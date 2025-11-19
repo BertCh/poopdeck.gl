@@ -1,0 +1,55 @@
+# Rust
+/target/
+**/*.rs.bk
+*.pdb
+Cargo.lock
+
+# TypeScript / Node
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+.npm/
+.yarn/
+.pnp.*
+.turbo/
+
+# Compiled TypeScript files (should not be in src/)
+src/**/*.js
+src/**/*.js.map
+src/**/*.d.ts
+src/**/*.d.ts.map
+!src/**/*.config.js
+!src/**/*.test.js
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Test outputs
+coverage/
+.nyc_output/
+*.log
+temp_eval/
+
+# Tile files
+*.stt
+*.mbtiles
+*.pmtiles
+test-data/*.json
+test-data/*.geojson
+
+# Build artifacts
+*.wasm
+pkg/
+
+# Data
+data/
+*.geojson
+*.csv
+*.zip
+scripts/data-generation/data/

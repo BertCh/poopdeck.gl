@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>STT Loader Debug</title>
+  <style>
+    body { font-family: monospace; padding: 20px; }
+    .section { margin: 20px 0; border: 1px solid #ccc; padding: 10px; }
+    .error { color: red; }
+    .success { color: green; }
+    pre { background: #f5f5f5; padding: 10px; overflow: auto; }
+  </style>
+</head>
+<body>
+  <h1>STT Archive Loader Debug</h1>
+  
+  <div class="section">
+    <h2>1. Loading Archive</h2>
+    <div id="archive-status">Initializing...</div>
+  </div>
+  
+  <div class="section">
+    <h2>2. Metadata</h2>
+    <pre id="metadata">Loading...</pre>
+  </div>
+  
+  <div class="section">
+    <h2>3. Index</h2>
+    <pre id="index">Loading...</pre>
+  </div>
+  
+  <div class="section">
+    <h2>4. Tile Query</h2>
+    <pre id="tile-query">Waiting...</pre>
+  </div>
+  
+  <div class="section">
+    <h2>5. Features</h2>
+    <pre id="features">Waiting...</pre>
+  </div>
+  
+  <script type="module">
+    import { STTArchive } from '/src/index.ts';
+    
+    async function debug() {
+      try {
+        // Test with the small test dataset
+        const url = '/data/test.stt';
+        console.log('Loading archive:', url);
+        document.getElementById('archive-status').innerHTML = `<div class="success">Loading ${url}...</div>`;
+        
+        const archive = new STTArchive(url);
+        
+        // Get metadata
+        console.log('Fetching metadata...');
+        const metadata = await archive.getMetadata();
+        console.log('Metadata:', metadata);
+        document.getElementById('metadata').textContent = JSON.stringify(metadata, null, 2);
+        
+        // Get index
+        console.log('Fetching index...');
+        const index = await archive.getIndex();
+        console.log('Index:', index);
+        document.getElementById('index').textContent = 
+          `Total tiles: ${index.tiles.length}\n\n` +
+          `Sample tiles:\n` +
+          index.tiles.slice(0, 5).map((t, i) => 
+            `[${i}] z=${t.zoom} x=${t.x} y=${t.y} time=${new Date(t.timeStart).toISOString()} features=${t.featureCount}`
+          ).join('\n');
+        
+        // Query tiles
+        console.log('Querying tiles...');
+        const bounds = metadata.bounds;
+        const zoom = metadata.minZoom;
+        const timeRange = metadata.timeRange;
+        
+        console.log('Query params:', { bounds, zoom, timeRange });
+        
+        const tiles = await archive.getTilesInBounds(bounds, zoom, timeRange);
+        console.log(`Found ${tiles.length} tiles`);
+        
+        document.getElementById('tile-query').textContent = 
+          `Query: zoom=${zoom}\n` +
+          `Bounds: ${JSON.stringify(bounds)}\n` +
+          `Time: ${new Date(timeRange.start).toISOString()} to ${new Date(timeRange.end).toISOString()}\n\n` +
+          `Results: ${tiles.length} tiles`;
+        
+        // Extract features
+        if (tiles.length > 0) {
+          const allFeatures = [];
+          for (const tile of tiles) {
+            for (const layer of tile.layers) {
+              for (const feature of layer.features) {
+                allFeatures.push({
+                  tileId: tile.id,
+                  extent: layer.extent,
+                  geometry: feature.geometry,
+                  properties: feature.properties,
+                  timeRange: feature.timeRange
+                });
+              }
+            }
+          }
+          
+          document.getElementById('features').textContent = 
+            `Total features: ${allFeatures.length}\n\n` +
+            `Sample features:\n` +
+            allFeatures.slice(0, 3).map((f, i) => 
+              `[${i}] tile z=${f.tileId.z} x=${f.tileId.x} y=${f.tileId.y}\n` +
+              `     geometry: [${f.geometry.slice(0, 5).join(', ')}${f.geometry.length > 5 ? '...' : ''}]\n` +
+              `     properties: ${JSON.stringify(f.properties)}\n` +
+              `     time: ${f.timeRange ? new Date(f.timeRange.start).toISOString() : 'none'}`
+            ).join('\n\n');
+        } else {
+          document.getElementById('features').innerHTML = '<div class="error">No tiles found!</div>';
+        }
+        
+        document.getElementById('archive-status').innerHTML = '<div class="success">✓ Loading complete</div>';
+        
+      } catch (error) {
+        console.error('Error:', error);
+        document.getElementById('archive-status').innerHTML = `<div class="error">Error: ${error.message}</div>`;
+        document.getElementById('metadata').textContent = `Error: ${error.stack}`;
+      }
+    }
+    
+    debug();
+  </script>
+</body>
+</html>
+

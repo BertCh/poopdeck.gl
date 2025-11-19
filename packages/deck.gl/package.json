@@ -1,0 +1,47 @@
+{
+  "name": "@stt/deck.gl",
+  "version": "0.1.0",
+  "description": "deck.gl layers for spatiotemporal tiles",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@deck.gl/aggregation-layers": "^9.2.2",
+    "@deck.gl/core": "^9.0.0",
+    "@deck.gl/layers": "^9.0.0",
+    "@loaders.gl/core": "^4.2.0",
+    "@stt/core": "workspace:*"
+  },
+  "peerDependencies": {
+    "@deck.gl/core": ">=8.9.0",
+    "@deck.gl/layers": ">=8.9.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "typescript": "^5.4.0",
+    "vitest": "^1.6.0"
+  },
+  "keywords": [
+    "deck.gl",
+    "tiles",
+    "spatiotemporal",
+    "visualization"
+  ],
+  "author": "Robert Christie",
+  "license": "MIT"
+}
