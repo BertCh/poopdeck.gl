@@ -31,16 +31,13 @@ export class SpatiotemporalTileset {
             evictions: 0,
         };
         this.options = {
-            maxRequests: options.maxRequests ?? 24, // 4x from original 6 - VERY aggressive for fast scrubbing
-            debounceTime: options.debounceTime ?? 50, // Reduced from 100ms for instant response
-            maxCacheSize: options.maxCacheSize ?? 5000, // 25x increase from 200 - cache entire datasets
-            maxCacheByteSize: options.maxCacheByteSize ?? 4 * 1024 * 1024 * 1024, // 4GB for massive caching
+            maxRequests: options.maxRequests ?? 6,
+            debounceTime: options.debounceTime ?? 300,
+            maxCacheSize: options.maxCacheSize ?? 200, // Increased from 100
+            maxCacheByteSize: options.maxCacheByteSize ?? 500 * 1024 * 1024, // 500MB (increased from 200MB)
             minZoom: options.minZoom ?? 0,
             maxZoom: options.maxZoom ?? 14,
             refinementStrategy: options.refinementStrategy ?? 'best-available', // Default: load parent tiles as fallback
-            enablePrefetch: options.enablePrefetch ?? true, // Enable by default
-            prefetchTimeSteps: options.prefetchTimeSteps ?? 30, // Prefetch 30 time steps ahead (3x from 10)
-            prefetchTimeIncrement: options.prefetchTimeIncrement ?? 86400000, // 1 day default
             getAvailableTiles: options.getAvailableTiles,
             getTileData: options.getTileData,
             onTileLoad: options.onTileLoad ?? (() => { }),
@@ -101,44 +98,40 @@ export class SpatiotemporalTileset {
     }
     /**
      * Select tiles for current viewport and queue for loading
-     * Now includes predictive prefetching for animation playback
      */
     async selectAndLoadTiles() {
         if (!this.currentViewport)
             return;
         const { bounds, zoom, time, timeWindow } = this.currentViewport;
-        // Calculate temporal range for current viewport
+        // Calculate temporal range
         const timeRange = {
             start: time - timeWindow / 2,
             end: time + timeWindow / 2,
         };
+        console.log('[Tileset] selectAndLoadTiles:', {
+            bounds: {
+                minLon: bounds.minLon,
+                minLat: bounds.minLat,
+                maxLon: bounds.maxLon,
+                maxLat: bounds.maxLat,
+            },
+            zoom,
+            timeRange: {
+                start: new Date(timeRange.start).toISOString(),
+                end: new Date(timeRange.end).toISOString(),
+            },
+        });
         // Get zoom levels to load (supports LOD with parent tiles)
         const zoomLevels = this.getZoomLevelsToLoad(zoom);
         // Mark tiles as used (for LRU)
         const now = Date.now();
         const neededTileKeys = new Set();
-        // Load tiles for current viewport (highest priority)
-        await this.loadTilesForTimeRange(bounds, zoomLevels, timeRange, neededTileKeys, now, true);
-        // PREFETCHING: Load tiles ahead of animation if enabled
-        if (this.options.enablePrefetch) {
-            await this.prefetchFutureTiles(bounds, zoom, time, timeWindow, neededTileKeys, now);
-        }
-        // Remove tiles not in viewport (with grace period)
-        this.evictUnusedTiles(neededTileKeys);
-        // Process request queue
-        this.processRequestQueue();
-        // Increment frame number
-        this.frameNumber++;
-    }
-    /**
-     * Load tiles for a specific time range
-     */
-    async loadTilesForTimeRange(bounds, zoomLevels, timeRange, neededTileKeys, now, highPriority = false) {
         // Load tiles for each zoom level
         // Primary zoom (most detailed) is loaded first, then parent zooms as fallback
         for (const z of zoomLevels) {
             // Query archive for available tiles at this zoom level
             const availableTileIds = await this.options.getAvailableTiles(bounds, z, timeRange);
+            console.log(`[Tileset] Zoom ${z}: found ${availableTileIds.length} tiles`);
             for (const tileId of availableTileIds) {
                 const key = this.tileIdToKey(tileId);
                 neededTileKeys.add(key);
@@ -157,12 +150,12 @@ export class SpatiotemporalTileset {
                     this.tiles.set(key, header);
                     // Add to request queue
                     // Higher zoom (more detailed) tiles get priority
-                    if (highPriority) {
-                        // Current viewport - highest priority (add to front)
+                    if (z === zoom) {
+                        // Primary zoom - highest priority (add to front)
                         this.requestQueue.unshift(tileId);
                     }
                     else {
-                        // Prefetch - lower priority (add to back)
+                        // Parent zoom - lower priority (add to back)
                         this.requestQueue.push(tileId);
                     }
                 }
@@ -172,27 +165,12 @@ export class SpatiotemporalTileset {
                 }
             }
         }
-    }
-    /**
-     * Prefetch tiles ahead of current time for smooth animation
-     * This loads multiple time slices into the future
-     */
-    async prefetchFutureTiles(bounds, zoom, currentTime, timeWindow, neededTileKeys, now) {
-        const { prefetchTimeSteps, prefetchTimeIncrement } = this.options;
-        // Only load primary zoom for prefetch (not parent tiles) to avoid overloading
-        const zoomLevels = [zoom];
-        // Prefetch N time steps into the future
-        for (let step = 1; step <= prefetchTimeSteps; step++) {
-            const futureTime = currentTime + (step * prefetchTimeIncrement);
-            const futureTimeRange = {
-                start: futureTime - timeWindow / 2,
-                end: futureTime + timeWindow / 2,
-            };
-            // Load tiles for this future time range (lower priority)
-            await this.loadTilesForTimeRange(bounds, zoomLevels, futureTimeRange, neededTileKeys, now - (step * 1000), // Slightly lower lastUsed time for LRU ordering
-            false // Not high priority
-            );
-        }
+        // Remove tiles not in viewport (with grace period)
+        this.evictUnusedTiles(neededTileKeys);
+        // Process request queue
+        this.processRequestQueue();
+        // Increment frame number
+        this.frameNumber++;
     }
     /**
      * Process request queue with concurrency limit
@@ -236,12 +214,11 @@ export class SpatiotemporalTileset {
     }
     /**
      * Evict tiles not recently used (LRU)
-     * Very conservative eviction to support smooth animation loops
-     * With massively increased cache sizes for seamless playback
+     * More conservative eviction to support smooth animation loops
      */
     evictUnusedTiles(neededTileKeys) {
         const now = Date.now();
-        const GRACE_PERIOD = 300000; // 5 minutes (increased from 2 min) - allows long animation loops to reuse tiles
+        const GRACE_PERIOD = 120000; // 2 minutes - allows animation loops to reuse tiles
         // Calculate current cache usage
         let currentCacheSize = 0;
         let currentCacheBytes = 0;
@@ -251,9 +228,9 @@ export class SpatiotemporalTileset {
                 currentCacheBytes += header.byteSize;
             }
         }
-        // Only evict if we're significantly over limits (give more headroom)
-        const overSizeLimit = currentCacheSize > this.options.maxCacheSize * 1.1; // 10% buffer
-        const overByteLimit = currentCacheBytes > this.options.maxCacheByteSize * 1.1; // 10% buffer
+        // Only evict if we're over limits
+        const overSizeLimit = currentCacheSize > this.options.maxCacheSize;
+        const overByteLimit = currentCacheBytes > this.options.maxCacheByteSize;
         if (!overSizeLimit && !overByteLimit) {
             // Under limits - only evict tiles outside grace period
             const tilesToEvict = [];
@@ -273,11 +250,10 @@ export class SpatiotemporalTileset {
             .filter(([key]) => !neededTileKeys.has(key)) // Never evict needed tiles
             .sort((a, b) => a[1].lastUsed - b[1].lastUsed); // Oldest first
         const tilesToEvict = [];
-        // Only evict until we're back under limits (not under buffer)
         for (const [tileKey, header] of sortedTiles) {
             if (!header.isLoaded)
                 continue;
-            // Check if we're still over the actual limits (not buffer)
+            // Check if we're still over limits
             const stillOverSize = currentCacheSize > this.options.maxCacheSize;
             const stillOverBytes = currentCacheBytes > this.options.maxCacheByteSize;
             if (!stillOverSize && !stillOverBytes) {
@@ -398,11 +374,28 @@ export class SpatiotemporalTileset {
     estimateTileSize(tile) {
         // Rough estimate: count features and properties
         let size = 1000; // Base overhead
+        if (!tile?.layers) {
+            return size;
+        }
         for (const layer of tile.layers) {
+            if (!layer?.features) {
+                continue;
+            }
             for (const feature of layer.features) {
+                if (!feature) {
+                    continue;
+                }
                 size += 100; // Per feature
-                size += feature.geometry.length * 4; // Geometry array
-                size += JSON.stringify(feature.properties).length; // Properties
+                const positionCount = feature.positions?.length ?? 0;
+                size += positionCount * 16; // Approximate lon/lat pairs
+                if (feature.properties) {
+                    try {
+                        size += JSON.stringify(feature.properties).length; // Properties
+                    }
+                    catch {
+                        size += 100; // Fallback
+                    }
+                }
             }
         }
         return size;

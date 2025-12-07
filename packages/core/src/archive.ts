@@ -202,14 +202,15 @@ export class STTArchive {
 
     const compressed = await response.arrayBuffer();
 
-    // Use loaders.gl parse
+    // Use loaders.gl parse - always use object format for archive caching
     const tile = await parse(compressed, STTLoader, { 
       ...this.loadOptions,
       stt: { 
         tileId: id, 
-        compression: entry.compression 
+        compression: entry.compression,
+        outputFormat: 'object' as const,
       } 
-    });
+    }) as Tile;
 
     // Cache tile
     this.tileCache.set(cacheKey, tile);

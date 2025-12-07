@@ -8,4 +8,5 @@ export * from './types';
 export * from './cache';
 export * from './spatiotemporal-tileset';
 export * from './stt-loader';
+export * from './binary-features';
 

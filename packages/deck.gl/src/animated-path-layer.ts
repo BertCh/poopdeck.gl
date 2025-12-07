@@ -4,33 +4,34 @@
 
 import { PathLayer } from '@deck.gl/layers';
 import type { PathLayerProps } from '@deck.gl/layers';
+import type { Accessor, Color, Layer, Position } from '@deck.gl/core';
 import { SpatioTemporalLayer, SpatioTemporalLayerProps } from './spatiotemporal-layer';
 import { TimeFilterExtension } from './time-filter-extension';
-import { Feature } from '@stt/core';
+import type { Feature } from '@stt/core';
 
 export interface AnimatedPathLayerProps extends SpatioTemporalLayerProps {
-  /** Width of paths in pixels */
+  /** Width scale multiplier */
   widthScale?: number;
   
   /** Width units ('pixels' | 'meters') */
   widthUnits?: 'pixels' | 'meters';
   
-  /** Get path color [r, g, b, a] */
-  getColor?: (feature: Feature) => [number, number, number, number];
+  /** Path color accessor - returns [r, g, b, a] */
+  getColor?: Accessor<Feature, Color>;
   
-  /** Get path width */
-  getWidth?: (feature: Feature) => number;
+  /** Path width accessor */
+  getWidth?: Accessor<Feature, number>;
   
-  /** Get path coordinates [[lon, lat], ...] */
-  getPath?: PathLayerProps['getPath'];
+  /** Path coordinates accessor - returns [[lon, lat], ...] */
+  getPath?: Accessor<Feature, Position[]>;
   
-  /** Show trailing effect (gradient fade) */
+  /** Enable trailing effect (gradient fade) */
   trail?: boolean;
   
   /** Trail length in milliseconds */
   trailLength?: number;
   
-  /** Fade-in duration for new paths (ms) */
+  /** Fade-in duration for appearing paths (ms) */
   fadeInDuration?: number;
   
   /** Fade-out duration for disappearing paths (ms) */
@@ -43,7 +44,7 @@ export interface AnimatedPathLayerProps extends SpatioTemporalLayerProps {
  * Features:
  * - Smooth path rendering over time
  * - Optional trailing effect (shows path history)
- * - Interpolation between time frames
+ * - GPU-accelerated time filtering via TimeFilterExtension
  * - Efficient rendering with GPU instancing
  */
 export class AnimatedPathLayer extends SpatioTemporalLayer<AnimatedPathLayerProps> {
@@ -51,18 +52,23 @@ export class AnimatedPathLayer extends SpatioTemporalLayer<AnimatedPathLayerProp
 
   static defaultProps = {
     ...SpatioTemporalLayer.defaultProps,
-    widthScale: { type: 'number', value: 1, compare: false },
-    widthUnits: { type: 'string', value: 'pixels', compare: false },
-    getColor: { type: 'accessor', value: [0, 150, 255, 255] },
+    // PathLayer props
+    widthScale: { type: 'number', value: 1, min: 0 },
+    widthUnits: 'pixels',
+    getColor: { type: 'accessor', value: [0, 150, 255, 255] as Color },
     getWidth: { type: 'accessor', value: 3 },
-    getPath: { type: 'accessor', value: (_f: Feature) => [] },
-    trail: { type: 'boolean', value: true, compare: false },
-    trailLength: { type: 'number', value: 5000, compare: false }, // 5 seconds
-    fadeInDuration: { type: 'number', value: 300, compare: false },
-    fadeOutDuration: { type: 'number', value: 300, compare: false },
+    getPath: { type: 'accessor', value: null },
+    
+    // Trail props
+    trail: true,
+    trailLength: { type: 'number', value: 5000, min: 0 }, // 5 seconds
+    
+    // Animation props
+    fadeInDuration: { type: 'number', value: 300, min: 0 },
+    fadeOutDuration: { type: 'number', value: 300, min: 0 },
   };
 
-  renderLayers(): any[] {
+  renderLayers(): Layer[] {
     const { tiles, currentTime } = this.state;
     if (!tiles || tiles.length === 0) {
       return [];
@@ -77,7 +83,7 @@ export class AnimatedPathLayer extends SpatioTemporalLayer<AnimatedPathLayerProp
       return tile.layers.map((layer, layerIndex) => {
         const layerId = `${this.props.id}-${tile.id.z}-${tile.id.x}-${tile.id.y}-${tile.id.t}-${layerIndex}`;
 
-        const defaultGetPath: PathLayerProps['getPath'] = (feature: Feature) =>
+        const defaultGetPath = (feature: Feature) =>
           feature.positions || [];
 
         return new PathLayer({

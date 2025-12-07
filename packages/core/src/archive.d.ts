@@ -10,7 +10,7 @@ export declare class STTArchive {
     private metadataCache?;
     private indexCache?;
     private tileCache;
-    private useWorkers;
+    private loadOptions?;
     constructor(options: ArchiveOptions | string);
     /** Get archive metadata */
     getMetadata(): Promise<ArchiveMetadata>;
@@ -18,6 +18,8 @@ export declare class STTArchive {
     getIndex(): Promise<ArchiveIndex>;
     /** Get a specific tile */
     getTile(id: TileId, options?: TileRequestOptions): Promise<Tile | null>;
+    /** Get an iterator for tiles in a bounding box and time range */
+    getTilesIterator(bounds: BoundingBox, zoom: number, timeRange: TimeRange, options?: TileRequestOptions): AsyncIterable<Tile>;
     /** Get all tiles in a bounding box and time range */
     getTilesInBounds(bounds: BoundingBox, zoom: number, timeRange: TimeRange, options?: TileRequestOptions): Promise<Tile[]>;
     /** Get available tile IDs in a bounding box and time range (without fetching tile data) */

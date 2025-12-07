@@ -5,6 +5,7 @@
  */
 
 import { CompositeLayer } from '@deck.gl/core';
+import type { CompositeLayerProps, UpdateParameters, LayerContext } from '@deck.gl/core';
 import { STTArchive } from '@stt/core';
 import { SpatiotemporalTileset } from '@stt/core';
 import type { Tile, BoundingBox, ArchiveMetadata } from '@stt/core';
@@ -12,7 +13,7 @@ import { TimeController } from './time-controller';
 
 const DEBUG = false;
 
-export interface SpatioTemporalLayerProps {
+export interface SpatioTemporalLayerProps extends CompositeLayerProps {
   /** URL to STT archive */
   data: string;
   
@@ -27,12 +28,6 @@ export interface SpatioTemporalLayerProps {
   
   /** Time controller (optional, for synchronized animation) */
   timeController?: TimeController;
-  
-  /** Opacity */
-  opacity?: number;
-  
-  /** Visible flag */
-  visible?: boolean;
   
   /** Maximum concurrent tile requests (deck.gl TileLayer pattern) */
   maxRequests?: number;
@@ -56,7 +51,7 @@ export interface SpatioTemporalLayerProps {
   onTileUnload?: (tile: Tile) => void;
 
   /** Loaders.gl options */
-  loadOptions?: any;
+  loadOptions?: Record<string, unknown>;
 }
 
 interface SpatioTemporalLayerState {
@@ -85,23 +80,33 @@ export class SpatioTemporalLayer<
   static layerName = 'SpatioTemporalLayer';
 
   static defaultProps = {
+    // Data source
     data: { type: 'string', value: '', compare: true },
+    
+    // Temporal properties
     currentTime: { type: 'number', value: Date.now(), compare: true },
-    timeWindow: { type: 'number', value: 86400000, compare: false }, // 1 day
-    opacity: { type: 'number', value: 1.0, compare: false },
-    visible: { type: 'boolean', value: true, compare: false },
-    maxRequests: { type: 'number', value: 6, compare: false }, // deck.gl TileLayer default
-    debounceTime: { type: 'number', value: 300, compare: false }, // deck.gl TileLayer pattern
-    maxCacheSize: { type: 'number', value: 200, compare: false }, // Increased from 100 for animation loops
-    maxCacheByteSize: { type: 'number', value: 500 * 1024 * 1024, compare: false }, // 500MB (increased from 200MB)
-    onViewportLoad: { type: 'function', value: null, compare: false },
-    onTileLoad: { type: 'function', value: null, compare: false },
-    onTileUnload: { type: 'function', value: null, compare: false },
+    timeWindow: { type: 'number', value: 86400000, compare: false }, // 1 day default
+    timeRange: { type: 'object', value: null, compare: true },
+    timeController: { type: 'object', value: null, compare: false },
+    
+    // Tile loading configuration (following deck.gl TileLayer pattern)
+    maxRequests: { type: 'number', value: 6, compare: false },
+    debounceTime: { type: 'number', value: 300, compare: false },
+    maxCacheSize: { type: 'number', value: 200, compare: false },
+    maxCacheByteSize: { type: 'number', value: 500 * 1024 * 1024, compare: false }, // 500MB
+    
+    // Callbacks
+    onViewportLoad: { type: 'function', value: null, optional: true },
+    onTileLoad: { type: 'function', value: null, optional: true },
+    onTileUnload: { type: 'function', value: null, optional: true },
+    
+    // Loaders options
+    loadOptions: { type: 'object', value: {}, compare: false },
   };
 
-  declare state: SpatioTemporalLayerState & { [key: string]: any };
+  declare state: SpatioTemporalLayerState & { [key: string]: unknown };
 
-  initializeState(): void {
+  initializeState(_context: LayerContext): void {
     this.setState({
       archive: null,
       tileset: null,
@@ -112,13 +117,14 @@ export class SpatioTemporalLayer<
     });
 
     // Initialize archive and tileset
-    this.initArchiveAndTileset();
+    this._initArchiveAndTileset();
   }
 
-  finalizeState(): void {
-    // Cleanup tileset
-    if (this.state.tileset) {
-      this.state.tileset.finalize();
+  finalizeState(_context: LayerContext): void {
+    // Cleanup tileset resources
+    const { tileset } = this.state;
+    if (tileset) {
+      tileset.finalize();
     }
   }
 
@@ -126,17 +132,18 @@ export class SpatioTemporalLayer<
    * deck.gl layer lifecycle: decide if layer needs to update
    * Following deck.gl TileLayer pattern - return true for any change including viewport
    */
-  shouldUpdateState({ changeFlags }: any): boolean {
-    return changeFlags.somethingChanged;
+  shouldUpdateState(params: { changeFlags: any }): boolean {
+    return params.changeFlags.somethingChanged;
   }
 
-  updateState({ changeFlags }: any): void {
+  updateState(params: UpdateParameters<this>): void {
+    const { changeFlags } = params;
     const propsChanged = changeFlags.propsChanged;
     const dataChanged = propsChanged && this.props.data !== this.state.archive?.url;
     
     if (dataChanged) {
       // Reinitialize with new data source
-      this.initArchiveAndTileset();
+      this._initArchiveAndTileset();
       return;
     }
     
@@ -198,7 +205,7 @@ export class SpatioTemporalLayer<
     }
   }
 
-  private async initArchiveAndTileset(): Promise<void> {
+  private async _initArchiveAndTileset(): Promise<void> {
     if (DEBUG) console.log('[STL] Initializing archive from', this.props.data);
     
     const archive = new STTArchive({

@@ -64,3 +64,5 @@ Inherits from all [CompositeLayer](https://deck.gl/docs/api-reference/core/compo
 
 [packages/deck.gl/src/spatiotemporal-layer.ts](../../packages/deck.gl/src/spatiotemporal-layer.ts)
 
+
+

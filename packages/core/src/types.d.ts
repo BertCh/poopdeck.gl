@@ -38,20 +38,6 @@ export declare enum GeometryType {
     LineString = 1,
     Polygon = 2
 }
-/** Feature change type for delta encoding */
-export declare enum ChangeType {
-    Unchanged = 0,
-    Created = 1,
-    Modified = 2,
-    Deleted = 3
-}
-/** Interpolation method for temporal transitions */
-export declare enum InterpolationMethod {
-    None = 0,
-    Linear = 1,
-    Step = 2,
-    Cubic = 3
-}
 /** Property value types */
 export type PropertyValue = string | number | boolean;
 /** Archive metadata */
@@ -95,7 +81,6 @@ export interface Tile {
     id: TileId;
     timeRange: TimeRange;
     layers: Layer[];
-    interpolation?: InterpolationHint;
 }
 /** Layer within a tile */
 export interface Layer {
@@ -107,49 +92,9 @@ export interface Layer {
 export interface Feature {
     id: number;
     type: GeometryType;
-    geometry: number[];
+    positions: [number, number][];
     properties: Record<string, PropertyValue>;
     timeRange?: TimeRange;
-    changeType?: ChangeType;
-}
-/** Interpolation hint */
-export interface InterpolationHint {
-    method: InterpolationMethod;
-    properties: string[];
-}
-/** Temporal resolution metadata - tells frontend how to handle animation */
-export interface TemporalResolution {
-    /** Temporal bucket size in milliseconds (0 = no bucketing) */
-    bucketSizeMs: number;
-    /** Zoom level of this tile */
-    zoomLevel: number;
-    /** Number of features in this tile */
-    featureCount: number;
-    /** Suggested animation speed multiplier (1.0 = normal, >1.0 = faster) */
-    suggestedSpeedMultiplier: number;
-}
-/** Decoded tile */
-export interface Tile {
-    id: TileId;
-    timeRange: TimeRange;
-    layers: Layer[];
-    interpolation?: InterpolationHint;
-    temporalResolution?: TemporalResolution;
-}
-/** Layer within a tile */
-export interface Layer {
-    name: string;
-    extent: number;
-    features: Feature[];
-}
-/** Feature within a layer */
-export interface Feature {
-    id: number;
-    type: GeometryType;
-    geometry: number[];
-    properties: Record<string, PropertyValue>;
-    timeRange?: TimeRange;
-    changeType?: ChangeType;
 }
 export interface TileEntry {
     zoom: number;
@@ -191,8 +136,8 @@ export interface ArchiveOptions {
     cache?: boolean;
     /** Maximum cache size in bytes */
     maxCacheSize?: number;
-    /** Enable Web Workers for tile decoding (default: true) */
-    useWorkers?: boolean;
+    /** Options for loaders.gl */
+    loadOptions?: any;
 }
 /** Options for tile requests */
 export interface TileRequestOptions {

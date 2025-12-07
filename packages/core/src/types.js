@@ -15,20 +15,4 @@ export var GeometryType;
     GeometryType[GeometryType["LineString"] = 1] = "LineString";
     GeometryType[GeometryType["Polygon"] = 2] = "Polygon";
 })(GeometryType || (GeometryType = {}));
-/** Feature change type for delta encoding */
-export var ChangeType;
-(function (ChangeType) {
-    ChangeType[ChangeType["Unchanged"] = 0] = "Unchanged";
-    ChangeType[ChangeType["Created"] = 1] = "Created";
-    ChangeType[ChangeType["Modified"] = 2] = "Modified";
-    ChangeType[ChangeType["Deleted"] = 3] = "Deleted";
-})(ChangeType || (ChangeType = {}));
-/** Interpolation method for temporal transitions */
-export var InterpolationMethod;
-(function (InterpolationMethod) {
-    InterpolationMethod[InterpolationMethod["None"] = 0] = "None";
-    InterpolationMethod[InterpolationMethod["Linear"] = 1] = "Linear";
-    InterpolationMethod[InterpolationMethod["Step"] = 2] = "Step";
-    InterpolationMethod[InterpolationMethod["Cubic"] = 3] = "Cubic";
-})(InterpolationMethod || (InterpolationMethod = {}));
 //# sourceMappingURL=types.js.map

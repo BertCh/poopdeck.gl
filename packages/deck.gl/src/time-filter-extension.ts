@@ -1,10 +1,22 @@
-import { LayerExtension, Layer } from '@deck.gl/core';
+import { LayerExtension } from '@deck.gl/core';
+import type { Layer, LayerContext, Accessor, UpdateParameters } from '@deck.gl/core';
 
-export type TimeFilterProps = {
-  currentTime: number;
-  timeWindow: number;
+/**
+ * Props for layers using TimeFilterExtension
+ */
+export type TimeFilterExtensionProps<DataT = any> = {
+  /** Current time for filtering (Unix milliseconds) */
+  currentTime?: number;
+  /** Time window size in milliseconds */
+  timeWindow?: number;
+  /** Fade-in duration for appearing objects (ms) */
   fadeInDuration?: number;
+  /** Fade-out duration for disappearing objects (ms) */
   fadeOutDuration?: number;
+  /** Accessor to get start time from each data object */
+  getInstanceStartTime?: Accessor<DataT, number>;
+  /** Accessor to get end time from each data object */
+  getInstanceEndTime?: Accessor<DataT, number>;
 };
 
 // Define uniform types for the shader module
@@ -38,19 +50,26 @@ const timeFilterUniforms = {
   }
 };
 
-export class TimeFilterExtension extends LayerExtension {
-  static defaultProps = {
-    currentTime: 0,
-    timeWindow: 0,
-    fadeInDuration: 0,
-    fadeOutDuration: 0,
-    getInstanceStartTime: { type: 'accessor', value: 0 },
-    getInstanceEndTime: { type: 'accessor', value: Infinity }
-  };
+const defaultProps: Required<TimeFilterExtensionProps> = {
+  currentTime: 0,
+  timeWindow: 0,
+  fadeInDuration: 0,
+  fadeOutDuration: 0,
+  getInstanceStartTime: { type: 'accessor', value: 0 } as any,
+  getInstanceEndTime: { type: 'accessor', value: Infinity } as any
+};
 
+/**
+ * Layer extension for GPU-based temporal filtering
+ * 
+ * Filters and fades objects based on their time range relative to the current time.
+ * Works with any layer that has temporal data.
+ */
+export class TimeFilterExtension extends LayerExtension {
+  static defaultProps = defaultProps;
   static extensionName = 'TimeFilterExtension';
 
-  getShaders() {
+  getShaders(this: Layer<TimeFilterExtensionProps>, _extension: TimeFilterExtension) {
     return {
       modules: [timeFilterUniforms],
       inject: {
@@ -79,10 +98,10 @@ export class TimeFilterExtension extends LayerExtension {
           }
           
           if (vTimeAlpha > 0.0 && timeFilter.fadeOut > 0.0) {
-             float remaining = instanceEndTime - timeStart;
-             if (remaining < timeFilter.fadeOut) {
-               vTimeAlpha *= (remaining / timeFilter.fadeOut);
-             }
+            float remaining = instanceEndTime - timeStart;
+            if (remaining < timeFilter.fadeOut) {
+              vTimeAlpha *= (remaining / timeFilter.fadeOut);
+            }
           }
         `,
         'fs:#decl': `
@@ -98,32 +117,58 @@ export class TimeFilterExtension extends LayerExtension {
     };
   }
 
-  initializeState(this: Layer, context: any, extension: any) {
+  initializeState(
+    this: Layer<TimeFilterExtensionProps>,
+    _context: LayerContext,
+    _extension: TimeFilterExtension
+  ): void {
     const attributeManager = this.getAttributeManager();
     if (attributeManager) {
       attributeManager.addInstanced({
         instanceStartTime: {
           size: 1,
           accessor: 'getInstanceStartTime',
-          type: 'float32'
+          type: 'float32',
+          stepMode: 'dynamic'
         },
         instanceEndTime: {
           size: 1,
           accessor: 'getInstanceEndTime',
-          type: 'float32'
+          type: 'float32',
+          stepMode: 'dynamic'
         }
       });
     }
   }
 
-  draw(this: Layer, params: any, extension: any) {
-    const { currentTime, timeWindow, fadeInDuration = 0, fadeOutDuration = 0 } = this.props as any;
+  updateState(
+    this: Layer<TimeFilterExtensionProps>,
+    _params: UpdateParameters<Layer<TimeFilterExtensionProps>>,
+    _extension: TimeFilterExtension
+  ): void {
+    // Trigger uniform update on prop changes
+    // The draw method will handle setting the uniforms
+  }
+
+  draw(
+    this: Layer<TimeFilterExtensionProps>,
+    _params: unknown,
+    _extension: TimeFilterExtension
+  ): void {
+    const {
+      currentTime = 0,
+      timeWindow = 0,
+      fadeInDuration = 0,
+      fadeOutDuration = 0
+    } = this.props;
+    
     const timeFilterProps: TimeFilterUniformProps = {
       currentTime,
       windowHalf: timeWindow / 2,
       fadeIn: fadeInDuration,
       fadeOut: fadeOutDuration
     };
+    
     this.setShaderModuleProps({ timeFilter: timeFilterProps });
   }
 }

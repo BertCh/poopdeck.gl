@@ -7,6 +7,5 @@ export * from './types';
 export * from './cache';
 export * from './spatiotemporal-tileset';
 export * from './stt-loader';
-export * from './worker-pool';
-export * from './auto-config';
+export * from './binary-features';
 //# sourceMappingURL=index.d.ts.map

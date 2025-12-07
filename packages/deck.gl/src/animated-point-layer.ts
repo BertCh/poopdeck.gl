@@ -3,31 +3,32 @@
  */
 
 import { ScatterplotLayer } from '@deck.gl/layers';
+import type { Accessor, Color, Layer } from '@deck.gl/core';
+import { COORDINATE_SYSTEM } from '@deck.gl/core';
 import { SpatioTemporalLayer, SpatioTemporalLayerProps } from './spatiotemporal-layer';
 import { TimeFilterExtension } from './time-filter-extension';
 import type { Feature } from '@stt/core';
-import { COORDINATE_SYSTEM } from '@deck.gl/core';
 
 // Debug flag
 const DEBUG = false;
 
 export interface AnimatedPointLayerProps extends SpatioTemporalLayerProps {
-  /** Radius of points in pixels */
+  /** Radius scale multiplier */
   radiusScale?: number;
   
   /** Radius units ('pixels' | 'meters' | 'common') */
   radiusUnits?: 'pixels' | 'meters' | 'common';
   
-  /** Get fill color [r, g, b, a] */
-  getFillColor?: (feature: Feature) => [number, number, number, number];
+  /** Fill color accessor - returns [r, g, b, a] */
+  getFillColor?: Accessor<Feature, Color>;
   
-  /** Get radius */
-  getRadius?: (feature: Feature) => number;
+  /** Radius accessor */
+  getRadius?: Accessor<Feature, number>;
   
-  /** Get position [lon, lat] */
-  getPosition?: (feature: Feature) => [number, number];
+  /** Position accessor - returns [lon, lat] */
+  getPosition?: Accessor<Feature, [number, number]>;
   
-  /** Fade-in duration for new points (ms) */
+  /** Fade-in duration for appearing points (ms) */
   fadeInDuration?: number;
   
   /** Fade-out duration for disappearing points (ms) */
@@ -40,7 +41,7 @@ export interface AnimatedPointLayerProps extends SpatioTemporalLayerProps {
  * Features:
  * - Smooth fade-in/out for appearing/disappearing points
  * - Optional interpolation between time frames
- * - GPU-accelerated rendering
+ * - GPU-accelerated rendering via TimeFilterExtension
  * - Automatic filtering by time window
  */
 export class AnimatedPointLayer extends SpatioTemporalLayer<AnimatedPointLayerProps> {
@@ -48,16 +49,19 @@ export class AnimatedPointLayer extends SpatioTemporalLayer<AnimatedPointLayerPr
 
   static defaultProps = {
     ...SpatioTemporalLayer.defaultProps,
-    radiusScale: { type: 'number', value: 1, compare: false },
-    radiusUnits: { type: 'string', value: 'pixels', compare: false },
-    getFillColor: { type: 'accessor', value: [255, 128, 0, 255] },
+    // ScatterplotLayer props
+    radiusScale: { type: 'number', value: 1, min: 0 },
+    radiusUnits: 'pixels',
+    getFillColor: { type: 'accessor', value: [255, 128, 0, 255] as Color },
     getRadius: { type: 'accessor', value: 5 },
-    // Don't set getPosition default - let it be undefined so extractPosition is used
-    fadeInDuration: { type: 'number', value: 300, compare: false },
-    fadeOutDuration: { type: 'number', value: 300, compare: false },
+    getPosition: { type: 'accessor', value: null },
+    
+    // Animation props
+    fadeInDuration: { type: 'number', value: 300, min: 0 },
+    fadeOutDuration: { type: 'number', value: 300, min: 0 },
   };
 
-  renderLayers(): any[] {
+  renderLayers(): Layer[] {
     const { tiles, currentTime } = this.state;
     if (!tiles || tiles.length === 0) {
       if (DEBUG) console.log('AnimatedPointLayer: No tiles loaded');
@@ -113,17 +117,24 @@ export class AnimatedPointLayer extends SpatioTemporalLayer<AnimatedPointLayerPr
       return tile.layers.map((layer, layerIndex) => {
         const layerId = `${this.props.id}-${tile.id.z}-${tile.id.x}-${tile.id.y}-${layerIndex}`;
 
-        const getPosition =
-          this.props.getPosition ??
-          ((feature: Feature) => {
+        // Build getPosition accessor - use provided one or fallback to feature.positions
+        // Note: Accessor<T> can be a function or constant, we need to handle both
+        const propsGetPosition = this.props.getPosition;
+        const getPosition = (feature: Feature): [number, number] => {
+          if (typeof propsGetPosition === 'function') {
+            return propsGetPosition(feature, {} as any);
+          }
+          if (Array.isArray(propsGetPosition)) {
+            return propsGetPosition as [number, number];
+          }
             return fallbackPosition(feature);
-          });
+        };
 
         // Debug: log the first feature's actual position to verify
         if (DEBUG && layerIndex === 0) {
           const firstFeature = layer.features[0];
           if (firstFeature) {
-            const pos = getPosition(firstFeature);
+            const pos = fallbackPosition(firstFeature);
             console.log(`Layer ${layerId} - first feature position:`, pos);
             console.log(`Layer ${layerId} - radiusUnits:`, this.props.radiusUnits);
             console.log(`Layer ${layerId} - data count:`, layer.features.length);

@@ -48,3 +48,5 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 
 [packages/deck.gl/src/animated-point-layer.ts](../../packages/deck.gl/src/animated-point-layer.ts)
 
+
+

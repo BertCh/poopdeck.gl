@@ -3,6 +3,7 @@
  */
 
 import { HeatmapLayer } from '@deck.gl/aggregation-layers';
+import type { Accessor, Color, Layer, Position } from '@deck.gl/core';
 import { SpatioTemporalLayer, SpatioTemporalLayerProps } from './spatiotemporal-layer';
 import type { Feature } from '@stt/core';
 
@@ -10,20 +11,20 @@ export interface HeatmapTimeLayerProps extends SpatioTemporalLayerProps {
   /** Radius of influence in pixels */
   radiusPixels?: number;
   
-  /** Intensity of each point */
+  /** Intensity multiplier for each point */
   intensity?: number;
   
-  /** Aggregation method ('SUM' | 'MEAN') */
+  /** Aggregation method for overlapping points */
   aggregation?: 'SUM' | 'MEAN';
   
-  /** Color range (low to high) */
-  colorRange?: [number, number, number, number][];
+  /** Color range from low to high density */
+  colorRange?: Color[];
   
-  /** Get weight for each point */
-  getWeight?: (feature: Feature) => number;
+  /** Weight accessor for each data point */
+  getWeight?: Accessor<Feature, number>;
   
-  /** Get position [lon, lat] */
-  getPosition?: (feature: Feature) => [number, number];
+  /** Position accessor - returns [lon, lat] */
+  getPosition?: Accessor<Feature, Position>;
 }
 
 /**
@@ -37,9 +38,10 @@ export class HeatmapTimeLayer extends SpatioTemporalLayer<HeatmapTimeLayerProps>
 
   static defaultProps = {
     ...SpatioTemporalLayer.defaultProps,
-    radiusPixels: { type: 'number', value: 30, compare: false },
-    intensity: { type: 'number', value: 1, compare: false },
-    aggregation: { type: 'string', value: 'SUM', compare: false },
+    // HeatmapLayer props
+    radiusPixels: { type: 'number', value: 30, min: 1 },
+    intensity: { type: 'number', value: 1, min: 0 },
+    aggregation: 'SUM',
     colorRange: {
       type: 'array',
       value: [
@@ -50,14 +52,14 @@ export class HeatmapTimeLayer extends SpatioTemporalLayer<HeatmapTimeLayerProps>
         [252, 78, 42, 255],
         [227, 26, 28, 255],
         [177, 0, 38, 255],
-      ],
-      compare: false,
+      ] as Color[],
+      compare: true,
     },
     getWeight: { type: 'accessor', value: 1 },
-    getPosition: { type: 'accessor', value: (_f: Feature) => [0, 0] },
+    getPosition: { type: 'accessor', value: null },
   };
 
-  renderLayers(): any[] {
+  renderLayers(): Layer[] {
     const { tiles, currentTime } = this.state;
     if (!tiles || tiles.length === 0) {
       return [];
@@ -75,13 +77,22 @@ export class HeatmapTimeLayer extends SpatioTemporalLayer<HeatmapTimeLayerProps>
       }
     }
 
+    // Helper to evaluate accessor (function or constant value)
+    const evaluateAccessor = <T>(accessor: Accessor<Feature, T> | undefined, feature: Feature, defaultValue: T): T => {
+      if (accessor === undefined || accessor === null) {
+        return defaultValue;
+      }
+      if (typeof accessor === 'function') {
+        return (accessor as (f: Feature) => T)(feature);
+      }
+      return accessor as T;
+    };
+
     // Convert to heatmap data format
     const data = features.map((feature) => ({
       feature,
-      position: this.props.getPosition
-        ? this.props.getPosition(feature)
-        : [0, 0],
-      weight: this.props.getWeight ? this.props.getWeight(feature) : 1,
+      position: evaluateAccessor(this.props.getPosition, feature, [0, 0] as Position),
+      weight: evaluateAccessor(this.props.getWeight, feature, 1),
     }));
 
     return [

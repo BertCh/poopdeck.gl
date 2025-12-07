@@ -2,9 +2,8 @@
  * STT Archive reader using HTTP Range Requests
  */
 import { stt } from './proto';
-import { decompress } from './compression';
-import { decodeTile } from './tile';
-import { getWorkerPool } from './worker-pool';
+import { parse } from '@loaders.gl/core';
+import { STTLoader } from './stt-loader';
 const MAGIC = new Uint8Array([0x53, 0x54, 0x54, 0x01]); // "STT\x01"
 const VERSION = 1;
 const HEADER_SIZE = 53; // 4 (magic) + 1 (version) + 32 (four u64s) + 16 (reserved)
@@ -15,12 +14,11 @@ export class STTArchive {
         if (typeof options === 'string') {
             this.url = options;
             this.fetchFn = fetch.bind(globalThis);
-            this.useWorkers = true; // Enable workers by default
         }
         else {
             this.url = options.url;
             this.fetchFn = options.fetch || fetch.bind(globalThis);
-            this.useWorkers = options.useWorkers ?? true; // Enable workers by default
+            this.loadOptions = options.loadOptions;
         }
     }
     /** Get archive metadata */
@@ -138,23 +136,30 @@ export class STTArchive {
         if (!response.ok) {
             throw new Error(`Failed to fetch tile: ${response.statusText}`);
         }
-        const compressed = new Uint8Array(await response.arrayBuffer());
-        // Decompress and decode tile
-        let tile;
-        if (this.useWorkers && typeof Worker !== 'undefined') {
-            // Use worker pool for parallel processing
-            const workerPool = getWorkerPool();
-            tile = await workerPool.decodeTile(id, compressed, entry.compression);
-        }
-        else {
-            // Fallback to main thread
-            const data = await decompress(compressed, entry.compression);
-            tile = decodeTile(data, id);
-        }
+        const compressed = await response.arrayBuffer();
+        // Use loaders.gl parse - always use object format for archive caching
+        const tile = await parse(compressed, STTLoader, {
+            ...this.loadOptions,
+            stt: {
+                tileId: id,
+                compression: entry.compression,
+                outputFormat: 'object',
+            }
+        });
         // Cache tile
         this.tileCache.set(cacheKey, tile);
         // TODO: Implement cache eviction based on maxCacheSize
         return tile;
+    }
+    /** Get an iterator for tiles in a bounding box and time range */
+    async *getTilesIterator(bounds, zoom, timeRange, options) {
+        const tileIds = await this.getTileIdsInBounds(bounds, zoom, timeRange);
+        for (const id of tileIds) {
+            const tile = await this.getTile(id, options);
+            if (tile) {
+                yield tile;
+            }
+        }
     }
     /** Get all tiles in a bounding box and time range */
     async getTilesInBounds(bounds, zoom, timeRange, options) {
