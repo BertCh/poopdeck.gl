@@ -197,6 +197,20 @@ export class SpatiotemporalTileset {
       end: time + timeWindow / 2,
     };
     
+    console.log('[Tileset] selectAndLoadTiles:', {
+      bounds: {
+        minLon: bounds.minLon,
+        minLat: bounds.minLat,
+        maxLon: bounds.maxLon,
+        maxLat: bounds.maxLat,
+      },
+      zoom,
+      timeRange: {
+        start: new Date(timeRange.start).toISOString(),
+        end: new Date(timeRange.end).toISOString(),
+      },
+    });
+    
     // Get zoom levels to load (supports LOD with parent tiles)
     const zoomLevels = this.getZoomLevelsToLoad(zoom);
     
@@ -213,6 +227,8 @@ export class SpatiotemporalTileset {
         z,
         timeRange
       );
+      
+      console.log(`[Tileset] Zoom ${z}: found ${availableTileIds.length} tiles`);
       
       for (const tileId of availableTileIds) {
         const key = this.tileIdToKey(tileId);
@@ -502,11 +518,28 @@ export class SpatiotemporalTileset {
     // Rough estimate: count features and properties
     let size = 1000; // Base overhead
     
+    if (!tile?.layers) {
+      return size;
+    }
+    
     for (const layer of tile.layers) {
+      if (!layer?.features) {
+        continue;
+      }
       for (const feature of layer.features) {
+        if (!feature) {
+          continue;
+        }
         size += 100; // Per feature
-        size += feature.geometry.length * 4; // Geometry array
-        size += JSON.stringify(feature.properties).length; // Properties
+        const positionCount = feature.positions?.length ?? 0;
+        size += positionCount * 16; // Approximate lon/lat pairs
+        if (feature.properties) {
+          try {
+            size += JSON.stringify(feature.properties).length; // Properties
+          } catch {
+            size += 100; // Fallback
+          }
+        }
       }
     }
     

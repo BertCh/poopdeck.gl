@@ -20,17 +20,10 @@ Traditional approaches to animating massive datasets (millions of points) usuall
 
 STT solves this by pre-indexing data temporally. The client only downloads data relevant to the current time window and animation speed.
 
-## Key Technologies
+## Key Concepts
 
-### 1. Delta Encoding
-To minimize file size, STT uses **Delta Encoding** between temporal frames. If a feature (like a ship or car) moves slightly, we only store the *difference* in position, not the absolute coordinates again.
-
-- **Created:** Feature appears.
-- **Modified:** Feature moves or properties change (delta encoded).
-- **Unchanged:** Feature exists but hasn't changed (reference only).
-- **Deleted:** Feature disappears.
-
-This dramatically reduces the size of high-frequency tracking data (AIS, GPS traces).
+### 1. Chunked Feature Storage
+Each tile now stores absolute WGS84 coordinates for the features that intersect it. There is no delta or zig-zag encoding—tiles are literally **chunks of the source dataset** broken up by `(zoom, x, y, time)`. This makes the format easy to debug (you can dump a tile and immediately see lon/lat values) and keeps the refactor focused on correctness over extreme compression.
 
 ### 2. Temporal Bucketing
 Not all data needs millisecond precision. **Temporal Bucketing** allows grouping updates into discrete time slots (e.g., 1 second, 1 hour, 1 day) based on the zoom level.

@@ -1,4 +1,3 @@
-
 import { LayerExtension, Layer } from '@deck.gl/core';
 
 export type TimeFilterProps = {
@@ -8,56 +7,86 @@ export type TimeFilterProps = {
   fadeOutDuration?: number;
 };
 
+// Define uniform types for the shader module
+type TimeFilterUniformProps = {
+  currentTime: number;
+  windowHalf: number;
+  fadeIn: number;
+  fadeOut: number;
+};
+
+// Uniform block for GLSL 3.0 (WebGL2)
+const glslUniformBlock = `\
+uniform timeFilterUniforms {
+  float currentTime;
+  float windowHalf;
+  float fadeIn;
+  float fadeOut;
+} timeFilter;
+`;
+
+// Shader module definition for deck.gl 9.x
+const timeFilterUniforms = {
+  name: 'timeFilter',
+  vs: glslUniformBlock,
+  fs: glslUniformBlock,
+  uniformTypes: {
+    currentTime: 'f32',
+    windowHalf: 'f32',
+    fadeIn: 'f32',
+    fadeOut: 'f32'
+  }
+};
+
 export class TimeFilterExtension extends LayerExtension {
   static defaultProps = {
     currentTime: 0,
     timeWindow: 0,
     fadeInDuration: 0,
-    fadeOutDuration: 0
+    fadeOutDuration: 0,
+    getInstanceStartTime: { type: 'accessor', value: 0 },
+    getInstanceEndTime: { type: 'accessor', value: Infinity }
   };
+
+  static extensionName = 'TimeFilterExtension';
 
   getShaders() {
     return {
+      modules: [timeFilterUniforms],
       inject: {
         'vs:#decl': `
-          uniform float timeFilter_currentTime;
-          uniform float timeFilter_windowHalf;
-          uniform float timeFilter_fadeIn;
-          uniform float timeFilter_fadeOut;
-          attribute float instanceStartTime;
-          attribute float instanceEndTime;
-          varying float vTimeAlpha;
+          in float instanceStartTime;
+          in float instanceEndTime;
+          out float vTimeAlpha;
         `,
         'vs:#main-start': `
-          float timeStart = timeFilter_currentTime - timeFilter_windowHalf;
-          float timeEnd = timeFilter_currentTime + timeFilter_windowHalf;
+          float timeStart = timeFilter.currentTime - timeFilter.windowHalf;
+          float timeEnd = timeFilter.currentTime + timeFilter.windowHalf;
           
           vTimeAlpha = 1.0;
 
           // Check visibility
           if (instanceEndTime < timeStart || instanceStartTime > timeEnd) {
             vTimeAlpha = 0.0;
-            gl_Position = vec4(0.0); // Cull vertex
-            return;
           }
           
           // Fade logic (optional)
-          if (timeFilter_fadeIn > 0.0) {
+          if (vTimeAlpha > 0.0 && timeFilter.fadeIn > 0.0) {
             float age = timeEnd - instanceStartTime;
-            if (age < timeFilter_fadeIn) {
-              vTimeAlpha *= (age / timeFilter_fadeIn);
+            if (age < timeFilter.fadeIn) {
+              vTimeAlpha *= (age / timeFilter.fadeIn);
             }
           }
           
-          if (timeFilter_fadeOut > 0.0) {
+          if (vTimeAlpha > 0.0 && timeFilter.fadeOut > 0.0) {
              float remaining = instanceEndTime - timeStart;
-             if (remaining < timeFilter_fadeOut) {
-               vTimeAlpha *= (remaining / timeFilter_fadeOut);
+             if (remaining < timeFilter.fadeOut) {
+               vTimeAlpha *= (remaining / timeFilter.fadeOut);
              }
           }
         `,
         'fs:#decl': `
-          varying float vTimeAlpha;
+          in float vTimeAlpha;
         `,
         'fs:#main-start': `
           if (vTimeAlpha == 0.0) discard;
@@ -72,38 +101,29 @@ export class TimeFilterExtension extends LayerExtension {
   initializeState(this: Layer, context: any, extension: any) {
     const attributeManager = this.getAttributeManager();
     if (attributeManager) {
-      attributeManager.add({
+      attributeManager.addInstanced({
         instanceStartTime: {
           size: 1,
           accessor: 'getInstanceStartTime',
-          type: 0x1406, // GL.FLOAT
-          shaderAttributes: {
-            instanceStartTime: {
-              divisor: 1
-            }
-          }
+          type: 'float32'
         },
         instanceEndTime: {
           size: 1,
           accessor: 'getInstanceEndTime',
-          type: 0x1406, // GL.FLOAT
-          shaderAttributes: {
-            instanceEndTime: {
-              divisor: 1
-            }
-          }
+          type: 'float32'
         }
       });
     }
   }
 
-  draw(this: any, {uniforms}: any) {
-    const {currentTime, timeWindow, fadeInDuration = 0, fadeOutDuration = 0} = this.props;
-    this.state.model.setUniforms({
-      timeFilter_currentTime: currentTime,
-      timeFilter_windowHalf: timeWindow / 2,
-      timeFilter_fadeIn: fadeInDuration,
-      timeFilter_fadeOut: fadeOutDuration
-    });
+  draw(this: Layer, params: any, extension: any) {
+    const { currentTime, timeWindow, fadeInDuration = 0, fadeOutDuration = 0 } = this.props as any;
+    const timeFilterProps: TimeFilterUniformProps = {
+      currentTime,
+      windowHalf: timeWindow / 2,
+      fadeIn: fadeInDuration,
+      fadeOut: fadeOutDuration
+    };
+    this.setShaderModuleProps({ timeFilter: timeFilterProps });
   }
 }

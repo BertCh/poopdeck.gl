@@ -1497,12 +1497,6 @@ export namespace stt {
 
         /** Tile layers */
         layers?: (stt.ILayer[]|null);
-
-        /** Tile interpolation */
-        interpolation?: (stt.IInterpolation|null);
-
-        /** Tile temporalResolution */
-        temporalResolution?: (stt.ITemporalResolution|null);
     }
 
     /** Represents a Tile. */
@@ -1525,12 +1519,6 @@ export namespace stt {
 
         /** Tile layers. */
         public layers: stt.ILayer[];
-
-        /** Tile interpolation. */
-        public interpolation?: (stt.IInterpolation|null);
-
-        /** Tile temporalResolution. */
-        public temporalResolution?: (stt.ITemporalResolution|null);
 
         /**
          * Creates a new Tile instance using the specified properties.
@@ -1619,12 +1607,6 @@ export namespace stt {
         /** Layer extent */
         extent?: (number|null);
 
-        /** Layer keys */
-        keys?: (string[]|null);
-
-        /** Layer values */
-        values?: (stt.IValue[]|null);
-
         /** Layer features */
         features?: (stt.IFeature[]|null);
     }
@@ -1643,12 +1625,6 @@ export namespace stt {
 
         /** Layer extent. */
         public extent: number;
-
-        /** Layer keys. */
-        public keys: string[];
-
-        /** Layer values. */
-        public values: stt.IValue[];
 
         /** Layer features. */
         public features: stt.IFeature[];
@@ -1740,23 +1716,17 @@ export namespace stt {
         /** Feature type */
         type?: (stt.Feature.GeomType|null);
 
-        /** Feature geometry */
-        geometry?: (number[]|null);
+        /** Feature positions */
+        positions?: (stt.IPosition[]|null);
 
-        /** Feature tags */
-        tags?: (number[]|null);
+        /** Feature properties */
+        properties?: ({ [k: string]: stt.IValue }|null);
 
         /** Feature validFrom */
         validFrom?: (number|Long|null);
 
         /** Feature validTo */
         validTo?: (number|Long|null);
-
-        /** Feature previousHash */
-        previousHash?: (number|Long|null);
-
-        /** Feature change */
-        change?: (stt.Feature.ChangeType|null);
     }
 
     /** Represents a Feature. */
@@ -1774,23 +1744,17 @@ export namespace stt {
         /** Feature type. */
         public type: stt.Feature.GeomType;
 
-        /** Feature geometry. */
-        public geometry: number[];
+        /** Feature positions. */
+        public positions: stt.IPosition[];
 
-        /** Feature tags. */
-        public tags: number[];
+        /** Feature properties. */
+        public properties: { [k: string]: stt.IValue };
 
         /** Feature validFrom. */
         public validFrom: (number|Long);
 
         /** Feature validTo. */
         public validTo: (number|Long);
-
-        /** Feature previousHash. */
-        public previousHash: (number|Long);
-
-        /** Feature change. */
-        public change: stt.Feature.ChangeType;
 
         /**
          * Creates a new Feature instance using the specified properties.
@@ -1878,14 +1842,109 @@ export namespace stt {
             LINESTRING = 1,
             POLYGON = 2
         }
+    }
 
-        /** ChangeType enum. */
-        enum ChangeType {
-            UNCHANGED = 0,
-            CREATED = 1,
-            MODIFIED = 2,
-            DELETED = 3
-        }
+    /** Properties of a Position. */
+    interface IPosition {
+
+        /** Position lon */
+        lon?: (number|null);
+
+        /** Position lat */
+        lat?: (number|null);
+    }
+
+    /** Represents a Position. */
+    class Position implements IPosition {
+
+        /**
+         * Constructs a new Position.
+         * @param [properties] Properties to set
+         */
+        constructor(properties?: stt.IPosition);
+
+        /** Position lon. */
+        public lon: number;
+
+        /** Position lat. */
+        public lat: number;
+
+        /**
+         * Creates a new Position instance using the specified properties.
+         * @param [properties] Properties to set
+         * @returns Position instance
+         */
+        public static create(properties?: stt.IPosition): stt.Position;
+
+        /**
+         * Encodes the specified Position message. Does not implicitly {@link stt.Position.verify|verify} messages.
+         * @param message Position message or plain object to encode
+         * @param [writer] Writer to encode to
+         * @returns Writer
+         */
+        public static encode(message: stt.IPosition, writer?: $protobuf.Writer): $protobuf.Writer;
+
+        /**
+         * Encodes the specified Position message, length delimited. Does not implicitly {@link stt.Position.verify|verify} messages.
+         * @param message Position message or plain object to encode
+         * @param [writer] Writer to encode to
+         * @returns Writer
+         */
+        public static encodeDelimited(message: stt.IPosition, writer?: $protobuf.Writer): $protobuf.Writer;
+
+        /**
+         * Decodes a Position message from the specified reader or buffer.
+         * @param reader Reader or buffer to decode from
+         * @param [length] Message length if known beforehand
+         * @returns Position
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        public static decode(reader: ($protobuf.Reader|Uint8Array), length?: number): stt.Position;
+
+        /**
+         * Decodes a Position message from the specified reader or buffer, length delimited.
+         * @param reader Reader or buffer to decode from
+         * @returns Position
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        public static decodeDelimited(reader: ($protobuf.Reader|Uint8Array)): stt.Position;
+
+        /**
+         * Verifies a Position message.
+         * @param message Plain object to verify
+         * @returns `null` if valid, otherwise the reason why it is not
+         */
+        public static verify(message: { [k: string]: any }): (string|null);
+
+        /**
+         * Creates a Position message from a plain object. Also converts values to their respective internal types.
+         * @param object Plain object
+         * @returns Position
+         */
+        public static fromObject(object: { [k: string]: any }): stt.Position;
+
+        /**
+         * Creates a plain object from a Position message. Also converts values to other types if specified.
+         * @param message Position
+         * @param [options] Conversion options
+         * @returns Plain object
+         */
+        public static toObject(message: stt.Position, options?: $protobuf.IConversionOptions): { [k: string]: any };
+
+        /**
+         * Converts this Position to JSON.
+         * @returns JSON object
+         */
+        public toJSON(): { [k: string]: any };
+
+        /**
+         * Gets the default type url for Position
+         * @param [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+         * @returns The default type url
+         */
+        public static getTypeUrl(typeUrlPrefix?: string): string;
     }
 
     /** Properties of a Value. */
@@ -2018,235 +2077,6 @@ export namespace stt {
 
         /**
          * Gets the default type url for Value
-         * @param [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
-         * @returns The default type url
-         */
-        public static getTypeUrl(typeUrlPrefix?: string): string;
-    }
-
-    /** Properties of an Interpolation. */
-    interface IInterpolation {
-
-        /** Interpolation method */
-        method?: (stt.Interpolation.Method|null);
-
-        /** Interpolation properties */
-        properties?: (string[]|null);
-    }
-
-    /** Represents an Interpolation. */
-    class Interpolation implements IInterpolation {
-
-        /**
-         * Constructs a new Interpolation.
-         * @param [properties] Properties to set
-         */
-        constructor(properties?: stt.IInterpolation);
-
-        /** Interpolation method. */
-        public method: stt.Interpolation.Method;
-
-        /** Interpolation properties. */
-        public properties: string[];
-
-        /**
-         * Creates a new Interpolation instance using the specified properties.
-         * @param [properties] Properties to set
-         * @returns Interpolation instance
-         */
-        public static create(properties?: stt.IInterpolation): stt.Interpolation;
-
-        /**
-         * Encodes the specified Interpolation message. Does not implicitly {@link stt.Interpolation.verify|verify} messages.
-         * @param message Interpolation message or plain object to encode
-         * @param [writer] Writer to encode to
-         * @returns Writer
-         */
-        public static encode(message: stt.IInterpolation, writer?: $protobuf.Writer): $protobuf.Writer;
-
-        /**
-         * Encodes the specified Interpolation message, length delimited. Does not implicitly {@link stt.Interpolation.verify|verify} messages.
-         * @param message Interpolation message or plain object to encode
-         * @param [writer] Writer to encode to
-         * @returns Writer
-         */
-        public static encodeDelimited(message: stt.IInterpolation, writer?: $protobuf.Writer): $protobuf.Writer;
-
-        /**
-         * Decodes an Interpolation message from the specified reader or buffer.
-         * @param reader Reader or buffer to decode from
-         * @param [length] Message length if known beforehand
-         * @returns Interpolation
-         * @throws {Error} If the payload is not a reader or valid buffer
-         * @throws {$protobuf.util.ProtocolError} If required fields are missing
-         */
-        public static decode(reader: ($protobuf.Reader|Uint8Array), length?: number): stt.Interpolation;
-
-        /**
-         * Decodes an Interpolation message from the specified reader or buffer, length delimited.
-         * @param reader Reader or buffer to decode from
-         * @returns Interpolation
-         * @throws {Error} If the payload is not a reader or valid buffer
-         * @throws {$protobuf.util.ProtocolError} If required fields are missing
-         */
-        public static decodeDelimited(reader: ($protobuf.Reader|Uint8Array)): stt.Interpolation;
-
-        /**
-         * Verifies an Interpolation message.
-         * @param message Plain object to verify
-         * @returns `null` if valid, otherwise the reason why it is not
-         */
-        public static verify(message: { [k: string]: any }): (string|null);
-
-        /**
-         * Creates an Interpolation message from a plain object. Also converts values to their respective internal types.
-         * @param object Plain object
-         * @returns Interpolation
-         */
-        public static fromObject(object: { [k: string]: any }): stt.Interpolation;
-
-        /**
-         * Creates a plain object from an Interpolation message. Also converts values to other types if specified.
-         * @param message Interpolation
-         * @param [options] Conversion options
-         * @returns Plain object
-         */
-        public static toObject(message: stt.Interpolation, options?: $protobuf.IConversionOptions): { [k: string]: any };
-
-        /**
-         * Converts this Interpolation to JSON.
-         * @returns JSON object
-         */
-        public toJSON(): { [k: string]: any };
-
-        /**
-         * Gets the default type url for Interpolation
-         * @param [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
-         * @returns The default type url
-         */
-        public static getTypeUrl(typeUrlPrefix?: string): string;
-    }
-
-    namespace Interpolation {
-
-        /** Method enum. */
-        enum Method {
-            NONE = 0,
-            LINEAR = 1,
-            STEP = 2,
-            CUBIC = 3
-        }
-    }
-
-    /** Properties of a TemporalResolution. */
-    interface ITemporalResolution {
-
-        /** TemporalResolution bucketSizeMs */
-        bucketSizeMs?: (number|Long|null);
-
-        /** TemporalResolution zoomLevel */
-        zoomLevel?: (number|null);
-
-        /** TemporalResolution featureCount */
-        featureCount?: (number|null);
-
-        /** TemporalResolution suggestedSpeedMultiplier */
-        suggestedSpeedMultiplier?: (number|null);
-    }
-
-    /** Represents a TemporalResolution. */
-    class TemporalResolution implements ITemporalResolution {
-
-        /**
-         * Constructs a new TemporalResolution.
-         * @param [properties] Properties to set
-         */
-        constructor(properties?: stt.ITemporalResolution);
-
-        /** TemporalResolution bucketSizeMs. */
-        public bucketSizeMs: (number|Long);
-
-        /** TemporalResolution zoomLevel. */
-        public zoomLevel: number;
-
-        /** TemporalResolution featureCount. */
-        public featureCount: number;
-
-        /** TemporalResolution suggestedSpeedMultiplier. */
-        public suggestedSpeedMultiplier: number;
-
-        /**
-         * Creates a new TemporalResolution instance using the specified properties.
-         * @param [properties] Properties to set
-         * @returns TemporalResolution instance
-         */
-        public static create(properties?: stt.ITemporalResolution): stt.TemporalResolution;
-
-        /**
-         * Encodes the specified TemporalResolution message. Does not implicitly {@link stt.TemporalResolution.verify|verify} messages.
-         * @param message TemporalResolution message or plain object to encode
-         * @param [writer] Writer to encode to
-         * @returns Writer
-         */
-        public static encode(message: stt.ITemporalResolution, writer?: $protobuf.Writer): $protobuf.Writer;
-
-        /**
-         * Encodes the specified TemporalResolution message, length delimited. Does not implicitly {@link stt.TemporalResolution.verify|verify} messages.
-         * @param message TemporalResolution message or plain object to encode
-         * @param [writer] Writer to encode to
-         * @returns Writer
-         */
-        public static encodeDelimited(message: stt.ITemporalResolution, writer?: $protobuf.Writer): $protobuf.Writer;
-
-        /**
-         * Decodes a TemporalResolution message from the specified reader or buffer.
-         * @param reader Reader or buffer to decode from
-         * @param [length] Message length if known beforehand
-         * @returns TemporalResolution
-         * @throws {Error} If the payload is not a reader or valid buffer
-         * @throws {$protobuf.util.ProtocolError} If required fields are missing
-         */
-        public static decode(reader: ($protobuf.Reader|Uint8Array), length?: number): stt.TemporalResolution;
-
-        /**
-         * Decodes a TemporalResolution message from the specified reader or buffer, length delimited.
-         * @param reader Reader or buffer to decode from
-         * @returns TemporalResolution
-         * @throws {Error} If the payload is not a reader or valid buffer
-         * @throws {$protobuf.util.ProtocolError} If required fields are missing
-         */
-        public static decodeDelimited(reader: ($protobuf.Reader|Uint8Array)): stt.TemporalResolution;
-
-        /**
-         * Verifies a TemporalResolution message.
-         * @param message Plain object to verify
-         * @returns `null` if valid, otherwise the reason why it is not
-         */
-        public static verify(message: { [k: string]: any }): (string|null);
-
-        /**
-         * Creates a TemporalResolution message from a plain object. Also converts values to their respective internal types.
-         * @param object Plain object
-         * @returns TemporalResolution
-         */
-        public static fromObject(object: { [k: string]: any }): stt.TemporalResolution;
-
-        /**
-         * Creates a plain object from a TemporalResolution message. Also converts values to other types if specified.
-         * @param message TemporalResolution
-         * @param [options] Conversion options
-         * @returns Plain object
-         */
-        public static toObject(message: stt.TemporalResolution, options?: $protobuf.IConversionOptions): { [k: string]: any };
-
-        /**
-         * Converts this TemporalResolution to JSON.
-         * @returns JSON object
-         */
-        public toJSON(): { [k: string]: any };
-
-        /**
-         * Gets the default type url for TemporalResolution
          * @param [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
          * @returns The default type url
          */

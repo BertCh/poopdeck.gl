@@ -7,7 +7,8 @@ import { decodeTile } from './tile';
 import { decompress } from './compression';
 import type { Tile, TileId, Compression } from './types';
 import type { LoaderWithParser } from '@loaders.gl/loader-utils';
-import { getWorkerPool } from './worker-pool';
+// Worker pool disabled - see comment in parse()
+// import { getWorkerPool } from './worker-pool';
 
 /**
  * STT Loader for loaders.gl integration
@@ -41,7 +42,8 @@ export const STTLoader: LoaderWithParser = {
   parse: async (arrayBuffer: ArrayBuffer, options?: any): Promise<Tile> => {
     const tileId = options?.stt?.tileId;
     const compression = options?.stt?.compression ?? 0;
-    const disableWorker = options?.stt?.disableWorker ?? false;
+    // Worker decoding disabled - see TODO below
+    // const disableWorker = options?.stt?.disableWorker ?? false;
     
     if (!tileId) {
       throw new Error('STTLoader: tileId is required in options.stt.tileId');
@@ -50,16 +52,8 @@ export const STTLoader: LoaderWithParser = {
     // Decompress
     const compressed = new Uint8Array(arrayBuffer);
 
-    if (!disableWorker) {
-        // Use worker pool for decoding
-        const pool = getWorkerPool();
-        try {
-            return await pool.decodeTile(tileId, compressed, compression);
-        } catch (error) {
-            console.warn('STTLoader: Worker decode failed, falling back to main thread', error);
-            // Fallback to main thread if worker fails
-        }
-    }
+    // TODO: Re-enable worker decoding after updating worker to use 'positions' field
+    // The worker currently uses outdated 'geometry' field name
 
     const data = await decompress(compressed, compression);
     

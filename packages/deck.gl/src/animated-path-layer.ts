@@ -3,9 +3,10 @@
  */
 
 import { PathLayer } from '@deck.gl/layers';
+import type { PathLayerProps } from '@deck.gl/layers';
 import { SpatioTemporalLayer, SpatioTemporalLayerProps } from './spatiotemporal-layer';
 import { TimeFilterExtension } from './time-filter-extension';
-import { Feature, decodeGeometry, GeometryType } from '@stt/core';
+import { Feature } from '@stt/core';
 
 export interface AnimatedPathLayerProps extends SpatioTemporalLayerProps {
   /** Width of paths in pixels */
@@ -21,7 +22,7 @@ export interface AnimatedPathLayerProps extends SpatioTemporalLayerProps {
   getWidth?: (feature: Feature) => number;
   
   /** Get path coordinates [[lon, lat], ...] */
-  getPath?: (feature: Feature) => number[][];
+  getPath?: PathLayerProps['getPath'];
   
   /** Show trailing effect (gradient fade) */
   trail?: boolean;
@@ -76,17 +77,15 @@ export class AnimatedPathLayer extends SpatioTemporalLayer<AnimatedPathLayerProp
       return tile.layers.map((layer, layerIndex) => {
         const layerId = `${this.props.id}-${tile.id.z}-${tile.id.x}-${tile.id.y}-${tile.id.t}-${layerIndex}`;
 
+        const defaultGetPath: PathLayerProps['getPath'] = (feature: Feature) =>
+          feature.positions || [];
+
         return new PathLayer({
           id: layerId,
           data: layer.features,
           
           // Path accessor - decode geometry if not provided
-          getPath: (feature: Feature) => {
-            if (this.props.getPath && this.props.getPath(feature).length > 0) {
-               return this.props.getPath(feature);
-            }
-            return this.extractPath(feature, layer.extent, tile.id);
-          },
+          getPath: (this.props.getPath as PathLayerProps['getPath']) ?? defaultGetPath,
           
           // Standard accessors
           getColor: this.props.getColor,
@@ -125,39 +124,4 @@ export class AnimatedPathLayer extends SpatioTemporalLayer<AnimatedPathLayerProp
     });
   }
 
-  private isFeatureVisible(feature: Feature, currentTime: number): boolean {
-     // Kept for compatibility or debugging, but filtering is done on GPU now
-    if (!feature.timeRange) {
-      return true;
-    }
-    const timeWindow = this.props.timeWindow || 86400000;
-    const windowStart = currentTime - timeWindow / 2;
-    const windowEnd = currentTime + timeWindow / 2;
-    return (
-      feature.timeRange.start <= windowEnd &&
-      feature.timeRange.end >= windowStart
-    );
-  }
-  
-  private extractPath(feature: Feature, extent: number, tileId: any): number[][] {
-    if (!feature.geometry || feature.geometry.length < 3) return [];
-    
-    // Decode geometry (handles ZigZag and Delta encoding)
-    // Note: We treat all paths as LineStrings for now
-    const coords = decodeGeometry(feature.geometry, GeometryType.LineString, extent);
-    const path: number[][] = [];
-    const n = 1 << tileId.z;
-    
-    for (const [normX, normY] of coords) {
-      // Convert normalized tile coords (0-1) to lon/lat
-      // Note: decodeGeometry returns x/extent, y/extent
-      const lon = ((tileId.x + normX) / n) * 360 - 180;
-      const latRad = Math.atan(Math.sinh(Math.PI * (1 - 2 * (tileId.y + normY) / n)));
-      const lat = (latRad * 180) / Math.PI;
-      
-      path.push([lon, lat]);
-    }
-    
-    return path;
-  }
 }

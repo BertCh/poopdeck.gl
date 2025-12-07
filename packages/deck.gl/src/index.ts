@@ -6,6 +6,7 @@ export { SpatioTemporalLayer } from './spatiotemporal-layer';
 export { AnimatedPointLayer } from './animated-point-layer';
 export { AnimatedPathLayer } from './animated-path-layer';
 export { HeatmapTimeLayer } from './heatmap-time-layer';
+export { TimeFilterExtension } from './time-filter-extension';
 export { TimeController } from './time-controller';
 export type { TimeControllerOptions, TimeControllerState } from './time-controller';
 

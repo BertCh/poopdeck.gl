@@ -44,22 +44,6 @@ export enum GeometryType {
   Polygon = 2,
 }
 
-/** Feature change type for delta encoding */
-export enum ChangeType {
-  Unchanged = 0,
-  Created = 1,
-  Modified = 2,
-  Deleted = 3,
-}
-
-/** Interpolation method for temporal transitions */
-export enum InterpolationMethod {
-  None = 0,
-  Linear = 1,
-  Step = 2,
-  Cubic = 3,
-}
-
 /** Property value types */
 export type PropertyValue = string | number | boolean;
 
@@ -108,8 +92,6 @@ export interface Tile {
   id: TileId;
   timeRange: TimeRange;
   layers: Layer[];
-  interpolation?: InterpolationHint;
-  temporalResolution?: TemporalResolution;
 }
 
 /** Layer within a tile */
@@ -117,77 +99,15 @@ export interface Layer {
   name: string;
   extent: number;
   features: Feature[];
-  /** Trajectories for moving objects (decoded as binary data) */
-  trajectories?: TrajectoryData;
-  binary?: BinaryLayerData;
-}
-
-/** Binary data for a layer (Structure of Arrays) */
-export interface BinaryLayerData {
-  /** Flat array of coordinates [x, y, x, y, ...] or [x, y, z, ...] */
-  positions: Float32Array;
-  /** Flat array of other numeric attributes */
-  numericProps: Record<string, Float32Array>;
-  /** Number of features/vertices */
-  length: number;
-  /** Global feature IDs corresponding to indices */
-  featureIds: Float64Array;
-  /** Start times (Unix ms) */
-  startTimes: Float64Array;
-  /** End times (Unix ms) */
-  endTimes: Float64Array;
-}
-
-/** Optimized trajectory data for GPU rendering */
-export interface TrajectoryData {
-  /** Number of paths */
-  count: number;
-  
-  /** Flat array of path IDs */
-  ids: Float64Array;
-  
-  /** Start index in flattened arrays for each path */
-  startIndices: Uint32Array;
-  
-  /** Number of points in each path */
-  lengths: Uint32Array;
-  
-  /** Flattened timestamps (Float32 for precision relative to tile start) */
-  timestamps: Float32Array;
-  
-  /** Flattened positions [x, y, x, y...] */
-  positions: Float32Array;
-  
-  /** Properties per path */
-  properties: Record<string, PropertyValue>[];
 }
 
 /** Feature within a layer */
 export interface Feature {
   id: number;
   type: GeometryType;
-  geometry: number[]; // Delta-encoded coordinates
+  positions: [number, number][];
   properties: Record<string, PropertyValue>;
   timeRange?: TimeRange;
-  changeType?: ChangeType;
-}
-
-/** Interpolation hint */
-export interface InterpolationHint {
-  method: InterpolationMethod;
-  properties: string[];
-}
-
-/** Temporal resolution metadata - tells frontend how to handle animation */
-export interface TemporalResolution {
-  /** Temporal bucket size in milliseconds (0 = no bucketing) */
-  bucketSizeMs: number;
-  /** Zoom level of this tile */
-  zoomLevel: number;
-  /** Number of features in this tile */
-  featureCount: number;
-  /** Suggested animation speed multiplier (1.0 = normal, >1.0 = faster) */
-  suggestedSpeedMultiplier: number;
 }
 
 export interface TileEntry {

@@ -141,8 +141,8 @@ function App() {
                 if (magnitude < 8.0) return [227, 26, 28, 200]; // Red
                 return [128, 0, 38, 200]; // Dark Red
               } else if (isShipData) {
-                // Color by vessel type
-                const vesselType = d.properties.vessel_type || "cargo";
+                // Color by vessel type (real AIS data from NOAA)
+                const vesselType = d.properties.vessel_type || "other";
                 switch (vesselType) {
                   case "cargo":
                     return [74, 144, 226, 200]; // Blue
@@ -152,8 +152,12 @@ function App() {
                     return [80, 227, 194, 200]; // Teal
                   case "fishing":
                     return [184, 233, 134, 200]; // Green
+                  case "towing":
+                    return [155, 89, 182, 200]; // Purple
+                  case "special":
+                    return [241, 196, 15, 200]; // Yellow
                   default:
-                    return [128, 128, 128, 200]; // Gray
+                    return [128, 128, 128, 200]; // Gray for 'other'
                 }
               } else {
                 // Color by value (e.g., case count)
