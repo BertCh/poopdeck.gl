@@ -41,6 +41,15 @@ export interface SpatioTemporalLayerProps extends CompositeLayerProps {
   /** Maximum cache size in bytes */
   maxCacheByteSize?: number;
   
+  /** Enable predictive prefetching for smooth animation */
+  enablePrefetch?: boolean;
+  
+  /** How far ahead to prefetch in animation time (milliseconds) */
+  prefetchAhead?: number;
+  
+  /** Number of time steps to prefetch ahead */
+  prefetchSteps?: number;
+  
   /** Callback when all tiles in viewport are loaded */
   onViewportLoad?: (tiles: Tile[]) => void;
   
@@ -62,6 +71,7 @@ interface SpatioTemporalLayerState {
   currentTime: number;
   isLoaded: boolean;
   frameNumber?: number;
+  playStateHandler?: (playing: boolean, speed: number) => void;
 }
 
 /**
@@ -90,10 +100,15 @@ export class SpatioTemporalLayer<
     timeController: { type: 'object', value: null, compare: false },
     
     // Tile loading configuration (following deck.gl TileLayer pattern)
-    maxRequests: { type: 'number', value: 6, compare: false },
-    debounceTime: { type: 'number', value: 300, compare: false },
+    maxRequests: { type: 'number', value: 12, compare: false }, // Higher for animation
+    debounceTime: { type: 'number', value: 0, compare: false }, // No debounce for time changes
     maxCacheSize: { type: 'number', value: 200, compare: false },
     maxCacheByteSize: { type: 'number', value: 500 * 1024 * 1024, compare: false }, // 500MB
+    
+    // Prefetch configuration for smooth animation
+    enablePrefetch: { type: 'boolean', value: true, compare: false },
+    prefetchAhead: { type: 'number', value: 10000, compare: false }, // 10 seconds ahead
+    prefetchSteps: { type: 'number', value: 3, compare: false },
     
     // Callbacks
     onViewportLoad: { type: 'function', value: null, optional: true },
@@ -107,6 +122,14 @@ export class SpatioTemporalLayer<
   declare state: SpatioTemporalLayerState & { [key: string]: unknown };
 
   initializeState(_context: LayerContext): void {
+    // Create handler for play state changes
+    const playStateHandler = (playing: boolean, speed: number) => {
+      const { tileset } = this.state;
+      if (tileset) {
+        tileset.setAnimationState(playing, speed);
+      }
+    };
+    
     this.setState({
       archive: null,
       tileset: null,
@@ -114,13 +137,24 @@ export class SpatioTemporalLayer<
       tiles: [],
       currentTime: this.props.currentTime,
       isLoaded: false,
+      playStateHandler,
     });
+
+    // Subscribe to time controller play state if provided
+    if (this.props.timeController) {
+      this.props.timeController.on('playState', playStateHandler);
+    }
 
     // Initialize archive and tileset
     this._initArchiveAndTileset();
   }
 
   finalizeState(_context: LayerContext): void {
+    // Unsubscribe from time controller
+    if (this.props.timeController && this.state.playStateHandler) {
+      this.props.timeController.off('playState', this.state.playStateHandler);
+    }
+    
     // Cleanup tileset resources
     const { tileset } = this.state;
     if (tileset) {
@@ -137,9 +171,29 @@ export class SpatioTemporalLayer<
   }
 
   updateState(params: UpdateParameters<this>): void {
-    const { changeFlags } = params;
+    const { changeFlags, oldProps } = params;
     const propsChanged = changeFlags.propsChanged;
     const dataChanged = propsChanged && this.props.data !== this.state.archive?.url;
+    
+    // Handle TimeController changes
+    if (oldProps?.timeController !== this.props.timeController && this.state.playStateHandler) {
+      // Unsubscribe from old controller
+      if (oldProps?.timeController) {
+        oldProps.timeController.off('playState', this.state.playStateHandler);
+      }
+      // Subscribe to new controller
+      if (this.props.timeController) {
+        this.props.timeController.on('playState', this.state.playStateHandler);
+        // Sync current animation state
+        const { tileset } = this.state;
+        if (tileset) {
+          tileset.setAnimationState(
+            this.props.timeController.isPlaying(),
+            this.props.timeController.getSpeed()
+          );
+        }
+      }
+    }
     
     if (dataChanged) {
       // Reinitialize with new data source
@@ -225,6 +279,10 @@ export class SpatioTemporalLayer<
       minZoom: metadata.minZoom,
       maxZoom: metadata.maxZoom,
       refinementStrategy: 'best-available', // Load parent tiles as fallback (deck.gl pattern)
+      // Prefetch configuration for smooth animation playback
+      enablePrefetch: this.props.enablePrefetch!,
+      prefetchAhead: this.props.prefetchAhead!,
+      prefetchSteps: this.props.prefetchSteps!,
       getAvailableTiles: (bounds, zoom, timeRange) => 
         archive.getTileIdsInBounds(bounds, zoom, timeRange),
       getTileData: (tileId) => archive.getTile(tileId),
@@ -244,6 +302,11 @@ export class SpatioTemporalLayer<
     });
     
     if (DEBUG) console.log('[STL] Tileset configured with zoom range:', metadata.minZoom, '-', metadata.maxZoom);
+    
+    // If time controller is playing, set initial animation state
+    if (this.props.timeController?.isPlaying()) {
+      tileset.setAnimationState(true, this.props.timeController.getSpeed());
+    }
     
     this.setState({ archive, tileset, metadata });
   }

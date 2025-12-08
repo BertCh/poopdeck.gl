@@ -21,6 +21,7 @@ export interface TimeControllerState {
 }
 
 export type TimeUpdateCallback = (time: number) => void;
+export type PlayStateCallback = (playing: boolean, speed: number) => void;
 
 export class TimeController {
   private currentTime: number;
@@ -29,6 +30,7 @@ export class TimeController {
   private loop: boolean = false;
   private timeRange?: { start: number; end: number };
   private listeners: Set<TimeUpdateCallback> = new Set();
+  private playStateListeners: Set<PlayStateCallback> = new Set();
   private animationFrameId?: number;
   private lastUpdateTime?: number;
 
@@ -63,6 +65,9 @@ export class TimeController {
   /** Set playback speed */
   setSpeed(speed: number): void {
     this.speed = speed;
+    if (this.playing) {
+      this.notifyPlayStateListeners();
+    }
   }
 
   /** Set time range */
@@ -75,6 +80,7 @@ export class TimeController {
     if (this.playing) return;
     this.playing = true;
     this.lastUpdateTime = performance.now();
+    this.notifyPlayStateListeners();
     this.tick();
   }
 
@@ -85,6 +91,7 @@ export class TimeController {
       cancelAnimationFrame(this.animationFrameId);
       this.animationFrameId = undefined;
     }
+    this.notifyPlayStateListeners();
   }
 
   /** Toggle play/pause */
@@ -107,16 +114,24 @@ export class TimeController {
   }
 
   /** Register listener for time updates */
-  on(event: 'tick', callback: TimeUpdateCallback): void {
+  on(event: 'tick', callback: TimeUpdateCallback): void;
+  on(event: 'playState', callback: PlayStateCallback): void;
+  on(event: string, callback: TimeUpdateCallback | PlayStateCallback): void {
     if (event === 'tick') {
-      this.listeners.add(callback);
+      this.listeners.add(callback as TimeUpdateCallback);
+    } else if (event === 'playState') {
+      this.playStateListeners.add(callback as PlayStateCallback);
     }
   }
 
   /** Unregister listener */
-  off(event: 'tick', callback: TimeUpdateCallback): void {
+  off(event: 'tick', callback: TimeUpdateCallback): void;
+  off(event: 'playState', callback: PlayStateCallback): void;
+  off(event: string, callback: TimeUpdateCallback | PlayStateCallback): void {
     if (event === 'tick') {
-      this.listeners.delete(callback);
+      this.listeners.delete(callback as TimeUpdateCallback);
+    } else if (event === 'playState') {
+      this.playStateListeners.delete(callback as PlayStateCallback);
     }
   }
 
@@ -177,6 +192,12 @@ export class TimeController {
   private notifyListeners(): void {
     for (const listener of this.listeners) {
       listener(this.currentTime);
+    }
+  }
+
+  private notifyPlayStateListeners(): void {
+    for (const listener of this.playStateListeners) {
+      listener(this.playing, this.speed);
     }
   }
 }

@@ -33,6 +33,15 @@ export interface SpatiotemporalTilesetOptions {
   /** Refinement strategy: 'best-available' (load parent tiles as fallback) or 'no-overlap' (only exact zoom) */
   refinementStrategy?: 'best-available' | 'no-overlap';
   
+  /** Enable predictive prefetching for animations */
+  enablePrefetch?: boolean;
+  
+  /** How far ahead to prefetch (in milliseconds of animation time) */
+  prefetchAhead?: number;
+  
+  /** Number of time window steps to prefetch */
+  prefetchSteps?: number;
+  
   /** Callback to get available tiles for bounds/time */
   getAvailableTiles: (
     bounds: BoundingBox,
@@ -76,8 +85,7 @@ export class SpatiotemporalTileset {
   // Tile registry
   private tiles: Map<string, SpatiotemporalTileHeader> = new Map();
   
-  // Request queue
-  private requestQueue: TileId[] = [];
+  // Active requests tracking
   private activeRequests: Set<string> = new Set();
   
   // Viewport state
@@ -101,21 +109,47 @@ export class SpatiotemporalTileset {
     evictions: 0,
   };
   
+  // Animation state for prefetching
+  private animationSpeed: number = 0;
+  private lastUpdateTime: number = 0;
+  private isAnimating: boolean = false;
+  
+  // Separate queues for priority management
+  private priorityQueue: TileId[] = []; // High priority - current time tiles
+  private prefetchQueue: TileId[] = []; // Low priority - future tiles
+  
   constructor(options: SpatiotemporalTilesetOptions) {
     this.options = {
-      maxRequests: options.maxRequests ?? 6,
+      maxRequests: options.maxRequests ?? 60, // Increased default for animation
       debounceTime: options.debounceTime ?? 300,
       maxCacheSize: options.maxCacheSize ?? 200, // Increased from 100
       maxCacheByteSize: options.maxCacheByteSize ?? 500 * 1024 * 1024, // 500MB (increased from 200MB)
       minZoom: options.minZoom ?? 0,
       maxZoom: options.maxZoom ?? 14,
       refinementStrategy: options.refinementStrategy ?? 'best-available', // Default: load parent tiles as fallback
+      enablePrefetch: options.enablePrefetch ?? true, // Enable by default
+      prefetchAhead: options.prefetchAhead ?? 10000, // 10 seconds ahead default
+      prefetchSteps: options.prefetchSteps ?? 3, // 3 steps ahead
       getAvailableTiles: options.getAvailableTiles,
       getTileData: options.getTileData,
       onTileLoad: options.onTileLoad ?? (() => {}),
       onTileUnload: options.onTileUnload ?? (() => {}),
       onTileError: options.onTileError ?? ((err) => console.error(err)),
     };
+  }
+  
+  /**
+   * Update animation state for prefetching
+   * Call this when animation starts/stops or speed changes
+   */
+  setAnimationState(isAnimating: boolean, speed: number = 0): void {
+    this.isAnimating = isAnimating;
+    this.animationSpeed = speed;
+    
+    // When animation starts, trigger prefetch immediately
+    if (isAnimating && this.options.enablePrefetch && this.currentViewport) {
+      this.prefetchFutureTiles();
+    }
   }
   
   /**
@@ -128,7 +162,19 @@ export class SpatiotemporalTileset {
     time: number;
     timeWindow: number;
   }, skipDebounce: boolean = false): number {
+    const previousTime = this.currentViewport?.time;
     this.currentViewport = viewport;
+    
+    // Track animation speed based on time changes
+    const now = Date.now();
+    if (previousTime !== undefined && this.lastUpdateTime > 0) {
+      const realTimeDelta = now - this.lastUpdateTime;
+      const simTimeDelta = viewport.time - previousTime;
+      if (realTimeDelta > 0 && realTimeDelta < 1000) { // Ignore large gaps
+        this.animationSpeed = simTimeDelta / realTimeDelta;
+      }
+    }
+    this.lastUpdateTime = now;
     
     // Cancel pending debounce if viewport changed
     if (this.debounceTimer) {
@@ -197,20 +243,6 @@ export class SpatiotemporalTileset {
       end: time + timeWindow / 2,
     };
     
-    console.log('[Tileset] selectAndLoadTiles:', {
-      bounds: {
-        minLon: bounds.minLon,
-        minLat: bounds.minLat,
-        maxLon: bounds.maxLon,
-        maxLat: bounds.maxLat,
-      },
-      zoom,
-      timeRange: {
-        start: new Date(timeRange.start).toISOString(),
-        end: new Date(timeRange.end).toISOString(),
-      },
-    });
-    
     // Get zoom levels to load (supports LOD with parent tiles)
     const zoomLevels = this.getZoomLevelsToLoad(zoom);
     
@@ -227,8 +259,6 @@ export class SpatiotemporalTileset {
         z,
         timeRange
       );
-      
-      console.log(`[Tileset] Zoom ${z}: found ${availableTileIds.length} tiles`);
       
       for (const tileId of availableTileIds) {
         const key = this.tileIdToKey(tileId);
@@ -249,14 +279,14 @@ export class SpatiotemporalTileset {
           };
           this.tiles.set(key, header);
           
-          // Add to request queue
-          // Higher zoom (more detailed) tiles get priority
+          // Add to HIGH PRIORITY queue for current time tiles
+          // These always load before prefetch tiles
           if (z === zoom) {
-            // Primary zoom - highest priority (add to front)
-            this.requestQueue.unshift(tileId);
+            // Primary zoom - front of priority queue
+            this.priorityQueue.unshift(tileId);
           } else {
-            // Parent zoom - lower priority (add to back)
-            this.requestQueue.push(tileId);
+            // Parent zoom - back of priority queue (still before prefetch)
+            this.priorityQueue.push(tileId);
           }
         } else {
           // Update last used time
@@ -265,10 +295,15 @@ export class SpatiotemporalTileset {
       }
     }
     
+    // Prefetch future tiles if animation is active
+    if (this.options.enablePrefetch && (this.isAnimating || Math.abs(this.animationSpeed) > 0.1)) {
+      this.prefetchFutureTiles();
+    }
+    
     // Remove tiles not in viewport (with grace period)
     this.evictUnusedTiles(neededTileKeys);
     
-    // Process request queue
+    // Process request queues - priority first, then prefetch
     this.processRequestQueue();
     
     // Increment frame number
@@ -276,52 +311,163 @@ export class SpatiotemporalTileset {
   }
   
   /**
-   * Process request queue with concurrency limit
+   * Prefetch tiles ahead of current animation time
+   * This ensures smooth playback by loading tiles before they're needed
+   */
+  private async prefetchFutureTiles(): Promise<void> {
+    if (!this.currentViewport) return;
+    
+    const { bounds, zoom, time, timeWindow } = this.currentViewport;
+    const { prefetchAhead, prefetchSteps } = this.options;
+    
+    // Determine prefetch direction based on animation speed
+    const direction = this.animationSpeed >= 0 ? 1 : -1;
+    
+    // Calculate how far ahead to prefetch based on animation speed
+    // If animating at 1000x, prefetch more aggressively
+    const speedFactor = Math.max(1, Math.abs(this.animationSpeed) / 1000);
+    const effectivePrefetchAhead = prefetchAhead * speedFactor;
+    
+    // Get zoom levels to prefetch
+    const zoomLevels = this.getZoomLevelsToLoad(zoom);
+    const now = Date.now();
+    
+    // Prefetch multiple time windows ahead
+    for (let step = 1; step <= prefetchSteps; step++) {
+      const futureTime = time + (direction * effectivePrefetchAhead * step);
+      
+      const futureTimeRange = {
+        start: futureTime - timeWindow / 2,
+        end: futureTime + timeWindow / 2,
+      };
+      
+      for (const z of zoomLevels) {
+        try {
+          const futureTileIds = await this.options.getAvailableTiles(
+            bounds,
+            z,
+            futureTimeRange
+          );
+          
+          for (const tileId of futureTileIds) {
+            const key = this.tileIdToKey(tileId);
+            let header = this.tiles.get(key);
+            
+            if (!header) {
+              // Create header for prefetch tile
+              header = {
+                id: tileId,
+                tile: null,
+                isLoaded: false,
+                isLoading: false,
+                isCancelled: false,
+                lastUsed: now,
+                byteSize: 0,
+              };
+              this.tiles.set(key, header);
+              
+              // Add to LOW PRIORITY prefetch queue
+              // These only load when priority queue has capacity
+              this.prefetchQueue.push(tileId);
+            } else {
+              // Update last used time to prevent eviction
+              header.lastUsed = now;
+            }
+          }
+        } catch (error) {
+          // Ignore prefetch errors - they're best-effort
+          console.debug('[Tileset] Prefetch error:', error);
+        }
+      }
+    }
+  }
+  
+  /**
+   * Process request queues with concurrency limit
+   * Priority queue is processed first, prefetch queue uses remaining capacity
    */
   private async processRequestQueue(): Promise<void> {
+    // Calculate how many more requests we can start
+    const availableSlots = this.options.maxRequests - this.activeRequests.size;
+    if (availableSlots <= 0) return;
+    
+    // Reserve slots: priority queue gets what it needs, prefetch gets the rest
+    // During animation, reserve at least 4 slots for priority tiles
+    const priorityReserved = this.isAnimating ? Math.min(4, availableSlots) : 0;
+    
+    let usedSlots = 0;
+    
+    // Process HIGH PRIORITY queue first (current time tiles)
     while (
-      this.requestQueue.length > 0 &&
-      this.activeRequests.size < this.options.maxRequests
+      this.priorityQueue.length > 0 &&
+      usedSlots < availableSlots
     ) {
-      const tileId = this.requestQueue.shift()!;
-      const key = this.tileIdToKey(tileId);
-      
-      // Skip if already loading or loaded
-      const header = this.tiles.get(key);
-      if (!header || header.isLoading || header.isLoaded) {
-        continue;
+      const tileId = this.priorityQueue.shift()!;
+      if (this.startTileLoad(tileId)) {
+        usedSlots++;
       }
-      
-      // Mark as loading
-      header.isLoading = true;
-      this.activeRequests.add(key);
-      
-      // Load tile
-      this.options.getTileData(tileId)
-        .then((tile) => {
-          if (!header.isCancelled && tile) {
-            header.tile = tile;
-            header.isLoaded = true;
-            header.byteSize = this.estimateTileSize(tile);
-            this.cacheStats.hits++;
-            
-            this.options.onTileLoad?.(tile);
-            
-            // Trigger re-render
-            this.frameNumber++;
-          }
-        })
-        .catch((error) => {
-          this.options.onTileError?.(error, tileId);
-        })
-        .finally(() => {
-          header.isLoading = false;
-          this.activeRequests.delete(key);
-          
-          // Process next in queue
-          this.processRequestQueue();
-        });
     }
+    
+    // Process LOW PRIORITY prefetch queue with remaining slots
+    // But respect the priority reservation during animation
+    const prefetchSlots = availableSlots - Math.max(usedSlots, priorityReserved);
+    let prefetchUsed = 0;
+    
+    while (
+      this.prefetchQueue.length > 0 &&
+      prefetchUsed < prefetchSlots
+    ) {
+      const tileId = this.prefetchQueue.shift()!;
+      if (this.startTileLoad(tileId)) {
+        prefetchUsed++;
+      }
+    }
+  }
+  
+  /**
+   * Start loading a single tile
+   * Returns true if load was started, false if skipped
+   */
+  private startTileLoad(tileId: TileId): boolean {
+    const key = this.tileIdToKey(tileId);
+    
+    // Skip if already loading or loaded
+    const header = this.tiles.get(key);
+    if (!header || header.isLoading || header.isLoaded) {
+      return false;
+    }
+    
+    // Mark as loading
+    header.isLoading = true;
+    this.activeRequests.add(key);
+    
+    // Load tile
+    this.options.getTileData(tileId)
+      .then((tile) => {
+        if (!header.isCancelled && tile) {
+          header.tile = tile;
+          header.isLoaded = true;
+          header.byteSize = this.estimateTileSize(tile);
+          this.cacheStats.hits++;
+          
+          this.options.onTileLoad?.(tile);
+          
+          // Trigger re-render
+          this.frameNumber++;
+        }
+      })
+      .catch((error) => {
+        this.options.onTileError?.(error, tileId);
+      })
+      .finally(() => {
+        header.isLoading = false;
+        this.activeRequests.delete(key);
+        
+        // Process next in queue
+        this.processRequestQueue();
+      });
+    
+    return true;
   }
   
   /**
@@ -477,7 +623,8 @@ export class SpatiotemporalTileset {
       ...this.cacheStats,
       tileCount: this.tiles.size,
       activeRequests: this.activeRequests.size,
-      queuedRequests: this.requestQueue.length,
+      priorityQueueLength: this.priorityQueue.length,
+      prefetchQueueLength: this.prefetchQueue.length,
     };
   }
   
@@ -491,7 +638,8 @@ export class SpatiotemporalTileset {
       }
     }
     this.tiles.clear();
-    this.requestQueue = [];
+    this.priorityQueue = [];
+    this.prefetchQueue = [];
     this.activeRequests.clear();
   }
   

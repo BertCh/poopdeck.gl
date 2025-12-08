@@ -53,3 +53,9 @@ data/
 *.csv
 *.zip
 scripts/data-generation/data/
+
+# OSRM routing data (large binary files)
+scripts/data-generation/osrm-data/
+*.osm.pbf
+*.osrm
+*.osrm.*

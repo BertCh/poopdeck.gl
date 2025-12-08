@@ -8,6 +8,7 @@ import {
   TimeController,
 } from "@stt/deck.gl";
 import { DATASETS, getDatasetById } from "./datasets";
+import { calculateAnimationSpeed } from "./types";
 import Sidebar from "./components/Sidebar";
 import Legend from "./components/Legend";
 import TimeControls from "./components/TimeControls";
@@ -27,12 +28,18 @@ function App() {
     [selectedDatasetId]
   );
 
+  // Calculate animation speed based on dataset for consistent playback
+  const baseAnimationSpeed = useMemo(() => {
+    if (!selectedDataset) return 1000;
+    return calculateAnimationSpeed(selectedDataset);
+  }, [selectedDataset]);
+
   const [timeController] = useState(
     () =>
       new TimeController({
         initialTime:
           selectedDataset?.timeRange.start || Date.parse("2020-01-01"),
-        speed: selectedDataset?.animationSpeed || 86400000, // Use dataset speed or default
+        speed: baseAnimationSpeed,
         loop: true,
         timeRange: selectedDataset?.timeRange,
       })
@@ -46,11 +53,10 @@ function App() {
   // Update time controller when dataset changes
   React.useEffect(() => {
     if (selectedDataset) {
+      const newSpeed = calculateAnimationSpeed(selectedDataset);
       timeController.setTimeRange(selectedDataset.timeRange);
       timeController.setTime(selectedDataset.timeRange.start);
-      timeController.setSpeed(
-        (selectedDataset.animationSpeed || 86400000) * speedMultiplier
-      ); // Use dataset speed with multiplier
+      timeController.setSpeed(newSpeed * speedMultiplier);
       timeController.pause();
       setIsPlaying(false);
       setSpeedMultiplier(1.0); // Reset speed multiplier when dataset changes
@@ -100,15 +106,21 @@ function App() {
   const handleSpeedChange = useCallback(
     (multiplier: number) => {
       setSpeedMultiplier(multiplier);
-      const baseSpeed = selectedDataset?.animationSpeed || 86400000;
-      timeController.setSpeed(baseSpeed * multiplier);
+      timeController.setSpeed(baseAnimationSpeed * multiplier);
     },
-    [timeController, selectedDataset]
+    [timeController, baseAnimationSpeed]
   );
 
   // Create appropriate layer based on dataset type
   const layers = useMemo(() => {
     if (!selectedDataset) return [];
+
+    // Calculate prefetch ahead time based on dataset duration and target playback
+    // This ensures we prefetch tiles far enough ahead to cover animation speed
+    const datasetDuration =
+      selectedDataset.timeRange.end - selectedDataset.timeRange.start;
+    const playbackSpeed =
+      datasetDuration / (selectedDataset.targetPlaybackSeconds || 60) / 1000; // ms sim time per ms real time
 
     const baseProps = {
       id: selectedDataset.id,
@@ -119,6 +131,13 @@ function App() {
       timeRange: selectedDataset.timeRange, // Pass time range for precision handling
       opacity: 0.8,
       pickable: true,
+      // Prefetch configuration - scale with animation speed
+      enablePrefetch: true,
+      prefetchAhead: Math.max(
+        selectedDataset.timeWindow || 86400000,
+        playbackSpeed * 5000
+      ), // At least 5 seconds ahead
+      prefetchSteps: 5, // Prefetch 5 time windows ahead
     };
 
     switch (selectedDataset.type) {
@@ -179,10 +198,10 @@ function App() {
                 return Math.pow(2, magnitude - 4) * 10000;
               } else if (isShipData) {
                 // Fixed size for ships (about 1km radius)
-                return 1000;
+                return 10;
               } else {
                 const value = d.properties.value || 1;
-                return Math.sqrt(value) * 50;
+                return Math.sqrt(value) * 20;
               }
             },
             radiusUnits: "meters",
@@ -205,7 +224,7 @@ function App() {
                   return [255, 107, 53, 255];
                 case "enroute":
                   return [74, 144, 226, 255];
-                
+
                 // Hurricane statuses
                 case "tropical_depression":
                   return [0, 208, 132, 255];
@@ -223,7 +242,7 @@ function App() {
                   return [144, 19, 254, 255];
                 case "disturbance":
                   return [80, 227, 194, 255];
-                  
+
                 default:
                   return [128, 128, 128, 255];
               }
@@ -300,6 +319,7 @@ function App() {
         onSeek={handleSeek}
         onSpeedChange={handleSpeedChange}
         currentSpeedMultiplier={speedMultiplier}
+        targetPlaybackSeconds={selectedDataset.targetPlaybackSeconds ?? 30}
       />
 
       {loading && (

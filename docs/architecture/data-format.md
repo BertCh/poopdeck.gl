@@ -2,6 +2,11 @@
 
 The Spatiotemporal Tile (`.stt`) format is a custom binary archive format designed for efficient random access of spatiotemporal data. It combines a spatial index with a temporal index to allow clients to fetch only the data required for a specific map view and time window.
 
+## Format Versions
+
+- **Version 1** (Original): Absolute WGS84 coordinates, per-feature properties
+- **Version 2** (New): Quantized tile-relative coordinates, columnar properties
+
 ## File Structure
 
 A `.stt` file is composed of four main sections:
@@ -88,18 +93,62 @@ Contains dataset-level information:
 - **Internal Coordinates:** Features store absolute WGS84 lon/lat as doubles.
 
 ## Compression
-- **Geometry:** Stored as full-precision longitude/latitude pairs (no zig-zag or delta encoding).
-- **Properties:** Written inline per feature as a map.
+- **Version 1 Geometry:** Stored as full-precision longitude/latitude pairs.
+- **Version 2 Geometry:** Delta-encoded quantized coordinates (4-8x smaller).
+- **Properties:** V1: inline per feature. V2: columnar typed arrays.
 - **Tile:** The serialized Tile message is compressed using Gzip.
+
+## Version 2 Format Details
+
+Version 2 provides significant improvements for GPU rendering:
+
+### Coordinate Quantization (MVT-style)
+```protobuf
+// V1: 16 bytes per coordinate
+message Position {
+  double lon = 1;  // 8 bytes
+  double lat = 2;  // 8 bytes
+}
+
+// V2: ~2-4 bytes per coordinate (delta + varint)
+repeated sint32 geometry = 4 [packed = true];  // [dx, dy, dx, dy, ...]
+```
+
+### Columnar Properties
+```protobuf
+message ColumnarFeatures {
+  uint32 feature_count = 1;
+  
+  // All positions in one array (GPU buffer ready)
+  repeated sint32 geometry = 4 [packed = true];
+  
+  // All timestamps in one array
+  repeated sint64 start_times = 6 [packed = true];
+  
+  // Numeric properties as typed arrays
+  repeated NumericColumn numeric_properties = 8;
+  
+  // Categorical properties with dictionary encoding
+  repeated CategoricalColumn categorical_properties = 9;
+}
+```
+
+### Generating V2 Tiles
+
+```bash
+stt-build -i data.geojson -o output.stt --v2
+```
 
 ## Design Philosophy
 
 The format prioritizes simplicity and compatibility with deck.gl:
 
-1. **No Complex Encoding**: Coordinates are stored as absolute doubles, avoiding the need for complex delta/zigzag decoding on the frontend.
+1. **Version 1**: Simple format with absolute coordinates for easy debugging.
 
-2. **Size-Based Chunking**: Tiles are chunked by estimated byte size to ensure consistent network transfer times.
+2. **Version 2**: GPU-optimized format with quantized coordinates and columnar layout.
 
-3. **Direct deck.gl Compatibility**: Features can be passed directly to deck.gl layers with minimal transformation.
+3. **Size-Based Chunking**: Tiles are chunked by estimated byte size to ensure consistent network transfer times.
 
-4. **HTTP Range Requests**: The archive structure supports efficient random access via HTTP Range Requests.
+4. **Direct deck.gl Compatibility**: Features can be passed directly to deck.gl layers with minimal transformation.
+
+5. **HTTP Range Requests**: The archive structure supports efficient random access via HTTP Range Requests.
