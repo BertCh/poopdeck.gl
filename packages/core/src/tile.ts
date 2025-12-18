@@ -1,109 +1,162 @@
 /**
  * Tile decoding utilities
  * 
- * Supports both Version 1 (absolute WGS84 coords) and Version 2 (quantized + columnar)
+ * Decodes directly to BinaryFeatures format for GPU-efficient rendering.
+ * No intermediate Feature objects are created - data goes straight to typed arrays.
  */
 
 import { stt } from './proto';
 import {
-  Feature,
+  BinaryFeatures,
   GeometryType,
   Layer,
-  PropertyValue,
   Tile,
   TileId,
 } from './types';
 
 /**
- * Decode a tile from Protocol Buffer bytes
+ * Decode a tile from Protocol Buffer bytes directly to binary format
  */
 export function decodeTile(data: Uint8Array, id: TileId): Tile {
   const protoTile = stt.Tile.decode(data);
-  const version = protoTile.version || 1;
   const tileTimeStart = Number(protoTile.timeStart) || 0;
+  const tileTimeEnd = Number(protoTile.timeEnd) || 0;
 
   const layers = (protoTile.layers || []).map((layer) => 
-    decodeLayer(layer, id, version, tileTimeStart)
+    decodeLayerBinary(layer, id, tileTimeStart)
   );
 
   return {
     id,
     timeRange: {
       start: tileTimeStart,
-      end: Number(protoTile.timeEnd) || 0,
+      end: tileTimeEnd,
     },
     layers,
   };
 }
 
-function decodeLayer(protoLayer: stt.ILayer, tileId: TileId, version: number, tileTimeStart: number): Layer {
-  const extent = protoLayer.extent || 4096;
-  
-  // Check if this is a Version 2 layer with columnar data
-  if (version >= 2 && protoLayer.columnar) {
-    return decodeColumnarLayer(protoLayer, tileId, extent, tileTimeStart);
-  }
-  
-  // Version 1: Individual features with absolute coordinates
-  const features = (protoLayer.features || []).map((feature) => 
-    decodeFeature(feature)
-  );
-
-  return {
-    name: protoLayer.name || 'default',
-    extent,
-    features,
-  };
-}
-
 /**
- * Decode a Version 2 columnar layer
+ * Decode a layer directly to binary format
  */
-function decodeColumnarLayer(
+function decodeLayerBinary(
   protoLayer: stt.ILayer, 
   tileId: TileId, 
-  extent: number,
   tileTimeStart: number
 ): Layer {
-  const columnar = protoLayer.columnar!;
+  const extent = protoLayer.extent || 4096;
+  
+  if (!protoLayer.columnar) {
+    throw new Error('Invalid tile: missing columnar data. Only columnar format is supported.');
+  }
+  
+  const columnar = protoLayer.columnar;
   const featureCount = columnar.featureCount || 0;
   const geometryType = protoGeomTypeToType(
     (columnar.geometryType ?? stt.Feature.GeomType.POINT) as stt.Feature.GeomType
   );
   const isPoint = geometryType === GeometryType.Point;
   
-// Pre-decode categorical properties into lookup tables
-  const categoricalLookup: Map<string, { categories: string[]; indices: Uint8Array }> = new Map();
-  for (const col of columnar.categoricalProperties || []) {
-    if (col.name && col.categories && col.indices) {
-      categoricalLookup.set(col.name, {
-        categories: col.categories,
-        indices: new Uint8Array(col.indices),
-      });
-    }
+  // Handle empty tiles
+  if (featureCount === 0) {
+    return {
+      name: protoLayer.name || 'default',
+      extent,
+      features: createEmptyBinaryFeatures(geometryType),
+    };
   }
   
-  // Pre-decode numeric properties into arrays
-  const numericLookup: Map<string, Float32Array> = new Map();
-  for (const col of columnar.numericProperties || []) {
-    if (col.name && col.values) {
-      numericLookup.set(col.name, new Float32Array(col.values));
-    }
+  // Decode geometry to Float64Array positions
+  const { positions, positionOffsets } = decodeGeometry(
+    columnar.geometry || [],
+    columnar.geometryOffsets || [],
+    tileId,
+    extent,
+    featureCount,
+    isPoint
+  );
+  
+  // Decode feature IDs
+  const featureIds = new Uint32Array(featureCount);
+  const protoFeatureIds = columnar.featureIds || [];
+  for (let i = 0; i < featureCount; i++) {
+    featureIds[i] = Number(protoFeatureIds[i]) || i;
   }
   
-  const features: Feature[] = [];
-  const geometry = columnar.geometry || [];
-  const geometryOffsets = columnar.geometryOffsets || [];
-  const featureIds = columnar.featureIds || [];
-  const startTimes = columnar.startTimes || [];
-  const endTimes = columnar.endTimes || [];
-  
-  // Decode each feature
-  let prevX = 0;
-  let prevY = 0;
+  // Decode times directly to Float32Array (relative to tileTimeStart for precision)
+  const startTimes = new Float32Array(featureCount);
+  const endTimes = new Float32Array(featureCount);
+  const protoStartTimes = columnar.startTimes || [];
+  const protoEndTimes = columnar.endTimes || [];
   
   for (let i = 0; i < featureCount; i++) {
-    // Determine geometry range
+    const startDelta = Number(protoStartTimes[i]) || 0;
+    const endDelta = Number(protoEndTimes[i]) || 0;
+    startTimes[i] = startDelta;
+    endTimes[i] = startDelta + endDelta; // endTimes[i] is absolute relative to timeOffset
+  }
+  
+  // Decode properties directly to typed arrays
+  const numericProperties = decodeNumericProperties(columnar.numericProperties || []);
+  const categoricalProperties = decodeCategoricalProperties(columnar.categoricalProperties || []);
+  
+  return {
+    name: protoLayer.name || 'default',
+    extent,
+    features: {
+      featureCount,
+      geometryType,
+      positionDimensions: 2,
+      positions,
+      startIndices: positionOffsets,
+      featureIds,
+      startTimes,
+      endTimes,
+      timeOffset: tileTimeStart,
+      numericProps: numericProperties,
+      categoricalProps: categoricalProperties,
+    },
+  };
+}
+
+/**
+ * Decode geometry from delta-encoded quantized format directly to Float64Array
+ */
+function decodeGeometry(
+  geometry: number[],
+  geometryOffsets: number[],
+  tileId: TileId,
+  extent: number,
+  featureCount: number,
+  isPoint: boolean
+): { positions: Float64Array; positionOffsets?: Uint32Array } {
+  // Calculate total coordinate count
+  let totalCoords: number;
+  if (isPoint) {
+    totalCoords = featureCount;
+  } else {
+    // For lines/polygons, last offset tells us total
+    totalCoords = geometryOffsets.length > 0 
+      ? geometryOffsets[geometryOffsets.length - 1] || (geometry.length / 2)
+      : geometry.length / 2;
+  }
+  
+  // Pre-calculate tile projection constants
+  const n = Math.pow(2, tileId.z);
+  const tileX = tileId.x;
+  const tileY = tileId.y;
+  
+  // Allocate output arrays
+  const positions = new Float64Array(totalCoords * 2);
+  const positionOffsets = isPoint ? undefined : new Uint32Array(featureCount + 1);
+  
+  // Delta decode and dequantize in a single pass
+  let prevX = 0;
+  let prevY = 0;
+  let posIdx = 0;
+  
+  for (let i = 0; i < featureCount; i++) {
+    // Determine geometry range for this feature
     let geomStart: number;
     let geomEnd: number;
     
@@ -112,11 +165,11 @@ function decodeColumnarLayer(
       geomEnd = geomStart + 2;
     } else {
       geomStart = (geometryOffsets[i] || 0) * 2;
-      geomEnd = (geometryOffsets[i + 1] || geometry.length / 2) * 2;
+      geomEnd = (geometryOffsets[i + 1] ?? geometry.length / 2) * 2;
+      positionOffsets![i] = posIdx / 2;
     }
     
-    // Decode positions (delta + quantized -> WGS84)
-    const positions: [number, number][] = [];
+    // Decode coordinates for this feature
     for (let j = geomStart; j < geomEnd; j += 2) {
       // Delta decode
       const dx = geometry[j] || 0;
@@ -126,112 +179,79 @@ function decodeColumnarLayer(
       prevX = qx;
       prevY = qy;
       
-      // Dequantize to WGS84
-      const [lon, lat] = tileRelativeToWgs84(qx, qy, tileId, extent);
-      positions.push([lon, lat]);
+      // Dequantize to WGS84 - inline for performance
+      const worldX = tileX + (qx / extent);
+      const worldY = tileY + (qy / extent);
+      const lon = (worldX / n) * 360 - 180;
+      const latRad = Math.atan(Math.sinh(Math.PI * (1 - (2 * worldY) / n)));
+      const lat = latRad * (180 / Math.PI);
+      
+      positions[posIdx++] = lon;
+      positions[posIdx++] = lat;
     }
-    
-    // Decode properties
-    const properties: Record<string, PropertyValue> = {};
-    
-    for (const [name, { categories, indices }] of categoricalLookup) {
-      const idx = indices[i] || 0;
-      properties[name] = categories[idx] || '';
-    }
-    
-    for (const [name, values] of numericLookup) {
-      properties[name] = values[i] || 0;
-    }
-    
-    // Decode timestamps (delta relative to tile time_start)
-    const startDelta = Number(startTimes[i]) || 0;
-    const endDelta = Number(endTimes[i]) || 0;
-    const absoluteStart = tileTimeStart + startDelta;
-    
-    features.push({
-      id: Number(featureIds[i]) || i,
-      type: geometryType,
-      positions,
-      properties,
-      timeRange: {
-        start: absoluteStart,
-        end: absoluteStart + endDelta,
-      },
-    });
   }
   
-return {
-    name: protoLayer.name || 'default',
-    extent,
-    features,
-  };
+  // Final offset for non-point geometries
+  if (positionOffsets) {
+    positionOffsets[featureCount] = posIdx / 2;
+  }
+  
+  return { positions, positionOffsets };
 }
 
 /**
- * Convert tile-relative quantized coordinates to WGS84
+ * Decode numeric properties directly to Float32Arrays
  */
-function tileRelativeToWgs84(
-  x: number,
-  y: number,
-  tileId: TileId,
-  extent: number
-): [number, number] {
-  const n = Math.pow(2, tileId.z);
+function decodeNumericProperties(
+  protoProperties: stt.INumericColumn[]
+): Record<string, Float32Array> {
+  const result: Record<string, Float32Array> = {};
   
-  // Convert from tile-relative to world coordinates
-  const worldX = tileId.x + (x / extent);
-  const worldY = tileId.y + (y / extent);
-  
-  // Convert to WGS84
-  const lon = (worldX / n) * 360 - 180;
-  const latRad = Math.atan(Math.sinh(Math.PI * (1 - (2 * worldY) / n)));
-  const lat = latRad * (180 / Math.PI);
-  
-  return [lon, lat];
-}
-
-function decodeFeature(protoFeature: stt.IFeature): Feature {
-  const positions = (protoFeature.positions || []).map((position) => [
-    Number(position?.lon) || 0,
-    Number(position?.lat) || 0,
-  ]) as [number, number][];
-
-  const properties: Record<string, PropertyValue> = {};
-  if (protoFeature.properties) {
-    for (const [key, value] of Object.entries(protoFeature.properties)) {
-      properties[key] = protoValueToValue(value);
+  for (const col of protoProperties) {
+    if (col.name && col.values) {
+      result[col.name] = new Float32Array(col.values);
     }
   }
-
-  return {
-    id: Number(protoFeature.id) || 0,
-    type: protoGeomTypeToType(
-      (protoFeature.type ?? stt.Feature.GeomType.POINT) as stt.Feature.GeomType
-    ),
-    positions,
-    properties,
-    timeRange:
-      protoFeature.validFrom !== undefined && protoFeature.validTo !== undefined
-        ? {
-            start: Number(protoFeature.validFrom),
-            end: Number(protoFeature.validTo),
-          }
-        : undefined,
-  };
+  
+  return result;
 }
 
-function protoValueToValue(protoValue: any): PropertyValue {
-  if (!protoValue) return '';
+/**
+ * Decode categorical properties to indexed arrays
+ */
+function decodeCategoricalProperties(
+  protoProperties: stt.ICategoricalColumn[]
+): Record<string, { indices: Uint8Array; categories: string[] }> {
+  const result: Record<string, { indices: Uint8Array; categories: string[] }> = {};
+  
+  for (const col of protoProperties) {
+    if (col.name && col.categories && col.indices) {
+      result[col.name] = {
+        indices: new Uint8Array(col.indices),
+        categories: col.categories,
+      };
+    }
+  }
+  
+  return result;
+}
 
-  if (protoValue.stringValue !== undefined) return String(protoValue.stringValue);
-  if (protoValue.doubleValue !== undefined) return Number(protoValue.doubleValue);
-  if (protoValue.floatValue !== undefined) return Number(protoValue.floatValue);
-  if (protoValue.intValue !== undefined) return Number(protoValue.intValue);
-  if (protoValue.uintValue !== undefined) return Number(protoValue.uintValue);
-  if (protoValue.sintValue !== undefined) return Number(protoValue.sintValue);
-  if (protoValue.boolValue !== undefined) return Boolean(protoValue.boolValue);
-
-  return '';
+/**
+ * Create empty binary features structure
+ */
+function createEmptyBinaryFeatures(geometryType: GeometryType): BinaryFeatures {
+  return {
+    featureCount: 0,
+    geometryType,
+    positionDimensions: 2,
+    positions: new Float64Array(0),
+    featureIds: new Uint32Array(0),
+    startTimes: new Float32Array(0),
+    endTimes: new Float32Array(0),
+    timeOffset: 0,
+    numericProps: {},
+    categoricalProps: {},
+  };
 }
 
 function protoGeomTypeToType(protoType: stt.Feature.GeomType): GeometryType {

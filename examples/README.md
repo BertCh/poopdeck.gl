@@ -10,10 +10,9 @@ This directory contains example applications demonstrating the SpatioTemporal Ti
 
 An interactive web application showcasing 8+ real-world datasets across different visualization types:
 
-- **Point Visualizations**: COVID-19 cases, earthquake activity
-- **Path & Trajectory**: Taxi movements, hurricane tracks, ship routes
-- **Density Heatmaps**: Flight density, bike share trips
-- **Area Coverage**: Wildfire spread
+- **Point Visualizations**: Earthquake activity, flight traffic, maritime AIS
+- **Path & Trajectory**: Flight paths, NYC taxi routes, hurricane tracks
+- **Area Coverage**: Wildfire perimeters
 
 **Tech Stack**: React, deck.gl, TypeScript, Vite
 
@@ -24,9 +23,6 @@ npm run dev
 ```
 
 ### 🚀 Coming Soon
-
-#### COVID Tracker (React + deck.gl)
-Real-time COVID-19 case tracking with temporal animation.
 
 #### Climate Visualizer (Vue + deck.gl)
 Multi-decade climate data visualization with temporal interpolation.
@@ -41,53 +37,39 @@ Minimal implementation showing earthquake activity over time.
 
 Each example includes scripts to generate STT archives from source data:
 
-### Example: COVID-19 Dataset
+### Example: Earthquake Dataset
 
 ```bash
-# Download source data
-curl -O https://github.com/nytimes/covid-19-data/raw/master/us-counties.csv
-
-# Convert to GeoJSON with temporal data
-python scripts/covid-to-geojson.py us-counties.csv > covid.geojson
-
-# Generate STT archive
-stt-build \
-  --input covid.geojson \
-  --output covid-cases.stt \
-  --time-field date \
-  --min-zoom 0 \
-  --max-zoom 14 \
-  --compression brotli
+# Generate earthquake data using stt-generate
+stt-generate earthquakes \
+  --start-date 2020-01-01 \
+  --end-date 2024-12-31 \
+  --min-magnitude 4.5 \
+  --output earthquakes.stt
 ```
 
-### Example: Taxi Trajectories
+### Example: AIS Maritime Traffic
 
 ```bash
-# Download SF taxi data
-curl -O https://data.sfgov.org/resource/taxis.json
+# Download AIS data from NOAA Marine Cadastre
+curl -O https://coast.noaa.gov/htdata/CMSP/AISDataHandler/2024/AIS_2024_01_01.zip
+unzip AIS_2024_01_01.zip
 
-# Process to trajectory format
-python scripts/taxis-to-paths.py taxis.json > sf-taxis.geojson
-
-# Generate STT archive with path optimization
-stt-build \
-  --input sf-taxis.geojson \
-  --output sf-taxis.stt \
-  --time-field timestamp \
-  --min-zoom 10 \
-  --max-zoom 16 \
-  --simplification 0.5 \
-  --compression brotli
+# Process with stt-generate
+stt-generate ais \
+  --input AIS_2024_01_01.csv \
+  --output ais-traffic.stt \
+  --sample-minutes 10
 ```
 
 ## Performance Comparison
 
-| Example | Dataset Size | STT Archive | Compression | Initial Load | Animation FPS |
-|---------|--------------|-------------|-------------|--------------|---------------|
-| COVID Tracker | 450 MB | 145 MB | 3.6x | 320ms | 60 |
-| Taxi Trajectories | 280 MB | 67 MB | 4.2x | 280ms | 60 |
-| Earthquake Monitor | 120 MB | 23 MB | 5.1x | 180ms | 60 |
-| Climate Viz | 890 MB | 234 MB | 3.8x | 450ms | 58 |
+| Example | Dataset Size | STT Archive | Initial Load | Animation FPS |
+|---------|--------------|-------------|--------------|---------------|
+| Earthquake Monitor | 77K features | 119 MB | 200ms | 60 |
+| Flight Traffic | 3.96M features | 1 GB | 500ms | 60 |
+| AIS Maritime | 1.17M features | 548 MB | 400ms | 60 |
+| NYC Taxi | 1.14M features | 142 MB | 250ms | 60 |
 
 *All measurements on Chrome 120, M1 MacBook Pro*
 

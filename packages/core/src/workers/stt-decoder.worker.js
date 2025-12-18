@@ -3,17 +3,18 @@
  *
  * Offloads protobuf decoding and decompression from the main thread.
  * This worker is used by the STTLoader when worker support is enabled.
+ *
+ * Output is always in binary format (BinaryFeatures) for GPU-efficient rendering.
  */
 import { decodeTile } from '../tile';
 import { decompress } from '../compression';
-import { tileToBinaryTile } from '../binary-features';
 // Worker global scope (using globalThis for type safety)
 const workerSelf = globalThis;
 /**
  * Handle incoming messages from the main thread
  */
 workerSelf.onmessage = async (event) => {
-    const { type, id, data, tileId, compression, outputFormat } = event.data;
+    const { type, id, data, tileId, compression } = event.data;
     if (type !== 'decode') {
         return;
     }
@@ -21,46 +22,34 @@ workerSelf.onmessage = async (event) => {
         // Decompress the data
         const compressed = new Uint8Array(data);
         const decompressed = await decompress(compressed, compression);
-        // Decode the tile
+        // Decode the tile (directly produces binary format)
         const tile = decodeTile(decompressed, tileId);
-        // Convert to binary format if requested
-        if (outputFormat === 'binary') {
-            const binaryTile = tileToBinaryTile(tile);
-            // Collect transferable buffers for zero-copy transfer
-            const transferables = [];
-            for (const layer of binaryTile.layers) {
-                transferables.push(layer.features.positions.buffer);
-                transferables.push(layer.features.featureIds.buffer);
-                transferables.push(layer.features.startTimes.buffer);
-                transferables.push(layer.features.endTimes.buffer);
-                if (layer.features.positionOffsets) {
-                    transferables.push(layer.features.positionOffsets.buffer);
-                }
-                for (const arr of Object.values(layer.features.numericProperties)) {
-                    transferables.push(arr.buffer);
-                }
-                for (const { indices } of Object.values(layer.features.categoricalProperties)) {
-                    transferables.push(indices.buffer);
-                }
+        // Collect transferable buffers for zero-copy transfer
+        const transferables = [];
+        for (const layer of tile.layers) {
+            const features = layer.features;
+            transferables.push(features.positions.buffer);
+            transferables.push(features.featureIds.buffer);
+            transferables.push(features.startTimes.buffer);
+            transferables.push(features.endTimes.buffer);
+            if (features.startIndices) {
+                transferables.push(features.startIndices.buffer);
             }
-            const result = {
-                type: 'result',
-                id,
-                tile: binaryTile,
-                transferables,
-            };
-            // Transfer buffers to main thread (zero-copy)
-            workerSelf.postMessage(result, transferables);
+            for (const arr of Object.values(features.numericProps)) {
+                transferables.push(arr.buffer);
+            }
+            for (const { indices } of Object.values(features.categoricalProps)) {
+                transferables.push(indices.buffer);
+            }
         }
-        else {
-            // Return standard object format
-            const result = {
-                type: 'result',
-                id,
-                tile,
-            };
-            workerSelf.postMessage(result);
-        }
+        const result = {
+            type: 'result',
+            id,
+            tile,
+            transferables,
+        };
+        // Transfer buffers to main thread (zero-copy)
+        workerSelf.postMessage(result, transferables);
     }
     catch (error) {
         const errorResult = {

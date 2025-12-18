@@ -12,6 +12,12 @@ export type TimeFilterExtensionProps<DataT = any> = {
     fadeInDuration?: number;
     /** Fade-out duration for disappearing objects (ms) */
     fadeOutDuration?: number;
+    /**
+     * Trail length in milliseconds (for path/trips effect).
+     * When set > 0, enables progressive drawing with trailing fade.
+     * The path is drawn from (currentTime - trailLength) to currentTime.
+     */
+    trailLength?: number;
     /** Accessor to get start time from each data object */
     getInstanceStartTime?: Accessor<DataT, number>;
     /** Accessor to get end time from each data object */
@@ -22,6 +28,11 @@ export type TimeFilterExtensionProps<DataT = any> = {
  *
  * Filters and fades objects based on their time range relative to the current time.
  * Works with any layer that has temporal data.
+ *
+ * Supports two modes:
+ * 1. Window mode (trailLength = 0): Show features whose time range overlaps with time window
+ * 2. Trail mode (trailLength > 0): Progressive drawing with trailing fade for paths/trajectories
+ *    - For trail mode, optionally provide instanceVertexProgress (0-1) for per-vertex time interpolation
  */
 export declare class TimeFilterExtension extends LayerExtension {
     static defaultProps: Required<TimeFilterExtensionProps<any>>;
@@ -36,6 +47,7 @@ export declare class TimeFilterExtension extends LayerExtension {
                 windowHalf: string;
                 fadeIn: string;
                 fadeOut: string;
+                trailLength: string;
             };
         }[];
         inject: {

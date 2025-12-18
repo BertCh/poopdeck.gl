@@ -72,6 +72,7 @@ interface SpatioTemporalLayerState {
   isLoaded: boolean;
   frameNumber?: number;
   playStateHandler?: (playing: boolean, speed: number) => void;
+  tickHandler?: (time: number) => void;
 }
 
 /**
@@ -79,7 +80,7 @@ interface SpatioTemporalLayerState {
  * 
  * Architecture based on deck.gl TileLayer + loaders.gl:
  * - Separates tile management (Tileset) from data loading (Archive)
- * - Request concurrency control (maxRequests: 6)
+ * - Request concurrency control (maxRequests: 24)
  * - Debouncing for smooth viewport changes
  * - LRU cache with size limits
  * - Frame-based rendering optimization
@@ -88,6 +89,13 @@ export class SpatioTemporalLayer<
   Props extends SpatioTemporalLayerProps = SpatioTemporalLayerProps
 > extends CompositeLayer<Props> {
   static layerName = 'SpatioTemporalLayer';
+  
+  // Internal time tracking - updated every tick without setState overhead
+  // Sublayers read from this via getCurrentTime() method
+  protected _currentTime: number = 0;
+  
+  // Track last time we updated the tileset to throttle updates
+  private _lastTilesetUpdateTime: number = 0;
 
   static defaultProps = {
     // Data source
@@ -100,15 +108,15 @@ export class SpatioTemporalLayer<
     timeController: { type: 'object', value: null, compare: false },
     
     // Tile loading configuration (following deck.gl TileLayer pattern)
-    maxRequests: { type: 'number', value: 12, compare: false }, // Higher for animation
+    maxRequests: { type: 'number', value: 64, compare: false }, // Higher for parallel animation loading
     debounceTime: { type: 'number', value: 0, compare: false }, // No debounce for time changes
-    maxCacheSize: { type: 'number', value: 200, compare: false },
-    maxCacheByteSize: { type: 'number', value: 500 * 1024 * 1024, compare: false }, // 500MB
+    maxCacheSize: { type: 'number', value: 2000, compare: false }, // Large cache for big datasets
+    maxCacheByteSize: { type: 'number', value: 2 * 1024 * 1024 * 1024, compare: false }, // 2GB for large datasets
     
     // Prefetch configuration for smooth animation
     enablePrefetch: { type: 'boolean', value: true, compare: false },
-    prefetchAhead: { type: 'number', value: 10000, compare: false }, // 10 seconds ahead
-    prefetchSteps: { type: 'number', value: 3, compare: false },
+    prefetchAhead: { type: 'number', value: 30000, compare: false }, // 30 seconds ahead
+    prefetchSteps: { type: 'number', value: 10, compare: false }, // More steps for fast animations
     
     // Callbacks
     onViewportLoad: { type: 'function', value: null, optional: true },
@@ -122,11 +130,24 @@ export class SpatioTemporalLayer<
   declare state: SpatioTemporalLayerState & { [key: string]: unknown };
 
   initializeState(_context: LayerContext): void {
+    // Initialize internal time tracking
+    this._currentTime = this.props.currentTime;
+    this._lastTilesetUpdateTime = this.props.currentTime;
+    
     // Create handler for play state changes
     const playStateHandler = (playing: boolean, speed: number) => {
       const { tileset } = this.state;
       if (tileset) {
         tileset.setAnimationState(playing, speed);
+      }
+    };
+    
+    // Create handler for time tick updates - this allows the layer to update
+    // without React re-rendering the entire layer tree
+    const tickHandler = (time: number) => {
+      // Only update if time actually changed significantly (avoid micro-updates)
+      if (Math.abs(time - this._currentTime) > 1) {
+        this._handleTimeUpdate(time);
       }
     };
     
@@ -138,11 +159,13 @@ export class SpatioTemporalLayer<
       currentTime: this.props.currentTime,
       isLoaded: false,
       playStateHandler,
+      tickHandler,
     });
 
-    // Subscribe to time controller play state if provided
+    // Subscribe to time controller events if provided
     if (this.props.timeController) {
       this.props.timeController.on('playState', playStateHandler);
+      this.props.timeController.on('tick', tickHandler);
     }
 
     // Initialize archive and tileset
@@ -151,8 +174,13 @@ export class SpatioTemporalLayer<
 
   finalizeState(_context: LayerContext): void {
     // Unsubscribe from time controller
-    if (this.props.timeController && this.state.playStateHandler) {
-      this.props.timeController.off('playState', this.state.playStateHandler);
+    if (this.props.timeController) {
+      if (this.state.playStateHandler) {
+        this.props.timeController.off('playState', this.state.playStateHandler);
+      }
+      if (this.state.tickHandler) {
+        this.props.timeController.off('tick', this.state.tickHandler);
+      }
     }
     
     // Cleanup tileset resources
@@ -176,14 +204,24 @@ export class SpatioTemporalLayer<
     const dataChanged = propsChanged && this.props.data !== this.state.archive?.url;
     
     // Handle TimeController changes
-    if (oldProps?.timeController !== this.props.timeController && this.state.playStateHandler) {
+    if (oldProps?.timeController !== this.props.timeController) {
       // Unsubscribe from old controller
       if (oldProps?.timeController) {
-        oldProps.timeController.off('playState', this.state.playStateHandler);
+        if (this.state.playStateHandler) {
+          oldProps.timeController.off('playState', this.state.playStateHandler);
+        }
+        if (this.state.tickHandler) {
+          oldProps.timeController.off('tick', this.state.tickHandler);
+        }
       }
       // Subscribe to new controller
       if (this.props.timeController) {
-        this.props.timeController.on('playState', this.state.playStateHandler);
+        if (this.state.playStateHandler) {
+          this.props.timeController.on('playState', this.state.playStateHandler);
+        }
+        if (this.state.tickHandler) {
+          this.props.timeController.on('tick', this.state.tickHandler);
+        }
         // Sync current animation state
         const { tileset } = this.state;
         if (tileset) {
@@ -206,13 +244,101 @@ export class SpatioTemporalLayer<
     // The tileset itself will detect what changed and update accordingly
     this._updateTileset(changeFlags);
   }
+  
+  /**
+   * Handle time updates from TimeController tick events
+   * 
+   * PERFORMANCE OPTIMIZED:
+   * - Updates _currentTime directly (no setState overhead)
+   * - Only calls setState when tiles actually change (infrequent)
+   * - Calls setNeedsRedraw() for time-only changes (NOT setNeedsUpdate!)
+   * - Time is read via getTime() getter in TimeFilterExtension.draw()
+   * - This avoids renderLayers() call when only time changes
+   */
+  private _handleTimeUpdate(time: number): void {
+    const { tileset } = this.state;
+    if (!tileset) return;
+    
+    // Always update internal time tracking (no setState overhead)
+    this._currentTime = time;
+    
+    // Check if we need to update the tileset (throttled)
+    const timeWindow = this.props.timeWindow || 86400000;
+    const timeDelta = Math.abs(time - this._lastTilesetUpdateTime);
+    const updateThreshold = timeWindow / 20; // Update tileset when 5% of time window has passed
+    
+    let tilesChanged = false;
+    
+    if (timeDelta > updateThreshold) {
+      this._lastTilesetUpdateTime = time;
+      
+      const viewport = this.context.viewport;
+      if (viewport) {
+        const bounds = this.getViewportBounds(viewport);
+        const zoom = this.getZoomLevel(viewport);
+        
+        // Update tileset - this triggers prefetch for upcoming tiles
+        tileset.update({
+          bounds,
+          zoom,
+          time,
+          timeWindow,
+        }, true); // skipDebounce = true for animation
+        
+        // Check if tiles actually changed
+        const newTiles = tileset.getVisibleTiles();
+        if (newTiles.length !== this.state.tiles.length || this._tilesChanged(newTiles)) {
+          // Tiles changed - use setState (this will trigger full update cycle)
+          this.setState({
+            tiles: newTiles,
+            frameNumber: (this.state.frameNumber || 0) + 1,
+          });
+          tilesChanged = true;
+        }
+      }
+    }
+    
+    // PERFORMANCE: For time-only changes, use setNeedsRedraw() instead of setNeedsUpdate()
+    // This triggers a redraw WITHOUT calling renderLayers() - the memoized layer is reused
+    // Time updates happen via the getTime() getter in TimeFilterExtension.draw()
+    if (!tilesChanged) {
+      this.setNeedsRedraw();
+    }
+  }
+  
+  /**
+   * Check if the tiles array has actually changed (not just reference)
+   */
+  private _tilesChanged(newTiles: Tile[]): boolean {
+    const oldTiles = this.state.tiles;
+    if (!oldTiles || oldTiles.length !== newTiles.length) return true;
+    
+    // Quick check: compare tile IDs
+    for (let i = 0; i < newTiles.length; i++) {
+      const newId = newTiles[i].id;
+      const oldId = oldTiles[i].id;
+      if (newId.z !== oldId.z || newId.x !== oldId.x || 
+          newId.y !== oldId.y || newId.t !== oldId.t) {
+        return true;
+      }
+    }
+    return false;
+  }
 
   private _updateTileset(changeFlags: any): void {
     const { tileset } = this.state;
     if (!tileset) return;
     
+    // Get current time from TimeController if available, otherwise from props
+    const currentTime = this.props.timeController 
+      ? this.props.timeController.getTime() 
+      : this.props.currentTime;
+    
+    // Update internal time tracking
+    this._currentTime = currentTime;
+    
     // Check if it's a time-only change for debouncing logic
-    const timeChanged = changeFlags.propsChanged && this.props.currentTime !== this.state.currentTime;
+    const timeChanged = changeFlags.propsChanged && currentTime !== this._lastTilesetUpdateTime;
     const skipDebounce = timeChanged && !changeFlags.propsOrDataChanged;
     
     // Get viewport bounds and zoom
@@ -230,23 +356,22 @@ export class SpatioTemporalLayer<
     const frameNumber = tileset.update({
       bounds,
       zoom,
-      time: this.props.currentTime,
+      time: currentTime,
       timeWindow,
     }, skipDebounce);
     
     // Get visible tiles (optimistic rendering - show what we have)
     const tiles = tileset.getVisibleTiles();
     
-    // Check if state changed
+    // Check if tiles actually changed
     const frameChanged = this.state.frameNumber !== frameNumber;
-    const timeStateChanged = this.props.currentTime !== this.state.currentTime;
     
-    if (frameChanged || timeStateChanged) {
-      // Trigger re-render by updating state
+    if (frameChanged) {
+      // Tiles changed - use setState
+      this._lastTilesetUpdateTime = currentTime;
       this.setState({
         tiles,
         frameNumber,
-        currentTime: this.props.currentTime,
       });
     }
     
@@ -289,8 +414,14 @@ export class SpatioTemporalLayer<
       onTileLoad: (tile) => {
         if (DEBUG) console.log('[STL] Tile loaded:', tile.id);
         this.props.onTileLoad?.(tile);
-        // Trigger re-render when new tiles load
-        this.setNeedsUpdate();
+        
+        // Update tiles state immediately when new tiles load
+        // This ensures the map updates with newly loaded data
+        const visibleTiles = tileset.getVisibleTiles();
+        this.setState({ 
+          tiles: visibleTiles,
+          frameNumber: (this.state.frameNumber || 0) + 1,
+        });
       },
       onTileUnload: (tile) => {
         if (DEBUG) console.log('[STL] Tile unloaded:', tile.id);
@@ -344,6 +475,15 @@ export class SpatioTemporalLayer<
    */
   get isLoaded(): boolean {
     return this.state.isLoaded;
+  }
+  
+  /**
+   * Get the current animation time.
+   * Sublayers should use this instead of this.state.currentTime for performance.
+   * This is updated every tick without triggering setState.
+   */
+  getCurrentTime(): number {
+    return this._currentTime;
   }
 
   /**

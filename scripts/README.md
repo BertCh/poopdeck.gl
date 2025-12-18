@@ -9,27 +9,27 @@ Located in [`data-generation/`](./data-generation/), these Rust scripts download
 ### Quick Start
 
 ```bash
-cd data-generation
+# Install the unified stt-generate tool
+cargo install --path ../crates/stt-generate
 
 # Generate all datasets
-./generate-all.sh
+stt-generate all --output-dir ../examples/showcase/public/data
 
 # Or generate individually
-cargo run --release --bin generate-covid-data
-cargo run --release --bin generate-earthquake-data
-cargo run --release --bin generate-taxi-data
+stt-generate earthquakes --output earthquakes.stt
+stt-generate hurricanes --output hurricanes.stt
+stt-generate wildfires --output wildfires.stt
+stt-generate ais --input ais.csv --output ais.stt
 ```
 
-### Available Scripts
+### Available Datasets
 
-- **`generate-covid-data`**: COVID-19 county-level cases (NYT data)
-- **`generate-earthquake-data`**: Global seismic activity (USGS)
-- **`generate-taxi-data`**: Synthetic taxi trajectories (SF)
-- **`generate-hurricane-data`**: Hurricane tracks *(coming soon)*
-- **`generate-flight-data`**: Flight density *(coming soon)*
-- **`generate-wildfire-data`**: Wildfire perimeters *(coming soon)*
-- **`generate-ship-data`**: Maritime traffic *(coming soon)*
-- **`generate-bikeshare-data`**: Bike share trips *(coming soon)*
+- **Earthquakes**: Global seismic activity (USGS API)
+- **Hurricanes**: Atlantic hurricane tracks (NOAA IBTrACS)
+- **Wildfires**: US wildfire perimeters (NIFC)
+- **AIS Maritime**: Ship traffic (NOAA Marine Cadastre)
+- **Flights**: Historical flight data (OpenSky Network)
+- **NYC Rideshare**: Taxi trajectories (TLC + OSRM)
 
 See [data-generation/README.md](./data-generation/README.md) for detailed documentation.
 

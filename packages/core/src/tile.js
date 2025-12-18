@@ -1,73 +1,195 @@
 /**
  * Tile decoding utilities
+ *
+ * Decodes directly to BinaryFeatures format for GPU-efficient rendering.
+ * No intermediate Feature objects are created - data goes straight to typed arrays.
  */
 import { stt } from './proto';
 import { GeometryType, } from './types';
 /**
- * Decode a tile from Protocol Buffer bytes
+ * Decode a tile from Protocol Buffer bytes directly to binary format
  */
 export function decodeTile(data, id) {
     const protoTile = stt.Tile.decode(data);
-    const layers = (protoTile.layers || []).map((layer) => decodeLayer(layer));
+    const tileTimeStart = Number(protoTile.timeStart) || 0;
+    const tileTimeEnd = Number(protoTile.timeEnd) || 0;
+    const layers = (protoTile.layers || []).map((layer) => decodeLayerBinary(layer, id, tileTimeStart));
     return {
         id,
         timeRange: {
-            start: Number(protoTile.timeStart) || 0,
-            end: Number(protoTile.timeEnd) || 0,
+            start: tileTimeStart,
+            end: tileTimeEnd,
         },
         layers,
     };
 }
-function decodeLayer(protoLayer) {
-    const features = (protoLayer.features || []).map((feature) => decodeFeature(feature));
+/**
+ * Decode a layer directly to binary format
+ */
+function decodeLayerBinary(protoLayer, tileId, tileTimeStart) {
+    const extent = protoLayer.extent || 4096;
+    if (!protoLayer.columnar) {
+        throw new Error('Invalid tile: missing columnar data. Only columnar format is supported.');
+    }
+    const columnar = protoLayer.columnar;
+    const featureCount = columnar.featureCount || 0;
+    const geometryType = protoGeomTypeToType((columnar.geometryType ?? stt.Feature.GeomType.POINT));
+    const isPoint = geometryType === GeometryType.Point;
+    // Handle empty tiles
+    if (featureCount === 0) {
+        return {
+            name: protoLayer.name || 'default',
+            extent,
+            features: createEmptyBinaryFeatures(geometryType),
+        };
+    }
+    // Decode geometry to Float64Array positions
+    const { positions, positionOffsets } = decodeGeometry(columnar.geometry || [], columnar.geometryOffsets || [], tileId, extent, featureCount, isPoint);
+    // Decode feature IDs
+    const featureIds = new Uint32Array(featureCount);
+    const protoFeatureIds = columnar.featureIds || [];
+    for (let i = 0; i < featureCount; i++) {
+        featureIds[i] = Number(protoFeatureIds[i]) || i;
+    }
+    // Decode times directly to Float32Array (relative to tileTimeStart for precision)
+    const startTimes = new Float32Array(featureCount);
+    const endTimes = new Float32Array(featureCount);
+    const protoStartTimes = columnar.startTimes || [];
+    const protoEndTimes = columnar.endTimes || [];
+    for (let i = 0; i < featureCount; i++) {
+        const startDelta = Number(protoStartTimes[i]) || 0;
+        const endDelta = Number(protoEndTimes[i]) || 0;
+        startTimes[i] = startDelta;
+        endTimes[i] = startDelta + endDelta; // endTimes[i] is absolute relative to timeOffset
+    }
+    // Decode properties directly to typed arrays
+    const numericProperties = decodeNumericProperties(columnar.numericProperties || []);
+    const categoricalProperties = decodeCategoricalProperties(columnar.categoricalProperties || []);
     return {
         name: protoLayer.name || 'default',
-        extent: protoLayer.extent || 4096,
-        features,
+        extent,
+        features: {
+            featureCount,
+            geometryType,
+            positionDimensions: 2,
+            positions,
+            startIndices: positionOffsets,
+            featureIds,
+            startTimes,
+            endTimes,
+            timeOffset: tileTimeStart,
+            numericProps: numericProperties,
+            categoricalProps: categoricalProperties,
+        },
     };
 }
-function decodeFeature(protoFeature) {
-    const positions = (protoFeature.positions || []).map((position) => [
-        Number(position?.lon) || 0,
-        Number(position?.lat) || 0,
-    ]);
-    const properties = {};
-    if (protoFeature.properties) {
-        for (const [key, value] of Object.entries(protoFeature.properties)) {
-            properties[key] = protoValueToValue(value);
+/**
+ * Decode geometry from delta-encoded quantized format directly to Float64Array
+ */
+function decodeGeometry(geometry, geometryOffsets, tileId, extent, featureCount, isPoint) {
+    // Calculate total coordinate count
+    let totalCoords;
+    if (isPoint) {
+        totalCoords = featureCount;
+    }
+    else {
+        // For lines/polygons, last offset tells us total
+        totalCoords = geometryOffsets.length > 0
+            ? geometryOffsets[geometryOffsets.length - 1] || (geometry.length / 2)
+            : geometry.length / 2;
+    }
+    // Pre-calculate tile projection constants
+    const n = Math.pow(2, tileId.z);
+    const tileX = tileId.x;
+    const tileY = tileId.y;
+    // Allocate output arrays
+    const positions = new Float64Array(totalCoords * 2);
+    const positionOffsets = isPoint ? undefined : new Uint32Array(featureCount + 1);
+    // Delta decode and dequantize in a single pass
+    let prevX = 0;
+    let prevY = 0;
+    let posIdx = 0;
+    for (let i = 0; i < featureCount; i++) {
+        // Determine geometry range for this feature
+        let geomStart;
+        let geomEnd;
+        if (isPoint) {
+            geomStart = i * 2;
+            geomEnd = geomStart + 2;
+        }
+        else {
+            geomStart = (geometryOffsets[i] || 0) * 2;
+            geomEnd = (geometryOffsets[i + 1] ?? geometry.length / 2) * 2;
+            positionOffsets[i] = posIdx / 2;
+        }
+        // Decode coordinates for this feature
+        for (let j = geomStart; j < geomEnd; j += 2) {
+            // Delta decode
+            const dx = geometry[j] || 0;
+            const dy = geometry[j + 1] || 0;
+            const qx = prevX + dx;
+            const qy = prevY + dy;
+            prevX = qx;
+            prevY = qy;
+            // Dequantize to WGS84 - inline for performance
+            const worldX = tileX + (qx / extent);
+            const worldY = tileY + (qy / extent);
+            const lon = (worldX / n) * 360 - 180;
+            const latRad = Math.atan(Math.sinh(Math.PI * (1 - (2 * worldY) / n)));
+            const lat = latRad * (180 / Math.PI);
+            positions[posIdx++] = lon;
+            positions[posIdx++] = lat;
         }
     }
-    return {
-        id: Number(protoFeature.id) || 0,
-        type: protoGeomTypeToType((protoFeature.type ?? stt.Feature.GeomType.POINT)),
-        positions,
-        properties,
-        timeRange: protoFeature.validFrom !== undefined && protoFeature.validTo !== undefined
-            ? {
-                start: Number(protoFeature.validFrom),
-                end: Number(protoFeature.validTo),
-            }
-            : undefined,
-    };
+    // Final offset for non-point geometries
+    if (positionOffsets) {
+        positionOffsets[featureCount] = posIdx / 2;
+    }
+    return { positions, positionOffsets };
 }
-function protoValueToValue(protoValue) {
-    if (!protoValue)
-        return '';
-    if (protoValue.stringValue !== undefined)
-        return String(protoValue.stringValue);
-    if (protoValue.doubleValue !== undefined)
-        return Number(protoValue.doubleValue);
-    if (protoValue.floatValue !== undefined)
-        return Number(protoValue.floatValue);
-    if (protoValue.intValue !== undefined)
-        return Number(protoValue.intValue);
-    if (protoValue.uintValue !== undefined)
-        return Number(protoValue.uintValue);
-    if (protoValue.sintValue !== undefined)
-        return Number(protoValue.sintValue);
-    if (protoValue.boolValue !== undefined)
-        return Boolean(protoValue.boolValue);
-    return '';
+/**
+ * Decode numeric properties directly to Float32Arrays
+ */
+function decodeNumericProperties(protoProperties) {
+    const result = {};
+    for (const col of protoProperties) {
+        if (col.name && col.values) {
+            result[col.name] = new Float32Array(col.values);
+        }
+    }
+    return result;
+}
+/**
+ * Decode categorical properties to indexed arrays
+ */
+function decodeCategoricalProperties(protoProperties) {
+    const result = {};
+    for (const col of protoProperties) {
+        if (col.name && col.categories && col.indices) {
+            result[col.name] = {
+                indices: new Uint8Array(col.indices),
+                categories: col.categories,
+            };
+        }
+    }
+    return result;
+}
+/**
+ * Create empty binary features structure
+ */
+function createEmptyBinaryFeatures(geometryType) {
+    return {
+        featureCount: 0,
+        geometryType,
+        positionDimensions: 2,
+        positions: new Float64Array(0),
+        featureIds: new Uint32Array(0),
+        startTimes: new Float32Array(0),
+        endTimes: new Float32Array(0),
+        timeOffset: 0,
+        numericProps: {},
+        categoricalProps: {},
+    };
 }
 function protoGeomTypeToType(protoType) {
     switch (protoType) {

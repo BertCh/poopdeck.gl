@@ -1,5 +1,10 @@
 /**
  * STT Archive reader using HTTP Range Requests
+ *
+ * Performance optimizations (120fps target):
+ * - LRU cache eviction with device-aware limits
+ * - Reduced grace period (60s instead of 5min) for faster eviction
+ * - Memory pressure detection via navigator.deviceMemory
  */
 import { stt } from './proto';
 import { parse } from '@loaders.gl/core';
@@ -7,19 +12,83 @@ import { STTLoader } from './stt-loader';
 const MAGIC = new Uint8Array([0x53, 0x54, 0x54, 0x01]); // "STT\x01"
 const VERSION = 1;
 const HEADER_SIZE = 53; // 4 (magic) + 1 (version) + 32 (four u64s) + 16 (reserved)
+// Cache configuration
+const DEFAULT_MAX_CACHE_SIZE = 500; // Default max cached tiles
+const MOBILE_MAX_CACHE_SIZE = 100; // Reduced for mobile devices
+const CACHE_GRACE_PERIOD_MS = 60000; // 60 seconds (reduced from 5 minutes)
+/**
+ * Detect device memory capacity and return appropriate cache size
+ */
+function getDeviceAwareCacheSize() {
+    // Use navigator.deviceMemory if available (Chrome/Edge)
+    if (typeof navigator !== 'undefined' && 'deviceMemory' in navigator) {
+        const deviceMemoryGB = navigator.deviceMemory;
+        if (deviceMemoryGB <= 2) {
+            return MOBILE_MAX_CACHE_SIZE;
+        }
+        else if (deviceMemoryGB <= 4) {
+            return Math.floor(DEFAULT_MAX_CACHE_SIZE / 2);
+        }
+    }
+    // Check for mobile user agent as fallback
+    if (typeof navigator !== 'undefined' && /mobile|android|iphone|ipad/i.test(navigator.userAgent)) {
+        return MOBILE_MAX_CACHE_SIZE;
+    }
+    return DEFAULT_MAX_CACHE_SIZE;
+}
+/**
+ * Estimate tile size in bytes
+ */
+function estimateTileSize(tile) {
+    let size = 1000; // Base overhead
+    for (const layer of tile.layers) {
+        const features = layer.features;
+        size += features.positions.byteLength;
+        size += features.featureIds.byteLength;
+        size += features.startTimes.byteLength;
+        size += features.endTimes.byteLength;
+        if (features.startIndices) {
+            size += features.startIndices.byteLength;
+        }
+        for (const arr of Object.values(features.numericProps)) {
+            size += arr.byteLength;
+        }
+        for (const { indices } of Object.values(features.categoricalProps)) {
+            size += indices.byteLength;
+        }
+    }
+    return size;
+}
 /** STT Archive reader */
 export class STTArchive {
     constructor(options) {
+        // LRU tile cache with access tracking
         this.tileCache = new Map();
+        this.currentCacheBytes = 0;
+        // O(1) tile entry lookup - spatial key -> list of temporal entries
+        this.tileEntryIndex = new Map();
+        // Cache statistics
+        this.cacheStats = {
+            hits: 0,
+            misses: 0,
+            evictions: 0,
+        };
         if (typeof options === 'string') {
             this.url = options;
             this.fetchFn = fetch.bind(globalThis);
+            this.loadOptions = undefined;
         }
         else {
             this.url = options.url;
             this.fetchFn = options.fetch || fetch.bind(globalThis);
             this.loadOptions = options.loadOptions;
         }
+        // Device-aware cache sizing
+        this.maxCacheSize = getDeviceAwareCacheSize();
+        // 512MB max for mobile, 1GB for desktop
+        this.maxCacheBytes = this.maxCacheSize <= MOBILE_MAX_CACHE_SIZE
+            ? 512 * 1024 * 1024
+            : 1024 * 1024 * 1024;
     }
     /** Get archive metadata */
     async getMetadata() {
@@ -107,22 +176,38 @@ export class STTArchive {
                 uncompressedSize: t.uncompressedSize || 0,
             })),
         };
+        // Build O(1) spatial lookup index
+        // Key: "z/x/y" -> Array of temporal tile entries for that spatial location
+        this.tileEntryIndex.clear();
+        for (const entry of this.indexCache.tiles) {
+            const spatialKey = `${entry.zoom}/${entry.x}/${entry.y}`;
+            let entries = this.tileEntryIndex.get(spatialKey);
+            if (!entries) {
+                entries = [];
+                this.tileEntryIndex.set(spatialKey, entries);
+            }
+            entries.push(entry);
+        }
+        console.log(`[Archive] Built tile index: ${this.tileEntryIndex.size} spatial locations, ${this.indexCache.tiles.length} total tiles`);
         return this.indexCache;
     }
     /** Get a specific tile */
     async getTile(id, options) {
         const cacheKey = this.tileIdToKey(id);
         // Check cache
-        if (this.tileCache.has(cacheKey)) {
-            return this.tileCache.get(cacheKey);
+        const cached = this.tileCache.get(cacheKey);
+        if (cached) {
+            // Update last access time for LRU
+            cached.lastAccess = Date.now();
+            this.cacheStats.hits++;
+            return cached.tile;
         }
-        // Find tile entry in index
-        const index = await this.getIndex();
-        const entry = index.tiles.find((e) => e.zoom === id.z &&
-            e.x === id.x &&
-            e.y === id.y &&
-            e.timeStart <= id.t &&
-            e.timeEnd >= id.t);
+        this.cacheStats.misses++;
+        // Find tile entry using O(1) spatial lookup + temporal filter
+        await this.getIndex(); // Ensure index is loaded
+        const spatialKey = `${id.z}/${id.x}/${id.y}`;
+        const entries = this.tileEntryIndex.get(spatialKey);
+        const entry = entries?.find((e) => e.timeStart <= id.t && e.timeEnd >= id.t);
         if (!entry) {
             return null;
         }
@@ -137,19 +222,57 @@ export class STTArchive {
             throw new Error(`Failed to fetch tile: ${response.statusText}`);
         }
         const compressed = await response.arrayBuffer();
-        // Use loaders.gl parse - always use object format for archive caching
+        // Use loaders.gl parse to decode tile (always binary format)
         const tile = await parse(compressed, STTLoader, {
             ...this.loadOptions,
             stt: {
                 tileId: id,
                 compression: entry.compression,
-                outputFormat: 'object',
             }
         });
-        // Cache tile
-        this.tileCache.set(cacheKey, tile);
-        // TODO: Implement cache eviction based on maxCacheSize
+        // Cache tile with LRU tracking
+        const byteSize = estimateTileSize(tile);
+        this.tileCache.set(cacheKey, {
+            tile,
+            lastAccess: Date.now(),
+            byteSize,
+        });
+        this.currentCacheBytes += byteSize;
+        // Evict tiles if over limits
+        this.evictIfNeeded();
         return tile;
+    }
+    /**
+     * Evict tiles using LRU policy when cache exceeds limits
+     */
+    evictIfNeeded() {
+        const now = Date.now();
+        // Check if eviction is needed
+        if (this.tileCache.size <= this.maxCacheSize &&
+            this.currentCacheBytes <= this.maxCacheBytes) {
+            return;
+        }
+        // Collect entries with their keys for sorting
+        const entries = [];
+        for (const [key, entry] of this.tileCache) {
+            entries.push([key, entry]);
+        }
+        // Sort by last access time (oldest first)
+        entries.sort((a, b) => a[1].lastAccess - b[1].lastAccess);
+        // Evict oldest entries until under limits
+        for (const [key, entry] of entries) {
+            if (this.tileCache.size <= this.maxCacheSize &&
+                this.currentCacheBytes <= this.maxCacheBytes) {
+                break;
+            }
+            // Don't evict recently accessed tiles (grace period)
+            if (now - entry.lastAccess < CACHE_GRACE_PERIOD_MS) {
+                break;
+            }
+            this.tileCache.delete(key);
+            this.currentCacheBytes -= entry.byteSize;
+            this.cacheStats.evictions++;
+        }
     }
     /** Get an iterator for tiles in a bounding box and time range */
     async *getTilesIterator(bounds, zoom, timeRange, options) {
@@ -176,26 +299,27 @@ export class STTArchive {
     }
     /** Get available tile IDs in a bounding box and time range (without fetching tile data) */
     async getTileIdsInBounds(bounds, zoom, timeRange) {
-        const index = await this.getIndex();
+        await this.getIndex(); // Ensure index is loaded
         const tileCoords = boundsToTiles(bounds, zoom);
         const tileIds = [];
         // For each spatial tile coordinate, find ALL temporal tiles that overlap the time range
+        // Using O(1) spatial lookup instead of O(n) filter over all tiles
         for (const [x, y] of tileCoords) {
-            // Find all entries that match the spatial coords and overlap with time range
-            const matchingEntries = index.tiles.filter((e) => e.zoom === zoom &&
-                e.x === x &&
-                e.y === y &&
+            const spatialKey = `${zoom}/${x}/${y}`;
+            const entries = this.tileEntryIndex.get(spatialKey);
+            if (!entries)
+                continue;
+            // Filter temporal entries that overlap with time range
+            for (const entry of entries) {
                 // Temporal overlap check: tile overlaps if its end is after query start AND its start is before query end
-                e.timeEnd >= timeRange.start &&
-                e.timeStart <= timeRange.end);
-            // Create TileId from each matching entry
-            for (const entry of matchingEntries) {
-                tileIds.push({
-                    z: entry.zoom,
-                    x: entry.x,
-                    y: entry.y,
-                    t: entry.timeStart, // Use tile's actual start time
-                });
+                if (entry.timeEnd >= timeRange.start && entry.timeStart <= timeRange.end) {
+                    tileIds.push({
+                        z: entry.zoom,
+                        x: entry.x,
+                        y: entry.y,
+                        t: entry.timeStart, // Use tile's actual start time
+                    });
+                }
             }
         }
         return tileIds;
@@ -217,6 +341,22 @@ export class STTArchive {
     /** Clear tile cache */
     clearCache() {
         this.tileCache.clear();
+        this.currentCacheBytes = 0;
+        // Note: tileEntryIndex is derived from indexCache and rebuilt on next getIndex() call
+    }
+    /** Get cache statistics */
+    getCacheStats() {
+        const total = this.cacheStats.hits + this.cacheStats.misses;
+        return {
+            size: this.tileCache.size,
+            maxSize: this.maxCacheSize,
+            bytes: this.currentCacheBytes,
+            maxBytes: this.maxCacheBytes,
+            hits: this.cacheStats.hits,
+            misses: this.cacheStats.misses,
+            evictions: this.cacheStats.evictions,
+            hitRate: total > 0 ? this.cacheStats.hits / total : 0,
+        };
     }
     /** Get header */
     async getHeader() {

@@ -2,18 +2,15 @@
  * STT Loader for loaders.gl integration
  * Handles parsing and decompression of spatiotemporal tiles
  *
- * Supports:
- * - Worker-based decoding for main thread performance
- * - Binary columnar output for GPU-efficient rendering
- * - Standard object output for compatibility
+ * Output is always in binary format (BinaryFeatures) for GPU-efficient rendering.
+ *
+ * Performance optimizations (120fps target):
+ * - Worker pool sized to hardware concurrency (up to 8 workers)
+ * - Zero-copy buffer transfer to workers via Transferable
+ * - Fallback to main thread only on worker failure
  */
 import type { Tile, TileId, Compression } from './types';
-import type { BinaryTile } from './binary-features';
 import type { LoaderOptions, LoaderContext } from '@loaders.gl/loader-utils';
-/**
- * Output format options
- */
-export type STTOutputFormat = 'object' | 'binary';
 /**
  * Options specific to the STT loader
  */
@@ -22,12 +19,6 @@ export interface STTOptions {
     tileId?: TileId | null;
     /** Compression method: 0 = None, 1 = Gzip, 2 = Brotli */
     compression?: Compression;
-    /**
-     * Output format:
-     * - 'object': Standard Tile object (default, compatible with existing code)
-     * - 'binary': BinaryTile with typed arrays (GPU-ready, zero-copy transfer)
-     */
-    outputFormat?: STTOutputFormat;
     /** Force main thread decoding if true (disables worker) */
     disableWorker?: boolean;
 }
@@ -43,27 +34,22 @@ export type STTLoaderOptions = LoaderOptions & {
  * Handles parsing and decompression of spatiotemporal tiles in the .stt format.
  * Supports Gzip and Brotli compression.
  *
+ * Output is always in binary format with typed arrays for GPU-efficient rendering.
+ *
  * @example
  * ```typescript
  * import { load } from '@loaders.gl/core';
  * import { STTLoader } from '@stt/core';
  *
- * // Standard object output
  * const tile = await load(url, STTLoader, {
  *   stt: { tileId: { z: 0, x: 0, y: 0, t: Date.now() } }
  * });
  *
- * // Binary output for GPU-efficient rendering
- * const binaryTile = await load(url, STTLoader, {
- *   stt: {
- *     tileId: { z: 0, x: 0, y: 0, t: Date.now() },
- *     outputFormat: 'binary'
- *   }
- * });
+ * // tile.layers[0].features is BinaryFeatures (typed arrays)
  * ```
  */
 export declare const STTLoader: {
-    readonly dataType: Tile | BinaryTile;
+    readonly dataType: Tile;
     readonly batchType: never;
     readonly name: "STT";
     readonly id: "stt";
@@ -74,12 +60,11 @@ export declare const STTLoader: {
     readonly binary: true;
     readonly text: false;
     readonly category: "geometry";
-    readonly worker: true;
+    readonly worker: false;
     readonly options: {
         readonly stt: {
             readonly tileId: null;
             readonly compression: 0;
-            readonly outputFormat: STTOutputFormat;
             readonly disableWorker: false;
         };
     };
@@ -88,11 +73,14 @@ export declare const STTLoader: {
 };
 /**
  * Parse compressed tile data asynchronously
+ *
+ * IMPORTANT: Worker decode uses zero-copy transfer, which detaches the ArrayBuffer.
+ * If worker fails, we cannot retry with the same buffer - the error will propagate
+ * up and the caller should re-fetch the tile.
  */
-declare function parse(arrayBuffer: ArrayBuffer, options?: STTLoaderOptions, _context?: LoaderContext): Promise<Tile | BinaryTile>;
+declare function parse(arrayBuffer: ArrayBuffer, options?: STTLoaderOptions, _context?: LoaderContext): Promise<Tile>;
 /**
  * Parse tile data synchronously (assumes already decompressed)
- * Note: Always uses main thread and object output format
  */
 declare function parseSync(arrayBuffer: ArrayBuffer, options?: STTLoaderOptions, _context?: LoaderContext): Tile;
 /**

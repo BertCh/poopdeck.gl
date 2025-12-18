@@ -1,4 +1,4 @@
-export type DatasetType = 'point' | 'path' | 'heatmap' | 'polygon';
+export type DatasetType = 'point' | 'path' | 'trips' | 'heatmap' | 'polygon';
 
 export interface DatasetLegendItem {
   color: string;
@@ -33,6 +33,24 @@ export interface Dataset {
     bearing: number;
   };
   legend?: DatasetLegend;
+  
+  /** Enable 3D visualization with altitude/elevation */
+  use3D?: boolean;
+  
+  /** Property name containing elevation data (e.g., 'altitude', 'elevation') */
+  elevationProperty?: string;
+  
+  /** Scale factor for elevation values (e.g., for unit conversion) */
+  elevationScale?: number;
+  
+  /** Property name for categorical coloring (passed to layers as colorProperty) */
+  colorProperty?: string;
+  
+  /** Property name for radius/size (passed to layers as radiusProperty) */
+  radiusProperty?: string;
+  
+  /** Property name for weight (used in heatmap layers) */
+  weightProperty?: string;
 }
 
 /**

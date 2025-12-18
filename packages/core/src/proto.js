@@ -349,7 +349,6 @@ export const stt = $root.stt = (() => {
          * @interface ILayer
          * @property {string|null} [name] Layer name
          * @property {number|null} [extent] Layer extent
-         * @property {Array.<stt.IFeature>|null} [features] Layer features
          * @property {stt.IColumnarFeatures|null} [columnar] Layer columnar
          */
 
@@ -362,7 +361,6 @@ export const stt = $root.stt = (() => {
          * @param {stt.ILayer=} [properties] Properties to set
          */
         function Layer(properties) {
-            this.features = [];
             if (properties)
                 for (let keys = Object.keys(properties), i = 0; i < keys.length; ++i)
                     if (properties[keys[i]] != null)
@@ -384,14 +382,6 @@ export const stt = $root.stt = (() => {
          * @instance
          */
         Layer.prototype.extent = 0;
-
-        /**
-         * Layer features.
-         * @member {Array.<stt.IFeature>} features
-         * @memberof stt.Layer
-         * @instance
-         */
-        Layer.prototype.features = $util.emptyArray;
 
         /**
          * Layer columnar.
@@ -429,9 +419,6 @@ export const stt = $root.stt = (() => {
                 writer.uint32(/* id 1, wireType 2 =*/10).string(message.name);
             if (message.extent != null && Object.hasOwnProperty.call(message, "extent"))
                 writer.uint32(/* id 2, wireType 0 =*/16).uint32(message.extent);
-            if (message.features != null && message.features.length)
-                for (let i = 0; i < message.features.length; ++i)
-                    $root.stt.Feature.encode(message.features[i], writer.uint32(/* id 3, wireType 2 =*/26).fork()).ldelim();
             if (message.columnar != null && Object.hasOwnProperty.call(message, "columnar"))
                 $root.stt.ColumnarFeatures.encode(message.columnar, writer.uint32(/* id 4, wireType 2 =*/34).fork()).ldelim();
             return writer;
@@ -476,12 +463,6 @@ export const stt = $root.stt = (() => {
                     }
                 case 2: {
                         message.extent = reader.uint32();
-                        break;
-                    }
-                case 3: {
-                        if (!(message.features && message.features.length))
-                            message.features = [];
-                        message.features.push($root.stt.Feature.decode(reader, reader.uint32()));
                         break;
                     }
                 case 4: {
@@ -529,15 +510,6 @@ export const stt = $root.stt = (() => {
             if (message.extent != null && message.hasOwnProperty("extent"))
                 if (!$util.isInteger(message.extent))
                     return "extent: integer expected";
-            if (message.features != null && message.hasOwnProperty("features")) {
-                if (!Array.isArray(message.features))
-                    return "features: array expected";
-                for (let i = 0; i < message.features.length; ++i) {
-                    let error = $root.stt.Feature.verify(message.features[i]);
-                    if (error)
-                        return "features." + error;
-                }
-            }
             if (message.columnar != null && message.hasOwnProperty("columnar")) {
                 let error = $root.stt.ColumnarFeatures.verify(message.columnar);
                 if (error)
@@ -562,16 +534,6 @@ export const stt = $root.stt = (() => {
                 message.name = String(object.name);
             if (object.extent != null)
                 message.extent = object.extent >>> 0;
-            if (object.features) {
-                if (!Array.isArray(object.features))
-                    throw TypeError(".stt.Layer.features: array expected");
-                message.features = [];
-                for (let i = 0; i < object.features.length; ++i) {
-                    if (typeof object.features[i] !== "object")
-                        throw TypeError(".stt.Layer.features: object expected");
-                    message.features[i] = $root.stt.Feature.fromObject(object.features[i]);
-                }
-            }
             if (object.columnar != null) {
                 if (typeof object.columnar !== "object")
                     throw TypeError(".stt.Layer.columnar: object expected");
@@ -593,8 +555,6 @@ export const stt = $root.stt = (() => {
             if (!options)
                 options = {};
             let object = {};
-            if (options.arrays || options.defaults)
-                object.features = [];
             if (options.defaults) {
                 object.name = "";
                 object.extent = 0;
@@ -604,11 +564,6 @@ export const stt = $root.stt = (() => {
                 object.name = message.name;
             if (message.extent != null && message.hasOwnProperty("extent"))
                 object.extent = message.extent;
-            if (message.features && message.features.length) {
-                object.features = [];
-                for (let j = 0; j < message.features.length; ++j)
-                    object.features[j] = $root.stt.Feature.toObject(message.features[j], options);
-            }
             if (message.columnar != null && message.hasOwnProperty("columnar"))
                 object.columnar = $root.stt.ColumnarFeatures.toObject(message.columnar, options);
             return object;
@@ -649,13 +604,6 @@ export const stt = $root.stt = (() => {
          * Properties of a Feature.
          * @memberof stt
          * @interface IFeature
-         * @property {number|Long|null} [id] Feature id
-         * @property {stt.Feature.GeomType|null} [type] Feature type
-         * @property {Array.<stt.IPosition>|null} [positions] Feature positions
-         * @property {Object.<string,stt.IValue>|null} [properties] Feature properties
-         * @property {number|Long|null} [validFrom] Feature validFrom
-         * @property {number|Long|null} [validTo] Feature validTo
-         * @property {Array.<number>|null} [geometry] Feature geometry
          */
 
         /**
@@ -667,70 +615,11 @@ export const stt = $root.stt = (() => {
          * @param {stt.IFeature=} [properties] Properties to set
          */
         function Feature(properties) {
-            this.positions = [];
-            this.properties = {};
-            this.geometry = [];
             if (properties)
                 for (let keys = Object.keys(properties), i = 0; i < keys.length; ++i)
                     if (properties[keys[i]] != null)
                         this[keys[i]] = properties[keys[i]];
         }
-
-        /**
-         * Feature id.
-         * @member {number|Long} id
-         * @memberof stt.Feature
-         * @instance
-         */
-        Feature.prototype.id = $util.Long ? $util.Long.fromBits(0,0,true) : 0;
-
-        /**
-         * Feature type.
-         * @member {stt.Feature.GeomType} type
-         * @memberof stt.Feature
-         * @instance
-         */
-        Feature.prototype.type = 0;
-
-        /**
-         * Feature positions.
-         * @member {Array.<stt.IPosition>} positions
-         * @memberof stt.Feature
-         * @instance
-         */
-        Feature.prototype.positions = $util.emptyArray;
-
-        /**
-         * Feature properties.
-         * @member {Object.<string,stt.IValue>} properties
-         * @memberof stt.Feature
-         * @instance
-         */
-        Feature.prototype.properties = $util.emptyObject;
-
-        /**
-         * Feature validFrom.
-         * @member {number|Long} validFrom
-         * @memberof stt.Feature
-         * @instance
-         */
-        Feature.prototype.validFrom = $util.Long ? $util.Long.fromBits(0,0,true) : 0;
-
-        /**
-         * Feature validTo.
-         * @member {number|Long} validTo
-         * @memberof stt.Feature
-         * @instance
-         */
-        Feature.prototype.validTo = $util.Long ? $util.Long.fromBits(0,0,true) : 0;
-
-        /**
-         * Feature geometry.
-         * @member {Array.<number>} geometry
-         * @memberof stt.Feature
-         * @instance
-         */
-        Feature.prototype.geometry = $util.emptyArray;
 
         /**
          * Creates a new Feature instance using the specified properties.
@@ -756,28 +645,6 @@ export const stt = $root.stt = (() => {
         Feature.encode = function encode(message, writer) {
             if (!writer)
                 writer = $Writer.create();
-            if (message.id != null && Object.hasOwnProperty.call(message, "id"))
-                writer.uint32(/* id 1, wireType 0 =*/8).uint64(message.id);
-            if (message.type != null && Object.hasOwnProperty.call(message, "type"))
-                writer.uint32(/* id 2, wireType 0 =*/16).int32(message.type);
-            if (message.positions != null && message.positions.length)
-                for (let i = 0; i < message.positions.length; ++i)
-                    $root.stt.Position.encode(message.positions[i], writer.uint32(/* id 3, wireType 2 =*/26).fork()).ldelim();
-            if (message.properties != null && Object.hasOwnProperty.call(message, "properties"))
-                for (let keys = Object.keys(message.properties), i = 0; i < keys.length; ++i) {
-                    writer.uint32(/* id 4, wireType 2 =*/34).fork().uint32(/* id 1, wireType 2 =*/10).string(keys[i]);
-                    $root.stt.Value.encode(message.properties[keys[i]], writer.uint32(/* id 2, wireType 2 =*/18).fork()).ldelim().ldelim();
-                }
-            if (message.validFrom != null && Object.hasOwnProperty.call(message, "validFrom"))
-                writer.uint32(/* id 5, wireType 0 =*/40).uint64(message.validFrom);
-            if (message.validTo != null && Object.hasOwnProperty.call(message, "validTo"))
-                writer.uint32(/* id 6, wireType 0 =*/48).uint64(message.validTo);
-            if (message.geometry != null && message.geometry.length) {
-                writer.uint32(/* id 7, wireType 2 =*/58).fork();
-                for (let i = 0; i < message.geometry.length; ++i)
-                    writer.sint32(message.geometry[i]);
-                writer.ldelim();
-            }
             return writer;
         };
 
@@ -808,68 +675,12 @@ export const stt = $root.stt = (() => {
         Feature.decode = function decode(reader, length, error) {
             if (!(reader instanceof $Reader))
                 reader = $Reader.create(reader);
-            let end = length === undefined ? reader.len : reader.pos + length, message = new $root.stt.Feature(), key, value;
+            let end = length === undefined ? reader.len : reader.pos + length, message = new $root.stt.Feature();
             while (reader.pos < end) {
                 let tag = reader.uint32();
                 if (tag === error)
                     break;
                 switch (tag >>> 3) {
-                case 1: {
-                        message.id = reader.uint64();
-                        break;
-                    }
-                case 2: {
-                        message.type = reader.int32();
-                        break;
-                    }
-                case 3: {
-                        if (!(message.positions && message.positions.length))
-                            message.positions = [];
-                        message.positions.push($root.stt.Position.decode(reader, reader.uint32()));
-                        break;
-                    }
-                case 4: {
-                        if (message.properties === $util.emptyObject)
-                            message.properties = {};
-                        let end2 = reader.uint32() + reader.pos;
-                        key = "";
-                        value = null;
-                        while (reader.pos < end2) {
-                            let tag2 = reader.uint32();
-                            switch (tag2 >>> 3) {
-                            case 1:
-                                key = reader.string();
-                                break;
-                            case 2:
-                                value = $root.stt.Value.decode(reader, reader.uint32());
-                                break;
-                            default:
-                                reader.skipType(tag2 & 7);
-                                break;
-                            }
-                        }
-                        message.properties[key] = value;
-                        break;
-                    }
-                case 5: {
-                        message.validFrom = reader.uint64();
-                        break;
-                    }
-                case 6: {
-                        message.validTo = reader.uint64();
-                        break;
-                    }
-                case 7: {
-                        if (!(message.geometry && message.geometry.length))
-                            message.geometry = [];
-                        if ((tag & 7) === 2) {
-                            let end2 = reader.uint32() + reader.pos;
-                            while (reader.pos < end2)
-                                message.geometry.push(reader.sint32());
-                        } else
-                            message.geometry.push(reader.sint32());
-                        break;
-                    }
                 default:
                     reader.skipType(tag & 7);
                     break;
@@ -905,50 +716,6 @@ export const stt = $root.stt = (() => {
         Feature.verify = function verify(message) {
             if (typeof message !== "object" || message === null)
                 return "object expected";
-            if (message.id != null && message.hasOwnProperty("id"))
-                if (!$util.isInteger(message.id) && !(message.id && $util.isInteger(message.id.low) && $util.isInteger(message.id.high)))
-                    return "id: integer|Long expected";
-            if (message.type != null && message.hasOwnProperty("type"))
-                switch (message.type) {
-                default:
-                    return "type: enum value expected";
-                case 0:
-                case 1:
-                case 2:
-                    break;
-                }
-            if (message.positions != null && message.hasOwnProperty("positions")) {
-                if (!Array.isArray(message.positions))
-                    return "positions: array expected";
-                for (let i = 0; i < message.positions.length; ++i) {
-                    let error = $root.stt.Position.verify(message.positions[i]);
-                    if (error)
-                        return "positions." + error;
-                }
-            }
-            if (message.properties != null && message.hasOwnProperty("properties")) {
-                if (!$util.isObject(message.properties))
-                    return "properties: object expected";
-                let key = Object.keys(message.properties);
-                for (let i = 0; i < key.length; ++i) {
-                    let error = $root.stt.Value.verify(message.properties[key[i]]);
-                    if (error)
-                        return "properties." + error;
-                }
-            }
-            if (message.validFrom != null && message.hasOwnProperty("validFrom"))
-                if (!$util.isInteger(message.validFrom) && !(message.validFrom && $util.isInteger(message.validFrom.low) && $util.isInteger(message.validFrom.high)))
-                    return "validFrom: integer|Long expected";
-            if (message.validTo != null && message.hasOwnProperty("validTo"))
-                if (!$util.isInteger(message.validTo) && !(message.validTo && $util.isInteger(message.validTo.low) && $util.isInteger(message.validTo.high)))
-                    return "validTo: integer|Long expected";
-            if (message.geometry != null && message.hasOwnProperty("geometry")) {
-                if (!Array.isArray(message.geometry))
-                    return "geometry: array expected";
-                for (let i = 0; i < message.geometry.length; ++i)
-                    if (!$util.isInteger(message.geometry[i]))
-                        return "geometry: integer[] expected";
-            }
             return null;
         };
 
@@ -963,82 +730,7 @@ export const stt = $root.stt = (() => {
         Feature.fromObject = function fromObject(object) {
             if (object instanceof $root.stt.Feature)
                 return object;
-            let message = new $root.stt.Feature();
-            if (object.id != null)
-                if ($util.Long)
-                    (message.id = $util.Long.fromValue(object.id)).unsigned = true;
-                else if (typeof object.id === "string")
-                    message.id = parseInt(object.id, 10);
-                else if (typeof object.id === "number")
-                    message.id = object.id;
-                else if (typeof object.id === "object")
-                    message.id = new $util.LongBits(object.id.low >>> 0, object.id.high >>> 0).toNumber(true);
-            switch (object.type) {
-            default:
-                if (typeof object.type === "number") {
-                    message.type = object.type;
-                    break;
-                }
-                break;
-            case "POINT":
-            case 0:
-                message.type = 0;
-                break;
-            case "LINESTRING":
-            case 1:
-                message.type = 1;
-                break;
-            case "POLYGON":
-            case 2:
-                message.type = 2;
-                break;
-            }
-            if (object.positions) {
-                if (!Array.isArray(object.positions))
-                    throw TypeError(".stt.Feature.positions: array expected");
-                message.positions = [];
-                for (let i = 0; i < object.positions.length; ++i) {
-                    if (typeof object.positions[i] !== "object")
-                        throw TypeError(".stt.Feature.positions: object expected");
-                    message.positions[i] = $root.stt.Position.fromObject(object.positions[i]);
-                }
-            }
-            if (object.properties) {
-                if (typeof object.properties !== "object")
-                    throw TypeError(".stt.Feature.properties: object expected");
-                message.properties = {};
-                for (let keys = Object.keys(object.properties), i = 0; i < keys.length; ++i) {
-                    if (typeof object.properties[keys[i]] !== "object")
-                        throw TypeError(".stt.Feature.properties: object expected");
-                    message.properties[keys[i]] = $root.stt.Value.fromObject(object.properties[keys[i]]);
-                }
-            }
-            if (object.validFrom != null)
-                if ($util.Long)
-                    (message.validFrom = $util.Long.fromValue(object.validFrom)).unsigned = true;
-                else if (typeof object.validFrom === "string")
-                    message.validFrom = parseInt(object.validFrom, 10);
-                else if (typeof object.validFrom === "number")
-                    message.validFrom = object.validFrom;
-                else if (typeof object.validFrom === "object")
-                    message.validFrom = new $util.LongBits(object.validFrom.low >>> 0, object.validFrom.high >>> 0).toNumber(true);
-            if (object.validTo != null)
-                if ($util.Long)
-                    (message.validTo = $util.Long.fromValue(object.validTo)).unsigned = true;
-                else if (typeof object.validTo === "string")
-                    message.validTo = parseInt(object.validTo, 10);
-                else if (typeof object.validTo === "number")
-                    message.validTo = object.validTo;
-                else if (typeof object.validTo === "object")
-                    message.validTo = new $util.LongBits(object.validTo.low >>> 0, object.validTo.high >>> 0).toNumber(true);
-            if (object.geometry) {
-                if (!Array.isArray(object.geometry))
-                    throw TypeError(".stt.Feature.geometry: array expected");
-                message.geometry = [];
-                for (let i = 0; i < object.geometry.length; ++i)
-                    message.geometry[i] = object.geometry[i] | 0;
-            }
-            return message;
+            return new $root.stt.Feature();
         };
 
         /**
@@ -1050,68 +742,8 @@ export const stt = $root.stt = (() => {
          * @param {$protobuf.IConversionOptions} [options] Conversion options
          * @returns {Object.<string,*>} Plain object
          */
-        Feature.toObject = function toObject(message, options) {
-            if (!options)
-                options = {};
-            let object = {};
-            if (options.arrays || options.defaults) {
-                object.positions = [];
-                object.geometry = [];
-            }
-            if (options.objects || options.defaults)
-                object.properties = {};
-            if (options.defaults) {
-                if ($util.Long) {
-                    let long = new $util.Long(0, 0, true);
-                    object.id = options.longs === String ? long.toString() : options.longs === Number ? long.toNumber() : long;
-                } else
-                    object.id = options.longs === String ? "0" : 0;
-                object.type = options.enums === String ? "POINT" : 0;
-                if ($util.Long) {
-                    let long = new $util.Long(0, 0, true);
-                    object.validFrom = options.longs === String ? long.toString() : options.longs === Number ? long.toNumber() : long;
-                } else
-                    object.validFrom = options.longs === String ? "0" : 0;
-                if ($util.Long) {
-                    let long = new $util.Long(0, 0, true);
-                    object.validTo = options.longs === String ? long.toString() : options.longs === Number ? long.toNumber() : long;
-                } else
-                    object.validTo = options.longs === String ? "0" : 0;
-            }
-            if (message.id != null && message.hasOwnProperty("id"))
-                if (typeof message.id === "number")
-                    object.id = options.longs === String ? String(message.id) : message.id;
-                else
-                    object.id = options.longs === String ? $util.Long.prototype.toString.call(message.id) : options.longs === Number ? new $util.LongBits(message.id.low >>> 0, message.id.high >>> 0).toNumber(true) : message.id;
-            if (message.type != null && message.hasOwnProperty("type"))
-                object.type = options.enums === String ? $root.stt.Feature.GeomType[message.type] === undefined ? message.type : $root.stt.Feature.GeomType[message.type] : message.type;
-            if (message.positions && message.positions.length) {
-                object.positions = [];
-                for (let j = 0; j < message.positions.length; ++j)
-                    object.positions[j] = $root.stt.Position.toObject(message.positions[j], options);
-            }
-            let keys2;
-            if (message.properties && (keys2 = Object.keys(message.properties)).length) {
-                object.properties = {};
-                for (let j = 0; j < keys2.length; ++j)
-                    object.properties[keys2[j]] = $root.stt.Value.toObject(message.properties[keys2[j]], options);
-            }
-            if (message.validFrom != null && message.hasOwnProperty("validFrom"))
-                if (typeof message.validFrom === "number")
-                    object.validFrom = options.longs === String ? String(message.validFrom) : message.validFrom;
-                else
-                    object.validFrom = options.longs === String ? $util.Long.prototype.toString.call(message.validFrom) : options.longs === Number ? new $util.LongBits(message.validFrom.low >>> 0, message.validFrom.high >>> 0).toNumber(true) : message.validFrom;
-            if (message.validTo != null && message.hasOwnProperty("validTo"))
-                if (typeof message.validTo === "number")
-                    object.validTo = options.longs === String ? String(message.validTo) : message.validTo;
-                else
-                    object.validTo = options.longs === String ? $util.Long.prototype.toString.call(message.validTo) : options.longs === Number ? new $util.LongBits(message.validTo.low >>> 0, message.validTo.high >>> 0).toNumber(true) : message.validTo;
-            if (message.geometry && message.geometry.length) {
-                object.geometry = [];
-                for (let j = 0; j < message.geometry.length; ++j)
-                    object.geometry[j] = message.geometry[j];
-            }
-            return object;
+        Feature.toObject = function toObject() {
+            return {};
         };
 
         /**
@@ -1159,662 +791,6 @@ export const stt = $root.stt = (() => {
         return Feature;
     })();
 
-    stt.Position = (function() {
-
-        /**
-         * Properties of a Position.
-         * @memberof stt
-         * @interface IPosition
-         * @property {number|null} [lon] Position lon
-         * @property {number|null} [lat] Position lat
-         */
-
-        /**
-         * Constructs a new Position.
-         * @memberof stt
-         * @classdesc Represents a Position.
-         * @implements IPosition
-         * @constructor
-         * @param {stt.IPosition=} [properties] Properties to set
-         */
-        function Position(properties) {
-            if (properties)
-                for (let keys = Object.keys(properties), i = 0; i < keys.length; ++i)
-                    if (properties[keys[i]] != null)
-                        this[keys[i]] = properties[keys[i]];
-        }
-
-        /**
-         * Position lon.
-         * @member {number} lon
-         * @memberof stt.Position
-         * @instance
-         */
-        Position.prototype.lon = 0;
-
-        /**
-         * Position lat.
-         * @member {number} lat
-         * @memberof stt.Position
-         * @instance
-         */
-        Position.prototype.lat = 0;
-
-        /**
-         * Creates a new Position instance using the specified properties.
-         * @function create
-         * @memberof stt.Position
-         * @static
-         * @param {stt.IPosition=} [properties] Properties to set
-         * @returns {stt.Position} Position instance
-         */
-        Position.create = function create(properties) {
-            return new Position(properties);
-        };
-
-        /**
-         * Encodes the specified Position message. Does not implicitly {@link stt.Position.verify|verify} messages.
-         * @function encode
-         * @memberof stt.Position
-         * @static
-         * @param {stt.IPosition} message Position message or plain object to encode
-         * @param {$protobuf.Writer} [writer] Writer to encode to
-         * @returns {$protobuf.Writer} Writer
-         */
-        Position.encode = function encode(message, writer) {
-            if (!writer)
-                writer = $Writer.create();
-            if (message.lon != null && Object.hasOwnProperty.call(message, "lon"))
-                writer.uint32(/* id 1, wireType 1 =*/9).double(message.lon);
-            if (message.lat != null && Object.hasOwnProperty.call(message, "lat"))
-                writer.uint32(/* id 2, wireType 1 =*/17).double(message.lat);
-            return writer;
-        };
-
-        /**
-         * Encodes the specified Position message, length delimited. Does not implicitly {@link stt.Position.verify|verify} messages.
-         * @function encodeDelimited
-         * @memberof stt.Position
-         * @static
-         * @param {stt.IPosition} message Position message or plain object to encode
-         * @param {$protobuf.Writer} [writer] Writer to encode to
-         * @returns {$protobuf.Writer} Writer
-         */
-        Position.encodeDelimited = function encodeDelimited(message, writer) {
-            return this.encode(message, writer).ldelim();
-        };
-
-        /**
-         * Decodes a Position message from the specified reader or buffer.
-         * @function decode
-         * @memberof stt.Position
-         * @static
-         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
-         * @param {number} [length] Message length if known beforehand
-         * @returns {stt.Position} Position
-         * @throws {Error} If the payload is not a reader or valid buffer
-         * @throws {$protobuf.util.ProtocolError} If required fields are missing
-         */
-        Position.decode = function decode(reader, length, error) {
-            if (!(reader instanceof $Reader))
-                reader = $Reader.create(reader);
-            let end = length === undefined ? reader.len : reader.pos + length, message = new $root.stt.Position();
-            while (reader.pos < end) {
-                let tag = reader.uint32();
-                if (tag === error)
-                    break;
-                switch (tag >>> 3) {
-                case 1: {
-                        message.lon = reader.double();
-                        break;
-                    }
-                case 2: {
-                        message.lat = reader.double();
-                        break;
-                    }
-                default:
-                    reader.skipType(tag & 7);
-                    break;
-                }
-            }
-            return message;
-        };
-
-        /**
-         * Decodes a Position message from the specified reader or buffer, length delimited.
-         * @function decodeDelimited
-         * @memberof stt.Position
-         * @static
-         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
-         * @returns {stt.Position} Position
-         * @throws {Error} If the payload is not a reader or valid buffer
-         * @throws {$protobuf.util.ProtocolError} If required fields are missing
-         */
-        Position.decodeDelimited = function decodeDelimited(reader) {
-            if (!(reader instanceof $Reader))
-                reader = new $Reader(reader);
-            return this.decode(reader, reader.uint32());
-        };
-
-        /**
-         * Verifies a Position message.
-         * @function verify
-         * @memberof stt.Position
-         * @static
-         * @param {Object.<string,*>} message Plain object to verify
-         * @returns {string|null} `null` if valid, otherwise the reason why it is not
-         */
-        Position.verify = function verify(message) {
-            if (typeof message !== "object" || message === null)
-                return "object expected";
-            if (message.lon != null && message.hasOwnProperty("lon"))
-                if (typeof message.lon !== "number")
-                    return "lon: number expected";
-            if (message.lat != null && message.hasOwnProperty("lat"))
-                if (typeof message.lat !== "number")
-                    return "lat: number expected";
-            return null;
-        };
-
-        /**
-         * Creates a Position message from a plain object. Also converts values to their respective internal types.
-         * @function fromObject
-         * @memberof stt.Position
-         * @static
-         * @param {Object.<string,*>} object Plain object
-         * @returns {stt.Position} Position
-         */
-        Position.fromObject = function fromObject(object) {
-            if (object instanceof $root.stt.Position)
-                return object;
-            let message = new $root.stt.Position();
-            if (object.lon != null)
-                message.lon = Number(object.lon);
-            if (object.lat != null)
-                message.lat = Number(object.lat);
-            return message;
-        };
-
-        /**
-         * Creates a plain object from a Position message. Also converts values to other types if specified.
-         * @function toObject
-         * @memberof stt.Position
-         * @static
-         * @param {stt.Position} message Position
-         * @param {$protobuf.IConversionOptions} [options] Conversion options
-         * @returns {Object.<string,*>} Plain object
-         */
-        Position.toObject = function toObject(message, options) {
-            if (!options)
-                options = {};
-            let object = {};
-            if (options.defaults) {
-                object.lon = 0;
-                object.lat = 0;
-            }
-            if (message.lon != null && message.hasOwnProperty("lon"))
-                object.lon = options.json && !isFinite(message.lon) ? String(message.lon) : message.lon;
-            if (message.lat != null && message.hasOwnProperty("lat"))
-                object.lat = options.json && !isFinite(message.lat) ? String(message.lat) : message.lat;
-            return object;
-        };
-
-        /**
-         * Converts this Position to JSON.
-         * @function toJSON
-         * @memberof stt.Position
-         * @instance
-         * @returns {Object.<string,*>} JSON object
-         */
-        Position.prototype.toJSON = function toJSON() {
-            return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
-        };
-
-        /**
-         * Gets the default type url for Position
-         * @function getTypeUrl
-         * @memberof stt.Position
-         * @static
-         * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
-         * @returns {string} The default type url
-         */
-        Position.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
-            if (typeUrlPrefix === undefined) {
-                typeUrlPrefix = "type.googleapis.com";
-            }
-            return typeUrlPrefix + "/stt.Position";
-        };
-
-        return Position;
-    })();
-
-    stt.Value = (function() {
-
-        /**
-         * Properties of a Value.
-         * @memberof stt
-         * @interface IValue
-         * @property {string|null} [stringValue] Value stringValue
-         * @property {number|null} [doubleValue] Value doubleValue
-         * @property {number|null} [floatValue] Value floatValue
-         * @property {number|Long|null} [intValue] Value intValue
-         * @property {number|Long|null} [uintValue] Value uintValue
-         * @property {number|Long|null} [sintValue] Value sintValue
-         * @property {boolean|null} [boolValue] Value boolValue
-         */
-
-        /**
-         * Constructs a new Value.
-         * @memberof stt
-         * @classdesc Represents a Value.
-         * @implements IValue
-         * @constructor
-         * @param {stt.IValue=} [properties] Properties to set
-         */
-        function Value(properties) {
-            if (properties)
-                for (let keys = Object.keys(properties), i = 0; i < keys.length; ++i)
-                    if (properties[keys[i]] != null)
-                        this[keys[i]] = properties[keys[i]];
-        }
-
-        /**
-         * Value stringValue.
-         * @member {string|null|undefined} stringValue
-         * @memberof stt.Value
-         * @instance
-         */
-        Value.prototype.stringValue = null;
-
-        /**
-         * Value doubleValue.
-         * @member {number|null|undefined} doubleValue
-         * @memberof stt.Value
-         * @instance
-         */
-        Value.prototype.doubleValue = null;
-
-        /**
-         * Value floatValue.
-         * @member {number|null|undefined} floatValue
-         * @memberof stt.Value
-         * @instance
-         */
-        Value.prototype.floatValue = null;
-
-        /**
-         * Value intValue.
-         * @member {number|Long|null|undefined} intValue
-         * @memberof stt.Value
-         * @instance
-         */
-        Value.prototype.intValue = null;
-
-        /**
-         * Value uintValue.
-         * @member {number|Long|null|undefined} uintValue
-         * @memberof stt.Value
-         * @instance
-         */
-        Value.prototype.uintValue = null;
-
-        /**
-         * Value sintValue.
-         * @member {number|Long|null|undefined} sintValue
-         * @memberof stt.Value
-         * @instance
-         */
-        Value.prototype.sintValue = null;
-
-        /**
-         * Value boolValue.
-         * @member {boolean|null|undefined} boolValue
-         * @memberof stt.Value
-         * @instance
-         */
-        Value.prototype.boolValue = null;
-
-        // OneOf field names bound to virtual getters and setters
-        let $oneOfFields;
-
-        /**
-         * Value valueType.
-         * @member {"stringValue"|"doubleValue"|"floatValue"|"intValue"|"uintValue"|"sintValue"|"boolValue"|undefined} valueType
-         * @memberof stt.Value
-         * @instance
-         */
-        Object.defineProperty(Value.prototype, "valueType", {
-            get: $util.oneOfGetter($oneOfFields = ["stringValue", "doubleValue", "floatValue", "intValue", "uintValue", "sintValue", "boolValue"]),
-            set: $util.oneOfSetter($oneOfFields)
-        });
-
-        /**
-         * Creates a new Value instance using the specified properties.
-         * @function create
-         * @memberof stt.Value
-         * @static
-         * @param {stt.IValue=} [properties] Properties to set
-         * @returns {stt.Value} Value instance
-         */
-        Value.create = function create(properties) {
-            return new Value(properties);
-        };
-
-        /**
-         * Encodes the specified Value message. Does not implicitly {@link stt.Value.verify|verify} messages.
-         * @function encode
-         * @memberof stt.Value
-         * @static
-         * @param {stt.IValue} message Value message or plain object to encode
-         * @param {$protobuf.Writer} [writer] Writer to encode to
-         * @returns {$protobuf.Writer} Writer
-         */
-        Value.encode = function encode(message, writer) {
-            if (!writer)
-                writer = $Writer.create();
-            if (message.stringValue != null && Object.hasOwnProperty.call(message, "stringValue"))
-                writer.uint32(/* id 1, wireType 2 =*/10).string(message.stringValue);
-            if (message.doubleValue != null && Object.hasOwnProperty.call(message, "doubleValue"))
-                writer.uint32(/* id 2, wireType 1 =*/17).double(message.doubleValue);
-            if (message.floatValue != null && Object.hasOwnProperty.call(message, "floatValue"))
-                writer.uint32(/* id 3, wireType 5 =*/29).float(message.floatValue);
-            if (message.intValue != null && Object.hasOwnProperty.call(message, "intValue"))
-                writer.uint32(/* id 4, wireType 0 =*/32).int64(message.intValue);
-            if (message.uintValue != null && Object.hasOwnProperty.call(message, "uintValue"))
-                writer.uint32(/* id 5, wireType 0 =*/40).uint64(message.uintValue);
-            if (message.sintValue != null && Object.hasOwnProperty.call(message, "sintValue"))
-                writer.uint32(/* id 6, wireType 0 =*/48).sint64(message.sintValue);
-            if (message.boolValue != null && Object.hasOwnProperty.call(message, "boolValue"))
-                writer.uint32(/* id 7, wireType 0 =*/56).bool(message.boolValue);
-            return writer;
-        };
-
-        /**
-         * Encodes the specified Value message, length delimited. Does not implicitly {@link stt.Value.verify|verify} messages.
-         * @function encodeDelimited
-         * @memberof stt.Value
-         * @static
-         * @param {stt.IValue} message Value message or plain object to encode
-         * @param {$protobuf.Writer} [writer] Writer to encode to
-         * @returns {$protobuf.Writer} Writer
-         */
-        Value.encodeDelimited = function encodeDelimited(message, writer) {
-            return this.encode(message, writer).ldelim();
-        };
-
-        /**
-         * Decodes a Value message from the specified reader or buffer.
-         * @function decode
-         * @memberof stt.Value
-         * @static
-         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
-         * @param {number} [length] Message length if known beforehand
-         * @returns {stt.Value} Value
-         * @throws {Error} If the payload is not a reader or valid buffer
-         * @throws {$protobuf.util.ProtocolError} If required fields are missing
-         */
-        Value.decode = function decode(reader, length, error) {
-            if (!(reader instanceof $Reader))
-                reader = $Reader.create(reader);
-            let end = length === undefined ? reader.len : reader.pos + length, message = new $root.stt.Value();
-            while (reader.pos < end) {
-                let tag = reader.uint32();
-                if (tag === error)
-                    break;
-                switch (tag >>> 3) {
-                case 1: {
-                        message.stringValue = reader.string();
-                        break;
-                    }
-                case 2: {
-                        message.doubleValue = reader.double();
-                        break;
-                    }
-                case 3: {
-                        message.floatValue = reader.float();
-                        break;
-                    }
-                case 4: {
-                        message.intValue = reader.int64();
-                        break;
-                    }
-                case 5: {
-                        message.uintValue = reader.uint64();
-                        break;
-                    }
-                case 6: {
-                        message.sintValue = reader.sint64();
-                        break;
-                    }
-                case 7: {
-                        message.boolValue = reader.bool();
-                        break;
-                    }
-                default:
-                    reader.skipType(tag & 7);
-                    break;
-                }
-            }
-            return message;
-        };
-
-        /**
-         * Decodes a Value message from the specified reader or buffer, length delimited.
-         * @function decodeDelimited
-         * @memberof stt.Value
-         * @static
-         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
-         * @returns {stt.Value} Value
-         * @throws {Error} If the payload is not a reader or valid buffer
-         * @throws {$protobuf.util.ProtocolError} If required fields are missing
-         */
-        Value.decodeDelimited = function decodeDelimited(reader) {
-            if (!(reader instanceof $Reader))
-                reader = new $Reader(reader);
-            return this.decode(reader, reader.uint32());
-        };
-
-        /**
-         * Verifies a Value message.
-         * @function verify
-         * @memberof stt.Value
-         * @static
-         * @param {Object.<string,*>} message Plain object to verify
-         * @returns {string|null} `null` if valid, otherwise the reason why it is not
-         */
-        Value.verify = function verify(message) {
-            if (typeof message !== "object" || message === null)
-                return "object expected";
-            let properties = {};
-            if (message.stringValue != null && message.hasOwnProperty("stringValue")) {
-                properties.valueType = 1;
-                if (!$util.isString(message.stringValue))
-                    return "stringValue: string expected";
-            }
-            if (message.doubleValue != null && message.hasOwnProperty("doubleValue")) {
-                if (properties.valueType === 1)
-                    return "valueType: multiple values";
-                properties.valueType = 1;
-                if (typeof message.doubleValue !== "number")
-                    return "doubleValue: number expected";
-            }
-            if (message.floatValue != null && message.hasOwnProperty("floatValue")) {
-                if (properties.valueType === 1)
-                    return "valueType: multiple values";
-                properties.valueType = 1;
-                if (typeof message.floatValue !== "number")
-                    return "floatValue: number expected";
-            }
-            if (message.intValue != null && message.hasOwnProperty("intValue")) {
-                if (properties.valueType === 1)
-                    return "valueType: multiple values";
-                properties.valueType = 1;
-                if (!$util.isInteger(message.intValue) && !(message.intValue && $util.isInteger(message.intValue.low) && $util.isInteger(message.intValue.high)))
-                    return "intValue: integer|Long expected";
-            }
-            if (message.uintValue != null && message.hasOwnProperty("uintValue")) {
-                if (properties.valueType === 1)
-                    return "valueType: multiple values";
-                properties.valueType = 1;
-                if (!$util.isInteger(message.uintValue) && !(message.uintValue && $util.isInteger(message.uintValue.low) && $util.isInteger(message.uintValue.high)))
-                    return "uintValue: integer|Long expected";
-            }
-            if (message.sintValue != null && message.hasOwnProperty("sintValue")) {
-                if (properties.valueType === 1)
-                    return "valueType: multiple values";
-                properties.valueType = 1;
-                if (!$util.isInteger(message.sintValue) && !(message.sintValue && $util.isInteger(message.sintValue.low) && $util.isInteger(message.sintValue.high)))
-                    return "sintValue: integer|Long expected";
-            }
-            if (message.boolValue != null && message.hasOwnProperty("boolValue")) {
-                if (properties.valueType === 1)
-                    return "valueType: multiple values";
-                properties.valueType = 1;
-                if (typeof message.boolValue !== "boolean")
-                    return "boolValue: boolean expected";
-            }
-            return null;
-        };
-
-        /**
-         * Creates a Value message from a plain object. Also converts values to their respective internal types.
-         * @function fromObject
-         * @memberof stt.Value
-         * @static
-         * @param {Object.<string,*>} object Plain object
-         * @returns {stt.Value} Value
-         */
-        Value.fromObject = function fromObject(object) {
-            if (object instanceof $root.stt.Value)
-                return object;
-            let message = new $root.stt.Value();
-            if (object.stringValue != null)
-                message.stringValue = String(object.stringValue);
-            if (object.doubleValue != null)
-                message.doubleValue = Number(object.doubleValue);
-            if (object.floatValue != null)
-                message.floatValue = Number(object.floatValue);
-            if (object.intValue != null)
-                if ($util.Long)
-                    (message.intValue = $util.Long.fromValue(object.intValue)).unsigned = false;
-                else if (typeof object.intValue === "string")
-                    message.intValue = parseInt(object.intValue, 10);
-                else if (typeof object.intValue === "number")
-                    message.intValue = object.intValue;
-                else if (typeof object.intValue === "object")
-                    message.intValue = new $util.LongBits(object.intValue.low >>> 0, object.intValue.high >>> 0).toNumber();
-            if (object.uintValue != null)
-                if ($util.Long)
-                    (message.uintValue = $util.Long.fromValue(object.uintValue)).unsigned = true;
-                else if (typeof object.uintValue === "string")
-                    message.uintValue = parseInt(object.uintValue, 10);
-                else if (typeof object.uintValue === "number")
-                    message.uintValue = object.uintValue;
-                else if (typeof object.uintValue === "object")
-                    message.uintValue = new $util.LongBits(object.uintValue.low >>> 0, object.uintValue.high >>> 0).toNumber(true);
-            if (object.sintValue != null)
-                if ($util.Long)
-                    (message.sintValue = $util.Long.fromValue(object.sintValue)).unsigned = false;
-                else if (typeof object.sintValue === "string")
-                    message.sintValue = parseInt(object.sintValue, 10);
-                else if (typeof object.sintValue === "number")
-                    message.sintValue = object.sintValue;
-                else if (typeof object.sintValue === "object")
-                    message.sintValue = new $util.LongBits(object.sintValue.low >>> 0, object.sintValue.high >>> 0).toNumber();
-            if (object.boolValue != null)
-                message.boolValue = Boolean(object.boolValue);
-            return message;
-        };
-
-        /**
-         * Creates a plain object from a Value message. Also converts values to other types if specified.
-         * @function toObject
-         * @memberof stt.Value
-         * @static
-         * @param {stt.Value} message Value
-         * @param {$protobuf.IConversionOptions} [options] Conversion options
-         * @returns {Object.<string,*>} Plain object
-         */
-        Value.toObject = function toObject(message, options) {
-            if (!options)
-                options = {};
-            let object = {};
-            if (message.stringValue != null && message.hasOwnProperty("stringValue")) {
-                object.stringValue = message.stringValue;
-                if (options.oneofs)
-                    object.valueType = "stringValue";
-            }
-            if (message.doubleValue != null && message.hasOwnProperty("doubleValue")) {
-                object.doubleValue = options.json && !isFinite(message.doubleValue) ? String(message.doubleValue) : message.doubleValue;
-                if (options.oneofs)
-                    object.valueType = "doubleValue";
-            }
-            if (message.floatValue != null && message.hasOwnProperty("floatValue")) {
-                object.floatValue = options.json && !isFinite(message.floatValue) ? String(message.floatValue) : message.floatValue;
-                if (options.oneofs)
-                    object.valueType = "floatValue";
-            }
-            if (message.intValue != null && message.hasOwnProperty("intValue")) {
-                if (typeof message.intValue === "number")
-                    object.intValue = options.longs === String ? String(message.intValue) : message.intValue;
-                else
-                    object.intValue = options.longs === String ? $util.Long.prototype.toString.call(message.intValue) : options.longs === Number ? new $util.LongBits(message.intValue.low >>> 0, message.intValue.high >>> 0).toNumber() : message.intValue;
-                if (options.oneofs)
-                    object.valueType = "intValue";
-            }
-            if (message.uintValue != null && message.hasOwnProperty("uintValue")) {
-                if (typeof message.uintValue === "number")
-                    object.uintValue = options.longs === String ? String(message.uintValue) : message.uintValue;
-                else
-                    object.uintValue = options.longs === String ? $util.Long.prototype.toString.call(message.uintValue) : options.longs === Number ? new $util.LongBits(message.uintValue.low >>> 0, message.uintValue.high >>> 0).toNumber(true) : message.uintValue;
-                if (options.oneofs)
-                    object.valueType = "uintValue";
-            }
-            if (message.sintValue != null && message.hasOwnProperty("sintValue")) {
-                if (typeof message.sintValue === "number")
-                    object.sintValue = options.longs === String ? String(message.sintValue) : message.sintValue;
-                else
-                    object.sintValue = options.longs === String ? $util.Long.prototype.toString.call(message.sintValue) : options.longs === Number ? new $util.LongBits(message.sintValue.low >>> 0, message.sintValue.high >>> 0).toNumber() : message.sintValue;
-                if (options.oneofs)
-                    object.valueType = "sintValue";
-            }
-            if (message.boolValue != null && message.hasOwnProperty("boolValue")) {
-                object.boolValue = message.boolValue;
-                if (options.oneofs)
-                    object.valueType = "boolValue";
-            }
-            return object;
-        };
-
-        /**
-         * Converts this Value to JSON.
-         * @function toJSON
-         * @memberof stt.Value
-         * @instance
-         * @returns {Object.<string,*>} JSON object
-         */
-        Value.prototype.toJSON = function toJSON() {
-            return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
-        };
-
-        /**
-         * Gets the default type url for Value
-         * @function getTypeUrl
-         * @memberof stt.Value
-         * @static
-         * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
-         * @returns {string} The default type url
-         */
-        Value.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
-            if (typeUrlPrefix === undefined) {
-                typeUrlPrefix = "type.googleapis.com";
-            }
-            return typeUrlPrefix + "/stt.Value";
-        };
-
-        return Value;
-    })();
-
     stt.ColumnarFeatures = (function() {
 
         /**
@@ -1830,6 +806,8 @@ export const stt = $root.stt = (() => {
          * @property {Array.<number|Long>|null} [endTimes] ColumnarFeatures endTimes
          * @property {Array.<stt.INumericColumn>|null} [numericProperties] ColumnarFeatures numericProperties
          * @property {Array.<stt.ICategoricalColumn>|null} [categoricalProperties] ColumnarFeatures categoricalProperties
+         * @property {Array.<number>|null} [ringOffsets] ColumnarFeatures ringOffsets
+         * @property {Array.<number>|null} [ringOffsetsOffsets] ColumnarFeatures ringOffsetsOffsets
          */
 
         /**
@@ -1848,6 +826,8 @@ export const stt = $root.stt = (() => {
             this.endTimes = [];
             this.numericProperties = [];
             this.categoricalProperties = [];
+            this.ringOffsets = [];
+            this.ringOffsetsOffsets = [];
             if (properties)
                 for (let keys = Object.keys(properties), i = 0; i < keys.length; ++i)
                     if (properties[keys[i]] != null)
@@ -1927,6 +907,22 @@ export const stt = $root.stt = (() => {
         ColumnarFeatures.prototype.categoricalProperties = $util.emptyArray;
 
         /**
+         * ColumnarFeatures ringOffsets.
+         * @member {Array.<number>} ringOffsets
+         * @memberof stt.ColumnarFeatures
+         * @instance
+         */
+        ColumnarFeatures.prototype.ringOffsets = $util.emptyArray;
+
+        /**
+         * ColumnarFeatures ringOffsetsOffsets.
+         * @member {Array.<number>} ringOffsetsOffsets
+         * @memberof stt.ColumnarFeatures
+         * @instance
+         */
+        ColumnarFeatures.prototype.ringOffsetsOffsets = $util.emptyArray;
+
+        /**
          * Creates a new ColumnarFeatures instance using the specified properties.
          * @function create
          * @memberof stt.ColumnarFeatures
@@ -1990,6 +986,18 @@ export const stt = $root.stt = (() => {
             if (message.categoricalProperties != null && message.categoricalProperties.length)
                 for (let i = 0; i < message.categoricalProperties.length; ++i)
                     $root.stt.CategoricalColumn.encode(message.categoricalProperties[i], writer.uint32(/* id 9, wireType 2 =*/74).fork()).ldelim();
+            if (message.ringOffsets != null && message.ringOffsets.length) {
+                writer.uint32(/* id 10, wireType 2 =*/82).fork();
+                for (let i = 0; i < message.ringOffsets.length; ++i)
+                    writer.uint32(message.ringOffsets[i]);
+                writer.ldelim();
+            }
+            if (message.ringOffsetsOffsets != null && message.ringOffsetsOffsets.length) {
+                writer.uint32(/* id 11, wireType 2 =*/90).fork();
+                for (let i = 0; i < message.ringOffsetsOffsets.length; ++i)
+                    writer.uint32(message.ringOffsetsOffsets[i]);
+                writer.ldelim();
+            }
             return writer;
         };
 
@@ -2101,6 +1109,28 @@ export const stt = $root.stt = (() => {
                         message.categoricalProperties.push($root.stt.CategoricalColumn.decode(reader, reader.uint32()));
                         break;
                     }
+                case 10: {
+                        if (!(message.ringOffsets && message.ringOffsets.length))
+                            message.ringOffsets = [];
+                        if ((tag & 7) === 2) {
+                            let end2 = reader.uint32() + reader.pos;
+                            while (reader.pos < end2)
+                                message.ringOffsets.push(reader.uint32());
+                        } else
+                            message.ringOffsets.push(reader.uint32());
+                        break;
+                    }
+                case 11: {
+                        if (!(message.ringOffsetsOffsets && message.ringOffsetsOffsets.length))
+                            message.ringOffsetsOffsets = [];
+                        if ((tag & 7) === 2) {
+                            let end2 = reader.uint32() + reader.pos;
+                            while (reader.pos < end2)
+                                message.ringOffsetsOffsets.push(reader.uint32());
+                        } else
+                            message.ringOffsetsOffsets.push(reader.uint32());
+                        break;
+                    }
                 default:
                     reader.skipType(tag & 7);
                     break;
@@ -2200,6 +1230,20 @@ export const stt = $root.stt = (() => {
                     if (error)
                         return "categoricalProperties." + error;
                 }
+            }
+            if (message.ringOffsets != null && message.hasOwnProperty("ringOffsets")) {
+                if (!Array.isArray(message.ringOffsets))
+                    return "ringOffsets: array expected";
+                for (let i = 0; i < message.ringOffsets.length; ++i)
+                    if (!$util.isInteger(message.ringOffsets[i]))
+                        return "ringOffsets: integer[] expected";
+            }
+            if (message.ringOffsetsOffsets != null && message.hasOwnProperty("ringOffsetsOffsets")) {
+                if (!Array.isArray(message.ringOffsetsOffsets))
+                    return "ringOffsetsOffsets: array expected";
+                for (let i = 0; i < message.ringOffsetsOffsets.length; ++i)
+                    if (!$util.isInteger(message.ringOffsetsOffsets[i]))
+                        return "ringOffsetsOffsets: integer[] expected";
             }
             return null;
         };
@@ -2314,6 +1358,20 @@ export const stt = $root.stt = (() => {
                     message.categoricalProperties[i] = $root.stt.CategoricalColumn.fromObject(object.categoricalProperties[i]);
                 }
             }
+            if (object.ringOffsets) {
+                if (!Array.isArray(object.ringOffsets))
+                    throw TypeError(".stt.ColumnarFeatures.ringOffsets: array expected");
+                message.ringOffsets = [];
+                for (let i = 0; i < object.ringOffsets.length; ++i)
+                    message.ringOffsets[i] = object.ringOffsets[i] >>> 0;
+            }
+            if (object.ringOffsetsOffsets) {
+                if (!Array.isArray(object.ringOffsetsOffsets))
+                    throw TypeError(".stt.ColumnarFeatures.ringOffsetsOffsets: array expected");
+                message.ringOffsetsOffsets = [];
+                for (let i = 0; i < object.ringOffsetsOffsets.length; ++i)
+                    message.ringOffsetsOffsets[i] = object.ringOffsetsOffsets[i] >>> 0;
+            }
             return message;
         };
 
@@ -2338,6 +1396,8 @@ export const stt = $root.stt = (() => {
                 object.endTimes = [];
                 object.numericProperties = [];
                 object.categoricalProperties = [];
+                object.ringOffsets = [];
+                object.ringOffsetsOffsets = [];
             }
             if (options.defaults) {
                 object.featureCount = 0;
@@ -2390,6 +1450,16 @@ export const stt = $root.stt = (() => {
                 object.categoricalProperties = [];
                 for (let j = 0; j < message.categoricalProperties.length; ++j)
                     object.categoricalProperties[j] = $root.stt.CategoricalColumn.toObject(message.categoricalProperties[j], options);
+            }
+            if (message.ringOffsets && message.ringOffsets.length) {
+                object.ringOffsets = [];
+                for (let j = 0; j < message.ringOffsets.length; ++j)
+                    object.ringOffsets[j] = message.ringOffsets[j];
+            }
+            if (message.ringOffsetsOffsets && message.ringOffsetsOffsets.length) {
+                object.ringOffsetsOffsets = [];
+                for (let j = 0; j < message.ringOffsetsOffsets.length; ++j)
+                    object.ringOffsetsOffsets[j] = message.ringOffsetsOffsets[j];
             }
             return object;
         };

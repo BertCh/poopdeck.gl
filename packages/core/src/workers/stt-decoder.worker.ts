@@ -3,12 +3,13 @@
  * 
  * Offloads protobuf decoding and decompression from the main thread.
  * This worker is used by the STTLoader when worker support is enabled.
+ * 
+ * Output is always in binary format (BinaryFeatures) for GPU-efficient rendering.
  */
 
 import { decodeTile } from '../tile';
 import { decompress } from '../compression';
-import { tileToBinaryTile } from '../binary-features';
-import type { TileId, Compression } from '../types';
+import type { TileId, Compression, Tile, BinaryFeatures } from '../types';
 
 export interface STTWorkerMessage {
   type: 'decode';
@@ -16,13 +17,12 @@ export interface STTWorkerMessage {
   data: ArrayBuffer;
   tileId: TileId;
   compression: Compression;
-  outputFormat: 'object' | 'binary';
 }
 
 export interface STTWorkerResult {
   type: 'result';
   id: number;
-  tile: unknown;
+  tile: Tile;
   transferables?: ArrayBuffer[];
 }
 
@@ -42,7 +42,7 @@ const workerSelf = globalThis as unknown as {
  * Handle incoming messages from the main thread
  */
 workerSelf.onmessage = async (event: MessageEvent<STTWorkerMessage>) => {
-  const { type, id, data, tileId, compression, outputFormat } = event.data;
+  const { type, id, data, tileId, compression } = event.data;
   
   if (type !== 'decode') {
     return;
@@ -53,53 +53,40 @@ workerSelf.onmessage = async (event: MessageEvent<STTWorkerMessage>) => {
     const compressed = new Uint8Array(data);
     const decompressed = await decompress(compressed, compression);
     
-    // Decode the tile
+    // Decode the tile (directly produces binary format)
     const tile = decodeTile(decompressed, tileId);
     
-    // Convert to binary format if requested
-    if (outputFormat === 'binary') {
-      const binaryTile = tileToBinaryTile(tile);
+    // Collect transferable buffers for zero-copy transfer
+    const transferables: ArrayBuffer[] = [];
+    for (const layer of tile.layers) {
+      const features: BinaryFeatures = layer.features;
+      transferables.push(features.positions.buffer as ArrayBuffer);
+      transferables.push(features.featureIds.buffer as ArrayBuffer);
+      transferables.push(features.startTimes.buffer as ArrayBuffer);
+      transferables.push(features.endTimes.buffer as ArrayBuffer);
       
-      // Collect transferable buffers for zero-copy transfer
-      const transferables: ArrayBuffer[] = [];
-      for (const layer of binaryTile.layers) {
-        transferables.push(layer.features.positions.buffer as ArrayBuffer);
-        transferables.push(layer.features.featureIds.buffer as ArrayBuffer);
-        transferables.push(layer.features.startTimes.buffer as ArrayBuffer);
-        transferables.push(layer.features.endTimes.buffer as ArrayBuffer);
-        
-        if (layer.features.positionOffsets) {
-          transferables.push(layer.features.positionOffsets.buffer as ArrayBuffer);
-        }
-        
-        for (const arr of Object.values(layer.features.numericProperties)) {
-          transferables.push(arr.buffer as ArrayBuffer);
-        }
-        
-        for (const { indices } of Object.values(layer.features.categoricalProperties)) {
-          transferables.push(indices.buffer as ArrayBuffer);
-        }
+      if (features.startIndices) {
+        transferables.push(features.startIndices.buffer as ArrayBuffer);
       }
       
-      const result: STTWorkerResult = {
-        type: 'result',
-        id,
-        tile: binaryTile,
-        transferables,
-      };
+      for (const arr of Object.values(features.numericProps)) {
+        transferables.push(arr.buffer as ArrayBuffer);
+      }
       
-      // Transfer buffers to main thread (zero-copy)
-      workerSelf.postMessage(result, transferables);
-    } else {
-      // Return standard object format
-      const result: STTWorkerResult = {
-        type: 'result',
-        id,
-        tile,
-      };
-      
-      workerSelf.postMessage(result);
+      for (const { indices } of Object.values(features.categoricalProps)) {
+        transferables.push(indices.buffer as ArrayBuffer);
+      }
     }
+    
+    const result: STTWorkerResult = {
+      type: 'result',
+      id,
+      tile,
+      transferables,
+    };
+    
+    // Transfer buffers to main thread (zero-copy)
+    workerSelf.postMessage(result, transferables);
   } catch (error) {
     const errorResult: STTWorkerError = {
       type: 'error',

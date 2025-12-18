@@ -1,9 +1,17 @@
 /**
- * Layer for temporal heatmap visualization
+ * HeatmapTimeLayer - Temporal heatmap visualization
+ *
+ * Aggregates point data into a density heatmap that animates over time.
+ * Uses GPU acceleration for real-time aggregation.
+ *
+ * PERFORMANCE OPTIMIZED:
+ * - Caches extracted points per tile to avoid re-extraction
+ * - Only recomputes visible points when tile set changes
+ * - Uses typed arrays for position/weight data
+ * - Layer instance cached and reused when point count stable
  */
-import type { Accessor, Color, Layer, Position } from '@deck.gl/core';
+import type { Color, Layer, LayerContext } from '@deck.gl/core';
 import { SpatioTemporalLayer, SpatioTemporalLayerProps } from './spatiotemporal-layer';
-import type { Feature } from '@stt/core';
 export interface HeatmapTimeLayerProps extends SpatioTemporalLayerProps {
     /** Radius of influence in pixels */
     radiusPixels?: number;
@@ -13,16 +21,17 @@ export interface HeatmapTimeLayerProps extends SpatioTemporalLayerProps {
     aggregation?: 'SUM' | 'MEAN';
     /** Color range from low to high density */
     colorRange?: Color[];
-    /** Weight accessor for each data point */
-    getWeight?: Accessor<Feature, number>;
-    /** Position accessor - returns [lon, lat] */
-    getPosition?: Accessor<Feature, Position>;
+    /** Property name for weight values (if using a numeric property) */
+    weightProperty?: string;
 }
 /**
  * Temporal heatmap layer
  *
- * Aggregates point data into a density heatmap that animates over time.
- * Uses GPU acceleration for real-time aggregation.
+ * Performance optimizations:
+ * - Caches all points per tile (extracted once on tile load)
+ * - Only time-filtering loop runs per frame (no object creation)
+ * - Uses flat typed arrays for minimal memory churn
+ * - Caches layer instance for reuse
  */
 export declare class HeatmapTimeLayer extends SpatioTemporalLayer<HeatmapTimeLayerProps> {
     static layerName: string;
@@ -43,14 +52,7 @@ export declare class HeatmapTimeLayer extends SpatioTemporalLayer<HeatmapTimeLay
             value: Color[];
             compare: boolean;
         };
-        getWeight: {
-            type: string;
-            value: number;
-        };
-        getPosition: {
-            type: string;
-            value: null;
-        };
+        weightProperty: null;
         data: {
             type: string;
             value: string;
@@ -96,6 +98,21 @@ export declare class HeatmapTimeLayer extends SpatioTemporalLayer<HeatmapTimeLay
             value: number;
             compare: boolean;
         };
+        enablePrefetch: {
+            type: string;
+            value: boolean;
+            compare: boolean;
+        };
+        prefetchAhead: {
+            type: string;
+            value: number;
+            compare: boolean;
+        };
+        prefetchSteps: {
+            type: string;
+            value: number;
+            compare: boolean;
+        };
         onViewportLoad: {
             type: string;
             value: null;
@@ -117,7 +134,22 @@ export declare class HeatmapTimeLayer extends SpatioTemporalLayer<HeatmapTimeLay
             compare: boolean;
         };
     };
+    private visiblePositions;
+    private visibleWeights;
+    private cachedLayer;
+    private cachedVisibleCount;
+    finalizeState(context: LayerContext): void;
     renderLayers(): Layer[];
-    private isFeatureVisible;
+    /**
+     * Filter visible points from all tiles based on time window.
+     * Uses cached tile point data and reuses output arrays.
+     * Returns the number of visible points.
+     */
+    private filterVisiblePoints;
+    /**
+     * Get or create cached point data for a tile layer.
+     * Extracts positions, weights, and times once per tile.
+     */
+    private getCachedTilePoints;
 }
 //# sourceMappingURL=heatmap-time-layer.d.ts.map

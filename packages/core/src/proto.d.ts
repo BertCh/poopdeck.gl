@@ -127,9 +127,6 @@ export namespace stt {
         /** Layer extent */
         extent?: (number|null);
 
-        /** Layer features */
-        features?: (stt.IFeature[]|null);
-
         /** Layer columnar */
         columnar?: (stt.IColumnarFeatures|null);
     }
@@ -148,9 +145,6 @@ export namespace stt {
 
         /** Layer extent. */
         public extent: number;
-
-        /** Layer features. */
-        public features: stt.IFeature[];
 
         /** Layer columnar. */
         public columnar?: (stt.IColumnarFeatures|null);
@@ -235,27 +229,6 @@ export namespace stt {
 
     /** Properties of a Feature. */
     interface IFeature {
-
-        /** Feature id */
-        id?: (number|Long|null);
-
-        /** Feature type */
-        type?: (stt.Feature.GeomType|null);
-
-        /** Feature positions */
-        positions?: (stt.IPosition[]|null);
-
-        /** Feature properties */
-        properties?: ({ [k: string]: stt.IValue }|null);
-
-        /** Feature validFrom */
-        validFrom?: (number|Long|null);
-
-        /** Feature validTo */
-        validTo?: (number|Long|null);
-
-        /** Feature geometry */
-        geometry?: (number[]|null);
     }
 
     /** Represents a Feature. */
@@ -266,27 +239,6 @@ export namespace stt {
          * @param [properties] Properties to set
          */
         constructor(properties?: stt.IFeature);
-
-        /** Feature id. */
-        public id: (number|Long);
-
-        /** Feature type. */
-        public type: stt.Feature.GeomType;
-
-        /** Feature positions. */
-        public positions: stt.IPosition[];
-
-        /** Feature properties. */
-        public properties: { [k: string]: stt.IValue };
-
-        /** Feature validFrom. */
-        public validFrom: (number|Long);
-
-        /** Feature validTo. */
-        public validTo: (number|Long);
-
-        /** Feature geometry. */
-        public geometry: number[];
 
         /**
          * Creates a new Feature instance using the specified properties.
@@ -376,245 +328,6 @@ export namespace stt {
         }
     }
 
-    /** Properties of a Position. */
-    interface IPosition {
-
-        /** Position lon */
-        lon?: (number|null);
-
-        /** Position lat */
-        lat?: (number|null);
-    }
-
-    /** Represents a Position. */
-    class Position implements IPosition {
-
-        /**
-         * Constructs a new Position.
-         * @param [properties] Properties to set
-         */
-        constructor(properties?: stt.IPosition);
-
-        /** Position lon. */
-        public lon: number;
-
-        /** Position lat. */
-        public lat: number;
-
-        /**
-         * Creates a new Position instance using the specified properties.
-         * @param [properties] Properties to set
-         * @returns Position instance
-         */
-        public static create(properties?: stt.IPosition): stt.Position;
-
-        /**
-         * Encodes the specified Position message. Does not implicitly {@link stt.Position.verify|verify} messages.
-         * @param message Position message or plain object to encode
-         * @param [writer] Writer to encode to
-         * @returns Writer
-         */
-        public static encode(message: stt.IPosition, writer?: $protobuf.Writer): $protobuf.Writer;
-
-        /**
-         * Encodes the specified Position message, length delimited. Does not implicitly {@link stt.Position.verify|verify} messages.
-         * @param message Position message or plain object to encode
-         * @param [writer] Writer to encode to
-         * @returns Writer
-         */
-        public static encodeDelimited(message: stt.IPosition, writer?: $protobuf.Writer): $protobuf.Writer;
-
-        /**
-         * Decodes a Position message from the specified reader or buffer.
-         * @param reader Reader or buffer to decode from
-         * @param [length] Message length if known beforehand
-         * @returns Position
-         * @throws {Error} If the payload is not a reader or valid buffer
-         * @throws {$protobuf.util.ProtocolError} If required fields are missing
-         */
-        public static decode(reader: ($protobuf.Reader|Uint8Array), length?: number): stt.Position;
-
-        /**
-         * Decodes a Position message from the specified reader or buffer, length delimited.
-         * @param reader Reader or buffer to decode from
-         * @returns Position
-         * @throws {Error} If the payload is not a reader or valid buffer
-         * @throws {$protobuf.util.ProtocolError} If required fields are missing
-         */
-        public static decodeDelimited(reader: ($protobuf.Reader|Uint8Array)): stt.Position;
-
-        /**
-         * Verifies a Position message.
-         * @param message Plain object to verify
-         * @returns `null` if valid, otherwise the reason why it is not
-         */
-        public static verify(message: { [k: string]: any }): (string|null);
-
-        /**
-         * Creates a Position message from a plain object. Also converts values to their respective internal types.
-         * @param object Plain object
-         * @returns Position
-         */
-        public static fromObject(object: { [k: string]: any }): stt.Position;
-
-        /**
-         * Creates a plain object from a Position message. Also converts values to other types if specified.
-         * @param message Position
-         * @param [options] Conversion options
-         * @returns Plain object
-         */
-        public static toObject(message: stt.Position, options?: $protobuf.IConversionOptions): { [k: string]: any };
-
-        /**
-         * Converts this Position to JSON.
-         * @returns JSON object
-         */
-        public toJSON(): { [k: string]: any };
-
-        /**
-         * Gets the default type url for Position
-         * @param [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
-         * @returns The default type url
-         */
-        public static getTypeUrl(typeUrlPrefix?: string): string;
-    }
-
-    /** Properties of a Value. */
-    interface IValue {
-
-        /** Value stringValue */
-        stringValue?: (string|null);
-
-        /** Value doubleValue */
-        doubleValue?: (number|null);
-
-        /** Value floatValue */
-        floatValue?: (number|null);
-
-        /** Value intValue */
-        intValue?: (number|Long|null);
-
-        /** Value uintValue */
-        uintValue?: (number|Long|null);
-
-        /** Value sintValue */
-        sintValue?: (number|Long|null);
-
-        /** Value boolValue */
-        boolValue?: (boolean|null);
-    }
-
-    /** Represents a Value. */
-    class Value implements IValue {
-
-        /**
-         * Constructs a new Value.
-         * @param [properties] Properties to set
-         */
-        constructor(properties?: stt.IValue);
-
-        /** Value stringValue. */
-        public stringValue?: (string|null);
-
-        /** Value doubleValue. */
-        public doubleValue?: (number|null);
-
-        /** Value floatValue. */
-        public floatValue?: (number|null);
-
-        /** Value intValue. */
-        public intValue?: (number|Long|null);
-
-        /** Value uintValue. */
-        public uintValue?: (number|Long|null);
-
-        /** Value sintValue. */
-        public sintValue?: (number|Long|null);
-
-        /** Value boolValue. */
-        public boolValue?: (boolean|null);
-
-        /** Value valueType. */
-        public valueType?: ("stringValue"|"doubleValue"|"floatValue"|"intValue"|"uintValue"|"sintValue"|"boolValue");
-
-        /**
-         * Creates a new Value instance using the specified properties.
-         * @param [properties] Properties to set
-         * @returns Value instance
-         */
-        public static create(properties?: stt.IValue): stt.Value;
-
-        /**
-         * Encodes the specified Value message. Does not implicitly {@link stt.Value.verify|verify} messages.
-         * @param message Value message or plain object to encode
-         * @param [writer] Writer to encode to
-         * @returns Writer
-         */
-        public static encode(message: stt.IValue, writer?: $protobuf.Writer): $protobuf.Writer;
-
-        /**
-         * Encodes the specified Value message, length delimited. Does not implicitly {@link stt.Value.verify|verify} messages.
-         * @param message Value message or plain object to encode
-         * @param [writer] Writer to encode to
-         * @returns Writer
-         */
-        public static encodeDelimited(message: stt.IValue, writer?: $protobuf.Writer): $protobuf.Writer;
-
-        /**
-         * Decodes a Value message from the specified reader or buffer.
-         * @param reader Reader or buffer to decode from
-         * @param [length] Message length if known beforehand
-         * @returns Value
-         * @throws {Error} If the payload is not a reader or valid buffer
-         * @throws {$protobuf.util.ProtocolError} If required fields are missing
-         */
-        public static decode(reader: ($protobuf.Reader|Uint8Array), length?: number): stt.Value;
-
-        /**
-         * Decodes a Value message from the specified reader or buffer, length delimited.
-         * @param reader Reader or buffer to decode from
-         * @returns Value
-         * @throws {Error} If the payload is not a reader or valid buffer
-         * @throws {$protobuf.util.ProtocolError} If required fields are missing
-         */
-        public static decodeDelimited(reader: ($protobuf.Reader|Uint8Array)): stt.Value;
-
-        /**
-         * Verifies a Value message.
-         * @param message Plain object to verify
-         * @returns `null` if valid, otherwise the reason why it is not
-         */
-        public static verify(message: { [k: string]: any }): (string|null);
-
-        /**
-         * Creates a Value message from a plain object. Also converts values to their respective internal types.
-         * @param object Plain object
-         * @returns Value
-         */
-        public static fromObject(object: { [k: string]: any }): stt.Value;
-
-        /**
-         * Creates a plain object from a Value message. Also converts values to other types if specified.
-         * @param message Value
-         * @param [options] Conversion options
-         * @returns Plain object
-         */
-        public static toObject(message: stt.Value, options?: $protobuf.IConversionOptions): { [k: string]: any };
-
-        /**
-         * Converts this Value to JSON.
-         * @returns JSON object
-         */
-        public toJSON(): { [k: string]: any };
-
-        /**
-         * Gets the default type url for Value
-         * @param [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
-         * @returns The default type url
-         */
-        public static getTypeUrl(typeUrlPrefix?: string): string;
-    }
-
     /** Properties of a ColumnarFeatures. */
     interface IColumnarFeatures {
 
@@ -644,6 +357,12 @@ export namespace stt {
 
         /** ColumnarFeatures categoricalProperties */
         categoricalProperties?: (stt.ICategoricalColumn[]|null);
+
+        /** ColumnarFeatures ringOffsets */
+        ringOffsets?: (number[]|null);
+
+        /** ColumnarFeatures ringOffsetsOffsets */
+        ringOffsetsOffsets?: (number[]|null);
     }
 
     /** Represents a ColumnarFeatures. */
@@ -681,6 +400,12 @@ export namespace stt {
 
         /** ColumnarFeatures categoricalProperties. */
         public categoricalProperties: stt.ICategoricalColumn[];
+
+        /** ColumnarFeatures ringOffsets. */
+        public ringOffsets: number[];
+
+        /** ColumnarFeatures ringOffsetsOffsets. */
+        public ringOffsetsOffsets: number[];
 
         /**
          * Creates a new ColumnarFeatures instance using the specified properties.

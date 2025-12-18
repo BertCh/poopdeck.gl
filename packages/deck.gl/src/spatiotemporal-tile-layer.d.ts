@@ -10,14 +10,14 @@ import type { TileLayerProps } from '@deck.gl/geo-layers';
 import type { Layer, LayersList, UpdateParameters, DefaultProps } from '@deck.gl/core';
 import type { _Tile2DHeader as Tile2DHeader, _TileLoadProps as TileLoadProps } from '@deck.gl/geo-layers';
 import { STTArchive } from '@stt/core';
-import type { Tile, ArchiveMetadata, BinaryTile } from '@stt/core';
+import type { Tile, ArchiveMetadata } from '@stt/core';
 import { TimeController } from './time-controller';
 /**
  * Extended tile data including temporal information
  */
 export interface SpatioTemporalTileData {
-    /** The decoded tile data (object or binary format) */
-    tile: Tile | BinaryTile;
+    /** The decoded tile data (binary format) */
+    tile: Tile;
     /** Tile temporal bounds */
     timeRange: {
         start: number;
@@ -38,8 +38,6 @@ export interface SpatioTemporalTileLayerProps extends Omit<TileLayerProps<Spatio
     };
     /** Time controller (optional, for synchronized animation) */
     timeController?: TimeController;
-    /** Use binary output format for GPU-optimized rendering */
-    useBinaryFormat?: boolean;
     /** Callback when archive metadata is loaded */
     onMetadataLoad?: (metadata: ArchiveMetadata) => void;
 }

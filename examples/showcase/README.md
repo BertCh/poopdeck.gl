@@ -15,38 +15,34 @@ All datasets have been regenerated with the improved data pipeline:
 
 ### Real Data
 
-**Earthquakes (101 MB)** - USGS seismic events
+**Earthquakes (119 MB)** - USGS seismic events
 
-- 34,521 features, 1,826 temporal frames
+- 77,198 features (M4.0+ 2020-2024)
 - Built with `sparse-events` temporal profile
-- Magnitude 4.0+ from Dec 2023 - Oct 2024
 
-**COVID-19 Cases (5.2 MB)** - NYT county data (5 sample counties)
-
-- 3,238 features, 730 temporal frames
-- Daily aggregates profile
-- Feb 2020 - May 2022
-
-**Hurricane Tracks (4.4 MB)** - NOAA IBTrACS
+**Hurricane Tracks (5.4 MB)** - NOAA IBTrACS
 
 - 5,219 features, 15,011 temporal frames
 - Atlantic hurricanes 2020-2023
 
-### Synthetic Data
+**AIS Maritime Traffic (548 MB)** - NOAA Marine Cadastre
 
-**Ships (4.1 MB)** - Simulated AIS maritime traffic
+- 1.17M vessel positions from 14,868 ships
+- Real AIS data (Jan 2024)
 
-- 84,000 features, 1,246 frames
-- High-frequency temporal profile
+**Flight Traffic (1 GB)** - OpenSky Network
 
-**Flights (345 KB)** - Simulated ADS-B aircraft positions
+- 3.96M aircraft positions from 21K aircraft
+- Real ADS-B data (24hr, Jan 2020)
 
-- 1,104 features, 831 frames
+**NYC Taxi (142 MB)** - TLC + OSRM routed
 
-**SF Taxis (21 MB)** - Simulated taxi trajectories
+- 1.14M rideshare points
+- Real trip data (Feb 2016)
 
-- 10,000 features, 24 frames
-- Improved coordinate math with latitude adjustment
+**Wildfires (328 KB)** - NIFC perimeters
+
+- 118 large wildfire polygons (1000+ acres, 2020-2023)
 
 ## Building Locally
 
@@ -61,30 +57,19 @@ Datasets are pre-built and included in `public/data/`.
 
 ## Regenerating Datasets
 
-To rebuild with the latest pipeline:
+To rebuild all datasets:
 
 ```bash
-# Earthquakes (real data)
-cd scripts/data-generation
-cargo run --bin generate-earthquake-data -- --output earthquakes.geojson
-cd ../..
-./target/release/stt-build \\
-  --input scripts/data-generation/earthquakes.geojson \\
-  --output examples/showcase/public/data/earthquakes.stt \\
-  --time-field timestamp \\
-  --temporal-resolution sparse-events \\
-  --compression gzip
+# Install stt-generate
+cargo install --path crates/stt-generate
 
-# SF Taxis (synthetic)
-cd scripts/data-generation
-cargo run --bin generate-taxi-data -- --output sf-taxis.geojson
-cd ../..
-./target/release/stt-build \\
-  --input scripts/data-generation/sf-taxis.geojson \\
-  --output examples/showcase/public/data/sf-taxis.stt \\
-  --time-field timestamp \\
-  --temporal-resolution high-frequency \\
-  --compression gzip
+# Generate all datasets
+stt-generate all --output-dir examples/showcase/public/data
+
+# Or generate individually
+stt-generate earthquakes --output examples/showcase/public/data/earthquakes.stt
+stt-generate hurricanes --output examples/showcase/public/data/hurricanes.stt
+stt-generate wildfires --output examples/showcase/public/data/wildfires.stt
 ```
 
 ## Performance

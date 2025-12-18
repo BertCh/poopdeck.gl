@@ -22,7 +22,7 @@ import type {
 } from '@deck.gl/geo-layers';
 
 import { STTArchive } from '@stt/core';
-import type { Tile, BoundingBox, ArchiveMetadata, BinaryTile } from '@stt/core';
+import type { Tile, BoundingBox, ArchiveMetadata } from '@stt/core';
 import { TimeController } from './time-controller';
 
 const DEBUG = false;
@@ -31,8 +31,8 @@ const DEBUG = false;
  * Extended tile data including temporal information
  */
 export interface SpatioTemporalTileData {
-  /** The decoded tile data (object or binary format) */
-  tile: Tile | BinaryTile;
+  /** The decoded tile data (binary format) */
+  tile: Tile;
   /** Tile temporal bounds */
   timeRange: { start: number; end: number };
 }
@@ -53,9 +53,6 @@ export interface SpatioTemporalTileLayerProps extends Omit<TileLayerProps<Spatio
   /** Time controller (optional, for synchronized animation) */
   timeController?: TimeController;
   
-  /** Use binary output format for GPU-optimized rendering */
-  useBinaryFormat?: boolean;
-  
   /** Callback when archive metadata is loaded */
   onMetadataLoad?: (metadata: ArchiveMetadata) => void;
 }
@@ -73,10 +70,9 @@ const defaultProps: DefaultProps<SpatioTemporalTileLayerProps> = {
   data: { type: 'data', value: '' },
   currentTime: { type: 'number', value: Date.now() },
   timeWindow: { type: 'number', value: 86400000 }, // 1 day default
-  useBinaryFormat: { type: 'boolean', value: false },
   
   // TileLayer defaults optimized for STT
-  maxRequests: 6,
+  maxRequests: 24,
   debounceTime: 0, // No debounce for time changes
   maxCacheSize: 200,
   maxCacheByteSize: 500 * 1024 * 1024, // 500MB

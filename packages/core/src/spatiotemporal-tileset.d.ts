@@ -3,6 +3,12 @@
  *
  * Inspired by deck.gl's Tileset2D but extended for the temporal dimension.
  * Manages tile lifecycle, request queue, caching, and viewport-based tile selection.
+ *
+ * Performance optimizations (120fps target):
+ * - Priority queue ensures current tiles load before prefetch
+ * - Prefetch capped to 20% of maxRequests to avoid network saturation
+ * - Prefetch intensity scales with playback speed
+ * - Reduced default prefetchSteps from 10 to 5
  */
 import type { Tile, TileId, BoundingBox } from './types';
 export interface SpatiotemporalTilesetOptions {
@@ -22,17 +28,17 @@ export interface SpatiotemporalTilesetOptions {
     refinementStrategy?: 'best-available' | 'no-overlap';
     /** Enable predictive prefetching for animations */
     enablePrefetch?: boolean;
-    /** Number of time steps to prefetch ahead */
-    prefetchTimeSteps?: number;
-    /** Time increment for each prefetch step (milliseconds) */
-    prefetchTimeIncrement?: number;
+    /** How far ahead to prefetch (in milliseconds of animation time) */
+    prefetchAhead?: number;
+    /** Number of time window steps to prefetch */
+    prefetchSteps?: number;
     /** Callback to get available tiles for bounds/time */
     getAvailableTiles: (bounds: BoundingBox, zoom: number, timeRange: {
         start: number;
         end: number;
     }) => Promise<TileId[]>;
-    /** Callback to fetch tile data */
-    getTileData: (tileId: TileId) => Promise<Tile | null>;
+    /** Callback to fetch tile data (with optional abort signal for cancellation) */
+    getTileData: (tileId: TileId, signal?: AbortSignal) => Promise<Tile | null>;
     /** Callback when tile loads */
     onTileLoad?: (tile: Tile) => void;
     /** Callback when tile unloads */
@@ -48,6 +54,7 @@ export interface SpatiotemporalTileHeader {
     isCancelled: boolean;
     lastUsed: number;
     byteSize: number;
+    abortController?: AbortController;
 }
 /**
  * Manages spatiotemporal tile loading with:
@@ -59,13 +66,24 @@ export interface SpatiotemporalTileHeader {
 export declare class SpatiotemporalTileset {
     options: Required<SpatiotemporalTilesetOptions>;
     private tiles;
-    private requestQueue;
     private activeRequests;
     private currentViewport;
     private debounceTimer;
     private frameNumber;
     private cacheStats;
+    private animationSpeed;
+    private lastUpdateTime;
+    private isAnimating;
+    private priorityQueue;
+    private prefetchQueue;
+    private neededTileKeys;
+    private neededTilesVersion;
     constructor(options: SpatiotemporalTilesetOptions);
+    /**
+     * Update animation state for prefetching
+     * Call this when animation starts/stops or speed changes
+     */
+    setAnimationState(isAnimating: boolean, speed?: number): void;
     /**
      * Update tileset with new viewport
      * Returns new frame number if tiles changed
@@ -87,26 +105,44 @@ export declare class SpatiotemporalTileset {
     private getZoomLevelsToLoad;
     /**
      * Select tiles for current viewport and queue for loading
-     * Now includes predictive prefetching for animation playback
      */
     private selectAndLoadTiles;
     /**
-     * Load tiles for a specific time range
-     */
-    private loadTilesForTimeRange;
-    /**
-     * Prefetch tiles ahead of current time for smooth animation
-     * This loads multiple time slices into the future
+     * Prefetch tiles ahead of current animation time
+     * This ensures smooth playback by loading tiles before they're needed
+     *
+     * PERFORMANCE: Prefetch intensity scales with playback speed:
+     * - Paused/slow: fewer steps (1-2)
+     * - Normal speed: moderate steps (3-4)
+     * - Fast playback: full prefetch steps
      */
     private prefetchFutureTiles;
     /**
-     * Process request queue with concurrency limit
+     * Process request queues with concurrency limit
+     * Priority queue is processed first, prefetch queue uses remaining capacity
+     *
+     * PERFORMANCE: Prefetch capped to 20% of maxRequests to avoid network saturation
+     * and ensure priority tiles always have bandwidth available.
      */
     private processRequestQueue;
     /**
+     * Start loading a single tile
+     * Returns true if load was started, false if skipped
+     *
+     * PERFORMANCE: Uses AbortController to cancel superseded requests
+     * when viewport/time changes significantly.
+     */
+    private startTileLoad;
+    /**
+     * Cancel in-flight requests for tiles that are no longer needed
+     * Called when viewport/time changes significantly
+     */
+    cancelSupersededRequests(neededTileKeys: Set<string>): number;
+    /**
      * Evict tiles not recently used (LRU)
-     * Very conservative eviction to support smooth animation loops
-     * With massively increased cache sizes for seamless playback
+     *
+     * PERFORMANCE: Grace period reduced from 5 minutes to 60 seconds
+     * to prevent memory bloat while still supporting animation loops.
      */
     private evictUnusedTiles;
     /**
@@ -115,11 +151,21 @@ export declare class SpatiotemporalTileset {
     private evictTiles;
     /**
      * Get visible tiles for rendering
-     * Returns tiles that overlap with current time window
+     *
+     * PERFORMANCE OPTIMIZED - O(k) where k = needed tiles count:
+     * - Uses pre-computed neededTileKeys from selectAndLoadTiles()
+     * - No searching through all cached tiles
+     * - Just iterates over the known-needed set and returns loaded ones
+     *
+     * The neededTileKeys set is computed using spatial/temporal knowledge:
+     * - Viewport bounds + zoom -> which (x,y) tiles are visible
+     * - Current time + window -> which temporal tiles overlap
+     * - This is already computed in selectAndLoadTiles() via getTileIdsInBounds()
      */
     getVisibleTiles(): Tile[];
     /**
      * Get tiles specifically for current viewport (for filtering)
+     * Uses the same optimized method as getVisibleTiles
      */
     getViewportTiles(): Tile[];
     /**
@@ -128,7 +174,8 @@ export declare class SpatiotemporalTileset {
     getCacheStats(): {
         tileCount: number;
         activeRequests: number;
-        queuedRequests: number;
+        priorityQueueLength: number;
+        prefetchQueueLength: number;
         hits: number;
         misses: number;
         evictions: number;

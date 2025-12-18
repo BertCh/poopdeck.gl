@@ -1,94 +1,56 @@
 /**
- * Binary Columnar Format for GPU-ready spatiotemporal data
+ * Binary Features Utilities
  *
- * This format aligns with @loaders.gl/schema BinaryFeatureCollection patterns
- * and enables zero-copy GPU upload for deck.gl layers.
+ * Helper functions for working with BinaryFeatures data.
+ * The main types are defined in types.ts.
  */
-import type { Feature, GeometryType, Layer, Tile, TileId, TimeRange } from './types';
+import type { BinaryFeatures, GeometryType } from './types';
+export type { BinaryFeatures } from './types';
 /**
- * Binary representation of features for GPU-efficient rendering
- * All arrays are typed for direct GPU buffer upload
- */
-export interface BinaryFeatures {
-    /** Total number of features */
-    featureCount: number;
-    /** Geometry type (0=Point, 1=LineString, 2=Polygon) */
-    geometryType: GeometryType;
-    /**
-     * Interleaved positions as Float64Array [lon0, lat0, lon1, lat1, ...]
-     * For points: 2 values per feature
-     * For lines/polygons: variable, use positionOffsets to index
-     */
-    positions: Float64Array;
-    /**
-     * For non-point geometries: offset into positions array for each feature
-     * Length = featureCount + 1 (last value is total position count)
-     */
-    positionOffsets?: Uint32Array;
-    /** Feature IDs */
-    featureIds: Uint32Array;
-    /** Start time for each feature (milliseconds, relative to timeOffset) */
-    startTimes: Float32Array;
-    /** End time for each feature (milliseconds, relative to timeOffset) */
-    endTimes: Float32Array;
-    /**
-     * Time offset to maintain precision (subtract from absolute times)
-     * startTimes/endTimes are relative to this value
-     */
-    timeOffset: number;
-    /**
-     * Numeric properties as typed arrays
-     * Key is property name, value is Float32Array with one value per feature
-     */
-    numericProperties: Record<string, Float32Array>;
-    /**
-     * Categorical properties as indices into lookup tables
-     * Enables GPU-based coloring by category
-     */
-    categoricalProperties: Record<string, {
-        indices: Uint8Array;
-        categories: string[];
-    }>;
-}
-/**
- * Binary representation of a complete tile
- */
-export interface BinaryTile {
-    id: TileId;
-    timeRange: TimeRange;
-    layers: BinaryLayer[];
-}
-/**
- * Binary representation of a layer
- */
-export interface BinaryLayer {
-    name: string;
-    extent: number;
-    features: BinaryFeatures;
-}
-/**
- * Convert standard Tile to BinaryTile for GPU-efficient rendering
- */
-export declare function tileToBinaryTile(tile: Tile): BinaryTile;
-/**
- * Convert standard Layer to BinaryLayer
- */
-export declare function layerToBinaryLayer(layer: Layer): BinaryLayer;
-/**
- * Convert array of Feature objects to BinaryFeatures
- * This is the main conversion function for GPU-ready data
- */
-export declare function featuresToBinaryFeatures(features: Feature[]): BinaryFeatures;
-/**
- * Get position for a point feature from binary data
+ * Get 2D position for a point feature from binary data
  */
 export declare function getBinaryPosition(binary: BinaryFeatures, featureIndex: number): [number, number];
 /**
- * Get path positions for a line/polygon feature from binary data
+ * Get 3D position for a point feature from binary data
+ * Returns [lon, lat, altitude] - altitude is 0 if not available
  */
-export declare function getBinaryPath(binary: BinaryFeatures, featureIndex: number): [number, number][];
+export declare function getBinaryPosition3D(binary: BinaryFeatures, featureIndex: number): [number, number, number];
+/**
+ * Get absolute start time for a feature (timeOffset + startTimes[i])
+ */
+export declare function getAbsoluteStartTime(binary: BinaryFeatures, featureIndex: number): number;
+/**
+ * Get absolute end time for a feature (timeOffset + endTimes[i])
+ */
+export declare function getAbsoluteEndTime(binary: BinaryFeatures, featureIndex: number): number;
+/**
+ * Get a numeric property value for a feature
+ */
+export declare function getNumericProperty(binary: BinaryFeatures, propertyName: string, featureIndex: number): number | undefined;
+/**
+ * Get a categorical property value for a feature (resolved string value)
+ */
+export declare function getCategoricalProperty(binary: BinaryFeatures, propertyName: string, featureIndex: number): string | undefined;
+/**
+ * Get the category index for a feature (for color mapping)
+ */
+export declare function getCategoricalIndex(binary: BinaryFeatures, propertyName: string, featureIndex: number): number | undefined;
 /**
  * Calculate memory size of binary features (for cache management)
  */
 export declare function getBinaryFeaturesSize(binary: BinaryFeatures): number;
+/**
+ * Create empty binary features structure
+ */
+export declare function createEmptyBinaryFeatures(geometryType?: GeometryType): BinaryFeatures;
+/**
+ * Check if a feature is visible at a given time
+ */
+export declare function isFeatureVisible(binary: BinaryFeatures, featureIndex: number, currentTime: number, timeWindow: number): boolean;
+/**
+ * Get the number of positions for a specific feature
+ * For points, this is always 1
+ * For lines/polygons, uses the startIndices array
+ */
+export declare function getFeaturePositionCount(binary: BinaryFeatures, featureIndex: number): number;
 //# sourceMappingURL=binary-features.d.ts.map

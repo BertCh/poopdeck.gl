@@ -13,9 +13,8 @@ const defaultProps = {
     data: { type: 'data', value: '' },
     currentTime: { type: 'number', value: Date.now() },
     timeWindow: { type: 'number', value: 86400000 }, // 1 day default
-    useBinaryFormat: { type: 'boolean', value: false },
     // TileLayer defaults optimized for STT
-    maxRequests: 6,
+    maxRequests: 24,
     debounceTime: 0, // No debounce for time changes
     maxCacheSize: 200,
     maxCacheByteSize: 500 * 1024 * 1024, // 500MB

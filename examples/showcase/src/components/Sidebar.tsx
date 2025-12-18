@@ -1,8 +1,8 @@
 import React from "react";
-import { DatasetConfig } from "../datasets";
+import { Dataset } from "../types";
 
 interface SidebarProps {
-  datasets: DatasetConfig[];
+  datasets: Dataset[];
   selectedDatasetId: string;
   onDatasetChange: (datasetId: string) => void;
 }
@@ -14,15 +14,18 @@ const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   // Group datasets by type
   const groupedDatasets = React.useMemo(() => {
-    const groups: Record<string, DatasetConfig[]> = {
+    const groups: Record<string, Dataset[]> = {
       point: [],
       path: [],
+      trips: [],
       heatmap: [],
       polygon: [],
     };
 
     datasets.forEach((dataset) => {
-      groups[dataset.type].push(dataset);
+      if (groups[dataset.type]) {
+        groups[dataset.type].push(dataset);
+      }
     });
 
     return groups;
@@ -31,6 +34,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   const typeLabels: Record<string, string> = {
     point: "Point Visualizations",
     path: "Path & Trajectory",
+    trips: "Animated Trips",
     heatmap: "Density Heatmaps",
     polygon: "Area Coverage",
   };

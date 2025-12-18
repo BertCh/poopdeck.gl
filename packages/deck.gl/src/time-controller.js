@@ -7,6 +7,7 @@ export class TimeController {
         this.speed = 1.0;
         this.loop = false;
         this.listeners = new Set();
+        this.playStateListeners = new Set();
         this.tick = () => {
             if (!this.playing)
                 return;
@@ -68,6 +69,9 @@ export class TimeController {
     /** Set playback speed */
     setSpeed(speed) {
         this.speed = speed;
+        if (this.playing) {
+            this.notifyPlayStateListeners();
+        }
     }
     /** Set time range */
     setTimeRange(timeRange) {
@@ -79,6 +83,7 @@ export class TimeController {
             return;
         this.playing = true;
         this.lastUpdateTime = performance.now();
+        this.notifyPlayStateListeners();
         this.tick();
     }
     /** Pause playback */
@@ -88,6 +93,7 @@ export class TimeController {
             cancelAnimationFrame(this.animationFrameId);
             this.animationFrameId = undefined;
         }
+        this.notifyPlayStateListeners();
     }
     /** Toggle play/pause */
     toggle() {
@@ -106,16 +112,20 @@ export class TimeController {
     seekBy(delta) {
         this.setTime(this.currentTime + delta);
     }
-    /** Register listener for time updates */
     on(event, callback) {
         if (event === 'tick') {
             this.listeners.add(callback);
         }
+        else if (event === 'playState') {
+            this.playStateListeners.add(callback);
+        }
     }
-    /** Unregister listener */
     off(event, callback) {
         if (event === 'tick') {
             this.listeners.delete(callback);
+        }
+        else if (event === 'playState') {
+            this.playStateListeners.delete(callback);
         }
     }
     /** Get current state */
@@ -135,6 +145,11 @@ export class TimeController {
     notifyListeners() {
         for (const listener of this.listeners) {
             listener(this.currentTime);
+        }
+    }
+    notifyPlayStateListeners() {
+        for (const listener of this.playStateListeners) {
+            listener(this.playing, this.speed);
         }
     }
 }

@@ -31,6 +31,12 @@ export interface SpatioTemporalLayerProps extends CompositeLayerProps {
     maxCacheSize?: number;
     /** Maximum cache size in bytes */
     maxCacheByteSize?: number;
+    /** Enable predictive prefetching for smooth animation */
+    enablePrefetch?: boolean;
+    /** How far ahead to prefetch in animation time (milliseconds) */
+    prefetchAhead?: number;
+    /** Number of time steps to prefetch ahead */
+    prefetchSteps?: number;
     /** Callback when all tiles in viewport are loaded */
     onViewportLoad?: (tiles: Tile[]) => void;
     /** Callback when a tile loads */
@@ -48,13 +54,15 @@ interface SpatioTemporalLayerState {
     currentTime: number;
     isLoaded: boolean;
     frameNumber?: number;
+    playStateHandler?: (playing: boolean, speed: number) => void;
+    tickHandler?: (time: number) => void;
 }
 /**
  * Base layer for spatiotemporal tile visualization
  *
  * Architecture based on deck.gl TileLayer + loaders.gl:
  * - Separates tile management (Tileset) from data loading (Archive)
- * - Request concurrency control (maxRequests: 6)
+ * - Request concurrency control (maxRequests: 24)
  * - Debouncing for smooth viewport changes
  * - LRU cache with size limits
  * - Frame-based rendering optimization
@@ -107,6 +115,21 @@ export declare class SpatioTemporalLayer<Props extends SpatioTemporalLayerProps 
             value: number;
             compare: boolean;
         };
+        enablePrefetch: {
+            type: string;
+            value: boolean;
+            compare: boolean;
+        };
+        prefetchAhead: {
+            type: string;
+            value: number;
+            compare: boolean;
+        };
+        prefetchSteps: {
+            type: string;
+            value: number;
+            compare: boolean;
+        };
         onViewportLoad: {
             type: string;
             value: null;
@@ -141,6 +164,19 @@ export declare class SpatioTemporalLayer<Props extends SpatioTemporalLayerProps 
         changeFlags: any;
     }): boolean;
     updateState(params: UpdateParameters<this>): void;
+    /**
+     * Handle time updates from TimeController tick events
+     *
+     * PERFORMANCE OPTIMIZED:
+     * - Only updates currentTime without full tile re-evaluation
+     * - Tiles are updated less frequently via a throttled tileset update
+     * - Layer caching in subclasses ensures GPU state is preserved
+     */
+    private _handleTimeUpdate;
+    /**
+     * Check if the tiles array has actually changed (not just reference)
+     */
+    private _tilesChanged;
     private _updateTileset;
     private _initArchiveAndTileset;
     private getViewportBounds;

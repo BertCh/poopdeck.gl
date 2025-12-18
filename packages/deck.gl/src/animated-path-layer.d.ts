@@ -1,20 +1,25 @@
 /**
- * Layer for animating path/trajectory data over time
+ * AnimatedPathLayer - GPU-efficient path/trajectory rendering with time filtering
+ *
+ * Uses deck.gl's binary data interface for maximum performance:
+ * - Passes typed arrays directly to GPU (no accessor function calls)
+ * - Uses startIndices for variable-length paths
+ * - Time filtering happens entirely in the shader via TimeFilterExtension
+ * - Layer instances are cached and cloned to avoid recreation overhead
  */
-import type { Accessor, Color, Layer, Position } from '@deck.gl/core';
+import type { Color, Layer, LayerContext } from '@deck.gl/core';
 import { SpatioTemporalLayer, SpatioTemporalLayerProps } from './spatiotemporal-layer';
-import type { Feature } from '@stt/core';
 export interface AnimatedPathLayerProps extends SpatioTemporalLayerProps {
     /** Width scale multiplier */
     widthScale?: number;
     /** Width units ('pixels' | 'meters') */
     widthUnits?: 'pixels' | 'meters';
-    /** Path color accessor - returns [r, g, b, a] */
-    getColor?: Accessor<Feature, Color>;
-    /** Path width accessor */
-    getWidth?: Accessor<Feature, number>;
-    /** Path coordinates accessor - returns [[lon, lat], ...] */
-    getPath?: Accessor<Feature, Position[]>;
+    /** Path color - constant value or property name for categorical coloring */
+    pathColor?: Color | string;
+    /** Path width - constant value or property name */
+    pathWidth?: number | string;
+    /** Color palette for categorical properties */
+    colorPalette?: Color[];
     /** Enable trailing effect (gradient fade) */
     trail?: boolean;
     /** Trail length in milliseconds */
@@ -25,16 +30,18 @@ export interface AnimatedPathLayerProps extends SpatioTemporalLayerProps {
     fadeOutDuration?: number;
 }
 /**
- * Animated path layer for trajectory data
+ * Animated path layer using deck.gl binary interface
  *
- * Features:
- * - Smooth path rendering over time
- * - Optional trailing effect (shows path history)
- * - GPU-accelerated time filtering via TimeFilterExtension
- * - Efficient rendering with GPU instancing
+ * Performance optimizations:
+ * - Typed arrays passed directly to GPU (zero accessor calls)
+ * - Uses startIndices for variable-length path geometries
+ * - TimeFilterExtension handles temporal filtering in shaders
+ * - Layer caching prevents unnecessary buffer recreation
  */
 export declare class AnimatedPathLayer extends SpatioTemporalLayer<AnimatedPathLayerProps> {
     static layerName: string;
+    private layerCache;
+    private activeLayerIds;
     static defaultProps: {
         widthScale: {
             type: string;
@@ -42,17 +49,17 @@ export declare class AnimatedPathLayer extends SpatioTemporalLayer<AnimatedPathL
             min: number;
         };
         widthUnits: string;
-        getColor: {
+        pathColor: {
             type: string;
             value: Color;
         };
-        getWidth: {
+        pathWidth: {
             type: string;
             value: number;
         };
-        getPath: {
+        colorPalette: {
             type: string;
-            value: null;
+            value: Color[];
         };
         trail: boolean;
         trailLength: {
@@ -87,12 +94,12 @@ export declare class AnimatedPathLayer extends SpatioTemporalLayer<AnimatedPathL
         };
         timeRange: {
             type: string;
-            value: null;
+            value: any;
             compare: boolean;
         };
         timeController: {
             type: string;
-            value: null;
+            value: any;
             compare: boolean;
         };
         maxRequests: {
@@ -115,19 +122,34 @@ export declare class AnimatedPathLayer extends SpatioTemporalLayer<AnimatedPathL
             value: number;
             compare: boolean;
         };
+        enablePrefetch: {
+            type: string;
+            value: boolean;
+            compare: boolean;
+        };
+        prefetchAhead: {
+            type: string;
+            value: number;
+            compare: boolean;
+        };
+        prefetchSteps: {
+            type: string;
+            value: number;
+            compare: boolean;
+        };
         onViewportLoad: {
             type: string;
-            value: null;
+            value: any;
             optional: boolean;
         };
         onTileLoad: {
             type: string;
-            value: null;
+            value: any;
             optional: boolean;
         };
         onTileUnload: {
             type: string;
-            value: null;
+            value: any;
             optional: boolean;
         };
         loadOptions: {
@@ -136,6 +158,28 @@ export declare class AnimatedPathLayer extends SpatioTemporalLayer<AnimatedPathL
             compare: boolean;
         };
     };
+    finalizeState(context: LayerContext): void;
     renderLayers(): Layer[];
+    /**
+     * Get a cached layer or create a new one.
+     */
+    private getOrCreateLayer;
+    /**
+     * Remove cached layers that are no longer active
+     */
+    private cleanupCache;
+    /**
+     * Create a PathLayer using deck.gl's binary data interface
+     */
+    private createBinaryPathLayer;
+    /**
+     * Get width attribute from numeric property if specified
+     */
+    private getWidthAttribute;
+    /**
+     * Get color attribute from categorical property if specified.
+     * Cached per BinaryFeatures + property + palette combination.
+     */
+    private getColorAttribute;
 }
 //# sourceMappingURL=animated-path-layer.d.ts.map

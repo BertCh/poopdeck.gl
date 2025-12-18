@@ -4,6 +4,8 @@ import { Map } from "react-map-gl";
 import {
   AnimatedPointLayer,
   AnimatedPathLayer,
+  AnimatedTripsLayer,
+  AnimatedPolygonLayer,
   HeatmapTimeLayer,
   TimeController,
 } from "@stt/deck.gl";
@@ -12,6 +14,7 @@ import { calculateAnimationSpeed } from "./types";
 import Sidebar from "./components/Sidebar";
 import Legend from "./components/Legend";
 import TimeControls from "./components/TimeControls";
+import PerformanceMonitor from "./components/PerformanceMonitor";
 import "./index.css";
 
 const MAPBOX_ACCESS_TOKEN =
@@ -112,6 +115,9 @@ function App() {
   );
 
   // Create appropriate layer based on dataset type
+  // IMPORTANT: currentTime is NOT a dependency here!
+  // The layer receives currentTime as a prop and handles time changes internally.
+  // This prevents layer recreation on every animation frame.
   const layers = useMemo(() => {
     if (!selectedDataset) return [];
 
@@ -121,91 +127,55 @@ function App() {
       selectedDataset.timeRange.end - selectedDataset.timeRange.start;
     const playbackSpeed =
       datasetDuration / (selectedDataset.targetPlaybackSeconds || 60) / 1000; // ms sim time per ms real time
+    const timeWindow = selectedDataset.timeWindow || 86400000;
+
+    // Calculate how many time windows we traverse per second of real time
+    const timeWindowsPerSecond = (playbackSpeed / timeWindow) * 1000;
+
+    // Prefetch enough steps to cover at least 30 seconds of real-time playback
+    // More aggressive for fast-moving datasets with small time windows
+    const minPrefetchSteps = Math.max(5, Math.ceil(timeWindowsPerSecond * 30));
+    const prefetchSteps = Math.min(minPrefetchSteps, 50); // Cap at 50 to avoid excessive memory
+
+    // Prefetch ahead should cover at least 10 seconds of real-time animation
+    const prefetchAhead = Math.max(
+      timeWindow * 2, // At least 2 time windows ahead per step
+      playbackSpeed * 10000 // Or 10 seconds of real-time ahead
+    );
 
     const baseProps = {
       id: selectedDataset.id,
       data: selectedDataset.url,
       currentTime,
       timeController,
-      timeWindow: selectedDataset.timeWindow || 86400000, // Use dataset time window or default to 1 day
+      timeWindow, // Use dataset time window or default to 1 day
       timeRange: selectedDataset.timeRange, // Pass time range for precision handling
       opacity: 0.8,
-      pickable: true,
+      pickable: false,
       // Prefetch configuration - scale with animation speed
       enablePrefetch: true,
-      prefetchAhead: Math.max(
-        selectedDataset.timeWindow || 86400000,
-        playbackSpeed * 5000
-      ), // At least 5 seconds ahead
-      prefetchSteps: 5, // Prefetch 5 time windows ahead
+      prefetchAhead,
+      prefetchSteps,
     };
 
     switch (selectedDataset.type) {
       case "point":
-        // Check dataset type
-        const isEarthquakeData = selectedDataset.id === "earthquake-activity";
-        const isShipData = selectedDataset.id === "ship-traffic";
-
         return [
           new AnimatedPointLayer({
             ...baseProps,
-            getFillColor: (d: any) => {
-              if (isEarthquakeData) {
-                // Color by earthquake magnitude (4.0 - 9.0)
-                const magnitude =
-                  d.properties.magnitude || d.properties.value || 0;
-                if (magnitude < 5.0) return [255, 237, 160, 200]; // Yellow
-                if (magnitude < 6.0) return [254, 178, 76, 200]; // Orange
-                if (magnitude < 7.0) return [252, 78, 42, 200]; // Red-Orange
-                if (magnitude < 8.0) return [227, 26, 28, 200]; // Red
-                return [128, 0, 38, 200]; // Dark Red
-              } else if (isShipData) {
-                // Color by vessel type (real AIS data from NOAA)
-                const vesselType = d.properties.vessel_type || "other";
-                switch (vesselType) {
-                  case "cargo":
-                    return [74, 144, 226, 200]; // Blue
-                  case "tanker":
-                    return [245, 166, 35, 200]; // Orange
-                  case "passenger":
-                    return [80, 227, 194, 200]; // Teal
-                  case "fishing":
-                    return [184, 233, 134, 200]; // Green
-                  case "towing":
-                    return [155, 89, 182, 200]; // Purple
-                  case "special":
-                    return [241, 196, 15, 200]; // Yellow
-                  default:
-                    return [128, 128, 128, 200]; // Gray for 'other'
-                }
-              } else {
-                // Color by value (e.g., case count)
-                const value = d.properties.value || 0;
-                if (value < 100) return [254, 217, 118, 200];
-                if (value < 500) return [254, 178, 76, 200];
-                if (value < 1000) return [253, 141, 60, 200];
-                if (value < 5000) return [252, 78, 42, 200];
-                if (value < 10000) return [227, 26, 28, 200];
-                return [177, 0, 38, 200];
-              }
-            },
-            getRadius: (d: any) => {
-              if (isEarthquakeData) {
-                // Scale radius exponentially for earthquake magnitude
-                // Magnitude 4.0 = ~10km, Magnitude 8.0 = ~500km radius
-                const magnitude =
-                  d.properties.magnitude || d.properties.value || 4.0;
-                return Math.pow(2, magnitude - 4) * 10000;
-              } else if (isShipData) {
-                // Fixed size for ships (about 1km radius)
-                return 10;
-              } else {
-                const value = d.properties.value || 1;
-                return Math.sqrt(value) * 20;
-              }
-            },
+            // Color can be a constant or categorical property name
+            fillColor: selectedDataset.colorProperty || [255, 128, 0, 255],
+            radius: selectedDataset.radiusProperty || 1000,
             radiusUnits: "meters",
-            radiusScale: 1,
+            radiusScale: 2,
+            // 3D support - pass through from dataset config
+            use3D: selectedDataset.use3D,
+            elevationProperty: selectedDataset.elevationProperty,
+            elevationScale: selectedDataset.elevationScale,
+            updateTriggers: {
+              fillColor: selectedDataset.id,
+              radius: selectedDataset.id,
+            },
           }),
         ];
 
@@ -213,44 +183,35 @@ function App() {
         return [
           new AnimatedPathLayer({
             ...baseProps,
-            getColor: (d: any) => {
-              // Color by status or category
-              const status = d.properties.status || "default";
-              switch (status) {
-                // Taxi statuses
-                case "available":
-                  return [0, 208, 132, 255];
-                case "occupied":
-                  return [255, 107, 53, 255];
-                case "enroute":
-                  return [74, 144, 226, 255];
-
-                // Hurricane statuses
-                case "tropical_depression":
-                  return [0, 208, 132, 255];
-                case "tropical_storm":
-                  return [255, 107, 53, 255];
-                case "category_1":
-                case "category_2":
-                case "category_3":
-                case "category_4":
-                case "category_5":
-                  return [74, 144, 226, 255];
-                case "subtropical_storm":
-                  return [189, 16, 224, 255];
-                case "extratropical":
-                  return [144, 19, 254, 255];
-                case "disturbance":
-                  return [80, 227, 194, 255];
-
-                default:
-                  return [128, 128, 128, 255];
-              }
-            },
-            getWidth: () => 3,
+            // Color can be a constant or categorical property name
+            pathColor: selectedDataset.colorProperty || [0, 150, 255, 255],
+            pathWidth: 3,
             widthUnits: "pixels",
             trail: true,
             trailLength: 5000,
+            updateTriggers: {
+              pathColor: selectedDataset.id,
+              pathWidth: selectedDataset.id,
+            },
+          }),
+        ];
+
+      case "trips":
+        return [
+          new AnimatedTripsLayer({
+            ...baseProps,
+            tripColor: [253, 128, 93, 255], // Warm orange for taxi trips
+            tripWidth: 4,
+            widthMinPixels: 2,
+            widthMaxPixels: 8,
+            trailLength: 120000, // 2 minute trail
+            fadeTrail: true,
+            capRounded: true,
+            jointRounded: true,
+            updateTriggers: {
+              tripColor: selectedDataset.id,
+              tripWidth: selectedDataset.id,
+            },
           }),
         ];
 
@@ -267,14 +228,40 @@ function App() {
               [240, 59, 32, 255],
               [189, 0, 38, 255],
             ],
-            getWeight: (d: any) => d.properties.weight || 1,
+            // weightProperty is the name of a numeric property to use for weight
+            weightProperty: selectedDataset.weightProperty,
+            updateTriggers: {
+              weightProperty: selectedDataset.id,
+            },
+          }),
+        ];
+
+      case "polygon":
+        return [
+          new AnimatedPolygonLayer({
+            ...baseProps,
+            filled: true,
+            stroked: false, // Stroked requires separate PathLayer
+            lineWidthUnits: "pixels",
+            lineWidth: 2,
+            lineColor: [255, 100, 0, 255],
+            // fillColor can be a constant or categorical property name
+            fillColor: selectedDataset.colorProperty || [255, 140, 0, 180],
+            updateTriggers: {
+              fillColor: selectedDataset.id,
+              lineColor: selectedDataset.id,
+            },
           }),
         ];
 
       default:
         return [];
     }
-  }, [selectedDataset, currentTime, timeController]);
+    // Note: currentTime is intentionally NOT a dependency here.
+    // Layers subscribe to TimeController tick events directly for smooth animation
+    // without triggering React re-renders on every frame.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedDataset, timeController]);
 
   if (!selectedDataset) {
     return <div className="loading">Loading...</div>;
@@ -286,20 +273,42 @@ function App() {
         initialViewState={selectedDataset.initialViewState}
         controller={true}
         layers={layers}
-        getTooltip={({ object }) =>
-          object && object.properties
-            ? Object.entries(object.properties)
-                .slice(0, 3)
-                .map(([k, v]) => `${k}: ${v}`)
-                .join("\n")
-            : null
-        }
+        // getTooltip={({ object }) =>
+        //   object && object.properties
+        //     ? Object.entries(object.properties)
+        //         .slice(0, 3)
+        //         .map(([k, v]) => `${k}: ${v}`)
+        //         .join("\n")
+        //     : null
+        // }
       >
         <Map
           reuseMaps
-          mapStyle="mapbox://styles/mapbox/dark-v11"
+          mapStyle={
+            // selectedDataset.use3D
+            // ? "mapbox://styles/mapbox/standard"
+            // :
+            "mapbox://styles/mapbox/dark-v11"
+          }
           mapboxAccessToken={MAPBOX_ACCESS_TOKEN}
           projection={{ name: "mercator" }}
+          terrain={
+            selectedDataset.use3D
+              ? { source: "mapbox-dem", exaggeration: 1.5 }
+              : undefined
+          }
+          onLoad={(evt) => {
+            const map = evt.target;
+            // Add terrain source for 3D datasets
+            if (selectedDataset.use3D && !map.getSource("mapbox-dem")) {
+              map.addSource("mapbox-dem", {
+                type: "raster-dem",
+                url: "mapbox://mapbox.mapbox-terrain-dem-v1",
+                tileSize: 512,
+                maxzoom: 14,
+              });
+            }
+          }}
         />
       </DeckGL>
 
@@ -321,6 +330,8 @@ function App() {
         currentSpeedMultiplier={speedMultiplier}
         targetPlaybackSeconds={selectedDataset.targetPlaybackSeconds ?? 30}
       />
+
+      <PerformanceMonitor visible={true} />
 
       {loading && (
         <div className="loading">Loading {selectedDataset.name}...</div>
