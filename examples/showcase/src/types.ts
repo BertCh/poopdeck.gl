@@ -21,8 +21,6 @@ export interface Dataset {
     end: number;
   };
   timeWindow: number;
-  /** @deprecated Use targetPlaybackSeconds instead - animationSpeed is computed automatically */
-  animationSpeed?: number;
   /** Target duration in seconds for one complete playthrough at 1x speed (default: 30) */
   targetPlaybackSeconds?: number;
   initialViewState: {

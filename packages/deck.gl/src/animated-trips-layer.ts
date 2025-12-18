@@ -428,11 +428,3 @@ export class AnimatedTripsLayer extends SpatioTemporalLayer<AnimatedTripsLayerPr
     return null;
   }
 }
-
-// Legacy type export for backwards compatibility
-export interface TripFeature {
-  id: number;
-  positions: [number, number][];
-  timestamps?: number[];
-  timeRange?: { start: number; end: number };
-}

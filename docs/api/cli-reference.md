@@ -52,11 +52,3 @@ stt-build [OPTIONS] --input <INPUT> --output <OUTPUT>
 | :--- | :--- | :--- |
 | `-w, --workers` | `4` | Number of parallel threads to use for processing. |
 
-## stt-analyze
-
-*Note: The analysis tool is currently under development.*
-
-Intended to profile existing `.stt` archives to report:
-- Tile size distribution
-- Temporal density
-- Compression ratios
