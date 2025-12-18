@@ -45,7 +45,3 @@ Welcome to the documentation for Spatiotemporal Tiles (STT), a system for visual
 ## Guides
 
 - [**Data Generation**](./guides/data-generation.md): How to create `.stt` files from CSV or GeoJSON.
-
-## Legacy / Archive
-
-- [**Archive**](./archive/): Old status reports, audit logs, and implementation notes.
