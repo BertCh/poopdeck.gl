@@ -45,6 +45,10 @@ export interface SpatioTemporalLayerProps extends CompositeLayerProps {
     onTileUnload?: (tile: Tile) => void;
     /** Loaders.gl options */
     loadOptions?: Record<string, unknown>;
+    /** Force a specific zoom level (useful for GlobeView to load low-zoom tiles) */
+    zoomOverride?: number;
+    /** Use global bounds instead of viewport bounds (for GlobeView) */
+    useGlobalBounds?: boolean;
 }
 interface SpatioTemporalLayerState {
     archive: STTArchive | null;
@@ -69,6 +73,8 @@ interface SpatioTemporalLayerState {
  */
 export declare class SpatioTemporalLayer<Props extends SpatioTemporalLayerProps = SpatioTemporalLayerProps> extends CompositeLayer<Props> {
     static layerName: string;
+    protected _currentTime: number;
+    private _lastTilesetUpdateTime;
     static defaultProps: {
         data: {
             type: string;
@@ -168,9 +174,11 @@ export declare class SpatioTemporalLayer<Props extends SpatioTemporalLayerProps 
      * Handle time updates from TimeController tick events
      *
      * PERFORMANCE OPTIMIZED:
-     * - Only updates currentTime without full tile re-evaluation
-     * - Tiles are updated less frequently via a throttled tileset update
-     * - Layer caching in subclasses ensures GPU state is preserved
+     * - Updates _currentTime directly (no setState overhead)
+     * - Only calls setState when tiles actually change (infrequent)
+     * - Calls setNeedsRedraw() for time-only changes (NOT setNeedsUpdate!)
+     * - Time is read via getTime() getter in TimeFilterExtension.draw()
+     * - This avoids renderLayers() call when only time changes
      */
     private _handleTimeUpdate;
     /**
@@ -185,6 +193,12 @@ export declare class SpatioTemporalLayer<Props extends SpatioTemporalLayerProps 
      * Check if layer is fully loaded
      */
     get isLoaded(): boolean;
+    /**
+     * Get the current animation time.
+     * Sublayers should use this instead of this.state.currentTime for performance.
+     * This is updated every tick without triggering setState.
+     */
+    getCurrentTime(): number;
     /**
      * Subclasses override this to render actual visualization layers
      */

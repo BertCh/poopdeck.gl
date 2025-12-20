@@ -17,7 +17,7 @@ STT is a single-file archive format for spatiotemporal data visualization that c
 - ⚡ **60 FPS animation** - Sub-16ms frame switching with predictive prefetching
 - 📦 **Single-file archives** - Deploy to CDN, no tile server needed
 - 🗜️ **Efficient compression** - Gzip with MVT-compatible encoding
-- 🔄 **Delta encoding** - Optional feature deduplication across temporal frames
+- 🔄 **Temporal indexing** - Efficient time-based queries and prefetching
 - 🎯 **Smart indexing** - Hilbert curve (spatial) + interval tree (temporal)
 - 🌐 **HTTP Range Requests** - Stream tiles on-demand
 - 🔧 **Modern stack** - Rust (`geo`, `chrono`) + TypeScript (deck.gl)
@@ -44,9 +44,7 @@ cargo build --release
   --output tiles.stt \
   --time-field timestamp \
   --time-format iso8601 \
-  --temporal-resolution sparse-events \
-  --compression gzip \
-  --delta-encoding
+  --compression gzip
 ```
 
 ### 3. Visualize with deck.gl
@@ -123,9 +121,9 @@ spatiotemporal-tiles/
 - HTTP Range Requests
 
 ### ✅ Phase 2: Optimization (Complete)
-- Delta encoding support
-- Temporal bucketing profiles
-- Frontend feature caching
+- Binary columnar format for GPU efficiency
+- Predictive prefetching for animations
+- LRU caching with 2GB default capacity
 
 ### 📋 Phase 3: Advanced (In Progress)
 - [ ] Web Worker tile decoding

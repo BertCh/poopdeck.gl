@@ -66,14 +66,19 @@ function decodeLayerBinary(
     };
   }
   
-  // Decode geometry to Float64Array positions
+  // Check if we have altitude data (3D)
+  const altitudes = columnar.altitudes || [];
+  const has3D = altitudes.length > 0;
+  
+  // Decode geometry to Float64Array positions (2D or 3D)
   const { positions, positionOffsets } = decodeGeometry(
     columnar.geometry || [],
     columnar.geometryOffsets || [],
     tileId,
     extent,
     featureCount,
-    isPoint
+    isPoint,
+    has3D ? altitudes : undefined
   );
   
   // Decode feature IDs
@@ -100,19 +105,44 @@ function decodeLayerBinary(
   const numericProperties = decodeNumericProperties(columnar.numericProperties || []);
   const categoricalProperties = decodeCategoricalProperties(columnar.categoricalProperties || []);
   
+  // Decode per-vertex timestamps if present (for accurate path animation)
+  // These are delta-encoded relative to tile time_start, so we add tileTimeStart to get absolute times
+  const protoVertexTimestamps = columnar.vertexTimestamps || [];
+  const dims = has3D ? 3 : 2;
+  const expectedVertexCount = positions.length / dims;
+  let vertexTimestamps: Float32Array | undefined;
+  
+  if (protoVertexTimestamps.length > 0) {
+    // Validate that we have timestamps for all vertices
+    if (protoVertexTimestamps.length === expectedVertexCount) {
+      vertexTimestamps = new Float32Array(expectedVertexCount);
+      for (let i = 0; i < expectedVertexCount; i++) {
+        // Convert delta to absolute time (delta + tileTimeStart)
+        // Note: we don't add tileTimeStart here because the layer applies timeOffset
+        // Just like startTimes/endTimes, these are relative to timeOffset
+        vertexTimestamps[i] = Number(protoVertexTimestamps[i]) || 0;
+      }
+    } else {
+      console.warn(
+        `[STT] vertexTimestamps length mismatch: expected ${expectedVertexCount}, got ${protoVertexTimestamps.length}`
+      );
+    }
+  }
+  
   return {
     name: protoLayer.name || 'default',
     extent,
     features: {
       featureCount,
       geometryType,
-      positionDimensions: 2,
+      positionDimensions: has3D ? 3 : 2,
       positions,
       startIndices: positionOffsets,
       featureIds,
       startTimes,
       endTimes,
       timeOffset: tileTimeStart,
+      vertexTimestamps,
       numericProps: numericProperties,
       categoricalProps: categoricalProperties,
     },
@@ -121,6 +151,7 @@ function decodeLayerBinary(
 
 /**
  * Decode geometry from delta-encoded quantized format directly to Float64Array
+ * Supports 2D (lon, lat) and 3D (lon, lat, alt) when altitudes are provided
  */
 function decodeGeometry(
   geometry: number[],
@@ -128,8 +159,11 @@ function decodeGeometry(
   tileId: TileId,
   extent: number,
   featureCount: number,
-  isPoint: boolean
+  isPoint: boolean,
+  altitudes?: number[]
 ): { positions: Float64Array; positionOffsets?: Uint32Array } {
+  const dims = altitudes ? 3 : 2;
+  
   // Calculate total coordinate count
   let totalCoords: number;
   if (isPoint) {
@@ -146,14 +180,15 @@ function decodeGeometry(
   const tileX = tileId.x;
   const tileY = tileId.y;
   
-  // Allocate output arrays
-  const positions = new Float64Array(totalCoords * 2);
+  // Allocate output arrays (2 or 3 values per coordinate)
+  const positions = new Float64Array(totalCoords * dims);
   const positionOffsets = isPoint ? undefined : new Uint32Array(featureCount + 1);
   
   // Delta decode and dequantize in a single pass
   let prevX = 0;
   let prevY = 0;
   let posIdx = 0;
+  let altIdx = 0;
   
   for (let i = 0; i < featureCount; i++) {
     // Determine geometry range for this feature
@@ -166,7 +201,7 @@ function decodeGeometry(
     } else {
       geomStart = (geometryOffsets[i] || 0) * 2;
       geomEnd = (geometryOffsets[i + 1] ?? geometry.length / 2) * 2;
-      positionOffsets![i] = posIdx / 2;
+      positionOffsets![i] = posIdx / dims;
     }
     
     // Decode coordinates for this feature
@@ -188,12 +223,17 @@ function decodeGeometry(
       
       positions[posIdx++] = lon;
       positions[posIdx++] = lat;
+      
+      // Add altitude if 3D
+      if (altitudes) {
+        positions[posIdx++] = altitudes[altIdx++] || 0;
+      }
     }
   }
   
   // Final offset for non-point geometries
   if (positionOffsets) {
-    positionOffsets[featureCount] = posIdx / 2;
+    positionOffsets[featureCount] = posIdx / dims;
   }
   
   return { positions, positionOffsets };

@@ -23,11 +23,14 @@ const TIME_FILTER_EXTENSION = new TimeFilterExtension();
 // Cache for per-vertex progress arrays (keyed by BinaryFeatures instance)
 const vertexProgressCache = new WeakMap<BinaryFeatures, Float32Array>();
 
-// Cache for expanded per-vertex time arrays
+// Cache for expanded per-vertex time arrays (legacy - used when no actual vertex timestamps)
 const vertexTimesCache = new WeakMap<BinaryFeatures, {
   vertexStartTimes: Float32Array;
   vertexEndTimes: Float32Array;
 }>();
+
+// Cache for actual per-vertex timestamps (from data or computed via interpolation)
+const actualVertexTimesCache = new WeakMap<BinaryFeatures, Float32Array>();
 
 // Cache for color attributes (keyed by binary + property + palette hash)
 const colorAttrCache = new WeakMap<BinaryFeatures, Map<string, Uint8Array>>();
@@ -123,6 +126,25 @@ export class AnimatedTripsLayer extends SpatioTemporalLayer<AnimatedTripsLayerPr
     this.activeLayerIds.clear();
   }
 
+  /**
+   * Override to ensure time window is large enough for trail rendering.
+   * For trail mode, the time window should be at least 2x the trail length
+   * to ensure tiles containing trail data are loaded.
+   * 
+   * The time window is centered on currentTime, so we need:
+   * timeWindow/2 >= trailLength
+   */
+  protected getEffectiveTimeWindow(): number {
+    const baseWindow = this.props.timeWindow || 86400000;
+    const trailLength = this.props.trailLength || 180000;
+    
+    // Ensure the backward look (timeWindow/2) covers the full trail
+    // Need: baseWindow/2 >= trailLength, so baseWindow >= trailLength * 2
+    const minWindowForTrail = trailLength * 2;
+    
+    return Math.max(baseWindow, minWindowForTrail);
+  }
+
   renderLayers(): Layer[] {
     const { tiles, frameNumber } = this.state;
     
@@ -164,7 +186,7 @@ export class AnimatedTripsLayer extends SpatioTemporalLayer<AnimatedTripsLayerPr
     binary: BinaryFeatures,
     layerId: string,
     timeOffset: number,
-    frameNumber: number
+    _frameNumber: number
   ): PathLayer {
     const cached = this.layerCache.get(layerId);
     
@@ -200,6 +222,9 @@ export class AnimatedTripsLayer extends SpatioTemporalLayer<AnimatedTripsLayerPr
   /**
    * Create a PathLayer using deck.gl's binary data interface with trail support.
    * PERFORMANCE: Uses getTime() getter for dynamic time updates.
+   * 
+   * SMOOTH ANIMATION: Uses actual per-vertex timestamps for GPU-based trail rendering.
+   * This avoids the flashing issues caused by path segmentation.
    */
   private createBinaryPathLayer(
     binary: BinaryFeatures,
@@ -212,13 +237,13 @@ export class AnimatedTripsLayer extends SpatioTemporalLayer<AnimatedTripsLayerPr
     // Capture self for getTime closure
     const self = this;
     
-    // Get or compute per-vertex progress (0-1 along each path)
-    const vertexProgress = this.getVertexProgress(binary);
-    
-    // Expand per-feature times to per-vertex for trail rendering
-    const { vertexStartTimes, vertexEndTimes } = this.expandTimesToVertices(binary);
+    // Get actual per-vertex timestamps (from data or computed via interpolation)
+    // This is the key to smooth trail animation - each vertex has its own timestamp
+    const actualVertexTimes = this.getActualVertexTimes(binary);
     
     // Build the binary data object for deck.gl
+    // We use a SINGLE time attribute (instanceVertexTime) for simplicity and to avoid
+    // hitting WebGL attribute limits
     const data: any = {
       length: binary.featureCount,
       startIndices: binary.startIndices,
@@ -228,18 +253,10 @@ export class AnimatedTripsLayer extends SpatioTemporalLayer<AnimatedTripsLayerPr
           value: binary.positions,
           size: dims,
         },
-        // Per-vertex time attributes for trail rendering
-        instanceStartTime: {
-          value: vertexStartTimes,
-          size: 1,
-        },
-        instanceEndTime: {
-          value: vertexEndTimes,
-          size: 1,
-        },
-        // Per-vertex progress (0-1) for interpolating time along path
-        instanceVertexProgress: {
-          value: vertexProgress,
+        // Per-vertex absolute timestamp for trail rendering
+        // The shader uses this directly: show if (currentTime - trailLength) <= vertexTime <= currentTime
+        instanceVertexTime: {
+          value: actualVertexTimes,
           size: 1,
         },
       },
@@ -294,8 +311,53 @@ export class AnimatedTripsLayer extends SpatioTemporalLayer<AnimatedTripsLayerPr
   }
   
   /**
+   * Get per-vertex timestamps from the pre-calculated data.
+   * 
+   * Per-vertex timestamps are computed during tile building (in Rust) and stored
+   * in the tile data. This ensures consistent, accurate timestamps without any
+   * frontend computation.
+   * 
+   * The timestamps are absolute (relative to timeOffset) and enable smooth
+   * GPU-based trail animation.
+   */
+  private getActualVertexTimes(binary: BinaryFeatures): Float32Array {
+    // Check cache first
+    const cached = actualVertexTimesCache.get(binary);
+    if (cached) {
+      return cached;
+    }
+    
+    const startIndices = binary.startIndices!;
+    const totalVertices = startIndices[binary.featureCount];
+    
+    // Per-vertex timestamps are pre-calculated in the Rust tiler
+    // They are stored as deltas from tile time_start, decoded to absolute times
+    if (binary.vertexTimestamps && binary.vertexTimestamps.length === totalVertices) {
+      // Cache the reference directly (no copy needed)
+      actualVertexTimesCache.set(binary, binary.vertexTimestamps);
+      return binary.vertexTimestamps;
+    }
+    
+    // Fallback for older data without per-vertex timestamps
+    // This should not happen with properly generated data
+    console.warn('[AnimatedTripsLayer] Missing per-vertex timestamps - regenerate data with latest stt-build');
+    const vertexTimes = new Float32Array(totalVertices);
+    for (let i = 0; i < binary.featureCount; i++) {
+      const vertexStart = startIndices[i];
+      const vertexEnd = startIndices[i + 1];
+      const featureStartTime = binary.startTimes[i];
+      for (let j = vertexStart; j < vertexEnd; j++) {
+        vertexTimes[j] = featureStartTime;
+      }
+    }
+    actualVertexTimesCache.set(binary, vertexTimes);
+    return vertexTimes;
+  }
+  
+  /**
    * Get or compute per-vertex progress (0-1) for each vertex along its path.
    * Cached per BinaryFeatures instance to avoid recomputation.
+   * @deprecated Use getActualVertexTimes instead for trail rendering
    */
   private getVertexProgress(binary: BinaryFeatures): Float32Array {
     // Check cache first

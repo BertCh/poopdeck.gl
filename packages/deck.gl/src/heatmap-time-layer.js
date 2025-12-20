@@ -39,7 +39,9 @@ export class HeatmapTimeLayer extends SpatioTemporalLayer {
         this.cachedVisibleCount = -1;
     }
     renderLayers() {
-        const { tiles, currentTime } = this.state;
+        const { tiles } = this.state;
+        // Use getCurrentTime() for up-to-date time without setState overhead
+        const currentTime = this.getCurrentTime();
         if (!tiles || tiles.length === 0) {
             this.cachedLayer = null;
             this.cachedVisibleCount = -1;

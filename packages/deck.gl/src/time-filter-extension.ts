@@ -86,7 +86,8 @@ const defaultProps: Required<TimeFilterExtensionProps> = {
  * Supports two modes:
  * 1. Window mode (trailLength = 0): Show features whose time range overlaps with time window
  * 2. Trail mode (trailLength > 0): Progressive drawing with trailing fade for paths/trajectories
- *    - For trail mode, optionally provide instanceVertexProgress (0-1) for per-vertex time interpolation
+ *    - Uses instanceVertexTime (actual per-vertex timestamp) for smooth animation
+ *    - Falls back to instanceStartTime/instanceEndTime for feature-level filtering
  */
 export class TimeFilterExtension extends LayerExtension {
   static defaultProps = defaultProps;
@@ -97,10 +98,11 @@ export class TimeFilterExtension extends LayerExtension {
       modules: [timeFilterUniforms],
       inject: {
         'vs:#decl': `
+          // Per-vertex absolute timestamp (preferred for trail mode - enables smooth animation)
+          in float instanceVertexTime;
+          // Feature-level times (used for window mode and fallback)
           in float instanceStartTime;
           in float instanceEndTime;
-          // Optional: vertex progress along path (0-1), enables per-vertex time interpolation
-          in float instanceVertexProgress;
           out float vTimeAlpha;
         `,
         'vs:#main-start': `
@@ -111,16 +113,18 @@ export class TimeFilterExtension extends LayerExtension {
 
           // Trail mode: progressive drawing with trailing fade
           if (timeFilter.trailLength > 0.0) {
-            // Interpolate vertex time based on progress along path
-            // If instanceVertexProgress is not provided (0), use simple feature-level visibility
-            float progress = instanceVertexProgress;
-            float featureDuration = instanceEndTime - instanceStartTime;
-            
-            // Compute the time at this vertex
-            float vertexTime = instanceStartTime + featureDuration * progress;
-            
             // Trail window: show vertices from (currentTime - trailLength) to currentTime
             float trailStart = timeFilter.currentTime - timeFilter.trailLength;
+            
+            // Use actual per-vertex timestamp (preferred) or fall back to feature times
+            // instanceVertexTime is the absolute timestamp for this vertex
+            float vertexTime = instanceVertexTime;
+            
+            // Fallback: if instanceVertexTime is 0, use feature start time
+            // (This handles layers that don't provide per-vertex timestamps)
+            if (vertexTime == 0.0) {
+              vertexTime = instanceStartTime;
+            }
             
             if (vertexTime > timeFilter.currentTime) {
               // Vertex is in the future - hide it
@@ -133,11 +137,6 @@ export class TimeFilterExtension extends LayerExtension {
               float age = timeFilter.currentTime - vertexTime;
               vTimeAlpha = 1.0 - (age / timeFilter.trailLength);
               vTimeAlpha = clamp(vTimeAlpha, 0.0, 1.0);
-            }
-            
-            // Also check if feature is within the overall time window
-            if (instanceEndTime < timeStart || instanceStartTime > timeEnd) {
-              vTimeAlpha = 0.0;
             }
           } else {
             // Standard window mode: check if feature overlaps with time window
@@ -182,6 +181,15 @@ export class TimeFilterExtension extends LayerExtension {
     const attributeManager = this.getAttributeManager();
     if (attributeManager) {
       attributeManager.addInstanced({
+        // Per-vertex absolute timestamp (for trail mode with smooth animation)
+        instanceVertexTime: {
+          size: 1,
+          accessor: 'getInstanceVertexTime',
+          type: 'float32',
+          stepMode: 'dynamic',
+          defaultValue: 0
+        },
+        // Feature-level times (for window mode and backward compatibility)
         instanceStartTime: {
           size: 1,
           accessor: 'getInstanceStartTime',
@@ -193,15 +201,6 @@ export class TimeFilterExtension extends LayerExtension {
           accessor: 'getInstanceEndTime',
           type: 'float32',
           stepMode: 'dynamic'
-        },
-        // Optional: vertex progress for trail rendering (0-1 along path)
-        // If not provided, defaults to 0 and trail mode uses feature-level times
-        instanceVertexProgress: {
-          size: 1,
-          accessor: 'getInstanceVertexProgress',
-          type: 'float32',
-          stepMode: 'dynamic',
-          defaultValue: 0
         }
       });
     }

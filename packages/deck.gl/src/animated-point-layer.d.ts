@@ -1,16 +1,16 @@
 /**
  * AnimatedPointLayer - GPU-efficient point rendering with time filtering
  *
- * Uses deck.gl's binary data interface for maximum performance:
- * - Passes typed arrays directly to GPU (no accessor function calls)
+ * PERFORMANCE OPTIMIZED (v2 - Consolidated Rendering):
+ * - Consolidates ALL tiles into a SINGLE ScatterplotLayer (1 draw call instead of N)
+ * - Uses deck.gl's binary data interface for maximum performance
  * - Time filtering happens entirely in the shader via TimeFilterExtension
- * - Sub-layer caching prevents buffer regeneration
- * - Layer props reused with same ID - deck.gl diffing preserves GPU state
- * - TimeFilterExtension.draw() updates time uniforms each frame (no clone overhead)
+ * - Consolidated data cached per tile set - only rebuilt when tiles change
+ * - Layer instance memoized to avoid recreation on time-only updates
  *
- * Performance: Targets 120fps by eliminating layer.clone() allocations
+ * Performance: Targets 200fps by eliminating per-tile layer overhead
  */
-import type { Color, Layer } from '@deck.gl/core';
+import type { Color, Layer, LayerContext } from '@deck.gl/core';
 import { SpatioTemporalLayer, SpatioTemporalLayerProps } from './spatiotemporal-layer';
 export interface AnimatedPointLayerProps extends SpatioTemporalLayerProps {
     /** Radius scale multiplier */
@@ -47,15 +47,18 @@ export interface AnimatedPointLayerProps extends SpatioTemporalLayerProps {
 /**
  * Animated point layer using deck.gl binary interface
  *
- * Performance optimizations:
+ * Performance optimizations (v2):
+ * - SINGLE draw call: All tiles consolidated into one ScatterplotLayer
  * - Typed arrays passed directly to GPU (zero accessor calls)
  * - TimeFilterExtension handles temporal filtering in shaders
- * - Layer caching prevents unnecessary buffer recreation
- * - Only time-varying props are updated on animation frames
- * - Cached accessor functions and updateTriggers for stable references
+ * - Consolidated data cached - only rebuilt when tiles change (frameNumber)
+ * - Layer instance memoized for time-only updates
  */
 export declare class AnimatedPointLayer extends SpatioTemporalLayer<AnimatedPointLayerProps> {
     static layerName: string;
+    private consolidatedDataCache;
+    private cachedLayer;
+    private cachedLayerFrameNumber;
     private cachedUpdateTriggers;
     private lastFillColor;
     private lastRadius;
@@ -83,7 +86,7 @@ export declare class AnimatedPointLayer extends SpatioTemporalLayer<AnimatedPoin
             value: Color[];
         };
         use3D: boolean;
-        elevationProperty: any;
+        elevationProperty: null;
         elevationScale: {
             type: string;
             value: number;
@@ -116,12 +119,12 @@ export declare class AnimatedPointLayer extends SpatioTemporalLayer<AnimatedPoin
         };
         timeRange: {
             type: string;
-            value: any;
+            value: null;
             compare: boolean;
         };
         timeController: {
             type: string;
-            value: any;
+            value: null;
             compare: boolean;
         };
         maxRequests: {
@@ -161,17 +164,17 @@ export declare class AnimatedPointLayer extends SpatioTemporalLayer<AnimatedPoin
         };
         onViewportLoad: {
             type: string;
-            value: any;
+            value: null;
             optional: boolean;
         };
         onTileLoad: {
             type: string;
-            value: any;
+            value: null;
             optional: boolean;
         };
         onTileUnload: {
             type: string;
-            value: any;
+            value: null;
             optional: boolean;
         };
         loadOptions: {
@@ -180,47 +183,41 @@ export declare class AnimatedPointLayer extends SpatioTemporalLayer<AnimatedPoin
             compare: boolean;
         };
     };
+    finalizeState(context: LayerContext): void;
+    /**
+     * PERFORMANCE OPTIMIZED renderLayers:
+     * - Creates a SINGLE ScatterplotLayer for ALL tiles (1 draw call)
+     * - Caches consolidated data - only rebuilds when tiles change
+     * - TRULY MEMOIZES layer instance - returns SAME layer for time-only updates
+     * - Time updates happen via getTime() getter in TimeFilterExtension.draw()
+     */
     renderLayers(): Layer[];
     /**
-     * Create a ScatterplotLayer for the given binary data.
-     *
-     * PERFORMANCE OPTIMIZATION:
-     * - Caches the `data` object per BinaryFeatures + props combo so deck.gl recognizes
-     *   unchanged data and skips GPU buffer re-uploads
-     * - Creates new layer instances with updated time props each frame
-     *   (this is lightweight - deck.gl efficiently diffs and updates uniforms)
-     * - NO MUTATION: data objects are built complete upfront, never mutated after caching
+     * Get or create consolidated data from all tiles.
+     * Cached by frameNumber - only rebuilds when tiles actually change.
      */
-    private createLayer;
+    private getConsolidatedData;
     /**
-     * Get or create a complete data object for the given binary features.
-     *
-     * The cache key includes the property names used for color/radius so that
-     * when props change, we create a new data object rather than mutating.
+     * Build consolidated data by merging all tile binary data.
+     * Converts relative times to absolute times during consolidation.
      */
-    private getOrCreateDataObject;
+    private buildConsolidatedData;
     /**
-     * Build the complete binary data object for deck.gl.
-     * Includes all attributes based on current props - no mutation after creation.
+     * Create a single ScatterplotLayer with consolidated data.
+     *
+     * PERFORMANCE: Uses getTime() getter instead of currentTime prop.
+     * This allows the layer to be memoized - time updates happen in
+     * TimeFilterExtension.draw() via the getter, not via layer recreation.
      */
-    private buildDataObject;
+    private createConsolidatedLayer;
     /**
      * Get color and radius props for constant values only.
-     * Property-based values are handled in buildDataObject as attributes.
+     * Property-based values are handled in buildConsolidatedData as attributes.
      *
      * PERFORMANCE OPTIMIZATION:
      * Returns a cached object when props haven't changed. This ensures deck.gl
      * sees stable references and can skip expensive deep comparisons.
      */
     private getColorAndRadiusProps;
-    /**
-     * Get radius attribute from numeric property if specified
-     */
-    private getRadiusAttribute;
-    /**
-     * Get fill color attribute from categorical property if specified.
-     * Cached per BinaryFeatures + property + palette combination.
-     */
-    private getFillColorAttribute;
 }
 //# sourceMappingURL=animated-point-layer.d.ts.map

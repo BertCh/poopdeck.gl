@@ -42,19 +42,9 @@ export class AnimatedTripsLayer extends SpatioTemporalLayer {
     constructor() {
         super(...arguments);
         // Cache of layer instances keyed by tile+layer ID
-        Object.defineProperty(this, "layerCache", {
-            enumerable: true,
-            configurable: true,
-            writable: true,
-            value: new Map()
-        });
+        this.layerCache = new Map();
         // Set of layer IDs that are currently visible
-        Object.defineProperty(this, "activeLayerIds", {
-            enumerable: true,
-            configurable: true,
-            writable: true,
-            value: new Set()
-        });
+        this.activeLayerIds = new Set();
     }
     finalizeState(context) {
         super.finalizeState(context);
@@ -62,12 +52,11 @@ export class AnimatedTripsLayer extends SpatioTemporalLayer {
         this.activeLayerIds.clear();
     }
     renderLayers() {
-        const { tiles, currentTime } = this.state;
+        const { tiles, frameNumber } = this.state;
         if (!tiles || tiles.length === 0) {
             this.cleanupCache(new Set());
             return [];
         }
-        const timeWindow = this.props.timeWindow || 86400000;
         const newActiveIds = new Set();
         const layers = tiles.flatMap((tile) => {
             return tile.layers.map((layer, layerIndex) => {
@@ -78,7 +67,7 @@ export class AnimatedTripsLayer extends SpatioTemporalLayer {
                 const layerId = `${this.props.id}-${tile.id.z}-${tile.id.x}-${tile.id.y}-${tile.id.t}-${layerIndex}`;
                 newActiveIds.add(layerId);
                 const tileTimeOffset = binary.timeOffset;
-                return this.getOrCreateLayer(binary, layerId, currentTime, tileTimeOffset, timeWindow);
+                return this.getOrCreateLayer(binary, layerId, tileTimeOffset, frameNumber || 0);
             });
         }).filter(Boolean);
         this.cleanupCache(newActiveIds);
@@ -87,22 +76,17 @@ export class AnimatedTripsLayer extends SpatioTemporalLayer {
     }
     /**
      * Get a cached layer or create a new one.
+     * PERFORMANCE: Uses getTime() getter so layers can be memoized.
      */
-    getOrCreateLayer(binary, layerId, currentTime, timeOffset, timeWindow) {
+    getOrCreateLayer(binary, layerId, timeOffset, _frameNumber) {
         const cached = this.layerCache.get(layerId);
+        // Return cached layer if binary hasn't changed
+        // Time updates happen via getTime() getter in TimeFilterExtension.draw()
         if (cached && cached.binary === binary) {
-            // Clone with updated time props
-            // Cast to any because extension props aren't in base type
-            return cached.layer.clone({
-                currentTime: currentTime - timeOffset,
-                timeWindow,
-                trailLength: this.props.trailLength,
-                opacity: this.props.opacity,
-                visible: this.props.visible,
-            });
+            return cached.layer;
         }
-        // Create new layer
-        const layer = this.createBinaryPathLayer(binary, layerId, currentTime, timeOffset, timeWindow);
+        // Create new layer with getTime getter
+        const layer = this.createBinaryPathLayer(binary, layerId, timeOffset);
         this.layerCache.set(layerId, {
             layer,
             binary,
@@ -121,10 +105,14 @@ export class AnimatedTripsLayer extends SpatioTemporalLayer {
         }
     }
     /**
-     * Create a PathLayer using deck.gl's binary data interface with trail support
+     * Create a PathLayer using deck.gl's binary data interface with trail support.
+     * PERFORMANCE: Uses getTime() getter for dynamic time updates.
      */
-    createBinaryPathLayer(binary, layerId, currentTime, timeOffset, timeWindow) {
+    createBinaryPathLayer(binary, layerId, timeOffset) {
         const dims = binary.positionDimensions ?? 2;
+        const timeWindow = this.props.timeWindow || 86400000;
+        // Capture self for getTime closure
+        const self = this;
         // Get or compute per-vertex progress (0-1 along each path)
         const vertexProgress = this.getVertexProgress(binary);
         // Expand per-feature times to per-vertex for trail rendering
@@ -149,12 +137,22 @@ export class AnimatedTripsLayer extends SpatioTemporalLayer {
                     size: 1,
                 },
                 // Per-vertex progress (0-1) for interpolating time along path
+                // Used when actual per-vertex timestamps are not available
                 instanceVertexProgress: {
                     value: vertexProgress,
                     size: 1,
                 },
             },
         };
+        // Add per-vertex timestamps if available (for accurate animation)
+        // This is preferred over linear interpolation when the data includes 
+        // actual timestamps for each coordinate (e.g., GPS tracks)
+        if (binary.vertexTimestamps) {
+            data.attributes.instanceVertexTime = {
+                value: binary.vertexTimestamps,
+                size: 1,
+            };
+        }
         // Add width attribute if using a property
         const widthAttr = this.getWidthAttribute(binary);
         if (widthAttr) {
@@ -180,8 +178,9 @@ export class AnimatedTripsLayer extends SpatioTemporalLayer {
             capRounded: this.props.capRounded,
             jointRounded: this.props.jointRounded,
             // Time Filtering via extension with trail support
+            // PERFORMANCE: Use getTime() getter for dynamic time updates (allows layer memoization)
             extensions: [TIME_FILTER_EXTENSION],
-            currentTime: currentTime - timeOffset,
+            getTime: () => self.getCurrentTime() - timeOffset,
             timeWindow,
             trailLength: this.props.trailLength,
             fadeInDuration: 0,
@@ -306,29 +305,20 @@ export class AnimatedTripsLayer extends SpatioTemporalLayer {
         return null;
     }
 }
-Object.defineProperty(AnimatedTripsLayer, "layerName", {
-    enumerable: true,
-    configurable: true,
-    writable: true,
-    value: 'AnimatedTripsLayer'
-});
-Object.defineProperty(AnimatedTripsLayer, "defaultProps", {
-    enumerable: true,
-    configurable: true,
-    writable: true,
-    value: {
-        ...SpatioTemporalLayer.defaultProps,
-        // Path styling props
-        widthScale: { type: 'number', value: 1, min: 0 },
-        widthMinPixels: { type: 'number', value: 2 },
-        widthMaxPixels: { type: 'number', value: 10 },
-        tripColor: { type: 'color', value: [253, 128, 93, 255] },
-        tripWidth: { type: 'number', value: 3 },
-        colorPalette: { type: 'array', value: DEFAULT_PALETTE },
-        // Trail props
-        trailLength: { type: 'number', value: 180000, min: 0 }, // 3 minutes default
-        fadeTrail: true,
-        capRounded: true,
-        jointRounded: true,
-    }
-});
+AnimatedTripsLayer.layerName = 'AnimatedTripsLayer';
+AnimatedTripsLayer.defaultProps = {
+    ...SpatioTemporalLayer.defaultProps,
+    // Path styling props
+    widthScale: { type: 'number', value: 1, min: 0 },
+    widthMinPixels: { type: 'number', value: 2 },
+    widthMaxPixels: { type: 'number', value: 10 },
+    tripColor: { type: 'color', value: [253, 128, 93, 255] },
+    tripWidth: { type: 'number', value: 3 },
+    colorPalette: { type: 'array', value: DEFAULT_PALETTE },
+    // Trail props
+    trailLength: { type: 'number', value: 180000, min: 0 }, // 3 minutes default
+    fadeTrail: true,
+    capRounded: true,
+    jointRounded: true,
+};
+//# sourceMappingURL=animated-trips-layer.js.map

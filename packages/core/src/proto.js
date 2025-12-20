@@ -16,2062 +16,6 @@ export const stt = $root.stt = (() => {
      */
     const stt = {};
 
-    stt.Tile = (function() {
-
-        /**
-         * Properties of a Tile.
-         * @memberof stt
-         * @interface ITile
-         * @property {number|null} [version] Tile version
-         * @property {number|Long|null} [timeStart] Tile timeStart
-         * @property {number|Long|null} [timeEnd] Tile timeEnd
-         * @property {Array.<stt.ILayer>|null} [layers] Tile layers
-         */
-
-        /**
-         * Constructs a new Tile.
-         * @memberof stt
-         * @classdesc Represents a Tile.
-         * @implements ITile
-         * @constructor
-         * @param {stt.ITile=} [properties] Properties to set
-         */
-        function Tile(properties) {
-            this.layers = [];
-            if (properties)
-                for (let keys = Object.keys(properties), i = 0; i < keys.length; ++i)
-                    if (properties[keys[i]] != null)
-                        this[keys[i]] = properties[keys[i]];
-        }
-
-        /**
-         * Tile version.
-         * @member {number} version
-         * @memberof stt.Tile
-         * @instance
-         */
-        Tile.prototype.version = 0;
-
-        /**
-         * Tile timeStart.
-         * @member {number|Long} timeStart
-         * @memberof stt.Tile
-         * @instance
-         */
-        Tile.prototype.timeStart = $util.Long ? $util.Long.fromBits(0,0,true) : 0;
-
-        /**
-         * Tile timeEnd.
-         * @member {number|Long} timeEnd
-         * @memberof stt.Tile
-         * @instance
-         */
-        Tile.prototype.timeEnd = $util.Long ? $util.Long.fromBits(0,0,true) : 0;
-
-        /**
-         * Tile layers.
-         * @member {Array.<stt.ILayer>} layers
-         * @memberof stt.Tile
-         * @instance
-         */
-        Tile.prototype.layers = $util.emptyArray;
-
-        /**
-         * Creates a new Tile instance using the specified properties.
-         * @function create
-         * @memberof stt.Tile
-         * @static
-         * @param {stt.ITile=} [properties] Properties to set
-         * @returns {stt.Tile} Tile instance
-         */
-        Tile.create = function create(properties) {
-            return new Tile(properties);
-        };
-
-        /**
-         * Encodes the specified Tile message. Does not implicitly {@link stt.Tile.verify|verify} messages.
-         * @function encode
-         * @memberof stt.Tile
-         * @static
-         * @param {stt.ITile} message Tile message or plain object to encode
-         * @param {$protobuf.Writer} [writer] Writer to encode to
-         * @returns {$protobuf.Writer} Writer
-         */
-        Tile.encode = function encode(message, writer) {
-            if (!writer)
-                writer = $Writer.create();
-            if (message.version != null && Object.hasOwnProperty.call(message, "version"))
-                writer.uint32(/* id 1, wireType 0 =*/8).uint32(message.version);
-            if (message.timeStart != null && Object.hasOwnProperty.call(message, "timeStart"))
-                writer.uint32(/* id 2, wireType 0 =*/16).uint64(message.timeStart);
-            if (message.timeEnd != null && Object.hasOwnProperty.call(message, "timeEnd"))
-                writer.uint32(/* id 3, wireType 0 =*/24).uint64(message.timeEnd);
-            if (message.layers != null && message.layers.length)
-                for (let i = 0; i < message.layers.length; ++i)
-                    $root.stt.Layer.encode(message.layers[i], writer.uint32(/* id 4, wireType 2 =*/34).fork()).ldelim();
-            return writer;
-        };
-
-        /**
-         * Encodes the specified Tile message, length delimited. Does not implicitly {@link stt.Tile.verify|verify} messages.
-         * @function encodeDelimited
-         * @memberof stt.Tile
-         * @static
-         * @param {stt.ITile} message Tile message or plain object to encode
-         * @param {$protobuf.Writer} [writer] Writer to encode to
-         * @returns {$protobuf.Writer} Writer
-         */
-        Tile.encodeDelimited = function encodeDelimited(message, writer) {
-            return this.encode(message, writer).ldelim();
-        };
-
-        /**
-         * Decodes a Tile message from the specified reader or buffer.
-         * @function decode
-         * @memberof stt.Tile
-         * @static
-         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
-         * @param {number} [length] Message length if known beforehand
-         * @returns {stt.Tile} Tile
-         * @throws {Error} If the payload is not a reader or valid buffer
-         * @throws {$protobuf.util.ProtocolError} If required fields are missing
-         */
-        Tile.decode = function decode(reader, length, error) {
-            if (!(reader instanceof $Reader))
-                reader = $Reader.create(reader);
-            let end = length === undefined ? reader.len : reader.pos + length, message = new $root.stt.Tile();
-            while (reader.pos < end) {
-                let tag = reader.uint32();
-                if (tag === error)
-                    break;
-                switch (tag >>> 3) {
-                case 1: {
-                        message.version = reader.uint32();
-                        break;
-                    }
-                case 2: {
-                        message.timeStart = reader.uint64();
-                        break;
-                    }
-                case 3: {
-                        message.timeEnd = reader.uint64();
-                        break;
-                    }
-                case 4: {
-                        if (!(message.layers && message.layers.length))
-                            message.layers = [];
-                        message.layers.push($root.stt.Layer.decode(reader, reader.uint32()));
-                        break;
-                    }
-                default:
-                    reader.skipType(tag & 7);
-                    break;
-                }
-            }
-            return message;
-        };
-
-        /**
-         * Decodes a Tile message from the specified reader or buffer, length delimited.
-         * @function decodeDelimited
-         * @memberof stt.Tile
-         * @static
-         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
-         * @returns {stt.Tile} Tile
-         * @throws {Error} If the payload is not a reader or valid buffer
-         * @throws {$protobuf.util.ProtocolError} If required fields are missing
-         */
-        Tile.decodeDelimited = function decodeDelimited(reader) {
-            if (!(reader instanceof $Reader))
-                reader = new $Reader(reader);
-            return this.decode(reader, reader.uint32());
-        };
-
-        /**
-         * Verifies a Tile message.
-         * @function verify
-         * @memberof stt.Tile
-         * @static
-         * @param {Object.<string,*>} message Plain object to verify
-         * @returns {string|null} `null` if valid, otherwise the reason why it is not
-         */
-        Tile.verify = function verify(message) {
-            if (typeof message !== "object" || message === null)
-                return "object expected";
-            if (message.version != null && message.hasOwnProperty("version"))
-                if (!$util.isInteger(message.version))
-                    return "version: integer expected";
-            if (message.timeStart != null && message.hasOwnProperty("timeStart"))
-                if (!$util.isInteger(message.timeStart) && !(message.timeStart && $util.isInteger(message.timeStart.low) && $util.isInteger(message.timeStart.high)))
-                    return "timeStart: integer|Long expected";
-            if (message.timeEnd != null && message.hasOwnProperty("timeEnd"))
-                if (!$util.isInteger(message.timeEnd) && !(message.timeEnd && $util.isInteger(message.timeEnd.low) && $util.isInteger(message.timeEnd.high)))
-                    return "timeEnd: integer|Long expected";
-            if (message.layers != null && message.hasOwnProperty("layers")) {
-                if (!Array.isArray(message.layers))
-                    return "layers: array expected";
-                for (let i = 0; i < message.layers.length; ++i) {
-                    let error = $root.stt.Layer.verify(message.layers[i]);
-                    if (error)
-                        return "layers." + error;
-                }
-            }
-            return null;
-        };
-
-        /**
-         * Creates a Tile message from a plain object. Also converts values to their respective internal types.
-         * @function fromObject
-         * @memberof stt.Tile
-         * @static
-         * @param {Object.<string,*>} object Plain object
-         * @returns {stt.Tile} Tile
-         */
-        Tile.fromObject = function fromObject(object) {
-            if (object instanceof $root.stt.Tile)
-                return object;
-            let message = new $root.stt.Tile();
-            if (object.version != null)
-                message.version = object.version >>> 0;
-            if (object.timeStart != null)
-                if ($util.Long)
-                    (message.timeStart = $util.Long.fromValue(object.timeStart)).unsigned = true;
-                else if (typeof object.timeStart === "string")
-                    message.timeStart = parseInt(object.timeStart, 10);
-                else if (typeof object.timeStart === "number")
-                    message.timeStart = object.timeStart;
-                else if (typeof object.timeStart === "object")
-                    message.timeStart = new $util.LongBits(object.timeStart.low >>> 0, object.timeStart.high >>> 0).toNumber(true);
-            if (object.timeEnd != null)
-                if ($util.Long)
-                    (message.timeEnd = $util.Long.fromValue(object.timeEnd)).unsigned = true;
-                else if (typeof object.timeEnd === "string")
-                    message.timeEnd = parseInt(object.timeEnd, 10);
-                else if (typeof object.timeEnd === "number")
-                    message.timeEnd = object.timeEnd;
-                else if (typeof object.timeEnd === "object")
-                    message.timeEnd = new $util.LongBits(object.timeEnd.low >>> 0, object.timeEnd.high >>> 0).toNumber(true);
-            if (object.layers) {
-                if (!Array.isArray(object.layers))
-                    throw TypeError(".stt.Tile.layers: array expected");
-                message.layers = [];
-                for (let i = 0; i < object.layers.length; ++i) {
-                    if (typeof object.layers[i] !== "object")
-                        throw TypeError(".stt.Tile.layers: object expected");
-                    message.layers[i] = $root.stt.Layer.fromObject(object.layers[i]);
-                }
-            }
-            return message;
-        };
-
-        /**
-         * Creates a plain object from a Tile message. Also converts values to other types if specified.
-         * @function toObject
-         * @memberof stt.Tile
-         * @static
-         * @param {stt.Tile} message Tile
-         * @param {$protobuf.IConversionOptions} [options] Conversion options
-         * @returns {Object.<string,*>} Plain object
-         */
-        Tile.toObject = function toObject(message, options) {
-            if (!options)
-                options = {};
-            let object = {};
-            if (options.arrays || options.defaults)
-                object.layers = [];
-            if (options.defaults) {
-                object.version = 0;
-                if ($util.Long) {
-                    let long = new $util.Long(0, 0, true);
-                    object.timeStart = options.longs === String ? long.toString() : options.longs === Number ? long.toNumber() : long;
-                } else
-                    object.timeStart = options.longs === String ? "0" : 0;
-                if ($util.Long) {
-                    let long = new $util.Long(0, 0, true);
-                    object.timeEnd = options.longs === String ? long.toString() : options.longs === Number ? long.toNumber() : long;
-                } else
-                    object.timeEnd = options.longs === String ? "0" : 0;
-            }
-            if (message.version != null && message.hasOwnProperty("version"))
-                object.version = message.version;
-            if (message.timeStart != null && message.hasOwnProperty("timeStart"))
-                if (typeof message.timeStart === "number")
-                    object.timeStart = options.longs === String ? String(message.timeStart) : message.timeStart;
-                else
-                    object.timeStart = options.longs === String ? $util.Long.prototype.toString.call(message.timeStart) : options.longs === Number ? new $util.LongBits(message.timeStart.low >>> 0, message.timeStart.high >>> 0).toNumber(true) : message.timeStart;
-            if (message.timeEnd != null && message.hasOwnProperty("timeEnd"))
-                if (typeof message.timeEnd === "number")
-                    object.timeEnd = options.longs === String ? String(message.timeEnd) : message.timeEnd;
-                else
-                    object.timeEnd = options.longs === String ? $util.Long.prototype.toString.call(message.timeEnd) : options.longs === Number ? new $util.LongBits(message.timeEnd.low >>> 0, message.timeEnd.high >>> 0).toNumber(true) : message.timeEnd;
-            if (message.layers && message.layers.length) {
-                object.layers = [];
-                for (let j = 0; j < message.layers.length; ++j)
-                    object.layers[j] = $root.stt.Layer.toObject(message.layers[j], options);
-            }
-            return object;
-        };
-
-        /**
-         * Converts this Tile to JSON.
-         * @function toJSON
-         * @memberof stt.Tile
-         * @instance
-         * @returns {Object.<string,*>} JSON object
-         */
-        Tile.prototype.toJSON = function toJSON() {
-            return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
-        };
-
-        /**
-         * Gets the default type url for Tile
-         * @function getTypeUrl
-         * @memberof stt.Tile
-         * @static
-         * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
-         * @returns {string} The default type url
-         */
-        Tile.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
-            if (typeUrlPrefix === undefined) {
-                typeUrlPrefix = "type.googleapis.com";
-            }
-            return typeUrlPrefix + "/stt.Tile";
-        };
-
-        return Tile;
-    })();
-
-    stt.Layer = (function() {
-
-        /**
-         * Properties of a Layer.
-         * @memberof stt
-         * @interface ILayer
-         * @property {string|null} [name] Layer name
-         * @property {number|null} [extent] Layer extent
-         * @property {stt.IColumnarFeatures|null} [columnar] Layer columnar
-         */
-
-        /**
-         * Constructs a new Layer.
-         * @memberof stt
-         * @classdesc Represents a Layer.
-         * @implements ILayer
-         * @constructor
-         * @param {stt.ILayer=} [properties] Properties to set
-         */
-        function Layer(properties) {
-            if (properties)
-                for (let keys = Object.keys(properties), i = 0; i < keys.length; ++i)
-                    if (properties[keys[i]] != null)
-                        this[keys[i]] = properties[keys[i]];
-        }
-
-        /**
-         * Layer name.
-         * @member {string} name
-         * @memberof stt.Layer
-         * @instance
-         */
-        Layer.prototype.name = "";
-
-        /**
-         * Layer extent.
-         * @member {number} extent
-         * @memberof stt.Layer
-         * @instance
-         */
-        Layer.prototype.extent = 0;
-
-        /**
-         * Layer columnar.
-         * @member {stt.IColumnarFeatures|null|undefined} columnar
-         * @memberof stt.Layer
-         * @instance
-         */
-        Layer.prototype.columnar = null;
-
-        /**
-         * Creates a new Layer instance using the specified properties.
-         * @function create
-         * @memberof stt.Layer
-         * @static
-         * @param {stt.ILayer=} [properties] Properties to set
-         * @returns {stt.Layer} Layer instance
-         */
-        Layer.create = function create(properties) {
-            return new Layer(properties);
-        };
-
-        /**
-         * Encodes the specified Layer message. Does not implicitly {@link stt.Layer.verify|verify} messages.
-         * @function encode
-         * @memberof stt.Layer
-         * @static
-         * @param {stt.ILayer} message Layer message or plain object to encode
-         * @param {$protobuf.Writer} [writer] Writer to encode to
-         * @returns {$protobuf.Writer} Writer
-         */
-        Layer.encode = function encode(message, writer) {
-            if (!writer)
-                writer = $Writer.create();
-            if (message.name != null && Object.hasOwnProperty.call(message, "name"))
-                writer.uint32(/* id 1, wireType 2 =*/10).string(message.name);
-            if (message.extent != null && Object.hasOwnProperty.call(message, "extent"))
-                writer.uint32(/* id 2, wireType 0 =*/16).uint32(message.extent);
-            if (message.columnar != null && Object.hasOwnProperty.call(message, "columnar"))
-                $root.stt.ColumnarFeatures.encode(message.columnar, writer.uint32(/* id 4, wireType 2 =*/34).fork()).ldelim();
-            return writer;
-        };
-
-        /**
-         * Encodes the specified Layer message, length delimited. Does not implicitly {@link stt.Layer.verify|verify} messages.
-         * @function encodeDelimited
-         * @memberof stt.Layer
-         * @static
-         * @param {stt.ILayer} message Layer message or plain object to encode
-         * @param {$protobuf.Writer} [writer] Writer to encode to
-         * @returns {$protobuf.Writer} Writer
-         */
-        Layer.encodeDelimited = function encodeDelimited(message, writer) {
-            return this.encode(message, writer).ldelim();
-        };
-
-        /**
-         * Decodes a Layer message from the specified reader or buffer.
-         * @function decode
-         * @memberof stt.Layer
-         * @static
-         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
-         * @param {number} [length] Message length if known beforehand
-         * @returns {stt.Layer} Layer
-         * @throws {Error} If the payload is not a reader or valid buffer
-         * @throws {$protobuf.util.ProtocolError} If required fields are missing
-         */
-        Layer.decode = function decode(reader, length, error) {
-            if (!(reader instanceof $Reader))
-                reader = $Reader.create(reader);
-            let end = length === undefined ? reader.len : reader.pos + length, message = new $root.stt.Layer();
-            while (reader.pos < end) {
-                let tag = reader.uint32();
-                if (tag === error)
-                    break;
-                switch (tag >>> 3) {
-                case 1: {
-                        message.name = reader.string();
-                        break;
-                    }
-                case 2: {
-                        message.extent = reader.uint32();
-                        break;
-                    }
-                case 4: {
-                        message.columnar = $root.stt.ColumnarFeatures.decode(reader, reader.uint32());
-                        break;
-                    }
-                default:
-                    reader.skipType(tag & 7);
-                    break;
-                }
-            }
-            return message;
-        };
-
-        /**
-         * Decodes a Layer message from the specified reader or buffer, length delimited.
-         * @function decodeDelimited
-         * @memberof stt.Layer
-         * @static
-         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
-         * @returns {stt.Layer} Layer
-         * @throws {Error} If the payload is not a reader or valid buffer
-         * @throws {$protobuf.util.ProtocolError} If required fields are missing
-         */
-        Layer.decodeDelimited = function decodeDelimited(reader) {
-            if (!(reader instanceof $Reader))
-                reader = new $Reader(reader);
-            return this.decode(reader, reader.uint32());
-        };
-
-        /**
-         * Verifies a Layer message.
-         * @function verify
-         * @memberof stt.Layer
-         * @static
-         * @param {Object.<string,*>} message Plain object to verify
-         * @returns {string|null} `null` if valid, otherwise the reason why it is not
-         */
-        Layer.verify = function verify(message) {
-            if (typeof message !== "object" || message === null)
-                return "object expected";
-            if (message.name != null && message.hasOwnProperty("name"))
-                if (!$util.isString(message.name))
-                    return "name: string expected";
-            if (message.extent != null && message.hasOwnProperty("extent"))
-                if (!$util.isInteger(message.extent))
-                    return "extent: integer expected";
-            if (message.columnar != null && message.hasOwnProperty("columnar")) {
-                let error = $root.stt.ColumnarFeatures.verify(message.columnar);
-                if (error)
-                    return "columnar." + error;
-            }
-            return null;
-        };
-
-        /**
-         * Creates a Layer message from a plain object. Also converts values to their respective internal types.
-         * @function fromObject
-         * @memberof stt.Layer
-         * @static
-         * @param {Object.<string,*>} object Plain object
-         * @returns {stt.Layer} Layer
-         */
-        Layer.fromObject = function fromObject(object) {
-            if (object instanceof $root.stt.Layer)
-                return object;
-            let message = new $root.stt.Layer();
-            if (object.name != null)
-                message.name = String(object.name);
-            if (object.extent != null)
-                message.extent = object.extent >>> 0;
-            if (object.columnar != null) {
-                if (typeof object.columnar !== "object")
-                    throw TypeError(".stt.Layer.columnar: object expected");
-                message.columnar = $root.stt.ColumnarFeatures.fromObject(object.columnar);
-            }
-            return message;
-        };
-
-        /**
-         * Creates a plain object from a Layer message. Also converts values to other types if specified.
-         * @function toObject
-         * @memberof stt.Layer
-         * @static
-         * @param {stt.Layer} message Layer
-         * @param {$protobuf.IConversionOptions} [options] Conversion options
-         * @returns {Object.<string,*>} Plain object
-         */
-        Layer.toObject = function toObject(message, options) {
-            if (!options)
-                options = {};
-            let object = {};
-            if (options.defaults) {
-                object.name = "";
-                object.extent = 0;
-                object.columnar = null;
-            }
-            if (message.name != null && message.hasOwnProperty("name"))
-                object.name = message.name;
-            if (message.extent != null && message.hasOwnProperty("extent"))
-                object.extent = message.extent;
-            if (message.columnar != null && message.hasOwnProperty("columnar"))
-                object.columnar = $root.stt.ColumnarFeatures.toObject(message.columnar, options);
-            return object;
-        };
-
-        /**
-         * Converts this Layer to JSON.
-         * @function toJSON
-         * @memberof stt.Layer
-         * @instance
-         * @returns {Object.<string,*>} JSON object
-         */
-        Layer.prototype.toJSON = function toJSON() {
-            return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
-        };
-
-        /**
-         * Gets the default type url for Layer
-         * @function getTypeUrl
-         * @memberof stt.Layer
-         * @static
-         * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
-         * @returns {string} The default type url
-         */
-        Layer.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
-            if (typeUrlPrefix === undefined) {
-                typeUrlPrefix = "type.googleapis.com";
-            }
-            return typeUrlPrefix + "/stt.Layer";
-        };
-
-        return Layer;
-    })();
-
-    stt.Feature = (function() {
-
-        /**
-         * Properties of a Feature.
-         * @memberof stt
-         * @interface IFeature
-         */
-
-        /**
-         * Constructs a new Feature.
-         * @memberof stt
-         * @classdesc Represents a Feature.
-         * @implements IFeature
-         * @constructor
-         * @param {stt.IFeature=} [properties] Properties to set
-         */
-        function Feature(properties) {
-            if (properties)
-                for (let keys = Object.keys(properties), i = 0; i < keys.length; ++i)
-                    if (properties[keys[i]] != null)
-                        this[keys[i]] = properties[keys[i]];
-        }
-
-        /**
-         * Creates a new Feature instance using the specified properties.
-         * @function create
-         * @memberof stt.Feature
-         * @static
-         * @param {stt.IFeature=} [properties] Properties to set
-         * @returns {stt.Feature} Feature instance
-         */
-        Feature.create = function create(properties) {
-            return new Feature(properties);
-        };
-
-        /**
-         * Encodes the specified Feature message. Does not implicitly {@link stt.Feature.verify|verify} messages.
-         * @function encode
-         * @memberof stt.Feature
-         * @static
-         * @param {stt.IFeature} message Feature message or plain object to encode
-         * @param {$protobuf.Writer} [writer] Writer to encode to
-         * @returns {$protobuf.Writer} Writer
-         */
-        Feature.encode = function encode(message, writer) {
-            if (!writer)
-                writer = $Writer.create();
-            return writer;
-        };
-
-        /**
-         * Encodes the specified Feature message, length delimited. Does not implicitly {@link stt.Feature.verify|verify} messages.
-         * @function encodeDelimited
-         * @memberof stt.Feature
-         * @static
-         * @param {stt.IFeature} message Feature message or plain object to encode
-         * @param {$protobuf.Writer} [writer] Writer to encode to
-         * @returns {$protobuf.Writer} Writer
-         */
-        Feature.encodeDelimited = function encodeDelimited(message, writer) {
-            return this.encode(message, writer).ldelim();
-        };
-
-        /**
-         * Decodes a Feature message from the specified reader or buffer.
-         * @function decode
-         * @memberof stt.Feature
-         * @static
-         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
-         * @param {number} [length] Message length if known beforehand
-         * @returns {stt.Feature} Feature
-         * @throws {Error} If the payload is not a reader or valid buffer
-         * @throws {$protobuf.util.ProtocolError} If required fields are missing
-         */
-        Feature.decode = function decode(reader, length, error) {
-            if (!(reader instanceof $Reader))
-                reader = $Reader.create(reader);
-            let end = length === undefined ? reader.len : reader.pos + length, message = new $root.stt.Feature();
-            while (reader.pos < end) {
-                let tag = reader.uint32();
-                if (tag === error)
-                    break;
-                switch (tag >>> 3) {
-                default:
-                    reader.skipType(tag & 7);
-                    break;
-                }
-            }
-            return message;
-        };
-
-        /**
-         * Decodes a Feature message from the specified reader or buffer, length delimited.
-         * @function decodeDelimited
-         * @memberof stt.Feature
-         * @static
-         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
-         * @returns {stt.Feature} Feature
-         * @throws {Error} If the payload is not a reader or valid buffer
-         * @throws {$protobuf.util.ProtocolError} If required fields are missing
-         */
-        Feature.decodeDelimited = function decodeDelimited(reader) {
-            if (!(reader instanceof $Reader))
-                reader = new $Reader(reader);
-            return this.decode(reader, reader.uint32());
-        };
-
-        /**
-         * Verifies a Feature message.
-         * @function verify
-         * @memberof stt.Feature
-         * @static
-         * @param {Object.<string,*>} message Plain object to verify
-         * @returns {string|null} `null` if valid, otherwise the reason why it is not
-         */
-        Feature.verify = function verify(message) {
-            if (typeof message !== "object" || message === null)
-                return "object expected";
-            return null;
-        };
-
-        /**
-         * Creates a Feature message from a plain object. Also converts values to their respective internal types.
-         * @function fromObject
-         * @memberof stt.Feature
-         * @static
-         * @param {Object.<string,*>} object Plain object
-         * @returns {stt.Feature} Feature
-         */
-        Feature.fromObject = function fromObject(object) {
-            if (object instanceof $root.stt.Feature)
-                return object;
-            return new $root.stt.Feature();
-        };
-
-        /**
-         * Creates a plain object from a Feature message. Also converts values to other types if specified.
-         * @function toObject
-         * @memberof stt.Feature
-         * @static
-         * @param {stt.Feature} message Feature
-         * @param {$protobuf.IConversionOptions} [options] Conversion options
-         * @returns {Object.<string,*>} Plain object
-         */
-        Feature.toObject = function toObject() {
-            return {};
-        };
-
-        /**
-         * Converts this Feature to JSON.
-         * @function toJSON
-         * @memberof stt.Feature
-         * @instance
-         * @returns {Object.<string,*>} JSON object
-         */
-        Feature.prototype.toJSON = function toJSON() {
-            return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
-        };
-
-        /**
-         * Gets the default type url for Feature
-         * @function getTypeUrl
-         * @memberof stt.Feature
-         * @static
-         * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
-         * @returns {string} The default type url
-         */
-        Feature.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
-            if (typeUrlPrefix === undefined) {
-                typeUrlPrefix = "type.googleapis.com";
-            }
-            return typeUrlPrefix + "/stt.Feature";
-        };
-
-        /**
-         * GeomType enum.
-         * @name stt.Feature.GeomType
-         * @enum {number}
-         * @property {number} POINT=0 POINT value
-         * @property {number} LINESTRING=1 LINESTRING value
-         * @property {number} POLYGON=2 POLYGON value
-         */
-        Feature.GeomType = (function() {
-            const valuesById = {}, values = Object.create(valuesById);
-            values[valuesById[0] = "POINT"] = 0;
-            values[valuesById[1] = "LINESTRING"] = 1;
-            values[valuesById[2] = "POLYGON"] = 2;
-            return values;
-        })();
-
-        return Feature;
-    })();
-
-    stt.ColumnarFeatures = (function() {
-
-        /**
-         * Properties of a ColumnarFeatures.
-         * @memberof stt
-         * @interface IColumnarFeatures
-         * @property {number|null} [featureCount] ColumnarFeatures featureCount
-         * @property {stt.Feature.GeomType|null} [geometryType] ColumnarFeatures geometryType
-         * @property {Array.<number|Long>|null} [featureIds] ColumnarFeatures featureIds
-         * @property {Array.<number>|null} [geometry] ColumnarFeatures geometry
-         * @property {Array.<number>|null} [geometryOffsets] ColumnarFeatures geometryOffsets
-         * @property {Array.<number|Long>|null} [startTimes] ColumnarFeatures startTimes
-         * @property {Array.<number|Long>|null} [endTimes] ColumnarFeatures endTimes
-         * @property {Array.<stt.INumericColumn>|null} [numericProperties] ColumnarFeatures numericProperties
-         * @property {Array.<stt.ICategoricalColumn>|null} [categoricalProperties] ColumnarFeatures categoricalProperties
-         * @property {Array.<number>|null} [ringOffsets] ColumnarFeatures ringOffsets
-         * @property {Array.<number>|null} [ringOffsetsOffsets] ColumnarFeatures ringOffsetsOffsets
-         */
-
-        /**
-         * Constructs a new ColumnarFeatures.
-         * @memberof stt
-         * @classdesc Represents a ColumnarFeatures.
-         * @implements IColumnarFeatures
-         * @constructor
-         * @param {stt.IColumnarFeatures=} [properties] Properties to set
-         */
-        function ColumnarFeatures(properties) {
-            this.featureIds = [];
-            this.geometry = [];
-            this.geometryOffsets = [];
-            this.startTimes = [];
-            this.endTimes = [];
-            this.numericProperties = [];
-            this.categoricalProperties = [];
-            this.ringOffsets = [];
-            this.ringOffsetsOffsets = [];
-            if (properties)
-                for (let keys = Object.keys(properties), i = 0; i < keys.length; ++i)
-                    if (properties[keys[i]] != null)
-                        this[keys[i]] = properties[keys[i]];
-        }
-
-        /**
-         * ColumnarFeatures featureCount.
-         * @member {number} featureCount
-         * @memberof stt.ColumnarFeatures
-         * @instance
-         */
-        ColumnarFeatures.prototype.featureCount = 0;
-
-        /**
-         * ColumnarFeatures geometryType.
-         * @member {stt.Feature.GeomType} geometryType
-         * @memberof stt.ColumnarFeatures
-         * @instance
-         */
-        ColumnarFeatures.prototype.geometryType = 0;
-
-        /**
-         * ColumnarFeatures featureIds.
-         * @member {Array.<number|Long>} featureIds
-         * @memberof stt.ColumnarFeatures
-         * @instance
-         */
-        ColumnarFeatures.prototype.featureIds = $util.emptyArray;
-
-        /**
-         * ColumnarFeatures geometry.
-         * @member {Array.<number>} geometry
-         * @memberof stt.ColumnarFeatures
-         * @instance
-         */
-        ColumnarFeatures.prototype.geometry = $util.emptyArray;
-
-        /**
-         * ColumnarFeatures geometryOffsets.
-         * @member {Array.<number>} geometryOffsets
-         * @memberof stt.ColumnarFeatures
-         * @instance
-         */
-        ColumnarFeatures.prototype.geometryOffsets = $util.emptyArray;
-
-        /**
-         * ColumnarFeatures startTimes.
-         * @member {Array.<number|Long>} startTimes
-         * @memberof stt.ColumnarFeatures
-         * @instance
-         */
-        ColumnarFeatures.prototype.startTimes = $util.emptyArray;
-
-        /**
-         * ColumnarFeatures endTimes.
-         * @member {Array.<number|Long>} endTimes
-         * @memberof stt.ColumnarFeatures
-         * @instance
-         */
-        ColumnarFeatures.prototype.endTimes = $util.emptyArray;
-
-        /**
-         * ColumnarFeatures numericProperties.
-         * @member {Array.<stt.INumericColumn>} numericProperties
-         * @memberof stt.ColumnarFeatures
-         * @instance
-         */
-        ColumnarFeatures.prototype.numericProperties = $util.emptyArray;
-
-        /**
-         * ColumnarFeatures categoricalProperties.
-         * @member {Array.<stt.ICategoricalColumn>} categoricalProperties
-         * @memberof stt.ColumnarFeatures
-         * @instance
-         */
-        ColumnarFeatures.prototype.categoricalProperties = $util.emptyArray;
-
-        /**
-         * ColumnarFeatures ringOffsets.
-         * @member {Array.<number>} ringOffsets
-         * @memberof stt.ColumnarFeatures
-         * @instance
-         */
-        ColumnarFeatures.prototype.ringOffsets = $util.emptyArray;
-
-        /**
-         * ColumnarFeatures ringOffsetsOffsets.
-         * @member {Array.<number>} ringOffsetsOffsets
-         * @memberof stt.ColumnarFeatures
-         * @instance
-         */
-        ColumnarFeatures.prototype.ringOffsetsOffsets = $util.emptyArray;
-
-        /**
-         * Creates a new ColumnarFeatures instance using the specified properties.
-         * @function create
-         * @memberof stt.ColumnarFeatures
-         * @static
-         * @param {stt.IColumnarFeatures=} [properties] Properties to set
-         * @returns {stt.ColumnarFeatures} ColumnarFeatures instance
-         */
-        ColumnarFeatures.create = function create(properties) {
-            return new ColumnarFeatures(properties);
-        };
-
-        /**
-         * Encodes the specified ColumnarFeatures message. Does not implicitly {@link stt.ColumnarFeatures.verify|verify} messages.
-         * @function encode
-         * @memberof stt.ColumnarFeatures
-         * @static
-         * @param {stt.IColumnarFeatures} message ColumnarFeatures message or plain object to encode
-         * @param {$protobuf.Writer} [writer] Writer to encode to
-         * @returns {$protobuf.Writer} Writer
-         */
-        ColumnarFeatures.encode = function encode(message, writer) {
-            if (!writer)
-                writer = $Writer.create();
-            if (message.featureCount != null && Object.hasOwnProperty.call(message, "featureCount"))
-                writer.uint32(/* id 1, wireType 0 =*/8).uint32(message.featureCount);
-            if (message.geometryType != null && Object.hasOwnProperty.call(message, "geometryType"))
-                writer.uint32(/* id 2, wireType 0 =*/16).int32(message.geometryType);
-            if (message.featureIds != null && message.featureIds.length) {
-                writer.uint32(/* id 3, wireType 2 =*/26).fork();
-                for (let i = 0; i < message.featureIds.length; ++i)
-                    writer.uint64(message.featureIds[i]);
-                writer.ldelim();
-            }
-            if (message.geometry != null && message.geometry.length) {
-                writer.uint32(/* id 4, wireType 2 =*/34).fork();
-                for (let i = 0; i < message.geometry.length; ++i)
-                    writer.sint32(message.geometry[i]);
-                writer.ldelim();
-            }
-            if (message.geometryOffsets != null && message.geometryOffsets.length) {
-                writer.uint32(/* id 5, wireType 2 =*/42).fork();
-                for (let i = 0; i < message.geometryOffsets.length; ++i)
-                    writer.uint32(message.geometryOffsets[i]);
-                writer.ldelim();
-            }
-            if (message.startTimes != null && message.startTimes.length) {
-                writer.uint32(/* id 6, wireType 2 =*/50).fork();
-                for (let i = 0; i < message.startTimes.length; ++i)
-                    writer.sint64(message.startTimes[i]);
-                writer.ldelim();
-            }
-            if (message.endTimes != null && message.endTimes.length) {
-                writer.uint32(/* id 7, wireType 2 =*/58).fork();
-                for (let i = 0; i < message.endTimes.length; ++i)
-                    writer.sint64(message.endTimes[i]);
-                writer.ldelim();
-            }
-            if (message.numericProperties != null && message.numericProperties.length)
-                for (let i = 0; i < message.numericProperties.length; ++i)
-                    $root.stt.NumericColumn.encode(message.numericProperties[i], writer.uint32(/* id 8, wireType 2 =*/66).fork()).ldelim();
-            if (message.categoricalProperties != null && message.categoricalProperties.length)
-                for (let i = 0; i < message.categoricalProperties.length; ++i)
-                    $root.stt.CategoricalColumn.encode(message.categoricalProperties[i], writer.uint32(/* id 9, wireType 2 =*/74).fork()).ldelim();
-            if (message.ringOffsets != null && message.ringOffsets.length) {
-                writer.uint32(/* id 10, wireType 2 =*/82).fork();
-                for (let i = 0; i < message.ringOffsets.length; ++i)
-                    writer.uint32(message.ringOffsets[i]);
-                writer.ldelim();
-            }
-            if (message.ringOffsetsOffsets != null && message.ringOffsetsOffsets.length) {
-                writer.uint32(/* id 11, wireType 2 =*/90).fork();
-                for (let i = 0; i < message.ringOffsetsOffsets.length; ++i)
-                    writer.uint32(message.ringOffsetsOffsets[i]);
-                writer.ldelim();
-            }
-            return writer;
-        };
-
-        /**
-         * Encodes the specified ColumnarFeatures message, length delimited. Does not implicitly {@link stt.ColumnarFeatures.verify|verify} messages.
-         * @function encodeDelimited
-         * @memberof stt.ColumnarFeatures
-         * @static
-         * @param {stt.IColumnarFeatures} message ColumnarFeatures message or plain object to encode
-         * @param {$protobuf.Writer} [writer] Writer to encode to
-         * @returns {$protobuf.Writer} Writer
-         */
-        ColumnarFeatures.encodeDelimited = function encodeDelimited(message, writer) {
-            return this.encode(message, writer).ldelim();
-        };
-
-        /**
-         * Decodes a ColumnarFeatures message from the specified reader or buffer.
-         * @function decode
-         * @memberof stt.ColumnarFeatures
-         * @static
-         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
-         * @param {number} [length] Message length if known beforehand
-         * @returns {stt.ColumnarFeatures} ColumnarFeatures
-         * @throws {Error} If the payload is not a reader or valid buffer
-         * @throws {$protobuf.util.ProtocolError} If required fields are missing
-         */
-        ColumnarFeatures.decode = function decode(reader, length, error) {
-            if (!(reader instanceof $Reader))
-                reader = $Reader.create(reader);
-            let end = length === undefined ? reader.len : reader.pos + length, message = new $root.stt.ColumnarFeatures();
-            while (reader.pos < end) {
-                let tag = reader.uint32();
-                if (tag === error)
-                    break;
-                switch (tag >>> 3) {
-                case 1: {
-                        message.featureCount = reader.uint32();
-                        break;
-                    }
-                case 2: {
-                        message.geometryType = reader.int32();
-                        break;
-                    }
-                case 3: {
-                        if (!(message.featureIds && message.featureIds.length))
-                            message.featureIds = [];
-                        if ((tag & 7) === 2) {
-                            let end2 = reader.uint32() + reader.pos;
-                            while (reader.pos < end2)
-                                message.featureIds.push(reader.uint64());
-                        } else
-                            message.featureIds.push(reader.uint64());
-                        break;
-                    }
-                case 4: {
-                        if (!(message.geometry && message.geometry.length))
-                            message.geometry = [];
-                        if ((tag & 7) === 2) {
-                            let end2 = reader.uint32() + reader.pos;
-                            while (reader.pos < end2)
-                                message.geometry.push(reader.sint32());
-                        } else
-                            message.geometry.push(reader.sint32());
-                        break;
-                    }
-                case 5: {
-                        if (!(message.geometryOffsets && message.geometryOffsets.length))
-                            message.geometryOffsets = [];
-                        if ((tag & 7) === 2) {
-                            let end2 = reader.uint32() + reader.pos;
-                            while (reader.pos < end2)
-                                message.geometryOffsets.push(reader.uint32());
-                        } else
-                            message.geometryOffsets.push(reader.uint32());
-                        break;
-                    }
-                case 6: {
-                        if (!(message.startTimes && message.startTimes.length))
-                            message.startTimes = [];
-                        if ((tag & 7) === 2) {
-                            let end2 = reader.uint32() + reader.pos;
-                            while (reader.pos < end2)
-                                message.startTimes.push(reader.sint64());
-                        } else
-                            message.startTimes.push(reader.sint64());
-                        break;
-                    }
-                case 7: {
-                        if (!(message.endTimes && message.endTimes.length))
-                            message.endTimes = [];
-                        if ((tag & 7) === 2) {
-                            let end2 = reader.uint32() + reader.pos;
-                            while (reader.pos < end2)
-                                message.endTimes.push(reader.sint64());
-                        } else
-                            message.endTimes.push(reader.sint64());
-                        break;
-                    }
-                case 8: {
-                        if (!(message.numericProperties && message.numericProperties.length))
-                            message.numericProperties = [];
-                        message.numericProperties.push($root.stt.NumericColumn.decode(reader, reader.uint32()));
-                        break;
-                    }
-                case 9: {
-                        if (!(message.categoricalProperties && message.categoricalProperties.length))
-                            message.categoricalProperties = [];
-                        message.categoricalProperties.push($root.stt.CategoricalColumn.decode(reader, reader.uint32()));
-                        break;
-                    }
-                case 10: {
-                        if (!(message.ringOffsets && message.ringOffsets.length))
-                            message.ringOffsets = [];
-                        if ((tag & 7) === 2) {
-                            let end2 = reader.uint32() + reader.pos;
-                            while (reader.pos < end2)
-                                message.ringOffsets.push(reader.uint32());
-                        } else
-                            message.ringOffsets.push(reader.uint32());
-                        break;
-                    }
-                case 11: {
-                        if (!(message.ringOffsetsOffsets && message.ringOffsetsOffsets.length))
-                            message.ringOffsetsOffsets = [];
-                        if ((tag & 7) === 2) {
-                            let end2 = reader.uint32() + reader.pos;
-                            while (reader.pos < end2)
-                                message.ringOffsetsOffsets.push(reader.uint32());
-                        } else
-                            message.ringOffsetsOffsets.push(reader.uint32());
-                        break;
-                    }
-                default:
-                    reader.skipType(tag & 7);
-                    break;
-                }
-            }
-            return message;
-        };
-
-        /**
-         * Decodes a ColumnarFeatures message from the specified reader or buffer, length delimited.
-         * @function decodeDelimited
-         * @memberof stt.ColumnarFeatures
-         * @static
-         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
-         * @returns {stt.ColumnarFeatures} ColumnarFeatures
-         * @throws {Error} If the payload is not a reader or valid buffer
-         * @throws {$protobuf.util.ProtocolError} If required fields are missing
-         */
-        ColumnarFeatures.decodeDelimited = function decodeDelimited(reader) {
-            if (!(reader instanceof $Reader))
-                reader = new $Reader(reader);
-            return this.decode(reader, reader.uint32());
-        };
-
-        /**
-         * Verifies a ColumnarFeatures message.
-         * @function verify
-         * @memberof stt.ColumnarFeatures
-         * @static
-         * @param {Object.<string,*>} message Plain object to verify
-         * @returns {string|null} `null` if valid, otherwise the reason why it is not
-         */
-        ColumnarFeatures.verify = function verify(message) {
-            if (typeof message !== "object" || message === null)
-                return "object expected";
-            if (message.featureCount != null && message.hasOwnProperty("featureCount"))
-                if (!$util.isInteger(message.featureCount))
-                    return "featureCount: integer expected";
-            if (message.geometryType != null && message.hasOwnProperty("geometryType"))
-                switch (message.geometryType) {
-                default:
-                    return "geometryType: enum value expected";
-                case 0:
-                case 1:
-                case 2:
-                    break;
-                }
-            if (message.featureIds != null && message.hasOwnProperty("featureIds")) {
-                if (!Array.isArray(message.featureIds))
-                    return "featureIds: array expected";
-                for (let i = 0; i < message.featureIds.length; ++i)
-                    if (!$util.isInteger(message.featureIds[i]) && !(message.featureIds[i] && $util.isInteger(message.featureIds[i].low) && $util.isInteger(message.featureIds[i].high)))
-                        return "featureIds: integer|Long[] expected";
-            }
-            if (message.geometry != null && message.hasOwnProperty("geometry")) {
-                if (!Array.isArray(message.geometry))
-                    return "geometry: array expected";
-                for (let i = 0; i < message.geometry.length; ++i)
-                    if (!$util.isInteger(message.geometry[i]))
-                        return "geometry: integer[] expected";
-            }
-            if (message.geometryOffsets != null && message.hasOwnProperty("geometryOffsets")) {
-                if (!Array.isArray(message.geometryOffsets))
-                    return "geometryOffsets: array expected";
-                for (let i = 0; i < message.geometryOffsets.length; ++i)
-                    if (!$util.isInteger(message.geometryOffsets[i]))
-                        return "geometryOffsets: integer[] expected";
-            }
-            if (message.startTimes != null && message.hasOwnProperty("startTimes")) {
-                if (!Array.isArray(message.startTimes))
-                    return "startTimes: array expected";
-                for (let i = 0; i < message.startTimes.length; ++i)
-                    if (!$util.isInteger(message.startTimes[i]) && !(message.startTimes[i] && $util.isInteger(message.startTimes[i].low) && $util.isInteger(message.startTimes[i].high)))
-                        return "startTimes: integer|Long[] expected";
-            }
-            if (message.endTimes != null && message.hasOwnProperty("endTimes")) {
-                if (!Array.isArray(message.endTimes))
-                    return "endTimes: array expected";
-                for (let i = 0; i < message.endTimes.length; ++i)
-                    if (!$util.isInteger(message.endTimes[i]) && !(message.endTimes[i] && $util.isInteger(message.endTimes[i].low) && $util.isInteger(message.endTimes[i].high)))
-                        return "endTimes: integer|Long[] expected";
-            }
-            if (message.numericProperties != null && message.hasOwnProperty("numericProperties")) {
-                if (!Array.isArray(message.numericProperties))
-                    return "numericProperties: array expected";
-                for (let i = 0; i < message.numericProperties.length; ++i) {
-                    let error = $root.stt.NumericColumn.verify(message.numericProperties[i]);
-                    if (error)
-                        return "numericProperties." + error;
-                }
-            }
-            if (message.categoricalProperties != null && message.hasOwnProperty("categoricalProperties")) {
-                if (!Array.isArray(message.categoricalProperties))
-                    return "categoricalProperties: array expected";
-                for (let i = 0; i < message.categoricalProperties.length; ++i) {
-                    let error = $root.stt.CategoricalColumn.verify(message.categoricalProperties[i]);
-                    if (error)
-                        return "categoricalProperties." + error;
-                }
-            }
-            if (message.ringOffsets != null && message.hasOwnProperty("ringOffsets")) {
-                if (!Array.isArray(message.ringOffsets))
-                    return "ringOffsets: array expected";
-                for (let i = 0; i < message.ringOffsets.length; ++i)
-                    if (!$util.isInteger(message.ringOffsets[i]))
-                        return "ringOffsets: integer[] expected";
-            }
-            if (message.ringOffsetsOffsets != null && message.hasOwnProperty("ringOffsetsOffsets")) {
-                if (!Array.isArray(message.ringOffsetsOffsets))
-                    return "ringOffsetsOffsets: array expected";
-                for (let i = 0; i < message.ringOffsetsOffsets.length; ++i)
-                    if (!$util.isInteger(message.ringOffsetsOffsets[i]))
-                        return "ringOffsetsOffsets: integer[] expected";
-            }
-            return null;
-        };
-
-        /**
-         * Creates a ColumnarFeatures message from a plain object. Also converts values to their respective internal types.
-         * @function fromObject
-         * @memberof stt.ColumnarFeatures
-         * @static
-         * @param {Object.<string,*>} object Plain object
-         * @returns {stt.ColumnarFeatures} ColumnarFeatures
-         */
-        ColumnarFeatures.fromObject = function fromObject(object) {
-            if (object instanceof $root.stt.ColumnarFeatures)
-                return object;
-            let message = new $root.stt.ColumnarFeatures();
-            if (object.featureCount != null)
-                message.featureCount = object.featureCount >>> 0;
-            switch (object.geometryType) {
-            default:
-                if (typeof object.geometryType === "number") {
-                    message.geometryType = object.geometryType;
-                    break;
-                }
-                break;
-            case "POINT":
-            case 0:
-                message.geometryType = 0;
-                break;
-            case "LINESTRING":
-            case 1:
-                message.geometryType = 1;
-                break;
-            case "POLYGON":
-            case 2:
-                message.geometryType = 2;
-                break;
-            }
-            if (object.featureIds) {
-                if (!Array.isArray(object.featureIds))
-                    throw TypeError(".stt.ColumnarFeatures.featureIds: array expected");
-                message.featureIds = [];
-                for (let i = 0; i < object.featureIds.length; ++i)
-                    if ($util.Long)
-                        (message.featureIds[i] = $util.Long.fromValue(object.featureIds[i])).unsigned = true;
-                    else if (typeof object.featureIds[i] === "string")
-                        message.featureIds[i] = parseInt(object.featureIds[i], 10);
-                    else if (typeof object.featureIds[i] === "number")
-                        message.featureIds[i] = object.featureIds[i];
-                    else if (typeof object.featureIds[i] === "object")
-                        message.featureIds[i] = new $util.LongBits(object.featureIds[i].low >>> 0, object.featureIds[i].high >>> 0).toNumber(true);
-            }
-            if (object.geometry) {
-                if (!Array.isArray(object.geometry))
-                    throw TypeError(".stt.ColumnarFeatures.geometry: array expected");
-                message.geometry = [];
-                for (let i = 0; i < object.geometry.length; ++i)
-                    message.geometry[i] = object.geometry[i] | 0;
-            }
-            if (object.geometryOffsets) {
-                if (!Array.isArray(object.geometryOffsets))
-                    throw TypeError(".stt.ColumnarFeatures.geometryOffsets: array expected");
-                message.geometryOffsets = [];
-                for (let i = 0; i < object.geometryOffsets.length; ++i)
-                    message.geometryOffsets[i] = object.geometryOffsets[i] >>> 0;
-            }
-            if (object.startTimes) {
-                if (!Array.isArray(object.startTimes))
-                    throw TypeError(".stt.ColumnarFeatures.startTimes: array expected");
-                message.startTimes = [];
-                for (let i = 0; i < object.startTimes.length; ++i)
-                    if ($util.Long)
-                        (message.startTimes[i] = $util.Long.fromValue(object.startTimes[i])).unsigned = false;
-                    else if (typeof object.startTimes[i] === "string")
-                        message.startTimes[i] = parseInt(object.startTimes[i], 10);
-                    else if (typeof object.startTimes[i] === "number")
-                        message.startTimes[i] = object.startTimes[i];
-                    else if (typeof object.startTimes[i] === "object")
-                        message.startTimes[i] = new $util.LongBits(object.startTimes[i].low >>> 0, object.startTimes[i].high >>> 0).toNumber();
-            }
-            if (object.endTimes) {
-                if (!Array.isArray(object.endTimes))
-                    throw TypeError(".stt.ColumnarFeatures.endTimes: array expected");
-                message.endTimes = [];
-                for (let i = 0; i < object.endTimes.length; ++i)
-                    if ($util.Long)
-                        (message.endTimes[i] = $util.Long.fromValue(object.endTimes[i])).unsigned = false;
-                    else if (typeof object.endTimes[i] === "string")
-                        message.endTimes[i] = parseInt(object.endTimes[i], 10);
-                    else if (typeof object.endTimes[i] === "number")
-                        message.endTimes[i] = object.endTimes[i];
-                    else if (typeof object.endTimes[i] === "object")
-                        message.endTimes[i] = new $util.LongBits(object.endTimes[i].low >>> 0, object.endTimes[i].high >>> 0).toNumber();
-            }
-            if (object.numericProperties) {
-                if (!Array.isArray(object.numericProperties))
-                    throw TypeError(".stt.ColumnarFeatures.numericProperties: array expected");
-                message.numericProperties = [];
-                for (let i = 0; i < object.numericProperties.length; ++i) {
-                    if (typeof object.numericProperties[i] !== "object")
-                        throw TypeError(".stt.ColumnarFeatures.numericProperties: object expected");
-                    message.numericProperties[i] = $root.stt.NumericColumn.fromObject(object.numericProperties[i]);
-                }
-            }
-            if (object.categoricalProperties) {
-                if (!Array.isArray(object.categoricalProperties))
-                    throw TypeError(".stt.ColumnarFeatures.categoricalProperties: array expected");
-                message.categoricalProperties = [];
-                for (let i = 0; i < object.categoricalProperties.length; ++i) {
-                    if (typeof object.categoricalProperties[i] !== "object")
-                        throw TypeError(".stt.ColumnarFeatures.categoricalProperties: object expected");
-                    message.categoricalProperties[i] = $root.stt.CategoricalColumn.fromObject(object.categoricalProperties[i]);
-                }
-            }
-            if (object.ringOffsets) {
-                if (!Array.isArray(object.ringOffsets))
-                    throw TypeError(".stt.ColumnarFeatures.ringOffsets: array expected");
-                message.ringOffsets = [];
-                for (let i = 0; i < object.ringOffsets.length; ++i)
-                    message.ringOffsets[i] = object.ringOffsets[i] >>> 0;
-            }
-            if (object.ringOffsetsOffsets) {
-                if (!Array.isArray(object.ringOffsetsOffsets))
-                    throw TypeError(".stt.ColumnarFeatures.ringOffsetsOffsets: array expected");
-                message.ringOffsetsOffsets = [];
-                for (let i = 0; i < object.ringOffsetsOffsets.length; ++i)
-                    message.ringOffsetsOffsets[i] = object.ringOffsetsOffsets[i] >>> 0;
-            }
-            return message;
-        };
-
-        /**
-         * Creates a plain object from a ColumnarFeatures message. Also converts values to other types if specified.
-         * @function toObject
-         * @memberof stt.ColumnarFeatures
-         * @static
-         * @param {stt.ColumnarFeatures} message ColumnarFeatures
-         * @param {$protobuf.IConversionOptions} [options] Conversion options
-         * @returns {Object.<string,*>} Plain object
-         */
-        ColumnarFeatures.toObject = function toObject(message, options) {
-            if (!options)
-                options = {};
-            let object = {};
-            if (options.arrays || options.defaults) {
-                object.featureIds = [];
-                object.geometry = [];
-                object.geometryOffsets = [];
-                object.startTimes = [];
-                object.endTimes = [];
-                object.numericProperties = [];
-                object.categoricalProperties = [];
-                object.ringOffsets = [];
-                object.ringOffsetsOffsets = [];
-            }
-            if (options.defaults) {
-                object.featureCount = 0;
-                object.geometryType = options.enums === String ? "POINT" : 0;
-            }
-            if (message.featureCount != null && message.hasOwnProperty("featureCount"))
-                object.featureCount = message.featureCount;
-            if (message.geometryType != null && message.hasOwnProperty("geometryType"))
-                object.geometryType = options.enums === String ? $root.stt.Feature.GeomType[message.geometryType] === undefined ? message.geometryType : $root.stt.Feature.GeomType[message.geometryType] : message.geometryType;
-            if (message.featureIds && message.featureIds.length) {
-                object.featureIds = [];
-                for (let j = 0; j < message.featureIds.length; ++j)
-                    if (typeof message.featureIds[j] === "number")
-                        object.featureIds[j] = options.longs === String ? String(message.featureIds[j]) : message.featureIds[j];
-                    else
-                        object.featureIds[j] = options.longs === String ? $util.Long.prototype.toString.call(message.featureIds[j]) : options.longs === Number ? new $util.LongBits(message.featureIds[j].low >>> 0, message.featureIds[j].high >>> 0).toNumber(true) : message.featureIds[j];
-            }
-            if (message.geometry && message.geometry.length) {
-                object.geometry = [];
-                for (let j = 0; j < message.geometry.length; ++j)
-                    object.geometry[j] = message.geometry[j];
-            }
-            if (message.geometryOffsets && message.geometryOffsets.length) {
-                object.geometryOffsets = [];
-                for (let j = 0; j < message.geometryOffsets.length; ++j)
-                    object.geometryOffsets[j] = message.geometryOffsets[j];
-            }
-            if (message.startTimes && message.startTimes.length) {
-                object.startTimes = [];
-                for (let j = 0; j < message.startTimes.length; ++j)
-                    if (typeof message.startTimes[j] === "number")
-                        object.startTimes[j] = options.longs === String ? String(message.startTimes[j]) : message.startTimes[j];
-                    else
-                        object.startTimes[j] = options.longs === String ? $util.Long.prototype.toString.call(message.startTimes[j]) : options.longs === Number ? new $util.LongBits(message.startTimes[j].low >>> 0, message.startTimes[j].high >>> 0).toNumber() : message.startTimes[j];
-            }
-            if (message.endTimes && message.endTimes.length) {
-                object.endTimes = [];
-                for (let j = 0; j < message.endTimes.length; ++j)
-                    if (typeof message.endTimes[j] === "number")
-                        object.endTimes[j] = options.longs === String ? String(message.endTimes[j]) : message.endTimes[j];
-                    else
-                        object.endTimes[j] = options.longs === String ? $util.Long.prototype.toString.call(message.endTimes[j]) : options.longs === Number ? new $util.LongBits(message.endTimes[j].low >>> 0, message.endTimes[j].high >>> 0).toNumber() : message.endTimes[j];
-            }
-            if (message.numericProperties && message.numericProperties.length) {
-                object.numericProperties = [];
-                for (let j = 0; j < message.numericProperties.length; ++j)
-                    object.numericProperties[j] = $root.stt.NumericColumn.toObject(message.numericProperties[j], options);
-            }
-            if (message.categoricalProperties && message.categoricalProperties.length) {
-                object.categoricalProperties = [];
-                for (let j = 0; j < message.categoricalProperties.length; ++j)
-                    object.categoricalProperties[j] = $root.stt.CategoricalColumn.toObject(message.categoricalProperties[j], options);
-            }
-            if (message.ringOffsets && message.ringOffsets.length) {
-                object.ringOffsets = [];
-                for (let j = 0; j < message.ringOffsets.length; ++j)
-                    object.ringOffsets[j] = message.ringOffsets[j];
-            }
-            if (message.ringOffsetsOffsets && message.ringOffsetsOffsets.length) {
-                object.ringOffsetsOffsets = [];
-                for (let j = 0; j < message.ringOffsetsOffsets.length; ++j)
-                    object.ringOffsetsOffsets[j] = message.ringOffsetsOffsets[j];
-            }
-            return object;
-        };
-
-        /**
-         * Converts this ColumnarFeatures to JSON.
-         * @function toJSON
-         * @memberof stt.ColumnarFeatures
-         * @instance
-         * @returns {Object.<string,*>} JSON object
-         */
-        ColumnarFeatures.prototype.toJSON = function toJSON() {
-            return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
-        };
-
-        /**
-         * Gets the default type url for ColumnarFeatures
-         * @function getTypeUrl
-         * @memberof stt.ColumnarFeatures
-         * @static
-         * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
-         * @returns {string} The default type url
-         */
-        ColumnarFeatures.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
-            if (typeUrlPrefix === undefined) {
-                typeUrlPrefix = "type.googleapis.com";
-            }
-            return typeUrlPrefix + "/stt.ColumnarFeatures";
-        };
-
-        return ColumnarFeatures;
-    })();
-
-    stt.NumericColumn = (function() {
-
-        /**
-         * Properties of a NumericColumn.
-         * @memberof stt
-         * @interface INumericColumn
-         * @property {string|null} [name] NumericColumn name
-         * @property {Array.<number>|null} [values] NumericColumn values
-         * @property {Array.<number>|null} [valuesF64] NumericColumn valuesF64
-         */
-
-        /**
-         * Constructs a new NumericColumn.
-         * @memberof stt
-         * @classdesc Represents a NumericColumn.
-         * @implements INumericColumn
-         * @constructor
-         * @param {stt.INumericColumn=} [properties] Properties to set
-         */
-        function NumericColumn(properties) {
-            this.values = [];
-            this.valuesF64 = [];
-            if (properties)
-                for (let keys = Object.keys(properties), i = 0; i < keys.length; ++i)
-                    if (properties[keys[i]] != null)
-                        this[keys[i]] = properties[keys[i]];
-        }
-
-        /**
-         * NumericColumn name.
-         * @member {string} name
-         * @memberof stt.NumericColumn
-         * @instance
-         */
-        NumericColumn.prototype.name = "";
-
-        /**
-         * NumericColumn values.
-         * @member {Array.<number>} values
-         * @memberof stt.NumericColumn
-         * @instance
-         */
-        NumericColumn.prototype.values = $util.emptyArray;
-
-        /**
-         * NumericColumn valuesF64.
-         * @member {Array.<number>} valuesF64
-         * @memberof stt.NumericColumn
-         * @instance
-         */
-        NumericColumn.prototype.valuesF64 = $util.emptyArray;
-
-        /**
-         * Creates a new NumericColumn instance using the specified properties.
-         * @function create
-         * @memberof stt.NumericColumn
-         * @static
-         * @param {stt.INumericColumn=} [properties] Properties to set
-         * @returns {stt.NumericColumn} NumericColumn instance
-         */
-        NumericColumn.create = function create(properties) {
-            return new NumericColumn(properties);
-        };
-
-        /**
-         * Encodes the specified NumericColumn message. Does not implicitly {@link stt.NumericColumn.verify|verify} messages.
-         * @function encode
-         * @memberof stt.NumericColumn
-         * @static
-         * @param {stt.INumericColumn} message NumericColumn message or plain object to encode
-         * @param {$protobuf.Writer} [writer] Writer to encode to
-         * @returns {$protobuf.Writer} Writer
-         */
-        NumericColumn.encode = function encode(message, writer) {
-            if (!writer)
-                writer = $Writer.create();
-            if (message.name != null && Object.hasOwnProperty.call(message, "name"))
-                writer.uint32(/* id 1, wireType 2 =*/10).string(message.name);
-            if (message.values != null && message.values.length) {
-                writer.uint32(/* id 2, wireType 2 =*/18).fork();
-                for (let i = 0; i < message.values.length; ++i)
-                    writer.float(message.values[i]);
-                writer.ldelim();
-            }
-            if (message.valuesF64 != null && message.valuesF64.length) {
-                writer.uint32(/* id 3, wireType 2 =*/26).fork();
-                for (let i = 0; i < message.valuesF64.length; ++i)
-                    writer.double(message.valuesF64[i]);
-                writer.ldelim();
-            }
-            return writer;
-        };
-
-        /**
-         * Encodes the specified NumericColumn message, length delimited. Does not implicitly {@link stt.NumericColumn.verify|verify} messages.
-         * @function encodeDelimited
-         * @memberof stt.NumericColumn
-         * @static
-         * @param {stt.INumericColumn} message NumericColumn message or plain object to encode
-         * @param {$protobuf.Writer} [writer] Writer to encode to
-         * @returns {$protobuf.Writer} Writer
-         */
-        NumericColumn.encodeDelimited = function encodeDelimited(message, writer) {
-            return this.encode(message, writer).ldelim();
-        };
-
-        /**
-         * Decodes a NumericColumn message from the specified reader or buffer.
-         * @function decode
-         * @memberof stt.NumericColumn
-         * @static
-         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
-         * @param {number} [length] Message length if known beforehand
-         * @returns {stt.NumericColumn} NumericColumn
-         * @throws {Error} If the payload is not a reader or valid buffer
-         * @throws {$protobuf.util.ProtocolError} If required fields are missing
-         */
-        NumericColumn.decode = function decode(reader, length, error) {
-            if (!(reader instanceof $Reader))
-                reader = $Reader.create(reader);
-            let end = length === undefined ? reader.len : reader.pos + length, message = new $root.stt.NumericColumn();
-            while (reader.pos < end) {
-                let tag = reader.uint32();
-                if (tag === error)
-                    break;
-                switch (tag >>> 3) {
-                case 1: {
-                        message.name = reader.string();
-                        break;
-                    }
-                case 2: {
-                        if (!(message.values && message.values.length))
-                            message.values = [];
-                        if ((tag & 7) === 2) {
-                            let end2 = reader.uint32() + reader.pos;
-                            while (reader.pos < end2)
-                                message.values.push(reader.float());
-                        } else
-                            message.values.push(reader.float());
-                        break;
-                    }
-                case 3: {
-                        if (!(message.valuesF64 && message.valuesF64.length))
-                            message.valuesF64 = [];
-                        if ((tag & 7) === 2) {
-                            let end2 = reader.uint32() + reader.pos;
-                            while (reader.pos < end2)
-                                message.valuesF64.push(reader.double());
-                        } else
-                            message.valuesF64.push(reader.double());
-                        break;
-                    }
-                default:
-                    reader.skipType(tag & 7);
-                    break;
-                }
-            }
-            return message;
-        };
-
-        /**
-         * Decodes a NumericColumn message from the specified reader or buffer, length delimited.
-         * @function decodeDelimited
-         * @memberof stt.NumericColumn
-         * @static
-         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
-         * @returns {stt.NumericColumn} NumericColumn
-         * @throws {Error} If the payload is not a reader or valid buffer
-         * @throws {$protobuf.util.ProtocolError} If required fields are missing
-         */
-        NumericColumn.decodeDelimited = function decodeDelimited(reader) {
-            if (!(reader instanceof $Reader))
-                reader = new $Reader(reader);
-            return this.decode(reader, reader.uint32());
-        };
-
-        /**
-         * Verifies a NumericColumn message.
-         * @function verify
-         * @memberof stt.NumericColumn
-         * @static
-         * @param {Object.<string,*>} message Plain object to verify
-         * @returns {string|null} `null` if valid, otherwise the reason why it is not
-         */
-        NumericColumn.verify = function verify(message) {
-            if (typeof message !== "object" || message === null)
-                return "object expected";
-            if (message.name != null && message.hasOwnProperty("name"))
-                if (!$util.isString(message.name))
-                    return "name: string expected";
-            if (message.values != null && message.hasOwnProperty("values")) {
-                if (!Array.isArray(message.values))
-                    return "values: array expected";
-                for (let i = 0; i < message.values.length; ++i)
-                    if (typeof message.values[i] !== "number")
-                        return "values: number[] expected";
-            }
-            if (message.valuesF64 != null && message.hasOwnProperty("valuesF64")) {
-                if (!Array.isArray(message.valuesF64))
-                    return "valuesF64: array expected";
-                for (let i = 0; i < message.valuesF64.length; ++i)
-                    if (typeof message.valuesF64[i] !== "number")
-                        return "valuesF64: number[] expected";
-            }
-            return null;
-        };
-
-        /**
-         * Creates a NumericColumn message from a plain object. Also converts values to their respective internal types.
-         * @function fromObject
-         * @memberof stt.NumericColumn
-         * @static
-         * @param {Object.<string,*>} object Plain object
-         * @returns {stt.NumericColumn} NumericColumn
-         */
-        NumericColumn.fromObject = function fromObject(object) {
-            if (object instanceof $root.stt.NumericColumn)
-                return object;
-            let message = new $root.stt.NumericColumn();
-            if (object.name != null)
-                message.name = String(object.name);
-            if (object.values) {
-                if (!Array.isArray(object.values))
-                    throw TypeError(".stt.NumericColumn.values: array expected");
-                message.values = [];
-                for (let i = 0; i < object.values.length; ++i)
-                    message.values[i] = Number(object.values[i]);
-            }
-            if (object.valuesF64) {
-                if (!Array.isArray(object.valuesF64))
-                    throw TypeError(".stt.NumericColumn.valuesF64: array expected");
-                message.valuesF64 = [];
-                for (let i = 0; i < object.valuesF64.length; ++i)
-                    message.valuesF64[i] = Number(object.valuesF64[i]);
-            }
-            return message;
-        };
-
-        /**
-         * Creates a plain object from a NumericColumn message. Also converts values to other types if specified.
-         * @function toObject
-         * @memberof stt.NumericColumn
-         * @static
-         * @param {stt.NumericColumn} message NumericColumn
-         * @param {$protobuf.IConversionOptions} [options] Conversion options
-         * @returns {Object.<string,*>} Plain object
-         */
-        NumericColumn.toObject = function toObject(message, options) {
-            if (!options)
-                options = {};
-            let object = {};
-            if (options.arrays || options.defaults) {
-                object.values = [];
-                object.valuesF64 = [];
-            }
-            if (options.defaults)
-                object.name = "";
-            if (message.name != null && message.hasOwnProperty("name"))
-                object.name = message.name;
-            if (message.values && message.values.length) {
-                object.values = [];
-                for (let j = 0; j < message.values.length; ++j)
-                    object.values[j] = options.json && !isFinite(message.values[j]) ? String(message.values[j]) : message.values[j];
-            }
-            if (message.valuesF64 && message.valuesF64.length) {
-                object.valuesF64 = [];
-                for (let j = 0; j < message.valuesF64.length; ++j)
-                    object.valuesF64[j] = options.json && !isFinite(message.valuesF64[j]) ? String(message.valuesF64[j]) : message.valuesF64[j];
-            }
-            return object;
-        };
-
-        /**
-         * Converts this NumericColumn to JSON.
-         * @function toJSON
-         * @memberof stt.NumericColumn
-         * @instance
-         * @returns {Object.<string,*>} JSON object
-         */
-        NumericColumn.prototype.toJSON = function toJSON() {
-            return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
-        };
-
-        /**
-         * Gets the default type url for NumericColumn
-         * @function getTypeUrl
-         * @memberof stt.NumericColumn
-         * @static
-         * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
-         * @returns {string} The default type url
-         */
-        NumericColumn.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
-            if (typeUrlPrefix === undefined) {
-                typeUrlPrefix = "type.googleapis.com";
-            }
-            return typeUrlPrefix + "/stt.NumericColumn";
-        };
-
-        return NumericColumn;
-    })();
-
-    stt.CategoricalColumn = (function() {
-
-        /**
-         * Properties of a CategoricalColumn.
-         * @memberof stt
-         * @interface ICategoricalColumn
-         * @property {string|null} [name] CategoricalColumn name
-         * @property {Array.<string>|null} [categories] CategoricalColumn categories
-         * @property {Uint8Array|null} [indices] CategoricalColumn indices
-         */
-
-        /**
-         * Constructs a new CategoricalColumn.
-         * @memberof stt
-         * @classdesc Represents a CategoricalColumn.
-         * @implements ICategoricalColumn
-         * @constructor
-         * @param {stt.ICategoricalColumn=} [properties] Properties to set
-         */
-        function CategoricalColumn(properties) {
-            this.categories = [];
-            if (properties)
-                for (let keys = Object.keys(properties), i = 0; i < keys.length; ++i)
-                    if (properties[keys[i]] != null)
-                        this[keys[i]] = properties[keys[i]];
-        }
-
-        /**
-         * CategoricalColumn name.
-         * @member {string} name
-         * @memberof stt.CategoricalColumn
-         * @instance
-         */
-        CategoricalColumn.prototype.name = "";
-
-        /**
-         * CategoricalColumn categories.
-         * @member {Array.<string>} categories
-         * @memberof stt.CategoricalColumn
-         * @instance
-         */
-        CategoricalColumn.prototype.categories = $util.emptyArray;
-
-        /**
-         * CategoricalColumn indices.
-         * @member {Uint8Array} indices
-         * @memberof stt.CategoricalColumn
-         * @instance
-         */
-        CategoricalColumn.prototype.indices = $util.newBuffer([]);
-
-        /**
-         * Creates a new CategoricalColumn instance using the specified properties.
-         * @function create
-         * @memberof stt.CategoricalColumn
-         * @static
-         * @param {stt.ICategoricalColumn=} [properties] Properties to set
-         * @returns {stt.CategoricalColumn} CategoricalColumn instance
-         */
-        CategoricalColumn.create = function create(properties) {
-            return new CategoricalColumn(properties);
-        };
-
-        /**
-         * Encodes the specified CategoricalColumn message. Does not implicitly {@link stt.CategoricalColumn.verify|verify} messages.
-         * @function encode
-         * @memberof stt.CategoricalColumn
-         * @static
-         * @param {stt.ICategoricalColumn} message CategoricalColumn message or plain object to encode
-         * @param {$protobuf.Writer} [writer] Writer to encode to
-         * @returns {$protobuf.Writer} Writer
-         */
-        CategoricalColumn.encode = function encode(message, writer) {
-            if (!writer)
-                writer = $Writer.create();
-            if (message.name != null && Object.hasOwnProperty.call(message, "name"))
-                writer.uint32(/* id 1, wireType 2 =*/10).string(message.name);
-            if (message.categories != null && message.categories.length)
-                for (let i = 0; i < message.categories.length; ++i)
-                    writer.uint32(/* id 2, wireType 2 =*/18).string(message.categories[i]);
-            if (message.indices != null && Object.hasOwnProperty.call(message, "indices"))
-                writer.uint32(/* id 3, wireType 2 =*/26).bytes(message.indices);
-            return writer;
-        };
-
-        /**
-         * Encodes the specified CategoricalColumn message, length delimited. Does not implicitly {@link stt.CategoricalColumn.verify|verify} messages.
-         * @function encodeDelimited
-         * @memberof stt.CategoricalColumn
-         * @static
-         * @param {stt.ICategoricalColumn} message CategoricalColumn message or plain object to encode
-         * @param {$protobuf.Writer} [writer] Writer to encode to
-         * @returns {$protobuf.Writer} Writer
-         */
-        CategoricalColumn.encodeDelimited = function encodeDelimited(message, writer) {
-            return this.encode(message, writer).ldelim();
-        };
-
-        /**
-         * Decodes a CategoricalColumn message from the specified reader or buffer.
-         * @function decode
-         * @memberof stt.CategoricalColumn
-         * @static
-         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
-         * @param {number} [length] Message length if known beforehand
-         * @returns {stt.CategoricalColumn} CategoricalColumn
-         * @throws {Error} If the payload is not a reader or valid buffer
-         * @throws {$protobuf.util.ProtocolError} If required fields are missing
-         */
-        CategoricalColumn.decode = function decode(reader, length, error) {
-            if (!(reader instanceof $Reader))
-                reader = $Reader.create(reader);
-            let end = length === undefined ? reader.len : reader.pos + length, message = new $root.stt.CategoricalColumn();
-            while (reader.pos < end) {
-                let tag = reader.uint32();
-                if (tag === error)
-                    break;
-                switch (tag >>> 3) {
-                case 1: {
-                        message.name = reader.string();
-                        break;
-                    }
-                case 2: {
-                        if (!(message.categories && message.categories.length))
-                            message.categories = [];
-                        message.categories.push(reader.string());
-                        break;
-                    }
-                case 3: {
-                        message.indices = reader.bytes();
-                        break;
-                    }
-                default:
-                    reader.skipType(tag & 7);
-                    break;
-                }
-            }
-            return message;
-        };
-
-        /**
-         * Decodes a CategoricalColumn message from the specified reader or buffer, length delimited.
-         * @function decodeDelimited
-         * @memberof stt.CategoricalColumn
-         * @static
-         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
-         * @returns {stt.CategoricalColumn} CategoricalColumn
-         * @throws {Error} If the payload is not a reader or valid buffer
-         * @throws {$protobuf.util.ProtocolError} If required fields are missing
-         */
-        CategoricalColumn.decodeDelimited = function decodeDelimited(reader) {
-            if (!(reader instanceof $Reader))
-                reader = new $Reader(reader);
-            return this.decode(reader, reader.uint32());
-        };
-
-        /**
-         * Verifies a CategoricalColumn message.
-         * @function verify
-         * @memberof stt.CategoricalColumn
-         * @static
-         * @param {Object.<string,*>} message Plain object to verify
-         * @returns {string|null} `null` if valid, otherwise the reason why it is not
-         */
-        CategoricalColumn.verify = function verify(message) {
-            if (typeof message !== "object" || message === null)
-                return "object expected";
-            if (message.name != null && message.hasOwnProperty("name"))
-                if (!$util.isString(message.name))
-                    return "name: string expected";
-            if (message.categories != null && message.hasOwnProperty("categories")) {
-                if (!Array.isArray(message.categories))
-                    return "categories: array expected";
-                for (let i = 0; i < message.categories.length; ++i)
-                    if (!$util.isString(message.categories[i]))
-                        return "categories: string[] expected";
-            }
-            if (message.indices != null && message.hasOwnProperty("indices"))
-                if (!(message.indices && typeof message.indices.length === "number" || $util.isString(message.indices)))
-                    return "indices: buffer expected";
-            return null;
-        };
-
-        /**
-         * Creates a CategoricalColumn message from a plain object. Also converts values to their respective internal types.
-         * @function fromObject
-         * @memberof stt.CategoricalColumn
-         * @static
-         * @param {Object.<string,*>} object Plain object
-         * @returns {stt.CategoricalColumn} CategoricalColumn
-         */
-        CategoricalColumn.fromObject = function fromObject(object) {
-            if (object instanceof $root.stt.CategoricalColumn)
-                return object;
-            let message = new $root.stt.CategoricalColumn();
-            if (object.name != null)
-                message.name = String(object.name);
-            if (object.categories) {
-                if (!Array.isArray(object.categories))
-                    throw TypeError(".stt.CategoricalColumn.categories: array expected");
-                message.categories = [];
-                for (let i = 0; i < object.categories.length; ++i)
-                    message.categories[i] = String(object.categories[i]);
-            }
-            if (object.indices != null)
-                if (typeof object.indices === "string")
-                    $util.base64.decode(object.indices, message.indices = $util.newBuffer($util.base64.length(object.indices)), 0);
-                else if (object.indices.length >= 0)
-                    message.indices = object.indices;
-            return message;
-        };
-
-        /**
-         * Creates a plain object from a CategoricalColumn message. Also converts values to other types if specified.
-         * @function toObject
-         * @memberof stt.CategoricalColumn
-         * @static
-         * @param {stt.CategoricalColumn} message CategoricalColumn
-         * @param {$protobuf.IConversionOptions} [options] Conversion options
-         * @returns {Object.<string,*>} Plain object
-         */
-        CategoricalColumn.toObject = function toObject(message, options) {
-            if (!options)
-                options = {};
-            let object = {};
-            if (options.arrays || options.defaults)
-                object.categories = [];
-            if (options.defaults) {
-                object.name = "";
-                if (options.bytes === String)
-                    object.indices = "";
-                else {
-                    object.indices = [];
-                    if (options.bytes !== Array)
-                        object.indices = $util.newBuffer(object.indices);
-                }
-            }
-            if (message.name != null && message.hasOwnProperty("name"))
-                object.name = message.name;
-            if (message.categories && message.categories.length) {
-                object.categories = [];
-                for (let j = 0; j < message.categories.length; ++j)
-                    object.categories[j] = message.categories[j];
-            }
-            if (message.indices != null && message.hasOwnProperty("indices"))
-                object.indices = options.bytes === String ? $util.base64.encode(message.indices, 0, message.indices.length) : options.bytes === Array ? Array.prototype.slice.call(message.indices) : message.indices;
-            return object;
-        };
-
-        /**
-         * Converts this CategoricalColumn to JSON.
-         * @function toJSON
-         * @memberof stt.CategoricalColumn
-         * @instance
-         * @returns {Object.<string,*>} JSON object
-         */
-        CategoricalColumn.prototype.toJSON = function toJSON() {
-            return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
-        };
-
-        /**
-         * Gets the default type url for CategoricalColumn
-         * @function getTypeUrl
-         * @memberof stt.CategoricalColumn
-         * @static
-         * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
-         * @returns {string} The default type url
-         */
-        CategoricalColumn.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
-            if (typeUrlPrefix === undefined) {
-                typeUrlPrefix = "type.googleapis.com";
-            }
-            return typeUrlPrefix + "/stt.CategoricalColumn";
-        };
-
-        return CategoricalColumn;
-    })();
-
     stt.Index = (function() {
 
         /**
@@ -6267,6 +4211,2166 @@ export const stt = $root.stt = (() => {
         };
 
         return ZoomStats;
+    })();
+
+    stt.Tile = (function() {
+
+        /**
+         * Properties of a Tile.
+         * @memberof stt
+         * @interface ITile
+         * @property {number|null} [version] Tile version
+         * @property {number|Long|null} [timeStart] Tile timeStart
+         * @property {number|Long|null} [timeEnd] Tile timeEnd
+         * @property {Array.<stt.ILayer>|null} [layers] Tile layers
+         */
+
+        /**
+         * Constructs a new Tile.
+         * @memberof stt
+         * @classdesc Represents a Tile.
+         * @implements ITile
+         * @constructor
+         * @param {stt.ITile=} [properties] Properties to set
+         */
+        function Tile(properties) {
+            this.layers = [];
+            if (properties)
+                for (let keys = Object.keys(properties), i = 0; i < keys.length; ++i)
+                    if (properties[keys[i]] != null)
+                        this[keys[i]] = properties[keys[i]];
+        }
+
+        /**
+         * Tile version.
+         * @member {number} version
+         * @memberof stt.Tile
+         * @instance
+         */
+        Tile.prototype.version = 0;
+
+        /**
+         * Tile timeStart.
+         * @member {number|Long} timeStart
+         * @memberof stt.Tile
+         * @instance
+         */
+        Tile.prototype.timeStart = $util.Long ? $util.Long.fromBits(0,0,true) : 0;
+
+        /**
+         * Tile timeEnd.
+         * @member {number|Long} timeEnd
+         * @memberof stt.Tile
+         * @instance
+         */
+        Tile.prototype.timeEnd = $util.Long ? $util.Long.fromBits(0,0,true) : 0;
+
+        /**
+         * Tile layers.
+         * @member {Array.<stt.ILayer>} layers
+         * @memberof stt.Tile
+         * @instance
+         */
+        Tile.prototype.layers = $util.emptyArray;
+
+        /**
+         * Creates a new Tile instance using the specified properties.
+         * @function create
+         * @memberof stt.Tile
+         * @static
+         * @param {stt.ITile=} [properties] Properties to set
+         * @returns {stt.Tile} Tile instance
+         */
+        Tile.create = function create(properties) {
+            return new Tile(properties);
+        };
+
+        /**
+         * Encodes the specified Tile message. Does not implicitly {@link stt.Tile.verify|verify} messages.
+         * @function encode
+         * @memberof stt.Tile
+         * @static
+         * @param {stt.ITile} message Tile message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        Tile.encode = function encode(message, writer) {
+            if (!writer)
+                writer = $Writer.create();
+            if (message.version != null && Object.hasOwnProperty.call(message, "version"))
+                writer.uint32(/* id 1, wireType 0 =*/8).uint32(message.version);
+            if (message.timeStart != null && Object.hasOwnProperty.call(message, "timeStart"))
+                writer.uint32(/* id 2, wireType 0 =*/16).uint64(message.timeStart);
+            if (message.timeEnd != null && Object.hasOwnProperty.call(message, "timeEnd"))
+                writer.uint32(/* id 3, wireType 0 =*/24).uint64(message.timeEnd);
+            if (message.layers != null && message.layers.length)
+                for (let i = 0; i < message.layers.length; ++i)
+                    $root.stt.Layer.encode(message.layers[i], writer.uint32(/* id 4, wireType 2 =*/34).fork()).ldelim();
+            return writer;
+        };
+
+        /**
+         * Encodes the specified Tile message, length delimited. Does not implicitly {@link stt.Tile.verify|verify} messages.
+         * @function encodeDelimited
+         * @memberof stt.Tile
+         * @static
+         * @param {stt.ITile} message Tile message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        Tile.encodeDelimited = function encodeDelimited(message, writer) {
+            return this.encode(message, writer).ldelim();
+        };
+
+        /**
+         * Decodes a Tile message from the specified reader or buffer.
+         * @function decode
+         * @memberof stt.Tile
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @param {number} [length] Message length if known beforehand
+         * @returns {stt.Tile} Tile
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        Tile.decode = function decode(reader, length, error) {
+            if (!(reader instanceof $Reader))
+                reader = $Reader.create(reader);
+            let end = length === undefined ? reader.len : reader.pos + length, message = new $root.stt.Tile();
+            while (reader.pos < end) {
+                let tag = reader.uint32();
+                if (tag === error)
+                    break;
+                switch (tag >>> 3) {
+                case 1: {
+                        message.version = reader.uint32();
+                        break;
+                    }
+                case 2: {
+                        message.timeStart = reader.uint64();
+                        break;
+                    }
+                case 3: {
+                        message.timeEnd = reader.uint64();
+                        break;
+                    }
+                case 4: {
+                        if (!(message.layers && message.layers.length))
+                            message.layers = [];
+                        message.layers.push($root.stt.Layer.decode(reader, reader.uint32()));
+                        break;
+                    }
+                default:
+                    reader.skipType(tag & 7);
+                    break;
+                }
+            }
+            return message;
+        };
+
+        /**
+         * Decodes a Tile message from the specified reader or buffer, length delimited.
+         * @function decodeDelimited
+         * @memberof stt.Tile
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @returns {stt.Tile} Tile
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        Tile.decodeDelimited = function decodeDelimited(reader) {
+            if (!(reader instanceof $Reader))
+                reader = new $Reader(reader);
+            return this.decode(reader, reader.uint32());
+        };
+
+        /**
+         * Verifies a Tile message.
+         * @function verify
+         * @memberof stt.Tile
+         * @static
+         * @param {Object.<string,*>} message Plain object to verify
+         * @returns {string|null} `null` if valid, otherwise the reason why it is not
+         */
+        Tile.verify = function verify(message) {
+            if (typeof message !== "object" || message === null)
+                return "object expected";
+            if (message.version != null && message.hasOwnProperty("version"))
+                if (!$util.isInteger(message.version))
+                    return "version: integer expected";
+            if (message.timeStart != null && message.hasOwnProperty("timeStart"))
+                if (!$util.isInteger(message.timeStart) && !(message.timeStart && $util.isInteger(message.timeStart.low) && $util.isInteger(message.timeStart.high)))
+                    return "timeStart: integer|Long expected";
+            if (message.timeEnd != null && message.hasOwnProperty("timeEnd"))
+                if (!$util.isInteger(message.timeEnd) && !(message.timeEnd && $util.isInteger(message.timeEnd.low) && $util.isInteger(message.timeEnd.high)))
+                    return "timeEnd: integer|Long expected";
+            if (message.layers != null && message.hasOwnProperty("layers")) {
+                if (!Array.isArray(message.layers))
+                    return "layers: array expected";
+                for (let i = 0; i < message.layers.length; ++i) {
+                    let error = $root.stt.Layer.verify(message.layers[i]);
+                    if (error)
+                        return "layers." + error;
+                }
+            }
+            return null;
+        };
+
+        /**
+         * Creates a Tile message from a plain object. Also converts values to their respective internal types.
+         * @function fromObject
+         * @memberof stt.Tile
+         * @static
+         * @param {Object.<string,*>} object Plain object
+         * @returns {stt.Tile} Tile
+         */
+        Tile.fromObject = function fromObject(object) {
+            if (object instanceof $root.stt.Tile)
+                return object;
+            let message = new $root.stt.Tile();
+            if (object.version != null)
+                message.version = object.version >>> 0;
+            if (object.timeStart != null)
+                if ($util.Long)
+                    (message.timeStart = $util.Long.fromValue(object.timeStart)).unsigned = true;
+                else if (typeof object.timeStart === "string")
+                    message.timeStart = parseInt(object.timeStart, 10);
+                else if (typeof object.timeStart === "number")
+                    message.timeStart = object.timeStart;
+                else if (typeof object.timeStart === "object")
+                    message.timeStart = new $util.LongBits(object.timeStart.low >>> 0, object.timeStart.high >>> 0).toNumber(true);
+            if (object.timeEnd != null)
+                if ($util.Long)
+                    (message.timeEnd = $util.Long.fromValue(object.timeEnd)).unsigned = true;
+                else if (typeof object.timeEnd === "string")
+                    message.timeEnd = parseInt(object.timeEnd, 10);
+                else if (typeof object.timeEnd === "number")
+                    message.timeEnd = object.timeEnd;
+                else if (typeof object.timeEnd === "object")
+                    message.timeEnd = new $util.LongBits(object.timeEnd.low >>> 0, object.timeEnd.high >>> 0).toNumber(true);
+            if (object.layers) {
+                if (!Array.isArray(object.layers))
+                    throw TypeError(".stt.Tile.layers: array expected");
+                message.layers = [];
+                for (let i = 0; i < object.layers.length; ++i) {
+                    if (typeof object.layers[i] !== "object")
+                        throw TypeError(".stt.Tile.layers: object expected");
+                    message.layers[i] = $root.stt.Layer.fromObject(object.layers[i]);
+                }
+            }
+            return message;
+        };
+
+        /**
+         * Creates a plain object from a Tile message. Also converts values to other types if specified.
+         * @function toObject
+         * @memberof stt.Tile
+         * @static
+         * @param {stt.Tile} message Tile
+         * @param {$protobuf.IConversionOptions} [options] Conversion options
+         * @returns {Object.<string,*>} Plain object
+         */
+        Tile.toObject = function toObject(message, options) {
+            if (!options)
+                options = {};
+            let object = {};
+            if (options.arrays || options.defaults)
+                object.layers = [];
+            if (options.defaults) {
+                object.version = 0;
+                if ($util.Long) {
+                    let long = new $util.Long(0, 0, true);
+                    object.timeStart = options.longs === String ? long.toString() : options.longs === Number ? long.toNumber() : long;
+                } else
+                    object.timeStart = options.longs === String ? "0" : 0;
+                if ($util.Long) {
+                    let long = new $util.Long(0, 0, true);
+                    object.timeEnd = options.longs === String ? long.toString() : options.longs === Number ? long.toNumber() : long;
+                } else
+                    object.timeEnd = options.longs === String ? "0" : 0;
+            }
+            if (message.version != null && message.hasOwnProperty("version"))
+                object.version = message.version;
+            if (message.timeStart != null && message.hasOwnProperty("timeStart"))
+                if (typeof message.timeStart === "number")
+                    object.timeStart = options.longs === String ? String(message.timeStart) : message.timeStart;
+                else
+                    object.timeStart = options.longs === String ? $util.Long.prototype.toString.call(message.timeStart) : options.longs === Number ? new $util.LongBits(message.timeStart.low >>> 0, message.timeStart.high >>> 0).toNumber(true) : message.timeStart;
+            if (message.timeEnd != null && message.hasOwnProperty("timeEnd"))
+                if (typeof message.timeEnd === "number")
+                    object.timeEnd = options.longs === String ? String(message.timeEnd) : message.timeEnd;
+                else
+                    object.timeEnd = options.longs === String ? $util.Long.prototype.toString.call(message.timeEnd) : options.longs === Number ? new $util.LongBits(message.timeEnd.low >>> 0, message.timeEnd.high >>> 0).toNumber(true) : message.timeEnd;
+            if (message.layers && message.layers.length) {
+                object.layers = [];
+                for (let j = 0; j < message.layers.length; ++j)
+                    object.layers[j] = $root.stt.Layer.toObject(message.layers[j], options);
+            }
+            return object;
+        };
+
+        /**
+         * Converts this Tile to JSON.
+         * @function toJSON
+         * @memberof stt.Tile
+         * @instance
+         * @returns {Object.<string,*>} JSON object
+         */
+        Tile.prototype.toJSON = function toJSON() {
+            return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
+        };
+
+        /**
+         * Gets the default type url for Tile
+         * @function getTypeUrl
+         * @memberof stt.Tile
+         * @static
+         * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+         * @returns {string} The default type url
+         */
+        Tile.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
+            if (typeUrlPrefix === undefined) {
+                typeUrlPrefix = "type.googleapis.com";
+            }
+            return typeUrlPrefix + "/stt.Tile";
+        };
+
+        return Tile;
+    })();
+
+    stt.Layer = (function() {
+
+        /**
+         * Properties of a Layer.
+         * @memberof stt
+         * @interface ILayer
+         * @property {string|null} [name] Layer name
+         * @property {number|null} [extent] Layer extent
+         * @property {stt.IColumnarFeatures|null} [columnar] Layer columnar
+         */
+
+        /**
+         * Constructs a new Layer.
+         * @memberof stt
+         * @classdesc Represents a Layer.
+         * @implements ILayer
+         * @constructor
+         * @param {stt.ILayer=} [properties] Properties to set
+         */
+        function Layer(properties) {
+            if (properties)
+                for (let keys = Object.keys(properties), i = 0; i < keys.length; ++i)
+                    if (properties[keys[i]] != null)
+                        this[keys[i]] = properties[keys[i]];
+        }
+
+        /**
+         * Layer name.
+         * @member {string} name
+         * @memberof stt.Layer
+         * @instance
+         */
+        Layer.prototype.name = "";
+
+        /**
+         * Layer extent.
+         * @member {number} extent
+         * @memberof stt.Layer
+         * @instance
+         */
+        Layer.prototype.extent = 0;
+
+        /**
+         * Layer columnar.
+         * @member {stt.IColumnarFeatures|null|undefined} columnar
+         * @memberof stt.Layer
+         * @instance
+         */
+        Layer.prototype.columnar = null;
+
+        /**
+         * Creates a new Layer instance using the specified properties.
+         * @function create
+         * @memberof stt.Layer
+         * @static
+         * @param {stt.ILayer=} [properties] Properties to set
+         * @returns {stt.Layer} Layer instance
+         */
+        Layer.create = function create(properties) {
+            return new Layer(properties);
+        };
+
+        /**
+         * Encodes the specified Layer message. Does not implicitly {@link stt.Layer.verify|verify} messages.
+         * @function encode
+         * @memberof stt.Layer
+         * @static
+         * @param {stt.ILayer} message Layer message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        Layer.encode = function encode(message, writer) {
+            if (!writer)
+                writer = $Writer.create();
+            if (message.name != null && Object.hasOwnProperty.call(message, "name"))
+                writer.uint32(/* id 1, wireType 2 =*/10).string(message.name);
+            if (message.extent != null && Object.hasOwnProperty.call(message, "extent"))
+                writer.uint32(/* id 2, wireType 0 =*/16).uint32(message.extent);
+            if (message.columnar != null && Object.hasOwnProperty.call(message, "columnar"))
+                $root.stt.ColumnarFeatures.encode(message.columnar, writer.uint32(/* id 4, wireType 2 =*/34).fork()).ldelim();
+            return writer;
+        };
+
+        /**
+         * Encodes the specified Layer message, length delimited. Does not implicitly {@link stt.Layer.verify|verify} messages.
+         * @function encodeDelimited
+         * @memberof stt.Layer
+         * @static
+         * @param {stt.ILayer} message Layer message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        Layer.encodeDelimited = function encodeDelimited(message, writer) {
+            return this.encode(message, writer).ldelim();
+        };
+
+        /**
+         * Decodes a Layer message from the specified reader or buffer.
+         * @function decode
+         * @memberof stt.Layer
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @param {number} [length] Message length if known beforehand
+         * @returns {stt.Layer} Layer
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        Layer.decode = function decode(reader, length, error) {
+            if (!(reader instanceof $Reader))
+                reader = $Reader.create(reader);
+            let end = length === undefined ? reader.len : reader.pos + length, message = new $root.stt.Layer();
+            while (reader.pos < end) {
+                let tag = reader.uint32();
+                if (tag === error)
+                    break;
+                switch (tag >>> 3) {
+                case 1: {
+                        message.name = reader.string();
+                        break;
+                    }
+                case 2: {
+                        message.extent = reader.uint32();
+                        break;
+                    }
+                case 4: {
+                        message.columnar = $root.stt.ColumnarFeatures.decode(reader, reader.uint32());
+                        break;
+                    }
+                default:
+                    reader.skipType(tag & 7);
+                    break;
+                }
+            }
+            return message;
+        };
+
+        /**
+         * Decodes a Layer message from the specified reader or buffer, length delimited.
+         * @function decodeDelimited
+         * @memberof stt.Layer
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @returns {stt.Layer} Layer
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        Layer.decodeDelimited = function decodeDelimited(reader) {
+            if (!(reader instanceof $Reader))
+                reader = new $Reader(reader);
+            return this.decode(reader, reader.uint32());
+        };
+
+        /**
+         * Verifies a Layer message.
+         * @function verify
+         * @memberof stt.Layer
+         * @static
+         * @param {Object.<string,*>} message Plain object to verify
+         * @returns {string|null} `null` if valid, otherwise the reason why it is not
+         */
+        Layer.verify = function verify(message) {
+            if (typeof message !== "object" || message === null)
+                return "object expected";
+            if (message.name != null && message.hasOwnProperty("name"))
+                if (!$util.isString(message.name))
+                    return "name: string expected";
+            if (message.extent != null && message.hasOwnProperty("extent"))
+                if (!$util.isInteger(message.extent))
+                    return "extent: integer expected";
+            if (message.columnar != null && message.hasOwnProperty("columnar")) {
+                let error = $root.stt.ColumnarFeatures.verify(message.columnar);
+                if (error)
+                    return "columnar." + error;
+            }
+            return null;
+        };
+
+        /**
+         * Creates a Layer message from a plain object. Also converts values to their respective internal types.
+         * @function fromObject
+         * @memberof stt.Layer
+         * @static
+         * @param {Object.<string,*>} object Plain object
+         * @returns {stt.Layer} Layer
+         */
+        Layer.fromObject = function fromObject(object) {
+            if (object instanceof $root.stt.Layer)
+                return object;
+            let message = new $root.stt.Layer();
+            if (object.name != null)
+                message.name = String(object.name);
+            if (object.extent != null)
+                message.extent = object.extent >>> 0;
+            if (object.columnar != null) {
+                if (typeof object.columnar !== "object")
+                    throw TypeError(".stt.Layer.columnar: object expected");
+                message.columnar = $root.stt.ColumnarFeatures.fromObject(object.columnar);
+            }
+            return message;
+        };
+
+        /**
+         * Creates a plain object from a Layer message. Also converts values to other types if specified.
+         * @function toObject
+         * @memberof stt.Layer
+         * @static
+         * @param {stt.Layer} message Layer
+         * @param {$protobuf.IConversionOptions} [options] Conversion options
+         * @returns {Object.<string,*>} Plain object
+         */
+        Layer.toObject = function toObject(message, options) {
+            if (!options)
+                options = {};
+            let object = {};
+            if (options.defaults) {
+                object.name = "";
+                object.extent = 0;
+                object.columnar = null;
+            }
+            if (message.name != null && message.hasOwnProperty("name"))
+                object.name = message.name;
+            if (message.extent != null && message.hasOwnProperty("extent"))
+                object.extent = message.extent;
+            if (message.columnar != null && message.hasOwnProperty("columnar"))
+                object.columnar = $root.stt.ColumnarFeatures.toObject(message.columnar, options);
+            return object;
+        };
+
+        /**
+         * Converts this Layer to JSON.
+         * @function toJSON
+         * @memberof stt.Layer
+         * @instance
+         * @returns {Object.<string,*>} JSON object
+         */
+        Layer.prototype.toJSON = function toJSON() {
+            return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
+        };
+
+        /**
+         * Gets the default type url for Layer
+         * @function getTypeUrl
+         * @memberof stt.Layer
+         * @static
+         * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+         * @returns {string} The default type url
+         */
+        Layer.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
+            if (typeUrlPrefix === undefined) {
+                typeUrlPrefix = "type.googleapis.com";
+            }
+            return typeUrlPrefix + "/stt.Layer";
+        };
+
+        return Layer;
+    })();
+
+    stt.Feature = (function() {
+
+        /**
+         * Properties of a Feature.
+         * @memberof stt
+         * @interface IFeature
+         */
+
+        /**
+         * Constructs a new Feature.
+         * @memberof stt
+         * @classdesc Represents a Feature.
+         * @implements IFeature
+         * @constructor
+         * @param {stt.IFeature=} [properties] Properties to set
+         */
+        function Feature(properties) {
+            if (properties)
+                for (let keys = Object.keys(properties), i = 0; i < keys.length; ++i)
+                    if (properties[keys[i]] != null)
+                        this[keys[i]] = properties[keys[i]];
+        }
+
+        /**
+         * Creates a new Feature instance using the specified properties.
+         * @function create
+         * @memberof stt.Feature
+         * @static
+         * @param {stt.IFeature=} [properties] Properties to set
+         * @returns {stt.Feature} Feature instance
+         */
+        Feature.create = function create(properties) {
+            return new Feature(properties);
+        };
+
+        /**
+         * Encodes the specified Feature message. Does not implicitly {@link stt.Feature.verify|verify} messages.
+         * @function encode
+         * @memberof stt.Feature
+         * @static
+         * @param {stt.IFeature} message Feature message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        Feature.encode = function encode(message, writer) {
+            if (!writer)
+                writer = $Writer.create();
+            return writer;
+        };
+
+        /**
+         * Encodes the specified Feature message, length delimited. Does not implicitly {@link stt.Feature.verify|verify} messages.
+         * @function encodeDelimited
+         * @memberof stt.Feature
+         * @static
+         * @param {stt.IFeature} message Feature message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        Feature.encodeDelimited = function encodeDelimited(message, writer) {
+            return this.encode(message, writer).ldelim();
+        };
+
+        /**
+         * Decodes a Feature message from the specified reader or buffer.
+         * @function decode
+         * @memberof stt.Feature
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @param {number} [length] Message length if known beforehand
+         * @returns {stt.Feature} Feature
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        Feature.decode = function decode(reader, length, error) {
+            if (!(reader instanceof $Reader))
+                reader = $Reader.create(reader);
+            let end = length === undefined ? reader.len : reader.pos + length, message = new $root.stt.Feature();
+            while (reader.pos < end) {
+                let tag = reader.uint32();
+                if (tag === error)
+                    break;
+                switch (tag >>> 3) {
+                default:
+                    reader.skipType(tag & 7);
+                    break;
+                }
+            }
+            return message;
+        };
+
+        /**
+         * Decodes a Feature message from the specified reader or buffer, length delimited.
+         * @function decodeDelimited
+         * @memberof stt.Feature
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @returns {stt.Feature} Feature
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        Feature.decodeDelimited = function decodeDelimited(reader) {
+            if (!(reader instanceof $Reader))
+                reader = new $Reader(reader);
+            return this.decode(reader, reader.uint32());
+        };
+
+        /**
+         * Verifies a Feature message.
+         * @function verify
+         * @memberof stt.Feature
+         * @static
+         * @param {Object.<string,*>} message Plain object to verify
+         * @returns {string|null} `null` if valid, otherwise the reason why it is not
+         */
+        Feature.verify = function verify(message) {
+            if (typeof message !== "object" || message === null)
+                return "object expected";
+            return null;
+        };
+
+        /**
+         * Creates a Feature message from a plain object. Also converts values to their respective internal types.
+         * @function fromObject
+         * @memberof stt.Feature
+         * @static
+         * @param {Object.<string,*>} object Plain object
+         * @returns {stt.Feature} Feature
+         */
+        Feature.fromObject = function fromObject(object) {
+            if (object instanceof $root.stt.Feature)
+                return object;
+            return new $root.stt.Feature();
+        };
+
+        /**
+         * Creates a plain object from a Feature message. Also converts values to other types if specified.
+         * @function toObject
+         * @memberof stt.Feature
+         * @static
+         * @param {stt.Feature} message Feature
+         * @param {$protobuf.IConversionOptions} [options] Conversion options
+         * @returns {Object.<string,*>} Plain object
+         */
+        Feature.toObject = function toObject() {
+            return {};
+        };
+
+        /**
+         * Converts this Feature to JSON.
+         * @function toJSON
+         * @memberof stt.Feature
+         * @instance
+         * @returns {Object.<string,*>} JSON object
+         */
+        Feature.prototype.toJSON = function toJSON() {
+            return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
+        };
+
+        /**
+         * Gets the default type url for Feature
+         * @function getTypeUrl
+         * @memberof stt.Feature
+         * @static
+         * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+         * @returns {string} The default type url
+         */
+        Feature.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
+            if (typeUrlPrefix === undefined) {
+                typeUrlPrefix = "type.googleapis.com";
+            }
+            return typeUrlPrefix + "/stt.Feature";
+        };
+
+        /**
+         * GeomType enum.
+         * @name stt.Feature.GeomType
+         * @enum {number}
+         * @property {number} POINT=0 POINT value
+         * @property {number} LINESTRING=1 LINESTRING value
+         * @property {number} POLYGON=2 POLYGON value
+         */
+        Feature.GeomType = (function() {
+            const valuesById = {}, values = Object.create(valuesById);
+            values[valuesById[0] = "POINT"] = 0;
+            values[valuesById[1] = "LINESTRING"] = 1;
+            values[valuesById[2] = "POLYGON"] = 2;
+            return values;
+        })();
+
+        return Feature;
+    })();
+
+    stt.ColumnarFeatures = (function() {
+
+        /**
+         * Properties of a ColumnarFeatures.
+         * @memberof stt
+         * @interface IColumnarFeatures
+         * @property {number|null} [featureCount] ColumnarFeatures featureCount
+         * @property {stt.Feature.GeomType|null} [geometryType] ColumnarFeatures geometryType
+         * @property {Array.<number|Long>|null} [featureIds] ColumnarFeatures featureIds
+         * @property {Array.<number>|null} [geometry] ColumnarFeatures geometry
+         * @property {Array.<number>|null} [geometryOffsets] ColumnarFeatures geometryOffsets
+         * @property {Array.<number|Long>|null} [startTimes] ColumnarFeatures startTimes
+         * @property {Array.<number|Long>|null} [endTimes] ColumnarFeatures endTimes
+         * @property {Array.<stt.INumericColumn>|null} [numericProperties] ColumnarFeatures numericProperties
+         * @property {Array.<stt.ICategoricalColumn>|null} [categoricalProperties] ColumnarFeatures categoricalProperties
+         * @property {Array.<number>|null} [ringOffsets] ColumnarFeatures ringOffsets
+         * @property {Array.<number>|null} [ringOffsetsOffsets] ColumnarFeatures ringOffsetsOffsets
+         * @property {Array.<number>|null} [altitudes] ColumnarFeatures altitudes
+         * @property {Array.<number|Long>|null} [vertexTimestamps] ColumnarFeatures vertexTimestamps
+         */
+
+        /**
+         * Constructs a new ColumnarFeatures.
+         * @memberof stt
+         * @classdesc Represents a ColumnarFeatures.
+         * @implements IColumnarFeatures
+         * @constructor
+         * @param {stt.IColumnarFeatures=} [properties] Properties to set
+         */
+        function ColumnarFeatures(properties) {
+            this.featureIds = [];
+            this.geometry = [];
+            this.geometryOffsets = [];
+            this.startTimes = [];
+            this.endTimes = [];
+            this.numericProperties = [];
+            this.categoricalProperties = [];
+            this.ringOffsets = [];
+            this.ringOffsetsOffsets = [];
+            this.altitudes = [];
+            this.vertexTimestamps = [];
+            if (properties)
+                for (let keys = Object.keys(properties), i = 0; i < keys.length; ++i)
+                    if (properties[keys[i]] != null)
+                        this[keys[i]] = properties[keys[i]];
+        }
+
+        /**
+         * ColumnarFeatures featureCount.
+         * @member {number} featureCount
+         * @memberof stt.ColumnarFeatures
+         * @instance
+         */
+        ColumnarFeatures.prototype.featureCount = 0;
+
+        /**
+         * ColumnarFeatures geometryType.
+         * @member {stt.Feature.GeomType} geometryType
+         * @memberof stt.ColumnarFeatures
+         * @instance
+         */
+        ColumnarFeatures.prototype.geometryType = 0;
+
+        /**
+         * ColumnarFeatures featureIds.
+         * @member {Array.<number|Long>} featureIds
+         * @memberof stt.ColumnarFeatures
+         * @instance
+         */
+        ColumnarFeatures.prototype.featureIds = $util.emptyArray;
+
+        /**
+         * ColumnarFeatures geometry.
+         * @member {Array.<number>} geometry
+         * @memberof stt.ColumnarFeatures
+         * @instance
+         */
+        ColumnarFeatures.prototype.geometry = $util.emptyArray;
+
+        /**
+         * ColumnarFeatures geometryOffsets.
+         * @member {Array.<number>} geometryOffsets
+         * @memberof stt.ColumnarFeatures
+         * @instance
+         */
+        ColumnarFeatures.prototype.geometryOffsets = $util.emptyArray;
+
+        /**
+         * ColumnarFeatures startTimes.
+         * @member {Array.<number|Long>} startTimes
+         * @memberof stt.ColumnarFeatures
+         * @instance
+         */
+        ColumnarFeatures.prototype.startTimes = $util.emptyArray;
+
+        /**
+         * ColumnarFeatures endTimes.
+         * @member {Array.<number|Long>} endTimes
+         * @memberof stt.ColumnarFeatures
+         * @instance
+         */
+        ColumnarFeatures.prototype.endTimes = $util.emptyArray;
+
+        /**
+         * ColumnarFeatures numericProperties.
+         * @member {Array.<stt.INumericColumn>} numericProperties
+         * @memberof stt.ColumnarFeatures
+         * @instance
+         */
+        ColumnarFeatures.prototype.numericProperties = $util.emptyArray;
+
+        /**
+         * ColumnarFeatures categoricalProperties.
+         * @member {Array.<stt.ICategoricalColumn>} categoricalProperties
+         * @memberof stt.ColumnarFeatures
+         * @instance
+         */
+        ColumnarFeatures.prototype.categoricalProperties = $util.emptyArray;
+
+        /**
+         * ColumnarFeatures ringOffsets.
+         * @member {Array.<number>} ringOffsets
+         * @memberof stt.ColumnarFeatures
+         * @instance
+         */
+        ColumnarFeatures.prototype.ringOffsets = $util.emptyArray;
+
+        /**
+         * ColumnarFeatures ringOffsetsOffsets.
+         * @member {Array.<number>} ringOffsetsOffsets
+         * @memberof stt.ColumnarFeatures
+         * @instance
+         */
+        ColumnarFeatures.prototype.ringOffsetsOffsets = $util.emptyArray;
+
+        /**
+         * ColumnarFeatures altitudes.
+         * @member {Array.<number>} altitudes
+         * @memberof stt.ColumnarFeatures
+         * @instance
+         */
+        ColumnarFeatures.prototype.altitudes = $util.emptyArray;
+
+        /**
+         * ColumnarFeatures vertexTimestamps.
+         * @member {Array.<number|Long>} vertexTimestamps
+         * @memberof stt.ColumnarFeatures
+         * @instance
+         */
+        ColumnarFeatures.prototype.vertexTimestamps = $util.emptyArray;
+
+        /**
+         * Creates a new ColumnarFeatures instance using the specified properties.
+         * @function create
+         * @memberof stt.ColumnarFeatures
+         * @static
+         * @param {stt.IColumnarFeatures=} [properties] Properties to set
+         * @returns {stt.ColumnarFeatures} ColumnarFeatures instance
+         */
+        ColumnarFeatures.create = function create(properties) {
+            return new ColumnarFeatures(properties);
+        };
+
+        /**
+         * Encodes the specified ColumnarFeatures message. Does not implicitly {@link stt.ColumnarFeatures.verify|verify} messages.
+         * @function encode
+         * @memberof stt.ColumnarFeatures
+         * @static
+         * @param {stt.IColumnarFeatures} message ColumnarFeatures message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        ColumnarFeatures.encode = function encode(message, writer) {
+            if (!writer)
+                writer = $Writer.create();
+            if (message.featureCount != null && Object.hasOwnProperty.call(message, "featureCount"))
+                writer.uint32(/* id 1, wireType 0 =*/8).uint32(message.featureCount);
+            if (message.geometryType != null && Object.hasOwnProperty.call(message, "geometryType"))
+                writer.uint32(/* id 2, wireType 0 =*/16).int32(message.geometryType);
+            if (message.featureIds != null && message.featureIds.length) {
+                writer.uint32(/* id 3, wireType 2 =*/26).fork();
+                for (let i = 0; i < message.featureIds.length; ++i)
+                    writer.uint64(message.featureIds[i]);
+                writer.ldelim();
+            }
+            if (message.geometry != null && message.geometry.length) {
+                writer.uint32(/* id 4, wireType 2 =*/34).fork();
+                for (let i = 0; i < message.geometry.length; ++i)
+                    writer.sint32(message.geometry[i]);
+                writer.ldelim();
+            }
+            if (message.geometryOffsets != null && message.geometryOffsets.length) {
+                writer.uint32(/* id 5, wireType 2 =*/42).fork();
+                for (let i = 0; i < message.geometryOffsets.length; ++i)
+                    writer.uint32(message.geometryOffsets[i]);
+                writer.ldelim();
+            }
+            if (message.startTimes != null && message.startTimes.length) {
+                writer.uint32(/* id 6, wireType 2 =*/50).fork();
+                for (let i = 0; i < message.startTimes.length; ++i)
+                    writer.sint64(message.startTimes[i]);
+                writer.ldelim();
+            }
+            if (message.endTimes != null && message.endTimes.length) {
+                writer.uint32(/* id 7, wireType 2 =*/58).fork();
+                for (let i = 0; i < message.endTimes.length; ++i)
+                    writer.sint64(message.endTimes[i]);
+                writer.ldelim();
+            }
+            if (message.numericProperties != null && message.numericProperties.length)
+                for (let i = 0; i < message.numericProperties.length; ++i)
+                    $root.stt.NumericColumn.encode(message.numericProperties[i], writer.uint32(/* id 8, wireType 2 =*/66).fork()).ldelim();
+            if (message.categoricalProperties != null && message.categoricalProperties.length)
+                for (let i = 0; i < message.categoricalProperties.length; ++i)
+                    $root.stt.CategoricalColumn.encode(message.categoricalProperties[i], writer.uint32(/* id 9, wireType 2 =*/74).fork()).ldelim();
+            if (message.ringOffsets != null && message.ringOffsets.length) {
+                writer.uint32(/* id 10, wireType 2 =*/82).fork();
+                for (let i = 0; i < message.ringOffsets.length; ++i)
+                    writer.uint32(message.ringOffsets[i]);
+                writer.ldelim();
+            }
+            if (message.ringOffsetsOffsets != null && message.ringOffsetsOffsets.length) {
+                writer.uint32(/* id 11, wireType 2 =*/90).fork();
+                for (let i = 0; i < message.ringOffsetsOffsets.length; ++i)
+                    writer.uint32(message.ringOffsetsOffsets[i]);
+                writer.ldelim();
+            }
+            if (message.altitudes != null && message.altitudes.length) {
+                writer.uint32(/* id 12, wireType 2 =*/98).fork();
+                for (let i = 0; i < message.altitudes.length; ++i)
+                    writer.float(message.altitudes[i]);
+                writer.ldelim();
+            }
+            if (message.vertexTimestamps != null && message.vertexTimestamps.length) {
+                writer.uint32(/* id 13, wireType 2 =*/106).fork();
+                for (let i = 0; i < message.vertexTimestamps.length; ++i)
+                    writer.sint64(message.vertexTimestamps[i]);
+                writer.ldelim();
+            }
+            return writer;
+        };
+
+        /**
+         * Encodes the specified ColumnarFeatures message, length delimited. Does not implicitly {@link stt.ColumnarFeatures.verify|verify} messages.
+         * @function encodeDelimited
+         * @memberof stt.ColumnarFeatures
+         * @static
+         * @param {stt.IColumnarFeatures} message ColumnarFeatures message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        ColumnarFeatures.encodeDelimited = function encodeDelimited(message, writer) {
+            return this.encode(message, writer).ldelim();
+        };
+
+        /**
+         * Decodes a ColumnarFeatures message from the specified reader or buffer.
+         * @function decode
+         * @memberof stt.ColumnarFeatures
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @param {number} [length] Message length if known beforehand
+         * @returns {stt.ColumnarFeatures} ColumnarFeatures
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        ColumnarFeatures.decode = function decode(reader, length, error) {
+            if (!(reader instanceof $Reader))
+                reader = $Reader.create(reader);
+            let end = length === undefined ? reader.len : reader.pos + length, message = new $root.stt.ColumnarFeatures();
+            while (reader.pos < end) {
+                let tag = reader.uint32();
+                if (tag === error)
+                    break;
+                switch (tag >>> 3) {
+                case 1: {
+                        message.featureCount = reader.uint32();
+                        break;
+                    }
+                case 2: {
+                        message.geometryType = reader.int32();
+                        break;
+                    }
+                case 3: {
+                        if (!(message.featureIds && message.featureIds.length))
+                            message.featureIds = [];
+                        if ((tag & 7) === 2) {
+                            let end2 = reader.uint32() + reader.pos;
+                            while (reader.pos < end2)
+                                message.featureIds.push(reader.uint64());
+                        } else
+                            message.featureIds.push(reader.uint64());
+                        break;
+                    }
+                case 4: {
+                        if (!(message.geometry && message.geometry.length))
+                            message.geometry = [];
+                        if ((tag & 7) === 2) {
+                            let end2 = reader.uint32() + reader.pos;
+                            while (reader.pos < end2)
+                                message.geometry.push(reader.sint32());
+                        } else
+                            message.geometry.push(reader.sint32());
+                        break;
+                    }
+                case 5: {
+                        if (!(message.geometryOffsets && message.geometryOffsets.length))
+                            message.geometryOffsets = [];
+                        if ((tag & 7) === 2) {
+                            let end2 = reader.uint32() + reader.pos;
+                            while (reader.pos < end2)
+                                message.geometryOffsets.push(reader.uint32());
+                        } else
+                            message.geometryOffsets.push(reader.uint32());
+                        break;
+                    }
+                case 6: {
+                        if (!(message.startTimes && message.startTimes.length))
+                            message.startTimes = [];
+                        if ((tag & 7) === 2) {
+                            let end2 = reader.uint32() + reader.pos;
+                            while (reader.pos < end2)
+                                message.startTimes.push(reader.sint64());
+                        } else
+                            message.startTimes.push(reader.sint64());
+                        break;
+                    }
+                case 7: {
+                        if (!(message.endTimes && message.endTimes.length))
+                            message.endTimes = [];
+                        if ((tag & 7) === 2) {
+                            let end2 = reader.uint32() + reader.pos;
+                            while (reader.pos < end2)
+                                message.endTimes.push(reader.sint64());
+                        } else
+                            message.endTimes.push(reader.sint64());
+                        break;
+                    }
+                case 8: {
+                        if (!(message.numericProperties && message.numericProperties.length))
+                            message.numericProperties = [];
+                        message.numericProperties.push($root.stt.NumericColumn.decode(reader, reader.uint32()));
+                        break;
+                    }
+                case 9: {
+                        if (!(message.categoricalProperties && message.categoricalProperties.length))
+                            message.categoricalProperties = [];
+                        message.categoricalProperties.push($root.stt.CategoricalColumn.decode(reader, reader.uint32()));
+                        break;
+                    }
+                case 10: {
+                        if (!(message.ringOffsets && message.ringOffsets.length))
+                            message.ringOffsets = [];
+                        if ((tag & 7) === 2) {
+                            let end2 = reader.uint32() + reader.pos;
+                            while (reader.pos < end2)
+                                message.ringOffsets.push(reader.uint32());
+                        } else
+                            message.ringOffsets.push(reader.uint32());
+                        break;
+                    }
+                case 11: {
+                        if (!(message.ringOffsetsOffsets && message.ringOffsetsOffsets.length))
+                            message.ringOffsetsOffsets = [];
+                        if ((tag & 7) === 2) {
+                            let end2 = reader.uint32() + reader.pos;
+                            while (reader.pos < end2)
+                                message.ringOffsetsOffsets.push(reader.uint32());
+                        } else
+                            message.ringOffsetsOffsets.push(reader.uint32());
+                        break;
+                    }
+                case 12: {
+                        if (!(message.altitudes && message.altitudes.length))
+                            message.altitudes = [];
+                        if ((tag & 7) === 2) {
+                            let end2 = reader.uint32() + reader.pos;
+                            while (reader.pos < end2)
+                                message.altitudes.push(reader.float());
+                        } else
+                            message.altitudes.push(reader.float());
+                        break;
+                    }
+                case 13: {
+                        if (!(message.vertexTimestamps && message.vertexTimestamps.length))
+                            message.vertexTimestamps = [];
+                        if ((tag & 7) === 2) {
+                            let end2 = reader.uint32() + reader.pos;
+                            while (reader.pos < end2)
+                                message.vertexTimestamps.push(reader.sint64());
+                        } else
+                            message.vertexTimestamps.push(reader.sint64());
+                        break;
+                    }
+                default:
+                    reader.skipType(tag & 7);
+                    break;
+                }
+            }
+            return message;
+        };
+
+        /**
+         * Decodes a ColumnarFeatures message from the specified reader or buffer, length delimited.
+         * @function decodeDelimited
+         * @memberof stt.ColumnarFeatures
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @returns {stt.ColumnarFeatures} ColumnarFeatures
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        ColumnarFeatures.decodeDelimited = function decodeDelimited(reader) {
+            if (!(reader instanceof $Reader))
+                reader = new $Reader(reader);
+            return this.decode(reader, reader.uint32());
+        };
+
+        /**
+         * Verifies a ColumnarFeatures message.
+         * @function verify
+         * @memberof stt.ColumnarFeatures
+         * @static
+         * @param {Object.<string,*>} message Plain object to verify
+         * @returns {string|null} `null` if valid, otherwise the reason why it is not
+         */
+        ColumnarFeatures.verify = function verify(message) {
+            if (typeof message !== "object" || message === null)
+                return "object expected";
+            if (message.featureCount != null && message.hasOwnProperty("featureCount"))
+                if (!$util.isInteger(message.featureCount))
+                    return "featureCount: integer expected";
+            if (message.geometryType != null && message.hasOwnProperty("geometryType"))
+                switch (message.geometryType) {
+                default:
+                    return "geometryType: enum value expected";
+                case 0:
+                case 1:
+                case 2:
+                    break;
+                }
+            if (message.featureIds != null && message.hasOwnProperty("featureIds")) {
+                if (!Array.isArray(message.featureIds))
+                    return "featureIds: array expected";
+                for (let i = 0; i < message.featureIds.length; ++i)
+                    if (!$util.isInteger(message.featureIds[i]) && !(message.featureIds[i] && $util.isInteger(message.featureIds[i].low) && $util.isInteger(message.featureIds[i].high)))
+                        return "featureIds: integer|Long[] expected";
+            }
+            if (message.geometry != null && message.hasOwnProperty("geometry")) {
+                if (!Array.isArray(message.geometry))
+                    return "geometry: array expected";
+                for (let i = 0; i < message.geometry.length; ++i)
+                    if (!$util.isInteger(message.geometry[i]))
+                        return "geometry: integer[] expected";
+            }
+            if (message.geometryOffsets != null && message.hasOwnProperty("geometryOffsets")) {
+                if (!Array.isArray(message.geometryOffsets))
+                    return "geometryOffsets: array expected";
+                for (let i = 0; i < message.geometryOffsets.length; ++i)
+                    if (!$util.isInteger(message.geometryOffsets[i]))
+                        return "geometryOffsets: integer[] expected";
+            }
+            if (message.startTimes != null && message.hasOwnProperty("startTimes")) {
+                if (!Array.isArray(message.startTimes))
+                    return "startTimes: array expected";
+                for (let i = 0; i < message.startTimes.length; ++i)
+                    if (!$util.isInteger(message.startTimes[i]) && !(message.startTimes[i] && $util.isInteger(message.startTimes[i].low) && $util.isInteger(message.startTimes[i].high)))
+                        return "startTimes: integer|Long[] expected";
+            }
+            if (message.endTimes != null && message.hasOwnProperty("endTimes")) {
+                if (!Array.isArray(message.endTimes))
+                    return "endTimes: array expected";
+                for (let i = 0; i < message.endTimes.length; ++i)
+                    if (!$util.isInteger(message.endTimes[i]) && !(message.endTimes[i] && $util.isInteger(message.endTimes[i].low) && $util.isInteger(message.endTimes[i].high)))
+                        return "endTimes: integer|Long[] expected";
+            }
+            if (message.numericProperties != null && message.hasOwnProperty("numericProperties")) {
+                if (!Array.isArray(message.numericProperties))
+                    return "numericProperties: array expected";
+                for (let i = 0; i < message.numericProperties.length; ++i) {
+                    let error = $root.stt.NumericColumn.verify(message.numericProperties[i]);
+                    if (error)
+                        return "numericProperties." + error;
+                }
+            }
+            if (message.categoricalProperties != null && message.hasOwnProperty("categoricalProperties")) {
+                if (!Array.isArray(message.categoricalProperties))
+                    return "categoricalProperties: array expected";
+                for (let i = 0; i < message.categoricalProperties.length; ++i) {
+                    let error = $root.stt.CategoricalColumn.verify(message.categoricalProperties[i]);
+                    if (error)
+                        return "categoricalProperties." + error;
+                }
+            }
+            if (message.ringOffsets != null && message.hasOwnProperty("ringOffsets")) {
+                if (!Array.isArray(message.ringOffsets))
+                    return "ringOffsets: array expected";
+                for (let i = 0; i < message.ringOffsets.length; ++i)
+                    if (!$util.isInteger(message.ringOffsets[i]))
+                        return "ringOffsets: integer[] expected";
+            }
+            if (message.ringOffsetsOffsets != null && message.hasOwnProperty("ringOffsetsOffsets")) {
+                if (!Array.isArray(message.ringOffsetsOffsets))
+                    return "ringOffsetsOffsets: array expected";
+                for (let i = 0; i < message.ringOffsetsOffsets.length; ++i)
+                    if (!$util.isInteger(message.ringOffsetsOffsets[i]))
+                        return "ringOffsetsOffsets: integer[] expected";
+            }
+            if (message.altitudes != null && message.hasOwnProperty("altitudes")) {
+                if (!Array.isArray(message.altitudes))
+                    return "altitudes: array expected";
+                for (let i = 0; i < message.altitudes.length; ++i)
+                    if (typeof message.altitudes[i] !== "number")
+                        return "altitudes: number[] expected";
+            }
+            if (message.vertexTimestamps != null && message.hasOwnProperty("vertexTimestamps")) {
+                if (!Array.isArray(message.vertexTimestamps))
+                    return "vertexTimestamps: array expected";
+                for (let i = 0; i < message.vertexTimestamps.length; ++i)
+                    if (!$util.isInteger(message.vertexTimestamps[i]) && !(message.vertexTimestamps[i] && $util.isInteger(message.vertexTimestamps[i].low) && $util.isInteger(message.vertexTimestamps[i].high)))
+                        return "vertexTimestamps: integer|Long[] expected";
+            }
+            return null;
+        };
+
+        /**
+         * Creates a ColumnarFeatures message from a plain object. Also converts values to their respective internal types.
+         * @function fromObject
+         * @memberof stt.ColumnarFeatures
+         * @static
+         * @param {Object.<string,*>} object Plain object
+         * @returns {stt.ColumnarFeatures} ColumnarFeatures
+         */
+        ColumnarFeatures.fromObject = function fromObject(object) {
+            if (object instanceof $root.stt.ColumnarFeatures)
+                return object;
+            let message = new $root.stt.ColumnarFeatures();
+            if (object.featureCount != null)
+                message.featureCount = object.featureCount >>> 0;
+            switch (object.geometryType) {
+            default:
+                if (typeof object.geometryType === "number") {
+                    message.geometryType = object.geometryType;
+                    break;
+                }
+                break;
+            case "POINT":
+            case 0:
+                message.geometryType = 0;
+                break;
+            case "LINESTRING":
+            case 1:
+                message.geometryType = 1;
+                break;
+            case "POLYGON":
+            case 2:
+                message.geometryType = 2;
+                break;
+            }
+            if (object.featureIds) {
+                if (!Array.isArray(object.featureIds))
+                    throw TypeError(".stt.ColumnarFeatures.featureIds: array expected");
+                message.featureIds = [];
+                for (let i = 0; i < object.featureIds.length; ++i)
+                    if ($util.Long)
+                        (message.featureIds[i] = $util.Long.fromValue(object.featureIds[i])).unsigned = true;
+                    else if (typeof object.featureIds[i] === "string")
+                        message.featureIds[i] = parseInt(object.featureIds[i], 10);
+                    else if (typeof object.featureIds[i] === "number")
+                        message.featureIds[i] = object.featureIds[i];
+                    else if (typeof object.featureIds[i] === "object")
+                        message.featureIds[i] = new $util.LongBits(object.featureIds[i].low >>> 0, object.featureIds[i].high >>> 0).toNumber(true);
+            }
+            if (object.geometry) {
+                if (!Array.isArray(object.geometry))
+                    throw TypeError(".stt.ColumnarFeatures.geometry: array expected");
+                message.geometry = [];
+                for (let i = 0; i < object.geometry.length; ++i)
+                    message.geometry[i] = object.geometry[i] | 0;
+            }
+            if (object.geometryOffsets) {
+                if (!Array.isArray(object.geometryOffsets))
+                    throw TypeError(".stt.ColumnarFeatures.geometryOffsets: array expected");
+                message.geometryOffsets = [];
+                for (let i = 0; i < object.geometryOffsets.length; ++i)
+                    message.geometryOffsets[i] = object.geometryOffsets[i] >>> 0;
+            }
+            if (object.startTimes) {
+                if (!Array.isArray(object.startTimes))
+                    throw TypeError(".stt.ColumnarFeatures.startTimes: array expected");
+                message.startTimes = [];
+                for (let i = 0; i < object.startTimes.length; ++i)
+                    if ($util.Long)
+                        (message.startTimes[i] = $util.Long.fromValue(object.startTimes[i])).unsigned = false;
+                    else if (typeof object.startTimes[i] === "string")
+                        message.startTimes[i] = parseInt(object.startTimes[i], 10);
+                    else if (typeof object.startTimes[i] === "number")
+                        message.startTimes[i] = object.startTimes[i];
+                    else if (typeof object.startTimes[i] === "object")
+                        message.startTimes[i] = new $util.LongBits(object.startTimes[i].low >>> 0, object.startTimes[i].high >>> 0).toNumber();
+            }
+            if (object.endTimes) {
+                if (!Array.isArray(object.endTimes))
+                    throw TypeError(".stt.ColumnarFeatures.endTimes: array expected");
+                message.endTimes = [];
+                for (let i = 0; i < object.endTimes.length; ++i)
+                    if ($util.Long)
+                        (message.endTimes[i] = $util.Long.fromValue(object.endTimes[i])).unsigned = false;
+                    else if (typeof object.endTimes[i] === "string")
+                        message.endTimes[i] = parseInt(object.endTimes[i], 10);
+                    else if (typeof object.endTimes[i] === "number")
+                        message.endTimes[i] = object.endTimes[i];
+                    else if (typeof object.endTimes[i] === "object")
+                        message.endTimes[i] = new $util.LongBits(object.endTimes[i].low >>> 0, object.endTimes[i].high >>> 0).toNumber();
+            }
+            if (object.numericProperties) {
+                if (!Array.isArray(object.numericProperties))
+                    throw TypeError(".stt.ColumnarFeatures.numericProperties: array expected");
+                message.numericProperties = [];
+                for (let i = 0; i < object.numericProperties.length; ++i) {
+                    if (typeof object.numericProperties[i] !== "object")
+                        throw TypeError(".stt.ColumnarFeatures.numericProperties: object expected");
+                    message.numericProperties[i] = $root.stt.NumericColumn.fromObject(object.numericProperties[i]);
+                }
+            }
+            if (object.categoricalProperties) {
+                if (!Array.isArray(object.categoricalProperties))
+                    throw TypeError(".stt.ColumnarFeatures.categoricalProperties: array expected");
+                message.categoricalProperties = [];
+                for (let i = 0; i < object.categoricalProperties.length; ++i) {
+                    if (typeof object.categoricalProperties[i] !== "object")
+                        throw TypeError(".stt.ColumnarFeatures.categoricalProperties: object expected");
+                    message.categoricalProperties[i] = $root.stt.CategoricalColumn.fromObject(object.categoricalProperties[i]);
+                }
+            }
+            if (object.ringOffsets) {
+                if (!Array.isArray(object.ringOffsets))
+                    throw TypeError(".stt.ColumnarFeatures.ringOffsets: array expected");
+                message.ringOffsets = [];
+                for (let i = 0; i < object.ringOffsets.length; ++i)
+                    message.ringOffsets[i] = object.ringOffsets[i] >>> 0;
+            }
+            if (object.ringOffsetsOffsets) {
+                if (!Array.isArray(object.ringOffsetsOffsets))
+                    throw TypeError(".stt.ColumnarFeatures.ringOffsetsOffsets: array expected");
+                message.ringOffsetsOffsets = [];
+                for (let i = 0; i < object.ringOffsetsOffsets.length; ++i)
+                    message.ringOffsetsOffsets[i] = object.ringOffsetsOffsets[i] >>> 0;
+            }
+            if (object.altitudes) {
+                if (!Array.isArray(object.altitudes))
+                    throw TypeError(".stt.ColumnarFeatures.altitudes: array expected");
+                message.altitudes = [];
+                for (let i = 0; i < object.altitudes.length; ++i)
+                    message.altitudes[i] = Number(object.altitudes[i]);
+            }
+            if (object.vertexTimestamps) {
+                if (!Array.isArray(object.vertexTimestamps))
+                    throw TypeError(".stt.ColumnarFeatures.vertexTimestamps: array expected");
+                message.vertexTimestamps = [];
+                for (let i = 0; i < object.vertexTimestamps.length; ++i)
+                    if ($util.Long)
+                        (message.vertexTimestamps[i] = $util.Long.fromValue(object.vertexTimestamps[i])).unsigned = false;
+                    else if (typeof object.vertexTimestamps[i] === "string")
+                        message.vertexTimestamps[i] = parseInt(object.vertexTimestamps[i], 10);
+                    else if (typeof object.vertexTimestamps[i] === "number")
+                        message.vertexTimestamps[i] = object.vertexTimestamps[i];
+                    else if (typeof object.vertexTimestamps[i] === "object")
+                        message.vertexTimestamps[i] = new $util.LongBits(object.vertexTimestamps[i].low >>> 0, object.vertexTimestamps[i].high >>> 0).toNumber();
+            }
+            return message;
+        };
+
+        /**
+         * Creates a plain object from a ColumnarFeatures message. Also converts values to other types if specified.
+         * @function toObject
+         * @memberof stt.ColumnarFeatures
+         * @static
+         * @param {stt.ColumnarFeatures} message ColumnarFeatures
+         * @param {$protobuf.IConversionOptions} [options] Conversion options
+         * @returns {Object.<string,*>} Plain object
+         */
+        ColumnarFeatures.toObject = function toObject(message, options) {
+            if (!options)
+                options = {};
+            let object = {};
+            if (options.arrays || options.defaults) {
+                object.featureIds = [];
+                object.geometry = [];
+                object.geometryOffsets = [];
+                object.startTimes = [];
+                object.endTimes = [];
+                object.numericProperties = [];
+                object.categoricalProperties = [];
+                object.ringOffsets = [];
+                object.ringOffsetsOffsets = [];
+                object.altitudes = [];
+                object.vertexTimestamps = [];
+            }
+            if (options.defaults) {
+                object.featureCount = 0;
+                object.geometryType = options.enums === String ? "POINT" : 0;
+            }
+            if (message.featureCount != null && message.hasOwnProperty("featureCount"))
+                object.featureCount = message.featureCount;
+            if (message.geometryType != null && message.hasOwnProperty("geometryType"))
+                object.geometryType = options.enums === String ? $root.stt.Feature.GeomType[message.geometryType] === undefined ? message.geometryType : $root.stt.Feature.GeomType[message.geometryType] : message.geometryType;
+            if (message.featureIds && message.featureIds.length) {
+                object.featureIds = [];
+                for (let j = 0; j < message.featureIds.length; ++j)
+                    if (typeof message.featureIds[j] === "number")
+                        object.featureIds[j] = options.longs === String ? String(message.featureIds[j]) : message.featureIds[j];
+                    else
+                        object.featureIds[j] = options.longs === String ? $util.Long.prototype.toString.call(message.featureIds[j]) : options.longs === Number ? new $util.LongBits(message.featureIds[j].low >>> 0, message.featureIds[j].high >>> 0).toNumber(true) : message.featureIds[j];
+            }
+            if (message.geometry && message.geometry.length) {
+                object.geometry = [];
+                for (let j = 0; j < message.geometry.length; ++j)
+                    object.geometry[j] = message.geometry[j];
+            }
+            if (message.geometryOffsets && message.geometryOffsets.length) {
+                object.geometryOffsets = [];
+                for (let j = 0; j < message.geometryOffsets.length; ++j)
+                    object.geometryOffsets[j] = message.geometryOffsets[j];
+            }
+            if (message.startTimes && message.startTimes.length) {
+                object.startTimes = [];
+                for (let j = 0; j < message.startTimes.length; ++j)
+                    if (typeof message.startTimes[j] === "number")
+                        object.startTimes[j] = options.longs === String ? String(message.startTimes[j]) : message.startTimes[j];
+                    else
+                        object.startTimes[j] = options.longs === String ? $util.Long.prototype.toString.call(message.startTimes[j]) : options.longs === Number ? new $util.LongBits(message.startTimes[j].low >>> 0, message.startTimes[j].high >>> 0).toNumber() : message.startTimes[j];
+            }
+            if (message.endTimes && message.endTimes.length) {
+                object.endTimes = [];
+                for (let j = 0; j < message.endTimes.length; ++j)
+                    if (typeof message.endTimes[j] === "number")
+                        object.endTimes[j] = options.longs === String ? String(message.endTimes[j]) : message.endTimes[j];
+                    else
+                        object.endTimes[j] = options.longs === String ? $util.Long.prototype.toString.call(message.endTimes[j]) : options.longs === Number ? new $util.LongBits(message.endTimes[j].low >>> 0, message.endTimes[j].high >>> 0).toNumber() : message.endTimes[j];
+            }
+            if (message.numericProperties && message.numericProperties.length) {
+                object.numericProperties = [];
+                for (let j = 0; j < message.numericProperties.length; ++j)
+                    object.numericProperties[j] = $root.stt.NumericColumn.toObject(message.numericProperties[j], options);
+            }
+            if (message.categoricalProperties && message.categoricalProperties.length) {
+                object.categoricalProperties = [];
+                for (let j = 0; j < message.categoricalProperties.length; ++j)
+                    object.categoricalProperties[j] = $root.stt.CategoricalColumn.toObject(message.categoricalProperties[j], options);
+            }
+            if (message.ringOffsets && message.ringOffsets.length) {
+                object.ringOffsets = [];
+                for (let j = 0; j < message.ringOffsets.length; ++j)
+                    object.ringOffsets[j] = message.ringOffsets[j];
+            }
+            if (message.ringOffsetsOffsets && message.ringOffsetsOffsets.length) {
+                object.ringOffsetsOffsets = [];
+                for (let j = 0; j < message.ringOffsetsOffsets.length; ++j)
+                    object.ringOffsetsOffsets[j] = message.ringOffsetsOffsets[j];
+            }
+            if (message.altitudes && message.altitudes.length) {
+                object.altitudes = [];
+                for (let j = 0; j < message.altitudes.length; ++j)
+                    object.altitudes[j] = options.json && !isFinite(message.altitudes[j]) ? String(message.altitudes[j]) : message.altitudes[j];
+            }
+            if (message.vertexTimestamps && message.vertexTimestamps.length) {
+                object.vertexTimestamps = [];
+                for (let j = 0; j < message.vertexTimestamps.length; ++j)
+                    if (typeof message.vertexTimestamps[j] === "number")
+                        object.vertexTimestamps[j] = options.longs === String ? String(message.vertexTimestamps[j]) : message.vertexTimestamps[j];
+                    else
+                        object.vertexTimestamps[j] = options.longs === String ? $util.Long.prototype.toString.call(message.vertexTimestamps[j]) : options.longs === Number ? new $util.LongBits(message.vertexTimestamps[j].low >>> 0, message.vertexTimestamps[j].high >>> 0).toNumber() : message.vertexTimestamps[j];
+            }
+            return object;
+        };
+
+        /**
+         * Converts this ColumnarFeatures to JSON.
+         * @function toJSON
+         * @memberof stt.ColumnarFeatures
+         * @instance
+         * @returns {Object.<string,*>} JSON object
+         */
+        ColumnarFeatures.prototype.toJSON = function toJSON() {
+            return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
+        };
+
+        /**
+         * Gets the default type url for ColumnarFeatures
+         * @function getTypeUrl
+         * @memberof stt.ColumnarFeatures
+         * @static
+         * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+         * @returns {string} The default type url
+         */
+        ColumnarFeatures.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
+            if (typeUrlPrefix === undefined) {
+                typeUrlPrefix = "type.googleapis.com";
+            }
+            return typeUrlPrefix + "/stt.ColumnarFeatures";
+        };
+
+        return ColumnarFeatures;
+    })();
+
+    stt.NumericColumn = (function() {
+
+        /**
+         * Properties of a NumericColumn.
+         * @memberof stt
+         * @interface INumericColumn
+         * @property {string|null} [name] NumericColumn name
+         * @property {Array.<number>|null} [values] NumericColumn values
+         * @property {Array.<number>|null} [valuesF64] NumericColumn valuesF64
+         */
+
+        /**
+         * Constructs a new NumericColumn.
+         * @memberof stt
+         * @classdesc Represents a NumericColumn.
+         * @implements INumericColumn
+         * @constructor
+         * @param {stt.INumericColumn=} [properties] Properties to set
+         */
+        function NumericColumn(properties) {
+            this.values = [];
+            this.valuesF64 = [];
+            if (properties)
+                for (let keys = Object.keys(properties), i = 0; i < keys.length; ++i)
+                    if (properties[keys[i]] != null)
+                        this[keys[i]] = properties[keys[i]];
+        }
+
+        /**
+         * NumericColumn name.
+         * @member {string} name
+         * @memberof stt.NumericColumn
+         * @instance
+         */
+        NumericColumn.prototype.name = "";
+
+        /**
+         * NumericColumn values.
+         * @member {Array.<number>} values
+         * @memberof stt.NumericColumn
+         * @instance
+         */
+        NumericColumn.prototype.values = $util.emptyArray;
+
+        /**
+         * NumericColumn valuesF64.
+         * @member {Array.<number>} valuesF64
+         * @memberof stt.NumericColumn
+         * @instance
+         */
+        NumericColumn.prototype.valuesF64 = $util.emptyArray;
+
+        /**
+         * Creates a new NumericColumn instance using the specified properties.
+         * @function create
+         * @memberof stt.NumericColumn
+         * @static
+         * @param {stt.INumericColumn=} [properties] Properties to set
+         * @returns {stt.NumericColumn} NumericColumn instance
+         */
+        NumericColumn.create = function create(properties) {
+            return new NumericColumn(properties);
+        };
+
+        /**
+         * Encodes the specified NumericColumn message. Does not implicitly {@link stt.NumericColumn.verify|verify} messages.
+         * @function encode
+         * @memberof stt.NumericColumn
+         * @static
+         * @param {stt.INumericColumn} message NumericColumn message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        NumericColumn.encode = function encode(message, writer) {
+            if (!writer)
+                writer = $Writer.create();
+            if (message.name != null && Object.hasOwnProperty.call(message, "name"))
+                writer.uint32(/* id 1, wireType 2 =*/10).string(message.name);
+            if (message.values != null && message.values.length) {
+                writer.uint32(/* id 2, wireType 2 =*/18).fork();
+                for (let i = 0; i < message.values.length; ++i)
+                    writer.float(message.values[i]);
+                writer.ldelim();
+            }
+            if (message.valuesF64 != null && message.valuesF64.length) {
+                writer.uint32(/* id 3, wireType 2 =*/26).fork();
+                for (let i = 0; i < message.valuesF64.length; ++i)
+                    writer.double(message.valuesF64[i]);
+                writer.ldelim();
+            }
+            return writer;
+        };
+
+        /**
+         * Encodes the specified NumericColumn message, length delimited. Does not implicitly {@link stt.NumericColumn.verify|verify} messages.
+         * @function encodeDelimited
+         * @memberof stt.NumericColumn
+         * @static
+         * @param {stt.INumericColumn} message NumericColumn message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        NumericColumn.encodeDelimited = function encodeDelimited(message, writer) {
+            return this.encode(message, writer).ldelim();
+        };
+
+        /**
+         * Decodes a NumericColumn message from the specified reader or buffer.
+         * @function decode
+         * @memberof stt.NumericColumn
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @param {number} [length] Message length if known beforehand
+         * @returns {stt.NumericColumn} NumericColumn
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        NumericColumn.decode = function decode(reader, length, error) {
+            if (!(reader instanceof $Reader))
+                reader = $Reader.create(reader);
+            let end = length === undefined ? reader.len : reader.pos + length, message = new $root.stt.NumericColumn();
+            while (reader.pos < end) {
+                let tag = reader.uint32();
+                if (tag === error)
+                    break;
+                switch (tag >>> 3) {
+                case 1: {
+                        message.name = reader.string();
+                        break;
+                    }
+                case 2: {
+                        if (!(message.values && message.values.length))
+                            message.values = [];
+                        if ((tag & 7) === 2) {
+                            let end2 = reader.uint32() + reader.pos;
+                            while (reader.pos < end2)
+                                message.values.push(reader.float());
+                        } else
+                            message.values.push(reader.float());
+                        break;
+                    }
+                case 3: {
+                        if (!(message.valuesF64 && message.valuesF64.length))
+                            message.valuesF64 = [];
+                        if ((tag & 7) === 2) {
+                            let end2 = reader.uint32() + reader.pos;
+                            while (reader.pos < end2)
+                                message.valuesF64.push(reader.double());
+                        } else
+                            message.valuesF64.push(reader.double());
+                        break;
+                    }
+                default:
+                    reader.skipType(tag & 7);
+                    break;
+                }
+            }
+            return message;
+        };
+
+        /**
+         * Decodes a NumericColumn message from the specified reader or buffer, length delimited.
+         * @function decodeDelimited
+         * @memberof stt.NumericColumn
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @returns {stt.NumericColumn} NumericColumn
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        NumericColumn.decodeDelimited = function decodeDelimited(reader) {
+            if (!(reader instanceof $Reader))
+                reader = new $Reader(reader);
+            return this.decode(reader, reader.uint32());
+        };
+
+        /**
+         * Verifies a NumericColumn message.
+         * @function verify
+         * @memberof stt.NumericColumn
+         * @static
+         * @param {Object.<string,*>} message Plain object to verify
+         * @returns {string|null} `null` if valid, otherwise the reason why it is not
+         */
+        NumericColumn.verify = function verify(message) {
+            if (typeof message !== "object" || message === null)
+                return "object expected";
+            if (message.name != null && message.hasOwnProperty("name"))
+                if (!$util.isString(message.name))
+                    return "name: string expected";
+            if (message.values != null && message.hasOwnProperty("values")) {
+                if (!Array.isArray(message.values))
+                    return "values: array expected";
+                for (let i = 0; i < message.values.length; ++i)
+                    if (typeof message.values[i] !== "number")
+                        return "values: number[] expected";
+            }
+            if (message.valuesF64 != null && message.hasOwnProperty("valuesF64")) {
+                if (!Array.isArray(message.valuesF64))
+                    return "valuesF64: array expected";
+                for (let i = 0; i < message.valuesF64.length; ++i)
+                    if (typeof message.valuesF64[i] !== "number")
+                        return "valuesF64: number[] expected";
+            }
+            return null;
+        };
+
+        /**
+         * Creates a NumericColumn message from a plain object. Also converts values to their respective internal types.
+         * @function fromObject
+         * @memberof stt.NumericColumn
+         * @static
+         * @param {Object.<string,*>} object Plain object
+         * @returns {stt.NumericColumn} NumericColumn
+         */
+        NumericColumn.fromObject = function fromObject(object) {
+            if (object instanceof $root.stt.NumericColumn)
+                return object;
+            let message = new $root.stt.NumericColumn();
+            if (object.name != null)
+                message.name = String(object.name);
+            if (object.values) {
+                if (!Array.isArray(object.values))
+                    throw TypeError(".stt.NumericColumn.values: array expected");
+                message.values = [];
+                for (let i = 0; i < object.values.length; ++i)
+                    message.values[i] = Number(object.values[i]);
+            }
+            if (object.valuesF64) {
+                if (!Array.isArray(object.valuesF64))
+                    throw TypeError(".stt.NumericColumn.valuesF64: array expected");
+                message.valuesF64 = [];
+                for (let i = 0; i < object.valuesF64.length; ++i)
+                    message.valuesF64[i] = Number(object.valuesF64[i]);
+            }
+            return message;
+        };
+
+        /**
+         * Creates a plain object from a NumericColumn message. Also converts values to other types if specified.
+         * @function toObject
+         * @memberof stt.NumericColumn
+         * @static
+         * @param {stt.NumericColumn} message NumericColumn
+         * @param {$protobuf.IConversionOptions} [options] Conversion options
+         * @returns {Object.<string,*>} Plain object
+         */
+        NumericColumn.toObject = function toObject(message, options) {
+            if (!options)
+                options = {};
+            let object = {};
+            if (options.arrays || options.defaults) {
+                object.values = [];
+                object.valuesF64 = [];
+            }
+            if (options.defaults)
+                object.name = "";
+            if (message.name != null && message.hasOwnProperty("name"))
+                object.name = message.name;
+            if (message.values && message.values.length) {
+                object.values = [];
+                for (let j = 0; j < message.values.length; ++j)
+                    object.values[j] = options.json && !isFinite(message.values[j]) ? String(message.values[j]) : message.values[j];
+            }
+            if (message.valuesF64 && message.valuesF64.length) {
+                object.valuesF64 = [];
+                for (let j = 0; j < message.valuesF64.length; ++j)
+                    object.valuesF64[j] = options.json && !isFinite(message.valuesF64[j]) ? String(message.valuesF64[j]) : message.valuesF64[j];
+            }
+            return object;
+        };
+
+        /**
+         * Converts this NumericColumn to JSON.
+         * @function toJSON
+         * @memberof stt.NumericColumn
+         * @instance
+         * @returns {Object.<string,*>} JSON object
+         */
+        NumericColumn.prototype.toJSON = function toJSON() {
+            return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
+        };
+
+        /**
+         * Gets the default type url for NumericColumn
+         * @function getTypeUrl
+         * @memberof stt.NumericColumn
+         * @static
+         * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+         * @returns {string} The default type url
+         */
+        NumericColumn.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
+            if (typeUrlPrefix === undefined) {
+                typeUrlPrefix = "type.googleapis.com";
+            }
+            return typeUrlPrefix + "/stt.NumericColumn";
+        };
+
+        return NumericColumn;
+    })();
+
+    stt.CategoricalColumn = (function() {
+
+        /**
+         * Properties of a CategoricalColumn.
+         * @memberof stt
+         * @interface ICategoricalColumn
+         * @property {string|null} [name] CategoricalColumn name
+         * @property {Array.<string>|null} [categories] CategoricalColumn categories
+         * @property {Uint8Array|null} [indices] CategoricalColumn indices
+         */
+
+        /**
+         * Constructs a new CategoricalColumn.
+         * @memberof stt
+         * @classdesc Represents a CategoricalColumn.
+         * @implements ICategoricalColumn
+         * @constructor
+         * @param {stt.ICategoricalColumn=} [properties] Properties to set
+         */
+        function CategoricalColumn(properties) {
+            this.categories = [];
+            if (properties)
+                for (let keys = Object.keys(properties), i = 0; i < keys.length; ++i)
+                    if (properties[keys[i]] != null)
+                        this[keys[i]] = properties[keys[i]];
+        }
+
+        /**
+         * CategoricalColumn name.
+         * @member {string} name
+         * @memberof stt.CategoricalColumn
+         * @instance
+         */
+        CategoricalColumn.prototype.name = "";
+
+        /**
+         * CategoricalColumn categories.
+         * @member {Array.<string>} categories
+         * @memberof stt.CategoricalColumn
+         * @instance
+         */
+        CategoricalColumn.prototype.categories = $util.emptyArray;
+
+        /**
+         * CategoricalColumn indices.
+         * @member {Uint8Array} indices
+         * @memberof stt.CategoricalColumn
+         * @instance
+         */
+        CategoricalColumn.prototype.indices = $util.newBuffer([]);
+
+        /**
+         * Creates a new CategoricalColumn instance using the specified properties.
+         * @function create
+         * @memberof stt.CategoricalColumn
+         * @static
+         * @param {stt.ICategoricalColumn=} [properties] Properties to set
+         * @returns {stt.CategoricalColumn} CategoricalColumn instance
+         */
+        CategoricalColumn.create = function create(properties) {
+            return new CategoricalColumn(properties);
+        };
+
+        /**
+         * Encodes the specified CategoricalColumn message. Does not implicitly {@link stt.CategoricalColumn.verify|verify} messages.
+         * @function encode
+         * @memberof stt.CategoricalColumn
+         * @static
+         * @param {stt.ICategoricalColumn} message CategoricalColumn message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        CategoricalColumn.encode = function encode(message, writer) {
+            if (!writer)
+                writer = $Writer.create();
+            if (message.name != null && Object.hasOwnProperty.call(message, "name"))
+                writer.uint32(/* id 1, wireType 2 =*/10).string(message.name);
+            if (message.categories != null && message.categories.length)
+                for (let i = 0; i < message.categories.length; ++i)
+                    writer.uint32(/* id 2, wireType 2 =*/18).string(message.categories[i]);
+            if (message.indices != null && Object.hasOwnProperty.call(message, "indices"))
+                writer.uint32(/* id 3, wireType 2 =*/26).bytes(message.indices);
+            return writer;
+        };
+
+        /**
+         * Encodes the specified CategoricalColumn message, length delimited. Does not implicitly {@link stt.CategoricalColumn.verify|verify} messages.
+         * @function encodeDelimited
+         * @memberof stt.CategoricalColumn
+         * @static
+         * @param {stt.ICategoricalColumn} message CategoricalColumn message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        CategoricalColumn.encodeDelimited = function encodeDelimited(message, writer) {
+            return this.encode(message, writer).ldelim();
+        };
+
+        /**
+         * Decodes a CategoricalColumn message from the specified reader or buffer.
+         * @function decode
+         * @memberof stt.CategoricalColumn
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @param {number} [length] Message length if known beforehand
+         * @returns {stt.CategoricalColumn} CategoricalColumn
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        CategoricalColumn.decode = function decode(reader, length, error) {
+            if (!(reader instanceof $Reader))
+                reader = $Reader.create(reader);
+            let end = length === undefined ? reader.len : reader.pos + length, message = new $root.stt.CategoricalColumn();
+            while (reader.pos < end) {
+                let tag = reader.uint32();
+                if (tag === error)
+                    break;
+                switch (tag >>> 3) {
+                case 1: {
+                        message.name = reader.string();
+                        break;
+                    }
+                case 2: {
+                        if (!(message.categories && message.categories.length))
+                            message.categories = [];
+                        message.categories.push(reader.string());
+                        break;
+                    }
+                case 3: {
+                        message.indices = reader.bytes();
+                        break;
+                    }
+                default:
+                    reader.skipType(tag & 7);
+                    break;
+                }
+            }
+            return message;
+        };
+
+        /**
+         * Decodes a CategoricalColumn message from the specified reader or buffer, length delimited.
+         * @function decodeDelimited
+         * @memberof stt.CategoricalColumn
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @returns {stt.CategoricalColumn} CategoricalColumn
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        CategoricalColumn.decodeDelimited = function decodeDelimited(reader) {
+            if (!(reader instanceof $Reader))
+                reader = new $Reader(reader);
+            return this.decode(reader, reader.uint32());
+        };
+
+        /**
+         * Verifies a CategoricalColumn message.
+         * @function verify
+         * @memberof stt.CategoricalColumn
+         * @static
+         * @param {Object.<string,*>} message Plain object to verify
+         * @returns {string|null} `null` if valid, otherwise the reason why it is not
+         */
+        CategoricalColumn.verify = function verify(message) {
+            if (typeof message !== "object" || message === null)
+                return "object expected";
+            if (message.name != null && message.hasOwnProperty("name"))
+                if (!$util.isString(message.name))
+                    return "name: string expected";
+            if (message.categories != null && message.hasOwnProperty("categories")) {
+                if (!Array.isArray(message.categories))
+                    return "categories: array expected";
+                for (let i = 0; i < message.categories.length; ++i)
+                    if (!$util.isString(message.categories[i]))
+                        return "categories: string[] expected";
+            }
+            if (message.indices != null && message.hasOwnProperty("indices"))
+                if (!(message.indices && typeof message.indices.length === "number" || $util.isString(message.indices)))
+                    return "indices: buffer expected";
+            return null;
+        };
+
+        /**
+         * Creates a CategoricalColumn message from a plain object. Also converts values to their respective internal types.
+         * @function fromObject
+         * @memberof stt.CategoricalColumn
+         * @static
+         * @param {Object.<string,*>} object Plain object
+         * @returns {stt.CategoricalColumn} CategoricalColumn
+         */
+        CategoricalColumn.fromObject = function fromObject(object) {
+            if (object instanceof $root.stt.CategoricalColumn)
+                return object;
+            let message = new $root.stt.CategoricalColumn();
+            if (object.name != null)
+                message.name = String(object.name);
+            if (object.categories) {
+                if (!Array.isArray(object.categories))
+                    throw TypeError(".stt.CategoricalColumn.categories: array expected");
+                message.categories = [];
+                for (let i = 0; i < object.categories.length; ++i)
+                    message.categories[i] = String(object.categories[i]);
+            }
+            if (object.indices != null)
+                if (typeof object.indices === "string")
+                    $util.base64.decode(object.indices, message.indices = $util.newBuffer($util.base64.length(object.indices)), 0);
+                else if (object.indices.length >= 0)
+                    message.indices = object.indices;
+            return message;
+        };
+
+        /**
+         * Creates a plain object from a CategoricalColumn message. Also converts values to other types if specified.
+         * @function toObject
+         * @memberof stt.CategoricalColumn
+         * @static
+         * @param {stt.CategoricalColumn} message CategoricalColumn
+         * @param {$protobuf.IConversionOptions} [options] Conversion options
+         * @returns {Object.<string,*>} Plain object
+         */
+        CategoricalColumn.toObject = function toObject(message, options) {
+            if (!options)
+                options = {};
+            let object = {};
+            if (options.arrays || options.defaults)
+                object.categories = [];
+            if (options.defaults) {
+                object.name = "";
+                if (options.bytes === String)
+                    object.indices = "";
+                else {
+                    object.indices = [];
+                    if (options.bytes !== Array)
+                        object.indices = $util.newBuffer(object.indices);
+                }
+            }
+            if (message.name != null && message.hasOwnProperty("name"))
+                object.name = message.name;
+            if (message.categories && message.categories.length) {
+                object.categories = [];
+                for (let j = 0; j < message.categories.length; ++j)
+                    object.categories[j] = message.categories[j];
+            }
+            if (message.indices != null && message.hasOwnProperty("indices"))
+                object.indices = options.bytes === String ? $util.base64.encode(message.indices, 0, message.indices.length) : options.bytes === Array ? Array.prototype.slice.call(message.indices) : message.indices;
+            return object;
+        };
+
+        /**
+         * Converts this CategoricalColumn to JSON.
+         * @function toJSON
+         * @memberof stt.CategoricalColumn
+         * @instance
+         * @returns {Object.<string,*>} JSON object
+         */
+        CategoricalColumn.prototype.toJSON = function toJSON() {
+            return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
+        };
+
+        /**
+         * Gets the default type url for CategoricalColumn
+         * @function getTypeUrl
+         * @memberof stt.CategoricalColumn
+         * @static
+         * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+         * @returns {string} The default type url
+         */
+        CategoricalColumn.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
+            if (typeUrlPrefix === undefined) {
+                typeUrlPrefix = "type.googleapis.com";
+            }
+            return typeUrlPrefix + "/stt.CategoricalColumn";
+        };
+
+        return CategoricalColumn;
     })();
 
     return stt;

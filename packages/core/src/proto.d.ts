@@ -3,706 +3,6 @@ import Long = require("long");
 /** Namespace stt. */
 export namespace stt {
 
-    /** Properties of a Tile. */
-    interface ITile {
-
-        /** Tile version */
-        version?: (number|null);
-
-        /** Tile timeStart */
-        timeStart?: (number|Long|null);
-
-        /** Tile timeEnd */
-        timeEnd?: (number|Long|null);
-
-        /** Tile layers */
-        layers?: (stt.ILayer[]|null);
-    }
-
-    /** Represents a Tile. */
-    class Tile implements ITile {
-
-        /**
-         * Constructs a new Tile.
-         * @param [properties] Properties to set
-         */
-        constructor(properties?: stt.ITile);
-
-        /** Tile version. */
-        public version: number;
-
-        /** Tile timeStart. */
-        public timeStart: (number|Long);
-
-        /** Tile timeEnd. */
-        public timeEnd: (number|Long);
-
-        /** Tile layers. */
-        public layers: stt.ILayer[];
-
-        /**
-         * Creates a new Tile instance using the specified properties.
-         * @param [properties] Properties to set
-         * @returns Tile instance
-         */
-        public static create(properties?: stt.ITile): stt.Tile;
-
-        /**
-         * Encodes the specified Tile message. Does not implicitly {@link stt.Tile.verify|verify} messages.
-         * @param message Tile message or plain object to encode
-         * @param [writer] Writer to encode to
-         * @returns Writer
-         */
-        public static encode(message: stt.ITile, writer?: $protobuf.Writer): $protobuf.Writer;
-
-        /**
-         * Encodes the specified Tile message, length delimited. Does not implicitly {@link stt.Tile.verify|verify} messages.
-         * @param message Tile message or plain object to encode
-         * @param [writer] Writer to encode to
-         * @returns Writer
-         */
-        public static encodeDelimited(message: stt.ITile, writer?: $protobuf.Writer): $protobuf.Writer;
-
-        /**
-         * Decodes a Tile message from the specified reader or buffer.
-         * @param reader Reader or buffer to decode from
-         * @param [length] Message length if known beforehand
-         * @returns Tile
-         * @throws {Error} If the payload is not a reader or valid buffer
-         * @throws {$protobuf.util.ProtocolError} If required fields are missing
-         */
-        public static decode(reader: ($protobuf.Reader|Uint8Array), length?: number): stt.Tile;
-
-        /**
-         * Decodes a Tile message from the specified reader or buffer, length delimited.
-         * @param reader Reader or buffer to decode from
-         * @returns Tile
-         * @throws {Error} If the payload is not a reader or valid buffer
-         * @throws {$protobuf.util.ProtocolError} If required fields are missing
-         */
-        public static decodeDelimited(reader: ($protobuf.Reader|Uint8Array)): stt.Tile;
-
-        /**
-         * Verifies a Tile message.
-         * @param message Plain object to verify
-         * @returns `null` if valid, otherwise the reason why it is not
-         */
-        public static verify(message: { [k: string]: any }): (string|null);
-
-        /**
-         * Creates a Tile message from a plain object. Also converts values to their respective internal types.
-         * @param object Plain object
-         * @returns Tile
-         */
-        public static fromObject(object: { [k: string]: any }): stt.Tile;
-
-        /**
-         * Creates a plain object from a Tile message. Also converts values to other types if specified.
-         * @param message Tile
-         * @param [options] Conversion options
-         * @returns Plain object
-         */
-        public static toObject(message: stt.Tile, options?: $protobuf.IConversionOptions): { [k: string]: any };
-
-        /**
-         * Converts this Tile to JSON.
-         * @returns JSON object
-         */
-        public toJSON(): { [k: string]: any };
-
-        /**
-         * Gets the default type url for Tile
-         * @param [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
-         * @returns The default type url
-         */
-        public static getTypeUrl(typeUrlPrefix?: string): string;
-    }
-
-    /** Properties of a Layer. */
-    interface ILayer {
-
-        /** Layer name */
-        name?: (string|null);
-
-        /** Layer extent */
-        extent?: (number|null);
-
-        /** Layer columnar */
-        columnar?: (stt.IColumnarFeatures|null);
-    }
-
-    /** Represents a Layer. */
-    class Layer implements ILayer {
-
-        /**
-         * Constructs a new Layer.
-         * @param [properties] Properties to set
-         */
-        constructor(properties?: stt.ILayer);
-
-        /** Layer name. */
-        public name: string;
-
-        /** Layer extent. */
-        public extent: number;
-
-        /** Layer columnar. */
-        public columnar?: (stt.IColumnarFeatures|null);
-
-        /**
-         * Creates a new Layer instance using the specified properties.
-         * @param [properties] Properties to set
-         * @returns Layer instance
-         */
-        public static create(properties?: stt.ILayer): stt.Layer;
-
-        /**
-         * Encodes the specified Layer message. Does not implicitly {@link stt.Layer.verify|verify} messages.
-         * @param message Layer message or plain object to encode
-         * @param [writer] Writer to encode to
-         * @returns Writer
-         */
-        public static encode(message: stt.ILayer, writer?: $protobuf.Writer): $protobuf.Writer;
-
-        /**
-         * Encodes the specified Layer message, length delimited. Does not implicitly {@link stt.Layer.verify|verify} messages.
-         * @param message Layer message or plain object to encode
-         * @param [writer] Writer to encode to
-         * @returns Writer
-         */
-        public static encodeDelimited(message: stt.ILayer, writer?: $protobuf.Writer): $protobuf.Writer;
-
-        /**
-         * Decodes a Layer message from the specified reader or buffer.
-         * @param reader Reader or buffer to decode from
-         * @param [length] Message length if known beforehand
-         * @returns Layer
-         * @throws {Error} If the payload is not a reader or valid buffer
-         * @throws {$protobuf.util.ProtocolError} If required fields are missing
-         */
-        public static decode(reader: ($protobuf.Reader|Uint8Array), length?: number): stt.Layer;
-
-        /**
-         * Decodes a Layer message from the specified reader or buffer, length delimited.
-         * @param reader Reader or buffer to decode from
-         * @returns Layer
-         * @throws {Error} If the payload is not a reader or valid buffer
-         * @throws {$protobuf.util.ProtocolError} If required fields are missing
-         */
-        public static decodeDelimited(reader: ($protobuf.Reader|Uint8Array)): stt.Layer;
-
-        /**
-         * Verifies a Layer message.
-         * @param message Plain object to verify
-         * @returns `null` if valid, otherwise the reason why it is not
-         */
-        public static verify(message: { [k: string]: any }): (string|null);
-
-        /**
-         * Creates a Layer message from a plain object. Also converts values to their respective internal types.
-         * @param object Plain object
-         * @returns Layer
-         */
-        public static fromObject(object: { [k: string]: any }): stt.Layer;
-
-        /**
-         * Creates a plain object from a Layer message. Also converts values to other types if specified.
-         * @param message Layer
-         * @param [options] Conversion options
-         * @returns Plain object
-         */
-        public static toObject(message: stt.Layer, options?: $protobuf.IConversionOptions): { [k: string]: any };
-
-        /**
-         * Converts this Layer to JSON.
-         * @returns JSON object
-         */
-        public toJSON(): { [k: string]: any };
-
-        /**
-         * Gets the default type url for Layer
-         * @param [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
-         * @returns The default type url
-         */
-        public static getTypeUrl(typeUrlPrefix?: string): string;
-    }
-
-    /** Properties of a Feature. */
-    interface IFeature {
-    }
-
-    /** Represents a Feature. */
-    class Feature implements IFeature {
-
-        /**
-         * Constructs a new Feature.
-         * @param [properties] Properties to set
-         */
-        constructor(properties?: stt.IFeature);
-
-        /**
-         * Creates a new Feature instance using the specified properties.
-         * @param [properties] Properties to set
-         * @returns Feature instance
-         */
-        public static create(properties?: stt.IFeature): stt.Feature;
-
-        /**
-         * Encodes the specified Feature message. Does not implicitly {@link stt.Feature.verify|verify} messages.
-         * @param message Feature message or plain object to encode
-         * @param [writer] Writer to encode to
-         * @returns Writer
-         */
-        public static encode(message: stt.IFeature, writer?: $protobuf.Writer): $protobuf.Writer;
-
-        /**
-         * Encodes the specified Feature message, length delimited. Does not implicitly {@link stt.Feature.verify|verify} messages.
-         * @param message Feature message or plain object to encode
-         * @param [writer] Writer to encode to
-         * @returns Writer
-         */
-        public static encodeDelimited(message: stt.IFeature, writer?: $protobuf.Writer): $protobuf.Writer;
-
-        /**
-         * Decodes a Feature message from the specified reader or buffer.
-         * @param reader Reader or buffer to decode from
-         * @param [length] Message length if known beforehand
-         * @returns Feature
-         * @throws {Error} If the payload is not a reader or valid buffer
-         * @throws {$protobuf.util.ProtocolError} If required fields are missing
-         */
-        public static decode(reader: ($protobuf.Reader|Uint8Array), length?: number): stt.Feature;
-
-        /**
-         * Decodes a Feature message from the specified reader or buffer, length delimited.
-         * @param reader Reader or buffer to decode from
-         * @returns Feature
-         * @throws {Error} If the payload is not a reader or valid buffer
-         * @throws {$protobuf.util.ProtocolError} If required fields are missing
-         */
-        public static decodeDelimited(reader: ($protobuf.Reader|Uint8Array)): stt.Feature;
-
-        /**
-         * Verifies a Feature message.
-         * @param message Plain object to verify
-         * @returns `null` if valid, otherwise the reason why it is not
-         */
-        public static verify(message: { [k: string]: any }): (string|null);
-
-        /**
-         * Creates a Feature message from a plain object. Also converts values to their respective internal types.
-         * @param object Plain object
-         * @returns Feature
-         */
-        public static fromObject(object: { [k: string]: any }): stt.Feature;
-
-        /**
-         * Creates a plain object from a Feature message. Also converts values to other types if specified.
-         * @param message Feature
-         * @param [options] Conversion options
-         * @returns Plain object
-         */
-        public static toObject(message: stt.Feature, options?: $protobuf.IConversionOptions): { [k: string]: any };
-
-        /**
-         * Converts this Feature to JSON.
-         * @returns JSON object
-         */
-        public toJSON(): { [k: string]: any };
-
-        /**
-         * Gets the default type url for Feature
-         * @param [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
-         * @returns The default type url
-         */
-        public static getTypeUrl(typeUrlPrefix?: string): string;
-    }
-
-    namespace Feature {
-
-        /** GeomType enum. */
-        enum GeomType {
-            POINT = 0,
-            LINESTRING = 1,
-            POLYGON = 2
-        }
-    }
-
-    /** Properties of a ColumnarFeatures. */
-    interface IColumnarFeatures {
-
-        /** ColumnarFeatures featureCount */
-        featureCount?: (number|null);
-
-        /** ColumnarFeatures geometryType */
-        geometryType?: (stt.Feature.GeomType|null);
-
-        /** ColumnarFeatures featureIds */
-        featureIds?: ((number|Long)[]|null);
-
-        /** ColumnarFeatures geometry */
-        geometry?: (number[]|null);
-
-        /** ColumnarFeatures geometryOffsets */
-        geometryOffsets?: (number[]|null);
-
-        /** ColumnarFeatures startTimes */
-        startTimes?: ((number|Long)[]|null);
-
-        /** ColumnarFeatures endTimes */
-        endTimes?: ((number|Long)[]|null);
-
-        /** ColumnarFeatures numericProperties */
-        numericProperties?: (stt.INumericColumn[]|null);
-
-        /** ColumnarFeatures categoricalProperties */
-        categoricalProperties?: (stt.ICategoricalColumn[]|null);
-
-        /** ColumnarFeatures ringOffsets */
-        ringOffsets?: (number[]|null);
-
-        /** ColumnarFeatures ringOffsetsOffsets */
-        ringOffsetsOffsets?: (number[]|null);
-    }
-
-    /** Represents a ColumnarFeatures. */
-    class ColumnarFeatures implements IColumnarFeatures {
-
-        /**
-         * Constructs a new ColumnarFeatures.
-         * @param [properties] Properties to set
-         */
-        constructor(properties?: stt.IColumnarFeatures);
-
-        /** ColumnarFeatures featureCount. */
-        public featureCount: number;
-
-        /** ColumnarFeatures geometryType. */
-        public geometryType: stt.Feature.GeomType;
-
-        /** ColumnarFeatures featureIds. */
-        public featureIds: (number|Long)[];
-
-        /** ColumnarFeatures geometry. */
-        public geometry: number[];
-
-        /** ColumnarFeatures geometryOffsets. */
-        public geometryOffsets: number[];
-
-        /** ColumnarFeatures startTimes. */
-        public startTimes: (number|Long)[];
-
-        /** ColumnarFeatures endTimes. */
-        public endTimes: (number|Long)[];
-
-        /** ColumnarFeatures numericProperties. */
-        public numericProperties: stt.INumericColumn[];
-
-        /** ColumnarFeatures categoricalProperties. */
-        public categoricalProperties: stt.ICategoricalColumn[];
-
-        /** ColumnarFeatures ringOffsets. */
-        public ringOffsets: number[];
-
-        /** ColumnarFeatures ringOffsetsOffsets. */
-        public ringOffsetsOffsets: number[];
-
-        /**
-         * Creates a new ColumnarFeatures instance using the specified properties.
-         * @param [properties] Properties to set
-         * @returns ColumnarFeatures instance
-         */
-        public static create(properties?: stt.IColumnarFeatures): stt.ColumnarFeatures;
-
-        /**
-         * Encodes the specified ColumnarFeatures message. Does not implicitly {@link stt.ColumnarFeatures.verify|verify} messages.
-         * @param message ColumnarFeatures message or plain object to encode
-         * @param [writer] Writer to encode to
-         * @returns Writer
-         */
-        public static encode(message: stt.IColumnarFeatures, writer?: $protobuf.Writer): $protobuf.Writer;
-
-        /**
-         * Encodes the specified ColumnarFeatures message, length delimited. Does not implicitly {@link stt.ColumnarFeatures.verify|verify} messages.
-         * @param message ColumnarFeatures message or plain object to encode
-         * @param [writer] Writer to encode to
-         * @returns Writer
-         */
-        public static encodeDelimited(message: stt.IColumnarFeatures, writer?: $protobuf.Writer): $protobuf.Writer;
-
-        /**
-         * Decodes a ColumnarFeatures message from the specified reader or buffer.
-         * @param reader Reader or buffer to decode from
-         * @param [length] Message length if known beforehand
-         * @returns ColumnarFeatures
-         * @throws {Error} If the payload is not a reader or valid buffer
-         * @throws {$protobuf.util.ProtocolError} If required fields are missing
-         */
-        public static decode(reader: ($protobuf.Reader|Uint8Array), length?: number): stt.ColumnarFeatures;
-
-        /**
-         * Decodes a ColumnarFeatures message from the specified reader or buffer, length delimited.
-         * @param reader Reader or buffer to decode from
-         * @returns ColumnarFeatures
-         * @throws {Error} If the payload is not a reader or valid buffer
-         * @throws {$protobuf.util.ProtocolError} If required fields are missing
-         */
-        public static decodeDelimited(reader: ($protobuf.Reader|Uint8Array)): stt.ColumnarFeatures;
-
-        /**
-         * Verifies a ColumnarFeatures message.
-         * @param message Plain object to verify
-         * @returns `null` if valid, otherwise the reason why it is not
-         */
-        public static verify(message: { [k: string]: any }): (string|null);
-
-        /**
-         * Creates a ColumnarFeatures message from a plain object. Also converts values to their respective internal types.
-         * @param object Plain object
-         * @returns ColumnarFeatures
-         */
-        public static fromObject(object: { [k: string]: any }): stt.ColumnarFeatures;
-
-        /**
-         * Creates a plain object from a ColumnarFeatures message. Also converts values to other types if specified.
-         * @param message ColumnarFeatures
-         * @param [options] Conversion options
-         * @returns Plain object
-         */
-        public static toObject(message: stt.ColumnarFeatures, options?: $protobuf.IConversionOptions): { [k: string]: any };
-
-        /**
-         * Converts this ColumnarFeatures to JSON.
-         * @returns JSON object
-         */
-        public toJSON(): { [k: string]: any };
-
-        /**
-         * Gets the default type url for ColumnarFeatures
-         * @param [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
-         * @returns The default type url
-         */
-        public static getTypeUrl(typeUrlPrefix?: string): string;
-    }
-
-    /** Properties of a NumericColumn. */
-    interface INumericColumn {
-
-        /** NumericColumn name */
-        name?: (string|null);
-
-        /** NumericColumn values */
-        values?: (number[]|null);
-
-        /** NumericColumn valuesF64 */
-        valuesF64?: (number[]|null);
-    }
-
-    /** Represents a NumericColumn. */
-    class NumericColumn implements INumericColumn {
-
-        /**
-         * Constructs a new NumericColumn.
-         * @param [properties] Properties to set
-         */
-        constructor(properties?: stt.INumericColumn);
-
-        /** NumericColumn name. */
-        public name: string;
-
-        /** NumericColumn values. */
-        public values: number[];
-
-        /** NumericColumn valuesF64. */
-        public valuesF64: number[];
-
-        /**
-         * Creates a new NumericColumn instance using the specified properties.
-         * @param [properties] Properties to set
-         * @returns NumericColumn instance
-         */
-        public static create(properties?: stt.INumericColumn): stt.NumericColumn;
-
-        /**
-         * Encodes the specified NumericColumn message. Does not implicitly {@link stt.NumericColumn.verify|verify} messages.
-         * @param message NumericColumn message or plain object to encode
-         * @param [writer] Writer to encode to
-         * @returns Writer
-         */
-        public static encode(message: stt.INumericColumn, writer?: $protobuf.Writer): $protobuf.Writer;
-
-        /**
-         * Encodes the specified NumericColumn message, length delimited. Does not implicitly {@link stt.NumericColumn.verify|verify} messages.
-         * @param message NumericColumn message or plain object to encode
-         * @param [writer] Writer to encode to
-         * @returns Writer
-         */
-        public static encodeDelimited(message: stt.INumericColumn, writer?: $protobuf.Writer): $protobuf.Writer;
-
-        /**
-         * Decodes a NumericColumn message from the specified reader or buffer.
-         * @param reader Reader or buffer to decode from
-         * @param [length] Message length if known beforehand
-         * @returns NumericColumn
-         * @throws {Error} If the payload is not a reader or valid buffer
-         * @throws {$protobuf.util.ProtocolError} If required fields are missing
-         */
-        public static decode(reader: ($protobuf.Reader|Uint8Array), length?: number): stt.NumericColumn;
-
-        /**
-         * Decodes a NumericColumn message from the specified reader or buffer, length delimited.
-         * @param reader Reader or buffer to decode from
-         * @returns NumericColumn
-         * @throws {Error} If the payload is not a reader or valid buffer
-         * @throws {$protobuf.util.ProtocolError} If required fields are missing
-         */
-        public static decodeDelimited(reader: ($protobuf.Reader|Uint8Array)): stt.NumericColumn;
-
-        /**
-         * Verifies a NumericColumn message.
-         * @param message Plain object to verify
-         * @returns `null` if valid, otherwise the reason why it is not
-         */
-        public static verify(message: { [k: string]: any }): (string|null);
-
-        /**
-         * Creates a NumericColumn message from a plain object. Also converts values to their respective internal types.
-         * @param object Plain object
-         * @returns NumericColumn
-         */
-        public static fromObject(object: { [k: string]: any }): stt.NumericColumn;
-
-        /**
-         * Creates a plain object from a NumericColumn message. Also converts values to other types if specified.
-         * @param message NumericColumn
-         * @param [options] Conversion options
-         * @returns Plain object
-         */
-        public static toObject(message: stt.NumericColumn, options?: $protobuf.IConversionOptions): { [k: string]: any };
-
-        /**
-         * Converts this NumericColumn to JSON.
-         * @returns JSON object
-         */
-        public toJSON(): { [k: string]: any };
-
-        /**
-         * Gets the default type url for NumericColumn
-         * @param [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
-         * @returns The default type url
-         */
-        public static getTypeUrl(typeUrlPrefix?: string): string;
-    }
-
-    /** Properties of a CategoricalColumn. */
-    interface ICategoricalColumn {
-
-        /** CategoricalColumn name */
-        name?: (string|null);
-
-        /** CategoricalColumn categories */
-        categories?: (string[]|null);
-
-        /** CategoricalColumn indices */
-        indices?: (Uint8Array|null);
-    }
-
-    /** Represents a CategoricalColumn. */
-    class CategoricalColumn implements ICategoricalColumn {
-
-        /**
-         * Constructs a new CategoricalColumn.
-         * @param [properties] Properties to set
-         */
-        constructor(properties?: stt.ICategoricalColumn);
-
-        /** CategoricalColumn name. */
-        public name: string;
-
-        /** CategoricalColumn categories. */
-        public categories: string[];
-
-        /** CategoricalColumn indices. */
-        public indices: Uint8Array;
-
-        /**
-         * Creates a new CategoricalColumn instance using the specified properties.
-         * @param [properties] Properties to set
-         * @returns CategoricalColumn instance
-         */
-        public static create(properties?: stt.ICategoricalColumn): stt.CategoricalColumn;
-
-        /**
-         * Encodes the specified CategoricalColumn message. Does not implicitly {@link stt.CategoricalColumn.verify|verify} messages.
-         * @param message CategoricalColumn message or plain object to encode
-         * @param [writer] Writer to encode to
-         * @returns Writer
-         */
-        public static encode(message: stt.ICategoricalColumn, writer?: $protobuf.Writer): $protobuf.Writer;
-
-        /**
-         * Encodes the specified CategoricalColumn message, length delimited. Does not implicitly {@link stt.CategoricalColumn.verify|verify} messages.
-         * @param message CategoricalColumn message or plain object to encode
-         * @param [writer] Writer to encode to
-         * @returns Writer
-         */
-        public static encodeDelimited(message: stt.ICategoricalColumn, writer?: $protobuf.Writer): $protobuf.Writer;
-
-        /**
-         * Decodes a CategoricalColumn message from the specified reader or buffer.
-         * @param reader Reader or buffer to decode from
-         * @param [length] Message length if known beforehand
-         * @returns CategoricalColumn
-         * @throws {Error} If the payload is not a reader or valid buffer
-         * @throws {$protobuf.util.ProtocolError} If required fields are missing
-         */
-        public static decode(reader: ($protobuf.Reader|Uint8Array), length?: number): stt.CategoricalColumn;
-
-        /**
-         * Decodes a CategoricalColumn message from the specified reader or buffer, length delimited.
-         * @param reader Reader or buffer to decode from
-         * @returns CategoricalColumn
-         * @throws {Error} If the payload is not a reader or valid buffer
-         * @throws {$protobuf.util.ProtocolError} If required fields are missing
-         */
-        public static decodeDelimited(reader: ($protobuf.Reader|Uint8Array)): stt.CategoricalColumn;
-
-        /**
-         * Verifies a CategoricalColumn message.
-         * @param message Plain object to verify
-         * @returns `null` if valid, otherwise the reason why it is not
-         */
-        public static verify(message: { [k: string]: any }): (string|null);
-
-        /**
-         * Creates a CategoricalColumn message from a plain object. Also converts values to their respective internal types.
-         * @param object Plain object
-         * @returns CategoricalColumn
-         */
-        public static fromObject(object: { [k: string]: any }): stt.CategoricalColumn;
-
-        /**
-         * Creates a plain object from a CategoricalColumn message. Also converts values to other types if specified.
-         * @param message CategoricalColumn
-         * @param [options] Conversion options
-         * @returns Plain object
-         */
-        public static toObject(message: stt.CategoricalColumn, options?: $protobuf.IConversionOptions): { [k: string]: any };
-
-        /**
-         * Converts this CategoricalColumn to JSON.
-         * @returns JSON object
-         */
-        public toJSON(): { [k: string]: any };
-
-        /**
-         * Gets the default type url for CategoricalColumn
-         * @param [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
-         * @returns The default type url
-         */
-        public static getTypeUrl(typeUrlPrefix?: string): string;
-    }
-
     /** Properties of an Index. */
     interface IIndex {
 
@@ -2177,6 +1477,718 @@ export namespace stt {
 
         /**
          * Gets the default type url for ZoomStats
+         * @param [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+         * @returns The default type url
+         */
+        public static getTypeUrl(typeUrlPrefix?: string): string;
+    }
+
+    /** Properties of a Tile. */
+    interface ITile {
+
+        /** Tile version */
+        version?: (number|null);
+
+        /** Tile timeStart */
+        timeStart?: (number|Long|null);
+
+        /** Tile timeEnd */
+        timeEnd?: (number|Long|null);
+
+        /** Tile layers */
+        layers?: (stt.ILayer[]|null);
+    }
+
+    /** Represents a Tile. */
+    class Tile implements ITile {
+
+        /**
+         * Constructs a new Tile.
+         * @param [properties] Properties to set
+         */
+        constructor(properties?: stt.ITile);
+
+        /** Tile version. */
+        public version: number;
+
+        /** Tile timeStart. */
+        public timeStart: (number|Long);
+
+        /** Tile timeEnd. */
+        public timeEnd: (number|Long);
+
+        /** Tile layers. */
+        public layers: stt.ILayer[];
+
+        /**
+         * Creates a new Tile instance using the specified properties.
+         * @param [properties] Properties to set
+         * @returns Tile instance
+         */
+        public static create(properties?: stt.ITile): stt.Tile;
+
+        /**
+         * Encodes the specified Tile message. Does not implicitly {@link stt.Tile.verify|verify} messages.
+         * @param message Tile message or plain object to encode
+         * @param [writer] Writer to encode to
+         * @returns Writer
+         */
+        public static encode(message: stt.ITile, writer?: $protobuf.Writer): $protobuf.Writer;
+
+        /**
+         * Encodes the specified Tile message, length delimited. Does not implicitly {@link stt.Tile.verify|verify} messages.
+         * @param message Tile message or plain object to encode
+         * @param [writer] Writer to encode to
+         * @returns Writer
+         */
+        public static encodeDelimited(message: stt.ITile, writer?: $protobuf.Writer): $protobuf.Writer;
+
+        /**
+         * Decodes a Tile message from the specified reader or buffer.
+         * @param reader Reader or buffer to decode from
+         * @param [length] Message length if known beforehand
+         * @returns Tile
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        public static decode(reader: ($protobuf.Reader|Uint8Array), length?: number): stt.Tile;
+
+        /**
+         * Decodes a Tile message from the specified reader or buffer, length delimited.
+         * @param reader Reader or buffer to decode from
+         * @returns Tile
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        public static decodeDelimited(reader: ($protobuf.Reader|Uint8Array)): stt.Tile;
+
+        /**
+         * Verifies a Tile message.
+         * @param message Plain object to verify
+         * @returns `null` if valid, otherwise the reason why it is not
+         */
+        public static verify(message: { [k: string]: any }): (string|null);
+
+        /**
+         * Creates a Tile message from a plain object. Also converts values to their respective internal types.
+         * @param object Plain object
+         * @returns Tile
+         */
+        public static fromObject(object: { [k: string]: any }): stt.Tile;
+
+        /**
+         * Creates a plain object from a Tile message. Also converts values to other types if specified.
+         * @param message Tile
+         * @param [options] Conversion options
+         * @returns Plain object
+         */
+        public static toObject(message: stt.Tile, options?: $protobuf.IConversionOptions): { [k: string]: any };
+
+        /**
+         * Converts this Tile to JSON.
+         * @returns JSON object
+         */
+        public toJSON(): { [k: string]: any };
+
+        /**
+         * Gets the default type url for Tile
+         * @param [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+         * @returns The default type url
+         */
+        public static getTypeUrl(typeUrlPrefix?: string): string;
+    }
+
+    /** Properties of a Layer. */
+    interface ILayer {
+
+        /** Layer name */
+        name?: (string|null);
+
+        /** Layer extent */
+        extent?: (number|null);
+
+        /** Layer columnar */
+        columnar?: (stt.IColumnarFeatures|null);
+    }
+
+    /** Represents a Layer. */
+    class Layer implements ILayer {
+
+        /**
+         * Constructs a new Layer.
+         * @param [properties] Properties to set
+         */
+        constructor(properties?: stt.ILayer);
+
+        /** Layer name. */
+        public name: string;
+
+        /** Layer extent. */
+        public extent: number;
+
+        /** Layer columnar. */
+        public columnar?: (stt.IColumnarFeatures|null);
+
+        /**
+         * Creates a new Layer instance using the specified properties.
+         * @param [properties] Properties to set
+         * @returns Layer instance
+         */
+        public static create(properties?: stt.ILayer): stt.Layer;
+
+        /**
+         * Encodes the specified Layer message. Does not implicitly {@link stt.Layer.verify|verify} messages.
+         * @param message Layer message or plain object to encode
+         * @param [writer] Writer to encode to
+         * @returns Writer
+         */
+        public static encode(message: stt.ILayer, writer?: $protobuf.Writer): $protobuf.Writer;
+
+        /**
+         * Encodes the specified Layer message, length delimited. Does not implicitly {@link stt.Layer.verify|verify} messages.
+         * @param message Layer message or plain object to encode
+         * @param [writer] Writer to encode to
+         * @returns Writer
+         */
+        public static encodeDelimited(message: stt.ILayer, writer?: $protobuf.Writer): $protobuf.Writer;
+
+        /**
+         * Decodes a Layer message from the specified reader or buffer.
+         * @param reader Reader or buffer to decode from
+         * @param [length] Message length if known beforehand
+         * @returns Layer
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        public static decode(reader: ($protobuf.Reader|Uint8Array), length?: number): stt.Layer;
+
+        /**
+         * Decodes a Layer message from the specified reader or buffer, length delimited.
+         * @param reader Reader or buffer to decode from
+         * @returns Layer
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        public static decodeDelimited(reader: ($protobuf.Reader|Uint8Array)): stt.Layer;
+
+        /**
+         * Verifies a Layer message.
+         * @param message Plain object to verify
+         * @returns `null` if valid, otherwise the reason why it is not
+         */
+        public static verify(message: { [k: string]: any }): (string|null);
+
+        /**
+         * Creates a Layer message from a plain object. Also converts values to their respective internal types.
+         * @param object Plain object
+         * @returns Layer
+         */
+        public static fromObject(object: { [k: string]: any }): stt.Layer;
+
+        /**
+         * Creates a plain object from a Layer message. Also converts values to other types if specified.
+         * @param message Layer
+         * @param [options] Conversion options
+         * @returns Plain object
+         */
+        public static toObject(message: stt.Layer, options?: $protobuf.IConversionOptions): { [k: string]: any };
+
+        /**
+         * Converts this Layer to JSON.
+         * @returns JSON object
+         */
+        public toJSON(): { [k: string]: any };
+
+        /**
+         * Gets the default type url for Layer
+         * @param [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+         * @returns The default type url
+         */
+        public static getTypeUrl(typeUrlPrefix?: string): string;
+    }
+
+    /** Properties of a Feature. */
+    interface IFeature {
+    }
+
+    /** Represents a Feature. */
+    class Feature implements IFeature {
+
+        /**
+         * Constructs a new Feature.
+         * @param [properties] Properties to set
+         */
+        constructor(properties?: stt.IFeature);
+
+        /**
+         * Creates a new Feature instance using the specified properties.
+         * @param [properties] Properties to set
+         * @returns Feature instance
+         */
+        public static create(properties?: stt.IFeature): stt.Feature;
+
+        /**
+         * Encodes the specified Feature message. Does not implicitly {@link stt.Feature.verify|verify} messages.
+         * @param message Feature message or plain object to encode
+         * @param [writer] Writer to encode to
+         * @returns Writer
+         */
+        public static encode(message: stt.IFeature, writer?: $protobuf.Writer): $protobuf.Writer;
+
+        /**
+         * Encodes the specified Feature message, length delimited. Does not implicitly {@link stt.Feature.verify|verify} messages.
+         * @param message Feature message or plain object to encode
+         * @param [writer] Writer to encode to
+         * @returns Writer
+         */
+        public static encodeDelimited(message: stt.IFeature, writer?: $protobuf.Writer): $protobuf.Writer;
+
+        /**
+         * Decodes a Feature message from the specified reader or buffer.
+         * @param reader Reader or buffer to decode from
+         * @param [length] Message length if known beforehand
+         * @returns Feature
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        public static decode(reader: ($protobuf.Reader|Uint8Array), length?: number): stt.Feature;
+
+        /**
+         * Decodes a Feature message from the specified reader or buffer, length delimited.
+         * @param reader Reader or buffer to decode from
+         * @returns Feature
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        public static decodeDelimited(reader: ($protobuf.Reader|Uint8Array)): stt.Feature;
+
+        /**
+         * Verifies a Feature message.
+         * @param message Plain object to verify
+         * @returns `null` if valid, otherwise the reason why it is not
+         */
+        public static verify(message: { [k: string]: any }): (string|null);
+
+        /**
+         * Creates a Feature message from a plain object. Also converts values to their respective internal types.
+         * @param object Plain object
+         * @returns Feature
+         */
+        public static fromObject(object: { [k: string]: any }): stt.Feature;
+
+        /**
+         * Creates a plain object from a Feature message. Also converts values to other types if specified.
+         * @param message Feature
+         * @param [options] Conversion options
+         * @returns Plain object
+         */
+        public static toObject(message: stt.Feature, options?: $protobuf.IConversionOptions): { [k: string]: any };
+
+        /**
+         * Converts this Feature to JSON.
+         * @returns JSON object
+         */
+        public toJSON(): { [k: string]: any };
+
+        /**
+         * Gets the default type url for Feature
+         * @param [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+         * @returns The default type url
+         */
+        public static getTypeUrl(typeUrlPrefix?: string): string;
+    }
+
+    namespace Feature {
+
+        /** GeomType enum. */
+        enum GeomType {
+            POINT = 0,
+            LINESTRING = 1,
+            POLYGON = 2
+        }
+    }
+
+    /** Properties of a ColumnarFeatures. */
+    interface IColumnarFeatures {
+
+        /** ColumnarFeatures featureCount */
+        featureCount?: (number|null);
+
+        /** ColumnarFeatures geometryType */
+        geometryType?: (stt.Feature.GeomType|null);
+
+        /** ColumnarFeatures featureIds */
+        featureIds?: ((number|Long)[]|null);
+
+        /** ColumnarFeatures geometry */
+        geometry?: (number[]|null);
+
+        /** ColumnarFeatures geometryOffsets */
+        geometryOffsets?: (number[]|null);
+
+        /** ColumnarFeatures startTimes */
+        startTimes?: ((number|Long)[]|null);
+
+        /** ColumnarFeatures endTimes */
+        endTimes?: ((number|Long)[]|null);
+
+        /** ColumnarFeatures numericProperties */
+        numericProperties?: (stt.INumericColumn[]|null);
+
+        /** ColumnarFeatures categoricalProperties */
+        categoricalProperties?: (stt.ICategoricalColumn[]|null);
+
+        /** ColumnarFeatures ringOffsets */
+        ringOffsets?: (number[]|null);
+
+        /** ColumnarFeatures ringOffsetsOffsets */
+        ringOffsetsOffsets?: (number[]|null);
+
+        /** ColumnarFeatures altitudes */
+        altitudes?: (number[]|null);
+
+        /** ColumnarFeatures vertexTimestamps */
+        vertexTimestamps?: ((number|Long)[]|null);
+    }
+
+    /** Represents a ColumnarFeatures. */
+    class ColumnarFeatures implements IColumnarFeatures {
+
+        /**
+         * Constructs a new ColumnarFeatures.
+         * @param [properties] Properties to set
+         */
+        constructor(properties?: stt.IColumnarFeatures);
+
+        /** ColumnarFeatures featureCount. */
+        public featureCount: number;
+
+        /** ColumnarFeatures geometryType. */
+        public geometryType: stt.Feature.GeomType;
+
+        /** ColumnarFeatures featureIds. */
+        public featureIds: (number|Long)[];
+
+        /** ColumnarFeatures geometry. */
+        public geometry: number[];
+
+        /** ColumnarFeatures geometryOffsets. */
+        public geometryOffsets: number[];
+
+        /** ColumnarFeatures startTimes. */
+        public startTimes: (number|Long)[];
+
+        /** ColumnarFeatures endTimes. */
+        public endTimes: (number|Long)[];
+
+        /** ColumnarFeatures numericProperties. */
+        public numericProperties: stt.INumericColumn[];
+
+        /** ColumnarFeatures categoricalProperties. */
+        public categoricalProperties: stt.ICategoricalColumn[];
+
+        /** ColumnarFeatures ringOffsets. */
+        public ringOffsets: number[];
+
+        /** ColumnarFeatures ringOffsetsOffsets. */
+        public ringOffsetsOffsets: number[];
+
+        /** ColumnarFeatures altitudes. */
+        public altitudes: number[];
+
+        /** ColumnarFeatures vertexTimestamps. */
+        public vertexTimestamps: (number|Long)[];
+
+        /**
+         * Creates a new ColumnarFeatures instance using the specified properties.
+         * @param [properties] Properties to set
+         * @returns ColumnarFeatures instance
+         */
+        public static create(properties?: stt.IColumnarFeatures): stt.ColumnarFeatures;
+
+        /**
+         * Encodes the specified ColumnarFeatures message. Does not implicitly {@link stt.ColumnarFeatures.verify|verify} messages.
+         * @param message ColumnarFeatures message or plain object to encode
+         * @param [writer] Writer to encode to
+         * @returns Writer
+         */
+        public static encode(message: stt.IColumnarFeatures, writer?: $protobuf.Writer): $protobuf.Writer;
+
+        /**
+         * Encodes the specified ColumnarFeatures message, length delimited. Does not implicitly {@link stt.ColumnarFeatures.verify|verify} messages.
+         * @param message ColumnarFeatures message or plain object to encode
+         * @param [writer] Writer to encode to
+         * @returns Writer
+         */
+        public static encodeDelimited(message: stt.IColumnarFeatures, writer?: $protobuf.Writer): $protobuf.Writer;
+
+        /**
+         * Decodes a ColumnarFeatures message from the specified reader or buffer.
+         * @param reader Reader or buffer to decode from
+         * @param [length] Message length if known beforehand
+         * @returns ColumnarFeatures
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        public static decode(reader: ($protobuf.Reader|Uint8Array), length?: number): stt.ColumnarFeatures;
+
+        /**
+         * Decodes a ColumnarFeatures message from the specified reader or buffer, length delimited.
+         * @param reader Reader or buffer to decode from
+         * @returns ColumnarFeatures
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        public static decodeDelimited(reader: ($protobuf.Reader|Uint8Array)): stt.ColumnarFeatures;
+
+        /**
+         * Verifies a ColumnarFeatures message.
+         * @param message Plain object to verify
+         * @returns `null` if valid, otherwise the reason why it is not
+         */
+        public static verify(message: { [k: string]: any }): (string|null);
+
+        /**
+         * Creates a ColumnarFeatures message from a plain object. Also converts values to their respective internal types.
+         * @param object Plain object
+         * @returns ColumnarFeatures
+         */
+        public static fromObject(object: { [k: string]: any }): stt.ColumnarFeatures;
+
+        /**
+         * Creates a plain object from a ColumnarFeatures message. Also converts values to other types if specified.
+         * @param message ColumnarFeatures
+         * @param [options] Conversion options
+         * @returns Plain object
+         */
+        public static toObject(message: stt.ColumnarFeatures, options?: $protobuf.IConversionOptions): { [k: string]: any };
+
+        /**
+         * Converts this ColumnarFeatures to JSON.
+         * @returns JSON object
+         */
+        public toJSON(): { [k: string]: any };
+
+        /**
+         * Gets the default type url for ColumnarFeatures
+         * @param [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+         * @returns The default type url
+         */
+        public static getTypeUrl(typeUrlPrefix?: string): string;
+    }
+
+    /** Properties of a NumericColumn. */
+    interface INumericColumn {
+
+        /** NumericColumn name */
+        name?: (string|null);
+
+        /** NumericColumn values */
+        values?: (number[]|null);
+
+        /** NumericColumn valuesF64 */
+        valuesF64?: (number[]|null);
+    }
+
+    /** Represents a NumericColumn. */
+    class NumericColumn implements INumericColumn {
+
+        /**
+         * Constructs a new NumericColumn.
+         * @param [properties] Properties to set
+         */
+        constructor(properties?: stt.INumericColumn);
+
+        /** NumericColumn name. */
+        public name: string;
+
+        /** NumericColumn values. */
+        public values: number[];
+
+        /** NumericColumn valuesF64. */
+        public valuesF64: number[];
+
+        /**
+         * Creates a new NumericColumn instance using the specified properties.
+         * @param [properties] Properties to set
+         * @returns NumericColumn instance
+         */
+        public static create(properties?: stt.INumericColumn): stt.NumericColumn;
+
+        /**
+         * Encodes the specified NumericColumn message. Does not implicitly {@link stt.NumericColumn.verify|verify} messages.
+         * @param message NumericColumn message or plain object to encode
+         * @param [writer] Writer to encode to
+         * @returns Writer
+         */
+        public static encode(message: stt.INumericColumn, writer?: $protobuf.Writer): $protobuf.Writer;
+
+        /**
+         * Encodes the specified NumericColumn message, length delimited. Does not implicitly {@link stt.NumericColumn.verify|verify} messages.
+         * @param message NumericColumn message or plain object to encode
+         * @param [writer] Writer to encode to
+         * @returns Writer
+         */
+        public static encodeDelimited(message: stt.INumericColumn, writer?: $protobuf.Writer): $protobuf.Writer;
+
+        /**
+         * Decodes a NumericColumn message from the specified reader or buffer.
+         * @param reader Reader or buffer to decode from
+         * @param [length] Message length if known beforehand
+         * @returns NumericColumn
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        public static decode(reader: ($protobuf.Reader|Uint8Array), length?: number): stt.NumericColumn;
+
+        /**
+         * Decodes a NumericColumn message from the specified reader or buffer, length delimited.
+         * @param reader Reader or buffer to decode from
+         * @returns NumericColumn
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        public static decodeDelimited(reader: ($protobuf.Reader|Uint8Array)): stt.NumericColumn;
+
+        /**
+         * Verifies a NumericColumn message.
+         * @param message Plain object to verify
+         * @returns `null` if valid, otherwise the reason why it is not
+         */
+        public static verify(message: { [k: string]: any }): (string|null);
+
+        /**
+         * Creates a NumericColumn message from a plain object. Also converts values to their respective internal types.
+         * @param object Plain object
+         * @returns NumericColumn
+         */
+        public static fromObject(object: { [k: string]: any }): stt.NumericColumn;
+
+        /**
+         * Creates a plain object from a NumericColumn message. Also converts values to other types if specified.
+         * @param message NumericColumn
+         * @param [options] Conversion options
+         * @returns Plain object
+         */
+        public static toObject(message: stt.NumericColumn, options?: $protobuf.IConversionOptions): { [k: string]: any };
+
+        /**
+         * Converts this NumericColumn to JSON.
+         * @returns JSON object
+         */
+        public toJSON(): { [k: string]: any };
+
+        /**
+         * Gets the default type url for NumericColumn
+         * @param [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+         * @returns The default type url
+         */
+        public static getTypeUrl(typeUrlPrefix?: string): string;
+    }
+
+    /** Properties of a CategoricalColumn. */
+    interface ICategoricalColumn {
+
+        /** CategoricalColumn name */
+        name?: (string|null);
+
+        /** CategoricalColumn categories */
+        categories?: (string[]|null);
+
+        /** CategoricalColumn indices */
+        indices?: (Uint8Array|null);
+    }
+
+    /** Represents a CategoricalColumn. */
+    class CategoricalColumn implements ICategoricalColumn {
+
+        /**
+         * Constructs a new CategoricalColumn.
+         * @param [properties] Properties to set
+         */
+        constructor(properties?: stt.ICategoricalColumn);
+
+        /** CategoricalColumn name. */
+        public name: string;
+
+        /** CategoricalColumn categories. */
+        public categories: string[];
+
+        /** CategoricalColumn indices. */
+        public indices: Uint8Array;
+
+        /**
+         * Creates a new CategoricalColumn instance using the specified properties.
+         * @param [properties] Properties to set
+         * @returns CategoricalColumn instance
+         */
+        public static create(properties?: stt.ICategoricalColumn): stt.CategoricalColumn;
+
+        /**
+         * Encodes the specified CategoricalColumn message. Does not implicitly {@link stt.CategoricalColumn.verify|verify} messages.
+         * @param message CategoricalColumn message or plain object to encode
+         * @param [writer] Writer to encode to
+         * @returns Writer
+         */
+        public static encode(message: stt.ICategoricalColumn, writer?: $protobuf.Writer): $protobuf.Writer;
+
+        /**
+         * Encodes the specified CategoricalColumn message, length delimited. Does not implicitly {@link stt.CategoricalColumn.verify|verify} messages.
+         * @param message CategoricalColumn message or plain object to encode
+         * @param [writer] Writer to encode to
+         * @returns Writer
+         */
+        public static encodeDelimited(message: stt.ICategoricalColumn, writer?: $protobuf.Writer): $protobuf.Writer;
+
+        /**
+         * Decodes a CategoricalColumn message from the specified reader or buffer.
+         * @param reader Reader or buffer to decode from
+         * @param [length] Message length if known beforehand
+         * @returns CategoricalColumn
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        public static decode(reader: ($protobuf.Reader|Uint8Array), length?: number): stt.CategoricalColumn;
+
+        /**
+         * Decodes a CategoricalColumn message from the specified reader or buffer, length delimited.
+         * @param reader Reader or buffer to decode from
+         * @returns CategoricalColumn
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        public static decodeDelimited(reader: ($protobuf.Reader|Uint8Array)): stt.CategoricalColumn;
+
+        /**
+         * Verifies a CategoricalColumn message.
+         * @param message Plain object to verify
+         * @returns `null` if valid, otherwise the reason why it is not
+         */
+        public static verify(message: { [k: string]: any }): (string|null);
+
+        /**
+         * Creates a CategoricalColumn message from a plain object. Also converts values to their respective internal types.
+         * @param object Plain object
+         * @returns CategoricalColumn
+         */
+        public static fromObject(object: { [k: string]: any }): stt.CategoricalColumn;
+
+        /**
+         * Creates a plain object from a CategoricalColumn message. Also converts values to other types if specified.
+         * @param message CategoricalColumn
+         * @param [options] Conversion options
+         * @returns Plain object
+         */
+        public static toObject(message: stt.CategoricalColumn, options?: $protobuf.IConversionOptions): { [k: string]: any };
+
+        /**
+         * Converts this CategoricalColumn to JSON.
+         * @returns JSON object
+         */
+        public toJSON(): { [k: string]: any };
+
+        /**
+         * Gets the default type url for CategoricalColumn
          * @param [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
          * @returns The default type url
          */

@@ -7,23 +7,19 @@ GPU-optimized binary columnar format for spatiotemporal data. This format enable
 The binary format stores feature data in typed arrays instead of JavaScript objects:
 
 ```typescript
-// Standard object format (CPU-friendly)
-interface Feature {
-  id: number;
-  positions: [number, number][];
-  properties: Record<string, any>;
-  timeRange?: { start: number; end: number };
-}
-
 // Binary columnar format (GPU-friendly)
 interface BinaryFeatures {
   featureCount: number;
-  positions: Float64Array;      // [lon0, lat0, lon1, lat1, ...]
-  featureIds: Uint32Array;      // [id0, id1, id2, ...]
-  startTimes: Float32Array;     // [start0, start1, ...]
-  endTimes: Float32Array;       // [end0, end1, ...]
-  numericProperties: Record<string, Float32Array>;
-  categoricalProperties: Record<string, { indices: Uint8Array; categories: string[] }>;
+  geometryType: GeometryType;
+  positionDimensions?: 2 | 3;
+  positions: Float64Array;     // Interleaved [lon, lat, ...] or [lon, lat, alt, ...]
+  startIndices?: Uint32Array;  // For lines/polygons: start index per feature
+  featureIds: Uint32Array;
+  startTimes: Float32Array;    // Relative to timeOffset
+  endTimes: Float32Array;      // Relative to timeOffset
+  timeOffset: number;          // Add to times for absolute value
+  numericProps: Record<string, Float32Array>;
+  categoricalProps: Record<string, { indices: Uint8Array; categories: string[] }>;
 }
 ```
 
@@ -40,36 +36,46 @@ interface BinaryFeatures {
 
 ```typescript
 import { load } from "@loaders.gl/core";
-import { STTLoader, BinaryTile } from "@stt/core";
+import { STTLoader } from "@stt/core";
 
-const binaryTile = await load(url, STTLoader, {
+const tile = await load(url, STTLoader, {
   stt: {
     tileId: { z: 0, x: 0, y: 0, t: 0 },
-    outputFormat: 'binary',
   },
-}) as BinaryTile;
+});
+
+// All tiles are returned in binary format
+const features = tile.layers[0].features;
 ```
 
 ### Accessing Data
 
 ```typescript
-import { getBinaryPosition, getBinaryPath } from "@stt/core";
+import {
+  getBinaryPosition,
+  getBinaryPosition3D,
+  getAbsoluteStartTime,
+  getAbsoluteEndTime,
+  getNumericProperty,
+  getCategoricalProperty,
+} from "@stt/core";
 
-const features = binaryTile.layers[0].features;
+const features = tile.layers[0].features;
 
-// Get position for point feature at index 0
+// Get 2D position for point feature at index 0
 const [lon, lat] = getBinaryPosition(features, 0);
 
-// Get path for line feature at index 5
-const path = getBinaryPath(features, 5);
+// Get 3D position (includes altitude if available)
+const [lon, lat, alt] = getBinaryPosition3D(features, 0);
+
+// Get absolute timestamp
+const startTime = getAbsoluteStartTime(features, 0);
 
 // Access numeric property
-const magnitude = features.numericProperties['magnitude']?.[0];
+const magnitude = getNumericProperty(features, "magnitude", 0);
 
-// Access categorical property
-const category = features.categoricalProperties['status'];
-const statusIndex = category.indices[0];
-const statusValue = category.categories[statusIndex];
+// Access categorical property (returns resolved string value)
+const status = getCategoricalProperty(features, "status", 0);
 ```
 
 ### Using with deck.gl
@@ -77,9 +83,11 @@ const statusValue = category.categories[statusIndex];
 ```typescript
 import { ScatterplotLayer } from "@deck.gl/layers";
 
-// Binary data requires index-based accessors
+const features = tile.layers[0].features;
+
+// Binary data uses deck.gl's binary data interface
 const layer = new ScatterplotLayer({
-  id: 'binary-points',
+  id: "binary-points",
   data: {
     length: features.featureCount,
     attributes: {
@@ -90,52 +98,65 @@ const layer = new ScatterplotLayer({
 });
 ```
 
+### Using with PathLayer
+
+```typescript
+import { PathLayer } from "@deck.gl/layers";
+
+const features = tile.layers[0].features;
+
+// Lines/polygons use startIndices for variable-length geometries
+const layer = new PathLayer({
+  id: "binary-paths",
+  data: {
+    length: features.featureCount,
+    startIndices: features.startIndices,
+    attributes: {
+      getPath: { value: features.positions, size: 2 },
+    },
+  },
+  getWidth: 2,
+});
+```
+
 ## Types
-
-### BinaryTile
-
-```typescript
-interface BinaryTile {
-  id: TileId;
-  timeRange: TimeRange;
-  layers: BinaryLayer[];
-}
-```
-
-### BinaryLayer
-
-```typescript
-interface BinaryLayer {
-  name: string;
-  extent: number;
-  features: BinaryFeatures;
-}
-```
 
 ### BinaryFeatures
 
 ```typescript
 interface BinaryFeatures {
+  /** Total number of features */
   featureCount: number;
+
+  /** Geometry type (0=Point, 1=LineString, 2=Polygon) */
   geometryType: GeometryType;
-  
-  // Interleaved positions [lon, lat, lon, lat, ...]
+
+  /** Number of dimensions per position (2 or 3) */
+  positionDimensions?: 2 | 3;
+
+  /** Interleaved positions [lon, lat, ...] or [lon, lat, alt, ...] */
   positions: Float64Array;
-  
-  // For lines/polygons: offset into positions for each feature
-  positionOffsets?: Uint32Array;
-  
-  // Feature identifiers
+
+  /** Start index for each feature's positions (for lines/polygons) */
+  startIndices?: Uint32Array;
+
+  /** Feature IDs (per feature) */
   featureIds: Uint32Array;
-  
-  // Temporal data (relative to timeOffset)
+
+  /** Start time for each feature (ms, relative to timeOffset) */
   startTimes: Float32Array;
+
+  /** End time for each feature (ms, relative to timeOffset) */
   endTimes: Float32Array;
+
+  /** Time offset - add to times for absolute values */
   timeOffset: number;
-  
-  // Properties as typed arrays
-  numericProperties: Record<string, Float32Array>;
-  categoricalProperties: Record<string, {
+
+  /** Numeric properties as Float32Arrays */
+  numericProps: Record<string, Float32Array>;
+
+  /** Categorical properties as index + lookup table */
+  categoricalProps: Record<string, {
     indices: Uint8Array;
     categories: string[];
   }>;
@@ -154,6 +175,3 @@ console.log(`Features use ${sizeInBytes / 1024}KB`);
 ## Source
 
 [packages/core/src/binary-features.ts](../../packages/core/src/binary-features.ts)
-
-
-

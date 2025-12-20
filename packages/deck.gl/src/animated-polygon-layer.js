@@ -45,19 +45,9 @@ export class AnimatedPolygonLayer extends SpatioTemporalLayer {
     constructor() {
         super(...arguments);
         // Cache of layer instances keyed by tile+layer ID
-        Object.defineProperty(this, "layerCache", {
-            enumerable: true,
-            configurable: true,
-            writable: true,
-            value: new Map()
-        });
+        this.layerCache = new Map();
         // Set of layer IDs that are currently visible
-        Object.defineProperty(this, "activeLayerIds", {
-            enumerable: true,
-            configurable: true,
-            writable: true,
-            value: new Set()
-        });
+        this.activeLayerIds = new Set();
     }
     finalizeState(context) {
         super.finalizeState(context);
@@ -65,7 +55,9 @@ export class AnimatedPolygonLayer extends SpatioTemporalLayer {
         this.activeLayerIds.clear();
     }
     renderLayers() {
-        const { tiles, currentTime } = this.state;
+        const { tiles } = this.state;
+        // Use getCurrentTime() for up-to-date time without setState overhead
+        const currentTime = this.getCurrentTime();
         if (DEBUG) {
             console.log('[AnimatedPolygonLayer] renderLayers called, tiles:', tiles?.length || 0);
         }
@@ -288,30 +280,21 @@ export class AnimatedPolygonLayer extends SpatioTemporalLayer {
         return null;
     }
 }
-Object.defineProperty(AnimatedPolygonLayer, "layerName", {
-    enumerable: true,
-    configurable: true,
-    writable: true,
-    value: 'AnimatedPolygonLayer'
-});
-Object.defineProperty(AnimatedPolygonLayer, "defaultProps", {
-    enumerable: true,
-    configurable: true,
-    writable: true,
-    value: {
-        ...SpatioTemporalLayer.defaultProps,
-        // Polygon appearance
-        stroked: false, // Stroked requires separate PathLayer, disabled for performance
-        filled: true,
-        lineWidthUnits: 'pixels',
-        lineWidth: { type: 'number', value: 1 },
-        lineColor: { type: 'color', value: [0, 0, 0, 255] },
-        fillColor: { type: 'color', value: [255, 140, 0, 180] },
-        colorPalette: { type: 'array', value: DEFAULT_PALETTE },
-        elevation: { type: 'number', value: 0 },
-        extruded: false,
-        // Animation props
-        fadeInDuration: { type: 'number', value: 500, min: 0 },
-        fadeOutDuration: { type: 'number', value: 500, min: 0 },
-    }
-});
+AnimatedPolygonLayer.layerName = 'AnimatedPolygonLayer';
+AnimatedPolygonLayer.defaultProps = {
+    ...SpatioTemporalLayer.defaultProps,
+    // Polygon appearance
+    stroked: false, // Stroked requires separate PathLayer, disabled for performance
+    filled: true,
+    lineWidthUnits: 'pixels',
+    lineWidth: { type: 'number', value: 1 },
+    lineColor: { type: 'color', value: [0, 0, 0, 255] },
+    fillColor: { type: 'color', value: [255, 140, 0, 180] },
+    colorPalette: { type: 'array', value: DEFAULT_PALETTE },
+    elevation: { type: 'number', value: 0 },
+    extruded: false,
+    // Animation props
+    fadeInDuration: { type: 'number', value: 500, min: 0 },
+    fadeOutDuration: { type: 'number', value: 500, min: 0 },
+};
+//# sourceMappingURL=animated-polygon-layer.js.map

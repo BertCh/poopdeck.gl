@@ -18,7 +18,18 @@ const DEBUG = false;
  * - Frame-based rendering optimization
  */
 export class SpatioTemporalLayer extends CompositeLayer {
+    constructor() {
+        super(...arguments);
+        // Internal time tracking - updated every tick without setState overhead
+        // Sublayers read from this via getCurrentTime() method
+        this._currentTime = 0;
+        // Track last time we updated the tileset to throttle updates
+        this._lastTilesetUpdateTime = 0;
+    }
     initializeState(_context) {
+        // Initialize internal time tracking
+        this._currentTime = this.props.currentTime;
+        this._lastTilesetUpdateTime = this.props.currentTime;
         // Create handler for play state changes
         const playStateHandler = (playing, speed) => {
             const { tileset } = this.state;
@@ -30,7 +41,7 @@ export class SpatioTemporalLayer extends CompositeLayer {
         // without React re-rendering the entire layer tree
         const tickHandler = (time) => {
             // Only update if time actually changed significantly (avoid micro-updates)
-            if (Math.abs(time - this.state.currentTime) > 1) {
+            if (Math.abs(time - this._currentTime) > 1) {
                 this._handleTimeUpdate(time);
             }
         };
@@ -119,24 +130,25 @@ export class SpatioTemporalLayer extends CompositeLayer {
      * Handle time updates from TimeController tick events
      *
      * PERFORMANCE OPTIMIZED:
-     * - Only updates currentTime without full tile re-evaluation
-     * - Tiles are updated less frequently via a throttled tileset update
-     * - Layer caching in subclasses ensures GPU state is preserved
+     * - Updates _currentTime directly (no setState overhead)
+     * - Only calls setState when tiles actually change (infrequent)
+     * - Calls setNeedsRedraw() for time-only changes (NOT setNeedsUpdate!)
+     * - Time is read via getTime() getter in TimeFilterExtension.draw()
+     * - This avoids renderLayers() call when only time changes
      */
     _handleTimeUpdate(time) {
         const { tileset } = this.state;
         if (!tileset)
             return;
-        // Update current time immediately for smooth animation
-        // This is a minimal state update - just the time value
-        const prevTime = this.state.currentTime;
-        this.state.currentTime = time;
+        // Always update internal time tracking (no setState overhead)
+        this._currentTime = time;
         // Check if we need to update the tileset (throttled)
-        // Only update tileset when time has changed significantly relative to timeWindow
         const timeWindow = this.props.timeWindow || 86400000;
-        const timeDelta = Math.abs(time - prevTime);
+        const timeDelta = Math.abs(time - this._lastTilesetUpdateTime);
         const updateThreshold = timeWindow / 20; // Update tileset when 5% of time window has passed
+        let tilesChanged = false;
         if (timeDelta > updateThreshold) {
+            this._lastTilesetUpdateTime = time;
             const viewport = this.context.viewport;
             if (viewport) {
                 const bounds = this.getViewportBounds(viewport);
@@ -148,17 +160,24 @@ export class SpatioTemporalLayer extends CompositeLayer {
                     time,
                     timeWindow,
                 }, true); // skipDebounce = true for animation
-                // Only get new tiles array if tileset might have changed
-                const tiles = tileset.getVisibleTiles();
-                // Check if tiles actually changed (different length or different tile IDs)
-                if (tiles.length !== this.state.tiles.length || this._tilesChanged(tiles)) {
-                    this.state.tiles = tiles;
-                    this.state.frameNumber = (this.state.frameNumber || 0) + 1;
+                // Check if tiles actually changed
+                const newTiles = tileset.getVisibleTiles();
+                if (newTiles.length !== this.state.tiles.length || this._tilesChanged(newTiles)) {
+                    // Tiles changed - use setState (this will trigger full update cycle)
+                    this.setState({
+                        tiles: newTiles,
+                        frameNumber: (this.state.frameNumber || 0) + 1,
+                    });
+                    tilesChanged = true;
                 }
             }
         }
-        // Force deck.gl to re-draw this layer (updates uniforms in shaders)
-        this.setNeedsRedraw();
+        // PERFORMANCE: For time-only changes, use setNeedsRedraw() instead of setNeedsUpdate()
+        // This triggers a redraw WITHOUT calling renderLayers() - the memoized layer is reused
+        // Time updates happen via the getTime() getter in TimeFilterExtension.draw()
+        if (!tilesChanged) {
+            this.setNeedsRedraw();
+        }
     }
     /**
      * Check if the tiles array has actually changed (not just reference)
@@ -183,12 +202,13 @@ export class SpatioTemporalLayer extends CompositeLayer {
         if (!tileset)
             return;
         // Get current time from TimeController if available, otherwise from props
-        // This allows the layer to work correctly when currentTime is not passed as a prop
         const currentTime = this.props.timeController
             ? this.props.timeController.getTime()
             : this.props.currentTime;
+        // Update internal time tracking
+        this._currentTime = currentTime;
         // Check if it's a time-only change for debouncing logic
-        const timeChanged = changeFlags.propsChanged && currentTime !== this.state.currentTime;
+        const timeChanged = changeFlags.propsChanged && currentTime !== this._lastTilesetUpdateTime;
         const skipDebounce = timeChanged && !changeFlags.propsOrDataChanged;
         // Get viewport bounds and zoom
         const viewport = this.context.viewport;
@@ -209,15 +229,14 @@ export class SpatioTemporalLayer extends CompositeLayer {
         }, skipDebounce);
         // Get visible tiles (optimistic rendering - show what we have)
         const tiles = tileset.getVisibleTiles();
-        // Check if state changed
+        // Check if tiles actually changed
         const frameChanged = this.state.frameNumber !== frameNumber;
-        const timeStateChanged = currentTime !== this.state.currentTime;
-        if (frameChanged || timeStateChanged) {
-            // Trigger re-render by updating state
+        if (frameChanged) {
+            // Tiles changed - use setState
+            this._lastTilesetUpdateTime = currentTime;
             this.setState({
                 tiles,
                 frameNumber,
-                currentTime,
             });
         }
         // Track loading state (doesn't trigger re-render)
@@ -281,6 +300,15 @@ export class SpatioTemporalLayer extends CompositeLayer {
         this.setState({ archive, tileset, metadata });
     }
     getViewportBounds(viewport) {
+        // Use global bounds for GlobeView to load all tiles at zoom 0
+        if (this.props.useGlobalBounds) {
+            return {
+                minLon: -180,
+                minLat: -90,
+                maxLon: 180,
+                maxLat: 90,
+            };
+        }
         const [minLon, minLat] = viewport.unproject([0, viewport.height]);
         const [maxLon, maxLat] = viewport.unproject([viewport.width, 0]);
         return {
@@ -291,6 +319,10 @@ export class SpatioTemporalLayer extends CompositeLayer {
         };
     }
     getZoomLevel(viewport) {
+        // Use zoomOverride if specified (useful for GlobeView)
+        if (this.props.zoomOverride !== undefined) {
+            return this.props.zoomOverride;
+        }
         // Convert deck.gl zoom to tile zoom
         // Clamp to available zoom range from archive metadata
         const zoom = Math.floor(viewport.zoom);
@@ -308,6 +340,14 @@ export class SpatioTemporalLayer extends CompositeLayer {
      */
     get isLoaded() {
         return this.state.isLoaded;
+    }
+    /**
+     * Get the current animation time.
+     * Sublayers should use this instead of this.state.currentTime for performance.
+     * This is updated every tick without triggering setState.
+     */
+    getCurrentTime() {
+        return this._currentTime;
     }
     /**
      * Subclasses override this to render actual visualization layers
@@ -330,10 +370,10 @@ SpatioTemporalLayer.defaultProps = {
     debounceTime: { type: 'number', value: 0, compare: false }, // No debounce for time changes
     maxCacheSize: { type: 'number', value: 2000, compare: false }, // Large cache for big datasets
     maxCacheByteSize: { type: 'number', value: 2 * 1024 * 1024 * 1024, compare: false }, // 2GB for large datasets
-    // Prefetch configuration for smooth animation
+    // Prefetch configuration for smooth animation - aggressive defaults to prevent flashing
     enablePrefetch: { type: 'boolean', value: true, compare: false },
-    prefetchAhead: { type: 'number', value: 30000, compare: false }, // 30 seconds ahead
-    prefetchSteps: { type: 'number', value: 10, compare: false }, // More steps for fast animations
+    prefetchAhead: { type: 'number', value: 60000, compare: false }, // 60 seconds ahead for smooth animation
+    prefetchSteps: { type: 'number', value: 15, compare: false }, // Aggressive prefetching to prevent flashing
     // Callbacks
     onViewportLoad: { type: 'function', value: null, optional: true },
     onTileLoad: { type: 'function', value: null, optional: true },

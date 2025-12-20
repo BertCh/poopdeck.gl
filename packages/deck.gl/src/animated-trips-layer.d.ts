@@ -98,12 +98,12 @@ export declare class AnimatedTripsLayer extends SpatioTemporalLayer<AnimatedTrip
         };
         timeRange: {
             type: string;
-            value: any;
+            value: null;
             compare: boolean;
         };
         timeController: {
             type: string;
-            value: any;
+            value: null;
             compare: boolean;
         };
         maxRequests: {
@@ -143,17 +143,17 @@ export declare class AnimatedTripsLayer extends SpatioTemporalLayer<AnimatedTrip
         };
         onViewportLoad: {
             type: string;
-            value: any;
+            value: null;
             optional: boolean;
         };
         onTileLoad: {
             type: string;
-            value: any;
+            value: null;
             optional: boolean;
         };
         onTileUnload: {
             type: string;
-            value: any;
+            value: null;
             optional: boolean;
         };
         loadOptions: {
@@ -166,6 +166,7 @@ export declare class AnimatedTripsLayer extends SpatioTemporalLayer<AnimatedTrip
     renderLayers(): Layer[];
     /**
      * Get a cached layer or create a new one.
+     * PERFORMANCE: Uses getTime() getter so layers can be memoized.
      */
     private getOrCreateLayer;
     /**
@@ -173,7 +174,8 @@ export declare class AnimatedTripsLayer extends SpatioTemporalLayer<AnimatedTrip
      */
     private cleanupCache;
     /**
-     * Create a PathLayer using deck.gl's binary data interface with trail support
+     * Create a PathLayer using deck.gl's binary data interface with trail support.
+     * PERFORMANCE: Uses getTime() getter for dynamic time updates.
      */
     private createBinaryPathLayer;
     /**
@@ -196,14 +198,5 @@ export declare class AnimatedTripsLayer extends SpatioTemporalLayer<AnimatedTrip
      * Cached per BinaryFeatures + property + palette combination.
      */
     private getColorAttribute;
-}
-export interface TripFeature {
-    id: number;
-    positions: [number, number][];
-    timestamps?: number[];
-    timeRange?: {
-        start: number;
-        end: number;
-    };
 }
 //# sourceMappingURL=animated-trips-layer.d.ts.map

@@ -61,6 +61,12 @@ export interface SpatioTemporalLayerProps extends CompositeLayerProps {
 
   /** Loaders.gl options */
   loadOptions?: Record<string, unknown>;
+  
+  /** Force a specific zoom level (useful for GlobeView to load low-zoom tiles) */
+  zoomOverride?: number;
+  
+  /** Use global bounds instead of viewport bounds (for GlobeView) */
+  useGlobalBounds?: boolean;
 }
 
 interface SpatioTemporalLayerState {
@@ -113,10 +119,10 @@ export class SpatioTemporalLayer<
     maxCacheSize: { type: 'number', value: 2000, compare: false }, // Large cache for big datasets
     maxCacheByteSize: { type: 'number', value: 2 * 1024 * 1024 * 1024, compare: false }, // 2GB for large datasets
     
-    // Prefetch configuration for smooth animation
+    // Prefetch configuration for smooth animation - aggressive defaults to prevent flashing
     enablePrefetch: { type: 'boolean', value: true, compare: false },
-    prefetchAhead: { type: 'number', value: 30000, compare: false }, // 30 seconds ahead
-    prefetchSteps: { type: 'number', value: 10, compare: false }, // More steps for fast animations
+    prefetchAhead: { type: 'number', value: 60000, compare: false }, // 60 seconds ahead for smooth animation
+    prefetchSteps: { type: 'number', value: 15, compare: false }, // Aggressive prefetching to prevent flashing
     
     // Callbacks
     onViewportLoad: { type: 'function', value: null, optional: true },
@@ -350,7 +356,9 @@ export class SpatioTemporalLayer<
     
     const bounds = this.getViewportBounds(viewport);
     const zoom = this.getZoomLevel(viewport);
-    const timeWindow = this.props.timeWindow || 86400000;
+    
+    // Get effective time window - subclasses can override for trail rendering etc.
+    const timeWindow = this.getEffectiveTimeWindow();
     
     // Update tileset - this returns a new frameNumber if tiles changed
     const frameNumber = tileset.update({
@@ -382,6 +390,17 @@ export class SpatioTemporalLayer<
       const stats = tileset.getCacheStats();
       console.log('[STL] Tileset updated - frame:', frameNumber, 'tiles:', tiles.length, 'stats:', stats);
     }
+  }
+
+  /**
+   * Get the effective time window for tile loading.
+   * Subclasses can override this to account for trail rendering, etc.
+   * 
+   * For trail rendering, the time window should be at least 2x the trail length
+   * to ensure tiles containing trail data are loaded.
+   */
+  protected getEffectiveTimeWindow(): number {
+    return this.props.timeWindow || 86400000;
   }
 
   private async _initArchiveAndTileset(): Promise<void> {
@@ -443,6 +462,16 @@ export class SpatioTemporalLayer<
   }
 
   private getViewportBounds(viewport: any): BoundingBox {
+    // Use global bounds for GlobeView to load all tiles at zoom 0
+    if (this.props.useGlobalBounds) {
+      return {
+        minLon: -180,
+        minLat: -90,
+        maxLon: 180,
+        maxLat: 90,
+      };
+    }
+    
     const [minLon, minLat] = viewport.unproject([0, viewport.height]);
     const [maxLon, maxLat] = viewport.unproject([viewport.width, 0]);
 
@@ -455,6 +484,11 @@ export class SpatioTemporalLayer<
   }
 
   private getZoomLevel(viewport: any): number {
+    // Use zoomOverride if specified (useful for GlobeView)
+    if (this.props.zoomOverride !== undefined) {
+      return this.props.zoomOverride;
+    }
+    
     // Convert deck.gl zoom to tile zoom
     // Clamp to available zoom range from archive metadata
     const zoom = Math.floor(viewport.zoom);

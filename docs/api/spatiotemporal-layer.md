@@ -7,7 +7,7 @@ It follows the **[Tileset](https://loaders.gl/modules/tiles/docs/api-reference/t
 ## Installation
 
 ```typescript
-import { SpatioTemporalLayer } from '@stt/deck.gl';
+import { SpatioTemporalLayer } from "@stt/deck.gl";
 ```
 
 ## Usage
@@ -17,7 +17,8 @@ This is an abstract base layer. Typically, you would use a subclass like [`Anima
 ```typescript
 class MyCustomLayer extends SpatioTemporalLayer {
   renderLayers() {
-    const { tiles, currentTime } = this.state;
+    const { tiles } = this.state;
+    const currentTime = this.getCurrentTime();
     // ... implementation ...
   }
 }
@@ -29,40 +30,64 @@ Inherits from all [CompositeLayer](https://deck.gl/docs/api-reference/core/compo
 
 ### Data Properties
 
-| Property | Type | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `data` | `string` | `""` | URL to the `.stt` archive. |
-| `currentTime` | `number` | `Date.now()` | Current timestamp in Unix milliseconds. The layer will automatically filter and render data for this time. |
-| `timeWindow` | `number` | `86400000` | Time window duration in milliseconds (e.g., 1 day). Features falling within `currentTime ± timeWindow/2` will be considered visible. |
-| `timeController` | `TimeController` | `undefined` | Optional `TimeController` instance to synchronize animation state. |
+| Property         | Type                              | Default       | Description                                                                         |
+| :--------------- | :-------------------------------- | :------------ | :---------------------------------------------------------------------------------- |
+| `data`           | `string`                          | `""`          | URL to the `.stt` archive.                                                          |
+| `currentTime`    | `number`                          | `Date.now()`  | Current timestamp in Unix milliseconds.                                             |
+| `timeWindow`     | `number`                          | `86400000`    | Time window duration in milliseconds (1 day default).                               |
+| `timeRange`      | `{ start: number; end: number }`  | `null`        | Full time range of the dataset (for precision handling).                            |
+| `timeController` | `TimeController`                  | `undefined`   | Optional `TimeController` instance to synchronize animation state.                  |
 
-### Render Properties
+### Tile Loading Options
 
-| Property | Type | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `opacity` | `number` | `1.0` | Layer opacity (0.0 to 1.0). |
-| `visible` | `boolean` | `true` | Whether the layer is visible. |
+| Property           | Type     | Default       | Description                                                                |
+| :----------------- | :------- | :------------ | :------------------------------------------------------------------------- |
+| `maxRequests`      | `number` | `64`          | Maximum concurrent tile requests. Higher values enable parallel loading.   |
+| `debounceTime`     | `number` | `0`           | Debounce time (ms) for viewport updates. Set to 0 for responsive animation. |
+| `maxCacheSize`     | `number` | `2000`        | Maximum number of tiles to keep in the LRU cache.                          |
+| `maxCacheByteSize` | `number` | `2147483648`  | Maximum cache size in bytes (2GB default).                                 |
 
-### Load Options
+### Prefetch Options
 
-| Property | Type | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `maxRequests` | `number` | `6` | Maximum number of concurrent HTTP requests for tiles. Aligns with browser limits. |
-| `debounceTime` | `number` | `300` | Debounce time (ms) for viewport updates. Prevents excessive tile requests during panning/zooming. |
-| `maxCacheSize` | `number` | `200` | Maximum number of tiles to keep in the LRU cache. |
-| `maxCacheByteSize` | `number` | `500MB` | Maximum memory usage (in bytes) for the tile cache before eviction. |
+| Property        | Type      | Default | Description                                                   |
+| :-------------- | :-------- | :------ | :------------------------------------------------------------ |
+| `enablePrefetch`| `boolean` | `true`  | Enable predictive prefetching for smooth animation playback.  |
+| `prefetchAhead` | `number`  | `30000` | How far ahead to prefetch in animation time (milliseconds).   |
+| `prefetchSteps` | `number`  | `10`    | Number of time steps to prefetch ahead.                       |
 
 ### Callbacks
 
-| Property | Type | Description |
-| :--- | :--- | :--- |
-| `onViewportLoad` | `(tiles: Tile[]) => void` | Called when all tiles in the current viewport have finished loading. |
-| `onTileLoad` | `(tile: Tile) => void` | Called when a single tile successfully loads. |
-| `onTileUnload` | `(tile: Tile) => void` | Called when a tile is evicted from the cache. |
+| Property         | Type                      | Description                                            |
+| :--------------- | :------------------------ | :----------------------------------------------------- |
+| `onViewportLoad` | `(tiles: Tile[]) => void` | Called when all tiles in the current viewport loaded.  |
+| `onTileLoad`     | `(tile: Tile) => void`    | Called when a single tile successfully loads.          |
+| `onTileUnload`   | `(tile: Tile) => void`    | Called when a tile is evicted from the cache.          |
+
+### Advanced Options
+
+| Property      | Type                      | Default | Description                          |
+| :------------ | :------------------------ | :------ | :----------------------------------- |
+| `loadOptions` | `Record<string, unknown>` | `{}`    | Loaders.gl options for data loading. |
+
+## Methods
+
+### `getCurrentTime(): number`
+
+Get the current animation time. Subclasses should use this instead of accessing state directly for performance (avoids setState overhead during animation).
+
+### `isLoaded: boolean`
+
+Property indicating whether the layer has finished initial loading.
+
+## Performance
+
+The layer is optimized for high-performance animation:
+
+- **Request concurrency**: Up to 64 parallel tile requests
+- **Prefetching**: Tiles are loaded ahead of playback time
+- **LRU caching**: Large cache (2GB) for smooth looping
+- **Time updates via getter**: Avoids React re-renders during animation
 
 ## Source
 
 [packages/deck.gl/src/spatiotemporal-layer.ts](../../packages/deck.gl/src/spatiotemporal-layer.ts)
-
-
-

@@ -40,19 +40,9 @@ export class AnimatedPathLayer extends SpatioTemporalLayer {
     constructor() {
         super(...arguments);
         // Cache of layer instances keyed by tile+layer ID
-        Object.defineProperty(this, "layerCache", {
-            enumerable: true,
-            configurable: true,
-            writable: true,
-            value: new Map()
-        });
+        this.layerCache = new Map();
         // Set of layer IDs that are currently visible
-        Object.defineProperty(this, "activeLayerIds", {
-            enumerable: true,
-            configurable: true,
-            writable: true,
-            value: new Set()
-        });
+        this.activeLayerIds = new Set();
     }
     finalizeState(context) {
         super.finalizeState(context);
@@ -60,12 +50,11 @@ export class AnimatedPathLayer extends SpatioTemporalLayer {
         this.activeLayerIds.clear();
     }
     renderLayers() {
-        const { tiles, currentTime } = this.state;
+        const { tiles } = this.state;
         if (!tiles || tiles.length === 0) {
             this.cleanupCache(new Set());
             return [];
         }
-        const timeWindow = this.props.timeWindow || 86400000;
         const newActiveIds = new Set();
         const layers = tiles.flatMap((tile) => {
             return tile.layers.map((layer, layerIndex) => {
@@ -76,7 +65,7 @@ export class AnimatedPathLayer extends SpatioTemporalLayer {
                 const layerId = `${this.props.id}-${tile.id.z}-${tile.id.x}-${tile.id.y}-${tile.id.t}-${layerIndex}`;
                 newActiveIds.add(layerId);
                 const tileTimeOffset = binary.timeOffset;
-                return this.getOrCreateLayer(binary, layerId, currentTime, tileTimeOffset, timeWindow);
+                return this.getOrCreateLayer(binary, layerId, tileTimeOffset);
             });
         }).filter(Boolean);
         this.cleanupCache(newActiveIds);
@@ -85,21 +74,17 @@ export class AnimatedPathLayer extends SpatioTemporalLayer {
     }
     /**
      * Get a cached layer or create a new one.
+     * PERFORMANCE: Uses getTime() getter so layers can be memoized.
      */
-    getOrCreateLayer(binary, layerId, currentTime, timeOffset, timeWindow) {
+    getOrCreateLayer(binary, layerId, timeOffset) {
         const cached = this.layerCache.get(layerId);
+        // Return cached layer if binary hasn't changed
+        // Time updates happen via getTime() getter in TimeFilterExtension.draw()
         if (cached && cached.binary === binary) {
-            // Clone with updated time props
-            // Cast to any because extension props aren't in base type
-            return cached.layer.clone({
-                currentTime: currentTime - timeOffset,
-                timeWindow,
-                opacity: this.props.opacity,
-                visible: this.props.visible,
-            });
+            return cached.layer;
         }
-        // Create new layer
-        const layer = this.createBinaryPathLayer(binary, layerId, currentTime, timeOffset, timeWindow);
+        // Create new layer with getTime getter
+        const layer = this.createBinaryPathLayer(binary, layerId, timeOffset);
         this.layerCache.set(layerId, {
             layer,
             binary,
@@ -118,10 +103,14 @@ export class AnimatedPathLayer extends SpatioTemporalLayer {
         }
     }
     /**
-     * Create a PathLayer using deck.gl's binary data interface
+     * Create a PathLayer using deck.gl's binary data interface.
+     * PERFORMANCE: Uses getTime() getter for dynamic time updates.
      */
-    createBinaryPathLayer(binary, layerId, currentTime, timeOffset, timeWindow) {
+    createBinaryPathLayer(binary, layerId, timeOffset) {
         const dims = binary.positionDimensions ?? 2;
+        const timeWindow = this.props.timeWindow || 86400000;
+        // Capture self for getTime closure
+        const self = this;
         // Build the binary data object for deck.gl
         // For paths, we need startIndices to tell deck.gl where each path starts
         const data = {
@@ -165,8 +154,9 @@ export class AnimatedPathLayer extends SpatioTemporalLayer {
             visible: this.props.visible,
             pickable: this.props.pickable ?? false,
             // Time Filtering via extension
+            // PERFORMANCE: Use getTime() getter for dynamic time updates (allows layer memoization)
             extensions: [TIME_FILTER_EXTENSION],
-            currentTime: currentTime - timeOffset,
+            getTime: () => self.getCurrentTime() - timeOffset,
             timeWindow,
             fadeInDuration: this.props.fadeInDuration,
             fadeOutDuration: this.props.fadeOutDuration,
@@ -230,29 +220,20 @@ export class AnimatedPathLayer extends SpatioTemporalLayer {
         return null;
     }
 }
-Object.defineProperty(AnimatedPathLayer, "layerName", {
-    enumerable: true,
-    configurable: true,
-    writable: true,
-    value: 'AnimatedPathLayer'
-});
-Object.defineProperty(AnimatedPathLayer, "defaultProps", {
-    enumerable: true,
-    configurable: true,
-    writable: true,
-    value: {
-        ...SpatioTemporalLayer.defaultProps,
-        // PathLayer props
-        widthScale: { type: 'number', value: 1, min: 0 },
-        widthUnits: 'pixels',
-        pathColor: { type: 'color', value: [0, 150, 255, 255] },
-        pathWidth: { type: 'number', value: 3 },
-        colorPalette: { type: 'array', value: DEFAULT_PALETTE },
-        // Trail props
-        trail: true,
-        trailLength: { type: 'number', value: 5000, min: 0 }, // 5 seconds
-        // Animation props
-        fadeInDuration: { type: 'number', value: 300, min: 0 },
-        fadeOutDuration: { type: 'number', value: 300, min: 0 },
-    }
-});
+AnimatedPathLayer.layerName = 'AnimatedPathLayer';
+AnimatedPathLayer.defaultProps = {
+    ...SpatioTemporalLayer.defaultProps,
+    // PathLayer props
+    widthScale: { type: 'number', value: 1, min: 0 },
+    widthUnits: 'pixels',
+    pathColor: { type: 'color', value: [0, 150, 255, 255] },
+    pathWidth: { type: 'number', value: 3 },
+    colorPalette: { type: 'array', value: DEFAULT_PALETTE },
+    // Trail props
+    trail: true,
+    trailLength: { type: 'number', value: 5000, min: 0 }, // 5 seconds
+    // Animation props
+    fadeInDuration: { type: 'number', value: 300, min: 0 },
+    fadeOutDuration: { type: 'number', value: 300, min: 0 },
+};
+//# sourceMappingURL=animated-path-layer.js.map

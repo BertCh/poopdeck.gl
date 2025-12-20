@@ -6,9 +6,9 @@
  *
  * Performance optimizations (120fps target):
  * - Priority queue ensures current tiles load before prefetch
- * - Prefetch capped to 20% of maxRequests to avoid network saturation
- * - Prefetch intensity scales with playback speed
- * - Reduced default prefetchSteps from 10 to 5
+ * - Prefetch uses up to 50% of maxRequests for smooth animation
+ * - Prefetch is aggressive by default to prevent flashing
+ * - Prefetch steps scaled based on playback speed
  */
 const DEBUG = false;
 /**
@@ -58,8 +58,8 @@ export class SpatiotemporalTileset {
             maxZoom: options.maxZoom ?? 14,
             refinementStrategy: options.refinementStrategy ?? 'best-available', // Default: load parent tiles as fallback
             enablePrefetch: options.enablePrefetch ?? true, // Enable by default
-            prefetchAhead: options.prefetchAhead ?? 30000, // 30 seconds ahead default for smooth animation
-            prefetchSteps: options.prefetchSteps ?? 5, // Reduced from 10 to avoid network flooding
+            prefetchAhead: options.prefetchAhead ?? 60000, // 60 seconds ahead default for smooth animation
+            prefetchSteps: options.prefetchSteps ?? 15, // Aggressive prefetching to prevent flashing
             getAvailableTiles: options.getAvailableTiles,
             getTileData: options.getTileData,
             onTileLoad: options.onTileLoad ?? (() => { }),
@@ -251,23 +251,20 @@ export class SpatiotemporalTileset {
         // Determine prefetch direction based on animation speed
         const direction = this.animationSpeed >= 0 ? 1 : -1;
         // Scale prefetch steps based on animation speed
-        // Paused/very slow: 1-2 steps, normal: 3-4, fast: full prefetchSteps
+        // We're more aggressive now to prevent flashing during playback
+        // Speed = sim time delta / real time delta (typically 100-1000x for most datasets)
         const absSpeed = Math.abs(this.animationSpeed);
         let effectiveSteps;
-        if (absSpeed < 0.1) {
-            // Paused or very slow - minimal prefetch
-            effectiveSteps = Math.min(2, prefetchSteps);
+        if (absSpeed < 0.01) {
+            // Completely paused - still prefetch a few steps for scrubbing
+            effectiveSteps = Math.max(5, Math.floor(prefetchSteps * 0.5));
         }
         else if (absSpeed < 1.0) {
-            // Slow playback - moderate prefetch
-            effectiveSteps = Math.min(3, prefetchSteps);
-        }
-        else if (absSpeed < 5.0) {
-            // Normal playback - standard prefetch
-            effectiveSteps = Math.min(4, prefetchSteps);
+            // Very slow playback - moderate prefetch
+            effectiveSteps = Math.max(8, Math.floor(prefetchSteps * 0.7));
         }
         else {
-            // Fast playback - full prefetch
+            // Normal to fast playback - full prefetch
             effectiveSteps = prefetchSteps;
         }
         // prefetchAhead is expected to already be in SIMULATION TIME units
@@ -358,8 +355,8 @@ export class SpatiotemporalTileset {
      * Process request queues with concurrency limit
      * Priority queue is processed first, prefetch queue uses remaining capacity
      *
-     * PERFORMANCE: Prefetch capped to 20% of maxRequests to avoid network saturation
-     * and ensure priority tiles always have bandwidth available.
+     * PERFORMANCE: Prefetch can use up to 50% of maxRequests for aggressive pre-loading.
+     * Priority tiles always processed first to ensure current frame tiles load quickly.
      */
     async processRequestQueue() {
         // Calculate how many more requests we can start
@@ -374,10 +371,11 @@ export class SpatiotemporalTileset {
         }
         if (availableSlots <= 0)
             return;
-        // Reserve 80% of slots for priority tiles, prefetch gets max 20%
-        // This prevents prefetch from saturating the network and blocking current tiles
-        const maxPrefetchSlots = Math.floor(this.options.maxRequests * 0.2);
-        const priorityReserved = this.isAnimating ? Math.min(8, availableSlots) : 0;
+        // Allow prefetch to use up to 50% of slots for aggressive pre-loading
+        // Priority tiles are always processed first, so they get bandwidth when needed
+        const maxPrefetchSlots = Math.floor(this.options.maxRequests * 0.5);
+        // Reserve fewer slots during animation - prefetch is more important than we thought
+        const priorityReserved = this.isAnimating ? Math.min(4, availableSlots) : 0;
         let usedSlots = 0;
         // Process HIGH PRIORITY queue first (current time tiles)
         while (this.priorityQueue.length > 0 &&
@@ -388,7 +386,7 @@ export class SpatiotemporalTileset {
             }
         }
         // Process LOW PRIORITY prefetch queue with remaining slots
-        // Cap prefetch to 20% of total capacity to avoid network saturation
+        // Allow prefetch up to 50% of total capacity for smooth animation
         const remainingSlots = availableSlots - Math.max(usedSlots, priorityReserved);
         const prefetchSlots = Math.min(remainingSlots, maxPrefetchSlots);
         let prefetchUsed = 0;

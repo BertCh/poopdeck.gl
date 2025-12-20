@@ -6,7 +6,7 @@ A [loaders.gl](https://loaders.gl/) compatible loader for parsing Spatiotemporal
 
 - **Worker Support**: Offloads decoding to worker threads for better main thread performance
 - **Binary Output**: GPU-ready binary columnar format with typed arrays for zero-copy GPU upload
-- **Object Output**: Standard Tile objects for backward compatibility
+- **Automatic Worker Pool**: Scales workers to hardware concurrency (up to 8 workers)
 
 ## Installation
 
@@ -19,8 +19,6 @@ import { load } from "@loaders.gl/core";
 
 The loader is typically used internally by `STTArchive` or `SpatioTemporalLayer`, but can be used standalone with `loaders.gl`.
 
-### Standard Object Output
-
 ```typescript
 import { load } from "@loaders.gl/core";
 import { STTLoader } from "@stt/core";
@@ -31,25 +29,9 @@ const tile = await load(url, STTLoader, {
     compression: 1, // Gzip
   },
 });
-```
 
-### Binary Output (GPU-Optimized)
-
-```typescript
-import { load } from "@loaders.gl/core";
-import { STTLoader } from "@stt/core";
-import type { BinaryTile } from "@stt/core";
-
-const binaryTile = (await load(url, STTLoader, {
-  stt: {
-    tileId: { z: 0, x: 0, y: 0, t: 1234567890 },
-    compression: 1,
-    outputFormat: "binary", // GPU-ready typed arrays
-  },
-})) as BinaryTile;
-
-// Access binary data directly
-const { positions, startTimes, endTimes } = binaryTile.layers[0].features;
+// Output is always binary format for GPU efficiency
+const { positions, startTimes, endTimes } = tile.layers[0].features;
 ```
 
 ## Options
@@ -62,12 +44,11 @@ import type { STTLoaderOptions } from "@stt/core";
 
 ### STT-specific Options
 
-| Option              | Type                   | Default    | Description                                                                                                                                                               |
-| :------------------ | :--------------------- | :--------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `stt.tileId`        | `TileId`               | `null`     | **Required**. The tile ID `{z, x, y, t}` associated with the data being loaded. This is needed to decode delta-encoded coordinates which are relative to the tile origin. |
-| `stt.compression`   | `Compression`          | `0`        | Compression method used: `0` (None), `1` (Gzip), `2` (Brotli).                                                                                                            |
-| `stt.outputFormat`  | `'object' \| 'binary'` | `'object'` | Output format: `'object'` for standard Tile objects, `'binary'` for GPU-ready typed arrays.                                                                               |
-| `stt.disableWorker` | `boolean`              | `false`    | Force main thread decoding (disables worker threading).                                                                                                                   |
+| Option              | Type          | Default | Description                                                              |
+| :------------------ | :------------ | :------ | :----------------------------------------------------------------------- |
+| `stt.tileId`        | `TileId`      | `null`  | **Required**. The tile ID `{z, x, y, t}` for coordinate decoding.        |
+| `stt.compression`   | `Compression` | `0`     | Compression method: `0` (None), `1` (Gzip), `2` (Brotli).                |
+| `stt.disableWorker` | `boolean`     | `false` | Force main thread decoding (disables worker threading).                  |
 
 ### Standard loaders.gl Options
 
@@ -92,13 +73,13 @@ All standard loaders.gl options are also supported:
 
 ## Output
 
-Returns a `Tile` object:
+Returns a `Tile` object with binary features:
 
 ```typescript
 interface Tile {
   id: TileId;
   timeRange: TimeRange;
-  layers: Layer[];
+  layers: BinaryLayer[];
 }
 
 interface TileId {
@@ -108,12 +89,14 @@ interface TileId {
   t: number; // Timestamp (Unix milliseconds)
 }
 
-interface Layer {
+interface BinaryLayer {
   name: string;
   extent: number;
-  features: Feature[];
+  features: BinaryFeatures;
 }
 ```
+
+See [Binary Features](./binary-features.md) for the `BinaryFeatures` structure.
 
 ## TypeScript
 
@@ -123,7 +106,6 @@ The loader exports proper TypeScript types:
 import { STTLoader, STTLoaderOptions, STTOptions } from "@stt/core";
 import type { Tile } from "@stt/core";
 
-// Type-safe usage
 const options: STTLoaderOptions = {
   stt: {
     tileId: { z: 5, x: 10, y: 20, t: Date.now() },

@@ -76,7 +76,11 @@ The rendering layer for [deck.gl](https://deck.gl).
 - **`SpatioTemporalLayer`**: A composite layer that handles tile loading and time synchronization.
 - **`AnimatedPointLayer`**: Renders points with GPU-based time filtering.
 - **`AnimatedPathLayer`**: Renders paths/trajectories with time filtering.
+- **`AnimatedPolygonLayer`**: Renders polygons with time filtering.
+- **`AnimatedTripsLayer`**: Renders animated trajectories with trailing effect.
+- **`HeatmapTimeLayer`**: Renders temporal density heatmaps.
 - **`TimeController`**: Manages the playback clock, speed, and looping.
+- **`TimeFilterExtension`**: GPU shader extension for temporal filtering.
 
 ## Design Decisions
 
@@ -91,10 +95,10 @@ We use a custom `SpatiotemporalTileset` instead of extending deck.gl's built-in 
 3. **Time-Based Prefetching**: The tileset can prefetch tiles along the time axis for smooth animation, which `TileLayer` doesn't support natively.
 
 However, the implementation follows deck.gl patterns:
-- Request concurrency control (maxRequests: 6)
-- Debouncing for viewport changes
-- LRU cache eviction
+- Request concurrency control (maxRequests: 64 for parallel animation loading)
+- LRU cache eviction (up to 2GB cache for large datasets)
 - Viewport-based tile selection
+- Prefetching for smooth animation playback
 
 ### Why Not deck.gl TripsLayer?
 

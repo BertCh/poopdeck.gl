@@ -94,12 +94,12 @@ export declare class AnimatedPathLayer extends SpatioTemporalLayer<AnimatedPathL
         };
         timeRange: {
             type: string;
-            value: any;
+            value: null;
             compare: boolean;
         };
         timeController: {
             type: string;
-            value: any;
+            value: null;
             compare: boolean;
         };
         maxRequests: {
@@ -139,17 +139,17 @@ export declare class AnimatedPathLayer extends SpatioTemporalLayer<AnimatedPathL
         };
         onViewportLoad: {
             type: string;
-            value: any;
+            value: null;
             optional: boolean;
         };
         onTileLoad: {
             type: string;
-            value: any;
+            value: null;
             optional: boolean;
         };
         onTileUnload: {
             type: string;
-            value: any;
+            value: null;
             optional: boolean;
         };
         loadOptions: {
@@ -162,6 +162,7 @@ export declare class AnimatedPathLayer extends SpatioTemporalLayer<AnimatedPathL
     renderLayers(): Layer[];
     /**
      * Get a cached layer or create a new one.
+     * PERFORMANCE: Uses getTime() getter so layers can be memoized.
      */
     private getOrCreateLayer;
     /**
@@ -169,7 +170,8 @@ export declare class AnimatedPathLayer extends SpatioTemporalLayer<AnimatedPathL
      */
     private cleanupCache;
     /**
-     * Create a PathLayer using deck.gl's binary data interface
+     * Create a PathLayer using deck.gl's binary data interface.
+     * PERFORMANCE: Uses getTime() getter for dynamic time updates.
      */
     private createBinaryPathLayer;
     /**

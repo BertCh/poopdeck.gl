@@ -103,12 +103,12 @@ export declare class AnimatedPolygonLayer extends SpatioTemporalLayer<AnimatedPo
         };
         timeRange: {
             type: string;
-            value: any;
+            value: null;
             compare: boolean;
         };
         timeController: {
             type: string;
-            value: any;
+            value: null;
             compare: boolean;
         };
         maxRequests: {
@@ -148,17 +148,17 @@ export declare class AnimatedPolygonLayer extends SpatioTemporalLayer<AnimatedPo
         };
         onViewportLoad: {
             type: string;
-            value: any;
+            value: null;
             optional: boolean;
         };
         onTileLoad: {
             type: string;
-            value: any;
+            value: null;
             optional: boolean;
         };
         onTileUnload: {
             type: string;
-            value: any;
+            value: null;
             optional: boolean;
         };
         loadOptions: {

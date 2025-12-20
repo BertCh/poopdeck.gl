@@ -7,7 +7,7 @@ It is inspired by loaders.gl's [Tileset3D](https://loaders.gl/modules/tiles/docs
 ## Installation
 
 ```typescript
-import { SpatiotemporalTileset } from '@stt/core';
+import { SpatiotemporalTileset } from "@stt/core";
 ```
 
 ## Usage
@@ -16,55 +16,98 @@ Typically used internally by `SpatioTemporalLayer`, but can be used independentl
 
 ```typescript
 const tileset = new SpatiotemporalTileset({
-  maxRequests: 6,
-  getAvailableTiles: (bounds, zoom, timeRange) => archive.getTileIdsInBounds(...),
+  maxRequests: 64,
+  getAvailableTiles: (bounds, zoom, timeRange) =>
+    archive.getTileIdsInBounds(bounds, zoom, timeRange),
   getTileData: (tileId) => archive.getTile(tileId),
-  onTileLoad: (tile) => console.log('Loaded', tile)
+  onTileLoad: (tile) => console.log("Loaded", tile),
 });
 
 // Update every frame or viewport change
-tileset.update({
-  bounds: currentBounds,
-  zoom: currentZoom,
-  time: Date.now(),
-  timeWindow: 86400000
-});
+tileset.update(
+  {
+    bounds: currentBounds,
+    zoom: currentZoom,
+    time: Date.now(),
+    timeWindow: 86400000,
+  },
+  false
+);
 
 const visibleTiles = tileset.getVisibleTiles();
 ```
 
 ## Constructor Options
 
-| Option | Type | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `maxRequests` | `number` | `6` | Maximum concurrent tile fetches. |
-| `debounceTime` | `number` | `300` | Debounce time (ms) for viewport updates. |
-| `maxCacheSize` | `number` | `200` | Max tiles in LRU cache. |
-| `maxCacheByteSize` | `number` | `500MB` | Max cache size in bytes. |
-| `refinementStrategy` | `'best-available' \| 'no-overlap'` | `'best-available'` | Strategy for loading tiles. `'best-available'` loads parent tiles while detailed tiles are loading. |
-| `getAvailableTiles` | `Function` | **Required** | Async callback to query the archive for tile IDs in the current view. |
-| `getTileData` | `Function` | **Required** | Async callback to fetch and decode a specific tile. |
+### Required Callbacks
+
+| Option              | Type       | Description                                              |
+| :------------------ | :--------- | :------------------------------------------------------- |
+| `getAvailableTiles` | `Function` | Async callback to query tile IDs in current view.        |
+| `getTileData`       | `Function` | Async callback to fetch and decode a specific tile.      |
+
+### Tile Loading Options
+
+| Option             | Type     | Default | Description                                     |
+| :----------------- | :------- | :------ | :---------------------------------------------- |
+| `maxRequests`      | `number` | `6`     | Maximum concurrent tile fetches.                |
+| `debounceTime`     | `number` | `300`   | Debounce time (ms) for viewport updates.        |
+| `maxCacheSize`     | `number` | `200`   | Maximum tiles in LRU cache.                     |
+| `maxCacheByteSize` | `number` | `500MB` | Maximum cache size in bytes.                    |
+| `minZoom`          | `number` | `0`     | Minimum zoom level available in data.           |
+| `maxZoom`          | `number` | `22`    | Maximum zoom level available in data.           |
+
+### Refinement Options
+
+| Option               | Type                                | Default            | Description                                            |
+| :------------------- | :---------------------------------- | :----------------- | :----------------------------------------------------- |
+| `refinementStrategy` | `'best-available' \| 'no-overlap'`  | `'best-available'` | Strategy for loading tiles. `'best-available'` loads parent tiles while detailed tiles load. |
+
+### Prefetch Options
+
+| Option          | Type      | Default | Description                                          |
+| :-------------- | :-------- | :------ | :--------------------------------------------------- |
+| `enablePrefetch`| `boolean` | `false` | Enable predictive prefetching for animations.        |
+| `prefetchAhead` | `number`  | `30000` | How far ahead to prefetch (animation time in ms).    |
+| `prefetchSteps` | `number`  | `5`     | Number of time window steps to prefetch.             |
+
+### Callbacks
+
+| Option         | Type                           | Description                        |
+| :------------- | :----------------------------- | :--------------------------------- |
+| `onTileLoad`   | `(tile: Tile) => void`         | Called when a tile loads.          |
+| `onTileUnload` | `(tile: Tile) => void`         | Called when a tile is evicted.     |
+| `onTileError`  | `(error: Error, tileId) => void` | Called on tile load error.       |
 
 ## Methods
 
-### `update(viewport: Viewport, skipDebounce?: boolean): number`
+### `update(viewport, skipDebounce?): number`
+
 Updates the tileset with a new viewport state. Returns a `frameNumber` which increments whenever the set of visible tiles changes.
 
-*   `viewport`: Object containing `{ bounds, zoom, time, timeWindow }`.
-*   `skipDebounce`: If `true`, loads tiles immediately (useful for time-only updates).
+- `viewport`: Object containing `{ bounds, zoom, time, timeWindow }`.
+- `skipDebounce`: If `true`, loads tiles immediately (useful for time-only updates).
 
 ### `getVisibleTiles(): Tile[]`
+
 Returns the array of tiles that are currently loaded and intersect with the current time window.
 
 ### `getCacheStats(): CacheStats`
-Returns statistics about the cache (hits, misses, active requests).
+
+Returns statistics about the cache (hits, misses, active requests, cached tiles count).
+
+### `setAnimationState(playing, speed)`
+
+Inform the tileset about animation playback state for prefetch optimization.
+
+### `finalize()`
+
+Cancels all active requests and cleans up resources.
 
 ### `clear()`
+
 Cancels all active requests and clears the cache.
 
 ## Source
 
 [packages/core/src/spatiotemporal-tileset.ts](../../packages/core/src/spatiotemporal-tileset.ts)
-
-
-

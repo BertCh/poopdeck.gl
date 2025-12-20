@@ -24,6 +24,7 @@ const timeFilterUniforms = {
 };
 const defaultProps = {
     currentTime: 0,
+    getTime: null, // Optional function, no default
     timeWindow: 0,
     fadeInDuration: 0,
     fadeOutDuration: 0,
@@ -52,6 +53,9 @@ export class TimeFilterExtension extends LayerExtension {
           in float instanceEndTime;
           // Optional: vertex progress along path (0-1), enables per-vertex time interpolation
           in float instanceVertexProgress;
+          // Optional: actual vertex timestamp (when available, takes precedence over interpolation)
+          // This enables accurate animation when per-vertex timestamps are stored in the data
+          in float instanceVertexTime;
           out float vTimeAlpha;
         `,
                 'vs:#main-start': `
@@ -62,13 +66,18 @@ export class TimeFilterExtension extends LayerExtension {
 
           // Trail mode: progressive drawing with trailing fade
           if (timeFilter.trailLength > 0.0) {
-            // Interpolate vertex time based on progress along path
-            // If instanceVertexProgress is not provided (0), use simple feature-level visibility
-            float progress = instanceVertexProgress;
-            float featureDuration = instanceEndTime - instanceStartTime;
-            
             // Compute the time at this vertex
-            float vertexTime = instanceStartTime + featureDuration * progress;
+            // Priority: 1) actual vertex timestamp, 2) interpolation from progress
+            float vertexTime;
+            if (instanceVertexTime > 0.0) {
+              // Use actual per-vertex timestamp (accurate, from data)
+              vertexTime = instanceVertexTime;
+            } else {
+              // Fall back to linear interpolation (assumes uniform speed)
+              float progress = instanceVertexProgress;
+              float featureDuration = instanceEndTime - instanceStartTime;
+              vertexTime = instanceStartTime + featureDuration * progress;
+            }
             
             // Trail window: show vertices from (currentTime - trailLength) to currentTime
             float trailStart = timeFilter.currentTime - timeFilter.trailLength;
@@ -148,6 +157,16 @@ export class TimeFilterExtension extends LayerExtension {
                     type: 'float32',
                     stepMode: 'dynamic',
                     defaultValue: 0
+                },
+                // Optional: actual per-vertex timestamp for accurate animation
+                // When present (> 0), takes precedence over interpolation
+                // This comes from data with per-vertex timestamps (like GPS tracks)
+                instanceVertexTime: {
+                    size: 1,
+                    accessor: 'getInstanceVertexTime',
+                    type: 'float32',
+                    stepMode: 'dynamic',
+                    defaultValue: 0
                 }
             });
         }
@@ -157,9 +176,12 @@ export class TimeFilterExtension extends LayerExtension {
         // The draw method will handle setting the uniforms
     }
     draw(_params, _extension) {
-        const { currentTime = 0, timeWindow = 0, fadeInDuration = 0, fadeOutDuration = 0, trailLength = 0 } = this.props;
+        const { currentTime = 0, getTime, timeWindow = 0, fadeInDuration = 0, fadeOutDuration = 0, trailLength = 0 } = this.props;
+        // PERFORMANCE: Use getTime() if provided for dynamic time updates
+        // This allows the layer to be cached while time updates each frame
+        const resolvedTime = typeof getTime === 'function' ? getTime() : currentTime;
         const timeFilterProps = {
-            currentTime,
+            currentTime: resolvedTime,
             windowHalf: timeWindow / 2,
             fadeIn: fadeInDuration,
             fadeOut: fadeOutDuration,

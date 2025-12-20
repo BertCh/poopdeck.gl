@@ -35,6 +35,9 @@ export interface Dataset {
   /** Enable 3D visualization with altitude/elevation */
   use3D?: boolean;
   
+  /** Use GlobeView instead of Mercator projection (for global satellite data) */
+  useGlobe?: boolean;
+  
   /** Property name containing elevation data (e.g., 'altitude', 'elevation') */
   elevationProperty?: string;
   

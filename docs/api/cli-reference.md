@@ -12,43 +12,84 @@ stt-build [OPTIONS] --input <INPUT> --output <OUTPUT>
 
 ### Required Arguments
 
-| Argument | Description |
-| :--- | :--- |
-| `-i, --input <INPUT>` | Path to the source file. Supports `.csv` (comma-separated values) and `.geojson` (FeatureCollection or newline-delimited). |
-| `-o, --output <OUTPUT>` | Path to the output `.stt` archive. |
+| Argument              | Description                                                                                 |
+| :-------------------- | :------------------------------------------------------------------------------------------ |
+| `-i, --input <INPUT>` | Path to the source file. Supports `.csv` and `.geojson` (FeatureCollection or newline-delimited). |
+| `-o, --output <OUTPUT>` | Path to the output `.stt` archive.                                                        |
 
-### Configuration Options
+### Time Configuration
 
-| Option | Default | Description |
-| :--- | :--- | :--- |
-| `-t, --time-field` | `timestamp` | Name of the column (CSV) or property (GeoJSON) containing the timestamp. |
-| `--time-format` | `iso8601` | Format of the timestamp. Options: `iso8601`, `unix-ms`, `unix-sec`. |
-| `--min-zoom` | `0` | Minimum zoom level to generate. |
-| `--max-zoom` | `14` | Maximum zoom level to generate. |
-| `--layer` | `default` | Name of the layer in the output tile. |
+| Option                 | Default     | Description                                                            |
+| :--------------------- | :---------- | :--------------------------------------------------------------------- |
+| `-t, --time-field`     | `timestamp` | Field name containing timestamps (Unix ms or ISO 8601).                |
+| `--end-time-field`     | `null`      | Optional field for end timestamps (creates time ranges per feature).   |
+| `--time-format`        | `iso8601`   | Format of timestamps: `iso8601`, `unix-ms`, or `unix-sec`.             |
 
-### Optimization & Tuning
+### Zoom Configuration
 
-| Option | Default | Description |
-| :--- | :--- | :--- |
-| `--temporal-resolution` | `sparse-events` | Temporal bucketing profile. <br> **Profiles**: `high-frequency`, `sparse-events`, `daily-aggregates` <br> **Fixed**: `second`, `minute`, `hour`, `day`, `week`, `month`, `year` |
-| `--delta-encoding` | `false` | Enable delta encoding. Reduces file size for moving entities but requires sequential decoding. |
-| `--simplification` | `0.0001` | Douglas-Peucker simplification tolerance in degrees. |
-| `--max-tile-size` | `500000` | Target maximum size for a single tile in bytes. Features may be dropped to meet this budget. |
-| `--compression` | `gzip` | Compression algorithm. Options: `gzip`, `none`. |
+| Option        | Default | Description                     |
+| :------------ | :------ | :------------------------------ |
+| `--min-zoom`  | `0`     | Minimum zoom level to generate. |
+| `--max-zoom`  | `14`    | Maximum zoom level to generate. |
+
+### Tile Options
+
+| Option            | Default  | Description                                                              |
+| :---------------- | :------- | :----------------------------------------------------------------------- |
+| `--extent`        | `4096`   | Tile extent (coordinate precision within tile).                          |
+| `--chunk-size`    | `500000` | Target chunk size in bytes. Features grouped into tiles of ~this size.  |
+| `--compression`   | `gzip`   | Compression algorithm: `gzip` or `none`.                                 |
+| `--simplification`| `0.0001` | Douglas-Peucker simplification tolerance in degrees (0 = no simplification). |
+| `--layer`         | `default`| Name of the layer in the output tiles.                                   |
 
 ### Metadata
 
-| Option | Description |
-| :--- | :--- |
-| `--name` | Dataset name. |
-| `--description` | Dataset description. |
-| `--attribution` | Data source attribution. |
-| `--metadata-output` | Write a JSON summary of the metadata to a specific file (useful for frontend config). |
+| Option              | Description                                                    |
+| :------------------ | :------------------------------------------------------------- |
+| `--name`            | Dataset name (stored in archive metadata).                     |
+| `--description`     | Dataset description.                                           |
+| `--attribution`     | Data source attribution.                                       |
+| `--metadata-output` | Write JSON metadata to file (useful for frontend config).      |
 
 ### Performance
 
-| Option | Default | Description |
-| :--- | :--- | :--- |
-| `-w, --workers` | `4` | Number of parallel threads to use for processing. |
+| Option          | Default | Description                                   |
+| :-------------- | :------ | :-------------------------------------------- |
+| `-w, --workers` | `4`     | Number of parallel threads for processing.    |
+| `-v, --verbose` | `false` | Enable verbose debug output.                  |
 
+### Examples
+
+#### Basic GeoJSON Conversion
+
+```bash
+stt-build -i earthquakes.geojson -o earthquakes.stt
+```
+
+#### CSV with Custom Time Field
+
+```bash
+stt-build -i ships.csv -o ships.stt \
+  --time-field observed_at \
+  --time-format unix-ms
+```
+
+#### High-Resolution with Time Ranges
+
+```bash
+stt-build -i flights.geojson -o flights.stt \
+  --time-field departure_time \
+  --end-time-field arrival_time \
+  --max-zoom 12 \
+  --workers 8
+```
+
+#### With Metadata
+
+```bash
+stt-build -i hurricanes.geojson -o hurricanes.stt \
+  --name "Hurricane Tracks" \
+  --description "NOAA hurricane tracking data" \
+  --attribution "NOAA" \
+  --metadata-output hurricanes-meta.json
+```

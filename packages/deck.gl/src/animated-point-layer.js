@@ -1,14 +1,14 @@
 /**
  * AnimatedPointLayer - GPU-efficient point rendering with time filtering
  *
- * Uses deck.gl's binary data interface for maximum performance:
- * - Passes typed arrays directly to GPU (no accessor function calls)
+ * PERFORMANCE OPTIMIZED (v2 - Consolidated Rendering):
+ * - Consolidates ALL tiles into a SINGLE ScatterplotLayer (1 draw call instead of N)
+ * - Uses deck.gl's binary data interface for maximum performance
  * - Time filtering happens entirely in the shader via TimeFilterExtension
- * - Sub-layer caching prevents buffer regeneration
- * - Layer props reused with same ID - deck.gl diffing preserves GPU state
- * - TimeFilterExtension.draw() updates time uniforms each frame (no clone overhead)
+ * - Consolidated data cached per tile set - only rebuilt when tiles change
+ * - Layer instance memoized to avoid recreation on time-only updates
  *
- * Performance: Targets 120fps by eliminating layer.clone() allocations
+ * Performance: Targets 200fps by eliminating per-tile layer overhead
  */
 import { ScatterplotLayer } from '@deck.gl/layers';
 import { COORDINATE_SYSTEM } from '@deck.gl/core';
@@ -18,12 +18,6 @@ import { TimeFilterExtension } from './time-filter-extension';
 const DEBUG = false;
 // Singleton TimeFilterExtension instance - reused across all layers
 const TIME_FILTER_EXTENSION = new TimeFilterExtension();
-// Cache for color attributes per tile (keyed by binary + property + palette)
-const colorAttrCache = new WeakMap();
-// Cache for binary data objects - deck.gl uses reference equality to detect data changes
-// If the data object is the same reference, deck.gl skips expensive buffer re-uploads
-// Key includes props that affect the data object (fillColor property name, radius property name)
-const binaryDataCache = new WeakMap();
 // Default color palette for categorical data
 const DEFAULT_PALETTE = [
     [31, 119, 180, 255],
@@ -40,80 +34,86 @@ const DEFAULT_PALETTE = [
 /**
  * Animated point layer using deck.gl binary interface
  *
- * Performance optimizations:
+ * Performance optimizations (v2):
+ * - SINGLE draw call: All tiles consolidated into one ScatterplotLayer
  * - Typed arrays passed directly to GPU (zero accessor calls)
  * - TimeFilterExtension handles temporal filtering in shaders
- * - Layer caching prevents unnecessary buffer recreation
- * - Only time-varying props are updated on animation frames
- * - Cached accessor functions and updateTriggers for stable references
+ * - Consolidated data cached - only rebuilt when tiles change (frameNumber)
+ * - Layer instance memoized for time-only updates
  */
 export class AnimatedPointLayer extends SpatioTemporalLayer {
     constructor() {
         super(...arguments);
+        // ========== CONSOLIDATED DATA CACHE ==========
+        // Merges all tile data into a single data object for ONE draw call
+        this.consolidatedDataCache = { tiles: null, frameNumber: -1, propsKey: '', data: null };
+        // ========== MEMOIZED LAYER CACHE ==========
+        // Reuse the same layer instance when only time changes (not tiles)
+        this.cachedLayer = null;
+        this.cachedLayerFrameNumber = -1;
         // ========== CACHED PROPERTIES FOR PERFORMANCE ==========
         // These provide stable references so deck.gl can use fast reference equality
         // instead of expensive deep comparison during layer diffing.
         // Cached updateTriggers object - only recreated when relevant props change
-        Object.defineProperty(this, "cachedUpdateTriggers", {
-            enumerable: true,
-            configurable: true,
-            writable: true,
-            value: {}
-        });
+        this.cachedUpdateTriggers = {};
         // Track last prop values to detect changes
-        Object.defineProperty(this, "lastFillColor", {
-            enumerable: true,
-            configurable: true,
-            writable: true,
-            value: undefined
-        });
-        Object.defineProperty(this, "lastRadius", {
-            enumerable: true,
-            configurable: true,
-            writable: true,
-            value: undefined
-        });
-        Object.defineProperty(this, "lastColorPalette", {
-            enumerable: true,
-            configurable: true,
-            writable: true,
-            value: undefined
-        });
+        this.lastFillColor = undefined;
+        this.lastRadius = undefined;
+        this.lastColorPalette = undefined;
         // Cached color/radius props object - only recreated when props change
-        Object.defineProperty(this, "cachedColorRadiusProps", {
-            enumerable: true,
-            configurable: true,
-            writable: true,
-            value: null
-        });
-        Object.defineProperty(this, "lastFillColorForProps", {
-            enumerable: true,
-            configurable: true,
-            writable: true,
-            value: undefined
-        });
-        Object.defineProperty(this, "lastRadiusForProps", {
-            enumerable: true,
-            configurable: true,
-            writable: true,
-            value: undefined
-        });
+        this.cachedColorRadiusProps = null;
+        this.lastFillColorForProps = undefined;
+        this.lastRadiusForProps = undefined;
     }
+    finalizeState(context) {
+        super.finalizeState(context);
+        // Clean up cached data
+        this.consolidatedDataCache = { tiles: null, frameNumber: -1, propsKey: '', data: null };
+        this.cachedLayer = null;
+    }
+    /**
+     * PERFORMANCE OPTIMIZED renderLayers:
+     * - Creates a SINGLE ScatterplotLayer for ALL tiles (1 draw call)
+     * - Caches consolidated data - only rebuilds when tiles change
+     * - TRULY MEMOIZES layer instance - returns SAME layer for time-only updates
+     * - Time updates happen via getTime() getter in TimeFilterExtension.draw()
+     */
     renderLayers() {
-        const { tiles, currentTime } = this.state;
+        const { tiles, frameNumber } = this.state;
         if (!tiles || tiles.length === 0) {
             if (DEBUG)
                 console.log('AnimatedPointLayer: No tiles loaded');
+            this.cachedLayer = null;
             return [];
         }
-        if (DEBUG) {
-            const totalFeatures = tiles.reduce((sum, t) => sum + t.layers.reduce((ls, l) => ls + l.features.featureCount, 0), 0);
-            console.log(`AnimatedPointLayer: ${tiles.length} tiles, ${totalFeatures} total features`);
+        const currentFrameNumber = frameNumber || 0;
+        // Get or build consolidated data for all tiles
+        const data = this.getConsolidatedData(tiles, currentFrameNumber);
+        if (!data || data.length === 0) {
+            if (DEBUG)
+                console.log('AnimatedPointLayer: No features in tiles');
+            return [];
         }
-        const timeWindow = this.props.timeWindow || 86400000;
+        // ========== LAYER MEMOIZATION ==========
+        // Return the SAME layer instance if tiles haven't changed.
+        // Time updates are handled by the getTime() getter in TimeFilterExtension.draw()
+        if (this.cachedLayer && this.cachedLayerFrameNumber === currentFrameNumber) {
+            // Check if props that affect the layer have changed
+            const propsUnchanged = this.props.fillColor === this.lastFillColor &&
+                this.props.radius === this.lastRadius &&
+                this.props.colorPalette === this.lastColorPalette &&
+                this.props.opacity === this.cachedLayer.props.opacity &&
+                this.props.visible === this.cachedLayer.props.visible;
+            if (propsUnchanged) {
+                if (DEBUG)
+                    console.log('AnimatedPointLayer: Returning memoized layer');
+                return [this.cachedLayer];
+            }
+        }
+        if (DEBUG) {
+            console.log(`AnimatedPointLayer: ${tiles.length} tiles, ${data.length} total features, creating layer`);
+        }
         // ========== UPDATE CACHED OBJECTS ONLY WHEN PROPS CHANGE ==========
-        // This ensures deck.gl sees stable references and can use fast equality checks
-        // Update cached updateTriggers only when relevant props change
         if (this.props.fillColor !== this.lastFillColor ||
             this.props.radius !== this.lastRadius ||
             this.props.colorPalette !== this.lastColorPalette) {
@@ -121,39 +121,154 @@ export class AnimatedPointLayer extends SpatioTemporalLayer {
             this.lastRadius = this.props.radius;
             this.lastColorPalette = this.props.colorPalette;
             this.cachedUpdateTriggers = {
-                getFillColor: [this.props.fillColor, this.props.colorPalette],
-                getRadius: [this.props.radius],
+                getFillColor: [this.props.fillColor, this.props.colorPalette, currentFrameNumber],
+                getRadius: [this.props.radius, currentFrameNumber],
             };
         }
-        const layers = tiles.flatMap((tile) => {
-            return tile.layers.map((layer, layerIndex) => {
-                const binary = layer.features;
-                if (binary.featureCount === 0) {
-                    return null;
-                }
-                const layerId = `${this.props.id}-${tile.id.z}-${tile.id.x}-${tile.id.y}-${tile.id.t}-${layerIndex}`;
-                // Use the tile's timeOffset for time calculations
-                // Feature times (startTimes, endTimes) are stored relative to this offset
-                const tileTimeOffset = binary.timeOffset;
-                return this.createLayer(binary, layerId, currentTime, tileTimeOffset, timeWindow);
-            });
-        }).filter(Boolean);
-        return layers;
+        // Create and cache the layer
+        const layer = this.createConsolidatedLayer(data);
+        this.cachedLayer = layer;
+        this.cachedLayerFrameNumber = currentFrameNumber;
+        return [layer];
     }
     /**
-     * Create a ScatterplotLayer for the given binary data.
-     *
-     * PERFORMANCE OPTIMIZATION:
-     * - Caches the `data` object per BinaryFeatures + props combo so deck.gl recognizes
-     *   unchanged data and skips GPU buffer re-uploads
-     * - Creates new layer instances with updated time props each frame
-     *   (this is lightweight - deck.gl efficiently diffs and updates uniforms)
-     * - NO MUTATION: data objects are built complete upfront, never mutated after caching
+     * Get or create consolidated data from all tiles.
+     * Cached by frameNumber - only rebuilds when tiles actually change.
      */
-    createLayer(binary, layerId, currentTime, timeOffset, timeWindow) {
-        // Get or create cached data object for this binary + props combination
-        // This ensures deck.gl sees the same data reference and skips buffer uploads
-        const data = this.getOrCreateDataObject(binary);
+    getConsolidatedData(tiles, frameNumber) {
+        // Generate cache key from props that affect data structure
+        const fillColorProp = typeof this.props.fillColor === 'string' ? this.props.fillColor : '';
+        const radiusProp = typeof this.props.radius === 'string' ? this.props.radius : '';
+        const propsKey = `${fillColorProp}|${radiusProp}`;
+        // Return cached data if still valid
+        if (this.consolidatedDataCache.data &&
+            this.consolidatedDataCache.frameNumber === frameNumber &&
+            this.consolidatedDataCache.propsKey === propsKey) {
+            return this.consolidatedDataCache.data;
+        }
+        // Build new consolidated data
+        const data = this.buildConsolidatedData(tiles);
+        // Cache it
+        this.consolidatedDataCache = {
+            tiles,
+            frameNumber,
+            propsKey,
+            data,
+        };
+        // Invalidate layer cache since data changed
+        this.cachedLayer = null;
+        this.cachedLayerFrameNumber = -1;
+        return data;
+    }
+    /**
+     * Build consolidated data by merging all tile binary data.
+     * Converts relative times to absolute times during consolidation.
+     */
+    buildConsolidatedData(tiles) {
+        // First pass: count total features and determine dimensions
+        let totalFeatures = 0;
+        let dims = 2;
+        for (const tile of tiles) {
+            for (const layer of tile.layers) {
+                const binary = layer.features;
+                totalFeatures += binary.featureCount;
+                if (binary.positionDimensions && binary.positionDimensions > dims) {
+                    dims = binary.positionDimensions;
+                }
+            }
+        }
+        if (totalFeatures === 0) {
+            return null;
+        }
+        // Allocate consolidated arrays
+        const positions = new Float32Array(totalFeatures * dims);
+        const startTimes = new Float32Array(totalFeatures);
+        const endTimes = new Float32Array(totalFeatures);
+        // For property-based attributes
+        const fillColorProp = typeof this.props.fillColor === 'string' ? this.props.fillColor : null;
+        const radiusProp = typeof this.props.radius === 'string' ? this.props.radius : null;
+        let colors = fillColorProp ? new Uint8Array(totalFeatures * 4) : null;
+        let radii = radiusProp ? new Float32Array(totalFeatures) : null;
+        const palette = this.props.colorPalette || DEFAULT_PALETTE;
+        // Second pass: copy data from each tile
+        let offset = 0;
+        for (const tile of tiles) {
+            for (const layer of tile.layers) {
+                const binary = layer.features;
+                const count = binary.featureCount;
+                const srcDims = binary.positionDimensions ?? 2;
+                const timeOffset = binary.timeOffset;
+                // Copy positions (handle dimension mismatch)
+                for (let i = 0; i < count; i++) {
+                    const srcIdx = i * srcDims;
+                    const dstIdx = (offset + i) * dims;
+                    positions[dstIdx] = binary.positions[srcIdx];
+                    positions[dstIdx + 1] = binary.positions[srcIdx + 1];
+                    if (dims === 3) {
+                        positions[dstIdx + 2] = srcDims === 3 ? binary.positions[srcIdx + 2] : 0;
+                    }
+                }
+                // Copy times - convert to ABSOLUTE times by adding timeOffset
+                for (let i = 0; i < count; i++) {
+                    startTimes[offset + i] = timeOffset + binary.startTimes[i];
+                    endTimes[offset + i] = timeOffset + binary.endTimes[i];
+                }
+                // Copy colors if using property-based coloring
+                if (colors && fillColorProp) {
+                    const prop = binary.categoricalProps[fillColorProp];
+                    if (prop) {
+                        for (let i = 0; i < count; i++) {
+                            const categoryIndex = prop.indices[i];
+                            const color = palette[categoryIndex % palette.length];
+                            const dstIdx = (offset + i) * 4;
+                            colors[dstIdx] = color[0];
+                            colors[dstIdx + 1] = color[1];
+                            colors[dstIdx + 2] = color[2];
+                            colors[dstIdx + 3] = color[3] ?? 255;
+                        }
+                    }
+                }
+                // Copy radii if using property-based radius
+                if (radii && radiusProp) {
+                    const values = binary.numericProps[radiusProp];
+                    if (values) {
+                        for (let i = 0; i < count; i++) {
+                            radii[offset + i] = values[i];
+                        }
+                    }
+                }
+                offset += count;
+            }
+        }
+        // Build the consolidated data object
+        const attributes = {
+            getPosition: { value: positions, size: dims },
+            getInstanceStartTime: { value: startTimes, size: 1 },
+            getInstanceEndTime: { value: endTimes, size: 1 },
+        };
+        if (colors) {
+            attributes.getFillColor = { value: colors, size: 4, normalized: true };
+        }
+        if (radii) {
+            attributes.getRadius = { value: radii, size: 1 };
+        }
+        return {
+            length: totalFeatures,
+            attributes,
+        };
+    }
+    /**
+     * Create a single ScatterplotLayer with consolidated data.
+     *
+     * PERFORMANCE: Uses getTime() getter instead of currentTime prop.
+     * This allows the layer to be memoized - time updates happen in
+     * TimeFilterExtension.draw() via the getter, not via layer recreation.
+     */
+    createConsolidatedLayer(data) {
+        const layerId = `${this.props.id}-consolidated`;
+        const timeWindow = this.props.timeWindow || 86400000;
+        // Capture `this` for the getter closure
+        const self = this;
         return new ScatterplotLayer({
             id: layerId,
             data,
@@ -164,8 +279,10 @@ export class AnimatedPointLayer extends SpatioTemporalLayer {
             visible: this.props.visible,
             pickable: this.props.pickable ?? false,
             // Time Filtering via extension
+            // PERFORMANCE: Use getTime() getter - allows layer memoization
+            // Time is read dynamically in TimeFilterExtension.draw()
             extensions: [TIME_FILTER_EXTENSION],
-            currentTime: currentTime - timeOffset,
+            getTime: () => self.getCurrentTime(),
             timeWindow,
             fadeInDuration: this.props.fadeInDuration,
             fadeOutDuration: this.props.fadeOutDuration,
@@ -176,74 +293,8 @@ export class AnimatedPointLayer extends SpatioTemporalLayer {
         });
     }
     /**
-     * Get or create a complete data object for the given binary features.
-     *
-     * The cache key includes the property names used for color/radius so that
-     * when props change, we create a new data object rather than mutating.
-     */
-    getOrCreateDataObject(binary) {
-        // Get cache for this binary
-        let propsCache = binaryDataCache.get(binary);
-        if (!propsCache) {
-            propsCache = new Map();
-            binaryDataCache.set(binary, propsCache);
-        }
-        // Create cache key from props that affect data structure
-        const fillColorProp = typeof this.props.fillColor === 'string' ? this.props.fillColor : '';
-        const radiusProp = typeof this.props.radius === 'string' ? this.props.radius : '';
-        const cacheKey = `${fillColorProp}|${radiusProp}`;
-        // Return cached data if available
-        let data = propsCache.get(cacheKey);
-        if (data) {
-            return data;
-        }
-        // Build complete data object upfront (no mutation after this)
-        data = this.buildDataObject(binary);
-        propsCache.set(cacheKey, data);
-        return data;
-    }
-    /**
-     * Build the complete binary data object for deck.gl.
-     * Includes all attributes based on current props - no mutation after creation.
-     */
-    buildDataObject(binary) {
-        const dims = binary.positionDimensions ?? 2;
-        const attributes = {
-            getPosition: {
-                value: binary.positions,
-                size: dims,
-            },
-            getInstanceStartTime: {
-                value: binary.startTimes,
-                size: 1,
-            },
-            getInstanceEndTime: {
-                value: binary.endTimes,
-                size: 1,
-            },
-        };
-        // Add radius attribute if using a property name
-        if (typeof this.props.radius === 'string') {
-            const radiusAttr = this.getRadiusAttribute(binary);
-            if (radiusAttr) {
-                attributes.getRadius = radiusAttr;
-            }
-        }
-        // Add color attribute if using a property name
-        if (typeof this.props.fillColor === 'string') {
-            const colorAttr = this.getFillColorAttribute(binary);
-            if (colorAttr) {
-                attributes.getFillColor = colorAttr;
-            }
-        }
-        return {
-            length: binary.featureCount,
-            attributes,
-        };
-    }
-    /**
      * Get color and radius props for constant values only.
-     * Property-based values are handled in buildDataObject as attributes.
+     * Property-based values are handled in buildConsolidatedData as attributes.
      *
      * PERFORMANCE OPTIMIZATION:
      * Returns a cached object when props haven't changed. This ensures deck.gl
@@ -271,81 +322,22 @@ export class AnimatedPointLayer extends SpatioTemporalLayer {
         this.cachedColorRadiusProps = result;
         return result;
     }
-    /**
-     * Get radius attribute from numeric property if specified
-     */
-    getRadiusAttribute(binary) {
-        const radius = this.props.radius;
-        if (typeof radius === 'string') {
-            const values = binary.numericProps[radius];
-            if (values) {
-                return { value: values, size: 1 };
-            }
-        }
-        return null;
-    }
-    /**
-     * Get fill color attribute from categorical property if specified.
-     * Cached per BinaryFeatures + property + palette combination.
-     */
-    getFillColorAttribute(binary) {
-        const fillColor = this.props.fillColor;
-        if (typeof fillColor === 'string') {
-            const prop = binary.categoricalProps[fillColor];
-            if (prop) {
-                const palette = this.props.colorPalette || DEFAULT_PALETTE;
-                // Check cache
-                let binaryCache = colorAttrCache.get(binary);
-                if (!binaryCache) {
-                    binaryCache = new Map();
-                    colorAttrCache.set(binary, binaryCache);
-                }
-                // Create cache key from property name and palette
-                const paletteKey = palette.map(c => c.join(',')).join('|');
-                const cacheKey = `${fillColor}:${paletteKey}`;
-                let colors = binaryCache.get(cacheKey);
-                if (!colors) {
-                    colors = new Uint8Array(binary.featureCount * 4);
-                    for (let i = 0; i < binary.featureCount; i++) {
-                        const categoryIndex = prop.indices[i];
-                        const color = palette[categoryIndex % palette.length];
-                        colors[i * 4] = color[0];
-                        colors[i * 4 + 1] = color[1];
-                        colors[i * 4 + 2] = color[2];
-                        colors[i * 4 + 3] = color[3] ?? 255;
-                    }
-                    binaryCache.set(cacheKey, colors);
-                }
-                return { value: colors, size: 4, normalized: true };
-            }
-        }
-        return null;
-    }
 }
-Object.defineProperty(AnimatedPointLayer, "layerName", {
-    enumerable: true,
-    configurable: true,
-    writable: true,
-    value: 'AnimatedPointLayer'
-});
-Object.defineProperty(AnimatedPointLayer, "defaultProps", {
-    enumerable: true,
-    configurable: true,
-    writable: true,
-    value: {
-        ...SpatioTemporalLayer.defaultProps,
-        // ScatterplotLayer props
-        radiusScale: { type: 'number', value: 1, min: 0 },
-        radiusUnits: 'pixels',
-        fillColor: { type: 'color', value: [255, 128, 0, 255] },
-        radius: { type: 'number', value: 5 },
-        colorPalette: { type: 'array', value: DEFAULT_PALETTE },
-        // 3D support
-        use3D: false,
-        elevationProperty: null,
-        elevationScale: { type: 'number', value: 1, min: 0 },
-        // Animation props
-        fadeInDuration: { type: 'number', value: 300, min: 0 },
-        fadeOutDuration: { type: 'number', value: 300, min: 0 },
-    }
-});
+AnimatedPointLayer.layerName = 'AnimatedPointLayer';
+AnimatedPointLayer.defaultProps = {
+    ...SpatioTemporalLayer.defaultProps,
+    // ScatterplotLayer props
+    radiusScale: { type: 'number', value: 1, min: 0 },
+    radiusUnits: 'pixels',
+    fillColor: { type: 'color', value: [255, 128, 0, 255] },
+    radius: { type: 'number', value: 5 },
+    colorPalette: { type: 'array', value: DEFAULT_PALETTE },
+    // 3D support
+    use3D: false,
+    elevationProperty: null,
+    elevationScale: { type: 'number', value: 1, min: 0 },
+    // Animation props
+    fadeInDuration: { type: 'number', value: 300, min: 0 },
+    fadeOutDuration: { type: 'number', value: 300, min: 0 },
+};
+//# sourceMappingURL=animated-point-layer.js.map

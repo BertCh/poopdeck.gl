@@ -133,6 +133,18 @@ export interface BinaryFeatures {
      */
     timeOffset: number;
     /**
+     * Per-vertex timestamps for accurate path animation (optional).
+     * When present, has same length as positions / positionDimensions.
+     * Values are relative to timeOffset.
+     *
+     * This enables accurate "vehicle at position" animation instead of
+     * linear interpolation between start/end times. Used by AnimatedTripsLayer
+     * when available.
+     *
+     * Similar to deck.gl TripsLayer's getTimestamps accessor.
+     */
+    vertexTimestamps?: Float32Array;
+    /**
      * Numeric properties as typed arrays for direct GPU upload.
      * Key is property name, value is Float32Array with one value per feature.
      */

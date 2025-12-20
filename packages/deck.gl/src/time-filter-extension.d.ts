@@ -6,6 +6,13 @@ import type { Layer, LayerContext, Accessor, UpdateParameters } from '@deck.gl/c
 export type TimeFilterExtensionProps<DataT = any> = {
     /** Current time for filtering (Unix milliseconds) */
     currentTime?: number;
+    /**
+     * PERFORMANCE OPTIMIZATION: Time getter function for dynamic time updates.
+     * When provided, this is called in draw() to get the current time.
+     * This allows the layer to be cached and reused - only uniforms are updated each frame.
+     * Takes priority over currentTime prop.
+     */
+    getTime?: () => number;
     /** Time window size in milliseconds */
     timeWindow?: number;
     /** Fade-in duration for appearing objects (ms) */

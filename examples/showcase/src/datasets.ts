@@ -174,15 +174,15 @@ export const datasets: Dataset[] = [
   {
     id: 'nyc-taxi-paths',
     name: 'NYC Taxi Paths',
-    description: 'Real TLC trip paths with OSRM routing - 47K trips, 8.3M coordinates',
+    description: 'Real TLC trip paths with OSRM routing - 500K trips from January 2015',
     url: '/data/nyc-taxi-paths.stt',
     type: 'path',
     timeRange: {
-      start: 1454284862000,  // From data: Feb 1, 2016
-      end: 1456790303000,    // From data: Feb 29, 2016
+      start: 1420088400000,  // 2015-01-01 00:00:00 UTC
+      end: 1422766799000,    // 2015-01-31 23:59:59 UTC
     },
     timeWindow: 3600000, // 1 hour window for month-long data
-    targetPlaybackSeconds: 600, // ~1 month plays in 10 minutes
+    targetPlaybackSeconds: 1200, // ~1 month plays in 10 minutes
     initialViewState: {
       longitude: -73.98,
       latitude: 40.75,
@@ -200,15 +200,15 @@ export const datasets: Dataset[] = [
   {
     id: 'nyc-taxi-trips',
     name: 'NYC Taxi Trips',
-    description: 'Animated taxi trips with trailing effect - 47K vehicles moving along routes',
+    description: 'Animated taxi trips with trailing effect - 1M real routed trips from January 2015',
     url: '/data/nyc-taxi-paths.stt',
     type: 'trips',
     timeRange: {
-      start: 1454284862000,  // From data: Feb 1, 2016
-      end: 1456790303000,    // From data: Feb 29, 2016
+      start: 1420070411000,  // From generated data (Jan 1, 2015)
+      end: 1422751348000,    // From generated data (Jan 31, 2015)
     },
-    timeWindow: 3600000, // 1 hour window for month-long data
-    targetPlaybackSeconds: 6000, // ~1 month plays in 100 minutes
+    timeWindow: 600000, // 10 min window - reduces memory usage with 1M trips
+    targetPlaybackSeconds: 18200, // ~1 month plays in 2 hours - very slow/relaxed animation
     initialViewState: {
       longitude: -73.98,
       latitude: 40.75,
@@ -280,6 +280,69 @@ export const datasets: Dataset[] = [
         { color: "#FEB24C", label: "High (10K-50K acres)" },
         { color: "#F03B20", label: "Extreme (50K-100K acres)" },
         { color: "#BD0026", label: "Catastrophic (100K+ acres)" }
+      ]
+    },
+  },
+  {
+    id: 'satellites',
+    name: 'Satellite Orbits (Globe)',
+    description: 'All active satellites from CelesTrak - 13,506 orbits on 3D globe',
+    url: '/data/satellites.stt',
+    type: 'trips', // Use trips layer for animated satellite movement
+    useGlobe: true, // Render on 3D globe for orbital visualization
+    timeRange: {
+      start: 1718928000000, // 2024-06-21T00:00:00Z
+      end: 1719014400000,   // 2024-06-22T00:00:00Z (24 hours)
+    },
+    // Time window controls which segments are loaded/visible
+    // For LEO satellites with ~90 min orbits and ~40 min segments, use larger window
+    timeWindow: 600000, // 10 minute window - loads segments overlapping this range
+    targetPlaybackSeconds: 600, // 24 hours plays in 10 minutes for smooth animation
+    initialViewState: {
+      longitude: 0,
+      latitude: 20,
+      zoom: 0.5,
+      pitch: 0,
+      bearing: 0
+    },
+    legend: {
+      title: "Orbit Type",
+      items: [
+        { color: "#4FC3F7", label: "LEO (Low Earth Orbit)" },
+        { color: "#FFB74D", label: "MEO (Medium Earth Orbit)" },
+        { color: "#81C784", label: "GEO (Geostationary)" },
+        { color: "#E57373", label: "HEO (High Earth Orbit)" }
+      ]
+    },
+  },
+  {
+    id: 'satellite-trips-flat',
+    name: 'Satellite Orbits (Flat Map)',
+    description: 'All active satellites from CelesTrak - 13,506 animated orbits on flat projection',
+    url: '/data/satellites.stt',
+    type: 'trips', // Use trips layer for animated satellite movement
+    timeRange: {
+      start: 1718928000000, // 2024-06-21T00:00:00Z
+      end: 1719014400000,   // 2024-06-22T00:00:00Z (24 hours)
+    },
+    // Time window controls which segments are loaded/visible
+    // For LEO satellites with ~90 min orbits and ~40 min segments, use larger window
+    timeWindow: 600000, // 10 minute window - loads segments overlapping this range
+    targetPlaybackSeconds: 600, // 24 hours plays in 10 minutes for smooth animation
+    initialViewState: {
+      longitude: 0,
+      latitude: 0,
+      zoom: 1.2,
+      pitch: 0,
+      bearing: 0
+    },
+    legend: {
+      title: "Orbit Type",
+      items: [
+        { color: "#4FC3F7", label: "LEO (Low Earth Orbit)" },
+        { color: "#FFB74D", label: "MEO (Medium Earth Orbit)" },
+        { color: "#81C784", label: "GEO (Geostationary)" },
+        { color: "#E57373", label: "HEO (High Earth Orbit)" }
       ]
     },
   },

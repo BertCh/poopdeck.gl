@@ -6,9 +6,9 @@
  *
  * Performance optimizations (120fps target):
  * - Priority queue ensures current tiles load before prefetch
- * - Prefetch capped to 20% of maxRequests to avoid network saturation
- * - Prefetch intensity scales with playback speed
- * - Reduced default prefetchSteps from 10 to 5
+ * - Prefetch uses up to 50% of maxRequests for smooth animation
+ * - Prefetch is aggressive by default to prevent flashing
+ * - Prefetch steps scaled based on playback speed
  */
 import type { Tile, TileId, BoundingBox } from './types';
 export interface SpatiotemporalTilesetOptions {
@@ -121,8 +121,8 @@ export declare class SpatiotemporalTileset {
      * Process request queues with concurrency limit
      * Priority queue is processed first, prefetch queue uses remaining capacity
      *
-     * PERFORMANCE: Prefetch capped to 20% of maxRequests to avoid network saturation
-     * and ensure priority tiles always have bandwidth available.
+     * PERFORMANCE: Prefetch can use up to 50% of maxRequests for aggressive pre-loading.
+     * Priority tiles always processed first to ensure current frame tiles load quickly.
      */
     private processRequestQueue;
     /**

@@ -363,7 +363,7 @@ export class STTArchive {
         if (this.headerCache) {
             return this.headerCache;
         }
-        // Fetch first 56 bytes (header)
+        // Fetch header (53 bytes)
         const response = await this.fetchFn(this.url, {
             headers: {
                 Range: `bytes=0-${HEADER_SIZE - 1}`,
