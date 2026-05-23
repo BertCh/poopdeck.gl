@@ -16,6 +16,7 @@ import type { Color, Layer, LayerContext } from '@deck.gl/core';
 import { COORDINATE_SYSTEM } from '@deck.gl/core';
 import { SpatioTemporalLayer, SpatioTemporalLayerProps } from './spatiotemporal-layer';
 import { TimeFilterExtension } from './time-filter-extension';
+import { consolidatePoints } from './consolidate';
 import type { Tile } from '@stt/core';
 
 // Debug flag
@@ -29,13 +30,23 @@ const TIME_FILTER_EXTENSION = new TimeFilterExtension();
  */
 interface ConsolidatedData {
   length: number;
-  attributes: {
-    getPosition: { value: Float32Array | Float64Array; size: number };
-    getInstanceStartTime: { value: Float32Array; size: 1 };
-    getInstanceEndTime: { value: Float32Array; size: 1 };
-    getRadius?: { value: Float32Array; size: 1 };
-    getFillColor?: { value: Uint8Array; size: 4; normalized: boolean };
-  };
+  /**
+   * The reference time offset for this consolidated layer. All time
+   * attributes below are RELATIVE to this value (see relativizeTime / the
+   * float32-precision note in time-filter-extension.ts). The first tile's
+   * timeOffset is used as the layer-wide reference.
+   */
+  timeOffset: number;
+  /** Interleaved size-3 positions (lon, lat, 0). */
+  positions: Float64Array;
+  /** Per-feature start times, RELATIVE to timeOffset. */
+  startTimes: Float32Array;
+  /** Per-feature end times, RELATIVE to timeOffset. */
+  endTimes: Float32Array;
+  /** Per-feature RGBA colors, or null to use the constant `fillColor` prop. */
+  colors: Uint8Array | null;
+  /** Per-feature radii, or null to use the constant `radius` prop. */
+  radii: Float32Array | null;
 }
 
 export interface AnimatedPointLayerProps extends SpatioTemporalLayerProps {
@@ -78,6 +89,23 @@ export interface AnimatedPointLayerProps extends SpatioTemporalLayerProps {
   
   /** Fade-out duration for disappearing points (ms) */
   fadeOutDuration?: number;
+}
+
+/**
+ * True if two tile arrays describe the SAME set of tiles by id (z/x/y/t).
+ * The reference may differ (the tileset always returns a fresh array) but
+ * the content match lets the consolidated-data cache avoid a rebuild.
+ */
+function tilesContentMatch(a: Tile[], b: Tile[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const ai = a[i].id;
+    const bi = b[i].id;
+    if (ai.z !== bi.z || ai.x !== bi.x || ai.y !== bi.y || ai.t !== bi.t) {
+      return false;
+    }
+  }
+  return true;
 }
 
 // Default color palette for categorical data
@@ -137,6 +165,10 @@ export class AnimatedPointLayer extends SpatioTemporalLayer<AnimatedPointLayerPr
   private cachedColorRadiusProps: Record<string, any> | null = null;
   private lastFillColorForProps: Color | string | undefined = undefined;
   private lastRadiusForProps: number | string | undefined = undefined;
+
+  // Stable bound getTime function - hoisted so the layer prop reference is
+  // stable across renderLayers() calls (avoids defeating memoization).
+  private readonly boundGetTime: () => number = () => this.getCurrentTime();
 
   static defaultProps = {
     ...SpatioTemporalLayer.defaultProps,
@@ -229,231 +261,200 @@ export class AnimatedPointLayer extends SpatioTemporalLayer<AnimatedPointLayerPr
     const layer = this.createConsolidatedLayer(data);
     this.cachedLayer = layer;
     this.cachedLayerFrameNumber = currentFrameNumber;
-    
+
     return [layer];
   }
   
   /**
    * Get or create consolidated data from all tiles.
-   * Cached by frameNumber - only rebuilds when tiles actually change.
+   *
+   * The cache key has two layers:
+   *  1. tiles array reference — fast path for "same tiles array".
+   *  2. tile-ID content match — handles the common case where the tileset
+   *     returns a fresh array for the SAME tile set after an unrelated
+   *     frameNumber bump (an animation tick, a non-content-changing tile
+   *     load). Without the content check we'd allocate a fresh ~30 MB
+   *     consolidated buffer per frame for no visual gain and re-upload it
+   *     to the GPU, which on software WebGL takes ~1 s per upload.
    */
   private getConsolidatedData(tiles: Tile[], frameNumber: number): ConsolidatedData | null {
-    // Generate cache key from props that affect data structure
     const fillColorProp = typeof this.props.fillColor === 'string' ? this.props.fillColor : '';
     const radiusProp = typeof this.props.radius === 'string' ? this.props.radius : '';
     const propsKey = `${fillColorProp}|${radiusProp}`;
-    
-    // Return cached data if still valid
-    if (this.consolidatedDataCache.data &&
-        this.consolidatedDataCache.frameNumber === frameNumber &&
-        this.consolidatedDataCache.propsKey === propsKey) {
-      return this.consolidatedDataCache.data;
+    const cache = this.consolidatedDataCache;
+
+    if (
+      cache.data &&
+      cache.propsKey === propsKey &&
+      cache.tiles &&
+      (cache.tiles === tiles || tilesContentMatch(cache.tiles, tiles))
+    ) {
+      cache.frameNumber = frameNumber;
+      return cache.data;
     }
-    
-    // Build new consolidated data
+
     const data = this.buildConsolidatedData(tiles);
-    
-    // Cache it
+
     this.consolidatedDataCache = {
       tiles,
       frameNumber,
       propsKey,
       data,
     };
-    
-    // Invalidate layer cache since data changed
     this.cachedLayer = null;
     this.cachedLayerFrameNumber = -1;
-    
     return data;
   }
   
   /**
    * Build consolidated data by merging all tile binary data.
-   * Converts relative times to absolute times during consolidation.
+   *
+   * Positions and per-feature times come from the pure `consolidatePoints`
+   * helper (unit-tested). Times are kept RELATIVE to the layer-wide
+   * timeOffset so they fit exactly in a Float32Array - the extension
+   * subtracts the same offset from currentTime. Property-based color/radius
+   * attributes are merged here.
    */
   private buildConsolidatedData(tiles: Tile[]): ConsolidatedData | null {
-    // First pass: count total features and determine dimensions
-    let totalFeatures = 0;
-    let dims = 2;
-    
-    for (const tile of tiles) {
-      for (const layer of tile.layers) {
-        const binary = layer.features;
-        totalFeatures += binary.featureCount;
-        if (binary.positionDimensions && binary.positionDimensions > dims) {
-          dims = binary.positionDimensions;
-        }
-      }
-    }
-    
-    if (totalFeatures === 0) {
+    const consolidated = consolidatePoints(tiles);
+    if (!consolidated) {
       return null;
     }
-    
-    // Allocate consolidated arrays
-    const positions = new Float32Array(totalFeatures * dims);
-    const startTimes = new Float32Array(totalFeatures);
-    const endTimes = new Float32Array(totalFeatures);
-    
+
+    const { length: totalFeatures, dims, positions, startTimes, endTimes, timeOffset } =
+      consolidated;
+
     // For property-based attributes
     const fillColorProp = typeof this.props.fillColor === 'string' ? this.props.fillColor : null;
     const radiusProp = typeof this.props.radius === 'string' ? this.props.radius : null;
     let colors: Uint8Array | null = fillColorProp ? new Uint8Array(totalFeatures * 4) : null;
     let radii: Float32Array | null = radiusProp ? new Float32Array(totalFeatures) : null;
     const palette = this.props.colorPalette || DEFAULT_PALETTE;
-    
-    // Second pass: copy data from each tile
-    let offset = 0;
-    for (const tile of tiles) {
-      for (const layer of tile.layers) {
-        const binary = layer.features;
-        const count = binary.featureCount;
-        const srcDims = binary.positionDimensions ?? 2;
-        const timeOffset = binary.timeOffset;
-        
-        // Copy positions (handle dimension mismatch)
-        for (let i = 0; i < count; i++) {
-          const srcIdx = i * srcDims;
-          const dstIdx = (offset + i) * dims;
-          positions[dstIdx] = binary.positions[srcIdx];
-          positions[dstIdx + 1] = binary.positions[srcIdx + 1];
-          if (dims === 3) {
-            positions[dstIdx + 2] = srcDims === 3 ? binary.positions[srcIdx + 2] : 0;
-          }
-        }
-        
-        // Copy times - convert to ABSOLUTE times by adding timeOffset
-        for (let i = 0; i < count; i++) {
-          startTimes[offset + i] = timeOffset + binary.startTimes[i];
-          endTimes[offset + i] = timeOffset + binary.endTimes[i];
-        }
-        
-        // Copy colors if using property-based coloring
-        if (colors && fillColorProp) {
-          const prop = binary.categoricalProps[fillColorProp];
-          if (prop) {
-            for (let i = 0; i < count; i++) {
-              const categoryIndex = prop.indices[i];
-              const color = palette[categoryIndex % palette.length];
-              const dstIdx = (offset + i) * 4;
-              colors[dstIdx] = color[0];
-              colors[dstIdx + 1] = color[1];
-              colors[dstIdx + 2] = color[2];
-              colors[dstIdx + 3] = color[3] ?? 255;
+
+    if (colors || radii) {
+      let offset = 0;
+      for (const tile of tiles) {
+        for (const layer of tile.layers) {
+          const binary = layer.features;
+          const count = binary.featureCount;
+
+          if (colors && fillColorProp) {
+            const prop = binary.categoricalProps[fillColorProp];
+            if (prop) {
+              for (let i = 0; i < count; i++) {
+                const categoryIndex = prop.indices[i];
+                const color = palette[categoryIndex % palette.length];
+                const dstIdx = (offset + i) * 4;
+                colors[dstIdx] = color[0];
+                colors[dstIdx + 1] = color[1];
+                colors[dstIdx + 2] = color[2];
+                colors[dstIdx + 3] = color[3] ?? 255;
+              }
             }
           }
-        }
-        
-        // Copy radii if using property-based radius
-        if (radii && radiusProp) {
-          const values = binary.numericProps[radiusProp];
-          if (values) {
-            for (let i = 0; i < count; i++) {
-              radii[offset + i] = values[i];
+
+          if (radii && radiusProp) {
+            const values = binary.numericProps[radiusProp];
+            if (values) {
+              for (let i = 0; i < count; i++) {
+                radii[offset + i] = values[i];
+              }
             }
           }
+
+          offset += count;
         }
-        
-        offset += count;
       }
     }
-    
-    // Build the consolidated data object
-    const attributes: ConsolidatedData['attributes'] = {
-      getPosition: { value: positions, size: dims },
-      getInstanceStartTime: { value: startTimes, size: 1 },
-      getInstanceEndTime: { value: endTimes, size: 1 },
-    };
-    
-    if (colors) {
-      attributes.getFillColor = { value: colors, size: 4, normalized: true };
-    }
-    
-    if (radii) {
-      attributes.getRadius = { value: radii, size: 1 };
-    }
-    
+
+    // `dims` is always 3 (see consolidatePoints).
+    void dims;
     return {
       length: totalFeatures,
-      attributes,
+      timeOffset,
+      positions,
+      startTimes,
+      endTimes,
+      colors,
+      radii,
     };
   }
   
   /**
-   * Create a single ScatterplotLayer with consolidated data.
-   * 
-   * PERFORMANCE: Uses getTime() getter instead of currentTime prop.
-   * This allows the layer to be memoized - time updates happen in
-   * TimeFilterExtension.draw() via the getter, not via layer recreation.
+   * Create a single ScatterplotLayer over the consolidated typed arrays.
+   *
+   * Uses deck.gl's binary `data.attributes` interface: typed arrays are
+   * uploaded directly to the GPU and deck.gl never invokes a per-feature
+   * accessor. On the AIS dataset (1.29M points) this eliminates millions
+   * of accessor calls per tile-set change, which previously stalled the
+   * main thread for several seconds at a time during animation playback.
+   *
+   * Wiring:
+   * - ScatterplotLayer's own accessors are keyed under their accessor
+   *   names: `getPosition`, `getFillColor`, `getRadius`.
+   * - `TimeFilterExtension`'s instanced attributes are bound by ATTRIBUTE
+   *   name, not accessor name: `instanceStartTime` / `instanceEndTime`
+   *   (see attribute-wiring.test.ts).
+   * - When a property-driven attribute is absent (constant color/radius)
+   *   deck.gl falls back to the constant on `getRadius` / `getFillColor`.
+   *
+   * Time is snapshotted per render; the layer is rebuilt only when
+   * `frameNumber` bumps, and intra-tile-set time updates take
+   * `setNeedsRedraw()`, not a layer rebuild.
    */
   private createConsolidatedLayer(data: ConsolidatedData): ScatterplotLayer {
     const layerId = `${this.props.id}-consolidated`;
     const timeWindow = this.props.timeWindow || 86400000;
-    
-    // Capture `this` for the getter closure
-    const self = this;
-    
+    const { length, positions, startTimes, endTimes, colors, radii, timeOffset } = data;
+
+    const constRadius =
+      typeof this.props.radius === 'number' ? this.props.radius : 5;
+    const constColor = (Array.isArray(this.props.fillColor)
+      ? this.props.fillColor
+      : [255, 128, 0, 255]) as Color;
+    const snapshotTime = this.getCurrentTime();
+
+    const attributes: Record<string, any> = {
+      getPosition: { value: positions, size: 3 },
+      instanceStartTime: { value: startTimes, size: 1 },
+      instanceEndTime: { value: endTimes, size: 1 },
+    };
+    if (colors) {
+      attributes.getFillColor = { value: colors, size: 4, normalized: true };
+    }
+    if (radii) {
+      attributes.getRadius = { value: radii, size: 1 };
+    }
+
     return new ScatterplotLayer({
       id: layerId,
-      data,
-      coordinateSystem: COORDINATE_SYSTEM.LNGLAT,
-      radiusScale: this.props.radiusScale,
-      radiusUnits: this.props.radiusUnits,
+      data: { length, attributes } as any,
+      // Forward user-facing display props. Hardcoding radiusUnits dropped
+      // the demo configs' "meters" setting and turned 1000m ship markers
+      // into 1000-pixel discs that covered the entire viewport.
+      radiusUnits: this.props.radiusUnits ?? 'pixels',
+      radiusScale: this.props.radiusScale ?? 1,
       opacity: this.props.opacity,
       visible: this.props.visible,
       pickable: this.props.pickable ?? false,
-      
-      // Time Filtering via extension
-      // PERFORMANCE: Use getTime() getter - allows layer memoization
-      // Time is read dynamically in TimeFilterExtension.draw()
+
+      // Constant fallbacks — deck.gl uses these when no binary buffer is
+      // present for the corresponding accessor.
+      getRadius: constRadius,
+      getFillColor: constColor,
+
       extensions: [TIME_FILTER_EXTENSION],
-      getTime: () => self.getCurrentTime(),
+      currentTime: snapshotTime,
+      timeOffset,
       timeWindow,
-      fadeInDuration: this.props.fadeInDuration,
-      fadeOutDuration: this.props.fadeOutDuration,
-      
-      // Use constant values if not using property-based attributes
-      ...this.getColorAndRadiusProps(),
-      
-      // Use cached updateTriggers - stable reference for deck.gl diffing
-      updateTriggers: this.cachedUpdateTriggers,
+
+      updateTriggers: {
+        getPosition: positions,
+        instanceStartTime: startTimes,
+        instanceEndTime: endTimes,
+        getRadius: radii ?? [this.props.radius, this.props.radiusUnits, this.props.radiusScale],
+        getFillColor: colors ?? [this.props.fillColor, this.props.colorPalette],
+      },
     });
-  }
-  
-  /**
-   * Get color and radius props for constant values only.
-   * Property-based values are handled in buildConsolidatedData as attributes.
-   * 
-   * PERFORMANCE OPTIMIZATION:
-   * Returns a cached object when props haven't changed. This ensures deck.gl
-   * sees stable references and can skip expensive deep comparisons.
-   */
-  private getColorAndRadiusProps(): Record<string, any> {
-    // Return cached props if nothing changed
-    if (this.cachedColorRadiusProps &&
-        this.props.fillColor === this.lastFillColorForProps &&
-        this.props.radius === this.lastRadiusForProps) {
-      return this.cachedColorRadiusProps;
-    }
-    
-    // Rebuild cached props
-    this.lastFillColorForProps = this.props.fillColor;
-    this.lastRadiusForProps = this.props.radius;
-    
-    const result: Record<string, any> = {};
-    
-    // Add radius value if using a constant (property-based is in data.attributes)
-    if (typeof this.props.radius !== 'string') {
-      result.getRadius = this.props.radius as number;
-    }
-    
-    // Add color value if using a constant (property-based is in data.attributes)
-    if (typeof this.props.fillColor !== 'string') {
-      result.getFillColor = this.props.fillColor as Color;
-    }
-    
-    this.cachedColorRadiusProps = result;
-    return result;
   }
 }

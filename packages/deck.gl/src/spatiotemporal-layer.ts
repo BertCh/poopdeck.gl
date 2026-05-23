@@ -99,9 +99,14 @@ export class SpatioTemporalLayer<
   // Internal time tracking - updated every tick without setState overhead
   // Sublayers read from this via getCurrentTime() method
   protected _currentTime: number = 0;
-  
+
   // Track last time we updated the tileset to throttle updates
   private _lastTilesetUpdateTime: number = 0;
+
+  // rAF handle for coalescing onTileLoad setState calls. Many tiles can
+  // finish loading within one frame; batching avoids one full
+  // renderLayers()/buildConsolidatedData() rebuild per tile.
+  private _tileLoadRafId: number | null = null;
 
   static defaultProps = {
     // Data source
@@ -113,16 +118,24 @@ export class SpatioTemporalLayer<
     timeRange: { type: 'object', value: null, compare: true },
     timeController: { type: 'object', value: null, compare: false },
     
-    // Tile loading configuration (following deck.gl TileLayer pattern)
-    maxRequests: { type: 'number', value: 64, compare: false }, // Higher for parallel animation loading
+    // Tile loading configuration (following deck.gl TileLayer pattern).
+    // maxRequests sits at 12 because browsers cap concurrent connections per
+    // origin (~6 HTTP/1.1, more under HTTP/2 multiplexing). Going above ~12
+    // just queues fetches inside the browser and lengthens the main-thread
+    // decode backlog without speeding anything up.
+    maxRequests: { type: 'number', value: 12, compare: false },
     debounceTime: { type: 'number', value: 0, compare: false }, // No debounce for time changes
     maxCacheSize: { type: 'number', value: 2000, compare: false }, // Large cache for big datasets
     maxCacheByteSize: { type: 'number', value: 2 * 1024 * 1024 * 1024, compare: false }, // 2GB for large datasets
-    
-    // Prefetch configuration for smooth animation - aggressive defaults to prevent flashing
+
+    // Prefetch configuration. Defaults sized for a few real-time seconds of
+    // buffer, not minutes — see DemoPage.tsx for the consumer-side math.
+    // Overshooting here (the previous defaults were 60s ahead × 15 steps =
+    // 15 minutes of lookahead) caused the prefetch queue to balloon and
+    // saturated the decode backlog.
     enablePrefetch: { type: 'boolean', value: true, compare: false },
-    prefetchAhead: { type: 'number', value: 60000, compare: false }, // 60 seconds ahead for smooth animation
-    prefetchSteps: { type: 'number', value: 15, compare: false }, // Aggressive prefetching to prevent flashing
+    prefetchAhead: { type: 'number', value: 30000, compare: false }, // 30s of sim time
+    prefetchSteps: { type: 'number', value: 4, compare: false },
     
     // Callbacks
     onViewportLoad: { type: 'function', value: null, optional: true },
@@ -179,6 +192,16 @@ export class SpatioTemporalLayer<
   }
 
   finalizeState(_context: LayerContext): void {
+    // Cancel any pending coalesced tile-load update.
+    if (this._tileLoadRafId !== null) {
+      if (typeof cancelAnimationFrame === 'function') {
+        cancelAnimationFrame(this._tileLoadRafId);
+      } else {
+        clearTimeout(this._tileLoadRafId as unknown as ReturnType<typeof setTimeout>);
+      }
+      this._tileLoadRafId = null;
+    }
+
     // Unsubscribe from time controller
     if (this.props.timeController) {
       if (this.state.playStateHandler) {
@@ -189,10 +212,15 @@ export class SpatioTemporalLayer<
       }
     }
     
-    // Cleanup tileset resources
-    const { tileset } = this.state;
+    // Cleanup tileset + archive resources (the archive owns the worker-pool
+    // decoder when one is in use; we must terminate it on unmount or the
+    // workers stay alive across navigations).
+    const { tileset, archive } = this.state;
     if (tileset) {
       tileset.finalize();
+    }
+    if (archive) {
+      archive.finalize();
     }
   }
 
@@ -313,6 +341,47 @@ export class SpatioTemporalLayer<
   }
   
   /**
+   * Schedule a coalesced tiles-state update after tile load(s).
+   *
+   * Multiple tiles often finish loading within a single animation frame.
+   * Instead of calling setState() per tile (each triggering a full
+   * renderLayers() + buildConsolidatedData() rebuild), we batch them into one
+   * rAF-deferred setState. The frameNumber is bumped once per batch, only if
+   * the visible tile SET actually changed.
+   */
+  private _scheduleTileLoadUpdate(tileset: SpatiotemporalTileset): void {
+    if (this._tileLoadRafId !== null) {
+      // An update is already queued for this frame.
+      return;
+    }
+
+    const schedule =
+      typeof requestAnimationFrame === 'function'
+        ? requestAnimationFrame
+        : (cb: () => void) => setTimeout(cb, 0) as unknown as number;
+
+    this._tileLoadRafId = schedule(() => {
+      this._tileLoadRafId = null;
+
+      const visibleTiles = tileset.getVisibleTiles();
+
+      // Only bump frameNumber / setState if the tile set actually changed.
+      // Otherwise a setNeedsRedraw is enough and we keep the cached layers.
+      if (
+        visibleTiles.length !== this.state.tiles.length ||
+        this._tilesChanged(visibleTiles)
+      ) {
+        this.setState({
+          tiles: visibleTiles,
+          frameNumber: (this.state.frameNumber || 0) + 1,
+        });
+      } else {
+        this.setNeedsRedraw();
+      }
+    }) as unknown as number;
+  }
+
+  /**
    * Check if the tiles array has actually changed (not just reference)
    */
   private _tilesChanged(newTiles: Tile[]): boolean {
@@ -422,6 +491,8 @@ export class SpatioTemporalLayer<
       maxCacheByteSize: this.props.maxCacheByteSize!,
       minZoom: metadata.minZoom,
       maxZoom: metadata.maxZoom,
+      // Use temporal bucket from metadata for deterministic tile loading
+      temporalBucketMs: metadata.temporalBucketMs,
       refinementStrategy: 'best-available', // Load parent tiles as fallback (deck.gl pattern)
       // Prefetch configuration for smooth animation playback
       enablePrefetch: this.props.enablePrefetch!,
@@ -433,14 +504,11 @@ export class SpatioTemporalLayer<
       onTileLoad: (tile) => {
         if (DEBUG) console.log('[STL] Tile loaded:', tile.id);
         this.props.onTileLoad?.(tile);
-        
-        // Update tiles state immediately when new tiles load
-        // This ensures the map updates with newly loaded data
-        const visibleTiles = tileset.getVisibleTiles();
-        this.setState({ 
-          tiles: visibleTiles,
-          frameNumber: (this.state.frameNumber || 0) + 1,
-        });
+
+        // Coalesce per-tile updates: when many tiles finish within one frame
+        // we only want a SINGLE setState (and thus a single renderLayers /
+        // buildConsolidatedData rebuild), not one per tile.
+        this._scheduleTileLoadUpdate(tileset);
       },
       onTileUnload: (tile) => {
         if (DEBUG) console.log('[STL] Tile unloaded:', tile.id);

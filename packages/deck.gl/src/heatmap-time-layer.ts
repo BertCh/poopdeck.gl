@@ -18,12 +18,17 @@ import type { BinaryFeatures, Tile } from '@stt/core';
 
 /**
  * Cached point data from a single tile layer (all points, not time-filtered)
+ *
+ * Times are stored as plain JS-number arrays of ABSOLUTE epoch-ms. They are
+ * NOT Float32Array: absolute epoch-ms (~1.7e12) overflows float32's 24-bit
+ * mantissa (quantizing to ~131s buckets). Filtering here happens on the CPU
+ * in JS doubles, so plain number[] keeps full precision.
  */
 interface CachedTilePoints {
   positions: Float64Array;  // Interleaved [lon, lat, lon, lat, ...]
   weights: Float32Array;
-  startTimes: Float32Array; // Absolute times
-  endTimes: Float32Array;   // Absolute times
+  startTimes: Float64Array; // Absolute times (epoch-ms) - Float64 for precision
+  endTimes: Float64Array;   // Absolute times (epoch-ms) - Float64 for precision
   count: number;
 }
 
@@ -242,8 +247,9 @@ export class HeatmapTimeLayer extends SpatioTemporalLayer<HeatmapTimeLayerProps>
     
     const positions = new Float64Array(binary.featureCount * 2);
     const weights = new Float32Array(binary.featureCount);
-    const startTimes = new Float32Array(binary.featureCount);
-    const endTimes = new Float32Array(binary.featureCount);
+    // Float64 so absolute epoch-ms keeps full precision (see CachedTilePoints).
+    const startTimes = new Float64Array(binary.featureCount);
+    const endTimes = new Float64Array(binary.featureCount);
     
     for (let i = 0; i < binary.featureCount; i++) {
       const posIdx = i * dims;

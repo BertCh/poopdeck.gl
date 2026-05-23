@@ -11,6 +11,13 @@ export interface TimeControllerOptions {
   loop?: boolean;
   /** Time range */
   timeRange?: { start: number; end: number };
+  /**
+   * Minimum wall-clock interval (ms) between 'tick' notifications during
+   * playback. The internal time still advances every animation frame; this
+   * only throttles how often listeners are notified, so downstream layers
+   * are not asked to update more often than needed. 0 = notify every frame.
+   */
+  tickThrottleMs?: number;
 }
 
 export interface TimeControllerState {
@@ -33,12 +40,16 @@ export class TimeController {
   private playStateListeners: Set<PlayStateCallback> = new Set();
   private animationFrameId?: number;
   private lastUpdateTime?: number;
+  private tickThrottleMs: number = 0;
+  private lastTickNotifyTime: number = 0;
 
   constructor(options: TimeControllerOptions = {}) {
-    this.currentTime = options.initialTime || Date.now();
-    this.speed = options.speed || 1.0;
-    this.loop = options.loop || false;
+    // Use ?? not || so an explicit initialTime/speed of 0 is honored.
+    this.currentTime = options.initialTime ?? Date.now();
+    this.speed = options.speed ?? 1.0;
+    this.loop = options.loop ?? false;
     this.timeRange = options.timeRange;
+    this.tickThrottleMs = options.tickThrottleMs ?? 0;
   }
 
   /** Get current time */
@@ -80,6 +91,8 @@ export class TimeController {
     if (this.playing) return;
     this.playing = true;
     this.lastUpdateTime = performance.now();
+    // Reset throttle so the first tick after play notifies immediately.
+    this.lastTickNotifyTime = 0;
     this.notifyPlayStateListeners();
     this.tick();
   }
@@ -155,7 +168,8 @@ export class TimeController {
     if (!this.playing) return;
 
     const now = performance.now();
-    const elapsed = this.lastUpdateTime ? now - this.lastUpdateTime : 0;
+    // Explicit undefined check: a lastUpdateTime of 0 is a valid timestamp.
+    const elapsed = this.lastUpdateTime !== undefined ? now - this.lastUpdateTime : 0;
     this.lastUpdateTime = now;
 
     // Update time based on elapsed time and speed
@@ -181,7 +195,15 @@ export class TimeController {
       }
     }
 
-    this.notifyListeners();
+    // Throttle tick notifications: advance time every frame but only notify
+    // listeners every `tickThrottleMs` of wall-clock time. Boundary events
+    // (loop/clamp handled above) still notify on the next eligible tick.
+    if (this.tickThrottleMs <= 0) {
+      this.notifyListeners();
+    } else if (now - this.lastTickNotifyTime >= this.tickThrottleMs) {
+      this.lastTickNotifyTime = now;
+      this.notifyListeners();
+    }
 
     // Schedule next frame
     if (this.playing) {

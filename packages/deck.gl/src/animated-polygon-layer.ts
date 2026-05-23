@@ -133,6 +133,19 @@ export class AnimatedPolygonLayer extends SpatioTemporalLayer<AnimatedPolygonLay
     this.activeLayerIds.clear();
   }
 
+  /**
+   * KNOWN LIMITATION (tile-seam overdraw): this layer creates ONE
+   * SolidPolygonLayer per tile/layer rather than consolidating all tiles into
+   * a single layer (as the point/path/trips layers do). Polygons that span a
+   * tile boundary are split across tiles, so along seams the two halves are
+   * drawn by separate layers. With opacity < 1 this causes visible double-
+   * blending at seams, and for extruded polygons it can z-fight.
+   *
+   * Consolidating into a single SolidPolygonLayer (like the other layers)
+   * would fix this; it is deferred because polygons have variable ring counts
+   * and SolidPolygonLayer binary input needs careful startIndices handling.
+   * For now, prefer fully-opaque fills to avoid the seam artifact.
+   */
   renderLayers(): Layer[] {
     const { tiles } = this.state;
     // Use getCurrentTime() for up-to-date time without setState overhead
@@ -240,13 +253,16 @@ export class AnimatedPolygonLayer extends SpatioTemporalLayer<AnimatedPolygonLay
    * Returns both the indices and a hash for cache invalidation.
    */
   private getVisibleFeatureIndices(
-    binary: BinaryFeatures, 
-    timeStart: number, 
+    binary: BinaryFeatures,
+    timeStart: number,
     timeEnd: number
   ): { visibleIndices: number[]; indicesHash: string } {
     const visible: number[] = [];
     const timeOffset = binary.timeOffset;
-    
+
+    // NOTE: time filtering here is CPU-side in JS doubles (full precision).
+    // featureStart/featureEnd are plain numbers, never stored in a
+    // Float32Array, so the absolute epoch-ms values do not lose precision.
     for (let i = 0; i < binary.featureCount; i++) {
       const featureStart = timeOffset + binary.startTimes[i];
       const featureEnd = timeOffset + binary.endTimes[i];

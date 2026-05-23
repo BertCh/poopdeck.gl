@@ -21,11 +21,12 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@deck.gl/aggregation-layers": "^9.2.2",
-    "@deck.gl/core": "^9.0.0",
-    "@deck.gl/geo-layers": "^9.2.3",
-    "@deck.gl/layers": "^9.0.0",
+    "@deck.gl/aggregation-layers": "^9.3.2",
+    "@deck.gl/core": "^9.3.2",
+    "@deck.gl/geo-layers": "^9.3.2",
+    "@deck.gl/layers": "^9.3.2",
     "@loaders.gl/core": "^4.2.0",
+    "@luma.gl/core": "^9.3.0",
     "@stt/core": "workspace:*"
   },
   "peerDependencies": {
