@@ -1,0 +1,40 @@
+{
+  "name": "@stt/maplibre",
+  "version": "0.1.0",
+  "description": "MapLibre GL custom-layer adapter for SpatioTemporal Tiles archives",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@stt/core": "workspace:*"
+  },
+  "peerDependencies": {
+    "maplibre-gl": "^4 || ^5"
+  },
+  "devDependencies": {
+    "maplibre-gl": "^4.7.0",
+    "typescript": "^5.4.0",
+    "vitest": "^1.6.0"
+  },
+  "keywords": [
+    "stt",
+    "spatiotemporal",
+    "maplibre",
+    "geospatial"
+  ],
+  "author": "Robert Christie",
+  "license": "MIT"
+}
