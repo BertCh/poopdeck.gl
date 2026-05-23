@@ -2,7 +2,7 @@
 /target/
 **/*.rs.bk
 *.pdb
-Cargo.lock
+# Cargo.lock is committed: this workspace ships binary crates (stt-build, etc.)
 
 # TypeScript / Node
 node_modules/
@@ -14,13 +14,22 @@ build/
 .pnp.*
 .turbo/
 
-# Compiled TypeScript files (should not be in src/)
-src/**/*.js
-src/**/*.js.map
-src/**/*.d.ts
-src/**/*.d.ts.map
-!src/**/*.config.js
-!src/**/*.test.js
+# Compiled TypeScript output (must not live next to .ts sources).
+# Patterns are **/-prefixed so they match packages/*/src, not just root src/.
+**/src/**/*.js
+**/src/**/*.js.map
+**/src/**/*.d.ts
+**/src/**/*.d.ts.map
+!**/src/**/*.config.js
+!**/src/**/*.test.js
+**/test/**/*.js
+**/test/**/*.js.map
+**/test/**/*.d.ts
+**/test/**/*.d.ts.map
+**/vitest.config.js
+**/vitest.config.js.map
+**/vitest.config.d.ts
+**/vitest.config.d.ts.map
 
 # IDEs
 .vscode/
@@ -51,8 +60,18 @@ pkg/
 data/
 *.geojson
 *.csv
+*.parquet
+*.tle
 *.zip
 scripts/data-generation/data/
+
+# Ad-hoc evaluation / experiment scratch (write analyses elsewhere — docs/)
+evaluation/
+
+# Loose root-level fixtures that occasionally appear during dev
+/test*.html
+/test*.stt
+/rebuild-*.sh
 
 # OSRM routing data (large binary files)
 scripts/data-generation/osrm-data/
