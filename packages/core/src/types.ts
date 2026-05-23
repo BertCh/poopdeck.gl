@@ -34,7 +34,7 @@ export interface TimeRange {
 export enum Compression {
   None = 0,
   Gzip = 1,
-  Brotli = 2,
+  Zstd = 2,
 }
 
 /** Geometry type */
@@ -59,6 +59,12 @@ export interface ArchiveMetadata {
   maxZoom: number;
   layers: LayerInfo[];
   statistics?: ArchiveStatistics;
+  /** 
+   * Temporal bucket size in milliseconds used for tile chunking.
+   * Tiles are organized into fixed temporal intervals (e.g., 3600000 = 1 hour).
+   * This enables predictable prefetching and efficient animation.
+   */
+  temporalBucketMs?: number;
 }
 
 /** Layer information */
@@ -184,7 +190,12 @@ export interface BinaryFeatures {
    * Enables GPU-based coloring by category.
    */
   categoricalProps: Record<string, {
-    indices: Uint8Array;
+    /**
+     * Per-feature index into `categories`. Uint16Array supports up to 65535
+     * categories. Archives built before the u16 widening are normalized from
+     * the legacy single-byte field into a Uint16Array on decode.
+     */
+    indices: Uint16Array;
     categories: string[];
   }>;
 }
@@ -249,6 +260,13 @@ export interface ArchiveOptions {
   maxCacheSize?: number;
   /** Options for loaders.gl */
   loadOptions?: any;
+  /**
+   * Override the tile decoder. Defaults to a worker-pool decoder in browsers
+   * that support module workers, inline decoding elsewhere (Node tests,
+   * SSR). Pass an InlineTileDecoder to force inline decoding even in the
+   * browser — useful for debugging or environments that block workers.
+   */
+  decoder?: import('./tile-decoder').TileDecoder;
 }
 
 /** Options for tile requests */

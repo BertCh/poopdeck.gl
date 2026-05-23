@@ -1,499 +1,523 @@
 /**
- * STT Archive reader using HTTP Range Requests
- * 
- * Performance optimizations (120fps target):
- * - LRU cache eviction with device-aware limits
- * - Reduced grace period (60s instead of 5min) for faster eviction
- * - Memory pressure detection via navigator.deviceMemory
+ * STT archive reader over HTTP Range Requests.
+ *
+ * Layout (see the Rust `stt-core::archive` module):
+ *
+ * ```text
+ * [ 64-byte header ][ gzip Arrow-IPC tile blobs ][ Arrow-IPC index ][ JSON metadata ]
+ * ```
+ *
+ * The reader fetches the header, then the index table and metadata, then each
+ * tile blob with a single Range request. Only compressed bytes are cached
+ * here; decoded tiles are owned by the tileset.
  */
 
-import { stt } from './proto';
+import { tableFromIPC } from 'apache-arrow';
 import {
-  ArchiveMetadata,
-  ArchiveIndex,
-  ArchiveOptions,
-  Tile,
-  TileId,
-  TileEntry,
-  BoundingBox,
-  TimeRange,
-  TileRequestOptions,
+  type ArchiveMetadata,
+  type ArchiveIndex,
+  type ArchiveOptions,
+  type Tile,
+  type TileId,
+  type TileEntry,
+  type BoundingBox,
+  type TimeRange,
+  type TileRequestOptions,
   Compression,
 } from './types';
-import { parse } from '@loaders.gl/core';
-import { STTLoader } from './stt-loader';
+import { createDefaultTileDecoder, type TileDecoder } from './tile-decoder';
 
-const MAGIC = new Uint8Array([0x53, 0x54, 0x54, 0x01]); // "STT\x01"
-const VERSION = 1;
-const HEADER_SIZE = 53; // 4 (magic) + 1 (version) + 32 (four u64s) + 16 (reserved)
+/** Magic number: "STT" + format version byte. */
+const MAGIC = new Uint8Array([0x53, 0x54, 0x54, 0x02]);
+const FORMAT_VERSION = 2;
+const HEADER_SIZE = 64;
 
-// Cache configuration
-const DEFAULT_MAX_CACHE_SIZE = 500; // Default max cached tiles
-const MOBILE_MAX_CACHE_SIZE = 100; // Reduced for mobile devices
-const CACHE_GRACE_PERIOD_MS = 60_000; // 60 seconds (reduced from 5 minutes)
+const DEFAULT_MAX_CACHE_TILES = 500;
+const MOBILE_MAX_CACHE_TILES = 100;
+/** Max gap (bytes) between two tile ranges still worth coalescing. */
+const RANGE_COALESCE_GAP = 32 * 1024;
 
-/**
- * Detect device memory capacity and return appropriate cache size
- */
 function getDeviceAwareCacheSize(): number {
-  // Use navigator.deviceMemory if available (Chrome/Edge)
   if (typeof navigator !== 'undefined' && 'deviceMemory' in navigator) {
-    const deviceMemoryGB = (navigator as any).deviceMemory as number;
-    if (deviceMemoryGB <= 2) {
-      return MOBILE_MAX_CACHE_SIZE;
-    } else if (deviceMemoryGB <= 4) {
-      return Math.floor(DEFAULT_MAX_CACHE_SIZE / 2);
-    }
+    const gb = (navigator as any).deviceMemory as number;
+    if (gb <= 2) return MOBILE_MAX_CACHE_TILES;
+    if (gb <= 4) return Math.floor(DEFAULT_MAX_CACHE_TILES / 2);
   }
-  
-  // Check for mobile user agent as fallback
-  if (typeof navigator !== 'undefined' && /mobile|android|iphone|ipad/i.test(navigator.userAgent)) {
-    return MOBILE_MAX_CACHE_SIZE;
+  if (
+    typeof navigator !== 'undefined' &&
+    /mobile|android|iphone|ipad/i.test(navigator.userAgent)
+  ) {
+    return MOBILE_MAX_CACHE_TILES;
   }
-  
-  return DEFAULT_MAX_CACHE_SIZE;
+  return DEFAULT_MAX_CACHE_TILES;
 }
 
-/**
- * LRU cache entry with access tracking
- */
-interface CacheEntry {
-  tile: Tile;
+interface ByteCacheEntry {
+  bytes: ArrayBuffer;
   lastAccess: number;
   byteSize: number;
 }
 
-/**
- * Estimate tile size in bytes
- */
-function estimateTileSize(tile: Tile): number {
-  let size = 1000; // Base overhead
-  
-  for (const layer of tile.layers) {
-    const features = layer.features;
-    size += features.positions.byteLength;
-    size += features.featureIds.byteLength;
-    size += features.startTimes.byteLength;
-    size += features.endTimes.byteLength;
-    
-    if (features.startIndices) {
-      size += features.startIndices.byteLength;
-    }
-    
-    for (const arr of Object.values(features.numericProps)) {
-      size += arr.byteLength;
-    }
-    
-    for (const { indices } of Object.values(features.categoricalProps)) {
-      size += indices.byteLength;
-    }
-  }
-  
-  return size;
-}
-
-/** Archive header */
+/** Parsed archive header. */
 interface ArchiveHeader {
   version: number;
+  compression: Compression;
   indexOffset: number;
   indexLength: number;
   metadataOffset: number;
   metadataLength: number;
 }
 
-/** STT Archive reader */
+/**
+ * Estimate a decoded tile's in-memory size (bytes). Exported so the tileset
+ * uses one consistent accounting implementation.
+ */
+export function estimateTileSize(tile: Tile): number {
+  let size = 1000; // base overhead
+  if (!tile?.layers) return size;
+  for (const layer of tile.layers) {
+    const f = layer?.features;
+    if (!f) continue;
+    size += f.positions.byteLength;
+    size += f.featureIds.byteLength;
+    size += f.startTimes.byteLength;
+    size += f.endTimes.byteLength;
+    if (f.startIndices) size += f.startIndices.byteLength;
+    if (f.vertexTimestamps) size += f.vertexTimestamps.byteLength;
+    if (f.globalFeatureIds) size += f.globalFeatureIds.byteLength;
+    for (const arr of Object.values(f.numericProps)) size += arr.byteLength;
+    for (const { indices, categories } of Object.values(f.categoricalProps)) {
+      size += indices.byteLength;
+      for (const c of categories) size += c.length * 2 + 16;
+    }
+  }
+  return size;
+}
+
+/** STT archive reader. */
 export class STTArchive {
   public url: string;
   private fetchFn: typeof fetch;
   private headerCache?: ArchiveHeader;
   private metadataCache?: ArchiveMetadata;
   private indexCache?: ArchiveIndex;
-  private loadOptions?: any;
-  
-  // LRU tile cache with access tracking
-  private tileCache: Map<string, CacheEntry> = new Map();
-  private maxCacheSize: number;
-  private currentCacheBytes: number = 0;
+
+  private byteCache = new Map<string, ByteCacheEntry>();
+  private maxCacheTiles: number;
+  private currentCacheBytes = 0;
   private maxCacheBytes: number;
-  
-  // O(1) tile entry lookup - spatial key -> list of temporal entries
-  private tileEntryIndex: Map<string, TileEntry[]> = new Map();
-  
-  // Cache statistics
-  private cacheStats = {
-    hits: 0,
-    misses: 0,
-    evictions: 0,
-  };
+
+  /** "z/x/y" -> temporal entries at that spatial cell. */
+  private tileEntryIndex = new Map<string, TileEntry[]>();
+  /** "z/x/y/t" -> exact entry. */
+  private tileEntryByKey = new Map<string, TileEntry>();
+
+  private cacheStats = { hits: 0, misses: 0, evictions: 0 };
+
+  // The decoder runs decompress + Arrow IPC parse + binary-feature extraction
+  // off the main thread (worker pool) in browsers, inline elsewhere. Lazily
+  // constructed so node tests that never call getTile() don't spin a pool.
+  private decoder?: TileDecoder;
+  private decoderOption?: TileDecoder;
 
   constructor(options: ArchiveOptions | string) {
     if (typeof options === 'string') {
       this.url = options;
       this.fetchFn = fetch.bind(globalThis);
-      this.loadOptions = undefined;
     } else {
       this.url = options.url;
       this.fetchFn = options.fetch || fetch.bind(globalThis);
-      this.loadOptions = options.loadOptions;
+      this.decoderOption = options.decoder;
     }
-    
-    // Device-aware cache sizing
-    this.maxCacheSize = getDeviceAwareCacheSize();
-    // 512MB max for mobile, 1GB for desktop
-    this.maxCacheBytes = this.maxCacheSize <= MOBILE_MAX_CACHE_SIZE 
-      ? 512 * 1024 * 1024 
-      : 1024 * 1024 * 1024;
+    this.maxCacheTiles = getDeviceAwareCacheSize();
+    this.maxCacheBytes =
+      this.maxCacheTiles <= MOBILE_MAX_CACHE_TILES
+        ? 256 * 1024 * 1024
+        : 512 * 1024 * 1024;
   }
 
-  /** Get archive metadata */
-  async getMetadata(): Promise<ArchiveMetadata> {
-    if (this.metadataCache) {
-      return this.metadataCache;
-    }
+  private getDecoder(): TileDecoder {
+    if (this.decoder) return this.decoder;
+    this.decoder = this.decoderOption ?? createDefaultTileDecoder();
+    return this.decoder;
+  }
 
-    const header = await this.getHeader();
+  /** Release worker resources, if any. */
+  finalize(): void {
+    this.decoder?.finalize();
+    this.decoder = undefined;
+  }
 
-    // Fetch metadata using HTTP Range Request
+  /** Fetch a byte range, validating that the server honoured it. */
+  private async fetchRange(
+    start: number,
+    end: number,
+    signal?: AbortSignal
+  ): Promise<ArrayBuffer> {
     const response = await this.fetchFn(this.url, {
-      headers: {
-        Range: `bytes=${header.metadataOffset}-${
-          header.metadataOffset + header.metadataLength - 1
-        }`,
-      },
+      headers: { Range: `bytes=${start}-${end}` },
+      signal,
     });
-
     if (!response.ok) {
-      throw new Error(`Failed to fetch metadata: ${response.statusText}`);
+      throw new Error(`STT archive fetch failed: ${response.status} ${response.statusText}`);
     }
+    // A server that ignores Range replies 200 with the whole file — that
+    // would silently corrupt every offset-based read.
+    if (response.status !== 206) {
+      throw new Error(
+        `STT archive server ignored Range request (status ${response.status}); ` +
+          'HTTP range requests are required.'
+      );
+    }
+    return response.arrayBuffer();
+  }
 
-    const buffer = await response.arrayBuffer();
-    
-    // Decode Protocol Buffer metadata
-    const protoMetadata = stt.Metadata.decode(new Uint8Array(buffer));
-    
+  /** Read and validate the 64-byte header. */
+  private async getHeader(): Promise<ArchiveHeader> {
+    if (this.headerCache) return this.headerCache;
+    const buffer = await this.fetchRange(0, HEADER_SIZE - 1);
+    const view = new DataView(buffer);
+    const magic = new Uint8Array(buffer, 0, 4);
+    for (let i = 0; i < 4; i++) {
+      if (magic[i] !== MAGIC[i]) {
+        throw new Error('Invalid STT archive: bad magic number');
+      }
+    }
+    const version = view.getUint8(4);
+    if (version !== FORMAT_VERSION) {
+      throw new Error(`Unsupported STT format version: ${version}`);
+    }
+    const compressionByte = view.getUint8(5);
+    const header: ArchiveHeader = {
+      version,
+      compression: compressionByte === 1 ? Compression.Gzip : Compression.None,
+      indexOffset: Number(view.getBigUint64(6, true)),
+      indexLength: Number(view.getBigUint64(14, true)),
+      metadataOffset: Number(view.getBigUint64(22, true)),
+      metadataLength: Number(view.getBigUint64(30, true)),
+    };
+    this.headerCache = header;
+    return header;
+  }
+
+  /** Archive metadata (JSON). */
+  async getMetadata(): Promise<ArchiveMetadata> {
+    if (this.metadataCache) return this.metadataCache;
+    const header = await this.getHeader();
+    const buffer = await this.fetchRange(
+      header.metadataOffset,
+      header.metadataOffset + header.metadataLength - 1
+    );
+    const json = JSON.parse(new TextDecoder().decode(buffer));
     this.metadataCache = {
-      version: protoMetadata.version || VERSION,
-      bounds: protoMetadata.bounds
+      version: header.version,
+      name: json.name,
+      description: json.description,
+      attribution: json.attribution,
+      bounds: json.bounds
         ? {
-            minLon: protoMetadata.bounds.minLon || -180,
-            minLat: protoMetadata.bounds.minLat || -90,
-            maxLon: protoMetadata.bounds.maxLon || 180,
-            maxLat: protoMetadata.bounds.maxLat || 90,
+            minLon: json.bounds.min_lon,
+            minLat: json.bounds.min_lat,
+            maxLon: json.bounds.max_lon,
+            maxLat: json.bounds.max_lat,
           }
         : { minLon: -180, minLat: -90, maxLon: 180, maxLat: 90 },
-      timeRange: protoMetadata.timeRange
-        ? {
-            start: Number(protoMetadata.timeRange.start) || 0,
-            end: Number(protoMetadata.timeRange.end) || Date.now(),
-          }
+      timeRange: json.time_range
+        ? { start: json.time_range.start, end: json.time_range.end }
         : { start: 0, end: Date.now() },
-      minZoom: protoMetadata.minZoom || 0,
-      maxZoom: protoMetadata.maxZoom || 14,
-      layers: (protoMetadata.layers || []).map((l) => ({
-        name: l.name || 'default',
-        description: l.description || '',
+      minZoom: json.min_zoom ?? 0,
+      maxZoom: json.max_zoom ?? 14,
+      layers: (json.layers ?? []).map((name: string) => ({
+        name,
         properties: [],
         geometryTypes: [],
       })),
+      temporalBucketMs: json.temporal_bucket_ms ?? 3600 * 1000,
     };
-
-    console.log('Archive metadata:', {
-      minZoom: this.metadataCache.minZoom,
-      maxZoom: this.metadataCache.maxZoom,
-      timeRange: {
-        start: new Date(this.metadataCache.timeRange.start).toISOString(),
-        end: new Date(this.metadataCache.timeRange.end).toISOString(),
-      },
-      bounds: this.metadataCache.bounds,
-    });
-
-    return this.metadataCache!
+    return this.metadataCache;
   }
 
-  /** Get archive index */
+  /** Archive directory (the tile index, an Arrow table). */
   async getIndex(): Promise<ArchiveIndex> {
-    if (this.indexCache) {
-      return this.indexCache;
-    }
-
+    if (this.indexCache) return this.indexCache;
     const header = await this.getHeader();
+    const buffer = await this.fetchRange(
+      header.indexOffset,
+      header.indexOffset + header.indexLength - 1
+    );
+    const table = tableFromIPC(new Uint8Array(buffer));
 
-    // Fetch index using HTTP Range Request
-    const response = await this.fetchFn(this.url, {
-      headers: {
-        Range: `bytes=${header.indexOffset}-${
-          header.indexOffset + header.indexLength - 1
-        }`,
-      },
-    });
+    const zoom = table.getChild('zoom')!.toArray() as Uint8Array;
+    const x = table.getChild('x')!.toArray() as Uint32Array;
+    const y = table.getChild('y')!.toArray() as Uint32Array;
+    const timeStart = table.getChild('time_start')!.toArray() as BigInt64Array;
+    const timeEnd = table.getChild('time_end')!.toArray() as BigInt64Array;
+    const offset = table.getChild('offset')!.toArray() as BigUint64Array;
+    const length = table.getChild('length')!.toArray() as Uint32Array;
+    const uncompressed = table.getChild('uncompressed_size')!.toArray() as Uint32Array;
+    const featureCount = table.getChild('feature_count')!.toArray() as Uint32Array;
 
-    if (!response.ok) {
-      throw new Error(`Failed to fetch index: ${response.statusText}`);
+    const tiles: TileEntry[] = [];
+    for (let i = 0; i < table.numRows; i++) {
+      tiles.push({
+        zoom: zoom[i],
+        x: x[i],
+        y: y[i],
+        timeStart: Number(timeStart[i]),
+        timeEnd: Number(timeEnd[i]),
+        offset: Number(offset[i]),
+        length: length[i],
+        featureCount: featureCount[i],
+        compression: header.compression,
+        uncompressedSize: uncompressed[i],
+      });
     }
+    this.indexCache = { tiles };
 
-    const buffer = await response.arrayBuffer();
-    
-    // Decode Protocol Buffer index
-    const protoIndex = stt.Index.decode(new Uint8Array(buffer));
-    
-    this.indexCache = {
-      tiles: (protoIndex.tiles || []).map((t): TileEntry => ({
-        zoom: t.zoom || 0,
-        x: t.x || 0,
-        y: t.y || 0,
-        timeStart: Number(t.timeStart) || 0,
-        timeEnd: Number(t.timeEnd) || 0,
-        offset: Number(t.offset) || 0,
-        length: t.length || 0,
-        featureCount: t.featureCount || 0,
-        compression: (t.compression || 0) as Compression,
-        uncompressedSize: t.uncompressedSize || 0,
-      })),
-    };
-    
-    // Build O(1) spatial lookup index
-    // Key: "z/x/y" -> Array of temporal tile entries for that spatial location
     this.tileEntryIndex.clear();
-    for (const entry of this.indexCache.tiles) {
+    this.tileEntryByKey.clear();
+    for (const entry of tiles) {
       const spatialKey = `${entry.zoom}/${entry.x}/${entry.y}`;
-      let entries = this.tileEntryIndex.get(spatialKey);
-      if (!entries) {
-        entries = [];
-        this.tileEntryIndex.set(spatialKey, entries);
+      let list = this.tileEntryIndex.get(spatialKey);
+      if (!list) {
+        list = [];
+        this.tileEntryIndex.set(spatialKey, list);
       }
-      entries.push(entry);
+      list.push(entry);
+      this.tileEntryByKey.set(
+        `${entry.zoom}/${entry.x}/${entry.y}/${entry.timeStart}`,
+        entry
+      );
     }
-    
-    console.log(`[Archive] Built tile index: ${this.tileEntryIndex.size} spatial locations, ${this.indexCache.tiles.length} total tiles`);
-
     return this.indexCache;
   }
 
-  /** Get a specific tile */
-  async getTile(
-    id: TileId,
-    options?: TileRequestOptions
-  ): Promise<Tile | null> {
-    const cacheKey = this.tileIdToKey(id);
+  /** Resolve a TileId to its directory entry. */
+  private findTileEntry(id: TileId): TileEntry | undefined {
+    const exact = this.tileEntryByKey.get(`${id.z}/${id.x}/${id.y}/${id.t}`);
+    if (exact) return exact;
+    const entries = this.tileEntryIndex.get(`${id.z}/${id.x}/${id.y}`);
+    return entries?.find((e) => e.timeStart <= id.t && e.timeEnd >= id.t);
+  }
 
-    // Check cache
-    const cached = this.tileCache.get(cacheKey);
+  private tileIdToKey(id: TileId): string {
+    return `${id.z}/${id.x}/${id.y}/${id.t}`;
+  }
+
+  /** Decode compressed tile bytes into a Tile via the configured decoder. */
+  private async decodeBytes(
+    id: TileId,
+    entry: TileEntry,
+    compressed: ArrayBuffer,
+  ): Promise<Tile> {
+    return this.getDecoder().decode({
+      id,
+      timeRange: { start: entry.timeStart, end: entry.timeEnd },
+      compressed,
+      compression: entry.compression,
+    });
+  }
+
+  /** Fetch and decode a single tile. */
+  async getTile(id: TileId, options?: TileRequestOptions): Promise<Tile | null> {
+    await this.getIndex();
+    const entry = this.findTileEntry(id);
+    if (!entry) return null;
+
+    const key = this.tileIdToKey(id);
+    const cached = this.byteCache.get(key);
     if (cached) {
-      // Update last access time for LRU
       cached.lastAccess = Date.now();
       this.cacheStats.hits++;
-      return cached.tile;
+      return this.decodeBytes(id, entry, cached.bytes);
     }
-    
+
     this.cacheStats.misses++;
-
-    // Find tile entry using O(1) spatial lookup + temporal filter
-    await this.getIndex(); // Ensure index is loaded
-    const spatialKey = `${id.z}/${id.x}/${id.y}`;
-    const entries = this.tileEntryIndex.get(spatialKey);
-    const entry = entries?.find(
-      (e) => e.timeStart <= id.t && e.timeEnd >= id.t
+    const compressed = await this.fetchRange(
+      entry.offset,
+      entry.offset + entry.length - 1,
+      options?.signal
     );
-
-    if (!entry) {
-      return null;
-    }
-
-    // Fetch tile data using HTTP Range Request
-    const response = await this.fetchFn(this.url, {
-      headers: {
-        Range: `bytes=${entry.offset}-${entry.offset + entry.length - 1}`,
-      },
-      signal: options?.signal,
-    });
-
-    if (!response.ok) {
-      throw new Error(`Failed to fetch tile: ${response.statusText}`);
-    }
-
-    const compressed = await response.arrayBuffer();
-
-    // Use loaders.gl parse to decode tile (always binary format)
-    const tile = await parse(compressed, STTLoader, { 
-      ...this.loadOptions,
-      stt: { 
-        tileId: id, 
-        compression: entry.compression,
-      } 
-    }) as Tile;
-
-    // Cache tile with LRU tracking
-    const byteSize = estimateTileSize(tile);
-    this.tileCache.set(cacheKey, {
-      tile,
-      lastAccess: Date.now(),
-      byteSize,
-    });
-    this.currentCacheBytes += byteSize;
-    
-    // Evict tiles if over limits
-    this.evictIfNeeded();
-
-    return tile;
+    this.storeBytes(key, compressed);
+    return this.decodeBytes(id, entry, compressed);
   }
-  
+
   /**
-   * Evict tiles using LRU policy when cache exceeds limits
+   * Fetch many tiles, coalescing contiguous byte ranges into single requests.
+   * Returns tiles in the same order as `ids`; missing tiles are `null`.
    */
+  async getTiles(
+    ids: TileId[],
+    options?: TileRequestOptions
+  ): Promise<(Tile | null)[]> {
+    await this.getIndex();
+    const results: (Tile | null)[] = new Array(ids.length).fill(null);
+
+    interface Pending {
+      index: number;
+      id: TileId;
+      entry: TileEntry;
+    }
+    const pending: Pending[] = [];
+    const jobs: Promise<void>[] = [];
+
+    for (let i = 0; i < ids.length; i++) {
+      const id = ids[i];
+      const entry = this.findTileEntry(id);
+      if (!entry) continue;
+      const key = this.tileIdToKey(id);
+      const cached = this.byteCache.get(key);
+      if (cached) {
+        cached.lastAccess = Date.now();
+        this.cacheStats.hits++;
+        const idx = i;
+        jobs.push(
+          this.decodeBytes(id, entry, cached.bytes).then((t) => {
+            results[idx] = t;
+          })
+        );
+      } else {
+        this.cacheStats.misses++;
+        pending.push({ index: i, id, entry });
+      }
+    }
+
+    if (pending.length > 0) {
+      pending.sort((a, b) => a.entry.offset - b.entry.offset);
+      interface Group {
+        start: number;
+        end: number;
+        members: Pending[];
+      }
+      const groups: Group[] = [];
+      for (const p of pending) {
+        const pStart = p.entry.offset;
+        const pEnd = p.entry.offset + p.entry.length - 1;
+        const last = groups[groups.length - 1];
+        if (last && pStart - (last.end + 1) <= RANGE_COALESCE_GAP) {
+          last.end = Math.max(last.end, pEnd);
+          last.members.push(p);
+        } else {
+          groups.push({ start: pStart, end: pEnd, members: [p] });
+        }
+      }
+      for (const group of groups) {
+        // Decode all members of a group concurrently. A previous serial
+        // `for...of...await` decoded each member in sequence inside the
+        // group, which fully serialized large coalesced batches and made
+        // `getTiles()` slower than per-tile `getTile()` calls.
+        jobs.push(
+          this.fetchRange(group.start, group.end, options?.signal).then(
+            (buffer) =>
+              Promise.all(
+                group.members.map(async (m) => {
+                  const rel = m.entry.offset - group.start;
+                  const slice = buffer.slice(rel, rel + m.entry.length);
+                  this.storeBytes(this.tileIdToKey(m.id), slice);
+                  results[m.index] = await this.decodeBytes(m.id, m.entry, slice);
+                })
+              ).then(() => undefined)
+          )
+        );
+      }
+    }
+
+    await Promise.all(jobs);
+    return results;
+  }
+
+  private storeBytes(key: string, bytes: ArrayBuffer): void {
+    const existing = this.byteCache.get(key);
+    if (existing) this.currentCacheBytes -= existing.byteSize;
+    this.byteCache.set(key, {
+      bytes,
+      lastAccess: Date.now(),
+      byteSize: bytes.byteLength,
+    });
+    this.currentCacheBytes += bytes.byteLength;
+    this.evictIfNeeded();
+  }
+
   private evictIfNeeded(): void {
-    const now = Date.now();
-    
-    // Check if eviction is needed
-    if (this.tileCache.size <= this.maxCacheSize && 
-        this.currentCacheBytes <= this.maxCacheBytes) {
+    if (
+      this.byteCache.size <= this.maxCacheTiles &&
+      this.currentCacheBytes <= this.maxCacheBytes
+    ) {
       return;
     }
-    
-    // Collect entries with their keys for sorting
-    const entries: Array<[string, CacheEntry]> = [];
-    for (const [key, entry] of this.tileCache) {
-      entries.push([key, entry]);
-    }
-    
-    // Sort by last access time (oldest first)
+    const entries = Array.from(this.byteCache.entries());
     entries.sort((a, b) => a[1].lastAccess - b[1].lastAccess);
-    
-    // Evict oldest entries until under limits
     for (const [key, entry] of entries) {
-      if (this.tileCache.size <= this.maxCacheSize && 
-          this.currentCacheBytes <= this.maxCacheBytes) {
+      if (
+        this.byteCache.size <= this.maxCacheTiles &&
+        this.currentCacheBytes <= this.maxCacheBytes
+      ) {
         break;
       }
-      
-      // Don't evict recently accessed tiles (grace period)
-      if (now - entry.lastAccess < CACHE_GRACE_PERIOD_MS) {
-        break;
-      }
-      
-      this.tileCache.delete(key);
+      this.byteCache.delete(key);
       this.currentCacheBytes -= entry.byteSize;
       this.cacheStats.evictions++;
     }
   }
 
-  /** Get an iterator for tiles in a bounding box and time range */
-  async *getTilesIterator(
+  /** Tile IDs whose interval overlaps `timeRange` within `bounds` at `zoom`. */
+  async getTileIdsInBounds(
     bounds: BoundingBox,
     zoom: number,
-    timeRange: TimeRange,
-    options?: TileRequestOptions
-  ): AsyncIterable<Tile> {
-    const tileIds = await this.getTileIdsInBounds(bounds, zoom, timeRange);
-    
-    for (const id of tileIds) {
-      const tile = await this.getTile(id, options);
-      if (tile) {
-        yield tile;
+    timeRange: TimeRange
+  ): Promise<TileId[]> {
+    await this.getIndex();
+    const ids: TileId[] = [];
+    for (const [x, y] of boundsToTiles(bounds, zoom)) {
+      const entries = this.tileEntryIndex.get(`${zoom}/${x}/${y}`);
+      if (!entries) continue;
+      for (const e of entries) {
+        if (e.timeEnd >= timeRange.start && e.timeStart <= timeRange.end) {
+          ids.push({ z: e.zoom, x: e.x, y: e.y, t: e.timeStart });
+        }
       }
     }
+    return ids;
   }
 
-  /** Get all tiles in a bounding box and time range */
+  /** All tiles within a bounding box and time range. */
   async getTilesInBounds(
     bounds: BoundingBox,
     zoom: number,
     timeRange: TimeRange,
     options?: TileRequestOptions
   ): Promise<Tile[]> {
-    const tileIds = await this.getTileIdsInBounds(bounds, zoom, timeRange);
-    
-    const tiles: Tile[] = [];
-    const promises = tileIds.map(async (id) => {
-      const tile = await this.getTile(id, options);
-      if (tile) {
-        tiles.push(tile);
-      }
-    });
-    
-    await Promise.all(promises);
-    return tiles;
-  }
-  
-  /** Get available tile IDs in a bounding box and time range (without fetching tile data) */
-  async getTileIdsInBounds(
-    bounds: BoundingBox,
-    zoom: number,
-    timeRange: TimeRange
-  ): Promise<TileId[]> {
-    await this.getIndex(); // Ensure index is loaded
-    const tileCoords = boundsToTiles(bounds, zoom);
-    const tileIds: TileId[] = [];
-    
-    // For each spatial tile coordinate, find ALL temporal tiles that overlap the time range
-    // Using O(1) spatial lookup instead of O(n) filter over all tiles
-    for (const [x, y] of tileCoords) {
-      const spatialKey = `${zoom}/${x}/${y}`;
-      const entries = this.tileEntryIndex.get(spatialKey);
-      
-      if (!entries) continue;
-      
-      // Filter temporal entries that overlap with time range
-      for (const entry of entries) {
-        // Temporal overlap check: tile overlaps if its end is after query start AND its start is before query end
-        if (entry.timeEnd >= timeRange.start && entry.timeStart <= timeRange.end) {
-          tileIds.push({
-            z: entry.zoom,
-            x: entry.x,
-            y: entry.y,
-            t: entry.timeStart, // Use tile's actual start time
-          });
-        }
-      }
-    }
-    
-    return tileIds;
+    const ids = await this.getTileIdsInBounds(bounds, zoom, timeRange);
+    const tiles = await this.getTiles(ids, options);
+    return tiles.filter((t): t is Tile => t !== null);
   }
 
-  /** Prefetch tiles for smooth animation */
+  /** Prefetch tiles for a set of bucket times (warms the byte cache). */
   async prefetch(
     bounds: BoundingBox,
     zoom: number,
     times: number[],
     options?: TileRequestOptions
   ): Promise<void> {
-    const tileCoords = boundsToTiles(bounds, zoom);
-
-    // Create prefetch requests for all time + spatial combinations
-    const promises: Promise<Tile | null>[] = [];
-
-    for (const [x, y] of tileCoords) {
-      for (const t of times) {
-        const id: TileId = { z: zoom, x, y, t };
-        promises.push(this.getTile(id, options));
-      }
+    const ids: TileId[] = [];
+    for (const [x, y] of boundsToTiles(bounds, zoom)) {
+      for (const t of times) ids.push({ z: zoom, x, y, t });
     }
-
-    // Fetch all in parallel (browsers will limit concurrency)
-    await Promise.all(promises);
+    await this.getTiles(ids, options);
   }
 
-  /** Clear tile cache */
+  /** Clear the compressed-byte cache. */
   clearCache(): void {
-    this.tileCache.clear();
+    this.byteCache.clear();
     this.currentCacheBytes = 0;
-    // Note: tileEntryIndex is derived from indexCache and rebuilt on next getIndex() call
   }
-  
-  /** Get cache statistics */
-  getCacheStats(): {
-    size: number;
-    maxSize: number;
-    bytes: number;
-    maxBytes: number;
-    hits: number;
-    misses: number;
-    evictions: number;
-    hitRate: number;
-  } {
+
+  /** Cache statistics. */
+  getCacheStats() {
     const total = this.cacheStats.hits + this.cacheStats.misses;
     return {
-      size: this.tileCache.size,
-      maxSize: this.maxCacheSize,
+      size: this.byteCache.size,
+      maxSize: this.maxCacheTiles,
       bytes: this.currentCacheBytes,
       maxBytes: this.maxCacheBytes,
       hits: this.cacheStats.hits,
@@ -502,69 +526,18 @@ export class STTArchive {
       hitRate: total > 0 ? this.cacheStats.hits / total : 0,
     };
   }
-
-  /** Get header */
-  private async getHeader(): Promise<ArchiveHeader> {
-    if (this.headerCache) {
-      return this.headerCache;
-    }
-
-    // Fetch header (53 bytes)
-    const response = await this.fetchFn(this.url, {
-      headers: {
-        Range: `bytes=0-${HEADER_SIZE - 1}`,
-      },
-    });
-
-    if (!response.ok) {
-      throw new Error(`Failed to fetch header: ${response.statusText}`);
-    }
-
-    const buffer = await response.arrayBuffer();
-    const view = new DataView(buffer);
-
-    // Verify magic number
-    const magic = new Uint8Array(buffer, 0, 4);
-    if (!arraysEqual(magic, MAGIC)) {
-      throw new Error('Invalid STT archive: bad magic number');
-    }
-
-    // Read version
-    const version = view.getUint8(4);
-    if (version !== VERSION) {
-      throw new Error(`Unsupported STT version: ${version}`);
-    }
-
-    // Read offsets and lengths (little-endian)
-    const header: ArchiveHeader = {
-      version,
-      indexOffset: Number(view.getBigUint64(5, true)),
-      indexLength: Number(view.getBigUint64(13, true)),
-      metadataOffset: Number(view.getBigUint64(21, true)),
-      metadataLength: Number(view.getBigUint64(29, true)),
-    };
-
-    this.headerCache = header;
-    return header;
-  }
-
-  private tileIdToKey(id: TileId): string {
-    return `${id.z}/${id.x}/${id.y}/${id.t}`;
-  }
 }
 
-/** Convert bounding box to tile coordinates */
+/** Web-Mercator tile coordinates covering a bounding box at a zoom. */
 function boundsToTiles(bounds: BoundingBox, zoom: number): [number, number][] {
   const n = 1 << zoom;
-
   const minX = lonToTileX(bounds.minLon, zoom);
   const maxX = lonToTileX(bounds.maxLon, zoom);
-  const minY = latToTileY(bounds.maxLat, zoom); // Y is flipped
+  const minY = latToTileY(bounds.maxLat, zoom); // y is flipped
   const maxY = latToTileY(bounds.minLat, zoom);
-
   const tiles: [number, number][] = [];
-  for (let x = minX; x <= Math.min(maxX, n - 1); x++) {
-    for (let y = minY; y <= Math.min(maxY, n - 1); y++) {
+  for (let x = Math.max(0, minX); x <= Math.min(maxX, n - 1); x++) {
+    for (let y = Math.max(0, minY); y <= Math.min(maxY, n - 1); y++) {
       tiles.push([x, y]);
     }
   }
@@ -572,23 +545,12 @@ function boundsToTiles(bounds: BoundingBox, zoom: number): [number, number][] {
 }
 
 function lonToTileX(lon: number, zoom: number): number {
-  const n = 1 << zoom;
-  return Math.floor(((lon + 180) / 360) * n);
+  return Math.floor(((lon + 180) / 360) * (1 << zoom));
 }
 
 function latToTileY(lat: number, zoom: number): number {
-  const n = 1 << zoom;
-  const latRad = (lat * Math.PI) / 180;
+  const rad = (lat * Math.PI) / 180;
   return Math.floor(
-    ((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2) * n
+    ((1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2) * (1 << zoom)
   );
 }
-
-function arraysEqual(a: Uint8Array, b: Uint8Array): boolean {
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i++) {
-    if (a[i] !== b[i]) return false;
-  }
-  return true;
-}
-

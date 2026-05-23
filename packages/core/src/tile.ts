@@ -1,308 +1,275 @@
 /**
- * Tile decoding utilities
- * 
- * Decodes directly to BinaryFeatures format for GPU-efficient rendering.
- * No intermediate Feature objects are created - data goes straight to typed arrays.
+ * Tile decoding: turn an STT tile payload into deck.gl-ready binary features.
+ *
+ * A tile payload is the *layer frame* produced by the Rust builder:
+ *
+ * ```text
+ * [u16 layerCount]
+ *   repeated: [u16 nameLen][name utf8][u32 ipcLen][Arrow IPC stream]
+ * ```
+ *
+ * Each layer's Arrow IPC stream holds one RecordBatch whose `geometry` column
+ * is GeoArrow-encoded (interleaved f64 coordinates). We extract the underlying
+ * typed-array buffers into {@link BinaryFeatures} — the columnar shape deck.gl
+ * uploads straight to the GPU.
  */
 
-import { stt } from './proto';
+import { tableFromIPC, type Table, type Vector } from 'apache-arrow';
 import {
-  BinaryFeatures,
+  type Tile,
+  type TileId,
+  type TimeRange,
+  type Layer,
+  type BinaryFeatures,
   GeometryType,
-  Layer,
-  Tile,
-  TileId,
 } from './types';
 
-/**
- * Decode a tile from Protocol Buffer bytes directly to binary format
- */
-export function decodeTile(data: Uint8Array, id: TileId): Tile {
-  const protoTile = stt.Tile.decode(data);
-  const tileTimeStart = Number(protoTile.timeStart) || 0;
-  const tileTimeEnd = Number(protoTile.timeEnd) || 0;
-
-  const layers = (protoTile.layers || []).map((layer) => 
-    decodeLayerBinary(layer, id, tileTimeStart)
-  );
-
-  return {
-    id,
-    timeRange: {
-      start: tileTimeStart,
-      end: tileTimeEnd,
-    },
-    layers,
-  };
+/** One layer extracted from the payload frame. */
+interface RawLayer {
+  name: string;
+  ipc: Uint8Array;
 }
 
-/**
- * Decode a layer directly to binary format
- */
-function decodeLayerBinary(
-  protoLayer: stt.ILayer, 
-  tileId: TileId, 
-  tileTimeStart: number
-): Layer {
-  const extent = protoLayer.extent || 4096;
-  
-  if (!protoLayer.columnar) {
-    throw new Error('Invalid tile: missing columnar data. Only columnar format is supported.');
+/** Parse the layer frame into its constituent Arrow IPC streams. */
+function parseLayerFrame(payload: Uint8Array): RawLayer[] {
+  const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
+  let pos = 0;
+  const readU16 = () => {
+    const v = view.getUint16(pos, true);
+    pos += 2;
+    return v;
+  };
+  const readU32 = () => {
+    const v = view.getUint32(pos, true);
+    pos += 4;
+    return v;
+  };
+  const readBytes = (len: number) => {
+    if (pos + len > payload.byteLength) {
+      throw new Error('STT tile payload truncated');
+    }
+    const slice = payload.subarray(pos, pos + len);
+    pos += len;
+    return slice;
+  };
+
+  if (payload.byteLength < 2) {
+    throw new Error('STT tile payload too short for layer frame');
   }
-  
-  const columnar = protoLayer.columnar;
-  const featureCount = columnar.featureCount || 0;
-  const geometryType = protoGeomTypeToType(
-    (columnar.geometryType ?? stt.Feature.GeomType.POINT) as stt.Feature.GeomType
-  );
-  const isPoint = geometryType === GeometryType.Point;
-  
-  // Handle empty tiles
-  if (featureCount === 0) {
-    return {
-      name: protoLayer.name || 'default',
-      extent,
-      features: createEmptyBinaryFeatures(geometryType),
-    };
+  const count = readU16();
+  const layers: RawLayer[] = [];
+  for (let i = 0; i < count; i++) {
+    const nameLen = readU16();
+    const name = new TextDecoder().decode(readBytes(nameLen));
+    const ipcLen = readU32();
+    const ipc = readBytes(ipcLen);
+    layers.push({ name, ipc });
   }
-  
-  // Check if we have altitude data (3D)
-  const altitudes = columnar.altitudes || [];
-  const has3D = altitudes.length > 0;
-  
-  // Decode geometry to Float64Array positions (2D or 3D)
-  const { positions, positionOffsets } = decodeGeometry(
-    columnar.geometry || [],
-    columnar.geometryOffsets || [],
-    tileId,
-    extent,
-    featureCount,
-    isPoint,
-    has3D ? altitudes : undefined
-  );
-  
-  // Decode feature IDs
+  return layers;
+}
+
+/** Resolve the single `Data` chunk of a column (tiles have one batch). */
+function chunk(vec: Vector): any {
+  if (vec.data.length === 0) throw new Error('empty Arrow column');
+  // A tile layer is always written as one record batch.
+  return vec.data[0];
+}
+
+/** The geometry kind a layer carries, from schema metadata. */
+function geometryKind(table: Table): GeometryType {
+  const meta = table.schema.metadata.get('stt:geometry') ?? '';
+  if (meta === 'geoarrow.linestring') return GeometryType.LineString;
+  if (meta === 'geoarrow.polygon') return GeometryType.Polygon;
+  return GeometryType.Point;
+}
+
+/** Extract interleaved positions + per-feature start indices from geometry. */
+function extractGeometry(
+  geomVec: Vector,
+  kind: GeometryType
+): { positions: Float64Array; startIndices?: Uint32Array } {
+  const geom = chunk(geomVec);
+
+  if (kind === GeometryType.Point) {
+    // FixedSizeList<Float64, 2>: the child buffer is the interleaved coords.
+    const coords: Float64Array = geom.children[0].values;
+    const start = geom.offset * 2;
+    return { positions: coords.subarray(start, start + geom.length * 2) };
+  }
+
+  // LineString: List<FixedSizeList<Float64,2>>.
+  // Polygon: List<List<FixedSizeList<Float64,2>>> — flattened to feature-level
+  // coordinate ranges (ring boundaries are not preserved in BinaryFeatures).
+  const featureOffsets: Int32Array = geom.valueOffsets;
+  let coordData = geom.children[0];
+  if (kind === GeometryType.Polygon) {
+    // Descend through the ring list to the coordinate list.
+    coordData = coordData.children[0];
+  }
+  // coordData is now FixedSizeList<Float64,2>.
+  const coords: Float64Array = coordData.children[0].values;
+
+  // Translate the List offsets (in units of coordinate *pairs*) into
+  // per-feature start indices, normalised so feature 0 starts at 0.
+  const n = geom.length;
+  const base = featureOffsets[geom.offset];
+  const startIndices = new Uint32Array(n + 1);
+  for (let i = 0; i <= n; i++) {
+    startIndices[i] = featureOffsets[geom.offset + i] - base;
+  }
+  const positions = coords.subarray(base * 2, featureOffsets[geom.offset + n] * 2);
+  return { positions, startIndices };
+}
+
+/** Extract a `List<Int64>` per-vertex time column as a flat Float32Array. */
+function extractVertexTimes(
+  vec: Vector | null,
+  timeOffset: number
+): Float32Array | undefined {
+  if (!vec) return undefined;
+  const data = chunk(vec);
+  const offsets: Int32Array = data.valueOffsets;
+  const childValues: BigInt64Array = data.children[0].values;
+  const base = offsets[data.offset];
+  const total = offsets[data.offset + data.length] - base;
+  const out = new Float32Array(total);
+  for (let i = 0; i < total; i++) {
+    out[i] = Number(childValues[base + i]) - timeOffset;
+  }
+  return out;
+}
+
+/** Convert one Arrow RecordBatch table into deck.gl binary features. */
+function tableToBinaryFeatures(table: Table): BinaryFeatures {
+  const kind = geometryKind(table);
+  const featureCount = table.numRows;
+
+  // --- ids ---
+  const idVec = table.getChild('id');
   const featureIds = new Uint32Array(featureCount);
-  const protoFeatureIds = columnar.featureIds || [];
-  for (let i = 0; i < featureCount; i++) {
-    featureIds[i] = Number(protoFeatureIds[i]) || i;
+  if (idVec) {
+    const raw = idVec.toArray() as BigUint64Array | Uint32Array;
+    for (let i = 0; i < featureCount; i++) featureIds[i] = Number(raw[i]);
   }
-  
-  // Decode times directly to Float32Array (relative to tileTimeStart for precision)
+
+  // --- times (relativised to timeOffset for f32 precision) ---
+  const startRaw = table.getChild('start_time')?.toArray() as
+    | BigInt64Array
+    | undefined;
+  const endRaw = table.getChild('end_time')?.toArray() as
+    | BigInt64Array
+    | undefined;
+  let timeOffset = 0;
+  if (startRaw && startRaw.length > 0) {
+    let min = Number(startRaw[0]);
+    for (let i = 1; i < startRaw.length; i++) {
+      const v = Number(startRaw[i]);
+      if (v < min) min = v;
+    }
+    timeOffset = min;
+  }
   const startTimes = new Float32Array(featureCount);
   const endTimes = new Float32Array(featureCount);
-  const protoStartTimes = columnar.startTimes || [];
-  const protoEndTimes = columnar.endTimes || [];
-  
   for (let i = 0; i < featureCount; i++) {
-    const startDelta = Number(protoStartTimes[i]) || 0;
-    const endDelta = Number(protoEndTimes[i]) || 0;
-    startTimes[i] = startDelta;
-    endTimes[i] = startDelta + endDelta; // endTimes[i] is absolute relative to timeOffset
+    startTimes[i] = startRaw ? Number(startRaw[i]) - timeOffset : 0;
+    endTimes[i] = endRaw ? Number(endRaw[i]) - timeOffset : 0;
   }
-  
-  // Decode properties directly to typed arrays
-  const numericProperties = decodeNumericProperties(columnar.numericProperties || []);
-  const categoricalProperties = decodeCategoricalProperties(columnar.categoricalProperties || []);
-  
-  // Decode per-vertex timestamps if present (for accurate path animation)
-  // These are delta-encoded relative to tile time_start, so we add tileTimeStart to get absolute times
-  const protoVertexTimestamps = columnar.vertexTimestamps || [];
-  const dims = has3D ? 3 : 2;
-  const expectedVertexCount = positions.length / dims;
-  let vertexTimestamps: Float32Array | undefined;
-  
-  if (protoVertexTimestamps.length > 0) {
-    // Validate that we have timestamps for all vertices
-    if (protoVertexTimestamps.length === expectedVertexCount) {
-      vertexTimestamps = new Float32Array(expectedVertexCount);
-      for (let i = 0; i < expectedVertexCount; i++) {
-        // Convert delta to absolute time (delta + tileTimeStart)
-        // Note: we don't add tileTimeStart here because the layer applies timeOffset
-        // Just like startTimes/endTimes, these are relative to timeOffset
-        vertexTimestamps[i] = Number(protoVertexTimestamps[i]) || 0;
+
+  // --- geometry ---
+  const geomVec = table.getChild('geometry');
+  if (!geomVec) throw new Error('STT tile layer is missing its geometry column');
+  const { positions, startIndices } = extractGeometry(geomVec, kind);
+
+  // --- per-vertex times ---
+  const vertexTimestamps = extractVertexTimes(
+    table.getChild('vertex_time') ?? null,
+    timeOffset
+  );
+
+  // --- properties ---
+  const numericProps: Record<string, Float32Array> = {};
+  const categoricalProps: BinaryFeatures['categoricalProps'] = {};
+  const reserved = new Set([
+    'id',
+    'start_time',
+    'end_time',
+    'geometry',
+    'vertex_time',
+  ]);
+  for (const field of table.schema.fields) {
+    if (reserved.has(field.name)) continue;
+    const vec = table.getChild(field.name);
+    if (!vec) continue;
+    if (field.type.toString().includes('Utf8')) {
+      // Categorical: dictionary-encode the strings on decode.
+      const categories: string[] = [];
+      const lookup = new Map<string, number>();
+      const indices = new Uint16Array(featureCount);
+      for (let i = 0; i < featureCount; i++) {
+        const s = vec.get(i);
+        if (s == null) {
+          indices[i] = 0xffff; // sentinel for "missing"
+          continue;
+        }
+        let idx = lookup.get(s);
+        if (idx === undefined) {
+          idx = categories.length;
+          categories.push(s);
+          lookup.set(s, idx);
+        }
+        indices[i] = idx;
       }
+      categoricalProps[field.name] = { indices, categories };
     } else {
-      console.warn(
-        `[STT] vertexTimestamps length mismatch: expected ${expectedVertexCount}, got ${protoVertexTimestamps.length}`
-      );
+      // Numeric: f64 column down-converted to f32 for GPU upload.
+      const raw = vec.toArray() as Float64Array | Float32Array;
+      const arr = new Float32Array(featureCount);
+      for (let i = 0; i < featureCount; i++) arr[i] = Number(raw[i]);
+      numericProps[field.name] = arr;
     }
   }
-  
+
   return {
-    name: protoLayer.name || 'default',
-    extent,
-    features: {
-      featureCount,
-      geometryType,
-      positionDimensions: has3D ? 3 : 2,
-      positions,
-      startIndices: positionOffsets,
-      featureIds,
-      startTimes,
-      endTimes,
-      timeOffset: tileTimeStart,
-      vertexTimestamps,
-      numericProps: numericProperties,
-      categoricalProps: categoricalProperties,
-    },
-  };
-}
-
-/**
- * Decode geometry from delta-encoded quantized format directly to Float64Array
- * Supports 2D (lon, lat) and 3D (lon, lat, alt) when altitudes are provided
- */
-function decodeGeometry(
-  geometry: number[],
-  geometryOffsets: number[],
-  tileId: TileId,
-  extent: number,
-  featureCount: number,
-  isPoint: boolean,
-  altitudes?: number[]
-): { positions: Float64Array; positionOffsets?: Uint32Array } {
-  const dims = altitudes ? 3 : 2;
-  
-  // Calculate total coordinate count
-  let totalCoords: number;
-  if (isPoint) {
-    totalCoords = featureCount;
-  } else {
-    // For lines/polygons, last offset tells us total
-    totalCoords = geometryOffsets.length > 0 
-      ? geometryOffsets[geometryOffsets.length - 1] || (geometry.length / 2)
-      : geometry.length / 2;
-  }
-  
-  // Pre-calculate tile projection constants
-  const n = Math.pow(2, tileId.z);
-  const tileX = tileId.x;
-  const tileY = tileId.y;
-  
-  // Allocate output arrays (2 or 3 values per coordinate)
-  const positions = new Float64Array(totalCoords * dims);
-  const positionOffsets = isPoint ? undefined : new Uint32Array(featureCount + 1);
-  
-  // Delta decode and dequantize in a single pass
-  let prevX = 0;
-  let prevY = 0;
-  let posIdx = 0;
-  let altIdx = 0;
-  
-  for (let i = 0; i < featureCount; i++) {
-    // Determine geometry range for this feature
-    let geomStart: number;
-    let geomEnd: number;
-    
-    if (isPoint) {
-      geomStart = i * 2;
-      geomEnd = geomStart + 2;
-    } else {
-      geomStart = (geometryOffsets[i] || 0) * 2;
-      geomEnd = (geometryOffsets[i + 1] ?? geometry.length / 2) * 2;
-      positionOffsets![i] = posIdx / dims;
-    }
-    
-    // Decode coordinates for this feature
-    for (let j = geomStart; j < geomEnd; j += 2) {
-      // Delta decode
-      const dx = geometry[j] || 0;
-      const dy = geometry[j + 1] || 0;
-      const qx = prevX + dx;
-      const qy = prevY + dy;
-      prevX = qx;
-      prevY = qy;
-      
-      // Dequantize to WGS84 - inline for performance
-      const worldX = tileX + (qx / extent);
-      const worldY = tileY + (qy / extent);
-      const lon = (worldX / n) * 360 - 180;
-      const latRad = Math.atan(Math.sinh(Math.PI * (1 - (2 * worldY) / n)));
-      const lat = latRad * (180 / Math.PI);
-      
-      positions[posIdx++] = lon;
-      positions[posIdx++] = lat;
-      
-      // Add altitude if 3D
-      if (altitudes) {
-        positions[posIdx++] = altitudes[altIdx++] || 0;
-      }
-    }
-  }
-  
-  // Final offset for non-point geometries
-  if (positionOffsets) {
-    positionOffsets[featureCount] = posIdx / dims;
-  }
-  
-  return { positions, positionOffsets };
-}
-
-/**
- * Decode numeric properties directly to Float32Arrays
- */
-function decodeNumericProperties(
-  protoProperties: stt.INumericColumn[]
-): Record<string, Float32Array> {
-  const result: Record<string, Float32Array> = {};
-  
-  for (const col of protoProperties) {
-    if (col.name && col.values) {
-      result[col.name] = new Float32Array(col.values);
-    }
-  }
-  
-  return result;
-}
-
-/**
- * Decode categorical properties to indexed arrays
- */
-function decodeCategoricalProperties(
-  protoProperties: stt.ICategoricalColumn[]
-): Record<string, { indices: Uint8Array; categories: string[] }> {
-  const result: Record<string, { indices: Uint8Array; categories: string[] }> = {};
-  
-  for (const col of protoProperties) {
-    if (col.name && col.categories && col.indices) {
-      result[col.name] = {
-        indices: new Uint8Array(col.indices),
-        categories: col.categories,
-      };
-    }
-  }
-  
-  return result;
-}
-
-/**
- * Create empty binary features structure
- */
-function createEmptyBinaryFeatures(geometryType: GeometryType): BinaryFeatures {
-  return {
-    featureCount: 0,
-    geometryType,
+    featureCount,
+    geometryType: kind,
     positionDimensions: 2,
-    positions: new Float64Array(0),
-    featureIds: new Uint32Array(0),
-    startTimes: new Float32Array(0),
-    endTimes: new Float32Array(0),
-    timeOffset: 0,
-    numericProps: {},
-    categoricalProps: {},
+    positions,
+    startIndices,
+    featureIds,
+    startTimes,
+    endTimes,
+    timeOffset,
+    vertexTimestamps,
+    numericProps,
+    categoricalProps,
   };
 }
 
-function protoGeomTypeToType(protoType: stt.Feature.GeomType): GeometryType {
-  switch (protoType) {
-    case stt.Feature.GeomType.POINT:
-      return GeometryType.Point;
-    case stt.Feature.GeomType.LINESTRING:
-      return GeometryType.LineString;
-    case stt.Feature.GeomType.POLYGON:
-      return GeometryType.Polygon;
-    default:
-      return GeometryType.Point;
-  }
+/**
+ * Decode an uncompressed tile payload into a {@link Tile}.
+ *
+ * @param payload   The decompressed layer-frame bytes.
+ * @param id        The tile identity.
+ * @param timeRange The tile's temporal span (from the archive directory).
+ *                  Optional: the worker / loaders.gl decode paths do not have
+ *                  the archive directory available. When omitted it is
+ *                  defaulted to a zero-width range at the tile's own `t`
+ *                  timestamp — callers that need the precise span (the
+ *                  `Archive` reader) always pass it explicitly.
+ */
+export function decodeTile(
+  payload: Uint8Array,
+  id: TileId,
+  timeRange: TimeRange = { start: id.t, end: id.t }
+): Tile {
+  const rawLayers = parseLayerFrame(payload);
+  const layers: Layer[] = rawLayers.map((raw) => {
+    const table = tableFromIPC(raw.ipc);
+    return {
+      name: raw.name,
+      extent: 0, // coordinates are real lon/lat; no quantization extent
+      features: tableToBinaryFeatures(table),
+    };
+  });
+  return { id, timeRange, layers };
 }

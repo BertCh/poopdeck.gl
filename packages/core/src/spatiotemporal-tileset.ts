@@ -16,8 +16,16 @@ import type {
   TileId,
   BoundingBox,
 } from './types';
+import { estimateTileSize } from './archive';
 
 const DEBUG = false;
+
+/**
+ * Number of consecutive frames a reversed time-delta must persist before the
+ * prefetch direction actually flips. Prevents a single backward scrub frame
+ * from inverting the prefetch direction (direction hysteresis).
+ */
+const DIRECTION_FLIP_THRESHOLD = 3;
 
 export interface SpatiotemporalTilesetOptions {
   /** Maximum concurrent tile requests */
@@ -37,6 +45,13 @@ export interface SpatiotemporalTilesetOptions {
   
   /** Maximum zoom level available in data */
   maxZoom?: number;
+  
+  /** 
+   * Temporal bucket size in milliseconds (from archive metadata).
+   * When set, enables deterministic tile prefetching aligned to bucket boundaries.
+   * This significantly improves cache hits and reduces loading churn.
+   */
+  temporalBucketMs?: number;
   
   /** Refinement strategy: 'best-available' (load parent tiles as fallback) or 'no-overlap' (only exact zoom) */
   refinementStrategy?: 'best-available' | 'no-overlap';
@@ -122,10 +137,28 @@ export class SpatiotemporalTileset {
   private animationSpeed: number = 0;
   private lastUpdateTime: number = 0;
   private isAnimating: boolean = false;
+
+  // Prefetch direction hysteresis. `prefetchDirection` is the committed
+  // direction (+1 forward / -1 backward); `pendingFlipCount` counts how many
+  // consecutive frames pointed the opposite way.
+  private prefetchDirection: 1 | -1 = 1;
+  private pendingFlipCount: number = 0;
+
+  // Running byte total of decoded tiles held in `this.tiles`. Maintained
+  // incrementally so eviction never re-sums every frame.
+  private currentCacheBytes: number = 0;
   
   // Separate queues for priority management
   private priorityQueue: TileId[] = []; // High priority - current time tiles
   private prefetchQueue: TileId[] = []; // Low priority - future tiles
+
+  // Prefetch wall-clock debounce. Without this, every tick of the time
+  // controller that crosses the tileset update threshold triggers a full
+  // prefetchFutureTiles() pass — building thousands of getAvailableTiles
+  // queries each time. We coalesce to one pass per ~250ms wall-clock.
+  private static readonly PREFETCH_DEBOUNCE_MS = 250;
+  private lastPrefetchAt = 0;
+  private prefetchPendingTimer: ReturnType<typeof setTimeout> | null = null;
   
   // Currently needed tile keys - computed during selectAndLoadTiles()
   // This is the authoritative set of tiles that should be visible for current viewport/time
@@ -137,16 +170,23 @@ export class SpatiotemporalTileset {
   
   constructor(options: SpatiotemporalTilesetOptions) {
     this.options = {
-      maxRequests: options.maxRequests ?? 64, // Higher for parallel animation loading
-      debounceTime: options.debounceTime ?? 0, // No debounce by default for smooth animation
-      maxCacheSize: options.maxCacheSize ?? 2000, // Large cache for animation loops with big datasets
-      maxCacheByteSize: options.maxCacheByteSize ?? 2 * 1024 * 1024 * 1024, // 2GB for large datasets
+      // 12 is the practical ceiling: browsers cap concurrent fetches per
+      // origin (~6 HTTP/1.1, more under HTTP/2 multiplexing) and beyond that
+      // we just queue inside the browser while the main-thread decode
+      // backlog grows.
+      maxRequests: options.maxRequests ?? 12,
+      debounceTime: options.debounceTime ?? 0,
+      maxCacheSize: options.maxCacheSize ?? 2000,
+      maxCacheByteSize: options.maxCacheByteSize ?? 2 * 1024 * 1024 * 1024,
       minZoom: options.minZoom ?? 0,
       maxZoom: options.maxZoom ?? 14,
-      refinementStrategy: options.refinementStrategy ?? 'best-available', // Default: load parent tiles as fallback
-      enablePrefetch: options.enablePrefetch ?? true, // Enable by default
-      prefetchAhead: options.prefetchAhead ?? 60000, // 60 seconds ahead default for smooth animation
-      prefetchSteps: options.prefetchSteps ?? 15, // Aggressive prefetching to prevent flashing
+      temporalBucketMs: options.temporalBucketMs ?? 3600 * 1000,
+      refinementStrategy: options.refinementStrategy ?? 'best-available',
+      enablePrefetch: options.enablePrefetch ?? true,
+      // Defaults sized for a few real-time seconds of buffer. See the
+      // matching tuning notes in SpatioTemporalLayer.defaultProps.
+      prefetchAhead: options.prefetchAhead ?? 30000,
+      prefetchSteps: options.prefetchSteps ?? 4,
       getAvailableTiles: options.getAvailableTiles,
       getTileData: options.getTileData,
       onTileLoad: options.onTileLoad ?? (() => {}),
@@ -155,6 +195,96 @@ export class SpatiotemporalTileset {
     };
   }
   
+  /**
+   * Align a timestamp to the nearest bucket boundary (floor)
+   */
+  private alignToBucket(time: number): number {
+    const bucket = this.options.temporalBucketMs;
+    return Math.floor(time / bucket) * bucket;
+  }
+  
+  /**
+   * Maximum number of bucket boundaries a single prefetch pass may enumerate.
+   * Without this cap a large `prefetchAhead * prefetchSteps` combined with a
+   * small `temporalBucketMs` (e.g. the earthquakes dataset: ~13e9ms ahead at a
+   * 1-hour bucket) produces millions of buckets. That overflows the V8 hard
+   * limit on `Promise.all`/`allSettled` (~2^21 elements) and throws
+   * "RangeError: Too many elements passed to Promise.all", which aborts all
+   * tile loading. Capping keeps prefetch bounded and best-effort.
+   */
+  private static readonly MAX_PREFETCH_BUCKETS = 4096;
+
+  /**
+   * Get all bucket boundaries that overlap with a time range.
+   *
+   * The result length is hard-capped at MAX_PREFETCH_BUCKETS. If the requested
+   * range would exceed that, the bucket step is coarsened so the range is
+   * still fully covered with at most MAX_PREFETCH_BUCKETS entries.
+   */
+  private getBucketBoundaries(start: number, end: number): number[] {
+    const bucket = this.options.temporalBucketMs;
+    const firstBucket = this.alignToBucket(start);
+    const lastBucket = this.alignToBucket(end);
+
+    const span = lastBucket - firstBucket;
+    const naiveCount = Math.floor(span / bucket) + 1;
+    // Coarsen the step (in whole-bucket multiples) if the naive enumeration
+    // would exceed the cap, so a huge prefetch range is sampled rather than
+    // fully enumerated.
+    let step = bucket;
+    if (naiveCount > SpatiotemporalTileset.MAX_PREFETCH_BUCKETS) {
+      const multiple = Math.ceil(
+        naiveCount / SpatiotemporalTileset.MAX_PREFETCH_BUCKETS,
+      );
+      step = bucket * multiple;
+    }
+
+    const buckets: number[] = [];
+    for (
+      let t = firstBucket;
+      t <= lastBucket &&
+      buckets.length < SpatiotemporalTileset.MAX_PREFETCH_BUCKETS;
+      t += step
+    ) {
+      buckets.push(t);
+    }
+    return buckets;
+  }
+  
+  /**
+   * Update the committed prefetch direction with hysteresis.
+   *
+   * A single frame whose time delta points opposite to the committed direction
+   * does NOT flip prefetch — the opposite sign must persist for
+   * {@link DIRECTION_FLIP_THRESHOLD} consecutive frames. This stops a stray
+   * backward scrub frame from inverting (and invalidating) the prefetch queue.
+   */
+  private updatePrefetchDirection(simTimeDelta: number): void {
+    if (simTimeDelta === 0) return; // No movement: keep current direction.
+
+    const observed: 1 | -1 = simTimeDelta > 0 ? 1 : -1;
+    if (observed === this.prefetchDirection) {
+      this.pendingFlipCount = 0;
+      return;
+    }
+
+    this.pendingFlipCount++;
+    if (this.pendingFlipCount >= DIRECTION_FLIP_THRESHOLD) {
+      this.prefetchDirection = observed;
+      this.pendingFlipCount = 0;
+    }
+  }
+
+  /** Current committed prefetch direction (+1 forward, -1 backward). */
+  getPrefetchDirection(): 1 | -1 {
+    return this.prefetchDirection;
+  }
+
+  /** Most recent estimated animation speed (sim-ms per real-ms). */
+  getAnimationSpeed(): number {
+    return this.animationSpeed;
+  }
+
   /**
    * Update animation state for prefetching
    * Call this when animation starts/stops or speed changes
@@ -167,9 +297,11 @@ export class SpatiotemporalTileset {
     
     if (this.currentViewport) {
       if (isAnimating && this.options.enablePrefetch) {
-        // When animation starts, trigger prefetch immediately
-        if (DEBUG) console.log('[Tileset] Triggering immediate prefetch');
-        this.prefetchFutureTiles();
+        // When animation starts, schedule prefetch (debounced). This used to
+        // call prefetchFutureTiles() directly, which combined with the
+        // selectAndLoadTiles() prefetch above produced two back-to-back fans
+        // of thousands of queries.
+        this.schedulePrefetch();
       } else if (!isAnimating && wasAnimating) {
         // When animation pauses, ensure tiles for current time are loaded
         // This handles the case where loading was lagging behind animation
@@ -177,6 +309,31 @@ export class SpatiotemporalTileset {
         this.selectAndLoadTiles();
       }
     }
+  }
+
+  /**
+   * Run prefetchFutureTiles(), but at most once per PREFETCH_DEBOUNCE_MS of
+   * wall-clock time. Coalesces the per-tick "selectAndLoadTiles → prefetch"
+   * storm during fast playback into one prefetch pass per ~quarter-second.
+   */
+  private schedulePrefetch(): void {
+    if (this.prefetchPendingTimer !== null) {
+      // Already deferred; the existing timer will run a fresh prefetch.
+      return;
+    }
+    const now = Date.now();
+    const elapsed = now - this.lastPrefetchAt;
+    if (elapsed >= SpatiotemporalTileset.PREFETCH_DEBOUNCE_MS) {
+      this.lastPrefetchAt = now;
+      this.prefetchFutureTiles();
+      return;
+    }
+    const wait = SpatiotemporalTileset.PREFETCH_DEBOUNCE_MS - elapsed;
+    this.prefetchPendingTimer = setTimeout(() => {
+      this.prefetchPendingTimer = null;
+      this.lastPrefetchAt = Date.now();
+      this.prefetchFutureTiles();
+    }, wait);
   }
   
   /**
@@ -194,11 +351,17 @@ export class SpatiotemporalTileset {
     
     // Track animation speed based on time changes
     const now = Date.now();
-    if (previousTime !== undefined && this.lastUpdateTime > 0) {
-      const realTimeDelta = now - this.lastUpdateTime;
+    if (previousTime !== undefined) {
       const simTimeDelta = viewport.time - previousTime;
-      if (realTimeDelta > 0 && realTimeDelta < 1000) { // Ignore large gaps
-        this.animationSpeed = simTimeDelta / realTimeDelta;
+      // Direction tracking only needs the SIGN of the time delta — update it
+      // regardless of wall-clock spacing (consecutive updates may share a ms).
+      this.updatePrefetchDirection(simTimeDelta);
+
+      if (this.lastUpdateTime > 0) {
+        const realTimeDelta = now - this.lastUpdateTime;
+        if (realTimeDelta > 0 && realTimeDelta < 1000) { // Ignore large gaps
+          this.animationSpeed = simTimeDelta / realTimeDelta;
+        }
       }
     }
     this.lastUpdateTime = now;
@@ -291,9 +454,9 @@ export class SpatiotemporalTileset {
       for (const tileId of availableTileIds) {
         const key = this.tileIdToKey(tileId);
         neededTileKeys.add(key);
-        
+
         let header = this.tiles.get(key);
-        
+
         if (!header) {
           // Create new tile header
           header = {
@@ -306,7 +469,10 @@ export class SpatiotemporalTileset {
             byteSize: 0,
           };
           this.tiles.set(key, header);
-          
+
+          // Cache MISS: a needed tile that must be fetched from the network.
+          this.cacheStats.misses++;
+
           // Add to HIGH PRIORITY queue for current time tiles
           // These always load before prefetch tiles
           if (z === zoom) {
@@ -319,6 +485,39 @@ export class SpatiotemporalTileset {
         } else {
           // Update last used time
           header.lastUsed = now;
+
+          if (header.isLoaded) {
+            // Cache HIT: already-decoded tile served straight from memory.
+            this.cacheStats.hits++;
+          } else {
+            // Tile has a header but is not loaded yet. It may have been
+            // created by prefetch (low priority) or previously cancelled.
+            // Either way it is now needed at PRIORITY, so:
+            //  - reset the one-way isCancelled latch so it can load again,
+            //  - promote it out of the prefetch queue into the priority queue.
+            header.isCancelled = false;
+
+            if (!header.isLoading) {
+              const inPriority = this.priorityQueue.some(
+                (qid) => this.tileIdToKey(qid) === key
+              );
+              if (!inPriority) {
+                // Remove from the low-priority prefetch queue if present.
+                const pfIdx = this.prefetchQueue.findIndex(
+                  (qid) => this.tileIdToKey(qid) === key
+                );
+                if (pfIdx !== -1) {
+                  this.prefetchQueue.splice(pfIdx, 1);
+                }
+                // Enqueue at priority (front for primary zoom).
+                if (z === zoom) {
+                  this.priorityQueue.unshift(tileId);
+                } else {
+                  this.priorityQueue.push(tileId);
+                }
+              }
+            }
+          }
         }
       }
     }
@@ -332,11 +531,10 @@ export class SpatiotemporalTileset {
     // This frees up bandwidth for current tiles
     this.cancelSupersededRequests(neededTileKeys);
     
-    // Always prefetch when enabled - don't wait for animation to start
-    // This ensures tiles are pre-loaded for smooth playback from the beginning
+    // Prefetch when enabled, but debounced to once per PREFETCH_DEBOUNCE_MS
+    // of wall-clock — see schedulePrefetch().
     if (this.options.enablePrefetch) {
-      if (DEBUG) console.log('[Tileset] Prefetch enabled, triggering prefetch');
-      this.prefetchFutureTiles();
+      this.schedulePrefetch();
     }
     
     // Remove tiles not in viewport (with grace period)
@@ -353,76 +551,76 @@ export class SpatiotemporalTileset {
    * Prefetch tiles ahead of current animation time
    * This ensures smooth playback by loading tiles before they're needed
    * 
-   * PERFORMANCE: Prefetch intensity scales with playback speed:
-   * - Paused/slow: fewer steps (1-2)
-   * - Normal speed: moderate steps (3-4)
-   * - Fast playback: full prefetch steps
+   * OPTIMIZATION: Uses deterministic bucket-aligned prefetching when temporalBucketMs is set.
+   * Instead of arbitrary future times, we prefetch at exact bucket boundaries.
+   * This ensures:
+   * - Predictable tile IDs (better cache hits)
+   * - Fewer unique queries (buckets are shared across time windows)
+   * - Reduced loading churn during animation
    */
   private async prefetchFutureTiles(): Promise<void> {
     if (!this.currentViewport) return;
     
     const { bounds, zoom, time, timeWindow } = this.currentViewport;
-    const { prefetchAhead, prefetchSteps } = this.options;
+    const { prefetchAhead, prefetchSteps, temporalBucketMs } = this.options;
     
-    // Determine prefetch direction based on animation speed
-    const direction = this.animationSpeed >= 0 ? 1 : -1;
-    
-    // Scale prefetch steps based on animation speed
-    // We're more aggressive now to prevent flashing during playback
-    // Speed = sim time delta / real time delta (typically 100-1000x for most datasets)
-    const absSpeed = Math.abs(this.animationSpeed);
-    let effectiveSteps: number;
-    if (absSpeed < 0.01) {
-      // Completely paused - still prefetch a few steps for scrubbing
-      effectiveSteps = Math.max(5, Math.floor(prefetchSteps * 0.5));
-    } else if (absSpeed < 1.0) {
-      // Very slow playback - moderate prefetch
-      effectiveSteps = Math.max(8, Math.floor(prefetchSteps * 0.7));
-    } else {
-      // Normal to fast playback - full prefetch
-      effectiveSteps = prefetchSteps;
-    }
-    
-    // prefetchAhead is expected to already be in SIMULATION TIME units
-    // (App.tsx calculates it as: playbackSpeed * 5000 or timeWindow, whichever is larger)
-    // So we use it directly without additional scaling
-    // When paused (animationSpeed ~= 0), use timeWindow as sensible default
-    const effectivePrefetchAhead = prefetchAhead > 0 ? prefetchAhead : timeWindow;
-    
-    if (DEBUG) console.log('[Tileset] prefetchFutureTiles:', { 
-      time: new Date(time).toISOString(),
-      timeWindow,
-      effectivePrefetchAhead,
-      effectiveSteps,
-      absSpeed,
-      direction
-    });
+    // Use the hysteresis-smoothed committed prefetch direction. A single
+    // backward scrub frame will not flip this (see updatePrefetchDirection).
+    const direction = this.prefetchDirection;
     
     // Get zoom levels to prefetch
     const zoomLevels = this.getZoomLevelsToLoad(zoom);
     const now = Date.now();
     
-    // Build all prefetch queries to run in parallel
-    // Instead of nested sequential loops, we create all query combinations upfront
+    // Calculate the time range we need to prefetch
+    // prefetchAhead is in simulation time units
+    const effectivePrefetchAhead = prefetchAhead > 0 ? prefetchAhead : timeWindow;
+    const prefetchEndTime = time + (direction * effectivePrefetchAhead * prefetchSteps);
+    
+    // Get all bucket boundaries we need to prefetch
+    // This is the key optimization: we prefetch at deterministic bucket boundaries
+    const startTime = direction > 0 ? time : prefetchEndTime;
+    const endTime = direction > 0 ? prefetchEndTime : time;
+    const bucketBoundaries = this.getBucketBoundaries(
+      startTime - timeWindow / 2,
+      endTime + timeWindow / 2
+    );
+    
+    if (DEBUG) console.log('[Tileset] Bucket-aligned prefetch:', { 
+      time: new Date(time).toISOString(),
+      temporalBucketMs,
+      bucketsToFetch: bucketBoundaries.length,
+      firstBucket: bucketBoundaries[0] ? new Date(bucketBoundaries[0]).toISOString() : 'none',
+      lastBucket: bucketBoundaries[bucketBoundaries.length - 1] ? new Date(bucketBoundaries[bucketBoundaries.length - 1]).toISOString() : 'none',
+    });
+    
+    // Build prefetch queries for each bucket boundary
+    // Each bucket represents a deterministic time range
     const prefetchQueries: Array<{
-      step: number;
+      bucketTime: number;
       zoom: number;
       timeRange: { start: number; end: number };
     }> = [];
     
-    for (let step = 1; step <= effectiveSteps; step++) {
-      const futureTime = time + (direction * effectivePrefetchAhead * step);
-      const futureTimeRange = {
-        start: futureTime - timeWindow / 2,
-        end: futureTime + timeWindow / 2,
+    // Hard cap on concurrent prefetch queries. Each query becomes a promise in
+    // the Promise.allSettled below; keeping the total well under the V8 limit
+    // (~2^21) guarantees we never throw "Too many elements passed to
+    // Promise.all" regardless of zoom-level count or bucket coarsening.
+    const MAX_PREFETCH_QUERIES = 8192;
+    outer: for (const bucketTime of bucketBoundaries) {
+      // Query for the bucket's time range
+      const timeRange = {
+        start: bucketTime,
+        end: bucketTime + temporalBucketMs,
       };
-      
+
       for (const z of zoomLevels) {
-        prefetchQueries.push({ step, zoom: z, timeRange: futureTimeRange });
+        prefetchQueries.push({ bucketTime, zoom: z, timeRange });
+        if (prefetchQueries.length >= MAX_PREFETCH_QUERIES) break outer;
       }
     }
-    
-    if (DEBUG) console.log('[Tileset] Prefetch queries:', prefetchQueries.length, 'first:', prefetchQueries[0]?.timeRange);
+
+    if (DEBUG) console.log('[Tileset] Prefetch queries:', prefetchQueries.length);
     
     // Execute ALL prefetch queries IN PARALLEL
     const results = await Promise.allSettled(
@@ -491,57 +689,55 @@ export class SpatiotemporalTileset {
   }
   
   /**
-   * Process request queues with concurrency limit
-   * Priority queue is processed first, prefetch queue uses remaining capacity
-   * 
-   * PERFORMANCE: Prefetch can use up to 50% of maxRequests for aggressive pre-loading.
-   * Priority tiles always processed first to ensure current frame tiles load quickly.
+   * Process request queues with concurrency limit.
+   *
+   * Priority (current-time) tiles always get first call on the available
+   * slots. Prefetch is capped to half of maxRequests (animating) or a third
+   * when paused — both substantially below the old 75 % / 50 % share. The
+   * priority queue can drain into prefetch's reserved slots, but prefetch
+   * never starves priority: if the priority queue is non-empty after this
+   * pass, no prefetch starts at all.
    */
   private async processRequestQueue(): Promise<void> {
-    // Calculate how many more requests we can start
     const availableSlots = this.options.maxRequests - this.activeRequests.size;
     if (DEBUG && (this.priorityQueue.length > 0 || this.prefetchQueue.length > 0)) {
-      console.log('[Tileset] processRequestQueue:', { 
-        availableSlots, 
+      console.log('[Tileset] processRequestQueue:', {
+        availableSlots,
         activeRequests: this.activeRequests.size,
-        priorityQueue: this.priorityQueue.length, 
-        prefetchQueue: this.prefetchQueue.length 
+        priorityQueue: this.priorityQueue.length,
+        prefetchQueue: this.prefetchQueue.length,
       });
     }
     if (availableSlots <= 0) return;
-    
-    // Allow prefetch to use up to 75% of slots for aggressive pre-loading during animation
-    // Priority tiles are always processed first, so they get bandwidth when needed
-    // During animation, prefetch is critical to prevent flashing
-    const maxPrefetchSlots = this.isAnimating 
-      ? Math.floor(this.options.maxRequests * 0.75)  // 75% during animation for smooth playback
-      : Math.floor(this.options.maxRequests * 0.5); // 50% when paused
-    // Reserve minimal slots for priority - prefetch is more important for streaming
-    const priorityReserved = this.isAnimating ? Math.min(2, availableSlots) : 0;
-    
+
     let usedSlots = 0;
-    
-    // Process HIGH PRIORITY queue first (current time tiles)
-    while (
-      this.priorityQueue.length > 0 &&
-      usedSlots < availableSlots
-    ) {
+
+    // Drain HIGH PRIORITY queue first — current viewport tiles always come
+    // before any prefetch work.
+    while (this.priorityQueue.length > 0 && usedSlots < availableSlots) {
       const tileId = this.priorityQueue.shift()!;
       if (this.startTileLoad(tileId)) {
         usedSlots++;
       }
     }
-    
-    // Process LOW PRIORITY prefetch queue with remaining slots
-    // Allow prefetch up to 50% of total capacity for smooth animation
-    const remainingSlots = availableSlots - Math.max(usedSlots, priorityReserved);
-    const prefetchSlots = Math.min(remainingSlots, maxPrefetchSlots);
+
+    // If priority is still backed up after we used every slot, do not start
+    // prefetch on this pass — let the next finally-handler retry.
+    if (this.priorityQueue.length > 0) return;
+
+    const remainingSlots = availableSlots - usedSlots;
+    // Animation phase tolerates more prefetch (smoothing the play head);
+    // paused phase keeps a tight cap so a stale prefetch queue can't tie up
+    // bandwidth when the user starts panning again.
+    const prefetchShare = this.isAnimating ? 0.5 : 0.33;
+    const prefetchCap = Math.max(
+      1,
+      Math.floor(this.options.maxRequests * prefetchShare),
+    );
+    const prefetchSlots = Math.min(remainingSlots, prefetchCap);
     let prefetchUsed = 0;
-    
-    while (
-      this.prefetchQueue.length > 0 &&
-      prefetchUsed < prefetchSlots
-    ) {
+
+    while (this.prefetchQueue.length > 0 && prefetchUsed < prefetchSlots) {
       const tileId = this.prefetchQueue.shift()!;
       if (this.startTileLoad(tileId)) {
         prefetchUsed++;
@@ -558,32 +754,35 @@ export class SpatiotemporalTileset {
    */
   private startTileLoad(tileId: TileId): boolean {
     const key = this.tileIdToKey(tileId);
-    
-    // Skip if already loading or loaded
+
+    // Skip if already loading, loaded, or cancelled.
+    // The isCancelled latch is reset in selectAndLoadTiles() when a tile is
+    // re-needed, so a cancelled-then-re-needed tile CAN load again.
     const header = this.tiles.get(key);
-    if (!header || header.isLoading || header.isLoaded) {
+    if (!header || header.isLoading || header.isLoaded || header.isCancelled) {
       return false;
     }
-    
+
     // Create AbortController for this request
     const abortController = new AbortController();
-    
+
     // Mark as loading
     header.isLoading = true;
     header.abortController = abortController;
     this.activeRequests.add(key);
-    
+
     // Load tile with abort signal
     this.options.getTileData(tileId, abortController.signal)
       .then((tile) => {
         if (!header.isCancelled && tile) {
           header.tile = tile;
           header.isLoaded = true;
-          header.byteSize = this.estimateTileSize(tile);
-          this.cacheStats.hits++;
-          
+          header.byteSize = estimateTileSize(tile);
+          // Incremental byte accounting — never re-summed every frame.
+          this.currentCacheBytes += header.byteSize;
+
           this.options.onTileLoad?.(tile);
-          
+
           // Trigger re-render
           this.frameNumber++;
         }
@@ -641,68 +840,65 @@ export class SpatiotemporalTileset {
     // 120 seconds during animation (2 minutes of real-time buffer)
     // 30 seconds when paused (keep recently viewed tiles)
     const GRACE_PERIOD = this.isAnimating ? 120000 : 30000;
-    
-    // Calculate current cache usage
-    let currentCacheSize = 0;
-    let currentCacheBytes = 0;
-    
+
+    // Loaded-tile count is derived from the map; byte total is the incrementally
+    // maintained running counter (no per-frame re-sum).
+    let loadedCount = 0;
     for (const [, header] of this.tiles) {
-      if (header.isLoaded && header.tile) {
-        currentCacheSize++;
-        currentCacheBytes += header.byteSize;
-      }
+      if (header.isLoaded && header.tile) loadedCount++;
     }
-    
+    let cacheBytes = this.currentCacheBytes;
+
     // Only evict if we're over limits
-    const overSizeLimit = currentCacheSize > this.options.maxCacheSize;
-    const overByteLimit = currentCacheBytes > this.options.maxCacheByteSize;
-    
+    const overSizeLimit = loadedCount > this.options.maxCacheSize;
+    const overByteLimit = cacheBytes > this.options.maxCacheByteSize;
+
     if (!overSizeLimit && !overByteLimit) {
       // Under limits - only evict tiles outside grace period
       const tilesToEvict: string[] = [];
-      
+
       for (const [tileKey, header] of this.tiles) {
         const isNeeded = neededTileKeys.has(tileKey);
         const isRecent = (now - header.lastUsed) < GRACE_PERIOD;
-        
+
         if (!isNeeded && !isRecent) {
           tilesToEvict.push(tileKey);
         }
       }
-      
+
       this.evictTiles(tilesToEvict);
       return;
     }
-    
+
     // Over limits - use LRU to evict oldest tiles
     // But NEVER evict tiles in current viewport (neededTileKeys)
     const sortedTiles = Array.from(this.tiles.entries())
       .filter(([key]) => !neededTileKeys.has(key)) // Never evict needed tiles
       .sort((a, b) => a[1].lastUsed - b[1].lastUsed); // Oldest first
-    
+
     const tilesToEvict: string[] = [];
-    
+
     for (const [tileKey, header] of sortedTiles) {
       if (!header.isLoaded) continue;
-      
+
       // Check if we're still over limits
-      const stillOverSize = currentCacheSize > this.options.maxCacheSize;
-      const stillOverBytes = currentCacheBytes > this.options.maxCacheByteSize;
-      
+      const stillOverSize = loadedCount > this.options.maxCacheSize;
+      const stillOverBytes = cacheBytes > this.options.maxCacheByteSize;
+
       if (!stillOverSize && !stillOverBytes) {
         break; // We're under limits now, stop evicting
       }
-      
+
       tilesToEvict.push(tileKey);
-      currentCacheSize--;
-      currentCacheBytes -= header.byteSize;
+      loadedCount--;
+      cacheBytes -= header.byteSize;
     }
-    
+
     this.evictTiles(tilesToEvict);
   }
-  
+
   /**
-   * Actually evict tiles from cache
+   * Actually evict tiles from cache. Keeps the running byte counter accurate.
    */
   private evictTiles(tileKeys: string[]): void {
     for (const tileKey of tileKeys) {
@@ -710,6 +906,8 @@ export class SpatiotemporalTileset {
       if (header) {
         if (header.tile) {
           this.options.onTileUnload?.(header.tile);
+          // Incrementally decrement the running byte total.
+          this.currentCacheBytes -= header.byteSize;
         }
         this.tiles.delete(tileKey);
         this.cacheStats.evictions++;
@@ -718,32 +916,81 @@ export class SpatiotemporalTileset {
   }
   
   /**
-   * Get visible tiles for rendering
-   * 
-   * PERFORMANCE OPTIMIZED - O(k) where k = needed tiles count:
-   * - Uses pre-computed neededTileKeys from selectAndLoadTiles()
-   * - No searching through all cached tiles
-   * - Just iterates over the known-needed set and returns loaded ones
-   * 
-   * The neededTileKeys set is computed using spatial/temporal knowledge:
-   * - Viewport bounds + zoom -> which (x,y) tiles are visible
-   * - Current time + window -> which temporal tiles overlap
-   * - This is already computed in selectAndLoadTiles() via getTileIdsInBounds()
+   * Get visible tiles for rendering.
+   *
+   * With `refinementStrategy: 'best-available'` we also load parent tiles
+   * one and two zooms below the requested zoom, so the viewport has
+   * SOMETHING to show while the detailed tiles stream in. Once the detailed
+   * tiles arrive the parents become redundant — but they still appear in
+   * `neededTileKeys` and would otherwise get consolidated into the same
+   * draw call, which on a high-density dataset (e.g. ship-traffic ~1.29 M
+   * points) tripled the per-rebuild work and produced 2–3 s consolidation
+   * stalls during playback.
+   *
+   * Here we de-dupe: emit every loaded tile at the highest zoom present in
+   * the needed set, then for each loaded lower-zoom parent only emit it if
+   * at least one of its primary-zoom children is missing (i.e. it's still
+   * earning its keep as a fallback).
+   *
+   * O(k) overall, where k = neededTileKeys.size — the inner cover-check is
+   * 4^(maxZoomDiff) which in practice is 16 (zDiff ≤ 2).
    */
   getVisibleTiles(): Tile[] {
-    // Fast path: iterate only over tiles we know we need
-    // This is O(k) where k = neededTileKeys.size (typically 10-50 tiles)
-    // Not O(n) where n = total cached tiles (could be 1000+)
-    
-    const tiles: Tile[] = [];
-    
+    if (this.neededTileKeys.size === 0) return [];
+
+    // Find the primary (highest) zoom level that has a loaded tile.
+    let primaryZoom = -1;
     for (const key of this.neededTileKeys) {
       const header = this.tiles.get(key);
-      if (header?.isLoaded && header.tile) {
+      if (!header?.isLoaded) continue;
+      if (header.id.z > primaryZoom) primaryZoom = header.id.z;
+    }
+    if (primaryZoom < 0) return []; // Nothing loaded yet.
+
+    const tiles: Tile[] = [];
+    // Cover set at primary zoom: "x/y/t" of loaded primary tiles.
+    const primaryCover = new Set<string>();
+
+    for (const key of this.neededTileKeys) {
+      const header = this.tiles.get(key);
+      if (!header?.isLoaded || !header.tile) continue;
+      if (header.id.z === primaryZoom) {
         tiles.push(header.tile);
+        primaryCover.add(`${header.id.x}/${header.id.y}/${header.id.t}`);
       }
     }
-    
+
+    // Pass 2: keep a parent only if at least one of its child cells at the
+    // primary zoom is uncovered. This avoids paying the parent's
+    // consolidation cost once the children have finished streaming, while
+    // still preserving the "show coarse data until detail arrives" promise.
+    for (const key of this.neededTileKeys) {
+      const header = this.tiles.get(key);
+      if (!header?.isLoaded || !header.tile) continue;
+      if (header.id.z === primaryZoom) continue;
+      const { z, x, y, t } = header.id;
+      const zDiff = primaryZoom - z;
+      // Defensive: tiles at zooms ABOVE the primary should not appear, but
+      // if they do, fall through to include them.
+      if (zDiff <= 0) {
+        tiles.push(header.tile);
+        continue;
+      }
+      const range = 1 << zDiff;
+      const baseX = x << zDiff;
+      const baseY = y << zDiff;
+      let needed = false;
+      for (let dy = 0; dy < range && !needed; dy++) {
+        for (let dx = 0; dx < range; dx++) {
+          if (!primaryCover.has(`${baseX + dx}/${baseY + dy}/${t}`)) {
+            needed = true;
+            break;
+          }
+        }
+      }
+      if (needed) tiles.push(header.tile);
+    }
+
     return tiles;
   }
   
@@ -757,18 +1004,24 @@ export class SpatiotemporalTileset {
   }
   
   /**
-   * Get cache statistics
+   * Get cache statistics.
+   *
+   * `hits` and `misses` reflect genuine cache behaviour: a hit is a needed tile
+   * already decoded in memory, a miss is a needed tile that required a fetch.
    */
   getCacheStats() {
+    const total = this.cacheStats.hits + this.cacheStats.misses;
     return {
       ...this.cacheStats,
       tileCount: this.tiles.size,
+      cacheBytes: this.currentCacheBytes,
+      hitRate: total > 0 ? this.cacheStats.hits / total : 0,
       activeRequests: this.activeRequests.size,
       priorityQueueLength: this.priorityQueue.length,
       prefetchQueueLength: this.prefetchQueue.length,
     };
   }
-  
+
   /**
    * Clear all tiles
    */
@@ -778,15 +1031,16 @@ export class SpatiotemporalTileset {
         this.options.onTileUnload?.(header.tile);
       }
     }
-    
+
     // Clear needed tiles tracking
     this.neededTileKeys.clear();
     this.neededTilesVersion++;
-    
+
     this.tiles.clear();
     this.priorityQueue = [];
     this.prefetchQueue = [];
     this.activeRequests.clear();
+    this.currentCacheBytes = 0;
   }
   
   /**
@@ -795,6 +1049,10 @@ export class SpatiotemporalTileset {
   finalize(): void {
     if (this.debounceTimer) {
       clearTimeout(this.debounceTimer);
+    }
+    if (this.prefetchPendingTimer !== null) {
+      clearTimeout(this.prefetchPendingTimer);
+      this.prefetchPendingTimer = null;
     }
     this.clear();
   }
@@ -805,43 +1063,7 @@ export class SpatiotemporalTileset {
     return `${id.z}/${id.x}/${id.y}/${id.t}`;
   }
   
-  // Helper methods removed - now using archive's getTileIdsInBounds
-  // which has its own spatial tile calculation
-  
-  private estimateTileSize(tile: Tile): number {
-    // Calculate tile size from binary features
-    let size = 1000; // Base overhead
-    
-    if (!tile?.layers) {
-      return size;
-    }
-    
-    for (const layer of tile.layers) {
-      const features = layer?.features;
-      if (!features) {
-        continue;
-      }
-      
-      // Use binary feature sizes directly
-      size += features.positions.byteLength;
-      size += features.featureIds.byteLength;
-      size += features.startTimes.byteLength;
-      size += features.endTimes.byteLength;
-      
-      if (features.startIndices) {
-        size += features.startIndices.byteLength;
-      }
-      
-      for (const arr of Object.values(features.numericProps)) {
-        size += arr.byteLength;
-      }
-      
-      for (const { indices } of Object.values(features.categoricalProps)) {
-        size += indices.byteLength;
-      }
-    }
-    
-    return size;
-  }
+  // Tile-size estimation lives in archive.ts (estimateTileSize) so the archive
+  // and the tileset share one complete, consistent accounting implementation.
 }
 

@@ -1,13 +1,16 @@
 /**
- * @stt/core - Core TypeScript library for reading spatiotemporal tiles
+ * @stt/core — read SpatioTemporal Tiles archives in the browser.
  */
 
+export * from './types';
 export * from './archive';
 export * from './tile';
-export * from './types';
-export * from './cache';
 export * from './spatiotemporal-tileset';
-export * from './stt-loader';
-export * from './binary-features';
-export { BufferPool } from './buffer-pool';
-
+export { decompress, decompressSync } from './compression';
+export {
+  InlineTileDecoder,
+  WorkerTileDecoder,
+  createDefaultTileDecoder,
+  type TileDecoder,
+  type DecodeArgs,
+} from './tile-decoder';
