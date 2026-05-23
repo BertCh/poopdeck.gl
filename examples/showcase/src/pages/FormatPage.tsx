@@ -154,7 +154,8 @@ const FormatPage: React.FC = () => {
             style={{ color: "#A0A7B4", lineHeight: 1.7 }}
           >
             The <code style={{ color: "#1FBAD6" }}>stt-build</code> command-line tool 
-            converts source data (GeoJSON, CSV with coordinates, etc.) into the .stt format.
+            converts GeoParquet files into the .stt format using a memory-efficient streaming 
+            architecture (~50MB per 1M features).
           </p>
 
           <div
@@ -173,22 +174,26 @@ const FormatPage: React.FC = () => {
               className="p-4 overflow-x-auto code-block"
               style={{ color: "#A0A7B4" }}
             >
-{`# Basic usage
-stt-build -i data.geojson -o output.stt
+{`# Basic usage (GeoParquet input)
+stt-build -i data.parquet -o output.stt
 
-# With time column and zoom levels
-stt-build -i earthquakes.csv \\
-  --time-column timestamp \\
+# With time fields and zoom levels
+stt-build -i earthquakes.parquet \\
+  --time-field timestamp \\
+  --time-format unix-ms \\
   --min-zoom 0 \\
   --max-zoom 8 \\
   -o earthquakes.stt
 
-# For path/trajectory data
-stt-build -i taxi-trips.geojson \\
-  --geometry-type path \\
-  --start-time-column pickup_time \\
-  --end-time-column dropoff_time \\
-  -o taxi-trips.stt`}
+# For path/trajectory data with duration
+stt-build -i taxi-trips.parquet \\
+  --time-field timestamp \\
+  --end-time-field end_timestamp \\
+  --time-format unix-ms \\
+  -o taxi-trips.stt
+
+# Convert GeoJSON to GeoParquet first
+ogr2ogr -f Parquet input.parquet input.geojson`}
             </pre>
           </div>
 
@@ -213,23 +218,27 @@ stt-build -i taxi-trips.geojson \\
               <tbody style={{ color: "#A0A7B4" }}>
                 <tr style={{ borderTop: "1px solid #3A414C" }}>
                   <td className="px-4 py-3 font-mono" style={{ color: "#1FBAD6" }}>-i, --input</td>
-                  <td className="px-4 py-3">Input file path (GeoJSON, CSV, etc.)</td>
+                  <td className="px-4 py-3">Input GeoParquet file (.parquet or .geoparquet)</td>
                 </tr>
                 <tr style={{ borderTop: "1px solid #3A414C" }}>
                   <td className="px-4 py-3 font-mono" style={{ color: "#1FBAD6" }}>-o, --output</td>
                   <td className="px-4 py-3">Output .stt file path</td>
                 </tr>
                 <tr style={{ borderTop: "1px solid #3A414C" }}>
-                  <td className="px-4 py-3 font-mono" style={{ color: "#1FBAD6" }}>--time-column</td>
+                  <td className="px-4 py-3 font-mono" style={{ color: "#1FBAD6" }}>--time-field</td>
                   <td className="px-4 py-3">Column name containing timestamps</td>
+                </tr>
+                <tr style={{ borderTop: "1px solid #3A414C" }}>
+                  <td className="px-4 py-3 font-mono" style={{ color: "#1FBAD6" }}>--end-time-field</td>
+                  <td className="px-4 py-3">Optional end timestamp for features with duration</td>
                 </tr>
                 <tr style={{ borderTop: "1px solid #3A414C" }}>
                   <td className="px-4 py-3 font-mono" style={{ color: "#1FBAD6" }}>--min-zoom, --max-zoom</td>
                   <td className="px-4 py-3">Zoom level range for tile generation</td>
                 </tr>
                 <tr style={{ borderTop: "1px solid #3A414C" }}>
-                  <td className="px-4 py-3 font-mono" style={{ color: "#1FBAD6" }}>--geometry-type</td>
-                  <td className="px-4 py-3">Point, path, or polygon geometry type</td>
+                  <td className="px-4 py-3 font-mono" style={{ color: "#1FBAD6" }}>--time-format</td>
+                  <td className="px-4 py-3">Timestamp format: iso8601, unix-ms, or unix-sec</td>
                 </tr>
               </tbody>
             </table>

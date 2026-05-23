@@ -40,15 +40,13 @@ const layer = new AnimatedPathLayer({
   pathColor: [79, 195, 247], // Cyan paths
   pathWidth: 3,
   widthUnits: 'pixels',
-  trail: true,
-  trailLength: 5000,
 });`;
 
 const tripsLayerExample = `import { AnimatedTripsLayer, TimeController } from '@stt/deck.gl';
 
 const timeController = new TimeController({
-  initialTime: 1420070411000,
-  speed: 2678400000 / 7200, // 1 month in 2 hours
+  initialTime: 1420070400000, // 2015-01-01 00:00 UTC
+  speed: 142985000 / 600, // 1.5 days in 10 minutes
   loop: true,
 });
 
@@ -161,4 +159,5 @@ export function getCodeExample(type: DatasetType, datasetId: string): string {
   // Fall back to type-based example
   return codeExamples[type] || tripsLayerExample;
 }
+
 

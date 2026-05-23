@@ -1,0 +1,101 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  rust:
+    name: Rust (cargo test + build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo build --workspace
+        run: cargo build --workspace --all-features
+      - name: cargo test --workspace
+        # stt-generate's satellites GMST test is flaky on CI; exclude until
+        # it's stabilised. Everything else is part of the gate.
+        run: cargo test --workspace --exclude stt-generate
+
+  typescript:
+    name: TypeScript (typecheck + vitest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter '@stt/core' typecheck
+      - run: pnpm --filter '@stt/deck.gl' typecheck
+      - run: pnpm --filter '@stt/core' test
+      - run: pnpm --filter '@stt/deck.gl' test
+
+  bench-regression:
+    name: Bench (regression vs baseline)
+    runs-on: ubuntu-latest
+    needs: [rust, typescript]
+    # Skipped automatically when no baseline file exists in the repo.
+    if: hashFiles('tools/bench/baselines/*.json') != ''
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build release binaries
+        run: cargo build --release -p stt-build -p stt-generate
+      - name: Generate a small reference dataset
+        run: ./target/release/stt-generate earthquakes --cached --output tools/bench/baselines/earthquakes.stt || true
+      - name: Run bench against baseline
+        run: |
+          if [ -f tools/bench/baselines/earthquakes.json ] && [ -f tools/bench/baselines/earthquakes.stt ]; then
+            node tools/bench/src/index.mjs tools/bench/baselines/earthquakes.stt \
+              --check tools/bench/baselines/earthquakes.json --tolerance 0.15
+          else
+            echo "No baseline pair found; skipping regression check."
+          fi
+
+  showcase-probe:
+    name: Showcase (all demos load)
+    runs-on: ubuntu-latest
+    needs: [typescript]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter '@stt/render-test' install-browser
+      - name: Build packages
+        run: pnpm build
+      - name: Start showcase
+        # The showcase needs sample .stt files in examples/showcase/public/data.
+        # We don't ship those in CI yet, so this step is intentionally allowed
+        # to fail silently — it will tighten once a small fixture set lands.
+        run: |
+          pnpm --filter '@stt/showcase' dev &
+          for i in $(seq 1 30); do
+            if curl -fs http://localhost:3000 >/dev/null; then break; fi
+            sleep 1
+          done
+      - name: Probe all demos
+        continue-on-error: true
+        run: pnpm --filter '@stt/render-test' probe

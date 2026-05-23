@@ -21,6 +21,17 @@
     "noFallthroughCasesInSwitch": true,
     "allowSyntheticDefaultImports": true
   },
-  "exclude": ["node_modules", "dist", "build", "examples"]
+  "exclude": [
+    "node_modules",
+    "dist",
+    "build",
+    "examples",
+    "**/test/**",
+    "**/__tests__/**",
+    "**/*.test.ts",
+    "**/*.spec.ts",
+    "**/vitest.config.ts",
+    "tools"
+  ]
 }
 

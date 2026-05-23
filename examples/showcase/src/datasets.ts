@@ -12,7 +12,8 @@ export const datasets: Dataset[] = [
     id: 'earthquake-activity',
     name: 'Earthquake Activity',
     description: 'USGS real-time earthquake feed (M4.5+ from past 30 days)',
-    url: '/data/earthquakes.stt',
+    url: '/data/earthquakes-v2.stt',
+    radiusProperty: 'mag',
     type: 'point',
     timeRange: {
       start: Date.parse('2020-01-01T00:28:20.289Z'),
@@ -70,21 +71,21 @@ export const datasets: Dataset[] = [
   {
     id: 'flight-paths',
     name: 'Flight Paths',
-    description: 'Real OpenSky data - 69K 3D flight trajectories with altitude (Jan 6, 2020)',
-    url: '/data/adsb-paths.stt',
+    description: 'Synthetic linestring tracks for migrated-format demo',
+    url: '/data/lines-v2.stt',
     type: 'path',
     timeRange: {
-      start: 1578268800000,  // 2020-01-06 00:00:00 UTC
-      end: 1578354650000,    // 2020-01-06 23:50:50 UTC
+      start: 1600000000000,
+      end: 1726272000000,
     },
-    timeWindow: 600000, // 10 minute window for 24-hour data
-    targetPlaybackSeconds: 300, // 24 hours plays in 5 minutes
+    timeWindow: 86400000 * 30,
+    targetPlaybackSeconds: 60,
     initialViewState: {
-      longitude: -98.5,
-      latitude: 39.8,
-      zoom: 4,
-      pitch: 60,
-      bearing: 0
+      longitude: 0,
+      latitude: 20,
+      zoom: 1,
+      pitch: 0,
+      bearing: 0,
     },
     legend: {
       title: "Flight Paths",
@@ -146,15 +147,15 @@ export const datasets: Dataset[] = [
   {
     id: 'nyc-rideshare',
     name: 'NYC Yellow Taxi',
-    description: 'Synthetic NYC taxi trip data - 19K points (Jan 15, 2024)',
+    description: 'Real NYC TLC trips — 94K pickup/dropoff points (Feb 2016)',
     url: '/data/nyc-rideshare.stt',
     type: 'point',
     timeRange: {
-      start: 1705276835000,  // Jan 15, 2024 00:00 UTC (from actual data)
-      end: 1705365399000,    // Jan 15, 2024 ~24:36 UTC (from actual data)
+      start: 1454284862000,  // 2016-02-01 00:01:02 UTC (from actual data)
+      end: 1456791577000,    // 2016-02-29 23:39:37 UTC (from actual data)
     },
-    timeWindow: 3600000, // 1 hour window for 24-hour data
-    targetPlaybackSeconds: 120, // 1 day plays in 2 minutes
+    timeWindow: 3600000 * 6, // 6 hour window for ~29-day dataset
+    targetPlaybackSeconds: 180, // ~29 days plays in 3 minutes
     initialViewState: {
       longitude: -73.98,
       latitude: 40.75,
@@ -174,19 +175,19 @@ export const datasets: Dataset[] = [
   {
     id: 'nyc-taxi-paths',
     name: 'NYC Taxi Paths',
-    description: 'Real TLC trip paths with OSRM routing - 500K trips from January 2015',
+    description: 'Real TLC trip paths with OSRM routing - 500K trips (Jan 1-2, 2015)',
     url: '/data/nyc-taxi-paths.stt',
     type: 'path',
     timeRange: {
-      start: 1420088400000,  // 2015-01-01 00:00:00 UTC
-      end: 1422766799000,    // 2015-01-31 23:59:59 UTC
+      start: 1420070400000,  // 2015-01-01 00:00:00 UTC
+      end: 1420213385000,    // 2015-01-02 13:43:05 UTC
     },
-    timeWindow: 3600000, // 1 hour window for month-long data
-    targetPlaybackSeconds: 1200, // ~1 month plays in 10 minutes
+    timeWindow: 300000, // 5 min window for 1.5 day dataset
+    targetPlaybackSeconds: 300, // 1.5 days plays in 5 minutes
     initialViewState: {
       longitude: -73.98,
       latitude: 40.75,
-      zoom: 13,
+      zoom: 14,  // Higher zoom = fewer tiles loaded
       pitch: 45,
       bearing: -15
     },
@@ -200,19 +201,19 @@ export const datasets: Dataset[] = [
   {
     id: 'nyc-taxi-trips',
     name: 'NYC Taxi Trips',
-    description: 'Animated taxi trips with trailing effect - 1M real routed trips from January 2015',
+    description: 'Animated taxi trips with OSRM routing - 500K trips (Jan 1-2, 2015)',
     url: '/data/nyc-taxi-paths.stt',
     type: 'trips',
     timeRange: {
-      start: 1420070411000,  // From generated data (Jan 1, 2015)
-      end: 1422751348000,    // From generated data (Jan 31, 2015)
+      start: 1420070400000,  // 2015-01-01 00:00:00 UTC
+      end: 1420213385000,    // 2015-01-02 13:43:05 UTC
     },
-    timeWindow: 600000, // 10 min window - reduces memory usage with 1M trips
-    targetPlaybackSeconds: 18200, // ~1 month plays in 2 hours - very slow/relaxed animation
+    timeWindow: 120000, // 2 min window for trips
+    targetPlaybackSeconds: 600, // 1.5 days plays in 10 minutes
     initialViewState: {
       longitude: -73.98,
       latitude: 40.75,
-      zoom: 13,
+      zoom: 14,  // Higher zoom = fewer tiles loaded
       pitch: 45,
       bearing: -15
     },
@@ -226,12 +227,12 @@ export const datasets: Dataset[] = [
   {
     id: 'ship-traffic',
     name: 'US Maritime Traffic',
-    description: 'Real AIS data from NOAA Marine Cadastre - 1.3M points, 16K vessels, 24 hours',
+    description: 'Real AIS data from NOAA Marine Cadastre - 1.29M points, 15.9K vessels, 24 hours (Jan 9, 2023)',
     url: '/data/ais-all-us.stt',
     type: 'point',
     timeRange: {
-      start: 1672531200000, // 2023-01-01T00:00:00Z
-      end: 1672617599000,   // 2023-01-01T23:59:59Z
+      start: 1673222400000, // 2023-01-09T00:00:00Z (from actual data)
+      end: 1673308799000,   // 2023-01-09T23:59:59Z (from actual data)
     },
     timeWindow: 1800000, // 30 minute window for 24-hour data
     targetPlaybackSeconds: 180, // 24 hours plays in 3 minutes

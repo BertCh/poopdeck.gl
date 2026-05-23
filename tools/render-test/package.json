@@ -1,0 +1,19 @@
+{
+  "name": "@stt/render-test",
+  "version": "0.1.0",
+  "description": "Automated browser rendering + FPS regression test for the @stt/deck.gl showcase",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "e2e": "playwright test",
+    "e2e:headed": "playwright test --headed",
+    "probe": "node probe-all-demos.mjs",
+    "install-browser": "playwright install chromium"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0",
+    "@types/pngjs": "^6.0.5",
+    "playwright": "^1.49.0",
+    "pngjs": "^7.0.0"
+  }
+}

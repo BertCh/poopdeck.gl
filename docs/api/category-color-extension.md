@@ -75,3 +75,4 @@ new ScatterplotLayer({
 
 [packages/deck.gl/src/category-color-extension.ts](../../packages/deck.gl/src/category-color-extension.ts)
 
+

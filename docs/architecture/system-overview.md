@@ -1,116 +1,143 @@
-# System Overview
+# System overview
 
-The Spatiotemporal Tiles (STT) system consists of two main technology stacks: a **Rust** backend for high-performance data processing and tile generation, and a **TypeScript** frontend for efficient web-based rendering.
-
-## Architecture Diagram
+STT has two stacks: a **Rust** toolchain that turns GeoParquet into a `.stt`
+archive, and a **TypeScript** client that streams tiles from that archive
+into deck.gl.
 
 ```mermaid
 graph TD
-    subgraph Input Data
-        CSV[CSV Files]
-        GEO[GeoJSON]
-        DB[(PostGIS)]
+    subgraph "Input data"
+        PARQUET[GeoParquet]
     end
 
-    subgraph Rust Toolchain
-        CLI[stt-build CLI]
-        LIB[stt-core]
-        CLI --> LIB
+    subgraph "Rust toolchain"
+        BUILD[stt-build]
+        OPTIMIZE[stt-optimize]
+        VALIDATE[stt-validate]
+        GEN[stt-generate]
+        CORE_RS[stt-core]
+        BUILD --> CORE_RS
+        OPTIMIZE --> CORE_RS
+        VALIDATE --> CORE_RS
+        GEN --> BUILD
     end
 
-    subgraph Storage
-        STT[".stt" Archive]
-        IDX[Index & Metadata]
-        STT --- IDX
+    subgraph "Storage"
+        STT["(.stt) archive"]
     end
 
-    subgraph Client (Browser)
-        Loader[@stt/core]
-        Cache[LRU Cache]
-        Layer[@stt/deck.gl]
-        
-        Loader --> Cache
-        Cache --> Layer
+    subgraph "Client (browser)"
+        ARCHIVE["@stt/core: STTArchive"]
+        DECODER["WorkerTileDecoder pool"]
+        TILESET[SpatiotemporalTileset]
+        LAYERS["@stt/deck.gl layers"]
+        ARCHIVE --> DECODER
+        DECODER --> TILESET
+        TILESET --> LAYERS
     end
 
-    CSV --> CLI
-    GEO --> CLI
-    DB --> CLI
-    
-    CLI --> STT
-    STT --> Loader
+    PARQUET --> BUILD
+    BUILD --> STT
+    STT -->|HTTP Range| ARCHIVE
 ```
 
-## Rust Toolchain (Generation)
+## Rust toolchain
 
-The Rust stack is responsible for ingesting raw data and producing optimized `.stt` archives.
+### `stt-build` (CLI)
+Reads a GeoParquet file (WKB, GeoArrow, or `lon`/`lat` columns) and writes
+one `.stt` archive. Pipeline:
 
-### `stt-build`
-The primary CLI tool. It performs the following steps:
-1.  **Ingest:** Reads streams of GeoJSON, CSV, or DB rows.
-2.  **Parse & Chunk:** Parses timestamps and groups features into spatial tiles based on target chunk size.
-3.  **Simplification:** Applies Douglas-Peucker simplification to geometries based on zoom level.
-4.  **Encoding:** Stores absolute WGS84 coordinates (no delta/zigzag encoding).
-5.  **Compression:** Encodes data using Protocol Buffers and compresses with Gzip.
-6.  **Indexing:** Generates a Hilbert-curve based spatial index and a temporal index.
+1. **Load**: stream Arrow record batches from Parquet; extract geometry,
+   timestamps (Unix ms, Unix s, or ISO 8601), and per-feature properties.
+2. **Clip**: LineStrings with a duration (`--end-time-field`) are clipped
+   to each zoom's tile boundaries with Liang-Barsky; per-vertex timestamps
+   are interpolated so a tile's trajectory still animates correctly.
+3. **Simplify** (optional): per-zoom Visvalingam-Whyatt simplification.
+4. **Tile**: bucket features by `(zoom, x, y, time-bucket)`, where the
+   bucket size is `--temporal-bucket` (default `1h`).
+5. **Encode**: each tile becomes an Arrow IPC layer frame (see
+   [Data format](./data-format.md)).
+6. **Write**: `stt-core::Archive::create()` → gzip → content-addressed
+   dedup → write directory + JSON metadata + 64-byte header.
+
+Inputs must be GeoParquet. Convert other formats first:
+`ogr2ogr -f Parquet out.parquet in.geojson`, or use DuckDB
+(`COPY ... TO 'out.parquet' (FORMAT 'parquet')`).
+
+### `stt-optimize`
+Reads a Parquet or `.stt` and prints recommended `stt-build` settings —
+zoom range, temporal bucket size, compression — based on the data's
+spatial density and temporal distribution. Standalone today; can be invoked
+in a future `stt-build --auto`.
+
+### `stt-validate`
+Opens an archive, verifies the content hash of every tile, decodes each
+Arrow IPC payload, and reports any anomalies (decode failures, feature-count
+mismatches, tile extents outside the metadata range). Suitable for CI.
+
+### `stt-generate`
+Convenience CLI that downloads + processes + builds the showcase datasets
+(earthquakes, AIS, flights, hurricanes, wildfires, NYC rideshare, satellites).
+Each subcommand emits GeoParquet and calls `stt-build` internally.
 
 ### `stt-core`
-The shared library containing the logic for:
-- Protocol Buffer definitions (`proto/tile.proto`).
-- Coordinate projection (Web Mercator).
-- Geometry simplification.
-- File I/O and archive structure.
+The library every CLI uses. Owns the archive format, Arrow tile codec,
+compression abstraction, Hilbert/temporal indexing, and metadata.
 
-## TypeScript Stack (Consumption)
-
-The TypeScript stack runs in the browser and handles the efficient loading and rendering of the data.
+## TypeScript stack
 
 ### `@stt/core`
-The core loader library.
-- **`STTArchive`**: Handles HTTP Range Requests to fetch only specific byte ranges from the `.stt` file.
-- **`SpatiotemporalTileset`**: Manages the lifecycle of tiles, including loading, caching, and eviction.
-- **`STTLoader`**: A loaders.gl compatible loader for parsing the binary tile format.
+- **`STTArchive`** — HTTP Range reader. Header → index → metadata → per-tile
+  blob fetch. Range-coalesces adjacent tile reads (≤32 KiB gap). Caches
+  compressed bytes (device-aware sizing: 512 MiB desktop, 256 MiB mobile).
+- **`TileDecoder`** — see [stt-loader.md](../api/stt-loader.md). Worker-pool
+  by default in browsers; inline fallback elsewhere. Crashed workers are
+  replaced automatically.
+- **`SpatiotemporalTileset`** — viewport + time-aware tile selection,
+  bucket-aligned prefetch, direction hysteresis to suppress scrub jitter,
+  grace-period LRU eviction.
 
 ### `@stt/deck.gl`
-The rendering layer for [deck.gl](https://deck.gl).
-- **`SpatioTemporalLayer`**: A composite layer that handles tile loading and time synchronization.
-- **`AnimatedPointLayer`**: Renders points with GPU-based time filtering.
-- **`AnimatedPathLayer`**: Renders paths/trajectories with time filtering.
-- **`AnimatedPolygonLayer`**: Renders polygons with time filtering.
-- **`AnimatedTripsLayer`**: Renders animated trajectories with trailing effect.
-- **`HeatmapTimeLayer`**: Renders temporal density heatmaps.
-- **`TimeController`**: Manages the playback clock, speed, and looping.
-- **`TimeFilterExtension`**: GPU shader extension for temporal filtering.
+- **`SpatioTemporalLayer`** — composite layer; owns the archive + tileset,
+  delegates rendering to specialized sublayers.
+- **`AnimatedPointLayer` / `AnimatedPathLayer` / `AnimatedPolygonLayer` /
+  `AnimatedTripsLayer`** — deck.gl layers with GPU time filtering.
+- **`TimeFilterExtension`** — relativizes time against a per-layer
+  `timeOffset` so f32 stays exact; supports window mode (whole feature on
+  / off) and trail mode (per-vertex fade).
+- **`CategoryColorExtension`** — texture-based palette lookup, scales to
+  many categories without CPU-side color expansion.
+- **`TimeController`** — `requestAnimationFrame`-driven playback clock.
 
-## Design Decisions
+## Design decisions
 
-### Why Custom Tileset Instead of deck.gl TileLayer?
+### Arrow IPC instead of a bespoke binary format
+Standard, columnar, browser-native via `apache-arrow`. The same library
+parses the archive's directory and its tile payloads. GeoArrow gives the
+deck.gl layers exactly the buffer shape they need.
 
-We use a custom `SpatiotemporalTileset` instead of extending deck.gl's built-in `TileLayer` for the following reasons:
+### Custom tileset, not deck.gl `TileLayer`
+- 4D addressing — `(z, x, y, t)` — that `TileLayer` doesn't model.
+- Bucket-aligned temporal prefetch needs first-class access to the time axis.
+- Cache eviction needs to be temporal-aware (keep tiles for the active
+  time window even when they're off-viewport for a frame).
 
-1. **Temporal Dimension**: deck.gl's `TileLayer` is designed for 3D tiles (z/x/y). STT tiles have a 4th dimension (time), requiring custom tile selection logic that considers both spatial bounds and time range.
+### GPU time filtering, not CPU per-frame filtering
+Once a tile is consolidated into the deck.gl layer's attribute buffers,
+animation costs nothing extra. The CPU updates one uniform per frame; the
+shader does the filter and the fade.
 
-2. **Temporal Caching**: The LRU cache needs to consider time-based eviction strategies. Animation playback benefits from keeping recently-used temporal tiles in memory for smooth looping.
+### One archive, one HTTP origin
+A `.stt` file is served as static bytes by any HTTP server that honours
+Range requests. No tile server, no database, no CDN smarts beyond
+range-aware caching.
 
-3. **Time-Based Prefetching**: The tileset can prefetch tiles along the time axis for smooth animation, which `TileLayer` doesn't support natively.
+## Key interactions
 
-However, the implementation follows deck.gl patterns:
-- Request concurrency control (maxRequests: 64 for parallel animation loading)
-- LRU cache eviction (up to 2GB cache for large datasets)
-- Viewport-based tile selection
-- Prefetching for smooth animation playback
-
-### Why Not deck.gl TripsLayer?
-
-deck.gl's `TripsLayer` is designed for pre-baked trajectory animation where the entire path is known. STT uses a different approach:
-
-1. **Tile-Based Loading**: Data is loaded progressively as tiles, not as complete trajectories.
-2. **GPU Time Filtering**: The `TimeFilterExtension` filters features by time in the GPU shader, which is more efficient for large datasets.
-3. **Flexibility**: Works for both point data (earthquakes, events) and path data (ships, taxis) with the same mechanism.
-
-## Key Interactions
-
-1.  **Generation:** You run `stt-build` once to convert your massive CSV/GeoJSON into a single `.stt` file.
-2.  **Hosting:** You host the `.stt` file on any static file server (S3, Nginx, etc.). No special backend is required.
-3.  **Loading:** The browser client downloads the header (first few KB) to get the index.
-4.  **Streaming:** As the user pans or plays the timeline, the client calculates which byte ranges to fetch and requests them in parallel.
+1. **Generation** — run `stt-build` once to convert GeoParquet into a `.stt`.
+2. **Hosting** — drop the `.stt` on S3, R2, Cloudflare Pages, nginx, etc.
+3. **Loading** — the browser fetches the 64-byte header, then the index
+   table and metadata, then each viewport tile via a Range request.
+4. **Streaming** — as the user pans or plays the timeline, the tileset
+   coalesces ranges, the decoder pool decodes off the main thread, and
+   deck.gl renders the consolidated buffers with the time filter applied.

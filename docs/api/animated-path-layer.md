@@ -1,6 +1,8 @@
 # AnimatedPathLayer
 
-The `AnimatedPathLayer` renders time-series path/trajectory data as lines. It extends [`SpatioTemporalLayer`](./spatiotemporal-layer.md) and provides GPU-accelerated time filtering with optional trailing fade effects.
+The `AnimatedPathLayer` renders time-series path/trajectory data as lines. It extends [`SpatioTemporalLayer`](./spatiotemporal-layer.md) and provides GPU-accelerated time filtering.
+
+It operates in **window mode**: each feature is shown (with optional fade) whenever its `[startTime, endTime]` overlaps the current time window — whole paths render at once. For a "vehicle moving along the route" trailing effect, use [`AnimatedTripsLayer`](./animated-trips-layer.md) instead, which renders per-vertex with a fading trail.
 
 ## Installation
 
@@ -20,8 +22,6 @@ const layer = new AnimatedPathLayer({
   timeWindow: 3600000, // 1 hour
   pathColor: [0, 150, 255, 255],
   pathWidth: 3,
-  trail: true,
-  trailLength: 5000, // 5 seconds
 });
 ```
 
@@ -35,10 +35,8 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 | :--- | :--- | :--- | :--- |
 | `widthScale` | `number` | `1` | Global multiplier for path widths. |
 | `widthUnits` | `'pixels' \| 'meters'` | `'pixels'` | Units for width. |
-| `trail` | `boolean` | `true` | Enable trailing fade effect. |
-| `trailLength` | `number` | `5000` | Trail length in milliseconds. |
-| `fadeInDuration` | `number` | `300` | Duration (ms) for paths to fade in. |
-| `fadeOutDuration` | `number` | `300` | Duration (ms) for paths to fade out. |
+| `fadeInDuration` | `number` | `300` | Duration (ms) for paths to fade in when their time range enters the window. |
+| `fadeOutDuration` | `number` | `300` | Duration (ms) for paths to fade out when their time range leaves the window. |
 
 ### Data Accessors
 
@@ -59,4 +57,5 @@ The layer uses several optimizations:
 ## Source
 
 [packages/deck.gl/src/animated-path-layer.ts](../../packages/deck.gl/src/animated-path-layer.ts)
+
 

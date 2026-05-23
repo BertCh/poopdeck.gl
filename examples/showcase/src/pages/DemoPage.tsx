@@ -116,17 +116,24 @@ const DemoPage: React.FC = () => {
     const playbackSpeed =
       datasetDuration / (selectedDataset.targetPlaybackSeconds || 60) / 1000;
     const timeWindow = selectedDataset.timeWindow || 86400000;
-    const timeWindowsPerSecond = (playbackSpeed / timeWindow) * 1000;
 
-    // Aggressive prefetching to prevent flashing with large datasets
-    // - More steps = smoother streaming
-    // - Larger ahead window = more buffer for loading
-    const minPrefetchSteps = Math.max(
-      30,
-      Math.ceil(timeWindowsPerSecond * 120)
-    ); // 2 minutes of real-time buffer
-    const prefetchSteps = Math.min(minPrefetchSteps, 150); // Allow more steps for fast playback
-    const prefetchAhead = Math.max(timeWindow * 5, playbackSpeed * 60000); // 60 real seconds of prefetch buffer
+    // Prefetch budget keyed to REAL-time playback, not sim-time. We want a
+    // few seconds of real-time buffer ahead of the play head, regardless of
+    // how compressed sim-time is. `playbackSpeed` is sim-ms per real-ms, so
+    // `playbackSpeed * PREFETCH_REAL_SECONDS * 1000` is that many real seconds
+    // expressed in sim-time.
+    //
+    // The old math asked for max(5*timeWindow, playbackSpeed*60000) and up to
+    // 150 steps. For ship-traffic that produced ~8h of lookahead × 150 steps
+    // ≈ 50 days of prefetch horizon per tick — every tick blew through the
+    // bucket-boundary cap and queued thousands of fetches, collapsing FPS to
+    // 0.5 under SwiftShader.
+    const PREFETCH_REAL_SECONDS = 5;
+    const prefetchAhead = Math.max(
+      timeWindow,
+      playbackSpeed * 1000 * PREFETCH_REAL_SECONDS,
+    );
+    const prefetchSteps = 4;
 
     const baseProps = {
       id: selectedDataset.id,
@@ -140,7 +147,10 @@ const DemoPage: React.FC = () => {
       enablePrefetch: true,
       prefetchAhead,
       prefetchSteps,
-      maxRequests: 128, // Increased for faster tile loading with large datasets
+      // Browsers cap to ~6 concurrent connections per HTTP/1.1 origin; asking
+      // for more just queues inside the network layer and deepens the decode
+      // backlog on the main thread. 12 is enough for HTTP/2 multiplexing too.
+      maxRequests: 12,
     };
 
     switch (selectedDataset.type) {
@@ -164,8 +174,6 @@ const DemoPage: React.FC = () => {
             pathColor: selectedDataset.colorProperty || [31, 186, 214, 255],
             pathWidth: 3,
             widthUnits: "pixels",
-            trail: true,
-            trailLength: 5000,
           }),
         ];
       case "trips":

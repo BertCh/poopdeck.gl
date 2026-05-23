@@ -25,13 +25,13 @@ const layers: LayerInfo[] = [
   {
     name: "AnimatedPathLayer",
     description:
-      "Renders path geometries with time filtering. Paths are shown when their time range overlaps the current time window.",
+      "Renders path geometries with time filtering. Paths are shown when their time range overlaps the current time window. For a vehicle-along-route trailing effect, use AnimatedTripsLayer.",
     useCase: "Ship tracks, flight routes, GPS traces, historical trajectories",
     props: [
       { name: "pathColor", type: "Color | string", description: "Path color or categorical property name" },
       { name: "pathWidth", type: "number", description: "Path width in pixels" },
-      { name: "trail", type: "boolean", description: "Enable trailing effect behind current time" },
-      { name: "trailLength", type: "number", description: "Trail length in milliseconds" },
+      { name: "fadeInDuration", type: "number", description: "Fade-in duration in ms when a path enters the window" },
+      { name: "fadeOutDuration", type: "number", description: "Fade-out duration in ms when a path leaves the window" },
     ],
     demoId: "flight-paths",
   },
@@ -458,4 +458,5 @@ function App() {
 };
 
 export default LayersPage;
+
 

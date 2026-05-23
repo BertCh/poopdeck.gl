@@ -1,6 +1,6 @@
 # SpatioTemporal Tiles (STT)
 
-> **High-performance tile format for interactive spatiotemporal data visualization**
+> **A single-file tile format for interactive spatiotemporal data visualization**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Rust](https://img.shields.io/badge/rust-1.70+-orange.svg)](https://www.rust-lang.org/)
@@ -10,23 +10,39 @@
 
 ## What is STT?
 
-STT is a single-file archive format for spatiotemporal data visualization that combines efficient spatial tiling with native temporal indexing for smooth 60 FPS animations in the browser.
+STT is a **single-file archive format** for spatiotemporal data. It combines a
+spatial tile pyramid with a temporal axis — each tile is addressed by
+`(zoom, x, y, time-bucket)` — so a deck.gl client can stream only the tiles in
+the current viewport *and* time window, and animate over time.
 
-### Key Features
+Tile payloads are **Apache Arrow IPC** with **GeoArrow**-encoded geometry, so
+they are a standard, columnar, GPU-friendly format rather than a bespoke
+encoding.
 
-- ⚡ **60 FPS animation** - Sub-16ms frame switching with predictive prefetching
-- 📦 **Single-file archives** - Deploy to CDN, no tile server needed
-- 🗜️ **Efficient compression** - Gzip with MVT-compatible encoding
-- 🔄 **Temporal indexing** - Efficient time-based queries and prefetching
-- 🎯 **Smart indexing** - Hilbert curve (spatial) + interval tree (temporal)
-- 🌐 **HTTP Range Requests** - Stream tiles on-demand
-- 🔧 **Modern stack** - Rust (`geo`, `chrono`) + TypeScript (deck.gl)
+### Key features
+
+- 📦 **Single-file archives** — deploy to a CDN, no tile server needed.
+- 🌐 **HTTP Range Requests** — the header, index, and each tile are fetched
+  with independent range requests.
+- 🗜️ **Apache Arrow payloads** — GeoArrow geometry + columnar properties,
+  gzip-compressed per tile, content-addressed and de-duplicated.
+- 🕒 **Temporal tiling** — features are bucketed into fixed time intervals for
+  predictable, animation-friendly loading.
+- 🎯 **Hilbert-ordered directory** — tiles are stored in spatial-locality order.
+- 🔧 **Modern stack** — Rust (`arrow`, `geo`, `geozero`) builder + TypeScript
+  (`apache-arrow`, deck.gl) reader.
+
+> **Status:** the build pipeline, archive format, and TypeScript reader are
+> implemented and tested end-to-end (Rust ↔ browser). The deck.gl layers
+> render from the Arrow format; GPU-accelerated time filtering for the
+> point/path/trip layers is driven by a shader uniform via
+> `TimeFilterExtension`.
 
 ---
 
-## Quick Start
+## Quick start
 
-### 1. Install CLI
+### 1. Build the CLI
 
 ```bash
 git clone https://github.com/robertchristie/spatiotemporal-tiles.git
@@ -34,18 +50,21 @@ cd spatiotemporal-tiles
 cargo build --release
 ```
 
-### 2. Build STT Archive
-
-**From GeoJSON:**
+### 2. Build an STT archive from GeoParquet
 
 ```bash
 ./target/release/stt-build \
-  --input data.geojson \
+  --input data.parquet \
   --output tiles.stt \
   --time-field timestamp \
-  --time-format iso8601 \
-  --compression gzip
+  --time-format unix-ms \
+  --min-zoom 0 --max-zoom 8 \
+  --temporal-bucket 1h
 ```
+
+The input must be a Parquet file with either a WKB/GeoArrow geometry column or
+separate `lon`/`lat` columns, plus a timestamp column. Convert other formats
+first, e.g. `ogr2ogr -f Parquet data.parquet data.geojson`.
 
 ### 3. Visualize with deck.gl
 
@@ -59,79 +78,59 @@ const layer = new AnimatedPointLayer({
 });
 ```
 
-For more details, see the **[Documentation](./docs/README.md)**.
-
 ---
 
-## Documentation
-
-Full documentation is available in the [`docs/`](./docs/) directory:
-
-- **[Concepts](./docs/intro/concepts.md)** - Learn about STT, Delta Encoding, and Bucketing.
-- **[System Overview](./docs/architecture/system-overview.md)** - Architecture and Design.
-- **[CLI Reference](./docs/api/cli-reference.md)** - `stt-build` command options.
-- **[Data Generation Guide](./docs/guides/data-generation.md)** - How to create your own archives.
-
----
-
-## Architecture
-
-### File Format
+## Archive format
 
 ```
-┌─────────────────┐
-│ Header (53B)    │  Magic: "STT\x01", index/metadata offsets
-├─────────────────┤
-│ Tile Data       │  Compressed Protocol Buffers (MVT-compatible)
-├─────────────────┤
-│ Index           │  Hilbert spatial index + temporal ranges
-├─────────────────┤
-│ Metadata        │  Bounds, time range, zoom levels, stats
-└─────────────────┘
+┌──────────────────┐
+│ Header (64 B)    │  Magic "STT\x02", compression, index/metadata offsets
+├──────────────────┤
+│ Tile blobs       │  gzip(Arrow IPC layer frame), content-addressed
+├──────────────────┤
+│ Index            │  Arrow IPC table — one row per tile (the directory)
+├──────────────────┤
+│ Metadata         │  UTF-8 JSON — bounds, time range, zoom levels
+└──────────────────┘
 ```
 
-See **[Data Format Specification](./docs/architecture/data-format.md)** for details.
+Each tile blob is a small *layer frame* (`[u16 count]` then per-layer
+`[name][Arrow IPC]`); every layer is one Arrow `RecordBatch` whose `geometry`
+column is GeoArrow-encoded. The directory is itself an Arrow table, so both the
+Rust writer and the TypeScript reader use one Arrow implementation throughout.
 
 ---
 
-## Repository Structure
+## Repository structure
 
 ```
 spatiotemporal-tiles/
-├── crates/                    # Rust Backend
-│   ├── stt-core/             # Archive format & lib
-│   └── stt-build/            # CLI tool
-│
-├── packages/                  # TypeScript Frontend
-│   ├── core/                 # Archive reader
-│   └── deck.gl/              # deck.gl layers
-│
-├── proto/                     # Protocol Buffer definitions
-└── examples/
-    └── showcase/             # Interactive demo app
+├── crates/                 # Rust
+│   ├── stt-core/           # Archive + Arrow tile format library
+│   ├── stt-build/          # CLI: GeoParquet -> .stt
+│   ├── stt-generate/       # Sample dataset generators
+│   └── stt-optimize/       # Archive/dataset analysis CLI
+├── packages/               # TypeScript
+│   ├── core/               # Archive reader (apache-arrow)
+│   └── deck.gl/            # deck.gl layers + extensions
+└── examples/showcase/      # Interactive demo app
 ```
 
 ---
 
-## Roadmap
+## Development
 
-### ✅ Phase 1: Core (Complete)
-- Archive format, CLI, deck.gl layers, showcase app
-- Gzip/Brotli compression
-- HTTP Range Requests
+```bash
+cargo test --workspace          # Rust tests
+cargo build --release           # CLI binaries
 
-### ✅ Phase 2: Optimization (Complete)
-- Binary columnar format for GPU efficiency
-- Predictive prefetching for animations
-- LRU caching with 2GB default capacity
-
-### 📋 Phase 3: Advanced (In Progress)
-- [ ] Web Worker tile decoding
-- [ ] Parquet/Arrow file reading
-- [ ] 3D Tile integration
+pnpm install
+pnpm --filter @stt/core test     # TypeScript reader tests (vs a real archive)
+pnpm --filter @stt/core build
+```
 
 ---
 
 ## License
 
-MIT © 2025 Robert Christie
+MIT © Robert Christie

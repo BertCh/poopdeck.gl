@@ -1,7 +1,7 @@
 {
   "name": "spatiotemporal-tiles",
   "version": "0.1.0",
-  "description": "High-performance spatiotemporal tile format for interactive time series visualization",
+  "description": "Single-file spatiotemporal tile format for interactive time-series visualization",
   "private": true,
   "packageManager": "pnpm@10.19.0",
   "workspaces": [
@@ -15,21 +15,35 @@
     "dev": "turbo run dev --parallel",
     "clean": "turbo run clean && rm -rf node_modules",
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\"",
-    "typecheck": "turbo run typecheck",
-    "generate-proto": "pnpm run generate-proto:js",
-    "generate-proto:js": "pbjs -t static-module -w es6 --es6 -o packages/core/src/proto.js proto/*.proto && pbts -o packages/core/src/proto.d.ts packages/core/src/proto.js"
+    "typecheck": "turbo run typecheck"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",
     "prettier": "^3.3.0",
-    "protobufjs-cli": "^1.1.3",
     "turbo": "^2.0.0",
     "typescript": "^5.4.0",
     "vitest": "^1.6.0"
   },
+  "pnpm": {
+    "overrides": {
+      "@deck.gl/core": "9.3.2",
+      "@deck.gl/layers": "9.3.2",
+      "@deck.gl/react": "9.3.2",
+      "@deck.gl/aggregation-layers": "9.3.2",
+      "@deck.gl/geo-layers": "9.3.2",
+      "@deck.gl/extensions": "9.3.2",
+      "@deck.gl/mesh-layers": "9.3.2",
+      "@deck.gl/widgets": "9.3.2",
+      "@luma.gl/core": "9.3.3",
+      "@luma.gl/engine": "9.3.3",
+      "@luma.gl/constants": "9.3.3",
+      "@luma.gl/shadertools": "9.3.3",
+      "@luma.gl/webgl": "9.3.3",
+      "@luma.gl/gltf": "9.3.3"
+    }
+  },
   "engines": {
-    "node": ">=18.0.0",
-    "npm": ">=9.0.0"
+    "node": ">=18.0.0"
   },
   "repository": {
     "type": "git",

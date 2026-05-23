@@ -4,7 +4,19 @@
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
-      "outputs": ["dist/**", "build/**"]
+      "outputs": [
+        "dist/**",
+        "build/**",
+        "!**/dist/data/**",
+        "!**/data/**",
+        "!**/*.stt",
+        "!**/*.mbtiles",
+        "!**/*.pmtiles"
+      ]
+    },
+    "@stt/showcase#build": {
+      "dependsOn": ["^build"],
+      "cache": false
     },
     "test": {
       "dependsOn": ["build"],
@@ -25,4 +37,3 @@
     }
   }
 }
-

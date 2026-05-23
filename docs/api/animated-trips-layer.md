@@ -71,3 +71,4 @@ The layer uses several optimizations:
 
 [packages/deck.gl/src/animated-trips-layer.ts](../../packages/deck.gl/src/animated-trips-layer.ts)
 
+

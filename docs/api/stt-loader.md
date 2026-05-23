@@ -1,121 +1,83 @@
-# STTLoader
+# Tile decoding
 
-A [loaders.gl](https://loaders.gl/) compatible loader for parsing Spatiotemporal Tile (`.stt`) data. It handles decompression (Gzip/Brotli) and Protocol Buffer decoding.
+`@stt/core` exposes a small surface for decoding STT tile blobs. In normal
+use you don't call it directly — `STTArchive` and `SpatiotemporalTileset` do
+— but the pieces are documented here for tests, custom integrations, and
+loaders.gl-style adapters.
 
-## Features
+> A previous version of this document described an `STTLoader` for
+> loaders.gl that decoded protobuf payloads on a worker. STT v2 dropped
+> protobuf in favour of Apache Arrow IPC; the public surface is now the
+> `TileDecoder` interface described below.
 
-- **Worker Support**: Offloads decoding to worker threads for better main thread performance
-- **Binary Output**: GPU-ready binary columnar format with typed arrays for zero-copy GPU upload
-- **Automatic Worker Pool**: Scales workers to hardware concurrency (up to 8 workers)
-
-## Installation
-
-```typescript
-import { STTLoader } from "@stt/core";
-import { load } from "@loaders.gl/core";
-```
-
-## Usage
-
-The loader is typically used internally by `STTArchive` or `SpatioTemporalLayer`, but can be used standalone with `loaders.gl`.
+## TileDecoder
 
 ```typescript
-import { load } from "@loaders.gl/core";
-import { STTLoader } from "@stt/core";
+import {
+  type TileDecoder,
+  InlineTileDecoder,
+  WorkerTileDecoder,
+  createDefaultTileDecoder,
+} from "@stt/core";
 
-const tile = await load(url, STTLoader, {
-  stt: {
-    tileId: { z: 0, x: 0, y: 0, t: 1234567890 },
-    compression: 1, // Gzip
-  },
-});
+interface TileDecoder {
+  decode(args: {
+    id: TileId;
+    timeRange: TimeRange;
+    compressed: ArrayBuffer;
+    compression: Compression;
+  }): Promise<Tile>;
 
-// Output is always binary format for GPU efficiency
-const { positions, startTimes, endTimes } = tile.layers[0].features;
+  /** Release worker resources, if any. */
+  finalize(): void;
+}
 ```
 
-## Options
+Implementations:
 
-The loader accepts `STTLoaderOptions`, which extends the standard loaders.gl `LoaderOptions`:
+- **`InlineTileDecoder`** — synchronous decode on the calling thread.
+  Used in Node tests and as the fallback in browsers when module workers
+  fail to construct.
+- **`WorkerTileDecoder`** — pool of 2–4 module workers (sized from
+  `navigator.hardwareConcurrency`, capped at 4) that runs decompression,
+  Arrow IPC parsing, and binary-feature extraction off the main thread.
+  Workers that crash are replaced; their in-flight requests are rejected.
+- **`createDefaultTileDecoder()`** — picks `WorkerTileDecoder` when the
+  environment supports module workers, otherwise falls back to inline.
 
-```typescript
-import type { STTLoaderOptions } from "@stt/core";
-```
+`STTArchive` constructs the default decoder lazily on first `getTile()`.
+Pass `decoder: new InlineTileDecoder()` to the archive constructor to force
+inline decoding (useful in tests).
 
-### STT-specific Options
-
-| Option              | Type          | Default | Description                                                              |
-| :------------------ | :------------ | :------ | :----------------------------------------------------------------------- |
-| `stt.tileId`        | `TileId`      | `null`  | **Required**. The tile ID `{z, x, y, t}` for coordinate decoding.        |
-| `stt.compression`   | `Compression` | `0`     | Compression method: `0` (None), `1` (Gzip), `2` (Brotli).                |
-| `stt.disableWorker` | `boolean`     | `false` | Force main thread decoding (disables worker threading).                  |
-
-### Standard loaders.gl Options
-
-All standard loaders.gl options are also supported:
-
-| Option    | Type           | Description            |
-| :-------- | :------------- | :--------------------- |
-| `fetch`   | `typeof fetch` | Custom fetch function  |
-| `nothrow` | `boolean`      | Do not throw on errors |
-
-## Loader Properties
-
-| Property     | Value                                                 |
-| :----------- | :---------------------------------------------------- |
-| `id`         | `'stt'`                                               |
-| `name`       | `'STT'`                                               |
-| `module`     | `'stt'`                                               |
-| `extensions` | `['stt']`                                             |
-| `mimeTypes`  | `['application/vnd.stt', 'application/octet-stream']` |
-| `category`   | `'geometry'`                                          |
-| `binary`     | `true`                                                |
-
-## Output
-
-Returns a `Tile` object with binary features:
+## What the decoder returns
 
 ```typescript
 interface Tile {
-  id: TileId;
-  timeRange: TimeRange;
-  layers: BinaryLayer[];
-}
-
-interface TileId {
-  z: number; // Zoom level (0-22)
-  x: number; // X coordinate
-  y: number; // Y coordinate
-  t: number; // Timestamp (Unix milliseconds)
-}
-
-interface BinaryLayer {
-  name: string;
-  extent: number;
-  features: BinaryFeatures;
+  id: TileId;                 // { z, x, y, t }
+  timeRange: TimeRange;       // { start, end } in Unix ms
+  timeOffset: number;         // see "Float32 precision" below
+  layers: Array<{
+    name: string;
+    features: BinaryFeatures; // GPU-ready typed arrays
+  }>;
 }
 ```
 
-See [Binary Features](./binary-features.md) for the `BinaryFeatures` structure.
+`BinaryFeatures` is described in [Binary Features](./binary-features.md).
+The decoder also extracts numeric properties as `Float32Array` and
+categorical properties as a `{ indices: Uint32Array; categories: string[] }`
+dictionary, ready for `CategoryColorExtension`.
 
-## TypeScript
+## Float32 precision
 
-The loader exports proper TypeScript types:
-
-```typescript
-import { STTLoader, STTLoaderOptions, STTOptions } from "@stt/core";
-import type { Tile } from "@stt/core";
-
-const options: STTLoaderOptions = {
-  stt: {
-    tileId: { z: 5, x: 10, y: 20, t: Date.now() },
-    compression: 0,
-  },
-};
-
-const tile: Tile = await load(url, STTLoader, options);
-```
+The decoder relativizes `start_time` / `end_time` / `vertex_time` against the
+tile's `timeOffset` so the resulting `Float32Array`s fit within the f32
+exactly-representable integer range. The layer extension applies the same
+offset to its `currentTime` shader uniform — see `time-filter-extension.ts`.
+If you build a custom layer, pass through `tile.timeOffset` unchanged.
 
 ## Source
 
-[packages/core/src/stt-loader.ts](../../packages/core/src/stt-loader.ts)
+- `packages/core/src/tile-decoder.ts` — pool implementation and inline fallback.
+- `packages/core/src/tile-decoder.worker.ts` — the worker entry point.
+- `packages/core/src/tile.ts` — `decodeTile()` (the actual Arrow → binary pass).

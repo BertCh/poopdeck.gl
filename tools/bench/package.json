@@ -1,0 +1,13 @@
+{
+  "name": "@stt/bench",
+  "version": "0.1.0",
+  "description": "Performance benchmark harness for the @stt/core data-loading pipeline",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "bench": "node src/index.mjs"
+  },
+  "dependencies": {
+    "@stt/core": "workspace:*"
+  }
+}
