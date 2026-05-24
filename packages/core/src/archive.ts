@@ -27,9 +27,10 @@ import {
 } from './types';
 import { createDefaultTileDecoder, type TileDecoder } from './tile-decoder';
 
-/** Magic number: "STT" + format version byte. */
-const MAGIC = new Uint8Array([0x53, 0x54, 0x54, 0x02]);
-const FORMAT_VERSION = 2;
+/** Magic prefix shared by all STT archives ("STT" + version byte). */
+const MAGIC_PREFIX = [0x53, 0x54, 0x54];
+/** Highest archive format version this reader understands. */
+const FORMAT_VERSION = 3;
 const HEADER_SIZE = 64;
 
 const DEFAULT_MAX_CACHE_TILES = 500;
@@ -66,6 +67,13 @@ interface ArchiveHeader {
   indexLength: number;
   metadataOffset: number;
   metadataLength: number;
+  /**
+   * Byte offset of the optional zstd training dictionary (v3 only).
+   * Zero for v2 archives and v3 archives written without a dictionary.
+   */
+  dictionaryOffset: number;
+  /** Length of the optional zstd training dictionary in bytes. */
+  dictionaryLength: number;
 }
 
 /**
@@ -111,6 +119,9 @@ export class STTArchive {
   private tileEntryIndex = new Map<string, TileEntry[]>();
   /** "z/x/y/t" -> exact entry. */
   private tileEntryByKey = new Map<string, TileEntry>();
+
+  /** Cached zstd dictionary bytes for v3 archives that ship one. */
+  private dictionaryCache?: Uint8Array | null;
 
   private cacheStats = { hits: 0, misses: 0, evictions: 0 };
 
@@ -173,32 +184,81 @@ export class STTArchive {
     return response.arrayBuffer();
   }
 
-  /** Read and validate the 64-byte header. */
+  /** Read and validate the 64-byte header. Accepts v2 and v3 archives. */
   private async getHeader(): Promise<ArchiveHeader> {
     if (this.headerCache) return this.headerCache;
     const buffer = await this.fetchRange(0, HEADER_SIZE - 1);
     const view = new DataView(buffer);
     const magic = new Uint8Array(buffer, 0, 4);
-    for (let i = 0; i < 4; i++) {
-      if (magic[i] !== MAGIC[i]) {
+    for (let i = 0; i < 3; i++) {
+      if (magic[i] !== MAGIC_PREFIX[i]) {
         throw new Error('Invalid STT archive: bad magic number');
       }
     }
     const version = view.getUint8(4);
-    if (version !== FORMAT_VERSION) {
+    // The 4th magic byte must also match the version byte — this catches
+    // archives whose two version fields drifted out of sync.
+    if (magic[3] !== version) {
+      throw new Error(
+        `Invalid STT archive: magic version byte (${magic[3]}) != header version (${version})`,
+      );
+    }
+    if (version < 2 || version > FORMAT_VERSION) {
       throw new Error(`Unsupported STT format version: ${version}`);
     }
     const compressionByte = view.getUint8(5);
+    let compression: Compression;
+    switch (compressionByte) {
+      case 0:
+        compression = Compression.None;
+        break;
+      case 1:
+        compression = Compression.Gzip;
+        break;
+      case 2:
+        compression = Compression.Zstd;
+        break;
+      default:
+        throw new Error(`Unknown STT compression code: ${compressionByte}`);
+    }
+    // Fields 6..38 are identical across v2 and v3. Fields 38..54 are the
+    // dictionary slot in v3 and reserved zero in v2 — reading them either
+    // way is correct (v2 will see zeros and produce a dictionary-less
+    // header).
     const header: ArchiveHeader = {
       version,
-      compression: compressionByte === 1 ? Compression.Gzip : Compression.None,
+      compression,
       indexOffset: Number(view.getBigUint64(6, true)),
       indexLength: Number(view.getBigUint64(14, true)),
       metadataOffset: Number(view.getBigUint64(22, true)),
       metadataLength: Number(view.getBigUint64(30, true)),
+      dictionaryOffset: Number(view.getBigUint64(38, true)),
+      dictionaryLength: Number(view.getBigUint64(46, true)),
     };
     this.headerCache = header;
     return header;
+  }
+
+  /**
+   * Fetch the optional zstd training dictionary embedded in a v3 archive.
+   * Returns `null` for v2 archives and v3 archives written without one.
+   *
+   * The dictionary is cached after the first call — every decode pulls it
+   * straight from memory.
+   */
+  async getDictionary(): Promise<Uint8Array | null> {
+    if (this.dictionaryCache !== undefined) return this.dictionaryCache;
+    const header = await this.getHeader();
+    if (header.version < 3 || header.dictionaryLength === 0) {
+      this.dictionaryCache = null;
+      return null;
+    }
+    const buffer = await this.fetchRange(
+      header.dictionaryOffset,
+      header.dictionaryOffset + header.dictionaryLength - 1,
+    );
+    this.dictionaryCache = new Uint8Array(buffer);
+    return this.dictionaryCache;
   }
 
   /** Archive metadata (JSON). */
@@ -257,6 +317,13 @@ export class STTArchive {
     const length = table.getChild('length')!.toArray() as Uint32Array;
     const uncompressed = table.getChild('uncompressed_size')!.toArray() as Uint32Array;
     const featureCount = table.getChild('feature_count')!.toArray() as Uint32Array;
+    // v3 archives use `crc32c` (UInt32); v2 archives use `content_hash`
+    // (UInt64). The TS reader doesn't currently verify the integrity tag
+    // client-side (decode failures throw a clear error instead), so we just
+    // tolerate either column being absent.
+    // (Kept for forward compatibility / debugging tools.)
+    void table.getChild('crc32c');
+    void table.getChild('content_hash');
 
     const tiles: TileEntry[] = [];
     for (let i = 0; i < table.numRows; i++) {
