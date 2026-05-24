@@ -11,31 +11,52 @@ export const datasets: Dataset[] = [
   {
     id: 'earthquake-activity',
     name: 'Earthquake Activity',
-    description: 'USGS real-time earthquake feed (M4.5+ from past 30 days)',
+    description: 'USGS earthquake archive — global M4.5+ events, 2020-01 → 2024-12',
     url: '/data/earthquakes-v2.stt',
-    radiusProperty: 'mag',
     type: 'point',
     timeRange: {
-      start: Date.parse('2020-01-01T00:28:20.289Z'),
-      end: Date.parse('2024-12-30T23:56:29.977Z'),
+      start: Date.parse('2020-01-01T00:00:00Z'),
+      end: Date.parse('2024-12-31T23:59:59Z'),
     },
     timeWindow: 86400000 * 30, // 30 day window for multi-year data
-    targetPlaybackSeconds: 120, // ~5 years plays in 60 seconds
+    targetPlaybackSeconds: 120, // ~5 years plays in ~2 min
     initialViewState: {
-      longitude: -155,
-      latitude: 30,
+      longitude: 140,
+      latitude: 20,
       zoom: 2,
       pitch: 0,
-      bearing: 0
+      bearing: 0,
     },
+    // Marker radius scales with magnitude. Smaller range and tamer slope keep
+    // fragment-shader work down: M4.5 ≈ 2.8 px, M6 ≈ 3.0 px, M7 ≈ 4.5 px,
+    // M8.5 ≈ 6.8 px. Capped at radiusMaxPixels so a single big quake never
+    // explodes into a viewport-wide disc.
+    radiusProperty: 'magnitude',
+    radiusUnits: 'pixels',
+    radiusScale: 1,
+    radiusMinPixels: 2,
+    radiusMaxPixels: 16,
+    radiusTransform: (mag: number) => Math.max(2, (mag - 4) * 1.5),
+    // Color by magnitude band (categorical column emitted by stt-generate).
+    // Fully opaque so the GPU can skip alpha blending — biggest perf win
+    // after dropping `stroked`.
+    colorProperty: 'mag_band',
+    colorMapping: {
+      '1-M4.5-5': [254, 229, 217, 255],
+      '2-M5-6':   [252, 174, 145, 255],
+      '3-M6-7':   [251, 106,  74, 255],
+      '4-M7-8':   [222,  45,  38, 255],
+      '5-M8+':    [165,  15,  21, 255],
+    },
+    colorMappingDefault: [120, 120, 120, 255],
     legend: {
       title: "Magnitude",
       items: [
-        { color: "#FEE5D9", label: "4.5-5.0" },
-        { color: "#FCAE91", label: "5.0-6.0" },
-        { color: "#FB6A4A", label: "6.0-7.0" },
-        { color: "#DE2D26", label: "7.0-8.0" },
-        { color: "#A50F15", label: "8.0+" }
+        { color: "#FEE5D9", label: "M4.5–5.0" },
+        { color: "#FCAE91", label: "M5.0–6.0" },
+        { color: "#FB6A4A", label: "M6.0–7.0" },
+        { color: "#DE2D26", label: "M7.0–8.0" },
+        { color: "#A50F15", label: "M8.0+" }
       ]
     },
   },
@@ -123,6 +144,11 @@ export const datasets: Dataset[] = [
     },
     use3D: true,
     elevationScale: 1, // Altitude already in meters (scaled during processing)
+    tripColor: [31, 186, 214, 255],
+    tripWidth: 4,
+    widthMinPixels: 2,
+    widthMaxPixels: 8,
+    trailLength: 60000,
   },
   {
     id: 'hurricanes',
@@ -173,6 +199,76 @@ export const datasets: Dataset[] = [
     },
   },
   {
+    id: 'nyc-taxi-od-heatmap',
+    name: 'NYC Pickups vs Dropoffs',
+    description: 'Density heatmap of taxi pickup (green) vs dropoff (red) hotspots — same TLC trips dataset, split by status (Feb 2016)',
+    url: '/data/nyc-rideshare.stt',
+    type: 'heatmap',
+    timeRange: {
+      start: 1454284862000,  // 2016-02-01 00:01:02 UTC
+      end: 1456791577000,    // 2016-02-29 23:39:37 UTC
+    },
+    // 12 hour window — wide enough that point density forms readable heat
+    // (both pickup-green and dropoff-red halos visible side-by-side), narrow
+    // enough that day-vs-night patterns still animate over the 28-day range.
+    timeWindow: 3600000 * 12,
+    targetPlaybackSeconds: 180,
+    initialViewState: {
+      longitude: -73.98,
+      latitude: 40.75,
+      zoom: 12,
+      pitch: 0,
+      bearing: 0,
+    },
+    // Stacked heatmaps — both layers cap their high-density alpha around
+    // 165/255 so the upper layer never fully occludes the one below. This is
+    // what lets the green pickups and red/orange dropoffs visibly co-exist
+    // in the same hot-zones (Midtown overlaps heavily).
+    // Perf knobs (see HeatmapTimeLayerProps.colorDomain / debounceTimeout for
+    // why these matter): colorDomain pins the weight ramp so deck.gl's
+    // HeatmapLayer skips its per-frame max-weight auto-detect (the dominant
+    // cost when the underlying data changes every animation tick). The radius
+    // is also dialled in — every doubling of `radiusPixels` is ~4x more
+    // fragment-shader work in the gaussian splat pass.
+    heatmapLayers: [
+      {
+        id: 'pickups',
+        radiusPixels: 24,
+        intensity: 1.2,
+        categoryFilter: { property: 'status', values: ['pickup'] },
+        colorRange: [
+          [16, 64, 32, 0],
+          [22, 122, 60, 70],
+          [38, 174, 88, 110],
+          [76, 218, 122, 140],
+          [144, 240, 168, 160],
+          [218, 252, 218, 175],
+        ],
+      },
+      {
+        id: 'dropoffs',
+        radiusPixels: 24,
+        intensity: 1.2,
+        categoryFilter: { property: 'status', values: ['dropoff'] },
+        colorRange: [
+          [64, 16, 16, 0],
+          [148, 38, 38, 70],
+          [216, 84, 50, 110],
+          [248, 142, 64, 140],
+          [252, 198, 120, 160],
+          [255, 240, 210, 175],
+        ],
+      },
+    ],
+    legend: {
+      title: 'Pickup vs Dropoff Density',
+      ramps: [
+        { label: 'Pickups',  colors: ['#0d3a1f', '#26ae58', '#90f0a8', '#dafcda'] },
+        { label: 'Dropoffs', colors: ['#3a0d0d', '#d85432', '#fcc678', '#fff0d2'] },
+      ],
+    },
+  },
+  {
     id: 'nyc-taxi-paths',
     name: 'NYC Taxi Paths',
     description: 'Real TLC trip paths with OSRM routing - 500K trips (Jan 1-2, 2015)',
@@ -182,8 +278,8 @@ export const datasets: Dataset[] = [
       start: 1420070400000,  // 2015-01-01 00:00:00 UTC
       end: 1420213385000,    // 2015-01-02 13:43:05 UTC
     },
-    timeWindow: 300000, // 5 min window for 1.5 day dataset
-    targetPlaybackSeconds: 300, // 1.5 days plays in 5 minutes
+    timeWindow: 60000, // 1 min window for 1.5 day dataset
+    targetPlaybackSeconds: 600, // 1.5 days plays in 10 minutes
     initialViewState: {
       longitude: -73.98,
       latitude: 40.75,
@@ -208,8 +304,11 @@ export const datasets: Dataset[] = [
       start: 1420070400000,  // 2015-01-01 00:00:00 UTC
       end: 1420213385000,    // 2015-01-02 13:43:05 UTC
     },
-    timeWindow: 120000, // 2 min window for trips
-    targetPlaybackSeconds: 600, // 1.5 days plays in 10 minutes
+    // timeWindow is overridden up to `2 × trailLength` for tile loading
+    // (see AnimatedTripsLayer.getEffectiveTimeWindow), so setting it shorter
+    // than that has no effect. Keep them aligned to avoid surprise.
+    timeWindow: 40000, // 40s — matches 2 × trailLength
+    targetPlaybackSeconds: 60000, // 2 minutes
     initialViewState: {
       longitude: -73.98,
       latitude: 40.75,
@@ -223,6 +322,15 @@ export const datasets: Dataset[] = [
         { color: "#FD805D", label: "Active Trip" },
       ]
     },
+    tripColor: [31, 186, 214, 255],
+    tripWidth: 4,
+    widthMinPixels: 2,
+    widthMaxPixels: 8,
+    trailLength: 10000,
+    // Flat caps/joints at zoom 14 — rounded was the dominant fragment cost on
+    // the Manhattan dataset and the rounding is invisible at 2-8 px widths.
+    capRounded: false,
+    jointRounded: false,
   },
   {
     id: 'ship-traffic',
@@ -315,6 +423,13 @@ export const datasets: Dataset[] = [
         { color: "#E57373", label: "HEO (High Earth Orbit)" }
       ]
     },
+    zoomOverride: 0,
+    useGlobalBounds: true,
+    tripColor: [31, 186, 214, 255],
+    tripWidth: 1.5,
+    widthMinPixels: 1,
+    widthMaxPixels: 3,
+    trailLength: 1000,
   },
   {
     id: 'satellite-trips-flat',
@@ -346,6 +461,13 @@ export const datasets: Dataset[] = [
         { color: "#E57373", label: "HEO (High Earth Orbit)" }
       ]
     },
+    zoomOverride: 0,
+    useGlobalBounds: true,
+    tripColor: [31, 186, 214, 255],
+    tripWidth: 1.5,
+    widthMinPixels: 1,
+    widthMaxPixels: 3,
+    trailLength: 300000,
   },
 ];
 

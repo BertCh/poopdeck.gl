@@ -136,6 +136,7 @@ export class STTArchive {
         : 512 * 1024 * 1024;
   }
 
+
   private getDecoder(): TileDecoder {
     if (this.decoder) return this.decoder;
     this.decoder = this.decoderOption ?? createDefaultTileDecoder();

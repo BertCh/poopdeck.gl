@@ -436,15 +436,21 @@ export class SpatioTemporalLayer<
       time: currentTime,
       timeWindow,
     }, skipDebounce);
-    
+
     // Get visible tiles (optimistic rendering - show what we have)
     const tiles = tileset.getVisibleTiles();
-    
-    // Check if tiles actually changed
+
+    // Decide whether to setState. Two conditions matter for the consolidated
+    // render path: the visible tile SET changed, or the frameNumber bumped
+    // (a new tile finished loading). We check the tile content directly as
+    // defense in depth — historically the tileset bumped frameNumber on
+    // every selectAndLoadTiles() call, which made the trip consolidation
+    // rebuild every animation frame. The content check stays cheap and
+    // ensures we never re-consolidate when the visible set is unchanged.
     const frameChanged = this.state.frameNumber !== frameNumber;
-    
-    if (frameChanged) {
-      // Tiles changed - use setState
+    const tilesChanged = this._tilesChanged(tiles);
+
+    if (frameChanged || tilesChanged) {
       this._lastTilesetUpdateTime = currentTime;
       this.setState({
         tiles,
@@ -474,7 +480,7 @@ export class SpatioTemporalLayer<
 
   private async _initArchiveAndTileset(): Promise<void> {
     if (DEBUG) console.log('[STL] Initializing archive from', this.props.data);
-    
+
     const archive = new STTArchive({
         url: this.props.data,
         loadOptions: this.props.loadOptions

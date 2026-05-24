@@ -27,6 +27,16 @@ const DEBUG = false;
  */
 const DIRECTION_FLIP_THRESHOLD = 3;
 
+/** O(n) set equality used to decide whether the needed-tile set actually changed. */
+function setsEqual(a: Set<string>, b: Set<string>): boolean {
+  if (a === b) return true;
+  if (a.size !== b.size) return false;
+  for (const k of a) {
+    if (!b.has(k)) return false;
+  }
+  return true;
+}
+
 export interface SpatiotemporalTilesetOptions {
   /** Maximum concurrent tile requests */
   maxRequests?: number;
@@ -193,62 +203,6 @@ export class SpatiotemporalTileset {
       onTileUnload: options.onTileUnload ?? (() => {}),
       onTileError: options.onTileError ?? ((err) => console.error(err)),
     };
-  }
-  
-  /**
-   * Align a timestamp to the nearest bucket boundary (floor)
-   */
-  private alignToBucket(time: number): number {
-    const bucket = this.options.temporalBucketMs;
-    return Math.floor(time / bucket) * bucket;
-  }
-  
-  /**
-   * Maximum number of bucket boundaries a single prefetch pass may enumerate.
-   * Without this cap a large `prefetchAhead * prefetchSteps` combined with a
-   * small `temporalBucketMs` (e.g. the earthquakes dataset: ~13e9ms ahead at a
-   * 1-hour bucket) produces millions of buckets. That overflows the V8 hard
-   * limit on `Promise.all`/`allSettled` (~2^21 elements) and throws
-   * "RangeError: Too many elements passed to Promise.all", which aborts all
-   * tile loading. Capping keeps prefetch bounded and best-effort.
-   */
-  private static readonly MAX_PREFETCH_BUCKETS = 4096;
-
-  /**
-   * Get all bucket boundaries that overlap with a time range.
-   *
-   * The result length is hard-capped at MAX_PREFETCH_BUCKETS. If the requested
-   * range would exceed that, the bucket step is coarsened so the range is
-   * still fully covered with at most MAX_PREFETCH_BUCKETS entries.
-   */
-  private getBucketBoundaries(start: number, end: number): number[] {
-    const bucket = this.options.temporalBucketMs;
-    const firstBucket = this.alignToBucket(start);
-    const lastBucket = this.alignToBucket(end);
-
-    const span = lastBucket - firstBucket;
-    const naiveCount = Math.floor(span / bucket) + 1;
-    // Coarsen the step (in whole-bucket multiples) if the naive enumeration
-    // would exceed the cap, so a huge prefetch range is sampled rather than
-    // fully enumerated.
-    let step = bucket;
-    if (naiveCount > SpatiotemporalTileset.MAX_PREFETCH_BUCKETS) {
-      const multiple = Math.ceil(
-        naiveCount / SpatiotemporalTileset.MAX_PREFETCH_BUCKETS,
-      );
-      step = bucket * multiple;
-    }
-
-    const buckets: number[] = [];
-    for (
-      let t = firstBucket;
-      t <= lastBucket &&
-      buckets.length < SpatiotemporalTileset.MAX_PREFETCH_BUCKETS;
-      t += step
-    ) {
-      buckets.push(t);
-    }
-    return buckets;
   }
   
   /**
@@ -522,29 +476,43 @@ export class SpatiotemporalTileset {
       }
     }
     
+    // Compare against the previous needed set BEFORE overwriting it. The
+    // frameNumber is the cache key consumers (AnimatedTripsLayer etc.) use
+    // to decide whether to re-consolidate hundreds of MB of vertex data, so
+    // bumping it on every selectAndLoadTiles() call — which fires every
+    // React render of the demo at 60Hz — defeats the whole memoization
+    // architecture and rebuilds the trip consolidation every frame.
+    const neededChanged = !setsEqual(this.neededTileKeys, neededTileKeys);
+
     // Store the needed tile keys for getVisibleTiles()
     // This is the authoritative set - no searching needed later
     this.neededTileKeys = neededTileKeys;
-    this.neededTilesVersion++;
-    
+    if (neededChanged) {
+      this.neededTilesVersion++;
+    }
+
     // Cancel in-flight requests for tiles that are no longer needed
     // This frees up bandwidth for current tiles
     this.cancelSupersededRequests(neededTileKeys);
-    
+
     // Prefetch when enabled, but debounced to once per PREFETCH_DEBOUNCE_MS
     // of wall-clock — see schedulePrefetch().
     if (this.options.enablePrefetch) {
       this.schedulePrefetch();
     }
-    
+
     // Remove tiles not in viewport (with grace period)
     this.evictUnusedTiles(neededTileKeys);
-    
+
     // Process request queues - priority first, then prefetch
     this.processRequestQueue();
-    
-    // Increment frame number
-    this.frameNumber++;
+
+    // Bump frameNumber only when the needed-tile set actually changed.
+    // Tile-load completions in startTileLoad() bump it separately, so a
+    // newly-arrived tile still wakes the consumer's render path.
+    if (neededChanged) {
+      this.frameNumber++;
+    }
   }
   
   /**
@@ -562,7 +530,7 @@ export class SpatiotemporalTileset {
     if (!this.currentViewport) return;
     
     const { bounds, zoom, time, timeWindow } = this.currentViewport;
-    const { prefetchAhead, prefetchSteps, temporalBucketMs } = this.options;
+    const { prefetchAhead, prefetchSteps } = this.options;
     
     // Use the hysteresis-smoothed committed prefetch direction. A single
     // backward scrub frame will not flip this (see updatePrefetchDirection).
@@ -577,60 +545,33 @@ export class SpatiotemporalTileset {
     const effectivePrefetchAhead = prefetchAhead > 0 ? prefetchAhead : timeWindow;
     const prefetchEndTime = time + (direction * effectivePrefetchAhead * prefetchSteps);
     
-    // Get all bucket boundaries we need to prefetch
-    // This is the key optimization: we prefetch at deterministic bucket boundaries
+    // One query per zoom level covering the whole prefetch range. The previous
+    // implementation enumerated every bucket boundary in [startTime, endTime]
+    // and issued one getAvailableTiles() call per (bucket × zoom). For datasets
+    // with large prefetch ranges and small temporal buckets (e.g. earthquakes:
+    // 76 days × 4 steps lookahead, 1-hour buckets → 8192 queries), the loop
+    // dominated the main thread — ~215 ms per pass × 4 passes/sec, collapsing
+    // FPS to single digits. The collapsed query returns the SAME tile IDs
+    // (getAvailableTiles already filters by interval overlap), just in O(zoomLevels)
+    // queries instead of O(buckets × zoomLevels).
     const startTime = direction > 0 ? time : prefetchEndTime;
     const endTime = direction > 0 ? prefetchEndTime : time;
-    const bucketBoundaries = this.getBucketBoundaries(
-      startTime - timeWindow / 2,
-      endTime + timeWindow / 2
-    );
-    
-    if (DEBUG) console.log('[Tileset] Bucket-aligned prefetch:', { 
+    const fullRange = {
+      start: startTime - timeWindow / 2,
+      end: endTime + timeWindow / 2,
+    };
+
+    if (DEBUG) console.log('[Tileset] Wide-range prefetch:', {
       time: new Date(time).toISOString(),
-      temporalBucketMs,
-      bucketsToFetch: bucketBoundaries.length,
-      firstBucket: bucketBoundaries[0] ? new Date(bucketBoundaries[0]).toISOString() : 'none',
-      lastBucket: bucketBoundaries[bucketBoundaries.length - 1] ? new Date(bucketBoundaries[bucketBoundaries.length - 1]).toISOString() : 'none',
+      zoomLevels,
+      fullRangeStart: new Date(fullRange.start).toISOString(),
+      fullRangeEnd: new Date(fullRange.end).toISOString(),
     });
-    
-    // Build prefetch queries for each bucket boundary
-    // Each bucket represents a deterministic time range
-    const prefetchQueries: Array<{
-      bucketTime: number;
-      zoom: number;
-      timeRange: { start: number; end: number };
-    }> = [];
-    
-    // Hard cap on concurrent prefetch queries. Each query becomes a promise in
-    // the Promise.allSettled below; keeping the total well under the V8 limit
-    // (~2^21) guarantees we never throw "Too many elements passed to
-    // Promise.all" regardless of zoom-level count or bucket coarsening.
-    const MAX_PREFETCH_QUERIES = 8192;
-    outer: for (const bucketTime of bucketBoundaries) {
-      // Query for the bucket's time range
-      const timeRange = {
-        start: bucketTime,
-        end: bucketTime + temporalBucketMs,
-      };
 
-      for (const z of zoomLevels) {
-        prefetchQueries.push({ bucketTime, zoom: z, timeRange });
-        if (prefetchQueries.length >= MAX_PREFETCH_QUERIES) break outer;
-      }
-    }
-
-    if (DEBUG) console.log('[Tileset] Prefetch queries:', prefetchQueries.length);
-    
-    // Execute ALL prefetch queries IN PARALLEL
     const results = await Promise.allSettled(
-      prefetchQueries.map(async (query) => {
-        const tileIds = await this.options.getAvailableTiles(
-          bounds,
-          query.zoom,
-          query.timeRange
-        );
-        return { ...query, tileIds };
+      zoomLevels.map(async (z) => {
+        const tileIds = await this.options.getAvailableTiles(bounds, z, fullRange);
+        return { zoom: z, tileIds };
       })
     );
     

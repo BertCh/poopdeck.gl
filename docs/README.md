@@ -13,6 +13,10 @@ Welcome to the documentation for Spatiotemporal Tiles (STT), a system for visual
 
 ## API Reference
 
+### MapLibre Adapter
+
+- [**@stt/maplibre**](./api/stt-maplibre.md): Native MapLibre GL custom-layer adapter (point / line / polygon).
+
 ### deck.gl Layers
 
 - [**SpatioTemporalLayer**](./api/spatiotemporal-layer.md): The base class for STT layers.

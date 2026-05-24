@@ -1,0 +1,17 @@
+{
+  "name": "@stt/perf",
+  "version": "0.1.0",
+  "description": "Real-WebGL perf harness for the STT showcase: frame-time histograms across playback / zoom / paused-idle scenarios, JSON output + baseline regression check.",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "stt-perf": "./src/cli.mjs"
+  },
+  "scripts": {
+    "perf": "node src/cli.mjs",
+    "install-browser": "playwright install chromium"
+  },
+  "dependencies": {
+    "playwright": "^1.49.0"
+  }
+}

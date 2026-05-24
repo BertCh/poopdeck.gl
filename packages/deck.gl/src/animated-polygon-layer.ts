@@ -35,11 +35,20 @@ const geometryCache = new WeakMap<BinaryFeatures, CachedPolygonGeometry>();
 const colorCache = new WeakMap<BinaryFeatures, Map<string, Uint8Array>>();
 
 /**
- * Cached layer info - stores the layer and its geometry hash
+ * Cached layer info - stores the layer and its geometry hash.
+ *
+ * `opacity`/`visible` are tracked so we can return the cached `layer`
+ * reference unchanged when nothing the consumer cares about has changed —
+ * deck.gl reuses the same GPU state and skips updateState() for matched
+ * sublayers, but only when we hand back the SAME Layer instance. The
+ * previous `.clone({opacity, visible})` allocated a fresh layer per render
+ * even when both values were equal to the cached layer's props.
  */
 interface CachedLayerInfo {
   layer: SolidPolygonLayer;
   indicesHash: string;
+  opacity: number | undefined;
+  visible: boolean | undefined;
 }
 
 export interface AnimatedPolygonLayerProps extends SpatioTemporalLayerProps {
@@ -215,25 +224,36 @@ export class AnimatedPolygonLayer extends SpatioTemporalLayer<AnimatedPolygonLay
     layerId: string
   ): SolidPolygonLayer | null {
     const cached = this.layerCache.get(layerId);
-    
+    const opacity = this.props.opacity;
+    const visible = this.props.visible;
+
     if (cached && cached.indicesHash === indicesHash) {
-      // Same visible set - clone with updated props
-      return cached.layer.clone({
-        opacity: this.props.opacity,
-        visible: this.props.visible,
-      } as any);
+      // Same visible set: if opacity/visible also match the cached layer's
+      // baked values, return the exact same instance. deck.gl's layer
+      // matcher will short-circuit prop diff entirely. Only clone when one
+      // of the cheap props actually changed.
+      if (cached.opacity === opacity && cached.visible === visible) {
+        return cached.layer;
+      }
+      const cloned = cached.layer.clone({ opacity, visible } as any);
+      cached.layer = cloned;
+      cached.opacity = opacity;
+      cached.visible = visible;
+      return cloned;
     }
-    
+
     // Visible set changed or new layer - create new
     const layer = this.createBinaryPolygonLayer(binary, visibleIndices, indicesHash, layerId);
-    
+
     if (layer) {
       this.layerCache.set(layerId, {
         layer,
         indicesHash,
+        opacity,
+        visible,
       });
     }
-    
+
     return layer;
   }
   

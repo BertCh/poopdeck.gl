@@ -64,6 +64,44 @@ export interface AnimatedPointLayerProps extends SpatioTemporalLayerProps {
   
   /** Color palette for categorical properties */
   colorPalette?: Color[];
+
+  /**
+   * Explicit category-to-color map. When set together with a string `fillColor`
+   * property, each feature's color is `colorMapping[categoryValue]`, using
+   * `colorMappingDefault` (or transparent) for unknown values. This is the
+   * only way to get stable colors across tiles whose categorical column
+   * contains different category subsets — the first-seen palette index
+   * fallback assigns the same band a different palette slot per tile.
+   */
+  colorMapping?: Record<string, Color>;
+
+  /** Fallback color for categories absent from `colorMapping`. */
+  colorMappingDefault?: Color;
+
+  /**
+   * Per-feature radius transform, applied to the numeric value of the
+   * `radius` property column before the GPU receives it. Useful for
+   * non-linear scalings (e.g. magnitude → area).
+   */
+  radiusTransform?: (value: number) => number;
+
+  /** Minimum on-screen radius in pixels. Forwarded to ScatterplotLayer. */
+  radiusMinPixels?: number;
+
+  /** Maximum on-screen radius in pixels. Forwarded to ScatterplotLayer. */
+  radiusMaxPixels?: number;
+
+  /** Outline stroke width in pixels. Forwarded to ScatterplotLayer. */
+  lineWidthMinPixels?: number;
+
+  /** Whether to render an outline stroke around each point. */
+  stroked?: boolean;
+
+  /** Stroke color (constant). */
+  strokeColor?: Color;
+
+  /** Whether to fill the marker (default true). */
+  filled?: boolean;
   
   /** 
    * Enable 3D positions (altitude/elevation support)
@@ -339,11 +377,47 @@ export class AnimatedPointLayer extends SpatioTemporalLayer<AnimatedPointLayerPr
           const count = binary.featureCount;
 
           if (colors && fillColorProp) {
-            const prop = binary.categoricalProps[fillColorProp];
-            if (prop) {
+            const catProp = binary.categoricalProps[fillColorProp];
+            const numProp = binary.numericProps[fillColorProp];
+            if (catProp) {
+              const mapping = this.props.colorMapping;
+              const fallback =
+                this.props.colorMappingDefault ?? [0, 0, 0, 0];
               for (let i = 0; i < count; i++) {
-                const categoryIndex = prop.indices[i];
-                const color = palette[categoryIndex % palette.length];
+                const categoryIndex = catProp.indices[i];
+                let color: Color;
+                if (mapping) {
+                  // Explicit mapping wins — looking up by category string
+                  // produces stable colors across tiles whose category lists
+                  // differ. (Falling back to palette[index] does not, since
+                  // each tile rebuilds the category dictionary in first-seen
+                  // order.)
+                  const cat =
+                    categoryIndex === 0xffff
+                      ? undefined
+                      : catProp.categories[categoryIndex];
+                  color = (cat !== undefined && mapping[cat]) || fallback;
+                } else {
+                  color =
+                    categoryIndex === 0xffff
+                      ? fallback
+                      : palette[categoryIndex % palette.length];
+                }
+                const dstIdx = (offset + i) * 4;
+                colors[dstIdx] = color[0];
+                colors[dstIdx + 1] = color[1];
+                colors[dstIdx + 2] = color[2];
+                colors[dstIdx + 3] = color[3] ?? 255;
+              }
+            } else if (numProp && this.props.colorMapping) {
+              // Numeric column + explicit mapping: stringify the value to look
+              // it up. Useful when a categorical-style key was accidentally
+              // emitted as numeric (rare, but defensive).
+              const mapping = this.props.colorMapping;
+              const fallback =
+                this.props.colorMappingDefault ?? [0, 0, 0, 0];
+              for (let i = 0; i < count; i++) {
+                const color = mapping[String(numProp[i])] || fallback;
                 const dstIdx = (offset + i) * 4;
                 colors[dstIdx] = color[0];
                 colors[dstIdx + 1] = color[1];
@@ -355,9 +429,16 @@ export class AnimatedPointLayer extends SpatioTemporalLayer<AnimatedPointLayerPr
 
           if (radii && radiusProp) {
             const values = binary.numericProps[radiusProp];
+            const transform = this.props.radiusTransform;
             if (values) {
-              for (let i = 0; i < count; i++) {
-                radii[offset + i] = values[i];
+              if (transform) {
+                for (let i = 0; i < count; i++) {
+                  radii[offset + i] = transform(values[i]);
+                }
+              } else {
+                for (let i = 0; i < count; i++) {
+                  radii[offset + i] = values[i];
+                }
               }
             }
           }
@@ -434,6 +515,12 @@ export class AnimatedPointLayer extends SpatioTemporalLayer<AnimatedPointLayerPr
       // into 1000-pixel discs that covered the entire viewport.
       radiusUnits: this.props.radiusUnits ?? 'pixels',
       radiusScale: this.props.radiusScale ?? 1,
+      radiusMinPixels: this.props.radiusMinPixels ?? 0,
+      radiusMaxPixels: this.props.radiusMaxPixels ?? Number.MAX_SAFE_INTEGER,
+      stroked: this.props.stroked ?? false,
+      filled: this.props.filled ?? true,
+      getLineColor: this.props.strokeColor ?? [0, 0, 0, 255],
+      lineWidthMinPixels: this.props.lineWidthMinPixels ?? 0,
       opacity: this.props.opacity,
       visible: this.props.visible,
       pickable: this.props.pickable ?? false,
@@ -453,7 +540,7 @@ export class AnimatedPointLayer extends SpatioTemporalLayer<AnimatedPointLayerPr
         instanceStartTime: startTimes,
         instanceEndTime: endTimes,
         getRadius: radii ?? [this.props.radius, this.props.radiusUnits, this.props.radiusScale],
-        getFillColor: colors ?? [this.props.fillColor, this.props.colorPalette],
+        getFillColor: colors ?? [this.props.fillColor, this.props.colorPalette, this.props.colorMapping],
       },
     });
   }

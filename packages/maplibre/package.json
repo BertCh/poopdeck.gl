@@ -1,6 +1,6 @@
 {
   "name": "@stt/maplibre",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "MapLibre GL custom-layer adapter for SpatioTemporal Tiles archives",
   "type": "module",
   "main": "./dist/index.js",
@@ -19,12 +19,14 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@stt/core": "workspace:*"
+    "@stt/core": "workspace:*",
+    "earcut": "^3.0.0"
   },
   "peerDependencies": {
-    "maplibre-gl": "^4 || ^5"
+    "maplibre-gl": "^3 || ^4 || ^5"
   },
   "devDependencies": {
+    "@types/earcut": "^2.1.4",
     "maplibre-gl": "^4.7.0",
     "typescript": "^5.4.0",
     "vitest": "^1.6.0"

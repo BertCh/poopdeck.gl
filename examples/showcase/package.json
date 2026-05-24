@@ -20,6 +20,7 @@
     "@deck.gl/widgets": "9.3.2",
     "@stt/core": "workspace:*",
     "@stt/deck.gl": "workspace:*",
+    "@stt/maplibre": "workspace:*",
     "@tailwindcss/typography": "^0.5.19",
     "@tailwindcss/vite": "^4.1.18",
     "autoprefixer": "^10.4.23",

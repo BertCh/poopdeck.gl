@@ -1,4 +1,10 @@
-import React, { useState, useCallback, useMemo, useEffect } from "react";
+import React, {
+  useState,
+  useCallback,
+  useMemo,
+  useEffect,
+  useRef,
+} from "react";
 import { useParams, Navigate } from "react-router-dom";
 import DeckGL from "@deck.gl/react";
 import { _GlobeView as GlobeView } from "@deck.gl/core";
@@ -19,7 +25,16 @@ import Legend from "../components/Legend";
 import TimeControls from "../components/TimeControls";
 import PerformanceMonitor from "../components/PerformanceMonitor";
 import CodePanel from "../components/CodePanel";
+import MaplibreRenderer from "../components/MaplibreRenderer";
 import { getCodeExample } from "../codeExamples";
+
+/**
+ * Which renderer is in use. Both share the same `TimeController` so a play /
+ * seek / speed change in the bottom bar drives whichever viewport is mounted.
+ * Switching renderers tears the old viewport down (so we don't keep an idle
+ * WebGL context around) and mounts the other one fresh.
+ */
+type RendererKind = "deck" | "maplibre";
 
 const MAPBOX_ACCESS_TOKEN =
   (import.meta as any).env?.VITE_MAPBOX_TOKEN ||
@@ -40,10 +55,11 @@ const DemoPage: React.FC = () => {
   const { datasetId } = useParams<{ datasetId: string }>();
   const selectedDataset = useMemo(
     () => getDatasetById(datasetId || ""),
-    [datasetId]
+    [datasetId],
   );
   const [bottomPanelExpanded, setBottomPanelExpanded] = useState(false);
   const [showTileBoundaries, setShowTileBoundaries] = useState(false);
+  const [renderer, setRenderer] = useState<RendererKind>("deck");
 
   const baseAnimationSpeed = useMemo(() => {
     if (!selectedDataset) return 1000;
@@ -58,7 +74,7 @@ const DemoPage: React.FC = () => {
         speed: baseAnimationSpeed,
         loop: true,
         timeRange: selectedDataset?.timeRange,
-      })
+      }),
   );
 
   const [currentTime, setCurrentTime] = useState(timeController.getTime());
@@ -77,11 +93,37 @@ const DemoPage: React.FC = () => {
     }
   }, [selectedDataset, timeController]);
 
+  // Throttle the React `currentTime` state update during playback. The
+  // TimeController ticks once per rAF (60Hz); the deck.gl layer reads time
+  // directly from the controller via a getter in TimeFilterExtension.draw(),
+  // so this React state is ONLY used to repaint the time slider and the
+  // displayed-time label. Updating those at 60Hz forces a full DemoPage
+  // re-render every frame, which made deck.gl receive a fresh `layers`
+  // array prop on every tick and rerun layer matching + updateState on
+  // every visible sublayer. 20Hz is visually indistinguishable for the
+  // UI and cuts React/deck.gl prop-diff work to a third.
+  const lastUiTickRef = useRef(0);
   useEffect(() => {
-    const handleTimeUpdate = (time: number) => setCurrentTime(time);
+    lastUiTickRef.current = 0;
+    const handleTimeUpdate = (time: number) => {
+      const now = performance.now();
+      if (now - lastUiTickRef.current < 50) return;
+      lastUiTickRef.current = now;
+      setCurrentTime(time);
+    };
+    // Subscribe to play-state as well so the slider snaps to the final time
+    // when playback stops (the throttled tick may have skipped the last update).
+    const handlePlayState = (playing: boolean) => {
+      if (!playing) {
+        lastUiTickRef.current = 0;
+        setCurrentTime(timeController.getTime());
+      }
+    };
     timeController.on("tick", handleTimeUpdate);
+    timeController.on("playState", handlePlayState);
     return () => {
       timeController.off("tick", handleTimeUpdate);
+      timeController.off("playState", handlePlayState);
     };
   }, [timeController]);
 
@@ -98,7 +140,7 @@ const DemoPage: React.FC = () => {
     (time: number) => {
       timeController.setTime(time);
     },
-    [timeController]
+    [timeController],
   );
 
   const handleSpeedChange = useCallback(
@@ -106,7 +148,7 @@ const DemoPage: React.FC = () => {
       setSpeedMultiplier(multiplier);
       timeController.setSpeed(baseAnimationSpeed * multiplier);
     },
-    [timeController, baseAnimationSpeed]
+    [timeController, baseAnimationSpeed],
   );
 
   const layers = useMemo(() => {
@@ -138,7 +180,12 @@ const DemoPage: React.FC = () => {
     const baseProps = {
       id: selectedDataset.id,
       data: selectedDataset.url,
-      currentTime,
+      // Seed with the initial time. The layer reads the live time from the
+      // shared TimeController every draw — we deliberately do NOT thread
+      // the React `currentTime` state in here, because that would invalidate
+      // the layer prop tree at 60Hz and force deck.gl to re-run updateState
+      // (and the trip consolidation cache) on every tick.
+      currentTime: selectedDataset.timeRange.start,
       timeController,
       timeWindow,
       timeRange: selectedDataset.timeRange,
@@ -159,9 +206,19 @@ const DemoPage: React.FC = () => {
           new AnimatedPointLayer({
             ...baseProps,
             fillColor: selectedDataset.colorProperty || [31, 186, 214, 255],
+            colorMapping: selectedDataset.colorMapping,
+            colorMappingDefault: selectedDataset.colorMappingDefault,
             radius: selectedDataset.radiusProperty || 1000,
-            radiusUnits: "meters",
-            radiusScale: 2,
+            // Per-dataset styling overrides; legacy datasets stay on the old
+            // meters/×2 default so ship and flight markers keep their look.
+            radiusUnits: selectedDataset.radiusUnits ?? "meters",
+            radiusScale: selectedDataset.radiusScale ?? 2,
+            radiusMinPixels: selectedDataset.radiusMinPixels,
+            radiusMaxPixels: selectedDataset.radiusMaxPixels,
+            radiusTransform: selectedDataset.radiusTransform,
+            stroked: selectedDataset.stroked,
+            strokeColor: selectedDataset.strokeColor,
+            lineWidthMinPixels: selectedDataset.lineWidthMinPixels,
             use3D: selectedDataset.use3D,
             elevationProperty: selectedDataset.elevationProperty,
             elevationScale: selectedDataset.elevationScale,
@@ -171,12 +228,34 @@ const DemoPage: React.FC = () => {
         return [
           new AnimatedPathLayer({
             ...baseProps,
-            pathColor: selectedDataset.colorProperty || [31, 186, 214, 255],
-            pathWidth: 3,
-            widthUnits: "pixels",
+            pathColor:
+              selectedDataset.colorProperty ||
+              selectedDataset.pathColor ||
+              [31, 186, 214, 255],
+            pathWidth: selectedDataset.pathWidth ?? 3,
+            widthUnits: selectedDataset.widthUnits ?? "pixels",
           }),
         ];
-      case "trips":
+      case "trips": {
+        const tripsLayer = new AnimatedTripsLayer({
+          ...baseProps,
+          // useGlobe / useGlobalBounds / zoomOverride let a dataset opt into
+          // a global tile load without bespoke per-id branching here.
+          ...(selectedDataset.zoomOverride !== undefined && {
+            zoomOverride: selectedDataset.zoomOverride,
+          }),
+          ...(selectedDataset.useGlobalBounds && { useGlobalBounds: true }),
+          tripColor: selectedDataset.tripColor ?? [31, 186, 214, 255],
+          tripWidth: selectedDataset.tripWidth ?? 4,
+          widthMinPixels: selectedDataset.widthMinPixels ?? 2,
+          widthMaxPixels: selectedDataset.widthMaxPixels ?? 8,
+          trailLength: selectedDataset.trailLength ?? 60000,
+          fadeTrail: selectedDataset.fadeTrail ?? true,
+          // Rounded caps/joints are the dominant fragment-shader cost at small
+          // widths; default off and let datasets opt in.
+          capRounded: selectedDataset.capRounded ?? false,
+          jointRounded: selectedDataset.jointRounded ?? false,
+        });
         if (selectedDataset.useGlobe) {
           return [
             new SolidPolygonLayer({
@@ -187,52 +266,32 @@ const DemoPage: React.FC = () => {
               filled: true,
               getFillColor: [36, 39, 48, 255],
             }),
-            new AnimatedTripsLayer({
-              ...baseProps,
-              zoomOverride: 0,
-              useGlobalBounds: true,
-              tripColor: [31, 186, 214, 255],
-              tripWidth: 1.5,
-              widthMinPixels: 1,
-              widthMaxPixels: 3,
-              trailLength: 1000,
-              fadeTrail: true,
-              capRounded: false,
-              jointRounded: false,
-            }),
+            tripsLayer,
           ];
         }
-        if (selectedDataset.id === "satellite-trips-flat") {
-          return [
-            new AnimatedTripsLayer({
-              ...baseProps,
-              zoomOverride: 0,
-              useGlobalBounds: true,
-              tripColor: [31, 186, 214, 255],
-              tripWidth: 1.5,
-              widthMinPixels: 1,
-              widthMaxPixels: 3,
-              trailLength: 300000,
-              fadeTrail: true,
-              capRounded: false,
-              jointRounded: false,
-            }),
-          ];
-        }
-        return [
-          new AnimatedTripsLayer({
-            ...baseProps,
-            tripColor: [31, 186, 214, 255],
-            tripWidth: 4,
-            widthMinPixels: 2,
-            widthMaxPixels: 8,
-            trailLength: 60000,
-            fadeTrail: true,
-            capRounded: true,
-            jointRounded: true,
-          }),
-        ];
+        return [tripsLayer];
+      }
       case "heatmap":
+        if (
+          selectedDataset.heatmapLayers &&
+          selectedDataset.heatmapLayers.length > 0
+        ) {
+          return selectedDataset.heatmapLayers.map(
+            (spec) =>
+              new HeatmapTimeLayer({
+                ...baseProps,
+                id: `${selectedDataset.id}-${spec.id}`,
+                radiusPixels: spec.radiusPixels ?? 30,
+                intensity: spec.intensity ?? 1,
+                colorRange: spec.colorRange,
+                weightProperty:
+                  spec.weightProperty ?? selectedDataset.weightProperty,
+                categoryFilter: spec.categoryFilter,
+                colorDomain: spec.colorDomain ?? null,
+                debounceTimeout: spec.debounceTimeout ?? 1000,
+              }),
+          );
+        }
         return [
           new HeatmapTimeLayer({
             ...baseProps,
@@ -252,18 +311,26 @@ const DemoPage: React.FC = () => {
         return [
           new AnimatedPolygonLayer({
             ...baseProps,
-            filled: true,
-            stroked: false,
-            lineWidthUnits: "pixels",
-            lineWidth: 2,
-            lineColor: [31, 186, 214, 255],
-            fillColor: selectedDataset.colorProperty || [31, 186, 214, 180],
+            filled: selectedDataset.polygonFilled ?? true,
+            stroked: selectedDataset.polygonStroked ?? false,
+            lineWidthUnits: selectedDataset.polygonLineWidthUnits ?? "pixels",
+            lineWidth: selectedDataset.polygonLineWidth ?? 2,
+            lineColor: selectedDataset.polygonLineColor ?? [31, 186, 214, 255],
+            fillColor:
+              selectedDataset.colorProperty ||
+              selectedDataset.polygonFillColor ||
+              [31, 186, 214, 180],
           }),
         ];
       default:
         return [];
     }
-  }, [selectedDataset, currentTime, timeController]);
+    // `currentTime` is deliberately NOT in the dependency list: the layer
+    // pulls live time from the shared TimeController on every draw, and
+    // including currentTime here rebuilt the prop tree every tick (60Hz),
+    // which forced deck.gl to invalidate the trip consolidation cache and
+    // re-copy ~10M vertex positions per frame on the NYC taxi dataset.
+  }, [selectedDataset, timeController]);
 
   // Debug tile boundary layer
   const tileBoundaryLayer = useMemo(() => {
@@ -304,11 +371,21 @@ const DemoPage: React.FC = () => {
     });
   }, [showTileBoundaries]);
 
+  // Compose the final layer array. Memoized so deck.gl sees a stable array
+  // reference across React re-renders (when `layers` and the optional tile
+  // boundary overlay are unchanged). Without this the inline
+  // `[...layers, tileBoundaryLayer].filter(Boolean)` in JSX allocated a new
+  // array every render and forced deck.gl to re-run layer matching every tick.
+  const composedLayers = useMemo(
+    () => [...layers, tileBoundaryLayer].filter(Boolean),
+    [layers, tileBoundaryLayer],
+  );
+
   const useGlobe = selectedDataset?.useGlobe ?? false;
   const views = useMemo(
     () =>
       useGlobe ? [new GlobeView({ id: "globe", resolution: 10 })] : undefined,
-    [useGlobe]
+    [useGlobe],
   );
   const initialViewState = useMemo((): any => {
     if (!selectedDataset) return undefined;
@@ -328,17 +405,24 @@ const DemoPage: React.FC = () => {
     >
       {/* Header */}
       <div
-        className="shrink-0 px-4 py-3 border-b flex items-center justify-between"
+        className="shrink-0 px-4 py-3 border-b flex items-center justify-between gap-4"
         style={{ background: "#29323C", borderColor: "#3A414C" }}
       >
         <div>
           <h1 className="text-sm font-semibold" style={{ color: "#FFFFFF" }}>
             {selectedDataset.name}
+            <span
+              className="ml-2 font-normal text-xs"
+              style={{ color: "#1FBAD6" }}
+            >
+              · {renderer === "deck" ? "@stt/deck.gl" : "@stt/maplibre"}
+            </span>
           </h1>
           <p className="text-xs mt-0.5" style={{ color: "#6A7485" }}>
             {selectedDataset.description}
           </p>
         </div>
+        <RendererToggle value={renderer} onChange={setRenderer} />
       </div>
 
       {/* Map Viewport */}
@@ -347,38 +431,49 @@ const DemoPage: React.FC = () => {
           className="w-full h-full rounded overflow-hidden map-viewport"
           style={{ border: "1px solid #3A414C" }}
         >
-          <DeckGL
-            initialViewState={initialViewState}
-            controller={true}
-            layers={[...layers, tileBoundaryLayer].filter(Boolean)}
-            views={views}
-            parameters={useGlobe ? ({ cull: true } as any) : undefined}
-          >
-            {!selectedDataset.useGlobe && (
-              <Map
-                reuseMaps
-                mapStyle="mapbox://styles/mapbox/dark-v11"
-                mapboxAccessToken={MAPBOX_ACCESS_TOKEN}
-                projection={{ name: "mercator" }}
-                terrain={
-                  selectedDataset.use3D
-                    ? { source: "mapbox-dem", exaggeration: 1.5 }
-                    : undefined
-                }
-                onLoad={(evt) => {
-                  const map = evt.target;
-                  if (selectedDataset.use3D && !map.getSource("mapbox-dem")) {
-                    map.addSource("mapbox-dem", {
-                      type: "raster-dem",
-                      url: "mapbox://mapbox.mapbox-terrain-dem-v1",
-                      tileSize: 512,
-                      maxzoom: 14,
-                    });
+          {renderer === "deck" ? (
+            <DeckGL
+              initialViewState={initialViewState}
+              controller={true}
+              layers={composedLayers}
+              views={views}
+              parameters={useGlobe ? ({ cull: true } as any) : undefined}
+            >
+              {!selectedDataset.useGlobe && (
+                <Map
+                  reuseMaps
+                  mapStyle="mapbox://styles/mapbox/dark-v11"
+                  mapboxAccessToken={MAPBOX_ACCESS_TOKEN}
+                  projection={{ name: "mercator" }}
+                  terrain={
+                    selectedDataset.use3D
+                      ? { source: "mapbox-dem", exaggeration: 1.5 }
+                      : undefined
                   }
-                }}
-              />
-            )}
-          </DeckGL>
+                  onLoad={(evt) => {
+                    const map = evt.target;
+                    if (selectedDataset.use3D && !map.getSource("mapbox-dem")) {
+                      map.addSource("mapbox-dem", {
+                        type: "raster-dem",
+                        url: "mapbox://mapbox.mapbox-terrain-dem-v1",
+                        tileSize: 512,
+                        maxzoom: 14,
+                      });
+                    }
+                  }}
+                />
+              )}
+            </DeckGL>
+          ) : (
+            // `key` forces a remount when the dataset changes so MapLibre's
+            // internal state (style, tile cache, viewport) doesn't try to
+            // straddle two unrelated archives.
+            <MaplibreRenderer
+              key={selectedDataset.id}
+              dataset={selectedDataset}
+              timeController={timeController}
+            />
+          )}
 
           {/* Legend */}
           {selectedDataset.legend && (
@@ -387,20 +482,23 @@ const DemoPage: React.FC = () => {
             </div>
           )}
 
-          {/* Debug Controls */}
-          <div className="absolute top-3 right-3 flex flex-col gap-2">
-            <button
-              onClick={() => setShowTileBoundaries(!showTileBoundaries)}
-              className="px-3 py-1.5 text-xs rounded transition-colors"
-              style={{
-                background: showTileBoundaries ? "#1FBAD6" : "#29323C",
-                color: showTileBoundaries ? "#000" : "#fff",
-                border: "1px solid #3A414C",
-              }}
-            >
-              {showTileBoundaries ? "🔲 Tiles ON" : "🔲 Tiles"}
-            </button>
-          </div>
+          {/* Debug Controls (deck.gl only — the MapLibre adapter doesn't draw
+              tile boundaries; users can inspect bounds via the native style). */}
+          {renderer === "deck" && (
+            <div className="absolute top-3 right-3 flex flex-col gap-2">
+              <button
+                onClick={() => setShowTileBoundaries(!showTileBoundaries)}
+                className="px-3 py-1.5 text-xs rounded transition-colors"
+                style={{
+                  background: showTileBoundaries ? "#1FBAD6" : "#29323C",
+                  color: showTileBoundaries ? "#000" : "#fff",
+                  border: "1px solid #3A414C",
+                }}
+              >
+                {showTileBoundaries ? "🔲 Tiles ON" : "🔲 Tiles"}
+              </button>
+            </div>
+          )}
 
           {/* Performance Monitor */}
           <PerformanceMonitor visible={true} />
@@ -457,3 +555,52 @@ const DemoPage: React.FC = () => {
 };
 
 export default DemoPage;
+
+/**
+ * Small segmented control for swapping between the deck.gl and `@stt/maplibre`
+ * renderers. Kept inline here because it has no other consumer.
+ */
+const RendererToggle: React.FC<{
+  value: RendererKind;
+  onChange: (next: RendererKind) => void;
+}> = ({ value, onChange }) => {
+  const items: Array<{ id: RendererKind; label: string; sub: string }> = [
+    { id: "deck", label: "deck.gl", sub: "@stt/deck.gl" },
+    { id: "maplibre", label: "MapLibre", sub: "@stt/maplibre" },
+  ];
+  return (
+    <div
+      className="inline-flex items-center rounded overflow-hidden"
+      style={{ background: "#242730", border: "1px solid #3A414C" }}
+      role="group"
+      aria-label="Renderer"
+    >
+      {items.map((it) => {
+        const active = it.id === value;
+        return (
+          <button
+            key={it.id}
+            type="button"
+            onClick={() => onChange(it.id)}
+            className="px-3 py-1.5 text-xs transition-colors flex flex-col items-start"
+            style={{
+              background: active ? "#1FBAD6" : "transparent",
+              color: active ? "#000" : "#A0A7B4",
+              minWidth: 100,
+              borderRight: it.id === "deck" ? "1px solid #3A414C" : undefined,
+            }}
+            aria-pressed={active}
+          >
+            <span className="font-semibold leading-tight">{it.label}</span>
+            <span
+              className="text-[10px] leading-tight mt-0.5"
+              style={{ color: active ? "#000" : "#6A7485" }}
+            >
+              {it.sub}
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+};

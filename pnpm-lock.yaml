@@ -72,6 +72,9 @@ importers:
       '@stt/deck.gl':
         specifier: workspace:*
         version: link:../../packages/deck.gl
+      '@stt/maplibre':
+        specifier: workspace:*
+        version: link:../../packages/maplibre
       '@tailwindcss/typography':
         specifier: ^0.5.19
         version: 0.5.19(tailwindcss@4.3.0)
@@ -192,7 +195,13 @@ importers:
       '@stt/core':
         specifier: workspace:*
         version: link:../core
+      earcut:
+        specifier: ^3.0.0
+        version: 3.0.2
     devDependencies:
+      '@types/earcut':
+        specifier: ^2.1.4
+        version: 2.1.4
       maplibre-gl:
         specifier: ^4.7.0
         version: 4.7.1
@@ -208,6 +217,12 @@ importers:
       '@stt/core':
         specifier: workspace:*
         version: link:../../packages/core
+
+  tools/perf:
+    dependencies:
+      playwright:
+        specifier: ^1.49.0
+        version: 1.60.0
 
   tools/render-test:
     devDependencies:
@@ -1142,6 +1157,9 @@ packages:
 
   '@types/crypto-js@4.2.2':
     resolution: {integrity: sha512-sDOLlVbHhXpAUAL0YHDUUwDZf3iN4Bwi4W6a0W0b+QcAezUbRtH4FVb+9J4h+XFPW7l/gQ9F8qC7P+Ec4k8QVQ==}
+
+  '@types/earcut@2.1.4':
+    resolution: {integrity: sha512-qp3m9PPz4gULB9MhjGID7wpo3gJ4bTGXm7ltNDsmOvsPduTeHp8wSW9YckBj3mljeOh4F0m2z/0JKAALRKbmLQ==}
 
   '@types/estree@1.0.8':
     resolution: {integrity: sha512-dWHzHa2WqEXI/O1E9OjrocMTKJl2mSrEolh1Iomrv6U+JuNwaHXsXx9bLu5gG7BUWFIN0skIQJQ/L1rIex4X6w==}
@@ -3182,6 +3200,8 @@ snapshots:
   '@types/command-line-usage@5.0.4': {}
 
   '@types/crypto-js@4.2.2': {}
+
+  '@types/earcut@2.1.4': {}
 
   '@types/estree@1.0.8': {}
 

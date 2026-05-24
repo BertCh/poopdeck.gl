@@ -188,15 +188,15 @@ describe('AnimatedPointLayer.createConsolidatedLayer', () => {
 // AnimatedPathLayer
 // ---------------------------------------------------------------------------
 
-describe('AnimatedPathLayer.createConsolidatedPathLayer', () => {
-  let buildLayer: (tile: any) => any;
+describe('AnimatedPathLayer per-tile sublayer architecture (v3)', () => {
+  let buildSublayerForTile: (tile: any) => any;
 
   beforeEach(async () => {
     vi.resetModules();
     const mod = await import('../src/animated-path-layer');
     const LayerCtor = mod.AnimatedPathLayer as any;
 
-    buildLayer = (tile) => {
+    buildSublayerForTile = (tile) => {
       const layer = Object.create(LayerCtor.prototype);
       layer.props = {
         id: 'test',
@@ -208,47 +208,46 @@ describe('AnimatedPathLayer.createConsolidatedPathLayer', () => {
         visible: true,
       };
       layer._currentTime = 0;
-      const data = (layer as any).buildConsolidatedData([tile]);
-      return (layer as any).createConsolidatedPathLayer(data);
+      layer.boundGetTime = () => 0;
+      layer.timeFilterExtension = {};
+      layer.preparedTileCache = new Map();
+      return (layer as any).buildSublayer(
+        (layer as any).prepareTile(tile, tile.layers[0])
+      );
     };
   });
 
-  it('path accessor returns a zero-copy SUBARRAY view, not a fresh number[]', () => {
+  it('hands deck.gl the binary {length, startIndices, attributes} shape', () => {
     const N = 100;
-    const V = 50; // 50 vertices per path
-    const layer = buildLayer(bigPathTile(N, V));
-    const features = layer.props.data;
+    const V = 50;
+    const built = buildSublayerForTile(bigPathTile(N, V));
+    const data = built.props.data;
 
-    expect(Array.isArray(features)).toBe(true);
-    expect(features.length).toBe(N);
-
-    // Every per-feature path must be a typed array (subarray view), not a
-    // freshly-allocated number[] of length n*dims. The previous code
-    // allocated `new Array(n * dims)` and copied every vertex per feature.
-    for (const f of features) {
-      expect(f.path).toBeInstanceOf(Float64Array);
-      // The view's byteLength corresponds to V*dims*8 bytes (Float64Array).
-      expect(f.path.length % V).toBe(0); // n*dims, dims is 2 or 3
-    }
-
-    // All subarrays should share the same underlying buffer as the
-    // consolidated positions array — that is the "zero-copy" guarantee.
-    const sharedBuffer = features[0].path.buffer;
-    for (const f of features) {
-      expect(f.path.buffer).toBe(sharedBuffer);
-    }
+    // Regression guard: data must NOT be a plain Array (which would imply
+    // per-feature wrapper allocations and accessor calls per tesselation).
+    expect(Array.isArray(data)).toBe(false);
+    expect(data.length).toBe(N);
+    expect(data.startIndices).toBeInstanceOf(Uint32Array);
+    expect(data.attributes).toBeDefined();
   });
 
-  it('sets positionFormat:"XY" so 2D flat paths are not misread as 3D', () => {
-    // makePathTile produces 2D positions (positionDimensions=2). Without an
-    // explicit positionFormat, PathLayer defaults to 'XYZ', which would slice
-    // a flat [lon0, lat0, lon1, lat1] array into garbage 3-tuples.
-    const layer = buildLayer(bigPathTile(5, 4));
-    expect(layer.props.positionFormat).toBe('XY');
-    // Sanity: every path subarray length is divisible by 2 (the matching stride).
-    for (const f of layer.props.data) {
-      expect(f.path.length % 2).toBe(0);
-    }
+  it('binds positions as a zero-copy view of the tile buffer', () => {
+    const tile = bigPathTile(8, 4);
+    const built = buildSublayerForTile(tile);
+    const attrs = built.props.data.attributes;
+
+    expect(attrs.getPath.value).toBeInstanceOf(Float64Array);
+    expect(attrs.getPath.size).toBe(2);
+    // Zero-copy: same buffer ref as the tile's BinaryFeatures.positions.
+    expect(attrs.getPath.value).toBe(tile.layers[0].features.positions);
+  });
+
+  it('sets positionFormat:"XY" so 2D flat paths are not misread as XYZ', () => {
+    // makePathTile produces 2D positions. Without an explicit positionFormat
+    // PathLayer defaults to 'XYZ' and would slice flat [lon0, lat0, …] into
+    // garbage 3-tuples — same bug as the trips layer.
+    const built = buildSublayerForTile(bigPathTile(5, 4));
+    expect(built.props.positionFormat).toBe('XY');
   });
 });
 
@@ -256,52 +255,234 @@ describe('AnimatedPathLayer.createConsolidatedPathLayer', () => {
 // AnimatedTripsLayer
 // ---------------------------------------------------------------------------
 
-describe('AnimatedTripsLayer.createConsolidatedPathLayer', () => {
-  it('sets positionFormat from consolidated dims so 2D paths render correctly', async () => {
+describe('AnimatedTripsLayer per-tile sublayer architecture (v3)', () => {
+  let LayerCtor: any;
+  let makeLayer: (opts?: any) => any;
+
+  beforeEach(async () => {
     vi.resetModules();
     const mod = await import('../src/animated-trips-layer');
-    const LayerCtor = mod.AnimatedTripsLayer as any;
+    LayerCtor = mod.AnimatedTripsLayer as any;
 
-    const layer = Object.create(LayerCtor.prototype);
-    layer.props = {
-      id: 'trips',
-      tripColor: [253, 128, 93, 255],
-      tripWidth: 2,
-      timeWindow: 1000,
-      trailLength: 500,
-      opacity: 1,
-      visible: true,
+    makeLayer = (opts = {}) => {
+      const layer = Object.create(LayerCtor.prototype);
+      layer.props = {
+        id: 'trips',
+        tripColor: [253, 128, 93, 255],
+        tripWidth: 2,
+        timeWindow: 1000,
+        trailLength: 500,
+        opacity: 1,
+        visible: true,
+        ...opts,
+      };
+      layer._currentTime = 0;
+      // boundGetTime is normally an instance-field initializer; Object.create
+      // bypasses that, so re-create the shape the constructor would set up.
+      layer.boundGetTime = () => 0;
+      layer.timeFilterExtension = {};
+      layer.preparedTileCache = new Map();
+      // Sublayer-instance cache + last-props digest: also class fields, so
+      // Object.create misses them. Initialize to the same empty shape the
+      // constructor would.
+      layer.sublayerCache = new Map();
+      layer.lastLayerPropsKey = '';
+      (layer as any).getEffectiveTimeWindow = () => 1000;
+      return layer;
     };
-    layer._currentTime = 0;
-    layer.timeFilterExtension = {}; // unused by the path under test
-    (layer as any).getEffectiveTimeWindow = () => 1000;
+  });
 
+  it('builds one PathLayer per tile (no cross-tile consolidation)', () => {
+    const layer = makeLayer();
+    layer.state = { tiles: [bigPathTile(20, 5), bigPathTile(15, 4)] };
+    // Give the two tiles distinct ids so makeTileKey doesn't collide.
+    layer.state.tiles[0].id = { z: 14, x: 1, y: 2, t: 0 };
+    layer.state.tiles[1].id = { z: 14, x: 1, y: 3, t: 0 };
+    const sublayers = (layer as any).renderLayers();
+    // Each tile has 1 layer; expect 1 sublayer per tile.
+    expect(sublayers.length).toBe(2);
+  });
+
+  it('hands deck.gl the binary {length, startIndices, attributes} shape', () => {
+    const layer = makeLayer();
+    const tile = bigPathTile(50, 4);
+    const built = (layer as any).buildSublayer((layer as any).prepareTile(tile, tile.layers[0]));
+    const data = built.props.data;
+
+    // Regression guard: data must NOT be a plain Array (i.e. no per-feature
+    // wrappers). On the NYC taxi dataset that meant ~500K small allocations
+    // per tile and matching accessor calls during PathLayer's tesselation.
+    expect(Array.isArray(data)).toBe(false);
+    expect(data.length).toBe(50);
+    expect(data.startIndices).toBeInstanceOf(Uint32Array);
+    expect(data.attributes).toBeDefined();
+  });
+
+  it('binds positions + instanceVertexTime as zero-copy typed arrays', () => {
+    const layer = makeLayer();
+    const tile = bigPathTile(8, 4);
+    const built = (layer as any).buildSublayer((layer as any).prepareTile(tile, tile.layers[0]));
+    const attrs = built.props.data.attributes;
+
+    // PathLayer's geometry accessor: keyed by ACCESSOR NAME `getPath`.
+    expect(attrs.getPath.value).toBeInstanceOf(Float64Array);
+    expect(attrs.getPath.size).toBe(2);
+    // Zero-copy: same buffer ref as the tile's BinaryFeatures.positions.
+    expect(attrs.getPath.value).toBe(tile.layers[0].features.positions);
+
+    // TimeFilterExtension per-vertex attribute: keyed by ATTRIBUTE NAME
+    // `instanceVertexTime` (the name registered in addInstanced()).
+    expect(attrs.instanceVertexTime).toBeDefined();
+    expect(attrs.instanceVertexTime.value).toBeInstanceOf(Float32Array);
+    expect(attrs.instanceVertexTime.size).toBe(1);
+
+    // With constant color/width (no property name), no per-feature buffer is
+    // emitted — deck.gl falls back to the constant `getColor`/`getWidth`.
+    expect(attrs.getColor).toBeUndefined();
+    expect(attrs.getWidth).toBeUndefined();
+  });
+
+  it('caches PreparedTile so the data object reference is stable across renders', () => {
+    const layer = makeLayer();
+    const tile = bigPathTile(5, 4);
+    const first = (layer as any).prepareTile(tile, tile.layers[0]);
+    const second = (layer as any).prepareTile(tile, tile.layers[0]);
+    // Stable identity is what lets deck.gl skip re-tesselation / GPU
+    // re-upload on the next render when nothing changed.
+    expect(second).toBe(first);
+    expect(second.data).toBe(first.data);
+  });
+
+  it('sets positionFormat from tile dims so 2D paths are not misread as XYZ', () => {
+    const layer = makeLayer();
     const tile = bigPathTile(3, 4);
-    const data = (layer as any).buildConsolidatedData([tile]);
-    const built = (layer as any).createConsolidatedPathLayer(data);
-
-    // Same root cause as AnimatedPathLayer: PathLayer defaults positionFormat
-    // to 'XYZ' and would misread 2D flat paths without an override.
+    const built = (layer as any).buildSublayer((layer as any).prepareTile(tile, tile.layers[0]));
+    // PathLayer defaults positionFormat to 'XYZ', which would slice a flat
+    // 2D buffer into garbage 3-tuples. Both AnimatedPathLayer and the trips
+    // layer have to opt out explicitly.
     expect(built.props.positionFormat).toBe('XY');
-    // Every per-feature path/vertexTimes is a zero-copy subarray view.
-    for (const f of built.props.data) {
-      expect(f.path).toBeInstanceOf(Float64Array);
-      expect(f.vertexTimes).toBeInstanceOf(Float32Array);
-    }
+  });
 
-    // getInstanceVertexTime must return the WHOLE per-feature vertex-times
-    // array. If it returns a single number (e.g. `d.vertexTimes[info.index]`),
-    // deck.gl applies that one value to every vertex of the feature, which
-    // makes entire paths flash on/off instead of producing a trailing animation.
-    const accessor = built.props.getInstanceVertexTime;
-    const sample = built.props.data[0];
-    const result = accessor(sample, { index: 0 });
-    expect(result).toBeInstanceOf(Float32Array);
-    expect(result).toBe(sample.vertexTimes);
-    // Different vertex times across the feature — trail interpolation relies
-    // on this. (4 vertices over [0, 1000] gives 0, 333.33, 666.66, 1000.)
-    expect(result.length).toBeGreaterThan(1);
-    expect(result[0]).not.toBe(result[result.length - 1]);
+  it('passes the bound getTime getter so the trail uniform advances each draw', () => {
+    const layer = makeLayer();
+    const tile = bigPathTile(3, 4);
+    const built = (layer as any).buildSublayer((layer as any).prepareTile(tile, tile.layers[0]));
+    // Without this, the trail uniform would freeze at the snapshot value
+    // between layer rebuilds — visible as "freeze then jump" stutter.
+    expect(typeof built.props.getTime).toBe('function');
+  });
+
+  it("uses each tile's own timeOffset (no cross-tile rebasing)", () => {
+    // Independence is the architectural promise of the v3 design: every tile
+    // is rendered through its own sublayer with its own TimeFilterExtension
+    // uniforms. The v2 consolidation pass rebased every tile onto a single
+    // layer-wide offset, defeating zero-copy on the time arrays.
+    const layer = makeLayer();
+    const a = bigPathTile(3, 4);
+    a.id = { z: 14, x: 1, y: 2, t: 0 };
+    a.layers[0].features.timeOffset = 1_700_000_000_000;
+    const b = bigPathTile(3, 4);
+    b.id = { z: 14, x: 1, y: 3, t: 0 };
+    b.layers[0].features.timeOffset = 1_700_086_400_000; // +1 day
+    layer.state = { tiles: [a, b] };
+    const [subA, subB] = (layer as any).renderLayers();
+    expect(subA.props.timeOffset).toBe(1_700_000_000_000);
+    expect(subB.props.timeOffset).toBe(1_700_086_400_000);
+  });
+
+  it('uses tile.vertexTimestamps directly (zero copy) when present', () => {
+    const layer = makeLayer();
+    const tile = bigPathTile(3, 4);
+    const totalVerts = tile.layers[0].features.startIndices[3];
+    const vt = new Float32Array(totalVerts);
+    for (let i = 0; i < totalVerts; i++) vt[i] = i * 10;
+    tile.layers[0].features.vertexTimestamps = vt;
+    const built = (layer as any).buildSublayer((layer as any).prepareTile(tile, tile.layers[0]));
+    // The very point of carrying per-vertex times in the tile is that the
+    // layer can hand them straight to deck.gl without allocating a fresh
+    // Float32Array per render.
+    expect(built.props.data.attributes.instanceVertexTime.value).toBe(vt);
+  });
+
+  it('synthesizes per-vertex times from start/end when vertexTimestamps absent', () => {
+    // bigPathTile leaves vertexTimestamps unset, so the synth path runs.
+    // Each feature interpolates startTime..endTime linearly across its vertices.
+    const layer = makeLayer();
+    const tile = bigPathTile(1, 4);
+    tile.layers[0].features.startTimes = new Float32Array([0]);
+    tile.layers[0].features.endTimes = new Float32Array([300]);
+    const built = (layer as any).buildSublayer((layer as any).prepareTile(tile, tile.layers[0]));
+    const vt = built.props.data.attributes.instanceVertexTime.value;
+    expect(vt.length).toBe(4);
+    expect(vt[0]).toBe(0);
+    expect(vt[3]).toBe(300);
+    expect(vt[1]).toBeCloseTo(100);
+    expect(vt[2]).toBeCloseTo(200);
+  });
+
+  it('prunes prepared-data cache when a tile drops out of the visible set', () => {
+    // Cache growth would be a slow memory leak under panning/animation; the
+    // prune step at the top of renderLayers() keeps it bounded to the live set.
+    const layer = makeLayer();
+    const a = bigPathTile(3, 4);
+    a.id = { z: 14, x: 1, y: 2, t: 0 };
+    const b = bigPathTile(3, 4);
+    b.id = { z: 14, x: 1, y: 3, t: 0 };
+    layer.state = { tiles: [a, b] };
+    (layer as any).renderLayers();
+    expect((layer as any).preparedTileCache.size).toBe(2);
+
+    layer.state = { tiles: [a] };
+    (layer as any).renderLayers();
+    expect((layer as any).preparedTileCache.size).toBe(1);
+  });
+
+  it('returns the SAME PathLayer instance per tile across renders when nothing changed', () => {
+    // Reference stability is the whole point of the sublayer cache: deck.gl's
+    // matcher short-circuits the entire updateState / prop-diff pass when the
+    // same instance comes back. Per-frame `new PathLayer(...)` was 30-60% of
+    // frame time once 50+ tiles were on screen.
+    const layer = makeLayer();
+    const a = bigPathTile(3, 4);
+    a.id = { z: 14, x: 1, y: 2, t: 0 };
+    const b = bigPathTile(3, 4);
+    b.id = { z: 14, x: 1, y: 3, t: 0 };
+    layer.state = { tiles: [a, b] };
+    const first = (layer as any).renderLayers();
+    const second = (layer as any).renderLayers();
+    expect(second.length).toBe(2);
+    expect(second[0]).toBe(first[0]);
+    expect(second[1]).toBe(first[1]);
+  });
+
+  it('rebuilds the cached PathLayer when a tile-level prop changes', () => {
+    // Layer-prop changes (trailLength, widthScale, …) must invalidate every
+    // cached sublayer; otherwise the new prop would apply only to newly
+    // arriving tiles and produce a visible split-render.
+    const layer = makeLayer();
+    const tile = bigPathTile(3, 4);
+    layer.state = { tiles: [tile] };
+    const first = (layer as any).renderLayers();
+    // Mutate a baked layer-level prop and re-render.
+    layer.props.trailLength = 12345;
+    const second = (layer as any).renderLayers();
+    expect(second[0]).not.toBe(first[0]);
+    expect(second[0].props.trailLength).toBe(12345);
+  });
+
+  it('drops sublayer-cache entries for tiles that leave the visible set', () => {
+    const layer = makeLayer();
+    const a = bigPathTile(3, 4);
+    a.id = { z: 14, x: 1, y: 2, t: 0 };
+    const b = bigPathTile(3, 4);
+    b.id = { z: 14, x: 1, y: 3, t: 0 };
+    layer.state = { tiles: [a, b] };
+    (layer as any).renderLayers();
+    expect((layer as any).sublayerCache.size).toBe(2);
+
+    layer.state = { tiles: [a] };
+    (layer as any).renderLayers();
+    expect((layer as any).sublayerCache.size).toBe(1);
   });
 });
 

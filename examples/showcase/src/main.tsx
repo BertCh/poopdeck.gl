@@ -17,6 +17,10 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
           <Route path="format" element={<FormatPage />} />
           <Route path="layers" element={<LayersPage />} />
           <Route path="demo/:datasetId" element={<DemoPage />} />
+          {/* Backwards-compat: old `/maplibre/:id` deep-links route to the
+              same dataset; the renderer toggle on DemoPage replaces the
+              previous standalone page. */}
+          <Route path="maplibre/:datasetId" element={<DemoPage />} />
         </Route>
       </Routes>
     </BrowserRouter>

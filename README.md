@@ -78,6 +78,25 @@ const layer = new AnimatedPointLayer({
 });
 ```
 
+### …or with native MapLibre GL
+
+```typescript
+import maplibregl from "maplibre-gl";
+import { STTPointLayer } from "@stt/maplibre";
+
+const map = new maplibregl.Map({ container: "map", style: "..." });
+const layer = new STTPointLayer({
+  id: "earthquakes",
+  url: "/data/earthquakes.stt",
+  currentTime: Date.now(),
+  timeWindow: 24 * 60 * 60 * 1000,
+});
+map.on("load", () => map.addLayer(layer));
+```
+
+See [`docs/api/stt-maplibre.md`](./docs/api/stt-maplibre.md) for the full
+adapter API.
+
 ---
 
 ## Archive format
@@ -112,7 +131,8 @@ spatiotemporal-tiles/
 │   └── stt-optimize/       # Archive/dataset analysis CLI
 ├── packages/               # TypeScript
 │   ├── core/               # Archive reader (apache-arrow)
-│   └── deck.gl/            # deck.gl layers + extensions
+│   ├── deck.gl/            # deck.gl layers + extensions
+│   └── maplibre/           # MapLibre GL custom-layer adapter
 └── examples/showcase/      # Interactive demo app
 ```
 
