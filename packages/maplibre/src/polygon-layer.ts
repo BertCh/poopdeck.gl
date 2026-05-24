@@ -30,6 +30,7 @@ import {
   type RGBA8,
 } from './base-layer';
 import { lngLatToMercator } from './projection';
+import { TIME_WINDOW_GLSL } from './shaders/time-window.glsl';
 
 // Categorical default palette (matches @stt/deck.gl AnimatedPolygonLayer).
 const DEFAULT_POLY_PALETTE: ReadonlyArray<RGBA8> = [
@@ -95,12 +96,10 @@ const VS_SOURCE = `
   uniform float uFadeOut;
   varying float vAlpha;
   varying vec4 vColor;
+${TIME_WINDOW_GLSL}
   void main() {
     gl_Position = uMatrix * vec4(aMercator.x, aMercator.y, aMercator.z * uAltitudeScale, 1.0);
-    float inside = (aTime.y >= uWindowStart && aTime.x <= uWindowEnd) ? 1.0 : 0.0;
-    float entering = (uFadeIn > 0.0) ? clamp((aTime.y - uWindowStart) / uFadeIn, 0.0, 1.0) : 1.0;
-    float leaving = (uFadeOut > 0.0) ? clamp((uWindowEnd - aTime.x) / uFadeOut, 0.0, 1.0) : 1.0;
-    vAlpha = inside * min(entering, leaving);
+    vAlpha = sttTimeWindowAlpha(aTime, uWindowStart, uWindowEnd, uFadeIn, uFadeOut);
     vColor = (uUseFeatureColor > 0.5) ? aColor : uColor;
   }
 `;
@@ -597,31 +596,28 @@ export class STTPolygonLayer extends STTBaseLayer {
       gl.uniform1f(h.uWindowEnd, ctx.windowEnd);
       gl.uniform1f(h.uFadeIn, fadeIn);
       gl.uniform1f(h.uFadeOut, fadeOut);
+      gl.uniform1f(h.uUseFeatureColor, c.colorBuffer && h.aColor >= 0 ? 1 : 0);
 
-      gl.bindBuffer(gl.ARRAY_BUFFER, c.positionBuffer);
-      gl.enableVertexAttribArray(h.aMercator);
-      gl.vertexAttribPointer(h.aMercator, 3, gl.FLOAT, false, 0, 0);
+      this.bindVaoOrSetup(c, () => {
+        gl.bindBuffer(gl.ARRAY_BUFFER, c.positionBuffer);
+        gl.enableVertexAttribArray(h.aMercator);
+        gl.vertexAttribPointer(h.aMercator, 3, gl.FLOAT, false, 0, 0);
 
-      gl.bindBuffer(gl.ARRAY_BUFFER, c.timeBuffer);
-      gl.enableVertexAttribArray(h.aTime);
-      gl.vertexAttribPointer(h.aTime, 2, gl.FLOAT, false, 0, 0);
+        gl.bindBuffer(gl.ARRAY_BUFFER, c.timeBuffer);
+        gl.enableVertexAttribArray(h.aTime);
+        gl.vertexAttribPointer(h.aTime, 2, gl.FLOAT, false, 0, 0);
 
-      if (c.colorBuffer && h.aColor >= 0) {
-        gl.bindBuffer(gl.ARRAY_BUFFER, c.colorBuffer);
-        gl.enableVertexAttribArray(h.aColor);
-        gl.vertexAttribPointer(h.aColor, 4, gl.UNSIGNED_BYTE, true, 0, 0);
-        gl.uniform1f(h.uUseFeatureColor, 1);
-      } else {
-        gl.uniform1f(h.uUseFeatureColor, 0);
-      }
+        if (c.colorBuffer && h.aColor >= 0) {
+          gl.bindBuffer(gl.ARRAY_BUFFER, c.colorBuffer);
+          gl.enableVertexAttribArray(h.aColor);
+          gl.vertexAttribPointer(h.aColor, 4, gl.UNSIGNED_BYTE, true, 0, 0);
+        }
+        // VAOs capture the element-array binding too.
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, c.indexBuffer!);
+      });
 
-      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, c.indexBuffer!);
       const indexType = c.use32BitIndices ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT;
       gl.drawElements(gl.TRIANGLES, c.indexCount, indexType, 0);
-
-      gl.disableVertexAttribArray(h.aMercator);
-      gl.disableVertexAttribArray(h.aTime);
-      if (c.colorBuffer && h.aColor >= 0) gl.disableVertexAttribArray(h.aColor);
     }
 
     if (this.polyOpts.stroked && c.stroke && this.strokeHandles) {
