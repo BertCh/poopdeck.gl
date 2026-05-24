@@ -23,6 +23,8 @@ import {
   type BoundingBox,
   type TimeRange,
   type TileRequestOptions,
+  type SummaryTier,
+  type SummaryColumn,
   Compression,
 } from './types';
 import { createDefaultTileDecoder, type TileDecoder } from './tile-decoder';
@@ -294,6 +296,7 @@ export class STTArchive {
         geometryTypes: [],
       })),
       temporalBucketMs: json.temporal_bucket_ms ?? 3600 * 1000,
+      summaryTier: parseSummaryTier(json.summary_tier),
     };
     return this.metadataCache;
   }
@@ -560,6 +563,66 @@ export class STTArchive {
     return tiles.filter((t): t is Tile => t !== null);
   }
 
+  /**
+   * Tile IDs whose interval overlaps `timeRange` within `bounds` at `zoom`,
+   * filtered to the SUMMARY tier when the archive carries one and the
+   * requested zoom is inside the summary range.
+   *
+   * The directory keys are identical to the raw tier (a summary tile shares
+   * its (zoom, x, y, t) coordinates with the raw tile that covers the same
+   * area at the same zoom). The TS reader distinguishes them only by the
+   * layer name carried in the decoded tile payload — so this helper is
+   * essentially a convenience wrapper that:
+   *
+   *   1. Returns an empty list if the archive has no summary tier.
+   *   2. Returns an empty list if `zoom` is outside the summary range.
+   *   3. Otherwise delegates to `getTileIdsInBounds`.
+   *
+   * Callers fetch the tiles with the standard `getTiles()` and then keep
+   * only the `summary`-named layer (see `isSummaryTile`).
+   */
+  async getSummaryTileIdsInBounds(
+    bounds: BoundingBox,
+    zoom: number,
+    timeRange: TimeRange,
+  ): Promise<TileId[]> {
+    const metadata = await this.getMetadata();
+    const tier = metadata.summaryTier;
+    if (!tier) return [];
+    if (zoom < tier.minZoom || zoom > tier.maxZoom) return [];
+    return this.getTileIdsInBounds(bounds, zoom, timeRange);
+  }
+
+  /**
+   * All summary-tier tiles within a bounding box and time range. Returns
+   * `[]` if the archive has no summary tier or the zoom is outside the
+   * summary range.
+   */
+  async getSummaryTilesInBounds(
+    bounds: BoundingBox,
+    zoom: number,
+    timeRange: TimeRange,
+    options?: TileRequestOptions
+  ): Promise<Tile[]> {
+    const ids = await this.getSummaryTileIdsInBounds(bounds, zoom, timeRange);
+    if (ids.length === 0) return [];
+    const tiles = await this.getTiles(ids, options);
+    const metadata = await this.getMetadata();
+    const layerName = metadata.summaryTier?.layerName ?? 'summary';
+    // Drop tiles that don't actually carry a summary layer. The raw and
+    // summary tiers share spatial coordinates but raw tiles are NOT
+    // expected at the summary zooms when the build wrote both tiers —
+    // however we still defend against tiles that mix layers.
+    const out: Tile[] = [];
+    for (const t of tiles) {
+      if (!t) continue;
+      const summaryLayers = t.layers.filter((l) => l.name === layerName);
+      if (summaryLayers.length === 0) continue;
+      out.push({ ...t, layers: summaryLayers });
+    }
+    return out;
+  }
+
   /** Prefetch tiles for a set of bucket times (warms the byte cache). */
   async prefetch(
     bounds: BoundingBox,
@@ -621,4 +684,50 @@ function latToTileY(lat: number, zoom: number): number {
   return Math.floor(
     ((1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2) * (1 << zoom)
   );
+}
+
+/**
+ * Parse the `summary_tier` block from an archive's JSON metadata into the
+ * camelCase TS shape. Returns `undefined` for archives that don't carry one
+ * (v2/v3 archives pre-dating the feature).
+ */
+function parseSummaryTier(raw: unknown): SummaryTier | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const r = raw as Record<string, unknown>;
+  const scheme = r.scheme as string | undefined;
+  if (scheme !== 'h3' && scheme !== 'quadbin') return undefined;
+  const minZoom = Number(r.min_zoom ?? 0);
+  const maxZoom = Number(r.max_zoom ?? minZoom);
+  const cellResolutionPerZoom = Array.isArray(r.cell_resolution_per_zoom)
+    ? (r.cell_resolution_per_zoom as unknown[]).map((v) => Number(v))
+    : [];
+  const layerName = typeof r.layer_name === 'string' ? r.layer_name : 'summary';
+  const cols: SummaryColumn[] = Array.isArray(r.columns)
+    ? (r.columns as unknown[])
+        .map((c) => {
+          if (!c || typeof c !== 'object') return null;
+          const cc = c as Record<string, unknown>;
+          const name = String(cc.name ?? '');
+          const agg = String(cc.agg ?? '');
+          if (
+            agg !== 'count' &&
+            agg !== 'sum' &&
+            agg !== 'mean' &&
+            agg !== 'min' &&
+            agg !== 'max'
+          ) {
+            return null;
+          }
+          return { name, agg } as SummaryColumn;
+        })
+        .filter((c): c is SummaryColumn => c !== null)
+    : [];
+  return {
+    scheme,
+    minZoom,
+    maxZoom,
+    cellResolutionPerZoom,
+    columns: cols,
+    layerName,
+  };
 }

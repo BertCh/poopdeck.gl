@@ -37,60 +37,101 @@ function setsEqual(a: Set<string>, b: Set<string>): boolean {
   return true;
 }
 
+/**
+ * Tile-tier dispatch mode for archives that carry a server-aggregated
+ * summary tier alongside their raw tiles.
+ *
+ * - `raw`     — always fetch raw tiles, ignoring any summary tier.
+ * - `summary` — always fetch summary tiles. Returns no tiles for archives
+ *               with no summary tier.
+ * - `auto`    — fetch summary tiles when the current zoom is inside the
+ *               archive's `summaryTier.[minZoom..=maxZoom]` range, raw
+ *               tiles otherwise. The default.
+ */
+export type TileTier = 'raw' | 'summary' | 'auto';
+
 export interface SpatiotemporalTilesetOptions {
   /** Maximum concurrent tile requests */
   maxRequests?: number;
-  
+
   /** Debounce time in milliseconds before loading tiles */
   debounceTime?: number;
-  
+
   /** Maximum number of tiles to cache */
   maxCacheSize?: number;
-  
+
   /** Maximum cache size in bytes */
   maxCacheByteSize?: number;
-  
+
   /** Minimum zoom level available in data */
   minZoom?: number;
-  
+
   /** Maximum zoom level available in data */
   maxZoom?: number;
-  
-  /** 
+
+  /**
    * Temporal bucket size in milliseconds (from archive metadata).
    * When set, enables deterministic tile prefetching aligned to bucket boundaries.
    * This significantly improves cache hits and reduces loading churn.
    */
   temporalBucketMs?: number;
-  
+
   /** Refinement strategy: 'best-available' (load parent tiles as fallback) or 'no-overlap' (only exact zoom) */
   refinementStrategy?: 'best-available' | 'no-overlap';
-  
+
   /** Enable predictive prefetching for animations */
   enablePrefetch?: boolean;
-  
+
   /** How far ahead to prefetch (in milliseconds of animation time) */
   prefetchAhead?: number;
-  
+
   /** Number of time window steps to prefetch */
   prefetchSteps?: number;
-  
-  /** Callback to get available tiles for bounds/time */
+
+  /**
+   * Tile-tier dispatch mode. Defaults to `'auto'`. See {@link TileTier}.
+   * When set to `'auto'`, the tileset asks `getAvailableTilesForTier` (if
+   * provided) for summary tile IDs at zooms inside the summary range and
+   * raw tile IDs elsewhere. If only `getAvailableTiles` is provided, the
+   * tier setting is informational and the tileset always uses raw tiles.
+   */
+  tier?: TileTier;
+
+  /**
+   * Inclusive zoom range covered by the archive's summary tier. When set,
+   * `'auto'` tier dispatches to summary inside this range and raw outside.
+   * Ignored when `tier !== 'auto'`.
+   */
+  summaryZoomRange?: { minZoom: number; maxZoom: number };
+
+  /** Callback to get available raw tiles for bounds/time. */
   getAvailableTiles: (
     bounds: BoundingBox,
     zoom: number,
     timeRange: { start: number; end: number }
   ) => Promise<TileId[]>;
-  
+
+  /**
+   * Optional callback to get available SUMMARY tiles for bounds/time. When
+   * unset, `tier: 'summary'` and `tier: 'auto'` (inside the summary range)
+   * both behave as `tier: 'raw'`. Pass `STTArchive.getSummaryTileIdsInBounds`
+   * here when wiring a tileset against an archive with a summary tier.
+   */
+  getAvailableSummaryTiles?: (
+    bounds: BoundingBox,
+    zoom: number,
+    timeRange: { start: number; end: number }
+  ) => Promise<TileId[]>;
+
   /** Callback to fetch tile data (with optional abort signal for cancellation) */
   getTileData: (tileId: TileId, signal?: AbortSignal) => Promise<Tile | null>;
-  
+
   /** Callback when tile loads */
   onTileLoad?: (tile: Tile) => void;
-  
+
   /** Callback when tile unloads */
   onTileUnload?: (tile: Tile) => void;
-  
+
   /** Callback on error */
   onTileError?: (error: Error, tileId: TileId) => void;
 }
@@ -197,12 +238,54 @@ export class SpatiotemporalTileset {
       // matching tuning notes in SpatioTemporalLayer.defaultProps.
       prefetchAhead: options.prefetchAhead ?? 30000,
       prefetchSteps: options.prefetchSteps ?? 4,
+      tier: options.tier ?? 'auto',
+      summaryZoomRange: options.summaryZoomRange ?? null,
       getAvailableTiles: options.getAvailableTiles,
+      getAvailableSummaryTiles: options.getAvailableSummaryTiles ?? null,
       getTileData: options.getTileData,
       onTileLoad: options.onTileLoad ?? (() => {}),
       onTileUnload: options.onTileUnload ?? (() => {}),
       onTileError: options.onTileError ?? ((err) => console.error(err)),
-    };
+    } as Required<SpatiotemporalTilesetOptions>;
+  }
+
+  /**
+   * Decide which tile-tier callback to use for a given zoom. Encapsulates the
+   * `tier: 'auto' | 'summary' | 'raw'` policy so `selectAndLoadTiles` and
+   * `prefetchFutureTiles` agree.
+   *
+   * Returns `'summary'` when the configured tier IS summary OR when tier is
+   * `'auto'` and `zoom` falls inside `summaryZoomRange`. Falls back to
+   * `'raw'` whenever no summary callback was provided (so the tier setting
+   * never breaks an archive without a summary tier).
+   */
+  private pickTierForZoom(zoom: number): 'raw' | 'summary' {
+    const { tier, summaryZoomRange, getAvailableSummaryTiles } = this.options;
+    if (!getAvailableSummaryTiles) return 'raw';
+    if (tier === 'raw') return 'raw';
+    if (tier === 'summary') return 'summary';
+    // 'auto': use summary when in range, raw otherwise.
+    if (!summaryZoomRange) return 'raw';
+    if (zoom >= summaryZoomRange.minZoom && zoom <= summaryZoomRange.maxZoom) {
+      return 'summary';
+    }
+    return 'raw';
+  }
+
+  /**
+   * One unified "available tiles" call that respects the active tier. Used
+   * by both `selectAndLoadTiles` and `prefetchFutureTiles`.
+   */
+  private async fetchAvailableTilesForZoom(
+    bounds: BoundingBox,
+    zoom: number,
+    timeRange: { start: number; end: number },
+  ): Promise<TileId[]> {
+    const tier = this.pickTierForZoom(zoom);
+    if (tier === 'summary' && this.options.getAvailableSummaryTiles) {
+      return this.options.getAvailableSummaryTiles(bounds, zoom, timeRange);
+    }
+    return this.options.getAvailableTiles(bounds, zoom, timeRange);
   }
   
   /**
@@ -395,11 +478,13 @@ export class SpatiotemporalTileset {
     const neededTileKeys = new Set<string>();
     
     // Query available tiles for ALL zoom levels IN PARALLEL
-    // This is much faster than sequential queries, especially for initial load
+    // This is much faster than sequential queries, especially for initial load.
+    // Dispatches between raw and summary tiers per zoom based on the
+    // configured tier setting (see pickTierForZoom).
     const tileIdsByZoom = await Promise.all(
       zoomLevels.map(async (z) => ({
         zoom: z,
-        tileIds: await this.options.getAvailableTiles(bounds, z, timeRange),
+        tileIds: await this.fetchAvailableTilesForZoom(bounds, z, timeRange),
       }))
     );
     
@@ -570,7 +655,7 @@ export class SpatiotemporalTileset {
 
     const results = await Promise.allSettled(
       zoomLevels.map(async (z) => {
-        const tileIds = await this.options.getAvailableTiles(bounds, z, fullRange);
+        const tileIds = await this.fetchAvailableTilesForZoom(bounds, z, fullRange);
         return { zoom: z, tileIds };
       })
     );

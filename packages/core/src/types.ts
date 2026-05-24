@@ -59,12 +59,53 @@ export interface ArchiveMetadata {
   maxZoom: number;
   layers: LayerInfo[];
   statistics?: ArchiveStatistics;
-  /** 
+  /**
    * Temporal bucket size in milliseconds used for tile chunking.
    * Tiles are organized into fixed temporal intervals (e.g., 3600000 = 1 hour).
    * This enables predictable prefetching and efficient animation.
    */
   temporalBucketMs?: number;
+  /**
+   * Optional server-aggregated summary tier descriptor. When set, the archive
+   * carries summary tiles alongside the raw tiles; the tileset can dispatch
+   * to whichever tier is appropriate for the current zoom.
+   */
+  summaryTier?: SummaryTier;
+}
+
+/** Aggregation scheme for the summary tier. */
+export type SummaryScheme = 'h3' | 'quadbin';
+
+/** Aggregation function for one summary-tier column. */
+export type SummaryAggregation = 'count' | 'sum' | 'mean' | 'min' | 'max';
+
+/** Descriptor for one aggregated column. */
+export interface SummaryColumn {
+  /**
+   * Source property name in the raw features. Ignored for `count`.
+   * The on-wire column name is `<agg>_<name>` (e.g. `mean_magnitude`),
+   * except `count` which is emitted as the bare `count` column.
+   */
+  name: string;
+  agg: SummaryAggregation;
+}
+
+/**
+ * Server-aggregated low-zoom tier. See the Rust
+ * `stt_core::metadata::SummaryTier` doc for the on-disk shape.
+ */
+export interface SummaryTier {
+  scheme: SummaryScheme;
+  /** Inclusive minimum zoom at which summary tiles exist. */
+  minZoom: number;
+  /** Inclusive maximum zoom at which summary tiles exist. */
+  maxZoom: number;
+  /** Cell resolution at each zoom in `[minZoom..=maxZoom]`. */
+  cellResolutionPerZoom: number[];
+  /** Aggregated columns. The implicit `count` is always present. */
+  columns: SummaryColumn[];
+  /** Layer name carried in summary tile frames (defaults to `summary`). */
+  layerName: string;
 }
 
 /** Layer information */
