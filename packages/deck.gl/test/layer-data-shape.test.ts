@@ -297,14 +297,15 @@ describe('AnimatedPointLayer per-tile sublayer architecture (v3)', () => {
 // ---------------------------------------------------------------------------
 
 describe('AnimatedPathLayer per-tile sublayer architecture (v3)', () => {
-  let buildSublayerForTile: (tile: any) => any;
+  let buildSublayerForTile: (tile: any, opts?: any) => any;
+  let LayerCtor: any;
 
   beforeEach(async () => {
     vi.resetModules();
     const mod = await import('../src/animated-path-layer');
-    const LayerCtor = mod.AnimatedPathLayer as any;
+    LayerCtor = mod.AnimatedPathLayer as any;
 
-    buildSublayerForTile = (tile) => {
+    buildSublayerForTile = (tile, opts = {}) => {
       const layer = Object.create(LayerCtor.prototype);
       layer.props = {
         id: 'test',
@@ -314,10 +315,12 @@ describe('AnimatedPathLayer per-tile sublayer architecture (v3)', () => {
         timeWindow: 1000,
         opacity: 1,
         visible: true,
+        ...opts,
       };
       layer._currentTime = 0;
       layer.boundGetTime = () => 0;
       layer.timeFilterExtension = {};
+      layer.categoryColorExtension = {};
       layer.preparedTileCache = new Map();
       return (layer as any).buildSublayer(
         (layer as any).prepareTile(tile, tile.layers[0])
@@ -357,6 +360,40 @@ describe('AnimatedPathLayer per-tile sublayer architecture (v3)', () => {
     const built = buildSublayerForTile(bigPathTile(5, 4));
     expect(built.props.positionFormat).toBe('XY');
   });
+
+  it('hands categorical color indices to the GPU (no per-feature RGBA buffer)', () => {
+    // Wire a categorical column on a path tile and assert the layer carries
+    // instanceCategoryIndex + useCategoryColor instead of allocating a
+    // 4n-byte Uint8Array.
+    const tile = bigPathTile(8, 4);
+    tile.layers[0].features.categoricalProps['kind'] = {
+      indices: new Uint16Array([0, 1, 2, 1, 0, 2, 1, 0]),
+      categories: ['a', 'b', 'c'],
+    };
+    const built = buildSublayerForTile(tile, {
+      pathColor: 'kind',
+      colorPalette: [
+        [10, 20, 30, 255],
+        [40, 50, 60, 255],
+        [70, 80, 90, 255],
+      ],
+    });
+    const attrs = built.props.data.attributes;
+    expect(attrs.getColor).toBeUndefined();
+    expect(attrs.instanceCategoryIndex).toBeDefined();
+    expect(attrs.instanceCategoryIndex.value).toBeInstanceOf(Float32Array);
+    expect(attrs.instanceCategoryIndex.value[2]).toBe(2);
+    expect(built.props.useCategoryColor).toBe(true);
+  });
+
+  it('declares dataComparator that skips deck.gl prop diff on identical references', () => {
+    const built = buildSublayerForTile(bigPathTile(3, 4));
+    const cmp = built.props.dataComparator;
+    expect(typeof cmp).toBe('function');
+    const ref = {};
+    expect(cmp(ref, ref)).toBe(true);
+    expect(cmp(ref, {})).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -389,6 +426,7 @@ describe('AnimatedTripsLayer per-tile sublayer architecture (v3)', () => {
       // bypasses that, so re-create the shape the constructor would set up.
       layer.boundGetTime = () => 0;
       layer.timeFilterExtension = {};
+      layer.categoryColorExtension = {};
       layer.preparedTileCache = new Map();
       // Sublayer-instance cache + last-props digest: also class fields, so
       // Object.create misses them. Initialize to the same empty shape the
@@ -591,6 +629,43 @@ describe('AnimatedTripsLayer per-tile sublayer architecture (v3)', () => {
     layer.state = { tiles: [a] };
     (layer as any).renderLayers();
     expect((layer as any).sublayerCache.size).toBe(1);
+  });
+
+  it('hands trip categorical color indices to the GPU (no per-feature RGBA buffer)', () => {
+    const layer = makeLayer({
+      tripColor: 'kind',
+      colorPalette: [
+        [10, 20, 30, 255],
+        [40, 50, 60, 255],
+        [70, 80, 90, 255],
+      ],
+    });
+    const tile = bigPathTile(8, 4);
+    tile.layers[0].features.categoricalProps['kind'] = {
+      indices: new Uint16Array([0, 1, 2, 1, 0, 2, 1, 0]),
+      categories: ['a', 'b', 'c'],
+    };
+    const built = (layer as any).buildSublayer(
+      (layer as any).prepareTile(tile, tile.layers[0]),
+    );
+    const attrs = built.props.data.attributes;
+    expect(attrs.getColor).toBeUndefined();
+    expect(attrs.instanceCategoryIndex).toBeDefined();
+    expect(attrs.instanceCategoryIndex.value).toBeInstanceOf(Float32Array);
+    expect(built.props.useCategoryColor).toBe(true);
+  });
+
+  it('declares dataComparator that skips deck.gl prop diff on identical references', () => {
+    const layer = makeLayer();
+    const tile = bigPathTile(3, 4);
+    const built = (layer as any).buildSublayer(
+      (layer as any).prepareTile(tile, tile.layers[0]),
+    );
+    const cmp = built.props.dataComparator;
+    expect(typeof cmp).toBe('function');
+    const ref = {};
+    expect(cmp(ref, ref)).toBe(true);
+    expect(cmp(ref, {})).toBe(false);
   });
 });
 

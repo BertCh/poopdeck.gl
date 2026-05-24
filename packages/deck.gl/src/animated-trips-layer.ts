@@ -25,6 +25,11 @@ import { PathLayer } from '@deck.gl/layers';
 import type { Color, Layer, LayerContext } from '@deck.gl/core';
 import { SpatioTemporalLayer, SpatioTemporalLayerProps } from './spatiotemporal-layer';
 import { TimeFilterExtension } from './time-filter-extension';
+import {
+  CategoryColorExtension,
+  CATEGORY_PALETTE_SIZE,
+} from './category-color-extension';
+import { emit } from './telemetry';
 import type { Tile, Layer as TileLayer, BinaryFeatures } from '@stt/core';
 
 const DEBUG = false;
@@ -73,6 +78,8 @@ interface PreparedTile {
   timeOffset: number;
   /** 2 or 3 — drives `positionFormat`. */
   dims: number;
+  /** Resolved palette when GPU categorical-color path is active for this tile. */
+  gpuPalette: Color[] | null;
 }
 
 function makeTileKey(tile: Tile, layer: TileLayer): string {
@@ -104,21 +111,13 @@ function synthesizeVertexTimes(binary: BinaryFeatures): Float32Array {
   return out;
 }
 
-/** Expand a categorical-property index array into a flat Uint8Array RGBA buffer. */
-function expandPaletteColors(
-  indices: Uint16Array,
-  categoryCount: number,
-  palette: Color[],
-): Uint8Array {
-  const out = new Uint8Array(categoryCount * 4);
-  for (let i = 0; i < categoryCount; i++) {
-    const color = palette[indices[i] % palette.length];
-    const o = i * 4;
-    out[o] = color[0];
-    out[o + 1] = color[1];
-    out[o + 2] = color[2];
-    out[o + 3] = color[3] ?? 255;
-  }
+/**
+ * Narrow Uint16Array → Float32Array for the GPU CategoryColorExtension.
+ * Allocated once per (tile, style change) and cached on the PreparedTile.
+ */
+function indicesToFloat32(indices: Uint16Array, count: number): Float32Array {
+  const out = new Float32Array(count);
+  for (let i = 0; i < count; i++) out[i] = indices[i];
   return out;
 }
 
@@ -174,6 +173,15 @@ export class AnimatedTripsLayer extends SpatioTemporalLayer<AnimatedTripsLayerPr
   private readonly timeFilterExtension = new TimeFilterExtension();
 
   /**
+   * Singleton CategoryColorExtension. Replaces the per-tile CPU
+   * expandPaletteColors() RGBA expansion with a one-time palette texture
+   * upload and a Float32 category-index attribute per tile. The shader
+   * branch is gated by useCategoryColor so the extension is inert on tiles
+   * without categorical color (constant tripColor, etc.).
+   */
+  private readonly categoryColorExtension = new CategoryColorExtension();
+
+  /**
    * Stable getTime reference. Critical: deck.gl re-runs work when accessor
    * function references change; a fresh arrow every render would defeat the
    * cache. The extension reads this from layer props on every draw().
@@ -225,6 +233,7 @@ export class AnimatedTripsLayer extends SpatioTemporalLayer<AnimatedTripsLayerPr
   }
 
   renderLayers(): Layer[] {
+    const t0 = performance.now();
     const { tiles } = this.state;
     if (!tiles || tiles.length === 0) return [];
 
@@ -278,6 +287,12 @@ export class AnimatedTripsLayer extends SpatioTemporalLayer<AnimatedTripsLayerPr
       }
     }
 
+    emit('renderLayers', {
+      layer: 'AnimatedTripsLayer',
+      tiles: tiles.length,
+      sublayers: sublayers.length,
+      ms: performance.now() - t0,
+    });
     if (DEBUG) {
       // eslint-disable-next-line no-console
       console.log(`AnimatedTripsLayer: ${tiles.length} tiles → ${sublayers.length} sublayers`);
@@ -303,8 +318,12 @@ export class AnimatedTripsLayer extends SpatioTemporalLayer<AnimatedTripsLayerPr
 
     const tileKey = makeTileKey(tile, tileLayer);
     const cached = this.preparedTileCache.get(tileKey);
-    if (cached && cached.styleKey === styleKey) return cached;
+    if (cached && cached.styleKey === styleKey) {
+      emit('tilePrepare', { layer: 'AnimatedTripsLayer', tileKey, cached: true, ms: 0 });
+      return cached;
+    }
 
+    const t0 = performance.now();
     const dims = binary.positionDimensions ?? 2;
     const totalVerts = binary.startIndices[binary.featureCount];
 
@@ -329,16 +348,19 @@ export class AnimatedTripsLayer extends SpatioTemporalLayer<AnimatedTripsLayerPr
       instanceVertexTime: { value: vertexTimes, size: 1 },
     };
 
-    // Property-driven categorical color → flat Uint8Array RGBA per feature.
+    // Property-driven categorical color: GPU path via CategoryColorExtension.
+    // The previous CPU expansion allocated a fresh 4n-byte Uint8Array per
+    // tile-style change; the GPU path uploads a 4n-byte Float32 attribute
+    // (one-time) and indexes a shared 16 KB palette texture in the shader.
+    let gpuPalette: Color[] | null = null;
     if (colorProp) {
       const cat = binary.categoricalProps[colorProp];
       if (cat) {
-        const palette = this.props.colorPalette ?? DEFAULT_PALETTE;
-        attributes.getColor = {
-          value: expandPaletteColors(cat.indices, binary.featureCount, palette),
-          size: 4,
-          normalized: true,
+        attributes.instanceCategoryIndex = {
+          value: indicesToFloat32(cat.indices, binary.featureCount),
+          size: 1,
         };
+        gpuPalette = this.props.colorPalette ?? DEFAULT_PALETTE;
       }
     }
 
@@ -361,8 +383,17 @@ export class AnimatedTripsLayer extends SpatioTemporalLayer<AnimatedTripsLayerPr
       },
       timeOffset: binary.timeOffset,
       dims,
+      gpuPalette,
     };
     this.preparedTileCache.set(tileKey, prepared);
+    emit('tilePrepare', {
+      layer: 'AnimatedTripsLayer',
+      tileKey,
+      cached: false,
+      features: binary.featureCount,
+      gpuPalette: gpuPalette !== null,
+      ms: performance.now() - t0,
+    });
     return prepared;
   }
 
@@ -375,9 +406,25 @@ export class AnimatedTripsLayer extends SpatioTemporalLayer<AnimatedTripsLayerPr
     const constWidth = typeof this.props.tripWidth === 'number' ? this.props.tripWidth : 2;
     const timeWindow = this.props.timeWindow || 86400000;
 
+    const useGpuCategory = prepared.gpuPalette !== null;
+    if (
+      useGpuCategory &&
+      prepared.gpuPalette!.length > CATEGORY_PALETTE_SIZE
+    ) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[AnimatedTripsLayer] colorPalette has ${prepared.gpuPalette!.length} ` +
+          `entries; only the first ${CATEGORY_PALETTE_SIZE} will be used by ` +
+          'CategoryColorExtension.',
+      );
+    }
+
     return new PathLayer({
       id: sublayerId,
       data: prepared.data,
+      // Identity comparator: deck.gl skips prop-diff on `data` when the same
+      // object reference comes back. Pairs with preparedTileCache.
+      dataComparator: (a: any, b: any) => a === b,
       _pathType: 'open',
       // PathLayer defaults positionFormat to 'XYZ'; 2D paths must opt out or
       // every vertex is read with the wrong stride.
@@ -397,13 +444,18 @@ export class AnimatedTripsLayer extends SpatioTemporalLayer<AnimatedTripsLayerPr
       getColor: constColor,
       getWidth: constWidth,
 
-      extensions: [this.timeFilterExtension],
+      extensions: [this.timeFilterExtension, this.categoryColorExtension],
       // Dynamic time: extension reads getTime() on every draw, so we never
       // recreate the layer for time-only changes.
       getTime: this.boundGetTime,
       timeOffset: prepared.timeOffset,
       timeWindow,
       trailLength: this.props.trailLength,
-    });
+
+      // CategoryColorExtension wiring. Toggle off when this tile has no
+      // categorical color so the shader branch is gated.
+      categoryPalette: useGpuCategory ? prepared.gpuPalette! : [],
+      useCategoryColor: useGpuCategory,
+    } as any);
   }
 }
