@@ -267,6 +267,28 @@ export interface ArchiveOptions {
    * browser — useful for debugging or environments that block workers.
    */
   decoder?: import('./tile-decoder').TileDecoder;
+  /**
+   * Enable the OPFS-backed persistent tile cache. Defaults to `true` in
+   * environments that expose `navigator.storage.getDirectory` (modern
+   * browsers) and `false` everywhere else (Node, SSR, sandboxed iframes).
+   *
+   * When enabled, decompressed tile payloads are stored under the Origin
+   * Private File System keyed by `(url, tileId, archiveFingerprint)`. On a
+   * tab reload the cache survives, so re-rendering the same viewport skips
+   * both the HTTP range request AND the zstd decompress step — only the
+   * Arrow IPC parse runs.
+   */
+  opfsCache?: boolean;
+  /** Soft byte budget for the OPFS cache. Defaults to 512 MB. */
+  opfsCacheMaxBytes?: number;
+  /** Subdirectory name under the OPFS root. Defaults to `"stt-cache"`. */
+  opfsCacheDirectory?: string;
+  /**
+   * Inject a custom OPFS cache implementation. Tests pass an in-memory shim
+   * here; production code should leave this unset and let `STTArchive`
+   * construct the real one.
+   */
+  opfsCacheImpl?: import('./opfs-cache').OpfsTileCache;
 }
 
 /** Options for tile requests */

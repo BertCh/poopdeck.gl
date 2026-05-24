@@ -26,6 +26,8 @@ import {
   Compression,
 } from './types';
 import { createDefaultTileDecoder, type TileDecoder } from './tile-decoder';
+import { OpfsTileCache, isOpfsAvailable } from './opfs-cache';
+import { decompress } from './compression';
 
 /** Magic prefix shared by all STT archives ("STT" + version byte). */
 const MAGIC_PREFIX = [0x53, 0x54, 0x54];
@@ -124,12 +126,32 @@ export class STTArchive {
   private dictionaryCache?: Uint8Array | null;
 
   private cacheStats = { hits: 0, misses: 0, evictions: 0 };
+  /**
+   * OPFS hit/miss counters. Tracked separately from the in-memory byte
+   * cache so the HUD can show the two layers independently — a low OPFS
+   * hit rate on a returning visitor usually means the archive ETag changed.
+   */
+  private opfsStats = { hits: 0, misses: 0 };
 
   // The decoder runs decompress + Arrow IPC parse + binary-feature extraction
   // off the main thread (worker pool) in browsers, inline elsewhere. Lazily
   // constructed so node tests that never call getTile() don't spin a pool.
   private decoder?: TileDecoder;
   private decoderOption?: TileDecoder;
+
+  /**
+   * Persistent OPFS cache for decompressed tile payloads. `undefined` when
+   * the caller opted out or OPFS isn't reachable; null after construction
+   * means "explicitly disabled, do not auto-enable later".
+   */
+  private opfsCache?: OpfsTileCache;
+  /**
+   * Stable archive fingerprint captured from the first response (ETag /
+   * Last-Modified / Content-Length). Lazily filled by `fetchRange` so an
+   * archive that's hot-swapped on the server (different ETag) invalidates
+   * the OPFS entry without us hashing the full file.
+   */
+  private archiveFingerprint?: string;
 
   constructor(options: ArchiveOptions | string) {
     if (typeof options === 'string') {
@@ -139,6 +161,20 @@ export class STTArchive {
       this.url = options.url;
       this.fetchFn = options.fetch || fetch.bind(globalThis);
       this.decoderOption = options.decoder;
+      // OPFS defaults to on in browsers, off in Node (no navigator.storage).
+      // An explicit `false` disables it everywhere; an explicit `true` forces
+      // construction so a test shim (`opfsCacheImpl`) is honoured even
+      // without a real OPFS API.
+      const opfsRequested =
+        options.opfsCache ?? (typeof navigator !== 'undefined' && isOpfsAvailable());
+      if (options.opfsCacheImpl) {
+        this.opfsCache = options.opfsCacheImpl;
+      } else if (opfsRequested) {
+        this.opfsCache = new OpfsTileCache({
+          directory: options.opfsCacheDirectory,
+          maxBytes: options.opfsCacheMaxBytes,
+        });
+      }
     }
     this.maxCacheTiles = getDeviceAwareCacheSize();
     this.maxCacheBytes =
@@ -180,6 +216,30 @@ export class STTArchive {
         `STT archive server ignored Range request (status ${response.status}); ` +
           'HTTP range requests are required.'
       );
+    }
+    // Snapshot a stable identifier the first time the server tells us one.
+    // Prefer ETag (server-chosen, opaque), fall back to Last-Modified, then
+    // Content-Range total. This is good enough to bust the OPFS cache when
+    // the archive is republished without us hashing the file ourselves.
+    if (!this.archiveFingerprint && response.headers) {
+      const headers = response.headers as Headers | Record<string, string>;
+      const get = (name: string): string | null => {
+        if (typeof (headers as Headers).get === 'function') {
+          return (headers as Headers).get(name);
+        }
+        const rec = headers as Record<string, string>;
+        return rec[name] ?? rec[name.toLowerCase()] ?? null;
+      };
+      const etag = get('ETag') || get('etag');
+      const lastMod = get('Last-Modified') || get('last-modified');
+      const contentRange = get('Content-Range') || get('content-range');
+      let total: string | null = null;
+      if (contentRange) {
+        const m = /\/(\d+)$/.exec(contentRange);
+        if (m) total = m[1];
+      }
+      const fp = etag || lastMod || total;
+      if (fp) this.archiveFingerprint = fp;
     }
     return response.arrayBuffer();
   }
@@ -372,6 +432,45 @@ export class STTArchive {
     return `${id.z}/${id.x}/${id.y}/${id.t}`;
   }
 
+  /**
+   * Build the OPFS cache key for a tile. Includes the archive URL and a
+   * stable fingerprint so a redeployed archive (different ETag) doesn't
+   * silently serve stale tiles. Returns `null` when the fingerprint isn't
+   * known yet — in that case we just skip OPFS for this call; the next one
+   * (post-header) will have a fingerprint and start hitting.
+   */
+  private opfsKey(id: TileId): string | null {
+    if (!this.archiveFingerprint) return null;
+    return `${this.url}::${id.z}/${id.x}/${id.y}/${id.t}::${this.archiveFingerprint}`;
+  }
+
+  /**
+   * Persist decompressed bytes to OPFS in the background. Decompressing the
+   * payload again on the main thread is wasted CPU on the cold path, but it
+   * runs AFTER the tile has been delivered to the caller — so it doesn't
+   * block any user-visible work. On every subsequent reload that same key
+   * skips both the HTTP fetch and the zstd decompress.
+   */
+  private async writeOpfsAsync(
+    id: TileId,
+    entry: TileEntry,
+    compressed: ArrayBuffer,
+  ): Promise<void> {
+    const cache = this.opfsCache;
+    if (!cache) return;
+    const key = this.opfsKey(id);
+    if (!key) return;
+    try {
+      const decompressed = await decompress(
+        new Uint8Array(compressed),
+        entry.compression,
+      );
+      await cache.set(key, decompressed);
+    } catch {
+      // Best-effort: an OPFS error must never break the data path.
+    }
+  }
+
   /** Decode compressed tile bytes into a Tile via the configured decoder. */
   private async decodeBytes(
     id: TileId,
@@ -383,6 +482,31 @@ export class STTArchive {
       timeRange: { start: entry.timeStart, end: entry.timeEnd },
       compressed,
       compression: entry.compression,
+    });
+  }
+
+  /**
+   * Decode an already-decompressed payload. Reused for OPFS warm hits — the
+   * decoder still has to run the Arrow IPC parse + binary extraction, but
+   * it skips the (often zstd) decompression step entirely.
+   */
+  private async decodeDecompressed(
+    id: TileId,
+    entry: TileEntry,
+    decompressed: Uint8Array,
+  ): Promise<Tile> {
+    // Copy into a fresh ArrayBuffer — the worker decoder transfers ownership
+    // of the buffer, and we may have other consumers (or the OPFS view)
+    // still holding the original. The explicit `new ArrayBuffer(...)` is
+    // belt-and-braces against a SharedArrayBuffer-backed input slipping in
+    // (the decoder protocol requires a transferable buffer).
+    const buf = new ArrayBuffer(decompressed.byteLength);
+    new Uint8Array(buf).set(decompressed);
+    return this.getDecoder().decode({
+      id,
+      timeRange: { start: entry.timeStart, end: entry.timeEnd },
+      compressed: buf,
+      compression: Compression.None,
     });
   }
 
@@ -400,6 +524,22 @@ export class STTArchive {
       return this.decodeBytes(id, entry, cached.bytes);
     }
 
+    // OPFS lookup BEFORE the network. A hit returns decompressed bytes that
+    // we can feed straight into the decoder, skipping zstd entirely. Note
+    // we also skip storing the bytes back into the in-memory byteCache —
+    // they're decompressed, while the in-memory cache holds compressed
+    // payloads. Re-fetches inside the same tab will hit OPFS again, which
+    // is still very fast.
+    const opfsK = this.opfsCache ? this.opfsKey(id) : null;
+    if (this.opfsCache && opfsK) {
+      const fromOpfs = await this.opfsCache.get(opfsK);
+      if (fromOpfs) {
+        this.opfsStats.hits++;
+        return this.decodeDecompressed(id, entry, fromOpfs);
+      }
+      this.opfsStats.misses++;
+    }
+
     this.cacheStats.misses++;
     const compressed = await this.fetchRange(
       entry.offset,
@@ -407,7 +547,13 @@ export class STTArchive {
       options?.signal
     );
     this.storeBytes(key, compressed);
-    return this.decodeBytes(id, entry, compressed);
+    const tile = await this.decodeBytes(id, entry, compressed);
+    // Fire-and-forget OPFS write. Slicing the buffer so any later mutation
+    // of `compressed` is independent.
+    if (this.opfsCache) {
+      void this.writeOpfsAsync(id, entry, compressed.slice(0));
+    }
+    return tile;
   }
 
   /**
@@ -426,7 +572,7 @@ export class STTArchive {
       id: TileId;
       entry: TileEntry;
     }
-    const pending: Pending[] = [];
+    let pending: Pending[] = [];
     const jobs: Promise<void>[] = [];
 
     for (let i = 0; i < ids.length; i++) {
@@ -448,6 +594,39 @@ export class STTArchive {
         this.cacheStats.misses++;
         pending.push({ index: i, id, entry });
       }
+    }
+
+    // OPFS lookup phase: every miss against the in-memory cache gets one
+    // chance to come from OPFS first. The lookups run concurrently so the
+    // batch isn't serialized behind OPFS I/O. A hit on OPFS removes the
+    // tile from `pending` so it doesn't get scheduled into a coalesced
+    // HTTP range group.
+    if (this.opfsCache && pending.length > 0 && this.archiveFingerprint) {
+      const opfsResults = await Promise.all(
+        pending.map(async (p) => {
+          const k = this.opfsKey(p.id);
+          if (!k) return null;
+          const bytes = await this.opfsCache!.get(k);
+          return bytes;
+        }),
+      );
+      const stillPending: Pending[] = [];
+      for (let i = 0; i < pending.length; i++) {
+        const bytes = opfsResults[i];
+        const p = pending[i];
+        if (bytes) {
+          this.opfsStats.hits++;
+          jobs.push(
+            this.decodeDecompressed(p.id, p.entry, bytes).then((t) => {
+              results[p.index] = t;
+            }),
+          );
+        } else {
+          this.opfsStats.misses++;
+          stillPending.push(p);
+        }
+      }
+      pending = stillPending;
     }
 
     if (pending.length > 0) {
@@ -483,6 +662,9 @@ export class STTArchive {
                   const slice = buffer.slice(rel, rel + m.entry.length);
                   this.storeBytes(this.tileIdToKey(m.id), slice);
                   results[m.index] = await this.decodeBytes(m.id, m.entry, slice);
+                  if (this.opfsCache) {
+                    void this.writeOpfsAsync(m.id, m.entry, slice.slice(0));
+                  }
                 })
               ).then(() => undefined)
           )
@@ -574,15 +756,27 @@ export class STTArchive {
     await this.getTiles(ids, options);
   }
 
-  /** Clear the compressed-byte cache. */
+  /** Clear the in-memory compressed-byte cache (does NOT touch OPFS). */
   clearCache(): void {
     this.byteCache.clear();
     this.currentCacheBytes = 0;
   }
 
+  /**
+   * Clear the persistent OPFS cache. Use this when the user wants to
+   * reclaim disk, or as part of a forced refresh. The in-memory byte cache
+   * is left alone — clear that separately with {@link clearCache}.
+   */
+  async clearOpfsCache(): Promise<void> {
+    await this.opfsCache?.clear();
+    this.opfsStats = { hits: 0, misses: 0 };
+  }
+
   /** Cache statistics. */
   getCacheStats() {
     const total = this.cacheStats.hits + this.cacheStats.misses;
+    const opfsTotal = this.opfsStats.hits + this.opfsStats.misses;
+    const opfs = this.opfsCache?.getStats();
     return {
       size: this.byteCache.size,
       maxSize: this.maxCacheTiles,
@@ -592,7 +786,28 @@ export class STTArchive {
       misses: this.cacheStats.misses,
       evictions: this.cacheStats.evictions,
       hitRate: total > 0 ? this.cacheStats.hits / total : 0,
+      // OPFS layer stats. Fields are zero / undefined when OPFS isn't
+      // enabled, so HUD code can read them unconditionally.
+      opfs: opfs
+        ? {
+            available: opfs.available,
+            bytes: opfs.bytes,
+            entries: opfs.entries,
+            maxBytes: opfs.maxBytes,
+            hits: this.opfsStats.hits,
+            misses: this.opfsStats.misses,
+            hitRate: opfsTotal > 0 ? this.opfsStats.hits / opfsTotal : 0,
+          }
+        : undefined,
     };
+  }
+
+  /**
+   * Direct handle to the OPFS cache. Returns `undefined` when OPFS is
+   * disabled. Useful for `clear()` from a "wipe cache" UI button.
+   */
+  getOpfsCache(): OpfsTileCache | undefined {
+    return this.opfsCache;
   }
 }
 

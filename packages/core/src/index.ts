@@ -14,3 +14,8 @@ export {
   type TileDecoder,
   type DecodeArgs,
 } from './tile-decoder';
+export {
+  OpfsTileCache,
+  isOpfsAvailable,
+  type OpfsTileCacheOptions,
+} from './opfs-cache';
