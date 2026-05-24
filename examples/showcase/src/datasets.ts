@@ -9,6 +9,52 @@ import { Dataset } from './types';
 
 export const datasets: Dataset[] = [
   {
+    id: 'earthquake-summary',
+    name: 'Earthquake Hex Density (Summary Tier)',
+    description:
+      'Server-aggregated H3 hex bins of global M4.5+ earthquakes, 2020-2024. ' +
+      'Renders 100K+ raw events as ~hundreds of pre-aggregated cells — the ' +
+      'unlock for 100M+ scale point datasets.',
+    url: '/data/earthquakes-summary.stt',
+    type: 'summary',
+    timeRange: {
+      start: Date.parse('2020-01-01T00:00:00Z'),
+      end: Date.parse('2024-12-31T23:59:59Z'),
+    },
+    timeWindow: 86400000 * 90, // 90-day window
+    targetPlaybackSeconds: 120,
+    initialViewState: {
+      longitude: 140,
+      latitude: 20,
+      zoom: 2,
+      pitch: 30,
+      bearing: 0,
+    },
+    summaryWeightProperty: 'count',
+    // Bright sequential ramp — Yellow→Red works well for density. Matches
+    // CARTO's `Sunset` palette in spirit.
+    summaryColorRange: [
+      [255, 255, 204, 220],
+      [254, 217, 142, 230],
+      [254, 153,  41, 235],
+      [217,  95,  14, 240],
+      [153,  52,   4, 250],
+      [102,  37,   6, 255],
+    ],
+    summaryColorDomain: [1, 200], // pin the legend across zoom changes
+    summaryExtruded: false,
+    summaryCoverage: 0.94,
+    legend: {
+      title: 'Earthquakes per hex',
+      ramps: [
+        {
+          label: 'Density',
+          colors: ['#FFFFCC', '#FED993', '#FE9929', '#D95F0E', '#993404'],
+        },
+      ],
+    },
+  },
+  {
     id: 'earthquake-activity',
     name: 'Earthquake Activity',
     description: 'USGS earthquake archive — global M4.5+ events, 2020-01 → 2024-12',

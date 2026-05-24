@@ -13,6 +13,7 @@ const typeLabels: Record<string, string> = {
   trips: 'Animated Trips',
   heatmap: 'Heatmaps',
   polygon: 'Polygon Layers',
+  summary: 'Summary Hex Bins',
 };
 
 const typeIcons: Record<string, string> = {
@@ -21,13 +22,21 @@ const typeIcons: Record<string, string> = {
   trips: '→',
   heatmap: '◐',
   polygon: '⬡',
+  summary: '⬢',
 };
 
 const Sidebar: React.FC<SidebarProps> = ({ onNavigate }) => {
   const location = useLocation();
 
   const groupedDatasets = React.useMemo(() => {
-    const groups: Record<string, Dataset[]> = { point: [], path: [], trips: [], heatmap: [], polygon: [] };
+    const groups: Record<string, Dataset[]> = {
+      point: [],
+      path: [],
+      trips: [],
+      heatmap: [],
+      polygon: [],
+      summary: [],
+    };
     DATASETS.forEach((dataset) => {
       if (groups[dataset.type]) groups[dataset.type].push(dataset);
     });

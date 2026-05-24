@@ -17,6 +17,7 @@ import {
   AnimatedTripsLayer,
   AnimatedPolygonLayer,
   HeatmapTimeLayer,
+  H3SummaryLayer,
   TimeController,
 } from "@stt/deck.gl";
 import { getDatasetById } from "../datasets";
@@ -320,6 +321,24 @@ const DemoPage: React.FC = () => {
               selectedDataset.colorProperty ||
               selectedDataset.polygonFillColor ||
               [31, 186, 214, 180],
+          }),
+        ];
+      case "summary":
+        return [
+          new H3SummaryLayer({
+            id: selectedDataset.id,
+            data: selectedDataset.url,
+            currentTime: selectedDataset.timeRange.start,
+            timeController,
+            timeWindow,
+            weightProperty: selectedDataset.summaryWeightProperty ?? "count",
+            colorRange: selectedDataset.summaryColorRange,
+            colorDomain: selectedDataset.summaryColorDomain,
+            extruded: selectedDataset.summaryExtruded ?? false,
+            elevationScale: selectedDataset.summaryElevationScale ?? 1,
+            coverage: selectedDataset.summaryCoverage ?? 0.92,
+            opacity: 0.85,
+            pickable: false,
           }),
         ];
       default:

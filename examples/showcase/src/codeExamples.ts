@@ -138,12 +138,44 @@ const layer = new AnimatedTripsLayer({
   fadeTrail: true,
 });`;
 
+const summaryLayerExample = `import { H3SummaryLayer, TimeController } from '@stt/deck.gl';
+
+// Summary-tier hexagons. The archive must have been built with
+// stt-build --summary-tier h3.
+const timeController = new TimeController({
+  initialTime: Date.parse('2020-01-01'),
+  speed: 86400000 / 60,
+  loop: true,
+});
+
+const layer = new H3SummaryLayer({
+  id: 'earthquake-summary',
+  data: '/data/earthquakes-summary.stt',
+  currentTime: timeController.getTime(),
+  timeController,
+  // 'count' is the implicit per-cell count column. Aggregated columns
+  // are addressable as e.g. 'mean_magnitude', 'max_magnitude'.
+  weightProperty: 'count',
+  colorDomain: [1, 200],
+  colorRange: [
+    [255, 255, 204, 220],
+    [254, 217, 142, 230],
+    [254, 153,  41, 235],
+    [217,  95,  14, 240],
+    [153,  52,   4, 250],
+    [102,  37,   6, 255],
+  ],
+  coverage: 0.94,
+  opacity: 0.85,
+});`;
+
 const codeExamples: Record<DatasetType, string> = {
   point: pointLayerExample,
   path: pathLayerExample,
   trips: tripsLayerExample,
   heatmap: heatmapLayerExample,
   polygon: polygonLayerExample,
+  summary: summaryLayerExample,
 };
 
 const datasetSpecificExamples: Record<string, string> = {

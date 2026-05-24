@@ -1,4 +1,15 @@
-export type DatasetType = 'point' | 'path' | 'trips' | 'heatmap' | 'polygon';
+export type DatasetType =
+  | 'point'
+  | 'path'
+  | 'trips'
+  | 'heatmap'
+  | 'polygon'
+  /**
+   * Server-aggregated summary tier (H3 hex bins). Renders summary tiles via
+   * `H3SummaryLayer`. Only useful for archives built with
+   * `stt-build --summary-tier h3`.
+   */
+  | 'summary';
 
 export interface DatasetLegendItem {
   color: string;
@@ -182,6 +193,28 @@ export interface Dataset {
   polygonLineColor?: ColorRGBA;
   /** Polygon fill color — constant RGBA or `colorProperty` for categorical fill. */
   polygonFillColor?: ColorRGBA;
+
+  // ─── summary-tier styling (type: 'summary') ────────────────────────────
+  /**
+   * Numeric column the summary-tier color ramp + extrusion are driven by.
+   * Defaults to `'count'` (the implicit per-cell count column).
+   */
+  summaryWeightProperty?: string;
+  /**
+   * 6-stop low→high colour ramp for the summary tier. RGBA, 0-255.
+   */
+  summaryColorRange?: ColorRGBA[];
+  /**
+   * `[min, max]` pin for the colour ramp. When unset, each tile's own
+   * min/max drives the ramp — visually unstable but a usable default.
+   */
+  summaryColorDomain?: [number, number];
+  /** Extrude the hexes by `weight * elevationScale`. */
+  summaryExtruded?: boolean;
+  /** Meters-per-weight-unit when extruded. */
+  summaryElevationScale?: number;
+  /** Hex coverage (0..1). Lower values leave visible gaps between hexes. */
+  summaryCoverage?: number;
 }
 
 /**
