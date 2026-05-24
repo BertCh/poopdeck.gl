@@ -50,6 +50,9 @@ temp_eval/
 # Exception: the tiny bench fixture is checked in so CI can run regression
 # checks without generating data over the network.
 !tools/bench/baselines/earthquakes-ci.stt
+# Exception: TS contract test fixtures are committed so the test can run
+# without the Rust toolchain being available.
+!packages/core/test/fixtures/*.stt
 *.mbtiles
 *.pmtiles
 test-data/*.json

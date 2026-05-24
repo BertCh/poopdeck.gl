@@ -46,7 +46,11 @@ describe('STTArchive (Arrow format)', () => {
   it('reads metadata from the JSON block', async () => {
     const archive = new STTArchive({ url: 'mem://sample.stt', fetch: rangeFetch() });
     const meta = await archive.getMetadata();
-    expect(meta.version).toBe(2);
+    // Reader supports both v2 and v3 fixtures; let the fixture's actual
+    // version drive the expectation so we can regenerate it as the format
+    // moves forward.
+    expect(meta.version).toBeGreaterThanOrEqual(2);
+    expect(meta.version).toBeLessThanOrEqual(3);
     expect(meta.minZoom).toBeLessThanOrEqual(meta.maxZoom);
     expect(meta.bounds.minLon).toBeLessThan(meta.bounds.maxLon);
     expect(meta.timeRange.end).toBeGreaterThan(meta.timeRange.start);
