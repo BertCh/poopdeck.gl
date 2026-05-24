@@ -59,12 +59,34 @@ export interface ArchiveMetadata {
   maxZoom: number;
   layers: LayerInfo[];
   statistics?: ArchiveStatistics;
-  /** 
+  /**
    * Temporal bucket size in milliseconds used for tile chunking.
    * Tiles are organized into fixed temporal intervals (e.g., 3600000 = 1 hour).
    * This enables predictable prefetching and efficient animation.
    */
   temporalBucketMs?: number;
+  /**
+   * Optional temporal LOD pyramid.
+   *
+   * When present, the archive carries aggregate tiles at coarser temporal
+   * granularities in addition to the base `temporalBucketMs` tiles. A
+   * renderer animating long time spans at low zoom can fetch tiles from the
+   * matching LOD level instead of streaming per-bucket base tiles.
+   *
+   * Sorted by ascending `bucketMs`. Each level applies up to (and including)
+   * `maxZoomLevel`.
+   */
+  temporalLod?: TemporalLodLevel[];
+}
+
+/**
+ * One level of a temporal LOD pyramid (mirrors stt_core::metadata::TemporalLodLevel).
+ */
+export interface TemporalLodLevel {
+  /** Temporal bucket size in milliseconds at this level. */
+  bucketMs: number;
+  /** Inclusive upper bound on the spatial zoom where this LOD applies. */
+  maxZoomLevel: number;
 }
 
 /** Layer information */
@@ -225,6 +247,15 @@ export interface TileEntry {
   featureCount: number;
   compression: Compression;
   uncompressedSize: number;
+  /**
+   * Temporal bucket size in milliseconds this tile spans.
+   *
+   * `undefined` when the archive predates the temporal-LOD scaffold (the
+   * directory column isn't present); the reader treats those tiles as
+   * belonging to the archive's base `temporalBucketMs`. LOD-aware archives
+   * always populate this so a reader can dispatch on bucket size.
+   */
+  temporalBucketMs?: number;
 }
 
 /** Archive index */

@@ -21,6 +21,7 @@ import {
   type TileId,
   type TileEntry,
   type BoundingBox,
+  type TemporalLodLevel,
   type TimeRange,
   type TileRequestOptions,
   Compression,
@@ -294,6 +295,14 @@ export class STTArchive {
         geometryTypes: [],
       })),
       temporalBucketMs: json.temporal_bucket_ms ?? 3600 * 1000,
+      // The serialized `temporal_lod` field is omitted when unset; readers
+      // that don't know about LOD can still parse the metadata blob.
+      temporalLod: Array.isArray(json.temporal_lod)
+        ? json.temporal_lod.map((l: any) => ({
+            bucketMs: Number(l.bucket_ms),
+            maxZoomLevel: Number(l.max_zoom_level),
+          }))
+        : undefined,
     };
     return this.metadataCache;
   }
@@ -325,8 +334,19 @@ export class STTArchive {
     void table.getChild('crc32c');
     void table.getChild('content_hash');
 
+    // Optional per-tile temporal bucket size — present only in archives
+    // that ship a temporal LOD pyramid. Use the per-element accessor (which
+    // returns null for null cells) rather than `.toArray()` so the all-null
+    // case stays distinguishable from "bucket = 0".
+    const bucketVec = table.getChild('temporal_bucket_ms');
+
     const tiles: TileEntry[] = [];
     for (let i = 0; i < table.numRows; i++) {
+      let temporalBucketMs: number | undefined;
+      if (bucketVec) {
+        const raw = bucketVec.get(i);
+        if (raw != null) temporalBucketMs = Number(raw);
+      }
       tiles.push({
         zoom: zoom[i],
         x: x[i],
@@ -338,6 +358,7 @@ export class STTArchive {
         featureCount: featureCount[i],
         compression: header.compression,
         uncompressedSize: uncompressed[i],
+        temporalBucketMs,
       });
     }
     this.indexCache = { tiles };
@@ -528,18 +549,74 @@ export class STTArchive {
     }
   }
 
-  /** Tile IDs whose interval overlaps `timeRange` within `bounds` at `zoom`. */
+  /**
+   * Tile IDs whose interval overlaps `timeRange` within `bounds` at `zoom`.
+   *
+   * For archives that ship a temporal LOD pyramid, this returns ONLY the
+   * base-bucket tiles — i.e. tiles whose `temporalBucketMs` matches the
+   * archive's base bucket (or is unset, for legacy archives). Use
+   * {@link getTileIdsInBoundsForTemporalLod} to request a coarser LOD
+   * level's tiles.
+   */
   async getTileIdsInBounds(
     bounds: BoundingBox,
     zoom: number,
     timeRange: TimeRange
   ): Promise<TileId[]> {
     await this.getIndex();
+    const meta = await this.getMetadata();
+    const baseBucket = meta.temporalBucketMs;
+    const filterToBase = meta.temporalLod !== undefined && meta.temporalLod.length > 0;
     const ids: TileId[] = [];
     for (const [x, y] of boundsToTiles(bounds, zoom)) {
       const entries = this.tileEntryIndex.get(`${zoom}/${x}/${y}`);
       if (!entries) continue;
       for (const e of entries) {
+        if (filterToBase) {
+          // The archive carries LOD tiers; exclude anything that isn't a
+          // base-bucket tile so the existing renderer behaviour is
+          // preserved (only base tiles flow into the default path).
+          const tagged = e.temporalBucketMs;
+          if (tagged !== undefined && tagged !== baseBucket) continue;
+        }
+        if (e.timeEnd >= timeRange.start && e.timeStart <= timeRange.end) {
+          ids.push({ z: e.zoom, x: e.x, y: e.y, t: e.timeStart });
+        }
+      }
+    }
+    return ids;
+  }
+
+  /**
+   * Tile IDs for a specific temporal LOD level.
+   *
+   * `bucketMs` selects which tier of the temporal pyramid to read; pass the
+   * value from {@link ArchiveMetadata.temporalLod} (or its
+   * `bucketMs` field) — or the archive's base `temporalBucketMs` to get the
+   * base tier explicitly.
+   *
+   * Returns an empty array if the archive has no tiles tagged with that
+   * bucket size (i.e. the level was not built into this archive).
+   */
+  async getTileIdsInBoundsForTemporalLod(
+    bounds: BoundingBox,
+    zoom: number,
+    timeRange: TimeRange,
+    bucketMs: number
+  ): Promise<TileId[]> {
+    await this.getIndex();
+    const meta = await this.getMetadata();
+    const baseBucket = meta.temporalBucketMs;
+    const ids: TileId[] = [];
+    for (const [x, y] of boundsToTiles(bounds, zoom)) {
+      const entries = this.tileEntryIndex.get(`${zoom}/${x}/${y}`);
+      if (!entries) continue;
+      for (const e of entries) {
+        // The tile matches iff its tagged bucket equals the requested one.
+        // Legacy tiles (column absent) are treated as base-bucket tiles —
+        // they only match a request for `bucketMs === baseBucket`.
+        const tagged = e.temporalBucketMs ?? baseBucket;
+        if (tagged !== bucketMs) continue;
         if (e.timeEnd >= timeRange.start && e.timeStart <= timeRange.end) {
           ids.push({ z: e.zoom, x: e.x, y: e.y, t: e.timeStart });
         }
@@ -558,6 +635,48 @@ export class STTArchive {
     const ids = await this.getTileIdsInBounds(bounds, zoom, timeRange);
     const tiles = await this.getTiles(ids, options);
     return tiles.filter((t): t is Tile => t !== null);
+  }
+
+  /**
+   * Fetch tiles from a specific temporal LOD level.
+   *
+   * Convenience wrapper over {@link getTileIdsInBoundsForTemporalLod}.
+   */
+  async getTilesInBoundsForTemporalLod(
+    bounds: BoundingBox,
+    zoom: number,
+    timeRange: TimeRange,
+    bucketMs: number,
+    options?: TileRequestOptions
+  ): Promise<Tile[]> {
+    const ids = await this.getTileIdsInBoundsForTemporalLod(
+      bounds,
+      zoom,
+      timeRange,
+      bucketMs,
+    );
+    const tiles = await this.getTiles(ids, options);
+    return tiles.filter((t): t is Tile => t !== null);
+  }
+
+  /**
+   * Pick the LOD level (`bucketMs`) the reader should request at `zoom`.
+   *
+   * Returns the coarsest level whose `maxZoomLevel >= zoom`. If no level
+   * applies, returns `undefined` — the caller should fall back to base
+   * tiles via {@link getTileIdsInBounds}.
+   */
+  async pickTemporalLodForZoom(zoom: number): Promise<TemporalLodLevel | undefined> {
+    const meta = await this.getMetadata();
+    const levels = meta.temporalLod;
+    if (!levels || levels.length === 0) return undefined;
+    let pick: TemporalLodLevel | undefined;
+    for (const l of levels) {
+      if (zoom <= l.maxZoomLevel) {
+        if (!pick || l.bucketMs > pick.bucketMs) pick = l;
+      }
+    }
+    return pick;
   }
 
   /** Prefetch tiles for a set of bucket times (warms the byte cache). */
