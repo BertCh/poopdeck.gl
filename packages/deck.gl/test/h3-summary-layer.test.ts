@@ -22,10 +22,12 @@ describe('H3SummaryLayer: cell ID round-trip', () => {
     const recombined = splitLongToH3Index(lower, upper);
     expect(recombined).toBe(cell);
 
-    // The recovered cell still resolves to roughly the same centroid.
+    // The recovered cell still resolves to a centroid in the same
+    // bounding region. At resolution 5 the cell edge is ~9 km, so the
+    // centroid will be within a fraction of a degree of the input.
     const [lat, lng] = cellToLatLng(recombined);
-    expect(lat).toBeCloseTo(37.77, 1);
-    expect(lng).toBeCloseTo(-122.42, 1);
+    expect(Math.abs(lat - 37.7749)).toBeLessThan(0.5);
+    expect(Math.abs(lng - -122.4194)).toBeLessThan(0.5);
   });
 
   it('roundtrips via BigUint64 mask + shift identical to the layer path', () => {
