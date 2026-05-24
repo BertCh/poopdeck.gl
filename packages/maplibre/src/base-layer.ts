@@ -417,6 +417,14 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
   render(
     gl: WebGLRenderingContext | WebGL2RenderingContext,
     matrix: Iterable<number>,
+    // The third arg is `RenderArgs` on MapLibre v5 (includes the projection
+    // mode), absent on v3 / v4. Typed as `unknown` so the override compiles
+    // against any of the three majors without forking type defs. v5's globe
+    // projection is *not* supported by this adapter today: shaders assume
+    // mercator-unit-square inputs and v5 globe passes a 4D projector. The
+    // package's peerDep is pinned to `^3 || ^4`; v5 users should either stay
+    // on v4 for STT or contribute a globe-aware projection branch.
+    _renderArgs?: unknown,
   ): void {
     if (!this.tileset || !this.map) return;
 
