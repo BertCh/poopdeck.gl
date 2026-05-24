@@ -107,18 +107,20 @@ function bigPathTile(n: number, v: number) {
 // AnimatedPointLayer
 // ---------------------------------------------------------------------------
 
-describe('AnimatedPointLayer.createConsolidatedLayer', () => {
-  let buildLayer: (tile: any, opts?: any) => any;
+describe('AnimatedPointLayer per-tile sublayer architecture (v3)', () => {
+  let buildSublayerForTile: (tile: any, opts?: any) => any;
+  let LayerCtor: any;
+  let makeLayer: (opts?: any) => any;
 
   beforeEach(async () => {
     // Fresh import each test so vi.mock's are applied.
     vi.resetModules();
     const mod = await import('../src/animated-point-layer');
-    const LayerCtor = mod.AnimatedPointLayer as any;
+    LayerCtor = mod.AnimatedPointLayer as any;
 
-    buildLayer = (tile, opts = {}) => {
-      // Construct via Object.create so we bypass CompositeLayer's lifecycle
-      // and just exercise the data-building / layer-creation private path.
+    makeLayer = (opts = {}) => {
+      // Object.create bypasses CompositeLayer's lifecycle — we exercise the
+      // per-tile prepare + sublayer-build path directly.
       const layer = Object.create(LayerCtor.prototype);
       layer.props = {
         id: 'test',
@@ -131,56 +133,162 @@ describe('AnimatedPointLayer.createConsolidatedLayer', () => {
         ...opts,
       };
       layer._currentTime = 0;
-      const data = (layer as any).buildConsolidatedData([tile]);
-      return (layer as any).createConsolidatedLayer(data);
+      layer.boundGetTime = () => 0;
+      layer.timeFilterExtension = {};
+      layer.categoryColorExtension = {};
+      layer.preparedTileCache = new Map();
+      layer.sublayerCache = new Map();
+      layer.lastLayerPropsKey = '';
+      return layer;
+    };
+
+    buildSublayerForTile = (tile, opts = {}) => {
+      const layer = makeLayer(opts);
+      return (layer as any).buildSublayer(
+        (layer as any).prepareTile(tile, tile.layers[0]),
+      );
     };
   });
 
   it('uses the binary {length, attributes} shape — no per-feature objects', () => {
     const N = 50_000;
-    const layer = buildLayer(bigPointTile(N));
-    const data = layer.props.data;
+    const built = buildSublayerForTile(bigPointTile(N));
+    const data = built.props.data;
 
-    // Specifically guard against the regression: data must NOT be a real
-    // Array (which would imply N wrapper objects were allocated).
+    // Regression guard: data must NOT be a real Array (which would imply N
+    // wrapper objects were allocated).
     expect(Array.isArray(data)).toBe(false);
     expect(data.length).toBe(N);
     expect(data.attributes).toBeDefined();
   });
 
-  it('feeds consolidated typed arrays directly through binary attributes', () => {
+  it('feeds zero-copy binary attributes (positions / startTimes / endTimes)', () => {
     const N = 100;
-    const layer = buildLayer(bigPointTile(N));
-    const attrs = layer.props.data.attributes;
+    const tile = bigPointTile(N);
+    const built = buildSublayerForTile(tile);
+    const attrs = built.props.data.attributes;
 
-    // ScatterplotLayer's own accessor: keyed by accessor name.
+    // ScatterplotLayer's own position accessor — keyed by accessor name.
     expect(attrs.getPosition.value).toBeInstanceOf(Float64Array);
     expect(attrs.getPosition.size).toBe(3);
     expect(attrs.getPosition.value.length).toBe(N * 3);
 
-    // TimeFilterExtension's instanced attributes: keyed by ATTRIBUTE name
-    // (matches attribute-wiring.test.ts).
-    expect(attrs.instanceStartTime.value).toBeInstanceOf(Float32Array);
+    // TimeFilterExtension instanced attributes — keyed by ATTRIBUTE name.
+    // Zero-copy: the same Float32Array reference the tile carries.
+    expect(attrs.instanceStartTime.value).toBe(tile.layers[0].features.startTimes);
     expect(attrs.instanceStartTime.size).toBe(1);
-    expect(attrs.instanceEndTime.value).toBeInstanceOf(Float32Array);
+    expect(attrs.instanceEndTime.value).toBe(tile.layers[0].features.endTimes);
     expect(attrs.instanceEndTime.size).toBe(1);
 
-    // With constant color/radius (no property name), no per-feature buffer
-    // is emitted — deck.gl falls back to the constant on getRadius/getFillColor.
+    // With constant color/radius (no property name), no per-feature buffer is
+    // emitted — deck.gl falls back to the constant on getRadius / getFillColor.
     expect(attrs.getFillColor).toBeUndefined();
     expect(attrs.getRadius).toBeUndefined();
+    expect(attrs.instanceCategoryIndex).toBeUndefined();
   });
 
-  it('binary positions carry the actual lon/lat from the tile', () => {
+  it('pads 2D positions to size-3 once per tile (covers ScatterplotLayer instancePositions)', () => {
     const tile = bigPointTile(3);
-    const layer = buildLayer(tile);
-    const positions = layer.props.data.attributes.getPosition.value;
+    const built = buildSublayerForTile(tile);
+    const positions = built.props.data.attributes.getPosition.value;
 
-    // Source positions: feature i = [i%360 - 180, i%180 - 90, 0]
+    // Source positions: feature i = [i%360 - 180, i%180 - 90]; padded to 3D.
     expect(positions[0]).toBe(-180);
     expect(positions[1]).toBe(-90);
+    expect(positions[2]).toBe(0);
     expect(positions[3]).toBe(-179);
     expect(positions[4]).toBe(-89);
+    expect(positions[5]).toBe(0);
+  });
+
+  it('builds one ScatterplotLayer per tile (no cross-tile consolidation)', () => {
+    const layer = makeLayer();
+    const a = bigPointTile(20);
+    a.id = { z: 14, x: 1, y: 2, t: 0 };
+    const b = bigPointTile(15);
+    b.id = { z: 14, x: 1, y: 3, t: 0 };
+    layer.state = { tiles: [a, b] };
+    const sublayers = (layer as any).renderLayers();
+    expect(sublayers.length).toBe(2);
+  });
+
+  it("uses each tile's own timeOffset (no cross-tile rebasing)", () => {
+    // The v3 promise: every tile renders through its own sublayer with its
+    // own TimeFilterExtension uniforms. v2 rebased onto a single offset and
+    // had to copy startTimes / endTimes into a fresh consolidated buffer.
+    const layer = makeLayer();
+    const a = bigPointTile(3);
+    a.id = { z: 14, x: 1, y: 2, t: 0 };
+    a.layers[0].features.timeOffset = 1_700_000_000_000;
+    const b = bigPointTile(3);
+    b.id = { z: 14, x: 1, y: 3, t: 0 };
+    b.layers[0].features.timeOffset = 1_700_086_400_000;
+    layer.state = { tiles: [a, b] };
+    const [subA, subB] = (layer as any).renderLayers();
+    expect(subA.props.timeOffset).toBe(1_700_000_000_000);
+    expect(subB.props.timeOffset).toBe(1_700_086_400_000);
+  });
+
+  it('caches PreparedTile so the data object reference is stable across renders', () => {
+    const layer = makeLayer();
+    const tile = bigPointTile(5);
+    const first = (layer as any).prepareTile(tile, tile.layers[0]);
+    const second = (layer as any).prepareTile(tile, tile.layers[0]);
+    expect(second).toBe(first);
+    expect(second.data).toBe(first.data);
+  });
+
+  it('returns the SAME ScatterplotLayer instance per tile across renders when nothing changed', () => {
+    const layer = makeLayer();
+    const a = bigPointTile(3);
+    a.id = { z: 14, x: 1, y: 2, t: 0 };
+    const b = bigPointTile(3);
+    b.id = { z: 14, x: 1, y: 3, t: 0 };
+    layer.state = { tiles: [a, b] };
+    const first = (layer as any).renderLayers();
+    const second = (layer as any).renderLayers();
+    expect(second[0]).toBe(first[0]);
+    expect(second[1]).toBe(first[1]);
+  });
+
+  it('rebuilds the cached ScatterplotLayer when a tile-level prop changes', () => {
+    const layer = makeLayer();
+    const tile = bigPointTile(3);
+    layer.state = { tiles: [tile] };
+    const first = (layer as any).renderLayers();
+    layer.props.radiusScale = 7;
+    const second = (layer as any).renderLayers();
+    expect(second[0]).not.toBe(first[0]);
+    expect(second[0].props.radiusScale).toBe(7);
+  });
+
+  it('drops sublayer-cache entries for tiles that leave the visible set', () => {
+    const layer = makeLayer();
+    const a = bigPointTile(3);
+    a.id = { z: 14, x: 1, y: 2, t: 0 };
+    const b = bigPointTile(3);
+    b.id = { z: 14, x: 1, y: 3, t: 0 };
+    layer.state = { tiles: [a, b] };
+    (layer as any).renderLayers();
+    expect((layer as any).sublayerCache.size).toBe(2);
+
+    layer.state = { tiles: [a] };
+    (layer as any).renderLayers();
+    expect((layer as any).sublayerCache.size).toBe(1);
+  });
+
+  it('passes the bound getTime getter so the time uniform advances each draw', () => {
+    const built = buildSublayerForTile(bigPointTile(3));
+    expect(typeof built.props.getTime).toBe('function');
+  });
+
+  it('declares dataComparator that skips deck.gl prop diff on identical references', () => {
+    const built = buildSublayerForTile(bigPointTile(3));
+    const cmp = built.props.dataComparator;
+    expect(typeof cmp).toBe('function');
+    const ref = {};
+    expect(cmp(ref, ref)).toBe(true);
+    expect(cmp(ref, {})).toBe(false);
   });
 });
 
@@ -491,15 +599,40 @@ describe('AnimatedTripsLayer per-tile sublayer architecture (v3)', () => {
 // ---------------------------------------------------------------------------
 
 describe('AnimatedPointLayer with categorical color', () => {
-  it('emits a per-feature color binary attribute when fillColor is a property name', async () => {
+  function makePointLayerForTile() {
+    const layer: any = {
+      props: {
+        id: 'cat',
+        fillColor: 'vtype',
+        colorPalette: [
+          [10, 20, 30, 255],
+          [40, 50, 60, 255],
+          [70, 80, 90, 255],
+        ],
+        radius: 5,
+        radiusUnits: 'pixels',
+        timeWindow: 1000,
+        opacity: 1,
+        visible: true,
+      },
+      _currentTime: 0,
+      boundGetTime: () => 0,
+      timeFilterExtension: {},
+      categoryColorExtension: {},
+      preparedTileCache: new Map(),
+      sublayerCache: new Map(),
+      lastLayerPropsKey: '',
+    };
+    return layer;
+  }
+
+  it('hands category indices to the GPU (no per-feature RGBA buffer) when colorMapping is unset', async () => {
     vi.resetModules();
     const mod = await import('../src/animated-point-layer');
     const LayerCtor = mod.AnimatedPointLayer as any;
 
     const N = 1000;
     const tile = bigPointTile(N);
-    // Inject a fake categorical property on the binary features so the
-    // property-color path actually runs.
     const binary = tile.layers[0].features;
     binary.categoricalProps['vtype'] = {
       indices: new Uint16Array(N).fill(2),
@@ -507,40 +640,65 @@ describe('AnimatedPointLayer with categorical color', () => {
     };
 
     const layer = Object.create(LayerCtor.prototype);
-    layer.props = {
-      id: 'cat',
-      fillColor: 'vtype',
-      colorPalette: [
-        [10, 20, 30, 255],
-        [40, 50, 60, 255],
-        [70, 80, 90, 255],
-      ],
-      radius: 5,
-      radiusUnits: 'pixels',
-      timeWindow: 1000,
-      opacity: 1,
-      visible: true,
-    };
-    layer._currentTime = 0;
+    Object.assign(layer, makePointLayerForTile());
 
-    const data = (layer as any).buildConsolidatedData([tile]);
-    const built = (layer as any).createConsolidatedLayer(data);
+    const prepared = (layer as any).prepareTile(tile, tile.layers[0]);
+    const built = (layer as any).buildSublayer(prepared);
     const attrs = built.props.data.attributes;
 
-    expect(built.props.data.length).toBe(N);
-    // Color binary attribute is emitted when fillColor is a property name.
+    // GPU path: no per-feature RGBA — instanceCategoryIndex carries the
+    // category id; CategoryColorExtension samples the palette texture.
+    expect(attrs.getFillColor).toBeUndefined();
+    expect(attrs.instanceCategoryIndex).toBeDefined();
+    expect(attrs.instanceCategoryIndex.value).toBeInstanceOf(Float32Array);
+    expect(attrs.instanceCategoryIndex.value[0]).toBe(2);
+    expect(attrs.instanceCategoryIndex.size).toBe(1);
+
+    // Layer carries the resolved palette + useCategoryColor toggle.
+    expect(built.props.useCategoryColor).toBe(true);
+    expect(built.props.categoryPalette).toEqual([
+      [10, 20, 30, 255],
+      [40, 50, 60, 255],
+      [70, 80, 90, 255],
+    ]);
+  });
+
+  it('falls back to the CPU RGBA expansion when colorMapping is provided (string-keyed lookup)', async () => {
+    vi.resetModules();
+    const mod = await import('../src/animated-point-layer');
+    const LayerCtor = mod.AnimatedPointLayer as any;
+
+    const N = 100;
+    const tile = bigPointTile(N);
+    const binary = tile.layers[0].features;
+    binary.categoricalProps['vtype'] = {
+      indices: new Uint16Array(N).fill(2),
+      categories: ['a', 'b', 'c', 'd'],
+    };
+
+    const layer = Object.create(LayerCtor.prototype);
+    Object.assign(layer, makePointLayerForTile());
+    layer.props = {
+      ...layer.props,
+      colorMapping: { c: [11, 22, 33, 255] as any },
+      colorMappingDefault: [0, 0, 0, 255] as any,
+    };
+
+    const prepared = (layer as any).prepareTile(tile, tile.layers[0]);
+    const built = (layer as any).buildSublayer(prepared);
+    const attrs = built.props.data.attributes;
+
+    // CPU path: getFillColor RGBA is emitted; GPU category-index attribute is absent.
+    expect(attrs.instanceCategoryIndex).toBeUndefined();
     expect(attrs.getFillColor).toBeDefined();
     expect(attrs.getFillColor.value).toBeInstanceOf(Uint8Array);
-    expect(attrs.getFillColor.size).toBe(4);
-    expect(attrs.getFillColor.normalized).toBe(true);
-    // With indices=2 the palette entry is [70,80,90,255]; check the first
-    // feature's color in the consolidated buffer.
     expect([
       attrs.getFillColor.value[0],
       attrs.getFillColor.value[1],
       attrs.getFillColor.value[2],
       attrs.getFillColor.value[3],
-    ]).toEqual([70, 80, 90, 255]);
+    ]).toEqual([11, 22, 33, 255]);
+    expect(built.props.useCategoryColor).toBe(false);
   });
 });
 
@@ -549,7 +707,7 @@ describe('AnimatedPointLayer with categorical color', () => {
 // ---------------------------------------------------------------------------
 
 describe('AIS-sized perf budget', () => {
-  it('point layer: consolidate + build 200k features under a generous budget', async () => {
+  it('point layer: prepare + build 200k features per tile under a generous budget', async () => {
     vi.resetModules();
     const mod = await import('../src/animated-point-layer');
     const LayerCtor = mod.AnimatedPointLayer as any;
@@ -568,18 +726,24 @@ describe('AIS-sized perf budget', () => {
       visible: true,
     };
     layer._currentTime = 0;
+    layer.boundGetTime = () => 0;
+    layer.timeFilterExtension = {};
+    layer.categoryColorExtension = {};
+    layer.preparedTileCache = new Map();
+    layer.sublayerCache = new Map();
+    layer.lastLayerPropsKey = '';
 
     const t0 = performance.now();
-    const data = (layer as any).buildConsolidatedData([tile]);
-    const built = (layer as any).createConsolidatedLayer(data);
+    const prepared = (layer as any).prepareTile(tile, tile.layers[0]);
+    const built = (layer as any).buildSublayer(prepared);
     const elapsed = performance.now() - t0;
 
-    // Log the actual number so a re-regression is easy to debug from CI.
-    // Leave the floor loose: the OLD code allocated N Feat objects +
-    // N position triples per build (several hundred ms for 200k locally).
-    // 250ms catches the regression without being flaky on slow CI workers.
+    // v3 prepare+build is one position-pad pass (2D → 3D) + zero-copy time
+    // attribute references. The v2 consolidation copied positions+times
+    // AND re-rebased timestamps; in CI it took ~20ms for 200k features.
+    // Budget held loose at 250ms to absorb slow CI runners.
     // eslint-disable-next-line no-console
-    console.log(`[perf] point-layer consolidate+build for ${N} features: ${elapsed.toFixed(1)} ms`);
+    console.log(`[perf] point-layer prepare+build for ${N} features: ${elapsed.toFixed(1)} ms`);
     expect(elapsed).toBeLessThan(250);
     expect(built.props.data.length).toBe(N);
     expect(Array.isArray(built.props.data)).toBe(false);

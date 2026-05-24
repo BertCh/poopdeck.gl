@@ -1,67 +1,59 @@
 /**
- * AnimatedPointLayer - GPU-efficient point rendering with time filtering
- * 
- * PERFORMANCE OPTIMIZED (v2 - Consolidated Rendering):
- * - Consolidates ALL tiles into a SINGLE ScatterplotLayer (1 draw call instead of N)
- * - Uses deck.gl's binary data interface for maximum performance
- * - Time filtering happens entirely in the shader via TimeFilterExtension
- * - Consolidated data cached per tile set - only rebuilt when tiles change
- * - Layer instance memoized to avoid recreation on time-only updates
- * 
- * Performance: Targets 200fps by eliminating per-tile layer overhead
+ * AnimatedPointLayer - GPU-efficient point rendering with time filtering.
+ *
+ * ARCHITECTURE (v3 - Per-tile binary sublayers):
+ * - One ScatterplotLayer per (tile, layer) pair. No cross-tile consolidation.
+ * - Each sublayer uses deck.gl's binary `data: { length, attributes }`
+ *   interface, with positions / startTimes / endTimes referenced DIRECTLY
+ *   from the tile's BinaryFeatures (zero-copy from the Arrow buffer).
+ * - Per-tile `timeOffset` — each sublayer rebases time independently in its
+ *   own TimeFilterExtension instance. No layer-wide rebasing pass.
+ * - `getTime` callback drives the window uniform per draw without layer
+ *   recreation, so the demo's tick handler only calls `setNeedsRedraw()`.
+ * - Prepared per-tile data is cached so the `data` object reference is
+ *   stable across renderLayers() calls; deck.gl short-circuits GPU
+ *   re-uploads when the reference matches.
+ *
+ * Streaming is additive: a new tile creates one sublayer and one GPU upload.
+ * Existing tiles' GPU buffers are untouched.
+ *
+ * The previous v2 consolidation path allocated a single ~3.6 GB chunk at
+ * 100M points (one Float64Array for positions + two Float32Array for times)
+ * and re-uploaded it on every tile arrival. Per-tile sublayers replace that
+ * with one ~36 MB Arrow-backed view per tile and zero copies.
+ *
+ * Categorical colors lift to the GPU via CategoryColorExtension when the
+ * caller does NOT provide a `colorMapping` (which is inherently CPU-side
+ * because it indexes by category STRING). With a mapping set, we fall back
+ * to the legacy CPU-expansion path on the cold tile-prepare step.
  */
 
 import { ScatterplotLayer } from '@deck.gl/layers';
 import type { Color, Layer, LayerContext } from '@deck.gl/core';
-import { COORDINATE_SYSTEM } from '@deck.gl/core';
 import { SpatioTemporalLayer, SpatioTemporalLayerProps } from './spatiotemporal-layer';
 import { TimeFilterExtension } from './time-filter-extension';
-import { consolidatePoints } from './consolidate';
-import type { Tile } from '@stt/core';
+import {
+  CategoryColorExtension,
+  CATEGORY_PALETTE_SIZE,
+} from './category-color-extension';
+import { emit } from './telemetry';
+import type { Tile, Layer as TileLayer } from '@stt/core';
 
-// Debug flag
 const DEBUG = false;
-
-// Singleton TimeFilterExtension instance - reused across all layers
-const TIME_FILTER_EXTENSION = new TimeFilterExtension();
-
-/**
- * Consolidated data from all tiles - contains merged typed arrays
- */
-interface ConsolidatedData {
-  length: number;
-  /**
-   * The reference time offset for this consolidated layer. All time
-   * attributes below are RELATIVE to this value (see relativizeTime / the
-   * float32-precision note in time-filter-extension.ts). The first tile's
-   * timeOffset is used as the layer-wide reference.
-   */
-  timeOffset: number;
-  /** Interleaved size-3 positions (lon, lat, 0). */
-  positions: Float64Array;
-  /** Per-feature start times, RELATIVE to timeOffset. */
-  startTimes: Float32Array;
-  /** Per-feature end times, RELATIVE to timeOffset. */
-  endTimes: Float32Array;
-  /** Per-feature RGBA colors, or null to use the constant `fillColor` prop. */
-  colors: Uint8Array | null;
-  /** Per-feature radii, or null to use the constant `radius` prop. */
-  radii: Float32Array | null;
-}
 
 export interface AnimatedPointLayerProps extends SpatioTemporalLayerProps {
   /** Radius scale multiplier */
   radiusScale?: number;
-  
+
   /** Radius units ('pixels' | 'meters' | 'common') */
   radiusUnits?: 'pixels' | 'meters' | 'common';
-  
+
   /** Fill color - constant value or property name for categorical coloring */
   fillColor?: Color | string;
-  
+
   /** Radius - constant value or property name for radius */
   radius?: number | string;
-  
+
   /** Color palette for categorical properties */
   colorPalette?: Color[];
 
@@ -72,6 +64,11 @@ export interface AnimatedPointLayerProps extends SpatioTemporalLayerProps {
    * only way to get stable colors across tiles whose categorical column
    * contains different category subsets — the first-seen palette index
    * fallback assigns the same band a different palette slot per tile.
+   *
+   * NOTE: setting this forces the CPU palette-expansion path (one Uint8Array
+   * RGBA per tile) because the GPU palette texture has no way to look up by
+   * the category STRING. With `colorMapping` unset, the GPU CategoryColorExtension
+   * handles the lookup in the fragment shader against the `colorPalette`.
    */
   colorMapping?: Record<string, Color>;
 
@@ -102,48 +99,12 @@ export interface AnimatedPointLayerProps extends SpatioTemporalLayerProps {
 
   /** Whether to fill the marker (default true). */
   filled?: boolean;
-  
-  /** 
-   * Enable 3D positions (altitude/elevation support)
-   * When true, positions will include altitude component
-   */
-  use3D?: boolean;
-  
-  /**
-   * Property name to extract elevation from (e.g., 'altitude', 'elevation')
-   * Used when positions don't have embedded altitude but it's available in properties
-   * Only used when use3D is true
-   */
-  elevationProperty?: string;
-  
-  /**
-   * Scale factor for elevation values (e.g., to convert feet to meters)
-   * Only used when use3D is true
-   */
-  elevationScale?: number;
-  
+
   /** Fade-in duration for appearing points (ms) */
   fadeInDuration?: number;
-  
+
   /** Fade-out duration for disappearing points (ms) */
   fadeOutDuration?: number;
-}
-
-/**
- * True if two tile arrays describe the SAME set of tiles by id (z/x/y/t).
- * The reference may differ (the tileset always returns a fresh array) but
- * the content match lets the consolidated-data cache avoid a rebuild.
- */
-function tilesContentMatch(a: Tile[], b: Tile[]): boolean {
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i++) {
-    const ai = a[i].id;
-    const bi = b[i].id;
-    if (ai.z !== bi.z || ai.x !== bi.x || ai.y !== bi.y || ai.t !== bi.t) {
-      return false;
-    }
-  }
-  return true;
 }
 
 // Default color palette for categorical data
@@ -161,358 +122,405 @@ const DEFAULT_PALETTE: Color[] = [
 ];
 
 /**
- * Animated point layer using deck.gl binary interface
- * 
- * Performance optimizations (v2):
- * - SINGLE draw call: All tiles consolidated into one ScatterplotLayer
- * - Typed arrays passed directly to GPU (zero accessor calls)
- * - TimeFilterExtension handles temporal filtering in shaders
- * - Consolidated data cached - only rebuilt when tiles change (frameNumber)
- * - Layer instance memoized for time-only updates
+ * Per-tile prepared data. Cached so the `data` object reference handed to
+ * deck.gl is stable across renders — deck.gl compares `data` by reference
+ * (with our dataComparator: ===) to decide whether to re-upload GPU buffers.
+ *
+ * Mirrors AnimatedTripsLayer / AnimatedPathLayer's PreparedTile shape.
+ */
+interface PreparedTile {
+  /** Resolved (tile, layer) cache key. */
+  tileKey: string;
+  /** Hash of style props that affect the prepared `attributes`. */
+  styleKey: string;
+  /** Reference-stable data object for ScatterplotLayer's binary interface. */
+  data: {
+    length: number;
+    attributes: Record<string, { value: any; size: number; normalized?: boolean }>;
+  };
+  /** Per-tile time reference; passed to TimeFilterExtension as `timeOffset`. */
+  timeOffset: number;
+  /**
+   * When the GPU categorical-color path is active for this tile, the resolved
+   * palette to pass to the extension. Null when CPU-side colors / constant
+   * color are in use.
+   */
+  gpuPalette: Color[] | null;
+}
+
+function makeTileKey(tile: Tile, layer: TileLayer): string {
+  const { z, x, y, t } = tile.id;
+  return `${z}/${x}/${y}/${t}:${layer.name}`;
+}
+
+/**
+ * Expand category indices into a flat Uint8Array RGBA buffer using an
+ * explicit colorMapping (category STRING → Color). The CPU path is
+ * unavoidable here because the GPU palette texture can only be indexed by
+ * a numeric category id, not by an arbitrary string key.
+ */
+function expandMappedColors(
+  indices: Uint16Array,
+  categories: readonly string[],
+  count: number,
+  mapping: Record<string, Color>,
+  fallback: Color,
+): Uint8Array {
+  const out = new Uint8Array(count * 4);
+  for (let i = 0; i < count; i++) {
+    const idx = indices[i];
+    const cat = idx === 0xffff ? undefined : categories[idx];
+    const color = (cat !== undefined && mapping[cat]) || fallback;
+    const o = i * 4;
+    out[o] = color[0];
+    out[o + 1] = color[1];
+    out[o + 2] = color[2];
+    out[o + 3] = color[3] ?? 255;
+  }
+  return out;
+}
+
+/**
+ * For categorical columns with no `colorMapping`, hand the category indices
+ * straight to the GPU as a single-component float attribute. The
+ * CategoryColorExtension samples the palette texture in the fragment shader.
+ *
+ * `indices` arrive as Uint16Array (4096 categories max); the extension reads
+ * them as float32. We do a narrowing copy here rather than running a shader
+ * permutation per integer type.
+ */
+function indicesToFloat32(indices: Uint16Array, count: number): Float32Array {
+  const out = new Float32Array(count);
+  for (let i = 0; i < count; i++) out[i] = indices[i];
+  return out;
+}
+
+/**
+ * Animated point layer with per-tile binary sublayers.
+ *
+ * Each visible tile produces one ScatterplotLayer instance that is cached
+ * across renders. Time updates flow through getTime() on the extension; tile
+ * arrivals only construct one new sublayer + one GPU upload, never touching
+ * the buffers of already-loaded tiles.
  */
 export class AnimatedPointLayer extends SpatioTemporalLayer<AnimatedPointLayerProps> {
   static layerName = 'AnimatedPointLayer';
-  
-  // ========== CONSOLIDATED DATA CACHE ==========
-  // Merges all tile data into a single data object for ONE draw call
-  private consolidatedDataCache: {
-    tiles: Tile[] | null;
-    frameNumber: number;
-    propsKey: string;
-    data: ConsolidatedData | null;
-  } = { tiles: null, frameNumber: -1, propsKey: '', data: null };
-  
-  // ========== MEMOIZED LAYER CACHE ==========
-  // Reuse the same layer instance when only time changes (not tiles)
-  private cachedLayer: ScatterplotLayer | null = null;
-  private cachedLayerFrameNumber: number = -1;
-  
-  // ========== CACHED PROPERTIES FOR PERFORMANCE ==========
-  // These provide stable references so deck.gl can use fast reference equality
-  // instead of expensive deep comparison during layer diffing.
-  
-  // Cached updateTriggers object - only recreated when relevant props change
-  private cachedUpdateTriggers: Record<string, any> = {};
-  
-  // Track last prop values to detect changes
-  private lastFillColor: Color | string | undefined = undefined;
-  private lastRadius: number | string | undefined = undefined;
-  private lastColorPalette: Color[] | undefined = undefined;
-  
-  // Cached color/radius props object - only recreated when props change
-  private cachedColorRadiusProps: Record<string, any> | null = null;
-  private lastFillColorForProps: Color | string | undefined = undefined;
-  private lastRadiusForProps: number | string | undefined = undefined;
-
-  // Stable bound getTime function - hoisted so the layer prop reference is
-  // stable across renderLayers() calls (avoids defeating memoization).
-  private readonly boundGetTime: () => number = () => this.getCurrentTime();
 
   static defaultProps = {
     ...SpatioTemporalLayer.defaultProps,
-    // ScatterplotLayer props
     radiusScale: { type: 'number', value: 1, min: 0 },
     radiusUnits: 'pixels',
     fillColor: { type: 'color', value: [255, 128, 0, 255] as Color },
     radius: { type: 'number', value: 5 },
     colorPalette: { type: 'array', value: DEFAULT_PALETTE },
-    
-    // 3D support
-    use3D: false,
-    elevationProperty: null,
-    elevationScale: { type: 'number', value: 1, min: 0 },
-    
-    // Animation props
+
+    // Animation props (unused on the GPU side after the rewrite; kept for
+    // API compatibility with v2 callers that pass them in).
     fadeInDuration: { type: 'number', value: 300, min: 0 },
     fadeOutDuration: { type: 'number', value: 300, min: 0 },
   };
-  
+
+  /** Per-tile prepared-data cache. Pruned to the live tile set each render. */
+  private preparedTileCache = new Map<string, PreparedTile>();
+
+  /**
+   * Per-tile sublayer-instance cache. Returning the SAME ScatterplotLayer
+   * reference across renderLayers() calls lets deck.gl short-circuit prop
+   * diff entirely. Allocating a fresh layer per visible tile per frame (as
+   * the v2 consolidation rewrite would in any non-trivial workflow) was the
+   * single largest source of frame-time variance at 50+ tiles.
+   */
+  private sublayerCache = new Map<
+    string,
+    { layer: ScatterplotLayer; preparedKey: PreparedTile; layerPropsKey: string }
+  >();
+
+  /** Digest of every prop baked into a sublayer at construction time. */
+  private lastLayerPropsKey: string = '';
+
+  /**
+   * Singleton TimeFilterExtension reused by every sublayer. Extensions are
+   * stateless w.r.t. data; per-tile timeOffset is passed as a layer prop.
+   */
+  private readonly timeFilterExtension = new TimeFilterExtension();
+
+  /**
+   * Singleton CategoryColorExtension. Like the time filter, it's stateless —
+   * the palette and `useCategoryColor` toggle ride through layer props. We
+   * always include it in the layer's extension list: when the per-tile data
+   * lacks `instanceCategoryIndex`, the shader branch is gated off via the
+   * uniform.
+   */
+  private readonly categoryColorExtension = new CategoryColorExtension();
+
+  /**
+   * Stable getTime reference. Critical: deck.gl re-runs work when accessor
+   * function references change; a fresh arrow every render defeats the cache.
+   */
+  private readonly boundGetTime: () => number = () => this.getCurrentTime();
+
   finalizeState(context: LayerContext): void {
     super.finalizeState(context);
-    // Clean up cached data
-    this.consolidatedDataCache = { tiles: null, frameNumber: -1, propsKey: '', data: null };
-    this.cachedLayer = null;
+    this.preparedTileCache.clear();
+    this.sublayerCache.clear();
   }
-  
+
   /**
-   * PERFORMANCE OPTIMIZED renderLayers:
-   * - Creates a SINGLE ScatterplotLayer for ALL tiles (1 draw call)
-   * - Caches consolidated data - only rebuilds when tiles change
-   * - TRULY MEMOIZES layer instance - returns SAME layer for time-only updates
-   * - Time updates happen via getTime() getter in TimeFilterExtension.draw()
+   * Compute a digest of the layer-level props that affect every sublayer.
+   * When this changes we throw away the entire sublayer cache.
    */
+  private computeLayerPropsKey(): string {
+    return [
+      this.props.radiusScale,
+      this.props.radiusUnits,
+      this.props.radiusMinPixels,
+      this.props.radiusMaxPixels,
+      this.props.lineWidthMinPixels,
+      this.props.stroked,
+      this.props.filled,
+      Array.isArray(this.props.strokeColor)
+        ? this.props.strokeColor.join(',')
+        : '',
+      this.props.opacity,
+      this.props.visible,
+      this.props.pickable,
+      this.props.timeWindow,
+      this.props.fadeInDuration,
+      this.props.fadeOutDuration,
+      // fillColor/radius constant branches only — the property-driven path
+      // lives in `prepared` and is keyed via preparedKey.
+      Array.isArray(this.props.fillColor) ? this.props.fillColor.join(',') : '',
+      typeof this.props.radius === 'number' ? this.props.radius : 0,
+    ].join('|');
+  }
+
   renderLayers(): Layer[] {
-    const { tiles, frameNumber } = this.state;
-    
-    if (!tiles || tiles.length === 0) {
-      if (DEBUG) console.log('AnimatedPointLayer: No tiles loaded');
-      this.cachedLayer = null;
-      return [];
+    const t0 = performance.now();
+    const { tiles } = this.state;
+    if (!tiles || tiles.length === 0) return [];
+
+    // Prune cache: drop entries for tiles no longer visible.
+    const live = new Set<string>();
+    for (const tile of tiles) {
+      for (const tileLayer of tile.layers) live.add(makeTileKey(tile, tileLayer));
     }
-    
-    const currentFrameNumber = frameNumber || 0;
-    
-    // Get or build consolidated data for all tiles
-    const data = this.getConsolidatedData(tiles, currentFrameNumber);
-    
-    if (!data || data.length === 0) {
-      if (DEBUG) console.log('AnimatedPointLayer: No features in tiles');
-      return [];
+    for (const key of this.preparedTileCache.keys()) {
+      if (!live.has(key)) this.preparedTileCache.delete(key);
     }
-    
-    // ========== LAYER MEMOIZATION ==========
-    // Return the SAME layer instance if tiles haven't changed.
-    // Time updates are handled by the getTime() getter in TimeFilterExtension.draw()
-    if (this.cachedLayer && this.cachedLayerFrameNumber === currentFrameNumber) {
-      // Check if props that affect the layer have changed
-      const propsUnchanged = 
-        this.props.fillColor === this.lastFillColor &&
-        this.props.radius === this.lastRadius &&
-        this.props.colorPalette === this.lastColorPalette &&
-        this.props.opacity === (this.cachedLayer.props as any).opacity &&
-        this.props.visible === (this.cachedLayer.props as any).visible;
-      
-      if (propsUnchanged) {
-        if (DEBUG) console.log('AnimatedPointLayer: Returning memoized layer');
-        return [this.cachedLayer];
+    for (const key of this.sublayerCache.keys()) {
+      if (!live.has(key)) this.sublayerCache.delete(key);
+    }
+
+    // Any layer-level prop change invalidates every cached sublayer.
+    const layerPropsKey = this.computeLayerPropsKey();
+    if (layerPropsKey !== this.lastLayerPropsKey) {
+      this.lastLayerPropsKey = layerPropsKey;
+      this.sublayerCache.clear();
+    }
+
+    const sublayers: Layer[] = [];
+    for (const tile of tiles) {
+      for (const tileLayer of tile.layers) {
+        const prepared = this.prepareTile(tile, tileLayer);
+        if (!prepared) continue;
+        const cached = this.sublayerCache.get(prepared.tileKey);
+        if (
+          cached &&
+          cached.preparedKey === prepared &&
+          cached.layerPropsKey === layerPropsKey
+        ) {
+          sublayers.push(cached.layer);
+          continue;
+        }
+        const layer = this.buildSublayer(prepared);
+        this.sublayerCache.set(prepared.tileKey, {
+          layer,
+          preparedKey: prepared,
+          layerPropsKey,
+        });
+        sublayers.push(layer);
       }
     }
-    
-    if (DEBUG) {
-      console.log(`AnimatedPointLayer: ${tiles.length} tiles, ${data.length} total features, creating layer`);
-    }
-    
-    // ========== UPDATE CACHED OBJECTS ONLY WHEN PROPS CHANGE ==========
-    if (this.props.fillColor !== this.lastFillColor ||
-        this.props.radius !== this.lastRadius ||
-        this.props.colorPalette !== this.lastColorPalette) {
-      this.lastFillColor = this.props.fillColor;
-      this.lastRadius = this.props.radius;
-      this.lastColorPalette = this.props.colorPalette;
-      this.cachedUpdateTriggers = {
-        getFillColor: [this.props.fillColor, this.props.colorPalette, currentFrameNumber],
-        getRadius: [this.props.radius, currentFrameNumber],
-      };
-    }
-    
-    // Create and cache the layer
-    const layer = this.createConsolidatedLayer(data);
-    this.cachedLayer = layer;
-    this.cachedLayerFrameNumber = currentFrameNumber;
 
-    return [layer];
+    emit('renderLayers', {
+      layer: 'AnimatedPointLayer',
+      tiles: tiles.length,
+      sublayers: sublayers.length,
+      ms: performance.now() - t0,
+    });
+    if (DEBUG) {
+      // eslint-disable-next-line no-console
+      console.log(`AnimatedPointLayer: ${tiles.length} tiles → ${sublayers.length} sublayers`);
+    }
+    return sublayers;
   }
-  
+
   /**
-   * Get or create consolidated data from all tiles.
-   *
-   * The cache key has two layers:
-   *  1. tiles array reference — fast path for "same tiles array".
-   *  2. tile-ID content match — handles the common case where the tileset
-   *     returns a fresh array for the SAME tile set after an unrelated
-   *     frameNumber bump (an animation tick, a non-content-changing tile
-   *     load). Without the content check we'd allocate a fresh ~30 MB
-   *     consolidated buffer per frame for no visual gain and re-upload it
-   *     to the GPU, which on software WebGL takes ~1 s per upload.
+   * Build (or fetch from cache) the binary `data` object for a single tile.
    */
-  private getConsolidatedData(tiles: Tile[], frameNumber: number): ConsolidatedData | null {
+  private prepareTile(tile: Tile, tileLayer: TileLayer): PreparedTile | null {
+    const binary = tileLayer.features;
+    if (binary.featureCount === 0) return null;
+
     const fillColorProp = typeof this.props.fillColor === 'string' ? this.props.fillColor : '';
     const radiusProp = typeof this.props.radius === 'string' ? this.props.radius : '';
-    const propsKey = `${fillColorProp}|${radiusProp}`;
-    const cache = this.consolidatedDataCache;
+    // Palette identity matters only when fillColor is a column name. Including
+    // the mapping flag toggles between CPU/GPU expansion paths.
+    const usingMapping = !!this.props.colorMapping;
+    const styleKey = `${fillColorProp}|${radiusProp}|${
+      fillColorProp ? (this.props.colorPalette ?? DEFAULT_PALETTE).length : 0
+    }|${usingMapping ? 'm' : 'g'}`;
 
-    if (
-      cache.data &&
-      cache.propsKey === propsKey &&
-      cache.tiles &&
-      (cache.tiles === tiles || tilesContentMatch(cache.tiles, tiles))
-    ) {
-      cache.frameNumber = frameNumber;
-      return cache.data;
+    const tileKey = makeTileKey(tile, tileLayer);
+    const cached = this.preparedTileCache.get(tileKey);
+    if (cached && cached.styleKey === styleKey) {
+      const t1 = performance.now();
+      emit('tilePrepare', { layer: 'AnimatedPointLayer', tileKey, cached: true, ms: 0 });
+      void t1;
+      return cached;
     }
 
-    const data = this.buildConsolidatedData(tiles);
+    const t0 = performance.now();
+    const count = binary.featureCount;
+    const srcDims = binary.positionDimensions ?? 2;
 
-    this.consolidatedDataCache = {
-      tiles,
-      frameNumber,
-      propsKey,
-      data,
+    // ScatterplotLayer expects size=3 positions. When the tile is 2D we keep
+    // the original buffer if it already has stride 3 (rare), otherwise pad
+    // once into a fresh Float64Array. The pad copy is per-tile, not per-tile-set,
+    // so cost is amortized across animation frames.
+    const positions: Float64Array =
+      srcDims === 3
+        ? binary.positions
+        : padPositionsTo3D(binary.positions, count);
+
+    const attributes: PreparedTile['data']['attributes'] = {
+      getPosition: { value: positions, size: 3 },
+      // Extension-registered attribute names — must match
+      // TimeFilterExtension.initializeState exactly. Zero-copy: the tile's
+      // own Float32Arrays (relative to binary.timeOffset) ride straight to
+      // the GPU.
+      instanceStartTime: { value: binary.startTimes, size: 1 },
+      instanceEndTime: { value: binary.endTimes, size: 1 },
     };
-    this.cachedLayer = null;
-    this.cachedLayerFrameNumber = -1;
-    return data;
-  }
-  
-  /**
-   * Build consolidated data by merging all tile binary data.
-   *
-   * Positions and per-feature times come from the pure `consolidatePoints`
-   * helper (unit-tested). Times are kept RELATIVE to the layer-wide
-   * timeOffset so they fit exactly in a Float32Array - the extension
-   * subtracts the same offset from currentTime. Property-based color/radius
-   * attributes are merged here.
-   */
-  private buildConsolidatedData(tiles: Tile[]): ConsolidatedData | null {
-    const consolidated = consolidatePoints(tiles);
-    if (!consolidated) {
-      return null;
+
+    let gpuPalette: Color[] | null = null;
+
+    // Property-driven color
+    if (fillColorProp) {
+      const cat = binary.categoricalProps[fillColorProp];
+      const num = binary.numericProps[fillColorProp];
+      const palette = this.props.colorPalette ?? DEFAULT_PALETTE;
+
+      if (cat) {
+        if (this.props.colorMapping) {
+          // CPU branch: indexed by category string → no way to do this on the
+          // GPU without a string→int hash on every frame.
+          const fallback =
+            this.props.colorMappingDefault ?? ([0, 0, 0, 0] as Color);
+          attributes.getFillColor = {
+            value: expandMappedColors(
+              cat.indices,
+              cat.categories,
+              count,
+              this.props.colorMapping,
+              fallback,
+            ),
+            size: 4,
+            normalized: true,
+          };
+        } else {
+          // GPU branch: hand category indices to the CategoryColorExtension.
+          attributes.instanceCategoryIndex = {
+            value: indicesToFloat32(cat.indices, count),
+            size: 1,
+          };
+          gpuPalette = palette;
+        }
+      } else if (num && this.props.colorMapping) {
+        // Numeric column + mapping: stringify lookup (rare).
+        const fallback =
+          this.props.colorMappingDefault ?? ([0, 0, 0, 0] as Color);
+        const out = new Uint8Array(count * 4);
+        for (let i = 0; i < count; i++) {
+          const color = this.props.colorMapping[String(num[i])] || fallback;
+          const o = i * 4;
+          out[o] = color[0];
+          out[o + 1] = color[1];
+          out[o + 2] = color[2];
+          out[o + 3] = color[3] ?? 255;
+        }
+        attributes.getFillColor = { value: out, size: 4, normalized: true };
+      }
     }
 
-    const { length: totalFeatures, dims, positions, startTimes, endTimes, timeOffset } =
-      consolidated;
-
-    // For property-based attributes
-    const fillColorProp = typeof this.props.fillColor === 'string' ? this.props.fillColor : null;
-    const radiusProp = typeof this.props.radius === 'string' ? this.props.radius : null;
-    let colors: Uint8Array | null = fillColorProp ? new Uint8Array(totalFeatures * 4) : null;
-    let radii: Float32Array | null = radiusProp ? new Float32Array(totalFeatures) : null;
-    const palette = this.props.colorPalette || DEFAULT_PALETTE;
-
-    if (colors || radii) {
-      let offset = 0;
-      for (const tile of tiles) {
-        for (const layer of tile.layers) {
-          const binary = layer.features;
-          const count = binary.featureCount;
-
-          if (colors && fillColorProp) {
-            const catProp = binary.categoricalProps[fillColorProp];
-            const numProp = binary.numericProps[fillColorProp];
-            if (catProp) {
-              const mapping = this.props.colorMapping;
-              const fallback =
-                this.props.colorMappingDefault ?? [0, 0, 0, 0];
-              for (let i = 0; i < count; i++) {
-                const categoryIndex = catProp.indices[i];
-                let color: Color;
-                if (mapping) {
-                  // Explicit mapping wins — looking up by category string
-                  // produces stable colors across tiles whose category lists
-                  // differ. (Falling back to palette[index] does not, since
-                  // each tile rebuilds the category dictionary in first-seen
-                  // order.)
-                  const cat =
-                    categoryIndex === 0xffff
-                      ? undefined
-                      : catProp.categories[categoryIndex];
-                  color = (cat !== undefined && mapping[cat]) || fallback;
-                } else {
-                  color =
-                    categoryIndex === 0xffff
-                      ? fallback
-                      : palette[categoryIndex % palette.length];
-                }
-                const dstIdx = (offset + i) * 4;
-                colors[dstIdx] = color[0];
-                colors[dstIdx + 1] = color[1];
-                colors[dstIdx + 2] = color[2];
-                colors[dstIdx + 3] = color[3] ?? 255;
-              }
-            } else if (numProp && this.props.colorMapping) {
-              // Numeric column + explicit mapping: stringify the value to look
-              // it up. Useful when a categorical-style key was accidentally
-              // emitted as numeric (rare, but defensive).
-              const mapping = this.props.colorMapping;
-              const fallback =
-                this.props.colorMappingDefault ?? [0, 0, 0, 0];
-              for (let i = 0; i < count; i++) {
-                const color = mapping[String(numProp[i])] || fallback;
-                const dstIdx = (offset + i) * 4;
-                colors[dstIdx] = color[0];
-                colors[dstIdx + 1] = color[1];
-                colors[dstIdx + 2] = color[2];
-                colors[dstIdx + 3] = color[3] ?? 255;
-              }
-            }
-          }
-
-          if (radii && radiusProp) {
-            const values = binary.numericProps[radiusProp];
-            const transform = this.props.radiusTransform;
-            if (values) {
-              if (transform) {
-                for (let i = 0; i < count; i++) {
-                  radii[offset + i] = transform(values[i]);
-                }
-              } else {
-                for (let i = 0; i < count; i++) {
-                  radii[offset + i] = values[i];
-                }
-              }
-            }
-          }
-
-          offset += count;
+    // Property-driven radius — already Float32Array, ride zero-copy unless
+    // radiusTransform is set (which forces a per-tile pass).
+    if (radiusProp) {
+      const values = binary.numericProps[radiusProp];
+      if (values) {
+        const transform = this.props.radiusTransform;
+        if (transform) {
+          const out = new Float32Array(count);
+          for (let i = 0; i < count; i++) out[i] = transform(values[i]);
+          attributes.getRadius = { value: out, size: 1 };
+        } else {
+          attributes.getRadius = { value: values, size: 1 };
         }
       }
     }
 
-    // `dims` is always 3 (see consolidatePoints).
-    void dims;
-    return {
-      length: totalFeatures,
-      timeOffset,
-      positions,
-      startTimes,
-      endTimes,
-      colors,
-      radii,
+    const prepared: PreparedTile = {
+      tileKey,
+      styleKey,
+      data: { length: count, attributes },
+      timeOffset: binary.timeOffset,
+      gpuPalette,
     };
+    this.preparedTileCache.set(tileKey, prepared);
+    emit('tilePrepare', {
+      layer: 'AnimatedPointLayer',
+      tileKey,
+      cached: false,
+      features: count,
+      gpuPalette: gpuPalette !== null,
+      ms: performance.now() - t0,
+    });
+    return prepared;
   }
-  
-  /**
-   * Create a single ScatterplotLayer over the consolidated typed arrays.
-   *
-   * Uses deck.gl's binary `data.attributes` interface: typed arrays are
-   * uploaded directly to the GPU and deck.gl never invokes a per-feature
-   * accessor. On the AIS dataset (1.29M points) this eliminates millions
-   * of accessor calls per tile-set change, which previously stalled the
-   * main thread for several seconds at a time during animation playback.
-   *
-   * Wiring:
-   * - ScatterplotLayer's own accessors are keyed under their accessor
-   *   names: `getPosition`, `getFillColor`, `getRadius`.
-   * - `TimeFilterExtension`'s instanced attributes are bound by ATTRIBUTE
-   *   name, not accessor name: `instanceStartTime` / `instanceEndTime`
-   *   (see attribute-wiring.test.ts).
-   * - When a property-driven attribute is absent (constant color/radius)
-   *   deck.gl falls back to the constant on `getRadius` / `getFillColor`.
-   *
-   * Time is snapshotted per render; the layer is rebuilt only when
-   * `frameNumber` bumps, and intra-tile-set time updates take
-   * `setNeedsRedraw()`, not a layer rebuild.
-   */
-  private createConsolidatedLayer(data: ConsolidatedData): ScatterplotLayer {
-    const layerId = `${this.props.id}-consolidated`;
-    const timeWindow = this.props.timeWindow || 86400000;
-    const { length, positions, startTimes, endTimes, colors, radii, timeOffset } = data;
 
+  private buildSublayer(prepared: PreparedTile): ScatterplotLayer {
+    const sublayerId = `${this.props.id}-${prepared.tileKey}`;
+    const timeWindow = this.props.timeWindow || 86400000;
     const constRadius =
       typeof this.props.radius === 'number' ? this.props.radius : 5;
     const constColor = (Array.isArray(this.props.fillColor)
       ? this.props.fillColor
-      : [255, 128, 0, 255]) as Color;
-    const snapshotTime = this.getCurrentTime();
+      : ([255, 128, 0, 255] as Color)) as Color;
 
-    const attributes: Record<string, any> = {
-      getPosition: { value: positions, size: 3 },
-      instanceStartTime: { value: startTimes, size: 1 },
-      instanceEndTime: { value: endTimes, size: 1 },
-    };
-    if (colors) {
-      attributes.getFillColor = { value: colors, size: 4, normalized: true };
-    }
-    if (radii) {
-      attributes.getRadius = { value: radii, size: 1 };
+    // CategoryColorExtension props: when this tile uses the GPU palette path
+    // we pass the resolved palette + useCategoryColor=true. Otherwise the
+    // extension idles (its shader branch is gated by useCategoryColor).
+    const useGpuCategory = prepared.gpuPalette !== null;
+    if (
+      useGpuCategory &&
+      prepared.gpuPalette!.length > CATEGORY_PALETTE_SIZE
+    ) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[AnimatedPointLayer] colorPalette has ${prepared.gpuPalette!.length} ` +
+          `entries; only the first ${CATEGORY_PALETTE_SIZE} will be used by ` +
+          'CategoryColorExtension.',
+      );
     }
 
     return new ScatterplotLayer({
-      id: layerId,
-      data: { length, attributes } as any,
-      // Forward user-facing display props. Hardcoding radiusUnits dropped
-      // the demo configs' "meters" setting and turned 1000m ship markers
-      // into 1000-pixel discs that covered the entire viewport.
+      id: sublayerId,
+      data: prepared.data as any,
+      // Identity comparator: deck.gl skips prop-diff for `data` entirely when
+      // the same object reference comes back. Pairs with the preparedTileCache
+      // which guarantees stable identity.
+      dataComparator: (a: any, b: any) => a === b,
+
       radiusUnits: this.props.radiusUnits ?? 'pixels',
       radiusScale: this.props.radiusScale ?? 1,
       radiusMinPixels: this.props.radiusMinPixels ?? 0,
@@ -525,23 +533,38 @@ export class AnimatedPointLayer extends SpatioTemporalLayer<AnimatedPointLayerPr
       visible: this.props.visible,
       pickable: this.props.pickable ?? false,
 
-      // Constant fallbacks — deck.gl uses these when no binary buffer is
-      // present for the corresponding accessor.
+      // Constant fallbacks — used when the binary attribute is absent.
       getRadius: constRadius,
       getFillColor: constColor,
 
-      extensions: [TIME_FILTER_EXTENSION],
-      currentTime: snapshotTime,
-      timeOffset,
-      timeWindow,
+      extensions: [this.timeFilterExtension, this.categoryColorExtension],
 
-      updateTriggers: {
-        getPosition: positions,
-        instanceStartTime: startTimes,
-        instanceEndTime: endTimes,
-        getRadius: radii ?? [this.props.radius, this.props.radiusUnits, this.props.radiusScale],
-        getFillColor: colors ?? [this.props.fillColor, this.props.colorPalette, this.props.colorMapping],
-      },
-    });
+      // TimeFilterExtension wiring
+      getTime: this.boundGetTime,
+      timeOffset: prepared.timeOffset,
+      timeWindow,
+      fadeInDuration: this.props.fadeInDuration,
+      fadeOutDuration: this.props.fadeOutDuration,
+
+      // CategoryColorExtension wiring
+      categoryPalette: useGpuCategory ? prepared.gpuPalette! : [],
+      useCategoryColor: useGpuCategory,
+    } as any);
   }
+}
+
+/**
+ * Pad a 2D Float64Array of positions [x0,y0, x1,y1, ...] into a 3D buffer
+ * [x0,y0,0, x1,y1,0, ...] for ScatterplotLayer's size-3 attribute. This is
+ * the only allocation per tile in the prepare step; the previous v2 path
+ * allocated this AND the consolidated buffer for every tile in the visible set.
+ */
+function padPositionsTo3D(src: Float64Array, count: number): Float64Array {
+  const out = new Float64Array(count * 3);
+  for (let i = 0; i < count; i++) {
+    out[i * 3] = src[i * 2];
+    out[i * 3 + 1] = src[i * 2 + 1];
+    // out[i * 3 + 2] = 0; (already zero-initialized)
+  }
+  return out;
 }
