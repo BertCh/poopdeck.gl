@@ -33,6 +33,7 @@ import {
   type GeometryType,
 } from '@stt/core';
 import { projectPositions } from './projection';
+import { getProjectionPool } from './worker/projection-pool';
 
 /** RGBA tuple in the 0–1 range used by all STT shader uniforms. */
 export type RGBA = [number, number, number, number];
@@ -96,6 +97,22 @@ export interface STTBaseLayerOptions {
   enablePrefetch?: boolean;
   prefetchAhead?: number;
   prefetchSteps?: number;
+  /**
+   * Opt into running per-tile lon/lat → mercator projection in a Web Worker.
+   * Disabled by default to preserve the existing synchronous tile-build path.
+   * Once enabled, `buildTileGpuCache` returns its cache asynchronously and
+   * the first frame for each tile draws after the worker reply lands; the
+   * second frame onward sees no overhead. Recommended for hosts that render
+   * tiles with >5k vertices apiece (city-scale rideshare, polygon-heavy
+   * datasets).
+   */
+  useWorkerProjection?: boolean;
+  /**
+   * Threshold (number of input vertices) above which `projectAsync` actually
+   * dispatches to a worker. Below this size the synchronous path is faster
+   * because the postMessage overhead dominates. Default 1000.
+   */
+  workerProjectionMinVertices?: number;
 }
 
 /** Per-tile cached GPU buffers. Created lazily on first draw. */
@@ -574,6 +591,31 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
     gl.bindBuffer(gl.ARRAY_BUFFER, buf);
     gl.bufferData(gl.ARRAY_BUFFER, projected, gl.STATIC_DRAW);
     return buf;
+  }
+
+  /**
+   * Async sibling of `projectAndUpload`: when `useWorkerProjection` is on and
+   * the input is large enough to be worth the postMessage overhead, runs the
+   * projection in a shared Web Worker. Otherwise falls back to the
+   * synchronous helper.
+   *
+   * Returns the projected `Float32Array` (not a buffer) because subclasses
+   * sometimes want to inspect / reformat the data before upload.
+   */
+  protected async projectAsync(
+    positions: Float64Array | Float32Array,
+    dimensions: 2 | 3,
+  ): Promise<Float32Array> {
+    const min = this.opts.workerProjectionMinVertices ?? 1000;
+    const vertexCount = positions.length / dimensions;
+    if (!this.opts.useWorkerProjection || vertexCount < min) {
+      return projectPositions(positions, dimensions);
+    }
+    // We copy the input before transferring, because the buffer's owner
+    // (caller) may still want it for non-projection purposes (e.g. polygon
+    // earcut on flat lon/lat). The copy is cheaper than a re-fetch.
+    const copy = positions.slice();
+    return getProjectionPool().project(copy, dimensions);
   }
 
   /**
