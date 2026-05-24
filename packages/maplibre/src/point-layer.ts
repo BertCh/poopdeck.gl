@@ -11,6 +11,7 @@ import {
   type TileGpuCache,
   type RGBA8,
 } from './base-layer';
+import { TIME_WINDOW_GLSL } from './shaders/time-window.glsl';
 
 export interface STTPointLayerOptions extends STTBaseLayerOptions {
   /** Point color as [r, g, b, a] in the 0–1 range. Ignored when `colorProperty` is set. */
@@ -73,20 +74,13 @@ const VS_SOURCE = `
   uniform float uFadeOut;
   varying float vAlpha;
   varying vec4 vColor;
+${TIME_WINDOW_GLSL}
   void main() {
     vec4 pos = uMatrix * vec4(aMercator.x, aMercator.y, aMercator.z * uAltitudeScale, 1.0);
     gl_Position = pos;
     float radiusPx = (uUseFeatureRadius > 0.5 ? aRadius : uRadius) * uRadiusScale;
     gl_PointSize = radiusPx * 2.0;
-
-    // Window check: feature overlaps [uWindowStart, uWindowEnd]?
-    float inside = (aTime.y >= uWindowStart && aTime.x <= uWindowEnd) ? 1.0 : 0.0;
-
-    // Asymmetric fade: ramp alpha 0->1 across uFadeIn ms at the leading edge
-    // and 1->0 across uFadeOut ms at the trailing edge.
-    float entering = (uFadeIn > 0.0) ? clamp((aTime.y - uWindowStart) / uFadeIn, 0.0, 1.0) : 1.0;
-    float leaving = (uFadeOut > 0.0) ? clamp((uWindowEnd - aTime.x) / uFadeOut, 0.0, 1.0) : 1.0;
-    vAlpha = inside * min(entering, leaving);
+    vAlpha = sttTimeWindowAlpha(aTime, uWindowStart, uWindowEnd, uFadeIn, uFadeOut);
     vColor = (uUseFeatureColor > 0.5) ? aColor : uColor;
   }
 `;
@@ -283,40 +277,34 @@ export class STTPointLayer extends STTBaseLayer {
     const { fadeIn, fadeOut } = this.resolveFadeDurations();
     gl.uniform1f(h.uFadeIn, fadeIn);
     gl.uniform1f(h.uFadeOut, fadeOut);
+    // useFeature* uniforms are program-level, not VAO-recorded; set them every
+    // draw so toggling colourProperty/radiusProperty at runtime takes effect.
+    gl.uniform1f(h.uUseFeatureColor, c.colorBuffer && h.aColor >= 0 ? 1 : 0);
+    gl.uniform1f(h.uUseFeatureRadius, c.radiusBuffer && h.aRadius >= 0 ? 1 : 0);
 
-    gl.bindBuffer(gl.ARRAY_BUFFER, cache.positionBuffer);
-    gl.enableVertexAttribArray(h.aMercator);
-    gl.vertexAttribPointer(h.aMercator, 3, gl.FLOAT, false, 0, 0);
+    // First-frame VAO setup: capture every attribute binding. Subsequent
+    // frames just `bindVertexArray` and reuse all the state we recorded.
+    this.bindVaoOrSetup(c, () => {
+      gl.bindBuffer(gl.ARRAY_BUFFER, c.positionBuffer);
+      gl.enableVertexAttribArray(h.aMercator);
+      gl.vertexAttribPointer(h.aMercator, 3, gl.FLOAT, false, 0, 0);
 
-    gl.bindBuffer(gl.ARRAY_BUFFER, cache.timeBuffer);
-    gl.enableVertexAttribArray(h.aTime);
-    gl.vertexAttribPointer(h.aTime, 2, gl.FLOAT, false, 0, 0);
+      gl.bindBuffer(gl.ARRAY_BUFFER, c.timeBuffer);
+      gl.enableVertexAttribArray(h.aTime);
+      gl.vertexAttribPointer(h.aTime, 2, gl.FLOAT, false, 0, 0);
 
-    // Per-feature colour: when present, normalize the Uint8Array on upload
-    // and switch the shader to feature-driven colour.
-    if (c.colorBuffer && h.aColor >= 0) {
-      gl.bindBuffer(gl.ARRAY_BUFFER, c.colorBuffer);
-      gl.enableVertexAttribArray(h.aColor);
-      gl.vertexAttribPointer(h.aColor, 4, gl.UNSIGNED_BYTE, true, 0, 0);
-      gl.uniform1f(h.uUseFeatureColor, 1);
-    } else {
-      gl.uniform1f(h.uUseFeatureColor, 0);
-    }
-
-    if (c.radiusBuffer && h.aRadius >= 0) {
-      gl.bindBuffer(gl.ARRAY_BUFFER, c.radiusBuffer);
-      gl.enableVertexAttribArray(h.aRadius);
-      gl.vertexAttribPointer(h.aRadius, 1, gl.FLOAT, false, 0, 0);
-      gl.uniform1f(h.uUseFeatureRadius, 1);
-    } else {
-      gl.uniform1f(h.uUseFeatureRadius, 0);
-    }
+      if (c.colorBuffer && h.aColor >= 0) {
+        gl.bindBuffer(gl.ARRAY_BUFFER, c.colorBuffer);
+        gl.enableVertexAttribArray(h.aColor);
+        gl.vertexAttribPointer(h.aColor, 4, gl.UNSIGNED_BYTE, true, 0, 0);
+      }
+      if (c.radiusBuffer && h.aRadius >= 0) {
+        gl.bindBuffer(gl.ARRAY_BUFFER, c.radiusBuffer);
+        gl.enableVertexAttribArray(h.aRadius);
+        gl.vertexAttribPointer(h.aRadius, 1, gl.FLOAT, false, 0, 0);
+      }
+    });
 
     gl.drawArrays(gl.POINTS, 0, cache.vertexCount);
-
-    gl.disableVertexAttribArray(h.aMercator);
-    gl.disableVertexAttribArray(h.aTime);
-    if (c.colorBuffer && h.aColor >= 0) gl.disableVertexAttribArray(h.aColor);
-    if (c.radiusBuffer && h.aRadius >= 0) gl.disableVertexAttribArray(h.aRadius);
   }
 }

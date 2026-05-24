@@ -118,6 +118,16 @@ export interface TileGpuCache {
    * when the tile is unloaded.
    */
   extraBuffers?: WebGLBuffer[];
+  /**
+   * Cached vertex-array-object. Set by subclasses inside drawTile on the first
+   * draw and reused on every subsequent frame — replaces ~5–7 buffer-binds +
+   * enableVertexAttribArray calls per tile per frame with a single
+   * `bindVertexArray(vao)`. Cleared automatically with the tile.
+   * A separate VAO may exist per logical sub-pass (e.g. polygon fill vs. stroke).
+   */
+  vao?: WebGLVertexArrayObject | null;
+  /** Secondary VAO for layers that emit more than one pass per tile (e.g. polygon stroke). */
+  strokeVao?: WebGLVertexArrayObject | null;
 }
 
 /** Context passed to drawTile() with everything the subclass needs. */
@@ -149,6 +159,23 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
   protected tileGpuCache = new Map<string, TileGpuCache | null>();
   protected opts: STTBaseLayerOptions & { autoRepaint: boolean };
   protected supports32BitIndices = false;
+  /**
+   * VAO support detection. WebGL2 has VAOs in core; WebGL1 exposes them via
+   * `OES_vertex_array_object`. When unavailable, subclasses fall back to
+   * rebinding attributes per draw (the legacy path) — still correct, just
+   * 5–7× more API calls per tile.
+   */
+  protected vaoSupport: {
+    enabled: boolean;
+    create: () => WebGLVertexArrayObject | null;
+    bind: (vao: WebGLVertexArrayObject | null) => void;
+    delete: (vao: WebGLVertexArrayObject) => void;
+  } = {
+    enabled: false,
+    create: () => null,
+    bind: () => undefined,
+    delete: () => undefined,
+  };
 
   constructor(opts: STTBaseLayerOptions) {
     this.id = opts.id;
@@ -199,8 +226,44 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
     } else {
       this.supports32BitIndices = !!gl.getExtension('OES_element_index_uint');
     }
+    this.initVaoSupport(gl);
     this.onContextReady(gl);
     void this.initTileset();
+  }
+
+  /**
+   * Resolve VAO entry points. WebGL2 has them in core under the unprefixed
+   * names; WebGL1 must go through `OES_vertex_array_object` (the extension
+   * lookup also covers the test mock, which exposes the WebGL2 names directly).
+   * We capture function refs once so the per-draw fast path doesn't pay the
+   * cost of `instanceof` / extension probing on every tile.
+   */
+  private initVaoSupport(
+    gl: WebGLRenderingContext | WebGL2RenderingContext,
+  ): void {
+    const gl2 = gl as WebGL2RenderingContext;
+    if (typeof gl2.createVertexArray === 'function') {
+      this.vaoSupport = {
+        enabled: true,
+        create: () => gl2.createVertexArray(),
+        bind: (vao) => gl2.bindVertexArray(vao),
+        delete: (vao) => gl2.deleteVertexArray(vao),
+      };
+      return;
+    }
+    const ext = gl.getExtension('OES_vertex_array_object') as {
+      createVertexArrayOES: () => WebGLVertexArrayObject | null;
+      bindVertexArrayOES: (vao: WebGLVertexArrayObject | null) => void;
+      deleteVertexArrayOES: (vao: WebGLVertexArrayObject) => void;
+    } | null;
+    if (ext) {
+      this.vaoSupport = {
+        enabled: true,
+        create: () => ext.createVertexArrayOES(),
+        bind: (vao) => ext.bindVertexArrayOES(vao),
+        delete: (vao) => ext.deleteVertexArrayOES(vao),
+      };
+    }
   }
 
   onRemove(): void {
@@ -227,6 +290,8 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
     if (cache.extraBuffers) {
       for (const b of cache.extraBuffers) gl.deleteBuffer(b);
     }
+    if (cache.vao) this.vaoSupport.delete(cache.vao);
+    if (cache.strokeVao) this.vaoSupport.delete(cache.strokeVao);
   }
 
   render(
@@ -272,6 +337,9 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
         this.drawTile(gl, tile, layer, cache, ctx);
       }
     }
+    // Unbind so unrelated GL consumers (basemap, other custom layers) start
+    // from a clean attribute slate.
+    this.unbindVao();
   }
 
   // ------------------------------------------------------------------------
@@ -330,6 +398,55 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
   // ------------------------------------------------------------------------
   // Helpers for subclasses
   // ------------------------------------------------------------------------
+
+  /**
+   * Bind (or lazily build) a VAO for the given cache slot. On the first call
+   * the `setup` callback runs inside a VAO recording scope so all
+   * `bindBuffer(ARRAY_BUFFER, ...)` / `vertexAttribPointer` / element-buffer
+   * binds are captured. On every subsequent call we just `bindVertexArray(vao)`
+   * and skip the setup.
+   *
+   * When VAOs aren't available (very old WebGL1 without OES_vertex_array_object)
+   * we still run `setup` every draw — correctness preserved, perf falls back to
+   * the legacy path.
+   *
+   * The `slot` parameter selects which VAO slot on the cache to use. Subclasses
+   * with two passes per tile (polygon fill + stroke, heatmap accumulate) can
+   * use 'main' and 'stroke' independently.
+   */
+  protected bindVaoOrSetup(
+    cache: TileGpuCache,
+    setup: () => void,
+    slot: 'main' | 'stroke' = 'main',
+  ): void {
+    if (!this.vaoSupport.enabled) {
+      setup();
+      return;
+    }
+    const existing = slot === 'main' ? cache.vao : cache.strokeVao;
+    if (existing) {
+      this.vaoSupport.bind(existing);
+      return;
+    }
+    const vao = this.vaoSupport.create();
+    if (!vao) {
+      setup();
+      return;
+    }
+    this.vaoSupport.bind(vao);
+    setup();
+    if (slot === 'main') cache.vao = vao;
+    else cache.strokeVao = vao;
+  }
+
+  /**
+   * Unbind any VAO that may be currently active. Call once at the end of a
+   * frame so subsequent non-STT MapLibre passes don't inherit our attribute
+   * bindings.
+   */
+  protected unbindVao(): void {
+    if (this.vaoSupport.enabled) this.vaoSupport.bind(null);
+  }
 
   /** GL state shared across all STT layers. Subclasses can extend in drawTile. */
   protected applySharedGlState(
