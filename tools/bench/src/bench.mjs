@@ -14,7 +14,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { performance } from 'node:perf_hooks';
 
-import { STTArchive, estimateTileSize } from '@stt/core';
+import { STTArchive, estimateTileSize, OpfsTileCache } from '@stt/core';
 
 // `compression.ts` is not re-exported from the package's index, and the
 // package `exports` map only exposes `.`. Resolve the package's main module
@@ -81,8 +81,11 @@ function percentiles(values) {
  * Build a custom `fetch` that reads byte ranges out of an in-memory copy of a
  * local `.stt` file. Returns the fetch function plus a `stats` object tracking
  * request count and bytes transferred so the bench can measure amplification.
+ *
+ * The shim emits an `ETag` header on every response so the archive can
+ * fingerprint it and key OPFS entries deterministically.
  */
-function createFileFetch(fileBuffer) {
+function createFileFetch(fileBuffer, etag = 'W/"bench-v1"') {
   const stats = { requests: 0, bytesTransferred: 0 };
 
   const fileFetch = async (_url, init) => {
@@ -96,6 +99,7 @@ function createFileFetch(fileBuffer) {
       return new Response(fileBuffer.subarray(), {
         status: 200,
         statusText: 'OK',
+        headers: { ETag: etag },
       });
     }
 
@@ -115,10 +119,103 @@ function createFileFetch(fileBuffer) {
     return new Response(slice, {
       status: 206,
       statusText: 'Partial Content',
+      headers: { ETag: etag },
     });
   };
 
   return { fileFetch, stats };
+}
+
+/**
+ * Install / uninstall an in-memory OPFS shim on globalThis.navigator for the
+ * duration of the OPFS section. Backing store is a Map<filename, Uint8Array>
+ * so the bench measures the in-process decode-side savings — disk I/O for
+ * real OPFS is fast (NVMe), so this is a good proxy for the production warm
+ * path, with the network and zstd costs realistically excluded.
+ */
+let savedNavDescriptor;
+function installInMemoryOpfsShim() {
+  const root = makeMemDir();
+  savedNavDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  Object.defineProperty(globalThis, 'navigator', {
+    configurable: true,
+    writable: true,
+    value: {
+      ...(savedNavDescriptor?.value ?? {}),
+      storage: { getDirectory: async () => root },
+    },
+  });
+  return root;
+}
+function uninstallInMemoryOpfsShim() {
+  if (savedNavDescriptor) {
+    Object.defineProperty(globalThis, 'navigator', savedNavDescriptor);
+    savedNavDescriptor = undefined;
+  }
+}
+function makeMemDir() {
+  const files = new Map();
+  const subdirs = new Map();
+  return {
+    _files: files,
+    async getFileHandle(name, opts) {
+      if (!files.has(name)) {
+        if (opts?.create) files.set(name, new Uint8Array());
+        else {
+          const err = new Error('NotFoundError');
+          err.name = 'NotFoundError';
+          throw err;
+        }
+      }
+      return {
+        getFile: async () => {
+          const b = files.get(name);
+          return {
+            arrayBuffer: async () => b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength),
+            text: async () => new TextDecoder().decode(b),
+          };
+        },
+        createWritable: async () => {
+          const chunks = [];
+          return {
+            write: async (d) => {
+              let bytes;
+              if (typeof d === 'string') bytes = new TextEncoder().encode(d);
+              else if (d instanceof Uint8Array) bytes = d;
+              else bytes = new Uint8Array(d);
+              chunks.push(new Uint8Array(bytes));
+            },
+            close: async () => {
+              const total = chunks.reduce((s, c) => s + c.byteLength, 0);
+              const out = new Uint8Array(total);
+              let o = 0;
+              for (const c of chunks) {
+                out.set(c, o);
+                o += c.byteLength;
+              }
+              files.set(name, out);
+            },
+          };
+        },
+      };
+    },
+    async getDirectoryHandle(name, opts) {
+      let sub = subdirs.get(name);
+      if (!sub) {
+        if (!opts?.create) {
+          const err = new Error('NotFoundError');
+          err.name = 'NotFoundError';
+          throw err;
+        }
+        sub = makeMemDir();
+        subdirs.set(name, sub);
+      }
+      return sub;
+    },
+    async removeEntry(name) {
+      files.delete(name);
+    },
+  };
 }
 
 /** Derive the exact TileId getTile expects from an index TileEntry. */
@@ -501,6 +598,119 @@ async function main() {
     var archiveRatio = ratio;
     metrics.compression_ratio = ratio;
   }
+
+  // ====================================================================
+  // 7. OPFS persistent cache (decompressed-payload reuse)
+  // ====================================================================
+  header('7. OPFS cache — cold vs warm');
+
+  // Numbers from this section are recorded into the baseline so a future
+  // regression in the OPFS fast path is caught in CI.
+  let opfsColdP95 = 0;
+  let opfsWarmP95 = 0;
+  let opfsColdMBs = 0;
+  let opfsWarmMBs = 0;
+
+  {
+    installInMemoryOpfsShim();
+    try {
+      const opfs = new OpfsTileCache({ maxBytes: 512 * 1024 * 1024 });
+      const SAMPLE = Math.min(500, tileEntries.length);
+      const probeIds = tileEntries.slice(0, SAMPLE).map(entryToTileId);
+
+      // --- Cold pass: empty OPFS, every tile through fetch + decompress.
+      const coldFetch = createFileFetch(fileBuffer);
+      const coldArchive = new STTArchive({
+        url: sttPath,
+        fetch: coldFetch.fileFetch,
+        opfsCacheImpl: opfs,
+      });
+      await coldArchive.getIndex();
+      const coldLatencies = [];
+      let coldBytes = 0;
+      const coldT0 = performance.now();
+      for (const id of probeIds) {
+        const tStart = performance.now();
+        const tile = await coldArchive.getTile(id);
+        coldLatencies.push(performance.now() - tStart);
+        const entry = tileEntries.find(
+          (e) => e.zoom === id.z && e.x === id.x && e.y === id.y && e.timeStart === id.t,
+        );
+        if (entry && tile) coldBytes += entry.uncompressedSize || entry.length;
+      }
+      const coldMs = performance.now() - coldT0;
+      const coldPct = percentiles(coldLatencies);
+
+      // Let the fire-and-forget OPFS writes complete before warm pass.
+      // The cache flush is on a setTimeout(0) tick — a couple of frames
+      // worth of wait is enough.
+      await new Promise((r) => setTimeout(r, 100));
+
+      // --- Warm pass: fresh archive, same OPFS cache. The archive only
+      //     hits the network for header/metadata/index, never for tiles.
+      const warmFetch = createFileFetch(fileBuffer);
+      const warmArchive = new STTArchive({
+        url: sttPath,
+        fetch: warmFetch.fileFetch,
+        opfsCacheImpl: opfs,
+      });
+      await warmArchive.getIndex();
+      // After getIndex(), the archive has captured the ETag fingerprint and
+      // can build OPFS keys for tile lookups.
+      const reqsBeforeWarm = warmFetch.stats.requests;
+      const warmLatencies = [];
+      let warmBytes = 0;
+      const warmT0 = performance.now();
+      for (const id of probeIds) {
+        const tStart = performance.now();
+        const tile = await warmArchive.getTile(id);
+        warmLatencies.push(performance.now() - tStart);
+        const entry = tileEntries.find(
+          (e) => e.zoom === id.z && e.x === id.x && e.y === id.y && e.timeStart === id.t,
+        );
+        if (entry && tile) warmBytes += entry.uncompressedSize || entry.length;
+      }
+      const warmMs = performance.now() - warmT0;
+      const warmPct = percentiles(warmLatencies);
+      const warmTileRequests = warmFetch.stats.requests - reqsBeforeWarm;
+      const warmStats = warmArchive.getCacheStats().opfs;
+
+      opfsColdP95 = coldPct.p95;
+      opfsWarmP95 = warmPct.p95;
+      opfsColdMBs = coldMs > 0 ? coldBytes / 1024 / 1024 / (coldMs / 1000) : 0;
+      opfsWarmMBs = warmMs > 0 ? warmBytes / 1024 / 1024 / (warmMs / 1000) : 0;
+
+      row('Sample tiles', fmtNum(probeIds.length));
+      console.log('');
+      row('Cold pass (no OPFS hits)', '');
+      row('  wall time', fmtMs(coldMs));
+      row('  throughput', `${(probeIds.length / (coldMs / 1000)).toFixed(0)} tiles/s`);
+      row('  uncompressed MB/s', fmtMBs(coldBytes, coldMs));
+      row('  p50 / p95 / p99', `${fmtMs(coldPct.p50)} / ${fmtMs(coldPct.p95)} / ${fmtMs(coldPct.p99)}`);
+      console.log('');
+      row('Warm pass (OPFS hits)', '');
+      row('  wall time', fmtMs(warmMs));
+      row('  throughput', `${(probeIds.length / (warmMs / 1000)).toFixed(0)} tiles/s`);
+      row('  uncompressed MB/s', fmtMBs(warmBytes, warmMs));
+      row('  p50 / p95 / p99', `${fmtMs(warmPct.p50)} / ${fmtMs(warmPct.p95)} / ${fmtMs(warmPct.p99)}`);
+      row('  range requests', fmtNum(warmTileRequests));
+      console.log('');
+      row(
+        'Speedup',
+        warmMs > 0 ? `${(coldMs / warmMs).toFixed(2)}x  (${fmtMs(coldMs)} -> ${fmtMs(warmMs)})` : 'n/a',
+      );
+      row('OPFS entries', fmtNum(warmStats?.entries ?? 0));
+      row('OPFS bytes', fmtBytes(warmStats?.bytes ?? 0));
+      row('OPFS hit rate', warmStats ? fmtPct(warmStats.hitRate) : 'n/a');
+    } finally {
+      uninstallInMemoryOpfsShim();
+    }
+  }
+
+  metrics.opfs_cold_p95_ms = opfsColdP95;
+  metrics.opfs_warm_p95_ms = opfsWarmP95;
+  metrics.opfs_cold_mb_per_s = opfsColdMBs;
+  metrics.opfs_warm_mb_per_s = opfsWarmMBs;
 
   // ====================================================================
   // Summary
