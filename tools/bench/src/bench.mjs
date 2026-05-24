@@ -373,73 +373,156 @@ async function main() {
   metrics.coalesce_ratio = batchReqs > 0 ? indivReqs / batchReqs : 0;
 
   // ====================================================================
-  // 4. Decompression: native DecompressionStream vs pako
+  // 4. Decompression: native vs fflate vs pako vs fzstd
   // ====================================================================
-  header('4. Decompression: native vs pako');
+  // The hot path is gzip decode of tile blobs. We compare:
+  //   - native gzip via `DecompressionStream` (off-heap, the default)
+  //   - fflate gzip (pure JS, ~10 KB — current fallback)
+  //   - pako gzip   (pure JS, ~45 KB — historical fallback; bench only)
+  //   - fzstd zstd  (pure JS, ~30 KB — the zstd path is always pure JS,
+  //                  no DecompressionStream('zstd') exists yet)
+  // The zstd row uses payloads from a different bucket (zstd-compressed
+  // tiles) so the MB/s figure is on a different absolute scale; what
+  // matters is whether fzstd is fast enough that the zstd archive size
+  // win is not eaten by decode cost.
+  header('4. Decompression: native vs fflate vs pako vs fzstd');
 
-  // Collect raw compressed payloads for gzip-compressed tiles via the
-  // file-backed fetch using index offsets/lengths.
   const Compression = { None: 0, Gzip: 1, Zstd: 2 };
+  // Lazily resolve pako (still installed as a transitive dep for some
+  // toolchains; bench-only, NOT a @stt/core dep any more). Missing pako
+  // is not an error — just skip its row.
+  let pakoUngzip = null;
+  try {
+    const pako = await import('pako');
+    pakoUngzip = pako.ungzip ?? pako.default?.ungzip ?? null;
+  } catch {
+    /* pako not installed — fine, we shipped fflate */
+  }
+  let fflateGunzip = null;
+  try {
+    const fflate = await import('fflate');
+    fflateGunzip = fflate.gunzipSync;
+  } catch {
+    /* fflate missing — should never happen, but don't crash bench */
+  }
+  let fzstdDecompress = null;
+  try {
+    const fzstd = await import('fzstd');
+    fzstdDecompress = fzstd.decompress;
+  } catch {
+    /* same — fzstd is a @stt/core dep so this is unreachable */
+  }
+
   const gzipEntries = tileEntries
     .filter((e) => e.compression === Compression.Gzip && e.length > 0)
     .slice(0, 200);
+  const zstdEntries = tileEntries
+    .filter((e) => e.compression === Compression.Zstd && e.length > 0)
+    .slice(0, 200);
 
-  if (gzipEntries.length === 0) {
-    row('Status', 'no gzip-compressed tiles in archive — section skipped');
-  } else {
-    // Read raw compressed bytes directly from the file buffer.
+  if (gzipEntries.length === 0 && zstdEntries.length === 0) {
+    row('Status', 'no compressed tiles in archive — section skipped');
+  } else if (gzipEntries.length > 0) {
+    // Gzip path: native vs fflate (vs pako if available).
     const payloads = gzipEntries.map((e) =>
-      Uint8Array.prototype.slice.call(fileBuffer, e.offset, e.offset + e.length)
+      Uint8Array.prototype.slice.call(fileBuffer, e.offset, e.offset + e.length),
     );
     const totalCompressed = payloads.reduce((s, p) => s + p.length, 0);
     let totalDecompressed = 0;
 
-    // Pako (synchronous, pure JS).
     const ITER = Math.max(1, Math.ceil(2000 / payloads.length));
-    const pakoT0 = performance.now();
-    for (let i = 0; i < ITER; i++) {
-      for (const p of payloads) {
-        const out = gunzipSync(p);
-        if (i === 0) totalDecompressed += out.length;
+
+    // fflate (the shipped fallback).
+    let fflateMs = null;
+    if (fflateGunzip) {
+      const t0 = performance.now();
+      for (let i = 0; i < ITER; i++) {
+        for (const p of payloads) {
+          const out = fflateGunzip(p);
+          if (i === 0) totalDecompressed += out.length;
+        }
       }
+      fflateMs = performance.now() - t0;
     }
-    const pakoMs = performance.now() - pakoT0;
+
+    // pako (bench comparison only).
+    let pakoMs = null;
+    if (pakoUngzip) {
+      const t0 = performance.now();
+      for (let i = 0; i < ITER; i++) {
+        for (const p of payloads) pakoUngzip(p);
+      }
+      pakoMs = performance.now() - t0;
+    }
 
     // Native DecompressionStream (async, off-heap).
     let nativeMs = null;
     if (NATIVE_DECOMPRESSION_AVAILABLE) {
       const decodeNative = async (data) => {
         const stream = new Response(data.slice().buffer).body.pipeThrough(
-          new DecompressionStream('gzip')
+          new DecompressionStream('gzip'),
         );
         return new Uint8Array(await new Response(stream).arrayBuffer());
       };
-      const nativeT0 = performance.now();
+      const t0 = performance.now();
       for (let i = 0; i < ITER; i++) {
         await Promise.all(payloads.map((p) => decodeNative(p)));
       }
-      nativeMs = performance.now() - nativeT0;
+      nativeMs = performance.now() - t0;
     }
 
     const totalCompIter = totalCompressed * ITER;
-    row('Sample payloads', fmtNum(payloads.length));
+    row('Gzip sample payloads', fmtNum(payloads.length));
     row('Iterations', `${ITER} (${fmtNum(payloads.length * ITER)} decode calls)`);
     row('Compressed / decompressed', `${fmtBytes(totalCompressed)} -> ${fmtBytes(totalDecompressed)}`);
     console.log('');
-    row('pako (pure JS)', `${fmtMs(pakoMs)}  @ ${fmtMBs(totalCompIter, pakoMs)}`);
     if (nativeMs !== null) {
       row('native DecompressionStream', `${fmtMs(nativeMs)}  @ ${fmtMBs(totalCompIter, nativeMs)}`);
-      row(
-        'Speedup (native vs pako)',
-        nativeMs > 0 ? `${(pakoMs / nativeMs).toFixed(2)}x` : 'n/a'
-      );
     } else {
-      row('native DecompressionStream', 'unavailable in this Node version');
+      row('native DecompressionStream', 'unavailable in this runtime');
+    }
+    if (fflateMs !== null) {
+      row('fflate gzip (pure JS)', `${fmtMs(fflateMs)}  @ ${fmtMBs(totalCompIter, fflateMs)}`);
+    }
+    if (pakoMs !== null) {
+      row('pako gzip (pure JS)', `${fmtMs(pakoMs)}  @ ${fmtMBs(totalCompIter, pakoMs)}`);
+    }
+    if (nativeMs !== null && fflateMs !== null) {
+      row('Speedup (native vs fflate)', `${(fflateMs / nativeMs).toFixed(2)}x`);
+    }
+    if (pakoMs !== null && fflateMs !== null) {
+      row('Speedup (fflate vs pako)', `${(pakoMs / fflateMs).toFixed(2)}x`);
     }
 
-    // Sanity check: decompressSync produces identical output.
+    // Sanity check: decompressSync produces identical output. This is the
+    // gunzipSync we ship to consumers; if it diverged the contract test
+    // would catch it, but we re-check here for the bench summary.
     const check = decompressSync(payloads[0], Compression.Gzip);
     row('decompressSync sanity', check.length > 0 ? 'ok' : 'FAILED');
+  }
+
+  if (zstdEntries.length > 0 && fzstdDecompress) {
+    console.log('');
+    const zPayloads = zstdEntries.map((e) =>
+      Uint8Array.prototype.slice.call(fileBuffer, e.offset, e.offset + e.length),
+    );
+    const zTotalCompressed = zPayloads.reduce((s, p) => s + p.length, 0);
+    const ITER = Math.max(1, Math.ceil(2000 / zPayloads.length));
+    const t0 = performance.now();
+    let zTotalDecompressed = 0;
+    for (let i = 0; i < ITER; i++) {
+      for (const p of zPayloads) {
+        const out = fzstdDecompress(p);
+        if (i === 0) zTotalDecompressed += out.length;
+      }
+    }
+    const fzstdMs = performance.now() - t0;
+    const zTotalIter = zTotalCompressed * ITER;
+    row('Zstd sample payloads', fmtNum(zPayloads.length));
+    row('Compressed / decompressed', `${fmtBytes(zTotalCompressed)} -> ${fmtBytes(zTotalDecompressed)}`);
+    row('fzstd (pure JS)', `${fmtMs(fzstdMs)}  @ ${fmtMBs(zTotalIter, fzstdMs)}`);
+  } else if (zstdEntries.length === 0) {
+    row('Zstd', 'no zstd tiles in archive');
   }
 
   // ====================================================================
