@@ -97,27 +97,45 @@ function extractGeometry(
     return { positions: coords.subarray(start, start + geom.length * 2) };
   }
 
-  // LineString: List<FixedSizeList<Float64,2>>.
-  // Polygon: List<List<FixedSizeList<Float64,2>>> — flattened to feature-level
-  // coordinate ranges (ring boundaries are not preserved in BinaryFeatures).
-  const featureOffsets: Int32Array = geom.valueOffsets;
-  let coordData = geom.children[0];
-  if (kind === GeometryType.Polygon) {
-    // Descend through the ring list to the coordinate list.
-    coordData = coordData.children[0];
+  if (kind === GeometryType.LineString) {
+    // LineString: List<FixedSizeList<Float64,2>>.
+    const featureOffsets: Int32Array = geom.valueOffsets;
+    const coordData = geom.children[0]; // FixedSizeList<Float64,2>
+    const coords: Float64Array = coordData.children[0].values;
+    const n = geom.length;
+    const base = featureOffsets[geom.offset];
+    const startIndices = new Uint32Array(n + 1);
+    for (let i = 0; i <= n; i++) {
+      startIndices[i] = featureOffsets[geom.offset + i] - base;
+    }
+    const positions = coords.subarray(base * 2, featureOffsets[geom.offset + n] * 2);
+    return { positions, startIndices };
   }
-  // coordData is now FixedSizeList<Float64,2>.
+
+  // Polygon: List<List<FixedSizeList<Float64,2>>>. Two levels of offsets:
+  //   featureOffsets : feature -> ring index
+  //   ringOffsets    : ring    -> vertex index
+  // We collapse to per-feature VERTEX offsets so the renderer sees one flat
+  // run per feature. Ring boundaries inside a feature are not preserved in
+  // BinaryFeatures — every existing STT polygon path treats `startIndices`
+  // as feature-level vertex offsets.
+  const featureOffsets: Int32Array = geom.valueOffsets;
+  const ringList = geom.children[0]; // List<FixedSizeList<Float64,2>>
+  const ringOffsets: Int32Array = ringList.valueOffsets;
+  const coordData = ringList.children[0]; // FixedSizeList<Float64,2>
   const coords: Float64Array = coordData.children[0].values;
 
-  // Translate the List offsets (in units of coordinate *pairs*) into
-  // per-feature start indices, normalised so feature 0 starts at 0.
   const n = geom.length;
-  const base = featureOffsets[geom.offset];
+  const firstRing = featureOffsets[geom.offset];
+  const lastRing = featureOffsets[geom.offset + n];
+  const startVertex = ringOffsets[firstRing];
+  const endVertex = ringOffsets[lastRing];
   const startIndices = new Uint32Array(n + 1);
   for (let i = 0; i <= n; i++) {
-    startIndices[i] = featureOffsets[geom.offset + i] - base;
+    const ringIdx = featureOffsets[geom.offset + i];
+    startIndices[i] = ringOffsets[ringIdx] - startVertex;
   }
-  const positions = coords.subarray(base * 2, featureOffsets[geom.offset + n] * 2);
+  const positions = coords.subarray(startVertex * 2, endVertex * 2);
   return { positions, startIndices };
 }
 
@@ -216,6 +234,43 @@ function tableToBinaryFeatures(table: Table): BinaryFeatures {
     step,
   );
 
+  // --- pre-baked triangle indices (MLT-style polygon meshes) ---
+  // The Rust writer stores feature-LOCAL indices so we shift each feature's
+  // run by its `startIndices[i]` to produce GLOBAL indices the renderer can
+  // hand straight to deck.gl / WebGL. Absent → the renderer falls back to
+  // its CPU earcut path at tile-arrival time.
+  let triangles: Uint32Array | undefined;
+  let triangleOffsets: Uint32Array | undefined;
+  const hasTriangles =
+    kind === GeometryType.Polygon &&
+    table.schema.metadata.get('stt:has_triangles') === 'true';
+  if (hasTriangles) {
+    const triVec = table.getChild('triangles');
+    if (triVec && startIndices) {
+      const triData = chunk(triVec);
+      const triOffsets: Int32Array = triData.valueOffsets;
+      const triValues = triData.children[0].values as Uint32Array;
+      const baseOff = triOffsets[triData.offset];
+      const total = triOffsets[triData.offset + triData.length] - baseOff;
+      triangles = new Uint32Array(total);
+      triangleOffsets = new Uint32Array(featureCount + 1);
+      // Walk every feature once, copying its slice with a per-feature shift
+      // applied. `startIndices[i]` is in coordinate-pair units, which is
+      // exactly what the triangle indices need to be shifted by.
+      let writePos = 0;
+      for (let i = 0; i < featureCount; i++) {
+        triangleOffsets[i] = writePos;
+        const begin = triOffsets[triData.offset + i] - baseOff;
+        const end = triOffsets[triData.offset + i + 1] - baseOff;
+        const shift = startIndices[i];
+        for (let j = begin; j < end; j++) {
+          triangles[writePos++] = triValues[j] + shift;
+        }
+      }
+      triangleOffsets[featureCount] = writePos;
+    }
+  }
+
   // --- properties ---
   const numericProps: Record<string, Float32Array> = {};
   const categoricalProps: BinaryFeatures['categoricalProps'] = {};
@@ -225,6 +280,7 @@ function tableToBinaryFeatures(table: Table): BinaryFeatures {
     'end_time',
     'geometry',
     'vertex_time',
+    'triangles',
   ]);
   for (const field of table.schema.fields) {
     if (reserved.has(field.name)) continue;
@@ -297,6 +353,8 @@ function tableToBinaryFeatures(table: Table): BinaryFeatures {
     endTimes,
     timeOffset,
     vertexTimestamps,
+    triangles,
+    triangleOffsets,
     numericProps,
     categoricalProps,
   };
