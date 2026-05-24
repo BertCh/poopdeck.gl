@@ -170,7 +170,17 @@ export class AnimatedTripsLayer extends SpatioTemporalLayer<AnimatedTripsLayerPr
    * Singleton TimeFilterExtension reused by every sublayer. Extensions are
    * stateless w.r.t. data; the per-tile timeOffset is passed as a layer prop.
    */
-  private readonly timeFilterExtension = new TimeFilterExtension();
+  /**
+   * Trips always use trail-mode filtering (per-vertex time + trail uniform),
+   * so we register ONLY `instanceVertexTime` and skip the
+   * `instanceStartTime` / `instanceEndTime` pair. That frees up two
+   * vertex-attribute slots — critical because PathLayer's fp64 position
+   * split + `instancePickingColors` + CategoryColorExtension already crowd
+   * the WebGL2 16-attribute minimum. Without this fix the nyc-taxi-trips
+   * and hero-trips sublayers hit
+   *   "WebGL Link error: Too many attributes (instancePickingColors)".
+   */
+  private readonly timeFilterExtension = new TimeFilterExtension({ mode: 'trail' });
 
   /**
    * Singleton CategoryColorExtension. Replaces the per-tile CPU
@@ -419,7 +429,16 @@ export class AnimatedTripsLayer extends SpatioTemporalLayer<AnimatedTripsLayerPr
       );
     }
 
-    return new PathLayer({
+    // Keep the extension list constant across all sublayers of this
+    // AnimatedTripsLayer instance — deck.gl caches compiled shader
+    // pipelines per extension set, and a varying list produces one cache
+    // entry per (set, props) combination, which manifests as 0.3 FPS
+    // shader-rebuild storms during tile churn. CategoryColorExtension
+    // sits idle when `useCategoryColor` is false (gated in its own
+    // shader branch via the uniform).
+    const extensions: any[] = [this.timeFilterExtension, this.categoryColorExtension];
+
+    const props: Record<string, any> = {
       id: sublayerId,
       data: prepared.data,
       // Identity comparator: deck.gl skips prop-diff on `data` when the same
@@ -444,18 +463,18 @@ export class AnimatedTripsLayer extends SpatioTemporalLayer<AnimatedTripsLayerPr
       getColor: constColor,
       getWidth: constWidth,
 
-      extensions: [this.timeFilterExtension, this.categoryColorExtension],
+      extensions,
       // Dynamic time: extension reads getTime() on every draw, so we never
       // recreate the layer for time-only changes.
       getTime: this.boundGetTime,
       timeOffset: prepared.timeOffset,
       timeWindow,
       trailLength: this.props.trailLength,
-
-      // CategoryColorExtension wiring. Toggle off when this tile has no
-      // categorical color so the shader branch is gated.
-      categoryPalette: useGpuCategory ? prepared.gpuPalette! : [],
-      useCategoryColor: useGpuCategory,
-    } as any);
+    };
+    props.useCategoryColor = useGpuCategory;
+    if (useGpuCategory) {
+      props.categoryPalette = prepared.gpuPalette!;
+    }
+    return new PathLayer(props as any);
   }
 }

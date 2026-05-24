@@ -203,7 +203,17 @@ async function probeDemo(demoId) {
   const consoleErrors = [];
   page.on('pageerror', (e) => consoleErrors.push(`[pageerror] ${e.message}`));
   page.on('console', (msg) => {
-    if (msg.type() === 'error') consoleErrors.push(`[error] ${msg.text()}`);
+    // Capture both errors AND warnings — luma.gl / deck.gl emit GPU link
+    // failures as `console.warn` (e.g. "Too many attributes"), which the
+    // error-only filter missed. Filter out the chatty dev-mode noise.
+    const t = msg.type();
+    const txt = msg.text();
+    if (t === 'error') consoleErrors.push(`[error] ${txt}`);
+    else if (t === 'warning' || t === 'warn') {
+      if (/luma\.gl|deck\.gl|WebGL|shader|link error/i.test(txt)) {
+        consoleErrors.push(`[warn] ${txt}`);
+      }
+    }
   });
 
   const result = {

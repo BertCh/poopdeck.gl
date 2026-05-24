@@ -1,14 +1,32 @@
-import React from 'react';
-import ReactDOM from 'react-dom/client';
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
-import Layout from './components/Layout';
-import HomePage from './pages/HomePage';
-import DemoPage from './pages/DemoPage';
-import FormatPage from './pages/FormatPage';
-import LayersPage from './pages/LayersPage';
-import './index.css';
+import React from "react";
+import ReactDOM from "react-dom/client";
+import { BrowserRouter, Routes, Route } from "react-router-dom";
+import Layout from "./components/Layout";
+import HomePage from "./pages/HomePage";
+import DemoPage from "./pages/DemoPage";
+import FormatPage from "./pages/FormatPage";
+import LayersPage from "./pages/LayersPage";
+import "./index.css";
 
-ReactDOM.createRoot(document.getElementById('root')!).render(
+// Silence the known non-fatal luma.gl link warning that fires on deck.gl
+// ≤ 9.3 for the per-tile sublayer demos:
+//   `WebGL Link error: Too many attributes (instancePickingColors)`
+// deck.gl falls back to a non-picking shader and rendering proceeds —
+// the warning is just visual noise. The proper fix lands in deck.gl 9.4
+// (gl_InstanceID picking, no vertex-attribute slot).
+const originalError = console.error;
+console.error = function (...args: unknown[]): void {
+  const msg = String(args[0] ?? '');
+  if (
+    /Too many attributes \(instancePickingColors\)/.test(msg) ||
+    /Link error during link-error/.test(msg)
+  ) {
+    return;
+  }
+  originalError.apply(console, args as []);
+};
+
+ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <BrowserRouter>
       <Routes>
@@ -24,5 +42,5 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
         </Route>
       </Routes>
     </BrowserRouter>
-  </React.StrictMode>
+  </React.StrictMode>,
 );

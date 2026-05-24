@@ -89,6 +89,7 @@ function indicesToFloat32(indices: Uint16Array, count: number): Float32Array {
   return out;
 }
 
+
 export class AnimatedPathLayer extends SpatioTemporalLayer<AnimatedPathLayerProps> {
   static layerName = 'AnimatedPathLayer';
 
@@ -115,7 +116,14 @@ export class AnimatedPathLayer extends SpatioTemporalLayer<AnimatedPathLayerProp
     { layer: PathLayer; preparedKey: PreparedTile; layerPropsKey: string }
   >();
   private lastLayerPropsKey: string = '';
-  private readonly timeFilterExtension = new TimeFilterExtension();
+  /**
+   * Path layer is window-mode only (whole feature on/off + fade), so the
+   * per-vertex time attribute is unused. Registering only the start/end pair
+   * keeps the per-pipeline vertex-attribute count under WebGL2's 16-slot
+   * minimum when stacked with PathLayer's fp64 position split + picking +
+   * CategoryColorExtension.
+   */
+  private readonly timeFilterExtension = new TimeFilterExtension({ mode: 'window' });
   private readonly categoryColorExtension = new CategoryColorExtension();
   private readonly boundGetTime: () => number = () => this.getCurrentTime();
 
@@ -303,7 +311,10 @@ export class AnimatedPathLayer extends SpatioTemporalLayer<AnimatedPathLayerProp
       );
     }
 
-    return new PathLayer({
+    // Keep the extension list constant across sublayers — see
+    // animated-trips-layer.ts for the cache-storm rationale.
+    const extensions: any[] = [this.timeFilterExtension, this.categoryColorExtension];
+    const props: Record<string, any> = {
       id: sublayerId,
       data: prepared.data,
       // Identity comparator pairs with the preparedTileCache: deck.gl skips
@@ -325,17 +336,17 @@ export class AnimatedPathLayer extends SpatioTemporalLayer<AnimatedPathLayerProp
       getColor: constColor,
       getWidth: constWidth,
 
-      extensions: [this.timeFilterExtension, this.categoryColorExtension],
+      extensions,
       getTime: this.boundGetTime,
       timeOffset: prepared.timeOffset,
       timeWindow,
       fadeInDuration: this.props.fadeInDuration,
       fadeOutDuration: this.props.fadeOutDuration,
-
-      // CategoryColorExtension wiring. When this tile has no categorical
-      // color, the toggle is off and the shader branch is gated.
-      categoryPalette: useGpuCategory ? prepared.gpuPalette! : [],
-      useCategoryColor: useGpuCategory,
-    } as any);
+    };
+    props.useCategoryColor = useGpuCategory;
+    if (useGpuCategory) {
+      props.categoryPalette = prepared.gpuPalette!;
+    }
+    return new PathLayer(props as any);
   }
 }

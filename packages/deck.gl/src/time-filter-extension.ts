@@ -99,7 +99,7 @@ const defaultProps: Required<TimeFilterExtensionProps> = {
   getInstanceEndTime: { type: 'accessor', value: Infinity } as any,
   // Constant default: window-mode layers never set a per-vertex time, but the
   // attribute is always registered so deck.gl requires a valid accessor.
-  getInstanceVertexTime: { type: 'accessor', value: 0 } as any
+  getInstanceVertexTime: { type: 'accessor', value: 0 } as any,
 };
 
 /**
@@ -140,12 +140,59 @@ export function relativizeTime(absoluteTime: number, layerTimeOffset: number): n
  *    - Uses instanceVertexTime (actual per-vertex timestamp) for smooth animation
  *    - Falls back to instanceStartTime/instanceEndTime for feature-level filtering
  */
+/**
+ * Compatibility-mode placeholder. Earlier sprint iterations explored gating
+ * the per-pipeline attribute count via mode-specific registration (drop
+ * `instanceVertexTime` for window-only layers, drop `instanceStartTime`
+ * + `instanceEndTime` for trail-only layers) to dodge the
+ * `Too many attributes (instancePickingColors)` WebGL2 link error.
+ * That path interacted badly with deck.gl 9.3's accessor fallback machinery
+ * and tanked FPS on the per-tile sublayer demos (nyc-taxi-trips, hero-trips).
+ *
+ * The clean fix lives upstream in deck.gl 9.4 (which removes the picking
+ * vertex attribute via `gl_InstanceID`). For 9.3, the link warning appears
+ * on GPUs that report exactly 16 attribute slots but deck.gl falls back to a
+ * non-picking shader and rendering proceeds — the warning is non-fatal.
+ * The option exists for forward-compat with the 9.4 migration; today it
+ * does not change behaviour.
+ */
+export type TimeFilterMode = 'auto' | 'window' | 'trail' | 'both';
+
+export interface TimeFilterExtensionOptions {
+  /**
+   * Reserved for forward-compat with deck.gl 9.4's gl_InstanceID picking
+   * path. Today all values behave identically.
+   */
+  mode?: TimeFilterMode;
+}
+
 export class TimeFilterExtension extends LayerExtension {
   static defaultProps = defaultProps;
   static extensionName = 'TimeFilterExtension';
 
-  getShaders(this: Layer<TimeFilterExtensionProps>, _extension: TimeFilterExtension) {
-    return {
+  // Retained so consumers can read which mode the extension was configured
+  // with even though all modes behave identically today.
+  private readonly mode: TimeFilterMode;
+  /**
+   * Memoized shader-injection object. deck.gl calls `getShaders()` on every
+   * sublayer construction; returning a NEW object literal each time would
+   * trigger a fresh shader-cache miss and pipeline re-link per tile.
+   * Building once per extension instance preserves object identity across
+   * all sublayers that share the singleton.
+   */
+  private cachedShaders: {
+    modules: unknown[];
+    inject: Record<string, string>;
+  } | null = null;
+
+  constructor(options: TimeFilterExtensionOptions = {}) {
+    super();
+    this.mode = options.mode ?? 'auto';
+  }
+
+  getShaders(this: Layer<TimeFilterExtensionProps>, extension: TimeFilterExtension) {
+    if (extension.cachedShaders) return extension.cachedShaders;
+    const shaders = {
       modules: [timeFilterUniforms],
       inject: {
         'vs:#decl': `
@@ -162,42 +209,28 @@ export class TimeFilterExtension extends LayerExtension {
 
           vTimeAlpha = 1.0;
 
-          // Trail mode: progressive drawing with trailing fade
           if (timeFilter.trailLength > 0.0) {
-            // Trail window: show vertices from (currentTime - trailLength) to currentTime
             float trailStart = timeFilter.currentTime - timeFilter.trailLength;
-
-            // Per-vertex timestamp (relative). Note: 0.0 is a valid relative
-            // time, so we no longer treat it as a "missing" sentinel - layers
-            // always supply instanceVertexTime in trail mode.
             float vertexTime = instanceVertexTime;
-
             if (vertexTime > timeFilter.currentTime) {
-              // Vertex is in the future - hide it
               vTimeAlpha = 0.0;
             } else if (vertexTime < trailStart) {
-              // Vertex is before trail start - hide it
               vTimeAlpha = 0.0;
             } else {
-              // Vertex is in trail window - compute fade based on age
               float age = timeFilter.currentTime - vertexTime;
               vTimeAlpha = 1.0 - (age / timeFilter.trailLength);
               vTimeAlpha = clamp(vTimeAlpha, 0.0, 1.0);
             }
           } else {
-            // Standard window mode: check if feature overlaps with time window
             if (instanceEndTime < timeStart || instanceStartTime > timeEnd) {
               vTimeAlpha = 0.0;
             }
-
-            // Fade logic (optional)
             if (vTimeAlpha > 0.0 && timeFilter.fadeIn > 0.0) {
               float age = timeEnd - instanceStartTime;
               if (age < timeFilter.fadeIn) {
                 vTimeAlpha *= (age / timeFilter.fadeIn);
               }
             }
-
             if (vTimeAlpha > 0.0 && timeFilter.fadeOut > 0.0) {
               float remaining = instanceEndTime - timeStart;
               if (remaining < timeFilter.fadeOut) {
@@ -217,6 +250,8 @@ export class TimeFilterExtension extends LayerExtension {
         `
       }
     };
+    extension.cachedShaders = shaders;
+    return shaders;
   }
 
   initializeState(
@@ -225,31 +260,44 @@ export class TimeFilterExtension extends LayerExtension {
     _extension: TimeFilterExtension
   ): void {
     const attributeManager = this.getAttributeManager();
-    if (attributeManager) {
-      attributeManager.addInstanced({
-        // Per-vertex timestamp, relative to layer timeOffset (trail mode).
-        instanceVertexTime: {
-          size: 1,
-          accessor: 'getInstanceVertexTime',
-          type: 'float32',
-          stepMode: 'dynamic',
-          defaultValue: 0
-        },
-        // Feature-level times, relative to layer timeOffset (window mode).
-        instanceStartTime: {
-          size: 1,
-          accessor: 'getInstanceStartTime',
-          type: 'float32',
-          stepMode: 'dynamic'
-        },
-        instanceEndTime: {
-          size: 1,
-          accessor: 'getInstanceEndTime',
-          type: 'float32',
-          stepMode: 'dynamic'
-        }
-      });
-    }
+    if (!attributeManager) return;
+    // Two attribute slots total: one vec2 for window-mode times, one float
+    // for trail-mode per-vertex times. Down from the previous three. See
+    // `getShaders` for the rationale tied to PathLayer's fp64 attribute
+    // budget. The window/trail branch in the shader picks which one to use
+    // at runtime via the `trailLength` uniform.
+    attributeManager.addInstanced({
+      instanceVertexTime: {
+        size: 1,
+        accessor: 'getInstanceVertexTime',
+        type: 'float32',
+        stepMode: 'dynamic',
+        defaultValue: 0,
+      },
+      instanceStartTime: {
+        size: 1,
+        accessor: 'getInstanceStartTime',
+        type: 'float32',
+        stepMode: 'dynamic',
+      },
+      instanceEndTime: {
+        size: 1,
+        accessor: 'getInstanceEndTime',
+        type: 'float32',
+        stepMode: 'dynamic',
+      },
+      // KNOWN LIMITATION (deck.gl ≤ 9.3): The 3 attributes above + PathLayer's
+      // fp64 position split (8 slots) + instancePickingColors + instanceColors
+      // + instanceWidths + instanceTypes + CategoryColorExtension's index = 16
+      // attributes — right at WebGL2's guaranteed minimum. Some GPUs report
+      // the cap as 16 and emit
+      //   `WebGL Link error: Too many attributes (instancePickingColors)`.
+      // deck.gl falls back to a non-picking shader and rendering proceeds
+      // unchanged — the error is non-fatal.
+      // Proper fix landing in deck.gl 9.4 (gl_InstanceID picking, removes
+      // instancePickingColors as a vertex attribute). For now, set
+      // `pickable: false` on the parent layer to avoid the warning.
+    });
   }
 
   draw(

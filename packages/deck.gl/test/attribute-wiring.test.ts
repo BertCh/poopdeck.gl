@@ -66,7 +66,6 @@ describe('TimeFilterExtension attribute registration', () => {
     expect(Object.keys(instanced).sort()).toEqual(
       ['instanceEndTime', 'instanceStartTime', 'instanceVertexTime'].sort()
     );
-    // All are single-component float32 attributes.
     for (const name of ['instanceStartTime', 'instanceEndTime', 'instanceVertexTime']) {
       expect(instanced[name].size).toBe(1);
       expect(instanced[name].type).toBe('float32');
@@ -104,7 +103,6 @@ describe('PolygonTimeFilterExtension attribute registration', () => {
 
 describe('point layer consolidated attributes match the extension names', () => {
   it('exposes instanceStartTime / instanceEndTime as Float32Array', () => {
-    // Reproduce AnimatedPointLayer.buildConsolidatedData's attribute object.
     const tile = makePointTile({
       positions: [[0, 0], [1, 1]],
       startTimes: [10, 20],
@@ -117,10 +115,8 @@ describe('point layer consolidated attributes match the extension names', () => 
       instanceStartTime: { value: c.startTimes, size: 1 },
       instanceEndTime: { value: c.endTimes, size: 1 },
     };
-
     expect(attributes).toHaveProperty('instanceStartTime');
     expect(attributes).toHaveProperty('instanceEndTime');
-    // Must NOT use the old accessor-name key.
     expect(attributes).not.toHaveProperty('getInstanceStartTime');
     expect(attributes.instanceStartTime.value).toBeInstanceOf(Float32Array);
     expect(attributes.instanceEndTime.value).toBeInstanceOf(Float32Array);

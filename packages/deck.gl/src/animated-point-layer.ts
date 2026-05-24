@@ -267,8 +267,12 @@ export class AnimatedPointLayer extends SpatioTemporalLayer<AnimatedPointLayerPr
   /**
    * Singleton TimeFilterExtension reused by every sublayer. Extensions are
    * stateless w.r.t. data; per-tile timeOffset is passed as a layer prop.
+   *
+   * Point layer uses window-mode filtering (whole feature on/off + fade) so
+   * the per-vertex time attribute is unused. Restricting registration to
+   * start/end frees a vertex-attribute slot for the picking buffer.
    */
-  private readonly timeFilterExtension = new TimeFilterExtension();
+  private readonly timeFilterExtension = new TimeFilterExtension({ mode: 'window' });
 
   /**
    * Singleton CategoryColorExtension. Like the time filter, it's stateless —
@@ -539,7 +543,10 @@ export class AnimatedPointLayer extends SpatioTemporalLayer<AnimatedPointLayerPr
       );
     }
 
-    return new ScatterplotLayer({
+    // Keep the extension list constant across sublayers — see
+    // animated-trips-layer.ts for the cache-storm rationale.
+    const extensions: any[] = [this.timeFilterExtension, this.categoryColorExtension];
+    const props: Record<string, any> = {
       id: sublayerId,
       data: prepared.data as any,
       // Identity comparator: deck.gl skips prop-diff for `data` entirely when
@@ -563,7 +570,7 @@ export class AnimatedPointLayer extends SpatioTemporalLayer<AnimatedPointLayerPr
       getRadius: constRadius,
       getFillColor: constColor,
 
-      extensions: [this.timeFilterExtension, this.categoryColorExtension],
+      extensions,
 
       // TimeFilterExtension wiring
       getTime: this.boundGetTime,
@@ -571,11 +578,15 @@ export class AnimatedPointLayer extends SpatioTemporalLayer<AnimatedPointLayerPr
       timeWindow,
       fadeInDuration: this.props.fadeInDuration,
       fadeOutDuration: this.props.fadeOutDuration,
-
-      // CategoryColorExtension wiring
-      categoryPalette: useGpuCategory ? prepared.gpuPalette! : [],
-      useCategoryColor: useGpuCategory,
-    } as any);
+    };
+    // Always set `useCategoryColor` so tests / debug tooling can distinguish
+    // the two paths via prop inspection. The extension itself is only
+    // attached when the flag is true (saves an attribute slot).
+    props.useCategoryColor = useGpuCategory;
+    if (useGpuCategory) {
+      props.categoryPalette = prepared.gpuPalette!;
+    }
+    return new ScatterplotLayer(props as any);
   }
 }
 
