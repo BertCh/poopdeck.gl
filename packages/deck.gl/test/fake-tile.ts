@@ -39,7 +39,14 @@ export function makePointTile(opts: FakePointTileOptions): Tile {
   return {
     id: (opts.tileId ?? { z: 0, x: 0, y: 0, t: 0 }) as any,
     timeRange: { start: 0, end: 0 } as any,
-    layers: [{ name: 'layer0', extent: 4096, features }],
+    layers: [
+      {
+        name: 'layer0',
+        extent: 4096,
+        features,
+        geometryExtensionName: 'geoarrow.point',
+      },
+    ],
   };
 }
 
@@ -90,7 +97,14 @@ export function makePolygonTile(opts: FakePolygonTileOptions): Tile {
   return {
     id: (opts.tileId ?? { z: 0, x: 0, y: 0, t: 0 }) as any,
     timeRange: { start: 0, end: 0 } as any,
-    layers: [{ name: 'layer0', extent: 4096, features }],
+    layers: [
+      {
+        name: 'layer0',
+        extent: 4096,
+        features,
+        geometryExtensionName: 'geoarrow.polygon',
+      },
+    ],
   };
 }
 
@@ -141,6 +155,13 @@ export function makePathTile(opts: FakePathTileOptions): Tile {
   return {
     id: (opts.tileId ?? { z: 0, x: 0, y: 0, t: 0 }) as any,
     timeRange: { start: 0, end: 0 } as any,
-    layers: [{ name: 'layer0', extent: 4096, features }],
+    layers: [
+      {
+        name: 'layer0',
+        extent: 4096,
+        features,
+        geometryExtensionName: 'geoarrow.linestring',
+      },
+    ],
   };
 }

@@ -14,7 +14,14 @@
  * uploads straight to the GPU.
  */
 
-import { tableFromIPC, Type as ArrowType, type Table, type Vector } from 'apache-arrow';
+import {
+  RecordBatch,
+  Schema,
+  Table,
+  tableFromIPC,
+  Type as ArrowType,
+  type Vector,
+} from 'apache-arrow';
 import {
   type Tile,
   type TileId,
@@ -75,11 +82,29 @@ function chunk(vec: Vector): any {
   return vec.data[0];
 }
 
-/** The geometry kind a layer carries, from schema metadata. */
+/** The GeoArrow extension-name metadata key (standard, cross-tool). */
+const GEOARROW_EXT_KEY = 'ARROW:extension:name';
+
+/**
+ * Resolve the geometry kind for a layer.
+ *
+ * Reads the standard GeoArrow extension name from the `geometry` field's
+ * metadata first — that's the key any GeoArrow-aware consumer
+ * (`@geoarrow/deck.gl-layers`, Lonboard, geoarrow-rs) will inspect. Falls
+ * back to the legacy schema-level `stt:geometry` metadata so v2 archives
+ * (written before the field-level tag landed) still decode.
+ */
+function geometryExtensionName(table: Table): string {
+  const geomField = table.schema.fields.find((f) => f.name === 'geometry');
+  const fieldName = geomField?.metadata.get(GEOARROW_EXT_KEY);
+  if (fieldName) return fieldName;
+  return table.schema.metadata.get('stt:geometry') ?? '';
+}
+
 function geometryKind(table: Table): GeometryType {
-  const meta = table.schema.metadata.get('stt:geometry') ?? '';
-  if (meta === 'geoarrow.linestring') return GeometryType.LineString;
-  if (meta === 'geoarrow.polygon') return GeometryType.Polygon;
+  const name = geometryExtensionName(table);
+  if (name === 'geoarrow.linestring') return GeometryType.LineString;
+  if (name === 'geoarrow.polygon') return GeometryType.Polygon;
   return GeometryType.Point;
 }
 
@@ -326,7 +351,65 @@ export function decodeTile(
       name: raw.name,
       extent: 0, // coordinates are real lon/lat; no quantization extent
       features: tableToBinaryFeatures(table),
+      // Standard GeoArrow extension name (e.g. `geoarrow.point`). Surfaced
+      // so a GeoArrow-aware consumer can branch on it without looking at
+      // the Arrow schema directly.
+      geometryExtensionName: geometryExtensionName(table),
+      // Hold the underlying Arrow Table so `toGeoArrowTable()` is a
+      // zero-copy hand-off into `@geoarrow/deck.gl-layers` / Lonboard.
+      arrowTable: table,
     };
   });
   return { id, timeRange, layers };
+}
+
+/**
+ * Return an Arrow {@link Table} that is a valid GeoArrow record batch — i.e.
+ * the `geometry` field carries the `ARROW:extension:name` metadata key with
+ * a value of `geoarrow.point`, `geoarrow.linestring`, or `geoarrow.polygon`.
+ *
+ * Intended hand-off into `@geoarrow/deck.gl-layers`:
+ *
+ * ```ts
+ * import { GeoArrowPathLayer } from '@geoarrow/deck.gl-layers';
+ * const table = toGeoArrowTable(tile.layers[0]);
+ * new GeoArrowPathLayer({ id: 'paths', data: table, getPath: table.getChild('geometry')! });
+ * ```
+ *
+ * The returned `Table` shares buffers with the decoded tile — do not mutate
+ * it or hold onto it past the tile's lifetime. If the layer was constructed
+ * without a backing Arrow `Table` (e.g. synthetic test data) this throws.
+ *
+ * @see https://geoarrow.org/format.html
+ */
+export function toGeoArrowTable(layer: Layer): Table {
+  const table = layer.arrowTable;
+  if (!table) {
+    throw new Error(
+      `STT layer '${layer.name}' has no backing Arrow Table — toGeoArrowTable() ` +
+        'only works for layers produced by decodeTile().',
+    );
+  }
+  // Older archives wrote the extension name into schema metadata
+  // (`stt:geometry`) but left the geometry FIELD bare. GeoArrow consumers
+  // look at the field, so patch it on the way out when needed. We rebuild
+  // the schema rather than mutate it in place — `apache-arrow`'s Field
+  // metadata is frozen on a Table instance shared across tiles.
+  const geomIdx = table.schema.fields.findIndex((f) => f.name === 'geometry');
+  if (geomIdx < 0) return table;
+  const geomField = table.schema.fields[geomIdx];
+  if (geomField.metadata.get(GEOARROW_EXT_KEY)) return table;
+  const fallback = table.schema.metadata.get('stt:geometry');
+  if (!fallback) return table;
+
+  // Rebuild the Schema with a patched geometry field; reuse the existing
+  // record-batch Data objects so this stays a zero-copy view.
+  const patched = geomField.clone({
+    metadata: new Map([...geomField.metadata, [GEOARROW_EXT_KEY, fallback]]),
+  });
+  const fields = table.schema.fields.slice();
+  fields[geomIdx] = patched;
+  const newSchema = new Schema(fields, table.schema.metadata, table.schema.dictionaries);
+  const newBatches = table.batches.map((b) => new RecordBatch(newSchema, b.data));
+  return new Table(newSchema, newBatches);
 }
