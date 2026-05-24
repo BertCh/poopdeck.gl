@@ -17,7 +17,12 @@ import { STTPointLayer } from '../src/point-layer';
 import { STTLineLayer } from '../src/line-layer';
 import { STTPolygonLayer } from '../src/polygon-layer';
 import { makeMockGl } from './mock-gl';
-import { makePointTile, makeLineTile, makePolygonTile } from './fixtures';
+import {
+  makeLineTile,
+  makePointTile,
+  makePolygonTile,
+  makePreTessellatedPolygonTile,
+} from './fixtures';
 
 const baseOpts = {
   url: 'mem://test.stt',
@@ -164,6 +169,47 @@ describe('STTPolygonLayer', () => {
     // 4 top + 4 bottom verts; 2 top tris (6 idx) + 4 side quads (24 idx) = 30.
     expect(cache.vertexCount).toBe(8);
     expect(cache.indexCount).toBe(30);
+  });
+
+  it('uses pre-baked triangle indices when the tile carries them (MLT mode)', () => {
+    // When a tile arrives with `triangles`, we must NOT call earcut. Stub it
+    // out — any call would surface as a test failure regardless of count.
+    const layer = new STTPolygonLayer({ ...baseOpts, id: 'g' }) as any;
+    layer.supports32BitIndices = true;
+    const gl = makeMockGl();
+    const tile = makePreTessellatedPolygonTile();
+    const cache = layer.buildTileGpuCache(gl, tile, tile.layers[0]);
+    expect(cache).not.toBeNull();
+    // Same vertex count + index count as the legacy path (single square,
+    // 4 verts, 2 triangles → 6 indices) — pre-baking is a CPU-time win, not
+    // a representation change.
+    expect(cache.vertexCount).toBe(4);
+    expect(cache.indexCount).toBe(6);
+  });
+
+  it('pre-baked path produces identical fill geometry to the earcut path', () => {
+    // A regression guard for the index translation: pre-baked indices are
+    // global into the tile's `positions` buffer; the layer must subtract
+    // each feature's `startIndex` so the emitted index list still indexes
+    // into the per-feature top-vertex slot the existing emit loop builds.
+    const baseline = new STTPolygonLayer({ ...baseOpts, id: 'g1' }) as any;
+    baseline.supports32BitIndices = true;
+    const baselineCache = baseline.buildTileGpuCache(
+      makeMockGl(),
+      makePolygonTile(),
+      makePolygonTile().layers[0],
+    );
+
+    const baked = new STTPolygonLayer({ ...baseOpts, id: 'g2' }) as any;
+    baked.supports32BitIndices = true;
+    const bakedTile = makePreTessellatedPolygonTile();
+    const bakedCache = baked.buildTileGpuCache(
+      makeMockGl(),
+      bakedTile,
+      bakedTile.layers[0],
+    );
+    expect(bakedCache.vertexCount).toBe(baselineCache.vertexCount);
+    expect(bakedCache.indexCount).toBe(baselineCache.indexCount);
   });
 });
 

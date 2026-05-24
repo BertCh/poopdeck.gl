@@ -101,6 +101,13 @@ interface PreparedTile {
   dims: number;
   /** Resolved palette for the GPU categorical-color path, or null. */
   gpuPalette: Color[] | null;
+  /**
+   * True when the tile carried a pre-baked `triangles` index buffer (MLT
+   * mode). Lets the sublayer construction path skip deck.gl's internal
+   * PolygonTesselator (earcut) by setting `_normalize: false` and feeding
+   * the indices directly through `data.attributes.indices`.
+   */
+  hasPreBakedTriangles: boolean;
 }
 
 function makeTileKey(tile: Tile, layer: TileLayer): string {
@@ -309,6 +316,19 @@ export class AnimatedPolygonLayer extends SpatioTemporalLayer<AnimatedPolygonLay
       }
     }
 
+    // MLT-style pre-baked triangle indices. When the tile carries a
+    // `triangles` sidecar (the Rust writer ran with `--pre-tessellate`),
+    // we route it through deck.gl's `indices` binary attribute so the
+    // PolygonTesselator skips its own earcut on tile arrival. Indices in
+    // BinaryFeatures.triangles are already GLOBAL (the decoder applied
+    // the per-feature `startIndices` shift), so no further translation is
+    // needed here.
+    const hasPreBakedTriangles =
+      !!binary.triangles && binary.triangles.length > 0;
+    if (hasPreBakedTriangles) {
+      attributes.indices = { value: binary.triangles!, size: 1 };
+    }
+
     const prepared: PreparedTile = {
       tileKey,
       styleKey,
@@ -320,6 +340,7 @@ export class AnimatedPolygonLayer extends SpatioTemporalLayer<AnimatedPolygonLay
       timeOffset: binary.timeOffset,
       dims,
       gpuPalette,
+      hasPreBakedTriangles,
     };
     this.preparedTileCache.set(tileKey, prepared);
     emit('tilePrepare', {
@@ -328,6 +349,7 @@ export class AnimatedPolygonLayer extends SpatioTemporalLayer<AnimatedPolygonLay
       cached: false,
       features: binary.featureCount,
       gpuPalette: gpuPalette !== null,
+      preBakedTriangles: hasPreBakedTriangles,
       ms: performance.now() - t0,
     });
     return prepared;
