@@ -23,7 +23,7 @@
     "earcut": "^3.0.0"
   },
   "peerDependencies": {
-    "maplibre-gl": "^3 || ^4 || ^5"
+    "maplibre-gl": "^3 || ^4"
   },
   "devDependencies": {
     "@types/earcut": "^2.1.4",

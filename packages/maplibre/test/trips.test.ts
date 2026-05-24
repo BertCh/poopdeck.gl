@@ -24,22 +24,27 @@ describe('STTTripsLayer', () => {
     expect(layer.acceptsGeometry(GeometryType.Polygon)).toBe(false);
   });
 
-  it('expands segments to 4 verts and reads vertexTimestamps when present', () => {
+  it('emits one instance per segment with per-endpoint vertex times', () => {
     const layer = new STTTripsLayer({
       ...baseOpts,
       id: 't',
       trailLength: 1500,
     }) as any;
     layer.supports32BitIndices = true;
+    layer.instSupport = {
+      enabled: true,
+      drawArraysInstanced: () => {},
+      drawElementsInstanced: () => {},
+      vertexAttribDivisor: () => {},
+    };
     const gl = makeMockGl();
     const tile = makeTripsTile();
     const cache = layer.buildTileGpuCache(gl, tile, tile.layers[0]);
     expect(cache).not.toBeNull();
-    // Path 0 has 3 verts → 2 segments, Path 1 has 2 verts → 1 segment.
-    // 3 segments × 4 verts = 12 verts, × 6 indices = 18 indices.
-    expect(cache.vertexCount).toBe(12);
-    expect(cache.indexCount).toBe(18);
-    expect(cache.vertexTimeBuffer).toBeDefined();
+    // Path 0 has 3 verts → 2 segments, Path 1 has 2 verts → 1 segment → 3.
+    expect(cache.instanceCount).toBe(3);
+    expect(cache.indexCount).toBe(0);
+    expect(cache.vertexTimeABBuffer).toBeDefined();
   });
 
   it('packs per-feature width and colour attributes when properties are set', () => {
@@ -50,6 +55,12 @@ describe('STTTripsLayer', () => {
       colorProperty: 'vehicleType',
     }) as any;
     layer.supports32BitIndices = true;
+    layer.instSupport = {
+      enabled: true,
+      drawArraysInstanced: () => {},
+      drawElementsInstanced: () => {},
+      vertexAttribDivisor: () => {},
+    };
     const gl = makeMockGl();
     const tile = makeTripsTile();
     const cache = layer.buildTileGpuCache(gl, tile, tile.layers[0]);
@@ -66,6 +77,12 @@ describe('STTTripsLayer', () => {
       trailLength: 2000,
     }) as any;
     layer.supports32BitIndices = true;
+    layer.instSupport = {
+      enabled: true,
+      drawArraysInstanced: () => {},
+      drawElementsInstanced: () => {},
+      vertexAttribDivisor: () => {},
+    };
     layer.onContextReady(makeMockGl());
     const gl = makeMockGl();
     const tile = makeTripsTile();
@@ -82,6 +99,9 @@ describe('STTTripsLayer', () => {
     const values = uniform1fCalls.map((c) => c[1]);
     expect(values).toContain(1500);
     expect(values).toContain(2000); // trail length
-    expect(gl.drawElements).toHaveBeenCalled();
+    // The instanced draw is routed through `instSupport.drawArraysInstanced`,
+    // which the test stub above no-ops; just verify the layer did not fall
+    // back to the legacy drawElements path.
+    expect(gl.drawElements).not.toHaveBeenCalled();
   });
 });

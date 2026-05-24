@@ -30,6 +30,7 @@ import {
   type RGBA8,
 } from './base-layer';
 import { lngLatToMercator } from './projection';
+import { TIME_WINDOW_GLSL } from './shaders/time-window.glsl';
 
 // Categorical default palette (matches @stt/deck.gl AnimatedPolygonLayer).
 const DEFAULT_POLY_PALETTE: ReadonlyArray<RGBA8> = [
@@ -95,12 +96,10 @@ const VS_SOURCE = `
   uniform float uFadeOut;
   varying float vAlpha;
   varying vec4 vColor;
+${TIME_WINDOW_GLSL}
   void main() {
     gl_Position = uMatrix * vec4(aMercator.x, aMercator.y, aMercator.z * uAltitudeScale, 1.0);
-    float inside = (aTime.y >= uWindowStart && aTime.x <= uWindowEnd) ? 1.0 : 0.0;
-    float entering = (uFadeIn > 0.0) ? clamp((aTime.y - uWindowStart) / uFadeIn, 0.0, 1.0) : 1.0;
-    float leaving = (uFadeOut > 0.0) ? clamp((uWindowEnd - aTime.x) / uFadeOut, 0.0, 1.0) : 1.0;
-    vAlpha = inside * min(entering, leaving);
+    vAlpha = sttTimeWindowAlpha(aTime, uWindowStart, uWindowEnd, uFadeIn, uFadeOut);
     vColor = (uUseFeatureColor > 0.5) ? aColor : uColor;
   }
 `;
@@ -115,14 +114,15 @@ const FS_SOURCE = `
   }
 `;
 
-// Outline shader: same screen-space line expansion as STTLineLayer, kept
-// inline here to avoid cross-layer coupling.
+// Outline shader: instanced screen-space line expansion (same scheme as the
+// STTLineLayer). One instance per ring edge; the static unit-quad VBO from
+// the base layer provides the 4 corners.
 const STROKE_VS_SOURCE = `
   precision highp float;
-  attribute vec3 aPos;
-  attribute vec3 aNeighbor;
-  attribute float aSide;
-  attribute vec2 aTime;
+  attribute vec2 aCorner;       // (side, along) per-vertex
+  attribute vec2 aPosA;         // edge start, per-instance
+  attribute vec2 aPosB;         // edge end, per-instance
+  attribute vec2 aTime;         // [startTime, endTime], per-instance
   uniform mat4 uMatrix;
   uniform vec2 uViewport;
   uniform float uWidth;
@@ -131,24 +131,25 @@ const STROKE_VS_SOURCE = `
   uniform float uFadeIn;
   uniform float uFadeOut;
   varying float vAlpha;
+${TIME_WINDOW_GLSL}
   void main() {
-    vec4 a = uMatrix * vec4(aPos.x, aPos.y, 0.0, 1.0);
-    vec4 b = uMatrix * vec4(aNeighbor.x, aNeighbor.y, 0.0, 1.0);
-    vec2 aNdc = a.xy / a.w;
-    vec2 bNdc = b.xy / b.w;
-    vec2 dirPx = (bNdc - aNdc) * 0.5 * uViewport;
+    vec2 posM = mix(aPosA, aPosB, aCorner.y);
+    vec2 neighborM = mix(aPosB, aPosA, aCorner.y);
+    vec4 here = uMatrix * vec4(posM, 0.0, 1.0);
+    vec4 there = uMatrix * vec4(neighborM, 0.0, 1.0);
+    vec2 hereNdc = here.xy / here.w;
+    vec2 thereNdc = there.xy / there.w;
+    vec2 dirPx = (thereNdc - hereNdc) * 0.5 * uViewport;
     float lenPx = max(length(dirPx), 1e-4);
     vec2 dirN = dirPx / lenPx;
-    vec2 perp = vec2(-dirN.y, dirN.x);
-    vec2 offsetPx = perp * aSide * uWidth * 0.5;
+    float sideSign = (aCorner.y > 0.5) ? -1.0 : 1.0;
+    vec2 perp = vec2(-dirN.y, dirN.x) * sideSign;
+    vec2 offsetPx = perp * aCorner.x * uWidth * 0.5;
     vec2 offsetNdc = offsetPx / (0.5 * uViewport);
-    vec4 outClip = a;
-    outClip.xy += offsetNdc * a.w;
+    vec4 outClip = here;
+    outClip.xy += offsetNdc * here.w;
     gl_Position = outClip;
-    float inside = (aTime.y >= uWindowStart && aTime.x <= uWindowEnd) ? 1.0 : 0.0;
-    float entering = (uFadeIn > 0.0) ? clamp((aTime.y - uWindowStart) / uFadeIn, 0.0, 1.0) : 1.0;
-    float leaving = (uFadeOut > 0.0) ? clamp((uWindowEnd - aTime.x) / uFadeOut, 0.0, 1.0) : 1.0;
-    vAlpha = inside * min(entering, leaving);
+    vAlpha = sttTimeWindowAlpha(aTime, uWindowStart, uWindowEnd, uFadeIn, uFadeOut);
   }
 `;
 
@@ -179,9 +180,9 @@ interface PolygonProgramHandles {
 
 interface StrokeProgramHandles {
   program: WebGLProgram;
-  aPos: number;
-  aNeighbor: number;
-  aSide: number;
+  aCorner: number;
+  aPosA: number;
+  aPosB: number;
   aTime: number;
   uMatrix: WebGLUniformLocation | null;
   uViewport: WebGLUniformLocation | null;
@@ -197,15 +198,16 @@ interface PolygonGpuCache extends TileGpuCache {
   use32BitIndices: boolean;
   /** Per-vertex RGBA colours (Uint8 normalized) when `fillColorProperty` is in use. */
   colorBuffer?: WebGLBuffer;
-  /** Optional stroke pass: line-quad vertex / index buffers over the ring edges. */
+  /**
+   * Optional stroke pass: one instance per ring edge. Carries the two endpoints
+   * and the feature's time range. The quad geometry comes from the base layer's
+   * shared unit quad.
+   */
   stroke?: {
-    positionBuffer: WebGLBuffer;
-    neighborBuffer: WebGLBuffer;
-    sideBuffer: WebGLBuffer;
+    posABuffer: WebGLBuffer;
+    posBBuffer: WebGLBuffer;
     timeBuffer: WebGLBuffer;
-    indexBuffer: WebGLBuffer;
-    indexCount: number;
-    use32BitIndices: boolean;
+    instanceCount: number;
   };
 }
 
@@ -286,9 +288,9 @@ export class STTPolygonLayer extends STTBaseLayer {
     const sprogram = this.linkProgram(gl, STROKE_VS_SOURCE, STROKE_FS_SOURCE);
     this.strokeHandles = {
       program: sprogram,
-      aPos: gl.getAttribLocation(sprogram, 'aPos'),
-      aNeighbor: gl.getAttribLocation(sprogram, 'aNeighbor'),
-      aSide: gl.getAttribLocation(sprogram, 'aSide'),
+      aCorner: gl.getAttribLocation(sprogram, 'aCorner'),
+      aPosA: gl.getAttribLocation(sprogram, 'aPosA'),
+      aPosB: gl.getAttribLocation(sprogram, 'aPosB'),
       aTime: gl.getAttribLocation(sprogram, 'aTime'),
       uMatrix: gl.getUniformLocation(sprogram, 'uMatrix'),
       uViewport: gl.getUniformLocation(sprogram, 'uViewport'),
@@ -488,78 +490,34 @@ export class STTPolygonLayer extends STTBaseLayer {
       extras.push(colorBuffer);
     }
 
-    // Stroke pass buffers (when stroked) — same screen-space quad layout as
-    // STTLineLayer.
+    // Stroke pass buffers (when stroked) — instanced, one row per edge. No
+    // 32-bit index dance: with instancing the draw call only consumes the 4
+    // shared quad verts so the per-segment count is unbounded.
     let stroke: PolygonGpuCache['stroke'] = undefined;
-    if (wantStroke && strokeSegments.length > 0) {
+    if (wantStroke && strokeSegments.length > 0 && this.instSupport.enabled) {
       const segCount = strokeSegments.length;
-      const sVertCount = segCount * 4;
-      const sUse32 = sVertCount > 65535;
-      if (sUse32 && !this.supports32BitIndices) {
-        // Fall back to no stroke rather than dropping the whole tile.
-        stroke = undefined;
-      } else {
-        const sPos = new Float32Array(sVertCount * 3);
-        const sNbr = new Float32Array(sVertCount * 3);
-        const sSide = new Float32Array(sVertCount);
-        const sTime = new Float32Array(sVertCount * 2);
-        const sIdx = sUse32
-          ? new Uint32Array(segCount * 6)
-          : new Uint16Array(segCount * 6);
-        let vW = 0;
-        let iW = 0;
-        for (let s = 0; s < segCount; s++) {
-          const seg = strokeSegments[s];
-          const [ax, ay] = seg.a;
-          const [bx, by] = seg.b;
-          const corners: Array<{
-            p: [number, number];
-            n: [number, number];
-            s: number;
-          }> = [
-            { p: [ax, ay], n: [bx, by], s: -1 },
-            { p: [ax, ay], n: [bx, by], s: 1 },
-            { p: [bx, by], n: [ax, ay], s: 1 },
-            { p: [bx, by], n: [ax, ay], s: -1 },
-          ];
-          for (let c = 0; c < 4; c++) {
-            sPos[vW * 3] = corners[c].p[0];
-            sPos[vW * 3 + 1] = corners[c].p[1];
-            sPos[vW * 3 + 2] = 0;
-            sNbr[vW * 3] = corners[c].n[0];
-            sNbr[vW * 3 + 1] = corners[c].n[1];
-            sNbr[vW * 3 + 2] = 0;
-            sSide[vW] = corners[c].s;
-            sTime[vW * 2] = seg.ts;
-            sTime[vW * 2 + 1] = seg.te;
-            vW++;
-          }
-          const base = vW - 4;
-          sIdx[iW++] = base + 0;
-          sIdx[iW++] = base + 2;
-          sIdx[iW++] = base + 1;
-          sIdx[iW++] = base + 1;
-          sIdx[iW++] = base + 2;
-          sIdx[iW++] = base + 3;
-        }
-        const sPosBuf = this.uploadArrayBuffer(gl, sPos);
-        const sNbrBuf = this.uploadArrayBuffer(gl, sNbr);
-        const sSideBuf = this.uploadArrayBuffer(gl, sSide);
-        const sTimeBuf = this.uploadArrayBuffer(gl, sTime);
-        const sIdxBuf = gl.createBuffer()!;
-        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, sIdxBuf);
-        gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, sIdx, gl.STATIC_DRAW);
-        stroke = {
-          positionBuffer: sPosBuf,
-          neighborBuffer: sNbrBuf,
-          sideBuffer: sSideBuf,
-          timeBuffer: sTimeBuf,
-          indexBuffer: sIdxBuf,
-          indexCount: sIdx.length,
-          use32BitIndices: sUse32,
-        };
-        extras.push(sPosBuf, sNbrBuf, sSideBuf, sTimeBuf, sIdxBuf);
+      const sPosA = new Float32Array(segCount * 2);
+      const sPosB = new Float32Array(segCount * 2);
+      const sTime = new Float32Array(segCount * 2);
+      for (let i = 0; i < segCount; i++) {
+        const seg = strokeSegments[i];
+        sPosA[i * 2] = seg.a[0];
+        sPosA[i * 2 + 1] = seg.a[1];
+        sPosB[i * 2] = seg.b[0];
+        sPosB[i * 2 + 1] = seg.b[1];
+        sTime[i * 2] = seg.ts;
+        sTime[i * 2 + 1] = seg.te;
       }
+      const sPosABuf = this.uploadArrayBuffer(gl, sPosA);
+      const sPosBBuf = this.uploadArrayBuffer(gl, sPosB);
+      const sTimeBuf = this.uploadArrayBuffer(gl, sTime);
+      stroke = {
+        posABuffer: sPosABuf,
+        posBBuffer: sPosBBuf,
+        timeBuffer: sTimeBuf,
+        instanceCount: segCount,
+      };
+      extras.push(sPosABuf, sPosBBuf, sTimeBuf);
     }
 
     return {
@@ -597,34 +555,36 @@ export class STTPolygonLayer extends STTBaseLayer {
       gl.uniform1f(h.uWindowEnd, ctx.windowEnd);
       gl.uniform1f(h.uFadeIn, fadeIn);
       gl.uniform1f(h.uFadeOut, fadeOut);
+      gl.uniform1f(h.uUseFeatureColor, c.colorBuffer && h.aColor >= 0 ? 1 : 0);
 
-      gl.bindBuffer(gl.ARRAY_BUFFER, c.positionBuffer);
-      gl.enableVertexAttribArray(h.aMercator);
-      gl.vertexAttribPointer(h.aMercator, 3, gl.FLOAT, false, 0, 0);
+      this.bindVaoOrSetup(c, () => {
+        gl.bindBuffer(gl.ARRAY_BUFFER, c.positionBuffer);
+        gl.enableVertexAttribArray(h.aMercator);
+        gl.vertexAttribPointer(h.aMercator, 3, gl.FLOAT, false, 0, 0);
 
-      gl.bindBuffer(gl.ARRAY_BUFFER, c.timeBuffer);
-      gl.enableVertexAttribArray(h.aTime);
-      gl.vertexAttribPointer(h.aTime, 2, gl.FLOAT, false, 0, 0);
+        gl.bindBuffer(gl.ARRAY_BUFFER, c.timeBuffer);
+        gl.enableVertexAttribArray(h.aTime);
+        gl.vertexAttribPointer(h.aTime, 2, gl.FLOAT, false, 0, 0);
 
-      if (c.colorBuffer && h.aColor >= 0) {
-        gl.bindBuffer(gl.ARRAY_BUFFER, c.colorBuffer);
-        gl.enableVertexAttribArray(h.aColor);
-        gl.vertexAttribPointer(h.aColor, 4, gl.UNSIGNED_BYTE, true, 0, 0);
-        gl.uniform1f(h.uUseFeatureColor, 1);
-      } else {
-        gl.uniform1f(h.uUseFeatureColor, 0);
-      }
+        if (c.colorBuffer && h.aColor >= 0) {
+          gl.bindBuffer(gl.ARRAY_BUFFER, c.colorBuffer);
+          gl.enableVertexAttribArray(h.aColor);
+          gl.vertexAttribPointer(h.aColor, 4, gl.UNSIGNED_BYTE, true, 0, 0);
+        }
+        // VAOs capture the element-array binding too.
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, c.indexBuffer!);
+      });
 
-      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, c.indexBuffer!);
       const indexType = c.use32BitIndices ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT;
       gl.drawElements(gl.TRIANGLES, c.indexCount, indexType, 0);
-
-      gl.disableVertexAttribArray(h.aMercator);
-      gl.disableVertexAttribArray(h.aTime);
-      if (c.colorBuffer && h.aColor >= 0) gl.disableVertexAttribArray(h.aColor);
     }
 
-    if (this.polyOpts.stroked && c.stroke && this.strokeHandles) {
+    if (
+      this.polyOpts.stroked &&
+      c.stroke &&
+      this.strokeHandles &&
+      this.instSupport.enabled
+    ) {
       const sh = this.strokeHandles;
       const s = c.stroke;
       gl.useProgram(sh.program);
@@ -637,30 +597,39 @@ export class STTPolygonLayer extends STTBaseLayer {
       gl.uniform1f(sh.uFadeIn, fadeIn);
       gl.uniform1f(sh.uFadeOut, fadeOut);
 
-      gl.bindBuffer(gl.ARRAY_BUFFER, s.positionBuffer);
-      gl.enableVertexAttribArray(sh.aPos);
-      gl.vertexAttribPointer(sh.aPos, 3, gl.FLOAT, false, 0, 0);
+      const quad = this.getUnitQuad(gl);
+      this.bindVaoOrSetup(
+        c,
+        () => {
+          gl.bindBuffer(gl.ARRAY_BUFFER, quad);
+          gl.enableVertexAttribArray(sh.aCorner);
+          gl.vertexAttribPointer(sh.aCorner, 2, gl.FLOAT, false, 0, 0);
+          this.instSupport.vertexAttribDivisor(sh.aCorner, 0);
 
-      gl.bindBuffer(gl.ARRAY_BUFFER, s.neighborBuffer);
-      gl.enableVertexAttribArray(sh.aNeighbor);
-      gl.vertexAttribPointer(sh.aNeighbor, 3, gl.FLOAT, false, 0, 0);
+          gl.bindBuffer(gl.ARRAY_BUFFER, s.posABuffer);
+          gl.enableVertexAttribArray(sh.aPosA);
+          gl.vertexAttribPointer(sh.aPosA, 2, gl.FLOAT, false, 0, 0);
+          this.instSupport.vertexAttribDivisor(sh.aPosA, 1);
 
-      gl.bindBuffer(gl.ARRAY_BUFFER, s.sideBuffer);
-      gl.enableVertexAttribArray(sh.aSide);
-      gl.vertexAttribPointer(sh.aSide, 1, gl.FLOAT, false, 0, 0);
+          gl.bindBuffer(gl.ARRAY_BUFFER, s.posBBuffer);
+          gl.enableVertexAttribArray(sh.aPosB);
+          gl.vertexAttribPointer(sh.aPosB, 2, gl.FLOAT, false, 0, 0);
+          this.instSupport.vertexAttribDivisor(sh.aPosB, 1);
 
-      gl.bindBuffer(gl.ARRAY_BUFFER, s.timeBuffer);
-      gl.enableVertexAttribArray(sh.aTime);
-      gl.vertexAttribPointer(sh.aTime, 2, gl.FLOAT, false, 0, 0);
+          gl.bindBuffer(gl.ARRAY_BUFFER, s.timeBuffer);
+          gl.enableVertexAttribArray(sh.aTime);
+          gl.vertexAttribPointer(sh.aTime, 2, gl.FLOAT, false, 0, 0);
+          this.instSupport.vertexAttribDivisor(sh.aTime, 1);
+        },
+        'stroke',
+      );
 
-      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, s.indexBuffer);
-      const t = s.use32BitIndices ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT;
-      gl.drawElements(gl.TRIANGLES, s.indexCount, t, 0);
-
-      gl.disableVertexAttribArray(sh.aPos);
-      gl.disableVertexAttribArray(sh.aNeighbor);
-      gl.disableVertexAttribArray(sh.aSide);
-      gl.disableVertexAttribArray(sh.aTime);
+      this.instSupport.drawArraysInstanced(
+        0x0005 /* TRIANGLE_STRIP */,
+        0,
+        4,
+        s.instanceCount,
+      );
     }
   }
 }

@@ -17,7 +17,24 @@ const makeHandle = (kind: string) => ({ __mockKind: kind, __id: nextHandleId++ }
  * don't call falls through to `vi.fn()` so we can assert on it later if a
  * future code path starts exercising it.
  */
-export function makeMockGl(opts: { supports32Bit?: boolean } = {}): any {
+export function makeMockGl(
+  opts: {
+    supports32Bit?: boolean;
+    /**
+     * When true, the recorder advertises `EXT_color_buffer_half_float` so the
+     * heatmap path probes RGBA16F. Default `false` so legacy tests see the
+     * historical RGBA8 allocator.
+     */
+    supportsHalfFloatColorBuffer?: boolean;
+    /**
+     * When true, `getExtension('OES_vertex_array_object')` returns a stub.
+     * Default false — the WebGL2-style `createVertexArray` already exists on
+     * the mock so the layer code takes the WebGL2 fast path; this flag exists
+     * for the (rare) WebGL1 + OES test cases.
+     */
+    supportsVaoExtension?: boolean;
+  } = {},
+): any {
   const constants = {
     BLEND: 0x0be2,
     SRC_ALPHA: 0x0302,
@@ -31,7 +48,9 @@ export function makeMockGl(opts: { supports32Bit?: boolean } = {}): any {
     UNSIGNED_BYTE: 0x1401,
     UNSIGNED_SHORT: 0x1403,
     UNSIGNED_INT: 0x1405,
+    HALF_FLOAT: 0x140b,
     RGBA: 0x1908,
+    RGBA16F: 0x881a,
     LINEAR: 0x2601,
     NEAREST: 0x2600,
     CLAMP_TO_EDGE: 0x812f,
@@ -102,11 +121,35 @@ export function makeMockGl(opts: { supports32Bit?: boolean } = {}): any {
     getAttribLocation: vi.fn(() => 0),
     getUniformLocation: vi.fn(() => makeHandle('uniform')),
 
-    getExtension: vi.fn((name: string) =>
-      name === 'OES_element_index_uint' && opts.supports32Bit
-        ? makeHandle('extension')
-        : null,
-    ),
+    getExtension: vi.fn((name: string) => {
+      if (name === 'OES_element_index_uint' && opts.supports32Bit) {
+        return makeHandle('extension');
+      }
+      if (
+        (name === 'EXT_color_buffer_half_float' ||
+          name === 'EXT_color_buffer_float') &&
+        opts.supportsHalfFloatColorBuffer
+      ) {
+        return makeHandle('extension');
+      }
+      // Paired texture extension required on the WebGL1 path. The mock isn't
+      // a real `WebGL2RenderingContext`, so the layer takes the WebGL1 branch
+      // even though it has `createVertexArray` from the WebGL2-style mock.
+      if (
+        name === 'OES_texture_half_float' &&
+        opts.supportsHalfFloatColorBuffer
+      ) {
+        return { HALF_FLOAT_OES: 0x8d61 };
+      }
+      if (name === 'OES_vertex_array_object' && opts.supportsVaoExtension) {
+        return {
+          createVertexArrayOES: vi.fn(() => makeHandle('vao')),
+          bindVertexArrayOES: vi.fn(),
+          deleteVertexArrayOES: vi.fn(),
+        };
+      }
+      return null;
+    }),
 
     drawArrays: vi.fn((_mode: number, _first: number, count: number) => {
       drawCalls.push({ kind: 'arrays', count });
@@ -116,6 +159,44 @@ export function makeMockGl(opts: { supports32Bit?: boolean } = {}): any {
         drawCalls.push({ kind: 'elements', count });
       },
     ),
+    // Instanced draws. Track them separately so tests can distinguish "ran
+    // the new instanced path" from "ran the old expanded-quad path". The
+    // `count` we record for instanced is `vertCount * instanceCount` — same
+    // semantics as the legacy drawElements path so existing assertions still
+    // resolve sensibly (e.g. 18 = 3 segments × 6 indices, now 3 instances × 6
+    // quad indices).
+    drawArraysInstanced: vi.fn(
+      (
+        _mode: number,
+        _first: number,
+        count: number,
+        primCount: number,
+      ) => {
+        drawCalls.push({
+          kind: 'arrays-instanced',
+          count: count * primCount,
+          vertices: count,
+          instances: primCount,
+        });
+      },
+    ),
+    drawElementsInstanced: vi.fn(
+      (
+        _mode: number,
+        count: number,
+        _type: number,
+        _offset: number,
+        primCount: number,
+      ) => {
+        drawCalls.push({
+          kind: 'elements-instanced',
+          count: count * primCount,
+          vertices: count,
+          instances: primCount,
+        });
+      },
+    ),
+    vertexAttribDivisor: vi.fn(),
 
     // FBO / texture surface (used by the heatmap layer's two-pass pipeline).
     createTexture: vi.fn(() => makeHandle('texture')),

@@ -1,16 +1,16 @@
 /**
  * Animated trips adapter — renders LINESTRING-type tiles with a trailing fade
  * effect anchored at the current time. Equivalent to
- * `@stt/deck.gl`'s `AnimatedTripsLayer`.
+ * @stt/deck.gl's AnimatedTripsLayer.
  *
- * Each line segment is expanded into a screen-space quad (same layout as
- * STTLineLayer). Per-vertex timestamps come from `binary.vertexTimestamps`
- * when present; otherwise we interpolate linearly between the feature's
- * `startTimes`/`endTimes`. Alpha drops to 0 for vertices older than
- * `currentTime - trailLength`, ramps to 1 at `currentTime`, and is clipped to
- * 0 for vertices in the future.
+ * Each segment is drawn as one instance of a shared 4-vertex unit quad; the
+ * per-instance attributes carry the two endpoints and their (relative)
+ * timestamps. Alpha is computed in the vertex shader against the current
+ * tile-relative time, using the shared trail-mode snippet. This matches the
+ * deck.gl extension's per-vertex fade math exactly.
  *
- * For static-window line rendering, use STTLineLayer instead.
+ * If `binary.vertexTimestamps` is present we use it for endpoint times;
+ * otherwise we interpolate linearly between the feature's start/end times.
  */
 
 import type { Tile, Layer as STTLayer } from '@stt/core';
@@ -23,6 +23,7 @@ import {
   type RGBA8,
 } from './base-layer';
 import { lngLatToMercator } from './projection';
+import { TIME_TRAIL_GLSL } from './shaders/time-window.glsl';
 
 const DEFAULT_TRIPS_PALETTE: ReadonlyArray<RGBA8> = [
   [253, 128, 93, 255],
@@ -33,9 +34,9 @@ const DEFAULT_TRIPS_PALETTE: ReadonlyArray<RGBA8> = [
 ];
 
 export interface STTTripsLayerOptions extends STTBaseLayerOptions {
-  /** Constant line colour (overridden by `colorProperty`). */
+  /** Constant line colour (overridden by colorProperty). */
   color?: [number, number, number, number];
-  /** Constant line width in pixels (overridden by `widthProperty`). */
+  /** Constant line width in pixels (overridden by widthProperty). */
   width?: number;
   /** Multiplier applied to per-feature widths. */
   widthScale?: number;
@@ -48,7 +49,7 @@ export interface STTTripsLayerOptions extends STTBaseLayerOptions {
   fadeTrail?: boolean;
   /** Drive per-feature colour from a categorical property name. */
   colorProperty?: string;
-  /** Palette used with `colorProperty` (0–255 RGBA). */
+  /** Palette used with colorProperty (0–255 RGBA). */
   colorPalette?: ReadonlyArray<RGBA8>;
   /** Drive per-feature width from a numeric property name. */
   widthProperty?: string;
@@ -56,12 +57,12 @@ export interface STTTripsLayerOptions extends STTBaseLayerOptions {
 
 const VS_SOURCE = `
   precision highp float;
-  attribute vec3 aPos;
-  attribute vec3 aNeighbor;
-  attribute float aSide;
-  attribute float aVertexTime; // relative to tile timeOffset
-  attribute vec4 aColor;
-  attribute float aWidth;
+  attribute vec2 aCorner;        // (side, along) ∈ {-1,1} × {0,1}, per-vertex
+  attribute vec2 aPosA;          // segment start, per-instance
+  attribute vec2 aPosB;          // segment end, per-instance
+  attribute vec2 aVertexTimeAB;  // [timeA, timeB], per-instance, tile-relative
+  attribute vec4 aColor;         // per-feature RGBA (when uUseFeatureColor=1)
+  attribute float aWidth;        // per-feature width (when uUseFeatureWidth=1)
   uniform mat4 uMatrix;
   uniform vec2 uViewport;
   uniform float uWidth;
@@ -74,35 +75,28 @@ const VS_SOURCE = `
   uniform float uFadeTrail;
   varying float vAlpha;
   varying vec4 vColor;
+${TIME_TRAIL_GLSL}
   void main() {
-    vec4 a = uMatrix * vec4(aPos.x, aPos.y, 0.0, 1.0);
-    vec4 b = uMatrix * vec4(aNeighbor.x, aNeighbor.y, 0.0, 1.0);
-    vec2 aNdc = a.xy / a.w;
-    vec2 bNdc = b.xy / b.w;
-    vec2 dirPx = (bNdc - aNdc) * 0.5 * uViewport;
+    vec2 posM = mix(aPosA, aPosB, aCorner.y);
+    vec2 neighborM = mix(aPosB, aPosA, aCorner.y);
+    vec4 here = uMatrix * vec4(posM, 0.0, 1.0);
+    vec4 there = uMatrix * vec4(neighborM, 0.0, 1.0);
+    vec2 hereNdc = here.xy / here.w;
+    vec2 thereNdc = there.xy / there.w;
+    vec2 dirPx = (thereNdc - hereNdc) * 0.5 * uViewport;
     float lenPx = max(length(dirPx), 1e-4);
     vec2 dirN = dirPx / lenPx;
-    vec2 perp = vec2(-dirN.y, dirN.x);
+    float sideSign = (aCorner.y > 0.5) ? -1.0 : 1.0;
+    vec2 perp = vec2(-dirN.y, dirN.x) * sideSign;
     float widthPx = (uUseFeatureWidth > 0.5 ? aWidth : uWidth) * uWidthScale;
-    vec2 offsetPx = perp * aSide * widthPx * 0.5;
+    vec2 offsetPx = perp * aCorner.x * widthPx * 0.5;
     vec2 offsetNdc = offsetPx / (0.5 * uViewport);
-    vec4 outClip = a;
-    outClip.xy += offsetNdc * a.w;
+    vec4 outClip = here;
+    outClip.xy += offsetNdc * here.w;
     gl_Position = outClip;
 
-    // Trail logic: hide vertices in the future or older than trailLength.
-    if (aVertexTime > uCurrentTime) {
-      vAlpha = 0.0;
-    } else {
-      float age = uCurrentTime - aVertexTime;
-      if (age > uTrailLength) {
-        vAlpha = 0.0;
-      } else if (uFadeTrail > 0.5 && uTrailLength > 0.0) {
-        vAlpha = clamp(1.0 - age / uTrailLength, 0.0, 1.0);
-      } else {
-        vAlpha = 1.0;
-      }
-    }
+    float vertexTime = mix(aVertexTimeAB.x, aVertexTimeAB.y, aCorner.y);
+    vAlpha = sttTrailAlpha(vertexTime, uCurrentTime, uTrailLength, uFadeTrail);
     vColor = (uUseFeatureColor > 0.5) ? aColor : uColor;
   }
 `;
@@ -119,10 +113,10 @@ const FS_SOURCE = `
 
 interface TripsProgramHandles {
   program: WebGLProgram;
-  aPos: number;
-  aNeighbor: number;
-  aSide: number;
-  aVertexTime: number;
+  aCorner: number;
+  aPosA: number;
+  aPosB: number;
+  aVertexTimeAB: number;
   aColor: number;
   aWidth: number;
   uMatrix: WebGLUniformLocation | null;
@@ -138,10 +132,10 @@ interface TripsProgramHandles {
 }
 
 interface TripsGpuCache extends TileGpuCache {
-  neighborBuffer: WebGLBuffer;
-  sideBuffer: WebGLBuffer;
-  vertexTimeBuffer: WebGLBuffer;
-  use32BitIndices: boolean;
+  posABuffer: WebGLBuffer;
+  posBBuffer: WebGLBuffer;
+  vertexTimeABBuffer: WebGLBuffer;
+  instanceCount: number;
   colorBuffer?: WebGLBuffer;
   widthBuffer?: WebGLBuffer;
 }
@@ -199,10 +193,10 @@ export class STTTripsLayer extends STTBaseLayer {
     const program = this.linkProgram(gl, VS_SOURCE, FS_SOURCE);
     this.handles = {
       program,
-      aPos: gl.getAttribLocation(program, 'aPos'),
-      aNeighbor: gl.getAttribLocation(program, 'aNeighbor'),
-      aSide: gl.getAttribLocation(program, 'aSide'),
-      aVertexTime: gl.getAttribLocation(program, 'aVertexTime'),
+      aCorner: gl.getAttribLocation(program, 'aCorner'),
+      aPosA: gl.getAttribLocation(program, 'aPosA'),
+      aPosB: gl.getAttribLocation(program, 'aPosB'),
+      aVertexTimeAB: gl.getAttribLocation(program, 'aVertexTimeAB'),
       aColor: gl.getAttribLocation(program, 'aColor'),
       aWidth: gl.getAttribLocation(program, 'aWidth'),
       uMatrix: gl.getUniformLocation(program, 'uMatrix'),
@@ -232,6 +226,13 @@ export class STTTripsLayer extends STTBaseLayer {
     _tile: Tile,
     layer: STTLayer,
   ): TripsGpuCache | null {
+    if (!this.instSupport.enabled) {
+      console.warn(
+        `[${this.id}] runtime lacks ANGLE_instanced_arrays / WebGL2; ` +
+          `STTTripsLayer requires instancing.`,
+      );
+      return null;
+    }
     const f = layer.features;
     if (!f.positions?.length || !f.startIndices) return null;
 
@@ -248,28 +249,9 @@ export class STTTripsLayer extends STTBaseLayer {
     }
     if (segmentCount === 0) return null;
 
-    const vertexCount = segmentCount * 4;
-    if (vertexCount > 65535 && !this.supports32BitIndices) {
-      console.warn(
-        `[${this.id}] trips tile has ${vertexCount} vertices, but WebGL1 ` +
-          `runtime lacks OES_element_index_uint; dropping tile.`,
-      );
-      return null;
-    }
-
-    const pos = new Float32Array(vertexCount * 3);
-    const nbr = new Float32Array(vertexCount * 3);
-    const side = new Float32Array(vertexCount);
-    // Per-vertex time (relative to tile timeOffset). Two GPU-shared per quad
-    // corner pair — we set both endpoints' times so the GPU interpolates
-    // alpha across the segment naturally.
-    const vTime = new Float32Array(vertexCount);
-    // Per-feature start/end time (only used as part of the per-vertex
-    // interpolation when vertexTimestamps is missing).
-    const use32 = vertexCount > 65535;
-    const idx = use32
-      ? new Uint32Array(segmentCount * 6)
-      : new Uint16Array(segmentCount * 6);
+    const posA = new Float32Array(segmentCount * 2);
+    const posB = new Float32Array(segmentCount * 2);
+    const vTimeAB = new Float32Array(segmentCount * 2);
 
     const featureColors = this.tripsOpts.colorProperty
       ? this.expandCategoricalColors(
@@ -281,11 +263,10 @@ export class STTTripsLayer extends STTBaseLayer {
     const featureWidths = this.tripsOpts.widthProperty
       ? this.getNumericProperty(f, this.tripsOpts.widthProperty)
       : null;
-    const colorAttr = featureColors ? new Uint8Array(vertexCount * 4) : null;
-    const widthAttr = featureWidths ? new Float32Array(vertexCount) : null;
+    const colorAttr = featureColors ? new Uint8Array(segmentCount * 4) : null;
+    const widthAttr = featureWidths ? new Float32Array(segmentCount) : null;
 
-    let vWrite = 0;
-    let iWrite = 0;
+    let s = 0;
     for (let fi = 0; fi < featureCount; fi++) {
       const begin = startIndices[fi];
       const end = startIndices[fi + 1];
@@ -302,14 +283,14 @@ export class STTTripsLayer extends STTBaseLayer {
       const fw = featureWidths ? featureWidths[fi] : 0;
 
       for (let v = begin; v < end - 1; v++) {
-        const aLon = f.positions[v * dims];
-        const aLat = f.positions[v * dims + 1];
-        const bLon = f.positions[(v + 1) * dims];
-        const bLat = f.positions[(v + 1) * dims + 1];
-        const [ax, ay] = lngLatToMercator(aLon, aLat);
-        const [bx, by] = lngLatToMercator(bLon, bLat);
-
-        // Per-vertex time for each endpoint.
+        const [ax, ay] = lngLatToMercator(
+          f.positions[v * dims],
+          f.positions[v * dims + 1],
+        );
+        const [bx, by] = lngLatToMercator(
+          f.positions[(v + 1) * dims],
+          f.positions[(v + 1) * dims + 1],
+        );
         const localIdxA = v - begin;
         const localIdxB = localIdxA + 1;
         const tA = hasVertexTimestamps
@@ -322,66 +303,35 @@ export class STTTripsLayer extends STTBaseLayer {
           : numVerts > 1
             ? ts + (localIdxB / (numVerts - 1)) * duration
             : te;
-
-        const corners: Array<{
-          p: [number, number];
-          n: [number, number];
-          s: number;
-          t: number;
-        }> = [
-          { p: [ax, ay], n: [bx, by], s: -1, t: tA },
-          { p: [ax, ay], n: [bx, by], s: 1, t: tA },
-          { p: [bx, by], n: [ax, ay], s: 1, t: tB },
-          { p: [bx, by], n: [ax, ay], s: -1, t: tB },
-        ];
-        for (let c = 0; c < 4; c++) {
-          pos[vWrite * 3] = corners[c].p[0];
-          pos[vWrite * 3 + 1] = corners[c].p[1];
-          pos[vWrite * 3 + 2] = 0;
-          nbr[vWrite * 3] = corners[c].n[0];
-          nbr[vWrite * 3 + 1] = corners[c].n[1];
-          nbr[vWrite * 3 + 2] = 0;
-          side[vWrite] = corners[c].s;
-          vTime[vWrite] = corners[c].t;
-          if (colorAttr) {
-            colorAttr[vWrite * 4] = fr;
-            colorAttr[vWrite * 4 + 1] = fg;
-            colorAttr[vWrite * 4 + 2] = fb;
-            colorAttr[vWrite * 4 + 3] = fa;
-          }
-          if (widthAttr) widthAttr[vWrite] = fw;
-          vWrite++;
+        posA[s * 2] = ax;
+        posA[s * 2 + 1] = ay;
+        posB[s * 2] = bx;
+        posB[s * 2 + 1] = by;
+        vTimeAB[s * 2] = tA;
+        vTimeAB[s * 2 + 1] = tB;
+        if (colorAttr) {
+          colorAttr[s * 4] = fr;
+          colorAttr[s * 4 + 1] = fg;
+          colorAttr[s * 4 + 2] = fb;
+          colorAttr[s * 4 + 3] = fa;
         }
-        const base = vWrite - 4;
-        idx[iWrite++] = base + 0;
-        idx[iWrite++] = base + 2;
-        idx[iWrite++] = base + 1;
-        idx[iWrite++] = base + 1;
-        idx[iWrite++] = base + 2;
-        idx[iWrite++] = base + 3;
+        if (widthAttr) widthAttr[s] = fw;
+        s++;
       }
     }
 
-    const positionBuffer = this.uploadArrayBuffer(gl, pos);
-    const neighborBuffer = this.uploadArrayBuffer(gl, nbr);
-    const sideBuffer = this.uploadArrayBuffer(gl, side);
-    const vertexTimeBuffer = this.uploadArrayBuffer(gl, vTime);
-    // We keep a dummy 0-length time buffer to satisfy the base TileGpuCache
-    // type — trips don't use the per-feature time attribute, but the base
-    // class lifecycle expects to own a `timeBuffer`.
+    const posABuffer = this.uploadArrayBuffer(gl, posA);
+    const posBBuffer = this.uploadArrayBuffer(gl, posB);
+    const vertexTimeABBuffer = this.uploadArrayBuffer(gl, vTimeAB);
+    // Keep a dummy timeBuffer to satisfy the base TileGpuCache contract — the
+    // trail shader doesn't read [startTime,endTime] (that's window mode), so
+    // we point it at a zero-length buffer rather than the per-instance times.
     const timeBuffer = gl.createBuffer()!;
     gl.bindBuffer(gl.ARRAY_BUFFER, timeBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(0), gl.STATIC_DRAW);
 
-    const indexBuffer = gl.createBuffer()!;
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
-    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, idx, gl.STATIC_DRAW);
-
-    const extras: WebGLBuffer[] = [
-      neighborBuffer,
-      sideBuffer,
-      vertexTimeBuffer,
-    ];
+    const positionBuffer = posABuffer;
+    const extras: WebGLBuffer[] = [posBBuffer, vertexTimeABBuffer];
     let colorBuffer: WebGLBuffer | undefined;
     let widthBuffer: WebGLBuffer | undefined;
     if (colorAttr) {
@@ -396,14 +346,13 @@ export class STTTripsLayer extends STTBaseLayer {
     return {
       positionBuffer,
       timeBuffer,
-      neighborBuffer,
-      sideBuffer,
-      vertexTimeBuffer,
-      indexBuffer,
-      vertexCount,
-      indexCount: idx.length,
+      posABuffer,
+      posBBuffer,
+      vertexTimeABBuffer,
+      vertexCount: segmentCount,
+      indexCount: 0,
+      instanceCount: segmentCount,
       timeOffset: f.timeOffset,
-      use32BitIndices: use32,
       extraBuffers: extras,
       colorBuffer,
       widthBuffer,
@@ -432,49 +381,50 @@ export class STTTripsLayer extends STTBaseLayer {
     gl.uniform1f(h.uCurrentTime, ctx.currentTime - c.timeOffset);
     gl.uniform1f(h.uTrailLength, this.tripsOpts.trailLength);
     gl.uniform1f(h.uFadeTrail, this.tripsOpts.fadeTrail ? 1 : 0);
+    gl.uniform1f(h.uUseFeatureColor, c.colorBuffer && h.aColor >= 0 ? 1 : 0);
+    gl.uniform1f(h.uUseFeatureWidth, c.widthBuffer && h.aWidth >= 0 ? 1 : 0);
 
-    gl.bindBuffer(gl.ARRAY_BUFFER, c.positionBuffer);
-    gl.enableVertexAttribArray(h.aPos);
-    gl.vertexAttribPointer(h.aPos, 3, gl.FLOAT, false, 0, 0);
+    const quad = this.getUnitQuad(gl);
+    this.bindVaoOrSetup(c, () => {
+      gl.bindBuffer(gl.ARRAY_BUFFER, quad);
+      gl.enableVertexAttribArray(h.aCorner);
+      gl.vertexAttribPointer(h.aCorner, 2, gl.FLOAT, false, 0, 0);
+      this.instSupport.vertexAttribDivisor(h.aCorner, 0);
 
-    gl.bindBuffer(gl.ARRAY_BUFFER, c.neighborBuffer);
-    gl.enableVertexAttribArray(h.aNeighbor);
-    gl.vertexAttribPointer(h.aNeighbor, 3, gl.FLOAT, false, 0, 0);
+      gl.bindBuffer(gl.ARRAY_BUFFER, c.posABuffer);
+      gl.enableVertexAttribArray(h.aPosA);
+      gl.vertexAttribPointer(h.aPosA, 2, gl.FLOAT, false, 0, 0);
+      this.instSupport.vertexAttribDivisor(h.aPosA, 1);
 
-    gl.bindBuffer(gl.ARRAY_BUFFER, c.sideBuffer);
-    gl.enableVertexAttribArray(h.aSide);
-    gl.vertexAttribPointer(h.aSide, 1, gl.FLOAT, false, 0, 0);
+      gl.bindBuffer(gl.ARRAY_BUFFER, c.posBBuffer);
+      gl.enableVertexAttribArray(h.aPosB);
+      gl.vertexAttribPointer(h.aPosB, 2, gl.FLOAT, false, 0, 0);
+      this.instSupport.vertexAttribDivisor(h.aPosB, 1);
 
-    gl.bindBuffer(gl.ARRAY_BUFFER, c.vertexTimeBuffer);
-    gl.enableVertexAttribArray(h.aVertexTime);
-    gl.vertexAttribPointer(h.aVertexTime, 1, gl.FLOAT, false, 0, 0);
+      gl.bindBuffer(gl.ARRAY_BUFFER, c.vertexTimeABBuffer);
+      gl.enableVertexAttribArray(h.aVertexTimeAB);
+      gl.vertexAttribPointer(h.aVertexTimeAB, 2, gl.FLOAT, false, 0, 0);
+      this.instSupport.vertexAttribDivisor(h.aVertexTimeAB, 1);
 
-    if (c.colorBuffer && h.aColor >= 0) {
-      gl.bindBuffer(gl.ARRAY_BUFFER, c.colorBuffer);
-      gl.enableVertexAttribArray(h.aColor);
-      gl.vertexAttribPointer(h.aColor, 4, gl.UNSIGNED_BYTE, true, 0, 0);
-      gl.uniform1f(h.uUseFeatureColor, 1);
-    } else {
-      gl.uniform1f(h.uUseFeatureColor, 0);
-    }
-    if (c.widthBuffer && h.aWidth >= 0) {
-      gl.bindBuffer(gl.ARRAY_BUFFER, c.widthBuffer);
-      gl.enableVertexAttribArray(h.aWidth);
-      gl.vertexAttribPointer(h.aWidth, 1, gl.FLOAT, false, 0, 0);
-      gl.uniform1f(h.uUseFeatureWidth, 1);
-    } else {
-      gl.uniform1f(h.uUseFeatureWidth, 0);
-    }
+      if (c.colorBuffer && h.aColor >= 0) {
+        gl.bindBuffer(gl.ARRAY_BUFFER, c.colorBuffer);
+        gl.enableVertexAttribArray(h.aColor);
+        gl.vertexAttribPointer(h.aColor, 4, gl.UNSIGNED_BYTE, true, 0, 0);
+        this.instSupport.vertexAttribDivisor(h.aColor, 1);
+      }
+      if (c.widthBuffer && h.aWidth >= 0) {
+        gl.bindBuffer(gl.ARRAY_BUFFER, c.widthBuffer);
+        gl.enableVertexAttribArray(h.aWidth);
+        gl.vertexAttribPointer(h.aWidth, 1, gl.FLOAT, false, 0, 0);
+        this.instSupport.vertexAttribDivisor(h.aWidth, 1);
+      }
+    });
 
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, c.indexBuffer!);
-    const indexType = c.use32BitIndices ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT;
-    gl.drawElements(gl.TRIANGLES, c.indexCount, indexType, 0);
-
-    gl.disableVertexAttribArray(h.aPos);
-    gl.disableVertexAttribArray(h.aNeighbor);
-    gl.disableVertexAttribArray(h.aSide);
-    gl.disableVertexAttribArray(h.aVertexTime);
-    if (c.colorBuffer && h.aColor >= 0) gl.disableVertexAttribArray(h.aColor);
-    if (c.widthBuffer && h.aWidth >= 0) gl.disableVertexAttribArray(h.aWidth);
+    this.instSupport.drawArraysInstanced(
+      0x0005 /* TRIANGLE_STRIP */,
+      0,
+      4,
+      c.instanceCount,
+    );
   }
 }

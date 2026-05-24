@@ -11,7 +11,7 @@
  * via the showcase demo and visual inspection.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { GeometryType } from '@stt/core';
 import { STTPointLayer } from '../src/point-layer';
 import { STTLineLayer } from '../src/line-layer';
@@ -54,28 +54,56 @@ describe('STTLineLayer', () => {
     expect(layer.acceptsGeometry(GeometryType.Polygon)).toBe(false);
   });
 
-  it('expands each segment to 4 vertices and 6 indices', () => {
+  it('emits one instance per segment with no CPU quad expansion', () => {
     const layer = new STTLineLayer({ ...baseOpts, id: 'l' }) as any;
     layer.supports32BitIndices = true;
+    // Drive the protected hooks directly — the real `initInstanceSupport`
+    // from `onAdd` hasn't run, so we stand up a minimal stub.
+    layer.instSupport = {
+      enabled: true,
+      drawArraysInstanced: () => {},
+      drawElementsInstanced: () => {},
+      vertexAttribDivisor: () => {},
+    };
     const gl = makeMockGl();
     const tile = makeLineTile();
     const cache = layer.buildTileGpuCache(gl, tile, tile.layers[0]);
     expect(cache).not.toBeNull();
     // Path 0 has 3 vertices => 2 segments. Path 1 has 2 vertices => 1 segment.
-    // Total segments = 3 → 12 verts, 18 indices.
-    expect(cache.vertexCount).toBe(12);
-    expect(cache.indexCount).toBe(18);
+    // Total segments = 3 → 3 instances; no CPU quad expansion now.
+    expect(cache.instanceCount).toBe(3);
+    expect(cache.indexCount).toBe(0);
+    // extraBuffers: posBBuffer (posABuffer is reused as positionBuffer).
     expect(cache.extraBuffers).toBeDefined();
-    expect(cache.extraBuffers.length).toBe(2);
+    expect(cache.extraBuffers.length).toBe(1);
   });
 
   it('returns null for a layer with no startIndices', () => {
     const layer = new STTLineLayer({ ...baseOpts, id: 'l' }) as any;
     layer.supports32BitIndices = true;
+    layer.instSupport = {
+      enabled: true,
+      drawArraysInstanced: () => {},
+      drawElementsInstanced: () => {},
+      vertexAttribDivisor: () => {},
+    };
     const gl = makeMockGl();
     const tile = makePointTile(); // Point tile has no startIndices.
     const cache = layer.buildTileGpuCache(gl, tile, tile.layers[0]);
     expect(cache).toBeNull();
+  });
+
+  it('refuses to build a tile cache when instancing is unavailable', () => {
+    const layer = new STTLineLayer({ ...baseOpts, id: 'l' }) as any;
+    layer.supports32BitIndices = true;
+    // Leave instSupport.enabled at its default (false). Silence the warn so
+    // the test output stays clean.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const gl = makeMockGl();
+    const tile = makeLineTile();
+    const cache = layer.buildTileGpuCache(gl, tile, tile.layers[0]);
+    expect(cache).toBeNull();
+    warn.mockRestore();
   });
 });
 
@@ -98,7 +126,7 @@ describe('STTPolygonLayer', () => {
     expect(cache.indexCount).toBe(6);
   });
 
-  it('adds a stroke pass when stroked: true', () => {
+  it('adds an instanced stroke pass when stroked: true', () => {
     const layer = new STTPolygonLayer({
       ...baseOpts,
       id: 'g',
@@ -106,12 +134,20 @@ describe('STTPolygonLayer', () => {
       lineWidth: 2,
     }) as any;
     layer.supports32BitIndices = true;
+    layer.instSupport = {
+      enabled: true,
+      drawArraysInstanced: () => {},
+      drawElementsInstanced: () => {},
+      vertexAttribDivisor: () => {},
+    };
     const gl = makeMockGl();
     const tile = makePolygonTile();
     const cache = layer.buildTileGpuCache(gl, tile, tile.layers[0]);
     expect(cache.stroke).toBeDefined();
-    // A 4-vertex square ring → 4 edges → 4×4=16 stroke verts, 4×6=24 indices.
-    expect(cache.stroke.indexCount).toBe(24);
+    // A 4-vertex square ring → 4 edges → 4 stroke instances. The legacy path
+    // emitted 24 (4 edges × 6 indices) — instancing collapses that to a single
+    // draw call against the shared 4-vertex unit quad.
+    expect(cache.stroke.instanceCount).toBe(4);
   });
 
   it('emits side walls when extruded: true with a non-zero elevation', () => {

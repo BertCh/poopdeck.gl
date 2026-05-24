@@ -2,10 +2,16 @@
  * Line geometry adapter — renders LINESTRING-type tiles as screen-space thick
  * lines (constant pixel width across zoom).
  *
- * Each segment is expanded to a quad (two triangles) on the CPU and offset
- * along its screen-space normal in the vertex shader. This is the same
- * approach deck.gl's PathLayer uses, kept minimal: no rounded joints, no
- * dashes, no per-vertex width — just a single solid stroke per layer.
+ * Each segment is drawn as a single *instance* of a shared 4-vertex unit quad.
+ * Per-instance attributes carry the segment endpoints, times, and (optional)
+ * per-feature colour / width. This replaces the legacy CPU-side 4×-expansion
+ * pass: the same N segments now occupy 1/4 the GPU memory and skip the per-
+ * frame walk that copied positions into corner-major buffers.
+ *
+ * Instancing requires WebGL2 (core) or WebGL1 + `ANGLE_instanced_arrays`.
+ * Layers on a runtime without instancing log a warning and drop the tile —
+ * the only browsers without it are end-of-life Edge and IE, neither of which
+ * the rest of the STT stack targets.
  */
 
 import type { Tile, Layer as STTLayer } from '@stt/core';
@@ -18,6 +24,7 @@ import {
   type RGBA8,
 } from './base-layer';
 import { lngLatToMercator } from './projection';
+import { TIME_WINDOW_GLSL } from './shaders/time-window.glsl';
 
 // Default categorical palette (matches @stt/deck.gl AnimatedPathLayer's).
 const DEFAULT_LINE_PALETTE: ReadonlyArray<RGBA8> = [
@@ -48,14 +55,19 @@ export interface STTLineLayerOptions extends STTBaseLayerOptions {
   widthProperty?: string;
 }
 
+// The instanced VS reads (side, along) ∈ {-1,1} × {0,1} from the unit-quad
+// vertex attribute, then picks the segment endpoint and perpendicular offset.
+// `aPosA`/`aPosB` are the *segment endpoints*, not the 4 corners; the 4×
+// expansion happens in the GPU rasterizer — we're removing the redundant CPU
+// broadcast that the v0.2 layer was doing on every tile load.
 const VS_SOURCE = `
   precision highp float;
-  attribute vec3 aPos;
-  attribute vec3 aNeighbor;
-  attribute float aSide;
-  attribute vec2 aTime;
-  attribute vec4 aColor;       // per-feature RGBA in 0..1 (constant fallback when uUseFeatureColor=0)
-  attribute float aWidth;      // per-feature width in pixels (when uUseFeatureWidth=1)
+  attribute vec2 aCorner;      // (side, along) ∈ {-1,1} × {0,1}, per-vertex
+  attribute vec2 aPosA;        // segment start, per-instance
+  attribute vec2 aPosB;        // segment end, per-instance
+  attribute vec2 aTime;        // [startTime, endTime], per-instance
+  attribute vec4 aColor;       // per-feature RGBA (when uUseFeatureColor=1)
+  attribute float aWidth;      // per-feature width (when uUseFeatureWidth=1)
   uniform mat4 uMatrix;
   uniform vec2 uViewport;
   uniform float uWidth;
@@ -69,26 +81,31 @@ const VS_SOURCE = `
   uniform float uFadeOut;
   varying float vAlpha;
   varying vec4 vColor;
+${TIME_WINDOW_GLSL}
   void main() {
-    vec4 a = uMatrix * vec4(aPos.x, aPos.y, 0.0, 1.0);
-    vec4 b = uMatrix * vec4(aNeighbor.x, aNeighbor.y, 0.0, 1.0);
-    vec2 aNdc = a.xy / a.w;
-    vec2 bNdc = b.xy / b.w;
-    vec2 dirPx = (bNdc - aNdc) * 0.5 * uViewport;
+    vec2 posM = mix(aPosA, aPosB, aCorner.y);     // pick A or B endpoint
+    vec2 neighborM = mix(aPosB, aPosA, aCorner.y); // and its neighbour
+    vec4 here = uMatrix * vec4(posM, 0.0, 1.0);
+    vec4 there = uMatrix * vec4(neighborM, 0.0, 1.0);
+    vec2 hereNdc = here.xy / here.w;
+    vec2 thereNdc = there.xy / there.w;
+    // Direction in pixels from here to there; offset perpendicular so the
+    // line keeps a constant on-screen width across zooms.
+    vec2 dirPx = (thereNdc - hereNdc) * 0.5 * uViewport;
     float lenPx = max(length(dirPx), 1e-4);
     vec2 dirN = dirPx / lenPx;
-    vec2 perp = vec2(-dirN.y, dirN.x);
+    // The B-end's neighbour is A → its perpendicular points the *other* way
+    // along the segment. Flip the side so the quad winds consistently.
+    float sideSign = (aCorner.y > 0.5) ? -1.0 : 1.0;
+    vec2 perp = vec2(-dirN.y, dirN.x) * sideSign;
     float widthPx = (uUseFeatureWidth > 0.5 ? aWidth : uWidth) * uWidthScale;
-    vec2 offsetPx = perp * aSide * widthPx * 0.5;
+    vec2 offsetPx = perp * aCorner.x * widthPx * 0.5;
     vec2 offsetNdc = offsetPx / (0.5 * uViewport);
-    vec4 outClip = a;
-    outClip.xy += offsetNdc * a.w;
+    vec4 outClip = here;
+    outClip.xy += offsetNdc * here.w;
     gl_Position = outClip;
 
-    float inside = (aTime.y >= uWindowStart && aTime.x <= uWindowEnd) ? 1.0 : 0.0;
-    float entering = (uFadeIn > 0.0) ? clamp((aTime.y - uWindowStart) / uFadeIn, 0.0, 1.0) : 1.0;
-    float leaving = (uFadeOut > 0.0) ? clamp((uWindowEnd - aTime.x) / uFadeOut, 0.0, 1.0) : 1.0;
-    vAlpha = inside * min(entering, leaving);
+    vAlpha = sttTimeWindowAlpha(aTime, uWindowStart, uWindowEnd, uFadeIn, uFadeOut);
     vColor = (uUseFeatureColor > 0.5) ? aColor : uColor;
   }
 `;
@@ -105,9 +122,9 @@ const FS_SOURCE = `
 
 interface LineProgramHandles {
   program: WebGLProgram;
-  aPos: number;
-  aNeighbor: number;
-  aSide: number;
+  aCorner: number;
+  aPosA: number;
+  aPosB: number;
   aTime: number;
   aColor: number;
   aWidth: number;
@@ -125,9 +142,12 @@ interface LineProgramHandles {
 }
 
 interface LineGpuCache extends TileGpuCache {
-  neighborBuffer: WebGLBuffer;
-  sideBuffer: WebGLBuffer;
-  use32BitIndices: boolean;
+  /** Per-instance segment-start positions, stride-2 Float32. */
+  posABuffer: WebGLBuffer;
+  /** Per-instance segment-end positions, stride-2 Float32. */
+  posBBuffer: WebGLBuffer;
+  /** Number of segments (= number of instances). */
+  instanceCount: number;
   colorBuffer?: WebGLBuffer;
   widthBuffer?: WebGLBuffer;
 }
@@ -175,9 +195,9 @@ export class STTLineLayer extends STTBaseLayer {
     const program = this.linkProgram(gl, VS_SOURCE, FS_SOURCE);
     this.handles = {
       program,
-      aPos: gl.getAttribLocation(program, 'aPos'),
-      aNeighbor: gl.getAttribLocation(program, 'aNeighbor'),
-      aSide: gl.getAttribLocation(program, 'aSide'),
+      aCorner: gl.getAttribLocation(program, 'aCorner'),
+      aPosA: gl.getAttribLocation(program, 'aPosA'),
+      aPosB: gl.getAttribLocation(program, 'aPosB'),
       aTime: gl.getAttribLocation(program, 'aTime'),
       aColor: gl.getAttribLocation(program, 'aColor'),
       aWidth: gl.getAttribLocation(program, 'aWidth'),
@@ -209,6 +229,15 @@ export class STTLineLayer extends STTBaseLayer {
     _tile: Tile,
     layer: STTLayer,
   ): LineGpuCache | null {
+    if (!this.instSupport.enabled) {
+      // No instancing → no line rendering. Logged so hosts can detect and
+      // swap to a different renderer / runtime.
+      console.warn(
+        `[${this.id}] runtime lacks ANGLE_instanced_arrays / WebGL2; ` +
+          `STTLineLayer requires instancing.`,
+      );
+      return null;
+    }
     const f = layer.features;
     if (!f.positions?.length || !f.startIndices) return null;
 
@@ -224,26 +253,13 @@ export class STTLineLayer extends STTBaseLayer {
     }
     if (segmentCount === 0) return null;
 
-    const vertexCount = segmentCount * 4;
-    if (vertexCount > 65535 && !this.supports32BitIndices) {
-      console.warn(
-        `[${this.id}] tile has ${vertexCount} line vertices, but WebGL1 ` +
-          `runtime lacks OES_element_index_uint; dropping tile.`,
-      );
-      return null;
-    }
-    const pos = new Float32Array(vertexCount * 3);
-    const nbr = new Float32Array(vertexCount * 3);
-    const side = new Float32Array(vertexCount);
-    const times = new Float32Array(vertexCount * 2);
-    const use32 = vertexCount > 65535;
-    const idx = use32
-      ? new Uint32Array(segmentCount * 6)
-      : new Uint16Array(segmentCount * 6);
+    // Per-instance buffers — one row per segment, not per quad corner. This
+    // is the core memory win vs. v0.2: 4× less data uploaded per tile and no
+    // main-thread expansion pass.
+    const posA = new Float32Array(segmentCount * 2);
+    const posB = new Float32Array(segmentCount * 2);
+    const times = new Float32Array(segmentCount * 2);
 
-    // Per-feature attribute expansion (one value broadcast to all 4 verts of
-    // each segment of that feature). Built only when properties are configured
-    // AND present in the binary tile.
     const featureColors = this.lineOpts.colorProperty
       ? this.expandCategoricalColors(
           f,
@@ -254,11 +270,10 @@ export class STTLineLayer extends STTBaseLayer {
     const featureWidths = this.lineOpts.widthProperty
       ? this.getNumericProperty(f, this.lineOpts.widthProperty)
       : null;
-    const colorAttr = featureColors ? new Uint8Array(vertexCount * 4) : null;
-    const widthAttr = featureWidths ? new Float32Array(vertexCount) : null;
+    const colorAttr = featureColors ? new Uint8Array(segmentCount * 4) : null;
+    const widthAttr = featureWidths ? new Float32Array(segmentCount) : null;
 
-    let vWrite = 0; // vertex index
-    let iWrite = 0; // index buffer write head
+    let s = 0;
     for (let fi = 0; fi < featureCount; fi++) {
       const begin = startIndices[fi];
       const end = startIndices[fi + 1];
@@ -270,75 +285,39 @@ export class STTLineLayer extends STTBaseLayer {
       const fa = featureColors ? featureColors[fi * 4 + 3] : 255;
       const fw = featureWidths ? featureWidths[fi] : 0;
       for (let v = begin; v < end - 1; v++) {
-        const aLon = f.positions[v * dims];
-        const aLat = f.positions[v * dims + 1];
-        const bLon = f.positions[(v + 1) * dims];
-        const bLat = f.positions[(v + 1) * dims + 1];
-        const [ax, ay] = lngLatToMercator(aLon, aLat);
-        const [bx, by] = lngLatToMercator(bLon, bLat);
-
-        // 4 verts per segment: (A,-1), (A,+1), (B,+1), (B,-1) — sides
-        // chosen so the resulting quad winds (0,2,1)+(1,2,3).
-        const corners: Array<{
-          p: [number, number];
-          n: [number, number];
-          s: number;
-        }> = [
-          { p: [ax, ay], n: [bx, by], s: -1 },
-          { p: [ax, ay], n: [bx, by], s: 1 },
-          { p: [bx, by], n: [ax, ay], s: 1 },
-          { p: [bx, by], n: [ax, ay], s: -1 },
-        ];
-        for (let c = 0; c < 4; c++) {
-          pos[vWrite * 3] = corners[c].p[0];
-          pos[vWrite * 3 + 1] = corners[c].p[1];
-          pos[vWrite * 3 + 2] = 0;
-          nbr[vWrite * 3] = corners[c].n[0];
-          nbr[vWrite * 3 + 1] = corners[c].n[1];
-          nbr[vWrite * 3 + 2] = 0;
-          side[vWrite] = corners[c].s;
-          times[vWrite * 2] = ts;
-          times[vWrite * 2 + 1] = te;
-          if (colorAttr) {
-            colorAttr[vWrite * 4] = fr;
-            colorAttr[vWrite * 4 + 1] = fg;
-            colorAttr[vWrite * 4 + 2] = fb;
-            colorAttr[vWrite * 4 + 3] = fa;
-          }
-          if (widthAttr) widthAttr[vWrite] = fw;
-          vWrite++;
+        const [ax, ay] = lngLatToMercator(
+          f.positions[v * dims],
+          f.positions[v * dims + 1],
+        );
+        const [bx, by] = lngLatToMercator(
+          f.positions[(v + 1) * dims],
+          f.positions[(v + 1) * dims + 1],
+        );
+        posA[s * 2] = ax;
+        posA[s * 2 + 1] = ay;
+        posB[s * 2] = bx;
+        posB[s * 2 + 1] = by;
+        times[s * 2] = ts;
+        times[s * 2 + 1] = te;
+        if (colorAttr) {
+          colorAttr[s * 4] = fr;
+          colorAttr[s * 4 + 1] = fg;
+          colorAttr[s * 4 + 2] = fb;
+          colorAttr[s * 4 + 3] = fa;
         }
-        const base = vWrite - 4;
-        idx[iWrite++] = base + 0;
-        idx[iWrite++] = base + 2;
-        idx[iWrite++] = base + 1;
-        idx[iWrite++] = base + 1;
-        idx[iWrite++] = base + 2;
-        idx[iWrite++] = base + 3;
+        if (widthAttr) widthAttr[s] = fw;
+        s++;
       }
     }
 
-    const positionBuffer = gl.createBuffer()!;
-    gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
-    gl.bufferData(gl.ARRAY_BUFFER, pos, gl.STATIC_DRAW);
+    const posABuffer = this.uploadArrayBuffer(gl, posA);
+    const posBBuffer = this.uploadArrayBuffer(gl, posB);
+    const timeBuffer = this.uploadArrayBuffer(gl, times);
+    // The base TileGpuCache type expects `positionBuffer`. We keep posA there
+    // (the "primary" data) so the inherited cleanup walks delete it.
+    const positionBuffer = posABuffer;
 
-    const neighborBuffer = gl.createBuffer()!;
-    gl.bindBuffer(gl.ARRAY_BUFFER, neighborBuffer);
-    gl.bufferData(gl.ARRAY_BUFFER, nbr, gl.STATIC_DRAW);
-
-    const sideBuffer = gl.createBuffer()!;
-    gl.bindBuffer(gl.ARRAY_BUFFER, sideBuffer);
-    gl.bufferData(gl.ARRAY_BUFFER, side, gl.STATIC_DRAW);
-
-    const timeBuffer = gl.createBuffer()!;
-    gl.bindBuffer(gl.ARRAY_BUFFER, timeBuffer);
-    gl.bufferData(gl.ARRAY_BUFFER, times, gl.STATIC_DRAW);
-
-    const indexBuffer = gl.createBuffer()!;
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
-    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, idx, gl.STATIC_DRAW);
-
-    const extras: WebGLBuffer[] = [neighborBuffer, sideBuffer];
+    const extras: WebGLBuffer[] = [posBBuffer];
     let colorBuffer: WebGLBuffer | undefined;
     let widthBuffer: WebGLBuffer | undefined;
     if (colorAttr) {
@@ -353,13 +332,15 @@ export class STTLineLayer extends STTBaseLayer {
     return {
       positionBuffer,
       timeBuffer,
-      neighborBuffer,
-      sideBuffer,
-      indexBuffer,
-      vertexCount,
-      indexCount: idx.length,
+      posABuffer,
+      posBBuffer,
+      // `vertexCount` here is the number of segments — old tests assert
+      // 4 verts/segment (legacy 12), which no longer applies. The replacement
+      // assertion is `instanceCount`.
+      vertexCount: segmentCount,
+      indexCount: 0,
+      instanceCount: segmentCount,
       timeOffset: f.timeOffset,
-      use32BitIndices: use32,
       extraBuffers: extras,
       colorBuffer,
       widthBuffer,
@@ -388,49 +369,54 @@ export class STTLineLayer extends STTBaseLayer {
     const { fadeIn, fadeOut } = this.resolveFadeDurations();
     gl.uniform1f(h.uFadeIn, fadeIn);
     gl.uniform1f(h.uFadeOut, fadeOut);
+    gl.uniform1f(h.uUseFeatureColor, c.colorBuffer && h.aColor >= 0 ? 1 : 0);
+    gl.uniform1f(h.uUseFeatureWidth, c.widthBuffer && h.aWidth >= 0 ? 1 : 0);
 
-    gl.bindBuffer(gl.ARRAY_BUFFER, c.positionBuffer);
-    gl.enableVertexAttribArray(h.aPos);
-    gl.vertexAttribPointer(h.aPos, 3, gl.FLOAT, false, 0, 0);
+    const quad = this.getUnitQuad(gl);
+    this.bindVaoOrSetup(c, () => {
+      // Per-vertex quad corner (divisor 0).
+      gl.bindBuffer(gl.ARRAY_BUFFER, quad);
+      gl.enableVertexAttribArray(h.aCorner);
+      gl.vertexAttribPointer(h.aCorner, 2, gl.FLOAT, false, 0, 0);
+      this.instSupport.vertexAttribDivisor(h.aCorner, 0);
 
-    gl.bindBuffer(gl.ARRAY_BUFFER, c.neighborBuffer);
-    gl.enableVertexAttribArray(h.aNeighbor);
-    gl.vertexAttribPointer(h.aNeighbor, 3, gl.FLOAT, false, 0, 0);
+      // Per-instance attributes (divisor 1).
+      gl.bindBuffer(gl.ARRAY_BUFFER, c.posABuffer);
+      gl.enableVertexAttribArray(h.aPosA);
+      gl.vertexAttribPointer(h.aPosA, 2, gl.FLOAT, false, 0, 0);
+      this.instSupport.vertexAttribDivisor(h.aPosA, 1);
 
-    gl.bindBuffer(gl.ARRAY_BUFFER, c.sideBuffer);
-    gl.enableVertexAttribArray(h.aSide);
-    gl.vertexAttribPointer(h.aSide, 1, gl.FLOAT, false, 0, 0);
+      gl.bindBuffer(gl.ARRAY_BUFFER, c.posBBuffer);
+      gl.enableVertexAttribArray(h.aPosB);
+      gl.vertexAttribPointer(h.aPosB, 2, gl.FLOAT, false, 0, 0);
+      this.instSupport.vertexAttribDivisor(h.aPosB, 1);
 
-    gl.bindBuffer(gl.ARRAY_BUFFER, c.timeBuffer);
-    gl.enableVertexAttribArray(h.aTime);
-    gl.vertexAttribPointer(h.aTime, 2, gl.FLOAT, false, 0, 0);
+      gl.bindBuffer(gl.ARRAY_BUFFER, c.timeBuffer);
+      gl.enableVertexAttribArray(h.aTime);
+      gl.vertexAttribPointer(h.aTime, 2, gl.FLOAT, false, 0, 0);
+      this.instSupport.vertexAttribDivisor(h.aTime, 1);
 
-    if (c.colorBuffer && h.aColor >= 0) {
-      gl.bindBuffer(gl.ARRAY_BUFFER, c.colorBuffer);
-      gl.enableVertexAttribArray(h.aColor);
-      gl.vertexAttribPointer(h.aColor, 4, gl.UNSIGNED_BYTE, true, 0, 0);
-      gl.uniform1f(h.uUseFeatureColor, 1);
-    } else {
-      gl.uniform1f(h.uUseFeatureColor, 0);
-    }
-    if (c.widthBuffer && h.aWidth >= 0) {
-      gl.bindBuffer(gl.ARRAY_BUFFER, c.widthBuffer);
-      gl.enableVertexAttribArray(h.aWidth);
-      gl.vertexAttribPointer(h.aWidth, 1, gl.FLOAT, false, 0, 0);
-      gl.uniform1f(h.uUseFeatureWidth, 1);
-    } else {
-      gl.uniform1f(h.uUseFeatureWidth, 0);
-    }
+      if (c.colorBuffer && h.aColor >= 0) {
+        gl.bindBuffer(gl.ARRAY_BUFFER, c.colorBuffer);
+        gl.enableVertexAttribArray(h.aColor);
+        gl.vertexAttribPointer(h.aColor, 4, gl.UNSIGNED_BYTE, true, 0, 0);
+        this.instSupport.vertexAttribDivisor(h.aColor, 1);
+      }
+      if (c.widthBuffer && h.aWidth >= 0) {
+        gl.bindBuffer(gl.ARRAY_BUFFER, c.widthBuffer);
+        gl.enableVertexAttribArray(h.aWidth);
+        gl.vertexAttribPointer(h.aWidth, 1, gl.FLOAT, false, 0, 0);
+        this.instSupport.vertexAttribDivisor(h.aWidth, 1);
+      }
+    });
 
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, c.indexBuffer!);
-    const indexType = c.use32BitIndices ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT;
-    gl.drawElements(gl.TRIANGLES, c.indexCount, indexType, 0);
-
-    gl.disableVertexAttribArray(h.aPos);
-    gl.disableVertexAttribArray(h.aNeighbor);
-    gl.disableVertexAttribArray(h.aSide);
-    gl.disableVertexAttribArray(h.aTime);
-    if (c.colorBuffer && h.aColor >= 0) gl.disableVertexAttribArray(h.aColor);
-    if (c.widthBuffer && h.aWidth >= 0) gl.disableVertexAttribArray(h.aWidth);
+    // 4 verts per quad × N segment instances, drawn as TRIANGLE_STRIP. No
+    // gl_VertexID needed so this works on WebGL1 + ANGLE_instanced_arrays.
+    this.instSupport.drawArraysInstanced(
+      0x0005 /* TRIANGLE_STRIP */,
+      0,
+      4,
+      c.instanceCount,
+    );
   }
 }

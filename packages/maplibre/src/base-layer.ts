@@ -33,6 +33,7 @@ import {
   type GeometryType,
 } from '@stt/core';
 import { projectPositions } from './projection';
+import { getProjectionPool } from './worker/projection-pool';
 
 /** RGBA tuple in the 0–1 range used by all STT shader uniforms. */
 export type RGBA = [number, number, number, number];
@@ -96,6 +97,22 @@ export interface STTBaseLayerOptions {
   enablePrefetch?: boolean;
   prefetchAhead?: number;
   prefetchSteps?: number;
+  /**
+   * Opt into running per-tile lon/lat → mercator projection in a Web Worker.
+   * Disabled by default to preserve the existing synchronous tile-build path.
+   * Once enabled, `buildTileGpuCache` returns its cache asynchronously and
+   * the first frame for each tile draws after the worker reply lands; the
+   * second frame onward sees no overhead. Recommended for hosts that render
+   * tiles with >5k vertices apiece (city-scale rideshare, polygon-heavy
+   * datasets).
+   */
+  useWorkerProjection?: boolean;
+  /**
+   * Threshold (number of input vertices) above which `projectAsync` actually
+   * dispatches to a worker. Below this size the synchronous path is faster
+   * because the postMessage overhead dominates. Default 1000.
+   */
+  workerProjectionMinVertices?: number;
 }
 
 /** Per-tile cached GPU buffers. Created lazily on first draw. */
@@ -118,6 +135,16 @@ export interface TileGpuCache {
    * when the tile is unloaded.
    */
   extraBuffers?: WebGLBuffer[];
+  /**
+   * Cached vertex-array-object. Set by subclasses inside drawTile on the first
+   * draw and reused on every subsequent frame — replaces ~5–7 buffer-binds +
+   * enableVertexAttribArray calls per tile per frame with a single
+   * `bindVertexArray(vao)`. Cleared automatically with the tile.
+   * A separate VAO may exist per logical sub-pass (e.g. polygon fill vs. stroke).
+   */
+  vao?: WebGLVertexArrayObject | null;
+  /** Secondary VAO for layers that emit more than one pass per tile (e.g. polygon stroke). */
+  strokeVao?: WebGLVertexArrayObject | null;
 }
 
 /** Context passed to drawTile() with everything the subclass needs. */
@@ -149,6 +176,51 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
   protected tileGpuCache = new Map<string, TileGpuCache | null>();
   protected opts: STTBaseLayerOptions & { autoRepaint: boolean };
   protected supports32BitIndices = false;
+  /**
+   * VAO support detection. WebGL2 has VAOs in core; WebGL1 exposes them via
+   * `OES_vertex_array_object`. When unavailable, subclasses fall back to
+   * rebinding attributes per draw (the legacy path) — still correct, just
+   * 5–7× more API calls per tile.
+   */
+  protected vaoSupport: {
+    enabled: boolean;
+    create: () => WebGLVertexArrayObject | null;
+    bind: (vao: WebGLVertexArrayObject | null) => void;
+    delete: (vao: WebGLVertexArrayObject) => void;
+  } = {
+    enabled: false,
+    create: () => null,
+    bind: () => undefined,
+    delete: () => undefined,
+  };
+  /**
+   * Instanced-draw support detection. WebGL2 has `drawArraysInstanced` /
+   * `drawElementsInstanced` / `vertexAttribDivisor` in core; WebGL1 exposes
+   * them through `ANGLE_instanced_arrays`. When unavailable, layers that rely
+   * on instancing (lines, trips, polygon stroke) will be dropped — the
+   * fallback non-instanced path is gone now that instancing is widely
+   * available (everywhere except old IE/Edge, both EOL).
+   */
+  protected instSupport: {
+    enabled: boolean;
+    drawArraysInstanced: (mode: number, first: number, count: number, primCount: number) => void;
+    drawElementsInstanced: (mode: number, count: number, type: number, offset: number, primCount: number) => void;
+    vertexAttribDivisor: (index: number, divisor: number) => void;
+  } = {
+    enabled: false,
+    drawArraysInstanced: () => undefined,
+    drawElementsInstanced: () => undefined,
+    vertexAttribDivisor: () => undefined,
+  };
+  /**
+   * A 4-vertex unit quad shared by every instanced layer in this layer
+   * instance. Vertices are (sideA: -1|+1, along: 0|1) where `sideA` picks the
+   * perpendicular offset direction and `along` picks the A or B endpoint of
+   * the segment.
+   *
+   * Lazily uploaded the first time a subclass asks for it via `getUnitQuad()`.
+   */
+  protected unitQuadBuffer?: WebGLBuffer;
 
   constructor(opts: STTBaseLayerOptions) {
     this.id = opts.id;
@@ -199,8 +271,115 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
     } else {
       this.supports32BitIndices = !!gl.getExtension('OES_element_index_uint');
     }
+    this.initVaoSupport(gl);
+    this.initInstanceSupport(gl);
     this.onContextReady(gl);
     void this.initTileset();
+  }
+
+  /**
+   * Resolve VAO entry points. WebGL2 has them in core under the unprefixed
+   * names; WebGL1 must go through `OES_vertex_array_object` (the extension
+   * lookup also covers the test mock, which exposes the WebGL2 names directly).
+   * We capture function refs once so the per-draw fast path doesn't pay the
+   * cost of `instanceof` / extension probing on every tile.
+   */
+  private initVaoSupport(
+    gl: WebGLRenderingContext | WebGL2RenderingContext,
+  ): void {
+    const gl2 = gl as WebGL2RenderingContext;
+    if (typeof gl2.createVertexArray === 'function') {
+      this.vaoSupport = {
+        enabled: true,
+        create: () => gl2.createVertexArray(),
+        bind: (vao) => gl2.bindVertexArray(vao),
+        delete: (vao) => gl2.deleteVertexArray(vao),
+      };
+      return;
+    }
+    const ext = gl.getExtension('OES_vertex_array_object') as {
+      createVertexArrayOES: () => WebGLVertexArrayObject | null;
+      bindVertexArrayOES: (vao: WebGLVertexArrayObject | null) => void;
+      deleteVertexArrayOES: (vao: WebGLVertexArrayObject) => void;
+    } | null;
+    if (ext) {
+      this.vaoSupport = {
+        enabled: true,
+        create: () => ext.createVertexArrayOES(),
+        bind: (vao) => ext.bindVertexArrayOES(vao),
+        delete: (vao) => ext.deleteVertexArrayOES(vao),
+      };
+    }
+  }
+
+  /**
+   * Resolve instanced-draw entry points. WebGL2 has them in core; WebGL1 must
+   * pull them off `ANGLE_instanced_arrays`. The line / trips / polygon-stroke
+   * sub-layers rely on instancing for their quad expansion; everywhere
+   * instancing is missing they bail out at tile-cache-build time with a
+   * console warning and the tile is skipped.
+   */
+  private initInstanceSupport(
+    gl: WebGLRenderingContext | WebGL2RenderingContext,
+  ): void {
+    const gl2 = gl as WebGL2RenderingContext;
+    if (typeof gl2.drawArraysInstanced === 'function') {
+      this.instSupport = {
+        enabled: true,
+        drawArraysInstanced: (mode, first, count, primCount) =>
+          gl2.drawArraysInstanced(mode, first, count, primCount),
+        drawElementsInstanced: (mode, count, type, offset, primCount) =>
+          gl2.drawElementsInstanced(mode, count, type, offset, primCount),
+        vertexAttribDivisor: (index, divisor) =>
+          gl2.vertexAttribDivisor(index, divisor),
+      };
+      return;
+    }
+    const ext = gl.getExtension('ANGLE_instanced_arrays') as {
+      drawArraysInstancedANGLE: (mode: number, first: number, count: number, primCount: number) => void;
+      drawElementsInstancedANGLE: (mode: number, count: number, type: number, offset: number, primCount: number) => void;
+      vertexAttribDivisorANGLE: (index: number, divisor: number) => void;
+    } | null;
+    if (ext) {
+      this.instSupport = {
+        enabled: true,
+        drawArraysInstanced: (mode, first, count, primCount) =>
+          ext.drawArraysInstancedANGLE(mode, first, count, primCount),
+        drawElementsInstanced: (mode, count, type, offset, primCount) =>
+          ext.drawElementsInstancedANGLE(mode, count, type, offset, primCount),
+        vertexAttribDivisor: (index, divisor) =>
+          ext.vertexAttribDivisorANGLE(index, divisor),
+      };
+    }
+  }
+
+  /**
+   * Build (lazily) and return the shared 4-vertex unit quad VBO used by every
+   * instanced renderer. Vertex layout per vertex is `vec2(side, along)`:
+   *   v0 = (-1, 0)  — A end, left
+   *   v1 = ( 1, 0)  — A end, right
+   *   v2 = (-1, 1)  — B end, left
+   *   v3 = ( 1, 1)  — B end, right
+   * Drawn as `TRIANGLE_STRIP`, 4 vertices per instance.
+   */
+  protected getUnitQuad(
+    gl: WebGLRenderingContext | WebGL2RenderingContext,
+  ): WebGLBuffer {
+    if (this.unitQuadBuffer) return this.unitQuadBuffer;
+    const buf = gl.createBuffer()!;
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(
+      gl.ARRAY_BUFFER,
+      new Float32Array([
+        -1, 0,
+        1, 0,
+        -1, 1,
+        1, 1,
+      ]),
+      gl.STATIC_DRAW,
+    );
+    this.unitQuadBuffer = buf;
+    return buf;
   }
 
   onRemove(): void {
@@ -208,6 +387,10 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
     if (gl) {
       for (const cache of this.tileGpuCache.values()) {
         if (cache) this.deleteCacheBuffers(gl, cache);
+      }
+      if (this.unitQuadBuffer) {
+        gl.deleteBuffer(this.unitQuadBuffer);
+        this.unitQuadBuffer = undefined;
       }
       this.onContextLost(gl);
     }
@@ -227,11 +410,21 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
     if (cache.extraBuffers) {
       for (const b of cache.extraBuffers) gl.deleteBuffer(b);
     }
+    if (cache.vao) this.vaoSupport.delete(cache.vao);
+    if (cache.strokeVao) this.vaoSupport.delete(cache.strokeVao);
   }
 
   render(
     gl: WebGLRenderingContext | WebGL2RenderingContext,
     matrix: Iterable<number>,
+    // The third arg is `RenderArgs` on MapLibre v5 (includes the projection
+    // mode), absent on v3 / v4. Typed as `unknown` so the override compiles
+    // against any of the three majors without forking type defs. v5's globe
+    // projection is *not* supported by this adapter today: shaders assume
+    // mercator-unit-square inputs and v5 globe passes a 4D projector. The
+    // package's peerDep is pinned to `^3 || ^4`; v5 users should either stay
+    // on v4 for STT or contribute a globe-aware projection branch.
+    _renderArgs?: unknown,
   ): void {
     if (!this.tileset || !this.map) return;
 
@@ -272,6 +465,9 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
         this.drawTile(gl, tile, layer, cache, ctx);
       }
     }
+    // Unbind so unrelated GL consumers (basemap, other custom layers) start
+    // from a clean attribute slate.
+    this.unbindVao();
   }
 
   // ------------------------------------------------------------------------
@@ -331,6 +527,55 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
   // Helpers for subclasses
   // ------------------------------------------------------------------------
 
+  /**
+   * Bind (or lazily build) a VAO for the given cache slot. On the first call
+   * the `setup` callback runs inside a VAO recording scope so all
+   * `bindBuffer(ARRAY_BUFFER, ...)` / `vertexAttribPointer` / element-buffer
+   * binds are captured. On every subsequent call we just `bindVertexArray(vao)`
+   * and skip the setup.
+   *
+   * When VAOs aren't available (very old WebGL1 without OES_vertex_array_object)
+   * we still run `setup` every draw — correctness preserved, perf falls back to
+   * the legacy path.
+   *
+   * The `slot` parameter selects which VAO slot on the cache to use. Subclasses
+   * with two passes per tile (polygon fill + stroke, heatmap accumulate) can
+   * use 'main' and 'stroke' independently.
+   */
+  protected bindVaoOrSetup(
+    cache: TileGpuCache,
+    setup: () => void,
+    slot: 'main' | 'stroke' = 'main',
+  ): void {
+    if (!this.vaoSupport.enabled) {
+      setup();
+      return;
+    }
+    const existing = slot === 'main' ? cache.vao : cache.strokeVao;
+    if (existing) {
+      this.vaoSupport.bind(existing);
+      return;
+    }
+    const vao = this.vaoSupport.create();
+    if (!vao) {
+      setup();
+      return;
+    }
+    this.vaoSupport.bind(vao);
+    setup();
+    if (slot === 'main') cache.vao = vao;
+    else cache.strokeVao = vao;
+  }
+
+  /**
+   * Unbind any VAO that may be currently active. Call once at the end of a
+   * frame so subsequent non-STT MapLibre passes don't inherit our attribute
+   * bindings.
+   */
+  protected unbindVao(): void {
+    if (this.vaoSupport.enabled) this.vaoSupport.bind(null);
+  }
+
   /** GL state shared across all STT layers. Subclasses can extend in drawTile. */
   protected applySharedGlState(
     gl: WebGLRenderingContext | WebGL2RenderingContext,
@@ -354,6 +599,31 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
     gl.bindBuffer(gl.ARRAY_BUFFER, buf);
     gl.bufferData(gl.ARRAY_BUFFER, projected, gl.STATIC_DRAW);
     return buf;
+  }
+
+  /**
+   * Async sibling of `projectAndUpload`: when `useWorkerProjection` is on and
+   * the input is large enough to be worth the postMessage overhead, runs the
+   * projection in a shared Web Worker. Otherwise falls back to the
+   * synchronous helper.
+   *
+   * Returns the projected `Float32Array` (not a buffer) because subclasses
+   * sometimes want to inspect / reformat the data before upload.
+   */
+  protected async projectAsync(
+    positions: Float64Array | Float32Array,
+    dimensions: 2 | 3,
+  ): Promise<Float32Array> {
+    const min = this.opts.workerProjectionMinVertices ?? 1000;
+    const vertexCount = positions.length / dimensions;
+    if (!this.opts.useWorkerProjection || vertexCount < min) {
+      return projectPositions(positions, dimensions);
+    }
+    // We copy the input before transferring, because the buffer's owner
+    // (caller) may still want it for non-projection purposes (e.g. polygon
+    // earcut on flat lon/lat). The copy is cheaper than a re-fetch.
+    const copy = positions.slice();
+    return getProjectionPool().project(copy, dimensions);
   }
 
   /**

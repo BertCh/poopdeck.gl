@@ -34,6 +34,7 @@ import {
   type TileGpuCache,
   type RGBA8,
 } from './base-layer';
+import { TIME_WINDOW_GLSL } from './shaders/time-window.glsl';
 
 export interface STTHeatmapLayerOptions extends STTBaseLayerOptions {
   /** Splat radius in pixels. */
@@ -80,13 +81,11 @@ const ACCUM_VS = `
   uniform float uFadeIn;
   uniform float uFadeOut;
   varying float vWeight;
+${TIME_WINDOW_GLSL}
   void main() {
     gl_Position = uMatrix * vec4(aMercator.x, aMercator.y, 0.0, 1.0);
     gl_PointSize = uRadius * 2.0;
-    float inside = (aTime.y >= uWindowStart && aTime.x <= uWindowEnd) ? 1.0 : 0.0;
-    float entering = (uFadeIn > 0.0) ? clamp((aTime.y - uWindowStart) / uFadeIn, 0.0, 1.0) : 1.0;
-    float leaving = (uFadeOut > 0.0) ? clamp((uWindowEnd - aTime.x) / uFadeOut, 0.0, 1.0) : 1.0;
-    vWeight = aWeight * inside * min(entering, leaving);
+    vWeight = aWeight * sttTimeWindowAlpha(aTime, uWindowStart, uWindowEnd, uFadeIn, uFadeOut);
   }
 `;
 
@@ -157,6 +156,18 @@ interface HeatmapGpuCache extends TileGpuCache {
   weightBuffer?: WebGLBuffer;
 }
 
+/** Resolved accumulator-texture format, decided once per layer. */
+interface AccumFormat {
+  /** internalFormat for texImage2D (RGBA / RGBA16F / RGBA32F). */
+  internalFormat: number;
+  /** format for texImage2D. */
+  format: number;
+  /** type for texImage2D (UNSIGNED_BYTE / HALF_FLOAT / FLOAT). */
+  type: number;
+  /** Pretty label, for logging only. */
+  label: 'RGBA8' | 'RGBA16F' | 'RGBA32F';
+}
+
 export class STTHeatmapLayer extends STTBaseLayer {
   private heatOpts: Required<
     Pick<STTHeatmapLayerOptions, 'radiusPixels' | 'intensity' | 'threshold'>
@@ -173,6 +184,18 @@ export class STTHeatmapLayer extends STTBaseLayer {
   private accumTexture?: WebGLTexture;
   private accumWidth = 0;
   private accumHeight = 0;
+  /**
+   * Internal format probe result. RGBA8 saturates at ~255 splats per pixel,
+   * which is easy to hit on dense events (rideshare in Manhattan, eqs near
+   * the Pacific Rim). When the runtime supports a half-float colour buffer
+   * (WebGL2 `EXT_color_buffer_half_float` / WebGL1 + OES_texture_half_float),
+   * we allocate `RGBA16F` and the additive blend has ~65k headroom per
+   * channel. Falls back to `RGBA8` everywhere else — heatmaps still render,
+   * just with the historical saturation behaviour.
+   *
+   * `null` = uninitialized; resolved on first `ensureAccumFramebuffer`.
+   */
+  private accumFormat: AccumFormat | null = null;
 
   // 256×1 RGBA palette texture sampled by accumulated intensity.
   private paletteTexture?: WebGLTexture;
@@ -393,29 +416,29 @@ export class STTHeatmapLayer extends STTBaseLayer {
         gl.uniform1f(ah.uWindowStart, ctx.windowStart);
         gl.uniform1f(ah.uWindowEnd, ctx.windowEnd);
 
-        gl.bindBuffer(gl.ARRAY_BUFFER, cache.positionBuffer);
-        gl.enableVertexAttribArray(ah.aMercator);
-        gl.vertexAttribPointer(ah.aMercator, 3, gl.FLOAT, false, 0, 0);
+        // VAO captures position/time/weight attribute state on first frame.
+        this.bindVaoOrSetup(cache, () => {
+          gl.bindBuffer(gl.ARRAY_BUFFER, cache.positionBuffer);
+          gl.enableVertexAttribArray(ah.aMercator);
+          gl.vertexAttribPointer(ah.aMercator, 3, gl.FLOAT, false, 0, 0);
 
-        gl.bindBuffer(gl.ARRAY_BUFFER, cache.timeBuffer);
-        gl.enableVertexAttribArray(ah.aTime);
-        gl.vertexAttribPointer(ah.aTime, 2, gl.FLOAT, false, 0, 0);
+          gl.bindBuffer(gl.ARRAY_BUFFER, cache.timeBuffer);
+          gl.enableVertexAttribArray(ah.aTime);
+          gl.vertexAttribPointer(ah.aTime, 2, gl.FLOAT, false, 0, 0);
 
-        if (cache.weightBuffer && ah.aWeight >= 0) {
-          gl.bindBuffer(gl.ARRAY_BUFFER, cache.weightBuffer);
-          gl.enableVertexAttribArray(ah.aWeight);
-          gl.vertexAttribPointer(ah.aWeight, 1, gl.FLOAT, false, 0, 0);
-        }
+          if (cache.weightBuffer && ah.aWeight >= 0) {
+            gl.bindBuffer(gl.ARRAY_BUFFER, cache.weightBuffer);
+            gl.enableVertexAttribArray(ah.aWeight);
+            gl.vertexAttribPointer(ah.aWeight, 1, gl.FLOAT, false, 0, 0);
+          }
+        });
 
         gl.drawArrays(gl.POINTS, 0, cache.vertexCount);
-
-        gl.disableVertexAttribArray(ah.aMercator);
-        gl.disableVertexAttribArray(ah.aTime);
-        if (cache.weightBuffer && ah.aWeight >= 0) {
-          gl.disableVertexAttribArray(ah.aWeight);
-        }
       }
     }
+    // Unbind before pass 2 — the fullscreen quad uses a different VBO and
+    // shouldn't inherit any per-tile attribute state.
+    this.unbindVao();
 
     // ---- Pass 2: colour-ramp lookup against the default framebuffer ----
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -462,21 +485,24 @@ export class STTHeatmapLayer extends STTBaseLayer {
     const h = gl.drawingBufferHeight | 0;
     if (w === this.accumWidth && h === this.accumHeight && this.fbo) return;
 
+    if (!this.accumFormat) this.accumFormat = this.probeAccumFormat(gl);
+
     // Drop the old FBO + texture.
     if (this.fbo) gl.deleteFramebuffer(this.fbo);
     if (this.accumTexture) gl.deleteTexture(this.accumTexture);
     this.fbo = gl.createFramebuffer()!;
     this.accumTexture = gl.createTexture()!;
     gl.bindTexture(gl.TEXTURE_2D, this.accumTexture);
+    const fmt = this.accumFormat;
     gl.texImage2D(
       gl.TEXTURE_2D,
       0,
-      gl.RGBA,
+      fmt.internalFormat,
       w,
       h,
       0,
-      gl.RGBA,
-      gl.UNSIGNED_BYTE,
+      fmt.format,
+      fmt.type,
       null,
     );
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
@@ -491,9 +517,87 @@ export class STTHeatmapLayer extends STTBaseLayer {
       this.accumTexture,
       0,
     );
+    // Some drivers refuse RGBA16F as colour-renderable even after advertising
+    // the extension. Verify completeness and degrade to RGBA8 if the FBO is
+    // unusable. Future allocations skip the probe by reusing the demoted
+    // accumFormat.
+    const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
+    if (status !== gl.FRAMEBUFFER_COMPLETE && fmt.label !== 'RGBA8') {
+      gl.deleteFramebuffer(this.fbo);
+      gl.deleteTexture(this.accumTexture);
+      this.accumFormat = {
+        internalFormat: gl.RGBA,
+        format: gl.RGBA,
+        type: gl.UNSIGNED_BYTE,
+        label: 'RGBA8',
+      };
+      this.fbo = undefined;
+      this.accumTexture = undefined;
+      // Recursively retry with the demoted format.
+      this.accumWidth = 0;
+      this.accumHeight = 0;
+      this.ensureAccumFramebuffer(gl);
+      return;
+    }
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     this.accumWidth = w;
     this.accumHeight = h;
+  }
+
+  /**
+   * Resolve the best available colour-renderable RGBA format. We prefer
+   * RGBA16F (~65k splats/pixel headroom, the deck.gl heatmap default on
+   * modern hardware) and fall back through RGBA8 (~255 splats — the legacy
+   * behaviour). RGBA32F is intentionally skipped: extra precision is not
+   * useful for this accumulator and many drivers either don't expose it as
+   * colour-renderable or refuse to blend it.
+   */
+  private probeAccumFormat(
+    gl: WebGLRenderingContext | WebGL2RenderingContext,
+  ): AccumFormat {
+    const isWebGL2 =
+      typeof WebGL2RenderingContext !== 'undefined' &&
+      gl instanceof WebGL2RenderingContext;
+    if (isWebGL2) {
+      // WebGL2 path: requires EXT_color_buffer_half_float (or
+      // EXT_color_buffer_float, which is a superset). RGBA16F internalFormat
+      // is in core; only the colour-renderable property comes from the ext.
+      const gl2 = gl as WebGL2RenderingContext;
+      const hasHalf =
+        !!gl.getExtension('EXT_color_buffer_half_float') ||
+        !!gl.getExtension('EXT_color_buffer_float');
+      if (hasHalf) {
+        return {
+          internalFormat: (gl2 as unknown as { RGBA16F: number }).RGBA16F,
+          format: gl.RGBA,
+          type: (gl2 as unknown as { HALF_FLOAT: number }).HALF_FLOAT,
+          label: 'RGBA16F',
+        };
+      }
+    } else {
+      // WebGL1 path: OES_texture_half_float gives us HALF_FLOAT_OES as the
+      // texture data type. The colour-renderable property comes from
+      // EXT_color_buffer_half_float (separate from the texture ext). When
+      // both are present, RGBA + HALF_FLOAT_OES is renderable.
+      const halfTex = gl.getExtension('OES_texture_half_float') as {
+        HALF_FLOAT_OES: number;
+      } | null;
+      const halfRender = gl.getExtension('EXT_color_buffer_half_float');
+      if (halfTex && halfRender) {
+        return {
+          internalFormat: gl.RGBA,
+          format: gl.RGBA,
+          type: halfTex.HALF_FLOAT_OES,
+          label: 'RGBA16F',
+        };
+      }
+    }
+    return {
+      internalFormat: gl.RGBA,
+      format: gl.RGBA,
+      type: gl.UNSIGNED_BYTE,
+      label: 'RGBA8',
+    };
   }
 
   private uploadPalette(
