@@ -174,13 +174,26 @@ export class AnimatedPointLayer extends SpatioTemporalLayer<AnimatedPointLayerPr
   static layerName = 'AnimatedPointLayer';
   
   // ========== CONSOLIDATED DATA CACHE ==========
-  // Merges all tile data into a single data object for ONE draw call
+  // Merges all tile data into a single data object for ONE draw call.
+  // `paletteRef` / `mappingRef` hold the object identity of the palette and
+  // mapping that produced the cached `colors` buffer; mutating either while
+  // keeping the same field name on `fillColor` invalidates the cache.
+  // Without these, swapping colorPalette/colorMapping returned stale colors.
   private consolidatedDataCache: {
     tiles: Tile[] | null;
     frameNumber: number;
     propsKey: string;
+    paletteRef: unknown;
+    mappingRef: unknown;
     data: ConsolidatedData | null;
-  } = { tiles: null, frameNumber: -1, propsKey: '', data: null };
+  } = {
+    tiles: null,
+    frameNumber: -1,
+    propsKey: '',
+    paletteRef: null,
+    mappingRef: null,
+    data: null,
+  };
   
   // ========== MEMOIZED LAYER CACHE ==========
   // Reuse the same layer instance when only time changes (not tiles)
@@ -229,8 +242,17 @@ export class AnimatedPointLayer extends SpatioTemporalLayer<AnimatedPointLayerPr
   
   finalizeState(context: LayerContext): void {
     super.finalizeState(context);
-    // Clean up cached data
-    this.consolidatedDataCache = { tiles: null, frameNumber: -1, propsKey: '', data: null };
+    // Clean up cached data — shape must match the field declaration above
+    // (including paletteRef / mappingRef which were added to fix the
+    // stale-palette cache bug).
+    this.consolidatedDataCache = {
+      tiles: null,
+      frameNumber: -1,
+      propsKey: '',
+      paletteRef: null,
+      mappingRef: null,
+      data: null,
+    };
     this.cachedLayer = null;
   }
   
@@ -319,11 +341,17 @@ export class AnimatedPointLayer extends SpatioTemporalLayer<AnimatedPointLayerPr
     const fillColorProp = typeof this.props.fillColor === 'string' ? this.props.fillColor : '';
     const radiusProp = typeof this.props.radius === 'string' ? this.props.radius : '';
     const propsKey = `${fillColorProp}|${radiusProp}`;
+    // Palette / mapping identity matters only when colors come from a
+    // categorical property — the constant-color branch doesn't read them.
+    const paletteRef = fillColorProp ? this.props.colorPalette ?? null : null;
+    const mappingRef = fillColorProp ? this.props.colorMapping ?? null : null;
     const cache = this.consolidatedDataCache;
 
     if (
       cache.data &&
       cache.propsKey === propsKey &&
+      cache.paletteRef === paletteRef &&
+      cache.mappingRef === mappingRef &&
       cache.tiles &&
       (cache.tiles === tiles || tilesContentMatch(cache.tiles, tiles))
     ) {
@@ -337,6 +365,8 @@ export class AnimatedPointLayer extends SpatioTemporalLayer<AnimatedPointLayerPr
       tiles,
       frameNumber,
       propsKey,
+      paletteRef,
+      mappingRef,
       data,
     };
     this.cachedLayer = null;
@@ -493,7 +523,6 @@ export class AnimatedPointLayer extends SpatioTemporalLayer<AnimatedPointLayerPr
     const constColor = (Array.isArray(this.props.fillColor)
       ? this.props.fillColor
       : [255, 128, 0, 255]) as Color;
-    const snapshotTime = this.getCurrentTime();
 
     const attributes: Record<string, any> = {
       getPosition: { value: positions, size: 3 },
@@ -531,7 +560,13 @@ export class AnimatedPointLayer extends SpatioTemporalLayer<AnimatedPointLayerPr
       getFillColor: constColor,
 
       extensions: [TIME_FILTER_EXTENSION],
-      currentTime: snapshotTime,
+      // Dynamic time: TimeFilterExtension.draw() reads getTime() every frame,
+      // so the layer instance can be memoized across animation ticks and only
+      // the uniform changes. Passing `currentTime: snapshotTime` froze the
+      // shader uniform until the next tile-set change, which produced a
+      // visible "points stop animating between tile churn" bug. Paths and
+      // trips already use the getTime path; points now match.
+      getTime: this.boundGetTime,
       timeOffset,
       timeWindow,
 

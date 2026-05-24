@@ -2,3 +2,4 @@ output/
 test-results/
 playwright-report/
 .playwright/
+tools/render-test/output/

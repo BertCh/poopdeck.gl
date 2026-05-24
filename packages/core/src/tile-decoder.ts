@@ -12,6 +12,7 @@
 
 import { decompress } from './compression';
 import { decodeTile } from './tile';
+import { emit as emitTelemetry } from './telemetry';
 import type { Compression, Tile, TileId, TimeRange } from './types';
 
 /** A single decode request. Compressed bytes are owned by the caller. */
@@ -33,8 +34,25 @@ export interface TileDecoder {
  */
 export class InlineTileDecoder implements TileDecoder {
   async decode({ id, timeRange, compressed, compression }: DecodeArgs): Promise<Tile> {
+    const t0 = typeof performance !== 'undefined' ? performance.now() : Date.now();
     const payload = await decompress(new Uint8Array(compressed), compression);
-    return decodeTile(payload, id, timeRange);
+    const tDecompress = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    const tile = decodeTile(payload, id, timeRange);
+    const t1 = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    // Emit telemetry only when the probe is enabled. Capturing compressed
+    // + decompressed sizes lets the perf probe attribute slow decodes to
+    // either decompression (compression hot-path bottleneck) or IPC parse
+    // (Arrow IPC reader bottleneck).
+    emitTelemetry('decode', {
+      tileKey: `${id.z}/${id.x}/${id.y}/${id.t}`,
+      decompressMs: tDecompress - t0,
+      ipcMs: t1 - tDecompress,
+      ms: t1 - t0,
+      compressedBytes: compressed.byteLength,
+      payloadBytes: payload.byteLength,
+      path: 'inline',
+    });
+    return tile;
   }
   finalize(): void {
     /* nothing to release */
@@ -126,7 +144,14 @@ export class WorkerTileDecoder implements TileDecoder {
     // keeps the original in its byte cache for re-decode after eviction or
     // for a viewport tile that's also in the prefetch queue.
     const compressedCopy = args.compressed.slice(0);
+    const compressedBytes = compressedCopy.byteLength;
     const owner = target;
+    // Capture round-trip start so we can emit a probe sample including the
+    // main-thread→worker→main-thread queue latency. Useful when the pool
+    // is saturated and the bottleneck is queue wait, not raw decode.
+    const tStart =
+      typeof performance !== 'undefined' ? performance.now() : Date.now();
+    const tileKey = `${args.id.z}/${args.id.x}/${args.id.y}/${args.id.t}`;
 
     return new Promise<Tile>((resolve, reject) => {
       this.pending.set(requestId, {
@@ -134,6 +159,14 @@ export class WorkerTileDecoder implements TileDecoder {
           owner.pending = Math.max(0, owner.pending - 1);
           owner.inFlight.delete(requestId);
           this.requestOwner.delete(requestId);
+          const tEnd =
+            typeof performance !== 'undefined' ? performance.now() : Date.now();
+          emitTelemetry('decode', {
+            tileKey,
+            ms: tEnd - tStart,
+            compressedBytes,
+            path: 'worker',
+          });
           resolve(tile);
         },
         reject: (err) => {

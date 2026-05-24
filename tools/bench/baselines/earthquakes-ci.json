@@ -1,0 +1,11 @@
+{
+  "archive": "tools/bench/baselines/earthquakes-ci.stt",
+  "archive_size_bytes": 750205,
+  "open_ms": 6.637875000000008,
+  "tile_count": 3627,
+  "decode_tiles_per_s": 5407.670181523402,
+  "decode_mb_per_s": 3.9257613578799564,
+  "decode_p95_ms": 0.2769999999999868,
+  "coalesce_ratio": 2000,
+  "compression_ratio": 4.24003341584607
+}

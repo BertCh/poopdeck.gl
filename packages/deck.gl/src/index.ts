@@ -17,6 +17,18 @@ export { CategoryColorExtension } from './category-color-extension';
 // Controllers
 export { TimeController } from './time-controller';
 
+// Telemetry — opt-in perf probe channel used by tools/render-test and
+// the showcase HUD. No-op when `globalThis.__sttProbe` is unset.
+export {
+  emit,
+  measure,
+  disableProbe,
+  enableProbe,
+  snapshot,
+  getSnapshot,
+} from './telemetry';
+export type { ProbeChannel } from './telemetry';
+
 // Types
 export type { SpatioTemporalLayerProps } from './spatiotemporal-layer';
 export type { AnimatedPointLayerProps } from './animated-point-layer';

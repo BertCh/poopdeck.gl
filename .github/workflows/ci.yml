@@ -56,18 +56,19 @@ jobs:
           node-version: '20'
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - name: Build release binaries
-        run: cargo build --release -p stt-build -p stt-generate
-      - name: Generate a small reference dataset
-        run: ./target/release/stt-generate earthquakes --cached --output tools/bench/baselines/earthquakes.stt || true
-      - name: Run bench against baseline
+      - run: pnpm --filter '@stt/core' build
+      - name: Run bench against committed fixture baseline
+        # The 733 KB `earthquakes-ci.stt` fixture and its matching JSON
+        # baseline are committed to the repo (see tools/bench/baselines/),
+        # so the regression check is a pure local comparison with no
+        # network or USGS dependency. Tolerance is 15% — generous enough
+        # to absorb cold-start noise on shared CI runners while still
+        # catching real perf cliffs.
         run: |
-          if [ -f tools/bench/baselines/earthquakes.json ] && [ -f tools/bench/baselines/earthquakes.stt ]; then
-            node tools/bench/src/index.mjs tools/bench/baselines/earthquakes.stt \
-              --check tools/bench/baselines/earthquakes.json --tolerance 0.15
-          else
-            echo "No baseline pair found; skipping regression check."
-          fi
+          node tools/bench/src/index.mjs \
+            tools/bench/baselines/earthquakes-ci.stt \
+            --check tools/bench/baselines/earthquakes-ci.json \
+            --tolerance 0.15
 
   showcase-probe:
     name: Showcase (all demos load)

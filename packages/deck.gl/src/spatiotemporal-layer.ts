@@ -10,6 +10,7 @@ import { STTArchive } from '@stt/core';
 import { SpatiotemporalTileset } from '@stt/core';
 import type { Tile, BoundingBox, ArchiveMetadata } from '@stt/core';
 import { TimeController } from './time-controller';
+import { snapshot } from './telemetry';
 
 const DEBUG = false;
 
@@ -460,10 +461,23 @@ export class SpatioTemporalLayer<
     
     // Track loading state (doesn't trigger re-render)
     this.state.isLoaded = tiles.length > 0;
-    
+
+    // Publish tileset stats so the HUD / probe consumers can read them
+    // without a getter callback. snapshot() is a no-op when the probe isn't
+    // enabled, so this is free in production.
+    const tilesetStats = tileset.getCacheStats();
+    snapshot('tileset.stats', {
+      ...tilesetStats,
+      visibleTiles: tiles.length,
+      layerId: this.props.id,
+    });
+    const archive = this.state.archive;
+    if (archive) {
+      snapshot('archive.stats', archive.getCacheStats());
+    }
+
     if (DEBUG) {
-      const stats = tileset.getCacheStats();
-      console.log('[STL] Tileset updated - frame:', frameNumber, 'tiles:', tiles.length, 'stats:', stats);
+      console.log('[STL] Tileset updated - frame:', frameNumber, 'tiles:', tiles.length, 'stats:', tilesetStats);
     }
   }
 

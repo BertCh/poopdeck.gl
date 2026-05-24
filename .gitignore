@@ -47,6 +47,9 @@ temp_eval/
 
 # Tile files
 *.stt
+# Exception: the tiny bench fixture is checked in so CI can run regression
+# checks without generating data over the network.
+!tools/bench/baselines/earthquakes-ci.stt
 *.mbtiles
 *.pmtiles
 test-data/*.json
@@ -78,3 +81,4 @@ scripts/data-generation/osrm-data/
 *.osm.pbf
 *.osrm
 *.osrm.*
+.claude/

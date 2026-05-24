@@ -8,6 +8,7 @@
     "e2e": "playwright test",
     "e2e:headed": "playwright test --headed",
     "probe": "node probe-all-demos.mjs",
+    "probe:scale": "node probe-scale-sweep.mjs",
     "install-browser": "playwright install chromium"
   },
   "devDependencies": {

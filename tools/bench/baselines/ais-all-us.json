@@ -1,0 +1,11 @@
+{
+  "archive": "examples/showcase/public/data/ais-all-us.stt",
+  "archive_size_bytes": 1250968038,
+  "open_ms": 343.93425,
+  "tile_count": 559809,
+  "decode_tiles_per_s": 167.94276636949442,
+  "decode_mb_per_s": 31.67536726440784,
+  "decode_p95_ms": 33.21991600000001,
+  "coalesce_ratio": 117.6470588235294,
+  "compression_ratio": 3.0811759396443748
+}

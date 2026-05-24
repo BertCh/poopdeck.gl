@@ -1,0 +1,11 @@
+{
+  "archive": "examples/showcase/public/data/earthquakes-v2.stt",
+  "archive_size_bytes": 87206000,
+  "open_ms": 235.17562500000003,
+  "tile_count": 350594,
+  "decode_tiles_per_s": 5129.325241316672,
+  "decode_mb_per_s": 3.9182832046351255,
+  "decode_p95_ms": 0.3044160000000602,
+  "coalesce_ratio": 2000,
+  "compression_ratio": 4.192716049450704
+}
