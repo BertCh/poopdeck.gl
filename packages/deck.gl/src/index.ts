@@ -17,6 +17,9 @@ export { CategoryColorExtension } from './category-color-extension';
 // Controllers
 export { TimeController } from './time-controller';
 
+// Telemetry (opt-in; no-op when globalThis.__sttProbe is not set)
+export { emit as emitTelemetry } from './telemetry';
+
 // Types
 export type { SpatioTemporalLayerProps } from './spatiotemporal-layer';
 export type { AnimatedPointLayerProps } from './animated-point-layer';
