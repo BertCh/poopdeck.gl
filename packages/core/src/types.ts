@@ -65,12 +65,10 @@ export interface ArchiveMetadata {
    * This enables predictable prefetching and efficient animation.
    */
   temporalBucketMs?: number;
-  /**
-   * Optional server-aggregated summary tier descriptor. When set, the archive
-   * carries summary tiles alongside the raw tiles; the tileset can dispatch
-   * to whichever tier is appropriate for the current zoom.
-   */
+  /** Optional server-aggregated summary tier (H3 / Quadbin hex bins). */
   summaryTier?: SummaryTier;
+  /** Optional temporal LOD pyramid (orthogonal to the summary tier). */
+  temporalLod?: TemporalLodLevel[];
 }
 
 /** Aggregation scheme for the summary tier. */
@@ -81,31 +79,24 @@ export type SummaryAggregation = 'count' | 'sum' | 'mean' | 'min' | 'max';
 
 /** Descriptor for one aggregated column. */
 export interface SummaryColumn {
-  /**
-   * Source property name in the raw features. Ignored for `count`.
-   * The on-wire column name is `<agg>_<name>` (e.g. `mean_magnitude`),
-   * except `count` which is emitted as the bare `count` column.
-   */
   name: string;
   agg: SummaryAggregation;
 }
 
-/**
- * Server-aggregated low-zoom tier. See the Rust
- * `stt_core::metadata::SummaryTier` doc for the on-disk shape.
- */
+/** Server-aggregated low-zoom tier. */
 export interface SummaryTier {
   scheme: SummaryScheme;
-  /** Inclusive minimum zoom at which summary tiles exist. */
   minZoom: number;
-  /** Inclusive maximum zoom at which summary tiles exist. */
   maxZoom: number;
-  /** Cell resolution at each zoom in `[minZoom..=maxZoom]`. */
   cellResolutionPerZoom: number[];
-  /** Aggregated columns. The implicit `count` is always present. */
   columns: SummaryColumn[];
-  /** Layer name carried in summary tile frames (defaults to `summary`). */
   layerName: string;
+}
+
+/** One level of a temporal LOD pyramid. */
+export interface TemporalLodLevel {
+  bucketMs: number;
+  maxZoomLevel: number;
 }
 
 /** Layer information */
@@ -321,6 +312,15 @@ export interface TileEntry {
   featureCount: number;
   compression: Compression;
   uncompressedSize: number;
+  /**
+   * Temporal bucket size in milliseconds this tile spans.
+   *
+   * `undefined` when the archive predates the temporal-LOD scaffold (the
+   * directory column isn't present); the reader treats those tiles as
+   * belonging to the archive's base `temporalBucketMs`. LOD-aware archives
+   * always populate this so a reader can dispatch on bucket size.
+   */
+  temporalBucketMs?: number;
 }
 
 /** Archive index */
