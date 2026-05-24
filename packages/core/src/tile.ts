@@ -121,20 +121,42 @@ function extractGeometry(
   return { positions, startIndices };
 }
 
-/** Extract a `List<Int64>` per-vertex time column as a flat Float32Array. */
+/**
+ * Extract the per-vertex time column.
+ *
+ * v3 layers carry the column as `List<UInt16>` deltas relative to a
+ * per-layer `(origin, step)` recorded in schema metadata. v2 layers (and
+ * v3 layers whose temporal span exceeds u16 * step) keep the absolute
+ * `List<Int64>` shape. Either way we return one f32 relative to the
+ * tile-level `timeOffset` for direct GPU upload.
+ */
 function extractVertexTimes(
   vec: Vector | null,
-  timeOffset: number
+  timeOffset: number,
+  origin: number,
+  step: number,
 ): Float32Array | undefined {
   if (!vec) return undefined;
   const data = chunk(vec);
   const offsets: Int32Array = data.valueOffsets;
-  const childValues: BigInt64Array = data.children[0].values;
+  const childValues = data.children[0].values as
+    | BigInt64Array
+    | Uint16Array
+    | Int32Array;
   const base = offsets[data.offset];
   const total = offsets[data.offset + data.length] - base;
   const out = new Float32Array(total);
-  for (let i = 0; i < total; i++) {
-    out[i] = Number(childValues[base + i]) - timeOffset;
+  // childValues is a BigInt64Array for the v2 absolute path and a
+  // Uint16Array for the v3 delta path. Branch once outside the loop so
+  // the tight loop stays monomorphic.
+  if (childValues instanceof BigInt64Array) {
+    for (let i = 0; i < total; i++) {
+      out[i] = Number(childValues[base + i]) - timeOffset;
+    }
+  } else {
+    for (let i = 0; i < total; i++) {
+      out[i] = origin + childValues[base + i] * step - timeOffset;
+    }
   }
   return out;
 }
@@ -181,9 +203,17 @@ function tableToBinaryFeatures(table: Table): BinaryFeatures {
   const { positions, startIndices } = extractGeometry(geomVec, kind);
 
   // --- per-vertex times ---
+  // v3 layers carry the origin/step pair as schema metadata; v2 layers
+  // (and v3 layers with the i64 fallback) leave them absent, which we
+  // treat as (origin=0, step=1) so the delta-vs-absolute branch still
+  // produces correct numbers (Int64 path ignores both).
+  const origin = Number(table.schema.metadata.get('stt:vertex_time_origin_ms') ?? 0);
+  const step = Number(table.schema.metadata.get('stt:vertex_time_step_ms') ?? 1);
   const vertexTimestamps = extractVertexTimes(
     table.getChild('vertex_time') ?? null,
-    timeOffset
+    timeOffset,
+    origin,
+    step,
   );
 
   // --- properties ---
