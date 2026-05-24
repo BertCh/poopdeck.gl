@@ -107,12 +107,54 @@ All integers are little-endian. `ipc stream bytes` is the output of an Arrow
 
 Geometry uses the GeoArrow extension metadata key
 `ARROW:extension:name` with values `geoarrow.point`, `geoarrow.linestring`,
-or `geoarrow.polygon`. Coordinates are interleaved `[x, y]` in WGS84
-degrees; the writer does **not** quantize or delta-encode — gzip on the IPC
-bytes does the work.
+or `geoarrow.polygon` — see [GeoArrow interop](#geoarrow-interop) below.
+Coordinates are interleaved `[x, y]` in WGS84 degrees; the writer does
+**not** quantize or delta-encode — gzip or zstd (header `compression`)
+on the IPC bytes does the work.
 
 Layers within one tile MUST agree on feature count for the rows they each
 cover, but they MAY carry different property columns.
+
+### GeoArrow interop
+
+An STT tile layer **is** a valid [GeoArrow](https://geoarrow.org/format.html)
+record batch. The Rust writer (`crates/stt-core/src/arrow_tile.rs`) tags
+the `geometry` field's Arrow metadata with the standard extension key:
+
+| field metadata key       | values                                                     |
+| ------------------------ | ---------------------------------------------------------- |
+| `ARROW:extension:name`   | `geoarrow.point` / `geoarrow.linestring` / `geoarrow.polygon` |
+
+Coordinates use the GeoArrow **interleaved** convention
+(`FixedSizeList<Float64, 2>` of `[x, y]` pairs), which matches the
+`xy` storage Lonboard and `@geoarrow/deck.gl-layers` consume by
+default. Polygons are encoded as `List<List<FixedSizeList<Float64, 2>>>`
+(rings inside features), and linestrings as `List<FixedSizeList<Float64, 2>>`.
+
+The schema also carries a legacy `stt:geometry` key in
+schema-level metadata for v2 archive back-compat; readers SHOULD
+prefer the standard field-level key and fall back to `stt:geometry`
+only when it is absent.
+
+In TypeScript, the decoded `Layer` exposes both surfaces:
+
+```ts
+import { toGeoArrowTable } from '@stt/core';
+import { GeoArrowPathLayer } from '@geoarrow/deck.gl-layers';
+
+const table = toGeoArrowTable(tile.layers[0]);
+new GeoArrowPathLayer({
+  id: 'paths',
+  data: table,
+  getPath: table.getChild('geometry')!,
+});
+```
+
+`Layer.geometryExtensionName` carries the same string for callers
+that want to dispatch on geometry kind without touching the Arrow
+schema directly. This means any GeoArrow-aware renderer
+(`@geoarrow/deck.gl-layers`, Lonboard, geoarrow-rs in WASM) can consume
+STT tiles as-is — no per-tile conversion step.
 
 ### Naming conventions
 
