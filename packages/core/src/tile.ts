@@ -194,8 +194,19 @@ function tableToBinaryFeatures(table: Table): BinaryFeatures {
   // --- ids ---
   const idVec = table.getChild('id');
   const featureIds = new Uint32Array(featureCount);
+  // The archive's `id` column is UInt64. For raw tiles, the lower 32 bits
+  // are always sufficient (we generate IDs from a hash); for summary tiles
+  // the ID IS the H3/quadbin cell index, which at H3 resolutions ≥ 7 does
+  // not fit in 32 bits. We preserve the full BigUint64Array verbatim on
+  // `featureIds64` so the H3SummaryLayer can recover the original cell.
+  let featureIds64: BigUint64Array | undefined;
   if (idVec) {
     const raw = idVec.toArray() as BigUint64Array | Uint32Array;
+    if (raw instanceof BigUint64Array) {
+      // Copy so the slice into the Arrow buffer doesn't keep the IPC view
+      // alive longer than the rest of the binary feature.
+      featureIds64 = new BigUint64Array(raw);
+    }
     for (let i = 0; i < featureCount; i++) featureIds[i] = Number(raw[i]);
   }
 
@@ -318,6 +329,7 @@ function tableToBinaryFeatures(table: Table): BinaryFeatures {
     positions,
     startIndices,
     featureIds,
+    featureIds64,
     startTimes,
     endTimes,
     timeOffset,

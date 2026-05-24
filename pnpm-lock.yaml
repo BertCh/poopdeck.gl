@@ -176,6 +176,9 @@ importers:
       '@stt/core':
         specifier: workspace:*
         version: link:../core
+      h3-js:
+        specifier: ^4.1.0
+        version: 4.4.0
     devDependencies:
       '@types/node':
         specifier: ^20.14.0

@@ -184,7 +184,15 @@ export interface BinaryFeatures {
   
   /** Feature IDs (per feature) */
   featureIds: Uint32Array;
-  
+
+  /**
+   * Optional full-precision 64-bit feature IDs, preserved verbatim from the
+   * archive's Arrow UInt64 `id` column. Present only when the archive needs
+   * full-width IDs (e.g. H3 cell indices at resolution ≥ 7 don't fit in
+   * 32 bits). Most consumers should keep using `featureIds`.
+   */
+  featureIds64?: BigUint64Array;
+
   /**
    * Global feature IDs for cross-tile feature identification.
    * Optional - if not provided, featureIds are used.

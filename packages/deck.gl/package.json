@@ -27,7 +27,8 @@
     "@deck.gl/layers": "^9.3.2",
     "@loaders.gl/core": "^4.2.0",
     "@luma.gl/core": "^9.3.0",
-    "@stt/core": "workspace:*"
+    "@stt/core": "workspace:*",
+    "h3-js": "^4.1.0"
   },
   "peerDependencies": {
     "@deck.gl/core": ">=8.9.0",

@@ -9,6 +9,8 @@ export { AnimatedPathLayer } from './animated-path-layer';
 export { AnimatedPolygonLayer } from './animated-polygon-layer';
 export { AnimatedTripsLayer } from './animated-trips-layer';
 export { HeatmapTimeLayer } from './heatmap-time-layer';
+// Server-aggregated summary tier (renders H3 hexes at low zooms).
+export { H3SummaryLayer } from './h3-summary-layer';
 
 // Extensions
 export { TimeFilterExtension } from './time-filter-extension';
@@ -50,6 +52,7 @@ export type { AnimatedPathLayerProps } from './animated-path-layer';
 export type { AnimatedPolygonLayerProps } from './animated-polygon-layer';
 export type { AnimatedTripsLayerProps } from './animated-trips-layer';
 export type { HeatmapTimeLayerProps } from './heatmap-time-layer';
+export type { H3SummaryLayerProps } from './h3-summary-layer';
 export type { TimeFilterExtensionProps } from './time-filter-extension';
 export type { CategoryColorExtensionProps } from './category-color-extension';
 export type { PolygonTimeFilterExtensionProps } from './polygon-time-filter-extension';
