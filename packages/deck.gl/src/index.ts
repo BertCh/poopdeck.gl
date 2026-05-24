@@ -24,6 +24,16 @@ export { TimeController } from './time-controller';
 // Telemetry (opt-in; no-op when globalThis.__sttProbe is not set)
 export { emit as emitTelemetry } from './telemetry';
 
+// Pure consolidation helpers — kept exported for downstream consumers that
+// want the merged-buffer shape. The animated layers themselves no longer use
+// these (each tile flows through its own sublayer).
+export {
+  consolidatePoints,
+  consolidatePaths,
+  pickLayerTimeOffset,
+} from './consolidate';
+export type { ConsolidatedPoints, ConsolidatedPaths } from './consolidate';
+
 // Types
 export type { SpatioTemporalLayerProps } from './spatiotemporal-layer';
 export type { AnimatedPointLayerProps } from './animated-point-layer';

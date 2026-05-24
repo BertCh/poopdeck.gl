@@ -105,6 +105,25 @@ export interface AnimatedPointLayerProps extends SpatioTemporalLayerProps {
 
   /** Fade-out duration for disappearing points (ms) */
   fadeOutDuration?: number;
+
+  /**
+   * Enable 3D positions (altitude / elevation). The v3 layer infers 3D from
+   * the tile's `positionDimensions` automatically — the prop is kept for
+   * API compatibility with v2 callers and forwarded as a hint. 2D tiles
+   * are padded with z=0; 3D tiles ride zero-copy.
+   */
+  use3D?: boolean;
+
+  /**
+   * Property name to source elevation from when the tile's positions are
+   * 2D. Currently a forward-declared no-op in the v3 layer (the per-tile
+   * binary path uses the tile's stored z if present); the prop is kept on
+   * the type to preserve v2 dataset configs.
+   */
+  elevationProperty?: string;
+
+  /** Scale factor for elevation values. Forward-declared (see `elevationProperty`). */
+  elevationScale?: number;
 }
 
 // Default color palette for categorical data
@@ -218,6 +237,13 @@ export class AnimatedPointLayer extends SpatioTemporalLayer<AnimatedPointLayerPr
     // API compatibility with v2 callers that pass them in).
     fadeInDuration: { type: 'number', value: 300, min: 0 },
     fadeOutDuration: { type: 'number', value: 300, min: 0 },
+
+    // 3D forward-declared props (see prop docstrings). The v3 layer reads 3D
+    // directly from the tile's positionDimensions; these are accepted on the
+    // type so v2 dataset configs continue to compile.
+    use3D: false,
+    elevationProperty: null,
+    elevationScale: { type: 'number', value: 1, min: 0 },
   };
 
   /** Per-tile prepared-data cache. Pruned to the live tile set each render. */
