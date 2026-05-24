@@ -1047,4 +1047,47 @@ describe('AnimatedPolygonLayer per-tile sublayer architecture (v3)', () => {
     (layer as any).renderLayers();
     expect((layer as any).sublayerCache.size).toBe(1);
   });
+
+  it('passes pre-baked triangle indices to SolidPolygonLayer when present', () => {
+    // MLT-style pre-tessellation: when the tile carries `triangles`, the
+    // sublayer's `data.attributes.indices` slot must be wired up so the
+    // PolygonTesselator skips its CPU earcut pass. The legacy path (no
+    // triangles) must not allocate this attribute.
+    const layer = makeLayer();
+    const tile = bigPolygonTile(3);
+    const f = tile.layers[0].features;
+    // 3 features × 6 indices each (a square earcuts to 2 tris).
+    // Indices reference global vertex positions (already shifted by the
+    // decoder before reaching the layer).
+    const tris = new Uint32Array([
+      // feature 0: verts 0..4
+      0, 1, 2, 0, 2, 3,
+      // feature 1: verts 5..9
+      5, 6, 7, 5, 7, 8,
+      // feature 2: verts 10..14
+      10, 11, 12, 10, 12, 13,
+    ]);
+    f.triangles = tris;
+    f.triangleOffsets = new Uint32Array([0, 6, 12, 18]);
+    const built = (layer as any).buildSublayer(
+      (layer as any).prepareTile(tile, tile.layers[0]),
+    );
+    const attrs = built.props.data.attributes;
+    expect(attrs.indices).toBeDefined();
+    // Zero-copy: same Uint32Array reference as the tile carries.
+    expect(attrs.indices.value).toBe(tris);
+    expect(attrs.indices.size).toBe(1);
+    // _normalize must remain false so deck.gl bypasses the PolygonTesselator.
+    expect(built.props._normalize).toBe(false);
+  });
+
+  it('omits the indices attribute when triangles are absent (legacy CPU earcut path)', () => {
+    const layer = makeLayer();
+    const tile = bigPolygonTile(3);
+    // tile.features.triangles is unset → CPU fallback path stays in play.
+    const built = (layer as any).buildSublayer(
+      (layer as any).prepareTile(tile, tile.layers[0]),
+    );
+    expect(built.props.data.attributes.indices).toBeUndefined();
+  });
 });

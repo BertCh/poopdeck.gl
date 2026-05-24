@@ -217,14 +217,37 @@ export interface BinaryFeatures {
    * Per-vertex timestamps for accurate path animation (optional).
    * When present, has same length as positions / positionDimensions.
    * Values are relative to timeOffset.
-   * 
-   * This enables accurate "vehicle at position" animation instead of 
+   *
+   * This enables accurate "vehicle at position" animation instead of
    * linear interpolation between start/end times. Used by AnimatedTripsLayer
    * when available.
-   * 
+   *
    * Similar to deck.gl TripsLayer's getTimestamps accessor.
    */
   vertexTimestamps?: Float32Array;
+
+  /**
+   * Pre-baked polygon triangle indices, MLT-style.
+   *
+   * Flat array of vertex indices (groups of 3 per triangle). Indices are
+   * GLOBAL across the tile: each refers to a vertex in `positions` indexed
+   * by `(positions[2*i], positions[2*i+1])`. The Rust writer stores
+   * feature-LOCAL indices in the on-disk Arrow column; the TS decoder
+   * pre-shifts them by each feature's `startIndices[i]` so the renderer
+   * can hand the buffer straight to deck.gl / WebGL without a second pass.
+   *
+   * Only meaningful for Polygon layers. Present when the source archive
+   * was built with `--pre-tessellate`. Absent → the renderer must fall back
+   * to its own CPU tessellation (earcut) at tile-arrival time.
+   */
+  triangles?: Uint32Array;
+
+  /**
+   * Per-feature offsets into `triangles`. `triangleOffsets[i]` is the first
+   * index for feature `i`; `triangleOffsets[featureCount]` is the total
+   * length. Only present when `triangles` is.
+   */
+  triangleOffsets?: Uint32Array;
   
   // ========== Properties ==========
   

@@ -187,3 +187,18 @@ export function makePolygonTile(): Tile {
     layers: [layer],
   };
 }
+
+/**
+ * The same square as `makePolygonTile`, but with pre-baked triangle indices
+ * attached — what an STT archive built with `--pre-tessellate` would produce.
+ * The decoder pre-shifts triangle indices by each feature's `startIndex`, so
+ * here the indices reference global vertex positions (0..3 for the only
+ * feature, which starts at vertex 0).
+ */
+export function makePreTessellatedPolygonTile(): Tile {
+  const tile = makePolygonTile();
+  // Two triangles split a 4-vert square: [0,1,2] + [0,2,3].
+  tile.layers[0].features.triangles = new Uint32Array([0, 1, 2, 0, 2, 3]);
+  tile.layers[0].features.triangleOffsets = new Uint32Array([0, 6]);
+  return tile;
+}

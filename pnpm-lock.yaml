@@ -146,6 +146,15 @@ importers:
         specifier: ^0.1.1
         version: 0.1.1
     devDependencies:
+      '@types/earcut':
+        specifier: ^2.1.4
+        version: 2.1.4
+      '@types/pako':
+        specifier: ^2.0.3
+        version: 2.0.4
+      earcut:
+        specifier: ^3.0.0
+        version: 3.0.2
       typescript:
         specifier: ^5.4.0
         version: 5.9.3

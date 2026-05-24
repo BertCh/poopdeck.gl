@@ -376,23 +376,51 @@ export class STTPolygonLayer extends STTBaseLayer {
     const fillIndicesArr: number[] = [];
     let nextVertex = 0;
 
+    // MLT-style pre-baked triangle indices: when the tile carries `triangles`
+    // we skip the per-feature earcut call entirely. Decoder hands us GLOBAL
+    // indices into `positions`, so we just translate them into our local
+    // top-vertex slot as the projection loop runs.
+    const preBakedTris = f.triangles;
+    const preBakedOffsets = f.triangleOffsets;
+    const usePreBaked =
+      !!preBakedTris && !!preBakedOffsets && preBakedOffsets.length === featureCount + 1;
+
     for (let fi = 0; fi < featureCount; fi++) {
       const begin = f.startIndices[fi];
       const end = f.startIndices[fi + 1];
       const ringVertexCount = end - begin;
       if (ringVertexCount < 3) continue;
 
-      const flat = new Float64Array(ringVertexCount * 2);
+      // Pre-project the ring once — the projected coords feed both the fill
+      // emit loop and (when used) the earcut input.
       const projected: Array<[number, number]> = new Array(ringVertexCount);
       for (let v = 0; v < ringVertexCount; v++) {
         const lon = f.positions[(begin + v) * dims];
         const lat = f.positions[(begin + v) * dims + 1];
         const [mx, my] = lngLatToMercator(lon, lat);
-        flat[v * 2] = mx;
-        flat[v * 2 + 1] = my;
         projected[v] = [mx, my];
       }
-      const tris = earcut(flat as unknown as number[], undefined, 2);
+
+      // Resolve the triangle indices for this feature. Pre-baked indices
+      // are GLOBAL (refer to vertices in the tile's `positions` buffer); we
+      // shift them down to feature-local before emit so the existing loop
+      // that adds `topVertexBase` works unchanged.
+      let tris: number[];
+      if (usePreBaked) {
+        const triBegin = preBakedOffsets![fi];
+        const triEnd = preBakedOffsets![fi + 1];
+        tris = new Array(triEnd - triBegin);
+        for (let t = 0; t < tris.length; t++) {
+          tris[t] = preBakedTris![triBegin + t] - begin;
+        }
+      } else {
+        const flat = new Float64Array(ringVertexCount * 2);
+        for (let v = 0; v < ringVertexCount; v++) {
+          flat[v * 2] = projected[v][0];
+          flat[v * 2 + 1] = projected[v][1];
+        }
+        tris = earcut(flat as unknown as number[], undefined, 2);
+      }
       if (tris.length === 0) continue;
 
       const ts = f.startTimes[fi];
