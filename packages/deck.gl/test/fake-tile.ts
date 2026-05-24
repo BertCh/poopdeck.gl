@@ -43,6 +43,57 @@ export function makePointTile(opts: FakePointTileOptions): Tile {
   };
 }
 
+export interface FakePolygonTileOptions {
+  /** Each polygon is an array of [lon, lat] vertices (closed ring). */
+  polygons: number[][][];
+  /** Per-feature start times, RELATIVE to timeOffset. */
+  startTimes: number[];
+  /** Per-feature end times, RELATIVE to timeOffset. */
+  endTimes: number[];
+  timeOffset: number;
+  tileId?: { z: number; x: number; y: number; t: number };
+}
+
+export function makePolygonTile(opts: FakePolygonTileOptions): Tile {
+  const featureCount = opts.polygons.length;
+  let totalVertices = 0;
+  for (const p of opts.polygons) totalVertices += p.length;
+
+  const positions = new Float64Array(totalVertices * 2);
+  const startIndices = new Uint32Array(featureCount + 1);
+
+  let v = 0;
+  for (let f = 0; f < featureCount; f++) {
+    startIndices[f] = v;
+    for (const [lon, lat] of opts.polygons[f]) {
+      positions[v * 2] = lon;
+      positions[v * 2 + 1] = lat;
+      v++;
+    }
+  }
+  startIndices[featureCount] = v;
+
+  const features: BinaryFeatures = {
+    featureCount,
+    geometryType: 2 as any,
+    positionDimensions: 2,
+    positions,
+    startIndices,
+    featureIds: new Uint32Array(featureCount),
+    startTimes: new Float32Array(opts.startTimes),
+    endTimes: new Float32Array(opts.endTimes),
+    timeOffset: opts.timeOffset,
+    numericProps: {},
+    categoricalProps: {},
+  };
+
+  return {
+    id: (opts.tileId ?? { z: 0, x: 0, y: 0, t: 0 }) as any,
+    timeRange: { start: 0, end: 0 } as any,
+    layers: [{ name: 'layer0', extent: 4096, features }],
+  };
+}
+
 export interface FakePathTileOptions {
   /** Each path is an array of [lon, lat] vertices */
   paths: number[][][];

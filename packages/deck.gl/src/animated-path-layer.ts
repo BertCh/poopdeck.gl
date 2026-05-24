@@ -24,6 +24,11 @@ import { PathLayer } from '@deck.gl/layers';
 import type { Color, Layer, LayerContext } from '@deck.gl/core';
 import { SpatioTemporalLayer, SpatioTemporalLayerProps } from './spatiotemporal-layer';
 import { TimeFilterExtension } from './time-filter-extension';
+import {
+  CategoryColorExtension,
+  CATEGORY_PALETTE_SIZE,
+} from './category-color-extension';
+import { emit } from './telemetry';
 import type { Tile, Layer as TileLayer } from '@stt/core';
 
 const DEBUG = false;
@@ -64,6 +69,8 @@ interface PreparedTile {
   };
   timeOffset: number;
   dims: number;
+  /** Resolved palette when GPU categorical-color path is active for this tile. */
+  gpuPalette: Color[] | null;
 }
 
 function makeTileKey(tile: Tile, layer: TileLayer): string {
@@ -71,20 +78,14 @@ function makeTileKey(tile: Tile, layer: TileLayer): string {
   return `${z}/${x}/${y}/${t}:${layer.name}`;
 }
 
-function expandPaletteColors(
-  indices: Uint16Array,
-  categoryCount: number,
-  palette: Color[],
-): Uint8Array {
-  const out = new Uint8Array(categoryCount * 4);
-  for (let i = 0; i < categoryCount; i++) {
-    const color = palette[indices[i] % palette.length];
-    const o = i * 4;
-    out[o] = color[0];
-    out[o + 1] = color[1];
-    out[o + 2] = color[2];
-    out[o + 3] = color[3] ?? 255;
-  }
+/**
+ * Narrow Uint16Array → Float32Array so the GPU CategoryColorExtension can
+ * read indices as a float attribute. Allocated once per (tile, prop change)
+ * pair and cached on the PreparedTile.
+ */
+function indicesToFloat32(indices: Uint16Array, count: number): Float32Array {
+  const out = new Float32Array(count);
+  for (let i = 0; i < count; i++) out[i] = indices[i];
   return out;
 }
 
@@ -115,6 +116,7 @@ export class AnimatedPathLayer extends SpatioTemporalLayer<AnimatedPathLayerProp
   >();
   private lastLayerPropsKey: string = '';
   private readonly timeFilterExtension = new TimeFilterExtension();
+  private readonly categoryColorExtension = new CategoryColorExtension();
   private readonly boundGetTime: () => number = () => this.getCurrentTime();
 
   finalizeState(context: LayerContext): void {
@@ -145,6 +147,7 @@ export class AnimatedPathLayer extends SpatioTemporalLayer<AnimatedPathLayerProp
   }
 
   renderLayers(): Layer[] {
+    const t0 = performance.now();
     const { tiles } = this.state;
     if (!tiles || tiles.length === 0) return [];
 
@@ -189,6 +192,12 @@ export class AnimatedPathLayer extends SpatioTemporalLayer<AnimatedPathLayerProp
       }
     }
 
+    emit('renderLayers', {
+      layer: 'AnimatedPathLayer',
+      tiles: tiles.length,
+      sublayers: sublayers.length,
+      ms: performance.now() - t0,
+    });
     if (DEBUG) {
       // eslint-disable-next-line no-console
       console.log(`AnimatedPathLayer: ${tiles.length} tiles → ${sublayers.length} sublayers`);
@@ -208,8 +217,12 @@ export class AnimatedPathLayer extends SpatioTemporalLayer<AnimatedPathLayerProp
 
     const tileKey = makeTileKey(tile, tileLayer);
     const cached = this.preparedTileCache.get(tileKey);
-    if (cached && cached.styleKey === styleKey) return cached;
+    if (cached && cached.styleKey === styleKey) {
+      emit('tilePrepare', { layer: 'AnimatedPathLayer', tileKey, cached: true, ms: 0 });
+      return cached;
+    }
 
+    const t0 = performance.now();
     const dims = binary.positionDimensions ?? 2;
 
     const attributes: PreparedTile['data']['attributes'] = {
@@ -221,15 +234,19 @@ export class AnimatedPathLayer extends SpatioTemporalLayer<AnimatedPathLayerProp
       instanceEndTime: { value: binary.endTimes, size: 1 },
     };
 
+    // Categorical color: GPU path via CategoryColorExtension. The previous
+    // expandPaletteColors() pass allocated a 4n-byte Uint8Array per tile and
+    // walked the indices on the CPU; the GPU path uploads a 4n-byte Float32
+    // attribute (one-time) and samples a shared 16 KB palette texture.
+    let gpuPalette: Color[] | null = null;
     if (colorProp) {
       const cat = binary.categoricalProps[colorProp];
       if (cat) {
-        const palette = this.props.colorPalette ?? DEFAULT_PALETTE;
-        attributes.getColor = {
-          value: expandPaletteColors(cat.indices, binary.featureCount, palette),
-          size: 4,
-          normalized: true,
+        attributes.instanceCategoryIndex = {
+          value: indicesToFloat32(cat.indices, binary.featureCount),
+          size: 1,
         };
+        gpuPalette = this.props.colorPalette ?? DEFAULT_PALETTE;
       }
     }
 
@@ -250,8 +267,17 @@ export class AnimatedPathLayer extends SpatioTemporalLayer<AnimatedPathLayerProp
       },
       timeOffset: binary.timeOffset,
       dims,
+      gpuPalette,
     };
     this.preparedTileCache.set(tileKey, prepared);
+    emit('tilePrepare', {
+      layer: 'AnimatedPathLayer',
+      tileKey,
+      cached: false,
+      features: binary.featureCount,
+      gpuPalette: gpuPalette !== null,
+      ms: performance.now() - t0,
+    });
     return prepared;
   }
 
@@ -264,9 +290,26 @@ export class AnimatedPathLayer extends SpatioTemporalLayer<AnimatedPathLayerProp
     const constWidth = typeof this.props.pathWidth === 'number' ? this.props.pathWidth : 2;
     const timeWindow = this.props.timeWindow || 86400000;
 
+    const useGpuCategory = prepared.gpuPalette !== null;
+    if (
+      useGpuCategory &&
+      prepared.gpuPalette!.length > CATEGORY_PALETTE_SIZE
+    ) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[AnimatedPathLayer] colorPalette has ${prepared.gpuPalette!.length} ` +
+          `entries; only the first ${CATEGORY_PALETTE_SIZE} will be used by ` +
+          'CategoryColorExtension.',
+      );
+    }
+
     return new PathLayer({
       id: sublayerId,
       data: prepared.data,
+      // Identity comparator pairs with the preparedTileCache: deck.gl skips
+      // the entire prop-diff for `data` when the same object reference
+      // comes back.
+      dataComparator: (a: any, b: any) => a === b,
       _pathType: 'open',
       positionFormat: prepared.dims === 3 ? 'XYZ' : 'XY',
       widthUnits: this.props.widthUnits ?? 'pixels',
@@ -282,12 +325,17 @@ export class AnimatedPathLayer extends SpatioTemporalLayer<AnimatedPathLayerProp
       getColor: constColor,
       getWidth: constWidth,
 
-      extensions: [this.timeFilterExtension],
+      extensions: [this.timeFilterExtension, this.categoryColorExtension],
       getTime: this.boundGetTime,
       timeOffset: prepared.timeOffset,
       timeWindow,
       fadeInDuration: this.props.fadeInDuration,
       fadeOutDuration: this.props.fadeOutDuration,
-    });
+
+      // CategoryColorExtension wiring. When this tile has no categorical
+      // color, the toggle is off and the shader branch is gated.
+      categoryPalette: useGpuCategory ? prepared.gpuPalette! : [],
+      useCategoryColor: useGpuCategory,
+    } as any);
   }
 }

@@ -12,7 +12,11 @@ export { HeatmapTimeLayer } from './heatmap-time-layer';
 
 // Extensions
 export { TimeFilterExtension } from './time-filter-extension';
-export { CategoryColorExtension } from './category-color-extension';
+export {
+  CategoryColorExtension,
+  CATEGORY_PALETTE_SIZE,
+} from './category-color-extension';
+export { PolygonTimeFilterExtension } from './polygon-time-filter-extension';
 
 // Controllers
 export { TimeController } from './time-controller';
@@ -29,6 +33,16 @@ export {
 } from './telemetry';
 export type { ProbeChannel } from './telemetry';
 
+// Pure consolidation helpers — kept exported for downstream consumers that
+// want the merged-buffer shape. The animated layers themselves no longer
+// use these (each tile flows through its own sublayer after Track D).
+export {
+  consolidatePoints,
+  consolidatePaths,
+  pickLayerTimeOffset,
+} from './consolidate';
+export type { ConsolidatedPoints, ConsolidatedPaths } from './consolidate';
+
 // Types
 export type { SpatioTemporalLayerProps } from './spatiotemporal-layer';
 export type { AnimatedPointLayerProps } from './animated-point-layer';
@@ -38,5 +52,6 @@ export type { AnimatedTripsLayerProps } from './animated-trips-layer';
 export type { HeatmapTimeLayerProps } from './heatmap-time-layer';
 export type { TimeFilterExtensionProps } from './time-filter-extension';
 export type { CategoryColorExtensionProps } from './category-color-extension';
+export type { PolygonTimeFilterExtensionProps } from './polygon-time-filter-extension';
 export type { TimeControllerOptions, TimeControllerState } from './time-controller';
 
