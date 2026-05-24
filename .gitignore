@@ -47,6 +47,9 @@ temp_eval/
 
 # Tile files
 *.stt
+# Test fixtures are exempt — committed so the TS contract test doesn't
+# need the Rust toolchain to be runnable.
+!packages/core/test/fixtures/*.stt
 *.mbtiles
 *.pmtiles
 test-data/*.json
