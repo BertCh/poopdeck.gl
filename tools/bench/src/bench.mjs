@@ -129,16 +129,26 @@ const entryToTileId = (e) => ({ z: e.zoom, x: e.x, y: e.y, t: e.timeStart });
 // ---------------------------------------------------------------------------
 
 function parseArgs(argv) {
-  // Positional .stt path + two optional named flags:
+  // Positional .stt path + named flags:
   //   --baseline <out.json>   record current metrics to a baseline file
   //   --check <baseline.json> compare against baseline; exit 1 on regression
   //   --tolerance <0.10>      relative tolerance for regression (default 0.10)
-  const out = { sttPath: null, baseline: null, check: null, tolerance: 0.10 };
+  //   --compare <other.stt>   run the same bench against a second archive
+  //                           and print a side-by-side delta (useful for
+  //                           v2 vs v3 size & decode comparisons).
+  const out = {
+    sttPath: null,
+    baseline: null,
+    check: null,
+    tolerance: 0.10,
+    compare: null,
+  };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--baseline') out.baseline = argv[++i];
     else if (a === '--check') out.check = argv[++i];
     else if (a === '--tolerance') out.tolerance = parseFloat(argv[++i]);
+    else if (a === '--compare') out.compare = argv[++i];
     else if (!a.startsWith('--') && out.sttPath === null) out.sttPath = a;
   }
   return out;
@@ -520,6 +530,77 @@ async function main() {
     await fs.mkdir(path.dirname(outPath), { recursive: true });
     await fs.writeFile(outPath, JSON.stringify(metrics, null, 2) + '\n');
     console.log(`\nBaseline written to ${path.relative(process.cwd(), outPath)}`);
+  }
+
+  if (cliArgs.compare) {
+    // Run the same bench pipeline against a second archive and emit a
+    // side-by-side delta. Useful for tracking the v2 -> v3 format upgrade
+    // (archive size, compression ratio, decode throughput).
+    const otherPath = path.isAbsolute(cliArgs.compare)
+      ? cliArgs.compare
+      : path.resolve(REPO_ROOT, cliArgs.compare);
+    let otherBuf;
+    try {
+      otherBuf = await fs.readFile(otherPath);
+    } catch (err) {
+      console.error(`\nWARN: --compare archive ${otherPath} could not be read: ${err.message}`);
+    }
+    if (otherBuf) {
+      header('Compare against ' + path.relative(REPO_ROOT, otherPath));
+      const { fileFetch: otherFetch } = createFileFetch(otherBuf);
+      const otherArchive = new STTArchive({ url: otherPath, fetch: otherFetch });
+      const otherMeta = await otherArchive.getMetadata();
+      const otherIndex = await otherArchive.getIndex();
+      const otherEntries = otherIndex.tiles;
+      const otherSample =
+        otherEntries.length > SAMPLE_CAP ? otherEntries.slice(0, SAMPLE_CAP) : otherEntries;
+
+      let otherFeatures = 0;
+      let otherCompressed = 0;
+      let otherUncompressed = 0;
+      const otherLatencies = [];
+      const oT0 = performance.now();
+      for (const entry of otherSample) {
+        const id = entryToTileId(entry);
+        const tStart = performance.now();
+        const tile = await otherArchive.getTile(id);
+        otherLatencies.push(performance.now() - tStart);
+        otherCompressed += entry.length;
+        otherUncompressed += entry.uncompressedSize || entry.length;
+        if (tile) {
+          for (const layer of tile.layers) otherFeatures += layer.features.featureCount;
+        }
+      }
+      const oMs = performance.now() - oT0;
+      const oPct = percentiles(otherLatencies);
+      const otherTotalComp = otherEntries.reduce((s, e) => s + e.length, 0);
+      const otherTotalUncomp = otherEntries.reduce(
+        (s, e) => s + (e.uncompressedSize || e.length),
+        0,
+      );
+      const otherRatio = otherTotalComp > 0 ? otherTotalUncomp / otherTotalComp : 1;
+
+      const aLabel = `current (v${metadata.version})`;
+      const bLabel = `compare (v${otherMeta.version})`;
+      row('metric', `${aLabel.padEnd(20)} ${bLabel.padEnd(20)} delta`);
+      const cmpRow = (label, a, b, fmt = (v) => v) => {
+        const delta = b - a;
+        const pct = a !== 0 ? ` (${((delta / a) * 100).toFixed(1)}%)` : '';
+        row(label, `${String(fmt(a)).padEnd(20)} ${String(fmt(b)).padEnd(20)} ${fmt(delta)}${pct}`);
+      };
+      cmpRow('archive size', fileBuffer.length, otherBuf.length, fmtBytes);
+      cmpRow('tile count', tileEntries.length, otherEntries.length, fmtNum);
+      cmpRow(
+        'decode tiles/s',
+        Math.round(sampleEntries.length / (decMs / 1000)),
+        Math.round(otherSample.length / (oMs / 1000)),
+        fmtNum,
+      );
+      cmpRow('decode p95', pct.p95, oPct.p95, fmtMs);
+      cmpRow('compression ratio', archiveRatio, otherRatio, (v) => v.toFixed(2) + 'x');
+      cmpRow('features sampled', featuresDecoded, otherFeatures, fmtNum);
+      otherArchive.finalize?.();
+    }
   }
 
   if (cliArgs.check) {
