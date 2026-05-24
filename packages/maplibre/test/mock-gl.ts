@@ -159,6 +159,44 @@ export function makeMockGl(
         drawCalls.push({ kind: 'elements', count });
       },
     ),
+    // Instanced draws. Track them separately so tests can distinguish "ran
+    // the new instanced path" from "ran the old expanded-quad path". The
+    // `count` we record for instanced is `vertCount * instanceCount` — same
+    // semantics as the legacy drawElements path so existing assertions still
+    // resolve sensibly (e.g. 18 = 3 segments × 6 indices, now 3 instances × 6
+    // quad indices).
+    drawArraysInstanced: vi.fn(
+      (
+        _mode: number,
+        _first: number,
+        count: number,
+        primCount: number,
+      ) => {
+        drawCalls.push({
+          kind: 'arrays-instanced',
+          count: count * primCount,
+          vertices: count,
+          instances: primCount,
+        });
+      },
+    ),
+    drawElementsInstanced: vi.fn(
+      (
+        _mode: number,
+        count: number,
+        _type: number,
+        _offset: number,
+        primCount: number,
+      ) => {
+        drawCalls.push({
+          kind: 'elements-instanced',
+          count: count * primCount,
+          vertices: count,
+          instances: primCount,
+        });
+      },
+    ),
+    vertexAttribDivisor: vi.fn(),
 
     // FBO / texture surface (used by the heatmap layer's two-pass pipeline).
     createTexture: vi.fn(() => makeHandle('texture')),

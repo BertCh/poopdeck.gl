@@ -176,6 +176,34 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
     bind: () => undefined,
     delete: () => undefined,
   };
+  /**
+   * Instanced-draw support detection. WebGL2 has `drawArraysInstanced` /
+   * `drawElementsInstanced` / `vertexAttribDivisor` in core; WebGL1 exposes
+   * them through `ANGLE_instanced_arrays`. When unavailable, layers that rely
+   * on instancing (lines, trips, polygon stroke) will be dropped — the
+   * fallback non-instanced path is gone now that instancing is widely
+   * available (everywhere except old IE/Edge, both EOL).
+   */
+  protected instSupport: {
+    enabled: boolean;
+    drawArraysInstanced: (mode: number, first: number, count: number, primCount: number) => void;
+    drawElementsInstanced: (mode: number, count: number, type: number, offset: number, primCount: number) => void;
+    vertexAttribDivisor: (index: number, divisor: number) => void;
+  } = {
+    enabled: false,
+    drawArraysInstanced: () => undefined,
+    drawElementsInstanced: () => undefined,
+    vertexAttribDivisor: () => undefined,
+  };
+  /**
+   * A 4-vertex unit quad shared by every instanced layer in this layer
+   * instance. Vertices are (sideA: -1|+1, along: 0|1) where `sideA` picks the
+   * perpendicular offset direction and `along` picks the A or B endpoint of
+   * the segment.
+   *
+   * Lazily uploaded the first time a subclass asks for it via `getUnitQuad()`.
+   */
+  protected unitQuadBuffer?: WebGLBuffer;
 
   constructor(opts: STTBaseLayerOptions) {
     this.id = opts.id;
@@ -227,6 +255,7 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
       this.supports32BitIndices = !!gl.getExtension('OES_element_index_uint');
     }
     this.initVaoSupport(gl);
+    this.initInstanceSupport(gl);
     this.onContextReady(gl);
     void this.initTileset();
   }
@@ -266,11 +295,85 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
     }
   }
 
+  /**
+   * Resolve instanced-draw entry points. WebGL2 has them in core; WebGL1 must
+   * pull them off `ANGLE_instanced_arrays`. The line / trips / polygon-stroke
+   * sub-layers rely on instancing for their quad expansion; everywhere
+   * instancing is missing they bail out at tile-cache-build time with a
+   * console warning and the tile is skipped.
+   */
+  private initInstanceSupport(
+    gl: WebGLRenderingContext | WebGL2RenderingContext,
+  ): void {
+    const gl2 = gl as WebGL2RenderingContext;
+    if (typeof gl2.drawArraysInstanced === 'function') {
+      this.instSupport = {
+        enabled: true,
+        drawArraysInstanced: (mode, first, count, primCount) =>
+          gl2.drawArraysInstanced(mode, first, count, primCount),
+        drawElementsInstanced: (mode, count, type, offset, primCount) =>
+          gl2.drawElementsInstanced(mode, count, type, offset, primCount),
+        vertexAttribDivisor: (index, divisor) =>
+          gl2.vertexAttribDivisor(index, divisor),
+      };
+      return;
+    }
+    const ext = gl.getExtension('ANGLE_instanced_arrays') as {
+      drawArraysInstancedANGLE: (mode: number, first: number, count: number, primCount: number) => void;
+      drawElementsInstancedANGLE: (mode: number, count: number, type: number, offset: number, primCount: number) => void;
+      vertexAttribDivisorANGLE: (index: number, divisor: number) => void;
+    } | null;
+    if (ext) {
+      this.instSupport = {
+        enabled: true,
+        drawArraysInstanced: (mode, first, count, primCount) =>
+          ext.drawArraysInstancedANGLE(mode, first, count, primCount),
+        drawElementsInstanced: (mode, count, type, offset, primCount) =>
+          ext.drawElementsInstancedANGLE(mode, count, type, offset, primCount),
+        vertexAttribDivisor: (index, divisor) =>
+          ext.vertexAttribDivisorANGLE(index, divisor),
+      };
+    }
+  }
+
+  /**
+   * Build (lazily) and return the shared 4-vertex unit quad VBO used by every
+   * instanced renderer. Vertex layout per vertex is `vec2(side, along)`:
+   *   v0 = (-1, 0)  — A end, left
+   *   v1 = ( 1, 0)  — A end, right
+   *   v2 = (-1, 1)  — B end, left
+   *   v3 = ( 1, 1)  — B end, right
+   * Drawn as `TRIANGLE_STRIP`, 4 vertices per instance.
+   */
+  protected getUnitQuad(
+    gl: WebGLRenderingContext | WebGL2RenderingContext,
+  ): WebGLBuffer {
+    if (this.unitQuadBuffer) return this.unitQuadBuffer;
+    const buf = gl.createBuffer()!;
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(
+      gl.ARRAY_BUFFER,
+      new Float32Array([
+        -1, 0,
+        1, 0,
+        -1, 1,
+        1, 1,
+      ]),
+      gl.STATIC_DRAW,
+    );
+    this.unitQuadBuffer = buf;
+    return buf;
+  }
+
   onRemove(): void {
     const gl = this.gl;
     if (gl) {
       for (const cache of this.tileGpuCache.values()) {
         if (cache) this.deleteCacheBuffers(gl, cache);
+      }
+      if (this.unitQuadBuffer) {
+        gl.deleteBuffer(this.unitQuadBuffer);
+        this.unitQuadBuffer = undefined;
       }
       this.onContextLost(gl);
     }
