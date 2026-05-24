@@ -14,7 +14,7 @@
  * uploads straight to the GPU.
  */
 
-import { tableFromIPC, type Table, type Vector } from 'apache-arrow';
+import { tableFromIPC, Type as ArrowType, type Table, type Vector } from 'apache-arrow';
 import {
   type Tile,
   type TileId,
@@ -230,15 +230,42 @@ function tableToBinaryFeatures(table: Table): BinaryFeatures {
     if (reserved.has(field.name)) continue;
     const vec = table.getChild(field.name);
     if (!vec) continue;
-    if (field.type.toString().includes('Utf8')) {
-      // Categorical: dictionary-encode the strings on decode.
+    const typeId = (field.type as any).typeId;
+    const isDictionary =
+      typeId === ArrowType.Dictionary ||
+      String(field.type).startsWith('Dictionary');
+    const isUtf8 = !isDictionary && field.type.toString().includes('Utf8');
+    if (isDictionary) {
+      // v3 categoricals are Dictionary<UInt16, Utf8>: lift the dictionary
+      // indices and value table straight out of Arrow. No per-tile rebuild.
+      const data = chunk(vec);
+      const keys = data.values as Uint16Array | Uint8Array | Int32Array;
+      const dictArray = (data as any).dictionary;
+      const dictValues: string[] = [];
+      const n = dictArray ? dictArray.length : 0;
+      for (let i = 0; i < n; i++) dictValues.push(dictArray.get(i));
+      const indices = new Uint16Array(featureCount);
+      const validity = data.nullBitmap;
+      for (let i = 0; i < featureCount; i++) {
+        if (validity && (validity[(i + data.offset) >> 3] & (1 << ((i + data.offset) & 7))) === 0) {
+          indices[i] = 0xffff;
+        } else {
+          // Widen narrower key types up to Uint16. Arrow stores keys as
+          // whatever type the schema declared; v3 always uses UInt16, but
+          // we tolerate the others for forward compatibility.
+          indices[i] = Number(keys[i + data.offset]);
+        }
+      }
+      categoricalProps[field.name] = { indices, categories: dictValues };
+    } else if (isUtf8) {
+      // v2 fallback: plain Utf8 column. Rebuild the dictionary here.
       const categories: string[] = [];
       const lookup = new Map<string, number>();
       const indices = new Uint16Array(featureCount);
       for (let i = 0; i < featureCount; i++) {
         const s = vec.get(i);
         if (s == null) {
-          indices[i] = 0xffff; // sentinel for "missing"
+          indices[i] = 0xffff;
           continue;
         }
         let idx = lookup.get(s);
