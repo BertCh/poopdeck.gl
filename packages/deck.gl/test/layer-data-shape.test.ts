@@ -22,7 +22,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { makePointTile, makePathTile } from './fake-tile';
+import { makePointTile, makePathTile, makePolygonTile } from './fake-tile';
 
 // ---------------------------------------------------------------------------
 // deck.gl mocks
@@ -50,7 +50,17 @@ vi.mock('@deck.gl/layers', () => {
       this.props = props;
     }
   }
-  return { ScatterplotLayer: FakeScatterplotLayer, PathLayer: FakePathLayer };
+  class FakeSolidPolygonLayer implements CapturedLayer {
+    props: Record<string, any>;
+    constructor(props: Record<string, any>) {
+      this.props = props;
+    }
+  }
+  return {
+    ScatterplotLayer: FakeScatterplotLayer,
+    PathLayer: FakePathLayer,
+    SolidPolygonLayer: FakeSolidPolygonLayer,
+  };
 });
 
 // `@deck.gl/core` is only used for `CompositeLayer` / `LayerExtension` base
@@ -822,5 +832,219 @@ describe('AIS-sized perf budget', () => {
     expect(elapsed).toBeLessThan(250);
     expect(built.props.data.length).toBe(N);
     expect(Array.isArray(built.props.data)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AnimatedPolygonLayer (v3 — GPU time filter + per-tile sublayers)
+// ---------------------------------------------------------------------------
+
+describe('AnimatedPolygonLayer per-tile sublayer architecture (v3)', () => {
+  /** A tile with 3 square polygons at distinct lon/lat. */
+  function bigPolygonTile(n: number) {
+    const polygons: number[][][] = new Array(n);
+    const startTimes: number[] = new Array(n);
+    const endTimes: number[] = new Array(n);
+    for (let i = 0; i < n; i++) {
+      const x = i * 0.1;
+      polygons[i] = [
+        [x, 0],
+        [x + 0.05, 0],
+        [x + 0.05, 0.05],
+        [x, 0.05],
+        [x, 0],
+      ];
+      startTimes[i] = i * 100;
+      endTimes[i] = i * 100 + 500;
+    }
+    return makePolygonTile({ polygons, startTimes, endTimes, timeOffset: 0 });
+  }
+
+  let LayerCtor: any;
+  let makeLayer: (opts?: any) => any;
+
+  beforeEach(async () => {
+    vi.resetModules();
+    const mod = await import('../src/animated-polygon-layer');
+    LayerCtor = mod.AnimatedPolygonLayer as any;
+
+    makeLayer = (opts = {}) => {
+      const layer = Object.create(LayerCtor.prototype);
+      layer.props = {
+        id: 'poly',
+        fillColor: [255, 140, 0, 180],
+        timeWindow: 1000,
+        opacity: 1,
+        visible: true,
+        filled: true,
+        extruded: false,
+        elevation: 0,
+        ...opts,
+      };
+      layer._currentTime = 0;
+      layer.boundGetTime = () => 0;
+      layer.polygonTimeFilterExtension = {};
+      layer.categoryColorExtension = {};
+      layer.preparedTileCache = new Map();
+      layer.sublayerCache = new Map();
+      layer.lastLayerPropsKey = '';
+      return layer;
+    };
+  });
+
+  it('hands deck.gl the binary {length, startIndices, attributes} shape (no per-feature wrappers)', () => {
+    const layer = makeLayer();
+    const tile = bigPolygonTile(20);
+    const built = (layer as any).buildSublayer(
+      (layer as any).prepareTile(tile, tile.layers[0]),
+    );
+    const data = built.props.data;
+    expect(Array.isArray(data)).toBe(false);
+    expect(data.length).toBe(20);
+    expect(data.startIndices).toBeInstanceOf(Uint32Array);
+  });
+
+  it('zero-copies positions / startTime / endTime from the tile (no CPU filter pass)', () => {
+    // The whole point of lifting the time filter to the GPU: positions and
+    // per-feature times ride straight from the Arrow-backed tile buffers to
+    // the GPU. The v2 layer copied positions into a fresh Float64Array via
+    // extractVisiblePolygons() on every render.
+    const layer = makeLayer();
+    const tile = bigPolygonTile(8);
+    const binary = tile.layers[0].features;
+    const built = (layer as any).buildSublayer(
+      (layer as any).prepareTile(tile, tile.layers[0]),
+    );
+    const attrs = built.props.data.attributes;
+    expect(attrs.getPolygon.value).toBe(binary.positions);
+    expect(attrs.startTime.value).toBe(binary.startTimes);
+    expect(attrs.endTime.value).toBe(binary.endTimes);
+    expect(attrs.startTime.size).toBe(1);
+    expect(attrs.endTime.size).toBe(1);
+  });
+
+  it('builds one SolidPolygonLayer per tile (no cross-tile consolidation)', () => {
+    const layer = makeLayer();
+    const a = bigPolygonTile(3);
+    a.id = { z: 14, x: 1, y: 2, t: 0 };
+    const b = bigPolygonTile(4);
+    b.id = { z: 14, x: 1, y: 3, t: 0 };
+    layer.state = { tiles: [a, b] };
+    const sublayers = (layer as any).renderLayers();
+    expect(sublayers.length).toBe(2);
+  });
+
+  it("uses each tile's own timeOffset (no layer-wide rebasing)", () => {
+    const layer = makeLayer();
+    const a = bigPolygonTile(2);
+    a.id = { z: 14, x: 1, y: 2, t: 0 };
+    a.layers[0].features.timeOffset = 1_700_000_000_000;
+    const b = bigPolygonTile(2);
+    b.id = { z: 14, x: 1, y: 3, t: 0 };
+    b.layers[0].features.timeOffset = 1_700_086_400_000;
+    layer.state = { tiles: [a, b] };
+    const [subA, subB] = (layer as any).renderLayers();
+    expect(subA.props.timeOffset).toBe(1_700_000_000_000);
+    expect(subB.props.timeOffset).toBe(1_700_086_400_000);
+  });
+
+  it('caches PreparedTile so the data object reference is stable across renders', () => {
+    const layer = makeLayer();
+    const tile = bigPolygonTile(3);
+    const first = (layer as any).prepareTile(tile, tile.layers[0]);
+    const second = (layer as any).prepareTile(tile, tile.layers[0]);
+    expect(second).toBe(first);
+    expect(second.data).toBe(first.data);
+  });
+
+  it('returns the SAME SolidPolygonLayer per tile across renders when nothing changed', () => {
+    const layer = makeLayer();
+    const a = bigPolygonTile(3);
+    a.id = { z: 14, x: 1, y: 2, t: 0 };
+    layer.state = { tiles: [a] };
+    const [first] = (layer as any).renderLayers();
+    const [second] = (layer as any).renderLayers();
+    expect(second).toBe(first);
+  });
+
+  it('polygons fade/visibility-toggle via uniform updates only (no rebuild)', () => {
+    // The architectural promise of lifting filtering to the GPU: changing
+    // the play head (via getTime) must NOT rebuild the SolidPolygonLayer.
+    // We verify by mutating the bound time getter, calling renderLayers,
+    // and asserting the same layer instance comes back.
+    let now = 0;
+    const layer = makeLayer();
+    layer.boundGetTime = () => now;
+    const tile = bigPolygonTile(5);
+    layer.state = { tiles: [tile] };
+    const [first] = (layer as any).renderLayers();
+    now = 50_000; // big jump in sim time
+    const [second] = (layer as any).renderLayers();
+    expect(second).toBe(first);
+    // The dynamic getter is still wired in.
+    expect(typeof first.props.getTime).toBe('function');
+  });
+
+  it('hands category indices to the GPU for categorical fill colors', () => {
+    const layer = makeLayer({
+      fillColor: 'kind',
+      colorPalette: [
+        [10, 20, 30, 255],
+        [40, 50, 60, 255],
+        [70, 80, 90, 255],
+      ],
+    });
+    const tile = bigPolygonTile(6);
+    tile.layers[0].features.categoricalProps['kind'] = {
+      indices: new Uint16Array([0, 1, 2, 1, 0, 2]),
+      categories: ['a', 'b', 'c'],
+    };
+    const built = (layer as any).buildSublayer(
+      (layer as any).prepareTile(tile, tile.layers[0]),
+    );
+    const attrs = built.props.data.attributes;
+    expect(attrs.getFillColor).toBeUndefined();
+    expect(attrs.instanceCategoryIndex).toBeDefined();
+    expect(attrs.instanceCategoryIndex.value).toBeInstanceOf(Float32Array);
+    expect(attrs.instanceCategoryIndex.value[2]).toBe(2);
+    expect(built.props.useCategoryColor).toBe(true);
+  });
+
+  it('declares dataComparator that skips deck.gl prop diff on identical references', () => {
+    const layer = makeLayer();
+    const tile = bigPolygonTile(2);
+    const built = (layer as any).buildSublayer(
+      (layer as any).prepareTile(tile, tile.layers[0]),
+    );
+    const cmp = built.props.dataComparator;
+    expect(typeof cmp).toBe('function');
+    const ref = {};
+    expect(cmp(ref, ref)).toBe(true);
+    expect(cmp(ref, {})).toBe(false);
+  });
+
+  it('rebuilds the cached SolidPolygonLayer when a tile-level prop changes', () => {
+    const layer = makeLayer();
+    const tile = bigPolygonTile(3);
+    layer.state = { tiles: [tile] };
+    const first = (layer as any).renderLayers();
+    layer.props.extruded = true;
+    const second = (layer as any).renderLayers();
+    expect(second[0]).not.toBe(first[0]);
+    expect(second[0].props.extruded).toBe(true);
+  });
+
+  it('drops sublayer-cache entries for tiles that leave the visible set', () => {
+    const layer = makeLayer();
+    const a = bigPolygonTile(2);
+    a.id = { z: 14, x: 1, y: 2, t: 0 };
+    const b = bigPolygonTile(2);
+    b.id = { z: 14, x: 1, y: 3, t: 0 };
+    layer.state = { tiles: [a, b] };
+    (layer as any).renderLayers();
+    expect((layer as any).sublayerCache.size).toBe(2);
+    layer.state = { tiles: [a] };
+    (layer as any).renderLayers();
+    expect((layer as any).sublayerCache.size).toBe(1);
   });
 });
