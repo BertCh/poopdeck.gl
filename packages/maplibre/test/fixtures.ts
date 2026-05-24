@@ -23,7 +23,12 @@ export function makePointTile(): Tile {
     numericProps: {},
     categoricalProps: {},
   };
-  const layer: Layer = { name: 'points', extent: 4096, features };
+  const layer: Layer = {
+    name: 'points',
+    extent: 4096,
+    features,
+    geometryExtensionName: 'geoarrow.point',
+  };
   return {
     id: { z: 2, x: 1, y: 1, t: 1_700_000_000_000 },
     timeRange: { start: 1_700_000_000_000, end: 1_700_000_003_000 },
@@ -56,7 +61,12 @@ export function makeLineTile(): Tile {
     numericProps: {},
     categoricalProps: {},
   };
-  const layer: Layer = { name: 'paths', extent: 4096, features };
+  const layer: Layer = {
+    name: 'paths',
+    extent: 4096,
+    features,
+    geometryExtensionName: 'geoarrow.linestring',
+  };
   return {
     id: { z: 2, x: 1, y: 1, t: 1_700_000_000_000 },
     timeRange: { start: 1_700_000_000_000, end: 1_700_000_003_000 },
@@ -98,7 +108,12 @@ export function makeTripsTile(): Tile {
       vehicleType: { indices: new Uint16Array([0, 1]), categories: ['truck', 'car'] },
     },
   };
-  const layer: Layer = { name: 'trips', extent: 4096, features };
+  const layer: Layer = {
+    name: 'trips',
+    extent: 4096,
+    features,
+    geometryExtensionName: 'geoarrow.linestring',
+  };
   return {
     id: { z: 2, x: 1, y: 1, t: 1_700_000_000_000 },
     timeRange: { start: 1_700_000_000_000, end: 1_700_000_002_000 },
@@ -125,7 +140,12 @@ export function makePropertyPointTile(): Tile {
       species: { indices: new Uint16Array([0, 1]), categories: ['a', 'b'] },
     },
   };
-  const layer: Layer = { name: 'props', extent: 4096, features };
+  const layer: Layer = {
+    name: 'props',
+    extent: 4096,
+    features,
+    geometryExtensionName: 'geoarrow.point',
+  };
   return {
     id: { z: 2, x: 1, y: 1, t: 1_700_000_000_000 },
     timeRange: { start: 1_700_000_000_000, end: 1_700_000_005_000 },
@@ -155,7 +175,12 @@ export function makePolygonTile(): Tile {
     numericProps: {},
     categoricalProps: {},
   };
-  const layer: Layer = { name: 'polys', extent: 4096, features };
+  const layer: Layer = {
+    name: 'polys',
+    extent: 4096,
+    features,
+    geometryExtensionName: 'geoarrow.polygon',
+  };
   return {
     id: { z: 2, x: 1, y: 1, t: 1_700_000_000_000 },
     timeRange: { start: 1_700_000_000_000, end: 1_700_000_001_000 },

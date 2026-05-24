@@ -246,6 +246,30 @@ export interface Layer {
   name: string;
   extent: number;
   features: BinaryFeatures;
+  /**
+   * The standard GeoArrow extension name carried by the underlying Arrow
+   * `geometry` field — e.g. `'geoarrow.point'`, `'geoarrow.linestring'`,
+   * `'geoarrow.polygon'`. Surfaced here so downstream renderers
+   * (`@geoarrow/deck.gl-layers`, Lonboard) can pick a layer type from the
+   * standard metadata without re-parsing the Arrow schema.
+   *
+   * Empty string only for archives older than the GeoArrow extension-name
+   * tag (pre-v2.x) — clients should treat that as "unknown" rather than
+   * "point" to avoid silent mismatches.
+   */
+  geometryExtensionName: string;
+  /**
+   * The original Arrow {@link import('apache-arrow').Table} the layer was
+   * decoded from — already a valid GeoArrow record batch. Held so callers
+   * can hand it straight to `@geoarrow/deck.gl-layers` (see
+   * {@link import('./tile').toGeoArrowTable}) without re-encoding the
+   * typed arrays in {@link BinaryFeatures}.
+   *
+   * Optional because the worker-pool decoder strips `arrowTable` before
+   * postMessage (the `Table` class is not structured-cloneable). Use
+   * `InlineTileDecoder` if a downstream library needs the raw Table.
+   */
+  arrowTable?: import('apache-arrow').Table;
 }
 
 /** Decoded tile with binary features */

@@ -67,6 +67,12 @@ ctx.onmessage = async (event: MessageEvent<DecodeRequest>) => {
   try {
     const payload = await decompress(new Uint8Array(compressed), compression);
     const tile = decodeTile(payload, id, timeRange);
+    // The `arrowTable` field carries an apache-arrow `Table` instance. That
+    // class has methods on its prototype and is NOT structured-cloneable —
+    // postMessage would throw. Strip it before transfer. Callers that need
+    // a GeoArrow `Table` should use the inline decoder
+    // ({@link InlineTileDecoder}), which preserves `arrowTable` end-to-end.
+    for (const layer of tile.layers) delete layer.arrowTable;
     const transferables = collectTransferables(tile);
     const response: DecodeResponse = { requestId, tile };
     ctx.postMessage(response, transferables);
