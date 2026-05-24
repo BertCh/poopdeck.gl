@@ -17,6 +17,7 @@
 
 import { decompress } from './compression';
 import { decodeTile } from './tile';
+import { collectTransferables } from './tile-transferables';
 import type { Compression, Tile, TileId, TimeRange } from './types';
 
 interface DecodeRequest {
@@ -31,35 +32,6 @@ type DecodeResponse =
   | { requestId: number; tile: Tile }
   | { requestId: number; error: string };
 
-/**
- * Collect every transferable ArrayBuffer in a Tile.
- *
- * Several typed arrays (notably positions for points) are subarrays into the
- * decoded Arrow IPC buffer, so multiple views can share one underlying
- * buffer. Postmessage rejects duplicate transfers, so we deduplicate.
- */
-function collectTransferables(tile: Tile): Transferable[] {
-  // TypedArray.buffer is typed as ArrayBufferLike (could be SharedArrayBuffer
-  // in newer TS lib defs); we only construct regular ArrayBuffer-backed
-  // typed arrays so the runtime values are always plain ArrayBuffers.
-  const seen = new Set<ArrayBufferLike>();
-  for (const layer of tile.layers) {
-    const f = layer.features;
-    seen.add(f.positions.buffer);
-    seen.add(f.featureIds.buffer);
-    seen.add(f.startTimes.buffer);
-    seen.add(f.endTimes.buffer);
-    if (f.startIndices) seen.add(f.startIndices.buffer);
-    if (f.vertexTimestamps) seen.add(f.vertexTimestamps.buffer);
-    if (f.globalFeatureIds) seen.add(f.globalFeatureIds.buffer);
-    for (const arr of Object.values(f.numericProps)) seen.add(arr.buffer);
-    for (const { indices } of Object.values(f.categoricalProps)) {
-      seen.add(indices.buffer);
-    }
-  }
-  return Array.from(seen) as Transferable[];
-}
-
 const ctx = self as unknown as DedicatedWorkerGlobalScope;
 
 ctx.onmessage = async (event: MessageEvent<DecodeRequest>) => {
@@ -71,7 +43,11 @@ ctx.onmessage = async (event: MessageEvent<DecodeRequest>) => {
     const response: DecodeResponse = { requestId, tile };
     ctx.postMessage(response, transferables);
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    // Tag the error with the tile id so the main thread's `[STL] Tile error`
+    // log identifies the offending tile without a separate debug pass.
+    const base = err instanceof Error ? err.message : String(err);
+    const tileKey = `${id.z}/${id.x}/${id.y}/${id.t}`;
+    const message = `tile ${tileKey}: ${base}`;
     const response: DecodeResponse = { requestId, error: message };
     ctx.postMessage(response);
   }
