@@ -22,3 +22,16 @@ export {
   isOpfsAvailable,
   type OpfsTileCacheOptions,
 } from './opfs-cache';
+
+// loaders.gl-conformant surfaces. Structural-only — `@stt/core` has no
+// `@loaders.gl/*` runtime dep. Apps that already use loaders.gl can pass
+// `SttLoader` straight to deck.gl's `loaders` prop, and `STTArchive.asTileSource()`
+// returns a value matching the v4.x `TileSource` interface.
+export { SttLoader, type ParsedSTT, type SttLoaderShape } from './stt-loader';
+export {
+  createSttTileSource,
+  type SttTileSource,
+  type SttTileSourceMetadata,
+  type SttGetTileParameters,
+  type SttGetTileDataParameters,
+} from './tile-source';

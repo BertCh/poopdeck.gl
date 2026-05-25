@@ -102,6 +102,23 @@ describe('STTArchive (Arrow format)', () => {
     expect(features.numericProps.speed.length).toBe(features.featureCount);
     expect(features.categoricalProps.kind).toBeDefined();
     expect(features.categoricalProps.kind.categories.length).toBeGreaterThan(0);
+
+    // Regression: the dictionary decoder used to treat Arrow's empty
+    // `nullBitmap` (returned for null-free columns) as "all rows null",
+    // marking every index with the 0xffff sentinel. Downstream consumers
+    // (e.g. HeatmapTimeLayer's categoryFilter) then dropped every feature
+    // and the layer rendered nothing. Assert that at least one feature has
+    // a real, in-range dictionary index — not the null sentinel.
+    const kindIdx = features.categoricalProps.kind.indices;
+    const numCats = features.categoricalProps.kind.categories.length;
+    let resolved = 0;
+    for (let i = 0; i < kindIdx.length; i++) {
+      if (kindIdx[i] !== 0xffff) {
+        expect(kindIdx[i]).toBeLessThan(numCats);
+        resolved++;
+      }
+    }
+    expect(resolved).toBeGreaterThan(0);
   });
 
   it('serves repeated tile reads from the byte cache', async () => {

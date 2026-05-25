@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from "react";
 import { Link } from "react-router-dom";
 import DeckGL from "@deck.gl/react";
 import { Map } from "react-map-gl";
-import { AnimatedTripsLayer, TimeController } from "@stt/deck.gl";
+import { VatTripsLayer, TimeController } from "@stt/deck.gl";
 import { getDatasetById } from "../datasets";
 import { calculateAnimationSpeed } from "../types";
 
@@ -10,8 +10,10 @@ const MAPBOX_ACCESS_TOKEN =
   (import.meta as any).env?.VITE_MAPBOX_TOKEN ||
   "pk.eyJ1IjoicmdjZ2VvZyIsImEiOiJjajBuNG1sMjUwMDFlMzNxcWY0M2RqMHI3In0.XfM0BMSqZqjRDcz-oJuadw";
 
-// Speed multiplier for hero section - slower than demo page for smoother visuals
-const HERO_SPEED_MULTIPLIER = 0.35;
+// Speed multiplier for hero section. VAT renders head-only dots and scales
+// fluidly to the full trip set, so we run hot — 5× the prior 0.35 setting —
+// to make the swarm feel alive.
+const HERO_SPEED_MULTIPLIER = 10;
 
 const HomePage: React.FC = () => {
   const heroDataset = getDatasetById("nyc-taxi-trips");
@@ -29,7 +31,7 @@ const HomePage: React.FC = () => {
         speed: baseAnimationSpeed * HERO_SPEED_MULTIPLIER,
         loop: true,
         timeRange: heroDataset?.timeRange,
-      })
+      }),
   );
 
   const [currentTime, setCurrentTime] = useState(timeController.getTime());
@@ -60,22 +62,16 @@ const HomePage: React.FC = () => {
     const prefetchAhead = Math.max(timeWindow * 3, playbackSpeed * 30000);
 
     return [
-      new AnimatedTripsLayer({
+      new VatTripsLayer({
         id: "hero-trips",
         data: heroDataset.url,
         currentTime,
         timeController,
         timeWindow,
         timeRange: heroDataset.timeRange,
-        tripColor: [31, 186, 214, 255],
-        tripWidth: 4,
-        widthMinPixels: 2,
-        widthMaxPixels: 8,
-        trailLength: 60000,
-        fadeTrail: true,
-        capRounded: true,
-        jointRounded: true,
-        opacity: 0.8,
+        headColor: [31, 186, 214, 255],
+        headRadiusPixels: 3,
+        opacity: 0.85,
         pickable: false,
         enablePrefetch: true,
         prefetchAhead,
@@ -110,7 +106,7 @@ const HomePage: React.FC = () => {
       icon: "🔧",
       title: "CLI Tools",
       description:
-        "Rust-powered tile generation from GeoJSON and other spatial formats.",
+        "Rust-powered tile generation from GeoParquet — streaming builds, H3 summary tiers, zstd-trained dictionaries.",
       link: "/format",
     },
   ];

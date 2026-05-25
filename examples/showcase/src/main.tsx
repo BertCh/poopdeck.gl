@@ -6,7 +6,24 @@ import HomePage from "./pages/HomePage";
 import DemoPage from "./pages/DemoPage";
 import FormatPage from "./pages/FormatPage";
 import LayersPage from "./pages/LayersPage";
+import { datasets } from "./datasets";
 import "./index.css";
+
+// Expose a JSON-safe dataset manifest on `window` so the render-test runner
+// can enumerate every demo without re-parsing the TS source. Only includes
+// fields the runner needs; deliberately drops React/function props so the
+// object is structured-clone-safe.
+(window as unknown as { __STT_DATASETS?: unknown }).__STT_DATASETS = datasets.map(
+  (d) => ({
+    id: d.id,
+    name: d.name,
+    type: d.type,
+    url: d.url,
+    timeRange: d.timeRange,
+    targetPlaybackSeconds: d.targetPlaybackSeconds,
+    useGlobe: d.useGlobe ?? false,
+  }),
+);
 
 // Silence the known non-fatal luma.gl link warning that fires on deck.gl
 // ≤ 9.3 for the per-tile sublayer demos:

@@ -134,6 +134,19 @@ export function getSnapshot<T>(name: string): T | undefined {
 }
 
 /**
+ * Fast check used by hot paths to skip building a snapshot/sample payload
+ * when no probe consumer is going to read it. `snapshot()` and `emit()` are
+ * themselves no-ops in that case, but the ARGUMENTS to those calls are
+ * still evaluated unconditionally — so a per-frame
+ * `snapshot('x', expensive())` still pays for `expensive()` in production.
+ * Gate the expensive part with `if (isProbeEnabled()) { ... }`.
+ */
+export function isProbeEnabled(): boolean {
+  const bag = (globalThis as unknown as { __sttProbe?: ProbeBag }).__sttProbe;
+  return !!bag && bag.enabled !== false;
+}
+
+/**
  * Activate the probe. Call this from a consumer (HUD, Playwright probe)
  * BEFORE the work you want to sample so the first events are captured.
  * Idempotent — re-enabling a bag that's already active keeps existing samples.

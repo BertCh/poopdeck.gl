@@ -198,6 +198,19 @@ export class SpatiotemporalTileset {
   // Running byte total of decoded tiles held in `this.tiles`. Maintained
   // incrementally so eviction never re-sums every frame.
   private currentCacheBytes: number = 0;
+
+  // Running loaded-tile count. Same rationale as `currentCacheBytes`: the
+  // eviction path used to walk every header in `this.tiles` just to count
+  // loaded entries (per call). At a few thousand tiles this was the
+  // visible cost of the eviction loop.
+  private loadedTileCount: number = 0;
+
+  // Last `selectAndLoadTiles` parameters. When `update()` arrives with
+  // identical (bounds, zoom, timeStart, timeEnd) we skip the awaited
+  // `getAvailableTiles` Promise.all entirely — the result would just
+  // re-mark the same `neededTileKeys` set we already published. This
+  // dominates the steady-state cost for tightly-throttled time ticks.
+  private lastSelectKey: string = '';
   
   // Separate queues for priority management
   private priorityQueue: TileId[] = []; // High priority - current time tiles
@@ -423,36 +436,41 @@ export class SpatiotemporalTileset {
   
   /**
    * Get zoom levels to load based on refinement strategy
-   * 
+   *
    * 'best-available': Load requested zoom + parent tiles as fallback
    * 'no-overlap': Only load requested zoom level
-   * 
-   * This follows deck.gl TileLayer patterns for LOD (Level of Detail)
+   *
+   * This follows deck.gl TileLayer patterns for LOD (Level of Detail). The
+   * parent fallback list is large enough to bridge archives built with
+   * sparse-tile skipping (`stt-build --min-features-per-tile > 1`), where
+   * deep-zoom tiles in low-density regions are intentionally omitted and the
+   * renderer must walk further back to find a covering ancestor.
    */
   private getZoomLevelsToLoad(requestedZoom: number): number[] {
     const { refinementStrategy, minZoom, maxZoom } = this.options;
-    
+
     // Clamp requested zoom to available range
     const clampedZoom = Math.max(minZoom, Math.min(maxZoom, requestedZoom));
-    
+
     if (refinementStrategy === 'no-overlap') {
       // Only load the exact zoom level
       return [clampedZoom];
     }
-    
-    // 'best-available': Load requested zoom + parent tiles for fallback
-    // This ensures we always have something to show while detailed tiles load
+
+    // 'best-available': primary zoom + up to PARENT_FALLBACK_LEVELS parents.
+    // 4 levels covers the common case for sparse global point datasets:
+    // a feature isolated within ~150 km at z=10 typically clusters into a
+    // 2+ feature tile by z=6 (300 km/cell). Higher numbers don't add load
+    // pressure (each lower zoom has 4x fewer cells) but they DO grow the
+    // O(4^zDiff) ancestor-cover check in getVisibleTiles, so we cap.
+    const PARENT_FALLBACK_LEVELS = 4;
     const zoomLevels: number[] = [clampedZoom];
-    
-    // Add parent zoom levels (up to 2 levels back)
-    // This provides smooth progressive refinement
-    if (clampedZoom > minZoom) {
-      zoomLevels.push(clampedZoom - 1);
+    for (let i = 1; i <= PARENT_FALLBACK_LEVELS; i++) {
+      const z = clampedZoom - i;
+      if (z < minZoom) break;
+      zoomLevels.push(z);
     }
-    if (clampedZoom > minZoom + 1) {
-      zoomLevels.push(clampedZoom - 2);
-    }
-    
+
     return zoomLevels;
   }
   
@@ -461,15 +479,29 @@ export class SpatiotemporalTileset {
    */
   private async selectAndLoadTiles(): Promise<void> {
     if (!this.currentViewport) return;
-    
+
     const { bounds, zoom, time, timeWindow } = this.currentViewport;
-    
+
     // Calculate temporal range
     const timeRange = {
       start: time - timeWindow / 2,
       end: time + timeWindow / 2,
     };
-    
+
+    // Cheap fast-path: when the (bounds, zoom, time-range) signature is
+    // identical to the previous call we'd just rebuild the same
+    // `neededTileKeys` set and recompute equality. Skip the awaited
+    // `getAvailableTiles` chain entirely. Running on a TimeController
+    // tick that hasn't crossed a bucket boundary, this is the common
+    // case and the await round-trip is the dominant cost.
+    const selectKey =
+      `${bounds.minLon}|${bounds.minLat}|${bounds.maxLon}|${bounds.maxLat}` +
+      `|${zoom}|${timeRange.start}|${timeRange.end}`;
+    if (selectKey === this.lastSelectKey) {
+      return;
+    }
+    this.lastSelectKey = selectKey;
+
     // Get zoom levels to load (supports LOD with parent tiles)
     const zoomLevels = this.getZoomLevelsToLoad(zoom);
     
@@ -804,8 +836,9 @@ export class SpatiotemporalTileset {
           header.tile = tile;
           header.isLoaded = true;
           header.byteSize = estimateTileSize(tile);
-          // Incremental byte accounting — never re-summed every frame.
+          // Incremental accounting — never re-summed every frame.
           this.currentCacheBytes += header.byteSize;
+          this.loadedTileCount++;
 
           this.options.onTileLoad?.(tile);
 
@@ -867,12 +900,11 @@ export class SpatiotemporalTileset {
     // 30 seconds when paused (keep recently viewed tiles)
     const GRACE_PERIOD = this.isAnimating ? 120000 : 30000;
 
-    // Loaded-tile count is derived from the map; byte total is the incrementally
-    // maintained running counter (no per-frame re-sum).
-    let loadedCount = 0;
-    for (const [, header] of this.tiles) {
-      if (header.isLoaded && header.tile) loadedCount++;
-    }
+    // Loaded-tile count and byte total are both maintained incrementally
+    // (see `loadedTileCount` / `currentCacheBytes`). The previous version
+    // walked every header to recount loaded tiles on every eviction pass —
+    // visibly expensive at a few thousand cached tiles.
+    let loadedCount = this.loadedTileCount;
     let cacheBytes = this.currentCacheBytes;
 
     // Only evict if we're over limits
@@ -924,7 +956,8 @@ export class SpatiotemporalTileset {
   }
 
   /**
-   * Actually evict tiles from cache. Keeps the running byte counter accurate.
+   * Actually evict tiles from cache. Keeps the running byte counter +
+   * loaded-tile count accurate.
    */
   private evictTiles(tileKeys: string[]): void {
     for (const tileKey of tileKeys) {
@@ -932,8 +965,9 @@ export class SpatiotemporalTileset {
       if (header) {
         if (header.tile) {
           this.options.onTileUnload?.(header.tile);
-          // Incrementally decrement the running byte total.
+          // Incrementally decrement the running counters.
           this.currentCacheBytes -= header.byteSize;
+          if (header.isLoaded) this.loadedTileCount--;
         }
         this.tiles.delete(tileKey);
         this.cacheStats.evictions++;
@@ -1067,6 +1101,10 @@ export class SpatiotemporalTileset {
     this.prefetchQueue = [];
     this.activeRequests.clear();
     this.currentCacheBytes = 0;
+    this.loadedTileCount = 0;
+    // Force the next selectAndLoadTiles to run — the previous selection is
+    // no longer authoritative once we've torn down the tile registry.
+    this.lastSelectKey = '';
   }
   
   /**

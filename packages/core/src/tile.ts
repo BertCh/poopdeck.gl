@@ -337,9 +337,16 @@ function tableToBinaryFeatures(table: Table): BinaryFeatures {
       const n = dictArray ? dictArray.length : 0;
       for (let i = 0; i < n; i++) dictValues.push(dictArray.get(i));
       const indices = new Uint16Array(featureCount);
+      // Arrow returns an empty (byteLength=0) `nullBitmap` for columns with
+      // no nulls — it's truthy but every byte read yields undefined, so a
+      // naive `validity && bit === 0` check marks EVERY row null and the
+      // category filter (e.g. heatmap pickup/dropoff filter) rejects all
+      // features. Mirror Arrow's own `nullable` check: only inspect bits
+      // when the buffer actually has content.
       const validity = data.nullBitmap;
+      const hasValidity = validity && validity.byteLength > 0;
       for (let i = 0; i < featureCount; i++) {
-        if (validity && (validity[(i + data.offset) >> 3] & (1 << ((i + data.offset) & 7))) === 0) {
+        if (hasValidity && (validity[(i + data.offset) >> 3] & (1 << ((i + data.offset) & 7))) === 0) {
           indices[i] = 0xffff;
         } else {
           // Widen narrower key types up to Uint16. Arrow stores keys as

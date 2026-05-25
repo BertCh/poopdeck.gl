@@ -49,6 +49,18 @@ const deckLayers: LayerInfo[] = [
     demoId: "nyc-taxi-trips",
   },
   {
+    name: "VatTripsLayer",
+    description:
+      "Vertex-Animation-Texture variant. One quad instance per active trip; per-tile RGBA32F texture stores position-over-time and the vertex shader samples it at the current playhead. GPU work is independent of per-trajectory vertex count.",
+    useCase: "100k+ simultaneous trips, dense urban taxi/rideshare animations, anywhere AnimatedTripsLayer's per-vertex upload becomes the bottleneck",
+    props: [
+      { name: "headColor", type: "Color", description: "Constant RGBA color of the head dot" },
+      { name: "headRadiusPixels", type: "number", description: "Head-dot radius in pixels" },
+      { name: "timeSlots", type: "number", description: "Resampled positions per trip in the VAT texture (default 64)" },
+    ],
+    demoId: "nyc-taxi-vat",
+  },
+  {
     name: "AnimatedPolygonLayer",
     description:
       "Renders polygon features with temporal filtering. Polygons appear when their time range overlaps the current window.",

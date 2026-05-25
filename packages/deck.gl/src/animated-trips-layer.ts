@@ -24,6 +24,7 @@
 import { PathLayer } from '@deck.gl/layers';
 import type { Color, Layer, LayerContext } from '@deck.gl/core';
 import { SpatioTemporalLayer, SpatioTemporalLayerProps } from './spatiotemporal-layer';
+import { NoPickingPathLayer } from './no-picking-path-layer';
 import { TimeFilterExtension } from './time-filter-extension';
 import {
   CategoryColorExtension,
@@ -88,14 +89,30 @@ function makeTileKey(tile: Tile, layer: TileLayer): string {
 }
 
 /**
- * Per-vertex time fallback when the tile lacks `vertexTimestamps`. Linearly
- * interpolates each feature's per-vertex time from its [startTime, endTime].
- * Allocated once per tile (cached in PreparedTile) — not per frame.
+ * Per-vertex time fallback when the tile lacks `vertexTimestamps`.
+ *
+ * Distributes each feature's [startTime, endTime] across its vertices by
+ * cumulative haversine distance — matches the Rust side
+ * (`interpolate_vertex_times` in stt-build/src/columnar.rs). Index-based
+ * fallback (the previous behaviour) made long segments "flash" because a
+ * single long edge got the same time delta as a short urban-block edge.
+ *
+ * The build path normally populates `binary.vertexTimestamps` directly, so
+ * this only fires for tiles whose producer didn't compute per-vertex times
+ * (older datasets, ad-hoc inputs). Allocated once per tile (cached in
+ * PreparedTile) — not per frame.
  */
 function synthesizeVertexTimes(binary: BinaryFeatures): Float32Array {
   const startIndices = binary.startIndices!;
   const totalVerts = startIndices[binary.featureCount];
   const out = new Float32Array(totalVerts);
+  const dims = binary.positionDimensions ?? 2;
+  const positions = binary.positions;
+
+  // Reused per-feature distance buffer. featureCount-bounded growth means a
+  // single allocation lives across all features in this tile.
+  let cum = new Float64Array(0);
+
   for (let i = 0; i < binary.featureCount; i++) {
     const v0 = startIndices[i];
     const v1 = startIndices[i + 1];
@@ -103,12 +120,57 @@ function synthesizeVertexTimes(binary: BinaryFeatures): Float32Array {
     const featureStart = binary.startTimes[i];
     const featureEnd = binary.endTimes[i];
     const duration = featureEnd - featureStart;
+
+    if (numVerts <= 1) {
+      if (numVerts === 1) out[v0] = featureStart;
+      continue;
+    }
+    if (duration <= 0) {
+      for (let v = 0; v < numVerts; v++) out[v0 + v] = featureStart;
+      continue;
+    }
+
+    if (cum.length < numVerts) cum = new Float64Array(numVerts);
+    cum[0] = 0;
+    let total = 0;
+    for (let v = 1; v < numVerts; v++) {
+      const aBase = (v0 + v - 1) * dims;
+      const bBase = (v0 + v) * dims;
+      total += haversineMeters(
+        positions[aBase],
+        positions[aBase + 1],
+        positions[bBase],
+        positions[bBase + 1],
+      );
+      cum[v] = total;
+    }
+
+    if (total <= 0) {
+      for (let v = 0; v < numVerts; v++) out[v0 + v] = featureStart;
+      continue;
+    }
     for (let v = 0; v < numVerts; v++) {
-      const progress = numVerts > 1 ? v / (numVerts - 1) : 0;
-      out[v0 + v] = featureStart + progress * duration;
+      const frac = cum[v] / total;
+      out[v0 + v] = featureStart + frac * duration;
     }
   }
   return out;
+}
+
+const EARTH_RADIUS_M = 6_371_000;
+
+/** Haversine distance in meters. Inputs in degrees. */
+function haversineMeters(lon1: number, lat1: number, lon2: number, lat2: number): number {
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const lat1Rad = (lat1 * Math.PI) / 180;
+  const lat2Rad = (lat2 * Math.PI) / 180;
+  const sinDLat = Math.sin(dLat / 2);
+  const sinDLon = Math.sin(dLon / 2);
+  const a =
+    sinDLat * sinDLat +
+    Math.cos(lat1Rad) * Math.cos(lat2Rad) * sinDLon * sinDLon;
+  return 2 * EARTH_RADIUS_M * Math.asin(Math.sqrt(a));
 }
 
 /**
@@ -165,6 +227,14 @@ export class AnimatedTripsLayer extends SpatioTemporalLayer<AnimatedTripsLayerPr
    * invalidated and rebuilt on the next render.
    */
   private lastLayerPropsKey: string = '';
+
+  /**
+   * Tile-array identity from the previous render. When the parent layer
+   * returns the SAME `state.tiles` reference (i.e. no setState during this
+   * render cycle) we skip the prune walks over `preparedTileCache` and
+   * `sublayerCache` entirely — the live set is unchanged by construction.
+   */
+  private lastTilesRef: Tile[] | null = null;
 
   /**
    * Singleton TimeFilterExtension reused by every sublayer. Extensions are
@@ -245,20 +315,26 @@ export class AnimatedTripsLayer extends SpatioTemporalLayer<AnimatedTripsLayerPr
   renderLayers(): Layer[] {
     const t0 = performance.now();
     const { tiles } = this.state;
-    if (!tiles || tiles.length === 0) return [];
+    if (!tiles || tiles.length === 0) {
+      this.lastTilesRef = null;
+      return [];
+    }
 
-    // Prune cache: drop prepared entries for tiles that are no longer visible.
-    // We do this once per renderLayers() — O(currentTiles + cacheSize).
-    const live = new Set<string>();
-    for (const tile of tiles) {
-      for (const tileLayer of tile.layers) live.add(makeTileKey(tile, tileLayer));
-    }
-    for (const key of this.preparedTileCache.keys()) {
-      if (!live.has(key)) this.preparedTileCache.delete(key);
-    }
-    // Same pruning for the sublayer-instance cache.
-    for (const key of this.sublayerCache.keys()) {
-      if (!live.has(key)) this.sublayerCache.delete(key);
+    // Skip the O(cacheSize) prune walk when the parent handed us the SAME
+    // tile-array reference (no setState since the last render). The live set
+    // is then identical to the cached set by construction.
+    if (this.lastTilesRef !== tiles) {
+      const live = new Set<string>();
+      for (const tile of tiles) {
+        for (const tileLayer of tile.layers) live.add(makeTileKey(tile, tileLayer));
+      }
+      for (const key of this.preparedTileCache.keys()) {
+        if (!live.has(key)) this.preparedTileCache.delete(key);
+      }
+      for (const key of this.sublayerCache.keys()) {
+        if (!live.has(key)) this.sublayerCache.delete(key);
+      }
+      this.lastTilesRef = tiles;
     }
 
     // If any layer-level prop changed since the last render, every cached
@@ -475,6 +551,11 @@ export class AnimatedTripsLayer extends SpatioTemporalLayer<AnimatedTripsLayerPr
     if (useGpuCategory) {
       props.categoryPalette = prepared.gpuPalette!;
     }
-    return new PathLayer(props as any);
+    // NoPickingPathLayer frees the `instancePickingColors` attribute slot,
+    // which keeps the fp64 + TimeFilter + CategoryColor combo under WebGL2's
+    // 16-attribute minimum. Sublayers here are always `pickable: false`, so
+    // dropping the picking buffer is a no-op behaviourally. See
+    // `no-picking-path-layer.ts` for the upstream-fix timeline.
+    return new NoPickingPathLayer(props as any);
   }
 }

@@ -1,0 +1,243 @@
+{
+  "capturedAt": "2026-05-24T19:14:37.736Z",
+  "durationMs": 10000,
+  "host": "http://localhost:3003",
+  "bucketsMs": [
+    16,
+    33,
+    50,
+    100,
+    250,
+    500
+  ],
+  "runs": [
+    {
+      "demo": "nyc-taxi-vat",
+      "url": "http://localhost:3003/demo/nyc-taxi-vat",
+      "status": "ok",
+      "error": null,
+      "ttftMs": 2362.1000000089407,
+      "fps": 120,
+      "frameTime": {
+        "counts": {
+          "<=16": 1200,
+          "<=33": 0,
+          "<=50": 0,
+          "<=100": 0,
+          "<=250": 0,
+          "<=500": 0
+        },
+        "overflow": 0,
+        "p50": 8.300000000001091,
+        "p95": 9.299999999999272,
+        "p99": 9.399999999999636,
+        "max": 9.400000000001455,
+        "mean": 8.334083333333332,
+        "n": 1200
+      },
+      "longTasks": 6,
+      "consolidations": 0,
+      "renderLayers": 4,
+      "tilePrepare": 52,
+      "decodes": 12,
+      "workersStarted": 7,
+      "visibleTilesAtEnd": 15,
+      "consoleErrors": [
+        "[warn] [.WebGL-0x11c00517e00]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+        "[warn] [.WebGL-0x11c00520200]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+        "[warn] [.WebGL-0x11c00517e00]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+        "[warn] [.WebGL-0x11c00520200]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels (this message will no longer repeat)",
+        "[error] luma.gl: %cWebGL color: white; background: red; padding: 2px 6px; border-radius: 3px; Link error during link-error: Vertex shader is not compiled.\n\u0000 SharedRenderPipeline:\"nyc-taxi-vat-14/4826/6158/1420070400000:default\"",
+        "[warn] [VatTripsLayer] tile 14/4824/6158/1420070400000:default has 9723 trips; clamping to 8192 (WebGL2 max-texture-size).",
+        "[warn] [VatTripsLayer] tile 14/4825/6157/1420070400000:default has 9586 trips; clamping to 8192 (WebGL2 max-texture-size).",
+        "[warn] [VatTripsLayer] tile 13/2412/3079/1420070400000:default has 13550 trips; clamping to 8192 (WebGL2 max-texture-size).",
+        "[warn] [VatTripsLayer] tile 12/1206/1539/1420070400000:default has 23118 trips; clamping to 8192 (WebGL2 max-texture-size).",
+        "[warn] [VatTripsLayer] tile 11/603/769/1420070400000:default has 24947 trips; clamping to 8192 (WebGL2 max-texture-size).",
+        "[warn] [VatTripsLayer] tile 10/301/384/1420070400000:default has 25338 trips; clamping to 8192 (WebGL2 max-texture-size)."
+      ],
+      "decodeStats": {
+        "n": 12,
+        "totalMs": 3595.7,
+        "mean": 299.64,
+        "p50": 246.2,
+        "p95": 778.7,
+        "max": 778.7
+      },
+      "consolidationStats": null,
+      "renderLayersStats": {
+        "n": 4,
+        "totalMs": 93.7,
+        "mean": 23.43,
+        "p50": 21.3,
+        "p95": 49.4,
+        "max": 49.4
+      },
+      "tilePrepareStats": {
+        "n": 52,
+        "totalMs": 93.1,
+        "mean": 1.79,
+        "p50": 0,
+        "p95": 11.3,
+        "max": 12.6
+      },
+      "_raw": {
+        "topLongTasks": [
+          {
+            "duration": 252,
+            "startSinceNav": 11739
+          },
+          {
+            "duration": 235,
+            "startSinceNav": 11463
+          },
+          {
+            "duration": 169,
+            "startSinceNav": 11293
+          },
+          {
+            "duration": 83,
+            "startSinceNav": 10439
+          },
+          {
+            "duration": 66,
+            "startSinceNav": 10528
+          },
+          {
+            "duration": 64,
+            "startSinceNav": 10594
+          }
+        ],
+        "topDecodes": [
+          {
+            "tileKey": "10/301/384/1420070400000",
+            "ms": 778.7000000029802,
+            "compressedBytes": 44906177,
+            "path": "worker"
+          },
+          {
+            "tileKey": "11/603/769/1420070400000",
+            "ms": 509.09999999403954,
+            "compressedBytes": 41931342,
+            "path": "worker"
+          },
+          {
+            "tileKey": "12/1206/1539/1420070400000",
+            "ms": 401,
+            "compressedBytes": 31964217,
+            "path": "worker"
+          },
+          {
+            "tileKey": "13/2412/3078/1420070400000",
+            "ms": 342.70000000298023,
+            "compressedBytes": 10992807,
+            "path": "worker"
+          },
+          {
+            "tileKey": "13/2412/3079/1420070400000",
+            "ms": 249.79999999701977,
+            "compressedBytes": 12323459,
+            "path": "worker"
+          }
+        ],
+        "topConsolidations": []
+      }
+    },
+    {
+      "demo": "nyc-taxi-trips",
+      "url": "http://localhost:3003/demo/nyc-taxi-trips",
+      "status": "ok",
+      "error": null,
+      "ttftMs": 6686.20000000298,
+      "fps": 2.6,
+      "frameTime": {
+        "counts": {
+          "<=16": 25,
+          "<=33": 0,
+          "<=50": 0,
+          "<=100": 0,
+          "<=250": 0,
+          "<=500": 0
+        },
+        "overflow": 1,
+        "p50": 8.30000000000291,
+        "p95": 9.30000000000291,
+        "p99": 76002.90000000001,
+        "max": 76002.90000000001,
+        "mean": 2931.223076923077,
+        "n": 26
+      },
+      "longTasks": 2,
+      "consolidations": 0,
+      "renderLayers": 2,
+      "tilePrepare": 25,
+      "decodes": 4,
+      "workersStarted": 7,
+      "visibleTilesAtEnd": 13,
+      "consoleErrors": [],
+      "decodeStats": {
+        "n": 4,
+        "totalMs": 152384.4,
+        "mean": 38096.1,
+        "p50": 76104.2,
+        "p95": 76124.5,
+        "max": 76124.5
+      },
+      "consolidationStats": null,
+      "renderLayersStats": {
+        "n": 2,
+        "totalMs": 0.2,
+        "mean": 0.1,
+        "p50": 0.1,
+        "p95": 0.1,
+        "max": 0.1
+      },
+      "tilePrepareStats": {
+        "n": 25,
+        "totalMs": 0,
+        "mean": 0,
+        "p50": 0,
+        "p95": 0,
+        "max": 0
+      },
+      "_raw": {
+        "topLongTasks": [
+          {
+            "duration": 47825,
+            "startSinceNav": 139138
+          },
+          {
+            "duration": 47247,
+            "startSinceNav": 91858
+          }
+        ],
+        "topDecodes": [
+          {
+            "tileKey": "11/603/769/1420070400000",
+            "ms": 76124.5,
+            "compressedBytes": 84356247,
+            "path": "worker"
+          },
+          {
+            "tileKey": "10/301/384/1420070400000",
+            "ms": 76104.20000000298,
+            "compressedBytes": 89558743,
+            "path": "worker"
+          },
+          {
+            "tileKey": "12/1206/1539/1420070400000",
+            "ms": 132.29999999701977,
+            "compressedBytes": 67696663,
+            "path": "worker"
+          },
+          {
+            "tileKey": "13/2413/3079/1420070400000",
+            "ms": 23.399999991059303,
+            "compressedBytes": 4022551,
+            "path": "worker"
+          }
+        ],
+        "topConsolidations": []
+      }
+    }
+  ]
+}

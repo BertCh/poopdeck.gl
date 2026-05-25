@@ -23,6 +23,7 @@
 import { PathLayer } from '@deck.gl/layers';
 import type { Color, Layer, LayerContext } from '@deck.gl/core';
 import { SpatioTemporalLayer, SpatioTemporalLayerProps } from './spatiotemporal-layer';
+import { NoPickingPathLayer } from './no-picking-path-layer';
 import { TimeFilterExtension } from './time-filter-extension';
 import {
   CategoryColorExtension,
@@ -36,6 +37,10 @@ const DEBUG = false;
 export interface AnimatedPathLayerProps extends SpatioTemporalLayerProps {
   widthScale?: number;
   widthUnits?: 'pixels' | 'meters';
+  /** Clamp path width to at least this many on-screen pixels. */
+  widthMinPixels?: number;
+  /** Clamp path width to at most this many on-screen pixels. */
+  widthMaxPixels?: number;
   /** Path color - constant Color, or property name for categorical coloring */
   pathColor?: Color | string;
   /** Path width - constant number, or property name for per-feature width */
@@ -43,6 +48,14 @@ export interface AnimatedPathLayerProps extends SpatioTemporalLayerProps {
   colorPalette?: Color[];
   fadeInDuration?: number;
   fadeOutDuration?: number;
+  /**
+   * Rounded line caps. Default `false` (flat). Rounded caps are the dominant
+   * fragment-shader cost at small widths and are visually indistinguishable
+   * from flat below ~10 px.
+   */
+  capRounded?: boolean;
+  /** Rounded line joints; same fragment-cost tradeoff as `capRounded`. */
+  jointRounded?: boolean;
 }
 
 const DEFAULT_PALETTE: Color[] = [
@@ -116,6 +129,8 @@ export class AnimatedPathLayer extends SpatioTemporalLayer<AnimatedPathLayerProp
     { layer: PathLayer; preparedKey: PreparedTile; layerPropsKey: string }
   >();
   private lastLayerPropsKey: string = '';
+  /** Tile-array identity from the previous render — see AnimatedTripsLayer.lastTilesRef. */
+  private lastTilesRef: Tile[] | null = null;
   /**
    * Path layer is window-mode only (whole feature on/off + fade), so the
    * per-vertex time attribute is unused. Registering only the start/end pair
@@ -157,17 +172,25 @@ export class AnimatedPathLayer extends SpatioTemporalLayer<AnimatedPathLayerProp
   renderLayers(): Layer[] {
     const t0 = performance.now();
     const { tiles } = this.state;
-    if (!tiles || tiles.length === 0) return [];
+    if (!tiles || tiles.length === 0) {
+      this.lastTilesRef = null;
+      return [];
+    }
 
-    const live = new Set<string>();
-    for (const tile of tiles) {
-      for (const tileLayer of tile.layers) live.add(makeTileKey(tile, tileLayer));
-    }
-    for (const key of this.preparedTileCache.keys()) {
-      if (!live.has(key)) this.preparedTileCache.delete(key);
-    }
-    for (const key of this.sublayerCache.keys()) {
-      if (!live.has(key)) this.sublayerCache.delete(key);
+    // Skip O(cacheSize) prune walks when the parent re-rendered with the
+    // same tile-array ref — the live and cached sets are then identical.
+    if (this.lastTilesRef !== tiles) {
+      const live = new Set<string>();
+      for (const tile of tiles) {
+        for (const tileLayer of tile.layers) live.add(makeTileKey(tile, tileLayer));
+      }
+      for (const key of this.preparedTileCache.keys()) {
+        if (!live.has(key)) this.preparedTileCache.delete(key);
+      }
+      for (const key of this.sublayerCache.keys()) {
+        if (!live.has(key)) this.sublayerCache.delete(key);
+      }
+      this.lastTilesRef = tiles;
     }
 
     const layerPropsKey = this.computeLayerPropsKey();
@@ -347,6 +370,13 @@ export class AnimatedPathLayer extends SpatioTemporalLayer<AnimatedPathLayerProp
     if (useGpuCategory) {
       props.categoryPalette = prepared.gpuPalette!;
     }
-    return new PathLayer(props as any);
+    // NoPickingPathLayer drops `instancePickingColors` from both the JS
+    // attribute-manager registration AND the compiled vertex shader. With
+    // PathLayer's hard-coded 13 attrs + TimeFilterExtension's 3 +
+    // CategoryColorExtension's 1 = 17, the layer otherwise blows past the
+    // WebGL2 16-attribute minimum and the per-pipeline link fails on GPUs
+    // that report exactly 16. Sublayers here are always non-pickable, so
+    // there is no behavioural change. See `no-picking-path-layer.ts`.
+    return new NoPickingPathLayer(props as any);
   }
 }

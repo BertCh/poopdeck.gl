@@ -169,10 +169,33 @@ const layer = new H3SummaryLayer({
   opacity: 0.85,
 });`;
 
+const vatLayerExample = `import { VatTripsLayer, TimeController } from '@stt/deck.gl';
+
+const timeController = new TimeController({
+  initialTime: 1420070400000,
+  speed: 142985000 / 600,
+  loop: true,
+});
+
+// Vertex Animation Texture: one quad per active trip, positions baked
+// into a per-tile 2D texture and sampled in the vertex shader. Scales
+// independently of per-trip vertex count.
+const layer = new VatTripsLayer({
+  id: 'taxi-vat',
+  data: '/data/nyc-taxi-paths.stt',
+  currentTime: timeController.getTime(),
+  timeController,
+  timeWindow: 60000,
+  headColor: [253, 128, 93, 255],
+  headRadiusPixels: 4,
+  timeSlots: 64,
+});`;
+
 const codeExamples: Record<DatasetType, string> = {
   point: pointLayerExample,
   path: pathLayerExample,
   trips: tripsLayerExample,
+  vat: vatLayerExample,
   heatmap: heatmapLayerExample,
   polygon: polygonLayerExample,
   summary: summaryLayerExample,

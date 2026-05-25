@@ -158,6 +158,8 @@ export class AnimatedPolygonLayer extends SpatioTemporalLayer<AnimatedPolygonLay
 
   /** Digest of every prop baked into a sublayer at construction. */
   private lastLayerPropsKey: string = '';
+  /** Tile-array identity from the previous render — see AnimatedTripsLayer.lastTilesRef. */
+  private lastTilesRef: Tile[] | null = null;
 
   /** Singleton extensions, reused by every sublayer (stateless w.r.t. data). */
   private readonly polygonTimeFilterExtension = new PolygonTimeFilterExtension();
@@ -197,18 +199,23 @@ export class AnimatedPolygonLayer extends SpatioTemporalLayer<AnimatedPolygonLay
       // that the previous sublayers should unmount.
       this.preparedTileCache.clear();
       this.sublayerCache.clear();
+      this.lastTilesRef = null;
       return [];
     }
 
-    const live = new Set<string>();
-    for (const tile of tiles) {
-      for (const tileLayer of tile.layers) live.add(makeTileKey(tile, tileLayer));
-    }
-    for (const key of this.preparedTileCache.keys()) {
-      if (!live.has(key)) this.preparedTileCache.delete(key);
-    }
-    for (const key of this.sublayerCache.keys()) {
-      if (!live.has(key)) this.sublayerCache.delete(key);
+    // Skip O(cacheSize) prune walks when the tile-array ref is unchanged.
+    if (this.lastTilesRef !== tiles) {
+      const live = new Set<string>();
+      for (const tile of tiles) {
+        for (const tileLayer of tile.layers) live.add(makeTileKey(tile, tileLayer));
+      }
+      for (const key of this.preparedTileCache.keys()) {
+        if (!live.has(key)) this.preparedTileCache.delete(key);
+      }
+      for (const key of this.sublayerCache.keys()) {
+        if (!live.has(key)) this.sublayerCache.delete(key);
+      }
+      this.lastTilesRef = tiles;
     }
 
     const layerPropsKey = this.computeLayerPropsKey();

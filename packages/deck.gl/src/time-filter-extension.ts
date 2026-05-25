@@ -170,9 +170,6 @@ export class TimeFilterExtension extends LayerExtension {
   static defaultProps = defaultProps;
   static extensionName = 'TimeFilterExtension';
 
-  // Retained so consumers can read which mode the extension was configured
-  // with even though all modes behave identically today.
-  private readonly mode: TimeFilterMode;
   /**
    * Memoized shader-injection object. deck.gl calls `getShaders()` on every
    * sublayer construction; returning a NEW object literal each time would
@@ -185,9 +182,13 @@ export class TimeFilterExtension extends LayerExtension {
     inject: Record<string, string>;
   } | null = null;
 
-  constructor(options: TimeFilterExtensionOptions = {}) {
+  // The `mode` option is accepted but currently a no-op (forward-compat
+  // hook for deck.gl 9.4's `gl_InstanceID` picking path — see the type
+  // docstring above). We deliberately do NOT store it: nothing reads it,
+  // and keeping a dead field around invited bugs where someone might
+  // assume reading `.mode` reflected real behaviour.
+  constructor(_options: TimeFilterExtensionOptions = {}) {
     super();
-    this.mode = options.mode ?? 'auto';
   }
 
   getShaders(this: Layer<TimeFilterExtensionProps>, extension: TimeFilterExtension) {

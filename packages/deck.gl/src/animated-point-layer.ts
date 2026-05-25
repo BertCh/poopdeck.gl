@@ -263,6 +263,8 @@ export class AnimatedPointLayer extends SpatioTemporalLayer<AnimatedPointLayerPr
 
   /** Digest of every prop baked into a sublayer at construction time. */
   private lastLayerPropsKey: string = '';
+  /** Tile-array identity from the previous render — see AnimatedTripsLayer.lastTilesRef. */
+  private lastTilesRef: Tile[] | null = null;
 
   /**
    * Singleton TimeFilterExtension reused by every sublayer. Extensions are
@@ -327,18 +329,26 @@ export class AnimatedPointLayer extends SpatioTemporalLayer<AnimatedPointLayerPr
   renderLayers(): Layer[] {
     const t0 = performance.now();
     const { tiles } = this.state;
-    if (!tiles || tiles.length === 0) return [];
+    if (!tiles || tiles.length === 0) {
+      this.lastTilesRef = null;
+      return [];
+    }
 
-    // Prune cache: drop entries for tiles no longer visible.
-    const live = new Set<string>();
-    for (const tile of tiles) {
-      for (const tileLayer of tile.layers) live.add(makeTileKey(tile, tileLayer));
-    }
-    for (const key of this.preparedTileCache.keys()) {
-      if (!live.has(key)) this.preparedTileCache.delete(key);
-    }
-    for (const key of this.sublayerCache.keys()) {
-      if (!live.has(key)) this.sublayerCache.delete(key);
+    // Prune cache only when the tile-array ref changed — when the parent
+    // hands us the same `state.tiles` instance, the live and cached sets are
+    // identical by construction and the walks are pure overhead.
+    if (this.lastTilesRef !== tiles) {
+      const live = new Set<string>();
+      for (const tile of tiles) {
+        for (const tileLayer of tile.layers) live.add(makeTileKey(tile, tileLayer));
+      }
+      for (const key of this.preparedTileCache.keys()) {
+        if (!live.has(key)) this.preparedTileCache.delete(key);
+      }
+      for (const key of this.sublayerCache.keys()) {
+        if (!live.has(key)) this.sublayerCache.delete(key);
+      }
+      this.lastTilesRef = tiles;
     }
 
     // Any layer-level prop change invalidates every cached sublayer.

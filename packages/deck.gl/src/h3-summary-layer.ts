@@ -191,8 +191,39 @@ export class H3SummaryLayer extends CompositeLayer<H3SummaryLayerProps> {
 
   declare state: H3SummaryLayerState & { [key: string]: unknown };
 
+  /** Set-based snapshot of the last published tile set — see SpatioTemporalLayer._tilesChanged. */
+  private _lastTileIdSet: Set<string> = new Set();
+
   /** Per-tile prepared-data cache. Pruned to the live tile set every render. */
   private preparedTileCache = new Map<string, PreparedTile>();
+
+  /**
+   * Per-tile H3HexagonLayer instance cache. Same idea as the animated layers'
+   * `sublayerCache`: returning the SAME H3HexagonLayer reference for a tile
+   * across renderLayers() lets deck.gl short-circuit the prop-diff pass for
+   * that tile entirely. Without this we constructed and prop-diff'd a fresh
+   * H3HexagonLayer per visible cell-tile per render — at ~hundreds of summary
+   * tiles that dominated steady-state cost on the earthquake demo.
+   *
+   * Invalidated keys:
+   *  - `preparedKey`: the prepared-data object (changes when the tile's rows
+   *    change OR the weight property changed).
+   *  - `styleKey`: layer-level style props that we bake into the H3HexagonLayer
+   *    at construction time (extruded, coverage, opacity, domain, etc.).
+   */
+  private sublayerCache = new Map<
+    string,
+    { layer: H3HexagonLayer<PreparedHexRow>; preparedKey: PreparedTile; styleKey: string }
+  >();
+  private lastTilesRef: Tile[] | null = null;
+
+  /** Skip `unproject()` while the viewport hasn't moved. */
+  private _lastBoundsKey: string = '';
+  private _cachedBounds: BoundingBox | null = null;
+
+  /** Finalize guard for in-flight `_initArchiveAndTileset` (see SpatioTemporalLayer). */
+  private _finalized: boolean = false;
+  private _initializingUrl: string | null = null;
 
   initializeState(_context: LayerContext): void {
     const playStateHandler = (playing: boolean, speed: number) => {
@@ -222,6 +253,7 @@ export class H3SummaryLayer extends CompositeLayer<H3SummaryLayerProps> {
   }
 
   finalizeState(_context: LayerContext): void {
+    this._finalized = true;
     if (this.props.timeController) {
       if (this.state.playStateHandler) {
         this.props.timeController.off('playState', this.state.playStateHandler);
@@ -234,6 +266,7 @@ export class H3SummaryLayer extends CompositeLayer<H3SummaryLayerProps> {
     tileset?.finalize();
     archive?.finalize();
     this.preparedTileCache.clear();
+    this.sublayerCache.clear();
   }
 
   shouldUpdateState(params: { changeFlags: { somethingChanged: boolean } }): boolean {
@@ -242,7 +275,14 @@ export class H3SummaryLayer extends CompositeLayer<H3SummaryLayerProps> {
 
   updateState(params: UpdateParameters<this>): void {
     const { oldProps } = params;
-    if (oldProps?.data !== this.props.data && oldProps?.data !== undefined) {
+    // Race-safe URL change check (mirrors SpatioTemporalLayer): treat the URL
+    // as unchanged when an init for the same URL is already in flight.
+    const liveUrl = this.state.archive?.url ?? this._initializingUrl ?? null;
+    if (
+      oldProps?.data !== this.props.data &&
+      oldProps?.data !== undefined &&
+      this.props.data !== liveUrl
+    ) {
       this._initArchiveAndTileset();
       return;
     }
@@ -284,16 +324,38 @@ export class H3SummaryLayer extends CompositeLayer<H3SummaryLayerProps> {
       true,
     );
     const newTiles = tileset.getVisibleTiles();
-    // Only setState when the tile set actually changes — every other tick
-    // is a redraw-only.
-    if (newTiles.length !== this.state.tiles.length) {
+    // Set-based change detection. The previous length-only check missed
+    // the case where one tile entered and one left in the same tick
+    // (size unchanged, identities different) — those frames silently
+    // dropped a tile-set update.
+    if (this._tilesChangedSet(newTiles)) {
       this.setState({
         tiles: newTiles,
         frameNumber: this.state.frameNumber + 1,
       });
+      this._commitTileIdSet(newTiles);
     } else {
       this.setNeedsRedraw();
     }
+  }
+
+  private _tilesChangedSet(newTiles: Tile[]): boolean {
+    const prev = this._lastTileIdSet;
+    if (prev.size !== newTiles.length) return true;
+    for (const tile of newTiles) {
+      const { z, x, y, t } = tile.id;
+      if (!prev.has(`${z}/${x}/${y}/${t}`)) return true;
+    }
+    return false;
+  }
+
+  private _commitTileIdSet(newTiles: Tile[]): void {
+    const next = new Set<string>();
+    for (const tile of newTiles) {
+      const { z, x, y, t } = tile.id;
+      next.add(`${z}/${x}/${y}/${t}`);
+    }
+    this._lastTileIdSet = next;
   }
 
   private _updateTileset(): void {
@@ -313,12 +375,36 @@ export class H3SummaryLayer extends CompositeLayer<H3SummaryLayerProps> {
       timeWindow: this.props.timeWindow ?? 86_400_000,
     });
     const tiles = tileset.getVisibleTiles();
-    this.setState({ tiles });
+    // Only setState when the tile set actually changed — the previous
+    // unconditional setState forced deck.gl to re-run renderLayers() (and
+    // the per-tile H3HexagonLayer prop diff) on every viewport tick even
+    // when nothing new arrived.
+    if (this._tilesChangedSet(tiles)) {
+      this.setState({ tiles });
+      this._commitTileIdSet(tiles);
+    }
   }
 
   private async _initArchiveAndTileset(): Promise<void> {
-    const archive = new STTArchive({ url: this.props.data });
+    // Tear down the previous pair before wiring a new one. Without this,
+    // switching `data` (or letting two race) leaks the previous archive's
+    // worker pool + OPFS handles. Mirrors the fix in SpatioTemporalLayer.
+    const previousTileset = this.state.tileset;
+    const previousArchive = this.state.archive;
+    if (previousTileset) previousTileset.finalize();
+    if (previousArchive) previousArchive.finalize();
+
+    const targetUrl = this.props.data;
+    this._initializingUrl = targetUrl;
+
+    const archive = new STTArchive({ url: targetUrl });
     const metadata = await archive.getMetadata();
+
+    // Bail if finalized or superseded while we awaited metadata.
+    if (this._finalized || this._initializingUrl !== targetUrl) {
+      archive.finalize();
+      return;
+    }
     if (this.props.onMetadataLoad) this.props.onMetadataLoad(metadata);
 
     const tier = metadata.summaryTier;
@@ -353,18 +439,35 @@ export class H3SummaryLayer extends CompositeLayer<H3SummaryLayerProps> {
       getTileData: (tileId, _signal) => archive.getTile(tileId),
     });
 
-    this.setState({ archive, tileset, metadata });
+    this._initializingUrl = null;
+    // Reset tiles to [] so the next renderLayers prunes stale cache
+    // entries that referenced the previous archive (see the same fix in
+    // SpatioTemporalLayer._initArchiveAndTileset).
+    this.setState({ archive, tileset, metadata, tiles: [] });
+    this._lastTileIdSet = new Set();
+    this.lastTilesRef = null;
+    this.preparedTileCache.clear();
+    this.sublayerCache.clear();
   }
 
   private _getBounds(viewport: any): BoundingBox {
+    // Memoize on viewport identity (id + dims + camera) to skip the two
+    // `unproject` matrix-multiplies on the steady-state animation path.
+    const v = viewport;
+    const key = `${v.id ?? ''}|${v.width}x${v.height}|${v.zoom}|${v.longitude ?? 0},${v.latitude ?? 0}|${v.pitch ?? 0}|${v.bearing ?? 0}`;
+    if (this._cachedBounds && this._lastBoundsKey === key) {
+      return this._cachedBounds;
+    }
     const [minLon, minLat] = viewport.unproject([0, viewport.height]);
     const [maxLon, maxLat] = viewport.unproject([viewport.width, 0]);
-    return {
+    this._lastBoundsKey = key;
+    this._cachedBounds = {
       minLon: Math.max(-180, minLon),
       minLat: Math.max(-90, minLat),
       maxLon: Math.min(180, maxLon),
       maxLat: Math.min(90, maxLat),
     };
+    return this._cachedBounds;
   }
 
   private _getZoom(viewport: any): number {
@@ -453,14 +556,21 @@ export class H3SummaryLayer extends CompositeLayer<H3SummaryLayerProps> {
 
     const weightProp = this.props.weightProperty ?? 'count';
 
-    // Prune the prepared cache to the live tile set.
-    const live = new Set<string>();
-    for (const tile of tiles) live.add(`${makeTileKey(tile)}:${weightProp}`);
-    for (const key of this.preparedTileCache.keys()) {
-      if (!live.has(key)) this.preparedTileCache.delete(key);
+    // Skip the O(cacheSize) prune walk when the tile list reference is
+    // unchanged from the last render — the live set and cached set are
+    // necessarily identical.
+    if (this.lastTilesRef !== tiles) {
+      const live = new Set<string>();
+      for (const tile of tiles) live.add(`${makeTileKey(tile)}:${weightProp}`);
+      for (const key of this.preparedTileCache.keys()) {
+        if (!live.has(key)) this.preparedTileCache.delete(key);
+      }
+      for (const key of this.sublayerCache.keys()) {
+        if (!live.has(key)) this.sublayerCache.delete(key);
+      }
+      this.lastTilesRef = tiles;
     }
 
-    const out: Layer[] = [];
     // Resolve the color domain ONCE per render. When the caller pins it via
     // props we use that; otherwise we fall back to the max across visible
     // tiles. The fallback gives a usable display out of the box but is
@@ -483,9 +593,29 @@ export class H3SummaryLayer extends CompositeLayer<H3SummaryLayerProps> {
       ];
     }
 
+    // Layer-level style digest — when ANY of these change every cached
+    // H3HexagonLayer is stale and we rebuild. The domain is included so a
+    // streaming-in tile that widens the auto-fit domain invalidates the
+    // cache (otherwise the rampColor accessor would be stale).
+    const styleKey =
+      `${this.props.extruded ? 1 : 0}|${this.props.elevationScale ?? 1}` +
+      `|${this.props.coverage ?? 0.92}|${this.props.pickable ? 1 : 0}` +
+      `|${this.props.opacity ?? 1}|${domain[0]}|${domain[1]}` +
+      `|${weightProp}|${(this.props.colorRange ?? DEFAULT_COLOR_RANGE).length}`;
+
+    const out: Layer[] = [];
     for (const tile of tiles) {
       const prepared = this.prepareTile(tile, weightProp);
       if (!prepared) continue;
+      const cached = this.sublayerCache.get(prepared.tileKey);
+      if (
+        cached &&
+        cached.preparedKey === prepared &&
+        cached.styleKey === styleKey
+      ) {
+        out.push(cached.layer);
+        continue;
+      }
       const layer = new H3HexagonLayer<PreparedHexRow>({
         id: `${this.props.id}-${prepared.tileKey}`,
         data: prepared.rows,
@@ -512,6 +642,11 @@ export class H3SummaryLayer extends CompositeLayer<H3SummaryLayerProps> {
           ],
           getElevation: [this.props.extruded, this.props.elevationScale],
         },
+      });
+      this.sublayerCache.set(prepared.tileKey, {
+        layer,
+        preparedKey: prepared,
+        styleKey,
       });
       out.push(layer);
     }

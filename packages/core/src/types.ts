@@ -368,11 +368,17 @@ export interface ArchiveOptions {
    * environments that expose `navigator.storage.getDirectory` (modern
    * browsers) and `false` everywhere else (Node, SSR, sandboxed iframes).
    *
-   * When enabled, decompressed tile payloads are stored under the Origin
-   * Private File System keyed by `(url, tileId, archiveFingerprint)`. On a
-   * tab reload the cache survives, so re-rendering the same viewport skips
-   * both the HTTP range request AND the zstd decompress step — only the
-   * Arrow IPC parse runs.
+   * **Defaults to `false`.** When enabled, decompressed tile payloads are
+   * stored under the Origin Private File System keyed by `(url, tileId,
+   * archiveFingerprint)`. On a tab reload the cache survives, so
+   * re-rendering the same viewport skips both the HTTP range request AND
+   * the zstd decompress step — only the Arrow IPC parse runs.
+   *
+   * Only enable this when the archive fits comfortably in
+   * `opfsCacheMaxBytes` AND users revisit the same viewport across reloads.
+   * Cold tile loads cost an extra main-thread zstd decompress per tile
+   * (the worker decoder's decompressed bytes are not yet plumbed back to
+   * the cache writer), which hurts initial pan/zoom on large archives.
    */
   opfsCache?: boolean;
   /** Soft byte budget for the OPFS cache. Defaults to 512 MB. */

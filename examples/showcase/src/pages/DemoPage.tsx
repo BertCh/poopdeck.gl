@@ -19,9 +19,11 @@ import {
   HeatmapTimeLayer,
   H3SummaryLayer,
   TimeController,
+  VatTripsLayer,
 } from "@stt/deck.gl";
 import { getDatasetById } from "../datasets";
 import { calculateAnimationSpeed } from "../types";
+import type { SummaryToggleOption } from "../types";
 import Legend from "../components/Legend";
 import TimeControls from "../components/TimeControls";
 import PerformanceMonitor from "../components/PerformanceMonitor";
@@ -61,6 +63,23 @@ const DemoPage: React.FC = () => {
   const [bottomPanelExpanded, setBottomPanelExpanded] = useState(false);
   const [showTileBoundaries, setShowTileBoundaries] = useState(false);
   const [renderer, setRenderer] = useState<RendererKind>("deck");
+
+  // Active option for summary-tier weight toggles (e.g. pickup vs dropoff).
+  // Reset to the dataset's first option whenever the dataset changes.
+  const summaryToggleOptions = selectedDataset?.summaryToggleWeights;
+  const [summaryToggleId, setSummaryToggleId] = useState<string | undefined>(
+    summaryToggleOptions?.[0]?.id,
+  );
+  useEffect(() => {
+    setSummaryToggleId(summaryToggleOptions?.[0]?.id);
+  }, [summaryToggleOptions]);
+  const activeSummaryToggle: SummaryToggleOption | undefined = useMemo(() => {
+    if (!summaryToggleOptions) return undefined;
+    return (
+      summaryToggleOptions.find((o) => o.id === summaryToggleId) ??
+      summaryToggleOptions[0]
+    );
+  }, [summaryToggleOptions, summaryToggleId]);
 
   const baseAnimationSpeed = useMemo(() => {
     if (!selectedDataset) return 1000;
@@ -235,6 +254,32 @@ const DemoPage: React.FC = () => {
               [31, 186, 214, 255],
             pathWidth: selectedDataset.pathWidth ?? 3,
             widthUnits: selectedDataset.widthUnits ?? "pixels",
+            // Same fragment-cost story as trips: rounded is the dominant cost
+            // on dense Manhattan paths at small widths; default off.
+            capRounded: selectedDataset.capRounded ?? false,
+            jointRounded: selectedDataset.jointRounded ?? false,
+          }),
+        ];
+      case "vat":
+        return [
+          new VatTripsLayer({
+            ...baseProps,
+            headColor: selectedDataset.vatHeadColor ?? [253, 128, 93, 255],
+            headRadiusPixels: selectedDataset.vatHeadRadiusPixels ?? 4,
+            timeSlots: selectedDataset.vatTimeSlots ?? 64,
+            // Trail-mode props. When vatTrailLength > 0 the layer renders a
+            // ribbon per active trip instead of a head dot — same scaling
+            // characteristics, visual parity with AnimatedTripsLayer trips.
+            trailLength: selectedDataset.vatTrailLength ?? 0,
+            trailSamples: selectedDataset.vatTrailSamples ?? 16,
+            trailColor:
+              selectedDataset.vatTrailColor ??
+              selectedDataset.vatHeadColor ??
+              [253, 128, 93, 255],
+            tripWidth: selectedDataset.vatTripWidth ?? 4,
+            widthMinPixels: selectedDataset.widthMinPixels ?? 2,
+            widthMaxPixels: selectedDataset.widthMaxPixels ?? 8,
+            fadeTrail: selectedDataset.vatFadeTrail ?? true,
           }),
         ];
       case "trips": {
@@ -323,17 +368,28 @@ const DemoPage: React.FC = () => {
               [31, 186, 214, 180],
           }),
         ];
-      case "summary":
+      case "summary": {
+        // If the dataset declares a toggle (e.g. pickup vs dropoff), the
+        // active option overrides the base summary styling props. Otherwise
+        // fall back to the dataset's single-weight settings.
+        const weightProperty =
+          activeSummaryToggle?.weightProperty ??
+          selectedDataset.summaryWeightProperty ??
+          "count";
+        const colorRange =
+          activeSummaryToggle?.colorRange ?? selectedDataset.summaryColorRange;
+        const colorDomain =
+          activeSummaryToggle?.colorDomain ?? selectedDataset.summaryColorDomain;
         return [
           new H3SummaryLayer({
-            id: selectedDataset.id,
+            id: `${selectedDataset.id}-${activeSummaryToggle?.id ?? "default"}`,
             data: selectedDataset.url,
             currentTime: selectedDataset.timeRange.start,
             timeController,
             timeWindow,
-            weightProperty: selectedDataset.summaryWeightProperty ?? "count",
-            colorRange: selectedDataset.summaryColorRange,
-            colorDomain: selectedDataset.summaryColorDomain,
+            weightProperty,
+            colorRange,
+            colorDomain,
             extruded: selectedDataset.summaryExtruded ?? false,
             elevationScale: selectedDataset.summaryElevationScale ?? 1,
             coverage: selectedDataset.summaryCoverage ?? 0.92,
@@ -341,6 +397,7 @@ const DemoPage: React.FC = () => {
             pickable: false,
           }),
         ];
+      }
       default:
         return [];
     }
@@ -349,7 +406,7 @@ const DemoPage: React.FC = () => {
     // including currentTime here rebuilt the prop tree every tick (60Hz),
     // which forced deck.gl to invalidate the trip consolidation cache and
     // re-copy ~10M vertex positions per frame on the NYC taxi dataset.
-  }, [selectedDataset, timeController]);
+  }, [selectedDataset, timeController, activeSummaryToggle]);
 
   // Debug tile boundary layer
   const tileBoundaryLayer = useMemo(() => {
@@ -519,6 +576,17 @@ const DemoPage: React.FC = () => {
             </div>
           )}
 
+          {/* Summary-tier weight toggle (pickup ↔ dropoff style). */}
+          {summaryToggleOptions && summaryToggleOptions.length > 1 && (
+            <div className="absolute top-3 left-3">
+              <SummaryToggle
+                options={summaryToggleOptions}
+                value={activeSummaryToggle?.id}
+                onChange={setSummaryToggleId}
+              />
+            </div>
+          )}
+
           {/* Performance Monitor */}
           <PerformanceMonitor visible={true} />
         </div>
@@ -579,6 +647,56 @@ export default DemoPage;
  * Small segmented control for swapping between the deck.gl and `@stt/maplibre`
  * renderers. Kept inline here because it has no other consumer.
  */
+/**
+ * Pickup ↔ dropoff segmented control for summary-tier demos. Sits above the
+ * map and swaps the H3SummaryLayer's weight column + ramp in place. Coloured
+ * dots come from the first entry of each option's legendColors so the active
+ * option visually matches the legend ramp on the opposite corner.
+ */
+const SummaryToggle: React.FC<{
+  options: SummaryToggleOption[];
+  value: string | undefined;
+  onChange: (next: string) => void;
+}> = ({ options, value, onChange }) => {
+  return (
+    <div
+      className="inline-flex items-center rounded overflow-hidden"
+      style={{ background: "rgba(36, 39, 48, 0.95)", border: "1px solid #3A414C" }}
+      role="group"
+      aria-label="Summary weight"
+    >
+      {options.map((opt, i) => {
+        const active = opt.id === value;
+        const swatch =
+          opt.legendColors?.[opt.legendColors.length - 2] ??
+          opt.legendColors?.[opt.legendColors.length - 1] ??
+          "#1FBAD6";
+        return (
+          <button
+            key={opt.id}
+            type="button"
+            onClick={() => onChange(opt.id)}
+            className="px-3 py-1.5 text-xs transition-colors flex items-center gap-1.5"
+            style={{
+              background: active ? "#1FBAD6" : "transparent",
+              color: active ? "#000" : "#A0A7B4",
+              borderRight:
+                i < options.length - 1 ? "1px solid #3A414C" : undefined,
+            }}
+            aria-pressed={active}
+          >
+            <span
+              className="inline-block w-2 h-2 rounded-full shrink-0"
+              style={{ background: swatch }}
+            />
+            <span className="font-semibold leading-tight">{opt.label}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+};
+
 const RendererToggle: React.FC<{
   value: RendererKind;
   onChange: (next: RendererKind) => void;

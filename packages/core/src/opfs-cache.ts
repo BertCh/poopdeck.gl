@@ -120,6 +120,13 @@ export class OpfsTileCache {
   private initPromise?: Promise<void>;
   private dirHandle?: FileSystemDirectoryHandle;
   private index: OpfsIndex = { entries: {}, totalBytes: 0, v: INDEX_VERSION };
+  /**
+   * Live entry count kept in sync with `index.entries`. `getStats()` runs
+   * on every frame in the perf HUD path; reading `Object.keys(...).length`
+   * there allocates an N-string array per call, which at 60 Hz × hundreds
+   * of entries shows up in flamegraphs as a real chunk of frame time.
+   */
+  private entryCount = 0;
 
   /**
    * Index writes are batched: every mutation marks the index dirty and
@@ -161,7 +168,7 @@ export class OpfsTileCache {
 
   /** Number of cached entries. */
   getEntryCount(): number {
-    return Object.keys(this.index.entries).length;
+    return this.entryCount;
   }
 
   /**
@@ -217,20 +224,27 @@ export class OpfsTileCache {
       ) {
         this.index = parsed as OpfsIndex;
         // Seed the monotonic access counter past every persisted entry so
-        // new tiles always look "newer" than rehydrated ones.
+        // new tiles always look "newer" than rehydrated ones. Also seed the
+        // entry counter — this is the one place we still pay an O(n) walk,
+        // amortized across the entire session.
+        let count = 0;
         for (const e of Object.values(this.index.entries)) {
           if (e.lastAccess > this.accessCounter) this.accessCounter = e.lastAccess;
+          count++;
         }
+        this.entryCount = count;
       } else {
         // Older or mangled index — start fresh. Leave any orphan .bin files
         // alone; they'll be overwritten / left to OPFS's quota manager.
         this.index = { entries: {}, totalBytes: 0, v: INDEX_VERSION };
+        this.entryCount = 0;
         this.markDirty();
       }
     } catch (err: any) {
       // NotFoundError is the common case (first run). Anything else falls
       // through to the same empty-index initialisation.
       this.index = { entries: {}, totalBytes: 0, v: INDEX_VERSION };
+      this.entryCount = 0;
     }
   }
 
@@ -292,6 +306,7 @@ export class OpfsTileCache {
       // The index claims this key exists but the file is gone. Forget it so
       // we don't keep retrying. The next `set()` for the same key will work.
       delete this.index.entries[safeFileName(key)];
+      this.entryCount = Math.max(0, this.entryCount - 1);
       this.index.totalBytes = Math.max(0, this.index.totalBytes - entry.bytes);
       this.markDirty();
       return null;
@@ -330,6 +345,7 @@ export class OpfsTileCache {
       // Update index accounting.
       const prev = this.index.entries[fileName];
       if (prev) this.index.totalBytes -= prev.bytes;
+      else this.entryCount++;
       this.index.entries[fileName] = {
         bytes: payload.byteLength,
         lastAccess: this.tick(),
@@ -370,6 +386,7 @@ export class OpfsTileCache {
         // index entry anyway so accounting stays honest.
       }
       delete this.index.entries[fileName];
+      this.entryCount = Math.max(0, this.entryCount - 1);
       this.index.totalBytes = Math.max(0, this.index.totalBytes - entry.bytes);
     }
     this.markDirty();
@@ -387,6 +404,7 @@ export class OpfsTileCache {
       }
     }
     this.index = { entries: {}, totalBytes: 0, v: INDEX_VERSION };
+    this.entryCount = 0;
     this.markDirty();
     await this.flushIndex();
   }
@@ -396,7 +414,7 @@ export class OpfsTileCache {
     return {
       available: this.available,
       bytes: this.index.totalBytes,
-      entries: Object.keys(this.index.entries).length,
+      entries: this.entryCount,
       maxBytes: this.maxBytes,
     };
   }

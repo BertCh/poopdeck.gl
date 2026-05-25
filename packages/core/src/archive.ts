@@ -29,8 +29,9 @@ import {
   Compression,
 } from './types';
 import { createDefaultTileDecoder, type TileDecoder } from './tile-decoder';
-import { OpfsTileCache, isOpfsAvailable } from './opfs-cache';
+import { OpfsTileCache } from './opfs-cache';
 import { decompress } from './compression';
+import { createSttTileSource, type SttTileSource } from './tile-source';
 
 /** Magic prefix shared by all STT archives ("STT" + version byte). */
 const MAGIC_PREFIX = [0x53, 0x54, 0x54];
@@ -164,12 +165,15 @@ export class STTArchive {
       this.url = options.url;
       this.fetchFn = options.fetch || fetch.bind(globalThis);
       this.decoderOption = options.decoder;
-      // OPFS defaults to on in browsers, off in Node (no navigator.storage).
-      // An explicit `false` disables it everywhere; an explicit `true` forces
-      // construction so a test shim (`opfsCacheImpl`) is honoured even
-      // without a real OPFS API.
-      const opfsRequested =
-        options.opfsCache ?? (typeof navigator !== 'undefined' && isOpfsAvailable());
+      // OPFS defaults to OFF. The cache's warm-reload win only materializes
+      // when the archive fits in `opfsCacheMaxBytes` AND users revisit the
+      // same viewport across reloads. On the cold path it costs a duplicate
+      // main-thread zstd decompress per tile (see `writeOpfsAsync`), which
+      // hurts initial pan/zoom — the dominant experience for showcase users
+      // and for any archive bigger than the cache budget (e.g. the 6.7 GB
+      // nyc-taxi-paths.stt vs the 512 MB default). Apps that genuinely
+      // benefit opt in explicitly.
+      const opfsRequested = options.opfsCache === true;
       if (options.opfsCacheImpl) {
         this.opfsCache = options.opfsCacheImpl;
       } else if (opfsRequested) {
@@ -990,6 +994,17 @@ export class STTArchive {
    */
   getOpfsCache(): OpfsTileCache | undefined {
     return this.opfsCache;
+  }
+
+  /**
+   * View this archive through the loaders.gl `TileSource` interface so it
+   * can be passed to deck.gl `TileLayer` / `MVTLayer`-style consumers. STT
+   * is 4D (z, x, y, t); the adapter picks the archive-midpoint time by
+   * default — pass `userData.t` in `getTileData()` for explicit control.
+   * See {@link createSttTileSource} for details.
+   */
+  asTileSource(): SttTileSource {
+    return createSttTileSource(this);
   }
 }
 

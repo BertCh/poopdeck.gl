@@ -9,55 +9,81 @@ import { Dataset } from './types';
 
 export const datasets: Dataset[] = [
   {
-    id: 'earthquake-summary',
-    name: 'Earthquake Hex Density (Summary Tier)',
+    id: 'nyc-taxi-od-summary',
+    name: 'NYC Pickup vs Dropoff Hex Density',
     description:
-      'Server-aggregated H3 hex bins of global M4.5+ earthquakes, 2020-2024. ' +
-      'Renders 100K+ raw events as ~hundreds of pre-aggregated cells — the ' +
-      'unlock for 100M+ scale point datasets.',
-    url: '/data/earthquakes-summary.stt',
+      'Server-aggregated H3 hex bins of 1.36M real TLC taxi pickup + dropoff ' +
+      'events (Jan 1-2 2015). Toggle between pickup and dropoff density — ' +
+      'each frame is a 30-min slice, aggregated server-side at build time.',
+    url: '/data/nyc-taxi-od-summary.stt',
     type: 'summary',
     timeRange: {
-      start: Date.parse('2020-01-01T00:00:00Z'),
-      end: Date.parse('2024-12-31T23:59:59Z'),
+      start: 1420070400000, // 2015-01-01 00:00:00 UTC
+      end: 1420213385000,   // 2015-01-02 15:43:05 UTC
     },
-    timeWindow: 86400000 * 90, // 90-day window
-    targetPlaybackSeconds: 120,
+    timeWindow: 1800000, // 30 min — matches the archive's temporal bucket
+    targetPlaybackSeconds: 90,
     initialViewState: {
-      longitude: 140,
-      latitude: 20,
-      zoom: 2,
+      longitude: -73.985,
+      latitude: 40.748,
+      zoom: 11,
       pitch: 30,
       bearing: 0,
     },
-    summaryWeightProperty: 'count',
-    // Bright sequential ramp — Yellow→Red works well for density. Matches
-    // CARTO's `Sunset` palette in spirit.
-    summaryColorRange: [
-      [255, 255, 204, 220],
-      [254, 217, 142, 230],
-      [254, 153,  41, 235],
-      [217,  95,  14, 240],
-      [153,  52,   4, 250],
-      [102,  37,   6, 255],
-    ],
-    summaryColorDomain: [1, 200], // pin the legend across zoom changes
-    summaryExtruded: false,
+    summaryExtruded: true,
+    // Per-cell density at zoom 11 / 30-min slice tops out around 80-100 in
+    // the busiest Midtown cells; scaling each "1 trip" by ~80 m gives the
+    // tallest hexes a visible spike without flying past the camera.
+    summaryElevationScale: 80,
     summaryCoverage: 0.94,
+    // Two-up toggle: pickups (green) vs dropoffs (orange/red), both reading
+    // the sum-aggregated columns the build emitted from `is_pickup`/
+    // `is_dropoff` indicator columns. Color domain pinned so the legend
+    // doesn't jitter as new tiles stream in.
+    summaryToggleWeights: [
+      {
+        id: 'pickup',
+        label: 'Pickups',
+        weightProperty: 'sum_is_pickup',
+        colorDomain: [1, 80],
+        colorRange: [
+          [16, 64, 32, 220],
+          [22, 122, 60, 230],
+          [38, 174, 88, 235],
+          [76, 218, 122, 240],
+          [144, 240, 168, 250],
+          [218, 252, 218, 255],
+        ],
+        legendColors: ['#103a20', '#26ae58', '#90f0a8', '#dafcda'],
+      },
+      {
+        id: 'dropoff',
+        label: 'Dropoffs',
+        weightProperty: 'sum_is_dropoff',
+        colorDomain: [1, 80],
+        colorRange: [
+          [64, 16, 16, 220],
+          [148, 38, 38, 230],
+          [216, 84, 50, 235],
+          [248, 142, 64, 240],
+          [252, 198, 120, 250],
+          [255, 240, 210, 255],
+        ],
+        legendColors: ['#3a0d0d', '#d85432', '#fcc678', '#fff0d2'],
+      },
+    ],
     legend: {
-      title: 'Earthquakes per hex',
+      title: 'Trips per hex (30 min)',
       ramps: [
-        {
-          label: 'Density',
-          colors: ['#FFFFCC', '#FED993', '#FE9929', '#D95F0E', '#993404'],
-        },
+        { label: 'Pickups',  colors: ['#103a20', '#26ae58', '#90f0a8', '#dafcda'] },
+        { label: 'Dropoffs', colors: ['#3a0d0d', '#d85432', '#fcc678', '#fff0d2'] },
       ],
     },
   },
   {
     id: 'earthquake-activity',
     name: 'Earthquake Activity',
-    description: 'USGS earthquake archive — global M4.5+ events, 2020-01 → 2024-12',
+    description: 'USGS earthquake archive — global M4.0+ events, 2020-01 → 2024-12',
     url: '/data/earthquakes-v2.stt',
     type: 'point',
     timeRange: {
@@ -219,15 +245,15 @@ export const datasets: Dataset[] = [
   {
     id: 'nyc-rideshare',
     name: 'NYC Yellow Taxi',
-    description: 'Real NYC TLC trips — 94K pickup/dropoff points (Feb 2016)',
+    description: 'Real NYC TLC trips — 1M pickup/dropoff points (Jan 1 2015, first 2.8h, OSRM per-segment speeds)',
     url: '/data/nyc-rideshare.stt',
     type: 'point',
     timeRange: {
-      start: 1454284862000,  // 2016-02-01 00:01:02 UTC (from actual data)
-      end: 1456791577000,    // 2016-02-29 23:39:37 UTC (from actual data)
+      start: 1420070400000,  // 2015-01-01 00:00:00 UTC (first chronological trip)
+      end:   1420080391000,  // 2015-01-01 02:46:31 UTC (50K-trip cap)
     },
-    timeWindow: 3600000 * 6, // 6 hour window for ~29-day dataset
-    targetPlaybackSeconds: 180, // ~29 days plays in 3 minutes
+    timeWindow: 600000, // 10 min window for a 2.8h dataset
+    targetPlaybackSeconds: 120, // ~2.8h plays in 2 minutes
     initialViewState: {
       longitude: -73.98,
       latitude: 40.75,
@@ -247,18 +273,19 @@ export const datasets: Dataset[] = [
   {
     id: 'nyc-taxi-od-heatmap',
     name: 'NYC Pickups vs Dropoffs',
-    description: 'Density heatmap of taxi pickup (green) vs dropoff (red) hotspots — same TLC trips dataset, split by status (Feb 2016)',
+    description: 'Density heatmap of taxi pickup (green) vs dropoff (red) hotspots — same TLC trips dataset, split by status (Jan 1 2015, 50K-trip sample)',
     url: '/data/nyc-rideshare.stt',
     type: 'heatmap',
     timeRange: {
-      start: 1454284862000,  // 2016-02-01 00:01:02 UTC
-      end: 1456791577000,    // 2016-02-29 23:39:37 UTC
+      start: 1420070400000,  // 2015-01-01 00:00:00 UTC
+      end:   1420080391000,  // 2015-01-01 02:46:31 UTC
     },
-    // 12 hour window — wide enough that point density forms readable heat
+    // 30 min window — wide enough that point density forms readable heat
     // (both pickup-green and dropoff-red halos visible side-by-side), narrow
-    // enough that day-vs-night patterns still animate over the 28-day range.
-    timeWindow: 3600000 * 12,
-    targetPlaybackSeconds: 180,
+    // enough that ~5-minute time slices still animate visibly over the
+    // 2.8-hour range.
+    timeWindow: 60000 * 30,
+    targetPlaybackSeconds: 120,
     initialViewState: {
       longitude: -73.98,
       latitude: 40.75,
@@ -315,6 +342,58 @@ export const datasets: Dataset[] = [
     },
   },
   {
+    id: 'nyc-taxi-points',
+    name: 'NYC Taxi Points (Animated)',
+    description:
+      'Vehicle positions interpolated along OSRM-routed taxi paths — 500K trips ' +
+      'at ~15s temporal cadence (Jan 1-2, 2015). Derived in-place from ' +
+      'nyc-taxi-paths.stt for smooth moving-vehicle animation.',
+    url: '/data/nyc-taxi-points.stt',
+    type: 'point',
+    timeRange: {
+      start: 1420070400000,  // 2015-01-01 00:00:00 UTC
+      end: 1420213385000,    // 2015-01-02 13:43:05 UTC
+    },
+    // Match the sampling cadence: the Rust generator emits one interpolated
+    // sample every 15s along each trip, so a 15s window catches ~one sample
+    // per car per frame. Each vehicle renders as a single point that
+    // teleports forward at each sample boundary instead of stacking 2-3
+    // overlapping copies (which is what a wider window would do).
+    timeWindow: 15000,
+    targetPlaybackSeconds: 600, // 1.5 days plays in 10 min
+    initialViewState: {
+      longitude: -73.98,
+      latitude: 40.75,
+      zoom: 14,
+      pitch: 45,
+      bearing: -15,
+    },
+    legend: {
+      title: 'Trip Status',
+      items: [
+        { color: '#4CAF50', label: 'Pickup' },
+        { color: '#2196F3', label: 'En Route' },
+        { color: '#FF5722', label: 'Dropoff' },
+      ],
+    },
+    colorProperty: 'status',
+    // Lower alpha so the thousands of overlapping vehicles blend into a
+    // density field rather than stacking into opaque blobs.
+    colorMapping: {
+      pickup: [76, 175, 80, 180],
+      enroute: [33, 150, 243, 140],
+      dropoff: [255, 87, 34, 180],
+    },
+    colorMappingDefault: [120, 120, 120, 140],
+    // No radiusProperty → DemoPage falls back to a 1000m × radiusScale fixed
+    // disc, which at NYC zoom 14 renders as a ~200px blob. Switch to pixels
+    // and clamp tight: each vehicle is a 2-3px dot regardless of zoom.
+    radiusUnits: 'pixels',
+    radiusScale: 1,
+    radiusMinPixels: 1.5,
+    radiusMaxPixels: 3,
+  },
+  {
     id: 'nyc-taxi-paths',
     name: 'NYC Taxi Paths',
     description: 'Real TLC trip paths with OSRM routing - 500K trips (Jan 1-2, 2015)',
@@ -339,21 +418,25 @@ export const datasets: Dataset[] = [
         { color: "#FFD700", label: "Active Trip" },
       ]
     },
+    // Match nyc-taxi-trips: rounded caps/joints are the dominant fragment cost
+    // on dense Manhattan paths and the rounding is invisible at 2–8 px widths.
+    capRounded: false,
+    jointRounded: false,
   },
   {
     id: 'nyc-taxi-trips',
     name: 'NYC Taxi Trips',
-    description: 'Animated taxi trips with OSRM routing - 500K trips (Jan 1-2, 2015)',
+    description:
+      'Animated taxi trips with OSRM routing — 500K trips (Jan 1-2, 2015). Rendered via VAT-trail: one ribbon-strip instance per active trip with positions sampled from a per-tile texture in the vertex shader. Frame cost is independent of per-trajectory vertex count, closing the ~15× perf gap the PathLayer renderer had on this dataset.',
     url: '/data/nyc-taxi-paths.stt',
-    type: 'trips',
+    type: 'vat',
     timeRange: {
       start: 1420070400000,  // 2015-01-01 00:00:00 UTC
       end: 1420213385000,    // 2015-01-02 13:43:05 UTC
     },
-    // timeWindow is overridden up to `2 × trailLength` for tile loading
-    // (see AnimatedTripsLayer.getEffectiveTimeWindow), so setting it shorter
-    // than that has no effect. Keep them aligned to avoid surprise.
-    timeWindow: 40000, // 40s — matches 2 × trailLength
+    // Tile-load window: trail is 10s, so 20s comfortably covers the trail plus
+    // a margin for tiles arriving slightly ahead of the playhead.
+    timeWindow: 20000,
     targetPlaybackSeconds: 60000, // 2 minutes
     initialViewState: {
       longitude: -73.98,
@@ -365,18 +448,46 @@ export const datasets: Dataset[] = [
     legend: {
       title: "Taxi Trips",
       items: [
-        { color: "#FD805D", label: "Active Trip" },
+        { color: "#1FBAD6", label: "Active Trip" },
       ]
     },
-    tripColor: [31, 186, 214, 255],
-    tripWidth: 4,
+    // VAT-trail config — mirrors the previous PathLayer styling.
+    vatTrailColor: [31, 186, 214, 255],
+    vatTrailLength: 10000,
+    vatTrailSamples: 16,
+    vatTripWidth: 4,
     widthMinPixels: 2,
     widthMaxPixels: 8,
-    trailLength: 10000,
-    // Flat caps/joints at zoom 14 — rounded was the dominant fragment cost on
-    // the Manhattan dataset and the rounding is invisible at 2-8 px widths.
-    capRounded: false,
-    jointRounded: false,
+    vatFadeTrail: true,
+    vatTimeSlots: 64,
+  },
+  {
+    id: 'nyc-taxi-vat',
+    name: 'NYC Taxi (VAT)',
+    description:
+      'Same 500K-trip archive rendered via Vertex Animation Textures — one head per active trip; GPU work is independent of per-trip vertex count.',
+    url: '/data/nyc-taxi-paths.stt',
+    type: 'vat',
+    timeRange: {
+      start: 1420070400000,
+      end: 1420213385000,
+    },
+    timeWindow: 15000,
+    targetPlaybackSeconds: 60000,
+    initialViewState: {
+      longitude: -73.98,
+      latitude: 40.75,
+      zoom: 14,
+      pitch: 45,
+      bearing: -15,
+    },
+    legend: {
+      title: 'Taxis',
+      items: [{ color: '#FD805D', label: 'Active Trip' }],
+    },
+    vatHeadColor: [253, 128, 93, 255],
+    vatHeadRadiusPixels: 4,
+    vatTimeSlots: 64,
   },
   {
     id: 'ship-traffic',

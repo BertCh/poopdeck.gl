@@ -8,6 +8,11 @@ export { AnimatedPointLayer } from './animated-point-layer';
 export { AnimatedPathLayer } from './animated-path-layer';
 export { AnimatedPolygonLayer } from './animated-polygon-layer';
 export { AnimatedTripsLayer } from './animated-trips-layer';
+// Vertex-Animation-Texture variant of trip rendering — one quad per active
+// trip; positions sampled from a per-tile texture. Scales independently of
+// per-trajectory vertex count.
+export { VatTripsLayer } from './vat-trips-layer';
+export { NoPickingPathLayer } from './no-picking-path-layer';
 export { HeatmapTimeLayer } from './heatmap-time-layer';
 // Server-aggregated summary tier (renders H3 hexes at low zooms).
 export { H3SummaryLayer } from './h3-summary-layer';
@@ -35,9 +40,15 @@ export {
 } from './telemetry';
 export type { ProbeChannel } from './telemetry';
 
-// Pure consolidation helpers — kept exported for downstream consumers that
-// want the merged-buffer shape. The animated layers themselves no longer
-// use these (each tile flows through its own sublayer after Track D).
+// DEPRECATED — pure consolidation helpers. The animated layers no longer
+// use these (every tile flows through its own per-tile sublayer; see
+// Track D in the sprint notes). Kept exported for backwards compatibility
+// with any external consumer that built against the v2 single-buffer shape.
+// New code should NOT use these — they will be removed once we're confident
+// no downstream consumer depends on them. The implementation file is still
+// covered by `test/consolidate.test.ts`.
+//
+// @deprecated Use per-tile sublayer composition instead — see AnimatedTripsLayer.
 export {
   consolidatePoints,
   consolidatePaths,
@@ -51,6 +62,7 @@ export type { AnimatedPointLayerProps } from './animated-point-layer';
 export type { AnimatedPathLayerProps } from './animated-path-layer';
 export type { AnimatedPolygonLayerProps } from './animated-polygon-layer';
 export type { AnimatedTripsLayerProps } from './animated-trips-layer';
+export type { VatTripsLayerProps } from './vat-trips-layer';
 export type { HeatmapTimeLayerProps } from './heatmap-time-layer';
 export type { H3SummaryLayerProps } from './h3-summary-layer';
 export type { TimeFilterExtensionProps } from './time-filter-extension';

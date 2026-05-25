@@ -2,6 +2,13 @@ export type DatasetType =
   | 'point'
   | 'path'
   | 'trips'
+  /**
+   * Vertex-Animation-Texture trip rendering — one head dot per active trip,
+   * positions baked into a per-tile 2D texture. GPU work is independent of
+   * per-trajectory vertex count, so this scales where `trips` doesn't.
+   * Same archive shape as `trips` (no rebuild needed).
+   */
+  | 'vat'
   | 'heatmap'
   | 'polygon'
   /**
@@ -145,6 +152,28 @@ export interface Dataset {
    */
   heatmapLayers?: HeatmapLayerSpec[];
 
+  // ─── VAT-trips styling (type: 'vat') ───────────────────────────────────
+  /** Head-dot color for VAT trips, RGBA 0-255. Used when `vatTrailLength` is 0. */
+  vatHeadColor?: ColorRGBA;
+  /** Head-dot radius in pixels for VAT trips. Used when `vatTrailLength` is 0. */
+  vatHeadRadiusPixels?: number;
+  /** Time-slot resolution per trip for the VAT texture (default 64). */
+  vatTimeSlots?: number;
+  /**
+   * VAT trail length in ms. > 0 switches the VAT layer from a head dot to a
+   * ribbon trail behind each active trip — same perf characteristics, but
+   * visually matches AnimatedTripsLayer trips.
+   */
+  vatTrailLength?: number;
+  /** Ribbon resolution (verts = (samples+1)*2 per active trip). Default 16. */
+  vatTrailSamples?: number;
+  /** Ribbon color (RGBA, 0-255). Used when `vatTrailLength` > 0. */
+  vatTrailColor?: ColorRGBA;
+  /** Ribbon nominal width in pixels (clamped to widthMin/MaxPixels). */
+  vatTripWidth?: number;
+  /** Fade the trail's tail to transparent (vs constant alpha). */
+  vatFadeTrail?: boolean;
+
   // ─── trips-layer styling (type: 'trips') ───────────────────────────────
   /** Constant trip color, RGBA 0-255. */
   tripColor?: ColorRGBA;
@@ -215,6 +244,30 @@ export interface Dataset {
   summaryElevationScale?: number;
   /** Hex coverage (0..1). Lower values leave visible gaps between hexes. */
   summaryCoverage?: number;
+  /**
+   * Optional pickup/dropoff-style toggle for a summary-tier demo. When set,
+   * the demo renders a small segmented control over the map; selecting an
+   * option swaps the layer's `weightProperty` + colour ramp + domain in
+   * place. The first entry is the initial selection.
+   */
+  summaryToggleWeights?: SummaryToggleOption[];
+}
+
+/**
+ * One choice in a summary-tier weight toggle. Each option points at a
+ * different numeric column on the summary tier (e.g. `sum_is_pickup`
+ * vs `sum_is_dropoff`) and styles it with its own ramp.
+ */
+export interface SummaryToggleOption {
+  id: string;
+  label: string;
+  /** Summary column to drive the ramp. */
+  weightProperty: string;
+  colorRange: ColorRGBA[];
+  /** Optional pinned `[min, max]` domain (same semantics as `summaryColorDomain`). */
+  colorDomain?: [number, number];
+  /** CSS gradient stops for the legend strip — usually `colorRange` mapped to hex strings. */
+  legendColors?: string[];
 }
 
 /**
