@@ -20,7 +20,7 @@ and the code disagree, the code wins — please open a PR.
 │ Tile blobs              │  compressed Arrow IPC layer frames
 │ ...                     │  one HTTP range request per tile
 ├─────────────────────────┤
-│ Dictionary (optional)   │  zstd training dictionary shared across tiles
+│ Dictionary (optional)   │  reserved zstd-dictionary slot — currently unused
 ├─────────────────────────┤
 │ Index (Arrow IPC)       │  the directory — one row per tile
 ├─────────────────────────┤
@@ -42,7 +42,7 @@ version.
 | ------------ | ------- | --------------------------------------------------- |
 | `STT\x01`    | 1       | retired (pre-Arrow protobuf tiles)                  |
 | `STT\x02`    | 2       | legacy (gzip + BLAKE3-64 dedup, no dictionary slot) |
-| `STT\x03`    | 3       | **current** (zstd + CRC32C, optional dictionary)    |
+| `STT\x03`    | 3       | **current** (zstd + CRC32C, no dedup; dictionary slot reserved but unused) |
 
 Both v2 and v3 share the 64-byte header layout — v2 readers/writers simply
 treat the v3 `dictionary_offset` / `dictionary_length` fields as zero
@@ -78,22 +78,31 @@ padding. The directory tells a reader where each one starts and how long it
 is.
 
 Each blob is **zstd(layer frame)** (v3 default), **gzip(layer frame)**, or
-the raw layer frame, depending on the header's `compression` byte. In v3,
-blobs are also **content-addressed** via a 32-bit CRC32C: if two directory
-entries produce byte-identical compressed blobs, only one copy is written
-and both rows point at the same offset. This gives free deduplication for
-sparse zoom levels and for tiles that repeat geometry across temporal
-buckets.
+the raw layer frame, depending on the header's `compression` byte.
 
-Every blob carries an integrity tag in its directory row that readers MUST
-verify on read:
+**v3 does NOT deduplicate tile blobs.** The v3 writer appends every tile's
+compressed bytes unconditionally and tags each with a CRC32C purely as an
+integrity check — there is no content-addressing and no shared-offset
+dedup. (Real-data dedup hit rates on continuous datasets are sub-1%, so the
+hashing + lookup cost was removed in v3.) Only **v2** deduplicates: its
+writer keys a hash table on the leading 8 bytes of a BLAKE3 digest and
+shares the offset for byte-identical blobs.
 
-- **v3**: CRC32C of the compressed bytes, zero-extended to 64 bits.
-- **v2**: leading 8 bytes of a BLAKE3 digest (used as the dedup key on the
-  write side).
+Every blob carries an integrity tag in its directory row:
 
-The directory column is called `content_hash` in both versions for
-back-compat.
+- **v3**: CRC32C of the compressed bytes (stored in the `crc32c` column).
+- **v2**: leading 8 bytes of a BLAKE3 digest (stored in the `content_hash`
+  column; doubles as the dedup key on the write side).
+
+Verification status:
+
+- The Rust `ArchiveReader` (`stt-core::archive`) checks the tag on every
+  `read_payload` and the `stt-validate` tool checks all tiles up front.
+- The reference TypeScript reader (`packages/core/src/archive.ts`) reads the
+  column for forward-compat/debugging but does **not** currently verify it on
+  the hot decode path — a corrupt blob surfaces as an Arrow/zstd decode
+  error instead. Readers SHOULD verify the tag; client-side verification is a
+  planned follow-up.
 
 ### Layer frame
 
@@ -118,9 +127,9 @@ All integers are little-endian. `ipc stream bytes` is the output of an Arrow
 | `start_time`        | `Int64`                                 | non-null    | Unix ms, absolute                    |
 | `end_time`          | `Int64`                                 | non-null    | Unix ms, absolute                    |
 | `geometry`          | GeoArrow Point / LineString / Polygon   | non-null    | interleaved f64 lon/lat              |
-| `vertex_time`       | `List<Int64>`                           | nullable    | per-vertex Unix ms (LineString only) |
-| `triangle_indices`  | `List<UInt32>`                          | nullable    | feature-local earcut indices (Polygon, `--pre-tessellate`) |
-| `<prop>`            | `Float64` or `Utf8`                     | nullable    | one column per property, by name     |
+| `vertex_time`       | `List<UInt16>` (deltas) or `List<Int64>` (fallback) | nullable | per-vertex times (LineString only) — see below |
+| `triangles`         | `List<UInt32>`                          | non-null    | feature-local earcut indices (Polygon, `--pre-tessellate`) |
+| `<prop>`            | `Float64` (numeric) or `Dictionary<UInt16, Utf8>` (categorical) | nullable | one column per property, by name |
 
 Geometry uses the GeoArrow extension metadata key
 `ARROW:extension:name` with values `geoarrow.point`, `geoarrow.linestring`,
@@ -132,11 +141,38 @@ on the IPC bytes does the work.
 Layers within one tile MUST agree on feature count for the rows they each
 cover, but they MAY carry different property columns.
 
-`triangle_indices` is present only when the archive was built with
-`stt-build --pre-tessellate`. The Rust writer stores feature-LOCAL indices;
-the TS decoder pre-shifts them by each feature's `startIndices[i]` and
-exposes a single tile-global `triangles: Uint32Array` on `BinaryFeatures`
-so the renderer can hand it straight to deck.gl / WebGL.
+#### `vertex_time` (per-vertex timestamps)
+
+LineString layers built with `--end-time-field` carry a per-vertex time
+column. v3 encodes it as `List<UInt16>` **deltas** relative to a per-layer
+`(origin, step)`: the absolute time of a vertex is
+`origin + delta * step`. The origin and step are recorded in the layer's
+**schema-level** Arrow metadata under the keys:
+
+| schema metadata key            | meaning                                  |
+| ------------------------------ | ---------------------------------------- |
+| `stt:vertex_time_origin_ms`    | absolute Unix-ms origin (`i64` as string) |
+| `stt:vertex_time_step_ms`      | ms per delta unit (`u32` as string)       |
+
+The encoder picks the smallest `step` (≥ 1) that keeps every
+`(t - origin)` inside `u16::MAX`. For a layer whose temporal span would
+overflow `u16::MAX * step`, the encoder falls back to the legacy
+absolute `List<Int64>` shape and omits the two metadata keys. A reader
+that sees a `List<Int64>` column (or no origin/step metadata) treats the
+values as absolute Unix ms; a reader that sees `List<UInt16>` reconstructs
+`origin + delta * step`.
+
+#### `triangles` (pre-tessellated polygon meshes)
+
+`triangles` is present only when the archive was built with
+`stt-build --pre-tessellate` (the layer also carries the schema metadata
+key `stt:has_triangles = "true"`). The column is emitted only for polygon
+layers — an over-eager builder that attaches it to a point/line layer has
+it silently dropped at encode time. The Rust writer stores feature-LOCAL
+indices; the TS decoder pre-shifts them by each feature's
+`startIndices[i]` and exposes a single tile-global
+`triangles: Uint32Array` on `BinaryFeatures` so the renderer can hand it
+straight to deck.gl / WebGL.
 
 ### GeoArrow interop
 
@@ -186,16 +222,29 @@ unsimplified geometry when `--simplify` is used; clients can pick the
 appropriate one based on zoom. Summary-tier tiles use the layer name
 `summary` by default (overridable via `--summary-layer`).
 
-## Dictionary (optional, v3 only)
+## Dictionary (optional, v3 only — currently unused)
 
-When present, the dictionary is a single zstd training dictionary that
-applies to every tile blob in the archive. Sharing one dictionary across
-many small/repetitive tiles substantially improves ratios at zooms where
-most tiles repeat similar property values. The header's
-`dictionary_offset` / `dictionary_length` point at it; readers load the
-dictionary once at archive-open time and pass it to every per-tile zstd
-decoder. `dictionary_offset == 0` means no dictionary — decode tiles
-with a stock decoder.
+The header reserves a slot (`dictionary_offset` / `dictionary_length`) for
+a single zstd training dictionary that would apply to every tile blob.
+**No producer in this repo writes one today**: `stt-build` always calls the
+dictionary-less `ArchiveWriter::finalize`, and there is no dictionary-
+training pass. The plumbing exists (`ArchiveWriter::finalize_with_dictionary`
+and `ArchiveReader::dictionary()`) for forward compatibility and tooling,
+but every shipped archive has `dictionary_offset == 0`.
+
+If a dictionary ever IS embedded:
+
+- The Rust reader loads it once at archive-open and feeds it to the
+  per-tile zstd decoder.
+- The reference TypeScript reader (`packages/core/src/archive.ts`)
+  **refuses to decode** the tiles — its zstd path (`fzstd`) has no
+  dictionary API, so `decodeBytes` throws when `dictionary_length > 0`
+  rather than silently producing garbage. (It can still read the header,
+  metadata, and dictionary slot.) Do not emit dictionary archives for
+  browser consumption until a dictionary-capable zstd decoder is wired in.
+
+`dictionary_offset == 0` means no dictionary — decode tiles with a stock
+decoder.
 
 ## Index (Arrow IPC)
 
@@ -214,8 +263,16 @@ tile, sorted by `(zoom ascending, hilbert ascending)` for spatial locality.
 | `uncompressed_size`   | `UInt32` | uncompressed payload length                              |
 | `feature_count`       | `UInt32` | total features across the tile's layers                  |
 | `hilbert`             | `UInt64` | Hilbert index of `(zoom, x, y)` — directory sort key     |
-| `content_hash`        | `UInt64` | v3: CRC32C zero-extended; v2: low 8 bytes of BLAKE3      |
+| `crc32c` (v3)         | `UInt32` | v3 ONLY — CRC32C of the compressed blob (integrity tag, no dedup) |
+| `content_hash` (v2)   | `UInt64` | v2 ONLY — low 8 bytes of BLAKE3 (integrity tag + dedup key) |
 | `temporal_bucket_ms`  | `UInt64` | optional — bucket size in ms this tile covers (LOD-aware) |
+
+The integrity column changes name and width between versions: v3 archives
+carry a `crc32c` (`UInt32`) column and v2 archives carry a `content_hash`
+(`UInt64`) column. A reader picks whichever is present in the schema rather
+than assuming a name from the header version, so a future variant that
+omits the column still decodes the identifying columns. The TypeScript
+reader reads neither for verification today (see [Tile blobs](#tile-blobs)).
 
 The Hilbert ordering is what makes range coalescing work: viewport tiles at
 the same zoom level tend to be contiguous in file order, so a reader can
@@ -297,9 +354,10 @@ A new client opens an archive like this:
    Arrow IPC; build any in-memory secondary indices.
 4. Range `[metadata_offset, metadata_offset + metadata_length)` → metadata.
 5. Per visible tile: range
-   `[entry.offset, entry.offset + entry.length)` → blob. Verify
-   `content_hash`, decompress, decode the layer frame, hand the resulting
-   Arrow `RecordBatch`es to the renderer.
+   `[entry.offset, entry.offset + entry.length)` → blob. Optionally verify
+   the integrity tag (`crc32c` in v3, `content_hash` in v2 — the Rust reader
+   does, the TS reader does not yet), decompress, decode the layer frame,
+   hand the resulting Arrow `RecordBatch`es to the renderer.
 
 The reference TypeScript implementation coalesces adjacent ranges when their
 gap is less than 32 KiB (`RANGE_COALESCE_GAP` in `packages/core/src/archive.ts`).
@@ -322,8 +380,9 @@ gap is less than 32 KiB (`RANGE_COALESCE_GAP` in `packages/core/src/archive.ts`)
 
 ## Validating an archive
 
-`stt-validate <path.stt>` opens an archive, content-hash-checks every tile,
-decodes each, and reports schema and feature-count anomalies. Use it after
+`stt-validate <path.stt>` opens an archive, verifies the per-tile integrity
+tag (CRC32C in v3, BLAKE3-64 in v2), decodes each, and reports schema and
+feature-count anomalies. Use it after
 generating data and in CI for any dataset that ships with the project.
 Pass `--json` for a machine-readable report, `--fail-fast` to stop on the
 first failure, `--skip-decode` to verify only the integrity tags.

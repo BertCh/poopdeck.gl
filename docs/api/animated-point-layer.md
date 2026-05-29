@@ -90,10 +90,18 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 
 The layer uses several optimizations:
 
-- **Single draw call**: All tiles consolidated into one ScatterplotLayer
-- **Binary data interface**: Typed arrays passed directly to GPU
-- **Layer memoization**: Layer instance cached and reused when only time changes
-- **TimeFilterExtension**: Time filtering happens entirely in GPU shaders
+- **Per-tile binary sublayers**: each visible tile produces one
+  `ScatterplotLayer` (no cross-tile consolidation). A new tile arriving
+  adds exactly one sublayer and one GPU upload — it never re-uploads or
+  rebuilds existing tiles.
+- **Binary data interface**: each sublayer uses deck.gl's binary
+  `data: { length, attributes }` shape, so the Arrow-backed typed arrays go
+  straight to the GPU.
+- **Sublayer memoization**: each per-tile `ScatterplotLayer` instance is
+  cached and the same reference is returned across `renderLayers()` calls,
+  so deck.gl short-circuits prop diffing when only time changes.
+- **TimeFilterExtension**: time filtering happens entirely in GPU shaders;
+  each sublayer rebases time against its own per-tile `timeOffset`.
 
 ## Source
 

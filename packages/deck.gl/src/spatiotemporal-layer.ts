@@ -84,6 +84,23 @@ export interface SpatioTemporalLayerProps extends CompositeLayerProps {
    */
   prefetchSteps?: number;
 
+  /**
+   * Which tier the tileset draws from when the archive carries a
+   * server-aggregated summary tier (`stt-build --summary-tier`):
+   * - `'auto'` (default): use the summary tier at zooms inside the tier's
+   *   `[minZoom, maxZoom]` band and the raw tier above it — so a wide,
+   *   low-zoom view streams a few thousand aggregated cells instead of
+   *   millions of raw features (the 100M+ unlock; fixes ship-traffic).
+   * - `'summary'`: always use the summary tier.
+   * - `'raw'`: always use the raw tier (legacy behaviour; what every layer
+   *   did before summary dispatch was wired).
+   *
+   * Has no effect on archives without a summary tier — the tileset falls
+   * back to `'raw'` whenever no summary tier is present in the metadata.
+   * @default 'auto'
+   */
+  tier?: 'auto' | 'summary' | 'raw';
+
   /** Callback when all tiles in viewport are loaded. */
   onViewportLoad?: ((tiles: Tile[]) => void) | null;
 
@@ -196,6 +213,10 @@ export class SpatioTemporalLayer<
     enablePrefetch: true,
     prefetchAhead: 30_000, // 30s of sim time
     prefetchSteps: 4,
+
+    // Summary-tier dispatch: 'auto' transparently swaps to the aggregated
+    // tier at low zoom when the archive has one (no-op otherwise).
+    tier: 'auto',
 
     // Callbacks
     onViewportLoad: { type: 'function', value: null, optional: true },
@@ -630,6 +651,20 @@ export class SpatioTemporalLayer<
       return;
     }
     
+    // Summary-tier dispatch. When the archive carries a server-aggregated
+    // summary tier, wire the tileset to fall back to it at low zoom so a
+    // wide view streams a few thousand aggregated cells instead of millions
+    // of raw features. Without this wiring pickTierForZoom always returns
+    // 'raw' (the historical gap behind the ship-traffic 49→1 FPS regression).
+    const summaryTier = metadata.summaryTier;
+    const summaryZoomRange = summaryTier
+      ? { minZoom: summaryTier.minZoom, maxZoom: summaryTier.maxZoom }
+      : undefined;
+    const getAvailableSummaryTiles = summaryTier
+      ? (bounds: BoundingBox, zoom: number, timeRange: { start: number; end: number }) =>
+          archive.getSummaryTileIdsInBounds(bounds, zoom, timeRange)
+      : undefined;
+
     // Create tileset with archive as data source
     const tileset = new SpatiotemporalTileset({
       maxRequests: this.props.maxRequests!,
@@ -645,8 +680,11 @@ export class SpatioTemporalLayer<
       enablePrefetch: this.props.enablePrefetch!,
       prefetchAhead: this.props.prefetchAhead!,
       prefetchSteps: this.props.prefetchSteps!,
-      getAvailableTiles: (bounds, zoom, timeRange) => 
+      tier: this.props.tier ?? 'auto',
+      summaryZoomRange,
+      getAvailableTiles: (bounds, zoom, timeRange) =>
         archive.getTileIdsInBounds(bounds, zoom, timeRange),
+      getAvailableSummaryTiles,
       getTileData: (tileId) => archive.getTile(tileId),
       onTileLoad: (tile) => {
         if (DEBUG) console.log('[STL] Tile loaded:', tile.id);

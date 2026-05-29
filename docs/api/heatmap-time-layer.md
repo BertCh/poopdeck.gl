@@ -6,12 +6,24 @@
 > class name (`HeatmapLayer`).
 
 The `HeatmapLayer` renders temporal point data as an animated density
-heatmap. Per-point splats are accumulated additively into the framebuffer
-and sampled through a color ramp, so animation cost is independent of
-point count.
+heatmap. It is a **single-pass GPU splat**: each point is drawn as a
+gaussian-weighted quad with **additive blending directly to the canvas**
+(no offscreen framebuffer / FBO accumulation pass), and overlapping splats
+sum per-pixel. The accumulated intensity is mapped through a palette LUT in
+the fragment shader.
+
+The per-(tile, channel) GPU vertex buffers (`instancePosition`,
+`instanceTime`, `instanceWeight`) are uploaded **once** when a tile first
+arrives and reused across every subsequent frame — there is zero per-frame
+buffer allocation and no per-frame CPU filter. Time filtering is done in
+the shader against a small uniform updated each frame. (Per-frame cost still
+scales with the number of splats drawn, since every active splat is one
+instanced quad; the win is the eliminated per-frame upload/rebuild, not a
+fixed cost.)
 
 It extends [`SpatioTemporalLayer`](./spatiotemporal-layer.md) and supports
-up to four stacked categorical channels in a single draw.
+up to four stacked categorical channels (one per RGBA accumulator slot),
+each rendered as a sub-draw with the shared shader.
 
 ## Installation
 

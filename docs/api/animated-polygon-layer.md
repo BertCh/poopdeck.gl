@@ -1,6 +1,6 @@
 # AnimatedPolygonLayer
 
-The `AnimatedPolygonLayer` renders time-series polygon data (e.g., county boundaries, zones). It extends [`SpatioTemporalLayer`](./spatiotemporal-layer.md) and provides time-based visibility filtering for polygon features.
+The `AnimatedPolygonLayer` renders time-series polygon data (e.g., county boundaries, zones). It extends [`SpatioTemporalLayer`](./spatiotemporal-layer.md) and provides GPU time-based visibility filtering for polygon features, with one `SolidPolygonLayer` sublayer per tile.
 
 ## Installation
 
@@ -56,7 +56,7 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 
 ## Performance
 
-Note: Unlike point and path layers, `AnimatedPolygonLayer` performs time filtering in JavaScript rather than GPU shaders because `SolidPolygonLayer` doesn't support the `TimeFilterExtension`. However, it still caches geometry and color attributes for efficient rendering.
+Time filtering runs on the **GPU**. `SolidPolygonLayer` can't take the standard `TimeFilterExtension`, so the layer wires a dedicated [`PolygonTimeFilterExtension`](./time-filter-extension.md) that filters polygons in the shader — the CPU only updates one uniform per frame. Categorical fill colors are likewise lifted to the GPU via `CategoryColorExtension`. Geometry and color attributes are bound straight from the Arrow-backed tile buffers, one cached sublayer per tile.
 
 ## Source
 
