@@ -15,7 +15,7 @@ archive format for visualizing massive time-variant geospatial datasets.
   (deck.gl and MapLibre).
 - [**Data Format**](./architecture/data-format.md): Normative spec of the
   `.stt` v3 binary archive — header, tile blobs (Apache Arrow IPC +
-  GeoArrow), optional shared zstd dictionary, index, JSON metadata.
+  GeoArrow), reserved (unused) zstd-dictionary slot, index, JSON metadata.
 
 ## API Reference
 

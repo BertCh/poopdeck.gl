@@ -42,10 +42,14 @@ during animation.
 ### 3. Temporal LOD pyramid
 For multi-year datasets you'd animate at fine bucket resolution, the
 build can emit one or more coarser-bucket tiers alongside the base
-(`--temporal-lod 1d,30d` or `1d@8,30d@4`). The reader picks the
-coarsest tier whose `max_zoom_level` covers the current zoom — so
-"zoomed out, scrubbing a decade" reads 30-day aggregates instead of
-streaming per-hour base tiles.
+(`--temporal-lod 1d,30d` or `1d@8,30d@4`). The **reader API** can pick the
+coarsest tier whose `max_zoom_level` covers the current zoom
+(`STTArchive.pickTemporalLodForZoom` + `getTilesInBoundsForTemporalLod`) —
+so "zoomed out, scrubbing a decade" can read 30-day aggregates instead of
+streaming per-hour base tiles. Note: this is reader-API-only today — the
+tileset and renderers do not yet dispatch temporal LOD automatically, so an
+app must call these methods itself to use the coarser tiers. (The summary
+tier below, by contrast, is wired into the tileset.)
 
 ### 4. Summary tier (server-side aggregation)
 For 100M+ point datasets, a `--summary-tier h3` build emits a

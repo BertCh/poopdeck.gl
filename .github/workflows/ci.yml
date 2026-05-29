@@ -35,8 +35,10 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter '@stt/core' typecheck
       - run: pnpm --filter '@stt/deck.gl' typecheck
+      - run: pnpm --filter '@stt/maplibre' typecheck
       - run: pnpm --filter '@stt/core' test
       - run: pnpm --filter '@stt/deck.gl' test
+      - run: pnpm --filter '@stt/maplibre' test
 
   bench-regression:
     name: Bench (regression vs baseline)

@@ -112,6 +112,7 @@ from `metadata.summaryTier`. Currently only `h3` is implemented.
 | `--summary-max-zoom <N>` | `min-zoom + 4` | Highest zoom for summary tiles |
 | `--summary-columns <SPEC>` | `""` | Comma-separated `name:agg` list, e.g. `magnitude:mean,magnitude:max,depth:sum`. `count` is always implicit. |
 | `--summary-layer <NAME>` | `summary` | Layer name carried in summary tile frames |
+| `--summary-sub-buckets <N>` | `1` | Sub-buckets PER tile temporal bucket. `>1` adds N `bucket_<i>` count columns per cell (one per `bucket_ms / N` sub-window) so the renderer can animate through them with no data re-upload. Recommended 12–30 for hour buckets; capped at 32. |
 
 ### HeatmapLayer build-time domain
 
@@ -123,6 +124,7 @@ metadata so the renderer doesn't fall back to a runtime GPU readback.
 | ---- | ------- | ----------- |
 | `--heatmap-weight <PROP>` | — | Numeric property driving per-splat weight. The build computes its `[min, 95p]` across all features. |
 | `--heatmap-class <PROP>` | — | Categorical property whose unique values become per-class entries (up to 8). |
+| `--heatmap-raster <WxH>` | — | Density-grid raster tier spec, e.g. `128x128` (gated to the bottom 5 zooms). **Scaffold**: currently records intent in archive metadata only — the sidecar raster tile generation is not implemented yet. |
 
 ### Metadata
 
@@ -197,7 +199,7 @@ Subcommands:
 
 | Subcommand | Source |
 | ---------- | ------ |
-| `all` | every dataset below (`--output-dir <DIR>`, `--skip-existing`) |
+| `all` | builds ONLY `earthquakes`, `hurricanes`, `wildfires` (the no-extra-setup datasets). `--output-dir <DIR>` (default `examples/showcase/public/data`), `--skip-existing`. The other datasets need per-run params (dates, OSRM, etc.) and must be run individually. |
 | `earthquakes` | USGS API (M4.0+ global, 2020–2024) |
 | `ais` | NOAA Marine Cadastre AIS vessel positions |
 | `flights` | OpenSky Network ADS-B (Mondays 2017–2020) |

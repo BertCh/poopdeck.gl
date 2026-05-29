@@ -25,8 +25,8 @@ standard, columnar, GPU-friendly representation that interops directly with
 - 🌐 **HTTP Range Requests** — the header, index, and each tile are fetched
   with independent range requests.
 - 🗜️ **Apache Arrow payloads** — GeoArrow geometry + columnar properties,
-  zstd-compressed per tile, with an optional shared training dictionary for
-  small/repetitive tiles. CRC32C integrity tag per tile.
+  zstd-compressed per tile, with a CRC32C integrity tag per tile. (A shared
+  zstd-dictionary header slot is reserved but not currently used.)
 - 🕒 **Temporal tiling** — features are bucketed into fixed time intervals for
   predictable, animation-friendly loading. Optional coarser-bucket pyramid
   (`--temporal-lod`) for multi-scale animation.
@@ -106,7 +106,7 @@ adapter API.
 ├──────────────────┤
 │ Tile blobs       │  zstd(Arrow IPC layer frame), CRC32C-tagged
 ├──────────────────┤
-│ Dictionary       │  Optional zstd training dictionary shared across tiles
+│ Dictionary       │  Reserved zstd-dictionary slot (currently unused)
 ├──────────────────┤
 │ Index            │  Arrow IPC table — one row per tile (the directory)
 ├──────────────────┤

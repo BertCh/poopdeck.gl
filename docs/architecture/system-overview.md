@@ -60,9 +60,10 @@ one `.stt` archive. Pipeline:
 5. **Encode**: each tile becomes an Arrow IPC layer frame (see
    [Data format](./data-format.md)).
 6. **Write**: `stt-core::Archive::create()` → zstd (default) or gzip →
-   CRC32C-tagged, content-addressed dedup → write directory + JSON metadata
-   + 64-byte header. Optionally emits a shared zstd training dictionary
-   for better ratios on small/repetitive tiles.
+   CRC32C-tagged tile blobs (integrity tag only — v3 does NOT dedup) →
+   write directory + JSON metadata + 64-byte header. The header reserves a
+   shared-zstd-dictionary slot, but `stt-build` never populates it (see
+   [Data format](./data-format.md#dictionary-optional-v3-only--currently-unused)).
 
 Optional pipeline extras: `--summary-tier h3` adds a server-aggregated
 H3-hex tier alongside the raw tier (so 100M-feature point datasets render
@@ -113,8 +114,10 @@ compression abstraction, Hilbert/temporal indexing, and metadata.
   replaced automatically.
 - **`SpatiotemporalTileset`** — viewport + time-aware tile selection,
   bucket-aligned prefetch, direction hysteresis to suppress scrub jitter,
-  grace-period LRU eviction. Aware of summary-tier and temporal-LOD
-  dispatch (picks the right tier per zoom).
+  grace-period LRU eviction. Dispatches between the raw and **summary**
+  tiers per zoom (`tier: 'raw' | 'summary' | 'auto'`). Temporal-LOD
+  dispatch is reader-API-only (`STTArchive.pickTemporalLodForZoom` /
+  `getTilesInBoundsForTemporalLod`) and is not yet wired into the tileset.
 - **`SttLoader` / `createSttTileSource`** — structural shims that let
   apps already using `@loaders.gl/*` drop STT into their existing tile
   source plumbing.
@@ -162,9 +165,10 @@ deck.gl layers exactly the buffer shape they need.
   time window even when they're off-viewport for a frame).
 
 ### GPU time filtering, not CPU per-frame filtering
-Once a tile is consolidated into the deck.gl layer's attribute buffers,
-animation costs nothing extra. The CPU updates one uniform per frame; the
-shader does the filter and the fade.
+Each visible tile gets its own deck.gl sublayer bound to that tile's
+Arrow-backed attribute buffers (uploaded once on tile arrival — there is no
+cross-tile consolidation pass). Animation then costs nothing extra: the CPU
+updates one uniform per frame and the shader does the filter and the fade.
 
 ### One archive, one HTTP origin
 A `.stt` file is served as static bytes by any HTTP server that honours
@@ -179,4 +183,4 @@ range-aware caching.
    table and metadata, then each viewport tile via a Range request.
 4. **Streaming** — as the user pans or plays the timeline, the tileset
    coalesces ranges, the decoder pool decodes off the main thread, and
-   deck.gl renders the consolidated buffers with the time filter applied.
+   deck.gl renders one per-tile sublayer each with the time filter applied.

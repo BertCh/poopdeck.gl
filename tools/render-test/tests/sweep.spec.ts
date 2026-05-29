@@ -1,4 +1,4 @@
-import { test, Page } from '@playwright/test';
+import { test, expect, Page } from '@playwright/test';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import {
@@ -50,6 +50,17 @@ const SAMPLE_WINDOW_MS = Number(process.env.STT_SWEEP_SAMPLE_MS || 5_000);
 const WARMUP_SETTLE_MS = Number(process.env.STT_SWEEP_WARMUP_MS || 8_000);
 const BLESS = process.env.STT_BLESS_BASELINES === '1';
 const FILTER = process.env.STT_SWEEP_FILTER || '';
+
+/**
+ * Max per-anchor pixel-diff ratio (fraction of pixels differing above the
+ * perceptual threshold) we tolerate against a committed baseline before the
+ * sweep fails. Deliberately GENEROUS: under software WebGL (llvmpipe/SwiftShader
+ * on headless CI) AA, dithering, and timing jitter shift a non-trivial slice of
+ * pixels even for an unchanged scene, so a tight gate would be flaky. This
+ * catches gross regressions (blank canvas, wrong color ramp, missing geometry)
+ * without tripping on rendering noise. Override with STT_SWEEP_MAX_DIFF.
+ */
+const MAX_DIFF_RATIO = Number(process.env.STT_SWEEP_MAX_DIFF || 0.35);
 
 const FATAL_ERROR_PATTERNS = [
   /shader/i,
@@ -323,5 +334,36 @@ test.describe('STT showcase evaluation sweep', () => {
     console.log(`[sweep] report → ${path.relative(process.cwd(), htmlPath)}`);
     // eslint-disable-next-line no-console
     console.log(`[sweep] data   → ${path.relative(process.cwd(), jsonPath)}`);
+
+    // Fidelity gate. The report above is always written first so a failure
+    // here still leaves the full HTML/JSON artifacts (with diff PNGs) behind.
+    //
+    // We only assert on anchors that were actually COMPARED against an existing
+    // committed baseline — `blessed` (first run / STT_BLESS_BASELINES),
+    // `baseline-missing`, `size-mismatch`, and `capture-failed` carry a null
+    // diffRatio and are skipped, so the gate is a no-op when no baselines are
+    // present (e.g. on CI, which ships none). The threshold is intentionally
+    // generous (see MAX_DIFF_RATIO) so it goes red only on real regressions.
+    const offenders: string[] = [];
+    for (const r of results) {
+      for (const a of r.anchors) {
+        const fid = a.fidelity;
+        if (!fid || fid.status !== 'compared' || fid.diffRatio == null) continue;
+        if (fid.diffRatio > MAX_DIFF_RATIO) {
+          offenders.push(
+            `${r.dataset.id}@${a.anchor}: diffRatio=${fid.diffRatio.toFixed(4)} ` +
+              `(> ${MAX_DIFF_RATIO}) — see ${path.relative(process.cwd(), fid.diffPath ?? fid.currentPath)}`,
+          );
+        }
+      }
+    }
+    if (offenders.length > 0) {
+      // eslint-disable-next-line no-console
+      console.error(`[sweep] fidelity regressions:\n  ${offenders.join('\n  ')}`);
+    }
+    expect(
+      offenders,
+      `fidelity diff exceeded ${MAX_DIFF_RATIO} for:\n  ${offenders.join('\n  ')}`,
+    ).toEqual([]);
   });
 });

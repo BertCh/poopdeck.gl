@@ -60,16 +60,26 @@ regenerate locally with `stt-generate`.
 # Build the toolchain once
 cargo build --release
 
-# Generate every dataset into the showcase's data directory
+# `all` builds ONLY the no-setup datasets — earthquakes, hurricanes,
+# wildfires — into the showcase's data directory.
 ./target/release/stt-generate all \
   --output-dir examples/showcase/public/data --skip-existing
 
-# Or one at a time
-./target/release/stt-generate earthquakes \
-  --output examples/showcase/public/data/earthquakes.stt
+# The rest need per-run parameters and must be run individually, e.g.:
+./target/release/stt-generate ais --date 2024-01-01 \
+  --output examples/showcase/public/data/ais-traffic.stt
+./target/release/stt-generate flights --date 2020-01-06 \
+  --output examples/showcase/public/data/flights.stt
+./target/release/stt-generate nyc-rideshare --synthetic \
+  --osrm-url http://localhost:5000 \
+  --output examples/showcase/public/data/nyc-rideshare.stt
+./target/release/stt-generate satellites \
+  --output examples/showcase/public/data/satellites.stt
 ```
 
-Per-dataset flags vary — run `stt-generate <subcommand> --help`.
+Per-dataset flags vary — run `stt-generate <subcommand> --help`. See the
+[Data Generation Guide](../../docs/guides/data-generation.md) for the full
+recipes.
 
 ## Tech Stack
 

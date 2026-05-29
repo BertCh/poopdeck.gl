@@ -75,10 +75,17 @@ const visibleTiles = tileset.getVisibleTiles();
 When the archive's metadata declares a `summaryTier` (built with
 `stt-build --summary-tier h3`), the tileset routes requests in the
 declared `[minZoom..=maxZoom]` to summary tiles instead of the raw tier.
-When metadata declares a `temporalLod` pyramid (built with
-`--temporal-lod`), the tileset picks the coarsest level whose
-`maxZoomLevel` covers the current zoom for animation prefetch. Both
-dispatches are transparent to callers.
+This is driven by the `tier` option (`'raw' | 'summary' | 'auto'`) plus a
+`getAvailableSummaryTiles` callback (wire it to
+`STTArchive.getSummaryTileIdsInBounds`); `'auto'` uses summary inside the
+summary zoom range and raw outside.
+
+Temporal-LOD dispatch is **not** yet wired into the tileset. The reader
+API exposes it — `STTArchive.pickTemporalLodForZoom`,
+`getTileIdsInBoundsForTemporalLod`, and
+`getTilesInBoundsForTemporalLod` — but no tileset or renderer calls them
+automatically today, so an app that wants coarser temporal tiers must
+select the LOD level and request those tiles itself.
 
 ### Callbacks
 

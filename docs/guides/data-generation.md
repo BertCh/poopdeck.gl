@@ -19,26 +19,55 @@ and pyarrow.
 
 ## Quick Start
 
-### Generate All Showcase Datasets
+### Generate the no-setup datasets (`all`)
+
+`stt-generate all` builds **only the three datasets that need no extra
+parameters**: `earthquakes`, `hurricanes`, and `wildfires`. It writes
+`earthquakes.stt`, `hurricanes.stt`, and `wildfires.stt` into the output
+directory (default `examples/showcase/public/data`).
 
 ```bash
-# Generate every bundled dataset (earthquakes, ais, flights, hurricanes,
-# wildfires, nyc-rideshare, nyc-taxi-points, satellites) into the
-# showcase's data directory.
+# Builds earthquakes.stt, hurricanes.stt, wildfires.stt only.
 stt-generate all --output-dir examples/showcase/public/data --skip-existing
 ```
+
+The remaining datasets (`ais`, `flights`, `nyc-rideshare`,
+`nyc-taxi-points`, `satellites`) require per-run parameters (download
+dates, an OSRM server, an existing source archive, etc.) and are NOT built
+by `all` — run them individually.
 
 ### Generate Individual Datasets
 
 ```bash
-# Earthquake data from USGS
+# Earthquake data from USGS → earthquakes.stt
 stt-generate earthquakes --output earthquakes.stt
 
-# Hurricane tracks from NOAA IBTrACS
+# Hurricane tracks from NOAA IBTrACS → hurricanes.stt
 stt-generate hurricanes --output hurricanes.stt
 
-# Wildfire perimeters from NIFC
+# Wildfire perimeters from NIFC → wildfires.stt
 stt-generate wildfires --output wildfires.stt
+
+# AIS maritime traffic from NOAA Marine Cadastre → ais-traffic.stt
+# (default output is ais-traffic.stt; pass --date or --input)
+stt-generate ais --date 2024-01-01 --output ais-traffic.stt
+
+# Flight traffic from OpenSky (Mondays 2017–2020) → flights.stt
+stt-generate flights --date 2020-01-06 --output flights.stt
+
+# NYC rideshare trajectories from TLC + OSRM → nyc-rideshare.stt
+# (needs an OSRM server; --synthetic routes random Manhattan trips)
+stt-generate nyc-rideshare --synthetic --num-trips 1000 \
+  --osrm-url http://localhost:5000 --output nyc-rideshare.stt
+
+# NYC taxi POINTS derived from an existing path archive → nyc-taxi-points.stt
+# (--input defaults to examples/showcase/public/data/nyc-taxi-paths.stt)
+stt-generate nyc-taxi-points \
+  --input examples/showcase/public/data/nyc-taxi-paths.stt \
+  --output nyc-taxi-points.stt
+
+# Satellite orbits from CelesTrak TLE + SGP4 → satellites.stt
+stt-generate satellites --output satellites.stt
 ```
 
 ## Available Datasets
