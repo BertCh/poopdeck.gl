@@ -46,6 +46,28 @@ export type RGBA = [number, number, number, number];
  */
 export type RGBA8 = [number, number, number, number];
 
+/**
+ * Normalize a constant colour to the 0–1 range the shaders expect, accepting
+ * EITHER convention:
+ * - 0–1 floats (the maplibre adapter's historical `color` convention), or
+ * - 0–255 ints (the deck.gl `Color` convention and what `colorPalette` already
+ *   uses).
+ *
+ * The range is auto-detected: if any RGB channel exceeds 1 the tuple is treated
+ * as 0–255 and divided by 255. This removes the cross-adapter foot-gun where a
+ * deck.gl-style `[255, 128, 0, 255]` ported to maplibre clamped to solid white,
+ * and makes a single layer's `color` and `colorPalette` props self-consistent —
+ * without breaking existing 0–1 callers.
+ */
+export function toRgba01(
+  c: readonly [number, number, number, number],
+): [number, number, number, number] {
+  const is255 = c[0] > 1 || c[1] > 1 || c[2] > 1 || c[3] > 1;
+  return is255
+    ? [c[0] / 255, c[1] / 255, c[2] / 255, c[3] / 255]
+    : [c[0], c[1], c[2], c[3]];
+}
+
 export interface STTBaseLayerOptions {
   /** Unique layer id passed to MapLibre. */
   id: string;

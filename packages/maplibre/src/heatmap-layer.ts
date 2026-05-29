@@ -57,6 +57,14 @@ export interface STTHeatmapLayerOptions extends STTBaseLayerOptions {
    * heat tightly localised. Default 0.05.
    */
   threshold?: number;
+  /**
+   * Pinned `[min, max]` accumulated-intensity domain mapped onto the colour
+   * ramp. When unset, the layer uses `metadata.heatmapDomain` (class `default`)
+   * if the archive carries one (`stt-build --heatmap-weight`), else `[0, 1]`.
+   * Mirrors the deck.gl HeatmapLayer's `colorDomain` so a weighted heatmap
+   * scales the same on both adapters instead of washing out on maplibre.
+   */
+  colorDomain?: [number, number];
 }
 
 const DEFAULT_COLOR_RANGE: ReadonlyArray<RGBA8> = [
@@ -121,10 +129,18 @@ const RAMP_FS = `
   uniform sampler2D uAccum;
   uniform sampler2D uPalette;
   uniform float uThreshold;
+  // [min, max] accumulated-intensity range mapped onto the palette. Defaults
+  // to [0, 1] (identity). When the archive carries a bake-time heatmap domain
+  // (metadata.heatmapDomain) or the caller pins colorDomain, the accumulator
+  // is remapped so a weighted heatmap (large weightProperty values) isn't
+  // washed-out/saturated — matching the deck.gl adapter's colorDomain.
+  uniform float uDomainMin;
+  uniform float uDomainMax;
   void main() {
     float intensity = texture2D(uAccum, vUv).r;
     if (intensity <= uThreshold) discard;
-    float t = clamp(intensity, 0.0, 1.0);
+    float span = max(uDomainMax - uDomainMin, 1e-6);
+    float t = clamp((intensity - uDomainMin) / span, 0.0, 1.0);
     vec4 ramp = texture2D(uPalette, vec2(t, 0.5));
     gl_FragColor = vec4(ramp.rgb, ramp.a * smoothstep(uThreshold, uThreshold + 0.05, intensity));
   }
@@ -150,6 +166,8 @@ interface RampProgramHandles {
   uAccum: WebGLUniformLocation | null;
   uPalette: WebGLUniformLocation | null;
   uThreshold: WebGLUniformLocation | null;
+  uDomainMin: WebGLUniformLocation | null;
+  uDomainMax: WebGLUniformLocation | null;
 }
 
 interface HeatmapGpuCache extends TileGpuCache {
@@ -174,6 +192,7 @@ export class STTHeatmapLayer extends STTBaseLayer {
   > & {
     colorRange: ReadonlyArray<RGBA8>;
     weightProperty?: string;
+    colorDomain?: [number, number];
   };
   private accum?: AccumProgramHandles;
   private ramp?: RampProgramHandles;
@@ -211,7 +230,25 @@ export class STTHeatmapLayer extends STTBaseLayer {
       threshold: opts.threshold ?? 0.05,
       colorRange: opts.colorRange ?? DEFAULT_COLOR_RANGE,
       weightProperty: opts.weightProperty,
+      colorDomain: opts.colorDomain,
     };
+  }
+
+  /**
+   * Resolve the accumulated-intensity domain mapped onto the colour ramp:
+   * the explicit `colorDomain` prop, else the archive's bake-time
+   * `metadata.heatmapDomain` (class `default`), else the identity `[0, 1]`.
+   */
+  private resolveColorDomain(): [number, number] {
+    if (this.heatOpts.colorDomain) return this.heatOpts.colorDomain;
+    const classes = this.metadata?.heatmapDomain?.classes;
+    if (classes && classes.length > 0) {
+      const def = classes.find((c) => c.id === 'default') ?? classes[0];
+      if (def && Number.isFinite(def.min) && Number.isFinite(def.max)) {
+        return [def.min, def.max];
+      }
+    }
+    return [0, 1];
   }
 
   /** Replace the colour ramp at runtime. */
@@ -258,6 +295,8 @@ export class STTHeatmapLayer extends STTBaseLayer {
       uAccum: gl.getUniformLocation(rampProgram, 'uAccum'),
       uPalette: gl.getUniformLocation(rampProgram, 'uPalette'),
       uThreshold: gl.getUniformLocation(rampProgram, 'uThreshold'),
+      uDomainMin: gl.getUniformLocation(rampProgram, 'uDomainMin'),
+      uDomainMax: gl.getUniformLocation(rampProgram, 'uDomainMax'),
     };
 
     // Fullscreen quad (triangle strip).
@@ -459,6 +498,9 @@ export class STTHeatmapLayer extends STTBaseLayer {
     gl.bindTexture(gl.TEXTURE_2D, this.paletteTexture);
     gl.uniform1i(rh.uPalette, 1);
     gl.uniform1f(rh.uThreshold, this.heatOpts.threshold);
+    const [domainMin, domainMax] = this.resolveColorDomain();
+    gl.uniform1f(rh.uDomainMin, domainMin);
+    gl.uniform1f(rh.uDomainMax, domainMax);
 
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 

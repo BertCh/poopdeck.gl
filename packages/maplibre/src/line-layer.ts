@@ -21,6 +21,7 @@ import {
   type STTBaseLayerOptions,
   type DrawContext,
   type TileGpuCache,
+  toRgba01,
   type RGBA8,
 } from './base-layer';
 import { lngLatToMercator } from './projection';
@@ -363,7 +364,7 @@ export class STTLineLayer extends STTBaseLayer {
     gl.uniform2f(h.uViewport, gl.drawingBufferWidth, gl.drawingBufferHeight);
     gl.uniform1f(h.uWidth, this.lineOpts.width);
     gl.uniform1f(h.uWidthScale, this.lineOpts.widthScale);
-    gl.uniform4fv(h.uColor, this.lineOpts.color);
+    gl.uniform4fv(h.uColor, toRgba01(this.lineOpts.color));
     gl.uniform1f(h.uWindowStart, ctx.windowStart);
     gl.uniform1f(h.uWindowEnd, ctx.windowEnd);
     const { fadeIn, fadeOut } = this.resolveFadeDurations();

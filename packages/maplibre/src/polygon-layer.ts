@@ -27,6 +27,7 @@ import {
   type STTBaseLayerOptions,
   type DrawContext,
   type TileGpuCache,
+  toRgba01,
   type RGBA8,
 } from './base-layer';
 import { lngLatToMercator } from './projection';
@@ -578,7 +579,7 @@ export class STTPolygonLayer extends STTBaseLayer {
       gl.useProgram(h.program);
       gl.uniformMatrix4fv(h.uMatrix, false, ctx.matrix);
       gl.uniform1f(h.uAltitudeScale, this.polyOpts.altitudeScale);
-      gl.uniform4fv(h.uColor, this.polyOpts.color);
+      gl.uniform4fv(h.uColor, toRgba01(this.polyOpts.color));
       gl.uniform1f(h.uWindowStart, ctx.windowStart);
       gl.uniform1f(h.uWindowEnd, ctx.windowEnd);
       gl.uniform1f(h.uFadeIn, fadeIn);
@@ -619,7 +620,7 @@ export class STTPolygonLayer extends STTBaseLayer {
       gl.uniformMatrix4fv(sh.uMatrix, false, ctx.matrix);
       gl.uniform2f(sh.uViewport, gl.drawingBufferWidth, gl.drawingBufferHeight);
       gl.uniform1f(sh.uWidth, this.polyOpts.lineWidth);
-      gl.uniform4fv(sh.uColor, this.polyOpts.lineColor);
+      gl.uniform4fv(sh.uColor, toRgba01(this.polyOpts.lineColor));
       gl.uniform1f(sh.uWindowStart, ctx.windowStart);
       gl.uniform1f(sh.uWindowEnd, ctx.windowEnd);
       gl.uniform1f(sh.uFadeIn, fadeIn);

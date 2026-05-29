@@ -20,6 +20,7 @@ import {
   type STTBaseLayerOptions,
   type DrawContext,
   type TileGpuCache,
+  toRgba01,
   type RGBA8,
 } from './base-layer';
 import { lngLatToMercator } from './projection';
@@ -375,7 +376,7 @@ export class STTTripsLayer extends STTBaseLayer {
     gl.uniform2f(h.uViewport, gl.drawingBufferWidth, gl.drawingBufferHeight);
     gl.uniform1f(h.uWidth, this.tripsOpts.width);
     gl.uniform1f(h.uWidthScale, this.tripsOpts.widthScale);
-    gl.uniform4fv(h.uColor, this.tripsOpts.color);
+    gl.uniform4fv(h.uColor, toRgba01(this.tripsOpts.color));
     // currentTime relative to this tile's timeOffset (same convention as the
     // window-mode shaders).
     gl.uniform1f(h.uCurrentTime, ctx.currentTime - c.timeOffset);

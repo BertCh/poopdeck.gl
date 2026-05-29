@@ -9,12 +9,17 @@ import {
   type STTBaseLayerOptions,
   type DrawContext,
   type TileGpuCache,
+  toRgba01,
   type RGBA8,
 } from './base-layer';
 import { TIME_WINDOW_GLSL } from './shaders/time-window.glsl';
 
 export interface STTPointLayerOptions extends STTBaseLayerOptions {
-  /** Point color as [r, g, b, a] in the 0–1 range. Ignored when `colorProperty` is set. */
+  /**
+   * Point color as `[r, g, b, a]`. Accepts EITHER 0–255 ints (the deck.gl
+   * `Color` convention, and what `colorPalette` uses) OR 0–1 floats — the
+   * range is auto-detected. Ignored when `colorProperty` is set.
+   */
   color?: [number, number, number, number];
   /** Point radius in pixels. Clamped to GPU `gl_PointSize` range at draw time. */
   radius?: number;
@@ -271,7 +276,7 @@ export class STTPointLayer extends STTBaseLayer {
     gl.uniform1f(h.uAltitudeScale, 0); // 2D points; altitudes are ignored.
     gl.uniform1f(h.uRadius, this.pointOpts.radius);
     gl.uniform1f(h.uRadiusScale, this.pointOpts.radiusScale);
-    gl.uniform4fv(h.uColor, this.pointOpts.color);
+    gl.uniform4fv(h.uColor, toRgba01(this.pointOpts.color));
     gl.uniform1f(h.uWindowStart, ctx.windowStart);
     gl.uniform1f(h.uWindowEnd, ctx.windowEnd);
     const { fadeIn, fadeOut } = this.resolveFadeDurations();
