@@ -16,11 +16,12 @@ import {
   AnimatedPathLayer,
   AnimatedTripsLayer,
   AnimatedPolygonLayer,
-  HeatmapTimeLayer,
+  HeatmapLayer,
   H3SummaryLayer,
   TimeController,
   VatTripsLayer,
 } from "@stt/deck.gl";
+import type { HeatmapChannelSpec } from "@stt/deck.gl";
 import { getDatasetById } from "../datasets";
 import { calculateAnimationSpeed } from "../types";
 import type { SummaryToggleOption } from "../types";
@@ -239,6 +240,8 @@ const DemoPage: React.FC = () => {
             stroked: selectedDataset.stroked,
             strokeColor: selectedDataset.strokeColor,
             lineWidthMinPixels: selectedDataset.lineWidthMinPixels,
+            wakeLength: selectedDataset.wakeLength,
+            wakeTailScale: selectedDataset.wakeTailScale,
             use3D: selectedDataset.use3D,
             elevationProperty: selectedDataset.elevationProperty,
             elevationScale: selectedDataset.elevationScale,
@@ -317,42 +320,53 @@ const DemoPage: React.FC = () => {
         }
         return [tripsLayer];
       }
-      case "heatmap":
-        if (
-          selectedDataset.heatmapLayers &&
-          selectedDataset.heatmapLayers.length > 0
-        ) {
-          return selectedDataset.heatmapLayers.map(
-            (spec) =>
-              new HeatmapTimeLayer({
-                ...baseProps,
-                id: `${selectedDataset.id}-${spec.id}`,
-                radiusPixels: spec.radiusPixels ?? 30,
-                intensity: spec.intensity ?? 1,
-                colorRange: spec.colorRange,
-                weightProperty:
-                  spec.weightProperty ?? selectedDataset.weightProperty,
-                categoryFilter: spec.categoryFilter,
-                colorDomain: spec.colorDomain ?? null,
-                debounceTimeout: spec.debounceTimeout ?? 1000,
-              }),
-          );
+      case "heatmap": {
+        // Stacked heatmaps now compile down to ONE HeatmapLayer with N
+        // channels packed into the RGBA accumulator — half the draw calls
+        // and one shared FBO. The legacy per-spec sublayer fanout is gone.
+        const specs = selectedDataset.heatmapLayers ?? [];
+        if (specs.length === 0) {
+          return [
+            new HeatmapLayer({
+              ...baseProps,
+              radiusPixels: 30,
+              intensity: 1,
+              colorRange: [
+                [255, 255, 178, 255],
+                [254, 204, 92, 255],
+                [253, 141, 60, 255],
+                [240, 59, 32, 255],
+                [189, 0, 38, 255],
+              ],
+              weightProperty: selectedDataset.weightProperty,
+              // TAA — visible smoothness boost at no measurable cost.
+              historyWeight: 0.15,
+            }),
+          ];
         }
+        // Pick the first spec's radius/intensity for the layer-wide values
+        // (the per-channel intensity multiplier still composes on top).
+        const first = specs[0];
+        const channels: HeatmapChannelSpec[] = specs.slice(0, 4).map((spec) => ({
+          id: spec.id,
+          categoryFilter: spec.categoryFilter,
+          colorRange: spec.colorRange,
+          colorDomain: spec.colorDomain ?? undefined,
+          intensity: spec.intensity ?? 1,
+        }));
         return [
-          new HeatmapTimeLayer({
+          new HeatmapLayer({
             ...baseProps,
-            radiusPixels: 30,
+            id: `${selectedDataset.id}-heatmap`,
+            radiusPixels: first.radiusPixels ?? 30,
             intensity: 1,
-            colorRange: [
-              [255, 255, 178, 255],
-              [254, 204, 92, 255],
-              [253, 141, 60, 255],
-              [240, 59, 32, 255],
-              [189, 0, 38, 255],
-            ],
-            weightProperty: selectedDataset.weightProperty,
+            weightProperty:
+              first.weightProperty ?? selectedDataset.weightProperty,
+            channels,
+            historyWeight: 0.15,
           }),
         ];
+      }
       case "polygon":
         return [
           new AnimatedPolygonLayer({

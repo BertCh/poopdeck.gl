@@ -1,3 +1,7 @@
+// @stt/deck.gl
+// SPDX-License-Identifier: MIT
+// Copyright (c) @stt/deck.gl contributors
+
 /**
  * CategoryColorExtension - GPU-based categorical color lookup.
  *
@@ -37,9 +41,16 @@
  */
 
 import { LayerExtension } from '@deck.gl/core';
-import type { Layer, LayerContext, Accessor, UpdateParameters } from '@deck.gl/core';
-import type { Color } from '@deck.gl/core';
+import type {
+  Accessor,
+  Color,
+  DefaultProps,
+  Layer,
+  LayerContext,
+  UpdateParameters,
+} from '@deck.gl/core';
 import type { Texture } from '@luma.gl/core';
+import { warnOnce } from './log';
 
 /**
  * Width of the palette texture. The bump from 256 to 4096 covers real-world
@@ -49,12 +60,21 @@ import type { Texture } from '@luma.gl/core';
 export const CATEGORY_PALETTE_SIZE = 4096;
 
 /** Props for layers using CategoryColorExtension. */
-export type CategoryColorExtensionProps<DataT = any> = {
-  /** Color palette (up to CATEGORY_PALETTE_SIZE entries). */
+export type CategoryColorExtensionProps<DataT = unknown> = {
+  /**
+   * Color palette (up to {@link CATEGORY_PALETTE_SIZE} entries).
+   * @default []
+   */
   categoryPalette?: Color[];
-  /** Accessor returning the category index (0..CATEGORY_PALETTE_SIZE-1). */
+  /**
+   * Accessor returning the category index (0..{@link CATEGORY_PALETTE_SIZE}-1).
+   * @default 0
+   */
   getCategoryIndex?: Accessor<DataT, number>;
-  /** Enable categorical coloring. Off by default — the layer must opt in. */
+  /**
+   * Enable categorical coloring. Off by default — the layer must opt in.
+   * @default false
+   */
   useCategoryColor?: boolean;
 };
 
@@ -92,9 +112,9 @@ const categoryColorUniforms = {
   },
 };
 
-const defaultProps: Required<CategoryColorExtensionProps> = {
-  categoryPalette: [] as Color[],
-  getCategoryIndex: { type: 'accessor', value: 0 } as any,
+const defaultProps: DefaultProps<CategoryColorExtensionProps> = {
+  categoryPalette: { type: 'array', value: [], compare: true },
+  getCategoryIndex: { type: 'accessor', value: 0 },
   useCategoryColor: false,
 };
 
@@ -209,16 +229,12 @@ export class CategoryColorExtension extends LayerExtension {
     // sat at (index mod paletteSize), producing visually-plausible but
     // wrong colors.
     if (categoryPalette.length > CATEGORY_PALETTE_SIZE) {
-      const layerState = this.state as { _paletteOverflowWarned?: boolean };
-      if (!layerState._paletteOverflowWarned) {
-        layerState._paletteOverflowWarned = true;
-        // eslint-disable-next-line no-console
-        console.warn(
-          `[CategoryColorExtension] palette has ${categoryPalette.length} ` +
-            `entries; only the first ${CATEGORY_PALETTE_SIZE} are uploaded ` +
-            'to the palette texture.',
-        );
-      }
+      warnOnce(
+        'CategoryColorExtension:overflow',
+        `[CategoryColorExtension] palette has ${categoryPalette.length} ` +
+          `entries; only the first ${CATEGORY_PALETTE_SIZE} are uploaded ` +
+          'to the palette texture.',
+      );
     }
 
     const paletteSize = Math.min(categoryPalette.length, CATEGORY_PALETTE_SIZE);

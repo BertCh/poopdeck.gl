@@ -1,3 +1,7 @@
+// @stt/deck.gl
+// SPDX-License-Identifier: MIT
+// Copyright (c) @stt/deck.gl contributors
+
 /**
  * Lightweight performance-probe channel.
  *

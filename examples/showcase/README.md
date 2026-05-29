@@ -1,90 +1,79 @@
-# Showcase Examples
+# Showcase
 
-This showcase demonstrates spatiotemporal tile format (STT) with various real and synthetic datasets.
+Interactive demo of the SpatioTemporal Tile (`.stt`) format, deck.gl
+layers (`@stt/deck.gl`), and MapLibre adapters (`@stt/maplibre`) across
+16 real and synthetic datasets.
 
-## Updated for Latest Pipeline (Oct 2025)
+## Pages
 
-All datasets have been regenerated with the improved data pipeline:
+- `/` — landing page + dataset gallery
+- `/demo/:datasetId` — single-dataset deck.gl demo with the time
+  controller, the perf HUD, and the `__sttProbe` channel tap
+- `/maplibre/:datasetId` — same data rendered through `@stt/maplibre`
+- `/format` — annotated walk-through of the `.stt` archive layout
+- `/layers` — gallery of every layer kind with an inline code example
 
-- ✅ **Standardized projections** - Uses `projection` module for accurate coordinate transformations
-- ✅ **Proper temporal bucketing** - chrono-based month/week/year calculations
-- ✅ **CSV support** - Can now ingest CSV files directly
-- ✅ **Improved coordinate math** - Latitude-adjusted distance calculations for synthetic data
+## Data Pipeline
 
-## Available Datasets
+Datasets are built by `stt-generate`, which fetches the source,
+normalises it into GeoParquet, and shells out to `stt-build`. The
+generators share `crates/stt-generate/src/common.rs` for coordinate
+transforms, chrono-based temporal bucketing, and latitude-adjusted
+distance math. CSV sources are ingested directly; HTTP sources are
+cached under `data/`.
 
-### Real Data
+## Registered Datasets (`src/datasets.ts`)
 
-**Earthquakes (119 MB)** - USGS seismic events
-
-- 77,198 features (M4.0+ 2020-2024)
-- Built with `sparse-events` temporal profile
-
-**Hurricane Tracks (5.4 MB)** - NOAA IBTrACS
-
-- 5,219 features, 15,011 temporal frames
-- Atlantic hurricanes 2020-2023
-
-**AIS Maritime Traffic (548 MB)** - NOAA Marine Cadastre
-
-- 1.17M vessel positions from 14,868 ships
-- Real AIS data (Jan 2024)
-
-**Flight Traffic (1 GB)** - OpenSky Network
-
-- 3.96M aircraft positions from 21K aircraft
-- Real ADS-B data (24hr, Jan 2020)
-
-**NYC Taxi (142 MB)** - TLC + OSRM routed
-
-- 1.14M rideshare points
-- Real trip data (Feb 2016)
-
-**Wildfires (328 KB)** - NIFC perimeters
-
-- 118 large wildfire polygons (1000+ acres, 2020-2023)
+| Dataset id                   | Layer kind     | Source |
+| ---------------------------- | -------------- | ------ |
+| `earthquake-activity`        | point          | USGS M4.0+ global (2020–2024) |
+| `flights`                    | point          | OpenSky ADS-B (24 h sample) |
+| `flight-paths`               | path           | OpenSky, derived per-flight polylines |
+| `flight-trips`               | trips          | OpenSky, per-vertex timed paths |
+| `hurricanes`                 | path           | NOAA IBTrACS (Atlantic 2020–2023) |
+| `nyc-rideshare`              | point          | NYC TLC + OSRM routed |
+| `nyc-taxi-points`            | point          | derived from rideshare paths |
+| `nyc-taxi-paths`             | path           | OSRM-routed taxi routes |
+| `nyc-taxi-trips`             | trips          | per-vertex timed taxi routes |
+| `nyc-taxi-vat`               | vat-trips      | vertex-animation-texture variant |
+| `nyc-taxi-od-heatmap`        | heatmap        | OD pickups / dropoffs as GPU splats |
+| `nyc-taxi-od-summary`        | h3 summary     | server-aggregated H3 hex bins |
+| `ship-traffic`               | point          | NOAA Marine Cadastre AIS |
+| `wildfires`                  | polygon        | NIFC perimeters (1000+ acres) |
+| `satellites`                 | point          | CelesTrak TLE + SGP4 propagation |
+| `satellite-trips-flat`       | trips          | satellites rendered as trip trails |
 
 ## Building Locally
 
 ```bash
-# From the project root
 cd examples/showcase
 pnpm install
 pnpm dev
 ```
 
-Datasets are pre-built and included in `public/data/`.
+Datasets must be present under `public/data/`. They are NOT committed —
+regenerate locally with `stt-generate`.
 
 ## Regenerating Datasets
 
-To rebuild all datasets:
-
 ```bash
-# Install stt-generate
-cargo install --path crates/stt-generate
+# Build the toolchain once
+cargo build --release
 
-# Generate all datasets
-stt-generate all --output-dir examples/showcase/public/data
+# Generate every dataset into the showcase's data directory
+./target/release/stt-generate all \
+  --output-dir examples/showcase/public/data --skip-existing
 
-# Or generate individually
-stt-generate earthquakes --output examples/showcase/public/data/earthquakes.stt
-stt-generate hurricanes --output examples/showcase/public/data/hurricanes.stt
-stt-generate wildfires --output examples/showcase/public/data/wildfires.stt
+# Or one at a time
+./target/release/stt-generate earthquakes \
+  --output examples/showcase/public/data/earthquakes.stt
 ```
 
-## Performance
-
-All datasets load with HTTP Range Requests:
-
-- Initial metadata: <100ms
-- First frame: <200ms
-- Frame switching: <16ms (60 FPS)
-- Memory: ~180 MB for all datasets
+Per-dataset flags vary — run `stt-generate <subcommand> --help`.
 
 ## Tech Stack
 
-- **React 18** - UI framework
-- **deck.gl 9.0** - WebGL visualization
-- **@stt/core** - Archive reader
-- **@stt/deck.gl** - Custom layers
-- **Vite** - Build tool
+- **React 18** + **TypeScript** + **Vite**
+- **deck.gl 9.x** via `@stt/deck.gl`
+- **MapLibre GL 3+** via `@stt/maplibre`
+- **`@stt/core`** for the archive reader, decoder pool, and tileset

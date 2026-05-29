@@ -1,3 +1,7 @@
+// @stt/core
+// SPDX-License-Identifier: MIT
+// Copyright (c) @stt/core contributors
+
 /**
  * Tile decoding: turn an STT tile payload into deck.gl-ready binary features.
  *

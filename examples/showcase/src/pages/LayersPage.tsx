@@ -73,9 +73,9 @@ const deckLayers: LayerInfo[] = [
     demoId: "wildfires",
   },
   {
-    name: "HeatmapTimeLayer",
+    name: "HeatmapLayer",
     description:
-      "Renders a heatmap that updates based on the current time window. Intensity is calculated from visible features.",
+      "GPU-splat density heatmap. Per-tile vertex buffers uploaded once; the vertex shader does the time-window filter, then a two-pass additive-splat + colour-ramp pipeline composites up to 4 RGBA-packed categorical channels.",
     useCase: "Activity hotspots, density over time, temporal clustering",
     props: [
       { name: "radiusPixels", type: "number", description: "Heatmap radius in pixels" },

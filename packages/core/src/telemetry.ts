@@ -1,3 +1,7 @@
+// @stt/core
+// SPDX-License-Identifier: MIT
+// Copyright (c) @stt/core contributors
+
 /**
  * Minimal telemetry shim for `@stt/core`.
  *

@@ -1,3 +1,7 @@
+// @stt/deck.gl
+// SPDX-License-Identifier: MIT
+// Copyright (c) @stt/deck.gl contributors
+
 /**
  * PolygonTimeFilterExtension - GPU time filtering for SolidPolygonLayer.
  *
@@ -27,31 +31,52 @@
  */
 
 import { LayerExtension } from '@deck.gl/core';
-import type { Layer, LayerContext, Accessor } from '@deck.gl/core';
+import type { Layer, LayerContext, Accessor, DefaultProps } from '@deck.gl/core';
 import { relativizeTime, MAX_RELATIVE_TIME_MS } from './time-filter-extension';
+import { warnOnce } from './log';
 
-export type PolygonTimeFilterExtensionProps<DataT = any> = {
-  /** Absolute current time (epoch-ms). `getTime` takes priority when present. */
+export type PolygonTimeFilterExtensionProps<DataT = unknown> = {
+  /**
+   * Absolute current time (epoch-ms). `getTime` takes priority when present.
+   * @default 0
+   */
   currentTime?: number;
   /**
-   * Dynamic time getter. Called every draw — lets the layer stay cached
-   * across animation ticks (only the uniform updates).
+   * Dynamic time getter — called every `draw()` so the layer instance can
+   * stay cached across animation ticks (only uniforms update each frame).
+   * @default null
    */
-  getTime?: () => number;
+  getTime?: (() => number) | null;
   /**
    * Per-layer time offset. ALL per-feature time attribute values must be
    * relative to this; see TimeFilterExtension for the precision rationale.
+   * @default 0
    */
   timeOffset?: number;
-  /** Total visible window size in ms (currentTime ± windowHalf). */
+  /**
+   * Total visible window size in ms (currentTime ± windowHalf).
+   * @default 0
+   */
   timeWindow?: number;
-  /** Fade-in duration (ms). */
+  /**
+   * Fade-in duration (ms).
+   * @default 0
+   */
   fadeInDuration?: number;
-  /** Fade-out duration (ms). */
+  /**
+   * Fade-out duration (ms).
+   * @default 0
+   */
   fadeOutDuration?: number;
-  /** Accessor for per-feature start time (relative to timeOffset). */
+  /**
+   * Accessor for per-feature start time (relative to `timeOffset`).
+   * @default 0
+   */
   getPolygonStartTime?: Accessor<DataT, number>;
-  /** Accessor for per-feature end time (relative to timeOffset). */
+  /**
+   * Accessor for per-feature end time (relative to `timeOffset`).
+   * @default Infinity
+   */
   getPolygonEndTime?: Accessor<DataT, number>;
 };
 
@@ -87,15 +112,15 @@ const polygonTimeFilterUniforms = {
   },
 };
 
-const defaultProps: Required<PolygonTimeFilterExtensionProps> = {
+const defaultProps: DefaultProps<PolygonTimeFilterExtensionProps> = {
   currentTime: 0,
-  getTime: null as any,
+  getTime: { type: 'function', value: null, optional: true },
   timeOffset: 0,
   timeWindow: 0,
   fadeInDuration: 0,
   fadeOutDuration: 0,
-  getPolygonStartTime: { type: 'accessor', value: 0 } as any,
-  getPolygonEndTime: { type: 'accessor', value: Infinity } as any,
+  getPolygonStartTime: { type: 'accessor', value: 0 },
+  getPolygonEndTime: { type: 'accessor', value: Infinity },
 };
 
 /**
@@ -204,11 +229,9 @@ export class PolygonTimeFilterExtension extends LayerExtension {
     // Same precision guard as TimeFilterExtension. A wrong timeOffset (e.g.
     // not subtracted on the consumer side) silently degrades to ~131s
     // bucketing; the warning surfaces that without breaking rendering.
-    const extState = this.state as { _timePrecisionWarned?: boolean };
-    if (Math.abs(relativeTime) > MAX_RELATIVE_TIME_MS && !extState._timePrecisionWarned) {
-      extState._timePrecisionWarned = true;
-      // eslint-disable-next-line no-console
-      console.warn(
+    if (Math.abs(relativeTime) > MAX_RELATIVE_TIME_MS) {
+      warnOnce(
+        'PolygonTimeFilterExtension:precision',
         `[PolygonTimeFilterExtension] relative time ${relativeTime} exceeds ` +
           `${MAX_RELATIVE_TIME_MS} ms — Float32 precision is degraded; ` +
           'check that `timeOffset` matches the tile data.',

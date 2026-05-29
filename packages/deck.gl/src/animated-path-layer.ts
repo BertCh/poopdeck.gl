@@ -1,3 +1,7 @@
+// @stt/deck.gl
+// SPDX-License-Identifier: MIT
+// Copyright (c) @stt/deck.gl contributors
+
 /**
  * AnimatedPathLayer - GPU-efficient path/trajectory rendering with time filtering.
  *
@@ -21,7 +25,7 @@
  */
 
 import { PathLayer } from '@deck.gl/layers';
-import type { Color, Layer, LayerContext } from '@deck.gl/core';
+import type { Color, DefaultProps, Layer, LayerContext } from '@deck.gl/core';
 import { SpatioTemporalLayer, SpatioTemporalLayerProps } from './spatiotemporal-layer';
 import { NoPickingPathLayer } from './no-picking-path-layer';
 import { TimeFilterExtension } from './time-filter-extension';
@@ -30,31 +34,60 @@ import {
   CATEGORY_PALETTE_SIZE,
 } from './category-color-extension';
 import { emit } from './telemetry';
+import { warnOnce } from './log';
 import type { Tile, Layer as TileLayer } from '@stt/core';
 
 const DEBUG = false;
 
 export interface AnimatedPathLayerProps extends SpatioTemporalLayerProps {
+  /**
+   * Width multiplier.
+   * @default 1
+   */
   widthScale?: number;
+  /**
+   * Units for path width.
+   * @default 'pixels'
+   */
   widthUnits?: 'pixels' | 'meters';
   /** Clamp path width to at least this many on-screen pixels. */
   widthMinPixels?: number;
   /** Clamp path width to at most this many on-screen pixels. */
   widthMaxPixels?: number;
-  /** Path color - constant Color, or property name for categorical coloring */
+  /**
+   * Path color — constant {@link Color}, or property name for categorical coloring.
+   * @default [0, 150, 255, 255]
+   */
   pathColor?: Color | string;
-  /** Path width - constant number, or property name for per-feature width */
+  /**
+   * Path width — constant number, or property name for per-feature width.
+   * @default 3
+   */
   pathWidth?: number | string;
+  /**
+   * Color palette for categorical `pathColor`.
+   */
   colorPalette?: Color[];
+  /**
+   * Fade-in duration for appearing paths (ms).
+   * @default 300
+   */
   fadeInDuration?: number;
+  /**
+   * Fade-out duration for disappearing paths (ms).
+   * @default 300
+   */
   fadeOutDuration?: number;
   /**
-   * Rounded line caps. Default `false` (flat). Rounded caps are the dominant
-   * fragment-shader cost at small widths and are visually indistinguishable
-   * from flat below ~10 px.
+   * Rounded line caps. Rounded caps are the dominant fragment-shader cost
+   * at small widths and are visually indistinguishable from flat below ~10 px.
+   * @default false
    */
   capRounded?: boolean;
-  /** Rounded line joints; same fragment-cost tradeoff as `capRounded`. */
+  /**
+   * Rounded line joints; same fragment-cost tradeoff as `capRounded`.
+   * @default false
+   */
   jointRounded?: boolean;
 }
 
@@ -106,13 +139,13 @@ function indicesToFloat32(indices: Uint16Array, count: number): Float32Array {
 export class AnimatedPathLayer extends SpatioTemporalLayer<AnimatedPathLayerProps> {
   static layerName = 'AnimatedPathLayer';
 
-  static defaultProps = {
+  static defaultProps: DefaultProps<AnimatedPathLayerProps> = {
     ...SpatioTemporalLayer.defaultProps,
     widthScale: { type: 'number', value: 1, min: 0 },
     widthUnits: 'pixels',
-    pathColor: { type: 'color', value: [0, 150, 255, 255] as Color },
+    pathColor: { type: 'color', value: [0, 150, 255, 255] },
     pathWidth: { type: 'number', value: 3 },
-    colorPalette: { type: 'array', value: DEFAULT_PALETTE },
+    colorPalette: { type: 'array', value: DEFAULT_PALETTE, compare: true },
     fadeInDuration: { type: 'number', value: 300, min: 0 },
     fadeOutDuration: { type: 'number', value: 300, min: 0 },
   };
@@ -152,10 +185,10 @@ export class AnimatedPathLayer extends SpatioTemporalLayer<AnimatedPathLayerProp
     return [
       this.props.widthScale,
       this.props.widthUnits,
-      (this.props as any).widthMinPixels,
-      (this.props as any).widthMaxPixels,
-      (this.props as any).capRounded,
-      (this.props as any).jointRounded,
+      this.props.widthMinPixels,
+      this.props.widthMaxPixels,
+      this.props.capRounded,
+      this.props.jointRounded,
       this.props.fadeInDuration,
       this.props.fadeOutDuration,
       this.props.opacity,
@@ -326,8 +359,8 @@ export class AnimatedPathLayer extends SpatioTemporalLayer<AnimatedPathLayerProp
       useGpuCategory &&
       prepared.gpuPalette!.length > CATEGORY_PALETTE_SIZE
     ) {
-      // eslint-disable-next-line no-console
-      console.warn(
+      warnOnce(
+        'AnimatedPathLayer:paletteOverflow',
         `[AnimatedPathLayer] colorPalette has ${prepared.gpuPalette!.length} ` +
           `entries; only the first ${CATEGORY_PALETTE_SIZE} will be used by ` +
           'CategoryColorExtension.',
@@ -348,10 +381,10 @@ export class AnimatedPathLayer extends SpatioTemporalLayer<AnimatedPathLayerProp
       positionFormat: prepared.dims === 3 ? 'XYZ' : 'XY',
       widthUnits: this.props.widthUnits ?? 'pixels',
       widthScale: this.props.widthScale ?? 1,
-      widthMinPixels: (this.props as any).widthMinPixels,
-      widthMaxPixels: (this.props as any).widthMaxPixels,
-      capRounded: (this.props as any).capRounded,
-      jointRounded: (this.props as any).jointRounded,
+      widthMinPixels: this.props.widthMinPixels,
+      widthMaxPixels: this.props.widthMaxPixels,
+      capRounded: this.props.capRounded,
+      jointRounded: this.props.jointRounded,
       opacity: this.props.opacity,
       visible: this.props.visible,
       pickable: this.props.pickable ?? false,

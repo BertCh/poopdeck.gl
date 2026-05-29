@@ -66,7 +66,7 @@ const layer = new AnimatedTripsLayer({
   jointRounded: true,
 });`;
 
-const heatmapLayerExample = `import { HeatmapTimeLayer, TimeController } from '@stt/deck.gl';
+const heatmapLayerExample = `import { HeatmapLayer, TimeController } from '@stt/deck.gl';
 
 const timeController = new TimeController({
   initialTime: Date.parse('2020-01-01'),
@@ -74,7 +74,9 @@ const timeController = new TimeController({
   loop: true,
 });
 
-const layer = new HeatmapTimeLayer({
+// GPU-splat heatmap: per-tile vertex buffers uploaded once, vertex shader
+// does the time-window filter, two-pass additive splat + colour ramp.
+const layer = new HeatmapLayer({
   id: 'heatmap',
   data: '/data/activity.stt',
   currentTime: timeController.getTime(),
@@ -90,6 +92,9 @@ const layer = new HeatmapTimeLayer({
     [189, 0, 38],
   ],
   weightProperty: 'magnitude',
+  // TAA-style EWMA blend across frames — hides any throttled stutter at
+  // animation playback speeds, ~0 ms cost.
+  historyWeight: 0.15,
 });`;
 
 const polygonLayerExample = `import { AnimatedPolygonLayer, TimeController } from '@stt/deck.gl';

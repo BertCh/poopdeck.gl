@@ -37,7 +37,7 @@ const FormatPage: React.FC = () => {
             className="mb-4"
             style={{ color: "#A0A7B4", lineHeight: 1.7 }}
           >
-            A v3 <code style={{ color: "#1FBAD6" }}>.stt</code> archive lays out five
+            An <code style={{ color: "#1FBAD6" }}>.stt</code> archive lays out five
             sections in the order a reader needs them:
           </p>
 
@@ -134,10 +134,9 @@ const FormatPage: React.FC = () => {
                 zstd + Trained Dictionary
               </h3>
               <p style={{ color: "#6A7485", fontSize: "0.875rem", lineHeight: 1.6 }}>
-                v3 archives default to zstd-3 — ~5× faster to compress than gzip-6
-                for an equal-or-better ratio. An optional zstd training dictionary
-                shared across tiles drops payload size another 20–40% on small or
-                repetitive tiles.
+                Tiles are compressed with zstd-3 by default. An optional zstd
+                training dictionary shared across tiles drops payload size by
+                20–40% on small or repetitive tiles.
               </p>
             </div>
 
@@ -214,7 +213,7 @@ const FormatPage: React.FC = () => {
             style={{ color: "#A0A7B4", lineHeight: 1.7 }}
           >
             <code style={{ color: "#1FBAD6" }}>stt-build</code> converts a GeoParquet
-            file into a v3 <code>.stt</code> archive. Input is always GeoParquet —
+            file into a <code>.stt</code> archive. Input is always GeoParquet —
             convert other formats with <code>ogr2ogr</code> first. The
             Arrow-native streaming pipeline (<code>--streaming-arrow</code>) keeps
             peak RSS bounded by one record batch plus the active tile-spill budget,
@@ -319,8 +318,8 @@ ogr2ogr -f Parquet input.parquet input.geojson`}
                 <tr style={{ borderTop: "1px solid #3A414C" }}>
                   <td className="px-4 py-3 font-mono" style={{ color: "#1FBAD6" }}>--compression</td>
                   <td className="px-4 py-3">
-                    <code>none</code>, <code>gzip</code> (v2-compat), or
-                    <code> zstd</code> (default, v3)
+                    <code>zstd</code> (default), <code>gzip</code>, or
+                    <code> none</code>
                   </td>
                 </tr>
                 <tr style={{ borderTop: "1px solid #3A414C" }}>

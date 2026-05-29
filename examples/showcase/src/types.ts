@@ -40,8 +40,13 @@ export interface DatasetLegend {
 /** RGBA color, 0-255 per channel. Matches deck.gl's Color type. */
 export type ColorRGBA = [number, number, number, number];
 
+/**
+ * One channel of a stacked heatmap. N specs (max 4) pack into the
+ * RGBA channels of the new HeatmapLayer's accumulator FBO — one splat
+ * pass + one ramp pass total, regardless of channel count.
+ */
 export interface HeatmapLayerSpec {
-  /** Suffix appended to the dataset id to make a unique layer id. */
+  /** Channel id (used for log/picking + future build-time metadata lookup). */
   id: string;
   /** Color ramp from low density → high density. */
   colorRange: ColorRGBA[];
@@ -49,18 +54,19 @@ export interface HeatmapLayerSpec {
   categoryFilter?: { property: string; values: string[] };
   /** Optional weight property (defaults to 1 per feature). */
   weightProperty?: string;
-  /** Optional per-layer radius override (px). */
+  /**
+   * Optional per-layer radius override (px). When several channels are
+   * stacked, only the FIRST channel's `radiusPixels` is honoured — the
+   * splat pass runs once for all channels.
+   */
   radiusPixels?: number;
-  /** Optional per-layer intensity override. */
+  /** Per-channel weight multiplier on top of the global intensity. */
   intensity?: number;
   /**
-   * Pinned `[min, max]` weight domain forwarded to deck.gl's HeatmapLayer.
-   * Setting this is the big perf knob for animated heatmaps — it skips
-   * deck.gl's per-rebuild max-weight auto-detection.
+   * Pinned `[min, max]` accumulator-intensity domain. Setting this skips
+   * any runtime auto-detect (zero GPU readback). Defaults to [0, 1].
    */
   colorDomain?: [number, number];
-  /** Forwarded to HeatmapLayer.debounceTimeout (ms). */
-  debounceTimeout?: number;
 }
 
 export interface Dataset {
@@ -132,6 +138,17 @@ export interface Dataset {
    * magnitude) and a linear pixel mapping is uninformative.
    */
   radiusTransform?: (value: number) => number;
+
+  /**
+   * Wake length in milliseconds for `type: 'point'`. When > 0, each point
+   * is drawn behind the play head as a fading + shrinking "ship wake".
+   * The caller's `timeWindow` should be `>= 2 × wakeLength` so the tile
+   * loader still covers the past portion of the wake.
+   */
+  wakeLength?: number;
+
+  /** Tail-edge size multiplier for wake mode (0..1). Defaults to 0.15. */
+  wakeTailScale?: number;
 
   /** Render a stroke around each point. */
   stroked?: boolean;

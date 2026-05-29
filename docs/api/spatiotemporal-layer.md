@@ -42,10 +42,9 @@ Inherits from all [CompositeLayer](https://deck.gl/docs/api-reference/core/compo
 
 | Property           | Type     | Default       | Description                                                                |
 | :----------------- | :------- | :------------ | :------------------------------------------------------------------------- |
-| `maxRequests`      | `number` | `64`          | Maximum concurrent tile requests. Higher values enable parallel loading.   |
+| `maxRequests`      | `number` | `12`          | Maximum concurrent tile requests. Sits at 12 because browsers cap concurrent connections per origin around there. |
 | `debounceTime`     | `number` | `0`           | Debounce time (ms) for viewport updates. Set to 0 for responsive animation. |
 | `maxCacheSize`     | `number` | `2000`        | Maximum number of tiles to keep in the LRU cache.                          |
-| `maxCacheByteSize` | `number` | `2147483648`  | Maximum cache size in bytes (2GB default).                                 |
 
 ### Prefetch Options
 
@@ -53,7 +52,7 @@ Inherits from all [CompositeLayer](https://deck.gl/docs/api-reference/core/compo
 | :-------------- | :-------- | :------ | :------------------------------------------------------------ |
 | `enablePrefetch`| `boolean` | `true`  | Enable predictive prefetching for smooth animation playback.  |
 | `prefetchAhead` | `number`  | `30000` | How far ahead to prefetch in animation time (milliseconds).   |
-| `prefetchSteps` | `number`  | `10`    | Number of time steps to prefetch ahead.                       |
+| `prefetchSteps` | `number`  | `4`     | Number of time-window steps to prefetch ahead.                |
 
 ### Callbacks
 
@@ -83,10 +82,15 @@ Property indicating whether the layer has finished initial loading.
 
 The layer is optimized for high-performance animation:
 
-- **Request concurrency**: Up to 64 parallel tile requests
-- **Prefetching**: Tiles are loaded ahead of playback time
-- **LRU caching**: Large cache (2GB) for smooth looping
-- **Time updates via getter**: Avoids React re-renders during animation
+- **Request concurrency**: 12 parallel tile requests (matching browser
+  per-origin caps); prefetch consumes ≤ 50 % of that budget while
+  animating.
+- **Prefetching**: tiles are loaded ahead of playback time, aligned with
+  the archive's temporal bucket boundaries.
+- **LRU caching**: 2000-tile cache; eviction respects the active time
+  window so tiles needed by the current animation frame aren't dropped.
+- **Time updates via getter**: passing `timeController` avoids React
+  re-renders during animation — the layer reads time in `draw()`.
 
 ## Source
 

@@ -9,16 +9,15 @@
  *  2. The data objects the animated layers feed to deck.gl carry the time
  *     attributes under those EXACT keys (so the data actually reaches the GPU).
  *
- * Real deck.gl layers need a GPU to instantiate, so layer construction is
- * exercised indirectly: we reproduce each layer's consolidated `attributes`
- * object the same way the layer builds it and assert its keys.
+ * Real deck.gl layers need a GPU to instantiate, so we construct the
+ * per-tile binary `data.attributes` object the same way each layer builds it
+ * and assert its key set.
  */
 
 import { describe, it, expect } from 'vitest';
 import { TimeFilterExtension } from '../src/time-filter-extension';
 import { CategoryColorExtension } from '../src/category-color-extension';
 import { PolygonTimeFilterExtension } from '../src/polygon-time-filter-extension';
-import { consolidatePoints, consolidatePaths } from '../src/consolidate';
 import { makePointTile, makePathTile } from './fake-tile';
 
 /**
@@ -101,7 +100,7 @@ describe('PolygonTimeFilterExtension attribute registration', () => {
   });
 });
 
-describe('point layer consolidated attributes match the extension names', () => {
+describe('point layer per-tile attributes match the extension names', () => {
   it('exposes instanceStartTime / instanceEndTime as Float32Array', () => {
     const tile = makePointTile({
       positions: [[0, 0], [1, 1]],
@@ -109,11 +108,14 @@ describe('point layer consolidated attributes match the extension names', () => 
       endTimes: [15, 25],
       timeOffset: 1_716_206_000_000,
     });
-    const c = consolidatePoints([tile])!;
+    // Mirrors AnimatedPointLayer.prepareTile: the per-tile binary `data`
+    // object hands the tile's own typed arrays to deck.gl under the
+    // extension-registered keys.
+    const binary = tile.layers[0].features;
     const attributes: Record<string, any> = {
-      getPosition: { value: c.positions, size: c.dims },
-      instanceStartTime: { value: c.startTimes, size: 1 },
-      instanceEndTime: { value: c.endTimes, size: 1 },
+      getPosition: { value: binary.positions, size: binary.positionDimensions ?? 2 },
+      instanceStartTime: { value: binary.startTimes, size: 1 },
+      instanceEndTime: { value: binary.endTimes, size: 1 },
     };
     expect(attributes).toHaveProperty('instanceStartTime');
     expect(attributes).toHaveProperty('instanceEndTime');
@@ -123,7 +125,7 @@ describe('point layer consolidated attributes match the extension names', () => 
   });
 });
 
-describe('path layer consolidated attributes match the extension names', () => {
+describe('path layer per-tile attributes match the extension names', () => {
   it('exposes instanceStartTime / instanceEndTime as Float32Array', () => {
     const tile = makePathTile({
       paths: [[[0, 0], [1, 1]]],
@@ -131,11 +133,12 @@ describe('path layer consolidated attributes match the extension names', () => {
       endTimes: [20],
       timeOffset: 0,
     });
-    const c = consolidatePaths([tile])!;
+    // Mirrors AnimatedPathLayer.prepareTile.
+    const binary = tile.layers[0].features;
     const attributes: Record<string, any> = {
-      getPath: { value: c.positions, size: c.dims },
-      instanceStartTime: { value: c.startTimes, size: 1 },
-      instanceEndTime: { value: c.endTimes, size: 1 },
+      getPath: { value: binary.positions, size: binary.positionDimensions ?? 2 },
+      instanceStartTime: { value: binary.startTimes, size: 1 },
+      instanceEndTime: { value: binary.endTimes, size: 1 },
     };
     expect(attributes).toHaveProperty('instanceStartTime');
     expect(attributes).toHaveProperty('instanceEndTime');

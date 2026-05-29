@@ -1,3 +1,7 @@
+// @stt/core
+// SPDX-License-Identifier: MIT
+// Copyright (c) @stt/core contributors
+
 /**
  * OPFS-backed persistent tile cache.
  *

@@ -15,9 +15,9 @@ spatial tile pyramid with a temporal axis — each tile is addressed by
 `(zoom, x, y, time-bucket)` — so a deck.gl client can stream only the tiles in
 the current viewport *and* time window, and animate over time.
 
-Tile payloads are **Apache Arrow IPC** with **GeoArrow**-encoded geometry, so
-they are a standard, columnar, GPU-friendly format rather than a bespoke
-encoding.
+Tile payloads are **Apache Arrow IPC** with **GeoArrow**-encoded geometry — a
+standard, columnar, GPU-friendly representation that interops directly with
+`@geoarrow/deck.gl-layers`, Lonboard, and kepler.gl 3.x.
 
 ### Key features
 
@@ -25,18 +25,17 @@ encoding.
 - 🌐 **HTTP Range Requests** — the header, index, and each tile are fetched
   with independent range requests.
 - 🗜️ **Apache Arrow payloads** — GeoArrow geometry + columnar properties,
-  gzip-compressed per tile, content-addressed and de-duplicated.
+  zstd-compressed per tile, with an optional shared training dictionary for
+  small/repetitive tiles. CRC32C integrity tag per tile.
 - 🕒 **Temporal tiling** — features are bucketed into fixed time intervals for
-  predictable, animation-friendly loading.
-- 🎯 **Hilbert-ordered directory** — tiles are stored in spatial-locality order.
-- 🔧 **Modern stack** — Rust (`arrow`, `geo`, `geozero`) builder + TypeScript
-  (`apache-arrow`, deck.gl) reader.
-
-> **Status:** the build pipeline, archive format, and TypeScript reader are
-> implemented and tested end-to-end (Rust ↔ browser). The deck.gl layers
-> render from the Arrow format; GPU-accelerated time filtering for the
-> point/path/trip layers is driven by a shader uniform via
-> `TimeFilterExtension`.
+  predictable, animation-friendly loading. Optional coarser-bucket pyramid
+  (`--temporal-lod`) for multi-scale animation.
+- 🎯 **Hilbert-ordered directory** — tiles are stored in spatial-locality order
+  for better CDN cacheability and smaller seek footprints during pans.
+- 🧭 **H3 summary tier** — optional pre-aggregated low-zoom tier for
+  100M+ scale point datasets.
+- 🔧 **Stack** — Rust (`arrow`, `geo`, `geozero`) builder + TypeScript
+  (`apache-arrow`, deck.gl, MapLibre) reader and layers.
 
 ---
 
@@ -103,19 +102,21 @@ adapter API.
 
 ```
 ┌──────────────────┐
-│ Header (64 B)    │  Magic "STT\x02", compression, index/metadata offsets
+│ Header (64 B)    │  Magic "STT\x03", compression, dict/index/metadata offsets
 ├──────────────────┤
-│ Tile blobs       │  gzip(Arrow IPC layer frame), content-addressed
+│ Tile blobs       │  zstd(Arrow IPC layer frame), CRC32C-tagged
+├──────────────────┤
+│ Dictionary       │  Optional zstd training dictionary shared across tiles
 ├──────────────────┤
 │ Index            │  Arrow IPC table — one row per tile (the directory)
 ├──────────────────┤
-│ Metadata         │  UTF-8 JSON — bounds, time range, zoom levels
+│ Metadata         │  UTF-8 JSON — bounds, time range, zoom levels, schemas
 └──────────────────┘
 ```
 
 Each tile blob is a small *layer frame* (`[u16 count]` then per-layer
 `[name][Arrow IPC]`); every layer is one Arrow `RecordBatch` whose `geometry`
-column is GeoArrow-encoded. The directory is itself an Arrow table, so both the
+column is GeoArrow-encoded. The directory is itself an Arrow table, so the
 Rust writer and the TypeScript reader use one Arrow implementation throughout.
 
 ---
@@ -127,13 +128,19 @@ spatiotemporal-tiles/
 ├── crates/                 # Rust
 │   ├── stt-core/           # Archive + Arrow tile format library
 │   ├── stt-build/          # CLI: GeoParquet -> .stt
-│   ├── stt-generate/       # Sample dataset generators
-│   └── stt-optimize/       # Archive/dataset analysis CLI
+│   ├── stt-generate/       # Bundled showcase-dataset generators
+│   ├── stt-optimize/       # Input analysis + recommendations (powers --auto)
+│   └── stt-validate/       # CRC32C-check + decode every tile in an archive
 ├── packages/               # TypeScript
-│   ├── core/               # Archive reader (apache-arrow)
+│   ├── core/               # Archive reader, decoder pool, OPFS cache
 │   ├── deck.gl/            # deck.gl layers + extensions
 │   └── maplibre/           # MapLibre GL custom-layer adapter
-└── examples/showcase/      # Interactive demo app
+├── examples/showcase/      # Interactive demo app (deck.gl + MapLibre)
+├── tools/
+│   ├── bench/              # @stt/core load + decode benchmark (Node)
+│   ├── perf/               # Real-WebGL Playwright perf harness
+│   └── render-test/        # Playwright fidelity sweep (baselines + diffs)
+└── docs/                   # Format spec, API reference, guides
 ```
 
 ---
@@ -142,11 +149,23 @@ spatiotemporal-tiles/
 
 ```bash
 cargo test --workspace          # Rust tests
-cargo build --release           # CLI binaries
+cargo build --release           # CLI binaries (stt-build, stt-generate, ...)
 
 pnpm install
-pnpm --filter @stt/core test     # TypeScript reader tests (vs a real archive)
 pnpm --filter @stt/core build
+pnpm --filter @stt/core test    # TS reader tests against a real archive
+pnpm --filter @stt/deck.gl build
+pnpm --filter @stt/maplibre build
+
+pnpm --filter @stt/showcase dev # Run the showcase locally
+```
+
+Tooling:
+
+```bash
+pnpm --filter @stt/bench bench                   # @stt/core load/decode benchmark
+pnpm --filter @stt/render-test sweep             # fidelity + perf sweep
+pnpm --filter @stt/perf perf -- <demo-id>        # real-WebGL perf harness
 ```
 
 ---

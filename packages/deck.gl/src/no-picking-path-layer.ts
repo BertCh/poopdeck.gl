@@ -1,3 +1,7 @@
+// @stt/deck.gl
+// SPDX-License-Identifier: MIT
+// Copyright (c) @stt/deck.gl contributors
+
 /**
  * `PathLayer` subclass that fully strips picking-color machinery so the GPU
  * pipeline allocates one fewer vertex-attribute slot.
@@ -38,6 +42,7 @@
  */
 
 import { PathLayer } from '@deck.gl/layers';
+import { warnOnce } from './log';
 
 const PICKING_ATTR_DECL = /in\s+vec3\s+instancePickingColors\s*;\s*/g;
 const PICKING_USE = /geometry\.pickingColor\s*=\s*instancePickingColors\s*;/g;
@@ -57,9 +62,27 @@ export class NoPickingPathLayer extends PathLayer {
     // instead — it ignores the value when picking is inactive, which is
     // always the case for this subclass.
     if (typeof shaders.vs === 'string') {
-      shaders.vs = shaders.vs
+      const original = shaders.vs;
+      const stripped = original
         .replace(PICKING_ATTR_DECL, '')
         .replace(PICKING_USE, 'geometry.pickingColor = vec3(0.0);');
+      if (stripped === original) {
+        // Regex-rewrite is brittle across deck.gl versions: the attribute
+        // declaration's exact spelling might have changed (e.g. deck.gl 9.4
+        // dropped the attribute entirely via `gl_InstanceID`). If the regex
+        // misses, the layer still works but the link-error workaround is
+        // silently disabled — surface that loudly so the consumer rebuilds
+        // their deck.gl pin or switches back to plain PathLayer.
+        warnOnce(
+          'NoPickingPathLayer:regex-miss',
+          '[NoPickingPathLayer] could not strip instancePickingColors from ' +
+            "PathLayer's vertex shader — the regex did not match. The " +
+            'attribute-budget workaround is INACTIVE. Likely deck.gl 9.4+ ' +
+            'already dropped the attribute (in which case use PathLayer directly) ' +
+            'or the shader source layout has changed.',
+        );
+      }
+      shaders.vs = stripped;
     }
     return shaders;
   }

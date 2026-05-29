@@ -50,10 +50,9 @@ const visibleTiles = tileset.getVisibleTiles();
 
 | Option             | Type     | Default | Description                                     |
 | :----------------- | :------- | :------ | :---------------------------------------------- |
-| `maxRequests`      | `number` | `6`     | Maximum concurrent tile fetches.                |
-| `debounceTime`     | `number` | `300`   | Debounce time (ms) for viewport updates.        |
-| `maxCacheSize`     | `number` | `200`   | Maximum tiles in LRU cache.                     |
-| `maxCacheByteSize` | `number` | `500MB` | Maximum cache size in bytes.                    |
+| `maxRequests`      | `number` | `12`    | Maximum concurrent tile fetches (browser per-origin cap). |
+| `debounceTime`     | `number` | `0`     | Debounce time (ms) for viewport updates.        |
+| `maxCacheSize`     | `number` | `2000`  | Maximum tiles in LRU cache.                     |
 | `minZoom`          | `number` | `0`     | Minimum zoom level available in data.           |
 | `maxZoom`          | `number` | `22`    | Maximum zoom level available in data.           |
 
@@ -61,15 +60,25 @@ const visibleTiles = tileset.getVisibleTiles();
 
 | Option               | Type                                | Default            | Description                                            |
 | :------------------- | :---------------------------------- | :----------------- | :----------------------------------------------------- |
-| `refinementStrategy` | `'best-available' \| 'no-overlap'`  | `'best-available'` | Strategy for loading tiles. `'best-available'` loads parent tiles while detailed tiles load. |
+| `refinementStrategy` | `'best-available' \| 'no-overlap'`  | `'best-available'` | `'best-available'` surfaces parent tiles while detailed tiles load — also covers the gap when `--min-features-per-tile` drops sparse deep-zoom tiles. |
 
 ### Prefetch Options
 
 | Option          | Type      | Default | Description                                          |
 | :-------------- | :-------- | :------ | :--------------------------------------------------- |
-| `enablePrefetch`| `boolean` | `false` | Enable predictive prefetching for animations.        |
+| `enablePrefetch`| `boolean` | `true`  | Enable predictive prefetching for animations.        |
 | `prefetchAhead` | `number`  | `30000` | How far ahead to prefetch (animation time in ms).    |
-| `prefetchSteps` | `number`  | `5`     | Number of time window steps to prefetch.             |
+| `prefetchSteps` | `number`  | `4`     | Number of time-window steps to prefetch.             |
+
+### Tier dispatch
+
+When the archive's metadata declares a `summaryTier` (built with
+`stt-build --summary-tier h3`), the tileset routes requests in the
+declared `[minZoom..=maxZoom]` to summary tiles instead of the raw tier.
+When metadata declares a `temporalLod` pyramid (built with
+`--temporal-lod`), the tileset picks the coarsest level whose
+`maxZoomLevel` covers the current zoom for animation prefetch. Both
+dispatches are transparent to callers.
 
 ### Callbacks
 

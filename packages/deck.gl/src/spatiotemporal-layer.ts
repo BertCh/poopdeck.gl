@@ -1,3 +1,7 @@
+// @stt/deck.gl
+// SPDX-License-Identifier: MIT
+// Copyright (c) @stt/deck.gl contributors
+
 /**
  * Refactored SpatioTemporalLayer using Tileset pattern
  * 
@@ -5,7 +9,12 @@
  */
 
 import { CompositeLayer } from '@deck.gl/core';
-import type { CompositeLayerProps, UpdateParameters, LayerContext } from '@deck.gl/core';
+import type {
+  CompositeLayerProps,
+  DefaultProps,
+  LayerContext,
+  UpdateParameters,
+} from '@deck.gl/core';
 import { STTArchive } from '@stt/core';
 import { SpatiotemporalTileset } from '@stt/core';
 import type { Tile, BoundingBox, ArchiveMetadata } from '@stt/core';
@@ -15,58 +24,82 @@ import { snapshot, isProbeEnabled } from './telemetry';
 const DEBUG = false;
 
 export interface SpatioTemporalLayerProps extends CompositeLayerProps {
-  /** URL to STT archive */
+  /** URL to the STT archive. */
   data: string;
-  
-  /** Current time to display (Unix milliseconds) */
+
+  /** Current time to display (Unix milliseconds). */
   currentTime: number;
-  
-  /** Time window (milliseconds before and after currentTime) */
+
+  /**
+   * Time window (milliseconds before and after `currentTime`).
+   * @default 86400000
+   */
   timeWindow?: number;
 
-  /** Full time range of the dataset */
-  timeRange?: { start: number; end: number };
-  
-  /** Time controller (optional, for synchronized animation) */
-  timeController?: TimeController;
-  
-  /** Maximum concurrent tile requests (deck.gl TileLayer pattern) */
-  maxRequests?: number;
-  
-  /** Debounce time for viewport changes in ms (deck.gl TileLayer pattern) */
-  debounceTime?: number;
-  
-  /** Maximum number of tiles to cache */
-  maxCacheSize?: number;
-  
-  /** Maximum cache size in bytes */
-  maxCacheByteSize?: number;
-  
-  /** Enable predictive prefetching for smooth animation */
-  enablePrefetch?: boolean;
-  
-  /** How far ahead to prefetch in animation time (milliseconds) */
-  prefetchAhead?: number;
-  
-  /** Number of time steps to prefetch ahead */
-  prefetchSteps?: number;
-  
-  /** Callback when all tiles in viewport are loaded */
-  onViewportLoad?: (tiles: Tile[]) => void;
-  
-  /** Callback when a tile loads */
-  onTileLoad?: (tile: Tile) => void;
-  
-  /** Callback when a tile is evicted from cache */
-  onTileUnload?: (tile: Tile) => void;
+  /** Full time range of the dataset. */
+  timeRange?: { start: number; end: number } | null;
 
-  /** Loaders.gl options */
+  /** Optional shared {@link TimeController} for synchronized animation. */
+  timeController?: TimeController | null;
+
+  /**
+   * Maximum concurrent tile requests (deck.gl `TileLayer` pattern).
+   * @default 12
+   */
+  maxRequests?: number;
+
+  /**
+   * Debounce time for viewport changes in ms (deck.gl `TileLayer` pattern).
+   * @default 0
+   */
+  debounceTime?: number;
+
+  /**
+   * Maximum number of tiles to cache.
+   * @default 2000
+   */
+  maxCacheSize?: number;
+
+  /**
+   * Maximum cache size in bytes.
+   * @default 2147483648 (2 GiB)
+   */
+  maxCacheByteSize?: number;
+
+  /**
+   * Enable predictive prefetching for smooth animation.
+   * @default true
+   */
+  enablePrefetch?: boolean;
+
+  /**
+   * How far ahead to prefetch in animation time (milliseconds).
+   * @default 30000
+   */
+  prefetchAhead?: number;
+
+  /**
+   * Number of time steps to prefetch ahead.
+   * @default 4
+   */
+  prefetchSteps?: number;
+
+  /** Callback when all tiles in viewport are loaded. */
+  onViewportLoad?: ((tiles: Tile[]) => void) | null;
+
+  /** Callback when a tile loads. */
+  onTileLoad?: ((tile: Tile) => void) | null;
+
+  /** Callback when a tile is evicted from cache. */
+  onTileUnload?: ((tile: Tile) => void) | null;
+
+  /** loaders.gl options. */
   loadOptions?: Record<string, unknown>;
-  
-  /** Force a specific zoom level (useful for GlobeView to load low-zoom tiles) */
+
+  /** Force a specific zoom level (useful for `GlobeView` to load low-zoom tiles). */
   zoomOverride?: number;
-  
-  /** Use global bounds instead of viewport bounds (for GlobeView) */
+
+  /** Use global bounds instead of viewport bounds (for `GlobeView`). */
   useGlobalBounds?: boolean;
 }
 
@@ -135,41 +168,41 @@ export class SpatioTemporalLayer<
    */
   private _finalized: boolean = false;
 
-  static defaultProps = {
+  static defaultProps: DefaultProps<SpatioTemporalLayerProps> = {
     // Data source
-    data: { type: 'string', value: '', compare: true },
-    
+    data: '',
+
     // Temporal properties
-    currentTime: { type: 'number', value: Date.now(), compare: true },
-    timeWindow: { type: 'number', value: 86400000, compare: false }, // 1 day default
-    timeRange: { type: 'object', value: null, compare: true },
-    timeController: { type: 'object', value: null, compare: false },
-    
-    // Tile loading configuration (following deck.gl TileLayer pattern).
+    currentTime: 0,
+    timeWindow: 86_400_000, // 1 day
+    timeRange: { type: 'object', value: null, optional: true, compare: true },
+    timeController: { type: 'object', value: null, optional: true, compare: false },
+
+    // Tile-loading configuration (mirrors deck.gl `TileLayer`).
     // maxRequests sits at 12 because browsers cap concurrent connections per
     // origin (~6 HTTP/1.1, more under HTTP/2 multiplexing). Going above ~12
     // just queues fetches inside the browser and lengthens the main-thread
     // decode backlog without speeding anything up.
-    maxRequests: { type: 'number', value: 12, compare: false },
-    debounceTime: { type: 'number', value: 0, compare: false }, // No debounce for time changes
-    maxCacheSize: { type: 'number', value: 2000, compare: false }, // Large cache for big datasets
-    maxCacheByteSize: { type: 'number', value: 2 * 1024 * 1024 * 1024, compare: false }, // 2GB for large datasets
+    maxRequests: 12,
+    debounceTime: 0,
+    maxCacheSize: 2000,
+    maxCacheByteSize: 2 * 1024 * 1024 * 1024, // 2 GiB
 
     // Prefetch configuration. Defaults sized for a few real-time seconds of
     // buffer, not minutes — see DemoPage.tsx for the consumer-side math.
     // Overshooting here (the previous defaults were 60s ahead × 15 steps =
     // 15 minutes of lookahead) caused the prefetch queue to balloon and
     // saturated the decode backlog.
-    enablePrefetch: { type: 'boolean', value: true, compare: false },
-    prefetchAhead: { type: 'number', value: 30000, compare: false }, // 30s of sim time
-    prefetchSteps: { type: 'number', value: 4, compare: false },
-    
+    enablePrefetch: true,
+    prefetchAhead: 30_000, // 30s of sim time
+    prefetchSteps: 4,
+
     // Callbacks
     onViewportLoad: { type: 'function', value: null, optional: true },
     onTileLoad: { type: 'function', value: null, optional: true },
     onTileUnload: { type: 'function', value: null, optional: true },
-    
-    // Loaders options
+
+    // loaders.gl options
     loadOptions: { type: 'object', value: {}, compare: false },
   };
 

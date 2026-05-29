@@ -1,26 +1,38 @@
-# HeatmapTimeLayer
+# HeatmapLayer
 
-The `HeatmapTimeLayer` renders temporal point data as an animated density heatmap. Points are aggregated into a GPU-accelerated heatmap that animates smoothly over time.
+> Previously documented as `HeatmapTimeLayer` (an `@deck.gl/aggregation-layers`
+> wrapper). That implementation was replaced with a GPU-splat layer that
+> renders directly from the binary tile buffers — same import path, new
+> class name (`HeatmapLayer`).
+
+The `HeatmapLayer` renders temporal point data as an animated density
+heatmap. Per-point splats are accumulated additively into the framebuffer
+and sampled through a color ramp, so animation cost is independent of
+point count.
+
+It extends [`SpatioTemporalLayer`](./spatiotemporal-layer.md) and supports
+up to four stacked categorical channels in a single draw.
 
 ## Installation
 
 ```typescript
-import { HeatmapTimeLayer } from '@stt/deck.gl';
+import { HeatmapLayer } from '@stt/deck.gl';
 ```
 
 ## Usage
 
-```typescript
-import { HeatmapTimeLayer } from '@stt/deck.gl';
+### Single-channel (default)
 
-const layer = new HeatmapTimeLayer({
-  id: 'earthquake-heatmap',
-  data: 'https://example.com/earthquakes.stt',
+```typescript
+const layer = new HeatmapLayer({
+  id: 'earthquake-heat',
+  data: '/data/earthquakes.stt',
   currentTime: 1672531200000,
-  timeWindow: 86400000, // 1 day
+  timeWindow: 86_400_000,           // 1 day
   radiusPixels: 30,
   intensity: 1,
-  weightProperty: 'magnitude',
+  weightProperty: 'magnitude',      // per-splat weight
+  colorDomain: [4.0, 6.5],          // pin the ramp — protects against jitter
   colorRange: [
     [255, 255, 178, 255],
     [254, 204, 92, 255],
@@ -31,35 +43,79 @@ const layer = new HeatmapTimeLayer({
 });
 ```
 
+If the archive was built with `stt-build --heatmap-weight <prop>`, the
+layer reads `metadata.heatmapDomain` and pins `colorDomain` automatically
+to the baked `[min, 95p]` range. Setting `colorDomain` explicitly always
+wins.
+
+### Stacked categorical channels
+
+```typescript
+const layer = new HeatmapLayer({
+  id: 'taxi-od',
+  data: '/data/nyc-taxi-od.stt',
+  currentTime,
+  timeWindow: 30 * 60 * 1000,
+  radiusPixels: 40,
+  channels: [
+    {
+      id: 'pickup',
+      categoryFilter: { property: 'kind', values: ['pickup'] },
+      colorRange: PICKUP_RAMP,
+      colorDomain: [1, 80],
+    },
+    {
+      id: 'dropoff',
+      categoryFilter: { property: 'kind', values: ['dropoff'] },
+      colorRange: DROPOFF_RAMP,
+      colorDomain: [1, 80],
+    },
+  ],
+});
+```
+
+Up to four channels pack into the RGBA accumulator; beyond that the
+layer warns and renders only the first four.
+
 ## Properties
 
 Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 
-### Render Options
+### Render
 
 | Property | Type | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `radiusPixels` | `number` | `30` | Radius of influence for each point in pixels. |
-| `intensity` | `number` | `1` | Intensity multiplier for each point. |
-| `aggregation` | `'SUM' \| 'MEAN'` | `'SUM'` | Aggregation method for overlapping points. |
-| `colorRange` | `Color[]` | Yellow-Red gradient | Color range from low to high density. |
+| -------- | ---- | ------- | ----------- |
+| `radiusPixels` | `number` | `30` | Splat radius in pixels |
+| `intensity` | `number` | `1` | Global per-splat multiplier |
+| `weightProperty` | `string` | `undefined` | Numeric property → per-splat weight. Defaults to `1.0`. |
+| `colorRange` | `Color[]` | OrRd | Low → high density ramp (single-channel mode) |
+| `colorDomain` | `[number, number]` | `[0, 1]` or baked-in | Pinned intensity domain (single-channel mode) |
+| `threshold` | `number` | `0.05` | Hide pixels with accumulated intensity below this |
+| `fadeInDuration` | `number` | `0` | Leading-edge alpha ramp (ms) |
+| `fadeOutDuration` | `number` | `0` | Trailing-edge alpha ramp (ms) |
 
-### Data Accessors
+### Stacked channels (`channels`)
 
-| Property | Type | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `weightProperty` | `string` | `null` | Property name to use for point weights. If not provided, all points have weight 1. |
+When supplied, each entry produces one sub-draw using the shared shader
+and accumulator.
 
-## Performance
+| Field | Type | Default | Description |
+| ----- | ---- | ------- | ----------- |
+| `id` | `string` | — | Channel id; matches `metadata.heatmapDomain.classes[*].id` when present |
+| `categoryFilter` | `{ property, values[] }` | — | Only features matching this categorical filter contribute to the channel |
+| `colorRange` | `Color[]` | OrRd | Per-channel ramp |
+| `colorDomain` | `[number, number]` | `[0, 1]` or baked-in | Pinned per-channel intensity domain |
+| `intensity` | `number` | `1` | Per-channel weight multiplier stacked on top of the global one |
 
-The layer uses several optimizations:
+## Build-time intensity domain
 
-- **Cached tile points**: Points are extracted once per tile and cached
-- **Reusable arrays**: Visible point arrays are reused between frames
-- **Typed arrays**: Uses Float64Array for positions and Float32Array for weights
+The renderer can pin `colorDomain` from archive metadata when the build
+sets it. Use `stt-build --heatmap-weight <prop>` (and optionally
+`--heatmap-class <prop>` for per-class domains) — the build computes
+`[min, 95th-percentile]` across all features and writes it to
+`metadata.heatmapDomain`. 95p (not absolute max) protects the ramp from
+single-outlier dimming.
 
 ## Source
 
-[packages/deck.gl/src/heatmap-time-layer.ts](../../packages/deck.gl/src/heatmap-time-layer.ts)
-
-
+[`packages/deck.gl/src/heatmap-layer.ts`](../../packages/deck.gl/src/heatmap-layer.ts)

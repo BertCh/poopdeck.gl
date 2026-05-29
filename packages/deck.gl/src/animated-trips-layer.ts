@@ -1,3 +1,7 @@
+// @stt/deck.gl
+// SPDX-License-Identifier: MIT
+// Copyright (c) @stt/deck.gl contributors
+
 /**
  * AnimatedTripsLayer - GPU-efficient animated trips/trajectories
  *
@@ -22,7 +26,7 @@
  */
 
 import { PathLayer } from '@deck.gl/layers';
-import type { Color, Layer, LayerContext } from '@deck.gl/core';
+import type { Color, DefaultProps, Layer, LayerContext } from '@deck.gl/core';
 import { SpatioTemporalLayer, SpatioTemporalLayerProps } from './spatiotemporal-layer';
 import { NoPickingPathLayer } from './no-picking-path-layer';
 import { TimeFilterExtension } from './time-filter-extension';
@@ -31,23 +35,58 @@ import {
   CATEGORY_PALETTE_SIZE,
 } from './category-color-extension';
 import { emit } from './telemetry';
+import { warnOnce } from './log';
 import type { Tile, Layer as TileLayer, BinaryFeatures } from '@stt/core';
 
 const DEBUG = false;
 
 export interface AnimatedTripsLayerProps extends SpatioTemporalLayerProps {
+  /**
+   * Width multiplier.
+   * @default 1
+   */
   widthScale?: number;
+  /**
+   * Minimum on-screen path width in pixels.
+   * @default 2
+   */
   widthMinPixels?: number;
+  /**
+   * Maximum on-screen path width in pixels.
+   * @default 10
+   */
   widthMaxPixels?: number;
-  /** Trip color - constant Color, or property name for categorical coloring */
+  /**
+   * Trip color — constant {@link Color}, or property name for categorical coloring.
+   * @default [253, 128, 93, 255]
+   */
   tripColor?: Color | string;
-  /** Trip width - constant number, or property name for per-feature width */
+  /**
+   * Trip width — constant number, or property name for per-feature width.
+   * @default 3
+   */
   tripWidth?: number | string;
+  /** Color palette for categorical `tripColor`. */
   colorPalette?: Color[];
-  /** Trail length in milliseconds */
+  /**
+   * Trail length in milliseconds.
+   * @default 180000
+   */
   trailLength?: number;
+  /**
+   * Fade the trail older→transparent.
+   * @default true
+   */
   fadeTrail?: boolean;
+  /**
+   * Rounded line caps.
+   * @default true
+   */
   capRounded?: boolean;
+  /**
+   * Rounded line joints.
+   * @default true
+   */
   jointRounded?: boolean;
 }
 
@@ -186,15 +225,15 @@ function indicesToFloat32(indices: Uint16Array, count: number): Float32Array {
 export class AnimatedTripsLayer extends SpatioTemporalLayer<AnimatedTripsLayerProps> {
   static layerName = 'AnimatedTripsLayer';
 
-  static defaultProps = {
+  static defaultProps: DefaultProps<AnimatedTripsLayerProps> = {
     ...SpatioTemporalLayer.defaultProps,
     widthScale: { type: 'number', value: 1, min: 0 },
     widthMinPixels: { type: 'number', value: 2 },
     widthMaxPixels: { type: 'number', value: 10 },
-    tripColor: { type: 'color', value: [253, 128, 93, 255] as Color },
+    tripColor: { type: 'color', value: [253, 128, 93, 255] },
     tripWidth: { type: 'number', value: 3 },
-    colorPalette: { type: 'array', value: DEFAULT_PALETTE },
-    trailLength: { type: 'number', value: 180000, min: 0 },
+    colorPalette: { type: 'array', value: DEFAULT_PALETTE, compare: true },
+    trailLength: { type: 'number', value: 180_000, min: 0 },
     fadeTrail: true,
     capRounded: true,
     jointRounded: true,
@@ -497,8 +536,8 @@ export class AnimatedTripsLayer extends SpatioTemporalLayer<AnimatedTripsLayerPr
       useGpuCategory &&
       prepared.gpuPalette!.length > CATEGORY_PALETTE_SIZE
     ) {
-      // eslint-disable-next-line no-console
-      console.warn(
+      warnOnce(
+        'AnimatedTripsLayer:paletteOverflow',
         `[AnimatedTripsLayer] colorPalette has ${prepared.gpuPalette!.length} ` +
           `entries; only the first ${CATEGORY_PALETTE_SIZE} will be used by ` +
           'CategoryColorExtension.',

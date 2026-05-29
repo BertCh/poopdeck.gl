@@ -1,51 +1,76 @@
 # Spatiotemporal Tiles Documentation
 
-Welcome to the documentation for Spatiotemporal Tiles (STT), a system for visualizing massive time-variant geospatial datasets.
+Welcome to the documentation for Spatiotemporal Tiles (STT), a single-file
+archive format for visualizing massive time-variant geospatial datasets.
 
 ## Introduction
 
-- [**Concepts**](./intro/concepts.md): Understand the core ideas—Spatiotemporal Tiles, Delta Encoding, and Optimistic Rendering.
+- [**Concepts**](./intro/concepts.md): Spatiotemporal tiling, temporal LOD,
+  Hilbert ordering, and the streaming render model.
 
 ## Architecture
 
-- [**System Overview**](./architecture/system-overview.md): High-level look at the Rust generation tools and TypeScript rendering stack.
-- [**Data Format**](./architecture/data-format.md): Specification of the `.stt` binary archive and Protocol Buffers schema.
+- [**System Overview**](./architecture/system-overview.md): High-level look
+  at the Rust generation tools and the TypeScript reader + render stack
+  (deck.gl and MapLibre).
+- [**Data Format**](./architecture/data-format.md): Normative spec of the
+  `.stt` v3 binary archive — header, tile blobs (Apache Arrow IPC +
+  GeoArrow), optional shared zstd dictionary, index, JSON metadata.
 
 ## API Reference
 
-### MapLibre Adapter
-
-- [**@stt/maplibre**](./api/stt-maplibre.md): Native MapLibre GL custom-layer adapter (point / line / polygon).
-
 ### deck.gl Layers
 
-- [**SpatioTemporalLayer**](./api/spatiotemporal-layer.md): The base class for STT layers.
-- [**SpatioTemporalTileLayer**](./api/spatiotemporal-tile-layer.md): Experimental TileLayer-based implementation.
-- [**AnimatedPointLayer**](./api/animated-point-layer.md): A layer for rendering animated points.
-- [**AnimatedPathLayer**](./api/animated-path-layer.md): A layer for rendering animated paths/trajectories.
-- [**AnimatedPolygonLayer**](./api/animated-polygon-layer.md): A layer for rendering animated polygons.
-- [**AnimatedTripsLayer**](./api/animated-trips-layer.md): A layer for "vehicle moving along route" animations.
-- [**HeatmapTimeLayer**](./api/heatmap-time-layer.md): A layer for temporal heatmap visualization.
+- [**SpatioTemporalLayer**](./api/spatiotemporal-layer.md): Base class
+  used by every animated layer below.
+- [**AnimatedPointLayer**](./api/animated-point-layer.md): Animated
+  points (billboards).
+- [**AnimatedPathLayer**](./api/animated-path-layer.md): Animated
+  paths / trajectories with window-mode fade.
+- [**AnimatedPolygonLayer**](./api/animated-polygon-layer.md): Animated
+  polygons with optional extrusion.
+- [**AnimatedTripsLayer**](./api/animated-trips-layer.md): "Vehicle moving
+  along route" trails with per-vertex timestamps.
+- [**HeatmapLayer**](./api/heatmap-time-layer.md): GPU-splat temporal
+  heatmap with stacked categorical channels.
 
 ### Extensions
 
-- [**TimeFilterExtension**](./api/time-filter-extension.md): GPU-based temporal filtering for any layer.
-- [**CategoryColorExtension**](./api/category-color-extension.md): GPU-based categorical color lookup.
+- [**TimeFilterExtension**](./api/time-filter-extension.md): GPU-based
+  temporal filtering for any deck.gl layer.
+- [**CategoryColorExtension**](./api/category-color-extension.md): GPU-based
+  categorical color lookup via a palette texture.
 
 ### Controllers
 
-- [**TimeController**](./api/time-controller.md): Animation playback controller.
+- [**TimeController**](./api/time-controller.md): Animation playback clock
+  shared across layers.
 
-### loaders.gl Loaders
+### Reader (`@stt/core`)
 
-- [**STTLoader**](./api/stt-loader.md): Loader for parsing `.stt` tile data.
-- [**SpatiotemporalTileset**](./api/spatiotemporal-tileset.md): Manages tile lifecycle and temporal logic.
-- [**Binary Features**](./api/binary-features.md): GPU-optimized binary columnar format.
+- [**Tile decoder**](./api/stt-loader.md): The `TileDecoder` interface
+  plus the inline / worker-pool implementations.
+- [**SpatiotemporalTileset**](./api/spatiotemporal-tileset.md): Tile
+  lifecycle, viewport + time-aware selection, and prefetching.
+- [**Binary Features**](./api/binary-features.md): The GPU-ready columnar
+  format `TileDecoder` returns.
+
+### MapLibre adapter
+
+- [**@stt/maplibre**](./api/stt-maplibre.md): MapLibre GL custom-layer
+  adapter — five layer classes (point / line / polygon / trips / heatmap)
+  for sites that don't want a deck.gl dependency.
 
 ### CLI Tools
 
-- [**CLI Reference**](./api/cli-reference.md): Documentation for `stt-build`.
+- [**CLI Reference**](./api/cli-reference.md): `stt-build`, `stt-generate`,
+  `stt-optimize`, `stt-validate`.
 
 ## Guides
 
-- [**Data Generation**](./guides/data-generation.md): How to create `.stt` files from CSV or GeoJSON.
+- [**Data Generation**](./guides/data-generation.md): Building `.stt`
+  archives with `stt-generate` for the included showcase datasets, or
+  with `stt-build` for your own GeoParquet input.
+- [**Building from Python**](./guides/python.md): GeoPandas, DuckDB, or
+  pyarrow recipes for getting your data into GeoParquet so `stt-build`
+  can consume it.

@@ -1,3 +1,7 @@
+// @stt/deck.gl
+// SPDX-License-Identifier: MIT
+// Copyright (c) @stt/deck.gl contributors
+
 /**
  * H3SummaryLayer — render the SERVER-AGGREGATED summary tier as H3 hexagons.
  *
@@ -38,10 +42,10 @@ import type {
   ArchiveMetadata,
   BoundingBox,
   Tile,
-  TileId,
 } from '@stt/core';
 import { splitLongToH3Index } from 'h3-js';
 import { TimeController } from './time-controller';
+import { warnOnce } from './log';
 
 const DEBUG = false;
 
@@ -55,8 +59,8 @@ export interface H3SummaryLayerProps extends CompositeLayerProps {
   /** Time window (ms) centred on `currentTime`. */
   timeWindow?: number;
 
-  /** Optional shared TimeController. */
-  timeController?: TimeController;
+  /** Optional shared {@link TimeController}. */
+  timeController?: TimeController | null;
 
   /** Maximum concurrent tile requests. */
   maxRequests?: number;
@@ -86,7 +90,7 @@ export interface H3SummaryLayerProps extends CompositeLayerProps {
    * across tiles and zoom changes (recommended). When unset, every tile's
    * own min/max drives the ramp — visually unstable.
    */
-  colorDomain?: [number, number];
+  colorDomain?: [number, number] | null;
 
   /** Extrusion enabled? Defaults to false (flat hexagons). */
   extruded?: boolean;
@@ -101,7 +105,7 @@ export interface H3SummaryLayerProps extends CompositeLayerProps {
   coverage?: number;
 
   /** Fired when an archive's tiles are first loaded. */
-  onMetadataLoad?: (meta: ArchiveMetadata) => void;
+  onMetadataLoad?: ((meta: ArchiveMetadata) => void) | null;
 }
 
 interface H3SummaryLayerState {
@@ -172,20 +176,23 @@ function h3IndexFromTile(
 export class H3SummaryLayer extends CompositeLayer<H3SummaryLayerProps> {
   static layerName = 'H3SummaryLayer';
 
-  static defaultProps = {
-    data: { type: 'string', value: '', compare: true },
-    currentTime: { type: 'number', value: Date.now(), compare: true },
-    timeWindow: { type: 'number', value: 86_400_000, compare: false },
-    timeController: { type: 'object', value: null, compare: false },
-    maxRequests: { type: 'number', value: 12, compare: false },
-    debounceTime: { type: 'number', value: 0, compare: false },
-    maxCacheSize: { type: 'number', value: 500, compare: false },
-    weightProperty: { type: 'string', value: 'count', compare: true },
+  // `: any` keeps tsc from refusing to emit a portable .d.ts. The strict
+  // DefaultProps mapped type surfaces references to mjolnir.js / math.gl
+  // that aren't in our direct dep list, same as VatTripsLayer.
+  static defaultProps: any = {
+    data: '',
+    currentTime: 0,
+    timeWindow: 86_400_000,
+    timeController: { type: 'object', value: null, optional: true, compare: false },
+    maxRequests: 12,
+    debounceTime: 0,
+    maxCacheSize: 500,
+    weightProperty: 'count',
     colorRange: { type: 'array', value: DEFAULT_COLOR_RANGE, compare: true },
     colorDomain: { type: 'array', value: null, compare: true, optional: true },
-    extruded: { type: 'boolean', value: false, compare: true },
-    elevationScale: { type: 'number', value: 1, compare: false },
-    coverage: { type: 'number', value: 0.92, min: 0, max: 1, compare: false },
+    extruded: false,
+    elevationScale: 1,
+    coverage: { type: 'number', value: 0.92, min: 0, max: 1 },
     onMetadataLoad: { type: 'function', value: null, optional: true },
   };
 
@@ -412,8 +419,8 @@ export class H3SummaryLayer extends CompositeLayer<H3SummaryLayerProps> {
       // Archive has no summary tier — the layer renders nothing. Logging is
       // useful here because the consumer might be using H3SummaryLayer on an
       // archive that was built without `--summary-tier`.
-      // eslint-disable-next-line no-console
-      console.warn(
+      warnOnce(
+        `H3SummaryLayer:noTier:${this.props.data}`,
         `[H3SummaryLayer] archive ${this.props.data} has no summary tier; ` +
           'rebuild with `stt-build --summary-tier h3` to enable.',
       );

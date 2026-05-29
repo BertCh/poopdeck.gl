@@ -1,113 +1,129 @@
 # Binary Features Format
 
-GPU-optimized binary columnar format for spatiotemporal data. This format enables zero-copy GPU upload and efficient rendering in deck.gl.
+GPU-optimized binary columnar representation that the tile decoder produces.
+This format aligns with deck.gl's binary data interface and loaders.gl's
+`BinaryFeatures` specification, with STT-specific temporal extensions.
 
-## Overview
+It's what every `Tile.layers[i].features` value carries — the deck.gl
+layers in `@stt/deck.gl` consume it directly, and so do the
+`@stt/maplibre` adapters.
 
-The binary format stores feature data in typed arrays instead of JavaScript objects:
+## Shape
 
 ```typescript
-// Binary columnar format (GPU-friendly)
 interface BinaryFeatures {
   featureCount: number;
-  geometryType: GeometryType;
+  geometryType: GeometryType;       // 0=Point, 1=LineString, 2=Polygon
+
+  /** 2 for [lon, lat], 3 for [lon, lat, alt]. Defaults to 2. */
   positionDimensions?: 2 | 3;
-  positions: Float64Array;     // Interleaved [lon, lat, ...] or [lon, lat, alt, ...]
-  startIndices?: Uint32Array;  // For lines/polygons: start index per feature
+
+  /** Interleaved [lon, lat, ...] (or [lon, lat, alt, ...] in 3D). */
+  positions: Float64Array;
+
+  /**
+   * Line / polygon feature boundaries.
+   * Length = featureCount + 1, last value = total position count.
+   * Pass to deck.gl PathLayer/PolygonLayer as `startIndices`.
+   */
+  startIndices?: Uint32Array;
+
   featureIds: Uint32Array;
-  startTimes: Float32Array;    // Relative to timeOffset
-  endTimes: Float32Array;      // Relative to timeOffset
-  timeOffset: number;          // Add to times for absolute value
+
+  /**
+   * Optional full-precision 64-bit feature IDs, preserved verbatim from the
+   * archive's Arrow UInt64 `id` column. Present when the archive needs
+   * full-width IDs (e.g. H3 cell indices at resolution ≥ 7).
+   */
+  featureIds64?: BigUint64Array;
+
+  globalFeatureIds?: Uint32Array;
+
+  /* ───── Temporal extensions ─────────────────────────────────────── */
+
+  /** Per-feature start/end, relative to timeOffset (ms). */
+  startTimes: Float32Array;
+  endTimes:   Float32Array;
+
+  /** Absolute time = startTimes[i] + timeOffset. */
+  timeOffset: number;
+
+  /**
+   * Per-vertex timestamps for LineStrings, relative to timeOffset.
+   * AnimatedTripsLayer uses this for accurate "vehicle at position"
+   * animation instead of linear start/end interpolation.
+   */
+  vertexTimestamps?: Float32Array;
+
+  /* ───── Pre-tessellated polygons (--pre-tessellate) ─────────────── */
+
+  /** Tile-global earcut indices. Groups of 3 per triangle. */
+  triangles?: Uint32Array;
+
+  /** Per-feature offsets into `triangles`. Length = featureCount + 1. */
+  triangleOffsets?: Uint32Array;
+
+  /* ───── Properties ──────────────────────────────────────────────── */
+
+  /** One Float32Array per numeric property, length = featureCount. */
   numericProps: Record<string, Float32Array>;
-  categoricalProps: Record<string, { indices: Uint8Array; categories: string[] }>;
+
+  /** Categorical properties as indices into a per-tile lookup. */
+  categoricalProps: Record<string, {
+    /** Uint16 supports up to 65535 categories per property per tile. */
+    indices: Uint16Array;
+    categories: string[];
+  }>;
 }
 ```
 
-## Benefits
+## Why a custom binary shape
 
-1. **Zero-Copy GPU Upload**: Typed arrays can be uploaded to GPU buffers directly
-2. **Memory Efficiency**: No JavaScript object overhead per feature
-3. **Cache-Friendly**: Columnar layout enables efficient iteration
-4. **Worker Transfer**: Typed array buffers can be transferred (not copied) between workers
+1. **Zero-copy GPU upload**: typed arrays go straight to GPU buffers.
+2. **Cache-friendly**: columnar layout iterates fast.
+3. **Transferable**: typed-array buffers transfer (not copy) from the
+   worker decoder to the main thread.
+4. **Bake-time tessellation**: when an archive is built with
+   `--pre-tessellate`, polygon triangles arrive ready to draw — the
+   renderer never runs earcut at tile-arrival time.
 
-## Usage
+## Float32 precision
 
-### Loading Binary Data
+`startTimes`, `endTimes`, and `vertexTimestamps` are stored relative to a
+per-tile `timeOffset` so they fit within f32's exactly-representable
+integer range. The `TimeFilterExtension` applies the same offset to its
+`currentTime` shader uniform; if you build a custom layer, pass
+`tile.timeOffset` through unchanged.
 
-```typescript
-import { load } from "@loaders.gl/core";
-import { STTLoader } from "@stt/core";
-
-const tile = await load(url, STTLoader, {
-  stt: {
-    tileId: { z: 0, x: 0, y: 0, t: 0 },
-  },
-});
-
-// All tiles are returned in binary format
-const features = tile.layers[0].features;
-```
-
-### Accessing Data
+## Using with deck.gl directly
 
 ```typescript
-import {
-  getBinaryPosition,
-  getBinaryPosition3D,
-  getAbsoluteStartTime,
-  getAbsoluteEndTime,
-  getNumericProperty,
-  getCategoricalProperty,
-} from "@stt/core";
+import { ScatterplotLayer } from '@deck.gl/layers';
 
 const features = tile.layers[0].features;
 
-// Get 2D position for point feature at index 0
-const [lon, lat] = getBinaryPosition(features, 0);
-
-// Get 3D position (includes altitude if available)
-const [lon, lat, alt] = getBinaryPosition3D(features, 0);
-
-// Get absolute timestamp
-const startTime = getAbsoluteStartTime(features, 0);
-
-// Access numeric property
-const magnitude = getNumericProperty(features, "magnitude", 0);
-
-// Access categorical property (returns resolved string value)
-const status = getCategoricalProperty(features, "status", 0);
-```
-
-### Using with deck.gl
-
-```typescript
-import { ScatterplotLayer } from "@deck.gl/layers";
-
-const features = tile.layers[0].features;
-
-// Binary data uses deck.gl's binary data interface
-const layer = new ScatterplotLayer({
-  id: "binary-points",
+new ScatterplotLayer({
+  id: 'binary-points',
   data: {
     length: features.featureCount,
     attributes: {
-      getPosition: { value: features.positions, size: 2 },
+      getPosition: {
+        value: features.positions,
+        size: features.positionDimensions ?? 2,
+      },
     },
   },
   getRadius: 100,
 });
 ```
 
-### Using with PathLayer
+For paths and polygons, pass `startIndices` plus the same `positions`:
 
 ```typescript
-import { PathLayer } from "@deck.gl/layers";
+import { PathLayer } from '@deck.gl/layers';
 
-const features = tile.layers[0].features;
-
-// Lines/polygons use startIndices for variable-length geometries
-const layer = new PathLayer({
-  id: "binary-paths",
+new PathLayer({
+  id: 'binary-paths',
   data: {
     length: features.featureCount,
     startIndices: features.startIndices,
@@ -119,59 +135,8 @@ const layer = new PathLayer({
 });
 ```
 
-## Types
-
-### BinaryFeatures
-
-```typescript
-interface BinaryFeatures {
-  /** Total number of features */
-  featureCount: number;
-
-  /** Geometry type (0=Point, 1=LineString, 2=Polygon) */
-  geometryType: GeometryType;
-
-  /** Number of dimensions per position (2 or 3) */
-  positionDimensions?: 2 | 3;
-
-  /** Interleaved positions [lon, lat, ...] or [lon, lat, alt, ...] */
-  positions: Float64Array;
-
-  /** Start index for each feature's positions (for lines/polygons) */
-  startIndices?: Uint32Array;
-
-  /** Feature IDs (per feature) */
-  featureIds: Uint32Array;
-
-  /** Start time for each feature (ms, relative to timeOffset) */
-  startTimes: Float32Array;
-
-  /** End time for each feature (ms, relative to timeOffset) */
-  endTimes: Float32Array;
-
-  /** Time offset - add to times for absolute values */
-  timeOffset: number;
-
-  /** Numeric properties as Float32Arrays */
-  numericProps: Record<string, Float32Array>;
-
-  /** Categorical properties as index + lookup table */
-  categoricalProps: Record<string, {
-    indices: Uint8Array;
-    categories: string[];
-  }>;
-}
-```
-
-## Memory Size Calculation
-
-```typescript
-import { getBinaryFeaturesSize } from "@stt/core";
-
-const sizeInBytes = getBinaryFeaturesSize(features);
-console.log(`Features use ${sizeInBytes / 1024}KB`);
-```
-
 ## Source
 
-[packages/core/src/binary-features.ts](../../packages/core/src/binary-features.ts)
+Defined in [`packages/core/src/types.ts`](../../packages/core/src/types.ts);
+constructed by the decoder in
+[`packages/core/src/tile.ts`](../../packages/core/src/tile.ts).

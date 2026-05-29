@@ -28,9 +28,11 @@ graph TD
 
     subgraph "Client (browser)"
         ARCHIVE["@stt/core: STTArchive"]
+        OPFS["OPFS persistent cache"]
         DECODER["WorkerTileDecoder pool"]
         TILESET[SpatiotemporalTileset]
-        LAYERS["@stt/deck.gl layers"]
+        LAYERS["@stt/deck.gl OR @stt/maplibre layers"]
+        ARCHIVE --> OPFS
         ARCHIVE --> DECODER
         DECODER --> TILESET
         TILESET --> LAYERS
@@ -57,18 +59,30 @@ one `.stt` archive. Pipeline:
    bucket size is `--temporal-bucket` (default `1h`).
 5. **Encode**: each tile becomes an Arrow IPC layer frame (see
    [Data format](./data-format.md)).
-6. **Write**: `stt-core::Archive::create()` → gzip → content-addressed
-   dedup → write directory + JSON metadata + 64-byte header.
+6. **Write**: `stt-core::Archive::create()` → zstd (default) or gzip →
+   CRC32C-tagged, content-addressed dedup → write directory + JSON metadata
+   + 64-byte header. Optionally emits a shared zstd training dictionary
+   for better ratios on small/repetitive tiles.
+
+Optional pipeline extras: `--summary-tier h3` adds a server-aggregated
+H3-hex tier alongside the raw tier (so 100M-feature point datasets render
+at low zooms without shipping the raw points); `--temporal-lod 1d,30d`
+adds coarser-bucket aggregate tiles so animating decades of data picks
+the appropriate temporal LOD; `--pre-tessellate` runs earcut at build time
+and stores triangle indices in a sidecar column.
 
 Inputs must be GeoParquet. Convert other formats first:
 `ogr2ogr -f Parquet out.parquet in.geojson`, or use DuckDB
-(`COPY ... TO 'out.parquet' (FORMAT 'parquet')`).
+(`COPY ... TO 'out.parquet' (FORMAT 'parquet')`). See
+[Building from Python](../guides/python.md) for GeoPandas / DuckDB / pyarrow
+recipes.
 
 ### `stt-optimize`
 Reads a Parquet or `.stt` and prints recommended `stt-build` settings —
 zoom range, temporal bucket size, compression — based on the data's
-spatial density and temporal distribution. Standalone today; can be invoked
-in a future `stt-build --auto`.
+spatial density and temporal distribution. Wired into the builder via
+`stt-build --auto`: every flag the user did NOT pass explicitly is
+filled in from the recommendation.
 
 ### `stt-validate`
 Opens an archive, verifies the content hash of every tile, decodes each
@@ -87,27 +101,52 @@ compression abstraction, Hilbert/temporal indexing, and metadata.
 ## TypeScript stack
 
 ### `@stt/core`
-- **`STTArchive`** — HTTP Range reader. Header → index → metadata → per-tile
-  blob fetch. Range-coalesces adjacent tile reads (≤32 KiB gap). Caches
-  compressed bytes (device-aware sizing: 512 MiB desktop, 256 MiB mobile).
+- **`STTArchive`** — HTTP Range reader. Header → optional dictionary →
+  index → metadata → per-tile blob fetch. Range-coalesces adjacent tile
+  reads (≤32 KiB gap). Caches compressed bytes (device-aware sizing).
+  Exposes `asTileSource()` for loaders.gl-style integrations.
+- **`OpfsTileCache`** — optional persistent cache backed by the Origin
+  Private File System. Survives reloads; uses `isOpfsAvailable()` to
+  feature-detect.
 - **`TileDecoder`** — see [stt-loader.md](../api/stt-loader.md). Worker-pool
   by default in browsers; inline fallback elsewhere. Crashed workers are
   replaced automatically.
 - **`SpatiotemporalTileset`** — viewport + time-aware tile selection,
   bucket-aligned prefetch, direction hysteresis to suppress scrub jitter,
-  grace-period LRU eviction.
+  grace-period LRU eviction. Aware of summary-tier and temporal-LOD
+  dispatch (picks the right tier per zoom).
+- **`SttLoader` / `createSttTileSource`** — structural shims that let
+  apps already using `@loaders.gl/*` drop STT into their existing tile
+  source plumbing.
 
 ### `@stt/deck.gl`
 - **`SpatioTemporalLayer`** — composite layer; owns the archive + tileset,
   delegates rendering to specialized sublayers.
 - **`AnimatedPointLayer` / `AnimatedPathLayer` / `AnimatedPolygonLayer` /
   `AnimatedTripsLayer`** — deck.gl layers with GPU time filtering.
+- **`VatTripsLayer`** — Vertex-Animation-Texture variant of trip rendering;
+  one quad per active trip, positions sampled from a per-tile texture.
+  Scales independently of per-trajectory vertex count.
+- **`HeatmapLayer`** — GPU-splat temporal heatmap with stacked categorical
+  channels and bake-time intensity-domain support.
+- **`H3SummaryLayer`** — renders the server-aggregated summary tier as
+  extrudable H3 hexagons (wraps `H3HexagonLayer`).
 - **`TimeFilterExtension`** — relativizes time against a per-layer
   `timeOffset` so f32 stays exact; supports window mode (whole feature on
   / off) and trail mode (per-vertex fade).
+- **`PolygonTimeFilterExtension`** — same idea for `SolidPolygonLayer`,
+  which can't take `TimeFilterExtension` directly.
 - **`CategoryColorExtension`** — texture-based palette lookup, scales to
   many categories without CPU-side color expansion.
 - **`TimeController`** — `requestAnimationFrame`-driven playback clock.
+
+### `@stt/maplibre`
+Same archive reader and tileset, rendered through MapLibre GL's
+`CustomLayerInterface` in raw WebGL — for sites that don't want a deck.gl
+dependency or that need to interleave STT layers between native MapLibre
+style layers. Five layer classes mirror the deck.gl coverage:
+`STTPointLayer`, `STTLineLayer`, `STTPolygonLayer`, `STTTripsLayer`,
+`STTHeatmapLayer`. See [stt-maplibre.md](../api/stt-maplibre.md).
 
 ## Design decisions
 

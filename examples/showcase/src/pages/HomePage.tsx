@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import DeckGL from "@deck.gl/react";
 import { Map } from "react-map-gl";
@@ -34,14 +34,14 @@ const HomePage: React.FC = () => {
       }),
   );
 
-  const [currentTime, setCurrentTime] = useState(timeController.getTime());
-
+  // No React state for time. The VAT layer reads the live time straight from
+  // `timeController` on every draw, so we deliberately don't re-render this
+  // page on every tick — that would invalidate the layer prop tree at 60 Hz,
+  // force deck.gl to recreate sublayers, and trash VatTripsLayer's per-tile
+  // texture cache. Mirrors the DemoPage pattern.
   useEffect(() => {
     timeController.play();
-    const handleTick = (time: number) => setCurrentTime(time);
-    timeController.on("tick", handleTick);
     return () => {
-      timeController.off("tick", handleTick);
       timeController.pause();
     };
   }, [timeController]);
@@ -65,7 +65,10 @@ const HomePage: React.FC = () => {
       new VatTripsLayer({
         id: "hero-trips",
         data: heroDataset.url,
-        currentTime,
+        // Seed value only — VAT pulls the live time from `timeController`
+        // every draw. See the comment on the play-effect above for why we
+        // don't thread a React state through here.
+        currentTime: heroDataset.timeRange.start,
         timeController,
         timeWindow,
         timeRange: heroDataset.timeRange,
@@ -78,7 +81,7 @@ const HomePage: React.FC = () => {
         prefetchSteps,
       }),
     ];
-  }, [heroDataset, currentTime, timeController]);
+  }, [heroDataset, timeController]);
 
   const features = [
     {

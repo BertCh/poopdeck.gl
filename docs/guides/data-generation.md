@@ -1,6 +1,12 @@
 # Data Generation Guide
 
-This guide walks you through the process of generating spatiotemporal tile (`.stt`) archives from various data sources.
+This guide walks you through generating spatiotemporal tile (`.stt`) archives
+either with the bundled `stt-generate` (for the showcase datasets) or with
+`stt-build` directly (for your own data).
+
+For getting your own data into the GeoParquet input `stt-build` requires,
+see [Building from Python](./python.md) — it covers GeoPandas, DuckDB,
+and pyarrow.
 
 ## Prerequisites
 
@@ -16,8 +22,10 @@ This guide walks you through the process of generating spatiotemporal tile (`.st
 ### Generate All Showcase Datasets
 
 ```bash
-# Generate all built-in datasets (earthquakes, hurricanes, wildfires)
-stt-generate all --output-dir examples/showcase/public/data
+# Generate every bundled dataset (earthquakes, ais, flights, hurricanes,
+# wildfires, nyc-rideshare, nyc-taxi-points, satellites) into the
+# showcase's data directory.
+stt-generate all --output-dir examples/showcase/public/data --skip-existing
 ```
 
 ### Generate Individual Datasets
@@ -164,37 +172,62 @@ stt-generate nyc-rideshare \
 
 ## Custom Data (Using stt-build)
 
-For arbitrary data not covered by built-in datasets, use `stt-build` directly:
+`stt-build` accepts **GeoParquet only** (`.parquet` / `.geoparquet`). For
+other formats, convert first — see [Building from Python](./python.md) for
+GeoPandas / DuckDB / pyarrow recipes, or use `ogr2ogr -f Parquet
+out.parquet in.geojson`.
 
-### From GeoJSON
+### From GeoParquet
 
 ```bash
 stt-build \
-  --input my-custom-data.geojson \
+  --input my-custom-data.parquet \
   --output my-custom-data.stt \
   --time-field timestamp \
-  --min-zoom 0 \
-  --max-zoom 14 \
-  --compression gzip
+  --time-format unix-ms \
+  --auto
 ```
 
-### From CSV (Points with Timestamps)
+`--auto` runs `stt-optimize` over the input and fills in zoom range,
+temporal bucket, and compression based on the data's spatial density and
+temporal distribution. Any flag you pass explicitly still wins.
+
+### Adding a temporal LOD pyramid
+
+For multi-year datasets you'd otherwise animate at hour-scale, build a
+coarser-bucket pyramid so the reader can pick a tier per zoom:
 
 ```bash
-stt-build \
-  --input sensor-readings.csv \
-  --output sensors.stt \
-  --time-field recorded_at \
-  --time-format unix-ms
+stt-build -i quakes.parquet -o quakes.stt \
+  --time-field time --time-format unix-ms \
+  --temporal-bucket 1h \
+  --temporal-lod 1d@8,30d@4
 ```
 
-**Required columns for CSV:** `lon`, `lat`, and the timestamp field.
+Each LOD entry must be a strict multiple of `--temporal-bucket`; the
+`@N` suffix clamps the level to zooms ≤ N.
+
+### Adding an H3 summary tier
+
+For 100M+ point datasets, server-aggregate the low zooms so the raw tier
+doesn't ship hundreds of millions of points per frame:
+
+```bash
+stt-build -i quakes.parquet -o quakes.stt \
+  --time-field time --time-format unix-ms \
+  --summary-tier h3 \
+  --summary-min-zoom 0 --summary-max-zoom 4 \
+  --summary-columns magnitude:mean,magnitude:max
+```
 
 ### Time Format Options
 
-- `iso8601`: ISO 8601 format (default), e.g., `2024-01-15T12:30:00Z`
-- `unix-ms`: Unix timestamp in milliseconds
-- `unix-sec`: Unix timestamp in seconds
+- `iso8601` (default): e.g., `2024-01-15T12:30:00Z`
+- `unix-ms`: milliseconds since epoch
+- `unix-sec`: seconds since epoch
+
+Pass `--strict-times` to fail the build on any null or unparseable
+timestamp instead of coercing it to epoch with a warning.
 
 ## Best Practices
 
@@ -214,46 +247,56 @@ stt-generate flights --sample-seconds 60  # 1 position per aircraft per minute
 
 ### 3. Memory Management
 
-For massive datasets (GBs of data), use streaming CSV output:
+For multi-GB inputs, switch `stt-build` to its Arrow-native streaming
+pipeline so peak RSS stays bounded by one Parquet batch plus the active
+spill budget:
+
 ```bash
-stt-generate earthquakes --output earthquakes.csv --skip-build
-stt-build --input earthquakes.csv --output earthquakes.stt
+stt-build -i huge-input.parquet -o out.stt \
+  --time-field timestamp --time-format unix-ms \
+  --streaming-arrow
 ```
+
+The standard `--streaming` flag is an older path that writes tiles per
+zoom level — fine for medium inputs but holds the per-zoom feature set
+in RAM. `--streaming-arrow` is the right answer for >10 GB inputs.
 
 ## Validating Output
 
-Test your generated files with the showcase app:
+Run `stt-validate` after every build — it CRC32C-checks every tile,
+decodes each payload, and reports schema or feature-count anomalies:
 
 ```bash
-# Copy to showcase data directory
+stt-validate my-data.stt
+stt-validate my-data.stt --json   # for CI
+```
+
+Then try the archive in the showcase:
+
+```bash
 cp my-data.stt examples/showcase/public/data/
-
-# Update datasets.ts with your dataset config
-
-# Run the showcase
-cd examples/showcase
-npm run dev
+# Update examples/showcase/src/datasets.ts with your dataset config
+cd examples/showcase && pnpm dev
 ```
 
 ## Troubleshooting
 
-### Download Fails
+### stt-build Not Found
 
-Use cached data if available:
 ```bash
-stt-generate hurricanes --cached
+cargo install --path crates/stt-build
 ```
 
 ### Out of Memory
 
-Process in smaller chunks or use streaming mode:
-```bash
-stt-generate ais --input large-file.csv --output ais.csv --skip-build
-```
+Switch to the streaming Arrow pipeline (above) and lower
+`--min-features-per-tile` to drop tiny deep-zoom tiles. The TS reader's
+`'best-available'` refinement surfaces dropped features from their
+parent tiles.
 
-### stt-build Not Found
+### Validation Fails
 
-Install it first:
-```bash
-cargo install --path crates/stt-build
-```
+`stt-validate` exits non-zero on integrity or decode errors. Common
+causes: building an older archive with a newer CLI (rebuild), or a
+truncated download. Pass `--fail-fast` to stop on the first failure
+when iterating on a fix.

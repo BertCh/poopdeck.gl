@@ -1,3 +1,7 @@
+// @stt/deck.gl
+// SPDX-License-Identifier: MIT
+// Copyright (c) @stt/deck.gl contributors
+
 /**
  * AnimatedPolygonLayer - GPU-filtered polygon rendering with time windowing.
  *
@@ -24,7 +28,7 @@
  */
 
 import { SolidPolygonLayer } from '@deck.gl/layers';
-import type { Color, Layer, LayerContext } from '@deck.gl/core';
+import type { Color, DefaultProps, Layer, LayerContext } from '@deck.gl/core';
 import { SpatioTemporalLayer, SpatioTemporalLayerProps } from './spatiotemporal-layer';
 import { PolygonTimeFilterExtension } from './polygon-time-filter-extension';
 import {
@@ -32,42 +36,73 @@ import {
   CATEGORY_PALETTE_SIZE,
 } from './category-color-extension';
 import { emit } from './telemetry';
+import { warnOnce } from './log';
 import type { Tile, Layer as TileLayer } from '@stt/core';
 
 const DEBUG = false;
 
 export interface AnimatedPolygonLayerProps extends SpatioTemporalLayerProps {
-  /** Draw an outline around each polygon (slower; routes through PathLayer). */
+  /**
+   * Draw an outline around each polygon (slower; routes through PathLayer).
+   * @default false
+   */
   stroked?: boolean;
 
-  /** Fill the polygon (default true). */
+  /**
+   * Fill the polygon.
+   * @default true
+   */
   filled?: boolean;
 
-  /** Outline width in pixels. */
+  /**
+   * Units for outline width.
+   * @default 'pixels'
+   */
   lineWidthUnits?: 'pixels' | 'meters' | 'common';
 
-  /** Outline width (constant or property name). */
+  /**
+   * Outline width — constant number, or property name.
+   * @default 1
+   */
   lineWidth?: number | string;
 
-  /** Outline color (constant or property name). */
+  /**
+   * Outline color — constant {@link Color}, or property name.
+   * @default [0, 0, 0, 255]
+   */
   lineColor?: Color | string;
 
-  /** Fill color — constant value, or column name for categorical coloring. */
+  /**
+   * Fill color — constant {@link Color}, or column name for categorical coloring.
+   * @default [255, 140, 0, 180]
+   */
   fillColor?: Color | string;
 
-  /** Color palette for the categorical fillColor path. */
+  /** Color palette for the categorical `fillColor` path. */
   colorPalette?: Color[];
 
-  /** Elevation (constant or property name). */
+  /**
+   * Elevation — constant number, or property name.
+   * @default 0
+   */
   elevation?: number | string;
 
-  /** Extruded (3D) polygons. */
+  /**
+   * Extruded (3D) polygons.
+   * @default false
+   */
   extruded?: boolean;
 
-  /** Fade-in duration (ms). */
+  /**
+   * Fade-in duration (ms).
+   * @default 500
+   */
   fadeInDuration?: number;
 
-  /** Fade-out duration (ms). */
+  /**
+   * Fade-out duration (ms).
+   * @default 500
+   */
   fadeOutDuration?: number;
 }
 
@@ -128,15 +163,15 @@ function indicesToFloat32(indices: Uint16Array, count: number): Float32Array {
 export class AnimatedPolygonLayer extends SpatioTemporalLayer<AnimatedPolygonLayerProps> {
   static layerName = 'AnimatedPolygonLayer';
 
-  static defaultProps = {
+  static defaultProps: DefaultProps<AnimatedPolygonLayerProps> = {
     ...SpatioTemporalLayer.defaultProps,
     stroked: false,
     filled: true,
-    lineWidthUnits: 'pixels' as const,
+    lineWidthUnits: 'pixels',
     lineWidth: { type: 'number', value: 1 },
-    lineColor: { type: 'color', value: [0, 0, 0, 255] as Color },
-    fillColor: { type: 'color', value: [255, 140, 0, 180] as Color },
-    colorPalette: { type: 'array', value: DEFAULT_PALETTE },
+    lineColor: { type: 'color', value: [0, 0, 0, 255] },
+    fillColor: { type: 'color', value: [255, 140, 0, 180] },
+    colorPalette: { type: 'array', value: DEFAULT_PALETTE, compare: true },
     elevation: { type: 'number', value: 0 },
     extruded: false,
     fadeInDuration: { type: 'number', value: 500, min: 0 },
@@ -374,8 +409,8 @@ export class AnimatedPolygonLayer extends SpatioTemporalLayer<AnimatedPolygonLay
       useGpuCategory &&
       prepared.gpuPalette!.length > CATEGORY_PALETTE_SIZE
     ) {
-      // eslint-disable-next-line no-console
-      console.warn(
+      warnOnce(
+        'AnimatedPolygonLayer:paletteOverflow',
         `[AnimatedPolygonLayer] colorPalette has ${prepared.gpuPalette!.length} ` +
           `entries; only the first ${CATEGORY_PALETTE_SIZE} will be used by ` +
           'CategoryColorExtension.',

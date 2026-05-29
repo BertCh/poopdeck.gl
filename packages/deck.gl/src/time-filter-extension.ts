@@ -1,19 +1,27 @@
+// @stt/deck.gl
+// SPDX-License-Identifier: MIT
+// Copyright (c) @stt/deck.gl contributors
+
 import { LayerExtension } from '@deck.gl/core';
-import type { Layer, LayerContext, Accessor } from '@deck.gl/core';
+import type { Layer, LayerContext, Accessor, DefaultProps } from '@deck.gl/core';
+import { warnOnce } from './log';
 
 /**
  * Props for layers using TimeFilterExtension
  */
-export type TimeFilterExtensionProps<DataT = any> = {
-  /** Current time for filtering (Unix milliseconds) */
+export type TimeFilterExtensionProps<DataT = unknown> = {
+  /**
+   * Current time for filtering (Unix milliseconds).
+   * @default 0
+   */
   currentTime?: number;
   /**
-   * PERFORMANCE OPTIMIZATION: Time getter function for dynamic time updates.
-   * When provided, this is called in draw() to get the current time.
-   * This allows the layer to be cached and reused - only uniforms are updated each frame.
-   * Takes priority over currentTime prop.
+   * Dynamic time getter — called every `draw()` so the layer instance can
+   * stay cached across animation ticks (only uniforms update each frame).
+   * Takes priority over `currentTime` when set.
+   * @default null
    */
-  getTime?: () => number;
+  getTime?: (() => number) | null;
   /**
    * CRITICAL - float32 precision.
    *
@@ -27,28 +35,64 @@ export type TimeFilterExtensionProps<DataT = any> = {
    * comparison are small relative numbers that fit exactly in f32.
    *
    * The layer MUST pass the SAME offset it used to relativize the attributes.
+   * @default 0
    */
   timeOffset?: number;
-  /** Time window size in milliseconds */
+  /**
+   * Time window size in milliseconds.
+   * @default 0
+   */
   timeWindow?: number;
-  /** Fade-in duration for appearing objects (ms) */
+  /**
+   * Fade-in duration for appearing objects (ms).
+   * @default 0
+   */
   fadeInDuration?: number;
-  /** Fade-out duration for disappearing objects (ms) */
+  /**
+   * Fade-out duration for disappearing objects (ms).
+   * @default 0
+   */
   fadeOutDuration?: number;
   /**
-   * Trail length in milliseconds (for path/trips effect).
-   * When set > 0, enables progressive drawing with trailing fade.
-   * The path is drawn from (currentTime - trailLength) to currentTime.
+   * Trail length in milliseconds (path/trips effect). When > 0, progressive
+   * drawing with trailing fade: the path renders from
+   * `(currentTime - trailLength)` to `currentTime`.
+   * @default 0
    */
   trailLength?: number;
-  /** Accessor to get start time from each data object */
+  /**
+   * Wake length in milliseconds (point-layer "ship wake" aesthetic).
+   * When > 0, takes precedence over window/trail mode: features are shown
+   * only when `0 <= currentTime - instanceStartTime <= wakeLength`, alpha
+   * fades linearly to zero at the trailing edge, and point size shrinks to
+   * `wakeTailScale` of the head radius at the trailing edge.
+   *
+   * The host layer is responsible for setting `timeWindow >= 2 * wakeLength`
+   * so the tile loader actually loads the past half of the wake — the shader
+   * filter is independent of the tile-loading window.
+   */
+  wakeLength?: number;
+  /**
+   * Trailing-edge size multiplier in wake mode (0..1). Head = 1.0, tail =
+   * `wakeTailScale`. Defaults to 0.15 — the "barely visible dot" end of a
+   * comet tail.
+   */
+  wakeTailScale?: number;
+  /**
+   * Accessor returning a feature's start time.
+   * @default 0
+   */
   getInstanceStartTime?: Accessor<DataT, number>;
-  /** Accessor to get end time from each data object */
+  /**
+   * Accessor returning a feature's end time.
+   * @default Infinity
+   */
   getInstanceEndTime?: Accessor<DataT, number>;
   /**
-   * Accessor for the per-vertex timestamp used in trail mode. Layers that do
-   * not use trail mode never supply this; it defaults to a constant `0` so
-   * deck.gl always has a valid accessor for the registered attribute.
+   * Accessor for the per-vertex timestamp used in trail mode. Layers that
+   * don't use trail mode never supply this; default `0` keeps deck.gl happy
+   * because the attribute is always registered.
+   * @default 0
    */
   getInstanceVertexTime?: Accessor<DataT, number>;
 };
@@ -60,6 +104,8 @@ type TimeFilterUniformProps = {
   fadeIn: number;
   fadeOut: number;
   trailLength: number;
+  wakeLength: number;
+  wakeTailScale: number;
 };
 
 // Uniform block for GLSL 3.0 (WebGL2)
@@ -70,6 +116,8 @@ uniform timeFilterUniforms {
   float fadeIn;
   float fadeOut;
   float trailLength;
+  float wakeLength;
+  float wakeTailScale;
 } timeFilter;
 `;
 
@@ -83,23 +131,27 @@ const timeFilterUniforms = {
     windowHalf: 'f32',
     fadeIn: 'f32',
     fadeOut: 'f32',
-    trailLength: 'f32'
+    trailLength: 'f32',
+    wakeLength: 'f32',
+    wakeTailScale: 'f32'
   }
 };
 
-const defaultProps: Required<TimeFilterExtensionProps> = {
+const defaultProps: DefaultProps<TimeFilterExtensionProps> = {
   currentTime: 0,
-  getTime: null as any, // Optional function, no default
+  getTime: { type: 'function', value: null, optional: true },
   timeOffset: 0,
   timeWindow: 0,
   fadeInDuration: 0,
   fadeOutDuration: 0,
   trailLength: 0,
-  getInstanceStartTime: { type: 'accessor', value: 0 } as any,
-  getInstanceEndTime: { type: 'accessor', value: Infinity } as any,
+  wakeLength: 0,
+  wakeTailScale: 0.15,
+  getInstanceStartTime: { type: 'accessor', value: 0 },
+  getInstanceEndTime: { type: 'accessor', value: Infinity },
   // Constant default: window-mode layers never set a per-vertex time, but the
   // attribute is always registered so deck.gl requires a valid accessor.
-  getInstanceVertexTime: { type: 'accessor', value: 0 } as any,
+  getInstanceVertexTime: { type: 'accessor', value: 0 },
 };
 
 /**
@@ -205,12 +257,16 @@ export class TimeFilterExtension extends LayerExtension {
           out float vTimeAlpha;
         `,
         'vs:#main-start': `
-          float timeStart = timeFilter.currentTime - timeFilter.windowHalf;
-          float timeEnd = timeFilter.currentTime + timeFilter.windowHalf;
-
           vTimeAlpha = 1.0;
 
-          if (timeFilter.trailLength > 0.0) {
+          if (timeFilter.wakeLength > 0.0) {
+            float age = timeFilter.currentTime - instanceStartTime;
+            if (age < 0.0 || age > timeFilter.wakeLength) {
+              vTimeAlpha = 0.0;
+            } else {
+              vTimeAlpha = 1.0 - (age / timeFilter.wakeLength);
+            }
+          } else if (timeFilter.trailLength > 0.0) {
             float trailStart = timeFilter.currentTime - timeFilter.trailLength;
             float vertexTime = instanceVertexTime;
             if (vertexTime > timeFilter.currentTime) {
@@ -223,6 +279,8 @@ export class TimeFilterExtension extends LayerExtension {
               vTimeAlpha = clamp(vTimeAlpha, 0.0, 1.0);
             }
           } else {
+            float timeStart = timeFilter.currentTime - timeFilter.windowHalf;
+            float timeEnd = timeFilter.currentTime + timeFilter.windowHalf;
             if (instanceEndTime < timeStart || instanceStartTime > timeEnd) {
               vTimeAlpha = 0.0;
             }
@@ -238,6 +296,18 @@ export class TimeFilterExtension extends LayerExtension {
                 vTimeAlpha *= (remaining / timeFilter.fadeOut);
               }
             }
+          }
+        `,
+        // ScatterplotLayer-only hook (silently ignored where absent). The
+        // inout parameter in the hook signature is named `size` regardless of
+        // what the calling layer passes at the call site — see deck.gl/core
+        // DECKGL_FILTER_SIZE registration. Shrinks point geometry toward the
+        // trailing edge of the wake by reusing vTimeAlpha as the head→tail
+        // factor.
+        'vs:DECKGL_FILTER_SIZE': `
+          if (timeFilter.wakeLength > 0.0) {
+            float wakeScale = mix(timeFilter.wakeTailScale, 1.0, vTimeAlpha);
+            size *= wakeScale;
           }
         `,
         'fs:#decl': `
@@ -313,7 +383,9 @@ export class TimeFilterExtension extends LayerExtension {
       timeWindow = 0,
       fadeInDuration = 0,
       fadeOutDuration = 0,
-      trailLength = 0
+      trailLength = 0,
+      wakeLength = 0,
+      wakeTailScale = 0.15
     } = this.props;
 
     // PERFORMANCE: Use getTime() if provided for dynamic time updates
@@ -327,14 +399,12 @@ export class TimeFilterExtension extends LayerExtension {
 
     // Guard the f32 precision contract: a relative time past 2^24 ms loses
     // millisecond precision in the shader. Warn once if `timeOffset` is wrong.
-    const extState = this.state as { _timePrecisionWarned?: boolean };
-    if (Math.abs(relativeTime) > MAX_RELATIVE_TIME_MS && !extState._timePrecisionWarned) {
-      extState._timePrecisionWarned = true;
-      // eslint-disable-next-line no-console
-      console.warn(
+    if (Math.abs(relativeTime) > MAX_RELATIVE_TIME_MS) {
+      warnOnce(
+        'TimeFilterExtension:precision',
         `[TimeFilterExtension] relative time ${relativeTime} exceeds ` +
           `${MAX_RELATIVE_TIME_MS} ms — Float32 precision is degraded; ` +
-          'check that `timeOffset` matches the tile data.'
+          'check that `timeOffset` matches the tile data.',
       );
     }
 
@@ -343,7 +413,9 @@ export class TimeFilterExtension extends LayerExtension {
       windowHalf: timeWindow / 2,
       fadeIn: fadeInDuration,
       fadeOut: fadeOutDuration,
-      trailLength
+      trailLength,
+      wakeLength,
+      wakeTailScale
     };
 
     this.setShaderModuleProps({ timeFilter: timeFilterProps });

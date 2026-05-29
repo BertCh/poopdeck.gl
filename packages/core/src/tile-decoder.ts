@@ -1,3 +1,7 @@
+// @stt/core
+// SPDX-License-Identifier: MIT
+// Copyright (c) @stt/core contributors
+
 /**
  * Tile-decode strategy: inline (main thread) or worker pool (off main).
  *

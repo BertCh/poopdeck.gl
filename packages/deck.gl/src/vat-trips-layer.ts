@@ -1,3 +1,7 @@
+// @stt/deck.gl
+// SPDX-License-Identifier: MIT
+// Copyright (c) @stt/deck.gl contributors
+
 /**
  * VatTripsLayer — Vertex-Animation-Texture trip rendering.
  *
@@ -28,7 +32,12 @@
  */
 
 import { Layer, project32, picking } from '@deck.gl/core';
-import type { Color, Layer as DeckLayer, LayerContext } from '@deck.gl/core';
+import type {
+  Color,
+  DefaultProps,
+  Layer as DeckLayer,
+  LayerContext,
+} from '@deck.gl/core';
 import { Model, Geometry } from '@luma.gl/engine';
 import type { Texture } from '@luma.gl/core';
 import {
@@ -36,6 +45,7 @@ import {
   SpatioTemporalLayerProps,
 } from './spatiotemporal-layer';
 import { emit } from './telemetry';
+import { warnOnce } from './log';
 import type { Tile, Layer as TileLayer, BinaryFeatures } from '@stt/core';
 
 const DEBUG = false;
@@ -369,6 +379,9 @@ uniform vatUniforms {
 
 uniform sampler2D vat_positionsTexture;
 `,
+  // The FS reads only varyings; the uniform block is intentionally absent
+  // here. If a future fragment-fade-by-uniform variant lands, mirror the
+  // `vs` declaration into `fs` so the FS can reference `vat.*`.
   fs: '',
   uniformTypes: {
     relativeTime: 'f32',
@@ -387,6 +400,15 @@ uniform sampler2D vat_positionsTexture;
     trailColor: 'vec4<f32>',
   },
 };
+
+/**
+ * Stable shader-module list for both VAT sublayers. Hoisted to module scope
+ * so getShaders() returns object-identity-stable references across every
+ * sublayer construction — deck.gl keys its shader-pipeline cache on the
+ * modules array identity, and rebuilding the list inside the getter would
+ * spawn a fresh cache entry per tile.
+ */
+const VAT_SHADER_MODULES = [project32, picking, vatUniformsModule];
 
 class VatTripsSublayer extends Layer<VatTripsSublayerProps> {
   static layerName = 'VatTripsSublayer';
@@ -408,7 +430,7 @@ class VatTripsSublayer extends Layer<VatTripsSublayerProps> {
     return super.getShaders({
       vs: VAT_VS,
       fs: VAT_FS,
-      modules: [project32, picking, vatUniformsModule],
+      modules: VAT_SHADER_MODULES,
     });
   }
 
@@ -716,7 +738,7 @@ class VatTripsTrailSublayer extends Layer<VatTripsTrailSublayerProps> {
     return super.getShaders({
       vs: VAT_TRAIL_VS,
       fs: VAT_TRAIL_FS,
-      modules: [project32, picking, vatUniformsModule],
+      modules: VAT_SHADER_MODULES,
     });
   }
 
@@ -849,7 +871,7 @@ class VatTripsTrailSublayer extends Layer<VatTripsTrailSublayerProps> {
 export class VatTripsLayer extends SpatioTemporalLayer<VatTripsLayerProps> {
   static layerName = 'VatTripsLayer';
 
-  static defaultProps = {
+  static defaultProps: DefaultProps<VatTripsLayerProps> = {
     ...SpatioTemporalLayer.defaultProps,
     headColor: { type: 'color', value: DEFAULT_HEAD_COLOR },
     headRadiusPixels: { type: 'number', value: 4, min: 0 },
@@ -986,8 +1008,8 @@ export class VatTripsLayer extends SpatioTemporalLayer<VatTripsLayerProps> {
     const t0 = performance.now();
     const numTrips = Math.min(binary.featureCount, MAX_TRIPS_PER_TILE);
     if (numTrips < binary.featureCount) {
-      // eslint-disable-next-line no-console
-      console.warn(
+      warnOnce(
+        `VatTripsLayer:cap:${tileKey}`,
         `[VatTripsLayer] tile ${tileKey} has ${binary.featureCount} trips; ` +
           `clamping to ${MAX_TRIPS_PER_TILE} (VatTripsLayer safety cap).`,
       );

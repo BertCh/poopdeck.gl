@@ -1,3 +1,7 @@
+// @stt/core
+// SPDX-License-Identifier: MIT
+// Copyright (c) @stt/core contributors
+
 /**
  * Core types for spatiotemporal tiles
  */
@@ -44,9 +48,6 @@ export enum GeometryType {
   Polygon = 2,
 }
 
-/** Property value types */
-export type PropertyValue = string | number | boolean;
-
 /** Archive metadata */
 export interface ArchiveMetadata {
   version: number;
@@ -58,7 +59,6 @@ export interface ArchiveMetadata {
   minZoom: number;
   maxZoom: number;
   layers: LayerInfo[];
-  statistics?: ArchiveStatistics;
   /**
    * Temporal bucket size in milliseconds used for tile chunking.
    * Tiles are organized into fixed temporal intervals (e.g., 3600000 = 1 hour).
@@ -69,6 +69,26 @@ export interface ArchiveMetadata {
   summaryTier?: SummaryTier;
   /** Optional temporal LOD pyramid (orthogonal to the summary tier). */
   temporalLod?: TemporalLodLevel[];
+  /**
+   * Optional bake-time HeatmapLayer intensity-domain entries. When set,
+   * the deck.gl/maplibre HeatmapLayer skips its [0, 1] default and uses
+   * these per-class domains — vital for weighted heatmaps where the
+   * configured `weightProperty` carries large values (earthquake
+   * magnitudes, AIS speed, etc.).
+   */
+  heatmapDomain?: HeatmapDomain;
+  /**
+   * Optional pre-rasterized density-grid tier (Phase D). At zooms inside
+   * `[minZoom, maxZoom]` the renderer dispatches to a constant-time
+   * textured-quad path instead of streaming raw or cell-aggregated tiles
+   * — the only practical path for 100M+ point datasets at planet scale.
+   *
+   * **Scaffold note**: as of v3, the metadata is declared but the
+   * tile-side sidecar payload is not yet emitted by `stt-build`. Readers
+   * should fall through to the summary or raw tier when the field is
+   * present but the corresponding density-raster layer is absent.
+   */
+  rasterTier?: RasterTier;
 }
 
 /** Aggregation scheme for the summary tier. */
@@ -91,12 +111,61 @@ export interface SummaryTier {
   cellResolutionPerZoom: number[];
   columns: SummaryColumn[];
   layerName: string;
+  /**
+   * Number of fine-grained sub-buckets per outer time-bucket. When > 1,
+   * each cell row carries `bucket_0`..`bucket_<N-1>` numeric columns and
+   * the renderer animates by switching which one drives the cell colour
+   * — no data re-upload between frames. Defaults to 1 (legacy
+   * single-count behaviour).
+   */
+  subBuckets: number;
 }
 
 /** One level of a temporal LOD pyramid. */
 export interface TemporalLodLevel {
   bucketMs: number;
   maxZoomLevel: number;
+}
+
+/**
+ * One bake-time HeatmapLayer intensity-domain entry. The renderer pins
+ * `colorDomain` to `[min, max]` whenever the FE channel-spec id (or `'default'`)
+ * matches `id`, skipping any runtime auto-detect.
+ */
+export interface HeatmapClassDomain {
+  /** Channel id (matches HeatmapChannelSpec.id, or `'default'` for unsplit). */
+  id: string;
+  /** Inclusive minimum splat intensity. */
+  min: number;
+  /** Inclusive maximum splat intensity (typically 95p of `weightProperty`). */
+  max: number;
+  /** Weight property the domain was computed from, if any. */
+  property?: string;
+}
+
+/** Container for the bake-time HeatmapLayer domain metadata. */
+export interface HeatmapDomain {
+  classes: HeatmapClassDomain[];
+}
+
+/**
+ * Pre-rasterized density-grid tier descriptor. Companion to
+ * [[SummaryTier]] at the lowest zooms — one RGBA texture per tile,
+ * per-frame cost independent of feature count.
+ */
+export interface RasterTier {
+  minZoom: number;
+  maxZoom: number;
+  /** Density-grid width in pixels (per tile). */
+  width: number;
+  /** Density-grid height in pixels (per tile). */
+  height: number;
+  /** Number of RGBA channels in use (1..=4). One class per channel. */
+  channels: number;
+  /** Per-channel class ids — ordered to match channel index 0..channels-1. */
+  classIds: string[];
+  /** Layer name carried in the emitted density-raster frames. */
+  layerName: string;
 }
 
 /** Layer information */
@@ -114,15 +183,6 @@ export interface PropertyInfo {
   description?: string;
   minValue?: number;
   maxValue?: number;
-}
-
-/** Archive statistics */
-export interface ArchiveStatistics {
-  totalTiles: number;
-  totalFeatures: number;
-  totalSize: number;
-  uncompressedSize: number;
-  compressionRatio: number;
 }
 
 /** 2D position [lon, lat] */

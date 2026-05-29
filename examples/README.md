@@ -1,176 +1,107 @@
 # Example Applications
 
-This directory contains example applications demonstrating the SpatioTemporal Tiles (STT) format.
+This directory contains example applications demonstrating the
+SpatioTemporal Tiles (STT) format.
 
-## Available Examples
+## [Showcase](./showcase/)
 
-### 🎨 [Showcase](./showcase/)
+**The primary demonstration of STT capabilities.**
 
-**The primary demonstration of STT capabilities**
+An interactive web application showcasing 16 real and synthetic datasets
+across every layer type the project ships:
 
-An interactive web application showcasing 8+ real-world datasets across different visualization types:
+- **Point visualizations**: earthquake activity, ship traffic, flights,
+  satellites, NYC taxi points
+- **Path & trajectory**: NYC taxi paths, flight paths, hurricane tracks,
+  satellite trips, flight trips
+- **Animated trips (per-vertex timing)**: NYC taxi trips, NYC taxi VAT
+  (vertex-animation-texture variant)
+- **Polygon coverage**: wildfire perimeters
+- **GPU-splat heatmap**: NYC taxi OD heatmap
+- **Server-aggregated H3 summary tier**: NYC taxi OD summary
 
-- **Point Visualizations**: Earthquake activity, flight traffic, maritime AIS
-- **Path & Trajectory**: Flight paths, NYC taxi routes, hurricane tracks
-- **Area Coverage**: Wildfire perimeters
+Each demo can also be rendered through the `@stt/maplibre` adapter via
+the `/maplibre/:datasetId` route, for the no-deck.gl path.
 
-**Tech Stack**: React, deck.gl, TypeScript, Vite
+**Tech stack**: React 18, deck.gl 9.x, TypeScript, Vite,
+`@stt/core`, `@stt/deck.gl`, `@stt/maplibre`.
 
 ```bash
 cd showcase
-npm install
-npm run dev
+pnpm install
+pnpm dev
 ```
 
-### 🚀 Coming Soon
-
-#### Climate Visualizer (Vue + deck.gl)
-Multi-decade climate data visualization with temporal interpolation.
-
-#### Fleet Manager (React + Mapbox GL)
-Real-time vehicle fleet tracking with historical playback.
-
-#### Earthquake Monitor (Vanilla JS)
-Minimal implementation showing earthquake activity over time.
+See [`showcase/README.md`](./showcase/README.md) for dataset details.
 
 ## Dataset Generation
 
-Each example includes scripts to generate STT archives from source data:
-
-### Example: Earthquake Dataset
+Datasets are produced by `stt-generate`, which fetches the source,
+normalises it into GeoParquet, and shells out to `stt-build`.
 
 ```bash
-# Generate earthquake data using stt-generate
+# Build the toolchain
+cargo install --path ../crates/stt-generate
+cargo install --path ../crates/stt-build
+
+# Generate everything into the showcase's public/data
+stt-generate all --output-dir showcase/public/data --skip-existing
+
+# Or one at a time
 stt-generate earthquakes \
-  --start-date 2020-01-01 \
-  --end-date 2024-12-31 \
-  --min-magnitude 4.5 \
-  --output earthquakes.stt
+  --start-date 2020-01-01 --end-date 2024-12-31 \
+  --min-magnitude 4.0 \
+  --output showcase/public/data/earthquakes.stt
 ```
 
-### Example: AIS Maritime Traffic
+For arbitrary GeoParquet input, use `stt-build` directly. See the
+[Data Generation Guide](../docs/guides/data-generation.md) and
+[Building from Python](../docs/guides/python.md).
+
+## Creating Your Own App
 
 ```bash
-# Download AIS data from NOAA Marine Cadastre
-curl -O https://coast.noaa.gov/htdata/CMSP/AISDataHandler/2024/AIS_2024_01_01.zip
-unzip AIS_2024_01_01.zip
-
-# Process with stt-generate
-stt-generate ais \
-  --input AIS_2024_01_01.csv \
-  --output ais-traffic.stt \
-  --sample-minutes 10
-```
-
-## Performance Comparison
-
-| Example | Dataset Size | STT Archive | Initial Load | Animation FPS |
-|---------|--------------|-------------|--------------|---------------|
-| Earthquake Monitor | 77K features | 119 MB | 200ms | 60 |
-| Flight Traffic | 3.96M features | 1 GB | 500ms | 60 |
-| AIS Maritime | 1.17M features | 548 MB | 400ms | 60 |
-| NYC Taxi | 1.14M features | 142 MB | 250ms | 60 |
-
-*All measurements on Chrome 120, M1 MacBook Pro*
-
-## Development
-
-Each example is a standalone application with its own dependencies:
-
-```bash
-# Navigate to example
-cd showcase
-
-# Install dependencies
-npm install
-
-# Run development server
-npm run dev
-
-# Build for production
-npm run build
-```
-
-## Deployment
-
-Examples can be deployed as static sites:
-
-```bash
-# Build
-npm run build
-
-# Deploy to Vercel
-vercel deploy
-
-# Or to Netlify
-netlify deploy --prod
-
-# Or to any static host
-aws s3 sync dist/ s3://your-bucket --acl public-read
-```
-
-## Creating Your Own Example
-
-### 1. Set Up Project
-
-```bash
-mkdir my-stt-app
-cd my-stt-app
+mkdir my-stt-app && cd my-stt-app
 npm init -y
 npm install @stt/core @stt/deck.gl @deck.gl/react react react-dom
 ```
 
-### 2. Create Basic App
-
 ```typescript
-import { AnimatedPointLayer, TimeController } from '@stt/deck.gl';
+import { useState } from 'react';
 import DeckGL from '@deck.gl/react';
+import { AnimatedPointLayer, TimeController } from '@stt/deck.gl';
 
 function App() {
-  const [timeController] = useState(new TimeController());
+  const [timeController] = useState(() => new TimeController());
 
   const layer = new AnimatedPointLayer({
     id: 'points',
     data: 'https://example.com/data.stt',
-    currentTime: timeController.getTime(),
     timeController,
+    timeWindow: 86_400_000,
   });
 
   return <DeckGL layers={[layer]} />;
 }
 ```
 
-### 3. Generate Your Data
+Build your own dataset:
 
 ```bash
 stt-build \
-  --input your-data.geojson \
+  --input your-data.parquet \
   --output your-data.stt \
-  --time-field timestamp \
-  --max-zoom 14
+  --time-field timestamp --time-format unix-ms \
+  --auto
 ```
 
 ## Resources
 
-- [STT Documentation](../README.md)
+- [Main README](../README.md)
+- [Documentation](../docs/README.md)
 - [API Reference](../docs/api/)
-- [Performance Guide](../PERFORMANCE.md)
-- [deck.gl Docs](https://deck.gl)
-
-## Contributing
-
-We welcome new examples! Please submit a PR with:
-
-1. Complete, runnable application
-2. README with setup instructions
-3. Sample dataset or generation script
-4. Screenshots/demo GIF
+- [deck.gl docs](https://deck.gl)
 
 ## License
 
 All examples are MIT licensed.
-
----
-
-**Ready to build your own spatiotemporal visualization? Start with the [Showcase](./showcase/)!**
-

@@ -199,7 +199,7 @@ export const datasets: Dataset[] = [
       start: 1578268800000,  // 2020-01-06 00:00:00 UTC
       end: 1578354650000,    // 2020-01-06 23:50:50 UTC
     },
-    timeWindow: 1800000, // 30 minute window for trips
+    timeWindow: 3600000, // 1 hour window for trips
     targetPlaybackSeconds: 600, // 24 hours plays in 10 minutes
     initialViewState: {
       longitude: -98.5,
@@ -233,7 +233,7 @@ export const datasets: Dataset[] = [
       end: Date.parse('2023-11-17T21:00:00.000Z'),
     },
     timeWindow: 86400000 * 14, // 2 week window for multi-year hurricane data
-    targetPlaybackSeconds: 120, // ~3.5 years plays in 45 seconds
+    targetPlaybackSeconds: 120, // ~3.5 years plays in 2 min
     initialViewState: {
       longitude: -65,
       latitude: 25,
@@ -252,7 +252,7 @@ export const datasets: Dataset[] = [
       start: 1420070400000,  // 2015-01-01 00:00:00 UTC (first chronological trip)
       end:   1420080391000,  // 2015-01-01 02:46:31 UTC (50K-trip cap)
     },
-    timeWindow: 600000, // 10 min window for a 2.8h dataset
+    timeWindow: 15000, // 15s window for a 2.8h dataset
     targetPlaybackSeconds: 120, // ~2.8h plays in 2 minutes
     initialViewState: {
       longitude: -73.98,
@@ -269,6 +269,10 @@ export const datasets: Dataset[] = [
         { color: "#FF5722", label: "Dropoff" }
       ]
     },
+    radiusUnits: 'pixels',
+    radiusScale: 1,
+    radiusMinPixels: 1.5,
+    radiusMaxPixels: 3,
   },
   {
     id: 'nyc-taxi-od-heatmap',
@@ -293,16 +297,13 @@ export const datasets: Dataset[] = [
       pitch: 0,
       bearing: 0,
     },
-    // Stacked heatmaps — both layers cap their high-density alpha around
-    // 165/255 so the upper layer never fully occludes the one below. This is
-    // what lets the green pickups and red/orange dropoffs visibly co-exist
-    // in the same hot-zones (Midtown overlaps heavily).
-    // Perf knobs (see HeatmapTimeLayerProps.colorDomain / debounceTimeout for
-    // why these matter): colorDomain pins the weight ramp so deck.gl's
-    // HeatmapLayer skips its per-frame max-weight auto-detect (the dominant
-    // cost when the underlying data changes every animation tick). The radius
-    // is also dialled in — every doubling of `radiusPixels` is ~4x more
-    // fragment-shader work in the gaussian splat pass.
+    // Stacked heatmaps — both classes pack into ONE RGBA accumulator
+    // channel (R = pickups, G = dropoffs) and composite via per-class
+    // screen-blending so overlapping hot zones never go muddy. The
+    // HeatmapLayer compiles these two specs into channels and runs ONE
+    // splat pass total. Per-class `colorDomain` pins the intensity ramp;
+    // every doubling of `radiusPixels` is ~4x more fragment-shader work in
+    // the gaussian splat pass.
     heatmapLayers: [
       {
         id: 'pickups',
@@ -453,9 +454,9 @@ export const datasets: Dataset[] = [
     },
     // VAT-trail config — mirrors the previous PathLayer styling.
     vatTrailColor: [31, 186, 214, 255],
-    vatTrailLength: 10000,
+    vatTrailLength: 12500,
     vatTrailSamples: 16,
-    vatTripWidth: 4,
+    vatTripWidth: 3,
     widthMinPixels: 2,
     widthMaxPixels: 8,
     vatFadeTrail: true,
@@ -499,8 +500,21 @@ export const datasets: Dataset[] = [
       start: 1673222400000, // 2023-01-09T00:00:00Z (from actual data)
       end: 1673308799000,   // 2023-01-09T23:59:59Z (from actual data)
     },
-    timeWindow: 1800000, // 30 minute window for 24-hour data
+    // Wake aesthetic: every AIS ping behind the play head fades and shrinks
+    // to form a comet trail behind each vessel. `wakeLength` is the trail's
+    // temporal span; `timeWindow` is set to 2× that so the tile loader still
+    // covers the past half of the wake (the shader filter is independent of
+    // the loader window — see TimeFilterExtension.wakeLength docstring).
+    wakeLength: 1800000,    // 30-minute wake behind each ship
+    wakeTailScale: 0.15,    // tail shrinks to 15% of head radius
+    timeWindow: 3600000,    // 60-min loader window → 30-min past coverage
     targetPlaybackSeconds: 180, // 24 hours plays in 3 minutes
+    // Pixel-radius head dot. Meters-based default rendered sub-pixel at
+    // zoom 4 — invisible wakes. A 4 px head shrinks to ~0.6 px at the
+    // trailing edge, the classic comet-tail look.
+    radiusUnits: 'pixels',
+    radiusScale: 1,
+    radiusMaxPixels: 4,
     initialViewState: {
       longitude: -95,
       latitude: 30,

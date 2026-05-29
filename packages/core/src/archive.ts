@@ -1,3 +1,7 @@
+// @stt/core
+// SPDX-License-Identifier: MIT
+// Copyright (c) @stt/core contributors
+
 /**
  * STT archive reader over HTTP Range Requests.
  *
@@ -26,6 +30,9 @@ import {
   type TileRequestOptions,
   type SummaryTier,
   type SummaryColumn,
+  type HeatmapDomain,
+  type HeatmapClassDomain,
+  type RasterTier,
   Compression,
 } from './types';
 import { createDefaultTileDecoder, type TileDecoder } from './tile-decoder';
@@ -370,6 +377,8 @@ export class STTArchive {
             maxZoomLevel: Number(l.max_zoom_level),
           }))
         : undefined,
+      heatmapDomain: parseHeatmapDomain(json.heatmap_domain),
+      rasterTier: parseRasterTier(json.raster_tier),
     };
     return this.metadataCache;
   }
@@ -1071,6 +1080,7 @@ function parseSummaryTier(raw: unknown): SummaryTier | undefined {
         })
         .filter((c): c is SummaryColumn => c !== null)
     : [];
+  const subBuckets = Math.max(1, Math.floor(Number(r.sub_buckets ?? 1)));
   return {
     scheme,
     minZoom,
@@ -1078,5 +1088,59 @@ function parseSummaryTier(raw: unknown): SummaryTier | undefined {
     cellResolutionPerZoom,
     columns: cols,
     layerName,
+    subBuckets,
   };
+}
+
+/**
+ * Parse the `raster_tier` block from an archive's JSON metadata. Returns
+ * `undefined` for archives that don't carry one (most). Phase D scaffold:
+ * the metadata is declared but stt-build doesn't emit sidecar tile
+ * payloads yet, so the renderer falls back to summary/raw tiers when
+ * the density-raster layer is missing from a tile.
+ */
+function parseRasterTier(raw: unknown): RasterTier | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const r = raw as Record<string, unknown>;
+  const minZoom = Number(r.min_zoom ?? 0);
+  const maxZoom = Number(r.max_zoom ?? minZoom);
+  const width = Number(r.width ?? 0);
+  const height = Number(r.height ?? 0);
+  const channels = Number(r.channels ?? 1);
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    return undefined;
+  }
+  const classIds = Array.isArray(r.class_ids)
+    ? (r.class_ids as unknown[]).map(String)
+    : [];
+  const layerName =
+    typeof r.layer_name === 'string' ? r.layer_name : 'density_raster';
+  return { minZoom, maxZoom, width, height, channels, classIds, layerName };
+}
+
+/**
+ * Parse the `heatmap_domain` block from an archive's JSON metadata into the
+ * camelCase TS shape. Returns `undefined` for archives that don't carry one.
+ * Each class entry surfaces the bake-time `[min, max]` splat-intensity
+ * domain that HeatmapLayer uses as its pinned `colorDomain` default.
+ */
+function parseHeatmapDomain(raw: unknown): HeatmapDomain | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const r = raw as Record<string, unknown>;
+  if (!Array.isArray(r.classes)) return undefined;
+  const classes: HeatmapClassDomain[] = (r.classes as unknown[])
+    .map((c) => {
+      if (!c || typeof c !== 'object') return null;
+      const cc = c as Record<string, unknown>;
+      const id = typeof cc.id === 'string' ? cc.id : '';
+      const min = Number(cc.min);
+      const max = Number(cc.max);
+      if (!id || !Number.isFinite(min) || !Number.isFinite(max)) return null;
+      const out: HeatmapClassDomain = { id, min, max };
+      if (typeof cc.property === 'string') out.property = cc.property;
+      return out;
+    })
+    .filter((c): c is HeatmapClassDomain => c !== null);
+  if (classes.length === 0) return undefined;
+  return { classes };
 }

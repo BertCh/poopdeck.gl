@@ -1,3 +1,7 @@
+// @stt/deck.gl
+// SPDX-License-Identifier: MIT
+// Copyright (c) @stt/deck.gl contributors
+
 /**
  * AnimatedPointLayer - GPU-efficient point rendering with time filtering.
  *
@@ -29,7 +33,7 @@
  */
 
 import { ScatterplotLayer } from '@deck.gl/layers';
-import type { Color, Layer, LayerContext } from '@deck.gl/core';
+import type { Color, DefaultProps, Layer, LayerContext } from '@deck.gl/core';
 import { SpatioTemporalLayer, SpatioTemporalLayerProps } from './spatiotemporal-layer';
 import { TimeFilterExtension } from './time-filter-extension';
 import {
@@ -37,24 +41,37 @@ import {
   CATEGORY_PALETTE_SIZE,
 } from './category-color-extension';
 import { emit } from './telemetry';
+import { warnOnce } from './log';
 import type { Tile, Layer as TileLayer } from '@stt/core';
 
 const DEBUG = false;
 
 export interface AnimatedPointLayerProps extends SpatioTemporalLayerProps {
-  /** Radius scale multiplier */
+  /**
+   * Radius scale multiplier.
+   * @default 1
+   */
   radiusScale?: number;
 
-  /** Radius units ('pixels' | 'meters' | 'common') */
+  /**
+   * Radius units.
+   * @default 'pixels'
+   */
   radiusUnits?: 'pixels' | 'meters' | 'common';
 
-  /** Fill color - constant value or property name for categorical coloring */
+  /**
+   * Fill color — constant {@link Color}, or property name for categorical coloring.
+   * @default [255, 128, 0, 255]
+   */
   fillColor?: Color | string;
 
-  /** Radius - constant value or property name for radius */
+  /**
+   * Radius — constant number, or property name for per-feature radius.
+   * @default 5
+   */
   radius?: number | string;
 
-  /** Color palette for categorical properties */
+  /** Color palette for categorical `fillColor`. */
   colorPalette?: Color[];
 
   /**
@@ -91,20 +108,52 @@ export interface AnimatedPointLayerProps extends SpatioTemporalLayerProps {
   /** Outline stroke width in pixels. Forwarded to ScatterplotLayer. */
   lineWidthMinPixels?: number;
 
-  /** Whether to render an outline stroke around each point. */
+  /**
+   * Whether to render an outline stroke around each point.
+   * @default false
+   */
   stroked?: boolean;
 
   /** Stroke color (constant). */
   strokeColor?: Color;
 
-  /** Whether to fill the marker (default true). */
+  /**
+   * Whether to fill the marker.
+   * @default true
+   */
   filled?: boolean;
 
-  /** Fade-in duration for appearing points (ms) */
+  /**
+   * Fade-in duration for appearing points (ms).
+   * @default 300
+   */
   fadeInDuration?: number;
 
-  /** Fade-out duration for disappearing points (ms) */
+  /**
+   * Fade-out duration for disappearing points (ms).
+   * @default 300
+   */
   fadeOutDuration?: number;
+
+  /**
+   * Wake length in milliseconds. When > 0, switches the layer into a
+   * one-sided "ship wake" rendering: each point is visible only while
+   * `0 <= currentTime - startTime <= wakeLength`, its alpha fades linearly
+   * to 0 at the trailing edge, and its on-screen radius shrinks to
+   * `wakeTailScale` × head radius. Takes precedence over the symmetric
+   * window/fadeIn/fadeOut filter inherited from TimeFilterExtension.
+   *
+   * The caller must ensure `timeWindow >= 2 × wakeLength` so the tile
+   * loader actually fetches the past half of the wake — the shader filter
+   * is independent of the tile-loading window.
+   */
+  wakeLength?: number;
+
+  /**
+   * Trailing-edge size multiplier in wake mode (0..1). Head = 1.0, tail =
+   * `wakeTailScale`. Defaults to 0.15.
+   */
+  wakeTailScale?: number;
 
   /**
    * Enable 3D positions (altitude / elevation). The v3 layer infers 3D from
@@ -120,9 +169,12 @@ export interface AnimatedPointLayerProps extends SpatioTemporalLayerProps {
    * binary path uses the tile's stored z if present); the prop is kept on
    * the type to preserve v2 dataset configs.
    */
-  elevationProperty?: string;
+  elevationProperty?: string | null;
 
-  /** Scale factor for elevation values. Forward-declared (see `elevationProperty`). */
+  /**
+   * Scale factor for elevation values. Forward-declared (see `elevationProperty`).
+   * @default 1
+   */
   elevationScale?: number;
 }
 
@@ -225,24 +277,28 @@ function indicesToFloat32(indices: Uint16Array, count: number): Float32Array {
 export class AnimatedPointLayer extends SpatioTemporalLayer<AnimatedPointLayerProps> {
   static layerName = 'AnimatedPointLayer';
 
-  static defaultProps = {
+  static defaultProps: DefaultProps<AnimatedPointLayerProps> = {
     ...SpatioTemporalLayer.defaultProps,
     radiusScale: { type: 'number', value: 1, min: 0 },
     radiusUnits: 'pixels',
-    fillColor: { type: 'color', value: [255, 128, 0, 255] as Color },
+    fillColor: { type: 'color', value: [255, 128, 0, 255] },
     radius: { type: 'number', value: 5 },
-    colorPalette: { type: 'array', value: DEFAULT_PALETTE },
+    colorPalette: { type: 'array', value: DEFAULT_PALETTE, compare: true },
 
     // Animation props (unused on the GPU side after the rewrite; kept for
     // API compatibility with v2 callers that pass them in).
     fadeInDuration: { type: 'number', value: 300, min: 0 },
     fadeOutDuration: { type: 'number', value: 300, min: 0 },
 
+    // Wake-mode props. wakeLength=0 keeps the symmetric window behavior.
+    wakeLength: { type: 'number', value: 0, min: 0 },
+    wakeTailScale: { type: 'number', value: 0.15, min: 0 },
+
     // 3D forward-declared props (see prop docstrings). The v3 layer reads 3D
     // directly from the tile's positionDimensions; these are accepted on the
     // type so v2 dataset configs continue to compile.
     use3D: false,
-    elevationProperty: null,
+    elevationProperty: { type: 'object', value: null, optional: true, compare: true },
     elevationScale: { type: 'number', value: 1, min: 0 },
   };
 
@@ -319,6 +375,8 @@ export class AnimatedPointLayer extends SpatioTemporalLayer<AnimatedPointLayerPr
       this.props.timeWindow,
       this.props.fadeInDuration,
       this.props.fadeOutDuration,
+      this.props.wakeLength,
+      this.props.wakeTailScale,
       // fillColor/radius constant branches only — the property-driven path
       // lives in `prepared` and is keyed via preparedKey.
       Array.isArray(this.props.fillColor) ? this.props.fillColor.join(',') : '',
@@ -545,8 +603,8 @@ export class AnimatedPointLayer extends SpatioTemporalLayer<AnimatedPointLayerPr
       useGpuCategory &&
       prepared.gpuPalette!.length > CATEGORY_PALETTE_SIZE
     ) {
-      // eslint-disable-next-line no-console
-      console.warn(
+      warnOnce(
+        'AnimatedPointLayer:paletteOverflow',
         `[AnimatedPointLayer] colorPalette has ${prepared.gpuPalette!.length} ` +
           `entries; only the first ${CATEGORY_PALETTE_SIZE} will be used by ` +
           'CategoryColorExtension.',
@@ -588,6 +646,8 @@ export class AnimatedPointLayer extends SpatioTemporalLayer<AnimatedPointLayerPr
       timeWindow,
       fadeInDuration: this.props.fadeInDuration,
       fadeOutDuration: this.props.fadeOutDuration,
+      wakeLength: this.props.wakeLength,
+      wakeTailScale: this.props.wakeTailScale,
     };
     // Always set `useCategoryColor` so tests / debug tooling can distinguish
     // the two paths via prop inspection. The extension itself is only

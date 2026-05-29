@@ -22,21 +22,44 @@ STT solves this by pre-indexing data temporally. The client only downloads data 
 
 ## Key Concepts
 
-### 1. Chunked Feature Storage
-Each tile now stores absolute WGS84 coordinates for the features that intersect it. There is no delta or zig-zag encoding—tiles are literally **chunks of the source dataset** broken up by `(zoom, x, y, time)`. This makes the format easy to debug (you can dump a tile and immediately see lon/lat values) and keeps the refactor focused on correctness over extreme compression.
+### 1. Apache Arrow IPC + GeoArrow tile payloads
+Each tile is one Apache Arrow `RecordBatch` per layer, with geometry
+encoded as standard **GeoArrow** (interleaved `[x, y]` Float64 inside a
+`FixedSizeList`). Coordinates are absolute WGS84 — no delta or zig-zag
+encoding — so a tile is "a chunk of the source dataset, broken up by
+`(zoom, x, y, time)`" and can be inspected with any Arrow tool. zstd
+(default) or gzip on the IPC bytes does the size compression. The
+client only needs one library (`apache-arrow`) to decode both the
+directory and the tile payloads.
 
 ### 2. Temporal Bucketing
-Not all data needs millisecond precision. **Temporal Bucketing** allows grouping updates into discrete time slots (e.g., 1 second, 1 hour, 1 day) based on the zoom level.
+Not all data needs millisecond precision. **Temporal Bucketing** groups
+features into fixed-width time slots — the same bucket size everywhere
+in the archive, configurable as `--temporal-bucket` (default `1h`).
+Bucket boundaries become the cache-hit pivot for predictive prefetch
+during animation.
 
-- **Zoom 0-3 (World):** Daily or Monthly buckets.
-- **Zoom 14 (Street):** Second-level precision.
+### 3. Temporal LOD pyramid
+For multi-year datasets you'd animate at fine bucket resolution, the
+build can emit one or more coarser-bucket tiers alongside the base
+(`--temporal-lod 1d,30d` or `1d@8,30d@4`). The reader picks the
+coarsest tier whose `max_zoom_level` covers the current zoom — so
+"zoomed out, scrubbing a decade" reads 30-day aggregates instead of
+streaming per-hour base tiles.
 
-This acts as a "Temporal Level of Detail" (LOD), ensuring you don't load millisecond-precision data when viewing the entire globe.
+### 4. Summary tier (server-side aggregation)
+For 100M+ point datasets, a `--summary-tier h3` build emits a
+server-aggregated H3-hex tier alongside the raw tier. Each hex carries a
+`count` plus any configured `name:agg` (mean / sum / max / min) columns.
+The reader dispatches to summary tiles below the configured zoom
+threshold, so low-zoom rendering never streams the raw points.
 
-### 3. Spatial Indexing (Hilbert Curve)
-Tiles are stored in the archive using a **Hilbert Space-Filling Curve**. This ensures that tiles that are spatially close (neighbors on the map) are also close in the file byte stream.
-
-- **Benefit:** Improves HDD/SSD read performance and enables efficient range requests.
+### 5. Spatial Indexing (Hilbert Curve)
+Tiles are stored in the archive using a **Hilbert Space-Filling Curve**.
+Spatially-neighbouring tiles end up adjacent in the file, so the reader's
+range-coalescer often satisfies several tiles with one HTTP Range
+request — important for CDN cacheability and total request count under
+viewport pans.
 
 ## Client-Side Rendering
 

@@ -3,15 +3,20 @@
   "version": "0.1.0",
   "description": "deck.gl layers for spatiotemporal tiles",
   "type": "module",
+  "sideEffects": false,
   "main": "./dist/index.js",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "import": "./dist/index.js",
-      "types": "./dist/index.d.ts"
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
     }
   },
+  "files": [
+    "dist",
+    "src"
+  ],
   "scripts": {
     "build": "tsc",
     "test": "vitest run",
@@ -21,21 +26,24 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
+    "@stt/core": "workspace:*",
+    "h3-js": "^4.1.0"
+  },
+  "peerDependencies": {
+    "@deck.gl/aggregation-layers": "^9.3.0",
+    "@deck.gl/core": "^9.3.0",
+    "@deck.gl/geo-layers": "^9.3.0",
+    "@deck.gl/layers": "^9.3.0",
+    "@luma.gl/core": "^9.3.0",
+    "@luma.gl/engine": "^9.3.0"
+  },
+  "devDependencies": {
     "@deck.gl/aggregation-layers": "^9.3.2",
     "@deck.gl/core": "^9.3.2",
     "@deck.gl/geo-layers": "^9.3.2",
     "@deck.gl/layers": "^9.3.2",
     "@luma.gl/core": "^9.3.0",
     "@luma.gl/engine": "^9.3.0",
-    "@stt/core": "workspace:*",
-    "h3-js": "^4.1.0"
-  },
-  "peerDependencies": {
-    "@deck.gl/core": ">=8.9.0",
-    "@deck.gl/geo-layers": ">=8.9.0",
-    "@deck.gl/layers": ">=8.9.0"
-  },
-  "devDependencies": {
     "@types/node": "^20.14.0",
     "typescript": "^5.4.0",
     "vitest": "^1.6.0"
