@@ -61,6 +61,13 @@ export type TimeFilterExtensionProps<DataT = unknown> = {
    */
   trailLength?: number;
   /**
+   * In trail mode, whether the trail fades head→tail (`true`, the classic
+   * comet trail) or renders at constant opacity along its whole length
+   * (`false`, a solid snake). Has no effect outside trail mode.
+   * @default true
+   */
+  fadeTrail?: boolean;
+  /**
    * Wake length in milliseconds (point-layer "ship wake" aesthetic).
    * When > 0, takes precedence over window/trail mode: features are shown
    * only when `0 <= currentTime - instanceStartTime <= wakeLength`, alpha
@@ -104,6 +111,8 @@ type TimeFilterUniformProps = {
   fadeIn: number;
   fadeOut: number;
   trailLength: number;
+  /** 1.0 = fade trail head→tail; 0.0 = solid trail at constant opacity. */
+  trailFade: number;
   wakeLength: number;
   wakeTailScale: number;
 };
@@ -116,6 +125,7 @@ uniform timeFilterUniforms {
   float fadeIn;
   float fadeOut;
   float trailLength;
+  float trailFade;
   float wakeLength;
   float wakeTailScale;
 } timeFilter;
@@ -132,6 +142,7 @@ const timeFilterUniforms = {
     fadeIn: 'f32',
     fadeOut: 'f32',
     trailLength: 'f32',
+    trailFade: 'f32',
     wakeLength: 'f32',
     wakeTailScale: 'f32'
   }
@@ -145,6 +156,7 @@ const defaultProps: DefaultProps<TimeFilterExtensionProps> = {
   fadeInDuration: 0,
   fadeOutDuration: 0,
   trailLength: 0,
+  fadeTrail: true,
   wakeLength: 0,
   wakeTailScale: 0.15,
   getInstanceStartTime: { type: 'accessor', value: 0 },
@@ -275,8 +287,9 @@ export class TimeFilterExtension extends LayerExtension {
               vTimeAlpha = 0.0;
             } else {
               float age = timeFilter.currentTime - vertexTime;
-              vTimeAlpha = 1.0 - (age / timeFilter.trailLength);
-              vTimeAlpha = clamp(vTimeAlpha, 0.0, 1.0);
+              float faded = clamp(1.0 - (age / timeFilter.trailLength), 0.0, 1.0);
+              // trailFade == 1.0 -> classic head→tail fade; 0.0 -> solid trail.
+              vTimeAlpha = mix(1.0, faded, timeFilter.trailFade);
             }
           } else {
             float timeStart = timeFilter.currentTime - timeFilter.windowHalf;
@@ -384,6 +397,7 @@ export class TimeFilterExtension extends LayerExtension {
       fadeInDuration = 0,
       fadeOutDuration = 0,
       trailLength = 0,
+      fadeTrail = true,
       wakeLength = 0,
       wakeTailScale = 0.15
     } = this.props;
@@ -414,6 +428,7 @@ export class TimeFilterExtension extends LayerExtension {
       fadeIn: fadeInDuration,
       fadeOut: fadeOutDuration,
       trailLength,
+      trailFade: fadeTrail ? 1.0 : 0.0,
       wakeLength,
       wakeTailScale
     };

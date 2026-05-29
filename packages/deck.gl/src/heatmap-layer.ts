@@ -37,7 +37,7 @@ import type {
   UpdateParameters,
 } from '@deck.gl/core';
 import { Model, Geometry } from '@luma.gl/engine';
-import type { Texture } from '@luma.gl/core';
+import type { Buffer as LumaBuffer, Texture } from '@luma.gl/core';
 import { HEATMAP_VS, HEATMAP_FS, heatmapUniforms } from './shaders/heatmap.glsl';
 import {
   SpatioTemporalLayer,
@@ -129,6 +129,28 @@ interface PerTileChannelData {
   vertexCount: number;
   channelIndex: number;
   channelId: string;
+  /**
+   * GPU buffers, uploaded ONCE when the entry is built and reused across
+   * frames. Previously the layer created+destroyed four buffers per entry on
+   * every `draw()` (i.e. every animation frame) — 4·N·C alloc+upload+free per
+   * frame — which defeated the "upload once" design and churned the driver's
+   * buffer pool. Destroyed on tile eviction (updateState) and finalizeState.
+   */
+  gpu?: {
+    posBuf: LumaBuffer;
+    timeBuf: LumaBuffer;
+    weightBuf: LumaBuffer;
+    channelBuf: LumaBuffer;
+  };
+}
+
+function destroyEntryGpu(entry: PerTileChannelData | undefined): void {
+  if (!entry?.gpu) return;
+  entry.gpu.posBuf.destroy();
+  entry.gpu.timeBuf.destroy();
+  entry.gpu.weightBuf.destroy();
+  entry.gpu.channelBuf.destroy();
+  entry.gpu = undefined;
 }
 
 interface ResolvedChannel {
@@ -251,6 +273,12 @@ class HeatmapSplatSublayer extends Layer<HeatmapSplatSublayerProps> {
     if (s.paletteTextures) {
       for (const t of s.paletteTextures) t?.destroy();
     }
+    if (s.tileChannelData) {
+      for (const entry of (s.tileChannelData as Map<string, PerTileChannelData>).values()) {
+        destroyEntryGpu(entry);
+      }
+      s.tileChannelData.clear();
+    }
   }
 
   updateState(params: UpdateParameters<this>): void {
@@ -271,11 +299,18 @@ class HeatmapSplatSublayer extends Layer<HeatmapSplatSublayerProps> {
       params.props.weightProperty !== params.oldProps.weightProperty ||
       params.props.layerTimeOffset !== params.oldProps.layerTimeOffset
     ) {
-      // Wholesale wipe — channel mapping or relativization changed.
+      // Wholesale wipe — channel mapping or relativization changed. Free the
+      // GPU buffers of every cached entry before dropping them.
+      for (const entry of (s.tileChannelData as Map<string, PerTileChannelData>)?.values() ?? []) {
+        destroyEntryGpu(entry);
+      }
       s.tileChannelData?.clear();
     } else {
-      for (const key of s.tileChannelData?.keys() ?? []) {
-        if (!live.has(key)) s.tileChannelData.delete(key);
+      for (const key of [...(s.tileChannelData?.keys() ?? [])]) {
+        if (!live.has(key)) {
+          destroyEntryGpu(s.tileChannelData.get(key));
+          s.tileChannelData.delete(key);
+        }
       }
     }
   }
@@ -289,7 +324,6 @@ class HeatmapSplatSublayer extends Layer<HeatmapSplatSublayerProps> {
     this.syncPalettes();
     this.ensureTileChannelData();
 
-    const device = this.context.device;
     const time = this.props.getTime();
     const halfWindow = this.props.timeWindow / 2;
     const windowStart = time - this.props.layerTimeOffset - halfWindow;
@@ -302,57 +336,34 @@ class HeatmapSplatSublayer extends Layer<HeatmapSplatSublayerProps> {
       uPalette3: s.paletteTextures[3],
     });
 
-    // One draw call per (tile, channel) pair. Each switches the attribute
-    // buffers and the per-channel domain uniform, then triggers a draw
-    // into the deck.gl-managed render pass (= canvas).
+    // One draw call per (tile, channel) pair. GPU buffers are created once in
+    // ensureTileChannelData() and reused here every frame; draw() only swaps
+    // the (cached) attribute buffers and updates the small uniform block.
     for (const entry of (s.tileChannelData as Map<string, PerTileChannelData>).values()) {
       const channel = this.props.channels[entry.channelIndex];
-      if (!channel) continue;
-      const posBuf = device.createBuffer({
-        data: entry.instancePosition,
-        usage: 0x0020,
+      if (!channel || !entry.gpu) continue;
+      model.setAttributes({
+        instancePosition: entry.gpu.posBuf,
+        instanceTime: entry.gpu.timeBuf,
+        instanceWeight: entry.gpu.weightBuf,
+        instanceChannel: entry.gpu.channelBuf,
       });
-      const timeBuf = device.createBuffer({
-        data: entry.instanceTime,
-        usage: 0x0020,
+      model.setVertexCount(entry.vertexCount);
+      model.shaderInputs.setProps({
+        heatmap: {
+          radius: this.props.radiusPixels,
+          intensity: this.props.intensity,
+          windowStart,
+          windowEnd,
+          fadeIn: this.props.fadeInDuration,
+          fadeOut: this.props.fadeOutDuration,
+          threshold: this.props.threshold,
+          opacity: this.props.opacity ?? 1,
+          domainMin: channel.colorDomain[0],
+          domainMax: channel.colorDomain[1],
+        },
       });
-      const weightBuf = device.createBuffer({
-        data: entry.instanceWeight,
-        usage: 0x0020,
-      });
-      const channelBuf = device.createBuffer({
-        data: entry.instanceChannel,
-        usage: 0x0020,
-      });
-      try {
-        model.setAttributes({
-          instancePosition: posBuf,
-          instanceTime: timeBuf,
-          instanceWeight: weightBuf,
-          instanceChannel: channelBuf,
-        });
-        model.setVertexCount(entry.vertexCount);
-        model.shaderInputs.setProps({
-          heatmap: {
-            radius: this.props.radiusPixels,
-            intensity: this.props.intensity,
-            windowStart,
-            windowEnd,
-            fadeIn: this.props.fadeInDuration,
-            fadeOut: this.props.fadeOutDuration,
-            threshold: this.props.threshold,
-            opacity: this.props.opacity ?? 1,
-            domainMin: channel.colorDomain[0],
-            domainMax: channel.colorDomain[1],
-          },
-        });
-        model.draw(this.context.renderPass);
-      } finally {
-        posBuf.destroy();
-        timeBuf.destroy();
-        weightBuf.destroy();
-        channelBuf.destroy();
-      }
+      model.draw(this.context.renderPass);
     }
   }
 
@@ -391,7 +402,18 @@ class HeatmapSplatSublayer extends Layer<HeatmapSplatSublayerProps> {
             weightProp,
             this.props.layerTimeOffset,
           );
-          if (built) s.tileChannelData.set(key, built);
+          if (built) {
+            // Upload the GPU buffers ONCE, here on first sight of this
+            // (tile, channel), so draw() can reuse them every frame.
+            const device = this.context.device;
+            built.gpu = {
+              posBuf: device.createBuffer({ data: built.instancePosition, usage: 0x0020 }),
+              timeBuf: device.createBuffer({ data: built.instanceTime, usage: 0x0020 }),
+              weightBuf: device.createBuffer({ data: built.instanceWeight, usage: 0x0020 }),
+              channelBuf: device.createBuffer({ data: built.instanceChannel, usage: 0x0020 }),
+            };
+            s.tileChannelData.set(key, built);
+          }
         }
       }
     }

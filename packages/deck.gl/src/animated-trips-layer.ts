@@ -585,6 +585,10 @@ export class AnimatedTripsLayer extends SpatioTemporalLayer<AnimatedTripsLayerPr
       timeOffset: prepared.timeOffset,
       timeWindow,
       trailLength: this.props.trailLength,
+      // Whether the trail fades head→tail or renders solid. Previously this
+      // prop was baked into the sublayer cache key but never reached the
+      // TimeFilterExtension, so `fadeTrail: false` was a silent no-op.
+      fadeTrail: this.props.fadeTrail,
     };
     props.useCategoryColor = useGpuCategory;
     if (useGpuCategory) {
