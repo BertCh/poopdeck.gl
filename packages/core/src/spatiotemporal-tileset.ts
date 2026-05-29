@@ -130,6 +130,20 @@ export interface SpatiotemporalTilesetOptions {
   /** Callback to fetch tile data (with optional abort signal for cancellation) */
   getTileData: (tileId: TileId, signal?: AbortSignal) => Promise<Tile | null>;
 
+  /**
+   * Optional batched fetch. When provided, each processRequestQueue pass
+   * sends the tiles it would otherwise fetch one-by-one as a SINGLE call,
+   * letting the archive coalesce their (Hilbert-adjacent, hence usually
+   * byte-adjacent) ranges into a handful of HTTP Range requests instead of
+   * one per tile. Wire `STTArchive.getTiles` here. The per-tile `getTileData`
+   * path is retained for single-tile loads and as the fallback. Returns
+   * tiles in the same order as the input ids; missing tiles are `null`.
+   */
+  getTileDataBatch?: (
+    tileIds: TileId[],
+    signal?: AbortSignal
+  ) => Promise<(Tile | null)[]>;
+
   /** Callback when tile loads */
   onTileLoad?: (tile: Tile) => void;
 
@@ -260,6 +274,7 @@ export class SpatiotemporalTileset {
       getAvailableTiles: options.getAvailableTiles,
       getAvailableSummaryTiles: options.getAvailableSummaryTiles ?? null,
       getTileData: options.getTileData,
+      getTileDataBatch: options.getTileDataBatch ?? null,
       onTileLoad: options.onTileLoad ?? (() => {}),
       onTileUnload: options.onTileUnload ?? (() => {}),
       onTileError: options.onTileError ?? ((err) => console.error(err)),
@@ -775,12 +790,23 @@ export class SpatiotemporalTileset {
     let usedSlots = 0;
 
     // Drain HIGH PRIORITY queue first — current viewport tiles always come
-    // before any prefetch work.
-    while (this.priorityQueue.length > 0 && usedSlots < availableSlots) {
-      const tileId = this.priorityQueue.shift()!;
-      if (this.startTileLoad(tileId)) {
-        usedSlots++;
+    // before any prefetch work. When a batched fetch is available, send this
+    // pass's tiles as one coalesced request (Hilbert-adjacent tiles collapse
+    // into a few byte ranges) instead of one fetch per tile.
+    const batchFn = this.options.getTileDataBatch;
+    if (!batchFn || this.priorityQueue.length <= 1) {
+      while (this.priorityQueue.length > 0 && usedSlots < availableSlots) {
+        const tileId = this.priorityQueue.shift()!;
+        if (this.startTileLoad(tileId)) {
+          usedSlots++;
+        }
       }
+    } else {
+      const candidates: TileId[] = [];
+      while (this.priorityQueue.length > 0 && candidates.length < availableSlots) {
+        candidates.push(this.priorityQueue.shift()!);
+      }
+      usedSlots += this.startTileBatch(candidates);
     }
 
     // If priority is still backed up after we used every slot, do not start
@@ -797,13 +823,21 @@ export class SpatiotemporalTileset {
       Math.floor(this.options.maxRequests * prefetchShare),
     );
     const prefetchSlots = Math.min(remainingSlots, prefetchCap);
-    let prefetchUsed = 0;
 
-    while (this.prefetchQueue.length > 0 && prefetchUsed < prefetchSlots) {
-      const tileId = this.prefetchQueue.shift()!;
-      if (this.startTileLoad(tileId)) {
-        prefetchUsed++;
+    if (!batchFn || this.prefetchQueue.length <= 1 || prefetchSlots <= 1) {
+      let prefetchUsed = 0;
+      while (this.prefetchQueue.length > 0 && prefetchUsed < prefetchSlots) {
+        const tileId = this.prefetchQueue.shift()!;
+        if (this.startTileLoad(tileId)) {
+          prefetchUsed++;
+        }
       }
+    } else {
+      const candidates: TileId[] = [];
+      while (this.prefetchQueue.length > 0 && candidates.length < prefetchSlots) {
+        candidates.push(this.prefetchQueue.shift()!);
+      }
+      this.startTileBatch(candidates);
     }
   }
   
@@ -868,6 +902,78 @@ export class SpatiotemporalTileset {
     return true;
   }
   
+  /**
+   * Start loading a batch of tiles in ONE coalesced fetch.
+   *
+   * Mirrors `startTileLoad`'s per-tile state machine (isLoading / activeRequests
+   * / onTileLoad / byte accounting) but issues a single `getTileDataBatch` call
+   * so the archive can collapse the tiles' Hilbert-adjacent byte ranges into a
+   * few HTTP Range requests. Candidates that aren't loadable (already loading /
+   * loaded / cancelled / unknown) are skipped exactly as `startTileLoad` would.
+   *
+   * Cancellation is at BATCH granularity: all tiles in one batch share an
+   * AbortController. This is the deliberate trade-off the audit called for —
+   * the bulk viewport fill rides the coalescer; per-tile cancellation precision
+   * is retained on the single-tile `startTileLoad` path.
+   *
+   * Returns the number of tiles actually started.
+   */
+  private startTileBatch(tileIds: TileId[]): number {
+    const batchFn = this.options.getTileDataBatch;
+    if (!batchFn) return 0;
+
+    // Filter to loadable tiles, marking each as loading under ONE shared abort.
+    const abortController = new AbortController();
+    const started: { id: TileId; key: string; header: SpatiotemporalTileHeader }[] = [];
+    for (const tileId of tileIds) {
+      const key = this.tileIdToKey(tileId);
+      const header = this.tiles.get(key);
+      if (!header || header.isLoading || header.isLoaded || header.isCancelled) {
+        continue;
+      }
+      header.isLoading = true;
+      header.abortController = abortController;
+      this.activeRequests.add(key);
+      started.push({ id: tileId, key, header });
+    }
+    if (started.length === 0) return 0;
+
+    batchFn(
+      started.map((s) => s.id),
+      abortController.signal,
+    )
+      .then((tiles) => {
+        for (let i = 0; i < started.length; i++) {
+          const { header } = started[i];
+          const tile = tiles[i];
+          if (!header.isCancelled && tile) {
+            header.tile = tile;
+            header.isLoaded = true;
+            header.byteSize = estimateTileSize(tile);
+            this.currentCacheBytes += header.byteSize;
+            this.loadedTileCount++;
+            this.options.onTileLoad?.(tile);
+          }
+        }
+        this.frameNumber++;
+      })
+      .catch((error) => {
+        if (error.name !== 'AbortError') {
+          for (const { id } of started) this.options.onTileError?.(error, id);
+        }
+      })
+      .finally(() => {
+        for (const { key, header } of started) {
+          header.isLoading = false;
+          header.abortController = undefined;
+          this.activeRequests.delete(key);
+        }
+        this.processRequestQueue();
+      });
+
+    return started.length;
+  }
+
   /**
    * Cancel in-flight requests for tiles that are no longer needed
    * Called when viewport/time changes significantly

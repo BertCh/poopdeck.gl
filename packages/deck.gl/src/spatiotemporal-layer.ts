@@ -685,7 +685,11 @@ export class SpatioTemporalLayer<
       getAvailableTiles: (bounds, zoom, timeRange) =>
         archive.getTileIdsInBounds(bounds, zoom, timeRange),
       getAvailableSummaryTiles,
-      getTileData: (tileId) => archive.getTile(tileId),
+      getTileData: (tileId, signal) => archive.getTile(tileId, { signal }),
+      // Route the bulk viewport/prefetch fill through the range coalescer so
+      // a viewport-full of Hilbert-adjacent tiles collapses into a handful of
+      // HTTP Range requests instead of one request per tile.
+      getTileDataBatch: (tileIds, signal) => archive.getTiles(tileIds, { signal }),
       onTileLoad: (tile) => {
         if (DEBUG) console.log('[STL] Tile loaded:', tile.id);
         this.props.onTileLoad?.(tile);
