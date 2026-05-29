@@ -50,6 +50,15 @@ export function collectTransferables(tile: Tile): Transferable[] {
     addBuffer(f.startIndices);
     addBuffer(f.vertexTimestamps);
     addBuffer(f.globalFeatureIds);
+    // Pre-tessellated polygon meshes (`--pre-tessellate`) and H3 summary
+    // tiles carry their largest buffers here: `triangles` (3 indices per
+    // triangle, frequently larger than `positions`) and the 64-bit feature
+    // ids (H3 cell indices). Omitting them silently structured-CLONE-copies
+    // the biggest buffer in the tile across the worker boundary, eating the
+    // pre-tessellation decode win and the summary-tier id payload.
+    addBuffer(f.triangles);
+    addBuffer(f.triangleOffsets);
+    addBuffer(f.featureIds64);
     if (f.numericProps) {
       for (const arr of Object.values(f.numericProps)) addBuffer(arr);
     }

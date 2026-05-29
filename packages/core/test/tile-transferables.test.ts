@@ -137,6 +137,22 @@ describe('collectTransferables (worker tile-transfer helper)', () => {
   // The helper now skips non-typed-array entries instead of crashing.
   // ---------------------------------------------------------------------------
 
+  it('transfers pre-tessellated mesh + 64-bit id buffers (polygon/summary tiles)', () => {
+    // triangles is often the LARGEST buffer in a --pre-tessellate polygon
+    // tile, and featureIds64 carries H3 cell indices on summary tiles. These
+    // were previously omitted, silently structured-clone-COPYing the biggest
+    // buffers across the worker boundary and eating the decode-speed win.
+    const tile = makeMinimalTile();
+    const f = tile.layers[0].features;
+    f.triangles = new Uint32Array([0, 1, 2, 0, 2, 3]);
+    f.triangleOffsets = new Uint32Array([0, 6]);
+    f.featureIds64 = new BigUint64Array([123n, 456n]);
+    const transferables = collectTransferables(tile);
+    expect(transferables).toContain(f.triangles.buffer);
+    expect(transferables).toContain(f.triangleOffsets.buffer);
+    expect(transferables).toContain(f.featureIds64.buffer);
+  });
+
   it('does not throw when numericProps contains an undefined entry (heatmap regression)', () => {
     const tile = makeMinimalTile();
     const f = tile.layers[0].features;

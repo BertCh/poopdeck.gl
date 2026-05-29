@@ -106,6 +106,12 @@ export function estimateTileSize(tile: Tile): number {
     if (f.startIndices) size += f.startIndices.byteLength;
     if (f.vertexTimestamps) size += f.vertexTimestamps.byteLength;
     if (f.globalFeatureIds) size += f.globalFeatureIds.byteLength;
+    // Pre-tessellated meshes and 64-bit feature ids are often the largest
+    // buffers in a tile; counting them keeps the byte-budget eviction honest
+    // (and matches collectTransferables, which transfers these zero-copy).
+    if (f.triangles) size += f.triangles.byteLength;
+    if (f.triangleOffsets) size += f.triangleOffsets.byteLength;
+    if (f.featureIds64) size += f.featureIds64.byteLength;
     for (const arr of Object.values(f.numericProps)) size += arr.byteLength;
     for (const { indices, categories } of Object.values(f.categoricalProps)) {
       size += indices.byteLength;
@@ -514,6 +520,20 @@ export class STTArchive {
     entry: TileEntry,
     compressed: ArrayBuffer,
   ): Promise<Tile> {
+    // Fail fast on shared-dictionary archives: the browser zstd path (fzstd)
+    // has no dictionary API, so a tile compressed against a training
+    // dictionary would silently decode to garbage. Inspecting the
+    // header/metadata/dictionary slot is still allowed (see getDictionary);
+    // only actual tile decode is refused. No producer emits one today — the
+    // Rust writer only calls the dictionary-less `finalize`.
+    const header = await this.getHeader();
+    if (header.dictionaryLength > 0) {
+      throw new Error(
+        'STT archive ships a shared zstd dictionary, which this reader cannot ' +
+          'yet decode (fzstd has no dictionary API). Rebuild the archive without ' +
+          'a dictionary, or upgrade to a dictionary-capable zstd decoder.',
+      );
+    }
     return this.getDecoder().decode({
       id,
       timeRange: { start: entry.timeStart, end: entry.timeEnd },
