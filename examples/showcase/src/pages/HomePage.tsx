@@ -10,9 +10,8 @@ const MAPBOX_ACCESS_TOKEN =
   (import.meta as any).env?.VITE_MAPBOX_TOKEN ||
   "pk.eyJ1IjoicmdjZ2VvZyIsImEiOiJjajBuNG1sMjUwMDFlMzNxcWY0M2RqMHI3In0.XfM0BMSqZqjRDcz-oJuadw";
 
-// Speed multiplier for hero section. VAT renders head-only dots and scales
-// fluidly to the full trip set, so we run hot — 5× the prior 0.35 setting —
-// to make the swarm feel alive.
+// Speed multiplier for the hero animation. VAT renders head-only dots, so it
+// stays smooth even at high playback rates.
 const HERO_SPEED_MULTIPLIER = 10;
 
 const HomePage: React.FC = () => {
@@ -85,31 +84,27 @@ const HomePage: React.FC = () => {
 
   const features = [
     {
-      icon: "🗺️",
       title: "deck.gl Layers",
       description:
         "AnimatedPointLayer, AnimatedPathLayer, AnimatedTripsLayer, and more for time-series geodata.",
       link: "/layers",
     },
     {
-      icon: "📦",
       title: ".stt File Format",
       description:
         "A single-file archive containing tiles, indices, and metadata for efficient streaming.",
       link: "/format",
     },
     {
-      icon: "🕐",
       title: "TimeController",
       description:
         "Utility class for synchronized animation playback across layers.",
       link: "/layers",
     },
     {
-      icon: "🔧",
       title: "CLI Tools",
       description:
-        "Rust-powered tile generation from GeoParquet — streaming builds, H3 summary tiers, zstd-trained dictionaries.",
+        "Rust tile generation from GeoParquet: streaming builds, H3 summary tiers, zstd dictionaries.",
       link: "/format",
     },
   ];
@@ -131,7 +126,7 @@ const HomePage: React.FC = () => {
               className="font-display text-3xl lg:text-4xl font-bold mb-4"
               style={{ color: "#FFFFFF", lineHeight: 1.2 }}
             >
-              <span className="gradient-text">SpatioTemporal Tiles</span>
+              SpatioTemporal Tiles
             </h1>
 
             <p
@@ -273,7 +268,6 @@ const HomePage: React.FC = () => {
                 e.currentTarget.style.borderColor = "#3A414C";
               }}
             >
-              <div className="text-2xl mb-2">{feature.icon}</div>
               <h3
                 className="text-sm font-medium mb-1 group-hover:text-[#1FBAD6] transition-colors"
                 style={{ color: "#FFFFFF" }}

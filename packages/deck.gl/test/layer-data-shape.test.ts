@@ -641,7 +641,12 @@ describe('AnimatedTripsLayer per-tile sublayer architecture (v3)', () => {
     expect((layer as any).sublayerCache.size).toBe(1);
   });
 
-  it('hands trip categorical color indices to the GPU (no per-feature RGBA buffer)', () => {
+  it('expands trip categorical color to a per-vertex getColor buffer (PathLayer segment instances)', () => {
+    // PathLayer instances are SEGMENTS, not features, so the GPU per-feature
+    // `instanceCategoryIndex` path (used by the point layer) under-sizes the
+    // instanced buffer and throws "vertex buffer is not big enough". The trips
+    // layer resolves the color on the CPU and expands it per-vertex, which
+    // PathLayer's tessellator maps onto its segment instances.
     const layer = makeLayer({
       tripColor: 'kind',
       colorPalette: [
@@ -651,7 +656,8 @@ describe('AnimatedTripsLayer per-tile sublayer architecture (v3)', () => {
       ],
     });
     const tile = bigPathTile(8, 4);
-    tile.layers[0].features.categoricalProps['kind'] = {
+    const binary = tile.layers[0].features;
+    binary.categoricalProps['kind'] = {
       indices: new Uint16Array([0, 1, 2, 1, 0, 2, 1, 0]),
       categories: ['a', 'b', 'c'],
     };
@@ -659,10 +665,27 @@ describe('AnimatedTripsLayer per-tile sublayer architecture (v3)', () => {
       (layer as any).prepareTile(tile, tile.layers[0]),
     );
     const attrs = built.props.data.attributes;
-    expect(attrs.getColor).toBeUndefined();
-    expect(attrs.instanceCategoryIndex).toBeDefined();
-    expect(attrs.instanceCategoryIndex.value).toBeInstanceOf(Float32Array);
-    expect(built.props.useCategoryColor).toBe(true);
+
+    // No GPU per-feature index, no useCategoryColor — color rides getColor.
+    expect(attrs.instanceCategoryIndex).toBeUndefined();
+    expect(built.props.useCategoryColor).toBe(false);
+
+    // getColor is one RGBA per VERTEX (matches getPath / instanceVertexTime
+    // granularity), so the draw call's instanced buffer is correctly sized.
+    expect(attrs.getColor).toBeDefined();
+    expect(attrs.getColor.value).toBeInstanceOf(Uint8Array);
+    expect(attrs.getColor.size).toBe(4);
+    expect(attrs.getColor.normalized).toBe(true);
+    const totalVerts = binary.startIndices[binary.featureCount];
+    expect(attrs.getColor.value.length).toBe(totalVerts * 4);
+
+    // Feature 0 (category index 0 → [10,20,30]) colors all its vertices…
+    const col = attrs.getColor.value;
+    const v0 = binary.startIndices[0] * 4;
+    expect([col[v0], col[v0 + 1], col[v0 + 2], col[v0 + 3]]).toEqual([10, 20, 30, 255]);
+    // …and feature 2 (category index 2 → [70,80,90]) gets the third palette entry.
+    const v2 = binary.startIndices[2] * 4;
+    expect([col[v2], col[v2 + 1], col[v2 + 2]]).toEqual([70, 80, 90]);
   });
 
   it('declares dataComparator that skips deck.gl prop diff on identical references', () => {

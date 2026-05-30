@@ -86,6 +86,20 @@ export type TimeFilterExtensionProps<DataT = unknown> = {
    */
   wakeTailScale?: number;
   /**
+   * Cumulative ("draw and persist") mode. When true, takes precedence over
+   * window/wake/trail: a feature becomes visible once `instanceStartTime <=
+   * currentTime` and then stays visible for the rest of playback (it is never
+   * hidden as the play head advances). Ideal for "watch it get built" datasets
+   * — e.g. OSM node creations inking a city in over time. `fadeInDuration`
+   * still applies as an "appear" ramp; `instanceEndTime` is ignored.
+   *
+   * The host layer must keep already-revealed tiles resident — set the tile
+   * loader's window wide enough to cover the played-through range (the shader
+   * filter does the progressive reveal, not the loader).
+   * @default false
+   */
+  cumulative?: boolean;
+  /**
    * Accessor returning a feature's start time.
    * @default 0
    */
@@ -115,6 +129,8 @@ type TimeFilterUniformProps = {
   trailFade: number;
   wakeLength: number;
   wakeTailScale: number;
+  /** 1.0 = cumulative "draw and persist" mode; 0.0 = off. */
+  cumulative: number;
 };
 
 // Uniform block for GLSL 3.0 (WebGL2)
@@ -128,6 +144,7 @@ uniform timeFilterUniforms {
   float trailFade;
   float wakeLength;
   float wakeTailScale;
+  float cumulative;
 } timeFilter;
 `;
 
@@ -144,7 +161,8 @@ const timeFilterUniforms = {
     trailLength: 'f32',
     trailFade: 'f32',
     wakeLength: 'f32',
-    wakeTailScale: 'f32'
+    wakeTailScale: 'f32',
+    cumulative: 'f32'
   }
 };
 
@@ -159,6 +177,7 @@ const defaultProps: DefaultProps<TimeFilterExtensionProps> = {
   fadeTrail: true,
   wakeLength: 0,
   wakeTailScale: 0.15,
+  cumulative: false,
   getInstanceStartTime: { type: 'accessor', value: 0 },
   getInstanceEndTime: { type: 'accessor', value: Infinity },
   // Constant default: window-mode layers never set a per-vertex time, but the
@@ -271,7 +290,17 @@ export class TimeFilterExtension extends LayerExtension {
         'vs:#main-start': `
           vTimeAlpha = 1.0;
 
-          if (timeFilter.wakeLength > 0.0) {
+          if (timeFilter.cumulative > 0.0) {
+            // "Draw and persist": visible once created, then stays forever.
+            if (instanceStartTime > timeFilter.currentTime) {
+              vTimeAlpha = 0.0;
+            } else if (timeFilter.fadeIn > 0.0) {
+              float age = timeFilter.currentTime - instanceStartTime;
+              if (age < timeFilter.fadeIn) {
+                vTimeAlpha = age / timeFilter.fadeIn;
+              }
+            }
+          } else if (timeFilter.wakeLength > 0.0) {
             float age = timeFilter.currentTime - instanceStartTime;
             if (age < 0.0 || age > timeFilter.wakeLength) {
               vTimeAlpha = 0.0;
@@ -345,11 +374,14 @@ export class TimeFilterExtension extends LayerExtension {
   ): void {
     const attributeManager = this.getAttributeManager();
     if (!attributeManager) return;
-    // Two attribute slots total: one vec2 for window-mode times, one float
-    // for trail-mode per-vertex times. Down from the previous three. See
-    // `getShaders` for the rationale tied to PathLayer's fp64 attribute
-    // budget. The window/trail branch in the shader picks which one to use
-    // at runtime via the `trailLength` uniform.
+    // Three instanced float attributes, ALWAYS registered regardless of mode:
+    // instanceVertexTime (trail) + instanceStartTime/instanceEndTime (window).
+    // The shader's wake/trail/window branch picks which to read at draw time
+    // via the trailLength/wakeLength uniforms. Mode-specific registration
+    // (dropping the unused pair to reclaim slots) was tried and tanked FPS on
+    // the per-tile sublayers — see the TimeFilterMode docstring above. What
+    // actually keeps the fp64-position + time + category combo under WebGL2's
+    // 16-attribute floor is NoPickingPathLayer freeing the picking slot.
     attributeManager.addInstanced({
       instanceVertexTime: {
         size: 1,
@@ -399,7 +431,8 @@ export class TimeFilterExtension extends LayerExtension {
       trailLength = 0,
       fadeTrail = true,
       wakeLength = 0,
-      wakeTailScale = 0.15
+      wakeTailScale = 0.15,
+      cumulative = false
     } = this.props;
 
     // PERFORMANCE: Use getTime() if provided for dynamic time updates
@@ -413,7 +446,10 @@ export class TimeFilterExtension extends LayerExtension {
 
     // Guard the f32 precision contract: a relative time past 2^24 ms loses
     // millisecond precision in the shader. Warn once if `timeOffset` is wrong.
-    if (Math.abs(relativeTime) > MAX_RELATIVE_TIME_MS) {
+    // Cumulative mode intentionally spans years (the reveal steps by days, so
+    // ~tens-of-seconds quantization at that magnitude is irrelevant) — skip the
+    // warning there to avoid a misleading console message.
+    if (!cumulative && Math.abs(relativeTime) > MAX_RELATIVE_TIME_MS) {
       warnOnce(
         'TimeFilterExtension:precision',
         `[TimeFilterExtension] relative time ${relativeTime} exceeds ` +
@@ -430,7 +466,8 @@ export class TimeFilterExtension extends LayerExtension {
       trailLength,
       trailFade: fadeTrail ? 1.0 : 0.0,
       wakeLength,
-      wakeTailScale
+      wakeTailScale,
+      cumulative: cumulative ? 1.0 : 0.0
     };
 
     this.setShaderModuleProps({ timeFilter: timeFilterProps });

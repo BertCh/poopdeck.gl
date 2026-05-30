@@ -70,7 +70,6 @@ const Sidebar: React.FC<SidebarProps> = ({ onNavigate }) => {
               border: isActive ? '1px solid rgba(31, 186, 214, 0.3)' : '1px solid transparent',
             })}
           >
-            <span>⌂</span>
             <span>Home</span>
           </NavLink>
         </div>
@@ -78,7 +77,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onNavigate }) => {
         {/* Documentation Section */}
         <div className="mb-3">
           <h2 className="px-4 py-1.5 text-[10px] font-semibold uppercase tracking-wider" style={{ color: '#6A7485' }}>
-            <span style={{ color: '#1FBAD6' }}>📖</span> Documentation
+            Documentation
           </h2>
           <div className="px-2">
             <NavLink

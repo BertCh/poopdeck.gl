@@ -208,6 +208,7 @@ Subcommands:
 | `nyc-rideshare` | NYC TLC trips + OSRM routing |
 | `nyc-taxi-points` | derived from `nyc-rideshare` via polyline interpolation |
 | `satellites` | CelesTrak TLE + SGP4 propagation |
+| `osm-edits` | OSM editing history — `--source nodes` (first-version node creations from a full-history `.osh.pbf`) or `--source changesets` (bbox-centroids from `changesets-latest.osm.bz2`), scoped to a metro `--bounds`. © OpenStreetMap contributors (ODbL). |
 
 Each subcommand has its own flags — run `stt-generate <subcommand> --help`
 for the per-dataset options. See the

@@ -93,6 +93,15 @@ describe('GeoArrow interop', () => {
     expect(geomField!.metadata.get('ARROW:extension:name')).toBe(
       tile!.layers[0].geometryExtensionName,
     );
+    // The CRS travels in the sibling `ARROW:extension:metadata` key so a
+    // consumer (GDAL/GeoPandas/lonboard/QGIS) sees WGS84 lon/lat (OGC:CRS84)
+    // rather than an unknown CRS. The Rust writer pins it on every geometry
+    // field; without it those tools fall back to "unknown".
+    const extMeta = geomField!.metadata.get('ARROW:extension:metadata');
+    expect(extMeta, 'geometry field must carry ARROW:extension:metadata').toBeDefined();
+    const crs = JSON.parse(extMeta!);
+    expect(crs.crs).toBe('OGC:CRS84');
+    expect(crs.crs_type).toBe('authority_code');
     // For a Point fixture, GeoArrow says the geometry column is
     // FixedSizeList<Float64, 2> (interleaved xy). The Rust writer uses
     // this exact shape; the TS reader must not have rewritten it.

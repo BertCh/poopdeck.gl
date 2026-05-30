@@ -166,7 +166,8 @@ const FormatPage: React.FC = () => {
                 Optional pre-aggregated low-zoom tier — H3 hex bins with
                 user-defined aggregates (<code>magnitude:mean</code>,{" "}
                 <code>count</code>, …). Readers dispatch between raw and summary
-                tiers automatically, unlocking 100M+ scale point datasets.
+                tiers automatically, which keeps low-zoom views fast on 100M+
+                point datasets.
               </p>
             </div>
 

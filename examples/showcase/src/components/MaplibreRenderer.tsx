@@ -36,6 +36,8 @@ export interface MaplibreRendererProps {
   basemapStyle?: string | maplibregl.StyleSpecification;
   /** Optional className applied to the outer container. */
   className?: string;
+  /** Map projection. Defaults to mercator; pass 'globe' for the globe view. */
+  projection?: "mercator" | "globe";
 }
 
 const MaplibreRenderer: React.FC<MaplibreRendererProps> = ({
@@ -43,6 +45,7 @@ const MaplibreRenderer: React.FC<MaplibreRendererProps> = ({
   timeController,
   basemapStyle = DEFAULT_BASEMAP_STYLE,
   className,
+  projection = "mercator",
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
@@ -71,6 +74,15 @@ const MaplibreRenderer: React.FC<MaplibreRendererProps> = ({
       attributionControl: true,
     });
     mapRef.current = map;
+    // setProjection lives on the runtime map, not the constructor — apply on
+    // load so the style is ready, and reapply when the prop changes below.
+    map.on("style.load", () => {
+      try {
+        (map as any).setProjection?.({ type: projection });
+      } catch {
+        // older maplibre builds without setProjection: silently fall back to mercator
+      }
+    });
 
     const sttLayer = makeSttLayer(dataset, initialTime);
     layerRef.current = sttLayer;
@@ -100,6 +112,19 @@ const MaplibreRenderer: React.FC<MaplibreRendererProps> = ({
       timeController.off("tick", onTick);
     };
   }, [timeController]);
+
+  // Live projection swap. Separated from the mount effect so flipping
+  // mercator ↔ globe doesn't tear down the map (which would drop tiles
+  // and the STT layer's GPU resources).
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    try {
+      (map as any).setProjection?.({ type: projection });
+    } catch {
+      // setProjection unsupported in this maplibre build — no-op.
+    }
+  }, [projection]);
 
   return (
     <div ref={containerRef} className={className ?? "w-full h-full"} />

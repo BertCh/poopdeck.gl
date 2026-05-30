@@ -23,7 +23,7 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist tsconfig.tsbuildinfo"
   },
   "dependencies": {
     "@stt/core": "workspace:*",
@@ -32,6 +32,7 @@
   "peerDependencies": {
     "@deck.gl/aggregation-layers": "^9.3.0",
     "@deck.gl/core": "^9.3.0",
+    "@deck.gl/extensions": "^9.3.0",
     "@deck.gl/geo-layers": "^9.3.0",
     "@deck.gl/layers": "^9.3.0",
     "@luma.gl/core": "^9.3.0",
@@ -40,6 +41,7 @@
   "devDependencies": {
     "@deck.gl/aggregation-layers": "^9.3.2",
     "@deck.gl/core": "^9.3.2",
+    "@deck.gl/extensions": "^9.3.2",
     "@deck.gl/geo-layers": "^9.3.2",
     "@deck.gl/layers": "^9.3.2",
     "@luma.gl/core": "^9.3.0",

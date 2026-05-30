@@ -31,7 +31,7 @@
  * tile-prepare time, cached on the PreparedTile.
  */
 
-import { Layer, project32, picking } from '@deck.gl/core';
+import { Layer, project32 } from '@deck.gl/core';
 import type {
   Color,
   DefaultProps,
@@ -115,9 +115,10 @@ const DEFAULT_TRAIL_SAMPLES = 16;
 interface PreparedTile {
   tileKey: string;
   /**
-   * 2D-packed RGBA32F texture. Trips are tiled `tripsPerRow` per texture
-   * row, each occupying `timeSlots` consecutive texels. So a trip's texel
-   * lives at `(row = floor(i / tripsPerRow), col = (i % tripsPerRow) * slots + k)`.
+   * 2D-packed RG32F texture (2 floats — lon, lat — per texel). Trips are tiled
+   * `tripsPerRow` per texture row, each occupying `timeSlots` consecutive
+   * texels. So a trip's texel lives at
+   * `(row = floor(i / tripsPerRow), col = (i % tripsPerRow) * slots + k)`.
    * This lets a single 8192×8192 texture hold up to ~1M trips at slots=64,
    * vs the old 1-row-per-trip layout that capped out at 8192 trips.
    */
@@ -216,11 +217,12 @@ function resamplePositions(
         lat = positions[pa + 1] ?? 0;
       }
 
-      const off = (rowBase + texColBase + k) * 4;
+      // RG32F: two floats per texel (lon, lat). The previous RGBA layout left
+      // B/A permanently zero — wasted host alloc, VRAM, and texture-fetch
+      // bandwidth. A future fp64-low / altitude pass would re-widen this.
+      const off = (rowBase + texColBase + k) * 2;
       out[off] = lon;
       out[off + 1] = lat;
-      out[off + 2] = 0; // reserved (altitude / 64-low half in a future pass)
-      out[off + 3] = 0;
     }
   }
 }
@@ -407,8 +409,15 @@ uniform sampler2D vat_positionsTexture;
  * sublayer construction — deck.gl keys its shader-pipeline cache on the
  * modules array identity, and rebuilding the list inside the getter would
  * spawn a fresh cache entry per tile.
+ *
+ * Deliberately OMITS the `picking` module. Both VAT sublayers are always
+ * `pickable: false` and neither shader references any `picking_*` symbol, so
+ * bundling picking only added the `instancePickingColors` attribute + picking
+ * varyings to every model for nothing (the exact overhead NoPickingPathLayer
+ * exists to strip on the PathLayer path). Mirrors the sibling
+ * `HeatmapSplatSublayer`, which is also a bare `Layer` with `[project32, …]`.
  */
-const VAT_SHADER_MODULES = [project32, picking, vatUniformsModule];
+const VAT_SHADER_MODULES = [project32, vatUniformsModule];
 
 class VatTripsSublayer extends Layer<VatTripsSublayerProps> {
   static layerName = 'VatTripsSublayer';
@@ -547,7 +556,7 @@ class VatTripsSublayer extends Layer<VatTripsSublayerProps> {
     const tex: Texture = device.createTexture({
       width,
       height,
-      format: 'rgba32float',
+      format: 'rg32float',
       // Nearest filtering: we lerp manually in the VS so we don't need
       // OES_texture_float_linear (which isn't on every WebGL2 backend).
       sampler: {
@@ -557,8 +566,8 @@ class VatTripsSublayer extends Layer<VatTripsSublayerProps> {
         addressModeV: 'clamp-to-edge',
       },
     });
-    // luma.gl expects a typed-array view of the texel bytes. RGBA32F is
-    // 4 channels × 4 bytes; copyImageData accepts the Float32Array directly.
+    // luma.gl expects a typed-array view of the texel bytes. RG32F is
+    // 2 channels × 4 bytes; copyImageData accepts the Float32Array directly.
     tex.copyImageData({ data: this.props.positionsTextureData });
     this.setState({ positionsTexture: tex });
   }
@@ -853,7 +862,7 @@ class VatTripsTrailSublayer extends Layer<VatTripsTrailSublayerProps> {
     const tex: Texture = device.createTexture({
       width,
       height,
-      format: 'rgba32float',
+      format: 'rg32float',
       sampler: {
         minFilter: 'nearest',
         magFilter: 'nearest',
@@ -896,6 +905,15 @@ export class VatTripsLayer extends SpatioTemporalLayer<VatTripsLayerProps> {
     }
   >();
   private lastStyleKey: string = '';
+  /**
+   * Tile-array identity from the previous render. When the parent layer hands
+   * back the SAME `state.tiles` reference (no setState this render cycle) the
+   * live tile set is unchanged by construction, so we skip the O(tiles+cache)
+   * prune walks entirely. Mirrors `AnimatedTripsLayer.lastTilesRef` — VAT was
+   * the only animated layer missing this guard, so prop-only re-renders during
+   * playback paid the full prune scan every frame.
+   */
+  private lastTilesRef: Tile[] | null = null;
   private readonly boundGetTime: () => number = () => this.getCurrentTime();
 
   finalizeState(context: LayerContext): void {
@@ -931,18 +949,27 @@ export class VatTripsLayer extends SpatioTemporalLayer<VatTripsLayerProps> {
   renderLayers(): DeckLayer[] {
     const t0 = performance.now();
     const { tiles } = this.state;
-    if (!tiles || tiles.length === 0) return [];
+    if (!tiles || tiles.length === 0) {
+      this.lastTilesRef = null;
+      return [];
+    }
 
-    // Prune caches against the live tile set.
-    const live = new Set<string>();
-    for (const tile of tiles) {
-      for (const tileLayer of tile.layers) live.add(makeTileKey(tile, tileLayer));
-    }
-    for (const key of this.preparedTileCache.keys()) {
-      if (!live.has(key)) this.preparedTileCache.delete(key);
-    }
-    for (const key of this.sublayerCache.keys()) {
-      if (!live.has(key)) this.sublayerCache.delete(key);
+    // Prune caches against the live tile set — but only when the tile array
+    // reference actually changed. On a prop-only re-render (e.g. a style tweak
+    // mid-playback) the parent returns the same `tiles` ref and the live set is
+    // identical by construction, so the prune scan is pure waste.
+    if (this.lastTilesRef !== tiles) {
+      const live = new Set<string>();
+      for (const tile of tiles) {
+        for (const tileLayer of tile.layers) live.add(makeTileKey(tile, tileLayer));
+      }
+      for (const key of this.preparedTileCache.keys()) {
+        if (!live.has(key)) this.preparedTileCache.delete(key);
+      }
+      for (const key of this.sublayerCache.keys()) {
+        if (!live.has(key)) this.sublayerCache.delete(key);
+      }
+      this.lastTilesRef = tiles;
     }
 
     const styleKey = this.computeStyleKey();
@@ -1022,7 +1049,8 @@ export class VatTripsLayer extends SpatioTemporalLayer<VatTripsLayerProps> {
     const textureWidth = Math.min(numTrips, tripsPerRow) * slots;
     const textureHeight = Math.ceil(numTrips / tripsPerRow);
 
-    const positionsData = new Float32Array(textureWidth * textureHeight * 4);
+    // RG32F packing: 2 floats (lon, lat) per texel.
+    const positionsData = new Float32Array(textureWidth * textureHeight * 2);
     resamplePositions(binary, slots, tripsPerRow, textureWidth, numTrips, positionsData);
 
     // Per-instance attribute buffers. We allocate a fresh tripRow array

@@ -40,8 +40,7 @@ cached under `data/`.
 | `nyc-taxi-od-summary`        | h3 summary     | server-aggregated H3 hex bins |
 | `ship-traffic`               | point          | NOAA Marine Cadastre AIS |
 | `wildfires`                  | polygon        | NIFC perimeters (1000+ acres) |
-| `satellites`                 | point          | CelesTrak TLE + SGP4 propagation |
-| `satellite-trips-flat`       | trips          | satellites rendered as trip trails |
+| `satellites`                 | trips          | CelesTrak TLE + SGP4 propagation; toggle globe/flat at top-left |
 
 ## Building Locally
 

@@ -75,6 +75,14 @@ export interface Dataset {
   description: string;
   url: string;
   type: DatasetType;
+  /**
+   * Tile-tier dispatch for archives built with `--summary-tier`. `'auto'`
+   * (default) swaps to the H3 summary overview at low zoom; `'raw'` always
+   * uses raw features (use this when the summary overlay would obscure the
+   * point-level story, e.g. the cumulative "draws itself" demo); `'summary'`
+   * always uses the aggregated tier. No effect on archives without a summary tier.
+   */
+  tier?: 'auto' | 'summary' | 'raw';
   timeRange: {
     start: number;
     end: number;
@@ -150,6 +158,22 @@ export interface Dataset {
   /** Tail-edge size multiplier for wake mode (0..1). Defaults to 0.15. */
   wakeTailScale?: number;
 
+  /**
+   * Cumulative "draw and persist" mode for `type: 'point'`. When true, each
+   * point appears at its start time and stays visible for the rest of playback
+   * — the dataset "draws itself" (e.g. OSM node creations inking a city in).
+   * DemoPage widens the tile loader's window to keep revealed tiles resident;
+   * the GPU does the progressive reveal. Pair with `fadeInDuration` for an
+   * "ink appearing" ramp.
+   */
+  cumulative?: boolean;
+
+  /**
+   * Fade-in duration in SIM milliseconds for appearing points. In `cumulative`
+   * mode this is the "ink appearing" ramp applied as each point is revealed.
+   */
+  fadeInDuration?: number;
+
   /** Render a stroke around each point. */
   stroked?: boolean;
 
@@ -190,6 +214,13 @@ export interface Dataset {
   vatTripWidth?: number;
   /** Fade the trail's tail to transparent (vs constant alpha). */
   vatFadeTrail?: boolean;
+
+  /**
+   * Layer opacity (0-1). Defaults to 0.8. Lower values let dense, overlapping
+   * geometry (e.g. thousands of satellite trails) read as a density glow
+   * instead of saturating into a solid block.
+   */
+  opacity?: number;
 
   // ─── trips-layer styling (type: 'trips') ───────────────────────────────
   /** Constant trip color, RGBA 0-255. */

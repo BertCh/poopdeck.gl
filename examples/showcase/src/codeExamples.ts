@@ -208,7 +208,6 @@ const codeExamples: Record<DatasetType, string> = {
 
 const datasetSpecificExamples: Record<string, string> = {
   'satellites': satelliteGlobeExample,
-  'satellite-trips-flat': satelliteGlobeExample,
 };
 
 export function getCodeExample(type: DatasetType, datasetId: string): string {

@@ -64,6 +64,14 @@ const DemoPage: React.FC = () => {
   const [bottomPanelExpanded, setBottomPanelExpanded] = useState(false);
   const [showTileBoundaries, setShowTileBoundaries] = useState(false);
   const [renderer, setRenderer] = useState<RendererKind>("deck");
+  // null = follow dataset default; 'globe'/'mercator' = user override. Reset
+  // to null on dataset change so each demo starts from its tuned default.
+  const [projectionOverride, setProjectionOverride] = useState<
+    "globe" | "mercator" | null
+  >(null);
+  useEffect(() => {
+    setProjectionOverride(null);
+  }, [datasetId]);
 
   // Active option for summary-tier weight toggles (e.g. pickup vs dropoff).
   // Reset to the dataset's first option whenever the dataset changes.
@@ -172,13 +180,38 @@ const DemoPage: React.FC = () => {
     [timeController, baseAnimationSpeed],
   );
 
+  // Resolved projection: the per-dataset default unless the user has flipped
+  // the toggle (which only renders for global-scale datasets — see
+  // isGlobalScale below).
+  const useGlobe =
+    projectionOverride === "globe" ||
+    (projectionOverride === null && (selectedDataset?.useGlobe ?? false));
+  // Heuristic for "global-scale": the dataset already opts into globe-friendly
+  // tile loading, OR it opens at a continental-or-wider zoom. Cuts city demos
+  // (zoom 10+) cleanly without per-dataset metadata.
+  const isGlobalScale = !!(
+    selectedDataset &&
+    (selectedDataset.useGlobe ||
+      selectedDataset.useGlobalBounds ||
+      selectedDataset.initialViewState.zoom <= 4.5)
+  );
+
   const layers = useMemo(() => {
     if (!selectedDataset) return [];
     const datasetDuration =
       selectedDataset.timeRange.end - selectedDataset.timeRange.start;
     const playbackSpeed =
       datasetDuration / (selectedDataset.targetPlaybackSeconds || 60) / 1000;
-    const timeWindow = selectedDataset.timeWindow || 86400000;
+    // Cumulative ("draw and persist") datasets reveal progressively in the
+    // shader, so the tile loader must keep every played-through bucket
+    // resident. A symmetric window of 2× the dataset duration guarantees the
+    // loader's [t-w/2, t+w/2] always covers the whole [start, end] range — at
+    // metro/viewport scale this loads the visible city's tiles once and retains
+    // them. Non-cumulative datasets keep their per-dataset rolling window.
+    const isCumulative = !!selectedDataset.cumulative;
+    const timeWindow = isCumulative
+      ? datasetDuration * 2
+      : selectedDataset.timeWindow || 86400000;
 
     // Prefetch budget keyed to REAL-time playback, not sim-time. We want a
     // few seconds of real-time buffer ahead of the play head, regardless of
@@ -210,7 +243,10 @@ const DemoPage: React.FC = () => {
       timeController,
       timeWindow,
       timeRange: selectedDataset.timeRange,
-      opacity: 0.8,
+      // Tile-tier dispatch. Defaults to 'auto' (summary overview at low zoom);
+      // datasets can force 'raw' when the summary overlay obscures the story.
+      tier: selectedDataset.tier,
+      opacity: selectedDataset.opacity ?? 0.8,
       pickable: false,
       enablePrefetch: true,
       prefetchAhead,
@@ -242,6 +278,11 @@ const DemoPage: React.FC = () => {
             lineWidthMinPixels: selectedDataset.lineWidthMinPixels,
             wakeLength: selectedDataset.wakeLength,
             wakeTailScale: selectedDataset.wakeTailScale,
+            // Cumulative "draw the map" mode (e.g. OSM node creations): points
+            // appear at their creation time and persist. fadeInDuration (sim-ms)
+            // doubles as the "ink appearing" ramp.
+            cumulative: selectedDataset.cumulative,
+            fadeInDuration: selectedDataset.fadeInDuration,
             use3D: selectedDataset.use3D,
             elevationProperty: selectedDataset.elevationProperty,
             elevationScale: selectedDataset.elevationScale,
@@ -289,12 +330,24 @@ const DemoPage: React.FC = () => {
         const tripsLayer = new AnimatedTripsLayer({
           ...baseProps,
           // useGlobe / useGlobalBounds / zoomOverride let a dataset opt into
-          // a global tile load without bespoke per-id branching here.
+          // a global tile load without bespoke per-id branching here. Globe
+          // mode forces global bounds because GlobeView's unproject() at low
+          // zoom returns degenerate bounds — without it the tile loader sees
+          // a tiny visible box and never requests the polar/back-side tiles.
           ...(selectedDataset.zoomOverride !== undefined && {
             zoomOverride: selectedDataset.zoomOverride,
           }),
-          ...(selectedDataset.useGlobalBounds && { useGlobalBounds: true }),
-          tripColor: selectedDataset.tripColor ?? [31, 186, 214, 255],
+          ...((selectedDataset.useGlobalBounds || useGlobe) && {
+            useGlobalBounds: true,
+          }),
+          // A categorical `colorProperty` is passed as the property-name form
+          // of `tripColor`; `colorMapping` keeps colors stable across tiles.
+          tripColor:
+            selectedDataset.colorProperty ?? selectedDataset.tripColor ?? [31, 186, 214, 255],
+          ...(selectedDataset.colorMapping && { colorMapping: selectedDataset.colorMapping }),
+          ...(selectedDataset.colorMappingDefault && {
+            colorMappingDefault: selectedDataset.colorMappingDefault,
+          }),
           tripWidth: selectedDataset.tripWidth ?? 4,
           widthMinPixels: selectedDataset.widthMinPixels ?? 2,
           widthMaxPixels: selectedDataset.widthMaxPixels ?? 8,
@@ -305,7 +358,7 @@ const DemoPage: React.FC = () => {
           capRounded: selectedDataset.capRounded ?? false,
           jointRounded: selectedDataset.jointRounded ?? false,
         });
-        if (selectedDataset.useGlobe) {
+        if (useGlobe) {
           return [
             new SolidPolygonLayer({
               id: "earth-background",
@@ -420,7 +473,7 @@ const DemoPage: React.FC = () => {
     // including currentTime here rebuilt the prop tree every tick (60Hz),
     // which forced deck.gl to invalidate the trip consolidation cache and
     // re-copy ~10M vertex positions per frame on the NYC taxi dataset.
-  }, [selectedDataset, timeController, activeSummaryToggle]);
+  }, [selectedDataset, timeController, activeSummaryToggle, useGlobe]);
 
   // Debug tile boundary layer
   const tileBoundaryLayer = useMemo(() => {
@@ -471,7 +524,6 @@ const DemoPage: React.FC = () => {
     [layers, tileBoundaryLayer],
   );
 
-  const useGlobe = selectedDataset?.useGlobe ?? false;
   const views = useMemo(
     () =>
       useGlobe ? [new GlobeView({ id: "globe", resolution: 10 })] : undefined,
@@ -529,7 +581,7 @@ const DemoPage: React.FC = () => {
               views={views}
               parameters={useGlobe ? ({ cull: true } as any) : undefined}
             >
-              {!selectedDataset.useGlobe && (
+              {!useGlobe && (
                 <Map
                   reuseMaps
                   mapStyle="mapbox://styles/mapbox/dark-v11"
@@ -562,6 +614,7 @@ const DemoPage: React.FC = () => {
               key={selectedDataset.id}
               dataset={selectedDataset}
               timeController={timeController}
+              projection={useGlobe ? "globe" : "mercator"}
             />
           )}
 
@@ -585,7 +638,7 @@ const DemoPage: React.FC = () => {
                   border: "1px solid #3A414C",
                 }}
               >
-                {showTileBoundaries ? "🔲 Tiles ON" : "🔲 Tiles"}
+                {showTileBoundaries ? "Tiles ON" : "Tiles"}
               </button>
             </div>
           )}
@@ -597,6 +650,28 @@ const DemoPage: React.FC = () => {
                 options={summaryToggleOptions}
                 value={activeSummaryToggle?.id}
                 onChange={setSummaryToggleId}
+              />
+            </div>
+          )}
+
+          {/* Globe ↔ Mercator toggle. Only meaningful for global-scale demos
+              (zoom ≤ 4.5 or explicitly-global datasets). Hidden when the
+              MapLibre renderer is active — the @stt/maplibre adapter's shaders
+              assume mercator-unit-square inputs, and showcase ships
+              maplibre-gl 3.x (no globe). Re-enable for MapLibre once the
+              adapter grows a globe projection branch. When a summary toggle is
+              also present the layout stacks them. */}
+          {isGlobalScale && renderer === "deck" && (
+            <div
+              className={`absolute left-3 ${
+                summaryToggleOptions && summaryToggleOptions.length > 1
+                  ? "top-12"
+                  : "top-3"
+              }`}
+            >
+              <ProjectionToggle
+                value={useGlobe ? "globe" : "mercator"}
+                onChange={setProjectionOverride}
               />
             </div>
           )}
@@ -658,11 +733,7 @@ const DemoPage: React.FC = () => {
 export default DemoPage;
 
 /**
- * Small segmented control for swapping between the deck.gl and `@stt/maplibre`
- * renderers. Kept inline here because it has no other consumer.
- */
-/**
- * Pickup ↔ dropoff segmented control for summary-tier demos. Sits above the
+ * Pickup/dropoff segmented control for summary-tier demos. Sits above the
  * map and swaps the H3SummaryLayer's weight column + ramp in place. Coloured
  * dots come from the first entry of each option's legendColors so the active
  * option visually matches the legend ramp on the opposite corner.
@@ -749,6 +820,52 @@ const RendererToggle: React.FC<{
             >
               {it.sub}
             </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+};
+
+/**
+ * Globe ↔ Mercator segmented control. Only rendered for global-scale datasets
+ * (see `isGlobalScale` in DemoPage). Setting the override to a non-null value
+ * pins the projection regardless of the dataset's `useGlobe` default.
+ */
+const ProjectionToggle: React.FC<{
+  value: "globe" | "mercator";
+  onChange: (next: "globe" | "mercator") => void;
+}> = ({ value, onChange }) => {
+  const items: Array<{ id: "globe" | "mercator"; label: string }> = [
+    { id: "globe", label: "Globe" },
+    { id: "mercator", label: "Flat" },
+  ];
+  return (
+    <div
+      className="inline-flex items-center rounded overflow-hidden"
+      style={{
+        background: "rgba(36, 39, 48, 0.95)",
+        border: "1px solid #3A414C",
+      }}
+      role="group"
+      aria-label="Projection"
+    >
+      {items.map((it, i) => {
+        const active = it.id === value;
+        return (
+          <button
+            key={it.id}
+            type="button"
+            onClick={() => onChange(it.id)}
+            className="px-3 py-1.5 text-xs transition-colors"
+            style={{
+              background: active ? "#1FBAD6" : "transparent",
+              color: active ? "#000" : "#A0A7B4",
+              borderRight: i < items.length - 1 ? "1px solid #3A414C" : undefined,
+            }}
+            aria-pressed={active}
+          >
+            <span className="font-semibold leading-tight">{it.label}</span>
           </button>
         );
       })}

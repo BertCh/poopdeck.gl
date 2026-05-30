@@ -156,6 +156,15 @@ export class SpatioTemporalLayer<
   // Track last time we updated the tileset to throttle updates
   private _lastTilesetUpdateTime: number = 0;
 
+  // Wall-clock (real-ms) timestamp of the last animation-tick tileset update.
+  // The sim-time threshold below (`timeWindow / 20`) is scale-relative, so at
+  // high playback speeds (e.g. nyc-taxi-paths ~238×) it is crossed every frame,
+  // firing ~60 synchronous selectAndLoadTiles passes/sec on the render thread.
+  // This floor caps tick-driven tileset updates to a fixed wall-clock rate so
+  // the cadence is playback-speed-invariant; the shader still animates smoothly
+  // because every tick calls setNeedsRedraw() and reads time live via getTime().
+  private _lastTilesetUpdateWall: number = 0;
+
   // rAF handle for coalescing onTileLoad setState calls. Many tiles can
   // finish loading within one frame; batching avoids one full
   // renderLayers()/buildConsolidatedData() rebuild per tile.
@@ -378,8 +387,17 @@ export class SpatioTemporalLayer<
    * - Calls setNeedsRedraw() for time-only changes (NOT setNeedsUpdate!)
    * - Time is read via getTime() getter in TimeFilterExtension.draw()
    * - This avoids renderLayers() call when only time changes
+   *
+   * `protected` (not `private`) so subclasses whose per-frame value is a deck.gl
+   * sublayer PROP rather than a draw-time uniform can override it. The canonical
+   * `HeatmapLayer` is the motivating case: its time window is a `filterRange`
+   * prop on a `@deck.gl/aggregation-layers` sublayer, which only re-aggregates
+   * when renderLayers() re-runs — so that subclass calls super() here (to keep
+   * `_currentTime` live and the tileset throttle intact) and then forces a
+   * throttled renderLayers() via `setState`. Layers whose per-frame value is a
+   * shader uniform (point/path/trips via TimeFilterExtension) never need to.
    */
-  private _handleTimeUpdate(time: number): void {
+  protected _handleTimeUpdate(time: number): void {
     const { tileset } = this.state;
     if (!tileset) return;
     
@@ -390,12 +408,22 @@ export class SpatioTemporalLayer<
     const timeWindow = this.props.timeWindow || 86400000;
     const timeDelta = Math.abs(time - this._lastTilesetUpdateTime);
     const updateThreshold = timeWindow / 20; // Update tileset when 5% of time window has passed
-    
+    // Wall-clock ceiling: never refresh the tileset more than ~10×/sec from the
+    // tick path, regardless of how fast sim-time advances. At 1× playback the
+    // sim threshold still governs (100ms wall < timeWindow/20 for any realistic
+    // window), so slow scrubbing is unchanged; only fast playback is reined in.
+    const MIN_TILESET_UPDATE_WALL_MS = 100;
+    const nowWall = performance.now();
+
     let tilesChanged = false;
-    
-    if (timeDelta > updateThreshold) {
+
+    if (
+      timeDelta > updateThreshold &&
+      nowWall - this._lastTilesetUpdateWall >= MIN_TILESET_UPDATE_WALL_MS
+    ) {
       this._lastTilesetUpdateTime = time;
-      
+      this._lastTilesetUpdateWall = nowWall;
+
       const viewport = this.context.viewport;
       if (viewport) {
         const bounds = this.getViewportBounds(viewport);

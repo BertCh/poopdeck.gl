@@ -1,29 +1,50 @@
 # HeatmapLayer
 
-> Previously documented as `HeatmapTimeLayer` (an `@deck.gl/aggregation-layers`
-> wrapper). That implementation was replaced with a GPU-splat layer that
-> renders directly from the binary tile buffers — same import path, new
-> class name (`HeatmapLayer`).
-
 The `HeatmapLayer` renders temporal point data as an animated density
-heatmap. It is a **single-pass GPU splat**: each point is drawn as a
-gaussian-weighted quad with **additive blending directly to the canvas**
-(no offscreen framebuffer / FBO accumulation pass), and overlapping splats
-sum per-pixel. The accumulated intensity is mapped through a palette LUT in
-the fragment shader.
+heatmap. It is a thin composite over the **canonical deck.gl
+[`HeatmapLayer`](https://deck.gl/docs/api-reference/aggregation-layers/heatmap-layer)**
+(`@deck.gl/aggregation-layers`): points are splatted into a GPU weight
+texture with **additive density accumulation**, reduced to a per-pixel
+density, and only then mapped through the colour ramp. Dense regions get
+hotter because more splats land on the same pixels — true per-pixel density,
+not per-splat colour blending.
 
-The per-(tile, channel) GPU vertex buffers (`instancePosition`,
-`instanceTime`, `instanceWeight`) are uploaded **once** when a tile first
-arrives and reused across every subsequent frame — there is zero per-frame
-buffer allocation and no per-frame CPU filter. Time filtering is done in
-the shader against a small uniform updated each frame. (Per-frame cost still
-scales with the number of splats drawn, since every active splat is one
-instanced quad; the win is the eliminated per-frame upload/rebuild, not a
-fixed cost.)
+> **Why the rewrite.** An earlier implementation hand-rolled a single-pass
+> splat shader that sampled the palette *per splat* (each point coloured by
+> its own weight) and additively blended the resulting *colours*. Overlapping
+> points summed colours instead of density, so hot zones blew out and the
+> result never read as a heatmap. The current layer hands the
+> splat→accumulate→ramp pipeline to deck.gl's tested implementation. Same
+> import path and public API.
 
-It extends [`SpatioTemporalLayer`](./spatiotemporal-layer.md) and supports
-up to four stacked categorical channels (one per RGBA accumulator slot),
-each rendered as a sub-draw with the shared shader.
+**Time animation.** The canonical HeatmapLayer has no notion of time, so the
+window is driven by `@deck.gl/extensions`'
+[`DataFilterExtension`](https://deck.gl/docs/api-reference/extensions/data-filter-extension):
+each point carries a relativized timestamp as `getFilterValue`, and the
+`filterRange` (the `[start, end]` window around the play head) is recomputed
+each frame. Out-of-window points contribute zero density during the weights
+aggregation pass — and changing `filterRange` **re-runs the aggregation**, so
+the heatmap genuinely re-densifies as the play head moves (it is not a
+cross-fade). The re-aggregation cadence is capped (default 30 Hz) independently
+of tile loading.
+
+**Data feed.** Points from every visible tile are consolidated into one binary
+buffer set per channel (not per-tile sublayers), so the canonical layer
+normalises against a single global max — no per-tile brightness seams, and
+gaussian splats accumulate correctly across tile borders. The consolidated
+buffers are cached by visible-tile-set key and rebuilt only when that set (or
+the channel config) changes; per frame only the small `filterRange` array
+changes, so nothing is re-uploaded — only the GPU aggregation re-runs.
+
+f32 precision: both the per-point filter value and `filterRange` are
+relativized against a single layer time offset (the first visible tile's
+offset), keeping both sides of the shader comparison inside the Float32
+mantissa budget (≈ 2²⁴ ms ≈ 4.6 h around the offset; longer-spanning windows
+quantize at the edges — the same bound the previous layer had).
+
+It extends [`SpatioTemporalLayer`](./spatiotemporal-layer.md) and supports up
+to four stacked categorical channels, each rendered as its own canonical
+HeatmapLayer (own ramp + density normalisation) composited in order.
 
 ## Installation
 
@@ -86,8 +107,8 @@ const layer = new HeatmapLayer({
 });
 ```
 
-Up to four channels pack into the RGBA accumulator; beyond that the
-layer warns and renders only the first four.
+Up to four channels are supported (one canonical HeatmapLayer each); beyond
+that the layer warns and renders only the first four.
 
 ## Properties
 
@@ -98,26 +119,27 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 | Property | Type | Default | Description |
 | -------- | ---- | ------- | ----------- |
 | `radiusPixels` | `number` | `30` | Splat radius in pixels |
-| `intensity` | `number` | `1` | Global per-splat multiplier |
-| `weightProperty` | `string` | `undefined` | Numeric property → per-splat weight. Defaults to `1.0`. |
+| `intensity` | `number` | `1` | Global intensity multiplier (canonical `intensity`) |
+| `weightProperty` | `string` | `undefined` | Numeric property → per-point weight. Defaults to `1.0`. |
 | `colorRange` | `Color[]` | OrRd | Low → high density ramp (single-channel mode) |
-| `colorDomain` | `[number, number]` | `[0, 1]` or baked-in | Pinned intensity domain (single-channel mode) |
-| `threshold` | `number` | `0.05` | Hide pixels with accumulated intensity below this |
-| `fadeInDuration` | `number` | `0` | Leading-edge alpha ramp (ms) |
-| `fadeOutDuration` | `number` | `0` | Trailing-edge alpha ramp (ms) |
+| `colorDomain` | `[number, number]` | auto / baked-in | Pinned density domain. **Unset → the layer auto-normalises against the current window's max each frame** (so colours may "breathe" as the window slides; pin it to keep the mapping stable). |
+| `threshold` | `number` | `0.05` | Density fraction below which pixels are transparent. **Only takes effect when `colorDomain` is unset** (the pinned-domain path supersedes it). |
+| `fadeInDuration` | `number` | `0` | Leading-edge fade (ms), mapped onto the filter soft-range |
+| `fadeOutDuration` | `number` | `0` | Trailing-edge fade (ms) |
+| `historyWeight` | `number` | `0` | **Deprecated / no-op.** Accepted for API compatibility; the canonical aggregation pipeline has no TAA blend. |
 
 ### Stacked channels (`channels`)
 
-When supplied, each entry produces one sub-draw using the shared shader
-and accumulator.
+When supplied, each entry renders as its own canonical HeatmapLayer (its own
+ramp + density normalisation), composited in order.
 
 | Field | Type | Default | Description |
 | ----- | ---- | ------- | ----------- |
 | `id` | `string` | — | Channel id; matches `metadata.heatmapDomain.classes[*].id` when present |
 | `categoryFilter` | `{ property, values[] }` | — | Only features matching this categorical filter contribute to the channel |
 | `colorRange` | `Color[]` | OrRd | Per-channel ramp |
-| `colorDomain` | `[number, number]` | `[0, 1]` or baked-in | Pinned per-channel intensity domain |
-| `intensity` | `number` | `1` | Per-channel weight multiplier stacked on top of the global one |
+| `colorDomain` | `[number, number]` | auto / baked-in | Pinned per-channel density domain (see note above) |
+| `intensity` | `number` | `1` | Per-channel weight multiplier, folded into the point weight |
 
 ## Build-time intensity domain
 

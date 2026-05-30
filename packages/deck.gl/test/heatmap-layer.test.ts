@@ -1,54 +1,25 @@
 /**
  * Pure-logic tests for HeatmapLayer.
  *
- * The full splat pipeline needs a real WebGL2 context (it allocates an FBO,
- * compiles shaders, etc.) so it's exercised by `tools/render-test` against a
- * SwiftShader Chromium. Here we verify the parts that DON'T need a GPU:
+ * The full pipeline now delegates the GPU splat/accumulate/ramp to the
+ * canonical `@deck.gl/aggregation-layers` HeatmapLayer + DataFilterExtension,
+ * which needs a real WebGL2 context and is exercised by `tools/render-test`.
+ * Here we verify the CPU-side data path that feeds it:
  *
- *   - `buildTileChannelBuffers` filters features by `categoryFilter` and
- *     correctly packs positions/times/weights into typed arrays sized by
- *     the masked count.
- *   - Time relativization against the layer-wide offset preserves f32
- *     precision for absolute Unix-ms timestamps.
- *   - The default channel set is synthesized from top-level props when
- *     `channels` is unset.
+ *   - `buildConsolidatedChannelData` consolidates every visible tile's points
+ *     into one binary buffer set, applies the channel's `categoryFilter`,
+ *     folds the per-channel `intensity` into the weight, and relativizes each
+ *     point's start time against the layer-wide offset.
+ *   - Time relativization against the layer offset preserves f32 precision for
+ *     absolute Unix-ms timestamps within the documented window.
  */
 
 import { describe, it, expect } from 'vitest';
-import type { BinaryFeatures } from '@stt/core';
+import type { BinaryFeatures, Tile } from '@stt/core';
 import { GeometryType } from '@stt/core';
+import { buildConsolidatedChannelData } from '../src/heatmap-layer';
 
-// Re-export the internals we want to test via a focused helper module would
-// be cleaner, but for now we duplicate the small pure-function under test
-// to keep the test self-contained without exporting more from the layer.
-// If this pattern grows we'll factor `buildTileChannelBuffers` out into
-// `heatmap-layer-internals.ts`.
-
-function maskCategoryFilter(
-  binary: BinaryFeatures,
-  filter: { property: string; values: string[] },
-): { mask: Uint8Array | null; count: number } | null {
-  const cat = binary.categoricalProps[filter.property];
-  if (!cat) return null;
-  const allowed = new Set<number>();
-  for (let i = 0; i < cat.categories.length; i++) {
-    if (filter.values.indexOf(cat.categories[i]) !== -1) {
-      allowed.add(i);
-    }
-  }
-  if (allowed.size === 0) return { mask: new Uint8Array(binary.featureCount), count: 0 };
-  const mask = new Uint8Array(binary.featureCount);
-  let count = 0;
-  for (let i = 0; i < binary.featureCount; i++) {
-    if (allowed.has(cat.indices[i])) {
-      mask[i] = 1;
-      count++;
-    }
-  }
-  return { mask, count };
-}
-
-function makeBinaryFixture(): BinaryFeatures {
+function makeBinaryFixture(timeOffset = 1_700_000_000_000): BinaryFeatures {
   // 6 features: 3 pickup, 2 dropoff, 1 transit.
   // Positions are arbitrary lon/lat; times are relative to timeOffset.
   const positions = new Float64Array([
@@ -74,50 +45,112 @@ function makeBinaryFixture(): BinaryFeatures {
     featureIds,
     startTimes,
     endTimes,
-    timeOffset: 1_700_000_000_000, // some real epoch-ms
-    numericProps: {},
+    timeOffset,
+    numericProps: { fare: new Float32Array([10, 20, 30, 40, 50, 60]) },
     categoricalProps: { status: cat },
   } as BinaryFeatures;
 }
 
-describe('HeatmapLayer: per-channel feature masking', () => {
+function wrapTile(binary: BinaryFeatures, t = 0): Tile {
+  return {
+    id: { z: 12, x: 1, y: 1, t },
+    timeRange: { start: 0, end: 1 },
+    layers: [
+      {
+        name: 'points',
+        extent: 4096,
+        features: binary,
+        geometryExtensionName: 'geoarrow.point',
+      },
+    ],
+  } as Tile;
+}
+
+describe('buildConsolidatedChannelData: per-channel masking + packing', () => {
   it('keeps only features whose categorical value matches', () => {
-    const binary = makeBinaryFixture();
-    const r = maskCategoryFilter(binary, {
-      property: 'status',
-      values: ['pickup'],
-    });
-    expect(r).not.toBeNull();
-    expect(r!.count).toBe(3); // indices 0, 2, 4
-    expect(Array.from(r!.mask!).filter((v) => v === 1).length).toBe(3);
+    const tile = wrapTile(makeBinaryFixture());
+    const data = buildConsolidatedChannelData(
+      [tile],
+      { categoryFilter: { property: 'status', values: ['pickup'] }, intensity: 1 },
+      undefined,
+      1_700_000_000_000,
+    );
+    expect(data).not.toBeNull();
+    expect(data!.length).toBe(3); // indices 0, 2, 4
+    expect(data!.attributes.getPosition.value.length).toBe(9); // 3 pts × 3
+    expect(data!.attributes.getWeight.value.length).toBe(3);
+    expect(data!.attributes.getFilterValue.value.length).toBe(3);
+    // First retained point is feature 0 at [-74, 40.7].
+    expect(data!.attributes.getPosition.value[0]).toBeCloseTo(-74);
+    expect(data!.attributes.getPosition.value[1]).toBeCloseTo(40.7);
+    expect(data!.attributes.getPosition.value[2]).toBe(0); // padded altitude
   });
 
   it('returns null when the tile is missing the filter property', () => {
-    const binary = makeBinaryFixture();
-    const r = maskCategoryFilter(binary, {
-      property: 'nonexistent',
-      values: ['anything'],
-    });
-    expect(r).toBeNull();
+    const tile = wrapTile(makeBinaryFixture());
+    const data = buildConsolidatedChannelData(
+      [tile],
+      { categoryFilter: { property: 'nonexistent', values: ['x'] }, intensity: 1 },
+      undefined,
+      1_700_000_000_000,
+    );
+    expect(data).toBeNull();
   });
 
-  it('returns a zero-count result when no category matches', () => {
-    const binary = makeBinaryFixture();
-    const r = maskCategoryFilter(binary, {
-      property: 'status',
-      values: ['ghost'],
-    });
-    expect(r).not.toBeNull();
-    expect(r!.count).toBe(0);
+  it('returns null when no category matches', () => {
+    const tile = wrapTile(makeBinaryFixture());
+    const data = buildConsolidatedChannelData(
+      [tile],
+      { categoryFilter: { property: 'status', values: ['ghost'] }, intensity: 1 },
+      undefined,
+      1_700_000_000_000,
+    );
+    expect(data).toBeNull();
   });
 
   it('accepts multiple matching values', () => {
-    const binary = makeBinaryFixture();
-    const r = maskCategoryFilter(binary, {
-      property: 'status',
-      values: ['pickup', 'dropoff'],
-    });
-    expect(r!.count).toBe(5);
+    const tile = wrapTile(makeBinaryFixture());
+    const data = buildConsolidatedChannelData(
+      [tile],
+      {
+        categoryFilter: { property: 'status', values: ['pickup', 'dropoff'] },
+        intensity: 1,
+      },
+      undefined,
+      1_700_000_000_000,
+    );
+    expect(data!.length).toBe(5);
+  });
+
+  it('defaults weight to 1 and folds the per-channel intensity in', () => {
+    const tile = wrapTile(makeBinaryFixture());
+    const data = buildConsolidatedChannelData([tile], { intensity: 2 }, undefined, 1_700_000_000_000);
+    expect(data!.length).toBe(6);
+    // weight = (no weightProperty → 1) × intensity(2)
+    expect(Array.from(data!.attributes.getWeight.value)).toEqual([2, 2, 2, 2, 2, 2]);
+  });
+
+  it('sources weight from weightProperty × intensity', () => {
+    const tile = wrapTile(makeBinaryFixture());
+    const data = buildConsolidatedChannelData([tile], { intensity: 0.5 }, 'fare', 1_700_000_000_000);
+    // fare = [10..60] × 0.5
+    expect(Array.from(data!.attributes.getWeight.value)).toEqual([5, 10, 15, 20, 25, 30]);
+  });
+
+  it('consolidates across tiles and relativizes times against the layer offset', () => {
+    const layerOffset = 1_700_000_000_000;
+    // Second tile sits 1 hour later — its per-feature times must be shifted by
+    // the +3_600_000 ms delta so the consolidated filter values are comparable.
+    const tileA = wrapTile(makeBinaryFixture(layerOffset), 0);
+    const tileB = wrapTile(makeBinaryFixture(layerOffset + 3_600_000), 1);
+    const data = buildConsolidatedChannelData([tileA, tileB], { intensity: 1 }, undefined, layerOffset);
+    expect(data!.length).toBe(12); // 6 + 6
+    // tileA feature 0 start=0 + delta 0 → 0
+    expect(data!.attributes.getFilterValue.value[0]).toBe(0);
+    // tileB feature 0 start=0 + delta 3_600_000 → 3_600_000
+    expect(data!.attributes.getFilterValue.value[6]).toBe(3_600_000);
+    // tileB feature 5 start=5_000 + delta 3_600_000 → 3_605_000
+    expect(data!.attributes.getFilterValue.value[11]).toBe(3_605_000);
   });
 });
 
@@ -125,9 +158,6 @@ describe('HeatmapLayer: time relativization (f32 precision)', () => {
   it('keeps relative times inside the f32 mantissa budget for typical windows', () => {
     // Tile offset = 2025-01-01 03:00, layer offset = 2025-01-01 00:00. The
     // delta is 3h = 10_800_000 ms — well inside f32's 16.7M-ms budget.
-    // A per-feature time of 12_345 ms relative to the tile ends up at
-    // 10_812_345 ms relative to the layer, which Math.fround preserves
-    // exactly.
     const tileOffset = Date.parse('2025-01-01T03:00:00Z');
     const layerOffset = Date.parse('2025-01-01T00:00:00Z');
     const delta = tileOffset - layerOffset;
@@ -142,9 +172,7 @@ describe('HeatmapLayer: time relativization (f32 precision)', () => {
 
   it('loses ms precision once the relative span exceeds the 24-bit mantissa', () => {
     // 2^24 = 16_777_216 is the largest integer representable in f32 with
-    // ms precision. Anything in the next 2^24 range quantizes to even
-    // values; pick an odd number just past the cliff so fround rounds to
-    // the nearest even and the equality fails.
+    // ms precision. Anything in the next 2^24 range quantizes to even values.
     const MAX = 16_777_216;
     expect(Math.fround(MAX)).toBe(MAX);
     const justPast = MAX + 1; // odd, not representable

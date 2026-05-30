@@ -1,20 +1,54 @@
 /**
- * Dataset configurations for the spatiotemporal tiles showcase
- * 
- * Animation speed is now computed automatically based on targetPlaybackSeconds
- * to ensure consistent playback experience across all datasets.
+ * Dataset configurations for the spatiotemporal tiles showcase.
+ *
+ * Playback speed is derived per dataset from targetPlaybackSeconds; see
+ * calculateAnimationSpeed in types.ts.
  */
 
-import { Dataset } from './types';
+import { Dataset, ColorRGBA } from './types';
+
+/**
+ * Chronological color ramp for OSM "edit age strata": older node creations read
+ * cool (deep blue), recent ones warm (red). Keyed by year string so the point
+ * layer's `colorMapping` can color each creation by the year it first appeared.
+ */
+function osmYearColors(startYear: number, endYear: number): Record<string, ColorRGBA> {
+  const stops: ColorRGBA[] = [
+    [37, 52, 148, 255],   // deep blue (oldest)
+    [44, 127, 184, 255],  // blue
+    [65, 182, 196, 255],  // cyan
+    [120, 198, 121, 255], // green
+    [255, 204, 92, 255],  // yellow
+    [253, 141, 60, 255],  // orange
+    [227, 26, 28, 255],   // red (newest)
+  ];
+  const out: Record<string, ColorRGBA> = {};
+  const span = Math.max(1, endYear - startYear);
+  for (let y = startYear; y <= endYear; y++) {
+    const f = ((y - startYear) / span) * (stops.length - 1);
+    const i = Math.min(stops.length - 2, Math.floor(f));
+    const frac = f - i;
+    const a = stops[i];
+    const b = stops[i + 1];
+    out[String(y)] = [
+      Math.round(a[0] + (b[0] - a[0]) * frac),
+      Math.round(a[1] + (b[1] - a[1]) * frac),
+      Math.round(a[2] + (b[2] - a[2]) * frac),
+      255,
+    ];
+  }
+  return out;
+}
+
+const OSM_YEAR_COLORS = osmYearColors(2007, 2026);
 
 export const datasets: Dataset[] = [
   {
     id: 'nyc-taxi-od-summary',
     name: 'NYC Pickup vs Dropoff Hex Density',
     description:
-      'Server-aggregated H3 hex bins of 1.36M real TLC taxi pickup + dropoff ' +
-      'events (Jan 1-2 2015). Toggle between pickup and dropoff density — ' +
-      'each frame is a 30-min slice, aggregated server-side at build time.',
+      'H3 hex-bin density of 1.36M NYC taxi pickups and dropoffs (Jan 1-2, 2015). ' +
+      'Toggle pickup vs dropoff.',
     url: '/data/nyc-taxi-od-summary.stt',
     type: 'summary',
     timeRange: {
@@ -135,7 +169,7 @@ export const datasets: Dataset[] = [
   {
     id: 'flights',
     name: 'Flight Traffic',
-    description: 'Real OpenSky data - 3.96M points, 21K aircraft, 24 hours (Jan 6, 2020)',
+    description: 'OpenSky aircraft positions — 21K aircraft over 24h (Jan 6, 2020)',
     url: '/data/flights.stt',
     type: 'point',
     timeRange: {
@@ -164,7 +198,7 @@ export const datasets: Dataset[] = [
   {
     id: 'flight-paths',
     name: 'Flight Paths',
-    description: 'Synthetic linestring tracks for migrated-format demo',
+    description: 'Synthetic flight tracks',
     url: '/data/lines-v2.stt',
     type: 'path',
     timeRange: {
@@ -192,7 +226,7 @@ export const datasets: Dataset[] = [
   {
     id: 'flight-trips',
     name: 'Flight Trips (3D)',
-    description: 'Animated 3D flight trajectories - 21K aircraft moving along routes',
+    description: '3D flight trajectories — 21K aircraft (Jan 6, 2020)',
     url: '/data/adsb-paths.stt',
     type: 'trips',
     timeRange: {
@@ -220,12 +254,12 @@ export const datasets: Dataset[] = [
     tripWidth: 4,
     widthMinPixels: 2,
     widthMaxPixels: 8,
-    trailLength: 60000,
+    trailLength: 120000,
   },
   {
     id: 'hurricanes',
     name: 'Hurricane Tracks',
-    description: 'IBTrACS historical hurricane data (Atlantic basin, 2000-2020)',
+    description: 'IBTrACS hurricane tracks — Atlantic basin (2020-2023)',
     url: '/data/hurricanes.stt',
     type: 'point',
     timeRange: {
@@ -245,7 +279,7 @@ export const datasets: Dataset[] = [
   {
     id: 'nyc-rideshare',
     name: 'NYC Yellow Taxi',
-    description: 'Real NYC TLC trips — 1M pickup/dropoff points (Jan 1 2015, first 2.8h, OSRM per-segment speeds)',
+    description: 'NYC TLC taxi pickups and dropoffs — 1M points (Jan 1, 2015, first 2.8h)',
     url: '/data/nyc-rideshare.stt',
     type: 'point',
     timeRange: {
@@ -277,7 +311,7 @@ export const datasets: Dataset[] = [
   {
     id: 'nyc-taxi-od-heatmap',
     name: 'NYC Pickups vs Dropoffs',
-    description: 'Density heatmap of taxi pickup (green) vs dropoff (red) hotspots — same TLC trips dataset, split by status (Jan 1 2015, 50K-trip sample)',
+    description: 'Density heatmap of NYC taxi pickups (green) vs dropoffs (red), Jan 1, 2015',
     url: '/data/nyc-rideshare.stt',
     type: 'heatmap',
     timeRange: {
@@ -346,9 +380,7 @@ export const datasets: Dataset[] = [
     id: 'nyc-taxi-points',
     name: 'NYC Taxi Points (Animated)',
     description:
-      'Vehicle positions interpolated along OSRM-routed taxi paths — 500K trips ' +
-      'at ~15s temporal cadence (Jan 1-2, 2015). Derived in-place from ' +
-      'nyc-taxi-paths.stt for smooth moving-vehicle animation.',
+      'Animated NYC taxi vehicle positions — 500K trips (Jan 1-2, 2015)',
     url: '/data/nyc-taxi-points.stt',
     type: 'point',
     timeRange: {
@@ -397,7 +429,7 @@ export const datasets: Dataset[] = [
   {
     id: 'nyc-taxi-paths',
     name: 'NYC Taxi Paths',
-    description: 'Real TLC trip paths with OSRM routing - 500K trips (Jan 1-2, 2015)',
+    description: 'NYC taxi trip paths — 500K trips (Jan 1-2, 2015)',
     url: '/data/nyc-taxi-paths.stt',
     type: 'path',
     timeRange: {
@@ -428,7 +460,7 @@ export const datasets: Dataset[] = [
     id: 'nyc-taxi-trips',
     name: 'NYC Taxi Trips',
     description:
-      'Animated taxi trips with OSRM routing — 500K trips (Jan 1-2, 2015). Rendered via VAT-trail: one ribbon-strip instance per active trip with positions sampled from a per-tile texture in the vertex shader. Frame cost is independent of per-trajectory vertex count, closing the ~15× perf gap the PathLayer renderer had on this dataset.',
+      'Animated NYC taxi trips — 500K trips (Jan 1-2, 2015)',
     url: '/data/nyc-taxi-paths.stt',
     type: 'vat',
     timeRange: {
@@ -466,15 +498,15 @@ export const datasets: Dataset[] = [
     id: 'nyc-taxi-vat',
     name: 'NYC Taxi (VAT)',
     description:
-      'Same 500K-trip archive rendered via Vertex Animation Textures — one head per active trip; GPU work is independent of per-trip vertex count.',
+      'NYC taxi trips as moving point heads — 500K trips (Jan 1-2, 2015)',
     url: '/data/nyc-taxi-paths.stt',
     type: 'vat',
     timeRange: {
       start: 1420070400000,
       end: 1420213385000,
     },
-    timeWindow: 15000,
-    targetPlaybackSeconds: 60000,
+    timeWindow: 20000,
+    targetPlaybackSeconds: 6000,
     initialViewState: {
       longitude: -73.98,
       latitude: 40.75,
@@ -493,7 +525,7 @@ export const datasets: Dataset[] = [
   {
     id: 'ship-traffic',
     name: 'US Maritime Traffic',
-    description: 'Real AIS data from NOAA Marine Cadastre - 1.29M points, 15.9K vessels, 24 hours (Jan 9, 2023)',
+    description: 'NOAA Marine Cadastre AIS — 15.9K vessels over 24h (Jan 9, 2023)',
     url: '/data/ais-all-us.stt',
     type: 'point',
     timeRange: {
@@ -505,9 +537,9 @@ export const datasets: Dataset[] = [
     // temporal span; `timeWindow` is set to 2× that so the tile loader still
     // covers the past half of the wake (the shader filter is independent of
     // the loader window — see TimeFilterExtension.wakeLength docstring).
-    wakeLength: 1800000,    // 30-minute wake behind each ship
+    wakeLength: 3600000,    // 30-minute wake behind each ship
     wakeTailScale: 0.15,    // tail shrinks to 15% of head radius
-    timeWindow: 3600000,    // 60-min loader window → 30-min past coverage
+    timeWindow: 5600000,    // 60-min loader window → 30-min past coverage
     targetPlaybackSeconds: 180, // 24 hours plays in 3 minutes
     // Pixel-radius head dot. Meters-based default rendered sub-pixel at
     // zoom 4 — invisible wakes. A 4 px head shrinks to ~0.6 px at the
@@ -537,7 +569,7 @@ export const datasets: Dataset[] = [
   {
     id: 'wildfires',
     name: 'US Wildfires',
-    description: 'NIFC wildfire perimeters (1000+ acres, 2020-2023) - polygon data',
+    description: 'NIFC wildfire perimeters — 1000+ acres (2020-2023)',
     url: '/data/wildfires.stt',
     type: 'polygon',
     timeRange: {
@@ -565,8 +597,8 @@ export const datasets: Dataset[] = [
   },
   {
     id: 'satellites',
-    name: 'Satellite Orbits (Globe)',
-    description: 'All active satellites from CelesTrak - 13,506 orbits on 3D globe',
+    name: 'Satellite Orbits',
+    description: '~12,700 low-Earth-orbit satellites from CelesTrak over 24h (2024-06-21). Defaults to the globe; flip to flat at top-left.',
     url: '/data/satellites.stt',
     type: 'trips', // Use trips layer for animated satellite movement
     useGlobe: true, // Render on 3D globe for orbital visualization
@@ -577,7 +609,7 @@ export const datasets: Dataset[] = [
     // Time window controls which segments are loaded/visible
     // For LEO satellites with ~90 min orbits and ~40 min segments, use larger window
     timeWindow: 600000, // 10 minute window - loads segments overlapping this range
-    targetPlaybackSeconds: 600, // 24 hours plays in 10 minutes for smooth animation
+    targetPlaybackSeconds: 900, // 24h in ~15 min — slow enough to follow LEO streaks
     initialViewState: {
       longitude: 0,
       latitude: 20,
@@ -585,13 +617,12 @@ export const datasets: Dataset[] = [
       pitch: 0,
       bearing: 0
     },
+    // 24h plays in ~15 min: LEO ground tracks move fast, so a slower playback
+    // lets the eye follow individual streaks instead of a blur.
     legend: {
-      title: "Orbit Type",
+      title: "Orbit",
       items: [
-        { color: "#4FC3F7", label: "LEO (Low Earth Orbit)" },
-        { color: "#FFB74D", label: "MEO (Medium Earth Orbit)" },
-        { color: "#81C784", label: "GEO (Geostationary)" },
-        { color: "#E57373", label: "HEO (High Earth Orbit)" }
+        { color: "#1FBAD6", label: "LEO satellite" },
       ]
     },
     zoomOverride: 0,
@@ -600,45 +631,306 @@ export const datasets: Dataset[] = [
     tripWidth: 1.5,
     widthMinPixels: 1,
     widthMaxPixels: 3,
-    trailLength: 1000,
+    // LEO-tuned: a short 60s trail renders each satellite as a brief comet
+    // streak (≈ the distance it covers in one sampling step) rather than a
+    // long arc, so 12.7k of them read as a moving speckled field, not a ball
+    // of yarn. Low opacity lets overlapping streaks build into a density glow
+    // instead of a saturated cyan slab.
+    opacity: 0.4,
+    trailLength: 60000,
   },
   {
-    id: 'satellite-trips-flat',
-    name: 'Satellite Orbits (Flat Map)',
-    description: 'All active satellites from CelesTrak - 13,506 animated orbits on flat projection',
-    url: '/data/satellites.stt',
-    type: 'trips', // Use trips layer for animated satellite movement
+    id: 'animal-migration',
+    name: 'Animal Migration',
+    description:
+      'Animal tracking studies from GBIF, coloured by taxonomic class; ' +
+      'multi-year tracks folded into one year. Data: GBIF.org (CC0 / CC-BY / ' +
+      'CC-BY-NC).',
+    url: '/data/animals.stt',
+    type: 'trips',
     timeRange: {
-      start: 1718928000000, // 2024-06-21T00:00:00Z
-      end: 1719014400000,   // 2024-06-22T00:00:00Z (24 hours)
+      start: Date.parse('2024-01-01T00:00:00Z'),
+      end: Date.parse('2025-01-01T00:00:00Z'),
     },
-    // Time window controls which segments are loaded/visible
-    // For LEO satellites with ~90 min orbits and ~40 min segments, use larger window
-    timeWindow: 600000, // 10 minute window - loads segments overlapping this range
-    targetPlaybackSeconds: 600, // 24 hours plays in 10 minutes for smooth animation
+    // Day-scale loader window (1-day temporal buckets); ~2× the trail so the
+    // loader covers the past portion of each fading trail.
+    timeWindow: 86400000 * 4,
+    targetPlaybackSeconds: 210, // one folded year in ~3.5 min
     initialViewState: {
       longitude: 0,
-      latitude: 0,
+      latitude: 20,
       zoom: 1.2,
       pitch: 0,
-      bearing: 0
+      bearing: 0,
     },
-    legend: {
-      title: "Orbit Type",
-      items: [
-        { color: "#4FC3F7", label: "LEO (Low Earth Orbit)" },
-        { color: "#FFB74D", label: "MEO (Medium Earth Orbit)" },
-        { color: "#81C784", label: "GEO (Geostationary)" },
-        { color: "#E57373", label: "HEO (High Earth Orbit)" }
-      ]
+    // Colour by coarse taxon group, resolved at build time from the GBIF
+    // backbone. colorMapping keeps each class the same colour across tiles
+    // (the ordered palette path is per-tile and would jitter).
+    colorProperty: 'taxon_group',
+    colorMapping: {
+      bird:    [79, 195, 247, 235],
+      mammal:  [255, 138, 101, 235],
+      fish:    [77, 182, 172, 235],
+      reptile: [174, 213, 129, 235],
+      insect:  [255, 213, 79, 235],
+      other:   [176, 190, 197, 200],
     },
-    zoomOverride: 0,
-    useGlobalBounds: true,
-    tripColor: [31, 186, 214, 255],
+    colorMappingDefault: [176, 190, 197, 200],
+    opacity: 0.8,
     tripWidth: 1.5,
     widthMinPixels: 1,
     widthMaxPixels: 3,
-    trailLength: 300000,
+    trailLength: 86400000 * 4, // 4-day fading trail shows the migration arc
+    fadeTrail: true,
+    zoomOverride: 0,
+    useGlobalBounds: true,
+    legend: {
+      title: 'Taxonomic class',
+      items: [
+        { color: '#4FC3F7', label: 'Birds' },
+        { color: '#FF8A65', label: 'Mammals' },
+        { color: '#4DB6AC', label: 'Fish & sharks' },
+        { color: '#AED581', label: 'Reptiles' },
+        { color: '#FFD54F', label: 'Insects' },
+        { color: '#B0BEC5', label: 'Other' },
+      ],
+    },
+  },
+  {
+    id: 'ocean-drifters',
+    name: 'Ocean Currents',
+    description:
+      'NOAA Global Drifter Program surface-buoy tracks, 1979→2022, coloured ' +
+      'by sea-surface temperature. Data: NOAA AOML / PMEL (public domain).',
+    url: '/data/drifters.stt',
+    type: 'trips',
+    useGlobe: true,
+    timeRange: {
+      start: 287884800000,  // 1979-02-15 — first fix in the GDP record
+      end: 1667844000000,   // 2022-11-07 — last fix (PMEL interpolated product ends here)
+    },
+    // ~43 years compress into ~10 min, so sim-time races by; the loader window
+    // is wide (weekly build buckets → ~30 buckets) and the trail long so each
+    // comet tail still lasts a few real seconds.
+    timeWindow: 86400000 * 200,
+    targetPlaybackSeconds: 600, // 43 years of currents in ~10 min
+    initialViewState: {
+      longitude: -40,
+      latitude: 25,
+      zoom: 0.7,
+      pitch: 0,
+      bearing: 0,
+    },
+    colorProperty: 'temp_band',
+    colorMapping: {
+      cold:    [44, 90, 200, 235],
+      cool:    [40, 180, 200, 235],
+      mild:    [250, 210, 90, 235],
+      warm:    [244, 140, 60, 235],
+      hot:     [220, 50, 47, 235],
+      unknown: [130, 130, 130, 170],
+    },
+    colorMappingDefault: [130, 130, 130, 170],
+    opacity: 0.85,
+    tripWidth: 1.5,
+    widthMinPixels: 1,
+    widthMaxPixels: 3,
+    trailLength: 86400000 * 90, // ~90-day trail ≈ a few real seconds at 43yr/10min
+    fadeTrail: true,
+    zoomOverride: 0,
+    useGlobalBounds: true,
+    legend: {
+      title: 'Sea-surface temperature',
+      items: [
+        { color: '#2C5AC8', label: '< 5 °C' },
+        { color: '#28B4C8', label: '5–15 °C' },
+        { color: '#FAD25A', label: '15–22 °C' },
+        { color: '#F48C3C', label: '22–27 °C' },
+        { color: '#DC322F', label: '≥ 27 °C' },
+      ],
+    },
+  },
+  {
+    // ── OSM editing history — generate with:
+    //   stt-generate osm-edits --source nodes --input <region.osh.pbf> \
+    //     --bounds 40.49,-74.27,40.92,-73.68 --tagged-only --summary-tier \
+    //     --output examples/showcase/public/data/osm-nyc-nodes.stt
+    // The archive is kept local (not committed); see docs/guides/data-generation.md.
+    id: 'osm-nyc-draw',
+    name: 'OSM Editing — NYC Draws Itself',
+    description:
+      'OpenStreetMap node creations in New York City, 2007→2025, coloured by ' +
+      'year created. © OpenStreetMap contributors (ODbL).',
+    url: '/data/osm-nyc-nodes.stt',
+    type: 'point',
+    // Force raw points at every zoom: the archive carries an H3 summary tier
+    // (built for the overview), but that hexbin overlay obscures the
+    // point-level "drawing" story, so this demo always renders raw creations.
+    tier: 'raw',
+    // "Draw and persist": points appear at their creation time and stay. The
+    // loader window is widened automatically (DemoPage) so revealed tiles stay
+    // resident; the GPU does the progressive reveal.
+    cumulative: true,
+    timeRange: {
+      start: Date.parse('2007-01-01T00:00:00Z'),
+      end: Date.parse('2026-01-01T00:00:00Z'),
+    },
+    timeWindow: 86400000 * 30, // overridden for cumulative datasets; kept for completeness
+    targetPlaybackSeconds: 180, // ~19 years in 4 minutes
+    // ~2 weeks of sim-time "ink appearing" ramp as each node is revealed.
+    fadeInDuration: 86400000 * 14,
+    initialViewState: {
+      longitude: -73.97,
+      latitude: 40.72,
+      zoom: 11,
+      pitch: 0,
+      bearing: 0,
+    },
+    colorProperty: 'year',
+    colorMapping: OSM_YEAR_COLORS,
+    colorMappingDefault: [150, 150, 150, 255],
+    // Tight pixel dots so millions of creations read as line-work, not blobs.
+    radiusUnits: 'pixels',
+    radiusScale: 1,
+    radiusMinPixels: 1,
+    radiusMaxPixels: 2,
+    legend: {
+      title: 'Year created',
+      ramps: [
+        { label: '2007 → 2026', colors: ['#253494', '#41b6c4', '#78c679', '#fd8d3c', '#e31a1c'] },
+      ],
+    },
+  },
+  {
+    // ── generate with:
+    //   stt-generate osm-edits --source changesets \
+    //     --input changesets-latest.osm.bz2 --bounds 40.49,-74.27,40.92,-73.68 \
+    //     --summary-tier --output examples/showcase/public/data/osm-nyc-changesets.stt
+    id: 'osm-nyc-changesets-summary',
+    name: 'OSM Editing — NYC Activity (Hex)',
+    description:
+      'H3 hex-bin density of New York City OpenStreetMap changesets, 2007→2025. ' +
+      'Toggle total edits vs sessions. © OpenStreetMap contributors (ODbL).',
+    url: '/data/osm-nyc-changesets.stt',
+    type: 'summary',
+    timeRange: {
+      start: Date.parse('2007-01-01T00:00:00Z'),
+      end: Date.parse('2026-01-01T00:00:00Z'),
+    },
+    timeWindow: 86400000 * 30, // matches the 30-day temporal bucket
+    targetPlaybackSeconds: 120,
+    initialViewState: {
+      longitude: -73.97,
+      latitude: 40.72,
+      zoom: 10,
+      pitch: 0,
+      bearing: 0,
+    },
+    // Flat choropleth, not extruded: per-cell edit counts are brutally
+    // heavy-tailed (res-10 p99≈1.3K, max≈37K per 30-day bucket), so
+    // weight-proportional extrusion would throw single 30 km+ towers. Colour
+    // alone reads cleanly and works for both toggle metrics.
+    summaryExtruded: false,
+    summaryCoverage: 0.9,
+    summaryToggleWeights: [
+      {
+        id: 'edits',
+        label: 'Edits',
+        weightProperty: 'sum_num_changes',
+        // Total edits per hex per 30-day bucket. Tuned to the real res-10
+        // distribution (p90≈135, p95≈315, p99≈1345) for good mid-range spread.
+        colorDomain: [1, 600],
+        colorRange: [
+          [12, 44, 64, 220],
+          [22, 92, 110, 230],
+          [38, 150, 160, 235],
+          [90, 200, 180, 240],
+          [170, 230, 200, 250],
+          [224, 250, 235, 255],
+        ],
+        legendColors: ['#0c2c40', '#26ae9c', '#aae6c8', '#e0faeb'],
+      },
+      {
+        id: 'sessions',
+        label: 'Sessions',
+        weightProperty: 'count',
+        // Changeset count per hex per 30-day bucket — small numbers (res-10
+        // p90≈2, p99≈6), so a tight domain gives the map real contrast.
+        colorDomain: [1, 8],
+        colorRange: [
+          [28, 24, 64, 220],
+          [60, 48, 130, 230],
+          [104, 80, 188, 235],
+          [150, 120, 224, 240],
+          [196, 170, 244, 250],
+          [232, 220, 252, 255],
+        ],
+        legendColors: ['#1c1840', '#6850bc', '#c4aaf4', '#e8dcfc'],
+      },
+    ],
+    legend: {
+      title: 'OSM editing activity (per hex)',
+      ramps: [
+        { label: 'Edits',    colors: ['#0c2c40', '#26ae9c', '#aae6c8', '#e0faeb'] },
+        { label: 'Sessions', colors: ['#1c1840', '#6850bc', '#c4aaf4', '#e8dcfc'] },
+      ],
+    },
+  },
+  {
+    // Same archive as osm-nyc-changesets-summary, rendered raw and coloured by
+    // the editor "era" (the tooling story: Potlatch → JOSM → iD → StreetComplete).
+    id: 'osm-nyc-changesets-editors',
+    name: 'OSM Editing — NYC by Editor',
+    description:
+      'New York City OpenStreetMap changesets coloured by editor (Potlatch, ' +
+      'JOSM, iD, StreetComplete…), 2007→2025. © OpenStreetMap contributors (ODbL).',
+    url: '/data/osm-nyc-changesets.stt',
+    type: 'point',
+    timeRange: {
+      start: Date.parse('2007-01-01T00:00:00Z'),
+      end: Date.parse('2026-01-01T00:00:00Z'),
+    },
+    timeWindow: 86400000 * 60, // 60-day rolling window of editing activity
+    targetPlaybackSeconds: 120,
+    initialViewState: {
+      longitude: -73.97,
+      latitude: 40.72,
+      zoom: 11,
+      pitch: 0,
+      bearing: 0,
+    },
+    colorProperty: 'editor',
+    colorMapping: {
+      Potlatch: [142, 68, 173, 255],
+      JOSM: [41, 128, 185, 255],
+      iD: [39, 174, 96, 255],
+      Rapid: [26, 188, 156, 255],
+      StreetComplete: [243, 156, 18, 255],
+      'Go Map!!': [233, 30, 99, 255],
+      Vespucci: [211, 84, 0, 255],
+      'Maps.me': [127, 140, 141, 255],
+      'Organic Maps': [127, 140, 141, 255],
+      'bot/import': [149, 165, 166, 255],
+      other: [189, 195, 199, 255],
+    },
+    colorMappingDefault: [189, 195, 199, 255],
+    radiusUnits: 'pixels',
+    radiusScale: 1,
+    radiusMinPixels: 2,
+    radiusMaxPixels: 4,
+    legend: {
+      title: 'Editor',
+      items: [
+        { color: '#8e44ad', label: 'Potlatch' },
+        { color: '#2980b9', label: 'JOSM' },
+        { color: '#27ae60', label: 'iD' },
+        { color: '#1abc9c', label: 'Rapid' },
+        { color: '#f39c12', label: 'StreetComplete' },
+        { color: '#e91e63', label: 'Go Map!!' },
+        { color: '#95a5a6', label: 'bot / import' },
+        { color: '#bdc3c7', label: 'other' },
+      ],
+    },
   },
 ];
 

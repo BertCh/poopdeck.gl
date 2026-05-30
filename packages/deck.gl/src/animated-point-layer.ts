@@ -156,6 +156,16 @@ export interface AnimatedPointLayerProps extends SpatioTemporalLayerProps {
   wakeTailScale?: number;
 
   /**
+   * Cumulative ("draw and persist") mode — see TimeFilterExtension. When true,
+   * each point appears at its `startTime` and stays visible for the rest of
+   * playback (the map "draws itself"). `fadeInDuration` doubles as the appear
+   * ramp. The caller must widen the tile loader's window so revealed tiles stay
+   * resident (the shader does the progressive reveal, not the loader).
+   * @default false
+   */
+  cumulative?: boolean;
+
+  /**
    * Enable 3D positions (altitude / elevation). The v3 layer infers 3D from
    * the tile's `positionDimensions` automatically — the prop is kept for
    * API compatibility with v2 callers and forwarded as a hint. 2D tiles
@@ -648,6 +658,7 @@ export class AnimatedPointLayer extends SpatioTemporalLayer<AnimatedPointLayerPr
       fadeOutDuration: this.props.fadeOutDuration,
       wakeLength: this.props.wakeLength,
       wakeTailScale: this.props.wakeTailScale,
+      cumulative: this.props.cumulative,
     };
     // Always set `useCategoryColor` so tests / debug tooling can distinguish
     // the two paths via prop inspection. The extension itself is only

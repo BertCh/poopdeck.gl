@@ -64,13 +64,6 @@
   border: 1px solid var(--panel-border);
 }
 
-.gradient-text {
-  background: linear-gradient(135deg, var(--active) 0%, var(--primary) 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-}
-
 .font-display {
   font-family: 'Syne', sans-serif;
 }

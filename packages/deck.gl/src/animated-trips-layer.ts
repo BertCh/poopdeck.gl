@@ -69,6 +69,16 @@ export interface AnimatedTripsLayerProps extends SpatioTemporalLayerProps {
   /** Color palette for categorical `tripColor`. */
   colorPalette?: Color[];
   /**
+   * Explicit category-string → color map for categorical `tripColor`.
+   * Resolved per-tile against each tile's own category dictionary, so colors
+   * stay consistent across tiles (unlike `colorPalette`, whose indices are
+   * assigned per-tile in first-seen order). Takes precedence over
+   * `colorPalette` when set. Mirrors `AnimatedPointLayer.colorMapping`.
+   */
+  colorMapping?: Record<string, Color>;
+  /** Fallback color for categories absent from `colorMapping`. */
+  colorMappingDefault?: Color;
+  /**
    * Trail length in milliseconds.
    * @default 180000
    */
@@ -97,6 +107,20 @@ const DEFAULT_PALETTE: Color[] = [
   [214, 39, 40, 255],
   [148, 103, 189, 255],
 ];
+
+/**
+ * Build a per-tile palette by mapping the tile's own category dictionary
+ * through an explicit string→color map. Because `instanceCategoryIndex`
+ * indexes into the same per-tile `categories` array, the resulting palette
+ * makes each category render the same color in every tile.
+ */
+function paletteFromMapping(
+  categories: string[],
+  mapping: Record<string, Color>,
+  fallback: Color,
+): Color[] {
+  return categories.map((c) => mapping[c] ?? fallback);
+}
 
 /**
  * Per-tile prepared data. Cached so the `data` object reference handed to
@@ -213,12 +237,35 @@ function haversineMeters(lon1: number, lat1: number, lon2: number, lat2: number)
 }
 
 /**
- * Narrow Uint16Array → Float32Array for the GPU CategoryColorExtension.
- * Allocated once per (tile, style change) and cached on the PreparedTile.
+ * Resolve each feature's categorical color from the palette and expand it to
+ * one RGBA per vertex. PathLayer renders segments as instances and maps a
+ * per-vertex `getColor` onto them via its tessellator, so a per-vertex buffer
+ * is the correct granularity here — a per-feature one under-sizes the draw
+ * call (the cause of "vertex buffer is not big enough").
  */
-function indicesToFloat32(indices: Uint16Array, count: number): Float32Array {
-  const out = new Float32Array(count);
-  for (let i = 0; i < count; i++) out[i] = indices[i];
+function expandCategoryColors(
+  indices: Uint16Array,
+  palette: Color[],
+  startIndices: Uint32Array,
+  featureCount: number,
+  totalVerts: number,
+  fallback: Color,
+): Uint8Array {
+  const out = new Uint8Array(totalVerts * 4);
+  for (let f = 0; f < featureCount; f++) {
+    const c = palette[indices[f]] ?? fallback;
+    const r = c[0];
+    const g = c[1];
+    const b = c[2];
+    const a = c[3] ?? 255;
+    for (let v = startIndices[f]; v < startIndices[f + 1]; v++) {
+      const o = v * 4;
+      out[o] = r;
+      out[o + 1] = g;
+      out[o + 2] = b;
+      out[o + 3] = a;
+    }
+  }
   return out;
 }
 
@@ -280,14 +327,14 @@ export class AnimatedTripsLayer extends SpatioTemporalLayer<AnimatedTripsLayerPr
    * stateless w.r.t. data; the per-tile timeOffset is passed as a layer prop.
    */
   /**
-   * Trips always use trail-mode filtering (per-vertex time + trail uniform),
-   * so we register ONLY `instanceVertexTime` and skip the
-   * `instanceStartTime` / `instanceEndTime` pair. That frees up two
-   * vertex-attribute slots — critical because PathLayer's fp64 position
-   * split + `instancePickingColors` + CategoryColorExtension already crowd
-   * the WebGL2 16-attribute minimum. Without this fix the nyc-taxi-trips
-   * and hero-trips sublayers hit
-   *   "WebGL Link error: Too many attributes (instancePickingColors)".
+   * Trips run in trail mode (per-vertex time + trail uniform). The
+   * `mode: 'trail'` arg is forward-compat only and a NO-OP today (see the
+   * TimeFilterMode docstring): the extension registers all three time
+   * attributes (`instanceVertexTime` + `instanceStartTime`/`instanceEndTime`)
+   * unconditionally, and the shader's trailLength branch selects per-vertex
+   * time at draw. What keeps PathLayer's fp64 split + time + category combo
+   * under WebGL2's 16-attribute floor is NoPickingPathLayer freeing the
+   * `instancePickingColors` slot — not attribute pruning here.
    */
   private readonly timeFilterExtension = new TimeFilterExtension({ mode: 'trail' });
 
@@ -437,9 +484,12 @@ export class AnimatedTripsLayer extends SpatioTemporalLayer<AnimatedTripsLayerPr
     const widthProp = typeof this.props.tripWidth === 'string' ? this.props.tripWidth : '';
     // Palette identity matters only when colorProp is set. Including its
     // length in the key is a cheap way to invalidate when the palette changes.
+    const mapSig = this.props.colorMapping
+      ? `m${Object.keys(this.props.colorMapping).length}`
+      : '';
     const styleKey = `${colorProp}|${widthProp}|${
       colorProp ? (this.props.colorPalette ?? DEFAULT_PALETTE).length : 0
-    }`;
+    }|${mapSig}`;
 
     const tileKey = makeTileKey(tile, tileLayer);
     const cached = this.preparedTileCache.get(tileKey);
@@ -473,21 +523,43 @@ export class AnimatedTripsLayer extends SpatioTemporalLayer<AnimatedTripsLayerPr
       instanceVertexTime: { value: vertexTimes, size: 1 },
     };
 
-    // Property-driven categorical color: GPU path via CategoryColorExtension.
-    // The previous CPU expansion allocated a fresh 4n-byte Uint8Array per
-    // tile-style change; the GPU path uploads a 4n-byte Float32 attribute
-    // (one-time) and indexes a shared 16 KB palette texture in the shader.
-    let gpuPalette: Color[] | null = null;
+    // Property-driven categorical color. PathLayer instances are SEGMENTS,
+    // not features, so the GPU per-feature `instanceCategoryIndex` path
+    // (correct for the point layer) under-sizes the instanced buffer here and
+    // throws "vertex buffer is not big enough". Resolve each feature's color
+    // on the CPU and expand it per-vertex instead — PathLayer's tessellator
+    // maps a per-vertex `getColor` onto its segment instances natively. The
+    // extra 4 bytes/vertex is negligible at trip-dataset scale.
     if (colorProp) {
       const cat = binary.categoricalProps[colorProp];
       if (cat) {
-        attributes.instanceCategoryIndex = {
-          value: indicesToFloat32(cat.indices, binary.featureCount),
-          size: 1,
+        // Explicit colorMapping → stable per-tile palette (resolved against
+        // this tile's own category dictionary); else the ordered colorPalette.
+        const palette = this.props.colorMapping
+          ? paletteFromMapping(
+              cat.categories,
+              this.props.colorMapping,
+              this.props.colorMappingDefault ?? [120, 120, 120, 255],
+            )
+          : this.props.colorPalette ?? DEFAULT_PALETTE;
+        attributes.getColor = {
+          value: expandCategoryColors(
+            cat.indices,
+            palette,
+            binary.startIndices,
+            binary.featureCount,
+            totalVerts,
+            this.props.colorMappingDefault ?? [120, 120, 120, 255],
+          ),
+          size: 4,
+          normalized: true,
         };
-        gpuPalette = this.props.colorPalette ?? DEFAULT_PALETTE;
       }
     }
+    // The GPU CategoryColorExtension stays installed (constant extension list
+    // keeps shader pipelines cached) but idle for trips: its instanced index
+    // can't ride PathLayer's segment tessellation, so we color via getColor.
+    const gpuPalette: Color[] | null = null;
 
     // Property-driven width is already a Float32Array of length featureCount
     // — pass it through with zero copy.

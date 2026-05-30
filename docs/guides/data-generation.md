@@ -199,6 +199,91 @@ stt-generate nyc-rideshare \
 - `--osrm-url`: OSRM server URL
 - `--skip-routing`: Skip OSRM routing (pickup/dropoff only)
 
+### OSM Editing History (`osm-edits`)
+
+A time-series animation of *OpenStreetMap being edited*, scoped to one metro
+(default: New York City via `--bounds`). Two complementary signals; both
+sources are downloaded as a prerequisite and passed via `--input`. All output
+is **© OpenStreetMap contributors (ODbL)** — keep that attribution in any
+showcase config or published render.
+
+#### Signal A — node creation ("watch the metro draw itself")
+
+Every node's *first version* (its creation) placed at its lon/lat at its
+creation time. Played back cumulatively in the showcase (`cumulative: true`),
+the street grid and buildings ink in over ~18 years.
+
+**Step 1 — get a full-history extract.** Download a regional `.osh.pbf` for the
+region containing your metro from Geofabrik's *internal* server
+(<https://osm-internal.download.geofabrik.de/>, free OSM login). Optionally
+shrink it to the metro first with [osmium](https://osmcode.org/osmium-tool/):
+
+```bash
+osmium extract --with-history -b -74.27,40.49,-73.68,40.92 \
+  us-northeast-internal.osh.pbf -o nyc.osh.pbf
+```
+
+**Step 2 — build.** (The reader bbox-filters too, so the pre-clip is optional.)
+
+```bash
+stt-generate osm-edits \
+  --source nodes \
+  --input nyc.osh.pbf \
+  --bounds 40.49,-74.27,40.92,-73.68 \
+  --tagged-only \
+  --summary-tier \
+  --output examples/showcase/public/data/osm-nyc-nodes.stt
+```
+
+- `--tagged-only` keeps real features (buildings/POIs/roads) and drops untagged
+  geometry vertices — ~5-10× smaller, recommended for the showcase.
+- Builds zooms 8-16, monthly temporal buckets + a coarser LOD pyramid, and an
+  optional H3 count summary tier for the zoomed-out overview.
+
+#### Signal B — changeset activity ("who maps, with what, when")
+
+Every changeset near the metro as a timestamped point (bbox centroid), coloured
+by editor era, with an edit-volume H3 summary tier.
+
+**Step 1 — get the changeset dump** (public, no login; ~6 GB bz2, stream-parsed):
+
+```bash
+curl -O https://planet.openstreetmap.org/planet/changesets-latest.osm.bz2
+```
+
+**Step 2 — build:**
+
+```bash
+stt-generate osm-edits \
+  --source changesets \
+  --input changesets-latest.osm.bz2 \
+  --bounds 40.49,-74.27,40.92,-73.68 \
+  --max-bbox-deg 1.0 \
+  --summary-tier \
+  --output examples/showcase/public/data/osm-nyc-changesets.stt
+```
+
+- `--max-bbox-deg` drops planet-spanning import/bot changesets so their centroid
+  doesn't smear onto Null Island. `0` disables the filter.
+
+**Options (both sources):**
+- `--source`: `nodes` or `changesets` (default `nodes`)
+- `--input`: source file (required)
+- `--bounds`: metro bbox `min_lat,min_lon,max_lat,max_lon` (default NYC)
+- `--start-date` / `--end-date`: clip the time range (YYYY-MM-DD)
+- `--summary-tier`: emit the server-aggregated H3 tier
+- `--tagged-only` (nodes): drop untagged geometry vertices
+- `--max-bbox-deg` (changesets): giant-bbox filter degrees (default 1.0)
+
+The archives are large and are **kept local** — they're git-ignored and not
+hosted. The matching showcase configs (`osm-nyc-draw`,
+`osm-nyc-changesets-summary`, `osm-nyc-changesets-editors` in
+`examples/showcase/src/datasets.ts`) expect them under
+`examples/showcase/public/data/`.
+
+To target a different metro, swap `--bounds` (and pick the right region
+extract for `nodes`). For example, Berlin: `--bounds 52.34,13.09,52.68,13.76`.
+
 ## Custom Data (Using stt-build)
 
 `stt-build` accepts **GeoParquet only** (`.parquet` / `.geoparquet`). For

@@ -84,4 +84,10 @@ scripts/data-generation/osrm-data/
 *.osm.pbf
 *.osrm
 *.osrm.*
+
+# OSM editing-history inputs for `stt-generate osm-edits` (large; downloaded
+# as a prerequisite, never committed). History extracts + the changeset dump.
+*.osh.pbf
+*.osm.bz2
+*.osm.opl
 .claude/

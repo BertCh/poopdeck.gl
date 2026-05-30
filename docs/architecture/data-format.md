@@ -178,11 +178,21 @@ straight to deck.gl / WebGL.
 
 An STT tile layer **is** a valid [GeoArrow](https://geoarrow.org/format.html)
 record batch. The Rust writer (`crates/stt-core/src/arrow_tile.rs`) tags
-the `geometry` field's Arrow metadata with the standard extension key:
+the `geometry` field's Arrow metadata with the standard extension keys:
 
-| field metadata key       | values                                                     |
-| ------------------------ | ---------------------------------------------------------- |
-| `ARROW:extension:name`   | `geoarrow.point` / `geoarrow.linestring` / `geoarrow.polygon` |
+| field metadata key          | values                                                     |
+| --------------------------- | ---------------------------------------------------------- |
+| `ARROW:extension:name`      | `geoarrow.point` / `geoarrow.linestring` / `geoarrow.polygon` |
+| `ARROW:extension:metadata`  | `{"crs":"OGC:CRS84","crs_type":"authority_code"}`          |
+
+The `ARROW:extension:metadata` value is the GeoArrow per-type metadata JSON.
+STT pins the CRS to **OGC:CRS84** — WGS84 with the GeoJSON longitude-first axis
+order, matching the interleaved `[lon, lat]` storage — *not* `EPSG:4326`, whose
+strict (lat/lon) axis order would mislabel the data. Carrying it makes every
+tile self-describing to GDAL / GeoPandas / lonboard / QGIS; a reader that wants
+the CRS reads this key, and a reader that ignores it is unaffected (the key is
+additive). Older archives written before this key was added carry only
+`ARROW:extension:name`; consumers should treat a missing CRS as OGC:CRS84.
 
 Coordinates use the GeoArrow **interleaved** convention
 (`FixedSizeList<Float64, 2>` of `[x, y]` pairs), which matches the

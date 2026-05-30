@@ -1,50 +1,60 @@
 /**
- * HeatmapLayer — GPU-splat temporal heatmap, deck.gl edition.
+ * HeatmapLayer — animated density heatmap built on CANONICAL deck.gl.
  *
- * Architecture (single-pass):
- *   1. Per-tile-per-channel vertex buffers (instancePosition, instanceTime,
- *      instanceWeight, instanceChannel) are uploaded ONCE on tile arrival.
- *      No per-frame CPU filter.
- *   2. Vertex shader projects via deck.gl's `project32` and evaluates the
- *      time-window alpha — out-of-window points discard on the GPU.
- *   3. Fragment shader draws a gaussian disc, samples a per-channel
- *      palette LUT keyed on the splat intensity. Additive blending into
- *      the canvas sums contributions across overlapping splats.
+ * This is a thin composite over `@deck.gl/aggregation-layers`'
+ * {@link DeckHeatmapLayer}, the standard deck.gl heatmap. That layer does the
+ * thing a heatmap is supposed to do: it splats every point into a GPU weight
+ * texture with ADDITIVE accumulation, reduces to a per-pixel density, and only
+ * THEN maps the accumulated density through a colour ramp. Dense regions get
+ * hotter because more splats land on the same pixels — true per-pixel density.
  *
- * Replaces the old `HeatmapTimeLayer` that wrapped
- * `@deck.gl/aggregation-layers/HeatmapLayer`. The previous design rebuilt
- * the inner HeatmapLayer instance on every refilter, re-uploaded all
- * positions/weights, and triggered the weight-texture rebuild — the
- * dominant cost. The new layer does zero per-frame CPU work and reuses
- * GPU buffers across frames.
+ * ### Why this replaces the old custom-splat layer
+ * The previous implementation hand-rolled a single-pass splat shader that
+ * sampled the palette PER SPLAT (each point coloured by its own weight) and
+ * additively blended the resulting *colours*. Overlapping points summed colours
+ * instead of density, so hot zones blew out to white and the result never read
+ * as a heatmap. Its own shader comments admitted the ramp was "sampled
+ * per-splat, not per-pixel". This rewrite hands the splat+accumulate+ramp
+ * pipeline to deck.gl's tested implementation instead.
  *
- * The two-pass offscreen-FBO architecture used by the maplibre adapter
- * (gather into RGBA16F, then ramp-pass to canvas) is intentionally NOT
- * used here: it interacts poorly with deck.gl 9's RenderPass system and
- * the offscreen output never reached the canvas in testing. The
- * single-pass direct splat keeps us inside the standard deck.gl
- * pipeline. Visual diff vs the FBO design is small in practice; the FBO
- * variant remains a follow-up once deck.gl's offscreen contract is
- * better understood.
+ * ### Time animation
+ * The canonical HeatmapLayer has no notion of time. We animate it with
+ * `@deck.gl/extensions`' {@link DataFilterExtension}: each point carries a
+ * relativized timestamp as `getFilterValue`, and the layer's `filterRange`
+ * (the `[start, end]` window around the play head) is recomputed every frame.
+ * Out-of-window points collapse to a degenerate vertex during the weights
+ * aggregation pass, so they contribute zero density — and crucially, changing
+ * `filterRange` RE-RUNS the aggregation (verified against the installed
+ * 9.3.2: `filterRange` is not in the aggregation layer's `ignoreProps`, so a
+ * changed value flags `dataChanged` → the weights transform re-runs). The
+ * result is a genuinely re-aggregated heatmap that animates, not a cross-fade.
+ *
+ * ### Data feed — consolidated across visible tiles
+ * Points from every visible tile are consolidated into ONE binary buffer set
+ * per channel (not per-tile sublayers). The canonical layer normalises against
+ * a single global max, so there are no per-tile brightness seams, and gaussian
+ * splats that straddle a tile border accumulate correctly. The consolidated
+ * buffers are cached by visible-tile-set key and rebuilt only when that set (or
+ * the channel config) changes — never per frame. Per frame, only the small
+ * `filterRange` array changes, so deck.gl re-aggregates over the already-
+ * uploaded GPU buffers without re-uploading anything.
+ *
+ * f32 time precision: absolute epoch-ms (~1.7e12) cannot live in a Float32
+ * attribute. Both the per-point filter value AND `filterRange` are relativized
+ * against a single `layerTimeOffset` (the first visible tile's offset), so both
+ * sides of the shader comparison are small numbers that fit exactly in f32 —
+ * the same scheme the TimeFilterExtension uses for point/path/trips layers.
  */
 
-import { Layer, project32 } from '@deck.gl/core';
-import type {
-  Color,
-  CompositeLayerProps,
-  Layer as DeckLayer,
-  LayerContext,
-  UpdateParameters,
-} from '@deck.gl/core';
-import { Model, Geometry } from '@luma.gl/engine';
-import type { Buffer as LumaBuffer, Texture } from '@luma.gl/core';
-import { HEATMAP_VS, HEATMAP_FS, heatmapUniforms } from './shaders/heatmap.glsl';
+import { HeatmapLayer as DeckHeatmapLayer } from '@deck.gl/aggregation-layers';
+import { DataFilterExtension } from '@deck.gl/extensions';
+import type { Color, Layer as DeckLayer, UpdateParameters } from '@deck.gl/core';
 import {
   SpatioTemporalLayer,
   type SpatioTemporalLayerProps,
 } from './spatiotemporal-layer';
 import { warnOnce } from './log';
-import type { BinaryFeatures, Tile } from '@stt/core';
+import type { Tile } from '@stt/core';
 
 const DEFAULT_COLOR_RANGE: Color[] = [
   [255, 255, 178, 255],
@@ -56,10 +66,17 @@ const DEFAULT_COLOR_RANGE: Color[] = [
   [177, 0, 38, 255],
 ];
 
+/** Max stacked channels — one canonical HeatmapLayer is drawn per channel. */
+const MAX_CHANNELS = 4;
+
+/** Re-aggregation cadence cap (Hz). filterRange is pushed at most this often. */
+const FILTER_UPDATE_HZ = 30;
+
 /**
- * Per-class spec for a stacked heatmap. Up to 4 classes pack into the
- * RGBA accumulator. When `channels` is omitted the layer renders ONE
- * default class from the top-level colorRange/colorDomain props.
+ * Per-class spec for a stacked heatmap. Each channel renders as its own
+ * canonical HeatmapLayer (its own ramp + density normalisation), composited in
+ * order. When `channels` is omitted the layer renders ONE default class from
+ * the top-level colorRange/colorDomain props.
  */
 export interface HeatmapChannelSpec {
   /** Human-readable id; matches metadata.heatmapDomain.classes[*].id when set. */
@@ -73,449 +90,75 @@ export interface HeatmapChannelSpec {
   /** Per-class color ramp (low → high density). Defaults to OrRd. */
   colorRange?: Color[];
   /**
-   * Pinned [min, max] intensity domain. Setting this skips any runtime
-   * auto-detect. Defaults to [0, 1].
+   * Pinned [min, max] density domain. Setting this skips the canonical layer's
+   * per-frame max-normalisation (which otherwise makes colours "breathe" as the
+   * window slides). When unset the layer auto-normalises against the current
+   * window's max density.
    */
   colorDomain?: [number, number];
-  /** Per-class weight multiplier on top of the global `intensity`. */
+  /** Per-class weight multiplier folded into each point's accumulation weight. */
   intensity?: number;
 }
 
 export interface HeatmapLayerProps extends SpatioTemporalLayerProps {
   /** Splat radius in pixels. Defaults to 30. */
   radiusPixels?: number;
-  /** Global intensity multiplier. Per-channel `intensity` stacks on top. */
+  /** Global intensity multiplier (canonical HeatmapLayer `intensity`). */
   intensity?: number;
   /** Per-feature weight property name (defaults to constant 1.0). */
   weightProperty?: string;
   /** Color ramp used when `channels` is unset (single-class mode). */
   colorRange?: Color[];
   /**
-   * Pinned [min, max] intensity domain for the default (single-class) mode.
-   * Defaults to [0, 1].
+   * Pinned [min, max] density domain for the default (single-class) mode.
+   * When unset the layer auto-normalises (and reads metadata.heatmapDomain when
+   * the archive carries one).
    */
   colorDomain?: [number, number];
   /**
-   * Threshold below which accumulated intensity renders transparent.
-   * 0 = no threshold; 0.05 hides faint regions. Default 0.05.
+   * Density fraction below which pixels render transparent (canonical
+   * HeatmapLayer `threshold`). Only takes effect when `colorDomain` is unset.
+   * Default 0.05.
    */
   threshold?: number;
   /**
    * Stacked categorical channels. When supplied, the layer renders one
-   * sub-draw per channel using the same shader + accumulator.
+   * canonical HeatmapLayer per channel.
    */
   channels?: HeatmapChannelSpec[];
   /**
-   * Reserved for the future FBO-based TAA blend. Currently a no-op — the
-   * single-pass design has no offscreen frame to blend into.
+   * Deprecated/no-op. The old single-pass splat reserved this for a future
+   * TAA blend that never shipped. Accepted for API compatibility and ignored —
+   * the canonical aggregation pipeline has no equivalent.
    */
   historyWeight?: number;
-  /** Fade-in duration at the leading edge of the time window (ms). */
+  /**
+   * Fade-in duration at the leading edge of the time window (ms). Mapped onto
+   * the DataFilterExtension soft range so points fade in rather than pop.
+   */
   fadeInDuration?: number;
   /** Fade-out duration at the trailing edge of the time window (ms). */
   fadeOutDuration?: number;
-}
-
-/* ────────────────────────────────────────────────────────────────────── */
-/* Inner sublayer — owns the GPU pipeline                                 */
-/* ────────────────────────────────────────────────────────────────────── */
-
-interface PerTileChannelData {
-  /** Pre-projected per-instance attributes. */
-  instancePosition: Float32Array;
-  instanceTime: Float32Array;
-  instanceWeight: Float32Array;
-  instanceChannel: Float32Array;
-  vertexCount: number;
-  channelIndex: number;
-  channelId: string;
-  /**
-   * GPU buffers, uploaded ONCE when the entry is built and reused across
-   * frames. Previously the layer created+destroyed four buffers per entry on
-   * every `draw()` (i.e. every animation frame) — 4·N·C alloc+upload+free per
-   * frame — which defeated the "upload once" design and churned the driver's
-   * buffer pool. Destroyed on tile eviction (updateState) and finalizeState.
-   */
-  gpu?: {
-    posBuf: LumaBuffer;
-    timeBuf: LumaBuffer;
-    weightBuf: LumaBuffer;
-    channelBuf: LumaBuffer;
-  };
-}
-
-function destroyEntryGpu(entry: PerTileChannelData | undefined): void {
-  if (!entry?.gpu) return;
-  entry.gpu.posBuf.destroy();
-  entry.gpu.timeBuf.destroy();
-  entry.gpu.weightBuf.destroy();
-  entry.gpu.channelBuf.destroy();
-  entry.gpu = undefined;
 }
 
 interface ResolvedChannel {
   id: string;
   intensity: number;
   colorRange: Color[];
-  colorDomain: [number, number];
+  /** null → let the canonical layer auto-normalise (no pinned domain). */
+  colorDomain: [number, number] | null;
   categoryFilter?: { property: string; values: string[] };
 }
 
-interface HeatmapSplatSublayerProps extends CompositeLayerProps {
-  /** Visible tile set from the parent's tileset. */
-  tiles: Tile[];
-  /** Reference offset (epoch-ms) to relativize all times against. */
-  layerTimeOffset: number;
-  /** Current sim time getter (epoch-ms). */
-  getTime: () => number;
-  timeWindow: number;
-  radiusPixels: number;
-  intensity: number;
-  threshold: number;
-  channels: ResolvedChannel[];
-  fadeInDuration: number;
-  fadeOutDuration: number;
-  weightProperty?: string;
-}
-
-class HeatmapSplatSublayer extends Layer<HeatmapSplatSublayerProps> {
-  static layerName = 'HeatmapSplatSublayer';
-
-  static defaultProps: any = {
-    tiles: { type: 'array', value: [], compare: false },
-    layerTimeOffset: { type: 'number', value: 0, compare: false },
-    getTime: { type: 'function', value: () => 0, compare: false },
-    timeWindow: { type: 'number', value: 86_400_000, compare: false },
-    radiusPixels: { type: 'number', value: 30, compare: true },
-    intensity: { type: 'number', value: 1, compare: true },
-    threshold: { type: 'number', value: 0.05, compare: true },
-    channels: { type: 'array', value: [], compare: true },
-    fadeInDuration: { type: 'number', value: 0, compare: false },
-    fadeOutDuration: { type: 'number', value: 0, compare: false },
-    weightProperty: { type: 'string', value: null, optional: true, compare: true },
-  };
-
-  getShaders(): any {
-    return super.getShaders({
-      vs: HEATMAP_VS,
-      fs: HEATMAP_FS,
-      modules: [project32, heatmapUniforms],
-    });
-  }
-
-  initializeState(_context: LayerContext): void {
-    const device = this.context.device;
-    const shaders = this.getShaders();
-    const model = new Model(device, {
-      ...shaders,
-      id: `${this.props.id}-model`,
-      topology: 'point-list',
-      isInstanced: false,
-      vertexCount: 0,
-      bufferLayout: [
-        { name: 'instancePosition', format: 'float32x3' },
-        { name: 'instanceTime', format: 'float32x2' },
-        { name: 'instanceWeight', format: 'float32' },
-        { name: 'instanceChannel', format: 'float32' },
-      ],
-      // Empty geometry — Model needs something declared as the vertex
-      // driver. We replace its attribute buffers per tile/channel in draw().
-      geometry: new Geometry({
-        topology: 'point-list',
-        attributes: {
-          instancePosition: { size: 3, value: new Float32Array(0) },
-        },
-        vertexCount: 0,
-      }),
-      parameters: {
-        blend: true,
-        // Additive blending — accumulate splat contributions per pixel.
-        blendColorSrcFactor: 'one',
-        blendColorDstFactor: 'one',
-        blendAlphaSrcFactor: 'one',
-        blendAlphaDstFactor: 'one',
-        depthCompare: 'always',
-        depthWriteEnabled: false,
-        cullMode: 'none',
-      },
-    });
-
-    const paletteTextures: Texture[] = [];
-    for (let i = 0; i < 4; i++) {
-      paletteTextures.push(
-        device.createTexture({
-          width: 256,
-          height: 1,
-          format: 'rgba8unorm',
-          sampler: {
-            minFilter: 'linear',
-            magFilter: 'linear',
-            addressModeU: 'clamp-to-edge',
-            addressModeV: 'clamp-to-edge',
-          },
-        }),
-      );
-    }
-
-    this.setState({
-      model,
-      paletteTextures,
-      lastPaletteKey: ['', '', '', ''],
-      // Per-tile-per-channel cached CPU-side typed arrays. Built once per
-      // (tile, channel) on first sight and reused across frames.
-      tileChannelData: new Map<string, PerTileChannelData>(),
-    });
-  }
-
-  finalizeState(_context: LayerContext): void {
-    const s = this.state as any;
-    s.model?.destroy();
-    if (s.paletteTextures) {
-      for (const t of s.paletteTextures) t?.destroy();
-    }
-    if (s.tileChannelData) {
-      for (const entry of (s.tileChannelData as Map<string, PerTileChannelData>).values()) {
-        destroyEntryGpu(entry);
-      }
-      s.tileChannelData.clear();
-    }
-  }
-
-  updateState(params: UpdateParameters<this>): void {
-    super.updateState(params);
-    const s = this.state as any;
-    // Drop cached buffers whose tile is no longer live or whose channel
-    // mapping changed.
-    const live = new Set<string>();
-    const channelCount = params.props.channels?.length ?? 0;
-    for (const tile of params.props.tiles ?? []) {
-      const base = tileKey(tile);
-      for (let chIdx = 0; chIdx < channelCount; chIdx++) {
-        live.add(`${base}::${chIdx}`);
-      }
-    }
-    if (
-      params.props.channels !== params.oldProps.channels ||
-      params.props.weightProperty !== params.oldProps.weightProperty ||
-      params.props.layerTimeOffset !== params.oldProps.layerTimeOffset
-    ) {
-      // Wholesale wipe — channel mapping or relativization changed. Free the
-      // GPU buffers of every cached entry before dropping them.
-      for (const entry of (s.tileChannelData as Map<string, PerTileChannelData>)?.values() ?? []) {
-        destroyEntryGpu(entry);
-      }
-      s.tileChannelData?.clear();
-    } else {
-      for (const key of [...(s.tileChannelData?.keys() ?? [])]) {
-        if (!live.has(key)) {
-          destroyEntryGpu(s.tileChannelData.get(key));
-          s.tileChannelData.delete(key);
-        }
-      }
-    }
-  }
-
-  draw(_params: unknown): void {
-    const s = this.state as any;
-    const model: Model | undefined = s.model;
-    if (!model) return;
-    if (!this.props.channels || this.props.channels.length === 0) return;
-
-    this.syncPalettes();
-    this.ensureTileChannelData();
-
-    const time = this.props.getTime();
-    const halfWindow = this.props.timeWindow / 2;
-    const windowStart = time - this.props.layerTimeOffset - halfWindow;
-    const windowEnd = time - this.props.layerTimeOffset + halfWindow;
-
-    model.setBindings({
-      uPalette0: s.paletteTextures[0],
-      uPalette1: s.paletteTextures[1],
-      uPalette2: s.paletteTextures[2],
-      uPalette3: s.paletteTextures[3],
-    });
-
-    // One draw call per (tile, channel) pair. GPU buffers are created once in
-    // ensureTileChannelData() and reused here every frame; draw() only swaps
-    // the (cached) attribute buffers and updates the small uniform block.
-    for (const entry of (s.tileChannelData as Map<string, PerTileChannelData>).values()) {
-      const channel = this.props.channels[entry.channelIndex];
-      if (!channel || !entry.gpu) continue;
-      model.setAttributes({
-        instancePosition: entry.gpu.posBuf,
-        instanceTime: entry.gpu.timeBuf,
-        instanceWeight: entry.gpu.weightBuf,
-        instanceChannel: entry.gpu.channelBuf,
-      });
-      model.setVertexCount(entry.vertexCount);
-      model.shaderInputs.setProps({
-        heatmap: {
-          radius: this.props.radiusPixels,
-          intensity: this.props.intensity,
-          windowStart,
-          windowEnd,
-          fadeIn: this.props.fadeInDuration,
-          fadeOut: this.props.fadeOutDuration,
-          threshold: this.props.threshold,
-          opacity: this.props.opacity ?? 1,
-          domainMin: channel.colorDomain[0],
-          domainMax: channel.colorDomain[1],
-        },
-      });
-      model.draw(this.context.renderPass);
-    }
-  }
-
-  // ──────────────────────────────────────────────────────────────────────
-  // Helpers
-  // ──────────────────────────────────────────────────────────────────────
-
-  private syncPalettes(): void {
-    const s = this.state as any;
-    for (let i = 0; i < this.props.channels.length; i++) {
-      const ch = this.props.channels[i];
-      const key = `${ch.colorRange.length}:${ch.colorRange.flat().join(',')}`;
-      if (key === s.lastPaletteKey[i]) continue;
-      const data = buildPaletteRgba8(ch.colorRange);
-      s.paletteTextures[i].copyImageData({ data });
-      s.lastPaletteKey[i] = key;
-    }
-  }
-
-  private ensureTileChannelData(): void {
-    const s = this.state as any;
-    const channels = this.props.channels;
-    const weightProp = this.props.weightProperty;
-    for (const tile of this.props.tiles) {
-      for (const tileLayer of tile.layers) {
-        const binary = tileLayer.features;
-        if (binary.featureCount === 0) continue;
-        const base = tileKey(tile);
-        for (let chIdx = 0; chIdx < channels.length; chIdx++) {
-          const key = `${base}::${chIdx}`;
-          if (s.tileChannelData.has(key)) continue;
-          const built = buildTileChannelData(
-            binary,
-            channels[chIdx],
-            chIdx,
-            weightProp,
-            this.props.layerTimeOffset,
-          );
-          if (built) {
-            // Upload the GPU buffers ONCE, here on first sight of this
-            // (tile, channel), so draw() can reuse them every frame.
-            const device = this.context.device;
-            built.gpu = {
-              posBuf: device.createBuffer({ data: built.instancePosition, usage: 0x0020 }),
-              timeBuf: device.createBuffer({ data: built.instanceTime, usage: 0x0020 }),
-              weightBuf: device.createBuffer({ data: built.instanceWeight, usage: 0x0020 }),
-              channelBuf: device.createBuffer({ data: built.instanceChannel, usage: 0x0020 }),
-            };
-            s.tileChannelData.set(key, built);
-          }
-        }
-      }
-    }
-  }
-}
-
-function tileKey(tile: Tile): string {
-  const { z, x, y, t } = tile.id;
-  return `${z}/${x}/${y}/${t}`;
-}
-
-/**
- * Build the per-(tile, channel) typed arrays. Filters out features that
- * don't pass the channel's category filter — those rows are simply not
- * uploaded, so the GPU does no work culling them.
- */
-function buildTileChannelData(
-  binary: BinaryFeatures,
-  channel: ResolvedChannel,
-  channelIndex: number,
-  weightProp: string | undefined,
-  layerTimeOffset: number,
-): PerTileChannelData | null {
-  let mask: Uint8Array | null = null;
-  let n = binary.featureCount;
-  if (channel.categoryFilter) {
-    const cat = binary.categoricalProps[channel.categoryFilter.property];
-    if (!cat) return null;
-    const allowed = new Set<number>();
-    for (let i = 0; i < cat.categories.length; i++) {
-      if (channel.categoryFilter.values.indexOf(cat.categories[i]) !== -1) {
-        allowed.add(i);
-      }
-    }
-    if (allowed.size === 0) return null;
-    mask = new Uint8Array(binary.featureCount);
-    n = 0;
-    for (let i = 0; i < binary.featureCount; i++) {
-      if (allowed.has(cat.indices[i])) {
-        mask[i] = 1;
-        n++;
-      }
-    }
-    if (n === 0) return null;
-  }
-
-  const dims = binary.positionDimensions ?? 2;
-  const instancePosition = new Float32Array(n * 3);
-  const instanceTime = new Float32Array(n * 2);
-  const instanceWeight = new Float32Array(n);
-  const instanceChannel = new Float32Array(n);
-  const weightSrc = weightProp ? binary.numericProps[weightProp] : null;
-  const tileToLayerDelta = binary.timeOffset - layerTimeOffset;
-  const chFloat = channelIndex;
-  const perChannelIntensity = channel.intensity;
-
-  let dst = 0;
-  for (let i = 0; i < binary.featureCount; i++) {
-    if (mask && !mask[i]) continue;
-    const srcIdx = i * dims;
-    instancePosition[dst * 3] = binary.positions[srcIdx];
-    instancePosition[dst * 3 + 1] = binary.positions[srcIdx + 1];
-    instancePosition[dst * 3 + 2] = 0;
-    instanceTime[dst * 2] = binary.startTimes[i] + tileToLayerDelta;
-    instanceTime[dst * 2 + 1] = binary.endTimes[i] + tileToLayerDelta;
-    instanceWeight[dst] = (weightSrc ? weightSrc[i] : 1) * perChannelIntensity;
-    instanceChannel[dst] = chFloat;
-    dst++;
-  }
-
-  return {
-    instancePosition,
-    instanceTime,
-    instanceWeight,
-    instanceChannel,
-    vertexCount: n,
-    channelIndex,
-    channelId: channel.id,
+/** Binary `data: { length, attributes }` payload for one channel. */
+interface ChannelData {
+  length: number;
+  attributes: {
+    getPosition: { value: Float64Array; size: 3 };
+    getWeight: { value: Float32Array; size: 1 };
+    getFilterValue: { value: Float32Array; size: 1 };
   };
 }
-
-/** Build a 256-entry RGBA8 palette by linearly interpolating between stops. */
-function buildPaletteRgba8(range: Color[]): Uint8Array {
-  const data = new Uint8Array(256 * 4);
-  for (let i = 0; i < 256; i++) {
-    const t = (i / 255) * (range.length - 1);
-    const a = Math.floor(t);
-    const b = Math.min(range.length - 1, a + 1);
-    const f = t - a;
-    const ca = range[a];
-    const cb = range[b];
-    data[i * 4] = Math.round((ca[0] ?? 0) * (1 - f) + (cb[0] ?? 0) * f);
-    data[i * 4 + 1] = Math.round((ca[1] ?? 0) * (1 - f) + (cb[1] ?? 0) * f);
-    data[i * 4 + 2] = Math.round((ca[2] ?? 0) * (1 - f) + (cb[2] ?? 0) * f);
-    data[i * 4 + 3] = Math.round((ca[3] ?? 255) * (1 - f) + (cb[3] ?? 255) * f);
-  }
-  return data;
-}
-
-/* ────────────────────────────────────────────────────────────────────── */
-/* Composite wrapper                                                      */
-/* ────────────────────────────────────────────────────────────────────── */
 
 export class HeatmapLayer extends SpatioTemporalLayer<HeatmapLayerProps> {
   static layerName = 'HeatmapLayer';
@@ -534,7 +177,51 @@ export class HeatmapLayer extends SpatioTemporalLayer<HeatmapLayerProps> {
     fadeOutDuration: { type: 'number', value: 0, min: 0 },
   };
 
-  private boundGetTime = () => this.getCurrentTime();
+  /** Shared filter extension — one instance across every channel sublayer. */
+  private _dataFilter = new DataFilterExtension({ filterSize: 1 });
+
+  /** Consolidated binary buffers per channel index, keyed for cache reuse. */
+  private _channelCache = new Map<number, { key: string; data: ChannelData }>();
+
+  /** Wall-clock floor for the filterRange (re-aggregation) cadence. */
+  private _lastFilterUpdateWall = 0;
+
+  finalizeState(context: any): void {
+    this._channelCache.clear();
+    super.finalizeState(context);
+  }
+
+  updateState(params: UpdateParameters<this>): void {
+    super.updateState(params);
+    // Channel/weight config changes invalidate every consolidated buffer.
+    const { props, oldProps } = params;
+    if (
+      props.channels !== oldProps.channels ||
+      props.weightProperty !== oldProps.weightProperty
+    ) {
+      this._channelCache.clear();
+    }
+  }
+
+  /**
+   * Override the base tick handler: the canonical sublayers' time window is a
+   * `filterRange` PROP, so we must force renderLayers() to re-run (the base
+   * only calls setNeedsRedraw() for time-only ticks, which would freeze the
+   * window). super() keeps `_currentTime` live and throttles tile loading on
+   * its own cadence; we add an independent ~30 Hz cadence for the re-aggregate.
+   */
+  protected _handleTimeUpdate(time: number): void {
+    super._handleTimeUpdate(time);
+    const intervalMs = 1000 / FILTER_UPDATE_HZ;
+    const nowWall =
+      typeof performance !== 'undefined' ? performance.now() : Date.now();
+    if (nowWall - this._lastFilterUpdateWall >= intervalMs) {
+      this._lastFilterUpdateWall = nowWall;
+      // setState (not setNeedsRedraw) is what re-runs renderLayers() and thus
+      // pushes a fresh filterRange into the aggregation sublayers.
+      this.setState({ frameNumber: (this.state.frameNumber || 0) + 1 });
+    }
+  }
 
   renderLayers(): DeckLayer[] {
     const { tiles } = this.state;
@@ -544,41 +231,114 @@ export class HeatmapLayer extends SpatioTemporalLayer<HeatmapLayerProps> {
     if (channels.length === 0) return [];
 
     const layerTimeOffset = pickLayerTimeOffset(tiles);
+    const tileSetKey = tiles.map(tileKey).sort().join('|');
 
-    return [
-      new HeatmapSplatSublayer({
-        id: `${this.props.id}-splat`,
+    // Time window, relativized against the layer offset so it sits in the same
+    // small-number f32 space as the per-point filter values. A FRESH array is
+    // allocated every render on purpose: the canonical aggregation layer
+    // reference-compares filterRange, so reusing the array would freeze the
+    // animation (it would never see a "changed" prop and never re-aggregate).
+    const time = this.getCurrentTime();
+    const halfWindow = (this.props.timeWindow ?? 86_400_000) / 2;
+    const center = time - layerTimeOffset;
+    const filterRange: [number, number] = [center - halfWindow, center + halfWindow];
+
+    // Optional soft edges from fadeIn/fadeOut, clamped inside the hard range.
+    const fadeIn = Math.max(0, this.props.fadeInDuration ?? 0);
+    const fadeOut = Math.max(0, this.props.fadeOutDuration ?? 0);
+    const softMin = filterRange[0] + fadeIn;
+    const softMax = filterRange[1] - fadeOut;
+    const filterSoftRange: [number, number] | null =
+      (fadeIn > 0 || fadeOut > 0) && softMin < softMax ? [softMin, softMax] : null;
+
+    // Prune cache entries for channels that no longer exist.
+    for (const idx of [...this._channelCache.keys()]) {
+      if (idx >= channels.length) this._channelCache.delete(idx);
+    }
+
+    const layers: DeckLayer[] = [];
+    for (let i = 0; i < channels.length; i++) {
+      const channel = channels[i];
+      const data = this._getChannelData(
         tiles,
+        channel,
+        i,
+        tileSetKey,
         layerTimeOffset,
-        getTime: this.boundGetTime,
-        timeWindow: this.props.timeWindow ?? 86_400_000,
-        radiusPixels: this.props.radiusPixels ?? 30,
-        intensity: this.props.intensity ?? 1,
-        threshold: this.props.threshold ?? 0.05,
-        channels,
-        fadeInDuration: this.props.fadeInDuration ?? 0,
-        fadeOutDuration: this.props.fadeOutDuration ?? 0,
-        weightProperty: this.props.weightProperty,
-        opacity: this.props.opacity ?? 1,
-        visible: this.props.visible ?? true,
-      } as any),
-    ];
+      );
+      if (!data || data.length === 0) continue;
+
+      layers.push(
+        new DeckHeatmapLayer({
+          id: `${this.props.id}-ch${i}-${channel.id}`,
+          data,
+          // Density accumulation (count/weight per pixel). MEAN would flatten a
+          // constant-weight density map to a single colour, so SUM is correct.
+          aggregation: 'SUM',
+          radiusPixels: this.props.radiusPixels ?? 30,
+          intensity: this.props.intensity ?? 1,
+          colorRange: channel.colorRange as any,
+          // null → canonical auto-normalisation; pinned → stable (no breathing).
+          colorDomain: channel.colorDomain ?? null,
+          threshold: this.props.threshold ?? 0.05,
+          opacity: this.props.opacity ?? 1,
+          visible: this.props.visible ?? true,
+          pickable: false,
+          extensions: [this._dataFilter],
+          filterEnabled: true,
+          filterRange,
+          ...(filterSoftRange ? { filterSoftRange } : {}),
+        } as any),
+      );
+    }
+    return layers;
+  }
+
+  /** Fetch (or rebuild) the consolidated binary buffers for one channel. */
+  private _getChannelData(
+    tiles: Tile[],
+    channel: ResolvedChannel,
+    channelIndex: number,
+    tileSetKey: string,
+    layerTimeOffset: number,
+  ): ChannelData | null {
+    const weightProp = this.props.weightProperty;
+    const filterSig = channel.categoryFilter
+      ? `${channel.categoryFilter.property}:${channel.categoryFilter.values.join(',')}`
+      : '';
+    const key = `${tileSetKey}::${weightProp ?? ''}::${layerTimeOffset}::${filterSig}::${channel.intensity}`;
+
+    const cached = this._channelCache.get(channelIndex);
+    if (cached && cached.key === key) return cached.data;
+
+    const data = buildConsolidatedChannelData(
+      tiles,
+      channel,
+      weightProp,
+      layerTimeOffset,
+    );
+    if (data) {
+      this._channelCache.set(channelIndex, { key, data });
+    } else {
+      this._channelCache.delete(channelIndex);
+    }
+    return data;
   }
 
   private resolveChannels(): ResolvedChannel[] {
     const { channels } = this.props;
     if (channels && channels.length > 0) {
-      if (channels.length > 4) {
+      if (channels.length > MAX_CHANNELS) {
         warnOnce(
           'HeatmapLayer:tooManyChannels',
-          `[HeatmapLayer] only the first 4 channels are rendered (got ${channels.length}).`,
+          `[HeatmapLayer] only the first ${MAX_CHANNELS} channels are rendered (got ${channels.length}).`,
         );
       }
-      return channels.slice(0, 4).map((ch) => ({
+      return channels.slice(0, MAX_CHANNELS).map((ch) => ({
         id: ch.id,
         intensity: ch.intensity ?? 1,
         colorRange: ch.colorRange ?? DEFAULT_COLOR_RANGE,
-        colorDomain: ch.colorDomain ?? this.archiveHeatmapDomain(ch.id) ?? [0, 1],
+        colorDomain: ch.colorDomain ?? this.archiveHeatmapDomain(ch.id),
         categoryFilter: ch.categoryFilter,
       }));
     }
@@ -588,16 +348,15 @@ export class HeatmapLayer extends SpatioTemporalLayer<HeatmapLayerProps> {
         intensity: 1,
         colorRange: this.props.colorRange ?? DEFAULT_COLOR_RANGE,
         colorDomain:
-          this.props.colorDomain ??
-          this.archiveHeatmapDomain('default') ??
-          [0, 1],
+          this.props.colorDomain ?? this.archiveHeatmapDomain('default'),
       },
     ];
   }
 
   /**
-   * Pull the per-class intensity domain baked at build time from archive
-   * metadata (Phase B). Returns null when the archive predates the field.
+   * Pull the per-class density domain baked at build time from archive
+   * metadata. Returns null when the archive predates the field (or the class
+   * isn't present) — in which case the canonical layer auto-normalises.
    */
   private archiveHeatmapDomain(channelId: string): [number, number] | null {
     const metadata = this.state.metadata as any;
@@ -611,6 +370,11 @@ export class HeatmapLayer extends SpatioTemporalLayer<HeatmapLayerProps> {
   }
 }
 
+function tileKey(tile: Tile): string {
+  const { z, x, y, t } = tile.id;
+  return `${z}/${x}/${y}/${t}`;
+}
+
 function pickLayerTimeOffset(tiles: Tile[]): number {
   for (const tile of tiles) {
     for (const layer of tile.layers) {
@@ -618,4 +382,101 @@ function pickLayerTimeOffset(tiles: Tile[]): number {
     }
   }
   return 0;
+}
+
+/**
+ * Consolidate every visible tile's points for one channel into a single binary
+ * `data: { length, attributes }` payload. Features that don't pass the
+ * channel's category filter are simply omitted from the buffers (the GPU never
+ * sees them). Positions are kept in Float64 (matching the canonical layer's
+ * float64 `getPosition` accessor); times are relativized against
+ * `layerTimeOffset` so they fit in f32.
+ *
+ * Exported for unit testing (no GPU needed).
+ */
+export function buildConsolidatedChannelData(
+  tiles: Tile[],
+  channel: {
+    categoryFilter?: { property: string; values: string[] };
+    intensity: number;
+  },
+  weightProp: string | undefined,
+  layerTimeOffset: number,
+): ChannelData | null {
+  // Pass 1: per tile-layer, compute the category mask + retained count.
+  interface Part {
+    binary: import('@stt/core').BinaryFeatures;
+    mask: Uint8Array | null;
+    count: number;
+  }
+  const parts: Part[] = [];
+  let total = 0;
+
+  for (const tile of tiles) {
+    for (const tileLayer of tile.layers) {
+      const binary = tileLayer.features;
+      if (binary.featureCount === 0) continue;
+
+      let mask: Uint8Array | null = null;
+      let count = binary.featureCount;
+
+      if (channel.categoryFilter) {
+        const cat = binary.categoricalProps[channel.categoryFilter.property];
+        if (!cat) continue; // tile lacks the property → skip for this channel
+        const allowed = new Set<number>();
+        for (let i = 0; i < cat.categories.length; i++) {
+          if (channel.categoryFilter.values.indexOf(cat.categories[i]) !== -1) {
+            allowed.add(i);
+          }
+        }
+        if (allowed.size === 0) continue;
+        mask = new Uint8Array(binary.featureCount);
+        count = 0;
+        for (let i = 0; i < binary.featureCount; i++) {
+          if (allowed.has(cat.indices[i])) {
+            mask[i] = 1;
+            count++;
+          }
+        }
+        if (count === 0) continue;
+      }
+
+      parts.push({ binary, mask, count });
+      total += count;
+    }
+  }
+
+  if (total === 0) return null;
+
+  // Pass 2: pack the consolidated buffers.
+  const positions = new Float64Array(total * 3);
+  const weights = new Float32Array(total);
+  const filterValues = new Float32Array(total);
+  const perChannelIntensity = channel.intensity;
+
+  let dst = 0;
+  for (const { binary, mask } of parts) {
+    const dims = binary.positionDimensions ?? 2;
+    const weightSrc = weightProp ? binary.numericProps[weightProp] : null;
+    const tileToLayerDelta = binary.timeOffset - layerTimeOffset;
+    for (let i = 0; i < binary.featureCount; i++) {
+      if (mask && !mask[i]) continue;
+      const srcIdx = i * dims;
+      positions[dst * 3] = binary.positions[srcIdx];
+      positions[dst * 3 + 1] = binary.positions[srcIdx + 1];
+      positions[dst * 3 + 2] = 0;
+      weights[dst] = (weightSrc ? weightSrc[i] : 1) * perChannelIntensity;
+      filterValues[dst] = binary.startTimes[i] + tileToLayerDelta;
+      dst++;
+    }
+  }
+
+  return {
+    length: total,
+    attributes: {
+      getPosition: { value: positions, size: 3 },
+      getWeight: { value: weights, size: 1 },
+      getFilterValue: { value: filterValues, size: 1 },
+    },
+  };
 }
