@@ -30,6 +30,18 @@
  * caller does NOT provide a `colorMapping` (which is inherently CPU-side
  * because it indexes by category STRING). With a mapping set, we fall back
  * to the legacy CPU-expansion path on the cold tile-prepare step.
+ *
+ * CUMULATIVE MODE (`cumulative: true`) takes a different render path. The
+ * "draws itself" datasets widen the loader window to the whole dataset span,
+ * so tiles are never evicted and the per-tile-sublayer count climbs into the
+ * thousands by end of playback — one draw call each, re-issued on every
+ * pan/zoom frame. That is what collapses a long cumulative playback to
+ * single-digit FPS. So in cumulative mode we pack points append-only into a
+ * small number of consolidated "slabs" (one ScatterplotLayer per slab, capped
+ * at SLAB_CAPACITY_POINTS): frozen slabs keep a stable `data` ref (zero
+ * re-upload), only the single open slab grows. Per-tile times are rebased to
+ * one common slab offset — Float32-safe here because cumulative reveal already
+ * tolerates tens-of-seconds time quantization (see TimeFilterExtension.draw).
  */
 
 import { ScatterplotLayer } from '@deck.gl/layers';
@@ -45,6 +57,14 @@ import { warnOnce } from './log';
 import type { Tile, Layer as TileLayer } from '@stt/core';
 
 const DEBUG = false;
+
+/**
+ * Cumulative consolidation: target points per consolidated slab. Sized so a
+ * metro-scale cumulative playback resolves to a handful of slabs (≈ a handful
+ * of draw calls) instead of thousands of per-tile sublayers, while keeping the
+ * open slab's per-append re-upload small (≈ 250k × 36 B ≈ 9 MB worst case).
+ */
+const SLAB_CAPACITY_POINTS = 250_000;
 
 export interface AnimatedPointLayerProps extends SpatioTemporalLayerProps {
   /**
@@ -229,6 +249,56 @@ interface PreparedTile {
   gpuPalette: Color[] | null;
 }
 
+/**
+ * Optional per-feature attributes a consolidated slab carries. Derived once
+ * from the first absorbed tile — every tile in a slab shares one styleKey, so
+ * one schema describes them all.
+ */
+interface SlabSchema {
+  hasFillColor: boolean;
+  hasCategoryIndex: boolean;
+  hasRadius: boolean;
+  gpuPalette: Color[] | null;
+}
+
+/**
+ * Append-only consolidated buffer for cumulative mode. Many tiles' points are
+ * packed into one set of typed arrays → one ScatterplotLayer → one draw call.
+ * Frozen slabs are never rewritten (stable `data` ref ⇒ zero re-upload); only
+ * the single open slab grows as new tiles arrive. Arrays are allocated at
+ * `capacity` up front; the trailing unused tail of the final (open) slab is
+ * the only wasted space.
+ */
+interface ConsolidatedSlab {
+  capacity: number;
+  count: number;
+  positions: Float64Array; // size 3 (padded from 2D tiles)
+  startTimes: Float32Array; // rebased to the layer's common slab offset
+  endTimes: Float32Array;
+  fillColors: Uint8Array | null; // size 4, normalized
+  categoryIndex: Float32Array | null;
+  radii: Float32Array | null;
+  frozen: boolean;
+  /** Bumped on every append; the cached data + layer are rebuilt when they fall behind. */
+  version: number;
+  /** Reference-stable binary `data` object, keyed by `dataVersion` (== `version`). */
+  dataRef: { length: number; attributes: Record<string, any> } | null;
+  dataVersion: number;
+  layer: ScatterplotLayer | null;
+  builtVersion: number;
+}
+
+function deriveSlabSchema(built: PreparedTile): SlabSchema {
+  const a = built.data.attributes;
+  return {
+    hasFillColor: !!a.getFillColor,
+    hasCategoryIndex: !!a.instanceCategoryIndex,
+    // Per-feature radius only — a constant radius rides a scalar prop, not an attribute.
+    hasRadius: !!a.getRadius && a.getRadius.value instanceof Float32Array,
+    gpuPalette: built.gpuPalette,
+  };
+}
+
 function makeTileKey(tile: Tile, layer: TileLayer): string {
   const { z, x, y, t } = tile.id;
   return `${z}/${x}/${y}/${t}:${layer.name}`;
@@ -332,6 +402,20 @@ export class AnimatedPointLayer extends SpatioTemporalLayer<AnimatedPointLayerPr
   /** Tile-array identity from the previous render — see AnimatedTripsLayer.lastTilesRef. */
   private lastTilesRef: Tile[] | null = null;
 
+  /* ── Cumulative consolidation state (cumulative mode only) ─────────────── */
+  /** Packed slabs, in arrival order. The last entry is the open (growing) slab. */
+  private slabs: ConsolidatedSlab[] = [];
+  /** Tile keys already packed into a slab — skipped on subsequent renders. */
+  private absorbedTileKeys = new Set<string>();
+  /** Common timeOffset every slab's times are rebased to (Float32-safe in cumulative). */
+  private slabBaseOffset = 0;
+  /** `styleKey|zoom` of the current slabs; a change forces a full data rebuild. */
+  private slabSchemaKey: string | null = null;
+  /** Optional-attribute schema shared by every slab (from the first absorbed tile). */
+  private slabSchema: SlabSchema | null = null;
+  /** Visual layer-prop digest; a change rebuilds slab LAYERS but keeps the packed data. */
+  private lastSlabLayerPropsKey = '';
+
   /**
    * Singleton TimeFilterExtension reused by every sublayer. Extensions are
    * stateless w.r.t. data; per-tile timeOffset is passed as a layer prop.
@@ -361,6 +445,10 @@ export class AnimatedPointLayer extends SpatioTemporalLayer<AnimatedPointLayerPr
     super.finalizeState(context);
     this.preparedTileCache.clear();
     this.sublayerCache.clear();
+    this.slabs = [];
+    this.absorbedTileKeys.clear();
+    this.slabSchema = null;
+    this.slabSchemaKey = null;
   }
 
   /**
@@ -395,6 +483,13 @@ export class AnimatedPointLayer extends SpatioTemporalLayer<AnimatedPointLayerPr
   }
 
   renderLayers(): Layer[] {
+    // Cumulative "draws itself" datasets use a consolidated, append-only path:
+    // packing points into a few slabs instead of one sublayer per resident
+    // tile is what keeps a long playback off the thousands-of-draw-calls cliff.
+    if (this.props.cumulative) {
+      return this.renderConsolidated();
+    }
+
     const t0 = performance.now();
     const { tiles } = this.state;
     if (!tiles || tiles.length === 0) {
@@ -464,29 +559,53 @@ export class AnimatedPointLayer extends SpatioTemporalLayer<AnimatedPointLayerPr
   }
 
   /**
-   * Build (or fetch from cache) the binary `data` object for a single tile.
+   * styleKey digest of the props that change a tile's prepared `attributes`
+   * (which color/radius column, palette length, CPU-vs-GPU color path). Shared
+   * by the per-tile cache check and the slab-schema invalidation.
    */
-  private prepareTile(tile: Tile, tileLayer: TileLayer): PreparedTile | null {
-    const binary = tileLayer.features;
-    if (binary.featureCount === 0) return null;
-
+  private computeStyleKey(): string {
     const fillColorProp = typeof this.props.fillColor === 'string' ? this.props.fillColor : '';
     const radiusProp = typeof this.props.radius === 'string' ? this.props.radius : '';
     // Palette identity matters only when fillColor is a column name. Including
     // the mapping flag toggles between CPU/GPU expansion paths.
     const usingMapping = !!this.props.colorMapping;
-    const styleKey = `${fillColorProp}|${radiusProp}|${
+    return `${fillColorProp}|${radiusProp}|${
       fillColorProp ? (this.props.colorPalette ?? DEFAULT_PALETTE).length : 0
     }|${usingMapping ? 'm' : 'g'}`;
+  }
 
+  /**
+   * Fetch the cached binary `data` object for a single tile, building (and
+   * caching) it on a miss. Returns a reference-stable PreparedTile so deck.gl
+   * can short-circuit GPU re-uploads.
+   */
+  private prepareTile(tile: Tile, tileLayer: TileLayer): PreparedTile | null {
+    if (tileLayer.features.featureCount === 0) return null;
+    const styleKey = this.computeStyleKey();
     const tileKey = makeTileKey(tile, tileLayer);
     const cached = this.preparedTileCache.get(tileKey);
     if (cached && cached.styleKey === styleKey) {
-      const t1 = performance.now();
       emit('tilePrepare', { layer: 'AnimatedPointLayer', tileKey, cached: true, ms: 0 });
-      void t1;
       return cached;
     }
+    const prepared = this.buildTileData(tile, tileLayer);
+    if (prepared) this.preparedTileCache.set(tileKey, prepared);
+    return prepared;
+  }
+
+  /**
+   * Build the binary `data` object for a single tile from scratch (no caching).
+   * Shared by the cached per-tile path (`prepareTile`) and the cumulative
+   * consolidation path, which copies the result into a slab and discards it.
+   */
+  private buildTileData(tile: Tile, tileLayer: TileLayer): PreparedTile | null {
+    const binary = tileLayer.features;
+    if (binary.featureCount === 0) return null;
+
+    const fillColorProp = typeof this.props.fillColor === 'string' ? this.props.fillColor : '';
+    const radiusProp = typeof this.props.radius === 'string' ? this.props.radius : '';
+    const styleKey = this.computeStyleKey();
+    const tileKey = makeTileKey(tile, tileLayer);
 
     const t0 = performance.now();
     const count = binary.featureCount;
@@ -584,7 +703,6 @@ export class AnimatedPointLayer extends SpatioTemporalLayer<AnimatedPointLayerPr
       timeOffset: binary.timeOffset,
       gpuPalette,
     };
-    this.preparedTileCache.set(tileKey, prepared);
     emit('tilePrepare', {
       layer: 'AnimatedPointLayer',
       tileKey,
@@ -632,6 +750,38 @@ export class AnimatedPointLayer extends SpatioTemporalLayer<AnimatedPointLayerPr
       // which guarantees stable identity.
       dataComparator: (a: any, b: any) => a === b,
 
+      ...this.commonStyleProps(),
+
+      // Constant fallbacks — used when the binary attribute is absent.
+      getRadius: constRadius,
+      getFillColor: constColor,
+
+      extensions,
+
+      // TimeFilterExtension wiring — per-tile timeOffset and window.
+      getTime: this.boundGetTime,
+      timeOffset: prepared.timeOffset,
+      timeWindow,
+    };
+    // Always set `useCategoryColor` so tests / debug tooling can distinguish
+    // the two paths via prop inspection. The extension itself is only
+    // attached when the flag is true (saves an attribute slot).
+    props.useCategoryColor = useGpuCategory;
+    if (useGpuCategory) {
+      props.categoryPalette = prepared.gpuPalette!;
+    }
+    return new ScatterplotLayer(props as any);
+  }
+
+  /**
+   * Visual + time-filter props shared by every ScatterplotLayer this layer
+   * emits, whether a per-tile sublayer or a consolidated slab. Excludes the
+   * bits that differ per path: `data`/`dataComparator`, the constant
+   * radius/color fallbacks, `extensions`, and the time wiring
+   * (`getTime`/`timeOffset`/`timeWindow`).
+   */
+  private commonStyleProps(): Record<string, any> {
+    return {
       radiusUnits: this.props.radiusUnits ?? 'pixels',
       radiusScale: this.props.radiusScale ?? 1,
       radiusMinPixels: this.props.radiusMinPixels ?? 0,
@@ -643,31 +793,236 @@ export class AnimatedPointLayer extends SpatioTemporalLayer<AnimatedPointLayerPr
       opacity: this.props.opacity,
       visible: this.props.visible,
       pickable: this.props.pickable ?? false,
-
-      // Constant fallbacks — used when the binary attribute is absent.
-      getRadius: constRadius,
-      getFillColor: constColor,
-
-      extensions,
-
-      // TimeFilterExtension wiring
-      getTime: this.boundGetTime,
-      timeOffset: prepared.timeOffset,
-      timeWindow,
       fadeInDuration: this.props.fadeInDuration,
       fadeOutDuration: this.props.fadeOutDuration,
       wakeLength: this.props.wakeLength,
       wakeTailScale: this.props.wakeTailScale,
       cumulative: this.props.cumulative,
     };
-    // Always set `useCategoryColor` so tests / debug tooling can distinguish
-    // the two paths via prop inspection. The extension itself is only
-    // attached when the flag is true (saves an attribute slot).
-    props.useCategoryColor = useGpuCategory;
-    if (useGpuCategory) {
-      props.categoryPalette = prepared.gpuPalette!;
+  }
+
+  /* ── Cumulative consolidation path ──────────────────────────────────────
+   * Pack resident tiles append-only into a few ScatterplotLayer "slabs"
+   * instead of one sublayer per tile. See the file header for why.
+   */
+
+  private renderConsolidated(): Layer[] {
+    const t0 = performance.now();
+    const { tiles } = this.state;
+
+    // Data switch / pre-load: collapse everything so the next archive starts clean.
+    if (!tiles || tiles.length === 0) {
+      if (this.slabs.length) {
+        this.slabs = [];
+        this.absorbedTileKeys.clear();
+        this.slabSchema = null;
+        this.slabSchemaKey = null;
+      }
+      return [];
     }
-    return new ScatterplotLayer(props as any);
+
+    // All resident tiles share one zoom (the viewport's). styleKey + that zoom
+    // key the packed attributes; a change in either (restyle, or zoom in/out)
+    // means the existing slabs no longer describe the current view → full
+    // rebuild from the now-resident tiles. Cheap: zoom/style changes are rare
+    // and user-driven, unlike the per-frame tile arrivals consolidation targets.
+    const zoom = tiles[0].id.z;
+    const schemaKey = `${this.computeStyleKey()}|${zoom}`;
+    if (schemaKey !== this.slabSchemaKey) {
+      this.slabSchemaKey = schemaKey;
+      this.slabs = [];
+      this.absorbedTileKeys.clear();
+      this.slabSchema = null;
+      this.slabBaseOffset = this.props.timeRange?.start ?? 0;
+    }
+
+    // Append every not-yet-packed tile into the open slab. In cumulative mode
+    // tiles are only ever added (the loader keeps the whole span resident), so
+    // there is no removal path — a tile spatially evicted then revisited stays
+    // in `absorbedTileKeys` and is not re-packed. This append-only persistence
+    // is what makes the fast path O(new points), not O(resident points).
+    for (const tile of tiles) {
+      for (const tileLayer of tile.layers) {
+        const key = makeTileKey(tile, tileLayer);
+        if (this.absorbedTileKeys.has(key)) continue;
+        this.absorbedTileKeys.add(key); // mark even if empty so we never retry it
+        const built = this.buildTileData(tile, tileLayer);
+        if (!built) continue;
+        if (!this.slabSchema) this.slabSchema = deriveSlabSchema(built);
+        this.absorbTile(built);
+      }
+    }
+
+    // Visual-only prop change (opacity, radiusScale, stroke…): rebuild the slab
+    // LAYERS but keep the packed data — no need to re-copy millions of points.
+    const layerPropsKey = this.computeLayerPropsKey();
+    if (layerPropsKey !== this.lastSlabLayerPropsKey) {
+      this.lastSlabLayerPropsKey = layerPropsKey;
+      for (const slab of this.slabs) {
+        slab.layer = null;
+        slab.builtVersion = -1;
+      }
+    }
+
+    const sublayers: Layer[] = this.slabs.map((slab, i) => this.buildSlabLayer(slab, i));
+
+    emit('renderLayers', {
+      layer: 'AnimatedPointLayer',
+      mode: 'cumulative',
+      tiles: tiles.length,
+      sublayers: sublayers.length,
+      ms: performance.now() - t0,
+    });
+    if (DEBUG) {
+      // eslint-disable-next-line no-console
+      console.log(
+        `AnimatedPointLayer[cumulative]: ${tiles.length} tiles → ${sublayers.length} slabs`,
+      );
+    }
+    return sublayers;
+  }
+
+  /** Copy one prepared tile's attributes into the open slab, rebasing times. */
+  private absorbTile(built: PreparedTile): void {
+    const n = built.data.length;
+    if (n === 0) return;
+    const slab = this.slabForAppend(n);
+    const o = slab.count;
+    const a = built.data.attributes;
+
+    slab.positions.set(a.getPosition.value as Float64Array, o * 3);
+
+    // Rebase the tile's per-tile-relative times onto the common slab offset:
+    //   absolute = built.timeOffset + tileRelative  ⇒  slabRelative = tileRelative + delta
+    // Computed via JS doubles, stored as Float32. Magnitudes reach the dataset
+    // span (~years); the resulting tens-of-seconds quantization is below what
+    // the cumulative reveal can show (see TimeFilterExtension.draw precision note).
+    const delta = built.timeOffset - this.slabBaseOffset;
+    const st = a.instanceStartTime.value as Float32Array;
+    const et = a.instanceEndTime.value as Float32Array;
+    for (let i = 0; i < n; i++) {
+      slab.startTimes[o + i] = st[i] + delta;
+      slab.endTimes[o + i] = et[i] + delta;
+    }
+
+    if (slab.fillColors && a.getFillColor) {
+      slab.fillColors.set(a.getFillColor.value as Uint8Array, o * 4);
+    }
+    if (slab.categoryIndex && a.instanceCategoryIndex) {
+      slab.categoryIndex.set(a.instanceCategoryIndex.value as Float32Array, o);
+    }
+    if (slab.radii && a.getRadius && a.getRadius.value instanceof Float32Array) {
+      slab.radii.set(a.getRadius.value, o);
+    }
+
+    slab.count += n;
+    slab.version++;
+  }
+
+  /**
+   * The open slab if it has room for `n` more points, else seal it and open a
+   * fresh one. A single tile larger than the cap gets its own oversized slab.
+   */
+  private slabForAppend(n: number): ConsolidatedSlab {
+    const open = this.slabs[this.slabs.length - 1];
+    if (open && !open.frozen && open.count + n <= open.capacity) return open;
+    if (open && !open.frozen) open.frozen = true;
+
+    const schema = this.slabSchema!;
+    const capacity = Math.max(SLAB_CAPACITY_POINTS, n);
+    const slab: ConsolidatedSlab = {
+      capacity,
+      count: 0,
+      positions: new Float64Array(capacity * 3),
+      startTimes: new Float32Array(capacity),
+      endTimes: new Float32Array(capacity),
+      fillColors: schema.hasFillColor ? new Uint8Array(capacity * 4) : null,
+      categoryIndex: schema.hasCategoryIndex ? new Float32Array(capacity) : null,
+      radii: schema.hasRadius ? new Float32Array(capacity) : null,
+      frozen: false,
+      version: 0,
+      dataRef: null,
+      dataVersion: -1,
+      layer: null,
+      builtVersion: -1,
+    };
+    this.slabs.push(slab);
+    return slab;
+  }
+
+  /**
+   * Reference-stable binary `data` object for one slab, rebuilt only when the
+   * slab's content `version` advances. Subarray views share the slab's backing
+   * buffer (no copy); a fresh object reference is what tells deck.gl to
+   * re-upload the grown open slab — and reusing it across a style-only rebuild
+   * is what lets deck.gl SKIP re-upload when only a uniform changed.
+   */
+  private slabData(slab: ConsolidatedSlab): { length: number; attributes: Record<string, any> } {
+    if (slab.dataRef && slab.dataVersion === slab.version) return slab.dataRef;
+    const count = slab.count;
+    const attributes: Record<string, any> = {
+      getPosition: { value: slab.positions.subarray(0, count * 3), size: 3 },
+      instanceStartTime: { value: slab.startTimes.subarray(0, count), size: 1 },
+      instanceEndTime: { value: slab.endTimes.subarray(0, count), size: 1 },
+    };
+    if (slab.fillColors) {
+      attributes.getFillColor = {
+        value: slab.fillColors.subarray(0, count * 4),
+        size: 4,
+        normalized: true,
+      };
+    }
+    if (slab.categoryIndex) {
+      attributes.instanceCategoryIndex = { value: slab.categoryIndex.subarray(0, count), size: 1 };
+    }
+    if (slab.radii) {
+      attributes.getRadius = { value: slab.radii.subarray(0, count), size: 1 };
+    }
+    slab.dataRef = { length: count, attributes };
+    slab.dataVersion = slab.version;
+    return slab.dataRef;
+  }
+
+  /**
+   * Build (or return the cached) ScatterplotLayer for one slab. Frozen slabs
+   * keep a stable layer reference (their `version` never advances ⇒ no GPU
+   * re-upload); the open slab rebuilds whenever it grew since last render.
+   */
+  private buildSlabLayer(slab: ConsolidatedSlab, index: number): ScatterplotLayer {
+    if (slab.layer && slab.builtVersion === slab.version) return slab.layer;
+
+    const constRadius = typeof this.props.radius === 'number' ? this.props.radius : 5;
+    const constColor = (Array.isArray(this.props.fillColor)
+      ? this.props.fillColor
+      : ([255, 128, 0, 255] as Color)) as Color;
+    const useGpuCategory = !!this.slabSchema?.gpuPalette;
+
+    const props: Record<string, any> = {
+      id: `${this.props.id}-slab-${index}`,
+      data: this.slabData(slab),
+      dataComparator: (a: any, b: any) => a === b,
+
+      ...this.commonStyleProps(),
+
+      getRadius: constRadius,
+      getFillColor: constColor,
+
+      // Constant extension list (cache-storm rationale, as in buildSublayer).
+      extensions: [this.timeFilterExtension, this.categoryColorExtension],
+
+      // TimeFilterExtension wiring — one shared offset for every slab.
+      getTime: this.boundGetTime,
+      timeOffset: this.slabBaseOffset,
+      timeWindow: this.props.timeWindow || 86400000,
+
+      useCategoryColor: useGpuCategory,
+    };
+    if (useGpuCategory) props.categoryPalette = this.slabSchema!.gpuPalette;
+
+    const layer = new ScatterplotLayer(props as any);
+    slab.layer = layer;
+    slab.builtVersion = slab.version;
+    return layer;
   }
 }
 

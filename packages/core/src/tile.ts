@@ -208,6 +208,26 @@ function extractVertexTimes(
   return out;
 }
 
+/**
+ * Extract the per-vertex scalar column (`vertex_value`, a `List<Float32>`)
+ * into a flat `Float32Array` aligned 1:1 with `positions`. Unlike vertex
+ * times there's no delta/origin/step encoding — values are stored verbatim.
+ * `NaN` entries mark vertices with no value (rendered with a fallback color).
+ */
+function extractVertexFloats(vec: Vector | null): Float32Array | undefined {
+  if (!vec) return undefined;
+  const data = chunk(vec);
+  const offsets: Int32Array = data.valueOffsets;
+  const childValues = data.children[0].values as Float32Array | Float64Array;
+  const base = offsets[data.offset];
+  const total = offsets[data.offset + data.length] - base;
+  const out = new Float32Array(total);
+  for (let i = 0; i < total; i++) {
+    out[i] = childValues[base + i];
+  }
+  return out;
+}
+
 /** Convert one Arrow RecordBatch table into deck.gl binary features. */
 function tableToBinaryFeatures(table: Table): BinaryFeatures {
   const kind = geometryKind(table);
@@ -274,6 +294,9 @@ function tableToBinaryFeatures(table: Table): BinaryFeatures {
     step,
   );
 
+  // --- per-vertex scalar values (e.g. SST) ---
+  const vertexValues = extractVertexFloats(table.getChild('vertex_value') ?? null);
+
   // --- pre-baked triangle indices (MLT-style polygon meshes) ---
   // The Rust writer stores feature-LOCAL indices so we shift each feature's
   // run by its `startIndices[i]` to produce GLOBAL indices the renderer can
@@ -320,6 +343,7 @@ function tableToBinaryFeatures(table: Table): BinaryFeatures {
     'end_time',
     'geometry',
     'vertex_time',
+    'vertex_value',
     'triangles',
   ]);
   for (const field of table.schema.fields) {
@@ -401,6 +425,7 @@ function tableToBinaryFeatures(table: Table): BinaryFeatures {
     endTimes,
     timeOffset,
     vertexTimestamps,
+    vertexValues,
     triangles,
     triangleOffsets,
     numericProps,

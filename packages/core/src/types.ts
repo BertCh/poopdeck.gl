@@ -278,6 +278,15 @@ export interface BinaryFeatures {
   vertexTimestamps?: Float32Array;
 
   /**
+   * Per-vertex scalar values (optional), e.g. sea-surface temperature for the
+   * ocean-drifter dataset. When present, has the same length as the total
+   * vertex count and aligns 1:1 with `positions` (like {@link vertexTimestamps}).
+   * `NaN` marks a vertex with no value. AnimatedTripsLayer maps these through a
+   * color ramp to shade the line by the value along its length.
+   */
+  vertexValues?: Float32Array;
+
+  /**
    * Pre-baked polygon triangle indices, MLT-style.
    *
    * Flat array of vertex indices (groups of 3 per triangle). Indices are

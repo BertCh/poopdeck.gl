@@ -75,6 +75,23 @@ export interface VatTripsLayerProps extends SpatioTemporalLayerProps {
   /** Head radius in pixels. Used when `trailLength === 0`. */
   headRadiusPixels?: number;
   /**
+   * Units for head radius (`headRadius`/`headRadiusPixels`) and trail width
+   * (`tripWidth`). 'pixels' (default) is the legacy screen-space behavior;
+   * 'meters' makes sizes world-space so dots/ribbons scale with zoom (emerge
+   * as you zoom in) like the maritime point layer's "render by space" look.
+   */
+  sizeUnits?: 'pixels' | 'meters';
+  /**
+   * Head radius value when `sizeUnits === 'meters'` (in meters). Falls back to
+   * `headRadiusPixels` when unset. Clamped to [headRadiusMinPixels,
+   * headRadiusMaxPixels] on screen.
+   */
+  headRadius?: number;
+  /** Min on-screen head radius in pixels (meters mode clamp). Default 0. */
+  headRadiusMinPixels?: number;
+  /** Max on-screen head radius in pixels (meters mode clamp). Default unbounded. */
+  headRadiusMaxPixels?: number;
+  /**
    * Time-slot resolution of the VAT (samples per trajectory). Higher =
    * smoother motion / larger texture. 64 is the visual sweet spot for the
    * NYC taxi case; expose for callers with much-longer trips.
@@ -259,7 +276,12 @@ interface VatTripsSublayerProps {
   /** Number of trips packed into each texture row. */
   tripsPerRow: number;
   headColor: Color;
+  /** Head size value — pixels, or meters when `sizeInMeters` is true. */
   headRadiusPixels: number;
+  /** When true, `headRadiusPixels` is meters; projected → pixels and clamped. */
+  sizeInMeters: boolean;
+  headRadiusMinPixels: number;
+  headRadiusMaxPixels: number;
   timeOffset: number;
   /** Absolute Unix-ms playhead reader. Called on every draw. */
   getTime: () => number;
@@ -322,8 +344,18 @@ void main() {
   vec3 world64Low = vec3(0.0); // see file header for the fp64-split TODO.
   gl_Position = project_position_to_clipspace(world, world64Low, vec3(0.0));
 
-  // Expand to the head's pixel-space billboard.
-  vec2 offsetPx = positions * vat.headRadiusPixels;
+  // Head size. Pixels by default; when sizeUnitsMeters is set, headRadiusPixels
+  // carries a METER radius that we project to on-screen pixels and clamp, so the
+  // dot scales with the world (emerges on zoom) like the maritime points.
+  float headPx = vat.headRadiusPixels;
+  if (vat.sizeUnitsMeters > 0.5) {
+    headPx = clamp(
+      project_size_to_pixel(vat.headRadiusPixels),
+      vat.headRadiusMinPixels,
+      vat.headRadiusMaxPixels
+    );
+  }
+  vec2 offsetPx = positions * headPx;
   gl_Position.xy += project_pixel_size_to_clipspace(offsetPx);
 
   vColor = vec4(vat.headColor.rgb, vat.headColor.a);
@@ -377,6 +409,11 @@ uniform vatUniforms {
   float widthMaxPixels;
   float fadeTrail;
   vec4 trailColor;
+  // World-space sizing: 0 = pixels (legacy), 1 = meters. When 1, the head/
+  // trail size fields above carry meters and are projected → pixels in the VS.
+  float sizeUnitsMeters;
+  float headRadiusMinPixels;
+  float headRadiusMaxPixels;
 } vat;
 
 uniform sampler2D vat_positionsTexture;
@@ -400,6 +437,9 @@ uniform sampler2D vat_positionsTexture;
     widthMaxPixels: 'f32',
     fadeTrail: 'f32',
     trailColor: 'vec4<f32>',
+    sizeUnitsMeters: 'f32',
+    headRadiusMinPixels: 'f32',
+    headRadiusMaxPixels: 'f32',
   },
 };
 
@@ -430,6 +470,9 @@ class VatTripsSublayer extends Layer<VatTripsSublayerProps> {
     tripsPerRow: { type: 'number', value: 1, compare: false },
     headColor: { type: 'color', value: DEFAULT_HEAD_COLOR },
     headRadiusPixels: { type: 'number', value: 4, min: 0, compare: true },
+    sizeInMeters: { type: 'boolean', value: false, compare: true },
+    headRadiusMinPixels: { type: 'number', value: 0, min: 0, compare: true },
+    headRadiusMaxPixels: { type: 'number', value: 1e9, min: 0, compare: true },
     timeOffset: { type: 'number', value: 0, compare: false },
     getTime: { type: 'function', value: () => 0, compare: false },
     opacity: { type: 'number', value: 1, min: 0, max: 1 },
@@ -507,6 +550,9 @@ class VatTripsSublayer extends Layer<VatTripsSublayerProps> {
         texHeight: this.props.positionsTextureHeight,
         headRadiusPixels: this.props.headRadiusPixels ?? 4,
         headColor: rgba,
+        sizeUnitsMeters: this.props.sizeInMeters ? 1 : 0,
+        headRadiusMinPixels: this.props.headRadiusMinPixels ?? 0,
+        headRadiusMaxPixels: this.props.headRadiusMaxPixels ?? 1e9,
         // Trail-mode fields zero'd in head mode. The shared uniform block
         // declares them; leaving them unset on some drivers leaves stale
         // values from a previous trail-mode sublayer in the same renderpass.
@@ -673,7 +719,13 @@ void main() {
   vec2 dirN = (dirLen > 1e-3) ? (dirPx / dirLen) : vec2(1.0, 0.0);
   vec2 perpN = vec2(-dirN.y, dirN.x);
 
-  float widthPx = clamp(vat.tripWidthPixels, vat.widthMinPixels, vat.widthMaxPixels);
+  // Width. Pixels by default; when sizeUnitsMeters is set, tripWidthPixels
+  // carries a METER width that we project to on-screen pixels (world-space,
+  // emerges on zoom). Min/max-pixel clamps apply in both modes.
+  float rawWidth = (vat.sizeUnitsMeters > 0.5)
+    ? project_size_to_pixel(vat.tripWidthPixels)
+    : vat.tripWidthPixels;
+  float widthPx = clamp(rawWidth, vat.widthMinPixels, vat.widthMaxPixels);
   vec2 offsetPx = perpN * side * widthPx * 0.5;
 
   gl_Position = clipCenter;
@@ -713,7 +765,10 @@ interface VatTripsTrailSublayerProps {
   trailColor: Color;
   trailLength: number;
   trailSamples: number;
+  /** Ribbon width value — pixels, or meters when `sizeInMeters` is true. */
   tripWidth: number;
+  /** When true, `tripWidth` is meters; projected → pixels and clamped. */
+  sizeInMeters: boolean;
   widthMinPixels: number;
   widthMaxPixels: number;
   fadeTrail: boolean;
@@ -735,6 +790,7 @@ class VatTripsTrailSublayer extends Layer<VatTripsTrailSublayerProps> {
     trailLength: { type: 'number', value: 10000, min: 1, compare: true },
     trailSamples: { type: 'number', value: DEFAULT_TRAIL_SAMPLES, min: 2, compare: true },
     tripWidth: { type: 'number', value: 4, min: 0, compare: true },
+    sizeInMeters: { type: 'boolean', value: false, compare: true },
     widthMinPixels: { type: 'number', value: 0, min: 0, compare: true },
     widthMaxPixels: { type: 'number', value: 100, min: 0, compare: true },
     fadeTrail: { type: 'boolean', value: true, compare: true },
@@ -823,6 +879,10 @@ class VatTripsTrailSublayer extends Layer<VatTripsTrailSublayerProps> {
         widthMaxPixels: this.props.widthMaxPixels,
         fadeTrail: this.props.fadeTrail ? 1 : 0,
         trailColor: rgba,
+        sizeUnitsMeters: this.props.sizeInMeters ? 1 : 0,
+        // Head-only clamps unused in trail mode.
+        headRadiusMinPixels: 0,
+        headRadiusMaxPixels: 0,
       },
     });
     model.setBindings({ vat_positionsTexture: positionsTexture });
@@ -884,6 +944,10 @@ export class VatTripsLayer extends SpatioTemporalLayer<VatTripsLayerProps> {
     ...SpatioTemporalLayer.defaultProps,
     headColor: { type: 'color', value: DEFAULT_HEAD_COLOR },
     headRadiusPixels: { type: 'number', value: 4, min: 0 },
+    sizeUnits: 'pixels',
+    headRadius: { type: 'number', value: 0, min: 0 },
+    headRadiusMinPixels: { type: 'number', value: 0, min: 0 },
+    headRadiusMaxPixels: { type: 'number', value: 1e9, min: 0 },
     timeSlots: { type: 'number', value: DEFAULT_TIME_SLOTS, min: 2 },
     // Trail-mode props. trailLength === 0 keeps the historical head-dot mode.
     trailLength: { type: 'number', value: 0, min: 0 },
@@ -930,6 +994,10 @@ export class VatTripsLayer extends SpatioTemporalLayer<VatTripsLayerProps> {
       // Mode discriminator: switching modes rebuilds every sublayer.
       trailing ? 'trail' : 'head',
       this.props.headRadiusPixels,
+      this.props.sizeUnits,
+      this.props.headRadius,
+      this.props.headRadiusMinPixels,
+      this.props.headRadiusMaxPixels,
       this.props.timeSlots,
       this.props.opacity,
       this.props.visible,
@@ -1109,6 +1177,7 @@ export class VatTripsLayer extends SpatioTemporalLayer<VatTripsLayerProps> {
   ): VatTripsSublayer | VatTripsTrailSublayer {
     const sublayerId = `${this.props.id}-${prepared.tileKey}`;
     const trailing = (this.props.trailLength ?? 0) > 0;
+    const sizeInMeters = (this.props.sizeUnits ?? 'pixels') === 'meters';
 
     if (trailing) {
       const color = (Array.isArray(this.props.trailColor)
@@ -1127,6 +1196,7 @@ export class VatTripsLayer extends SpatioTemporalLayer<VatTripsLayerProps> {
         trailLength: this.props.trailLength ?? 10000,
         trailSamples: this.props.trailSamples ?? DEFAULT_TRAIL_SAMPLES,
         tripWidth: this.props.tripWidth ?? 4,
+        sizeInMeters,
         widthMinPixels: this.props.widthMinPixels ?? 0,
         widthMaxPixels: this.props.widthMaxPixels ?? 100,
         fadeTrail: this.props.fadeTrail ?? true,
@@ -1151,7 +1221,13 @@ export class VatTripsLayer extends SpatioTemporalLayer<VatTripsLayerProps> {
       timeSlots: prepared.timeSlots,
       tripsPerRow: prepared.tripsPerRow,
       headColor: color,
-      headRadiusPixels: this.props.headRadiusPixels ?? 4,
+      // In meters mode pass the meter radius (headRadius); else the pixel value.
+      headRadiusPixels: sizeInMeters
+        ? (this.props.headRadius || this.props.headRadiusPixels || 4)
+        : (this.props.headRadiusPixels ?? 4),
+      sizeInMeters,
+      headRadiusMinPixels: this.props.headRadiusMinPixels ?? 0,
+      headRadiusMaxPixels: this.props.headRadiusMaxPixels ?? 1e9,
       timeOffset: prepared.timeOffset,
       getTime: this.boundGetTime,
       opacity: (this.props.opacity as number) ?? 1,

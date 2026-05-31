@@ -48,8 +48,9 @@ const Sidebar: React.FC<SidebarProps> = ({ onNavigate }) => {
 
   return (
     <div className="h-full flex flex-col overflow-hidden" style={{ background: '#242730', borderRight: '1px solid #3A414C' }}>
-      {/* Header */}
-      <div className="shrink-0 p-4 border-b" style={{ background: '#29323C', borderColor: '#3A414C' }}>
+      {/* Header — fixed height matches the demo page header (DemoPage.tsx) so the
+          two top bars' bottom borders line up across the sidebar/main divide. */}
+      <div className="shrink-0 h-[68.5px] px-4 flex flex-col justify-center border-b" style={{ background: '#29323C', borderColor: '#3A414C' }}>
         <NavLink to="/" onClick={onNavigate} className="block">
           <h1 className="text-lg font-bold" style={{ color: '#1FBAD6' }}>STT</h1>
           <p className="text-xs mt-0.5" style={{ color: '#6A7485' }}>SpatioTemporal Tiles</p>

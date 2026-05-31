@@ -265,7 +265,10 @@ const DemoPage: React.FC = () => {
             fillColor: selectedDataset.colorProperty || [31, 186, 214, 255],
             colorMapping: selectedDataset.colorMapping,
             colorMappingDefault: selectedDataset.colorMappingDefault,
-            radius: selectedDataset.radiusProperty || 1000,
+            radius:
+              selectedDataset.radiusProperty ??
+              selectedDataset.radius ??
+              1000,
             // Per-dataset styling overrides; legacy datasets stay on the old
             // meters/×2 default so ship and flight markers keep their look.
             radiusUnits: selectedDataset.radiusUnits ?? "meters",
@@ -310,6 +313,12 @@ const DemoPage: React.FC = () => {
             ...baseProps,
             headColor: selectedDataset.vatHeadColor ?? [253, 128, 93, 255],
             headRadiusPixels: selectedDataset.vatHeadRadiusPixels ?? 4,
+            // World-space sizing (meters) so VAT heads/ribbons emerge on zoom
+            // like the maritime points; defaults to pixels (legacy look).
+            sizeUnits: selectedDataset.vatSizeUnits,
+            headRadius: selectedDataset.vatHeadRadius,
+            headRadiusMinPixels: selectedDataset.vatHeadRadiusMinPixels,
+            headRadiusMaxPixels: selectedDataset.vatHeadRadiusMaxPixels,
             timeSlots: selectedDataset.vatTimeSlots ?? 64,
             // Trail-mode props. When vatTrailLength > 0 the layer renders a
             // ribbon per active trip instead of a head dot — same scaling
@@ -348,7 +357,17 @@ const DemoPage: React.FC = () => {
           ...(selectedDataset.colorMappingDefault && {
             colorMappingDefault: selectedDataset.colorMappingDefault,
           }),
+          // Per-vertex gradient (e.g. ocean-drifter SST) shades the line along
+          // its length and takes precedence over categorical `tripColor`.
+          ...(selectedDataset.tripGradient && {
+            gradientProperty: selectedDataset.tripGradient.property,
+            gradientDomain: selectedDataset.tripGradient.domain,
+            gradientColorRamp: selectedDataset.tripGradient.colors,
+          }),
           tripWidth: selectedDataset.tripWidth ?? 4,
+          // World-space widths (meters) when a dataset opts in, so trails
+          // thicken on zoom like the maritime points; defaults to pixels.
+          widthUnits: selectedDataset.widthUnits ?? "pixels",
           widthMinPixels: selectedDataset.widthMinPixels ?? 2,
           widthMaxPixels: selectedDataset.widthMaxPixels ?? 8,
           trailLength: selectedDataset.trailLength ?? 60000,

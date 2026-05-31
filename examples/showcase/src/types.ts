@@ -128,6 +128,12 @@ export interface Dataset {
   /** Property name for radius/size (passed to layers as radiusProperty) */
   radiusProperty?: string;
 
+  /**
+   * Fixed radius for all features when no `radiusProperty` is set. Interpreted
+   * in `radiusUnits` (meters by default in DemoPage). Falls back to 1000 m.
+   */
+  radius?: number;
+
   /** Units for the `radius` prop — defaults to 'pixels' in DemoPage. */
   radiusUnits?: 'pixels' | 'meters' | 'common';
 
@@ -210,10 +216,24 @@ export interface Dataset {
   vatTrailSamples?: number;
   /** Ribbon color (RGBA, 0-255). Used when `vatTrailLength` > 0. */
   vatTrailColor?: ColorRGBA;
-  /** Ribbon nominal width in pixels (clamped to widthMin/MaxPixels). */
+  /** Ribbon nominal width (clamped to widthMin/MaxPixels). Pixels, or metres when `vatSizeUnits === 'meters'`. */
   vatTripWidth?: number;
   /** Fade the trail's tail to transparent (vs constant alpha). */
   vatFadeTrail?: boolean;
+
+  /**
+   * Units for VAT head radius and trail width. 'pixels' (default) is screen-
+   * space; 'meters' makes them world-space (emerge on zoom) like the maritime
+   * point layer. In meters mode the head uses `vatHeadRadius` and the trail
+   * uses `vatTripWidth` (both metres), clamped by the *MinPixels/*MaxPixels.
+   */
+  vatSizeUnits?: 'pixels' | 'meters';
+  /** Head radius in METRES when `vatSizeUnits === 'meters'`. */
+  vatHeadRadius?: number;
+  /** Min on-screen head radius in pixels (meters-mode clamp). */
+  vatHeadRadiusMinPixels?: number;
+  /** Max on-screen head radius in pixels (meters-mode clamp). */
+  vatHeadRadiusMaxPixels?: number;
 
   /**
    * Layer opacity (0-1). Defaults to 0.8. Lower values let dense, overlapping
@@ -225,6 +245,18 @@ export interface Dataset {
   // ─── trips-layer styling (type: 'trips') ───────────────────────────────
   /** Constant trip color, RGBA 0-255. */
   tripColor?: ColorRGBA;
+  /**
+   * Color each trip *along its length* by a per-vertex scalar carried in the
+   * tile (the `vertex_value` channel, e.g. sea-surface temperature). `property`
+   * names the BinaryFeatures channel (currently only `'vertexValues'`),
+   * `domain` is the `[min, max]` mapped onto `colors` (low→high RGBA stops).
+   * Takes precedence over `colorProperty` / `tripColor`.
+   */
+  tripGradient?: {
+    property: string;
+    domain: [number, number];
+    colors: ColorRGBA[];
+  };
   /** Trip line width — number (in widthUnits) or numeric property name. */
   tripWidth?: number | string;
   /** Clamp trip width to at least this many on-screen pixels. */

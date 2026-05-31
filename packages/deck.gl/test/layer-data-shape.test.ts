@@ -303,6 +303,212 @@ describe('AnimatedPointLayer per-tile sublayer architecture (v3)', () => {
 });
 
 // ---------------------------------------------------------------------------
+// AnimatedPointLayer cumulative consolidation ("draws itself")
+// ---------------------------------------------------------------------------
+//
+// In cumulative mode the loader keeps the whole span resident, so the per-tile
+// path would accumulate thousands of sublayers (one draw call each) and tank
+// pan/zoom FPS late in playback. The consolidation path packs resident tiles
+// append-only into a few "slab" ScatterplotLayers. These tests pin: the slab
+// count stays tiny, frozen slabs keep a stable layer reference (no re-upload),
+// times rebase onto one common offset, restyle/zoom invalidation behaves, and
+// the cap rolls over into a second slab.
+
+describe('AnimatedPointLayer cumulative consolidation', () => {
+  let LayerCtor: any;
+  let makeCumulativeLayer: (opts?: any) => any;
+
+  beforeEach(async () => {
+    vi.resetModules();
+    const mod = await import('../src/animated-point-layer');
+    LayerCtor = mod.AnimatedPointLayer as any;
+
+    makeCumulativeLayer = (opts = {}) => {
+      const layer = Object.create(LayerCtor.prototype);
+      layer.props = {
+        id: 'cum',
+        fillColor: [255, 128, 0, 255],
+        radius: 5,
+        radiusUnits: 'pixels',
+        timeWindow: 1000,
+        opacity: 1,
+        visible: true,
+        cumulative: true,
+        timeRange: { start: 1_000_000, end: 2_000_000 },
+        fadeInDuration: 100,
+        ...opts,
+      };
+      layer._currentTime = 0;
+      layer.boundGetTime = () => 0;
+      layer.timeFilterExtension = {};
+      layer.categoryColorExtension = {};
+      layer.preparedTileCache = new Map();
+      layer.sublayerCache = new Map();
+      layer.lastLayerPropsKey = '';
+      // Cumulative-path fields (constructor doesn't run under Object.create).
+      layer.slabs = [];
+      layer.absorbedTileKeys = new Set();
+      layer.slabBaseOffset = 0;
+      layer.slabSchemaKey = null;
+      layer.slabSchema = null;
+      layer.lastSlabLayerPropsKey = '';
+      return layer;
+    };
+  });
+
+  /** `count` small point tiles at zoom 11, each a distinct (x) tile. */
+  function metroTiles(count: number, features = 50) {
+    const tiles = [];
+    for (let i = 0; i < count; i++) {
+      const t = bigPointTile(features);
+      t.id = { z: 11, x: i, y: 0, t: 0 };
+      tiles.push(t);
+    }
+    return tiles;
+  }
+
+  it('packs many resident tiles into a single slab layer (not one sublayer per tile)', () => {
+    const layer = makeCumulativeLayer();
+    layer.state = { tiles: metroTiles(20) }; // 20 tiles × 50 = 1000 pts ≪ cap
+    const sublayers = (layer as any).renderLayers();
+    expect(sublayers.length).toBe(1);
+    expect(sublayers[0].props.data.length).toBe(1000);
+  });
+
+  it('returns the SAME slab layer instance across renders when no new tiles arrived', () => {
+    const layer = makeCumulativeLayer();
+    layer.state = { tiles: metroTiles(8) };
+    const first = (layer as any).renderLayers();
+    const second = (layer as any).renderLayers();
+    // Frozen/unchanged slab ⇒ stable reference ⇒ deck.gl skips GPU re-upload.
+    expect(second[0]).toBe(first[0]);
+  });
+
+  it('grows the open slab and rebuilds its layer when a new tile arrives', () => {
+    const layer = makeCumulativeLayer();
+    const tiles = metroTiles(8);
+    layer.state = { tiles };
+    const before = (layer as any).renderLayers();
+    expect(before[0].props.data.length).toBe(400);
+
+    const extra = bigPointTile(50);
+    extra.id = { z: 11, x: 99, y: 0, t: 0 };
+    layer.state = { tiles: [...tiles, extra] };
+    const after = (layer as any).renderLayers();
+
+    expect(after.length).toBe(1);
+    expect(after[0]).not.toBe(before[0]); // version bumped → new data ref → re-upload
+    expect(after[0].props.data.length).toBe(450);
+  });
+
+  it('rebases per-tile times onto the dataset-start offset (one shared timeOffset)', () => {
+    const layer = makeCumulativeLayer();
+    const tile = makePointTile({
+      positions: [
+        [0, 0],
+        [1, 1],
+      ],
+      startTimes: [10, 20],
+      endTimes: [30, 40],
+      timeOffset: 1_500_000,
+      tileId: { z: 11, x: 1, y: 2, t: 0 },
+    });
+    layer.state = { tiles: [tile] };
+    const [slab] = (layer as any).renderLayers();
+    const attrs = slab.props.data.attributes;
+
+    // Common offset = timeRange.start; delta = 1_500_000 − 1_000_000 = 500_000.
+    expect(slab.props.timeOffset).toBe(1_000_000);
+    expect(attrs.instanceStartTime.value[0]).toBeCloseTo(500_010, 0);
+    expect(attrs.instanceStartTime.value[1]).toBeCloseTo(500_020, 0);
+    expect(attrs.instanceEndTime.value[0]).toBeCloseTo(500_030, 0);
+    expect(typeof slab.props.getTime).toBe('function');
+  });
+
+  it('consolidates CPU colorMapping fill colors across tiles into one buffer', () => {
+    const layer = makeCumulativeLayer({
+      fillColor: 'year',
+      colorMapping: { '2008': [1, 2, 3, 255] as any },
+      colorMappingDefault: [9, 9, 9, 255] as any,
+    });
+    const mkYearTile = (n: number, x: number) => {
+      const t = bigPointTile(n);
+      t.id = { z: 11, x, y: 0, t: 0 };
+      t.layers[0].features.categoricalProps['year'] = {
+        indices: new Uint16Array(n).fill(1), // → category '2008'
+        categories: ['2007', '2008', '2009'],
+      };
+      return t;
+    };
+    layer.state = { tiles: [mkYearTile(4, 0), mkYearTile(6, 1)] };
+    const [slab] = (layer as any).renderLayers();
+    const fill = slab.props.data.attributes.getFillColor;
+
+    expect(slab.props.data.length).toBe(10);
+    expect(fill.value).toBeInstanceOf(Uint8Array);
+    expect(fill.value.length).toBe(10 * 4);
+    // First feature of tile A and a feature from tile B both resolve to [1,2,3,255].
+    expect([fill.value[0], fill.value[1], fill.value[2], fill.value[3]]).toEqual([1, 2, 3, 255]);
+    expect([fill.value[36], fill.value[37], fill.value[38], fill.value[39]]).toEqual([1, 2, 3, 255]);
+  });
+
+  it('rebuilds slabs from scratch when the zoom (tile z) changes', () => {
+    const layer = makeCumulativeLayer();
+    layer.state = { tiles: metroTiles(4) };
+    (layer as any).renderLayers();
+    expect((layer as any).slabSchemaKey).toContain('|11');
+    expect((layer as any).absorbedTileKeys.size).toBe(4);
+
+    const deeper = bigPointTile(50);
+    deeper.id = { z: 12, x: 0, y: 0, t: 0 };
+    layer.state = { tiles: [deeper] };
+    (layer as any).renderLayers();
+    // Old-zoom tiles dropped; only the new-zoom tile is packed.
+    expect((layer as any).slabSchemaKey).toContain('|12');
+    expect((layer as any).absorbedTileKeys.size).toBe(1);
+  });
+
+  it('rebuilds slab layers (but keeps packed data) on a visual-only prop change', () => {
+    const layer = makeCumulativeLayer();
+    layer.state = { tiles: metroTiles(6) };
+    const first = (layer as any).renderLayers();
+    const firstData = first[0].props.data;
+
+    layer.props.radiusScale = 9;
+    const second = (layer as any).renderLayers();
+    expect(second[0]).not.toBe(first[0]); // layer rebuilt with new style…
+    expect(second[0].props.radiusScale).toBe(9);
+    expect(second[0].props.data).toBe(firstData); // …but the packed data is reused
+  });
+
+  it('rolls a full slab over into a second slab past the point cap', () => {
+    const layer = makeCumulativeLayer();
+    const a = bigPointTile(200_000);
+    a.id = { z: 11, x: 0, y: 0, t: 0 };
+    const b = bigPointTile(60_000); // 200k + 60k > 250k cap → opens a 2nd slab
+    b.id = { z: 11, x: 1, y: 0, t: 0 };
+    layer.state = { tiles: [a, b] };
+    const subs = (layer as any).renderLayers();
+    expect(subs.length).toBe(2);
+    expect(subs[0].props.data.length).toBe(200_000);
+    expect(subs[1].props.data.length).toBe(60_000);
+  });
+
+  it('collapses slabs when the tile set empties (data switch)', () => {
+    const layer = makeCumulativeLayer();
+    layer.state = { tiles: metroTiles(5) };
+    (layer as any).renderLayers();
+    expect((layer as any).slabs.length).toBeGreaterThan(0);
+
+    layer.state = { tiles: [] };
+    const subs = (layer as any).renderLayers();
+    expect(subs).toEqual([]);
+    expect((layer as any).slabs.length).toBe(0);
+    expect((layer as any).absorbedTileKeys.size).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // AnimatedPathLayer
 // ---------------------------------------------------------------------------
 
@@ -686,6 +892,64 @@ describe('AnimatedTripsLayer per-tile sublayer architecture (v3)', () => {
     // …and feature 2 (category index 2 → [70,80,90]) gets the third palette entry.
     const v2 = binary.startIndices[2] * 4;
     expect([col[v2], col[v2 + 1], col[v2 + 2]]).toEqual([70, 80, 90]);
+  });
+
+  it('maps a per-vertex scalar (vertexValues) through the gradient ramp; NaN → fallback', () => {
+    // The ocean-drifter feature: each vertex's SST is mapped through a low→high
+    // ramp so the line shades ALONG its length. Built per-vertex (same
+    // granularity as getPath) so PathLayer's segment instances are sized right.
+    const layer = makeLayer({
+      gradientProperty: 'vertexValues',
+      gradientDomain: [0, 30],
+      gradientColorRamp: [
+        [0, 0, 255, 255], // cold → blue
+        [255, 0, 0, 255], // hot → red
+      ],
+      colorMappingDefault: [9, 9, 9, 99], // NaN / no-value fallback
+    });
+    const tile = bigPathTile(1, 3);
+    const binary = tile.layers[0].features;
+    // 1 feature × 3 vertices: cold endpoint, hot endpoint, missing value.
+    binary.vertexValues = new Float32Array([0, 30, NaN]);
+    const built = (layer as any).buildSublayer(
+      (layer as any).prepareTile(tile, tile.layers[0]),
+    );
+    const attrs = built.props.data.attributes;
+
+    expect(attrs.getColor).toBeDefined();
+    expect(attrs.getColor.value).toBeInstanceOf(Uint8Array);
+    expect(attrs.getColor.size).toBe(4);
+    const totalVerts = binary.startIndices[binary.featureCount];
+    expect(attrs.getColor.value.length).toBe(totalVerts * 4);
+
+    const col = attrs.getColor.value;
+    // Distinct per-vertex values → distinct colors along the path.
+    expect([col[0], col[1], col[2], col[3]]).toEqual([0, 0, 255, 255]); // cold → blue
+    expect([col[4], col[5], col[6], col[7]]).toEqual([255, 0, 0, 255]); // hot → red
+    expect([col[8], col[9], col[10], col[11]]).toEqual([9, 9, 9, 99]); // missing → fallback
+  });
+
+  it('gradient color takes precedence over categorical tripColor', () => {
+    const layer = makeLayer({
+      tripColor: 'kind', // categorical would normally drive color…
+      colorPalette: [[10, 20, 30, 255]],
+      gradientProperty: 'vertexValues', // …but the gradient wins.
+      gradientDomain: [0, 10],
+      gradientColorRamp: [[1, 2, 3, 255]],
+    });
+    const tile = bigPathTile(1, 2);
+    const binary = tile.layers[0].features;
+    binary.categoricalProps['kind'] = {
+      indices: new Uint16Array([0]),
+      categories: ['a'],
+    };
+    binary.vertexValues = new Float32Array([5, 5]);
+    const built = (layer as any).buildSublayer(
+      (layer as any).prepareTile(tile, tile.layers[0]),
+    );
+    const col = built.props.data.attributes.getColor.value;
+    // Single-stop ramp → every vertex is the ramp color, not the palette color.
+    expect([col[0], col[1], col[2], col[3]]).toEqual([1, 2, 3, 255]);
   });
 
   it('declares dataComparator that skips deck.gl prop diff on identical references', () => {

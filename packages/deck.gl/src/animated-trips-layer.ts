@@ -42,6 +42,13 @@ const DEBUG = false;
 
 export interface AnimatedTripsLayerProps extends SpatioTemporalLayerProps {
   /**
+   * Units for `tripWidth`. 'pixels' (default) is screen-space; 'meters' makes
+   * widths world-space so trails thicken/thin with zoom like real objects
+   * (clamped by widthMin/MaxPixels), mirroring the maritime point layer.
+   * @default 'pixels'
+   */
+  widthUnits?: 'pixels' | 'meters' | 'common';
+  /**
    * Width multiplier.
    * @default 1
    */
@@ -78,6 +85,19 @@ export interface AnimatedTripsLayerProps extends SpatioTemporalLayerProps {
   colorMapping?: Record<string, Color>;
   /** Fallback color for categories absent from `colorMapping`. */
   colorMappingDefault?: Color;
+  /**
+   * Per-vertex gradient coloring. Names which `BinaryFeatures` per-vertex
+   * scalar channel to color by — currently only `'vertexValues'` (e.g. SST).
+   * When set and the tile carries that channel, each vertex's value is mapped
+   * through {@link gradientColorRamp} over {@link gradientDomain}, shading the
+   * line *along its length*. Takes precedence over categorical `tripColor`.
+   * `NaN` values fall back to {@link colorMappingDefault}.
+   */
+  gradientProperty?: string;
+  /** `[min, max]` value range mapped onto `gradientColorRamp`. */
+  gradientDomain?: [number, number];
+  /** Low→high color stops for the gradient ramp. */
+  gradientColorRamp?: Color[];
   /**
    * Trail length in milliseconds.
    * @default 180000
@@ -269,11 +289,77 @@ function expandCategoryColors(
   return out;
 }
 
+/**
+ * Map a per-vertex scalar array through a color ramp to one RGBA per vertex,
+ * so PathLayer shades each line *along its length* (its tessellator carries
+ * `getColor` as a per-vertex attribute and interpolates it across segments).
+ * Each value is normalized into `[0,1]` over `domain`, then piecewise-lerped
+ * across the ramp stops. `NaN` (no value) gets `fallback`.
+ */
+function expandGradientColors(
+  values: Float32Array,
+  domain: [number, number],
+  ramp: Color[],
+  totalVerts: number,
+  fallback: Color,
+): Uint8Array {
+  const out = new Uint8Array(totalVerts * 4);
+  const [lo, hi] = domain;
+  const span = hi - lo;
+  const n = ramp.length;
+  const fr = fallback[0];
+  const fg = fallback[1];
+  const fb = fallback[2];
+  const fa = fallback[3] ?? 255;
+  // Guard against a degenerate ramp/domain so the loop stays branch-light.
+  const safeSpan = span !== 0 ? span : 1;
+  for (let v = 0; v < totalVerts; v++) {
+    const o = v * 4;
+    const value = values[v];
+    if (n === 0 || Number.isNaN(value)) {
+      out[o] = fr;
+      out[o + 1] = fg;
+      out[o + 2] = fb;
+      out[o + 3] = fa;
+      continue;
+    }
+    let t = (value - lo) / safeSpan;
+    if (t <= 0 || n === 1) {
+      const c = ramp[0];
+      out[o] = c[0];
+      out[o + 1] = c[1];
+      out[o + 2] = c[2];
+      out[o + 3] = c[3] ?? 255;
+      continue;
+    }
+    if (t >= 1) {
+      const c = ramp[n - 1];
+      out[o] = c[0];
+      out[o + 1] = c[1];
+      out[o + 2] = c[2];
+      out[o + 3] = c[3] ?? 255;
+      continue;
+    }
+    // Locate the bracketing stops and lerp between them.
+    const scaled = t * (n - 1);
+    const i0 = Math.floor(scaled);
+    const f = scaled - i0;
+    const c0 = ramp[i0];
+    const c1 = ramp[i0 + 1];
+    out[o] = c0[0] + (c1[0] - c0[0]) * f;
+    out[o + 1] = c0[1] + (c1[1] - c0[1]) * f;
+    out[o + 2] = c0[2] + (c1[2] - c0[2]) * f;
+    out[o + 3] = (c0[3] ?? 255) + ((c1[3] ?? 255) - (c0[3] ?? 255)) * f;
+  }
+  return out;
+}
+
 export class AnimatedTripsLayer extends SpatioTemporalLayer<AnimatedTripsLayerProps> {
   static layerName = 'AnimatedTripsLayer';
 
   static defaultProps: DefaultProps<AnimatedTripsLayerProps> = {
     ...SpatioTemporalLayer.defaultProps,
+    widthUnits: 'pixels',
     widthScale: { type: 'number', value: 1, min: 0 },
     widthMinPixels: { type: 'number', value: 2 },
     widthMaxPixels: { type: 'number', value: 10 },
@@ -487,9 +573,16 @@ export class AnimatedTripsLayer extends SpatioTemporalLayer<AnimatedTripsLayerPr
     const mapSig = this.props.colorMapping
       ? `m${Object.keys(this.props.colorMapping).length}`
       : '';
+    // Gradient signature: property + domain + ramp length. Including the
+    // domain invalidates the cached per-vertex colors when the scale changes.
+    const gradSig = this.props.gradientProperty
+      ? `g${this.props.gradientProperty}:${(this.props.gradientDomain ?? [0, 1]).join(',')}:${
+          (this.props.gradientColorRamp ?? []).length
+        }`
+      : '';
     const styleKey = `${colorProp}|${widthProp}|${
       colorProp ? (this.props.colorPalette ?? DEFAULT_PALETTE).length : 0
-    }|${mapSig}`;
+    }|${mapSig}|${gradSig}`;
 
     const tileKey = makeTileKey(tile, tileLayer);
     const cached = this.preparedTileCache.get(tileKey);
@@ -523,14 +616,37 @@ export class AnimatedTripsLayer extends SpatioTemporalLayer<AnimatedTripsLayerPr
       instanceVertexTime: { value: vertexTimes, size: 1 },
     };
 
-    // Property-driven categorical color. PathLayer instances are SEGMENTS,
-    // not features, so the GPU per-feature `instanceCategoryIndex` path
-    // (correct for the point layer) under-sizes the instanced buffer here and
-    // throws "vertex buffer is not big enough". Resolve each feature's color
-    // on the CPU and expand it per-vertex instead — PathLayer's tessellator
-    // maps a per-vertex `getColor` onto its segment instances natively. The
-    // extra 4 bytes/vertex is negligible at trip-dataset scale.
-    if (colorProp) {
+    // Per-vertex gradient color takes precedence over categorical: map each
+    // vertex's scalar (currently only `vertexValues`, e.g. SST) through the
+    // ramp so the line shades along its length. Built per-vertex for the same
+    // reason as the categorical path below — PathLayer needs per-vertex colors.
+    const gradientValues =
+      this.props.gradientProperty === 'vertexValues' ? binary.vertexValues : undefined;
+    if (
+      gradientValues &&
+      gradientValues.length >= totalVerts &&
+      this.props.gradientColorRamp &&
+      this.props.gradientColorRamp.length > 0
+    ) {
+      attributes.getColor = {
+        value: expandGradientColors(
+          gradientValues,
+          this.props.gradientDomain ?? [0, 1],
+          this.props.gradientColorRamp,
+          totalVerts,
+          this.props.colorMappingDefault ?? [120, 120, 120, 255],
+        ),
+        size: 4,
+        normalized: true,
+      };
+    } else if (colorProp) {
+      // Property-driven categorical color. PathLayer instances are SEGMENTS,
+      // not features, so the GPU per-feature `instanceCategoryIndex` path
+      // (correct for the point layer) under-sizes the instanced buffer here and
+      // throws "vertex buffer is not big enough". Resolve each feature's color
+      // on the CPU and expand it per-vertex instead — PathLayer's tessellator
+      // maps a per-vertex `getColor` onto its segment instances natively. The
+      // extra 4 bytes/vertex is negligible at trip-dataset scale.
       const cat = binary.categoricalProps[colorProp];
       if (cat) {
         // Explicit colorMapping → stable per-tile palette (resolved against
@@ -635,7 +751,7 @@ export class AnimatedTripsLayer extends SpatioTemporalLayer<AnimatedTripsLayerPr
       // PathLayer defaults positionFormat to 'XYZ'; 2D paths must opt out or
       // every vertex is read with the wrong stride.
       positionFormat: prepared.dims === 3 ? 'XYZ' : 'XY',
-      widthUnits: 'pixels',
+      widthUnits: this.props.widthUnits ?? 'pixels',
       widthScale: this.props.widthScale ?? 1,
       widthMinPixels: this.props.widthMinPixels,
       widthMaxPixels: this.props.widthMaxPixels,

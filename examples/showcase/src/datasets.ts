@@ -176,7 +176,16 @@ export const datasets: Dataset[] = [
       start: 1578268800000,  // 2020-01-06 00:00 UTC
       end: 1578355190000,    // 2020-01-06 23:59 UTC
     },
-    timeWindow: 150000, // 15 minute window for 24-hour dataset
+    // Comet-wake aesthetic, mirrored from ship-traffic: every position ping
+    // behind the play head fades and shrinks into a trail behind each
+    // aircraft. Aircraft move ~25× faster than vessels (~900 km/h vs ~20 kn),
+    // so a 5-min wake already paints a long contrail (~75 km), where ships
+    // need an hour. timeWindow is 2× wakeLength so the tile loader covers the
+    // past half of the wake (the shader filter is independent of the loader
+    // window — see TimeFilterExtension.wakeLength docstring).
+    wakeLength: 300000,     // 5-minute contrail behind each aircraft
+    wakeTailScale: 0.15,    // tail shrinks to 15% of head radius
+    timeWindow: 600000,     // 10-min loader window → 5-min past coverage
     targetPlaybackSeconds: 360, // 24 hours plays in 3 minutes
     initialViewState: {
       longitude: -98.5,
@@ -194,6 +203,17 @@ export const datasets: Dataset[] = [
     use3D: true,
     elevationProperty: 'altitude', // Altitude stored in properties (feet)
     elevationScale: 0.3048, // Convert feet to meters
+    // World-space dots, mirrored from ship-traffic: `radius` is in METERS, so
+    // aircraft scale with zoom like real objects. No pixel floor
+    // (radiusMinPixels: 0) → dots fall sub-pixel at the zoom-4 national view
+    // and only emerge as you zoom in — the deliberate "render by space"
+    // tradeoff. radiusMaxPixels: 80 caps overdraw at deep zoom. The comet wake
+    // (alpha fade + size taper) is dimensionless and unaffected.
+    radiusUnits: 'meters',
+    radius: 500,
+    radiusScale: 1,
+    radiusMinPixels: 0,
+    radiusMaxPixels: 80,
   },
   {
     id: 'flight-paths',
@@ -286,7 +306,15 @@ export const datasets: Dataset[] = [
       start: 1420070400000,  // 2015-01-01 00:00:00 UTC (first chronological trip)
       end:   1420080391000,  // 2015-01-01 02:46:31 UTC (50K-trip cap)
     },
-    timeWindow: 15000, // 15s window for a 2.8h dataset
+    // Comet-wake aesthetic, mirrored from ship-traffic: each cab leaves a
+    // fading, shrinking trail of its recent positions. A 60s wake spans ~4
+    // of the 15s position samples — long enough to read as a street-tracing
+    // comet at the zoom-12 view, short enough not to smear into the VAT-trips
+    // look. timeWindow is 2× wakeLength so the loader covers the past half of
+    // the wake (the shader filter is independent of the loader window).
+    wakeLength: 60000,      // 60s comet trail behind each cab
+    wakeTailScale: 0.15,    // tail shrinks to 15% of head radius
+    timeWindow: 120000,     // 2-min loader window → 60s past coverage
     targetPlaybackSeconds: 120, // ~2.8h plays in 2 minutes
     initialViewState: {
       longitude: -73.98,
@@ -303,10 +331,17 @@ export const datasets: Dataset[] = [
         { color: "#FF5722", label: "Dropoff" }
       ]
     },
-    radiusUnits: 'pixels',
+    // World-space dots, mirrored from ship-traffic: `radius` is in METERS so
+    // cabs scale with zoom like real objects. No pixel floor
+    // (radiusMinPixels: 0) → at the zoom-12 view a 60 m dot reads ~2 px and
+    // emerges/shrinks as you zoom in/out — the "render by space" tradeoff.
+    // radiusMaxPixels: 8 caps a stopped cab from ballooning at deep zoom. The
+    // comet wake (alpha fade + size taper) is dimensionless and unaffected.
+    radiusUnits: 'meters',
+    radius: 60,
     radiusScale: 1,
-    radiusMinPixels: 1.5,
-    radiusMaxPixels: 3,
+    radiusMinPixels: 0,
+    radiusMaxPixels: 8,
   },
   {
     id: 'nyc-taxi-od-heatmap',
@@ -387,12 +422,16 @@ export const datasets: Dataset[] = [
       start: 1420070400000,  // 2015-01-01 00:00:00 UTC
       end: 1420213385000,    // 2015-01-02 13:43:05 UTC
     },
-    // Match the sampling cadence: the Rust generator emits one interpolated
-    // sample every 15s along each trip, so a 15s window catches ~one sample
-    // per car per frame. Each vehicle renders as a single point that
-    // teleports forward at each sample boundary instead of stacking 2-3
-    // overlapping copies (which is what a wider window would do).
-    timeWindow: 15000,
+    // Comet-wake aesthetic, mirrored from ship-traffic. The Rust generator
+    // emits one interpolated sample every 15s, so a 60s wake spans ~4 samples:
+    // instead of one teleporting dot, each cab now leaves a fading, shrinking
+    // trail of its recent positions. Crucially the wake does NOT re-create the
+    // old "stacked opaque copies" problem — the TimeFilterExtension fades each
+    // trailing sample by age (vTimeAlpha), so they read as a comet, not blobs.
+    // timeWindow is 2× wakeLength so the loader covers the past half of the wake.
+    wakeLength: 60000,      // 60s comet trail behind each cab
+    wakeTailScale: 0.15,    // tail shrinks to 15% of head radius
+    timeWindow: 120000,     // 2-min loader window → 60s past coverage
     targetPlaybackSeconds: 600, // 1.5 days plays in 10 min
     initialViewState: {
       longitude: -73.98,
@@ -418,13 +457,17 @@ export const datasets: Dataset[] = [
       dropoff: [255, 87, 34, 180],
     },
     colorMappingDefault: [120, 120, 120, 140],
-    // No radiusProperty → DemoPage falls back to a 1000m × radiusScale fixed
-    // disc, which at NYC zoom 14 renders as a ~200px blob. Switch to pixels
-    // and clamp tight: each vehicle is a 2-3px dot regardless of zoom.
-    radiusUnits: 'pixels',
+    // World-space dots, mirrored from ship-traffic: `radius` is in METERS so
+    // cabs scale with zoom like real objects. No pixel floor
+    // (radiusMinPixels: 0) → at the zoom-14 view a 20 m dot reads ~2.8 px and
+    // emerges/shrinks as you zoom in/out — the "render by space" tradeoff.
+    // radiusMaxPixels: 8 caps a stopped cab from ballooning at deep zoom. The
+    // comet wake (alpha fade + size taper) is dimensionless and unaffected.
+    radiusUnits: 'meters',
+    radius: 20,
     radiusScale: 1,
-    radiusMinPixels: 1.5,
-    radiusMaxPixels: 3,
+    radiusMinPixels: 0,
+    radiusMaxPixels: 8,
   },
   {
     id: 'nyc-taxi-paths',
@@ -470,7 +513,7 @@ export const datasets: Dataset[] = [
     // Tile-load window: trail is 10s, so 20s comfortably covers the trail plus
     // a margin for tiles arriving slightly ahead of the playhead.
     timeWindow: 20000,
-    targetPlaybackSeconds: 60000, // 2 minutes
+    targetPlaybackSeconds: 30000, // 1 minute
     initialViewState: {
       longitude: -73.98,
       latitude: 40.75,
@@ -484,13 +527,17 @@ export const datasets: Dataset[] = [
         { color: "#1FBAD6", label: "Active Trip" },
       ]
     },
-    // VAT-trail config — mirrors the previous PathLayer styling.
+    // VAT-trail config. World-space width (metres), mirrored from the maritime
+    // points' "render by space" look: the ribbon is ~1.4 px at the zoom-14 view
+    // and grows/shrinks with zoom (caps at widthMaxPixels) instead of staying a
+    // fixed screen width. The trail still alpha-fades toward its tail.
     vatTrailColor: [31, 186, 214, 255],
     vatTrailLength: 12500,
     vatTrailSamples: 16,
-    vatTripWidth: 3,
-    widthMinPixels: 2,
-    widthMaxPixels: 8,
+    vatSizeUnits: 'meters',
+    vatTripWidth: 10,       // metres
+    widthMinPixels: 0,
+    widthMaxPixels: 6,
     vatFadeTrail: true,
     vatTimeSlots: 64,
   },
@@ -506,7 +553,7 @@ export const datasets: Dataset[] = [
       end: 1420213385000,
     },
     timeWindow: 20000,
-    targetPlaybackSeconds: 6000,
+    targetPlaybackSeconds: 4000,
     initialViewState: {
       longitude: -73.98,
       latitude: 40.75,
@@ -518,8 +565,15 @@ export const datasets: Dataset[] = [
       title: 'Taxis',
       items: [{ color: '#FD805D', label: 'Active Trip' }],
     },
+    // World-space head dots (meters), mirrored from the maritime points: a
+    // 20 m head reads ~2.8 px at the zoom-14 view and emerges/shrinks on zoom
+    // with no pixel floor (radiusMinPixels: 0), matching nyc-taxi-points.
+    // radiusMaxPixels: 8 caps a stopped cab at deep zoom.
     vatHeadColor: [253, 128, 93, 255],
-    vatHeadRadiusPixels: 4,
+    vatSizeUnits: 'meters',
+    vatHeadRadius: 20,      // metres
+    vatHeadRadiusMinPixels: 0,
+    vatHeadRadiusMaxPixels: 8,
     vatTimeSlots: 64,
   },
   {
@@ -540,13 +594,20 @@ export const datasets: Dataset[] = [
     wakeLength: 3600000,    // 30-minute wake behind each ship
     wakeTailScale: 0.15,    // tail shrinks to 15% of head radius
     timeWindow: 5600000,    // 60-min loader window → 30-min past coverage
-    targetPlaybackSeconds: 180, // 24 hours plays in 3 minutes
-    // Pixel-radius head dot. Meters-based default rendered sub-pixel at
-    // zoom 4 — invisible wakes. A 4 px head shrinks to ~0.6 px at the
-    // trailing edge, the classic comet-tail look.
-    radiusUnits: 'pixels',
+    targetPlaybackSeconds: 220, // 24 hours plays in 3 minutes
+    // World-space dots: `radius` is in METERS, so vessels scale with zoom like
+    // real objects (300 m radius ≈ a large-vessel / berth footprint). No pixel
+    // floor (radiusMinPixels: 0), so dots fall sub-pixel at the zoom-4 national
+    // view and only emerge as you zoom toward a harbor — the deliberate
+    // "render by space" tradeoff. m/px = 156543·cos(lat)/2^zoom, so at lat 30:
+    // ~4.5 px @z11, ~9 px @z12, ~18 px @z13. radiusMaxPixels: 80 is a loose cap
+    // so a docked vessel can't fill the screen / blow up overdraw at deep zoom.
+    // The comet wake (alpha fade + size taper) is dimensionless and unaffected.
+    radiusUnits: 'meters',
+    radius: 500,
     radiusScale: 1,
-    radiusMaxPixels: 4,
+    radiusMinPixels: 0,
+    radiusMaxPixels: 80,
     initialViewState: {
       longitude: -95,
       latitude: 30,
@@ -598,13 +659,20 @@ export const datasets: Dataset[] = [
   {
     id: 'satellites',
     name: 'Satellite Orbits',
-    description: '~12,700 low-Earth-orbit satellites from CelesTrak over 24h (2024-06-21). Defaults to the globe; flip to flat at top-left.',
+    description: '~12,700 low-Earth-orbit satellites from CelesTrak over 24h (2026-05-30). Defaults to the globe; flip to flat at top-left.',
     url: '/data/satellites.stt',
     type: 'trips', // Use trips layer for animated satellite movement
     useGlobe: true, // Render on 3D globe for orbital visualization
+    // MUST bracket the simulation window baked into satellites.stt. The archive
+    // was regenerated without `--start-time`, so the generator defaulted to
+    // Utc::now() (~2026-05-30) rather than the old 2024-06-21 epoch. A
+    // mismatched timeRange makes the tile loader query a time with no data, so
+    // getTileIdsInBounds returns nothing and the demo renders blank (a black
+    // globe / bare base map) — which looks like "globe→flat is broken".
+    // If you regenerate with a fixed `--start-time`, update these to match.
     timeRange: {
-      start: 1718928000000, // 2024-06-21T00:00:00Z
-      end: 1719014400000,   // 2024-06-22T00:00:00Z (24 hours)
+      start: 1780102800000, // 2026-05-30T01:00:00Z (first sim step in the archive)
+      end: 1780191896319,   // 2026-05-31T01:44:56Z (last sim step, ~24.7h)
     },
     // Time window controls which segments are loaded/visible
     // For LEO satellites with ~90 min orbits and ~40 min segments, use larger window
@@ -677,7 +745,13 @@ export const datasets: Dataset[] = [
     },
     colorMappingDefault: [176, 190, 197, 200],
     opacity: 0.8,
-    tripWidth: 1.5,
+    // World-space width (metres), mirrored from the maritime points' "render by
+    // space" look: a track is ~3 px at a continental zoom (~5) and thins toward
+    // the global view, where m/px is huge. widthMinPixels: 1 keeps a 1 px floor
+    // so the hero global arc view (zoom 1.2) stays visible instead of vanishing
+    // sub-pixel; widthMaxPixels: 3 caps it once zoomed deep into a flyway.
+    widthUnits: 'meters',
+    tripWidth: 14000,   // ~14 km → ~3 px at zoom 5, floored to 1 px globally
     widthMinPixels: 1,
     widthMaxPixels: 3,
     trailLength: 86400000 * 4, // 4-day fading trail shows the migration arc
@@ -721,14 +795,20 @@ export const datasets: Dataset[] = [
       pitch: 0,
       bearing: 0,
     },
-    colorProperty: 'temp_band',
-    colorMapping: {
-      cold:    [44, 90, 200, 235],
-      cool:    [40, 180, 200, 235],
-      mild:    [250, 210, 90, 235],
-      warm:    [244, 140, 60, 235],
-      hot:     [220, 50, 47, 235],
-      unknown: [130, 130, 130, 170],
+    // Color each track *along its length* by the per-vertex SST carried in the
+    // tile, so a buoy's ribbon warms (blue→red) as it drifts into warmer water
+    // — e.g. the Gulf Stream's warm core reads red while its polar tail cools
+    // to blue. `colorMappingDefault` is the gray used where a fix had no SST.
+    tripGradient: {
+      property: 'vertexValues',
+      domain: [0, 30], // °C
+      colors: [
+        [44, 90, 200, 235],  // ≤ 0 °C  — deep blue
+        [40, 180, 200, 235], // ~7.5 °C — teal
+        [250, 210, 90, 235], // ~15 °C  — yellow
+        [244, 140, 60, 235], // ~22 °C  — orange
+        [220, 50, 47, 235],  // ≥ 30 °C — red
+      ],
     },
     colorMappingDefault: [130, 130, 130, 170],
     opacity: 0.85,
@@ -741,12 +821,11 @@ export const datasets: Dataset[] = [
     useGlobalBounds: true,
     legend: {
       title: 'Sea-surface temperature',
-      items: [
-        { color: '#2C5AC8', label: '< 5 °C' },
-        { color: '#28B4C8', label: '5–15 °C' },
-        { color: '#FAD25A', label: '15–22 °C' },
-        { color: '#F48C3C', label: '22–27 °C' },
-        { color: '#DC322F', label: '≥ 27 °C' },
+      ramps: [
+        {
+          label: '0 → 30 °C',
+          colors: ['#2C5AC8', '#28B4C8', '#FAD25A', '#F48C3C', '#DC322F'],
+        },
       ],
     },
   },
@@ -776,7 +855,7 @@ export const datasets: Dataset[] = [
       end: Date.parse('2026-01-01T00:00:00Z'),
     },
     timeWindow: 86400000 * 30, // overridden for cumulative datasets; kept for completeness
-    targetPlaybackSeconds: 180, // ~19 years in 4 minutes
+    targetPlaybackSeconds: 360, // ~19 years in 4 minutes
     // ~2 weeks of sim-time "ink appearing" ramp as each node is revealed.
     fadeInDuration: 86400000 * 14,
     initialViewState: {
@@ -789,11 +868,18 @@ export const datasets: Dataset[] = [
     colorProperty: 'year',
     colorMapping: OSM_YEAR_COLORS,
     colorMappingDefault: [150, 150, 150, 255],
-    // Tight pixel dots so millions of creations read as line-work, not blobs.
-    radiusUnits: 'pixels',
+    // World-space dots, mirrored from nyc-taxi-points: `radius` is in METERS so
+    // node creations scale with zoom like real objects. No pixel floor
+    // (radiusMinPixels: 0) → at the zoom-11 home view a 100 m dot reads ~1.7 px
+    // (m/px ≈ 58 at lat 40.7, z11), so the millions of creations read as fine
+    // line-work, then visibly grow into structure as you zoom in. A loose
+    // radiusMaxPixels: 8 (vs the old tight 3) lets that world-space growth
+    // actually show before capping a dense cluster from blobbing at deep zoom.
+    radiusUnits: 'meters',
+    radius: 7,
     radiusScale: 1,
-    radiusMinPixels: 1,
-    radiusMaxPixels: 2,
+    radiusMinPixels: 0,
+    radiusMaxPixels: 8,
     legend: {
       title: 'Year created',
       ramps: [
@@ -914,10 +1000,16 @@ export const datasets: Dataset[] = [
       other: [189, 195, 199, 255],
     },
     colorMappingDefault: [189, 195, 199, 255],
-    radiusUnits: 'pixels',
+    // World-space dots, mirrored from nyc-taxi-points: `radius` is in METERS so
+    // changesets scale with zoom like real objects. No pixel floor
+    // (radiusMinPixels: 0) → at the zoom-11 home view a 150 m dot reads ~2.6 px
+    // (m/px ≈ 58 at lat 40.7, z11) and emerges/shrinks as you zoom.
+    // radiusMaxPixels: 6 caps a dense cluster from ballooning at deep zoom.
+    radiusUnits: 'meters',
+    radius: 150,
     radiusScale: 1,
-    radiusMinPixels: 2,
-    radiusMaxPixels: 4,
+    radiusMinPixels: 0,
+    radiusMaxPixels: 6,
     legend: {
       title: 'Editor',
       items: [

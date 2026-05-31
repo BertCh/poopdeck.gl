@@ -8,6 +8,7 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
+    "test": "vitest run",
     "lint": "eslint src",
     "clean": "rm -rf node_modules/.vite dist *.tsbuildinfo && find src -type f \\( -name '*.js' -o -name '*.js.map' -o -name '*.d.ts' -o -name '*.d.ts.map' \\) ! -name '*.config.js' ! -name '*.test.js' -delete"
   },
