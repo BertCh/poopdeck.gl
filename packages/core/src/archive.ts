@@ -8,7 +8,7 @@
  * Layout (see the Rust `stt-core::archive` module):
  *
  * ```text
- * [ 64-byte header ][ gzip Arrow-IPC tile blobs ][ Arrow-IPC index ][ JSON metadata ]
+ * [ 64-byte header ][ compressed tile blobs ][ dictionary? ][ directory ][ JSON metadata ]
  * ```
  *
  * The reader fetches the header, then the index table and metadata, then each
@@ -16,7 +16,7 @@
  * here; decoded tiles are owned by the tileset.
  */
 
-import { tableFromIPC } from 'apache-arrow';
+import { decodeDirectory } from './directory';
 import {
   type ArchiveMetadata,
   type ArchiveIndex,
@@ -42,8 +42,8 @@ import { createSttTileSource, type SttTileSource } from './tile-source';
 
 /** Magic prefix shared by all STT archives ("STT" + version byte). */
 const MAGIC_PREFIX = [0x53, 0x54, 0x54];
-/** Highest archive format version this reader understands. */
-const FORMAT_VERSION = 3;
+/** The one supported archive format version. */
+const FORMAT_VERSION = 4;
 const HEADER_SIZE = 64;
 
 const DEFAULT_MAX_CACHE_TILES = 500;
@@ -80,12 +80,9 @@ interface ArchiveHeader {
   indexLength: number;
   metadataOffset: number;
   metadataLength: number;
-  /**
-   * Byte offset of the optional zstd training dictionary (v3 only).
-   * Zero for v2 archives and v3 archives written without a dictionary.
-   */
+  /** Byte offset of the optional shared zstd dictionary. Zero if absent. */
   dictionaryOffset: number;
-  /** Length of the optional zstd training dictionary in bytes. */
+  /** Length of the optional shared zstd dictionary in bytes. Zero if absent. */
   dictionaryLength: number;
 }
 
@@ -139,7 +136,7 @@ export class STTArchive {
   /** "z/x/y/t" -> exact entry. */
   private tileEntryByKey = new Map<string, TileEntry>();
 
-  /** Cached zstd dictionary bytes for v3 archives that ship one. */
+  /** Cached shared zstd dictionary bytes, if the archive ships one. */
   private dictionaryCache?: Uint8Array | null;
 
   private cacheStats = { hits: 0, misses: 0, evictions: 0 };
@@ -264,7 +261,7 @@ export class STTArchive {
     return response.arrayBuffer();
   }
 
-  /** Read and validate the 64-byte header. Accepts v2 and v3 archives. */
+  /** Read and validate the 64-byte v4 header. */
   private async getHeader(): Promise<ArchiveHeader> {
     if (this.headerCache) return this.headerCache;
     const buffer = await this.fetchRange(0, HEADER_SIZE - 1);
@@ -283,7 +280,7 @@ export class STTArchive {
         `Invalid STT archive: magic version byte (${magic[3]}) != header version (${version})`,
       );
     }
-    if (version < 2 || version > FORMAT_VERSION) {
+    if (version !== FORMAT_VERSION) {
       throw new Error(`Unsupported STT format version: ${version}`);
     }
     const compressionByte = view.getUint8(5);
@@ -301,10 +298,6 @@ export class STTArchive {
       default:
         throw new Error(`Unknown STT compression code: ${compressionByte}`);
     }
-    // Fields 6..38 are identical across v2 and v3. Fields 38..54 are the
-    // dictionary slot in v3 and reserved zero in v2 — reading them either
-    // way is correct (v2 will see zeros and produce a dictionary-less
-    // header).
     const header: ArchiveHeader = {
       version,
       compression,
@@ -320,16 +313,14 @@ export class STTArchive {
   }
 
   /**
-   * Fetch the optional zstd training dictionary embedded in a v3 archive.
-   * Returns `null` for v2 archives and v3 archives written without one.
-   *
-   * The dictionary is cached after the first call — every decode pulls it
-   * straight from memory.
+   * Fetch the optional shared zstd dictionary embedded in the archive.
+   * Returns `null` when the archive was written without one (the default
+   * eager build). Cached after the first call.
    */
   async getDictionary(): Promise<Uint8Array | null> {
     if (this.dictionaryCache !== undefined) return this.dictionaryCache;
     const header = await this.getHeader();
-    if (header.version < 3 || header.dictionaryLength === 0) {
+    if (header.dictionaryLength === 0) {
       this.dictionaryCache = null;
       return null;
     }
@@ -397,52 +388,23 @@ export class STTArchive {
       header.indexOffset,
       header.indexOffset + header.indexLength - 1
     );
-    const table = tableFromIPC(new Uint8Array(buffer));
-
-    const zoom = table.getChild('zoom')!.toArray() as Uint8Array;
-    const x = table.getChild('x')!.toArray() as Uint32Array;
-    const y = table.getChild('y')!.toArray() as Uint32Array;
-    const timeStart = table.getChild('time_start')!.toArray() as BigInt64Array;
-    const timeEnd = table.getChild('time_end')!.toArray() as BigInt64Array;
-    const offset = table.getChild('offset')!.toArray() as BigUint64Array;
-    const length = table.getChild('length')!.toArray() as Uint32Array;
-    const uncompressed = table.getChild('uncompressed_size')!.toArray() as Uint32Array;
-    const featureCount = table.getChild('feature_count')!.toArray() as Uint32Array;
-    // v3 archives use `crc32c` (UInt32); v2 archives use `content_hash`
-    // (UInt64). The TS reader doesn't currently verify the integrity tag
-    // client-side (decode failures throw a clear error instead), so we just
-    // tolerate either column being absent.
-    // (Kept for forward compatibility / debugging tools.)
-    void table.getChild('crc32c');
-    void table.getChild('content_hash');
-
-    // Optional per-tile temporal bucket size — present only in archives
-    // that ship a temporal LOD pyramid. Use the per-element accessor (which
-    // returns null for null cells) rather than `.toArray()` so the all-null
-    // case stays distinguishable from "bucket = 0".
-    const bucketVec = table.getChild('temporal_bucket_ms');
-
-    const tiles: TileEntry[] = [];
-    for (let i = 0; i < table.numRows; i++) {
-      let temporalBucketMs: number | undefined;
-      if (bucketVec) {
-        const raw = bucketVec.get(i);
-        if (raw != null) temporalBucketMs = Number(raw);
-      }
-      tiles.push({
-        zoom: zoom[i],
-        x: x[i],
-        y: y[i],
-        timeStart: Number(timeStart[i]),
-        timeEnd: Number(timeEnd[i]),
-        offset: Number(offset[i]),
-        length: length[i],
-        featureCount: featureCount[i],
-        compression: header.compression,
-        uncompressedSize: uncompressed[i],
-        temporalBucketMs,
-      });
-    }
+    // Decode the compact v4 directory (columnar varint + run-length). The
+    // crc32c integrity tag is read but not verified client-side — a decode
+    // failure throws a clear error instead.
+    const raw = decodeDirectory(new Uint8Array(buffer));
+    const tiles: TileEntry[] = raw.map((e) => ({
+      zoom: e.zoom,
+      x: e.x,
+      y: e.y,
+      timeStart: e.timeStart,
+      timeEnd: e.timeEnd,
+      offset: e.offset,
+      length: e.length,
+      featureCount: e.featureCount,
+      compression: header.compression,
+      uncompressedSize: e.uncompressedSize,
+      temporalBucketMs: e.temporalBucketMs,
+    }));
     this.indexCache = { tiles };
 
     this.tileEntryIndex.clear();
@@ -524,8 +486,9 @@ export class STTArchive {
     // has no dictionary API, so a tile compressed against a training
     // dictionary would silently decode to garbage. Inspecting the
     // header/metadata/dictionary slot is still allowed (see getDictionary);
-    // only actual tile decode is refused. No producer emits one today — the
-    // Rust writer only calls the dictionary-less `finalize`.
+    // only actual tile decode is refused. The eager `create` build emits no
+    // dictionary; `create_optimized` does — don't serve those to the browser
+    // until a dictionary-capable zstd decoder is wired in.
     const header = await this.getHeader();
     if (header.dictionaryLength > 0) {
       throw new Error(
@@ -1066,8 +1029,7 @@ function latToTileY(lat: number, zoom: number): number {
 
 /**
  * Parse the `summary_tier` block from an archive's JSON metadata into the
- * camelCase TS shape. Returns `undefined` for archives that don't carry one
- * (v2/v3 archives pre-dating the feature).
+ * camelCase TS shape. Returns `undefined` for archives that don't carry one.
  */
 function parseSummaryTier(raw: unknown): SummaryTier | undefined {
   if (!raw || typeof raw !== 'object') return undefined;

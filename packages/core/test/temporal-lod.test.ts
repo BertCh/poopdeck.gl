@@ -17,20 +17,8 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import {
-  tableFromArrays,
-  tableToIPC,
-  Field,
-  Schema,
-  Table,
-  RecordBatch,
-  makeData,
-  Type,
-  Utf8,
-  vectorFromArray,
-} from 'apache-arrow';
 import { STTArchive } from '../src/archive';
-import { Compression } from '../src/types';
+import { encodeDirectory } from '../src/directory';
 
 // ---------------------------------------------------------------------------
 // Helpers: build a minimal v3 archive in memory
@@ -69,46 +57,24 @@ function buildSyntheticArchive(opts: {
   }
   const indexOffset = cursor;
 
-  // Build the index table via Arrow.
-  const n = tiles.length;
-  const zoomArr = Uint8Array.from(tiles.map((t) => t.zoom));
-  const xArr = Uint32Array.from(tiles.map((t) => t.x));
-  const yArr = Uint32Array.from(tiles.map((t) => t.y));
-  const timeStartArr = BigInt64Array.from(tiles.map((t) => BigInt(t.timeStart)));
-  const timeEndArr = BigInt64Array.from(tiles.map((t) => BigInt(t.timeEnd)));
-  const offsetArr = BigUint64Array.from(blobOffsets.map((o) => BigInt(o)));
-  const lengthArr = Uint32Array.from(tileBlobs.map((b) => b.byteLength));
-  const uncompArr = Uint32Array.from(tileBlobs.map((b) => b.byteLength));
-  const featureCountArr = Uint32Array.from(tiles.map(() => 1));
-  const hilbertArr = BigUint64Array.from(tiles.map(() => 0n));
-  const crcArr = Uint32Array.from(tiles.map(() => 0));
-
-  const columns: Record<string, any> = {
-    zoom: zoomArr,
-    x: xArr,
-    y: yArr,
-    time_start: timeStartArr,
-    time_end: timeEndArr,
-    offset: offsetArr,
-    length: lengthArr,
-    uncompressed_size: uncompArr,
-    feature_count: featureCountArr,
-    hilbert: hilbertArr,
-    crc32c: crcArr,
-  };
-  if (opts.writeBucketColumn) {
-    // Nullable column: when a tile has no bucketMs, the entry is left as
-    // null (BigInt64Array doesn't carry nulls, so we use a plain array with
-    // nulls instead and let tableFromArrays infer the column).
-    columns.temporal_bucket_ms = BigUint64Array.from(
-      tiles.map((t) => BigInt(t.bucketMs ?? 0)),
-    );
-    // Note: tableFromArrays makes this column non-nullable. That's fine for
-    // the test — all our LOD-enabled fixtures populate every row.
-  }
-
-  const table = tableFromArrays(columns);
-  const indexBytes = tableToIPC(table, 'stream');
+  // Build the v4 directory. `writeBucketColumn === false` simulates a tile
+  // with no temporal-LOD tag (presence flag 0 → temporalBucketMs undefined).
+  const indexBytes = encodeDirectory(
+    tiles.map((t, i) => ({
+      zoom: t.zoom,
+      x: t.x,
+      y: t.y,
+      timeStart: t.timeStart,
+      timeEnd: t.timeEnd,
+      offset: blobOffsets[i],
+      length: tileBlobs[i].byteLength,
+      uncompressedSize: tileBlobs[i].byteLength,
+      featureCount: 1,
+      hilbert: 0,
+      crc32c: 0,
+      temporalBucketMs: opts.writeBucketColumn ? t.bucketMs : undefined,
+    })),
+  );
   // Tail: metadata JSON.
   const metadataOffset = indexOffset + indexBytes.byteLength;
   const metadataBytes = new TextEncoder().encode(JSON.stringify(opts.metadata));
@@ -119,8 +85,8 @@ function buildSyntheticArchive(opts: {
   total[0] = 0x53; // 'S'
   total[1] = 0x54;
   total[2] = 0x54;
-  total[3] = 3; // version
-  headerView.setUint8(4, 3); // version
+  total[3] = 4; // version
+  headerView.setUint8(4, 4); // version
   headerView.setUint8(5, 0); // Compression.None
   headerView.setBigUint64(6, BigInt(indexOffset), true);
   headerView.setBigUint64(14, BigInt(indexBytes.byteLength), true);
@@ -442,7 +408,3 @@ describe('temporal LOD: getTileIdsInBounds excludes LOD tiers by default', () =>
     expect(ids.length).toBe(2);
   });
 });
-
-// Avoid unused import lints — these symbols are referenced indirectly via
-// `tableFromArrays`'s type machinery.
-void [Field, Schema, Table, RecordBatch, makeData, Type, Utf8, vectorFromArray, Compression];

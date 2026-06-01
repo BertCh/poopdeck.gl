@@ -659,7 +659,7 @@ export const datasets: Dataset[] = [
   {
     id: 'satellites',
     name: 'Satellite Orbits',
-    description: '~12,700 low-Earth-orbit satellites from CelesTrak over 24h (2026-05-30). Defaults to the globe; flip to flat at top-left.',
+    description: '~12,700 low-Earth-orbit satellites from CelesTrak over 24h (2026-05-31). Defaults to the globe; flip to flat at top-left.',
     url: '/data/satellites.stt',
     type: 'trips', // Use trips layer for animated satellite movement
     useGlobe: true, // Render on 3D globe for orbital visualization
@@ -671,8 +671,8 @@ export const datasets: Dataset[] = [
     // globe / bare base map) — which looks like "globe→flat is broken".
     // If you regenerate with a fixed `--start-time`, update these to match.
     timeRange: {
-      start: 1780102800000, // 2026-05-30T01:00:00Z (first sim step in the archive)
-      end: 1780191896319,   // 2026-05-31T01:44:56Z (last sim step, ~24.7h)
+      start: 1780261200000, // first sim step in the regenerated archive (2026-05-31)
+      end: 1780348931102,   // last sim step (~24.4h)
     },
     // Time window controls which segments are loaded/visible
     // For LEO satellites with ~90 min orbits and ~40 min segments, use larger window

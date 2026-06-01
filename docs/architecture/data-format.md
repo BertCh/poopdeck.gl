@@ -1,4 +1,10 @@
-# STT v3 file format
+# STT v4 file format
+
+> **Container + index:** the archive container and the tile **directory** (the
+> index) are specified in [`docs/spec/stt-v4.md`](../spec/stt-v4.md). This page
+> covers the **tile payload** (Arrow IPC + GeoArrow), which is unchanged. The
+> legacy Arrow-IPC index described historically here was replaced by the compact
+> run-length directory in v4.
 
 The Spatiotemporal Tile (`.stt`) format is a single-file archive that combines
 a spatial tile pyramid with a temporal axis. Tile payloads are **Apache Arrow
@@ -6,7 +12,7 @@ IPC** record batches with **GeoArrow**-encoded geometry, so a browser can
 decode a tile with one library (`apache-arrow`) and feed the resulting
 columnar buffers directly to deck.gl.
 
-This document is the normative spec. The Rust authority is
+This document is the normative spec for the tile payload. The Rust authority is
 `crates/stt-core/src/archive.rs` and `crates/stt-core/src/arrow_tile.rs`; the
 TypeScript reader lives in `packages/core/src/archive.ts`. If this document
 and the code disagree, the code wins — please open a PR.

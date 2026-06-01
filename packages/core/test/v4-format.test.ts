@@ -1,11 +1,10 @@
 /**
- * v3 archive format: header parsing and basic compatibility surface.
+ * v4 archive format: header parsing and the dictionary slot.
  *
- * The full end-to-end contract test still lives in `archive.test.ts` and
- * relies on a Rust-built fixture; these tests target what we can verify
- * without spinning up the Rust toolchain — that the TS reader recognises
- * a synthetic v3 header, surfaces the dictionary slot, and rejects bad
- * magic / unknown versions.
+ * The full end-to-end contract test lives in `archive.test.ts` and relies on a
+ * Rust-built fixture; these tests target what we can verify without the Rust
+ * toolchain — that the TS reader recognises a synthetic v4 header, surfaces the
+ * dictionary slot, and rejects bad magic / unsupported versions.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -13,6 +12,7 @@ import { STTArchive } from '../src/archive';
 import { Compression } from '../src/types';
 
 const HEADER_SIZE = 64;
+const VERSION = 4;
 
 function buildHeader(opts: {
   version: number;
@@ -42,9 +42,9 @@ function buildHeader(opts: {
 }
 
 /**
- * Build a tiny "archive" containing just a header + JSON metadata, and
- * serve it via a range-fetch shim. The bench/contract tests exercise the
- * full pipeline; here we just confirm the reader parses the header.
+ * Build a tiny "archive" containing just a header + JSON metadata (an empty
+ * directory), and serve it via a range-fetch shim. These tests never decode
+ * the directory; they only confirm the header / metadata / dictionary paths.
  */
 function buildMinimalArchive(opts: {
   version: number;
@@ -61,10 +61,9 @@ function buildMinimalArchive(opts: {
   const dictBytes = new Uint8Array(opts.dictionaryLength ?? 0);
   for (let i = 0; i < dictBytes.length; i++) dictBytes[i] = (i + 1) & 0xff;
 
-  // Layout: [header] [dictionary?] [empty index] [metadata]
+  // Layout: [header] [dictionary?] [empty directory] [metadata]
   const dictionaryOffset = opts.dictionaryLength ? HEADER_SIZE : 0;
   const indexOffset = HEADER_SIZE + dictBytes.length;
-  // We never decode the empty index in this test; just give it zero-length.
   const indexLength = 0;
   const metadataOffset = indexOffset + indexLength;
   const metadataLength = metadata.length;
@@ -112,37 +111,36 @@ function rangeFetch(bytes: Uint8Array): typeof fetch {
   }) as unknown as typeof fetch;
 }
 
-describe('v3 archive header', () => {
-  it('parses a v3 header with zstd compression', async () => {
-    const bytes = buildMinimalArchive({ version: 3, compression: 2 });
-    const archive = new STTArchive({ url: 'mem://v3.stt', fetch: rangeFetch(bytes) });
+describe('v4 archive header', () => {
+  it('parses a v4 header with zstd compression', async () => {
+    const bytes = buildMinimalArchive({ version: VERSION, compression: 2 });
+    const archive = new STTArchive({ url: 'mem://v4.stt', fetch: rangeFetch(bytes) });
     const meta = await archive.getMetadata();
-    expect(meta.version).toBe(3);
-  });
-
-  it('parses a v2 header (back-compat)', async () => {
-    const bytes = buildMinimalArchive({ version: 2, compression: 1 });
-    const archive = new STTArchive({ url: 'mem://v2.stt', fetch: rangeFetch(bytes) });
-    const meta = await archive.getMetadata();
-    expect(meta.version).toBe(2);
+    expect(meta.version).toBe(VERSION);
   });
 
   it('rejects an unknown magic', async () => {
-    const bytes = buildMinimalArchive({ version: 3, compression: 2 });
+    const bytes = buildMinimalArchive({ version: VERSION, compression: 2 });
     bytes[0] = 0x42; // corrupt the magic
     const archive = new STTArchive({ url: 'mem://bad.stt', fetch: rangeFetch(bytes) });
     await expect(archive.getMetadata()).rejects.toThrow(/magic/i);
   });
 
-  it('rejects an unsupported future version', async () => {
+  it('rejects an unsupported version', async () => {
     const bytes = buildMinimalArchive({ version: 7, compression: 0 });
     const archive = new STTArchive({ url: 'mem://future.stt', fetch: rangeFetch(bytes) });
     await expect(archive.getMetadata()).rejects.toThrow(/version/i);
   });
 
-  it('exposes the v3 dictionary slot when present', async () => {
+  it('also rejects the now-removed v3 format', async () => {
+    const bytes = buildMinimalArchive({ version: 3, compression: 2 });
+    const archive = new STTArchive({ url: 'mem://v3.stt', fetch: rangeFetch(bytes) });
+    await expect(archive.getMetadata()).rejects.toThrow(/version/i);
+  });
+
+  it('exposes the dictionary slot when present', async () => {
     const bytes = buildMinimalArchive({
-      version: 3,
+      version: VERSION,
       compression: 2,
       dictionaryLength: 24,
     });
@@ -150,34 +148,22 @@ describe('v3 archive header', () => {
     const dict = await archive.getDictionary();
     expect(dict).not.toBeNull();
     expect(dict!.length).toBe(24);
-    // Sanity-check the bytes are exactly what we wrote.
     for (let i = 0; i < dict!.length; i++) {
-      expect(dict![i]).toBe(((i + 1) & 0xff));
+      expect(dict![i]).toBe((i + 1) & 0xff);
     }
   });
 
-  it('returns null when a v3 archive has no dictionary', async () => {
-    const bytes = buildMinimalArchive({ version: 3, compression: 2 });
+  it('returns null when an archive has no dictionary', async () => {
+    const bytes = buildMinimalArchive({ version: VERSION, compression: 2 });
     const archive = new STTArchive({ url: 'mem://nodict.stt', fetch: rangeFetch(bytes) });
     const dict = await archive.getDictionary();
     expect(dict).toBeNull();
   });
 
-  it('returns null when reading a v2 archive', async () => {
-    const bytes = buildMinimalArchive({ version: 2, compression: 1 });
-    const archive = new STTArchive({ url: 'mem://v2nodict.stt', fetch: rangeFetch(bytes) });
-    const dict = await archive.getDictionary();
-    expect(dict).toBeNull();
-  });
-
   it('parses a zstd compression code', async () => {
-    const bytes = buildMinimalArchive({ version: 3, compression: 2 });
-    const archive = new STTArchive({ url: 'mem://v3zstd.stt', fetch: rangeFetch(bytes) });
-    // Indirect: the compression byte feeds into entries returned by
-    // getIndex(). With an empty index we only confirm the header path
-    // accepted code=2 (zstd) — `getMetadata` would otherwise throw.
+    const bytes = buildMinimalArchive({ version: VERSION, compression: 2 });
+    const archive = new STTArchive({ url: 'mem://v4zstd.stt', fetch: rangeFetch(bytes) });
     await archive.getMetadata();
-    // We can also verify via a public Compression export.
     expect(Compression.Zstd).toBe(2);
   });
 });
