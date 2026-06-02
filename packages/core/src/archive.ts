@@ -48,8 +48,22 @@ const HEADER_SIZE = 64;
 
 const DEFAULT_MAX_CACHE_TILES = 500;
 const MOBILE_MAX_CACHE_TILES = 100;
-/** Max gap (bytes) between two tile ranges still worth coalescing. */
-const RANGE_COALESCE_GAP = 32 * 1024;
+/**
+ * Default max gap (bytes) between two tile ranges still worth coalescing into
+ * one HTTP range request. On free-egress object storage one saved ~60 ms RTT
+ * is worth multiple MB of over-fetch, so the old 32 KB was far too tight.
+ *
+ * Raised 512 KB → 2 MB: on a free-egress store (R2) the over-fetched gap bytes
+ * cost nothing, while each saved request is both a billed GET and a round-trip.
+ * A wider gap bridges across the byte-space between different cells' time-runs,
+ * which is what collapses a globe view's many small per-cell requests into far
+ * fewer ones. The downside (larger single requests) is bounded separately by
+ * the per-fetch size cap; the gap only controls how aggressively neighbours
+ * fuse. Overridable per-archive via `ArchiveOptions.coalesceGapBytes`.
+ */
+const DEFAULT_RANGE_COALESCE_GAP = 2 * 1024 * 1024;
+/** Default ceiling on concurrent range requests per coalesced batch. */
+const DEFAULT_MAX_CONCURRENT_REQUESTS = 24;
 
 function getDeviceAwareCacheSize(): number {
   if (typeof navigator !== 'undefined' && 'deviceMemory' in navigator) {
@@ -131,6 +145,11 @@ export class STTArchive {
   private currentCacheBytes = 0;
   private maxCacheBytes: number;
 
+  /** Max byte gap bridged when coalescing adjacent tile ranges (see options). */
+  private coalesceGapBytes: number = DEFAULT_RANGE_COALESCE_GAP;
+  /** Ceiling on concurrent range requests per coalesced batch (see options). */
+  private maxConcurrentRequests: number = DEFAULT_MAX_CONCURRENT_REQUESTS;
+
   /** "z/x/y" -> temporal entries at that spatial cell. */
   private tileEntryIndex = new Map<string, TileEntry[]>();
   /** "z/x/y/t" -> exact entry. */
@@ -175,6 +194,12 @@ export class STTArchive {
       this.url = options.url;
       this.fetchFn = options.fetch || fetch.bind(globalThis);
       this.decoderOption = options.decoder;
+      if (typeof options.coalesceGapBytes === 'number' && options.coalesceGapBytes >= 0) {
+        this.coalesceGapBytes = options.coalesceGapBytes;
+      }
+      if (typeof options.maxConcurrentRequests === 'number' && options.maxConcurrentRequests >= 1) {
+        this.maxConcurrentRequests = Math.floor(options.maxConcurrentRequests);
+      }
       // OPFS defaults to OFF. The cache's warm-reload win only materializes
       // when the archive fits in `opfsCacheMaxBytes` AND users revisit the
       // same viewport across reloads. On the cold path it costs a duplicate
@@ -404,6 +429,7 @@ export class STTArchive {
       compression: header.compression,
       uncompressedSize: e.uncompressedSize,
       temporalBucketMs: e.temporalBucketMs,
+      coverTMin: e.coverTMin,
     }));
     this.indexCache = { tiles };
 
@@ -431,6 +457,17 @@ export class STTArchive {
     if (exact) return exact;
     const entries = this.tileEntryIndex.get(`${id.z}/${id.x}/${id.y}`);
     return entries?.find((e) => e.timeStart <= id.t && e.timeEnd >= id.t);
+  }
+
+  /**
+   * Compressed byte size of a tile from the already-decoded directory, or
+   * `undefined` if the tile isn't indexed (or the index isn't loaded yet).
+   * Synchronous, no I/O — the directory is resident once `getTileIdsInBounds`
+   * has run. Wire into `SpatiotemporalTileset.getTileByteSize` so the tileset
+   * can skip giant low-zoom parent-fallback tiles before fetching them.
+   */
+  getTileByteSize(id: TileId): number | undefined {
+    return this.findTileEntry(id)?.length;
   }
 
   private tileIdToKey(id: TileId): string {
@@ -661,33 +698,50 @@ export class STTArchive {
         const pStart = p.entry.offset;
         const pEnd = p.entry.offset + p.entry.length - 1;
         const last = groups[groups.length - 1];
-        if (last && pStart - (last.end + 1) <= RANGE_COALESCE_GAP) {
+        if (last && pStart - (last.end + 1) <= this.coalesceGapBytes) {
           last.end = Math.max(last.end, pEnd);
           last.members.push(p);
         } else {
           groups.push({ start: pStart, end: pEnd, members: [p] });
         }
       }
-      for (const group of groups) {
-        // Decode all members of a group concurrently. A previous serial
-        // `for...of...await` decoded each member in sequence inside the
-        // group, which fully serialized large coalesced batches and made
-        // `getTiles()` slower than per-tile `getTile()` calls.
+      // Fire one HTTP range request per coalesced group. Decode all members of
+      // a group concurrently (a previous serial decode made `getTiles()` slower
+      // than per-tile `getTile()` calls). After coalescing a viewport×window
+      // usually collapses to a few groups; bound in-flight requests so a
+      // pathological sparse batch can't exceed an object store's per-connection
+      // stream cap.
+      const fetchGroup = (group: Group): Promise<void> =>
+        this.fetchRange(group.start, group.end, options?.signal).then((buffer) =>
+          Promise.all(
+            group.members.map(async (m) => {
+              const rel = m.entry.offset - group.start;
+              const slice = buffer.slice(rel, rel + m.entry.length);
+              this.storeBytes(this.tileIdToKey(m.id), slice);
+              results[m.index] = await this.decodeBytes(m.id, m.entry, slice);
+              if (this.opfsCache) {
+                void this.writeOpfsAsync(m.id, m.entry, slice.slice(0));
+              }
+            })
+          ).then(() => undefined)
+        );
+
+      const limit = Math.max(1, this.maxConcurrentRequests);
+      if (groups.length <= limit) {
+        for (const group of groups) jobs.push(fetchGroup(group));
+      } else {
+        // More groups than the concurrency budget: `limit` runners pull from a
+        // shared cursor so at most `limit` range requests are ever in flight.
+        let next = 0;
+        const runner = async (): Promise<void> => {
+          for (;;) {
+            const i = next++;
+            if (i >= groups.length) return;
+            await fetchGroup(groups[i]);
+          }
+        };
         jobs.push(
-          this.fetchRange(group.start, group.end, options?.signal).then(
-            (buffer) =>
-              Promise.all(
-                group.members.map(async (m) => {
-                  const rel = m.entry.offset - group.start;
-                  const slice = buffer.slice(rel, rel + m.entry.length);
-                  this.storeBytes(this.tileIdToKey(m.id), slice);
-                  results[m.index] = await this.decodeBytes(m.id, m.entry, slice);
-                  if (this.opfsCache) {
-                    void this.writeOpfsAsync(m.id, m.entry, slice.slice(0));
-                  }
-                })
-              ).then(() => undefined)
-          )
+          Promise.all(Array.from({ length: limit }, () => runner())).then(() => undefined)
         );
       }
     }
@@ -760,7 +814,13 @@ export class STTArchive {
           const tagged = e.temporalBucketMs;
           if (tagged !== undefined && tagged !== baseBucket) continue;
         }
-        if (e.timeEnd >= timeRange.start && e.timeStart <= timeRange.end) {
+        // Window overlap. Upper bound uses the tight `timeEnd`; lower bound uses
+        // the tight covering `coverTMin` when present (falling back to the
+        // bucket-edge `timeStart`), so a tile whose data is entirely AFTER the
+        // window is skipped without a fetch. The pushed TileId still addresses
+        // by `timeStart` (the bucket boundary) — covering tightens the *filter*,
+        // not the *address*.
+        if (e.timeEnd >= timeRange.start && (e.coverTMin ?? e.timeStart) <= timeRange.end) {
           ids.push({ z: e.zoom, x: e.x, y: e.y, t: e.timeStart });
         }
       }
@@ -798,7 +858,13 @@ export class STTArchive {
         // they only match a request for `bucketMs === baseBucket`.
         const tagged = e.temporalBucketMs ?? baseBucket;
         if (tagged !== bucketMs) continue;
-        if (e.timeEnd >= timeRange.start && e.timeStart <= timeRange.end) {
+        // Window overlap. Upper bound uses the tight `timeEnd`; lower bound uses
+        // the tight covering `coverTMin` when present (falling back to the
+        // bucket-edge `timeStart`), so a tile whose data is entirely AFTER the
+        // window is skipped without a fetch. The pushed TileId still addresses
+        // by `timeStart` (the bucket boundary) — covering tightens the *filter*,
+        // not the *address*.
+        if (e.timeEnd >= timeRange.start && (e.coverTMin ?? e.timeStart) <= timeRange.end) {
           ids.push({ z: e.zoom, x: e.x, y: e.y, t: e.timeStart });
         }
       }

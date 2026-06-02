@@ -5,11 +5,10 @@ import React, {
   useEffect,
   useRef,
 } from "react";
-import { useParams, Navigate } from "react-router-dom";
+import { useParams, Navigate, Link } from "react-router-dom";
 import DeckGL from "@deck.gl/react";
 import { _GlobeView as GlobeView } from "@deck.gl/core";
-import { SolidPolygonLayer, PathLayer } from "@deck.gl/layers";
-import { TileLayer } from "@deck.gl/geo-layers";
+import { SolidPolygonLayer } from "@deck.gl/layers";
 import { Map } from "react-map-gl";
 import {
   AnimatedPointLayer,
@@ -27,18 +26,6 @@ import { calculateAnimationSpeed } from "../types";
 import type { SummaryToggleOption } from "../types";
 import Legend from "../components/Legend";
 import TimeControls from "../components/TimeControls";
-import PerformanceMonitor from "../components/PerformanceMonitor";
-import CodePanel from "../components/CodePanel";
-import MaplibreRenderer from "../components/MaplibreRenderer";
-import { getCodeExample } from "../codeExamples";
-
-/**
- * Which renderer is in use. Both share the same `TimeController` so a play /
- * seek / speed change in the bottom bar drives whichever viewport is mounted.
- * Switching renderers tears the old viewport down (so we don't keep an idle
- * WebGL context around) and mounts the other one fresh.
- */
-type RendererKind = "deck" | "maplibre";
 
 const MAPBOX_ACCESS_TOKEN =
   (import.meta as any).env?.VITE_MAPBOX_TOKEN ||
@@ -61,17 +48,6 @@ const DemoPage: React.FC = () => {
     () => getDatasetById(datasetId || ""),
     [datasetId],
   );
-  const [bottomPanelExpanded, setBottomPanelExpanded] = useState(false);
-  const [showTileBoundaries, setShowTileBoundaries] = useState(false);
-  const [renderer, setRenderer] = useState<RendererKind>("deck");
-  // null = follow dataset default; 'globe'/'mercator' = user override. Reset
-  // to null on dataset change so each demo starts from its tuned default.
-  const [projectionOverride, setProjectionOverride] = useState<
-    "globe" | "mercator" | null
-  >(null);
-  useEffect(() => {
-    setProjectionOverride(null);
-  }, [datasetId]);
 
   // Active option for summary-tier weight toggles (e.g. pickup vs dropoff).
   // Reset to the dataset's first option whenever the dataset changes.
@@ -180,21 +156,9 @@ const DemoPage: React.FC = () => {
     [timeController, baseAnimationSpeed],
   );
 
-  // Resolved projection: the per-dataset default unless the user has flipped
-  // the toggle (which only renders for global-scale datasets — see
-  // isGlobalScale below).
-  const useGlobe =
-    projectionOverride === "globe" ||
-    (projectionOverride === null && (selectedDataset?.useGlobe ?? false));
-  // Heuristic for "global-scale": the dataset already opts into globe-friendly
-  // tile loading, OR it opens at a continental-or-wider zoom. Cuts city demos
-  // (zoom 10+) cleanly without per-dataset metadata.
-  const isGlobalScale = !!(
-    selectedDataset &&
-    (selectedDataset.useGlobe ||
-      selectedDataset.useGlobalBounds ||
-      selectedDataset.initialViewState.zoom <= 4.5)
-  );
+  // Projection follows the dataset's tuned default (no user toggle in the
+  // shipped UI). Globe-default demos (e.g. ocean currents) stay on the globe.
+  const useGlobe = selectedDataset?.useGlobe ?? false;
 
   const layers = useMemo(() => {
     if (!selectedDataset) return [];
@@ -385,7 +349,8 @@ const DemoPage: React.FC = () => {
               getPolygon: (d) => d as any,
               stroked: false,
               filled: true,
-              getFillColor: [36, 39, 48, 255],
+              getFillColor:
+                selectedDataset.globeBackgroundColor ?? [36, 39, 48, 255],
             }),
             tripsLayer,
           ];
@@ -494,55 +459,6 @@ const DemoPage: React.FC = () => {
     // re-copy ~10M vertex positions per frame on the NYC taxi dataset.
   }, [selectedDataset, timeController, activeSummaryToggle, useGlobe]);
 
-  // Debug tile boundary layer
-  const tileBoundaryLayer = useMemo(() => {
-    if (!showTileBoundaries) return null;
-
-    return new TileLayer({
-      id: "tile-boundaries",
-      // Use same tile scheme as typical web maps
-      minZoom: 0,
-      maxZoom: 19,
-      tileSize: 256,
-      renderSubLayers: (props: any) => {
-        const { tile } = props;
-        const { x, y, z } = tile.index;
-        const { west, south, east, north } = tile.bbox;
-
-        // Create a path around the tile boundary
-        const boundary = [
-          [west, north],
-          [east, north],
-          [east, south],
-          [west, south],
-          [west, north], // Close the loop
-        ];
-
-        return new PathLayer({
-          id: `tile-boundary-${z}-${x}-${y}`,
-          data: [{ path: boundary, tile: `${z}/${x}/${y}` }],
-          getPath: (d: any) => d.path,
-          getColor: [255, 255, 255, 100], // Thin white with transparency
-          getWidth: 1,
-          widthUnits: "pixels",
-          widthMinPixels: 1,
-          widthMaxPixels: 1,
-          pickable: false,
-        });
-      },
-    });
-  }, [showTileBoundaries]);
-
-  // Compose the final layer array. Memoized so deck.gl sees a stable array
-  // reference across React re-renders (when `layers` and the optional tile
-  // boundary overlay are unchanged). Without this the inline
-  // `[...layers, tileBoundaryLayer].filter(Boolean)` in JSX allocated a new
-  // array every render and forced deck.gl to re-run layer matching every tick.
-  const composedLayers = useMemo(
-    () => [...layers, tileBoundaryLayer].filter(Boolean),
-    [layers, tileBoundaryLayer],
-  );
-
   const views = useMemo(
     () =>
       useGlobe ? [new GlobeView({ id: "globe", resolution: 10 })] : undefined,
@@ -555,110 +471,123 @@ const DemoPage: React.FC = () => {
       : selectedDataset.initialViewState;
   }, [selectedDataset, useGlobe]);
 
-  if (!selectedDataset) return <Navigate to="/" replace />;
+  // Slow globe auto-rotation. When a dataset opts in (useGlobe + autoRotate) we
+  // take over the view state so a requestAnimationFrame loop can nudge the
+  // longitude each frame. As soon as the user interacts (drag/zoom fires
+  // onViewStateChange) we stop the spin for good and hand the globe over — the
+  // demo is for exploring, so it shouldn't keep spinning out from under a click.
+  // Non-rotating demos keep the uncontrolled `initialViewState` path untouched.
+  const autoRotate = useGlobe && (selectedDataset?.autoRotate ?? false);
+  const [viewState, setViewState] = useState<any>(null);
+  const rotateStoppedRef = useRef(false);
+  useEffect(() => {
+    setViewState(initialViewState);
+    rotateStoppedRef.current = false;
+  }, [initialViewState]);
+  useEffect(() => {
+    if (!autoRotate) return;
+    let raf = 0;
+    let last: number | null = null;
+    // Negative spins east→west (wind-following); very slow (~6 min/revolution).
+    const DEG_PER_SEC = -1;
+    const step = (now: number) => {
+      if (rotateStoppedRef.current) return; // user took over — stop spinning
+      const dt = last == null ? 0 : (now - last) / 1000;
+      last = now;
+      setViewState((vs: any) => {
+        const cur = vs?.globe ?? vs;
+        if (!cur) return vs;
+        const longitude = ((cur.longitude + DEG_PER_SEC * dt + 540) % 360) - 180;
+        return { globe: { ...cur, longitude } };
+      });
+      raf = requestAnimationFrame(step);
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [autoRotate]);
 
-  const codeExample = getCodeExample(selectedDataset.type, selectedDataset.id);
+  if (!selectedDataset) return <Navigate to="/" replace />;
 
   return (
     <div
       className="h-full flex flex-col overflow-hidden"
-      style={{ background: "#242730" }}
+      style={{ background: "var(--page-bg)" }}
     >
       {/* Header */}
       <div
-        className="shrink-0 px-4 py-3 border-b flex items-center justify-between gap-4"
-        style={{ background: "#29323C", borderColor: "#3A414C" }}
+        className="shrink-0 px-5 py-4"
+        style={{ borderBottom: "1px solid var(--hairline)" }}
       >
-        <div>
-          <h1 className="text-sm font-semibold" style={{ color: "#FFFFFF" }}>
-            {selectedDataset.name}
-            <span
-              className="ml-2 font-normal text-xs"
-              style={{ color: "#1FBAD6" }}
-            >
-              · {renderer === "deck" ? "@stt/deck.gl" : "@stt/maplibre"}
-            </span>
-          </h1>
-          <p className="text-xs mt-0.5" style={{ color: "#6A7485" }}>
-            {selectedDataset.description}
-          </p>
-        </div>
-        <RendererToggle value={renderer} onChange={setRenderer} />
+        {/* Back to the curated grid — the only nav home when the sidebar is
+            hidden in production. */}
+        <Link
+          to="/"
+          className="inline-flex items-center gap-1 text-xs mb-2 transition-colors"
+          style={{ color: "var(--ink-500)" }}
+          onMouseOver={(e) => (e.currentTarget.style.color = "var(--accent)")}
+          onMouseOut={(e) => (e.currentTarget.style.color = "var(--ink-500)")}
+        >
+          <span>←</span> Overview
+        </Link>
+        <h1
+          className="font-display text-base font-semibold leading-tight"
+          style={{ color: "var(--ink-900)" }}
+        >
+          {selectedDataset.name}
+        </h1>
+        <p className="text-xs mt-1" style={{ color: "var(--ink-500)" }}>
+          {selectedDataset.description}
+        </p>
       </div>
 
       {/* Map Viewport */}
-      <div className="flex-1 min-h-0 p-2 lg:p-3">
-        <div
-          className="w-full h-full rounded overflow-hidden map-viewport"
-          style={{ border: "1px solid #3A414C" }}
-        >
-          {renderer === "deck" ? (
-            <DeckGL
-              initialViewState={initialViewState}
-              controller={true}
-              layers={composedLayers}
-              views={views}
-              parameters={useGlobe ? ({ cull: true } as any) : undefined}
-            >
-              {!useGlobe && (
-                <Map
-                  reuseMaps
-                  mapStyle="mapbox://styles/mapbox/dark-v11"
-                  mapboxAccessToken={MAPBOX_ACCESS_TOKEN}
-                  projection={{ name: "mercator" }}
-                  terrain={
-                    selectedDataset.use3D
-                      ? { source: "mapbox-dem", exaggeration: 1.5 }
-                      : undefined
+      <div className="flex-1 min-h-0 p-3 lg:p-5">
+        <div className="w-full h-full rounded-lg overflow-hidden map-viewport">
+          <DeckGL
+            {...(autoRotate
+              ? {
+                  viewState: viewState ?? initialViewState,
+                  onViewStateChange: (e: any) => {
+                    rotateStoppedRef.current = true;
+                    setViewState({ globe: e.viewState });
+                  },
+                }
+              : { initialViewState })}
+            controller={true}
+            layers={layers}
+            views={views}
+            parameters={useGlobe ? ({ cull: true } as any) : undefined}
+          >
+            {!useGlobe && (
+              <Map
+                reuseMaps
+                mapStyle="mapbox://styles/mapbox/dark-v11"
+                mapboxAccessToken={MAPBOX_ACCESS_TOKEN}
+                projection={{ name: "mercator" }}
+                terrain={
+                  selectedDataset.use3D
+                    ? { source: "mapbox-dem", exaggeration: 1.5 }
+                    : undefined
+                }
+                onLoad={(evt) => {
+                  const map = evt.target;
+                  if (selectedDataset.use3D && !map.getSource("mapbox-dem")) {
+                    map.addSource("mapbox-dem", {
+                      type: "raster-dem",
+                      url: "mapbox://mapbox.mapbox-terrain-dem-v1",
+                      tileSize: 512,
+                      maxzoom: 14,
+                    });
                   }
-                  onLoad={(evt) => {
-                    const map = evt.target;
-                    if (selectedDataset.use3D && !map.getSource("mapbox-dem")) {
-                      map.addSource("mapbox-dem", {
-                        type: "raster-dem",
-                        url: "mapbox://mapbox.mapbox-terrain-dem-v1",
-                        tileSize: 512,
-                        maxzoom: 14,
-                      });
-                    }
-                  }}
-                />
-              )}
-            </DeckGL>
-          ) : (
-            // `key` forces a remount when the dataset changes so MapLibre's
-            // internal state (style, tile cache, viewport) doesn't try to
-            // straddle two unrelated archives.
-            <MaplibreRenderer
-              key={selectedDataset.id}
-              dataset={selectedDataset}
-              timeController={timeController}
-              projection={useGlobe ? "globe" : "mercator"}
-            />
-          )}
+                }}
+              />
+            )}
+          </DeckGL>
 
           {/* Legend */}
           {selectedDataset.legend && (
             <div className="absolute bottom-3 right-3">
               <Legend legend={selectedDataset.legend} />
-            </div>
-          )}
-
-          {/* Debug Controls (deck.gl only — the MapLibre adapter doesn't draw
-              tile boundaries; users can inspect bounds via the native style). */}
-          {renderer === "deck" && (
-            <div className="absolute top-3 right-3 flex flex-col gap-2">
-              <button
-                onClick={() => setShowTileBoundaries(!showTileBoundaries)}
-                className="px-3 py-1.5 text-xs rounded transition-colors"
-                style={{
-                  background: showTileBoundaries ? "#1FBAD6" : "#29323C",
-                  color: showTileBoundaries ? "#000" : "#fff",
-                  border: "1px solid #3A414C",
-                }}
-              >
-                {showTileBoundaries ? "Tiles ON" : "Tiles"}
-              </button>
             </div>
           )}
 
@@ -672,40 +601,15 @@ const DemoPage: React.FC = () => {
               />
             </div>
           )}
-
-          {/* Globe ↔ Mercator toggle. Only meaningful for global-scale demos
-              (zoom ≤ 4.5 or explicitly-global datasets). Hidden when the
-              MapLibre renderer is active — the @stt/maplibre adapter's shaders
-              assume mercator-unit-square inputs, and showcase ships
-              maplibre-gl 3.x (no globe). Re-enable for MapLibre once the
-              adapter grows a globe projection branch. When a summary toggle is
-              also present the layout stacks them. */}
-          {isGlobalScale && renderer === "deck" && (
-            <div
-              className={`absolute left-3 ${
-                summaryToggleOptions && summaryToggleOptions.length > 1
-                  ? "top-12"
-                  : "top-3"
-              }`}
-            >
-              <ProjectionToggle
-                value={useGlobe ? "globe" : "mercator"}
-                onChange={setProjectionOverride}
-              />
-            </div>
-          )}
-
-          {/* Performance Monitor */}
-          <PerformanceMonitor visible={true} />
         </div>
       </div>
 
       {/* Bottom Controls */}
       <div
-        className="shrink-0 border-t"
-        style={{ background: "#29323C", borderColor: "#3A414C" }}
+        className="shrink-0"
+        style={{ background: "var(--surface)", borderTop: "1px solid var(--hairline)" }}
       >
-        <div className="px-4 py-3">
+        <div className="px-5 py-3">
           <TimeControls
             currentTime={currentTime}
             timeRange={selectedDataset.timeRange}
@@ -717,33 +621,6 @@ const DemoPage: React.FC = () => {
             targetPlaybackSeconds={selectedDataset.targetPlaybackSeconds ?? 30}
           />
         </div>
-
-        {/* Code Toggle */}
-        <button
-          onClick={() => setBottomPanelExpanded(!bottomPanelExpanded)}
-          className="w-full flex items-center justify-between px-4 py-2 border-t transition-colors"
-          style={{ borderColor: "#3A414C", color: "#6A7485" }}
-          onMouseOver={(e) => (e.currentTarget.style.background = "#242730")}
-          onMouseOut={(e) => (e.currentTarget.style.background = "transparent")}
-        >
-          <div className="flex items-center gap-2">
-            <span style={{ color: "#1FBAD6" }}>{"</>"}</span>
-            <span className="text-xs">
-              {bottomPanelExpanded ? "Hide Code" : "View Code Example"}
-            </span>
-          </div>
-          <span
-            className={`text-xs transition-transform ${bottomPanelExpanded ? "rotate-180" : ""}`}
-          >
-            ▼
-          </span>
-        </button>
-
-        {bottomPanelExpanded && (
-          <div className="h-40 border-t" style={{ borderColor: "#3A414C" }}>
-            <CodePanel code={codeExample} />
-          </div>
-        )}
       </div>
     </div>
   );
@@ -794,97 +671,6 @@ const SummaryToggle: React.FC<{
               style={{ background: swatch }}
             />
             <span className="font-semibold leading-tight">{opt.label}</span>
-          </button>
-        );
-      })}
-    </div>
-  );
-};
-
-const RendererToggle: React.FC<{
-  value: RendererKind;
-  onChange: (next: RendererKind) => void;
-}> = ({ value, onChange }) => {
-  const items: Array<{ id: RendererKind; label: string; sub: string }> = [
-    { id: "deck", label: "deck.gl", sub: "@stt/deck.gl" },
-    { id: "maplibre", label: "MapLibre", sub: "@stt/maplibre" },
-  ];
-  return (
-    <div
-      className="inline-flex items-center rounded overflow-hidden"
-      style={{ background: "#242730", border: "1px solid #3A414C" }}
-      role="group"
-      aria-label="Renderer"
-    >
-      {items.map((it) => {
-        const active = it.id === value;
-        return (
-          <button
-            key={it.id}
-            type="button"
-            onClick={() => onChange(it.id)}
-            className="px-3 py-1.5 text-xs transition-colors flex flex-col items-start"
-            style={{
-              background: active ? "#1FBAD6" : "transparent",
-              color: active ? "#000" : "#A0A7B4",
-              minWidth: 100,
-              borderRight: it.id === "deck" ? "1px solid #3A414C" : undefined,
-            }}
-            aria-pressed={active}
-          >
-            <span className="font-semibold leading-tight">{it.label}</span>
-            <span
-              className="text-[10px] leading-tight mt-0.5"
-              style={{ color: active ? "#000" : "#6A7485" }}
-            >
-              {it.sub}
-            </span>
-          </button>
-        );
-      })}
-    </div>
-  );
-};
-
-/**
- * Globe ↔ Mercator segmented control. Only rendered for global-scale datasets
- * (see `isGlobalScale` in DemoPage). Setting the override to a non-null value
- * pins the projection regardless of the dataset's `useGlobe` default.
- */
-const ProjectionToggle: React.FC<{
-  value: "globe" | "mercator";
-  onChange: (next: "globe" | "mercator") => void;
-}> = ({ value, onChange }) => {
-  const items: Array<{ id: "globe" | "mercator"; label: string }> = [
-    { id: "globe", label: "Globe" },
-    { id: "mercator", label: "Flat" },
-  ];
-  return (
-    <div
-      className="inline-flex items-center rounded overflow-hidden"
-      style={{
-        background: "rgba(36, 39, 48, 0.95)",
-        border: "1px solid #3A414C",
-      }}
-      role="group"
-      aria-label="Projection"
-    >
-      {items.map((it, i) => {
-        const active = it.id === value;
-        return (
-          <button
-            key={it.id}
-            type="button"
-            onClick={() => onChange(it.id)}
-            className="px-3 py-1.5 text-xs transition-colors"
-            style={{
-              background: active ? "#1FBAD6" : "transparent",
-              color: active ? "#000" : "#A0A7B4",
-              borderRight: i < items.length - 1 ? "1px solid #3A414C" : undefined,
-            }}
-            aria-pressed={active}
-          >
-            <span className="font-semibold leading-tight">{it.label}</span>
           </button>
         );
       })}

@@ -31,6 +31,66 @@ const DEBUG = false;
  */
 const DIRECTION_FLIP_THRESHOLD = 3;
 
+/**
+ * Safety cap on how many priority tiles go into a single coalesced batch. The
+ * coalescer collapses byte-adjacent tiles into a handful of range requests, so
+ * sending the whole viewport×window working set in ONE batch is what removes
+ * the old ⌈N / maxRequests⌉ serial-batch floor. This cap only bounds abort
+ * granularity and array sizes for a pathologically large working set; the
+ * archive separately bounds in-flight HTTP requests (`maxConcurrentRequests`).
+ */
+const MAX_COALESCE_BATCH = 1024;
+
+/**
+ * How far ahead to prefetch during animation, expressed in REAL playback time
+ * (ms). Converted to sim-time via the measured animation speed, so a fast scrub
+ * (e.g. 43 years in 60 s) prefetches a large *contiguous* span of buckets that
+ * coalesces into a few range requests — instead of the old fixed 30 sim-second
+ * lookahead, which a fast animation outruns every frame (→ a request per frame).
+ */
+const PREFETCH_LOOKAHEAD_REAL_MS = 8000;
+/**
+ * Re-issue the wide prefetch only after the play head has consumed this fraction
+ * of the previously prefetched span. Keeps the debounced scheduler from
+ * re-coalescing the same chunk ~4×/second; the wide load then happens roughly
+ * once per `(1 - fraction) × LOOKAHEAD` of real time.
+ */
+const PREFETCH_RELOAD_FRACTION = 0.5;
+
+/**
+ * Fraction of the tile-count cache budget the forward prefetch runway may
+ * occupy in a single pass.
+ *
+ * The steady-state "thousands of tiny requests" failure is a cache THRASH, not
+ * a data problem: the lookahead is sized in SIM-TIME (speed × LOOKAHEAD), so a
+ * fast playback (drifters: ~43 yr in 60 s ⇒ ~14.6 years / ~760 weekly buckets
+ * ahead) enqueues far more tiles than the LRU holds. They are evicted before
+ * the play head arrives, and the priority path then re-fetches each one
+ * individually — and because the leading-edge bucket of each spatial cell is
+ * byte-scattered from its neighbours, those re-fetches don't coalesce, so they
+ * land as a flood of tiny single-tile requests.
+ *
+ * Capping the prefetch working set to a fraction of the cache keeps the runway
+ * RESIDENT, so the play head hits cache instead of re-fetching. Paired with
+ * temporal ordering (nearest upcoming bucket first), a finite budget always
+ * covers the IMMINENT future rather than a spatially-arbitrary slice of a
+ * multi-year span.
+ */
+const PREFETCH_CACHE_FRACTION = 0.5;
+
+/**
+ * Default byte ceiling for PARENT-fallback tiles. Above this, a coarse
+ * lower-zoom placeholder tile is skipped rather than fetched.
+ *
+ * Dense datasets produce enormous low-zoom tiles — a single z10 Manhattan cell
+ * over a 1-hour bucket measures 10–20 MB (taxi). Under a z14 / 20-second view
+ * the `best-available` strategy would still pull z10–z11 as fallback, spending
+ * 14 MB to placeholder a street view it discards the instant the z14 detail
+ * arrives. 2 MB keeps cheap fallback (z12/z13) while dropping the giants. The
+ * primary display zoom is NEVER subject to this — we always load what we draw.
+ */
+const DEFAULT_MAX_PARENT_TILE_BYTES = 2 * 1024 * 1024;
+
 /** O(n) set equality used to decide whether the needed-tile set actually changed. */
 function setsEqual(a: Set<string>, b: Set<string>): boolean {
   if (a === b) return true;
@@ -144,6 +204,23 @@ export interface SpatiotemporalTilesetOptions {
     signal?: AbortSignal
   ) => Promise<(Tile | null)[]>;
 
+  /**
+   * Optional SYNCHRONOUS lookup of a tile's compressed byte size from the
+   * archive directory (wire `STTArchive.getTileByteSize`). When provided, the
+   * tileset skips PARENT-fallback tiles larger than {@link maxParentTileBytes}
+   * — a giant low-zoom tile (e.g. a 14 MB z10 Manhattan tile) is a near-useless
+   * coarse placeholder under a deep-zoom view and costs far more to fetch +
+   * decode than the detail tiles it stands in for. The PRIMARY display zoom is
+   * never skipped. Returns `undefined` for unknown tiles (then never skipped).
+   */
+  getTileByteSize?: (tileId: TileId) => number | undefined;
+
+  /**
+   * Byte ceiling above which a PARENT-fallback tile is skipped (requires
+   * {@link getTileByteSize}). Defaults to {@link DEFAULT_MAX_PARENT_TILE_BYTES}.
+   */
+  maxParentTileBytes?: number;
+
   /** Callback when tile loads */
   onTileLoad?: (tile: Tile) => void;
 
@@ -212,6 +289,8 @@ export class SpatiotemporalTileset {
   // consecutive frames pointed the opposite way.
   private prefetchDirection: 1 | -1 = 1;
   private pendingFlipCount: number = 0;
+  /** End of the last prefetched span in sim-time (throttle runway anchor). */
+  private lastPrefetchEndTime?: number;
 
   // Running byte total of decoded tiles held in `this.tiles`. Maintained
   // incrementally so eviction never re-sums every frame.
@@ -252,11 +331,14 @@ export class SpatiotemporalTileset {
   
   constructor(options: SpatiotemporalTilesetOptions) {
     this.options = {
-      // 12 is the practical ceiling: browsers cap concurrent fetches per
-      // origin (~6 HTTP/1.1, more under HTTP/2 multiplexing) and beyond that
-      // we just queue inside the browser while the main-thread decode
-      // backlog grows.
-      maxRequests: options.maxRequests ?? 12,
+      // Concurrency budget for the single-tile / prefetch paths. The COALESCED
+      // priority path no longer caps its batch by this (it sends the whole
+      // viewport×window working set in one globally-coalesced request and lets
+      // the archive bound in-flight HTTP requests internally), so this is now
+      // only the per-tile + prefetch fan-out ceiling. 24 keeps us under an
+      // object store's per-connection stream cap (R2 ~75) with HTTP/2/3
+      // multiplexing.
+      maxRequests: options.maxRequests ?? 24,
       debounceTime: options.debounceTime ?? 0,
       maxCacheSize: options.maxCacheSize ?? 2000,
       maxCacheByteSize: options.maxCacheByteSize ?? 2 * 1024 * 1024 * 1024,
@@ -275,6 +357,8 @@ export class SpatiotemporalTileset {
       getAvailableSummaryTiles: options.getAvailableSummaryTiles ?? null,
       getTileData: options.getTileData,
       getTileDataBatch: options.getTileDataBatch ?? null,
+      getTileByteSize: options.getTileByteSize ?? null,
+      maxParentTileBytes: options.maxParentTileBytes ?? DEFAULT_MAX_PARENT_TILE_BYTES,
       onTileLoad: options.onTileLoad ?? (() => {}),
       onTileUnload: options.onTileUnload ?? (() => {}),
       onTileError: options.onTileError ?? ((err) => console.error(err)),
@@ -341,6 +425,9 @@ export class SpatiotemporalTileset {
     if (this.pendingFlipCount >= DIRECTION_FLIP_THRESHOLD) {
       this.prefetchDirection = observed;
       this.pendingFlipCount = 0;
+      // Direction reversed: the prefetched span is now behind the play head, so
+      // force the next prefetch to re-issue immediately (don't throttle).
+      this.lastPrefetchEndTime = undefined;
     }
   }
 
@@ -494,6 +581,24 @@ export class SpatiotemporalTileset {
   }
   
   /**
+   * Whether a tile is an OVERSIZED parent-fallback tile that should be skipped.
+   *
+   * Parent tiles (zoom below the primary display zoom) are coarse placeholders
+   * shown while detail streams in. A giant one — e.g. a 14 MB z10 tile under a
+   * z14 view — costs far more to fetch + decode than the detail tiles it stands
+   * in for and is discarded the moment they arrive, so loading it is pure waste.
+   * The primary display zoom is NEVER skipped (we always load what we draw), and
+   * skipping is inert unless a `getTileByteSize` lookup is wired.
+   */
+  private isOversizedParent(tileId: TileId, primaryZoom: number): boolean {
+    if (tileId.z >= primaryZoom) return false; // primary (or deeper) — always load
+    const getSize = this.options.getTileByteSize;
+    if (!getSize) return false;
+    const bytes = getSize(tileId);
+    return bytes !== undefined && bytes > this.options.maxParentTileBytes;
+  }
+
+  /**
    * Select tiles for current viewport and queue for loading
    */
   private async selectAndLoadTiles(): Promise<void> {
@@ -521,9 +626,11 @@ export class SpatiotemporalTileset {
     }
     this.lastSelectKey = selectKey;
 
-    // Get zoom levels to load (supports LOD with parent tiles)
+    // Get zoom levels to load (supports LOD with parent tiles). The first
+    // entry is the primary (clamped display) zoom; the rest are coarser parents.
     const zoomLevels = this.getZoomLevelsToLoad(zoom);
-    
+    const primaryZoom = zoomLevels[0];
+
     // Mark tiles as used (for LRU)
     const now = Date.now();
     const neededTileKeys = new Set<string>();
@@ -542,6 +649,10 @@ export class SpatiotemporalTileset {
     // Process results - primary zoom first for proper queue ordering
     for (const { zoom: z, tileIds: availableTileIds } of tileIdsByZoom) {
       for (const tileId of availableTileIds) {
+        // Skip giant low-zoom parent-fallback tiles — coarse placeholders not
+        // worth a multi-MB fetch under a deep-zoom view. Never skips the primary.
+        if (this.isOversizedParent(tileId, primaryZoom)) continue;
+
         const key = this.tileIdToKey(tileId);
         neededTileKeys.add(key);
 
@@ -674,12 +785,32 @@ export class SpatiotemporalTileset {
     
     // Get zoom levels to prefetch
     const zoomLevels = this.getZoomLevelsToLoad(zoom);
+    const primaryZoom = zoomLevels[0];
     const now = Date.now();
     
-    // Calculate the time range we need to prefetch
-    // prefetchAhead is in simulation time units
-    const effectivePrefetchAhead = prefetchAhead > 0 ? prefetchAhead : timeWindow;
-    const prefetchEndTime = time + (direction * effectivePrefetchAhead * prefetchSteps);
+    // How far ahead to prefetch, in SIM time. During a running animation, cover
+    // a fixed slice of REAL playback time (speed × LOOKAHEAD) so a fast scrub
+    // prefetches one big contiguous chunk that coalesces into a few range
+    // requests. Fall back to the configured window-based lookahead when paused
+    // (speed ≈ 0) so a stationary view still warms its immediate neighbourhood.
+    const speed = Math.abs(this.animationSpeed); // sim-ms per real-ms
+    const windowAhead = (prefetchAhead > 0 ? prefetchAhead : timeWindow) * prefetchSteps;
+    const effectiveAhead = Math.max(windowAhead, speed * PREFETCH_LOOKAHEAD_REAL_MS);
+    const prefetchEndTime = time + direction * effectiveAhead;
+
+    // Throttle on the remaining prefetched "runway": skip the wide load while the
+    // play head still has more than (1 − fraction) × lookahead of already-
+    // prefetched span ahead of it. This re-issues when the head has consumed
+    // ~half the span, AND whenever the span GROWS (e.g. the animation speeds up,
+    // making the previous end-time fall short) — the earlier start-time-anchored
+    // throttle wrongly suppressed that case, leaving playback to drip per-frame.
+    if (this.lastPrefetchEndTime !== undefined) {
+      const runway = direction * (this.lastPrefetchEndTime - time);
+      if (runway > effectiveAhead * (1 - PREFETCH_RELOAD_FRACTION)) {
+        return;
+      }
+    }
+    this.lastPrefetchEndTime = prefetchEndTime;
     
     // One query per zoom level covering the whole prefetch range. The previous
     // implementation enumerated every bucket boundary in [startTime, endTime]
@@ -711,46 +842,64 @@ export class SpatiotemporalTileset {
       })
     );
     
-    // Count total tiles found
-    let totalTilesFound = 0;
-    let newTilesAdded = 0;
-    
-    // Process successful results
+    // Flatten the candidate tiles across all zoom levels into one list.
+    const candidates: TileId[] = [];
     for (const result of results) {
       if (result.status === 'rejected') {
         // Ignore prefetch errors - they're best-effort
         console.debug('[Tileset] Prefetch error:', result.reason);
         continue;
       }
-      
-      const { tileIds } = result.value;
-      totalTilesFound += tileIds.length;
-      
-      for (const tileId of tileIds) {
-        const key = this.tileIdToKey(tileId);
-        let header = this.tiles.get(key);
-        
-        if (!header) {
-          // Create header for prefetch tile
-          header = {
-            id: tileId,
-            tile: null,
-            isLoaded: false,
-            isLoading: false,
-            isCancelled: false,
-            lastUsed: now,
-            byteSize: 0,
-          };
-          this.tiles.set(key, header);
-          
-          // Add to LOW PRIORITY prefetch queue
-          // These only load when priority queue has capacity
-          this.prefetchQueue.push(tileId);
-          newTilesAdded++;
-        } else {
-          // Update last used time to prevent eviction
-          header.lastUsed = now;
-        }
+      for (const tileId of result.value.tileIds) candidates.push(tileId);
+    }
+    const totalTilesFound = candidates.length;
+
+    // Order candidates by temporal distance from the play head IN THE PLAYBACK
+    // DIRECTION, so the buckets the head reaches SOONEST are enqueued first.
+    // Tiles already behind the head (wrong side) sort to the very end. Without
+    // this, the budget below would enqueue a spatially-arbitrary slice of a
+    // multi-year span instead of the next few seconds of playback.
+    const aheadDist = (id: TileId): number => {
+      const d = direction > 0 ? id.t - time : time - id.t;
+      return d >= 0 ? d : Number.MAX_SAFE_INTEGER + d; // behind-head tiles last
+    };
+    candidates.sort((a, b) => aheadDist(a) - aheadDist(b));
+
+    // Bound the prefetch runway to a fraction of the cache (see
+    // PREFETCH_CACHE_FRACTION) so it can never overflow the LRU and thrash.
+    // Nearest-first ordering means this budget always buys the most imminent
+    // buckets; the runway then slides forward as the head consumes it.
+    const prefetchBudget = Math.max(
+      64,
+      Math.floor(this.options.maxCacheSize * PREFETCH_CACHE_FRACTION),
+    );
+
+    let newTilesAdded = 0;
+    for (const tileId of candidates) {
+      if (newTilesAdded >= prefetchBudget) break;
+      // Don't prefetch giant low-zoom parent placeholders either (see
+      // isOversizedParent); they'd evict the runway they're meant to warm.
+      if (this.isOversizedParent(tileId, primaryZoom)) continue;
+      const key = this.tileIdToKey(tileId);
+      const header = this.tiles.get(key);
+
+      if (!header) {
+        // Create header for prefetch tile and add to the LOW PRIORITY queue.
+        // These only load when the priority queue has capacity.
+        this.tiles.set(key, {
+          id: tileId,
+          tile: null,
+          isLoaded: false,
+          isLoading: false,
+          isCancelled: false,
+          lastUsed: now,
+          byteSize: 0,
+        });
+        this.prefetchQueue.push(tileId);
+        newTilesAdded++;
+      } else {
+        // Update last used time to prevent eviction
+        header.lastUsed = now;
       }
     }
     
@@ -802,8 +951,15 @@ export class SpatiotemporalTileset {
         }
       }
     } else {
+      // Coalesced path: send the WHOLE current priority working set in one
+      // batch (capped only for safety) instead of slicing it into
+      // ⌈N / availableSlots⌉ serial batches. The archive coalesces byte-
+      // adjacent tiles into a few range requests and bounds in-flight HTTP
+      // requests itself, so one big batch collapses a viewport×window into a
+      // handful of parallel requests rather than a serial fan of 12-tile
+      // chunks.
       const candidates: TileId[] = [];
-      while (this.priorityQueue.length > 0 && candidates.length < availableSlots) {
+      while (this.priorityQueue.length > 0 && candidates.length < MAX_COALESCE_BATCH) {
         candidates.push(this.priorityQueue.shift()!);
       }
       usedSlots += this.startTileBatch(candidates);
@@ -823,8 +979,10 @@ export class SpatiotemporalTileset {
       Math.floor(this.options.maxRequests * prefetchShare),
     );
     const prefetchSlots = Math.min(remainingSlots, prefetchCap);
+    if (prefetchSlots <= 0) return; // priority work is saturating the connection
 
-    if (!batchFn || this.prefetchQueue.length <= 1 || prefetchSlots <= 1) {
+    if (!batchFn || this.prefetchQueue.length <= 1) {
+      // Per-tile fallback: `prefetchSlots` bounds in-flight single fetches.
       let prefetchUsed = 0;
       while (this.prefetchQueue.length > 0 && prefetchUsed < prefetchSlots) {
         const tileId = this.prefetchQueue.shift()!;
@@ -833,8 +991,14 @@ export class SpatiotemporalTileset {
         }
       }
     } else {
+      // Coalesced prefetch: take a LARGE chunk (same cap as the priority path)
+      // so a big prefetch queue collapses into a few range requests. Draining
+      // `prefetchSlots` (≈3) tiles per pass instead fired ~one tiny request per
+      // 3 tiles — hundreds of requests for a wide-window animation like the
+      // drifters globe. The archive bounds actual in-flight HTTP requests
+      // (`maxConcurrentRequests`), so batch size no longer needs throttling here.
       const candidates: TileId[] = [];
-      while (this.prefetchQueue.length > 0 && candidates.length < prefetchSlots) {
+      while (this.prefetchQueue.length > 0 && candidates.length < MAX_COALESCE_BATCH) {
         candidates.push(this.prefetchQueue.shift()!);
       }
       this.startTileBatch(candidates);

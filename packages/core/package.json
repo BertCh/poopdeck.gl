@@ -18,7 +18,8 @@
     "src"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && pnpm run build:worker",
+    "build:worker": "esbuild src/tile-decoder.worker.ts --bundle --format=esm --platform=browser --target=esnext --outfile=dist/tile-decoder.worker.js",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
@@ -33,6 +34,7 @@
   "devDependencies": {
     "@types/earcut": "^2.1.4",
     "earcut": "^3.0.0",
+    "esbuild": "^0.21.5",
     "typescript": "^5.4.0",
     "vitest": "^1.6.0"
   },

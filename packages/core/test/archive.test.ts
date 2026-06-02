@@ -10,10 +10,12 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { STTArchive } from '../src/archive';
+import { encodeDirectory } from '../src/directory';
 import { GeometryType } from '../src/types';
 
 const FIXTURE = fileURLToPath(new URL('./fixtures/sample.stt', import.meta.url));
 const FIXTURE_BYTES = readFileSync(FIXTURE);
+const HEADER_SIZE = 64;
 
 /**
  * A `fetch` shim that serves the fixture file with HTTP Range semantics —
@@ -133,6 +135,89 @@ describe('STTArchive (Arrow format)', () => {
     const archive = new STTArchive({ url: 'mem://sample.stt', fetch: rangeFetch() });
     const tile = await archive.getTile({ z: 20, x: 1, y: 1, t: 0 });
     expect(tile).toBeNull();
+  });
+
+  it('honours coalesceGapBytes and maxConcurrentRequests over many non-adjacent blobs', async () => {
+    // The committed fixture has a single tile, so synthesize a multi-blob
+    // archive by replicating the fixture's real (decodable) blob K times with
+    // PADDING between copies — non-adjacent on disk so a zero gap does NOT
+    // coalesce them, but an unbounded gap merges all K into one range request.
+    const fixtureIdx = await new STTArchive({ url: 'mem://s.stt', fetch: rangeFetch() }).getIndex();
+    const e = fixtureIdx.tiles[0];
+    const blob = FIXTURE_BYTES.subarray(e.offset, e.offset + e.length);
+    const compressionByte = FIXTURE_BYTES[5];
+    // Header fields of the fixture (little-endian u64s start at byte 6).
+    const hv = new DataView(bufferToArrayBuffer(FIXTURE_BYTES));
+    const metaOff = Number(hv.getBigUint64(22, true));
+    const metaLen = Number(hv.getBigUint64(30, true));
+    const metaBytes = FIXTURE_BYTES.subarray(metaOff, metaOff + metaLen);
+
+    const K = 6;
+    const PAD = 4096;
+    const stride = e.length + PAD;
+    const entries = Array.from({ length: K }, (_, i) => ({
+      zoom: e.zoom, x: e.x, y: e.y,
+      timeStart: i, timeEnd: i,
+      offset: HEADER_SIZE + i * stride,
+      length: e.length,
+      uncompressedSize: e.uncompressedSize,
+      featureCount: e.featureCount,
+      hilbert: i,
+      crc32c: i + 1,
+      temporalBucketMs: e.temporalBucketMs,
+    }));
+    const dir = encodeDirectory(entries);
+    const indexOffset = HEADER_SIZE + (K - 1) * stride + e.length;
+    const metadataOffset = indexOffset + dir.length;
+    const total = metadataOffset + metaBytes.length;
+
+    const buf = new Uint8Array(total);
+    buf.set([0x53, 0x54, 0x54, 0x04], 0); // "STT" + v4
+    buf[4] = 4;
+    buf[5] = compressionByte;
+    const dv = new DataView(buf.buffer);
+    dv.setBigUint64(6, BigInt(indexOffset), true);
+    dv.setBigUint64(14, BigInt(dir.length), true);
+    dv.setBigUint64(22, BigInt(metadataOffset), true);
+    dv.setBigUint64(30, BigInt(metaBytes.length), true);
+    for (let i = 0; i < K; i++) buf.set(blob, HEADER_SIZE + i * stride);
+    buf.set(dir, indexOffset);
+    buf.set(metaBytes, metadataOffset);
+
+    function countingFetch(state: { calls: number; inFlight: number; peak: number }): typeof fetch {
+      return (async (_url: string, init?: RequestInit) => {
+        const m = /bytes=(\d+)-(\d+)/.exec((init?.headers as Record<string, string>)?.Range ?? '');
+        state.calls++; state.inFlight++; state.peak = Math.max(state.peak, state.inFlight);
+        await new Promise((r) => setTimeout(r, 1));
+        state.inFlight--;
+        const start = Number(m![1]);
+        const end = Math.min(Number(m![2]), buf.length - 1);
+        const slice = buf.subarray(start, end + 1);
+        return { ok: true, status: 206, statusText: 'Partial Content', arrayBuffer: async () => bufferToArrayBuffer(slice) };
+      }) as unknown as typeof fetch;
+    }
+
+    const tileIds = entries.map((en) => ({ z: en.zoom, x: en.x, y: en.y, t: en.timeStart }));
+
+    // Unbounded gap → all K blobs coalesce into ONE tile range request.
+    const wide = { calls: 0, inFlight: 0, peak: 0 };
+    const aWide = new STTArchive({ url: 'mem://m.stt', fetch: countingFetch(wide), coalesceGapBytes: Number.MAX_SAFE_INTEGER });
+    await aWide.getIndex();
+    const wideBefore = wide.calls;
+    const tilesWide = await aWide.getTiles(tileIds);
+    expect(tilesWide.every((t) => t !== null)).toBe(true);
+    expect(wide.calls - wideBefore).toBe(1);
+
+    // Zero gap → K separate requests, but never more than maxConcurrentRequests
+    // in flight at once.
+    const tight = { calls: 0, inFlight: 0, peak: 0 };
+    const aTight = new STTArchive({ url: 'mem://m.stt', fetch: countingFetch(tight), coalesceGapBytes: 0, maxConcurrentRequests: 2 });
+    await aTight.getIndex();
+    const tightBefore = tight.calls;
+    const tilesTight = await aTight.getTiles(tileIds);
+    expect(tilesTight.every((t) => t !== null)).toBe(true);
+    expect(tight.calls - tightBefore).toBe(K);
+    expect(tight.peak).toBeLessThanOrEqual(2);
   });
 
   it('rejects a server that ignores Range requests', async () => {

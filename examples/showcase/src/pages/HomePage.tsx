@@ -1,23 +1,34 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import DeckGL from "@deck.gl/react";
-import { Map } from "react-map-gl";
-import { VatTripsLayer, TimeController } from "@stt/deck.gl";
-import { getDatasetById } from "../datasets";
+import { _GlobeView as GlobeView } from "@deck.gl/core";
+import { SolidPolygonLayer } from "@deck.gl/layers";
+import { AnimatedTripsLayer, TimeController } from "@stt/deck.gl";
+import { getDatasetById, navDatasets } from "../datasets";
 import { calculateAnimationSpeed } from "../types";
+import { SourceLogo } from "../components/SourceLogo";
 
-const MAPBOX_ACCESS_TOKEN =
-  (import.meta as any).env?.VITE_MAPBOX_TOKEN ||
-  "pk.eyJ1IjoicmdjZ2VvZyIsImEiOiJjajBuNG1sMjUwMDFlMzNxcWY0M2RqMHI3In0.XfM0BMSqZqjRDcz-oJuadw";
+// A single full-sphere quad gives the globe a light "ocean" backdrop (matching
+// the paper page) and occludes the back-side tracks, so the drifter ribbons
+// read as a planet rather than a tangle of overlapping lines.
+const EARTH_POLYGON: number[][][] = [
+  [
+    [-180, 90],
+    [0, 90],
+    [180, 90],
+    [180, -90],
+    [0, -90],
+    [-180, -90],
+  ],
+];
 
-// Speed multiplier for the hero animation. VAT renders head-only dots, so it
-// stays smooth even at high playback rates.
-const HERO_SPEED_MULTIPLIER = 10;
+// Degrees of longitude the globe spins per second. Negative spins east→west,
+// following the prevailing winds; very slow (~6 min per revolution).
+const DEG_PER_SEC = -1;
 
 const HomePage: React.FC = () => {
-  const heroDataset = getDatasetById("nyc-taxi-trips");
+  const heroDataset = getDatasetById("ocean-drifters");
 
-  // Calculate base animation speed using the same function as DemoPage
   const baseAnimationSpeed = useMemo(() => {
     if (!heroDataset) return 1000;
     return calculateAnimationSpeed(heroDataset);
@@ -26,18 +37,15 @@ const HomePage: React.FC = () => {
   const [timeController] = useState(
     () =>
       new TimeController({
-        initialTime: heroDataset?.timeRange.start || Date.now(),
-        speed: baseAnimationSpeed * HERO_SPEED_MULTIPLIER,
+        initialTime: heroDataset?.timeRange.start || 0,
+        speed: baseAnimationSpeed,
         loop: true,
         timeRange: heroDataset?.timeRange,
       }),
   );
 
-  // No React state for time. The VAT layer reads the live time straight from
-  // `timeController` on every draw, so we deliberately don't re-render this
-  // page on every tick — that would invalidate the layer prop tree at 60 Hz,
-  // force deck.gl to recreate sublayers, and trash VatTripsLayer's per-tile
-  // texture cache. Mirrors the DemoPage pattern.
+  // The trips layer reads the live time straight from `timeController` on every
+  // draw, so we deliberately don't re-render this page on every tick.
   useEffect(() => {
     timeController.play();
     return () => {
@@ -45,316 +53,190 @@ const HomePage: React.FC = () => {
     };
   }, [timeController]);
 
+  const views = useMemo(
+    () => [new GlobeView({ id: "globe", resolution: 10 })],
+    [],
+  );
+
+  // Open centered on the west coast of South America (the Humboldt Current) and
+  // slowly spin. A requestAnimationFrame loop nudges the longitude each frame;
+  // user drags flow back through onViewStateChange so the spin just resumes.
+  const [viewState, setViewState] = useState<any>({
+    globe: { longitude: -78, latitude: -20, zoom: 1.8, pitch: 0, bearing: 0 },
+  });
+  useEffect(() => {
+    let raf = 0;
+    let last: number | null = null;
+    const step = (now: number) => {
+      const dt = last == null ? 0 : (now - last) / 1000;
+      last = now;
+      setViewState((vs: any) => {
+        const cur = vs.globe;
+        const longitude = ((cur.longitude + DEG_PER_SEC * dt + 540) % 360) - 180;
+        return { globe: { ...cur, longitude } };
+      });
+      raf = requestAnimationFrame(step);
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, []);
+
   const layers = useMemo(() => {
     if (!heroDataset) return [];
-
-    // Calculate prefetch settings the same way as DemoPage for smooth playback
-    const datasetDuration =
-      heroDataset.timeRange.end - heroDataset.timeRange.start;
-    const playbackSpeed =
-      (datasetDuration / (heroDataset.targetPlaybackSeconds || 60) / 1000) *
-      HERO_SPEED_MULTIPLIER;
-    const timeWindow = heroDataset.timeWindow || 300000;
-    const timeWindowsPerSecond = (playbackSpeed / timeWindow) * 1000;
-    const minPrefetchSteps = Math.max(15, Math.ceil(timeWindowsPerSecond * 60));
-    const prefetchSteps = Math.min(minPrefetchSteps, 80);
-    const prefetchAhead = Math.max(timeWindow * 3, playbackSpeed * 30000);
-
+    const g = heroDataset.tripGradient;
     return [
-      new VatTripsLayer({
-        id: "hero-trips",
+      new SolidPolygonLayer({
+        id: "hero-earth",
+        data: EARTH_POLYGON,
+        getPolygon: (d) => d as any,
+        stroked: false,
+        filled: true,
+        getFillColor: [240, 240, 236, 255],
+      }),
+      new AnimatedTripsLayer({
+        id: "hero-drifters",
         data: heroDataset.url,
-        // Seed value only — VAT pulls the live time from `timeController`
-        // every draw. See the comment on the play-effect above for why we
-        // don't thread a React state through here.
         currentTime: heroDataset.timeRange.start,
         timeController,
-        timeWindow,
+        timeWindow: heroDataset.timeWindow,
         timeRange: heroDataset.timeRange,
-        headColor: [31, 186, 214, 255],
-        headRadiusPixels: 3,
-        opacity: 0.85,
+        useGlobalBounds: true,
+        zoomOverride: 0,
+        ...(g && {
+          gradientProperty: g.property,
+          gradientDomain: g.domain,
+          gradientColorRamp: g.colors,
+        }),
+        ...(heroDataset.colorMappingDefault && {
+          colorMappingDefault: heroDataset.colorMappingDefault,
+        }),
+        tripWidth: heroDataset.tripWidth ?? 1.5,
+        widthMinPixels: heroDataset.widthMinPixels ?? 1,
+        widthMaxPixels: heroDataset.widthMaxPixels ?? 3,
+        trailLength: heroDataset.trailLength ?? 60000,
+        fadeTrail: heroDataset.fadeTrail ?? true,
+        opacity: heroDataset.opacity ?? 0.85,
         pickable: false,
-        enablePrefetch: true,
-        prefetchAhead,
-        prefetchSteps,
       }),
     ];
   }, [heroDataset, timeController]);
 
-  const features = [
-    {
-      title: "deck.gl Layers",
-      description:
-        "AnimatedPointLayer, AnimatedPathLayer, AnimatedTripsLayer, and more for time-series geodata.",
-      link: "/layers",
-    },
-    {
-      title: ".stt File Format",
-      description:
-        "A single-file archive containing tiles, indices, and metadata for efficient streaming.",
-      link: "/format",
-    },
-    {
-      title: "TimeController",
-      description:
-        "Utility class for synchronized animation playback across layers.",
-      link: "/layers",
-    },
-    {
-      title: "CLI Tools",
-      description:
-        "Rust tile generation from GeoParquet: streaming builds, H3 summary tiers, zstd dictionaries.",
-      link: "/format",
-    },
-  ];
+  // The curated demos for the quiet index below the hero.
+  const featured = navDatasets.slice(0, 6);
 
   return (
     <div
       className="h-full flex flex-col overflow-y-auto custom-scrollbar"
-      style={{ background: "#242730" }}
+      style={{ background: "var(--page-bg)" }}
     >
-      {/* Hero Section */}
-      <div className="flex flex-col lg:flex-row lg:min-h-[400px]">
-        {/* Left: Content */}
-        <div
-          className="lg:w-[45%] flex flex-col justify-center p-6 lg:p-10 order-2 lg:order-1"
-          style={{ background: "#242730" }}
-        >
-          <div className="max-w-lg animate-fade-in">
+      {/* Hero */}
+      <div className="flex flex-col lg:flex-row lg:min-h-[490px]">
+        {/* Left: content */}
+        <div className="lg:w-[46%] flex flex-col justify-center px-5 sm:px-7 lg:px-12 py-8 sm:py-10 order-2 lg:order-1">
+          <div className="max-w-md">
             <h1
-              className="font-display text-3xl lg:text-4xl font-bold mb-4"
-              style={{ color: "#FFFFFF", lineHeight: 1.2 }}
+              className="font-display text-2xl sm:text-3xl lg:text-[2.6rem] font-bold mt-3 mb-5"
+              style={{ color: "var(--ink-900)", lineHeight: 1.1 }}
             >
               SpatioTemporal Tiles
             </h1>
 
             <p
-              className="text-sm lg:text-base mb-4"
-              style={{ color: "#A0A7B4", lineHeight: 1.7 }}
+              className="text-base mb-4"
+              style={{ color: "var(--ink-700)", lineHeight: 1.7 }}
             >
-              A collection of layers, components, and utility functions for
-              building animated, time-series geospatial visualizations with{" "}
+              Time-aware{" "}
               <a
                 href="https://deck.gl"
                 target="_blank"
                 rel="noopener noreferrer"
-                style={{ color: "#1FBAD6" }}
+                style={{ color: "var(--accent)" }}
               >
                 deck.gl
-              </a>
-              .
-            </p>
-
-            <p
-              className="text-sm lg:text-base mb-6"
-              style={{ color: "#6A7485", lineHeight: 1.7 }}
-            >
-              Includes the{" "}
-              <code
-                style={{
-                  color: "#A0A7B4",
-                  background: "#29323C",
-                  padding: "2px 6px",
-                  borderRadius: "4px",
-                }}
-              >
-                .stt
-              </code>{" "}
-              file format and CLI tools for efficient streaming of temporal
-              geodata.
+              </a>{" "}
+              layers and a single-file tile format for streaming animated
+              geospatial data.
             </p>
 
             <div className="flex flex-wrap gap-3">
               <Link
-                to="/demo/nyc-taxi-trips"
-                className="inline-flex items-center gap-2 px-5 py-2.5 rounded text-sm font-medium transition-all"
-                style={{ background: "#0F9668", color: "#FFFFFF" }}
-                onMouseOver={(e) =>
-                  (e.currentTarget.style.background = "#13B17B")
-                }
-                onMouseOut={(e) =>
-                  (e.currentTarget.style.background = "#0F9668")
-                }
+                to="/demo/ocean-drifters"
+                className="inline-flex items-center gap-2 px-5 py-2.5 rounded text-sm font-medium transition-opacity"
+                style={{ background: "var(--accent)", color: "#FFFFFF" }}
+                onMouseOver={(e) => (e.currentTarget.style.opacity = "0.9")}
+                onMouseOut={(e) => (e.currentTarget.style.opacity = "1")}
               >
-                Explore Demos
-                <span>→</span>
-              </Link>
-              <Link
-                to="/layers"
-                className="inline-flex items-center gap-2 px-5 py-2.5 rounded text-sm font-medium transition-all"
-                style={{
-                  background: "#29323C",
-                  color: "#A0A7B4",
-                  border: "1px solid #3A414C",
-                }}
-                onMouseOver={(e) => {
-                  e.currentTarget.style.background = "#3A414C";
-                  e.currentTarget.style.color = "#FFFFFF";
-                }}
-                onMouseOut={(e) => {
-                  e.currentTarget.style.background = "#29323C";
-                  e.currentTarget.style.color = "#A0A7B4";
-                }}
-              >
-                View Layers
+                View demos <span>→</span>
               </Link>
             </div>
           </div>
         </div>
 
-        {/* Right: Map Viewport */}
-        <div className="lg:w-[55%] h-64 lg:h-auto order-1 lg:order-2 lg:min-h-[400px] p-2 lg:p-4">
-          <div
-            className="w-full h-full rounded-lg overflow-hidden map-viewport"
-            style={{ border: "1px solid #3A414C" }}
-          >
+        {/* Right: rotating globe (dark canvas) */}
+        <div className="lg:w-[54%] h-56 sm:h-72 lg:h-auto order-1 lg:order-2 lg:min-h-[490px] p-3 sm:p-4 lg:p-6">
+          <div className="w-full h-full rounded-lg overflow-hidden map-viewport relative">
             <DeckGL
-              initialViewState={{
-                longitude: -73.98,
-                latitude: 40.75,
-                zoom: 12,
-                pitch: 45,
-                bearing: -15,
-              }}
+              views={views}
+              viewState={viewState}
+              onViewStateChange={(e: any) => setViewState({ globe: e.viewState })}
               controller={true}
               layers={layers}
-            >
-              <Map
-                reuseMaps
-                mapStyle="mapbox://styles/mapbox/dark-v11"
-                mapboxAccessToken={MAPBOX_ACCESS_TOKEN}
-                projection={{ name: "mercator" }}
-              />
-            </DeckGL>
+              parameters={{ cull: true } as any}
+            />
 
-            {/* Overlay label */}
             <div
               className="absolute top-3 left-3 px-2.5 py-1 rounded text-xs glass"
-              style={{ color: "#A0A7B4" }}
+              style={{ color: "rgba(255,255,255,0.85)" }}
             >
               <span
-                className="inline-block w-1.5 h-1.5 rounded-full mr-2"
-                style={{ background: "#1FBAD6" }}
+                className="inline-block w-1.5 h-1.5 rounded-full mr-2 align-middle"
+                style={{ background: "#28B4C8" }}
               />
-              NYC Taxi Trips • 1M routes
+              Ocean surface currents
             </div>
           </div>
         </div>
       </div>
 
-      {/* What's Included */}
+      {/* Quiet demo index */}
       <div
-        className="shrink-0 px-6 lg:px-10 py-6 border-t"
-        style={{ background: "#29323C", borderColor: "#3A414C" }}
+        className="px-5 sm:px-7 lg:px-12 py-8 sm:py-10"
+        style={{ borderTop: "1px solid var(--hairline)" }}
       >
-        <h2
-          className="text-sm font-semibold mb-4 text-center uppercase tracking-wider"
-          style={{ color: "#6A7485" }}
-        >
-          What's Included
-        </h2>
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 max-w-5xl mx-auto">
-          {features.map((feature) => (
-            <Link
-              key={feature.title}
-              to={feature.link}
-              className="p-4 rounded transition-all group"
-              style={{ background: "#242730", border: "1px solid #3A414C" }}
-              onMouseOver={(e) => {
-                e.currentTarget.style.borderColor = "#1FBAD6";
-              }}
-              onMouseOut={(e) => {
-                e.currentTarget.style.borderColor = "#3A414C";
-              }}
-            >
+        <span className="eyebrow">Demos</span>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-6 sm:gap-x-8 gap-y-5 sm:gap-y-6 mt-4 max-w-4xl">
+          {featured.map((d) => (
+            <Link key={d.id} to={`/demo/${d.id}`} className="group block">
               <h3
-                className="text-sm font-medium mb-1 group-hover:text-[#1FBAD6] transition-colors"
-                style={{ color: "#FFFFFF" }}
+                className="text-sm font-medium transition-colors"
+                style={{ color: "var(--ink-900)" }}
+                onMouseOver={(e) =>
+                  (e.currentTarget.style.color = "var(--accent)")
+                }
+                onMouseOut={(e) =>
+                  (e.currentTarget.style.color = "var(--ink-900)")
+                }
               >
-                {feature.title}
+                {d.name}
               </h3>
               <p
-                className="text-xs"
-                style={{ color: "#6A7485", lineHeight: 1.5 }}
+                className="text-xs mt-1 line-clamp-2"
+                style={{ color: "var(--ink-500)", lineHeight: 1.5 }}
               >
-                {feature.description}
+                {d.description}
               </p>
+              {d.sources && d.sources.length > 0 && (
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-2">
+                  {d.sources.map((s) => (
+                    <SourceLogo key={s} id={s} />
+                  ))}
+                </div>
+              )}
             </Link>
           ))}
         </div>
       </div>
 
-      {/* Quick Start */}
-      <div
-        className="shrink-0 px-6 lg:px-10 py-6 border-t"
-        style={{ borderColor: "#3A414C" }}
-      >
-        <div className="max-w-3xl mx-auto">
-          <h2
-            className="text-lg font-semibold mb-4 text-center"
-            style={{ color: "#FFFFFF" }}
-          >
-            Quick Start
-          </h2>
-          <div
-            className="rounded overflow-hidden"
-            style={{ background: "#29323C", border: "1px solid #3A414C" }}
-          >
-            <div
-              className="flex items-center gap-2 px-3 py-2 border-b"
-              style={{ background: "#242730", borderColor: "#3A414C" }}
-            >
-              <div
-                className="w-2.5 h-2.5 rounded-full"
-                style={{ background: "#F9042C" }}
-              />
-              <div
-                className="w-2.5 h-2.5 rounded-full"
-                style={{ background: "#FFBD2E" }}
-              />
-              <div
-                className="w-2.5 h-2.5 rounded-full"
-                style={{ background: "#27C93F" }}
-              />
-              <span className="ml-2 text-xs" style={{ color: "#6A7485" }}>
-                example.tsx
-              </span>
-            </div>
-            <pre
-              className="p-4 overflow-x-auto code-block"
-              style={{ color: "#A0A7B4" }}
-            >
-              {`import { AnimatedTripsLayer, TimeController } from '@stt/deck.gl';
-
-const timeController = new TimeController({
-  initialTime: Date.parse('2024-01-01'),
-  speed: 100000,
-  loop: true,
-});
-
-const layer = new AnimatedTripsLayer({
-  data: '/data/taxi-trips.stt',
-  currentTime: timeController.getTime(),
-  timeController,
-  tripColor: [31, 186, 214],
-  trailLength: 60000,
-});`}
-            </pre>
-          </div>
-          <p className="text-xs text-center mt-3" style={{ color: "#6A7485" }}>
-            See the{" "}
-            <Link to="/layers" style={{ color: "#1FBAD6" }}>
-              Layers documentation
-            </Link>{" "}
-            and{" "}
-            <Link to="/format" style={{ color: "#1FBAD6" }}>
-              Format specification
-            </Link>{" "}
-            for more details.
-          </p>
-        </div>
-      </div>
     </div>
   );
 };

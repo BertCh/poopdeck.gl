@@ -19,6 +19,13 @@
 // uses (offsets/timestamps within 2^53, as elsewhere in the reader).
 
 const DIRECTORY_VERSION = 4;
+/**
+ * Tag for the optional trailing covering section: one signed varint per entry
+ * (in directory order) giving `coverTMin - timeStart`. Backward-compatible — a
+ * pre-covering directory ends after the per-run blob columns and decodes with
+ * `coverTMin` undefined. Mirrors `COVER_SECTION_TMIN` in directory.rs.
+ */
+const COVER_SECTION_TMIN = 1;
 
 /**
  * A decoded directory entry. The integrity crc32c and the Hilbert key are read
@@ -39,6 +46,12 @@ export interface DirectoryEntry {
   uncompressedSize: number;
   featureCount: number;
   temporalBucketMs?: number;
+  /**
+   * Tight lower covering bound — the earliest feature *start* time actually in
+   * the tile (vs `timeStart`, the addressable bucket edge). `undefined` when the
+   * archive carries no covering section; clients then fall back to `timeStart`.
+   */
+  coverTMin?: number;
 }
 
 class Cursor {
@@ -180,6 +193,17 @@ export function decodeDirectory(bytes: Uint8Array): DirectoryEntry[] {
   if (cursor !== n) {
     throw new Error(`STT directory: runs covered ${cursor} entries, expected ${n}`);
   }
+
+  // Optional trailing covering section(s). A pre-covering archive's buffer ends
+  // here; if bytes remain, read tagged sections (unknown tags stop the scan).
+  if (c.pos < bytes.length) {
+    const tag = bytes[c.pos++];
+    if (tag === COVER_SECTION_TMIN) {
+      for (let i = 0; i < n; i++) {
+        entries[i].coverTMin = entries[i].timeStart + Number(c.ivarint());
+      }
+    }
+  }
   return entries;
 }
 
@@ -202,6 +226,8 @@ export interface DirectoryEncodeEntry {
   hilbert?: number;
   crc32c?: number;
   temporalBucketMs?: number;
+  /** Tight lower covering bound (see `DirectoryEntry.coverTMin`). */
+  coverTMin?: number;
 }
 
 function putUvarint(out: number[], value: bigint): void {
@@ -333,6 +359,15 @@ export function encodeDirectory(entries: DirectoryEncodeEntry[]): Uint8Array {
     putUvarint(out, BigInt(r.uncompressed));
     out.push(r.crc & 0xff, (r.crc >>> 8) & 0xff, (r.crc >>> 16) & 0xff, (r.crc >>> 24) & 0xff);
     expectedOffset = r.offset + BigInt(r.length);
+  }
+
+  // Optional trailing covering section — emitted only when every entry carries
+  // a tight lower bound (mirrors the Rust encoder).
+  if (n > 0 && sorted.every((e) => e.coverTMin !== undefined)) {
+    out.push(COVER_SECTION_TMIN);
+    for (const e of sorted) {
+      putIvarint(out, BigInt(e.coverTMin!) - BigInt(e.timeStart));
+    }
   }
 
   return Uint8Array.from(out);

@@ -59,6 +59,28 @@ describe('v4 directory codec (TS)', () => {
     expect(back.map((e) => e.timeStart)).toEqual([0, 3_600_000, 7_200_000, 10_800_000]);
   });
 
+  it('round-trips the optional covering section (coverTMin), incl. a value before the bucket', () => {
+    const entries: DirectoryEncodeEntry[] = [0, 1, 2].map((b) => ({
+      ...base,
+      zoom: 7, x: 2, y: 3, hilbert: b,
+      timeStart: b * 1000, timeEnd: b * 1000 + 900,
+      offset: 64 + b * 50, length: 50, uncompressedSize: 100, featureCount: b + 1, crc32c: b,
+      // entry 0's earliest feature starts 200ms BEFORE its bucket edge.
+      coverTMin: b === 0 ? -200 : b * 1000 + 300,
+    }));
+    const back = decodeDirectory(encodeDirectory(entries));
+    expect(back.map((e) => e.coverTMin)).toEqual([-200, 1300, 2300]);
+  });
+
+  it('omits the covering section when no entry carries coverTMin (backward compatible)', () => {
+    // Without coverTMin the buffer must be byte-identical to the pre-covering
+    // codec, and decode leaves coverTMin undefined.
+    const withCover = encodeDirectory([{ ...base, coverTMin: 5 }]);
+    const without = encodeDirectory([base]);
+    expect(without.length).toBeLessThan(withCover.length);
+    expect(decodeDirectory(without)[0].coverTMin).toBeUndefined();
+  });
+
   it('rejects out-of-range coordinates', () => {
     expect(() => encodeDirectory([{ ...base, zoom: 300 }])).toThrow(/zoom/);
     expect(() => encodeDirectory([{ ...base, x: 2 ** 33 }])).toThrow(/x /);

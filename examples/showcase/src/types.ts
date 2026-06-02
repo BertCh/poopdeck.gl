@@ -76,6 +76,11 @@ export interface Dataset {
   url: string;
   type: DatasetType;
   /**
+   * Data-source attribution keys (see SOURCE_REGISTRY in components/SourceLogo).
+   * Rendered as small source badges on the demo cards.
+   */
+  sources?: string[];
+  /**
    * Tile-tier dispatch for archives built with `--summary-tier`. `'auto'`
    * (default) swaps to the H3 summary overview at low zoom; `'raw'` always
    * uses raw features (use this when the summary overlay would obscure the
@@ -104,7 +109,16 @@ export interface Dataset {
   
   /** Use GlobeView instead of Mercator projection (for global satellite data) */
   useGlobe?: boolean;
-  
+
+  /** Slowly auto-rotate the globe (only applies when `useGlobe` is true). */
+  autoRotate?: boolean;
+
+  /**
+   * Fill color of the globe's earth sphere (only applies when `useGlobe`).
+   * Defaults to a dark sphere; set a light tone to match the paper landing page.
+   */
+  globeBackgroundColor?: ColorRGBA;
+
   /** Property name containing elevation data (e.g., 'altitude', 'elevation') */
   elevationProperty?: string;
   

@@ -42,7 +42,21 @@ function osmYearColors(startYear: number, endYear: number): Record<string, Color
 
 const OSM_YEAR_COLORS = osmYearColors(2007, 2026);
 
-export const datasets: Dataset[] = [
+/**
+ * Base URL for hosted `.stt` tile archives. When `VITE_DATA_BASE_URL` is set
+ * (e.g. an R2 custom domain like `https://tiles.example.com`), every dataset's
+ * `/data/x.stt` path is rewritten to `<base>/data/x.stt`. Unset → served from
+ * the showcase origin (local `public/data`), so behavior is unchanged by default.
+ */
+const DATA_BASE_URL: string = ((import.meta as any).env?.VITE_DATA_BASE_URL ?? '')
+  .toString()
+  .replace(/\/$/, '');
+
+function resolveDataUrl(url: string): string {
+  return DATA_BASE_URL && url.startsWith('/data/') ? `${DATA_BASE_URL}${url}` : url;
+}
+
+const rawDatasets: Dataset[] = [
   {
     id: 'nyc-taxi-od-summary',
     name: 'NYC Pickup vs Dropoff Hex Density',
@@ -56,7 +70,7 @@ export const datasets: Dataset[] = [
       end: 1420213385000,   // 2015-01-02 15:43:05 UTC
     },
     timeWindow: 1800000, // 30 min — matches the archive's temporal bucket
-    targetPlaybackSeconds: 90,
+    targetPlaybackSeconds: 60, // full time-range plays in ~1 min
     initialViewState: {
       longitude: -73.985,
       latitude: 40.748,
@@ -116,8 +130,9 @@ export const datasets: Dataset[] = [
   },
   {
     id: 'earthquake-activity',
-    name: 'Earthquake Activity',
-    description: 'USGS earthquake archive — global M4.0+ events, 2020-01 → 2024-12',
+    name: 'Earthquakes',
+    sources: ['usgs'],
+    description: 'Global M4.0+ events, 2020–2024. Source: USGS.',
     url: '/data/earthquakes-v2.stt',
     type: 'point',
     timeRange: {
@@ -125,7 +140,7 @@ export const datasets: Dataset[] = [
       end: Date.parse('2024-12-31T23:59:59Z'),
     },
     timeWindow: 86400000 * 30, // 30 day window for multi-year data
-    targetPlaybackSeconds: 120, // ~5 years plays in ~2 min
+    targetPlaybackSeconds: 60, // full time-range plays in ~1 min
     initialViewState: {
       longitude: 140,
       latitude: 20,
@@ -169,7 +184,8 @@ export const datasets: Dataset[] = [
   {
     id: 'flights',
     name: 'Flight Traffic',
-    description: 'OpenSky aircraft positions — 21K aircraft over 24h (Jan 6, 2020)',
+    sources: ['opensky'],
+    description: 'Aircraft positions over 24 hours. Source: OpenSky.',
     url: '/data/flights.stt',
     type: 'point',
     timeRange: {
@@ -186,7 +202,7 @@ export const datasets: Dataset[] = [
     wakeLength: 300000,     // 5-minute contrail behind each aircraft
     wakeTailScale: 0.15,    // tail shrinks to 15% of head radius
     timeWindow: 600000,     // 10-min loader window → 5-min past coverage
-    targetPlaybackSeconds: 360, // 24 hours plays in 3 minutes
+    targetPlaybackSeconds: 60, // full time-range plays in ~1 min
     initialViewState: {
       longitude: -98.5,
       latitude: 39.8,
@@ -226,7 +242,7 @@ export const datasets: Dataset[] = [
       end: 1726272000000,
     },
     timeWindow: 86400000 * 30,
-    targetPlaybackSeconds: 60,
+    targetPlaybackSeconds: 60, // full time-range plays in ~1 min
     initialViewState: {
       longitude: 0,
       latitude: 20,
@@ -245,8 +261,8 @@ export const datasets: Dataset[] = [
   },
   {
     id: 'flight-trips',
-    name: 'Flight Trips (3D)',
-    description: '3D flight trajectories — 21K aircraft (Jan 6, 2020)',
+    name: 'Flight Trips',
+    description: 'Animated 3-D flight trajectories. Source: OpenSky.',
     url: '/data/adsb-paths.stt',
     type: 'trips',
     timeRange: {
@@ -254,7 +270,7 @@ export const datasets: Dataset[] = [
       end: 1578354650000,    // 2020-01-06 23:50:50 UTC
     },
     timeWindow: 3600000, // 1 hour window for trips
-    targetPlaybackSeconds: 600, // 24 hours plays in 10 minutes
+    targetPlaybackSeconds: 60, // full time-range plays in ~1 min
     initialViewState: {
       longitude: -98.5,
       latitude: 39.8,
@@ -279,7 +295,8 @@ export const datasets: Dataset[] = [
   {
     id: 'hurricanes',
     name: 'Hurricane Tracks',
-    description: 'IBTrACS hurricane tracks — Atlantic basin (2020-2023)',
+    sources: ['noaa'],
+    description: 'Atlantic-basin storms, 2020–2023. Source: IBTrACS.',
     url: '/data/hurricanes.stt',
     type: 'point',
     timeRange: {
@@ -287,7 +304,7 @@ export const datasets: Dataset[] = [
       end: Date.parse('2023-11-17T21:00:00.000Z'),
     },
     timeWindow: 86400000 * 14, // 2 week window for multi-year hurricane data
-    targetPlaybackSeconds: 120, // ~3.5 years plays in 2 min
+    targetPlaybackSeconds: 60, // full time-range plays in ~1 min
     initialViewState: {
       longitude: -65,
       latitude: 25,
@@ -315,7 +332,7 @@ export const datasets: Dataset[] = [
     wakeLength: 60000,      // 60s comet trail behind each cab
     wakeTailScale: 0.15,    // tail shrinks to 15% of head radius
     timeWindow: 120000,     // 2-min loader window → 60s past coverage
-    targetPlaybackSeconds: 120, // ~2.8h plays in 2 minutes
+    targetPlaybackSeconds: 60, // full time-range plays in ~1 min
     initialViewState: {
       longitude: -73.98,
       latitude: 40.75,
@@ -358,7 +375,7 @@ export const datasets: Dataset[] = [
     // enough that ~5-minute time slices still animate visibly over the
     // 2.8-hour range.
     timeWindow: 60000 * 30,
-    targetPlaybackSeconds: 120,
+    targetPlaybackSeconds: 60, // full time-range plays in ~1 min
     initialViewState: {
       longitude: -73.98,
       latitude: 40.75,
@@ -414,25 +431,20 @@ export const datasets: Dataset[] = [
   {
     id: 'nyc-taxi-points',
     name: 'NYC Taxi Points (Animated)',
+    sources: ['tlc'],
     description:
-      'Animated NYC taxi vehicle positions — 500K trips (Jan 1-2, 2015)',
-    url: '/data/nyc-taxi-points.stt',
-    type: 'point',
+      'Animated NYC taxi vehicle positions across Manhattan. Source: NYC TLC.',
+    // VAT head animation on the FULL trip archive (same source as the trips
+    // demo) — one moving dot per active trip, no separate derived points file.
+    url: '/data/nyc-taxi-paths.stt',
+    type: 'vat',
     timeRange: {
       start: 1420070400000,  // 2015-01-01 00:00:00 UTC
       end: 1420213385000,    // 2015-01-02 13:43:05 UTC
     },
-    // Comet-wake aesthetic, mirrored from ship-traffic. The Rust generator
-    // emits one interpolated sample every 15s, so a 60s wake spans ~4 samples:
-    // instead of one teleporting dot, each cab now leaves a fading, shrinking
-    // trail of its recent positions. Crucially the wake does NOT re-create the
-    // old "stacked opaque copies" problem — the TimeFilterExtension fades each
-    // trailing sample by age (vTimeAlpha), so they read as a comet, not blobs.
-    // timeWindow is 2× wakeLength so the loader covers the past half of the wake.
-    wakeLength: 60000,      // 60s comet trail behind each cab
-    wakeTailScale: 0.15,    // tail shrinks to 15% of head radius
-    timeWindow: 120000,     // 2-min loader window → 60s past coverage
-    targetPlaybackSeconds: 600, // 1.5 days plays in 10 min
+    timeWindow: 20000,
+    // Slower than the 1-min default so individual cab heads stay readable.
+    targetPlaybackSeconds: 1800,
     initialViewState: {
       longitude: -73.98,
       latitude: 40.75,
@@ -441,33 +453,18 @@ export const datasets: Dataset[] = [
       bearing: -15,
     },
     legend: {
-      title: 'Trip Status',
-      items: [
-        { color: '#4CAF50', label: 'Pickup' },
-        { color: '#2196F3', label: 'En Route' },
-        { color: '#FF5722', label: 'Dropoff' },
-      ],
+      title: 'Taxis',
+      items: [{ color: '#FD805D', label: 'Active Trip' }],
     },
-    colorProperty: 'status',
-    // Lower alpha so the thousands of overlapping vehicles blend into a
-    // density field rather than stacking into opaque blobs.
-    colorMapping: {
-      pickup: [76, 175, 80, 180],
-      enroute: [33, 150, 243, 140],
-      dropoff: [255, 87, 34, 180],
-    },
-    colorMappingDefault: [120, 120, 120, 140],
-    // World-space dots, mirrored from ship-traffic: `radius` is in METERS so
-    // cabs scale with zoom like real objects. No pixel floor
-    // (radiusMinPixels: 0) → at the zoom-14 view a 20 m dot reads ~2.8 px and
-    // emerges/shrinks as you zoom in/out — the "render by space" tradeoff.
-    // radiusMaxPixels: 8 caps a stopped cab from ballooning at deep zoom. The
-    // comet wake (alpha fade + size taper) is dimensionless and unaffected.
-    radiusUnits: 'meters',
-    radius: 20,
-    radiusScale: 1,
-    radiusMinPixels: 0,
-    radiusMaxPixels: 8,
+    // World-space head dots (meters): a 20 m head reads ~2.8 px at the zoom-14
+    // view and emerges/shrinks on zoom with no pixel floor (radiusMinPixels: 0);
+    // radiusMaxPixels: 8 caps a stopped cab at deep zoom.
+    vatHeadColor: [253, 128, 93, 255],
+    vatSizeUnits: 'meters',
+    vatHeadRadius: 20,      // metres
+    vatHeadRadiusMinPixels: 0,
+    vatHeadRadiusMaxPixels: 8,
+    vatTimeSlots: 64,
   },
   {
     id: 'nyc-taxi-paths',
@@ -480,7 +477,7 @@ export const datasets: Dataset[] = [
       end: 1420213385000,    // 2015-01-02 13:43:05 UTC
     },
     timeWindow: 60000, // 1 min window for 1.5 day dataset
-    targetPlaybackSeconds: 600, // 1.5 days plays in 10 minutes
+    targetPlaybackSeconds: 60, // full time-range plays in ~1 min
     initialViewState: {
       longitude: -73.98,
       latitude: 40.75,
@@ -501,9 +498,9 @@ export const datasets: Dataset[] = [
   },
   {
     id: 'nyc-taxi-trips',
-    name: 'NYC Taxi Trips',
-    description:
-      'Animated NYC taxi trips — 500K trips (Jan 1-2, 2015)',
+    name: 'NYC Yellow Cab Trips',
+    sources: ['tlc'],
+    description: 'Animated yellow-cab trip lines across Manhattan. Source: NYC TLC.',
     url: '/data/nyc-taxi-paths.stt',
     type: 'vat',
     timeRange: {
@@ -513,7 +510,9 @@ export const datasets: Dataset[] = [
     // Tile-load window: trail is 10s, so 20s comfortably covers the trail plus
     // a margin for tiles arriving slightly ahead of the playhead.
     timeWindow: 20000,
-    targetPlaybackSeconds: 30000, // 1 minute
+    // Longer than the 1-min default: this ~40h archive blurs past too fast to
+    // read individual cabs at 60s, so play it slower (~30 min full range).
+    targetPlaybackSeconds: 1800,
     initialViewState: {
       longitude: -73.98,
       latitude: 40.75,
@@ -543,9 +542,8 @@ export const datasets: Dataset[] = [
   },
   {
     id: 'nyc-taxi-vat',
-    name: 'NYC Taxi (VAT)',
-    description:
-      'NYC taxi trips as moving point heads — 500K trips (Jan 1-2, 2015)',
+    name: 'NYC Yellow Cabs',
+    description: 'Animated yellow-cab positions across Manhattan. Source: NYC TLC.',
     url: '/data/nyc-taxi-paths.stt',
     type: 'vat',
     timeRange: {
@@ -553,7 +551,8 @@ export const datasets: Dataset[] = [
       end: 1420213385000,
     },
     timeWindow: 20000,
-    targetPlaybackSeconds: 4000,
+    // Match nyc-taxi-trips: 60s is too fast to follow individual cabs.
+    targetPlaybackSeconds: 1800,
     initialViewState: {
       longitude: -73.98,
       latitude: 40.75,
@@ -579,6 +578,7 @@ export const datasets: Dataset[] = [
   {
     id: 'ship-traffic',
     name: 'US Maritime Traffic',
+    sources: ['noaa'],
     description: 'NOAA Marine Cadastre AIS — 15.9K vessels over 24h (Jan 9, 2023)',
     url: '/data/ais-all-us.stt',
     type: 'point',
@@ -594,7 +594,7 @@ export const datasets: Dataset[] = [
     wakeLength: 3600000,    // 30-minute wake behind each ship
     wakeTailScale: 0.15,    // tail shrinks to 15% of head radius
     timeWindow: 5600000,    // 60-min loader window → 30-min past coverage
-    targetPlaybackSeconds: 220, // 24 hours plays in 3 minutes
+    targetPlaybackSeconds: 60, // full time-range plays in ~1 min
     // World-space dots: `radius` is in METERS, so vessels scale with zoom like
     // real objects (300 m radius ≈ a large-vessel / berth footprint). No pixel
     // floor (radiusMinPixels: 0), so dots fall sub-pixel at the zoom-4 national
@@ -638,7 +638,7 @@ export const datasets: Dataset[] = [
       end: 1702339200000,   // 2023-12-11T00:00:00Z
     },
     timeWindow: 86400000 * 30, // 30 day window for multi-year data
-    targetPlaybackSeconds: 120, // ~3.5 years plays in 2 minutes
+    targetPlaybackSeconds: 60, // full time-range plays in ~1 min
     initialViewState: {
       longitude: -115,
       latitude: 40,
@@ -677,7 +677,7 @@ export const datasets: Dataset[] = [
     // Time window controls which segments are loaded/visible
     // For LEO satellites with ~90 min orbits and ~40 min segments, use larger window
     timeWindow: 600000, // 10 minute window - loads segments overlapping this range
-    targetPlaybackSeconds: 900, // 24h in ~15 min — slow enough to follow LEO streaks
+    targetPlaybackSeconds: 60, // full time-range plays in ~1 min
     initialViewState: {
       longitude: 0,
       latitude: 20,
@@ -710,6 +710,7 @@ export const datasets: Dataset[] = [
   {
     id: 'animal-migration',
     name: 'Animal Migration',
+    sources: ['gbif'],
     description:
       'Animal tracking studies from GBIF, coloured by taxonomic class; ' +
       'multi-year tracks folded into one year. Data: GBIF.org (CC0 / CC-BY / ' +
@@ -723,7 +724,7 @@ export const datasets: Dataset[] = [
     // Day-scale loader window (1-day temporal buckets); ~2× the trail so the
     // loader covers the past portion of each fading trail.
     timeWindow: 86400000 * 4,
-    targetPlaybackSeconds: 210, // one folded year in ~3.5 min
+    targetPlaybackSeconds: 60, // full time-range plays in ~1 min
     initialViewState: {
       longitude: 0,
       latitude: 20,
@@ -773,12 +774,20 @@ export const datasets: Dataset[] = [
   {
     id: 'ocean-drifters',
     name: 'Ocean Currents',
+    sources: ['noaa'],
     description:
-      'NOAA Global Drifter Program surface-buoy tracks, 1979→2022, coloured ' +
-      'by sea-surface temperature. Data: NOAA AOML / PMEL (public domain).',
+      'Surface-buoy drift tracks, shaded by sea-surface temperature. ' +
+      'Source: NOAA Global Drifter Program.',
     url: '/data/drifters.stt',
     type: 'trips',
+    // Render on the 3D globe and slowly auto-rotate (DemoPage drives the spin
+    // when useGlobe && autoRotate). `useGlobalBounds` loads the whole planet's
+    // tiles so the back side of the globe is populated too.
     useGlobe: true,
+    autoRotate: true,
+    // Light earth sphere (matches the paper landing page / hero globe) instead
+    // of the default dark sphere.
+    globeBackgroundColor: [240, 240, 236, 255],
     timeRange: {
       start: 287884800000,  // 1979-02-15 — first fix in the GDP record
       end: 1667844000000,   // 2022-11-07 — last fix (PMEL interpolated product ends here)
@@ -787,11 +796,13 @@ export const datasets: Dataset[] = [
     // is wide (weekly build buckets → ~30 buckets) and the trail long so each
     // comet tail still lasts a few real seconds.
     timeWindow: 86400000 * 200,
-    targetPlaybackSeconds: 600, // 43 years of currents in ~10 min
+    targetPlaybackSeconds: 60, // full time-range plays in ~1 min
+    // Open centered on the west coast of South America (the Humboldt Current),
+    // then the globe slowly spins via the auto-rotate loop.
     initialViewState: {
-      longitude: -40,
-      latitude: 25,
-      zoom: 0.7,
+      longitude: -78,
+      latitude: -20,
+      zoom: 1.5,
       pitch: 0,
       bearing: 0,
     },
@@ -836,10 +847,11 @@ export const datasets: Dataset[] = [
     //     --output examples/showcase/public/data/osm-nyc-nodes.stt
     // The archive is kept local (not committed); see docs/guides/data-generation.md.
     id: 'osm-nyc-draw',
-    name: 'OSM Editing — NYC Draws Itself',
+    name: 'OSM Editing — NYC',
+    sources: ['osm'],
     description:
-      'OpenStreetMap node creations in New York City, 2007→2025, coloured by ' +
-      'year created. © OpenStreetMap contributors (ODbL).',
+      'OpenStreetMap node creations in New York City, coloured by year. ' +
+      '© OpenStreetMap contributors.',
     url: '/data/osm-nyc-nodes.stt',
     type: 'point',
     // Force raw points at every zoom: the archive carries an H3 summary tier
@@ -855,7 +867,7 @@ export const datasets: Dataset[] = [
       end: Date.parse('2026-01-01T00:00:00Z'),
     },
     timeWindow: 86400000 * 30, // overridden for cumulative datasets; kept for completeness
-    targetPlaybackSeconds: 360, // ~19 years in 4 minutes
+    targetPlaybackSeconds: 60, // full time-range plays in ~1 min
     // ~2 weeks of sim-time "ink appearing" ramp as each node is revealed.
     fadeInDuration: 86400000 * 14,
     initialViewState: {
@@ -904,7 +916,7 @@ export const datasets: Dataset[] = [
       end: Date.parse('2026-01-01T00:00:00Z'),
     },
     timeWindow: 86400000 * 30, // matches the 30-day temporal bucket
-    targetPlaybackSeconds: 120,
+    targetPlaybackSeconds: 60, // full time-range plays in ~1 min
     initialViewState: {
       longitude: -73.97,
       latitude: 40.72,
@@ -977,7 +989,7 @@ export const datasets: Dataset[] = [
       end: Date.parse('2026-01-01T00:00:00Z'),
     },
     timeWindow: 86400000 * 60, // 60-day rolling window of editing activity
-    targetPlaybackSeconds: 120,
+    targetPlaybackSeconds: 60, // full time-range plays in ~1 min
     initialViewState: {
       longitude: -73.97,
       latitude: 40.72,
@@ -1026,6 +1038,11 @@ export const datasets: Dataset[] = [
   },
 ];
 
+export const datasets: Dataset[] = rawDatasets.map((d) => ({
+  ...d,
+  url: resolveDataUrl(d.url),
+}));
+
 export const DATASETS = datasets;
 
 export function getDatasetById(id: string): Dataset | undefined {
@@ -1033,3 +1050,29 @@ export function getDatasetById(id: string): Dataset | undefined {
 }
 
 export const defaultDatasetId = 'earthquake-activity';
+
+/**
+ * The curated set shipped on `npm run build`, in navigation order. The full
+ * `datasets` array above stays intact so dev (`npm run dev`) keeps every demo;
+ * only the navigation surface is trimmed in production. Routing still resolves
+ * any id via `getDatasetById`, so old deep-links keep working in dev.
+ */
+export const SHIPPED_DATASET_IDS: string[] = [
+  'ocean-drifters',     // Ocean Currents — surface-drifter tracks
+  'nyc-taxi-points',    // NYC Taxi Points — VAT head layer, full nyc-taxi-paths.stt
+  'nyc-taxi-trips',     // NYC Yellow Cab Trips
+  'osm-nyc-draw',       // OSM Editing — NYC (cumulative "draw")
+  'ship-traffic',       // US Maritime Traffic — vessel points
+];
+
+export const shippedDatasets: Dataset[] = SHIPPED_DATASET_IDS
+  .map((id) => datasets.find((d) => d.id === id))
+  .filter((d): d is Dataset => Boolean(d));
+
+/**
+ * Datasets surfaced in the showcase (the Overview grid). This curated demo
+ * shows the same emphasized set in dev and prod so `localhost` matches the
+ * deploy. Every dataset still resolves by id via `getDatasetById`, so deep-links
+ * to the non-emphasized demos keep working.
+ */
+export const navDatasets: Dataset[] = shippedDatasets;

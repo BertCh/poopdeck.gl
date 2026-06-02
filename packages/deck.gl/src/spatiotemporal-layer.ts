@@ -718,6 +718,10 @@ export class SpatioTemporalLayer<
       // a viewport-full of Hilbert-adjacent tiles collapses into a handful of
       // HTTP Range requests instead of one request per tile.
       getTileDataBatch: (tileIds, signal) => archive.getTiles(tileIds, { signal }),
+      // Lets the tileset skip giant low-zoom parent-fallback tiles (e.g. a
+      // 14 MB z10 tile under a z14 view) before fetching them. Sync directory
+      // lookup, no I/O.
+      getTileByteSize: (tileId) => archive.getTileByteSize(tileId),
       onTileLoad: (tile) => {
         if (DEBUG) console.log('[STL] Tile loaded:', tile.id);
         this.props.onTileLoad?.(tile);

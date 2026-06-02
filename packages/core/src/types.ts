@@ -390,6 +390,15 @@ export interface TileEntry {
    * always populate this so a reader can dispatch on bucket size.
    */
   temporalBucketMs?: number;
+  /**
+   * Tight lower covering bound — the earliest feature *start* time actually in
+   * the tile (vs `timeStart`, the addressable bucket edge, which can be far
+   * earlier). Lets the reader skip a tile whose data lies entirely after a query
+   * window without fetching it. `undefined` for archives with no covering
+   * section (repacked/transcoded or pre-covering builds) → fall back to
+   * `timeStart`.
+   */
+  coverTMin?: number;
 }
 
 /** Archive index */
@@ -460,6 +469,30 @@ export interface ArchiveOptions {
    * construct the real one.
    */
   opfsCacheImpl?: import('./opfs-cache').OpfsTileCache;
+  /**
+   * Max gap (bytes) between two tile byte-ranges that `getTiles` will still
+   * bridge into ONE coalesced HTTP range request. Over-fetching the gap
+   * trades wasted bytes (≈free on R2: free egress) for one fewer ~60 ms RTT,
+   * so the break-even is large (~bandwidth × RTT ≈ multiple MB). Comparable
+   * cloud readers (Apache Arrow `object_store`, obstore) default to ~1 MB;
+   * the old STT default of 32 KB was ~30× too conservative.
+   *
+   * **Defaults to 2 MB.** On free-egress storage (R2) the gap bytes are free,
+   * so a wider gap fuses more neighbours into fewer billed GETs — notably
+   * collapsing a globe view's many per-cell requests. Lower it on metered-
+   * egress hosts or very sparse archives where the bridged bytes are wasted.
+   */
+  coalesceGapBytes?: number;
+  /**
+   * Max number of concurrent HTTP range requests `getTiles` keeps in flight
+   * for a single batch. After coalescing, a viewport×window usually collapses
+   * to a handful of byte-ranges; this only bounds the pathological sparse case
+   * (many non-adjacent blobs) so it can't exceed an object store's per-
+   * connection stream cap (Cloudflare R2 closes the connection at ~75 streams).
+   *
+   * **Defaults to 24.**
+   */
+  maxConcurrentRequests?: number;
 }
 
 /** Options for tile requests */

@@ -4,19 +4,19 @@
 
 @layer base {
   :root {
-    /* Kepler.gl inspired theme colors */
-    --panel-bg: #242730;
-    --panel-bg-hover: #29323C;
-    --panel-header: #29323C;
-    --panel-border: #3A414C;
-    --text-primary: #A0A7B4;
-    --text-secondary: #6A7485;
-    --text-white: #FFFFFF;
-    --active: #1FBAD6;
-    --active-hover: #108188;
-    --primary: #0F9668;
-    --primary-hover: #13B17B;
-    --error: #F9042C;
+    /* Light, minimal theme. Few fills/outlines — hierarchy comes from type
+       and ink weights, not boxes. The map canvas itself stays dark (its
+       data colors are tuned for it); these tokens style the UI around it. */
+    --page-bg: #fbfbf9;       /* warm paper white */
+    --surface: #ffffff;
+    --surface-sunken: #f3f2ee; /* faint fill for code/map frames */
+    --ink-900: #15171c;       /* headings, near-black */
+    --ink-700: #353a44;       /* strong body */
+    --ink-500: #6b7280;       /* muted body / labels */
+    --ink-400: #9aa1ad;       /* faint / captions */
+    --hairline: #e7e6e0;      /* used sparingly */
+    --accent: #0a7790;        /* deep cyan — echoes the data trails, readable on white */
+    --accent-soft: rgba(10, 119, 144, 0.08);
   }
 
   * {
@@ -32,12 +32,12 @@
   }
 
   body {
-    font-family: 'DM Sans', 'Helvetica Neue', Helvetica, sans-serif;
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
     font-size: 0.875rem;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-    background: var(--panel-bg);
-    color: var(--text-primary);
+    background: var(--page-bg);
+    color: var(--ink-700);
   }
 }
 
@@ -57,19 +57,34 @@
   height: 100% !important;
 }
 
+/* Frosted overlay chips that sit on top of the dark map canvas. Kept dark so
+   legends/labels stay legible against the basemap. */
 .glass {
-  background: rgba(36, 39, 48, 0.95);
+  background: rgba(21, 23, 28, 0.82);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
-  border: 1px solid var(--panel-border);
+  border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
+/* Headings use the same system sans as body — hierarchy comes from weight,
+   size, and tracking, matching the deck.gl / vis.gl docs aesthetic. */
 .font-display {
-  font-family: 'Syne', sans-serif;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  letter-spacing: -0.015em;
+}
+
+/* Uppercase tracked "eyebrow" label — part of the type hierarchy. */
+.eyebrow {
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-400);
 }
 
 .code-block {
-  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
   font-size: 12px;
   line-height: 1.6;
   tab-size: 2;
@@ -84,21 +99,21 @@
 }
 
 .custom-scrollbar::-webkit-scrollbar-thumb {
-  background: var(--panel-border);
+  background: var(--hairline);
   border-radius: 4px;
 }
 
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: var(--text-secondary);
+  background: var(--ink-400);
 }
 
-/* Mapbox attribution styling */
+/* Mapbox attribution — small + unobtrusive over the dark canvas. */
 .mapboxgl-ctrl-attrib {
   font-size: 10px !important;
-  background: rgba(36, 39, 48, 0.8) !important;
-  color: var(--text-secondary) !important;
+  background: rgba(21, 23, 28, 0.6) !important;
+  color: rgba(255, 255, 255, 0.5) !important;
 }
 
 .mapboxgl-ctrl-attrib a {
-  color: var(--text-primary) !important;
+  color: rgba(255, 255, 255, 0.7) !important;
 }

@@ -168,7 +168,7 @@ const PerformanceMonitor: React.FC<PerformanceMonitorProps> = ({ getTilesetStats
         background: 'rgba(36, 39, 48, 0.95)',
         border: '1px solid #3A414C',
         minWidth: 140,
-        fontFamily: 'JetBrains Mono, monospace',
+        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
         color: '#A0A7B4',
       }}
     >

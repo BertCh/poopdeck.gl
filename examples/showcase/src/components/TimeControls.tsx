@@ -61,16 +61,19 @@ const TimeControls: React.FC<TimeControlsProps> = ({
     <div className="space-y-3">
       {/* Time display */}
       <div className="flex justify-between items-center">
-        <span className="text-xs font-medium" style={{ color: "#FFFFFF" }}>
+        <span
+          className="text-xs font-medium font-mono"
+          style={{ color: "var(--ink-900)" }}
+        >
           {formatDate(currentTime)}
         </span>
         <span
           className="text-[10px] flex items-center gap-1.5"
-          style={{ color: "#6A7485" }}
+          style={{ color: "var(--ink-500)" }}
         >
           <span
             className="w-1.5 h-1.5 rounded-full"
-            style={{ background: isPlaying ? "#0F9668" : "#6A7485" }}
+            style={{ background: isPlaying ? "var(--accent)" : "var(--ink-400)" }}
           />
           {isPlaying ? `${formatDuration(remainingSeconds)} left` : "Paused"}
         </span>
@@ -79,11 +82,11 @@ const TimeControls: React.FC<TimeControlsProps> = ({
       {/* Progress bar */}
       <div
         className="relative h-1.5 rounded-full cursor-pointer"
-        style={{ background: "#3A414C" }}
+        style={{ background: "var(--hairline)" }}
       >
         <div
           className="absolute left-0 top-0 h-full rounded-full"
-          style={{ width: `${progress}%`, background: "#1FBAD6" }}
+          style={{ width: `${progress}%`, background: "var(--accent)" }}
         />
         <input
           type="range"
@@ -97,10 +100,10 @@ const TimeControls: React.FC<TimeControlsProps> = ({
 
       {/* Time range labels */}
       <div className="flex justify-between">
-        <span className="text-[9px]" style={{ color: "#6A7485" }}>
+        <span className="text-[9px]" style={{ color: "var(--ink-400)" }}>
           {formatDate(timeRange.start)}
         </span>
-        <span className="text-[9px]" style={{ color: "#6A7485" }}>
+        <span className="text-[9px]" style={{ color: "var(--ink-400)" }}>
           {formatDate(timeRange.end)}
         </span>
       </div>
@@ -113,7 +116,7 @@ const TimeControls: React.FC<TimeControlsProps> = ({
             onClick={onPlayPause}
             className="w-8 h-8 rounded flex items-center justify-center text-sm transition-colors"
             style={{
-              background: isPlaying ? "#F9042C" : "#0F9668",
+              background: "var(--accent)",
               color: "#FFFFFF",
             }}
           >
@@ -123,9 +126,9 @@ const TimeControls: React.FC<TimeControlsProps> = ({
             onClick={() => onSeek(timeRange.start)}
             className="w-7 h-7 rounded flex items-center justify-center text-xs transition-colors"
             style={{
-              background: "#29323C",
-              color: "#A0A7B4",
-              border: "1px solid #3A414C",
+              background: "var(--surface)",
+              color: "var(--ink-500)",
+              border: "1px solid var(--hairline)",
             }}
           >
             ⏮
@@ -136,7 +139,7 @@ const TimeControls: React.FC<TimeControlsProps> = ({
         <div className="flex items-center gap-1">
           <span
             className="text-[10px] mr-1 hidden sm:inline"
-            style={{ color: "#6A7485" }}
+            style={{ color: "var(--ink-500)" }}
           >
             Speed:
           </span>
@@ -149,9 +152,9 @@ const TimeControls: React.FC<TimeControlsProps> = ({
                 onClick={() => onSpeedChange(preset.value)}
                 className="px-2 py-1 rounded text-[10px] transition-colors"
                 style={{
-                  background: isActive ? "rgba(31, 186, 214, 0.15)" : "#29323C",
-                  color: isActive ? "#1FBAD6" : "#6A7485",
-                  border: `1px solid ${isActive ? "rgba(31, 186, 214, 0.3)" : "#3A414C"}`,
+                  background: isActive ? "var(--accent-soft)" : "transparent",
+                  color: isActive ? "var(--accent)" : "var(--ink-500)",
+                  border: `1px solid ${isActive ? "var(--accent)" : "var(--hairline)"}`,
                 }}
               >
                 {preset.label}
@@ -170,11 +173,11 @@ const TimeControls: React.FC<TimeControlsProps> = ({
             value={currentSpeedMultiplier}
             onChange={(e) => onSpeedChange(Number(e.target.value))}
             className="flex-1 h-1 cursor-pointer"
-            style={{ accentColor: "#1FBAD6" }}
+            style={{ accentColor: "var(--accent)" }}
           />
           <span
             className="text-[10px] font-medium min-w-[32px] text-right"
-            style={{ color: "#FFFFFF" }}
+            style={{ color: "var(--ink-900)" }}
           >
             {currentSpeedMultiplier.toFixed(1)}x
           </span>
