@@ -38,6 +38,15 @@ function excludeUnusedPublicFiles(): Plugin {
         filter(src) {
           if (path.basename(src) === '.DS_Store') return false;
           const rel = path.relative(publicDir, src).split(path.sep).join('/');
+          // Tile archives (.stt) and intermediate build artifacts (.parquet) are
+          // served from R2 (VITE_DATA_BASE_URL), never from the site origin, and
+          // far exceed Cloudflare's 25 MiB-per-asset deploy limit — keep them out
+          // of dist. They remain in public/ for local dev (served by the dev
+          // server, which reads public/ directly and never touches dist).
+          if (/\.(stt|parquet)$/i.test(rel)) {
+            skipped.push(rel);
+            return false;
+          }
           if (rel && EXCLUDE_FROM_DIST.has(rel)) {
             skipped.push(rel);
             return false;
