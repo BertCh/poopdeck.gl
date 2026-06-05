@@ -796,7 +796,10 @@ const rawDatasets: Dataset[] = [
     // is wide (weekly build buckets → ~30 buckets) and the trail long so each
     // comet tail still lasts a few real seconds.
     timeWindow: 86400000 * 200,
-    targetPlaybackSeconds: 60, // full time-range plays in ~1 min
+    // Slowed so the FASTEST preset (2×) plays at what 1× used to: ~120s base
+    // ⇒ 1× ≈ 4 min, 2× ≈ 2 min (× the global PLAYBACK_SLOWDOWN). The 43-year
+    // record raced by at 60; this keeps the comet trails legible over R2 loads.
+    targetPlaybackSeconds: 120,
     // Open centered on the west coast of South America (the Humboldt Current),
     // then the globe slowly spins via the auto-rotate loop.
     initialViewState: {
