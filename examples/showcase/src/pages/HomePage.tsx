@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import DeckGL from "@deck.gl/react";
 import { _GlobeView as GlobeView } from "@deck.gl/core";
@@ -46,12 +46,26 @@ const HomePage: React.FC = () => {
 
   // The trips layer reads the live time straight from `timeController` on every
   // draw, so we deliberately don't re-render this page on every tick.
-  useEffect(() => {
+  //
+  // Don't play on mount: tiles stream from R2, and starting before the first
+  // fixes load would skip past the earliest drifters (off the west coast of S.
+  // America). Hold at timeRange.start and begin once the hero layer reports its
+  // first loaded tile (onTileLoad below), with a timeout fallback so a slow or
+  // failed load never leaves the globe frozen.
+  const startedRef = useRef(false);
+  const startPlayback = useCallback(() => {
+    if (startedRef.current) return;
+    startedRef.current = true;
     timeController.play();
+  }, [timeController]);
+
+  useEffect(() => {
+    const fallback = setTimeout(startPlayback, 4000);
     return () => {
+      clearTimeout(fallback);
       timeController.pause();
     };
-  }, [timeController]);
+  }, [startPlayback, timeController]);
 
   const views = useMemo(
     () => [new GlobeView({ id: "globe", resolution: 10 })],
@@ -102,6 +116,10 @@ const HomePage: React.FC = () => {
         timeRange: heroDataset.timeRange,
         useGlobalBounds: true,
         zoomOverride: 0,
+        // Begin the hero animation as soon as the first tiles arrive, so the
+        // earliest drifters are on screen when playback starts instead of
+        // already scrolled past while R2 was still loading.
+        onTileLoad: () => startPlayback(),
         ...(g && {
           gradientProperty: g.property,
           gradientDomain: g.domain,
@@ -119,7 +137,7 @@ const HomePage: React.FC = () => {
         pickable: false,
       }),
     ];
-  }, [heroDataset, timeController]);
+  }, [heroDataset, timeController, startPlayback]);
 
   // The curated demos for the quiet index below the hero.
   const featured = navDatasets.slice(0, 6);
