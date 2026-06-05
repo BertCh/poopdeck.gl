@@ -1,0 +1,17 @@
+{
+  // Cloudflare Worker (static assets) for the showcase SPA — deployed by the
+  // dashboard Git integration. The repo is a pnpm workspace, so `wrangler deploy`
+  // must be pointed at THIS config (it refuses to run at the workspace root):
+  //
+  //   Deploy command:  npx wrangler deploy --config examples/showcase/wrangler.jsonc
+  //   Build command:   pnpm exec turbo run build --filter=@stt/showcase
+  //   Root directory:  /            (keep at repo root so pnpm installs the workspace)
+  //
+  // "directory" is resolved relative to this file → examples/showcase/dist.
+  "name": "poopdeck",
+  "compatibility_date": "2025-06-01",
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "single-page-application"
+  }
+}

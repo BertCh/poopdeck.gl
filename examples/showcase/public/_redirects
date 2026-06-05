@@ -1,0 +1,6 @@
+# SPA fallback for Cloudflare Pages.
+# The showcase uses react-router (BrowserRouter), so deep links like
+# /story/drifters and /demo/:datasetId must serve index.html and let the client
+# router take over. Real files (hashed assets, debug.html, story/*) are matched
+# and served first; only unmatched paths fall through to this rule.
+/*    /index.html   200
