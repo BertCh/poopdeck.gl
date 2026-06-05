@@ -450,7 +450,24 @@ export class SpatiotemporalTileset {
     const wasAnimating = this.isAnimating;
     this.isAnimating = isAnimating;
     this.animationSpeed = speed;
-    
+
+    // A signed speed is an AUTHORITATIVE direction signal (e.g. a ping-pong
+    // controller reversing at a boundary), so commit it immediately and bypass
+    // the observed-delta hysteresis in updatePrefetchDirection() — that
+    // hysteresis only exists to ignore stray single-frame scrubs, not a known
+    // reversal. Without this, prefetch keeps aiming the old way for a few
+    // frames after the reverse and the play head loads into un-prefetched
+    // buckets reactively → a flash. Reset the runway so the next prefetch
+    // re-issues in the new direction at once.
+    if (speed !== 0) {
+      const dir: 1 | -1 = speed > 0 ? 1 : -1;
+      if (dir !== this.prefetchDirection) {
+        this.prefetchDirection = dir;
+        this.pendingFlipCount = 0;
+        this.lastPrefetchEndTime = undefined;
+      }
+    }
+
     if (this.currentViewport) {
       if (isAnimating && this.options.enablePrefetch) {
         // When animation starts, schedule prefetch (debounced). This used to

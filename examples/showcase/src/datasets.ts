@@ -841,6 +841,75 @@ const rawDatasets: Dataset[] = [
     },
   },
   {
+    // ── ECCO "Perpetual Ocean" — generate with:
+    //   scripts/data-generation/ecco_advect.py --input <ecco-vel-dir> \
+    //     --output examples/showcase/public/data/ecco-currents.stt
+    // See scripts/data-generation/ECCO.md. The .stt is kept local (synced to
+    // R2, not committed) like the other large archives. timeRange below tracks
+    // the ECCO year you advected (default 2017); update both if you change it.
+    id: 'ecco-currents',
+    name: 'Modeled Ocean Currents',
+    sources: ['noaa'],
+    description:
+      'Virtual particles advected through NASA ECCO surface currents, shaded ' +
+      'by current speed. The modeled companion to the drifter tracks. ' +
+      'Source: NASA/JPL ECCO V4r4.',
+    url: '/data/ecco-currents.stt',
+    type: 'trips',
+    useGlobe: true,
+    autoRotate: true,
+    globeBackgroundColor: [240, 240, 236, 255],
+    timeRange: {
+      start: 1481889600000, // 2016-12-16 — first ECCO monthly field
+      end: 1512993600000,   // 2017-12-11 — last advected vertex
+    },
+    // ~1 year over ~1 min; wide loader window + long trail so each current
+    // ribbon persists a few real seconds.
+    timeWindow: 86400000 * 30,
+    targetPlaybackSeconds: 60,
+    initialViewState: {
+      longitude: -50, // Gulf Stream / North Atlantic gyre in view at open
+      latitude: 30,
+      zoom: 1.6,
+      pitch: 0,
+      bearing: 0,
+    },
+    // Color each ribbon along its length by per-vertex current speed (m/s):
+    // slow interior waters read deep blue, swift western-boundary currents
+    // (Gulf Stream, Kuroshio, Agulhas) flare yellow→red.
+    // Monthly-mean 0.5° currents top out ~0.66 m/s (99th pct ~0.38), so the
+    // ramp domain is pinned to [0, 0.6] for full color spread on real data.
+    tripGradient: {
+      property: 'vertexValues',
+      domain: [0, 0.6], // m/s
+      colors: [
+        [12, 44, 132, 235],  // ~0 m/s    — calm interior, deep blue
+        [34, 124, 190, 235], // ~0.15 m/s — blue
+        [60, 200, 180, 235], // ~0.3 m/s  — teal
+        [250, 210, 90, 235], // ~0.45 m/s — yellow
+        [220, 50, 47, 235],  // ≥0.6 m/s  — fast jet, red
+      ],
+    },
+    colorMappingDefault: [130, 130, 130, 170],
+    opacity: 0.85,
+    tripWidth: 1.5,
+    widthMinPixels: 1,
+    widthMaxPixels: 3,
+    trailLength: 86400000 * 20, // ~20-day trail
+    fadeTrail: true,
+    zoomOverride: 0,
+    useGlobalBounds: true,
+    legend: {
+      title: 'Current speed',
+      ramps: [
+        {
+          label: '0 → 0.6 m/s',
+          colors: ['#0C2C84', '#227CBE', '#3CC8B4', '#FAD25A', '#DC322F'],
+        },
+      ],
+    },
+  },
+  {
     // ── OSM editing history — generate with:
     //   stt-generate osm-edits --source nodes --input <region.osh.pbf> \
     //     --bounds 40.49,-74.27,40.92,-73.68 --tagged-only --summary-tier \
@@ -1058,7 +1127,8 @@ export const defaultDatasetId = 'earthquake-activity';
  * any id via `getDatasetById`, so old deep-links keep working in dev.
  */
 export const SHIPPED_DATASET_IDS: string[] = [
-  'ocean-drifters',     // Ocean Currents — surface-drifter tracks
+  'ocean-drifters',     // Ocean Currents — surface-drifter tracks (observed)
+  'ecco-currents',      // Modeled Ocean Currents — ECCO advected particles
   'nyc-taxi-points',    // NYC Taxi Points — VAT head layer, full nyc-taxi-paths.stt
   'nyc-taxi-trips',     // NYC Yellow Cab Trips
   'osm-nyc-draw',       // OSM Editing — NYC (cumulative "draw")

@@ -134,11 +134,12 @@ const HomePage: React.FC = () => {
         {/* Left: content */}
         <div className="lg:w-[46%] flex flex-col justify-center px-5 sm:px-7 lg:px-12 py-8 sm:py-10 order-2 lg:order-1">
           <div className="max-w-md">
+            <span className="eyebrow">Navigation &amp; observation</span>
             <h1
               className="font-display text-2xl sm:text-3xl lg:text-[2.6rem] font-bold mt-3 mb-5"
               style={{ color: "var(--ink-900)", lineHeight: 1.1 }}
             >
-              SpatioTemporal Tiles
+              poopdeck<span style={{ color: "var(--ink-400)" }}>.gl</span>
             </h1>
 
             <p
@@ -155,16 +156,26 @@ const HomePage: React.FC = () => {
                 deck.gl
               </a>{" "}
               layers and a single-file tile format for streaming animated
-              geospatial data.
+              geospatial data — built for things that move: ships, drifters,
+              cars, and anything with a track.
             </p>
 
             <div className="flex flex-wrap gap-3">
               <Link
-                to="/demo/ocean-drifters"
+                to="/story/drifters"
                 className="inline-flex items-center gap-2 px-5 py-2.5 rounded text-sm font-medium transition-opacity"
                 style={{ background: "var(--accent)", color: "#FFFFFF" }}
                 onMouseOver={(e) => (e.currentTarget.style.opacity = "0.9")}
                 onMouseOut={(e) => (e.currentTarget.style.opacity = "1")}
+              >
+                Read the drifters story <span>→</span>
+              </Link>
+              <Link
+                to="/demo/ocean-drifters"
+                className="inline-flex items-center gap-2 px-5 py-2.5 rounded text-sm font-medium transition-colors"
+                style={{ border: "1px solid var(--hairline)", color: "var(--ink-700)" }}
+                onMouseOver={(e) => (e.currentTarget.style.borderColor = "var(--accent)")}
+                onMouseOut={(e) => (e.currentTarget.style.borderColor = "var(--hairline)")}
               >
                 View demos <span>→</span>
               </Link>

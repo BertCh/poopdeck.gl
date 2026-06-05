@@ -117,3 +117,185 @@
 .mapboxgl-ctrl-attrib a {
   color: rgba(255, 255, 255, 0.7) !important;
 }
+
+/* ════════════════════════════════════════════════════════════════════════
+   DATA STORY — editorial design system
+   Scoped under `.story-root` so the long-form serif treatment never leaks
+   into the app's UI sans. The story alternates immersive dark "globe acts"
+   (transparent text over a fixed deck.gl globe) with light "interlude"
+   sections (opaque reading panels that scroll over and hide the globe).
+   ════════════════════════════════════════════════════════════════════════ */
+
+.story-root {
+  /* Dark, oceanic palette for the immersive sections; the reading interludes
+     re-use the app's warm paper tokens. */
+  --story-abyss: #060a14;       /* deepest background behind the globe */
+  --story-deep: #0a1424;        /* panel navy */
+  --story-ink: #f4f1ea;         /* near-white on dark */
+  --story-ink-soft: #b7c0cf;    /* muted on dark */
+  --story-ink-faint: #76829a;   /* faint on dark */
+  --story-warm: #f0c14b;        /* warm SST accent (yellow) */
+  --story-hot: #dc4a3f;         /* hot SST accent (red) */
+  --story-cool: #28b4c8;        /* cool SST accent (teal) */
+  --story-paper: #fbfbf9;       /* reading-interlude background */
+
+  --serif: "Newsreader", Georgia, "Times New Roman", serif;
+  --display: "Fraunces", Georgia, serif;
+
+  font-family: var(--serif);
+  color: var(--story-ink);
+  background: var(--story-abyss);
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scroll-behavior: smooth;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .story-root { scroll-behavior: auto; }
+}
+
+/* The fixed globe stage sits behind everything; content scrolls over it. */
+.story-stage {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  background: radial-gradient(120% 120% at 50% 30%, #0d1830 0%, #060a14 70%);
+  transition: opacity 600ms ease;
+  pointer-events: none;  /* re-enabled per-act so the globe is draggable */
+}
+.story-stage--idle { opacity: 0; }
+.story-stage--live { opacity: 1; }
+.story-stage .map-viewport > div:first-child { background: transparent !important; }
+
+.story-flow {
+  position: relative;
+  z-index: 1;
+}
+
+/* ── Display type ───────────────────────────────────────────────────────── */
+.story-display {
+  font-family: var(--display);
+  font-optical-sizing: auto;
+  letter-spacing: -0.02em;
+  line-height: 1.04;
+  font-weight: 600;
+}
+.story-eyebrow {
+  font-family: var(--display);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.26em;
+  text-transform: uppercase;
+}
+
+/* ── Scrolly "act": transparent steps over the fixed globe ──────────────── */
+.story-act { position: relative; z-index: 1; }
+.story-step {
+  min-height: 92vh;
+  display: flex;
+  align-items: center;
+  padding: 12vh 0;
+}
+.story-step-card {
+  max-width: 30rem;
+  padding: 1.6rem 1.8rem;
+  border-radius: 14px;
+  background: rgba(8, 14, 26, 0.66);
+  backdrop-filter: blur(12px) saturate(140%);
+  -webkit-backdrop-filter: blur(12px) saturate(140%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 24px 70px -30px rgba(0, 0, 0, 0.9);
+  opacity: 0.25;
+  transform: translateY(22px);
+  transition: opacity 600ms ease, transform 600ms ease;
+}
+.story-step--active .story-step-card { opacity: 1; transform: translateY(0); }
+.story-step-card p { color: var(--story-ink-soft); line-height: 1.62; }
+.story-step-card p + p { margin-top: 0.85rem; }
+
+/* ── Reading interlude: opaque, covers the globe ────────────────────────── */
+.story-interlude {
+  position: relative;
+  z-index: 2;
+  background: var(--story-paper);
+  color: var(--ink-700);
+}
+.story-interlude--dark {
+  background: var(--story-deep);
+  color: var(--story-ink-soft);
+}
+.story-prose { font-family: var(--serif); font-size: 1.18rem; line-height: 1.72; }
+.story-prose p + p { margin-top: 1.15rem; }
+.story-dropcap::first-letter {
+  font-family: var(--display);
+  font-weight: 700;
+  float: left;
+  font-size: 3.6rem;
+  line-height: 0.78;
+  padding: 0.22rem 0.6rem 0 0;
+  color: var(--accent);
+}
+
+/* ── Figure + credit ────────────────────────────────────────────────────── */
+.story-figure { margin: 0; }
+.story-figure img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 10px;
+}
+.story-figcaption {
+  font-family: var(--serif);
+  font-size: 0.86rem;
+  line-height: 1.5;
+  margin-top: 0.6rem;
+  color: var(--ink-500);
+}
+.story-credit {
+  font-family: var(--display);
+  font-size: 0.66rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-400);
+}
+.story-interlude--dark .story-figcaption { color: var(--story-ink-soft); }
+.story-interlude--dark .story-credit { color: var(--story-ink-faint); }
+
+/* ── People cards ───────────────────────────────────────────────────────── */
+.story-person {
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: 14px;
+  padding: 1.4rem;
+  height: 100%;
+  transition: transform 200ms ease, box-shadow 200ms ease;
+}
+.story-person:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 18px 40px -24px rgba(0,0,0,0.35);
+}
+.story-monogram {
+  width: 56px; height: 56px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--display); font-weight: 700; font-size: 1.25rem;
+  color: #fff; letter-spacing: 0.01em; flex: none;
+}
+
+/* ── Timeline ───────────────────────────────────────────────────────────── */
+.story-timeline-rail { background: linear-gradient(90deg, var(--story-cool), var(--story-warm), var(--story-hot)); }
+
+/* ── Stat counters ──────────────────────────────────────────────────────── */
+.story-stat-num {
+  font-family: var(--display);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+  line-height: 1;
+}
+
+/* ── SST gradient chip (re-used in legend + diagram) ────────────────────── */
+.story-sst-ramp {
+  background: linear-gradient(90deg, #2C5AC8, #28B4C8, #FAD25A, #F48C3C, #DC322F);
+  border-radius: 999px;
+}

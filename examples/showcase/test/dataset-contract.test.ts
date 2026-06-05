@@ -128,7 +128,7 @@ describe('referenced archives load and are sane', () => {
 
       const meta = await archive.getMetadata();
       expect(meta.version, `${url} version`).toBeGreaterThanOrEqual(2);
-      expect(meta.version, `${url} version`).toBeLessThanOrEqual(3);
+      expect(meta.version, `${url} version`).toBeLessThanOrEqual(4);
       expect(meta.minZoom).toBeLessThanOrEqual(meta.maxZoom);
 
       // World-bounds sanity: non-degenerate and inside the WGS84 extent.

@@ -4,6 +4,7 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import Layout from "./components/Layout";
 import HomePage from "./pages/HomePage";
 import DemoPage from "./pages/DemoPage";
+import DrifterStory from "./pages/DrifterStory";
 import { datasets } from "./datasets";
 import "./index.css";
 
@@ -47,6 +48,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
       <Routes>
         <Route path="/" element={<Layout />}>
           <Route index element={<HomePage />} />
+          <Route path="story/drifters" element={<DrifterStory />} />
           <Route path="demo/:datasetId" element={<DemoPage />} />
           {/* Backwards-compat: old `/maplibre/:id` deep-links route to the
               same dataset; the renderer toggle on DemoPage replaces the

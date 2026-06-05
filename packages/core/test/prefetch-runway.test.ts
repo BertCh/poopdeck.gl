@@ -129,6 +129,38 @@ describe('SpatiotemporalTileset prefetch runway', () => {
 
     tileset.finalize();
   });
+
+  it('commits prefetch direction immediately from a signed speed (no hysteresis)', () => {
+    const tileset = new SpatiotemporalTileset({
+      minZoom: 0,
+      maxZoom: 12,
+      maxCacheSize: 300,
+      enablePrefetch: true,
+      refinementStrategy: 'no-overlap',
+      getAvailableTiles: async (b, z, r) => availableTiles(b, z, r),
+      getTileData: async (id: TileId) => fakeTile(id),
+      getTileDataBatch: async (batch: TileId[]) => batch.map(fakeTile),
+    });
+
+    // Default is forward.
+    expect(tileset.getPrefetchDirection()).toBe(1);
+
+    // A negative speed (a ping-pong controller reversing at a boundary) is an
+    // authoritative signal: one call flips direction, no DIRECTION_FLIP_THRESHOLD
+    // frames of observed backward deltas required.
+    tileset.setAnimationState(true, -500);
+    expect(tileset.getPrefetchDirection()).toBe(-1);
+
+    // ...and back to forward, again in a single call.
+    tileset.setAnimationState(true, 500);
+    expect(tileset.getPrefetchDirection()).toBe(1);
+
+    // A zero speed (pause) leaves the committed direction untouched.
+    tileset.setAnimationState(false, 0);
+    expect(tileset.getPrefetchDirection()).toBe(1);
+
+    tileset.finalize();
+  });
 });
 
 describe('SpatiotemporalTileset byte-aware parent-fallback skip', () => {

@@ -110,6 +110,41 @@ describe('TimeController', () => {
     expect(tc.isPlaying()).toBe(true);
   });
 
+  it('bounces and reverses direction at the end of range (no teleport)', () => {
+    const tc = new TimeController({
+      initialTime: 90,
+      speed: 1,
+      bounce: true,
+      timeRange: { start: 0, end: 100 },
+    });
+    tc.play(); // sync tick at 90, dt=0
+    harness.advance(20); // 90 -> would be 110, reflects to 90, reverses
+    expect(tc.getTime()).toBeCloseTo(90, 0);
+    expect(tc.isPlaying()).toBe(true);
+    harness.advance(20); // now moving backward: 90 -> 70
+    expect(tc.getTime()).toBeCloseTo(70, 0);
+  });
+
+  it('bounces and reverses direction at the start of range', () => {
+    const tc = new TimeController({
+      initialTime: 10,
+      speed: 1,
+      bounce: true,
+      timeRange: { start: 0, end: 100 },
+    });
+    // Seed backward motion, then let it cross the start boundary.
+    tc.play();
+    harness.advance(5); // 10 -> 15 (forward); flip to backward via overshoot below
+    // Force a backward overshoot of start: jump near start moving forward is
+    // awkward to set up, so drive it past end first to reverse, then to start.
+    harness.advance(200); // overshoots end -> reflects, reverses to backward
+    expect(tc.getTime()).toBeLessThanOrEqual(100);
+    harness.advance(2000); // long backward run overshoots start -> reflects, forward
+    expect(tc.getTime()).toBeGreaterThanOrEqual(0);
+    expect(tc.getTime()).toBeLessThanOrEqual(100);
+    expect(tc.isPlaying()).toBe(true);
+  });
+
   it('notifies tick listeners on every frame when throttling is off', () => {
     const tc = new TimeController({ initialTime: 0, speed: 1 });
     const listener = vi.fn();

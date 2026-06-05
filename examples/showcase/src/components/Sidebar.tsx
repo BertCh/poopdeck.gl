@@ -17,12 +17,12 @@ const Sidebar: React.FC<SidebarProps> = ({ onNavigate }) => {
       {/* Wordmark */}
       <div className="shrink-0 px-5 pt-6 pb-5">
         <NavLink to="/" onClick={onNavigate} className="block">
-          <span className="eyebrow">SpatioTemporal Tiles</span>
+          <span className="eyebrow">Navigation &amp; observation</span>
           <h1
             className="font-display text-xl font-bold mt-1 leading-tight"
             style={{ color: 'var(--ink-900)' }}
           >
-            stt
+            poopdeck<span style={{ color: 'var(--ink-400)' }}>.gl</span>
           </h1>
         </NavLink>
       </div>

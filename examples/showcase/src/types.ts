@@ -365,12 +365,21 @@ export interface SummaryToggleOption {
 }
 
 /**
+ * Global playback slowdown. Datasets are served from R2 (remote) in production,
+ * which is slower than local disk, so we stretch every example's playback to
+ * give tile loading time to keep up — smoother motion, fewer gaps/flashes.
+ * 1 = play at the per-dataset target; 2 = half speed. Tune to taste.
+ */
+export const PLAYBACK_SLOWDOWN = 2;
+
+/**
  * Calculate animation speed based on time range and target playback duration.
  * Returns the number of simulation milliseconds per real millisecond.
  */
 export function calculateAnimationSpeed(dataset: Dataset): number {
   const timeRangeDuration = dataset.timeRange.end - dataset.timeRange.start;
-  const targetSeconds = dataset.targetPlaybackSeconds ?? 30; // Default to 30 seconds
+  // Default to 30 seconds, then stretch by the global slowdown factor.
+  const targetSeconds = (dataset.targetPlaybackSeconds ?? 30) * PLAYBACK_SLOWDOWN;
   const targetMs = targetSeconds * 1000;
   return timeRangeDuration / targetMs;
 }

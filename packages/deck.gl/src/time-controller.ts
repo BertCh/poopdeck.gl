@@ -13,6 +13,22 @@ export interface TimeControllerOptions {
   speed?: number;
   /** Loop animation */
   loop?: boolean;
+  /**
+   * Ping-pong at the range boundaries instead of jumping. When `true`, hitting
+   * `timeRange.end`/`start` reflects the overshoot back into the range and
+   * reverses playback direction, so time stays CONTINUOUS across the boundary.
+   * Takes precedence over `loop`.
+   *
+   * Why it exists: a hard loop-wrap teleports `currentTime` by the full range
+   * span in one frame. For trail/window-based layers that one-frame jump both
+   * (a) shifts the resident tile window past its own width → a mass evict+reload
+   * blink, and (b) pops the rendered `[t-trail, t]` segment set to a disjoint
+   * set → a visible layer flash. Bouncing keeps the window sliding smoothly so
+   * neither happens. The cost is that the animation reverses at the boundary —
+   * fine for an ambient, slow drift; not what you want for directional replay.
+   * @default false
+   */
+  bounce?: boolean;
   /** Time range */
   timeRange?: { start: number; end: number };
   /**
@@ -39,6 +55,7 @@ export class TimeController {
   private playing: boolean = false;
   private speed: number = 1.0;
   private loop: boolean = false;
+  private bounce: boolean = false;
   private timeRange?: { start: number; end: number };
   private listeners: Set<TimeUpdateCallback> = new Set();
   private playStateListeners: Set<PlayStateCallback> = new Set();
@@ -52,6 +69,7 @@ export class TimeController {
     this.currentTime = options.initialTime ?? Date.now();
     this.speed = options.speed ?? 1.0;
     this.loop = options.loop ?? false;
+    this.bounce = options.bounce ?? false;
     this.timeRange = options.timeRange;
     this.tickThrottleMs = options.tickThrottleMs ?? 0;
   }
@@ -182,18 +200,34 @@ export class TimeController {
 
     // Handle time range boundaries
     if (this.timeRange) {
-      if (this.currentTime > this.timeRange.end) {
-        if (this.loop) {
-          this.currentTime = this.timeRange.start;
+      const { start, end } = this.timeRange;
+      if (this.currentTime > end) {
+        if (this.bounce) {
+          // Reflect the overshoot back into the range and reverse direction so
+          // time stays continuous (no teleport → no window evict / ribbon pop).
+          this.currentTime = Math.max(start, end - (this.currentTime - end));
+          this.speed = -Math.abs(this.speed);
+          // Announce the reversal so downstream tile loaders can re-aim their
+          // prefetch immediately. Without this the tileset only infers the new
+          // direction from observed time deltas (with a multi-frame hysteresis),
+          // so it keeps prefetching the OLD direction for a moment and the
+          // tiles the play head now moves into load reactively → a flash.
+          this.notifyPlayStateListeners();
+        } else if (this.loop) {
+          this.currentTime = start;
         } else {
-          this.currentTime = this.timeRange.end;
+          this.currentTime = end;
           this.pause();
         }
-      } else if (this.currentTime < this.timeRange.start) {
-        if (this.loop) {
-          this.currentTime = this.timeRange.end;
+      } else if (this.currentTime < start) {
+        if (this.bounce) {
+          this.currentTime = Math.min(end, start + (start - this.currentTime));
+          this.speed = Math.abs(this.speed);
+          this.notifyPlayStateListeners();
+        } else if (this.loop) {
+          this.currentTime = end;
         } else {
-          this.currentTime = this.timeRange.start;
+          this.currentTime = start;
           this.pause();
         }
       }
