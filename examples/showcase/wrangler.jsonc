@@ -8,7 +8,10 @@
   //   Root directory:  /            (keep at repo root so pnpm installs the workspace)
   //
   // "directory" is resolved relative to this file → examples/showcase/dist.
-  "name": "poopdeck",
+  // NOTE: must match the Worker the Git integration created (named after the
+  // repo), otherwise `wrangler deploy` targets a different worker and nothing
+  // serves. The public site is poopdeck.gl regardless of this internal name.
+  "name": "spatiotemporal-tiles",
   "compatibility_date": "2025-06-01",
   "assets": {
     "directory": "./dist",
