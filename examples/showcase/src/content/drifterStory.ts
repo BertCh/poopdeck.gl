@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────────────────────────────────
-// "A Planet That Reports On Itself" — the NOAA Global Drifter Program story.
+// "A Planet That Helps Record Itself" — the NOAA Global Drifter Program story.
 //
 // All narrative facts here are drawn from sourced research (NOAA AOML, Scripps
 // LDL, Lumpkin & Pazos 2007, Lumpkin et al. 2017, Elipot et al. 2016, and the
@@ -134,7 +134,11 @@ export const ACT_BUILDUP: StoryAct = {
         mode: 'sweep',
         sweep: { start: DATA_START, end: D(2005, 8, 18) },
         trailDays: 110,
-        speedDays: 200,
+        // The fastest beat by far — it compresses ~26 years. Even after the
+        // global PLAYBACK_SLOWDOWN this lands near the demos' proven R2-safe
+        // base rate (~65 sim-days/real-s) so the sweep doesn't outrun loading;
+        // it now plays over ~2.5 min rather than ~45 s.
+        speedDays: 130,
       },
     },
     {

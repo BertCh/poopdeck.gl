@@ -196,7 +196,7 @@ const DrifterStory: React.FC = () => {
               >
                 A planet that
                 <br />
-                reports on itself
+                helps record itself
               </h1>
               <p
                 className="mt-6"
@@ -650,12 +650,12 @@ const DrifterStory: React.FC = () => {
                 }}
               >
                 Globe rendered from the NOAA Global Drifter Program trajectory
-                archive using poopdeck.gl. Imagery: NOAA AOML and
-                NASA’s Scientific Visualization Studio (public domain);
-                Franklin–Folger chart, Library of Congress; HMS Challenger, NOAA
-                archive; Argos diagram, Vsatinet / Wikimedia (CC BY 4.0);
-                Franklin portrait by Joseph-Siffred Duplessis (public domain).
-                Attribution does not imply endorsement by NOAA or NASA.
+                archive using deck.gl. Imagery: NOAA AOML and NASA’s
+                Scientific Visualization Studio (public domain); Franklin–Folger
+                chart, Library of Congress; HMS Challenger, NOAA archive; Argos
+                diagram, Vsatinet / Wikimedia (CC BY 4.0); Franklin portrait by
+                Joseph-Siffred Duplessis (public domain). Attribution does not
+                imply endorsement by NOAA or NASA.
               </p>
             </div>
           </div>

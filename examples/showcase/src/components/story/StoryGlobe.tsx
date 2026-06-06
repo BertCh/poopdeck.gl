@@ -9,6 +9,7 @@ import {
 } from '@deck.gl/layers';
 import { AnimatedTripsLayer, TimeController } from '@stt/deck.gl';
 import { getDatasetById } from '../../datasets';
+import { PLAYBACK_SLOWDOWN } from '../../types';
 import { DAY, DATA_START, DATA_END, type GlobeFocus, type GlobeMarker } from '../../content/drifterStory';
 
 // One full-sphere quad gives the globe a dark "ocean" body that also occludes
@@ -181,7 +182,12 @@ const StoryGlobe: React.FC<StoryGlobeProps> = ({ focus, active }) => {
   // applied separately and immediately (it never causes a flash).
   const applyFocusTime = useCallback(
     (f: GlobeFocus) => {
-      const speed = (f.speedDays ?? 8) * (DAY / 1000); // sim-ms per real-ms
+      // Route every beat through the same global PLAYBACK_SLOWDOWN the demos use:
+      // in production the tiles stream from R2 (slower than local disk), so the
+      // hand-tuned per-beat `speedDays` would race ahead of loading and the
+      // playhead would outrun the tiles. Dividing here stretches all beats
+      // uniformly (preserving their relative pacing) so loading keeps up.
+      const speed = ((f.speedDays ?? 8) * (DAY / 1000)) / PLAYBACK_SLOWDOWN; // sim-ms per real-ms
       timeController.setSpeed(speed);
       if (f.mode === 'sweep' && f.sweep) {
         timeController.setTimeRange(f.sweep);
