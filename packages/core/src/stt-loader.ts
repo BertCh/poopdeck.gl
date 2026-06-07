@@ -3,19 +3,22 @@
 // Copyright (c) @stt/core contributors
 
 /**
- * SttLoader — loaders.gl-conformant Loader for STT archives.
+ * SttLoader — loaders.gl-conformant Loader for STT datasets.
  *
  * Structurally matches `LoaderWithParser` from `@loaders.gl/loader-utils`
  * (v4.x) without taking a hard dep on it, so consumers using deck.gl /
  * loaders.gl can do `TileLayer({ loaders: [SttLoader] })` while consumers
  * that just want `STTArchive` directly pay nothing extra.
  *
- * `parse(arrayBuffer)` returns a `ParsedSTT` containing the parsed metadata
- * and index plus an `STTArchive` instance that reads tiles from the in-memory
- * buffer (via a synthetic Range-aware fetch). This is the right shape for
- * Node-side tools, drag-drop workflows, and tests — code that already has
- * the whole archive in memory. Production streaming consumers should
- * instantiate `STTArchive` against a URL instead.
+ * IMPORTANT — packed format: STT is no longer a single `.stt` blob. A dataset
+ * is now a multi-object packed directory (`manifest.json` + `index/<hash>.sttd`
+ * + `packs/<hash>.sttp`; see `docs/spec/stt-packed-format.md`). A lone
+ * `ArrayBuffer` therefore does NOT map to a readable dataset — the reader needs
+ * a manifest URL, not one buffer. So the whole-buffer `parse(arrayBuffer)` path
+ * is obsolete and throws a clear, actionable error directing callers to
+ * `new STTArchive(manifestUrl)`. The remaining value of this object is the
+ * loaders.gl Loader *shape* (name/id/extensions/mimeTypes) for registration;
+ * actual reading goes through `STTArchive` / `STTArchive.asTileSource()`.
  *
  * See loaders.gl's loader-object-format spec for the field contract:
  *   https://loaders.gl/docs/specifications/loader-object-format
@@ -27,13 +30,17 @@ import type { ArchiveIndex, ArchiveMetadata } from './types';
 /** STT magic prefix used for `tests` content-sniffing. */
 const STT_MAGIC = new Uint8Array([0x53, 0x54, 0x54]); // "STT"
 
-/** Result of `SttLoader.parse(arrayBuffer)`. */
+/**
+ * Result shape retained for type compatibility. The packed format no longer
+ * produces this from a single buffer (`parse` throws — see the file docstring);
+ * it's kept so downstream type imports don't break and so a future packed-aware
+ * loader could populate it from a manifest URL.
+ */
 export interface ParsedSTT {
   metadata: ArchiveMetadata;
   index: ArchiveIndex;
   /**
-   * Reader bound to the in-memory archive bytes. Use it to pull individual
-   * tile payloads — same API as a URL-backed `STTArchive`.
+   * Reader bound to the packed dataset. Same API as a URL-backed `STTArchive`.
    */
   archive: STTArchive;
 }
@@ -67,70 +74,34 @@ export interface SttLoaderShape<DataT = unknown> {
   ) => DataT;
 }
 
-/** Build a synthetic `fetch` that serves Range requests from `bytes`. */
-function bufferRangeFetch(bytes: Uint8Array): typeof fetch {
-  const total = bytes.byteLength;
-  const body = (start: number, end: number): ArrayBuffer => {
-    // Copy into a fresh ArrayBuffer — `bytes.buffer` may be a
-    // SharedArrayBuffer (newer TS lib defs reject that for `Response`).
-    const len = end - start;
-    const out = new ArrayBuffer(len);
-    new Uint8Array(out).set(bytes.subarray(start, end));
-    return out;
-  };
-  return async (_input: RequestInfo | URL, init?: RequestInit) => {
-    const headers = new Headers(init?.headers);
-    const range = headers.get('Range') || headers.get('range');
-    if (!range) {
-      return new Response(body(0, total), { status: 200 });
-    }
-    const m = /bytes=(\d+)-(\d+)/.exec(range);
-    if (!m) return new Response(body(0, total), { status: 200 });
-    const start = Number(m[1]);
-    const endExclusive = Math.min(Number(m[2]) + 1, total);
-    const buf = body(start, endExclusive);
-    return new Response(buf, {
-      status: 206,
-      headers: {
-        'Content-Range': `bytes ${start}-${endExclusive - 1}/${total}`,
-        'Content-Length': String(buf.byteLength),
-      },
-    });
-  };
-}
-
-async function parseSttArchive(
-  arrayBuffer: ArrayBuffer,
-  url?: string,
-): Promise<ParsedSTT> {
-  const bytes = new Uint8Array(arrayBuffer);
-  if (
-    bytes.byteLength < STT_MAGIC.length ||
-    bytes[0] !== STT_MAGIC[0] ||
-    bytes[1] !== STT_MAGIC[1] ||
-    bytes[2] !== STT_MAGIC[2]
-  ) {
-    throw new Error('SttLoader: not an STT archive (bad magic)');
-  }
-  const archive = new STTArchive({
-    url: url ?? 'memory://stt-archive',
-    fetch: bufferRangeFetch(bytes),
-  });
-  const [metadata, index] = await Promise.all([
-    archive.getMetadata(),
-    archive.getIndex(),
-  ]);
-  return { metadata, index, archive };
-}
+/**
+ * Error thrown by the obsolete whole-buffer `parse(arrayBuffer)` path.
+ *
+ * Under the packed format a single buffer is NOT a dataset — the reader needs
+ * a `manifest.json` URL that resolves its `index/` + `packs/` siblings. The
+ * message is deliberately actionable: it names the replacement API so a caller
+ * porting from the single-file format knows exactly what to do.
+ */
+const PACKED_PARSE_ERROR =
+  'SttLoader.parse(arrayBuffer) is no longer supported: STT is now a packed ' +
+  'multi-object format (manifest.json + index/ + packs/), so a single buffer ' +
+  'is not a readable dataset. Construct `new STTArchive(manifestUrl)` ' +
+  '(pointing at the dataset\'s manifest.json) instead of parsing a single buffer.';
 
 /**
- * loaders.gl-conformant Loader for STT archives.
+ * loaders.gl-conformant Loader for STT datasets.
  *
- * Use with deck.gl's `loaders` prop:
+ * The Loader OBJECT (name/id/extensions/mimeTypes/binary/tests) is still useful
+ * for registration with deck.gl / loaders.gl, but reading goes through
+ * `STTArchive` against a manifest URL:
  * ```ts
- * import { SttLoader } from '@stt/core';
- * new TileLayer({ data: url, loaders: [SttLoader] });
+ * import { STTArchive } from '@stt/core';
+ * const archive = new STTArchive('/data/<stem>/manifest.json');
+ * new TileLayer({ ...archive.asTileSource() });
  * ```
+ *
+ * `parse(arrayBuffer)` REJECTS: a lone buffer can't represent the packed
+ * multi-object format (see {@link PACKED_PARSE_ERROR}).
  */
 export const SttLoader: SttLoaderShape<ParsedSTT> = {
   name: 'STT',
@@ -146,6 +117,10 @@ export const SttLoader: SttLoaderShape<ParsedSTT> = {
   binary: true,
   options: { stt: {} },
   tests: [STT_MAGIC.buffer.slice(0)],
-  parse: (arrayBuffer, _options, context) =>
-    parseSttArchive(arrayBuffer, context?.url),
+  // The packed format has no single-buffer representation. Reject clearly
+  // instead of silently mis-reading bytes. (async so callers `await`/`.catch`
+  // uniformly.)
+  parse: async () => {
+    throw new Error(PACKED_PARSE_ERROR);
+  },
 };

@@ -1,0 +1,45 @@
+{
+  "format": "stt-packed",
+  "formatVersion": 1,
+  "compression": "zstd",
+  "directory": {
+    "key": "index/243f7cd36ac15cf623fb1b399eb42d30.sttd",
+    "length": 297,
+    "directoryVersion": 5
+  },
+  "packs": [
+    {
+      "key": "packs/742926040135830b2f6f5e730afe856f.sttp",
+      "length": 3859
+    },
+    {
+      "key": "packs/edca74fcffdd19c16ce8eba9010853f0.sttp",
+      "length": 1675
+    }
+  ],
+  "metadata": {
+    "name": "packed-golden",
+    "description": "Deterministic STT packed-format cross-impl fixture",
+    "attribution": "",
+    "bounds": {
+      "min_lon": -180.0,
+      "min_lat": -85.0511,
+      "max_lon": 180.0,
+      "max_lat": 85.0511
+    },
+    "time_range": {
+      "start": 0,
+      "end": 0
+    },
+    "min_zoom": 10,
+    "max_zoom": 10,
+    "tile_count": 0,
+    "feature_count": 0,
+    "layers": [
+      "default"
+    ],
+    "properties": {},
+    "temporal_bucket_ms": 1000,
+    "summary_tier": null
+  }
+}

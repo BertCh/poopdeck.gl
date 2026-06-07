@@ -376,6 +376,12 @@ export interface TileEntry {
   y: number;
   timeStart: number;
   timeEnd: number;
+  /**
+   * Which packed-format object (`manifest.packs[packId]`) holds this tile's
+   * blob. `offset`/`length` are relative to that pack. Always `0` for an
+   * archive read from a single implicit pack (v4 directory, single-file).
+   */
+  packId: number;
   offset: number;
   length: number;
   featureCount: number;

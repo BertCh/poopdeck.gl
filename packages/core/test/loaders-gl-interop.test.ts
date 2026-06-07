@@ -14,32 +14,17 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { STTArchive } from '../src/archive';
 import { SttLoader } from '../src/stt-loader';
+import { packedFromSingleFile, packedFetch } from './helpers/packed-fixture';
 
 const FIXTURE = fileURLToPath(new URL('./fixtures/sample.stt', import.meta.url));
-const FIXTURE_BYTES = readFileSync(FIXTURE);
+const FIXTURE_BYTES = new Uint8Array(readFileSync(FIXTURE));
+// The reader now consumes the packed format; transcode the single-file fixture
+// to an in-memory packed dataset for the `asTileSource()` conformance tests.
+const DATASET = packedFromSingleFile(FIXTURE_BYTES);
 
-function rangeFetch(): typeof fetch {
-  return (async (_url: string, init?: RequestInit) => {
-    const range = (init?.headers as Record<string, string>)?.Range;
-    const m = /bytes=(\d+)-(\d+)/.exec(range ?? '');
-    if (!m) {
-      return {
-        ok: true,
-        status: 200,
-        statusText: 'OK',
-        arrayBuffer: async () => bufferToArrayBuffer(FIXTURE_BYTES),
-      };
-    }
-    const start = Number(m[1]);
-    const end = Math.min(Number(m[2]), FIXTURE_BYTES.length - 1);
-    const slice = FIXTURE_BYTES.subarray(start, end + 1);
-    return {
-      ok: true,
-      status: 206,
-      statusText: 'Partial Content',
-      arrayBuffer: async () => bufferToArrayBuffer(slice),
-    };
-  }) as unknown as typeof fetch;
+/** A fresh packed archive over the transcoded sample fixture. */
+function sampleArchive(): STTArchive {
+  return new STTArchive({ url: DATASET.manifestUrl, fetch: packedFetch(DATASET) });
 }
 
 function bufferToArrayBuffer(buf: Uint8Array): ArrayBuffer {
@@ -73,27 +58,22 @@ describe('SttLoader (loaders.gl LoaderWithParser conformance)', () => {
     expect(badStarts).toBe(false);
   });
 
-  it('parse(arrayBuffer) yields metadata + index + a usable archive', async () => {
+  // NOTE: `SttLoader.parse(arrayBuffer)` consumed a WHOLE single-file `.stt`
+  // blob. The packed format is multi-object (manifest + index + packs), so a
+  // lone ArrayBuffer no longer maps to a readable dataset — the reader needs a
+  // manifest URL, not one blob. Until `SttLoader` is reworked for the packed
+  // format (out of scope here), the whole-buffer parse path is obsolete: it
+  // surfaces a clear "not a packed manifest" error rather than silently
+  // mis-reading the binary. See the orchestrator notes.
+  it('parse(arrayBuffer) of a single-file blob rejects under the packed format', async () => {
     const buf = bufferToArrayBuffer(FIXTURE_BYTES);
-    const parsed = await SttLoader.parse(buf);
-    expect(parsed.metadata.minZoom).toBeLessThanOrEqual(parsed.metadata.maxZoom);
-    expect(parsed.index.tiles.length).toBeGreaterThan(0);
-    const entry = parsed.index.tiles[0];
-    const tile = await parsed.archive.getTile({
-      z: entry.zoom,
-      x: entry.x,
-      y: entry.y,
-      t: entry.timeStart,
-    });
-    expect(tile).not.toBeNull();
-    expect(tile!.layers.length).toBeGreaterThan(0);
-    parsed.archive.finalize();
+    await expect(SttLoader.parse(buf)).rejects.toThrow(/manifest/i);
   });
 });
 
 describe('STTArchive.asTileSource() (loaders.gl TileSource conformance)', () => {
   it('getMetadata() returns the loaders.gl-shaped metadata', async () => {
-    const archive = new STTArchive({ url: 'mem://sample.stt', fetch: rangeFetch() });
+    const archive = sampleArchive();
     const source = archive.asTileSource();
     const meta = await source.getMetadata();
     expect(meta.format).toBe('stt');
@@ -105,7 +85,7 @@ describe('STTArchive.asTileSource() (loaders.gl TileSource conformance)', () => 
   });
 
   it('getTile({x,y,z}) picks the archive-midpoint time by default', async () => {
-    const archive = new STTArchive({ url: 'mem://sample.stt', fetch: rangeFetch() });
+    const archive = sampleArchive();
     const index = await archive.getIndex();
     const e = index.tiles[0];
     const source = archive.asTileSource();
@@ -118,7 +98,7 @@ describe('STTArchive.asTileSource() (loaders.gl TileSource conformance)', () => 
   });
 
   it('getTileData honours an explicit userData.t override', async () => {
-    const archive = new STTArchive({ url: 'mem://sample.stt', fetch: rangeFetch() });
+    const archive = sampleArchive();
     const index = await archive.getIndex();
     const e = index.tiles[0];
     const source = archive.asTileSource();

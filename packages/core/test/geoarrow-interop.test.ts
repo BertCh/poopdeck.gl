@@ -18,38 +18,22 @@ import { Field, FixedSizeList, Float, Precision } from 'apache-arrow';
 import { STTArchive } from '../src/archive';
 import { toGeoArrowTable, decodeTile } from '../src/tile';
 import { GeometryType } from '../src/types';
+import { packedFromSingleFile, packedFetch } from './helpers/packed-fixture';
 
+// The committed fixture is a single-file v4 archive; the reader now consumes
+// the packed format, so transcode it to an in-memory packed dataset once.
 const FIXTURE = fileURLToPath(new URL('./fixtures/sample.stt', import.meta.url));
-const FIXTURE_BYTES = readFileSync(FIXTURE);
+const FIXTURE_BYTES = new Uint8Array(readFileSync(FIXTURE));
+const DATASET = packedFromSingleFile(FIXTURE_BYTES);
 
-function rangeFetch(bytes: Uint8Array): typeof fetch {
-  return (async (_url: string, init?: RequestInit) => {
-    const range = (init?.headers as Record<string, string>)?.Range;
-    const m = /bytes=(\d+)-(\d+)/.exec(range ?? '');
-    if (!m) {
-      return {
-        ok: true,
-        status: 200,
-        statusText: 'OK',
-        arrayBuffer: async () => bytes.buffer.slice(0),
-      } as unknown as Response;
-    }
-    const start = Number(m[1]);
-    const end = Math.min(Number(m[2]), bytes.length - 1);
-    const slice = bytes.subarray(start, end + 1);
-    return {
-      ok: true,
-      status: 206,
-      statusText: 'Partial Content',
-      arrayBuffer: async () =>
-        slice.buffer.slice(slice.byteOffset, slice.byteOffset + slice.byteLength),
-    } as unknown as Response;
-  }) as unknown as typeof fetch;
+/** A fresh packed archive over the transcoded sample fixture. */
+function sampleArchive(): STTArchive {
+  return new STTArchive({ url: DATASET.manifestUrl, fetch: packedFetch(DATASET) });
 }
 
 describe('GeoArrow interop', () => {
   it('Layer.geometryExtensionName is populated from the geometry field', async () => {
-    const archive = new STTArchive({ url: 'mem://sample.stt', fetch: rangeFetch(FIXTURE_BYTES) });
+    const archive = sampleArchive();
     const index = await archive.getIndex();
     const entry = index.tiles[0];
     const tile = await archive.getTile({
@@ -77,7 +61,7 @@ describe('GeoArrow interop', () => {
   });
 
   it('toGeoArrowTable returns a Table whose geometry field carries ARROW:extension:name', async () => {
-    const archive = new STTArchive({ url: 'mem://sample.stt', fetch: rangeFetch(FIXTURE_BYTES) });
+    const archive = sampleArchive();
     const index = await archive.getIndex();
     const entry = index.tiles[0];
     const tile = await archive.getTile({
@@ -149,7 +133,7 @@ describe('GeoArrow interop', () => {
     // a tile from the fixture and checking the property is populated —
     // the fixture is v3 so this is a "still works" check rather than a
     // strict v2 reproduction.
-    const archive = new STTArchive({ url: 'mem://sample.stt', fetch: rangeFetch(FIXTURE_BYTES) });
+    const archive = sampleArchive();
     return archive.getIndex().then(async (index) => {
       const entry = index.tiles[0];
       const tile = await archive.getTile({
@@ -167,7 +151,7 @@ describe('decodeTile guards', () => {
   it('returns layers with arrowTable populated via the inline path', () => {
     // Re-decode the first tile via the public `decodeTile` entry point to
     // exercise the path used by InlineTileDecoder.
-    const archive = new STTArchive({ url: 'mem://sample.stt', fetch: rangeFetch(FIXTURE_BYTES) });
+    const archive = sampleArchive();
     return archive.getIndex().then(async (index) => {
       const entry = index.tiles[0];
       const tile = await archive.getTile({

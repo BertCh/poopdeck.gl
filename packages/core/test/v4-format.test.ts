@@ -1,169 +1,171 @@
 /**
- * v4 archive format: header parsing and the dictionary slot.
+ * Packed-format manifest parsing + validation.
  *
- * The full end-to-end contract test lives in `archive.test.ts` and relies on a
- * Rust-built fixture; these tests target what we can verify without the Rust
- * toolchain — that the TS reader recognises a synthetic v4 header, surfaces the
- * dictionary slot, and rejects bad magic / unsupported versions.
+ * Replaces the old v4 single-file header tests (magic / version byte /
+ * dictionary slot) — the reader no longer reads a 64-byte header or a shared
+ * dictionary. These tests cover the manifest the reader DOES read now: format
+ * discriminator, pack table, folded metadata, and clear errors for malformed
+ * or non-packed manifests. The full Rust↔TS contract lives in
+ * `archive.test.ts` (transcoded fixture) and `packed-golden.test.ts` (real
+ * Rust-produced packed dataset).
  */
 
 import { describe, it, expect } from 'vitest';
 import { STTArchive } from '../src/archive';
-import { Compression } from '../src/types';
+import { encodeDirectory } from '../src/directory';
 
-const HEADER_SIZE = 64;
-const VERSION = 4;
-
-function buildHeader(opts: {
-  version: number;
-  compression: number;
-  indexOffset: number;
-  indexLength: number;
-  metadataOffset: number;
-  metadataLength: number;
-  dictionaryOffset?: number;
-  dictionaryLength?: number;
-}): Uint8Array {
-  const buf = new ArrayBuffer(HEADER_SIZE);
-  const view = new DataView(buf);
-  view.setUint8(0, 0x53);
-  view.setUint8(1, 0x54);
-  view.setUint8(2, 0x54);
-  view.setUint8(3, opts.version);
-  view.setUint8(4, opts.version);
-  view.setUint8(5, opts.compression);
-  view.setBigUint64(6, BigInt(opts.indexOffset), true);
-  view.setBigUint64(14, BigInt(opts.indexLength), true);
-  view.setBigUint64(22, BigInt(opts.metadataOffset), true);
-  view.setBigUint64(30, BigInt(opts.metadataLength), true);
-  view.setBigUint64(38, BigInt(opts.dictionaryOffset ?? 0), true);
-  view.setBigUint64(46, BigInt(opts.dictionaryLength ?? 0), true);
-  return new Uint8Array(buf);
+function bufferToArrayBuffer(buf: Uint8Array): ArrayBuffer {
+  return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
 }
 
 /**
- * Build a tiny "archive" containing just a header + JSON metadata (an empty
- * directory), and serve it via a range-fetch shim. These tests never decode
- * the directory; they only confirm the header / metadata / dictionary paths.
+ * Build a minimal in-memory packed dataset (one tile, one pack, no compression)
+ * with an overridable manifest, and a `fetch` shim serving it. The single tile
+ * carries a 1-byte raw payload — enough for metadata/index assertions; the
+ * tile-decode path is covered elsewhere.
  */
-function buildMinimalArchive(opts: {
-  version: number;
-  compression: number;
-  dictionaryLength?: number;
-}): Uint8Array {
-  const metadata = new TextEncoder().encode(
-    JSON.stringify({
+function buildPackedDataset(manifestOverrides: Record<string, unknown> = {}): {
+  url: string;
+  fetch: typeof fetch;
+} {
+  const blob = new Uint8Array([0x42]);
+  const dir = encodeDirectory([
+    {
+      zoom: 5, x: 1, y: 2, timeStart: 0, timeEnd: 1,
+      packId: 0, offset: 0, length: blob.length, uncompressedSize: blob.length,
+      featureCount: 1, hilbert: 0, crc32c: 0,
+    },
+  ]);
+  const objects = new Map<string, Uint8Array>();
+  objects.set('packs/p0.sttp', blob);
+  objects.set('index/dir.sttd', dir);
+  const manifest = {
+    format: 'stt-packed',
+    formatVersion: 1,
+    compression: 'none',
+    directory: { key: 'index/dir.sttd', length: dir.length, directoryVersion: 5 },
+    packs: [{ key: 'packs/p0.sttp', length: blob.length }],
+    metadata: {
       name: 'test',
       bounds: { min_lon: -180, min_lat: -85, max_lon: 180, max_lat: 85 },
       time_range: { start: 0, end: 1 },
-    }),
-  );
-  const dictBytes = new Uint8Array(opts.dictionaryLength ?? 0);
-  for (let i = 0; i < dictBytes.length; i++) dictBytes[i] = (i + 1) & 0xff;
+      min_zoom: 5,
+      max_zoom: 5,
+      temporal_bucket_ms: 1000,
+    },
+    ...manifestOverrides,
+  };
+  objects.set('manifest.json', new TextEncoder().encode(JSON.stringify(manifest)));
 
-  // Layout: [header] [dictionary?] [empty directory] [metadata]
-  const dictionaryOffset = opts.dictionaryLength ? HEADER_SIZE : 0;
-  const indexOffset = HEADER_SIZE + dictBytes.length;
-  const indexLength = 0;
-  const metadataOffset = indexOffset + indexLength;
-  const metadataLength = metadata.length;
-
-  const header = buildHeader({
-    version: opts.version,
-    compression: opts.compression,
-    indexOffset,
-    indexLength,
-    metadataOffset,
-    metadataLength,
-    dictionaryOffset,
-    dictionaryLength: opts.dictionaryLength,
-  });
-
-  const total = new Uint8Array(metadataOffset + metadataLength);
-  total.set(header, 0);
-  total.set(dictBytes, dictionaryOffset || HEADER_SIZE);
-  total.set(metadata, metadataOffset);
-  return total;
-}
-
-function rangeFetch(bytes: Uint8Array): typeof fetch {
-  return (async (_url: string, init?: RequestInit) => {
-    const range = (init?.headers as Record<string, string>)?.Range;
+  const url = 'mem://data/test/manifest.json';
+  const base = 'mem://data/test/';
+  const fetchFn = (async (u: string, init?: RequestInit) => {
+    const key = u.startsWith(base) ? u.slice(base.length) : u;
+    const bytes = objects.get(key);
+    if (!bytes) {
+      return { ok: false, status: 404, statusText: 'Not Found', arrayBuffer: async () => new ArrayBuffer(0) };
+    }
+    const range = (init?.headers as Record<string, string> | undefined)?.Range;
     const m = /bytes=(\d+)-(\d+)/.exec(range ?? '');
     if (!m) {
-      return {
-        ok: true,
-        status: 200,
-        statusText: 'OK',
-        arrayBuffer: async () => bytes.buffer.slice(0),
-      };
+      return { ok: true, status: 200, statusText: 'OK', arrayBuffer: async () => bufferToArrayBuffer(bytes) };
     }
     const start = Number(m[1]);
     const end = Math.min(Number(m[2]), bytes.length - 1);
     const slice = bytes.subarray(start, end + 1);
-    return {
-      ok: true,
-      status: 206,
-      statusText: 'Partial Content',
-      arrayBuffer: async () =>
-        slice.buffer.slice(slice.byteOffset, slice.byteOffset + slice.byteLength),
-    };
+    return { ok: true, status: 206, statusText: 'Partial Content', arrayBuffer: async () => bufferToArrayBuffer(slice) };
   }) as unknown as typeof fetch;
+  return { url, fetch: fetchFn };
 }
 
-describe('v4 archive header', () => {
-  it('parses a v4 header with zstd compression', async () => {
-    const bytes = buildMinimalArchive({ version: VERSION, compression: 2 });
-    const archive = new STTArchive({ url: 'mem://v4.stt', fetch: rangeFetch(bytes) });
+describe('packed-format manifest', () => {
+  it('parses a packed manifest and folds the metadata in', async () => {
+    const { url, fetch } = buildPackedDataset();
+    const archive = new STTArchive({ url, fetch });
     const meta = await archive.getMetadata();
-    expect(meta.version).toBe(VERSION);
+    expect(meta.name).toBe('test');
+    // `version` surfaces the manifest schema version (formatVersion).
+    expect(meta.version).toBe(1);
+    expect(meta.minZoom).toBe(5);
+    expect(meta.temporalBucketMs).toBe(1000);
   });
 
-  it('rejects an unknown magic', async () => {
-    const bytes = buildMinimalArchive({ version: VERSION, compression: 2 });
-    bytes[0] = 0x42; // corrupt the magic
-    const archive = new STTArchive({ url: 'mem://bad.stt', fetch: rangeFetch(bytes) });
-    await expect(archive.getMetadata()).rejects.toThrow(/magic/i);
+  it('exposes pack ids on the decoded directory', async () => {
+    const { url, fetch } = buildPackedDataset();
+    const archive = new STTArchive({ url, fetch });
+    const index = await archive.getIndex();
+    expect(index.tiles.length).toBe(1);
+    expect(index.tiles[0].packId).toBe(0);
   });
 
-  it('rejects an unsupported version', async () => {
-    const bytes = buildMinimalArchive({ version: 7, compression: 0 });
-    const archive = new STTArchive({ url: 'mem://future.stt', fetch: rangeFetch(bytes) });
-    await expect(archive.getMetadata()).rejects.toThrow(/version/i);
+  it('rejects a manifest whose format is not stt-packed', async () => {
+    const { url, fetch } = buildPackedDataset({ format: 'something-else' });
+    const archive = new STTArchive({ url, fetch });
+    await expect(archive.getMetadata()).rejects.toThrow(/packed manifest/i);
   });
 
-  it('also rejects the now-removed v3 format', async () => {
-    const bytes = buildMinimalArchive({ version: 3, compression: 2 });
-    const archive = new STTArchive({ url: 'mem://v3.stt', fetch: rangeFetch(bytes) });
-    await expect(archive.getMetadata()).rejects.toThrow(/version/i);
+  it('rejects a manifest that is not valid JSON', async () => {
+    // Serve raw non-JSON bytes for manifest.json.
+    const url = 'mem://data/bad/manifest.json';
+    const fetchFn = (async () => {
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        arrayBuffer: async () => bufferToArrayBuffer(new Uint8Array([0x53, 0x54, 0x54, 0x04])),
+      };
+    }) as unknown as typeof fetch;
+    const archive = new STTArchive({ url, fetch: fetchFn });
+    await expect(archive.getMetadata()).rejects.toThrow(/manifest/i);
   });
 
-  it('exposes the dictionary slot when present', async () => {
-    const bytes = buildMinimalArchive({
-      version: VERSION,
-      compression: 2,
-      dictionaryLength: 24,
-    });
-    const archive = new STTArchive({ url: 'mem://dict.stt', fetch: rangeFetch(bytes) });
-    const dict = await archive.getDictionary();
-    expect(dict).not.toBeNull();
-    expect(dict!.length).toBe(24);
-    for (let i = 0; i < dict!.length; i++) {
-      expect(dict![i]).toBe((i + 1) & 0xff);
-    }
+  it('rejects a manifest missing the directory pointer or pack table', async () => {
+    const { url, fetch } = buildPackedDataset({ directory: undefined, packs: undefined });
+    const archive = new STTArchive({ url, fetch });
+    await expect(archive.getMetadata()).rejects.toThrow(/directory pointer or pack table/i);
   });
 
-  it('returns null when an archive has no dictionary', async () => {
-    const bytes = buildMinimalArchive({ version: VERSION, compression: 2 });
-    const archive = new STTArchive({ url: 'mem://nodict.stt', fetch: rangeFetch(bytes) });
-    const dict = await archive.getDictionary();
-    expect(dict).toBeNull();
-  });
-
-  it('parses a zstd compression code', async () => {
-    const bytes = buildMinimalArchive({ version: VERSION, compression: 2 });
-    const archive = new STTArchive({ url: 'mem://v4zstd.stt', fetch: rangeFetch(bytes) });
-    await archive.getMetadata();
-    expect(Compression.Zstd).toBe(2);
+  it('rejects a tile that references a non-existent pack', async () => {
+    // A directory entry referencing packId 5 with only one pack present.
+    const blob = new Uint8Array([0x42]);
+    const dir = encodeDirectory([
+      {
+        zoom: 5, x: 1, y: 2, timeStart: 0, timeEnd: 1,
+        packId: 5, offset: 0, length: blob.length, uncompressedSize: blob.length,
+        featureCount: 1, hilbert: 0, crc32c: 0,
+      },
+    ]);
+    const objects = new Map<string, Uint8Array>();
+    objects.set('packs/p0.sttp', blob);
+    objects.set('index/dir.sttd', dir);
+    objects.set(
+      'manifest.json',
+      new TextEncoder().encode(
+        JSON.stringify({
+          format: 'stt-packed',
+          formatVersion: 1,
+          compression: 'none',
+          directory: { key: 'index/dir.sttd', length: dir.length, directoryVersion: 5 },
+          packs: [{ key: 'packs/p0.sttp', length: blob.length }],
+          metadata: { name: 't', min_zoom: 5, max_zoom: 5, temporal_bucket_ms: 1000 },
+        }),
+      ),
+    );
+    const base = 'mem://data/badpack/';
+    const fetchFn = (async (u: string, init?: RequestInit) => {
+      const key = u.startsWith(base) ? u.slice(base.length) : u;
+      const bytes = objects.get(key)!;
+      const range = (init?.headers as Record<string, string> | undefined)?.Range;
+      const m = /bytes=(\d+)-(\d+)/.exec(range ?? '');
+      if (!m) return { ok: true, status: 200, arrayBuffer: async () => bufferToArrayBuffer(bytes) };
+      const slice = bytes.subarray(Number(m[1]), Math.min(Number(m[2]), bytes.length - 1) + 1);
+      return { ok: true, status: 206, arrayBuffer: async () => bufferToArrayBuffer(slice) };
+    }) as unknown as typeof fetch;
+    const archive = new STTArchive({ url: base + 'manifest.json', fetch: fetchFn });
+    const index = await archive.getIndex();
+    const e = index.tiles[0];
+    await expect(
+      archive.getTile({ z: e.zoom, x: e.x, y: e.y, t: e.timeStart }),
+    ).rejects.toThrow(/pack 5/);
   });
 });

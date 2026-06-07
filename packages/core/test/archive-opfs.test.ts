@@ -15,52 +15,56 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { STTArchive } from '../src/archive';
 import { OpfsTileCache } from '../src/opfs-cache';
+import {
+  packedFromSingleFile,
+  type InMemoryPackedDataset,
+} from './helpers/packed-fixture';
 
 const FIXTURE = fileURLToPath(new URL('./fixtures/sample.stt', import.meta.url));
-const FIXTURE_BYTES = readFileSync(FIXTURE);
+const FIXTURE_BYTES = new Uint8Array(readFileSync(FIXTURE));
+// The reader consumes the packed format; transcode the single-file fixture. The
+// OPFS fingerprint now derives from the manifest's content-addressed directory
+// key (stable across packs), NOT a per-response ETag.
+const DATASET = packedFromSingleFile(FIXTURE_BYTES, { manifestUrl: 'mem://data/sample/manifest.json' });
 
 function bufferToArrayBuffer(buf: Uint8Array): ArrayBuffer {
   return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
 }
 
 /**
- * Range-request fetch shim that ALSO returns an `ETag` header on every reply,
- * so the archive captures a stable fingerprint and the OPFS key is usable
- * after the first HTTP call. The count of fetches is exposed on `.calls`
- * so tests can prove cache hits skip the network entirely.
+ * A counting `fetch` over an in-memory packed dataset. `.calls` counts ALL
+ * HTTP calls (manifest + directory whole-GETs and pack range requests); tests
+ * snapshot it after `getIndex()` so the delta isolates tile-body fetches.
  */
-function rangeFetch(etag = 'W/"sample-v1"'): { fetch: typeof fetch; stats: { calls: number } } {
+function packedCountingFetch(
+  ds: InMemoryPackedDataset,
+): { fetch: typeof fetch; stats: { calls: number } } {
   const stats = { calls: 0 };
-  const fn = (async (_url: string, init?: RequestInit) => {
+  const slash = ds.manifestUrl.lastIndexOf('/');
+  const base = slash >= 0 ? ds.manifestUrl.slice(0, slash + 1) : '';
+  const fn = (async (url: string, init?: RequestInit) => {
     stats.calls++;
-    const range = (init?.headers as Record<string, string>)?.Range;
+    const key = url.startsWith(base) ? url.slice(base.length) : url;
+    const bytes = ds.objects.get(key)!;
+    const range = (init?.headers as Record<string, string> | undefined)?.Range;
     const m = /bytes=(\d+)-(\d+)/.exec(range ?? '');
     if (!m) {
-      return {
-        ok: true,
-        status: 200,
-        statusText: 'OK',
-        headers: {
-          get: (n: string) => (n.toLowerCase() === 'etag' ? etag : null),
-        },
-        arrayBuffer: async () => bufferToArrayBuffer(FIXTURE_BYTES),
-      };
+      return { ok: true, status: 200, statusText: 'OK', arrayBuffer: async () => bufferToArrayBuffer(bytes) };
     }
     const start = Number(m[1]);
-    const end = Math.min(Number(m[2]), FIXTURE_BYTES.length - 1);
-    const slice = FIXTURE_BYTES.subarray(start, end + 1);
-    return {
-      ok: true,
-      status: 206,
-      statusText: 'Partial Content',
-      headers: {
-        get: (n: string) => (n.toLowerCase() === 'etag' ? etag : null),
-      },
-      arrayBuffer: async () => bufferToArrayBuffer(slice),
-    };
+    const end = Math.min(Number(m[2]), bytes.length - 1);
+    const slice = bytes.subarray(start, end + 1);
+    return { ok: true, status: 206, statusText: 'Partial Content', arrayBuffer: async () => bufferToArrayBuffer(slice) };
   }) as unknown as typeof fetch;
   return { fetch: fn, stats };
 }
+
+/** Backwards-compatible alias: the OPFS tests serve the transcoded fixture. */
+function rangeFetch(): { fetch: typeof fetch; stats: { calls: number } } {
+  return packedCountingFetch(DATASET);
+}
+
+const MANIFEST_URL = DATASET.manifestUrl;
 
 /** Same in-memory OPFS shim as opfs-cache.test.ts. */
 class MemDirectoryHandle {
@@ -163,7 +167,7 @@ describe('STTArchive + OpfsTileCache integration', () => {
     try {
       const cache = new OpfsTileCache();
       const { fetch: f } = rangeFetch();
-      const a = new STTArchive({ url: 'mem://sample.stt', fetch: f, opfsCacheImpl: cache });
+      const a = new STTArchive({ url: MANIFEST_URL, fetch: f, opfsCacheImpl: cache });
       const index = await a.getIndex();
       const e = index.tiles[0];
       const tile = await a.getTile({ z: e.zoom, x: e.x, y: e.y, t: e.timeStart });
@@ -186,7 +190,7 @@ describe('STTArchive + OpfsTileCache integration', () => {
       {
         const { fetch: f } = rangeFetch();
         const a = new STTArchive({
-          url: 'mem://sample.stt',
+          url: MANIFEST_URL,
           fetch: f,
           opfsCacheImpl: sharedCache,
         });
@@ -199,7 +203,7 @@ describe('STTArchive + OpfsTileCache integration', () => {
       // Warm pass — same OPFS cache, fresh archive (simulates page reload).
       const { fetch: f2, stats: s2 } = rangeFetch();
       const b = new STTArchive({
-        url: 'mem://sample.stt',
+        url: MANIFEST_URL,
         fetch: f2,
         opfsCacheImpl: sharedCache,
       });
@@ -222,12 +226,23 @@ describe('STTArchive + OpfsTileCache integration', () => {
     installShim();
     try {
       const sharedCache = new OpfsTileCache();
+      // Two "deploys" of the SAME URL whose tiles changed → distinct
+      // content-addressed directory keys → distinct OPFS fingerprints. (The
+      // fingerprint is the manifest directory key, not a per-response ETag.)
+      const v1 = packedFromSingleFile(FIXTURE_BYTES, {
+        manifestUrl: 'mem://sample/manifest.json',
+        directoryKey: 'index/v1.sttd',
+      });
+      const v2 = packedFromSingleFile(FIXTURE_BYTES, {
+        manifestUrl: 'mem://sample/manifest.json',
+        directoryKey: 'index/v2-redeployed.sttd',
+      });
 
-      // Populate with the v1 ETag.
+      // Populate OPFS with the v1 deploy.
       {
-        const { fetch: f } = rangeFetch('W/"v1"');
+        const { fetch: f } = packedCountingFetch(v1);
         const a = new STTArchive({
-          url: 'mem://sample.stt',
+          url: v1.manifestUrl,
           fetch: f,
           opfsCacheImpl: sharedCache,
         });
@@ -237,10 +252,11 @@ describe('STTArchive + OpfsTileCache integration', () => {
         await new Promise((r) => setTimeout(r, 50));
       }
 
-      // Same URL, different ETag — should miss OPFS and re-fetch the tile.
-      const { fetch: f2, stats: s2 } = rangeFetch('W/"v2-redeployed"');
+      // Same URL, redeployed (different directory hash) — should miss OPFS and
+      // re-fetch the tile.
+      const { fetch: f2, stats: s2 } = packedCountingFetch(v2);
       const b = new STTArchive({
-        url: 'mem://sample.stt',
+        url: v2.manifestUrl,
         fetch: f2,
         opfsCacheImpl: sharedCache,
       });
@@ -264,7 +280,7 @@ describe('STTArchive + OpfsTileCache integration', () => {
     const { fetch: f } = rangeFetch();
     // Don't pass opfsCacheImpl, don't pass opfsCache=true. The archive should
     // default to "OPFS off" in this environment and still work normally.
-    const a = new STTArchive({ url: 'mem://sample.stt', fetch: f });
+    const a = new STTArchive({ url: MANIFEST_URL, fetch: f });
     const idx = await a.getIndex();
     const e = idx.tiles[0];
     const tile = await a.getTile({ z: e.zoom, x: e.x, y: e.y, t: e.timeStart });

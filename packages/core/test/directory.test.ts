@@ -1,9 +1,12 @@
 /**
- * v4 directory codec (TypeScript): round-trip + bounds validation.
+ * Directory codec (TypeScript): round-trip + bounds validation.
  *
  * The production writer is Rust; `encodeDirectory` exists for tests/tooling.
- * These tests pin the TS encode↔decode round-trip and the bounds checks that
- * stop an out-of-range value silently truncating on the Rust (`as u32`) side.
+ * The TS encoder emits v5 (per-run pack_id + pack-relative offsets); the
+ * decoder reads both v4 (single-file, one implicit pack) and v5. These tests
+ * pin the encode↔decode round-trip, the pack-id column, and the bounds checks
+ * that stop an out-of-range value silently truncating on the Rust (`as u32`)
+ * side.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -21,7 +24,100 @@ const base: DirectoryEncodeEntry = {
   featureCount: 0,
 };
 
-describe('v4 directory codec (TS)', () => {
+describe('directory codec (TS)', () => {
+  it('defaults packId to 0 and emits a v5 directory', () => {
+    const bytes = encodeDirectory([base]);
+    expect(bytes[0]).toBe(5); // DIRECTORY_VERSION
+    expect(decodeDirectory(bytes)[0].packId).toBe(0);
+  });
+
+  it('round-trips entries across multiple packs with pack-relative offsets', () => {
+    // Three packs, each with two distinct contiguous blobs starting at offset 0.
+    const entries: DirectoryEncodeEntry[] = [];
+    for (let p = 0; p < 3; p++) {
+      let off = 0;
+      for (let i = 0; i < 2; i++) {
+        const len = 40 + i;
+        entries.push({
+          ...base,
+          zoom: 9,
+          x: p * 10 + i,
+          y: 0,
+          hilbert: p * 100 + i, // monotone in directory order
+          timeStart: i * 1000,
+          timeEnd: i * 1000 + 500,
+          packId: p,
+          offset: off,
+          length: len,
+          uncompressedSize: len * 2,
+          featureCount: i,
+          crc32c: 0x2000 + p * 100 + i,
+        });
+        off += len;
+      }
+    }
+    const back = decodeDirectory(encodeDirectory(entries));
+    expect(new Set(back.map((e) => e.packId))).toEqual(new Set([0, 1, 2]));
+    // Each pack's first blob sits at offset 0 (pack-relative reset).
+    for (const p of [0, 1, 2]) {
+      expect(back.some((e) => e.packId === p && e.offset === 0)).toBe(true);
+    }
+    // Byte-for-byte the packId/offset/length survive.
+    for (const e of entries) {
+      const got = back.find((b) => b.x === e.x && b.timeStart === e.timeStart)!;
+      expect(got.packId).toBe(e.packId);
+      expect(got.offset).toBe(e.offset);
+      expect(got.length).toBe(e.length);
+    }
+  });
+
+  it('does NOT RLE-collapse byte-identical blobs in different packs', () => {
+    // Same blob fields, different packs → must stay two distinct entries each
+    // addressing its own pack (pack_id is part of the run identity).
+    const shared = {
+      ...base, zoom: 9, y: 0, hilbert: 0,
+      timeStart: 0, timeEnd: 1, offset: 0, length: 50, uncompressedSize: 100,
+      featureCount: 1, crc32c: 0x1234,
+    };
+    const back = decodeDirectory(
+      encodeDirectory([
+        { ...shared, x: 1, packId: 0 },
+        { ...shared, x: 2, packId: 1 },
+      ]),
+    );
+    expect(back.map((e) => e.packId).sort()).toEqual([0, 1]);
+    expect(back.every((e) => e.offset === 0)).toBe(true);
+  });
+
+  it('decodes a legacy v4 directory (no pack_id column) as packId 0', () => {
+    // Hand-craft a v4 buffer: version byte 4, then the v4 per-run columns
+    // (run_len, offset flag, length, uncompressed, crc) with NO pack_id column.
+    const buf: number[] = [];
+    const putU = (v: number) => {
+      for (;;) {
+        const b = v & 0x7f;
+        v >>>= 7;
+        if (v !== 0) buf.push(b | 0x80);
+        else { buf.push(b); break; }
+      }
+    };
+    const putI = (v: number) => putU(v < 0 ? -v * 2 - 1 : v * 2); // zig-zag
+    buf.push(4); // DIRECTORY_VERSION = 4
+    putU(1); // N
+    putU(1); // R
+    // one entry's key columns: Δzoom Δhilbert Δx Δy Δtime_start (zig-zag),
+    // duration (zig-zag), feature_count (uvarint), bucket-flag (0)
+    putI(7); putI(0); putI(3); putI(4); putI(1000);
+    putI(500); putU(2); putU(0);
+    // v4 per-run columns: run_len, offset flag (0 = contiguous from 0), length,
+    // uncompressed, crc (4 LE bytes). NO pack_id column.
+    putU(1); putU(0); putU(64); putU(128);
+    buf.push(0xef, 0xbe, 0xad, 0xde);
+    const back = decodeDirectory(Uint8Array.from(buf));
+    expect(back.length).toBe(1);
+    expect(back[0]).toMatchObject({ zoom: 7, x: 3, y: 4, timeStart: 1000, timeEnd: 1500, packId: 0, offset: 0, length: 64 });
+  });
+
   it('round-trips entries including the temporal bucket', () => {
     const entries: DirectoryEncodeEntry[] = [
       {

@@ -43,9 +43,12 @@ function osmYearColors(startYear: number, endYear: number): Record<string, Color
 const OSM_YEAR_COLORS = osmYearColors(2007, 2026);
 
 /**
- * Base URL for hosted `.stt` tile archives. When `VITE_DATA_BASE_URL` is set
- * (e.g. an R2 custom domain like `https://tiles.example.com`), every dataset's
- * `/data/x.stt` path is rewritten to `<base>/data/x.stt`. Unset → served from
+ * Base URL for hosted STT tile datasets. Each dataset is now a packed DIRECTORY
+ * (`/data/<stem>/manifest.json` + `index/` + `packs/`), not a single `.stt`
+ * file, so a `url` points at the dataset's `manifest.json`. When
+ * `VITE_DATA_BASE_URL` is set (e.g. an R2 custom domain like
+ * `https://tiles.example.com`), every dataset's `/data/<stem>/manifest.json`
+ * path is rewritten to `<base>/data/<stem>/manifest.json`. Unset → served from
  * the showcase origin (local `public/data`), so behavior is unchanged by default.
  */
 const DATA_BASE_URL: string = ((import.meta as any).env?.VITE_DATA_BASE_URL ?? '')
@@ -63,7 +66,7 @@ const rawDatasets: Dataset[] = [
     description:
       'H3 hex-bin density of 1.36M NYC taxi pickups and dropoffs (Jan 1-2, 2015). ' +
       'Toggle pickup vs dropoff.',
-    url: '/data/nyc-taxi-od-summary.stt',
+    url: '/data/nyc-taxi-od-summary/manifest.json',
     type: 'summary',
     timeRange: {
       start: 1420070400000, // 2015-01-01 00:00:00 UTC
@@ -133,7 +136,7 @@ const rawDatasets: Dataset[] = [
     name: 'Earthquakes',
     sources: ['usgs'],
     description: 'Global M4.0+ events, 2020–2024. Source: USGS.',
-    url: '/data/earthquakes-v2.stt',
+    url: '/data/earthquakes-v2/manifest.json',
     type: 'point',
     timeRange: {
       start: Date.parse('2020-01-01T00:00:00Z'),
@@ -186,7 +189,7 @@ const rawDatasets: Dataset[] = [
     name: 'Flight Traffic',
     sources: ['opensky'],
     description: 'Aircraft positions over 24 hours. Source: OpenSky.',
-    url: '/data/flights.stt',
+    url: '/data/flights/manifest.json',
     type: 'point',
     timeRange: {
       start: 1578268800000,  // 2020-01-06 00:00 UTC
@@ -235,7 +238,7 @@ const rawDatasets: Dataset[] = [
     id: 'flight-paths',
     name: 'Flight Paths',
     description: 'Synthetic flight tracks',
-    url: '/data/lines-v2.stt',
+    url: '/data/lines-v2/manifest.json',
     type: 'path',
     timeRange: {
       start: 1600000000000,
@@ -263,7 +266,7 @@ const rawDatasets: Dataset[] = [
     id: 'flight-trips',
     name: 'Flight Trips',
     description: 'Animated 3-D flight trajectories. Source: OpenSky.',
-    url: '/data/adsb-paths.stt',
+    url: '/data/adsb-paths/manifest.json',
     type: 'trips',
     timeRange: {
       start: 1578268800000,  // 2020-01-06 00:00:00 UTC
@@ -297,7 +300,7 @@ const rawDatasets: Dataset[] = [
     name: 'Hurricane Tracks',
     sources: ['noaa'],
     description: 'Atlantic-basin storms, 2020–2023. Source: IBTrACS.',
-    url: '/data/hurricanes.stt',
+    url: '/data/hurricanes/manifest.json',
     type: 'point',
     timeRange: {
       start: Date.parse('2020-05-16T18:00:00.000Z'),
@@ -317,7 +320,7 @@ const rawDatasets: Dataset[] = [
     id: 'nyc-rideshare',
     name: 'NYC Yellow Taxi',
     description: 'NYC TLC taxi pickups and dropoffs — 1M points (Jan 1, 2015, first 2.8h)',
-    url: '/data/nyc-rideshare.stt',
+    url: '/data/nyc-rideshare/manifest.json',
     type: 'point',
     timeRange: {
       start: 1420070400000,  // 2015-01-01 00:00:00 UTC (first chronological trip)
@@ -364,7 +367,7 @@ const rawDatasets: Dataset[] = [
     id: 'nyc-taxi-od-heatmap',
     name: 'NYC Pickups vs Dropoffs',
     description: 'Density heatmap of NYC taxi pickups (green) vs dropoffs (red), Jan 1, 2015',
-    url: '/data/nyc-rideshare.stt',
+    url: '/data/nyc-rideshare/manifest.json',
     type: 'heatmap',
     timeRange: {
       start: 1420070400000,  // 2015-01-01 00:00:00 UTC
@@ -436,7 +439,7 @@ const rawDatasets: Dataset[] = [
       'Animated NYC taxi vehicle positions across Manhattan. Source: NYC TLC.',
     // VAT head animation on the FULL trip archive (same source as the trips
     // demo) — one moving dot per active trip, no separate derived points file.
-    url: '/data/nyc-taxi-paths.stt',
+    url: '/data/nyc-taxi-paths/manifest.json',
     type: 'vat',
     timeRange: {
       start: 1420070400000,  // 2015-01-01 00:00:00 UTC
@@ -470,7 +473,7 @@ const rawDatasets: Dataset[] = [
     id: 'nyc-taxi-paths',
     name: 'NYC Taxi Paths',
     description: 'NYC taxi trip paths — 500K trips (Jan 1-2, 2015)',
-    url: '/data/nyc-taxi-paths.stt',
+    url: '/data/nyc-taxi-paths/manifest.json',
     type: 'path',
     timeRange: {
       start: 1420070400000,  // 2015-01-01 00:00:00 UTC
@@ -501,7 +504,7 @@ const rawDatasets: Dataset[] = [
     name: 'NYC Yellow Cab Trips',
     sources: ['tlc'],
     description: 'Animated yellow-cab trip lines across Manhattan. Source: NYC TLC.',
-    url: '/data/nyc-taxi-paths.stt',
+    url: '/data/nyc-taxi-paths/manifest.json',
     type: 'vat',
     timeRange: {
       start: 1420070400000,  // 2015-01-01 00:00:00 UTC
@@ -544,7 +547,7 @@ const rawDatasets: Dataset[] = [
     id: 'nyc-taxi-vat',
     name: 'NYC Yellow Cabs',
     description: 'Animated yellow-cab positions across Manhattan. Source: NYC TLC.',
-    url: '/data/nyc-taxi-paths.stt',
+    url: '/data/nyc-taxi-paths/manifest.json',
     type: 'vat',
     timeRange: {
       start: 1420070400000,
@@ -580,7 +583,7 @@ const rawDatasets: Dataset[] = [
     name: 'US Maritime Traffic',
     sources: ['noaa'],
     description: 'NOAA Marine Cadastre AIS — 15.9K vessels over 24h (Jan 9, 2023)',
-    url: '/data/ais-all-us.stt',
+    url: '/data/ais-all-us/manifest.json',
     type: 'point',
     timeRange: {
       start: 1673222400000, // 2023-01-09T00:00:00Z (from actual data)
@@ -631,7 +634,7 @@ const rawDatasets: Dataset[] = [
     id: 'wildfires',
     name: 'US Wildfires',
     description: 'NIFC wildfire perimeters — 1000+ acres (2020-2023)',
-    url: '/data/wildfires.stt',
+    url: '/data/wildfires/manifest.json',
     type: 'polygon',
     timeRange: {
       start: 1590969600000, // 2020-06-01T00:00:00Z
@@ -660,7 +663,7 @@ const rawDatasets: Dataset[] = [
     id: 'satellites',
     name: 'Satellite Orbits',
     description: '~12,700 low-Earth-orbit satellites from CelesTrak over 24h (2026-05-31). Defaults to the globe; flip to flat at top-left.',
-    url: '/data/satellites.stt',
+    url: '/data/satellites/manifest.json',
     type: 'trips', // Use trips layer for animated satellite movement
     useGlobe: true, // Render on 3D globe for orbital visualization
     // MUST bracket the simulation window baked into satellites.stt. The archive
@@ -715,7 +718,7 @@ const rawDatasets: Dataset[] = [
       'Animal tracking studies from GBIF, coloured by taxonomic class; ' +
       'multi-year tracks folded into one year. Data: GBIF.org (CC0 / CC-BY / ' +
       'CC-BY-NC).',
-    url: '/data/animals.stt',
+    url: '/data/animals/manifest.json',
     type: 'trips',
     timeRange: {
       start: Date.parse('2024-01-01T00:00:00Z'),
@@ -778,7 +781,7 @@ const rawDatasets: Dataset[] = [
     description:
       'Surface-buoy drift tracks, shaded by sea-surface temperature. ' +
       'Source: NOAA Global Drifter Program.',
-    url: '/data/drifters.stt',
+    url: '/data/drifters/manifest.json',
     type: 'trips',
     // Render on the 3D globe and slowly auto-rotate (DemoPage drives the spin
     // when useGlobe && autoRotate). `useGlobalBounds` loads the whole planet's
@@ -857,7 +860,7 @@ const rawDatasets: Dataset[] = [
       'Virtual particles advected through NASA ECCO surface currents, shaded ' +
       'by current speed. The modeled companion to the drifter tracks. ' +
       'Source: NASA/JPL ECCO V4r4.',
-    url: '/data/ecco-currents.stt',
+    url: '/data/ecco-currents/manifest.json',
     type: 'trips',
     useGlobe: true,
     autoRotate: true,
@@ -924,7 +927,7 @@ const rawDatasets: Dataset[] = [
     description:
       'OpenStreetMap node creations in New York City, coloured by year. ' +
       '© OpenStreetMap contributors.',
-    url: '/data/osm-nyc-nodes.stt',
+    url: '/data/osm-nyc-nodes/manifest.json',
     type: 'point',
     // Force raw points at every zoom: the archive carries an H3 summary tier
     // (built for the overview), but that hexbin overlay obscures the
@@ -981,7 +984,7 @@ const rawDatasets: Dataset[] = [
     description:
       'H3 hex-bin density of New York City OpenStreetMap changesets, 2007→2025. ' +
       'Toggle total edits vs sessions. © OpenStreetMap contributors (ODbL).',
-    url: '/data/osm-nyc-changesets.stt',
+    url: '/data/osm-nyc-changesets/manifest.json',
     type: 'summary',
     timeRange: {
       start: Date.parse('2007-01-01T00:00:00Z'),
@@ -1054,7 +1057,7 @@ const rawDatasets: Dataset[] = [
     description:
       'New York City OpenStreetMap changesets coloured by editor (Potlatch, ' +
       'JOSM, iD, StreetComplete…), 2007→2025. © OpenStreetMap contributors (ODbL).',
-    url: '/data/osm-nyc-changesets.stt',
+    url: '/data/osm-nyc-changesets/manifest.json',
     type: 'point',
     timeRange: {
       start: Date.parse('2007-01-01T00:00:00Z'),

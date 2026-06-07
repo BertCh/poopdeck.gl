@@ -19,12 +19,15 @@
 import { describe, it, expect } from 'vitest';
 import { STTArchive } from '../src/archive';
 import { encodeDirectory } from '../src/directory';
+import { packedFetch, type InMemoryPackedDataset } from './helpers/packed-fixture';
 
 // ---------------------------------------------------------------------------
-// Helpers: build a minimal v3 archive in memory
+// Helpers: build a minimal PACKED archive in memory
+//
+// The reader consumes the packed format (manifest + index + packs). These
+// LOD-dispatch tests only walk the directory, so a single pack of 1-byte dummy
+// blobs is enough; the v5 directory carries the temporal_bucket_ms column.
 // ---------------------------------------------------------------------------
-
-const HEADER_SIZE = 64;
 
 interface SynthTile {
   zoom: number;
@@ -35,6 +38,8 @@ interface SynthTile {
   bucketMs?: number; // when set, the synth index emits the column
 }
 
+let synthSeq = 0;
+
 function buildSyntheticArchive(opts: {
   tiles: SynthTile[];
   metadata: any;
@@ -43,22 +48,25 @@ function buildSyntheticArchive(opts: {
    * entirely — simulates an archive built before the LOD scaffold.
    */
   writeBucketColumn: boolean;
-}): Uint8Array {
+}): InMemoryPackedDataset {
   const tiles = opts.tiles;
   // Dummy tile blobs — the reader path under test only walks the directory.
   // Each tile has a 1-byte payload so offsets stay distinct.
   const tileBlobs: Uint8Array[] = tiles.map((_, i) => new Uint8Array([i & 0xff]));
 
-  let cursor = HEADER_SIZE;
+  // One pack holding all blobs back-to-back; the directory's offsets are
+  // pack-relative (packId 0).
+  let cursor = 0;
   const blobOffsets: number[] = [];
   for (let i = 0; i < tileBlobs.length; i++) {
     blobOffsets.push(cursor);
     cursor += tileBlobs[i].byteLength;
   }
-  const indexOffset = cursor;
+  const pack = new Uint8Array(cursor);
+  for (let i = 0; i < tileBlobs.length; i++) pack.set(tileBlobs[i], blobOffsets[i]);
 
-  // Build the v4 directory. `writeBucketColumn === false` simulates a tile
-  // with no temporal-LOD tag (presence flag 0 → temporalBucketMs undefined).
+  // Build the v5 directory. `writeBucketColumn === false` simulates a tile with
+  // no temporal-LOD tag (presence flag 0 → temporalBucketMs undefined).
   const indexBytes = encodeDirectory(
     tiles.map((t, i) => ({
       zoom: t.zoom,
@@ -66,6 +74,7 @@ function buildSyntheticArchive(opts: {
       y: t.y,
       timeStart: t.timeStart,
       timeEnd: t.timeEnd,
+      packId: 0,
       offset: blobOffsets[i],
       length: tileBlobs[i].byteLength,
       uncompressedSize: tileBlobs[i].byteLength,
@@ -75,57 +84,27 @@ function buildSyntheticArchive(opts: {
       temporalBucketMs: opts.writeBucketColumn ? t.bucketMs : undefined,
     })),
   );
-  // Tail: metadata JSON.
-  const metadataOffset = indexOffset + indexBytes.byteLength;
-  const metadataBytes = new TextEncoder().encode(JSON.stringify(opts.metadata));
 
-  const total = new Uint8Array(metadataOffset + metadataBytes.byteLength);
-  // 64-byte header.
-  const headerView = new DataView(total.buffer, 0, HEADER_SIZE);
-  total[0] = 0x53; // 'S'
-  total[1] = 0x54;
-  total[2] = 0x54;
-  total[3] = 4; // version
-  headerView.setUint8(4, 4); // version
-  headerView.setUint8(5, 0); // Compression.None
-  headerView.setBigUint64(6, BigInt(indexOffset), true);
-  headerView.setBigUint64(14, BigInt(indexBytes.byteLength), true);
-  headerView.setBigUint64(22, BigInt(metadataOffset), true);
-  headerView.setBigUint64(30, BigInt(metadataBytes.byteLength), true);
-  headerView.setBigUint64(38, 0n, true);
-  headerView.setBigUint64(46, 0n, true);
-  // Tile blobs.
-  for (let i = 0; i < tileBlobs.length; i++) {
-    total.set(tileBlobs[i], blobOffsets[i]);
-  }
-  total.set(indexBytes, indexOffset);
-  total.set(metadataBytes, metadataOffset);
-  return total;
+  const objects = new Map<string, Uint8Array>();
+  objects.set('packs/p0.sttp', pack);
+  objects.set('index/dir.sttd', indexBytes);
+  const manifest = {
+    format: 'stt-packed',
+    formatVersion: 1,
+    compression: 'none', // 1-byte raw dummy blobs (no zstd)
+    directory: { key: 'index/dir.sttd', length: indexBytes.byteLength, directoryVersion: 5 },
+    packs: [{ key: 'packs/p0.sttp', length: pack.byteLength }],
+    metadata: opts.metadata,
+  };
+  objects.set('manifest.json', new TextEncoder().encode(JSON.stringify(manifest)));
+
+  // Unique manifest URL per dataset so concurrent tests don't share a base.
+  return { objects, manifestUrl: `mem://lod-${synthSeq++}/manifest.json` };
 }
 
-function rangeFetch(bytes: Uint8Array): typeof fetch {
-  return (async (_url: string, init?: RequestInit) => {
-    const range = (init?.headers as Record<string, string>)?.Range;
-    const m = /bytes=(\d+)-(\d+)/.exec(range ?? '');
-    if (!m) {
-      return {
-        ok: true,
-        status: 200,
-        statusText: 'OK',
-        arrayBuffer: async () => bytes.buffer.slice(0),
-      };
-    }
-    const start = Number(m[1]);
-    const end = Math.min(Number(m[2]), bytes.length - 1);
-    const slice = bytes.subarray(start, end + 1);
-    return {
-      ok: true,
-      status: 206,
-      statusText: 'Partial Content',
-      arrayBuffer: async () =>
-        slice.buffer.slice(slice.byteOffset, slice.byteOffset + slice.byteLength),
-    };
-  }) as unknown as typeof fetch;
+/** Serve a synthetic packed dataset (the `bytes` variable IS the dataset). */
+function rangeFetch(ds: InMemoryPackedDataset): typeof fetch {
+  return packedFetch(ds);
 }
 
 // ---------------------------------------------------------------------------
@@ -154,7 +133,7 @@ describe('temporal LOD: metadata round-trip', () => {
       },
       writeBucketColumn: true,
     });
-    const archive = new STTArchive({ url: 'mem://lod', fetch: rangeFetch(bytes) });
+    const archive = new STTArchive({ url: bytes.manifestUrl, fetch: rangeFetch(bytes) });
     const meta = await archive.getMetadata();
     expect(meta.temporalLod).toEqual([
       { bucketMs: DAY, maxZoomLevel: 8 },
@@ -175,7 +154,7 @@ describe('temporal LOD: metadata round-trip', () => {
       },
       writeBucketColumn: false,
     });
-    const archive = new STTArchive({ url: 'mem://legacy', fetch: rangeFetch(bytes) });
+    const archive = new STTArchive({ url: bytes.manifestUrl, fetch: rangeFetch(bytes) });
     const meta = await archive.getMetadata();
     expect(meta.temporalLod).toBeUndefined();
   });
@@ -197,7 +176,7 @@ describe('temporal LOD: index column round-trip', () => {
       },
       writeBucketColumn: true,
     });
-    const archive = new STTArchive({ url: 'mem://lod', fetch: rangeFetch(bytes) });
+    const archive = new STTArchive({ url: bytes.manifestUrl, fetch: rangeFetch(bytes) });
     const index = await archive.getIndex();
     expect(index.tiles.map((t) => t.temporalBucketMs)).toEqual([HOUR, DAY]);
   });
@@ -213,7 +192,7 @@ describe('temporal LOD: index column round-trip', () => {
       },
       writeBucketColumn: false,
     });
-    const archive = new STTArchive({ url: 'mem://legacy', fetch: rangeFetch(bytes) });
+    const archive = new STTArchive({ url: bytes.manifestUrl, fetch: rangeFetch(bytes) });
     const index = await archive.getIndex();
     expect(index.tiles[0].temporalBucketMs).toBeUndefined();
   });
@@ -237,7 +216,7 @@ describe('temporal LOD: getTileIdsInBoundsForTemporalLod', () => {
       },
       writeBucketColumn: true,
     });
-    const archive = new STTArchive({ url: 'mem://lod', fetch: rangeFetch(bytes) });
+    const archive = new STTArchive({ url: bytes.manifestUrl, fetch: rangeFetch(bytes) });
     const bounds = { minLon: -180, minLat: -85, maxLon: 180, maxLat: 85 };
     const range = { start: 0, end: DAY };
 
@@ -264,7 +243,7 @@ describe('temporal LOD: getTileIdsInBoundsForTemporalLod', () => {
       },
       writeBucketColumn: true,
     });
-    const archive = new STTArchive({ url: 'mem://plain', fetch: rangeFetch(bytes) });
+    const archive = new STTArchive({ url: bytes.manifestUrl, fetch: rangeFetch(bytes) });
     const bounds = { minLon: -180, minLat: -85, maxLon: 180, maxLat: 85 };
     const ids = await archive.getTileIdsInBoundsForTemporalLod(
       bounds,
@@ -291,7 +270,7 @@ describe('temporal LOD: getTileIdsInBoundsForTemporalLod', () => {
       },
       writeBucketColumn: false,
     });
-    const archive = new STTArchive({ url: 'mem://legacy', fetch: rangeFetch(bytes) });
+    const archive = new STTArchive({ url: bytes.manifestUrl, fetch: rangeFetch(bytes) });
     const bounds = { minLon: -180, minLat: -85, maxLon: 180, maxLat: 85 };
     const ids = await archive.getTileIdsInBoundsForTemporalLod(
       bounds,
@@ -329,7 +308,7 @@ describe('temporal LOD: pickTemporalLodForZoom', () => {
       },
       writeBucketColumn: true,
     });
-    const archive = new STTArchive({ url: 'mem://lod', fetch: rangeFetch(bytes) });
+    const archive = new STTArchive({ url: bytes.manifestUrl, fetch: rangeFetch(bytes) });
     // Very zoomed out: both levels apply, pick the coarser (month).
     expect(await archive.pickTemporalLodForZoom(0)).toEqual({
       bucketMs: MONTH,
@@ -357,7 +336,7 @@ describe('temporal LOD: pickTemporalLodForZoom', () => {
       },
       writeBucketColumn: true,
     });
-    const archive = new STTArchive({ url: 'mem://plain', fetch: rangeFetch(bytes) });
+    const archive = new STTArchive({ url: bytes.manifestUrl, fetch: rangeFetch(bytes) });
     expect(await archive.pickTemporalLodForZoom(0)).toBeUndefined();
   });
 });
@@ -380,7 +359,7 @@ describe('temporal LOD: getTileIdsInBounds excludes LOD tiers by default', () =>
       },
       writeBucketColumn: true,
     });
-    const archive = new STTArchive({ url: 'mem://lod', fetch: rangeFetch(bytes) });
+    const archive = new STTArchive({ url: bytes.manifestUrl, fetch: rangeFetch(bytes) });
     const bounds = { minLon: -180, minLat: -85, maxLon: 180, maxLat: 85 };
     const ids = await archive.getTileIdsInBounds(bounds, 5, { start: 0, end: DAY });
     // Only the base-bucket tile shows up.
@@ -402,7 +381,7 @@ describe('temporal LOD: getTileIdsInBounds excludes LOD tiers by default', () =>
       },
       writeBucketColumn: true,
     });
-    const archive = new STTArchive({ url: 'mem://plain', fetch: rangeFetch(bytes) });
+    const archive = new STTArchive({ url: bytes.manifestUrl, fetch: rangeFetch(bytes) });
     const bounds = { minLon: -180, minLat: -85, maxLon: 180, maxLat: 85 };
     const ids = await archive.getTileIdsInBounds(bounds, 5, { start: 0, end: 2 * HOUR });
     expect(ids.length).toBe(2);

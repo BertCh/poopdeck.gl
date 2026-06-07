@@ -1,24 +1,37 @@
 // @stt/core
 // SPDX-License-Identifier: MIT
 //
-// Decoder for the STT v4 directory — the compact columnar run-length tile
-// index that replaces the old Arrow-IPC index. Mirrors the Rust encoder in
-// `crates/stt-core/src/directory.rs`:
+// Decoder for the STT directory — the compact columnar run-length tile index
+// that replaces the old Arrow-IPC index. Mirrors the Rust codec in
+// `crates/stt-core/src/directory.rs`. Decodes BOTH v4 (single-file archive,
+// one implicit pack) and v5 (packed format, per-run `pack_id` column +
+// pack-relative offsets):
 //
-//   u8      version_tag = 4
+//   u8      version_tag = 4 or 5
 //   uvarint N            entry count
 //   uvarint R            run count
 //   per-entry × N:  Δzoom Δhilbert Δx Δy Δtime_start (zig-zag), duration
 //                   (zig-zag), feature_count (uvarint), bucket presence flag
 //                   (+ value uvarint when present)
-//   per-run × R:    run_length (uvarint), offset flag (+ raw offset uvarint
-//                   when non-contiguous), length, uncompressed_size, crc32c (u32 LE)
+//   per-run × R:    run_length (uvarint),
+//                   Δpack_id (zig-zag, v5 ONLY — absent in v4),
+//                   offset flag (+ raw offset uvarint when non-contiguous),
+//                   length, uncompressed_size, crc32c (u32 LE)
+//
+// In v5 each run's blob lives in a specific pack object. `pack_id` is delta+
+// zig-zag coded against the previous run; the offset contiguity expectation
+// (`expectedOffset`) resets to 0 whenever the pack changes, so offsets are
+// pack-relative and the first run of each pack rides the cheap `0` sentinel.
+// v4 has no pack_id column (one implicit pack 0) and never resets.
 //
 // Varints are LEB128; signed columns use zig-zag. Values are accumulated as
 // BigInt for exactness, then narrowed to JS numbers for the fields the reader
 // uses (offsets/timestamps within 2^53, as elsewhere in the reader).
 
-const DIRECTORY_VERSION = 4;
+/** Directory codec version the TS encoder emits (matches the Rust writer). */
+const DIRECTORY_VERSION = 5;
+/** Oldest directory codec the decoder still reads (single-file v4 archives). */
+const MIN_DIRECTORY_VERSION = 4;
 /**
  * Tag for the optional trailing covering section: one signed varint per entry
  * (in directory order) giving `coverTMin - timeStart`. Backward-compatible — a
@@ -41,6 +54,11 @@ export interface DirectoryEntry {
   y: number;
   timeStart: number;
   timeEnd: number;
+  /**
+   * Packed-format pack index (`manifest.packs[packId]`) holding this blob.
+   * `offset`/`length` are pack-relative. `0` for a v4 single-file directory.
+   */
+  packId: number;
   offset: number;
   length: number;
   uncompressedSize: number;
@@ -98,17 +116,21 @@ class Cursor {
   }
 }
 
-/** Decode a v4 directory buffer into tile entries (in directory order). */
+/** Decode a v4/v5 directory buffer into tile entries (in directory order). */
 export function decodeDirectory(bytes: Uint8Array): DirectoryEntry[] {
   if (bytes.length === 0) {
     throw new Error('STT directory: empty buffer');
   }
   const version = bytes[0];
-  if (version !== DIRECTORY_VERSION) {
+  if (version < MIN_DIRECTORY_VERSION || version > DIRECTORY_VERSION) {
     throw new Error(
-      `STT directory: unsupported version ${version} (expected ${DIRECTORY_VERSION})`,
+      `STT directory: unsupported version ${version} ` +
+        `(expected ${MIN_DIRECTORY_VERSION}..${DIRECTORY_VERSION})`,
     );
   }
+  // v5 carries a per-run Δpack_id column and resets the offset contiguity
+  // expectation on every pack change; v4 has neither (one implicit pack 0).
+  const hasPackId = version >= 5;
   const c = new Cursor(bytes);
   c.pos = 1;
 
@@ -160,8 +182,18 @@ export function decodeDirectory(bytes: Uint8Array): DirectoryEntry[] {
   const entries: DirectoryEntry[] = new Array(n);
   let cursor = 0;
   let expectedOffset = 0n;
+  let prevPackId = 0n;
   for (let r = 0; r < runCount; r++) {
     const runLen = Number(c.uvarint());
+    // v5: Δpack_id (zig-zag) precedes the offset sentinel. Reset the offset
+    // contiguity expectation when the pack changes, so the first run of each
+    // pack hits the cheap `0` sentinel (offsets are pack-relative). v4 omits
+    // the column entirely — one implicit pack 0, whole-file offsets.
+    const packId = hasPackId ? prevPackId + c.ivarint() : 0n;
+    if (packId !== prevPackId) {
+      expectedOffset = 0n;
+    }
+    prevPackId = packId;
     const offFlag = c.uvarint();
     const offset = offFlag === 0n ? expectedOffset : c.uvarint();
     const length = Number(c.uvarint());
@@ -171,6 +203,7 @@ export function decodeDirectory(bytes: Uint8Array): DirectoryEntry[] {
     if (cursor + runLen > n) {
       throw new Error('STT directory: run length exceeds entry count');
     }
+    const packIdNum = Number(packId);
     for (let k = 0; k < runLen; k++) {
       const key = keys[cursor];
       entries[cursor] = {
@@ -179,6 +212,7 @@ export function decodeDirectory(bytes: Uint8Array): DirectoryEntry[] {
         y: key.y,
         timeStart: Number(key.timeStart),
         timeEnd: Number(key.timeEnd),
+        packId: packIdNum,
         offset: Number(offset),
         length,
         uncompressedSize,
@@ -212,13 +246,15 @@ export function decodeDirectory(bytes: Uint8Array): DirectoryEntry[] {
 // synthetic archives; the production writer is the Rust `stt-core`).
 // ----------------------------------------------------------------------------
 
-/** A directory entry to encode. `hilbert`/`crc32c` default to 0. */
+/** A directory entry to encode. `hilbert`/`crc32c`/`packId` default to 0. */
 export interface DirectoryEncodeEntry {
   zoom: number;
   x: number;
   y: number;
   timeStart: number;
   timeEnd: number;
+  /** Packed-format pack index. Defaults to 0 (single implicit pack). */
+  packId?: number;
   offset: number;
   length: number;
   uncompressedSize: number;
@@ -263,9 +299,12 @@ export function encodeDirectory(entries: DirectoryEncodeEntry[]): Uint8Array {
   });
   const n = sorted.length;
 
-  // Group consecutive entries that point at the same blob into runs.
+  // Group consecutive entries that point at the same blob into runs. Two
+  // entries collapse only when same pack AND same blob (pack_id is part of the
+  // run identity in v5), matching the Rust encoder.
   interface Run {
     runLen: number;
+    packId: bigint;
     offset: bigint;
     length: number;
     uncompressed: number;
@@ -276,9 +315,11 @@ export function encodeDirectory(entries: DirectoryEncodeEntry[]): Uint8Array {
   while (i < n) {
     const head = sorted[i];
     const crc = (head.crc32c ?? 0) >>> 0;
+    const packId = head.packId ?? 0;
     let j = i + 1;
     while (
       j < n &&
+      (sorted[j].packId ?? 0) === packId &&
       sorted[j].offset === head.offset &&
       sorted[j].length === head.length &&
       sorted[j].uncompressedSize === head.uncompressedSize &&
@@ -288,6 +329,7 @@ export function encodeDirectory(entries: DirectoryEncodeEntry[]): Uint8Array {
     }
     runs.push({
       runLen: j - i,
+      packId: BigInt(packId),
       offset: BigInt(head.offset),
       length: head.length,
       uncompressed: head.uncompressedSize,
@@ -347,8 +389,16 @@ export function encodeDirectory(entries: DirectoryEncodeEntry[]): Uint8Array {
   }
 
   let expectedOffset = 0n;
+  let prevPackId = 0n;
   for (const r of runs) {
     putUvarint(out, BigInt(r.runLen));
+    // Δpack_id (zig-zag). Reset the offset contiguity expectation on a pack
+    // change so this run's first blob is "contiguous from 0" (pack-relative).
+    if (r.packId !== prevPackId) {
+      expectedOffset = 0n;
+    }
+    putIvarint(out, r.packId - prevPackId);
+    prevPackId = r.packId;
     if (r.offset === expectedOffset) {
       putUvarint(out, 0n);
     } else {

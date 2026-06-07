@@ -38,6 +38,15 @@ function excludeUnusedPublicFiles(): Plugin {
         filter(src) {
           if (path.basename(src) === '.DS_Store') return false;
           const rel = path.relative(publicDir, src).split(path.sep).join('/');
+          // All tile data is served from R2 (VITE_DATA_BASE_URL), never the site
+          // origin — prune the whole data/ tree (flat .stt + packed <stem>/ dirs:
+          // manifest.json + index/*.sttd + packs/*.sttp) so dist stays well under
+          // Cloudflare's per-asset (25 MiB) and total deploy limits. Dev server
+          // reads public/ directly, so local dev is unaffected.
+          if (rel === 'data' || rel.startsWith('data/')) {
+            if (rel === 'data') skipped.push('data/ (entire tree)');
+            return false;
+          }
           // Tile archives (.stt) and intermediate build artifacts (.parquet) are
           // served from R2 (VITE_DATA_BASE_URL), never from the site origin, and
           // far exceed Cloudflare's 25 MiB-per-asset deploy limit — keep them out

@@ -3,17 +3,28 @@
 // Copyright (c) @stt/core contributors
 
 /**
- * STT archive reader over HTTP Range Requests.
+ * STT packed-format reader over HTTP Range Requests.
  *
- * Layout (see the Rust `stt-core::archive` module):
+ * Layout (see the Rust `stt-core::pack` module and
+ * `docs/spec/stt-packed-format.md`):
  *
  * ```text
- * [ 64-byte header ][ compressed tile blobs ][ dictionary? ][ directory ][ JSON metadata ]
+ * data/<dataset>/
+ *   manifest.json            metadata + directory pointer + pack table (mutable)
+ *   index/<blake3>.sttd       v5 directory blob          (immutable)
+ *   packs/<blake3>.sttp       per-blob zstd tile data    (immutable)
+ *   packs/<blake3>.sttp
  * ```
  *
- * The reader fetches the header, then the index table and metadata, then each
- * tile blob with a single Range request. Only compressed bytes are cached
- * here; decoded tiles are owned by the tileset.
+ * The reader's `url` points at the `manifest.json`. A cold load is one
+ * manifest GET + one directory GET + N pack range requests. The directory
+ * decodes to entries each carrying `(packId, offset, length)`; a tile read
+ * selects `manifest.packs[packId]` and issues a Range request against it.
+ * Coalescing is per-pack — a range can never bridge two pack objects.
+ *
+ * Only compressed bytes are cached here; decoded tiles are owned by the
+ * tileset. There is NO shared zstd dictionary (each blob is independently
+ * zstd-compressed), so the fzstd browser path can decode every tile.
  */
 
 import { decodeDirectory } from './directory';
@@ -40,11 +51,8 @@ import { OpfsTileCache } from './opfs-cache';
 import { decompress } from './compression';
 import { createSttTileSource, type SttTileSource } from './tile-source';
 
-/** Magic prefix shared by all STT archives ("STT" + version byte). */
-const MAGIC_PREFIX = [0x53, 0x54, 0x54];
-/** The one supported archive format version. */
-const FORMAT_VERSION = 4;
-const HEADER_SIZE = 64;
+/** `format` discriminator written into every packed manifest. */
+const PACKED_FORMAT = 'stt-packed';
 
 const DEFAULT_MAX_CACHE_TILES = 500;
 const MOBILE_MAX_CACHE_TILES = 100;
@@ -86,18 +94,36 @@ interface ByteCacheEntry {
   byteSize: number;
 }
 
-/** Parsed archive header. */
-interface ArchiveHeader {
-  version: number;
-  compression: Compression;
-  indexOffset: number;
-  indexLength: number;
-  metadataOffset: number;
-  metadataLength: number;
-  /** Byte offset of the optional shared zstd dictionary. Zero if absent. */
-  dictionaryOffset: number;
-  /** Length of the optional shared zstd dictionary in bytes. Zero if absent. */
-  dictionaryLength: number;
+/** Pointer to the encoded directory object in a packed manifest. */
+interface ManifestDirectoryRef {
+  /** Object key relative to the dataset root (e.g. `index/<hash>.sttd`). */
+  key: string;
+  /** Directory object length in bytes. */
+  length: number;
+  /** Directory codec version (5 for the packed format). */
+  directoryVersion: number;
+}
+
+/** Pointer to one pack object. Its position in `packs` IS the `packId`. */
+interface ManifestPackRef {
+  /** Object key relative to the dataset root (e.g. `packs/<hash>.sttp`). */
+  key: string;
+  /** Pack object length in bytes. */
+  length: number;
+}
+
+/**
+ * The packed-format `manifest.json` — metadata + directory pointer + pack
+ * table folded into one tiny object. Mirrors the Rust `pack::Manifest`.
+ */
+interface PackedManifest {
+  format: string;
+  formatVersion: number;
+  compression: string;
+  directory: ManifestDirectoryRef;
+  packs: ManifestPackRef[];
+  /** The verbatim stt-core Metadata JSON (snake_case keys). */
+  metadata: any;
 }
 
 /**
@@ -136,9 +162,21 @@ export function estimateTileSize(tile: Tile): number {
 export class STTArchive {
   public url: string;
   private fetchFn: typeof fetch;
-  private headerCache?: ArchiveHeader;
+  /** Parsed manifest.json (one whole-object GET, cached). */
+  private manifestCache?: PackedManifest;
+  /** Promise guard so concurrent callers share one manifest fetch. */
+  private manifestPromise?: Promise<PackedManifest>;
+  /**
+   * Base URL with the manifest's final path segment removed. `directory.key`
+   * and each `pack.key` are resolved relative to this.
+   */
+  private baseUrl?: string;
+  /** Pack compression codec parsed from the manifest (per-blob, no dict). */
+  private packCompression = Compression.Zstd;
   private metadataCache?: ArchiveMetadata;
   private indexCache?: ArchiveIndex;
+  /** Promise guard so concurrent callers share one directory fetch+decode. */
+  private indexPromise?: Promise<ArchiveIndex>;
 
   private byteCache = new Map<string, ByteCacheEntry>();
   private maxCacheTiles: number;
@@ -154,9 +192,6 @@ export class STTArchive {
   private tileEntryIndex = new Map<string, TileEntry[]>();
   /** "z/x/y/t" -> exact entry. */
   private tileEntryByKey = new Map<string, TileEntry>();
-
-  /** Cached shared zstd dictionary bytes, if the archive ships one. */
-  private dictionaryCache?: Uint8Array | null;
 
   private cacheStats = { hits: 0, misses: 0, evictions: 0 };
   /**
@@ -179,10 +214,11 @@ export class STTArchive {
    */
   private opfsCache?: OpfsTileCache;
   /**
-   * Stable archive fingerprint captured from the first response (ETag /
-   * Last-Modified / Content-Length). Lazily filled by `fetchRange` so an
-   * archive that's hot-swapped on the server (different ETag) invalidates
-   * the OPFS entry without us hashing the full file.
+   * Stable archive fingerprint, derived from the manifest's content-addressed
+   * directory hash (the `index/<hash>.sttd` key). The directory hash changes
+   * iff the dataset's tiles change, so it's the natural cache-busting key —
+   * and it's stable across the dataset's many immutable packs (unlike a
+   * per-pack ETag). Filled by `fetchManifest`.
    */
   private archiveFingerprint?: string;
 
@@ -238,136 +274,121 @@ export class STTArchive {
     this.decoder = undefined;
   }
 
-  /** Fetch a byte range, validating that the server honoured it. */
+  /**
+   * Resolve a manifest-relative key (e.g. `index/<hash>.sttd`) against the
+   * base URL (the manifest URL with its final path segment removed).
+   */
+  private resolveKey(key: string): string {
+    if (this.baseUrl === undefined) {
+      throw new Error('STT archive: manifest not loaded (resolveKey before fetchManifest)');
+    }
+    return this.baseUrl + key;
+  }
+
+  /**
+   * GET the whole `manifest.json` (NOT a range request) and parse it. Cached;
+   * concurrent callers share one in-flight fetch. Also derives the base URL,
+   * the pack compression codec and the stable OPFS fingerprint.
+   */
+  private async fetchManifest(): Promise<PackedManifest> {
+    if (this.manifestCache) return this.manifestCache;
+    if (this.manifestPromise) return this.manifestPromise;
+    this.manifestPromise = (async () => {
+      const response = await this.fetchFn(this.url);
+      if (!response.ok) {
+        throw new Error(
+          `STT manifest fetch failed: ${response.status} ${response.statusText}`,
+        );
+      }
+      const buffer = await response.arrayBuffer();
+      let manifest: PackedManifest;
+      try {
+        manifest = JSON.parse(new TextDecoder().decode(buffer));
+      } catch (e) {
+        throw new Error(`STT manifest: invalid JSON (${(e as Error).message})`);
+      }
+      if (manifest.format !== PACKED_FORMAT) {
+        throw new Error(
+          `STT manifest: not a packed manifest (format=${JSON.stringify(manifest.format)}, ` +
+            `expected ${JSON.stringify(PACKED_FORMAT)})`,
+        );
+      }
+      if (!manifest.directory || !Array.isArray(manifest.packs)) {
+        throw new Error('STT manifest: missing directory pointer or pack table');
+      }
+      // Base = manifest URL with the final path segment stripped (keep the
+      // trailing slash). `index/...` and `packs/...` keys resolve against it.
+      const slash = this.url.lastIndexOf('/');
+      this.baseUrl = slash >= 0 ? this.url.slice(0, slash + 1) : '';
+      switch (manifest.compression) {
+        case 'none':
+          this.packCompression = Compression.None;
+          break;
+        case 'gzip':
+          this.packCompression = Compression.Gzip;
+          break;
+        case 'zstd':
+        default:
+          this.packCompression = Compression.Zstd;
+          break;
+      }
+      // OPFS fingerprint = the content-addressed directory hash. It changes iff
+      // the dataset's tiles change, and is stable across the dataset's packs.
+      this.archiveFingerprint = manifest.directory.key;
+      this.manifestCache = manifest;
+      return manifest;
+    })();
+    try {
+      return await this.manifestPromise;
+    } finally {
+      this.manifestPromise = undefined;
+    }
+  }
+
+  /**
+   * Fetch a byte range from pack `packIndex`, validating that the server
+   * honoured it. A 200 (server ignored Range) would silently corrupt every
+   * offset-based read, so it's rejected.
+   */
   private async fetchRange(
+    packIndex: number,
     start: number,
     end: number,
-    signal?: AbortSignal
+    signal?: AbortSignal,
   ): Promise<ArrayBuffer> {
-    const response = await this.fetchFn(this.url, {
+    const manifest = await this.fetchManifest();
+    const pack = manifest.packs[packIndex];
+    if (!pack) {
+      throw new Error(
+        `STT archive: tile references pack ${packIndex} but only ${manifest.packs.length} packs exist`,
+      );
+    }
+    const response = await this.fetchFn(this.resolveKey(pack.key), {
       headers: { Range: `bytes=${start}-${end}` },
       signal,
     });
     if (!response.ok) {
-      throw new Error(`STT archive fetch failed: ${response.status} ${response.statusText}`);
+      throw new Error(`STT pack fetch failed: ${response.status} ${response.statusText}`);
     }
-    // A server that ignores Range replies 200 with the whole file — that
-    // would silently corrupt every offset-based read.
     if (response.status !== 206) {
       throw new Error(
-        `STT archive server ignored Range request (status ${response.status}); ` +
-          'HTTP range requests are required.'
+        `STT pack server ignored Range request (status ${response.status}); ` +
+          'HTTP range requests are required.',
       );
-    }
-    // Snapshot a stable identifier the first time the server tells us one.
-    // Prefer ETag (server-chosen, opaque), fall back to Last-Modified, then
-    // Content-Range total. This is good enough to bust the OPFS cache when
-    // the archive is republished without us hashing the file ourselves.
-    if (!this.archiveFingerprint && response.headers) {
-      const headers = response.headers as Headers | Record<string, string>;
-      const get = (name: string): string | null => {
-        if (typeof (headers as Headers).get === 'function') {
-          return (headers as Headers).get(name);
-        }
-        const rec = headers as Record<string, string>;
-        return rec[name] ?? rec[name.toLowerCase()] ?? null;
-      };
-      const etag = get('ETag') || get('etag');
-      const lastMod = get('Last-Modified') || get('last-modified');
-      const contentRange = get('Content-Range') || get('content-range');
-      let total: string | null = null;
-      if (contentRange) {
-        const m = /\/(\d+)$/.exec(contentRange);
-        if (m) total = m[1];
-      }
-      const fp = etag || lastMod || total;
-      if (fp) this.archiveFingerprint = fp;
     }
     return response.arrayBuffer();
   }
 
-  /** Read and validate the 64-byte v4 header. */
-  private async getHeader(): Promise<ArchiveHeader> {
-    if (this.headerCache) return this.headerCache;
-    const buffer = await this.fetchRange(0, HEADER_SIZE - 1);
-    const view = new DataView(buffer);
-    const magic = new Uint8Array(buffer, 0, 4);
-    for (let i = 0; i < 3; i++) {
-      if (magic[i] !== MAGIC_PREFIX[i]) {
-        throw new Error('Invalid STT archive: bad magic number');
-      }
-    }
-    const version = view.getUint8(4);
-    // The 4th magic byte must also match the version byte — this catches
-    // archives whose two version fields drifted out of sync.
-    if (magic[3] !== version) {
-      throw new Error(
-        `Invalid STT archive: magic version byte (${magic[3]}) != header version (${version})`,
-      );
-    }
-    if (version !== FORMAT_VERSION) {
-      throw new Error(`Unsupported STT format version: ${version}`);
-    }
-    const compressionByte = view.getUint8(5);
-    let compression: Compression;
-    switch (compressionByte) {
-      case 0:
-        compression = Compression.None;
-        break;
-      case 1:
-        compression = Compression.Gzip;
-        break;
-      case 2:
-        compression = Compression.Zstd;
-        break;
-      default:
-        throw new Error(`Unknown STT compression code: ${compressionByte}`);
-    }
-    const header: ArchiveHeader = {
-      version,
-      compression,
-      indexOffset: Number(view.getBigUint64(6, true)),
-      indexLength: Number(view.getBigUint64(14, true)),
-      metadataOffset: Number(view.getBigUint64(22, true)),
-      metadataLength: Number(view.getBigUint64(30, true)),
-      dictionaryOffset: Number(view.getBigUint64(38, true)),
-      dictionaryLength: Number(view.getBigUint64(46, true)),
-    };
-    this.headerCache = header;
-    return header;
-  }
-
-  /**
-   * Fetch the optional shared zstd dictionary embedded in the archive.
-   * Returns `null` when the archive was written without one (the default
-   * eager build). Cached after the first call.
-   */
-  async getDictionary(): Promise<Uint8Array | null> {
-    if (this.dictionaryCache !== undefined) return this.dictionaryCache;
-    const header = await this.getHeader();
-    if (header.dictionaryLength === 0) {
-      this.dictionaryCache = null;
-      return null;
-    }
-    const buffer = await this.fetchRange(
-      header.dictionaryOffset,
-      header.dictionaryOffset + header.dictionaryLength - 1,
-    );
-    this.dictionaryCache = new Uint8Array(buffer);
-    return this.dictionaryCache;
-  }
-
-  /** Archive metadata (JSON). */
+  /** Archive metadata, folded into the manifest (no separate fetch). */
   async getMetadata(): Promise<ArchiveMetadata> {
     if (this.metadataCache) return this.metadataCache;
-    const header = await this.getHeader();
-    const buffer = await this.fetchRange(
-      header.metadataOffset,
-      header.metadataOffset + header.metadataLength - 1
-    );
-    const json = JSON.parse(new TextDecoder().decode(buffer));
+    const manifest = await this.fetchManifest();
+    const json = manifest.metadata ?? {};
     this.metadataCache = {
-      version: header.version,
+      // The packed format folds metadata into the manifest; surface the
+      // manifest schema version (formatVersion) here for callers that branch
+      // on it (the legacy single-file `version` is gone).
+      version: manifest.formatVersion,
       name: json.name,
       description: json.description,
       attribution: json.attribution,
@@ -405,17 +426,31 @@ export class STTArchive {
     return this.metadataCache;
   }
 
-  /** Archive directory (the tile index, an Arrow table). */
+  /** Archive directory (the v5 tile index). One whole-object GET, cached. */
   async getIndex(): Promise<ArchiveIndex> {
     if (this.indexCache) return this.indexCache;
-    const header = await this.getHeader();
-    const buffer = await this.fetchRange(
-      header.indexOffset,
-      header.indexOffset + header.indexLength - 1
-    );
-    // Decode the compact v4 directory (columnar varint + run-length). The
-    // crc32c integrity tag is read but not verified client-side — a decode
-    // failure throws a clear error instead.
+    if (this.indexPromise) return this.indexPromise;
+    this.indexPromise = this.fetchAndBuildIndex();
+    try {
+      return await this.indexPromise;
+    } finally {
+      this.indexPromise = undefined;
+    }
+  }
+
+  private async fetchAndBuildIndex(): Promise<ArchiveIndex> {
+    const manifest = await this.fetchManifest();
+    // Whole-object GET of the immutable content-addressed directory.
+    const response = await this.fetchFn(this.resolveKey(manifest.directory.key));
+    if (!response.ok) {
+      throw new Error(
+        `STT directory fetch failed: ${response.status} ${response.statusText}`,
+      );
+    }
+    const buffer = await response.arrayBuffer();
+    // Decode the compact v5 directory (columnar varint + run-length + per-run
+    // pack_id). The crc32c integrity tag is read but not verified client-side —
+    // a decode failure throws a clear error instead.
     const raw = decodeDirectory(new Uint8Array(buffer));
     const tiles: TileEntry[] = raw.map((e) => ({
       zoom: e.zoom,
@@ -423,10 +458,11 @@ export class STTArchive {
       y: e.y,
       timeStart: e.timeStart,
       timeEnd: e.timeEnd,
+      packId: e.packId,
       offset: e.offset,
       length: e.length,
       featureCount: e.featureCount,
-      compression: header.compression,
+      compression: this.packCompression,
       uncompressedSize: e.uncompressedSize,
       temporalBucketMs: e.temporalBucketMs,
       coverTMin: e.coverTMin,
@@ -519,21 +555,10 @@ export class STTArchive {
     entry: TileEntry,
     compressed: ArrayBuffer,
   ): Promise<Tile> {
-    // Fail fast on shared-dictionary archives: the browser zstd path (fzstd)
-    // has no dictionary API, so a tile compressed against a training
-    // dictionary would silently decode to garbage. Inspecting the
-    // header/metadata/dictionary slot is still allowed (see getDictionary);
-    // only actual tile decode is refused. The eager `create` build emits no
-    // dictionary; `create_optimized` does — don't serve those to the browser
-    // until a dictionary-capable zstd decoder is wired in.
-    const header = await this.getHeader();
-    if (header.dictionaryLength > 0) {
-      throw new Error(
-        'STT archive ships a shared zstd dictionary, which this reader cannot ' +
-          'yet decode (fzstd has no dictionary API). Rebuild the archive without ' +
-          'a dictionary, or upgrade to a dictionary-capable zstd decoder.',
-      );
-    }
+    // The packed format has NO shared zstd dictionary: every blob is
+    // independently zstd-compressed (`compress_zstd_with_dict(_, None)` on the
+    // writer), so the fzstd browser path decodes every tile. There's nothing
+    // to guard against here.
     return this.getDecoder().decode({
       id,
       timeRange: { start: entry.timeStart, end: entry.timeEnd },
@@ -599,6 +624,7 @@ export class STTArchive {
 
     this.cacheStats.misses++;
     const compressed = await this.fetchRange(
+      entry.packId,
       entry.offset,
       entry.offset + entry.length - 1,
       options?.signal
@@ -687,32 +713,49 @@ export class STTArchive {
     }
 
     if (pending.length > 0) {
-      pending.sort((a, b) => a.entry.offset - b.entry.offset);
       interface Group {
+        packId: number;
         start: number;
         end: number;
         members: Pending[];
       }
-      const groups: Group[] = [];
+      // Coalescing is PER-PACK: a single HTTP range request addresses exactly
+      // one pack object, so a range may never bridge two packs. Group the
+      // pending tiles by pack first, then within each pack sort by offset and
+      // coalesce neighbours within `coalesceGapBytes`.
+      const byPack = new Map<number, Pending[]>();
       for (const p of pending) {
-        const pStart = p.entry.offset;
-        const pEnd = p.entry.offset + p.entry.length - 1;
-        const last = groups[groups.length - 1];
-        if (last && pStart - (last.end + 1) <= this.coalesceGapBytes) {
-          last.end = Math.max(last.end, pEnd);
-          last.members.push(p);
-        } else {
-          groups.push({ start: pStart, end: pEnd, members: [p] });
+        let list = byPack.get(p.entry.packId);
+        if (!list) {
+          list = [];
+          byPack.set(p.entry.packId, list);
+        }
+        list.push(p);
+      }
+      const groups: Group[] = [];
+      for (const [packId, members] of byPack) {
+        members.sort((a, b) => a.entry.offset - b.entry.offset);
+        let current: Group | undefined;
+        for (const p of members) {
+          const pStart = p.entry.offset;
+          const pEnd = p.entry.offset + p.entry.length - 1;
+          if (current && pStart - (current.end + 1) <= this.coalesceGapBytes) {
+            current.end = Math.max(current.end, pEnd);
+            current.members.push(p);
+          } else {
+            current = { packId, start: pStart, end: pEnd, members: [p] };
+            groups.push(current);
+          }
         }
       }
       // Fire one HTTP range request per coalesced group. Decode all members of
       // a group concurrently (a previous serial decode made `getTiles()` slower
       // than per-tile `getTile()` calls). After coalescing a viewport×window
-      // usually collapses to a few groups; bound in-flight requests so a
-      // pathological sparse batch can't exceed an object store's per-connection
-      // stream cap.
+      // usually collapses to a few groups; the concurrency pool below bounds
+      // in-flight requests across the groups of ALL packs so a pathological
+      // sparse batch can't exceed an object store's per-connection stream cap.
       const fetchGroup = (group: Group): Promise<void> =>
-        this.fetchRange(group.start, group.end, options?.signal).then((buffer) =>
+        this.fetchRange(group.packId, group.start, group.end, options?.signal).then((buffer) =>
           Promise.all(
             group.members.map(async (m) => {
               const rel = m.entry.offset - group.start;
