@@ -33,6 +33,22 @@ export { PolygonTimeFilterExtension } from './polygon-time-filter-extension';
 // Controllers
 export { TimeController } from './time-controller';
 
+// Playback buffering governor — the state machine between user intent and the
+// TimeController that gates play/resume/seek on the tileset's buffered runway
+// (see docs/roadmap/player-buffering.md, WS-B).
+export { PlaybackGovernor } from './playback-governor';
+export type {
+  BufferSource,
+  BufferedRunway,
+  GovernorEventMap,
+  GovernorEventName,
+  GovernorReadyEvent,
+  GovernorWaitingEvent,
+  PlaybackGovernorOptions,
+  PlaybackGovernorState,
+  ThroughputEstimate,
+} from './playback-governor';
+
 // Telemetry — opt-in perf probe channel used by tools/render-test and
 // the showcase HUD. No-op when `globalThis.__sttProbe` is unset.
 export {
@@ -44,6 +60,10 @@ export {
   getSnapshot,
 } from './telemetry';
 export type { ProbeChannel } from './telemetry';
+
+// Overview (storyboard) preview tier — the result shape of the layer's
+// `onOverviewPreload` callback (re-exported from @stt/core for convenience).
+export type { OverviewPreloadResult } from '@stt/core';
 
 // Types
 export type { SpatioTemporalLayerProps } from './spatiotemporal-layer';

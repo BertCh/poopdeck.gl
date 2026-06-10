@@ -1,7 +1,8 @@
 # Spatiotemporal Tiles Documentation
 
-Welcome to the documentation for Spatiotemporal Tiles (STT), a single-file
-archive format for visualizing massive time-variant geospatial datasets.
+Welcome to the documentation for Spatiotemporal Tiles (STT), a cloud-native,
+edge-cacheable tile format for visualizing massive time-variant geospatial
+datasets.
 
 ## Introduction
 
@@ -13,9 +14,11 @@ archive format for visualizing massive time-variant geospatial datasets.
 - [**System Overview**](./architecture/system-overview.md): High-level look
   at the Rust generation tools and the TypeScript reader + render stack
   (deck.gl and MapLibre).
-- [**Data Format**](./architecture/data-format.md): Normative spec of the
-  `.stt` v3 binary archive — header, tile blobs (Apache Arrow IPC +
-  GeoArrow), reserved (unused) zstd-dictionary slot, index, JSON metadata.
+- [**Packed format**](./spec/stt-packed-format.md): The canonical container —
+  `manifest.json` + content-addressed packs + directory, and the immutable-object
+  caching model. Machine-checkable manifest schema: [`manifest.schema.json`](./spec/manifest.schema.json).
+- [**Tile payload**](./architecture/data-format.md): Normative spec of the tile
+  payload (Apache Arrow IPC + GeoArrow), shared across containers.
 
 ## API Reference
 

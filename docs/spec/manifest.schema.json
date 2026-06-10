@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://spatiotemporal-tiles.dev/spec/manifest.schema.json",
+  "title": "STT packed-format manifest",
+  "description": "Canonical schema for the per-dataset `manifest.json` of the STT packed format (formatVersion 1). This is the cross-language wire contract: the Rust writer (`crate::pack::Manifest`) and every reader (TS `@stt/core` `PackedManifest`, Rust `PackedReader`) MUST agree with this document. See docs/spec/stt-packed-format.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "formatVersion", "compression", "directory", "packs", "metadata"],
+  "properties": {
+    "format": {
+      "description": "Format discriminator. Always the literal `stt-packed`.",
+      "const": "stt-packed"
+    },
+    "formatVersion": {
+      "description": "Manifest schema version. This schema describes version 1. Distinct from the directory codec version (see `directory.directoryVersion`) and the tile-payload encoding.",
+      "const": 1
+    },
+    "compression": {
+      "description": "Per-blob compression codec. Every tile blob is compressed independently (no shared zstd dictionary), so a streaming reader can decode any blob in isolation.",
+      "enum": ["zstd", "gzip", "none"]
+    },
+    "directory": {
+      "description": "Pointer to the single immutable, content-addressed directory object (the v5 run-length index).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "length", "directoryVersion"],
+      "properties": {
+        "key": {
+          "description": "Object key relative to the dataset root. blake3-128 content address.",
+          "type": "string",
+          "pattern": "^index/[0-9a-f]{32}\\.sttd$"
+        },
+        "length": {
+          "description": "Directory object length in bytes.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "directoryVersion": {
+          "description": "Directory codec version. The packed format (formatVersion 1) emits v5 (per-run pack_id column + pack-relative offsets).",
+          "const": 5
+        }
+      }
+    },
+    "packs": {
+      "description": "Ordered table of immutable, content-addressed pack objects. The index of a pack in this array IS the `pack_id` the directory references. Must be non-empty.",
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["key", "length"],
+        "properties": {
+          "key": {
+            "description": "Object key relative to the dataset root. blake3-128 content address.",
+            "type": "string",
+            "pattern": "^packs/[0-9a-f]{32}\\.sttp$"
+          },
+          "length": {
+            "description": "Pack object length in bytes. Normally <= the pack target (64 MiB by default); a single blob larger than the target gets its own oversized pack and may exceed it.",
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      }
+    },
+    "metadata": {
+      "description": "The full stt-core `Metadata` JSON, folded in verbatim (snake_case keys) so a cold reader needs no separate metadata object. Opaque to this schema; see crate::metadata::Metadata.",
+      "type": "object"
+    }
+  }
+}

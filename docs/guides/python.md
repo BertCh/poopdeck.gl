@@ -41,6 +41,10 @@ stt-build \
   --auto
 ```
 
+> `stt-build` writes the **packed format** — `--output earthquakes.stt` produces
+> an `earthquakes/` directory (`manifest.json` + `index/*.sttd` + `packs/*.sttp`),
+> not a single file. The `.stt` extension is stripped for convenience.
+
 `--auto` runs `stt-optimize` over the input to pick a sensible zoom range,
 temporal bucket, and compression. Any flag you also pass explicitly wins.
 

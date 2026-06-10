@@ -365,23 +365,52 @@ export interface SummaryToggleOption {
 }
 
 /**
- * Global playback slowdown. Datasets are served from R2 (remote) in production,
- * which is slower than local disk, so we stretch every example's playback to
- * give tile loading time to keep up — smoother motion, fewer gaps/flashes.
- * 1 = play at the per-dataset target; 2 = half speed. Tune to taste.
- */
-export const PLAYBACK_SLOWDOWN = 2;
-
-/**
  * Calculate animation speed based on time range and target playback duration.
  * Returns the number of simulation milliseconds per real millisecond.
+ *
+ * Plays at the dataset's intended `targetPlaybackSeconds`. (The old global
+ * `PLAYBACK_SLOWDOWN = 2` half-speed hack — which stretched every demo so R2
+ * loading could keep up — is gone: the PlaybackGovernor now gates playback on
+ * the buffered runway and stalls honestly when loading falls behind.)
  */
 export function calculateAnimationSpeed(dataset: Dataset): number {
   const timeRangeDuration = dataset.timeRange.end - dataset.timeRange.start;
-  // Default to 30 seconds, then stretch by the global slowdown factor.
-  const targetSeconds = (dataset.targetPlaybackSeconds ?? 30) * PLAYBACK_SLOWDOWN;
+  const targetSeconds = dataset.targetPlaybackSeconds ?? 30;
   const targetMs = targetSeconds * 1000;
   return timeRangeDuration / targetMs;
+}
+
+/**
+ * The ONE tile-loading recipe every STT layer in the showcase uses — demo
+ * pages, the home hero globe, and the data stories all spread this into their
+ * layer props so loading behaves identically across surfaces. (The underlying
+ * tileset freezes these options when it is created, so callers must pass a
+ * budget that covers their fastest playback up front.)
+ *
+ * Prefetch budget is keyed to REAL-time playback, not sim-time: we want a few
+ * seconds of real-time buffer ahead of the play head regardless of how
+ * compressed sim-time is. `playbackSpeed` is sim-ms per real-ms, so
+ * `playbackSpeed * PREFETCH_REAL_SECONDS * 1000` is that many real seconds
+ * expressed in sim-time. The `timeWindow` floor keeps a paused or slow view
+ * warming its whole resident window.
+ *
+ * (The old DemoPage math asked for max(5*timeWindow, playbackSpeed*60000) and
+ * up to 150 steps. For ship-traffic that produced ~8h of lookahead × 150 steps
+ * ≈ 50 days of prefetch horizon per tick — every tick blew through the
+ * bucket-boundary cap and queued thousands of fetches, collapsing FPS to 0.5
+ * under SwiftShader.)
+ */
+export function tileLoadingProps(timeWindow: number, playbackSpeed: number) {
+  const PREFETCH_REAL_SECONDS = 5;
+  return {
+    enablePrefetch: true,
+    prefetchAhead: Math.max(timeWindow, playbackSpeed * 1000 * PREFETCH_REAL_SECONDS),
+    prefetchSteps: 4,
+    // Browsers cap to ~6 concurrent connections per HTTP/1.1 origin; asking
+    // for more just queues inside the network layer and deepens the decode
+    // backlog on the main thread. 12 is enough for HTTP/2 multiplexing too.
+    maxRequests: 12,
+  };
 }
 
 

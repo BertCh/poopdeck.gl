@@ -499,6 +499,15 @@ export interface ArchiveOptions {
    * **Defaults to 24.**
    */
   maxConcurrentRequests?: number;
+  /**
+   * Backoff schedule (ms) for retrying a failed HTTP range request. The
+   * array length is the retry count; each delay is jittered ±50% before
+   * sleeping. Aborted requests are never retried. Tests can pass `[0, 0]`
+   * (or `[]` to disable retries entirely).
+   *
+   * **Defaults to `[250, 1000]`** — 2 retries with exponential backoff.
+   */
+  retryDelaysMs?: number[];
 }
 
 /** Options for tile requests */

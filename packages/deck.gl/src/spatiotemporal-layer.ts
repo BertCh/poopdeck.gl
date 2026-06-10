@@ -17,8 +17,14 @@ import type {
 } from '@deck.gl/core';
 import { STTArchive } from '@stt/core';
 import { SpatiotemporalTileset } from '@stt/core';
-import type { Tile, BoundingBox, ArchiveMetadata } from '@stt/core';
+import type {
+  Tile,
+  BoundingBox,
+  ArchiveMetadata,
+  OverviewPreloadResult,
+} from '@stt/core';
 import { TimeController } from './time-controller';
+import type { BufferSource, BufferedRunway } from './playback-governor';
 import { snapshot, isProbeEnabled } from './telemetry';
 
 const DEBUG = false;
@@ -43,8 +49,10 @@ export interface SpatioTemporalLayerProps extends CompositeLayerProps {
   timeController?: TimeController | null;
 
   /**
-   * Maximum concurrent tile requests (deck.gl `TileLayer` pattern).
-   * @default 12
+   * Maximum concurrent in-flight HTTP Range requests. Threaded into the
+   * archive's range coalescer as its `maxConcurrentRequests` ceiling, so this
+   * is the single knob that bounds actual fetch concurrency.
+   * @default 24
    */
   maxRequests?: number;
 
@@ -109,6 +117,44 @@ export interface SpatioTemporalLayerProps extends CompositeLayerProps {
 
   /** Callback when a tile is evicted from cache. */
   onTileUnload?: ((tile: Tile) => void) | null;
+
+  /**
+   * Fired ONCE per archive/tileset initialization (and again if `data`
+   * changes and a new tileset is created), with the live tileset. The tileset
+   * satisfies the {@link BufferSource} readiness contract, so apps hand it
+   * straight to a `PlaybackGovernor` via `governor.setSource(tileset)`.
+   * Mirrors the `onTileLoad` callback pattern.
+   */
+  onTilesetReady?: ((tileset: SpatiotemporalTileset & BufferSource) => void) | null;
+
+  /**
+   * Forwarded from the tileset's buffer bookkeeping: fires when the buffered
+   * runway around the playhead crosses a threshold (not per tile load). Apps
+   * forward this to `PlaybackGovernor.notifyBufferChange(runway)` so gating
+   * reacts immediately instead of waiting for the governor's poll cadence.
+   */
+  onBufferChange?: ((runway: BufferedRunway) => void) | null;
+
+  /**
+   * Overview (storyboard) preview tier — player buffering WS-C4. When truthy,
+   * the layer calls `tileset.preloadOverviewTier()` right after tileset init:
+   * the coarsest tiles (z0..maxZoom, default 1) across the FULL dataset time
+   * range are loaded at the lowest request tier and PINNED, so scrubbing
+   * always renders a coarse preview via the parent-zoom fallback — the data
+   * analog of a video player's always-resident thumbnail strip. Budget-gated
+   * per dataset (default 20 MiB of directory bytes): datasets with giant
+   * coarse tiles are rejected without fetching anything. Pass an object to
+   * tune `budgetBytes` / `maxZoom`. Init is never blocked on the preload.
+   * @default false
+   */
+  overviewPreload?: boolean | { budgetBytes?: number; maxZoom?: number };
+
+  /**
+   * Fired once per tileset init with the overview preload's outcome (loaded,
+   * candidate tile count, directory byte sum, and the rejection reason when
+   * skipped). Only fires when `overviewPreload` is truthy.
+   */
+  onOverviewPreload?: ((result: OverviewPreloadResult) => void) | null;
 
   /** loaders.gl options. */
   loadOptions?: Record<string, unknown>;
@@ -194,6 +240,13 @@ export class SpatioTemporalLayer<
    */
   private _finalized: boolean = false;
 
+  /**
+   * Outcome of the storyboard preload (WS-C4) for the LIVE tileset, kept so
+   * the perf-probe snapshot can republish it (the one-shot callback may fire
+   * before a HUD enables the probe). Reset on re-init.
+   */
+  private _overviewPreload: OverviewPreloadResult | null = null;
+
   static defaultProps: DefaultProps<SpatioTemporalLayerProps> = {
     // Data source
     data: '',
@@ -205,11 +258,13 @@ export class SpatioTemporalLayer<
     timeController: { type: 'object', value: null, optional: true, compare: false },
 
     // Tile-loading configuration (mirrors deck.gl `TileLayer`).
-    // maxRequests sits at 12 because browsers cap concurrent connections per
-    // origin (~6 HTTP/1.1, more under HTTP/2 multiplexing). Going above ~12
-    // just queues fetches inside the browser and lengthens the main-thread
-    // decode backlog without speeding anything up.
-    maxRequests: 12,
+    // maxRequests is the SINGLE concurrency knob: it's threaded into the
+    // archive as `maxConcurrentRequests`, bounding the number of in-flight
+    // HTTP Range requests the coalescer opens per batch. Under HTTP/2/3
+    // multiplexing to object storage (R2 caps ~75 streams/connection) 24 is
+    // the tuned ceiling — high enough to fill a viewport in one round-trip,
+    // low enough to stay well under the per-connection stream cap.
+    maxRequests: 24,
     debounceTime: 0,
     maxCacheSize: 2000,
     maxCacheByteSize: 2 * 1024 * 1024 * 1024, // 2 GiB
@@ -231,6 +286,13 @@ export class SpatioTemporalLayer<
     onViewportLoad: { type: 'function', value: null, optional: true },
     onTileLoad: { type: 'function', value: null, optional: true },
     onTileUnload: { type: 'function', value: null, optional: true },
+    onTilesetReady: { type: 'function', value: null, optional: true },
+    onBufferChange: { type: 'function', value: null, optional: true },
+
+    // Storyboard preview tier: opt-in (some datasets fail the byte budget by
+    // design — the gate, not the consumer, decides whether anything loads).
+    overviewPreload: false,
+    onOverviewPreload: { type: 'function', value: null, optional: true },
 
     // loaders.gl options
     loadOptions: { type: 'object', value: {}, compare: false },
@@ -612,6 +674,11 @@ export class SpatioTemporalLayer<
       if (archive) {
         snapshot('archive.stats', archive.getCacheStats());
       }
+      // Storyboard preload outcome (one-shot result, republished each pass so
+      // a HUD that enables the probe AFTER the preload still sees it).
+      if (this._overviewPreload) {
+        snapshot('overview.preload', this._overviewPreload);
+      }
     }
 
     if (DEBUG) {
@@ -665,7 +732,12 @@ export class SpatioTemporalLayer<
 
     const archive = new STTArchive({
         url: targetUrl,
-        loadOptions: this.props.loadOptions
+        loadOptions: this.props.loadOptions,
+        // Single concurrency knob: the tileset's `maxRequests` IS the archive's
+        // in-flight Range-request ceiling. Previously the archive used its own
+        // default (24) and the layer's `maxRequests` never reached the wire, so
+        // setting it had no effect on actual fetch concurrency.
+        maxConcurrentRequests: this.props.maxRequests!,
     });
 
     // Get metadata to configure tileset zoom range
@@ -738,6 +810,15 @@ export class SpatioTemporalLayer<
       onTileError: (error, tileId) => {
         console.error('[STL] Tile error:', tileId, error);
       },
+      // ── Player-buffering plumbing (WS-A/WS-B contract) ──────────────────
+      // Buffered-runway threshold events from the tileset's coverage index,
+      // forwarded to the app (which routes them into a PlaybackGovernor).
+      onBufferChange: (runway: BufferedRunway) => {
+        this.props.onBufferChange?.(runway);
+      },
+      // Wire the archive's coalesced-range throughput EWMA into the tileset
+      // so estimateTimeToReadyMs() can compute honest ETAs.
+      getThroughput: () => archive.getThroughputEstimate(),
     });
     
     if (DEBUG) console.log('[STL] Tileset configured with zoom range:', metadata.minZoom, '-', metadata.maxZoom);
@@ -753,6 +834,30 @@ export class SpatioTemporalLayer<
     // archive's tiles). Without this the cache holds stale entries until
     // the natural "different tile key" prune kicks in on the next render.
     this.setState({ archive, tileset, metadata, initializingUrl: null, tiles: [] });
+
+    // Hand the live tileset to the app exactly once per init, after state is
+    // committed. The tileset implements the BufferSource readiness contract
+    // (runway/cost/ETA queries), which is what a PlaybackGovernor consumes.
+    this.props.onTilesetReady?.(tileset as SpatiotemporalTileset & BufferSource);
+
+    // Storyboard tier (WS-C4): kick the budget-gated overview preload WITHOUT
+    // blocking init — the fetches ride the lowest request tier behind any
+    // viewport work, and the gate may reject the dataset outright (giant
+    // coarse tiles) in which case nothing is fetched at all.
+    this._overviewPreload = null;
+    if (this.props.overviewPreload) {
+      const overviewOpts =
+        typeof this.props.overviewPreload === 'object'
+          ? this.props.overviewPreload
+          : undefined;
+      tileset.preloadOverviewTier(overviewOpts).then((result) => {
+        // Ignore results for a tileset this layer no longer owns (re-init /
+        // unmount races) — `clear()` settles those with reason 'disabled'.
+        if (this._finalized || this.state.tileset !== tileset) return;
+        this._overviewPreload = result;
+        this.props.onOverviewPreload?.(result);
+      });
+    }
   }
 
   private getViewportBounds(viewport: any): BoundingBox {

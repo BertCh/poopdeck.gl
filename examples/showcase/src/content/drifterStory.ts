@@ -134,10 +134,12 @@ export const ACT_BUILDUP: StoryAct = {
         mode: 'sweep',
         sweep: { start: DATA_START, end: D(2005, 8, 18) },
         trailDays: 110,
-        // The fastest beat by far — it compresses ~26 years. Even after the
-        // global PLAYBACK_SLOWDOWN this lands near the demos' proven R2-safe
-        // base rate (~65 sim-days/real-s) so the sweep doesn't outrun loading;
-        // it now plays over ~2.5 min rather than ~45 s.
+        // The fastest beat by far — it compresses ~26 years over ~75 s. The
+        // rate is a hand-tuned PACING choice; it no longer needs to be R2-safe
+        // — the runway-gated cross-dissolve in StoryGlobe backstops loading on
+        // era jumps, and the story-wide prefetch budget is sized to this beat.
+        // (Governor-driven auto-speed for story beats is a possible follow-up;
+        // see player-buffering WS-D.)
         speedDays: 130,
       },
     },

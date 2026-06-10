@@ -50,6 +50,7 @@ import { createDefaultTileDecoder, type TileDecoder } from './tile-decoder';
 import { OpfsTileCache } from './opfs-cache';
 import { decompress } from './compression';
 import { createSttTileSource, type SttTileSource } from './tile-source';
+import { ThroughputEstimator, type ThroughputEstimate } from './throughput';
 
 /** `format` discriminator written into every packed manifest. */
 const PACKED_FORMAT = 'stt-packed';
@@ -72,6 +73,45 @@ const MOBILE_MAX_CACHE_TILES = 100;
 const DEFAULT_RANGE_COALESCE_GAP = 2 * 1024 * 1024;
 /** Default ceiling on concurrent range requests per coalesced batch. */
 const DEFAULT_MAX_CONCURRENT_REQUESTS = 24;
+/**
+ * Base backoff delays for transient range-request failures (WS-E loader
+ * hardening): 2 retries before a request is considered failed. Each delay is
+ * jittered ±50% (full jitter) so a fleet of throttled clients doesn't
+ * re-stampede the host in lockstep. Aborts are NEVER retried.
+ */
+const DEFAULT_RANGE_RETRY_DELAYS_MS = [250, 1000];
+
+/** Whether an error is a fetch cancellation (must propagate, never retry). */
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'AbortError';
+}
+
+/**
+ * Resolve after `ms`, rejecting immediately with an `AbortError` if `signal`
+ * fires first — so a retry backoff never outlives its request's cancellation.
+ */
+function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException('The operation was aborted.', 'AbortError'));
+      return;
+    }
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      reject(new DOMException('The operation was aborted.', 'AbortError'));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+/** Monotonic-ish wall clock for throughput samples. */
+function nowMs(): number {
+  return typeof performance !== 'undefined' ? performance.now() : Date.now();
+}
 
 function getDeviceAwareCacheSize(): number {
   if (typeof navigator !== 'undefined' && 'deviceMemory' in navigator) {
@@ -94,8 +134,13 @@ interface ByteCacheEntry {
   byteSize: number;
 }
 
-/** Pointer to the encoded directory object in a packed manifest. */
-interface ManifestDirectoryRef {
+/**
+ * Pointer to the encoded directory object in a packed manifest.
+ *
+ * Part of the published cross-language wire contract — see
+ * `docs/spec/manifest.schema.json` and the Rust `pack::DirectoryRef`.
+ */
+export interface ManifestDirectoryRef {
   /** Object key relative to the dataset root (e.g. `index/<hash>.sttd`). */
   key: string;
   /** Directory object length in bytes. */
@@ -104,8 +149,13 @@ interface ManifestDirectoryRef {
   directoryVersion: number;
 }
 
-/** Pointer to one pack object. Its position in `packs` IS the `packId`. */
-interface ManifestPackRef {
+/**
+ * Pointer to one pack object. Its position in `packs` IS the `packId`.
+ *
+ * Part of the published cross-language wire contract — see
+ * `docs/spec/manifest.schema.json` and the Rust `pack::PackRef`.
+ */
+export interface ManifestPackRef {
   /** Object key relative to the dataset root (e.g. `packs/<hash>.sttp`). */
   key: string;
   /** Pack object length in bytes. */
@@ -115,12 +165,22 @@ interface ManifestPackRef {
 /**
  * The packed-format `manifest.json` — metadata + directory pointer + pack
  * table folded into one tiny object. Mirrors the Rust `pack::Manifest`.
+ *
+ * This is the canonical cross-language wire contract. The authoritative schema
+ * is `docs/spec/manifest.schema.json` (validated against this type and the
+ * golden fixture in `test/manifest-schema.test.ts`); the prose spec is
+ * `docs/spec/stt-packed-format.md`.
  */
-interface PackedManifest {
+export interface PackedManifest {
+  /** Format discriminator. Always {@link PACKED_FORMAT} (`"stt-packed"`). */
   format: string;
+  /** Manifest schema version (currently 1). */
   formatVersion: number;
+  /** Per-blob compression codec (`"zstd" | "gzip" | "none"`). */
   compression: string;
+  /** Pointer to the immutable, content-addressed directory object. */
   directory: ManifestDirectoryRef;
+  /** Ordered pack table; a pack's array index IS its `packId`. */
   packs: ManifestPackRef[];
   /** The verbatim stt-core Metadata JSON (snake_case keys). */
   metadata: any;
@@ -187,6 +247,14 @@ export class STTArchive {
   private coalesceGapBytes: number = DEFAULT_RANGE_COALESCE_GAP;
   /** Ceiling on concurrent range requests per coalesced batch (see options). */
   private maxConcurrentRequests: number = DEFAULT_MAX_CONCURRENT_REQUESTS;
+  /** Backoff schedule for transient range failures (see options). */
+  private retryDelaysMs: number[] = DEFAULT_RANGE_RETRY_DELAYS_MS;
+
+  /**
+   * Dual-EWMA throughput estimator fed by completed coalesced range
+   * responses in {@link getTiles}. See {@link getThroughputEstimate}.
+   */
+  private throughput = new ThroughputEstimator();
 
   /** "z/x/y" -> temporal entries at that spatial cell. */
   private tileEntryIndex = new Map<string, TileEntry[]>();
@@ -235,6 +303,11 @@ export class STTArchive {
       }
       if (typeof options.maxConcurrentRequests === 'number' && options.maxConcurrentRequests >= 1) {
         this.maxConcurrentRequests = Math.floor(options.maxConcurrentRequests);
+      }
+      if (Array.isArray(options.retryDelaysMs)) {
+        this.retryDelaysMs = options.retryDelaysMs.filter(
+          (d) => typeof d === 'number' && d >= 0,
+        );
       }
       // OPFS defaults to OFF. The cache's warm-reload win only materializes
       // when the archive fits in `opfsCacheMaxBytes` AND users revisit the
@@ -377,6 +450,51 @@ export class STTArchive {
       );
     }
     return response.arrayBuffer();
+  }
+
+  /**
+   * {@link fetchRange} with exponential backoff + full jitter on transient
+   * failures (WS-E loader hardening). One transient 5xx / network blip used
+   * to silently drop every tile in the affected batch; now the request is
+   * retried per {@link ArchiveOptions.retryDelaysMs} (default 250 ms then
+   * 1000 ms, each jittered ±50%) before the failure surfaces.
+   *
+   * An `AbortError` is NEVER retried — cancellation propagates immediately,
+   * including out of a pending backoff delay.
+   */
+  private async fetchRangeWithRetry(
+    packIndex: number,
+    start: number,
+    end: number,
+    signal?: AbortSignal,
+  ): Promise<ArrayBuffer> {
+    let lastError: unknown;
+    for (let attempt = 0; attempt <= this.retryDelaysMs.length; attempt++) {
+      if (attempt > 0) {
+        const base = this.retryDelaysMs[attempt - 1];
+        await abortableDelay(base * (0.5 + Math.random()), signal);
+      }
+      try {
+        return await this.fetchRange(packIndex, start, end, signal);
+      } catch (error) {
+        if (isAbortError(error)) throw error;
+        lastError = error;
+      }
+    }
+    throw lastError;
+  }
+
+  /**
+   * Current network throughput estimate, fed by completed coalesced range
+   * responses in {@link getTiles}: dual EWMA (3 s fast / 9 s slow half-life,
+   * duration-weighted), published as `min(fast, slow)` — reacts fast to
+   * drops, rises cautiously. `bytesPerMs` is `null` until the first sample.
+   *
+   * Wire into `SpatiotemporalTileset`'s `getThroughput` option so the
+   * tileset can convert pending-byte counts into honest time-to-ready ETAs.
+   */
+  getThroughputEstimate(): ThroughputEstimate {
+    return this.throughput.getEstimate();
   }
 
   /** Archive metadata, folded into the manifest (no separate fetch). */
@@ -623,7 +741,7 @@ export class STTArchive {
     }
 
     this.cacheStats.misses++;
-    const compressed = await this.fetchRange(
+    const compressed = await this.fetchRangeWithRetry(
       entry.packId,
       entry.offset,
       entry.offset + entry.length - 1,
@@ -754,20 +872,65 @@ export class STTArchive {
       // usually collapses to a few groups; the concurrency pool below bounds
       // in-flight requests across the groups of ALL packs so a pathological
       // sparse batch can't exceed an object store's per-connection stream cap.
-      const fetchGroup = (group: Group): Promise<void> =>
-        this.fetchRange(group.packId, group.start, group.end, options?.signal).then((buffer) =>
-          Promise.all(
+      //
+      // WS-E hardening: the group fetch retries transient failures with
+      // backoff (see fetchRangeWithRetry); if the WHOLE coalesced range still
+      // fails, fall back to fetching its member tiles individually (single
+      // attempt each) so one bad range can't drop an entire batch — only the
+      // tiles that still fail stay `null` in the results. Every completed
+      // range response also feeds the throughput estimator.
+      const fetchGroup = async (group: Group): Promise<void> => {
+        let buffer: ArrayBuffer;
+        try {
+          const t0 = nowMs();
+          buffer = await this.fetchRangeWithRetry(
+            group.packId,
+            group.start,
+            group.end,
+            options?.signal,
+          );
+          this.throughput.addSample(buffer.byteLength, nowMs() - t0);
+        } catch (error) {
+          if (isAbortError(error)) throw error;
+          // Coalesced range failed after retries → per-member fallback.
+          await Promise.all(
             group.members.map(async (m) => {
-              const rel = m.entry.offset - group.start;
-              const slice = buffer.slice(rel, rel + m.entry.length);
-              this.storeBytes(this.tileIdToKey(m.id), slice);
-              results[m.index] = await this.decodeBytes(m.id, m.entry, slice);
-              if (this.opfsCache) {
-                void this.writeOpfsAsync(m.id, m.entry, slice.slice(0));
+              try {
+                const t0 = nowMs();
+                const single = await this.fetchRange(
+                  m.entry.packId,
+                  m.entry.offset,
+                  m.entry.offset + m.entry.length - 1,
+                  options?.signal,
+                );
+                this.throughput.addSample(single.byteLength, nowMs() - t0);
+                this.storeBytes(this.tileIdToKey(m.id), single);
+                results[m.index] = await this.decodeBytes(m.id, m.entry, single);
+                if (this.opfsCache) {
+                  void this.writeOpfsAsync(m.id, m.entry, single.slice(0));
+                }
+              } catch (memberError) {
+                if (isAbortError(memberError)) throw memberError;
+                // Tile-level failure: leave `null`. Callers that know the
+                // tile exists in the directory surface this per-tile (the
+                // tileset reports it through `onTileError`).
               }
-            })
-          ).then(() => undefined)
+            }),
+          );
+          return;
+        }
+        await Promise.all(
+          group.members.map(async (m) => {
+            const rel = m.entry.offset - group.start;
+            const slice = buffer.slice(rel, rel + m.entry.length);
+            this.storeBytes(this.tileIdToKey(m.id), slice);
+            results[m.index] = await this.decodeBytes(m.id, m.entry, slice);
+            if (this.opfsCache) {
+              void this.writeOpfsAsync(m.id, m.entry, slice.slice(0));
+            }
+          })
         );
+      };
 
       const limit = Math.max(1, this.maxConcurrentRequests);
       if (groups.length <= limit) {
@@ -1027,20 +1190,6 @@ export class STTArchive {
       }
     }
     return pick;
-  }
-
-  /** Prefetch tiles for a set of bucket times (warms the byte cache). */
-  async prefetch(
-    bounds: BoundingBox,
-    zoom: number,
-    times: number[],
-    options?: TileRequestOptions
-  ): Promise<void> {
-    const ids: TileId[] = [];
-    for (const [x, y] of boundsToTiles(bounds, zoom)) {
-      for (const t of times) ids.push({ z: zoom, x, y, t });
-    }
-    await this.getTiles(ids, options);
   }
 
   /** Clear the in-memory compressed-byte cache (does NOT touch OPFS). */

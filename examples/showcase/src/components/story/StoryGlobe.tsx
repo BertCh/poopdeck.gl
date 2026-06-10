@@ -8,9 +8,18 @@ import {
   TextLayer,
 } from '@deck.gl/layers';
 import { AnimatedTripsLayer, TimeController } from '@stt/deck.gl';
+import type { BufferSource } from '@stt/deck.gl';
 import { getDatasetById } from '../../datasets';
-import { PLAYBACK_SLOWDOWN } from '../../types';
-import { DAY, DATA_START, DATA_END, type GlobeFocus, type GlobeMarker } from '../../content/drifterStory';
+import { tileLoadingProps } from '../../types';
+import {
+  ACTS,
+  HERO_FOCUS,
+  DAY,
+  DATA_START,
+  DATA_END,
+  type GlobeFocus,
+  type GlobeMarker,
+} from '../../content/drifterStory';
 
 // One full-sphere quad gives the globe a dark "ocean" body that also occludes
 // the back-side tracks, so the drifter ribbons read as a planet rather than a
@@ -48,20 +57,35 @@ const IDLE_SPIN = -0.8; // gentle drift on located beats
 // layer blanks, then pops back when the new era streams in — read as a flash.
 //
 // Instead of blanking, we fade the globe out, commit the time jump at the
-// trough (invisibly), HOLD black until the new era's tiles actually load (or a
-// timeout), then fade back in — so the eras cross-dissolve over a flying camera,
-// reading as a deliberate scene cut. The fade is a GPU-composited CSS opacity on
-// the deck container (not the layer's own `opacity` prop), so the layers and
-// their per-tile caches are never recreated — the dissolve stays smooth. We
-// trigger it ONLY when the jump fully clears the resident tile window (otherwise
-// enough tiles overlap that nothing blanks — see the focus effect).
+// trough (invisibly), HOLD black until the destination era is genuinely ready
+// (or a timeout), then fade back in — so the eras cross-dissolve over a flying
+// camera, reading as a deliberate scene cut. The fade is a GPU-composited CSS
+// opacity on the deck container (not the layer's own `opacity` prop), so the
+// layers and their per-tile caches are never recreated — the dissolve stays
+// smooth. We trigger it ONLY when the jump fully clears the resident tile
+// window (otherwise enough tiles overlap that nothing blanks — see the focus
+// effect).
+//
+// "Ready" is a REAL runway signal: the tileset (handed over via
+// onTilesetReady) reports the contiguous buffered span ahead of the new
+// playhead, and we hold until it covers a start-gate-sized window — the same
+// wall-time × speed gate the PlaybackGovernor uses. Before the buffering API
+// existed this was a heuristic ("a tile loaded since the jump, +180 ms settle,
+// capped at 850 ms"), which is kept only as the no-source fallback.
 const RIBBON_OPACITY = 0.9; // the drifter layer's own (intrinsic) opacity
 const TARGET_OPACITY = 1; // globe-container opacity at rest (the fade rides 1→0→1)
 const FADE_TAU = 0.12; // globe fade ease constant (s) — ~0.35s each direction
-// Max hold at black before fading in regardless of load. Caps the dark moment
-// when the destination era is already cached (a scroll-back) and `onTileLoad`
-// never fires; for the common uncached case the load signal fades in sooner.
-const FADE_WAIT_MAX_MS = 850;
+// Max hold at black before fading in regardless of readiness, so a stalled or
+// errored load never leaves the globe dark. Now that the wait condition is a
+// real runway signal (not a guess), the cap can afford to be longer than the
+// old 850 ms heuristic — the common case releases as soon as the gate passes.
+const FADE_WAIT_MAX_MS = 1500;
+// Runway required before fading back in: wall-ms × the beat's |speed| — the
+// same start-gate sizing the PlaybackGovernor uses (player-buffering WS-B).
+const FADE_GATE_WALL_MS = 2000;
+// The runway query is cheap coverage-index bookkeeping, but there's no reason
+// to run it per-rAF — throttle the wait-phase readiness check.
+const FADE_GATE_CHECK_INTERVAL_MS = 150;
 
 // Full temporal extent of the drifters archive (Unix ms), from the story
 // content. Drift/spin beats play FORWARD from the beat's moment to DATA_END and
@@ -69,6 +93,27 @@ const FADE_WAIT_MAX_MS = 850;
 // and reads as calm. Forward playback is also the always-smooth tile-loading
 // direction (prefetch is aimed the way the head moves), so it never flashes.
 const DATA_TIME_RANGE: { start: number; end: number } = { start: DATA_START, end: DATA_END };
+
+// ── Tile-loading budget (shared recipe, story-wide ceiling) ──────────────────
+// The tileset freezes its prefetch/concurrency options when it is created and
+// the layer never re-threads them on prop updates, so we can't pass per-beat
+// values — instead we compute ONE budget that covers the story's most
+// demanding beat (longest trail window, fastest playback) and feed it through
+// the same `tileLoadingProps` recipe DemoPage and the hero use. Before this,
+// the story silently inherited the library defaults (30 sim-SECONDS of
+// prefetch lookahead against beats that play sim-DAYS per real second, and 24
+// concurrent requests vs the app-wide 12), so every bucket loaded reactively
+// only when the playhead hit it — which is why the story streamed so much
+// worse than the same dataset on /demo/ocean-drifters.
+const ALL_STORY_FOCI: GlobeFocus[] = [
+  HERO_FOCUS,
+  ...ACTS.flatMap((act) => act.steps.map((step) => step.focus)),
+];
+const MAX_TRAIL_MS = Math.max(...ALL_STORY_FOCI.map((f) => (f.trailDays ?? 90) * DAY));
+// Fastest beat's controller speed in sim-ms per real-ms (same math as
+// applyFocusTime below).
+const MAX_PLAYBACK_SPEED =
+  Math.max(...ALL_STORY_FOCI.map((f) => f.speedDays ?? 8)) * (DAY / 1000);
 
 const TONE: Record<NonNullable<GlobeMarker['tone']>, [number, number, number]> = {
   cool: [40, 180, 200],
@@ -153,6 +198,14 @@ const StoryGlobe: React.FC<StoryGlobeProps> = ({ focus, active }) => {
   // fade-in waits for the destination era to actually arrive.
   const jumpWallRef = useRef(0);
   const lastTileLoadRef = useRef(0);
+  // The drifter layer's tileset (a BufferSource), handed over via
+  // onTilesetReady. The wait phase queries its buffered runway to decide when
+  // the destination era is genuinely ready; null until init (or on a core
+  // build without the buffering API), in which case the legacy tile-load
+  // heuristic takes over.
+  const sourceRef = useRef<BufferSource | null>(null);
+  // Throttle for the wait-phase runway query (no need to ask per-rAF).
+  const lastGateCheckRef = useRef(0);
   // Whether the globe was already revealed on the previous focus — a within-act
   // beat change cross-dissolves; a first reveal (from an interlude, masked by
   // the stage's own CSS fade) applies immediately.
@@ -182,12 +235,11 @@ const StoryGlobe: React.FC<StoryGlobeProps> = ({ focus, active }) => {
   // applied separately and immediately (it never causes a flash).
   const applyFocusTime = useCallback(
     (f: GlobeFocus) => {
-      // Route every beat through the same global PLAYBACK_SLOWDOWN the demos use:
-      // in production the tiles stream from R2 (slower than local disk), so the
-      // hand-tuned per-beat `speedDays` would race ahead of loading and the
-      // playhead would outrun the tiles. Dividing here stretches all beats
-      // uniformly (preserving their relative pacing) so loading keeps up.
-      const speed = ((f.speedDays ?? 8) * (DAY / 1000)) / PLAYBACK_SLOWDOWN; // sim-ms per real-ms
+      // Per-beat `speedDays` plays at its authored rate. (The old global
+      // PLAYBACK_SLOWDOWN ÷2 — added so R2 loading could keep up — is gone:
+      // the runway-gated cross-dissolve below backstops era jumps, and the
+      // story-wide prefetch budget covers steady playback.)
+      const speed = (f.speedDays ?? 8) * (DAY / 1000); // sim-ms per real-ms
       timeController.setSpeed(speed);
       if (f.mode === 'sweep' && f.sweep) {
         timeController.setTimeRange(f.sweep);
@@ -327,16 +379,38 @@ const StoryGlobe: React.FC<StoryGlobeProps> = ({ focus, active }) => {
           pendingFocusRef.current = null;
         }
         jumpWallRef.current = now;
+        lastGateCheckRef.current = 0; // first readiness check runs immediately
         fadeStateRef.current = 'wait';
       } else if (phase === 'wait') {
-        // Fade back in once a tile has loaded since the jump (the new era is
-        // streaming in) — with a short settle so several buckets batch — or a
-        // hard timeout so a stalled/errored load never leaves it dark.
-        const loaded =
-          lastTileLoadRef.current > jumpWallRef.current && now - jumpWallRef.current > 180;
-        if (loaded || now - jumpWallRef.current > FADE_WAIT_MAX_MS) {
-          opacityTargetRef.current = TARGET_OPACITY;
-          fadeStateRef.current = 'in';
+        // Fade back in once the destination era is genuinely ready: the
+        // tileset's buffered runway ahead of the new playhead must cover a
+        // start-gate-sized window (FADE_GATE_WALL_MS of wall-time at the
+        // beat's speed — the same gate sizing the PlaybackGovernor uses).
+        // Falls back to the legacy "a tile loaded since the jump" heuristic
+        // when no source is available, and a hard timeout so a stalled or
+        // errored load never leaves it dark.
+        if (now - lastGateCheckRef.current >= FADE_GATE_CHECK_INTERVAL_MS) {
+          lastGateCheckRef.current = now;
+          const source = sourceRef.current;
+          let ready: boolean;
+          if (source) {
+            const speed = timeController.getSpeed();
+            const requiredSimMs = FADE_GATE_WALL_MS * Math.abs(speed);
+            const runway = source.getBufferedRunway(
+              timeController.getTime(),
+              speed < 0 ? -1 : 1,
+              requiredSimMs,
+            );
+            ready = runway.complete || runway.simMs >= requiredSimMs;
+          } else {
+            ready =
+              lastTileLoadRef.current > jumpWallRef.current &&
+              now - jumpWallRef.current > 180;
+          }
+          if (ready || now - jumpWallRef.current > FADE_WAIT_MAX_MS) {
+            opacityTargetRef.current = TARGET_OPACITY;
+            fadeStateRef.current = 'in';
+          }
         }
       } else if (phase === 'in' && op >= TARGET_OPACITY - 0.01) {
         op = TARGET_OPACITY;
@@ -356,14 +430,24 @@ const StoryGlobe: React.FC<StoryGlobeProps> = ({ focus, active }) => {
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [active]);
+  }, [active, timeController]);
 
   const views = useMemo(() => [new GlobeView({ id: 'globe', resolution: 10 })], []);
 
-  // Record tile arrivals (same clock as the rAF `now`) so the cross-dissolve
-  // can fade back in the moment the destination era starts streaming.
+  // Record tile arrivals (same clock as the rAF `now`) so the no-source
+  // fallback of the cross-dissolve can fade back in when the destination era
+  // starts streaming.
   const handleTileLoad = useCallback(() => {
     lastTileLoadRef.current = performance.now();
+  }, []);
+
+  // Capture the tileset (the BufferSource) once the layer finishes archive
+  // init — this is what makes the cross-dissolve's wait condition a real
+  // runway signal instead of a tile-load guess. Defensive method check so a
+  // core build without the buffering API keeps the legacy fallback.
+  const handleTilesetReady = useCallback((tileset: BufferSource) => {
+    sourceRef.current =
+      typeof tileset.getBufferedRunway === 'function' ? tileset : null;
   }, []);
 
   // Trail length is purely an aesthetic choice per beat — NOT a data-limiting
@@ -407,14 +491,15 @@ const StoryGlobe: React.FC<StoryGlobeProps> = ({ focus, active }) => {
         data: dataset.url,
         currentTime: focus.time,
         timeController,
-        // Judicious loading for a story: the real lever is GEOMETRY, not the
-        // tile pipeline. We keep the proven hero defaults (prefetch ON with its
-        // tiny ~30s look-ahead — disabling it left sublayers rendering against
-        // not-yet-ready binary and tripped per-tile assertions) and instead cut
-        // the per-frame vertex count: short, clamped trails (≤70d, vs the
-        // 150–220d that hogged the dense global tile) and a tile window kept
-        // just wide enough to cover the trail, so few temporal buckets are ever
-        // resident at once.
+        // Same loading recipe as every other surface (see tileLoadingProps +
+        // the story-wide budget constants above). The per-beat `timeWindow`
+        // still threads live below — only the prefetch/concurrency budget has
+        // to be the story-wide ceiling, because the tileset freezes it at
+        // creation.
+        ...tileLoadingProps(
+          Math.max(dataset.timeWindow ?? 200 * DAY, MAX_TRAIL_MS * 2),
+          MAX_PLAYBACK_SPEED,
+        ),
         timeWindow: windowMs,
         timeRange: DATA_TIME_RANGE,
         useGlobalBounds: true,
@@ -434,8 +519,10 @@ const StoryGlobe: React.FC<StoryGlobeProps> = ({ focus, active }) => {
         // The cross-dissolve is applied as CSS opacity on the deck container
         // (see the ERA_JUMP comment), NOT via this layer's `opacity` prop:
         // changing a layer prop recreates the instance every frame and wipes
-        // this layer's per-tile prepared/gradient caches. `onTileLoad` only
-        // feeds the fade-in gate (it waits for the destination era to stream in).
+        // this layer's per-tile prepared/gradient caches. `onTilesetReady`
+        // feeds the fade-in gate its runway oracle; `onTileLoad` only feeds
+        // the gate's no-source fallback.
+        onTilesetReady: handleTilesetReady,
         onTileLoad: handleTileLoad,
         pickable: false,
       }),
@@ -494,7 +581,16 @@ const StoryGlobe: React.FC<StoryGlobeProps> = ({ focus, active }) => {
     return built;
     // NOTE: driftersOpacity is deliberately NOT a dep — the cross-fade is CSS on
     // the container, so the layer instance (and its tile caches) stays stable.
-  }, [dataset, coastlines, trailMs, windowMs, focus.markers, timeController, handleTileLoad]);
+  }, [
+    dataset,
+    coastlines,
+    trailMs,
+    windowMs,
+    focus.markers,
+    timeController,
+    handleTileLoad,
+    handleTilesetReady,
+  ]);
 
   if (!dataset) return null;
 

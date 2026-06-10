@@ -1,23 +1,30 @@
-# STT v4 file format
+# STT tile payload format
 
-> **Container + index:** the archive container and the tile **directory** (the
-> index) are specified in [`docs/spec/stt-v4.md`](../spec/stt-v4.md). This page
-> covers the **tile payload** (Arrow IPC + GeoArrow), which is unchanged. The
-> legacy Arrow-IPC index described historically here was replaced by the compact
-> run-length directory in v4.
+> **Scope:** this page is the normative spec for the **tile payload** (Apache
+> Arrow IPC + GeoArrow), which is identical regardless of container. The current
+> **container** is the packed format —
+> [`docs/spec/stt-packed-format.md`](../spec/stt-packed-format.md); its directory
+> codec is [`docs/spec/stt-v4.md`](../spec/stt-v4.md). The single-file layout
+> under "Top-level layout" below is the **legacy v4** container, now retained
+> only as the streaming/transcode intermediate.
 
-The Spatiotemporal Tile (`.stt`) format is a single-file archive that combines
-a spatial tile pyramid with a temporal axis. Tile payloads are **Apache Arrow
-IPC** record batches with **GeoArrow**-encoded geometry, so a browser can
-decode a tile with one library (`apache-arrow`) and feed the resulting
-columnar buffers directly to deck.gl.
+An STT dataset combines a spatial tile pyramid with a temporal axis. Tile
+payloads are **Apache Arrow IPC** record batches with **GeoArrow**-encoded
+geometry, so a browser can decode a tile with one library (`apache-arrow`) and
+feed the resulting columnar buffers directly to deck.gl.
 
 This document is the normative spec for the tile payload. The Rust authority is
 `crates/stt-core/src/archive.rs` and `crates/stt-core/src/arrow_tile.rs`; the
 TypeScript reader lives in `packages/core/src/archive.ts`. If this document
 and the code disagree, the code wins — please open a PR.
 
-## Top-level layout
+## Top-level layout (legacy single-file v4)
+
+> The container below is the **legacy single-file** archive. The current
+> container is the packed format (`manifest.json` + content-addressed
+> `packs/*.sttp` + `index/*.sttd`); see
+> [`stt-packed-format.md`](../spec/stt-packed-format.md). Single-file is now only
+> produced as the bounded-RAM streaming intermediate that is transcoded to packs.
 
 ```
 ┌─────────────────────────┐  offset 0
@@ -47,13 +54,14 @@ version.
 | Magic        | Version | Status                                              |
 | ------------ | ------- | --------------------------------------------------- |
 | `STT\x01`    | 1       | retired (pre-Arrow protobuf tiles)                  |
-| `STT\x02`    | 2       | legacy (gzip + BLAKE3-64 dedup, no dictionary slot) |
-| `STT\x03`    | 3       | **current** (zstd + CRC32C, no dedup; dictionary slot reserved but unused) |
+| `STT\x02`    | 2       | retired (gzip + BLAKE3-64 dedup, no dictionary slot)|
+| `STT\x03`    | 3       | legacy single-file (zstd + CRC32C, no dedup)        |
+| `STT\x04`    | 4       | legacy single-file (dedup + shared dict + run-length directory); now only the streaming/transcode intermediate |
 
-Both v2 and v3 share the 64-byte header layout — v2 readers/writers simply
-treat the v3 `dictionary_offset` / `dictionary_length` fields as zero
-(they fall inside what v2 calls "reserved"). Readers MUST refuse archives
-whose version they do not understand.
+> The **current container is the packed format**, which has no single-file magic
+> — a dataset is identified by `manifest.json` with `"format": "stt-packed"`. The
+> magic table above applies only to single-file archives. Readers MUST refuse
+> archives whose version they do not understand.
 
 ## Header (64 bytes, little-endian)
 

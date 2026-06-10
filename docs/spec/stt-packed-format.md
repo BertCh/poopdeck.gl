@@ -1,6 +1,8 @@
 # STT Packed Format (v1) — Specification
 
-Status: **DRAFT — awaiting sign-off** · Replaces single-file v4 (`STT\x04`) as the canonical format.
+Status: **ADOPTED** — shipped 2026-06-07, live in production. The canonical STT
+container, replacing single-file v4 (`STT\x04`). Machine-checkable manifest
+contract: [`manifest.schema.json`](./manifest.schema.json). Versioning model: §10.
 
 ## 1. Motivation
 
@@ -54,6 +56,13 @@ data/<dataset>/
 - `metadata` is the current `crate::metadata::Metadata` JSON — folded into the manifest,
   so the reader needs **no** separate header or metadata fetch.
 
+The manifest envelope is the **cross-language wire contract**. Its authoritative,
+machine-checkable definition is [`manifest.schema.json`](./manifest.schema.json),
+which is pinned in CI against the Rust writer (`crate::pack::Manifest`), the TS
+reader type (`@stt/core` `PackedManifest`) and the golden fixture
+(`packages/core/test/manifest-schema.test.ts`). Any drift between the three fails
+the build.
+
 ## 4. Directory format v5 (extends the v4 codec)
 
 Reuses the entire v4 columnar + delta+zig-zag varint + blob-run RLE + trailing
@@ -101,9 +110,14 @@ Cold load = 1 manifest + 1 directory + N pack ranges. Warm = all served from edg
 
 ## 7. Component changes
 
+> **Shipped.** All changes below landed in `b4dec99` (2026-06-07). This section is
+> kept as an implementation record. Per **D3**, the single-file *write* path was
+> demoted (kept as the streaming intermediate), not deleted.
+
 ### Rust — `crates/stt-core`
-- `archive.rs`: `TileEntry += pack_id`. Keep `ArchiveReader` (v4 single-file, mmap) **as the
-  transcode input reader**. Remove the v4 single-file **write** path (`write_tail` etc.).
+- `archive.rs`: `TileEntry += pack_id`. `ArchiveReader` (v4 single-file, mmap) is retained
+  **as the transcode input reader** and the `--streaming-arrow` intermediate writer; it is
+  no longer a deployment output (see D3).
 - `directory.rs`: implement v5 (pack_id column, per-pack offset reset).
 - New `pack.rs` (`PackWriter`): consumes an `(entry, payload)` stream (like `repack`), cuts
   packs, writes `packs/*.sttp` + `index/*.sttd` + `manifest.json` to an output **dir**.
@@ -134,15 +148,45 @@ Cold load = 1 manifest + 1 directory + N pack ranges. Warm = all served from edg
 - `scripts/r2-sync.sh`: sync per-dataset trees; **two** `Cache-Control` passes — `immutable`
   for `packs/` + `index/`, short TTL for `manifest.json`.
 
-## 8. Open decisions (sign-off)
+## 8. Design decisions (locked)
 
-- **D1 — pack target size.** Default **64 MiB**? Smaller → finer cache granularity + more
-  parallelism, but more objects + more R2 GET ops to warm. Larger → fewer objects, coarser.
-- **D2 — hash.** blake3, 128-bit (32 hex). OK? (blake3 already used for dedup.)
-- **D3 — drop the v4 *write* path** (keep v4 read only for transcoding). Matches "replace."
-- **D4 — manifest freshness.** Short `max-age` (auto, slightly stale-tolerant) vs
-  purge-`manifest.json`-on-deploy (always fresh, one purge per dataset).
+All four were resolved when the format shipped; recorded here as rationale.
+
+- **D1 — pack target size = 64 MiB** (override `--pack-size`). Well under the 512 MB
+  CDN per-object cap, fine enough for granular caching + parallel range reads, coarse
+  enough to keep the object count (and R2 GET ops to warm) modest. A single blob larger
+  than the target gets its own oversized pack (blobs are never split).
+- **D2 — content address = blake3, 128-bit** (32 hex chars). blake3 is already the
+  dedup hash; 128 bits is collision-safe at our object counts and keeps keys short.
+- **D3 — single-file *write* path demoted, not deleted.** The v4 single-file writer is
+  no longer a deployment target, but it survives as (a) the bounded-RAM **intermediate**
+  that `stt-build --streaming-arrow` transcodes into packs, and (b) the read side that
+  `transcode_archive_to_packs` consumes to migrate old archives. Full deletion is gated
+  on a streaming `PackWriter` (see the packed-format roadmap). The v4 *read* path is
+  retained indefinitely for transcode.
+- **D4 — manifest freshness = short `max-age` + `must-revalidate`.** `manifest.json`
+  ships `max-age=60, must-revalidate`; packs/index ship `immutable, max-age=31536000`.
+  Revalidation (`REVALIDATED`) keeps the tiny manifest fresh without a mandatory purge;
+  packs never need purging. `scripts/r2-sync.sh` applies the two cache-control classes.
 
 ## 9. Non-goals (tracked separately)
 - **Low-zoom data volume** (the 80 MB zoom-out) → needs the summary/aggregate tier, not packing.
 - **Worker / edge compute** → unnecessary; cacheability now lives in the format.
+
+## 10. Versioning & file extensions
+
+STT has **three independent version axes**; this spec governs only the first.
+
+| Axis | Where | Current | Meaning |
+| --- | --- | --- | --- |
+| Packed **format** version | `manifest.formatVersion` | **1** | The manifest envelope + object layout described here. |
+| **Directory** codec version | `manifest.directory.directoryVersion` | **5** | The run-length tile index encoding (`crate::directory`). v5 adds the per-run `pack_id` column + pack-relative offsets over v4. |
+| **Tile payload** encoding | Arrow IPC schema / GeoArrow field metadata | — | Per-tile geometry + properties; archive-format-independent. |
+
+Packed format v1 emits directory v5. The legacy single-file container (magic
+`STT\x04`, "v4") is a fourth, retired axis — readable for transcode, never
+written as output. Bumping any axis is a separate, independently-negotiated change.
+
+**File extensions:** `.sttp` = pack object (tile blob data), `.sttd` = directory
+object (the v5 index), `manifest.json` = the per-dataset manifest. `.stt` = the
+legacy single-file archive (now only an internal streaming intermediate).

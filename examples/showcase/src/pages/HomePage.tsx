@@ -3,9 +3,10 @@ import { Link } from "react-router-dom";
 import DeckGL from "@deck.gl/react";
 import { _GlobeView as GlobeView } from "@deck.gl/core";
 import { SolidPolygonLayer } from "@deck.gl/layers";
-import { AnimatedTripsLayer, TimeController } from "@stt/deck.gl";
+import { AnimatedTripsLayer, PlaybackGovernor, TimeController } from "@stt/deck.gl";
+import type { BufferSource, BufferedRunway } from "@stt/deck.gl";
 import { getDatasetById, navDatasets } from "../datasets";
-import { calculateAnimationSpeed } from "../types";
+import { calculateAnimationSpeed, tileLoadingProps } from "../types";
 import { SourceLogo } from "../components/SourceLogo";
 
 // A single full-sphere quad gives the globe a light "ocean" backdrop (matching
@@ -49,23 +50,37 @@ const HomePage: React.FC = () => {
   //
   // Don't play on mount: tiles stream from R2, and starting before the first
   // fixes load would skip past the earliest drifters (off the west coast of S.
-  // America). Hold at timeRange.start and begin once the hero layer reports its
-  // first loaded tile (onTileLoad below), with a timeout fallback so a slow or
-  // failed load never leaves the globe frozen.
-  const startedRef = useRef(false);
-  const startPlayback = useCallback(() => {
-    if (startedRef.current) return;
-    startedRef.current = true;
-    timeController.play();
-  }, [timeController]);
-
+  // America). The PlaybackGovernor holds the clock at timeRange.start in its
+  // 'starting' state until the tileset reports a genuinely buffered runway,
+  // with maxStartWaitMs as the same 4 s escape hatch the old first-tile gate
+  // had — a slow or failed load never leaves the globe frozen.
+  //
+  // Created inside the effect (not useState): dispose() is terminal, and React
+  // StrictMode's dev mount→cleanup→remount would otherwise revive a dead
+  // instance whose requestPlay() silently no-ops. tilesetRef replays the
+  // layer's one-shot onTilesetReady handover to a freshly created governor.
+  const governorRef = useRef<PlaybackGovernor | null>(null);
+  const tilesetRef = useRef<BufferSource | null>(null);
   useEffect(() => {
-    const fallback = setTimeout(startPlayback, 4000);
+    const g = new PlaybackGovernor(timeController, { maxStartWaitMs: 4000 });
+    governorRef.current = g;
+    if (tilesetRef.current) g.setSource(tilesetRef.current);
+    g.requestPlay();
     return () => {
-      clearTimeout(fallback);
+      governorRef.current = null;
+      g.dispose();
       timeController.pause();
     };
-  }, [startPlayback, timeController]);
+  }, [timeController]);
+
+  const handleTilesetReady = useCallback((tileset: BufferSource) => {
+    tilesetRef.current = tileset;
+    governorRef.current?.setSource(tileset);
+  }, []);
+  const handleBufferChange = useCallback(
+    (runway: BufferedRunway) => governorRef.current?.notifyBufferChange(runway),
+    [],
+  );
 
   const views = useMemo(
     () => [new GlobeView({ id: "globe", resolution: 10 })],
@@ -114,12 +129,17 @@ const HomePage: React.FC = () => {
         timeController,
         timeWindow: heroDataset.timeWindow,
         timeRange: heroDataset.timeRange,
+        // Shared prefetch/concurrency recipe — same budget the demo page
+        // computes for this dataset, so the hero streams identically.
+        ...tileLoadingProps(heroDataset.timeWindow ?? 86400000, baseAnimationSpeed),
         useGlobalBounds: true,
         zoomOverride: 0,
-        // Begin the hero animation as soon as the first tiles arrive, so the
-        // earliest drifters are on screen when playback starts instead of
-        // already scrolled past while R2 was still loading.
-        onTileLoad: () => startPlayback(),
+        // Start gating: the governor begins the hero animation once the
+        // tileset reports a real buffered runway, so the earliest drifters
+        // are on screen when playback starts instead of already scrolled
+        // past while R2 was still loading.
+        onTilesetReady: handleTilesetReady,
+        onBufferChange: handleBufferChange,
         ...(g && {
           gradientProperty: g.property,
           gradientDomain: g.domain,
@@ -137,7 +157,13 @@ const HomePage: React.FC = () => {
         pickable: false,
       }),
     ];
-  }, [heroDataset, timeController, startPlayback]);
+  }, [
+    heroDataset,
+    timeController,
+    baseAnimationSpeed,
+    handleTilesetReady,
+    handleBufferChange,
+  ]);
 
   // The curated demos for the quiet index below the hero.
   const featured = navDatasets.slice(0, 6);

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { enableProbe, getSnapshot } from '@stt/deck.gl';
+import type { OverviewPreloadResult } from '@stt/deck.gl';
 
 interface PerformanceStats {
   tileCount: number;
@@ -39,6 +40,27 @@ interface PerformanceMonitorProps {
    */
   getTilesetStats?: () => any;
   visible?: boolean;
+  /**
+   * Storyboard (overview preview tier) preload outcome, fed from the layer's
+   * `onOverviewPreload` callback. Falls back to the `overview.preload`
+   * snapshot channel when unset; the row is hidden while neither has fired.
+   */
+  overviewPreload?: OverviewPreloadResult | null;
+  /**
+   * Where the collapsed chip docks. DemoPage uses `top-right` because the
+   * dataset Legend already owns the bottom-right corner. (Expanded view is
+   * top-anchored either way — pre-existing behaviour.)
+   */
+  anchor?: 'bottom-right' | 'top-right';
+}
+
+/** One-line "storyboard:" stat. */
+function formatOverview(result: OverviewPreloadResult): string {
+  const mb = Math.round((result.bytes / (1024 * 1024)) * 10) / 10;
+  if (result.loaded) return `loaded (${result.tiles} tiles, ${mb} MB)`;
+  if (result.reason === 'over-budget') return `skipped (over budget, ${mb} MB)`;
+  if (result.reason === 'no-tiles') return 'skipped (no tiles)';
+  return `skipped (${result.reason ?? 'unknown'})`;
 }
 
 interface TilesetSnapshot {
@@ -70,7 +92,12 @@ interface ArchiveSnapshot {
   };
 }
 
-const PerformanceMonitor: React.FC<PerformanceMonitorProps> = ({ getTilesetStats, visible = true }) => {
+const PerformanceMonitor: React.FC<PerformanceMonitorProps> = ({
+  getTilesetStats,
+  visible = true,
+  overviewPreload = null,
+  anchor = 'bottom-right',
+}) => {
   const [stats, setStats] = useState<PerformanceStats>({
     tileCount: 0,
     visibleTiles: 0,
@@ -158,12 +185,19 @@ const PerformanceMonitor: React.FC<PerformanceMonitorProps> = ({ getTilesetStats
 
   const getFpsColor = (fps: number) => fps >= 50 ? '#0F9668' : fps >= 30 ? '#FFBD2E' : '#F9042C';
 
+  // Storyboard preload outcome: prop first (DemoPage feeds onOverviewPreload
+  // straight in), snapshot channel as a fallback for probe-driven consumers.
+  const overview =
+    overviewPreload ?? getSnapshot<OverviewPreloadResult>('overview.preload') ?? null;
+
+  const dockTop = expanded || anchor === 'top-right';
+
   return (
     <div
       className="absolute z-50 rounded text-[10px] select-none"
       style={{
-        top: expanded ? 8 : 'auto',
-        bottom: expanded ? 'auto' : 8,
+        top: dockTop ? 8 : 'auto',
+        bottom: dockTop ? 'auto' : 8,
         right: 8,
         background: 'rgba(36, 39, 48, 0.95)',
         border: '1px solid #3A414C',
@@ -208,6 +242,17 @@ const PerformanceMonitor: React.FC<PerformanceMonitorProps> = ({ getTilesetStats
             <span>Queue:</span>
             <span>{stats.priorityQueueLength}+{stats.prefetchQueueLength}</span>
           </div>
+          {overview && (
+            <div className="flex justify-between gap-2">
+              <span>Storyboard:</span>
+              <span
+                className="text-right"
+                style={{ color: overview.loaded ? '#0F9668' : '#6A7485' }}
+              >
+                {formatOverview(overview)}
+              </span>
+            </div>
+          )}
           <div className="flex justify-between">
             <span>Tileset MB:</span>
             <span>{stats.cacheBytesMB}</span>

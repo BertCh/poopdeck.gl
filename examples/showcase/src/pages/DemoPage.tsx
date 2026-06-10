@@ -17,14 +17,22 @@ import {
   AnimatedPolygonLayer,
   HeatmapLayer,
   H3SummaryLayer,
+  PlaybackGovernor,
   TimeController,
   VatTripsLayer,
 } from "@stt/deck.gl";
-import type { HeatmapChannelSpec } from "@stt/deck.gl";
+import type {
+  BufferSource,
+  BufferedRunway,
+  HeatmapChannelSpec,
+  OverviewPreloadResult,
+  PlaybackGovernorState,
+} from "@stt/deck.gl";
 import { getDatasetById } from "../datasets";
-import { calculateAnimationSpeed } from "../types";
+import { calculateAnimationSpeed, tileLoadingProps } from "../types";
 import type { SummaryToggleOption } from "../types";
 import Legend from "../components/Legend";
+import PerformanceMonitor from "../components/PerformanceMonitor";
 import TimeControls from "../components/TimeControls";
 
 const MAPBOX_ACCESS_TOKEN =
@@ -85,18 +93,71 @@ const DemoPage: React.FC = () => {
   const [currentTime, setCurrentTime] = useState(timeController.getTime());
   const [isPlaying, setIsPlaying] = useState(false);
   const [speedMultiplier, setSpeedMultiplier] = useState(1.0);
+  const [autoSpeed, setAutoSpeed] = useState(false);
+
+  // ── Playback governor (player-buffering WS-B) ──────────────────────────────
+  // One governor per mounted demo, wrapping the shared TimeController: play /
+  // pause / seek all route through it so playback gates on the tileset's
+  // buffered runway (start gate, mid-playback stall, post-seek gate) instead
+  // of advancing into unloaded time. The tileset arrives async via the
+  // layer's onTilesetReady and is handed over with setSource below.
+  //
+  // The governor is created INSIDE an effect (not useState) so that React
+  // StrictMode's dev-only mount→cleanup→remount cycle gets a fresh instance:
+  // dispose() is terminal, and a useState-held instance would come back from
+  // the simulated remount permanently dead (every call a silent no-op).
+  // tilesetRef remembers the layer's one-shot onTilesetReady handover so a
+  // governor created after it (or re-created by StrictMode) still gets the
+  // source.
+  const governorRef = useRef<PlaybackGovernor | null>(null);
+  const tilesetRef = useRef<BufferSource | null>(null);
+  const [governor, setGovernor] = useState<PlaybackGovernor | null>(null);
+  useEffect(() => {
+    const g = new PlaybackGovernor(timeController);
+    governorRef.current = g;
+    if (tilesetRef.current) g.setSource(tilesetRef.current);
+    setGovernor(g);
+    return () => {
+      governorRef.current = null;
+      g.dispose();
+      setGovernor(null);
+    };
+  }, [timeController]);
+
+  // Reflect the governor's machine state into React (state transitions are
+  // rare — start/stall/seek — so no extra throttling is needed). When the
+  // governor lands in 'idle' from an external pause (e.g. the clock clamping
+  // at a range end) the play button must follow.
+  const [bufferState, setBufferState] = useState<PlaybackGovernorState>("idle");
+  useEffect(() => {
+    if (!governor) return;
+    setBufferState(governor.state);
+    const onStateChange = (state: PlaybackGovernorState) => {
+      setBufferState(state);
+      if (state === "idle") setIsPlaying(false);
+    };
+    governor.on("statechange", onStateChange);
+    return () => governor.off("statechange", onStateChange);
+  }, [governor]);
 
   useEffect(() => {
     if (selectedDataset) {
       const newSpeed = calculateAnimationSpeed(selectedDataset);
+      // Drop the previous dataset's tileset before resetting the clock — the
+      // layer finalizes it during its own re-init, and the governor must not
+      // query a finalized source. The new tileset re-attaches via
+      // onTilesetReady.
+      tilesetRef.current = null;
+      governor?.requestPause();
+      governor?.setSource(null);
       timeController.setTimeRange(selectedDataset.timeRange);
       timeController.setTime(selectedDataset.timeRange.start);
       timeController.setSpeed(newSpeed * speedMultiplier);
-      timeController.pause();
       setIsPlaying(false);
       setSpeedMultiplier(1.0);
+      setAutoSpeed(false);
     }
-  }, [selectedDataset, timeController]);
+  }, [selectedDataset, timeController, governor]);
 
   // Throttle the React `currentTime` state update during playback. The
   // TimeController ticks once per rAF (60Hz); the deck.gl layer reads time
@@ -133,28 +194,91 @@ const DemoPage: React.FC = () => {
   }, [timeController]);
 
   const handlePlayPause = useCallback(() => {
+    const g = governorRef.current;
+    if (!g) return;
     if (isPlaying) {
-      timeController.pause();
+      g.requestPause();
     } else {
-      timeController.play();
+      g.requestPlay();
     }
     setIsPlaying(!isPlaying);
-  }, [isPlaying, timeController]);
+  }, [isPlaying]);
 
-  const handleSeek = useCallback(
-    (time: number) => {
-      timeController.setTime(time);
-    },
-    [timeController],
-  );
+  // Committed seek (keyboard arrows, jump-to-start). Drag-scrubbing previews
+  // talk to the governor directly inside TimeControls.
+  const handleSeek = useCallback((time: number) => {
+    governorRef.current?.seekTo(time);
+  }, []);
 
   const handleSpeedChange = useCallback(
     (multiplier: number) => {
+      setAutoSpeed(false); // an explicit choice always exits Auto mode
       setSpeedMultiplier(multiplier);
       timeController.setSpeed(baseAnimationSpeed * multiplier);
     },
     [timeController, baseAnimationSpeed],
   );
+
+  // ── Opt-in Auto speed (player-buffering WS-D) ──────────────────────────────
+  // While Auto is selected, apply the governor's sustainable-speed suggestion
+  // on a slow cadence (5 s) with hysteresis (ignore <25% moves), snapped to
+  // preset-like steps and clamped to [0.25×, max preset]. Auto NEVER touches a
+  // user-chosen explicit speed — it's its own mode; picking any preset exits.
+  const speedMultiplierRef = useRef(speedMultiplier);
+  useEffect(() => {
+    speedMultiplierRef.current = speedMultiplier;
+  }, [speedMultiplier]);
+  useEffect(() => {
+    if (!autoSpeed || !governor) return;
+    const AUTO_STEPS = [0.25, 0.5, 0.75, 1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10];
+    const MAX_PRESET = 10; // top of the preset row
+    const applySuggestion = () => {
+      const suggestion = governor.getAutoSpeedSuggestion();
+      if (suggestion == null) return; // unknown cost/throughput → hold current
+      const raw = suggestion / baseAnimationSpeed;
+      const clamped = Math.min(MAX_PRESET, Math.max(0.25, raw));
+      const snapped = AUTO_STEPS.reduce((best, step) =>
+        Math.abs(step - clamped) < Math.abs(best - clamped) ? step : best,
+      );
+      const prev = speedMultiplierRef.current;
+      if (prev > 0 && Math.abs(snapped - prev) / prev <= 0.25) return; // hysteresis
+      timeController.setSpeed(baseAnimationSpeed * snapped);
+      setSpeedMultiplier(snapped);
+    };
+    applySuggestion();
+    const intervalId = setInterval(applySuggestion, 5000);
+    return () => clearInterval(intervalId);
+  }, [autoSpeed, governor, baseAnimationSpeed, timeController]);
+
+  const handleAutoSpeedSelect = useCallback(() => setAutoSpeed(true), []);
+
+  // Governor plumbing for the STT layers: the tileset (the BufferSource)
+  // arrives async after archive init; buffer-runway events route into the
+  // governor for immediate gate/stall evaluation.
+  const handleTilesetReady = useCallback((tileset: BufferSource) => {
+    tilesetRef.current = tileset;
+    governorRef.current?.setSource(tileset);
+  }, []);
+  const handleBufferChange = useCallback(
+    (runway: BufferedRunway) => governorRef.current?.notifyBufferChange(runway),
+    [],
+  );
+
+  // ── Storyboard preview tier (player-buffering WS-C4) ───────────────────────
+  // The layer preloads + pins the coarsest tiles across the full time range
+  // (budget-gated per dataset) so scrubbing always shows a coarse preview.
+  // The outcome surfaces as a one-line stat in the perf HUD.
+  const [overviewPreload, setOverviewPreload] =
+    useState<OverviewPreloadResult | null>(null);
+  const handleOverviewPreload = useCallback(
+    (result: OverviewPreloadResult) => setOverviewPreload(result),
+    [],
+  );
+  useEffect(() => {
+    // A dataset switch re-inits the tileset; the stale outcome must not
+    // describe the new dataset's storyboard.
+    setOverviewPreload(null);
+  }, [selectedDataset]);
 
   // Projection follows the dataset's tuned default (no user toggle in the
   // shipped UI). Globe-default demos (e.g. ocean currents) stay on the globe.
@@ -177,24 +301,6 @@ const DemoPage: React.FC = () => {
       ? datasetDuration * 2
       : selectedDataset.timeWindow || 86400000;
 
-    // Prefetch budget keyed to REAL-time playback, not sim-time. We want a
-    // few seconds of real-time buffer ahead of the play head, regardless of
-    // how compressed sim-time is. `playbackSpeed` is sim-ms per real-ms, so
-    // `playbackSpeed * PREFETCH_REAL_SECONDS * 1000` is that many real seconds
-    // expressed in sim-time.
-    //
-    // The old math asked for max(5*timeWindow, playbackSpeed*60000) and up to
-    // 150 steps. For ship-traffic that produced ~8h of lookahead × 150 steps
-    // ≈ 50 days of prefetch horizon per tick — every tick blew through the
-    // bucket-boundary cap and queued thousands of fetches, collapsing FPS to
-    // 0.5 under SwiftShader.
-    const PREFETCH_REAL_SECONDS = 5;
-    const prefetchAhead = Math.max(
-      timeWindow,
-      playbackSpeed * 1000 * PREFETCH_REAL_SECONDS,
-    );
-    const prefetchSteps = 4;
-
     const baseProps = {
       id: selectedDataset.id,
       data: selectedDataset.url,
@@ -212,13 +318,18 @@ const DemoPage: React.FC = () => {
       tier: selectedDataset.tier,
       opacity: selectedDataset.opacity ?? 0.8,
       pickable: false,
-      enablePrefetch: true,
-      prefetchAhead,
-      prefetchSteps,
-      // Browsers cap to ~6 concurrent connections per HTTP/1.1 origin; asking
-      // for more just queues inside the network layer and deepens the decode
-      // backlog on the main thread. 12 is enough for HTTP/2 multiplexing too.
-      maxRequests: 12,
+      // Shared prefetch/concurrency recipe (see tileLoadingProps): a few real
+      // seconds of sim-time lookahead, floored at the resident window.
+      ...tileLoadingProps(timeWindow, playbackSpeed),
+      // Playback-governor plumbing: hand the tileset over once it exists and
+      // forward buffer-runway events for immediate gate/stall evaluation.
+      onTilesetReady: handleTilesetReady,
+      onBufferChange: handleBufferChange,
+      // Storyboard preview tier: pin z0–z1 across the full time range so
+      // scrubbing always renders SOMETHING (default 20 MiB budget gate — the
+      // tileset rejects datasets with giant coarse tiles, e.g. satellites).
+      overviewPreload: true,
+      onOverviewPreload: handleOverviewPreload,
     };
 
     switch (selectedDataset.type) {
@@ -438,6 +549,9 @@ const DemoPage: React.FC = () => {
             currentTime: selectedDataset.timeRange.start,
             timeController,
             timeWindow,
+            // Same governor plumbing as the raw-tier layers (baseProps).
+            onTilesetReady: handleTilesetReady,
+            onBufferChange: handleBufferChange,
             weightProperty,
             colorRange,
             colorDomain,
@@ -457,7 +571,15 @@ const DemoPage: React.FC = () => {
     // including currentTime here rebuilt the prop tree every tick (60Hz),
     // which forced deck.gl to invalidate the trip consolidation cache and
     // re-copy ~10M vertex positions per frame on the NYC taxi dataset.
-  }, [selectedDataset, timeController, activeSummaryToggle, useGlobe]);
+  }, [
+    selectedDataset,
+    timeController,
+    activeSummaryToggle,
+    useGlobe,
+    handleTilesetReady,
+    handleBufferChange,
+    handleOverviewPreload,
+  ]);
 
   const views = useMemo(
     () =>
@@ -601,6 +723,10 @@ const DemoPage: React.FC = () => {
               />
             </div>
           )}
+
+          {/* Perf HUD (collapsed chip; top-right because the Legend owns the
+              bottom-right corner). Carries the storyboard-preload outcome. */}
+          <PerformanceMonitor anchor="top-right" overviewPreload={overviewPreload} />
         </div>
       </div>
 
@@ -614,11 +740,15 @@ const DemoPage: React.FC = () => {
             currentTime={currentTime}
             timeRange={selectedDataset.timeRange}
             isPlaying={isPlaying}
+            bufferState={bufferState}
+            governor={governor}
             onPlayPause={handlePlayPause}
             onSeek={handleSeek}
             onSpeedChange={handleSpeedChange}
             currentSpeedMultiplier={speedMultiplier}
             targetPlaybackSeconds={selectedDataset.targetPlaybackSeconds ?? 30}
+            autoSpeed={autoSpeed}
+            onAutoSpeedSelect={handleAutoSpeedSelect}
           />
         </div>
       </div>

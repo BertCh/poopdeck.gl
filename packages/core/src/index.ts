@@ -36,13 +36,29 @@ export { Compression, GeometryType } from './types';
 
 // ─── Archive / tileset / tile decoding ──────────────────────────────────────
 export { STTArchive, estimateTileSize } from './archive';
+// Packed-format manifest contract (mirrors Rust `pack::Manifest`; schema at
+// docs/spec/manifest.schema.json).
+export type {
+  PackedManifest,
+  ManifestDirectoryRef,
+  ManifestPackRef,
+} from './archive';
 export { SpatiotemporalTileset } from './spatiotemporal-tileset';
 export type {
+  BufferedRunway,
+  OverviewPreloadResult,
   SpatiotemporalTileHeader,
   SpatiotemporalTilesetOptions,
   TileTier,
 } from './spatiotemporal-tileset';
 export { decodeTile, toGeoArrowTable } from './tile';
+
+// ─── Throughput estimation (player buffering) ───────────────────────────────
+export {
+  ThroughputEstimator,
+  type ThroughputEstimate,
+  type ThroughputEstimatorOptions,
+} from './throughput';
 
 // ─── Compression ────────────────────────────────────────────────────────────
 export { decompress, decompressSync } from './compression';

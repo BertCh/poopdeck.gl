@@ -1,13 +1,19 @@
 # STT v4 format specification
 
-Status: **partial / in-progress.** This documents the v4 archive container and the
-new run-length **directory** as implemented in `crates/stt-core` (the eager v2/v3
-Arrow-index writer remains the default; v4 is produced by `ArchiveWriter::create_v4`).
-Tile-payload encoding (GeoArrow IPC, interleaved coords, u16-delta vertex times,
-pre-tessellated triangles) is unchanged from v3 — see `docs/architecture/data-format.md`.
+> **Historical / legacy reference.** Single-file v4 (`STT\x04`) is **no longer a
+> deployment format.** The canonical STT container is the **packed format** — see
+> [`stt-packed-format.md`](./stt-packed-format.md). v4 survives only as (a) the
+> bounded-RAM streaming *intermediate* that `stt-build --streaming-arrow`
+> transcodes into packs, and (b) the read side that `transcode_archive_to_packs`
+> consumes to migrate old archives. This document is retained because the packed
+> **directory codec (v5)** extends the v4 directory documented below.
 
-> v4 is a clean break: no on-disk back-compat is promised. Readers still *accept*
-> v2/v3 for migration, but v4 archives regenerate from source.
+This documents the v4 single-file container and its run-length **directory**.
+The tile-payload encoding (GeoArrow IPC, interleaved coords, u16-delta vertex
+times, pre-tessellated triangles) is shared with the packed format — see
+`docs/architecture/data-format.md`. (Historical note: the single-file v4 blob
+region used a shared zstd dictionary; the packed format dropped the shared dict
+so each blob decodes independently.)
 
 ## 1. Container layout
 

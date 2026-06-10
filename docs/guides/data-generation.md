@@ -1,8 +1,15 @@
 # Data Generation Guide
 
-This guide walks you through generating spatiotemporal tile (`.stt`) archives
-either with the bundled `stt-generate` (for the showcase datasets) or with
-`stt-build` directly (for your own data).
+This guide walks you through generating spatiotemporal tile **datasets** either
+with the bundled `stt-generate` (for the showcase datasets) or with `stt-build`
+directly (for your own data).
+
+> **Output is a packed dataset directory.** `stt-build` (and `stt-generate`,
+> which wraps it) writes the packed format — `manifest.json` + `index/*.sttd` +
+> `packs/*.sttp`. The `--output name.stt` forms below are accepted for
+> convenience: the `.stt` extension is **stripped to a `name/` directory**. The
+> commands work as written; just expect a directory, not a single file. Deploy
+> the directory with `scripts/r2-sync.sh` (immutable packs + short-TTL manifest).
 
 For getting your own data into the GeoParquet input `stt-build` requires,
 see [Building from Python](./python.md) — it covers GeoPandas, DuckDB,

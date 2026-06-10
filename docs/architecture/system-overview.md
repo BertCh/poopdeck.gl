@@ -1,8 +1,8 @@
 # System overview
 
-STT has two stacks: a **Rust** toolchain that turns GeoParquet into a `.stt`
-archive, and a **TypeScript** client that streams tiles from that archive
-into deck.gl.
+STT has two stacks: a **Rust** toolchain that turns GeoParquet into a **packed
+dataset** (`manifest.json` + content-addressed packs), and a **TypeScript**
+client that streams tiles from that dataset into deck.gl.
 
 ```mermaid
 graph TD
@@ -22,8 +22,10 @@ graph TD
         GEN --> BUILD
     end
 
-    subgraph "Storage"
-        STT["(.stt) archive"]
+    subgraph "Storage (static host / CDN)"
+        MANIFEST["manifest.json (mutable, short TTL)"]
+        PACKS["packs/*.sttp + index/*.sttd<br/>(immutable, content-addressed)"]
+        MANIFEST --- PACKS
     end
 
     subgraph "Client (browser)"
@@ -39,15 +41,18 @@ graph TD
     end
 
     PARQUET --> BUILD
-    BUILD --> STT
-    STT -->|HTTP Range| ARCHIVE
+    BUILD --> MANIFEST
+    MANIFEST -->|GET| ARCHIVE
+    PACKS -->|HTTP Range| ARCHIVE
 ```
 
 ## Rust toolchain
 
 ### `stt-build` (CLI)
-Reads a GeoParquet file (WKB, GeoArrow, or `lon`/`lat` columns) and writes
-one `.stt` archive. Pipeline:
+Reads a GeoParquet file (WKB, GeoArrow, or `lon`/`lat` columns) and writes a
+**packed dataset directory** (`manifest.json` + `index/*.sttd` + `packs/*.sttp`).
+`-o foo.stt` is accepted for convenience — the extension is stripped to a `foo/`
+directory. Pipeline:
 
 1. **Load**: stream Arrow record batches from Parquet; extract geometry,
    timestamps (Unix ms, Unix s, or ISO 8601), and per-feature properties.
@@ -59,11 +64,12 @@ one `.stt` archive. Pipeline:
    bucket size is `--temporal-bucket` (default `1h`).
 5. **Encode**: each tile becomes an Arrow IPC layer frame (see
    [Data format](./data-format.md)).
-6. **Write**: `stt-core::Archive::create()` → zstd (default) or gzip →
-   CRC32C-tagged tile blobs (integrity tag only — v3 does NOT dedup) →
-   write directory + JSON metadata + 64-byte header. The header reserves a
-   shared-zstd-dictionary slot, but `stt-build` never populates it (see
-   [Data format](./data-format.md#dictionary-optional-v3-only--currently-unused)).
+6. **Write**: `stt-core::PackWriter` orders blobs for locality, per-blob
+   zstd-compresses and byte-dedups them (no shared dictionary), then cuts the
+   stream into content-addressed packs (≤64 MiB each) and emits `manifest.json`
+   + `index/<hash>.sttd` + `packs/<hash>.sttp`. The bounded-RAM
+   `--streaming-arrow` path builds a temp single-file archive first, then
+   transcodes it to packs.
 
 Optional pipeline extras: `--summary-tier h3` adds a server-aggregated
 H3-hex tier alongside the raw tier (so 100M-feature point datasets render
@@ -86,9 +92,12 @@ spatial density and temporal distribution. Wired into the builder via
 filled in from the recommendation.
 
 ### `stt-validate`
-Opens an archive, verifies the content hash of every tile, decodes each
-Arrow IPC payload, and reports any anomalies (decode failures, feature-count
-mismatches, tile extents outside the metadata range). Suitable for CI.
+Opens a packed dataset (a directory or its `manifest.json`) — or a legacy
+single-file `.stt` — and reports anomalies. For packed inputs it first checks the
+**content-addressing contract** (each pack/directory object blake3-hashes to its
+filename, declared lengths match, no out-of-range `pack_id`), then verifies the
+content hash of every tile, decodes each Arrow IPC payload, and checks
+feature-count and temporal-extent consistency. Suitable for CI.
 
 ### `stt-generate`
 Convenience CLI that downloads + processes + builds the showcase datasets
@@ -102,10 +111,13 @@ compression abstraction, Hilbert/temporal indexing, and metadata.
 ## TypeScript stack
 
 ### `@stt/core`
-- **`STTArchive`** — HTTP Range reader. Header → optional dictionary →
-  index → metadata → per-tile blob fetch. Range-coalesces adjacent tile
-  reads (≤32 KiB gap). Caches compressed bytes (device-aware sizing).
-  Exposes `asTileSource()` for loaders.gl-style integrations.
+- **`STTArchive`** — packed-format reader over HTTP Range. Fetches
+  `manifest.json` (metadata + directory pointer + pack table), then the
+  directory object, then per-tile blobs via Range requests against the pack
+  objects. Coalesces adjacent reads **within a pack** (≤2 MiB gap by default; a
+  range never bridges two packs) and runs groups through a bounded concurrency
+  pool. Caches compressed bytes (device-aware sizing). Exposes `asTileSource()`
+  for loaders.gl-style integrations.
 - **`OpfsTileCache`** — optional persistent cache backed by the Origin
   Private File System. Survives reloads; uses `isOpfsAvailable()` to
   feature-detect.
@@ -170,17 +182,23 @@ Arrow-backed attribute buffers (uploaded once on tile arrival — there is no
 cross-tile consolidation pass). Animation then costs nothing extra: the CPU
 updates one uniform per frame and the shader does the filter and the fade.
 
-### One archive, one HTTP origin
-A `.stt` file is served as static bytes by any HTTP server that honours
-Range requests. No tile server, no database, no CDN smarts beyond
-range-aware caching.
+### Content-addressed packs, cacheable on any static host
+A dataset is a `manifest.json` plus many immutable, content-addressed pack
+objects (and one directory object), served as static bytes by any host that
+honours Range requests — R2, S3, GCS, nginx. Because each pack is small and
+immutable, a dumb CDN caches every one natively (no Worker, no vendor lock-in);
+only the tiny manifest is mutable. This is what fixed the uncacheable multi-GB
+single-file archive (`cf-cache-status: BYPASS` on every range request).
 
 ## Key interactions
 
-1. **Generation** — run `stt-build` once to convert GeoParquet into a `.stt`.
-2. **Hosting** — drop the `.stt` on S3, R2, Cloudflare Pages, nginx, etc.
-3. **Loading** — the browser fetches the 64-byte header, then the index
-   table and metadata, then each viewport tile via a Range request.
+1. **Generation** — run `stt-build` once to convert GeoParquet into a packed
+   dataset directory.
+2. **Hosting** — sync the dataset tree to S3 / R2 / Cloudflare / nginx; ship
+   packs + index as `immutable`, the manifest with a short TTL
+   (`scripts/r2-sync.sh`).
+3. **Loading** — the browser fetches `manifest.json`, then the directory object,
+   then each viewport tile via a Range request against the right pack.
 4. **Streaming** — as the user pans or plays the timeline, the tileset
-   coalesces ranges, the decoder pool decodes off the main thread, and
+   coalesces per-pack ranges, the decoder pool decodes off the main thread, and
    deck.gl renders one per-tile sublayer each with the time filter applied.

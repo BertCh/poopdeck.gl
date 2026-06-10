@@ -45,6 +45,7 @@ import type {
 } from '@stt/core';
 import { splitLongToH3Index } from 'h3-js';
 import { TimeController } from './time-controller';
+import type { BufferSource, BufferedRunway } from './playback-governor';
 import { warnOnce } from './log';
 
 const DEBUG = false;
@@ -106,6 +107,20 @@ export interface H3SummaryLayerProps extends CompositeLayerProps {
 
   /** Fired when an archive's tiles are first loaded. */
   onMetadataLoad?: ((meta: ArchiveMetadata) => void) | null;
+
+  /**
+   * Fired once per archive/tileset initialization with the live tileset
+   * (which satisfies the {@link BufferSource} readiness contract) — hand it
+   * to a `PlaybackGovernor` via `setSource`. Mirrors SpatioTemporalLayer.
+   */
+  onTilesetReady?: ((tileset: SpatiotemporalTileset & BufferSource) => void) | null;
+
+  /**
+   * Buffered-runway threshold events from the tileset's coverage index,
+   * forwarded to `PlaybackGovernor.notifyBufferChange`. Mirrors
+   * SpatioTemporalLayer.
+   */
+  onBufferChange?: ((runway: BufferedRunway) => void) | null;
 }
 
 interface H3SummaryLayerState {
@@ -184,7 +199,9 @@ export class H3SummaryLayer extends CompositeLayer<H3SummaryLayerProps> {
     currentTime: 0,
     timeWindow: 86_400_000,
     timeController: { type: 'object', value: null, optional: true, compare: false },
-    maxRequests: 12,
+    // Single concurrency knob — threaded into the archive's range coalescer
+    // (see _initArchiveAndTileset). 24 matches SpatioTemporalLayer.
+    maxRequests: 24,
     debounceTime: 0,
     maxCacheSize: 500,
     weightProperty: 'count',
@@ -194,6 +211,8 @@ export class H3SummaryLayer extends CompositeLayer<H3SummaryLayerProps> {
     elevationScale: 1,
     coverage: { type: 'number', value: 0.92, min: 0, max: 1 },
     onMetadataLoad: { type: 'function', value: null, optional: true },
+    onTilesetReady: { type: 'function', value: null, optional: true },
+    onBufferChange: { type: 'function', value: null, optional: true },
   };
 
   declare state: H3SummaryLayerState & { [key: string]: unknown };
@@ -404,7 +423,10 @@ export class H3SummaryLayer extends CompositeLayer<H3SummaryLayerProps> {
     const targetUrl = this.props.data;
     this._initializingUrl = targetUrl;
 
-    const archive = new STTArchive({ url: targetUrl });
+    const archive = new STTArchive({
+      url: targetUrl,
+      maxConcurrentRequests: this.props.maxRequests!,
+    });
     const metadata = await archive.getMetadata();
 
     // Bail if finalized or superseded while we awaited metadata.
@@ -427,7 +449,7 @@ export class H3SummaryLayer extends CompositeLayer<H3SummaryLayerProps> {
     }
 
     const tileset = new SpatiotemporalTileset({
-      maxRequests: this.props.maxRequests ?? 12,
+      maxRequests: this.props.maxRequests ?? 24,
       debounceTime: this.props.debounceTime ?? 0,
       maxCacheSize: this.props.maxCacheSize ?? 500,
       minZoom: tier ? tier.minZoom : metadata.minZoom,
@@ -444,6 +466,12 @@ export class H3SummaryLayer extends CompositeLayer<H3SummaryLayerProps> {
       getAvailableSummaryTiles: (bounds, zoom, timeRange) =>
         archive.getSummaryTileIdsInBounds(bounds, zoom, timeRange),
       getTileData: (tileId, _signal) => archive.getTile(tileId),
+      // Player-buffering plumbing (WS-A/WS-B contract) — mirrors
+      // SpatioTemporalLayer._initArchiveAndTileset.
+      onBufferChange: (runway: BufferedRunway) => {
+        this.props.onBufferChange?.(runway);
+      },
+      getThroughput: () => archive.getThroughputEstimate(),
     });
 
     this._initializingUrl = null;
@@ -455,6 +483,10 @@ export class H3SummaryLayer extends CompositeLayer<H3SummaryLayerProps> {
     this.lastTilesRef = null;
     this.preparedTileCache.clear();
     this.sublayerCache.clear();
+
+    // Hand the live tileset (the BufferSource) to the app once per init —
+    // mirrors SpatioTemporalLayer so summary-tier demos gate playback too.
+    this.props.onTilesetReady?.(tileset as SpatiotemporalTileset & BufferSource);
   }
 
   private _getBounds(viewport: any): BoundingBox {

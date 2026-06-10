@@ -247,7 +247,13 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
   constructor(opts: STTBaseLayerOptions) {
     this.id = opts.id;
     this.opts = { autoRepaint: true, ...opts };
-    this.archive = new STTArchive({ url: opts.url });
+    // `maxRequests` is the single concurrency knob: thread it into the
+    // archive's range coalescer so it bounds actual in-flight fetches.
+    // Undefined falls through to the archive's default (24).
+    this.archive = new STTArchive({
+      url: opts.url,
+      maxConcurrentRequests: opts.maxRequests,
+    });
   }
 
   /**
