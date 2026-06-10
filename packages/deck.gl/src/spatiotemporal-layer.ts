@@ -788,8 +788,15 @@ export class SpatioTemporalLayer<
       getTileData: (tileId, signal) => archive.getTile(tileId, { signal }),
       // Route the bulk viewport/prefetch fill through the range coalescer so
       // a viewport-full of Hilbert-adjacent tiles collapses into a handful of
-      // HTTP Range requests instead of one request per tile.
-      getTileDataBatch: (tileIds, signal) => archive.getTiles(tileIds, { signal }),
+      // HTTP Range requests instead of one request per tile. The hooks carry
+      // incremental per-tile delivery (tiles render as their range group
+      // lands) and the fetch-priority hint for lookahead tiers.
+      getTileDataBatch: (tileIds, signal, hooks) =>
+        archive.getTiles(tileIds, {
+          signal,
+          onTileReady: hooks?.onTileReady,
+          fetchPriority: hooks?.fetchPriority,
+        }),
       // Lets the tileset skip giant low-zoom parent-fallback tiles (e.g. a
       // 14 MB z10 tile under a z14 view) before fetching them. Sync directory
       // lookup, no I/O.

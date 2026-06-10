@@ -42,6 +42,50 @@ const DIRECTION_FLIP_THRESHOLD = 3;
 const MAX_COALESCE_BATCH = 1024;
 
 /**
+ * Prefetch dispatches in small time-ordered SLICES instead of one giant
+ * batch — the streaming-video segment model (hls.js/Shaka fetch a few seconds
+ * of media at a time, strictly in playback order). Slices are sized in BYTES
+ * from the measured network throughput so one slice ≈ this many ms of
+ * download. Two properties fall out:
+ *
+ * - The "hostage window" is bounded: a tile the play head reaches while its
+ *   slice is in flight waits ≈ one slice, not an unbounded 1024-tile batch.
+ * - The nearest-future tiles (the queue is drained nearest-first) land and
+ *   render first; a flush (seek / pan / direction flip) wastes at most one
+ *   slice of bandwidth.
+ *
+ * One slice is in flight at a time; its finally-handler dispatches the next,
+ * so the pipeline stays busy with at most ~1 RTT of idle between slices —
+ * and every slice boundary is a fresh chance for priority work to dispatch
+ * first (late commitment, the Cesium RequestScheduler principle).
+ */
+const PREFETCH_SLICE_TARGET_REAL_MS = 1000;
+/**
+ * Slice-size floor: below this, coalescing degrades (byte-adjacent tiles get
+ * split across slices for no scheduling benefit) and per-slice overhead
+ * (planning pass + range-request RTTs) dominates on slow links.
+ */
+const PREFETCH_SLICE_MIN_BYTES = 1 * 1024 * 1024;
+/**
+ * Slice-size ceiling: bounds the memory burst and the worst-case hostage
+ * window on very fast links, where TARGET_REAL_MS alone would allow huge
+ * slices.
+ */
+const PREFETCH_SLICE_MAX_BYTES = 16 * 1024 * 1024;
+/**
+ * Slice size before the throughput estimator has a sample (cold start):
+ * moderate, so the first slice both seeds the estimator and can't flood a
+ * link that turns out to be slow.
+ */
+const PREFETCH_SLICE_COLD_BYTES = 4 * 1024 * 1024;
+/**
+ * Per-tile byte guess when the directory size lookup is unavailable
+ * (`getTileByteSize` unset or the id is unknown). Turns the byte budget into
+ * an effective count cap (e.g. cold 4 MiB / 64 KiB = 64 tiles).
+ */
+const PREFETCH_UNKNOWN_TILE_BYTES = 64 * 1024;
+
+/**
  * How far ahead to prefetch during animation, expressed in REAL playback time
  * (ms). Converted to sim-time via the measured animation speed, so a fast scrub
  * (e.g. 43 years in 60 s) prefetches a large *contiguous* span of buckets that
@@ -267,6 +311,18 @@ export interface OverviewPreloadResult {
  */
 type RequestTier = 'priority' | 'prefetch' | 'overview';
 
+/**
+ * Optional per-batch hooks for {@link SpatiotemporalTilesetOptions.getTileDataBatch}.
+ * Mirrors the archive's `TileRequestOptions` incremental-delivery contract
+ * without importing it (the batch callback may be backed by anything).
+ */
+export interface TileBatchHooks {
+  /** Delivers `(indexIntoBatch, tile)` as each tile decodes, before the batch resolves. */
+  onTileReady?: (index: number, tile: Tile) => void;
+  /** Browser fetch-priority hint for the batch's HTTP requests. */
+  fetchPriority?: 'high' | 'low' | 'auto';
+}
+
 /** O(n) set equality used to decide whether the needed-tile set actually changed. */
 function setsEqual(a: Set<string>, b: Set<string>): boolean {
   if (a === b) return true;
@@ -374,10 +430,18 @@ export interface SpatiotemporalTilesetOptions {
    * one per tile. Wire `STTArchive.getTiles` here. The per-tile `getTileData`
    * path is retained for single-tile loads and as the fallback. Returns
    * tiles in the same order as the input ids; missing tiles are `null`.
+   *
+   * `hooks.onTileReady`, when forwarded to the archive, delivers each tile
+   * (by input index) as soon as ITS coalesced range group decodes, so the
+   * tileset can mark tiles loaded incrementally instead of waiting for the
+   * whole batch to settle. `hooks.fetchPriority` is the browser
+   * fetch-priority hint for the batch's HTTP requests (`'low'` for
+   * lookahead tiers). Implementations may ignore both.
    */
   getTileDataBatch?: (
     tileIds: TileId[],
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    hooks?: TileBatchHooks
   ) => Promise<(Tile | null)[]>;
 
   /**
@@ -1404,15 +1468,28 @@ export class SpatiotemporalTileset {
     // this queue.
     if (this.priorityQueue.length > 0) return;
 
-    // Prefetch: ONE coalesced batch in flight at a time. A single batch
-    // already carries up to a full planning pass's runway; a second would
-    // only add bandwidth contention against priority work, and the
+    // Prefetch: ONE small SLICE in flight at a time, sized in bytes to
+    // ≈ PREFETCH_SLICE_TARGET_REAL_MS of measured download (see the slice
+    // constants). The queue is drained nearest-to-playhead-first, so each
+    // slice is exactly the next most-imminent stretch of runway; the
     // finally-handler (plus extendPrefetchIfDrained) dispatches the next
-    // slice the moment this one settles.
+    // slice the moment this one settles, and re-checks priority work first.
+    // A second concurrent slice would only add bandwidth contention against
+    // priority fetches.
     if (this.prefetchQueue.length > 0 && this.inflightPrefetch.size === 0) {
+      const budget = this.prefetchSliceBytes();
+      const sizeFn = this.options.getTileByteSize;
       const candidates: TileId[] = [];
+      let sliceBytes = 0;
       while (this.prefetchQueue.length > 0 && candidates.length < MAX_COALESCE_BATCH) {
-        candidates.push(this.prefetchQueue.shift()!);
+        const next = this.prefetchQueue[0];
+        const size = sizeFn?.(next) ?? PREFETCH_UNKNOWN_TILE_BYTES;
+        // A slice always takes at least one tile, even one bigger than the
+        // whole budget — it has to load eventually and alone is its own slice.
+        if (candidates.length > 0 && sliceBytes + size > budget) break;
+        this.prefetchQueue.shift();
+        candidates.push(next);
+        sliceBytes += size;
       }
       this.startTileBatch(candidates, 'prefetch');
     }
@@ -1421,6 +1498,22 @@ export class SpatiotemporalTileset {
     // queue is fully drained on this pass, so it can never starve viewport
     // work.
     this.drainOverviewQueue();
+  }
+
+  /**
+   * Byte budget for the next prefetch slice: ≈ PREFETCH_SLICE_TARGET_REAL_MS
+   * of download at the measured throughput, clamped to [MIN, MAX]; a fixed
+   * cold-start size until the estimator has a sample. Sizing by TIME (not a
+   * fixed byte count) keeps the hostage window — how long a play head that
+   * catches the slice must wait for it — roughly constant across link speeds.
+   */
+  private prefetchSliceBytes(): number {
+    const bytesPerMs = this.options.getThroughput?.().bytesPerMs ?? null;
+    if (bytesPerMs === null || bytesPerMs <= 0) return PREFETCH_SLICE_COLD_BYTES;
+    return Math.min(
+      PREFETCH_SLICE_MAX_BYTES,
+      Math.max(PREFETCH_SLICE_MIN_BYTES, bytesPerMs * PREFETCH_SLICE_TARGET_REAL_MS),
+    );
   }
 
   /**
@@ -1567,23 +1660,43 @@ export class SpatiotemporalTileset {
           : null;
     if (registry) registry.add(inflightRecord);
 
+    // Incremental delivery: mark a member loaded the moment its coalesced
+    // range group decodes (via the onTileReady hook), instead of when the
+    // whole batch settles — the nearest tiles of a slice become renderable
+    // while the farther groups are still in flight. `delivered` guards
+    // double-accounting when the resolved array replays hook-delivered tiles.
+    const delivered: boolean[] = new Array(started.length).fill(false);
+    const deliverTile = (i: number, tile: Tile): void => {
+      const { header } = started[i];
+      if (delivered[i] || header.isCancelled || header.isLoaded) return;
+      delivered[i] = true;
+      header.tile = tile;
+      header.isLoaded = true;
+      header.byteSize = estimateTileSize(tile);
+      this.currentCacheBytes += header.byteSize;
+      this.loadedTileCount++;
+      this.options.onTileLoad?.(tile);
+      this.frameNumber++;
+      this.notifyBufferChange();
+    };
+
     batchFn(
       started.map((s) => s.id),
       abortController.signal,
+      {
+        onTileReady: deliverTile,
+        // Lookahead tiers yield to concurrent need-now fetches at the
+        // browser's connection scheduler; priority keeps the default.
+        fetchPriority: tier === 'priority' ? 'auto' : 'low',
+      },
     )
       .then((tiles) => {
-        let anyLoaded = false;
         for (let i = 0; i < started.length; i++) {
           const { header, id, key } = started[i];
           const tile = tiles[i];
           if (!header.isCancelled && tile) {
-            header.tile = tile;
-            header.isLoaded = true;
-            header.byteSize = estimateTileSize(tile);
-            this.currentCacheBytes += header.byteSize;
-            this.loadedTileCount++;
-            this.options.onTileLoad?.(tile);
-            anyLoaded = true;
+            // Backstop for batch implementations that ignore the hook.
+            deliverTile(i, tile);
           } else if (!header.isCancelled && !tile && tier === 'priority') {
             // The batch resolved but this member is absent. When the
             // directory says the tile exists, the archive's retry + per-tile
@@ -1601,8 +1714,6 @@ export class SpatiotemporalTileset {
             }
           }
         }
-        this.frameNumber++;
-        if (anyLoaded) this.notifyBufferChange();
       })
       .catch((error) => {
         if (error.name !== 'AbortError') {

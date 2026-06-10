@@ -516,4 +516,21 @@ export interface TileRequestOptions {
   signal?: AbortSignal;
   /** Priority (higher = more important) */
   priority?: number;
+  /**
+   * Incremental delivery for `getTiles()` batches: called with `(index, tile)`
+   * — index into the input `ids` array — as EACH tile finishes decoding,
+   * before the batch promise resolves. A coalesced batch fetches its range
+   * groups concurrently, so without this every member is held hostage until
+   * the slowest range request lands; with it, callers can render/mark tiles
+   * the moment their own group arrives. Tiles that resolve to `null`
+   * (missing / failed) are never delivered here — they stay `null` in the
+   * resolved array.
+   */
+  onTileReady?: (index: number, tile: Tile) => void;
+  /**
+   * Browser fetch-priority hint (`RequestInit.priority`) applied to the
+   * request's HTTP fetches. Lookahead traffic should pass `'low'` so the
+   * browser's connection scheduler favors concurrent need-now fetches.
+   */
+  fetchPriority?: 'high' | 'low' | 'auto';
 }

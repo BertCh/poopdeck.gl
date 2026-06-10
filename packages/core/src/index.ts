@@ -49,6 +49,7 @@ export type {
   OverviewPreloadResult,
   SpatiotemporalTileHeader,
   SpatiotemporalTilesetOptions,
+  TileBatchHooks,
   TileTier,
 } from './spatiotemporal-tileset';
 export { decodeTile, toGeoArrowTable } from './tile';

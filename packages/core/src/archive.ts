@@ -428,6 +428,7 @@ export class STTArchive {
     start: number,
     end: number,
     signal?: AbortSignal,
+    fetchPriority?: 'high' | 'low' | 'auto',
   ): Promise<ArrayBuffer> {
     const manifest = await this.fetchManifest();
     const pack = manifest.packs[packIndex];
@@ -436,10 +437,13 @@ export class STTArchive {
         `STT archive: tile references pack ${packIndex} but only ${manifest.packs.length} packs exist`,
       );
     }
-    const response = await this.fetchFn(this.resolveKey(pack.key), {
+    const init: RequestInit = {
       headers: { Range: `bytes=${start}-${end}` },
       signal,
-    });
+    };
+    // `RequestInit.priority` is a hint; browsers without it ignore the field.
+    if (fetchPriority) (init as RequestInit & { priority?: string }).priority = fetchPriority;
+    const response = await this.fetchFn(this.resolveKey(pack.key), init);
     if (!response.ok) {
       throw new Error(`STT pack fetch failed: ${response.status} ${response.statusText}`);
     }
@@ -467,6 +471,7 @@ export class STTArchive {
     start: number,
     end: number,
     signal?: AbortSignal,
+    fetchPriority?: 'high' | 'low' | 'auto',
   ): Promise<ArrayBuffer> {
     let lastError: unknown;
     for (let attempt = 0; attempt <= this.retryDelaysMs.length; attempt++) {
@@ -475,7 +480,7 @@ export class STTArchive {
         await abortableDelay(base * (0.5 + Math.random()), signal);
       }
       try {
-        return await this.fetchRange(packIndex, start, end, signal);
+        return await this.fetchRange(packIndex, start, end, signal, fetchPriority);
       } catch (error) {
         if (isAbortError(error)) throw error;
         lastError = error;
@@ -745,7 +750,8 @@ export class STTArchive {
       entry.packId,
       entry.offset,
       entry.offset + entry.length - 1,
-      options?.signal
+      options?.signal,
+      options?.fetchPriority
     );
     this.storeBytes(key, compressed);
     const tile = await this.decodeBytes(id, entry, compressed);
@@ -768,6 +774,15 @@ export class STTArchive {
     await this.getIndex();
     const results: (Tile | null)[] = new Array(ids.length).fill(null);
 
+    // Incremental delivery: store + announce a decoded tile in one place so
+    // every fill path (byte cache, OPFS, coalesced group, per-member
+    // fallback) reaches the caller the moment ITS bytes are decoded — not
+    // when the slowest range request of the whole batch settles.
+    const deliver = (index: number, tile: Tile | null): void => {
+      results[index] = tile;
+      if (tile) options?.onTileReady?.(index, tile);
+    };
+
     interface Pending {
       index: number;
       id: TileId;
@@ -788,7 +803,7 @@ export class STTArchive {
         const idx = i;
         jobs.push(
           this.decodeBytes(id, entry, cached.bytes).then((t) => {
-            results[idx] = t;
+            deliver(idx, t);
           })
         );
       } else {
@@ -819,7 +834,7 @@ export class STTArchive {
           this.opfsStats.hits++;
           jobs.push(
             this.decodeDecompressed(p.id, p.entry, bytes).then((t) => {
-              results[p.index] = t;
+              deliver(p.index, t);
             }),
           );
         } else {
@@ -888,6 +903,7 @@ export class STTArchive {
             group.start,
             group.end,
             options?.signal,
+            options?.fetchPriority,
           );
           this.throughput.addSample(buffer.byteLength, nowMs() - t0);
         } catch (error) {
@@ -902,10 +918,11 @@ export class STTArchive {
                   m.entry.offset,
                   m.entry.offset + m.entry.length - 1,
                   options?.signal,
+                  options?.fetchPriority,
                 );
                 this.throughput.addSample(single.byteLength, nowMs() - t0);
                 this.storeBytes(this.tileIdToKey(m.id), single);
-                results[m.index] = await this.decodeBytes(m.id, m.entry, single);
+                deliver(m.index, await this.decodeBytes(m.id, m.entry, single));
                 if (this.opfsCache) {
                   void this.writeOpfsAsync(m.id, m.entry, single.slice(0));
                 }
@@ -924,7 +941,7 @@ export class STTArchive {
             const rel = m.entry.offset - group.start;
             const slice = buffer.slice(rel, rel + m.entry.length);
             this.storeBytes(this.tileIdToKey(m.id), slice);
-            results[m.index] = await this.decodeBytes(m.id, m.entry, slice);
+            deliver(m.index, await this.decodeBytes(m.id, m.entry, slice));
             if (this.opfsCache) {
               void this.writeOpfsAsync(m.id, m.entry, slice.slice(0));
             }
