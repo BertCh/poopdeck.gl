@@ -500,6 +500,73 @@ const rawDatasets: Dataset[] = [
     jointRounded: false,
   },
   {
+    // ── Pre-aggregated overview companion to the per-trip taxi demos ──
+    // Built by `stt-generate nyc-rideshare --flows`: the same 500K routed
+    // trips, but aggregated build-side into one feature per (road corridor,
+    // 15-min bin). Per-vertex `vertex_values` carry the traversal count, so
+    // the gradient shades each street by how many cabs rolled over it that
+    // bin — the whole network pulses once per bin as new counts light up and
+    // the previous bin's trail fades.
+    id: 'nyc-taxi-flows',
+    name: 'NYC Taxi Flow',
+    sources: ['tlc'],
+    description:
+      'Taxi volume pulsing through the street grid — 500K trips aggregated ' +
+      'into 15-minute road-segment flows. The pre-aggregated overview ' +
+      'companion to the per-trip paths demos. Source: NYC TLC.',
+    url: '/data/nyc-taxi-flows/manifest.json',
+    type: 'trips',
+    timeRange: {
+      start: 1420070400000,  // 2015-01-01 00:00:00 UTC
+      end: 1420213500000,    // 2015-01-02 13:45:00 UTC — last 15-min bin end
+    },
+    // One 15-min aggregation bin per tile bucket; the loader auto-widens to
+    // cover the trail.
+    timeWindow: 900000,
+    // ~148 bins over the range ⇒ one pulse every ~2s at 1×.
+    targetPlaybackSeconds: 300,
+    initialViewState: {
+      longitude: -73.97,
+      latitude: 40.75,
+      zoom: 11.5,   // overview framing — the whole grid, not single blocks
+      pitch: 30,
+      bearing: -15,
+    },
+    // Counts are heavy-tailed (measured: p50≈3, p90≈25, p97≈55, max≈280 per
+    // segment per bin); the domain clamps at ~p97 so the top 3% saturates
+    // white while side streets stay visible. Dark-indigo → white-hot
+    // "city lights", with the warm stops pulled low so the p90 avenues glow.
+    tripGradient: {
+      property: 'vertexValues',
+      domain: [0, 50], // trips per segment per 15 min, clamped ~p97
+      colors: [
+        [35, 45, 130, 170],   // 0–12 — dim indigo (most side streets)
+        [40, 150, 200, 210],  // ~12 — teal
+        [250, 200, 80, 235],  // ~25 — amber (p90: busy crosstown streets)
+        [255, 150, 60, 245],  // ~37 — orange (arteries)
+        [255, 255, 255, 255], // 50+ — white-hot (5th Ave / FDR tier)
+      ],
+    },
+    colorMappingDefault: [70, 70, 90, 120],
+    // Two bins of trail: the previous bin lingers half-faded under the
+    // current one, so the network cross-fades instead of strobing.
+    trailLength: 1800000,
+    fadeTrail: true,
+    widthMinPixels: 1.5,
+    widthMaxPixels: 4,
+    capRounded: false,
+    jointRounded: false,
+    legend: {
+      title: 'Trips per street segment / 15 min',
+      ramps: [
+        {
+          label: '0 → 50+',
+          colors: ['#232D82', '#2896C8', '#FAC850', '#FF963C', '#FFFFFF'],
+        },
+      ],
+    },
+  },
+  {
     id: 'nyc-taxi-trips',
     name: 'NYC Yellow Cab Trips',
     sources: ['tlc'],
@@ -1139,6 +1206,9 @@ export const SHIPPED_DATASET_IDS: string[] = [
   'nyc-taxi-trips',     // NYC Yellow Cab Trips
   'osm-nyc-draw',       // OSM Editing — NYC (cumulative "draw")
   'ship-traffic',       // US Maritime Traffic — vessel points
+  // After the first 6 (the home-page grid is `navDatasets.slice(0, 6)`), so
+  // it lands in navigation without bumping a grid card.
+  'nyc-taxi-flows',     // NYC Taxi Flow — pre-aggregated overview corridors
 ];
 
 export const shippedDatasets: Dataset[] = SHIPPED_DATASET_IDS
