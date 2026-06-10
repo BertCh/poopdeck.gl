@@ -177,6 +177,34 @@ Cleanup once landed: **delete `PLAYBACK_SLOWDOWN`**, restore intended
 StoryGlobe 850 ms fade-wait cap with governor states (the cross-dissolve
 *presentation* stays; its wait condition becomes `runway ≥ resumeGate`).
 
+#### WS-B addendum (2026-06): frontier hold + degraded creep
+
+The first shipped governor detected stalls only from network events
+(`notifyBufferChange`) — but when playback has nearly caught the frontier,
+batches are by definition completing slowly, so between events the playhead
+sailed PAST the loaded frontier at full sim-speed. The stall then froze the
+clock deep in unloaded time (blank frame, truncated trails), the resume gate
+re-anchored in the void, and when the gate couldn't fill within
+`maxStartWaitMs` the escape hatch passed degraded — only for the next buffer
+event to re-enter `buffering` for another 8 s freeze: a freeze/lurch
+heartbeat. Three additions close this (all in `playback-governor.ts`):
+
+1. **Tick-driven stall detection.** The governor subscribes to `tick` and
+   re-probes runway + low watermark every 200 ms of wall time from the clock
+   itself — a quiet network can no longer blind it.
+2. **Frontier clamp.** The probe caches the buffered frontier as an absolute
+   sim-time bound (`bufferedUntil`); a playhead that crosses it is snapped
+   back and stalls ON loaded data — video-player semantics (`currentTime`
+   never exceeds the buffered end). Overruns larger than ~1 wall-second ×
+   |speed| are treated as external seeks and never snapped.
+3. **Degraded creep.** After an escape-hatch (degraded) resume, the low
+   watermark is suppressed and the clamp pins playback to the frontier, so it
+   advances at data-arrival rate — the optimum under a sustained throughput
+   deficit — instead of looping 8 s freezes. Normal stalling re-arms once the
+   runway recovers past the resume gate (`isCreeping` exposes the mode to
+   UIs). A committed seek now also freezes the clock *before* moving it, so
+   the clamp can never misread a seek target.
+
 ### WS-C: Seek & scrub overhaul
 
 1. **Drag vs. commit**: while the slider is being dragged (pointerdown→up),

@@ -152,6 +152,24 @@ export type GovernorEventName = keyof GovernorEventMap;
 
 /** Re-evaluation cadence while gated (never per-rAF). */
 const EVAL_INTERVAL_MS = 250;
+/**
+ * Wall-clock spacing of the tick-driven runway probe while PLAYING. Stall
+ * detection must not depend on network events arriving: when playback has
+ * nearly caught the loaded frontier, batches are by definition completing
+ * slowly (often seconds apart), and an event-only watermark check lets the
+ * playhead sail far past the frontier between events. The probe is a bounded
+ * in-memory bucket walk — cheap at 5 Hz.
+ */
+const TICK_PROBE_INTERVAL_MS = 200;
+/**
+ * Frontier-clamp sanity bound: a single playback step can plausibly overrun
+ * the (≤ TICK_PROBE_INTERVAL_MS stale) frontier by at most ~a second of
+ * wall-time × |speed|. An overrun beyond this is an external seek (legacy
+ * code calling `timeController.setTime` directly), which must not be snapped
+ * back — the frontier is re-probed instead. Mirrors the tileset's
+ * SEEK_DETECTION_REAL_MS reasoning.
+ */
+const CLAMP_MAX_OVERRUN_REAL_MS = 1000;
 /** Auto-speed lookahead: cost of the next N wall-seconds at current speed. */
 const AUTO_SPEED_HORIZON_WALL_MS = 8000;
 /** Auto-speed safety factor (rise cautiously — same spirit as ABR's 0.7×). */
@@ -193,6 +211,32 @@ export class PlaybackGovernor {
   private disposed = false;
   private warnedDisposedUse = false;
   /**
+   * Absolute sim-time of the buffered frontier in the current travel
+   * direction (`+Infinity`/`-Infinity` when the runway is complete, `null`
+   * when unknown — no source, zero speed, or invalidated by a seek/gate).
+   * The playhead is never allowed past it: the per-tick clamp below snaps an
+   * overrun back to the frontier so a stall always lands ON loaded data —
+   * never on a blank frame deep in unloaded time.
+   */
+  private bufferedUntil: number | null = null;
+  /** Direction `bufferedUntil` was probed in; a flip invalidates it. */
+  private frontierDirection: 1 | -1 = 1;
+  /** Wall timestamp of the last frontier probe (throttles the tick path). */
+  private lastFrontierProbeWall = 0;
+  /**
+   * Degraded-creep mode: set when a gate passed via the maxStartWaitMs
+   * escape hatch (the runway could NOT fill — sustained throughput deficit,
+   * prefetch budget cap, …). Re-entering 'buffering' would then just freeze
+   * for another maxStartWaitMs and lurch, over and over. Instead the
+   * low-watermark stall is suppressed and the per-tick clamp pins the
+   * playhead AT the frontier, so playback advances exactly as fast as data
+   * arrives — the best possible behavior under a deficit. Normal stalling
+   * re-arms once the runway recovers past the resume gate.
+   */
+  private degradedCreep = false;
+  /** Guards the tick subscription against reacting to our own setTime calls. */
+  private suppressTickClamp = false;
+  /**
    * Guards the playState subscription against reacting to OUR OWN play/pause
    * calls (the controller notifies synchronously).
    */
@@ -231,6 +275,56 @@ export class PlaybackGovernor {
     this.evaluateNow();
   };
 
+  /**
+   * Per-tick frontier enforcement while PLAYING (the clock is a free-running
+   * wall × speed rAF loop that knows nothing about data):
+   *
+   * 1. Every TICK_PROBE_INTERVAL_MS, re-probe the buffered frontier and run
+   *    the low-watermark check — stall detection driven by the CLOCK, so a
+   *    quiet network (no buffer events) can no longer blind it while the
+   *    playhead burns through the remaining runway.
+   * 2. If the playhead crossed the frontier anyway (probe staleness at high
+   *    sim-speed), snap it back and stall THERE — the frozen frame is then
+   *    fully-loaded data with its trail intact, and the resume gate measures
+   *    from the true frontier instead of from a point in the void.
+   * 3. In degraded-creep mode, (2) pins without re-gating: playback advances
+   *    at data-arrival rate instead of looping 8 s freezes.
+   */
+  private readonly tickHandler = (time: number): void => {
+    if (this.disposed || this.suppressTickClamp || this.scrubbing) return;
+    if (this._state !== 'playing' || !this.userWantsPlayback) return;
+    if (!this.timeController.isPlaying()) return;
+    if (!this.source) return;
+    const speed = this.timeController.getSpeed();
+    if (speed === 0) return;
+    const direction: 1 | -1 = speed < 0 ? -1 : 1;
+
+    if (
+      this.bufferedUntil === null ||
+      direction !== this.frontierDirection ||
+      nowWall() - this.lastFrontierProbeWall >= TICK_PROBE_INTERVAL_MS
+    ) {
+      this.refreshFrontier();
+      if (!this.degradedCreep) this.checkLowWatermark();
+      if (this._state !== 'playing') return; // the watermark gated; clock frozen
+    }
+
+    const frontier = this.bufferedUntil;
+    if (frontier === null || !Number.isFinite(frontier)) return;
+    const overrunSimMs = direction > 0 ? time - frontier : frontier - time;
+    if (overrunSimMs <= 0) return;
+    if (overrunSimMs > Math.abs(speed) * CLAMP_MAX_OVERRUN_REAL_MS) {
+      // Far past the frontier in one step: an external seek, not playback —
+      // never snap a seek back. Invalidate and let the next tick re-probe.
+      this.bufferedUntil = null;
+      return;
+    }
+    this.setClockTime(frontier);
+    if (!this.degradedCreep) {
+      this.enterGate('buffering', this.resumeFactor);
+    }
+  };
+
   constructor(timeController: TimeController, opts: PlaybackGovernorOptions = {}) {
     this.timeController = timeController;
     this.startGateWallMs = opts.startGateWallMs ?? 2000;
@@ -242,11 +336,23 @@ export class PlaybackGovernor {
     if (opts.source) this.setSource(opts.source);
 
     this.timeController.on('playState', this.playStateHandler);
+    this.timeController.on('tick', this.tickHandler);
   }
 
   /** Current machine state. */
   get state(): PlaybackGovernorState {
     return this._state;
+  }
+
+  /**
+   * True while in degraded creep: a gate passed via the maxStartWaitMs
+   * escape hatch and playback is advancing pinned to the buffered frontier
+   * (data-arrival rate) instead of free-running wall-clock × speed. UIs can
+   * surface this as a subtle "waiting for data" hint; it clears by itself
+   * once the runway recovers past the resume gate.
+   */
+  get isCreeping(): boolean {
+    return this._state === 'playing' && this.degradedCreep;
   }
 
   /** Register an event listener. */
@@ -323,6 +429,8 @@ export class PlaybackGovernor {
     if (this.rejectDisposedUse()) return;
     this.userWantsPlayback = false;
     this.stopEvalTimer();
+    this.bufferedUntil = null;
+    this.degradedCreep = false;
     this.pauseClock();
     // A real pause (unlike a gate) should drop the loader back to its paused
     // budget — undo any animating-at-speed assertion a gate made.
@@ -438,6 +546,7 @@ export class PlaybackGovernor {
     this.disposed = true;
     this.stopEvalTimer();
     this.timeController.off('playState', this.playStateHandler);
+    this.timeController.off('tick', this.tickHandler);
     this.listeners.statechange.clear();
     this.listeners.waiting.clear();
     this.listeners.ready.clear();
@@ -473,6 +582,12 @@ export class PlaybackGovernor {
    */
   private commitSeek(time: number): void {
     this.source?.flushPrefetch();
+    // Freeze the clock BEFORE moving it: with a running clock the seek target
+    // would tick forward (and hit the frontier clamp) for a frame before the
+    // gate takes over. A seek also invalidates the frontier and any creep.
+    this.pauseClock();
+    this.bufferedUntil = null;
+    this.degradedCreep = false;
     this.timeController.setTime(time);
     if (this.userWantsPlayback) {
       this.enterGate('seeking', 1);
@@ -506,7 +621,11 @@ export class PlaybackGovernor {
     if (this.isGated()) {
       this.evaluateGate();
     } else if (this._state === 'playing' && !this.scrubbing) {
-      this.checkLowWatermark();
+      // Keep the frontier fresh on every buffer/speed event too (not just the
+      // throttled tick path) — it also re-arms normal stalling after a
+      // degraded creep once the runway recovers.
+      this.refreshFrontier();
+      if (!this.degradedCreep) this.checkLowWatermark();
     }
   }
 
@@ -557,10 +676,62 @@ export class PlaybackGovernor {
     if (!passed) return false;
 
     this.stopEvalTimer();
+    // The gate filled (or the hatch fired) — the pre-gate frontier is stale,
+    // and trusting it would clamp the freshly-resumed playback straight back.
+    // Null it; the first tick re-probes.
+    this.bufferedUntil = null;
+    this.lastFrontierProbeWall = 0;
+    // An escape-hatch pass means the runway could NOT fill: switch to creep
+    // (pin at the frontier, no re-gating) instead of letting the next buffer
+    // event re-enter 'buffering' for another maxStartWaitMs freeze. An honest
+    // pass always clears creep.
+    this.degradedCreep = degraded;
     this.setState('playing');
     this.playClock();
     this.emit('ready', { degraded });
     return true;
+  }
+
+  /**
+   * Re-probe the buffered frontier at the source's own (generous, ~10 wall-s)
+   * default horizon and cache it as an ABSOLUTE sim-time bound for the
+   * per-tick clamp. Deliberately separate from the watermark probe, whose
+   * small horizon caps the reported runway far short of the real frontier.
+   * Also the creep re-arm point: once the runway again covers the full
+   * resume gate (or completes), degraded creep ends and normal stalling
+   * applies.
+   */
+  private refreshFrontier(): void {
+    this.lastFrontierProbeWall = nowWall();
+    const speed = this.timeController.getSpeed();
+    if (!this.source || speed === 0) {
+      this.bufferedUntil = null;
+      return;
+    }
+    const direction: 1 | -1 = speed < 0 ? -1 : 1;
+    const time = this.timeController.getTime();
+    const runway = this.source.getBufferedRunway(time, direction);
+    this.frontierDirection = direction;
+    this.bufferedUntil = runway.complete
+      ? direction * Infinity
+      : time + direction * runway.simMs;
+    if (this.degradedCreep) {
+      const required =
+        this.startGateWallMs * Math.abs(speed) * this.resumeFactor;
+      if (runway.complete || runway.simMs >= required) {
+        this.degradedCreep = false;
+      }
+    }
+  }
+
+  /** Move the clock without the tick subscription clamping our own write. */
+  private setClockTime(time: number): void {
+    this.suppressTickClamp = true;
+    try {
+      this.timeController.setTime(time);
+    } finally {
+      this.suppressTickClamp = false;
+    }
   }
 
   /**

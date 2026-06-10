@@ -202,6 +202,120 @@ describe('PlaybackGovernor', () => {
     expect(tc.isPlaying()).toBe(true);
   });
 
+  it('clamps an overrun playhead back to the buffered frontier and stalls THERE', () => {
+    const { source, state } = makeSource();
+    state.runwaySimMs = 100_000;
+    const g = makeGovernor({ source });
+    g.requestPlay();
+    expect(g.state).toBe('playing');
+    // play() ticked once at time 0 → frontier probed at 0 + 100_000.
+
+    // The network goes silent (no buffer events!) and the loader reports no
+    // further runway. The probe is tick-throttled, so the cached frontier is
+    // what bounds the playhead.
+    state.runwaySimMs = 0;
+    tc.setTime(100_400); // a playback step past the frontier (≤ |speed| × 1s)
+    expect(tc.getTime()).toBe(100_000); // snapped back to the frontier…
+    expect(g.state).toBe('buffering'); // …and stalled ON loaded data
+    expect(tc.isPlaying()).toBe(false);
+  });
+
+  it('never snaps back an external seek far past the frontier', () => {
+    const { source, state } = makeSource();
+    state.runwaySimMs = 100_000;
+    const g = makeGovernor({ source });
+    g.requestPlay();
+
+    // Legacy code seeks the controller directly: overrun ≫ |speed| × 1s.
+    tc.setTime(500_000);
+    expect(tc.getTime()).toBe(500_000); // not clamped
+    expect(g.state).toBe('playing');
+  });
+
+  it('detects a stall from the clock alone — no buffer events required', () => {
+    const { source, state } = makeSource();
+    state.runwaySimMs = 100_000;
+    const g = makeGovernor({ source, lowWatermarkWallMs: 600 });
+    g.requestPlay();
+    expect(g.state).toBe('playing');
+
+    // Runway drains below 600 wall-ms × 10 = 6000 sim-ms, but the network is
+    // quiet: notifyBufferChange never fires. The next tick past the probe
+    // throttle must catch it anyway.
+    state.runwaySimMs = 5000;
+    vi.advanceTimersByTime(250);
+    tc.setTime(2000); // an ordinary playback tick
+    expect(g.state).toBe('buffering');
+    expect(tc.isPlaying()).toBe(false);
+  });
+
+  it('degraded resume creeps at the frontier instead of looping 8s freezes', () => {
+    const { source, state } = makeSource();
+    state.runwaySimMs = 100_000;
+    const g = makeGovernor({
+      source,
+      startGateWallMs: 2000,
+      lowWatermarkWallMs: 600,
+      resumeFactor: 2,
+      maxStartWaitMs: 4000,
+    });
+    g.requestPlay();
+    expect(g.state).toBe('playing');
+
+    // Honest stall: runway drains, gate (40_000 sim-ms) can't fill.
+    state.runwaySimMs = 2000;
+    vi.advanceTimersByTime(250);
+    tc.setTime(3000);
+    expect(g.state).toBe('buffering');
+
+    // Escape hatch fires → degraded resume → creep mode.
+    const ready = vi.fn();
+    g.on('ready', ready);
+    vi.advanceTimersByTime(4000);
+    expect(g.state).toBe('playing');
+    expect(ready).toHaveBeenCalledWith({ degraded: true });
+    expect(g.isCreeping).toBe(true);
+    // resume tick re-probed the frontier: 3000 + 2000 = 5000.
+
+    // A buffer event below the watermark must NOT re-gate while creeping —
+    // that re-gate loop (8s freeze, lurch, repeat) was the bad state.
+    g.notifyBufferChange(runway(2000));
+    expect(g.state).toBe('playing');
+
+    // The clamp still pins the playhead at the frontier (data-arrival rate)…
+    tc.setTime(5600);
+    expect(tc.getTime()).toBe(5000);
+    expect(g.state).toBe('playing'); // …without re-entering 'buffering'
+
+    // Runway recovers past the resume gate → creep re-arms normal stalling.
+    state.runwaySimMs = 50_000;
+    vi.advanceTimersByTime(250);
+    tc.setTime(5050);
+    expect(g.isCreeping).toBe(false);
+
+    // A later drain now stalls honestly again.
+    state.runwaySimMs = 1000;
+    vi.advanceTimersByTime(250);
+    tc.setTime(5100);
+    expect(g.state).toBe('buffering');
+  });
+
+  it('clamps at the frontier during backward playback', () => {
+    const { source, state } = makeSource();
+    state.runwaySimMs = 100_000;
+    tc.setTime(1_000_000);
+    tc.setSpeed(-10);
+    const g = makeGovernor({ source });
+    g.requestPlay();
+    expect(g.state).toBe('playing');
+    // Frontier probed at 1_000_000 − 100_000 = 900_000.
+
+    state.runwaySimMs = 0;
+    tc.setTime(899_600); // playback step past the backward frontier
+    expect(tc.getTime()).toBe(900_000);
+    expect(g.state).toBe('buffering');
+  });
+
   it('pause during buffering sticks — a later runway recovery must not resume', () => {
     const { source, state } = makeSource();
     state.runwaySimMs = 100_000;

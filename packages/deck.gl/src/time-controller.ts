@@ -119,8 +119,9 @@ export class TimeController {
     this.tick();
   }
 
-  /** Pause playback */
+  /** Pause playback. No-op (and no playState notification) when already paused — mirrors play(). */
   pause(): void {
+    if (!this.playing) return;
     this.playing = false;
     if (this.animationFrameId) {
       cancelAnimationFrame(this.animationFrameId);
