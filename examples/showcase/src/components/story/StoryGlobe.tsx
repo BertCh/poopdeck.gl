@@ -7,8 +7,8 @@ import {
   ScatterplotLayer,
   TextLayer,
 } from '@deck.gl/layers';
-import { AnimatedTripsLayer, TimeController } from '@stt/deck.gl';
-import type { BufferSource } from '@stt/deck.gl';
+import { AnimatedTripsLayer, TimeController, PlaybackGovernor } from '@stt/deck.gl';
+import type { BufferSource, BufferedRunway } from '@stt/deck.gl';
 import { getDatasetById } from '../../datasets';
 import { tileLoadingProps } from '../../types';
 import {
@@ -66,26 +66,44 @@ const IDLE_SPIN = -0.8; // gentle drift on located beats
 // window (otherwise enough tiles overlap that nothing blanks — see the focus
 // effect).
 //
-// "Ready" is a REAL runway signal: the tileset (handed over via
-// onTilesetReady) reports the contiguous buffered span ahead of the new
-// playhead, and we hold until it covers a start-gate-sized window — the same
-// wall-time × speed gate the PlaybackGovernor uses. Before the buffering API
-// existed this was a heuristic ("a tile loaded since the jump, +180 ms settle,
-// capped at 850 ms"), which is kept only as the no-source fallback.
+// "Ready" is now the PlaybackGovernor's post-seek gate: every era jump
+// commits through governor.seekTo(), which flushes the old era's stale
+// prefetch and re-gates playback on the destination's buffered runway
+// (including the canplaythrough predictor, so a fast network releases a cold
+// gate immediately instead of waiting for a speed-scaled runway). The fade
+// holds black while the governor is gated and releases when it reaches
+// 'playing'. A direct runway query (the pre-governor wait condition) and the
+// original tile-load heuristic remain only as fallbacks for a paused beat or
+// a core build without the buffering API.
 const RIBBON_OPACITY = 0.9; // the drifter layer's own (intrinsic) opacity
 const TARGET_OPACITY = 1; // globe-container opacity at rest (the fade rides 1→0→1)
 const FADE_TAU = 0.12; // globe fade ease constant (s) — ~0.35s each direction
 // Max hold at black before fading in regardless of readiness, so a stalled or
-// errored load never leaves the globe dark. Now that the wait condition is a
-// real runway signal (not a guess), the cap can afford to be longer than the
-// old 850 ms heuristic — the common case releases as soon as the gate passes.
-const FADE_WAIT_MAX_MS = 1500;
-// Runway required before fading back in: wall-ms × the beat's |speed| — the
-// same start-gate sizing the PlaybackGovernor uses (player-buffering WS-B).
+// errored load never leaves the globe dark. The governor's own escape hatch
+// (maxStartWaitMs) is longer; this is the UX cap on the black hold — past it
+// we reveal whatever has arrived and let the stall machinery take over.
+const FADE_WAIT_MAX_MS = 2500;
+// Runway required before fading back in when only the FALLBACK (direct
+// runway query) is available: wall-ms × the beat's |speed| — the same
+// start-gate sizing the PlaybackGovernor uses (player-buffering WS-B).
 const FADE_GATE_WALL_MS = 2000;
 // The runway query is cheap coverage-index bookkeeping, but there's no reason
 // to run it per-rAF — throttle the wait-phase readiness check.
 const FADE_GATE_CHECK_INTERVAL_MS = 150;
+
+// ── Adaptive speed cap (player-buffering WS-D, story flavor) ────────────────
+// The story has authored per-beat speeds but no speed UI, so it adapts
+// automatically: while a beat plays, the clock is capped at the governor's
+// sustainable-speed suggestion (measured network throughput ÷ byte cost of
+// the upcoming horizon), clamped to [AUTO_CAP_MIN_FACTOR, 1] × the beat's
+// authored speed and applied with hysteresis. On a fast network every beat
+// plays exactly as authored; on a slow one the story gracefully slows instead
+// of letting the playhead outrun loading (ribbons popping in) or stuttering
+// through stall/resume cycles. The floor keeps the narrative moving — below
+// it, the governor's honest stall takes over.
+const AUTO_CAP_INTERVAL_MS = 3000;
+const AUTO_CAP_MIN_FACTOR = 0.35;
+const AUTO_CAP_HYSTERESIS = 0.2; // ignore <20% moves so the rate never wobbles
 
 // Full temporal extent of the drifters archive (Unix ms), from the story
 // content. Drift/spin beats play FORWARD from the beat's moment to DATA_END and
@@ -217,6 +235,34 @@ const StoryGlobe: React.FC<StoryGlobeProps> = ({ focus, active }) => {
   const activeRef = useRef(active);
   activeRef.current = active;
 
+  // ── Playback governor (player-buffering WS-B) ───────────────────────────────
+  // The same machinery DemoPage uses, wrapping the story's TimeController.
+  // Every beat's time jump commits through governor.seekTo() — which flushes
+  // the old era's stale prefetch and gates resume on the destination's
+  // buffered runway — and mid-beat the governor freezes the clock when the
+  // runway drains instead of letting the playhead advance into unloaded time.
+  // That advance-into-the-void was the story's core jank: the clock ran at the
+  // authored rate regardless of what had loaded, so ribbons popped in and out
+  // as R2 tiles chased the animation. While gated, the governor keeps the
+  // loader's prefetch reaching ahead (setAnimationState), so a gate can fill
+  // its own runway. Created INSIDE an effect (not useState) so StrictMode's
+  // dev-only remount gets a fresh instance — dispose() is terminal (mirrors
+  // DemoPage). The beat's authored speed is kept in a ref as the ceiling the
+  // adaptive cap below never exceeds.
+  const governorRef = useRef<PlaybackGovernor | null>(null);
+  const authoredSpeedRef = useRef((focus.speedDays ?? 8) * (DAY / 1000));
+  useEffect(() => {
+    const g = new PlaybackGovernor(timeController);
+    governorRef.current = g;
+    // The tileset may already have arrived (StrictMode remount re-creates the
+    // governor but not the layer) — re-attach it.
+    if (sourceRef.current) g.setSource(sourceRef.current);
+    return () => {
+      governorRef.current = null;
+      g.dispose();
+    };
+  }, [timeController]);
+
   const [coastlines, setCoastlines] = useState<any>(null);
   useEffect(() => {
     let alive = true;
@@ -235,26 +281,34 @@ const StoryGlobe: React.FC<StoryGlobeProps> = ({ focus, active }) => {
   // applied separately and immediately (it never causes a flash).
   const applyFocusTime = useCallback(
     (f: GlobeFocus) => {
-      // Per-beat `speedDays` plays at its authored rate. (The old global
+      // Per-beat `speedDays` plays at its authored rate — and resets the
+      // adaptive cap's ceiling for the new beat. (The old global
       // PLAYBACK_SLOWDOWN ÷2 — added so R2 loading could keep up — is gone:
-      // the runway-gated cross-dissolve below backstops era jumps, and the
-      // story-wide prefetch budget covers steady playback.)
+      // the governor gates/stalls honestly and the cap slows gracefully.)
       const speed = (f.speedDays ?? 8) * (DAY / 1000); // sim-ms per real-ms
+      authoredSpeedRef.current = speed;
       timeController.setSpeed(speed);
+      let target: number;
       if (f.mode === 'sweep' && f.sweep) {
         timeController.setTimeRange(f.sweep);
-        timeController.setTime(f.sweep.start);
+        target = f.sweep.start;
       } else if (f.mode === 'still') {
         timeController.setTimeRange({ start: f.time - 5 * DAY, end: f.time + 5 * DAY });
-        timeController.setTime(f.time);
+        target = f.time;
       } else {
         // drift / spin — play forward from the beat's moment to the end of the
         // archive, then hold. No loop, so no reset/snap; the drift simply unfolds
         // chronologically. (`start` only bounds the lower clamp, which forward
         // playback never reaches.)
         timeController.setTimeRange({ start: f.time, end: DATA_END });
-        timeController.setTime(f.time);
+        target = f.time;
       }
+      // Commit the jump through the governor: flushes the old era's stale
+      // prefetch (it must not compete with the destination for the request
+      // pool) and — when playback is intended — re-gates on the new runway.
+      const g = governorRef.current;
+      if (g) g.seekTo(target);
+      else timeController.setTime(target);
     },
     [timeController],
   );
@@ -310,17 +364,46 @@ const StoryGlobe: React.FC<StoryGlobeProps> = ({ focus, active }) => {
   }, [focus, timeController, applyFocusTime, dataset]);
 
   // ── Pause when covered (saves GPU); resume per mode when revealed. ──────────
+  // Intent routes through the governor so a resume is runway-gated (and a real
+  // pause drops the loader to its paused budget) instead of free-running.
   useEffect(() => {
+    const g = governorRef.current;
     if (active && focus.mode !== 'still') {
-      timeController.play();
+      if (g) g.requestPlay();
+      else timeController.play();
     } else {
-      timeController.pause();
+      if (g) g.requestPause();
+      else timeController.pause();
       if (focus.mode === 'still') timeController.setTime(focus.time);
     }
     // Remember the revealed state for the next focus change: a within-act beat
     // change (was active, still active) cross-dissolves; a first reveal does not.
     prevActiveRef.current = active;
   }, [active, focus, timeController]);
+
+  // ── Adaptive speed cap (see the constants block above). ─────────────────────
+  // Only adapts during steady 'playing' — never while a gate holds the clock
+  // (the gate's own predictor decides readiness at the authored speed). A null
+  // suggestion means the upcoming horizon is fully buffered (or cost/throughput
+  // is unknown) → drift back to the authored rate.
+  useEffect(() => {
+    if (!active) return;
+    const id = setInterval(() => {
+      const g = governorRef.current;
+      if (!g || g.state !== 'playing') return;
+      const authored = authoredSpeedRef.current;
+      if (authored <= 0) return;
+      const suggestion = g.getAutoSpeedSuggestion();
+      const target =
+        suggestion == null
+          ? authored
+          : Math.min(authored, Math.max(authored * AUTO_CAP_MIN_FACTOR, suggestion));
+      const current = timeController.getSpeed();
+      if (current > 0 && Math.abs(target - current) / current <= AUTO_CAP_HYSTERESIS) return;
+      timeController.setSpeed(target);
+    }, AUTO_CAP_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, [active, timeController]);
 
   // ── Single rAF loop: fly to the target, then keep a gentle rotation going. ──
   // The continuous (imperceptible) drift keeps `viewState` changing every frame,
@@ -382,18 +465,23 @@ const StoryGlobe: React.FC<StoryGlobeProps> = ({ focus, active }) => {
         lastGateCheckRef.current = 0; // first readiness check runs immediately
         fadeStateRef.current = 'wait';
       } else if (phase === 'wait') {
-        // Fade back in once the destination era is genuinely ready: the
-        // tileset's buffered runway ahead of the new playhead must cover a
-        // start-gate-sized window (FADE_GATE_WALL_MS of wall-time at the
-        // beat's speed — the same gate sizing the PlaybackGovernor uses).
-        // Falls back to the legacy "a tile loaded since the jump" heuristic
-        // when no source is available, and a hard timeout so a stalled or
-        // errored load never leaves it dark.
+        // Fade back in once the destination era is genuinely ready. The
+        // governor's post-seek gate is the oracle: the trough's seekTo put it
+        // in 'seeking' (or 'starting'/'buffering'), and 'playing' means the
+        // gate passed — including its canplaythrough predictor, so a fast
+        // network releases without waiting for a speed-scaled runway. When
+        // the governor is idle (a 'still' beat, or intent dropped) fall back
+        // to the direct runway query, then to the legacy "a tile loaded since
+        // the jump" heuristic; a hard timeout backstops a stalled or errored
+        // load so the globe is never left dark.
         if (now - lastGateCheckRef.current >= FADE_GATE_CHECK_INTERVAL_MS) {
           lastGateCheckRef.current = now;
+          const governor = governorRef.current;
           const source = sourceRef.current;
           let ready: boolean;
-          if (source) {
+          if (governor && governor.state !== 'idle') {
+            ready = governor.state === 'playing';
+          } else if (source) {
             const speed = timeController.getSpeed();
             const requiredSimMs = FADE_GATE_WALL_MS * Math.abs(speed);
             const runway = source.getBufferedRunway(
@@ -442,12 +530,20 @@ const StoryGlobe: React.FC<StoryGlobeProps> = ({ focus, active }) => {
   }, []);
 
   // Capture the tileset (the BufferSource) once the layer finishes archive
-  // init — this is what makes the cross-dissolve's wait condition a real
+  // init and hand it to the governor — this is what makes gating a real
   // runway signal instead of a tile-load guess. Defensive method check so a
   // core build without the buffering API keeps the legacy fallback.
   const handleTilesetReady = useCallback((tileset: BufferSource) => {
-    sourceRef.current =
+    const source =
       typeof tileset.getBufferedRunway === 'function' ? tileset : null;
+    sourceRef.current = source;
+    governorRef.current?.setSource(source);
+  }, []);
+
+  // Buffer-runway events route into the governor for immediate gate/stall
+  // evaluation (instead of waiting for its 250 ms polling cadence).
+  const handleBufferChange = useCallback((runway: BufferedRunway) => {
+    governorRef.current?.notifyBufferChange(runway);
   }, []);
 
   // Trail length is purely an aesthetic choice per beat — NOT a data-limiting
@@ -520,9 +616,11 @@ const StoryGlobe: React.FC<StoryGlobeProps> = ({ focus, active }) => {
         // (see the ERA_JUMP comment), NOT via this layer's `opacity` prop:
         // changing a layer prop recreates the instance every frame and wipes
         // this layer's per-tile prepared/gradient caches. `onTilesetReady`
-        // feeds the fade-in gate its runway oracle; `onTileLoad` only feeds
-        // the gate's no-source fallback.
+        // hands the governor (and the fade gate) its runway oracle;
+        // `onBufferChange` triggers immediate gate/stall evaluation;
+        // `onTileLoad` only feeds the gate's no-source fallback.
         onTilesetReady: handleTilesetReady,
+        onBufferChange: handleBufferChange,
         onTileLoad: handleTileLoad,
         pickable: false,
       }),
@@ -590,6 +688,7 @@ const StoryGlobe: React.FC<StoryGlobeProps> = ({ focus, active }) => {
     timeController,
     handleTileLoad,
     handleTilesetReady,
+    handleBufferChange,
   ]);
 
   if (!dataset) return null;
