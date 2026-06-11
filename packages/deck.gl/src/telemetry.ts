@@ -22,6 +22,7 @@
  *     renderLayers?:   Array<{ ms: number; tiles: number; layer: string }>,
  *     tilePrepare?:    Array<{ ms: number; tileKey: string; layer: string }>,
  *     decode?:         Array<{ ms: number; bytes: number; tileKey: string }>,
+ *     playback?:       Array<{ event: string; state: string } & PlaybackQoeStats>,
  *   };
  *
  * Set `enabled: false` to short-circuit even when the object exists, so
@@ -33,7 +34,8 @@ export type ProbeChannel =
   | 'consolidations'
   | 'renderLayers'
   | 'tilePrepare'
-  | 'decode';
+  | 'decode'
+  | 'playback';
 
 interface ProbeBag {
   enabled?: boolean;
@@ -41,6 +43,7 @@ interface ProbeBag {
   renderLayers?: unknown[];
   tilePrepare?: unknown[];
   decode?: unknown[];
+  playback?: unknown[];
   /** Latest-value channel (overwrites). HUDs subscribe; sample tools ignore. */
   snapshots?: Record<string, unknown>;
   [other: string]: unknown;

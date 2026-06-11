@@ -472,6 +472,178 @@ describe('PlaybackGovernor', () => {
     });
   });
 
+  describe('loop wrap → seek semantics', () => {
+    /** Rebuild tc as a looping clock with rAF frames captured for manual stepping. */
+    function makeLoopingClock(initialTime: number) {
+      const frames: Array<() => void> = [];
+      vi.stubGlobal('requestAnimationFrame', (cb: () => void) => {
+        frames.push(cb);
+        return frames.length;
+      });
+      tc.destroy();
+      tc = new TimeController({
+        initialTime,
+        speed: 10,
+        loop: true,
+        timeRange: { start: 0, end: 100_000 },
+      });
+      return {
+        /** Advance fake wall time and run all queued rAF frames. */
+        frame(ms: number) {
+          vi.advanceTimersByTime(ms);
+          for (const cb of frames.splice(0, frames.length)) cb();
+        },
+      };
+    }
+
+    it('gates a wrap into unbuffered time at the PLAIN startup gate, not the resume gate', () => {
+      const clock = makeLoopingClock(99_000);
+      const { source, state } = makeSource();
+      state.runwaySimMs = 1_000_000;
+      const g = makeGovernor({ source, startGateWallMs: 2000, resumeFactor: 2 });
+      g.requestPlay();
+      expect(g.state).toBe('playing');
+
+      // The loop start is NOT buffered; the playhead wraps on the next frame
+      // (200 wall-ms × 10 = 2000 sim-ms past 99_000 → 101_000 → wraps to 0).
+      state.runwaySimMs = 0;
+      const flushesBefore = state.flushes;
+      clock.frame(200);
+      expect(tc.getTime()).toBe(0);
+      expect(g.state).toBe('seeking'); // seek semantics — NOT 'buffering'
+      expect(state.flushes).toBe(flushesBefore + 1); // stale prefetch flushed
+      expect(tc.isPlaying()).toBe(false);
+
+      // Gate is startup-sized (2000 wall-ms × 10 × 1 = 20_000 sim-ms). The
+      // old behavior charged checkLowWatermark's resume gate (40_000).
+      state.runwaySimMs = 20_000;
+      g.notifyBufferChange(runway(20_000));
+      expect(g.state).toBe('playing');
+      expect(tc.isPlaying()).toBe(true);
+    });
+
+    it('keeps a wrap into fully-buffered time seamless (gate passes synchronously)', () => {
+      const clock = makeLoopingClock(99_000);
+      const { source, state } = makeSource();
+      state.runwaySimMs = 1_000_000;
+      const g = makeGovernor({ source });
+      g.requestPlay();
+
+      clock.frame(200); // wraps; gate passes against the huge runway
+      expect(tc.getTime()).toBe(0);
+      expect(g.state).toBe('playing');
+      expect(tc.isPlaying()).toBe(true);
+      // The seek gate was still ENTERED (frontier/prefetch reset) — it just
+      // opened in the same tick.
+      expect(states).toEqual(['starting', 'playing', 'seeking', 'playing']);
+
+      // …and playback keeps advancing from the wrapped position.
+      clock.frame(100);
+      expect(tc.getTime()).toBeGreaterThan(0);
+    });
+
+  });
+
+  describe('QoE counters', () => {
+    it('records startupMs for the start gate and counts mid-playback stalls', () => {
+      const { source, state } = makeSource();
+      const g = makeGovernor({
+        source,
+        startGateWallMs: 2000,
+        lowWatermarkWallMs: 600,
+        resumeFactor: 2,
+      });
+
+      g.requestPlay();
+      expect(g.state).toBe('starting');
+      expect(g.getQoeStats().startupMs).toBeNull();
+      vi.advanceTimersByTime(500);
+      state.runwaySimMs = 100_000;
+      g.notifyBufferChange(runway(100_000));
+      expect(g.state).toBe('playing');
+      const afterStart = g.getQoeStats();
+      expect(afterStart.startupMs).toBeGreaterThanOrEqual(500);
+      expect(afterStart.stallCount).toBe(0);
+      expect(afterStart.totalStallMs).toBe(0);
+
+      // One honest stall, 1000 ms long.
+      state.runwaySimMs = 0;
+      g.notifyBufferChange(runway(0));
+      expect(g.state).toBe('buffering');
+      expect(g.getQoeStats().stallCount).toBe(1);
+      vi.advanceTimersByTime(1000);
+      // In-progress stall time is visible mid-stall.
+      expect(g.getQoeStats().totalStallMs).toBeGreaterThanOrEqual(1000);
+      state.runwaySimMs = 100_000;
+      g.notifyBufferChange(runway(100_000));
+      expect(g.state).toBe('playing');
+
+      const final = g.getQoeStats();
+      expect(final.stallCount).toBe(1);
+      expect(final.totalStallMs).toBeGreaterThanOrEqual(1000);
+      expect(final.degradedResumeCount).toBe(0);
+      expect(final.creepMs).toBe(0);
+    });
+
+    it('counts degraded resumes and accumulates creep wall time', () => {
+      const { source, state } = makeSource();
+      state.runwaySimMs = 100_000;
+      const g = makeGovernor({
+        source,
+        startGateWallMs: 2000,
+        resumeFactor: 2,
+        maxStartWaitMs: 4000,
+      });
+      g.requestPlay();
+      expect(g.state).toBe('playing');
+
+      // Stall that can only resolve via the escape hatch.
+      state.runwaySimMs = 0;
+      g.notifyBufferChange(runway(0));
+      expect(g.state).toBe('buffering');
+      vi.advanceTimersByTime(4000);
+      expect(g.state).toBe('playing');
+      expect(g.isCreeping).toBe(true);
+      const degraded = g.getQoeStats();
+      expect(degraded.degradedResumeCount).toBe(1);
+      expect(degraded.stallCount).toBe(1);
+      expect(degraded.totalStallMs).toBeGreaterThanOrEqual(4000);
+
+      // Creep for 2 s, then recover past the resume gate.
+      vi.advanceTimersByTime(2000);
+      expect(g.getQoeStats().creepMs).toBeGreaterThanOrEqual(2000);
+      state.runwaySimMs = 1_000_000;
+      g.notifyBufferChange(runway(1_000_000));
+      expect(g.isCreeping).toBe(false);
+      expect(g.getQoeStats().creepMs).toBeGreaterThanOrEqual(2000);
+    });
+
+    it('publishes QoE snapshots on the telemetry playback channel', () => {
+      (globalThis as unknown as { __sttProbe?: unknown }).__sttProbe = { enabled: true };
+      try {
+        const { source, state } = makeSource();
+        state.runwaySimMs = 100_000;
+        const g = makeGovernor({ source });
+        g.requestPlay();
+        state.runwaySimMs = 0;
+        g.notifyBufferChange(runway(0));
+        expect(g.state).toBe('buffering');
+
+        const samples = (
+          globalThis as unknown as {
+            __sttProbe: { playback?: Array<Record<string, unknown>> };
+          }
+        ).__sttProbe.playback!;
+        expect(samples.some((s) => s.event === 'ready')).toBe(true);
+        expect(samples.some((s) => s.event === 'waiting')).toBe(true);
+        const last = samples[samples.length - 1];
+        expect(last.stallCount).toBe(1);
+      } finally {
+        delete (globalThis as unknown as { __sttProbe?: unknown }).__sttProbe;
+      }
+    });
+  });
+
   it('dispose stops timers and detaches from the controller', () => {
     const { source } = makeSource();
     const g = makeGovernor({ source, maxStartWaitMs: 1000 });

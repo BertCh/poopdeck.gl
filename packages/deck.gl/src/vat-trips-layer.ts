@@ -37,6 +37,7 @@ import type {
   DefaultProps,
   Layer as DeckLayer,
   LayerContext,
+  LayerProps,
 } from '@deck.gl/core';
 import { Model, Geometry } from '@luma.gl/engine';
 import type { Texture } from '@luma.gl/core';
@@ -46,6 +47,7 @@ import {
 } from './spatiotemporal-layer';
 import { emit } from './telemetry';
 import { warnOnce } from './log';
+import { inheritedPropsDigest, updateTriggersDigest } from './style-digest';
 import type { Tile, Layer as TileLayer, BinaryFeatures } from '@stt/core';
 
 const DEBUG = false;
@@ -69,7 +71,9 @@ const MAX_TEXTURE_DIM = 8192;
  */
 const MAX_TRIPS_PER_TILE = 131072;
 
-export interface VatTripsLayerProps extends SpatioTemporalLayerProps {
+/** Props added by {@link VatTripsLayer} (own props only — compose with
+ * {@link SpatioTemporalLayerProps} via {@link VatTripsLayerProps}). */
+export interface _VatTripsLayerProps {
   /** Constant head-dot color (RGBA, 0-255). Used when `trailLength === 0`. */
   headColor?: Color;
   /** Head radius in pixels. Used when `trailLength === 0`. */
@@ -121,6 +125,9 @@ export interface VatTripsLayerProps extends SpatioTemporalLayerProps {
   fadeTrail?: boolean;
 }
 
+/** Complete props accepted by {@link VatTripsLayer}. */
+export type VatTripsLayerProps = _VatTripsLayerProps & SpatioTemporalLayerProps;
+
 const DEFAULT_HEAD_COLOR: Color = [253, 128, 93, 255];
 const DEFAULT_TRAIL_COLOR: Color = [253, 128, 93, 255];
 
@@ -153,6 +160,15 @@ interface PreparedTile {
   timeSlots: number;
   /** Number of trips packed into each texture row. */
   tripsPerRow: number;
+  /**
+   * Source tile + decoded columns — picking enrichment context, carried for
+   * family parity. Inert today: VAT sublayers are hard-wired non-pickable
+   * (their shaders have no picking symbols), so no pick can originate here.
+   * Trip index === feature index (the safety cap truncates, never reorders),
+   * so the mapping holds if picking ever lands.
+   */
+  tile: Tile;
+  features: BinaryFeatures;
 }
 
 function makeTileKey(tile: Tile, layer: TileLayer): string {
@@ -265,10 +281,16 @@ interface VatTripsSublayerData {
   };
 }
 
-interface VatTripsSublayerProps {
-  id: string;
-  data: VatTripsSublayerData;
-  positionsTextureData: Float32Array;
+/**
+ * Own props of the head-dot sublayer (upstream `_XxxLayerProps` convention).
+ * `id`/`opacity`/`pickable`… come from {@link LayerProps} — they are NOT
+ * re-declared as custom props here.
+ */
+type _VatTripsSublayerProps = {
+  /** Per-tile instance buffers; null only before the composite supplies them. */
+  data: VatTripsSublayerData | null;
+  /** Baked VAT texel data; null only before the composite supplies it. */
+  positionsTextureData: Float32Array | null;
   positionsTextureWidth: number;
   positionsTextureHeight: number;
   /** Samples-per-trip (column stride of one trip within a texture row). */
@@ -285,8 +307,9 @@ interface VatTripsSublayerProps {
   timeOffset: number;
   /** Absolute Unix-ms playhead reader. Called on every draw. */
   getTime: () => number;
-  opacity: number;
-}
+};
+
+type VatTripsSublayerProps = _VatTripsSublayerProps & LayerProps;
 
 // The shader assembler prepends `vatUniformsModule.vs` and the deck.gl
 // `project32` decls, so we DO NOT redeclare the uniform block or sampler
@@ -459,24 +482,30 @@ uniform sampler2D vat_positionsTexture;
  */
 const VAT_SHADER_MODULES = [project32, vatUniformsModule];
 
-class VatTripsSublayer extends Layer<VatTripsSublayerProps> {
+// Upstream idiom: module-level const typed `DefaultProps<XxxProps>` then
+// assigned to the static — keeps the emitted .d.ts portable (the inferred
+// mapped type used to surface transitive-dep types, which motivated the
+// previous `static defaultProps: any`). `opacity` is NOT re-declared: the
+// base Layer's defaultProps already carry it.
+const vatTripsSublayerDefaultProps: DefaultProps<VatTripsSublayerProps> = {
+  data: { type: 'object', value: null, compare: false },
+  positionsTextureData: { type: 'object', value: null, compare: false },
+  positionsTextureWidth: { type: 'number', value: 0 },
+  positionsTextureHeight: { type: 'number', value: 0 },
+  timeSlots: { type: 'number', value: DEFAULT_TIME_SLOTS },
+  tripsPerRow: { type: 'number', value: 1 },
+  headColor: { type: 'color', value: DEFAULT_HEAD_COLOR },
+  headRadiusPixels: { type: 'number', value: 4, min: 0 },
+  sizeInMeters: { type: 'boolean', value: false },
+  headRadiusMinPixels: { type: 'number', value: 0, min: 0 },
+  headRadiusMaxPixels: { type: 'number', value: 1e9, min: 0 },
+  timeOffset: { type: 'number', value: 0 },
+  getTime: { type: 'function', value: () => 0, compare: false },
+};
+
+class VatTripsSublayer extends Layer<Required<_VatTripsSublayerProps>> {
   static layerName = 'VatTripsSublayer';
-  static defaultProps: any = {
-    data: { type: 'object', value: null, compare: false },
-    positionsTextureData: { type: 'object', value: null, compare: false },
-    positionsTextureWidth: { type: 'number', value: 0, compare: false },
-    positionsTextureHeight: { type: 'number', value: 0, compare: false },
-    timeSlots: { type: 'number', value: DEFAULT_TIME_SLOTS, compare: false },
-    tripsPerRow: { type: 'number', value: 1, compare: false },
-    headColor: { type: 'color', value: DEFAULT_HEAD_COLOR },
-    headRadiusPixels: { type: 'number', value: 4, min: 0, compare: true },
-    sizeInMeters: { type: 'boolean', value: false, compare: true },
-    headRadiusMinPixels: { type: 'number', value: 0, min: 0, compare: true },
-    headRadiusMaxPixels: { type: 'number', value: 1e9, min: 0, compare: true },
-    timeOffset: { type: 'number', value: 0, compare: false },
-    getTime: { type: 'function', value: () => 0, compare: false },
-    opacity: { type: 'number', value: 1, min: 0, max: 1 },
-  };
+  static defaultProps = vatTripsSublayerDefaultProps;
 
   getShaders(): any {
     return super.getShaders({
@@ -521,9 +550,16 @@ class VatTripsSublayer extends Layer<VatTripsSublayerProps> {
     }
   }
 
-  finalizeState(_context: LayerContext): void {
+  finalizeState(context: LayerContext): void {
+    // positionsTexture is layer-managed (base Layer knows nothing about it);
+    // model destroy is idempotent, so the base pass over getModels() is safe.
     (this.state as any).model?.destroy();
     (this.state as any).positionsTexture?.destroy();
+    // Base Layer.finalizeState does real work on this non-composite sublayer:
+    // attributeManager.finalize() releases the instanced attribute buffers
+    // and the resource manager unsubscribes — skipping it leaked GPU buffers
+    // on every per-tile sublayer churn.
+    super.finalizeState(context);
   }
 
   draw(_params: any): void {
@@ -597,7 +633,8 @@ class VatTripsSublayer extends Layer<VatTripsSublayerProps> {
   private _uploadTexture(): void {
     const width = this.props.positionsTextureWidth;
     const height = this.props.positionsTextureHeight;
-    if (width === 0 || height === 0) return;
+    const texelData = this.props.positionsTextureData;
+    if (width === 0 || height === 0 || !texelData) return;
     const device = this.context.device;
     const tex: Texture = device.createTexture({
       width,
@@ -614,7 +651,7 @@ class VatTripsSublayer extends Layer<VatTripsSublayerProps> {
     });
     // luma.gl expects a typed-array view of the texel bytes. RG32F is
     // 2 channels × 4 bytes; copyImageData accepts the Float32Array directly.
-    tex.copyImageData({ data: this.props.positionsTextureData });
+    tex.copyImageData({ data: texelData });
     this.setState({ positionsTexture: tex });
   }
 }
@@ -754,10 +791,12 @@ void main() {
 }
 `;
 
-interface VatTripsTrailSublayerProps {
-  id: string;
-  data: VatTripsSublayerData;
-  positionsTextureData: Float32Array;
+/** Own props of the ribbon-trail sublayer — see {@link _VatTripsSublayerProps}. */
+type _VatTripsTrailSublayerProps = {
+  /** Per-tile instance buffers; null only before the composite supplies them. */
+  data: VatTripsSublayerData | null;
+  /** Baked VAT texel data; null only before the composite supplies it. */
+  positionsTextureData: Float32Array | null;
   positionsTextureWidth: number;
   positionsTextureHeight: number;
   timeSlots: number;
@@ -774,30 +813,34 @@ interface VatTripsTrailSublayerProps {
   fadeTrail: boolean;
   timeOffset: number;
   getTime: () => number;
-  opacity: number;
-}
+};
 
-class VatTripsTrailSublayer extends Layer<VatTripsTrailSublayerProps> {
+type VatTripsTrailSublayerProps = _VatTripsTrailSublayerProps & LayerProps;
+
+// Same `DefaultProps`-typed-const idiom (and same no-`opacity` rationale) as
+// vatTripsSublayerDefaultProps above.
+const vatTripsTrailSublayerDefaultProps: DefaultProps<VatTripsTrailSublayerProps> = {
+  data: { type: 'object', value: null, compare: false },
+  positionsTextureData: { type: 'object', value: null, compare: false },
+  positionsTextureWidth: { type: 'number', value: 0 },
+  positionsTextureHeight: { type: 'number', value: 0 },
+  timeSlots: { type: 'number', value: DEFAULT_TIME_SLOTS },
+  tripsPerRow: { type: 'number', value: 1 },
+  trailColor: { type: 'color', value: DEFAULT_TRAIL_COLOR },
+  trailLength: { type: 'number', value: 10000, min: 1 },
+  trailSamples: { type: 'number', value: DEFAULT_TRAIL_SAMPLES, min: 2 },
+  tripWidth: { type: 'number', value: 4, min: 0 },
+  sizeInMeters: { type: 'boolean', value: false },
+  widthMinPixels: { type: 'number', value: 0, min: 0 },
+  widthMaxPixels: { type: 'number', value: 100, min: 0 },
+  fadeTrail: { type: 'boolean', value: true },
+  timeOffset: { type: 'number', value: 0 },
+  getTime: { type: 'function', value: () => 0, compare: false },
+};
+
+class VatTripsTrailSublayer extends Layer<Required<_VatTripsTrailSublayerProps>> {
   static layerName = 'VatTripsTrailSublayer';
-  static defaultProps: any = {
-    data: { type: 'object', value: null, compare: false },
-    positionsTextureData: { type: 'object', value: null, compare: false },
-    positionsTextureWidth: { type: 'number', value: 0, compare: false },
-    positionsTextureHeight: { type: 'number', value: 0, compare: false },
-    timeSlots: { type: 'number', value: DEFAULT_TIME_SLOTS, compare: false },
-    tripsPerRow: { type: 'number', value: 1, compare: false },
-    trailColor: { type: 'color', value: DEFAULT_TRAIL_COLOR },
-    trailLength: { type: 'number', value: 10000, min: 1, compare: true },
-    trailSamples: { type: 'number', value: DEFAULT_TRAIL_SAMPLES, min: 2, compare: true },
-    tripWidth: { type: 'number', value: 4, min: 0, compare: true },
-    sizeInMeters: { type: 'boolean', value: false, compare: true },
-    widthMinPixels: { type: 'number', value: 0, min: 0, compare: true },
-    widthMaxPixels: { type: 'number', value: 100, min: 0, compare: true },
-    fadeTrail: { type: 'boolean', value: true, compare: true },
-    timeOffset: { type: 'number', value: 0, compare: false },
-    getTime: { type: 'function', value: () => 0, compare: false },
-    opacity: { type: 'number', value: 1, min: 0, max: 1 },
-  };
+  static defaultProps = vatTripsTrailSublayerDefaultProps;
 
   getShaders(): any {
     return super.getShaders({
@@ -842,9 +885,11 @@ class VatTripsTrailSublayer extends Layer<VatTripsTrailSublayerProps> {
     }
   }
 
-  finalizeState(_context: LayerContext): void {
+  finalizeState(context: LayerContext): void {
+    // See VatTripsSublayer.finalizeState — same leak, same fix.
     (this.state as any).model?.destroy();
     (this.state as any).positionsTexture?.destroy();
+    super.finalizeState(context);
   }
 
   draw(_params: any): void {
@@ -917,7 +962,8 @@ class VatTripsTrailSublayer extends Layer<VatTripsTrailSublayerProps> {
   private _uploadTexture(): void {
     const width = this.props.positionsTextureWidth;
     const height = this.props.positionsTextureHeight;
-    if (width === 0 || height === 0) return;
+    const texelData = this.props.positionsTextureData;
+    if (width === 0 || height === 0 || !texelData) return;
     const device = this.context.device;
     const tex: Texture = device.createTexture({
       width,
@@ -930,14 +976,27 @@ class VatTripsTrailSublayer extends Layer<VatTripsTrailSublayerProps> {
         addressModeV: 'clamp-to-edge',
       },
     });
-    tex.copyImageData({ data: this.props.positionsTextureData });
+    tex.copyImageData({ data: texelData });
     this.setState({ positionsTexture: tex });
   }
 }
 
 /* ─────────────────────────── Composite layer ─────────────────────────── */
 
-export class VatTripsLayer extends SpatioTemporalLayer<VatTripsLayerProps> {
+/**
+ * VAT trips composite.
+ *
+ * Sublayer short ids for `_subLayerProps` overrides: **`head`** (the
+ * head-dot sublayer, active when `trailLength === 0`) and **`trail`** (the
+ * ribbon-trail sublayer). Note both default sublayer classes are custom
+ * texture-sampling layers — a `type` override must reimplement the VAT
+ * texture contract. Sublayers are forced `pickable: false` (their shaders
+ * carry no picking module); an explicit `_subLayerProps` pickable override
+ * is honored per deck convention but will not produce usable picks.
+ */
+export class VatTripsLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLayer<
+  ExtraPropsT & Required<_VatTripsLayerProps>
+> {
   static layerName = 'VatTripsLayer';
 
   static defaultProps: DefaultProps<VatTripsLayerProps> = {
@@ -987,9 +1046,10 @@ export class VatTripsLayer extends SpatioTemporalLayer<VatTripsLayerProps> {
   }
 
   private computeStyleKey(): string {
-    const head = this.props.headColor ?? DEFAULT_HEAD_COLOR;
-    const trail = this.props.trailColor ?? DEFAULT_TRAIL_COLOR;
-    const trailing = (this.props.trailLength ?? 0) > 0;
+    // `Required<>`-typed (defaults guarantee values) — no `??` refetches.
+    const head = this.props.headColor;
+    const trail = this.props.trailColor;
+    const trailing = this.props.trailLength > 0;
     return [
       // Mode discriminator: switching modes rebuilds every sublayer.
       trailing ? 'trail' : 'head',
@@ -999,8 +1059,11 @@ export class VatTripsLayer extends SpatioTemporalLayer<VatTripsLayerProps> {
       this.props.headRadiusMinPixels,
       this.props.headRadiusMaxPixels,
       this.props.timeSlots,
-      this.props.opacity,
-      this.props.visible,
+      // Composite props that getSubLayerProps bakes into every sublayer
+      // (opacity/pickable/visible, coordinate system, _subLayerProps, …)
+      // plus the user's updateTriggers.
+      inheritedPropsDigest(this.props),
+      updateTriggersDigest(this.props.updateTriggers),
       Array.isArray(head) ? head.join(',') : '',
       // Trail-only knobs. Including them in head mode is harmless — the
       // string compares stable when trailing === false.
@@ -1160,6 +1223,8 @@ export class VatTripsLayer extends SpatioTemporalLayer<VatTripsLayerProps> {
       timeOffset: binary.timeOffset,
       timeSlots: slots,
       tripsPerRow,
+      tile,
+      features: binary,
     };
     this.preparedTileCache.set(tileKey, prepared);
     emit('tilePrepare', {
@@ -1175,62 +1240,78 @@ export class VatTripsLayer extends SpatioTemporalLayer<VatTripsLayerProps> {
   private buildSublayer(
     prepared: PreparedTile,
   ): VatTripsSublayer | VatTripsTrailSublayer {
-    const sublayerId = `${this.props.id}-${prepared.tileKey}`;
-    const trailing = (this.props.trailLength ?? 0) > 0;
-    const sizeInMeters = (this.props.sizeUnits ?? 'pixels') === 'meters';
+    // `Required<>`-typed (defaults guarantee values) — no `??` refetches.
+    const trailing = this.props.trailLength > 0;
+    const sizeInMeters = this.props.sizeUnits === 'meters';
 
     if (trailing) {
       const color = (Array.isArray(this.props.trailColor)
         ? this.props.trailColor
         : DEFAULT_TRAIL_COLOR) as Color;
-      return new VatTripsTrailSublayer({
-        id: sublayerId,
+      // getSubLayerProps inheritance + user `_subLayerProps.trail` overrides.
+      // pickable is forced false in sublayerProps (after inheritance, before
+      // user overrides): the VAT shaders carry no picking module.
+      const props = this.composeSubLayerProps('trail', prepared.tileKey, {
         data: prepared.data,
         dataComparator: (a: any, b: any) => a === b,
+        pickable: false,
         positionsTextureData: prepared.positionsData,
         positionsTextureWidth: prepared.width,
         positionsTextureHeight: prepared.height,
         timeSlots: prepared.timeSlots,
         tripsPerRow: prepared.tripsPerRow,
         trailColor: color,
-        trailLength: this.props.trailLength ?? 10000,
-        trailSamples: this.props.trailSamples ?? DEFAULT_TRAIL_SAMPLES,
-        tripWidth: this.props.tripWidth ?? 4,
+        trailLength: this.props.trailLength,
+        trailSamples: this.props.trailSamples,
+        tripWidth: this.props.tripWidth,
         sizeInMeters,
-        widthMinPixels: this.props.widthMinPixels ?? 0,
-        widthMaxPixels: this.props.widthMaxPixels ?? 100,
-        fadeTrail: this.props.fadeTrail ?? true,
+        widthMinPixels: this.props.widthMinPixels,
+        widthMaxPixels: this.props.widthMaxPixels,
+        fadeTrail: this.props.fadeTrail,
         timeOffset: prepared.timeOffset,
         getTime: this.boundGetTime,
-        opacity: (this.props.opacity as number) ?? 1,
-      } as any);
+        // opacity is not passed explicitly — getSubLayerProps inherits it.
+        // Picking context (inert — see PreparedTile.tile), for family parity.
+        tile: prepared.tile,
+        sttFeatures: prepared.features,
+      });
+      const SubLayerClass = this.getSubLayerClass('trail', VatTripsTrailSublayer);
+      return new SubLayerClass(props as any);
     }
 
     const color = (Array.isArray(this.props.headColor)
       ? this.props.headColor
       : DEFAULT_HEAD_COLOR) as Color;
-    return new VatTripsSublayer({
-      id: sublayerId,
+    // getSubLayerProps inheritance + user `_subLayerProps.head` overrides.
+    const props = this.composeSubLayerProps('head', prepared.tileKey, {
       data: prepared.data,
       // Identity comparator pairs with preparedTileCache: deck.gl short-
       // circuits the entire data-prop diff when the same reference comes back.
       dataComparator: (a: any, b: any) => a === b,
+      pickable: false,
       positionsTextureData: prepared.positionsData,
       positionsTextureWidth: prepared.width,
       positionsTextureHeight: prepared.height,
       timeSlots: prepared.timeSlots,
       tripsPerRow: prepared.tripsPerRow,
       headColor: color,
-      // In meters mode pass the meter radius (headRadius); else the pixel value.
+      // In meters mode pass the meter radius (headRadius); else the pixel
+      // value. The `||` chain is deliberate (headRadius defaults to 0 =
+      // unset), unlike a dead `??` refetch.
       headRadiusPixels: sizeInMeters
         ? (this.props.headRadius || this.props.headRadiusPixels || 4)
-        : (this.props.headRadiusPixels ?? 4),
+        : this.props.headRadiusPixels,
       sizeInMeters,
-      headRadiusMinPixels: this.props.headRadiusMinPixels ?? 0,
-      headRadiusMaxPixels: this.props.headRadiusMaxPixels ?? 1e9,
+      headRadiusMinPixels: this.props.headRadiusMinPixels,
+      headRadiusMaxPixels: this.props.headRadiusMaxPixels,
       timeOffset: prepared.timeOffset,
       getTime: this.boundGetTime,
-      opacity: (this.props.opacity as number) ?? 1,
-    } as any);
+      // opacity is not passed explicitly — getSubLayerProps inherits it.
+      // Picking context (inert — see PreparedTile.tile), for family parity.
+      tile: prepared.tile,
+      sttFeatures: prepared.features,
+    });
+    const SubLayerClass = this.getSubLayerClass('head', VatTripsSublayer);
+    return new SubLayerClass(props as any);
   }
 }

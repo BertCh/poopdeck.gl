@@ -8,13 +8,23 @@
  * ARCHITECTURE (v3 - GPU time filtering, per-tile sublayers):
  * - One SolidPolygonLayer per (tile, layer). Same pattern as
  *   AnimatedPath/Trips/Point layers.
- * - Time filtering lifted to the GPU via PolygonTimeFilterExtension. The
+ * - Time filtering lifted to the GPU via the shared TimeFilterExtension. The
  *   previous CPU pass (`getVisibleFeatureIndices` + `extractVisiblePolygons`)
  *   ran every render, scaled O(featureCount × renderRate), and at 100k
  *   polygons dominated the frame budget. With this extension polygons are
  *   uploaded ONCE per tile and time-window changes only update uniforms.
  * - Categorical fill colors lift to the GPU via CategoryColorExtension —
  *   same wiring as the other animated layers.
+ * - PER-VERTEX EXPANSION: SolidPolygonLayer's fill model is NON-instanced, so
+ *   the extension attributes (stepMode 'dynamic') resolve to 'vertex' there
+ *   and the binary `data.attributes` buffers must carry ONE VALUE PER VERTEX.
+ *   deck.gl does NOT expand per-feature buffers supplied by attribute name
+ *   (`Attribute.setExternalBuffer` binds them verbatim; the
+ *   `setBinaryValue`/startIndices expansion path is bypassed whenever the
+ *   tile's startIndices are the very ref the tesselator adopted, which is
+ *   always the case with `_normalize: false`). prepareTile therefore expands
+ *   start/end times and category indices across each feature's vertex range
+ *   once per tile — see expandPerVertex.
  * - Per-tile timeOffset on each sublayer (no layer-wide rebasing).
  * - dataComparator: (a, b) => a === b lets deck.gl short-circuit prop diff
  *   when the cached prepared data ref is unchanged.
@@ -30,20 +40,31 @@
 import { SolidPolygonLayer } from '@deck.gl/layers';
 import type { Color, DefaultProps, Layer, LayerContext } from '@deck.gl/core';
 import { SpatioTemporalLayer, SpatioTemporalLayerProps } from './spatiotemporal-layer';
-import { PolygonTimeFilterExtension } from './polygon-time-filter-extension';
+import { TimeFilterExtension } from './time-filter-extension';
 import {
   CategoryColorExtension,
   CATEGORY_PALETTE_SIZE,
 } from './category-color-extension';
 import { emit } from './telemetry';
 import { warnOnce } from './log';
-import type { Tile, Layer as TileLayer } from '@stt/core';
+import {
+  colorListDigest,
+  inheritedPropsDigest,
+  updateTriggersDigest,
+} from './style-digest';
+import { resolveAccessorAlias } from './accessor-alias';
+import type { ColorAccessorValue, NumericAccessorValue } from './accessor-alias';
+import type { Tile, Layer as TileLayer, BinaryFeatures } from '@stt/core';
 
 const DEBUG = false;
 
-export interface AnimatedPolygonLayerProps extends SpatioTemporalLayerProps {
+/** Props added by {@link AnimatedPolygonLayer} (own props only — compose with
+ * {@link SpatioTemporalLayerProps} via {@link AnimatedPolygonLayerProps}). */
+export interface _AnimatedPolygonLayerProps {
   /**
-   * Draw an outline around each polygon (slower; routes through PathLayer).
+   * @deprecated Dead prop — outline rendering was never implemented (the
+   * sublayer is a fill-only SolidPolygonLayer) and setting it has no visual
+   * effect. Will be removed; a runtime warning fires when set.
    * @default false
    */
   stroked?: boolean;
@@ -55,19 +76,19 @@ export interface AnimatedPolygonLayerProps extends SpatioTemporalLayerProps {
   filled?: boolean;
 
   /**
-   * Units for outline width.
+   * @deprecated Dead prop — see {@link AnimatedPolygonLayerProps.stroked}.
    * @default 'pixels'
    */
   lineWidthUnits?: 'pixels' | 'meters' | 'common';
 
   /**
-   * Outline width — constant number, or property name.
+   * @deprecated Dead prop — see {@link AnimatedPolygonLayerProps.stroked}.
    * @default 1
    */
   lineWidth?: number | string;
 
   /**
-   * Outline color — constant {@link Color}, or property name.
+   * @deprecated Dead prop — see {@link AnimatedPolygonLayerProps.stroked}.
    * @default [0, 0, 0, 255]
    */
   lineColor?: Color | string;
@@ -78,6 +99,15 @@ export interface AnimatedPolygonLayerProps extends SpatioTemporalLayerProps {
    */
   fillColor?: Color | string;
 
+  /**
+   * Upstream-vocabulary alias of {@link fillColor}. NOTE: unlike upstream
+   * deck.gl, this accepts a constant Color OR a property-column NAME — NOT
+   * a function accessor (binary tiles can't run per-feature JS; a function
+   * warns once and falls back to `fillColor`). When set, it wins over
+   * `fillColor`.
+   */
+  getFillColor?: ColorAccessorValue | null;
+
   /** Color palette for the categorical `fillColor` path. */
   colorPalette?: Color[];
 
@@ -86,6 +116,14 @@ export interface AnimatedPolygonLayerProps extends SpatioTemporalLayerProps {
    * @default 0
    */
   elevation?: number | string;
+
+  /**
+   * Upstream-vocabulary alias of {@link elevation}. Accepts a constant
+   * number OR a property-column NAME — NOT a function accessor (a function
+   * warns once and falls back to `elevation`). When set, it wins over
+   * `elevation`.
+   */
+  getElevation?: NumericAccessorValue | null;
 
   /**
    * Extruded (3D) polygons.
@@ -105,6 +143,13 @@ export interface AnimatedPolygonLayerProps extends SpatioTemporalLayerProps {
    */
   fadeOutDuration?: number;
 }
+
+/** Complete props accepted by {@link AnimatedPolygonLayer}. */
+export type AnimatedPolygonLayerProps = _AnimatedPolygonLayerProps & SpatioTemporalLayerProps;
+
+// Shared with defaultProps so the dead-outline-prop warning can detect a
+// user-supplied lineColor by reference (deck assigns the default by ref).
+const DEFAULT_LINE_COLOR: Color = [0, 0, 0, 255];
 
 const DEFAULT_PALETTE: Color[] = [
   [255, 140, 0, 180],
@@ -143,6 +188,9 @@ interface PreparedTile {
    * the indices directly through `data.attributes.indices`.
    */
   hasPreBakedTriangles: boolean;
+  /** Source tile + decoded columns — picking enrichment context (references, not copies). */
+  tile: Tile;
+  features: BinaryFeatures;
 }
 
 function makeTileKey(tile: Tile, layer: TileLayer): string {
@@ -150,17 +198,44 @@ function makeTileKey(tile: Tile, layer: TileLayer): string {
   return `${z}/${x}/${y}/${t}:${layer.name}`;
 }
 
-/** Narrow Uint16Array → Float32Array for the GPU CategoryColorExtension. */
-function indicesToFloat32(indices: Uint16Array, count: number): Float32Array {
-  const out = new Float32Array(count);
-  for (let i = 0; i < count; i++) out[i] = indices[i];
+/**
+ * Expand a per-FEATURE value array to per-VERTEX for SolidPolygonLayer.
+ *
+ * The fill model is non-instanced, so every extension attribute (stepMode
+ * 'dynamic' → 'vertex' there) consumes one value per vertex. deck.gl binds
+ * binary buffers supplied by attribute name verbatim (no startIndices
+ * expansion — see the module docstring), so the layer must do the expansion
+ * itself: all vertices of feature i carry value[i]. Runs once per tile prep
+ * and is cached in PreparedTile, so it is NOT on the draw path.
+ */
+function expandPerVertex(
+  values: ArrayLike<number>,
+  startIndices: Uint32Array,
+  featureCount: number,
+  vertexCount: number,
+): Float32Array {
+  const out = new Float32Array(vertexCount);
+  for (let f = 0; f < featureCount; f++) {
+    const start = startIndices[f];
+    // startIndices carries a trailing sentinel (= vertexCount) by the deck.gl
+    // binary convention; fall back to vertexCount if a producer omits it.
+    const end = f + 1 < startIndices.length ? startIndices[f + 1] : vertexCount;
+    out.fill(values[f], start, end);
+  }
   return out;
 }
 
 /**
  * Animated polygon layer with GPU time filtering and per-tile sublayers.
+ *
+ * Sublayer short id for `_subLayerProps` overrides: **`polygons`**.
+ * `_subLayerProps: { polygons: { type: MyLayer, ...props } }` swaps the
+ * sublayer class (default `SolidPolygonLayer`) / overrides sublayer props
+ * (deck's CompositeLayer contract).
  */
-export class AnimatedPolygonLayer extends SpatioTemporalLayer<AnimatedPolygonLayerProps> {
+export class AnimatedPolygonLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLayer<
+  ExtraPropsT & Required<_AnimatedPolygonLayerProps>
+> {
   static layerName = 'AnimatedPolygonLayer';
 
   static defaultProps: DefaultProps<AnimatedPolygonLayerProps> = {
@@ -168,11 +243,21 @@ export class AnimatedPolygonLayer extends SpatioTemporalLayer<AnimatedPolygonLay
     stroked: false,
     filled: true,
     lineWidthUnits: 'pixels',
-    lineWidth: { type: 'number', value: 1 },
-    lineColor: { type: 'color', value: [0, 0, 0, 255] },
-    fillColor: { type: 'color', value: [255, 140, 0, 180] },
+    // Permissive descriptors ({type:'object'} validates anything): these
+    // props legally hold a constant OR a column-name string, which the
+    // 'color'/'number' validators would reject in deck's debug mode.
+    // (lineWidth/lineColor are deprecated dead props but keep the same
+    // declared domain; lineColor's default keeps the DEFAULT_LINE_COLOR
+    // reference so warnIfDeadOutlinePropsSet can detect a user value.)
+    lineWidth: { type: 'object', value: 1, compare: true },
+    lineColor: { type: 'object', value: DEFAULT_LINE_COLOR, compare: true },
+    fillColor: { type: 'object', value: [255, 140, 0, 180], compare: true },
     colorPalette: { type: 'array', value: DEFAULT_PALETTE, compare: true },
-    elevation: { type: 'number', value: 0 },
+    elevation: { type: 'object', value: 0, compare: true },
+    // Accessor-named aliases (see the prop docs): unset by default so the
+    // legacy props win unless the caller opts into the upstream vocabulary.
+    getFillColor: { type: 'object', value: null, optional: true, compare: true },
+    getElevation: { type: 'object', value: null, optional: true, compare: true },
     extruded: false,
     fadeInDuration: { type: 'number', value: 500, min: 0 },
     fadeOutDuration: { type: 'number', value: 500, min: 0 },
@@ -197,7 +282,7 @@ export class AnimatedPolygonLayer extends SpatioTemporalLayer<AnimatedPolygonLay
   private lastTilesRef: Tile[] | null = null;
 
   /** Singleton extensions, reused by every sublayer (stateless w.r.t. data). */
-  private readonly polygonTimeFilterExtension = new PolygonTimeFilterExtension();
+  private readonly timeFilterExtension = new TimeFilterExtension({ mode: 'window' });
   private readonly categoryColorExtension = new CategoryColorExtension();
 
   /** Stable getTime; preserved across renders to keep prop refs stable. */
@@ -209,25 +294,77 @@ export class AnimatedPolygonLayer extends SpatioTemporalLayer<AnimatedPolygonLay
     this.sublayerCache.clear();
   }
 
+  /**
+   * Accessor-alias resolution (audit B1): the upstream-named alias wins when
+   * set; a function-valued alias warns once and falls back to the legacy
+   * prop. Same value domain as the legacy props (constant or column name).
+   */
+  private fillColorValue(): Color | string | undefined {
+    return resolveAccessorAlias(
+      'AnimatedPolygonLayer',
+      'getFillColor',
+      this.props.getFillColor,
+      this.props.fillColor,
+    );
+  }
+
+  private elevationValue(): number | string | undefined {
+    return resolveAccessorAlias(
+      'AnimatedPolygonLayer',
+      'getElevation',
+      this.props.getElevation,
+      this.props.elevation,
+    );
+  }
+
   private computeLayerPropsKey(): string {
+    const fillColor = this.fillColorValue();
+    const elevation = this.elevationValue();
     return [
       this.props.stroked,
       this.props.filled,
       this.props.extruded,
-      typeof this.props.elevation === 'number' ? this.props.elevation : 0,
-      this.props.opacity,
-      this.props.visible,
-      this.props.pickable,
+      typeof elevation === 'number' ? elevation : 0,
+      // Composite props that getSubLayerProps bakes into every sublayer
+      // (opacity/pickable/visible, coordinate system, _subLayerProps, …)
+      // plus the user's updateTriggers.
+      inheritedPropsDigest(this.props),
+      updateTriggersDigest(this.props.updateTriggers),
       this.props.timeWindow,
       this.props.fadeInDuration,
       this.props.fadeOutDuration,
       // fillColor constant branch only; categorical branch lives in `prepared`.
-      Array.isArray(this.props.fillColor) ? this.props.fillColor.join(',') : '',
+      Array.isArray(fillColor) ? fillColor.join(',') : '',
     ].join('|');
+  }
+
+  /**
+   * The outline props were accepted from day one but no outline has ever been
+   * rendered (the sublayer is a fill-only SolidPolygonLayer). Warn once when
+   * any of them is set to a non-default value rather than silently ignoring
+   * the caller's intent. Scalar compares only — safe to run per render.
+   */
+  private warnIfDeadOutlinePropsSet(): void {
+    // `Required<>`-typed: defaults guarantee 1 / 'pixels' / DEFAULT_LINE_COLOR
+    // when unset, so a non-default value means the user supplied one.
+    const { stroked, lineWidth, lineWidthUnits, lineColor } = this.props;
+    if (
+      stroked === true ||
+      lineWidth !== 1 ||
+      lineWidthUnits !== 'pixels' ||
+      lineColor !== DEFAULT_LINE_COLOR
+    ) {
+      warnOnce(
+        'AnimatedPolygonLayer:deadOutlineProps',
+        '[AnimatedPolygonLayer] stroked/lineColor/lineWidth/lineWidthUnits ' +
+          'are deprecated dead props — polygon outlines are not rendered.',
+      );
+    }
   }
 
   renderLayers(): Layer[] {
     const t0 = performance.now();
+    this.warnIfDeadOutlinePropsSet();
     const { tiles } = this.state;
     if (!tiles || tiles.length === 0) {
       // No setState here — the empty result is itself the signal to deck.gl
@@ -302,13 +439,16 @@ export class AnimatedPolygonLayer extends SpatioTemporalLayer<AnimatedPolygonLay
     const binary = tileLayer.features;
     if (binary.featureCount === 0 || !binary.startIndices) return null;
 
-    const fillColorProp =
-      typeof this.props.fillColor === 'string' ? this.props.fillColor : '';
-    const elevationProp =
-      typeof this.props.elevation === 'string' ? this.props.elevation : '';
+    const fillColorValue = this.fillColorValue();
+    const elevationValue = this.elevationValue();
+    const fillColorProp = typeof fillColorValue === 'string' ? fillColorValue : '';
+    const elevationProp = typeof elevationValue === 'string' ? elevationValue : '';
+    // Palette keyed by CONTENT (memoized digest), not length — matches the
+    // sibling layers' stale-key fix. updateTriggers ride the key so a user
+    // trigger bump re-prepares the tile.
     const styleKey = `${fillColorProp}|${elevationProp}|${
-      fillColorProp ? (this.props.colorPalette ?? DEFAULT_PALETTE).length : 0
-    }`;
+      fillColorProp ? colorListDigest(this.props.colorPalette ?? DEFAULT_PALETTE) : 0
+    }|${updateTriggersDigest(this.props.updateTriggers)}`;
 
     const tileKey = makeTileKey(tile, tileLayer);
     const cached = this.preparedTileCache.get(tileKey);
@@ -324,19 +464,31 @@ export class AnimatedPolygonLayer extends SpatioTemporalLayer<AnimatedPolygonLay
 
     const t0 = performance.now();
     const dims = binary.positionDimensions ?? 2;
+    const featureCount = binary.featureCount;
+    const vertexCount = binary.positions.length / dims;
+    const startIndices = binary.startIndices;
 
-    // Zero-copy: positions, startIndices, startTimes, endTimes all ride
-    // straight from the Arrow-backed tile buffers to the GPU. The previous
-    // v2 path allocated fresh `positions` + `startIndices` arrays via
-    // extractVisiblePolygons() on every render.
+    // Positions and startIndices ride zero-copy straight from the
+    // Arrow-backed tile buffers to the GPU. The per-feature scalar columns
+    // (times, category index, elevation) must be expanded to PER-VERTEX
+    // because SolidPolygonLayer's fill model is non-instanced — see the
+    // module docstring and expandPerVertex. One expansion pass per tile
+    // prep, cached in PreparedTile; still strictly cheaper than the v2 path,
+    // which re-allocated `positions` + `startIndices` via
+    // extractVisiblePolygons() on EVERY render.
     const attributes: PreparedTile['data']['attributes'] = {
       // SolidPolygonLayer's geometry accessor — keyed by accessor name.
       getPolygon: { value: binary.positions, size: dims },
-      // PolygonTimeFilterExtension non-instanced attribute names. The
-      // PolygonTesselator expands these per-feature values across each
-      // polygon's vertices.
-      startTime: { value: binary.startTimes, size: 1 },
-      endTime: { value: binary.endTimes, size: 1 },
+      // TimeFilterExtension attribute names (shared with the other animated
+      // layers); per-vertex-expanded for the non-instanced polygon model.
+      instanceStartTime: {
+        value: expandPerVertex(binary.startTimes, startIndices, featureCount, vertexCount),
+        size: 1,
+      },
+      instanceEndTime: {
+        value: expandPerVertex(binary.endTimes, startIndices, featureCount, vertexCount),
+        size: 1,
+      },
     };
 
     let gpuPalette: Color[] | null = null;
@@ -344,7 +496,7 @@ export class AnimatedPolygonLayer extends SpatioTemporalLayer<AnimatedPolygonLay
       const cat = binary.categoricalProps[fillColorProp];
       if (cat) {
         attributes.instanceCategoryIndex = {
-          value: indicesToFloat32(cat.indices, binary.featureCount),
+          value: expandPerVertex(cat.indices, startIndices, featureCount, vertexCount),
           size: 1,
         };
         gpuPalette = this.props.colorPalette ?? DEFAULT_PALETTE;
@@ -354,7 +506,13 @@ export class AnimatedPolygonLayer extends SpatioTemporalLayer<AnimatedPolygonLay
     if (elevationProp) {
       const values = binary.numericProps[elevationProp];
       if (values) {
-        attributes.getElevation = { value: values, size: 1 };
+        // Same per-vertex contract as the time attributes: SolidPolygonLayer's
+        // own `elevations` attribute is vertex-stepped on the fill model and
+        // deck binds this buffer verbatim.
+        attributes.getElevation = {
+          value: expandPerVertex(values, startIndices, featureCount, vertexCount),
+          size: 1,
+        };
       }
     }
 
@@ -383,6 +541,8 @@ export class AnimatedPolygonLayer extends SpatioTemporalLayer<AnimatedPolygonLay
       dims,
       gpuPalette,
       hasPreBakedTriangles,
+      tile,
+      features: binary,
     };
     this.preparedTileCache.set(tileKey, prepared);
     emit('tilePrepare', {
@@ -398,10 +558,14 @@ export class AnimatedPolygonLayer extends SpatioTemporalLayer<AnimatedPolygonLay
   }
 
   private buildSublayer(prepared: PreparedTile): SolidPolygonLayer {
-    const sublayerId = `${this.props.id}-${prepared.tileKey}`;
-    const timeWindow = this.props.timeWindow || 86400000 * 30;
-    const constFillColor = (Array.isArray(this.props.fillColor)
-      ? this.props.fillColor
+    // `Required<>`-typed: the defaultProps value (86400000, inherited from
+    // the base) guarantees a number — the old `|| 86400000 * 30` fallback
+    // was dead code once the default merged.
+    const timeWindow = this.props.timeWindow;
+    const fillColorValue = this.fillColorValue();
+    const elevationValue = this.elevationValue();
+    const constFillColor = (Array.isArray(fillColorValue)
+      ? fillColorValue
       : ([255, 140, 0, 180] as Color)) as Color;
 
     const useGpuCategory = prepared.gpuPalette !== null;
@@ -417,8 +581,10 @@ export class AnimatedPolygonLayer extends SpatioTemporalLayer<AnimatedPolygonLay
       );
     }
 
-    return new SolidPolygonLayer({
-      id: sublayerId,
+    // getSubLayerProps inheritance (opacity/pickable/visible, coordinate
+    // system, highlight props, …) + user `_subLayerProps.polygons` overrides.
+    // Only runs inside this cache-gated build path — never per frame.
+    const props = this.composeSubLayerProps('polygons', prepared.tileKey, {
       data: prepared.data as any,
       dataComparator: (a: any, b: any) => a === b,
 
@@ -429,19 +595,16 @@ export class AnimatedPolygonLayer extends SpatioTemporalLayer<AnimatedPolygonLay
 
       filled: this.props.filled,
       extruded: this.props.extruded,
-      opacity: this.props.opacity,
-      visible: this.props.visible,
-      pickable: this.props.pickable ?? false,
 
       // Constant fallback — used when binary getFillColor isn't present.
       getFillColor: constFillColor,
-      ...(this.props.extruded && typeof this.props.elevation === 'number'
-        ? { getElevation: this.props.elevation as number }
+      ...(this.props.extruded && typeof elevationValue === 'number'
+        ? { getElevation: elevationValue }
         : {}),
 
-      extensions: [this.polygonTimeFilterExtension, this.categoryColorExtension],
+      extensions: [this.timeFilterExtension, this.categoryColorExtension],
 
-      // PolygonTimeFilterExtension wiring
+      // TimeFilterExtension wiring (same prop names the old polygon fork used)
       getTime: this.boundGetTime,
       timeOffset: prepared.timeOffset,
       timeWindow,
@@ -451,6 +614,14 @@ export class AnimatedPolygonLayer extends SpatioTemporalLayer<AnimatedPolygonLay
       // CategoryColorExtension wiring (gated by useCategoryColor)
       categoryPalette: useGpuCategory ? prepared.gpuPalette! : [],
       useCategoryColor: useGpuCategory,
-    } as any);
+
+      // TileLayer convention: the source tile rides on the sublayer so the
+      // base getPickingInfo can enrich info.tile / decode the picked polygon.
+      tile: prepared.tile,
+      sttFeatures: prepared.features,
+    });
+    // `_subLayerProps: { polygons: { type } }` swaps the sublayer class.
+    const SubLayerClass = this.getSubLayerClass('polygons', SolidPolygonLayer);
+    return new SubLayerClass(props as any);
   }
 }

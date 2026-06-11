@@ -64,24 +64,12 @@ vi.mock('@deck.gl/layers', () => {
 });
 
 // `@deck.gl/core` is only used for `CompositeLayer` / `LayerExtension` base
-// classes by the @stt layers. We stub them with empty classes so importing
-// the @stt layers does not require a real deck.gl runtime / GPU.
-vi.mock('@deck.gl/core', () => {
-  class FakeCompositeLayer<P = any> {
-    declare props: P;
-    declare state: any;
-    declare context: any;
-    setState(_: any) {}
-    setNeedsRedraw() {}
-    getCurrentTime() { return 0; }
-  }
-  class FakeLayerExtension {}
-  return {
-    CompositeLayer: FakeCompositeLayer,
-    LayerExtension: FakeLayerExtension,
-    COORDINATE_SYSTEM: { LNGLAT: 1 },
-  };
-});
+// classes by the @stt layers. The shared mock reproduces the real
+// getSubLayerProps/getSubLayerClass contract (the layers now build sublayer
+// props through it) without a deck.gl runtime / GPU.
+vi.mock('@deck.gl/core', async () =>
+  (await import('./fake-deck-core')).createDeckCoreMock(),
+);
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1170,7 +1158,7 @@ describe('AnimatedPolygonLayer per-tile sublayer architecture (v3)', () => {
       };
       layer._currentTime = 0;
       layer.boundGetTime = () => 0;
-      layer.polygonTimeFilterExtension = {};
+      layer.timeFilterExtension = {};
       layer.categoryColorExtension = {};
       layer.preparedTileCache = new Map();
       layer.sublayerCache = new Map();
@@ -1191,11 +1179,14 @@ describe('AnimatedPolygonLayer per-tile sublayer architecture (v3)', () => {
     expect(data.startIndices).toBeInstanceOf(Uint32Array);
   });
 
-  it('zero-copies positions / startTime / endTime from the tile (no CPU filter pass)', () => {
-    // The whole point of lifting the time filter to the GPU: positions and
-    // per-feature times ride straight from the Arrow-backed tile buffers to
-    // the GPU. The v2 layer copied positions into a fresh Float64Array via
-    // extractVisiblePolygons() on every render.
+  it('zero-copies positions and expands per-feature times to PER-VERTEX buffers', () => {
+    // Positions still ride zero-copy from the Arrow-backed tile buffers (the
+    // v2 layer copied them via extractVisiblePolygons() on every render).
+    // The time attributes, however, MUST be per-vertex-expanded:
+    // SolidPolygonLayer's fill model is non-instanced, so the extension
+    // attributes step per VERTEX there, and deck.gl binds binary buffers
+    // supplied by attribute name verbatim — a per-feature buffer would leave
+    // every vertex past featureCount reading out-of-bounds zeros.
     const layer = makeLayer();
     const tile = bigPolygonTile(8);
     const binary = tile.layers[0].features;
@@ -1204,10 +1195,41 @@ describe('AnimatedPolygonLayer per-tile sublayer architecture (v3)', () => {
     );
     const attrs = built.props.data.attributes;
     expect(attrs.getPolygon.value).toBe(binary.positions);
-    expect(attrs.startTime.value).toBe(binary.startTimes);
-    expect(attrs.endTime.value).toBe(binary.endTimes);
-    expect(attrs.startTime.size).toBe(1);
-    expect(attrs.endTime.size).toBe(1);
+
+    // The old polygon-fork keys must be gone — deck.gl binds by the names
+    // the (now shared) TimeFilterExtension registers.
+    expect(attrs.startTime).toBeUndefined();
+    expect(attrs.endTime).toBeUndefined();
+
+    const totalVerts = binary.startIndices[binary.featureCount];
+    expect(attrs.instanceStartTime.size).toBe(1);
+    expect(attrs.instanceEndTime.size).toBe(1);
+    expect(attrs.instanceStartTime.value).toBeInstanceOf(Float32Array);
+    expect(attrs.instanceStartTime.value.length).toBe(totalVerts);
+    expect(attrs.instanceEndTime.value.length).toBe(totalVerts);
+
+    // Every vertex of feature f carries feature f's start/end time.
+    for (let f = 0; f < binary.featureCount; f++) {
+      for (let v = binary.startIndices[f]; v < binary.startIndices[f + 1]; v++) {
+        expect(attrs.instanceStartTime.value[v]).toBe(binary.startTimes[f]);
+        expect(attrs.instanceEndTime.value[v]).toBe(binary.endTimes[f]);
+      }
+    }
+  });
+
+  it('expands a numeric elevation column per-vertex (same non-instanced contract)', () => {
+    const layer = makeLayer({ elevation: 'height', extruded: true });
+    const tile = bigPolygonTile(3);
+    const binary = tile.layers[0].features;
+    binary.numericProps['height'] = new Float32Array([10, 20, 30]);
+    const built = (layer as any).buildSublayer(
+      (layer as any).prepareTile(tile, tile.layers[0]),
+    );
+    const elev = built.props.data.attributes.getElevation;
+    const totalVerts = binary.startIndices[binary.featureCount];
+    expect(elev.value.length).toBe(totalVerts);
+    expect(elev.value[binary.startIndices[1]]).toBe(20);
+    expect(elev.value[binary.startIndices[2] + 2]).toBe(30);
   });
 
   it('builds one SolidPolygonLayer per tile (no cross-tile consolidation)', () => {
@@ -1272,7 +1294,7 @@ describe('AnimatedPolygonLayer per-tile sublayer architecture (v3)', () => {
     expect(typeof first.props.getTime).toBe('function');
   });
 
-  it('hands category indices to the GPU for categorical fill colors', () => {
+  it('hands PER-VERTEX category indices to the GPU for categorical fill colors', () => {
     const layer = makeLayer({
       fillColor: 'kind',
       colorPalette: [
@@ -1282,7 +1304,8 @@ describe('AnimatedPolygonLayer per-tile sublayer architecture (v3)', () => {
       ],
     });
     const tile = bigPolygonTile(6);
-    tile.layers[0].features.categoricalProps['kind'] = {
+    const binary = tile.layers[0].features;
+    binary.categoricalProps['kind'] = {
       indices: new Uint16Array([0, 1, 2, 1, 0, 2]),
       categories: ['a', 'b', 'c'],
     };
@@ -1293,7 +1316,14 @@ describe('AnimatedPolygonLayer per-tile sublayer architecture (v3)', () => {
     expect(attrs.getFillColor).toBeUndefined();
     expect(attrs.instanceCategoryIndex).toBeDefined();
     expect(attrs.instanceCategoryIndex.value).toBeInstanceOf(Float32Array);
-    expect(attrs.instanceCategoryIndex.value[2]).toBe(2);
+    // Per-vertex expansion (the fill model steps this attribute per vertex):
+    // length = total vertices, and every vertex of feature f carries
+    // feature f's category index. Per-FEATURE length here was the
+    // "all polygons take the first feature's color" bug.
+    const totalVerts = binary.startIndices[binary.featureCount];
+    expect(attrs.instanceCategoryIndex.value.length).toBe(totalVerts);
+    expect(attrs.instanceCategoryIndex.value[binary.startIndices[2]]).toBe(2);
+    expect(attrs.instanceCategoryIndex.value[binary.startIndices[3] + 1]).toBe(1);
     expect(built.props.useCategoryColor).toBe(true);
   });
 

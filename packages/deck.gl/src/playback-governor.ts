@@ -22,6 +22,7 @@
  */
 
 import { TimeController } from './time-controller';
+import { emit as emitProbe } from './telemetry';
 
 /**
  * Snapshot of the contiguous loaded span ahead of the playhead, as reported
@@ -148,6 +149,33 @@ export type GovernorEventMap = {
   progress: (runway: BufferedRunway) => void;
 };
 
+/**
+ * Playback quality-of-experience counters (Conviva-style). Accumulated on the
+ * governor's own state transitions, so a CI probe asserting `stallCount`
+ * stays bounded catches the freeze/lurch failure modes the unit-level state
+ * machine tests cannot see. Snapshot via
+ * {@link PlaybackGovernor.getQoeStats}; every snapshot is also pushed on the
+ * telemetry `playback` channel at each waiting/ready/state transition.
+ */
+export interface PlaybackQoeStats {
+  /** Mid-playback rebuffer events (entries into 'buffering'). */
+  stallCount: number;
+  /** Cumulative wall ms spent in 'buffering', including any in-progress stall. */
+  totalStallMs: number;
+  /**
+   * Wall ms the most recent start gate took (requestPlay → 'ready').
+   * Null until the first start completes.
+   */
+  startupMs: number | null;
+  /** 'ready' events that fired via the maxStartWaitMs escape hatch. */
+  degradedResumeCount: number;
+  /**
+   * Cumulative wall ms spent in degraded creep (playhead pinned to the
+   * frontier, advancing at data-arrival rate), including in-progress creep.
+   */
+  creepMs: number;
+}
+
 export type GovernorEventName = keyof GovernorEventMap;
 
 /** Re-evaluation cadence while gated (never per-rAF). */
@@ -236,6 +264,16 @@ export class PlaybackGovernor {
   private degradedCreep = false;
   /** Guards the tick subscription against reacting to our own setTime calls. */
   private suppressTickClamp = false;
+  // ── QoE accounting (see PlaybackQoeStats) ─────────────────────────────────
+  private qoeStallCount = 0;
+  private qoeTotalStallMs = 0;
+  private qoeStartupMs: number | null = null;
+  private qoeDegradedResumeCount = 0;
+  private qoeCreepMs = 0;
+  /** Wall timestamp the current 'buffering' state was entered. */
+  private stallEnteredAtWall = 0;
+  /** Wall timestamp the current degraded creep began. */
+  private creepStartedAtWall = 0;
   /**
    * Guards the playState subscription against reacting to OUR OWN play/pause
    * calls (the controller notifies synchronously).
@@ -325,6 +363,27 @@ export class PlaybackGovernor {
     }
   };
 
+  /**
+   * Loop-wrap subscription: a wrap is a teleport-seek the clock performed on
+   * its own — the playhead jumps the full range span, so the resident tile
+   * window and the cached frontier are both invalid. Route it through the
+   * same commit path as a user seek: flush stale prefetch and re-gate at the
+   * PLAIN startup gate (gateFactor 1). Falling through to checkLowWatermark
+   * instead would charge the wrap the resumeFactor× RESUME gate after a
+   * probe-interval ungated blind window — paid on every loop of every demo
+   * on slow networks. A wrap into fully-cached time passes the gate
+   * synchronously, so seamless loops stay seamless.
+   */
+  private readonly wrapHandler = (_time: number): void => {
+    if (this.disposed || this.scrubbing) return;
+    // The frontier is stale after a wrap regardless of machine state.
+    this.bufferedUntil = null;
+    if (this._state !== 'playing' || !this.userWantsPlayback) return;
+    this.source?.flushPrefetch();
+    this.setDegradedCreep(false);
+    this.enterGate('seeking', 1);
+  };
+
   constructor(timeController: TimeController, opts: PlaybackGovernorOptions = {}) {
     this.timeController = timeController;
     this.startGateWallMs = opts.startGateWallMs ?? 2000;
@@ -337,6 +396,7 @@ export class PlaybackGovernor {
 
     this.timeController.on('playState', this.playStateHandler);
     this.timeController.on('tick', this.tickHandler);
+    this.timeController.on('wrap', this.wrapHandler);
   }
 
   /** Current machine state. */
@@ -430,7 +490,7 @@ export class PlaybackGovernor {
     this.userWantsPlayback = false;
     this.stopEvalTimer();
     this.bufferedUntil = null;
-    this.degradedCreep = false;
+    this.setDegradedCreep(false);
     this.pauseClock();
     // A real pause (unlike a gate) should drop the loader back to its paused
     // budget — undo any animating-at-speed assertion a gate made.
@@ -496,6 +556,31 @@ export class PlaybackGovernor {
   }
 
   /**
+   * Snapshot of the session's playback-QoE counters. In-progress stall/creep
+   * spans are included, so a probe can read mid-stall without waiting for the
+   * transition out. Counters accumulate for the governor's lifetime (one
+   * governor per mounted player).
+   */
+  getQoeStats(): PlaybackQoeStats {
+    const now = nowWall();
+    let totalStallMs = this.qoeTotalStallMs;
+    if (this._state === 'buffering') {
+      totalStallMs += now - this.stallEnteredAtWall;
+    }
+    let creepMs = this.qoeCreepMs;
+    if (this.degradedCreep) {
+      creepMs += now - this.creepStartedAtWall;
+    }
+    return {
+      stallCount: this.qoeStallCount,
+      totalStallMs,
+      startupMs: this.qoeStartupMs,
+      degradedResumeCount: this.qoeDegradedResumeCount,
+      creepMs,
+    };
+  }
+
+  /**
    * Opt-in "Auto" speed (WS-D): the maximum sustainable playback speed
    * (TimeController units — sim-ms per wall-ms) the measured network can
    * feed, derived from the byte cost of the upcoming horizon:
@@ -547,6 +632,7 @@ export class PlaybackGovernor {
     this.stopEvalTimer();
     this.timeController.off('playState', this.playStateHandler);
     this.timeController.off('tick', this.tickHandler);
+    this.timeController.off('wrap', this.wrapHandler);
     this.listeners.statechange.clear();
     this.listeners.waiting.clear();
     this.listeners.ready.clear();
@@ -567,8 +653,36 @@ export class PlaybackGovernor {
 
   private setState(next: PlaybackGovernorState): void {
     if (this._state === next) return;
+    const prev = this._state;
+    // QoE stall accounting rides the transitions themselves so no caller can
+    // forget it: every entry into 'buffering' is one rebuffer event, every
+    // exit closes its wall-clock span.
+    const now = nowWall();
+    if (prev === 'buffering') {
+      this.qoeTotalStallMs += now - this.stallEnteredAtWall;
+    }
+    if (next === 'buffering') {
+      this.qoeStallCount++;
+      this.stallEnteredAtWall = now;
+    }
     this._state = next;
     this.emit('statechange', next);
+    emitProbe('playback', { event: 'statechange', state: next, ...this.getQoeStats() });
+  }
+
+  /**
+   * Single write path for degraded creep so the QoE creep clock can never
+   * leak: opening a span stamps it, closing it accumulates the wall time.
+   */
+  private setDegradedCreep(on: boolean): void {
+    if (this.degradedCreep === on) return;
+    const now = nowWall();
+    if (on) {
+      this.creepStartedAtWall = now;
+    } else {
+      this.qoeCreepMs += now - this.creepStartedAtWall;
+    }
+    this.degradedCreep = on;
   }
 
   private isGated(): boolean {
@@ -587,7 +701,7 @@ export class PlaybackGovernor {
     // gate takes over. A seek also invalidates the frontier and any creep.
     this.pauseClock();
     this.bufferedUntil = null;
-    this.degradedCreep = false;
+    this.setDegradedCreep(false);
     this.timeController.setTime(time);
     if (this.userWantsPlayback) {
       this.enterGate('seeking', 1);
@@ -607,7 +721,9 @@ export class PlaybackGovernor {
     // reaching ahead while we wait (the stall deadlock fix; see BufferSource).
     this.source?.setAnimationState?.(true, this.timeController.getSpeed());
     this.setState(state);
-    this.emit('waiting', { state, etaMs: this.getEtaMs() });
+    const etaMs = this.getEtaMs();
+    this.emit('waiting', { state, etaMs });
+    emitProbe('playback', { event: 'waiting', state, etaMs, ...this.getQoeStats() });
     // Evaluate once immediately (the gate may already be satisfied — e.g. a
     // backward seek into cached time); otherwise poll at the gated cadence.
     if (!this.evaluateGate()) {
@@ -681,14 +797,23 @@ export class PlaybackGovernor {
     // Null it; the first tick re-probes.
     this.bufferedUntil = null;
     this.lastFrontierProbeWall = 0;
+    // QoE: the starting gate's duration is the session's startup time; an
+    // escape-hatch pass of ANY gate is a degraded resume.
+    if (this._state === 'starting') {
+      this.qoeStartupMs = nowWall() - this.gateStartedAtWall;
+    }
+    if (degraded) {
+      this.qoeDegradedResumeCount++;
+    }
     // An escape-hatch pass means the runway could NOT fill: switch to creep
     // (pin at the frontier, no re-gating) instead of letting the next buffer
     // event re-enter 'buffering' for another maxStartWaitMs freeze. An honest
     // pass always clears creep.
-    this.degradedCreep = degraded;
+    this.setDegradedCreep(degraded);
     this.setState('playing');
     this.playClock();
     this.emit('ready', { degraded });
+    emitProbe('playback', { event: 'ready', state: 'playing', degraded, ...this.getQoeStats() });
     return true;
   }
 
@@ -719,7 +844,7 @@ export class PlaybackGovernor {
       const required =
         this.startGateWallMs * Math.abs(speed) * this.resumeFactor;
       if (runway.complete || runway.simMs >= required) {
-        this.degradedCreep = false;
+        this.setDegradedCreep(false);
       }
     }
   }

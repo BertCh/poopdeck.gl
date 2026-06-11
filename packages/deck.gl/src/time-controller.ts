@@ -50,6 +50,16 @@ export interface TimeControllerState {
 export type TimeUpdateCallback = (time: number) => void;
 export type PlayStateCallback = (playing: boolean, speed: number) => void;
 
+/**
+ * Upper bound on a single frame's wall-clock delta. Browsers suspend rAF in
+ * background tabs, so without this the first frame after a refocus advances
+ * time by the ENTIRE background duration — a playhead teleport the governor's
+ * frontier clamp deliberately refuses to snap back (it reads as an external
+ * seek). Any real frame longer than this is dropped-frames jank where
+ * advancing playback by the full gap would only compound the stutter.
+ */
+const MAX_FRAME_DELTA_MS = 250;
+
 export class TimeController {
   private currentTime: number;
   private playing: boolean = false;
@@ -59,10 +69,25 @@ export class TimeController {
   private timeRange?: { start: number; end: number };
   private listeners: Set<TimeUpdateCallback> = new Set();
   private playStateListeners: Set<PlayStateCallback> = new Set();
+  private wrapListeners: Set<TimeUpdateCallback> = new Set();
   private animationFrameId?: number;
   private lastUpdateTime?: number;
   private tickThrottleMs: number = 0;
   private lastTickNotifyTime: number = 0;
+  /** True while tick() runs — guards play() against forking a second rAF loop. */
+  private inTick = false;
+
+  /**
+   * Re-anchor the frame clock on tab refocus: rAF was suspended in the
+   * background, so the next frame's raw delta is the whole background
+   * duration. MAX_FRAME_DELTA_MS bounds the damage; re-anchoring removes
+   * even the clamped jump.
+   */
+  private readonly visibilityHandler = (): void => {
+    if (document.visibilityState === 'visible' && this.playing) {
+      this.lastUpdateTime = performance.now();
+    }
+  };
 
   constructor(options: TimeControllerOptions = {}) {
     // Use ?? not || so an explicit initialTime/speed of 0 is honored.
@@ -115,8 +140,19 @@ export class TimeController {
     this.lastUpdateTime = performance.now();
     // Reset throttle so the first tick after play notifies immediately.
     this.lastTickNotifyTime = 0;
+    // Registered only while playing: a playing controller is already rooted
+    // by its self-rescheduling rAF loop, so the document listener adds no new
+    // leak surface for undisposed instances. `document` is absent in
+    // workers/Node — the frame-delta clamp alone covers those.
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', this.visibilityHandler);
+    }
     this.notifyPlayStateListeners();
-    this.tick();
+    // Re-entrant resume (a wrap/playState listener resumed playback from
+    // inside tick(), e.g. the governor's instantly-passing post-wrap gate):
+    // skip the synchronous tick — the outer tick's tail reschedules the one
+    // rAF loop; a second sync tick would fork a second loop (2× speed).
+    if (!this.inTick) this.tick();
   }
 
   /** Pause playback. No-op (and no playState notification) when already paused — mirrors play(). */
@@ -126,6 +162,9 @@ export class TimeController {
     if (this.animationFrameId) {
       cancelAnimationFrame(this.animationFrameId);
       this.animationFrameId = undefined;
+    }
+    if (typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', this.visibilityHandler);
     }
     this.notifyPlayStateListeners();
   }
@@ -152,22 +191,28 @@ export class TimeController {
   /** Register listener for time updates */
   on(event: 'tick', callback: TimeUpdateCallback): void;
   on(event: 'playState', callback: PlayStateCallback): void;
+  on(event: 'wrap', callback: TimeUpdateCallback): void;
   on(event: string, callback: TimeUpdateCallback | PlayStateCallback): void {
     if (event === 'tick') {
       this.listeners.add(callback as TimeUpdateCallback);
     } else if (event === 'playState') {
       this.playStateListeners.add(callback as PlayStateCallback);
+    } else if (event === 'wrap') {
+      this.wrapListeners.add(callback as TimeUpdateCallback);
     }
   }
 
   /** Unregister listener */
   off(event: 'tick', callback: TimeUpdateCallback): void;
   off(event: 'playState', callback: PlayStateCallback): void;
+  off(event: 'wrap', callback: TimeUpdateCallback): void;
   off(event: string, callback: TimeUpdateCallback | PlayStateCallback): void {
     if (event === 'tick') {
       this.listeners.delete(callback as TimeUpdateCallback);
     } else if (event === 'playState') {
       this.playStateListeners.delete(callback as PlayStateCallback);
+    } else if (event === 'wrap') {
+      this.wrapListeners.delete(callback as TimeUpdateCallback);
     }
   }
 
@@ -183,8 +228,10 @@ export class TimeController {
 
   /** Destroy controller */
   destroy(): void {
-    this.pause();
+    this.pause(); // also unregisters the visibilitychange handler
     this.listeners.clear();
+    this.playStateListeners.clear();
+    this.wrapListeners.clear();
   }
 
   private tick = (): void => {
@@ -192,56 +239,71 @@ export class TimeController {
 
     const now = performance.now();
     // Explicit undefined check: a lastUpdateTime of 0 is a valid timestamp.
-    const elapsed = this.lastUpdateTime !== undefined ? now - this.lastUpdateTime : 0;
+    // The clamp bounds background-tab refocus (see MAX_FRAME_DELTA_MS).
+    const elapsed =
+      this.lastUpdateTime !== undefined
+        ? Math.min(now - this.lastUpdateTime, MAX_FRAME_DELTA_MS)
+        : 0;
     this.lastUpdateTime = now;
 
-    // Update time based on elapsed time and speed
-    const timeIncrement = elapsed * this.speed;
-    this.currentTime += timeIncrement;
+    this.inTick = true;
+    try {
+      // Update time based on elapsed time and speed
+      const timeIncrement = elapsed * this.speed;
+      this.currentTime += timeIncrement;
 
-    // Handle time range boundaries
-    if (this.timeRange) {
-      const { start, end } = this.timeRange;
-      if (this.currentTime > end) {
-        if (this.bounce) {
-          // Reflect the overshoot back into the range and reverse direction so
-          // time stays continuous (no teleport → no window evict / ribbon pop).
-          this.currentTime = Math.max(start, end - (this.currentTime - end));
-          this.speed = -Math.abs(this.speed);
-          // Announce the reversal so downstream tile loaders can re-aim their
-          // prefetch immediately. Without this the tileset only infers the new
-          // direction from observed time deltas (with a multi-frame hysteresis),
-          // so it keeps prefetching the OLD direction for a moment and the
-          // tiles the play head now moves into load reactively → a flash.
-          this.notifyPlayStateListeners();
-        } else if (this.loop) {
-          this.currentTime = start;
-        } else {
-          this.currentTime = end;
-          this.pause();
-        }
-      } else if (this.currentTime < start) {
-        if (this.bounce) {
-          this.currentTime = Math.min(end, start + (start - this.currentTime));
-          this.speed = Math.abs(this.speed);
-          this.notifyPlayStateListeners();
-        } else if (this.loop) {
-          this.currentTime = end;
-        } else {
-          this.currentTime = start;
-          this.pause();
+      // Handle time range boundaries
+      if (this.timeRange) {
+        const { start, end } = this.timeRange;
+        if (this.currentTime > end) {
+          if (this.bounce) {
+            // Reflect the overshoot back into the range and reverse direction so
+            // time stays continuous (no teleport → no window evict / ribbon pop).
+            this.currentTime = Math.max(start, end - (this.currentTime - end));
+            this.speed = -Math.abs(this.speed);
+            // Announce the reversal so downstream tile loaders can re-aim their
+            // prefetch immediately. Without this the tileset only infers the new
+            // direction from observed time deltas (with a multi-frame hysteresis),
+            // so it keeps prefetching the OLD direction for a moment and the
+            // tiles the play head now moves into load reactively → a flash.
+            this.notifyPlayStateListeners();
+          } else if (this.loop) {
+            this.currentTime = start;
+            // Announce the wrap: it is a teleport-seek the clock performed on
+            // its own, and the governor must route it through seek semantics
+            // (flush stale prefetch, plain startup gate) instead of letting
+            // playback run ungated into possibly-unloaded time.
+            this.notifyWrapListeners();
+          } else {
+            this.currentTime = end;
+            this.pause();
+          }
+        } else if (this.currentTime < start) {
+          if (this.bounce) {
+            this.currentTime = Math.min(end, start + (start - this.currentTime));
+            this.speed = Math.abs(this.speed);
+            this.notifyPlayStateListeners();
+          } else if (this.loop) {
+            this.currentTime = end;
+            this.notifyWrapListeners();
+          } else {
+            this.currentTime = start;
+            this.pause();
+          }
         }
       }
-    }
 
-    // Throttle tick notifications: advance time every frame but only notify
-    // listeners every `tickThrottleMs` of wall-clock time. Boundary events
-    // (loop/clamp handled above) still notify on the next eligible tick.
-    if (this.tickThrottleMs <= 0) {
-      this.notifyListeners();
-    } else if (now - this.lastTickNotifyTime >= this.tickThrottleMs) {
-      this.lastTickNotifyTime = now;
-      this.notifyListeners();
+      // Throttle tick notifications: advance time every frame but only notify
+      // listeners every `tickThrottleMs` of wall-clock time. Boundary events
+      // (loop/clamp handled above) still notify on the next eligible tick.
+      if (this.tickThrottleMs <= 0) {
+        this.notifyListeners();
+      } else if (now - this.lastTickNotifyTime >= this.tickThrottleMs) {
+        this.lastTickNotifyTime = now;
+        this.notifyListeners();
+      }
+    } finally {
+      this.inTick = false;
     }
 
     // Schedule next frame
@@ -259,6 +321,12 @@ export class TimeController {
   private notifyPlayStateListeners(): void {
     for (const listener of this.playStateListeners) {
       listener(this.playing, this.speed);
+    }
+  }
+
+  private notifyWrapListeners(): void {
+    for (const listener of this.wrapListeners) {
+      listener(this.currentTime);
     }
   }
 }

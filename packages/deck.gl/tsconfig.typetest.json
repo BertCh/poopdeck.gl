@@ -1,0 +1,12 @@
+{
+  // Compile-only type contracts (test/type-contracts.test-d.ts) — run by the
+  // `typecheck` script. Separate config because the package tsconfig pins
+  // rootDir to src/ (for dist emit) and the root config excludes test/**.
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "composite": false,
+    "noEmit": true
+  },
+  "include": ["src/**/*", "test/type-contracts.test-d.ts"],
+  "exclude": ["node_modules", "dist"]
+}

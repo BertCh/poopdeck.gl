@@ -12,16 +12,22 @@ import { CompositeLayer } from '@deck.gl/core';
 import type {
   CompositeLayerProps,
   DefaultProps,
+  GetPickingInfoParams,
   LayerContext,
+  PickingInfo,
   UpdateParameters,
 } from '@deck.gl/core';
-import { STTArchive } from '@stt/core';
+import { STTArchive, getFeatureProperties } from '@stt/core';
 import { SpatiotemporalTileset } from '@stt/core';
 import type {
   Tile,
+  TileId,
+  BinaryFeatures,
   BoundingBox,
   ArchiveMetadata,
   OverviewPreloadResult,
+  SpatiotemporalTilesetOptions,
+  SttLoadOptions,
 } from '@stt/core';
 import { TimeController } from './time-controller';
 import type { BufferSource, BufferedRunway } from './playback-governor';
@@ -29,7 +35,42 @@ import { snapshot, isProbeEnabled } from './telemetry';
 
 const DEBUG = false;
 
-export interface SpatioTemporalLayerProps extends CompositeLayerProps {
+/**
+ * Picking info emitted by the STT layer family. Follows `TileLayer`'s
+ * enrichment contract: `sourceTile` is the tile whose sublayer emitted the
+ * event (set on hover-off too), `tile` only on an actual hit. `info.object`
+ * — undefined by default for binary data — is filled with the picked
+ * feature's properties decoded from the tile's binary columns
+ * (see {@link getFeatureProperties} in `@stt/core`).
+ */
+export interface SpatioTemporalPickingInfo extends PickingInfo {
+  /** The picked tile (set only when a feature was hit). */
+  tile?: Tile | null;
+  /** The tile whose sublayer emitted the picking event. */
+  sourceTile?: Tile | null;
+}
+
+/**
+ * Props every animated sublayer carries so {@link SpatioTemporalLayer.getPickingInfo}
+ * can enrich picks — the `tile` name is the TileLayer convention; `sttFeatures`
+ * is the (tile, layer) pair's decoded columns. Both are REFERENCES into the
+ * prepared-tile cache, never copies.
+ */
+export interface SttSublayerPickingProps {
+  tile?: Tile | null;
+  sttFeatures?: BinaryFeatures;
+}
+
+/**
+ * Props added by {@link SpatioTemporalLayer} (upstream `_XxxLayerProps`
+ * convention: own props only — compose with `CompositeLayerProps` via
+ * {@link SpatioTemporalLayerProps}).
+ *
+ * Deliberate difference from upstream: there is NO `DataT` generic. Tiles are
+ * binary (Arrow-backed columnar buffers), so there is no per-row datum type
+ * for accessors to receive — `data` is always the archive URL string.
+ */
+export interface _SpatioTemporalLayerProps {
   /** URL to the STT archive. */
   data: string;
 
@@ -109,7 +150,13 @@ export interface SpatioTemporalLayerProps extends CompositeLayerProps {
    */
   tier?: 'auto' | 'summary' | 'raw';
 
-  /** Callback when all tiles in viewport are loaded. */
+  /**
+   * Called when all tiles in the current viewport×window selection have
+   * finished loading (the `TileLayer.onViewportLoad` moment), with the
+   * loaded tile array. Fires once per selection settle: again only after
+   * the selection itself changes (pan/zoom or the time window crossing a
+   * bucket) and re-settles — never per tile.
+   */
   onViewportLoad?: ((tiles: Tile[]) => void) | null;
 
   /** Callback when a tile loads. */
@@ -117,6 +164,13 @@ export interface SpatioTemporalLayerProps extends CompositeLayerProps {
 
   /** Callback when a tile is evicted from cache. */
   onTileUnload?: ((tile: Tile) => void) | null;
+
+  /**
+   * Called when a tile's fetch/decode fails after the loader's retries.
+   * Mirrors `TileLayer.onTileError`, plus the failing tile's id as context.
+   * Default (null) logs via `console.error`, matching TileLayer.
+   */
+  onTileError?: ((error: Error, tileId?: TileId) => void) | null;
 
   /**
    * Fired ONCE per archive/tileset initialization (and again if `data`
@@ -156,15 +210,46 @@ export interface SpatioTemporalLayerProps extends CompositeLayerProps {
    */
   onOverviewPreload?: ((result: OverviewPreloadResult) => void) | null;
 
-  /** loaders.gl options. */
-  loadOptions?: Record<string, unknown>;
+  /**
+   * loaders.gl-style options. Only `loadOptions.fetch` is consumed: the
+   * OBJECT form (`RequestInit`) is merged into every HTTP request the
+   * archive makes (manifest, directory, pack ranges) — auth headers,
+   * credentials, CORS mode; per-request fields like the `Range` header
+   * always win. A fetch-like FUNCTION replaces the transport instead.
+   */
+  loadOptions?: SttLoadOptions;
 
-  /** Force a specific zoom level (useful for `GlobeView` to load low-zoom tiles). */
-  zoomOverride?: number;
+  /**
+   * Force a specific zoom level (useful for `GlobeView` to load low-zoom
+   * tiles). `null` (default) derives zoom from the viewport.
+   */
+  zoomOverride?: number | null;
 
   /** Use global bounds instead of viewport bounds (for `GlobeView`). */
   useGlobalBounds?: boolean;
+
+  /**
+   * Time-as-height ("space-time cube"): meters of altitude per simulation
+   * millisecond. When non-zero, the trips/path/point layers lift each vertex
+   * by `(featureTime - timeHeightOrigin) * timeHeightScale` meters — per-vertex
+   * time on trail-mode trips (threads climb along their length, slope = speed),
+   * per-feature start time elsewhere. Animating this value morphs between the
+   * flat map (0) and the cube. MapView only — the lift is vertical in
+   * web-mercator common space.
+   * @default 0 (off)
+   */
+  timeHeightScale?: number;
+
+  /**
+   * Absolute time (Unix ms) rendered at altitude 0 in time-as-height mode,
+   * typically `timeRange.start`.
+   * @default 0
+   */
+  timeHeightOrigin?: number;
 }
+
+/** Complete props accepted by {@link SpatioTemporalLayer}. */
+export type SpatioTemporalLayerProps = _SpatioTemporalLayerProps & CompositeLayerProps;
 
 interface SpatioTemporalLayerState {
   archive: STTArchive | null;
@@ -180,20 +265,122 @@ interface SpatioTemporalLayerState {
   initializingUrl?: string | null;
 }
 
+const defaultProps: DefaultProps<SpatioTemporalLayerProps> = {
+  // Data source
+  data: '',
+
+  // Temporal properties
+  currentTime: 0,
+  timeWindow: 86_400_000, // 1 day
+  timeRange: { type: 'object', value: null, optional: true, compare: true },
+  timeController: { type: 'object', value: null, optional: true, compare: false },
+
+  // Tile-loading configuration (mirrors deck.gl `TileLayer`).
+  // maxRequests is the SINGLE concurrency knob: it's threaded into the
+  // archive as `maxConcurrentRequests`, bounding the number of in-flight
+  // HTTP Range requests the coalescer opens per batch. Under HTTP/2/3
+  // multiplexing to object storage (R2 caps ~75 streams/connection) 24 is
+  // the tuned ceiling — high enough to fill a viewport in one round-trip,
+  // low enough to stay well under the per-connection stream cap.
+  maxRequests: 24,
+  debounceTime: 0,
+  maxCacheSize: 2000,
+  maxCacheByteSize: 2 * 1024 * 1024 * 1024, // 2 GiB
+
+  // Prefetch configuration. Defaults sized for a few real-time seconds of
+  // buffer, not minutes — see DemoPage.tsx for the consumer-side math.
+  // Overshooting here (the previous defaults were 60s ahead × 15 steps =
+  // 15 minutes of lookahead) caused the prefetch queue to balloon and
+  // saturated the decode backlog.
+  enablePrefetch: true,
+  prefetchAhead: 30_000, // 30s of sim time
+  prefetchSteps: 4,
+
+  // Summary-tier dispatch: 'auto' transparently swaps to the aggregated
+  // tier at low zoom when the archive has one (no-op otherwise).
+  tier: 'auto',
+
+  // GlobeView helpers: null/false = derive from the viewport (the default).
+  zoomOverride: null,
+  useGlobalBounds: false,
+
+  // Time-as-height (space-time cube) — off by default.
+  timeHeightScale: 0,
+  timeHeightOrigin: 0,
+
+  // Callbacks
+  onViewportLoad: { type: 'function', value: null, optional: true },
+  onTileLoad: { type: 'function', value: null, optional: true },
+  onTileUnload: { type: 'function', value: null, optional: true },
+  onTileError: { type: 'function', value: null, optional: true },
+  onTilesetReady: { type: 'function', value: null, optional: true },
+  onBufferChange: { type: 'function', value: null, optional: true },
+
+  // Storyboard preview tier: opt-in (some datasets fail the byte budget by
+  // design — the gate, not the consumer, decides whether anything loads).
+  overviewPreload: false,
+  onOverviewPreload: { type: 'function', value: null, optional: true },
+
+  // loaders.gl options
+  loadOptions: { type: 'object', value: {}, compare: false },
+};
+
 /**
  * Base layer for spatiotemporal tile visualization
- * 
+ *
  * Architecture based on deck.gl TileLayer + loaders.gl:
  * - Separates tile management (Tileset) from data loading (Archive)
  * - Request concurrency control (maxRequests: 24)
  * - Debouncing for smooth viewport changes
  * - LRU cache with size limits
  * - Frame-based rendering optimization
+ *
+ * Generics follow the upstream extension pattern
+ * (`PathLayer<DataT, ExtraPropsT> extends Layer<ExtraPropsT & Required<_PathLayerProps<DataT>>>`)
+ * minus the `DataT` parameter — tiles are binary, there is no per-row datum
+ * type (see {@link _SpatioTemporalLayerProps}). Third parties subclass via
+ * `class My extends SpatioTemporalLayer<MyExtraProps>`, which types
+ * `this.props` as `MyExtraProps & Required<_SpatioTemporalLayerProps> &
+ * Required<CompositeLayerProps>`.
  */
 export class SpatioTemporalLayer<
-  Props extends SpatioTemporalLayerProps = SpatioTemporalLayerProps
-> extends CompositeLayer<Props> {
+  ExtraPropsT extends {} = {}
+> extends CompositeLayer<ExtraPropsT & Required<_SpatioTemporalLayerProps>> {
   static layerName = 'SpatioTemporalLayer';
+
+  /**
+   * deck.gl resolves defaultProps through the props object's prototype
+   * chain, so an own key explicitly set to `undefined` SHADOWS its default
+   * (`new AnimatedPointLayer({ strokeColor: cfg.strokeColor })` with an
+   * absent config field silently disables the default — and downstream the
+   * sublayers receive explicit `undefined` accessors, which deck's
+   * attribute updater rejects with "accessor is not a function"). Callers
+   * build props from optional config fields all the time, so defend the
+   * boundary once here: drop explicitly-undefined own keys before deck
+   * sees them, making `undefined` mean "use the default" the way every
+   * caller already assumes. This is also what makes the `Required<>` props
+   * typing above actually true at runtime.
+   */
+  constructor(...propObjects: any[]) {
+    super(
+      ...propObjects.map((props) => {
+        if (!props || typeof props !== 'object') return props;
+        let hasUndefined = false;
+        for (const key in props) {
+          if (props[key] === undefined) {
+            hasUndefined = true;
+            break;
+          }
+        }
+        if (!hasUndefined) return props;
+        const cleaned: Record<string, unknown> = {};
+        for (const key in props) {
+          if (props[key] !== undefined) cleaned[key] = props[key];
+        }
+        return cleaned;
+      }),
+    );
+  }
   
   // Internal time tracking - updated every tick without setState overhead
   // Sublayers read from this via getCurrentTime() method
@@ -247,56 +434,20 @@ export class SpatioTemporalLayer<
    */
   private _overviewPreload: OverviewPreloadResult | null = null;
 
-  static defaultProps: DefaultProps<SpatioTemporalLayerProps> = {
-    // Data source
-    data: '',
+  /**
+   * Once-per-settle latch for `onViewportLoad`: the tileset selection
+   * version we last fired for. The version advances only when the
+   * needed-tile SET changes (never on tile arrival), so "settled at
+   * version V" fires exactly once even though we probe from several code
+   * paths (updateState, the tile-load rAF, throttled animation ticks).
+   * Reset on re-init — a fresh tileset restarts its version counter.
+   */
+  private _viewportLoadVersion = -1;
 
-    // Temporal properties
-    currentTime: 0,
-    timeWindow: 86_400_000, // 1 day
-    timeRange: { type: 'object', value: null, optional: true, compare: true },
-    timeController: { type: 'object', value: null, optional: true, compare: false },
-
-    // Tile-loading configuration (mirrors deck.gl `TileLayer`).
-    // maxRequests is the SINGLE concurrency knob: it's threaded into the
-    // archive as `maxConcurrentRequests`, bounding the number of in-flight
-    // HTTP Range requests the coalescer opens per batch. Under HTTP/2/3
-    // multiplexing to object storage (R2 caps ~75 streams/connection) 24 is
-    // the tuned ceiling — high enough to fill a viewport in one round-trip,
-    // low enough to stay well under the per-connection stream cap.
-    maxRequests: 24,
-    debounceTime: 0,
-    maxCacheSize: 2000,
-    maxCacheByteSize: 2 * 1024 * 1024 * 1024, // 2 GiB
-
-    // Prefetch configuration. Defaults sized for a few real-time seconds of
-    // buffer, not minutes — see DemoPage.tsx for the consumer-side math.
-    // Overshooting here (the previous defaults were 60s ahead × 15 steps =
-    // 15 minutes of lookahead) caused the prefetch queue to balloon and
-    // saturated the decode backlog.
-    enablePrefetch: true,
-    prefetchAhead: 30_000, // 30s of sim time
-    prefetchSteps: 4,
-
-    // Summary-tier dispatch: 'auto' transparently swaps to the aggregated
-    // tier at low zoom when the archive has one (no-op otherwise).
-    tier: 'auto',
-
-    // Callbacks
-    onViewportLoad: { type: 'function', value: null, optional: true },
-    onTileLoad: { type: 'function', value: null, optional: true },
-    onTileUnload: { type: 'function', value: null, optional: true },
-    onTilesetReady: { type: 'function', value: null, optional: true },
-    onBufferChange: { type: 'function', value: null, optional: true },
-
-    // Storyboard preview tier: opt-in (some datasets fail the byte budget by
-    // design — the gate, not the consumer, decides whether anything loads).
-    overviewPreload: false,
-    onOverviewPreload: { type: 'function', value: null, optional: true },
-
-    // loaders.gl options
-    loadOptions: { type: 'object', value: {}, compare: false },
-  };
+  // Upstream idiom: a module-level const typed `DefaultProps<XxxLayerProps>`
+  // assigned to the static. The named annotation keeps the emitted .d.ts
+  // portable (no inference into transitive deps' types).
+  static defaultProps = defaultProps;
 
   declare state: SpatioTemporalLayerState & { [key: string]: unknown };
 
@@ -343,7 +494,7 @@ export class SpatioTemporalLayer<
     this._initArchiveAndTileset();
   }
 
-  finalizeState(_context: LayerContext): void {
+  finalizeState(context: LayerContext): void {
     this._finalized = true;
     // Cancel any pending coalesced tile-load update.
     if (this._tileLoadRafId !== null) {
@@ -375,6 +526,10 @@ export class SpatioTemporalLayer<
     if (archive) {
       archive.finalize();
     }
+
+    // Lifecycle contract: the base finalizeState still unsubscribes from the
+    // resource manager and finalizes internal state even on composites.
+    super.finalizeState(context);
   }
 
   /**
@@ -466,8 +621,9 @@ export class SpatioTemporalLayer<
     // Always update internal time tracking (no setState overhead)
     this._currentTime = time;
     
-    // Check if we need to update the tileset (throttled)
-    const timeWindow = this.props.timeWindow || 86400000;
+    // Check if we need to update the tileset (throttled). `timeWindow` is
+    // `Required<>`-typed: the default guarantees a value here.
+    const timeWindow = this.props.timeWindow;
     const timeDelta = Math.abs(time - this._lastTilesetUpdateTime);
     const updateThreshold = timeWindow / 20; // Update tileset when 5% of time window has passed
     // Wall-clock ceiling: never refresh the tileset more than ~10×/sec from the
@@ -510,6 +666,10 @@ export class SpatioTemporalLayer<
           this._commitTileIdSet(newTiles);
           tilesChanged = true;
         }
+        // Settle check rides the throttled block (≤10 Hz wall), NOT the raw
+        // 60 Hz tick — it covers all-cache-hit selections, which never fire
+        // onTileLoad and would otherwise only settle on the next updateState.
+        this._maybeFireViewportLoad(tileset);
       }
     }
     
@@ -557,7 +717,29 @@ export class SpatioTemporalLayer<
       } else {
         this.setNeedsRedraw();
       }
+
+      // Tile arrivals are what complete a selection — probe for the
+      // viewport-load settle here, once per coalesced batch.
+      this._maybeFireViewportLoad(tileset);
     }) as unknown as number;
+  }
+
+  /**
+   * Fire `onViewportLoad` when the tileset's current selection has settled
+   * (the `TileLayer` "all tiles in viewport loaded" moment). Latched on the
+   * tileset's selection version so a settled selection fires exactly once,
+   * however many code paths probe it; an all-cached selection (version bump
+   * with isLoaded already true) fires again, matching upstream semantics.
+   * Version 0 means no selection has needed anything yet — firing there
+   * would report an empty viewport during init.
+   */
+  private _maybeFireViewportLoad(tileset: SpatiotemporalTileset): void {
+    if (!this.props.onViewportLoad) return;
+    const version = tileset.selectionVersion;
+    if (version === 0 || version === this._viewportLoadVersion) return;
+    if (!tileset.isLoaded) return;
+    this._viewportLoadVersion = version;
+    this.props.onViewportLoad(tileset.getVisibleTiles());
   }
 
   /**
@@ -656,6 +838,8 @@ export class SpatioTemporalLayer<
     // Track loading state (doesn't trigger re-render)
     this.state.isLoaded = tiles.length > 0;
 
+    this._maybeFireViewportLoad(tileset);
+
     // Publish tileset stats so the HUD / probe consumers can read them
     // without a getter callback. The arguments to snapshot() are evaluated
     // unconditionally (JS), so building the stats objects here costs real
@@ -701,7 +885,7 @@ export class SpatioTemporalLayer<
    * to ensure tiles containing trail data are loaded.
    */
   protected getEffectiveTimeWindow(): number {
-    return this.props.timeWindow || 86400000;
+    return this.props.timeWindow;
   }
 
   private async _initArchiveAndTileset(): Promise<void> {
@@ -737,7 +921,7 @@ export class SpatioTemporalLayer<
         // in-flight Range-request ceiling. Previously the archive used its own
         // default (24) and the layer's `maxRequests` never reached the wire, so
         // setting it had no effect on actual fetch concurrency.
-        maxConcurrentRequests: this.props.maxRequests!,
+        maxConcurrentRequests: this.props.maxRequests,
     });
 
     // Get metadata to configure tileset zoom range
@@ -750,7 +934,11 @@ export class SpatioTemporalLayer<
       archive.finalize();
       return;
     }
-    
+
+    // Subclass hook (e.g. H3SummaryLayer fires onMetadataLoad + the
+    // no-summary-tier warning here).
+    this.onMetadataLoaded(metadata);
+
     // Summary-tier dispatch. When the archive carries a server-aggregated
     // summary tier, wire the tileset to fall back to it at low zoom so a
     // wide view streams a few thousand aggregated cells instead of millions
@@ -767,20 +955,20 @@ export class SpatioTemporalLayer<
 
     // Create tileset with archive as data source
     const tileset = new SpatiotemporalTileset({
-      maxRequests: this.props.maxRequests!,
-      debounceTime: this.props.debounceTime!,
-      maxCacheSize: this.props.maxCacheSize!,
-      maxCacheByteSize: this.props.maxCacheByteSize!,
+      maxRequests: this.props.maxRequests,
+      debounceTime: this.props.debounceTime,
+      maxCacheSize: this.props.maxCacheSize,
+      maxCacheByteSize: this.props.maxCacheByteSize,
       minZoom: metadata.minZoom,
       maxZoom: metadata.maxZoom,
       // Use temporal bucket from metadata for deterministic tile loading
       temporalBucketMs: metadata.temporalBucketMs,
       refinementStrategy: 'best-available', // Load parent tiles as fallback (deck.gl pattern)
       // Prefetch configuration for smooth animation playback
-      enablePrefetch: this.props.enablePrefetch!,
-      prefetchAhead: this.props.prefetchAhead!,
-      prefetchSteps: this.props.prefetchSteps!,
-      tier: this.props.tier ?? 'auto',
+      enablePrefetch: this.props.enablePrefetch,
+      prefetchAhead: this.props.prefetchAhead,
+      prefetchSteps: this.props.prefetchSteps,
+      tier: this.props.tier,
       summaryZoomRange,
       getAvailableTiles: (bounds, zoom, timeRange) =>
         archive.getTileIdsInBounds(bounds, zoom, timeRange),
@@ -815,7 +1003,12 @@ export class SpatioTemporalLayer<
         this.props.onTileUnload?.(tile);
       },
       onTileError: (error, tileId) => {
-        console.error('[STL] Tile error:', tileId, error);
+        if (this.props.onTileError) {
+          this.props.onTileError(error, tileId);
+        } else {
+          // TileLayer's default: errors surface in the console.
+          console.error('[STL] Tile error:', tileId, error);
+        }
       },
       // ── Player-buffering plumbing (WS-A/WS-B contract) ──────────────────
       // Buffered-runway threshold events from the tileset's coverage index,
@@ -826,6 +1019,10 @@ export class SpatioTemporalLayer<
       // Wire the archive's coalesced-range throughput EWMA into the tileset
       // so estimateTimeToReadyMs() can compute honest ETAs.
       getThroughput: () => archive.getThroughputEstimate(),
+      // Subclass hook: tier-specific tileset config (e.g. H3SummaryLayer's
+      // summary-tier zoom range + 'no-overlap' refinement). Spread LAST so
+      // overrides win over the base wiring above.
+      ...this.getTilesetOptionOverrides(metadata),
     });
     
     if (DEBUG) console.log('[STL] Tileset configured with zoom range:', metadata.minZoom, '-', metadata.maxZoom);
@@ -834,6 +1031,11 @@ export class SpatioTemporalLayer<
     if (this.props.timeController?.isPlaying()) {
       tileset.setAnimationState(true, this.props.timeController.getSpeed());
     }
+
+    // A fresh tileset restarts its selection-version counter; carrying the
+    // old latch over could silently swallow the new dataset's first
+    // onViewportLoad when the counters happen to collide.
+    this._viewportLoadVersion = -1;
 
     // Reset `tiles` to []; this signals subclass renderLayers() that the
     // visible set just collapsed (their lastTilesRef-guarded prune block
@@ -867,7 +1069,25 @@ export class SpatioTemporalLayer<
     }
   }
 
-  private getViewportBounds(viewport: any): BoundingBox {
+  /**
+   * Subclass hook, called once per archive init right after metadata arrives
+   * (and after the supersession race-guard). Base implementation is a no-op.
+   */
+  protected onMetadataLoaded(_metadata: ArchiveMetadata): void {}
+
+  /**
+   * Subclass hook: partial {@link SpatiotemporalTilesetOptions} spread over
+   * the base tileset wiring at construction time (overrides win). Lets a
+   * tier-specific subclass (H3SummaryLayer) swap zoom range / refinement
+   * strategy without duplicating the whole `_initArchiveAndTileset` plumbing.
+   */
+  protected getTilesetOptionOverrides(
+    _metadata: ArchiveMetadata,
+  ): Partial<SpatiotemporalTilesetOptions> {
+    return {};
+  }
+
+  protected getViewportBounds(viewport: any): BoundingBox {
     // Use global bounds for GlobeView to load all tiles at zoom 0.
     // Static result — cache and return the same reference to dodge any
     // downstream identity checks.
@@ -909,9 +1129,9 @@ export class SpatioTemporalLayer<
     return this._cachedBounds;
   }
 
-  private getZoomLevel(viewport: any): number {
+  protected getZoomLevel(viewport: any): number {
     // Use zoomOverride if specified (useful for GlobeView)
-    if (this.props.zoomOverride !== undefined) {
+    if (this.props.zoomOverride != null) {
       return this.props.zoomOverride;
     }
     
@@ -944,6 +1164,69 @@ export class SpatioTemporalLayer<
    */
   getCurrentTime(): number {
     return this._currentTime;
+  }
+
+  /**
+   * Compose one sublayer's props through deck's standard
+   * `CompositeLayer.getSubLayerProps()` so the inherited composite props
+   * (opacity, pickable, visible, coordinateSystem, modelMatrix,
+   * autoHighlight, highlightColor, wrapLongitude, positionFormat, …) and the
+   * user's `_subLayerProps[shortId]` overrides apply. Upstream merge order
+   * holds: inherited < `sublayerProps` (ours) < `_subLayerProps[shortId]`
+   * (the user's), so a forced value passed in `sublayerProps` beats
+   * inheritance but still yields to an explicit user override.
+   *
+   * `shortId` is the STABLE id `_subLayerProps` / `getSubLayerClass` key on
+   * (`'points'`, `'paths'`, …); `instanceKey` (typically the tile key) is
+   * appended afterwards so per-tile sublayer ids stay unique AND stable
+   * frame-to-frame — id stability is what keys deck's layer matching for the
+   * cached-instance optimization.
+   *
+   * PERF: allocates a fresh props object — call it only from the cache-gated
+   * buildSublayer paths, never from a per-frame path that returns cached
+   * sublayer instances. The user's `updateTriggers` are forwarded wholesale
+   * (the TileLayer pattern); note that any change to the inherited props or
+   * `_subLayerProps` must also be folded into the layer's cache digest via
+   * `inheritedPropsDigest` or the rebuild never triggers.
+   */
+  protected composeSubLayerProps(
+    shortId: string,
+    instanceKey: string,
+    sublayerProps: Record<string, any>,
+  ): Record<string, any> {
+    const props = this.getSubLayerProps({
+      id: shortId,
+      updateTriggers: this.props.updateTriggers,
+      ...sublayerProps,
+    } as any) as Record<string, any>;
+    props.id = `${props.id}-${instanceKey}`;
+    return props;
+  }
+
+  /**
+   * TileLayer-convention picking enrichment. Every animated sublayer
+   * carries its source `tile` plus the (tile, layer) pair's decoded
+   * `BinaryFeatures` as `sttFeatures` — references into the prepared-tile
+   * cache, never copies. A hit decodes ONE feature's binary columns into a
+   * plain `info.object` here, at event rate, so the render path stays free
+   * of per-feature objects. Cumulative point slabs (which merge many tiles
+   * into one sublayer) resolve through per-tile provenance instead — see
+   * `AnimatedPointLayer.getPickingInfo`.
+   */
+  getPickingInfo({ info, sourceLayer }: GetPickingInfoParams): SpatioTemporalPickingInfo {
+    const out = info as SpatioTemporalPickingInfo;
+    const sprops = sourceLayer?.props as SttSublayerPickingProps | undefined;
+    const tile = sprops?.tile ?? null;
+    out.sourceTile = tile;
+    if (info.index >= 0 && tile) {
+      out.tile = tile;
+      // Respect an object a sublayer already resolved (e.g. JS-row
+      // sublayers); only binary sublayers leave it undefined.
+      if (out.object === undefined && sprops?.sttFeatures) {
+        out.object = getFeatureProperties(sprops.sttFeatures, info.index) ?? undefined;
+      }
+    }
+    return out;
   }
 
   /**

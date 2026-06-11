@@ -45,8 +45,18 @@
  */
 
 import { ScatterplotLayer } from '@deck.gl/layers';
-import type { Color, DefaultProps, Layer, LayerContext } from '@deck.gl/core';
-import { SpatioTemporalLayer, SpatioTemporalLayerProps } from './spatiotemporal-layer';
+import type {
+  Color,
+  DefaultProps,
+  GetPickingInfoParams,
+  Layer,
+  LayerContext,
+} from '@deck.gl/core';
+import {
+  SpatioTemporalLayer,
+  SpatioTemporalLayerProps,
+  SpatioTemporalPickingInfo,
+} from './spatiotemporal-layer';
 import { TimeFilterExtension } from './time-filter-extension';
 import {
   CategoryColorExtension,
@@ -54,7 +64,17 @@ import {
 } from './category-color-extension';
 import { emit } from './telemetry';
 import { warnOnce } from './log';
-import type { Tile, Layer as TileLayer } from '@stt/core';
+import {
+  colorListDigest,
+  colorMappingDigest,
+  functionId,
+  inheritedPropsDigest,
+  updateTriggersDigest,
+} from './style-digest';
+import { resolveAccessorAlias } from './accessor-alias';
+import type { ColorAccessorValue, NumericAccessorValue } from './accessor-alias';
+import { getFeatureProperties } from '@stt/core';
+import type { Tile, TileId, Layer as TileLayer, BinaryFeatures } from '@stt/core';
 
 const DEBUG = false;
 
@@ -66,7 +86,9 @@ const DEBUG = false;
  */
 const SLAB_CAPACITY_POINTS = 250_000;
 
-export interface AnimatedPointLayerProps extends SpatioTemporalLayerProps {
+/** Props added by {@link AnimatedPointLayer} (own props only — compose with
+ * {@link SpatioTemporalLayerProps} via {@link AnimatedPointLayerProps}). */
+export interface _AnimatedPointLayerProps {
   /**
    * Radius scale multiplier.
    * @default 1
@@ -86,10 +108,26 @@ export interface AnimatedPointLayerProps extends SpatioTemporalLayerProps {
   fillColor?: Color | string;
 
   /**
+   * Upstream-vocabulary alias of {@link fillColor}. NOTE: unlike upstream
+   * deck.gl, this accepts a constant Color OR a property-column NAME — NOT a
+   * function accessor (binary tiles can't run per-feature JS; a function
+   * warns once and falls back to `fillColor`). When set, it wins over
+   * `fillColor`.
+   */
+  getFillColor?: ColorAccessorValue | null;
+
+  /**
    * Radius — constant number, or property name for per-feature radius.
    * @default 5
    */
   radius?: number | string;
+
+  /**
+   * Upstream-vocabulary alias of {@link radius}. Accepts a constant number
+   * OR a property-column NAME — NOT a function accessor (a function warns
+   * once and falls back to `radius`). When set, it wins over `radius`.
+   */
+  getRadius?: NumericAccessorValue | null;
 
   /** Color palette for categorical `fillColor`. */
   colorPalette?: Color[];
@@ -107,7 +145,7 @@ export interface AnimatedPointLayerProps extends SpatioTemporalLayerProps {
    * the category STRING. With `colorMapping` unset, the GPU CategoryColorExtension
    * handles the lookup in the fragment shader against the `colorPalette`.
    */
-  colorMapping?: Record<string, Color>;
+  colorMapping?: Record<string, Color> | null;
 
   /** Fallback color for categories absent from `colorMapping`. */
   colorMappingDefault?: Color;
@@ -117,7 +155,7 @@ export interface AnimatedPointLayerProps extends SpatioTemporalLayerProps {
    * `radius` property column before the GPU receives it. Useful for
    * non-linear scalings (e.g. magnitude → area).
    */
-  radiusTransform?: (value: number) => number;
+  radiusTransform?: ((value: number) => number) | null;
 
   /** Minimum on-screen radius in pixels. Forwarded to ScatterplotLayer. */
   radiusMinPixels?: number;
@@ -136,6 +174,13 @@ export interface AnimatedPointLayerProps extends SpatioTemporalLayerProps {
 
   /** Stroke color (constant). */
   strokeColor?: Color;
+
+  /**
+   * Upstream-vocabulary alias of {@link strokeColor} (constant Color only —
+   * same domain as the legacy prop; a function accessor warns once and falls
+   * back to `strokeColor`). When set, it wins over `strokeColor`.
+   */
+  getLineColor?: ColorAccessorValue | null;
 
   /**
    * Whether to fill the marker.
@@ -208,6 +253,9 @@ export interface AnimatedPointLayerProps extends SpatioTemporalLayerProps {
   elevationScale?: number;
 }
 
+/** Complete props accepted by {@link AnimatedPointLayer}. */
+export type AnimatedPointLayerProps = _AnimatedPointLayerProps & SpatioTemporalLayerProps;
+
 // Default color palette for categorical data
 const DEFAULT_PALETTE: Color[] = [
   [31, 119, 180, 255],
@@ -247,6 +295,43 @@ interface PreparedTile {
    * color are in use.
    */
   gpuPalette: Color[] | null;
+  /** Source tile + decoded columns — picking enrichment context (references, not copies). */
+  tile: Tile;
+  layerName: string;
+  features: BinaryFeatures;
+}
+
+/**
+ * One absorbed tile's feature range within a consolidated slab. Holds the
+ * tile ID (not the Tile) — a slab outlives spatially-evicted tiles, and a
+ * live reference would pin their decoded Arrow buffers in memory, defeating
+ * the slab's whole copy-then-release design. `getPickingInfo` resolves the
+ * id against the CURRENT visible set; an absorbed-but-evicted tile yields
+ * `info.tile === null`.
+ */
+interface SlabProvenance {
+  /** First slab feature index this tile's points occupy. */
+  start: number;
+  count: number;
+  tileId: TileId;
+  layerName: string;
+}
+
+/** Binary-search the provenance range containing slab feature `index`. */
+function findSlabProvenance(
+  entries: SlabProvenance[],
+  index: number,
+): SlabProvenance | null {
+  let lo = 0;
+  let hi = entries.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    const e = entries[mid];
+    if (index < e.start) hi = mid - 1;
+    else if (index >= e.start + e.count) lo = mid + 1;
+    else return e;
+  }
+  return null;
 }
 
 /**
@@ -279,6 +364,8 @@ interface ConsolidatedSlab {
   categoryIndex: Float32Array | null;
   radii: Float32Array | null;
   frozen: boolean;
+  /** Per-absorbed-tile feature ranges, ordered by `start` — picking provenance. */
+  provenance: SlabProvenance[];
   /** Bumped on every append; the cached data + layer are rebuilt when they fall behind. */
   version: number;
   /** Reference-stable binary `data` object, keyed by `dataVersion` (== `version`). */
@@ -353,26 +440,57 @@ function indicesToFloat32(indices: Uint16Array, count: number): Float32Array {
  * across renders. Time updates flow through getTime() on the extension; tile
  * arrivals only construct one new sublayer + one GPU upload, never touching
  * the buffers of already-loaded tiles.
+ *
+ * Sublayer short id for `_subLayerProps` overrides: **`points`** — covers
+ * both the per-tile ScatterplotLayers and the cumulative-mode slab layers.
+ * `_subLayerProps: { points: { type: MyLayer, ...props } }` swaps the
+ * sublayer class / overrides sublayer props (deck's CompositeLayer contract).
  */
-export class AnimatedPointLayer extends SpatioTemporalLayer<AnimatedPointLayerProps> {
+export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLayer<
+  ExtraPropsT & Required<_AnimatedPointLayerProps>
+> {
   static layerName = 'AnimatedPointLayer';
 
   static defaultProps: DefaultProps<AnimatedPointLayerProps> = {
     ...SpatioTemporalLayer.defaultProps,
     radiusScale: { type: 'number', value: 1, min: 0 },
     radiusUnits: 'pixels',
-    fillColor: { type: 'color', value: [255, 128, 0, 255] },
-    radius: { type: 'number', value: 5 },
+    radiusMinPixels: { type: 'number', value: 0, min: 0 },
+    radiusMaxPixels: { type: 'number', value: Number.MAX_SAFE_INTEGER, min: 0 },
+    // Permissive descriptors ({type:'object'} validates anything): these
+    // props legally hold a constant OR a column-name string, which the
+    // 'color'/'number' validators would reject in deck's debug mode.
+    fillColor: { type: 'object', value: [255, 128, 0, 255], compare: true },
+    radius: { type: 'object', value: 5, compare: true },
+    // Accessor-named aliases (see the prop docs): unset by default so the
+    // legacy props win unless the caller opts into the upstream vocabulary.
+    getFillColor: { type: 'object', value: null, optional: true, compare: true },
+    getRadius: { type: 'object', value: null, optional: true, compare: true },
+    getLineColor: { type: 'object', value: null, optional: true, compare: true },
     colorPalette: { type: 'array', value: DEFAULT_PALETTE, compare: true },
+    colorMapping: { type: 'object', value: null, optional: true, compare: false },
+    // Transparent fallback: features whose category is absent from
+    // `colorMapping` disappear rather than render a misleading color.
+    colorMappingDefault: { type: 'color', value: [0, 0, 0, 0] },
+    radiusTransform: { type: 'function', value: null, optional: true, compare: false },
 
-    // Animation props (unused on the GPU side after the rewrite; kept for
-    // API compatibility with v2 callers that pass them in).
+    // Marker styling forwarded to ScatterplotLayer.
+    stroked: false,
+    filled: true,
+    strokeColor: { type: 'color', value: [0, 0, 0, 255] },
+    lineWidthMinPixels: { type: 'number', value: 0, min: 0 },
+
+    // Fade ramps, forwarded to TimeFilterExtension (window mode); in
+    // cumulative mode `fadeInDuration` doubles as the appear ramp.
     fadeInDuration: { type: 'number', value: 300, min: 0 },
     fadeOutDuration: { type: 'number', value: 300, min: 0 },
 
     // Wake-mode props. wakeLength=0 keeps the symmetric window behavior.
     wakeLength: { type: 'number', value: 0, min: 0 },
     wakeTailScale: { type: 'number', value: 0.15, min: 0 },
+
+    // Cumulative "draws itself" reveal — see the file header.
+    cumulative: false,
 
     // 3D forward-declared props (see prop docstrings). The v3 layer reads 3D
     // directly from the tile's positionDimensions; these are accepted on the
@@ -452,10 +570,45 @@ export class AnimatedPointLayer extends SpatioTemporalLayer<AnimatedPointLayerPr
   }
 
   /**
+   * Accessor-alias resolution (audit B1): the upstream-named alias wins when
+   * set; a function-valued alias warns once and falls back to the legacy
+   * prop. Same value domain as the legacy props (constant or column name).
+   */
+  private fillColorValue(): Color | string | undefined {
+    return resolveAccessorAlias(
+      'AnimatedPointLayer',
+      'getFillColor',
+      this.props.getFillColor,
+      this.props.fillColor,
+    );
+  }
+
+  private radiusValue(): number | string | undefined {
+    return resolveAccessorAlias(
+      'AnimatedPointLayer',
+      'getRadius',
+      this.props.getRadius,
+      this.props.radius,
+    );
+  }
+
+  private lineColorValue(): Color {
+    return resolveAccessorAlias(
+      'AnimatedPointLayer',
+      'getLineColor',
+      this.props.getLineColor as Color | undefined,
+      this.props.strokeColor,
+    );
+  }
+
+  /**
    * Compute a digest of the layer-level props that affect every sublayer.
    * When this changes we throw away the entire sublayer cache.
    */
   private computeLayerPropsKey(): string {
+    const fillColor = this.fillColorValue();
+    const radius = this.radiusValue();
+    const lineColor = this.lineColorValue();
     return [
       this.props.radiusScale,
       this.props.radiusUnits,
@@ -464,21 +617,23 @@ export class AnimatedPointLayer extends SpatioTemporalLayer<AnimatedPointLayerPr
       this.props.lineWidthMinPixels,
       this.props.stroked,
       this.props.filled,
-      Array.isArray(this.props.strokeColor)
-        ? this.props.strokeColor.join(',')
-        : '',
-      this.props.opacity,
-      this.props.visible,
-      this.props.pickable,
+      Array.isArray(lineColor) ? lineColor.join(',') : '',
+      // Composite props that getSubLayerProps bakes into every sublayer
+      // (opacity/pickable/visible, coordinateSystem, modelMatrix, highlight
+      // props, _subLayerProps overrides…) plus the user's updateTriggers.
+      inheritedPropsDigest(this.props),
+      updateTriggersDigest(this.props.updateTriggers),
       this.props.timeWindow,
       this.props.fadeInDuration,
       this.props.fadeOutDuration,
       this.props.wakeLength,
       this.props.wakeTailScale,
+      this.props.timeHeightScale,
+      this.props.timeHeightOrigin,
       // fillColor/radius constant branches only — the property-driven path
       // lives in `prepared` and is keyed via preparedKey.
-      Array.isArray(this.props.fillColor) ? this.props.fillColor.join(',') : '',
-      typeof this.props.radius === 'number' ? this.props.radius : 0,
+      Array.isArray(fillColor) ? fillColor.join(',') : '',
+      typeof radius === 'number' ? radius : 0,
     ].join('|');
   }
 
@@ -560,18 +715,29 @@ export class AnimatedPointLayer extends SpatioTemporalLayer<AnimatedPointLayerPr
 
   /**
    * styleKey digest of the props that change a tile's prepared `attributes`
-   * (which color/radius column, palette length, CPU-vs-GPU color path). Shared
-   * by the per-tile cache check and the slab-schema invalidation.
+   * (which color/radius column, palette/mapping content, CPU-vs-GPU color
+   * path, radius transform). Shared by the per-tile cache check and the
+   * slab-schema invalidation.
    */
   private computeStyleKey(): string {
-    const fillColorProp = typeof this.props.fillColor === 'string' ? this.props.fillColor : '';
-    const radiusProp = typeof this.props.radius === 'string' ? this.props.radius : '';
-    // Palette identity matters only when fillColor is a column name. Including
-    // the mapping flag toggles between CPU/GPU expansion paths.
-    const usingMapping = !!this.props.colorMapping;
+    const fillColor = this.fillColorValue();
+    const radius = this.radiusValue();
+    const fillColorProp = typeof fillColor === 'string' ? fillColor : '';
+    const radiusProp = typeof radius === 'string' ? radius : '';
+    // Palette identity matters only when fillColor is a column name. The
+    // mapping branch keys CONTENT (not just the CPU/GPU toggle) — editing a
+    // mapping entry must invalidate the CPU-expanded RGBA buffers. Digests
+    // are memoized per object reference (style-digest.ts), so this stays a
+    // WeakMap lookup per tile, not a re-serialization.
+    const mapping = this.props.colorMapping;
+    // radiusTransform is baked into the prepared getRadius buffer; function
+    // identity (not body) is the invalidation contract for function props.
+    const transform = this.props.radiusTransform;
     return `${fillColorProp}|${radiusProp}|${
-      fillColorProp ? (this.props.colorPalette ?? DEFAULT_PALETTE).length : 0
-    }|${usingMapping ? 'm' : 'g'}`;
+      fillColorProp ? colorListDigest(this.props.colorPalette ?? DEFAULT_PALETTE) : 0
+    }|${mapping ? `m${colorMappingDigest(mapping)}` : 'g'}|${
+      transform ? `r${functionId(transform)}` : ''
+    }|${updateTriggersDigest(this.props.updateTriggers)}`;
   }
 
   /**
@@ -602,8 +768,10 @@ export class AnimatedPointLayer extends SpatioTemporalLayer<AnimatedPointLayerPr
     const binary = tileLayer.features;
     if (binary.featureCount === 0) return null;
 
-    const fillColorProp = typeof this.props.fillColor === 'string' ? this.props.fillColor : '';
-    const radiusProp = typeof this.props.radius === 'string' ? this.props.radius : '';
+    const fillColorValue = this.fillColorValue();
+    const radiusValue = this.radiusValue();
+    const fillColorProp = typeof fillColorValue === 'string' ? fillColorValue : '';
+    const radiusProp = typeof radiusValue === 'string' ? radiusValue : '';
     const styleKey = this.computeStyleKey();
     const tileKey = makeTileKey(tile, tileLayer);
 
@@ -702,6 +870,9 @@ export class AnimatedPointLayer extends SpatioTemporalLayer<AnimatedPointLayerPr
       data: { length: count, attributes },
       timeOffset: binary.timeOffset,
       gpuPalette,
+      tile,
+      layerName: tileLayer.name,
+      features: binary,
     };
     emit('tilePrepare', {
       layer: 'AnimatedPointLayer',
@@ -715,12 +886,13 @@ export class AnimatedPointLayer extends SpatioTemporalLayer<AnimatedPointLayerPr
   }
 
   private buildSublayer(prepared: PreparedTile): ScatterplotLayer {
-    const sublayerId = `${this.props.id}-${prepared.tileKey}`;
-    const timeWindow = this.props.timeWindow || 86400000;
-    const constRadius =
-      typeof this.props.radius === 'number' ? this.props.radius : 5;
-    const constColor = (Array.isArray(this.props.fillColor)
-      ? this.props.fillColor
+    // `Required<>`-typed: the defaultProps value guarantees a number here.
+    const timeWindow = this.props.timeWindow;
+    const radiusValue = this.radiusValue();
+    const fillColorValue = this.fillColorValue();
+    const constRadius = typeof radiusValue === 'number' ? radiusValue : 5;
+    const constColor = (Array.isArray(fillColorValue)
+      ? fillColorValue
       : ([255, 128, 0, 255] as Color)) as Color;
 
     // CategoryColorExtension props: when this tile uses the GPU palette path
@@ -742,8 +914,10 @@ export class AnimatedPointLayer extends SpatioTemporalLayer<AnimatedPointLayerPr
     // Keep the extension list constant across sublayers — see
     // animated-trips-layer.ts for the cache-storm rationale.
     const extensions: any[] = [this.timeFilterExtension, this.categoryColorExtension];
-    const props: Record<string, any> = {
-      id: sublayerId,
+    // getSubLayerProps inheritance (opacity/pickable/visible, coordinate
+    // system, highlight props, …) + user `_subLayerProps.points` overrides.
+    // Only runs inside this cache-gated build path — never per frame.
+    const props = this.composeSubLayerProps('points', prepared.tileKey, {
       data: prepared.data as any,
       // Identity comparator: deck.gl skips prop-diff for `data` entirely when
       // the same object reference comes back. Pairs with the preparedTileCache
@@ -762,15 +936,22 @@ export class AnimatedPointLayer extends SpatioTemporalLayer<AnimatedPointLayerPr
       getTime: this.boundGetTime,
       timeOffset: prepared.timeOffset,
       timeWindow,
-    };
-    // Always set `useCategoryColor` so tests / debug tooling can distinguish
-    // the two paths via prop inspection. The extension itself is only
-    // attached when the flag is true (saves an attribute slot).
-    props.useCategoryColor = useGpuCategory;
-    if (useGpuCategory) {
-      props.categoryPalette = prepared.gpuPalette!;
-    }
-    return new ScatterplotLayer(props as any);
+
+      // TileLayer convention: the source tile rides on the sublayer so the
+      // base getPickingInfo can enrich info.tile / decode the picked feature.
+      tile: prepared.tile,
+      sttFeatures: prepared.features,
+
+      // Always set `useCategoryColor` so tests / debug tooling can distinguish
+      // the two paths via prop inspection. The extension itself only does
+      // work when the flag is true.
+      useCategoryColor: useGpuCategory,
+      ...(useGpuCategory ? { categoryPalette: prepared.gpuPalette! } : {}),
+    });
+    // `_subLayerProps: { points: { type } }` swaps the sublayer class — the
+    // CompositeLayer-native renderSubLayers-style override point.
+    const SubLayerClass = this.getSubLayerClass('points', ScatterplotLayer);
+    return new SubLayerClass(props as any);
   }
 
   /**
@@ -778,26 +959,29 @@ export class AnimatedPointLayer extends SpatioTemporalLayer<AnimatedPointLayerPr
    * emits, whether a per-tile sublayer or a consolidated slab. Excludes the
    * bits that differ per path: `data`/`dataComparator`, the constant
    * radius/color fallbacks, `extensions`, and the time wiring
-   * (`getTime`/`timeOffset`/`timeWindow`).
+   * (`getTime`/`timeOffset`/`timeWindow`). `opacity`/`visible`/`pickable`
+   * are no longer listed here — getSubLayerProps inherits them from the
+   * composite with the exact values this method used to forward.
    */
   private commonStyleProps(): Record<string, any> {
+    // `Required<>`-typed (defaults guarantee values) — no `??` refetches.
     return {
-      radiusUnits: this.props.radiusUnits ?? 'pixels',
-      radiusScale: this.props.radiusScale ?? 1,
-      radiusMinPixels: this.props.radiusMinPixels ?? 0,
-      radiusMaxPixels: this.props.radiusMaxPixels ?? Number.MAX_SAFE_INTEGER,
-      stroked: this.props.stroked ?? false,
-      filled: this.props.filled ?? true,
-      getLineColor: this.props.strokeColor ?? [0, 0, 0, 255],
-      lineWidthMinPixels: this.props.lineWidthMinPixels ?? 0,
-      opacity: this.props.opacity,
-      visible: this.props.visible,
-      pickable: this.props.pickable ?? false,
+      radiusUnits: this.props.radiusUnits,
+      radiusScale: this.props.radiusScale,
+      radiusMinPixels: this.props.radiusMinPixels,
+      radiusMaxPixels: this.props.radiusMaxPixels,
+      stroked: this.props.stroked,
+      filled: this.props.filled,
+      getLineColor: this.lineColorValue(),
+      lineWidthMinPixels: this.props.lineWidthMinPixels,
       fadeInDuration: this.props.fadeInDuration,
       fadeOutDuration: this.props.fadeOutDuration,
       wakeLength: this.props.wakeLength,
       wakeTailScale: this.props.wakeTailScale,
       cumulative: this.props.cumulative,
+      // Time-as-height (space-time cube): whole points lift by start time.
+      timeHeightScale: this.props.timeHeightScale,
+      timeHeightOrigin: this.props.timeHeightOrigin,
     };
   }
 
@@ -890,6 +1074,15 @@ export class AnimatedPointLayer extends SpatioTemporalLayer<AnimatedPointLayerPr
     const o = slab.count;
     const a = built.data.attributes;
 
+    // Picking provenance: which (tile, layer) this feature range came from.
+    // IDs only — see the SlabProvenance docstring for why not Tile refs.
+    slab.provenance.push({
+      start: o,
+      count: n,
+      tileId: built.tile.id,
+      layerName: built.layerName,
+    });
+
     slab.positions.set(a.getPosition.value as Float64Array, o * 3);
 
     // Rebase the tile's per-tile-relative times onto the common slab offset:
@@ -940,6 +1133,7 @@ export class AnimatedPointLayer extends SpatioTemporalLayer<AnimatedPointLayerPr
       categoryIndex: schema.hasCategoryIndex ? new Float32Array(capacity) : null,
       radii: schema.hasRadius ? new Float32Array(capacity) : null,
       frozen: false,
+      provenance: [],
       version: 0,
       dataRef: null,
       dataVersion: -1,
@@ -991,14 +1185,17 @@ export class AnimatedPointLayer extends SpatioTemporalLayer<AnimatedPointLayerPr
   private buildSlabLayer(slab: ConsolidatedSlab, index: number): ScatterplotLayer {
     if (slab.layer && slab.builtVersion === slab.version) return slab.layer;
 
-    const constRadius = typeof this.props.radius === 'number' ? this.props.radius : 5;
-    const constColor = (Array.isArray(this.props.fillColor)
-      ? this.props.fillColor
+    const radiusValue = this.radiusValue();
+    const fillColorValue = this.fillColorValue();
+    const constRadius = typeof radiusValue === 'number' ? radiusValue : 5;
+    const constColor = (Array.isArray(fillColorValue)
+      ? fillColorValue
       : ([255, 128, 0, 255] as Color)) as Color;
     const useGpuCategory = !!this.slabSchema?.gpuPalette;
 
-    const props: Record<string, any> = {
-      id: `${this.props.id}-slab-${index}`,
+    // Same `points` short id as the per-tile path: one `_subLayerProps.points`
+    // override covers both render modes. Only runs when a slab grew/restyled.
+    const props = this.composeSubLayerProps('points', `slab-${index}`, {
       data: this.slabData(slab),
       dataComparator: (a: any, b: any) => a === b,
 
@@ -1013,16 +1210,62 @@ export class AnimatedPointLayer extends SpatioTemporalLayer<AnimatedPointLayerPr
       // TimeFilterExtension wiring — one shared offset for every slab.
       getTime: this.boundGetTime,
       timeOffset: this.slabBaseOffset,
-      timeWindow: this.props.timeWindow || 86400000,
+      timeWindow: this.props.timeWindow,
+
+      // A slab merges many tiles, so there is no single `tile` to carry;
+      // picking resolves the source tile through the provenance ranges
+      // (see getPickingInfo). The array reference is stable across appends.
+      tile: null,
+      sttSlabProvenance: slab.provenance,
 
       useCategoryColor: useGpuCategory,
-    };
-    if (useGpuCategory) props.categoryPalette = this.slabSchema!.gpuPalette;
+      ...(useGpuCategory ? { categoryPalette: this.slabSchema!.gpuPalette } : {}),
+    });
 
-    const layer = new ScatterplotLayer(props as any);
+    const SubLayerClass = this.getSubLayerClass('points', ScatterplotLayer);
+    const layer = new SubLayerClass(props as any);
     slab.layer = layer;
     slab.builtVersion = slab.version;
     return layer;
+  }
+
+  /**
+   * Slab-aware picking. Cumulative slabs merge many tiles into one
+   * sublayer, so the base tile/sttFeatures path can't apply; instead the
+   * picked slab index is mapped back through the slab's provenance ranges
+   * to its source (tile, layer) and decoded from that tile's columns.
+   * The tile is resolved from the CURRENT visible set (provenance holds
+   * ids only) — a pick on a feature whose absorbed tile has since been
+   * spatially evicted reports `tile: null` with `info.object` undefined,
+   * the price of not pinning evicted tiles' decoded buffers.
+   */
+  getPickingInfo(params: GetPickingInfoParams): SpatioTemporalPickingInfo {
+    const info = super.getPickingInfo(params);
+    const provenance = (
+      params.sourceLayer?.props as { sttSlabProvenance?: SlabProvenance[] } | undefined
+    )?.sttSlabProvenance;
+    if (!provenance || info.index < 0) return info;
+    const entry = findSlabProvenance(provenance, info.index);
+    if (!entry) return info;
+    const { z, x, y, t } = entry.tileId;
+    const tile =
+      this.state.tiles?.find(
+        (candidate) =>
+          candidate.id.z === z &&
+          candidate.id.x === x &&
+          candidate.id.y === y &&
+          candidate.id.t === t,
+      ) ?? null;
+    info.tile = tile;
+    info.sourceTile = tile;
+    if (tile && info.object === undefined) {
+      const tileLayer = tile.layers.find((l) => l.name === entry.layerName);
+      if (tileLayer) {
+        info.object =
+          getFeatureProperties(tileLayer.features, info.index - entry.start) ?? undefined;
+      }
+    }
+    return info;
   }
 }
 

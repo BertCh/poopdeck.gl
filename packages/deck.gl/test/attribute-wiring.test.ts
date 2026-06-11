@@ -18,6 +18,7 @@ import { describe, it, expect } from 'vitest';
 import { TimeFilterExtension } from '../src/time-filter-extension';
 import { CategoryColorExtension } from '../src/category-color-extension';
 import { PolygonTimeFilterExtension } from '../src/polygon-time-filter-extension';
+import { _resetWarnOnce } from '../src/log';
 import { makePointTile, makePathTile } from './fake-tile';
 
 /**
@@ -60,42 +61,63 @@ function captureRegisteredAttributes(extension: any): {
 }
 
 describe('TimeFilterExtension attribute registration', () => {
-  it('registers instanceStartTime / instanceEndTime / instanceVertexTime', () => {
-    const { instanced } = captureRegisteredAttributes(new TimeFilterExtension());
-    expect(Object.keys(instanced).sort()).toEqual(
+  it('registers instanceStartTime / instanceEndTime / instanceVertexTime via add() + stepMode dynamic', () => {
+    // MUST be add(), not addInstanced(): deck.gl core's addInstanced()
+    // unconditionally overrides stepMode to 'instance', which hard-locks the
+    // extension to instanced layers (a divisor-1 attribute on
+    // SolidPolygonLayer's non-instanced fill model reads element 0 for every
+    // vertex). 'dynamic' resolves per model — 'instance' on instanced layers,
+    // 'vertex' on SolidPolygonLayer — exactly like upstream
+    // DataFilterExtension's filterValues.
+    const { instanced, perVertex } = captureRegisteredAttributes(new TimeFilterExtension());
+    expect(Object.keys(instanced)).toEqual([]);
+    expect(Object.keys(perVertex).sort()).toEqual(
       ['instanceEndTime', 'instanceStartTime', 'instanceVertexTime'].sort()
     );
     for (const name of ['instanceStartTime', 'instanceEndTime', 'instanceVertexTime']) {
-      expect(instanced[name].size).toBe(1);
-      expect(instanced[name].type).toBe('float32');
+      expect(perVertex[name].size).toBe(1);
+      expect(perVertex[name].type).toBe('float32');
+      expect(perVertex[name].stepMode).toBe('dynamic');
     }
   });
 });
 
 describe('CategoryColorExtension attribute registration', () => {
-  it('registers instanceCategoryIndex', () => {
-    const { instanced } = captureRegisteredAttributes(new CategoryColorExtension());
-    expect(Object.keys(instanced)).toEqual(['instanceCategoryIndex']);
-    expect(instanced.instanceCategoryIndex.size).toBe(1);
-    expect(instanced.instanceCategoryIndex.type).toBe('float32');
+  it('registers instanceCategoryIndex via add() + stepMode dynamic', () => {
+    const { instanced, perVertex } = captureRegisteredAttributes(new CategoryColorExtension());
+    expect(Object.keys(instanced)).toEqual([]);
+    expect(Object.keys(perVertex)).toEqual(['instanceCategoryIndex']);
+    expect(perVertex.instanceCategoryIndex.size).toBe(1);
+    expect(perVertex.instanceCategoryIndex.type).toBe('float32');
+    expect(perVertex.instanceCategoryIndex.stepMode).toBe('dynamic');
   });
 });
 
-describe('PolygonTimeFilterExtension attribute registration', () => {
-  it('registers startTime / endTime as NON-instanced (per-vertex via tesselator)', () => {
-    // SolidPolygonLayer is non-instanced. Registering via addInstanced()
-    // (the standard TimeFilterExtension path) would set stepMode='instance'
-    // and the polygon tesselator's per-feature → per-vertex expansion would
-    // not happen.
+describe('PolygonTimeFilterExtension (deprecated alias)', () => {
+  it('registers the SAME attributes as TimeFilterExtension (the fork is folded in)', () => {
     const { instanced, perVertex } = captureRegisteredAttributes(
       new PolygonTimeFilterExtension(),
     );
     expect(Object.keys(instanced)).toEqual([]);
-    expect(Object.keys(perVertex).sort()).toEqual(['endTime', 'startTime']);
-    for (const name of ['startTime', 'endTime']) {
-      expect(perVertex[name].size).toBe(1);
-      expect(perVertex[name].type).toBe('float32');
-      expect(perVertex[name].stepMode).toBe('dynamic');
+    expect(Object.keys(perVertex).sort()).toEqual(
+      ['instanceEndTime', 'instanceStartTime', 'instanceVertexTime'].sort()
+    );
+  });
+
+  it('is a TimeFilterExtension and warns once on construction', () => {
+    _resetWarnOnce();
+    const warned: string[] = [];
+    const original = console.warn;
+    console.warn = (msg: string) => warned.push(msg);
+    try {
+      const ext = new PolygonTimeFilterExtension();
+      expect(ext).toBeInstanceOf(TimeFilterExtension);
+      new PolygonTimeFilterExtension(); // dedup: still only one warning
+      expect(
+        warned.filter((m) => m.includes('PolygonTimeFilterExtension')).length,
+      ).toBe(1);
+    } finally {
+      console.warn = original;
     }
   });
 });
@@ -149,8 +171,8 @@ describe('path layer per-tile attributes match the extension names', () => {
 describe('trips layer uses instanceVertexTime (the registered name)', () => {
   it('the trail-mode attribute key matches what the extension registers', () => {
     // AnimatedTripsLayer feeds per-vertex times under `instanceVertexTime`.
-    const { instanced } = captureRegisteredAttributes(new TimeFilterExtension());
+    const { perVertex } = captureRegisteredAttributes(new TimeFilterExtension());
     const tripsAttributeKey = 'instanceVertexTime';
-    expect(instanced).toHaveProperty(tripsAttributeKey);
+    expect(perVertex).toHaveProperty(tripsAttributeKey);
   });
 });

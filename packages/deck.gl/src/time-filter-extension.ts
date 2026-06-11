@@ -100,6 +100,23 @@ export type TimeFilterExtensionProps<DataT = unknown> = {
    */
   cumulative?: boolean;
   /**
+   * Time-as-height ("space-time cube"): meters of altitude per simulation
+   * millisecond. When non-zero, every vertex is lifted vertically by
+   * `(featureTime - timeHeightOrigin) * timeHeightScale` meters — per-VERTEX
+   * time in trail mode (`trailLength > 0`), per-FEATURE start time otherwise.
+   * A single uniform, so animating it (the "squash" morph between flat map
+   * and cube) costs nothing per frame.
+   * @default 0 (off)
+   */
+  timeHeightScale?: number;
+  /**
+   * Absolute time (Unix ms) mapped to altitude 0 in time-as-height mode —
+   * typically the dataset's timeRange.start. Relativized against `timeOffset`
+   * on the CPU like every other time in this extension.
+   * @default 0
+   */
+  timeHeightOrigin?: number;
+  /**
    * Accessor returning a feature's start time.
    * @default 0
    */
@@ -131,11 +148,18 @@ type TimeFilterUniformProps = {
   wakeTailScale: number;
   /** 1.0 = cumulative "draw and persist" mode; 0.0 = off. */
   cumulative: number;
+  /** Meters of altitude per sim-ms in time-as-height mode; 0 = off. */
+  heightScale: number;
+  /** Relative time (vs the layer timeOffset) mapped to altitude 0. */
+  heightOrigin: number;
 };
 
-// Uniform block for GLSL 3.0 (WebGL2)
+// Uniform block for GLSL 3.0 (WebGL2). layout(std140) matches upstream
+// extension convention and the std140 packing luma's UniformStore writes.
+// Scalar-only blocks happen to pack identically either way, but an explicit
+// layout keeps the block safe the day someone adds a vec3.
 const glslUniformBlock = `\
-uniform timeFilterUniforms {
+layout(std140) uniform timeFilterUniforms {
   float currentTime;
   float windowHalf;
   float fadeIn;
@@ -145,6 +169,8 @@ uniform timeFilterUniforms {
   float wakeLength;
   float wakeTailScale;
   float cumulative;
+  float heightScale;
+  float heightOrigin;
 } timeFilter;
 `;
 
@@ -162,7 +188,9 @@ const timeFilterUniforms = {
     trailFade: 'f32',
     wakeLength: 'f32',
     wakeTailScale: 'f32',
-    cumulative: 'f32'
+    cumulative: 'f32',
+    heightScale: 'f32',
+    heightOrigin: 'f32'
   }
 };
 
@@ -178,6 +206,8 @@ const defaultProps: DefaultProps<TimeFilterExtensionProps> = {
   wakeLength: 0,
   wakeTailScale: 0.15,
   cumulative: false,
+  timeHeightScale: 0,
+  timeHeightOrigin: 0,
   getInstanceStartTime: { type: 'accessor', value: 0 },
   getInstanceEndTime: { type: 'accessor', value: Infinity },
   // Constant default: window-mode layers never set a per-vertex time, but the
@@ -249,7 +279,13 @@ export interface TimeFilterExtensionOptions {
   mode?: TimeFilterMode;
 }
 
-export class TimeFilterExtension extends LayerExtension {
+const defaultOptions: Required<TimeFilterExtensionOptions> = {
+  mode: 'auto',
+};
+
+export class TimeFilterExtension extends LayerExtension<
+  Required<TimeFilterExtensionOptions>
+> {
   static defaultProps = defaultProps;
   static extensionName = 'TimeFilterExtension';
 
@@ -265,13 +301,16 @@ export class TimeFilterExtension extends LayerExtension {
     inject: Record<string, string>;
   } | null = null;
 
-  // The `mode` option is accepted but currently a no-op (forward-compat
-  // hook for deck.gl 9.4's `gl_InstanceID` picking path — see the type
-  // docstring above). We deliberately do NOT store it: nothing reads it,
-  // and keeping a dead field around invited bugs where someone might
-  // assume reading `.mode` reflected real behaviour.
-  constructor(_options: TimeFilterExtensionOptions = {}) {
-    super();
+  // The `mode` option is currently a no-op (forward-compat hook for deck.gl
+  // 9.4's `gl_InstanceID` picking path — see the type docstring above), but
+  // it MUST still flow to super(): `LayerExtension.equals()` compares
+  // `this.opts`, and dropping the options would make differently-configured
+  // instances compare equal — deck would then skip shader regeneration the
+  // day `mode` changes real behaviour. Same `{...defaults, ...opts}` pattern
+  // as upstream DataFilterExtension. Singleton usage is unaffected: each
+  // animated layer keeps reusing its one instance (identity short-circuit).
+  constructor(options: TimeFilterExtensionOptions = {}) {
+    super({ ...defaultOptions, ...options });
   }
 
   getShaders(this: Layer<TimeFilterExtensionProps>, extension: TimeFilterExtension) {
@@ -352,6 +391,38 @@ export class TimeFilterExtension extends LayerExtension {
             size *= wakeScale;
           }
         `,
+        // Time-as-height ("space-time cube"): lift each vertex vertically by
+        // its time since heightOrigin. Computed as a CLIP-SPACE DELTA between
+        // the lifted and unlifted common-space positions, so whatever screen-
+        // space offsets the host layer already baked into `position` (path
+        // width quads, scatterplot billboards) are preserved. The clipspace
+        // projection is affine, so the +center terms cancel in the difference.
+        // Trail mode carries true per-vertex times (the thread climbs along
+        // its length); window/wake/cumulative layers lift whole features by
+        // their start time.
+        'vs:DECKGL_FILTER_GL_POSITION': `
+          if (timeFilter.heightScale != 0.0) {
+            float heightTime = timeFilter.trailLength > 0.0 ? instanceVertexTime : instanceStartTime;
+            float heightMeters = (heightTime - timeFilter.heightOrigin) * timeFilter.heightScale;
+            vec4 liftedCommon = geometry.position;
+            liftedCommon.z += project_size(heightMeters);
+            position += project_common_position_to_clipspace(liftedCommon)
+              - project_common_position_to_clipspace(geometry.position);
+          }
+        `,
+        // Collapse fully-hidden features at the VERTEX stage (upstream
+        // DataFilterExtension does the same): degenerate clip-space position
+        // ⇒ zero fragments rasterized, so off-window features stop paying
+        // fragment cost (at low zoom most features in a tile are outside the
+        // window). Gated IN-SHADER on trail mode: window/wake/cumulative
+        // alphas are whole-feature (every vertex of a feature agrees), but a
+        // trail fades per-vertex — collapsing one end of a still-visible
+        // segment would drag its geometry to the origin.
+        'vs:#main-end': `
+          if (vTimeAlpha <= 0.0 && timeFilter.trailLength <= 0.0) {
+            gl_Position = vec4(0.);
+          }
+        `,
         'fs:#decl': `
           in float vTimeAlpha;
         `,
@@ -374,7 +445,7 @@ export class TimeFilterExtension extends LayerExtension {
   ): void {
     const attributeManager = this.getAttributeManager();
     if (!attributeManager) return;
-    // Three instanced float attributes, ALWAYS registered regardless of mode:
+    // Three float attributes, ALWAYS registered regardless of mode:
     // instanceVertexTime (trail) + instanceStartTime/instanceEndTime (window).
     // The shader's wake/trail/window branch picks which to read at draw time
     // via the trailLength/wakeLength uniforms. Mode-specific registration
@@ -382,7 +453,16 @@ export class TimeFilterExtension extends LayerExtension {
     // the per-tile sublayers — see the TimeFilterMode docstring above. What
     // actually keeps the fp64-position + time + category combo under WebGL2's
     // 16-attribute floor is NoPickingPathLayer freeing the picking slot.
-    attributeManager.addInstanced({
+    //
+    // Registered via add() + stepMode:'dynamic' — NOT addInstanced(), which
+    // unconditionally overrides stepMode to 'instance' (deck.gl core
+    // attribute-manager.ts) and hard-locks the extension to instanced layers.
+    // 'dynamic' resolves per model at bufferLayout time: 'instance' on
+    // instanced models (Scatterplot/Path — behaviour unchanged) and 'vertex'
+    // on non-instanced ones (SolidPolygonLayer's fill model), which is
+    // exactly how upstream DataFilterExtension registers filterValues and
+    // why one class serves every layer type.
+    attributeManager.add({
       instanceVertexTime: {
         size: 1,
         accessor: 'getInstanceVertexTime',
@@ -432,7 +512,9 @@ export class TimeFilterExtension extends LayerExtension {
       fadeTrail = true,
       wakeLength = 0,
       wakeTailScale = 0.15,
-      cumulative = false
+      cumulative = false,
+      timeHeightScale = 0,
+      timeHeightOrigin = 0
     } = this.props;
 
     // PERFORMANCE: Use getTime() if provided for dynamic time updates
@@ -467,7 +549,13 @@ export class TimeFilterExtension extends LayerExtension {
       trailFade: fadeTrail ? 1.0 : 0.0,
       wakeLength,
       wakeTailScale,
-      cumulative: cumulative ? 1.0 : 0.0
+      cumulative: cumulative ? 1.0 : 0.0,
+      heightScale: timeHeightScale,
+      // Same relativization scheme as currentTime: both sides of the shader
+      // subtraction are small f32-exact numbers. (A multi-day span overflows
+      // ms precision in f32, but at meters-per-hour height scales the error
+      // is micrometers of altitude — irrelevant.)
+      heightOrigin: relativizeTime(timeHeightOrigin, timeOffset)
     };
 
     this.setShaderModuleProps({ timeFilter: timeFilterProps });

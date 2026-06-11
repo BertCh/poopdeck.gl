@@ -1,5 +1,7 @@
 /**
- * HeatmapLayer — animated density heatmap built on CANONICAL deck.gl.
+ * AnimatedHeatmapLayer — animated density heatmap built on CANONICAL deck.gl.
+ * (Renamed from `HeatmapLayer`, which shadowed `@deck.gl/aggregation-layers`'
+ * HeatmapLayer; the old name remains exported as a deprecated alias.)
  *
  * This is a thin composite over `@deck.gl/aggregation-layers`'
  * {@link DeckHeatmapLayer}, the standard deck.gl heatmap. That layer does the
@@ -48,12 +50,21 @@
 
 import { HeatmapLayer as DeckHeatmapLayer } from '@deck.gl/aggregation-layers';
 import { DataFilterExtension } from '@deck.gl/extensions';
-import type { Color, Layer as DeckLayer, UpdateParameters } from '@deck.gl/core';
+import type {
+  Color,
+  DefaultProps,
+  Layer as DeckLayer,
+  LayerContext,
+  UpdateParameters,
+} from '@deck.gl/core';
 import {
   SpatioTemporalLayer,
   type SpatioTemporalLayerProps,
 } from './spatiotemporal-layer';
 import { warnOnce } from './log';
+import { updateTriggersDigest } from './style-digest';
+import { resolveAccessorAlias } from './accessor-alias';
+import type { WeightAccessorValue } from './accessor-alias';
 import type { Tile } from '@stt/core';
 
 const DEFAULT_COLOR_RANGE: Color[] = [
@@ -100,21 +111,31 @@ export interface HeatmapChannelSpec {
   intensity?: number;
 }
 
-export interface HeatmapLayerProps extends SpatioTemporalLayerProps {
+/** Props added by {@link AnimatedHeatmapLayer} (own props only — compose with
+ * {@link SpatioTemporalLayerProps} via {@link AnimatedHeatmapLayerProps}). */
+export interface _AnimatedHeatmapLayerProps {
   /** Splat radius in pixels. Defaults to 30. */
   radiusPixels?: number;
   /** Global intensity multiplier (canonical HeatmapLayer `intensity`). */
   intensity?: number;
-  /** Per-feature weight property name (defaults to constant 1.0). */
-  weightProperty?: string;
+  /** Per-feature weight property name; null (default) weights every point 1.0. */
+  weightProperty?: string | null;
+  /**
+   * Upstream-vocabulary alias of {@link weightProperty}. NOTE: unlike
+   * upstream deck.gl, this accepts a property-column NAME — NOT a function
+   * accessor (binary tiles can't run per-feature JS; a function warns once
+   * and falls back to `weightProperty`). When set, it wins over
+   * `weightProperty`.
+   */
+  getWeight?: WeightAccessorValue | null;
   /** Color ramp used when `channels` is unset (single-class mode). */
   colorRange?: Color[];
   /**
    * Pinned [min, max] density domain for the default (single-class) mode.
-   * When unset the layer auto-normalises (and reads metadata.heatmapDomain when
-   * the archive carries one).
+   * When unset (null) the layer auto-normalises (and reads
+   * metadata.heatmapDomain when the archive carries one).
    */
-  colorDomain?: [number, number];
+  colorDomain?: [number, number] | null;
   /**
    * Density fraction below which pixels render transparent (canonical
    * HeatmapLayer `threshold`). Only takes effect when `colorDomain` is unset.
@@ -123,9 +144,10 @@ export interface HeatmapLayerProps extends SpatioTemporalLayerProps {
   threshold?: number;
   /**
    * Stacked categorical channels. When supplied, the layer renders one
-   * canonical HeatmapLayer per channel.
+   * canonical HeatmapLayer per channel; null (default) renders the single
+   * default class from the top-level colorRange/colorDomain props.
    */
-  channels?: HeatmapChannelSpec[];
+  channels?: HeatmapChannelSpec[] | null;
   /**
    * Deprecated/no-op. The old single-pass splat reserved this for a future
    * TAA blend that never shipped. Accepted for API compatibility and ignored —
@@ -140,6 +162,12 @@ export interface HeatmapLayerProps extends SpatioTemporalLayerProps {
   /** Fade-out duration at the trailing edge of the time window (ms). */
   fadeOutDuration?: number;
 }
+
+/** Complete props accepted by {@link AnimatedHeatmapLayer}. */
+export type AnimatedHeatmapLayerProps = _AnimatedHeatmapLayerProps & SpatioTemporalLayerProps;
+
+/** @deprecated Renamed — use {@link AnimatedHeatmapLayerProps}. */
+export type HeatmapLayerProps = AnimatedHeatmapLayerProps;
 
 interface ResolvedChannel {
   id: string;
@@ -160,22 +188,40 @@ interface ChannelData {
   };
 }
 
-export class HeatmapLayer extends SpatioTemporalLayer<HeatmapLayerProps> {
-  static layerName = 'HeatmapLayer';
+// Upstream idiom: module-level const typed `DefaultProps<XxxLayerProps>` then
+// assigned to the static — the named annotation keeps the emitted .d.ts
+// portable (the inferred mapped type used to surface transitive-dep types,
+// which motivated the previous `static defaultProps: any`).
+const defaultProps: DefaultProps<AnimatedHeatmapLayerProps> = {
+  ...SpatioTemporalLayer.defaultProps,
+  radiusPixels: { type: 'number', value: 30, min: 1 },
+  intensity: { type: 'number', value: 1, min: 0 },
+  threshold: { type: 'number', value: 0.05, min: 0 },
+  colorRange: { type: 'array', value: DEFAULT_COLOR_RANGE, compare: true },
+  colorDomain: { type: 'array', value: null, compare: true, optional: true },
+  channels: { type: 'array', value: null, compare: true, optional: true },
+  historyWeight: { type: 'number', value: 0, min: 0, max: 0.95 },
+  weightProperty: { type: 'object', value: null, optional: true, compare: true },
+  // Accessor-named alias of weightProperty (column-name semantics).
+  getWeight: { type: 'object', value: null, optional: true, compare: true },
+  fadeInDuration: { type: 'number', value: 0, min: 0 },
+  fadeOutDuration: { type: 'number', value: 0, min: 0 },
+};
 
-  static defaultProps: any = {
-    ...SpatioTemporalLayer.defaultProps,
-    radiusPixels: { type: 'number', value: 30, min: 1 },
-    intensity: { type: 'number', value: 1, min: 0 },
-    threshold: { type: 'number', value: 0.05, min: 0 },
-    colorRange: { type: 'array', value: DEFAULT_COLOR_RANGE, compare: true },
-    colorDomain: { type: 'array', value: null, compare: true, optional: true },
-    channels: { type: 'array', value: null, compare: true, optional: true },
-    historyWeight: { type: 'number', value: 0, min: 0, max: 0.95 },
-    weightProperty: { type: 'string', value: null, optional: true },
-    fadeInDuration: { type: 'number', value: 0, min: 0 },
-    fadeOutDuration: { type: 'number', value: 0, min: 0 },
-  };
+/**
+ * Animated heatmap composite over the canonical deck.gl HeatmapLayer.
+ *
+ * Sublayer short id for `_subLayerProps` overrides: **`heatmap`** — covers
+ * every per-channel sublayer. `_subLayerProps: { heatmap: { type, ...props } }`
+ * swaps the sublayer class / overrides sublayer props (deck's CompositeLayer
+ * contract).
+ */
+export class AnimatedHeatmapLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLayer<
+  ExtraPropsT & Required<_AnimatedHeatmapLayerProps>
+> {
+  static layerName = 'AnimatedHeatmapLayer';
+
+  static defaultProps = defaultProps;
 
   /** Shared filter extension — one instance across every channel sublayer. */
   private _dataFilter = new DataFilterExtension({ filterSize: 1 });
@@ -186,7 +232,7 @@ export class HeatmapLayer extends SpatioTemporalLayer<HeatmapLayerProps> {
   /** Wall-clock floor for the filterRange (re-aggregation) cadence. */
   private _lastFilterUpdateWall = 0;
 
-  finalizeState(context: any): void {
+  finalizeState(context: LayerContext): void {
     this._channelCache.clear();
     super.finalizeState(context);
   }
@@ -197,10 +243,27 @@ export class HeatmapLayer extends SpatioTemporalLayer<HeatmapLayerProps> {
     const { props, oldProps } = params;
     if (
       props.channels !== oldProps.channels ||
-      props.weightProperty !== oldProps.weightProperty
+      props.weightProperty !== oldProps.weightProperty ||
+      props.getWeight !== oldProps.getWeight
     ) {
       this._channelCache.clear();
     }
+  }
+
+  /**
+   * Accessor-alias resolution (audit B1): `getWeight` wins when set; a
+   * function-valued alias warns once and falls back to `weightProperty`.
+   * Column-name semantics only — there is no constant-weight prop.
+   */
+  private weightPropertyValue(): string | undefined {
+    return (
+      resolveAccessorAlias(
+        'AnimatedHeatmapLayer',
+        'getWeight',
+        this.props.getWeight as string | undefined,
+        this.props.weightProperty,
+      ) ?? undefined
+    );
   }
 
   /**
@@ -239,13 +302,15 @@ export class HeatmapLayer extends SpatioTemporalLayer<HeatmapLayerProps> {
     // reference-compares filterRange, so reusing the array would freeze the
     // animation (it would never see a "changed" prop and never re-aggregate).
     const time = this.getCurrentTime();
-    const halfWindow = (this.props.timeWindow ?? 86_400_000) / 2;
+    // `Required<>`-typed: the defaultProps value guarantees a number here.
+    const halfWindow = this.props.timeWindow / 2;
     const center = time - layerTimeOffset;
     const filterRange: [number, number] = [center - halfWindow, center + halfWindow];
 
     // Optional soft edges from fadeIn/fadeOut, clamped inside the hard range.
-    const fadeIn = Math.max(0, this.props.fadeInDuration ?? 0);
-    const fadeOut = Math.max(0, this.props.fadeOutDuration ?? 0);
+    // `Required<>`-typed (defaults guarantee values) — no `??` refetches.
+    const fadeIn = Math.max(0, this.props.fadeInDuration);
+    const fadeOut = Math.max(0, this.props.fadeOutDuration);
     const softMin = filterRange[0] + fadeIn;
     const softMax = filterRange[1] - fadeOut;
     const filterSoftRange: [number, number] | null =
@@ -268,28 +333,32 @@ export class HeatmapLayer extends SpatioTemporalLayer<HeatmapLayerProps> {
       );
       if (!data || data.length === 0) continue;
 
-      layers.push(
-        new DeckHeatmapLayer({
-          id: `${this.props.id}-ch${i}-${channel.id}`,
-          data,
-          // Density accumulation (count/weight per pixel). MEAN would flatten a
-          // constant-weight density map to a single colour, so SUM is correct.
-          aggregation: 'SUM',
-          radiusPixels: this.props.radiusPixels ?? 30,
-          intensity: this.props.intensity ?? 1,
-          colorRange: channel.colorRange as any,
-          // null → canonical auto-normalisation; pinned → stable (no breathing).
-          colorDomain: channel.colorDomain ?? null,
-          threshold: this.props.threshold ?? 0.05,
-          opacity: this.props.opacity ?? 1,
-          visible: this.props.visible ?? true,
-          pickable: false,
-          extensions: [this._dataFilter],
-          filterEnabled: true,
-          filterRange,
-          ...(filterSoftRange ? { filterSoftRange } : {}),
-        } as any),
-      );
+      // getSubLayerProps inheritance (opacity/visible, coordinate system,
+      // modelMatrix, …) + user `_subLayerProps.heatmap` overrides. pickable
+      // is forced false in sublayerProps (after inheritance, before user
+      // overrides): density pixels have no feature identity to pick. Fresh
+      // props objects per render are inherent to this layer's prop-driven
+      // filterRange animation (renderLayers is already wall-clock capped).
+      const subProps = this.composeSubLayerProps('heatmap', `ch${i}-${channel.id}`, {
+        data,
+        // Density accumulation (count/weight per pixel). MEAN would flatten a
+        // constant-weight density map to a single colour, so SUM is correct.
+        aggregation: 'SUM',
+        radiusPixels: this.props.radiusPixels,
+        intensity: this.props.intensity,
+        colorRange: channel.colorRange as any,
+        // null → canonical auto-normalisation; pinned → stable (no breathing).
+        colorDomain: channel.colorDomain ?? null,
+        threshold: this.props.threshold,
+        pickable: false,
+        extensions: [this._dataFilter],
+        filterEnabled: true,
+        filterRange,
+        ...(filterSoftRange ? { filterSoftRange } : {}),
+      });
+      // `_subLayerProps: { heatmap: { type } }` swaps the sublayer class.
+      const SubLayerClass = this.getSubLayerClass('heatmap', DeckHeatmapLayer as any);
+      layers.push(new SubLayerClass(subProps as any));
     }
     return layers;
   }
@@ -302,11 +371,13 @@ export class HeatmapLayer extends SpatioTemporalLayer<HeatmapLayerProps> {
     tileSetKey: string,
     layerTimeOffset: number,
   ): ChannelData | null {
-    const weightProp = this.props.weightProperty;
+    const weightProp = this.weightPropertyValue();
     const filterSig = channel.categoryFilter
       ? `${channel.categoryFilter.property}:${channel.categoryFilter.values.join(',')}`
       : '';
-    const key = `${tileSetKey}::${weightProp ?? ''}::${layerTimeOffset}::${filterSig}::${channel.intensity}`;
+    // updateTriggers ride the key so a user trigger bump (e.g. getWeight)
+    // re-consolidates the channel buffers.
+    const key = `${tileSetKey}::${weightProp ?? ''}::${layerTimeOffset}::${filterSig}::${channel.intensity}::${updateTriggersDigest(this.props.updateTriggers)}`;
 
     const cached = this._channelCache.get(channelIndex);
     if (cached && cached.key === key) return cached.data;
@@ -330,8 +401,8 @@ export class HeatmapLayer extends SpatioTemporalLayer<HeatmapLayerProps> {
     if (channels && channels.length > 0) {
       if (channels.length > MAX_CHANNELS) {
         warnOnce(
-          'HeatmapLayer:tooManyChannels',
-          `[HeatmapLayer] only the first ${MAX_CHANNELS} channels are rendered (got ${channels.length}).`,
+          'AnimatedHeatmapLayer:tooManyChannels',
+          `[AnimatedHeatmapLayer] only the first ${MAX_CHANNELS} channels are rendered (got ${channels.length}).`,
         );
       }
       return channels.slice(0, MAX_CHANNELS).map((ch) => ({
@@ -346,7 +417,7 @@ export class HeatmapLayer extends SpatioTemporalLayer<HeatmapLayerProps> {
       {
         id: 'default',
         intensity: 1,
-        colorRange: this.props.colorRange ?? DEFAULT_COLOR_RANGE,
+        colorRange: this.props.colorRange,
         colorDomain:
           this.props.colorDomain ?? this.archiveHeatmapDomain('default'),
       },
@@ -369,6 +440,13 @@ export class HeatmapLayer extends SpatioTemporalLayer<HeatmapLayerProps> {
     return [entry.min, entry.max];
   }
 }
+
+/**
+ * @deprecated Renamed — use {@link AnimatedHeatmapLayer}. The old name
+ * shadowed `@deck.gl/aggregation-layers`' `HeatmapLayer`; this alias is kept
+ * so existing imports keep working and will be removed before npm publish 1.0.
+ */
+export { AnimatedHeatmapLayer as HeatmapLayer };
 
 function tileKey(tile: Tile): string {
   const { z, x, y, t } = tile.id;

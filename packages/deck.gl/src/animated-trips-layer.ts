@@ -30,17 +30,24 @@ import type { Color, DefaultProps, Layer, LayerContext } from '@deck.gl/core';
 import { SpatioTemporalLayer, SpatioTemporalLayerProps } from './spatiotemporal-layer';
 import { NoPickingPathLayer } from './no-picking-path-layer';
 import { TimeFilterExtension } from './time-filter-extension';
-import {
-  CategoryColorExtension,
-  CATEGORY_PALETTE_SIZE,
-} from './category-color-extension';
+import { CategoryColorExtension } from './category-color-extension';
 import { emit } from './telemetry';
 import { warnOnce } from './log';
+import {
+  colorListDigest,
+  colorMappingDigest,
+  inheritedPropsDigest,
+  updateTriggersDigest,
+} from './style-digest';
+import { resolveAccessorAlias } from './accessor-alias';
+import type { ColorAccessorValue, NumericAccessorValue } from './accessor-alias';
 import type { Tile, Layer as TileLayer, BinaryFeatures } from '@stt/core';
 
 const DEBUG = false;
 
-export interface AnimatedTripsLayerProps extends SpatioTemporalLayerProps {
+/** Props added by {@link AnimatedTripsLayer} (own props only — compose with
+ * {@link SpatioTemporalLayerProps} via {@link AnimatedTripsLayerProps}). */
+export interface _AnimatedTripsLayerProps {
   /**
    * Units for `tripWidth`. 'pixels' (default) is screen-space; 'meters' makes
    * widths world-space so trails thicken/thin with zoom like real objects
@@ -69,10 +76,25 @@ export interface AnimatedTripsLayerProps extends SpatioTemporalLayerProps {
    */
   tripColor?: Color | string;
   /**
+   * Upstream-vocabulary (TripsLayer/PathLayer) alias of {@link tripColor}.
+   * NOTE: unlike upstream deck.gl, this accepts a constant Color OR a
+   * property-column NAME — NOT a function accessor (binary tiles can't run
+   * per-feature JS; a function warns once and falls back to `tripColor`).
+   * When set, it wins over `tripColor`.
+   */
+  getColor?: ColorAccessorValue | null;
+  /**
    * Trip width — constant number, or property name for per-feature width.
    * @default 3
    */
   tripWidth?: number | string;
+  /**
+   * Upstream-vocabulary alias of {@link tripWidth}. Accepts a constant
+   * number OR a property-column NAME — NOT a function accessor (a function
+   * warns once and falls back to `tripWidth`). When set, it wins over
+   * `tripWidth`.
+   */
+  getWidth?: NumericAccessorValue | null;
   /** Color palette for categorical `tripColor`. */
   colorPalette?: Color[];
   /**
@@ -82,7 +104,7 @@ export interface AnimatedTripsLayerProps extends SpatioTemporalLayerProps {
    * assigned per-tile in first-seen order). Takes precedence over
    * `colorPalette` when set. Mirrors `AnimatedPointLayer.colorMapping`.
    */
-  colorMapping?: Record<string, Color>;
+  colorMapping?: Record<string, Color> | null;
   /** Fallback color for categories absent from `colorMapping`. */
   colorMappingDefault?: Color;
   /**
@@ -93,7 +115,7 @@ export interface AnimatedTripsLayerProps extends SpatioTemporalLayerProps {
    * line *along its length*. Takes precedence over categorical `tripColor`.
    * `NaN` values fall back to {@link colorMappingDefault}.
    */
-  gradientProperty?: string;
+  gradientProperty?: string | null;
   /** `[min, max]` value range mapped onto `gradientColorRamp`. */
   gradientDomain?: [number, number];
   /** Low→high color stops for the gradient ramp. */
@@ -119,6 +141,9 @@ export interface AnimatedTripsLayerProps extends SpatioTemporalLayerProps {
    */
   jointRounded?: boolean;
 }
+
+/** Complete props accepted by {@link AnimatedTripsLayer}. */
+export type AnimatedTripsLayerProps = _AnimatedTripsLayerProps & SpatioTemporalLayerProps;
 
 const DEFAULT_PALETTE: Color[] = [
   [253, 128, 93, 255],
@@ -164,6 +189,9 @@ interface PreparedTile {
   dims: number;
   /** Resolved palette when GPU categorical-color path is active for this tile. */
   gpuPalette: Color[] | null;
+  /** Source tile + decoded columns — picking enrichment context (references, not copies). */
+  tile: Tile;
+  features: BinaryFeatures;
 }
 
 function makeTileKey(tile: Tile, layer: TileLayer): string {
@@ -354,7 +382,18 @@ function expandGradientColors(
   return out;
 }
 
-export class AnimatedTripsLayer extends SpatioTemporalLayer<AnimatedTripsLayerProps> {
+/**
+ * Animated trips layer (trail mode) with per-tile binary sublayers.
+ *
+ * Sublayer short id for `_subLayerProps` overrides: **`trips`**.
+ * `_subLayerProps: { trips: { type: MyLayer, ...props } }` swaps the
+ * sublayer class / overrides sublayer props (deck's CompositeLayer
+ * contract). Without a `type` override the class is `PathLayer` when
+ * `pickable` and the attribute-stripped `NoPickingPathLayer` otherwise.
+ */
+export class AnimatedTripsLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLayer<
+  ExtraPropsT & Required<_AnimatedTripsLayerProps>
+> {
   static layerName = 'AnimatedTripsLayer';
 
   static defaultProps: DefaultProps<AnimatedTripsLayerProps> = {
@@ -363,9 +402,21 @@ export class AnimatedTripsLayer extends SpatioTemporalLayer<AnimatedTripsLayerPr
     widthScale: { type: 'number', value: 1, min: 0 },
     widthMinPixels: { type: 'number', value: 2 },
     widthMaxPixels: { type: 'number', value: 10 },
-    tripColor: { type: 'color', value: [253, 128, 93, 255] },
-    tripWidth: { type: 'number', value: 3 },
+    // Permissive descriptors ({type:'object'} validates anything): these
+    // props legally hold a constant OR a column-name string, which the
+    // 'color'/'number' validators would reject in deck's debug mode.
+    tripColor: { type: 'object', value: [253, 128, 93, 255], compare: true },
+    tripWidth: { type: 'object', value: 3, compare: true },
+    // Accessor-named aliases (see the prop docs): unset by default so the
+    // legacy props win unless the caller opts into the upstream vocabulary.
+    getColor: { type: 'object', value: null, optional: true, compare: true },
+    getWidth: { type: 'object', value: null, optional: true, compare: true },
     colorPalette: { type: 'array', value: DEFAULT_PALETTE, compare: true },
+    colorMapping: { type: 'object', value: null, optional: true, compare: false },
+    colorMappingDefault: { type: 'color', value: [120, 120, 120, 255] },
+    gradientProperty: { type: 'object', value: null, optional: true, compare: true },
+    gradientDomain: { type: 'array', value: [0, 1], compare: true },
+    gradientColorRamp: { type: 'array', value: [], compare: true },
     trailLength: { type: 'number', value: 180_000, min: 0 },
     fadeTrail: true,
     capRounded: true,
@@ -447,10 +498,35 @@ export class AnimatedTripsLayer extends SpatioTemporalLayer<AnimatedTripsLayerPr
   }
 
   /**
+   * Accessor-alias resolution (audit B1): the upstream-named alias wins when
+   * set; a function-valued alias warns once and falls back to the legacy
+   * prop. Same value domain as the legacy props (constant or column name).
+   */
+  private colorValue(): Color | string | undefined {
+    return resolveAccessorAlias(
+      'AnimatedTripsLayer',
+      'getColor',
+      this.props.getColor,
+      this.props.tripColor,
+    );
+  }
+
+  private widthValue(): number | string | undefined {
+    return resolveAccessorAlias(
+      'AnimatedTripsLayer',
+      'getWidth',
+      this.props.getWidth,
+      this.props.tripWidth,
+    );
+  }
+
+  /**
    * Compute a digest of the layer-level props that affect every sublayer.
    * When this changes we throw away the entire sublayer cache.
    */
   private computeLayerPropsKey(): string {
+    const color = this.colorValue();
+    const width = this.widthValue();
     return [
       this.props.widthScale,
       this.props.widthMinPixels,
@@ -459,17 +535,19 @@ export class AnimatedTripsLayer extends SpatioTemporalLayer<AnimatedTripsLayerPr
       this.props.jointRounded,
       this.props.trailLength,
       this.props.fadeTrail,
-      this.props.opacity,
-      this.props.visible,
-      this.props.pickable,
+      // Composite props that getSubLayerProps bakes into every sublayer
+      // (opacity/pickable/visible, coordinate system, _subLayerProps, …)
+      // plus the user's updateTriggers.
+      inheritedPropsDigest(this.props),
+      updateTriggersDigest(this.props.updateTriggers),
       this.props.timeWindow,
+      this.props.timeHeightScale,
+      this.props.timeHeightOrigin,
       // tripColor / tripWidth: only their "constant fallback" branch is
       // baked into the layer. The categorical/property-driven path lives
       // in `prepared` and is keyed via preparedKey.
-      Array.isArray(this.props.tripColor)
-        ? this.props.tripColor.join(',')
-        : '',
-      typeof this.props.tripWidth === 'number' ? this.props.tripWidth : 0,
+      Array.isArray(color) ? color.join(',') : '',
+      typeof width === 'number' ? width : 0,
     ].join('|');
   }
 
@@ -479,9 +557,8 @@ export class AnimatedTripsLayer extends SpatioTemporalLayer<AnimatedTripsLayerPr
    * narrower than that.
    */
   protected getEffectiveTimeWindow(): number {
-    const baseWindow = this.props.timeWindow || 86400000;
-    const trailLength = this.props.trailLength || 180000;
-    return Math.max(baseWindow, trailLength * 2);
+    // Both `Required<>`-typed: the defaultProps values guarantee numbers here.
+    return Math.max(this.props.timeWindow, this.props.trailLength * 2);
   }
 
   renderLayers(): Layer[] {
@@ -562,27 +639,56 @@ export class AnimatedTripsLayer extends SpatioTemporalLayer<AnimatedTripsLayerPr
    * Build the binary `data` object for a single tile, or return the cached
    * entry when the tile and style key are unchanged.
    */
+  /**
+   * The per-vertex scalar array fed to the gradient ramp. Base: the static
+   * `vertexValues` channel (e.g. drifter SST). {@link FlowCorridorLayer}
+   * overrides this to select/blend a time-bucket column from a per-vertex value
+   * matrix, so the corridor geometry stays resident on the GPU while the
+   * playhead picks the colors.
+   */
+  protected gradientValuesFor(
+    binary: BinaryFeatures,
+    _totalVerts: number,
+  ): Float32Array | undefined {
+    return this.props.gradientProperty === 'vertexValues' ? binary.vertexValues : undefined;
+  }
+
+  /**
+   * Extra token folded into the prepared-tile `styleKey` so a time-driven
+   * gradient invalidates the CPU-expanded per-vertex colors as the playhead
+   * advances. Base: '' (the static gradient never varies with time).
+   */
+  protected gradientStyleSuffix(_binary: BinaryFeatures): string {
+    return '';
+  }
+
   private prepareTile(tile: Tile, tileLayer: TileLayer): PreparedTile | null {
     const binary = tileLayer.features;
     if (binary.featureCount === 0 || !binary.startIndices) return null;
 
-    const colorProp = typeof this.props.tripColor === 'string' ? this.props.tripColor : '';
-    const widthProp = typeof this.props.tripWidth === 'string' ? this.props.tripWidth : '';
-    // Palette identity matters only when colorProp is set. Including its
-    // length in the key is a cheap way to invalidate when the palette changes.
+    const colorValue = this.colorValue();
+    const widthValue = this.widthValue();
+    const colorProp = typeof colorValue === 'string' ? colorValue : '';
+    const widthProp = typeof widthValue === 'string' ? widthValue : '';
+    // Palette / mapping / ramp keyed by CONTENT, not length or key-count — a
+    // same-size swap must invalidate the CPU-expanded per-vertex colors.
+    // Digests are memoized per object reference (style-digest.ts), so this is
+    // a WeakMap lookup per tile, not a re-serialization.
     const mapSig = this.props.colorMapping
-      ? `m${Object.keys(this.props.colorMapping).length}`
+      ? `m${colorMappingDigest(this.props.colorMapping)}`
       : '';
-    // Gradient signature: property + domain + ramp length. Including the
+    // Gradient signature: property + domain + ramp content. Including the
     // domain invalidates the cached per-vertex colors when the scale changes.
     const gradSig = this.props.gradientProperty
       ? `g${this.props.gradientProperty}:${(this.props.gradientDomain ?? [0, 1]).join(',')}:${
-          (this.props.gradientColorRamp ?? []).length
+          this.props.gradientColorRamp ? colorListDigest(this.props.gradientColorRamp) : ''
         }`
       : '';
     const styleKey = `${colorProp}|${widthProp}|${
-      colorProp ? (this.props.colorPalette ?? DEFAULT_PALETTE).length : 0
-    }|${mapSig}|${gradSig}`;
+      colorProp ? colorListDigest(this.props.colorPalette ?? DEFAULT_PALETTE) : 0
+    }|${mapSig}|${gradSig}${this.gradientStyleSuffix(binary)}|${updateTriggersDigest(
+      this.props.updateTriggers,
+    )}`;
 
     const tileKey = makeTileKey(tile, tileLayer);
     const cached = this.preparedTileCache.get(tileKey);
@@ -620,8 +726,7 @@ export class AnimatedTripsLayer extends SpatioTemporalLayer<AnimatedTripsLayerPr
     // vertex's scalar (currently only `vertexValues`, e.g. SST) through the
     // ramp so the line shades along its length. Built per-vertex for the same
     // reason as the categorical path below — PathLayer needs per-vertex colors.
-    const gradientValues =
-      this.props.gradientProperty === 'vertexValues' ? binary.vertexValues : undefined;
+    const gradientValues = this.gradientValuesFor(binary, totalVerts);
     if (
       gradientValues &&
       gradientValues.length >= totalVerts &&
@@ -697,6 +802,8 @@ export class AnimatedTripsLayer extends SpatioTemporalLayer<AnimatedTripsLayerPr
       timeOffset: binary.timeOffset,
       dims,
       gpuPalette,
+      tile,
+      features: binary,
     };
     this.preparedTileCache.set(tileKey, prepared);
     emit('tilePrepare', {
@@ -711,26 +818,19 @@ export class AnimatedTripsLayer extends SpatioTemporalLayer<AnimatedTripsLayerPr
   }
 
   private buildSublayer(prepared: PreparedTile): PathLayer {
-    const sublayerId = `${this.props.id}-${prepared.tileKey}`;
-
-    const constColor = (Array.isArray(this.props.tripColor)
-      ? this.props.tripColor
+    const colorValue = this.colorValue();
+    const widthValue = this.widthValue();
+    const constColor = (Array.isArray(colorValue)
+      ? colorValue
       : [253, 128, 93, 255]) as Color;
-    const constWidth = typeof this.props.tripWidth === 'number' ? this.props.tripWidth : 2;
-    const timeWindow = this.props.timeWindow || 86400000;
+    const constWidth = typeof widthValue === 'number' ? widthValue : 2;
+    // `Required<>`-typed: the defaultProps value guarantees a number here.
+    const timeWindow = this.props.timeWindow;
 
+    // Always false for trips — gpuPalette is intentionally hardwired null in
+    // prepareTile (CPU per-vertex colors; GPU palette indices can't ride
+    // PathLayer's segment tessellation). Plumbing kept for family parity.
     const useGpuCategory = prepared.gpuPalette !== null;
-    if (
-      useGpuCategory &&
-      prepared.gpuPalette!.length > CATEGORY_PALETTE_SIZE
-    ) {
-      warnOnce(
-        'AnimatedTripsLayer:paletteOverflow',
-        `[AnimatedTripsLayer] colorPalette has ${prepared.gpuPalette!.length} ` +
-          `entries; only the first ${CATEGORY_PALETTE_SIZE} will be used by ` +
-          'CategoryColorExtension.',
-      );
-    }
 
     // Keep the extension list constant across all sublayers of this
     // AnimatedTripsLayer instance — deck.gl caches compiled shader
@@ -741,25 +841,25 @@ export class AnimatedTripsLayer extends SpatioTemporalLayer<AnimatedTripsLayerPr
     // shader branch via the uniform).
     const extensions: any[] = [this.timeFilterExtension, this.categoryColorExtension];
 
-    const props: Record<string, any> = {
-      id: sublayerId,
+    // getSubLayerProps inheritance (opacity/pickable/visible, coordinate
+    // system, highlight props, …) + user `_subLayerProps.trips` overrides.
+    // Only runs inside this cache-gated build path — never per frame.
+    // positionFormat is passed explicitly (sublayerProps beats inheritance):
+    // PathLayer's default 'XYZ' would misread 2D tile buffers.
+    const props = this.composeSubLayerProps('trips', prepared.tileKey, {
       data: prepared.data,
       // Identity comparator: deck.gl skips prop-diff on `data` when the same
       // object reference comes back. Pairs with preparedTileCache.
       dataComparator: (a: any, b: any) => a === b,
       _pathType: 'open',
-      // PathLayer defaults positionFormat to 'XYZ'; 2D paths must opt out or
-      // every vertex is read with the wrong stride.
       positionFormat: prepared.dims === 3 ? 'XYZ' : 'XY',
-      widthUnits: this.props.widthUnits ?? 'pixels',
-      widthScale: this.props.widthScale ?? 1,
+      // `Required<>`-typed (defaults guarantee values) — no `??` refetches.
+      widthUnits: this.props.widthUnits,
+      widthScale: this.props.widthScale,
       widthMinPixels: this.props.widthMinPixels,
       widthMaxPixels: this.props.widthMaxPixels,
       capRounded: this.props.capRounded,
       jointRounded: this.props.jointRounded,
-      opacity: this.props.opacity,
-      visible: this.props.visible,
-      pickable: this.props.pickable ?? false,
 
       // Constants are harmless when the binary attribute is present (binary
       // attributes win); they only kick in for tiles missing the property.
@@ -772,21 +872,48 @@ export class AnimatedTripsLayer extends SpatioTemporalLayer<AnimatedTripsLayerPr
       getTime: this.boundGetTime,
       timeOffset: prepared.timeOffset,
       timeWindow,
+      // Time-as-height (space-time cube): a pure uniform pair, so the morph
+      // slider only re-issues sublayer props — no data/GPU re-upload.
+      timeHeightScale: this.props.timeHeightScale,
+      timeHeightOrigin: this.props.timeHeightOrigin,
       trailLength: this.props.trailLength,
       // Whether the trail fades head→tail or renders solid. Previously this
       // prop was baked into the sublayer cache key but never reached the
       // TimeFilterExtension, so `fadeTrail: false` was a silent no-op.
       fadeTrail: this.props.fadeTrail,
-    };
-    props.useCategoryColor = useGpuCategory;
-    if (useGpuCategory) {
-      props.categoryPalette = prepared.gpuPalette!;
+
+      // TileLayer convention: the source tile rides on the sublayer so the
+      // base getPickingInfo can enrich info.tile / decode the picked trip.
+      tile: prepared.tile,
+      sttFeatures: prepared.features,
+
+      useCategoryColor: useGpuCategory,
+      ...(useGpuCategory ? { categoryPalette: prepared.gpuPalette! } : {}),
+    });
+    // Pickable sublayers must use the stock PathLayer: NoPickingPathLayer
+    // strips `instancePickingColors`, so forwarding pickable:true into it
+    // produced silently-broken picking (zeroed picking colors). The stock
+    // layer's extra attribute can push the fp64 + TimeFilter + CategoryColor
+    // combo past WebGL2's 16-slot minimum on GPUs that report exactly 16 —
+    // accepted, with a warning. The picked instance index is the trip index
+    // within the tile; getPickingInfo decodes its properties from there.
+    // A `_subLayerProps: { trips: { type } }` override beats both defaults.
+    if (this.props.pickable) {
+      warnOnce(
+        'AnimatedTripsLayer:pickableAttributeBudget',
+        '[AnimatedTripsLayer] pickable:true renders through the stock PathLayer ' +
+          'so picking works, but its instancePickingColors attribute can exceed ' +
+          "WebGL2's 16-vertex-attribute minimum on some GPUs (link warning).",
+      );
+      const SubLayerClass = this.getSubLayerClass('trips', PathLayer);
+      return new SubLayerClass(props as any);
     }
     // NoPickingPathLayer frees the `instancePickingColors` attribute slot,
     // which keeps the fp64 + TimeFilter + CategoryColor combo under WebGL2's
-    // 16-attribute minimum. Sublayers here are always `pickable: false`, so
-    // dropping the picking buffer is a no-op behaviourally. See
-    // `no-picking-path-layer.ts` for the upstream-fix timeline.
-    return new NoPickingPathLayer(props as any);
+    // 16-attribute minimum. Sublayers here are non-pickable, so dropping the
+    // picking buffer is a no-op behaviourally. See `no-picking-path-layer.ts`
+    // for the upstream-fix timeline.
+    const SubLayerClass = this.getSubLayerClass('trips', NoPickingPathLayer);
+    return new SubLayerClass(props as any);
   }
 }

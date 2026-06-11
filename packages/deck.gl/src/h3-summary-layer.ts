@@ -22,56 +22,58 @@
  * giving us highPrecision-aware polygon rendering, GPU-side picking, and
  * the standard extruded/coverage style props.
  *
- * Coloring: by default we hand `colorRange + colorDomain` to a built-in
- * ramp that quantises `count` (or the configured `weightProperty`) into N
- * color buckets. Callers can also pass a `getFillColor` callback for
- * fully-custom styling.
+ * Coloring: `colorRange + colorDomain` drive a built-in ramp that quantises
+ * `count` (or the configured `weightProperty`) into N color buckets. There is
+ * no custom color-callback prop — restyle via `colorRange`/`colorDomain`/
+ * `weightProperty`.
+ *
+ * ARCHITECTURE: extends {@link SpatioTemporalLayer} and reuses ALL of its
+ * archive/tileset plumbing (init + supersession race guards, rAF-coalesced
+ * tile-load updates, throttled animation ticks, byte-budgeted cache,
+ * onViewportLoad/onTileLoad/onTileError/loadOptions, viewport-bounds
+ * memoization). The summary-tier specifics ride the base's two subclass
+ * hooks — {@link onMetadataLoaded} (onMetadataLoad callback + no-tier
+ * warning) and {@link getTilesetOptionOverrides} (summary tier dispatch,
+ * tier zoom range, 'no-overlap' refinement) — plus a {@link getZoomLevel}
+ * override that clamps to the tier's zoom band. Historically this class
+ * duplicated ~270 lines of that plumbing and had already drifted (missing
+ * rAF coalescing and `maxCacheByteSize`).
  */
 
-import { CompositeLayer } from '@deck.gl/core';
 import type {
   Color,
-  CompositeLayerProps,
+  DefaultProps,
+  GetPickingInfoParams,
   Layer,
   LayerContext,
-  UpdateParameters,
 } from '@deck.gl/core';
 import { H3HexagonLayer } from '@deck.gl/geo-layers';
-import { STTArchive, SpatiotemporalTileset } from '@stt/core';
+import { getFeatureProperties } from '@stt/core';
 import type {
   ArchiveMetadata,
-  BoundingBox,
+  BinaryFeatures,
+  SpatiotemporalTilesetOptions,
   Tile,
 } from '@stt/core';
 import { splitLongToH3Index } from 'h3-js';
-import { TimeController } from './time-controller';
-import type { BufferSource, BufferedRunway } from './playback-governor';
+import {
+  SpatioTemporalLayer,
+  type SpatioTemporalLayerProps,
+  type SpatioTemporalPickingInfo,
+  type SttSublayerPickingProps,
+} from './spatiotemporal-layer';
+import {
+  colorListDigest,
+  inheritedPropsDigest,
+  updateTriggersDigest,
+} from './style-digest';
 import { warnOnce } from './log';
 
 const DEBUG = false;
 
-export interface H3SummaryLayerProps extends CompositeLayerProps {
-  /** URL to the STT archive. */
-  data: string;
-
-  /** Current display time (Unix ms). */
-  currentTime: number;
-
-  /** Time window (ms) centred on `currentTime`. */
-  timeWindow?: number;
-
-  /** Optional shared {@link TimeController}. */
-  timeController?: TimeController | null;
-
-  /** Maximum concurrent tile requests. */
-  maxRequests?: number;
-
-  /** Debounce ms for viewport-driven tile updates. */
-  debounceTime?: number;
-
-  /** Maximum number of decoded tiles to keep cached. */
-  maxCacheSize?: number;
-
+/** Props added by {@link H3SummaryLayer} (own props only — compose with
+ * {@link SpatioTemporalLayerProps} via {@link H3SummaryLayerProps}). */
+export interface _H3SummaryLayerProps {
   /**
    * Numeric property the color ramp + extrusion height are driven by.
    * Defaults to `'count'` (the implicit cell-count column). Any aggregated
@@ -105,33 +107,12 @@ export interface H3SummaryLayerProps extends CompositeLayerProps {
    */
   coverage?: number;
 
-  /** Fired when an archive's tiles are first loaded. */
+  /** Fired once per archive init with the decoded metadata. */
   onMetadataLoad?: ((meta: ArchiveMetadata) => void) | null;
-
-  /**
-   * Fired once per archive/tileset initialization with the live tileset
-   * (which satisfies the {@link BufferSource} readiness contract) — hand it
-   * to a `PlaybackGovernor` via `setSource`. Mirrors SpatioTemporalLayer.
-   */
-  onTilesetReady?: ((tileset: SpatiotemporalTileset & BufferSource) => void) | null;
-
-  /**
-   * Buffered-runway threshold events from the tileset's coverage index,
-   * forwarded to `PlaybackGovernor.notifyBufferChange`. Mirrors
-   * SpatioTemporalLayer.
-   */
-  onBufferChange?: ((runway: BufferedRunway) => void) | null;
 }
 
-interface H3SummaryLayerState {
-  archive: STTArchive | null;
-  tileset: SpatiotemporalTileset | null;
-  metadata: ArchiveMetadata | null;
-  tiles: Tile[];
-  frameNumber: number;
-  playStateHandler?: (playing: boolean, speed: number) => void;
-  tickHandler?: (time: number) => void;
-}
+/** Complete props accepted by {@link H3SummaryLayer}. */
+export type H3SummaryLayerProps = _H3SummaryLayerProps & SpatioTemporalLayerProps;
 
 const DEFAULT_COLOR_RANGE: Color[] = [
   [255, 255, 204, 220],
@@ -152,6 +133,12 @@ interface PreparedHexRow {
   hex: string;
   /** Raw weight column value. */
   weight: number;
+  /**
+   * Feature row in the source layer's BinaryFeatures. Rows skip cells whose
+   * H3 index failed to decode, so the rows-array index is NOT the feature
+   * index — picking needs this to decode the cell's aggregated columns.
+   */
+  sourceIndex: number;
 }
 
 interface PreparedTile {
@@ -160,6 +147,9 @@ interface PreparedTile {
   /** Cached min/max of `weight` across the tile. */
   weightMin: number;
   weightMax: number;
+  /** Source tile + decoded columns — picking enrichment context (references, not copies). */
+  tile: Tile;
+  features: BinaryFeatures;
 }
 
 function makeTileKey(tile: Tile): string {
@@ -184,41 +174,39 @@ function h3IndexFromTile(
   return splitLongToH3Index(lower, upper);
 }
 
+// Upstream idiom: module-level const typed `DefaultProps<XxxLayerProps>` then
+// assigned to the static — the named annotation keeps the emitted .d.ts
+// portable (the inferred mapped type used to surface transitive-dep types,
+// which motivated the previous `static defaultProps: any`).
+const defaultProps: DefaultProps<H3SummaryLayerProps> = {
+  ...SpatioTemporalLayer.defaultProps,
+  // Summary tiles are few but row-heavy; the historical cap predates the
+  // shared base and is kept so behaviour doesn't change under the merge.
+  maxCacheSize: 500,
+  weightProperty: 'count',
+  colorRange: { type: 'array', value: DEFAULT_COLOR_RANGE, compare: true },
+  colorDomain: { type: 'array', value: null, compare: true, optional: true },
+  extruded: false,
+  elevationScale: 1,
+  coverage: { type: 'number', value: 0.92, min: 0, max: 1 },
+  onMetadataLoad: { type: 'function', value: null, optional: true },
+};
+
 /**
  * Render the SERVER-AGGREGATED summary tier of an STT archive as H3
  * hexagons. Companion to {@link SpatioTemporalLayer} for the raw tier.
+ *
+ * Sublayer short id for `_subLayerProps` overrides: **`hexagons`**.
+ * `_subLayerProps: { hexagons: { type: MyLayer, ...props } }` swaps the
+ * sublayer class (default `H3HexagonLayer`) / overrides sublayer props
+ * (deck's CompositeLayer contract).
  */
-export class H3SummaryLayer extends CompositeLayer<H3SummaryLayerProps> {
+export class H3SummaryLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLayer<
+  ExtraPropsT & Required<_H3SummaryLayerProps>
+> {
   static layerName = 'H3SummaryLayer';
 
-  // `: any` keeps tsc from refusing to emit a portable .d.ts. The strict
-  // DefaultProps mapped type surfaces references to mjolnir.js / math.gl
-  // that aren't in our direct dep list, same as VatTripsLayer.
-  static defaultProps: any = {
-    data: '',
-    currentTime: 0,
-    timeWindow: 86_400_000,
-    timeController: { type: 'object', value: null, optional: true, compare: false },
-    // Single concurrency knob — threaded into the archive's range coalescer
-    // (see _initArchiveAndTileset). 24 matches SpatioTemporalLayer.
-    maxRequests: 24,
-    debounceTime: 0,
-    maxCacheSize: 500,
-    weightProperty: 'count',
-    colorRange: { type: 'array', value: DEFAULT_COLOR_RANGE, compare: true },
-    colorDomain: { type: 'array', value: null, compare: true, optional: true },
-    extruded: false,
-    elevationScale: 1,
-    coverage: { type: 'number', value: 0.92, min: 0, max: 1 },
-    onMetadataLoad: { type: 'function', value: null, optional: true },
-    onTilesetReady: { type: 'function', value: null, optional: true },
-    onBufferChange: { type: 'function', value: null, optional: true },
-  };
-
-  declare state: H3SummaryLayerState & { [key: string]: unknown };
-
-  /** Set-based snapshot of the last published tile set — see SpatioTemporalLayer._tilesChanged. */
-  private _lastTileIdSet: Set<string> = new Set();
+  static defaultProps = defaultProps;
 
   /** Per-tile prepared-data cache. Pruned to the live tile set every render. */
   private preparedTileCache = new Map<string, PreparedTile>();
@@ -243,280 +231,58 @@ export class H3SummaryLayer extends CompositeLayer<H3SummaryLayerProps> {
   >();
   private lastTilesRef: Tile[] | null = null;
 
-  /** Skip `unproject()` while the viewport hasn't moved. */
-  private _lastBoundsKey: string = '';
-  private _cachedBounds: BoundingBox | null = null;
-
-  /** Finalize guard for in-flight `_initArchiveAndTileset` (see SpatioTemporalLayer). */
-  private _finalized: boolean = false;
-  private _initializingUrl: string | null = null;
-
-  initializeState(_context: LayerContext): void {
-    const playStateHandler = (playing: boolean, speed: number) => {
-      const { tileset } = this.state;
-      tileset?.setAnimationState(playing, speed);
-    };
-    const tickHandler = (time: number) => {
-      this._handleTimeUpdate(time);
-    };
-
-    this.setState({
-      archive: null,
-      tileset: null,
-      metadata: null,
-      tiles: [],
-      frameNumber: 0,
-      playStateHandler,
-      tickHandler,
-    });
-
-    if (this.props.timeController) {
-      this.props.timeController.on('playState', playStateHandler);
-      this.props.timeController.on('tick', tickHandler);
-    }
-
-    this._initArchiveAndTileset();
-  }
-
-  finalizeState(_context: LayerContext): void {
-    this._finalized = true;
-    if (this.props.timeController) {
-      if (this.state.playStateHandler) {
-        this.props.timeController.off('playState', this.state.playStateHandler);
-      }
-      if (this.state.tickHandler) {
-        this.props.timeController.off('tick', this.state.tickHandler);
-      }
-    }
-    const { tileset, archive } = this.state;
-    tileset?.finalize();
-    archive?.finalize();
+  finalizeState(context: LayerContext): void {
+    // Base handles controller unsubscribe, the pending tile-load rAF, and
+    // tileset/archive teardown.
+    super.finalizeState(context);
     this.preparedTileCache.clear();
     this.sublayerCache.clear();
   }
 
-  shouldUpdateState(params: { changeFlags: { somethingChanged: boolean } }): boolean {
-    return params.changeFlags.somethingChanged;
-  }
-
-  updateState(params: UpdateParameters<this>): void {
-    const { oldProps } = params;
-    // Race-safe URL change check (mirrors SpatioTemporalLayer): treat the URL
-    // as unchanged when an init for the same URL is already in flight.
-    const liveUrl = this.state.archive?.url ?? this._initializingUrl ?? null;
-    if (
-      oldProps?.data !== this.props.data &&
-      oldProps?.data !== undefined &&
-      this.props.data !== liveUrl
-    ) {
-      this._initArchiveAndTileset();
-      return;
-    }
-    if (oldProps?.timeController !== this.props.timeController) {
-      if (oldProps?.timeController) {
-        if (this.state.playStateHandler) {
-          oldProps.timeController.off('playState', this.state.playStateHandler);
-        }
-        if (this.state.tickHandler) {
-          oldProps.timeController.off('tick', this.state.tickHandler);
-        }
-      }
-      if (this.props.timeController) {
-        if (this.state.playStateHandler) {
-          this.props.timeController.on('playState', this.state.playStateHandler);
-        }
-        if (this.state.tickHandler) {
-          this.props.timeController.on('tick', this.state.tickHandler);
-        }
-      }
-    }
-    this._updateTileset();
-  }
-
-  private _handleTimeUpdate(time: number): void {
-    const { tileset } = this.state;
-    if (!tileset) return;
-    const viewport = this.context.viewport;
-    if (!viewport) return;
-    const bounds = this._getBounds(viewport);
-    const zoom = this._getZoom(viewport);
-    tileset.update(
-      {
-        bounds,
-        zoom,
-        time,
-        timeWindow: this.props.timeWindow ?? 86_400_000,
-      },
-      true,
-    );
-    const newTiles = tileset.getVisibleTiles();
-    // Set-based change detection. The previous length-only check missed
-    // the case where one tile entered and one left in the same tick
-    // (size unchanged, identities different) — those frames silently
-    // dropped a tile-set update.
-    if (this._tilesChangedSet(newTiles)) {
-      this.setState({
-        tiles: newTiles,
-        frameNumber: this.state.frameNumber + 1,
-      });
-      this._commitTileIdSet(newTiles);
-    } else {
-      this.setNeedsRedraw();
-    }
-  }
-
-  private _tilesChangedSet(newTiles: Tile[]): boolean {
-    const prev = this._lastTileIdSet;
-    if (prev.size !== newTiles.length) return true;
-    for (const tile of newTiles) {
-      const { z, x, y, t } = tile.id;
-      if (!prev.has(`${z}/${x}/${y}/${t}`)) return true;
-    }
-    return false;
-  }
-
-  private _commitTileIdSet(newTiles: Tile[]): void {
-    const next = new Set<string>();
-    for (const tile of newTiles) {
-      const { z, x, y, t } = tile.id;
-      next.add(`${z}/${x}/${y}/${t}`);
-    }
-    this._lastTileIdSet = next;
-  }
-
-  private _updateTileset(): void {
-    const { tileset } = this.state;
-    if (!tileset) return;
-    const viewport = this.context.viewport;
-    if (!viewport) return;
-    const bounds = this._getBounds(viewport);
-    const zoom = this._getZoom(viewport);
-    const time = this.props.timeController
-      ? this.props.timeController.getTime()
-      : this.props.currentTime;
-    tileset.update({
-      bounds,
-      zoom,
-      time,
-      timeWindow: this.props.timeWindow ?? 86_400_000,
-    });
-    const tiles = tileset.getVisibleTiles();
-    // Only setState when the tile set actually changed — the previous
-    // unconditional setState forced deck.gl to re-run renderLayers() (and
-    // the per-tile H3HexagonLayer prop diff) on every viewport tick even
-    // when nothing new arrived.
-    if (this._tilesChangedSet(tiles)) {
-      this.setState({ tiles });
-      this._commitTileIdSet(tiles);
-    }
-  }
-
-  private async _initArchiveAndTileset(): Promise<void> {
-    // Tear down the previous pair before wiring a new one. Without this,
-    // switching `data` (or letting two race) leaks the previous archive's
-    // worker pool + OPFS handles. Mirrors the fix in SpatioTemporalLayer.
-    const previousTileset = this.state.tileset;
-    const previousArchive = this.state.archive;
-    if (previousTileset) previousTileset.finalize();
-    if (previousArchive) previousArchive.finalize();
-
-    const targetUrl = this.props.data;
-    this._initializingUrl = targetUrl;
-
-    const archive = new STTArchive({
-      url: targetUrl,
-      maxConcurrentRequests: this.props.maxRequests!,
-    });
-    const metadata = await archive.getMetadata();
-
-    // Bail if finalized or superseded while we awaited metadata.
-    if (this._finalized || this._initializingUrl !== targetUrl) {
-      archive.finalize();
-      return;
-    }
-    if (this.props.onMetadataLoad) this.props.onMetadataLoad(metadata);
-
-    const tier = metadata.summaryTier;
-    if (!tier) {
-      // Archive has no summary tier — the layer renders nothing. Logging is
-      // useful here because the consumer might be using H3SummaryLayer on an
-      // archive that was built without `--summary-tier`.
+  /**
+   * Subclass hook (base calls it once per archive init, after the
+   * supersession race guard): surface the metadata to the app and warn when
+   * the archive has no summary tier — the layer renders nothing then, which
+   * usually means the archive was built without `--summary-tier`.
+   */
+  protected onMetadataLoaded(metadata: ArchiveMetadata): void {
+    this.props.onMetadataLoad?.(metadata);
+    if (!metadata.summaryTier) {
       warnOnce(
         `H3SummaryLayer:noTier:${this.props.data}`,
         `[H3SummaryLayer] archive ${this.props.data} has no summary tier; ` +
           'rebuild with `stt-build --summary-tier h3` to enable.',
       );
     }
+  }
 
-    const tileset = new SpatiotemporalTileset({
-      maxRequests: this.props.maxRequests ?? 24,
-      debounceTime: this.props.debounceTime ?? 0,
-      maxCacheSize: this.props.maxCacheSize ?? 500,
+  /**
+   * Subclass hook: summary-tier tileset wiring, spread over the base options
+   * (overrides win). The tier's zoom band replaces the raw tier's, summary
+   * dispatch is forced on, and 'no-overlap' refinement replaces the raw
+   * tier's parent-fallback (a parent SUMMARY tile under a finer view would
+   * double-draw aggregated cells).
+   */
+  protected getTilesetOptionOverrides(
+    metadata: ArchiveMetadata,
+  ): Partial<SpatiotemporalTilesetOptions> {
+    const tier = metadata.summaryTier;
+    return {
+      tier: 'summary',
       minZoom: tier ? tier.minZoom : metadata.minZoom,
       maxZoom: tier ? tier.maxZoom : metadata.maxZoom,
-      temporalBucketMs: metadata.temporalBucketMs,
-      tier: 'summary',
-      summaryZoomRange: tier
-        ? { minZoom: tier.minZoom, maxZoom: tier.maxZoom }
-        : undefined,
       refinementStrategy: 'no-overlap',
-      enablePrefetch: true,
-      getAvailableTiles: (bounds, zoom, timeRange) =>
-        archive.getTileIdsInBounds(bounds, zoom, timeRange),
-      getAvailableSummaryTiles: (bounds, zoom, timeRange) =>
-        archive.getSummaryTileIdsInBounds(bounds, zoom, timeRange),
-      getTileData: (tileId, _signal) => archive.getTile(tileId),
-      // Player-buffering plumbing (WS-A/WS-B contract) — mirrors
-      // SpatioTemporalLayer._initArchiveAndTileset.
-      onBufferChange: (runway: BufferedRunway) => {
-        this.props.onBufferChange?.(runway);
-      },
-      getThroughput: () => archive.getThroughputEstimate(),
-    });
-
-    this._initializingUrl = null;
-    // Reset tiles to [] so the next renderLayers prunes stale cache
-    // entries that referenced the previous archive (see the same fix in
-    // SpatioTemporalLayer._initArchiveAndTileset).
-    this.setState({ archive, tileset, metadata, tiles: [] });
-    this._lastTileIdSet = new Set();
-    this.lastTilesRef = null;
-    this.preparedTileCache.clear();
-    this.sublayerCache.clear();
-
-    // Hand the live tileset (the BufferSource) to the app once per init —
-    // mirrors SpatioTemporalLayer so summary-tier demos gate playback too.
-    this.props.onTilesetReady?.(tileset as SpatiotemporalTileset & BufferSource);
-  }
-
-  private _getBounds(viewport: any): BoundingBox {
-    // Memoize on viewport identity (id + dims + camera) to skip the two
-    // `unproject` matrix-multiplies on the steady-state animation path.
-    const v = viewport;
-    const key = `${v.id ?? ''}|${v.width}x${v.height}|${v.zoom}|${v.longitude ?? 0},${v.latitude ?? 0}|${v.pitch ?? 0}|${v.bearing ?? 0}`;
-    if (this._cachedBounds && this._lastBoundsKey === key) {
-      return this._cachedBounds;
-    }
-    const [minLon, minLat] = viewport.unproject([0, viewport.height]);
-    const [maxLon, maxLat] = viewport.unproject([viewport.width, 0]);
-    this._lastBoundsKey = key;
-    this._cachedBounds = {
-      minLon: Math.max(-180, minLon),
-      minLat: Math.max(-90, minLat),
-      maxLon: Math.min(180, maxLon),
-      maxLat: Math.min(90, maxLat),
     };
-    return this._cachedBounds;
   }
 
-  private _getZoom(viewport: any): number {
-    const z = Math.floor(viewport.zoom);
-    const { metadata } = this.state;
-    const tier = metadata?.summaryTier;
-    if (tier) {
+  /** Clamp to the summary tier's zoom band (not the raw tier's). */
+  protected getZoomLevel(viewport: any): number {
+    const tier = this.state.metadata?.summaryTier;
+    if (tier && this.props.zoomOverride == null) {
+      const z = Math.floor(viewport.zoom);
       return Math.max(tier.minZoom, Math.min(tier.maxZoom, z));
     }
-    return z;
+    return super.getZoomLevel(viewport);
   }
 
   /**
@@ -560,7 +326,7 @@ export class H3SummaryLayer extends CompositeLayer<H3SummaryLayerProps> {
       const hex = h3IndexFromTile(featureIds64, i);
       if (!hex) continue;
       const w = weights[i];
-      rows.push({ hex, weight: w });
+      rows.push({ hex, weight: w, sourceIndex: i });
       if (w < weightMin) weightMin = w;
       if (w > weightMax) weightMax = w;
     }
@@ -571,6 +337,8 @@ export class H3SummaryLayer extends CompositeLayer<H3SummaryLayerProps> {
       rows,
       weightMin: weightMin === Infinity ? 0 : weightMin,
       weightMax: weightMax === -Infinity ? 0 : weightMax,
+      tile,
+      features: binary,
     };
     this.preparedTileCache.set(tileKey, prepared);
     return prepared;
@@ -635,12 +403,18 @@ export class H3SummaryLayer extends CompositeLayer<H3SummaryLayerProps> {
     // Layer-level style digest — when ANY of these change every cached
     // H3HexagonLayer is stale and we rebuild. The domain is included so a
     // streaming-in tile that widens the auto-fit domain invalidates the
-    // cache (otherwise the rampColor accessor would be stale).
+    // cache (otherwise the rampColor accessor would be stale). colorRange is
+    // keyed by CONTENT (memoized digest), not length — a same-size ramp swap
+    // must invalidate cached sublayers, same fix as the animated layers'
+    // palettes. Inherited composite props (getSubLayerProps surface +
+    // _subLayerProps) and the user's updateTriggers ride the key too.
     const styleKey =
       `${this.props.extruded ? 1 : 0}|${this.props.elevationScale ?? 1}` +
       `|${this.props.coverage ?? 0.92}|${this.props.pickable ? 1 : 0}` +
       `|${this.props.opacity ?? 1}|${domain[0]}|${domain[1]}` +
-      `|${weightProp}|${(this.props.colorRange ?? DEFAULT_COLOR_RANGE).length}`;
+      `|${weightProp}|${colorListDigest(this.props.colorRange ?? DEFAULT_COLOR_RANGE)}` +
+      `|${inheritedPropsDigest(this.props)}` +
+      `|${updateTriggersDigest(this.props.updateTriggers)}`;
 
     const out: Layer[] = [];
     for (const tile of tiles) {
@@ -655,8 +429,16 @@ export class H3SummaryLayer extends CompositeLayer<H3SummaryLayerProps> {
         out.push(cached.layer);
         continue;
       }
-      const layer = new H3HexagonLayer<PreparedHexRow>({
-        id: `${this.props.id}-${prepared.tileKey}`,
+      // getSubLayerProps inheritance (opacity/pickable/visible, coordinate
+      // system, highlight props, …) + user `_subLayerProps.hexagons`
+      // overrides. The user's own updateTriggers are merged INTO the
+      // computed trigger arrays (not replaced by them).
+      const subProps = this.composeSubLayerProps('hexagons', prepared.tileKey, {
+        // TileLayer convention: the source tile rides on the sublayer so
+        // getPickingInfo can enrich info.tile / decode the cell's aggregated
+        // columns.
+        tile: prepared.tile,
+        sttFeatures: prepared.features,
         data: prepared.rows,
         // Use the cached prepared rows reference so deck.gl can short-circuit
         // re-upload when only style props changed.
@@ -668,26 +450,59 @@ export class H3SummaryLayer extends CompositeLayer<H3SummaryLayerProps> {
           : 0,
         extruded: !!this.props.extruded,
         coverage: this.props.coverage ?? 0.92,
-        pickable: !!this.props.pickable,
-        opacity: this.props.opacity ?? 1,
         // updateTriggers ensures deck.gl rebuilds the fill-color and elevation
         // buffers when the props they read from change.
         updateTriggers: {
+          ...this.props.updateTriggers,
           getFillColor: [
             domain[0],
             domain[1],
             this.props.colorRange,
             weightProp,
+            this.props.updateTriggers?.getFillColor,
           ],
-          getElevation: [this.props.extruded, this.props.elevationScale],
+          getElevation: [
+            this.props.extruded,
+            this.props.elevationScale,
+            this.props.updateTriggers?.getElevation,
+          ],
         },
       });
+      // `_subLayerProps: { hexagons: { type } }` swaps the sublayer class.
+      const SubLayerClass = this.getSubLayerClass('hexagons', H3HexagonLayer as any);
+      const layer = new SubLayerClass(subProps as any) as H3HexagonLayer<PreparedHexRow>;
       this.sublayerCache.set(prepared.tileKey, {
         layer,
         preparedKey: prepared,
         styleKey,
       });
       out.push(layer);
+    }
+    return out;
+  }
+
+  /**
+   * TileLayer-convention picking enrichment, H3 flavour. Unlike the binary
+   * animated layers, the H3HexagonLayer sublayers carry real JS rows, so
+   * `info.object` already arrives as a {@link PreparedHexRow}; this swaps it
+   * for the cell's FULL aggregated columns (decoded via `row.sourceIndex` —
+   * the rows array skips undecodable cells, so its index is not the feature
+   * index), keeping `hex`/`weight` keys for continuity.
+   */
+  getPickingInfo({ info, sourceLayer }: GetPickingInfoParams): SpatioTemporalPickingInfo {
+    const out = info as SpatioTemporalPickingInfo;
+    const sprops = sourceLayer?.props as SttSublayerPickingProps | undefined;
+    const tile = sprops?.tile ?? null;
+    out.sourceTile = tile;
+    if (info.index >= 0 && tile) {
+      out.tile = tile;
+      const row = info.object as PreparedHexRow | undefined;
+      if (row && typeof row.sourceIndex === 'number' && sprops?.sttFeatures) {
+        const props = getFeatureProperties(sprops.sttFeatures, row.sourceIndex);
+        if (props) {
+          out.object = { ...props, hex: row.hex, weight: row.weight };
+        }
+      }
     }
     return out;
   }

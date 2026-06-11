@@ -35,11 +35,20 @@ import {
 } from './category-color-extension';
 import { emit } from './telemetry';
 import { warnOnce } from './log';
-import type { Tile, Layer as TileLayer } from '@stt/core';
+import {
+  colorListDigest,
+  inheritedPropsDigest,
+  updateTriggersDigest,
+} from './style-digest';
+import { resolveAccessorAlias } from './accessor-alias';
+import type { ColorAccessorValue, NumericAccessorValue } from './accessor-alias';
+import type { Tile, Layer as TileLayer, BinaryFeatures } from '@stt/core';
 
 const DEBUG = false;
 
-export interface AnimatedPathLayerProps extends SpatioTemporalLayerProps {
+/** Props added by {@link AnimatedPathLayer} (own props only — compose with
+ * {@link SpatioTemporalLayerProps} via {@link AnimatedPathLayerProps}). */
+export interface _AnimatedPathLayerProps {
   /**
    * Width multiplier.
    * @default 1
@@ -60,10 +69,25 @@ export interface AnimatedPathLayerProps extends SpatioTemporalLayerProps {
    */
   pathColor?: Color | string;
   /**
+   * Upstream-vocabulary (PathLayer) alias of {@link pathColor}. NOTE: unlike
+   * upstream deck.gl, this accepts a constant Color OR a property-column
+   * NAME — NOT a function accessor (binary tiles can't run per-feature JS;
+   * a function warns once and falls back to `pathColor`). When set, it wins
+   * over `pathColor`.
+   */
+  getColor?: ColorAccessorValue | null;
+  /**
    * Path width — constant number, or property name for per-feature width.
    * @default 3
    */
   pathWidth?: number | string;
+  /**
+   * Upstream-vocabulary alias of {@link pathWidth}. Accepts a constant
+   * number OR a property-column NAME — NOT a function accessor (a function
+   * warns once and falls back to `pathWidth`). When set, it wins over
+   * `pathWidth`.
+   */
+  getWidth?: NumericAccessorValue | null;
   /**
    * Color palette for categorical `pathColor`.
    */
@@ -91,6 +115,9 @@ export interface AnimatedPathLayerProps extends SpatioTemporalLayerProps {
   jointRounded?: boolean;
 }
 
+/** Complete props accepted by {@link AnimatedPathLayer}. */
+export type AnimatedPathLayerProps = _AnimatedPathLayerProps & SpatioTemporalLayerProps;
+
 const DEFAULT_PALETTE: Color[] = [
   [0, 150, 255, 255],
   [255, 127, 14, 255],
@@ -117,6 +144,9 @@ interface PreparedTile {
   dims: number;
   /** Resolved palette when GPU categorical-color path is active for this tile. */
   gpuPalette: Color[] | null;
+  /** Source tile + decoded columns — picking enrichment context (references, not copies). */
+  tile: Tile;
+  features: BinaryFeatures;
 }
 
 function makeTileKey(tile: Tile, layer: TileLayer): string {
@@ -136,18 +166,40 @@ function indicesToFloat32(indices: Uint16Array, count: number): Float32Array {
 }
 
 
-export class AnimatedPathLayer extends SpatioTemporalLayer<AnimatedPathLayerProps> {
+/**
+ * Animated path layer (window mode) with per-tile binary sublayers.
+ *
+ * Sublayer short id for `_subLayerProps` overrides: **`paths`**.
+ * `_subLayerProps: { paths: { type: MyLayer, ...props } }` swaps the
+ * sublayer class / overrides sublayer props (deck's CompositeLayer
+ * contract). Without a `type` override the class is `PathLayer` when
+ * `pickable` and the attribute-stripped `NoPickingPathLayer` otherwise.
+ */
+export class AnimatedPathLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLayer<
+  ExtraPropsT & Required<_AnimatedPathLayerProps>
+> {
   static layerName = 'AnimatedPathLayer';
 
   static defaultProps: DefaultProps<AnimatedPathLayerProps> = {
     ...SpatioTemporalLayer.defaultProps,
     widthScale: { type: 'number', value: 1, min: 0 },
     widthUnits: 'pixels',
-    pathColor: { type: 'color', value: [0, 150, 255, 255] },
-    pathWidth: { type: 'number', value: 3 },
+    widthMinPixels: { type: 'number', value: 0, min: 0 },
+    widthMaxPixels: { type: 'number', value: Number.MAX_SAFE_INTEGER, min: 0 },
+    // Permissive descriptors ({type:'object'} validates anything): these
+    // props legally hold a constant OR a column-name string, which the
+    // 'color'/'number' validators would reject in deck's debug mode.
+    pathColor: { type: 'object', value: [0, 150, 255, 255], compare: true },
+    pathWidth: { type: 'object', value: 3, compare: true },
+    // Accessor-named aliases (see the prop docs): unset by default so the
+    // legacy props win unless the caller opts into the upstream vocabulary.
+    getColor: { type: 'object', value: null, optional: true, compare: true },
+    getWidth: { type: 'object', value: null, optional: true, compare: true },
     colorPalette: { type: 'array', value: DEFAULT_PALETTE, compare: true },
     fadeInDuration: { type: 'number', value: 300, min: 0 },
     fadeOutDuration: { type: 'number', value: 300, min: 0 },
+    capRounded: false,
+    jointRounded: false,
   };
 
   private preparedTileCache = new Map<string, PreparedTile>();
@@ -181,7 +233,32 @@ export class AnimatedPathLayer extends SpatioTemporalLayer<AnimatedPathLayerProp
     this.sublayerCache.clear();
   }
 
+  /**
+   * Accessor-alias resolution (audit B1): the upstream-named alias wins when
+   * set; a function-valued alias warns once and falls back to the legacy
+   * prop. Same value domain as the legacy props (constant or column name).
+   */
+  private colorValue(): Color | string | undefined {
+    return resolveAccessorAlias(
+      'AnimatedPathLayer',
+      'getColor',
+      this.props.getColor,
+      this.props.pathColor,
+    );
+  }
+
+  private widthValue(): number | string | undefined {
+    return resolveAccessorAlias(
+      'AnimatedPathLayer',
+      'getWidth',
+      this.props.getWidth,
+      this.props.pathWidth,
+    );
+  }
+
   private computeLayerPropsKey(): string {
+    const color = this.colorValue();
+    const width = this.widthValue();
     return [
       this.props.widthScale,
       this.props.widthUnits,
@@ -191,14 +268,16 @@ export class AnimatedPathLayer extends SpatioTemporalLayer<AnimatedPathLayerProp
       this.props.jointRounded,
       this.props.fadeInDuration,
       this.props.fadeOutDuration,
-      this.props.opacity,
-      this.props.visible,
-      this.props.pickable,
+      // Composite props that getSubLayerProps bakes into every sublayer
+      // (opacity/pickable/visible, coordinate system, _subLayerProps, …)
+      // plus the user's updateTriggers.
+      inheritedPropsDigest(this.props),
+      updateTriggersDigest(this.props.updateTriggers),
       this.props.timeWindow,
-      Array.isArray(this.props.pathColor)
-        ? this.props.pathColor.join(',')
-        : '',
-      typeof this.props.pathWidth === 'number' ? this.props.pathWidth : 0,
+      this.props.timeHeightScale,
+      this.props.timeHeightOrigin,
+      Array.isArray(color) ? color.join(',') : '',
+      typeof width === 'number' ? width : 0,
     ].join('|');
   }
 
@@ -273,11 +352,17 @@ export class AnimatedPathLayer extends SpatioTemporalLayer<AnimatedPathLayerProp
     const binary = tileLayer.features;
     if (binary.featureCount === 0 || !binary.startIndices) return null;
 
-    const colorProp = typeof this.props.pathColor === 'string' ? this.props.pathColor : '';
-    const widthProp = typeof this.props.pathWidth === 'string' ? this.props.pathWidth : '';
+    const colorValue = this.colorValue();
+    const widthValue = this.widthValue();
+    const colorProp = typeof colorValue === 'string' ? colorValue : '';
+    const widthProp = typeof widthValue === 'string' ? widthValue : '';
+    // Palette keyed by CONTENT, not length — a same-size palette swap must
+    // invalidate cached tiles. The digest is memoized per array reference, so
+    // this is a WeakMap lookup per tile, not a re-serialization. The user's
+    // updateTriggers ride the key too so a trigger bump re-prepares the tile.
     const styleKey = `${colorProp}|${widthProp}|${
-      colorProp ? (this.props.colorPalette ?? DEFAULT_PALETTE).length : 0
-    }`;
+      colorProp ? colorListDigest(this.props.colorPalette ?? DEFAULT_PALETTE) : 0
+    }|${updateTriggersDigest(this.props.updateTriggers)}`;
 
     const tileKey = makeTileKey(tile, tileLayer);
     const cached = this.preparedTileCache.get(tileKey);
@@ -332,6 +417,8 @@ export class AnimatedPathLayer extends SpatioTemporalLayer<AnimatedPathLayerProp
       timeOffset: binary.timeOffset,
       dims,
       gpuPalette,
+      tile,
+      features: binary,
     };
     this.preparedTileCache.set(tileKey, prepared);
     emit('tilePrepare', {
@@ -346,13 +433,14 @@ export class AnimatedPathLayer extends SpatioTemporalLayer<AnimatedPathLayerProp
   }
 
   private buildSublayer(prepared: PreparedTile): PathLayer {
-    const sublayerId = `${this.props.id}-${prepared.tileKey}`;
-
-    const constColor = (Array.isArray(this.props.pathColor)
-      ? this.props.pathColor
+    const colorValue = this.colorValue();
+    const widthValue = this.widthValue();
+    const constColor = (Array.isArray(colorValue)
+      ? colorValue
       : [0, 150, 255, 255]) as Color;
-    const constWidth = typeof this.props.pathWidth === 'number' ? this.props.pathWidth : 2;
-    const timeWindow = this.props.timeWindow || 86400000;
+    const constWidth = typeof widthValue === 'number' ? widthValue : 2;
+    // `Required<>`-typed: the defaultProps value guarantees a number here.
+    const timeWindow = this.props.timeWindow;
 
     const useGpuCategory = prepared.gpuPalette !== null;
     if (
@@ -370,8 +458,12 @@ export class AnimatedPathLayer extends SpatioTemporalLayer<AnimatedPathLayerProp
     // Keep the extension list constant across sublayers — see
     // animated-trips-layer.ts for the cache-storm rationale.
     const extensions: any[] = [this.timeFilterExtension, this.categoryColorExtension];
-    const props: Record<string, any> = {
-      id: sublayerId,
+    // getSubLayerProps inheritance (opacity/pickable/visible, coordinate
+    // system, highlight props, …) + user `_subLayerProps.paths` overrides.
+    // Only runs inside this cache-gated build path — never per frame.
+    // positionFormat is passed explicitly (sublayerProps beats inheritance):
+    // the composite's default 'XYZ' would misread 2D tile buffers.
+    const props = this.composeSubLayerProps('paths', prepared.tileKey, {
       data: prepared.data,
       // Identity comparator pairs with the preparedTileCache: deck.gl skips
       // the entire prop-diff for `data` when the same object reference
@@ -379,15 +471,13 @@ export class AnimatedPathLayer extends SpatioTemporalLayer<AnimatedPathLayerProp
       dataComparator: (a: any, b: any) => a === b,
       _pathType: 'open',
       positionFormat: prepared.dims === 3 ? 'XYZ' : 'XY',
-      widthUnits: this.props.widthUnits ?? 'pixels',
-      widthScale: this.props.widthScale ?? 1,
+      // `Required<>`-typed (defaults guarantee values) — no `??` refetches.
+      widthUnits: this.props.widthUnits,
+      widthScale: this.props.widthScale,
       widthMinPixels: this.props.widthMinPixels,
       widthMaxPixels: this.props.widthMaxPixels,
       capRounded: this.props.capRounded,
       jointRounded: this.props.jointRounded,
-      opacity: this.props.opacity,
-      visible: this.props.visible,
-      pickable: this.props.pickable ?? false,
 
       getColor: constColor,
       getWidth: constWidth,
@@ -398,18 +488,45 @@ export class AnimatedPathLayer extends SpatioTemporalLayer<AnimatedPathLayerProp
       timeWindow,
       fadeInDuration: this.props.fadeInDuration,
       fadeOutDuration: this.props.fadeOutDuration,
-    };
-    props.useCategoryColor = useGpuCategory;
-    if (useGpuCategory) {
-      props.categoryPalette = prepared.gpuPalette!;
+      // Time-as-height (space-time cube). Window mode lifts whole features
+      // by start time (the per-vertex attribute defaults to 0 here).
+      timeHeightScale: this.props.timeHeightScale,
+      timeHeightOrigin: this.props.timeHeightOrigin,
+
+      // TileLayer convention: the source tile rides on the sublayer so the
+      // base getPickingInfo can enrich info.tile / decode the picked path.
+      tile: prepared.tile,
+      sttFeatures: prepared.features,
+
+      useCategoryColor: useGpuCategory,
+      ...(useGpuCategory ? { categoryPalette: prepared.gpuPalette! } : {}),
+    });
+    // Pickable sublayers must use the stock PathLayer: NoPickingPathLayer
+    // strips `instancePickingColors`, so forwarding pickable:true into it
+    // produced silently-broken picking (zeroed picking colors). The stock
+    // layer's extra attribute can push the fp64 + TimeFilter + CategoryColor
+    // combo past WebGL2's 16-slot minimum on GPUs that report exactly 16 —
+    // accepted, with a warning. The picked instance index is the path index
+    // within the tile; getPickingInfo decodes its properties from there.
+    // A `_subLayerProps: { paths: { type } }` override beats both defaults.
+    if (this.props.pickable) {
+      warnOnce(
+        'AnimatedPathLayer:pickableAttributeBudget',
+        '[AnimatedPathLayer] pickable:true renders through the stock PathLayer ' +
+          'so picking works, but its instancePickingColors attribute can exceed ' +
+          "WebGL2's 16-vertex-attribute minimum on some GPUs (link warning).",
+      );
+      const SubLayerClass = this.getSubLayerClass('paths', PathLayer);
+      return new SubLayerClass(props as any);
     }
     // NoPickingPathLayer drops `instancePickingColors` from both the JS
     // attribute-manager registration AND the compiled vertex shader. With
     // PathLayer's hard-coded 13 attrs + TimeFilterExtension's 3 +
     // CategoryColorExtension's 1 = 17, the layer otherwise blows past the
     // WebGL2 16-attribute minimum and the per-pipeline link fails on GPUs
-    // that report exactly 16. Sublayers here are always non-pickable, so
-    // there is no behavioural change. See `no-picking-path-layer.ts`.
-    return new NoPickingPathLayer(props as any);
+    // that report exactly 16. Sublayers here are non-pickable, so there is
+    // no behavioural change. See `no-picking-path-layer.ts`.
+    const SubLayerClass = this.getSubLayerClass('paths', NoPickingPathLayer);
+    return new SubLayerClass(props as any);
   }
 }

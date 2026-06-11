@@ -50,13 +50,26 @@ const PICKING_USE = /geometry\.pickingColor\s*=\s*instancePickingColors\s*;/g;
 /**
  * Drop-in replacement for `PathLayer` that omits `instancePickingColors`.
  * Picking is unavailable on this subclass — only use it when the layer's
- * `pickable: false`.
+ * `pickable: false`. As defense in depth, a `pickable: true` instance skips
+ * the stripping entirely and behaves like a stock PathLayer (full attribute
+ * budget, working picking) instead of shipping zeroed picking colors.
+ *
+ * @internal Exported for back-compat only; the animated layers pick the
+ * stripped/stock PathLayer automatically based on `pickable`.
  */
 export class NoPickingPathLayer extends PathLayer {
   static layerName = 'NoPickingPathLayer';
 
   getShaders(): any {
     const shaders = (super.getShaders as any)();
+    // Defense in depth: the parent layers route pickable:true to the stock
+    // PathLayer, but a direct consumer could still construct this class
+    // pickable. Keep the shader (and, below, the attribute) intact in that
+    // case — stripping would silently zero every picking color. (Optional
+    // chaining: tests drive this method on a bare prototype without props.)
+    if (this.props?.pickable) {
+      return shaders;
+    }
     // Strip both the `in` declaration and the line that copies it into
     // `geometry.pickingColor`. Feed the picking module a constant zero
     // instead — it ignores the value when picking is inactive, which is
@@ -89,6 +102,11 @@ export class NoPickingPathLayer extends PathLayer {
 
   initializeState(...args: any[]): void {
     (super.initializeState as any)(...args);
+    // Mirror of the getShaders() pickable guard: the attribute must stay
+    // registered when the shader keeps its `in` declaration.
+    if (this.props?.pickable) {
+      return;
+    }
     const am = (this as any).getAttributeManager?.();
     if (am && typeof am.remove === 'function') {
       am.remove(['instancePickingColors']);

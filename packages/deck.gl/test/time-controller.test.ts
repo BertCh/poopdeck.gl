@@ -212,4 +212,109 @@ describe('TimeController', () => {
     tc.seekBy(-500);
     expect(tc.getTime()).toBe(750);
   });
+
+  it('clamps a single frame delta to 250ms (background-tab refocus)', () => {
+    const tc = new TimeController({ initialTime: 0, speed: 1 });
+    tc.play();
+    // The tab sat in the background for a minute: rAF was suspended, so the
+    // first refocus frame sees the whole gap as one delta. Without the clamp
+    // this teleports the playhead by 60_000 sim-ms.
+    harness.advance(60_000);
+    expect(tc.getTime()).toBe(250);
+    // Normal frames advance normally afterwards.
+    harness.advance(16);
+    expect(tc.getTime()).toBe(266);
+  });
+
+  it('re-anchors the frame clock on visibilitychange so refocus advances ~0', () => {
+    const fakeDocument = {
+      visibilityState: 'visible' as 'visible' | 'hidden',
+      listeners: new Map<string, () => void>(),
+      addEventListener(event: string, cb: () => void) {
+        this.listeners.set(event, cb);
+      },
+      removeEventListener(event: string) {
+        this.listeners.delete(event);
+      },
+    };
+    vi.stubGlobal('document', fakeDocument);
+    const tc = new TimeController({ initialTime: 0, speed: 1 });
+    // Listener lifetime tracks the rAF loop: registered on play, not construct.
+    expect(fakeDocument.listeners.has('visibilitychange')).toBe(false);
+    tc.play();
+    expect(fakeDocument.listeners.has('visibilitychange')).toBe(true);
+    harness.advance(16); // t=16
+
+    // Tab hides for a minute; the browser fires visibilitychange on refocus
+    // BEFORE the next rAF callback runs.
+    harness.advance(60_000); // wall clock moves; rAF queue would run, but the
+    // visibilitychange handler re-anchored first in a real browser. Emulate
+    // the ordering: re-anchor, then run a fresh frame.
+    fakeDocument.listeners.get('visibilitychange')!();
+    harness.advance(16);
+    // Only the post-re-anchor frame advanced time (the 60s frame ran before
+    // re-anchoring and was bounded by the clamp).
+    expect(tc.getTime()).toBeLessThanOrEqual(16 + 250 + 16);
+
+    // destroy() unregisters the handler.
+    tc.destroy();
+    expect(fakeDocument.listeners.has('visibilitychange')).toBe(false);
+  });
+
+  it('notifies wrap listeners on a loop wrap (not on plain ticks)', () => {
+    const tc = new TimeController({
+      initialTime: 0,
+      speed: 1,
+      loop: true,
+      timeRange: { start: 0, end: 100 },
+    });
+    const wrap = vi.fn();
+    tc.on('wrap', wrap);
+    tc.play();
+    harness.advance(50); // mid-range — no wrap
+    expect(wrap).not.toHaveBeenCalled();
+    harness.advance(70); // overshoots end → wraps to start
+    expect(wrap).toHaveBeenCalledTimes(1);
+    expect(wrap).toHaveBeenCalledWith(0);
+    tc.off('wrap', wrap);
+    harness.advance(120); // wraps again, but the listener is gone
+    expect(wrap).toHaveBeenCalledTimes(1);
+  });
+
+  it('notifies wrap listeners on a backward loop wrap', () => {
+    const tc = new TimeController({
+      initialTime: 50,
+      speed: -1,
+      loop: true,
+      timeRange: { start: 0, end: 100 },
+    });
+    const wrap = vi.fn();
+    tc.on('wrap', wrap);
+    tc.play();
+    harness.advance(70); // undershoots start → wraps to end
+    expect(wrap).toHaveBeenCalledTimes(1);
+    expect(wrap).toHaveBeenCalledWith(100);
+  });
+
+  it('a wrap listener that pauses and resumes does not fork a second rAF loop', () => {
+    const tc = new TimeController({
+      initialTime: 0,
+      speed: 1,
+      loop: true,
+      timeRange: { start: 0, end: 100 },
+    });
+    // Governor-shaped listener: a wrap gate that passes instantly pauses and
+    // immediately resumes the clock from INSIDE tick(). The re-entrant play()
+    // must not run a second synchronous tick, or two rAF loops each advance
+    // time every frame (2× speed).
+    tc.on('wrap', () => {
+      tc.pause();
+      tc.play();
+    });
+    tc.play();
+    harness.advance(120); // wrap fires
+    const t0 = tc.getTime();
+    harness.advance(20); // exactly one queued frame must advance time
+    expect(tc.getTime() - t0).toBeCloseTo(20, 0);
+  });
 });
