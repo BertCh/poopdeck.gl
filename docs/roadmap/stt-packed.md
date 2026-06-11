@@ -82,12 +82,42 @@ dataset size — a 15 MB directory becomes a few-KB root page + pages for visite
 subtrees; temporal pruning before any page fetch; the directory stops being the
 reason large datasets feel slow to open.
 
-**Open questions:** page-key scheme over our (z,x,y,t) directory order (COPC
-pages over an octree; we page over directory-sort runs — does run-length encoding
-survive page boundaries?); interaction with the global-coalesce fetch layer
+**Feasibility: MEASURED VIABLE (2026-06-11,
+`crates/stt-core/examples/directory-paging-sim.rs` over five real packed
+directories).** Pages = contiguous slices of directory order
+`(zoom, hilbert, time_start)` — the PMTiles leaf-directory model — each page
+independently codec'd + zstd'd, root models ~32 B/page (first key, offset/len,
+t-bounds):
+
+| dataset (entries) | paged at-rest vs whole (4096/page) | viewport-query bytes, med / p90 (% of whole-load) |
+|---|---|---|
+| ais-all-us (560 K) | +19% | **0.9% / 1.8%** |
+| earthquakes (351 K) | **+117%** (see dict note) | 3.0% / 3.1% |
+| nyc-taxi-points (559 K) | +12% | 11.4% / 36.5% |
+| nyc-rideshare (371 K) | +14% | 10.0% / 33.4% |
+| drifters (256 K) | +7% | 26.3% / 66.1% |
+
+- Sweet spot **1024–4096 entries/page** (~60–130 KB zstd'd pages — the range
+  coalescer's comfort zone). RLE/delta resets at page boundaries are noise;
+  the real paging cost is losing the whole-directory zstd window.
+- **Earthquakes anomaly → shared zstd dictionary**: its blob-dedup redundancy
+  compresses 3.7× under one window; per-page zstd forfeits that (+117%). A
+  zstd dict trained once and shipped in the manifest (or root page) should
+  recover most of it for all datasets.
+- Page-level **time pruning rarely fires** under spatial-major order (each
+  page spans most of the time range on fleet-shaped data) — the t-bounds on
+  page pointers earn their keep on temporally sparse/bursty datasets
+  (wildfires-shaped), while viewport pruning via the hilbert key range does
+  the heavy lifting everywhere. Keep both; they're each ~16 B/page.
+- Wide-time data (drifters) wins least (med 4×, p90 1.6×) because its queries
+  genuinely need entries spread across many pages — inherent, not a design
+  flaw.
+
+**Remaining open questions:** interaction with the global-coalesce fetch layer
 (pages are just more ranges to coalesce); whether the root page lives inline in
 `manifest.json` to save a request (COPC needs 3 requests to first render —
-adopt **requests-to-first-frame** as a tracked metric either way).
+adopt **requests-to-first-frame** as a tracked metric either way); shared-dict
+training set and versioning.
 
 ## 4. Lightweight column encodings (MLT-informed)
 
@@ -111,12 +141,27 @@ client language today — keep it that way by capping the toolbox at **two
 encodings** and skipping the adaptive per-tile selection machinery entirely
 (declare the encoding in column metadata; the writer picks once per column).
 
-**Open questions:** whether this lives inside the Arrow IPC envelope (custom
-metadata + encoded child buffers, decode-on-arrival) or motivates dropping IPC
-framing for hot columns — MLT's `VectorType`-tagged vectors with explicit
-16/64-byte alignment are an existence proof that zero-copy GPU upload survives
-without IPC's padding regime (relevant to the ALIGNED_FRAME_FLAG work);
-measure on `vertex_time` + coordinate columns of one heavy dataset first.
+**Measured: NO-GO in the cheap form (2026-06-11,
+`crates/stt-core/examples/encoding-experiment.rs`, 400-tile samples of
+drifters / ais-all-us / flights).** All variants re-zstd'd (packed is
+zstd-per-blob), so the test is "does the transform make zstd's job better":
+
+- Integer time columns: delta-varint wins big *relatively* (vertex_time
+  −31% on drifters, feature times −55% on flights, −23% on ais) — but these
+  columns are only **~0.3–0.8% of post-zstd payload**. Negligible absolute.
+- Coordinates — the dominant column (~57% of drifters payload) — get **worse**
+  under byte-shuffle (+31…+68%) and xor+shuffle (+49…+71%): zstd already
+  models raw little-endian f64 world coords better than the shuffled layouts.
+- Delta-bitpack consistently **loses to delta-varint when zstd follows**
+  (dense packed bits resist the entropy pass; varint streams feed it) — skip
+  FastPFOR-class packing entirely in a zstd-at-rest format.
+
+**Conclusion:** no lightweight-encoding pass pays for its decoder. The real
+size lever is **integer tile-local coordinate quantization** (MLT-style i32
+tile coords instead of f64 world coords) — a format change with renderer
+implications (precision at deep zoom, the f32-precision shader path), not an
+encoding pass. Park it as its own bet if payload size becomes a priority;
+the at-rest numbers above are the baseline to beat.
 
 ## 5. Smaller follow-ups
 

@@ -822,7 +822,7 @@ const rawDatasets: Dataset[] = [
     // If you regenerate with a fixed `--start-time`, update these to match.
     timeRange: {
       start: 1780261200000, // first sim step in the regenerated archive (2026-05-31)
-      end: 1780348931102,   // last sim step (~24.4h)
+      end: 1780347600000,   // start + 24h (2026-06-11 rebuild: 5m buckets, pinned --start-time)
     },
     // Time window controls which segments are loaded/visible
     // For LEO satellites with ~90 min orbits and ~40 min segments, use larger window
