@@ -1,12 +1,28 @@
-import React from "react";
+import React, { Suspense } from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import Layout from "./components/Layout";
+import SiteChrome from "./components/SiteChrome";
 import HomePage from "./pages/HomePage";
 import DemoPage from "./pages/DemoPage";
+import DemosCatalog from "./pages/DemosCatalog";
+import DemoDetailPage from "./pages/DemoDetailPage";
 import DrifterStory from "./pages/DrifterStory";
 import { datasets } from "./datasets";
 import "./index.css";
+
+// The docs section (react-markdown, prism theme, nav manifest, and one lazy
+// chunk per markdown file) loads on demand so the landing/demo bundles don't
+// carry it.
+const DocsLayout = React.lazy(() => import("./docs/DocsLayout"));
+const DocsLanding = React.lazy(() => import("./docs/DocsLanding"));
+const DocPage = React.lazy(() => import("./docs/DocPage"));
+
+const DocsFallback: React.FC = () => (
+  <div className="px-8 py-10 text-sm" style={{ color: "var(--ink-400)" }}>
+    Loading documentation…
+  </div>
+);
 
 // Expose a JSON-safe dataset manifest on `window` so the render-test runner
 // can enumerate every demo without re-parsing the TS source. Only includes
@@ -47,7 +63,27 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
     <BrowserRouter>
       <Routes>
         <Route path="/" element={<Layout />}>
-          <Route index element={<HomePage />} />
+          {/* "Site" pages share the header chrome + a single scroll surface. */}
+          <Route element={<SiteChrome />}>
+            <Route index element={<HomePage />} />
+            <Route path="demos" element={<DemosCatalog />} />
+            <Route path="demos/:datasetId" element={<DemoDetailPage />} />
+            <Route
+              path="docs"
+              element={
+                <Suspense fallback={<DocsFallback />}>
+                  <DocsLayout />
+                </Suspense>
+              }
+            >
+              <Route index element={<DocsLanding />} />
+              {/* Catch-all handles two-segment slugs (api/cli-reference) and
+                  renders a styled 404 for unknown ones. */}
+              <Route path="*" element={<DocPage />} />
+            </Route>
+          </Route>
+
+          {/* Chrome-free fullscreen surfaces. */}
           <Route path="story/drifters" element={<DrifterStory />} />
           <Route path="demo/:datasetId" element={<DemoPage />} />
           {/* Backwards-compat: old `/maplibre/:id` deep-links route to the

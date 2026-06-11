@@ -1,0 +1,89 @@
+import React from "react";
+import { Link, NavLink } from "react-router-dom";
+
+export const GITHUB_URL = "https://github.com/BertCh/spatiotemporal-tiles";
+
+/**
+ * Site-wide top bar shared by the landing page, demo catalog, per-demo pages
+ * and docs. Deliberately quiet — a hairline under the wordmark, hierarchy from
+ * ink weight — matching the rest of the editorial chrome. The fullscreen demo
+ * viewer and the drifters story render outside SiteChrome and never see it.
+ */
+const NAV_ITEMS: { label: string; to: string }[] = [
+  { label: "Demos", to: "/demos" },
+  { label: "Docs", to: "/docs" },
+  { label: "Story", to: "/story/drifters" },
+];
+
+const SiteHeader: React.FC = () => {
+  return (
+    <header
+      className="shrink-0 flex items-center justify-between px-5 sm:px-7 lg:px-12 h-12"
+      style={{
+        background: "var(--page-bg)",
+        borderBottom: "1px solid var(--hairline)",
+      }}
+    >
+      <Link
+        to="/"
+        className="font-display text-sm font-bold tracking-tight"
+        style={{ color: "var(--ink-900)" }}
+      >
+        poopdeck<span style={{ color: "var(--ink-400)" }}>.gl</span>
+      </Link>
+
+      <nav className="flex items-center gap-4 sm:gap-6" aria-label="Site">
+        {NAV_ITEMS.map((item) => (
+          <NavLink
+            key={item.to}
+            to={item.to}
+            className="text-xs sm:text-[13px] font-medium transition-colors"
+            style={({ isActive }) => ({
+              color: isActive ? "var(--accent)" : "var(--ink-500)",
+            })}
+            onMouseOver={(e) => (e.currentTarget.style.color = "var(--accent)")}
+            onMouseOut={(e) => {
+              // NavLink re-applies the style fn on render; restore the muted
+              // ink only when the link isn't the active route.
+              const active = e.currentTarget.getAttribute("aria-current");
+              e.currentTarget.style.color = active
+                ? "var(--accent)"
+                : "var(--ink-500)";
+            }}
+          >
+            {item.label}
+          </NavLink>
+        ))}
+        <a
+          href={GITHUB_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-xs sm:text-[13px] font-medium transition-colors inline-flex items-center gap-1"
+          style={{ color: "var(--ink-500)" }}
+          onMouseOver={(e) => (e.currentTarget.style.color = "var(--accent)")}
+          onMouseOut={(e) => (e.currentTarget.style.color = "var(--ink-500)")}
+        >
+          GitHub
+          <svg
+            viewBox="0 0 24 24"
+            width="11"
+            height="11"
+            aria-hidden="true"
+            style={{ opacity: 0.7 }}
+          >
+            <path
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M7 17L17 7M9 7h8v8"
+            />
+          </svg>
+        </a>
+      </nav>
+    </header>
+  );
+};
+
+export default SiteHeader;

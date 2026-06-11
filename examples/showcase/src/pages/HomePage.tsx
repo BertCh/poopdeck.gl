@@ -1,9 +1,19 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { Link } from "react-router-dom";
 import DeckGL from "@deck.gl/react";
 import { _GlobeView as GlobeView } from "@deck.gl/core";
 import { SolidPolygonLayer } from "@deck.gl/layers";
-import { AnimatedTripsLayer, PlaybackGovernor, TimeController } from "@stt/deck.gl";
+import {
+  AnimatedTripsLayer,
+  PlaybackGovernor,
+  TimeController,
+} from "@stt/deck.gl";
 import type { BufferSource, BufferedRunway } from "@stt/deck.gl";
 import { getDatasetById, navDatasets } from "../datasets";
 import { calculateAnimationSpeed, tileLoadingProps } from "../types";
@@ -101,7 +111,8 @@ const HomePage: React.FC = () => {
       last = now;
       setViewState((vs: any) => {
         const cur = vs.globe;
-        const longitude = ((cur.longitude + DEG_PER_SEC * dt + 540) % 360) - 180;
+        const longitude =
+          ((cur.longitude + DEG_PER_SEC * dt + 540) % 360) - 180;
         return { globe: { ...cur, longitude } };
       });
       raf = requestAnimationFrame(step);
@@ -131,7 +142,10 @@ const HomePage: React.FC = () => {
         timeRange: heroDataset.timeRange,
         // Shared prefetch/concurrency recipe — same budget the demo page
         // computes for this dataset, so the hero streams identically.
-        ...tileLoadingProps(heroDataset.timeWindow ?? 86400000, baseAnimationSpeed),
+        ...tileLoadingProps(
+          heroDataset.timeWindow ?? 86400000,
+          baseAnimationSpeed,
+        ),
         useGlobalBounds: true,
         zoomOverride: 0,
         // Start gating: the governor begins the hero animation once the
@@ -169,8 +183,9 @@ const HomePage: React.FC = () => {
   const featured = navDatasets.slice(0, 6);
 
   return (
+    // Scroll is owned by SiteChrome's container; this page just flows.
     <div
-      className="h-full flex flex-col overflow-y-auto custom-scrollbar"
+      className="min-h-full flex flex-col"
       style={{ background: "var(--page-bg)" }}
     >
       {/* Hero */}
@@ -199,9 +214,9 @@ const HomePage: React.FC = () => {
               >
                 deck.gl
               </a>{" "}
-              layers and a single-file tile format for streaming animated
-              geospatial data — built for things that move: ships, drifters,
-              cars, and anything with a track.
+              layers and a tile format for streaming animated geospatial data —
+              built for things that move: ships, drifters, cars, and anything
+              with a trace.
             </p>
 
             <div className="flex flex-wrap gap-3">
@@ -215,11 +230,18 @@ const HomePage: React.FC = () => {
                 Read the drifters story <span>→</span>
               </Link>
               <Link
-                to="/demo/ocean-drifters"
+                to="/demos"
                 className="inline-flex items-center gap-2 px-5 py-2.5 rounded text-sm font-medium transition-colors"
-                style={{ border: "1px solid var(--hairline)", color: "var(--ink-700)" }}
-                onMouseOver={(e) => (e.currentTarget.style.borderColor = "var(--accent)")}
-                onMouseOut={(e) => (e.currentTarget.style.borderColor = "var(--hairline)")}
+                style={{
+                  border: "1px solid var(--hairline)",
+                  color: "var(--ink-700)",
+                }}
+                onMouseOver={(e) =>
+                  (e.currentTarget.style.borderColor = "var(--accent)")
+                }
+                onMouseOut={(e) =>
+                  (e.currentTarget.style.borderColor = "var(--hairline)")
+                }
               >
                 View demos <span>→</span>
               </Link>
@@ -233,7 +255,9 @@ const HomePage: React.FC = () => {
             <DeckGL
               views={views}
               viewState={viewState}
-              onViewStateChange={(e: any) => setViewState({ globe: e.viewState })}
+              onViewStateChange={(e: any) =>
+                setViewState({ globe: e.viewState })
+              }
               controller={true}
               layers={layers}
               parameters={{ cull: true } as any}
@@ -261,7 +285,7 @@ const HomePage: React.FC = () => {
         <span className="eyebrow">Demos</span>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-6 sm:gap-x-8 gap-y-5 sm:gap-y-6 mt-4 max-w-4xl">
           {featured.map((d) => (
-            <Link key={d.id} to={`/demo/${d.id}`} className="group block">
+            <Link key={d.id} to={`/demos/${d.id}`} className="group block">
               <h3
                 className="text-sm font-medium transition-colors"
                 style={{ color: "var(--ink-900)" }}
@@ -290,8 +314,25 @@ const HomePage: React.FC = () => {
             </Link>
           ))}
         </div>
-      </div>
 
+        {/* Quiet pointers into the full catalog and the documentation. */}
+        <div className="flex flex-wrap gap-x-6 gap-y-2 mt-8">
+          <Link
+            to="/demos"
+            className="text-sm font-medium transition-colors"
+            style={{ color: "var(--accent)" }}
+          >
+            All demos →
+          </Link>
+          <Link
+            to="/docs"
+            className="text-sm font-medium transition-colors"
+            style={{ color: "var(--accent)" }}
+          >
+            Documentation →
+          </Link>
+        </div>
+      </div>
     </div>
   );
 };

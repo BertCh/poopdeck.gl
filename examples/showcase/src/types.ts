@@ -271,6 +271,16 @@ export interface Dataset {
     domain: [number, number];
     colors: ColorRGBA[];
   };
+  /**
+   * Render this `type: 'trips'` dataset with {@link FlowCorridorLayer} instead
+   * of {@link AnimatedTripsLayer}. Use for static-geometry *overview* archives
+   * (flow corridors) whose tiles carry a per-vertex × per-time-bucket value
+   * matrix: the corridor geometry loads ONCE and the renderer animates the
+   * `tripGradient` color by selecting the active bucket column from the
+   * playhead — no per-timestep geometry re-fetch. Pair with `trailLength: 0`
+   * (the matrix drives the animation, not a trailing fade).
+   */
+  flowMatrix?: boolean;
   /** Trip line width — number (in widthUnits) or numeric property name. */
   tripWidth?: number | string;
   /** Clamp trip width to at least this many on-screen pixels. */
@@ -316,6 +326,31 @@ export interface Dataset {
   polygonLineColor?: ColorRGBA;
   /** Polygon fill color — constant RGBA or `colorProperty` for categorical fill. */
   polygonFillColor?: ColorRGBA;
+
+  // ─── space-time cube (time = height) ───────────────────────────────────
+  /**
+   * Render the dataset as a Hägerstrand space-time cube: time maps to
+   * altitude, so trail-mode trips become 3D threads climbing through the
+   * cube (slope = speed) and points become temporal strata. DemoPage adds a
+   * "squash" slider that morphs between the flat map (0) and the full cube
+   * (1) — a single shader uniform, free to animate. MapView demos only.
+   */
+  timeHeight?: {
+    /** Cube height in meters for the full timeRange at squash factor 1. */
+    rangeHeightMeters: number;
+    /** Initial squash factor, 0..1. Defaults to 1 (full cube). */
+    initialFactor?: number;
+    /** Draw a translucent "now" plane rising with the playhead. Default true. */
+    nowPlane?: boolean;
+    /**
+     * Draw the STT tile lattice: each loaded tile rendered as a wireframe
+     * box (spatial footprint × temporal bucket) — the format made visible.
+     * Default true.
+     */
+    tileLattice?: boolean;
+    /** Camera pitch limit (MapView defaults to 60; cubes want more). */
+    maxPitch?: number;
+  };
 
   // ─── summary-tier styling (type: 'summary') ────────────────────────────
   /**

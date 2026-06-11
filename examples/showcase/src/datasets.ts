@@ -548,10 +548,14 @@ const rawDatasets: Dataset[] = [
       ],
     },
     colorMappingDefault: [70, 70, 90, 120],
-    // Two bins of trail: the previous bin lingers half-faded under the
-    // current one, so the network cross-fades instead of strobing.
-    trailLength: 1800000,
-    fadeTrail: true,
+    // Static-geometry overview: the street network is stored ONCE per tile and
+    // carries a per-vertex × per-15-min-bin value matrix. FlowCorridorLayer
+    // animates by selecting the active bucket column from the playhead (with a
+    // CPU cross-fade between adjacent bins) — the geometry never re-fetches as
+    // time advances. trailLength 0 keeps every corridor fully lit; the matrix,
+    // not a trailing fade, carries the pulse.
+    flowMatrix: true,
+    trailLength: 0,
     widthMinPixels: 1.5,
     widthMaxPixels: 4,
     capRounded: false,
@@ -563,6 +567,82 @@ const rawDatasets: Dataset[] = [
           label: '0 → 50+',
           colors: ['#232D82', '#2896C8', '#FAC850', '#FF963C', '#FFFFFF'],
         },
+      ],
+    },
+  },
+  {
+    // ── Space-time cube: time = height ──
+    // The Hägerstrand classic, on the nyc-rideshare POINT archive: every
+    // pickup / en-route sample / dropoff lifts to the altitude of its
+    // timestamp, so the 15 s en-route samples stack into dotted threads
+    // climbing through the cube (steep = stuck in traffic) while the
+    // midnight pickup burst reads as a green stratum at street level.
+    // `cumulative` keeps every played-through point resident below the
+    // rising now-plane AND routes rendering through the consolidated-slab
+    // path (a handful of draw calls at 1M points — the points cube is the
+    // perf-cheap sibling of a PathLayer thread cube, which measured 4 fps
+    // metro-wide). The tile-lattice overlay draws every loaded STT tile as
+    // a wireframe box (spatial footprint × hourly temporal bucket): the
+    // tiling system, made visible.
+    id: 'nyc-taxi-cube',
+    name: 'NYC Taxi Space-Time Cube',
+    sources: ['tlc'],
+    description:
+      'Time as height: a million taxi position samples from New Year’s ' +
+      'morning 2015 stack into a cube as the night unfolds — green pickups, ' +
+      'red dropoffs, gold en-route trails climbing between them. Wireframe ' +
+      'boxes are STT’s space-time tiles streaming in. Source: NYC TLC.',
+    url: '/data/nyc-rideshare/manifest.json',
+    type: 'point',
+    timeRange: {
+      start: 1420070400000,  // 2015-01-01 00:00:00 — midnight, New Year's Eve peak
+      end: 1420080391000,    // 2015-01-01 02:46:31 — same 50K-trip cut as nyc-rideshare
+    },
+    // Cumulative mode: DemoPage widens the loader window to 2× the range, so
+    // the whole night stays resident and the shader does the progressive
+    // reveal; fadeInDuration is the "ink appearing" ramp in sim-ms.
+    cumulative: true,
+    fadeInDuration: 90000,
+    timeWindow: 1800000,
+    targetPlaybackSeconds: 75,
+    initialViewState: {
+      longitude: -73.982,
+      latitude: 40.748,
+      zoom: 11.9,
+      pitch: 60,
+      bearing: -25,
+    },
+    colorProperty: 'status',
+    colorMapping: {
+      pickup: [110, 255, 160, 255],
+      en_route: [255, 220, 140, 220],
+      dropoff: [255, 105, 85, 255],
+    },
+    colorMappingDefault: [170, 170, 190, 180],
+    // World-space dots with a hard pixel floor: a million points must read
+    // as luminous nebula against the dark basemap, and a sub-pixel dot with
+    // no floor simply vanishes at the metro framing (measured: radius 22 m /
+    // minPixels 0 rendered an apparently empty cube at zoom 11.9).
+    radiusUnits: 'meters',
+    radius: 50,
+    radiusScale: 1,
+    radiusMinPixels: 1.6,
+    radiusMaxPixels: 6,
+    opacity: 1,
+    timeHeight: {
+      rangeHeightMeters: 8400, // 2.77 h → ~3 km per hour of city time
+      initialFactor: 1,
+      nowPlane: true,
+      tileLattice: true,
+      maxPitch: 85,
+    },
+    legend: {
+      title: 'Space-Time Cube (height = time)',
+      items: [
+        { color: '#50DC78', label: 'Pickup' },
+        { color: '#FFC46E', label: 'En route' },
+        { color: '#FF5A46', label: 'Dropoff' },
+        { color: '#1FBAD6', label: 'STT tile (space × time box)' },
       ],
     },
   },
