@@ -20,7 +20,12 @@ over time.
 
 Tile payloads are **Apache Arrow IPC** with **GeoArrow**-encoded geometry — a
 standard, columnar, GPU-friendly representation that interops directly with
-`@geoarrow/deck.gl-layers`, Lonboard, and kepler.gl 3.x.
+`@geoarrow/deck.gl-layers` (being renamed `@geoarrow/deck.gl-geoarrow`),
+Lonboard, and kepler.gl 3.x.
+
+**Scope:** STT is for temporally-tiled **vector** data — trajectories, events,
+and time-varying features. Time-varying rasters and datacubes are out of scope;
+use [GeoZarr](https://github.com/zarr-developers/geozarr-spec) or COG for those.
 
 ### Key features
 

@@ -1,5 +1,14 @@
 # Player buffering: coupling the playback clock to data loading
 
+> **Status: SHIPPED 2026-06-09** (design record; the living docs are
+> [`docs/api/playback-governor.md`](../api/playback-governor.md) and
+> [`docs/api/time-controller.md`](../api/time-controller.md)). 2026-06-10
+> follow-ups: frontier-hold fix (tick-driven stall, playhead clamped to the
+> buffered frontier, degraded creep), loop wraps gate via `'seeking'`, QoE
+> counters (`getQoeStats()` + `'playback'` probe channel), tab-refocus delta
+> clamp. Remaining: governor wiring in the MapLibre adapter (its
+> `onTilesetReady`/`onBufferChange` hooks landed 2026-06-10).
+
 Status: IMPLEMENTED (2026-06-09, branch audit-fixes-2026-05) — all workstreams
 (WS-A coverage/runway/cost APIs + throughput EWMA, WS-B PlaybackGovernor +
 buffered-bar/buffering UI + workaround deletion, WS-C scrub/seek + storyboard

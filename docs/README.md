@@ -6,8 +6,8 @@ datasets.
 
 ## Introduction
 
-- [**Concepts**](./intro/concepts.md): Spatiotemporal tiling, temporal LOD,
-  Hilbert ordering, and the streaming render model.
+- [**Concepts**](./intro/concepts.md): Spatiotemporal tiling, the packed
+  container, temporal LOD, blob ordering, and the streaming render model.
 
 ## Architecture
 
@@ -19,6 +19,8 @@ datasets.
   caching model. Machine-checkable manifest schema: [`manifest.schema.json`](./spec/manifest.schema.json).
 - [**Tile payload**](./architecture/data-format.md): Normative spec of the tile
   payload (Apache Arrow IPC + GeoArrow), shared across containers.
+- [**deck.gl Integration**](./architecture/deckgl-integration.md): How
+  `@stt/deck.gl` relates to TileLayer, and where it deliberately departs.
 
 ## API Reference
 
@@ -34,8 +36,12 @@ datasets.
   polygons with optional extrusion.
 - [**AnimatedTripsLayer**](./api/animated-trips-layer.md): "Vehicle moving
   along route" trails with per-vertex timestamps.
+- [**VatTripsLayer**](./api/vat-trips-layer.md): Vertex-attribute-texture
+  trips variant for very high trip counts.
 - [**HeatmapLayer**](./api/heatmap-time-layer.md): GPU-splat temporal
   heatmap with stacked categorical channels.
+- [**H3SummaryLayer**](./api/h3-summary-layer.md): Renders the
+  server-aggregated H3 summary tier as hexagons.
 
 ### Extensions
 
@@ -48,10 +54,13 @@ datasets.
 
 - [**TimeController**](./api/time-controller.md): Animation playback clock
   shared across layers.
+- [**PlaybackGovernor**](./api/playback-governor.md): Buffering state machine
+  that gates the clock on a buffered runway (stall/resume, seek gates,
+  Auto speed).
 
 ### Reader (`@stt/core`)
 
-- [**Tile decoder**](./api/stt-loader.md): The `TileDecoder` interface
+- [**Tile decoding**](./api/stt-loader.md): The `TileDecoder` interface
   plus the inline / worker-pool implementations.
 - [**SpatiotemporalTileset**](./api/spatiotemporal-tileset.md): Tile
   lifecycle, viewport + time-aware selection, and prefetching.
@@ -71,8 +80,8 @@ datasets.
 
 ## Guides
 
-- [**Data Generation**](./guides/data-generation.md): Building `.stt`
-  archives with `stt-generate` for the included showcase datasets, or
+- [**Data Generation**](./guides/data-generation.md): Building packed
+  datasets with `stt-generate` for the included showcase datasets, or
   with `stt-build` for your own GeoParquet input.
 - [**Building from Python**](./guides/python.md): GeoPandas, DuckDB, or
   pyarrow recipes for getting your data into GeoParquet so `stt-build`

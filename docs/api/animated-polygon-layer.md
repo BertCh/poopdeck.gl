@@ -15,10 +15,10 @@ import { AnimatedPolygonLayer } from "@stt/deck.gl";
 
 const layer = new AnimatedPolygonLayer({
   id: "covid-counties",
-  data: "https://example.com/covid-counties.stt",
+  data: "https://example.com/covid-counties/manifest.json",
   currentTime: 1672531200000,
   timeWindow: 86400000 * 30, // 30 days
-  fillColor: "status", // Use categorical property
+  fillColor: "status", // categorical property name
   colorPalette: [
     [255, 255, 178, 180],
     [254, 204, 92, 180],
@@ -38,9 +38,7 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 | Property          | Type                   | Default    | Description                             |
 | :---------------- | :--------------------- | :--------- | :-------------------------------------- |
 | `filled`          | `boolean`              | `true`     | Whether to fill polygons.               |
-| `stroked`         | `boolean`              | `false`    | Whether to draw polygon outlines.       |
 | `extruded`        | `boolean`              | `false`    | Whether to extrude polygons in 3D.      |
-| `lineWidthUnits`  | `'pixels' \| 'meters'` | `'pixels'` | Units for line width (if stroked).      |
 | `fadeInDuration`  | `number`               | `500`      | Duration (ms) for polygons to fade in.  |
 | `fadeOutDuration` | `number`               | `500`      | Duration (ms) for polygons to fade out. |
 
@@ -48,15 +46,45 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 
 | Property       | Type               | Default              | Description                                                                     |
 | :------------- | :----------------- | :------------------- | :------------------------------------------------------------------------------ |
-| `fillColor`    | `Color \| string`  | `[255, 140, 0, 180]` | Fill color. Can be a constant RGBA or a property name for categorical coloring. |
-| `lineColor`    | `Color \| string`  | `[0, 0, 0, 255]`     | Line color (if stroked).                                                        |
-| `lineWidth`    | `number \| string` | `1`                  | Line width.                                                                     |
-| `elevation`    | `number \| string` | `0`                  | Elevation for extruded polygons.                                                |
-| `colorPalette` | `Color[]`          | D3 category palette  | Color palette for categorical properties.                                       |
+| `fillColor`    | `Color \| string`  | `[255, 140, 0, 180]` | Fill color: constant RGBA, or a property name for categorical coloring.        |
+| `getFillColor` | `Color \| string \| null` | `null`        | Upstream-vocabulary alias of `fillColor`. Accepts a constant or a property-column NAME — NOT a function accessor (binary tiles can't run per-feature JS; a function warns once and falls back). When set, it wins. |
+| `elevation`    | `number \| string` | `0`                  | Elevation for extruded polygons: constant, or a numeric property name.          |
+| `getElevation` | `number \| string \| null` | `null`        | Upstream-vocabulary alias of `elevation` (same domain rules).                   |
+| `colorPalette` | `Color[]`          | 10-color palette     | Palette for categorical `fillColor` (GPU lookup, up to 4096 entries).           |
 
-## Performance
+### Deprecated (dead) outline props
 
-Time filtering runs on the **GPU**. `SolidPolygonLayer` can't take the standard `TimeFilterExtension`, so the layer wires a dedicated [`PolygonTimeFilterExtension`](./time-filter-extension.md) that filters polygons in the shader — the CPU only updates one uniform per frame. Categorical fill colors are likewise lifted to the GPU via `CategoryColorExtension`. Geometry and color attributes are bound straight from the Arrow-backed tile buffers, one cached sublayer per tile.
+`stroked`, `lineWidthUnits`, `lineWidth`, and `lineColor` are **dead props**: outline rendering was never implemented (the sublayer is a fill-only `SolidPolygonLayer`) and setting them has no visual effect. They remain on the type for compatibility; a runtime warning fires when set. They will be removed.
+
+## Architecture & performance
+
+- **GPU time filtering**: the shared
+  [`TimeFilterExtension`](./time-filter-extension.md) runs directly on
+  `SolidPolygonLayer` — polygons upload once per tile and time-window
+  changes only update uniforms. (`PolygonTimeFilterExtension` survives only
+  as a deprecated alias.) Categorical fill colors likewise lift to the GPU
+  via [`CategoryColorExtension`](./category-color-extension.md).
+- **Per-vertex attribute expansion**: `SolidPolygonLayer`'s fill model is
+  non-instanced, so the extension attributes resolve to per-vertex there
+  and the layer expands start/end times, category indices, and per-feature
+  elevations across each feature's vertex range — once per tile prep,
+  cached, never on the draw path.
+- **Pre-baked triangles (MLT-style)**: when the archive was built with
+  `stt-build --pre-tessellate`, the tile's `triangles` index buffer feeds
+  `SolidPolygonLayer` directly (`_normalize: false`), skipping deck.gl's
+  CPU earcut at tile-arrival time entirely. **This is also the only path
+  that renders polygon holes correctly** — `BinaryFeatures` collapses ring
+  boundaries into per-feature vertex runs (see
+  [Binary Features](./binary-features.md)), so on the non-pre-tessellated
+  path interior rings are not distinguished from the outer ring and
+  polygons with holes will mis-tessellate. Build polygon archives with
+  `--pre-tessellate`.
+- **Known limitation (tile-seam overdraw)**: polygons spanning a tile
+  boundary are split across tiles and drawn by separate sublayers. With
+  `opacity < 1` the two halves blend twice along the seam; extruded
+  polygons can z-fight. Prefer fully-opaque fills.
+
+The sublayer short id for `_subLayerProps` overrides is **`polygons`**: `_subLayerProps: { polygons: { type: MyLayer, ... } }`.
 
 ## Source
 

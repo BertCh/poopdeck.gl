@@ -1,8 +1,9 @@
 # Binary Features Format
 
 GPU-optimized binary columnar representation that the tile decoder produces.
-This format aligns with deck.gl's binary data interface and loaders.gl's
-`BinaryFeatures` specification, with STT-specific temporal extensions.
+This format is modeled on deck.gl's binary data interface and loaders.gl's
+`BinaryFeatures` specification, with STT-specific temporal extensions (and a
+few deliberate divergences — see "loaders.gl alignment caveats" below).
 
 It's what every `Tile.layers[i].features` value carries — the deck.gl
 layers in `@stt/deck.gl` consume it directly, and so do the
@@ -22,7 +23,7 @@ interface BinaryFeatures {
   positions: Float64Array;
 
   /**
-   * Line / polygon feature boundaries.
+   * Per-FEATURE vertex boundaries for lines/polygons.
    * Length = featureCount + 1, last value = total position count.
    * Pass to deck.gl PathLayer/PolygonLayer as `startIndices`.
    */
@@ -50,14 +51,23 @@ interface BinaryFeatures {
 
   /**
    * Per-vertex timestamps for LineStrings, relative to timeOffset.
-   * AnimatedTripsLayer uses this for accurate "vehicle at position"
-   * animation instead of linear start/end interpolation.
+   * Aligns 1:1 with positions. AnimatedTripsLayer uses this for accurate
+   * "vehicle at position" animation instead of linear start/end
+   * interpolation; VatTripsLayer for time-driven resampling.
    */
   vertexTimestamps?: Float32Array;
 
+  /**
+   * Per-vertex scalar values (e.g. sea-surface temperature on drifter
+   * tracks). Aligns 1:1 with positions; NaN marks a vertex with no value.
+   * AnimatedTripsLayer's gradientProperty maps these through a color ramp
+   * to shade the line along its length.
+   */
+  vertexValues?: Float32Array;
+
   /* ───── Pre-tessellated polygons (--pre-tessellate) ─────────────── */
 
-  /** Tile-global earcut indices. Groups of 3 per triangle. */
+  /** Tile-global triangle indices. Groups of 3 per triangle. */
   triangles?: Uint32Array;
 
   /** Per-feature offsets into `triangles`. Length = featureCount + 1. */
@@ -70,7 +80,7 @@ interface BinaryFeatures {
 
   /** Categorical properties as indices into a per-tile lookup. */
   categoricalProps: Record<string, {
-    /** Uint16 supports up to 65535 categories per property per tile. */
+    /** Uint16; 0xffff is the null sentinel. Up to 65535 categories per property per tile. */
     indices: Uint16Array;
     categories: string[];
   }>;
@@ -79,21 +89,64 @@ interface BinaryFeatures {
 
 ## Why a custom binary shape
 
-1. **Zero-copy GPU upload**: typed arrays go straight to GPU buffers.
+1. **Zero-copy GPU upload**: typed arrays go straight to GPU buffers. The
+   coordinate/index arrays are views into the tile's Arrow IPC buffer
+   (archives written with the aligned layer frame place every IPC stream
+   on an 8-byte boundary precisely so these views never copy).
 2. **Cache-friendly**: columnar layout iterates fast.
 3. **Transferable**: typed-array buffers transfer (not copy) from the
-   worker decoder to the main thread.
+   worker decoder to the main thread — including `vertexValues` and the
+   raw per-layer Arrow IPC bytes (`Layer.arrowIpc`).
 4. **Bake-time tessellation**: when an archive is built with
    `--pre-tessellate`, polygon triangles arrive ready to draw — the
-   renderer never runs earcut at tile-arrival time.
+   renderer never runs earcut at tile-arrival time. The Rust writer stores
+   feature-LOCAL indices; the decoder pre-shifts them by each feature's
+   `startIndices[i]` so the buffer is directly drawable.
+
+## Polygon rings
+
+`startIndices` is **feature-level**: the decoder collapses the Arrow
+polygon's two offset levels (feature → ring, ring → vertex) into one
+per-feature vertex run. **Ring boundaries inside a feature are not
+preserved** — there is no equivalent of loaders.gl's
+`polygonIndices`/`primitivePolygonIndices` pair.
+
+Consequences:
+
+- For single-ring polygons (what `stt-build` typically emits) this is
+  lossless.
+- Polygons **with holes** only render correctly on the pre-tessellated
+  path (`--pre-tessellate`), where hole-aware triangulation already
+  happened at build time and ships in `triangles`. On the
+  non-pre-tessellated path, a runtime tessellator sees the outer ring and
+  holes as one vertex run and will mis-tessellate.
+
+## loaders.gl alignment caveats
+
+The shape is *inspired by* loaders.gl `BinaryFeatures`, not conformant:
+
+- loaders.gl splits points/lines/polygons into three parallel objects;
+  STT carries ONE geometry type per layer with a `geometryType` tag.
+- loaders.gl positions are `{ value, size }` accessor objects; STT uses
+  bare typed arrays plus `positionDimensions`.
+- loaders.gl's `polygonIndices` vs `primitivePolygonIndices` ring
+  distinction is absent (see above) — `startIndices` matches deck.gl's
+  binary-attribute convention instead.
+- `numericProps` values are plain `Float32Array`s, not `{ value, size }`
+  wrappers.
+
+If you need a standards-track hand-off instead, use
+`toGeoArrowTable(layer)` (see [Tile decoding](./stt-loader.md)) — each
+layer also carries its original GeoArrow record batch.
 
 ## Float32 precision
 
-`startTimes`, `endTimes`, and `vertexTimestamps` are stored relative to a
-per-tile `timeOffset` so they fit within f32's exactly-representable
-integer range. The `TimeFilterExtension` applies the same offset to its
-`currentTime` shader uniform; if you build a custom layer, pass
-`tile.timeOffset` through unchanged.
+`startTimes`, `endTimes`, `vertexTimestamps` (and the comparison side of
+every shader filter) are stored relative to a per-tile `timeOffset` so they
+fit within f32's exactly-representable integer range. The
+[`TimeFilterExtension`](./time-filter-extension.md) applies the same offset
+to its `currentTime` uniform; if you build a custom layer, pass
+`features.timeOffset` through unchanged.
 
 ## Using with deck.gl directly
 
@@ -134,6 +187,14 @@ new PathLayer({
   getWidth: 2,
 });
 ```
+
+## Reading one feature back
+
+The render path never materializes per-feature objects; for picking,
+tooltips, and debugging use `getFeatureProperties(features, index)` from
+`@stt/core` — it decodes ONE feature's columns into a plain object
+(`id`, absolute `start_time`/`end_time`, every numeric and categorical
+column; categorical nulls decode to `null`).
 
 ## Source
 

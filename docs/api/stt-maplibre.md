@@ -2,16 +2,18 @@
 
 A MapLibre GL custom-layer adapter for SpatioTemporal Tiles archives.
 
-This package lets a vanilla MapLibre GL site consume `.stt` archives without
+This package lets a vanilla MapLibre GL site consume STT archives without
 pulling in deck.gl. It implements MapLibre's `CustomLayerInterface` and renders
 STT tiles in raw WebGL, with the same archive reader and tileset scheduler the
-deck.gl layers use under the hood.
+deck.gl layers use under the hood — including the globally-coalesced batch
+loading path (one range-coalesced request per viewport fill, incremental
+per-tile delivery, giant-parent-tile gating, throughput-driven ETAs).
 
 If you can take a deck.gl dependency, [`@stt/deck.gl`](./spatiotemporal-layer.md)
 still has a few advantages — rounded joints/dashes, GPU picking, GPU-side
 category-color extension, cross-tile consolidation. The MapLibre adapter trades
 those off for a much smaller bundle and the ability to interleave between
-native MapLibre style layers. It now covers every layer kind the deck.gl
+native MapLibre style layers. It covers every layer kind the deck.gl
 adapter does: points, lines, polygons (with optional stroke + extrusion),
 animated trips, and density heatmaps.
 
@@ -23,7 +25,16 @@ pnpm add @stt/maplibre maplibre-gl
 npm i @stt/maplibre maplibre-gl
 ```
 
-`maplibre-gl` is a peer dependency; any v3 / v4 / v5 release works.
+`maplibre-gl` is a peer dependency, pinned **`^3 || ^4`**.
+
+> **MapLibre v5 is NOT yet supported.** v5 replaced the custom layer's
+> positional `render(gl, matrix)` signature with a single args object and
+> changed the mercator matrix semantics (maplibre-gl-js#3854); this adapter's
+> render path would receive the args object where it expects the matrix and
+> draw nothing. A v5 port means accepting the args object, injecting
+> `args.shaderData.vertexShaderPrelude` into each vertex shader, and
+> projecting via `projectTile()` — the same prelude path that would unlock
+> globe rendering. Until that lands, stay on v4 for STT layers.
 
 ## Layer classes
 
@@ -34,8 +45,8 @@ one geometry type.
 | Class | Renders | Notes |
 |-------|---------|-------|
 | `STTPointLayer` | Point | Circular billboards with antialiased disc fragment shader |
-| `STTLineLayer` | LineString | Screen-space thick lines, constant pixel width across zoom |
-| `STTPolygonLayer` | Polygon | Filled, earcut triangulated, optional stroke + extrusion |
+| `STTLineLayer` | LineString | Instanced segment quads, constant pixel width across zoom |
+| `STTPolygonLayer` | Polygon | Filled, earcut triangulated (or pre-baked triangles), optional stroke + extrusion |
 | `STTTripsLayer` | LineString | Trailing-fade trajectories using per-vertex timestamps |
 | `STTHeatmapLayer` | Point | Two-pass FBO density heatmap with colour-ramp lookup |
 
@@ -57,7 +68,7 @@ const map = new maplibregl.Map({
 
 const sttLayer = new STTPointLayer({
   id: 'earthquakes',
-  url: '/data/earthquakes.stt',
+  url: '/data/earthquakes/manifest.json',
   currentTime: Date.now(),
   timeWindow: 24 * 60 * 60 * 1000, // 1 day
   color: [0.99, 0.5, 0.2, 1.0],
@@ -78,7 +89,7 @@ import { STTTripsLayer } from '@stt/maplibre';
 
 const trips = new STTTripsLayer({
   id: 'satellite-trips',
-  url: '/data/satellites.stt',
+  url: '/data/satellites/manifest.json',
   currentTime: Date.parse('2024-01-01T00:00:00Z'),
   timeWindow: 30 * 60 * 1000,
   trailLength: 5 * 60 * 1000,
@@ -95,7 +106,7 @@ import { STTHeatmapLayer } from '@stt/maplibre';
 
 const heat = new STTHeatmapLayer({
   id: 'pickup-heat',
-  url: '/data/taxi.stt',
+  url: '/data/taxi/manifest.json',
   currentTime: Date.parse('2024-01-01T18:00:00Z'),
   timeWindow: 30 * 60 * 1000,
   radiusPixels: 40,
@@ -103,6 +114,25 @@ const heat = new STTHeatmapLayer({
   weightProperty: 'passenger_count',
 });
 map.addLayer(heat);
+```
+
+### Playback governor wiring
+
+The maplibre layers expose the same buffer-model hooks as the deck.gl
+layers, so a [`PlaybackGovernor`](./playback-governor.md) (from
+`@stt/deck.gl`) can gate playback against them:
+
+```ts
+const layer = new STTTripsLayer({
+  id: 'trips',
+  url,
+  currentTime,
+  timeWindow,
+  onTilesetReady: (tileset) => governor.setSource(tileset),
+  onBufferChange: (runway) => governor.notifyBufferChange(runway),
+});
+// or later, pull-style:
+const tileset = layer.getTileset(); // undefined until metadata resolves
 ```
 
 ## Options
@@ -116,19 +146,21 @@ map.addLayer(heat);
 | `currentTime` | `number` | — | Initial Unix-ms time |
 | `timeWindow` | `number` | — | Full window in ms; features overlapping `[t - w/2, t + w/2]` are visible |
 | `autoRepaint` | `boolean` | `true` | Call `map.triggerRepaint()` from `setCurrentTime` |
-| `maxRequests` | `number` | tileset default | Max in-flight tile requests |
-| `enablePrefetch` | `boolean` | tileset default | Predictive prefetch for animation |
-| `prefetchAhead` | `number` | tileset default | Lookahead in ms of sim time |
-| `prefetchSteps` | `number` | tileset default | Number of prefetch time buckets |
+| `maxRequests` | `number` | `24` | Single concurrency knob: threaded into the archive's range coalescer as its in-flight HTTP Range ceiling (and the tileset's per-tile/prefetch fan-out) |
+| `enablePrefetch` | `boolean` | tileset default (`true`) | Predictive prefetch for animation |
+| `prefetchAhead` | `number` | tileset default (30 s) | Lookahead in ms of sim time |
+| `prefetchSteps` | `number` | tileset default (4) | Number of prefetch time buckets |
 | `fadeInDuration` | `number` | 10 % of `timeWindow` | Leading-edge alpha ramp (ms) |
 | `fadeOutDuration` | `number` | 10 % of `timeWindow` | Trailing-edge alpha ramp (ms) |
 | `softTimeWindow` | `boolean` | `true` | Legacy shortcut — `false` zeroes the fades |
+| `onTilesetReady` | `(tileset) => void` | — | Fired once per archive init with the live tileset (satisfies the governor's `BufferSource` contract) |
+| `onBufferChange` | `(runway: BufferedRunway) => void` | — | Buffered-runway threshold events from the tileset's coverage index, forwarded as-is |
 
 ### `STTPointLayer`
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `color` | `[r, g, b, a]` 0–1 | `[0.31, 0.76, 0.97, 1.0]` | Constant fill colour |
+| `color` | `[r, g, b, a]` | `[0.31, 0.76, 0.97, 1.0]` | Constant fill colour. 0–1 floats or 0–255 ints — the range is auto-detected (any RGB channel > 1 ⇒ 0–255), so deck.gl-style colors port directly |
 | `colorProperty` | `string` | — | Categorical property → palette lookup |
 | `colorPalette` | `RGBA8[]` | 10-stop categorical | Palette for `colorProperty` (0–255) |
 | `radius` | `number` | `4` | Constant pixel radius |
@@ -139,7 +171,7 @@ map.addLayer(heat);
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `color` | `[r, g, b, a]` 0–1 | `[0.31, 0.76, 0.97, 1.0]` | Constant stroke colour |
+| `color` | `[r, g, b, a]` | `[0.31, 0.76, 0.97, 1.0]` | Constant stroke colour (range auto-detected) |
 | `colorProperty` | `string` | — | Categorical property → palette lookup |
 | `colorPalette` | `RGBA8[]` | 10-stop categorical | Palette for `colorProperty` |
 | `width` | `number` | `2` | Constant pixel width |
@@ -150,12 +182,12 @@ map.addLayer(heat);
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `color` | `[r, g, b, a]` 0–1 | `[0.99, 0.55, 0.2, 0.7]` | Constant fill colour |
+| `color` | `[r, g, b, a]` | `[0.99, 0.55, 0.2, 0.7]` | Constant fill colour (range auto-detected) |
 | `fillColorProperty` | `string` | — | Categorical fill property → palette lookup |
 | `colorPalette` | `RGBA8[]` | 10-stop categorical | Palette for `fillColorProperty` |
 | `filled` | `boolean` | `true` | Render the polygon fill |
 | `stroked` | `boolean` | `false` | Draw a stroked outline over each ring |
-| `lineColor` | `[r, g, b, a]` 0–1 | `[0, 0, 0, 1]` | Outline colour (used with `stroked`) |
+| `lineColor` | `[r, g, b, a]` | `[0, 0, 0, 1]` | Outline colour (used with `stroked`) |
 | `lineWidth` | `number` | `1` | Outline pixel width |
 | `extruded` | `boolean` | `false` | Raise the top of the polygon to `elevation` and draw side walls |
 | `elevation` | `number \| string` | `0` | Constant elevation, or numeric property name |
@@ -165,7 +197,7 @@ map.addLayer(heat);
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `color` | `[r, g, b, a]` 0–1 | `[0.99, 0.5, 0.36, 1.0]` | Constant trail colour |
+| `color` | `[r, g, b, a]` | `[0.99, 0.5, 0.36, 1.0]` | Constant trail colour (range auto-detected) |
 | `colorProperty` | `string` | — | Categorical trail colour property |
 | `colorPalette` | `RGBA8[]` | 5-stop categorical | Palette for `colorProperty` |
 | `width` | `number` | `2` | Constant pixel width |
@@ -196,31 +228,34 @@ Each layer exposes lifecycle helpers in addition to `CustomLayerInterface`:
 | `setCurrentTime(t: number)` | Update the time the next frame's filter compares against |
 | `setTimeWindow(ms: number)` | Replace the time window |
 | `setColor([r,g,b,a])` | (Per-class) Update fill / stroke / trail colour |
-| `setRadius(px: number)` | (Point) Update billboard radius |
+| `setRadius(px: number)` | (Point, Heatmap) Update billboard / splat radius |
 | `setWidth(px: number)` | (Line, Trips) Update stroke width |
 | `setTrailLength(ms: number)` | (Trips) Update the trail length |
-| `setStroked(b: boolean)` | (Polygon) Toggle the stroke pass |
-| `setExtruded(b: boolean)` | (Polygon) Toggle extrusion |
+| `setStroked(b: boolean)` | (Polygon) Toggle the stroke pass. Rebuilds the per-tile GPU caches (stroke instance buffers are baked in at build time), so expect a one-off CPU re-triangulation cost on toggle |
+| `setExtruded(b: boolean)` | (Polygon) Toggle extrusion. Same cache rebuild as `setStroked` |
 | `setColorRange(range)` | (Heatmap) Replace the colour ramp |
-| `ready()` | `Promise<ArchiveMetadata>` resolved when the archive header is parsed |
+| `ready()` | `Promise<ArchiveMetadata>` resolved when the archive metadata is parsed |
+| `getTileset()` | The live `SpatiotemporalTileset`, or `undefined` before metadata resolves (subscribe via `onTilesetReady` to avoid polling) |
 
 ## How it works
 
 1. The constructor opens an `STTArchive` against the URL. No fetches happen yet.
 2. MapLibre calls `onAdd(map, gl)` when the layer is added. The adapter
    compiles its shader, requests `archive.getMetadata()` asynchronously, and
-   builds a `SpatiotemporalTileset` configured with the archive's
-   `minZoom` / `maxZoom` / `temporalBucketMs`.
-3. On every frame MapLibre calls `render(gl, matrix)`. The adapter feeds the
-   current viewport bounds + `currentTime` to the tileset, which decides which
-   tiles to load / unload.
+   builds a [`SpatiotemporalTileset`](./spatiotemporal-tileset.md) configured
+   with the archive's `minZoom` / `maxZoom` / `temporalBucketMs` — wiring the
+   batched `getTiles` path, `getTileByteSize`, throughput, and buffer-change
+   forwarding exactly like the deck.gl layer does.
+3. On every frame MapLibre calls `render(gl, matrix)` (the v3/v4 signature).
+   The adapter feeds the current viewport bounds + `currentTime` to the
+   tileset, which decides which tiles to load / unload.
 4. Each loaded tile is pre-projected to mercator unit-square coordinates *once*
-   on the CPU, uploaded into a tile-scoped `WebGLBuffer`, and reused across
-   frames. The window-mode time filter is a per-feature `[startTime, endTime]`
-   pair compared against window uniforms in the vertex shader; trips mode
-   uses per-vertex timestamps and a trail-length uniform; the heatmap layer
-   renders points into an FBO additively, then samples it through a colour
-   ramp on a full-screen quad.
+   on the CPU, uploaded into a tile-scoped `WebGLBuffer` (with a cached VAO
+   where available), and reused across frames. The window-mode time filter is
+   a per-feature `[startTime, endTime]` pair compared against window uniforms
+   in the vertex shader; trips mode uses per-vertex timestamps and a
+   trail-length uniform; the heatmap layer renders points into an FBO
+   additively, then samples it through a colour ramp on a full-screen quad.
 
 ## Compared to deck.gl
 
@@ -229,39 +264,48 @@ Each layer exposes lifecycle helpers in addition to `CustomLayerInterface`:
 | Point billboards | ✓ | ✓ |
 | Line stroke (constant px) | ✓ | ✓ |
 | Filled polygons | ✓ (single-ring) | ✓ |
-| Stroked / extruded polygons | ✓ | ✓ |
+| Stroked / extruded polygons | ✓ | extruded ✓ (stroke: no) |
 | Trip animation (per-vertex timestamps) | ✓ | ✓ |
-| Heatmaps | ✓ (two-pass FBO) | ✓ (`HeatmapLayer`) |
+| Heatmaps | ✓ (two-pass FBO) | ✓ (`AnimatedHeatmapLayer`) |
 | Per-feature categorical colour | ✓ (CPU-expanded RGBA attribute) | ✓ (`CategoryColorExtension`, GPU palette texture) |
+| Batched/coalesced tile loading | ✓ | ✓ |
+| PlaybackGovernor hooks | ✓ (`onTilesetReady`/`onBufferChange`/`getTileset`) | ✓ |
 | Rounded joints / caps | — | ✓ |
 | GPU picking | — | ✓ |
-| Cross-tile consolidation | — | ✓ |
-| Bundle size (peer-min) | ~35 kB gzipped | ~250 kB gzipped (with deck.gl) |
+| Globe projection | — | ✓ (GlobeView) |
 | Interleaves with MapLibre style layers | ✓ | partially (overlay) |
 
 ## Limitations
 
-- **Single-ring polygons only.** Holes are not yet supported. The current
-  `stt-build` pipeline emits single-ring polygons so the limitation hasn't
-  bitten us in practice.
+- **MapLibre v5 unsupported** (see the install note above).
+- **Single-ring polygons only.** Holes are not preserved in
+  `BinaryFeatures` (see [Binary Features](./binary-features.md)); with
+  pre-baked triangles (`--pre-tessellate`) hole-aware meshes draw
+  correctly, but the runtime-earcut path treats each feature as one ring.
 - **No picking.** MapLibre's `queryRenderedFeatures` doesn't reach into
   custom layers; you'd have to plumb pickable hit-testing yourself.
 - **Categorical colours expand on the CPU.** Each tile builds a per-vertex
   RGBA buffer (Uint8 normalised); the deck.gl adapter does the lookup
   GPU-side via a palette texture. Hot-swapping palettes therefore requires
   re-uploading the colour attribute on the MapLibre side.
-- **WebGL1 fallback only for ≤ 65 535 vertices per tile.** Lines and polygons
-  that triangulate above that threshold need 32-bit indices, which require
-  WebGL2 or the `OES_element_index_uint` extension. The adapter probes for
-  the extension on `onAdd` and drops tiles that exceed the cap when it isn't
-  available, with a console warning.
-- **No tile consolidation.** Each tile is one draw call (heatmap is
-  one draw call per tile in the accumulation pass, then a fullscreen ramp
-  draw). Fine for the scaffold; bring `@stt/deck.gl` if you need
-  cross-tile consolidation for hundreds of tiles per frame.
+- **Polygon tiles need 32-bit indices above 65,535 vertices.** Only the
+  polygon fill path uses element indices; WebGL2 supports `UNSIGNED_INT`
+  natively, WebGL1 needs `OES_element_index_uint`. On a WebGL1 context
+  without the extension, polygon tiles exceeding the cap are dropped with
+  a console warning. Lines/trips/points are instanced or unindexed and
+  unaffected.
+- **Instancing required for lines/trips/polygon-stroke.** WebGL2 core, or
+  `ANGLE_instanced_arrays` on WebGL1; where missing, those tiles are
+  skipped with a warning.
+- **No tile consolidation.** Each tile is one draw call (heatmap: one
+  accumulate draw per tile + a fullscreen ramp draw). Bring `@stt/deck.gl`
+  if you need cross-tile consolidation for hundreds of tiles per frame.
+- **Float32 mercator positions** cap usable zoom around z15 (~meter-scale
+  quantization in dense city data); the deck.gl side is immune via its
+  fp64 position split.
 
 ## Live demo
 
-The repo's showcase app has a `/maplibre/:datasetId` route that renders any
-supported dataset through this adapter — run `pnpm dev` from
-`examples/showcase` and click "MapLibre Demo" in the sidebar.
+The repo's showcase app renders any supported dataset through this adapter
+via the renderer toggle on each demo page (the old `/maplibre/:datasetId`
+deep links still resolve) — run `pnpm dev` from `examples/showcase`.

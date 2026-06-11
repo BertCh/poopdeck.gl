@@ -1,8 +1,8 @@
 # SpatioTemporalLayer
 
-The `SpatioTemporalLayer` is the base layer for visualizing spatiotemporal data from `.stt` archives. It handles the complex logic of data loading, caching, time synchronization, and coordinate decoding, allowing subclasses to focus purely on rendering.
+The `SpatioTemporalLayer` is the base layer for visualizing spatiotemporal data from STT archives. It handles data loading, caching, time synchronization, and coordinate decoding, allowing subclasses to focus purely on rendering.
 
-It follows the **[Tileset](https://loaders.gl/modules/tiles/docs/api-reference/tileset-3d)** pattern from loaders.gl and integrates seamlessly with deck.gl's composite layer system.
+It follows the deck.gl [TileLayer](https://deck.gl/docs/api-reference/geo-layers/tile-layer) architecture: a [`SpatiotemporalTileset`](./spatiotemporal-tileset.md) (from `@stt/core`) manages tile selection and request scheduling, while the layer turns visible tiles into sublayers.
 
 ## Installation
 
@@ -24,6 +24,8 @@ class MyCustomLayer extends SpatioTemporalLayer {
 }
 ```
 
+Note there is no `DataT` generic, unlike upstream composite layers: tiles are binary (Arrow-backed columnar buffers), so there is no per-row datum type for accessors to receive — `data` is always the archive URL string. Third parties subclass via `class My extends SpatioTemporalLayer<MyExtraProps>`.
+
 ## Properties
 
 Inherits from all [CompositeLayer](https://deck.gl/docs/api-reference/core/composite-layer) properties.
@@ -32,41 +34,72 @@ Inherits from all [CompositeLayer](https://deck.gl/docs/api-reference/core/compo
 
 | Property         | Type                              | Default       | Description                                                                         |
 | :--------------- | :-------------------------------- | :------------ | :---------------------------------------------------------------------------------- |
-| `data`           | `string`                          | `""`          | URL to the `.stt` archive.                                                          |
-| `currentTime`    | `number`                          | `Date.now()`  | Current timestamp in Unix milliseconds.                                             |
+| `data`           | `string`                          | `""`          | URL to the STT archive (the packed manifest URL).                                   |
+| `currentTime`    | `number`                          | `0`           | Current timestamp in Unix milliseconds.                                             |
 | `timeWindow`     | `number`                          | `86400000`    | Time window duration in milliseconds (1 day default).                               |
 | `timeRange`      | `{ start: number; end: number }`  | `null`        | Full time range of the dataset (for precision handling).                            |
-| `timeController` | `TimeController`                  | `undefined`   | Optional `TimeController` instance to synchronize animation state.                  |
+| `timeController` | `TimeController`                  | `null`        | Optional [`TimeController`](./time-controller.md) instance to synchronize animation state. |
 
 ### Tile Loading Options
 
-| Property           | Type     | Default       | Description                                                                |
-| :----------------- | :------- | :------------ | :------------------------------------------------------------------------- |
-| `maxRequests`      | `number` | `12`          | Maximum concurrent tile requests. Sits at 12 because browsers cap concurrent connections per origin around there. |
-| `debounceTime`     | `number` | `0`           | Debounce time (ms) for viewport updates. Set to 0 for responsive animation. |
-| `maxCacheSize`     | `number` | `2000`        | Maximum number of tiles to keep in the LRU cache.                          |
+| Property           | Type     | Default        | Description                                                                |
+| :----------------- | :------- | :------------- | :-------------------------------------------------------------------------- |
+| `maxRequests`      | `number` | `24`           | Maximum concurrent in-flight HTTP Range requests. This is the SINGLE concurrency knob: it is threaded into the archive's range coalescer as `maxConcurrentRequests`, so it bounds actual fetch concurrency. 24 is tuned for HTTP/2/3 multiplexing against object storage (R2 caps ~75 streams/connection) — high enough to fill a viewport in one round-trip, low enough to stay under per-connection stream caps. |
+| `debounceTime`     | `number` | `0`            | Debounce time (ms) for viewport updates. 0 keeps animation responsive.     |
+| `maxCacheSize`     | `number` | `2000`         | Maximum number of tiles to keep in the LRU cache.                          |
+| `maxCacheByteSize` | `number` | `2147483648`   | Maximum decoded cache size in bytes (2 GiB).                               |
 
 ### Prefetch Options
 
 | Property        | Type      | Default | Description                                                   |
 | :-------------- | :-------- | :------ | :------------------------------------------------------------ |
 | `enablePrefetch`| `boolean` | `true`  | Enable predictive prefetching for smooth animation playback.  |
-| `prefetchAhead` | `number`  | `30000` | How far ahead to prefetch in animation time (milliseconds).   |
+| `prefetchAhead` | `number`  | `30000` | How far ahead to prefetch in animation time (milliseconds). Sized for a few real-time seconds of buffer; the tileset additionally scales lookahead by the measured playback speed. |
 | `prefetchSteps` | `number`  | `4`     | Number of time-window steps to prefetch ahead.                |
+
+### Tier dispatch
+
+| Property | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `tier` | `'auto' \| 'summary' \| 'raw'` | `'auto'` | Which tier the tileset draws from when the archive carries a server-aggregated summary tier (`stt-build --summary-tier`). `'auto'` uses the summary tier at zooms inside its `[minZoom, maxZoom]` band and the raw tier above it, so a wide low-zoom view streams a few thousand aggregated cells instead of millions of raw features. `'summary'` always uses the summary tier; `'raw'` always uses raw (the legacy behaviour). No effect on archives without a summary tier. |
+
+### GlobeView / projection helpers
+
+| Property          | Type             | Default | Description                                                           |
+| :---------------- | :--------------- | :------ | :--------------------------------------------------------------------- |
+| `zoomOverride`    | `number \| null` | `null`  | Force a specific tile zoom level (useful for `GlobeView` to load low-zoom tiles). `null` derives zoom from the viewport. |
+| `useGlobalBounds` | `boolean`        | `false` | Use whole-world bounds instead of viewport bounds (for `GlobeView`).  |
+
+### Time-as-height (space-time cube)
+
+| Property           | Type     | Default | Description                                                              |
+| :----------------- | :------- | :------ | :------------------------------------------------------------------------ |
+| `timeHeightScale`  | `number` | `0`     | Meters of altitude per simulation millisecond. When non-zero, the trips/path/point layers lift each vertex by `(featureTime - timeHeightOrigin) * timeHeightScale` meters — per-vertex time on trail-mode trips (threads climb along their length, slope = speed), per-feature start time elsewhere. Animating this value morphs between the flat map (0) and the cube. MapView only. |
+| `timeHeightOrigin` | `number` | `0`     | Absolute time (Unix ms) rendered at altitude 0, typically `timeRange.start`. |
+
+### Overview (storyboard) preload
+
+| Property           | Type | Default | Description |
+| :----------------- | :--- | :------ | :--- |
+| `overviewPreload`  | `boolean \| { budgetBytes?: number; maxZoom?: number }` | `false` | When truthy, the layer calls `tileset.preloadOverviewTier()` right after tileset init: the coarsest tiles (z0..`maxZoom`, default 1) across the FULL dataset time range are loaded at the lowest request tier and PINNED, so scrubbing always renders a coarse preview via the parent-zoom fallback — the data analog of a video player's thumbnail strip. Budget-gated per dataset (default 20 MiB of directory bytes): datasets with giant coarse tiles are rejected without fetching anything. Init is never blocked on the preload. |
+| `onOverviewPreload` | `(result: OverviewPreloadResult) => void` | `null` | Fired once per tileset init with the preload's outcome (loaded, candidate tile count, directory byte sum, and the rejection reason when skipped). Only fires when `overviewPreload` is truthy. |
 
 ### Callbacks
 
-| Property         | Type                      | Description                                            |
-| :--------------- | :------------------------ | :----------------------------------------------------- |
-| `onViewportLoad` | `(tiles: Tile[]) => void` | Called when all tiles in the current viewport loaded.  |
-| `onTileLoad`     | `(tile: Tile) => void`    | Called when a single tile successfully loads.          |
-| `onTileUnload`   | `(tile: Tile) => void`    | Called when a tile is evicted from the cache.          |
+| Property         | Type                                  | Description                                            |
+| :--------------- | :------------------------------------ | :----------------------------------------------------- |
+| `onViewportLoad` | `(tiles: Tile[]) => void`             | Called when all tiles in the current viewport×window selection have finished loading (the `TileLayer.onViewportLoad` moment). Fires once per selection settle — again only after the selection itself changes (pan/zoom or the time window crossing a bucket) and re-settles, never per tile. |
+| `onTileLoad`     | `(tile: Tile) => void`                | Called when a single tile successfully loads.          |
+| `onTileUnload`   | `(tile: Tile) => void`                | Called when a tile is evicted from the cache.          |
+| `onTileError`    | `(error: Error, tileId?: TileId) => void` | Called when a tile's fetch/decode fails after the loader's retries. Default (`null`) logs via `console.error`, matching TileLayer. |
+| `onTilesetReady` | `(tileset: SpatiotemporalTileset & BufferSource) => void` | Fired ONCE per archive/tileset initialization (and again if `data` changes), with the live tileset. The tileset satisfies the [`BufferSource`](./playback-governor.md) readiness contract, so apps hand it straight to a `PlaybackGovernor` via `governor.setSource(tileset)`. |
+| `onBufferChange` | `(runway: BufferedRunway) => void`    | Forwarded from the tileset's buffer bookkeeping: fires when the buffered runway around the playhead crosses a threshold (not per tile load). Forward this to `PlaybackGovernor.notifyBufferChange(runway)` so gating reacts immediately instead of waiting for the governor's poll cadence. |
 
 ### Advanced Options
 
-| Property      | Type                      | Default | Description                          |
-| :------------ | :------------------------ | :------ | :----------------------------------- |
-| `loadOptions` | `Record<string, unknown>` | `{}`    | Loaders.gl options for data loading. |
+| Property      | Type             | Default | Description                          |
+| :------------ | :--------------- | :------ | :----------------------------------- |
+| `loadOptions` | `SttLoadOptions` | `{}`    | loaders.gl-style options. Only `loadOptions.fetch` is consumed: the OBJECT form (`RequestInit`) is merged into every HTTP request the archive makes (manifest, directory, pack ranges) — auth headers, credentials, CORS mode; per-request fields like the `Range` header always win. A fetch-like FUNCTION replaces the transport instead. |
 
 ## Methods
 
@@ -76,21 +109,47 @@ Get the current animation time. Subclasses should use this instead of accessing 
 
 ### `isLoaded: boolean`
 
-Property indicating whether the layer has finished initial loading.
+Property indicating whether the layer currently has visible tiles.
+
+### `getPickingInfo(params): SpatioTemporalPickingInfo`
+
+TileLayer-convention picking enrichment. A hit fills `info.tile` / `info.sourceTile` with the source tile and decodes ONE feature's binary columns into a plain `info.object` (via `getFeatureProperties` from `@stt/core`) at event rate, so the render path stays free of per-feature objects.
+
+### Subclass hooks
+
+| Hook | Description |
+| :--- | :--- |
+| `renderLayers()` | Override to render visualization sublayers from `this.state.tiles`. |
+| `onMetadataLoaded(metadata)` | Called once per archive init, right after metadata arrives (and after the supersession race guard). |
+| `getTilesetOptionOverrides(metadata)` | Partial `SpatiotemporalTilesetOptions` spread over the base tileset wiring at construction time (overrides win). How `H3SummaryLayer` swaps zoom range / refinement strategy. |
+| `getEffectiveTimeWindow()` | The time window used for tile loading. `AnimatedTripsLayer` overrides it to `max(timeWindow, 2 × trailLength)`. |
+| `composeSubLayerProps(shortId, instanceKey, props)` | Composes one sublayer's props through deck's `CompositeLayer.getSubLayerProps()` so inherited composite props and the user's `_subLayerProps[shortId]` overrides apply. |
 
 ## Performance
 
 The layer is optimized for high-performance animation:
 
-- **Request concurrency**: 12 parallel tile requests (matching browser
-  per-origin caps); prefetch consumes ≤ 50 % of that budget while
-  animating.
-- **Prefetching**: tiles are loaded ahead of playback time, aligned with
-  the archive's temporal bucket boundaries.
-- **LRU caching**: 2000-tile cache; eviction respects the active time
-  window so tiles needed by the current animation frame aren't dropped.
+- **Single concurrency knob**: `maxRequests` (24) bounds the archive's
+  in-flight HTTP Range requests; viewport fills are sent as ONE
+  globally-coalesced batch (`STTArchive.getTiles`), so Hilbert-adjacent
+  tiles collapse into a handful of range requests with incremental
+  per-tile delivery.
+- **Prefetching**: tiles are loaded ahead of playback time in
+  throughput-sized slices, aligned with the archive's temporal bucket
+  boundaries; prefetch requests carry `fetchpriority: low`.
+- **Parent-tile gating**: oversized low-zoom fallback tiles (> 2 MB by
+  default) are skipped before fetching — a 14 MB z10 tile is a
+  near-useless placeholder under a z14 view.
+- **LRU caching**: 2000-tile / 2 GiB cache; eviction respects the active
+  time window so tiles needed by the current animation frame aren't
+  dropped.
 - **Time updates via getter**: passing `timeController` avoids React
-  re-renders during animation — the layer reads time in `draw()`.
+  re-renders during animation — sublayers read time in `draw()` through
+  the extension's `getTime` callback, and tick-driven tileset refreshes
+  are capped at ~10 Hz wall-clock regardless of playback speed.
+- **Coalesced tile arrivals**: many tiles finishing within one frame are
+  batched into a single rAF-deferred `setState`, and a
+  reordered-but-identical tile set never triggers a rebuild.
 
 ## Source
 

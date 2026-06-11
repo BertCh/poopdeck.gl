@@ -1,6 +1,6 @@
 # AnimatedPointLayer
 
-The `AnimatedPointLayer` renders time-series point data as circles. It extends [`SpatioTemporalLayer`](./spatiotemporal-layer.md) and provides GPU-accelerated time filtering with support for categorical coloring and 3D elevation.
+The `AnimatedPointLayer` renders time-series point data as circles. It extends [`SpatioTemporalLayer`](./spatiotemporal-layer.md) and provides GPU-accelerated time filtering (window, wake, and cumulative modes) with support for categorical coloring.
 
 ## Installation
 
@@ -15,7 +15,7 @@ import { AnimatedPointLayer } from "@stt/deck.gl";
 
 const layer = new AnimatedPointLayer({
   id: "earthquakes",
-  data: "https://example.com/earthquakes.stt",
+  data: "https://example.com/earthquakes/manifest.json",
   currentTime: 1672531200000,
   timeWindow: 3600000, // 1 hour
   fillColor: [255, 128, 0, 255],
@@ -30,30 +30,42 @@ const layer = new AnimatedPointLayer({
 ```typescript
 const layer = new AnimatedPointLayer({
   id: "flights",
-  data: "https://example.com/flights.stt",
+  data: "https://example.com/flights/manifest.json",
   currentTime: Date.now(),
   timeWindow: 3600000,
-  fillColor: "airline", // Use categorical property name
+  fillColor: "airline", // categorical property name → GPU palette lookup
   colorPalette: [
     [31, 119, 180, 255],
     [255, 127, 14, 255],
     [44, 160, 44, 255],
   ],
-  radius: "altitude", // Use numeric property for radius
+  radius: "altitude", // numeric property name → per-feature radius
 });
 ```
 
-### With 3D Elevation
+### Wake mode (ship-wake aesthetic)
 
 ```typescript
 const layer = new AnimatedPointLayer({
-  id: "aircraft",
-  data: "https://example.com/aircraft.stt",
-  currentTime: Date.now(),
-  timeWindow: 60000,
-  use3D: true,
-  elevationProperty: "altitude",
-  elevationScale: 0.3048, // feet to meters
+  id: "vessels",
+  data: "/data/ais/manifest.json",
+  currentTime,
+  wakeLength: 30 * 60 * 1000,    // 30 min comet tail behind each point
+  wakeTailScale: 0.15,
+  timeWindow: 60 * 60 * 1000,    // must be >= 2 × wakeLength (loader window)
+});
+```
+
+### Cumulative mode ("the map draws itself")
+
+```typescript
+const layer = new AnimatedPointLayer({
+  id: "osm-nodes",
+  data: "/data/osm-nyc/manifest.json",
+  currentTime,
+  cumulative: true,
+  fadeInDuration: 500,          // appear ramp
+  timeWindow: WHOLE_DATASET_MS, // keep revealed tiles resident
 });
 ```
 
@@ -63,45 +75,67 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 
 ### Render Options
 
-| Property         | Type                              | Default | Description                                        |
-| :--------------- | :-------------------------------- | :------ | :------------------------------------------------- |
-| `radiusScale`    | `number`                          | `1`     | Global multiplier for point radii.                 |
-| `radiusUnits`    | `'pixels' \| 'meters' \| 'common'` | `'pixels'` | Units for radius.                               |
-| `fadeInDuration` | `number`                          | `300`   | Duration (ms) for points to fade in.               |
-| `fadeOutDuration`| `number`                          | `300`   | Duration (ms) for points to fade out.              |
+| Property             | Type                              | Default | Description                                        |
+| :------------------- | :-------------------------------- | :------ | :------------------------------------------------- |
+| `radiusScale`        | `number`                          | `1`     | Global multiplier for point radii.                 |
+| `radiusUnits`        | `'pixels' \| 'meters' \| 'common'` | `'pixels'` | Units for radius.                               |
+| `radiusMinPixels`    | `number`                          | `0`     | Minimum on-screen radius in pixels.                |
+| `radiusMaxPixels`    | `number`                          | `MAX_SAFE_INTEGER` | Maximum on-screen radius in pixels.     |
+| `filled`             | `boolean`                         | `true`  | Fill the marker.                                   |
+| `stroked`            | `boolean`                         | `false` | Render an outline stroke around each point.        |
+| `strokeColor`        | `Color`                           | `[0, 0, 0, 255]` | Stroke color (constant).                  |
+| `lineWidthMinPixels` | `number`                          | `0`     | Outline stroke width in pixels.                    |
+| `fadeInDuration`     | `number`                          | `300`   | Duration (ms) for points to fade in.               |
+| `fadeOutDuration`    | `number`                          | `300`   | Duration (ms) for points to fade out (window mode).|
 
-### 3D Options
+### Mode Options
 
-| Property           | Type      | Default | Description                                                    |
-| :----------------- | :-------- | :------ | :------------------------------------------------------------- |
-| `use3D`            | `boolean` | `false` | Enable 3D positions with altitude/elevation.                   |
-| `elevationProperty`| `string`  | `null`  | Property name to extract elevation from (e.g., `'altitude'`).  |
-| `elevationScale`   | `number`  | `1`     | Scale factor for elevation values.                             |
+| Property        | Type      | Default | Description |
+| :-------------- | :-------- | :------ | :--- |
+| `wakeLength`    | `number`  | `0`     | When > 0, switches to one-sided "ship wake" rendering: visible only while `0 <= currentTime - startTime <= wakeLength`, alpha fades to 0 at the trailing edge, radius shrinks to `wakeTailScale` × head. Takes precedence over the symmetric window filter. The caller must ensure `timeWindow >= 2 × wakeLength` so the loader fetches the past half of the wake. |
+| `wakeTailScale` | `number`  | `0.15`  | Trailing-edge size multiplier in wake mode (0..1). |
+| `cumulative`    | `boolean` | `false` | "Draw and persist" mode: each point appears at its `startTime` and stays visible for the rest of playback. `fadeInDuration` doubles as the appear ramp. Widen the tile loader's window so revealed tiles stay resident. |
 
 ### Data Accessors
 
-| Property       | Type              | Default              | Description                                                                    |
-| :------------- | :---------------- | :------------------- | :----------------------------------------------------------------------------- |
-| `fillColor`    | `Color \| string` | `[255, 128, 0, 255]` | Fill color. Can be a constant RGBA or a property name for categorical coloring. |
-| `radius`       | `number \| string`| `5`                  | Point radius. Can be a constant or a property name for numeric values.         |
-| `colorPalette` | `Color[]`         | D3 category palette  | Color palette for categorical properties (up to 10 colors).                    |
+| Property              | Type               | Default              | Description                                                                    |
+| :-------------------- | :----------------- | :------------------- | :----------------------------------------------------------------------------- |
+| `fillColor`           | `Color \| string`  | `[255, 128, 0, 255]` | Fill color: constant RGBA, or a property name for categorical coloring.        |
+| `getFillColor`        | `Color \| string \| null` | `null`        | Upstream-vocabulary alias of `fillColor`. Unlike upstream deck.gl it accepts a constant or a property-column NAME — NOT a function accessor (binary tiles can't run per-feature JS; a function warns once and falls back to `fillColor`). When set, it wins. |
+| `radius`              | `number \| string` | `5`                  | Point radius: constant, or a numeric property name.                            |
+| `getRadius`           | `number \| string \| null` | `null`       | Upstream-vocabulary alias of `radius` (same domain rules as `getFillColor`).   |
+| `getLineColor`        | `Color \| null`    | `null`               | Upstream-vocabulary alias of `strokeColor` (constant only).                    |
+| `colorPalette`        | `Color[]`          | 10-color palette     | Palette for categorical `fillColor` (GPU path, up to 4096 entries).            |
+| `colorMapping`        | `Record<string, Color> \| null` | `null`  | Explicit category-string → color map. The only way to get stable colors across tiles whose categorical column contains different category subsets. Forces the CPU palette-expansion path (the GPU texture can't look up by string). |
+| `colorMappingDefault` | `Color`            | `[0, 0, 0, 0]`       | Fallback for categories absent from `colorMapping` (transparent: unknown categories disappear rather than mislead). |
+| `radiusTransform`     | `(v: number) => number \| null` | `null`  | Per-feature transform applied to the `radius` property value before GPU upload (e.g. magnitude → area). |
 
-## Performance
+### Legacy 3D props
 
-The layer uses several optimizations:
+`use3D`, `elevationProperty`, and `elevationScale` are accepted for v2 API compatibility but the v3 layer infers 3D from the tile's `positionDimensions` automatically — 3D tiles ride zero-copy, 2D tiles are padded with z=0. `elevationProperty`/`elevationScale` are currently forward-declared no-ops.
 
-- **Per-tile binary sublayers**: each visible tile produces one
-  `ScatterplotLayer` (no cross-tile consolidation). A new tile arriving
-  adds exactly one sublayer and one GPU upload — it never re-uploads or
-  rebuilds existing tiles.
-- **Binary data interface**: each sublayer uses deck.gl's binary
-  `data: { length, attributes }` shape, so the Arrow-backed typed arrays go
-  straight to the GPU.
-- **Sublayer memoization**: each per-tile `ScatterplotLayer` instance is
-  cached and the same reference is returned across `renderLayers()` calls,
-  so deck.gl short-circuits prop diffing when only time changes.
-- **TimeFilterExtension**: time filtering happens entirely in GPU shaders;
-  each sublayer rebases time against its own per-tile `timeOffset`.
+## Architecture & performance
+
+- **Per-tile binary sublayers**: each visible (tile, layer) pair produces one
+  `ScatterplotLayer` using deck.gl's binary `data: { length, attributes }`
+  shape, with positions/times referenced DIRECTLY from the tile's Arrow
+  buffers (zero copy). A new tile adds exactly one sublayer and one GPU
+  upload — existing tiles' buffers are untouched.
+- **Sublayer + prepared-data caches**: the same layer instance and `data`
+  reference come back across `renderLayers()` calls, so deck.gl
+  short-circuits prop diffing and re-uploads when only time changes.
+- **Per-tile `timeOffset`**: each sublayer rebases time independently via
+  its [`TimeFilterExtension`](./time-filter-extension.md) — see the
+  timeOffset contract there.
+- **Cumulative slabs**: in cumulative mode the per-tile-sublayer model
+  would climb into thousands of draw calls by end of playback, so points
+  are instead packed append-only into consolidated ~250k-point slabs —
+  frozen slabs keep a stable `data` ref (zero re-upload); only the single
+  open slab grows. Picking resolves through per-tile provenance ranges.
+- **Picking**: `getPickingInfo` enriches hits with `info.tile` and decodes
+  the picked feature's columns into `info.object` at event rate.
+
+The sublayer short id for `_subLayerProps` overrides is **`points`** (covers both per-tile and slab sublayers): `_subLayerProps: { points: { type: MyLayer, ... } }`.
 
 ## Source
 

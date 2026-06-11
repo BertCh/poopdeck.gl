@@ -130,9 +130,11 @@ compression abstraction, Hilbert/temporal indexing, and metadata.
   tiers per zoom (`tier: 'raw' | 'summary' | 'auto'`). Temporal-LOD
   dispatch is reader-API-only (`STTArchive.pickTemporalLodForZoom` /
   `getTilesInBoundsForTemporalLod`) and is not yet wired into the tileset.
-- **`SttLoader` / `createSttTileSource`** — structural shims that let
-  apps already using `@loaders.gl/*` drop STT into their existing tile
-  source plumbing.
+- **`createSttTileSource`** — a structural (no runtime dependency)
+  loaders.gl-style tile source over an `STTArchive`, so apps already
+  using `@loaders.gl/*` can drop STT into their existing tile source
+  plumbing. (The old standalone `SttLoader` parser object was removed —
+  see the [tile decoding](../api/stt-loader.md) page.)
 
 ### `@stt/deck.gl`
 - **`SpatioTemporalLayer`** — composite layer; owns the archive + tileset,

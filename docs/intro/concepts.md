@@ -4,7 +4,7 @@ This guide introduces the fundamental concepts behind Spatiotemporal Tiles (STT)
 
 ## What is a Spatiotemporal Tile?
 
-A **Spatiotemporal Tile** is a unit of data that organizes geospatial features not just by space (X, Y coordinates at a Zoom level) but also by **Time**. Unlike traditional vector tiles (MVT) which are static snapshots, an STT contains a time-ordered sequence of feature states.
+A **Spatiotemporal Tile** is a unit of data that organizes geospatial features not just by space (X, Y coordinates at a Zoom level) but also by **Time**. Unlike traditional vector tiles (MVT) which are static snapshots, an STT tile is addressed by `(zoom, x, y, time bucket)` and contains the features that exist within that space-time volume.
 
 Each tile represents:
 - A specific spatial bounds (Web Mercator tile).
@@ -18,21 +18,48 @@ Traditional approaches to animating massive datasets (millions of points) usuall
 2.  **GeoJSON per frame:** Huge network overhead, redundant data.
 3.  **Filtering static tiles:** CPU intensive on the client to filter millions of points every frame.
 
-STT solves this by pre-indexing data temporally. The client only downloads data relevant to the current time window and animation speed.
+STT solves this by pre-indexing data temporally. The client only downloads data relevant to the current viewport, time window, and animation speed — and the GPU does the per-frame time filtering, so nothing is re-uploaded as the clock advances.
+
+## The packed container
+
+A dataset is **not** one big file. It is a small tree of objects designed so
+that *cacheability is a property of the format* — a dumb CDN or static host
+(S3, R2, GCS) serves it efficiently with no server-side code:
+
+- **`manifest.json`** — the only mutable object. Tiny; embeds the full dataset
+  metadata plus pointers to everything else, so a cold start needs no separate
+  metadata fetch.
+- **`index/<blake3>.sttd`** — the **directory**: a compact binary index mapping
+  every `(zoom, x, y, time bucket)` to its byte range. Run-length encoded, so a
+  spatial cell whose content is identical across many consecutive time buckets
+  costs one index run.
+- **`packs/<blake3>.sttp`** — the tile data, cut into **content-addressed
+  packs** of ~64 MiB. Each tile payload inside a pack is an independently
+  zstd-compressed blob, deduplicated by hash.
+
+Packs and the directory are named by their own blake3 hash, so their bytes can
+never change without their name changing — they ship with
+`Cache-Control: immutable` and live at the edge forever. A deploy only ever
+invalidates the few-KB manifest. Reads are HTTP range requests into packs; the
+reader groups nearby tiles by pack and coalesces their ranges into a handful of
+requests. The full contract is in
+[the packed format spec](../spec/stt-packed-format.md).
 
 ## Key Concepts
 
 ### 1. Apache Arrow IPC + GeoArrow tile payloads
-Each tile is one Apache Arrow `RecordBatch` per layer, with geometry
+
+Each tile payload is one Apache Arrow `RecordBatch` per layer, with geometry
 encoded as standard **GeoArrow** (interleaved `[x, y]` Float64 inside a
 `FixedSizeList`). Coordinates are absolute WGS84 — no delta or zig-zag
 encoding — so a tile is "a chunk of the source dataset, broken up by
-`(zoom, x, y, time)`" and can be inspected with any Arrow tool. zstd
-(default) or gzip on the IPC bytes does the size compression. The
-client only needs one library (`apache-arrow`) to decode both the
-directory and the tile payloads.
+`(zoom, x, y, time)`" and a decompressed tile opens directly in any Arrow tool
+(GeoPandas, Lonboard, …). Per-blob zstd does the size compression; the client
+decodes with `apache-arrow` + a small zstd decoder, and the columnar buffers
+feed the GPU directly. See [the payload spec](../architecture/data-format.md).
 
 ### 2. Temporal Bucketing
+
 Not all data needs millisecond precision. **Temporal Bucketing** groups
 features into fixed-width time slots — the same bucket size everywhere
 in the archive, configurable as `--temporal-bucket` (default `1h`).
@@ -40,6 +67,7 @@ Bucket boundaries become the cache-hit pivot for predictive prefetch
 during animation.
 
 ### 3. Temporal LOD pyramid
+
 For multi-year datasets you'd animate at fine bucket resolution, the
 build can emit one or more coarser-bucket tiers alongside the base
 (`--temporal-lod 1d,30d` or `1d@8,30d@4`). The **reader API** can pick the
@@ -52,27 +80,58 @@ app must call these methods itself to use the coarser tiers. (The summary
 tier below, by contrast, is wired into the tileset.)
 
 ### 4. Summary tier (server-side aggregation)
+
 For 100M+ point datasets, a `--summary-tier h3` build emits a
 server-aggregated H3-hex tier alongside the raw tier. Each hex carries a
 `count` plus any configured `name:agg` (mean / sum / max / min) columns.
 The reader dispatches to summary tiles below the configured zoom
 threshold, so low-zoom rendering never streams the raw points.
 
-### 5. Spatial Indexing (Hilbert Curve)
-Tiles are stored in the archive using a **Hilbert Space-Filling Curve**.
-Spatially-neighbouring tiles end up adjacent in the file, so the reader's
-range-coalescer often satisfies several tiles with one HTTP Range
-request — important for CDN cacheability and total request count under
-viewport pans.
+### 5. Blob ordering (space–time locality)
+
+Tile blobs are laid out inside packs so that blobs a client reads together sit
+near each other, letting the per-pack range-coalescer satisfy several tiles
+with one request. There is no single best curve — it depends on the dataset's
+space-vs-time shape, so the default is **`--blob-ordering auto`**:
+
+- **Time-deep data** (few cells, thousands of buckets — e.g. four decades of
+  ocean drifters) → **spatial-major** `(zoom, hilbert, time)`: each cell's
+  whole timeline is byte-contiguous, which is what playback reads. Measured
+  ~3× better than a 3D space-time curve here.
+- **Balanced or space-dominant data** (e.g. one day of flights) →
+  **3D Hilbert** over `(x, y, time bucket)`: the robust generalist with no
+  catastrophic query.
+
+Explicit `spatial`, `time-major`, `hilbert3`, and `morton3` orders are
+available when you know your access pattern.
 
 ## Client-Side Rendering
 
 ### Optimistic Rendering
+
 The STT client implementation (`@stt/core`) is designed for smooth animation. It employs **Optimistic Rendering**:
 - It immediately displays whatever data is available in the cache.
 - It fetches higher-resolution or adjacent temporal data in the background.
 - It never blocks the animation loop waiting for network requests.
 
-### Predictive Prefetching
-When you play an animation, the client predicts which tiles will be needed next (e.g., $t+1, t+2$) and fetches them ahead of time. This ensures 60 FPS playback even on constrained networks.
+Time filtering happens on the GPU: tiles are uploaded once per bucket, and a
+per-frame uniform window selects what's visible, so a 60 fps clock costs no
+re-decode or re-upload.
 
+### Predictive Prefetching
+
+When you play an animation, the client predicts which time buckets will be
+needed next and fetches them ahead of the playhead, in small byte-budgeted,
+nearest-first slices (~1 s of measured network throughput at a time) so a
+seek or pan is never stuck behind a huge speculative download.
+
+### Buffered playback (the governor)
+
+Prefetch alone can't guarantee the playhead never outruns the network. The
+[`PlaybackGovernor`](../api/playback-governor.md) couples the playback clock to
+the loader the way a video player does: it gates `play()` and seeks on a
+buffered runway ahead of the playhead, freezes the clock (with resume
+hysteresis) when the runway drains instead of advancing into unloaded time,
+and can drive an **Auto speed** that adapts the playback rate to measured
+throughput. The result is "buffering…" semantics — never silently empty
+frames.

@@ -1,6 +1,13 @@
-# HeatmapLayer
+# AnimatedHeatmapLayer
 
-The `HeatmapLayer` renders temporal point data as an animated density
+> **Renamed.** This layer is exported as **`AnimatedHeatmapLayer`** — the old
+> export name `HeatmapLayer` shadowed `@deck.gl/aggregation-layers`'
+> `HeatmapLayer` and is kept only as a deprecated alias (same class, same
+> props; `HeatmapLayerProps` likewise aliases `AnimatedHeatmapLayerProps`).
+> Existing imports keep working; new code should use the new name. The
+> examples below still show the legacy name.
+
+The `AnimatedHeatmapLayer` renders temporal point data as an animated density
 heatmap. It is a thin composite over the **canonical deck.gl
 [`HeatmapLayer`](https://deck.gl/docs/api-reference/aggregation-layers/heatmap-layer)**
 (`@deck.gl/aggregation-layers`): points are splatted into a GPU weight

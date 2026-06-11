@@ -21,6 +21,11 @@ import geopandas as gpd
 # Any GeoDataFrame with a geometry column and a timestamp column will do.
 gdf = gpd.read_file("earthquakes.geojson")
 
+# stt-build requires lon/lat degrees (OGC:CRS84 / EPSG:4326). Reproject
+# projected data BEFORE export — the build hard-fails on any other
+# declared CRS:
+gdf = gdf.to_crs(4326)
+
 # stt-build expects timestamps as Unix-ms (Int64), Unix-s (Int64), or ISO
 # 8601 strings. Convert if needed:
 gdf["timestamp"] = (
@@ -31,6 +36,23 @@ gdf["timestamp"] = (
 # stt-build's input loader expects.
 gdf.to_parquet("earthquakes.parquet", compression="snappy")
 ```
+
+Two export pitfalls the build catches with a hard error:
+
+- **Wrong CRS.** A GeoParquet file whose geometry column declares any CRS
+  other than `OGC:CRS84` / `EPSG:4326` (e.g. a Web Mercator export) fails
+  with: *"GeoParquet geometry column 'geometry' declares CRS EPSG:3857
+  (WGS 84 / Pseudo-Mercator), but stt-build requires lon/lat degrees
+  (OGC:CRS84 / EPSG:4326). Reproject the input before export…"* — the
+  `to_crs(4326)` line above is the fix.
+- **Native geoarrow encoding.** `gdf.to_parquet(...,
+  geometry_encoding="geoarrow")` writes line/polygon geometry in a layout
+  the build cannot ingest and fails with a re-export hint. Keep the
+  default WKB encoding (or pass `geometry_encoding="WKB"` explicitly).
+
+Pre-1970 timestamps are rejected in all modes — the STT temporal index
+stores unsigned ms-since-epoch. Filter or re-epoch historical rows before
+building.
 
 ```bash
 stt-build \
@@ -45,8 +67,9 @@ stt-build \
 > an `earthquakes/` directory (`manifest.json` + `index/*.sttd` + `packs/*.sttp`),
 > not a single file. The `.stt` extension is stripped for convenience.
 
-`--auto` runs `stt-optimize` over the input to pick a sensible zoom range,
-temporal bucket, and compression. Any flag you also pass explicitly wins.
+`--auto` runs `stt-optimize` over the input to pick a sensible zoom range
+and temporal bucket. Any flag you also pass explicitly wins. (Compression
+is not auto-tuned — the packed format is zstd-only.)
 
 ## 2. DuckDB → GeoParquet (no Python deps beyond duckdb)
 
@@ -138,9 +161,11 @@ at any time within the trip's duration.
 ## Verifying the result
 
 ```bash
-stt-validate trips.stt
+stt-validate trips/
 ```
 
-This opens the archive, content-hash-checks every tile, decodes each, and
+This opens the packed dataset (pass the directory `stt-build` wrote, or
+its `manifest.json`), blake3-verifies every object against its
+content-addressed name, content-hash-checks and decodes every tile, and
 prints schema + feature counts. Use `--json` for a machine-readable report
 suitable for CI.

@@ -39,9 +39,10 @@ stt-generate all --output-dir examples/showcase/public/data --skip-existing
 ```
 
 The remaining datasets (`ais`, `flights`, `nyc-rideshare`,
-`nyc-taxi-points`, `satellites`) require per-run parameters (download
-dates, an OSRM server, an existing source archive, etc.) and are NOT built
-by `all` — run them individually.
+`nyc-taxi-points`, `satellites`, `drifters`, `drifters-hourly`, `animals`,
+`osm-edits`) require per-run parameters (download dates, an OSRM server,
+an existing source archive, etc.) or long downloads and are NOT built by
+`all` — run them individually.
 
 ### Generate Individual Datasets
 
@@ -75,6 +76,12 @@ stt-generate nyc-taxi-points \
 
 # Satellite orbits from CelesTrak TLE + SGP4 → satellites.stt
 stt-generate satellites --output satellites.stt
+
+# Ocean drifter trajectories from NOAA's Global Drifter Program → drifters.stt
+stt-generate drifters --start 2021-01-01 --end 2022-01-01 --output drifters.stt
+
+# Animal migration trajectories from GBIF tracking datasets → animals.stt
+stt-generate animals --output animals.stt
 ```
 
 ## Available Datasets
@@ -117,7 +124,7 @@ stt-generate ais \
 ```
 
 **Options:**
-- `--input`: Input CSV file (required)
+- `--input`: Input CSV file (or pass `--date` / `--start-date`+`--end-date` to download from NOAA directly)
 - `--sample-minutes`: Temporal sampling (1 position per vessel per N minutes)
 - `--bounds`: Geographic filter (min_lat,min_lon,max_lat,max_lon)
 - `--max-vessels`: Limit number of vessels (0 = unlimited)
@@ -141,6 +148,7 @@ stt-generate flights \
 - `--hours`: Hours to download (e.g., "0-23" for full day)
 - `--bounds`: Geographic filter
 - `--sample-seconds`: Temporal sampling interval
+- `--paths`: Output LineString trajectories instead of points
 
 ### Hurricane Tracks (NOAA IBTrACS)
 
@@ -203,8 +211,48 @@ stt-generate nyc-rideshare \
 - `--synthetic`: Generate synthetic trips
 - `--num-trips`: Number of synthetic trips
 - `--paths`: Output LineString paths instead of points
+- `--flows`: Output pre-aggregated corridor flows (segment counts per time bin)
+- `--flow-bin`: Time bin for `--flows` aggregation, default `15m`
 - `--osrm-url`: OSRM server URL
 - `--skip-routing`: Skip OSRM routing (pickup/dropoff only)
+
+### Ocean Drifters (NOAA Global Drifter Program)
+
+Downloads 6-hourly drifting-buoy trajectories (positions + sea-surface
+temperature as per-vertex values).
+
+```bash
+stt-generate drifters \
+  --start 2021-01-01 --end 2022-01-01 \
+  --output drifters.stt
+```
+
+**Options:**
+- `--start` / `--end`: Time window (YYYY-MM-DD), default 2021-01-01 → 2022-01-01
+- `--bounds`: Geographic filter (min_lat,min_lon,max_lat,max_lon)
+- `--min-points`: Drop trajectories shorter than this, default: 4
+- `--max-gap-hours`: Split a trajectory at gaps longer than this, default: 120
+- `--cache-dir`: Download cache, default: `data/gdp-cache`
+
+`drifters-hourly` is the EXPERIMENTAL hourly-product variant
+(`drifter_hourly_qc`) with the same flags — 6× the temporal resolution
+and volume of `drifters`, same end-date coverage.
+
+### Animal Migrations (GBIF)
+
+Downloads animal-tracking occurrence datasets from GBIF and builds
+migration trajectories.
+
+```bash
+stt-generate animals --output animals.stt
+```
+
+**Options:**
+- `--licenses`: Comma-separated license allowlist, default: `CC0_1_0,CC_BY_4_0,CC_BY_NC_4_0`
+- `--max-datasets`: Limit number of GBIF datasets (0 = unlimited)
+- `--min-points`: Drop trajectories shorter than this, default: 5
+- `--max-gap-days`: Split a trajectory at gaps longer than this, default: 21
+- `--cache-dir`: Download cache, default: `data/gbif-cache`
 
 ### OSM Editing History (`osm-edits`)
 
@@ -298,6 +346,16 @@ other formats, convert first — see [Building from Python](./python.md) for
 GeoPandas / DuckDB / pyarrow recipes, or use `ogr2ogr -f Parquet
 out.parquet in.geojson`.
 
+Two input constraints are enforced from the GeoParquet `geo` footer:
+
+- **Coordinates must be lon/lat degrees** (`OGC:CRS84` / `EPSG:4326`).
+  Any other declared CRS — e.g. an export in Web Mercator — fails the
+  build with a reproject hint (`gdf.to_crs(4326).to_parquet(...)`).
+- **Line/polygon geometry must be WKB-encoded.** The native geoarrow
+  `linestring`/`polygon`/`multi*` encodings fail with a re-export hint
+  (`gdf.to_parquet(..., geometry_encoding='WKB')`). WKB is the GeoPandas
+  default, so most exports just work.
+
 ### From GeoParquet
 
 ```bash
@@ -309,9 +367,10 @@ stt-build \
   --auto
 ```
 
-`--auto` runs `stt-optimize` over the input and fills in zoom range,
-temporal bucket, and compression based on the data's spatial density and
-temporal distribution. Any flag you pass explicitly still wins.
+`--auto` runs `stt-optimize` over the input and fills in zoom range and
+temporal bucket based on the data's spatial density and temporal
+distribution. Any flag you pass explicitly still wins. (Compression is
+not auto-tuned — the packed format is zstd-only.)
 
 ### Adding a temporal LOD pyramid
 
@@ -341,14 +400,34 @@ stt-build -i quakes.parquet -o quakes.stt \
   --summary-columns magnitude:mean,magnitude:max
 ```
 
+The summary tier runs in the in-memory pipeline only — combining it with
+`--streaming-arrow` is an error (see Memory Management below).
+
 ### Time Format Options
+
+`--time-format` is a closed vocabulary (a typo is a clap error):
 
 - `iso8601` (default): e.g., `2024-01-15T12:30:00Z`
 - `unix-ms`: milliseconds since epoch
 - `unix-sec`: seconds since epoch
 
+The flag is only consulted for integer (Int64) time columns — Arrow
+Timestamp columns are self-describing and String columns are always
+parsed as ISO 8601. An Int64 column under the default `iso8601` logs a
+warning and is interpreted as unix-ms; pass `unix-ms`/`unix-sec` to make
+the intent explicit.
+
 Pass `--strict-times` to fail the build on any null or unparseable
-timestamp instead of coercing it to epoch with a warning.
+timestamp instead of coercing it to epoch with a warning. Pre-1970
+(negative) timestamps always fail the build in both modes — the temporal
+index stores unsigned ms-since-epoch and cannot represent them.
+
+### Bad geometry
+
+Rows with null or unparseable geometry are **skipped** with a count
+warning (they have no position to tile at — they are never placed at
+(0,0)). Pass `--strict-geometry` to fail the build on the first such row
+instead.
 
 ## Best Practices
 
@@ -380,22 +459,33 @@ stt-build -i huge-input.parquet -o out.stt \
 
 The standard `--streaming` flag is an older path that writes tiles per
 zoom level — fine for medium inputs but holds the per-zoom feature set
-in RAM. `--streaming-arrow` is the right answer for >10 GB inputs.
+in RAM (and is ignored when `--temporal-lod` is set). `--streaming-arrow`
+is the right answer for >10 GB inputs.
+
+`--streaming-arrow` has restrictions: it **errors** when combined with
+`--summary-tier`, `--heatmap-weight`, `--heatmap-class`, or
+`--metadata-output` (those passes run after the in-memory pipeline's
+finalize), ignores `--temporal-lod` with a warning, and is
+single-threaded (`--workers` is ignored). Use the in-memory pipeline for
+those features.
 
 ## Validating Output
 
-Run `stt-validate` after every build — it CRC32C-checks every tile,
-decodes each payload, and reports schema or feature-count anomalies:
+Run `stt-validate` after every build — pass the packed dataset directory
+(or its `manifest.json`). It blake3-verifies every pack and the directory
+object against their content-addressed names, content-hash-checks every
+tile blob, decodes each payload, and reports schema or feature-count
+anomalies:
 
 ```bash
-stt-validate my-data.stt
-stt-validate my-data.stt --json   # for CI
+stt-validate my-data/            # the directory stt-build wrote
+stt-validate my-data/ --json     # for CI
 ```
 
-Then try the archive in the showcase:
+Then try the dataset in the showcase:
 
 ```bash
-cp my-data.stt examples/showcase/public/data/
+cp -R my-data examples/showcase/public/data/
 # Update examples/showcase/src/datasets.ts with your dataset config
 cd examples/showcase && pnpm dev
 ```
@@ -410,7 +500,7 @@ cargo install --path crates/stt-build
 
 ### Out of Memory
 
-Switch to the streaming Arrow pipeline (above) and lower
+Switch to the streaming Arrow pipeline (above) and raise
 `--min-features-per-tile` to drop tiny deep-zoom tiles. The TS reader's
 `'best-available'` refinement surfaces dropped features from their
 parent tiles.
