@@ -3,8 +3,8 @@
 > **Scope:** this page is the normative spec for the **tile payload** (Apache
 > Arrow IPC + GeoArrow), which is identical regardless of container. The current
 > **container** is the packed format —
-> [`docs/spec/stt-packed-format.md`](../spec/stt-packed-format.md); its directory
-> codec is [`docs/spec/stt-v4.md`](../spec/stt-v4.md). The single-file layout
+> [`docs/spec/stt-packed-format.md`](../spec/stt-packed-format.md), which also
+> specifies the v5 directory codec (§4 there). The single-file layout
 > under "Top-level layout" below is the **legacy v4** container, now retained
 > only as the streaming/transcode intermediate.
 
@@ -125,13 +125,22 @@ linestrings). The blob payload is a tiny frame around one Arrow IPC stream
 per layer:
 
 ```
-[u16 layer_count]
+[u16 layer_count]            // high bit = ALIGNED_FRAME_FLAG (0x8000)
   repeated layer_count times:
-    [u16 name_len][name utf8][u32 ipc_len][ipc stream bytes]
+    [u16 name_len][name utf8][u32 ipc_len][pad?][ipc stream bytes]
 ```
 
 All integers are little-endian. `ipc stream bytes` is the output of an Arrow
 `StreamWriter` containing exactly one `RecordBatch`.
+
+When the leading `u16`'s `ALIGNED_FRAME_FLAG` (`0x8000`) bit is set, the
+writer inserts `(8 - pos % 8) % 8` zero bytes after each `ipc_len` so every
+IPC stream starts 8-byte aligned relative to the payload start — the
+alignment Arrow requires for zero-copy buffer views. `ipc_len` is the exact
+IPC byte length (padding excluded); the pad is never stored, readers derive
+it from the same alignment math. Layer count is therefore capped at
+`0x7fff`. The flag unset (all archives built before 2026-06) means no
+padding; readers MUST accept both shapes. See the packed spec §5.1.
 
 ### Per-layer Arrow schema
 
@@ -141,7 +150,8 @@ All integers are little-endian. `ipc stream bytes` is the output of an Arrow
 | `start_time`        | `Int64`                                 | non-null    | Unix ms, absolute                    |
 | `end_time`          | `Int64`                                 | non-null    | Unix ms, absolute                    |
 | `geometry`          | GeoArrow Point / LineString / Polygon   | non-null    | interleaved f64 lon/lat              |
-| `vertex_time`       | `List<UInt16>` (deltas) or `List<Int64>` (fallback) | nullable | per-vertex times (LineString only) — see below |
+| `vertex_time`       | `List<UInt16>` (deltas) or `List<Int64>` (exact) | nullable | per-vertex times (LineString only) — see below |
+| `vertex_value`      | `List<Float32>`                         | nullable    | per-vertex scalar (e.g. SST on drifters/currents); decoded to `BinaryFeatures.vertexValues` |
 | `triangles`         | `List<UInt32>`                          | non-null    | feature-local earcut indices (Polygon, `--pre-tessellate`) |
 | `<prop>`            | `Float64` (numeric) or `Dictionary<UInt16, Utf8>` (categorical) | nullable | one column per property, by name |
 
@@ -149,8 +159,9 @@ Geometry uses the GeoArrow extension metadata key
 `ARROW:extension:name` with values `geoarrow.point`, `geoarrow.linestring`,
 or `geoarrow.polygon` — see [GeoArrow interop](#geoarrow-interop) below.
 Coordinates are interleaved `[x, y]` in WGS84 degrees; the writer does
-**not** quantize or delta-encode — zstd or gzip (header `compression`)
-on the IPC bytes does the work.
+**not** quantize or delta-encode — per-blob zstd on the IPC bytes does the
+work (gzip survives only as a readable legacy value; the writer is
+zstd-only).
 
 Layers within one tile MUST agree on feature count for the rows they each
 cover, but they MAY carry different property columns.
@@ -169,9 +180,12 @@ column. v3 encodes it as `List<UInt16>` **deltas** relative to a per-layer
 | `stt:vertex_time_step_ms`      | ms per delta unit (`u32` as string)       |
 
 The encoder picks the smallest `step` (≥ 1) that keeps every
-`(t - origin)` inside `u16::MAX`. For a layer whose temporal span would
-overflow `u16::MAX * step`, the encoder falls back to the legacy
-absolute `List<Int64>` shape and omits the two metadata keys. A reader
+`(t - origin)` inside `u16::MAX`, **bounded by a precision ceiling**
+(`DEFAULT_VERTEX_TIME_MAX_STEP_MS` = 1000 ms, configurable via
+`stt-build --vertex-time-precision`). A layer whose span would need a
+coarser step — anything over ~18.2 h at the default — takes the exact
+absolute `List<Int64>` shape instead and omits the two metadata keys, so
+quantization error is always bounded by the ceiling. A reader
 that sees a `List<Int64>` column (or no origin/step metadata) treats the
 values as absolute Unix ms; a reader that sees `List<UInt16>` reconstructs
 `origin + delta * step`.
@@ -384,7 +398,10 @@ A new client opens an archive like this:
    hand the resulting Arrow `RecordBatch`es to the renderer.
 
 The reference TypeScript implementation coalesces adjacent ranges when their
-gap is less than 32 KiB (`RANGE_COALESCE_GAP` in `packages/core/src/archive.ts`).
+gap is less than 2 MiB (`DEFAULT_RANGE_COALESCE_GAP` in
+`packages/core/src/archive.ts`, overridable per archive) — tuned for
+HTTP/2 against edge caches, where re-fetching a small gap is cheaper than
+an extra request.
 
 ## Forward and backward compatibility
 

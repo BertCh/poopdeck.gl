@@ -2,9 +2,8 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://spatiotemporal-tiles.dev/spec/manifest.schema.json",
   "title": "STT packed-format manifest",
-  "description": "Canonical schema for the per-dataset `manifest.json` of the STT packed format (formatVersion 1). This is the cross-language wire contract: the Rust writer (`crate::pack::Manifest`) and every reader (TS `@stt/core` `PackedManifest`, Rust `PackedReader`) MUST agree with this document. See docs/spec/stt-packed-format.md.",
+  "description": "Canonical schema for the per-dataset `manifest.json` of the STT packed format (formatVersion 1). This is the cross-language wire contract: the Rust writer (`crate::pack::Manifest`) and every reader (TS `@stt/core` `PackedManifest`, Rust `PackedReader`) MUST agree with this document. Unknown properties are permitted at every envelope level (additive evolution within formatVersion 1): readers MUST ignore fields they do not recognize. See docs/spec/stt-packed-format.md.",
   "type": "object",
-  "additionalProperties": false,
   "required": ["format", "formatVersion", "compression", "directory", "packs", "metadata"],
   "properties": {
     "format": {
@@ -22,22 +21,25 @@
     "directory": {
       "description": "Pointer to the single immutable, content-addressed directory object (the v5 run-length index).",
       "type": "object",
-      "additionalProperties": false,
       "required": ["key", "length", "directoryVersion"],
       "properties": {
         "key": {
-          "description": "Object key relative to the dataset root. blake3-128 content address.",
+          "description": "Object key relative to the dataset root. blake3-128 content address of the at-rest object bytes (the compressed bytes when `encoding` is set).",
           "type": "string",
           "pattern": "^index/[0-9a-f]{32}\\.sttd$"
         },
         "length": {
-          "description": "Directory object length in bytes.",
+          "description": "Directory object length in bytes — the at-rest object, i.e. the compressed length when `encoding` is set. Readers validate the fetched body against it before any decode.",
           "type": "integer",
           "minimum": 0
         },
         "directoryVersion": {
           "description": "Directory codec version. The packed format (formatVersion 1) emits v5 (per-run pack_id column + pack-relative offsets).",
           "const": 5
+        },
+        "encoding": {
+          "description": "OPTIONAL at-rest encoding of the directory object. `zstd` = the object is a single zstd frame wrapping the directory codec bytes. Absent = raw codec bytes (the shape of every manifest written before this field existed). Readers MUST support both.",
+          "enum": ["zstd"]
         }
       }
     },
@@ -47,7 +49,6 @@
       "minItems": 1,
       "items": {
         "type": "object",
-        "additionalProperties": false,
         "required": ["key", "length"],
         "properties": {
           "key": {
