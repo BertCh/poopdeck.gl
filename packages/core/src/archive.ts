@@ -141,7 +141,14 @@ function raceAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
   if (!signal) return promise;
   const reasonOf = (): unknown =>
     signal.reason ?? new DOMException('The operation was aborted.', 'AbortError');
-  if (signal.aborted) return Promise.reject(reasonOf());
+  if (signal.aborted) {
+    // The transport promise already exists (the call raced the abort) and
+    // will reject on its own — swallow that rejection so it can't surface
+    // as an unhandled-rejection pageerror. The caller still gets the abort
+    // reason through the rejection below.
+    promise.catch(() => {});
+    return Promise.reject(reasonOf());
+  }
   return new Promise<T>((resolve, reject) => {
     const onAbort = (): void => reject(reasonOf());
     signal.addEventListener('abort', onAbort, { once: true });

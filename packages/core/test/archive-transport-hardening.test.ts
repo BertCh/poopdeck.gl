@@ -306,3 +306,49 @@ describe('STTArchive throughput sampling', () => {
     expect(afterDeath.bytesPerMs!).toBeLessThan(healthy.bytesPerMs!);
   });
 });
+
+describe('STTArchive abort-path rejection hygiene', () => {
+  it('an already-aborted signal leaks no unhandled rejection from the raced transport', async () => {
+    // Models the supersession race: the tileset aborts the controller while
+    // the tile path is suspended (awaiting the manifest), so by the time the
+    // range fetch is issued the signal is ALREADY aborted. Real fetch still
+    // rejects on its own — that rejection must be adopted, not left floating
+    // (it surfaced as an "AbortError: signal is aborted without reason"
+    // pageerror during the drifters loop browser verify).
+    const inner = packedFetch(DATASET);
+    const archive = new STTArchive({
+      url: DATASET.manifestUrl,
+      fetch: (async (url: string, init?: RequestInit) => {
+        if (isPackRange(url, init)) {
+          // Spec-conformant transport: reject asynchronously when the signal
+          // is (or becomes) aborted.
+          const signal = init?.signal;
+          if (signal?.aborted) {
+            return new Promise((_, reject) => {
+              setTimeout(() => reject(signal.reason ?? new DOMException('aborted', 'AbortError')), 0);
+            });
+          }
+        }
+        return inner(url, init);
+      }) as unknown as typeof fetch,
+      retryDelaysMs: [],
+    });
+    const ids = await allTileIds(archive);
+
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown): void => { unhandled.push(reason); };
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      const controller = new AbortController();
+      controller.abort(); // bare abort, exactly like cancelSupersededRequests
+      await expect(
+        archive.getTiles(ids, { signal: controller.signal }),
+      ).rejects.toMatchObject({ name: 'AbortError' });
+      // Let the floating transport rejection (if any) reach the process hook.
+      await new Promise((r) => setTimeout(r, 20));
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+    expect(unhandled).toEqual([]);
+  });
+});
