@@ -27,13 +27,13 @@ import {
   type ArchiveMetadata,
   type BinaryFeatures,
   type BoundingBox,
+  type BufferedRunway,
   type Tile,
   type TileId,
   type Layer as STTLayer,
   type GeometryType,
 } from '@stt/core';
 import { projectPositions } from './projection';
-import { getProjectionPool } from './worker/projection-pool';
 
 /** RGBA tuple in the 0–1 range used by all STT shader uniforms. */
 export type RGBA = [number, number, number, number];
@@ -109,7 +109,7 @@ export interface STTBaseLayerOptions {
   softTimeWindow?: boolean;
   /**
    * Override the maximum concurrent tile requests against the archive.
-   * Defaults to the tileset's own default (12).
+   * Defaults to the tileset's own default (24).
    */
   maxRequests?: number;
   /**
@@ -120,21 +120,16 @@ export interface STTBaseLayerOptions {
   prefetchAhead?: number;
   prefetchSteps?: number;
   /**
-   * Opt into running per-tile lon/lat → mercator projection in a Web Worker.
-   * Disabled by default to preserve the existing synchronous tile-build path.
-   * Once enabled, `buildTileGpuCache` returns its cache asynchronously and
-   * the first frame for each tile draws after the worker reply lands; the
-   * second frame onward sees no overhead. Recommended for hosts that render
-   * tiles with >5k vertices apiece (city-scale rideshare, polygon-heavy
-   * datasets).
+   * Called once per archive init with the live tileset, after metadata has
+   * resolved. The tileset implements the BufferSource readiness contract
+   * (runway / cost / ETA queries), which is what a PlaybackGovernor consumes.
    */
-  useWorkerProjection?: boolean;
+  onTilesetReady?: (tileset: SpatiotemporalTileset) => void;
   /**
-   * Threshold (number of input vertices) above which `projectAsync` actually
-   * dispatches to a worker. Below this size the synchronous path is faster
-   * because the postMessage overhead dominates. Default 1000.
+   * Buffered-runway threshold events from the tileset's coverage index,
+   * forwarded as-is. Route them into a PlaybackGovernor or a buffered-bar UI.
    */
-  workerProjectionMinVertices?: number;
+  onBufferChange?: (runway: BufferedRunway) => void;
 }
 
 /** Per-tile cached GPU buffers. Created lazily on first draw. */
@@ -278,6 +273,16 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
   /** Promise that resolves once the archive's metadata has been read. */
   ready(): Promise<ArchiveMetadata> {
     return this.archive.getMetadata();
+  }
+
+  /**
+   * The live tileset, or `undefined` before `initTileset` resolves the
+   * archive metadata (subscribe via `onTilesetReady` to avoid polling). The
+   * tileset implements the BufferSource readiness contract (runway / cost /
+   * ETA queries), which is what a PlaybackGovernor attaches to.
+   */
+  getTileset(): SpatiotemporalTileset | undefined {
+    return this.tileset;
   }
 
   // ------------------------------------------------------------------------
@@ -442,17 +447,18 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
     if (cache.strokeVao) this.vaoSupport.delete(cache.strokeVao);
   }
 
+  // This positional-matrix signature is v3/v4-only: MapLibre v5 REPLACED it
+  // with a single CustomRenderMethodInput-style args object (and changed the
+  // mercator matrix semantics — maplibre/maplibre-gl-js#3854), so a v5 host
+  // would pass the args object where v3/v4 pass the matrix. The peerDep is
+  // pinned to `^3 || ^4` accordingly. A v5 port means accepting the args
+  // object, injecting `args.shaderData.vertexShaderPrelude` into each vertex
+  // shader and projecting via `projectTile()` instead of multiplying
+  // `uMatrix` by mercator-unit-square positions (that prelude path is also
+  // what unlocks globe). Until then, v5 users should stay on v4 for STT.
   render(
     gl: WebGLRenderingContext | WebGL2RenderingContext,
     matrix: Iterable<number>,
-    // The third arg is `RenderArgs` on MapLibre v5 (includes the projection
-    // mode), absent on v3 / v4. Typed as `unknown` so the override compiles
-    // against any of the three majors without forking type defs. v5's globe
-    // projection is *not* supported by this adapter today: shaders assume
-    // mercator-unit-square inputs and v5 globe passes a 4D projector. The
-    // package's peerDep is pinned to `^3 || ^4`; v5 users should either stay
-    // on v4 for STT or contribute a globe-aware projection branch.
-    _renderArgs?: unknown,
   ): void {
     if (!this.tileset || !this.map) return;
 
@@ -630,28 +636,19 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
   }
 
   /**
-   * Async sibling of `projectAndUpload`: when `useWorkerProjection` is on and
-   * the input is large enough to be worth the postMessage overhead, runs the
-   * projection in a shared Web Worker. Otherwise falls back to the
-   * synchronous helper.
-   *
-   * Returns the projected `Float32Array` (not a buffer) because subclasses
-   * sometimes want to inspect / reformat the data before upload.
+   * Drop every per-tile GPU cache so the next frame rebuilds them from the
+   * still-loaded tiles. Geometry-affecting option setters (polygon stroked /
+   * extruded) call this — the cached vertex/index buffers bake those options
+   * in at build time, so flipping them without a rebuild keeps drawing the
+   * stale geometry.
    */
-  protected async projectAsync(
-    positions: Float64Array | Float32Array,
-    dimensions: 2 | 3,
-  ): Promise<Float32Array> {
-    const min = this.opts.workerProjectionMinVertices ?? 1000;
-    const vertexCount = positions.length / dimensions;
-    if (!this.opts.useWorkerProjection || vertexCount < min) {
-      return projectPositions(positions, dimensions);
+  protected rebuildTileCaches(): void {
+    const gl = this.gl;
+    for (const cache of this.tileGpuCache.values()) {
+      if (cache && gl) this.deleteCacheBuffers(gl, cache);
     }
-    // We copy the input before transferring, because the buffer's owner
-    // (caller) may still want it for non-projection purposes (e.g. polygon
-    // earcut on flat lon/lat). The copy is cheaper than a re-fetch.
-    const copy = positions.slice();
-    return getProjectionPool().project(copy, dimensions);
+    this.tileGpuCache.clear();
+    this.map?.triggerRepaint();
   }
 
   /**
@@ -801,12 +798,36 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
       minZoom: this.metadata.minZoom,
       maxZoom: this.metadata.maxZoom,
       temporalBucketMs: this.metadata.temporalBucketMs,
+      refinementStrategy: 'best-available', // Load parent tiles as fallback (deck.gl parity)
       enablePrefetch: this.opts.enablePrefetch,
       prefetchAhead: this.opts.prefetchAhead,
       prefetchSteps: this.opts.prefetchSteps,
       getAvailableTiles: (bounds, zoom, timeRange) =>
         this.archive.getTileIdsInBounds(bounds, zoom, timeRange),
       getTileData: (id, signal) => this.archive.getTile(id, { signal }),
+      // Route the bulk viewport/prefetch fill through the range coalescer so
+      // a viewport-full of Hilbert-adjacent tiles collapses into a handful of
+      // HTTP Range requests instead of one request per tile. The hooks carry
+      // incremental per-tile delivery (tiles render as their range group
+      // lands) and the fetch-priority hint for lookahead tiers.
+      getTileDataBatch: (tileIds, signal, hooks) =>
+        this.archive.getTiles(tileIds, {
+          signal,
+          onTileReady: hooks?.onTileReady,
+          fetchPriority: hooks?.fetchPriority,
+        }),
+      // Lets the tileset skip giant low-zoom parent-fallback tiles (e.g. a
+      // 14 MB z10 tile under a z14 view) before fetching them. Sync directory
+      // lookup, no I/O.
+      getTileByteSize: (tileId) => this.archive.getTileByteSize(tileId),
+      // Buffered-runway threshold events from the tileset's coverage index,
+      // forwarded to the app (which routes them into a PlaybackGovernor).
+      onBufferChange: (runway) => {
+        this.opts.onBufferChange?.(runway);
+      },
+      // Wire the archive's coalesced-range throughput EWMA into the tileset
+      // so estimateTimeToReadyMs() can compute honest ETAs.
+      getThroughput: () => this.archive.getThroughputEstimate(),
       onTileLoad: (tile) => {
         this.loadedTiles.set(tileKey(tile.id), tile);
         this.map?.triggerRepaint();
@@ -824,6 +845,11 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
         }
       },
     });
+
+    // Hand the live tileset to the app exactly once per init. The tileset
+    // implements the BufferSource readiness contract (runway / cost / ETA
+    // queries), which is what a PlaybackGovernor consumes.
+    this.opts.onTilesetReady?.(this.tileset);
 
     this.map.triggerRepaint();
   }

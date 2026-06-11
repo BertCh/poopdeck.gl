@@ -5,15 +5,16 @@
  * Pipeline (two passes):
  *
  *   1. Accumulate pass: each visible point is splatted into an offscreen
- *      framebuffer as a Gaussian disc with additive blending. The
- *      framebuffer holds the accumulated intensity per screen pixel in the
- *      R channel (and a weighted version in G if a `weightProperty` is
- *      configured — keeping them separate avoids saturating the colour
- *      lookup).
+ *      framebuffer as a Gaussian disc with additive blending. The splat
+ *      shader writes one accumulated-intensity value, replicated across all
+ *      four channels; a `weightProperty` scales each point's contribution
+ *      before accumulation. The ramp pass samples `.r`.
  *
  *   2. Colour-ramp pass: a full-screen quad samples the accumulator with a
  *      256×1 RGBA palette texture (default = OrRd, matches the deck.gl
- *      adapter's `HeatmapLayer` defaults).
+ *      adapter's `HeatmapLayer` defaults), compositing into whatever
+ *      framebuffer the host had bound when render() was called (the default
+ *      framebuffer normally; an offscreen target under terrain/globe).
  *
  * Performance notes:
  *   - We render directly with `gl.POINTS` and rely on the GPU's `gl_PointSize`
@@ -412,6 +413,16 @@ export class STTHeatmapLayer extends STTBaseLayer {
       timeWindow: this.opts.timeWindow,
     });
 
+    // MapLibre may be rendering custom layers into an offscreen target
+    // (terrain draping, globe post-process), so the framebuffer bound on
+    // entry is NOT necessarily the default one. Capture binding + viewport
+    // before pass 1 hijacks them; pass 2 composites back into the host's
+    // target.
+    const prevFramebuffer = gl.getParameter(
+      gl.FRAMEBUFFER_BINDING,
+    ) as WebGLFramebuffer | null;
+    const prevViewport = gl.getParameter(gl.VIEWPORT) as Int32Array;
+
     this.ensureAccumFramebuffer(gl);
 
     const w = this.accumWidth;
@@ -479,9 +490,14 @@ export class STTHeatmapLayer extends STTBaseLayer {
     // shouldn't inherit any per-tile attribute state.
     this.unbindVao();
 
-    // ---- Pass 2: colour-ramp lookup against the default framebuffer ----
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
+    // ---- Pass 2: colour-ramp lookup against the host's render target ----
+    gl.bindFramebuffer(gl.FRAMEBUFFER, prevFramebuffer);
+    gl.viewport(
+      prevViewport[0],
+      prevViewport[1],
+      prevViewport[2],
+      prevViewport[3],
+    );
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 

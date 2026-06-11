@@ -68,4 +68,39 @@ describe('STTHeatmapLayer', () => {
     expect(draws.some((d) => d.kind === 'arrays' && d.count === 2)).toBe(true);
     expect(draws.some((d) => d.kind === 'arrays' && d.count === 4)).toBe(true);
   });
+
+  it('restores the framebuffer + viewport bound on entry for the ramp pass', () => {
+    // MapLibre's terrain / globe pipelines render custom layers into an
+    // offscreen target — pass 2 must composite into THAT framebuffer, not
+    // assume the default (null) one.
+    const layer = new STTHeatmapLayer({ ...baseOpts, id: 'h' }) as any;
+    layer.supports32BitIndices = true;
+    const gl = makeMockGl();
+    layer.onContextReady(gl);
+    layer.map = makeMockMap();
+    layer.tileset = {
+      update: vi.fn(),
+      getVisibleTiles: () => [],
+      finalize: vi.fn(),
+    };
+    const tile = makePropertyPointTile();
+    layer.loadedTiles.set('k', tile);
+
+    // Simulate the host's offscreen render target + sub-viewport.
+    const hostFbo = { __mockKind: 'host-framebuffer' };
+    gl.bindFramebuffer(gl.FRAMEBUFFER, hostFbo);
+    gl.viewport(16, 32, 512, 256);
+    gl.bindFramebuffer.mockClear();
+    gl.viewport.mockClear();
+
+    layer.render(gl, new Float32Array(16));
+
+    // The LAST framebuffer bind (pass 2) targets the host's FBO, and the
+    // LAST viewport call restores the host's sub-viewport.
+    const fboCalls = gl.bindFramebuffer.mock.calls;
+    expect(fboCalls.length).toBeGreaterThan(0);
+    expect(fboCalls[fboCalls.length - 1][1]).toBe(hostFbo);
+    const vpCalls = gl.viewport.mock.calls;
+    expect(vpCalls[vpCalls.length - 1]).toEqual([16, 32, 512, 256]);
+  });
 });

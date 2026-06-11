@@ -48,11 +48,6 @@ export {
   type RGBA8,
 } from './base-layer';
 export { lngLatToMercator, projectPositions } from './projection';
-export {
-  ProjectionWorkerPool,
-  getProjectionPool,
-  resetProjectionPool,
-} from './worker/projection-pool';
 
 // Backwards-compat alias for the 0.1.x scaffold, which only had a points
 // renderer named STTMaplibreLayer. New code should import STTPointLayer.

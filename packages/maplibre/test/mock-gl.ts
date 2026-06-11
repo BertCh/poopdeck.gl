@@ -61,6 +61,8 @@ export function makeMockGl(
     TEXTURE_WRAP_S: 0x2802,
     TEXTURE_WRAP_T: 0x2803,
     FRAMEBUFFER: 0x8d40,
+    FRAMEBUFFER_BINDING: 0x8ca6,
+    VIEWPORT: 0x0ba2,
     COLOR_ATTACHMENT0: 0x8ce0,
     FRAMEBUFFER_COMPLETE: 0x8cd5,
     ONE: 1,
@@ -78,6 +80,11 @@ export function makeMockGl(
   };
 
   const drawCalls: Array<{ kind: 'arrays' | 'elements'; count: number }> = [];
+
+  // Tracked bind state for getParameter — just enough for the heatmap's
+  // "capture + restore the host render target" path.
+  let boundFramebuffer: unknown = null;
+  let currentViewport = new Int32Array([0, 0, 1024, 768]);
 
   const gl = {
     ...constants,
@@ -207,10 +214,20 @@ export function makeMockGl(
     texImage2D: vi.fn(),
     createFramebuffer: vi.fn(() => makeHandle('framebuffer')),
     deleteFramebuffer: vi.fn(),
-    bindFramebuffer: vi.fn(),
+    bindFramebuffer: vi.fn((_target: number, fbo: unknown) => {
+      boundFramebuffer = fbo ?? null;
+    }),
     framebufferTexture2D: vi.fn(),
     checkFramebufferStatus: vi.fn(() => 0x8cd5),
-    viewport: vi.fn(),
+    viewport: vi.fn((x: number, y: number, w: number, h: number) => {
+      currentViewport = new Int32Array([x, y, w, h]);
+    }),
+    getParameter: vi.fn((pname: number) => {
+      if (pname === constants.FRAMEBUFFER_BINDING) return boundFramebuffer;
+      // Fresh copy, matching real-GL semantics (callers can't mutate ours).
+      if (pname === constants.VIEWPORT) return new Int32Array(currentViewport);
+      return null;
+    }),
     clear: vi.fn(),
     clearColor: vi.fn(),
     uniform1i: vi.fn(),

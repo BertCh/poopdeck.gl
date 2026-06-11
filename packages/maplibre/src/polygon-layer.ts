@@ -249,16 +249,26 @@ export class STTPolygonLayer extends STTBaseLayer {
     this.map?.triggerRepaint();
   }
 
-  /** Toggle the polygon stroke at runtime. */
+  /**
+   * Toggle the polygon stroke at runtime. The stroke instance buffers are
+   * baked into each tile's GPU cache at build time, so the caches must be
+   * rebuilt (rebuildTileCaches also triggers the repaint).
+   */
   setStroked(stroked: boolean): void {
+    if (this.polyOpts.stroked === stroked) return;
     this.polyOpts.stroked = stroked;
-    this.map?.triggerRepaint();
+    this.rebuildTileCaches();
   }
 
-  /** Toggle extrusion at runtime. */
+  /**
+   * Toggle extrusion at runtime. Side walls + raised tops are baked into each
+   * tile's vertex/index buffers at build time, so the caches must be rebuilt
+   * (rebuildTileCaches also triggers the repaint).
+   */
   setExtruded(extruded: boolean): void {
+    if (this.polyOpts.extruded === extruded) return;
     this.polyOpts.extruded = extruded;
-    this.map?.triggerRepaint();
+    this.rebuildTileCaches();
   }
 
   protected acceptsGeometry(type: GeometryType): boolean {

@@ -187,6 +187,63 @@ describe('STTPolygonLayer', () => {
     expect(cache.indexCount).toBe(6);
   });
 
+  it('setExtruded(false) rebuilds tile caches so walls actually disappear', () => {
+    const layer = new STTPolygonLayer({
+      ...baseOpts,
+      id: 'g',
+      extruded: true,
+      elevation: 1000,
+    }) as any;
+    layer.supports32BitIndices = true;
+    const gl = makeMockGl();
+    layer.gl = gl;
+    layer.map = { triggerRepaint: vi.fn() };
+    const tile = makePolygonTile();
+    const before = layer.ensureTileGpuCache(gl, tile, tile.layers[0]);
+    // Extruded geometry is baked in: 4 top + 4 bottom verts, walls indexed.
+    expect(before.vertexCount).toBe(8);
+    expect(before.indexCount).toBe(30);
+
+    layer.setExtruded(false);
+    // The cache sweep frees the GPU buffers and forces a repaint…
+    expect(layer.tileGpuCache.size).toBe(0);
+    expect(gl.deleteBuffer).toHaveBeenCalled();
+    expect(layer.map.triggerRepaint).toHaveBeenCalled();
+
+    // …and the next frame's rebuild emits flat geometry (no walls/tops).
+    const after = layer.ensureTileGpuCache(gl, tile, tile.layers[0]);
+    expect(after.vertexCount).toBe(4);
+    expect(after.indexCount).toBe(6);
+  });
+
+  it('setStroked(true) rebuilds tile caches so the stroke pass appears', () => {
+    const layer = new STTPolygonLayer({ ...baseOpts, id: 'g' }) as any;
+    layer.supports32BitIndices = true;
+    layer.instSupport = {
+      enabled: true,
+      drawArraysInstanced: () => {},
+      drawElementsInstanced: () => {},
+      vertexAttribDivisor: () => {},
+    };
+    const gl = makeMockGl();
+    layer.gl = gl;
+    layer.map = { triggerRepaint: vi.fn() };
+    const tile = makePolygonTile();
+    const before = layer.ensureTileGpuCache(gl, tile, tile.layers[0]);
+    expect(before.stroke).toBeUndefined();
+
+    layer.setStroked(true);
+    expect(layer.tileGpuCache.size).toBe(0);
+
+    const after = layer.ensureTileGpuCache(gl, tile, tile.layers[0]);
+    expect(after.stroke).toBeDefined();
+    expect(after.stroke.instanceCount).toBe(4);
+
+    // No-op toggle (same value) must NOT pay for a rebuild.
+    layer.setStroked(true);
+    expect(layer.tileGpuCache.size).toBe(1);
+  });
+
   it('pre-baked path produces identical fill geometry to the earcut path', () => {
     // A regression guard for the index translation: pre-baked indices are
     // global into the tile's `positions` buffer; the layer must subtract
