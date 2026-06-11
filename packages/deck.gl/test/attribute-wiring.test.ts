@@ -15,10 +15,10 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { TimeFilterExtension } from '../src/time-filter-extension';
-import { CategoryColorExtension } from '../src/category-color-extension';
-import { PolygonTimeFilterExtension } from '../src/polygon-time-filter-extension';
-import { _resetWarnOnce } from '../src/log';
+import { TimeFilterExtension } from '../src/extensions/time-filter-extension';
+import { CategoryColorExtension } from '../src/extensions/category-color-extension';
+import { PolygonTimeFilterExtension } from '../src/extensions/polygon-time-filter-extension';
+import { _resetWarnOnce } from '../src/lib/log';
 import { makePointTile, makePathTile } from './fake-tile';
 
 /**

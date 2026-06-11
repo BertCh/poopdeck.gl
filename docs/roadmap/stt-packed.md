@@ -53,6 +53,11 @@ build (index pass to decide ordering, payload pass to write packs).
 
 ## 3. Paged directory with temporal pruning (COPC-informed)
 
+> **Design resolved 2026-06-11 → see the focused-effort implementation plan
+> [`paged-directory.md`](./paged-directory.md)** (wire format, reader/writer
+> algorithms, backward-compat/rollout, validation, sequenced tasks). The sketch
+> below is the original feasibility note that plan supersedes.
+
 **Today:** the `.sttd` directory is a single whole-load blob on the cold-start
 critical path (spec §6: cold load = manifest + **entire directory** + pack
 ranges). Measured at-rest sizes across the showcase fleet (2026-06-11, pre-zstd):

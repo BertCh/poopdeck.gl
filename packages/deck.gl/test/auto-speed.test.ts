@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { decideAutoSpeedMultiplier } from '../src/auto-speed';
+import { decideAutoSpeedMultiplier } from '../src/playback/auto-speed';
 
 describe('decideAutoSpeedMultiplier', () => {
   it('applies a downshift immediately, even inside the deadband', () => {

@@ -18,8 +18,8 @@ import { ShaderInputs } from '@luma.gl/engine';
 import {
   CategoryColorExtension,
   categoryColorUniforms,
-} from '../src/category-color-extension';
-import { TimeFilterExtension } from '../src/time-filter-extension';
+} from '../src/extensions/category-color-extension';
+import { TimeFilterExtension } from '../src/extensions/time-filter-extension';
 import type { Color } from '@deck.gl/core';
 
 function makeShaderInputs() {

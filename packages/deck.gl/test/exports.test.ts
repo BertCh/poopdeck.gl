@@ -9,7 +9,7 @@ import { describe, it, expect } from 'vitest';
 
 describe('heatmap rename aliases', () => {
   it('exports HeatmapLayer as an alias of AnimatedHeatmapLayer (module)', async () => {
-    const mod = await import('../src/heatmap-layer');
+    const mod = await import('../src/layers/summary/heatmap-layer');
     expect(mod.AnimatedHeatmapLayer).toBeTypeOf('function');
     expect(mod.HeatmapLayer).toBe(mod.AnimatedHeatmapLayer);
     expect((mod.AnimatedHeatmapLayer as any).layerName).toBe('AnimatedHeatmapLayer');
@@ -17,7 +17,7 @@ describe('heatmap rename aliases', () => {
 
   it('re-exports both names from the package index', async () => {
     const index = await import('../src/index');
-    const mod = await import('../src/heatmap-layer');
+    const mod = await import('../src/layers/summary/heatmap-layer');
     expect(index.AnimatedHeatmapLayer).toBe(mod.AnimatedHeatmapLayer);
     expect(index.HeatmapLayer).toBe(mod.AnimatedHeatmapLayer);
   });

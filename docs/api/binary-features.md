@@ -53,7 +53,7 @@ interface BinaryFeatures {
    * Per-vertex timestamps for LineStrings, relative to timeOffset.
    * Aligns 1:1 with positions. AnimatedTripsLayer uses this for accurate
    * "vehicle at position" animation instead of linear start/end
-   * interpolation; VatTripsLayer for time-driven resampling.
+   * interpolation; AnimatedTripHeadsLayer for the moving head-dot position.
    */
   vertexTimestamps?: Float32Array;
 

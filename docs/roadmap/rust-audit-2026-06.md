@@ -118,6 +118,8 @@ precision at maxzoom, quantized only at overview zooms. Needs a fresh measuremen
 - [ ] Bounds on directory page-pointers + `[t_min, t_max]` per page (paged .sttd). Our sim:
       VIABLE, +7–19% at-rest, queries read 0.3–26% of a whole-load. Directly attacks the
       180× over-fetch + cover_t_min issues from the demo-tile audit.
+      **Design resolved → focused-effort plan: [`paged-directory.md`](./paged-directory.md)**
+      (wire format, reader/writer algorithms, rollout, validation, sequenced tasks).
 - [ ] Per-feature bbox covering column (GeoArrow geoarrow.box) — GeoParquet-1.1 pruning lever.
 - [ ] Re-run coordinate-encoding measurement WITH quantization (quantize-to-grid → delta →
       FastPFOR), zoom-aware (lossless at maxzoom). The one experiment that could overturn

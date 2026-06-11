@@ -36,8 +36,9 @@ datasets.
   polygons with optional extrusion.
 - [**AnimatedTripsLayer**](./api/animated-trips-layer.md): "Vehicle moving
   along route" trails with per-vertex timestamps.
-- [**VatTripsLayer**](./api/vat-trips-layer.md): Vertex-attribute-texture
-  trips variant for very high trip counts.
+- [**AnimatedTripHeadsLayer**](./api/animated-trip-heads-layer.md): A smooth
+  moving dot at the head of each active trip (CPU-interpolated position on a
+  stock ScatterplotLayer).
 - [**AnimatedHeatmapLayer**](./api/heatmap-time-layer.md): Temporal heatmap
   built on deck.gl's aggregation layers, with stacked categorical channels.
 - [**H3SummaryLayer**](./api/h3-summary-layer.md): Renders the

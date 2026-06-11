@@ -6,7 +6,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { GeometryType } from '@stt/core';
-import { STTTripsLayer } from '../src/trips-layer';
+import { STTTripsLayer } from '../src/layers/trips-layer';
 import { makeMockGl } from './mock-gl';
 import { makeTripsTile } from './fixtures';
 

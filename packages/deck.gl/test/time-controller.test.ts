@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { TimeController } from '../src/time-controller';
+import { TimeController } from '../src/playback/time-controller';
 
 /** Controllable rAF / performance.now harness. */
 function installFrameHarness() {

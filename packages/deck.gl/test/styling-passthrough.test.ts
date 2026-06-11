@@ -144,7 +144,7 @@ function basePolygonTile() {
 }
 
 async function makePointLayer(props: Record<string, any> = {}) {
-  const { AnimatedPointLayer } = await import('../src/animated-point-layer');
+  const { AnimatedPointLayer } = await import('../src/layers/core/animated-point-layer');
   const layer: any = Object.create((AnimatedPointLayer as any).prototype);
   layer.props = {
     id: 'pts',
@@ -167,7 +167,7 @@ async function makePointLayer(props: Record<string, any> = {}) {
 }
 
 async function makePathLayer(props: Record<string, any> = {}) {
-  const { AnimatedPathLayer } = await import('../src/animated-path-layer');
+  const { AnimatedPathLayer } = await import('../src/layers/core/animated-path-layer');
   const layer: any = Object.create((AnimatedPathLayer as any).prototype);
   layer.props = {
     id: 'paths',
@@ -190,7 +190,7 @@ async function makePathLayer(props: Record<string, any> = {}) {
 }
 
 async function makeTripsLayer(props: Record<string, any> = {}) {
-  const { AnimatedTripsLayer } = await import('../src/animated-trips-layer');
+  const { AnimatedTripsLayer } = await import('../src/layers/trips/animated-trips-layer');
   const layer: any = Object.create((AnimatedTripsLayer as any).prototype);
   layer.props = {
     id: 'trips',
@@ -215,7 +215,7 @@ async function makeTripsLayer(props: Record<string, any> = {}) {
 }
 
 async function makePolygonLayer(props: Record<string, any> = {}) {
-  const { AnimatedPolygonLayer } = await import('../src/animated-polygon-layer');
+  const { AnimatedPolygonLayer } = await import('../src/layers/core/animated-polygon-layer');
   const layer: any = Object.create((AnimatedPolygonLayer as any).prototype);
   layer.props = {
     id: 'poly',
@@ -241,7 +241,7 @@ async function makePolygonLayer(props: Record<string, any> = {}) {
 }
 
 async function makeHeatmapLayer(props: Record<string, any> = {}) {
-  const { HeatmapLayer } = await import('../src/heatmap-layer');
+  const { HeatmapLayer } = await import('../src/layers/summary/heatmap-layer');
   const layer: any = Object.create((HeatmapLayer as any).prototype);
   layer.props = {
     id: 'hm',
@@ -523,6 +523,111 @@ describe('AnimatedPolygonLayer SolidPolygonLayer pass-throughs', () => {
     expect(layer.renderLayers()[0]).toBe(first);
     layer.props.elevationScale = 50;
     expect(layer.renderLayers()[0]).not.toBe(first);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 4b. Polygon layer: categorical colorMapping → stable per-tile palette
+// ---------------------------------------------------------------------------
+
+/** A 2-feature polygon tile carrying a `severity` categorical column whose
+ *  per-tile dictionary order is caller-controlled. A distinct `t` keeps the
+ *  per-tile prepare cache from collapsing two tiles onto one cache key. */
+function severityPolygonTile(categories: string[], indices: number[], t = 0) {
+  const tile = makePolygonTile({
+    polygons: [
+      [
+        [0, 0],
+        [1, 0],
+        [1, 1],
+        [0, 0],
+      ],
+      [
+        [2, 2],
+        [3, 2],
+        [3, 3],
+        [2, 2],
+      ],
+    ],
+    startTimes: [0, 0],
+    endTimes: [100, 100],
+    timeOffset: 0,
+    tileId: { z: 0, x: 0, y: 0, t },
+  });
+  tile.layers[0].features.categoricalProps['severity'] = {
+    indices: new Uint16Array(indices),
+    categories,
+  } as any;
+  return tile;
+}
+
+describe('AnimatedPolygonLayer categorical colorMapping', () => {
+  const MAPPING = {
+    moderate: [255, 237, 160, 255],
+    extreme: [240, 59, 32, 255],
+  } as Record<string, number[]>;
+
+  it('resolves a per-tile palette by category STRING, stable across dictionary order', async () => {
+    const layer = await makePolygonLayer({
+      fillColor: 'severity',
+      colorMapping: MAPPING,
+      colorMappingDefault: [0, 0, 0, 0],
+    });
+
+    // Two tiles whose `severity` dictionaries are in OPPOSITE order. A bare
+    // index palette would paint feature 0 the same color in both; the mapping
+    // must instead tie color to the string, so the palettes come out reversed.
+    const tileA = severityPolygonTile(['moderate', 'extreme'], [0, 1], 0);
+    const tileB = severityPolygonTile(['extreme', 'moderate'], [0, 1], 1);
+
+    const paletteA = layer.prepareTile(tileA, tileA.layers[0]).gpuPalette;
+    const paletteB = layer.prepareTile(tileB, tileB.layers[0]).gpuPalette;
+
+    expect(paletteA).toEqual([MAPPING.moderate, MAPPING.extreme]);
+    expect(paletteB).toEqual([MAPPING.extreme, MAPPING.moderate]);
+
+    // Each tile's category index resolves through its own palette to the SAME
+    // color for the same string — the cross-tile-stability guarantee.
+    // tileA feature1 = 'extreme' (idx 1) → paletteA[1]; tileB feature0 =
+    // 'extreme' (idx 0) → paletteB[0]; both must equal the extreme color.
+    expect(paletteA![1]).toEqual(MAPPING.extreme);
+    expect(paletteB![0]).toEqual(MAPPING.extreme);
+  });
+
+  it('uses colorMappingDefault for categories absent from the map', async () => {
+    const layer = await makePolygonLayer({
+      fillColor: 'severity',
+      colorMapping: MAPPING,
+      colorMappingDefault: [180, 180, 180, 255],
+    });
+    // 'low' is not in MAPPING → its palette slot falls to the default.
+    const tile = severityPolygonTile(['moderate', 'low'], [0, 1]);
+    const palette = layer.prepareTile(tile, tile.layers[0]).gpuPalette;
+    expect(palette).toEqual([MAPPING.moderate, [180, 180, 180, 255]]);
+  });
+
+  it('without colorMapping, falls back to the global colorPalette (index order)', async () => {
+    const palette = [
+      [10, 10, 10, 255],
+      [20, 20, 20, 255],
+    ];
+    const layer = await makePolygonLayer({ fillColor: 'severity', colorPalette: palette });
+    const tile = severityPolygonTile(['moderate', 'extreme'], [0, 1]);
+    expect(layer.prepareTile(tile, tile.layers[0]).gpuPalette).toBe(palette);
+  });
+
+  it('a colorMapping change re-prepares the tile (styleKey invalidation)', async () => {
+    const layer = await makePolygonLayer({ fillColor: 'severity', colorMapping: MAPPING });
+    const tile = severityPolygonTile(['moderate', 'extreme'], [0, 1]);
+    const first = layer.prepareTile(tile, tile.layers[0]);
+    expect(layer.prepareTile(tile, tile.layers[0])).toBe(first); // cached
+    layer.props.colorMapping = { moderate: [1, 2, 3, 255], extreme: [4, 5, 6, 255] };
+    const second = layer.prepareTile(tile, tile.layers[0]);
+    expect(second).not.toBe(first);
+    expect(second.gpuPalette).toEqual([
+      [1, 2, 3, 255],
+      [4, 5, 6, 255],
+    ]);
   });
 });
 

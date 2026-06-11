@@ -9,13 +9,13 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { TimeController } from '../src/time-controller';
+import { TimeController } from '../src/playback/time-controller';
 import {
   PlaybackGovernor,
   type BufferSource,
   type BufferedRunway,
   type PlaybackGovernorState,
-} from '../src/playback-governor';
+} from '../src/playback/playback-governor';
 
 /** Mutable mock BufferSource: tests poke `runwaySimMs`/`complete` directly. */
 function makeSource() {

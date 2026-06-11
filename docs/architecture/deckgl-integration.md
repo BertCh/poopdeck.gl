@@ -138,7 +138,7 @@ Differences a deck.gl user will notice, beyond the tileset:
   `_subLayerProps` override map works — including `type` substitution, which
   is the `renderSubLayers`-equivalent class-swapping point. Sublayer short
   ids: `points` (AnimatedPointLayer, incl. cumulative slabs), `paths`,
-  `trips`, `polygons`, `head`/`trail` (VatTripsLayer), `heatmap` (per
+  `trips`, `polygons`, `heads` (AnimatedTripHeadsLayer), `heatmap` (per
   channel), `hexagons` (H3SummaryLayer). A TileLayer-style `renderSubLayers`
   *callback* is still not offered — per-tile sublayer construction is
   cache-gated for perf, and `_subLayerProps` covers the class/props

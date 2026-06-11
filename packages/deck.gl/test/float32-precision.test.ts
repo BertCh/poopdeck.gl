@@ -13,7 +13,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { relativizeTime, MAX_RELATIVE_TIME_MS } from '../src/time-filter-extension';
+import { relativizeTime, MAX_RELATIVE_TIME_MS } from '../src/extensions/time-filter-extension';
 
 /** Simulate storing a value in a Float32Array and reading it back. */
 function roundTripF32(value: number): number {

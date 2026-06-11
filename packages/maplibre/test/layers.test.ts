@@ -13,9 +13,9 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { GeometryType } from '@stt/core';
-import { STTPointLayer } from '../src/point-layer';
-import { STTLineLayer } from '../src/line-layer';
-import { STTPolygonLayer } from '../src/polygon-layer';
+import { STTPointLayer } from '../src/layers/point-layer';
+import { STTLineLayer } from '../src/layers/line-layer';
+import { STTPolygonLayer } from '../src/layers/polygon-layer';
 import { makeMockGl } from './mock-gl';
 import {
   makeLineTile,
@@ -272,7 +272,7 @@ describe('STTPolygonLayer', () => {
 
 describe('Per-feature attribute wiring', () => {
   it('point layer uploads radius + color buffers when properties are configured', async () => {
-    const { STTPointLayer } = await import('../src/point-layer');
+    const { STTPointLayer } = await import('../src/layers/point-layer');
     const { makePropertyPointTile } = await import('./fixtures');
     const layer = new STTPointLayer({
       ...baseOpts,

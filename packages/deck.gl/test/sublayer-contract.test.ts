@@ -62,7 +62,7 @@ vi.mock('@deck.gl/layers', () => {
 
 // Shared mock reproducing the real getSubLayerProps/getSubLayerClass
 // contract — see fake-deck-core.ts. Extended here with the base `Layer` +
-// `project32` exports the VAT sublayers import.
+// `project32` exports that custom sublayers import.
 vi.mock('@deck.gl/core', async () => {
   const core = (await import('./fake-deck-core')).createDeckCoreMock();
   class FakeLayer<P = any> {
@@ -161,7 +161,7 @@ function basePathTile() {
 }
 
 async function makePointLayer(props: Record<string, any> = {}) {
-  const { AnimatedPointLayer } = await import('../src/animated-point-layer');
+  const { AnimatedPointLayer } = await import('../src/layers/core/animated-point-layer');
   const layer: any = Object.create((AnimatedPointLayer as any).prototype);
   layer.props = {
     id: 'pts',
@@ -184,7 +184,7 @@ async function makePointLayer(props: Record<string, any> = {}) {
 }
 
 async function makePathLayer(props: Record<string, any> = {}) {
-  const { AnimatedPathLayer } = await import('../src/animated-path-layer');
+  const { AnimatedPathLayer } = await import('../src/layers/core/animated-path-layer');
   const layer: any = Object.create((AnimatedPathLayer as any).prototype);
   layer.props = {
     id: 'paths',
@@ -207,7 +207,7 @@ async function makePathLayer(props: Record<string, any> = {}) {
 }
 
 async function makeTripsLayer(props: Record<string, any> = {}) {
-  const { AnimatedTripsLayer } = await import('../src/animated-trips-layer');
+  const { AnimatedTripsLayer } = await import('../src/layers/trips/animated-trips-layer');
   const layer: any = Object.create((AnimatedTripsLayer as any).prototype);
   layer.props = {
     id: 'trips',
@@ -231,7 +231,7 @@ async function makeTripsLayer(props: Record<string, any> = {}) {
 }
 
 async function makePolygonLayer(props: Record<string, any> = {}) {
-  const { AnimatedPolygonLayer } = await import('../src/animated-polygon-layer');
+  const { AnimatedPolygonLayer } = await import('../src/layers/core/animated-polygon-layer');
   const layer: any = Object.create((AnimatedPolygonLayer as any).prototype);
   layer.props = {
     id: 'poly',
@@ -254,29 +254,32 @@ async function makePolygonLayer(props: Record<string, any> = {}) {
   return layer;
 }
 
-async function makeVatLayer(props: Record<string, any> = {}) {
-  const { VatTripsLayer } = await import('../src/vat-trips-layer');
-  const layer: any = Object.create((VatTripsLayer as any).prototype);
+async function makeHeadsLayer(props: Record<string, any> = {}) {
+  const { AnimatedTripHeadsLayer } = await import(
+    '../src/layers/trips/animated-trip-heads-layer'
+  );
+  const layer: any = Object.create((AnimatedTripHeadsLayer as any).prototype);
   layer.props = {
-    id: 'vat',
+    id: 'heads',
     timeWindow: 1000,
     opacity: 1,
     visible: true,
-    trailLength: 0,
     headColor: [253, 128, 93, 255],
+    sizeUnits: 'pixels',
+    headRadiusPixels: 4,
+    headRadius: 0,
+    headRadiusMinPixels: 0,
+    headRadiusMaxPixels: 1e9,
     ...props,
   };
-  layer._currentTime = 0;
-  layer.boundGetTime = () => 0;
+  layer._currentTime = 50; // mid-trip for basePathTile's [0,100] windows
   layer.preparedTileCache = new Map();
-  layer.sublayerCache = new Map();
-  layer.lastStyleKey = '';
   layer.lastTilesRef = null;
   return layer;
 }
 
 async function makeHeatmapLayer(props: Record<string, any> = {}) {
-  const { HeatmapLayer } = await import('../src/heatmap-layer');
+  const { HeatmapLayer } = await import('../src/layers/summary/heatmap-layer');
   const layer: any = Object.create((HeatmapLayer as any).prototype);
   layer.props = {
     id: 'hm',
@@ -327,7 +330,7 @@ function makeSummaryTile() {
 }
 
 async function makeH3Layer(props: Record<string, any> = {}) {
-  const { H3SummaryLayer } = await import('../src/h3-summary-layer');
+  const { H3SummaryLayer } = await import('../src/layers/summary/h3-summary-layer');
   const layer: any = Object.create((H3SummaryLayer as any).prototype);
   layer.props = {
     id: 'h3',
@@ -424,10 +427,11 @@ describe('getSubLayerProps inheritance (composite props reach sublayers)', () =>
     expect(sub.props.coordinateSystem).toBe(3);
   });
 
-  it('VatTripsLayer: inherits coordinateSystem but forces pickable:false (no picking shader)', async () => {
-    const layer = await makeVatLayer({ coordinateSystem: 3, pickable: true });
+  it('AnimatedTripHeadsLayer: inherits coordinateSystem but forces pickable:false (active-only buffer)', async () => {
+    const layer = await makeHeadsLayer({ coordinateSystem: 3, pickable: true });
     const tile = basePathTile();
-    const sub = layer.buildSublayer(layer.prepareTile(tile, tile.layers[0]));
+    layer.state = { tiles: [tile] };
+    const [sub] = layer.renderLayers();
     expect(sub.props.coordinateSystem).toBe(3);
     expect(sub.props.pickable).toBe(false);
   });
@@ -524,14 +528,23 @@ describe('user updateTriggers invalidate caches and forward into sublayers', () 
     expect(second).not.toBe(first);
   });
 
-  it('VatTripsLayer: a trigger bump rebuilds the cached sublayer', async () => {
-    const layer = await makeVatLayer();
+  it('AnimatedTripHeadsLayer: emits interpolated active heads and culls inactive trips', async () => {
+    const layer = await makeHeadsLayer();
     const tile = basePathTile();
     layer.state = { tiles: [tile] };
-    const [first] = layer.renderLayers();
-    layer.props.updateTriggers = { all: 1 };
-    const [second] = layer.renderLayers();
-    expect(second).not.toBe(first);
+    // Mid-trip: both trips active → one ScatterplotLayer with 2 heads at the
+    // segment midpoints (2-vertex paths, linear in time over [0,100]).
+    layer._currentTime = 50;
+    const [sub] = layer.renderLayers();
+    expect(sub.props.data.length).toBe(2);
+    const pos = sub.props.data.attributes.getPosition.value;
+    expect(pos[0]).toBeCloseTo(0.5);
+    expect(pos[1]).toBeCloseTo(0.5);
+    expect(pos[3]).toBeCloseTo(2.5);
+    expect(pos[4]).toBeCloseTo(2.5);
+    // Past both trips' end → no active heads → no sublayer emitted.
+    layer._currentTime = 200;
+    expect(layer.renderLayers().length).toBe(0);
   });
 
   it('HeatmapLayer: a trigger bump re-consolidates the channel buffers', async () => {
@@ -678,7 +691,7 @@ describe('accessor-named prop aliases (column-name semantics)', () => {
   });
 
   it('AnimatedPointLayer: a function accessor warns once and falls back to the legacy prop', async () => {
-    const { _resetWarnOnce } = await import('../src/log');
+    const { _resetWarnOnce } = await import('../src/lib/log');
     _resetWarnOnce();
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
@@ -772,7 +785,7 @@ describe('accessor-named prop aliases (column-name semantics)', () => {
   });
 
   it('HeatmapLayer: a function getWeight warns and falls back to weightProperty', async () => {
-    const { _resetWarnOnce } = await import('../src/log');
+    const { _resetWarnOnce } = await import('../src/lib/log');
     _resetWarnOnce();
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {

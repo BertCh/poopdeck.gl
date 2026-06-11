@@ -16,8 +16,8 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { PathLayer } from '@deck.gl/layers';
-import { NoPickingPathLayer } from '../src/no-picking-path-layer';
-import { _resetWarnOnce } from '../src/log';
+import { NoPickingPathLayer } from '../src/layers/internal/no-picking-path-layer';
+import { _resetWarnOnce } from '../src/lib/log';
 
 /**
  * Drive `NoPickingPathLayer.getShaders()` with a stubbed parent so we don't

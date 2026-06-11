@@ -25,20 +25,20 @@
 export {
   STTPointLayer,
   type STTPointLayerOptions,
-} from './point-layer';
+} from './layers/point-layer';
 export {
   STTLineLayer,
   type STTLineLayerOptions,
-} from './line-layer';
+} from './layers/line-layer';
 export {
   STTPolygonLayer,
   type STTPolygonLayerOptions,
-} from './polygon-layer';
-export { STTTripsLayer, type STTTripsLayerOptions } from './trips-layer';
+} from './layers/polygon-layer';
+export { STTTripsLayer, type STTTripsLayerOptions } from './layers/trips-layer';
 export {
   STTHeatmapLayer,
   type STTHeatmapLayerOptions,
-} from './heatmap-layer';
+} from './layers/heatmap-layer';
 export {
   STTBaseLayer,
   type STTBaseLayerOptions,
@@ -47,9 +47,9 @@ export {
   type RGBA,
   type RGBA8,
 } from './base-layer';
-export { lngLatToMercator, projectPositions } from './projection';
+export { lngLatToMercator, projectPositions } from './lib/projection';
 
 // Backwards-compat alias for the 0.1.x scaffold, which only had a points
 // renderer named STTMaplibreLayer. New code should import STTPointLayer.
-export { STTPointLayer as STTMaplibreLayer } from './point-layer';
-export type { STTPointLayerOptions as STTMaplibreLayerOptions } from './point-layer';
+export { STTPointLayer as STTMaplibreLayer } from './layers/point-layer';
+export type { STTPointLayerOptions as STTMaplibreLayerOptions } from './layers/point-layer';

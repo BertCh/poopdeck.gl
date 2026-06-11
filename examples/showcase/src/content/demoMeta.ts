@@ -50,7 +50,7 @@ export interface DemoMeta {
   category: DemoCategory;
   /** Short card tagline; catalog cards fall back to dataset.description. */
   tagline?: string;
-  /** Technique chip on cards, e.g. "Trips · gradient", "VAT", "H3 summary". */
+  /** Technique chip on cards, e.g. "Trips · gradient", "Moving heads", "H3 summary". */
   techniqueTag: string;
   /** "About this demo" — 2–3 paragraphs of plain prose. */
   about: string[];
@@ -74,7 +74,7 @@ export interface DemoMeta {
  *  - flight-paths: synthetic tracks, no source or recipe.
  *  - nyc-taxi-paths: 60× temporal over-fetch on its window; visually
  *    superseded by nyc-taxi-trips on the same archive.
- *  - nyc-taxi-vat: exact duplicate of nyc-taxi-points (same archive/config).
+ *  - nyc-taxi-heads: exact duplicate of nyc-taxi-points (same archive/config).
  *  - nyc-rideshare: near-duplicate of nyc-taxi-points (straight-line
  *    trajectories vs OSRM-routed); its archive still powers the cube/heatmap.
  */
@@ -82,7 +82,7 @@ export const CATALOG_EXCLUDED_IDS: string[] = [
   'satellites',
   'flight-paths',
   'nyc-taxi-paths',
-  'nyc-taxi-vat',
+  'nyc-taxi-heads',
   'nyc-rideshare',
 ];
 
@@ -469,18 +469,18 @@ export const DEMO_META: Record<string, DemoMeta> = {
   'nyc-taxi-trips': {
     category: 'mobility',
     tagline: 'Half a million OSRM-routed cab trips animated on the GPU as flowing ribbons.',
-    techniqueTag: 'VAT trails',
+    techniqueTag: 'Animated trails',
     about: [
       'Every yellow-cab trip from New Year’s Day 2015, routed through the ' +
         'actual Manhattan street network with OSRM so each trip follows real ' +
         'streets — not straight pickup-to-dropoff lines. Per-segment timing ' +
         'comes from OSRM’s duration annotations, so cabs slow through ' +
         'midtown and sprint up the FDR.',
-      'Animation runs entirely on the GPU via vertex-animation textures ' +
-        '(VAT): trip positions for all visible cabs are sampled from a texture ' +
-        'each frame, so half a million trips animate without the CPU touching ' +
-        'a vertex. The cyan ribbons fade toward their tails like long-exposure ' +
-        'headlights.',
+      'Animation runs entirely on the GPU: every vertex carries a timestamp, ' +
+        'and a time-filter shader fades each ribbon in over the trailing ' +
+        'window as the playhead advances — so half a million trips animate by ' +
+        'updating one uniform, with no per-frame CPU work. The cyan ribbons ' +
+        'fade toward their tails like long-exposure headlights.',
     ],
     dataSources: [
       {
@@ -500,7 +500,7 @@ export const DEMO_META: Record<string, DemoMeta> = {
       '  --max-trips 50000 --output nyc-taxi-paths.stt',
     buildNote: OSRM_NOTE,
     techniques: [
-      { label: 'SpatioTemporalLayer (VAT)', docPath: '/docs/api/spatiotemporal-layer' },
+      { label: 'AnimatedTripsLayer', docPath: '/docs/api/animated-trips-layer' },
       { label: 'TimeController', docPath: '/docs/api/time-controller' },
     ],
     related: ['nyc-taxi-points', 'nyc-taxi-flows', 'nyc-taxi-cube'],
@@ -509,16 +509,16 @@ export const DEMO_META: Record<string, DemoMeta> = {
   'nyc-taxi-points': {
     category: 'mobility',
     tagline: 'The same routed trips as moving head-dots — one glowing cab per active trip.',
-    techniqueTag: 'VAT heads',
+    techniqueTag: 'Moving heads',
     about: [
       'The same OSRM-routed trip archive as the ribbons demo, rendered as ' +
         'animated head positions instead of trails: one moving dot per active ' +
-        'cab, interpolated along its route on the GPU. At street zoom the ' +
+        'cab, interpolated along its route at the playhead. At street zoom the ' +
         'dots flow through the grid like blood cells through capillaries.',
-      'No separate "points" dataset exists — the vertex-animation texture ' +
-        'samples the full trip geometry at the playhead, so both this demo ' +
-        'and the ribbons read from the identical archive. One build, two ' +
-        'renderings.',
+      'No separate "points" dataset exists — each cab’s head position is ' +
+        'interpolated from the full trip geometry every frame and drawn as a ' +
+        'plain circle, so both this demo and the ribbons read from the ' +
+        'identical archive. One build, two renderings.',
     ],
     dataSources: [
       {
@@ -537,7 +537,7 @@ export const DEMO_META: Record<string, DemoMeta> = {
       '  --max-trips 50000 --output nyc-taxi-paths.stt',
     buildNote: OSRM_NOTE,
     techniques: [
-      { label: 'SpatioTemporalLayer (VAT)', docPath: '/docs/api/spatiotemporal-layer' },
+      { label: 'AnimatedTripHeadsLayer', docPath: '/docs/api/animated-trip-heads-layer' },
       { label: 'TimeController', docPath: '/docs/api/time-controller' },
     ],
     related: ['nyc-taxi-trips', 'nyc-taxi-cube', 'nyc-taxi-flows'],

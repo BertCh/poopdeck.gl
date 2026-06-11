@@ -17,7 +17,7 @@
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { SpatiotemporalTileset, type TileId } from '@stt/core';
-import { STTPointLayer } from '../src/point-layer';
+import { STTPointLayer } from '../src/layers/point-layer';
 import { makeMockMap } from './mock-gl';
 
 const baseOpts = {

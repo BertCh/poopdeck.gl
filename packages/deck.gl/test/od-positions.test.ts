@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { deriveSourceTargetPositions } from '../src/od-positions';
+import { deriveSourceTargetPositions } from '../src/lib/od-positions';
 import { makePathTile } from './fake-tile';
 
 describe('deriveSourceTargetPositions', () => {

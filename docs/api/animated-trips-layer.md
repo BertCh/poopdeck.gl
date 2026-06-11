@@ -96,7 +96,7 @@ The layer widens the effective loading window to `max(timeWindow, 2 × trailLeng
 | Time granularity | Per-feature `[start, end]` | Per-vertex timestamps |
 | Use case | Ship tracks, flight paths | Taxi routes, delivery animations |
 
-For datasets where total vertex count (not active-trip count) is the bottleneck, see [`VatTripsLayer`](./vat-trips-layer.md), which samples trajectories from a texture instead of uploading every vertex.
+To show a moving marker at each vehicle's current position instead of a trail, see [`AnimatedTripHeadsLayer`](./animated-trip-heads-layer.md), which interpolates the head position per frame and draws it on a stock ScatterplotLayer.
 
 ## Architecture & performance
 

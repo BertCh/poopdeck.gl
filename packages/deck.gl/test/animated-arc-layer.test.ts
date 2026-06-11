@@ -71,7 +71,7 @@ describe('AnimatedArcLayer per-tile sublayer architecture (v3)', () => {
 
   beforeEach(async () => {
     vi.resetModules();
-    const mod = await import('../src/animated-arc-layer');
+    const mod = await import('../src/layers/core/animated-arc-layer');
     LayerCtor = mod.AnimatedArcLayer as any;
 
     makeLayer = (opts = {}) => {
@@ -339,7 +339,7 @@ describe('AnimatedLineLayer per-tile sublayer architecture (v3)', () => {
 
   beforeEach(async () => {
     vi.resetModules();
-    const mod = await import('../src/animated-line-layer');
+    const mod = await import('../src/layers/core/animated-line-layer');
     LayerCtor = mod.AnimatedLineLayer as any;
 
     buildSublayerForTile = (tile, opts = {}) => {

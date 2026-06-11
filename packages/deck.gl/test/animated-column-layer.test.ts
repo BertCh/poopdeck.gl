@@ -75,7 +75,7 @@ describe('AnimatedColumnLayer per-tile sublayer architecture', () => {
   beforeEach(async () => {
     // Fresh import each test so vi.mock's are applied.
     vi.resetModules();
-    const mod = await import('../src/animated-column-layer');
+    const mod = await import('../src/layers/core/animated-column-layer');
     LayerCtor = mod.AnimatedColumnLayer as any;
 
     makeLayer = (opts = {}) => {

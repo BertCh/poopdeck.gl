@@ -73,7 +73,7 @@ describe('AnimatedPointLayer styleKey content invalidation', () => {
 
   beforeEach(async () => {
     vi.resetModules();
-    LayerCtor = (await import('../src/animated-point-layer')).AnimatedPointLayer as any;
+    LayerCtor = (await import('../src/layers/core/animated-point-layer')).AnimatedPointLayer as any;
   });
 
   function makeLayer(opts: Record<string, any> = {}) {
@@ -207,7 +207,7 @@ describe('AnimatedPathLayer styleKey content invalidation', () => {
 
   beforeEach(async () => {
     vi.resetModules();
-    LayerCtor = (await import('../src/animated-path-layer')).AnimatedPathLayer as any;
+    LayerCtor = (await import('../src/layers/core/animated-path-layer')).AnimatedPathLayer as any;
   });
 
   function makeLayer(opts: Record<string, any> = {}) {
@@ -295,7 +295,7 @@ describe('AnimatedTripsLayer styleKey content invalidation', () => {
 
   beforeEach(async () => {
     vi.resetModules();
-    LayerCtor = (await import('../src/animated-trips-layer')).AnimatedTripsLayer as any;
+    LayerCtor = (await import('../src/layers/trips/animated-trips-layer')).AnimatedTripsLayer as any;
   });
 
   function makeLayer(opts: Record<string, any> = {}) {
@@ -426,7 +426,7 @@ describe('H3SummaryLayer styleKey content invalidation', () => {
 
   beforeEach(async () => {
     vi.resetModules();
-    LayerCtor = (await import('../src/h3-summary-layer')).H3SummaryLayer as any;
+    LayerCtor = (await import('../src/layers/summary/h3-summary-layer')).H3SummaryLayer as any;
   });
 
   /** Summary-tier tile with real H3 cell ids packed as u64. */

@@ -3,12 +3,11 @@ export type DatasetType =
   | 'path'
   | 'trips'
   /**
-   * Vertex-Animation-Texture trip rendering — one head dot per active trip,
-   * positions baked into a per-tile 2D texture. GPU work is independent of
-   * per-trajectory vertex count, so this scales where `trips` doesn't.
-   * Same archive shape as `trips` (no rebuild needed).
+   * Moving head-dot trip rendering — one interpolated dot at the head of each
+   * active trip, drawn by `AnimatedTripHeadsLayer` (CPU per-frame position on a
+   * stock ScatterplotLayer). Same archive shape as `trips` (no rebuild needed).
    */
-  | 'vat'
+  | 'trip-heads'
   | 'heatmap'
   | 'polygon'
   /**
@@ -231,41 +230,25 @@ export interface Dataset {
    */
   heatmapLayers?: HeatmapLayerSpec[];
 
-  // ─── VAT-trips styling (type: 'vat') ───────────────────────────────────
-  /** Head-dot color for VAT trips, RGBA 0-255. Used when `vatTrailLength` is 0. */
-  vatHeadColor?: ColorRGBA;
-  /** Head-dot radius in pixels for VAT trips. Used when `vatTrailLength` is 0. */
-  vatHeadRadiusPixels?: number;
-  /** Time-slot resolution per trip for the VAT texture (default 64). */
-  vatTimeSlots?: number;
+  // ─── trip-heads styling (type: 'trip-heads') ───────────────────────────
+  // Rendered by AnimatedTripHeadsLayer — a smooth moving dot at the head of
+  // each active trip (CPU-interpolated position on a stock ScatterplotLayer).
+  /** Head-dot color, RGBA 0-255. */
+  headColor?: ColorRGBA;
+  /** Head-dot radius in pixels (used when `headSizeUnits` is 'pixels'). */
+  headRadiusPixels?: number;
   /**
-   * VAT trail length in ms. > 0 switches the VAT layer from a head dot to a
-   * ribbon trail behind each active trip — same perf characteristics, but
-   * visually matches AnimatedTripsLayer trips.
+   * Units for the head radius. 'pixels' (default) is screen-space; 'meters'
+   * makes the dot world-space (emerges on zoom) like the maritime point layer,
+   * using `headRadius` and clamped by the *MinPixels/*MaxPixels bounds.
    */
-  vatTrailLength?: number;
-  /** Ribbon resolution (verts = (samples+1)*2 per active trip). Default 16. */
-  vatTrailSamples?: number;
-  /** Ribbon color (RGBA, 0-255). Used when `vatTrailLength` > 0. */
-  vatTrailColor?: ColorRGBA;
-  /** Ribbon nominal width (clamped to widthMin/MaxPixels). Pixels, or metres when `vatSizeUnits === 'meters'`. */
-  vatTripWidth?: number;
-  /** Fade the trail's tail to transparent (vs constant alpha). */
-  vatFadeTrail?: boolean;
-
-  /**
-   * Units for VAT head radius and trail width. 'pixels' (default) is screen-
-   * space; 'meters' makes them world-space (emerge on zoom) like the maritime
-   * point layer. In meters mode the head uses `vatHeadRadius` and the trail
-   * uses `vatTripWidth` (both metres), clamped by the *MinPixels/*MaxPixels.
-   */
-  vatSizeUnits?: 'pixels' | 'meters';
-  /** Head radius in METRES when `vatSizeUnits === 'meters'`. */
-  vatHeadRadius?: number;
+  headSizeUnits?: 'pixels' | 'meters';
+  /** Head radius in METRES when `headSizeUnits === 'meters'`. */
+  headRadius?: number;
   /** Min on-screen head radius in pixels (meters-mode clamp). */
-  vatHeadRadiusMinPixels?: number;
+  headRadiusMinPixels?: number;
   /** Max on-screen head radius in pixels (meters-mode clamp). */
-  vatHeadRadiusMaxPixels?: number;
+  headRadiusMaxPixels?: number;
 
   /**
    * Layer opacity (0-1). Defaults to 0.8. Lower values let dense, overlapping

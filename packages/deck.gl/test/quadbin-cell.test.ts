@@ -12,7 +12,7 @@ import {
   tileToQuadkey,
   quadkeyFromTile,
   type QuadbinTile,
-} from '../src/quadbin-cell';
+} from '../src/lib/quadbin-cell';
 
 /**
  * Canonical CARTO `tile → quadbin u64` encode, kept INDEPENDENT of the

@@ -33,7 +33,7 @@ import {
   type Layer as STTLayer,
   type GeometryType,
 } from '@stt/core';
-import { projectPositions } from './projection';
+import { projectPositions } from './lib/projection';
 
 /** RGBA tuple in the 0–1 range used by all STT shader uniforms. */
 export type RGBA = [number, number, number, number];

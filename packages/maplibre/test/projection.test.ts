@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { lngLatToMercator, projectPositions } from '../src/projection';
+import { lngLatToMercator, projectPositions } from '../src/lib/projection';
 
 describe('lngLatToMercator', () => {
   it('sends [-180, 0] to [0, 0.5]', () => {

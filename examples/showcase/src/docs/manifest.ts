@@ -127,9 +127,9 @@ export const docSections: DocSection[] = [
         title: "AnimatedTripsLayer",
       },
       {
-        slug: "api/vat-trips-layer",
-        file: "api/vat-trips-layer.md",
-        title: "VatTripsLayer",
+        slug: "api/animated-trip-heads-layer",
+        file: "api/animated-trip-heads-layer.md",
+        title: "AnimatedTripHeadsLayer",
       },
       {
         slug: "api/heatmap-time-layer",

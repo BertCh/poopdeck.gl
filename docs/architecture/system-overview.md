@@ -142,9 +142,9 @@ compression abstraction, Hilbert/temporal indexing, and metadata.
   delegates rendering to specialized sublayers.
 - **`AnimatedPointLayer` / `AnimatedPathLayer` / `AnimatedPolygonLayer` /
   `AnimatedTripsLayer`** — deck.gl layers with GPU time filtering.
-- **`VatTripsLayer`** — Vertex-Animation-Texture variant of trip rendering;
-  one quad per active trip, positions sampled from a per-tile texture.
-  Scales independently of per-trajectory vertex count.
+- **`AnimatedTripHeadsLayer`** — a moving dot at the head of each active trip;
+  the head position is interpolated along the path per frame on the CPU and
+  drawn through a stock ScatterplotLayer (fp64, globe, circular markers).
 - **`AnimatedHeatmapLayer`** — temporal density heatmap built on the canonical
   `@deck.gl/aggregation-layers` HeatmapLayer + `DataFilterExtension`
   (per-channel categorical splits, bake-time intensity-domain support;

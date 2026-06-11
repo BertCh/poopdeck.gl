@@ -113,7 +113,7 @@ describe('AnimatedPointLayer per-tile sublayer architecture (v3)', () => {
   beforeEach(async () => {
     // Fresh import each test so vi.mock's are applied.
     vi.resetModules();
-    const mod = await import('../src/animated-point-layer');
+    const mod = await import('../src/layers/core/animated-point-layer');
     LayerCtor = mod.AnimatedPointLayer as any;
 
     makeLayer = (opts = {}) => {
@@ -308,7 +308,7 @@ describe('AnimatedPointLayer cumulative consolidation', () => {
 
   beforeEach(async () => {
     vi.resetModules();
-    const mod = await import('../src/animated-point-layer');
+    const mod = await import('../src/layers/core/animated-point-layer');
     LayerCtor = mod.AnimatedPointLayer as any;
 
     makeCumulativeLayer = (opts = {}) => {
@@ -506,7 +506,7 @@ describe('AnimatedPathLayer per-tile sublayer architecture (v3)', () => {
 
   beforeEach(async () => {
     vi.resetModules();
-    const mod = await import('../src/animated-path-layer');
+    const mod = await import('../src/layers/core/animated-path-layer');
     LayerCtor = mod.AnimatedPathLayer as any;
 
     buildSublayerForTile = (tile, opts = {}) => {
@@ -610,7 +610,7 @@ describe('AnimatedTripsLayer per-tile sublayer architecture (v3)', () => {
 
   beforeEach(async () => {
     vi.resetModules();
-    const mod = await import('../src/animated-trips-layer');
+    const mod = await import('../src/layers/trips/animated-trips-layer');
     LayerCtor = mod.AnimatedTripsLayer as any;
 
     makeLayer = (opts = {}) => {
@@ -988,7 +988,7 @@ describe('AnimatedPointLayer with categorical color', () => {
 
   it('hands category indices to the GPU (no per-feature RGBA buffer) when colorMapping is unset', async () => {
     vi.resetModules();
-    const mod = await import('../src/animated-point-layer');
+    const mod = await import('../src/layers/core/animated-point-layer');
     const LayerCtor = mod.AnimatedPointLayer as any;
 
     const N = 1000;
@@ -1025,7 +1025,7 @@ describe('AnimatedPointLayer with categorical color', () => {
 
   it('falls back to the CPU RGBA expansion when colorMapping is provided (string-keyed lookup)', async () => {
     vi.resetModules();
-    const mod = await import('../src/animated-point-layer');
+    const mod = await import('../src/layers/core/animated-point-layer');
     const LayerCtor = mod.AnimatedPointLayer as any;
 
     const N = 100;
@@ -1069,7 +1069,7 @@ describe('AnimatedPointLayer with categorical color', () => {
 describe('AIS-sized perf budget', () => {
   it('point layer: prepare + build 200k features per tile under a generous budget', async () => {
     vi.resetModules();
-    const mod = await import('../src/animated-point-layer');
+    const mod = await import('../src/layers/core/animated-point-layer');
     const LayerCtor = mod.AnimatedPointLayer as any;
 
     const N = 200_000;
@@ -1140,7 +1140,7 @@ describe('AnimatedPolygonLayer per-tile sublayer architecture (v3)', () => {
 
   beforeEach(async () => {
     vi.resetModules();
-    const mod = await import('../src/animated-polygon-layer');
+    const mod = await import('../src/layers/core/animated-polygon-layer');
     LayerCtor = mod.AnimatedPolygonLayer as any;
 
     makeLayer = (opts = {}) => {
@@ -1438,7 +1438,7 @@ describe('FlowCorridorLayer keeps static corridors visible (window-mode time bou
 
   beforeEach(async () => {
     vi.resetModules();
-    const mod = await import('../src/flow-corridor-layer');
+    const mod = await import('../src/layers/trips/flow-corridor-layer');
     const LayerCtor = mod.FlowCorridorLayer as any;
     makeLayer = (opts = {}) => {
       const layer = Object.create(LayerCtor.prototype);
@@ -1485,7 +1485,7 @@ describe('FlowCorridorLayer keeps static corridors visible (window-mode time bou
   });
 
   it('base AnimatedTripsLayer leaves instance start/end unset (trail mode)', async () => {
-    const mod = await import('../src/animated-trips-layer');
+    const mod = await import('../src/layers/trips/animated-trips-layer');
     const Base = mod.AnimatedTripsLayer as any;
     const layer = Object.create(Base.prototype);
     layer.props = {

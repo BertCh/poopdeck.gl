@@ -26,7 +26,7 @@ import {
   AnimatedPointLayer,
   AnimatedTripsLayer,
   AnimatedPolygonLayer,
-  VatTripsLayer,
+  AnimatedTripHeadsLayer,
   AnimatedHeatmapLayer,
   HeatmapLayer,
   H3SummaryLayer,
@@ -37,7 +37,7 @@ import type {
   AnimatedPointLayerProps,
   AnimatedTripsLayerProps,
   AnimatedPolygonLayerProps,
-  VatTripsLayerProps,
+  AnimatedTripHeadsLayerProps,
   AnimatedHeatmapLayerProps,
   HeatmapLayerProps,
   H3SummaryLayerProps,
@@ -92,7 +92,7 @@ class MySummaryLayer extends H3SummaryLayer<{ legendTitle: string }> {
 class MyPointLayer extends AnimatedPointLayer<{ a: 1 }> {}
 class MyTripsLayer extends AnimatedTripsLayer<{ a: 1 }> {}
 class MyPolygonLayer extends AnimatedPolygonLayer<{ a: 1 }> {}
-class MyVatLayer extends VatTripsLayer<{ a: 1 }> {}
+class MyHeadsLayer extends AnimatedTripHeadsLayer<{ a: 1 }> {}
 class MyHeatmapLayer extends AnimatedHeatmapLayer<{ a: 1 }> {}
 class MyBaseLayer extends SpatioTemporalLayer<{ a: 1 }> {}
 
@@ -144,11 +144,11 @@ const polygonProps: AnimatedPolygonLayerProps = {
   extruded: true,
   elevation: 'height',
 };
-const vatProps: VatTripsLayerProps = {
-  id: 'vat',
+const headsProps: AnimatedTripHeadsLayerProps = {
+  id: 'heads',
   data: '',
   currentTime: 0,
-  trailLength: 5_000,
+  headRadius: 20,
   sizeUnits: 'meters',
 };
 const h3Props: H3SummaryLayerProps = {
@@ -167,7 +167,7 @@ new MyPathLayer({ ...pathProps, myProp: 42 });
 new MyPointLayer({ ...pointProps, a: 1 });
 new MyTripsLayer({ ...tripsProps, a: 1 });
 new MyPolygonLayer({ ...polygonProps, a: 1 });
-new MyVatLayer({ ...vatProps, a: 1 });
+new MyHeadsLayer({ ...headsProps, a: 1 });
 new MyBaseLayer({ id: 'base', data: '', currentTime: 0, a: 1 });
 new MySummaryLayer({ ...h3Props, legendTitle: 'Cells' });
 

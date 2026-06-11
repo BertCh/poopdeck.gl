@@ -13,8 +13,8 @@
  * eagerly in the Layer constructor, no device required.
  */
 import { describe, it, expect } from 'vitest';
-import { AnimatedPointLayer } from '../src/animated-point-layer';
-import { AnimatedPathLayer } from '../src/animated-path-layer';
+import { AnimatedPointLayer } from '../src/layers/core/animated-point-layer';
+import { AnimatedPathLayer } from '../src/layers/core/animated-path-layer';
 
 describe('explicit-undefined props fall back to defaults', () => {
   it('strokeColor: undefined resolves to the defaultProps color', () => {

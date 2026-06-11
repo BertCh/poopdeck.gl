@@ -17,7 +17,7 @@
 import { describe, it, expect } from 'vitest';
 import type { BinaryFeatures, Tile } from '@stt/core';
 import { GeometryType } from '@stt/core';
-import { buildConsolidatedChannelData } from '../src/heatmap-layer';
+import { buildConsolidatedChannelData } from '../src/layers/summary/heatmap-layer';
 
 function makeBinaryFixture(timeOffset = 1_700_000_000_000): BinaryFeatures {
   // 6 features: 3 pickup, 2 dropoff, 1 transit.

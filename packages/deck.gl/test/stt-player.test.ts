@@ -12,8 +12,8 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { SttPlayer, type SttPlayerOptions } from '../src/stt-player';
-import type { BufferSource, BufferedRunway } from '../src/playback-governor';
+import { SttPlayer, type SttPlayerOptions } from '../src/playback/stt-player';
+import type { BufferSource, BufferedRunway } from '../src/playback/playback-governor';
 
 /** Mutable mock BufferSource: tests poke `runwaySimMs`/`complete` directly. */
 function makeSource() {

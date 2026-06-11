@@ -99,7 +99,7 @@ function makeSummaryTile(props?: Record<string, any>) {
 }
 
 async function makeQuadbinLayer(props: Record<string, any> = {}) {
-  const { QuadbinSummaryLayer } = await import('../src/quadbin-summary-layer');
+  const { QuadbinSummaryLayer } = await import('../src/layers/summary/quadbin-summary-layer');
   const layer: any = Object.create((QuadbinSummaryLayer as any).prototype);
   layer.props = {
     id: 'qb',

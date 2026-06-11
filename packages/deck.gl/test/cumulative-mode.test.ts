@@ -11,7 +11,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { TimeFilterExtension } from '../src/time-filter-extension';
+import { TimeFilterExtension } from '../src/extensions/time-filter-extension';
 
 /** JS mirror of the GLSL `if (timeFilter.cumulative > 0.0) { … }` branch. */
 function cumulativeAlphaRef(

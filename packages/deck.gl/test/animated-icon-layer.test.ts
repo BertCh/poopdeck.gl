@@ -63,7 +63,7 @@ describe('AnimatedIconLayer per-tile sublayer architecture', () => {
   beforeEach(async () => {
     // Fresh import each test so vi.mock's are applied.
     vi.resetModules();
-    const mod = await import('../src/animated-icon-layer');
+    const mod = await import('../src/layers/core/animated-icon-layer');
     LayerCtor = mod.AnimatedIconLayer as any;
 
     makeLayer = (opts = {}) => {

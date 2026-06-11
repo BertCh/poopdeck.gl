@@ -49,8 +49,8 @@ const TripsGlyph = svg(
   </>,
 );
 
-// A sampled trail (texture-baked positions) feeding a head — VAT.
-const VatGlyph = svg(
+// A fading trail feeding a moving head dot — trip heads.
+const TripHeadsGlyph = svg(
   <>
     <circle cx="4" cy="16.5" r="1.1" fill="currentColor" opacity={0.4} />
     <circle cx="8" cy="14" r="1.3" fill="currentColor" opacity={0.6} />
@@ -114,14 +114,14 @@ export interface VizDef {
 /**
  * Per-`DatasetType` icon + color. Hues are spread around the wheel and lean
  * dark enough to stay legible on the warm-paper chrome; siblings differ by
- * glyph (trips line vs. VAT dots; H3 hex vs. Quadbin square). `trips` keeps the
+ * glyph (trips line vs. head dots; H3 hex vs. Quadbin square). `trips` keeps the
  * brand teal — it's the hero technique.
  */
 export const VIZ_REGISTRY: Record<DatasetType, VizDef> = {
   point: { label: "Points", color: "#C8432F", icon: PointGlyph },
   path: { label: "Paths", color: "#2A8A60", icon: PathGlyph },
   trips: { label: "Trips", color: "#0A7790", icon: TripsGlyph },
-  vat: { label: "VAT", color: "#2A6FB0", icon: VatGlyph },
+  "trip-heads": { label: "Heads", color: "#2A6FB0", icon: TripHeadsGlyph },
   heatmap: { label: "Heatmap", color: "#C2671B", icon: HeatmapGlyph },
   polygon: { label: "Polygons", color: "#7A4DB3", icon: PolygonGlyph },
   summary: { label: "H3 summary", color: "#A93C76", icon: SummaryGlyph },

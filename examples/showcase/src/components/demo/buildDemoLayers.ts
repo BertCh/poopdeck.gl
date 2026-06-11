@@ -181,23 +181,21 @@ export function buildDemoLayers({
           jointRounded: selectedDataset.jointRounded ?? false,
         }),
       ];
-    case "vat":
-      // Head-dot demos render a smooth moving point at each active trip's head
-      // via the vanilla AnimatedTripHeadsLayer (stock ScatterplotLayer + CPU
-      // per-frame position interpolation) — fp64, no jitter, no custom GLSL.
-      // The `vat*` dataset fields are reused verbatim for the head styling; the
-      // trail-mode fields are ignored (head demos never set them).
+    case "trip-heads":
+      // A smooth moving point at each active trip's head via AnimatedTripHeadsLayer
+      // (stock ScatterplotLayer + CPU per-frame position interpolation) — fp64,
+      // no jitter, no custom GLSL.
       return [
         new AnimatedTripHeadsLayer({
           ...baseProps,
-          headColor: selectedDataset.vatHeadColor ?? [253, 128, 93, 255],
-          headRadiusPixels: selectedDataset.vatHeadRadiusPixels ?? 4,
+          headColor: selectedDataset.headColor ?? [253, 128, 93, 255],
+          headRadiusPixels: selectedDataset.headRadiusPixels ?? 4,
           // World-space sizing (meters) so heads emerge on zoom like the
           // maritime points; defaults to pixels (legacy look).
-          sizeUnits: selectedDataset.vatSizeUnits,
-          headRadius: selectedDataset.vatHeadRadius,
-          headRadiusMinPixels: selectedDataset.vatHeadRadiusMinPixels,
-          headRadiusMaxPixels: selectedDataset.vatHeadRadiusMaxPixels,
+          sizeUnits: selectedDataset.headSizeUnits,
+          headRadius: selectedDataset.headRadius,
+          headRadiusMinPixels: selectedDataset.headRadiusMinPixels,
+          headRadiusMaxPixels: selectedDataset.headRadiusMaxPixels,
         }),
       ];
     case "trips": {

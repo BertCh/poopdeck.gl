@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { emit, measure, disableProbe } from '../src/telemetry';
+import { emit, measure, disableProbe } from '../src/lib/telemetry';
 
 interface ProbeBag {
   enabled?: boolean;

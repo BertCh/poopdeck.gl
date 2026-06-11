@@ -455,7 +455,7 @@ const rawDatasets: Dataset[] = [
     // Comet-wake aesthetic, mirrored from ship-traffic: each cab leaves a
     // fading, shrinking trail of its recent positions. A 60s wake spans ~4
     // of the 15s position samples — long enough to read as a street-tracing
-    // comet at the zoom-12 view, short enough not to smear into the VAT-trips
+    // comet at the zoom-12 view, short enough not to smear into the trips-ribbon
     // look. timeWindow is 2× wakeLength so the loader covers the past half of
     // the wake (the shader filter is independent of the loader window).
     wakeLength: 60000,      // 60s comet trail behind each cab
@@ -566,10 +566,9 @@ const rawDatasets: Dataset[] = [
     // Smooth moving head-dot on the FULL trip archive (same source as the trips
     // demo) — one interpolated dot per active trip, no separate derived points
     // file. Rendered by AnimatedTripHeadsLayer (stock ScatterplotLayer + CPU
-    // per-frame head interpolation), the vanilla replacement for the old VAT
-    // head; the `type: 'vat'` tag now maps to that layer.
+    // per-frame head interpolation).
     url: '/data/nyc-taxi-paths/manifest.json',
-    type: 'vat',
+    type: 'trip-heads',
     timeRange: {
       start: 1420070400000,  // 2015-01-01 00:00:00 UTC
       end: 1420213385000,    // 2015-01-02 13:43:05 UTC
@@ -591,11 +590,11 @@ const rawDatasets: Dataset[] = [
     // World-space head dots (meters): a 20 m head reads ~2.8 px at the zoom-14
     // view and emerges/shrinks on zoom with no pixel floor (radiusMinPixels: 0);
     // radiusMaxPixels: 8 caps a stopped cab at deep zoom.
-    vatHeadColor: [253, 128, 93, 255],
-    vatSizeUnits: 'meters',
-    vatHeadRadius: 20,      // metres
-    vatHeadRadiusMinPixels: 0,
-    vatHeadRadiusMaxPixels: 8,
+    headColor: [253, 128, 93, 255],
+    headSizeUnits: 'meters',
+    headRadius: 20,      // metres
+    headRadiusMinPixels: 0,
+    headRadiusMaxPixels: 8,
   },
   {
     id: 'nyc-taxi-paths',
@@ -804,7 +803,7 @@ const rawDatasets: Dataset[] = [
         { color: "#1FBAD6", label: "Active Trip" },
       ]
     },
-    // Trail config (AnimatedTripsLayer / PathLayer — no custom VAT layer).
+    // Trail config (AnimatedTripsLayer / PathLayer).
     // World-space width (metres), mirrored from the maritime points' "render by
     // space" look: the ribbon is ~1.4 px at the zoom-14 view and grows/shrinks
     // with zoom (caps at widthMaxPixels) instead of staying a fixed screen
@@ -821,13 +820,13 @@ const rawDatasets: Dataset[] = [
     jointRounded: false,
   },
   {
-    id: 'nyc-taxi-vat',
+    id: 'nyc-taxi-heads',
     name: 'NYC Yellow Cabs',
     description: 'Animated yellow-cab positions across Manhattan. Source: NYC TLC.',
     url: '/data/nyc-taxi-paths/manifest.json',
     // Head-dot via AnimatedTripHeadsLayer (vanilla ScatterplotLayer + CPU head
-    // interpolation); the `type: 'vat'` tag maps to that layer now.
-    type: 'vat',
+    // interpolation).
+    type: 'trip-heads',
     timeRange: {
       start: 1420070400000,
       end: 1420213385000,
@@ -850,11 +849,11 @@ const rawDatasets: Dataset[] = [
     // 20 m head reads ~2.8 px at the zoom-14 view and emerges/shrinks on zoom
     // with no pixel floor (radiusMinPixels: 0), matching nyc-taxi-points.
     // radiusMaxPixels: 8 caps a stopped cab at deep zoom.
-    vatHeadColor: [253, 128, 93, 255],
-    vatSizeUnits: 'meters',
-    vatHeadRadius: 20,      // metres
-    vatHeadRadiusMinPixels: 0,
-    vatHeadRadiusMaxPixels: 8,
+    headColor: [253, 128, 93, 255],
+    headSizeUnits: 'meters',
+    headRadius: 20,      // metres
+    headRadiusMinPixels: 0,
+    headRadiusMaxPixels: 8,
   },
   {
     id: 'ship-traffic',
@@ -1443,7 +1442,7 @@ export const defaultDatasetId = 'earthquake-activity';
 export const SHIPPED_DATASET_IDS: string[] = [
   'ocean-drifters',     // Ocean Currents — surface-drifter tracks (observed)
   'ecco-currents',      // Modeled Ocean Currents — ECCO advected particles
-  'nyc-taxi-points',    // NYC Taxi Points — VAT head layer, full nyc-taxi-paths.stt
+  'nyc-taxi-points',    // NYC Taxi Points — trip-heads layer, full nyc-taxi-paths.stt
   'nyc-taxi-trips',     // NYC Yellow Cab Trips
   'osm-nyc-draw',       // OSM Editing — NYC (cumulative "draw")
   'ship-traffic',       // US Maritime Traffic — vessel points
