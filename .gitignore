@@ -22,6 +22,8 @@ build/
 **/src/**/*.d.ts.map
 !**/src/**/*.config.js
 !**/src/**/*.test.js
+# Hand-written ambient type shims (not compiler output).
+!**/src/vite-env.d.ts
 **/test/**/*.js
 **/test/**/*.js.map
 **/test/**/*.d.ts
