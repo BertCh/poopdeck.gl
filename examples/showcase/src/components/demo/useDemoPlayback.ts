@@ -24,6 +24,13 @@ import type {
 import type { Dataset } from "../../types";
 import { calculateAnimationSpeed } from "../../types";
 
+// The governor's user-intent bit (`get paused()`, the F7 intent exposure) is
+// newer than the showcase's built @stt/deck.gl dist may be — the showcase
+// typechecks against dist/*.d.ts, not src. Narrow assertion until the dist is
+// rebuilt; the runtime member is always present on the source build.
+const governorPaused = (g: PlaybackGovernor): boolean =>
+  (g as PlaybackGovernor & { paused: boolean }).paused;
+
 export interface DemoPlayback {
   timeController: TimeController;
   governor: PlaybackGovernor | null;
@@ -104,16 +111,19 @@ export function useDemoPlayback(
   }, [timeController]);
 
   // Reflect the governor's machine state into React (state transitions are
-  // rare — start/stall/seek — so no extra throttling is needed). When the
-  // governor lands in 'idle' from an external pause (e.g. the clock clamping
-  // at a range end) the play button must follow.
+  // rare — start/stall/seek — so no extra throttling is needed). The React
+  // `isPlaying` mirror derives from the governor's intent bit (`paused`) on
+  // every transition — external pauses (the clock clamping at a range end)
+  // and the ended path both clear intent inside the governor, so they flow
+  // through here without special-casing any particular state.
   const [bufferState, setBufferState] = useState<PlaybackGovernorState>("idle");
   useEffect(() => {
     if (!governor) return;
     setBufferState(governor.state);
+    setIsPlaying(!governorPaused(governor));
     const onStateChange = (state: PlaybackGovernorState) => {
       setBufferState(state);
-      if (state === "idle") setIsPlaying(false);
+      setIsPlaying(!governorPaused(governor));
     };
     governor.on("statechange", onStateChange);
     return () => governor.off("statechange", onStateChange);
@@ -175,30 +185,34 @@ export function useDemoPlayback(
     };
   }, [timeController]);
 
+  // Play/pause/toggle all read AND write intent on the governor (F7): branch
+  // on `g.paused`, call requestPlay/requestPause, then mirror `!g.paused` back
+  // into React. One source of truth — no optimistic state to drift from the
+  // governor (and no stale-closure dependency on the `isPlaying` state).
   const play = useCallback(() => {
     const g = governorRef.current;
     if (!g) return;
     g.requestPlay();
-    setIsPlaying(true);
+    setIsPlaying(!governorPaused(g));
   }, []);
 
   const pause = useCallback(() => {
     const g = governorRef.current;
     if (!g) return;
     g.requestPause();
-    setIsPlaying(false);
+    setIsPlaying(!governorPaused(g));
   }, []);
 
   const handlePlayPause = useCallback(() => {
     const g = governorRef.current;
     if (!g) return;
-    if (isPlaying) {
-      g.requestPause();
-    } else {
+    if (governorPaused(g)) {
       g.requestPlay();
+    } else {
+      g.requestPause();
     }
-    setIsPlaying(!isPlaying);
-  }, [isPlaying]);
+    setIsPlaying(!governorPaused(g));
+  }, []);
 
   // Committed seek (keyboard arrows, jump-to-start). Drag-scrubbing previews
   // talk to the governor directly inside TimeControls.

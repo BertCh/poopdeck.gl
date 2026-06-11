@@ -37,6 +37,21 @@ describe('decideAutoSpeedMultiplier', () => {
     expect(decideAutoSpeedMultiplier(1, 0.01, 'cadence')).toBe(0.25);
   });
 
+  it('clamps an Infinity suggestion (nothing left to load) to maxMultiplier', () => {
+    // The governor returns Infinity when the horizon has zero pending tiles;
+    // the consumer clamp turns "uncapped" into "rise to the top step".
+    expect(decideAutoSpeedMultiplier(1, Infinity, 'cadence')).toBe(10);
+  });
+
+  it('an Infinity suggestion still obeys the upshift damping rules', () => {
+    // Already at the top step → hold.
+    expect(decideAutoSpeedMultiplier(10, Infinity, 'cadence')).toBeNull();
+    // Upshifts never apply on the waiting phase, even uncapped ones.
+    expect(decideAutoSpeedMultiplier(1, Infinity, 'waiting')).toBeNull();
+    // 8 → 10 is exactly a 25% move (≤ deadband) → hold.
+    expect(decideAutoSpeedMultiplier(8, Infinity, 'cadence')).toBeNull();
+  });
+
   it('holds when the snapped step equals the current multiplier', () => {
     expect(decideAutoSpeedMultiplier(2, 2.1, 'cadence')).toBeNull();
   });

@@ -1,12 +1,12 @@
 # STT tile payload format
 
 > **Scope:** this page is the normative spec for the **tile payload** (Apache
-> Arrow IPC + GeoArrow), which is identical regardless of container. The current
+> Arrow IPC + GeoArrow), which is identical regardless of container. The
 > **container** is the packed format —
 > [`docs/spec/stt-packed-format.md`](../spec/stt-packed-format.md), which also
 > specifies the v5 directory codec (§4 there). The single-file layout
-> under "Top-level layout" below is the **legacy v4** container, now retained
-> only as the streaming/transcode intermediate.
+> under "Top-level layout" below is the **single-file container**, used as the
+> streaming/transcode intermediate.
 
 An STT dataset combines a spatial tile pyramid with a temporal axis. Tile
 payloads are **Apache Arrow IPC** record batches with **GeoArrow**-encoded
@@ -14,28 +14,31 @@ geometry, so a browser can decode a tile with one library (`apache-arrow`) and
 feed the resulting columnar buffers directly to deck.gl.
 
 This document is the normative spec for the tile payload. The Rust authority is
-`crates/stt-core/src/archive.rs` and `crates/stt-core/src/arrow_tile.rs`; the
-TypeScript reader lives in `packages/core/src/archive.ts`. If this document
-and the code disagree, the code wins — please open a PR.
+`crates/stt-core/src/arrow_tile.rs` (payload), `crates/stt-core/src/archive.rs`
+(single-file container) and `crates/stt-core/src/directory.rs` (the tile
+index codec); the TypeScript reader (packed format only) lives in
+`packages/core/src/archive.ts` / `tile.ts`. If this document and the code
+disagree, the code wins — please open a PR.
 
-## Top-level layout (legacy single-file v4)
+## Top-level layout (single-file container)
 
-> The container below is the **legacy single-file** archive. The current
+> The container below is the **single-file** archive. The primary
 > container is the packed format (`manifest.json` + content-addressed
 > `packs/*.sttp` + `index/*.sttd`); see
-> [`stt-packed-format.md`](../spec/stt-packed-format.md). Single-file is now only
-> produced as the bounded-RAM streaming intermediate that is transcoded to packs.
+> [`stt-packed-format.md`](../spec/stt-packed-format.md). The single-file
+> container is produced as the bounded-RAM streaming intermediate that is
+> transcoded to packs.
 
 ```
 ┌─────────────────────────┐  offset 0
 │ Header (64 bytes)       │  fixed-size, little-endian
 ├─────────────────────────┤
 │ Tile blobs              │  compressed Arrow IPC layer frames
-│ ...                     │  one HTTP range request per tile
+│ ...                     │  back to back, no padding
 ├─────────────────────────┤
-│ Dictionary (optional)   │  reserved zstd-dictionary slot — currently unused
+│ Dictionary (optional)   │  shared zstd dictionary — no shipped producer
 ├─────────────────────────┤
-│ Index (Arrow IPC)       │  the directory — one row per tile
+│ Index (directory codec) │  the directory — one entry per tile
 ├─────────────────────────┤
 │ Metadata (UTF-8 JSON)   │  human-inspectable; serde-versioned
 └─────────────────────────┘  offset = file length
@@ -54,28 +57,29 @@ version.
 | Magic        | Version | Status                                              |
 | ------------ | ------- | --------------------------------------------------- |
 | `STT\x01`    | 1       | retired (pre-Arrow protobuf tiles)                  |
-| `STT\x02`    | 2       | retired (gzip + BLAKE3-64 dedup, no dictionary slot)|
-| `STT\x03`    | 3       | legacy single-file (zstd + CRC32C, no dedup)        |
-| `STT\x04`    | 4       | legacy single-file (dedup + shared dict + run-length directory); now only the streaming/transcode intermediate |
+| `STT\x02`    | 2       | retired (gzip + BLAKE3-64 dedup)                    |
+| `STT\x03`    | 3       | retired (zstd + CRC32C, no dedup)                   |
+| `STT\x04`    | 4       | single-file container (dedup + run-length directory); the streaming/transcode intermediate |
 
 > The **current container is the packed format**, which has no single-file magic
 > — a dataset is identified by `manifest.json` with `"format": "stt-packed"`. The
-> magic table above applies only to single-file archives. Readers MUST refuse
-> archives whose version they do not understand.
+> magic table above applies only to single-file archives, and the in-repo
+> reader (`stt-core::archive::ArchiveReader`) accepts **only v4** — v1–v3 are
+> rejected. Readers MUST refuse archives whose version they do not understand.
 
 ## Header (64 bytes, little-endian)
 
 ```rust
 struct ArchiveHeader {
-    magic: [u8; 4],             // "STT\x03" (or "STT\x02" for legacy)
-    version: u8,                // 3
+    magic: [u8; 4],             // "STT\x04" (4th byte doubles as the version)
+    version: u8,                // 4
     compression: u8,            // 0 = none, 1 = gzip, 2 = zstd
     index_offset: u64,          // start of Index, bytes from file start
     index_length: u64,
     metadata_offset: u64,       // start of Metadata
     metadata_length: u64,
-    dictionary_offset: u64,     // 0 if no dictionary present (v3 only)
-    dictionary_length: u64,     // 0 if no dictionary present (v3 only)
+    dictionary_offset: u64,     // 0 if no dictionary present
+    dictionary_length: u64,     // 0 if no dictionary present
     reserved: [u8; 10],         // MUST be zero, RESERVED for future use
 }
 ```
@@ -91,32 +95,25 @@ Tile blobs are written immediately after the header, back to back, with no
 padding. The directory tells a reader where each one starts and how long it
 is.
 
-Each blob is **zstd(layer frame)** (v3 default), **gzip(layer frame)**, or
-the raw layer frame, depending on the header's `compression` byte.
+Each blob is **zstd(layer frame)** (the default — `stt-build` is zstd-only),
+**gzip(layer frame)**, or the raw layer frame, depending on the header's
+`compression` byte.
 
-**v3 does NOT deduplicate tile blobs.** The v3 writer appends every tile's
-compressed bytes unconditionally and tags each with a CRC32C purely as an
-integrity check — there is no content-addressing and no shared-offset
-dedup. (Real-data dedup hit rates on continuous datasets are sub-1%, so the
-hashing + lookup cost was removed in v3.) Only **v2** deduplicates: its
-writer keys a hash table on the leading 8 bytes of a BLAKE3 digest and
-shares the offset for byte-identical blobs.
+**Deduplication.** The buffered ("optimized") v4 writer and the packed
+`PackWriter` blake3-hash each compressed blob and write byte-identical blobs
+once — a static cell repeated across time buckets stores one physical blob,
+which the directory's run-length encoding then collapses into a single run.
+The eager (streaming) v4 writer appends every blob unconditionally.
 
-Every blob carries an integrity tag in its directory row:
-
-- **v3**: CRC32C of the compressed bytes (stored in the `crc32c` column).
-- **v2**: leading 8 bytes of a BLAKE3 digest (stored in the `content_hash`
-  column; doubles as the dedup key on the write side).
-
-Verification status:
+Every blob carries a **CRC32C of its compressed bytes** as an integrity tag
+in its directory entry. Verification status:
 
 - The Rust `ArchiveReader` (`stt-core::archive`) checks the tag on every
-  `read_payload` and the `stt-validate` tool checks all tiles up front.
-- The reference TypeScript reader (`packages/core/src/archive.ts`) reads the
-  column for forward-compat/debugging but does **not** currently verify it on
-  the hot decode path — a corrupt blob surfaces as an Arrow/zstd decode
-  error instead. Readers SHOULD verify the tag; client-side verification is a
-  planned follow-up.
+  `read_payload`, and `stt-validate` checks all tiles up front.
+- The TypeScript reader (`packages/core/src/archive.ts`) decodes the tag from
+  the directory but does **not** verify it on the hot decode path — a corrupt
+  blob surfaces as an Arrow/zstd decode error instead. Readers SHOULD verify
+  the tag.
 
 ### Layer frame
 
@@ -139,8 +136,8 @@ IPC stream starts 8-byte aligned relative to the payload start — the
 alignment Arrow requires for zero-copy buffer views. `ipc_len` is the exact
 IPC byte length (padding excluded); the pad is never stored, readers derive
 it from the same alignment math. Layer count is therefore capped at
-`0x7fff`. The flag unset (all archives built before 2026-06) means no
-padding; readers MUST accept both shapes. See the packed spec §5.1.
+`0x7fff`. Frames with the flag unset carry no padding; readers MUST accept
+both shapes. See the packed spec §5.1.
 
 ### Per-layer Arrow schema
 
@@ -152,6 +149,7 @@ padding; readers MUST accept both shapes. See the packed spec §5.1.
 | `geometry`          | GeoArrow Point / LineString / Polygon   | non-null    | interleaved f64 lon/lat              |
 | `vertex_time`       | `List<UInt16>` (deltas) or `List<Int64>` (exact) | nullable | per-vertex times (LineString only) — see below |
 | `vertex_value`      | `List<Float32>`                         | nullable    | per-vertex scalar (e.g. SST on drifters/currents); decoded to `BinaryFeatures.vertexValues` |
+| `vertex_value_matrix` | `List<Float32>`                       | nullable    | per-vertex × per-bucket value matrix (vertex-major) for static-geometry overview animation; bucket count in schema metadata `stt:vertex_value_buckets` |
 | `triangles`         | `List<UInt32>`                          | non-null    | feature-local earcut indices (Polygon, `--pre-tessellate`) |
 | `<prop>`            | `Float64` (numeric) or `Dictionary<UInt16, Utf8>` (categorical) | nullable | one column per property, by name |
 
@@ -160,8 +158,8 @@ Geometry uses the GeoArrow extension metadata key
 or `geoarrow.polygon` — see [GeoArrow interop](#geoarrow-interop) below.
 Coordinates are interleaved `[x, y]` in WGS84 degrees; the writer does
 **not** quantize or delta-encode — per-blob zstd on the IPC bytes does the
-work (gzip survives only as a readable legacy value; the writer is
-zstd-only).
+work (the writer is zstd-only; gzip remains a readable value for older
+single-file archives).
 
 Layers within one tile MUST agree on feature count for the rows they each
 cover, but they MAY carry different property columns.
@@ -169,7 +167,7 @@ cover, but they MAY carry different property columns.
 #### `vertex_time` (per-vertex timestamps)
 
 LineString layers built with `--end-time-field` carry a per-vertex time
-column. v3 encodes it as `List<UInt16>` **deltas** relative to a per-layer
+column. The writer encodes it as `List<UInt16>` **deltas** relative to a per-layer
 `(origin, step)`: the absolute time of a vertex is
 `origin + delta * step`. The origin and step are recorded in the layer's
 **schema-level** Arrow metadata under the keys:
@@ -219,8 +217,8 @@ order, matching the interleaved `[lon, lat]` storage — *not* `EPSG:4326`, whos
 strict (lat/lon) axis order would mislabel the data. Carrying it makes every
 tile self-describing to GDAL / GeoPandas / lonboard / QGIS; a reader that wants
 the CRS reads this key, and a reader that ignores it is unaffected (the key is
-additive). Older archives written before this key was added carry only
-`ARROW:extension:name`; consumers should treat a missing CRS as OGC:CRS84.
+additive). Archives that carry only `ARROW:extension:name` (no CRS metadata)
+should be treated as OGC:CRS84.
 
 Coordinates use the GeoArrow **interleaved** convention
 (`FixedSizeList<Float64, 2>` of `[x, y]` pairs), which matches the
@@ -228,8 +226,8 @@ Coordinates use the GeoArrow **interleaved** convention
 default. Polygons are encoded as `List<List<FixedSizeList<Float64, 2>>>`
 (rings inside features), and linestrings as `List<FixedSizeList<Float64, 2>>`.
 
-The schema also carries a legacy `stt:geometry` key in
-schema-level metadata for back-compat; readers SHOULD prefer the standard
+The schema-level metadata also carries `stt:layer` (the layer name) and a
+legacy `stt:geometry` key for back-compat; readers SHOULD prefer the standard
 field-level key and fall back to `stt:geometry` only when it is absent.
 
 In TypeScript, the decoded `Layer` exposes both surfaces:
@@ -260,67 +258,57 @@ unsimplified geometry when `--simplify` is used; clients can pick the
 appropriate one based on zoom. Summary-tier tiles use the layer name
 `summary` by default (overridable via `--summary-layer`).
 
-## Dictionary (optional, v3 only — currently unused)
+## Dictionary (optional — no shipped producer)
 
-The header reserves a slot (`dictionary_offset` / `dictionary_length`) for
-a single zstd training dictionary that would apply to every tile blob.
-**No producer in this repo writes one today**: `stt-build` always calls the
-dictionary-less `ArchiveWriter::finalize`, and there is no dictionary-
-training pass. The plumbing exists (`ArchiveWriter::finalize_with_dictionary`
-and `ArchiveReader::dictionary()`) for forward compatibility and tooling,
-but every shipped archive has `dictionary_offset == 0`.
+The header reserves a slot (`dictionary_offset` / `dictionary_length`) for a
+single shared zstd dictionary that would apply to every tile blob. The
+plumbing exists (`ArchiveWriter::create_optimized*` trains a ~112 KiB
+dictionary in buffered mode; `ArchiveReader` loads it at open and feeds the
+per-tile zstd decoder), but **no producer in this repo ships one**:
+`stt-build` writes packed datasets via `PackWriter` (explicitly
+dictionary-less so the browser's `fzstd` decoder works), and its
+`--streaming-arrow` single-file intermediate doesn't train one either. The
+packed format has **no dictionary slot at all** — every blob is an
+independent zstd frame. `dictionary_offset == 0` means no dictionary.
 
-If a dictionary ever IS embedded:
+## Index (the directory)
 
-- The Rust reader loads it once at archive-open and feeds it to the
-  per-tile zstd decoder.
-- The reference TypeScript reader (`packages/core/src/archive.ts`)
-  **refuses to decode** the tiles — its zstd path (`fzstd`) has no
-  dictionary API, so `decodeBytes` throws when `dictionary_length > 0`
-  rather than silently producing garbage. (It can still read the header,
-  metadata, and dictionary slot.) Do not emit dictionary archives for
-  browser consumption until a dictionary-capable zstd decoder is wired in.
+The directory is **not** Arrow IPC — it is a compact columnar binary codec
+(`crates/stt-core/src/directory.rs`): delta + zig-zag LEB128 varint key
+columns plus blob-run RLE, sorted by `(zoom, hilbert, time_start)` so every
+column delta-codes to ~1 byte per entry. The wire encoding is specified in
+[the packed format spec §4](../spec/stt-packed-format.md); the
+single-file container embeds the same codec at the header's
+`index_offset` (its variant has no per-run `pack_id` column —
+whole-file offsets, decoded as `pack_id = 0`).
 
-`dictionary_offset == 0` means no dictionary — decode tiles with a stock
-decoder.
+Each entry decodes to these logical fields (`stt-core::archive::TileEntry`):
 
-## Index (Arrow IPC)
-
-The directory is itself an Arrow IPC stream — one `RecordBatch`, one row per
-tile, sorted by `(zoom ascending, hilbert ascending)` for spatial locality.
-
-| column                | type     | description                                              |
-| --------------------- | -------- | -------------------------------------------------------- |
-| `zoom`                | `UInt8`  | zoom level                                               |
-| `x`                   | `UInt32` | tile x                                                   |
-| `y`                   | `UInt32` | tile y                                                   |
-| `time_start`          | `Int64`  | inclusive temporal start, Unix ms                        |
-| `time_end`            | `Int64`  | inclusive temporal end, Unix ms                          |
-| `offset`              | `UInt64` | byte offset of compressed blob within the archive        |
-| `length`              | `UInt32` | compressed blob length                                   |
-| `uncompressed_size`   | `UInt32` | uncompressed payload length                              |
-| `feature_count`       | `UInt32` | total features across the tile's layers                  |
-| `hilbert`             | `UInt64` | Hilbert index of `(zoom, x, y)` — directory sort key     |
-| `crc32c` (v3)         | `UInt32` | v3 ONLY — CRC32C of the compressed blob (integrity tag, no dedup) |
-| `content_hash` (v2)   | `UInt64` | v2 ONLY — low 8 bytes of BLAKE3 (integrity tag + dedup key) |
-| `temporal_bucket_ms`  | `UInt64` | optional — bucket size in ms this tile covers (LOD-aware) |
-
-The integrity column changes name and width between versions: v3 archives
-carry a `crc32c` (`UInt32`) column and v2 archives carry a `content_hash`
-(`UInt64`) column. A reader picks whichever is present in the schema rather
-than assuming a name from the header version, so a future variant that
-omits the column still decodes the identifying columns. The TypeScript
-reader reads neither for verification today (see [Tile blobs](#tile-blobs)).
+| field                 | type            | description                                              |
+| --------------------- | --------------- | -------------------------------------------------------- |
+| `zoom`                | `u8`            | zoom level                                               |
+| `x`                   | `u32`           | tile x                                                   |
+| `y`                   | `u32`           | tile y                                                   |
+| `time_start`          | `i64`           | inclusive temporal start, Unix ms (bucket boundary)      |
+| `time_end`            | `i64`           | inclusive temporal end, Unix ms                          |
+| `pack_id`             | `u32`           | pack object index (always 0 in a single-file archive)    |
+| `offset`              | `u64`           | byte offset of the compressed blob (pack-relative; whole-file in single-file) |
+| `length`              | `u32`           | compressed blob length                                   |
+| `uncompressed_size`   | `u32`           | uncompressed payload length                              |
+| `feature_count`       | `u32`           | total features across the tile's layers                  |
+| `hilbert`             | `u64`           | Hilbert index of `(zoom, x, y)` — directory sort key     |
+| `crc32c`              | `u32`           | CRC32C of the compressed blob (integrity tag)            |
+| `temporal_bucket_ms`  | `Option<u64>`   | bucket size this tile covers (base vs temporal-LOD tier) |
+| `cover_t_min`         | `Option<i64>`   | tight lower covering bound — earliest feature start actually in the tile |
 
 The Hilbert ordering is what makes range coalescing work: viewport tiles at
-the same zoom level tend to be contiguous in file order, so a reader can
+the same zoom level tend to be contiguous in blob order, so a reader can
 issue one HTTP Range request that covers several tiles.
 
-`temporal_bucket_ms` is populated on archives built after the temporal-LOD
-scaffold landed: base tiles record the archive's base bucket size; LOD
-tiles record their coarser bucket. Older archives leave the column null
-and the reader falls back to the archive-level
-`Metadata::temporal_bucket_ms`.
+`temporal_bucket_ms` is `None` on archives without a temporal-LOD pyramid
+(readers fall back to the archive-level `Metadata::temporal_bucket_ms`);
+`cover_t_min` is `None` on pre-covering builds (readers fall back to
+`time_start`).
 
 ## Metadata (UTF-8 JSON)
 
@@ -382,48 +370,49 @@ cache-hit rate high during animation.
 
 ## Read order
 
-A new client opens an archive like this:
+**Packed (current):** `GET manifest.json` → `GET` the directory object →
+per visible tile, a Range request into the right pack — see
+[the packed format spec §6](../spec/stt-packed-format.md). The TypeScript
+reader coalesces ranges within a pack when their gap is under 2 MiB
+(`DEFAULT_RANGE_COALESCE_GAP` in `packages/core/src/archive.ts`,
+overridable via `ArchiveOptions.coalesceGapBytes`) — tuned for HTTP/2
+against edge caches, where re-fetching a small gap is cheaper than an
+extra request.
 
-1. Range `[0, 64)` → header. Verify magic and version.
-2. If `dictionary_length > 0`: range
-   `[dictionary_offset, dictionary_offset + dictionary_length)` → dictionary.
-   Construct a shared zstd decompressor with it.
-3. Range `[index_offset, index_offset + index_length)` → index. Decode as
-   Arrow IPC; build any in-memory secondary indices.
-4. Range `[metadata_offset, metadata_offset + metadata_length)` → metadata.
-5. Per visible tile: range
-   `[entry.offset, entry.offset + entry.length)` → blob. Optionally verify
-   the integrity tag (`crc32c` in v3, `content_hash` in v2 — the Rust reader
-   does, the TS reader does not yet), decompress, decode the layer frame,
-   hand the resulting Arrow `RecordBatch`es to the renderer.
+**Single-file container** (Rust `ArchiveReader`, transcode input only):
 
-The reference TypeScript implementation coalesces adjacent ranges when their
-gap is less than 2 MiB (`DEFAULT_RANGE_COALESCE_GAP` in
-`packages/core/src/archive.ts`, overridable per archive) — tuned for
-HTTP/2 against edge caches, where re-fetching a small gap is cheaper than
-an extra request.
+1. Bytes `[0, 64)` → header. Verify magic and version.
+2. If `dictionary_length > 0`: read the dictionary slot and construct a
+   shared zstd decompressor with it.
+3. `[index_offset, index_offset + index_length)` → index. Decode the
+   directory codec; build in-memory secondary indices.
+4. `[metadata_offset, metadata_offset + metadata_length)` → metadata.
+5. Per tile: `[entry.offset, entry.offset + entry.length)` → blob. Verify
+   the CRC32C, decompress, decode the layer frame, hand the resulting Arrow
+   `RecordBatch`es to the consumer.
 
 ## Forward and backward compatibility
 
 - The `compression` byte is the only place new compression algorithms are
   added; readers MUST reject values they do not understand.
-- New columns added to the index are tolerated by the reader as long as the
-  columns listed above remain present and well-typed.
+- The directory codec carries its own version byte (currently v5 packed /
+  v4 single-file) and evolves independently of the container.
 - New per-layer columns are tolerated automatically — they appear in the
   Arrow schema and a property-aware client passes them through to the
   renderer.
 - New metadata fields use serde defaults so old archives decode under new
   readers; new fields are skipped when unset so new archives decode under
   old readers that ignore them.
-- The 10 reserved header bytes will be used for additive features
-  (e.g. footer index, encrypted-payload bit). They MUST be zero on write
-  today.
+- The 10 reserved header bytes (single-file) are reserved for additive
+  features. They MUST be zero on write.
 
 ## Validating an archive
 
-`stt-validate <path.stt>` opens an archive, verifies the per-tile integrity
-tag (CRC32C in v3, BLAKE3-64 in v2), decodes each, and reports schema and
-feature-count anomalies. Use it after
-generating data and in CI for any dataset that ships with the project.
-Pass `--json` for a machine-readable report, `--fail-fast` to stop on the
-first failure, `--skip-decode` to verify only the integrity tags.
+`stt-validate <dataset>` accepts a packed dataset directory, its
+`manifest.json`, or a single-file `.stt`. For packed inputs it first
+verifies the content-addressing contract (every pack/directory object
+blake3-hashes to its filename, declared lengths match, no out-of-range
+`pack_id`), then verifies every tile's CRC32C, decodes each payload, and
+reports schema and feature-count anomalies. Use it after generating data
+and in CI. Pass `--json` for a machine-readable report, `--fail-fast` to
+stop on the first failure, `--skip-decode` to verify only integrity.

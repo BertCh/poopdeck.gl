@@ -7,7 +7,12 @@ import {
   ScatterplotLayer,
   TextLayer,
 } from '@deck.gl/layers';
-import { AnimatedTripsLayer, TimeController, PlaybackGovernor } from '@stt/deck.gl';
+import {
+  AnimatedTripsLayer,
+  TimeController,
+  PlaybackGovernor,
+  decideAutoSpeedMultiplier,
+} from '@stt/deck.gl';
 import type { BufferSource, BufferedRunway } from '@stt/deck.gl';
 import { getDatasetById } from '../../datasets';
 import { tileLoadingProps } from '../../types';
@@ -95,15 +100,28 @@ const FADE_GATE_CHECK_INTERVAL_MS = 150;
 // The story has authored per-beat speeds but no speed UI, so it adapts
 // automatically: while a beat plays, the clock is capped at the governor's
 // sustainable-speed suggestion (measured network throughput ÷ byte cost of
-// the upcoming horizon), clamped to [AUTO_CAP_MIN_FACTOR, 1] × the beat's
-// authored speed and applied with hysteresis. On a fast network every beat
-// plays exactly as authored; on a slow one the story gracefully slows instead
-// of letting the playhead outrun loading (ribbons popping in) or stuttering
-// through stall/resume cycles. The floor keeps the narrative moving — below
-// it, the governor's honest stall takes over.
+// the upcoming horizon), expressed as a FRACTION of the beat's authored speed
+// in [AUTO_CAP_MIN_FACTOR, 1]. On a fast network every beat plays exactly as
+// authored (a fully-buffered horizon suggests Infinity, which clamps to 1);
+// on a slow one the story gracefully slows instead of letting the playhead
+// outrun loading (ribbons popping in) or stuttering through stall/resume
+// cycles. The floor keeps the narrative moving — below it, the governor's
+// honest stall takes over.
+//
+// The asymmetric up/down policy itself (downshift immediately, upshift only
+// on the cadence and past a deadband, snap to displayable steps) is the
+// shared `decideAutoSpeedMultiplier` — the same module every Auto-speed UI
+// applies — parameterized with a story ladder instead of a local hysteresis
+// fork (player-ergonomics review §5.3).
 const AUTO_CAP_INTERVAL_MS = 3000;
-const AUTO_CAP_MIN_FACTOR = 0.35;
-const AUTO_CAP_HYSTERESIS = 0.2; // ignore <20% moves so the rate never wobbles
+const AUTO_CAP_MIN_FACTOR = 0.2;
+// Cap-fraction rungs (× authored speed). Finer than the showcase preset row
+// because everything here lives below 1×; 1 means "play as authored".
+const AUTO_CAP_STEPS = [0.2, 0.3, 0.4, 0.5, 0.65, 0.8, 1] as const;
+// Upshift deadband (replaces the old AUTO_CAP_HYSTERESIS): the ladder's
+// tightest gap (0.65→0.8, +23%) must clear it, or recovery to the authored
+// rate would stall one rung short on a healthy network.
+const AUTO_CAP_UPSHIFT_DEADBAND = 0.2;
 
 // Full temporal extent of the drifters archive (Unix ms), from the story
 // content. Drift/spin beats play FORWARD from the beat's moment to DATA_END and
@@ -383,9 +401,14 @@ const StoryGlobe: React.FC<StoryGlobeProps> = ({ focus, active }) => {
 
   // ── Adaptive speed cap (see the constants block above). ─────────────────────
   // Only adapts during steady 'playing' — never while a gate holds the clock
-  // (the gate's own predictor decides readiness at the authored speed). A null
-  // suggestion means the upcoming horizon is fully buffered (or cost/throughput
-  // is unknown) → drift back to the authored rate.
+  // (the gate's own predictor decides readiness at the authored speed), so
+  // every evaluation here is the 'cadence' phase: the story has no
+  // gate-entry ('waiting') trigger by design. A null suggestion means cost or
+  // throughput is genuinely unknown → hold the current rate (a fully-buffered
+  // horizon now suggests Infinity, which clamps to the authored speed — the
+  // old "null → drift back to authored" reading). The authored speed is the
+  // base: prev/raw fractions are speed ÷ authored, and `applyFocusTime`'s
+  // per-beat setSpeed(authored) resets the fraction to 1 for each new beat.
   useEffect(() => {
     if (!active) return;
     const id = setInterval(() => {
@@ -394,13 +417,21 @@ const StoryGlobe: React.FC<StoryGlobeProps> = ({ focus, active }) => {
       const authored = authoredSpeedRef.current;
       if (authored <= 0) return;
       const suggestion = g.getAutoSpeedSuggestion();
-      const target =
-        suggestion == null
-          ? authored
-          : Math.min(authored, Math.max(authored * AUTO_CAP_MIN_FACTOR, suggestion));
+      if (suggestion == null) return; // unknown cost/throughput → hold
       const current = timeController.getSpeed();
-      if (current > 0 && Math.abs(target - current) / current <= AUTO_CAP_HYSTERESIS) return;
-      timeController.setSpeed(target);
+      const next = decideAutoSpeedMultiplier(
+        current > 0 ? current / authored : 1,
+        suggestion / authored,
+        'cadence',
+        {
+          steps: AUTO_CAP_STEPS,
+          minMultiplier: AUTO_CAP_MIN_FACTOR,
+          maxMultiplier: 1,
+          upshiftDeadband: AUTO_CAP_UPSHIFT_DEADBAND,
+        },
+      );
+      if (next == null) return; // hold (same rung, or a damped upshift)
+      timeController.setSpeed(authored * next);
     }, AUTO_CAP_INTERVAL_MS);
     return () => clearInterval(id);
   }, [active, timeController]);

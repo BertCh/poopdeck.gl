@@ -142,6 +142,31 @@ export const docSections: DocSection[] = [
         title: "H3SummaryLayer",
       },
       {
+        slug: "api/quadbin-summary-layer",
+        file: "api/quadbin-summary-layer.md",
+        title: "QuadbinSummaryLayer",
+      },
+      {
+        slug: "api/animated-arc-layer",
+        file: "api/animated-arc-layer.md",
+        title: "AnimatedArcLayer",
+      },
+      {
+        slug: "api/animated-line-layer",
+        file: "api/animated-line-layer.md",
+        title: "AnimatedLineLayer",
+      },
+      {
+        slug: "api/animated-icon-layer",
+        file: "api/animated-icon-layer.md",
+        title: "AnimatedIconLayer",
+      },
+      {
+        slug: "api/animated-column-layer",
+        file: "api/animated-column-layer.md",
+        title: "AnimatedColumnLayer",
+      },
+      {
         slug: "api/time-filter-extension",
         file: "api/time-filter-extension.md",
         title: "TimeFilterExtension",
@@ -150,6 +175,11 @@ export const docSections: DocSection[] = [
         slug: "api/category-color-extension",
         file: "api/category-color-extension.md",
         title: "CategoryColorExtension",
+      },
+      {
+        slug: "api/stt-player",
+        file: "api/stt-player.md",
+        title: "SttPlayer",
       },
       {
         slug: "api/time-controller",

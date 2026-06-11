@@ -161,6 +161,26 @@ export interface _AnimatedHeatmapLayerProps {
   fadeInDuration?: number;
   /** Fade-out duration at the trailing edge of the time window (ms). */
   fadeOutDuration?: number;
+  /**
+   * Density accumulation operation — canonical HeatmapLayer pass-through.
+   * 'SUM' (default) accumulates count/weight per pixel; 'MEAN' averages
+   * weights instead — only meaningful with a `weightProperty`, since a
+   * constant-weight MEAN flattens the map to a single colour.
+   * @default 'SUM'
+   */
+  aggregation?: 'SUM' | 'MEAN';
+  /**
+   * Side length of the density texture — canonical HeatmapLayer pass-through.
+   * Larger = finer detail at higher GPU cost.
+   * @default 2048
+   */
+  weightsTextureSize?: number;
+  /**
+   * Interaction debounce (ms) before re-aggregating during pan/zoom —
+   * canonical HeatmapLayer pass-through.
+   * @default 500
+   */
+  debounceTimeout?: number;
 }
 
 /** Complete props accepted by {@link AnimatedHeatmapLayer}. */
@@ -206,6 +226,9 @@ const defaultProps: DefaultProps<AnimatedHeatmapLayerProps> = {
   getWeight: { type: 'object', value: null, optional: true, compare: true },
   fadeInDuration: { type: 'number', value: 0, min: 0 },
   fadeOutDuration: { type: 'number', value: 0, min: 0 },
+  aggregation: 'SUM',
+  weightsTextureSize: { type: 'number', value: 2048, min: 128 },
+  debounceTimeout: { type: 'number', value: 500, min: 0 },
 };
 
 /**
@@ -341,17 +364,21 @@ export class AnimatedHeatmapLayer<ExtraPropsT extends {} = {}> extends SpatioTem
       // filterRange animation (renderLayers is already wall-clock capped).
       const subProps = this.composeSubLayerProps('heatmap', `ch${i}-${channel.id}`, {
         data,
-        // Density accumulation (count/weight per pixel). MEAN would flatten a
-        // constant-weight density map to a single colour, so SUM is correct.
-        aggregation: 'SUM',
+        // Density accumulation (count/weight per pixel). The 'SUM' default is
+        // correct for density; 'MEAN' only makes sense with a weightProperty.
+        aggregation: this.props.aggregation,
         radiusPixels: this.props.radiusPixels,
         intensity: this.props.intensity,
         colorRange: channel.colorRange as any,
         // null → canonical auto-normalisation; pinned → stable (no breathing).
         colorDomain: channel.colorDomain ?? null,
         threshold: this.props.threshold,
+        weightsTextureSize: this.props.weightsTextureSize,
+        debounceTimeout: this.props.debounceTimeout,
         pickable: false,
-        extensions: [this._dataFilter],
+        // The DataFilterExtension is what animates the heatmap (filterRange);
+        // user extensions from the top-level prop are appended.
+        extensions: this.composeExtensions([this._dataFilter]),
         filterEnabled: true,
         filterRange,
         ...(filterSoftRange ? { filterSoftRange } : {}),

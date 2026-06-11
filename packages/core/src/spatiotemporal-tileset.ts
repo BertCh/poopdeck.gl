@@ -242,6 +242,15 @@ interface CoverageIndex {
   /** Bucket start time → needed tiles addressed at that bucket. */
   buckets: Map<number, CoverageBucket>;
   /**
+   * Every registry key in the index, flat — the membership test the
+   * grace-period evictor uses to protect the buffered timeline (see
+   * evictUnusedTiles): a tile in here is one the buffered-ranges bar reports
+   * and the playback governor gates on, so reclaiming it on a wall-clock
+   * timer (rather than under real memory pressure) silently un-buffers time
+   * the player was told is ready.
+   */
+  keySet: Set<string>;
+  /**
    * `[first bucket start, last bucket end]` of the viewport's available
    * data, or `null` when the viewport has no tiles at any time.
    */
@@ -1660,6 +1669,25 @@ export class SpatiotemporalTileset {
           : null;
     if (registry) registry.add(inflightRecord);
 
+    // TEMP-DIAGNOSTIC (flash repro): record batch dispatches per tier with
+    // queue state, so offline analysis can see whether the play head is being
+    // served by prefetch (ahead-of-time) or priority (on-demand) loads.
+    const probeBatch = (globalThis as unknown as {
+      __sttProbe?: { enabled?: boolean; batches?: unknown[] };
+    }).__sttProbe;
+    const probeT0 = typeof performance !== 'undefined' ? performance.now() : 0;
+    if (probeBatch?.enabled && Array.isArray(probeBatch.batches)) {
+      probeBatch.batches.push({
+        wall: probeT0,
+        tier,
+        n: started.length,
+        prioQ: this.priorityQueue.length,
+        prefQ: this.prefetchQueue.length,
+        sim: this.currentViewport?.time,
+        ts: started.map((s) => s.id.t),
+      });
+    }
+
     // Incremental delivery: mark a member loaded the moment its coalesced
     // range group decodes (via the onTileReady hook), instead of when the
     // whole batch settles — the nearest tiles of a slice become renderable
@@ -2380,13 +2408,16 @@ export class SpatiotemporalTileset {
 
         const getSize = this.options.getTileByteSize;
         const buckets = new Map<number, CoverageBucket>();
+        const keySet = new Set<string>();
         for (const id of ids) {
           let bucket = buckets.get(id.t);
           if (!bucket) {
             bucket = { keys: [], bytes: [] };
             buckets.set(id.t, bucket);
           }
-          bucket.keys.push(this.tileIdToKey(id));
+          const key = this.tileIdToKey(id);
+          bucket.keys.push(key);
+          keySet.add(key);
           bucket.bytes.push((getSize ? getSize(id) : undefined) ?? 0);
         }
         const bucketStarts = Array.from(buckets.keys()).sort((a, b) => a - b);
@@ -2398,7 +2429,7 @@ export class SpatiotemporalTileset {
                 end: bucketStarts[bucketStarts.length - 1] + bucketMs,
               }
             : null;
-        this.coverageIndex = { signature, bucketStarts, buckets, timeRange };
+        this.coverageIndex = { signature, bucketStarts, buckets, keySet, timeRange };
         this.notifyBufferChange();
       })
       .catch(() => {
@@ -2462,8 +2493,24 @@ export class SpatiotemporalTileset {
       // Under limits - only evict tiles outside grace period
       const tilesToEvict: string[] = [];
 
+      // Tiles in the coverage index (current viewport at the primary zoom,
+      // FULL time range) are exempt from the wall-clock grace timer: they are
+      // exactly the tiles getBufferedRanges() reports as buffered and the
+      // PlaybackGovernor gates on, so timing them out un-buffers time the
+      // player was just told is ready — the runway evaporates while paused
+      // (30 s grace) or whenever playback hasn't reached a prefetched bucket
+      // within 2 min, and the bar visibly drops ranges ahead of the playhead
+      // before the priority path re-fetches the same bytes. Video players
+      // trim the back/forward buffer by SIZE, never by wall-clock age; the
+      // over-limit LRU below still reclaims these under real memory
+      // pressure. Tiles from previous viewports are not in the index and
+      // still age out on the timer. (`coverageIndex` is null for consumers
+      // that never touch the buffer APIs — their behavior is unchanged.)
+      const bufferedKeys = this.coverageIndex?.keySet;
+
       for (const [tileKey, header] of this.tiles) {
-        const isNeeded = neededTileKeys.has(tileKey);
+        const isNeeded =
+          neededTileKeys.has(tileKey) || (bufferedKeys?.has(tileKey) ?? false);
         const isRecent = (now - header.lastUsed) < GRACE_PERIOD;
 
         // An in-flight header must never be deleted out from under its

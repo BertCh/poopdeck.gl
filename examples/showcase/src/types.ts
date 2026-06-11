@@ -16,7 +16,25 @@ export type DatasetType =
    * `H3SummaryLayer`. Only useful for archives built with
    * `stt-build --summary-tier h3`.
    */
-  | 'summary';
+  | 'summary'
+  /**
+   * Origin→destination flow arcs (`AnimatedArcLayer`). Each feature is a
+   * 2-vertex LineString — first vertex = source, last = target. Arcs bow over
+   * the map and animate in/out by time window. Build with
+   * `stt-generate nyc-rideshare --od`.
+   */
+  | 'arc'
+  /**
+   * Extruded 3D columns at point features (`AnimatedColumnLayer`); column
+   * height comes from a numeric `elevationProperty`. Reuses any point archive.
+   */
+  | 'column'
+  /**
+   * Server-aggregated CARTO Quadbin summary tier (`QuadbinSummaryLayer`) — the
+   * square-cell analog of `summary`. Only useful for archives built with
+   * `stt-build --summary-tier quadbin`.
+   */
+  | 'quadbin-summary';
 
 export interface DatasetLegendItem {
   color: string;
@@ -380,6 +398,36 @@ export interface Dataset {
    * place. The first entry is the initial selection.
    */
   summaryToggleWeights?: SummaryToggleOption[];
+
+  // ─── arc-layer styling (type: 'arc') ───────────────────────────────────
+  /** Arc source-endpoint (origin) color, RGBA. The arc interpolates source→target. */
+  arcSourceColor?: ColorRGBA;
+  /** Arc target-endpoint (destination) color, RGBA. */
+  arcTargetColor?: ColorRGBA;
+  /** Arc line width in `widthUnits` (default pixels). */
+  arcWidth?: number;
+  /** Bow arcs along a great-circle path (for globe / long-haul flows). */
+  arcGreatCircle?: boolean;
+  /** Arc height multiplier; 0 = flat lines. Default 1. */
+  arcHeight?: number;
+
+  // ─── column-layer styling (type: 'column') ─────────────────────────────
+  /** Column disk radius in `columnRadiusUnits`. Default 100. */
+  columnRadius?: number;
+  /** Units for `columnRadius`. Default 'meters'. */
+  columnRadiusUnits?: 'meters' | 'pixels' | 'common';
+  /** Column cross-section resolution (sides). Default 12. */
+  columnDiskResolution?: number;
+  /** Constant column height when no `elevationProperty` is set. */
+  columnElevation?: number;
+  /** Constant column fill, RGBA (or use `colorProperty` for categorical fill). */
+  columnFillColor?: ColorRGBA;
+
+  /**
+   * Palette for a categorical `colorProperty` on the arc / column layers
+   * (GPU CategoryColorExtension — palette[categoryIndex]).
+   */
+  colorPalette?: ColorRGBA[];
 }
 
 /**

@@ -3,7 +3,7 @@
 > **A cloud-native, edge-cacheable tile format for interactive spatiotemporal data visualization**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Rust](https://img.shields.io/badge/rust-1.70+-orange.svg)](https://www.rust-lang.org/)
+[![Rust](https://img.shields.io/badge/rust-1.85+-orange.svg)](https://www.rust-lang.org/)
 [![TypeScript](https://img.shields.io/badge/typescript-5.4+-blue.svg)](https://www.typescriptlang.org/)
 
 ---
@@ -20,8 +20,7 @@ over time.
 
 Tile payloads are **Apache Arrow IPC** with **GeoArrow**-encoded geometry — a
 standard, columnar, GPU-friendly representation that interops directly with
-`@geoarrow/deck.gl-layers` (being renamed `@geoarrow/deck.gl-geoarrow`),
-Lonboard, and kepler.gl 3.x.
+`@geoarrow/deck.gl-layers`, Lonboard, and kepler.gl 3.x.
 
 **Scope:** STT is for temporally-tiled **vector** data — trajectories, events,
 and time-varying features. Time-varying rasters and datacubes are out of scope;
@@ -43,8 +42,9 @@ use [GeoZarr](https://github.com/zarr-developers/geozarr-spec) or COG for those.
 - 🕒 **Temporal tiling** — features are bucketed into fixed time intervals for
   predictable, animation-friendly loading. Optional coarser-bucket pyramid
   (`--temporal-lod`) for multi-scale animation.
-- 🎯 **Hilbert-ordered directory** — tiles are stored in spatial-locality order
-  for better CDN cacheability and smaller seek footprints during pans.
+- 🎯 **Locality-aware layout** — directory entries are Hilbert-sorted, and tile
+  blobs are packed in locality-preserving order (`--blob-ordering auto` picks
+  3D-Hilbert or spatial-major per dataset) so a viewport touches few packs.
 - 🧭 **H3 summary tier** — optional pre-aggregated low-zoom tier for
   100M+ scale point datasets.
 - 🔧 **Stack** — Rust (`arrow`, `geo`, `geozero`) builder + TypeScript
@@ -86,12 +86,20 @@ immutable-pack / short-TTL-manifest cache headers).
 ```typescript
 import { AnimatedPointLayer, TimeController } from "@stt/deck.gl";
 
+const controller = new TimeController({ speed: 3600 }); // 1h of data per second
+controller.play();
+
 const layer = new AnimatedPointLayer({
   id: "earthquakes",
   data: "/data/earthquakes/manifest.json",
   currentTime: Date.now(),
+  timeWindow: 24 * 60 * 60 * 1000,
+  timeController: controller,
 });
 ```
+
+See [`docs/api/`](./docs/api/) for the full layer catalog
+(paths, trips, polygons, heatmap, H3 summary).
 
 ### …or with native MapLibre GL
 
@@ -122,7 +130,7 @@ tiny manifest:
 ```
 data/<dataset>/
   manifest.json          # metadata + directory pointer + pack table (mutable, short TTL)
-  index/<blake3>.sttd    # the directory: one run-length row per tile (immutable)
+  index/<blake3>.sttd    # the directory: varint tile index, RLE over shared blobs (immutable)
   packs/<blake3>.sttp    # tile-blob data, ≤64 MiB each (immutable)
   packs/<blake3>.sttp
   ...
@@ -150,7 +158,7 @@ spatiotemporal-tiles/
 │   ├── stt-build/          # CLI: GeoParquet -> packed dataset
 │   ├── stt-generate/       # Bundled showcase-dataset generators
 │   ├── stt-optimize/       # Input analysis + recommendations (powers --auto)
-│   └── stt-validate/       # Content-address + CRC32C + decode check (packed or legacy .stt)
+│   └── stt-validate/       # Content-address + CRC32C + decode check (packed or single-file .stt)
 ├── packages/               # TypeScript
 │   ├── core/               # Archive reader, decoder pool, OPFS cache
 │   ├── deck.gl/            # deck.gl layers + extensions

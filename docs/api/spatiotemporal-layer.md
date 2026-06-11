@@ -26,6 +26,8 @@ class MyCustomLayer extends SpatioTemporalLayer {
 
 Note there is no `DataT` generic, unlike upstream composite layers: tiles are binary (Arrow-backed columnar buffers), so there is no per-row datum type for accessors to receive — `data` is always the archive URL string. Third parties subclass via `class My extends SpatioTemporalLayer<MyExtraProps>`.
 
+The constructor drops own props explicitly set to `undefined` before deck.gl sees them, so `undefined` always means "use the default". (deck.gl resolves defaults through the prototype chain, where an own `undefined` key would otherwise shadow its default — e.g. `new AnimatedPointLayer({ strokeColor: cfg.strokeColor })` with an absent config field would silently disable the default and hand sublayers `undefined` accessors.) This applies to every layer in the family.
+
 ## Properties
 
 Inherits from all [CompositeLayer](https://deck.gl/docs/api-reference/core/composite-layer) properties.
@@ -61,7 +63,7 @@ Inherits from all [CompositeLayer](https://deck.gl/docs/api-reference/core/compo
 
 | Property | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `tier` | `'auto' \| 'summary' \| 'raw'` | `'auto'` | Which tier the tileset draws from when the archive carries a server-aggregated summary tier (`stt-build --summary-tier`). `'auto'` uses the summary tier at zooms inside its `[minZoom, maxZoom]` band and the raw tier above it, so a wide low-zoom view streams a few thousand aggregated cells instead of millions of raw features. `'summary'` always uses the summary tier; `'raw'` always uses raw (the legacy behaviour). No effect on archives without a summary tier. |
+| `tier` | `'auto' \| 'summary' \| 'raw'` | `'auto'` | Which tier the tileset draws from when the archive carries a server-aggregated summary tier (`stt-build --summary-tier`). `'auto'` uses the summary tier at zooms inside its `[minZoom, maxZoom]` band and the raw tier above it, so a wide low-zoom view streams a few thousand aggregated cells instead of millions of raw features. `'summary'` always uses the summary tier; `'raw'` always uses the raw tier. No effect on archives without a summary tier. |
 
 ### GlobeView / projection helpers
 
@@ -124,6 +126,37 @@ TileLayer-convention picking enrichment. A hit fills `info.tile` / `info.sourceT
 | `getTilesetOptionOverrides(metadata)` | Partial `SpatiotemporalTilesetOptions` spread over the base tileset wiring at construction time (overrides win). How `H3SummaryLayer` swaps zoom range / refinement strategy. |
 | `getEffectiveTimeWindow()` | The time window used for tile loading. `AnimatedTripsLayer` overrides it to `max(timeWindow, 2 × trailLength)`. |
 | `composeSubLayerProps(shortId, instanceKey, props)` | Composes one sublayer's props through deck's `CompositeLayer.getSubLayerProps()` so inherited composite props and the user's `_subLayerProps[shortId]` overrides apply. |
+| `composeExtensions(internal)` | Appends the user's top-level `extensions` after the layer's internal extension list — the hook that makes custom deck.gl extensions work (see below). |
+
+## Custom deck.gl extensions
+
+Every animated layer carries internal, load-bearing extensions on its
+sublayers (`TimeFilterExtension` + `CategoryColorExtension`; the heatmap a
+`DataFilterExtension`). Extensions you pass via the standard top-level
+`extensions` prop are **appended after** the internal ones and reach every
+sublayer:
+
+```typescript
+new AnimatedPointLayer({
+  // ...,
+  extensions: [new CollisionFilterExtension()],
+  // sublayers receive [timeFilter, categoryColor, collisionFilter]
+});
+```
+
+Adding/removing an extension rebuilds the cached sublayers; equal extensions
+re-instantiated each render (`extensions: [new Ext()]` inline) are digested by
+constructor + options and do NOT thrash the caches. Keep the list short — the
+extension set participates in deck.gl's shader-pipeline cache key.
+
+A `_subLayerProps.<shortId>.extensions` override still REPLACES the whole
+list (deck's contract) and emits a one-time warning when it drops an internal
+extension class, since that silently disables time filtering / categorical
+color. Prefer the top-level prop unless you really mean to replace.
+
+Sublayer short ids for `_subLayerProps` / `getSubLayerClass` overrides:
+`points`, `paths`, `trips` (also FlowCorridorLayer), `polygons`, `heatmap`,
+`hexagons`.
 
 ## Performance
 

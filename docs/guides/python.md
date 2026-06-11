@@ -49,6 +49,10 @@ Two export pitfalls the build catches with a hard error:
   geometry_encoding="geoarrow")` writes line/polygon geometry in a layout
   the build cannot ingest and fails with a re-export hint. Keep the
   default WKB encoding (or pass `geometry_encoding="WKB"` explicitly).
+- **Nanosecond timestamps.** Native Arrow Timestamp columns are read
+  directly, but only at ms/µs precision — pandas `datetime64[ns]` exports
+  as a nanosecond Timestamp and fails with *"Unsupported timestamp column
+  type"*. The Int64 conversion above sidesteps it.
 
 Pre-1970 timestamps are rejected in all modes — the STT temporal index
 stores unsigned ms-since-epoch. Filter or re-epoch historical rows before
@@ -157,6 +161,14 @@ stt-build \
 clipper splits trips at tile boundaries while preserving per-vertex
 timestamps so the deck.gl `AnimatedTripsLayer` can interpolate position
 at any time within the trip's duration.
+
+Without more information the build interpolates per-vertex times by
+cumulative distance between `start_time` and `end_time`. If you have real
+per-segment timing (e.g. from OSRM annotations), supply it as a
+`vertex_timestamps` list column (`List<Timestamp>` or `List<Int64>`
+unix-ms, one entry per vertex); an optional `vertex_values` column
+(`List<Float32>`/`List<Float64>`) carries a per-vertex scalar such as
+sea-surface temperature.
 
 ## Verifying the result
 

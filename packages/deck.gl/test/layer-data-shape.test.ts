@@ -1408,3 +1408,113 @@ describe('AnimatedPolygonLayer per-tile sublayer architecture (v3)', () => {
     expect(built.props.data.attributes.indices).toBeUndefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+// FlowCorridorLayer — static-geometry overview visibility
+// ---------------------------------------------------------------------------
+//
+// Regression: with `trailLength: 0` the trips TimeFilterExtension uses its
+// WINDOW branch, which hides a feature once `instanceEndTime < currentTime -
+// windowHalf`. The trips binary path only supplies `instanceVertexTime`, so
+// instanceStartTime/instanceEndTime default to 0 and the corridors vanished
+// ~windowHalf into playback ("show then disappear"). FlowCorridorLayer must
+// feed the window filter the corridor's FULL [start,end] so it stays visible
+// while the value matrix drives color.
+describe('FlowCorridorLayer keeps static corridors visible (window-mode time bounds)', () => {
+  let makeLayer: (opts?: any) => any;
+
+  function matrixPathTile(numBuckets: number, endRel: number): any {
+    const tile = makePathTile({
+      paths: [[[0, 0], [1, 1], [2, 2]]],
+      startTimes: [0],
+      endTimes: [endRel],
+      timeOffset: 1_420_070_400_000,
+    });
+    const bf: any = tile.layers[0].features;
+    bf.vertexValueBuckets = numBuckets;
+    bf.vertexValueMatrix = new Float32Array(3 * numBuckets).fill(5);
+    return tile;
+  }
+
+  beforeEach(async () => {
+    vi.resetModules();
+    const mod = await import('../src/flow-corridor-layer');
+    const LayerCtor = mod.FlowCorridorLayer as any;
+    makeLayer = (opts = {}) => {
+      const layer = Object.create(LayerCtor.prototype);
+      layer.props = {
+        id: 'flows',
+        tripColor: [31, 186, 214, 255],
+        tripWidth: 2,
+        timeWindow: 900_000,
+        trailLength: 0,
+        gradientProperty: 'vertexValues',
+        gradientDomain: [0, 50],
+        gradientColorRamp: [
+          [35, 45, 130, 170],
+          [255, 255, 255, 255],
+        ],
+        opacity: 1,
+        visible: true,
+        ...opts,
+      };
+      layer._currentTime = 0;
+      layer.boundGetTime = () => 0;
+      layer.timeFilterExtension = {};
+      layer.categoryColorExtension = {};
+      layer.preparedTileCache = new Map();
+      layer.sublayerCache = new Map();
+      layer.lastLayerPropsKey = '';
+      (layer as any).getEffectiveTimeWindow = () => 900_000;
+      return layer;
+    };
+  });
+
+  it('feeds the window filter the corridor full [start,end] so it never hides', () => {
+    const endRel = 143_100_000;
+    const layer = makeLayer();
+    const tile = matrixPathTile(159, endRel);
+    const built = (layer as any).buildSublayer(
+      (layer as any).prepareTile(tile, tile.layers[0]),
+    );
+    // The fix: instanceStartTime/instanceEndTime span the whole range. Without
+    // them they default to 0 and the window branch hides the network ~windowHalf
+    // into playback.
+    expect(built.props.getInstanceStartTime).toBe(0);
+    expect(built.props.getInstanceEndTime).toBe(endRel);
+  });
+
+  it('base AnimatedTripsLayer leaves instance start/end unset (trail mode)', async () => {
+    const mod = await import('../src/animated-trips-layer');
+    const Base = mod.AnimatedTripsLayer as any;
+    const layer = Object.create(Base.prototype);
+    layer.props = {
+      id: 'trips',
+      tripColor: [1, 2, 3, 255],
+      tripWidth: 2,
+      timeWindow: 1000,
+      trailLength: 500,
+      opacity: 1,
+      visible: true,
+    };
+    layer._currentTime = 0;
+    layer.boundGetTime = () => 0;
+    layer.timeFilterExtension = {};
+    layer.categoryColorExtension = {};
+    layer.preparedTileCache = new Map();
+    layer.sublayerCache = new Map();
+    layer.lastLayerPropsKey = '';
+    (layer as any).getEffectiveTimeWindow = () => 1000;
+    const tile = makePathTile({
+      paths: [[[0, 0], [1, 1]]],
+      startTimes: [0],
+      endTimes: [100],
+      timeOffset: 0,
+    });
+    const built = (layer as any).buildSublayer(
+      (layer as any).prepareTile(tile, tile.layers[0]),
+    );
+    expect(built.props.getInstanceStartTime).toBeUndefined();
+    expect(built.props.getInstanceEndTime).toBeUndefined();
+  });
+});

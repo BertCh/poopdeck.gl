@@ -5,12 +5,10 @@ use you don't call it directly — `STTArchive` and
 [`SpatiotemporalTileset`](./spatiotemporal-tileset.md) do — but the pieces are
 documented here for tests, custom integrations, and GeoArrow hand-offs.
 
-> **`SttLoader` is gone.** Earlier releases exported a loaders.gl-style
-> `SttLoader` object. It was removed: its `parse(arrayBuffer)` could only
-> reject — the packed multi-object format has no single-buffer
-> representation — and its magic sniff matched only the retired single-file
-> format. Construct `new STTArchive(manifestUrl)` instead; for a
-> loaders.gl-conformant surface use `createSttTileSource()` /
+> **No single-buffer loader.** The packed multi-object format has no
+> single-buffer representation, so there is no loaders.gl-style
+> `parse(arrayBuffer)` entry point. Construct `new STTArchive(manifestUrl)`
+> instead; for a loaders.gl-conformant surface use `createSttTileSource()` /
 > `STTArchive.asTileSource()`, which match the loaders.gl v4 `TileSource`
 > interface structurally (no `@loaders.gl/*` runtime dependency).
 
@@ -44,7 +42,8 @@ Implementations:
   Used in Node tests and as the fallback in browsers when module workers
   fail to construct.
 - **`WorkerTileDecoder`** — pool of 2–4 module workers (sized from
-  `navigator.hardwareConcurrency - 1`, capped at 4) that runs
+  `navigator.hardwareConcurrency - 1`, capped at 4; override via the
+  constructor's `{ poolSize?, workerUrl? }`) that runs
   decompression, Arrow IPC parsing, and binary-feature extraction off the
   main thread. Requests dispatch to the least-pending worker; decoded
   typed-array buffers transfer (zero copy) back to the main thread.
@@ -69,10 +68,12 @@ const tile = decodeTile(payloadBytes, id, timeRange);
 ```
 
 Decodes an **uncompressed** tile payload (the layer frame) into a `Tile`.
+`timeRange` is optional — when omitted it defaults to a zero-width range at
+the tile's own `t` (the worker / loaders.gl paths have no directory at hand).
 The frame is `[u16 layerCount | flags]` followed by, per layer,
 `[u16 nameLen][name][u32 ipcLen][pad][Arrow IPC stream]`. The leading u16's
 top bit marks the *aligned* frame (every IPC stream starts 8-byte aligned,
-which is what lets apache-arrow wrap its buffers zero-copy); legacy frames
+which is what lets apache-arrow wrap its buffers zero-copy); frames
 without the flag carry no padding and parse identically.
 
 ## What the decoder returns
@@ -86,8 +87,10 @@ interface Tile {
 
 interface Layer {
   name: string;
+  extent: number;                  // always 0 — coordinates are real lon/lat, no quantization
   features: BinaryFeatures;        // GPU-ready typed arrays
   geometryExtensionName: string;   // 'geoarrow.point' | 'geoarrow.linestring' | 'geoarrow.polygon'
+                                   // ('' only for pre-v2 archives — treat as unknown)
   arrowTable?: Table;              // the decoded GeoArrow record batch (absent after a worker hop)
   arrowIpc?: Uint8Array;           // raw per-layer Arrow IPC bytes (cloneable; survives workers)
 }

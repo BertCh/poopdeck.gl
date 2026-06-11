@@ -147,6 +147,8 @@ export type GovernorEventMap = {
   waiting: (event: GovernorWaitingEvent) => void;
   ready: (event: GovernorReadyEvent) => void;
   progress: (runway: BufferedRunway) => void;
+  /** Playback parked at a non-looping range boundary (media-element 'ended'). */
+  ended: (time: number) => void;
 };
 
 /**
@@ -236,6 +238,19 @@ export class PlaybackGovernor {
   private gateStartedAtWall = 0;
   private evalTimer: ReturnType<typeof setInterval> | null = null;
   private scrubbing = false;
+  /**
+   * Settle-commit memo: the position {@link seekTo} committed while the thumb
+   * was still held. Releasing on the same position must not pay a second
+   * prefetch flush + gate — endScrub just lifts the scrub hold.
+   */
+  private scrubCommittedTime: number | null = null;
+  /**
+   * True while parked at a non-looping range boundary. Distinct from a user
+   * pause: the next requestPlay restarts from the range start (media-element
+   * replay convention) instead of passing a complete-at-end gate only for the
+   * first tick to re-clamp — a one-frame no-op.
+   */
+  private endedAtBoundary = false;
   private disposed = false;
   private warnedDisposedUse = false;
   /**
@@ -285,6 +300,7 @@ export class PlaybackGovernor {
     waiting: new Set(),
     ready: new Set(),
     progress: new Set(),
+    ended: new Set(),
   };
 
   /**
@@ -305,6 +321,7 @@ export class PlaybackGovernor {
     if (playing && this._state === 'idle' && !this.userWantsPlayback) {
       // External play (legacy direct timeController.play()) — adopt it.
       this.userWantsPlayback = true;
+      this.endedAtBoundary = false;
       this.setState('playing');
       return;
     }
@@ -384,6 +401,18 @@ export class PlaybackGovernor {
     this.enterGate('seeking', 1);
   };
 
+  /**
+   * Range-boundary stop from the clock (non-loop clamp). The clamp's own
+   * pause() already routed through {@link playStateHandler} (external pause →
+   * idle); this marks the stop as ENDED — distinct from a user pause — so UIs
+   * can show a replay affordance and requestPlay restarts from the range start.
+   */
+  private readonly endedHandler = (time: number): void => {
+    if (this.disposed) return;
+    this.endedAtBoundary = true;
+    this.emit('ended', time);
+  };
+
   constructor(timeController: TimeController, opts: PlaybackGovernorOptions = {}) {
     this.timeController = timeController;
     this.startGateWallMs = opts.startGateWallMs ?? 2000;
@@ -397,11 +426,27 @@ export class PlaybackGovernor {
     this.timeController.on('playState', this.playStateHandler);
     this.timeController.on('tick', this.tickHandler);
     this.timeController.on('wrap', this.wrapHandler);
+    this.timeController.on('ended', this.endedHandler);
   }
 
   /** Current machine state. */
   get state(): PlaybackGovernorState {
     return this._state;
+  }
+
+  /**
+   * User intent, HTMLMediaElement-shaped: true when the user does not want
+   * playback. Stays false through 'starting'/'buffering'/'seeking' gates (the
+   * user pressed play; the machine is just not there yet), so UIs can drive
+   * the play/pause glyph from this single bit instead of mirroring intent.
+   */
+  get paused(): boolean {
+    return !this.userWantsPlayback;
+  }
+
+  /** True while parked at a non-looping range boundary (media-element 'ended'). */
+  get ended(): boolean {
+    return this.endedAtBoundary;
   }
 
   /**
@@ -415,9 +460,10 @@ export class PlaybackGovernor {
     return this._state === 'playing' && this.degradedCreep;
   }
 
-  /** Register an event listener. */
-  on<K extends GovernorEventName>(event: K, callback: GovernorEventMap[K]): void {
+  /** Register an event listener. Returns an unsubscribe function. */
+  on<K extends GovernorEventName>(event: K, callback: GovernorEventMap[K]): () => void {
     this.listeners[event].add(callback);
+    return () => this.off(event, callback);
   }
 
   /** Unregister an event listener. */
@@ -478,6 +524,18 @@ export class PlaybackGovernor {
   requestPlay(): void {
     if (this.rejectDisposedUse()) return;
     this.userWantsPlayback = true;
+    if (this.endedAtBoundary) {
+      // Media-element replay convention: play at the range end restarts from
+      // the start (or from the end when travelling in reverse). Without this
+      // the gate passes on a complete-at-end runway and the first tick
+      // re-clamps — a one-frame no-op.
+      this.endedAtBoundary = false;
+      const range = this.timeController.getTimeRange();
+      if (range) {
+        this.commitSeek(this.timeController.getSpeed() < 0 ? range.end : range.start);
+        return;
+      }
+    }
     if (this._state === 'idle') {
       this.enterGate('starting', 1);
     }
@@ -522,6 +580,19 @@ export class PlaybackGovernor {
   endScrub(time: number): void {
     if (this.rejectDisposedUse()) return;
     this.scrubbing = false;
+    const alreadyCommitted = this.scrubCommittedTime === time;
+    this.scrubCommittedTime = null;
+    if (alreadyCommitted) {
+      // The settle timer already committed this exact position; releasing the
+      // thumb just lifts the no-resume-while-scrubbing hold. Re-base the
+      // escape-hatch clock so a long-held thumb cannot fire it (degraded) the
+      // instant it lets go.
+      if (this.isGated()) {
+        this.gateStartedAtWall = nowWall();
+        this.evaluateNow();
+      }
+      return;
+    }
     this.commitSeek(time);
   }
 
@@ -529,6 +600,9 @@ export class PlaybackGovernor {
   seekTo(time: number): void {
     if (this.rejectDisposedUse()) return;
     this.commitSeek(time);
+    // A settle-commit mid-drag: memo the position so releasing the thumb on
+    // it doesn't pay a second prefetch flush + gate (see endScrub).
+    if (this.scrubbing) this.scrubCommittedTime = time;
   }
 
   /**
@@ -553,6 +627,15 @@ export class PlaybackGovernor {
   /** Loaded time ranges for a buffered-range bar (passthrough; [] without a source). */
   getBufferedRanges(opts?: { maxRanges?: number }): Array<{ start: number; end: number }> {
     return this.source?.getBufferedRanges(opts) ?? [];
+  }
+
+  /**
+   * Byte/tile cost of making `range` fully buffered for the current viewport
+   * (passthrough to the source's directory math; zeros without a source).
+   * UIs use it for ETA chips and timeline density strips.
+   */
+  estimateCost(range: { start: number; end: number }): { bytes: number; tiles: number } {
+    return this.source?.estimateCost(range) ?? { bytes: 0, tiles: 0 };
   }
 
   /**
@@ -588,10 +671,13 @@ export class PlaybackGovernor {
    *   bytesPerSimMs = cost(next 8 wall-s at current speed) / horizonSimMs
    *   maxSustainable = throughputBytesPerMs / bytesPerSimMs × 0.7
    *
-   * Returns null when cost or throughput is unknown — including when the
-   * upcoming horizon costs zero bytes (everything buffered ⇒ no cap needed).
-   * Consumers apply their own snapping/clamping/hysteresis; the governor only
-   * does the honest math.
+   * Returns `Infinity` when the upcoming horizon has nothing left to load
+   * (everything buffered ⇒ the network imposes no cap) — consumers clamp it
+   * to their max step, so a fully-cached dataset rises to full speed instead
+   * of freezing at whatever multiplier Auto last chose. Returns null when the
+   * math cannot be honest: throughput unknown, or tiles pending whose byte
+   * sizes the directory doesn't expose. Consumers apply their own
+   * snapping/clamping/hysteresis; the governor only does the honest math.
    */
   getAutoSpeedSuggestion(): number | null {
     if (!this.source) return null;
@@ -607,7 +693,8 @@ export class PlaybackGovernor {
         : { start: time, end: time + horizonSimMs };
 
     const cost = this.source.estimateCost(range);
-    if (!cost || cost.bytes <= 0) return null; // fully buffered ahead — no cap
+    if (!cost || cost.tiles === 0) return Infinity; // nothing left to load — uncapped
+    if (cost.bytes <= 0) return null; // tiles pending but sizes unknown — no honest math
 
     let bytesPerMs: number | null = null;
     const throughput = this.getThroughput?.();
@@ -633,10 +720,12 @@ export class PlaybackGovernor {
     this.timeController.off('playState', this.playStateHandler);
     this.timeController.off('tick', this.tickHandler);
     this.timeController.off('wrap', this.wrapHandler);
+    this.timeController.off('ended', this.endedHandler);
     this.listeners.statechange.clear();
     this.listeners.waiting.clear();
     this.listeners.ready.clear();
     this.listeners.progress.clear();
+    this.listeners.ended.clear();
     this.source = null;
   }
 
@@ -695,6 +784,10 @@ export class PlaybackGovernor {
    * then re-gate at the plain (startup-sized) gate if intent is playing.
    */
   private commitSeek(time: number): void {
+    // Any committed seek leaves the ended boundary and invalidates a prior
+    // settle-commit memo (seekTo re-stamps it when scrubbing).
+    this.endedAtBoundary = false;
+    this.scrubCommittedTime = null;
     this.source?.flushPrefetch();
     // Freeze the clock BEFORE moving it: with a running clock the seek target
     // would tick forward (and hit the frontier clamp) for a frame before the
@@ -757,6 +850,17 @@ export class PlaybackGovernor {
       // this is pure defense).
       this.stopEvalTimer();
       this.setState('idle');
+      return false;
+    }
+
+    if (this.scrubbing) {
+      // A gate must never start the clock under a held thumb — video players
+      // warm the pipeline on a settled scrub but resume only on release.
+      // Covers both the settle-commit's own 'seeking' gate and a pre-existing
+      // gate ('starting'/'buffering') the user began dragging through. The
+      // maxStartWaitMs escape hatch is suspended too: degraded playback under
+      // a held thumb is worse than a longer-held preview (endScrub re-bases
+      // the hatch clock on release).
       return false;
     }
 

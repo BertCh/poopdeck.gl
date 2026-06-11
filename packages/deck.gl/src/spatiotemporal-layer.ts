@@ -32,6 +32,7 @@ import type {
 import { TimeController } from './time-controller';
 import type { BufferSource, BufferedRunway } from './playback-governor';
 import { snapshot, isProbeEnabled } from './telemetry';
+import { warnOnce } from './log';
 
 const DEBUG = false;
 
@@ -773,6 +774,26 @@ export class SpatioTemporalLayer<
       const { z, x, y, t } = tile.id;
       next.add(`${z}/${x}/${y}/${t}`);
     }
+    // TEMP-DIAGNOSTIC (flash repro): record visible-tile set deltas with the
+    // sim time at the swap, so removed-before-replaced churn shows up offline.
+    {
+      const probe = (globalThis as unknown as {
+        __sttProbe?: { enabled?: boolean; tileSwaps?: unknown[] };
+      }).__sttProbe;
+      if (probe?.enabled && Array.isArray(probe.tileSwaps)) {
+        const added: string[] = [];
+        const removed: string[] = [];
+        for (const k of next) if (!this._lastTileIdSet.has(k)) added.push(k);
+        for (const k of this._lastTileIdSet) if (!next.has(k)) removed.push(k);
+        probe.tileSwaps.push({
+          wall: performance.now(),
+          sim: this._currentTime,
+          count: next.size,
+          added,
+          removed,
+        });
+      }
+    }
     this._lastTileIdSet = next;
   }
 
@@ -1200,7 +1221,56 @@ export class SpatioTemporalLayer<
       ...sublayerProps,
     } as any) as Record<string, any>;
     props.id = `${props.id}-${instanceKey}`;
+    // A `_subLayerProps.<shortId>.extensions` override REPLACES the whole
+    // list (deck's merge contract). The internal extensions are load-bearing
+    // (time filtering, categorical color, heatmap animation), so an override
+    // that drops one silently breaks the layer — surface that instead.
+    const intended = sublayerProps.extensions as unknown[] | undefined;
+    const overridden = props.extensions as unknown[] | undefined;
+    if (intended?.length && overridden !== intended) {
+      const missing = intended.filter(
+        (e) =>
+          !overridden?.some(
+            (o) => (o as any)?.constructor === (e as any)?.constructor,
+          ),
+      );
+      if (missing.length > 0) {
+        const names = missing
+          .map((e) => (e as any)?.constructor?.name ?? 'unknown extension')
+          .join(', ');
+        warnOnce(
+          `${(this.constructor as any).layerName}:${shortId}:extensionsOverride`,
+          `[${(this.constructor as any).layerName}] _subLayerProps.${shortId}.extensions ` +
+            `replaces the internal extension list and omits: ${names}. Time ` +
+            `filtering / categorical color may silently break. To ADD ` +
+            `extensions, pass them via the top-level \`extensions\` prop ` +
+            `instead — the layer appends them to its internal list.`,
+        );
+      }
+    }
     return props;
+  }
+
+  /**
+   * Merge the layer's internal extensions (time filter, categorical color, …)
+   * with the user's top-level `extensions` prop. `getSubLayerProps` DOES
+   * forward `extensions`, but the animated layers pass an explicit list in
+   * `sublayerProps` — which beats inheritance — so without this merge a
+   * user-supplied extension would be silently dropped. Internal extensions
+   * come first so user shader injections compose on top of the time-filter
+   * alpha. The merged contents are stable across calls as long as the
+   * caller's `extensions` entries compare equal (deck diffs extensions via
+   * `LayerExtension.equals`, not reference), preserving the
+   * constant-extension-set shader-cache contract documented in
+   * animated-trips-layer.ts. Adding/removing a user extension rebuilds the
+   * cached sublayers via `extensionsDigest` inside `inheritedPropsDigest`.
+   */
+  protected composeExtensions(internal: any[]): any[] {
+    const user = (this.props as CompositeLayerProps).extensions as
+      | any[]
+      | undefined;
+    if (!user || user.length === 0) return internal;
+    return [...internal, ...user];
   }
 
   /**

@@ -29,9 +29,9 @@ const DemosCatalog: React.FC = () => {
           className="text-sm mt-3 max-w-xl"
           style={{ color: "var(--ink-500)", lineHeight: 1.7 }}
         >
-          Every demo streams a real dataset as spatiotemporal tiles — no
-          thinning, no pre-rendered video. Each page explains the data, how the
-          archive was built, and which layers render it.
+          Every demo streams a real dataset as spatiotemporal tiles. Each page
+          explains the data, how the archive was built, and which layers render
+          it.
         </p>
 
         {CATEGORY_ORDER.map((cat) => {

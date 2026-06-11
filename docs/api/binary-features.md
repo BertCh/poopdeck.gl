@@ -65,6 +65,18 @@ interface BinaryFeatures {
    */
   vertexValues?: Float32Array;
 
+  /**
+   * Per-vertex × per-time-bucket value matrix, flattened globally
+   * vertex-major: `vertexValueMatrix[globalVertex * vertexValueBuckets +
+   * bucket]`. Lets a static-geometry overview (flow corridors) carry a
+   * per-vertex time series — geometry stays resident, the renderer just
+   * selects the active bucket column from the playhead.
+   */
+  vertexValueMatrix?: Float32Array;
+
+  /** Number of time buckets packed into vertexValueMatrix (0 = no matrix). */
+  vertexValueBuckets?: number;
+
   /* ───── Pre-tessellated polygons (--pre-tessellate) ─────────────── */
 
   /** Tile-global triangle indices. Groups of 3 per triangle. */

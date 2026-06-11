@@ -9,7 +9,7 @@ The Rust toolchain ships four binaries. Build them with
 | `stt-build`     | Convert a GeoParquet file into a packed STT dataset                |
 | `stt-generate`  | Download + build the bundled showcase datasets                     |
 | `stt-optimize`  | Analyze an input and recommend `stt-build` flags                   |
-| `stt-validate`  | Verify a packed dataset (or legacy `.stt`), decode every tile      |
+| `stt-validate`  | Verify a packed dataset (or single-file `.stt`), decode every tile |
 
 ---
 
@@ -79,7 +79,7 @@ load); they are never placed at (0,0).
 | ---- | ------- | ----------- |
 | `--blob-ordering <ORD>` | `auto` | Tile-blob layout before packs are cut: `auto` (picks from the dataset's space-vs-time cardinality: wide-time → spatial-major, else 3D-Hilbert), or explicit `spatial`, `time-major`, `hilbert3`, `morton3`. Better locality → fewer packs touched per viewport → fewer client range requests. `eager` is accepted for backward-compat and maps to `auto`. |
 | `--pack-size <MIB>` | `64` | Target pack object size in MiB. A single blob larger than the target gets its own pack rather than being split. Smaller → finer cache granularity, more objects; larger → fewer, coarser objects. Stay well under the CDN per-object cap (512 MB). |
-| `--compression <ALGO>` | `zstd` | The packed format is **zstd-only** — every tile blob is compressed per-blob with zstd. The legacy `gzip`/`none` choices were removed and now error; drop the flag. |
+| `--compression <ALGO>` | `zstd` | The packed format is **zstd-only** — every tile blob is compressed per-blob with zstd. `gzip`/`none` are rejected; drop the flag. |
 
 ### Trajectory clipping
 
@@ -143,11 +143,11 @@ only). Use the in-memory pipeline for those features.
 
 When set, the archive carries one summary tile per `(zoom, x, y, t)` in
 addition to the raw tier — readers dispatch between them automatically
-from `metadata.summaryTier`. Currently only `h3` is implemented.
+from `metadata.summaryTier`. `h3` is the available scheme.
 
 | Flag | Default | Description |
 | ---- | ------- | ----------- |
-| `--summary-tier <SCHEME>` | — | `h3` or `quadbin` (`quadbin` is a reserved vocabulary entry and errors as not implemented yet) |
+| `--summary-tier <SCHEME>` | — | `h3` (`quadbin` is reserved and not currently accepted) |
 | `--summary-min-zoom <N>` | `min-zoom` | Lowest zoom for summary tiles |
 | `--summary-max-zoom <N>` | `min(min-zoom + 4, max-zoom)` | Highest zoom for summary tiles |
 | `--summary-columns <SPEC>` | `""` | Comma-separated `name:agg` list, e.g. `magnitude:mean,magnitude:max,depth:sum`. `count` is always implicit. |
@@ -233,8 +233,12 @@ The build reads the GeoParquet `geo` footer metadata when present:
 | LineString | Trajectories, routes; `--end-time-field` enables per-vertex timing + clipping |
 | Polygon | Boundaries; `--pre-tessellate` bakes earcut indices |
 
-MultiPoint / MultiLineString / MultiPolygon are read but exploded into
-their constituent single-geometry features before tiling.
+Multi-geometries are read but **flattened within the feature**, not
+exploded: a MultiPoint collapses to a single point at its centroid, a
+MultiLineString's vertices are concatenated into one path, and a
+MultiPolygon's rings are flattened into one ring list (kept separable by
+ring offsets). Split multi-geometries into one row per part before export
+if you need them rendered independently.
 
 Two optional list columns are recognised when present: `vertex_timestamps`
 (`List<Timestamp>` / `List<Int64>`, real per-segment timing for
@@ -264,7 +268,7 @@ Subcommands:
 | `flights` | OpenSky Network ADS-B (Mondays 2017–2020); `--paths` emits LineString trajectories instead of points |
 | `hurricanes` | NOAA IBTrACS historical archive |
 | `wildfires` | NIFC perimeters (1000+ acres) |
-| `nyc-rideshare` | NYC TLC trips + OSRM routing; `--paths` for LineString trajectories, `--flows` for pre-aggregated corridor flows (`--flow-bin`, default `15m`) |
+| `nyc-rideshare` | NYC TLC trips + OSRM routing; `--paths` for LineString trajectories, `--flows` for pre-aggregated corridor flows (`--flow-bin` default `15m`, `--flow-snap-meters` default `30` merges nearby road nodes; 0 = exact OSRM geometry) |
 | `nyc-taxi-points` | derived from `nyc-rideshare` via polyline interpolation |
 | `satellites` | CelesTrak TLE + SGP4 propagation |
 | `drifters` | NOAA Global Drifter Program 6-hourly buoy trajectories |
@@ -281,8 +285,10 @@ recipes.
 
 ## `stt-optimize`
 
-Inspects an input (or an existing archive, via `analyze --stt`) and prints
-recommended `stt-build` flags.
+Inspects an input and prints recommended `stt-build` flags. `analyze` also
+accepts an existing archive via `--stt` (single-file `.stt` only —
+it does not open packed dataset directories) and supports
+`--format json` / `-o <FILE>` for machine-readable output.
 
 ```bash
 stt-optimize analyze --input data.parquet --time-field timestamp \
@@ -302,13 +308,13 @@ recommendations but not compression — the packed format is zstd-only).
 ## `stt-validate`
 
 Validates an STT dataset. Accepts the canonical **packed format** — pass
-the dataset directory or its `manifest.json` — or a legacy single-file
+the dataset directory or its `manifest.json` — or a single-file
 `.stt` archive.
 
 ```bash
 stt-validate my-dataset/ [--json] [--fail-fast] [--skip-decode]
 stt-validate my-dataset/manifest.json
-stt-validate legacy-archive.stt
+stt-validate archive.stt
 ```
 
 Checks performed:
@@ -331,3 +337,23 @@ Checks performed:
 
 Exits non-zero on any failure. Suitable for CI gating any dataset that
 ships with the project.
+
+---
+
+## Maintenance tools (cargo examples)
+
+`crates/stt-core/examples/` carries operational one-offs that are run via
+`cargo run --release -p stt-core --example <name>` rather than shipped as
+binaries. The one you're most likely to need:
+
+- **`pack-cover`** — losslessly re-packs a packed dataset whose directory
+  predates the `cover_t_min` covering section, backfilling the tight
+  temporal bound per tile (payload bytes untouched):
+  ```bash
+  cargo run --release -p stt-core --example pack-cover -- \
+    <in_dir/manifest.json> <out_dir> [pack_size_mb=64] [ordering=auto]
+  ```
+
+Others (`repack`, `packed-stats`, `pack-transcode`, `verify-packed`,
+`simulate_layout`, …) are analysis/benchmark aids — see
+`crates/stt-core/examples/README.md`.

@@ -38,8 +38,8 @@ datasets.
   along route" trails with per-vertex timestamps.
 - [**VatTripsLayer**](./api/vat-trips-layer.md): Vertex-attribute-texture
   trips variant for very high trip counts.
-- [**HeatmapLayer**](./api/heatmap-time-layer.md): GPU-splat temporal
-  heatmap with stacked categorical channels.
+- [**AnimatedHeatmapLayer**](./api/heatmap-time-layer.md): Temporal heatmap
+  built on deck.gl's aggregation layers, with stacked categorical channels.
 - [**H3SummaryLayer**](./api/h3-summary-layer.md): Renders the
   server-aggregated H3 summary tier as hexagons.
 

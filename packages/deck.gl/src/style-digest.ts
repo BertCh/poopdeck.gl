@@ -109,6 +109,27 @@ export function structuralDigest(value: unknown, depth = 0): string {
   return `{${keys.map((k) => `${k}:${structuralDigest(record[k], depth + 1)}`).join(',')}}`;
 }
 
+/**
+ * Content digest of an `extensions` prop. Extension instances digest by
+ * constructor identity + constructor opts — NOT by object reference — so a
+ * caller who re-instantiates equal extensions every render (the common
+ * `extensions: [new BrushingExtension()]` literal) does not thrash the
+ * sublayer caches, mirroring deck's own `LayerExtension.equals` diff.
+ * Swapping in a different extension class or different opts changes the
+ * digest and rebuilds the cached sublayers.
+ */
+export function extensionsDigest(
+  extensions: readonly unknown[] | null | undefined,
+): string {
+  if (!extensions || extensions.length === 0) return '';
+  return extensions
+    .map((e) => {
+      const ext = e as { constructor?: { name?: string }; opts?: unknown } | null;
+      return `${ext?.constructor?.name ?? '?'}${structuralDigest(ext?.opts)}`;
+    })
+    .join(',');
+}
+
 const updateTriggersDigests = new WeakMap<object, string>();
 
 /**
@@ -158,5 +179,9 @@ export function inheritedPropsDigest(props: Record<string, any>): string {
     structuralDigest(props.getPolygonOffset),
     structuralDigest(props.fetch),
     structuralDigest(props._subLayerProps),
+    // The user's extensions are merged into every sublayer's internal list
+    // (SpatioTemporalLayer.composeExtensions); adding/removing one must
+    // rebuild the cached sublayer instances or the change never applies.
+    extensionsDigest(props.extensions),
   ].join('|');
 }

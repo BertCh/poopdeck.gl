@@ -1,6 +1,7 @@
 import React from "react";
 import { Link } from "react-router-dom";
 import { SourceLogo } from "./SourceLogo";
+import { VizBadge } from "./VizBadge";
 import type { CatalogEntry } from "../content/demoMeta";
 
 /**
@@ -44,12 +45,7 @@ const DemoCard: React.FC<{ entry: CatalogEntry }> = ({ entry }) => {
             <SourceLogo key={s} id={s} />
           ))}
         </div>
-        <span
-          className="text-[10px] font-semibold tracking-wide uppercase px-1.5 py-0.5 rounded"
-          style={{ background: "var(--accent-soft)", color: "var(--accent)" }}
-        >
-          {meta.techniqueTag}
-        </span>
+        <VizBadge type={dataset.type} label={meta.techniqueTag} />
       </div>
     </Link>
   );

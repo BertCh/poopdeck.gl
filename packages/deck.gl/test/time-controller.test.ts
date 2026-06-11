@@ -145,6 +145,59 @@ describe('TimeController', () => {
     expect(tc.isPlaying()).toBe(true);
   });
 
+  it('setSpeed(negative) selects reverse; setSpeed(positive) restores forward outside bounce', () => {
+    const tc = new TimeController({ initialTime: 0, speed: 1 });
+    tc.setSpeed(-3);
+    expect(tc.getSpeed()).toBe(-3);
+    expect(tc.getDirection()).toBe(-1);
+    // A positive magnitude restores forward travel — direction is not sticky
+    // outside bounce mode.
+    tc.setSpeed(2);
+    expect(tc.getSpeed()).toBe(2);
+    expect(tc.getDirection()).toBe(1);
+  });
+
+  it('setSpeed(positive) during a bounce return leg changes only the rate, never the direction', () => {
+    const tc = new TimeController({
+      initialTime: 90,
+      speed: 1,
+      bounce: true,
+      timeRange: { start: 0, end: 100 },
+    });
+    tc.play();
+    harness.advance(20); // reflects at end → travel flips to backward
+    expect(tc.getDirection()).toBe(-1);
+    expect(tc.getSpeed()).toBe(-1); // observable bounce contract: signed product
+
+    // Speed slider pushes a positive magnitude mid-reverse: bounce owns the
+    // direction, so only the rate changes.
+    tc.setSpeed(2);
+    expect(tc.getDirection()).toBe(-1);
+    expect(tc.getSpeed()).toBe(-2);
+    harness.advance(10); // still backward, at the new rate: 90 → 70
+    expect(tc.getTime()).toBeCloseTo(70, 0);
+  });
+
+  it('setDirection announces playState while playing (a re-plan event), and only on change', () => {
+    const tc = new TimeController({ initialTime: 0, speed: 2 });
+    const stateListener = vi.fn();
+    tc.on('playState', stateListener);
+    tc.play();
+    stateListener.mockClear();
+
+    tc.setDirection(-1);
+    expect(stateListener).toHaveBeenCalledTimes(1);
+    expect(stateListener).toHaveBeenCalledWith(true, -2);
+    tc.setDirection(-1); // same direction — no notification
+    expect(stateListener).toHaveBeenCalledTimes(1);
+
+    tc.pause();
+    stateListener.mockClear();
+    tc.setDirection(1); // silent while paused
+    expect(tc.getDirection()).toBe(1);
+    expect(stateListener).not.toHaveBeenCalled();
+  });
+
   it('notifies tick listeners on every frame when throttling is off', () => {
     const tc = new TimeController({ initialTime: 0, speed: 1 });
     const listener = vi.fn();
@@ -203,6 +256,35 @@ describe('TimeController', () => {
     tc.play();
     harness.advance(16);
     expect(listener).not.toHaveBeenCalled();
+  });
+
+  it('on() returns an unsubscribe function', () => {
+    const tc = new TimeController({ initialTime: 0, speed: 1 });
+    const listener = vi.fn();
+    const off = tc.on('tick', listener);
+    off();
+    tc.play();
+    harness.advance(16);
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it('getTimeRange returns a defensive copy (or undefined when unconfigured)', () => {
+    const tc = new TimeController({ timeRange: { start: 0, end: 100 } });
+    const range = tc.getTimeRange()!;
+    expect(range).toEqual({ start: 0, end: 100 });
+    range.end = 5; // mutating the copy must not corrupt the controller
+    expect(tc.getTimeRange()).toEqual({ start: 0, end: 100 });
+    expect(new TimeController().getTimeRange()).toBeUndefined();
+  });
+
+  it('getState reports the signed speed and the separated direction', () => {
+    const tc = new TimeController({ initialTime: 7, speed: -2 });
+    expect(tc.getState()).toMatchObject({
+      currentTime: 7,
+      playing: false,
+      speed: -2,
+      direction: -1,
+    });
   });
 
   it('seekBy advances time by a relative delta', () => {
@@ -316,5 +398,69 @@ describe('TimeController', () => {
     const t0 = tc.getTime();
     harness.advance(20); // exactly one queued frame must advance time
     expect(tc.getTime() - t0).toBeCloseTo(20, 0);
+  });
+
+  it("fires 'ended' (with the clamp time) on a forward non-loop clamp", () => {
+    const tc = new TimeController({
+      initialTime: 0,
+      speed: 1,
+      loop: false,
+      timeRange: { start: 0, end: 100 },
+    });
+    const ended = vi.fn();
+    tc.on('ended', ended);
+    tc.play();
+    harness.advance(250); // overshoots end → clamps + pauses
+    expect(tc.getTime()).toBe(100);
+    expect(tc.isPlaying()).toBe(false);
+    expect(ended).toHaveBeenCalledTimes(1);
+    expect(ended).toHaveBeenCalledWith(100);
+  });
+
+  it("fires 'ended' on a backward non-loop clamp at the range start", () => {
+    const tc = new TimeController({
+      initialTime: 50,
+      speed: -1,
+      loop: false,
+      timeRange: { start: 0, end: 100 },
+    });
+    const ended = vi.fn();
+    tc.on('ended', ended);
+    tc.play();
+    harness.advance(70); // undershoots start → clamps + pauses
+    expect(tc.getTime()).toBe(0);
+    expect(tc.isPlaying()).toBe(false);
+    expect(ended).toHaveBeenCalledTimes(1);
+    expect(ended).toHaveBeenCalledWith(0);
+  });
+
+  it("does not fire 'ended' on a loop wrap or a bounce reflection", () => {
+    const ended = vi.fn();
+
+    const looper = new TimeController({
+      initialTime: 0,
+      speed: 1,
+      loop: true,
+      timeRange: { start: 0, end: 100 },
+    });
+    looper.on('ended', ended);
+    looper.play();
+    harness.advance(120); // wraps — playback continues
+    expect(looper.isPlaying()).toBe(true);
+    looper.destroy();
+
+    const bouncer = new TimeController({
+      initialTime: 0,
+      speed: 1,
+      bounce: true,
+      timeRange: { start: 0, end: 100 },
+    });
+    bouncer.on('ended', ended);
+    bouncer.play();
+    harness.advance(120); // reflects — playback continues
+    expect(bouncer.isPlaying()).toBe(true);
+    bouncer.destroy();
+
+    expect(ended).not.toHaveBeenCalled();
   });
 });

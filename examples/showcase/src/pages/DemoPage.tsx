@@ -10,8 +10,11 @@ import { useParams, useLocation, Navigate, Link } from "react-router-dom";
 import { getDatasetById } from "../datasets";
 import { getDemoMeta } from "../content/demoMeta";
 import DemoViewer from "../components/demo/DemoViewer";
+import HoverPreview from "../components/demo/HoverPreview";
+import type { DemoCamera } from "../components/demo/HoverPreview";
 import MaplibreRenderer from "../components/MaplibreRenderer";
 import { useDemoPlayback } from "../components/demo/useDemoPlayback";
+import { usePlaybackHotkeys } from "../components/demo/usePlaybackHotkeys";
 import TimeControls from "../components/TimeControls";
 
 /** Dataset types the `@stt/maplibre` adapter can mount (see makeSttLayer). */
@@ -27,6 +30,10 @@ const DemoPage: React.FC = () => {
 
   const playback = useDemoPlayback(selectedDataset);
 
+  // Video-player keyboard map (Space/K, ←/→, J/L, Home/End, ↑/↓, 0–9) —
+  // fullscreen-only: the scrolling embed pages must not capture window keys.
+  usePlaybackHotkeys(playback, selectedDataset?.timeRange);
+
   // Renderer toggle (deck.gl ↔ maplibre). The legacy `/maplibre/:id`
   // deep-links land directly on the maplibre renderer; the toggle keeps
   // both reachable from either route. maplibre adapter is mercator-only.
@@ -35,6 +42,10 @@ const DemoPage: React.FC = () => {
   );
   const maplibreCapable =
     selectedDataset != null && MAPLIBRE_TYPES.has(selectedDataset.type);
+
+  // Live camera from the deck viewer — fed to the scrubber's hover preview so
+  // the thumbnail mirrors what the user is looking at.
+  const [camera, setCamera] = useState<DemoCamera | null>(null);
 
   if (!selectedDataset) return <Navigate to="/" replace />;
   const useMaplibre = renderer === "maplibre" && maplibreCapable;
@@ -88,6 +99,7 @@ const DemoPage: React.FC = () => {
               dataset={selectedDataset}
               playback={playback}
               showPerfHud
+              onCameraChange={setCamera}
             />
           )}
           {maplibreCapable && (
@@ -128,6 +140,20 @@ const DemoPage: React.FC = () => {
             targetPlaybackSeconds={selectedDataset.targetPlaybackSeconds ?? 30}
             autoSpeed={playback.autoSpeed}
             onAutoSpeedSelect={playback.onAutoSpeedSelect}
+            // Hover preview is deck-only (it needs the deck camera/render path);
+            // the maplibre renderer doesn't feed a camera, so omit it there.
+            renderPreview={
+              useMaplibre
+                ? undefined
+                : (time) => (
+                    <HoverPreview
+                      key={selectedDataset.id}
+                      dataset={selectedDataset}
+                      camera={camera}
+                      time={time}
+                    />
+                  )
+            }
           />
         </div>
       </div>

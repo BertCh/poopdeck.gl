@@ -27,9 +27,9 @@ export const CATEGORY_BLURBS: Record<DemoCategory, string> = {
   'earth-ocean':
     'Currents, storms, quakes and fire — the planet observed and modeled over years to decades.',
   mobility:
-    'Ships, aircraft and half a million taxi trips — dense trajectory data at street to continental scale.',
+    'Ships, aircraft, half a million taxi trips and a year of animal migration — dense trajectory data at street to continental scale.',
   'built-life':
-    'Two decades of OpenStreetMap editing and a year of animal migration — the mapped and the living world.',
+    'Two decades of OpenStreetMap editing — the mapped world, drawn one node and changeset at a time.',
 };
 
 export interface DemoTechnique {
@@ -198,6 +198,122 @@ export const DEMO_META: Record<string, DemoMeta> = {
       { label: 'CategoryColorExtension', docPath: '/docs/api/category-color-extension' },
     ],
     related: ['wildfires', 'hurricanes'],
+  },
+
+  'earthquake-columns': {
+    category: 'earth-ocean',
+    tagline: 'The same seismic catalog, stood up as 3D columns — bar height is magnitude.',
+    techniqueTag: 'Columns · 3D extrusion',
+    about: [
+      'This is the earthquake catalog from the points demo, rendered a second ' +
+        'way: every event becomes an extruded column whose height is its ' +
+        'magnitude. Where the point map reads as a flat scatter, the columns ' +
+        'turn the Ring of Fire into a literal landscape — a forest of spikes ' +
+        'rising along the subduction zones, the rare great quakes towering ' +
+        'over the background M4 crackle.',
+      'It reuses the exact same archive as the points demo — nothing was ' +
+        'rebuilt. Only the layer changed: `AnimatedColumnLayer` reads the ' +
+        'numeric `magnitude` column as per-feature elevation, and the shared ' +
+        'time filter fades columns in and out across a 30-day rolling window. ' +
+        'Tilt the camera and pan out to trace the plate boundaries in relief.',
+    ],
+    dataSources: [
+      {
+        name: 'USGS Earthquake Catalog (ComCat)',
+        url: 'https://earthquake.usgs.gov/earthquakes/search/',
+        license: 'Public domain (US Gov)',
+      },
+    ],
+    buildCommand: 'stt-generate earthquakes --output earthquakes-v2.stt',
+    buildNote:
+      'Reuses the earthquake-activity archive — only the render layer differs ' +
+      '(AnimatedColumnLayer with magnitude → column height). No rebuild needed.',
+    techniques: [
+      { label: 'AnimatedColumnLayer', docPath: '/docs/api/animated-column-layer' },
+      { label: 'TimeFilterExtension', docPath: '/docs/api/time-filter-extension' },
+    ],
+    related: ['earthquake-activity', 'hurricanes', 'wildfires'],
+  },
+
+  // ── Mobility ───────────────────────────────────────────────────────────
+  'nyc-od-arcs': {
+    category: 'mobility',
+    tagline: 'Every taxi trip as an arc from where it began to where it ended.',
+    techniqueTag: 'Arcs · OD flows',
+    about: [
+      'A taxi trip is, at heart, a single origin→destination pair: a pickup ' +
+        'point, a dropoff point, and the time in between. This demo draws each ' +
+        'trip as an arc bowed between the two — no route, just the flow — and ' +
+        'animates them in and out as their pickup→dropoff intervals slide ' +
+        'under a 30-minute window. The arcs warm from cyan at the origin to ' +
+        'orange at the destination, so direction reads at a glance.',
+      'The geometry is the minimal case for the STT format: a 2-vertex ' +
+        'LineString per feature. `AnimatedArcLayer` derives instanced ' +
+        'source/target positions from the first and last vertex of each tile ' +
+        'feature, so no special arc tile type is needed. The data here is ' +
+        'synthetic (generated offline, no routing engine), but the same ' +
+        '`--od` generator builds real arcs from TLC trip records.',
+    ],
+    dataSources: [
+      {
+        name: 'NYC Taxi & Limousine Commission (schema)',
+        url: 'https://www.nyc.gov/site/tlc/about/tlc-trip-record-data.page',
+        license: 'Public (NYC TLC)',
+        note: 'This demo uses SYNTHETIC trips generated offline; TLC is the schema/source the --od mode targets.',
+      },
+    ],
+    buildCommand:
+      'stt-generate nyc-rideshare --synthetic --num-trips 6000 --od --with-bearing \\\n' +
+      '  --output nyc-od-arcs.stt',
+    buildNote:
+      'The --od mode emits one straight 2-vertex origin→destination LineString ' +
+      'per trip — no OSRM routing — which AnimatedArcLayer reads as source/target.',
+    techniques: [
+      { label: 'AnimatedArcLayer', docPath: '/docs/api/animated-arc-layer' },
+      { label: 'TimeFilterExtension', docPath: '/docs/api/time-filter-extension' },
+    ],
+    related: ['nyc-taxi-flows', 'nyc-taxi-trips', 'nyc-od-quadbin'],
+  },
+
+  'nyc-od-quadbin': {
+    category: 'mobility',
+    tagline: 'Trip density binned into CARTO Quadbin square cells, extruded by count.',
+    techniqueTag: 'Quadbin summary · square cells',
+    about: [
+      'The summary tier is how STT renders a dataset too dense to draw ' +
+        'feature-by-feature: the build step aggregates points into cells and ' +
+        'ships one row per cell. This demo uses the CARTO Quadbin scheme — a ' +
+        'Z/X/Y square-cell grid — as the square-grid counterpart to the H3 ' +
+        'hex summary. Each cell is extruded by the number of pickup/dropoff ' +
+        'points that fall inside it, so Midtown rises into a block of towers.',
+      'The whole chain is STT-native: the Rust `stt-build --summary-tier ' +
+        'quadbin` aggregator encodes each cell as a CARTO Quadbin u64, and ' +
+        '`QuadbinSummaryLayer` decodes it to a quadkey for deck.gl’s ' +
+        'QuadkeyLayer. The tileset dispatches to the aggregated tier inside ' +
+        'its zoom band automatically — zoom in past it and the raw points ' +
+        'take over.',
+    ],
+    dataSources: [
+      {
+        name: 'NYC Taxi & Limousine Commission (schema)',
+        url: 'https://www.nyc.gov/site/tlc/about/tlc-trip-record-data.page',
+        license: 'Public (NYC TLC)',
+        note: 'Synthetic pickup/dropoff points generated offline; aggregated into Quadbin cells at build time.',
+      },
+    ],
+    buildCommand:
+      'stt-generate nyc-rideshare --synthetic --num-trips 12000 --skip-routing \\\n' +
+      '  --output od-points.parquet\n' +
+      'stt-build --input od-points.parquet --output nyc-od-quadbin \\\n' +
+      '  --time-field timestamp --min-zoom 8 --max-zoom 14 \\\n' +
+      '  --summary-tier quadbin --summary-min-zoom 8 --summary-max-zoom 12',
+    buildNote:
+      'The CARTO Quadbin aggregator bins points into square Z/X/Y cells (count ' +
+      'per cell per time bucket); QuadbinSummaryLayer renders them via QuadkeyLayer.',
+    techniques: [
+      { label: 'QuadbinSummaryLayer', docPath: '/docs/api/quadbin-summary-layer' },
+    ],
+    related: ['nyc-taxi-od-summary', 'nyc-taxi-od-heatmap', 'nyc-od-arcs'],
   },
 
   hurricanes: {
@@ -566,6 +682,35 @@ export const DEMO_META: Record<string, DemoMeta> = {
     related: ['nyc-taxi-od-summary', 'nyc-taxi-cube'],
   },
 
+  'animal-migration': {
+    category: 'mobility',
+    tagline: 'A year of tracked animal movement from GBIF, colored by taxonomic class.',
+    techniqueTag: 'Trips · categorical',
+    about: [
+      'Tracking studies aggregated by GBIF — albatrosses circling the ' +
+        'Southern Ocean, white storks commuting between Europe and Africa, ' +
+        'marine mammals working the coasts — with multi-year deployments ' +
+        'folded into a single calendar year so the seasonal rhythm reads as ' +
+        'one cycle.',
+      'Tracks are colored by coarse taxonomic class, resolved at build time ' +
+        'against the GBIF backbone: birds cyan, mammals coral, fish teal. ' +
+        'Four-day fading trails turn individual fixes into migration arcs.',
+    ],
+    dataSources: [
+      {
+        name: 'GBIF — Global Biodiversity Information Facility',
+        url: 'https://www.gbif.org/',
+        license: 'CC0 / CC-BY / CC-BY-NC (per study)',
+      },
+    ],
+    buildCommand: 'stt-generate animals',
+    techniques: [
+      { label: 'AnimatedTripsLayer', docPath: '/docs/api/animated-trips-layer' },
+      { label: 'CategoryColorExtension', docPath: '/docs/api/category-color-extension' },
+    ],
+    related: ['ocean-drifters', 'ship-traffic'],
+  },
+
   // ── Built world & life ───────────────────────────────────────────────────
   'osm-nyc-draw': {
     category: 'built-life',
@@ -670,35 +815,6 @@ export const DEMO_META: Record<string, DemoMeta> = {
       { label: 'CategoryColorExtension', docPath: '/docs/api/category-color-extension' },
     ],
     related: ['osm-nyc-draw', 'osm-nyc-changesets-summary'],
-  },
-
-  'animal-migration': {
-    category: 'built-life',
-    tagline: 'A year of tracked animal movement from GBIF, colored by taxonomic class.',
-    techniqueTag: 'Trips · categorical',
-    about: [
-      'Tracking studies aggregated by GBIF — albatrosses circling the ' +
-        'Southern Ocean, white storks commuting between Europe and Africa, ' +
-        'marine mammals working the coasts — with multi-year deployments ' +
-        'folded into a single calendar year so the seasonal rhythm reads as ' +
-        'one cycle.',
-      'Tracks are colored by coarse taxonomic class, resolved at build time ' +
-        'against the GBIF backbone: birds cyan, mammals coral, fish teal. ' +
-        'Four-day fading trails turn individual fixes into migration arcs.',
-    ],
-    dataSources: [
-      {
-        name: 'GBIF — Global Biodiversity Information Facility',
-        url: 'https://www.gbif.org/',
-        license: 'CC0 / CC-BY / CC-BY-NC (per study)',
-      },
-    ],
-    buildCommand: 'stt-generate animals',
-    techniques: [
-      { label: 'AnimatedTripsLayer', docPath: '/docs/api/animated-trips-layer' },
-      { label: 'CategoryColorExtension', docPath: '/docs/api/category-color-extension' },
-    ],
-    related: ['ocean-drifters', 'ship-traffic'],
   },
 };
 

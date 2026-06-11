@@ -1,6 +1,11 @@
-import React, { useRef, useState, useMemo } from "react";
+import React, { useState, useMemo } from "react";
 import { NavLink, Outlet, useOutletContext } from "react-router-dom";
 import { docSections } from "./manifest";
+
+/** SiteChrome hands every page its shared scroll surface (#site-scroll). */
+interface ChromeOutletContext {
+  scrollRef: React.RefObject<HTMLDivElement>;
+}
 
 interface DocsOutletContext {
   /** The docs content scroll container — anchors/TOC must target this. */
@@ -12,12 +17,18 @@ export function useDocsContext(): DocsOutletContext {
 }
 
 /**
- * The /docs shell: persistent grouped sidebar + a content column that OWNS
- * the docs scroll (html/body never scroll in this app). Mounted lazily so
- * react-markdown/prism stay out of the landing/demo bundles.
+ * The /docs shell: persistent grouped sidebar + a content column.
+ *
+ * Scrolling: docs do NOT own their own scroll surface. They scroll on the
+ * shared SiteChrome scroller (#site-scroll) like every other route — the
+ * sidebar is `sticky` instead. An earlier design nested a second
+ * `overflow-y-auto` here for the content; that nested-scroller layer left the
+ * lower part of long articles unpainted in Chromium/Safari until a scroll tick
+ * forced a repaint ("pop-in"). The TOC/anchor helpers still receive a
+ * `contentRef` — it just points at #site-scroll now.
  */
 const DocsLayout: React.FC = () => {
-  const contentRef = useRef<HTMLDivElement>(null);
+  const { scrollRef } = useOutletContext<ChromeOutletContext>();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [filter, setFilter] = useState("");
 
@@ -37,7 +48,7 @@ const DocsLayout: React.FC = () => {
   }, [filter]);
 
   const sidebar = (
-    <div className="h-full overflow-y-auto custom-scrollbar px-4 py-5">
+    <div className="px-4 py-5">
       <input
         type="search"
         value={filter}
@@ -83,10 +94,11 @@ const DocsLayout: React.FC = () => {
   );
 
   return (
-    <div className="h-full flex overflow-hidden">
-      {/* Desktop sidebar */}
+    <div className="flex min-h-full">
+      {/* Desktop sidebar — sticky against the shared page scroller (#site-scroll
+          starts below the 3rem header, so the rail fills the rest). */}
       <aside
-        className="hidden lg:block w-60 shrink-0"
+        className="hidden lg:block w-60 shrink-0 sticky top-0 self-start h-[calc(100vh-3rem)] overflow-y-auto custom-scrollbar"
         style={{ borderRight: "1px solid var(--hairline)" }}
       >
         {sidebar}
@@ -101,7 +113,7 @@ const DocsLayout: React.FC = () => {
             onClick={() => setDrawerOpen(false)}
           />
           <aside
-            className="lg:hidden fixed top-12 left-0 bottom-0 z-40 w-64"
+            className="lg:hidden fixed top-12 left-0 bottom-0 z-40 w-64 overflow-y-auto custom-scrollbar"
             style={{
               background: "var(--page-bg)",
               borderRight: "1px solid var(--hairline)",
@@ -112,12 +124,15 @@ const DocsLayout: React.FC = () => {
         </>
       )}
 
-      {/* Content column — THE docs scroll surface. */}
-      <div className="flex-1 min-w-0 flex flex-col">
-        {/* Mobile: docs-nav toggle bar */}
+      {/* Content column — flows into the shared page scroll. */}
+      <div className="flex-1 min-w-0">
+        {/* Mobile: docs-nav toggle bar (sticks to the top of the page scroll). */}
         <div
-          className="lg:hidden shrink-0 px-4 py-2"
-          style={{ borderBottom: "1px solid var(--hairline)" }}
+          className="lg:hidden sticky top-0 z-10 px-4 py-2"
+          style={{
+            borderBottom: "1px solid var(--hairline)",
+            background: "var(--page-bg)",
+          }}
         >
           <button
             type="button"
@@ -128,12 +143,8 @@ const DocsLayout: React.FC = () => {
             {drawerOpen ? "✕ Close docs menu" : "☰ Docs menu"}
           </button>
         </div>
-        <div
-          ref={contentRef}
-          className="flex-1 min-h-0 overflow-y-auto custom-scrollbar"
-        >
-          <Outlet context={{ contentRef } satisfies DocsOutletContext} />
-        </div>
+        {/* TOC/anchor helpers target the shared scroller via `contentRef`. */}
+        <Outlet context={{ contentRef: scrollRef } satisfies DocsOutletContext} />
       </div>
     </div>
   );

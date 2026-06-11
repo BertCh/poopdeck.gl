@@ -1,13 +1,25 @@
 # Player buffering: coupling the playback clock to data loading
 
 > **Status: SHIPPED 2026-06-09** (design record; the living docs are
+> [`docs/api/stt-player.md`](../api/stt-player.md),
 > [`docs/api/playback-governor.md`](../api/playback-governor.md) and
 > [`docs/api/time-controller.md`](../api/time-controller.md)). 2026-06-10
 > follow-ups: frontier-hold fix (tick-driven stall, playhead clamped to the
 > buffered frontier, degraded creep), loop wraps gate via `'seeking'`, QoE
 > counters (`getQoeStats()` + `'playback'` probe channel), tab-refocus delta
-> clamp. Remaining: governor wiring in the MapLibre adapter (its
-> `onTilesetReady`/`onBufferChange` hooks landed 2026-06-10).
+> clamp. 2026-06-11 ergonomics wave (from the player conventions review,
+> consolidated here): `SttPlayer` HTMLMediaElement-shaped facade (the
+> recommended entry point pre-npm-publish), scrub hold (gates never resume
+> under a held thumb; settle-commit warms the pipeline only), `'ended'` +
+> replay-from-start, direction/speed separation (bounce owns direction),
+> Auto-speed `Infinity` when fully buffered, `paused` intent getter,
+> showcase keyboard map + scrubber step + a11y/UTC/creep-honest labels +
+> hover timestamp + data-volume density strip, StoryGlobe on the shared
+> auto-speed policy. Remaining: governor wiring in the MapLibre adapter (its
+> `onTilesetReady`/`onBufferChange` hooks landed 2026-06-10; the facade makes
+> this pure wiring), and exposing the temporal window/trail length as a
+> player-level control (the data-player "exposure" knob — kepler.gl's brushed
+> range width; interacts with the runway horizon math).
 
 Status: IMPLEMENTED (2026-06-09, branch audit-fixes-2026-05) — all workstreams
 (WS-A coverage/runway/cost APIs + throughput EWMA, WS-B PlaybackGovernor +

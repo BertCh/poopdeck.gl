@@ -127,6 +127,26 @@ export class FlowCorridorLayer<
     return `:fp${step}`;
   }
 
+  protected override timeBoundsForSublayer(
+    binary: BinaryFeatures,
+  ): { start: number; end: number } | null {
+    // A flow corridor is timeless — its geometry exists across the WHOLE range,
+    // colored by the active bucket. Feed the window-mode time filter the
+    // feature's full [start,end] (relative to timeOffset; every corridor spans
+    // bucket0→range_end) so it never hides the network. Without this the
+    // instanceStartTime/instanceEndTime attributes default to 0 and the window
+    // hides every corridor once the playhead passes windowHalf.
+    if (
+      !binary.vertexValueBuckets ||
+      !binary.startTimes ||
+      binary.startTimes.length === 0 ||
+      !binary.endTimes
+    ) {
+      return null;
+    }
+    return { start: binary.startTimes[0], end: binary.endTimes[0] };
+  }
+
   protected override _handleTimeUpdate(time: number): void {
     super._handleTimeUpdate(time);
     // Until a matrix tile has populated the axis there's nothing to animate;

@@ -1,11 +1,10 @@
 # AnimatedHeatmapLayer
 
-> **Renamed.** This layer is exported as **`AnimatedHeatmapLayer`** — the old
-> export name `HeatmapLayer` shadowed `@deck.gl/aggregation-layers`'
-> `HeatmapLayer` and is kept only as a deprecated alias (same class, same
-> props; `HeatmapLayerProps` likewise aliases `AnimatedHeatmapLayerProps`).
-> Existing imports keep working; new code should use the new name. The
-> examples below still show the legacy name.
+> **Export name.** This layer is exported as **`AnimatedHeatmapLayer`**.
+> `HeatmapLayer` is a deprecated alias (same class, same props;
+> `HeatmapLayerProps` likewise aliases `AnimatedHeatmapLayerProps`) — it still
+> works, but new code should use `AnimatedHeatmapLayer` to avoid shadowing
+> `@deck.gl/aggregation-layers`' own `HeatmapLayer`.
 
 The `AnimatedHeatmapLayer` renders temporal point data as an animated density
 heatmap. It is a thin composite over the **canonical deck.gl
@@ -16,14 +15,6 @@ density, and only then mapped through the colour ramp. Dense regions get
 hotter because more splats land on the same pixels — true per-pixel density,
 not per-splat colour blending.
 
-> **Why the rewrite.** An earlier implementation hand-rolled a single-pass
-> splat shader that sampled the palette *per splat* (each point coloured by
-> its own weight) and additively blended the resulting *colours*. Overlapping
-> points summed colours instead of density, so hot zones blew out and the
-> result never read as a heatmap. The current layer hands the
-> splat→accumulate→ramp pipeline to deck.gl's tested implementation. Same
-> import path and public API.
-
 **Time animation.** The canonical HeatmapLayer has no notion of time, so the
 window is driven by `@deck.gl/extensions`'
 [`DataFilterExtension`](https://deck.gl/docs/api-reference/extensions/data-filter-extension):
@@ -32,7 +23,7 @@ each point carries a relativized timestamp as `getFilterValue`, and the
 each frame. Out-of-window points contribute zero density during the weights
 aggregation pass — and changing `filterRange` **re-runs the aggregation**, so
 the heatmap genuinely re-densifies as the play head moves (it is not a
-cross-fade). The re-aggregation cadence is capped (default 30 Hz) independently
+cross-fade). The re-aggregation cadence is capped at ~30 Hz, independently
 of tile loading.
 
 **Data feed.** Points from every visible tile are consolidated into one binary
@@ -56,7 +47,7 @@ HeatmapLayer (own ramp + density normalisation) composited in order.
 ## Installation
 
 ```typescript
-import { HeatmapLayer } from '@stt/deck.gl';
+import { AnimatedHeatmapLayer } from '@stt/deck.gl';
 ```
 
 ## Usage
@@ -64,9 +55,9 @@ import { HeatmapLayer } from '@stt/deck.gl';
 ### Single-channel (default)
 
 ```typescript
-const layer = new HeatmapLayer({
+const layer = new AnimatedHeatmapLayer({
   id: 'earthquake-heat',
-  data: '/data/earthquakes.stt',
+  data: '/data/earthquakes/manifest.json',
   currentTime: 1672531200000,
   timeWindow: 86_400_000,           // 1 day
   radiusPixels: 30,
@@ -91,9 +82,9 @@ wins.
 ### Stacked categorical channels
 
 ```typescript
-const layer = new HeatmapLayer({
+const layer = new AnimatedHeatmapLayer({
   id: 'taxi-od',
-  data: '/data/nyc-taxi-od.stt',
+  data: '/data/nyc-taxi-od/manifest.json',
   currentTime,
   timeWindow: 30 * 60 * 1000,
   radiusPixels: 40,
@@ -127,10 +118,14 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 | -------- | ---- | ------- | ----------- |
 | `radiusPixels` | `number` | `30` | Splat radius in pixels |
 | `intensity` | `number` | `1` | Global intensity multiplier (canonical `intensity`) |
-| `weightProperty` | `string` | `undefined` | Numeric property → per-point weight. Defaults to `1.0`. |
-| `colorRange` | `Color[]` | OrRd | Low → high density ramp (single-channel mode) |
+| `weightProperty` | `string \| null` | `null` | Numeric property → per-point weight. Unset weights every point `1.0`. |
+| `getWeight` | `string \| null` | `null` | Upstream-vocabulary alias of `weightProperty`. Accepts a property-column NAME — NOT a function accessor (a function warns once and falls back). When set, it wins. |
+| `colorRange` | `Color[]` | 7-stop YlOrRd | Low → high density ramp (single-channel mode) |
 | `colorDomain` | `[number, number]` | auto / baked-in | Pinned density domain. **Unset → the layer auto-normalises against the current window's max each frame** (so colours may "breathe" as the window slides; pin it to keep the mapping stable). |
 | `threshold` | `number` | `0.05` | Density fraction below which pixels are transparent. **Only takes effect when `colorDomain` is unset** (the pinned-domain path supersedes it). |
+| `aggregation` | `'SUM' \| 'MEAN'` | `'SUM'` | Density accumulation operation (canonical pass-through). `'MEAN'` averages weights instead — only meaningful with a `weightProperty`; a constant-weight MEAN flattens the map to a single colour. |
+| `weightsTextureSize` | `number` | `2048` | Side length of the density texture (canonical pass-through). Larger = finer detail at higher GPU cost. |
+| `debounceTimeout` | `number` | `500` | Interaction debounce (ms) before re-aggregating during pan/zoom (canonical pass-through). |
 | `fadeInDuration` | `number` | `0` | Leading-edge fade (ms), mapped onto the filter soft-range |
 | `fadeOutDuration` | `number` | `0` | Trailing-edge fade (ms) |
 | `historyWeight` | `number` | `0` | **Deprecated / no-op.** Accepted for API compatibility; the canonical aggregation pipeline has no TAA blend. |
@@ -143,10 +138,14 @@ ramp + density normalisation), composited in order.
 | Field | Type | Default | Description |
 | ----- | ---- | ------- | ----------- |
 | `id` | `string` | — | Channel id; matches `metadata.heatmapDomain.classes[*].id` when present |
-| `categoryFilter` | `{ property, values[] }` | — | Only features matching this categorical filter contribute to the channel |
-| `colorRange` | `Color[]` | OrRd | Per-channel ramp |
+| `categoryFilter` | `{ property, values[] }` | — | Only features matching this categorical filter contribute to the channel (tiles missing the property are skipped for that channel) |
+| `colorRange` | `Color[]` | 7-stop YlOrRd | Per-channel ramp |
 | `colorDomain` | `[number, number]` | auto / baked-in | Pinned per-channel density domain (see note above) |
 | `intensity` | `number` | `1` | Per-channel weight multiplier, folded into the point weight |
+
+Sublayers are not pickable (density pixels have no feature identity). The
+sublayer short id for `_subLayerProps` overrides is **`heatmap`** — it covers
+every per-channel sublayer.
 
 ## Build-time intensity domain
 

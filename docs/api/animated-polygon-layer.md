@@ -39,6 +39,9 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 | :---------------- | :--------------------- | :--------- | :-------------------------------------- |
 | `filled`          | `boolean`              | `true`     | Whether to fill polygons.               |
 | `extruded`        | `boolean`              | `false`    | Whether to extrude polygons in 3D.      |
+| `elevationScale`  | `number`               | `1`        | GPU multiplier applied to every elevation value (constant and column-driven). Only takes effect when `extruded`. |
+| `wireframe`       | `boolean`              | `false`    | Draw the edges of extruded polygons as a wireframe (SolidPolygonLayer pass-through). Only takes effect when `extruded`. |
+| `material`        | `Material`             | `true`     | Lighting material for extruded polygons: `true` for the default phong material, `false` to disable lighting, or `{ambient, diffuse, shininess, specularColor}`. |
 | `fadeInDuration`  | `number`               | `500`      | Duration (ms) for polygons to fade in.  |
 | `fadeOutDuration` | `number`               | `500`      | Duration (ms) for polygons to fade out. |
 
@@ -52,16 +55,16 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 | `getElevation` | `number \| string \| null` | `null`        | Upstream-vocabulary alias of `elevation` (same domain rules).                   |
 | `colorPalette` | `Color[]`          | 10-color palette     | Palette for categorical `fillColor` (GPU lookup, up to 4096 entries).           |
 
-### Deprecated (dead) outline props
+### Outline props (no effect)
 
-`stroked`, `lineWidthUnits`, `lineWidth`, and `lineColor` are **dead props**: outline rendering was never implemented (the sublayer is a fill-only `SolidPolygonLayer`) and setting them has no visual effect. They remain on the type for compatibility; a runtime warning fires when set. They will be removed.
+`stroked`, `lineWidthUnits`, `lineWidth`, and `lineColor` have **no visual effect**: the fill sublayer is a `SolidPolygonLayer` with no outline pass. They remain on the type for API compatibility, and a runtime warning fires when they are set.
 
 ## Architecture & performance
 
 - **GPU time filtering**: the shared
   [`TimeFilterExtension`](./time-filter-extension.md) runs directly on
   `SolidPolygonLayer` — polygons upload once per tile and time-window
-  changes only update uniforms. (`PolygonTimeFilterExtension` survives only
+  changes only update uniforms. (`PolygonTimeFilterExtension` is available
   as a deprecated alias.) Categorical fill colors likewise lift to the GPU
   via [`CategoryColorExtension`](./category-color-extension.md).
 - **Per-vertex attribute expansion**: `SolidPolygonLayer`'s fill model is
@@ -71,8 +74,10 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
   cached, never on the draw path.
 - **Pre-baked triangles (MLT-style)**: when the archive was built with
   `stt-build --pre-tessellate`, the tile's `triangles` index buffer feeds
-  `SolidPolygonLayer` directly (`_normalize: false`), skipping deck.gl's
-  CPU earcut at tile-arrival time entirely. **This is also the only path
+  `SolidPolygonLayer` directly through the binary `indices` attribute,
+  skipping deck.gl's CPU earcut at tile-arrival time entirely. (All
+  sublayers run with `_normalize: false` — tile data is already
+  pre-tesselated, so deck's re-normalization pass is bypassed either way.) **This is also the only path
   that renders polygon holes correctly** — `BinaryFeatures` collapses ring
   boundaries into per-feature vertex runs (see
   [Binary Features](./binary-features.md)), so on the non-pre-tessellated

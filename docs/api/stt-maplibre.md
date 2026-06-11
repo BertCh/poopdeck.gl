@@ -27,14 +27,11 @@ npm i @stt/maplibre maplibre-gl
 
 `maplibre-gl` is a peer dependency, pinned **`^3 || ^4`**.
 
-> **MapLibre v5 is NOT yet supported.** v5 replaced the custom layer's
+> **MapLibre v5 is not supported.** v5 replaced the custom layer's
 > positional `render(gl, matrix)` signature with a single args object and
-> changed the mercator matrix semantics (maplibre-gl-js#3854); this adapter's
-> render path would receive the args object where it expects the matrix and
-> draw nothing. A v5 port means accepting the args object, injecting
-> `args.shaderData.vertexShaderPrelude` into each vertex shader, and
-> projecting via `projectTile()` — the same prelude path that would unlock
-> globe rendering. Until that lands, stay on v4 for STT layers.
+> changed the mercator matrix semantics (maplibre-gl-js#3854), which this
+> adapter's render path does not handle — it expects the matrix and would
+> draw nothing. Use maplibre-gl v4 for STT layers.
 
 ## Layer classes
 
@@ -152,7 +149,7 @@ const tileset = layer.getTileset(); // undefined until metadata resolves
 | `prefetchSteps` | `number` | tileset default (4) | Number of prefetch time buckets |
 | `fadeInDuration` | `number` | 10 % of `timeWindow` | Leading-edge alpha ramp (ms) |
 | `fadeOutDuration` | `number` | 10 % of `timeWindow` | Trailing-edge alpha ramp (ms) |
-| `softTimeWindow` | `boolean` | `true` | Legacy shortcut — `false` zeroes the fades |
+| `softTimeWindow` | `boolean` | `true` | Shortcut — `false` zeroes the fades |
 | `onTilesetReady` | `(tileset) => void` | — | Fired once per archive init with the live tileset (satisfies the governor's `BufferSource` contract) |
 | `onBufferChange` | `(runway: BufferedRunway) => void` | — | Buffered-runway threshold events from the tileset's coverage index, forwarded as-is |
 
@@ -218,6 +215,7 @@ interpolates between `startTimes` / `endTimes`.
 | `colorRange` | `RGBA8[]` | 7-stop OrRd | Density-low → density-high colour ramp |
 | `weightProperty` | `string` | — | Numeric property name; defaults to 1 per point |
 | `threshold` | `number` | `0.05` | Hide pixels whose accumulated intensity is below this |
+| `colorDomain` | `[min, max]` | archive's `heatmapDomain`, else `[0, 1]` | Pinned accumulated-intensity domain mapped onto the ramp (deck.gl `colorDomain` parity) — keeps weighted heatmaps from washing out |
 
 ## Methods
 
@@ -307,5 +305,5 @@ Each layer exposes lifecycle helpers in addition to `CustomLayerInterface`:
 ## Live demo
 
 The repo's showcase app renders any supported dataset through this adapter
-via the renderer toggle on each demo page (the old `/maplibre/:datasetId`
-deep links still resolve) — run `pnpm dev` from `examples/showcase`.
+via the renderer toggle on each demo page — run `pnpm dev` from
+`examples/showcase`.

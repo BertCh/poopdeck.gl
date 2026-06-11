@@ -92,16 +92,17 @@ spatial density and temporal distribution. Wired into the builder via
 filled in from the recommendation.
 
 ### `stt-validate`
-Opens a packed dataset (a directory or its `manifest.json`) — or a legacy
+Opens a packed dataset (a directory or its `manifest.json`) — or a
 single-file `.stt` — and reports anomalies. For packed inputs it first checks the
 **content-addressing contract** (each pack/directory object blake3-hashes to its
-filename, declared lengths match, no out-of-range `pack_id`), then verifies the
-content hash of every tile, decodes each Arrow IPC payload, and checks
+filename, declared lengths match, no out-of-range `pack_id`), then verifies every
+tile's CRC32C, decodes each Arrow IPC payload, and checks
 feature-count and temporal-extent consistency. Suitable for CI.
 
 ### `stt-generate`
 Convenience CLI that downloads + processes + builds the showcase datasets
-(earthquakes, AIS, flights, hurricanes, wildfires, NYC rideshare, satellites).
+(earthquakes, AIS, flights, hurricanes, wildfires, NYC rideshare, NYC taxi
+points, satellites, drifters, drifters-hourly, animals, OSM edits).
 Each subcommand emits GeoParquet and calls `stt-build` internally.
 
 ### `stt-core`
@@ -129,12 +130,12 @@ compression abstraction, Hilbert/temporal indexing, and metadata.
   grace-period LRU eviction. Dispatches between the raw and **summary**
   tiers per zoom (`tier: 'raw' | 'summary' | 'auto'`). Temporal-LOD
   dispatch is reader-API-only (`STTArchive.pickTemporalLodForZoom` /
-  `getTilesInBoundsForTemporalLod`) and is not yet wired into the tileset.
+  `getTilesInBoundsForTemporalLod`); an app calls these methods to select a
+  coarser tier.
 - **`createSttTileSource`** — a structural (no runtime dependency)
   loaders.gl-style tile source over an `STTArchive`, so apps already
   using `@loaders.gl/*` can drop STT into their existing tile source
-  plumbing. (The old standalone `SttLoader` parser object was removed —
-  see the [tile decoding](../api/stt-loader.md) page.)
+  plumbing. See the [tile decoding](../api/stt-loader.md) page.
 
 ### `@stt/deck.gl`
 - **`SpatioTemporalLayer`** — composite layer; owns the archive + tileset,
@@ -144,8 +145,13 @@ compression abstraction, Hilbert/temporal indexing, and metadata.
 - **`VatTripsLayer`** — Vertex-Animation-Texture variant of trip rendering;
   one quad per active trip, positions sampled from a per-tile texture.
   Scales independently of per-trajectory vertex count.
-- **`HeatmapLayer`** — GPU-splat temporal heatmap with stacked categorical
-  channels and bake-time intensity-domain support.
+- **`AnimatedHeatmapLayer`** — temporal density heatmap built on the canonical
+  `@deck.gl/aggregation-layers` HeatmapLayer + `DataFilterExtension`
+  (per-channel categorical splits, bake-time intensity-domain support;
+  visible-tile data is consolidated into one buffer set per channel). The
+  `HeatmapLayer` name remains as a deprecated alias.
+- **`FlowCorridorLayer`** — static corridor geometry animated by a per-vertex
+  × per-bucket value matrix (pre-aggregated flow overviews).
 - **`H3SummaryLayer`** — renders the server-aggregated summary tier as
   extrudable H3 hexagons (wraps `H3HexagonLayer`).
 - **`TimeFilterExtension`** — relativizes time against a per-layer
@@ -156,6 +162,9 @@ compression abstraction, Hilbert/temporal indexing, and metadata.
 - **`CategoryColorExtension`** — texture-based palette lookup, scales to
   many categories without CPU-side color expansion.
 - **`TimeController`** — `requestAnimationFrame`-driven playback clock.
+- **`PlaybackGovernor`** — video-player-style buffering: gates play/seek on a
+  buffered runway ahead of the playhead and can auto-adapt playback speed to
+  measured throughput.
 
 ### `@stt/maplibre`
 Same archive reader and tileset, rendered through MapLibre GL's
@@ -163,14 +172,17 @@ Same archive reader and tileset, rendered through MapLibre GL's
 dependency or that need to interleave STT layers between native MapLibre
 style layers. Five layer classes mirror the deck.gl coverage:
 `STTPointLayer`, `STTLineLayer`, `STTPolygonLayer`, `STTTripsLayer`,
-`STTHeatmapLayer`. See [stt-maplibre.md](../api/stt-maplibre.md).
+`STTHeatmapLayer`. Mercator-only — the shaders assume the mercator
+projection, so there is no globe support (unlike the deck.gl stack). See
+[stt-maplibre.md](../api/stt-maplibre.md).
 
 ## Design decisions
 
 ### Arrow IPC instead of a bespoke binary format
-Standard, columnar, browser-native via `apache-arrow`. The same library
-parses the archive's directory and its tile payloads. GeoArrow gives the
-deck.gl layers exactly the buffer shape they need.
+Tile payloads are standard, columnar, and browser-native via `apache-arrow`;
+GeoArrow gives the deck.gl layers exactly the buffer shape they need. (The
+directory index is the one bespoke structure — a compact varint + RLE codec;
+see the packed format spec §4.)
 
 ### Custom tileset, not deck.gl `TileLayer`
 - 4D addressing — `(z, x, y, t)` — that `TileLayer` doesn't model.
@@ -179,18 +191,21 @@ deck.gl layers exactly the buffer shape they need.
   time window even when they're off-viewport for a frame).
 
 ### GPU time filtering, not CPU per-frame filtering
-Each visible tile gets its own deck.gl sublayer bound to that tile's
-Arrow-backed attribute buffers (uploaded once on tile arrival — there is no
-cross-tile consolidation pass). Animation then costs nothing extra: the CPU
-updates one uniform per frame and the shader does the filter and the fade.
+Most layers give each visible tile its own deck.gl sublayer bound to that
+tile's Arrow-backed attribute buffers, uploaded once on tile arrival.
+(Two exceptions consolidate across tiles for perf: the heatmap merges
+visible tiles into one buffer set per channel, and cumulative point
+datasets pack tiles into a few large slabs.) Animation then costs nothing
+extra: the CPU updates one uniform per frame and the shader does the filter
+and the fade.
 
 ### Content-addressed packs, cacheable on any static host
 A dataset is a `manifest.json` plus many immutable, content-addressed pack
 objects (and one directory object), served as static bytes by any host that
 honours Range requests — R2, S3, GCS, nginx. Because each pack is small and
 immutable, a dumb CDN caches every one natively (no Worker, no vendor lock-in);
-only the tiny manifest is mutable. This is what fixed the uncacheable multi-GB
-single-file archive (`cf-cache-status: BYPASS` on every range request).
+only the tiny manifest is mutable. A single multi-GB file cannot be edge-cached
+once it exceeds the CDN per-object limit; small immutable packs can.
 
 ## Key interactions
 

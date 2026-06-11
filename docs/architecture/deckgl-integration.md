@@ -20,7 +20,7 @@ the request scheduling problem, not just the tile address.
 | `data` (a `manifest.json` URL) | `data` (URL template) | One manifest per dataset, not a `{z}/{x}/{y}` template; tiles are range-read out of packs. |
 | `maxRequests` (default **24**) | `maxRequests` (default 6) | Same meaning. The single concurrency knob, threaded into the range-request pool. |
 | `maxCacheSize` (default 2000 tiles) | `maxCacheSize` | Same meaning (tile-count LRU cap). |
-| `maxCacheByteSize` (default 2 GiB, device-aware) | `maxCacheByteSize` | Same meaning; a persistent OPFS cache sits below the memory LRU. |
+| `maxCacheByteSize` (default 2 GiB) | `maxCacheByteSize` | Same meaning; a persistent OPFS cache sits below the memory LRU. |
 | `onTileLoad` / `onTileUnload` | `onTileLoad` / `onTileUnload` | Same contract. `onTileLoad`-driven re-renders are coalesced via rAF. |
 | `onViewportLoad` | `onViewportLoad` | Same contract: fired once per viewport×window selection settle, with the loaded tiles. Re-fires only after the selection changes and re-settles. |
 | `onTileError` | `onTileError` | Same contract, plus the failing tile's id. Default logs to `console.error`, like TileLayer. |
@@ -52,10 +52,6 @@ no home in that model:
   `PlaybackGovernor` consumes these to hold, resume, and auto-speed playback
   (video-player-style buffering). This is a tileset↔playback contract with no
   upstream counterpart.
-
-One thing the custom tileset *should* adopt from upstream is `TileLayer`'s
-pitch-aware bounding-volume traversal (`tile-2d-traversal`); the current
-viewport-corner unprojection over-fetches on pitched views.
 
 ## The time hot path is imperative
 
@@ -105,12 +101,13 @@ Differences a deck.gl user will notice, beyond the tileset:
   binary Arrow columns and per-feature JS accessors never run, so styling
   props take a constant *or a property-column name* (e.g.
   `pathColor: 'speed'`) instead of deck's `getFillColor`-style
-  `Accessor<DataT>` functions. The upstream accessor *names* now exist as
+  `Accessor<DataT>` functions. The upstream accessor *names* also exist as
   aliases with the same constant-or-column-name semantics — point
   `getFillColor`/`getRadius`/`getLineColor`, path/trips `getColor`/`getWidth`,
-  polygon `getFillColor`/`getElevation`, heatmap `getWeight` — and win over
-  the legacy prop when set. Passing a function accessor warns once and falls
-  back to the legacy prop (it cannot run against binary tiles).
+  polygon `getFillColor`/`getElevation`, heatmap `getWeight` — and take
+  precedence over the column-name prop when set. Passing a function accessor
+  warns once and falls back to the column-name prop (it cannot run against
+  binary tiles).
   User-supplied `updateTriggers` ARE honored: a trigger bump invalidates the
   cached prepared tiles and sublayer instances and the triggers forward into
   sublayers. `H3SummaryLayer` uses real accessors throughout.
@@ -120,8 +117,7 @@ Differences a deck.gl user will notice, beyond the tileset:
   but drops upstream's `DataT` parameter: tiles are binary Arrow columns, so
   there is no per-row datum type for accessors to receive — `data` is always
   the archive URL string. The temporal heatmap is exported as
-  `AnimatedHeatmapLayer` (the old `HeatmapLayer` name shadowed
-  `@deck.gl/aggregation-layers`' and remains only as a deprecated alias).
+  `AnimatedHeatmapLayer` (`HeatmapLayer` remains as a deprecated alias).
 - **No attribute transitions.** Binary pass-through plus per-tile sublayers
   makes deck's `transitions` unsupportable; tiles appear with a time-window
   fade instead.

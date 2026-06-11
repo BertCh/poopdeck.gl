@@ -13,6 +13,10 @@ export { AnimatedPathLayer } from './animated-path-layer';
 export { AnimatedPolygonLayer } from './animated-polygon-layer';
 export { AnimatedTripsLayer } from './animated-trips-layer';
 export { FlowCorridorLayer } from './flow-corridor-layer';
+// Smooth moving head-dot for trip archives — CPU-interpolated position per
+// frame rendered through a stock ScatterplotLayer (fp64, no jitter, globe,
+// circular markers). The vanilla replacement for VatTripsLayer's head mode.
+export { AnimatedTripHeadsLayer } from './animated-trip-heads-layer';
 // Vertex-Animation-Texture variant of trip rendering — one quad per active
 // trip; positions sampled from a per-tile texture. Scales independently of
 // per-trajectory vertex count.
@@ -26,6 +30,23 @@ export { NoPickingPathLayer } from './no-picking-path-layer';
 export { AnimatedHeatmapLayer, HeatmapLayer } from './heatmap-layer';
 // Server-aggregated summary tier (renders H3 hexes at low zooms).
 export { H3SummaryLayer } from './h3-summary-layer';
+// Server-aggregated Quadbin summary tier (renders Z/X/Y quad cells at low
+// zooms) — the Quadbin analog of H3SummaryLayer, completing the format's
+// already-declared `SummaryScheme::Quadbin`. Reads the cell id from
+// `featureIds64` exactly like H3; converts the CARTO Quadbin u64 to a Bing
+// quadkey for deck.gl's QuadkeyLayer.
+export { QuadbinSummaryLayer } from './quadbin-summary-layer';
+
+// Origin→destination flow layers (window-mode time filtering). Arc/Line read
+// the FIRST vertex of each (typically 2-vertex) LineString tile as the source
+// and the LAST as the target — feed them with the `nyc-rideshare --od` mode.
+export { AnimatedArcLayer } from './animated-arc-layer';
+export { AnimatedLineLayer } from './animated-line-layer';
+// Directional point markers — IconLayer rotated per-feature by a heading
+// column (e.g. AIS `cog`, aircraft `heading`); pairs with `--with-bearing`.
+export { AnimatedIconLayer } from './animated-icon-layer';
+// Extruded 3D columns at point features; height driven by a numeric column.
+export { AnimatedColumnLayer } from './animated-column-layer';
 
 // Extensions
 export { TimeFilterExtension } from './time-filter-extension';
@@ -66,6 +87,17 @@ export type {
 export { decideAutoSpeedMultiplier } from './auto-speed';
 export type { AutoSpeedDecisionOptions, AutoSpeedPhase } from './auto-speed';
 
+// SttPlayer — the HTMLMediaElement-shaped facade over TimeController +
+// PlaybackGovernor (player-ergonomics review §4): the recommended single
+// entry point. Owns the baseRate × playbackRate speed model and the throttled
+// 'timeupdate' cadence; exposes the wrapped pieces for layer wiring.
+export { SttPlayer } from './stt-player';
+export type {
+  SttPlayerEventMap,
+  SttPlayerEventName,
+  SttPlayerOptions,
+} from './stt-player';
+
 // Telemetry — opt-in perf probe channel used by tools/render-test and
 // the showcase HUD. No-op when `globalThis.__sttProbe` is unset.
 export {
@@ -101,6 +133,7 @@ export type { AnimatedPointLayerProps } from './animated-point-layer';
 export type { AnimatedPathLayerProps } from './animated-path-layer';
 export type { AnimatedPolygonLayerProps } from './animated-polygon-layer';
 export type { AnimatedTripsLayerProps } from './animated-trips-layer';
+export type { AnimatedTripHeadsLayerProps } from './animated-trip-heads-layer';
 export type { VatTripsLayerProps } from './vat-trips-layer';
 export type {
   AnimatedHeatmapLayerProps,
@@ -109,6 +142,11 @@ export type {
   HeatmapChannelSpec,
 } from './heatmap-layer';
 export type { H3SummaryLayerProps } from './h3-summary-layer';
+export type { QuadbinSummaryLayerProps } from './quadbin-summary-layer';
+export type { AnimatedArcLayerProps } from './animated-arc-layer';
+export type { AnimatedLineLayerProps } from './animated-line-layer';
+export type { AnimatedIconLayerProps } from './animated-icon-layer';
+export type { AnimatedColumnLayerProps } from './animated-column-layer';
 export type { TimeFilterExtensionProps } from './time-filter-extension';
 export type { CategoryColorExtensionProps } from './category-color-extension';
 export type { PolygonTimeFilterExtensionProps } from './polygon-time-filter-extension';

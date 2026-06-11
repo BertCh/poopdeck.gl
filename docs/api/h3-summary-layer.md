@@ -1,6 +1,6 @@
 # H3SummaryLayer
 
-The `H3SummaryLayer` renders the **server-aggregated summary tier** of an STT archive as H3 hexagons. The summary tier (built with `stt-build --summary-tier h3`) collapses 100M+ raw features into one row per H3 cell — `count` plus per-column aggregates — shipped as Arrow tiles indexed by `(zoom, x, y, time-bucket)` just like the raw tier. At low zooms this is the only way to render a planet-scale point dataset in real time.
+The `H3SummaryLayer` renders the **server-aggregated summary tier** of an STT archive as H3 hexagons. The summary tier (built with `stt-build --summary-tier h3`) collapses 100M+ raw features into one row per H3 cell — `count` plus per-column aggregates — stored as Arrow tiles indexed by `(zoom, x, y, time-bucket)` just like the raw tier. At low zooms this is the only way to render a planet-scale point dataset in real time.
 
 It extends [`SpatioTemporalLayer`](./spatiotemporal-layer.md) and reuses ALL of its archive/tileset plumbing (init + supersession race guards, rAF-coalesced tile-load updates, throttled animation ticks, byte-budgeted cache, callbacks, `loadOptions`); the summary-tier specifics ride the base's subclass hooks. Each cell renders through deck.gl's `H3HexagonLayer` (`@deck.gl/geo-layers`), so high-precision polygon rendering, GPU picking, and the standard extruded/coverage style props come for free.
 
@@ -27,7 +27,7 @@ const layer = new H3SummaryLayer({
 });
 ```
 
-Pair it with a raw-tier layer for a zoom-dependent stack, or simply use any animated layer with `tier: 'auto'` — the base tileset dispatches to the summary tier automatically inside its zoom band.
+Pair it with a raw-tier layer for a zoom-dependent stack, or simply use any animated layer with `tier: 'auto'` (the base default) — the tileset dispatches to the summary tier automatically inside its zoom band.
 
 ## Summary tile shape
 

@@ -34,8 +34,8 @@ that *cacheability is a property of the format* — a dumb CDN or static host
   spatial cell whose content is identical across many consecutive time buckets
   costs one index run.
 - **`packs/<blake3>.sttp`** — the tile data, cut into **content-addressed
-  packs** of ~64 MiB. Each tile payload inside a pack is an independently
-  zstd-compressed blob, deduplicated by hash.
+  packs** of ≤ 64 MiB (default). Each tile payload inside a pack is an
+  independently zstd-compressed blob, deduplicated by hash.
 
 Packs and the directory are named by their own blake3 hash, so their bytes can
 never change without their name changing — they ship with
@@ -74,10 +74,9 @@ build can emit one or more coarser-bucket tiers alongside the base
 coarsest tier whose `max_zoom_level` covers the current zoom
 (`STTArchive.pickTemporalLodForZoom` + `getTilesInBoundsForTemporalLod`) —
 so "zoomed out, scrubbing a decade" can read 30-day aggregates instead of
-streaming per-hour base tiles. Note: this is reader-API-only today — the
-tileset and renderers do not yet dispatch temporal LOD automatically, so an
-app must call these methods itself to use the coarser tiers. (The summary
-tier below, by contrast, is wired into the tileset.)
+streaming per-hour base tiles. These coarser tiers are exposed through the
+reader API; an app calls these methods to select a tier. (The summary tier
+below, by contrast, is selected automatically by the tileset.)
 
 ### 4. Summary tier (server-side aggregation)
 

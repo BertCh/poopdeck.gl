@@ -271,7 +271,7 @@ const HomePage: React.FC = () => {
                 className="inline-block w-1.5 h-1.5 rounded-full mr-2 align-middle"
                 style={{ background: "#28B4C8" }}
               />
-              Ocean surface currents
+              Ocean current drifters
             </div>
           </div>
         </div>

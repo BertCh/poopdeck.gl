@@ -185,6 +185,132 @@ const rawDatasets: Dataset[] = [
     },
   },
   {
+    // 3D columns reusing the SAME earthquakes-v2 archive as earthquake-activity
+    // — magnitude (numeric column) drives column height via AnimatedColumnLayer.
+    id: 'earthquake-columns',
+    name: 'Earthquakes as 3D Columns',
+    sources: ['usgs'],
+    description:
+      'The global M4.0+ catalog rendered as extruded columns — bar height is ' +
+      'magnitude. Same archive as the points demo, AnimatedColumnLayer.',
+    url: '/data/earthquakes-v2/manifest.json',
+    type: 'column',
+    timeRange: {
+      start: Date.parse('2020-01-01T00:00:00Z'),
+      end: Date.parse('2024-12-31T23:59:59Z'),
+    },
+    timeWindow: 86400000 * 30, // 30-day rolling window, matches the points demo
+    targetPlaybackSeconds: 60,
+    // Tilted regional view over the Ring of Fire (Japan) where the seismic
+    // field is dense enough for the columns to read as a 3D bar field; pan out
+    // for the global plate-boundary picture.
+    initialViewState: {
+      longitude: 138,
+      latitude: 36,
+      zoom: 5,
+      pitch: 55,
+      bearing: 15,
+    },
+    elevationProperty: 'magnitude',
+    // magnitude is ~4–8; ×12 km gives 48–96 km columns — tall enough to read
+    // at zoom ~5 without flying past the camera.
+    elevationScale: 12000,
+    columnRadius: 6000,
+    columnRadiusUnits: 'meters',
+    columnDiskResolution: 6,
+    columnFillColor: [251, 106, 74, 220],
+    opacity: 0.85,
+    legend: {
+      title: 'Column height = magnitude',
+      items: [{ color: '#fb6a4a', label: 'M4.0+ earthquake' }],
+    },
+  },
+  {
+    // Origin→destination flow arcs — straight pickup→dropoff lines bowed into
+    // arcs, animated by trip time. Synthetic offline data (no OSRM).
+    id: 'nyc-od-arcs',
+    name: 'NYC Taxi Origin→Destination Arcs',
+    description:
+      '~5.8K synthetic NYC taxi trips drawn as origin→destination arcs, ' +
+      'animated by pickup→dropoff time. AnimatedArcLayer.',
+    url: '/data/nyc-od-arcs/manifest.json',
+    type: 'arc',
+    timeRange: {
+      start: 1705276800000, // 2024-01-15 00:00 UTC
+      end: 1705364736000,   // ~24 h later
+    },
+    timeWindow: 1800000, // 30-min slice — arcs whose [pickup, dropoff] overlaps
+    targetPlaybackSeconds: 45,
+    initialViewState: {
+      longitude: -73.965,
+      latitude: 40.745,
+      zoom: 11.2,
+      pitch: 45,
+      bearing: 0,
+    },
+    arcSourceColor: [56, 196, 232, 210], // pickup — cool cyan
+    arcTargetColor: [255, 142, 64, 220], // dropoff — warm orange
+    arcWidth: 1.5,
+    arcHeight: 0.4,
+    opacity: 0.7,
+    legend: {
+      title: 'Trip direction',
+      items: [
+        { color: '#38c4e8', label: 'Pickup (origin)' },
+        { color: '#ff8e40', label: 'Dropoff (destination)' },
+      ],
+    },
+  },
+  {
+    // CARTO Quadbin summary tier — point density aggregated into square cells
+    // by the Rust quadbin aggregator, rendered by QuadbinSummaryLayer.
+    id: 'nyc-od-quadbin',
+    name: 'NYC Trip Density — Quadbin Cells',
+    description:
+      '~23K synthetic NYC pickup/dropoff points aggregated into CARTO Quadbin ' +
+      'square cells, extruded by count. QuadbinSummaryLayer.',
+    url: '/data/nyc-od-quadbin/manifest.json',
+    type: 'quadbin-summary',
+    timeRange: {
+      start: 1705276800000,
+      end: 1705366051000,
+    },
+    timeWindow: 3600000, // 1 h — matches the summary temporal bucket
+    targetPlaybackSeconds: 45,
+    initialViewState: {
+      // The Quadbin aggregator offsets cells +3 levels finer than the view
+      // zoom, so zoom 12 → quadbin z15 cells (~1.2 km): ~40 cells over
+      // Manhattan, each ~20 points/hour — a legible density grid. The summary
+      // tier covers zooms 8–15; pan out to coarsen, zoom past it for raw points.
+      longitude: -73.97,
+      latitude: 40.75,
+      zoom: 12,
+      pitch: 30,
+      bearing: 0,
+    },
+    summaryWeightProperty: 'count',
+    summaryColorRange: [
+      [12, 44, 76, 200],
+      [22, 92, 138, 220],
+      [38, 150, 190, 235],
+      [104, 204, 214, 245],
+      [180, 236, 226, 250],
+      [240, 252, 240, 255],
+    ],
+    summaryColorDomain: [1, 30],
+    summaryExtruded: true,
+    // Elevation is raw count × scale (not domain-clamped); keep it small — a
+    // ~30-count cell rises ~240 m, a modest block at zoom 12.
+    summaryElevationScale: 8,
+    summaryCoverage: 0.9,
+    legend: {
+      title: 'Points per Quadbin cell (1 h)',
+      ramps: [
+        { label: 'Density', colors: ['#0c2c4c', '#2696c2', '#b4ece2', '#f0fcf0'] },
+      ],
+    },
+  },
+  {
     id: 'flights',
     name: 'Flight Traffic',
     sources: ['opensky'],
@@ -437,8 +563,11 @@ const rawDatasets: Dataset[] = [
     sources: ['tlc'],
     description:
       'Animated NYC taxi vehicle positions across Manhattan. Source: NYC TLC.',
-    // VAT head animation on the FULL trip archive (same source as the trips
-    // demo) — one moving dot per active trip, no separate derived points file.
+    // Smooth moving head-dot on the FULL trip archive (same source as the trips
+    // demo) — one interpolated dot per active trip, no separate derived points
+    // file. Rendered by AnimatedTripHeadsLayer (stock ScatterplotLayer + CPU
+    // per-frame head interpolation), the vanilla replacement for the old VAT
+    // head; the `type: 'vat'` tag now maps to that layer.
     url: '/data/nyc-taxi-paths/manifest.json',
     type: 'vat',
     timeRange: {
@@ -467,7 +596,6 @@ const rawDatasets: Dataset[] = [
     vatHeadRadius: 20,      // metres
     vatHeadRadiusMinPixels: 0,
     vatHeadRadiusMaxPixels: 8,
-    vatTimeSlots: 64,
   },
   {
     id: 'nyc-taxi-paths',
@@ -652,7 +780,7 @@ const rawDatasets: Dataset[] = [
     sources: ['tlc'],
     description: 'Animated yellow-cab trip lines across Manhattan. Source: NYC TLC.',
     url: '/data/nyc-taxi-paths/manifest.json',
-    type: 'vat',
+    type: 'trips',
     timeRange: {
       start: 1420070400000,  // 2015-01-01 00:00:00 UTC
       end: 1420213385000,    // 2015-01-02 13:43:05 UTC
@@ -676,25 +804,29 @@ const rawDatasets: Dataset[] = [
         { color: "#1FBAD6", label: "Active Trip" },
       ]
     },
-    // VAT-trail config. World-space width (metres), mirrored from the maritime
-    // points' "render by space" look: the ribbon is ~1.4 px at the zoom-14 view
-    // and grows/shrinks with zoom (caps at widthMaxPixels) instead of staying a
-    // fixed screen width. The trail still alpha-fades toward its tail.
-    vatTrailColor: [31, 186, 214, 255],
-    vatTrailLength: 12500,
-    vatTrailSamples: 16,
-    vatSizeUnits: 'meters',
-    vatTripWidth: 10,       // metres
+    // Trail config (AnimatedTripsLayer / PathLayer — no custom VAT layer).
+    // World-space width (metres), mirrored from the maritime points' "render by
+    // space" look: the ribbon is ~1.4 px at the zoom-14 view and grows/shrinks
+    // with zoom (caps at widthMaxPixels) instead of staying a fixed screen
+    // width. The trail still alpha-fades toward its tail. Rounded caps/joints
+    // off — the dominant fragment cost on dense Manhattan at small widths.
+    tripColor: [31, 186, 214, 255],
+    trailLength: 12500,
+    widthUnits: 'meters',
+    tripWidth: 10,          // metres
     widthMinPixels: 0,
     widthMaxPixels: 6,
-    vatFadeTrail: true,
-    vatTimeSlots: 64,
+    fadeTrail: true,
+    capRounded: false,
+    jointRounded: false,
   },
   {
     id: 'nyc-taxi-vat',
     name: 'NYC Yellow Cabs',
     description: 'Animated yellow-cab positions across Manhattan. Source: NYC TLC.',
     url: '/data/nyc-taxi-paths/manifest.json',
+    // Head-dot via AnimatedTripHeadsLayer (vanilla ScatterplotLayer + CPU head
+    // interpolation); the `type: 'vat'` tag maps to that layer now.
     type: 'vat',
     timeRange: {
       start: 1420070400000,
@@ -723,7 +855,6 @@ const rawDatasets: Dataset[] = [
     vatHeadRadius: 20,      // metres
     vatHeadRadiusMinPixels: 0,
     vatHeadRadiusMaxPixels: 8,
-    vatTimeSlots: 64,
   },
   {
     id: 'ship-traffic',
@@ -765,6 +896,21 @@ const rawDatasets: Dataset[] = [
       pitch: 0,
       bearing: 0
     },
+    // Color each ping by the tile's `vessel_type` categorical column (emitted
+    // by the AIS generator). colorMapping keys are the exact category strings
+    // from vessel_type_to_category(); colors mirror the legend below 1:1.
+    // `special` has no legend swatch — folded into the gray "Other".
+    colorProperty: 'vessel_type',
+    colorMapping: {
+      cargo:     [74, 144, 226, 255],  // #4A90E2
+      tanker:    [245, 166, 35, 255],  // #F5A623
+      passenger: [80, 227, 194, 255],  // #50E3C2
+      fishing:   [184, 233, 134, 255], // #B8E986
+      towing:    [155, 89, 182, 255],  // #9B59B6
+      other:     [128, 128, 128, 255], // #808080
+      special:   [128, 128, 128, 255], // grouped under "Other"
+    },
+    colorMappingDefault: [128, 128, 128, 255],
     legend: {
       title: "Vessel Type",
       items: [
@@ -796,6 +942,21 @@ const rawDatasets: Dataset[] = [
       pitch: 0,
       bearing: 0
     },
+    // Color each perimeter by the tile's `severity` categorical column (emitted
+    // by the wildfires generator). colorMapping keys are the exact severity
+    // strings; colors mirror the legend below. Opaque fills (alpha 255) avoid
+    // the tile-seam double-blend AnimatedPolygonLayer warns about for large,
+    // boundary-spanning polygons. `low` (<1K acres) is below the legend floor
+    // and rare in this 1000+-acre cut — kept pale rather than dropped.
+    colorProperty: 'severity',
+    colorMapping: {
+      low:          [255, 245, 200, 255],
+      moderate:     [255, 237, 160, 255], // #FFEDA0
+      high:         [254, 178, 76, 255],  // #FEB24C
+      extreme:      [240, 59, 32, 255],   // #F03B20
+      catastrophic: [189, 0, 38, 255],    // #BD0026
+    },
+    colorMappingDefault: [180, 180, 180, 255],
     legend: {
       title: "Fire Severity",
       items: [

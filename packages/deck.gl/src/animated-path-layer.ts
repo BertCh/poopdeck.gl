@@ -113,6 +113,18 @@ export interface _AnimatedPathLayerProps {
    * @default false
    */
   jointRounded?: boolean;
+  /**
+   * Miter-joint length cap (multiples of line width) — PathLayer pass-through,
+   * applies when `jointRounded` is false.
+   * @default 4
+   */
+  miterLimit?: number;
+  /**
+   * Extrude lines in screen space (always face the camera) — PathLayer
+   * pass-through.
+   * @default false
+   */
+  billboard?: boolean;
 }
 
 /** Complete props accepted by {@link AnimatedPathLayer}. */
@@ -200,6 +212,8 @@ export class AnimatedPathLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
     fadeOutDuration: { type: 'number', value: 300, min: 0 },
     capRounded: false,
     jointRounded: false,
+    miterLimit: { type: 'number', value: 4, min: 0 },
+    billboard: false,
   };
 
   private preparedTileCache = new Map<string, PreparedTile>();
@@ -266,6 +280,8 @@ export class AnimatedPathLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
       this.props.widthMaxPixels,
       this.props.capRounded,
       this.props.jointRounded,
+      this.props.miterLimit,
+      this.props.billboard,
       this.props.fadeInDuration,
       this.props.fadeOutDuration,
       // Composite props that getSubLayerProps bakes into every sublayer
@@ -456,8 +472,12 @@ export class AnimatedPathLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
     }
 
     // Keep the extension list constant across sublayers — see
-    // animated-trips-layer.ts for the cache-storm rationale.
-    const extensions: any[] = [this.timeFilterExtension, this.categoryColorExtension];
+    // animated-trips-layer.ts for the cache-storm rationale. User extensions
+    // from the top-level `extensions` prop are appended (composeExtensions).
+    const extensions = this.composeExtensions([
+      this.timeFilterExtension,
+      this.categoryColorExtension,
+    ]);
     // getSubLayerProps inheritance (opacity/pickable/visible, coordinate
     // system, highlight props, …) + user `_subLayerProps.paths` overrides.
     // Only runs inside this cache-gated build path — never per frame.
@@ -478,6 +498,8 @@ export class AnimatedPathLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
       widthMaxPixels: this.props.widthMaxPixels,
       capRounded: this.props.capRounded,
       jointRounded: this.props.jointRounded,
+      miterLimit: this.props.miterLimit,
+      billboard: this.props.billboard,
 
       getColor: constColor,
       getWidth: constWidth,

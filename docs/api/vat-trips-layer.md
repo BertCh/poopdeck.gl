@@ -59,7 +59,7 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 | Property | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `trailLength` | `number` | `0` | Trail length in ms. > 0 swaps the head-dot sublayer for the ribbon-trail sublayer. |
-| `trailSamples` | `number` | `16` | Vertices per ribbon trail (one instance per active trip). VS work is `activeTrips × (trailSamples + 1) × 2`. 16 is the sweet spot for a 10 s trail; 32 is invisible at zoom ≥ 14. |
+| `trailSamples` | `number` | `16` | Time samples per ribbon (one instance per active trip; vertex count is `(trailSamples + 1) × 2`, so VS work is `activeTrips × (trailSamples + 1) × 2`). 16 is the sweet spot for a 10 s trail; 32 is invisible at zoom ≥ 14. |
 | `trailColor` | `Color` | `[253, 128, 93, 255]` | Ribbon color. |
 | `tripWidth` | `number` | `4` | Ribbon nominal width in pixels. |
 | `widthMinPixels` | `number` | `0` | Minimum on-screen ribbon width. |

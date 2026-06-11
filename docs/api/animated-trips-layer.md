@@ -61,6 +61,8 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 | `fadeTrail` | `boolean` | `true` | Fade the trail older→transparent (vs a solid constant-opacity snake). |
 | `capRounded` | `boolean` | `true` | Round caps on path ends. |
 | `jointRounded` | `boolean` | `true` | Round joints between path segments. |
+| `miterLimit` | `number` | `4` | Miter-joint length cap in multiples of line width (PathLayer pass-through; applies when `jointRounded` is `false`). |
+| `billboard` | `boolean` | `false` | Extrude lines in screen space so they always face the camera (PathLayer pass-through). |
 
 ### Data Accessors
 
@@ -78,7 +80,7 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 
 | Property | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `gradientProperty` | `string \| null` | `null` | Names which per-vertex scalar channel to color by — currently only `'vertexValues'` (see [Binary Features](./binary-features.md)). When set and the tile carries that channel, each vertex's value maps through the ramp, shading the line *along its length*. Takes precedence over categorical `tripColor`. |
+| `gradientProperty` | `string \| null` | `null` | Names which per-vertex scalar channel to color by — the one supported channel is `'vertexValues'` (see [Binary Features](./binary-features.md)). When set and the tile carries that channel, each vertex's value maps through the ramp, shading the line *along its length*. Takes precedence over categorical `tripColor`. |
 | `gradientDomain` | `[number, number]` | `[0, 1]` | Value range mapped onto the ramp. |
 | `gradientColorRamp` | `Color[]` | `[]` | Low→high color stops (piecewise-lerped). |
 
@@ -104,11 +106,12 @@ For datasets where total vertex count (not active-trip count) is the bottleneck,
   the haversine fallback is computed once per tile and cached.
 - **Sublayer + prepared-data caches** keyed by content digests; per-frame
   time updates are uniform-only via `getTime()`.
-- **Categorical/gradient colors**: categorical without `colorMapping` uses
-  the GPU `CategoryColorExtension`; `colorMapping` and gradients expand to
-  per-vertex RGBA on the CPU once per tile (PathLayer's tessellator carries
-  `getColor` per vertex, which is also what makes along-the-line gradients
-  possible).
+- **Categorical/gradient colors**: both expand to per-vertex RGBA on the
+  CPU once per tile — PathLayer renders segments as instances, so the GPU
+  `CategoryColorExtension`'s per-feature index can't ride its tessellation
+  (the extension stays installed for shader-cache stability but is idle
+  here). Per-vertex `getColor` is also what makes along-the-line gradients
+  possible.
 - **Non-pickable by default** via `NoPickingPathLayer` to stay within
   WebGL2's 16-attribute floor; `pickable: true` switches to the stock
   `PathLayer` (see [`AnimatedPathLayer`](./animated-path-layer.md) for the

@@ -140,6 +140,18 @@ export interface _AnimatedTripsLayerProps {
    * @default true
    */
   jointRounded?: boolean;
+  /**
+   * Miter-joint length cap (multiples of line width) — PathLayer pass-through,
+   * applies when `jointRounded` is false.
+   * @default 4
+   */
+  miterLimit?: number;
+  /**
+   * Extrude lines in screen space (always face the camera) — PathLayer
+   * pass-through.
+   * @default false
+   */
+  billboard?: boolean;
 }
 
 /** Complete props accepted by {@link AnimatedTripsLayer}. */
@@ -213,7 +225,7 @@ function makeTileKey(tile: Tile, layer: TileLayer): string {
  * (older datasets, ad-hoc inputs). Allocated once per tile (cached in
  * PreparedTile) — not per frame.
  */
-function synthesizeVertexTimes(binary: BinaryFeatures): Float32Array {
+export function synthesizeVertexTimes(binary: BinaryFeatures): Float32Array {
   const startIndices = binary.startIndices!;
   const totalVerts = startIndices[binary.featureCount];
   const out = new Float32Array(totalVerts);
@@ -421,6 +433,8 @@ export class AnimatedTripsLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
     fadeTrail: true,
     capRounded: true,
     jointRounded: true,
+    miterLimit: { type: 'number', value: 4, min: 0 },
+    billboard: false,
   };
 
   /** Per-tile prepared-data cache. Pruned to the currently-visible tile set on each render. */
@@ -528,11 +542,14 @@ export class AnimatedTripsLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
     const color = this.colorValue();
     const width = this.widthValue();
     return [
+      this.props.widthUnits,
       this.props.widthScale,
       this.props.widthMinPixels,
       this.props.widthMaxPixels,
       this.props.capRounded,
       this.props.jointRounded,
+      this.props.miterLimit,
+      this.props.billboard,
       this.props.trailLength,
       this.props.fadeTrail,
       // Composite props that getSubLayerProps bakes into every sublayer
@@ -660,6 +677,21 @@ export class AnimatedTripsLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
    */
   protected gradientStyleSuffix(_binary: BinaryFeatures): string {
     return '';
+  }
+
+  /**
+   * Per-feature `[start, end]` times (relative to the tile `timeOffset`) to feed
+   * the window-mode time filter's `instanceStartTime`/`instanceEndTime`, or
+   * `null` to leave them at the accessor default (0). Base returns null — trail
+   * trips animate via `instanceVertexTime`, not these. {@link FlowCorridorLayer}
+   * returns the corridor's FULL range so its static geometry stays visible
+   * under `trailLength: 0` (otherwise the window hides it once the playhead
+   * passes `windowHalf`, since the unset attributes default to 0).
+   */
+  protected timeBoundsForSublayer(
+    _binary: BinaryFeatures,
+  ): { start: number; end: number } | null {
+    return null;
   }
 
   private prepareTile(tile: Tile, tileLayer: TileLayer): PreparedTile | null {
@@ -826,6 +858,8 @@ export class AnimatedTripsLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
     const constWidth = typeof widthValue === 'number' ? widthValue : 2;
     // `Required<>`-typed: the defaultProps value guarantees a number here.
     const timeWindow = this.props.timeWindow;
+    // Per-feature [start,end] for the window-mode filter (null for trail trips).
+    const timeBounds = this.timeBoundsForSublayer(prepared.features);
 
     // Always false for trips — gpuPalette is intentionally hardwired null in
     // prepareTile (CPU per-vertex colors; GPU palette indices can't ride
@@ -838,8 +872,13 @@ export class AnimatedTripsLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
     // entry per (set, props) combination, which manifests as 0.3 FPS
     // shader-rebuild storms during tile churn. CategoryColorExtension
     // sits idle when `useCategoryColor` is false (gated in its own
-    // shader branch via the uniform).
-    const extensions: any[] = [this.timeFilterExtension, this.categoryColorExtension];
+    // shader branch via the uniform). User extensions from the top-level
+    // `extensions` prop are appended (composeExtensions) — the contract
+    // holds as long as the caller's entries compare equal across renders.
+    const extensions = this.composeExtensions([
+      this.timeFilterExtension,
+      this.categoryColorExtension,
+    ]);
 
     // getSubLayerProps inheritance (opacity/pickable/visible, coordinate
     // system, highlight props, …) + user `_subLayerProps.trips` overrides.
@@ -860,6 +899,8 @@ export class AnimatedTripsLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
       widthMaxPixels: this.props.widthMaxPixels,
       capRounded: this.props.capRounded,
       jointRounded: this.props.jointRounded,
+      miterLimit: this.props.miterLimit,
+      billboard: this.props.billboard,
 
       // Constants are harmless when the binary attribute is present (binary
       // attributes win); they only kick in for tiles missing the property.
@@ -881,6 +922,13 @@ export class AnimatedTripsLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
       // prop was baked into the sublayer cache key but never reached the
       // TimeFilterExtension, so `fadeTrail: false` was a silent no-op.
       fadeTrail: this.props.fadeTrail,
+      // Static-geometry layers (FlowCorridorLayer) feed the corridor's full
+      // [start,end] so the window-mode filter never hides it; trail trips leave
+      // these unset (instanceVertexTime drives visibility instead).
+      ...(timeBounds && {
+        getInstanceStartTime: timeBounds.start,
+        getInstanceEndTime: timeBounds.end,
+      }),
 
       // TileLayer convention: the source tile rides on the sublayer so the
       // base getPickingInfo can enrich info.tile / decode the picked trip.

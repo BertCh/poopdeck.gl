@@ -38,7 +38,7 @@
  */
 
 import { SolidPolygonLayer } from '@deck.gl/layers';
-import type { Color, DefaultProps, Layer, LayerContext } from '@deck.gl/core';
+import type { Color, DefaultProps, Layer, LayerContext, Material } from '@deck.gl/core';
 import { SpatioTemporalLayer, SpatioTemporalLayerProps } from './spatiotemporal-layer';
 import { TimeFilterExtension } from './time-filter-extension';
 import {
@@ -49,7 +49,9 @@ import { emit } from './telemetry';
 import { warnOnce } from './log';
 import {
   colorListDigest,
+  colorMappingDigest,
   inheritedPropsDigest,
+  structuralDigest,
   updateTriggersDigest,
 } from './style-digest';
 import { resolveAccessorAlias } from './accessor-alias';
@@ -112,6 +114,24 @@ export interface _AnimatedPolygonLayerProps {
   colorPalette?: Color[];
 
   /**
+   * Explicit category-string → color map for the categorical `fillColor` path.
+   * When set together with a string `fillColor`, each tile resolves its own
+   * category dictionary through this map to build a per-tile palette, so a band
+   * keeps the SAME color across tiles whose dictionaries differ in order or
+   * subset. The bare `colorPalette` assigns colors by first-seen category index
+   * and therefore drifts tile to tile — this is the only way to get stable
+   * categorical fills. Categories absent from the map use `colorMappingDefault`.
+   *
+   * Unlike the point layer's `colorMapping` (a CPU per-feature RGBA expansion),
+   * the polygon path stays on the GPU CategoryColorExtension: the mapping only
+   * changes how the per-tile palette is built, not how it's sampled.
+   */
+  colorMapping?: Record<string, Color> | null;
+
+  /** Fallback color for categories absent from `colorMapping`. @default transparent */
+  colorMappingDefault?: Color;
+
+  /**
    * Elevation — constant number, or property name.
    * @default 0
    */
@@ -130,6 +150,30 @@ export interface _AnimatedPolygonLayerProps {
    * @default false
    */
   extruded?: boolean;
+
+  /**
+   * Multiplier applied to every elevation value on the GPU (constant AND
+   * column-driven) — SolidPolygonLayer pass-through. Only takes effect when
+   * `extruded` is true.
+   * @default 1
+   */
+  elevationScale?: number;
+
+  /**
+   * Draw the edges of extruded polygons as a wireframe (sides + top outline)
+   * — SolidPolygonLayer pass-through. Only takes effect when `extruded` is
+   * true.
+   * @default false
+   */
+  wireframe?: boolean;
+
+  /**
+   * Lighting material for extruded polygons — SolidPolygonLayer pass-through.
+   * `true` for the default phong material, `false` to disable lighting, or a
+   * material spec `{ambient, diffuse, shininess, specularColor}`.
+   * @default true
+   */
+  material?: Material;
 
   /**
    * Fade-in duration (ms).
@@ -253,12 +297,21 @@ export class AnimatedPolygonLayer<ExtraPropsT extends {} = {}> extends SpatioTem
     lineColor: { type: 'object', value: DEFAULT_LINE_COLOR, compare: true },
     fillColor: { type: 'object', value: [255, 140, 0, 180], compare: true },
     colorPalette: { type: 'array', value: DEFAULT_PALETTE, compare: true },
+    // Object-valued mapping — compare:false (digest content via styleKey). The
+    // transparent default drops categories the caller didn't map, matching the
+    // point layer.
+    colorMapping: { type: 'object', value: null, optional: true, compare: false },
+    colorMappingDefault: { type: 'color', value: [0, 0, 0, 0] },
     elevation: { type: 'object', value: 0, compare: true },
     // Accessor-named aliases (see the prop docs): unset by default so the
     // legacy props win unless the caller opts into the upstream vocabulary.
     getFillColor: { type: 'object', value: null, optional: true, compare: true },
     getElevation: { type: 'object', value: null, optional: true, compare: true },
     extruded: false,
+    elevationScale: { type: 'number', value: 1, min: 0 },
+    wireframe: false,
+    // Same permissive descriptor SolidPolygonLayer uses: boolean or material spec.
+    material: { type: 'object', value: true, compare: true },
     fadeInDuration: { type: 'number', value: 500, min: 0 },
     fadeOutDuration: { type: 'number', value: 500, min: 0 },
   };
@@ -324,6 +377,9 @@ export class AnimatedPolygonLayer<ExtraPropsT extends {} = {}> extends SpatioTem
       this.props.stroked,
       this.props.filled,
       this.props.extruded,
+      this.props.elevationScale,
+      this.props.wireframe,
+      structuralDigest(this.props.material),
       typeof elevation === 'number' ? elevation : 0,
       // Composite props that getSubLayerProps bakes into every sublayer
       // (opacity/pickable/visible, coordinate system, _subLayerProps, …)
@@ -447,7 +503,11 @@ export class AnimatedPolygonLayer<ExtraPropsT extends {} = {}> extends SpatioTem
     // sibling layers' stale-key fix. updateTriggers ride the key so a user
     // trigger bump re-prepares the tile.
     const styleKey = `${fillColorProp}|${elevationProp}|${
-      fillColorProp ? colorListDigest(this.props.colorPalette ?? DEFAULT_PALETTE) : 0
+      fillColorProp
+        ? this.props.colorMapping
+          ? `m${colorMappingDigest(this.props.colorMapping)}`
+          : colorListDigest(this.props.colorPalette ?? DEFAULT_PALETTE)
+        : 0
     }|${updateTriggersDigest(this.props.updateTriggers)}`;
 
     const tileKey = makeTileKey(tile, tileLayer);
@@ -499,7 +559,20 @@ export class AnimatedPolygonLayer<ExtraPropsT extends {} = {}> extends SpatioTem
           value: expandPerVertex(cat.indices, startIndices, featureCount, vertexCount),
           size: 1,
         };
-        gpuPalette = this.props.colorPalette ?? DEFAULT_PALETTE;
+        // With a colorMapping, resolve THIS tile's category dictionary into a
+        // per-tile palette (palette[i] = mapping[categories[i]]) so the shader,
+        // which samples palette[categoryIndex], yields a stable per-string color
+        // regardless of the tile's dictionary order. Without one, fall back to
+        // the single global palette (colors then follow first-seen index).
+        const mapping = this.props.colorMapping;
+        gpuPalette = mapping
+          ? cat.categories.map(
+              (c) =>
+                mapping[c] ??
+                this.props.colorMappingDefault ??
+                ([0, 0, 0, 0] as Color),
+            )
+          : (this.props.colorPalette ?? DEFAULT_PALETTE);
       }
     }
 
@@ -595,6 +668,9 @@ export class AnimatedPolygonLayer<ExtraPropsT extends {} = {}> extends SpatioTem
 
       filled: this.props.filled,
       extruded: this.props.extruded,
+      elevationScale: this.props.elevationScale,
+      wireframe: this.props.wireframe,
+      material: this.props.material,
 
       // Constant fallback — used when binary getFillColor isn't present.
       getFillColor: constFillColor,
@@ -602,7 +678,12 @@ export class AnimatedPolygonLayer<ExtraPropsT extends {} = {}> extends SpatioTem
         ? { getElevation: elevationValue }
         : {}),
 
-      extensions: [this.timeFilterExtension, this.categoryColorExtension],
+      // Constant extension list (cache-storm rationale — see
+      // animated-trips-layer.ts); user extensions are appended.
+      extensions: this.composeExtensions([
+        this.timeFilterExtension,
+        this.categoryColorExtension,
+      ]),
 
       // TimeFilterExtension wiring (same prop names the old polygon fork used)
       getTime: this.boundGetTime,

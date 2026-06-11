@@ -102,6 +102,7 @@ stt-generate earthquakes \
 - `--start-date`: Start date (YYYY-MM-DD), default: 2020-01-01
 - `--end-date`: End date (YYYY-MM-DD), default: 2024-12-31
 - `--min-magnitude`: Minimum magnitude, default: 4.0
+- `--summary-tier`: Emit a server-aggregated H3 summary tier alongside the raw tier
 
 ### AIS Maritime Traffic (NOAA Marine Cadastre)
 
@@ -149,6 +150,8 @@ stt-generate flights \
 - `--bounds`: Geographic filter
 - `--sample-seconds`: Temporal sampling interval
 - `--paths`: Output LineString trajectories instead of points
+- `--min-points`: Path mode — drop flights with fewer points, default: 5
+- `--max-gap-seconds`: Path mode — split a track at gaps longer than this, default: 300
 
 ### Hurricane Tracks (NOAA IBTrACS)
 
@@ -182,7 +185,7 @@ stt-generate wildfires \
 - `--start-year`: Start year, default: 2020
 - `--end-year`: End year, default: 2023
 - `--min-acres`: Minimum fire size in acres, default: 1000
-- `--wildfires-only`: Exclude prescribed burns
+- `--wildfires-only`: Exclude prescribed burns (default: true)
 
 ### NYC Rideshare (TLC + OSRM)
 
@@ -210,9 +213,14 @@ stt-generate nyc-rideshare \
 **Options:**
 - `--synthetic`: Generate synthetic trips
 - `--num-trips`: Number of synthetic trips
+- `--download`: Download TLC data for a month (YYYY-MM; pre-2017 months carry real lat/lon)
 - `--paths`: Output LineString paths instead of points
 - `--flows`: Output pre-aggregated corridor flows (segment counts per time bin)
 - `--flow-bin`: Time bin for `--flows` aggregation, default `15m`
+- `--flow-snap-meters`: `--flows` snap grid (metres) that merges nearby road nodes into fewer corridors, default `30` (0 = exact OSRM geometry, heavy)
+- `--from-intermediate`: Re-build from a kept intermediate Parquet (e.g. re-bin `--flows` from a `--paths` intermediate without re-routing through OSRM)
+- `--od`: Output one straight origin→destination LineString per trip (2 vertices, no OSRM needed) — feeds the `AnimatedArcLayer` / `AnimatedLineLayer` flow layers, which read the first vertex as source and the last as target. Mutually exclusive with `--paths` / `--flows`
+- `--with-bearing`: Add a per-feature `bearing` numeric column (degrees, 0 = N, clockwise) — origin→destination initial azimuth in `--od` mode, heading toward the next point otherwise. Drives `AnimatedIconLayer` marker rotation
 - `--osrm-url`: OSRM server URL
 - `--skip-routing`: Skip OSRM routing (pickup/dropoff only)
 
@@ -232,11 +240,14 @@ stt-generate drifters \
 - `--bounds`: Geographic filter (min_lat,min_lon,max_lat,max_lon)
 - `--min-points`: Drop trajectories shorter than this, default: 4
 - `--max-gap-hours`: Split a trajectory at gaps longer than this, default: 120
+- `--max-zoom`: Max tile zoom, default: 6 (the globe demo only loads z0 — keep low for multi-decade pulls)
+- `--temporal-bucket`: Tile bucket size, default: `1d` (coarsen for long spans)
 - `--cache-dir`: Download cache, default: `data/gdp-cache`
 
 `drifters-hourly` is the EXPERIMENTAL hourly-product variant
-(`drifter_hourly_qc`) with the same flags — 6× the temporal resolution
-and volume of `drifters`, same end-date coverage.
+(`drifter_hourly_qc`) with the same flags (cache default
+`data/gdp-hourly-cache`) — 6× the temporal resolution and volume of
+`drifters`, same end-date coverage.
 
 ### Animal Migrations (GBIF)
 
@@ -250,6 +261,7 @@ stt-generate animals --output animals.stt
 **Options:**
 - `--licenses`: Comma-separated license allowlist, default: `CC0_1_0,CC_BY_4_0,CC_BY_NC_4_0`
 - `--max-datasets`: Limit number of GBIF datasets (0 = unlimited)
+- `--ref-year`: Reference year every track is season-folded onto, default: 2024
 - `--min-points`: Drop trajectories shorter than this, default: 5
 - `--max-gap-days`: Split a trajectory at gaps longer than this, default: 21
 - `--cache-dir`: Download cache, default: `data/gbif-cache`
@@ -292,8 +304,9 @@ stt-generate osm-edits \
 
 - `--tagged-only` keeps real features (buildings/POIs/roads) and drops untagged
   geometry vertices — ~5-10× smaller, recommended for the showcase.
-- Builds zooms 8-16, monthly temporal buckets + a coarser LOD pyramid, and an
-  optional H3 count summary tier for the zoomed-out overview.
+- Builds zooms 8-16 with monthly (`30d`) temporal buckets (no LOD pyramid —
+  the points render raw and cumulative) plus an optional H3 count summary
+  tier (zooms 8-11) for the zoomed-out overview.
 
 #### Signal B — changeset activity ("who maps, with what, when")
 

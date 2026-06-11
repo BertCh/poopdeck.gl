@@ -39,6 +39,8 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 | `widthMaxPixels` | `number` | `MAX_SAFE_INTEGER` | Clamp path width to at most this many on-screen pixels. |
 | `capRounded` | `boolean` | `false` | Rounded line caps. Rounded caps are the dominant fragment-shader cost at small widths and visually indistinguishable from flat below ~10 px. |
 | `jointRounded` | `boolean` | `false` | Rounded line joints; same fragment-cost tradeoff. |
+| `miterLimit` | `number` | `4` | Miter-joint length cap in multiples of line width (PathLayer pass-through; applies when `jointRounded` is `false`). |
+| `billboard` | `boolean` | `false` | Extrude lines in screen space so they always face the camera (PathLayer pass-through). |
 | `fadeInDuration` | `number` | `300` | Duration (ms) for paths to fade in when their time range enters the window. |
 | `fadeOutDuration` | `number` | `300` | Duration (ms) for paths to fade out when their time range leaves the window. |
 

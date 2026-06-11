@@ -84,7 +84,12 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 | `filled`             | `boolean`                         | `true`  | Fill the marker.                                   |
 | `stroked`            | `boolean`                         | `false` | Render an outline stroke around each point.        |
 | `strokeColor`        | `Color`                           | `[0, 0, 0, 255]` | Stroke color (constant).                  |
-| `lineWidthMinPixels` | `number`                          | `0`     | Outline stroke width in pixels.                    |
+| `lineWidthUnits`     | `'pixels' \| 'meters' \| 'common'` | `'meters'` | Units for `strokeWidth`. Deck-parity default — note this differs from `radiusUnits`, whose STT default is `'pixels'`. |
+| `lineWidthScale`     | `number`                          | `1`     | Global multiplier for stroke widths.               |
+| `lineWidthMinPixels` | `number`                          | `0`     | Minimum on-screen stroke width in pixels.          |
+| `lineWidthMaxPixels` | `number`                          | `MAX_SAFE_INTEGER` | Maximum on-screen stroke width in pixels. |
+| `billboard`          | `boolean`                         | `false` | Render markers as billboards (always face the camera in 3D views). |
+| `antialiasing`       | `boolean`                         | `true`  | Smooth-edge antialiasing; disable to fix blending artifacts under some depth-test `parameters`. |
 | `fadeInDuration`     | `number`                          | `300`   | Duration (ms) for points to fade in.               |
 | `fadeOutDuration`    | `number`                          | `300`   | Duration (ms) for points to fade out (window mode).|
 
@@ -105,14 +110,16 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 | `radius`              | `number \| string` | `5`                  | Point radius: constant, or a numeric property name.                            |
 | `getRadius`           | `number \| string \| null` | `null`       | Upstream-vocabulary alias of `radius` (same domain rules as `getFillColor`).   |
 | `getLineColor`        | `Color \| null`    | `null`               | Upstream-vocabulary alias of `strokeColor` (constant only).                    |
+| `strokeWidth`         | `number \| string` | `1`                  | Outline stroke width: constant, or a numeric property name. In `cumulative` mode a property-column value is ignored (slabs don't pack stroke widths) — the constant branch still applies. |
+| `getLineWidth`        | `number \| string \| null` | `null`       | Upstream-vocabulary alias of `strokeWidth` (same domain rules as `getRadius`). |
 | `colorPalette`        | `Color[]`          | 10-color palette     | Palette for categorical `fillColor` (GPU path, up to 4096 entries).            |
 | `colorMapping`        | `Record<string, Color> \| null` | `null`  | Explicit category-string → color map. The only way to get stable colors across tiles whose categorical column contains different category subsets. Forces the CPU palette-expansion path (the GPU texture can't look up by string). |
 | `colorMappingDefault` | `Color`            | `[0, 0, 0, 0]`       | Fallback for categories absent from `colorMapping` (transparent: unknown categories disappear rather than mislead). |
 | `radiusTransform`     | `(v: number) => number \| null` | `null`  | Per-feature transform applied to the `radius` property value before GPU upload (e.g. magnitude → area). |
 
-### Legacy 3D props
+### 3D props
 
-`use3D`, `elevationProperty`, and `elevationScale` are accepted for v2 API compatibility but the v3 layer infers 3D from the tile's `positionDimensions` automatically — 3D tiles ride zero-copy, 2D tiles are padded with z=0. `elevationProperty`/`elevationScale` are currently forward-declared no-ops.
+`use3D`, `elevationProperty`, and `elevationScale` are accepted for API compatibility, but 3D is inferred from the tile's `positionDimensions` automatically — 3D tiles ride zero-copy, 2D tiles are padded with z=0. `elevationProperty`/`elevationScale` are no-ops.
 
 ## Architecture & performance
 

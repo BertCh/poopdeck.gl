@@ -10,6 +10,8 @@ The `PlaybackGovernor` is the buffering state machine between user intent and th
 
 All thresholds are denominated in **wall-clock milliseconds × current |speed|**, because playback speed multiplies the data-consumption rate: 2 s of runway at 1× is 2 sim-seconds; at a 65-sim-days-per-real-second sweep it is ~130 sim-days. A speed change is therefore a re-plan event.
 
+> **New integrations:** [`SttPlayer`](./stt-player.md) is the recommended single entry point — it wires a `TimeController` and `PlaybackGovernor` together for you. Both remain the underlying pieces and are fully usable standalone as documented here.
+
 ## Installation
 
 ```typescript
@@ -90,6 +92,7 @@ A source missing `getBufferedRunway` is rejected with a console warning and gati
 - **Resume gate**: after a stall, resuming requires `resumeFactor ×` the start gate (ExoPlayer-style hysteresis) — one honest stall instead of many micro-stalls.
 - **canplaythrough predictor**: a gate/watermark also passes when the MISSING remainder of its window is predicted (cost ÷ throughput) to download in less wall time than the already-buffered runway plays out (floored at 250 ms) — so a cold seek on a fast network starts instantly instead of waiting for a speed-scaled runway. Conservative when blind: never passes while the throughput estimator has no samples.
 - **Escape hatch**: if a gate hasn't passed after `maxStartWaitMs`, playback starts anyway, flagged `degraded` — a broken network must never hard-lock playback.
+- **Scrub hold**: no gate can pass — and the escape hatch never fires — while the scrubber thumb is held (degraded playback under a held thumb is worse than a longer-held preview). A settle-commit (`seekTo` during a scrub) warms the pipeline, but playback resumes only on `endScrub`; releasing on the settle-committed position skips the duplicate commit (no second prefetch flush + gate) and re-bases the escape-hatch clock.
 
 ## Frontier clamp and degraded creep
 
@@ -110,7 +113,7 @@ new PlaybackGovernor(timeController: TimeController, opts?: PlaybackGovernorOpti
 | Option | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `source` | `BufferSource \| null` | `null` | The readiness oracle. Arrives async in real apps — set later via `setSource()`. |
-| `startGateWallMs` | `number` | `2000` | Wall-seconds of runway required to start (or resume after a seek): required runway = `startGateWallMs × \|speed\|` sim-ms. |
+| `startGateWallMs` | `number` | `2000` | Wall-clock ms of runway required to start (or resume after a seek): required runway = `startGateWallMs × \|speed\|` sim-ms. |
 | `lowWatermarkWallMs` | `number` | `600` | Stall threshold while playing. |
 | `resumeFactor` | `number` | `2` | Resume-gate multiplier after a stall. |
 | `seekSettleMs` | `number` | `200` | How long a scrub position must rest before a UI should commit it as a real seek. The governor doesn't run this timer — it's exposed (as the readonly `seekSettleMs` field) so scrubbing UIs share one knob. |
@@ -123,12 +126,12 @@ new PlaybackGovernor(timeController: TimeController, opts?: PlaybackGovernorOpti
 
 | Method | Description |
 | :--- | :--- |
-| `requestPlay()` | User pressed play. Gates the start on the buffered runway. |
+| `requestPlay()` | User pressed play. Gates the start on the buffered runway. While `ended`, restarts from the range start (the range end when travelling in reverse) — the media-element replay convention. |
 | `requestPause()` | User pressed pause. Sticks even while a gate is in progress. |
 | `beginScrub()` | Scrubber grabbed: freezes the clock; everything until `endScrub` is preview-only (no fetch churn). |
 | `scrubTo(time)` | Preview a scrub position — moves the clock so resident tiles render, WITHOUT committing a seek. |
-| `endScrub(time)` | Scrubber released — commits the final position as a real seek. |
-| `seekTo(time)` | Programmatic committed seek (keyboard arrows, story beats). Flushes prefetch, moves the clock, re-gates if intent is playing. |
+| `endScrub(time)` | Scrubber released — commits the final position as a real seek. Releasing on a position a settle-commit already committed skips the duplicate commit and just lifts the scrub hold (re-basing the escape-hatch clock). |
+| `seekTo(time)` | Programmatic committed seek (keyboard arrows, story beats). Flushes prefetch, moves the clock, re-gates if intent is playing. Mid-scrub it acts as the settle-commit: the pipeline warms, but playback resumes only on `endScrub`. |
 
 ### Wiring and queries
 
@@ -138,8 +141,9 @@ new PlaybackGovernor(timeController: TimeController, opts?: PlaybackGovernorOpti
 | `notifyBufferChange(runway)` | Consumer-forwarded buffer event (layer `onBufferChange` → here). Re-emits as `progress` and triggers an immediate gate/stall evaluation in addition to the 250 ms gated cadence. |
 | `getEtaMs()` | Honest ETA (wall-ms) until the current gate window is ready; `null` when unknown. |
 | `getBufferedRanges(opts?)` | Passthrough to the source (for a buffered-bar UI); `[]` without a source. |
+| `estimateCost(range)` | Byte/tile cost of making `range` fully buffered for the current viewport (passthrough to the source's directory math; zeros without a source). UIs use it for ETA chips and timeline density strips. |
 | `getQoeStats()` | Snapshot of the session's QoE counters (below). |
-| `getAutoSpeedSuggestion()` | Maximum sustainable playback speed (see below); `null` when unknown. |
+| `getAutoSpeedSuggestion()` | Maximum sustainable playback speed (see below); `Infinity` when the upcoming horizon has nothing left to load, `null` when unknown. |
 | `dispose()` | Detach from the TimeController and stop all timers. The clock is left as-is. Calling intent methods after dispose warns once and no-ops (React StrictMode note: create the governor inside an effect so a remount gets a fresh instance). |
 
 ### Properties
@@ -147,6 +151,8 @@ new PlaybackGovernor(timeController: TimeController, opts?: PlaybackGovernorOpti
 | Property | Type | Description |
 | :--- | :--- | :--- |
 | `state` | `PlaybackGovernorState` | Current machine state. |
+| `paused` | `boolean` | User intent, HTMLMediaElement-shaped: true when the user does not want playback. Stays `false` through `starting`/`buffering`/`seeking` gates (the user pressed play; the machine is just not there yet), so UIs can drive the play/pause glyph from this single bit instead of mirroring intent. |
+| `ended` | `boolean` | True while parked at a non-looping range boundary (media-element `'ended'`). Cleared by any committed seek; `requestPlay()` while ended restarts from the range start. |
 | `isCreeping` | `boolean` | True while in degraded creep (playing pinned to the frontier at data-arrival rate). |
 | `isDisposed` | `boolean` | True once `dispose()` has run. |
 | `seekSettleMs` | `number` | The shared scrub-settle knob. |
@@ -158,9 +164,16 @@ governor.on('statechange', (state: PlaybackGovernorState) => {});
 governor.on('waiting',     ({ state, etaMs }: GovernorWaitingEvent) => {});
 governor.on('ready',       ({ degraded }: GovernorReadyEvent) => {});
 governor.on('progress',    (runway: BufferedRunway) => {});
+governor.on('ended',       (time: number) => {});
 ```
 
-`waiting` fires whenever a gate is entered (the clock is frozen) with an honest `etaMs` when computable; `ready` fires when a gate passes and the clock starts (`degraded: true` when the escape hatch fired). `progress` re-emits forwarded buffer events.
+`waiting` fires whenever a gate is entered (the clock is frozen) with an honest `etaMs` when computable; `ready` fires when a gate passes and the clock starts (`degraded: true` when the escape hatch fired). `progress` re-emits forwarded buffer events. `ended` fires when playback parks at a non-looping range boundary (media-element `'ended'` — distinct from a user pause; show a replay affordance). `on()` returns an unsubscribe function; `off(event, callback)` also works:
+
+```typescript
+const unsubscribe = governor.on('statechange', (state) => setBadge(state));
+// later (e.g. effect cleanup):
+unsubscribe();
+```
 
 Every transition is also pushed on the telemetry `playback` probe channel (`__sttProbe.playback`) as `{ event: 'statechange' | 'waiting' | 'ready', state, etaMs?, degraded?, ...PlaybackQoeStats }`.
 
@@ -182,9 +195,9 @@ A CI probe asserting `stallCount` stays bounded catches freeze/lurch failure mod
 
 ## Auto speed
 
-`getAutoSpeedSuggestion()` returns the maximum sustainable playback speed (TimeController units — sim-ms per wall-ms) the measured network can feed, derived from the byte cost of the next 8 wall-seconds at the current speed with a 0.7 safety factor (ABR-style). Returns `null` when cost or throughput is unknown — including when the upcoming horizon costs zero bytes (everything buffered ⇒ no cap needed).
+`getAutoSpeedSuggestion()` returns the maximum sustainable playback speed (TimeController units — sim-ms per wall-ms) the measured network can feed, derived from the byte cost of the next 8 wall-seconds at the current speed with a 0.7 safety factor (ABR-style). Returns `Infinity` when the upcoming horizon has nothing left to load (everything buffered ⇒ the network imposes no cap) — consumers clamp it to their max step via `decideAutoSpeedMultiplier`, so a fully-cached dataset rises to full speed instead of freezing at whatever multiplier Auto last chose. Returns `null` when the math cannot be honest: throughput unknown, or tiles pending whose byte sizes the directory doesn't expose.
 
-Consumers apply the snapping/clamping/asymmetry via the shared policy in `decideAutoSpeedMultiplier` (exported from `@stt/deck.gl`): **downshifts apply immediately with no deadband; upshifts are damped** (cadence-only, and only past a 25 % relative deadband), and the result snaps to a preset-like step list.
+Consumers apply the snapping/clamping/asymmetry via the shared policy in `decideAutoSpeedMultiplier` (exported from `@stt/deck.gl`): **downshifts apply immediately with no deadband; upshifts are damped** (cadence-only, and only past a 25 % relative deadband), and the result snaps to a preset-like step list (defaults: 0.25–10×; override via an optional fourth `{ steps, minMultiplier, maxMultiplier, upshiftDeadband }` argument). It returns `null` to hold the current multiplier.
 
 ```typescript
 import { decideAutoSpeedMultiplier } from '@stt/deck.gl';

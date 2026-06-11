@@ -183,6 +183,55 @@ export interface _AnimatedPointLayerProps {
   getLineColor?: ColorAccessorValue | null;
 
   /**
+   * Outline stroke width — constant number, or property name for per-feature
+   * width. Interpreted in {@link lineWidthUnits} (deck parity: meters by
+   * default) and clamped by `lineWidthMinPixels`/`lineWidthMaxPixels`.
+   * NOTE: in `cumulative` mode a property-column value is ignored (slabs
+   * don't pack stroke widths) — the constant branch still applies.
+   * @default 1
+   */
+  strokeWidth?: number | string;
+
+  /**
+   * Upstream-vocabulary alias of {@link strokeWidth}. Accepts a constant
+   * number OR a property-column NAME — NOT a function accessor (a function
+   * warns once and falls back to `strokeWidth`). When set, it wins over
+   * `strokeWidth`.
+   */
+  getLineWidth?: NumericAccessorValue | null;
+
+  /**
+   * Units for `strokeWidth` — ScatterplotLayer pass-through. Deck-parity
+   * default: world-space meters (unlike `radiusUnits`, whose STT default is
+   * 'pixels').
+   * @default 'meters'
+   */
+  lineWidthUnits?: 'pixels' | 'meters' | 'common';
+
+  /**
+   * Stroke width multiplier — ScatterplotLayer pass-through.
+   * @default 1
+   */
+  lineWidthScale?: number;
+
+  /** Maximum on-screen stroke width in pixels. Forwarded to ScatterplotLayer. */
+  lineWidthMaxPixels?: number;
+
+  /**
+   * Render markers as billboards (always face the camera in 3D views) —
+   * ScatterplotLayer pass-through.
+   * @default false
+   */
+  billboard?: boolean;
+
+  /**
+   * Smooth-edge antialiasing — ScatterplotLayer pass-through. Disable to fix
+   * blending artifacts under some depth-test `parameters` configurations.
+   * @default true
+   */
+  antialiasing?: boolean;
+
+  /**
    * Whether to fill the marker.
    * @default true
    */
@@ -478,7 +527,15 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
     stroked: false,
     filled: true,
     strokeColor: { type: 'color', value: [0, 0, 0, 255] },
+    // Constant-or-column domain, same permissive descriptor as fillColor/radius.
+    strokeWidth: { type: 'object', value: 1, compare: true },
+    getLineWidth: { type: 'object', value: null, optional: true, compare: true },
+    lineWidthUnits: 'meters',
+    lineWidthScale: { type: 'number', value: 1, min: 0 },
     lineWidthMinPixels: { type: 'number', value: 0, min: 0 },
+    lineWidthMaxPixels: { type: 'number', value: Number.MAX_SAFE_INTEGER, min: 0 },
+    billboard: false,
+    antialiasing: true,
 
     // Fade ramps, forwarded to TimeFilterExtension (window mode); in
     // cumulative mode `fadeInDuration` doubles as the appear ramp.
@@ -601,6 +658,15 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
     );
   }
 
+  private lineWidthValue(): number | string | undefined {
+    return resolveAccessorAlias(
+      'AnimatedPointLayer',
+      'getLineWidth',
+      this.props.getLineWidth,
+      this.props.strokeWidth,
+    );
+  }
+
   /**
    * Compute a digest of the layer-level props that affect every sublayer.
    * When this changes we throw away the entire sublayer cache.
@@ -609,15 +675,24 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
     const fillColor = this.fillColorValue();
     const radius = this.radiusValue();
     const lineColor = this.lineColorValue();
+    const lineWidth = this.lineWidthValue();
     return [
       this.props.radiusScale,
       this.props.radiusUnits,
       this.props.radiusMinPixels,
       this.props.radiusMaxPixels,
+      this.props.lineWidthUnits,
+      this.props.lineWidthScale,
       this.props.lineWidthMinPixels,
+      this.props.lineWidthMaxPixels,
       this.props.stroked,
       this.props.filled,
+      this.props.billboard,
+      this.props.antialiasing,
       Array.isArray(lineColor) ? lineColor.join(',') : '',
+      // strokeWidth constant branch only — the column branch lives in
+      // `prepared` and is keyed via styleKey/preparedKey.
+      typeof lineWidth === 'number' ? lineWidth : 0,
       // Composite props that getSubLayerProps bakes into every sublayer
       // (opacity/pickable/visible, coordinateSystem, modelMatrix, highlight
       // props, _subLayerProps overrides…) plus the user's updateTriggers.
@@ -722,8 +797,10 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
   private computeStyleKey(): string {
     const fillColor = this.fillColorValue();
     const radius = this.radiusValue();
+    const lineWidth = this.lineWidthValue();
     const fillColorProp = typeof fillColor === 'string' ? fillColor : '';
     const radiusProp = typeof radius === 'string' ? radius : '';
+    const lineWidthProp = typeof lineWidth === 'string' ? lineWidth : '';
     // Palette identity matters only when fillColor is a column name. The
     // mapping branch keys CONTENT (not just the CPU/GPU toggle) — editing a
     // mapping entry must invalidate the CPU-expanded RGBA buffers. Digests
@@ -733,7 +810,7 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
     // radiusTransform is baked into the prepared getRadius buffer; function
     // identity (not body) is the invalidation contract for function props.
     const transform = this.props.radiusTransform;
-    return `${fillColorProp}|${radiusProp}|${
+    return `${fillColorProp}|${radiusProp}|${lineWidthProp}|${
       fillColorProp ? colorListDigest(this.props.colorPalette ?? DEFAULT_PALETTE) : 0
     }|${mapping ? `m${colorMappingDigest(mapping)}` : 'g'}|${
       transform ? `r${functionId(transform)}` : ''
@@ -864,6 +941,24 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
       }
     }
 
+    // Property-driven stroke width — zero-copy Float32Array ride-along.
+    // Cumulative slabs don't pack this attribute (absorbTile copies a fixed
+    // schema), so warn there instead of silently rendering constant widths.
+    const lineWidthValue = this.lineWidthValue();
+    const lineWidthProp = typeof lineWidthValue === 'string' ? lineWidthValue : '';
+    if (lineWidthProp) {
+      if (this.props.cumulative) {
+        warnOnce(
+          'AnimatedPointLayer:cumulativeStrokeWidthColumn',
+          '[AnimatedPointLayer] property-driven strokeWidth/getLineWidth is not ' +
+            'packed into cumulative slabs; strokes render at the constant width.',
+        );
+      } else {
+        const values = binary.numericProps[lineWidthProp];
+        if (values) attributes.getLineWidth = { value: values, size: 1 };
+      }
+    }
+
     const prepared: PreparedTile = {
       tileKey,
       styleKey,
@@ -912,8 +1007,12 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
     }
 
     // Keep the extension list constant across sublayers — see
-    // animated-trips-layer.ts for the cache-storm rationale.
-    const extensions: any[] = [this.timeFilterExtension, this.categoryColorExtension];
+    // animated-trips-layer.ts for the cache-storm rationale. User extensions
+    // from the top-level `extensions` prop are appended (composeExtensions).
+    const extensions = this.composeExtensions([
+      this.timeFilterExtension,
+      this.categoryColorExtension,
+    ]);
     // getSubLayerProps inheritance (opacity/pickable/visible, coordinate
     // system, highlight props, …) + user `_subLayerProps.points` overrides.
     // Only runs inside this cache-gated build path — never per frame.
@@ -964,6 +1063,7 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
    * composite with the exact values this method used to forward.
    */
   private commonStyleProps(): Record<string, any> {
+    const lineWidthValue = this.lineWidthValue();
     // `Required<>`-typed (defaults guarantee values) — no `??` refetches.
     return {
       radiusUnits: this.props.radiusUnits,
@@ -972,8 +1072,15 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
       radiusMaxPixels: this.props.radiusMaxPixels,
       stroked: this.props.stroked,
       filled: this.props.filled,
+      billboard: this.props.billboard,
+      antialiasing: this.props.antialiasing,
       getLineColor: this.lineColorValue(),
+      // Constant fallback — the binary getLineWidth attribute wins when present.
+      getLineWidth: typeof lineWidthValue === 'number' ? lineWidthValue : 1,
+      lineWidthUnits: this.props.lineWidthUnits,
+      lineWidthScale: this.props.lineWidthScale,
       lineWidthMinPixels: this.props.lineWidthMinPixels,
+      lineWidthMaxPixels: this.props.lineWidthMaxPixels,
       fadeInDuration: this.props.fadeInDuration,
       fadeOutDuration: this.props.fadeOutDuration,
       wakeLength: this.props.wakeLength,
@@ -1204,8 +1311,12 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
       getRadius: constRadius,
       getFillColor: constColor,
 
-      // Constant extension list (cache-storm rationale, as in buildSublayer).
-      extensions: [this.timeFilterExtension, this.categoryColorExtension],
+      // Constant extension list (cache-storm rationale, as in buildSublayer);
+      // user extensions from the top-level prop are appended.
+      extensions: this.composeExtensions([
+        this.timeFilterExtension,
+        this.categoryColorExtension,
+      ]),
 
       // TimeFilterExtension wiring — one shared offset for every slab.
       getTime: this.boundGetTime,

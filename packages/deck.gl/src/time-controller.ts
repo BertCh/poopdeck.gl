@@ -43,7 +43,10 @@ export interface TimeControllerOptions {
 export interface TimeControllerState {
   currentTime: number;
   playing: boolean;
+  /** Signed effective rate: direction × magnitude (sim-ms per wall-ms). */
   speed: number;
+  /** Travel direction, kept separate from the rate (bounce flips only this). */
+  direction: 1 | -1;
   loop: boolean;
 }
 
@@ -63,13 +66,21 @@ const MAX_FRAME_DELTA_MS = 250;
 export class TimeController {
   private currentTime: number;
   private playing: boolean = false;
-  private speed: number = 1.0;
+  /**
+   * Rate magnitude, kept separate from {@link direction} so a bounce reversal
+   * never corrupts the user's chosen rate (HTMLMediaElement keeps
+   * playbackRate magnitude-only for the same reason). `getSpeed()` still
+   * returns the signed product — the contract the governor and loaders read.
+   */
+  private speedMagnitude: number = 1.0;
+  private direction: 1 | -1 = 1;
   private loop: boolean = false;
   private bounce: boolean = false;
   private timeRange?: { start: number; end: number };
   private listeners: Set<TimeUpdateCallback> = new Set();
   private playStateListeners: Set<PlayStateCallback> = new Set();
   private wrapListeners: Set<TimeUpdateCallback> = new Set();
+  private endedListeners: Set<TimeUpdateCallback> = new Set();
   private animationFrameId?: number;
   private lastUpdateTime?: number;
   private tickThrottleMs: number = 0;
@@ -92,7 +103,9 @@ export class TimeController {
   constructor(options: TimeControllerOptions = {}) {
     // Use ?? not || so an explicit initialTime/speed of 0 is honored.
     this.currentTime = options.initialTime ?? Date.now();
-    this.speed = options.speed ?? 1.0;
+    const initialSpeed = options.speed ?? 1.0;
+    this.speedMagnitude = Math.abs(initialSpeed);
+    this.direction = initialSpeed < 0 ? -1 : 1;
     this.loop = options.loop ?? false;
     this.bounce = options.bounce ?? false;
     this.timeRange = options.timeRange;
@@ -106,6 +119,21 @@ export class TimeController {
 
   /** Set current time */
   setTime(time: number): void {
+    // TEMP-DIAGNOSTIC (flash repro): record backward sim-time jumps while
+    // playing — the governor's frontier clamp lands here via setClockTime.
+    if (this.playing && time < this.currentTime) {
+      const probe = (globalThis as unknown as {
+        __sttProbe?: { enabled?: boolean; backjumps?: unknown[] };
+      }).__sttProbe;
+      if (probe?.enabled && Array.isArray(probe.backjumps)) {
+        probe.backjumps.push({
+          wall: performance.now(),
+          from: this.currentTime,
+          to: time,
+          deltaSimMs: this.currentTime - time,
+        });
+      }
+    }
     this.currentTime = time;
     this.notifyListeners();
   }
@@ -115,14 +143,40 @@ export class TimeController {
     return this.playing;
   }
 
-  /** Get playback speed */
+  /** Get playback speed (signed: direction × magnitude). */
   getSpeed(): number {
-    return this.speed;
+    return this.direction * this.speedMagnitude;
   }
 
-  /** Set playback speed */
+  /**
+   * Set playback speed. The magnitude is always adopted. A negative value
+   * explicitly selects reverse; a positive value restores forward travel —
+   * EXCEPT in bounce mode, where direction belongs to the boundary
+   * reflection: a UI pushing a positive magnitude mid-reverse (speed slider
+   * during the return leg) must change only the rate, never the travel
+   * direction. Use {@link setDirection} to steer explicitly.
+   */
   setSpeed(speed: number): void {
-    this.speed = speed;
+    this.speedMagnitude = Math.abs(speed);
+    if (speed < 0) {
+      this.direction = -1;
+    } else if (speed > 0 && !this.bounce) {
+      this.direction = 1;
+    }
+    if (this.playing) {
+      this.notifyPlayStateListeners();
+    }
+  }
+
+  /** Travel direction (bounce reversals flip this, not the rate). */
+  getDirection(): 1 | -1 {
+    return this.direction;
+  }
+
+  /** Set travel direction explicitly. Announced while playing (a re-plan event for loaders). */
+  setDirection(direction: 1 | -1): void {
+    if (direction === this.direction) return;
+    this.direction = direction;
     if (this.playing) {
       this.notifyPlayStateListeners();
     }
@@ -131,6 +185,11 @@ export class TimeController {
   /** Set time range */
   setTimeRange(timeRange: { start: number; end: number }): void {
     this.timeRange = timeRange;
+  }
+
+  /** The configured time range, if any (a defensive copy). */
+  getTimeRange(): { start: number; end: number } | undefined {
+    return this.timeRange ? { ...this.timeRange } : undefined;
   }
 
   /** Start playback */
@@ -188,31 +247,45 @@ export class TimeController {
     this.setTime(this.currentTime + delta);
   }
 
-  /** Register listener for time updates */
-  on(event: 'tick', callback: TimeUpdateCallback): void;
-  on(event: 'playState', callback: PlayStateCallback): void;
-  on(event: 'wrap', callback: TimeUpdateCallback): void;
-  on(event: string, callback: TimeUpdateCallback | PlayStateCallback): void {
+  /** Register listener for time updates. Returns an unsubscribe function. */
+  on(event: 'tick', callback: TimeUpdateCallback): () => void;
+  on(event: 'playState', callback: PlayStateCallback): () => void;
+  on(event: 'wrap', callback: TimeUpdateCallback): () => void;
+  on(event: 'ended', callback: TimeUpdateCallback): () => void;
+  on(event: string, callback: TimeUpdateCallback | PlayStateCallback): () => void {
     if (event === 'tick') {
       this.listeners.add(callback as TimeUpdateCallback);
     } else if (event === 'playState') {
       this.playStateListeners.add(callback as PlayStateCallback);
     } else if (event === 'wrap') {
       this.wrapListeners.add(callback as TimeUpdateCallback);
+    } else if (event === 'ended') {
+      this.endedListeners.add(callback as TimeUpdateCallback);
     }
+    return () => this.removeListener(event, callback);
   }
 
   /** Unregister listener */
   off(event: 'tick', callback: TimeUpdateCallback): void;
   off(event: 'playState', callback: PlayStateCallback): void;
   off(event: 'wrap', callback: TimeUpdateCallback): void;
+  off(event: 'ended', callback: TimeUpdateCallback): void;
   off(event: string, callback: TimeUpdateCallback | PlayStateCallback): void {
+    this.removeListener(event, callback);
+  }
+
+  private removeListener(
+    event: string,
+    callback: TimeUpdateCallback | PlayStateCallback,
+  ): void {
     if (event === 'tick') {
       this.listeners.delete(callback as TimeUpdateCallback);
     } else if (event === 'playState') {
       this.playStateListeners.delete(callback as PlayStateCallback);
     } else if (event === 'wrap') {
       this.wrapListeners.delete(callback as TimeUpdateCallback);
+    } else if (event === 'ended') {
+      this.endedListeners.delete(callback as TimeUpdateCallback);
     }
   }
 
@@ -221,7 +294,8 @@ export class TimeController {
     return {
       currentTime: this.currentTime,
       playing: this.playing,
-      speed: this.speed,
+      speed: this.getSpeed(),
+      direction: this.direction,
       loop: this.loop,
     };
   }
@@ -232,6 +306,7 @@ export class TimeController {
     this.listeners.clear();
     this.playStateListeners.clear();
     this.wrapListeners.clear();
+    this.endedListeners.clear();
   }
 
   private tick = (): void => {
@@ -249,7 +324,7 @@ export class TimeController {
     this.inTick = true;
     try {
       // Update time based on elapsed time and speed
-      const timeIncrement = elapsed * this.speed;
+      const timeIncrement = elapsed * this.speedMagnitude * this.direction;
       this.currentTime += timeIncrement;
 
       // Handle time range boundaries
@@ -260,7 +335,7 @@ export class TimeController {
             // Reflect the overshoot back into the range and reverse direction so
             // time stays continuous (no teleport → no window evict / ribbon pop).
             this.currentTime = Math.max(start, end - (this.currentTime - end));
-            this.speed = -Math.abs(this.speed);
+            this.direction = -1;
             // Announce the reversal so downstream tile loaders can re-aim their
             // prefetch immediately. Without this the tileset only infers the new
             // direction from observed time deltas (with a multi-frame hysteresis),
@@ -277,11 +352,15 @@ export class TimeController {
           } else {
             this.currentTime = end;
             this.pause();
+            // Distinct from a user pause: the clock ran out of range. This is
+            // the media-element 'ended' signal — UIs show a replay affordance
+            // and the governor restarts from the range start on the next play.
+            this.notifyEndedListeners();
           }
         } else if (this.currentTime < start) {
           if (this.bounce) {
             this.currentTime = Math.min(end, start + (start - this.currentTime));
-            this.speed = Math.abs(this.speed);
+            this.direction = 1;
             this.notifyPlayStateListeners();
           } else if (this.loop) {
             this.currentTime = end;
@@ -289,6 +368,7 @@ export class TimeController {
           } else {
             this.currentTime = start;
             this.pause();
+            this.notifyEndedListeners();
           }
         }
       }
@@ -310,6 +390,20 @@ export class TimeController {
     if (this.playing) {
       this.animationFrameId = requestAnimationFrame(this.tick);
     }
+
+    // TEMP-DIAGNOSTIC (flash repro): ~20Hz (wall, simTime) timeline so tile
+    // arrivals can be correlated against the playhead offline.
+    {
+      const probe = (globalThis as unknown as {
+        __sttProbe?: { enabled?: boolean; timeline?: unknown[]; _tlLast?: number };
+      }).__sttProbe;
+      if (probe?.enabled && Array.isArray(probe.timeline)) {
+        if (now - (probe._tlLast ?? 0) >= 50) {
+          probe._tlLast = now;
+          probe.timeline.push({ wall: now, sim: this.currentTime });
+        }
+      }
+    }
   };
 
   private notifyListeners(): void {
@@ -320,12 +414,18 @@ export class TimeController {
 
   private notifyPlayStateListeners(): void {
     for (const listener of this.playStateListeners) {
-      listener(this.playing, this.speed);
+      listener(this.playing, this.getSpeed());
     }
   }
 
   private notifyWrapListeners(): void {
     for (const listener of this.wrapListeners) {
+      listener(this.currentTime);
+    }
+  }
+
+  private notifyEndedListeners(): void {
+    for (const listener of this.endedListeners) {
       listener(this.currentTime);
     }
   }

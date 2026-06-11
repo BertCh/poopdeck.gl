@@ -10,6 +10,7 @@ import {
 import DemoEmbed from "../components/demo/DemoEmbed";
 import DemoCard from "../components/DemoCard";
 import { SourceLogo } from "../components/SourceLogo";
+import { VizBadge } from "../components/VizBadge";
 
 /**
  * Per-demo landing page (`/demos/:id`): live embed up top, then the
@@ -51,12 +52,7 @@ const DemoDetailPage: React.FC = () => {
           >
             {dataset.name}
           </h1>
-          <span
-            className="text-[10px] font-semibold tracking-wide uppercase px-1.5 py-0.5 rounded"
-            style={{ background: "var(--accent-soft)", color: "var(--accent)" }}
-          >
-            {meta.techniqueTag}
-          </span>
+          <VizBadge type={dataset.type} label={meta.techniqueTag} />
         </div>
         <p
           className="text-sm mt-2 max-w-2xl"
