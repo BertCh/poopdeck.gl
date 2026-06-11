@@ -104,6 +104,38 @@ describe('GeoArrow interop', () => {
     expect(table.numRows).toBe(tile!.layers[0].features.featureCount);
   });
 
+  it('toGeoArrowTable rehydrates from the raw IPC bytes on the worker path', async () => {
+    const archive = sampleArchive();
+    const index = await archive.getIndex();
+    const entry = index.tiles[0];
+    const tile = await archive.getTile({
+      z: entry.zoom,
+      x: entry.x,
+      y: entry.y,
+      t: entry.timeStart,
+    });
+    const decoded = tile!.layers[0];
+    expect(decoded.arrowIpc).toBeDefined();
+
+    // Reproduce the worker decode path: the non-cloneable Table is stripped
+    // before postMessage (tile-decoder.worker.ts) and the rest of the layer
+    // crosses the boundary via structured clone — including `arrowIpc`.
+    delete decoded.arrowTable;
+    const layer = structuredClone(decoded);
+    expect(layer.arrowTable).toBeUndefined();
+
+    // First call rehydrates lazily from the IPC bytes…
+    const table = toGeoArrowTable(layer);
+    expect(table.numRows).toBe(layer.features.featureCount);
+    const geomField = table.schema.fields.find((f) => f.name === 'geometry');
+    expect(geomField!.metadata.get('ARROW:extension:name')).toBe(
+      layer.geometryExtensionName,
+    );
+    // …and memoizes the Table so repeat calls don't re-parse.
+    expect(layer.arrowTable).toBeDefined();
+    expect(toGeoArrowTable(layer)).toBe(table);
+  });
+
   it('toGeoArrowTable throws for layers without a backing Arrow Table', () => {
     expect(() =>
       toGeoArrowTable({

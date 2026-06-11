@@ -77,18 +77,6 @@ export interface ArchiveMetadata {
    * magnitudes, AIS speed, etc.).
    */
   heatmapDomain?: HeatmapDomain;
-  /**
-   * Optional pre-rasterized density-grid tier (Phase D). At zooms inside
-   * `[minZoom, maxZoom]` the renderer dispatches to a constant-time
-   * textured-quad path instead of streaming raw or cell-aggregated tiles
-   * — the only practical path for 100M+ point datasets at planet scale.
-   *
-   * **Scaffold note**: as of v3, the metadata is declared but the
-   * tile-side sidecar payload is not yet emitted by `stt-build`. Readers
-   * should fall through to the summary or raw tier when the field is
-   * present but the corresponding density-raster layer is absent.
-   */
-  rasterTier?: RasterTier;
 }
 
 /** Aggregation scheme for the summary tier. */
@@ -146,26 +134,6 @@ export interface HeatmapClassDomain {
 /** Container for the bake-time HeatmapLayer domain metadata. */
 export interface HeatmapDomain {
   classes: HeatmapClassDomain[];
-}
-
-/**
- * Pre-rasterized density-grid tier descriptor. Companion to
- * [[SummaryTier]] at the lowest zooms — one RGBA texture per tile,
- * per-frame cost independent of feature count.
- */
-export interface RasterTier {
-  minZoom: number;
-  maxZoom: number;
-  /** Density-grid width in pixels (per tile). */
-  width: number;
-  /** Density-grid height in pixels (per tile). */
-  height: number;
-  /** Number of RGBA channels in use (1..=4). One class per channel. */
-  channels: number;
-  /** Per-channel class ids — ordered to match channel index 0..channels-1. */
-  classIds: string[];
-  /** Layer name carried in the emitted density-raster frames. */
-  layerName: string;
 }
 
 /** Layer information */
@@ -287,6 +255,24 @@ export interface BinaryFeatures {
   vertexValues?: Float32Array;
 
   /**
+   * Per-vertex × per-time-bucket value matrix (optional), flattened globally
+   * **vertex-major**: `vertexValueMatrix[globalVertex * vertexValueBuckets +
+   * bucket]`, aligned 1:1 with `positions` per bucket. Lets a static-geometry
+   * overview (flow corridors) carry a per-vertex time series so the renderer
+   * animates by selecting the active bucket column from the playhead — geometry
+   * stays resident, only the playhead moves. See {@link vertexValueBuckets}.
+   */
+  vertexValueMatrix?: Float32Array;
+
+  /**
+   * Number of time buckets packed into {@link vertexValueMatrix} (0 when the
+   * tile carries no matrix). The bucket axis is global across the dataset;
+   * `bucket0` / `bucketWidth` are derived per feature from `startTimes` /
+   * `endTimes` and this count.
+   */
+  vertexValueBuckets?: number;
+
+  /**
    * Pre-baked polygon triangle indices, MLT-style.
    *
    * Flat array of vertex indices (groups of 3 per triangle). Indices are
@@ -357,10 +343,21 @@ export interface Layer {
    * typed arrays in {@link BinaryFeatures}.
    *
    * Optional because the worker-pool decoder strips `arrowTable` before
-   * postMessage (the `Table` class is not structured-cloneable). Use
-   * `InlineTileDecoder` if a downstream library needs the raw Table.
+   * postMessage (the `Table` class is not structured-cloneable) — on that
+   * path {@link arrowIpc} carries the layer instead and
+   * `toGeoArrowTable()` rehydrates the Table lazily on first use.
    */
   arrowTable?: import('apache-arrow').Table;
+  /**
+   * The layer's raw Arrow IPC stream bytes, verbatim from the decoded tile
+   * payload. Unlike {@link arrowTable} this IS structured-cloneable (and
+   * transferable), so it survives the worker→main postMessage boundary —
+   * it's what lets `toGeoArrowTable()` work for worker-decoded tiles by
+   * re-parsing lazily on first call (the result is memoized back into
+   * {@link arrowTable}). Usually a view into the same buffer as the
+   * layer's typed-array columns.
+   */
+  arrowIpc?: Uint8Array;
 }
 
 /** Decoded tile with binary features */
@@ -428,6 +425,25 @@ export interface TemporalIndex {
   tileRefs: number[];
 }
 
+/**
+ * loaders.gl-style load options. Only the `fetch` key is consumed:
+ *
+ * - **Object form** (`RequestInit`): merged into every HTTP request the
+ *   archive makes — manifest, directory, and pack range reads — for auth
+ *   headers, credentials, CORS mode, etc. Per-request fields (the `Range`
+ *   header, abort signal, fetch priority) always win on conflict.
+ * - **Function form** (fetch-like): a drop-in transport replacement,
+ *   equivalent to {@link ArchiveOptions.fetch} — which takes precedence
+ *   when both are provided.
+ *
+ * Other keys are accepted (loaders.gl callers pass rich option bags) but
+ * ignored by the archive reader.
+ */
+export interface SttLoadOptions {
+  fetch?: RequestInit | typeof fetch;
+  [key: string]: unknown;
+}
+
 /** Options for archive reader */
 export interface ArchiveOptions {
   /** Base URL for the archive */
@@ -438,8 +454,8 @@ export interface ArchiveOptions {
   cache?: boolean;
   /** Maximum cache size in bytes */
   maxCacheSize?: number;
-  /** Options for loaders.gl */
-  loadOptions?: any;
+  /** loaders.gl-style options; see {@link SttLoadOptions} for what is consumed. */
+  loadOptions?: SttLoadOptions;
   /**
    * Override the tile decoder. Defaults to a worker-pool decoder in browsers
    * that support module workers, inline decoding elsewhere (Node tests,
@@ -508,6 +524,18 @@ export interface ArchiveOptions {
    * **Defaults to `[250, 1000]`** — 2 retries with exponential backoff.
    */
   retryDelaysMs?: number[];
+  /**
+   * Per-transfer stall timeout (ms) applied to every HTTP fetch the archive
+   * makes — manifest, directory, and pack range reads. A response that
+   * neither completes nor errors within the window (TCP stall, dead proxy)
+   * is aborted with a `TimeoutError` and treated as a TRANSIENT failure:
+   * it retries per `retryDelaysMs` like any 5xx. Caller aborts are
+   * unaffected (they propagate immediately, never retried).
+   *
+   * **Defaults to 20000** (hls.js `fragLoadingTimeOut` parity). Pass `0`
+   * to disable the watchdog entirely.
+   */
+  transferTimeoutMs?: number;
 }
 
 /** Options for tile requests */

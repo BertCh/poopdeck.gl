@@ -45,9 +45,9 @@ ctx.onmessage = async (event: MessageEvent<DecodeRequest>) => {
     const tile = decodeTile(payload, id, timeRange);
     // The `arrowTable` field carries an apache-arrow `Table` instance. That
     // class has methods on its prototype and is NOT structured-cloneable —
-    // postMessage would throw. Strip it before transfer. Callers that need
-    // a GeoArrow `Table` should use the inline decoder
-    // ({@link InlineTileDecoder}), which preserves `arrowTable` end-to-end.
+    // postMessage would throw. Strip it before transfer. The raw IPC bytes
+    // (`layer.arrowIpc`) DO cross the boundary, so `toGeoArrowTable()` can
+    // rehydrate the Table lazily on the main thread.
     for (const layer of tile.layers) delete layer.arrowTable;
     const transferables = collectTransferables(tile);
     const response: DecodeResponse = { requestId, tile };

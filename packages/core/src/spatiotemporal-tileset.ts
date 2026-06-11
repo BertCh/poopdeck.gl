@@ -2466,7 +2466,12 @@ export class SpatiotemporalTileset {
         const isNeeded = neededTileKeys.has(tileKey);
         const isRecent = (now - header.lastUsed) < GRACE_PERIOD;
 
-        if (!isNeeded && !isRecent && !header.isPinned) {
+        // An in-flight header must never be deleted out from under its
+        // batch: the batch's deliverTile() holds a direct reference and
+        // would resurrect the orphan outside the registry, inflating
+        // currentCacheBytes / loadedTileCount forever. It gets re-judged
+        // on the pass after its load settles.
+        if (!isNeeded && !isRecent && !header.isPinned && !header.isLoading) {
           tilesToEvict.push(tileKey);
         }
       }
@@ -2514,6 +2519,14 @@ export class SpatiotemporalTileset {
     for (const tileKey of tileKeys) {
       const header = this.tiles.get(tileKey);
       if (header) {
+        if (header.isLoading && !header.isLoaded) {
+          // Belt-and-braces: a deleted in-flight header could still receive
+          // a late deliverTile() through the batch's captured reference and
+          // leak its bytes into the running counters. Latch the cancel flag
+          // so that delivery no-ops. (No abort here — batch members share
+          // one AbortController, and the batch may carry needed tiles.)
+          header.isCancelled = true;
+        }
         if (header.tile) {
           this.options.onTileUnload?.(header.tile);
           // Incrementally decrement the running counters.
@@ -2549,6 +2562,35 @@ export class SpatiotemporalTileset {
    * O(k) overall, where k = neededTileKeys.size — the inner cover-check is
    * 4^(maxZoomDiff) which in practice is 16 (zDiff ≤ 2).
    */
+  /**
+   * True when the current selection has SETTLED: nothing the selection
+   * queued is still waiting to dispatch and no needed tile is in flight.
+   * Mirrors upstream `Tileset2D.isLoaded` semantics including its error
+   * stance — a tile whose fetch failed (after the archive's retries) or
+   * was cancelled counts as settled, otherwise one permanent hole would
+   * pin the signal false forever. Prefetch/overview lookahead never blocks
+   * this: it is intentionally ahead of the needed set.
+   */
+  get isLoaded(): boolean {
+    if (this.priorityQueue.length > 0) return false;
+    for (const key of this.neededTileKeys) {
+      if (this.tiles.get(key)?.isLoading) return false;
+    }
+    return true;
+  }
+
+  /**
+   * Monotonic needed-set version: bumps exactly when a selection pass
+   * changes WHICH tiles the viewport×window needs — never on tile arrival.
+   * Stays 0 until the first selection that needs anything. Consumers pair
+   * it with {@link isLoaded} to derive once-per-settle viewport-load events
+   * (a settled version fires once, then re-fires only after the selection
+   * itself changes — the `TileLayer.onViewportLoad` contract).
+   */
+  get selectionVersion(): number {
+    return this.neededTilesVersion;
+  }
+
   getVisibleTiles(): Tile[] {
     if (this.neededTileKeys.size === 0) return [];
 
@@ -2634,6 +2676,14 @@ export class SpatiotemporalTileset {
     for (const header of this.tiles.values()) {
       if (header.tile) {
         this.options.onTileUnload?.(header.tile);
+      }
+      if (header.isLoading) {
+        // A delivery into a cleared registry would inflate the running
+        // counters forever (the header is unreachable after `tiles.clear()`).
+        // Latch the cancel flag so deliverTile() no-ops, and abort the
+        // transport — after clear() NOTHING in flight is wanted.
+        header.isCancelled = true;
+        header.abortController?.abort();
       }
     }
 

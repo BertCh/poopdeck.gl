@@ -43,12 +43,11 @@ import {
   type SummaryColumn,
   type HeatmapDomain,
   type HeatmapClassDomain,
-  type RasterTier,
   Compression,
 } from './types';
 import { createDefaultTileDecoder, type TileDecoder } from './tile-decoder';
 import { OpfsTileCache } from './opfs-cache';
-import { decompress } from './compression';
+import { decompress, unzstdSync } from './compression';
 import { createSttTileSource, type SttTileSource } from './tile-source';
 import { ThroughputEstimator, type ThroughputEstimate } from './throughput';
 
@@ -80,10 +79,105 @@ const DEFAULT_MAX_CONCURRENT_REQUESTS = 24;
  * re-stampede the host in lockstep. Aborts are NEVER retried.
  */
 const DEFAULT_RANGE_RETRY_DELAYS_MS = [250, 1000];
+/**
+ * Default per-transfer stall timeout. hls.js ships 20 s (`fragLoadingTimeOut`)
+ * and Shaka ~30 s; without one, a TCP-stalled response hangs its tile forever
+ * — the batch member stays in flight and is never re-requested. A timeout is
+ * a TRANSIENT failure (retried), unlike a caller abort (propagated).
+ * Overridable per-archive via `ArchiveOptions.transferTimeoutMs`; `0` disables.
+ */
+const DEFAULT_TRANSFER_TIMEOUT_MS = 20_000;
 
 /** Whether an error is a fetch cancellation (must propagate, never retry). */
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === 'AbortError';
+}
+
+/**
+ * Compose the caller's abort signal with a stall timeout. The returned signal
+ * aborts with a `TimeoutError` reason when `timeoutMs` elapses, or mirrors the
+ * caller's abort (reason and all) — so retry logic can tell the two apart
+ * (timeout → retryable transient, caller abort → propagate). `cleanup` MUST
+ * run when the transfer settles: it clears the timer and detaches the
+ * caller-signal listener so neither outlives the request.
+ */
+function withTransferTimeout(
+  signal: AbortSignal | undefined,
+  timeoutMs: number,
+): { signal: AbortSignal | undefined; cleanup: () => void } {
+  if (!(timeoutMs > 0)) return { signal, cleanup: () => {} };
+  const controller = new AbortController();
+  const onAbort = (): void => {
+    controller.abort(
+      signal?.reason ?? new DOMException('The operation was aborted.', 'AbortError'),
+    );
+  };
+  if (signal) {
+    if (signal.aborted) onAbort();
+    else signal.addEventListener('abort', onAbort, { once: true });
+  }
+  const timer = setTimeout(() => {
+    controller.abort(
+      new DOMException(`STT transfer stalled for ${timeoutMs} ms`, 'TimeoutError'),
+    );
+  }, timeoutMs);
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+    },
+  };
+}
+
+/**
+ * Race a transport promise against an abort signal. Spec-conformant `fetch`
+ * rejects on its own when its signal aborts, but custom transports
+ * (`ArchiveOptions.fetch`, `loadOptions.fetch`) may ignore the signal
+ * entirely — the race guarantees the stall timeout still fires through them.
+ * Rejects with the signal's abort reason (`TimeoutError` / `AbortError`).
+ */
+function raceAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise;
+  const reasonOf = (): unknown =>
+    signal.reason ?? new DOMException('The operation was aborted.', 'AbortError');
+  if (signal.aborted) return Promise.reject(reasonOf());
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => reject(reasonOf());
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
+/**
+ * Validate a 206's `Content-Range` against the requested offsets. A proxy or
+ * truncating origin that rewrites the range would silently corrupt every
+ * member sliced out of a coalesced buffer, so a mismatch is an error (and a
+ * retryable one — the byte-length check downstream backstops transports that
+ * don't surface headers at all, e.g. test shims).
+ */
+function validateContentRange(response: Response, start: number, end: number): void {
+  const header =
+    typeof response.headers?.get === 'function'
+      ? response.headers.get('content-range')
+      : null;
+  if (!header) return;
+  const m = /^bytes (\d+)-(\d+)\//.exec(header);
+  if (!m || Number(m[1]) !== start || Number(m[2]) !== end) {
+    throw new Error(
+      `STT pack server returned mismatched Content-Range ${JSON.stringify(header)} ` +
+        `for bytes=${start}-${end}`,
+    );
+  }
 }
 
 /**
@@ -143,10 +237,20 @@ interface ByteCacheEntry {
 export interface ManifestDirectoryRef {
   /** Object key relative to the dataset root (e.g. `index/<hash>.sttd`). */
   key: string;
-  /** Directory object length in bytes. */
+  /**
+   * Directory object length in bytes — the at-rest object, i.e. the
+   * compressed length when `encoding` is set. The fetched body is
+   * validated against it before any decode.
+   */
   length: number;
   /** Directory codec version (5 for the packed format). */
   directoryVersion: number;
+  /**
+   * At-rest encoding of the directory object. `'zstd'` = the object is one
+   * zstd frame wrapping the codec bytes; absent (every manifest written
+   * before the field existed) = raw codec bytes.
+   */
+  encoding?: string;
 }
 
 /**
@@ -186,6 +290,42 @@ export interface PackedManifest {
   metadata: any;
 }
 
+/** Normalize any HeadersInit into a plain record, preserving plain-object key casing. */
+function headersToRecord(h: HeadersInit | undefined): Record<string, string> {
+  if (!h) return {};
+  if (typeof Headers !== 'undefined' && h instanceof Headers) {
+    const out: Record<string, string> = {};
+    h.forEach((v, k) => {
+      out[k] = v;
+    });
+    return out;
+  }
+  if (Array.isArray(h)) return Object.fromEntries(h);
+  return { ...(h as Record<string, string>) };
+}
+
+/**
+ * Merge a caller-level `RequestInit` (from `loadOptions.fetch`, object form)
+ * UNDER a per-request one. Per-request fields win — they carry the `Range`
+ * header, abort signal and fetch-priority hint the reader's offset math and
+ * cancellation depend on, so the caller's init can never clobber them.
+ * Plain-object header keys are kept verbatim (no `Headers` round-trip, which
+ * would lowercase them).
+ */
+function mergeRequestInit(base: RequestInit, override?: RequestInit): RequestInit {
+  if (!override) {
+    return base.headers ? { ...base, headers: headersToRecord(base.headers) } : { ...base };
+  }
+  const merged: RequestInit = { ...base, ...override };
+  if (base.headers) {
+    merged.headers = {
+      ...headersToRecord(base.headers),
+      ...headersToRecord(override.headers),
+    };
+  }
+  return merged;
+}
+
 /**
  * Estimate a decoded tile's in-memory size (bytes). Exported so the tileset
  * uses one consistent accounting implementation.
@@ -194,6 +334,10 @@ export function estimateTileSize(tile: Tile): number {
   let size = 1000; // base overhead
   if (!tile?.layers) return size;
   for (const layer of tile.layers) {
+    // The retained raw IPC bytes (GeoArrow hand-off; see Layer.arrowIpc)
+    // keep the decoded payload buffer alive for the tile's lifetime, so
+    // they count toward the byte budget like any other buffer.
+    if (layer?.arrowIpc) size += layer.arrowIpc.byteLength;
     const f = layer?.features;
     if (!f) continue;
     size += f.positions.byteLength;
@@ -202,6 +346,7 @@ export function estimateTileSize(tile: Tile): number {
     size += f.endTimes.byteLength;
     if (f.startIndices) size += f.startIndices.byteLength;
     if (f.vertexTimestamps) size += f.vertexTimestamps.byteLength;
+    if (f.vertexValues) size += f.vertexValues.byteLength;
     if (f.globalFeatureIds) size += f.globalFeatureIds.byteLength;
     // Pre-tessellated meshes and 64-bit feature ids are often the largest
     // buffers in a tile; counting them keeps the byte-budget eviction honest
@@ -249,12 +394,24 @@ export class STTArchive {
   private maxConcurrentRequests: number = DEFAULT_MAX_CONCURRENT_REQUESTS;
   /** Backoff schedule for transient range failures (see options). */
   private retryDelaysMs: number[] = DEFAULT_RANGE_RETRY_DELAYS_MS;
+  /** Per-transfer stall timeout; `0` disables (see options). */
+  private transferTimeoutMs: number = DEFAULT_TRANSFER_TIMEOUT_MS;
 
   /**
    * Dual-EWMA throughput estimator fed by completed coalesced range
    * responses in {@link getTiles}. See {@link getThroughputEstimate}.
    */
   private throughput = new ThroughputEstimator();
+  /**
+   * Aggregate-window sampling state (Chromium NQE style). Per-request samples
+   * under the {@link maxConcurrentRequests}-way pool each see ~link/N and
+   * systematically underestimate the link by the concurrency factor — so
+   * bytes are accumulated across ALL in-flight range requests and ONE sample
+   * is recorded per busy window (first transfer starts → last one settles).
+   */
+  private activeTransferCount = 0;
+  private transferWindowBytes = 0;
+  private transferWindowStart = 0;
 
   /** "z/x/y" -> temporal entries at that spatial cell. */
   private tileEntryIndex = new Map<string, TileEntry[]>();
@@ -265,7 +422,8 @@ export class STTArchive {
   /**
    * OPFS hit/miss counters. Tracked separately from the in-memory byte
    * cache so the HUD can show the two layers independently — a low OPFS
-   * hit rate on a returning visitor usually means the archive ETag changed.
+   * hit rate on a returning visitor usually means the dataset was redeployed
+   * (the content-addressed directory hash, i.e. the OPFS fingerprint, changed).
    */
   private opfsStats = { hits: 0, misses: 0 };
 
@@ -297,6 +455,20 @@ export class STTArchive {
     } else {
       this.url = options.url;
       this.fetchFn = options.fetch || fetch.bind(globalThis);
+      // loaders.gl-convention `loadOptions.fetch` (see SttLoadOptions):
+      // the FUNCTION form is a drop-in transport (the explicitly-typed
+      // `options.fetch` wins when both are set); the OBJECT form is a
+      // RequestInit merged into EVERY request this archive makes — manifest,
+      // directory, pack ranges — so auth headers / credentials reach the
+      // wire without a custom fetch function.
+      const loadFetch = options.loadOptions?.fetch;
+      if (typeof loadFetch === 'function') {
+        if (!options.fetch) this.fetchFn = loadFetch as typeof fetch;
+      } else if (loadFetch && typeof loadFetch === 'object') {
+        const transport = this.fetchFn;
+        this.fetchFn = ((input: RequestInfo | URL, init?: RequestInit) =>
+          transport(input, mergeRequestInit(loadFetch, init))) as typeof fetch;
+      }
       this.decoderOption = options.decoder;
       if (typeof options.coalesceGapBytes === 'number' && options.coalesceGapBytes >= 0) {
         this.coalesceGapBytes = options.coalesceGapBytes;
@@ -309,13 +481,16 @@ export class STTArchive {
           (d) => typeof d === 'number' && d >= 0,
         );
       }
+      if (typeof options.transferTimeoutMs === 'number' && options.transferTimeoutMs >= 0) {
+        this.transferTimeoutMs = options.transferTimeoutMs;
+      }
       // OPFS defaults to OFF. The cache's warm-reload win only materializes
       // when the archive fits in `opfsCacheMaxBytes` AND users revisit the
       // same viewport across reloads. On the cold path it costs a duplicate
       // main-thread zstd decompress per tile (see `writeOpfsAsync`), which
       // hurts initial pan/zoom — the dominant experience for showcase users
-      // and for any archive bigger than the cache budget (e.g. the 6.7 GB
-      // nyc-taxi-paths.stt vs the 512 MB default). Apps that genuinely
+      // and for any dataset bigger than the cache budget (e.g. the multi-GB
+      // nyc-taxi-paths packs vs the 512 MB default). Apps that genuinely
       // benefit opt in explicitly.
       const opfsRequested = options.opfsCache === true;
       if (options.opfsCacheImpl) {
@@ -367,13 +542,10 @@ export class STTArchive {
     if (this.manifestCache) return this.manifestCache;
     if (this.manifestPromise) return this.manifestPromise;
     this.manifestPromise = (async () => {
-      const response = await this.fetchFn(this.url);
-      if (!response.ok) {
-        throw new Error(
-          `STT manifest fetch failed: ${response.status} ${response.statusText}`,
-        );
-      }
-      const buffer = await response.arrayBuffer();
+      // The manifest GET is the cold-start single point of failure — one
+      // transient blip used to fail the whole dataset load. It rides the
+      // same jittered backoff + stall timeout as pack range requests.
+      const buffer = await this.fetchWholeObjectWithRetry(this.url, 'manifest');
       let manifest: PackedManifest;
       try {
         manifest = JSON.parse(new TextDecoder().decode(buffer));
@@ -419,9 +591,70 @@ export class STTArchive {
   }
 
   /**
+   * GET a whole (non-range) object — manifest or directory — under the same
+   * stall timeout as range requests, validating the body length when the
+   * expected size is known (the manifest carries `directory.length`, so a
+   * truncated directory is caught here instead of corrupting the decode).
+   */
+  private async fetchWholeObject(
+    url: string,
+    what: string,
+    expectedLength?: number,
+  ): Promise<ArrayBuffer> {
+    const { signal, cleanup } = withTransferTimeout(undefined, this.transferTimeoutMs);
+    try {
+      const response = await raceAbort(this.fetchFn(url, { signal }), signal);
+      if (!response.ok) {
+        throw new Error(
+          `STT ${what} fetch failed: ${response.status} ${response.statusText}`,
+        );
+      }
+      const buffer = await raceAbort(response.arrayBuffer(), signal);
+      if (expectedLength !== undefined && buffer.byteLength !== expectedLength) {
+        throw new Error(
+          `STT ${what} truncated: got ${buffer.byteLength} bytes, expected ${expectedLength}`,
+        );
+      }
+      return buffer;
+    } finally {
+      cleanup();
+    }
+  }
+
+  /**
+   * {@link fetchWholeObject} with the same jittered backoff as
+   * {@link fetchRangeWithRetry}. The manifest and directory GETs used to be
+   * single-attempt while every tile range retried — exactly backwards for
+   * the two objects nothing else can proceed without.
+   */
+  private async fetchWholeObjectWithRetry(
+    url: string,
+    what: string,
+    expectedLength?: number,
+  ): Promise<ArrayBuffer> {
+    let lastError: unknown;
+    for (let attempt = 0; attempt <= this.retryDelaysMs.length; attempt++) {
+      if (attempt > 0) {
+        const base = this.retryDelaysMs[attempt - 1];
+        await abortableDelay(base * (0.5 + Math.random()));
+      }
+      try {
+        return await this.fetchWholeObject(url, what, expectedLength);
+      } catch (error) {
+        if (isAbortError(error)) throw error;
+        lastError = error;
+      }
+    }
+    throw lastError;
+  }
+
+  /**
    * Fetch a byte range from pack `packIndex`, validating that the server
    * honoured it. A 200 (server ignored Range) would silently corrupt every
-   * offset-based read, so it's rejected.
+   * offset-based read, so it's rejected — as is a 206 whose `Content-Range`
+   * or body length disagrees with the request (a truncated body would
+   * corrupt every member sliced from a coalesced buffer). The transfer runs
+   * under the stall timeout so a TCP-stalled response can't hang forever.
    */
   private async fetchRange(
     packIndex: number,
@@ -437,23 +670,43 @@ export class STTArchive {
         `STT archive: tile references pack ${packIndex} but only ${manifest.packs.length} packs exist`,
       );
     }
-    const init: RequestInit = {
-      headers: { Range: `bytes=${start}-${end}` },
+    const { signal: transferSignal, cleanup } = withTransferTimeout(
       signal,
-    };
-    // `RequestInit.priority` is a hint; browsers without it ignore the field.
-    if (fetchPriority) (init as RequestInit & { priority?: string }).priority = fetchPriority;
-    const response = await this.fetchFn(this.resolveKey(pack.key), init);
-    if (!response.ok) {
-      throw new Error(`STT pack fetch failed: ${response.status} ${response.statusText}`);
-    }
-    if (response.status !== 206) {
-      throw new Error(
-        `STT pack server ignored Range request (status ${response.status}); ` +
-          'HTTP range requests are required.',
+      this.transferTimeoutMs,
+    );
+    try {
+      const init: RequestInit = {
+        headers: { Range: `bytes=${start}-${end}` },
+        signal: transferSignal,
+      };
+      // `RequestInit.priority` is a hint; browsers without it ignore the field.
+      if (fetchPriority) (init as RequestInit & { priority?: string }).priority = fetchPriority;
+      const response = await raceAbort(
+        this.fetchFn(this.resolveKey(pack.key), init),
+        transferSignal,
       );
+      if (!response.ok) {
+        throw new Error(`STT pack fetch failed: ${response.status} ${response.statusText}`);
+      }
+      if (response.status !== 206) {
+        throw new Error(
+          `STT pack server ignored Range request (status ${response.status}); ` +
+            'HTTP range requests are required.',
+        );
+      }
+      validateContentRange(response, start, end);
+      const buffer = await raceAbort(response.arrayBuffer(), transferSignal);
+      const expected = end - start + 1;
+      if (buffer.byteLength !== expected) {
+        throw new Error(
+          `STT pack range truncated: got ${buffer.byteLength} bytes, ` +
+            `expected ${expected} (bytes=${start}-${end})`,
+        );
+      }
+      return buffer;
+    } finally {
+      cleanup();
     }
-    return response.arrayBuffer();
   }
 
   /**
@@ -461,7 +714,8 @@ export class STTArchive {
    * failures (WS-E loader hardening). One transient 5xx / network blip used
    * to silently drop every tile in the affected batch; now the request is
    * retried per {@link ArchiveOptions.retryDelaysMs} (default 250 ms then
-   * 1000 ms, each jittered ±50%) before the failure surfaces.
+   * 1000 ms, each jittered ±50%) before the failure surfaces. A transfer
+   * stall timeout counts as a transient failure and is retried the same way.
    *
    * An `AbortError` is NEVER retried — cancellation propagates immediately,
    * including out of a pending backoff delay.
@@ -479,10 +733,19 @@ export class STTArchive {
         const base = this.retryDelaysMs[attempt - 1];
         await abortableDelay(base * (0.5 + Math.random()), signal);
       }
+      const attemptStart = nowMs();
       try {
         return await this.fetchRange(packIndex, start, end, signal, fetchPriority);
       } catch (error) {
         if (isAbortError(error)) throw error;
+        // Failure-aware estimation: the estimator is otherwise fed only by
+        // COMPLETED responses, so on a dead network `getEstimate()` holds
+        // the last healthy rate forever and every ETA built from it lies.
+        // A failed attempt burned its wall-clock for ~zero delivered bytes
+        // — feed that as a 1-byte sample weighted by the attempt duration,
+        // dragging the fast EWMA toward zero (a 20 s stall outweighs a
+        // quick 5xx, which is the right proportionality).
+        this.throughput.addSample(1, nowMs() - attemptStart);
         lastError = error;
       }
     }
@@ -500,6 +763,38 @@ export class STTArchive {
    */
   getThroughputEstimate(): ThroughputEstimate {
     return this.throughput.getEstimate();
+  }
+
+  /**
+   * Mark one range transfer in flight for aggregate-window sampling. The
+   * first transfer of a busy window anchors the window's wall clock; see
+   * {@link endTransferSample} for where the sample lands.
+   */
+  private beginTransferSample(): void {
+    if (this.activeTransferCount === 0) {
+      this.transferWindowStart = nowMs();
+      this.transferWindowBytes = 0;
+    }
+    this.activeTransferCount++;
+  }
+
+  /**
+   * Settle one range transfer (`bytes` = 0 for a failed one). When the LAST
+   * in-flight transfer settles, the whole busy window becomes one
+   * `(totalBytes, wallClockMs)` sample — the link's aggregate rate, immune
+   * to the ~N× per-request underestimate the concurrent pool would cause.
+   * Retry backoff inside the window stays counted: time the link spent NOT
+   * delivering bytes is honest pessimism.
+   */
+  private endTransferSample(bytes: number): void {
+    this.transferWindowBytes += bytes;
+    this.activeTransferCount--;
+    if (this.activeTransferCount === 0 && this.transferWindowBytes > 0) {
+      this.throughput.addSample(
+        this.transferWindowBytes,
+        nowMs() - this.transferWindowStart,
+      );
+    }
   }
 
   /** Archive metadata, folded into the manifest (no separate fetch). */
@@ -544,7 +839,6 @@ export class STTArchive {
           }))
         : undefined,
       heatmapDomain: parseHeatmapDomain(json.heatmap_domain),
-      rasterTier: parseRasterTier(json.raster_tier),
     };
     return this.metadataCache;
   }
@@ -563,18 +857,31 @@ export class STTArchive {
 
   private async fetchAndBuildIndex(): Promise<ArchiveIndex> {
     const manifest = await this.fetchManifest();
-    // Whole-object GET of the immutable content-addressed directory.
-    const response = await this.fetchFn(this.resolveKey(manifest.directory.key));
-    if (!response.ok) {
+    // Whole-object GET of the immutable content-addressed directory, with
+    // the same retry/backoff + stall timeout as range requests. The body is
+    // validated against the manifest's `directory.length` — a truncated
+    // response is a retryable transport failure, not a decode-time mystery.
+    const buffer = await this.fetchWholeObjectWithRetry(
+      this.resolveKey(manifest.directory.key),
+      'directory',
+      manifest.directory.length,
+    );
+    // Unwrap the at-rest encoding (manifests written before the field
+    // existed carry raw codec bytes and no `encoding` key).
+    let dirBytes: Uint8Array = new Uint8Array(buffer);
+    const encoding = manifest.directory.encoding;
+    if (encoding === 'zstd') {
+      dirBytes = unzstdSync(dirBytes);
+    } else if (encoding !== undefined) {
       throw new Error(
-        `STT directory fetch failed: ${response.status} ${response.statusText}`,
+        `STT manifest: unknown directory encoding ${JSON.stringify(encoding)} ` +
+          "(this reader supports absent or 'zstd')",
       );
     }
-    const buffer = await response.arrayBuffer();
     // Decode the compact v5 directory (columnar varint + run-length + per-run
     // pack_id). The crc32c integrity tag is read but not verified client-side —
     // a decode failure throws a clear error instead.
-    const raw = decodeDirectory(new Uint8Array(buffer));
+    const raw = decodeDirectory(dirBytes);
     const tiles: TileEntry[] = raw.map((e) => ({
       zoom: e.zoom,
       x: e.x,
@@ -893,11 +1200,13 @@ export class STTArchive {
       // fails, fall back to fetching its member tiles individually (single
       // attempt each) so one bad range can't drop an entire batch — only the
       // tiles that still fail stay `null` in the results. Every completed
-      // range response also feeds the throughput estimator.
+      // range response also feeds the throughput estimator, at busy-window
+      // granularity (see beginTransferSample / endTransferSample) so the
+      // concurrent pool can't make each request look like 1/Nth of the link.
       const fetchGroup = async (group: Group): Promise<void> => {
         let buffer: ArrayBuffer;
+        this.beginTransferSample();
         try {
-          const t0 = nowMs();
           buffer = await this.fetchRangeWithRetry(
             group.packId,
             group.start,
@@ -905,32 +1214,42 @@ export class STTArchive {
             options?.signal,
             options?.fetchPriority,
           );
-          this.throughput.addSample(buffer.byteLength, nowMs() - t0);
+          this.endTransferSample(buffer.byteLength);
         } catch (error) {
+          this.endTransferSample(0);
           if (isAbortError(error)) throw error;
           // Coalesced range failed after retries → per-member fallback.
           await Promise.all(
             group.members.map(async (m) => {
+              let single: ArrayBuffer;
+              this.beginTransferSample();
               try {
-                const t0 = nowMs();
-                const single = await this.fetchRange(
+                single = await this.fetchRange(
                   m.entry.packId,
                   m.entry.offset,
                   m.entry.offset + m.entry.length - 1,
                   options?.signal,
                   options?.fetchPriority,
                 );
-                this.throughput.addSample(single.byteLength, nowMs() - t0);
+                this.endTransferSample(single.byteLength);
+              } catch (memberError) {
+                this.endTransferSample(0);
+                if (isAbortError(memberError)) throw memberError;
+                // Tile-level failure: leave `null`. Callers that know the
+                // tile exists in the directory surface this per-tile (the
+                // tileset reports it through `onTileError`).
+                return;
+              }
+              try {
                 this.storeBytes(this.tileIdToKey(m.id), single);
                 deliver(m.index, await this.decodeBytes(m.id, m.entry, single));
                 if (this.opfsCache) {
                   void this.writeOpfsAsync(m.id, m.entry, single.slice(0));
                 }
-              } catch (memberError) {
-                if (isAbortError(memberError)) throw memberError;
-                // Tile-level failure: leave `null`. Callers that know the
-                // tile exists in the directory surface this per-tile (the
-                // tileset reports it through `onTileError`).
+              } catch (decodeError) {
+                if (isAbortError(decodeError)) throw decodeError;
+                // Decode failure: same per-tile `null` semantics as a fetch
+                // failure (the bytes arrived but the payload is unusable).
               }
             }),
           );
@@ -1347,32 +1666,6 @@ function parseSummaryTier(raw: unknown): SummaryTier | undefined {
     layerName,
     subBuckets,
   };
-}
-
-/**
- * Parse the `raster_tier` block from an archive's JSON metadata. Returns
- * `undefined` for archives that don't carry one (most). Phase D scaffold:
- * the metadata is declared but stt-build doesn't emit sidecar tile
- * payloads yet, so the renderer falls back to summary/raw tiers when
- * the density-raster layer is missing from a tile.
- */
-function parseRasterTier(raw: unknown): RasterTier | undefined {
-  if (!raw || typeof raw !== 'object') return undefined;
-  const r = raw as Record<string, unknown>;
-  const minZoom = Number(r.min_zoom ?? 0);
-  const maxZoom = Number(r.max_zoom ?? minZoom);
-  const width = Number(r.width ?? 0);
-  const height = Number(r.height ?? 0);
-  const channels = Number(r.channels ?? 1);
-  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
-    return undefined;
-  }
-  const classIds = Array.isArray(r.class_ids)
-    ? (r.class_ids as unknown[]).map(String)
-    : [];
-  const layerName =
-    typeof r.layer_name === 'string' ? r.layer_name : 'density_raster';
-  return { minZoom, maxZoom, width, height, channels, classIds, layerName };
 }
 
 /**

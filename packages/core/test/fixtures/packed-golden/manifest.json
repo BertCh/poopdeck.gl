@@ -3,18 +3,19 @@
   "formatVersion": 1,
   "compression": "zstd",
   "directory": {
-    "key": "index/243f7cd36ac15cf623fb1b399eb42d30.sttd",
-    "length": 297,
-    "directoryVersion": 5
+    "key": "index/0ce7c4f65fffff081ce9ad186cd054b7.sttd",
+    "length": 169,
+    "directoryVersion": 5,
+    "encoding": "zstd"
   },
   "packs": [
     {
-      "key": "packs/742926040135830b2f6f5e730afe856f.sttp",
-      "length": 3859
+      "key": "packs/2001de6e7eed8cd1990277adc2a30e1f.sttp",
+      "length": 3864
     },
     {
-      "key": "packs/edca74fcffdd19c16ce8eba9010853f0.sttp",
-      "length": 1675
+      "key": "packs/1f8fa7dfe873347b06d8172a9b15778a.sttp",
+      "length": 1668
     }
   ],
   "metadata": {
@@ -29,7 +30,7 @@
     },
     "time_range": {
       "start": 0,
-      "end": 0
+      "end": 11100
     },
     "min_zoom": 10,
     "max_zoom": 10,

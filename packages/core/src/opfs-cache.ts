@@ -113,7 +113,17 @@ export class OpfsTileCache {
   /** Whether OPFS is reachable. `false` collapses every method to a no-op. */
   private available: boolean;
   private readonly directoryName: string;
+  /** Configured byte-budget ceiling (the `maxBytes` option / 512 MB default). */
   private readonly maxBytes: number;
+  /**
+   * Effective byte budget: `min(maxBytes, 0.5 × storage quota)` once
+   * `navigator.storage.estimate()` resolves in `init()`. A fixed 512 MB on a
+   * quota-constrained device (or an origin already holding other data) would
+   * drive every `set()` into QuotaExceeded; halving the quota leaves room
+   * for the rest of the origin. Equals `maxBytes` where `estimate()` is
+   * unavailable.
+   */
+  private budgetBytes: number;
 
   /**
    * Lazy initialisation promise. The first `get` / `set` triggers
@@ -157,6 +167,7 @@ export class OpfsTileCache {
   constructor(options: OpfsTileCacheOptions = {}) {
     this.directoryName = options.directory ?? 'stt-cache';
     this.maxBytes = options.maxBytes ?? 512 * 1024 * 1024;
+    this.budgetBytes = this.maxBytes;
     this.available = isOpfsAvailable();
   }
 
@@ -193,7 +204,19 @@ export class OpfsTileCache {
         this.dirHandle = await root.getDirectoryHandle(this.directoryName, {
           create: true,
         });
+        // Quota-aware budget: never let the cache claim more than half the
+        // origin's storage quota. Best-effort — `estimate()` failing (or
+        // missing, e.g. the Node test shim) keeps the configured budget.
+        try {
+          const estimate = await (navigator as any).storage?.estimate?.();
+          if (estimate && typeof estimate.quota === 'number' && estimate.quota > 0) {
+            this.budgetBytes = Math.min(this.maxBytes, Math.floor(estimate.quota / 2));
+          }
+        } catch {
+          /* keep the configured budget */
+        }
         await this.loadIndex();
+        await this.sweepOrphans();
       } catch (err) {
         // Any failure (denied, sandboxed iframe, Safari quirk) -> permanent
         // no-op. We log once so it's diagnosable without spamming the console
@@ -272,17 +295,62 @@ export class OpfsTileCache {
   async flushIndex(): Promise<void> {
     if (!this.available || !this.dirHandle || !this.indexDirty) return;
     this.indexDirty = false;
-    try {
-      const handle = await this.dirHandle.getFileHandle(INDEX_FILE, {
+    const write = async (): Promise<void> => {
+      const handle = await this.dirHandle!.getFileHandle(INDEX_FILE, {
         create: true,
       });
       const writable = await (handle as any).createWritable();
       await writable.write(JSON.stringify(this.index));
       await writable.close();
+    };
+    try {
+      // Two tabs share one origin-scoped index.json; without a lock their
+      // createWritable() streams interleave and the last writer clobbers
+      // the other's accounting mid-write. Web Locks serialise the writers
+      // (keyed per cache directory). Environments without `navigator.locks`
+      // (Node shim, very old browsers) write unserialised as before.
+      const locks =
+        typeof navigator !== 'undefined' ? (navigator as any).locks : undefined;
+      if (locks && typeof locks.request === 'function') {
+        await locks.request(`stt-opfs:${this.directoryName}`, write);
+      } else {
+        await write();
+      }
     } catch (err) {
       // Failing to persist the index isn't fatal — the entries themselves are
       // on disk; we just lose LRU ordering on the next page load.
       console.warn('[stt] OPFS index flush failed:', err);
+    }
+  }
+
+  /**
+   * Remove `.bin` files not referenced by the index. A tab that crashed
+   * between writing a payload and flushing `index.json` — or one that lost
+   * the last-writer-wins index race to a concurrent tab — leaves orphan
+   * files that no eviction pass can ever reclaim (they're invisible to the
+   * byte accounting). Swept once per init; directory iteration is guarded
+   * for handles that don't implement it.
+   */
+  private async sweepOrphans(): Promise<void> {
+    const dir = this.dirHandle as
+      | (FileSystemDirectoryHandle & { keys?: () => AsyncIterableIterator<string> })
+      | undefined;
+    if (!dir || typeof dir.keys !== 'function') return;
+    try {
+      const orphans: string[] = [];
+      for await (const name of dir.keys()) {
+        if (!name.endsWith('.bin')) continue; // never touch index.json etc.
+        if (!this.index.entries[name]) orphans.push(name);
+      }
+      for (const name of orphans) {
+        try {
+          await dir.removeEntry(name);
+        } catch {
+          // Already gone (concurrent tab's sweep) — that's the goal anyway.
+        }
+      }
+    } catch {
+      // Best-effort: a sweep failure must never break cache init.
     }
   }
 
@@ -357,8 +425,8 @@ export class OpfsTileCache {
       this.index.totalBytes += payload.byteLength;
       this.markDirty();
 
-      if (this.index.totalBytes > this.maxBytes) {
-        await this.evict(this.maxBytes);
+      if (this.index.totalBytes > this.budgetBytes) {
+        await this.evict(this.budgetBytes);
       }
     } catch (err) {
       // Most likely cause: quota exceeded. Eviction inside the catch lets a
@@ -413,13 +481,14 @@ export class OpfsTileCache {
     await this.flushIndex();
   }
 
-  /** Stats for the perf HUD / probe consumers. */
+  /** Stats for the perf HUD / probe consumers. `maxBytes` is the EFFECTIVE
+   * (quota-clamped) budget, which is what eviction actually enforces. */
   getStats(): { available: boolean; bytes: number; entries: number; maxBytes: number } {
     return {
       available: this.available,
       bytes: this.index.totalBytes,
       entries: this.entryCount,
-      maxBytes: this.maxBytes,
+      maxBytes: this.budgetBytes,
     };
   }
 }

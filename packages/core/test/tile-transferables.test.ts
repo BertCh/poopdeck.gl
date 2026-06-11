@@ -105,18 +105,25 @@ describe('collectTransferables (worker tile-transfer helper)', () => {
     const f = tile.layers[0].features;
     f.startIndices = new Uint32Array([0, 2]);
     f.vertexTimestamps = new Float32Array([0, 1]);
+    f.vertexValues = new Float32Array([21.5, NaN]);
     f.globalFeatureIds = new Uint32Array([10, 11]);
     f.numericProps['speed'] = new Float32Array([2, 3]);
     f.categoricalProps['kind'] = {
       indices: new Uint16Array([0, 1]),
       categories: ['a', 'b'],
     };
+    tile.layers[0].arrowIpc = new Uint8Array([0xff, 0xff, 0xff, 0xff]);
     const transferables = collectTransferables(tile);
     expect(transferables).toContain(f.startIndices.buffer);
     expect(transferables).toContain(f.vertexTimestamps.buffer);
+    // Per-vertex scalar values are positions-sized; omitting them from the
+    // transfer list silently structured-clone-copies them per tile.
+    expect(transferables).toContain(f.vertexValues.buffer);
     expect(transferables).toContain(f.globalFeatureIds.buffer);
     expect(transferables).toContain(f.numericProps['speed'].buffer);
     expect(transferables).toContain(f.categoricalProps['kind'].indices.buffer);
+    // The raw per-layer IPC bytes travel zero-copy too (GeoArrow hand-off).
+    expect(transferables).toContain(tile.layers[0].arrowIpc!.buffer);
     // The category-string table is structured-cloned (not transferable).
     for (const t of transferables) {
       expect(Array.isArray(t)).toBe(false);

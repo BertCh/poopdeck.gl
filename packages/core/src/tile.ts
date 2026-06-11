@@ -8,9 +8,17 @@
  * A tile payload is the *layer frame* produced by the Rust builder:
  *
  * ```text
- * [u16 layerCount]
- *   repeated: [u16 nameLen][name utf8][u32 ipcLen][Arrow IPC stream]
+ * [u16 layerCount | ALIGNED_FRAME_FLAG]
+ *   repeated: [u16 nameLen][name utf8][u32 ipcLen][pad to 8][Arrow IPC stream]
  * ```
+ *
+ * The leading u16's top bit (0x8000) marks the *aligned* frame: zero padding
+ * after each `ipcLen` places every IPC stream at an 8-byte boundary relative
+ * to the payload start, which is what lets apache-arrow wrap the stream's
+ * buffers zero-copy (a misaligned stream silently copies every buffer). The
+ * pad length is never stored — it is derived as `(8 - pos % 8) % 8` from the
+ * position after `ipcLen`. Frames without the flag (all archives written
+ * before the flag existed) carry no padding and parse exactly as before.
  *
  * Each layer's Arrow IPC stream holds one RecordBatch whose `geometry` column
  * is GeoArrow-encoded (interleaved f64 coordinates). We extract the underlying
@@ -41,6 +49,9 @@ interface RawLayer {
   ipc: Uint8Array;
 }
 
+/** Top bit of the frame's leading u16: marks the 8-byte-aligned frame. */
+const ALIGNED_FRAME_FLAG = 0x8000;
+
 /** Parse the layer frame into its constituent Arrow IPC streams. */
 function parseLayerFrame(payload: Uint8Array): RawLayer[] {
   const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
@@ -67,12 +78,18 @@ function parseLayerFrame(payload: Uint8Array): RawLayer[] {
   if (payload.byteLength < 2) {
     throw new Error('STT tile payload too short for layer frame');
   }
-  const count = readU16();
+  const rawCount = readU16();
+  const aligned = (rawCount & ALIGNED_FRAME_FLAG) !== 0;
+  const count = rawCount & ~ALIGNED_FRAME_FLAG;
   const layers: RawLayer[] = [];
   for (let i = 0; i < count; i++) {
     const nameLen = readU16();
     const name = new TextDecoder().decode(readBytes(nameLen));
     const ipcLen = readU32();
+    // Aligned frames pad the IPC stream to an 8-byte boundary (relative to
+    // the payload start); the pad is derived, never stored. Legacy frames
+    // (flag unset) have no padding.
+    if (aligned) pos += (8 - (pos & 7)) & 7;
     const ipc = readBytes(ipcLen);
     layers.push({ name, ipc });
   }
@@ -297,6 +314,20 @@ function tableToBinaryFeatures(table: Table): BinaryFeatures {
   // --- per-vertex scalar values (e.g. SST) ---
   const vertexValues = extractVertexFloats(table.getChild('vertex_value') ?? null);
 
+  // --- per-vertex × per-bucket value matrix (static-geometry overview) ---
+  // Each feature's list is its flat vertex-major matrix (vertex_count *
+  // numBuckets). extractVertexFloats concatenates features in the same order
+  // as `positions`, so the result is globally vertex-major:
+  // matrix[globalVertex * numBuckets + bucket]. The renderer selects the
+  // active bucket column from the playhead. `num_buckets` rides schema
+  // metadata; absent → 0 (no matrix on this tile).
+  const vertexValueMatrix = extractVertexFloats(
+    table.getChild('vertex_value_matrix') ?? null,
+  );
+  const vertexValueBuckets = Number(
+    table.schema.metadata.get('stt:vertex_value_buckets') ?? 0,
+  );
+
   // --- pre-baked triangle indices (MLT-style polygon meshes) ---
   // The Rust writer stores feature-LOCAL indices so we shift each feature's
   // run by its `startIndices[i]` to produce GLOBAL indices the renderer can
@@ -344,6 +375,7 @@ function tableToBinaryFeatures(table: Table): BinaryFeatures {
     'geometry',
     'vertex_time',
     'vertex_value',
+    'vertex_value_matrix',
     'triangles',
   ]);
   for (const field of table.schema.fields) {
@@ -426,6 +458,8 @@ function tableToBinaryFeatures(table: Table): BinaryFeatures {
     timeOffset,
     vertexTimestamps,
     vertexValues,
+    vertexValueMatrix,
+    vertexValueBuckets,
     triangles,
     triangleOffsets,
     numericProps,
@@ -464,9 +498,61 @@ export function decodeTile(
       // Hold the underlying Arrow Table so `toGeoArrowTable()` is a
       // zero-copy hand-off into `@geoarrow/deck.gl-layers` / Lonboard.
       arrowTable: table,
+      // Also hold the raw IPC bytes: the worker decode path strips the
+      // non-cloneable Table before postMessage, and these bytes are what
+      // `toGeoArrowTable()` rehydrates from on the main thread.
+      arrowIpc: raw.ipc,
     };
   });
   return { id, timeRange, layers };
+}
+
+/**
+ * Decode ONE feature's property columns into a plain JS object — the
+ * event-driven counterpart to the columnar {@link BinaryFeatures} layout.
+ * The render path never materializes per-feature objects (that's the whole
+ * point of binary tiles); this exists for the rare, user-initiated reads:
+ * deck.gl picking (`info.object`), tooltips, debugging.
+ *
+ * The object carries every numeric and categorical column at `index`
+ * (categorical nulls — the `0xffff` sentinel — decode to `null`), plus the
+ * reserved columns reconstructed from their GPU encodings:
+ *
+ * - `id` — the feature id; the full 64-bit value (bigint) when the archive
+ *   needed one (e.g. H3 cell indices at res ≥ 7), else the 32-bit number.
+ * - `start_time` / `end_time` — absolute Unix ms (`timeOffset + relative`).
+ *   The relative times are stored as f32, so on datasets spanning years the
+ *   reconstruction is quantized to tens of ms — fine for display.
+ *
+ * Reserved column names can never collide with dataset properties: the
+ * decoder excludes them from `numericProps`/`categoricalProps`.
+ *
+ * Returns `null` for an out-of-range index (e.g. a stale picking buffer).
+ */
+export function getFeatureProperties(
+  features: BinaryFeatures,
+  index: number,
+): Record<string, unknown> | null {
+  if (!Number.isInteger(index) || index < 0 || index >= features.featureCount) {
+    return null;
+  }
+  const props: Record<string, unknown> = {
+    id: features.featureIds64
+      ? features.featureIds64[index]
+      : features.featureIds[index],
+    start_time: features.timeOffset + features.startTimes[index],
+    end_time: features.timeOffset + features.endTimes[index],
+  };
+  for (const [name, values] of Object.entries(features.numericProps)) {
+    props[name] = values[index];
+  }
+  for (const [name, { indices, categories }] of Object.entries(
+    features.categoricalProps,
+  )) {
+    const ci = indices[index];
+    props[name] = ci === 0xffff ? null : categories[ci];
+  }
+  return props;
 }
 
 /**
@@ -489,7 +575,14 @@ export function decodeTile(
  * @see https://geoarrow.org/format.html
  */
 export function toGeoArrowTable(layer: Layer): Table {
-  const table = layer.arrowTable;
+  let table = layer.arrowTable;
+  if (!table && layer.arrowIpc) {
+    // Worker-decoded tiles arrive without the (non-cloneable) Table but
+    // with the layer's raw IPC bytes; rehydrate on first use and memoize
+    // so repeat calls don't re-parse.
+    table = tableFromIPC(layer.arrowIpc);
+    layer.arrowTable = table;
+  }
   if (!table) {
     throw new Error(
       `STT layer '${layer.name}' has no backing Arrow Table — toGeoArrowTable() ` +

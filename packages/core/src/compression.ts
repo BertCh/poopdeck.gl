@@ -71,7 +71,7 @@ export async function decompress(
         try {
           return await gunzipNative(data);
         } catch {
-          // Fall back to pako if the native path fails for any reason.
+          // Fall back to fflate if the native path fails for any reason.
           return gunzipSync(data);
         }
       }
@@ -87,7 +87,7 @@ export async function decompress(
 }
 
 /**
- * Decompress data synchronously. Uses pako for gzip, fzstd for zstd.
+ * Decompress data synchronously. Uses fflate for gzip, fzstd for zstd.
  * Only suitable for the synchronous code paths (e.g. `parseSync`).
  */
 export function decompressSync(

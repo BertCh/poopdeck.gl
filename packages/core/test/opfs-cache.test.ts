@@ -13,7 +13,7 @@
  * production code and the shim together.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { OpfsTileCache, isOpfsAvailable } from '../src/opfs-cache';
 
 /** In-memory file: a Uint8Array plus a `getFile()`-shaped accessor. */
@@ -117,6 +117,13 @@ class MemDirectoryHandle {
       throw err;
     }
     this._files.delete(name);
+  }
+
+  /** Directory iteration (file names; subset of the real API the sweep uses). */
+  async *keys(): AsyncIterableIterator<string> {
+    for (const name of Array.from(this._files.keys())) {
+      yield name;
+    }
   }
 }
 
@@ -260,5 +267,64 @@ describe('OpfsTileCache', () => {
     expect(stats.entries).toBe(2);
     expect(stats.bytes).toBe(150);
     expect(stats.maxBytes).toBe(1024);
+  });
+
+  it('sweeps orphan .bin files not referenced by the index on init', async () => {
+    const root = installShim();
+    // A first cache writes one legitimate entry and persists its index.
+    const a = new OpfsTileCache();
+    await a.set('real', new Uint8Array([1, 2, 3]));
+    await a.flushIndex();
+
+    // Simulate a crashed tab / lost index race: a payload file exists on
+    // disk but no index entry references it. Eviction can never reclaim it.
+    const dir = await root.getDirectoryHandle('stt-cache');
+    dir._files.set('deadbeef.bin', new Uint8Array(64));
+
+    // A fresh cache's init must sweep the orphan and keep everything else.
+    const b = new OpfsTileCache();
+    expect(await b.get('real')).not.toBeNull(); // triggers init + sweep
+    expect(dir._files.has('deadbeef.bin')).toBe(false);
+    expect(dir._files.has('index.json')).toBe(true);
+    expect(Array.from(dir._files.keys()).some((n) => n.endsWith('.bin'))).toBe(true);
+  });
+
+  it('serialises index flushes through navigator.locks when available', async () => {
+    installShim();
+    const order: string[] = [];
+    const request = vi.fn(async (_name: string, cb: () => Promise<void>) => {
+      order.push('lock');
+      await cb();
+      order.push('unlock');
+    });
+    (globalThis.navigator as any).locks = { request };
+
+    const cache = new OpfsTileCache();
+    await cache.set('k', new Uint8Array([7]));
+    await cache.flushIndex();
+    expect(request).toHaveBeenCalledWith('stt-opfs:stt-cache', expect.any(Function));
+    expect(order).toEqual(['lock', 'unlock']);
+
+    // The write went through the lock and still persisted: a fresh cache
+    // over the same root rehydrates the entry.
+    const b = new OpfsTileCache();
+    expect(await b.get('k')).not.toBeNull();
+  });
+
+  it('clamps the byte budget to half the storage quota', async () => {
+    installShim();
+    (globalThis.navigator as any).storage.estimate = async () => ({
+      quota: 100,
+      usage: 0,
+    });
+    const cache = new OpfsTileCache(); // default 512 MB budget → clamped to 50
+    const a = new Uint8Array(40).fill(1);
+    const b = new Uint8Array(40).fill(2);
+    await cache.set('A', a);
+    await cache.set('B', b); // 80 bytes > 50 → LRU eviction kicks in
+    expect(cache.getStats().maxBytes).toBe(50);
+    expect(await cache.get('A')).toBeNull();
+    expect(await cache.get('B')).not.toBeNull();
+    expect(cache.getBytes()).toBeLessThanOrEqual(50);
   });
 });

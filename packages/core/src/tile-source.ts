@@ -14,7 +14,7 @@
  *     UIs; not appropriate for animation (use `STTArchive` directly).
  *
  * The shape matches `TileSource` from `@loaders.gl/loader-utils` (v4.x)
- * structurally without forcing a hard dep — same approach as `SttLoader`.
+ * structurally without forcing a hard dep on any `@loaders.gl/*` package.
  */
 
 import { STTArchive } from './archive';

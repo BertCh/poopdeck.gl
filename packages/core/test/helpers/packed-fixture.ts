@@ -314,6 +314,15 @@ export function packedFetch(
     const start = Number(m[1]);
     const end = Math.min(Number(m[2]), bytes.length - 1);
     const slice = bytes.subarray(start, end + 1);
-    return { ok: true, status: 206, statusText: 'Partial Content', arrayBuffer: async () => bufferToArrayBuffer(slice) };
+    // Carry a real Content-Range so the reader's 206 validation is exercised
+    // (it tolerates header-less shims, but this shim should act like a server).
+    const contentRange = `bytes ${start}-${end}/${bytes.length}`;
+    return {
+      ok: true,
+      status: 206,
+      statusText: 'Partial Content',
+      headers: { get: (name: string) => (name.toLowerCase() === 'content-range' ? contentRange : null) },
+      arrayBuffer: async () => bufferToArrayBuffer(slice),
+    };
   }) as unknown as typeof fetch;
 }

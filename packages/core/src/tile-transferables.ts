@@ -41,6 +41,11 @@ export function collectTransferables(tile: Tile): Transferable[] {
   };
   if (!tile || !Array.isArray(tile.layers)) return [];
   for (const layer of tile.layers) {
+    // Raw per-layer Arrow IPC bytes (the GeoArrow hand-off; rehydrated
+    // lazily by `toGeoArrowTable()` on the main thread). Usually a view
+    // into the decoded payload buffer, which the dedup set collapses with
+    // any column views sharing it.
+    addBuffer(layer?.arrowIpc);
     const f = layer?.features;
     if (!f) continue;
     addBuffer(f.positions);
@@ -49,6 +54,12 @@ export function collectTransferables(tile: Tile): Transferable[] {
     addBuffer(f.endTimes);
     addBuffer(f.startIndices);
     addBuffer(f.vertexTimestamps);
+    // Per-vertex scalar values (e.g. drifter SST) align 1:1 with positions —
+    // omitting them structured-clone-copies a positions-sized buffer per tile.
+    addBuffer(f.vertexValues);
+    // Per-vertex × per-bucket value matrix (flow corridors) — numBuckets× the
+    // size of positions, so the most important buffer to transfer, not clone.
+    addBuffer(f.vertexValueMatrix);
     addBuffer(f.globalFeatureIds);
     // Pre-tessellated polygon meshes (`--pre-tessellate`) and H3 summary
     // tiles carry their largest buffers here: `triangles` (3 indices per

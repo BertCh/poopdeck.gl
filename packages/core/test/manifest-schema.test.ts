@@ -102,6 +102,10 @@ describe('packed-format manifest contract', () => {
     expect(schema.properties.format.const).toBe('stt-packed');
     expect(schema.properties.formatVersion.const).toBe(1);
     expect(schema.properties.directory.properties.directoryVersion.const).toBe(5);
+    // directory.encoding is additive: declared (so its vocabulary is pinned)
+    // but never required (pre-encoding manifests omit it).
+    expect(schema.properties.directory.properties.encoding.enum).toEqual(['zstd']);
+    expect(schema.properties.directory.required).not.toContain('encoding');
   });
 
   it('the Rust-produced golden manifest conforms to the schema', () => {
@@ -115,6 +119,8 @@ describe('packed-format manifest contract', () => {
     expect(m.format).toBe('stt-packed');
     expect(m.formatVersion).toBe(1);
     expect(m.directory.directoryVersion).toBe(5);
+    // The Rust writer compresses the directory at rest and declares it.
+    expect(m.directory.encoding).toBe('zstd');
     expect(m.packs.length).toBeGreaterThan(0);
   });
 
@@ -135,13 +141,36 @@ describe('packed-format manifest contract', () => {
     };
     expect(validate(badPackKey, schema).some((e) => /does not match/.test(e))).toBe(true);
 
-    const extraProp = { ...golden, surprise: true };
-    expect(validate(extraProp, schema).some((e) => /unexpected property/.test(e))).toBe(true);
-
     const badDirVersion = {
       ...golden,
       directory: { ...golden.directory, directoryVersion: 4 },
     };
     expect(validate(badDirVersion, schema).length).toBeGreaterThan(0);
+
+    const badEncoding = {
+      ...golden,
+      directory: { ...golden.directory, encoding: 'br' },
+    };
+    expect(validate(badEncoding, schema).some((e) => /enum/.test(e))).toBe(true);
+  });
+
+  it('tolerates unknown fields at every envelope level (additive evolution)', () => {
+    // Readers must ignore fields they do not recognize, so the schema must
+    // not reject them — otherwise external validators built from it would
+    // refuse manifests from any newer writer.
+    const extended = {
+      ...golden,
+      generation: 7,
+      directory: { ...golden.directory, sectionOffsets: [0, 64] },
+      packs: golden.packs.map((p: Record<string, unknown>) => ({ ...p, tier: 'raw' })),
+    };
+    expect(validate(extended, schema)).toEqual([]);
+  });
+
+  it('a pre-encoding directory pointer (no `encoding` key) still validates', () => {
+    // The shape of every deployed manifest: raw directory bytes, no field.
+    const legacyDir = { ...golden.directory };
+    delete (legacyDir as Record<string, unknown>).encoding;
+    expect(validate({ ...golden, directory: legacyDir }, schema)).toEqual([]);
   });
 });
