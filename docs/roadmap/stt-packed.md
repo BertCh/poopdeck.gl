@@ -51,12 +51,18 @@ deleted"). The v4 **read** path stays for transcoding old archives.
 (not global) view — e.g. external-sort the directory keys, or a two-pass
 build (index pass to decide ordering, payload pass to write packs).
 
-## 3. Paged directory with temporal pruning (COPC-informed)
+## 3. Paged directory with temporal pruning (COPC-informed) — ✅ SHIPPED 2026-06-11
 
-> **Design resolved 2026-06-11 → see the focused-effort implementation plan
-> [`paged-directory.md`](./paged-directory.md)** (wire format, reader/writer
-> algorithms, backward-compat/rollout, validation, sequenced tasks). The sketch
-> below is the original feasibility note that plan supersedes.
+> **SHIPPED.** Implemented end-to-end (Rust codec + writer, TS reader,
+> manifest contract, `stt-validate`, the `repack-directory` migration tool) and
+> specified in [`stt-packed-format.md` §4.1](../spec/stt-packed-format.md). See
+> the implementation plan + decisions in
+> [`paged-directory.md`](./paged-directory.md). Geo-bbox descriptor frozen by the
+> A/B sim; leaf codec is unchanged v5; the TS public surface (and therefore the
+> tileset + deck.gl/maplibre layers) is untouched. **Open: fleet re-transcode +
+> R2 re-sync** (held per the dev-settling policy — flip on with
+> `repack-directory <manifest> <out> 4096`). The sketch below is the original
+> feasibility note this supersedes.
 
 **Today:** the `.sttd` directory is a single whole-load blob on the cold-start
 critical path (spec §6: cold load = manifest + **entire directory** + pack

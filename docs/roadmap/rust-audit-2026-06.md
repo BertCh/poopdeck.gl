@@ -115,11 +115,14 @@ precision at maxzoom, quantized only at overview zooms. Needs a fresh measuremen
       this round delivered the `-zg` estimate + honest multi-zoom prediction, not the closed loop.
 
 ### Wave 2 — Format frontier (COPC / GeoParquet-1.1 steal; already de-risked by our sims)
-- [ ] Bounds on directory page-pointers + `[t_min, t_max]` per page (paged .sttd). Our sim:
-      VIABLE, +7–19% at-rest, queries read 0.3–26% of a whole-load. Directly attacks the
-      180× over-fetch + cover_t_min issues from the demo-tile audit.
-      **Design resolved → focused-effort plan: [`paged-directory.md`](./paged-directory.md)**
-      (wire format, reader/writer algorithms, rollout, validation, sequenced tasks).
+- [x] Bounds on directory page-pointers + `[t_min, t_max]` per page (paged .sttd) —
+      **SHIPPED 2026-06-11.** Geo-bbox + zoom-range + temporal descriptor (frozen over
+      hilbert-range by an A/B sim), single-level root + leaf pages reusing the v5 leaf codec,
+      `directory.layout:"paged"` (directoryVersion stays 5), TS reader fetches root + only
+      visited leaves (public surface unchanged → tileset/deck untouched), `stt-validate`
+      bounds-cover + monotonicity checks, `repack-directory` cheap migration (packs unchanged).
+      Eval: earthquakes-v2 dir 3.38 MB → 2.41 MB, root 524 B. Spec §4.1; plan
+      [`paged-directory.md`](./paged-directory.md). Open: fleet re-transcode + R2 re-sync.
 - [ ] Per-feature bbox covering column (GeoArrow geoarrow.box) — GeoParquet-1.1 pruning lever.
 - [ ] Re-run coordinate-encoding measurement WITH quantization (quantize-to-grid → delta →
       FastPFOR), zoom-aware (lossless at maxzoom). The one experiment that could overturn

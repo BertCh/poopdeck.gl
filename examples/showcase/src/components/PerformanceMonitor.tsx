@@ -10,21 +10,8 @@ interface PerformanceStats {
   prefetchQueueLength: number;
   cacheHits: number;
   cacheMisses: number;
-  cacheEvictions: number;
   cacheBytesMB: number;
   archiveCacheBytesMB: number;
-  archiveHitRate: number;
-  /** Bytes parked under OPFS — the persistent decompressed-tile cache. */
-  opfsCacheBytesMB: number;
-  /** Number of OPFS entries currently on disk. */
-  opfsEntries: number;
-  /** Warm-hit rate against OPFS, post-archive-open. */
-  opfsHitRate: number;
-  /**
-   * Whether the runtime actually exposes OPFS. Drives the "n/a" label so
-   * users on browsers without OPFS don't see misleading zeros.
-   */
-  opfsAvailable: boolean;
   fps: number;
   frameTime: number;
   estimatedMemoryMB: number;
@@ -77,19 +64,6 @@ interface TilesetSnapshot {
 
 interface ArchiveSnapshot {
   bytes?: number;
-  hitRate?: number;
-  /**
-   * `STTArchive.getCacheStats().opfs` — undefined when OPFS is disabled or
-   * unavailable. Populated by `archive.stats` from the deck.gl layer.
-   */
-  opfs?: {
-    available?: boolean;
-    bytes?: number;
-    entries?: number;
-    hits?: number;
-    misses?: number;
-    hitRate?: number;
-  };
 }
 
 const PerformanceMonitor: React.FC<PerformanceMonitorProps> = ({
@@ -106,14 +80,8 @@ const PerformanceMonitor: React.FC<PerformanceMonitorProps> = ({
     prefetchQueueLength: 0,
     cacheHits: 0,
     cacheMisses: 0,
-    cacheEvictions: 0,
     cacheBytesMB: 0,
     archiveCacheBytesMB: 0,
-    archiveHitRate: 0,
-    opfsCacheBytesMB: 0,
-    opfsEntries: 0,
-    opfsHitRate: 0,
-    opfsAvailable: false,
     fps: 60,
     frameTime: 16,
     estimatedMemoryMB: 0,
@@ -145,7 +113,6 @@ const PerformanceMonitor: React.FC<PerformanceMonitorProps> = ({
           getSnapshot<ArchiveSnapshot>('archive.stats') ?? {};
         const estimatedMemoryMB = ((performance as any).memory?.usedJSHeapSize || 0) / (1024 * 1024);
 
-        const opfs = archiveStats.opfs;
         setStats({
           tileCount: tilesetStats.tileCount ?? 0,
           visibleTiles: tilesetStats.visibleTiles ?? 0,
@@ -154,14 +121,8 @@ const PerformanceMonitor: React.FC<PerformanceMonitorProps> = ({
           prefetchQueueLength: tilesetStats.prefetchQueueLength ?? 0,
           cacheHits: (tilesetStats as any).hits ?? 0,
           cacheMisses: (tilesetStats as any).misses ?? 0,
-          cacheEvictions: (tilesetStats as any).evictions ?? 0,
           cacheBytesMB: Math.round(((tilesetStats.cacheBytes ?? 0) / (1024 * 1024)) * 10) / 10,
           archiveCacheBytesMB: Math.round(((archiveStats.bytes ?? 0) / (1024 * 1024)) * 10) / 10,
-          archiveHitRate: Math.round((archiveStats.hitRate ?? 0) * 100),
-          opfsCacheBytesMB: Math.round(((opfs?.bytes ?? 0) / (1024 * 1024)) * 10) / 10,
-          opfsEntries: opfs?.entries ?? 0,
-          opfsHitRate: Math.round((opfs?.hitRate ?? 0) * 100),
-          opfsAvailable: opfs?.available ?? false,
           fps,
           frameTime: Math.round(frameTime * 10) / 10,
           estimatedMemoryMB: Math.round(estimatedMemoryMB),
@@ -264,39 +225,6 @@ const PerformanceMonitor: React.FC<PerformanceMonitorProps> = ({
           <div className="flex justify-between">
             <span>Hit Rate:</span>
             <span style={{ color: hitRate >= 80 ? '#0F9668' : hitRate >= 50 ? '#FFBD2E' : '#F9042C' }}>{hitRate}%</span>
-          </div>
-          <div className="flex justify-between">
-            <span>Byte Hit:</span>
-            <span style={{ color: stats.archiveHitRate >= 80 ? '#0F9668' : stats.archiveHitRate >= 50 ? '#FFBD2E' : '#F9042C' }}>{stats.archiveHitRate}%</span>
-          </div>
-          <div style={{ height: 1, background: '#3A414C', margin: '4px 0' }} />
-          <div className="flex justify-between">
-            <span>OPFS MB:</span>
-            <span style={{ color: stats.opfsAvailable ? '#A0A7B4' : '#6A7485' }}>
-              {stats.opfsAvailable ? stats.opfsCacheBytesMB : 'n/a'}
-            </span>
-          </div>
-          <div className="flex justify-between">
-            <span>OPFS Tiles:</span>
-            <span style={{ color: stats.opfsAvailable ? '#A0A7B4' : '#6A7485' }}>
-              {stats.opfsAvailable ? stats.opfsEntries : 'n/a'}
-            </span>
-          </div>
-          <div className="flex justify-between">
-            <span>OPFS Hit:</span>
-            <span
-              style={{
-                color: !stats.opfsAvailable
-                  ? '#6A7485'
-                  : stats.opfsHitRate >= 80
-                    ? '#0F9668'
-                    : stats.opfsHitRate >= 50
-                      ? '#FFBD2E'
-                      : '#F9042C',
-              }}
-            >
-              {stats.opfsAvailable ? `${stats.opfsHitRate}%` : 'n/a'}
-            </span>
           </div>
         </div>
       )}

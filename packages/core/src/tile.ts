@@ -129,36 +129,87 @@ function geometryKind(table: Table): GeometryType {
   return GeometryType.Point;
 }
 
+/**
+ * Field-metadata key flagging a tile whose `xy` coordinate leaf is fixed-point
+ * `i32` grid indices, not Float64 lon/lat. Mirrors `arrow_tile.rs`'s
+ * `STT_QUANT_META_KEY`; its value is the reconstruction affine.
+ */
+const STT_QUANT_META_KEY = 'stt:quant';
+
+/** Coordinate-quantization affine (`lon = x0 + qx*sx`, `lat = y0 + qy*sy`). */
+interface QuantAffine {
+  x0: number;
+  y0: number;
+  sx: number;
+  sy: number;
+}
+
+/** Read the quantization affine from the geometry field, or undefined (Float64). */
+function readQuantAffine(table: Table): QuantAffine | undefined {
+  const geomField = table.schema.fields.find((f) => f.name === 'geometry');
+  const raw = geomField?.metadata.get(STT_QUANT_META_KEY);
+  if (!raw) return undefined;
+  try {
+    const o = JSON.parse(raw);
+    return { x0: o.x0, y0: o.y0, sx: o.sx, sy: o.sy };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Read an interleaved `[lon,lat,...]` coordinate run `[start, end)` out of a
+ * geometry leaf. Without an affine the leaf is already a `Float64Array` and we
+ * return a zero-copy subarray; with one it's an `i32` grid-index array
+ * (`Int32Array`) that we dequantize into a fresh `Float64Array` — even indices
+ * are longitude, odd are latitude (the run always starts on a vertex boundary).
+ */
+function readCoordRun(
+  leaf: ArrayLike<number>,
+  start: number,
+  end: number,
+  affine?: QuantAffine,
+): Float64Array {
+  if (!affine) return (leaf as Float64Array).subarray(start, end);
+  const out = new Float64Array(end - start);
+  for (let i = start, j = 0; i < end; i += 2, j += 2) {
+    out[j] = affine.x0 + leaf[i] * affine.sx;
+    out[j + 1] = affine.y0 + leaf[i + 1] * affine.sy;
+  }
+  return out;
+}
+
 /** Extract interleaved positions + per-feature start indices from geometry. */
 function extractGeometry(
   geomVec: Vector,
-  kind: GeometryType
+  kind: GeometryType,
+  affine?: QuantAffine,
 ): { positions: Float64Array; startIndices?: Uint32Array } {
   const geom = chunk(geomVec);
 
   if (kind === GeometryType.Point) {
-    // FixedSizeList<Float64, 2>: the child buffer is the interleaved coords.
-    const coords: Float64Array = geom.children[0].values;
+    // FixedSizeList<Float64|Int32, 2>: the child buffer is interleaved coords.
+    const coords: ArrayLike<number> = geom.children[0].values;
     const start = geom.offset * 2;
-    return { positions: coords.subarray(start, start + geom.length * 2) };
+    return { positions: readCoordRun(coords, start, start + geom.length * 2, affine) };
   }
 
   if (kind === GeometryType.LineString) {
-    // LineString: List<FixedSizeList<Float64,2>>.
+    // LineString: List<FixedSizeList<Float64|Int32,2>>.
     const featureOffsets: Int32Array = geom.valueOffsets;
-    const coordData = geom.children[0]; // FixedSizeList<Float64,2>
-    const coords: Float64Array = coordData.children[0].values;
+    const coordData = geom.children[0];
+    const coords: ArrayLike<number> = coordData.children[0].values;
     const n = geom.length;
     const base = featureOffsets[geom.offset];
     const startIndices = new Uint32Array(n + 1);
     for (let i = 0; i <= n; i++) {
       startIndices[i] = featureOffsets[geom.offset + i] - base;
     }
-    const positions = coords.subarray(base * 2, featureOffsets[geom.offset + n] * 2);
+    const positions = readCoordRun(coords, base * 2, featureOffsets[geom.offset + n] * 2, affine);
     return { positions, startIndices };
   }
 
-  // Polygon: List<List<FixedSizeList<Float64,2>>>. Two levels of offsets:
+  // Polygon: List<List<FixedSizeList<Float64|Int32,2>>>. Two levels of offsets:
   //   featureOffsets : feature -> ring index
   //   ringOffsets    : ring    -> vertex index
   // We collapse to per-feature VERTEX offsets so the renderer sees one flat
@@ -166,10 +217,10 @@ function extractGeometry(
   // BinaryFeatures — every existing STT polygon path treats `startIndices`
   // as feature-level vertex offsets.
   const featureOffsets: Int32Array = geom.valueOffsets;
-  const ringList = geom.children[0]; // List<FixedSizeList<Float64,2>>
+  const ringList = geom.children[0]; // List<FixedSizeList<Float64|Int32,2>>
   const ringOffsets: Int32Array = ringList.valueOffsets;
-  const coordData = ringList.children[0]; // FixedSizeList<Float64,2>
-  const coords: Float64Array = coordData.children[0].values;
+  const coordData = ringList.children[0];
+  const coords: ArrayLike<number> = coordData.children[0].values;
 
   const n = geom.length;
   const firstRing = featureOffsets[geom.offset];
@@ -181,7 +232,7 @@ function extractGeometry(
     const ringIdx = featureOffsets[geom.offset + i];
     startIndices[i] = ringOffsets[ringIdx] - startVertex;
   }
-  const positions = coords.subarray(startVertex * 2, endVertex * 2);
+  const positions = readCoordRun(coords, startVertex * 2, endVertex * 2, affine);
   return { positions, startIndices };
 }
 
@@ -295,7 +346,10 @@ function tableToBinaryFeatures(table: Table): BinaryFeatures {
   // --- geometry ---
   const geomVec = table.getChild('geometry');
   if (!geomVec) throw new Error('STT tile layer is missing its geometry column');
-  const { positions, startIndices } = extractGeometry(geomVec, kind);
+  // Quantized tiles store i32 grid indices + an affine; reconstruct Float64
+  // here so every downstream layer still sees standard lon/lat positions.
+  const quantAffine = readQuantAffine(table);
+  const { positions, startIndices } = extractGeometry(geomVec, kind, quantAffine);
 
   // --- per-vertex times ---
   // v3 layers carry the origin/step pair as schema metadata; v2 layers

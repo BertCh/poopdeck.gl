@@ -536,6 +536,18 @@ export interface ArchiveOptions {
    * to disable the watchdog entirely.
    */
   transferTimeoutMs?: number;
+  /**
+   * Paged-directory whole-load cutoff (bytes). A paged `.sttd` whose at-rest
+   * size is ≤ this is fetched in one GET and fully decoded (no extra request,
+   * no incremental bookkeeping) — small datasets behave like a single
+   * whole-load directory. Above it, only the root page is fetched up front and
+   * leaf pages stream in on demand as the viewport/time-window moves.
+   * No effect on single (non-paged) directories.
+   *
+   * **Defaults to 262144 (256 KiB).** Pass `0` to always page (stream every
+   * leaf on demand, even for tiny directories).
+   */
+  directoryPageThresholdBytes?: number;
 }
 
 /** Options for tile requests */

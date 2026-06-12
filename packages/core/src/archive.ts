@@ -27,7 +27,7 @@
  * zstd-compressed), so the fzstd browser path can decode every tile.
  */
 
-import { decodeDirectory } from './directory';
+import { decodeDirectory, decodePagedRoot, type PageDescriptor } from './directory';
 import {
   type ArchiveMetadata,
   type ArchiveIndex,
@@ -53,6 +53,17 @@ import { ThroughputEstimator, type ThroughputEstimate } from './throughput';
 
 /** `format` discriminator written into every packed manifest. */
 const PACKED_FORMAT = 'stt-packed';
+
+/** `directory.layout` value for the paged container. */
+const DIRECTORY_LAYOUT_PAGED = 'paged';
+/**
+ * A paged directory whose whole at-rest size is ≤ this is fetched in one GET and
+ * fully decoded (no paging benefit, but no extra request + no incremental
+ * bookkeeping) — small/wildfires-shaped datasets behave exactly as a single
+ * whole-load directory. Above it, only the root page is fetched up front and
+ * leaves stream in on demand. ~256 KiB ≈ a few thousand entries.
+ */
+const SMALL_DIR_THRESHOLD = 256 * 1024;
 
 const DEFAULT_MAX_CACHE_TILES = 500;
 const MOBILE_MAX_CACHE_TILES = 100;
@@ -250,14 +261,35 @@ export interface ManifestDirectoryRef {
    * validated against it before any decode.
    */
   length: number;
-  /** Directory codec version (5 for the packed format). */
+  /**
+   * Directory (leaf) codec version (5 for the packed format). Unchanged by the
+   * paged container — `layout`, not this, discriminates the container shape.
+   */
   directoryVersion: number;
   /**
-   * At-rest encoding of the directory object. `'zstd'` = the object is one
-   * zstd frame wrapping the codec bytes; absent (every manifest written
-   * before the field existed) = raw codec bytes.
+   * At-rest encoding of the directory object. `'zstd'` = a zstd frame wrapping
+   * the codec bytes (for a paged directory: EACH page — root + every leaf — is
+   * its own zstd frame); absent (every manifest written before the field
+   * existed) = raw codec bytes.
    */
   encoding?: string;
+  /**
+   * Container layout. `'paged'` = a root page + leaf pages (the reader fetches
+   * only the leaves a query touches); absent or `'single'` = the whole-load
+   * object. The `rootLength`/`pageCount`/`pageEntries` fields below are present
+   * iff `'paged'`.
+   */
+  layout?: string;
+  /**
+   * Paged only: at-rest byte length of the root page (a prefix of the object).
+   * The reader range-GETs `bytes=0-(rootLength-1)` for the root, then leaf
+   * ranges; leaf offsets are relative (absolute = `rootLength + rel_offset`).
+   */
+  rootLength?: number;
+  /** Paged only: number of leaf pages (informational / validation). */
+  pageCount?: number;
+  /** Paged only: nominal entries-per-leaf-page used at build (informational). */
+  pageEntries?: number;
 }
 
 /**
@@ -425,6 +457,31 @@ export class STTArchive {
   /** "z/x/y/t" -> exact entry. */
   private tileEntryByKey = new Map<string, TileEntry>();
 
+  // --- Paged directory (Wave 2) -------------------------------------------
+  /**
+   * True when the manifest's `directory.layout === "paged"` AND the directory
+   * is large enough to actually page (above {@link SMALL_DIR_THRESHOLD}). When
+   * paged, `tileEntryIndex`/`tileEntryByKey` are **incrementally populated** —
+   * only leaves whose pages have been fetched are resident — and queries call
+   * {@link ensurePagesForBounds}/{@link ensurePagesForTiles} first. A single
+   * (or small-paged) directory loads the whole entry set up front as before.
+   */
+  private paged = false;
+  /** The root page's leaf descriptors (paged mode only). */
+  private pageTable?: PageDescriptor[];
+  /** Indices into {@link pageTable} whose leaves are resident in the maps. */
+  private residentPages = new Set<number>();
+  /** Promise guards so concurrent queries share one in-flight page fetch. */
+  private pageFetchPromises = new Map<number, Promise<void>>();
+  /** Resolved URL of the `.sttd` directory object (paged range fetches). */
+  private directoryUrl?: string;
+  /** `directory.rootLength` (paged): leaf offsets are relative to this. */
+  private rootLength = 0;
+  /** Whether the directory object's pages are zstd-framed (`encoding === "zstd"`). */
+  private directoryZstd = false;
+  /** Paged-directory whole-load cutoff (see options); below it, fetch the lot. */
+  private directoryPageThresholdBytes: number = SMALL_DIR_THRESHOLD;
+
   private cacheStats = { hits: 0, misses: 0, evictions: 0 };
   /**
    * OPFS hit/miss counters. Tracked separately from the in-memory byte
@@ -490,6 +547,12 @@ export class STTArchive {
       }
       if (typeof options.transferTimeoutMs === 'number' && options.transferTimeoutMs >= 0) {
         this.transferTimeoutMs = options.transferTimeoutMs;
+      }
+      if (
+        typeof options.directoryPageThresholdBytes === 'number' &&
+        options.directoryPageThresholdBytes >= 0
+      ) {
+        this.directoryPageThresholdBytes = options.directoryPageThresholdBytes;
       }
       // OPFS defaults to OFF. The cache's warm-reload win only materializes
       // when the archive fits in `opfsCacheMaxBytes` AND users revisit the
@@ -677,6 +740,24 @@ export class STTArchive {
         `STT archive: tile references pack ${packIndex} but only ${manifest.packs.length} packs exist`,
       );
     }
+    return this.fetchObjectRange(this.resolveKey(pack.key), start, end, signal, fetchPriority);
+  }
+
+  /**
+   * Fetch a byte range from an arbitrary object URL (a pack or the `.sttd`
+   * directory), validating that the server honoured it. A 200 (Range ignored)
+   * would silently corrupt every offset-based read, so it's rejected — as is a
+   * 206 whose `Content-Range` or body length disagrees with the request. The
+   * transfer runs under the stall timeout. This is the shared primitive behind
+   * both per-pack tile reads and paged-directory leaf reads.
+   */
+  private async fetchObjectRange(
+    url: string,
+    start: number,
+    end: number,
+    signal?: AbortSignal,
+    fetchPriority?: 'high' | 'low' | 'auto',
+  ): Promise<ArrayBuffer> {
     const { signal: transferSignal, cleanup } = withTransferTimeout(
       signal,
       this.transferTimeoutMs,
@@ -688,16 +769,13 @@ export class STTArchive {
       };
       // `RequestInit.priority` is a hint; browsers without it ignore the field.
       if (fetchPriority) (init as RequestInit & { priority?: string }).priority = fetchPriority;
-      const response = await raceAbort(
-        this.fetchFn(this.resolveKey(pack.key), init),
-        transferSignal,
-      );
+      const response = await raceAbort(this.fetchFn(url, init), transferSignal);
       if (!response.ok) {
-        throw new Error(`STT pack fetch failed: ${response.status} ${response.statusText}`);
+        throw new Error(`STT range fetch failed: ${response.status} ${response.statusText}`);
       }
       if (response.status !== 206) {
         throw new Error(
-          `STT pack server ignored Range request (status ${response.status}); ` +
+          `STT server ignored Range request (status ${response.status}); ` +
             'HTTP range requests are required.',
         );
       }
@@ -706,7 +784,7 @@ export class STTArchive {
       const expected = end - start + 1;
       if (buffer.byteLength !== expected) {
         throw new Error(
-          `STT pack range truncated: got ${buffer.byteLength} bytes, ` +
+          `STT range truncated: got ${buffer.byteLength} bytes, ` +
             `expected ${expected} (bytes=${start}-${end})`,
         );
       }
@@ -734,6 +812,32 @@ export class STTArchive {
     signal?: AbortSignal,
     fetchPriority?: 'high' | 'low' | 'auto',
   ): Promise<ArrayBuffer> {
+    const manifest = await this.fetchManifest();
+    const pack = manifest.packs[packIndex];
+    if (!pack) {
+      throw new Error(
+        `STT archive: tile references pack ${packIndex} but only ${manifest.packs.length} packs exist`,
+      );
+    }
+    return this.fetchObjectRangeWithRetry(
+      this.resolveKey(pack.key),
+      start,
+      end,
+      signal,
+      fetchPriority,
+    );
+  }
+
+  /** {@link fetchObjectRange} with the same jittered backoff + failure-aware
+   *  throughput sampling as the per-pack path. Shared by tile and directory
+   *  range reads. An `AbortError` is never retried. */
+  private async fetchObjectRangeWithRetry(
+    url: string,
+    start: number,
+    end: number,
+    signal?: AbortSignal,
+    fetchPriority?: 'high' | 'low' | 'auto',
+  ): Promise<ArrayBuffer> {
     let lastError: unknown;
     for (let attempt = 0; attempt <= this.retryDelaysMs.length; attempt++) {
       if (attempt > 0) {
@@ -742,7 +846,7 @@ export class STTArchive {
       }
       const attemptStart = nowMs();
       try {
-        return await this.fetchRange(packIndex, start, end, signal, fetchPriority);
+        return await this.fetchObjectRange(url, start, end, signal, fetchPriority);
       } catch (error) {
         if (isAbortError(error)) throw error;
         // Failure-aware estimation: the estimator is otherwise fed only by
@@ -864,32 +968,71 @@ export class STTArchive {
 
   private async fetchAndBuildIndex(): Promise<ArchiveIndex> {
     const manifest = await this.fetchManifest();
-    // Whole-object GET of the immutable content-addressed directory, with
-    // the same retry/backoff + stall timeout as range requests. The body is
-    // validated against the manifest's `directory.length` — a truncated
-    // response is a retryable transport failure, not a decode-time mystery.
-    const buffer = await this.fetchWholeObjectWithRetry(
-      this.resolveKey(manifest.directory.key),
-      'directory',
-      manifest.directory.length,
-    );
-    // Unwrap the at-rest encoding (manifests written before the field
-    // existed carry raw codec bytes and no `encoding` key).
-    let dirBytes: Uint8Array = new Uint8Array(buffer);
-    const encoding = manifest.directory.encoding;
-    if (encoding === 'zstd') {
-      dirBytes = unzstdSync(dirBytes);
-    } else if (encoding !== undefined) {
+    const dref = manifest.directory;
+    this.directoryUrl = this.resolveKey(dref.key);
+    this.directoryZstd = dref.encoding === 'zstd';
+    if (dref.encoding !== undefined && !this.directoryZstd) {
       throw new Error(
-        `STT manifest: unknown directory encoding ${JSON.stringify(encoding)} ` +
+        `STT manifest: unknown directory encoding ${JSON.stringify(dref.encoding)} ` +
           "(this reader supports absent or 'zstd')",
       );
     }
-    // Decode the compact v5 directory (columnar varint + run-length + per-run
-    // pack_id). The crc32c integrity tag is read but not verified client-side —
-    // a decode failure throws a clear error instead.
-    const raw = decodeDirectory(dirBytes);
-    const tiles: TileEntry[] = raw.map((e) => ({
+
+    // Paged + large: fetch ONLY the root page (a prefix range GET), build the
+    // page table, and leave the entry maps empty — leaves stream in on demand
+    // via ensurePages*. Small/single directories take the whole-load path below.
+    if (
+      dref.layout === DIRECTORY_LAYOUT_PAGED &&
+      dref.length > this.directoryPageThresholdBytes &&
+      typeof dref.rootLength === 'number'
+    ) {
+      const rootBuf = await this.fetchObjectRangeWithRetry(
+        this.directoryUrl,
+        0,
+        dref.rootLength - 1,
+      );
+      const root = decodePagedRoot(this.unframeDirectory(new Uint8Array(rootBuf)));
+      this.paged = true;
+      this.rootLength = dref.rootLength;
+      this.pageTable = root.pages;
+      this.residentPages.clear();
+      this.pageFetchPromises.clear();
+      this.tileEntryIndex.clear();
+      this.tileEntryByKey.clear();
+      this.indexCache = { tiles: [] }; // incremental — filled as pages stream in
+      return this.indexCache;
+    }
+
+    // Whole-load path (single, or a paged directory small enough to grab in one
+    // GET). One whole-object fetch, validated against `directory.length`.
+    this.paged = false;
+    const buffer = await this.fetchWholeObjectWithRetry(
+      this.directoryUrl,
+      'directory',
+      dref.length,
+    );
+    const bytes = new Uint8Array(buffer);
+    const raw =
+      dref.layout === DIRECTORY_LAYOUT_PAGED
+        ? this.decodePagedWhole(bytes, dref.rootLength ?? 0)
+        : decodeDirectory(this.unframeDirectory(bytes));
+
+    const tiles: TileEntry[] = raw.map((e) => this.toTileEntry(e));
+    this.indexCache = { tiles };
+    this.tileEntryIndex.clear();
+    this.tileEntryByKey.clear();
+    this.mergeEntries(tiles);
+    return this.indexCache;
+  }
+
+  /** Unwrap the directory object's at-rest framing (one page or the whole). */
+  private unframeDirectory(bytes: Uint8Array): Uint8Array {
+    return this.directoryZstd ? unzstdSync(bytes) : bytes;
+  }
+
+  /** Map a decoded `DirectoryEntry` to the reader's internal `TileEntry`. */
+  private toTileEntry(e: ReturnType<typeof decodeDirectory>[number]): TileEntry {
+    return {
       zoom: e.zoom,
       x: e.x,
       y: e.y,
@@ -903,12 +1046,12 @@ export class STTArchive {
       uncompressedSize: e.uncompressedSize,
       temporalBucketMs: e.temporalBucketMs,
       coverTMin: e.coverTMin,
-    }));
-    this.indexCache = { tiles };
+    };
+  }
 
-    this.tileEntryIndex.clear();
-    this.tileEntryByKey.clear();
-    for (const entry of tiles) {
+  /** Insert entries into the (z/x/y → list) and (z/x/y/t → entry) maps. */
+  private mergeEntries(entries: TileEntry[]): void {
+    for (const entry of entries) {
       const spatialKey = `${entry.zoom}/${entry.x}/${entry.y}`;
       let list = this.tileEntryIndex.get(spatialKey);
       if (!list) {
@@ -918,10 +1061,160 @@ export class STTArchive {
       list.push(entry);
       this.tileEntryByKey.set(
         `${entry.zoom}/${entry.x}/${entry.y}/${entry.timeStart}`,
-        entry
+        entry,
       );
     }
-    return this.indexCache;
+  }
+
+  /** Decode a whole paged `.sttd` (root + every leaf) — the small-paged load-all
+   *  path, mirroring the Rust `decode_paged_directory`. */
+  private decodePagedWhole(
+    bytes: Uint8Array,
+    rootLength: number,
+  ): ReturnType<typeof decodeDirectory> {
+    const root = decodePagedRoot(this.unframeDirectory(bytes.subarray(0, rootLength)));
+    const out: ReturnType<typeof decodeDirectory> = [];
+    for (const d of root.pages) {
+      const start = rootLength + d.relOffset;
+      const frame = bytes.subarray(start, start + d.length);
+      const page = decodeDirectory(this.unframeDirectory(frame));
+      for (const e of page) out.push(e);
+    }
+    return out;
+  }
+
+  /**
+   * Fetch, decode and merge the given leaf pages (by `pageTable` index) if not
+   * already resident. Adjacent page byte-ranges coalesce into one request (the
+   * leaves are contiguous in the object), bounded by `maxConcurrentRequests`.
+   * Concurrent callers share one in-flight fetch per page via `pageFetchPromises`.
+   */
+  private async fetchAndMergePages(indices: number[], signal?: AbortSignal): Promise<void> {
+    if (!this.paged || !this.pageTable || !this.directoryUrl) return;
+    const pending = indices
+      .filter((i) => !this.residentPages.has(i) && !this.pageFetchPromises.has(i))
+      .sort((a, b) => a - b);
+    // Wait on any pages already in flight for this query, plus the new ones.
+    const inflight = indices
+      .filter((i) => this.pageFetchPromises.has(i))
+      .map((i) => this.pageFetchPromises.get(i)!);
+
+    // Coalesce contiguous/nearby page ranges into groups.
+    interface Group {
+      start: number;
+      end: number;
+      members: number[];
+    }
+    const groups: Group[] = [];
+    for (const i of pending) {
+      const d = this.pageTable[i];
+      const start = this.rootLength + d.relOffset;
+      const end = start + d.length - 1;
+      const cur = groups[groups.length - 1];
+      if (cur && start - (cur.end + 1) <= this.coalesceGapBytes) {
+        cur.end = Math.max(cur.end, end);
+        cur.members.push(i);
+      } else {
+        groups.push({ start, end, members: [i] });
+      }
+    }
+
+    const fetchGroup = async (g: Group): Promise<void> => {
+      const buf = await this.fetchObjectRangeWithRetry(this.directoryUrl!, g.start, g.end, signal);
+      for (const i of g.members) {
+        const d = this.pageTable![i];
+        const rel = this.rootLength + d.relOffset - g.start;
+        const frame = new Uint8Array(buf, rel, d.length);
+        const entries = decodeDirectory(this.unframeDirectory(frame)).map((e) =>
+          this.toTileEntry(e),
+        );
+        if (!this.residentPages.has(i)) {
+          this.mergeEntries(entries);
+          this.residentPages.add(i);
+          // Append to the incremental index.tiles so getIndex() reflects what's
+          // resident (no external consumer relies on it being complete).
+          if (this.indexCache) this.indexCache.tiles.push(...entries);
+        }
+      }
+    };
+
+    // Register a shared promise per pending page so concurrent queries dedupe.
+    const groupPromises: Promise<void>[] = [];
+    for (const g of groups) {
+      const p = fetchGroup(g).finally(() => {
+        for (const i of g.members) this.pageFetchPromises.delete(i);
+      });
+      for (const i of g.members) this.pageFetchPromises.set(i, p);
+      groupPromises.push(p);
+    }
+
+    // Bound concurrency across groups.
+    const limit = Math.max(1, this.maxConcurrentRequests);
+    if (groupPromises.length > limit) {
+      let next = 0;
+      const runner = async (): Promise<void> => {
+        for (;;) {
+          const k = next++;
+          if (k >= groupPromises.length) return;
+          await groupPromises[k];
+        }
+      };
+      await Promise.all(Array.from({ length: limit }, () => runner()));
+    } else {
+      await Promise.all(groupPromises);
+    }
+    await Promise.all(inflight);
+  }
+
+  /**
+   * Ensure every leaf page whose descriptor overlaps `(bounds, zoom, timeRange)`
+   * is resident. No-op for single / small-paged archives (maps already full).
+   * Geo-bbox ∩ viewport ∧ zoom membership ∧ temporal overlap — exactly the Rust
+   * `PageDescriptor::overlaps` predicate.
+   */
+  private async ensurePagesForBounds(
+    bounds: BoundingBox,
+    zoom: number,
+    timeRange: TimeRange,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    if (!this.paged || !this.pageTable) return;
+    const needed: number[] = [];
+    for (let i = 0; i < this.pageTable.length; i++) {
+      if (this.residentPages.has(i)) continue;
+      const p = this.pageTable[i];
+      if (zoom < p.minZoom || zoom > p.maxZoom) continue;
+      if (p.maxLon < bounds.minLon || bounds.maxLon < p.minLon) continue;
+      if (p.maxLat < bounds.minLat || bounds.maxLat < p.minLat) continue;
+      if (p.tMax < timeRange.start || p.tMin > timeRange.end) continue;
+      needed.push(i);
+    }
+    if (needed.length > 0 || this.pageFetchPromises.size > 0) {
+      await this.fetchAndMergePages(needed, signal);
+    }
+  }
+
+  /**
+   * Ensure the leaf pages covering the given tile IDs are resident — for the
+   * direct `getTile`/`getTiles` paths (the tileset's `getTileIdsInBounds`
+   * already ensured its pages, so its follow-up `getTiles` is usually a no-op).
+   */
+  private async ensurePagesForTiles(ids: TileId[], signal?: AbortSignal): Promise<void> {
+    if (!this.paged || !this.pageTable || ids.length === 0) return;
+    const needed = new Set<number>();
+    for (const id of ids) {
+      const [minLon, minLat, maxLon, maxLat] = tileToLonLatBounds(id.z, id.x, id.y);
+      for (let i = 0; i < this.pageTable.length; i++) {
+        if (this.residentPages.has(i)) continue;
+        const p = this.pageTable[i];
+        if (id.z < p.minZoom || id.z > p.maxZoom) continue;
+        if (p.maxLon < minLon || maxLon < p.minLon) continue;
+        if (p.maxLat < minLat || maxLat < p.minLat) continue;
+        if (p.tMax < id.t || p.tMin > id.t) continue;
+        needed.add(i);
+      }
+    }
+    if (needed.size > 0) await this.fetchAndMergePages([...needed], signal);
   }
 
   /** Resolve a TileId to its directory entry. */
@@ -934,10 +1227,11 @@ export class STTArchive {
 
   /**
    * Compressed byte size of a tile from the already-decoded directory, or
-   * `undefined` if the tile isn't indexed (or the index isn't loaded yet).
-   * Synchronous, no I/O — the directory is resident once `getTileIdsInBounds`
-   * has run. Wire into `SpatiotemporalTileset.getTileByteSize` so the tileset
-   * can skip giant low-zoom parent-fallback tiles before fetching them.
+   * `undefined` if the tile isn't indexed (or its leaf page isn't resident yet
+   * on a paged archive). Synchronous, no I/O — the tileset's giant-parent skip
+   * guard calls it without awaiting; on a paged archive a not-yet-resident
+   * page returns `undefined` (the guard then degrades to "don't skip"), and the
+   * page becomes resident the moment the tile is actually requested.
    */
   getTileByteSize(id: TileId): number | undefined {
     return this.findTileEntry(id)?.length;
@@ -1032,6 +1326,7 @@ export class STTArchive {
   /** Fetch and decode a single tile. */
   async getTile(id: TileId, options?: TileRequestOptions): Promise<Tile | null> {
     await this.getIndex();
+    await this.ensurePagesForTiles([id], options?.signal);
     const entry = this.findTileEntry(id);
     if (!entry) return null;
 
@@ -1086,6 +1381,10 @@ export class STTArchive {
     options?: TileRequestOptions
   ): Promise<(Tile | null)[]> {
     await this.getIndex();
+    // Paged archives: ensure the ids' leaf pages are resident so findTileEntry
+    // resolves them (usually a no-op — the caller's getTileIdsInBounds already
+    // paged them in; this covers callers that pass ids from elsewhere).
+    await this.ensurePagesForTiles(ids, options?.signal);
     const results: (Tile | null)[] = new Array(ids.length).fill(null);
 
     // Incremental delivery: store + announce a decoded tile in one place so
@@ -1348,6 +1647,7 @@ export class STTArchive {
     timeRange: TimeRange
   ): Promise<TileId[]> {
     await this.getIndex();
+    await this.ensurePagesForBounds(bounds, zoom, timeRange);
     const meta = await this.getMetadata();
     const baseBucket = meta.temporalBucketMs;
     const filterToBase = meta.temporalLod !== undefined && meta.temporalLod.length > 0;
@@ -1395,6 +1695,7 @@ export class STTArchive {
     bucketMs: number
   ): Promise<TileId[]> {
     await this.getIndex();
+    await this.ensurePagesForBounds(bounds, zoom, timeRange);
     const meta = await this.getMetadata();
     const baseBucket = meta.temporalBucketMs;
     const ids: TileId[] = [];
@@ -1626,6 +1927,22 @@ function latToTileY(lat: number, zoom: number): number {
   return Math.floor(
     ((1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2) * (1 << zoom)
   );
+}
+
+/**
+ * Geographic bbox `[minLon, minLat, maxLon, maxLat]` of a tile — the inverse
+ * Web-Mercator projection of its NW corner `(x, y)` and SE corner `(x+1, y+1)`.
+ * Mirrors the Rust `projection::tile_geo_bounds`; used to select a tile's leaf
+ * page(s) on a paged archive (`ensurePagesForTiles`).
+ */
+function tileToLonLatBounds(z: number, x: number, y: number): [number, number, number, number] {
+  const n = 1 << z;
+  const lon = (tx: number): number => (tx / n) * 360 - 180;
+  const lat = (ty: number): number => {
+    const m = Math.PI - (2 * Math.PI * ty) / n;
+    return (180 / Math.PI) * Math.atan(0.5 * (Math.exp(m) - Math.exp(-m)));
+  };
+  return [lon(x), lat(y + 1), lon(x + 1), lat(y)];
 }
 
 /**

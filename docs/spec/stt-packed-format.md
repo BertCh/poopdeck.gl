@@ -52,7 +52,8 @@ data/<dataset>/
   "format": "stt-packed",
   "formatVersion": 1,
   "compression": "zstd",
-  "directory": { "key": "index/<hash>.sttd", "length": 1234567, "directoryVersion": 5, "encoding": "zstd" },
+  "directory": { "key": "index/<hash>.sttd", "length": 1234567, "directoryVersion": 5, "encoding": "zstd",
+                 "layout": "paged", "rootLength": 7024, "pageCount": 137, "pageEntries": 4096 },
   "packs": [
     { "key": "packs/<hash0>.sttp", "length": 67108864 },
     { "key": "packs/<hash1>.sttp", "length": 67108864 }
@@ -65,12 +66,19 @@ data/<dataset>/
 - `metadata` is the current `crate::metadata::Metadata` JSON — folded into the manifest,
   so the reader needs **no** separate header or metadata fetch.
 - `directory.encoding` (OPTIONAL): at-rest encoding of the `.sttd`
-  object. `"zstd"` = the object is a single zstd frame wrapping the directory codec
-  bytes (~2× smaller; the directory sits on the cold-start critical path with no CDN
-  content-encoding rescue). **Absent = raw codec bytes.** The content address (`key`) and `length` always
-  describe the **at-rest** bytes (i.e. the compressed bytes when `encoding` is set),
-  so readers validate the fetched body length before decoding. Readers MUST support
-  both shapes and MUST fail loudly on an unrecognized value.
+  object. `"zstd"` = a zstd frame wrapping the directory codec bytes (~2× smaller; the
+  directory sits on the cold-start critical path with no CDN content-encoding rescue).
+  For a **paged** directory (below) it describes the framing of *each page* (root + every
+  leaf), not one frame over the whole object. **Absent = raw codec bytes.** The content
+  address (`key`) and `length` always describe the **at-rest** bytes (i.e. the compressed
+  bytes when `encoding` is set), so readers validate the fetched body length before decoding.
+  Readers MUST support both shapes and MUST fail loudly on an unrecognized value.
+- `directory.layout` (OPTIONAL): container shape. `"paged"` = a root page + leaf pages
+  (§4.1), so a cold reader fetches only the leaves its viewport/time-window touches.
+  **Absent or `"single"` = the whole-load object** (one buffer the reader decodes in full).
+  When `"paged"`, `rootLength` (at-rest byte length of the root prefix), `pageCount` and
+  `pageEntries` accompany it. The leaf codec is unchanged v5 — `layout`, not
+  `directoryVersion`, discriminates the container.
 - **Unknown fields are permitted at every envelope level** and MUST be ignored by
   readers (additive evolution within `formatVersion` 1). The JSON Schema encodes
   this: `format`, `formatVersion` and `directoryVersion` are strict consts, the
@@ -176,6 +184,83 @@ don't sum to `N` or the buffer is truncated.
 > for Web-Mercator tiles and Unix-ms time. The directory is single-level (no
 > leaf directories).
 
+## 4.1 Paged container (optional `layout: "paged"`)
+
+A whole-load directory must be fetched and decoded in full before any tile can
+be requested — cost grows with dataset size, not with what a session views (a
+15 MB directory on the cold-start critical path). The **paged container** wraps
+the v5 codec so a cold reader fetches a tiny root page plus only the leaf pages
+its viewport/time-window touches. Implemented in `crates/stt-core/src/directory_page.rs`
+(Rust) and `packages/core/src/directory.ts` (`decodePagedRoot`, TS).
+
+**Layout.** The `.sttd` object is a root frame followed by leaf frames:
+
+```text
+.sttd  =  [root page frame][leaf 0 frame][leaf 1 frame] ...
+```
+
+- A **leaf page** is the *unchanged* §4 v5 codec over a contiguous slice of
+  directory order `(zoom, hilbert, time_start)`. Slicing resets delta state and
+  splits RLE runs at boundaries — the only paging cost (measured +6–19% at rest,
+  paid once by the immutable CDN object, not per session).
+- Each page (root + every leaf) is an **independent frame**: when
+  `encoding == "zstd"` each is its own zstd frame (no shared dictionary, so the
+  fzstd TS path decodes every page); absent = raw codec bytes per page.
+- The directory is **single-level** (a flat page table; no multi-level tree) —
+  sufficient for the whole fleet (~560 K entries → ~137 pages → a ~7 KB root).
+
+**Root page** — a fixed-width header + one fixed-width descriptor per leaf (count
+= bytes / width, no per-record framing). All little-endian:
+
+```text
+u8   root_version = 1
+u8   descriptor_kind = 0          # 0 = geo-bbox + zoom-range + temporal bounds
+u16  reserved = 0
+u32  page_count P
+u32  page_entries                 # nominal entries-per-page used at build
+
+repeat P  (52 bytes each):
+  u64  rel_offset                 # leaf byte offset RELATIVE TO rootLength
+                                  #   (absolute = rootLength + rel_offset)
+  u32  length                     # at-rest (framed) byte length of the leaf
+  u32  entry_count                # entries in this leaf (Σ == N)
+  u8   min_zoom
+  u8   max_zoom
+  u16  reserved = 0
+  i32  min_lon_e7, min_lat_e7,    # geographic bbox, lon/lat × 1e7 fixed point;
+       max_lon_e7, max_lat_e7     #   mins floored / maxes ceiled so the integer
+                                  #   bbox always COVERS the leaf's tiles
+  i64  t_min                      # min(cover_t_min ?? time_start) over the leaf
+  i64  t_max                      # max(time_end) over the leaf
+```
+
+Offsets are relative to the root's end so the root encodes without knowing its
+own at-rest length first.
+
+**Descriptor choice (geo-bbox).** A reader prunes a leaf when its **zoom range**
+excludes the query zoom, its **geo bbox** misses the viewport, or its
+**`[t_min, t_max]`** misses the time window — all without fetching the leaf. The
+geographic bbox (rather than a Hilbert key range) is zoom-correct and needs no
+Hilbert index in the reader; it was frozen over the alternative by an A/B sim
+(`crates/stt-core/examples/directory-paging-sim.rs`): at 4096 entries/page it
+matched or beat Hilbert-range pruning on every dataset where paging matters
+(nyc-taxi-points 9.5%/15.5% of whole-load med/p90; drifters 25.0%/35.1%),
+because a viewport box maps to a Hilbert *interval* that falsely keeps
+spatially-distant pages while geo-bbox tests real overlap. It also composes with
+a future per-tile `geoarrow.box` covering column.
+
+**Covering section.** A leaf emits the §4 covering section iff **every** entry in
+the *whole directory* carries `cover_t_min` (a global decision, so a paged
+directory decodes byte-for-identical-entries to a whole-load directory of the
+same corpus). Per-leaf `t_min` already encodes the tight lower bound on the page
+pointer.
+
+**Validation.** Beyond plain decode (root frame, leaf byte-ranges, per-leaf
+entry counts), `stt-validate` checks the paged-specific invariants
+(`verify_paged_structure`): every descriptor's bounds **cover** its leaf's
+entries (geo bbox, zoom range, temporal) so a prune never drops a matching tile,
+and cross-page key order is monotonic in `(zoom, hilbert, time_start)`.
+
 ## 5. Pack-cutting (writer)
 
 1. Order blobs by `BlobOrdering` (default `Auto`, i.e. `--blob-ordering auto`:
@@ -220,18 +305,31 @@ and decode without it; readers MUST accept both. The flag caps the layer count a
 
 ## 6. Reader flow (identical contract, Rust + TS)
 
-1. `GET manifest.json` → metadata, directory `{key,length,encoding?}`, `packs[]`.
-2. `GET <directory.key>` (one whole-object fetch, immutable/cached) → validate the body
-   length against `directory.length`, unwrap `directory.encoding` if set (zstd inflate),
-   then decode v5 entries, each carrying `(pack_id, offset_in_pack, length, …)`.
+1. `GET manifest.json` → metadata, directory `{key,length,encoding?,layout?,rootLength?}`, `packs[]`.
+2. Load the directory, branching on `layout`:
+   - **single** (or `layout` absent): `GET <directory.key>` (one whole-object fetch,
+     immutable/cached) → validate body length against `directory.length`, unwrap
+     `encoding` if set, then decode v5 entries, each carrying `(pack_id, offset_in_pack,
+     length, …)`. Build the in-memory `(z,x,y[/t])` indexes.
+   - **paged**: if `directory.length` ≤ a small cutoff (the reader's
+     `directoryPageThresholdBytes`, default 256 KiB), whole-load as above (decode root +
+     all leaves). Otherwise range-`GET bytes=0-(rootLength-1)` for the **root page** only,
+     decode its descriptors, and leave the entry indexes empty. A query then selects the
+     leaves overlapping its `(viewport bbox, zoom, time window)` from the root descriptors,
+     range-fetches the missing ones (coalescing adjacent leaf ranges within the object) and
+     merges their entries — so the entry indexes fill in **incrementally**, proportional to
+     the query footprint.
 3. Tile read: `entry` → `pack = packs[entry.pack_id]` → range `GET pack.key`
    `bytes=<offset>-<offset+length-1>`.
 4. **Coalescing is per-pack**: group needed entries by `pack_id`, then coalesce by offset
    gap *within* each pack (a range can't bridge two pack objects); a concurrency pool runs
-   groups in parallel.
+   groups in parallel. (Leaf-page reads against the `.sttd` object coalesce the same way.)
 5. Decompress per-blob zstd (fzstd in TS — no dict).
 
-Cold load = 1 manifest + 1 directory + N pack ranges. Warm = all served from edge cache.
+Cold load (single) = 1 manifest + 1 directory + N pack ranges. Cold load (paged) =
+1 manifest + 1 root range + the few leaf ranges the first viewport touches + N pack
+ranges — directory bytes proportional to the viewport, not the dataset. Warm = all
+served from edge cache.
 
 ## 7. Design decisions
 

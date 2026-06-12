@@ -19,7 +19,7 @@
       "enum": ["zstd", "gzip", "none"]
     },
     "directory": {
-      "description": "Pointer to the single immutable, content-addressed directory object (the v5 run-length index).",
+      "description": "Pointer to the single immutable, content-addressed directory object (the v5 run-length index). The object is either a single whole-load buffer (default) or a paged container — root page + leaf pages — selected by `layout`. Either way the leaf codec is v5; `layout`, not `directoryVersion`, discriminates the container shape.",
       "type": "object",
       "required": ["key", "length", "directoryVersion"],
       "properties": {
@@ -34,12 +34,31 @@
           "minimum": 0
         },
         "directoryVersion": {
-          "description": "Directory codec version. The packed format (formatVersion 1) emits v5 (per-run pack_id column + pack-relative offsets).",
+          "description": "Directory (leaf) codec version. The packed format (formatVersion 1) emits v5 (per-run pack_id column + pack-relative offsets). Unchanged by the paged container.",
           "const": 5
         },
         "encoding": {
-          "description": "OPTIONAL at-rest encoding of the directory object. `zstd` = the object is a single zstd frame wrapping the directory codec bytes. Absent = raw codec bytes (the shape of every manifest written before this field existed). Readers MUST support both.",
+          "description": "OPTIONAL at-rest encoding of the directory object. `zstd` = the object is a zstd frame (for a paged directory: EACH page — root + every leaf — is its own zstd frame). Absent = raw codec bytes (the shape of every manifest written before this field existed). Readers MUST support both.",
           "enum": ["zstd"]
+        },
+        "layout": {
+          "description": "OPTIONAL container layout. `paged` = a root page (fixed-width geo-bbox + zoom-range + temporal page descriptors) followed by leaf pages, so a cold reader fetches only the leaves its viewport/time-window touches. Absent or `single` = the whole-load object. Present (with the fields below) iff `paged`.",
+          "enum": ["single", "paged"]
+        },
+        "rootLength": {
+          "description": "Paged only: at-rest byte length of the root page (a prefix of the object). The reader range-GETs `bytes=0-(rootLength-1)` for the root, then leaf ranges on demand. Leaf descriptor offsets are relative to this (absolute = rootLength + rel_offset).",
+          "type": "integer",
+          "minimum": 0
+        },
+        "pageCount": {
+          "description": "Paged only: number of leaf pages (informational / validation).",
+          "type": "integer",
+          "minimum": 0
+        },
+        "pageEntries": {
+          "description": "Paged only: nominal entries-per-leaf-page used at build (informational; the sim-validated sweet spot is 1024–4096).",
+          "type": "integer",
+          "minimum": 1
         }
       }
     },

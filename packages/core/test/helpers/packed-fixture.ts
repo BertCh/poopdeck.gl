@@ -279,6 +279,30 @@ export function packedFromSingleFile(
   return { objects, manifestUrl };
 }
 
+/**
+ * Load a real on-disk packed dataset (a directory containing `manifest.json`,
+ * `index/*.sttd`, `packs/*.sttp`) into an in-memory dataset servable by
+ * {@link packedFetch}. Used by the paged-directory cross-impl tests, which read
+ * Rust-produced fixtures (`paged-golden/`, `paged-golden-single/`).
+ */
+export function loadPackedDatasetFromDisk(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  fs: { readFileSync: (p: string) => any },
+  dir: string,
+  manifestUrl = 'mem://data/fixture/manifest.json',
+): InMemoryPackedDataset {
+  const objects = new Map<string, Uint8Array>();
+  const manifestBytes = new Uint8Array(fs.readFileSync(`${dir}/manifest.json`));
+  objects.set('manifest.json', manifestBytes);
+  const manifest = JSON.parse(new TextDecoder().decode(manifestBytes));
+  const add = (key: string): void => {
+    objects.set(key, new Uint8Array(fs.readFileSync(`${dir}/${key}`)));
+  };
+  add(manifest.directory.key);
+  for (const p of manifest.packs) add(p.key);
+  return { objects, manifestUrl };
+}
+
 /** Records what a packed-fetch shim served (for coalescing assertions). */
 export interface PackedFetchLog {
   /** Every requested object path (relative to the dataset root). */

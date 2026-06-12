@@ -1,15 +1,15 @@
 # Paged directory with temporal pruning — Wave 2 implementation plan
 
-> **Status: PLANNED (design resolved, not started).** This is the focused-effort
-> plan for rust-audit Wave 2's headline item: bounds + `[t_min, t_max]` on
-> paged-directory page pointers (the COPC / GeoParquet-1.1 steal). It is a
-> **wire-format change** touching `crates/stt-core` (writer + codec),
-> `packages/core` (TS reader), the manifest contract, `stt-validate`, the
-> transcode tool, and R2 deployment — it needs round-trip + cross-impl + browser
-> verification, not a quick fan-out. Feasibility is already MEASURED VIABLE
-> (`crates/stt-core/examples/directory-paging-sim.rs`); this doc turns that sim
-> into a buildable design. Supersedes the "designed" sketch in
-> [`stt-packed.md` §3](./stt-packed.md).
+> **Status: ✅ SHIPPED 2026-06-11 (uncommitted; fleet re-transcode + R2 re-sync
+> held per dev-settling policy).** Built end-to-end on branch
+> `feat/paged-directory`: Rust codec + writer (`directory_page.rs`), TS reader
+> (paged `getIndex`/`ensurePages` in `archive.ts` + `decodePagedRoot` in
+> `directory.ts`), manifest contract (Rust + TS + JSON Schema), `stt-validate`
+> bounds-cover + monotonicity checks, and the `repack-directory` migration tool.
+> Tests green: stt-core 121, @stt/core 190 (incl. cross-impl + differential
+> `paged-directory.test.ts`), deck.gl 389, maplibre 54. Format specified in
+> [`stt-packed-format.md` §4.1](../spec/stt-packed-format.md). The original
+> focused-effort plan and the resolved decisions follow.
 
 ## 1. The wall this attacks
 
@@ -50,7 +50,15 @@ fires.
   bytes are the root page + the container framing. Lowest-risk possible shape.
 
 - **D3 — page descriptor = geographic bbox + zoom-range + `[t_min, t_max]` +
-  `cover_t_min`. (RECOMMENDED; confirm in step 0.)** The reader's viewport query
+  `cover_t_min`. (FROZEN 2026-06-11 by the step-0 A/B sim.)** At 4096 entries/page,
+  geo-bbox pruning matched or beat the Hilbert-key-range model on every dataset
+  where paging matters — nyc-taxi-points **9.5% / 15.5%** of whole-load (med/p90)
+  vs hilbert 11.4% / 36.5%, drifters **25.0% / 35.1%** vs 26.3% / 66.1%; only
+  ais-all-us favoured hilbert (2.7% / 4.4% vs 0.9% / 1.8%) in an already-sub-5%
+  regime. Geo-bbox wins the p90 tail because a viewport box maps to a Hilbert
+  *interval* that falsely keeps spatially-distant pages, while geo-bbox tests
+  real spatial overlap. So geo-bbox it is: zoom-correct, **no Hilbert port in
+  TS**, composes with the future per-tile `geoarrow.box`. The reader's viewport query
   is already a lon/lat `BoundingBox` at a single zoom over a time window. Storing
   each page's **geographic** bbox (lon/lat, computed at build from the page's
   tiles), its `[min_zoom, max_zoom]`, and its temporal `[t_min, t_max]` (with
@@ -278,23 +286,29 @@ decode for a given query) keeps the paging concern out of the leaf codec.
 
 ## 9. Sequenced task list (the focused effort)
 
-0. **[de-risk] Extend `directory-paging-sim.rs`** to A/B geo-bbox vs
-   Hilbert-key-range pruning on the fleet → freeze the D3 descriptor choice with
-   numbers, not intuition. (Cheap: reads manifests, no rebuild.)
-1. **Rust codec:** `directory_page.rs` (root encode/decode + `PagedDirectory`
-   query), `tile_geo_bounds` helper, page-cut in `PackWriter::finalize` +
-   `transcode_archive_to_packs`, `--paged` / `--page-entries` flags. Round-trip +
-   property tests.
-2. **Manifest contract:** new `DirectoryRef` fields (Rust + TS + JSON Schema +
-   `manifest-schema.test.ts`).
-3. **TS reader:** paged `getIndex`, `ensurePages`, `fetchObjectRanges`
-   refactor, paged `findTileEntry`/query paths, small-dataset fast path.
-   Differential + cross-impl golden tests.
-4. **stt-validate:** paged-layout checks.
-5. **Transcode + deploy:** `pack-transcode --paged`, fleet transcode, R2
-   re-sync, browser verification, capture metrics.
-6. **Docs:** fold the frozen format into `stt-packed-format.md` (promote from
-   roadmap to spec §4), update `stt-packed.md` §3 to "shipped."
+0. **[x] [de-risk]** Extended `directory-paging-sim.rs` to A/B geo-bbox vs
+   Hilbert-key-range → froze the geo-bbox descriptor with numbers (D3).
+1. **[x] Rust codec:** `directory_page.rs` (root encode/decode +
+   `decode_paged_directory` + `verify_paged_structure`), `tile_geo_bounds`
+   helper, page-cut in `PackWriter::finalize` (`with_paging`) +
+   `transcode_archive_to_packs_paged`, `stt-build --paged`/`--page-entries`.
+   11 round-trip / property / structure tests.
+2. **[x] Manifest contract:** new `DirectoryRef` fields (Rust + TS
+   `ManifestDirectoryRef` + JSON Schema; `manifest-schema.test.ts` green).
+3. **[x] TS reader:** paged `getIndex` (root-only), `ensurePagesForBounds`/
+   `ensurePagesForTiles`, `fetchObjectRange(WithRetry)` refactor of the per-pack
+   coalescer, small-dataset fast path (`directoryPageThresholdBytes`),
+   `decodePagedRoot`, `tileToLonLatBounds`. Cross-impl golden + differential
+   `paged-directory.test.ts` (paged ≡ whole-load; pruning fires; payloads match).
+4. **[x] stt-validate:** paged checks (`verify_paged_structure` wired into
+   `verify_packed_objects`); validates a real paged fixture clean.
+5. **[x] Migration tool + eval:** `repack-directory` (directory-only re-pack,
+   packs unchanged) + `pack-transcode [page_entries]`; eval on earthquakes-v2
+   (3.38 MB → 2.41 MB dir, root 524 B, packs byte-identical, validates clean).
+   **Open: fleet re-transcode + R2 re-sync** (held per dev-settling policy);
+   browser verification of a live paged dataset pending.
+6. **[x] Docs:** format folded into `stt-packed-format.md` §4.1; `stt-packed.md`
+   §3 + rust-audit Wave 2 marked shipped.
 
 ## 10. Risks / open questions
 

@@ -40,6 +40,129 @@ const MIN_DIRECTORY_VERSION = 4;
  */
 const COVER_SECTION_TMIN = 1;
 
+// ----------------------------------------------------------------------------
+// Paged directory — root page (Wave 2). Mirrors the Rust
+// `crates/stt-core/src/directory_page.rs` container: a `.sttd` is
+// `[root frame][leaf 0 frame]...`, each an independent (zstd) frame. The root is
+// a fixed-width table of page descriptors carrying each leaf's byte range plus
+// its pruning bounds (geographic bbox, zoom range, temporal [t_min, t_max]).
+// The reader decodes the root, prunes leaves by viewport/zoom/time, and fetches
+// only the survivors. The leaf codec is the unchanged v5 directory below.
+// ----------------------------------------------------------------------------
+
+/** Root container version (first byte of the decoded root page). */
+const PAGED_ROOT_VERSION = 1;
+/** Descriptor-kind tag: geographic bbox + zoom range + temporal bounds. */
+const DESCRIPTOR_GEO_BBOX = 0;
+/** Fixed-width root header bytes: version, kind, reserved u16, P u32, pageEntries u32. */
+const ROOT_HEADER_LEN = 12;
+/** Fixed-width per-page descriptor bytes (see field order below). */
+const DESCRIPTOR_LEN = 52;
+
+/**
+ * One leaf page's pruning descriptor, decoded from the root page. Byte offsets
+ * are **relative to the end of the root page** (absolute = `rootLength +
+ * relOffset`). The geographic bbox is stored on the wire as lon/lat × 1e7 and
+ * surfaced here as float degrees (the encoder floored/ceiled the fixed point
+ * outward, so this bbox conservatively *covers* every tile in the leaf — a
+ * reader never prunes a leaf that holds a matching tile).
+ */
+export interface PageDescriptor {
+  /** Leaf byte offset relative to `rootLength`. Absolute = rootLength + relOffset. */
+  relOffset: number;
+  /** At-rest (framed) byte length of the leaf. */
+  length: number;
+  /** Entries in this leaf (Σ over pages == N). */
+  entryCount: number;
+  minZoom: number;
+  maxZoom: number;
+  /** Geographic bbox in degrees (covers every tile in the leaf). */
+  minLon: number;
+  minLat: number;
+  maxLon: number;
+  maxLat: number;
+  /** Subtree temporal bounds: min(coverTMin ?? timeStart) .. max(timeEnd). */
+  tMin: number;
+  tMax: number;
+}
+
+/** The decoded root page. */
+export interface PagedRoot {
+  /** Nominal entries-per-page used at build (informational). */
+  pageEntries: number;
+  pages: PageDescriptor[];
+}
+
+/**
+ * Decode the paged-directory root page from its raw (already-unframed) bytes.
+ * Mirrors `directory_page::decode_root`. Throws on an unknown version /
+ * descriptor kind or a truncated buffer.
+ */
+export function decodePagedRoot(bytes: Uint8Array): PagedRoot {
+  if (bytes.length < ROOT_HEADER_LEN) {
+    throw new Error('STT paged root: truncated header');
+  }
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const version = dv.getUint8(0);
+  if (version !== PAGED_ROOT_VERSION) {
+    throw new Error(
+      `STT paged root: unsupported version ${version} (expected ${PAGED_ROOT_VERSION})`,
+    );
+  }
+  const kind = dv.getUint8(1);
+  if (kind !== DESCRIPTOR_GEO_BBOX) {
+    throw new Error(`STT paged root: unsupported descriptor kind ${kind}`);
+  }
+  const pageCount = dv.getUint32(4, true);
+  const pageEntries = dv.getUint32(8, true);
+  const need = ROOT_HEADER_LEN + pageCount * DESCRIPTOR_LEN;
+  if (bytes.length < need) {
+    throw new Error(
+      `STT paged root: truncated (${bytes.length} B, need ${need} for ${pageCount} pages)`,
+    );
+  }
+  const pages: PageDescriptor[] = new Array(pageCount);
+  for (let i = 0; i < pageCount; i++) {
+    let o = ROOT_HEADER_LEN + i * DESCRIPTOR_LEN;
+    const relOffset = Number(dv.getBigUint64(o, true));
+    o += 8;
+    const length = dv.getUint32(o, true);
+    o += 4;
+    const entryCount = dv.getUint32(o, true);
+    o += 4;
+    const minZoom = dv.getUint8(o);
+    o += 1;
+    const maxZoom = dv.getUint8(o);
+    o += 1;
+    o += 2; // reserved
+    const minLon = dv.getInt32(o, true) / 1e7;
+    o += 4;
+    const minLat = dv.getInt32(o, true) / 1e7;
+    o += 4;
+    const maxLon = dv.getInt32(o, true) / 1e7;
+    o += 4;
+    const maxLat = dv.getInt32(o, true) / 1e7;
+    o += 4;
+    const tMin = Number(dv.getBigInt64(o, true));
+    o += 8;
+    const tMax = Number(dv.getBigInt64(o, true));
+    pages[i] = {
+      relOffset,
+      length,
+      entryCount,
+      minZoom,
+      maxZoom,
+      minLon,
+      minLat,
+      maxLon,
+      maxLat,
+      tMin,
+      tMax,
+    };
+  }
+  return { pageEntries, pages };
+}
+
 /**
  * A decoded directory entry. The integrity crc32c and the Hilbert key are read
  * (to advance the cursor) but not surfaced — the reader addresses tiles by
