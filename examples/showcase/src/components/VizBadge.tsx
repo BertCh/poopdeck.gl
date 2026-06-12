@@ -85,6 +85,17 @@ const ArcGlyph = svg(
   </>,
 );
 
+// Two weighted flows converging on a hub node — the OD flowmap.
+const FlowmapGlyph = svg(
+  <>
+    <path {...stroke} d="M4.5 18Q9 7.5 12 11.5" />
+    <path {...stroke} d="M19.5 18Q15 6.5 12 11.5" />
+    <circle cx="12" cy="11.5" r="2.8" fill="currentColor" />
+    <circle cx="4.5" cy="18" r="1.8" fill="currentColor" />
+    <circle cx="19.5" cy="18" r="1.8" fill="currentColor" />
+  </>,
+);
+
 // An extruded 3D box — a column at a point.
 const ColumnGlyph = svg(
   <>
@@ -128,6 +139,7 @@ export const VIZ_REGISTRY: Record<DatasetType, VizDef> = {
   arc: { label: "Arcs", color: "#3F54B6", icon: ArcGlyph },
   column: { label: "Columns", color: "#94701A", icon: ColumnGlyph },
   "quadbin-summary": { label: "Quadbin", color: "#6B7C26", icon: QuadbinGlyph },
+  flowmap: { label: "Flowmap", color: "#C72C68", icon: FlowmapGlyph },
 };
 
 /** `#RRGGBB` → `rgba(r,g,b,a)`; used for the soft chip fill. */

@@ -22,6 +22,7 @@ import {
   AnimatedArcLayer,
   AnimatedColumnLayer,
   AnimatedTripHeadsLayer,
+  FlowmapLayer,
 } from "@stt/deck.gl";
 import type {
   BufferSource,
@@ -392,6 +393,28 @@ export function buildDemoLayers({
           greatCircle: selectedDataset.arcGreatCircle ?? false,
           arcHeight: selectedDataset.arcHeight ?? 1,
           fadeInDuration: selectedDataset.fadeInDuration ?? 300,
+        }),
+      ];
+    case "flowmap":
+      // flowmap.gl-style animated OD flowmap: one weighted arc per station-pair
+      // whose width tracks volume at the playhead (per-bucket vertexValueMatrix
+      // decode), plus node circles sized by incident flow. Geometry spans the
+      // whole time range — loads once, animates from the matrix.
+      return [
+        new FlowmapLayer({
+          ...baseProps,
+          widthScale: selectedDataset.flowWidthScale ?? 1.1,
+          widthMinPixels: selectedDataset.flowWidthMinPixels ?? 1,
+          widthMaxPixels: selectedDataset.flowWidthMaxPixels ?? 12,
+          sourceColor: selectedDataset.flowSourceColor ?? [56, 196, 232, 235],
+          targetColor: selectedDataset.flowTargetColor ?? [255, 142, 64, 245],
+          greatCircle: selectedDataset.flowGreatCircle ?? false,
+          arcHeight: selectedDataset.flowArcHeight ?? 0.5,
+          nodeRadiusScale: selectedDataset.flowNodeRadiusScale ?? 1.3,
+          ...(selectedDataset.flowNodeColor && {
+            nodeColor: selectedDataset.flowNodeColor,
+          }),
+          minFlow: selectedDataset.flowMinFlow ?? 0.25,
         }),
       ];
     case "column":

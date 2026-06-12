@@ -33,7 +33,14 @@ export type DatasetType =
    * square-cell analog of `summary`. Only useful for archives built with
    * `stt-build --summary-tier quadbin`.
    */
-  | 'quadbin-summary';
+  | 'quadbin-summary'
+  /**
+   * flowmap.gl-style animated origin→destination flowmap (`FlowmapLayer`). One
+   * weighted arc per OD station-pair whose width tracks trip volume at the
+   * playhead (read from a per-bucket `vertexValueMatrix`), plus node circles
+   * sized by incident flow. Build with `stt-generate bixi`.
+   */
+  | 'flowmap';
 
 export interface DatasetLegendItem {
   color: string;
@@ -393,6 +400,28 @@ export interface Dataset {
   arcGreatCircle?: boolean;
   /** Arc height multiplier; 0 = flat lines. Default 1. */
   arcHeight?: number;
+
+  // ─── flowmap-layer styling (type: 'flowmap') ───────────────────────────
+  /** Arc width in px per `sqrt(current-bucket trip count)`. Default 1.1. */
+  flowWidthScale?: number;
+  /** Clamp arc width to at least this many px (active arcs only). */
+  flowWidthMinPixels?: number;
+  /** Clamp arc width to at most this many px. */
+  flowWidthMaxPixels?: number;
+  /** Arc source (origin) endpoint color, RGBA. */
+  flowSourceColor?: ColorRGBA;
+  /** Arc target (destination) endpoint color, RGBA. */
+  flowTargetColor?: ColorRGBA;
+  /** Arc height multiplier (0 = flat). Default 0.5. */
+  flowArcHeight?: number;
+  /** Bow arcs along the great-circle path. */
+  flowGreatCircle?: boolean;
+  /** Node circle radius in px per `sqrt(incident flow)`. Default 1.3. */
+  flowNodeRadiusScale?: number;
+  /** Node circle fill color, RGBA. */
+  flowNodeColor?: ColorRGBA;
+  /** Hide arcs/nodes whose current flow is below this many trips. Default 0.25. */
+  flowMinFlow?: number;
 
   // ─── column-layer styling (type: 'column') ─────────────────────────────
   /** Column disk radius in `columnRadiusUnits`. Default 100. */

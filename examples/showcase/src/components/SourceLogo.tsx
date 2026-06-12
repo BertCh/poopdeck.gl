@@ -65,6 +65,14 @@ const LeafIcon = (
   </svg>
 );
 
+const BikeIcon = (
+  <svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true">
+    <circle {...stroke} cx="5.5" cy="16" r="3" />
+    <circle {...stroke} cx="18.5" cy="16" r="3" />
+    <path {...stroke} d="M5.5 16l4-7h5l-3.5 7M9.5 9l1.5-3h2.5M14.5 9l4 7" />
+  </svg>
+);
+
 export const SOURCE_REGISTRY: Record<string, SourceDef> = {
   noaa: { label: "NOAA", color: "#0B5FA5", icon: WaveIcon },
   tlc: { label: "NYC TLC", color: "#C9971C", icon: TaxiIcon },
@@ -72,6 +80,7 @@ export const SOURCE_REGISTRY: Record<string, SourceDef> = {
   usgs: { label: "USGS", color: "#1A7D3C", icon: QuakeIcon },
   opensky: { label: "OpenSky", color: "#2E6FB7", icon: PlaneIcon },
   gbif: { label: "GBIF", color: "#4CA86E", icon: LeafIcon },
+  bixi: { label: "BIXI Montréal", color: "#D8232A", icon: BikeIcon },
 };
 
 export const SourceLogo: React.FC<{ id: string }> = ({ id }) => {

@@ -32,6 +32,11 @@ export { H3SummaryLayer } from './layers/summary/h3-summary-layer';
 // `featureIds64` exactly like H3; converts the CARTO Quadbin u64 to a Bing
 // quadkey for deck.gl's QuadkeyLayer.
 export { QuadbinSummaryLayer } from './layers/summary/quadbin-summary-layer';
+// flowmap.gl-style animated OD flowmap: one weighted arc per station-pair whose
+// width tracks volume at the playhead (vertexValueMatrix decode, like
+// FlowCorridorLayer) + node circles sized by incident flow. Feed it the
+// `stt-generate bixi` OD-pair matrix tiles.
+export { FlowmapLayer } from './layers/summary/flowmap-layer';
 
 // Origin→destination flow layers (window-mode time filtering). Arc/Line read
 // the FIRST vertex of each (typically 2-vertex) LineString tile as the source
@@ -138,6 +143,7 @@ export type {
 } from './layers/summary/heatmap-layer';
 export type { H3SummaryLayerProps } from './layers/summary/h3-summary-layer';
 export type { QuadbinSummaryLayerProps } from './layers/summary/quadbin-summary-layer';
+export type { FlowmapLayerProps } from './layers/summary/flowmap-layer';
 export type { AnimatedArcLayerProps } from './layers/core/animated-arc-layer';
 export type { AnimatedLineLayerProps } from './layers/core/animated-line-layer';
 export type { AnimatedIconLayerProps } from './layers/core/animated-icon-layer';

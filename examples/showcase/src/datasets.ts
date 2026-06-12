@@ -311,6 +311,53 @@ const rawDatasets: Dataset[] = [
     },
   },
   {
+    // Real Montreal BIXI bike-share trips (August 2024) aggregated into directed
+    // origin→destination station-pair flows. FlowmapLayer animates each arc's
+    // width from a per-hour vertexValueMatrix + sizes node circles by incident
+    // flow — the tile spans the whole month, so it loads once and animates from
+    // the matrix as the playhead scrubs the daily commute rhythm.
+    id: 'bixi-flowmap',
+    name: 'Montréal BIXI — OD Flowmap',
+    sources: ['bixi'],
+    description:
+      'A month of real BIXI bike-share trips (August 2024) as a flowmap.gl-style ' +
+      'animated origin→destination flowmap — station-pair arcs swell and recede ' +
+      "with hourly demand and node circles pulse with each dock's traffic. " +
+      'FlowmapLayer.',
+    url: '/data/bixi-flowmap/manifest.json',
+    type: 'flowmap',
+    timeRange: {
+      start: 1722470400000, // 2024-08-01 00:00 UTC
+      end: 1725148800000,   // 2024-09-01 00:00 UTC
+    },
+    // 1 h — matches the flow matrix bucket. Cosmetic for this type: the matrix
+    // decode (not a time window) drives the animation.
+    timeWindow: 3600000,
+    targetPlaybackSeconds: 90,
+    initialViewState: {
+      longitude: -73.578,
+      latitude: 45.518,
+      zoom: 12.2,
+      pitch: 40,
+      bearing: -10,
+    },
+    flowSourceColor: [56, 196, 232, 235], // origin — cool cyan
+    flowTargetColor: [255, 142, 64, 245], // destination — warm orange
+    flowWidthScale: 1.1,
+    flowWidthMaxPixels: 14,
+    flowArcHeight: 0.5,
+    flowNodeRadiusScale: 1.3,
+    flowMinFlow: 0.5, // hide corridors with < ~1 trip in the current hour
+    opacity: 0.85,
+    legend: {
+      title: 'BIXI trips per corridor (hourly)',
+      items: [
+        { color: '#38c4e8', label: 'Origin' },
+        { color: '#ff8e40', label: 'Destination' },
+      ],
+    },
+  },
+  {
     id: 'flights',
     name: 'Flight Traffic',
     sources: ['opensky'],

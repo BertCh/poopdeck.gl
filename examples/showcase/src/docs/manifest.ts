@@ -147,6 +147,11 @@ export const docSections: DocSection[] = [
         title: "QuadbinSummaryLayer",
       },
       {
+        slug: "api/flowmap-layer",
+        file: "api/flowmap-layer.md",
+        title: "FlowmapLayer",
+      },
+      {
         slug: "api/animated-arc-layer",
         file: "api/animated-arc-layer.md",
         title: "AnimatedArcLayer",

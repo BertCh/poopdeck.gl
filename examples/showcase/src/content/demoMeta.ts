@@ -275,6 +275,60 @@ export const DEMO_META: Record<string, DemoMeta> = {
     related: ['nyc-taxi-flows', 'nyc-taxi-trips', 'nyc-od-quadbin'],
   },
 
+  'bixi-flowmap': {
+    category: 'mobility',
+    tagline: 'A month of real Montréal BIXI trips as weighted flows that breathe with the commute.',
+    techniqueTag: 'Flowmap · OD matrix',
+    about: [
+      'flowmap.gl popularized the origin→destination flowmap: one weighted ' +
+        'arrow per station-pair, node circles sized by total flow. This demo ' +
+        'gives it a fourth dimension — time. Every directed BIXI station-pair ' +
+        'for August 2024 carries an hourly trip-count time series, so corridors ' +
+        'swell and recede with demand as the playhead scrubs the month: ' +
+        'downtown fills on weekday mornings, the Plateau and the Lachine Canal ' +
+        'light up on summer evenings and weekends.',
+      'It reuses the same geometry-once / animate-from-a-matrix trick as the ' +
+        'taxi flow corridors: each OD pair is a single 2-vertex arc carrying a ' +
+        '`[2 × buckets]` `vertexValueMatrix`. `FlowmapLayer` reads the active ' +
+        "bucket as each arc's width and sums incident flow at each dock for the " +
+        'node circles, so the tile loads once and only the playhead moves. A ' +
+        'volume-based `min_zoom` keeps the busiest corridors legible city-wide ' +
+        'and reveals the long tail on zoom-in.',
+      'The data is real: ~1.9M trips from BIXI Montréal open data, aggregated ' +
+        'into ~10.7K directed corridors at hourly resolution. No thinning — ' +
+        'aggregation IS the visualization (a summary tier), and every hourly ' +
+        'bucket is kept for every corridor.',
+    ],
+    dataSources: [
+      {
+        name: 'BIXI Montréal — Open Data (trip history)',
+        url: 'https://bixi.com/en/open-data/',
+        license: 'BIXI open data licence',
+        note: 'Real August 2024 trips (origin/destination station + timestamps).',
+      },
+      {
+        name: 'BIXI GBFS (station locations)',
+        url: 'https://gbfs.velobixi.com/gbfs/en/station_information.json',
+        license: 'Public (GBFS)',
+        note: 'Fallback station geometry for pre-2022 code-based trip files.',
+      },
+    ],
+    buildCommand:
+      'stt-generate bixi --input DonneesOuvertes2024.csv \\\n' +
+      '  --from 2024-08-01 --to 2024-09-01 --bin 1h --min-trips 30 \\\n' +
+      '  --output bixi-flowmap.stt',
+    buildNote:
+      'Aggregates real BIXI open-data trips into directed OD-pair corridors, ' +
+      'each carrying an hourly vertexValueMatrix (~1.5 MB packed). The CSV schema ' +
+      'is auto-detected: 2022+ embeds lat/lon per trip; pre-2022 resolves station ' +
+      'codes via a Stations CSV or the public GBFS feed.',
+    techniques: [
+      { label: 'FlowmapLayer', docPath: '/docs/api/flowmap-layer' },
+      { label: 'Binary features (vertex value matrix)', docPath: '/docs/api/binary-features' },
+    ],
+    related: ['nyc-od-arcs', 'nyc-taxi-flows', 'nyc-od-quadbin'],
+  },
+
   'nyc-od-quadbin': {
     category: 'mobility',
     tagline: 'Trip density binned into CARTO Quadbin square cells, extruded by count.',
