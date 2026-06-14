@@ -1,5 +1,5 @@
 /**
- * @stt/bench — performance benchmark for the @stt/core data-loading pipeline.
+ * @poopdeck.gl/bench — performance benchmark for the @poopdeck.gl/core data-loading pipeline.
  *
  * Runs entirely offline: instead of an HTTP server it uses a file-backed
  * `fetch` implementation that satisfies HTTP Range Requests by reading byte
@@ -14,13 +14,13 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { performance } from 'node:perf_hooks';
 
-import { STTArchive, estimateTileSize, OpfsTileCache } from '@stt/core';
+import { STTArchive, estimateTileSize, OpfsTileCache } from '@poopdeck.gl/core';
 
 // `compression.ts` is not re-exported from the package's index, and the
 // package `exports` map only exposes `.`. Resolve the package's main module
 // URL via `import.meta.resolve`, then import the sibling compression module
 // directly from `dist/`.
-const coreEntryUrl = import.meta.resolve('@stt/core');
+const coreEntryUrl = import.meta.resolve('@poopdeck.gl/core');
 const compressionUrl = new URL('./compression.js', coreEntryUrl).href;
 const { decompressSync, gunzipSync, NATIVE_DECOMPRESSION_AVAILABLE } =
   await import(compressionUrl);
@@ -338,7 +338,7 @@ async function main() {
   }
 
   // Probe: decode a single tile to confirm the archive's tile format matches
-  // the current @stt/core decoder. A stale archive (e.g. pre-columnar format)
+  // the current @poopdeck.gl/core decoder. A stale archive (e.g. pre-columnar format)
   // would otherwise fail mid-benchmark with an opaque protobuf wire error.
   try {
     const probe = tileEntries.find((e) => e.length > 0) || tileEntries[0];
@@ -486,7 +486,7 @@ async function main() {
 
   const Compression = { None: 0, Gzip: 1, Zstd: 2 };
   // Lazily resolve pako (still installed as a transitive dep for some
-  // toolchains; bench-only, NOT a @stt/core dep any more). Missing pako
+  // toolchains; bench-only, NOT a @poopdeck.gl/core dep any more). Missing pako
   // is not an error — just skip its row.
   let pakoUngzip = null;
   try {
@@ -507,7 +507,7 @@ async function main() {
     const fzstd = await import('fzstd');
     fzstdDecompress = fzstd.decompress;
   } catch {
-    /* same — fzstd is a @stt/core dep so this is unreachable */
+    /* same — fzstd is a @poopdeck.gl/core dep so this is unreachable */
   }
 
   const gzipEntries = tileEntries

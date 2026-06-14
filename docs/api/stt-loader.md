@@ -1,6 +1,6 @@
 # Tile decoding
 
-`@stt/core` exposes a small surface for decoding STT tile payloads. In normal
+`@poopdeck.gl/core` exposes a small surface for decoding STT tile payloads. In normal
 use you don't call it directly — `STTArchive` and
 [`SpatiotemporalTileset`](./spatiotemporal-tileset.md) do — but the pieces are
 documented here for tests, custom integrations, and GeoArrow hand-offs.
@@ -21,7 +21,7 @@ import {
   InlineTileDecoder,
   WorkerTileDecoder,
   createDefaultTileDecoder,
-} from "@stt/core";
+} from "@poopdeck.gl/core";
 
 interface TileDecoder {
   decode(args: {
@@ -62,7 +62,7 @@ decoding (useful in tests or environments that block workers).
 ## decodeTile()
 
 ```typescript
-import { decodeTile } from "@stt/core";
+import { decodeTile } from "@poopdeck.gl/core";
 
 const tile = decodeTile(payloadBytes, id, timeRange);
 ```
@@ -104,7 +104,7 @@ a `{ indices: Uint16Array; categories: string[] }` dictionary ready for
 ## GeoArrow hand-off
 
 ```typescript
-import { toGeoArrowTable } from "@stt/core";
+import { toGeoArrowTable } from "@poopdeck.gl/core";
 import { GeoArrowPathLayer } from "@geoarrow/deck.gl-layers";
 
 const table = toGeoArrowTable(tile.layers[0]);

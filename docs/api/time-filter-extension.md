@@ -7,7 +7,7 @@ It works on instanced layers (`ScatterplotLayer`, `PathLayer`) and non-instanced
 ## Installation
 
 ```typescript
-import { TimeFilterExtension, relativizeTime, MAX_RELATIVE_TIME_MS } from '@stt/deck.gl';
+import { TimeFilterExtension, relativizeTime, MAX_RELATIVE_TIME_MS } from '@poopdeck.gl/layers';
 ```
 
 ## Usage
@@ -16,7 +16,7 @@ The extension is used internally by the STT layers (`AnimatedPointLayer`, `Anima
 
 ```typescript
 import { ScatterplotLayer } from '@deck.gl/layers';
-import { TimeFilterExtension, relativizeTime } from '@stt/deck.gl';
+import { TimeFilterExtension, relativizeTime } from '@poopdeck.gl/layers';
 
 const timeOffset = dataStartMs; // see "The timeOffset contract" below
 
@@ -141,4 +141,4 @@ Other built-in optimizations: the shader-injection object is memoized per extens
 
 ## Source
 
-[packages/deck.gl/src/time-filter-extension.ts](../../packages/deck.gl/src/time-filter-extension.ts)
+[packages/layers/src/time-filter-extension.ts](../../packages/layers/src/time-filter-extension.ts)

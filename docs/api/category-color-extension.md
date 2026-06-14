@@ -5,14 +5,14 @@ The `CategoryColorExtension` is a deck.gl layer extension that provides GPU-base
 ## Installation
 
 ```typescript
-import { CategoryColorExtension, CATEGORY_PALETTE_SIZE } from '@stt/deck.gl';
+import { CategoryColorExtension, CATEGORY_PALETTE_SIZE } from '@poopdeck.gl/layers';
 ```
 
 ## Usage
 
 ```typescript
 import { ScatterplotLayer } from '@deck.gl/layers';
-import { CategoryColorExtension } from '@stt/deck.gl';
+import { CategoryColorExtension } from '@poopdeck.gl/layers';
 
 const layer = new ScatterplotLayer({
   id: 'categorical-points',
@@ -68,4 +68,4 @@ The GPU lookup indexes the palette by the per-tile category **index**. The STT l
 
 ## Source
 
-[packages/deck.gl/src/category-color-extension.ts](../../packages/deck.gl/src/category-color-extension.ts)
+[packages/layers/src/category-color-extension.ts](../../packages/layers/src/category-color-extension.ts)

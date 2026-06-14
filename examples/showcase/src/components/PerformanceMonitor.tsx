@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { enableProbe, getSnapshot } from '@stt/deck.gl';
-import type { OverviewPreloadResult } from '@stt/deck.gl';
+import { enableProbe, getSnapshot } from '@poopdeck.gl/layers';
+import type { OverviewPreloadResult } from '@poopdeck.gl/layers';
 
 interface PerformanceStats {
   tileCount: number;

@@ -402,25 +402,27 @@ export interface Dataset {
   arcHeight?: number;
 
   // ─── flowmap-layer styling (type: 'flowmap') ───────────────────────────
-  /** Arc width in px per `sqrt(current-bucket trip count)`. Default 1.1. */
+  /** Arrow width in px per `sqrt(current-bucket trip count)`. Default 1.1. */
   flowWidthScale?: number;
-  /** Clamp arc width to at least this many px (active arcs only). */
+  /** Clamp arrow width to at least this many px (active arrows only). */
   flowWidthMinPixels?: number;
-  /** Clamp arc width to at most this many px. */
+  /** Clamp arrow width to at most this many px. */
   flowWidthMaxPixels?: number;
-  /** Arc source (origin) endpoint color, RGBA. */
+  /** Arrow source (origin / tail) color, RGBA. */
   flowSourceColor?: ColorRGBA;
-  /** Arc target (destination) endpoint color, RGBA. */
+  /** Arrow target (destination / arrowhead) color, RGBA. */
   flowTargetColor?: ColorRGBA;
-  /** Arc height multiplier (0 = flat). Default 0.5. */
+  /** Perpendicular separation of the two directions, in arrow widths. Default 0.5. */
+  flowGap?: number;
+  /** @deprecated No effect — flow arrows are flat (old raised-arc knob). */
   flowArcHeight?: number;
-  /** Bow arcs along the great-circle path. */
+  /** @deprecated No effect — flow arrows are flat. */
   flowGreatCircle?: boolean;
   /** Node circle radius in px per `sqrt(incident flow)`. Default 1.3. */
   flowNodeRadiusScale?: number;
   /** Node circle fill color, RGBA. */
   flowNodeColor?: ColorRGBA;
-  /** Hide arcs/nodes whose current flow is below this many trips. Default 0.25. */
+  /** Hide arrows/nodes whose current flow is below this many trips. Default 0.25. */
   flowMinFlow?: number;
 
   // ─── column-layer styling (type: 'column') ─────────────────────────────

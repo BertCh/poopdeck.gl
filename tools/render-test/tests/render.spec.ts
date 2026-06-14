@@ -21,7 +21,7 @@ import {
 } from './helpers.js';
 
 /**
- * Automated rendering + FPS regression suite for `@stt/deck.gl`.
+ * Automated rendering + FPS regression suite for `@poopdeck.gl/layers`.
  *
  * Background: the deck.gl rendering layer was heavily refactored to fix a
  * float32 timestamp-precision bug, GPU attribute wiring, per-frame rebuilds
@@ -65,7 +65,7 @@ async function openDemo(page: Page): Promise<void> {
   await page.waitForTimeout(3000);
 }
 
-test.describe('@stt/deck.gl showcase rendering', () => {
+test.describe('@poopdeck.gl/layers showcase rendering', () => {
   test('1. canvas renders non-blank geometry', async ({ page }) => {
     ensureOutputDir();
     const sink = attachErrorCollectors(page);

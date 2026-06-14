@@ -23,14 +23,13 @@ import {
   AnimatedColumnLayer,
   AnimatedTripHeadsLayer,
   FlowmapLayer,
-} from "@stt/deck.gl";
+} from "@poopdeck.gl/layers";
+import type { HeatmapChannelSpec, OverviewPreloadResult } from "@poopdeck.gl/layers";
 import type {
   BufferSource,
   BufferedRunway,
-  HeatmapChannelSpec,
-  OverviewPreloadResult,
   TimeController,
-} from "@stt/deck.gl";
+} from "@poopdeck.gl/playback";
 import { tileLoadingProps } from "../../types";
 import type { Dataset, SummaryToggleOption } from "../../types";
 
@@ -396,10 +395,11 @@ export function buildDemoLayers({
         }),
       ];
     case "flowmap":
-      // flowmap.gl-style animated OD flowmap: one weighted arc per station-pair
-      // whose width tracks volume at the playhead (per-bucket vertexValueMatrix
-      // decode), plus node circles sized by incident flow. Geometry spans the
-      // whole time range — loads once, animates from the matrix.
+      // flowmap.gl-style animated OD flowmap: one weighted tapered arrow per
+      // station-pair whose width tracks volume at the playhead (per-bucket
+      // vertexValueMatrix decode, rendered via FlowLinesLayer), plus node
+      // circles sized by incident flow. Geometry spans the whole time range —
+      // loads once, animates from the matrix.
       return [
         new FlowmapLayer({
           ...baseProps,
@@ -408,8 +408,7 @@ export function buildDemoLayers({
           widthMaxPixels: selectedDataset.flowWidthMaxPixels ?? 12,
           sourceColor: selectedDataset.flowSourceColor ?? [56, 196, 232, 235],
           targetColor: selectedDataset.flowTargetColor ?? [255, 142, 64, 245],
-          greatCircle: selectedDataset.flowGreatCircle ?? false,
-          arcHeight: selectedDataset.flowArcHeight ?? 0.5,
+          gap: selectedDataset.flowGap ?? 0.5,
           nodeRadiusScale: selectedDataset.flowNodeRadiusScale ?? 1.3,
           ...(selectedDataset.flowNodeColor && {
             nodeColor: selectedDataset.flowNodeColor,

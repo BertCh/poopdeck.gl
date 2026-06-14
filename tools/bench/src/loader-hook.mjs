@@ -1,14 +1,14 @@
 /**
  * ESM resolution hook for the benchmark.
  *
- * `@stt/core` is compiled by `tsc` with extensionless relative imports
+ * `@poopdeck.gl/core` is compiled by `tsc` with extensionless relative imports
  * (e.g. `import './archive'`). Node's strict ESM resolver requires explicit
  * file extensions, so loading the package's `dist/` directly fails with
  * ERR_MODULE_NOT_FOUND.
  *
  * This hook (registered via `module.register` in index.mjs) retries failed
  * specifiers with `.js` / `/index.js` suffixes, WITHOUT modifying the
- * `@stt/core` package.
+ * `@poopdeck.gl/core` package.
  */
 
 import { existsSync } from 'node:fs';

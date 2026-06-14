@@ -10,14 +10,13 @@ import { useParams, useLocation, Navigate, Link } from "react-router-dom";
 import { getDatasetById } from "../datasets";
 import { getDemoMeta } from "../content/demoMeta";
 import DemoViewer from "../components/demo/DemoViewer";
-import HoverPreview from "../components/demo/HoverPreview";
-import type { DemoCamera } from "../components/demo/HoverPreview";
+import DemoHoverPreview from "../components/demo/DemoHoverPreview";
+import type { DemoCamera } from "../components/demo/previewBasemap";
 import MaplibreRenderer from "../components/MaplibreRenderer";
 import { useDemoPlayback } from "../components/demo/useDemoPlayback";
-import { usePlaybackHotkeys } from "../components/demo/usePlaybackHotkeys";
-import TimeControls from "../components/TimeControls";
+import { usePlaybackHotkeys, PlaybackControls } from "@poopdeck.gl/react";
 
-/** Dataset types the `@stt/maplibre` adapter can mount (see makeSttLayer). */
+/** Dataset types the `@poopdeck.gl/maplibre` adapter can mount (see makeSttLayer). */
 const MAPLIBRE_TYPES = new Set(["point", "path", "trips", "polygon", "heatmap"]);
 
 const DemoPage: React.FC = () => {
@@ -127,7 +126,7 @@ const DemoPage: React.FC = () => {
         style={{ background: "var(--surface)", borderTop: "1px solid var(--hairline)" }}
       >
         <div className="px-5 py-3">
-          <TimeControls
+          <PlaybackControls
             currentTime={playback.currentTime}
             timeRange={selectedDataset.timeRange}
             isPlaying={playback.isPlaying}
@@ -146,7 +145,7 @@ const DemoPage: React.FC = () => {
               useMaplibre
                 ? undefined
                 : (time) => (
-                    <HoverPreview
+                    <DemoHoverPreview
                       key={selectedDataset.id}
                       dataset={selectedDataset}
                       camera={camera}

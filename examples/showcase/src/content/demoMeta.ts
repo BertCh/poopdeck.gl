@@ -288,16 +288,19 @@ export const DEMO_META: Record<string, DemoMeta> = {
         'downtown fills on weekday mornings, the Plateau and the Lachine Canal ' +
         'light up on summer evenings and weekends.',
       'It reuses the same geometry-once / animate-from-a-matrix trick as the ' +
-        'taxi flow corridors: each OD pair is a single 2-vertex arc carrying a ' +
-        '`[2 × buckets]` `vertexValueMatrix`. `FlowmapLayer` reads the active ' +
-        "bucket as each arc's width and sums incident flow at each dock for the " +
-        'node circles, so the tile loads once and only the playhead moves. A ' +
-        'volume-based `min_zoom` keeps the busiest corridors legible city-wide ' +
-        'and reveals the long tail on zoom-in.',
-      'The data is real: ~1.9M trips from BIXI Montréal open data, aggregated ' +
-        'into ~10.7K directed corridors at hourly resolution. No thinning — ' +
-        'aggregation IS the visualization (a summary tier), and every hourly ' +
-        'bucket is kept for every corridor.',
+        'taxi flow corridors: each OD pair is a single 2-vertex corridor ' +
+        'carrying a `[2 × buckets]` `vertexValueMatrix`. `FlowmapLayer` draws ' +
+        'it as a flowmap.gl-style **tapered arrow** (via `FlowLinesLayer`) — ' +
+        'width from the active bucket — and sums incident flow at each dock for ' +
+        'the node circles, so the tile loads once and only the playhead moves.',
+      'The per-zoom aggregation is baked into the tiles: the build clusters ' +
+        'stations into hubs per zoom (the same hierarchical clustering ' +
+        'flowmap.gl does at runtime, done once at build time), so low zooms ' +
+        'show a few fat hub-to-hub corridors and full per-station detail ' +
+        'returns as you zoom in. The data is real: ~1.9M trips from BIXI ' +
+        'Montréal open data, aggregated into directed OD corridors at hourly ' +
+        'resolution. No thinning — clustering AGGREGATES flow rather than ' +
+        'dropping it, and every hourly bucket is kept for every corridor.',
     ],
     dataSources: [
       {
@@ -316,14 +319,18 @@ export const DEMO_META: Record<string, DemoMeta> = {
     buildCommand:
       'stt-generate bixi --input DonneesOuvertes2024.csv \\\n' +
       '  --from 2024-08-01 --to 2024-09-01 --bin 1h --min-trips 30 \\\n' +
+      '  --cluster-radius 80 \\\n' +
       '  --output bixi-flowmap.stt',
     buildNote:
       'Aggregates real BIXI open-data trips into directed OD-pair corridors, ' +
-      'each carrying an hourly vertexValueMatrix (~1.5 MB packed). The CSV schema ' +
-      'is auto-detected: 2022+ embeds lat/lon per trip; pre-2022 resolves station ' +
-      'codes via a Stations CSV or the public GBFS feed.',
+      'each carrying an hourly vertexValueMatrix. Stations are clustered into ' +
+      'hubs per zoom by default (tune with `--cluster-radius`; `--no-cluster` ' +
+      'falls back to the legacy volume LOD). The CSV schema is auto-detected: ' +
+      '2022+ embeds lat/lon per trip; pre-2022 resolves station codes via a ' +
+      'Stations CSV or the public GBFS feed.',
     techniques: [
       { label: 'FlowmapLayer', docPath: '/docs/api/flowmap-layer' },
+      { label: 'FlowLinesLayer (tapered arrows)', docPath: '/docs/api/flow-lines-layer' },
       { label: 'Binary features (vertex value matrix)', docPath: '/docs/api/binary-features' },
     ],
     related: ['nyc-od-arcs', 'nyc-taxi-flows', 'nyc-od-quadbin'],

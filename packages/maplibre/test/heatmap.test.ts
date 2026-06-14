@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { GeometryType } from '@stt/core';
+import { GeometryType } from '@poopdeck.gl/core';
 import { STTHeatmapLayer } from '../src/layers/heatmap-layer';
 import { makeMockGl, makeMockMap } from './mock-gl';
 import { makePropertyPointTile } from './fixtures';

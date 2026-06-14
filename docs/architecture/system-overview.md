@@ -29,11 +29,11 @@ graph TD
     end
 
     subgraph "Client (browser)"
-        ARCHIVE["@stt/core: STTArchive"]
+        ARCHIVE["@poopdeck.gl/core: STTArchive"]
         OPFS["OPFS persistent cache"]
         DECODER["WorkerTileDecoder pool"]
         TILESET[SpatiotemporalTileset]
-        LAYERS["@stt/deck.gl OR @stt/maplibre layers"]
+        LAYERS["@poopdeck.gl/layers OR @poopdeck.gl/maplibre layers"]
         ARCHIVE --> OPFS
         ARCHIVE --> DECODER
         DECODER --> TILESET
@@ -111,7 +111,7 @@ compression abstraction, Hilbert/temporal indexing, and metadata.
 
 ## TypeScript stack
 
-### `@stt/core`
+### `@poopdeck.gl/core`
 - **`STTArchive`** — packed-format reader over HTTP Range. Fetches
   `manifest.json` (metadata + directory pointer + pack table), then the
   directory object, then per-tile blobs via Range requests against the pack
@@ -137,7 +137,7 @@ compression abstraction, Hilbert/temporal indexing, and metadata.
   using `@loaders.gl/*` can drop STT into their existing tile source
   plumbing. See the [tile decoding](../api/stt-loader.md) page.
 
-### `@stt/deck.gl`
+### `@poopdeck.gl/layers`
 - **`SpatioTemporalLayer`** — composite layer; owns the archive + tileset,
   delegates rendering to specialized sublayers.
 - **`AnimatedPointLayer` / `AnimatedPathLayer` / `AnimatedPolygonLayer` /
@@ -166,7 +166,7 @@ compression abstraction, Hilbert/temporal indexing, and metadata.
   buffered runway ahead of the playhead and can auto-adapt playback speed to
   measured throughput.
 
-### `@stt/maplibre`
+### `@poopdeck.gl/maplibre`
 Same archive reader and tileset, rendered through MapLibre GL's
 `CustomLayerInterface` in raw WebGL — for sites that don't want a deck.gl
 dependency or that need to interleave STT layers between native MapLibre

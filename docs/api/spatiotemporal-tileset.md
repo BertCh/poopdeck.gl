@@ -7,12 +7,12 @@ It is inspired by deck.gl's `Tileset2D` (the class behind `TileLayer`), extended
 ## Installation
 
 ```typescript
-import { SpatiotemporalTileset } from "@stt/core";
+import { SpatiotemporalTileset } from "@poopdeck.gl/core";
 ```
 
 ## Usage
 
-Typically used internally by `SpatioTemporalLayer` (and `@stt/maplibre`'s `STTBaseLayer`), but can be used independently for custom implementations.
+Typically used internally by `SpatioTemporalLayer` (and `@poopdeck.gl/maplibre`'s `STTBaseLayer`), but can be used independently for custom implementations.
 
 ```typescript
 const tileset = new SpatiotemporalTileset({

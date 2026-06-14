@@ -13,7 +13,7 @@
  * - TTFT: time from `goto` resolved to the first `__sttProbe.tileset.stats`
  *   snapshot reporting `visibleTiles > 0`.
  * - Decode / consolidation / renderLayers samples drained from the
- *   in-app `globalThis.__sttProbe` channel (see packages/deck.gl/src/telemetry.ts).
+ *   in-app `globalThis.__sttProbe` channel (see packages/layers/src/telemetry.ts).
  * - Survives a missing demo (missing .stt, navigation timeout) without
  *   aborting the whole sweep — bad demos are reported and skipped.
  *

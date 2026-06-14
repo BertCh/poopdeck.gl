@@ -1,6 +1,6 @@
-# @stt/bench
+# @poopdeck.gl/bench
 
-Performance benchmark for the `@stt/core` data-loading pipeline.
+Performance benchmark for the `@poopdeck.gl/core` data-loading pipeline.
 
 It exercises the real `STTArchive` reader entirely offline: instead of an HTTP
 server, a custom file-backed `fetch` satisfies HTTP Range Requests by reading
@@ -23,7 +23,7 @@ coalescing, decode and caching code paths with zero network setup.
    evictions, and hit rate, with a warm-pass verification.
 6. **Compression ratio** — overall compressed vs. uncompressed bytes.
 
-Tile decoding in the current `@stt/core` (Apache Arrow IPC pipeline) is
+Tile decoding in the current `@poopdeck.gl/core` (Apache Arrow IPC pipeline) is
 inline / synchronous — there is no web-worker pool.
 
 ## Running
@@ -38,10 +38,10 @@ With no argument it uses the repo's `earthquakes.stt` (falling back to
 `ships.stt`), resolved relative to the repo root regardless of the current
 working directory.
 
-Requires `@stt/core` to be built first (`pnpm --filter @stt/core build`).
+Requires `@poopdeck.gl/core` to be built first (`pnpm --filter @poopdeck.gl/core build`).
 
 > `src/loader-hook.mjs` is an ESM resolution shim registered by `index.mjs`.
-> It lets the unmodified `@stt/core` `dist/` output load under Node's strict
+> It lets the unmodified `@poopdeck.gl/core` `dist/` output load under Node's strict
 > ESM resolver, which rejects the extensionless relative imports `tsc` emits.
 
 The benchmarked archive must be built with the current `stt-build` /

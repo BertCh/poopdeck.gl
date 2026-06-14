@@ -1,4 +1,4 @@
-# How `@stt/deck.gl` relates to TileLayer
+# How `@poopdeck.gl/layers` relates to TileLayer
 
 If you already use deck.gl, the natural question is: why isn't
 `SpatioTemporalLayer` just a
@@ -147,4 +147,4 @@ Differences a deck.gl user will notice, beyond the tileset:
 Utilities that are *not* deck-coupled at all: `TimeController` (playback
 clock, zero deck imports) and `PlaybackGovernor` (buffering state machine over
 a structural `BufferSource` interface) can be used with any renderer,
-including the `@stt/maplibre` adapter.
+including the `@poopdeck.gl/maplibre` adapter.

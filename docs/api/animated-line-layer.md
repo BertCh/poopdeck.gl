@@ -7,7 +7,7 @@ It extends [`SpatioTemporalLayer`](./spatiotemporal-layer.md) and uses window-mo
 ## Installation
 
 ```typescript
-import { AnimatedLineLayer } from '@stt/deck.gl';
+import { AnimatedLineLayer } from '@poopdeck.gl/layers';
 ```
 
 ## Usage
@@ -43,4 +43,4 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 
 ## Source
 
-[packages/deck.gl/src/animated-line-layer.ts](../../packages/deck.gl/src/animated-line-layer.ts)
+[packages/layers/src/animated-line-layer.ts](../../packages/layers/src/animated-line-layer.ts)

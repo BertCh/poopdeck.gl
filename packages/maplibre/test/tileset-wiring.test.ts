@@ -1,6 +1,6 @@
 /**
  * Tileset wiring tests — verifies `initTileset` configures the
- * SpatiotemporalTileset with the full @stt/core capability set (parity with
+ * SpatiotemporalTileset with the full @poopdeck.gl/core capability set (parity with
  * the deck.gl adapter's `_initArchiveAndTileset`):
  *
  *   - getTileDataBatch → archive.getTiles with per-range-group onTileReady
@@ -16,7 +16,7 @@
  */
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { SpatiotemporalTileset, type TileId } from '@stt/core';
+import { SpatiotemporalTileset, type TileId } from '@poopdeck.gl/core';
 import { STTPointLayer } from '../src/layers/point-layer';
 import { makeMockMap } from './mock-gl';
 

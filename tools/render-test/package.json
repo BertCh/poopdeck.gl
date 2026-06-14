@@ -1,7 +1,7 @@
 {
-  "name": "@stt/render-test",
+  "name": "@poopdeck.gl/render-test",
   "version": "0.1.0",
-  "description": "Automated browser rendering + FPS regression test for the @stt/deck.gl showcase",
+  "description": "Automated browser rendering + FPS regression test for the @poopdeck.gl/layers showcase",
   "private": true,
   "type": "module",
   "scripts": {

@@ -1,6 +1,6 @@
-// @stt/core
+// @poopdeck.gl/core
 // SPDX-License-Identifier: MIT
-// Copyright (c) @stt/core contributors
+// Copyright (c) @poopdeck.gl/core contributors
 
 /**
  * Tile decoding: turn an STT tile payload into deck.gl-ready binary features.

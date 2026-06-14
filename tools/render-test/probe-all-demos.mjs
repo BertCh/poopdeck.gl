@@ -1,5 +1,5 @@
 // Quick probe: navigate to every dataset, classify rendering result.
-// Run with: pnpm --filter @stt/render-test probe   (or node ./probe-all-demos.mjs)
+// Run with: pnpm --filter @poopdeck.gl/render-test probe   (or node ./probe-all-demos.mjs)
 import { chromium } from 'playwright';
 import fs from 'node:fs';
 import path from 'node:path';

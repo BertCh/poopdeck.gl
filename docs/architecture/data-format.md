@@ -233,7 +233,7 @@ field-level key and fall back to `stt:geometry` only when it is absent.
 In TypeScript, the decoded `Layer` exposes both surfaces:
 
 ```ts
-import { toGeoArrowTable } from '@stt/core';
+import { toGeoArrowTable } from '@poopdeck.gl/core';
 import { GeoArrowPathLayer } from '@geoarrow/deck.gl-layers';
 
 const table = toGeoArrowTable(tile.layers[0]);

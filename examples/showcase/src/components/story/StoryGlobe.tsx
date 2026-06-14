@@ -7,13 +7,13 @@ import {
   ScatterplotLayer,
   TextLayer,
 } from '@deck.gl/layers';
+import { AnimatedTripsLayer } from '@poopdeck.gl/layers';
 import {
-  AnimatedTripsLayer,
   TimeController,
   PlaybackGovernor,
   decideAutoSpeedMultiplier,
-} from '@stt/deck.gl';
-import type { BufferSource, BufferedRunway } from '@stt/deck.gl';
+} from '@poopdeck.gl/playback';
+import type { BufferSource, BufferedRunway } from '@poopdeck.gl/playback';
 import { getDatasetById } from '../../datasets';
 import { tileLoadingProps } from '../../types';
 import {

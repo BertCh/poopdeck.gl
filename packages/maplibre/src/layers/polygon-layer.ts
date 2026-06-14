@@ -20,8 +20,8 @@
  */
 
 import earcut from 'earcut';
-import type { Tile, Layer as STTLayer } from '@stt/core';
-import { GeometryType } from '@stt/core';
+import type { Tile, Layer as STTLayer } from '@poopdeck.gl/core';
+import { GeometryType } from '@poopdeck.gl/core';
 import {
   STTBaseLayer,
   type STTBaseLayerOptions,
@@ -33,7 +33,7 @@ import {
 import { lngLatToMercator } from '../lib/projection';
 import { TIME_WINDOW_GLSL } from '../shaders/time-window.glsl';
 
-// Categorical default palette (matches @stt/deck.gl AnimatedPolygonLayer).
+// Categorical default palette (matches @poopdeck.gl/layers AnimatedPolygonLayer).
 const DEFAULT_POLY_PALETTE: ReadonlyArray<RGBA8> = [
   [255, 140, 0, 180],
   [31, 119, 180, 180],

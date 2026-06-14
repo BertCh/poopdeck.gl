@@ -1,5 +1,5 @@
 {
-  "name": "@stt/perf",
+  "name": "@poopdeck.gl/perf",
   "version": "0.1.0",
   "description": "Real-WebGL perf harness for the STT showcase: frame-time histograms across playback / zoom / paused-idle scenarios, JSON output + baseline regression check.",
   "private": true,

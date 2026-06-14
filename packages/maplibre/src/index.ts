@@ -1,5 +1,5 @@
 /**
- * @stt/maplibre — MapLibre GL custom-layer adapters for STT archives.
+ * @poopdeck.gl/maplibre — MapLibre GL custom-layer adapters for STT archives.
  *
  * Five layer classes, one per visualisation kind. Add the one(s) you need to
  * your map; each manages its own archive read, tile cache and shader pipeline:
@@ -17,7 +17,7 @@
  * pointing at the same URL — each will pick out the geometries it accepts.
  *
  * For deck.gl's rounded joints, dashes and GPU picking, use
- * {@link "@stt/deck.gl"} instead. This adapter exists for sites that don't
+ * {@link "@poopdeck.gl/layers"} instead. This adapter exists for sites that don't
  * want a deck.gl dependency or that need to interleave STT data between
  * native MapLibre layers.
  */

@@ -20,11 +20,11 @@ across every layer type the project ships:
 - **GPU-splat heatmap**: NYC taxi OD heatmap
 - **Server-aggregated H3 summary tier**: NYC taxi OD summary
 
-Each demo can also be rendered through the `@stt/maplibre` adapter via
+Each demo can also be rendered through the `@poopdeck.gl/maplibre` adapter via
 the `/maplibre/:datasetId` route, for the no-deck.gl path.
 
 **Tech stack**: React 18, deck.gl 9.x, TypeScript, Vite,
-`@stt/core`, `@stt/deck.gl`, `@stt/maplibre`.
+`@poopdeck.gl/core`, `@poopdeck.gl/layers`, `@poopdeck.gl/maplibre`.
 
 ```bash
 cd showcase
@@ -63,13 +63,14 @@ For arbitrary GeoParquet input, use `stt-build` directly. See the
 ```bash
 mkdir my-stt-app && cd my-stt-app
 npm init -y
-npm install @stt/core @stt/deck.gl @deck.gl/react react react-dom
+npm install @poopdeck.gl/core @poopdeck.gl/layers @poopdeck.gl/playback @deck.gl/react react react-dom
 ```
 
 ```typescript
 import { useState } from 'react';
 import DeckGL from '@deck.gl/react';
-import { AnimatedPointLayer, TimeController } from '@stt/deck.gl';
+import { AnimatedPointLayer } from '@poopdeck.gl/layers';
+import { TimeController } from '@poopdeck.gl/playback';
 
 function App() {
   const [timeController] = useState(() => new TimeController());

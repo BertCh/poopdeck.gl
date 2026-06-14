@@ -10,21 +10,21 @@ import DeckGL from "@deck.gl/react";
 import { _GlobeView as GlobeView } from "@deck.gl/core";
 import { LineLayer, SolidPolygonLayer } from "@deck.gl/layers";
 import { Map } from "react-map-gl";
-import type { BufferSource } from "@stt/deck.gl";
+import type { BufferSource } from "@poopdeck.gl/playback";
 import type { Dataset, SummaryToggleOption } from "../../types";
 import Legend from "../Legend";
 import PerformanceMonitor from "../PerformanceMonitor";
 import { buildDemoLayers } from "./buildDemoLayers";
-import type { DemoCamera } from "./HoverPreview";
-import type { DemoPlayback } from "./useDemoPlayback";
+import type { DemoCamera } from "./previewBasemap";
+import type { PlaybackState } from "@poopdeck.gl/react";
 
 const MAPBOX_ACCESS_TOKEN =
   (import.meta as any).env?.VITE_MAPBOX_TOKEN ||
   "pk.eyJ1IjoicmdjZ2VvZyIsImEiOiJjajBuNG1sMjUwMDFlMzNxcWY0M2RqMHI3In0.XfM0BMSqZqjRDcz-oJuadw";
 
 /**
- * Minimal slice of @stt/core's Tile that the space-time-cube lattice needs.
- * Kept local so the showcase doesn't grow a direct @stt/core dependency for
+ * Minimal slice of @poopdeck.gl/core's Tile that the space-time-cube lattice needs.
+ * Kept local so the showcase doesn't grow a direct @poopdeck.gl/core dependency for
  * one overlay.
  */
 interface LatticeTile {
@@ -39,7 +39,7 @@ function tileLat(y: number, n: number): number {
 
 export interface DemoViewerProps {
   dataset: Dataset;
-  playback: DemoPlayback;
+  playback: PlaybackState;
   /** Show the collapsed performance HUD chip (fullscreen viewer only). */
   showPerfHud?: boolean;
   /** false renders with controller off (embed tap-to-interact shield). */

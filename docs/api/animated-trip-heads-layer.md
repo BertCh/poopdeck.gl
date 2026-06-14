@@ -7,13 +7,13 @@ Because the motion is a CPU-computed *position* (not a per-vertex alpha gate), t
 ## Installation
 
 ```typescript
-import { AnimatedTripHeadsLayer } from '@stt/deck.gl';
+import { AnimatedTripHeadsLayer } from '@poopdeck.gl/layers';
 ```
 
 ## Usage
 
 ```typescript
-import { AnimatedTripHeadsLayer } from '@stt/deck.gl';
+import { AnimatedTripHeadsLayer } from '@poopdeck.gl/layers';
 
 const heads = new AnimatedTripHeadsLayer({
   id: 'taxi-heads',
@@ -60,4 +60,4 @@ The sublayer short id for `_subLayerProps` overrides is **`heads`**.
 
 ## Source
 
-[packages/deck.gl/src/layers/trips/animated-trip-heads-layer.ts](../../packages/deck.gl/src/layers/trips/animated-trip-heads-layer.ts)
+[packages/layers/src/layers/trips/animated-trip-heads-layer.ts](../../packages/layers/src/layers/trips/animated-trip-heads-layer.ts)

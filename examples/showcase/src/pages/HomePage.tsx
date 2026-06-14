@@ -9,12 +9,9 @@ import { Link } from "react-router-dom";
 import DeckGL from "@deck.gl/react";
 import { _GlobeView as GlobeView } from "@deck.gl/core";
 import { SolidPolygonLayer } from "@deck.gl/layers";
-import {
-  AnimatedTripsLayer,
-  PlaybackGovernor,
-  TimeController,
-} from "@stt/deck.gl";
-import type { BufferSource, BufferedRunway } from "@stt/deck.gl";
+import { AnimatedTripsLayer } from "@poopdeck.gl/layers";
+import { PlaybackGovernor, TimeController } from "@poopdeck.gl/playback";
+import type { BufferSource, BufferedRunway } from "@poopdeck.gl/playback";
 import { getDatasetById, navDatasets } from "../datasets";
 import { calculateAnimationSpeed, tileLoadingProps } from "../types";
 import { SourceLogo } from "../components/SourceLogo";

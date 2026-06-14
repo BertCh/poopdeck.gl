@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import type { Dataset } from "../../types";
 import DemoViewer from "./DemoViewer";
 import { useDemoPlayback } from "./useDemoPlayback";
-import TimeControls from "../TimeControls";
+import { PlaybackControls } from "@poopdeck.gl/react";
 
 /**
  * Framed live-map embed for the per-demo landing pages.
@@ -132,7 +132,7 @@ const DemoEmbed: React.FC<{ dataset: Dataset }> = ({ dataset }) => {
         className="mt-3 rounded-md px-4 py-2.5"
         style={{ background: "var(--surface)", border: "1px solid var(--hairline)" }}
       >
-        <TimeControls
+        <PlaybackControls
           currentTime={playback.currentTime}
           timeRange={dataset.timeRange}
           isPlaying={playback.isPlaying}

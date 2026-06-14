@@ -70,7 +70,7 @@ export const docSections: DocSection[] = [
         file: "architecture/deckgl-integration.md",
         title: "deck.gl Integration",
         blurb:
-          "How @stt/deck.gl relates to TileLayer, and where it deliberately departs.",
+          "How @poopdeck.gl/layers relates to TileLayer, and where it deliberately departs.",
       },
     ],
   },
@@ -99,7 +99,7 @@ export const docSections: DocSection[] = [
     id: "api",
     label: "JS API",
     blurb:
-      "deck.gl layers and extensions, the playback clock, and the @stt/core reader.",
+      "deck.gl layers and extensions, the playback clock, and the @poopdeck.gl/core reader.",
     entries: [
       {
         slug: "api/spatiotemporal-layer",
@@ -150,6 +150,11 @@ export const docSections: DocSection[] = [
         slug: "api/flowmap-layer",
         file: "api/flowmap-layer.md",
         title: "FlowmapLayer",
+      },
+      {
+        slug: "api/flow-lines-layer",
+        file: "api/flow-lines-layer.md",
+        title: "FlowLinesLayer",
       },
       {
         slug: "api/animated-arc-layer",
@@ -214,7 +219,7 @@ export const docSections: DocSection[] = [
       {
         slug: "api/stt-maplibre",
         file: "api/stt-maplibre.md",
-        title: "@stt/maplibre",
+        title: "@poopdeck.gl/maplibre",
       },
     ],
   },

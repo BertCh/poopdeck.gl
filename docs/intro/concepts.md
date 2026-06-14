@@ -108,7 +108,7 @@ available when you know your access pattern.
 
 ### Optimistic Rendering
 
-The STT client implementation (`@stt/core`) is designed for smooth animation. It employs **Optimistic Rendering**:
+The STT client implementation (`@poopdeck.gl/core`) is designed for smooth animation. It employs **Optimistic Rendering**:
 - It immediately displays whatever data is available in the cache.
 - It fetches higher-resolution or adjacent temporal data in the background.
 - It never blocks the animation loop waiting for network requests.

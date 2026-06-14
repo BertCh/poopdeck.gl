@@ -7,13 +7,14 @@ The `TimeController` class is the animation clock: a wall-clock × speed rAF loo
 ## Installation
 
 ```typescript
-import { TimeController } from '@stt/deck.gl';
+import { TimeController } from '@poopdeck.gl/playback';
 ```
 
 ## Usage
 
 ```typescript
-import { TimeController, PlaybackGovernor, AnimatedPointLayer } from '@stt/deck.gl';
+import { TimeController, PlaybackGovernor } from '@poopdeck.gl/playback';
+import { AnimatedPointLayer } from '@poopdeck.gl/layers';
 
 const timeController = new TimeController({
   initialTime: Date.parse('2020-01-01'),
@@ -142,7 +143,7 @@ interface TimeControllerState {
 }
 ```
 
-Both are exported from `@stt/deck.gl`. The `tick`/`wrap`/`ended` callbacks receive `(time: number)`; `playState` receives `(playing: boolean, speed: number)` — see the events table.
+Both are exported from `@poopdeck.gl/playback`. The `tick`/`wrap`/`ended` callbacks receive `(time: number)`; `playState` receives `(playing: boolean, speed: number)` — see the events table.
 
 ## Integration with Layers
 
@@ -154,4 +155,4 @@ When you pass a `TimeController` to a layer via the `timeController` prop, the l
 
 ## Source
 
-[packages/deck.gl/src/time-controller.ts](../../packages/deck.gl/src/time-controller.ts)
+[packages/layers/src/time-controller.ts](../../packages/layers/src/time-controller.ts)

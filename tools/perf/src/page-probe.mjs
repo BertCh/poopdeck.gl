@@ -13,7 +13,7 @@
  *  - JS heap size (deltas across the run)
  *
  * The probe is the only piece of in-page instrumentation we install. Nothing
- * here depends on @stt/* internals, so the harness keeps working even if the
+ * here depends on @poopdeck.gl/* internals, so the harness keeps working even if the
  * app's internal hooks move. (Future: thread an optional @stt instrumentation
  * import when we want decode/consolidate timings.)
  */

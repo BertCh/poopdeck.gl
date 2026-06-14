@@ -5,13 +5,13 @@ The `AnimatedPointLayer` renders time-series point data as circles. It extends [
 ## Installation
 
 ```typescript
-import { AnimatedPointLayer } from "@stt/deck.gl";
+import { AnimatedPointLayer } from "@poopdeck.gl/layers";
 ```
 
 ## Usage
 
 ```typescript
-import { AnimatedPointLayer } from "@stt/deck.gl";
+import { AnimatedPointLayer } from "@poopdeck.gl/layers";
 
 const layer = new AnimatedPointLayer({
   id: "earthquakes",
@@ -146,4 +146,4 @@ The sublayer short id for `_subLayerProps` overrides is **`points`** (covers bot
 
 ## Source
 
-[packages/deck.gl/src/animated-point-layer.ts](../../packages/deck.gl/src/animated-point-layer.ts)
+[packages/layers/src/animated-point-layer.ts](../../packages/layers/src/animated-point-layer.ts)

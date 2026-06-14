@@ -312,16 +312,17 @@ const rawDatasets: Dataset[] = [
   },
   {
     // Real Montreal BIXI bike-share trips (August 2024) aggregated into directed
-    // origin→destination station-pair flows. FlowmapLayer animates each arc's
-    // width from a per-hour vertexValueMatrix + sizes node circles by incident
-    // flow — the tile spans the whole month, so it loads once and animates from
-    // the matrix as the playhead scrubs the daily commute rhythm.
+    // origin→destination station-pair flows. FlowmapLayer animates each tapered
+    // arrow's width from a per-hour vertexValueMatrix + sizes node circles by
+    // incident flow — the tile spans the whole month, so it loads once and
+    // animates from the matrix as the playhead scrubs the daily commute rhythm.
+    // Stations are clustered into hubs per zoom at build time (flowmap.gl-style).
     id: 'bixi-flowmap',
     name: 'Montréal BIXI — OD Flowmap',
     sources: ['bixi'],
     description:
       'A month of real BIXI bike-share trips (August 2024) as a flowmap.gl-style ' +
-      'animated origin→destination flowmap — station-pair arcs swell and recede ' +
+      'animated origin→destination flowmap — station-pair arrows swell and recede ' +
       "with hourly demand and node circles pulse with each dock's traffic. " +
       'FlowmapLayer.',
     url: '/data/bixi-flowmap/manifest.json',
@@ -334,18 +335,21 @@ const rawDatasets: Dataset[] = [
     // decode (not a time window) drives the animation.
     timeWindow: 3600000,
     targetPlaybackSeconds: 90,
+    // Opens on the clustered hub overview (z~11): flowmap.gl-style fat
+    // hub-to-hub arrows + node circles. Zoom in to dissolve hubs into
+    // per-station corridors (full resolution at the deepest zoom).
     initialViewState: {
-      longitude: -73.578,
-      latitude: 45.518,
-      zoom: 12.2,
-      pitch: 40,
+      longitude: -73.585,
+      latitude: 45.523,
+      zoom: 11.2,
+      pitch: 35,
       bearing: -10,
     },
     flowSourceColor: [56, 196, 232, 235], // origin — cool cyan
     flowTargetColor: [255, 142, 64, 245], // destination — warm orange
     flowWidthScale: 1.1,
     flowWidthMaxPixels: 14,
-    flowArcHeight: 0.5,
+    flowGap: 0.5, // A→B and B→A arrows sit side-by-side
     flowNodeRadiusScale: 1.3,
     flowMinFlow: 0.5, // hide corridors with < ~1 trip in the current hour
     opacity: 0.85,

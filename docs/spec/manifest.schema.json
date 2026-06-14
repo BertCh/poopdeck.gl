@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://spatiotemporal-tiles.dev/spec/manifest.schema.json",
   "title": "STT packed-format manifest",
-  "description": "Canonical schema for the per-dataset `manifest.json` of the STT packed format (formatVersion 1). This is the cross-language wire contract: the Rust writer (`crate::pack::Manifest`) and every reader (TS `@stt/core` `PackedManifest`, Rust `PackedReader`) MUST agree with this document. Unknown properties are permitted at every envelope level (additive evolution within formatVersion 1): readers MUST ignore fields they do not recognize. See docs/spec/stt-packed-format.md.",
+  "description": "Canonical schema for the per-dataset `manifest.json` of the STT packed format (formatVersion 1). This is the cross-language wire contract: the Rust writer (`crate::pack::Manifest`) and every reader (TS `@poopdeck.gl/core` `PackedManifest`, Rust `PackedReader`) MUST agree with this document. Unknown properties are permitted at every envelope level (additive evolution within formatVersion 1): readers MUST ignore fields they do not recognize. See docs/spec/stt-packed-format.md.",
   "type": "object",
   "required": ["format", "formatVersion", "compression", "directory", "packs", "metadata"],
   "properties": {

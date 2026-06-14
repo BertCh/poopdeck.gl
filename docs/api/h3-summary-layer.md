@@ -7,13 +7,13 @@ It extends [`SpatioTemporalLayer`](./spatiotemporal-layer.md) and reuses ALL of 
 ## Installation
 
 ```typescript
-import { H3SummaryLayer } from '@stt/deck.gl';
+import { H3SummaryLayer } from '@poopdeck.gl/layers';
 ```
 
 ## Usage
 
 ```typescript
-import { H3SummaryLayer } from '@stt/deck.gl';
+import { H3SummaryLayer } from '@poopdeck.gl/layers';
 
 const layer = new H3SummaryLayer({
   id: 'ship-density',
@@ -74,4 +74,4 @@ The sublayer short id for `_subLayerProps` overrides is **`hexagons`**: `_subLay
 
 ## Source
 
-[packages/deck.gl/src/h3-summary-layer.ts](../../packages/deck.gl/src/h3-summary-layer.ts)
+[packages/layers/src/h3-summary-layer.ts](../../packages/layers/src/h3-summary-layer.ts)

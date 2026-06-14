@@ -6,7 +6,7 @@
  *
  *   - Without `--pre-tessellate`, the tile arrives, the TS decoder converts
  *     it to `BinaryFeatures`, and the renderer (deck.gl's
- *     `SolidPolygonLayer`, or `@stt/maplibre`'s `STTPolygonLayer`) runs
+ *     `SolidPolygonLayer`, or `@poopdeck.gl/maplibre`'s `STTPolygonLayer`) runs
  *     earcut on every polygon's vertex list on the MAIN thread before
  *     anything reaches the GPU. For a 10k-polygon tile this is the longest
  *     single step in the tile-arrival critical path.

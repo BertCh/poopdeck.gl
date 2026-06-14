@@ -26,7 +26,7 @@ import {
 } from './lib/report.js';
 
 /**
- * Full-browser evaluation sweep for the @stt/showcase demo site.
+ * Full-browser evaluation sweep for the @poopdeck.gl/showcase demo site.
  *
  * For every dataset published on `window.__STT_DATASETS`, the sweep:
  *   1. opens `/demo/<id>` in a fresh Chromium page,

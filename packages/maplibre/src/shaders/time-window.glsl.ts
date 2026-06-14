@@ -1,7 +1,7 @@
 /**
  * Single source of truth for STT's time-filtering GLSL.
  *
- * Both `@stt/deck.gl`'s `TimeFilterExtension` and `@stt/maplibre`'s layers
+ * Both `@poopdeck.gl/layers`'s `TimeFilterExtension` and `@poopdeck.gl/maplibre`'s layers
  * compare a feature's `[startTime, endTime]` (or per-vertex `vertexTime` in
  * trail mode) against the current time, with optional symmetric fade-in /
  * fade-out at each window edge. Keeping the math in one snippet here lets us:
@@ -107,7 +107,7 @@ float sttTrailAlpha(
 
 /**
  * Convenience: a JS-side reference implementation of the window-mode shader,
- * used by tests to cross-check parity with `@stt/deck.gl`'s extension. Keeping
+ * used by tests to cross-check parity with `@poopdeck.gl/layers`'s extension. Keeping
  * it in the same file as the GLSL source forces the two to stay in lock-step
  * if anyone ever edits the formula.
  */

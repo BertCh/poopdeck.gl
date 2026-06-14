@@ -14,7 +14,7 @@
         "!**/*.pmtiles"
       ]
     },
-    "@stt/showcase#build": {
+    "@poopdeck.gl/showcase#build": {
       "dependsOn": ["^build"],
       "cache": false
     },

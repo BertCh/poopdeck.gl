@@ -2,8 +2,8 @@
  * Point geometry adapter — renders POINT-type tiles as circular billboards.
  */
 
-import type { Tile, Layer as STTLayer } from '@stt/core';
-import { GeometryType } from '@stt/core';
+import type { Tile, Layer as STTLayer } from '@poopdeck.gl/core';
+import { GeometryType } from '@poopdeck.gl/core';
 import {
   STTBaseLayer,
   type STTBaseLayerOptions,

@@ -93,7 +93,7 @@ const DocPage: React.FC = () => {
               <code>manifest.json</code> (JSON Schema 2020-12). It is pinned in
               CI against the Rust writer (<code>stt_core::pack::Manifest</code>)
               and the TypeScript reader (<code>PackedManifest</code> in{" "}
-              <code>@stt/core</code>). See the{" "}
+              <code>@poopdeck.gl/core</code>). See the{" "}
               <Link to="/docs/spec/stt-packed-format">packed format spec</Link>{" "}
               for the semantics.
             </p>

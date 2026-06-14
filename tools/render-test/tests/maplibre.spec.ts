@@ -1,5 +1,5 @@
 /**
- * Render smoke test for the `@stt/maplibre` adapter.
+ * Render smoke test for the `@poopdeck.gl/maplibre` adapter.
  *
  * We open the `/maplibre/:datasetId` route, wait for the basemap to load,
  * then assert that the WebGL canvas has rendered non-blank pixels. This is a
@@ -52,7 +52,7 @@ async function openMaplibreDemo(page: Page): Promise<void> {
   await page.waitForTimeout(4000);
 }
 
-test.describe('@stt/maplibre showcase rendering', () => {
+test.describe('@poopdeck.gl/maplibre showcase rendering', () => {
   test('renders non-blank pixels on the MapLibre route', async ({ page }) => {
     ensureOutputDir();
     const sink = attachErrorCollectors(page);

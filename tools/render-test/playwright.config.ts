@@ -3,7 +3,7 @@ import { defineConfig, devices } from '@playwright/test';
 /**
  * Playwright config for the STT showcase rendering / FPS regression suite.
  *
- * The `webServer` block auto-starts the Vite dev server for `@stt/showcase`.
+ * The `webServer` block auto-starts the Vite dev server for `@poopdeck.gl/showcase`.
  * The showcase serves very large .stt data files, so timeouts are generous.
  *
  * Chromium is launched with SwiftShader flags so WebGL works even when no
@@ -58,7 +58,7 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: 'pnpm --filter @stt/showcase dev',
+    command: 'pnpm --filter @poopdeck.gl/showcase dev',
     url: SHOWCASE_URL,
     reuseExistingServer: true,
     // The dev server transpiles a large app and Vite pre-bundles deck.gl/maplibre.

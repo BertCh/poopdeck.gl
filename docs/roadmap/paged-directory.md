@@ -6,7 +6,7 @@
 > (paged `getIndex`/`ensurePages` in `archive.ts` + `decodePagedRoot` in
 > `directory.ts`), manifest contract (Rust + TS + JSON Schema), `stt-validate`
 > bounds-cover + monotonicity checks, and the `repack-directory` migration tool.
-> Tests green: stt-core 121, @stt/core 190 (incl. cross-impl + differential
+> Tests green: stt-core 121, @poopdeck.gl/core 190 (incl. cross-impl + differential
 > `paged-directory.test.ts`), deck.gl 389, maplibre 54. Format specified in
 > [`stt-packed-format.md` §4.1](../spec/stt-packed-format.md). The original
 > focused-effort plan and the resolved decisions follow.

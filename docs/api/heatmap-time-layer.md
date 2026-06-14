@@ -47,7 +47,7 @@ HeatmapLayer (own ramp + density normalisation) composited in order.
 ## Installation
 
 ```typescript
-import { AnimatedHeatmapLayer } from '@stt/deck.gl';
+import { AnimatedHeatmapLayer } from '@poopdeck.gl/layers';
 ```
 
 ## Usage
@@ -158,4 +158,4 @@ single-outlier dimming.
 
 ## Source
 
-[`packages/deck.gl/src/heatmap-layer.ts`](../../packages/deck.gl/src/heatmap-layer.ts)
+[`packages/layers/src/heatmap-layer.ts`](../../packages/layers/src/heatmap-layer.ts)

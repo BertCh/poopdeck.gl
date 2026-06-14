@@ -7,13 +7,13 @@ It operates in **window mode**: each feature is shown (with optional fade) whene
 ## Installation
 
 ```typescript
-import { AnimatedPathLayer } from '@stt/deck.gl';
+import { AnimatedPathLayer } from '@poopdeck.gl/layers';
 ```
 
 ## Usage
 
 ```typescript
-import { AnimatedPathLayer } from '@stt/deck.gl';
+import { AnimatedPathLayer } from '@poopdeck.gl/layers';
 
 const layer = new AnimatedPathLayer({
   id: 'ship-tracks',
@@ -81,4 +81,4 @@ The sublayer short id for `_subLayerProps` overrides is **`paths`**. Without a `
 
 ## Source
 
-[packages/deck.gl/src/animated-path-layer.ts](../../packages/deck.gl/src/animated-path-layer.ts)
+[packages/layers/src/animated-path-layer.ts](../../packages/layers/src/animated-path-layer.ts)

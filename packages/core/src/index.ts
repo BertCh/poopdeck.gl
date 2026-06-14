@@ -1,9 +1,9 @@
-// @stt/core
+// @poopdeck.gl/core
 // SPDX-License-Identifier: MIT
-// Copyright (c) @stt/core contributors
+// Copyright (c) @poopdeck.gl/core contributors
 
 /**
- * @stt/core — read SpatioTemporal Tiles archives in the browser.
+ * @poopdeck.gl/core — read SpatioTemporal Tiles archives in the browser.
  */
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -82,7 +82,7 @@ export {
 } from './opfs-cache';
 
 // ─── loaders.gl-conformant surfaces ─────────────────────────────────────────
-// Structural-only — `@stt/core` has no `@loaders.gl/*` runtime dep.
+// Structural-only — `@poopdeck.gl/core` has no `@loaders.gl/*` runtime dep.
 // `STTArchive.asTileSource()` returns a value matching the v4.x `TileSource`
 // interface. (The old `SttLoader` object is gone: its `parse(arrayBuffer)`
 // could only reject — the packed multi-object format has no single-buffer

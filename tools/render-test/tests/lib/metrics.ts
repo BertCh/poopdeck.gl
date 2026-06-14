@@ -44,7 +44,7 @@ export interface DatasetMetrics {
   longTaskMaxMs: number;
 
   /**
-   * Tile-load timings derived from the @stt/deck.gl probe channel. `null`
+   * Tile-load timings derived from the @poopdeck.gl/layers probe channel. `null`
    * when the probe didn't emit any samples (e.g., heatmap-only datasets
    * without consolidations).
    */

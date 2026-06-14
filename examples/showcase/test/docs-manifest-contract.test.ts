@@ -105,10 +105,10 @@ describe('docs link rewriting', () => {
   });
 
   it('sends repo-source links escaping docs/ to GitHub (branch master)', () => {
-    const r = rewriteHref('../../packages/deck.gl/src/animated-point-layer.ts', 'api/animated-point-layer.md');
+    const r = rewriteHref('../../packages/layers/src/animated-point-layer.ts', 'api/animated-point-layer.md');
     expect(r.kind).toBe('external');
     expect((r as { href: string }).href).toBe(
-      'https://github.com/BertCh/spatiotemporal-tiles/blob/master/packages/deck.gl/src/animated-point-layer.ts',
+      'https://github.com/BertCh/spatiotemporal-tiles/blob/master/packages/layers/src/animated-point-layer.ts',
     );
   });
 

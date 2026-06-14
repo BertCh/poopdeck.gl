@@ -1,4 +1,4 @@
-# @stt/perf
+# @poopdeck.gl/perf
 
 Real-WebGL perf harness for the STT showcase. Drives the same demos a user
 opens in their browser, but with structured scenarios, frame-time histograms,
@@ -17,16 +17,16 @@ machines without a GPU.
 
 ```bash
 # Make sure the showcase dev server is up (in another terminal):
-pnpm --filter @stt/showcase dev
+pnpm --filter @poopdeck.gl/showcase dev
 
 # Run the harness against a demo:
-pnpm --filter @stt/perf perf -- nyc-taxi-od-heatmap
+pnpm --filter @poopdeck.gl/perf perf -- nyc-taxi-od-heatmap
 
 # Save the current numbers as a baseline:
-pnpm --filter @stt/perf perf -- nyc-taxi-trips --baseline write
+pnpm --filter @poopdeck.gl/perf perf -- nyc-taxi-trips --baseline write
 
 # Check current numbers against the saved baseline:
-pnpm --filter @stt/perf perf -- nyc-taxi-trips --baseline check
+pnpm --filter @poopdeck.gl/perf perf -- nyc-taxi-trips --baseline check
 ```
 
 ## What it measures
@@ -105,7 +105,7 @@ nyc-taxi-od-heatmap [gpu]   3 scenarios   workers=11   heap=+28.6MB
   `window.__sttPerf` (a probe it installs) but does not yet wrap
   `WorkerTileDecoder`, `consolidatePoints`, or per-tile loads with timings.
   When we want decode/consolidate p95 numbers, the next step is to publish
-  those from inside `@stt/core` + `@stt/deck.gl` behind a `?perf=1` query
+  those from inside `@poopdeck.gl/core` + `@poopdeck.gl/layers` behind a `?perf=1` query
   flag and read them via the snapshot.
 
 ## Files

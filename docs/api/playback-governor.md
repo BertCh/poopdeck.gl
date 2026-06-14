@@ -15,7 +15,7 @@ All thresholds are denominated in **wall-clock milliseconds × current |speed|**
 ## Installation
 
 ```typescript
-import { PlaybackGovernor, TimeController } from '@stt/deck.gl';
+import { PlaybackGovernor, TimeController } from '@poopdeck.gl/playback';
 ```
 
 ## Usage
@@ -57,7 +57,7 @@ governor.on('progress', (runway) => updateBufferBar(governor.getBufferedRanges()
 
 ## The BufferSource contract
 
-The governor never imports `@stt/core` — it consumes a structural readiness/cost oracle. `SpatiotemporalTileset` satisfies it (see the [buffer model](./spatiotemporal-tileset.md#buffer-model-player-buffering)); tests drive it with a plain object.
+The governor never imports `@poopdeck.gl/core` — it consumes a structural readiness/cost oracle. `SpatiotemporalTileset` satisfies it (see the [buffer model](./spatiotemporal-tileset.md#buffer-model-player-buffering)); tests drive it with a plain object.
 
 ```typescript
 interface BufferSource {
@@ -197,10 +197,10 @@ A CI probe asserting `stallCount` stays bounded catches freeze/lurch failure mod
 
 `getAutoSpeedSuggestion()` returns the maximum sustainable playback speed (TimeController units — sim-ms per wall-ms) the measured network can feed, derived from the byte cost of the next 8 wall-seconds at the current speed with a 0.7 safety factor (ABR-style). Returns `Infinity` when the upcoming horizon has nothing left to load (everything buffered ⇒ the network imposes no cap) — consumers clamp it to their max step via `decideAutoSpeedMultiplier`, so a fully-cached dataset rises to full speed instead of freezing at whatever multiplier Auto last chose. Returns `null` when the math cannot be honest: throughput unknown, or tiles pending whose byte sizes the directory doesn't expose.
 
-Consumers apply the snapping/clamping/asymmetry via the shared policy in `decideAutoSpeedMultiplier` (exported from `@stt/deck.gl`): **downshifts apply immediately with no deadband; upshifts are damped** (cadence-only, and only past a 25 % relative deadband), and the result snaps to a preset-like step list (defaults: 0.25–10×; override via an optional fourth `{ steps, minMultiplier, maxMultiplier, upshiftDeadband }` argument). It returns `null` to hold the current multiplier.
+Consumers apply the snapping/clamping/asymmetry via the shared policy in `decideAutoSpeedMultiplier` (exported from `@poopdeck.gl/playback`): **downshifts apply immediately with no deadband; upshifts are damped** (cadence-only, and only past a 25 % relative deadband), and the result snaps to a preset-like step list (defaults: 0.25–10×; override via an optional fourth `{ steps, minMultiplier, maxMultiplier, upshiftDeadband }` argument). It returns `null` to hold the current multiplier.
 
 ```typescript
-import { decideAutoSpeedMultiplier } from '@stt/deck.gl';
+import { decideAutoSpeedMultiplier } from '@poopdeck.gl/playback';
 
 const raw = governor.getAutoSpeedSuggestion();
 if (raw != null) {
@@ -215,6 +215,6 @@ if (raw != null) {
 
 ## Source
 
-[packages/deck.gl/src/playback-governor.ts](../../packages/deck.gl/src/playback-governor.ts) ·
-[packages/deck.gl/src/auto-speed.ts](../../packages/deck.gl/src/auto-speed.ts) ·
+[packages/layers/src/playback-governor.ts](../../packages/layers/src/playback-governor.ts) ·
+[packages/layers/src/auto-speed.ts](../../packages/layers/src/auto-speed.ts) ·
 design doc: `docs/roadmap/player-buffering.md`

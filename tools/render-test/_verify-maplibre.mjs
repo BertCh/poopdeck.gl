@@ -1,4 +1,4 @@
-// Verify the maplibre renderer surface: /maplibre/:id mounts the @stt/maplibre
+// Verify the maplibre renderer surface: /maplibre/:id mounts the @poopdeck.gl/maplibre
 // adapter, tiles load, and playback paints moving features.
 import { chromium } from 'playwright';
 import fs from 'node:fs';

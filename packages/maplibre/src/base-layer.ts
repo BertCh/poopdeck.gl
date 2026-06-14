@@ -32,7 +32,7 @@ import {
   type TileId,
   type Layer as STTLayer,
   type GeometryType,
-} from '@stt/core';
+} from '@poopdeck.gl/core';
 import { projectPositions } from './lib/projection';
 
 /** RGBA tuple in the 0–1 range used by all STT shader uniforms. */

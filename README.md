@@ -84,7 +84,8 @@ immutable-pack / short-TTL-manifest cache headers).
 ### 3. Visualize with deck.gl
 
 ```typescript
-import { AnimatedPointLayer, TimeController } from "@stt/deck.gl";
+import { AnimatedPointLayer } from "@poopdeck.gl/layers";
+import { TimeController } from "@poopdeck.gl/playback";
 
 const controller = new TimeController({ speed: 3600 }); // 1h of data per second
 controller.play();
@@ -105,7 +106,7 @@ See [`docs/api/`](./docs/api/) for the full layer catalog
 
 ```typescript
 import maplibregl from "maplibre-gl";
-import { STTPointLayer } from "@stt/maplibre";
+import { STTPointLayer } from "@poopdeck.gl/maplibre";
 
 const map = new maplibregl.Map({ container: "map", style: "..." });
 const layer = new STTPointLayer({
@@ -165,7 +166,7 @@ spatiotemporal-tiles/
 │   └── maplibre/           # MapLibre GL custom-layer adapter
 ├── examples/showcase/      # Interactive demo app (deck.gl + MapLibre)
 ├── tools/
-│   ├── bench/              # @stt/core load + decode benchmark (Node)
+│   ├── bench/              # @poopdeck.gl/core load + decode benchmark (Node)
 │   ├── perf/               # Real-WebGL Playwright perf harness
 │   └── render-test/        # Playwright fidelity sweep (baselines + diffs)
 └── docs/                   # Format spec, API reference, guides
@@ -180,20 +181,20 @@ cargo test --workspace          # Rust tests
 cargo build --release           # CLI binaries (stt-build, stt-generate, ...)
 
 pnpm install
-pnpm --filter @stt/core build
-pnpm --filter @stt/core test    # TS reader tests against a real archive
-pnpm --filter @stt/deck.gl build
-pnpm --filter @stt/maplibre build
+pnpm --filter @poopdeck.gl/core build
+pnpm --filter @poopdeck.gl/core test    # TS reader tests against a real archive
+pnpm --filter @poopdeck.gl/layers build
+pnpm --filter @poopdeck.gl/maplibre build
 
-pnpm --filter @stt/showcase dev # Run the showcase locally
+pnpm --filter @poopdeck.gl/showcase dev # Run the showcase locally
 ```
 
 Tooling:
 
 ```bash
-pnpm --filter @stt/bench bench                   # @stt/core load/decode benchmark
-pnpm --filter @stt/render-test sweep             # fidelity + perf sweep
-pnpm --filter @stt/perf perf -- <demo-id>        # real-WebGL perf harness
+pnpm --filter @poopdeck.gl/bench bench                   # @poopdeck.gl/core load/decode benchmark
+pnpm --filter @poopdeck.gl/render-test sweep             # fidelity + perf sweep
+pnpm --filter @poopdeck.gl/perf perf -- <demo-id>        # real-WebGL perf harness
 ```
 
 ---

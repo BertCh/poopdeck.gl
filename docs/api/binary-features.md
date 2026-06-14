@@ -6,8 +6,8 @@ This format is modeled on deck.gl's binary data interface and loaders.gl's
 few deliberate divergences — see "loaders.gl alignment caveats" below).
 
 It's what every `Tile.layers[i].features` value carries — the deck.gl
-layers in `@stt/deck.gl` consume it directly, and so do the
-`@stt/maplibre` adapters.
+layers in `@poopdeck.gl/layers` consume it directly, and so do the
+`@poopdeck.gl/maplibre` adapters.
 
 ## Shape
 
@@ -204,7 +204,7 @@ new PathLayer({
 
 The render path never materializes per-feature objects; for picking,
 tooltips, and debugging use `getFeatureProperties(features, index)` from
-`@stt/core` — it decodes ONE feature's columns into a plain object
+`@poopdeck.gl/core` — it decodes ONE feature's columns into a plain object
 (`id`, absolute `start_time`/`end_time`, every numeric and categorical
 column; categorical nulls decode to `null`).
 

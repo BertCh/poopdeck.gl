@@ -1,7 +1,7 @@
 # Showcase
 
 Interactive demo of the SpatioTemporal Tile (`.stt`) format, deck.gl
-layers (`@stt/deck.gl`), and MapLibre adapters (`@stt/maplibre`) across
+layers (`@poopdeck.gl/layers`), and MapLibre adapters (`@poopdeck.gl/maplibre`) across
 16 real and synthetic datasets.
 
 ## Pages
@@ -9,7 +9,7 @@ layers (`@stt/deck.gl`), and MapLibre adapters (`@stt/maplibre`) across
 - `/` — landing page + dataset gallery
 - `/demo/:datasetId` — single-dataset deck.gl demo with the time
   controller, the perf HUD, and the `__sttProbe` channel tap
-- `/maplibre/:datasetId` — same data rendered through `@stt/maplibre`
+- `/maplibre/:datasetId` — same data rendered through `@poopdeck.gl/maplibre`
 - `/format` — annotated walk-through of the `.stt` archive layout
 - `/layers` — gallery of every layer kind with an inline code example
 
@@ -83,6 +83,6 @@ recipes.
 ## Tech Stack
 
 - **React 18** + **TypeScript** + **Vite**
-- **deck.gl 9.x** via `@stt/deck.gl`
-- **MapLibre GL 3+** via `@stt/maplibre`
-- **`@stt/core`** for the archive reader, decoder pool, and tileset
+- **deck.gl 9.x** via `@poopdeck.gl/layers`
+- **MapLibre GL 3+** via `@poopdeck.gl/maplibre`
+- **`@poopdeck.gl/core`** for the archive reader, decoder pool, and tileset

@@ -1,4 +1,4 @@
-// @stt/core
+// @poopdeck.gl/core
 // SPDX-License-Identifier: MIT
 //
 // Decoder for the STT directory — the compact columnar run-length tile index

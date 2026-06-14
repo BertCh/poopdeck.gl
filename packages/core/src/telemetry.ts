@@ -1,13 +1,13 @@
-// @stt/core
+// @poopdeck.gl/core
 // SPDX-License-Identifier: MIT
-// Copyright (c) @stt/core contributors
+// Copyright (c) @poopdeck.gl/core contributors
 
 /**
- * Minimal telemetry shim for `@stt/core`.
+ * Minimal telemetry shim for `@poopdeck.gl/core`.
  *
- * Mirrors the channel layout used by `@stt/deck.gl`'s `telemetry.ts` so
+ * Mirrors the channel layout used by `@poopdeck.gl/layers`'s `telemetry.ts` so
  * probe consumers see a single coherent `globalThis.__sttProbe` object.
- * Kept inline (rather than imported from `@stt/deck.gl`) so the core
+ * Kept inline (rather than imported from `@poopdeck.gl/layers`) so the core
  * package has no dependency on a renderer.
  *
  * When the probe object isn't set up (production paths), every call is

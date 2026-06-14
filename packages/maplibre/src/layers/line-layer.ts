@@ -14,8 +14,8 @@
  * the rest of the STT stack targets.
  */
 
-import type { Tile, Layer as STTLayer } from '@stt/core';
-import { GeometryType } from '@stt/core';
+import type { Tile, Layer as STTLayer } from '@poopdeck.gl/core';
+import { GeometryType } from '@poopdeck.gl/core';
 import {
   STTBaseLayer,
   type STTBaseLayerOptions,
@@ -27,7 +27,7 @@ import {
 import { lngLatToMercator } from '../lib/projection';
 import { TIME_WINDOW_GLSL } from '../shaders/time-window.glsl';
 
-// Default categorical palette (matches @stt/deck.gl AnimatedPathLayer's).
+// Default categorical palette (matches @poopdeck.gl/layers AnimatedPathLayer's).
 const DEFAULT_LINE_PALETTE: ReadonlyArray<RGBA8> = [
   [0, 150, 255, 255],
   [255, 127, 14, 255],

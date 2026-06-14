@@ -1,7 +1,7 @@
 /**
  * Animated trips adapter — renders LINESTRING-type tiles with a trailing fade
  * effect anchored at the current time. Equivalent to
- * @stt/deck.gl's AnimatedTripsLayer.
+ * @poopdeck.gl/layers's AnimatedTripsLayer.
  *
  * Each segment is drawn as one instance of a shared 4-vertex unit quad; the
  * per-instance attributes carry the two endpoints and their (relative)
@@ -13,8 +13,8 @@
  * otherwise we interpolate linearly between the feature's start/end times.
  */
 
-import type { Tile, Layer as STTLayer } from '@stt/core';
-import { GeometryType } from '@stt/core';
+import type { Tile, Layer as STTLayer } from '@poopdeck.gl/core';
+import { GeometryType } from '@poopdeck.gl/core';
 import {
   STTBaseLayer,
   type STTBaseLayerOptions,

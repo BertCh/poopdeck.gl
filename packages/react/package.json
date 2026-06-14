@@ -1,0 +1,72 @@
+{
+  "name": "@poopdeck.gl/react",
+  "version": "0.1.0",
+  "description": "React hooks and UI components for spatiotemporal/time-series playback — usePlayback, keyboard controls, a transport bar + scrubber + density strip, and a scrubber hover-preview",
+  "publishConfig": {
+    "access": "public"
+  },
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src",
+    "clean": "rm -rf dist tsconfig.tsbuildinfo"
+  },
+  "dependencies": {
+    "@poopdeck.gl/core": "workspace:*",
+    "@poopdeck.gl/playback": "workspace:*"
+  },
+  "peerDependencies": {
+    "@deck.gl/core": ">=9.3.0 <10.0.0",
+    "@deck.gl/react": ">=9.3.0 <10.0.0",
+    "react": ">=18",
+    "react-dom": ">=18"
+  },
+  "peerDependenciesMeta": {
+    "@deck.gl/core": {
+      "optional": true
+    },
+    "@deck.gl/react": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@deck.gl/core": "^9.3.2",
+    "@deck.gl/react": "^9.3.2",
+    "@testing-library/react": "^14.3.1",
+    "@types/react": "^18.2.0",
+    "@types/react-dom": "^18.2.0",
+    "jsdom": "^25.0.1",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "typescript": "^5.4.0",
+    "vitest": "^1.6.0"
+  },
+  "keywords": [
+    "react",
+    "playback",
+    "scrubber",
+    "timeline",
+    "time-series",
+    "spatiotemporal",
+    "deck.gl"
+  ],
+  "author": "Robert Christie",
+  "license": "MIT"
+}

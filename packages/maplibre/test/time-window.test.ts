@@ -4,7 +4,7 @@
  * The whole point of `shaders/time-window.glsl.ts` is that the maplibre
  * adapter computes alpha for a `(startTime, endTime, currentTime,
  * timeWindow, fadeIn, fadeOut)` triplet *bit-identically* to
- * @stt/deck.gl's TimeFilterExtension. We replicate the deck.gl formula
+ * @poopdeck.gl/layers's TimeFilterExtension. We replicate the deck.gl formula
  * in-line (so the test is self-contained and doesn't import from deck.gl)
  * and assert each branch matches.
  */
@@ -17,7 +17,7 @@ import {
 
 /**
  * Reference re-implementation of the deck.gl TimeFilterExtension window
- * branch. Pulled from packages/deck.gl/src/time-filter-extension.js, kept
+ * branch. Pulled from packages/layers/src/time-filter-extension.js, kept
  * verbatim. If this ever drifts, the maplibre adapter and the deck.gl
  * adapter no longer agree and we want a loud test failure.
  */
@@ -61,7 +61,7 @@ function deckTrailAlpha(
   return Math.max(0, Math.min(1, 1 - age / trailLength));
 }
 
-describe('window-mode parity vs @stt/deck.gl TimeFilterExtension', () => {
+describe('window-mode parity vs @poopdeck.gl/layers TimeFilterExtension', () => {
   const currentTime = 1000;
   const timeWindow = 200; // half = 100, so window = [900, 1100]
 
@@ -137,7 +137,7 @@ describe('window-mode parity vs @stt/deck.gl TimeFilterExtension', () => {
   });
 });
 
-describe('trail-mode parity vs @stt/deck.gl TimeFilterExtension', () => {
+describe('trail-mode parity vs @poopdeck.gl/layers TimeFilterExtension', () => {
   it('matches when vertex is inside the trail', () => {
     const ml = trailAlphaJS(900, 1000, 200, 1);
     const dk = deckTrailAlpha(900, 1000, 200);

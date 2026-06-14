@@ -7,13 +7,13 @@ It runs the [`TimeFilterExtension`](./time-filter-extension.md) in **trail mode*
 ## Installation
 
 ```typescript
-import { AnimatedTripsLayer } from '@stt/deck.gl';
+import { AnimatedTripsLayer } from '@poopdeck.gl/layers';
 ```
 
 ## Usage
 
 ```typescript
-import { AnimatedTripsLayer } from '@stt/deck.gl';
+import { AnimatedTripsLayer } from '@poopdeck.gl/layers';
 
 const layer = new AnimatedTripsLayer({
   id: 'taxi-trips',
@@ -121,4 +121,4 @@ The sublayer short id for `_subLayerProps` overrides is **`trips`**.
 
 ## Source
 
-[packages/deck.gl/src/animated-trips-layer.ts](../../packages/deck.gl/src/animated-trips-layer.ts)
+[packages/layers/src/animated-trips-layer.ts](../../packages/layers/src/animated-trips-layer.ts)

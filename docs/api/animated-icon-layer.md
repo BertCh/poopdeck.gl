@@ -7,7 +7,7 @@ It extends [`SpatioTemporalLayer`](./spatiotemporal-layer.md) and follows the sa
 ## Installation
 
 ```typescript
-import { AnimatedIconLayer } from '@stt/deck.gl';
+import { AnimatedIconLayer } from '@poopdeck.gl/layers';
 ```
 
 ## Usage
@@ -52,4 +52,4 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 
 ## Source
 
-[packages/deck.gl/src/animated-icon-layer.ts](../../packages/deck.gl/src/animated-icon-layer.ts)
+[packages/layers/src/animated-icon-layer.ts](../../packages/layers/src/animated-icon-layer.ts)

@@ -5,13 +5,13 @@ The `AnimatedPolygonLayer` renders time-series polygon data (e.g., county bounda
 ## Installation
 
 ```typescript
-import { AnimatedPolygonLayer } from "@stt/deck.gl";
+import { AnimatedPolygonLayer } from "@poopdeck.gl/layers";
 ```
 
 ## Usage
 
 ```typescript
-import { AnimatedPolygonLayer } from "@stt/deck.gl";
+import { AnimatedPolygonLayer } from "@poopdeck.gl/layers";
 
 const layer = new AnimatedPolygonLayer({
   id: "covid-counties",
@@ -93,4 +93,4 @@ The sublayer short id for `_subLayerProps` overrides is **`polygons`**: `_subLay
 
 ## Source
 
-[packages/deck.gl/src/animated-polygon-layer.ts](../../packages/deck.gl/src/animated-polygon-layer.ts)
+[packages/layers/src/animated-polygon-layer.ts](../../packages/layers/src/animated-polygon-layer.ts)

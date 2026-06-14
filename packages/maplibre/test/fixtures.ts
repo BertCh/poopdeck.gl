@@ -4,7 +4,7 @@
  * about anything we don't populate (featureIds, props), so we omit them.
  */
 
-import { GeometryType, type Tile, type Layer } from '@stt/core';
+import { GeometryType, type Tile, type Layer } from '@poopdeck.gl/core';
 
 export function makePointTile(): Tile {
   const positions = new Float64Array([

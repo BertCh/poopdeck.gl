@@ -1,4 +1,4 @@
-# @stt/maplibre
+# @poopdeck.gl/maplibre
 
 A MapLibre GL custom-layer adapter for SpatioTemporal Tiles archives.
 
@@ -9,7 +9,7 @@ deck.gl layers use under the hood — including the globally-coalesced batch
 loading path (one range-coalesced request per viewport fill, incremental
 per-tile delivery, giant-parent-tile gating, throughput-driven ETAs).
 
-If you can take a deck.gl dependency, [`@stt/deck.gl`](./spatiotemporal-layer.md)
+If you can take a deck.gl dependency, [`@poopdeck.gl/layers`](./spatiotemporal-layer.md)
 still has a few advantages — rounded joints/dashes, GPU picking, GPU-side
 category-color extension, cross-tile consolidation. The MapLibre adapter trades
 those off for a much smaller bundle and the ability to interleave between
@@ -20,9 +20,9 @@ animated trips, and density heatmaps.
 ## Install
 
 ```bash
-pnpm add @stt/maplibre maplibre-gl
+pnpm add @poopdeck.gl/maplibre maplibre-gl
 # or
-npm i @stt/maplibre maplibre-gl
+npm i @poopdeck.gl/maplibre maplibre-gl
 ```
 
 `maplibre-gl` is a peer dependency, pinned **`^3 || ^4`**.
@@ -54,7 +54,7 @@ scheduling, viewport→tile resolution, and the GPU resource lifecycle.
 
 ```ts
 import maplibregl from 'maplibre-gl';
-import { STTPointLayer } from '@stt/maplibre';
+import { STTPointLayer } from '@poopdeck.gl/maplibre';
 
 const map = new maplibregl.Map({
   container: 'map',
@@ -82,7 +82,7 @@ setInterval(() => sttLayer.setCurrentTime(Date.now()), 16);
 ### Trips (trailing-fade trajectories)
 
 ```ts
-import { STTTripsLayer } from '@stt/maplibre';
+import { STTTripsLayer } from '@poopdeck.gl/maplibre';
 
 const trips = new STTTripsLayer({
   id: 'satellite-trips',
@@ -99,7 +99,7 @@ map.addLayer(trips);
 ### Heatmap
 
 ```ts
-import { STTHeatmapLayer } from '@stt/maplibre';
+import { STTHeatmapLayer } from '@poopdeck.gl/maplibre';
 
 const heat = new STTHeatmapLayer({
   id: 'pickup-heat',
@@ -117,7 +117,7 @@ map.addLayer(heat);
 
 The maplibre layers expose the same buffer-model hooks as the deck.gl
 layers, so a [`PlaybackGovernor`](./playback-governor.md) (from
-`@stt/deck.gl`) can gate playback against them:
+`@poopdeck.gl/playback`) can gate playback against them:
 
 ```ts
 const layer = new STTTripsLayer({
@@ -257,7 +257,7 @@ Each layer exposes lifecycle helpers in addition to `CustomLayerInterface`:
 
 ## Compared to deck.gl
 
-| Feature | `@stt/maplibre` | `@stt/deck.gl` |
+| Feature | `@poopdeck.gl/maplibre` | `@poopdeck.gl/layers` |
 |---------|-----------------|----------------|
 | Point billboards | ✓ | ✓ |
 | Line stroke (constant px) | ✓ | ✓ |
@@ -296,7 +296,7 @@ Each layer exposes lifecycle helpers in addition to `CustomLayerInterface`:
   `ANGLE_instanced_arrays` on WebGL1; where missing, those tiles are
   skipped with a warning.
 - **No tile consolidation.** Each tile is one draw call (heatmap: one
-  accumulate draw per tile + a fullscreen ramp draw). Bring `@stt/deck.gl`
+  accumulate draw per tile + a fullscreen ramp draw). Bring `@poopdeck.gl/layers`
   if you need cross-tile consolidation for hundreds of tiles per frame.
 - **Float32 mercator positions** cap usable zoom around z15 (~meter-scale
   quantization in dense city data); the deck.gl side is immune via its

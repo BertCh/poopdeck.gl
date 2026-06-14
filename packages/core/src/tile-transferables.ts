@@ -1,6 +1,6 @@
-// @stt/core
+// @poopdeck.gl/core
 // SPDX-License-Identifier: MIT
-// Copyright (c) @stt/core contributors
+// Copyright (c) @poopdeck.gl/core contributors
 
 /**
  * Collect every transferable ArrayBuffer in a decoded tile.

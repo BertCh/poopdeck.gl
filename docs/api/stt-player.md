@@ -11,7 +11,7 @@ The wrapped pieces stay exposed (`player.timeController` for layer wiring, `play
 ## Installation
 
 ```typescript
-import { SttPlayer } from '@stt/deck.gl';
+import { SttPlayer } from '@poopdeck.gl/playback';
 ```
 
 ## Quick start
@@ -142,5 +142,5 @@ Pick `baseRate` so the dataset plays in a target wall duration (`span / targetMs
 
 ## Source
 
-[packages/deck.gl/src/stt-player.ts](../../packages/deck.gl/src/stt-player.ts) ·
+[packages/layers/src/stt-player.ts](../../packages/layers/src/stt-player.ts) ·
 underlying pieces: [TimeController](./time-controller.md), [PlaybackGovernor](./playback-governor.md)

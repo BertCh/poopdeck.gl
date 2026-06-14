@@ -1,14 +1,14 @@
 {
-  "name": "@stt/bench",
+  "name": "@poopdeck.gl/bench",
   "version": "0.1.0",
-  "description": "Performance benchmark harness for the @stt/core data-loading pipeline",
+  "description": "Performance benchmark harness for the @poopdeck.gl/core data-loading pipeline",
   "private": true,
   "type": "module",
   "scripts": {
     "bench": "node src/index.mjs"
   },
   "dependencies": {
-    "@stt/core": "workspace:*",
+    "@poopdeck.gl/core": "workspace:*",
     "fflate": "^0.7.4",
     "fzstd": "^0.1.1",
     "pako": "^2.1.0"

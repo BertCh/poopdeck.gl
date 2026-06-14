@@ -3,9 +3,10 @@ import { Link } from "react-router-dom";
 import { docSections } from "./manifest";
 import CodeBlock from "./CodeBlock";
 
-const QUICK_START = `npm install @stt/core @stt/deck.gl
+const QUICK_START = `npm install @poopdeck.gl/core @poopdeck.gl/layers @poopdeck.gl/playback
 
-import { AnimatedPointLayer, TimeController } from '@stt/deck.gl';
+import { AnimatedPointLayer } from '@poopdeck.gl/layers';
+import { TimeController } from '@poopdeck.gl/playback';
 
 const timeController = new TimeController({ speed: 3600 });
 const layer = new AnimatedPointLayer({

@@ -7,7 +7,7 @@ It extends [`SpatioTemporalLayer`](./spatiotemporal-layer.md) and reuses all of 
 ## Installation
 
 ```typescript
-import { AnimatedArcLayer } from '@stt/deck.gl';
+import { AnimatedArcLayer } from '@poopdeck.gl/layers';
 ```
 
 ## Usage
@@ -54,4 +54,4 @@ The sublayer short id for `_subLayerProps` overrides is **`arcs`**.
 
 ## Source
 
-[packages/deck.gl/src/animated-arc-layer.ts](../../packages/deck.gl/src/animated-arc-layer.ts) · shared endpoint helper: [od-positions.ts](../../packages/deck.gl/src/od-positions.ts)
+[packages/layers/src/animated-arc-layer.ts](../../packages/layers/src/animated-arc-layer.ts) · shared endpoint helper: [od-positions.ts](../../packages/layers/src/od-positions.ts)

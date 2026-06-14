@@ -1,5 +1,5 @@
 /**
- * MaplibreRenderer — mounts a MapLibre GL map and a single `@stt/maplibre`
+ * MaplibreRenderer — mounts a MapLibre GL map and a single `@poopdeck.gl/maplibre`
  * custom layer for the supplied dataset. Drop into any page that already
  * owns a `TimeController`; this component subscribes to its `tick` event and
  * forwards `setCurrentTime` to the STT layer on every frame.
@@ -19,8 +19,8 @@ import {
   STTHeatmapLayer,
   type STTBaseLayer,
   type RGBA8,
-} from "@stt/maplibre";
-import type { TimeController } from "@stt/deck.gl";
+} from "@poopdeck.gl/maplibre";
+import type { TimeController } from "@poopdeck.gl/playback";
 import type { Dataset } from "../types";
 
 // CARTO's free dark style. We accept any style URL via prop, but this is the

@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { GeometryType } from '@stt/core';
+import { GeometryType } from '@poopdeck.gl/core';
 import { STTPointLayer } from '../src/layers/point-layer';
 import { STTLineLayer } from '../src/layers/line-layer';
 import { STTPolygonLayer } from '../src/layers/polygon-layer';

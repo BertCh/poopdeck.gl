@@ -37,7 +37,7 @@ Date: 2026-06-09
 
 The STT "player" (play/pause/seek/speed over streamed spatiotemporal tiles) behaves
 like a video player with the buffering logic deleted. The animation clock
-(`TimeController.tick()`, packages/deck.gl/src/time-controller.ts:189) advances
+(`TimeController.tick()`, packages/layers/src/time-controller.ts:189) advances
 `currentTime += elapsedWallMs * speed` unconditionally — it never consults the
 loader. When tiles for the current window haven't arrived, the GPU time filter
 simply renders whatever is resident: entities pop in late, frames are silently
@@ -168,7 +168,7 @@ The foundation everything else stands on. In `SpatiotemporalTileset`:
 Then `estimateTimeToReady(range) = estimateCost(range).bytes / throughput` —
 an honest ETA video players cannot compute. Surface in `getCacheStats()`.
 
-### WS-B: PlaybackGovernor (packages/deck.gl, shared with maplibre)
+### WS-B: PlaybackGovernor (packages/layers, shared with maplibre)
 
 A small state machine between `TimeController` and the tileset. The
 TimeController stays a dumb clock; the governor subscribes to ticks and buffer

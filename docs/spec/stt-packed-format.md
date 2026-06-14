@@ -87,7 +87,7 @@ data/<dataset>/
 The manifest envelope is the **cross-language wire contract**. Its authoritative,
 machine-checkable definition is [`manifest.schema.json`](./manifest.schema.json),
 which is pinned in CI against the Rust writer (`crate::pack::Manifest`), the TS
-reader type (`@stt/core` `PackedManifest`) and the golden fixture
+reader type (`@poopdeck.gl/core` `PackedManifest`) and the golden fixture
 (`packages/core/test/manifest-schema.test.ts`). Any drift between the three fails
 the build.
 

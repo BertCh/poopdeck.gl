@@ -1,6 +1,6 @@
 /**
  * Density-heatmap adapter — renders POINT-type tiles as a screen-space
- * heatmap. Equivalent to `@stt/deck.gl`'s `HeatmapTimeLayer`.
+ * heatmap. Equivalent to `@poopdeck.gl/layers`'s `HeatmapTimeLayer`.
  *
  * Pipeline (two passes):
  *
@@ -26,8 +26,8 @@
  *     reattachment.
  */
 
-import type { Tile, Layer as STTLayer } from '@stt/core';
-import { GeometryType } from '@stt/core';
+import type { Tile, Layer as STTLayer } from '@poopdeck.gl/core';
+import { GeometryType } from '@poopdeck.gl/core';
 import {
   STTBaseLayer,
   type STTBaseLayerOptions,

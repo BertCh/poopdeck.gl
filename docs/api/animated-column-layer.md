@@ -7,7 +7,7 @@ It extends [`SpatioTemporalLayer`](./spatiotemporal-layer.md) and is instanced a
 ## Installation
 
 ```typescript
-import { AnimatedColumnLayer } from '@stt/deck.gl';
+import { AnimatedColumnLayer } from '@poopdeck.gl/layers';
 ```
 
 ## Usage
@@ -51,4 +51,4 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 
 ## Source
 
-[packages/deck.gl/src/animated-column-layer.ts](../../packages/deck.gl/src/animated-column-layer.ts)
+[packages/layers/src/animated-column-layer.ts](../../packages/layers/src/animated-column-layer.ts)

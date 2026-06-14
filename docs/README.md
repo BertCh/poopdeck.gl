@@ -20,7 +20,7 @@ datasets.
 - [**Tile payload**](./architecture/data-format.md): Normative spec of the tile
   payload (Apache Arrow IPC + GeoArrow), shared across containers.
 - [**deck.gl Integration**](./architecture/deckgl-integration.md): How
-  `@stt/deck.gl` relates to TileLayer, and where it deliberately departs.
+  `@poopdeck.gl/layers` relates to TileLayer, and where it deliberately departs.
 
 ## API Reference
 
@@ -59,7 +59,7 @@ datasets.
   that gates the clock on a buffered runway (stall/resume, seek gates,
   Auto speed).
 
-### Reader (`@stt/core`)
+### Reader (`@poopdeck.gl/core`)
 
 - [**Tile decoding**](./api/stt-loader.md): The `TileDecoder` interface
   plus the inline / worker-pool implementations.
@@ -70,7 +70,7 @@ datasets.
 
 ### MapLibre adapter
 
-- [**@stt/maplibre**](./api/stt-maplibre.md): MapLibre GL custom-layer
+- [**@poopdeck.gl/maplibre**](./api/stt-maplibre.md): MapLibre GL custom-layer
   adapter — five layer classes (point / line / polygon / trips / heatmap)
   for sites that don't want a deck.gl dependency.
 

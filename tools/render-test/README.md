@@ -1,4 +1,4 @@
-# `@stt/render-test`
+# `@poopdeck.gl/render-test`
 
 Browser-rendered evaluation for the STT showcase: real Chromium + WebGL,
 exercising every demo end-to-end and reporting perf + visual fidelity.
@@ -6,8 +6,8 @@ exercising every demo end-to-end and reporting perf + visual fidelity.
 ## Quick start
 
 ```bash
-pnpm --filter @stt/render-test sweep             # run against committed baselines
-pnpm --filter @stt/render-test sweep:update      # re-bless baselines after a deliberate render change
+pnpm --filter @poopdeck.gl/render-test sweep             # run against committed baselines
+pnpm --filter @poopdeck.gl/render-test sweep:update      # re-bless baselines after a deliberate render change
 ```
 
 Open `tools/render-test/output/report.html` for the per-dataset card view
@@ -31,7 +31,7 @@ readable form.
      `baselines/<id>/<anchor>.png` via `pixelmatch`,
    - then starts playback and samples 5s of frame-times, JS heap,
      `measureUserAgentSpecificMemory` (where available), long-tasks, and
-     the `__sttProbe` channels from `@stt/deck.gl` (`tilePrepare`, `decode`,
+     the `__sttProbe` channels from `@poopdeck.gl/layers` (`tilePrepare`, `decode`,
      `consolidations`, `renderLayers`).
 
 The fidelity capture happens _before_ play starts so the baselines remain
@@ -69,7 +69,7 @@ When you make an intentional rendering change, the suite goes red on the
 affected datasets. To accept the new look:
 
 ```bash
-pnpm --filter @stt/render-test sweep:update
+pnpm --filter @poopdeck.gl/render-test sweep:update
 git add tools/render-test/baselines
 ```
 

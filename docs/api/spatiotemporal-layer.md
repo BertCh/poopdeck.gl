@@ -2,12 +2,12 @@
 
 The `SpatioTemporalLayer` is the base layer for visualizing spatiotemporal data from STT archives. It handles data loading, caching, time synchronization, and coordinate decoding, allowing subclasses to focus purely on rendering.
 
-It follows the deck.gl [TileLayer](https://deck.gl/docs/api-reference/geo-layers/tile-layer) architecture: a [`SpatiotemporalTileset`](./spatiotemporal-tileset.md) (from `@stt/core`) manages tile selection and request scheduling, while the layer turns visible tiles into sublayers.
+It follows the deck.gl [TileLayer](https://deck.gl/docs/api-reference/geo-layers/tile-layer) architecture: a [`SpatiotemporalTileset`](./spatiotemporal-tileset.md) (from `@poopdeck.gl/core`) manages tile selection and request scheduling, while the layer turns visible tiles into sublayers.
 
 ## Installation
 
 ```typescript
-import { SpatioTemporalLayer } from "@stt/deck.gl";
+import { SpatioTemporalLayer } from "@poopdeck.gl/layers";
 ```
 
 ## Usage
@@ -115,7 +115,7 @@ Property indicating whether the layer currently has visible tiles.
 
 ### `getPickingInfo(params): SpatioTemporalPickingInfo`
 
-TileLayer-convention picking enrichment. A hit fills `info.tile` / `info.sourceTile` with the source tile and decodes ONE feature's binary columns into a plain `info.object` (via `getFeatureProperties` from `@stt/core`) at event rate, so the render path stays free of per-feature objects.
+TileLayer-convention picking enrichment. A hit fills `info.tile` / `info.sourceTile` with the source tile and decodes ONE feature's binary columns into a plain `info.object` (via `getFeatureProperties` from `@poopdeck.gl/core`) at event rate, so the render path stays free of per-feature objects.
 
 ### Subclass hooks
 
@@ -186,4 +186,4 @@ The layer is optimized for high-performance animation:
 
 ## Source
 
-[packages/deck.gl/src/spatiotemporal-layer.ts](../../packages/deck.gl/src/spatiotemporal-layer.ts)
+[packages/layers/src/spatiotemporal-layer.ts](../../packages/layers/src/spatiotemporal-layer.ts)
