@@ -33,12 +33,12 @@ jobs:
           node-version: '20'
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter '@stt/core' typecheck
-      - run: pnpm --filter '@stt/deck.gl' typecheck
-      - run: pnpm --filter '@stt/maplibre' typecheck
-      - run: pnpm --filter '@stt/core' test
-      - run: pnpm --filter '@stt/deck.gl' test
-      - run: pnpm --filter '@stt/maplibre' test
+      - run: pnpm --filter '@poopdeck.gl/core' typecheck
+      - run: pnpm --filter '@poopdeck.gl/layers' typecheck
+      - run: pnpm --filter '@poopdeck.gl/maplibre' typecheck
+      - run: pnpm --filter '@poopdeck.gl/core' test
+      - run: pnpm --filter '@poopdeck.gl/layers' test
+      - run: pnpm --filter '@poopdeck.gl/maplibre' test
 
   bench-regression:
     name: Bench (regression vs baseline)
@@ -58,7 +58,7 @@ jobs:
           node-version: '20'
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter '@stt/core' build
+      - run: pnpm --filter '@poopdeck.gl/core' build
       - name: Run bench against committed fixture baseline
         # The 733 KB `earthquakes-ci.stt` fixture and its matching JSON
         # baseline are committed to the repo (see tools/bench/baselines/),
@@ -86,7 +86,7 @@ jobs:
           node-version: '20'
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter '@stt/render-test' install-browser
+      - run: pnpm --filter '@poopdeck.gl/render-test' install-browser
       - name: Build packages
         run: pnpm build
       - name: Start showcase
@@ -94,11 +94,11 @@ jobs:
         # We don't ship those in CI yet, so this step is intentionally allowed
         # to fail silently — it will tighten once a small fixture set lands.
         run: |
-          pnpm --filter '@stt/showcase' dev &
+          pnpm --filter '@poopdeck.gl/showcase' dev &
           for i in $(seq 1 30); do
             if curl -fs http://localhost:3000 >/dev/null; then break; fi
             sleep 1
           done
       - name: Probe all demos
         continue-on-error: true
-        run: pnpm --filter '@stt/render-test' probe
+        run: pnpm --filter '@poopdeck.gl/render-test' probe
