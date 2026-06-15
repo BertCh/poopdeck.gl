@@ -4,7 +4,7 @@
   // must be pointed at THIS config (it refuses to run at the workspace root):
   //
   //   Deploy command:  npx wrangler deploy --config examples/showcase/wrangler.jsonc
-  //   Build command:   pnpm exec turbo run build --filter=@stt/showcase
+  //   Build command:   pnpm exec turbo run build --filter=@poopdeck.gl/showcase
   //   Root directory:  /            (keep at repo root so pnpm installs the workspace)
   //
   // "directory" is resolved relative to this file → examples/showcase/dist.
