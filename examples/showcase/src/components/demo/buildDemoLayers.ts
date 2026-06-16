@@ -23,6 +23,7 @@ import {
   AnimatedColumnLayer,
   AnimatedTripHeadsLayer,
   FlowmapLayer,
+  BundledFlowmapLayer,
 } from "@poopdeck.gl/layers";
 import type { HeatmapChannelSpec, OverviewPreloadResult } from "@poopdeck.gl/layers";
 import type {
@@ -410,10 +411,52 @@ export function buildDemoLayers({
           targetColor: selectedDataset.flowTargetColor ?? [255, 142, 64, 245],
           gap: selectedDataset.flowGap ?? 0.5,
           nodeRadiusScale: selectedDataset.flowNodeRadiusScale ?? 1.3,
+          ...(selectedDataset.flowNodeRadiusUnits && {
+            nodeRadiusUnits: selectedDataset.flowNodeRadiusUnits,
+          }),
           ...(selectedDataset.flowNodeColor && {
             nodeColor: selectedDataset.flowNodeColor,
           }),
           minFlow: selectedDataset.flowMinFlow ?? 0.25,
+        }),
+      ];
+    case "flowmap-bundled":
+      // Same OD flowmap, but compatible corridors are relaxed into smooth rivers
+      // by a GPU kernel-density edge bundler (KDEEB/CUBu — density splat → advect
+      // → resample → Laplacian smooth, cosmos.gl-style ping-pong float textures)
+      // and rendered fully GPU-resident — the bundle is computed once and stays on
+      // the GPU; only ribbon width animates. Falls back to straight arrows on
+      // devices that can't additively blend into a float texture.
+      return [
+        new BundledFlowmapLayer({
+          ...baseProps,
+          widthScale: selectedDataset.flowWidthScale ?? 1.1,
+          widthMinPixels: selectedDataset.flowWidthMinPixels ?? 1,
+          widthMaxPixels: selectedDataset.flowWidthMaxPixels ?? 12,
+          sourceColor: selectedDataset.flowSourceColor ?? [56, 196, 232, 235],
+          targetColor: selectedDataset.flowTargetColor ?? [255, 142, 64, 245],
+          gap: selectedDataset.flowGap ?? 0.5,
+          nodeRadiusScale: selectedDataset.flowNodeRadiusScale ?? 1.3,
+          ...(selectedDataset.flowNodeColor && {
+            nodeColor: selectedDataset.flowNodeColor,
+          }),
+          minFlow: selectedDataset.flowMinFlow ?? 0.25,
+          ...(selectedDataset.flowNodeRadiusUnits && {
+            nodeRadiusUnits: selectedDataset.flowNodeRadiusUnits,
+          }),
+          ...(selectedDataset.flowNodeRadiusMaxPixels != null && {
+            nodeRadiusMaxPixels: selectedDataset.flowNodeRadiusMaxPixels,
+          }),
+          subdivisionPoints: selectedDataset.flowSubdivisionPoints ?? 48,
+          kernelRadius: selectedDataset.flowKernelRadius ?? 0.05,
+          bundlingIterations: selectedDataset.flowBundlingIterations ?? 15,
+          smoothingStrength: selectedDataset.flowSmoothingStrength ?? 0.5,
+          ...(selectedDataset.flowMaxBundledEdges != null && {
+            maxBundledEdges: selectedDataset.flowMaxBundledEdges,
+          }),
+          // Tiles built with `--bake-bundling` carry the rivers already; skip the
+          // live GPU bundler and render the precomputed geometry.
+          ...(selectedDataset.flowPreBundled && { preBundled: true }),
         }),
       ];
     case "column":

@@ -16,6 +16,7 @@ import {
 import type { BufferSource, BufferedRunway } from '@poopdeck.gl/playback';
 import { getDatasetById } from '../../datasets';
 import { tileLoadingProps } from '../../types';
+import { useReducedMotion } from '../../lib/reducedMotion';
 import {
   ACTS,
   HERO_FOCUS,
@@ -182,6 +183,15 @@ interface StoryGlobeProps {
  */
 const StoryGlobe: React.FC<StoryGlobeProps> = ({ focus, active }) => {
   const dataset = useMemo(() => getDatasetById('ocean-drifters'), []);
+
+  // Reduce-motion turns the cinematic globe into a sequence of static frames:
+  // no autoplay of the drifter trails, no continuous spin, no camera fly-in,
+  // and no era cross-dissolve. Each beat snaps to its framing + moment instead.
+  // A ref mirrors it so the focus/rAF effects can read the live value without
+  // listing it as a dep (which would reset the clock mid-beat).
+  const reducedMotion = useReducedMotion();
+  const reducedMotionRef = useRef(reducedMotion);
+  reducedMotionRef.current = reducedMotion;
 
   const [timeController] = useState(
     () =>
@@ -360,6 +370,7 @@ const StoryGlobe: React.FC<StoryGlobeProps> = ({ focus, active }) => {
     // screen. The first reveal out of an interlude is masked by the stage's own
     // 600ms CSS opacity fade, so it applies immediately.
     if (
+      !reducedMotionRef.current &&
       mountedRef.current &&
       activeRef.current &&
       prevActiveRef.current &&
@@ -377,6 +388,15 @@ const StoryGlobe: React.FC<StoryGlobeProps> = ({ focus, active }) => {
       lastSetOpacityRef.current = TARGET_OPACITY;
       setDriftersOpacity(TARGET_OPACITY);
     }
+    // Reduce-motion: the rAF easing loop is disabled, so snap the camera to the
+    // beat's framing right here (instead of flying to it) and mark it settled.
+    if (reducedMotionRef.current) {
+      camRef.current = { longitude: focus.lng, latitude: focus.lat, zoom: focus.zoom };
+      settledRef.current = true;
+      setViewState({
+        globe: { longitude: focus.lng, latitude: focus.lat, zoom: focus.zoom, pitch: 0, bearing: 0 },
+      });
+    }
     mountedRef.current = true;
     // Play/pause is reconciled by the `active` effect below.
   }, [focus, timeController, applyFocusTime, dataset]);
@@ -386,7 +406,9 @@ const StoryGlobe: React.FC<StoryGlobeProps> = ({ focus, active }) => {
   // pause drops the loader to its paused budget) instead of free-running.
   useEffect(() => {
     const g = governorRef.current;
-    if (active && focus.mode !== 'still') {
+    // Reduce-motion: never autoplay — hold the paused snapshot at the beat's
+    // moment (applyFocusTime already seeked the clock there).
+    if (active && focus.mode !== 'still' && !reducedMotion) {
       if (g) g.requestPlay();
       else timeController.play();
     } else {
@@ -397,7 +419,7 @@ const StoryGlobe: React.FC<StoryGlobeProps> = ({ focus, active }) => {
     // Remember the revealed state for the next focus change: a within-act beat
     // change (was active, still active) cross-dissolves; a first reveal does not.
     prevActiveRef.current = active;
-  }, [active, focus, timeController]);
+  }, [active, focus, timeController, reducedMotion]);
 
   // ── Adaptive speed cap (see the constants block above). ─────────────────────
   // Only adapts during steady 'playing' — never while a gate holds the clock
@@ -443,7 +465,9 @@ const StoryGlobe: React.FC<StoryGlobeProps> = ({ focus, active }) => {
   // frozen camera. `FAST_SPIN`/`IDLE_SPIN` are the dial: faster on the
   // hero/planetary "spin" beats, barely-there on located beats.
   useEffect(() => {
-    if (!active) return;
+    // Reduce-motion: no easing/spin/cross-dissolve loop — the focus effect
+    // snaps the camera and the clock holds a static frame.
+    if (!active || reducedMotion) return;
     let raf = 0;
     let last: number | null = null;
     const tick = (now: number) => {
@@ -549,7 +573,7 @@ const StoryGlobe: React.FC<StoryGlobeProps> = ({ focus, active }) => {
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [active, timeController]);
+  }, [active, timeController, reducedMotion]);
 
   const views = useMemo(() => [new GlobeView({ id: 'globe', resolution: 10 })], []);
 

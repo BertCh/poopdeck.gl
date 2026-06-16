@@ -17,6 +17,7 @@ import PerformanceMonitor from "../PerformanceMonitor";
 import { buildDemoLayers } from "./buildDemoLayers";
 import type { DemoCamera } from "./previewBasemap";
 import type { PlaybackState } from "@poopdeck.gl/react";
+import { useReducedMotion } from "../../lib/reducedMotion";
 
 const MAPBOX_ACCESS_TOKEN =
   (import.meta as any).env?.VITE_MAPBOX_TOKEN ||
@@ -295,6 +296,9 @@ const DemoViewer: React.FC<DemoViewerProps> = ({
   // onViewStateChange) we stop the spin for good and hand the globe over — the
   // demo is for exploring, so it shouldn't keep spinning out from under a click.
   // Non-rotating demos keep the uncontrolled `initialViewState` path untouched.
+  // Auto-rotation is opt-in per dataset, but reduce-motion always wins: the
+  // globe stays put (and draggable) instead of spinning on its own.
+  const reducedMotion = useReducedMotion();
   const autoRotate = useGlobe && (selectedDataset.autoRotate ?? false);
   const [viewState, setViewState] = useState<any>(null);
   const rotateStoppedRef = useRef(false);
@@ -303,7 +307,7 @@ const DemoViewer: React.FC<DemoViewerProps> = ({
     rotateStoppedRef.current = false;
   }, [initialViewState]);
   useEffect(() => {
-    if (!autoRotate) return;
+    if (!autoRotate || reducedMotion) return;
     let raf = 0;
     let last: number | null = null;
     // Negative spins east→west (wind-following); very slow (~6 min/revolution).
@@ -322,7 +326,7 @@ const DemoViewer: React.FC<DemoViewerProps> = ({
     };
     raf = requestAnimationFrame(step);
     return () => cancelAnimationFrame(raf);
-  }, [autoRotate]);
+  }, [autoRotate, reducedMotion]);
 
   // ── Camera reporting (scrubber hover-preview) ──────────────────────────────
   // The preview deck mirrors whatever the user is looking at, so we forward the

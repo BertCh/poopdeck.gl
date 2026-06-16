@@ -40,7 +40,15 @@ export type DatasetType =
    * playhead (read from a per-bucket `vertexValueMatrix`), plus node circles
    * sized by incident flow. Build with `stt-generate bixi`.
    */
-  | 'flowmap';
+  | 'flowmap'
+  /**
+   * GPU force-directed edge-bundled flowmap (`BundledFlowmapLayer`). Same OD
+   * `vertexValueMatrix` tiles as `flowmap`, but compatible flows are relaxed
+   * into smooth bundled rivers on the GPU (Holten FDEB, cosmos.gl-style
+   * ping-pong textures) and rendered fully GPU-resident. Drop-in superset of
+   * `flowmap`; honors the same `flow*` styling props.
+   */
+  | 'flowmap-bundled';
 
 export interface DatasetLegendItem {
   color: string;
@@ -418,12 +426,39 @@ export interface Dataset {
   flowArcHeight?: number;
   /** @deprecated No effect — flow arrows are flat. */
   flowGreatCircle?: boolean;
-  /** Node circle radius in px per `sqrt(incident flow)`. Default 1.3. */
+  /** Node circle radius per `sqrt(incident flow)`. Default 1.3. */
   flowNodeRadiusScale?: number;
+  /**
+   * Units for node-circle radius: `'pixels'` (constant on screen) or `'meters'`
+   * (scales with the map, so dense overviews don't blow out into overlapping
+   * dots — still clamped by `flowNodeRadiusMaxPixels`). With `'meters'`,
+   * `flowNodeRadiusScale` is metres per √flow. Default `'pixels'`.
+   */
+  flowNodeRadiusUnits?: 'meters' | 'pixels';
+  /** Clamp node circle radius to at most this many px. Default 28. */
+  flowNodeRadiusMaxPixels?: number;
   /** Node circle fill color, RGBA. */
   flowNodeColor?: ColorRGBA;
   /** Hide arrows/nodes whose current flow is below this many trips. Default 0.25. */
   flowMinFlow?: number;
+
+  // ─── edge-bundled flowmap tuning (type: 'flowmap-bundled', KDEEB) ───────
+  /** Control points per edge (P). Higher = smoother rivers, more GPU work. Default 48. */
+  flowSubdivisionPoints?: number;
+  /** Kernel bandwidth as a fraction of the tile extent — the headline knob; larger bundles more. Default 0.05. */
+  flowKernelRadius?: number;
+  /** Number of KDEEB density-advection iterations (more = tighter). Default 15. */
+  flowBundlingIterations?: number;
+  /** Per-iteration Laplacian smoothing strength in [0,1]. Default 0.5. */
+  flowSmoothingStrength?: number;
+  /** Above this many edges per tile, skip bundling (straight arrows). Default 4000. */
+  flowMaxBundledEdges?: number;
+  /**
+   * The tiles already carry BAKED bundled geometry (`stt-generate bixi
+   * --bake-bundling`): `BundledFlowmapLayer` skips the live GPU bundler and just
+   * renders the precomputed rivers. Cheaper, stable, works without `EXT_float_blend`.
+   */
+  flowPreBundled?: boolean;
 
   // ─── column-layer styling (type: 'column') ─────────────────────────────
   /** Column disk radius in `columnRadiusUnits`. Default 100. */

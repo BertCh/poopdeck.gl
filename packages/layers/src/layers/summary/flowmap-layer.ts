@@ -83,6 +83,15 @@ export interface _FlowmapLayerProps {
    * flow volume. @default 1.3
    */
   nodeRadiusScale?: number;
+  /**
+   * Units for the node-circle radius. `'pixels'` keeps a constant on-screen size
+   * at every zoom; `'meters'` makes the circles scale with the map, so a dense
+   * overview shrinks them instead of blowing out into overlapping blobs (still
+   * clamped by `nodeRadiusMin/MaxPixels`). With `'meters'`, `nodeRadiusScale` is
+   * a metres-per-√flow factor (so it needs a much larger value than in pixels).
+   * @default 'pixels'
+   */
+  nodeRadiusUnits?: 'meters' | 'pixels';
   /** Clamp node radius (px). @default min 1.5 */
   nodeRadiusMinPixels?: number;
   /** Clamp node radius (px). @default max 28 */
@@ -152,6 +161,7 @@ export class FlowmapLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLay
     greatCircle: false,
     arcHeight: { type: 'number', value: 0.5, min: 0 },
     nodeRadiusScale: { type: 'number', value: 1.3, min: 0 },
+    nodeRadiusUnits: 'pixels',
     nodeRadiusMinPixels: { type: 'number', value: 1.5, min: 0 },
     nodeRadiusMaxPixels: { type: 'number', value: 28, min: 0 },
     minFlow: { type: 'number', value: 0.25, min: 0 },
@@ -455,7 +465,7 @@ export class FlowmapLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLay
     const props = this.composeSubLayerProps('nodes', `${this.props.id}-nodes`, {
       data: nodes,
       positionFormat: 'XY',
-      radiusUnits: 'pixels',
+      radiusUnits: this.props.nodeRadiusUnits,
       getPosition: (d: FlowNode) => d.position,
       getRadius: (d: FlowNode) => d.radius,
       radiusMinPixels: this.props.nodeRadiusMinPixels,

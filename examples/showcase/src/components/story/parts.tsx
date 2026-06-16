@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import type { Person, Milestone, Stat, AssetCredit } from '../../content/drifterStory';
+import { useReducedMotion } from '../../lib/reducedMotion';
 
 // ── Small typographic helpers ───────────────────────────────────────────────
 export const Eyebrow: React.FC<{ children: React.ReactNode; tone?: 'dark' | 'light' }> = ({
@@ -108,8 +109,14 @@ export const StatCounter: React.FC<{ stat: Stat; tone?: 'light' | 'dark' }> = ({
   const numColor = dark ? 'var(--story-ink)' : 'var(--ink-900)';
   const labelColor = dark ? 'var(--story-ink-soft)' : 'var(--ink-700)';
   const subColor = dark ? 'var(--story-ink-faint)' : 'var(--ink-500)';
-  const [val, setVal] = useState(0);
+  const reducedMotion = useReducedMotion();
+  const [val, setVal] = useState(reducedMotion ? stat.value : 0);
   const ref = useInView<HTMLDivElement>(() => {
+    // Reduce-motion: show the final figure outright, no count-up.
+    if (reducedMotion) {
+      setVal(stat.value);
+      return;
+    }
     const dur = 1400;
     let raf = 0;
     let start: number | null = null;

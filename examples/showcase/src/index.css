@@ -1,6 +1,12 @@
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
 
+/* Tailwind v4 auto-detection skips node_modules, so utility classes used only
+   inside our workspace UI packages (e.g. @poopdeck.gl/react's PlaybackControls
+   — speed presets, gaps, paddings) never get generated and those elements
+   collapse. Register the package sources explicitly so their utilities emit. */
+@source "../../../packages/react/src";
+
 /* Custom CSS after Tailwind import */
 
 @layer base {
@@ -196,7 +202,21 @@
   scroll-behavior: smooth;
 }
 
+/* Honor the OS "reduce motion" accessibility setting: collapse every CSS
+   transition/animation to instant and disable smooth scrolling. JS-driven
+   motion (globe auto-rotation, playback autoplay, the story's camera fly-ins
+   and era cross-dissolves, count-up stats) can't be reached from CSS — those
+   are gated separately in the components via `useReducedMotion()`. */
 @media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    transition-delay: 0ms !important;
+    scroll-behavior: auto !important;
+  }
   .story-root { scroll-behavior: auto; }
 }
 

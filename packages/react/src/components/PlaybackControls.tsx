@@ -605,30 +605,80 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({
 
       {/* Controls */}
       <div className="flex items-center gap-3 flex-wrap">
-        {/* Play/Pause */}
-        <div className="flex items-center gap-1.5">
+        {/* Play/Pause + restart. Geometry is set inline (not via Tailwind w-/h-
+            utilities) so the buttons keep their dimensions in any consumer —
+            a published package can't rely on the host app's Tailwind content
+            scan reaching node_modules. Crisp SVG glyphs replace the old emoji,
+            which rendered at platform-dependent sizes/baselines. */}
+        <div className="flex items-center" style={{ gap: 8 }}>
           <button
             onClick={onPlayPause}
             aria-label={isPlaying ? "Pause" : "Play"}
-            className="w-8 h-8 rounded flex items-center justify-center text-sm transition-colors"
+            className="transition-colors"
             style={{
+              width: 40,
+              height: 40,
+              flexShrink: 0,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              borderRadius: 12,
+              border: "none",
+              cursor: "pointer",
               background: "var(--accent)",
               color: "#FFFFFF",
             }}
           >
-            {isPlaying ? "⏸" : "▶"}
+            {isPlaying ? (
+              <svg
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                fill="currentColor"
+                aria-hidden="true"
+              >
+                <path d="M6 5h3.5v14H6zM14.5 5H18v14h-3.5z" />
+              </svg>
+            ) : (
+              <svg
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                fill="currentColor"
+                aria-hidden="true"
+                style={{ marginLeft: 1 }}
+              >
+                <path d="M8 5.14v13.72a1 1 0 0 0 1.54.84l10.3-6.86a1 1 0 0 0 0-1.68L9.54 4.3A1 1 0 0 0 8 5.14z" />
+              </svg>
+            )}
           </button>
           <button
             onClick={() => onSeek(timeRange.start)}
             aria-label="Restart from beginning"
-            className="w-7 h-7 rounded flex items-center justify-center text-xs transition-colors"
+            className="transition-colors"
             style={{
+              width: 32,
+              height: 32,
+              flexShrink: 0,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              borderRadius: 10,
+              cursor: "pointer",
               background: "var(--surface)",
               color: "var(--ink-500)",
               border: "1px solid var(--hairline)",
             }}
           >
-            ⏮
+            <svg
+              width="15"
+              height="15"
+              viewBox="0 0 24 24"
+              fill="currentColor"
+              aria-hidden="true"
+            >
+              <path d="M7 6a1 1 0 0 0-1 1v10a1 1 0 0 0 2 0V7a1 1 0 0 0-1-1zm10.5.13L10.2 11.2a1 1 0 0 0 0 1.6l7.3 5.07A1 1 0 0 0 19 17.06V6.94a1 1 0 0 0-1.5-.81z" />
+            </svg>
           </button>
         </div>
 

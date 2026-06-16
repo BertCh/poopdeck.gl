@@ -4,6 +4,7 @@ import type { Dataset } from "../../types";
 import DemoViewer from "./DemoViewer";
 import { useDemoPlayback } from "./useDemoPlayback";
 import { PlaybackControls } from "@poopdeck.gl/react";
+import { useReducedMotion } from "../../lib/reducedMotion";
 
 /**
  * Framed live-map embed for the per-demo landing pages.
@@ -24,6 +25,7 @@ import { PlaybackControls } from "@poopdeck.gl/react";
 const DemoEmbed: React.FC<{ dataset: Dataset }> = ({ dataset }) => {
   const playback = useDemoPlayback(dataset);
   const frameRef = useRef<HTMLDivElement>(null);
+  const reducedMotion = useReducedMotion();
 
   // An explicit pause from the transport bar must not be undone by scrolling.
   const userPausedRef = useRef(false);
@@ -36,7 +38,7 @@ const DemoEmbed: React.FC<{ dataset: Dataset }> = ({ dataset }) => {
   useEffect(() => {
     const el = frameRef.current;
     if (!el) return;
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    if (reducedMotion) return; // reduce-motion disables visibility autoplay
     const io = new IntersectionObserver(
       ([entry]) => {
         if (entry.intersectionRatio >= 0.4) {
@@ -51,7 +53,7 @@ const DemoEmbed: React.FC<{ dataset: Dataset }> = ({ dataset }) => {
     );
     io.observe(el);
     return () => io.disconnect();
-  }, [play, pause, dataset]);
+  }, [play, pause, dataset, reducedMotion]);
 
   // Coarse-pointer tap shield: the map would otherwise capture every touch
   // and trap page scroll. Desktop pointers get the full controller directly.

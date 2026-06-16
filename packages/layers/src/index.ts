@@ -41,6 +41,23 @@ export { QuadbinSummaryLayer } from './layers/summary/quadbin-summary-layer';
 // FlowCorridorLayer) + node circles sized by incident flow. Feed it the
 // `stt-generate bixi` OD-pair matrix tiles.
 export { FlowmapLayer } from './layers/summary/flowmap-layer';
+// GPU force-directed edge bundling variant of FlowmapLayer: compatible OD flows
+// are relaxed into smooth rivers by an EdgeBundler running entirely on the GPU
+// (cosmos.gl-style ping-pong float textures), then rendered fully GPU-resident.
+// Drop-in superset of FlowmapLayer; falls back to straight arrows when the
+// device can't render to a float texture or a tile exceeds `maxBundledEdges`.
+export { BundledFlowmapLayer } from './layers/summary/bundled-flowmap-layer';
+export { BundledFlowLinesLayer } from './layers/internal/bundled-flow-lines-layer';
+// The GPU bundling engine + its float-render capability gate, exposed for
+// callers who want to bundle their own OD edges directly. StaticBundle renders
+// BAKED bundles (built by `stt-generate bixi --bake-bundling`) — same renderer,
+// no per-frame relaxation, laxer device gate.
+export {
+  EdgeBundler,
+  isBundlingSupported,
+  StaticBundle,
+  isStaticBundleSupported,
+} from './lib/edge-bundler';
 
 // Origin→destination flow layers (window-mode time filtering). Arc/Line read
 // the FIRST vertex of each (typically 2-vertex) LineString tile as the source
@@ -118,6 +135,14 @@ export type {
 export type { H3SummaryLayerProps } from './layers/summary/h3-summary-layer';
 export type { QuadbinSummaryLayerProps } from './layers/summary/quadbin-summary-layer';
 export type { FlowmapLayerProps } from './layers/summary/flowmap-layer';
+export type { BundledFlowmapLayerProps } from './layers/summary/bundled-flowmap-layer';
+export type { BundledFlowLinesLayerProps } from './layers/internal/bundled-flow-lines-layer';
+export type {
+  EdgeBundlerOptions,
+  StaticBundleOptions,
+  BundlePositions,
+  Vec2,
+} from './lib/edge-bundler';
 export type { FlowLinesLayerProps } from './layers/internal/flow-lines-layer';
 export type { AnimatedArcLayerProps } from './layers/core/animated-arc-layer';
 export type { AnimatedLineLayerProps } from './layers/core/animated-line-layer';

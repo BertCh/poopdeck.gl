@@ -333,7 +333,137 @@ export const DEMO_META: Record<string, DemoMeta> = {
       { label: 'FlowLinesLayer (tapered arrows)', docPath: '/docs/api/flow-lines-layer' },
       { label: 'Binary features (vertex value matrix)', docPath: '/docs/api/binary-features' },
     ],
-    related: ['nyc-od-arcs', 'nyc-taxi-flows', 'nyc-od-quadbin'],
+    related: ['bixi-flowmap-bundled', 'bixi-flowmap-baked', 'nyc-od-arcs', 'nyc-taxi-flows'],
+  },
+
+  'bixi-flowmap-bundled': {
+    category: 'mobility',
+    tagline: 'The BIXI flowmap, with close corridors relaxed into smooth rivers on the GPU.',
+    techniqueTag: 'GPU edge bundling · KDEEB',
+    about: [
+      'The origin→destination flowmap has a clutter problem: at an overview ' +
+        'zoom, hundreds of station-pair arrows cross into an unreadable hairball. ' +
+        'Edge bundling is the classic fix — pull geometrically-close flows ' +
+        'together so corridors heading the same way merge into smooth rivers. ' +
+        'This demo runs kernel-density edge bundling (KDEEB; Hurter & Telea ' +
+        '2012) entirely on the GPU.',
+      'KDEEB is the method behind the smooth bundles in the classic figures: ' +
+        'each iteration splats every edge point into a density texture, then ' +
+        'advects the points up the density gradient (toward where neighbouring ' +
+        'edges already are — mean-shift), resamples, and runs a 1D Laplacian ' +
+        'smoothing pass that removes the zig-zags. The kernel shrinks each ' +
+        'iteration to tighten the bundles. It all lives in float textures with ' +
+        'ping-pong render passes — the same texture-as-memory trick cosmos.gl ' +
+        'uses — so the geometry never round-trips through the CPU, and you can ' +
+        'watch the straight arrows settle into rivers over the first ~15 frames.',
+      'It reuses the exact same BIXI tiles as the unbundled flowmap — bundling ' +
+        'is purely client-side, no separate build. The bundle is a stable ' +
+        'spatial skeleton, computed once per tile and kept resident on the GPU; ' +
+        'only each ribbon’s WIDTH animates with the hourly demand, sampled ' +
+        'on the GPU from the per-corridor vertexValueMatrix. Direction reads ' +
+        'from the source→target color gradient along each river. On a device ' +
+        'that can’t additively blend into a float texture it falls back to ' +
+        'straight arrows.',
+    ],
+    dataSources: [
+      {
+        name: 'BIXI Montréal — Open Data (trip history)',
+        url: 'https://bixi.com/en/open-data/',
+        license: 'BIXI open data licence',
+        note: 'Real August 2024 trips (origin/destination station + timestamps).',
+      },
+      {
+        name: 'KDEEB — Graph Bundling by Kernel Density Estimation (Hurter, Ersoy, Telea)',
+        url: 'http://recherche.enac.fr/~hurter/KDEEB.html',
+        license: 'Academic',
+        note: 'The kernel-density bundling algorithm this layer ports to WebGL2.',
+      },
+    ],
+    buildCommand:
+      'stt-generate bixi --input bixi-2024.csv \\\n' +
+      '  --from 2024-08-01 --to 2024-09-01 --bin 1h --min-trips 5 \\\n' +
+      '  --cluster-radius 15 \\\n' +
+      '  --output bixi-flowmap-dense',
+    buildNote:
+      'A denser build than the bixi-flowmap demo (min-trips 5, cluster-radius ' +
+      '15) — thousands of corridors per overview tile, to load up the GPU ' +
+      'bundler. The bundling itself is done at render time by ' +
+      'BundledFlowmapLayer; tune it with `kernelRadius`, `bundlingIterations`, ' +
+      '`smoothingStrength`, and `subdivisionPoints` on the layer.',
+    techniques: [
+      { label: 'BundledFlowmapLayer', docPath: '/docs/api/bundled-flowmap-layer' },
+      { label: 'FlowmapLayer', docPath: '/docs/api/flowmap-layer' },
+      { label: 'Binary features (vertex value matrix)', docPath: '/docs/api/binary-features' },
+    ],
+    related: ['bixi-flowmap', 'bixi-flowmap-baked', 'nyc-taxi-flows', 'nyc-od-arcs'],
+  },
+  'bixi-flowmap-baked': {
+    category: 'mobility',
+    tagline: 'The same edge bundling, but BAKED into the tiles at build time.',
+    techniqueTag: 'Baked edge bundling · KDEEB',
+    about: [
+      'Edge bundling untangles a flowmap by pulling geometrically-close ' +
+        'corridors into smooth rivers. The sister demo runs that on the GPU at ' +
+        'render time; this one moves the entire computation into the build. A ' +
+        'deterministic CPU port of KDEEB (Hurter & Telea 2012) bundles each ' +
+        'zoom’s corridors once and writes the resulting rivers into the tiles as ' +
+        'ordinary multi-vertex polylines — so the client just draws the curve.',
+      'The key constraint is that bundling is a GLOBAL operation: the river a ' +
+        'corridor joins depends on the whole edge set, so bundling tile-local ' +
+        'subsets independently would seam. The generator sidesteps this by ' +
+        'bundling each zoom’s complete clustered hub-pair set with one density ' +
+        'field, then emitting whole (un-clipped) corridors banded to that single ' +
+        'zoom — the same per-zoom clustering the flowmap already bakes, now with ' +
+        'the geometry pre-relaxed. Determinism matters because the packs are ' +
+        'content-addressed: KDEEB uses a uniform (non-random) step and a pinned ' +
+        'density resolution, so a rebuild is byte-identical.',
+      'What you trade vs the live GPU demo: the bundle is fixed at build time ' +
+        '(no interactive kernel tuning). What you gain: no per-frame relaxation ' +
+        'and no settling animation, a bundle that’s stable as you pan and zoom, ' +
+        'reproducible output, and — because there’s no density splat — no ' +
+        '`EXT_float_blend` requirement, so it renders on mobile GPUs the live ' +
+        'bundler falls back on. Ribbon WIDTH still animates from the hourly ' +
+        'vertexValueMatrix exactly as before.',
+    ],
+    dataSources: [
+      {
+        name: 'BIXI Montréal — Open Data (trip history)',
+        url: 'https://bixi.com/en/open-data/',
+        license: 'BIXI open data licence',
+        note: 'Real August 2024 trips (origin/destination station + timestamps).',
+      },
+      {
+        name: 'KDEEB — Graph Bundling by Kernel Density Estimation (Hurter, Ersoy, Telea)',
+        url: 'http://recherche.enac.fr/~hurter/KDEEB.html',
+        license: 'Academic',
+        note: 'The kernel-density bundling algorithm, ported to a deterministic CPU pass.',
+      },
+    ],
+    buildCommand:
+      'stt-generate bixi --input bixi-2024.csv \\\n' +
+      '  --from 2024-08-01 --to 2024-09-01 --bin 1h \\\n' +
+      '  --min-trips 5 --cluster-radius 15 \\\n' +
+      '  --bake-bundling --bundle-points 24 \\\n' +
+      '  --output bixi-flowmap-baked',
+    buildNote:
+      'Because bundling is baked there is no render-time edge budget, so this ' +
+      'build keeps the WHOLE network — a relaxed trip floor (`--min-trips 5`, vs ' +
+      '30 for the live demo) keeps the long tail of low-traffic corridors, which ' +
+      'the layer renders as thin hairlines (`flowMinFlow≈0`, sub-pixel ' +
+      '`widthMinPixels`) instead of dropping them. `--bake-bundling` relaxes each ' +
+      'zoom’s clustered corridors with a CPU KDEEB and stores them as polylines ' +
+      '(`--bundle-points` = control points per corridor, must match the layer’s ' +
+      '`subdivisionPoints`; `--bundle-kernel`/`--bundle-iterations`/' +
+      '`--bundle-smoothing` tune the bundle). Baked corridors are coordinate-heavy, ' +
+      'so the build quantizes geometry to 1 m (invisible at these zooms) to roughly ' +
+      'halve the wire size. The client renders with ' +
+      '`BundledFlowmapLayer({ preBundled: true })` — no render-time bundling.',
+    techniques: [
+      { label: 'BundledFlowmapLayer', docPath: '/docs/api/bundled-flowmap-layer' },
+      { label: 'FlowmapLayer', docPath: '/docs/api/flowmap-layer' },
+      { label: 'Binary features (vertex value matrix)', docPath: '/docs/api/binary-features' },
+    ],
+    related: ['bixi-flowmap-bundled', 'bixi-flowmap', 'nyc-taxi-flows'],
   },
 
   'nyc-od-quadbin': {

@@ -96,6 +96,16 @@ const FlowmapGlyph = svg(
   </>,
 );
 
+// Several flows merging into one river — GPU edge-bundled flowmap.
+const BundledFlowmapGlyph = svg(
+  <>
+    <path {...stroke} d="M4 6Q11 10 13 12Q11 14 4 18" />
+    <path {...stroke} d="M4 12H13" />
+    <path {...stroke} strokeWidth={2.4} d="M13 12Q17 12 20 12" />
+    <circle cx="20" cy="12" r="2" fill="currentColor" />
+  </>,
+);
+
 // An extruded 3D box — a column at a point.
 const ColumnGlyph = svg(
   <>
@@ -140,6 +150,7 @@ export const VIZ_REGISTRY: Record<DatasetType, VizDef> = {
   column: { label: "Columns", color: "#94701A", icon: ColumnGlyph },
   "quadbin-summary": { label: "Quadbin", color: "#6B7C26", icon: QuadbinGlyph },
   flowmap: { label: "Flowmap", color: "#C72C68", icon: FlowmapGlyph },
+  "flowmap-bundled": { label: "Bundled flowmap", color: "#9B2C8C", icon: BundledFlowmapGlyph },
 };
 
 /** `#RRGGBB` → `rgba(r,g,b,a)`; used for the soft chip fill. */

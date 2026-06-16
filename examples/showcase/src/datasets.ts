@@ -362,6 +362,138 @@ const rawDatasets: Dataset[] = [
     },
   },
   {
+    // Same BIXI OD tiles as `bixi-flowmap`, but rendered with GPU force-directed
+    // edge bundling: compatible corridors are relaxed into smooth rivers on the
+    // GPU (Holten FDEB, cosmos.gl-style ping-pong float textures) so the overview
+    // reads as flowing channels instead of a hairball of crossing arrows. The
+    // bundle is computed once per tile and stays resident on the GPU; only ribbon
+    // width animates with the hourly demand. Bundling is purely client-side —
+    // identical tiles, no separate build.
+    id: 'bixi-flowmap-bundled',
+    name: 'BIXI Edge Bundling',
+    sources: ['bixi'],
+    description:
+      'A month of real Montréal BIXI trips, with close corridors relaxed into ' +
+      'smooth rivers by GPU kernel-density edge bundling (KDEEB). The straight ' +
+      'origin→destination flows settle into bundles over the first few frames, ' +
+      'then ribbon width pulses with the hourly commute — all on the GPU.',
+    // Denser build than the unbundled flowmap (min-trips 5, cluster-radius 15) —
+    // thousands of corridors per overview tile, to load up the GPU bundler.
+    url: '/data/bixi-flowmap-dense/manifest.json',
+    type: 'flowmap-bundled',
+    timeRange: {
+      start: 1722470400000, // 2024-08-01 00:00 UTC
+      end: 1725148800000,   // 2024-09-01 00:00 UTC
+    },
+    timeWindow: 3600000,
+    targetPlaybackSeconds: 90,
+    initialViewState: {
+      longitude: -73.585,
+      latitude: 45.523,
+      zoom: 11.2,
+      pitch: 0,
+      bearing: 0,
+    },
+    flowSourceColor: [56, 196, 232, 220], // origin — cool cyan
+    flowTargetColor: [255, 142, 64, 230], // destination — warm orange
+    // Thinner, lighter ribbons + subdued small nodes so the denser graph reads
+    // as bundles instead of a carpet of ink.
+    flowWidthScale: 0.9,
+    flowWidthMaxPixels: 9,
+    flowGap: 0.5,
+    flowNodeRadiusScale: 0.7,
+    flowNodeRadiusMaxPixels: 9,
+    flowNodeColor: [232, 238, 255, 110],
+    flowMinFlow: 0.75,
+    // KDEEB tuning — a slightly larger kernel (7% of the tile) bundles the
+    // denser graph into fewer, clearer trunk rivers.
+    flowSubdivisionPoints: 48,
+    flowKernelRadius: 0.07,
+    flowBundlingIterations: 16,
+    flowSmoothingStrength: 0.5,
+    // Dense build: bundle up to ~30k corridors/tile before falling back.
+    flowMaxBundledEdges: 30000,
+    opacity: 0.7,
+    legend: {
+      title: 'BIXI trips per corridor (hourly)',
+      items: [
+        { color: '#38c4e8', label: 'Origin' },
+        { color: '#ff8e40', label: 'Destination' },
+      ],
+    },
+  },
+  {
+    // Same BIXI OD flowmap, but the edge bundling is BAKED into the tiles at
+    // build time (`stt-generate bixi --bake-bundling`): each zoom's clustered
+    // hub-pair corridors are relaxed by a deterministic CPU KDEEB into smooth
+    // multi-vertex rivers and stored as polylines. The client renders the
+    // precomputed curve directly (BundledFlowmapLayer `preBundled`) — no GPU
+    // edge bundler, no settling animation, no float-blend requirement (works on
+    // mobile), and the bundle is stable under pan/zoom. Width still animates from
+    // the hourly matrix. The trade vs the live `bixi-flowmap-bundled` demo: the
+    // bundle is fixed at build time (no interactive kernel tuning) in exchange
+    // for being deterministic, cheaper, and universally supported.
+    id: 'bixi-flowmap-baked',
+    name: 'BIXI Baked Bundling',
+    sources: ['bixi'],
+    description:
+      'A month of real Montréal BIXI trips with edge bundling BAKED into the ' +
+      'tiles at build time — close corridors were relaxed into smooth rivers by ' +
+      'a deterministic CPU KDEEB pass and stored as polylines, so the client just ' +
+      'draws the precomputed curve (no GPU bundler, no settling) while ribbon ' +
+      'width pulses with the hourly commute. With no render-time edge budget the ' +
+      'build packs in ~2× the corridors of the live bundler — bundling keeps the ' +
+      'denser graph legible.',
+    url: '/data/bixi-flowmap-baked/manifest.json',
+    type: 'flowmap-bundled',
+    flowPreBundled: true,
+    timeRange: {
+      start: 1722470400000, // 2024-08-01 00:00 UTC
+      end: 1725148800000,   // 2024-09-01 00:00 UTC
+    },
+    timeWindow: 3600000,
+    targetPlaybackSeconds: 90,
+    initialViewState: {
+      longitude: -73.585,
+      latitude: 45.523,
+      zoom: 11.2,
+      pitch: 0,
+      bearing: 0,
+    },
+    flowSourceColor: [56, 196, 232, 235], // origin — cool cyan
+    flowTargetColor: [255, 142, 64, 245], // destination — warm orange
+    flowWidthScale: 1.1,
+    // Show the WHOLE network, including the long tail of low-traffic corridors a
+    // relaxed `--min-trips` keeps in the tiles: scale width down to a thin
+    // hairline (sub-pixel floor) and drop the visibility cutoff toward zero so
+    // faint tributaries render instead of being hidden — no thinning, width
+    // carries the signal.
+    flowWidthMinPixels: 0.6,
+    flowWidthMaxPixels: 12,
+    flowGap: 0.5,
+    // GEOGRAPHIC node circles: radius in metres (per √incident-flow, so circle
+    // AREA ∝ flow) — the hub set scales with the map and shrinks when you zoom out
+    // instead of blowing out into overlapping dots. The pixel cap is generous (36)
+    // so the busiest hubs aren't all flattened to one size: it's the clamp, not
+    // the √, that kills variation among the largest — a log scale would compress
+    // the top end further and make them MORE alike.
+    flowNodeRadiusScale: 60,
+    flowNodeRadiusUnits: 'meters',
+    flowNodeRadiusMaxPixels: 36,
+    flowMinFlow: 0.05, // ~0 → keep low-traffic corridors visible as thin lines
+    // P must match the baked control-point count (`--bundle-points`, default 24)
+    // so the renderer samples each baked vertex exactly.
+    flowSubdivisionPoints: 24,
+    opacity: 0.85,
+    legend: {
+      title: 'BIXI trips per corridor (hourly)',
+      items: [
+        { color: '#38c4e8', label: 'Origin' },
+        { color: '#ff8e40', label: 'Destination' },
+      ],
+    },
+  },
+  {
     id: 'flights',
     name: 'Flight Traffic',
     sources: ['opensky'],

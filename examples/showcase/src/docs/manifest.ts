@@ -152,6 +152,11 @@ export const docSections: DocSection[] = [
         title: "FlowmapLayer",
       },
       {
+        slug: "api/bundled-flowmap-layer",
+        file: "api/bundled-flowmap-layer.md",
+        title: "BundledFlowmapLayer",
+      },
+      {
         slug: "api/flow-lines-layer",
         file: "api/flow-lines-layer.md",
         title: "FlowLinesLayer",

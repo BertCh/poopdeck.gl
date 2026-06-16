@@ -15,6 +15,7 @@ import type { BufferSource, BufferedRunway } from "@poopdeck.gl/playback";
 import { getDatasetById, navDatasets } from "../datasets";
 import { calculateAnimationSpeed, tileLoadingProps } from "../types";
 import { SourceLogo } from "../components/SourceLogo";
+import { useReducedMotion } from "../lib/reducedMotion";
 
 // A single full-sphere quad gives the globe a light "ocean" backdrop (matching
 // the paper page) and occludes the back-side tracks, so the drifter ribbons
@@ -36,6 +37,11 @@ const DEG_PER_SEC = -1;
 
 const HomePage: React.FC = () => {
   const heroDataset = getDatasetById("ocean-drifters");
+
+  // When the viewer has asked the OS to reduce motion, the hero holds still: no
+  // autoplay of the drifter trails and no globe spin. Reactive, so toggling the
+  // setting re-runs the effects below and starts/stops the motion live.
+  const reducedMotion = useReducedMotion();
 
   const baseAnimationSpeed = useMemo(() => {
     if (!heroDataset) return 1000;
@@ -72,13 +78,15 @@ const HomePage: React.FC = () => {
     const g = new PlaybackGovernor(timeController, { maxStartWaitMs: 4000 });
     governorRef.current = g;
     if (tilesetRef.current) g.setSource(tilesetRef.current);
-    g.requestPlay();
+    // Honor reduce-motion: leave the hero paused on its first frame (a live
+    // "poster") instead of autoplaying the trails.
+    if (!reducedMotion) g.requestPlay();
     return () => {
       governorRef.current = null;
       g.dispose();
       timeController.pause();
     };
-  }, [timeController]);
+  }, [timeController, reducedMotion]);
 
   const handleTilesetReady = useCallback((tileset: BufferSource) => {
     tilesetRef.current = tileset;
@@ -101,6 +109,7 @@ const HomePage: React.FC = () => {
     globe: { longitude: -78, latitude: -20, zoom: 1.8, pitch: 0, bearing: 0 },
   });
   useEffect(() => {
+    if (reducedMotion) return; // reduce-motion: keep the globe still
     let raf = 0;
     let last: number | null = null;
     const step = (now: number) => {
@@ -116,7 +125,7 @@ const HomePage: React.FC = () => {
     };
     raf = requestAnimationFrame(step);
     return () => cancelAnimationFrame(raf);
-  }, []);
+  }, [reducedMotion]);
 
   const layers = useMemo(() => {
     if (!heroDataset) return [];
