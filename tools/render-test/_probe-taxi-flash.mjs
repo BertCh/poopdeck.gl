@@ -6,7 +6,7 @@
 //  - playback: governor statechange/waiting/ready QoE events
 //  - renderLayers: per-render tile/sublayer counts
 // Run: node tools/render-test/_probe-taxi-flash.mjs [demo-id] [seconds]
-import { chromium } from '/Users/robertchristie/Documents/GitHub/spatiotemporal-tiles/node_modules/.pnpm/playwright@1.60.0/node_modules/playwright/index.mjs';
+import { chromium } from 'playwright';
 
 const demo = process.argv[2] || 'nyc-taxi-trips';
 const seconds = Number(process.argv[3] || 45);

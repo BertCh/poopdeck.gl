@@ -1,7 +1,8 @@
 import { chromium } from 'playwright';
 import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
-const OUT = '/Users/robertchristie/Documents/GitHub/spatiotemporal-tiles/tools/render-test/output/probe-earthquake';
+const OUT = fileURLToPath(new URL('./output/probe-earthquake', import.meta.url));
 
 const browser = await chromium.launch({
   headless: true,

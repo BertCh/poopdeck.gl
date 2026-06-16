@@ -57,7 +57,7 @@ use [GeoZarr](https://github.com/zarr-developers/geozarr-spec) or COG for those.
 ### 1. Build the CLI
 
 ```bash
-git clone https://github.com/robertchristie/spatiotemporal-tiles.git
+git clone https://github.com/BertCh/spatiotemporal-tiles.git
 cd spatiotemporal-tiles
 cargo build --release
 ```
@@ -162,7 +162,9 @@ spatiotemporal-tiles/
 │   └── stt-validate/       # Content-address + CRC32C + decode check (packed or single-file .stt)
 ├── packages/               # TypeScript
 │   ├── core/               # Archive reader, decoder pool, OPFS cache
-│   ├── deck.gl/            # deck.gl layers + extensions
+│   ├── layers/             # deck.gl layers + extensions
+│   ├── playback/           # Time controller + playback governor (zero-dep)
+│   ├── react/              # React playback hooks + UI controls
 │   └── maplibre/           # MapLibre GL custom-layer adapter
 ├── examples/showcase/      # Interactive demo app (deck.gl + MapLibre)
 ├── tools/

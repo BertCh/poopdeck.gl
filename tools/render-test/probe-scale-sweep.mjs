@@ -27,7 +27,7 @@
  * Requires the showcase dev server to be running on :3000.
  */
 
-import { chromium } from '/Users/robertchristie/Documents/GitHub/spatiotemporal-tiles/node_modules/.pnpm/playwright@1.60.0/node_modules/playwright/index.mjs';
+import { chromium } from 'playwright';
 import { writeFile, mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 

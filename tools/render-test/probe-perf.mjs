@@ -4,7 +4,7 @@
 // window.
 // Run with: node tools/render-test/probe-perf.mjs
 
-import { chromium } from '/Users/robertchristie/Documents/GitHub/spatiotemporal-tiles/node_modules/.pnpm/playwright@1.60.0/node_modules/playwright/index.mjs';
+import { chromium } from 'playwright';
 
 const URL = process.env.STT_URL || 'http://localhost:3000/demo/ship-traffic';
 
