@@ -284,19 +284,28 @@ export interface _AnimatedPointLayerProps {
    * the tile's `positionDimensions` automatically — the prop is kept for
    * API compatibility with v2 callers and forwarded as a hint. 2D tiles
    * are padded with z=0; 3D tiles ride zero-copy.
+   *
+   * Setting {@link elevationProperty} is sufficient to source per-point z from
+   * a numeric column regardless of this flag — `use3D` is purely an enabling
+   * hint and does not gate the elevation column.
    */
   use3D?: boolean;
 
   /**
-   * Property name to source elevation from when the tile's positions are
-   * 2D. Currently a forward-declared no-op in the v3 layer (the per-tile
-   * binary path uses the tile's stored z if present); the prop is kept on
-   * the type to preserve v2 dataset configs.
+   * Property name to source per-point elevation (z) from a numeric tile
+   * column. The tile geometry is 2D (lon/lat) — z comes ONLY from this
+   * property: each point is placed at `z = column[i] × elevationScale`.
+   * Negative and zero values pass through unchanged (e.g. below-grade to
+   * rooftop LIDAR returns). With this unset (the common case) z stays 0,
+   * byte-identical to a flat 2D render.
+   *
+   * Applies to BOTH the per-tile sublayer path and the cumulative slab path.
    */
   elevationProperty?: string | null;
 
   /**
-   * Scale factor for elevation values. Forward-declared (see `elevationProperty`).
+   * Multiplier applied to each {@link elevationProperty} value before it
+   * becomes the point's z. No effect when `elevationProperty` is unset.
    * @default 1
    */
   elevationScale?: number;
@@ -549,12 +558,14 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
     // Cumulative "draws itself" reveal — see the file header.
     cumulative: false,
 
-    // 3D forward-declared props (see prop docstrings). The v3 layer reads 3D
-    // directly from the tile's positionDimensions; these are accepted on the
-    // type so v2 dataset configs continue to compile.
+    // 3D props (see prop docstrings). The v3 layer reads 3D geometry directly
+    // from the tile's positionDimensions; `elevationProperty` additionally
+    // sources per-point z from a numeric column on 2D tiles. `use3D` is a hint.
     use3D: false,
     elevationProperty: { type: 'object', value: null, optional: true, compare: true },
-    elevationScale: { type: 'number', value: 1, min: 0 },
+    // Allow negative scale (e.g. invert depth) — z values themselves may be
+    // negative (below-grade returns), so the multiplier is unconstrained too.
+    elevationScale: { type: 'number', value: 1 },
   };
 
   /** Per-tile prepared-data cache. Pruned to the live tile set each render. */
@@ -810,11 +821,18 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
     // radiusTransform is baked into the prepared getRadius buffer; function
     // identity (not body) is the invalidation contract for function props.
     const transform = this.props.radiusTransform;
+    // Elevation column + scale are baked into the prepared `positions` z, so
+    // they belong in the styleKey: changing either must re-pad the buffer
+    // (and, in cumulative mode, re-pack the slabs).
+    const elevProp = typeof this.props.elevationProperty === 'string'
+      ? this.props.elevationProperty
+      : '';
+    const elevScale = elevProp ? (this.props.elevationScale ?? 1) : 0;
     return `${fillColorProp}|${radiusProp}|${lineWidthProp}|${
       fillColorProp ? colorListDigest(this.props.colorPalette ?? DEFAULT_PALETTE) : 0
     }|${mapping ? `m${colorMappingDigest(mapping)}` : 'g'}|${
       transform ? `r${functionId(transform)}` : ''
-    }|${updateTriggersDigest(this.props.updateTriggers)}`;
+    }|e${elevProp}:${elevScale}|${updateTriggersDigest(this.props.updateTriggers)}`;
   }
 
   /**
@@ -856,14 +874,36 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
     const count = binary.featureCount;
     const srcDims = binary.positionDimensions ?? 2;
 
-    // ScatterplotLayer expects size=3 positions. When the tile is 2D we keep
-    // the original buffer if it already has stride 3 (rare), otherwise pad
-    // once into a fresh Float64Array. The pad copy is per-tile, not per-tile-set,
-    // so cost is amortized across animation frames.
-    const positions: Float64Array =
-      srcDims === 3
-        ? binary.positions
-        : padPositionsTo3D(binary.positions, count);
+    // Per-point elevation (z) from a numeric column. The tile geometry is 2D
+    // (lon/lat); z comes ONLY from this property — `positions[i*3+2] =
+    // column[i] * elevationScale`. Resolve the column here so both the pad
+    // path and the rare 3D-tile path can apply it. Unset / missing column ⇒
+    // z stays 0 (byte-identical to a flat render).
+    const elevProp = typeof this.props.elevationProperty === 'string'
+      ? this.props.elevationProperty
+      : '';
+    const elevValues = elevProp ? binary.numericProps[elevProp] : undefined;
+    const elevScale = this.props.elevationScale ?? 1;
+
+    // ScatterplotLayer expects size=3 positions. When the tile is 2D we pad
+    // once into a fresh Float64Array (baking in z if an elevation column is
+    // set). 3D tiles ride the original buffer zero-copy — UNLESS an elevation
+    // column overrides z, in which case we copy first so the Arrow buffer is
+    // never mutated. The pad/copy is per-tile, not per-tile-set, so cost is
+    // amortized across animation frames.
+    let positions: Float64Array;
+    if (srcDims === 3) {
+      if (elevValues) {
+        positions = Float64Array.from(binary.positions.subarray(0, count * 3));
+        for (let i = 0; i < count; i++) {
+          positions[i * 3 + 2] = elevValues[i] * elevScale;
+        }
+      } else {
+        positions = binary.positions;
+      }
+    } else {
+      positions = padPositionsTo3D(binary.positions, count, elevValues, elevScale);
+    }
 
     const attributes: PreparedTile['data']['attributes'] = {
       getPosition: { value: positions, size: 3 },
@@ -1382,16 +1422,34 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
 
 /**
  * Pad a 2D Float64Array of positions [x0,y0, x1,y1, ...] into a 3D buffer
- * [x0,y0,0, x1,y1,0, ...] for ScatterplotLayer's size-3 attribute. This is
+ * [x0,y0,z0, x1,y1,z1, ...] for ScatterplotLayer's size-3 attribute. This is
  * the only allocation per tile in the prepare step; the previous v2 path
  * allocated this AND the consolidated buffer for every tile in the visible set.
+ *
+ * `elevValues` (optional) supplies per-point z from a numeric column:
+ * `z = elevValues[i] * elevScale`. Negative/zero values pass through. When it
+ * is undefined, z stays 0 (the Float64Array is already zero-initialized), so
+ * the no-elevation output is byte-identical to the prior flat behavior.
  */
-function padPositionsTo3D(src: Float64Array, count: number): Float64Array {
+function padPositionsTo3D(
+  src: Float64Array,
+  count: number,
+  elevValues?: Float32Array,
+  elevScale = 1,
+): Float64Array {
   const out = new Float64Array(count * 3);
-  for (let i = 0; i < count; i++) {
-    out[i * 3] = src[i * 2];
-    out[i * 3 + 1] = src[i * 2 + 1];
-    // out[i * 3 + 2] = 0; (already zero-initialized)
+  if (elevValues) {
+    for (let i = 0; i < count; i++) {
+      out[i * 3] = src[i * 2];
+      out[i * 3 + 1] = src[i * 2 + 1];
+      out[i * 3 + 2] = elevValues[i] * elevScale;
+    }
+  } else {
+    for (let i = 0; i < count; i++) {
+      out[i * 3] = src[i * 2];
+      out[i * 3 + 1] = src[i * 2 + 1];
+      // out[i * 3 + 2] = 0; (already zero-initialized)
+    }
   }
   return out;
 }

@@ -76,7 +76,36 @@ describe('STTBaseLayer.initTileset wiring', () => {
       signal,
       onTileReady,
       fetchPriority: 'low',
+      playheadTime: undefined,
+      playheadDirection: undefined,
     });
+  });
+
+  it('forwards the cross-source EDF play-head hints into archive.getTiles', async () => {
+    // The tileset populates hooks.playheadTime/playheadDirection from its
+    // current viewport in startTileBatch; the batch wiring must forward both
+    // into the archive so its shared scheduler can rank range-groups by
+    // distance-to-playhead (multi-source coordination, Phase 2 §2.8). Without
+    // this link the archive falls back to a byte-order / enqueue-order sequence
+    // and cross-source EDF stays inert.
+    const { layer, archive } = await initLayer();
+    cleanup.push(() => layer.tileset.finalize());
+    const options = (layer.tileset as any).options;
+
+    const ids = [{ z: 1, x: 0, y: 0, t: 0 }];
+    const signal = new AbortController().signal;
+    await options.getTileDataBatch(ids, signal, {
+      fetchPriority: 'auto',
+      playheadTime: 1_700_000_001_000,
+      playheadDirection: -1,
+    });
+    expect(archive.getTiles).toHaveBeenCalledWith(
+      ids,
+      expect.objectContaining({
+        playheadTime: 1_700_000_001_000,
+        playheadDirection: -1,
+      }),
+    );
   });
 
   it('wires byte-size gating, refinement strategy and throughput', async () => {

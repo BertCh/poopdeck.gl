@@ -37,6 +37,7 @@ import { emit } from '../../lib/telemetry';
 import { warnOnce } from '../../lib/log';
 import {
   colorListDigest,
+  colorMappingDigest,
   inheritedPropsDigest,
   updateTriggersDigest,
 } from '../../lib/style-digest';
@@ -92,6 +93,23 @@ export interface _AnimatedPathLayerProps {
    * Color palette for categorical `pathColor`.
    */
   colorPalette?: Color[];
+  /**
+   * Explicit category-string → color map for categorical `pathColor`.
+   * Resolved per-tile against each tile's own category dictionary, so colors
+   * stay consistent across tiles (unlike `colorPalette`, whose indices are
+   * assigned per-tile in first-seen order). Takes precedence over
+   * `colorPalette` when set. Mirrors `AnimatedPointLayer.colorMapping` and
+   * `AnimatedTripsLayer.colorMapping`.
+   *
+   * Unlike the point layer, this stays on the GPU `CategoryColorExtension`
+   * path: the mapping is projected onto the tile's category dictionary to
+   * build a per-tile palette aligned with `instanceCategoryIndex`, so the same
+   * map layer (e.g. HD-map `lane_divider`) renders the same color in every
+   * tile without a per-tile CPU RGBA expansion.
+   */
+  colorMapping?: Record<string, Color> | null;
+  /** Fallback color for categories absent from `colorMapping`. */
+  colorMappingDefault?: Color;
   /**
    * Fade-in duration for appearing paths (ms).
    * @default 300
@@ -177,6 +195,22 @@ function indicesToFloat32(indices: Uint16Array, count: number): Float32Array {
   return out;
 }
 
+/**
+ * Build a per-tile palette by mapping the tile's own category dictionary
+ * through an explicit string→color map. Because `instanceCategoryIndex` indexes
+ * into the same per-tile `categories` array, the resulting palette makes each
+ * category render the same color in every tile (stable colors), while keeping
+ * the GPU `CategoryColorExtension` path — no per-tile CPU RGBA expansion.
+ * Mirrors `paletteFromMapping` in animated-trips-layer.ts.
+ */
+function paletteFromMapping(
+  categories: readonly string[],
+  mapping: Record<string, Color>,
+  fallback: Color,
+): Color[] {
+  return categories.map((c) => mapping[c] ?? fallback);
+}
+
 
 /**
  * Animated path layer (window mode) with per-tile binary sublayers.
@@ -208,6 +242,10 @@ export class AnimatedPathLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
     getColor: { type: 'object', value: null, optional: true, compare: true },
     getWidth: { type: 'object', value: null, optional: true, compare: true },
     colorPalette: { type: 'array', value: DEFAULT_PALETTE, compare: true },
+    // Digested by content in computeLayerPropsKey/styleKey (compare:false here);
+    // a same-shape mapping edit invalidates via the digest, not deck's diff.
+    colorMapping: { type: 'object', value: null, optional: true, compare: false },
+    colorMappingDefault: { type: 'color', value: [120, 120, 120, 255] },
     fadeInDuration: { type: 'number', value: 300, min: 0 },
     fadeOutDuration: { type: 'number', value: 300, min: 0 },
     capRounded: false,
@@ -372,13 +410,18 @@ export class AnimatedPathLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
     const widthValue = this.widthValue();
     const colorProp = typeof colorValue === 'string' ? colorValue : '';
     const widthProp = typeof widthValue === 'string' ? widthValue : '';
-    // Palette keyed by CONTENT, not length — a same-size palette swap must
-    // invalidate cached tiles. The digest is memoized per array reference, so
-    // this is a WeakMap lookup per tile, not a re-serialization. The user's
+    // Palette / mapping keyed by CONTENT, not length — a same-size swap must
+    // invalidate cached tiles. The digests are memoized per object reference
+    // (style-digest.ts), so this is a WeakMap lookup per tile, not a
+    // re-serialization. The mapping branch keys CONTENT so editing one mapping
+    // entry (same key count) re-projects the GPU palette. The user's
     // updateTriggers ride the key too so a trigger bump re-prepares the tile.
+    const mapSig = this.props.colorMapping
+      ? `m${colorMappingDigest(this.props.colorMapping)}`
+      : '';
     const styleKey = `${colorProp}|${widthProp}|${
       colorProp ? colorListDigest(this.props.colorPalette ?? DEFAULT_PALETTE) : 0
-    }|${updateTriggersDigest(this.props.updateTriggers)}`;
+    }|${mapSig}|${updateTriggersDigest(this.props.updateTriggers)}`;
 
     const tileKey = makeTileKey(tile, tileLayer);
     const cached = this.preparedTileCache.get(tileKey);
@@ -411,7 +454,18 @@ export class AnimatedPathLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
           value: indicesToFloat32(cat.indices, binary.featureCount),
           size: 1,
         };
-        gpuPalette = this.props.colorPalette ?? DEFAULT_PALETTE;
+        // Explicit colorMapping wins over colorPalette: project the
+        // string→color map onto THIS tile's category dictionary so the
+        // GPU palette aligns with `instanceCategoryIndex`. The same category
+        // string then renders the same color in every tile (stable), unlike
+        // colorPalette's first-seen per-tile index assignment.
+        gpuPalette = this.props.colorMapping
+          ? paletteFromMapping(
+              cat.categories,
+              this.props.colorMapping,
+              this.props.colorMappingDefault ?? [120, 120, 120, 255],
+            )
+          : this.props.colorPalette ?? DEFAULT_PALETTE;
       }
     }
 

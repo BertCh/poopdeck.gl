@@ -37,6 +37,7 @@ export type {
   PlaybackGovernorOptions,
   PlaybackGovernorState,
   PlaybackQoeStats,
+  SourceRunway,
   ThroughputEstimate,
 } from './playback-governor';
 

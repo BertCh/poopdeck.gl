@@ -218,7 +218,15 @@ const defaultProps: DefaultProps<TimeFilterExtensionProps> = {
 /**
  * Largest relative-time magnitude that survives a Float32 round-trip with
  * full millisecond precision. f32 has a 24-bit mantissa, so integers up to
- * 2^24 (16,777,216) are exact. Relative spans beyond this lose ms precision.
+ * 2^24 (16,777,216) are exact — i.e. ±~4.66 HOURS around `timeOffset`. Beyond
+ * that, granularity doubles each octave (2 ms at 2^25 ≈ 9.3 h, 4 ms at 2^26 ≈
+ * 18.6 h, …), staying under one 60 fps frame (16 ms) of error out to ~3 days.
+ * So the practical contract: pick `timeOffset` PER TEMPORAL CHUNK (not once per
+ * dataset) so the animated relative span stays inside this window; a mismatched
+ * offset silently shifts every feature's time (the draw() guard warns once when
+ * the resolved relative time crosses 2^24 in non-cumulative mode). Cumulative
+ * mode intentionally spans years and accepts the coarser quantization (its
+ * reveal steps by days, far above the millisecond floor).
  */
 export const MAX_RELATIVE_TIME_MS = 16_777_216;
 

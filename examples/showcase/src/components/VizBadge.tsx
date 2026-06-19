@@ -124,6 +124,15 @@ const QuadbinGlyph = svg(
   </>,
 );
 
+// A vehicle plan-view with a forward LIDAR fan — the AV cockpit composite.
+const AvGlyph = svg(
+  <>
+    <rect x="8" y="3.5" width="8" height="13" rx="2" {...stroke} />
+    <path {...stroke} d="M12 16.5 6 21M12 16.5 18 21M12 16.5 12 21.5" opacity={0.6} />
+    <circle cx="12" cy="8" r="1.4" fill="currentColor" />
+  </>,
+);
+
 export interface VizDef {
   /** Short type label (fallback when no editorial `techniqueTag` is given). */
   label: string;
@@ -140,6 +149,7 @@ export interface VizDef {
  */
 export const VIZ_REGISTRY: Record<DatasetType, VizDef> = {
   point: { label: "Points", color: "#C8432F", icon: PointGlyph },
+  radar: { label: "Radar", color: "#3FA7C4", icon: PolygonGlyph },
   path: { label: "Paths", color: "#2A8A60", icon: PathGlyph },
   trips: { label: "Trips", color: "#0A7790", icon: TripsGlyph },
   "trip-heads": { label: "Heads", color: "#2A6FB0", icon: TripHeadsGlyph },
@@ -151,6 +161,7 @@ export const VIZ_REGISTRY: Record<DatasetType, VizDef> = {
   "quadbin-summary": { label: "Quadbin", color: "#6B7C26", icon: QuadbinGlyph },
   flowmap: { label: "Flowmap", color: "#C72C68", icon: FlowmapGlyph },
   "flowmap-bundled": { label: "Bundled flowmap", color: "#9B2C8C", icon: BundledFlowmapGlyph },
+  av: { label: "AV cockpit", color: "#1F8FB0", icon: AvGlyph },
 };
 
 /** `#RRGGBB` → `rgba(r,g,b,a)`; used for the soft chip fill. */

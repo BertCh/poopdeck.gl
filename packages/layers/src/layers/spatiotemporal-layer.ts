@@ -37,6 +37,17 @@ import { warnOnce } from '../lib/log';
 const DEBUG = false;
 
 /**
+ * Wall-clock floor (ms) between VIEWPORT-driven tileset reselections, mirroring
+ * the time-tick path's `MIN_TILESET_UPDATE_WALL_MS`. A controlled camera that
+ * animates at 60fps (the AV cockpit's ego-follow, or any drag/zoom) otherwise
+ * drives a full `selectAndLoadTiles()` — and its prefetch re-plan — on every
+ * STT layer every frame. This caps that to ~10Hz; the GPU still redraws the
+ * moving viewport every frame (`setNeedsRedraw()`), and a trailing pass
+ * guarantees the SETTLE position reselects when motion ends inside the window.
+ */
+const MIN_VIEWPORT_TILESET_WALL_MS = 100;
+
+/**
  * Picking info emitted by the STT layer family. Follows `TileLayer`'s
  * enrichment contract: `sourceTile` is the tile whose sublayer emitted the
  * event (set on hover-off too), `tile` only on an actual hit. `info.object`
@@ -399,6 +410,13 @@ export class SpatioTemporalLayer<
   // because every tick calls setNeedsRedraw() and reads time live via getTime().
   private _lastTilesetUpdateWall: number = 0;
 
+  // Wall-clock (real-ms) timestamp of the last VIEWPORT-driven (updateState)
+  // tileset reselection, and the handle for the single pending trailing pass.
+  // Together they rate-limit pan/zoom/follow-cam reselection to ~10Hz without
+  // dropping the final settle position. See MIN_VIEWPORT_TILESET_WALL_MS.
+  private _lastViewportSelectWall: number = 0;
+  private _viewportSettleTimer: ReturnType<typeof setTimeout> | null = null;
+
   // rAF handle for coalescing onTileLoad setState calls. Many tiles can
   // finish loading within one frame; batching avoids one full
   // renderLayers()/buildConsolidatedData() rebuild per tile.
@@ -506,6 +524,8 @@ export class SpatioTemporalLayer<
       }
       this._tileLoadRafId = null;
     }
+    // Cancel any pending trailing viewport reselection.
+    this._clearViewportSettle();
 
     // Unsubscribe from time controller
     if (this.props.timeController) {
@@ -800,10 +820,36 @@ export class SpatioTemporalLayer<
   private _updateTileset(changeFlags: any): void {
     const { tileset } = this.state;
     if (!tileset) return;
-    
+
+    // Throttle the PURE-viewport (pan / zoom / follow-cam) reselection path to
+    // a wall-clock floor, mirroring the time-tick path (_handleTimeUpdate). A
+    // controlled camera animating at 60fps (AV ego-follow) otherwise drives a
+    // full selectAndLoadTiles() on every STT layer every frame. Prop/data
+    // changes (timeWindow, tier, style, controller swap) are NEVER throttled —
+    // they must reselect immediately. When throttled we still setNeedsRedraw()
+    // so the moving viewport draws every frame, and schedule one trailing pass
+    // so the settle position reselects when motion stops inside the window.
+    const viewportOnly =
+      !!(changeFlags && changeFlags.viewportChanged) &&
+      !changeFlags.propsChanged &&
+      !changeFlags.dataChanged;
+    if (viewportOnly) {
+      const nowWall = performance.now();
+      if (nowWall - this._lastViewportSelectWall < MIN_VIEWPORT_TILESET_WALL_MS) {
+        this.setNeedsRedraw();
+        this._scheduleViewportSettle();
+        return;
+      }
+    }
+    // Running the selection now: it is the latest reselect, and any queued
+    // trailing pass is redundant. (Prop-change passes count too, so a viewport
+    // frame arriving just after one is correctly throttled.)
+    this._lastViewportSelectWall = performance.now();
+    this._clearViewportSettle();
+
     // Get current time from TimeController if available, otherwise from props
-    const currentTime = this.props.timeController 
-      ? this.props.timeController.getTime() 
+    const currentTime = this.props.timeController
+      ? this.props.timeController.getTime()
       : this.props.currentTime;
     
     // Update internal time tracking
@@ -895,6 +941,32 @@ export class SpatioTemporalLayer<
         'stats:',
         tileset.getCacheStats(),
       );
+    }
+  }
+
+  /**
+   * Schedule a single trailing tileset reselection after the viewport throttle
+   * window, so a camera that stops moving WITHIN the window still selects tiles
+   * for its settled position. During playback the time-tick path already
+   * reselects at the settled viewport every ~100ms; this covers a paused
+   * drag/zoom, where no tick fires. Re-enters `_updateTileset` with a synthetic
+   * viewport change — enough wall time has elapsed that the throttle admits it.
+   */
+  private _scheduleViewportSettle(): void {
+    if (this._viewportSettleTimer !== null) return; // one pending pass at a time
+    if (typeof setTimeout !== 'function') return;
+    this._viewportSettleTimer = setTimeout(() => {
+      this._viewportSettleTimer = null;
+      if (this._finalized || !this.state.tileset) return;
+      this._updateTileset({ viewportChanged: true, propsChanged: false, dataChanged: false });
+    }, MIN_VIEWPORT_TILESET_WALL_MS);
+  }
+
+  /** Cancel any pending trailing reselection (a real pass just ran, or finalize). */
+  private _clearViewportSettle(): void {
+    if (this._viewportSettleTimer !== null) {
+      clearTimeout(this._viewportSettleTimer);
+      this._viewportSettleTimer = null;
     }
   }
 
@@ -1005,6 +1077,14 @@ export class SpatioTemporalLayer<
           signal,
           onTileReady: hooks?.onTileReady,
           fetchPriority: hooks?.fetchPriority,
+          // Cross-source EDF (multi-source coordination, Phase 2 §2.8): forward
+          // the tileset's play-head time + travel direction so the archive's
+          // shared scheduler ranks range-groups by distance-to-playhead
+          // comparably ACROSS archives that share this play-head. Without this
+          // link the archive falls back to its byte-order / enqueue-order
+          // sequence (tier-correct, but not true cross-source EDF).
+          playheadTime: hooks?.playheadTime,
+          playheadDirection: hooks?.playheadDirection,
         }),
       // Lets the tileset skip giant low-zoom parent-fallback tiles (e.g. a
       // 14 MB z10 tile under a z14 view) before fetching them. Sync directory

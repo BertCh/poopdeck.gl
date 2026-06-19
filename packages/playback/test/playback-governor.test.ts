@@ -899,6 +899,859 @@ describe('PlaybackGovernor', () => {
     });
   });
 
+  describe('multi-source registry (Phase 0 — N classified sources)', () => {
+    /**
+     * Mock source whose runway/complete/cost/eta and side-effect counters are
+     * pokeable, and which records every setAnimationState / flushPrefetch so
+     * broadcast behaviour is observable. (makeSource above predates
+     * setAnimationState; this one carries it.)
+     */
+    function makeTrackedSource() {
+      const state = {
+        runwaySimMs: 0,
+        complete: false,
+        bytesPending: 0,
+        ranges: [] as Array<{ start: number; end: number }>,
+        costBytes: 0,
+        costTiles: 0,
+        etaMs: null as number | null,
+        flushes: 0,
+        animateCalls: [] as Array<{ isAnimating: boolean; speed?: number }>,
+      };
+      const source: BufferSource = {
+        getBufferedRunway(_time, _direction, horizonSimMs) {
+          return {
+            simMs: state.runwaySimMs,
+            bytesPending: state.bytesPending,
+            horizonSimMs: horizonSimMs ?? state.runwaySimMs,
+            complete: state.complete,
+          };
+        },
+        getBufferedRanges() {
+          return state.ranges;
+        },
+        estimateCost() {
+          return { bytes: state.costBytes, tiles: state.costTiles };
+        },
+        estimateTimeToReadyMs() {
+          return state.etaMs;
+        },
+        flushPrefetch() {
+          state.flushes++;
+        },
+        setAnimationState(isAnimating, speed) {
+          state.animateCalls.push({ isAnimating, speed });
+        },
+      };
+      return { source, state };
+    }
+
+    it('gates on the MIN runway across two required sources (clock holds at the laggard)', () => {
+      const a = makeTrackedSource();
+      const b = makeTrackedSource();
+      const g = makeGovernor({ startGateWallMs: 2000 }); // gate = 2000 × 10 = 20_000 sim-ms
+      g.addSource('a', a.source, { required: true });
+      g.addSource('b', b.source, { required: true });
+
+      // A is well ahead, B lags below the gate → the clock holds at B.
+      a.state.runwaySimMs = 100_000;
+      b.state.runwaySimMs = 5_000;
+      g.requestPlay();
+      expect(g.state).toBe('starting');
+      expect(tc.isPlaying()).toBe(false);
+
+      // B catches up to the gate → both required ≥ gate → play.
+      b.state.runwaySimMs = 20_000;
+      g.notifyBufferChange(runway(20_000));
+      expect(g.state).toBe('playing');
+      expect(tc.isPlaying()).toBe(true);
+    });
+
+    it('stalls when a required source drops below the watermark even if the other is full', () => {
+      const a = makeTrackedSource();
+      const b = makeTrackedSource();
+      a.state.runwaySimMs = 100_000;
+      b.state.runwaySimMs = 100_000;
+      const g = makeGovernor({ lowWatermarkWallMs: 600 }); // watermark = 600 × 10 = 6000 sim-ms
+      g.addSource('a', a.source, { required: true });
+      g.addSource('b', b.source, { required: true });
+      g.requestPlay();
+      expect(g.state).toBe('playing');
+
+      // B drains under the watermark; A stays full → the laggard stalls the clock.
+      b.state.runwaySimMs = 1_000;
+      g.notifyBufferChange(runway(1_000));
+      expect(g.state).toBe('buffering');
+      expect(tc.isPlaying()).toBe(false);
+    });
+
+    it('an OPTIONAL source never gates — empty optional, full required → plays', () => {
+      const required = makeTrackedSource();
+      const optional = makeTrackedSource();
+      required.state.runwaySimMs = 100_000;
+      optional.state.runwaySimMs = 0; // bone dry, never complete
+      optional.state.complete = false;
+      const g = makeGovernor({ startGateWallMs: 2000, lowWatermarkWallMs: 600 });
+      g.addSource('field', required.source, { required: true });
+      g.addSource('overlay', optional.source, { required: false });
+
+      g.requestPlay();
+      expect(g.state).toBe('playing'); // the empty optional did not hold the gate
+      expect(tc.isPlaying()).toBe(true);
+
+      // The optical source staying empty must never trigger a mid-playback stall.
+      optional.state.runwaySimMs = 0;
+      g.notifyBufferChange(runway(0));
+      expect(g.state).toBe('playing');
+      expect(tc.isPlaying()).toBe(true);
+    });
+
+    it('with ZERO required sources (optional only) the clock never stalls', () => {
+      const optional = makeTrackedSource();
+      optional.state.runwaySimMs = 0;
+      const g = makeGovernor({ startGateWallMs: 2000 });
+      g.addSource('overlay', optional.source, { required: false });
+
+      g.requestPlay();
+      expect(g.state).toBe('playing'); // nothing gates ⇒ instant start
+      g.notifyBufferChange(runway(0));
+      expect(g.state).toBe('playing');
+    });
+
+    it('complete = AND over required: one incomplete required source keeps the gate honest', () => {
+      const a = makeTrackedSource();
+      const b = makeTrackedSource();
+      // A is complete (tiny runway), B is NOT complete and below the gate.
+      a.state.runwaySimMs = 5;
+      a.state.complete = true;
+      b.state.runwaySimMs = 100; // < gate, not complete
+      b.state.complete = false;
+      const g = makeGovernor({ startGateWallMs: 2000 });
+      g.addSource('a', a.source, { required: true });
+      g.addSource('b', b.source, { required: true });
+
+      g.requestPlay();
+      // A's completeness must NOT short-circuit the AND — B still gates.
+      expect(g.state).toBe('starting');
+
+      // Now B completes too → AND true → never gate → play.
+      b.state.complete = true;
+      g.notifyBufferChange(runway(100, true));
+      expect(g.state).toBe('playing');
+    });
+
+    it('never gates when every required source is complete (AND of complete)', () => {
+      const a = makeTrackedSource();
+      const b = makeTrackedSource();
+      a.state.runwaySimMs = 5;
+      a.state.complete = true;
+      b.state.runwaySimMs = 5;
+      b.state.complete = true;
+      const g = makeGovernor();
+      g.addSource('a', a.source, { required: true });
+      g.addSource('b', b.source, { required: true });
+      g.requestPlay();
+      expect(g.state).toBe('playing');
+    });
+
+    it('getEtaMs = MAX estimateTimeToReadyMs across ALL sources (required + optional)', () => {
+      const req = makeTrackedSource();
+      const opt = makeTrackedSource();
+      req.state.etaMs = 1_000;
+      opt.state.etaMs = 5_000; // an optional source still counts toward the honest ETA
+      const g = makeGovernor();
+      g.addSource('req', req.source, { required: true });
+      g.addSource('opt', opt.source, { required: false });
+      expect(g.getEtaMs()).toBe(5_000);
+    });
+
+    it('estimateCost = SUM of bytes/tiles across ALL sources', () => {
+      const a = makeTrackedSource();
+      const b = makeTrackedSource();
+      const c = makeTrackedSource();
+      a.state.costBytes = 100;
+      a.state.costTiles = 1;
+      b.state.costBytes = 250;
+      b.state.costTiles = 3;
+      c.state.costBytes = 5; // optional still summed
+      c.state.costTiles = 1;
+      const g = makeGovernor();
+      g.addSource('a', a.source, { required: true });
+      g.addSource('b', b.source, { required: true });
+      g.addSource('c', c.source, { required: false });
+      expect(g.estimateCost({ start: 0, end: 100 })).toEqual({ bytes: 355, tiles: 5 });
+    });
+
+    it('getAutoSpeedSuggestion = CONTENDED speed (aggregate pipe ÷ Σ demand), NOT the per-source min', () => {
+      // Two comparably-heavy required sources SHARE one pipe. The old code
+      // returned the min over each source's OPTIMISTIC full-pipe estimate
+      // (each assuming it owned the whole link) → ~N× too fast → the network
+      // can't feed it → stalls (the "racing ahead" failure mode). The correct
+      // bound divides the ONE pipe across the SUM of both sources' demand.
+      const fast = makeTrackedSource();
+      const slow = makeTrackedSource();
+      // horizon = 8000 × 10 = 80_000 sim-ms; aggregate throughput 100 bytes/ms.
+      // Σbytes = 800_000 + 1_600_000 = 2_400_000 → bytesPerSimMs = 30.
+      // CONTENDED = 100 / 30 × 0.7 ≈ 2.333…
+      // The OPTIMISTIC per-source min would have been 3.5 (slow alone) — and
+      // even that double-counts the pipe; the contended bound is lower still.
+      fast.state.costBytes = 800_000;
+      fast.state.costTiles = 100;
+      slow.state.costBytes = 1_600_000;
+      slow.state.costTiles = 100;
+      const g = makeGovernor({ getThroughput: () => ({ bytesPerMs: 100, samples: 5 }) });
+      g.addSource('fast', fast.source, { required: true });
+      g.addSource('slow', slow.source, { required: true });
+      const suggestion = g.getAutoSpeedSuggestion()!;
+      expect(suggestion).toBeCloseTo((100 / 30) * 0.7); // ≈ 2.333
+      // Strictly slower than the optimistic per-source min (3.5) it replaced.
+      expect(suggestion).toBeLessThan(3.5);
+    });
+
+    it('getAutoSpeedSuggestion: two comparably-heavy required sources halve the contended speed vs one', () => {
+      // A second comparably-heavy required source roughly HALVES the sustainable
+      // speed (Σ demand doubles over the same shared pipe) — the property the
+      // per-source min got wrong (it stayed at the single-source speed).
+      const oneHeavy = makeTrackedSource();
+      oneHeavy.state.costBytes = 800_000;
+      oneHeavy.state.costTiles = 100;
+      const g1 = makeGovernor({ getThroughput: () => ({ bytesPerMs: 100, samples: 5 }) });
+      g1.addSource('a', oneHeavy.source, { required: true });
+      const solo = g1.getAutoSpeedSuggestion()!; // 100 / 10 × 0.7 = 7
+      g1.dispose();
+
+      const a = makeTrackedSource();
+      const b = makeTrackedSource();
+      a.state.costBytes = 800_000;
+      a.state.costTiles = 100;
+      b.state.costBytes = 800_000; // a second, equally heavy required source
+      b.state.costTiles = 100;
+      governor = new PlaybackGovernor(tc, {
+        getThroughput: () => ({ bytesPerMs: 100, samples: 5 }),
+      });
+      governor.addSource('a', a.source, { required: true });
+      governor.addSource('b', b.source, { required: true });
+      const contended = governor.getAutoSpeedSuggestion()!; // Σ=1_600_000 → 100/20×0.7 = 3.5
+      expect(contended).toBeCloseTo(solo / 2); // exactly half — the contended bound
+    });
+
+    it('getAutoSpeedSuggestion: NO-getThroughput fallback is ALSO contended for multi-heavy sources', () => {
+      // The PRODUCTION path: no consumer wires getThroughput on the governor, so
+      // the ETA-implied fallback runs. Each source's estimateTimeToReadyMs is
+      // bytes_i / sharedLinkRate over the SAME shared link, so the per-source
+      // implied rates (bytes_i / eta_i) are all equal to that one link rate. The
+      // fallback must recover that single rate and divide it across Σbytes — NOT
+      // sum the rates (which would double-count the pipe by ~N and silently
+      // reproduce the optimistic single-source speed, the multi-heavy bug).
+      //
+      // Shared link rate T = 100 bytes/ms. horizon = 8000 × 10 = 80_000 sim-ms.
+      // Two EQUAL 800_000-byte sources, each eta = 800_000 / 100 = 8000ms.
+      // Σbytes = 1_600_000 → bytesPerSimMs = 20. Contended = 100 / 20 × 0.7 = 3.5
+      // (exactly the getThroughput path), NOT the old fallback's 7 (single speed).
+      const a = makeTrackedSource();
+      const b = makeTrackedSource();
+      a.state.costBytes = 800_000;
+      a.state.costTiles = 100;
+      a.state.etaMs = 8000; // 800_000 bytes / 100 bytes-per-ms shared link
+      b.state.costBytes = 800_000;
+      b.state.costTiles = 100;
+      b.state.etaMs = 8000;
+      const g = makeGovernor({}); // NO getThroughput — the live default
+      g.addSource('a', a.source, { required: true });
+      g.addSource('b', b.source, { required: true });
+      const contended = g.getAutoSpeedSuggestion()!;
+      expect(contended).toBeCloseTo(3.5); // = (100 / 20) × 0.7 — matches the wired path
+      expect(contended).toBeLessThan(7); // strictly under the single-source speed
+    });
+
+    it('getAutoSpeedSuggestion: NO-getThroughput fallback contends asymmetric multi-heavy sources', () => {
+      // Asymmetric heavy sources over the SAME shared link (T = 100 bytes/ms).
+      // A: 1_600_000 bytes, eta = 16_000ms. B: 800_000 bytes, eta = 8_000ms.
+      // bytes_i / eta_i = 100 for both (the one link rate). Σbytes = 2_400_000
+      // → bytesPerSimMs = 30. Contended = 100 / 30 × 0.7 ≈ 2.333 — NOT the old
+      // fallback's Σbytes / maxEta = 2_400_000 / 16_000 = 150 → 150/30×0.7 = 3.5.
+      const heavy = makeTrackedSource();
+      const light = makeTrackedSource();
+      heavy.state.costBytes = 1_600_000;
+      heavy.state.costTiles = 200;
+      heavy.state.etaMs = 16_000;
+      light.state.costBytes = 800_000;
+      light.state.costTiles = 100;
+      light.state.etaMs = 8_000;
+      const g = makeGovernor({}); // NO getThroughput
+      g.addSource('heavy', heavy.source, { required: true });
+      g.addSource('light', light.source, { required: true });
+      const contended = g.getAutoSpeedSuggestion()!;
+      expect(contended).toBeCloseTo((100 / 30) * 0.7); // ≈ 2.333
+      expect(contended).toBeLessThan(3.5); // strictly under the old optimistic value
+    });
+
+    it('getAutoSpeedSuggestion returns Infinity only when ALL required sources are clear', () => {
+      const a = makeTrackedSource();
+      const b = makeTrackedSource();
+      a.state.costTiles = 0; // nothing to load
+      b.state.costTiles = 0;
+      const g = makeGovernor({ getThroughput: () => ({ bytesPerMs: 100, samples: 5 }) });
+      g.addSource('a', a.source, { required: true });
+      g.addSource('b', b.source, { required: true });
+      expect(g.getAutoSpeedSuggestion()).toBe(Infinity);
+
+      // One source still has work → no longer uncapped.
+      b.state.costTiles = 50;
+      b.state.costBytes = 800_000;
+      expect(g.getAutoSpeedSuggestion()).toBeCloseTo(7);
+    });
+
+    it('getAutoSpeedSuggestion returns null when a required source has pending tiles but unknown byte sizes (single-source contract under composition)', () => {
+      // The single-source `sumBytes <= 0 ⇒ null` contract, generalized to N
+      // sources. A bytes-blind required source (tiles > 0, bytes = 0 — the
+      // directory exposes no sizes) ALONGSIDE a normal heavy source keeps
+      // Σbytes positive, so the old code proceeded with an UNDER-COUNTED demand
+      // and over-suggested speed. There is no honest combined Σbytes when any
+      // required track's cost is unknown ⇒ null (mirrors the anyEtaBlind path).
+      const blind = makeTrackedSource();
+      const normal = makeTrackedSource();
+      blind.state.costTiles = 5; // pending tiles…
+      blind.state.costBytes = 0; // …but the directory exposes no byte sizes
+      normal.state.costTiles = 100;
+      normal.state.costBytes = 800_000; // a normal, sized peer keeps Σbytes > 0
+      const g = makeGovernor({ getThroughput: () => ({ bytesPerMs: 100, samples: 5 }) });
+      g.addSource('blind', blind.source, { required: true });
+      g.addSource('normal', normal.source, { required: true });
+      // Without the fix this returned a (too-high) finite suggestion off the
+      // under-counted Σbytes = 800_000 instead of null.
+      expect(g.getAutoSpeedSuggestion()).toBeNull();
+
+      // Sanity: once the blind source's sizes become known, the honest
+      // contended math resumes (Σ = 1_600_000 → 100 / 20 × 0.7 = 3.5).
+      blind.state.costBytes = 800_000;
+      expect(g.getAutoSpeedSuggestion()).toBeCloseTo(3.5);
+    });
+
+    it('broadcasts setAnimationState(true) to ALL sources when a gate is entered', () => {
+      const req = makeTrackedSource();
+      const opt = makeTrackedSource();
+      req.state.runwaySimMs = 0; // gate will hold, asserting animating-at-speed
+      const g = makeGovernor({ startGateWallMs: 2000 });
+      g.addSource('req', req.source, { required: true });
+      g.addSource('opt', opt.source, { required: false });
+
+      g.requestPlay();
+      expect(g.state).toBe('starting');
+      // Both the required AND the optional loader were told to keep reaching ahead.
+      expect(req.state.animateCalls.at(-1)).toEqual({ isAnimating: true, speed: 10 });
+      expect(opt.state.animateCalls.at(-1)).toEqual({ isAnimating: true, speed: 10 });
+    });
+
+    it('broadcasts setAnimationState(false) to ALL sources on a real pause', () => {
+      const req = makeTrackedSource();
+      const opt = makeTrackedSource();
+      req.state.runwaySimMs = 100_000;
+      const g = makeGovernor();
+      g.addSource('req', req.source, { required: true });
+      g.addSource('opt', opt.source, { required: false });
+      g.requestPlay();
+      expect(g.state).toBe('playing');
+
+      g.requestPause();
+      expect(req.state.animateCalls.at(-1)).toEqual({ isAnimating: false, speed: 0 });
+      expect(opt.state.animateCalls.at(-1)).toEqual({ isAnimating: false, speed: 0 });
+    });
+
+    it('flushPrefetch on a committed seek reaches ALL sources', () => {
+      const req = makeTrackedSource();
+      const opt = makeTrackedSource();
+      const g = makeGovernor();
+      g.addSource('req', req.source, { required: true });
+      g.addSource('opt', opt.source, { required: false });
+
+      g.seekTo(12_345);
+      expect(req.state.flushes).toBe(1);
+      expect(opt.state.flushes).toBe(1); // the optional loader is flushed too
+    });
+
+    it('getSourceRunways probes each source at the playhead and identifies the gating source', () => {
+      const fieldA = makeTrackedSource();
+      const fieldB = makeTrackedSource();
+      const overlay = makeTrackedSource();
+      fieldA.state.runwaySimMs = 50_000;
+      fieldA.state.bytesPending = 1_000;
+      fieldB.state.runwaySimMs = 8_000; // the laggard among required → the gating source
+      fieldB.state.bytesPending = 9_000;
+      overlay.state.runwaySimMs = 1_000; // smaller, but OPTIONAL → never gates
+      overlay.state.bytesPending = 2_000;
+      tc.setTime(123_456);
+      const g = makeGovernor();
+      g.addSource('fieldA', fieldA.source, { required: true });
+      g.addSource('fieldB', fieldB.source, { required: true });
+      g.addSource('overlay', overlay.source, { required: false });
+
+      const runways = g.getSourceRunways();
+      // Correct shape, in registration order, one entry per source.
+      expect(runways).toEqual([
+        { id: 'fieldA', required: true, runwaySimMs: 50_000, complete: false, bytesPending: 1_000 },
+        { id: 'fieldB', required: true, runwaySimMs: 8_000, complete: false, bytesPending: 9_000 },
+        { id: 'overlay', required: false, runwaySimMs: 1_000, complete: false, bytesPending: 2_000 },
+      ]);
+
+      // The gating source is the required entry with the smallest runway among
+      // the incomplete ones — fieldB, NOT the smaller-but-optional overlay.
+      const gating = runways
+        .filter((r) => r.required && !r.complete)
+        .sort((x, y) => x.runwaySimMs - y.runwaySimMs)[0];
+      expect(gating.id).toBe('fieldB');
+    });
+
+    it('getSourceRunways is a pure read (no flush, no animate, no state change) and probes at the playhead direction', () => {
+      const a = makeTrackedSource();
+      const b = makeTrackedSource();
+      a.state.runwaySimMs = 10_000;
+      b.state.runwaySimMs = 20_000;
+      tc.setSpeed(-10); // reverse travel
+      const g = makeGovernor();
+      g.addSource('a', a.source, { required: true });
+      g.addSource('b', b.source, { required: false });
+      const stateBefore = g.state;
+
+      // Probe many times — no side effects must accumulate.
+      g.getSourceRunways();
+      g.getSourceRunways();
+      expect(a.state.flushes).toBe(0);
+      expect(b.state.flushes).toBe(0);
+      expect(a.state.animateCalls).toEqual([]);
+      expect(b.state.animateCalls).toEqual([]);
+      expect(g.state).toBe(stateBefore);
+
+      // [] when no source is registered.
+      g.removeSource('a');
+      g.removeSource('b');
+      expect(g.getSourceRunways()).toEqual([]);
+    });
+
+    it('getSourceRunways reflects a complete source', () => {
+      const a = makeTrackedSource();
+      a.state.runwaySimMs = 0;
+      a.state.complete = true;
+      const g = makeGovernor();
+      g.addSource('a', a.source, { required: true });
+      const [entry] = g.getSourceRunways();
+      expect(entry.complete).toBe(true);
+      // No required+incomplete entry ⇒ nothing currently gating.
+      const gating = g
+        .getSourceRunways()
+        .filter((r) => r.required && !r.complete)
+        .sort((x, y) => x.runwaySimMs - y.runwaySimMs)[0];
+      expect(gating).toBeUndefined();
+    });
+
+    it('removeSource drops a laggard from the gate so the clock can play', () => {
+      const a = makeTrackedSource();
+      const b = makeTrackedSource();
+      a.state.runwaySimMs = 100_000;
+      b.state.runwaySimMs = 0; // the laggard
+      const g = makeGovernor({ startGateWallMs: 2000 });
+      g.addSource('a', a.source, { required: true });
+      g.addSource('b', b.source, { required: true });
+      g.requestPlay();
+      expect(g.state).toBe('starting'); // held by B
+
+      g.removeSource('b'); // re-evaluates; now only A (full) gates
+      expect(g.state).toBe('playing');
+    });
+
+    it('getBufferedRanges = intersection over required sources', () => {
+      const a = makeTrackedSource();
+      const b = makeTrackedSource();
+      a.state.ranges = [{ start: 0, end: 100 }];
+      b.state.ranges = [{ start: 50, end: 150 }];
+      const g = makeGovernor();
+      g.addSource('a', a.source, { required: true });
+      g.addSource('b', b.source, { required: true });
+      expect(g.getBufferedRanges()).toEqual([{ start: 50, end: 100 }]);
+    });
+
+    it('getBufferedRanges ignores OPTIONAL sources (required intersection only)', () => {
+      const req = makeTrackedSource();
+      const opt = makeTrackedSource();
+      req.state.ranges = [{ start: 0, end: 100 }];
+      opt.state.ranges = [{ start: 200, end: 300 }]; // disjoint — must not zero the bar
+      const g = makeGovernor();
+      g.addSource('req', req.source, { required: true });
+      g.addSource('opt', opt.source, { required: false });
+      expect(g.getBufferedRanges()).toEqual([{ start: 0, end: 100 }]);
+    });
+
+    it('getBufferedRanges does NOT forward maxRanges to per-source probes before intersecting', () => {
+      // Deferred Wave-2 LOW fix: maxRanges must be applied ONCE on the combined
+      // intersection, never to each per-source probe. A source whose own
+      // getBufferedRanges honors maxRanges (sorted) would otherwise truncate
+      // and drop a later range that WOULD have intersected a peer's — silently
+      // shrinking the combined span. This mock honors maxRanges so the bug is
+      // observable: if maxRanges=1 were forwarded, source `a` would return only
+      // [0,100], its [200,300] dropped, and the [250,260] intersection lost.
+      function maxRangesAwareSource(ranges: Array<{ start: number; end: number }>) {
+        const s: BufferSource = {
+          getBufferedRunway: () => runway(0),
+          getBufferedRanges(opts) {
+            const sorted = [...ranges].sort((x, y) => x.start - y.start);
+            return opts?.maxRanges != null ? sorted.slice(0, opts.maxRanges) : sorted;
+          },
+          estimateCost: () => ({ bytes: 0, tiles: 0 }),
+          estimateTimeToReadyMs: () => null,
+          flushPrefetch: () => {},
+        };
+        return s;
+      }
+      const a = maxRangesAwareSource([
+        { start: 0, end: 100 },
+        { start: 200, end: 300 }, // would be dropped by a forwarded maxRanges:1
+      ]);
+      const b = maxRangesAwareSource([{ start: 250, end: 260 }]);
+      const g = makeGovernor();
+      g.addSource('a', a, { required: true });
+      g.addSource('b', b, { required: true });
+      // The surviving intersection [250,260] proves the second source range was
+      // NOT truncated away before intersecting.
+      expect(g.getBufferedRanges({ maxRanges: 1 })).toEqual([{ start: 250, end: 260 }]);
+    });
+
+    it('getBufferedRanges applies maxRanges once on the combined intersection (trailing slice)', () => {
+      const a = makeTrackedSource();
+      const b = makeTrackedSource();
+      // Three overlapping windows; the intersection yields three ranges, capped
+      // to two by the trailing slice on the COMBINED result.
+      a.state.ranges = [
+        { start: 0, end: 100 },
+        { start: 200, end: 300 },
+        { start: 400, end: 500 },
+      ];
+      b.state.ranges = [
+        { start: 10, end: 90 },
+        { start: 210, end: 290 },
+        { start: 410, end: 490 },
+      ];
+      const g = makeGovernor();
+      g.addSource('a', a.source, { required: true });
+      g.addSource('b', b.source, { required: true });
+      expect(g.getBufferedRanges()).toEqual([
+        { start: 10, end: 90 },
+        { start: 210, end: 290 },
+        { start: 410, end: 490 },
+      ]);
+      expect(g.getBufferedRanges({ maxRanges: 2 })).toEqual([
+        { start: 10, end: 90 },
+        { start: 210, end: 290 },
+      ]);
+    });
+
+    it('addSource ignores a source lacking the buffering API (warns, no throw)', () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const g = makeGovernor({ maxStartWaitMs: 1000 });
+      g.addSource('bad', {} as unknown as BufferSource, { required: true });
+      g.requestPlay();
+      expect(g.state).toBe('starting');
+      vi.advanceTimersByTime(1100); // degrades to the escape hatch
+      expect(g.state).toBe('playing');
+      expect(warn).toHaveBeenCalled();
+      warn.mockRestore();
+    });
+
+    it('setSource(badSource) ALWAYS re-evaluates even though the bad source is rejected', () => {
+      // Deferred Phase-0 fix: setSource clears the registry then defers to
+      // addSource, which returns early on a bad object (no getBufferedRunway)
+      // BEFORE its own evaluateNow(). Pre-fix, replacing a source with a bad
+      // one therefore emptied the registry without ever re-gating. setSource
+      // must re-evaluate unconditionally. Spy on the (private) evaluateNow to
+      // pin the contract directly: it fires exactly once on the rejected swap.
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const g = makeGovernor({ startGateWallMs: 2000 });
+      const evalSpy = vi.spyOn(
+        g as unknown as { evaluateNow: () => void },
+        'evaluateNow',
+      );
+
+      g.setSource({} as unknown as BufferSource);
+      expect(warn).toHaveBeenCalled(); // the bad source was rejected…
+      expect(evalSpy).toHaveBeenCalledTimes(1); // …but the swap STILL re-evaluated
+
+      // A good source's success path re-evaluates TWICE (addSource's own
+      // evaluateNow + setSource's unconditional one — cheap + idempotent, as
+      // documented): 1 (bad swap) + 2 (good swap) = 3.
+      const good = makeTrackedSource();
+      good.state.runwaySimMs = 100_000;
+      g.setSource(good.source);
+      expect(evalSpy).toHaveBeenCalledTimes(3);
+      g.requestPlay();
+      expect(g.state).toBe('playing');
+      evalSpy.mockRestore();
+      warn.mockRestore();
+    });
+
+    it('setSource(badSource) replacing a GATING source leaves the gate live (escape hatch still fires)', () => {
+      // End-to-end shape of the fix: a required source holds the start gate
+      // (empty runway), then is replaced by a bad source. The registry empties
+      // and the machine stays gated (nothing proves readiness), but the gate
+      // is never stranded — the maxStartWaitMs escape hatch still resolves it.
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const good = makeTrackedSource();
+      good.state.runwaySimMs = 0; // holds the start gate
+      const g = makeGovernor({ startGateWallMs: 2000, maxStartWaitMs: 4000 });
+      g.setSource(good.source);
+      g.requestPlay();
+      expect(g.state).toBe('starting');
+
+      g.setSource({} as unknown as BufferSource); // empties the registry, re-evaluates
+      expect(warn).toHaveBeenCalled();
+      expect(g.state).toBe('starting'); // still gated (no source proves readiness)
+
+      vi.advanceTimersByTime(4000); // the escape hatch resolves the gate
+      expect(g.state).toBe('playing');
+      warn.mockRestore();
+    });
+
+    it('setSource back-compat: clears the registry then registers a required default', () => {
+      const a = makeTrackedSource();
+      const b = makeTrackedSource();
+      a.state.runwaySimMs = 0; // would hold the gate
+      b.state.runwaySimMs = 100_000;
+      const g = makeGovernor({ startGateWallMs: 2000 });
+      g.addSource('a', a.source, { required: true });
+
+      // setSource replaces the whole registry with just B as 'default' required.
+      g.setSource(b.source);
+      g.requestPlay();
+      expect(g.state).toBe('playing'); // A is gone; only B (full) gates
+
+      // The old single-source side-effects still reach the default source.
+      g.requestPause();
+      expect(b.state.animateCalls.at(-1)).toEqual({ isAnimating: false, speed: 0 });
+      // A (removed by setSource) received no further broadcasts.
+      const aBroadcastsAfterReplace = a.state.animateCalls.length;
+      g.seekTo(7);
+      expect(b.state.flushes).toBeGreaterThan(0);
+      expect(a.state.animateCalls.length).toBe(aBroadcastsAfterReplace); // A is gone
+
+      // setSource(null) empties the registry (no throw, no source resident).
+      g.setSource(null);
+      expect(g.getBufferedRanges()).toEqual([]);
+      expect(g.estimateCost({ start: 0, end: 1 })).toEqual({ bytes: 0, tiles: 0 });
+    });
+
+    describe('cold-start gate across N required sources (Phase 3 audit)', () => {
+      it('play-from-cold releases the clock only once BOTH required sources reach the start gate', () => {
+        // The Phase-0 combined min-gate already serves cold start: evaluateGate
+        // folds min(runway)+AND(complete) over required, so the clock waits for
+        // EVERY required source. No new cold-start machinery needed.
+        const a = makeTrackedSource();
+        const b = makeTrackedSource();
+        a.state.runwaySimMs = 0; // both bone dry at cold start
+        b.state.runwaySimMs = 0;
+        const g = makeGovernor({ startGateWallMs: 2000 }); // gate = 20_000 sim-ms
+        g.addSource('a', a.source, { required: true });
+        g.addSource('b', b.source, { required: true });
+
+        g.requestPlay();
+        expect(g.state).toBe('starting');
+        expect(tc.isPlaying()).toBe(false);
+
+        // A reaches the start gate but B is still dry → clock STILL held.
+        a.state.runwaySimMs = 100_000;
+        g.notifyBufferChange(runway(100_000));
+        expect(g.state).toBe('starting');
+        expect(tc.isPlaying()).toBe(false);
+
+        // B finally reaches the gate → both required satisfied → clock releases.
+        b.state.runwaySimMs = 20_000;
+        g.notifyBufferChange(runway(20_000));
+        expect(g.state).toBe('playing');
+        expect(tc.isPlaying()).toBe(true);
+      });
+
+      it('cold-start throughput floor: a fast network passes the gate at empty buffer via predictsPlaythrough', () => {
+        // The cold-start throughput FLOOR already exists: predictsPlaythrough
+        // (PLAYTHROUGH_MIN_WALL_MS) lets a fast network start with ~zero
+        // buffered runway, folded over ALL required sources (max ETA). No
+        // separate floor was added.
+        const a = makeTrackedSource();
+        const b = makeTrackedSource();
+        a.state.runwaySimMs = 0; // empty buffer…
+        b.state.runwaySimMs = 0;
+        a.state.etaMs = 10; // …but both predicted to download near-instantly
+        b.state.etaMs = 10;
+        const g = makeGovernor({ startGateWallMs: 2000 });
+        g.addSource('a', a.source, { required: true });
+        g.addSource('b', b.source, { required: true });
+
+        g.requestPlay();
+        // Empty buffer, but the throughput-implied ETA is within the floor for
+        // BOTH required sources → start immediately, no degraded escape hatch.
+        expect(g.state).toBe('playing');
+        expect(tc.isPlaying()).toBe(true);
+      });
+
+      it('cold-start holds when ONE required source is blind/slow even if the other is instant', () => {
+        // predictsPlaythrough is conservative on a blind required source (null
+        // ETA) and folds the MAX ETA, so a single slow/blind required source
+        // keeps the cold gate closed — the floor never masks a laggard.
+        const fast = makeTrackedSource();
+        const blind = makeTrackedSource();
+        fast.state.runwaySimMs = 0;
+        fast.state.etaMs = 10; // instant
+        blind.state.runwaySimMs = 0;
+        blind.state.etaMs = null; // blind ⇒ conservative ⇒ no playthrough
+        const g = makeGovernor({ startGateWallMs: 2000, maxStartWaitMs: 60_000 });
+        g.addSource('fast', fast.source, { required: true });
+        g.addSource('blind', blind.source, { required: true });
+
+        g.requestPlay();
+        expect(g.state).toBe('starting'); // held by the blind required source
+        expect(tc.isPlaying()).toBe(false);
+      });
+    });
+
+    describe('cadence tolerance band (Phase 1 — W3C Bug 26436)', () => {
+      it('two required sources with within-tolerance horizons do NOT spuriously stall while playing', () => {
+        // speed 10; runwayToleranceMs 250 → tolerance = 2500 sim-ms.
+        // Both sources sit comfortably above the watermark but their cadences
+        // land their horizons 2000 sim-ms apart (< tolerance). A raw min would
+        // pin the combined runway to the lower one; the band lifts the laggard
+        // to the leader so neither false-stalls.
+        const a = makeTrackedSource();
+        const b = makeTrackedSource();
+        a.state.runwaySimMs = 100_000;
+        b.state.runwaySimMs = 100_000;
+        const g = makeGovernor({
+          startGateWallMs: 2000, // gate 20_000 sim-ms
+          lowWatermarkWallMs: 600, // watermark 6_000 sim-ms
+          runwayToleranceMs: 250, // band 2_500 sim-ms
+        });
+        g.addSource('a', a.source, { required: true });
+        g.addSource('b', b.source, { required: true });
+        g.requestPlay();
+        expect(g.state).toBe('playing');
+
+        // The fastest-cadence source dips to 5_000 (BELOW the 6_000 watermark)
+        // while its peer is still at 7_000 — i.e. only cadence jitter around a
+        // healthy ~7_000 frontier (lead 7_000 − 5_000 = 2_000 ≤ 2_500 band).
+        // A raw min(5_000) < 6_000 would stall; the band must coalesce to
+        // 7_000 ≥ 6_000 and keep playing.
+        a.state.runwaySimMs = 7_000;
+        b.state.runwaySimMs = 5_000;
+        g.notifyBufferChange(runway(5_000));
+        expect(g.state).toBe('playing');
+        expect(tc.isPlaying()).toBe(true);
+      });
+
+      it('a required source genuinely beyond tolerance below the watermark DOES still stall (no protection lost)', () => {
+        const a = makeTrackedSource();
+        const b = makeTrackedSource();
+        a.state.runwaySimMs = 100_000;
+        b.state.runwaySimMs = 100_000;
+        const g = makeGovernor({
+          startGateWallMs: 2000,
+          lowWatermarkWallMs: 600, // watermark 6_000 sim-ms
+          runwayToleranceMs: 250, // band 2_500 sim-ms
+        });
+        g.addSource('a', a.source, { required: true });
+        g.addSource('b', b.source, { required: true });
+        g.requestPlay();
+        expect(g.state).toBe('playing');
+
+        // B genuinely starves: 1_000 is 99_000 below the leader (≫ band), so
+        // it is NOT lifted, drags the combined runway to 1_000 < 6_000, and
+        // stalls. The band must never mask real starvation.
+        b.state.runwaySimMs = 1_000;
+        g.notifyBufferChange(runway(1_000));
+        expect(g.state).toBe('buffering');
+        expect(tc.isPlaying()).toBe(false);
+      });
+
+      it('runwayToleranceMs = 0 reproduces the raw-min behavior (fractional gap stalls)', () => {
+        const a = makeTrackedSource();
+        const b = makeTrackedSource();
+        a.state.runwaySimMs = 100_000;
+        b.state.runwaySimMs = 100_000;
+        const g = makeGovernor({
+          startGateWallMs: 2000,
+          lowWatermarkWallMs: 600, // watermark 6_000 sim-ms
+          runwayToleranceMs: 0, // raw min/AND — no band
+        });
+        g.addSource('a', a.source, { required: true });
+        g.addSource('b', b.source, { required: true });
+        g.requestPlay();
+        expect(g.state).toBe('playing');
+
+        // The SAME cadence jitter as the first test (lead 7_000, lag 5_000)
+        // now stalls, because with a zero band the raw min(5_000) < 6_000.
+        a.state.runwaySimMs = 7_000;
+        b.state.runwaySimMs = 5_000;
+        g.notifyBufferChange(runway(5_000));
+        expect(g.state).toBe('buffering');
+      });
+
+      it('the band lifts the cached frontier so a within-tolerance peer is not clamped back', () => {
+        // The per-tick clamp must use the BANDED frontier; otherwise the
+        // playhead would be snapped back to a fractionally-behind cadence peer
+        // even when the leader has data well ahead.
+        const a = makeTrackedSource();
+        const b = makeTrackedSource();
+        a.state.runwaySimMs = 100_000; // leader: frontier at 0 + 100_000
+        b.state.runwaySimMs = 98_000; // 2_000 behind ≤ 2_500 band → lifted
+        const g = makeGovernor({
+          startGateWallMs: 2000,
+          lowWatermarkWallMs: 600,
+          runwayToleranceMs: 250, // band 2_500 sim-ms
+        });
+        g.addSource('a', a.source, { required: true });
+        g.addSource('b', b.source, { required: true });
+        g.requestPlay();
+        expect(g.state).toBe('playing');
+        // Frontier should be banded to the leader (100_000), not pinned to the
+        // 98_000 peer: a playback step to 99_000 sits inside the leader's data
+        // and must not be clamped/stalled.
+        tc.setTime(99_000);
+        expect(tc.getTime()).toBe(99_000); // not snapped back to 98_000
+        expect(g.state).toBe('playing');
+      });
+
+      it('defaults runwayToleranceMs to the tick-probe scale (small fractional gap does not stall)', () => {
+        // No runwayToleranceMs option → default 200 wall-ms → 2_000 sim-ms band
+        // at speed 10. A 1_500 sim-ms gap below the watermark is jitter and
+        // must not stall under the default.
+        const a = makeTrackedSource();
+        const b = makeTrackedSource();
+        a.state.runwaySimMs = 100_000;
+        b.state.runwaySimMs = 100_000;
+        const g = makeGovernor({ startGateWallMs: 2000, lowWatermarkWallMs: 600 });
+        g.addSource('a', a.source, { required: true });
+        g.addSource('b', b.source, { required: true });
+        g.requestPlay();
+        expect(g.state).toBe('playing');
+
+        // lead 7_000, lag 5_500 → gap 1_500 ≤ 2_000 default band → no stall.
+        a.state.runwaySimMs = 7_000;
+        b.state.runwaySimMs = 5_500;
+        g.notifyBufferChange(runway(5_500));
+        expect(g.state).toBe('playing');
+      });
+
+      it('a single required source is unaffected by the band (still gates honestly)', () => {
+        // With one required source the leader IS the source, so the band is a
+        // no-op: a genuine drop below the watermark still stalls.
+        const a = makeTrackedSource();
+        a.state.runwaySimMs = 100_000;
+        const g = makeGovernor({ lowWatermarkWallMs: 600, runwayToleranceMs: 250 });
+        g.addSource('a', a.source, { required: true });
+        g.requestPlay();
+        expect(g.state).toBe('playing');
+
+        a.state.runwaySimMs = 1_000; // below watermark, only source
+        g.notifyBufferChange(runway(1_000));
+        expect(g.state).toBe('buffering');
+      });
+    });
+  });
+
   it('on() returns an unsubscribe function', () => {
     const { source, state } = makeSource();
     state.runwaySimMs = 100_000;

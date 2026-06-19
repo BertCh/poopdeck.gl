@@ -18,6 +18,11 @@ const DocsLayout = React.lazy(() => import("./docs/DocsLayout"));
 const DocsLanding = React.lazy(() => import("./docs/DocsLanding"));
 const DocPage = React.lazy(() => import("./docs/DocPage"));
 
+// The AV telemetry cockpit (streetscape.gl-style fullscreen surface) carries
+// the @deck.gl/mesh-layers + camera/gauge chrome; lazy-loaded so the landing
+// and demo bundles don't pay for it.
+const AvCockpit = React.lazy(() => import("./pages/AvCockpit"));
+
 const DocsFallback: React.FC = () => (
   <div className="px-8 py-10 text-sm" style={{ color: "var(--ink-400)" }}>
     Loading documentation…
@@ -85,6 +90,14 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
 
           {/* Chrome-free fullscreen surfaces. */}
           <Route path="story/drifters" element={<DrifterStory />} />
+          <Route
+            path="drive/:sceneId?"
+            element={
+              <Suspense fallback={<DocsFallback />}>
+                <AvCockpit />
+              </Suspense>
+            }
+          />
           <Route path="demo/:datasetId" element={<DemoPage />} />
           {/* Backwards-compat: old `/maplibre/:id` deep-links route to the
               same dataset; the renderer toggle on DemoPage replaces the

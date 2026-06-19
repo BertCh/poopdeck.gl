@@ -84,6 +84,36 @@ export const CATALOG_EXCLUDED_IDS: string[] = [
   'nyc-taxi-paths',
   'nyc-taxi-heads',
   'nyc-rideshare',
+  // The other nine nuScenes mini scenes. The cockpit SceneSwitcher lists every
+  // `type:'av'` dataset, so all ten are reachable at /drive/<id> and switchable
+  // in-cockpit; the /demos catalog shows the single headline card (nuscenes-0103)
+  // rather than ten near-identical nuScenes cards.
+  'nuscenes-0061',
+  'nuscenes-0553',
+  'nuscenes-0655',
+  'nuscenes-0757',
+  'nuscenes-0796',
+  'nuscenes-0916',
+  'nuscenes-1077',
+  'nuscenes-1094',
+  'nuscenes-1100',
+  // The other five Argoverse 2 cities (the headline card is argoverse-02678d04,
+  // Pittsburgh). Same treatment as nuScenes: every `type:'av'` dataset is
+  // reachable at /drive/<id> + switchable in the cockpit SceneSwitcher, so the
+  // /demos catalog shows one AV2 card rather than six near-identical ones.
+  'argoverse-02a00399', // Miami
+  'argoverse-0b5142c1', // Washington DC
+  'argoverse-0bae3b5e', // Detroit
+  'argoverse-25e5c600', // Palo Alto
+  'argoverse-92b900b1', // Austin
+  // The other four Waymo scenes (the headline card is waymo-sf-day, dense SF
+  // daytime). Same treatment as nuScenes/AV2: every `type:'av'` dataset is
+  // reachable at /drive/<id> + switchable in the cockpit, so the /demos catalog
+  // shows one Waymo card rather than five near-identical ones.
+  'waymo-phx-day',
+  'waymo-phx-night',
+  'waymo-sf-night',
+  'waymo-phx-dusk-rain',
 ];
 
 const OSRM_NOTE =
@@ -235,7 +265,290 @@ export const DEMO_META: Record<string, DemoMeta> = {
     related: ['earthquake-activity', 'hurricanes', 'wildfires'],
   },
 
+  'storm-radar': {
+    category: 'earth-ocean',
+    tagline:
+      'The 2020 Iowa derecho rebuilt from raw NEXRAD radar — reflectivity bands, storm cells, and tracks, all baked at build time.',
+    techniqueTag: 'Radar · 3-layer composite',
+    about: [
+      'On 10 August 2020 a derecho — a long-lived, fast-moving wall of ' +
+        'thunderstorms — raced east across the Midwest, organizing into a ' +
+        'classic bow echo and flattening crops and towns from eastern Nebraska ' +
+        'through Iowa with 100+ mph winds. This demo reconstructs that afternoon ' +
+        'from the raw NOAA NEXRAD Level II archive of three radar sites ' +
+        '(Omaha, Des Moines, and the Quad Cities), mosaicked into one moving ' +
+        'picture of the storm.',
+      'Everything the browser would normally choke on happens at build time, in ' +
+        'Rust. Each radar volume is decoded from its polar sweeps, every gate is ' +
+        'reprojected to lon/lat with the standard 4/3-earth beam model, the three ' +
+        'sites are max-combined onto a common grid per 5-minute scan, that grid ' +
+        'is contoured into filled NWS-palette reflectivity bands, and a ' +
+        "SCIT-style tracker links storm cells across scans into tracks. The " +
+        'browser just renders finished vector tiles.',
+      'Three STT archives drive one composite render: the contour bands ' +
+        '(`AnimatedPolygonLayer`, colored by a categorical `dbz_band`) are the ' +
+        'animated precipitation field; storm-cell centroids ' +
+        '(`AnimatedPointLayer`) mark the hardest cores; and cell tracks ' +
+        '(`AnimatedTripsLayer`) trail behind each cell, shaded by intensity over ' +
+        'time — the storm drawing its own path across the map.',
+    ],
+    dataSources: [
+      {
+        name: 'NOAA NEXRAD Level II (Unidata AWS archive)',
+        url: 'https://registry.opendata.aws/noaa-nexrad/',
+        license: 'Public domain (US Gov)',
+        note: 'Bucket unidata-nexrad-level2, sites KOAX / KDMX / KDVN, 2020-08-10.',
+      },
+    ],
+    buildCommand:
+      'stt-generate storms --sites KOAX,KDMX,KDVN --start-hour 16 --end-hour 22 --scan-stride 2',
+    buildNote:
+      'Downloads ~1–2 GB of Level II volumes from the public AWS bucket (no ' +
+      'credentials) on first run, caching to --cache-dir; re-run with ' +
+      '--no-download to rebuild tiles from the cache. Writes three archives: ' +
+      'storm-field, storm-cells, storm-tracks.',
+    techniques: [
+      { label: 'AnimatedPolygonLayer', docPath: '/docs/api/animated-polygon-layer' },
+      { label: 'AnimatedPointLayer', docPath: '/docs/api/animated-point-layer' },
+      { label: 'AnimatedTripsLayer', docPath: '/docs/api/animated-trips-layer' },
+      { label: 'TimeFilterExtension', docPath: '/docs/api/time-filter-extension' },
+    ],
+    related: ['hurricanes', 'wildfires', 'earthquake-activity'],
+  },
+
   // ── Mobility ───────────────────────────────────────────────────────────
+  'av-synthetic': {
+    category: 'mobility',
+    tagline:
+      'A streetscape.gl-style cockpit for an autonomous-vehicle drive — LIDAR, tracked objects, the ego path, and CAN gauges.',
+    techniqueTag: 'AV cockpit · 3-layer composite',
+    about: [
+      'Autonomous-vehicle logs are some of the densest spatiotemporal data ' +
+        'there is: a spinning LIDAR returns hundreds of thousands of 3D points ' +
+        'per second, a perception stack tracks every car and pedestrian as an ' +
+        'oriented 3D box, the vehicle records its own pose, and the CAN bus ' +
+        'streams speed, steering, and acceleration dozens of times a second. ' +
+        'This demo packages one 20-second drive as spatiotemporal tiles and ' +
+        'replays it the way Aurora/Uber’s open-source streetscape.gl (avs.auto) ' +
+        'viewer does — on a real basemap, with a cockpit around it.',
+      'Three STT archives compose into one render: an accumulated LIDAR point ' +
+        'cloud (`AnimatedPointLayer`, colored by a categorical `height_band` so ' +
+        'the ground reads cool and rooftops read warm); the ego trajectory ' +
+        '(`AnimatedTripsLayer`); and tracked objects as oriented extruded boxes ' +
+        '(`AnimatedBoundingBoxLayer`, colored by class). The bespoke cockpit at ' +
+        '`/drive/av-synthetic` adds a stream list, radial CAN-bus gauges, a ' +
+        'timeline scrubber, and a camera inset — all reading the same playback ' +
+        'clock the layers animate on.',
+      'This scene is synthetic — generated offline with no external download, so ' +
+        'the whole cockpit is runnable today. The same bundle layout is produced ' +
+        'by adapters for real datasets (nuScenes, comma.ai, Argoverse 2), which ' +
+        'georeference each scene’s local map frame onto a documented lat/lon origin.',
+    ],
+    dataSources: [
+      {
+        name: 'Synthetic AV scene (generated offline)',
+        url: 'https://avs.auto/',
+        license: 'Synthetic — no external data',
+        note: 'Procedurally generated by av_synthetic.py; same bundle layout the nuScenes / comma.ai / Argoverse adapters emit.',
+      },
+    ],
+    buildCommand:
+      'python scripts/data-generation/av_synthetic.py --out examples/showcase/public/data/av-synthetic',
+    buildNote:
+      'No external download or login. Writes a full AV scene bundle (scene.json, ' +
+      'lidar/ego/objects STT archives, telemetry.json, cameras.json) under ' +
+      'public/data/av-synthetic/. Open the cockpit at /drive/av-synthetic.',
+    techniques: [
+      { label: 'AnimatedPointLayer', docPath: '/docs/api/animated-point-layer' },
+      { label: 'AnimatedTripsLayer', docPath: '/docs/api/animated-trips-layer' },
+      { label: 'AnimatedColumnLayer', docPath: '/docs/api/animated-column-layer' },
+      { label: 'TimeFilterExtension', docPath: '/docs/api/time-filter-extension' },
+    ],
+    related: ['nyc-taxi-trips', 'ship-traffic', 'nyc-od-arcs'],
+  },
+
+  'nuscenes-0103': {
+    category: 'mobility',
+    tagline:
+      'A real nuScenes drive — the fullest cockpit: LIDAR, tracked 3D boxes, CAN gauges, and a front camera in Boston.',
+    techniqueTag: 'AV cockpit · all streams',
+    about: [
+      'nuScenes (Motional) is the reference multimodal autonomous-driving dataset: a ' +
+        '32-beam LIDAR, six cameras, radar, GPS/IMU, and the full CAN bus, with 1.4 million ' +
+        'hand-annotated 3D boxes across Boston and Singapore. This is one real 20-second ' +
+        'mini-split scene in Boston Seaport — and all ten v1.0-mini scenes (Boston + Singapore, ' +
+        'day and night) are wired into the cockpit: switch between them from the scene picker.',
+      'The cockpit at `/drive/nuscenes-0103` composes the accumulated LIDAR cloud — colored by ' +
+        'per-point nuScenes-lidarseg SEMANTIC class (cars orange, people blue, road grey, canopy ' +
+        'green) rather than a height ramp — the ego trail, tracked objects as oriented 3D boxes ' +
+        'colored by class, the radial CAN gauges (speed / steering / throttle / brake), and a ' +
+        'front-camera inset — all on one playback clock, georeferenced onto a real Boston basemap ' +
+        'from the map’s documented origin.',
+      'Built by `nuscenes_extract.py` from the login-gated v1.0-mini + CAN-bus expansion + ' +
+        'map-expansion + lidarseg, with the LIDAR decimated to ~174k points and each return ' +
+        'tagged with its semantic class.',
+    ],
+    dataSources: [
+      {
+        name: 'nuScenes (Motional)',
+        url: 'https://www.nuscenes.org/nuscenes',
+        license: 'CC BY-NC-SA 4.0',
+        note: 'v1.0-mini (all 10 scenes), Boston Seaport + Singapore, plus the CAN-bus, ' +
+          'map-expansion, and lidarseg extensions.',
+      },
+    ],
+    buildCommand:
+      'python scripts/data-generation/nuscenes_extract.py --dataroot ./nuscenes-data --version v1.0-mini --scene scene-0103 --out examples/showcase/public/data/nuscenes-0103',
+    buildNote:
+      'Requires a free (login-gated) nuScenes account: download v1.0-mini.tgz + can_bus.zip + ' +
+      'the map-expansion + lidarseg-mini archives, unpack to ./nuscenes-data/, then extract ' +
+      '(repeat --scene scene-XXXX for the other nine scenes). Open the cockpit at ' +
+      '/drive/nuscenes-0103.',
+    techniques: [
+      { label: 'AnimatedPointLayer', docPath: '/docs/api/animated-point-layer' },
+      { label: 'AnimatedTripsLayer', docPath: '/docs/api/animated-trips-layer' },
+      { label: 'AnimatedColumnLayer', docPath: '/docs/api/animated-column-layer' },
+      { label: 'TimeFilterExtension', docPath: '/docs/api/time-filter-extension' },
+    ],
+    related: ['av-synthetic', 'argoverse-02678d04', 'comma-280-1641'],
+  },
+
+  'argoverse-02678d04': {
+    category: 'mobility',
+    tagline:
+      'Real Argoverse 2 sensor logs across six US cities — LIDAR, tracked 3D boxes, HD-map lanes, camera + telemetry.',
+    techniqueTag: 'AV cockpit · real LIDAR',
+    about: [
+      'These are real autonomous-vehicle logs from Argoverse 2 — ~16-second drives ' +
+        'captured by a 64-beam LIDAR rig with a full perception stack. One scene per ' +
+        'AV2 city ships (Pittsburgh, Miami, Austin, Detroit, Palo Alto, Washington DC); ' +
+        'switch between them in the cockpit. Every LIDAR return, every tracked car / ' +
+        'pedestrian / cyclist box, the HD map, and the ego pose are georeferenced from ' +
+        'each city’s coordinate frame (via the AV2 devkit’s exact CRS) onto a real ' +
+        'basemap and served as spatiotemporal tiles.',
+      'The cockpit at `/drive/argoverse-02678d04` composes the full stream set on one ' +
+        'shared playback clock: the accumulated LIDAR cloud (colored by height band), ' +
+        'the ego trail, tracked objects as oriented 3D boxes, the HD-map substrate ' +
+        '(lane boundaries + lane centerlines + drivable areas + crosswalks), a ' +
+        'ring-camera inset, and a telemetry gauge panel. Argoverse logs carry no CAN ' +
+        'bus, so speed / acceleration / yaw-rate / heading are DERIVED from the ego pose.',
+      'Built by `argoverse_extract.py` (driven by `argoverse_batch.sh`) from public ' +
+        'sensor logs pulled with no auth from the Argoverse AWS Open Data bucket; each ' +
+        'scene is decimated to ~190k LIDAR points and drops zero-point (occluded) GT boxes.',
+    ],
+    dataSources: [
+      {
+        name: 'Argoverse 2 Sensor Dataset',
+        url: 'https://www.argoverse.org/av2.html',
+        license: 'CC BY-NC-SA 4.0',
+        note: 'One val-split log per city, s3://argoverse/datasets/av2/sensor (no login).',
+      },
+    ],
+    buildCommand:
+      'bash scripts/data-generation/argoverse_batch.sh   # 1 scene per AV2 city (6 total)',
+    buildNote:
+      'The batch driver selectively pulls each log (lidar + ego + annotations + map + ' +
+      'one ring camera) with `aws s3 cp --no-sign-request`, extracts, and deletes the ' +
+      'raw log. Open the cockpit at /drive/argoverse-02678d04 (switch cities in-cockpit).',
+    techniques: [
+      { label: 'AnimatedPointLayer', docPath: '/docs/api/animated-point-layer' },
+      { label: 'AnimatedTripsLayer', docPath: '/docs/api/animated-trips-layer' },
+      { label: 'AnimatedColumnLayer', docPath: '/docs/api/animated-column-layer' },
+      { label: 'TimeFilterExtension', docPath: '/docs/api/time-filter-extension' },
+    ],
+    related: ['av-synthetic', 'comma-280-1641', 'nuscenes-0103'],
+  },
+
+  'waymo-sf-day': {
+    category: 'mobility',
+    tagline:
+      'Real Waymo Open Dataset perception scenes — 5-laser LIDAR, tracked 3D boxes with real velocity, camera + telemetry, across SF & Phoenix, day & night (+ rain).',
+    techniqueTag: 'AV cockpit · real LIDAR',
+    about: [
+      'These are real autonomous-vehicle segments from the Waymo Open Dataset — ' +
+        '~20-second drives captured by a 5-laser LIDAR rig (one 64-beam mid-range ' +
+        'top sensor + four short-range) and a full perception stack. Five curated ' +
+        'scenes ship — dense daytime San Francisco, daytime + night Phoenix, night ' +
+        'San Francisco, and a rare dawn/dusk RAIN scene — switchable in the cockpit. ' +
+        'Every LIDAR return, every tracked vehicle / pedestrian / cyclist box (with ' +
+        'Waymo’s real per-box velocity), and the ego pose are served as spatiotemporal tiles.',
+      'The cockpit at `/drive/waymo-sf-day` composes the streams on one shared ' +
+        'playback clock: the accumulated LIDAR cloud (colored by height band), the ego ' +
+        'trail, tracked objects as oriented 3D boxes with velocity arrows, a FRONT-camera ' +
+        'inset, and a telemetry gauge panel. Waymo Perception carries no CAN bus, so ' +
+        'speed / acceleration / yaw-rate / heading are DERIVED from the ego pose. Waymo ' +
+        'discloses no georeferencing and the v2.0.1 release ships no HD map, so each ' +
+        'scene is anchored to an approximate local frame on a neutral dark basemap — the ' +
+        'lidar itself is the map.',
+      'Built by `waymo_extract.py` (driven by `waymo_batch.sh`) from the *modular ' +
+        'Parquet* release (v2.0.1): the components are read with pyarrow and the LIDAR ' +
+        'range images are decoded to a point cloud in pure numpy — no TensorFlow / ' +
+        'waymo-open-dataset library. Each scene is decimated to ~400k LIDAR points and ' +
+        'drops zero-point (occluded) GT boxes.',
+    ],
+    dataSources: [
+      {
+        name: 'Waymo Open Dataset (Perception v2.0.1)',
+        url: 'https://waymo.com/open/',
+        license: 'Waymo Dataset License Agreement (non-commercial)',
+        note: 'Curated validation-split segments, gs://waymo_open_dataset_v_2_0_1 (license-gated).',
+      },
+    ],
+    buildCommand:
+      'bash scripts/data-generation/waymo_batch.sh   # 5 curated scenes (SF/PHX, day/night, +rain)',
+    buildNote:
+      'Accept the Waymo Dataset License Agreement (non-commercial, no redistribution) ' +
+      'at waymo.com/open, then `gcloud auth login`. The batch driver pulls only the ' +
+      'components the cockpit needs per segment, decodes the range images in numpy, and ' +
+      'builds the bundle. Open the cockpit at /drive/waymo-sf-day (switch scenes in-cockpit).',
+    techniques: [
+      { label: 'AnimatedPointLayer', docPath: '/docs/api/animated-point-layer' },
+      { label: 'AnimatedTripsLayer', docPath: '/docs/api/animated-trips-layer' },
+      { label: 'AnimatedColumnLayer', docPath: '/docs/api/animated-column-layer' },
+      { label: 'TimeFilterExtension', docPath: '/docs/api/time-filter-extension' },
+    ],
+    related: ['av-synthetic', 'argoverse-02678d04', 'nuscenes-0103'],
+  },
+
+  'comma-280-1641': {
+    category: 'mobility',
+    tagline:
+      'A real comma.ai dashcam drive — GPS path + live CAN-bus gauges on California I-280.',
+    techniqueTag: 'AV cockpit · CAN telemetry',
+    about: [
+      'comma.ai’s comma2k19 is 33 hours of real California highway driving logged from ' +
+        'a windshield device: GPS, a 9-axis IMU, the road camera, and every CAN-bus ' +
+        'message the car emits. This scene is one 60-second segment on I-280 between ' +
+        'San Francisco and San Jose — a steady ~76 mph cruise.',
+      'Unlike the LIDAR scenes, a comma log has no point cloud and no perception boxes, ' +
+        'so the cockpit at `/drive/comma-280-1641` shows the streams it does have: the ' +
+        'GPS ego trail on the map, the radial CAN gauges (speed, steering, acceleration) ' +
+        'reading the real telemetry at the playhead, and the road-camera frame. The ' +
+        'cockpit adapts to whatever streams a scene contains.',
+      'Built by `comma_extract.py` from the public comma2k19 HuggingFace mirror — one ' +
+        'segment’s ECEF poses (→ lat/lon), CAN speed / steering, and IMU acceleration. ' +
+        'No 10 GB chunk needed.',
+    ],
+    dataSources: [
+      {
+        name: 'comma2k19 (comma.ai)',
+        url: 'https://github.com/commaai/comma2k19',
+        license: 'MIT',
+        note: 'Segment 2018-08-02--16-41-38/17 on I-280; commaai/comma2k19 on HuggingFace.',
+      },
+    ],
+    buildCommand:
+      'python scripts/data-generation/comma_extract.py --demo-parquet <comma2k19 demo parquet> --row 6 --out examples/showcase/public/data/comma-280-1641',
+    buildNote:
+      'Pull one demo parquet from the commaai/comma2k19 HuggingFace mirror, then ' +
+      'extract. Open the cockpit at /drive/comma-280-1641.',
+    techniques: [
+      { label: 'AnimatedTripsLayer', docPath: '/docs/api/animated-trips-layer' },
+      { label: 'TimeFilterExtension', docPath: '/docs/api/time-filter-extension' },
+    ],
+    related: ['av-synthetic', 'argoverse-02678d04', 'ship-traffic'],
+  },
+
   'nyc-od-arcs': {
     category: 'mobility',
     tagline: 'Every taxi trip as an arc from where it began to where it ended.',
@@ -464,6 +777,59 @@ export const DEMO_META: Record<string, DemoMeta> = {
       { label: 'Binary features (vertex value matrix)', docPath: '/docs/api/binary-features' },
     ],
     related: ['bixi-flowmap-bundled', 'bixi-flowmap', 'nyc-taxi-flows'],
+  },
+
+  'bixi-streets': {
+    category: 'mobility',
+    tagline: 'A month of BIXI trips routed onto Montréal’s bike network — the cycleways riders actually use, lit by the hourly commute.',
+    techniqueTag: 'Streets · pre-aggregated · gradient',
+    about: [
+      'The street-network companion to the BIXI flowmap: instead of straight ' +
+        'origin→destination arcs, every trip is routed through OSRM on Montréal’s ' +
+        'actual BICYCLE network — cycleways, the REV, the Lachine Canal path, and ' +
+        'shared streets — and its per-hour ridership is baked onto each road ' +
+        'segment. The gradient shades each corridor by how many riders rolled ' +
+        'over it, so quiet side streets stay dim indigo while de Maisonneuve and ' +
+        'the REV burn white-hot at rush hour.',
+      'It reuses the taxi-flow corridor pipeline end to end: OD pairs are routed ' +
+        'once (not per trip — counts already collapse millions of trips onto a ' +
+        'bounded pair set), each routed segment is matched back to its OSM edge, ' +
+        'and traversals accumulate per edge × per hour into one corridor feature ' +
+        'carrying a per-vertex value matrix. The build attaches a road-class ' +
+        '`min_zoom` so major arteries show in the overview and every cycleway ' +
+        'fills in on zoom-in. No thinning — aggregation IS the visualization.',
+    ],
+    dataSources: [
+      {
+        name: 'BIXI Montréal — Open Data (trip history)',
+        url: 'https://bixi.com/en/open-data/',
+        license: 'BIXI open data licence',
+        note: 'Real August 2024 trips (origin/destination station + timestamps).',
+      },
+      {
+        name: 'OpenStreetMap (bicycle network via OSRM)',
+        url: 'https://www.openstreetmap.org/',
+        license: 'ODbL',
+      },
+    ],
+    buildCommand:
+      'stt-generate bixi --streets --input bixi-2024.csv \\\n' +
+      '  --from 2024-08-01 --to 2024-09-01 --bin 1h --min-trips 30 \\\n' +
+      '  --osm-pbf osrm-data/quebec-latest.osm.pbf \\\n' +
+      '  --osrm-url http://localhost:5001 \\\n' +
+      '  --output bixi-streets.stt',
+    buildNote:
+      'Routes BIXI OD pairs onto the OSM bicycle network and aggregates per-hour ' +
+      'traversals into street corridors (the BIXI counterpart of `nyc-rideshare ' +
+      '--flows`). Needs a local OSRM **bicycle** server for Québec — bring one up ' +
+      'with `REGION=quebec PROFILE=bicycle scripts/data-generation/setup-osrm.sh` ' +
+      '(defaults to port 5001 so it coexists with the NYC car server).',
+    techniques: [
+      { label: 'FlowCorridorLayer', docPath: '/docs/api/animated-trips-layer' },
+      { label: 'Binary features (vertex value matrix)', docPath: '/docs/api/binary-features' },
+      { label: 'CLI: aggregation flags', docPath: '/docs/api/cli-reference' },
+    ],
+    related: ['bixi-flowmap', 'nyc-taxi-flows', 'bixi-flowmap-baked'],
   },
 
   'nyc-od-quadbin': {

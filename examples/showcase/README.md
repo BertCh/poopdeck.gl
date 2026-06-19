@@ -2,7 +2,7 @@
 
 Interactive demo of the SpatioTemporal Tile (`.stt`) format, deck.gl
 layers (`@poopdeck.gl/layers`), and MapLibre adapters (`@poopdeck.gl/maplibre`) across
-16 real and synthetic datasets.
+dozens of real and synthetic datasets.
 
 ## Pages
 
@@ -22,25 +22,23 @@ transforms, chrono-based temporal bucketing, and latitude-adjusted
 distance math. CSV sources are ingested directly; HTTP sources are
 cached under `data/`.
 
-## Registered Datasets (`src/datasets.ts`)
+## Registered Datasets
 
-| Dataset id                   | Layer kind     | Source |
-| ---------------------------- | -------------- | ------ |
-| `earthquake-activity`        | point          | USGS M4.0+ global (2020–2024) |
-| `flights`                    | point          | OpenSky ADS-B (24 h sample) |
-| `flight-paths`               | path           | OpenSky, derived per-flight polylines |
-| `flight-trips`               | trips          | OpenSky, per-vertex timed paths |
-| `hurricanes`                 | path           | NOAA IBTrACS (Atlantic 2020–2023) |
-| `nyc-rideshare`              | point          | NYC TLC + OSRM routed |
-| `nyc-taxi-points`            | point          | derived from rideshare paths |
-| `nyc-taxi-paths`             | path           | OSRM-routed taxi routes |
-| `nyc-taxi-trips`             | trips          | per-vertex timed taxi routes |
-| `nyc-taxi-vat`               | vat-trips      | vertex-animation-texture variant |
-| `nyc-taxi-od-heatmap`        | heatmap        | OD pickups / dropoffs as GPU splats |
-| `nyc-taxi-od-summary`        | h3 summary     | server-aggregated H3 hex bins |
-| `ship-traffic`               | point          | NOAA Marine Cadastre AIS |
-| `wildfires`                  | polygon        | NIFC perimeters (1000+ acres) |
-| `satellites`                 | trips          | CelesTrak TLE + SGP4 propagation; toggle globe/flat at top-left |
+The demo catalog is defined in [`src/datasets.ts`](./src/datasets.ts) — that
+file is the single source of truth (id, layer kind, source, and per-demo
+config). It's the list that drives the `/` gallery and `/demo/:id` routes, so
+consult it directly rather than a copy here. The demos span every layer kind
+the project ships, grouped roughly as:
+
+- **Points** — earthquakes, ship traffic, flights, satellites, NYC taxi points
+- **Paths & trips** — flight paths/trips, hurricane tracks, NYC taxi
+  paths/trips/heads, ocean drifters, ECCO currents, animal migration
+- **Polygons & cumulative** — wildfire perimeters, OSM edit "draw"
+- **OD & flow** — NYC taxi flows (flow corridors), OD arcs, OD quadbin /
+  H3 summary, OD heatmap, BIXI flowmaps (clustered / edge-bundled)
+- **3D & space-time cube** — earthquake columns, the NYC taxi cube
+- **Composite & domain** — NEXRAD storm radar, the AV cockpit
+  (nuScenes / Argoverse / comma / synthetic)
 
 ## Building Locally
 

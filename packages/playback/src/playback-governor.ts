@@ -127,6 +127,36 @@ export interface PlaybackGovernorOptions {
    * `estimateTimeToReadyMs` (which core computes with the same estimator).
    */
   getThroughput?: (() => ThroughputEstimate) | null;
+  /**
+   * Cadence tolerance band (wall-ms × |speed| → sim-ms), Phase 1 of
+   * multi-source coordination. When several REQUIRED sources are composited
+   * they almost never share a temporal chunking/cadence, so their buffered
+   * horizons land at fractionally-different sim-times even when all are
+   * comfortably ahead. A raw `min()` over those horizons then spuriously
+   * stalls the clock the instant the fastest-cadence source's runway dips a
+   * few ms below a peer's — exactly the W3C Bug 26436 misfire (see
+   * docs/roadmap/multi-source-coordination.md §2.2 + §2.10: this tolerance is
+   * NOT an inherited MSE/HTML mechanism, we must implement it ourselves).
+   *
+   * The band coalesces sub-tolerance horizon differences BETWEEN required
+   * sources: a source whose runway is within `runwayToleranceMs × |speed|` of
+   * the LEADING required frontier is treated as if it reached the leader (its
+   * lagging tile is cadence jitter that is about to align), so it no longer
+   * drags the combined min/frontier down. A source genuinely further behind
+   * keeps its real (small) runway and still drags the floor — the band absorbs
+   * jitter WITHOUT lowering the actual low-watermark stall protection (it never
+   * lets a genuinely-starved source play past real data; see §6 Decision 1).
+   * Setting this to 0 reproduces the exact Wave-1 raw-min/AND behavior.
+   *
+   * Denominated in WALL-ms (like every other threshold here) and scaled by
+   * |speed| at evaluation time, because horizon misalignment between cadences
+   * grows with the consumption rate. The default ties to the tick-probe scale
+   * ({@link TICK_PROBE_INTERVAL_MS}, the wall cadence at which the frontier is
+   * re-sampled): differences smaller than one probe interval of consumption
+   * are below the governor's own observation resolution and must not gate.
+   * @default 200
+   */
+  runwayToleranceMs?: number;
 }
 
 /** Payload of the 'ready' event (a gate passed and the clock started). */
@@ -178,6 +208,25 @@ export interface PlaybackQoeStats {
   creepMs: number;
 }
 
+/**
+ * Per-source runway probe for a multi-track buffered bar / debug panel
+ * (Phase 4 of multi-source coordination). One entry per registered source,
+ * probed at the current playhead time + travel direction. Pure read — no side
+ * effects. See {@link PlaybackGovernor.getSourceRunways}.
+ */
+export interface SourceRunway {
+  /** The id the source was registered under (addSource key; 'default' for setSource). */
+  id: string;
+  /** Whether this source gates the clock (true) or continue-and-degrades (false). */
+  required: boolean;
+  /** Contiguous sim-time span ahead of the playhead this source has resident. */
+  runwaySimMs: number;
+  /** True when this source has nothing left to load (dataset end / fully buffered). */
+  complete: boolean;
+  /** Bytes still in flight / queued inside the source's measured horizon. */
+  bytesPending: number;
+}
+
 export type GovernorEventName = keyof GovernorEventMap;
 
 /** Re-evaluation cadence while gated (never per-rAF). */
@@ -223,8 +272,22 @@ export class PlaybackGovernor {
   private readonly resumeFactor: number;
   private readonly maxStartWaitMs: number;
   private readonly getThroughput: (() => ThroughputEstimate) | null;
+  /** Cadence tolerance in WALL-ms; scaled by |speed| per evaluation. See options. */
+  private readonly runwayToleranceMs: number;
 
-  private source: BufferSource | null = null;
+  /**
+   * The classified source registry (Phase 0 of multi-source coordination).
+   * Replaces the historical single `source`. Each entry carries a `required`
+   * flag (gates the clock) and a `weight` (Phase 2 bandwidth-share hint, not
+   * yet consumed here). The clock's combined buffer health is folded over the
+   * REQUIRED subset only — `min` runway, `AND` complete, nearest frontier —
+   * while side-effects (prefetch keep-alive, flush) broadcast to ALL sources.
+   * See docs/roadmap/multi-source-coordination.md §4–5.
+   */
+  private sources = new Map<
+    string,
+    { source: BufferSource; required: boolean; weight: number }
+  >();
   private _state: PlaybackGovernorState = 'idle';
   /**
    * What the USER wants, tracked separately from the machine state so a pause
@@ -349,7 +412,7 @@ export class PlaybackGovernor {
     if (this.disposed || this.suppressTickClamp || this.scrubbing) return;
     if (this._state !== 'playing' || !this.userWantsPlayback) return;
     if (!this.timeController.isPlaying()) return;
-    if (!this.source) return;
+    if (!this.hasAnySource()) return;
     const speed = this.timeController.getSpeed();
     if (speed === 0) return;
     const direction: 1 | -1 = speed < 0 ? -1 : 1;
@@ -396,7 +459,7 @@ export class PlaybackGovernor {
     // The frontier is stale after a wrap regardless of machine state.
     this.bufferedUntil = null;
     if (this._state !== 'playing' || !this.userWantsPlayback) return;
-    this.source?.flushPrefetch();
+    for (const source of this.allSources()) source.flushPrefetch();
     this.setDegradedCreep(false);
     this.enterGate('seeking', 1);
   };
@@ -421,6 +484,9 @@ export class PlaybackGovernor {
     this.seekSettleMs = opts.seekSettleMs ?? 200;
     this.maxStartWaitMs = opts.maxStartWaitMs ?? 8000;
     this.getThroughput = opts.getThroughput ?? null;
+    // Tolerance defaults to one tick-probe interval of consumption (see option
+    // docs + §6 Decision 1). A negative value would invert the band, so clamp.
+    this.runwayToleranceMs = Math.max(0, opts.runwayToleranceMs ?? TICK_PROBE_INTERVAL_MS);
     if (opts.source) this.setSource(opts.source);
 
     this.timeController.on('playState', this.playStateHandler);
@@ -472,25 +538,70 @@ export class PlaybackGovernor {
   }
 
   /**
-   * Attach (or replace) the readiness oracle. The tileset arrives async in
-   * real apps, so the governor may sit in 'starting' with no source — it then
-   * either passes the gate the moment the source proves readiness, or starts
-   * degraded after `maxStartWaitMs`.
+   * Register (or replace) one classified readiness oracle in the multi-source
+   * registry, keyed by `id`. Required sources gate the clock; optional ones
+   * never do (they continue-and-degrade — see §2.3) but still load and still
+   * count toward cost/ETA. The tileset arrives async in real apps, so the
+   * governor may sit in 'starting' with no required source resident yet — it
+   * then either passes the gate the moment the required set proves readiness,
+   * or starts degraded after `maxStartWaitMs`.
    *
    * Sources missing the buffering API (a core build that predates WS-A) are
-   * treated as absent so gating degrades to the escape hatch instead of
-   * throwing at runtime.
+   * ignored so gating degrades to the escape hatch instead of throwing at
+   * runtime (mirrors the historical {@link setSource} guard).
+   *
+   * @param opts.required defaults to `true` (the source gates the clock).
+   * @param opts.weight   bandwidth-share hint for the Phase 2 shared
+   *                       scheduler; defaults to `1`, not consumed by gating.
    */
-  setSource(source: BufferSource | null): void {
-    if (source && typeof (source as Partial<BufferSource>).getBufferedRunway !== 'function') {
+  addSource(
+    id: string,
+    source: BufferSource,
+    opts: { required?: boolean; weight?: number } = {},
+  ): void {
+    if (typeof (source as Partial<BufferSource>).getBufferedRunway !== 'function') {
       // eslint-disable-next-line no-console
       console.warn(
         '[PlaybackGovernor] source lacks the buffering API (getBufferedRunway); ' +
           'gating degrades to the maxStartWaitMs escape hatch.',
       );
-      source = null;
+      return;
     }
-    this.source = source;
+    this.sources.set(id, {
+      source,
+      required: opts.required ?? true,
+      weight: opts.weight ?? 1,
+    });
+    this.evaluateNow();
+  }
+
+  /** Remove a source from the registry by id (no-op if absent). */
+  removeSource(id: string): void {
+    this.sources.delete(id);
+    this.evaluateNow();
+  }
+
+  /**
+   * Back-compat single-source shim: clears the registry and (when non-null)
+   * registers `source` as the required `'default'` source. Predates the
+   * N-source registry; new code should call {@link addSource}/{@link
+   * removeSource} directly so optional overlays can be classified.
+   *
+   * Always re-evaluates after the attempted swap — including when `source` is
+   * a bad object that {@link addSource} rejects (lacks `getBufferedRunway`).
+   * Without the unconditional re-evaluate, replacing the live required source
+   * with a bad one would empty the registry yet leave the clock gated on the
+   * stale combined runway: the registry would now report a never-stall
+   * unbounded runway (zero required sources) but nothing would re-open the
+   * gate. Re-evaluating folds the now-empty required set and starts (or
+   * escape-hatches) correctly.
+   */
+  setSource(source: BufferSource | null): void {
+    this.sources.clear();
+    // addSource calls evaluateNow on success; on a bad-source rejection it
+    // returns early WITHOUT evaluating, so re-evaluate here unconditionally.
+    // (A successful add re-evaluates twice — cheap and idempotent.)
+    if (source) this.addSource('default', source, { required: true });
     this.evaluateNow();
   }
 
@@ -550,9 +661,11 @@ export class PlaybackGovernor {
     this.bufferedUntil = null;
     this.setDegradedCreep(false);
     this.pauseClock();
-    // A real pause (unlike a gate) should drop the loader back to its paused
-    // budget — undo any animating-at-speed assertion a gate made.
-    this.source?.setAnimationState?.(false, 0);
+    // A real pause (unlike a gate) should drop EVERY loader back to its paused
+    // budget — undo any animating-at-speed assertion a gate made. Broadcasts
+    // to all sources (required AND optional): optional sources never gate the
+    // clock but they DO load, so they must also be told to stand down.
+    for (const source of this.allSources()) source.setAnimationState?.(false, 0);
     this.setState('idle');
   }
 
@@ -616,26 +729,99 @@ export class PlaybackGovernor {
   }
 
   /**
-   * Honest ETA (wall-ms) until the current gate window is ready, from the
-   * source's directory cost math ÷ measured throughput. Null when unknown.
+   * Honest ETA (wall-ms) until the current gate window is ready: the MAX
+   * `estimateTimeToReadyMs` across ALL sources (required + optional) — the
+   * window is "ready" only once the slowest source has it. Null when no source
+   * yields a finite estimate (or there are no sources).
    */
   getEtaMs(): number | null {
-    if (!this.source) return null;
-    return this.source.estimateTimeToReadyMs(this.gateRange());
-  }
-
-  /** Loaded time ranges for a buffered-range bar (passthrough; [] without a source). */
-  getBufferedRanges(opts?: { maxRanges?: number }): Array<{ start: number; end: number }> {
-    return this.source?.getBufferedRanges(opts) ?? [];
+    const range = this.gateRange();
+    let eta: number | null = null;
+    for (const source of this.allSources()) {
+      const e = source.estimateTimeToReadyMs(range);
+      if (e == null) continue;
+      eta = eta == null ? e : Math.max(eta, e);
+    }
+    return eta;
   }
 
   /**
-   * Byte/tile cost of making `range` fully buffered for the current viewport
-   * (passthrough to the source's directory math; zeros without a source).
-   * UIs use it for ETA chips and timeline density strips.
+   * Loaded time ranges for a buffered-range bar. Folded over the REQUIRED set
+   * as an INTERSECTION (the span the clock actually treats as loaded — a
+   * required source with a gap there gates regardless of optional coverage).
+   * Returns [] when there are no required sources. (Phase 4 may surface a
+   * richer per-source multi-track bar; this keeps the single-bar contract.)
+   */
+  getBufferedRanges(opts?: { maxRanges?: number }): Array<{ start: number; end: number }> {
+    const required = this.requiredSources();
+    if (required.length === 0) return [];
+    // Probe each source WITHOUT maxRanges for the intersection inputs: a
+    // per-source truncation could drop a range that would have intersected a
+    // peer's, silently shrinking the combined buffered span. Intersect the
+    // full per-source lists, then apply the caller's maxRanges slice once at
+    // the very end (a range cap is a presentation concern on the COMBINED
+    // result, not on each input).
+    let acc = required[0].getBufferedRanges();
+    for (let i = 1; i < required.length; i++) {
+      acc = intersectRanges(acc, required[i].getBufferedRanges());
+      if (acc.length === 0) break;
+    }
+    if (opts?.maxRanges != null && acc.length > opts.maxRanges) {
+      acc = acc.slice(0, opts.maxRanges);
+    }
+    return acc;
+  }
+
+  /**
+   * Byte/tile cost of making `range` fully buffered for the current viewport,
+   * SUMMED across ALL sources (required + optional) — the total work the
+   * composite must do. Zeros without any source. UIs use it for ETA chips and
+   * timeline density strips.
    */
   estimateCost(range: { start: number; end: number }): { bytes: number; tiles: number } {
-    return this.source?.estimateCost(range) ?? { bytes: 0, tiles: 0 };
+    let bytes = 0;
+    let tiles = 0;
+    for (const source of this.allSources()) {
+      const c = source.estimateCost(range);
+      bytes += c.bytes;
+      tiles += c.tiles;
+    }
+    return { bytes, tiles };
+  }
+
+  /**
+   * Per-source runway probe at the CURRENT playhead time + travel direction —
+   * the data behind a multi-track buffered bar or debug panel (Phase 4 of
+   * multi-source coordination). One {@link SourceRunway} per registered source,
+   * in registration order (required and optional alike). PURE READ: every
+   * source is probed via {@link BufferSource.getBufferedRunway}; nothing is
+   * mutated, no clock, gate, or frontier state is touched.
+   *
+   * The travel direction is the sign of the current speed (forward at zero
+   * speed, matching the gate/frontier convention). The GATING source — the one
+   * the clock is (or would be) held by — is the required entry with the
+   * smallest `runwaySimMs` among those not yet `complete` (an incomplete
+   * required source is what the combined min-gate folds to); callers identify
+   * it by filtering `required && !complete` and taking the min `runwaySimMs`.
+   * Returns [] when no source is registered.
+   */
+  getSourceRunways(): SourceRunway[] {
+    if (this.sources.size === 0) return [];
+    const speed = this.timeController.getSpeed();
+    const direction: 1 | -1 = speed < 0 ? -1 : 1;
+    const time = this.timeController.getTime();
+    const out: SourceRunway[] = [];
+    for (const [id, entry] of this.sources) {
+      const r = entry.source.getBufferedRunway(time, direction);
+      out.push({
+        id,
+        required: entry.required,
+        runwaySimMs: r.simMs,
+        complete: r.complete,
+        bytesPending: r.bytesPending,
+      });
+    }
+    return out;
   }
 
   /**
@@ -666,21 +852,50 @@ export class PlaybackGovernor {
   /**
    * Opt-in "Auto" speed (WS-D): the maximum sustainable playback speed
    * (TimeController units — sim-ms per wall-ms) the measured network can
-   * feed, derived from the byte cost of the upcoming horizon:
+   * feed, derived from the COMBINED byte cost of the upcoming horizon across
+   * every REQUIRED source.
    *
-   *   bytesPerSimMs = cost(next 8 wall-s at current speed) / horizonSimMs
-   *   maxSustainable = throughputBytesPerMs / bytesPerSimMs × 0.7
+   * THE CONTENDED BOUND (multi-heavy fix). N required sources do not each own
+   * the link — they share ONE pipe. The honest sustainable speed is therefore
+   * the aggregate throughput divided by the SUM of every required source's
+   * byte-rate demand, not the min over each source's own optimistic full-pipe
+   * estimate (which assumes each source has the whole link to itself and so
+   * runs ~N× too fast with N comparably-heavy sources — the "racing ahead"
+   * stall, the deferred Wave-1 MEDIUM finding):
+   *
+   *   Σbytes        = Σ over required of estimateCost(horizon).bytes
+   *   bytesPerSimMs = Σbytes / horizonSimMs          (combined demand per sim-ms)
+   *   maxSustainable = aggregateThroughputBytesPerMs / bytesPerSimMs × 0.7
+   *
+   * THROUGHPUT ASSUMPTION. `getThroughput()` (when wired) is read as the
+   * AGGREGATE / shared-link rate — the only honest numerator for a bound that
+   * divides one pipe across N sources. This holds because the core archive's
+   * estimator samples its whole BUSY WINDOW as one `(totalBytes, wallClockMs)`
+   * sample (archive.ts endTransferSample), i.e. the link's aggregate delivered
+   * rate while that archive was loading, not a per-request slice. (When the
+   * composite wires ONE archive's getter as the governor's `getThroughput`,
+   * that archive's busy-window rate is the best available proxy for the shared
+   * link; a future Phase-2 shared scheduler would expose a true link-wide
+   * estimate here.) When no getter is wired, the shared-link rate is recovered
+   * per source as bytes_i / eta_i — each source's estimateTimeToReadyMs is
+   * bytes_i / sharedLinkRate, so this quotient yields that ONE shared rate for
+   * every source. We take the max (all are ~equal; max is the most defensible
+   * single estimate) as the aggregate numerator and divide it across Σbytes
+   * below — NOT Σbytes / maxEta, which double-counts the one pipe by ~N and
+   * silently reproduces the optimistic per-source speed (the multi-heavy bug).
    *
    * Returns `Infinity` when the upcoming horizon has nothing left to load
-   * (everything buffered ⇒ the network imposes no cap) — consumers clamp it
-   * to their max step, so a fully-cached dataset rises to full speed instead
-   * of freezing at whatever multiplier Auto last chose. Returns null when the
-   * math cannot be honest: throughput unknown, or tiles pending whose byte
-   * sizes the directory doesn't expose. Consumers apply their own
-   * snapping/clamping/hysteresis; the governor only does the honest math.
+   * across ALL required sources (everything buffered ⇒ the network imposes no
+   * cap) — consumers clamp it to their max step, so a fully-cached dataset
+   * rises to full speed instead of freezing at whatever multiplier Auto last
+   * chose. Returns null when the math cannot be honest: throughput unknown, or
+   * tiles pending whose byte sizes the directory doesn't expose. Consumers
+   * apply their own snapping/clamping/hysteresis; the governor only does the
+   * honest math.
    */
   getAutoSpeedSuggestion(): number | null {
-    if (!this.source) return null;
+    const required = this.requiredSources();
+    if (required.length === 0) return null;
     const speed = this.timeController.getSpeed();
     const absSpeed = Math.abs(speed);
     if (absSpeed <= 0) return null;
@@ -692,24 +907,76 @@ export class PlaybackGovernor {
         ? { start: time - horizonSimMs, end: time }
         : { start: time, end: time + horizonSimMs };
 
-    const cost = this.source.estimateCost(range);
-    if (!cost || cost.tiles === 0) return Infinity; // nothing left to load — uncapped
-    if (cost.bytes <= 0) return null; // tiles pending but sizes unknown — no honest math
+    // Combined (contended) bound over the required set: sum the byte demand of
+    // every required source, then divide the ONE shared pipe across it. A
+    // composite plays only as fast as the shared link can feed the SUM of its
+    // required sources — never the optimistic per-source min.
+    let sumBytes = 0;
+    let sumTiles = 0;
+    // The ETA-implied fallback recovers the SHARED-LINK rate from each source's
+    // own honest ETA. Each source computes estimateTimeToReadyMs as
+    // bytes_i / sharedLinkRate (core spatiotemporal-tileset), so the per-source
+    // implied rate is bytes_i / eta_i — which equals that one shared link rate
+    // for every source (they all measure the same pipe). We take the max of
+    // these per-source rates as the aggregate numerator: it is the shared link's
+    // delivered rate, NOT a sum (summing would double-count the one pipe and
+    // reproduce the old optimistic per-source speed — the multi-heavy bug). The
+    // contention then lives entirely in dividing this ONE rate across Σbytes.
+    let maxLinkRateBytesPerMs: number | null = null;
+    let anyEtaBlind = false;
+    // Mirror of anyEtaBlind for the byte-size oracle: a required source with
+    // pending tiles whose byte sizes the directory does NOT expose
+    // (cost.tiles > 0 && cost.bytes <= 0). In the SINGLE-source case the
+    // `sumBytes <= 0` floor below already catches this. Under COMPOSITION a
+    // heavy peer keeps Σbytes positive, so the blind source's missing bytes
+    // silently under-count the combined demand and INFLATE the suggested speed —
+    // the composite then "races ahead" of a required track whose true cost is
+    // unknown. Restoring the single-source contract: if ANY required source is
+    // bytes-blind there is no honest combined Σbytes, so return null (exactly as
+    // the ETA-blind path does). See multi-source-coordination LOW finding.
+    let anyBytesBlind = false;
+    for (const source of required) {
+      const cost = source.estimateCost(range);
+      if (!cost) continue;
+      sumBytes += cost.bytes;
+      sumTiles += cost.tiles;
+      if (cost.tiles > 0) {
+        if (cost.bytes <= 0) anyBytesBlind = true;
+        const etaMs = source.estimateTimeToReadyMs(range);
+        if (etaMs == null) anyEtaBlind = true;
+        else if (etaMs > 0 && cost.bytes > 0) {
+          const linkRate = cost.bytes / etaMs; // = sharedLinkRate (see above)
+          maxLinkRateBytesPerMs =
+            maxLinkRateBytesPerMs == null ? linkRate : Math.max(maxLinkRateBytesPerMs, linkRate);
+        }
+      }
+    }
 
-    let bytesPerMs: number | null = null;
+    if (sumTiles === 0) return Infinity; // nothing left to load anywhere — uncapped
+    // Any required source with pending tiles but unknown byte sizes ⇒ Σbytes is
+    // under-counted (the single-source `sumBytes <= 0` contract generalized to
+    // composition): no honest combined demand, so no honest speed. Checked
+    // BEFORE the `sumBytes <= 0` floor so a bytes-blind source alongside a heavy
+    // peer (Σbytes > 0) is still rejected.
+    if (anyBytesBlind) return null;
+    if (sumBytes <= 0) return null; // tiles pending but sizes unknown — no honest math
+
+    let aggregateBytesPerMs: number | null = null;
     const throughput = this.getThroughput?.();
     if (throughput && throughput.bytesPerMs != null && throughput.bytesPerMs > 0) {
-      bytesPerMs = throughput.bytesPerMs;
-    } else {
-      // No direct estimator wired — imply one from the source's own honest
-      // ETA (core computes it with the archive-wired estimator anyway).
-      const etaMs = this.source.estimateTimeToReadyMs(range);
-      if (etaMs != null && etaMs > 0) bytesPerMs = cost.bytes / etaMs;
+      // Read as the AGGREGATE shared-link rate (see throughput assumption above).
+      aggregateBytesPerMs = throughput.bytesPerMs;
+    } else if (!anyEtaBlind && maxLinkRateBytesPerMs != null && maxLinkRateBytesPerMs > 0) {
+      // No direct estimator wired — imply the shared-link rate from the per-source
+      // ETAs (bytes_i / eta_i, all equal to the one link rate; max is the most
+      // defensible single estimate). Contention is applied below by dividing this
+      // ONE rate across Σbytes, matching the getThroughput path exactly.
+      aggregateBytesPerMs = maxLinkRateBytesPerMs;
     }
-    if (bytesPerMs == null || bytesPerMs <= 0) return null;
+    if (aggregateBytesPerMs == null || aggregateBytesPerMs <= 0) return null;
 
-    const bytesPerSimMs = cost.bytes / horizonSimMs;
-    return (bytesPerMs / bytesPerSimMs) * AUTO_SPEED_SAFETY;
+    const bytesPerSimMs = sumBytes / horizonSimMs;
+    return (aggregateBytesPerMs / bytesPerSimMs) * AUTO_SPEED_SAFETY;
   }
 
   /** Detach from the TimeController and stop all timers. The clock is left as-is. */
@@ -726,10 +993,118 @@ export class PlaybackGovernor {
     this.listeners.ready.clear();
     this.listeners.progress.clear();
     this.listeners.ended.clear();
-    this.source = null;
+    this.sources.clear();
   }
 
   // ── Internals ──────────────────────────────────────────────────────────────
+
+  /** Every registered source (required + optional). */
+  private allSources(): BufferSource[] {
+    const out: BufferSource[] = [];
+    for (const entry of this.sources.values()) out.push(entry.source);
+    return out;
+  }
+
+  /** Only the gating (required) sources. */
+  private requiredSources(): BufferSource[] {
+    const out: BufferSource[] = [];
+    for (const entry of this.sources.values()) {
+      if (entry.required) out.push(entry.source);
+    }
+    return out;
+  }
+
+  /** True once any source (required or not) is resident — the historical `this.source` truthiness check. */
+  private hasAnySource(): boolean {
+    return this.sources.size > 0;
+  }
+
+  /** The cadence tolerance band as sim-ms at the given |speed| (see options). */
+  private toleranceSimMs(absSpeed: number): number {
+    return this.runwayToleranceMs * absSpeed;
+  }
+
+  /**
+   * Combined buffer health folded over the REQUIRED sources only — the
+   * weakest-link / min-gate the SoTA prescribes (MSE intersection, §2.1):
+   *   simMs        = min over required (clock holds at the laggard)
+   *   complete     = AND over required (nothing left to wait for anywhere)
+   *   bytesPending = sum over required
+   * A completed required source never lowers the floor (its runway reads as
+   * unbounded for the min) so a finished source never gates. With ZERO
+   * required sources the clock is treated as fully buffered + complete so it
+   * never stalls — optional-only compositions free-run.
+   *
+   * CADENCE TOLERANCE BAND (Phase 1, §2.2). The raw min above spuriously
+   * stalls heterogeneous-cadence required sources whose horizons land a few
+   * ms apart (W3C Bug 26436). `toleranceSimMs` coalesces those sub-tolerance
+   * differences: each incomplete source whose runway is within tolerance of
+   * the LEADING (max) incomplete required runway is lifted to the leader
+   * before the min is taken, so cadence jitter around a shared, healthy
+   * frontier no longer drags the combined runway/frontier down. The lift is
+   * measured BETWEEN sources (against the leader), never against the gate or
+   * watermark — a source genuinely further than tolerance behind keeps its
+   * real (small) runway and still drags the min, so true starvation still
+   * stalls and the low-watermark protection is never lowered. `tolSimMs <= 0`
+   * is the exact raw-min behavior (the lift condition `lead - simMs <= 0` only
+   * fires for the leader itself, a no-op).
+   */
+  private combinedRequiredRunway(
+    time: number,
+    direction: 1 | -1,
+    horizonSimMs: number | undefined,
+    tolSimMs = 0,
+  ): BufferedRunway {
+    const required = this.requiredSources();
+    if (required.length === 0) {
+      // No gating source: never stall. Report a complete, unbounded runway.
+      return {
+        simMs: horizonSimMs ?? Infinity,
+        bytesPending: 0,
+        horizonSimMs: horizonSimMs ?? Infinity,
+        complete: true,
+      };
+    }
+    // First pass: collect each incomplete source's runway + the leading
+    // (max) one. Complete sources never gate, so they are excluded from both
+    // the min floor and the lead (they read as unbounded).
+    let bytesPending = 0;
+    let allComplete = true;
+    let leadSimMs = -Infinity;
+    const incomplete: number[] = [];
+    for (const source of required) {
+      const r = source.getBufferedRunway(time, direction, horizonSimMs);
+      bytesPending += r.bytesPending;
+      if (r.complete) continue;
+      allComplete = false;
+      incomplete.push(r.simMs);
+      if (r.simMs > leadSimMs) leadSimMs = r.simMs;
+    }
+    if (allComplete) {
+      // Every required source is complete — unbounded, which `complete`
+      // already encodes (mirrors the historical Infinity floor).
+      return {
+        simMs: Infinity,
+        bytesPending,
+        horizonSimMs: horizonSimMs ?? Infinity,
+        complete: true,
+      };
+    }
+    // Second pass: lift any source within tolerance of the leader to the
+    // leader, then take the min. Sources further behind keep their real
+    // runway (full stall protection).
+    let minSimMs = Infinity;
+    for (const simMs of incomplete) {
+      const effective = leadSimMs - simMs <= tolSimMs ? leadSimMs : simMs;
+      if (effective < minSimMs) minSimMs = effective;
+    }
+    return {
+      simMs: minSimMs,
+      bytesPending,
+      horizonSimMs: horizonSimMs ?? minSimMs,
+      complete: false,
+    };
+  }
 
   private emit<K extends GovernorEventName>(
     event: K,
@@ -788,7 +1163,10 @@ export class PlaybackGovernor {
     // settle-commit memo (seekTo re-stamps it when scrubbing).
     this.endedAtBoundary = false;
     this.scrubCommittedTime = null;
-    this.source?.flushPrefetch();
+    // Flush stale prefetch on EVERY source so the new window doesn't compete
+    // with old lookahead for the request pool (optional sources included —
+    // they load too).
+    for (const source of this.allSources()) source.flushPrefetch();
     // Freeze the clock BEFORE moving it: with a running clock the seek target
     // would tick forward (and hit the frontier clamp) for a frame before the
     // gate takes over. A seek also invalidates the frontier and any creep.
@@ -810,9 +1188,12 @@ export class PlaybackGovernor {
     this.pauseClock();
     // Freezing the clock makes the layer report "paused" to the loader, which
     // would shut down ahead-of-playhead prefetch — the very thing that must
-    // fill this gate. Re-assert animating-at-target-speed so the loader keeps
-    // reaching ahead while we wait (the stall deadlock fix; see BufferSource).
-    this.source?.setAnimationState?.(true, this.timeController.getSpeed());
+    // fill this gate. Re-assert animating-at-target-speed on EVERY source so
+    // every loader keeps reaching ahead while we wait (the stall deadlock fix;
+    // see BufferSource). Broadcast to optional sources too: they must keep
+    // loading even though they don't gate.
+    const gateSpeed = this.timeController.getSpeed();
+    for (const source of this.allSources()) source.setAnimationState?.(true, gateSpeed);
     this.setState(state);
     const etaMs = this.getEtaMs();
     this.emit('waiting', { state, etaMs });
@@ -873,10 +1254,18 @@ export class PlaybackGovernor {
     if (requiredSimMs <= 0) {
       // Zero speed consumes no data — nothing to gate on.
       passed = true;
-    } else if (this.source) {
+    } else if (this.hasAnySource()) {
       const direction: 1 | -1 = speed < 0 ? -1 : 1;
       const time = this.timeController.getTime();
-      const runway = this.source.getBufferedRunway(time, direction, requiredSimMs);
+      // Combined over REQUIRED sources: min runway (cadence-tolerance-banded),
+      // AND complete. With zero required sources this reports complete (never
+      // gates).
+      const runway = this.combinedRequiredRunway(
+        time,
+        direction,
+        requiredSimMs,
+        this.toleranceSimMs(absSpeed),
+      );
       passed = runway.complete || runway.simMs >= requiredSimMs;
       if (!passed) {
         // canplaythrough-style predictor (HAVE_ENOUGH_DATA): start when the
@@ -933,13 +1322,23 @@ export class PlaybackGovernor {
   private refreshFrontier(): void {
     this.lastFrontierProbeWall = nowWall();
     const speed = this.timeController.getSpeed();
-    if (!this.source || speed === 0) {
+    if (!this.hasAnySource() || speed === 0) {
       this.bufferedUntil = null;
       return;
     }
     const direction: 1 | -1 = speed < 0 ? -1 : 1;
     const time = this.timeController.getTime();
-    const runway = this.source.getBufferedRunway(time, direction);
+    // The NEAREST required-source frontier (cadence-tolerance-banded min
+    // simMs); complete = AND over required. The same band that keeps the gate
+    // from false-stalling must also lift the cached frontier so the per-tick
+    // clamp doesn't snap the playhead back to a fractionally-behind cadence
+    // peer. With zero required sources this is complete ⇒ unbounded.
+    const runway = this.combinedRequiredRunway(
+      time,
+      direction,
+      undefined,
+      this.toleranceSimMs(Math.abs(speed)),
+    );
     this.frontierDirection = direction;
     this.bufferedUntil = runway.complete
       ? direction * Infinity
@@ -970,7 +1369,7 @@ export class PlaybackGovernor {
    * gate (hysteresis), so one honest stall replaces many micro-stalls.
    */
   private checkLowWatermark(): void {
-    if (!this.source || !this.userWantsPlayback) return;
+    if (!this.hasAnySource() || !this.userWantsPlayback) return;
     const speed = this.timeController.getSpeed();
     const absSpeed = Math.abs(speed);
     if (absSpeed <= 0) return;
@@ -978,7 +1377,17 @@ export class PlaybackGovernor {
     const watermarkSimMs = this.lowWatermarkWallMs * absSpeed;
     const direction: 1 | -1 = speed < 0 ? -1 : 1;
     const time = this.timeController.getTime();
-    const runway = this.source.getBufferedRunway(time, direction, watermarkSimMs);
+    // Combined over REQUIRED sources: stall when the LAGGARD's runway drops
+    // under the watermark (and the required set isn't all complete). The
+    // cadence band only coalesces sources within tolerance of the leader, so
+    // a source genuinely below the watermark still drags the combined runway
+    // under it and stalls — the watermark itself is never lowered.
+    const runway = this.combinedRequiredRunway(
+      time,
+      direction,
+      watermarkSimMs,
+      this.toleranceSimMs(absSpeed),
+    );
     if (!runway.complete && runway.simMs < watermarkSimMs) {
       // Same canplaythrough predictor as the gate: don't stall when the
       // loader is predicted to outrun consumption — a thin runway on a fast
@@ -1003,15 +1412,26 @@ export class PlaybackGovernor {
     runway: BufferedRunway,
     absSpeed: number,
   ): boolean {
-    if (!this.source || absSpeed <= 0) return false;
+    const required = this.requiredSources();
+    if (required.length === 0) return true; // nothing gates ⇒ always plays through
+    if (absSpeed <= 0) return false;
     const window =
       direction > 0
         ? { start: time, end: time + windowSimMs }
         : { start: time - windowSimMs, end: time };
-    const etaMs = this.source.estimateTimeToReadyMs(window);
-    if (etaMs == null) return false;
+    // ALL required sources must predict playthrough ≡ the MAX ETA across them
+    // is within budget. `runway.simMs` is already the laggard's runway (the
+    // combined min), so a per-source ETA is compared against the combined
+    // runway the slowest source actually buys.
+    let maxEtaMs: number | null = null;
+    for (const source of required) {
+      const etaMs = source.estimateTimeToReadyMs(window);
+      if (etaMs == null) return false; // blind on any required source ⇒ conservative
+      maxEtaMs = maxEtaMs == null ? etaMs : Math.max(maxEtaMs, etaMs);
+    }
+    if (maxEtaMs == null) return false;
     const runwayWallMs = runway.simMs / absSpeed;
-    return etaMs <= Math.max(runwayWallMs, PLAYTHROUGH_MIN_WALL_MS);
+    return maxEtaMs <= Math.max(runwayWallMs, PLAYTHROUGH_MIN_WALL_MS);
   }
 
   /** The sim-time window the current (or a would-be) gate must cover. */
@@ -1060,4 +1480,32 @@ export class PlaybackGovernor {
 /** performance.now when available (browsers, vitest), Date.now otherwise. */
 function nowWall(): number {
   return typeof performance !== 'undefined' ? performance.now() : Date.now();
+}
+
+/**
+ * Intersection of two sorted, non-overlapping range lists — the span both
+ * sources have buffered (MSE `HTMLMediaElement.buffered` semantics, §2.1).
+ * Inputs need not be pre-sorted; they are sorted defensively. O(n+m) after the
+ * sort. Used to fold {@link PlaybackGovernor.getBufferedRanges} over the
+ * required set.
+ */
+function intersectRanges(
+  a: Array<{ start: number; end: number }>,
+  b: Array<{ start: number; end: number }>,
+): Array<{ start: number; end: number }> {
+  if (a.length === 0 || b.length === 0) return [];
+  const as = [...a].sort((x, y) => x.start - y.start);
+  const bs = [...b].sort((x, y) => x.start - y.start);
+  const out: Array<{ start: number; end: number }> = [];
+  let i = 0;
+  let j = 0;
+  while (i < as.length && j < bs.length) {
+    const start = Math.max(as[i].start, bs[j].start);
+    const end = Math.min(as[i].end, bs[j].end);
+    if (start < end) out.push({ start, end });
+    // Advance whichever range ends first.
+    if (as[i].end < bs[j].end) i++;
+    else j++;
+  }
+  return out;
 }

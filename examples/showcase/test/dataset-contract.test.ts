@@ -53,9 +53,14 @@ describe('dataset registry structural invariants', () => {
       // /data/<stem>/manifest.json — a non-empty stem segment between the
       // /data/ prefix and the manifest filename. (A VITE_DATA_BASE_URL prefix
       // is not applied in tests, so the path stays origin-relative.)
+      //
+      // AV "scene bundles" (type: 'av') are an exception: one scene dir bundles
+      // SEVERAL packed archives (lidar/ ego/ objects/), so the primary url nests
+      // one level deeper — /data/<sceneId>/<archive>/manifest.json. Both forms
+      // are valid packed-manifest paths.
       expect(
-        /\/data\/[^/]+\/manifest\.json$/.test(d.url),
-        `dataset ${d.id} url=${d.url} should match /data/<stem>/manifest.json`,
+        /\/data\/[^/]+(\/[^/]+)?\/manifest\.json$/.test(d.url),
+        `dataset ${d.id} url=${d.url} should match /data/<stem>[/<archive>]/manifest.json`,
       ).toBe(true);
     }
   });

@@ -24,14 +24,14 @@ stt-generate ais --input ais.csv --output ais.stt
 
 ### Available Datasets
 
-- **Earthquakes**: Global seismic activity (USGS API)
-- **Hurricanes**: Atlantic hurricane tracks (NOAA IBTrACS)
-- **Wildfires**: US wildfire perimeters (NIFC)
-- **AIS Maritime**: Ship traffic (NOAA Marine Cadastre)
-- **Flights**: Historical flight data (OpenSky Network)
-- **NYC Rideshare**: Taxi trajectories (TLC + OSRM)
+`stt-generate <subcommand>` covers earthquakes, AIS ship traffic, flights,
+hurricanes, wildfires, NYC rideshare (+ taxi points/paths/trips/flows),
+BIXI flowmaps, satellites, ocean drifters, animal migration, OSM edits, and
+NEXRAD storm radar. Run `stt-generate --help` for the full registered list.
 
-See [data-generation/README.md](./data-generation/README.md) for detailed documentation.
+See [data-generation/README.md](./data-generation/README.md) and the
+[Data Generation Guide](../docs/guides/data-generation.md) for per-dataset
+recipes and flags.
 
 ---
 

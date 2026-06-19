@@ -125,6 +125,10 @@ evaluation/
 /test*.stt
 /rebuild-*.sh
 
+# Python virtualenvs for the data-generation extractors (large; recreated per
+# the per-extractor venv convention, never committed).
+scripts/data-generation/venv-*/
+
 # OSRM routing data (large binary files)
 scripts/data-generation/osrm-data/
 *.osm.pbf

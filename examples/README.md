@@ -7,18 +7,20 @@ SpatioTemporal Tiles (STT) format.
 
 **The primary demonstration of STT capabilities.**
 
-An interactive web application showcasing 16 real and synthetic datasets
-across every layer type the project ships:
+An interactive web application showcasing dozens of real and synthetic
+datasets across every layer type the project ships. The full, current
+catalog lives in [`showcase/src/datasets.ts`](./showcase/src/datasets.ts);
+broadly:
 
-- **Point visualizations**: earthquake activity, ship traffic, flights,
-  satellites, NYC taxi points
-- **Path & trajectory**: NYC taxi paths, flight paths, hurricane tracks,
-  satellite trips, flight trips
-- **Animated trips (per-vertex timing)**: NYC taxi trips, NYC taxi VAT
-  (vertex-animation-texture variant)
-- **Polygon coverage**: wildfire perimeters
-- **GPU-splat heatmap**: NYC taxi OD heatmap
-- **Server-aggregated H3 summary tier**: NYC taxi OD summary
+- **Points**: earthquakes, ship traffic, flights, satellites, NYC taxi points
+- **Paths & trips**: flight paths/trips, hurricane tracks, NYC taxi
+  paths/trips/heads, ocean drifters, ECCO currents, animal migration
+- **Polygons & cumulative**: wildfire perimeters, OSM edit "draw"
+- **OD & flow**: NYC taxi flows, OD arcs, OD quadbin / H3 summary, OD heatmap,
+  BIXI flowmaps (clustered / edge-bundled)
+- **3D & space-time cube**: earthquake columns, the NYC taxi cube
+- **Composite & domain demos**: NEXRAD storm radar, the AV cockpit
+  (nuScenes / Argoverse / comma / synthetic)
 
 Each demo can also be rendered through the `@poopdeck.gl/maplibre` adapter via
 the `/maplibre/:datasetId` route, for the no-deck.gl path.

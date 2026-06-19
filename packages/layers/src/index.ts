@@ -69,6 +69,10 @@ export { AnimatedLineLayer } from './layers/core/animated-line-layer';
 export { AnimatedIconLayer } from './layers/core/animated-icon-layer';
 // Extruded 3D columns at point features; height driven by a numeric column.
 export { AnimatedColumnLayer } from './layers/core/animated-column-layer';
+// Oriented extruded boxes at point features (streetscape.gl tracked-object
+// look); per-feature categorical color + box dims. Feed it the AV-cockpit
+// `objects/` point archive (one box per tracked object per sample).
+export { AnimatedBoundingBoxLayer } from './layers/core/animated-bounding-box-layer';
 
 // Extensions
 export { TimeFilterExtension } from './extensions/time-filter-extension';
@@ -148,6 +152,7 @@ export type { AnimatedArcLayerProps } from './layers/core/animated-arc-layer';
 export type { AnimatedLineLayerProps } from './layers/core/animated-line-layer';
 export type { AnimatedIconLayerProps } from './layers/core/animated-icon-layer';
 export type { AnimatedColumnLayerProps } from './layers/core/animated-column-layer';
+export type { AnimatedBoundingBoxLayerProps } from './layers/core/animated-bounding-box-layer';
 export type { TimeFilterExtensionProps } from './extensions/time-filter-extension';
 export type { CategoryColorExtensionProps } from './extensions/category-color-extension';
 export type { PolygonTimeFilterExtensionProps } from './extensions/polygon-time-filter-extension';

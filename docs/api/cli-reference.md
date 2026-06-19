@@ -81,6 +81,56 @@ load); they are never placed at (0,0).
 | `--pack-size <MIB>` | `64` | Target pack object size in MiB. A single blob larger than the target gets its own pack rather than being split. Smaller → finer cache granularity, more objects; larger → fewer, coarser objects. Stay well under the CDN per-object cap (512 MB). |
 | `--compression <ALGO>` | `zstd` | The packed format is **zstd-only** — every tile blob is compressed per-blob with zstd. `gzip`/`none` are rejected; drop the flag. |
 
+### Size & layout
+
+The directory is **paged by default** (a tiny root page + leaf pages, so a cold
+reader fetches only the leaves its viewport / time-window touches).
+
+| Flag | Default | Description |
+| ---- | ------- | ----------- |
+| `--publish` | off | Deploy-ready build: raises the zstd level to 19 (−10..19% on the wire, decode-free) for serve-as-is output. The directory is already paged by default, so this only bumps the level; `--zstd-level` overrides it. This is what `stt-generate` uses, so a from-source build is publish-quality without a separate re-transcode. (Coordinate quantization stays a per-dataset opt-in via `--quantize-coords`.) |
+| `--zstd-level <1..22>` | `3` | zstd level for tile blobs + directory. Default 3 is zstd's "fast" tier; a publish build should pass 19 — the format is write-once / serve-many, so the higher (one-time, offline) build CPU buys −10..19% on every client fetch, and decode is level-independent (free on the client). 19 ≈ 22 on STT tiles, so there's no reason to go past 19. |
+| `--quantize-coords <METERS>` | `0` | Opt-in coordinate quantization: store geometry as fixed-point integers at this ground precision in **meters** instead of Float64 lon/lat. `0` keeps Float64 GeoArrow coords. Coordinates are the dominant, near-incompressible tile column, so e.g. `--quantize-coords 1` (sub-meter error) is the largest size lever — measured −25..47% on trip/path datasets. Trade-off: a quantized tile is no longer self-describing Float64 GeoArrow (the per-tile affine rides in geometry field metadata; the STT reader reconstructs Float64). |
+| `--single-directory` | off | Opt OUT of the paged directory and emit a single whole-load `.sttd` instead. For small datasets paging is ~free (one leaf, whole-loaded by the reader); the single shape only saves a few hundred bytes of root. |
+| `--page-entries <N>` | `4096` | Entries per leaf page (the sim-validated 1024–4096 sweet spot). Ignored with `--single-directory`. |
+
+### Per-tile budgets (opt-in)
+
+The project follows a documented "no thinning / comprehensive data by default"
+principle. These caps are **inert unless explicitly set**, and when they DO drop
+features they log exactly how many per affected tile (never randomly).
+
+| Flag | Default | Description |
+| ---- | ------- | ----------- |
+| `--maximum-tile-bytes <BYTES>` | — | Soft cap on a tile's estimated UNCOMPRESSED payload in bytes. When a tile exceeds this, its lowest-importance features are dropped to fit. Unset = no byte cap. tippecanoe analogue: `--maximum-tile-bytes`. |
+| `--maximum-tile-features <N>` | — | Hard cap on the number of features per tile. When a tile exceeds this, its lowest-importance features are dropped to fit. Unset = no feature cap. tippecanoe analogue: `--maximum-tile-features`. |
+| `--drop-densest-as-needed` | off | When a per-tile budget drops features, prefer to drop from the DENSEST features first (geometry-size density). Only meaningful with `--maximum-tile-bytes`/`--maximum-tile-features`. Without it a budget still drops the LEAST-important features first (a combined geometry+property score) — never randomly. tippecanoe analogue: `--drop-densest-as-needed`. |
+
+### Attribute control (opt-in)
+
+Default = keep every property. System columns (id/time/geometry/vertex_*/triangles)
+always survive regardless.
+
+| Flag | Default | Description |
+| ---- | ------- | ----------- |
+| `--exclude <PROP>` | — | Drop these property columns from output tiles (repeatable). Mutually exclusive with `--include`. tippecanoe analogue: `--exclude`. |
+| `--include <PROP>` | — | Keep ONLY these property columns (repeatable). Mutually exclusive with `--exclude`. tippecanoe analogue: `--include`. |
+| `--exclude-all` | off | Drop EVERY user property — geometry + times only. Mutually exclusive with `--exclude`/`--include`. tippecanoe analogue: `--exclude-all`. |
+
+### Zoom LOD fields (per-feature)
+
+Whole-feature filtering driven by a per-feature numeric property; geometry and
+attributes are untouched.
+
+| Flag | Default | Description |
+| ---- | ------- | ----------- |
+| `--min-zoom-field <NAME>` | — | Per-feature numeric property naming the shallowest zoom a feature appears at (road-class-style LOD). A feature is skipped at any zoom below its value — major roads when zoomed out, all streets up close. |
+| `--max-zoom-field <NAME>` | — | Per-feature numeric property naming the DEEPEST zoom a feature appears at (LOD ceiling). A feature is skipped at any zoom above its value. Paired with `--min-zoom-field` it confines a feature to a zoom band `[min_zoom, max_zoom]` — e.g. coarse-zoom clustered/aggregated overviews that must not bleed into full-resolution deep zooms. |
+
+The per-tile budgets and attribute-control flags hook into the in-memory build
+path only; `--streaming-arrow` **errors** when combined with any of them (see
+[Streaming pipelines](#streaming-pipelines)).
+
 ### Trajectory clipping
 
 LineStrings with `--end-time-field` are clipped at tile boundaries with
@@ -128,10 +178,13 @@ step coarser than the ceiling is stored as exact i64 timestamps instead
 
 `--streaming-arrow` refuses flag combinations it cannot honour rather than
 silently dropping them — it **errors** when combined with `--summary-tier`,
-`--heatmap-weight`, `--heatmap-class`, or `--metadata-output` (those passes
-run after the in-memory pipeline's finalize). `--temporal-lod` is ignored
-with a warning, and `--adaptive-temporal` does not apply (fixed buckets
-only). Use the in-memory pipeline for those features.
+`--heatmap-weight`, `--heatmap-class`, `--metadata-output`, the per-tile
+budgets (`--maximum-tile-bytes` / `--maximum-tile-features` /
+`--drop-densest-as-needed`), or the attribute-control flags (`--exclude` /
+`--include` / `--exclude-all`) — those passes run after the in-memory
+pipeline's finalize. `--temporal-lod` is ignored with a warning, and
+`--adaptive-temporal` does not apply (fixed buckets only). Use the in-memory
+pipeline for those features.
 
 ### Auto-tuning
 
@@ -269,12 +322,14 @@ Subcommands:
 | `hurricanes` | NOAA IBTrACS historical archive |
 | `wildfires` | NIFC perimeters (1000+ acres) |
 | `nyc-rideshare` | NYC TLC trips + OSRM routing; `--paths` for LineString trajectories, `--flows` for pre-aggregated corridor flows (`--flow-bin` default `15m`, `--flow-snap-meters` default `30` merges nearby road nodes; 0 = exact OSRM geometry) |
+| `bixi` | Montréal BIXI open-data trips → directed origin→destination flowmap (one 2-vertex O→D arc per station pair carrying a per-bucket count matrix). `--input` is required (the BIXI `.zip`/`.csv` or a directory). Build-time per-zoom station clustering is on by default (`--cluster-radius`, `--no-cluster`); `--bake-bundling` bakes KDEEB edge bundling into the geometry; `--streets` routes onto the OSM bicycle network instead (needs `--osm-pbf` + a bicycle-profile `--osrm-url`). |
 | `nyc-taxi-points` | derived from `nyc-rideshare` via polyline interpolation |
 | `satellites` | CelesTrak TLE + SGP4 propagation |
 | `drifters` | NOAA Global Drifter Program 6-hourly buoy trajectories |
 | `drifters-hourly` | EXPERIMENTAL: GDP hourly product (`drifter_hourly_qc`) — 6× the temporal resolution (and volume) of `drifters` |
 | `animals` | GBIF animal-tracking datasets (license-filtered via `--licenses`) |
 | `osm-edits` | OSM editing history — `--source nodes` (first-version node creations from a full-history `.osh.pbf`) or `--source changesets` (bbox-centroids from `changesets-latest.osm.bz2`), scoped to a metro `--bounds`. © OpenStreetMap contributors (ODbL). |
+| `storms` | NEXRAD storm-radar tiles for the 2020-08-10 Iowa derecho. Downloads archived Level II volumes from AWS, reprojects/mosaics each ~5-min scan, and bakes **three** packed archives under `--output`: `storm-field` (filled reflectivity contour bands), `storm-cells` (storm-cell centroids), and `storm-tracks` (cells linked across scans into animated trails). |
 
 Each subcommand has its own flags — run `stt-generate <subcommand> --help`
 for the per-dataset options. See the
@@ -334,6 +389,7 @@ Checks performed:
 | `--json` | Machine-readable report (suitable for CI) |
 | `--fail-fast` | Exit on the first failure |
 | `--skip-decode` | Skip the per-tile decode step — only header/integrity, index, and content-hash checks |
+| `--sample <N>` | Decode only a deterministic, evenly-spread sample of at most N tiles instead of every tile. The integrity / header / content-hash / temporal-bound checks still run over ALL tiles (they're cheap); only the expensive Arrow-decode + schema + feature-count checks are sampled. The sample is reproducible (every `ceil(total/N)`-th entry), and the report makes clear the decode was sampled rather than exhaustive. Useful for very large archives. |
 
 Exits non-zero on any failure. Suitable for CI gating any dataset that
 ships with the project.

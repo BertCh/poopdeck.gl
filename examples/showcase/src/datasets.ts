@@ -5,7 +5,7 @@
  * calculateAnimationSpeed in types.ts.
  */
 
-import { Dataset, ColorRGBA } from './types';
+import { Dataset, ColorRGBA, DatasetLegend } from './types';
 
 /**
  * Chronological color ramp for OSM "edit age strata": older node creations read
@@ -43,6 +43,106 @@ function osmYearColors(startYear: number, endYear: number): Record<string, Color
 const OSM_YEAR_COLORS = osmYearColors(2007, 2026);
 
 /**
+ * LIDAR `height_band` → RGBA color ramp for the AV cockpit. Keyed by the
+ * generator's categorical band labels (e.g. "-2-0", "0-2", … — a range form,
+ * deliberately non-numeric so stt-build keeps the column Categorical instead of
+ * promoting an all-numeric-string column to Numeric and no-opping the map).
+ * Low (ground) reads cool deep-blue → high (rooftops/canopy) reads warm amber,
+ * a viridis-ish 8-band ground→sky ramp.
+ */
+// Keys MUST match the generator's `av_common.HEIGHT_BANDS` exactly (the two
+// outermost bands are open-ended: "<-2" and ">10"). A key that doesn't match a
+// band label silently no-ops to `lidarColorMappingDefault`.
+const AV_HEIGHT_BAND_COLORS: Record<string, ColorRGBA> = {
+  '<-2': [46, 30, 96, 255],     // below grade — deep indigo
+  '-2-0': [52, 60, 158, 255],   // ground — blue
+  '0-2': [40, 120, 190, 255],   // curb / low — cyan-blue
+  '2-4': [38, 168, 168, 255],   // car-roof height — teal
+  '4-6': [72, 196, 120, 255],   // green
+  '6-8': [170, 214, 74, 255],   // lime
+  '8-10': [248, 198, 60, 255],  // building edge — amber
+  '>10': [250, 140, 48, 255],   // rooftops / canopy — orange
+};
+
+/**
+ * LIDAR `seg_class` → RGBA color for AV scenes that ship per-point SEMANTIC
+ * labels (nuScenes-lidarseg, collapsed to a coarse taxonomy by the extractor).
+ * Used instead of `AV_HEIGHT_BAND_COLORS` when a dataset sets
+ * `colorProperty: 'seg_class'`, so the cloud reads as a labelled scene (orange
+ * cars, blue people, green canopy, grey road) rather than a height ramp.
+ */
+// Keys MUST match the generator's `av_common.LIDARSEG_COLORS` exactly (the dual
+// copy — this colors the rendered points, that bakes the scene.json legend). A
+// key that doesn't match a class silently no-ops to `lidarColorMappingDefault`.
+const AV_LIDARSEG_COLORS: Record<string, ColorRGBA> = {
+  vehicle: [255, 158, 0, 255], // orange — echoes the car box color
+  cyclist: [220, 20, 60, 255], // crimson — bicycle + motorcycle
+  pedestrian: [40, 130, 255, 255], // bright blue — people
+  road: [80, 90, 120, 255], // blue-grey — drivable surface
+  sidewalk: [205, 175, 125, 255], // tan — sidewalk
+  terrain: [150, 140, 70, 255], // olive — terrain / other flat
+  vegetation: [70, 180, 95, 255], // green — trees / bushes
+  manmade: [190, 130, 215, 255], // violet — buildings, poles, barriers, cones
+  other: [120, 125, 140, 255], // dim grey — noise / unknown
+};
+
+/**
+ * Tracked-object category → RGBA color for the AV cockpit (mirrors the
+ * `objectColors` block the adapters write into `scene.json`). Keyed by the
+ * canonical category set (car/truck/bus/…/barrier; unknown → `other`).
+ */
+// Canonical nuScenes class palette — a projection of the devkit's `get_colormap()`
+// onto our 10-class taxonomy: vehicles read warm (orange→tomato→red), pedestrians
+// blue, cyclists crimson/red, cones dark-slate, barriers slate-grey. Matches every
+// nuScenes figure, so the boxes read as "real" AV output. Box color comes from the
+// Dataset's `avObjectColors`, so swapping this recolors all scenes with no re-gen.
+const AV_OBJECT_COLORS: Record<string, ColorRGBA> = {
+  car: [255, 158, 0, 235], // orange
+  truck: [255, 99, 71, 235], // tomato
+  bus: [255, 69, 0, 235], // orangered
+  trailer: [255, 140, 0, 235], // darkorange
+  construction_vehicle: [233, 150, 70, 235],
+  pedestrian: [0, 80, 230, 240], // blue
+  bicycle: [220, 20, 60, 240], // crimson
+  motorcycle: [255, 61, 99, 240], // red
+  traffic_cone: [47, 79, 79, 235], // darkslategrey
+  barrier: [112, 128, 144, 225], // slategrey
+  other: [150, 160, 175, 220],
+};
+
+// HD-map `map_layer` → RGBA. Keys MUST match `av_common.MAP_COLORS`. Polygon
+// layers (drivable/crosswalk/…) get low-alpha fills so they read as a subtle
+// substrate; line layers (dividers / lane boundaries) get crisp high-alpha. The
+// nuScenes layer palette + the Argoverse-2 lane-mark-type colors both live here.
+const AV_MAP_COLORS: Record<string, ColorRGBA> = {
+  // nuScenes / synthetic polygons (fills, under the scene)
+  drivable_area: [166, 206, 227, 90],
+  road_segment: [31, 120, 180, 70],
+  road_block: [178, 223, 138, 70],
+  lane: [51, 160, 44, 70],
+  ped_crossing: [251, 154, 153, 150],
+  walkway: [227, 26, 28, 110],
+  stop_line: [253, 191, 111, 170],
+  carpark_area: [255, 127, 0, 90],
+  // nuScenes / synthetic lines (dividers)
+  road_divider: [202, 178, 214, 230],
+  lane_divider: [106, 61, 154, 230],
+  // Argoverse 2 polygons
+  drivable: [122, 122, 122, 90],
+  crosswalk: [150, 60, 200, 150],
+  // Argoverse 2 lane boundaries (by LaneMarkType)
+  lane_white: [255, 255, 255, 210],
+  lane_yellow: [250, 210, 1, 220],
+  lane_blue: [42, 130, 193, 220],
+  lane_red: [223, 1, 1, 210],
+  lane_boundary: [200, 200, 200, 200],
+  // Argoverse 2 lane centerlines (the dataset's signature feature) — subtle
+  // steel-blue threads; intersection lanes read amber so junctions pop.
+  lane_centerline: [90, 130, 165, 95],
+  lane_centerline_intersection: [255, 170, 50, 160],
+};
+
+/**
  * Base URL for hosted STT tile datasets. Each dataset is now a packed DIRECTORY
  * (`/data/<stem>/manifest.json` + `index/` + `packs/`), not a single `.stt`
  * file, so a `url` points at the dataset's `manifest.json`. When
@@ -57,6 +157,231 @@ const DATA_BASE_URL: string = ((import.meta as any).env?.VITE_DATA_BASE_URL ?? '
 
 function resolveDataUrl(url: string): string {
   return DATA_BASE_URL && url.startsWith('/data/') ? `${DATA_BASE_URL}${url}` : url;
+}
+
+// Shared cockpit legend for the semantic-LIDAR scenes (hex of AV_LIDARSEG_COLORS;
+// `other` omitted — it's noise/unknown). Reused by every nuScenes scene.
+const AV_LIDARSEG_LEGEND: DatasetLegend = {
+  title: 'LIDAR semantic class',
+  items: [
+    { color: '#ff9e00', label: 'vehicle' },
+    { color: '#dc143c', label: 'cyclist' },
+    { color: '#2882ff', label: 'pedestrian' },
+    { color: '#505a78', label: 'road' },
+    { color: '#cdaf7d', label: 'sidewalk' },
+    { color: '#968c46', label: 'terrain' },
+    { color: '#46b45f', label: 'vegetation' },
+    { color: '#be82d7', label: 'building / manmade' },
+  ],
+};
+
+// Shared cockpit legend for the height-band LIDAR scenes (Argoverse 2 / synthetic
+// — sources with no per-point semantic labels), hex of AV_HEIGHT_BAND_COLORS.
+const AV_HEIGHT_BAND_LEGEND: DatasetLegend = {
+  title: 'LIDAR height band (m)',
+  items: [
+    { color: '#343c9e', label: 'ground' },
+    { color: '#28a8a8', label: 'car-roof' },
+    { color: '#aad64a', label: 'mid' },
+    { color: '#f8c63c', label: 'building edge' },
+    { color: '#fa8c30', label: 'rooftops' },
+  ],
+};
+
+/**
+ * AV scene-bundle factory for the nuScenes v1.0-mini scenes. Every nuScenes
+ * scene emits the identical 6-stream bundle under `/data/<id>/` (lidar / ego /
+ * objects / map_poly / map_line packed archives + telemetry.json + cameras.json),
+ * colored by the shared semantic-LIDAR + object palettes — so the scenes differ
+ * only by id, label, time range, and camera framing. This factory collapses ten
+ * otherwise-identical ~60-line entries. Reachable in the cockpit SceneSwitcher
+ * (which lists every `type:'av'` dataset) and at `/drive/<id>`; the `/demos`
+ * catalog curation is separate (see demoMeta `CATALOG_EXCLUDED_IDS`).
+ */
+function nuscenesScene(opts: {
+  id: string;
+  name: string;
+  description: string;
+  timeRange: { start: number; end: number };
+  longitude: number;
+  latitude: number;
+  /** Street-level framing; 18.5 frames a ~150 m scene so the cloud reads as 3D. */
+  zoom?: number;
+}): Dataset {
+  const base = `/data/${opts.id}`;
+  return {
+    id: opts.id,
+    name: opts.name,
+    description: opts.description,
+    url: `${base}/lidar/manifest.json`,
+    avLidarUrl: `${base}/lidar/manifest.json`,
+    avSceneUrl: `${base}/scene.json`,
+    avEgoUrl: `${base}/ego/manifest.json`,
+    avObjectsUrl: `${base}/objects/manifest.json`,
+    avTelemetryUrl: `${base}/telemetry.json`,
+    avCamerasUrl: `${base}/cameras.json`,
+    avMapPolyUrl: `${base}/map_poly/manifest.json`,
+    avMapLineUrl: `${base}/map_line/manifest.json`,
+    mapColors: AV_MAP_COLORS,
+    type: 'av',
+    timeRange: opts.timeRange,
+    timeWindow: 2000,
+    targetPlaybackSeconds: 20,
+    initialViewState: {
+      longitude: opts.longitude,
+      latitude: opts.latitude,
+      zoom: opts.zoom ?? 18.5,
+      pitch: 55,
+      bearing: 20,
+    },
+    // LIDAR colored by per-point nuScenes-lidarseg SEMANTIC class (`seg_class`),
+    // not height band — orange cars, blue people, green canopy, grey road.
+    colorProperty: 'seg_class',
+    lidarColorMapping: AV_LIDARSEG_COLORS,
+    lidarColorMappingDefault: [120, 130, 150, 220],
+    radius: 1.4,
+    radiusUnits: 'pixels',
+    radiusMinPixels: 1,
+    opacity: 0.9,
+    avObjectColors: AV_OBJECT_COLORS,
+    colorMappingDefault: [150, 160, 175, 220],
+    tripColor: [120, 230, 255, 255],
+    widthUnits: 'meters',
+    tripWidth: 2.2,
+    fadeTrail: true,
+    legend: AV_LIDARSEG_LEGEND,
+  };
+}
+
+/**
+ * AV scene-bundle factory for the Argoverse 2 sensor scenes (one per city). Every
+ * AV2 scene emits the same full-stream bundle under `/data/<id>/` (lidar / ego /
+ * objects / map_poly / map_line packed archives + telemetry.json + cameras.json),
+ * built by `argoverse_extract.py` via `argoverse_batch.sh`. Unlike nuScenes, AV2
+ * sensor ships NO per-point semantic labels, so the LIDAR is colored by
+ * `height_band` (not `seg_class`); telemetry is DERIVED from the ego pose (AV2 has
+ * no CAN bus). Scenes differ only by id, label, time range, and camera framing.
+ * Reachable in the cockpit SceneSwitcher and at `/drive/<id>`.
+ */
+function argoverseScene(opts: {
+  id: string;
+  name: string;
+  description: string;
+  timeRange: { start: number; end: number };
+  longitude: number;
+  latitude: number;
+  /** Street-level framing; ~18 frames a ~150 m AV2 scene so the cloud reads 3D. */
+  zoom?: number;
+}): Dataset {
+  const base = `/data/${opts.id}`;
+  return {
+    id: opts.id,
+    name: opts.name,
+    description: opts.description,
+    url: `${base}/lidar/manifest.json`,
+    avLidarUrl: `${base}/lidar/manifest.json`,
+    avSceneUrl: `${base}/scene.json`,
+    avEgoUrl: `${base}/ego/manifest.json`,
+    avObjectsUrl: `${base}/objects/manifest.json`,
+    avTelemetryUrl: `${base}/telemetry.json`,
+    avCamerasUrl: `${base}/cameras.json`,
+    avMapPolyUrl: `${base}/map_poly/manifest.json`,
+    avMapLineUrl: `${base}/map_line/manifest.json`,
+    mapColors: AV_MAP_COLORS,
+    type: 'av',
+    // AV2 nanosecond sensor clock ÷1e6 — the large ms values are internally
+    // consistent for relative playback (AV2 ships no wall-clock epoch).
+    timeRange: opts.timeRange,
+    timeWindow: 2000,
+    targetPlaybackSeconds: 16,
+    initialViewState: {
+      longitude: opts.longitude,
+      latitude: opts.latitude,
+      zoom: opts.zoom ?? 18,
+      pitch: 55,
+      bearing: 20,
+    },
+    // No per-point semantic labels in AV2 sensor → color LIDAR by height band.
+    colorProperty: 'height_band',
+    lidarColorMapping: AV_HEIGHT_BAND_COLORS,
+    lidarColorMappingDefault: [120, 130, 150, 220],
+    radius: 1.4,
+    radiusUnits: 'pixels',
+    radiusMinPixels: 1,
+    opacity: 0.9,
+    avObjectColors: AV_OBJECT_COLORS,
+    colorMappingDefault: [150, 160, 175, 220],
+    tripColor: [120, 230, 255, 255],
+    widthUnits: 'meters',
+    tripWidth: 2.2,
+    fadeTrail: true,
+    legend: AV_HEIGHT_BAND_LEGEND,
+  };
+}
+
+/**
+ * AV scene-bundle factory for the Waymo Open Dataset (Perception v2.0.1) scenes,
+ * built by waymo_extract.py / waymo_batch.sh from the *modular* Parquet release
+ * (decoded with pyarrow + numpy — no TensorFlow / waymo lib). Like AV2 it has no
+ * usable per-point semantic labels (Waymo's 3D-semseg covers only ~20/199 frames),
+ * so LIDAR is colored by `height_band`, and telemetry is DERIVED from the ego pose
+ * (Waymo Perception ships no CAN bus). DELIBERATELY no HD-map streams: v2.0.1 is
+ * the "modular without maps" release, AND Waymo discloses no georeferencing — each
+ * scene is anchored to an APPROXIMATE local frame (lat/lon by metro), so it rides
+ * the cockpit's dark basemap with the lidar itself as the map (the dark streets
+ * won't line up with the cloud — expected). Scenes differ only by id/label/
+ * timeRange/framing. Reachable in the cockpit SceneSwitcher and at `/drive/<id>`.
+ */
+function waymoScene(opts: {
+  id: string;
+  name: string;
+  description: string;
+  timeRange: { start: number; end: number };
+  longitude: number;
+  latitude: number;
+  /** Street-level framing; ~18 frames a ~150 m Waymo scene so the cloud reads 3D. */
+  zoom?: number;
+}): Dataset {
+  const base = `/data/${opts.id}`;
+  return {
+    id: opts.id,
+    name: opts.name,
+    description: opts.description,
+    url: `${base}/lidar/manifest.json`,
+    avLidarUrl: `${base}/lidar/manifest.json`,
+    avSceneUrl: `${base}/scene.json`,
+    avEgoUrl: `${base}/ego/manifest.json`,
+    avObjectsUrl: `${base}/objects/manifest.json`,
+    avTelemetryUrl: `${base}/telemetry.json`,
+    avCamerasUrl: `${base}/cameras.json`,
+    // No avMapPolyUrl/avMapLineUrl — Waymo Perception v2.0.1 ships no HD map.
+    type: 'av',
+    timeRange: opts.timeRange,
+    timeWindow: 2000,
+    targetPlaybackSeconds: 20,
+    initialViewState: {
+      longitude: opts.longitude,
+      latitude: opts.latitude,
+      zoom: opts.zoom ?? 18,
+      pitch: 55,
+      bearing: 20,
+    },
+    // No per-point semantic labels → color LIDAR by height band (like AV2).
+    colorProperty: 'height_band',
+    lidarColorMapping: AV_HEIGHT_BAND_COLORS,
+    lidarColorMappingDefault: [120, 130, 150, 220],
+    radius: 1.4,
+    radiusUnits: 'pixels',
+    radiusMinPixels: 1,
+    opacity: 0.9,
+    avObjectColors: AV_OBJECT_COLORS,
+    colorMappingDefault: [150, 160, 175, 220],
+    tripColor: [120, 230, 255, 255],
+    widthUnits: 'meters',
+    tripWidth: 2.2,
+    fadeTrail: true,
+    legend: AV_HEIGHT_BAND_LEGEND,
+  };
 }
 
 const rawDatasets: Dataset[] = [
@@ -490,6 +815,77 @@ const rawDatasets: Dataset[] = [
       items: [
         { color: '#38c4e8', label: 'Origin' },
         { color: '#ff8e40', label: 'Destination' },
+      ],
+    },
+  },
+  {
+    // ── BIXI street-network heatmap ──
+    // The OD-flowmap's pre-aggregated companion: every BIXI trip is routed onto
+    // Montréal's actual BICYCLE network (OSRM bicycle profile) and its per-hour
+    // ridership baked onto each street/cycleway segment, so the city's bike
+    // arteries — the REV, de Maisonneuve, the Lachine Canal path — light up with
+    // the hourly commute. Same geometry-once value-matrix encoding as
+    // nyc-taxi-flows, rendered by FlowCorridorLayer.
+    id: 'bixi-streets',
+    name: 'Montréal BIXI — Street Network',
+    sources: ['bixi'],
+    description:
+      'A month of real BIXI trips routed onto Montréal’s bike network and ' +
+      'aggregated into hourly street-segment flows — the cycleways and corridors ' +
+      'riders actually use, pulsing with demand. Pre-aggregated overview companion ' +
+      'to the BIXI flowmap. Source: BIXI Montréal open data.',
+    url: '/data/bixi-streets/manifest.json',
+    type: 'trips',
+    // August 2024 (same span as the BIXI flowmap). The generator prints the exact
+    // matrix start/end — set these to that after the build.
+    timeRange: {
+      start: 1722470400000, // 2024-08-01 00:00 UTC
+      end: 1725148800000,   // 2024-09-01 00:00 UTC
+    },
+    // One 1-hour aggregation bin per tile bucket; loader auto-widens for the trail.
+    timeWindow: 3600000,
+    // ~744 hourly bins over the month ⇒ the daily commute rhythm reads clearly.
+    targetPlaybackSeconds: 150,
+    initialViewState: {
+      longitude: -73.578,
+      latitude: 45.52,
+      zoom: 12,      // streets + cycleways visible (cycleway/tertiary surface ~z11)
+      pitch: 30,
+      bearing: -12,
+    },
+    // Heavy-tailed like the taxi flows (measured over the Aug-2024 build:
+    // trips/segment/hour p50≈2, p90≈7.5, p97≈15, p99≈26, max≈136). Domain clamps
+    // at ~p97 so the busiest cycleway-hours saturate white while quiet streets
+    // stay visible; p90 lands mid-ramp on the BIXI green.
+    tripGradient: {
+      property: 'vertexValues',
+      domain: [0, 16], // trips per segment per hour, clamped ~p97
+      colors: [
+        [30, 50, 120, 165],   // 0–4  — dim indigo (quiet side streets)
+        [40, 150, 200, 210],  // ~4   — teal
+        [120, 210, 160, 230],  // ~8  — BIXI green (busy cycleways, ~p90)
+        [255, 170, 70, 245],  // ~12  — orange (arteries: de Maisonneuve / REV)
+        [255, 255, 255, 255], // 16+  — white-hot (the busiest corridor-hours)
+      ],
+    },
+    colorMappingDefault: [70, 80, 90, 120],
+    // Static-geometry overview: the bike network is stored ONCE per tile with a
+    // per-vertex × per-hour value matrix; FlowCorridorLayer selects the active
+    // bucket from the playhead (CPU cross-fade between hours) so geometry never
+    // re-fetches as time advances. trailLength 0 keeps every corridor lit.
+    flowMatrix: true,
+    trailLength: 0,
+    widthMinPixels: 1.5,
+    widthMaxPixels: 4,
+    capRounded: false,
+    jointRounded: false,
+    legend: {
+      title: 'BIXI trips per street segment / hour',
+      ramps: [
+        {
+          label: '0 → 16+',
+          colors: ['#1E3278', '#2896C8', '#78D2A0', '#FFAA46', '#FFFFFF'],
+        },
       ],
     },
   },
@@ -1150,6 +1546,460 @@ const rawDatasets: Dataset[] = [
     },
   },
   {
+    id: 'storm-radar',
+    name: 'Iowa Derecho — Storm Radar',
+    description:
+      'The 10 August 2020 Midwest derecho. NWS reflectivity contour bands, ' +
+      'storm-cell centroids, and animated cell tracks — all baked at build time ' +
+      'from NOAA NEXRAD Level II (polar reprojection, multi-radar mosaic, ' +
+      'contouring, and cell tracking done by stt-generate, not the browser).',
+    // Primary `url` = the reflectivity FIELD manifest; cells + tracks overlay.
+    url: '/data/storm-field/manifest.json',
+    radarCellsUrl: '/data/storm-cells/manifest.json',
+    radarTracksUrl: '/data/storm-tracks/manifest.json',
+    type: 'radar',
+    sources: ['noaa'],
+    timeRange: {
+      start: Date.UTC(2020, 7, 10, 16, 0, 0), // 2020-08-10 16:00Z
+      end: Date.UTC(2020, 7, 10, 22, 0, 0),   // 2020-08-10 22:00Z (Omaha→Quad Cities)
+    },
+    timeWindow: 600000, // 10-min loader window (volume scans ~5 min)
+    targetPlaybackSeconds: 75,
+    initialViewState: {
+      longitude: -93,
+      latitude: 42,
+      zoom: 6,
+      pitch: 35,
+      bearing: 10,
+    },
+    // Reflectivity bands keyed by the generator's `dbz_band` categorical column
+    // (the band's lower threshold as a bare integer string — must match
+    // verbatim). Green→yellow→red→magenta NWS-style ramp; alpha climbs with
+    // intensity so heavy cores read strongest.
+    colorProperty: 'dbz_band',
+    // Keyed by the generator's `dbz_band` RANGE label ("20-25"…). The range form
+    // is deliberately non-numeric so stt-build keeps the column categorical (a
+    // bare-integer label would be promoted to a Numeric column, defeating this
+    // mapping). OPAQUE fills (alpha 255): the bands stack low→high, so any
+    // per-band translucency composites them into one muddy tone — overall
+    // translucency must live on the layer `opacity`, not the colors.
+    colorMapping: {
+      '20-25': [22, 150, 60, 255], // light green
+      '25-30': [40, 190, 70, 255],
+      '30-35': [70, 220, 90, 255], // green
+      '35-40': [180, 220, 50, 255], // yellow-green
+      '40-45': [250, 232, 45, 255], // yellow
+      '45-50': [250, 190, 35, 255], // amber
+      '50-55': [250, 140, 35, 255], // orange
+      '55-60': [240, 70, 45, 255], // red
+      '60-65': [205, 20, 30, 255], // dark red
+    },
+    colorMappingDefault: [130, 130, 140, 255],
+    // Fully opaque so the nested bands overwrite (high dBZ on top) instead of
+    // alpha-blending into a single tone; the storm reads as a solid echo.
+    opacity: 1,
+    // Storm-cell centroids sized by peak reflectivity.
+    radiusProperty: 'max_dbz',
+    radiusUnits: 'pixels',
+    radiusScale: 1,
+    radiusMinPixels: 2,
+    radiusMaxPixels: 16,
+    radiusTransform: (dbz: number) => Math.max(2, (dbz - 35) * 0.45),
+    radarCellColor: [255, 255, 255, 230],
+    stroked: true,
+    strokeColor: [8, 12, 24, 220],
+    lineWidthMinPixels: 1,
+    // Cell tracks shaded by per-vertex intensity over time.
+    tripGradient: {
+      property: 'vertexValues',
+      domain: [30, 70], // dBZ
+      colors: [
+        [40, 180, 80, 230],
+        [250, 230, 60, 235],
+        [250, 150, 40, 240],
+        [240, 40, 40, 245],
+      ],
+    },
+    trailLength: 1800000, // 30-min track trail
+    tripWidth: 3,
+    widthMinPixels: 1.5,
+    widthMaxPixels: 6,
+    fadeTrail: true,
+    legend: {
+      title: 'Reflectivity (dBZ)',
+      items: [
+        { color: '#1eaf1e', label: '30–40 · rain' },
+        { color: '#fae82d', label: '40–45' },
+        { color: '#fa8c23', label: '50–55' },
+        { color: '#f03728', label: '55–60 · heavy' },
+        { color: '#dc46e6', label: '65+ · hail core' },
+      ],
+    },
+  },
+  {
+    id: 'av-synthetic',
+    name: 'AV Cockpit — Synthetic Drive',
+    description:
+      'A streetscape.gl-style autonomous-vehicle telemetry cockpit. A 20-second ' +
+      'synthetic urban drive served as spatiotemporal tiles on a real basemap: an ' +
+      'accumulated LIDAR point cloud (colored by height band), the ego trajectory, ' +
+      'tracked-object 3D boxes, and CAN-bus gauges — explore it in the cockpit at ' +
+      '/drive/av-synthetic.',
+    // Primary `url` = the LIDAR point archive; ego + objects overlay; the
+    // cockpit additionally reads scene.json + the telemetry/camera sidecars.
+    url: '/data/av-synthetic/lidar/manifest.json',
+    avLidarUrl: '/data/av-synthetic/lidar/manifest.json',
+    avSceneUrl: '/data/av-synthetic/scene.json',
+    avEgoUrl: '/data/av-synthetic/ego/manifest.json',
+    avObjectsUrl: '/data/av-synthetic/objects/manifest.json',
+    avTelemetryUrl: '/data/av-synthetic/telemetry.json',
+    avCamerasUrl: '/data/av-synthetic/cameras.json',
+    avMapPolyUrl: '/data/av-synthetic/map_poly/manifest.json',
+    avMapLineUrl: '/data/av-synthetic/map_line/manifest.json',
+    mapColors: AV_MAP_COLORS,
+    type: 'av',
+    // MUST equal the av-synthetic bundle's scene.json range (the generator
+    // stamps the scene at this fixed epoch) — the standard DemoPage / tile
+    // loader keys off THIS, so a mismatch renders the demo blank. The cockpit
+    // additionally reads the authoritative range from scene.json at runtime.
+    timeRange: {
+      start: 1700000000000,
+      end: 1700000020000, // +20s
+    },
+    timeWindow: 2000, // 2s rolling window — LIDAR sweeps step crisply
+    targetPlaybackSeconds: 20, // real-time-ish playback of the 20s drive
+    // boston-seaport georef origin (per the contract table), tilted street view.
+    initialViewState: {
+      longitude: -71.0573,
+      latitude: 42.3375,
+      zoom: 17,
+      pitch: 55,
+      bearing: 20,
+    },
+    // LIDAR colored by categorical `height_band`; ground→sky 8-band ramp.
+    colorProperty: 'height_band',
+    lidarColorMapping: AV_HEIGHT_BAND_COLORS,
+    lidarColorMappingDefault: [120, 130, 150, 220],
+    radius: 1.4,
+    radiusUnits: 'pixels',
+    radiusMinPixels: 1,
+    opacity: 0.9,
+    // Object boxes colored by categorical `category`.
+    avObjectColors: AV_OBJECT_COLORS,
+    colorMappingDefault: [150, 160, 175, 220],
+    // Cyan ego trail spanning the whole drive.
+    tripColor: [120, 230, 255, 255],
+    widthUnits: 'meters',
+    tripWidth: 2.2,
+    fadeTrail: true,
+    legend: {
+      title: 'LIDAR height band (m)',
+      items: [
+        { color: '#343c9e', label: 'ground' },
+        { color: '#28a8a8', label: 'car-roof' },
+        { color: '#aad64a', label: 'mid' },
+        { color: '#f8c63c', label: 'building edge' },
+        { color: '#fa8c30', label: 'rooftops' },
+      ],
+    },
+  },
+  // ── Argoverse 2 · one real sensor log per AV2 city (LIDAR + ego + objects +
+  //    HD-map w/ lane centerlines + ring camera + ego-derived telemetry). Built
+  //    by argoverse_batch.sh from the public AWS-open-data bucket; coords are each
+  //    bundle's scene.json initialView (exact av2-devkit per-city CRS). The first
+  //    (Pittsburgh) is the /demos headline card; the rest are cockpit-only.
+  argoverseScene({
+    id: 'argoverse-02678d04',
+    name: 'Argoverse 2 · Pittsburgh',
+    description:
+      'A real Argoverse 2 sensor log in Pittsburgh: 64-beam LIDAR, tracked-object 3D ' +
+      'boxes, the ego trajectory, an HD-map substrate (lane boundaries + centerlines, ' +
+      'drivable areas, crosswalks), a ring-camera inset, and telemetry derived from the ' +
+      'ego pose (AV2 ships no CAN bus).',
+    timeRange: { start: 315969904357, end: 315969920307 },
+    longitude: -79.9333411419541,
+    latitude: 40.45610620281625,
+  }),
+  argoverseScene({
+    id: 'argoverse-02a00399',
+    name: 'Argoverse 2 · Miami',
+    description:
+      'A real Argoverse 2 sensor log in Miami: 64-beam LIDAR, tracked-object 3D boxes, ' +
+      'the ego trajectory, an HD-map substrate with lane centerlines, a ring-camera ' +
+      'inset, and ego-derived telemetry.',
+    timeRange: { start: 315966070522, end: 315966086462 },
+    longitude: -80.19521021126853,
+    latitude: 25.81266355087901,
+  }),
+  argoverseScene({
+    id: 'argoverse-0b5142c1',
+    name: 'Argoverse 2 · Washington DC',
+    description:
+      'A real Argoverse 2 sensor log in Washington DC: 64-beam LIDAR, tracked-object 3D ' +
+      'boxes, the ego trajectory, an HD-map substrate with lane centerlines, a ' +
+      'ring-camera inset, and ego-derived telemetry.',
+    timeRange: { start: 315968121172, end: 315968137127 },
+    longitude: -76.97901441961996,
+    latitude: 38.903158674858965,
+  }),
+  argoverseScene({
+    id: 'argoverse-0bae3b5e',
+    name: 'Argoverse 2 · Detroit',
+    description:
+      'A real Argoverse 2 sensor log in Detroit: 64-beam LIDAR, tracked-object 3D boxes, ' +
+      'the ego trajectory, an HD-map substrate with lane centerlines, a ring-camera ' +
+      'inset, and ego-derived telemetry.',
+    timeRange: { start: 315969524322, end: 315969540277 },
+    longitude: -83.05092955863113,
+    latitude: 42.33371685760447,
+  }),
+  argoverseScene({
+    id: 'argoverse-25e5c600',
+    name: 'Argoverse 2 · Palo Alto',
+    description:
+      'A real Argoverse 2 sensor log in Palo Alto: 64-beam LIDAR, tracked-object 3D ' +
+      'boxes, the ego trajectory, an HD-map substrate with lane centerlines, a ' +
+      'ring-camera inset, and ego-derived telemetry.',
+    timeRange: { start: 315966104242, end: 315966120187 },
+    longitude: -122.12833142762317,
+    latitude: 37.415846217190214,
+  }),
+  argoverseScene({
+    id: 'argoverse-92b900b1',
+    name: 'Argoverse 2 · Austin',
+    description:
+      'A real Argoverse 2 sensor log in Austin: 64-beam LIDAR, tracked-object 3D boxes, ' +
+      'the ego trajectory, an HD-map substrate with lane centerlines, a ring-camera ' +
+      'inset, and ego-derived telemetry.',
+    timeRange: { start: 315968947407, end: 315968963357 },
+    longitude: -97.70213668235851,
+    latitude: 30.255713070218487,
+  }),
+  // ── Waymo Open Dataset · curated Perception v2.0.1 segments (day/night, SF/PHX,
+  //    + the one rain scene). 5-laser LIDAR decoded from range images, 3D box
+  //    tracks w/ real per-box velocity, ego trail, FRONT camera, ego-derived
+  //    telemetry. NO HD map + NO disclosed georef → anchored local frame on the
+  //    cockpit dark basemap. Built by waymo_batch.sh. coords = scene.json center.
+  waymoScene({
+    id: 'waymo-sf-day',
+    name: 'Waymo · San Francisco · Day',
+    description:
+      'A real Waymo Open Dataset perception segment in dense daytime San Francisco: ' +
+      '5-laser LIDAR (decoded from range images), tracked-object 3D boxes with real ' +
+      'per-box velocity, the ego trajectory, a FRONT-camera inset, and telemetry ' +
+      'derived from the ego pose (Waymo ships no CAN bus). Waymo discloses no ' +
+      'georeferencing, so the scene is anchored to an approximate local frame.',
+    timeRange: { start: 1559170821400, end: 1559170841225 },
+    longitude: -122.41947418420166,
+    latitude: 37.774902618839754,
+  }),
+  waymoScene({
+    id: 'waymo-phx-day',
+    name: 'Waymo · Phoenix · Day',
+    description:
+      'A real Waymo Open Dataset segment in daytime suburban Phoenix: 5-laser LIDAR, ' +
+      '3D box tracks (vehicles, pedestrians, and cyclists) with real per-box velocity, ' +
+      'the ego trajectory, a FRONT-camera inset, and ego-derived telemetry. Anchored ' +
+      'to an approximate local frame (Waymo discloses no georeferencing).',
+    timeRange: { start: 1513450821409, end: 1513450841108 },
+    longitude: -112.074419,
+    latitude: 33.448329,
+  }),
+  waymoScene({
+    id: 'waymo-phx-night',
+    name: 'Waymo · Phoenix · Night',
+    description:
+      'A real Waymo Open Dataset NIGHT segment in Phoenix: 5-laser LIDAR, 3D object ' +
+      'box tracks with real per-box velocity, the ego trajectory, a FRONT-camera inset, ' +
+      'and ego-derived telemetry (Waymo ships no CAN bus). Anchored to an approximate ' +
+      'local frame on a neutral basemap.',
+    timeRange: { start: 1508038141882, end: 1508038161581 },
+    longitude: -112.073977,
+    latitude: 33.448178,
+  }),
+  waymoScene({
+    id: 'waymo-sf-night',
+    name: 'Waymo · San Francisco · Night',
+    description:
+      'A real Waymo Open Dataset NIGHT segment in San Francisco: 5-laser LIDAR, 3D box ' +
+      'tracks (vehicles, pedestrians, cyclists) with real per-box velocity, the ego ' +
+      'trajectory, a FRONT-camera inset, and ego-derived telemetry. Anchored to an ' +
+      'approximate local frame (Waymo discloses no georeferencing).',
+    timeRange: { start: 1541816058898, end: 1541816078598 },
+    longitude: -122.419489,
+    latitude: 37.774895,
+  }),
+  waymoScene({
+    id: 'waymo-phx-dusk-rain',
+    name: 'Waymo · Phoenix · Dawn/Dusk (rain)',
+    description:
+      'A real Waymo Open Dataset dawn/dusk segment in Phoenix during RAIN — the only ' +
+      'wet scene in the validation split. 5-laser LIDAR (rain scatters returns), 3D ' +
+      'object box tracks with real per-box velocity, the ego trajectory, a FRONT-camera ' +
+      'inset, and ego-derived telemetry. Anchored to an approximate local frame.',
+    timeRange: { start: 1518657647337, end: 1518657667137 },
+    longitude: -112.071638,
+    latitude: 33.448412,
+  }),
+  // ── comma.ai · real I-280 highway segment (ego GPS + CAN telemetry + camera;
+  //    NO lidar/objects). Built by comma_extract.py from the comma2k19 HF mirror.
+  //    LIDAR-less, so the PRIMARY (governor-gated) archive is the ego trips.
+  {
+    id: 'comma-280-1641',
+    name: 'comma.ai · I-280 Highway',
+    description:
+      'A real comma2k19 highway segment on California I-280 (San Francisco ↔ San Jose): ' +
+      'the GPS ego path, CAN-bus telemetry (speed / steering / acceleration), and a ' +
+      'road-camera frame. comma logs carry no LIDAR or tracked objects — camera + CAN + GNSS only.',
+    url: '/data/comma-280-1641/ego/manifest.json',
+    avSceneUrl: '/data/comma-280-1641/scene.json',
+    avEgoUrl: '/data/comma-280-1641/ego/manifest.json',
+    avTelemetryUrl: '/data/comma-280-1641/telemetry.json',
+    avCamerasUrl: '/data/comma-280-1641/cameras.json',
+    type: 'av',
+    // Matches comma-280-1641/scene.json (the extractor anchors the segment at a
+    // fixed epoch; the relative timing is the real 60s drive).
+    timeRange: { start: 1700000000000, end: 1700000059949 },
+    timeWindow: 4000,
+    targetPlaybackSeconds: 60,
+    initialViewState: { longitude: -122.4021, latitude: 37.5774, zoom: 15, pitch: 50, bearing: 0 },
+    tripColor: [120, 230, 255, 255],
+    widthUnits: 'meters',
+    tripWidth: 3,
+    fadeTrail: true,
+    legend: {
+      title: 'comma2k19 · I-280',
+      items: [{ color: '#78e6ff', label: 'ego vehicle' }],
+    },
+  },
+  // ── nuScenes · all 10 v1.0-mini scenes (Boston Seaport + Singapore), built by
+  //    nuscenes_extract.py from the login-gated v1.0-mini + can_bus + map-expansion
+  //    + lidarseg. Each is the fullest cockpit — LIDAR (colored by per-point
+  //    lidarseg SEMANTIC class), tracked 3D boxes, ego trail, CAN telemetry, and a
+  //    front camera, on the nuScenes HD-map substrate. The factory above captures
+  //    the shared shape; only id/label/timeRange/framing differ. All listed in the
+  //    cockpit SceneSwitcher; the /demos card is the headline scene-0103 only.
+  nuscenesScene({
+    id: 'nuscenes-0061',
+    name: 'nuScenes · One-North (construction)',
+    description:
+      'A real nuScenes mini scene in Singapore one-north — a construction zone at an ' +
+      'intersection with a parked truck. 32-beam LIDAR (semantic class), tracked 3D ' +
+      'boxes, ego trail, CAN telemetry, and a front camera. Scene log: "parked truck, ' +
+      'construction, intersection, turn."',
+    timeRange: { start: 1532402927647, end: 1532402946797 },
+    longitude: 103.788326,
+    latitude: 1.298278,
+  }),
+  nuscenesScene({
+    id: 'nuscenes-0103',
+    name: 'nuScenes · Boston Seaport (pedestrians)',
+    description:
+      'A real nuScenes mini scene in Boston Seaport — busy with pedestrians as the ego ' +
+      'waits for a turning car. 32-beam LIDAR (semantic class), tracked 3D boxes, ego ' +
+      'trail, CAN telemetry (speed / steering / throttle / brake), and a front camera. ' +
+      'Scene log: "many peds right, wait for turning car, long bike rack left, cyclist."',
+    timeRange: { start: 1533151603547, end: 1533151622948 },
+    longitude: -71.052031,
+    latitude: 42.347547,
+  }),
+  nuscenesScene({
+    id: 'nuscenes-0553',
+    name: 'nuScenes · Boston Seaport (bicycle)',
+    description:
+      'A real nuScenes mini scene in Boston Seaport — waiting at an intersection beside a ' +
+      'bicycle and a large truck. 32-beam LIDAR (semantic class), tracked 3D boxes, ego ' +
+      'trail, CAN telemetry, and a front camera. Scene log: "wait at intersection, ' +
+      'bicycle, large truck, peds."',
+    timeRange: { start: 1535489296047, end: 1535489315948 },
+    longitude: -71.046029,
+    latitude: 42.343746,
+  }),
+  nuscenesScene({
+    id: 'nuscenes-0655',
+    name: 'nuScenes · Boston Seaport (parking lot)',
+    description:
+      'A real nuScenes mini scene in Boston Seaport — a parking lot with parked cars, a ' +
+      'jaywalker, and a bendy bus. 32-beam LIDAR (semantic class), tracked 3D boxes, ego ' +
+      'trail, CAN telemetry, and a front camera. Scene log: "parking lot, parked cars, ' +
+      'jaywalker, bendy bus."',
+    timeRange: { start: 1535385092150, end: 1535385111949 },
+    longitude: -71.041194,
+    latitude: 42.342613,
+  }),
+  nuscenesScene({
+    id: 'nuscenes-0757',
+    name: 'nuScenes · Boston Seaport (busy intersection)',
+    description:
+      'A real nuScenes mini scene in Boston Seaport — arriving at a busy intersection with ' +
+      'a bus. 32-beam LIDAR (semantic class), tracked 3D boxes, ego trail, CAN telemetry, ' +
+      'and a front camera. Scene log: "arrive at busy intersection, bus, wait at ' +
+      'intersection."',
+    timeRange: { start: 1535657108301, end: 1535657128149 },
+    longitude: -71.055076,
+    latitude: 42.341289,
+  }),
+  nuscenesScene({
+    id: 'nuscenes-0796',
+    name: 'nuScenes · Queenstown (scooters)',
+    description:
+      'A real nuScenes mini scene in Singapore Queenstown — a scooter and pedestrians on ' +
+      'the sidewalk amid buses, cars, and a truck. 32-beam LIDAR (semantic class), tracked ' +
+      '3D boxes, ego trail, CAN telemetry, and a front camera. Scene log: "scooter, peds ' +
+      'on sidewalk, bus, cars, truck."',
+    timeRange: { start: 1538448744447, end: 1538448764047 },
+    longitude: 103.783507,
+    latitude: 1.301416,
+  }),
+  nuscenesScene({
+    id: 'nuscenes-0916',
+    name: 'nuScenes · Queenstown (parking)',
+    description:
+      'A real nuScenes mini scene in Singapore Queenstown — a parking lot with a bicycle ' +
+      'rack and parked bicycles. 32-beam LIDAR (semantic class), tracked 3D boxes, ego ' +
+      'trail, CAN telemetry, and a front camera. Scene log: "parking lot, bicycle rack, ' +
+      'parked bicycles, bus."',
+    timeRange: { start: 1538984233547, end: 1538984253447 },
+    longitude: 103.773607,
+    latitude: 1.294311,
+  }),
+  nuscenesScene({
+    id: 'nuscenes-1077',
+    name: 'nuScenes · Holland Village (night)',
+    description:
+      'A real nuScenes mini scene in Singapore Holland Village — a NIGHT drive down a big ' +
+      'street past a bus stop at high speed. 32-beam LIDAR (semantic class), tracked 3D ' +
+      'boxes, ego trail, CAN telemetry, and a front camera. Scene log: "night, big street, ' +
+      'bus stop, high speed, construction."',
+    timeRange: { start: 1542800367947, end: 1542800387897 },
+    longitude: 103.788307,
+    latitude: 1.316749,
+  }),
+  nuscenesScene({
+    id: 'nuscenes-1094',
+    name: 'nuScenes · Holland Village (night, after rain)',
+    description:
+      'A real nuScenes mini scene in Singapore Holland Village — a NIGHT drive after rain, ' +
+      'with many pedestrians and a personal mobility device. 32-beam LIDAR (semantic ' +
+      'class), tracked 3D boxes, ego trail, CAN telemetry, and a front camera. Scene log: ' +
+      '"night, after rain, many peds, PMD, ped with bag."',
+    timeRange: { start: 1542800847948, end: 1542800867447 },
+    longitude: 103.795694,
+    latitude: 1.310146,
+  }),
+  nuscenesScene({
+    id: 'nuscenes-1100',
+    name: 'nuScenes · Holland Village (night crossing)',
+    description:
+      'A real nuScenes mini scene in Singapore Holland Village — a NIGHT drive with ' +
+      'pedestrians on the sidewalk and crossing at a crosswalk. 32-beam LIDAR (semantic ' +
+      'class), tracked 3D boxes, ego trail, CAN telemetry, and a front camera. Scene log: ' +
+      '"night, peds in sidewalk, peds cross crosswalk."',
+    timeRange: { start: 1542800987947, end: 1542801007446 },
+    longitude: 103.794045,
+    latitude: 1.307481,
+  }),
+  {
     id: 'satellites',
     name: 'Satellite Orbits',
     description: '~12,700 low-Earth-orbit satellites from CelesTrak over 24h (2026-05-31). Defaults to the globe; flip to flat at top-left.',
@@ -1606,6 +2456,22 @@ const rawDatasets: Dataset[] = [
 export const datasets: Dataset[] = rawDatasets.map((d) => ({
   ...d,
   url: resolveDataUrl(d.url),
+  // The composite `radar` type carries two extra manifest URLs; rewrite them
+  // through the same VITE_DATA_BASE_URL resolver or they 404 on the R2 deploy
+  // while the primary field manifest loads.
+  ...(d.radarCellsUrl && { radarCellsUrl: resolveDataUrl(d.radarCellsUrl) }),
+  ...(d.radarTracksUrl && { radarTracksUrl: resolveDataUrl(d.radarTracksUrl) }),
+  // The composite `av` type carries the scene manifest, two overlay archive
+  // manifests, and two sidecar JSONs; rewrite all of them through the same
+  // VITE_DATA_BASE_URL resolver so they don't 404 on the R2 deploy.
+  ...(d.avSceneUrl && { avSceneUrl: resolveDataUrl(d.avSceneUrl) }),
+  ...(d.avLidarUrl && { avLidarUrl: resolveDataUrl(d.avLidarUrl) }),
+  ...(d.avEgoUrl && { avEgoUrl: resolveDataUrl(d.avEgoUrl) }),
+  ...(d.avObjectsUrl && { avObjectsUrl: resolveDataUrl(d.avObjectsUrl) }),
+  ...(d.avTelemetryUrl && { avTelemetryUrl: resolveDataUrl(d.avTelemetryUrl) }),
+  ...(d.avCamerasUrl && { avCamerasUrl: resolveDataUrl(d.avCamerasUrl) }),
+  ...(d.avMapPolyUrl && { avMapPolyUrl: resolveDataUrl(d.avMapPolyUrl) }),
+  ...(d.avMapLineUrl && { avMapLineUrl: resolveDataUrl(d.avMapLineUrl) }),
 }));
 
 export const DATASETS = datasets;
@@ -1632,6 +2498,7 @@ export const SHIPPED_DATASET_IDS: string[] = [
   // After the first 6 (the home-page grid is `navDatasets.slice(0, 6)`), so
   // it lands in navigation without bumping a grid card.
   'nyc-taxi-flows',     // NYC Taxi Flow — pre-aggregated overview corridors
+  'storm-radar',        // Iowa Derecho — NEXRAD radar composite (field+cells+tracks)
 ];
 
 export const shippedDatasets: Dataset[] = SHIPPED_DATASET_IDS

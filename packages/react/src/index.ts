@@ -17,7 +17,11 @@
 
 // Hooks (zero rendering deps — only @poopdeck.gl/playback + react).
 export { usePlayback } from "./hooks/use-playback";
-export type { UsePlaybackOptions, PlaybackState } from "./hooks/use-playback";
+export type {
+  UsePlaybackOptions,
+  PlaybackState,
+  SourceRegistry,
+} from "./hooks/use-playback";
 export { usePlaybackHotkeys } from "./hooks/use-playback-hotkeys";
 
 // Transport-bar UI (react only).

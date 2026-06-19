@@ -199,6 +199,66 @@ describe('AnimatedPointLayer per-tile sublayer architecture (v3)', () => {
     expect(positions[5]).toBe(0);
   });
 
+  it('keeps positions z=0 with no elevationProperty (byte-identical flat render)', () => {
+    const tile = bigPointTile(3);
+    const built = buildSublayerForTile(tile);
+    const positions = built.props.data.attributes.getPosition.value;
+    expect(positions[2]).toBe(0);
+    expect(positions[5]).toBe(0);
+    expect(positions[8]).toBe(0);
+  });
+
+  it('sources per-point z from a numeric elevationProperty column (z = value)', () => {
+    const tile = makePointTile({
+      positions: [
+        [0, 0],
+        [1, 1],
+        [2, 2],
+      ],
+      startTimes: [0, 1, 2],
+      endTimes: [1, 2, 3],
+      timeOffset: 0,
+    });
+    // AV LIDAR-style elevation range: below-grade to rooftop.
+    tile.layers[0].features.numericProps['z'] = new Float32Array([-10, 0, 14]);
+    const built = buildSublayerForTile(tile, { elevationProperty: 'z' });
+    const positions = built.props.data.attributes.getPosition.value;
+    // lon/lat unchanged; z lifted from the column. Negative & zero pass through.
+    expect(positions[0]).toBe(0);
+    expect(positions[1]).toBe(0);
+    expect(positions[2]).toBe(-10);
+    expect(positions[5]).toBe(0);
+    expect(positions[8]).toBe(14);
+  });
+
+  it('multiplies elevation by elevationScale (including negative scale)', () => {
+    const tile = makePointTile({
+      positions: [
+        [0, 0],
+        [1, 1],
+      ],
+      startTimes: [0, 1],
+      endTimes: [1, 2],
+      timeOffset: 0,
+    });
+    tile.layers[0].features.numericProps['z'] = new Float32Array([2, -3]);
+    const built = buildSublayerForTile(tile, {
+      elevationProperty: 'z',
+      elevationScale: 5,
+    });
+    const positions = built.props.data.attributes.getPosition.value;
+    expect(positions[2]).toBe(10); // 2 × 5
+    expect(positions[5]).toBe(-15); // -3 × 5
+  });
+
+  it('leaves z=0 when elevationProperty names a missing column', () => {
+    const tile = bigPointTile(2);
+    const built = buildSublayerForTile(tile, { elevationProperty: 'nope' });
+    const positions = built.props.data.attributes.getPosition.value;
+    expect(positions[2]).toBe(0);
+    expect(positions[5]).toBe(0);
+  });
+
   it('builds one ScatterplotLayer per tile (no cross-tile consolidation)', () => {
     const layer = makeLayer();
     const a = bigPointTile(20);
@@ -494,6 +554,40 @@ describe('AnimatedPointLayer cumulative consolidation', () => {
     expect((layer as any).slabs.length).toBe(0);
     expect((layer as any).absorbedTileKeys.size).toBe(0);
   });
+
+  it('bakes elevationProperty z into the consolidated slab positions', () => {
+    const layer = makeCumulativeLayer({ elevationProperty: 'z', elevationScale: 2 });
+    const tile = makePointTile({
+      positions: [
+        [0, 0],
+        [1, 1],
+        [2, 2],
+      ],
+      startTimes: [0, 1, 2],
+      endTimes: [1, 2, 3],
+      timeOffset: 1_000_000,
+      tileId: { z: 11, x: 1, y: 0, t: 0 },
+    });
+    tile.layers[0].features.numericProps['z'] = new Float32Array([-10, 0, 14]);
+    layer.state = { tiles: [tile] };
+    const [slab] = (layer as any).renderLayers();
+    const positions = slab.props.data.attributes.getPosition.value;
+    // lon/lat preserved; z = column × scale, negatives & zero through.
+    expect(positions[0]).toBe(0);
+    expect(positions[1]).toBe(0);
+    expect(positions[2]).toBe(-20); // -10 × 2
+    expect(positions[5]).toBe(0); // 0 × 2
+    expect(positions[8]).toBe(28); // 14 × 2
+  });
+
+  it('keeps consolidated slab z=0 with no elevationProperty', () => {
+    const layer = makeCumulativeLayer();
+    layer.state = { tiles: metroTiles(3) };
+    const [slab] = (layer as any).renderLayers();
+    const positions = slab.props.data.attributes.getPosition.value;
+    expect(positions[2]).toBe(0);
+    expect(positions[5]).toBe(0);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -597,6 +691,82 @@ describe('AnimatedPathLayer per-tile sublayer architecture (v3)', () => {
     const ref = {};
     expect(cmp(ref, ref)).toBe(true);
     expect(cmp(ref, {})).toBe(false);
+  });
+
+  it('projects colorMapping onto the tile category dictionary for stable per-category GPU colors', () => {
+    // Mirrors AnimatedTripsLayer: an explicit category-string → color map
+    // produces a per-tile palette ALIGNED with this tile's category dictionary,
+    // so each category string renders the same color in every tile (unlike
+    // colorPalette's first-seen per-tile index assignment). The GPU
+    // CategoryColorExtension path is retained (instanceCategoryIndex unchanged).
+    const tile = bigPathTile(8, 4);
+    tile.layers[0].features.categoricalProps['kind'] = {
+      indices: new Uint16Array([0, 1, 2, 1, 0, 2, 1, 0]),
+      categories: ['road_divider', 'lane_divider', 'lane_yellow'],
+    };
+    const built = buildSublayerForTile(tile, {
+      pathColor: 'kind',
+      // colorPalette is intentionally bogus to prove the mapping WINS over it.
+      colorPalette: [
+        [1, 1, 1, 255],
+        [2, 2, 2, 255],
+        [3, 3, 3, 255],
+      ],
+      colorMapping: {
+        road_divider: [200, 0, 0, 255],
+        lane_yellow: [0, 0, 200, 255],
+        // lane_divider intentionally absent → resolves to colorMappingDefault.
+      },
+      colorMappingDefault: [120, 120, 120, 255],
+    });
+
+    // GPU path is preserved: per-feature category index + useCategoryColor.
+    const attrs = built.props.data.attributes;
+    expect(attrs.instanceCategoryIndex).toBeDefined();
+    expect(built.props.useCategoryColor).toBe(true);
+    expect(attrs.getColor).toBeUndefined();
+
+    // The palette is projected onto the tile's category dictionary order, so
+    // palette[catIndex] === mapping[category] (or the default for absent keys).
+    const palette = built.props.categoryPalette;
+    expect(palette[0]).toEqual([200, 0, 0, 255]); // road_divider → mapped
+    expect(palette[1]).toEqual([120, 120, 120, 255]); // lane_divider → default
+    expect(palette[2]).toEqual([0, 0, 200, 255]); // lane_yellow → mapped
+  });
+
+  it('re-prepares the tile when colorMapping content changes (same-shape edit)', () => {
+    // A mapping edit with the SAME key count must invalidate the cached
+    // prepared tile so the projected GPU palette is rebuilt.
+    const tile = bigPathTile(4, 3);
+    tile.layers[0].features.categoricalProps['kind'] = {
+      indices: new Uint16Array([0, 0, 0, 0]),
+      categories: ['lane_white'],
+    };
+    const layer = Object.create(LayerCtor.prototype);
+    layer.props = {
+      id: 'test',
+      pathColor: 'kind',
+      pathWidth: 2,
+      widthUnits: 'pixels',
+      timeWindow: 1000,
+      opacity: 1,
+      visible: true,
+      colorMapping: { lane_white: [10, 20, 30, 255] },
+      colorMappingDefault: [120, 120, 120, 255],
+    };
+    layer.boundGetTime = () => 0;
+    layer.timeFilterExtension = {};
+    layer.categoryColorExtension = {};
+    layer.preparedTileCache = new Map();
+
+    const first = (layer as any).prepareTile(tile, tile.layers[0]);
+    expect(first.gpuPalette[0]).toEqual([10, 20, 30, 255]);
+
+    // Same-shape edit (still one key) — must NOT be served from cache.
+    layer.props.colorMapping = { lane_white: [40, 50, 60, 255] };
+    const second = (layer as any).prepareTile(tile, tile.layers[0]);
+    expect(second).not.toBe(first);
+    expect(second.gpuPalette[0]).toEqual([40, 50, 60, 255]);
   });
 });
 

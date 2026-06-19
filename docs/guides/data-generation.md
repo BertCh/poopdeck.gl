@@ -38,11 +38,11 @@ directory (default `examples/showcase/public/data`).
 stt-generate all --output-dir examples/showcase/public/data --skip-existing
 ```
 
-The remaining datasets (`ais`, `flights`, `nyc-rideshare`,
+The remaining datasets (`ais`, `flights`, `nyc-rideshare`, `bixi`,
 `nyc-taxi-points`, `satellites`, `drifters`, `drifters-hourly`, `animals`,
-`osm-edits`) require per-run parameters (download dates, an OSRM server,
-an existing source archive, etc.) or long downloads and are NOT built by
-`all` — run them individually.
+`osm-edits`, `storms`) require per-run parameters (download dates, an OSRM
+server, an existing source archive, etc.) or long downloads and are NOT
+built by `all` — run them individually.
 
 ### Generate Individual Datasets
 
@@ -224,6 +224,58 @@ stt-generate nyc-rideshare \
 - `--osrm-url`: OSRM server URL
 - `--skip-routing`: Skip OSRM routing (pickup/dropoff only)
 
+### Montréal BIXI Flowmap (`bixi`)
+
+Aggregates real [BIXI open-data](https://bixi.com/en/open-data/) bike-share
+trips into directed **origin→destination station-pair flows**, each emitted as a
+single 2-vertex `origin → destination` arc carrying a per-time-bucket count time
+series. The size on the wire is bounded by *(kept pairs) × (buckets)*, not the
+~13M raw trips/year, so a long span fits comfortably. The input CSV schema is
+auto-detected (the 2022+ embedded-coordinate family and the 2014–2021 station-code
+family).
+
+```bash
+stt-generate bixi \
+  --input data/bixi-2024.zip \
+  --from 2024-06-01 --to 2024-09-01 \
+  --bin 1h \
+  --output examples/showcase/public/data/bixi-flowmap.stt
+```
+
+**Options:**
+- `--input`: BIXI open-data input (required) — the downloaded `.zip`, an extracted `.csv`, or a directory of either (plus an optional `Stations_*.csv` for pre-2022 code-based files)
+- `--bin`: Time bucket for the flow matrix, default `1h` (e.g. `30m`, `3h`, `1d`)
+- `--from` / `--to`: Inclusive lower / exclusive upper date bound `YYYY-MM-DD` (UTC), default: unbounded
+- `--min-trips`: Drop OD pairs with fewer than this many total trips across the span (legibility threshold, not temporal thinning — kept pairs keep every bucket), default: 30
+- `--min-zoom` / `--max-zoom`: Build pyramid zoom range, default 10–13
+- `--cluster-radius`: Cluster merge radius in screen pixels at tile extent 512 (larger = coarser hubs), default 40. Build-time per-zoom station clustering is **on by default** (flowmap.gl-style)
+- `--no-cluster`: Disable clustering and fall back to a volume-based LOD (minor pairs dropped at low zoom)
+- `--bake-bundling`: Bake KDEEB edge bundling into the tile geometry (smooth multi-vertex "rivers" rendered with `BundledFlowmapLayer({ preBundled: true })`); requires clustering. Tuned with `--bundle-points` (default 24), `--bundle-kernel` (0.05), `--bundle-iterations` (15), `--bundle-smoothing` (0.5)
+- `--streets`: Route OD pairs onto the Montréal OSM **bicycle** network instead of straight arcs (per-segment street corridors, the BIXI counterpart of `nyc-rideshare --flows`). Requires `--osm-pbf <file.osm.pbf>` and a bicycle-profile `--osrm-url` (default `http://localhost:5001`). Incompatible with `--bake-bundling`/`--no-cluster`/`--cluster-radius`
+- `--skip-build`: Write only the intermediate GeoParquet (no stt-build)
+
+### NYC Taxi Points (`nyc-taxi-points`)
+
+Derives a Point dataset from an already-built `nyc-taxi-paths` LineString
+archive by interpolating each trip's polyline at a fixed time interval — no
+OSRM re-run, the routed geometries baked into the `.stt` are reused as-is.
+
+```bash
+stt-generate nyc-taxi-points \
+  --input examples/showcase/public/data/nyc-taxi-paths.stt \
+  --interval-seconds 15 \
+  --output nyc-taxi-points.stt
+```
+
+**Options:**
+- `--input`: Source LineString `.stt` archive, default `examples/showcase/public/data/nyc-taxi-paths.stt`
+- `--interval-seconds`: Time spacing between interpolated points (smaller = smoother animation, larger output), default: 15
+- `--max-trips`: Cap on trips processed (for quick iteration), default: all
+- `--temporal-bucket`: Output archive tile bucket, default `30m`
+- `--min-zoom` / `--max-zoom`: Output archive zoom range, default 10–16
+- `--skip-build`: Emit the intermediate Parquet only
+- `--keep-intermediate`: Keep the intermediate Parquet after build
+
 ### Ocean Drifters (NOAA Global Drifter Program)
 
 Downloads 6-hourly drifting-buoy trajectories (positions + sea-surface
@@ -351,6 +403,49 @@ hosted. The matching showcase configs (`osm-nyc-draw`,
 
 To target a different metro, swap `--bounds` (and pick the right region
 extract for `nodes`). For example, Berlin: `--bounds 52.34,13.09,52.68,13.76`.
+
+### Storm Radar (`storms`)
+
+NEXRAD Level II storm-radar tiles for the **2020-08-10 Iowa derecho**.
+Downloads archived Level II volumes from the public `unidata-nexrad-level2`
+AWS bucket for a set of radar sites over the event window, decodes the base
+reflectivity sweep of each volume, reprojects every gate to lon/lat, and
+mosaics all sites onto one analysis grid per ~5-minute scan. All polar
+reprojection, mosaicking, contouring, and cell tracking happen at build time;
+the browser only renders finished vector geometry.
+
+Unlike the other generators, `storms` bakes **three** packed archives under the
+`--output` directory:
+
+- `storm-field` — filled reflectivity contour bands (polygons, `dbz_band`)
+- `storm-cells` — storm-cell centroids (points, `max_dbz` + `area_km2`)
+- `storm-tracks` — cells linked across scans into tracks (LineStrings with
+  per-vertex intensity over time, so they animate as growing/decaying trails)
+
+```bash
+stt-generate storms \
+  --sites KOAX,KDMX,KDVN \
+  --date 2020-08-10 \
+  --start-hour 16 --end-hour 23 \
+  --output examples/showcase/public/data
+```
+
+**Options:**
+- `--sites`: Radar sites (WSR-88D ICAO ids) along the derecho path, west→east, default `KOAX,KDMX,KDVN`
+- `--date`: UTC date of the event, default `2020-08-10`
+- `--start-hour` / `--end-hour`: Inclusive start / exclusive end hour (UTC), default 16–23
+- `--scan-stride`: Keep only every Nth volume per site (1 = every scan), default: 2
+- `--dbz-thresholds`: Ascending dBZ thresholds for the filled contour bands, default `20,25,…,65`
+- `--cell-dbz`: Storm-cell detection floor in dBZ, default: 50
+- `--min-cell-km2`: Drop storm cells smaller than this (km², removes speckle), default: 12
+- `--min-band-km2`: Drop contour-band polygons smaller than this (km²), default: 9
+- `--grid-km`: Analysis-grid spacing in km, default: 2.0
+- `--bounds`: Analysis bbox `min_lat,min_lon,max_lat,max_lon`, default = derecho corridor
+- `--max-cell-speed`: Max track-association speed (m/s) for nearest-centroid matching, default: 45
+- `--min-zoom` / `--max-zoom`: Build pyramid zoom range, default 4–9
+- `--cache-dir`: Cache directory for downloaded V06 volumes, default `radar-data`
+- `--no-download`: Use cached downloaded volumes only; never hit S3
+- `--skip-build`: Write only the intermediate parquet for each archive
 
 ## Custom Data (Using stt-build)
 

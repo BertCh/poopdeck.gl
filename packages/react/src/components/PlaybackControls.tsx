@@ -3,7 +3,11 @@
 // Copyright (c) @poopdeck.gl/react contributors
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { PlaybackGovernor, PlaybackGovernorState } from "@poopdeck.gl/playback";
+import type {
+  PlaybackGovernor,
+  PlaybackGovernorState,
+  SourceRunway,
+} from "@poopdeck.gl/playback";
 
 export interface PlaybackControlsProps {
   currentTime: number;
@@ -59,6 +63,17 @@ type GovernorWithCost = PlaybackGovernor & {
   };
 };
 
+// `getSourceRunways` is the multi-source-coordination Phase 4 passthrough (one
+// runway probe per registered governor source). Same dist-staleness guard as
+// `GovernorWithCost`: the showcase typechecks against @poopdeck.gl/playback's
+// BUILT dist, which may not yet carry the member — this narrow intersection
+// keeps the call typed and becomes a harmless no-op once the rebuilt types
+// include it. Defensive `?.()` at the call site degrades to the single-bar
+// path if an older governor build lacks the method entirely.
+type GovernorWithSources = PlaybackGovernor & {
+  getSourceRunways?: () => SourceRunway[];
+};
+
 /** All timestamps in the player are dataset time — global scientific datasets
  *  (drifters, satellites, ECCO) are authored in UTC, so the labels must not
  *  drift with the viewer's locale zone (§3.5). */
@@ -103,6 +118,76 @@ const DensityStrip: React.FC<{ density: number[] }> = ({ density }) => (
         }}
       />
     ))}
+  </div>
+);
+
+/**
+ * Multi-source coordination Phase 4 — a compact per-source runway strip shown
+ * only when 2+ sources are registered (single-source demos keep the plain
+ * buffered bar unchanged). Each source gets one thin track; the filled portion
+ * is that source's contiguous resident runway ahead of the playhead, mapped
+ * onto the bar's sim-time axis (forward from the playhead). The GATING source
+ * (the required, not-yet-complete source with the least runway — what the clock
+ * is held by) is drawn in the accent colour; other required sources are inked;
+ * optional (non-gating) sources are faint. Purely informational (aria-hidden);
+ * the live status chip already announces buffering for screen readers, and a
+ * per-track title carries the words. No animation, so it is inert under
+ * prefers-reduced-motion by construction.
+ */
+const SourceRunwayStrip: React.FC<{
+  sources: SourceRunway[];
+  gatingId: string | null;
+  playheadFrac: number;
+  rangeMs: number;
+}> = ({ sources, gatingId, playheadFrac, rangeMs }) => (
+  <div
+    aria-hidden="true"
+    className="flex flex-col w-full"
+    style={{ gap: 2, marginTop: 4 }}
+  >
+    {sources.map((s) => {
+      // Resident runway as a fraction of the whole timeline, drawn forward
+      // from the playhead. A complete source has effectively unbounded runway,
+      // so fill to the end. Clamp so a long runway never paints past the bar.
+      const runwayFrac = s.complete
+        ? 1
+        : rangeMs > 0
+          ? Math.min(1, Math.max(0, s.runwaySimMs / rangeMs))
+          : 0;
+      const left = Math.min(100, Math.max(0, playheadFrac * 100));
+      const width = Math.min(100 - left, runwayFrac * 100);
+      const isGating = s.id === gatingId;
+      const color = isGating
+        ? "var(--accent)"
+        : s.required
+          ? "var(--ink-500)"
+          : "var(--ink-400)";
+      const labelKind = s.required
+        ? isGating
+          ? "gating — clock is held here"
+          : "required"
+        : "optional";
+      return (
+        <div
+          key={s.id}
+          title={`${s.id}: ${labelKind}${s.complete ? " (complete)" : ""}`}
+          className="relative w-full rounded-full"
+          style={{ height: 2, background: "var(--hairline)" }}
+        >
+          {width > 0 && (
+            <div
+              className="absolute top-0 h-full rounded-full"
+              style={{
+                left: `${left}%`,
+                width: `${width}%`,
+                background: color,
+                opacity: isGating ? 0.95 : s.required ? 0.55 : 0.3,
+              }}
+            />
+          )}
+        </div>
+      );
+    })}
   </div>
 );
 
@@ -230,6 +315,11 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({
   const [bufferedRanges, setBufferedRanges] = useState<
     Array<{ start: number; end: number }>
   >([]);
+  // Per-source runways (multi-source coordination Phase 4). Empty / single
+  // entry → no extra UI (the single buffered bar already IS the required
+  // intersection, i.e. exactly what the clock gates on). 2+ sources → a
+  // compact per-source strip with the gating source highlighted.
+  const [sourceRunways, setSourceRunways] = useState<SourceRunway[]>([]);
   const [etaMs, setEtaMs] = useState<number | null>(null);
   const [isCreeping, setIsCreeping] = useState(false);
   const isBuffering =
@@ -242,6 +332,12 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({
     let lastProgressUpdate = 0;
     const update = () => {
       setBufferedRanges(governor.getBufferedRanges({ maxRanges: 64 }));
+      // Probe per-source runways for the multi-track strip. `?.()` so a
+      // governor built before this passthrough simply yields the single-bar
+      // path (empty array) instead of throwing.
+      setSourceRunways(
+        (governor as GovernorWithSources).getSourceRunways?.() ?? [],
+      );
       setIsCreeping(governor.isCreeping);
       setEtaMs(
         governor.state === "starting" ||
@@ -391,6 +487,31 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({
     const remaining = (100 - progress) / 100;
     return (targetPlaybackSeconds / currentSpeedMultiplier) * remaining;
   }, [progress, targetPlaybackSeconds, currentSpeedMultiplier]);
+
+  // ── Multi-source runway strip (multi-source coordination Phase 4) ───────────
+  // Only meaningful with 2+ registered sources — a single source's runway is
+  // already exactly the buffered bar, so single-dataset demos render no extra
+  // chrome (graceful degrade). The gating source is the contract-defined one:
+  // the REQUIRED entry with the smallest contiguous runway among those not yet
+  // complete (i.e. the source the combined min-gate currently folds to). When
+  // every required source is complete there's no live gate, so nothing is
+  // highlighted. `runwaySimMs` is contiguous sim-ms ahead of the playhead, so
+  // each source's resident segment maps straight onto the bar's sim-time axis
+  // forward from the playhead (forward-at-nonneg-speed convention).
+  const multiSource = sourceRunways.length >= 2;
+  const gatingId = useMemo(() => {
+    if (!multiSource) return null;
+    let id: string | null = null;
+    let min = Infinity;
+    for (const r of sourceRunways) {
+      if (!r.required || r.complete) continue;
+      if (r.runwaySimMs < min) {
+        min = r.runwaySimMs;
+        id = r.id;
+      }
+    }
+    return id;
+  }, [sourceRunways, multiSource]);
 
   const speedPresets = [
     { label: "0.5x", value: 0.5 },
@@ -591,6 +712,17 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({
             className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
           />
         </div>
+
+        {/* Per-source runway strip — only with 2+ registered sources; a single
+            source's runway already equals the buffered bar above. */}
+        {multiSource && (
+          <SourceRunwayStrip
+            sources={sourceRunways}
+            gatingId={gatingId}
+            playheadFrac={progress / 100}
+            rangeMs={timeRange.end - timeRange.start}
+          />
+        )}
       </div>
 
       {/* Time range labels */}

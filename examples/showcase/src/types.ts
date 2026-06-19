@@ -48,7 +48,28 @@ export type DatasetType =
    * ping-pong textures) and rendered fully GPU-resident. Drop-in superset of
    * `flowmap`; honors the same `flow*` styling props.
    */
-  | 'flowmap-bundled';
+  | 'flowmap-bundled'
+  /**
+   * Composite storm-radar render (NEXRAD). Overlays THREE STT archives from one
+   * dataset entry: filled reflectivity contour bands (`AnimatedPolygonLayer`,
+   * categorical `dbz_band`) as the animated precipitation field — the dataset's
+   * primary `url`; storm-cell centroids (`AnimatedPointLayer`) from
+   * `radarCellsUrl`; and animated cell tracks (`AnimatedTripsLayer`,
+   * per-vertex intensity) from `radarTracksUrl`. Build with `stt-generate storms`.
+   */
+  | 'radar'
+  /**
+   * Composite AV-telemetry "cockpit" render (streetscape.gl / avs.auto style).
+   * Overlays up to THREE STT archives from one AV scene bundle: an accumulated
+   * LIDAR point cloud (`AnimatedPointLayer`, categorical `height_band` fill) as
+   * the dataset's primary `url`; the ego trajectory (`AnimatedTripsLayer`) from
+   * `avEgoUrl`; and tracked-object 3D boxes (`AnimatedBoundingBoxLayer`,
+   * categorical `category`) from `avObjectsUrl`. The bespoke `/drive/:sceneId`
+   * cockpit additionally reads `avSceneUrl` (the `scene.json` manifest) plus the
+   * `avTelemetryUrl` / `avCamerasUrl` sidecars for chrome, gauges, and the camera
+   * inset. Built by the `av_synthetic.py` / `nuscenes_extract.py` adapters.
+   */
+  | 'av';
 
 export interface DatasetLegendItem {
   color: string;
@@ -342,6 +363,87 @@ export interface Dataset {
   polygonLineColor?: ColorRGBA;
   /** Polygon fill color — constant RGBA or `colorProperty` for categorical fill. */
   polygonFillColor?: ColorRGBA;
+
+  // ─── radar composite styling (type: 'radar') ───────────────────────────
+  /**
+   * Storm-cell CENTROID points manifest (sized/colored by `max_dbz`). The
+   * dataset's primary `url` is the reflectivity FIELD manifest; this and
+   * `radarTracksUrl` are the two overlay tilesets. Rewritten through
+   * `resolveDataUrl` alongside `url` so an R2 deploy resolves all three.
+   */
+  radarCellsUrl?: string;
+  /** Storm-cell TRACK linestrings manifest (per-vertex intensity trail). */
+  radarTracksUrl?: string;
+  /** Solid fill for storm-cell centroids. Defaults to near-white. */
+  radarCellColor?: ColorRGBA;
+
+  // ─── AV cockpit composite styling (type: 'av') ─────────────────────────
+  /**
+   * `scene.json` manifest URL for the AV scene bundle. The bespoke
+   * `/drive/:sceneId` cockpit fetches it for chrome (name/attribution/license),
+   * object colors, the runtime time range, and the telemetry/camera sidecar
+   * references. The standard `case 'av'` render does NOT need it (it composes
+   * from the archive URLs + the Dataset copies of the colors); the cockpit does.
+   * Rewritten through `resolveDataUrl` alongside `url` so an R2 deploy resolves it.
+   */
+  avSceneUrl?: string;
+  /**
+   * LIDAR point-cloud archive manifest (an STT POINT archive — accumulated
+   * returns, colored by categorical `height_band`). Rendered by
+   * `AnimatedPointLayer`. Present ONLY on scenes that have a LIDAR stream
+   * (nuScenes / Argoverse / synthetic); omit it for LIDAR-less scenes such as
+   * comma.ai. On LIDAR scenes set it equal to the dataset's primary `url` so the
+   * playback governor rides the LIDAR (heaviest) archive. Routed through `resolveDataUrl`.
+   */
+  avLidarUrl?: string;
+  /**
+   * Ego-trajectory archive manifest (an STT TRIPS archive — one LineString =
+   * the ego path). Rendered by `AnimatedTripsLayer`. On LIDAR scenes the
+   * primary `url` is the LIDAR archive; on LIDAR-less scenes (comma.ai) this IS
+   * the primary `url`, so the governor rides it. Routed through `resolveDataUrl`.
+   */
+  avEgoUrl?: string;
+  /**
+   * Tracked-object archive manifest (an STT POINT archive — one point per
+   * object per annotated sample, carrying `category`/`heading`/box dims).
+   * Rendered by `AnimatedBoundingBoxLayer`. Routed through `resolveDataUrl`.
+   */
+  avObjectsUrl?: string;
+  /**
+   * CAN-bus telemetry sidecar JSON URL (`telemetry.json`). Loaded client-side
+   * by the cockpit; binary-searched at the playhead to drive the metric gauges.
+   * Routed through `resolveDataUrl`.
+   */
+  avTelemetryUrl?: string;
+  /**
+   * Camera-keyframe sidecar JSON URL (`cameras.json`). Loaded client-side by
+   * the cockpit's top-right camera inset. Routed through `resolveDataUrl`.
+   */
+  avCamerasUrl?: string;
+  /**
+   * Tracked-object category → RGBA color. Also present in `scene.json`; the
+   * Dataset copy keeps `buildDemoLayers` self-contained (so the standard
+   * `DemoPage` render colors object boxes without fetching the manifest).
+   */
+  avObjectColors?: Record<string, ColorRGBA>;
+  /**
+   * LIDAR `height_band` (categorical) → RGBA color ramp. Drives the LIDAR
+   * point cloud's `colorMapping`. ~8 bands across the height domain.
+   */
+  lidarColorMapping?: Record<string, ColorRGBA>;
+  /** Fallback color for `height_band` values absent from `lidarColorMapping`. */
+  lidarColorMappingDefault?: ColorRGBA;
+  /**
+   * HD-map vector streams: drivable-area / lane / crosswalk POLYGONS
+   * (`avMapPolyUrl`) and lane-divider / boundary LINES (`avMapLineUrl`), each an
+   * STT archive whose features carry a categorical `map_layer` string. Rendered
+   * UNDER the LIDAR as the scene substrate (the streetscape.gl "real road" cue).
+   * Routed through `resolveDataUrl`.
+   */
+  avMapPolyUrl?: string;
+  avMapLineUrl?: string;
+  /** `map_layer` (categorical) → RGBA for both map streams (fills low-alpha, lines crisp). */
+  mapColors?: Record<string, ColorRGBA>;
 
   // ─── space-time cube (time = height) ───────────────────────────────────
   /**

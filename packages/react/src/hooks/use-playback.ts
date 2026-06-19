@@ -12,7 +12,7 @@
  * wire the returned handlers into your layers, and drive any UI off the
  * returned reactive state.
  */
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import {
   PlaybackGovernor,
   TimeController,
@@ -29,6 +29,25 @@ import type { OverviewPreloadResult } from "@poopdeck.gl/core";
 // The governor's user-intent bit (`get paused()`). Narrow accessor kept as a
 // helper so a single call site documents the intent semantics.
 const governorPaused = (g: PlaybackGovernor): boolean => g.paused;
+
+/**
+ * Multi-source registration API (multi-source coordination Phase 0): a renderer
+ * registers EVERY layer's tileset as a classified governor source, keyed by the
+ * layer id, so the clock waits for every *required* source — not just the field.
+ * Optional overlays load coordinated but never gate. The governor re-probes all
+ * sources itself on a buffer change, so the `runway` passed to
+ * {@link SourceRegistry.onBufferChange} is advisory (it just kicks an immediate
+ * re-evaluation).
+ */
+export interface SourceRegistry {
+  registerSource: (
+    id: string,
+    tileset: BufferSource,
+    opts?: { required?: boolean; weight?: number },
+  ) => void;
+  unregisterSource: (id: string) => void;
+  onBufferChange: (id: string, runway: BufferedRunway) => void;
+}
 
 export interface PlaybackState {
   timeController: TimeController;
@@ -50,8 +69,20 @@ export interface PlaybackState {
   /** Imperative play/pause for visibility-driven embeds. */
   play: () => void;
   pause: () => void;
-  /** STT layer plumbing — pass through as layer props. */
+  /**
+   * Multi-source registration API (Phase 0): wire EACH layer's tileset into the
+   * governor as a classified source (field/primary required, overlays optional)
+   * so the clock waits for every required source. Renderers should prefer this
+   * over the single-source {@link handleTilesetReady} below.
+   */
+  registry: SourceRegistry;
+  /**
+   * @deprecated Single-source plumbing — hands ONE tileset to the governor as
+   * the required `'default'` source (clears any other sources). Kept for
+   * single-layer surfaces that have not migrated to {@link registry}.
+   */
   handleTilesetReady: (tileset: BufferSource) => void;
+  /** @deprecated See {@link PlaybackState.handleTilesetReady}. */
   handleBufferChange: (runway: BufferedRunway) => void;
   handleOverviewPreload: (result: OverviewPreloadResult) => void;
 }
@@ -290,6 +321,30 @@ export function usePlayback(options: UsePlaybackOptions = {}): PlaybackState {
     [],
   );
 
+  // Multi-source registration (Phase 0): each layer registers its own tileset
+  // as a classified governor source. `tilesetRef` tracks the FIRST required
+  // source so the cube lattice / overview pollers (which read one BufferSource)
+  // still have a handle even when the field arrives via the registry rather than
+  // the legacy single-source path. The governor's removeSource/addSource are
+  // re-evaluation points; on a buffer change we forward to notifyBufferChange
+  // (the governor re-probes every source itself — the runway arg is advisory).
+  const registry = useMemo<SourceRegistry>(
+    () => ({
+      registerSource: (id, tileset, opts) => {
+        if (opts?.required !== false && tilesetRef.current == null) {
+          tilesetRef.current = tileset;
+        }
+        governorRef.current?.addSource(id, tileset, opts);
+      },
+      unregisterSource: (id) => {
+        governorRef.current?.removeSource(id);
+      },
+      onBufferChange: (_id, runway) =>
+        governorRef.current?.notifyBufferChange(runway),
+    }),
+    [],
+  );
+
   // ── Storyboard preview tier (player-buffering WS-C4) ───────────────────────
   // The layer preloads + pins the coarsest tiles across the full time range
   // (budget-gated per dataset) so scrubbing always shows a coarse preview.
@@ -323,6 +378,7 @@ export function usePlayback(options: UsePlaybackOptions = {}): PlaybackState {
     onAutoSpeedSelect: handleAutoSpeedSelect,
     play,
     pause,
+    registry,
     handleTilesetReady,
     handleBufferChange,
     handleOverviewPreload,

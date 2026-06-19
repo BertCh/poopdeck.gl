@@ -66,8 +66,7 @@ const DemoViewer: React.FC<DemoViewerProps> = ({
     tilesetRef,
     currentTime,
     overviewPreload,
-    handleTilesetReady,
-    handleBufferChange,
+    registry,
     handleOverviewPreload,
   } = playback;
 
@@ -154,8 +153,7 @@ const DemoViewer: React.FC<DemoViewerProps> = ({
         timeHeightScale,
         activeSummaryToggle,
         plumbing: {
-          onTilesetReady: handleTilesetReady,
-          onBufferChange: handleBufferChange,
+          registry,
           onOverviewPreload: handleOverviewPreload,
           overviewPreload: true,
         },
@@ -165,8 +163,7 @@ const DemoViewer: React.FC<DemoViewerProps> = ({
       timeController,
       activeSummaryToggle,
       useGlobe,
-      handleTilesetReady,
-      handleBufferChange,
+      registry,
       handleOverviewPreload,
       timeHeightScale,
     ],

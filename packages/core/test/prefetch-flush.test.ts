@@ -235,4 +235,81 @@ describe('SpatiotemporalTileset.flushPrefetch', () => {
 
     tileset.finalize();
   });
+
+  // ── Spatial flush tolerance (motion-stutter fix) ──────────────────────────
+  // A controlled camera (AV ego-follow) shifts the bounds a sub-tile sliver
+  // every frame. The flush decision keys on bounds quantized to ~1/8 of the
+  // viewport, so DRIFT keeps the runway while a real PAN/zoom still flushes it.
+  const SMALL: BoundingBox = { minLon: 0, minLat: 0, maxLon: 0.008, maxLat: 0.008 };
+
+  function prefetchingTileset(batches: GatedBatch[]) {
+    return new SpatiotemporalTileset({
+      minZoom: 0,
+      maxZoom: 12,
+      enablePrefetch: true,
+      refinementStrategy: 'no-overlap',
+      temporalBucketMs: BUCKET_MS,
+      getAvailableTiles: async (b, z, r) => availableTiles(b, z, r),
+      getTileData: async (id: TileId) => fakeTile(id),
+      getTileDataBatch: gatedBatchFn(batches),
+    });
+  }
+
+  it('does NOT flush prefetch on sub-viewport camera drift', async () => {
+    const batches: GatedBatch[] = [];
+    const tileset = prefetchingTileset(batches);
+
+    tileset.update({ bounds: SMALL, zoom: 6, time: 0, timeWindow: BUCKET_MS });
+    await settle();
+    const prefetchBatches = batches.slice(1); // [0] is the priority batch
+    expect(prefetchBatches.length).toBeGreaterThan(0);
+    expect(prefetchBatches.every((b) => !b.signal?.aborted)).toBe(true);
+
+    // Drift the viewport by < 1/8 of the 0.008° span (0.001°): 0.0002°.
+    const drift: BoundingBox = { minLon: 0.0002, minLat: 0.0002, maxLon: 0.0082, maxLat: 0.0082 };
+    tileset.update({ bounds: drift, zoom: 6, time: 0, timeWindow: BUCKET_MS });
+    await settle();
+
+    // Runway preserved — the in-flight prefetch was NOT aborted.
+    expect(prefetchBatches.every((b) => !b.signal?.aborted)).toBe(true);
+
+    tileset.finalize();
+  });
+
+  it('DOES flush prefetch on a real pan (> ~1/8 of the viewport)', async () => {
+    const batches: GatedBatch[] = [];
+    const tileset = prefetchingTileset(batches);
+
+    tileset.update({ bounds: SMALL, zoom: 6, time: 0, timeWindow: BUCKET_MS });
+    await settle();
+    const prefetchBatches = batches.slice(1);
+    expect(prefetchBatches.length).toBeGreaterThan(0);
+    expect(prefetchBatches.every((b) => !b.signal?.aborted)).toBe(true);
+
+    // Pan by > 1/8 of the span (0.001°): 0.003° crosses several grid cells.
+    const pan: BoundingBox = { minLon: 0.003, minLat: 0.003, maxLon: 0.011, maxLat: 0.011 };
+    tileset.update({ bounds: pan, zoom: 6, time: 0, timeWindow: BUCKET_MS });
+    await settle();
+
+    // Stale runway flushed — every original in-flight prefetch was aborted.
+    expect(prefetchBatches.every((b) => b.signal?.aborted)).toBe(true);
+
+    tileset.finalize();
+  });
+
+  it('flushes on a zoom change even when bounds are unchanged', async () => {
+    const batches: GatedBatch[] = [];
+    const tileset = prefetchingTileset(batches);
+
+    tileset.update({ bounds: SMALL, zoom: 6, time: 0, timeWindow: BUCKET_MS });
+    await settle();
+    const prefetchBatches = batches.slice(1);
+    expect(prefetchBatches.length).toBeGreaterThan(0);
+
+    tileset.update({ bounds: SMALL, zoom: 7, time: 0, timeWindow: BUCKET_MS });
+    await settle();
+    expect(prefetchBatches.every((b) => b.signal?.aborted)).toBe(true);
+
+    tileset.finalize();
+  });
 });

@@ -115,6 +115,24 @@ const PREFETCH_RELOAD_FRACTION = 0.5;
 const SEEK_DETECTION_REAL_MS = 1000;
 
 /**
+ * Spatial flush tolerance, as a FRACTION of the viewport extent. A spatial
+ * viewport change flushes the prefetch runway (it was planned for the old
+ * bounds — see `selectAndLoadTiles`), but a controlled camera that DRIFTS
+ * smoothly (an AV ego-follow tracking the car, an easing pan) shifts the bounds
+ * a sub-tile sliver every frame. Without a tolerance that flushed — and aborted
+ * every in-flight prefetch — ~60×/second, so the runway could never build while
+ * the camera moved and tiles loaded reactively (visible motion stutter).
+ *
+ * The flush decision keys on bounds QUANTIZED to this fraction of the viewport
+ * span, so drift within ~1/8 of a viewport keeps the same key (no flush) while
+ * a genuine pan/zoom that shifts the viewport past a grid cell — or changes
+ * zoom — still crosses a cell and flushes the now-stale runway. The exact-bounds
+ * `selectKey` fast-path is untouched, so tile SELECTION still tracks the true
+ * viewport; only the (destructive) flush is debounced.
+ */
+const SPATIAL_FLUSH_TOLERANCE = 1 / 8;
+
+/**
  * Fraction of the tile-count cache budget the forward prefetch runway may
  * occupy in a single pass.
  *
@@ -330,6 +348,18 @@ export interface TileBatchHooks {
   onTileReady?: (index: number, tile: Tile) => void;
   /** Browser fetch-priority hint for the batch's HTTP requests. */
   fetchPriority?: 'high' | 'low' | 'auto';
+  /**
+   * Current play-head time (sim-ms) for the process-shared request scheduler's
+   * cross-source earliest-deadline-first priority (multi-source coordination,
+   * Phase 2 §2.8). The tileset populates it from its current viewport time so a
+   * batch implementation backed by `STTArchive.getTiles` can forward it as
+   * `TileRequestOptions.playheadTime`, letting the scheduler rank range-groups
+   * by distance-to-playhead comparably ACROSS archives that share this
+   * play-head. Optional; implementations that don't share a scheduler ignore it.
+   */
+  playheadTime?: number;
+  /** Play-head travel direction (+1 forward / -1 backward) paired with {@link playheadTime}. */
+  playheadDirection?: 1 | -1;
 }
 
 /** O(n) set equality used to decide whether the needed-tile set actually changed. */
@@ -581,10 +611,28 @@ export class SpatiotemporalTileset {
   // re-mark the same `neededTileKeys` set we already published. This
   // dominates the steady-state cost for tightly-throttled time ticks.
   private lastSelectKey: string = '';
-  
+
+  /**
+   * Monotonic stamp for the async `selectAndLoadTiles` pass. A pass captures it
+   * before its awaited directory slice and bails if a newer pass has started by
+   * the time it resolves, so a stale (slower) viewport's result can't clobber
+   * the current needed-tile set. `lastSelectKey` only dedupes passes with
+   * IDENTICAL params; it cannot order two concurrent different-param passes.
+   */
+  private selectGeneration = 0;
+
   // Separate queues for priority management
   private priorityQueue: TileId[] = []; // High priority - current time tiles
   private prefetchQueue: TileId[] = []; // Low priority - future tiles
+
+  /**
+   * Set true whenever `selectAndLoadTiles` enqueues priority tiles; cleared by
+   * `sortPriorityQueueByPlayhead` after it sorts. Draining the queue (shift
+   * from the front) preserves sort order, so ONLY enqueues invalidate the
+   * play-head-proximity sort — this flag stops `processRequestQueue` from
+   * re-sorting an unchanged queue on every batch finally-handler re-entry.
+   */
+  private priorityQueueDirty = false;
 
   // Prefetch wall-clock debounce. Without this, every tick of the time
   // controller that crosses the tileset update threshold triggers a full
@@ -607,13 +655,17 @@ export class SpatiotemporalTileset {
   private lastBufferChangeAt = 0;
 
   /**
-   * Spatial signature (`bounds|zoom`) of the previous selection pass. A
-   * change means the prefetch runway was planned for a viewport the camera
-   * has left, so it's auto-flushed (WS-C3 — "viewport is a second seek
-   * axis"). Time seeks are detected in `update()` instead, where the
+   * Viewport bounds + zoom of the previous selection pass. A SIGNIFICANT
+   * change (center pan or span/zoom change beyond `SPATIAL_FLUSH_TOLERANCE` of
+   * the viewport) means the prefetch runway was planned for a viewport the
+   * camera has left, so it's auto-flushed (WS-C3 — "viewport is a second seek
+   * axis"). A sub-tile DRIFT (follow-cam tracking the ego, easing pan) stays
+   * under the tolerance and does NOT flush, so the runway survives continuous
+   * camera motion. Time seeks are detected in `update()` instead, where the
    * pre-jump speed estimate is still available.
    */
-  private lastSpatialKey?: string;
+  private lastSpatialBounds?: BoundingBox;
+  private lastSpatialZoom?: number;
 
   /**
    * In-flight PREFETCH-tier requests (shared AbortController + the registry
@@ -977,6 +1029,30 @@ export class SpatiotemporalTileset {
   }
 
   /**
+   * Quantize the viewport bounds to a ~{@link SPATIAL_FLUSH_TOLERANCE} grid of
+   * their own extent, yielding a signature that is STABLE under sub-tile camera
+   * drift (an AV ego-follow tracking the car, an easing pan) but that changes
+   * once the viewport pans past ~1/8 of its span or the zoom changes. Used as
+   * the coverage-index signature so a smoothly drifting camera doesn't re-run
+   * the FULL-time-range directory slice (the heaviest query in the system) on
+   * every ~10 Hz selection pass — the buffered-runway estimate is a viewport
+   * approximation that tolerates sub-tile slack. This mirrors the tolerance the
+   * prefetch flush applies via its own center/span-delta check in
+   * `selectAndLoadTiles` (which can't be a grid key — it needs the pre-move
+   * bounds to measure drift, not a quantized snapshot).
+   */
+  private quantizedSpatialKey(bounds: BoundingBox, zoom: number): string {
+    const lonSpan = bounds.maxLon - bounds.minLon || 1e-9;
+    const latSpan = bounds.maxLat - bounds.minLat || 1e-9;
+    const qLon = lonSpan * SPATIAL_FLUSH_TOLERANCE;
+    const qLat = latSpan * SPATIAL_FLUSH_TOLERANCE;
+    return (
+      `${Math.round(bounds.minLon / qLon)}|${Math.round(bounds.minLat / qLat)}` +
+      `|${Math.round(bounds.maxLon / qLon)}|${Math.round(bounds.maxLat / qLat)}|${zoom}`
+    );
+  }
+
+  /**
    * Select tiles for current viewport and queue for loading
    */
   private async selectAndLoadTiles(): Promise<void> {
@@ -1003,18 +1079,44 @@ export class SpatiotemporalTileset {
       return;
     }
 
-    // Spatial viewport change (pan/zoom): the prefetch runway was planned
-    // for the previous bounds/zoom, so it now warms tiles the camera has
-    // left — flush it and let the next prefetch pass re-plan for the new
-    // viewport. Time SEEKS are detected in update() instead (speed-aware,
-    // before the jump can poison the speed estimate). flushPrefetch clears
-    // lastSelectKey, so assign it AFTER the flush.
-    const spatialKey =
-      `${bounds.minLon}|${bounds.minLat}|${bounds.maxLon}|${bounds.maxLat}|${zoom}`;
-    if (this.lastSpatialKey !== undefined && this.lastSpatialKey !== spatialKey) {
+    // Spatial viewport change (pan/zoom): the prefetch runway was planned for
+    // the previous viewport, so a real move now warms tiles the camera has left
+    // — flush it and let the next prefetch pass re-plan (WS-C3, "viewport is a
+    // second seek axis"). But flush ONLY on a SIGNIFICANT change: the center
+    // panned, or the span/zoom changed, by more than SPATIAL_FLUSH_TOLERANCE of
+    // the viewport extent. A controlled camera that DRIFTS a sub-tile sliver per
+    // frame (follow-cam, easing pan) stays under the tolerance and keeps its
+    // prefetch — without this it flushed (and aborted every in-flight prefetch)
+    // ~60×/s, so the runway never built while the camera moved. Time SEEKS are
+    // detected in update() instead (speed-aware, before the jump poisons the
+    // speed estimate). flushPrefetch clears lastSelectKey, so assign it AFTER.
+    const prev = this.lastSpatialBounds;
+    let spatialFlush = false;
+    if (prev !== undefined) {
+      const lonSpan = Math.max(bounds.maxLon - bounds.minLon, prev.maxLon - prev.minLon, 1e-9);
+      const latSpan = Math.max(bounds.maxLat - bounds.minLat, prev.maxLat - prev.minLat, 1e-9);
+      const dCenterLon = Math.abs((bounds.minLon + bounds.maxLon) - (prev.minLon + prev.maxLon)) / 2;
+      const dCenterLat = Math.abs((bounds.minLat + bounds.maxLat) - (prev.minLat + prev.maxLat)) / 2;
+      const dSpanLon = Math.abs((bounds.maxLon - bounds.minLon) - (prev.maxLon - prev.minLon));
+      const dSpanLat = Math.abs((bounds.maxLat - bounds.minLat) - (prev.maxLat - prev.minLat));
+      spatialFlush =
+        zoom !== this.lastSpatialZoom ||
+        dCenterLon > lonSpan * SPATIAL_FLUSH_TOLERANCE ||
+        dCenterLat > latSpan * SPATIAL_FLUSH_TOLERANCE ||
+        dSpanLon > lonSpan * SPATIAL_FLUSH_TOLERANCE ||
+        dSpanLat > latSpan * SPATIAL_FLUSH_TOLERANCE;
+    }
+    if (spatialFlush) {
       this.flushPrefetch();
     }
-    this.lastSpatialKey = spatialKey;
+    // Copy (not alias) — the layer reuses its cached bounds object across frames.
+    this.lastSpatialBounds = {
+      minLon: bounds.minLon,
+      minLat: bounds.minLat,
+      maxLon: bounds.maxLon,
+      maxLat: bounds.maxLat,
+    };
+    this.lastSpatialZoom = zoom;
     this.lastSelectKey = selectKey;
 
     // Keep the coverage index aligned with the spatial viewport (no-op until
@@ -1033,6 +1135,15 @@ export class SpatiotemporalTileset {
     const now = Date.now();
     const neededTileKeys = new Set<string>();
     
+    // Generation guard: this method is async (the getAvailableTiles slice can
+    // be a real network round-trip for paged directories), so two passes for
+    // DIFFERENT viewports may be in flight at once. If the earlier (now stale)
+    // one resolves LAST it would clobber `neededTileKeys` and the queues with
+    // the wrong viewport's tiles. Stamp this pass and bail after the await once
+    // a newer selection supersedes it. (`lastSelectKey` only dedupes passes
+    // with IDENTICAL params; it cannot order concurrent different-param ones.)
+    const generation = ++this.selectGeneration;
+
     // Query available tiles for ALL zoom levels IN PARALLEL
     // This is much faster than sequential queries, especially for initial load.
     // Dispatches between raw and summary tiers per zoom based on the
@@ -1043,7 +1154,25 @@ export class SpatiotemporalTileset {
         tileIds: await this.fetchAvailableTilesForZoom(bounds, z, timeRange),
       }))
     );
-    
+
+    // A newer selection started while we awaited — its viewport is the current
+    // truth. Drop this stale result before it mutates any shared state.
+    if (generation !== this.selectGeneration) return;
+
+    // Queue-membership snapshots so the promote-from-prefetch branch below is
+    // O(N + Q) instead of O(N·Q): the old code did a `.some()` over the
+    // priority queue AND a `.findIndex()` over the prefetch queue PER candidate
+    // (and the playhead sweeping into a band of prefetched buckets promotes many
+    // tiles at once). We test membership against these Sets and batch the
+    // prefetch removals into ONE filter pass after the loop — mirroring the
+    // `queuedKeys` pattern prefetchFutureTiles already uses.
+    const priorityKeys = new Set<string>();
+    for (const qid of this.priorityQueue) priorityKeys.add(this.tileIdToKey(qid));
+    const prefetchKeys = new Set<string>();
+    for (const qid of this.prefetchQueue) prefetchKeys.add(this.tileIdToKey(qid));
+    const promotedFromPrefetch = new Set<string>();
+    let enqueuedPriority = false;
+
     // Process results - primary zoom first for proper queue ordering
     for (const { zoom: z, tileIds: availableTileIds } of tileIdsByZoom) {
       for (const tileId of availableTileIds) {
@@ -1094,6 +1223,8 @@ export class SpatiotemporalTileset {
             // Parent zoom - back of priority queue (still before prefetch)
             this.priorityQueue.push(tileId);
           }
+          priorityKeys.add(key);
+          enqueuedPriority = true;
         } else {
           // Update last used time
           header.lastUsed = now;
@@ -1109,31 +1240,43 @@ export class SpatiotemporalTileset {
             //  - promote it out of the prefetch queue into the priority queue.
             header.isCancelled = false;
 
-            if (!header.isLoading) {
-              const inPriority = this.priorityQueue.some(
-                (qid) => this.tileIdToKey(qid) === key
-              );
-              if (!inPriority) {
-                // Remove from the low-priority prefetch queue if present.
-                const pfIdx = this.prefetchQueue.findIndex(
-                  (qid) => this.tileIdToKey(qid) === key
-                );
-                if (pfIdx !== -1) {
-                  this.prefetchQueue.splice(pfIdx, 1);
-                }
-                // Enqueue at priority (front for primary zoom).
-                if (z === zoom) {
-                  this.priorityQueue.unshift(tileId);
-                } else {
-                  this.priorityQueue.push(tileId);
-                }
+            // Promote to priority unless it is already loading or already
+            // queued at priority. Membership is tested against the Sets built
+            // before the loop (O(1)) rather than scanning the queues per tile.
+            if (!header.isLoading && !priorityKeys.has(key)) {
+              // Mark for removal from the prefetch queue (batched into one
+              // filter pass after the loop) instead of an O(Q) splice here.
+              if (prefetchKeys.has(key)) {
+                promotedFromPrefetch.add(key);
+                prefetchKeys.delete(key);
               }
+              // Enqueue at priority (front for primary zoom).
+              if (z === zoom) {
+                this.priorityQueue.unshift(tileId);
+              } else {
+                this.priorityQueue.push(tileId);
+              }
+              priorityKeys.add(key);
+              enqueuedPriority = true;
             }
           }
         }
       }
     }
     
+    // Drop the promoted tiles from the prefetch queue in a single O(Q) pass
+    // (they are now queued at priority) instead of an O(Q) splice per tile.
+    if (promotedFromPrefetch.size > 0) {
+      this.prefetchQueue = this.prefetchQueue.filter(
+        (qid) => !promotedFromPrefetch.has(this.tileIdToKey(qid)),
+      );
+    }
+
+    // A fresh priority enqueue makes the play-head-proximity sort stale; flag
+    // it so the next processRequestQueue re-sorts (and only then). See
+    // sortPriorityQueueByPlayhead.
+    if (enqueuedPriority) this.priorityQueueDirty = true;
+
     // Compare against the previous needed set BEFORE overwriting it. The
     // frameNumber is the cache key consumers (AnimatedTripsLayer etc.) use
     // to decide whether to re-consolidate hundreds of MB of vertex data, so
@@ -1534,6 +1677,13 @@ export class SpatiotemporalTileset {
    */
   private sortPriorityQueueByPlayhead(): void {
     if (this.priorityQueue.length <= 1 || !this.currentViewport) return;
+    // Only re-sort when a selection has added priority tiles since the last
+    // sort. processRequestQueue calls this on every re-entry (each batch's
+    // finally-handler), but draining the queue (shift from the front) keeps it
+    // sorted, so re-sorting an unchanged queue is wasted O(Q log Q). Enqueues
+    // happen only in selectAndLoadTiles, which sets the dirty flag.
+    if (!this.priorityQueueDirty) return;
+    this.priorityQueueDirty = false;
     const { time, zoom } = this.currentViewport;
     const primaryZoom = this.getZoomLevelsToLoad(zoom)[0];
     this.priorityQueue.sort((a, b) => {
@@ -1716,6 +1866,13 @@ export class SpatiotemporalTileset {
         // Lookahead tiers yield to concurrent need-now fetches at the
         // browser's connection scheduler; priority keeps the default.
         fetchPriority: tier === 'priority' ? 'auto' : 'low',
+        // Cross-source EDF hint (multi-source coordination, Phase 2 §2.8): the
+        // current play-head time + committed prefetch direction, so a batch
+        // backed by a shared-scheduler archive can rank range-groups by
+        // distance-to-playhead comparably across archives. Forwarded by the
+        // layer's getTileDataBatch into STTArchive.getTiles({playheadTime}).
+        playheadTime: this.currentViewport?.time,
+        playheadDirection: this.prefetchDirection,
       },
     )
       .then((tiles) => {
@@ -2395,8 +2552,14 @@ export class SpatiotemporalTileset {
    */
   private maybeRebuildCoverageIndex(bounds: BoundingBox, zoom: number): void {
     const primaryZoom = this.getZoomLevelsToLoad(zoom)[0];
-    const signature =
-      `${bounds.minLon}|${bounds.minLat}|${bounds.maxLon}|${bounds.maxLat}|${primaryZoom}`;
+    // Quantize to the SAME tolerance the prefetch flush applies (see
+    // quantizedSpatialKey): a smoothly drifting camera (AV ego-follow, eased
+    // pan) otherwise re-runs this FULL-time-range directory slice — the
+    // heaviest getAvailableTiles query in the system — on every ~10 Hz
+    // selection pass, even though the buffered-runway estimate tolerates
+    // sub-tile spatial slack. A real pan/zoom past ~1/8 of the viewport (or any
+    // zoom change) still moves the key and rebuilds.
+    const signature = this.quantizedSpatialKey(bounds, primaryZoom);
     if (this.coverageIndex?.signature === signature) return;
     if (this.coverageBuildSignature === signature) return; // build in flight
     this.coverageBuildSignature = signature;

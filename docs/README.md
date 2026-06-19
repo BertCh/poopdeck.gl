@@ -26,47 +26,89 @@ datasets.
 
 ### deck.gl Layers
 
-- [**SpatioTemporalLayer**](./api/spatiotemporal-layer.md): Base class
-  used by every animated layer below.
-- [**AnimatedPointLayer**](./api/animated-point-layer.md): Animated
-  points (billboards).
-- [**AnimatedPathLayer**](./api/animated-path-layer.md): Animated
-  paths / trajectories with window-mode fade.
-- [**AnimatedPolygonLayer**](./api/animated-polygon-layer.md): Animated
-  polygons with optional extrusion.
-- [**AnimatedTripsLayer**](./api/animated-trips-layer.md): "Vehicle moving
-  along route" trails with per-vertex timestamps.
+Every animated layer extends **SpatioTemporalLayer**, which streams STT tiles
+into a deck.gl sublayer.
+
+- [**SpatioTemporalLayer**](./api/spatiotemporal-layer.md): Base class used by
+  every layer below — tile lifecycle, time wiring, and binary-attribute plumbing.
+
+**Core — points / paths / polygons / 3D**
+
+- [**AnimatedPointLayer**](./api/animated-point-layer.md): Animated points
+  (billboards), with window / wake / cumulative modes.
+- [**AnimatedPathLayer**](./api/animated-path-layer.md): Animated paths /
+  trajectories with window-mode fade.
+- [**AnimatedPolygonLayer**](./api/animated-polygon-layer.md): Animated polygons
+  with optional extrusion.
+- [**AnimatedColumnLayer**](./api/animated-column-layer.md): Time-animated 3D
+  columns / bars.
+- [**AnimatedIconLayer**](./api/animated-icon-layer.md): Directional icon markers
+  with heading rotation.
+- [**AnimatedBoundingBoxLayer**](./api/animated-bounding-box-layer.md): Oriented
+  3D boxes for tracked objects (the AV-cockpit overlay).
+
+**Trips**
+
+- [**AnimatedTripsLayer**](./api/animated-trips-layer.md): "Vehicle moving along
+  route" trails with per-vertex timestamps.
 - [**AnimatedTripHeadsLayer**](./api/animated-trip-heads-layer.md): A smooth
-  moving dot at the head of each active trip (CPU-interpolated position on a
-  stock ScatterplotLayer).
-- [**AnimatedHeatmapLayer**](./api/heatmap-time-layer.md): Temporal heatmap
-  built on deck.gl's aggregation layers, with stacked categorical channels.
-- [**H3SummaryLayer**](./api/h3-summary-layer.md): Renders the
-  server-aggregated H3 summary tier as hexagons.
+  moving dot at the head of each active trip (CPU-interpolated on a stock
+  ScatterplotLayer).
+
+**OD & flow**
+
+- [**AnimatedArcLayer**](./api/animated-arc-layer.md): Per-trip origin→destination
+  arcs (window mode, no aggregation).
+- [**AnimatedLineLayer**](./api/animated-line-layer.md): The flat sibling of the
+  arc layer.
+- [**FlowmapLayer**](./api/flowmap-layer.md): flowmap.gl-style animated OD
+  flowmap — tapered arrows sized by volume plus node circles.
+- [**FlowLinesLayer**](./api/flow-lines-layer.md): The tapered-arrow primitive
+  FlowmapLayer renders.
+- [**BundledFlowmapLayer**](./api/bundled-flowmap-layer.md): Flowmap with baked /
+  GPU edge bundling.
+- [**FlowCorridorLayer**](./api/flow-corridor-layer.md): Static corridor network
+  whose per-segment color pulses over a time series.
+
+**Summary tiers**
+
+- [**AnimatedHeatmapLayer**](./api/heatmap-time-layer.md): Temporal heatmap built
+  on deck.gl's aggregation layers, with stacked categorical channels.
+- [**H3SummaryLayer**](./api/h3-summary-layer.md): Server-aggregated H3 summary
+  tier rendered as hexagons.
+- [**QuadbinSummaryLayer**](./api/quadbin-summary-layer.md): Server-aggregated
+  Quadbin (quadkey) summary tier.
 
 ### Extensions
 
-- [**TimeFilterExtension**](./api/time-filter-extension.md): GPU-based
-  temporal filtering for any deck.gl layer.
-- [**CategoryColorExtension**](./api/category-color-extension.md): GPU-based
+- [**TimeFilterExtension**](./api/time-filter-extension.md): GPU temporal
+  filtering (and time-as-height) for any deck.gl layer.
+- [**CategoryColorExtension**](./api/category-color-extension.md): GPU
   categorical color lookup via a palette texture.
 
-### Controllers
+### Playback (`@poopdeck.gl/playback`)
 
-- [**TimeController**](./api/time-controller.md): Animation playback clock
-  shared across layers.
+- [**SttPlayer**](./api/stt-player.md): HTMLMediaElement-style facade over the
+  clock + governor — the high-level entry point.
+- [**TimeController**](./api/time-controller.md): Animation playback clock shared
+  across layers.
 - [**PlaybackGovernor**](./api/playback-governor.md): Buffering state machine
-  that gates the clock on a buffered runway (stall/resume, seek gates,
-  Auto speed).
+  that gates the clock on a buffered runway (stall/resume, seek gates, Auto speed).
 
 ### Reader (`@poopdeck.gl/core`)
 
-- [**Tile decoding**](./api/stt-loader.md): The `TileDecoder` interface
-  plus the inline / worker-pool implementations.
-- [**SpatiotemporalTileset**](./api/spatiotemporal-tileset.md): Tile
-  lifecycle, viewport + time-aware selection, and prefetching.
-- [**Binary Features**](./api/binary-features.md): The GPU-ready columnar
-  format `TileDecoder` returns.
+- [**Tile decoding**](./api/stt-loader.md): The `TileDecoder` interface plus the
+  inline / worker-pool implementations.
+- [**SpatiotemporalTileset**](./api/spatiotemporal-tileset.md): Tile lifecycle,
+  viewport + time-aware selection, and prefetching.
+- [**Binary Features**](./api/binary-features.md): The GPU-ready columnar format
+  `TileDecoder` returns.
+
+### React adapter (`@poopdeck.gl/react`)
+
+- [**@poopdeck.gl/react**](./api/stt-react.md): React playback hooks + UI
+  controls — `usePlayback`, `usePlaybackHotkeys`, `PlaybackControls`, and the
+  `HoverPreview` scrubber thumbnail.
 
 ### MapLibre adapter
 

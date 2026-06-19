@@ -15,6 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { STTArchive } from '../src/archive';
 import { encodeDirectory } from '../src/directory';
 import { GeometryType } from '../src/types';
+import { configureSharedScheduler } from '../src/shared-scheduler';
 import { packedFromSingleFile, packedFetch } from './helpers/packed-fixture';
 
 const FIXTURE = fileURLToPath(new URL('./fixtures/sample.stt', import.meta.url));
@@ -238,15 +239,26 @@ describe('STTArchive (packed format)', () => {
     expect(wide.calls - wideBefore).toBe(PACKS);
 
     // Zero gap → K separate requests, but never more than maxConcurrentRequests
-    // in flight at once (the pool spans groups of ALL packs).
-    const tight = { calls: 0, inFlight: 0, peak: 0 };
-    const aTight = new STTArchive({ url: manifestUrl, fetch: countingFetch(tight), coalesceGapBytes: 0, maxConcurrentRequests: 2 });
-    await aTight.getIndex();
-    const tightBefore = tight.calls;
-    const tilesTight = await aTight.getTiles(tileIds);
-    expect(tilesTight.every((t) => t !== null)).toBe(true);
-    expect(tight.calls - tightBefore).toBe(K);
-    expect(tight.peak).toBeLessThanOrEqual(2);
+    // in flight at once (the pool spans groups of ALL packs). The per-archive
+    // `maxConcurrentRequests` cap is the LEGACY (kill-switch-disabled) path's
+    // contract — with the process-shared scheduler ENABLED (the default),
+    // concurrency is governed by the GLOBAL budget, not the per-archive number
+    // (multi-source coordination, Phase 2). Disable the shared scheduler so this
+    // exercises the per-instance cursor runner it is asserting about, then
+    // restore the default so other tests see the shared path.
+    configureSharedScheduler({ enabled: false });
+    try {
+      const tight = { calls: 0, inFlight: 0, peak: 0 };
+      const aTight = new STTArchive({ url: manifestUrl, fetch: countingFetch(tight), coalesceGapBytes: 0, maxConcurrentRequests: 2 });
+      await aTight.getIndex();
+      const tightBefore = tight.calls;
+      const tilesTight = await aTight.getTiles(tileIds);
+      expect(tilesTight.every((t) => t !== null)).toBe(true);
+      expect(tight.calls - tightBefore).toBe(K);
+      expect(tight.peak).toBeLessThanOrEqual(2);
+    } finally {
+      configureSharedScheduler({ enabled: true });
+    }
   });
 
   it('rejects a pack server that ignores Range requests', async () => {

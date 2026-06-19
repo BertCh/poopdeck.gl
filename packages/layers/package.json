@@ -39,6 +39,7 @@
     "@deck.gl/extensions": ">=9.3.0 <10.0.0",
     "@deck.gl/geo-layers": ">=9.3.0 <10.0.0",
     "@deck.gl/layers": ">=9.3.0 <10.0.0",
+    "@deck.gl/mesh-layers": ">=9.3.0 <10.0.0",
     "@luma.gl/core": ">=9.3.0 <10.0.0",
     "@luma.gl/engine": ">=9.3.0 <10.0.0"
   },
@@ -48,6 +49,7 @@
     "@deck.gl/extensions": "^9.3.2",
     "@deck.gl/geo-layers": "^9.3.2",
     "@deck.gl/layers": "^9.3.2",
+    "@deck.gl/mesh-layers": "^9.3.2",
     "@luma.gl/core": "^9.3.0",
     "@luma.gl/engine": "^9.3.0",
     "@types/node": "^20.14.0",

@@ -548,6 +548,19 @@ export interface ArchiveOptions {
    * leaf on demand, even for tiny directories).
    */
   directoryPageThresholdBytes?: number;
+  /**
+   * Relative weight of THIS archive for the process-shared request scheduler's
+   * weighted-fair (Deficit-Round-Robin) slot share when several archives
+   * composite into one scene (multi-source coordination, Phase 2). Higher
+   * weight ⇒ a larger share of the global concurrency budget when archives
+   * contend; an idle archive's share is reclaimed (work-conserving), so a SINGLE
+   * archive always gets the whole budget regardless of weight.
+   *
+   * **Defaults to 1.** Has no effect when the shared scheduler is disabled (see
+   * `configureSharedScheduler`) — each archive then uses its own per-instance
+   * concurrency cap as before.
+   */
+  schedulerWeight?: number;
 }
 
 /** Options for tile requests */
@@ -573,4 +586,25 @@ export interface TileRequestOptions {
    * browser's connection scheduler favors concurrent need-now fetches.
    */
   fetchPriority?: 'high' | 'low' | 'auto';
+  /**
+   * Current play-head time (sim-ms, in the same time domain as a tile's
+   * `timeStart`) for the process-shared scheduler's cross-source
+   * earliest-deadline-first (EDF) priority (multi-source coordination,
+   * Phase 2 §2.8). When set, each coalesced range-group is prioritized by its
+   * members' minimum distance-to-playhead — comparable ACROSS archives because
+   * they share one playhead — so the most-imminent data loads first globally,
+   * not just within one source. Omit it and the scheduler falls back to a
+   * per-archive nearest-first sequence (tier-correct, but not true cross-source
+   * EDF within a tier). The {@link fetchPriority} tier still dominates: a
+   * `'low'` (prefetch) group never outranks an `'auto'`/`'high'` (need-now)
+   * group of any source.
+   */
+  playheadTime?: number;
+  /**
+   * Play-head travel direction (+1 forward / -1 backward) paired with
+   * {@link playheadTime}. Data BEHIND the play-head in the travel direction is
+   * deprioritized (the play-head has already passed it). Defaults to forward
+   * (+1) when omitted but `playheadTime` is set.
+   */
+  playheadDirection?: 1 | -1;
 }

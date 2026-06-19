@@ -62,6 +62,33 @@ export {
   type ThroughputEstimatorOptions,
 } from './throughput';
 
+// ─── Shared request scheduler (multi-source coordination, Phase 2) ──────────
+// Process-shareable global concurrency budget allocated across N sources by
+// dynamic priority (lower value = higher priority; <0 cancels) + Deficit-Round-
+// Robin weighted-fair share. Wired into the archive's range-fetch hot path
+// behind the kill-switch in `shared-scheduler`.
+export {
+  SharedRequestScheduler,
+  createCancellationError,
+  isCancellationError,
+  type ScheduleOptions,
+  type ScheduledRequest,
+  type SchedulerStats,
+  type SharedRequestSchedulerOptions,
+} from './request-scheduler';
+
+// ─── Process-shared scheduler singleton + kill-switch ───────────────────────
+// `getSharedScheduler()` is the one instance every STTArchive draws from;
+// `configureSharedScheduler({enabled})` is THE ROLLBACK (default enabled).
+export {
+  getSharedScheduler,
+  configureSharedScheduler,
+  isSharedSchedulingEnabled,
+  getSharedSchedulerMaxRequests,
+  resetSharedScheduler,
+  type ConfigureSharedSchedulerOptions,
+} from './shared-scheduler';
+
 // ─── Compression ────────────────────────────────────────────────────────────
 export { decompress, decompressSync } from './compression';
 

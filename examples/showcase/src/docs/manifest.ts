@@ -30,7 +30,7 @@ export interface DocSection {
 }
 
 export const GITHUB_BLOB_BASE =
-  "https://github.com/BertCh/spatiotemporal-tiles/blob/master/";
+  "https://github.com/BertCh/spatiotemporal-tiles/blob/main/";
 
 export const docSections: DocSection[] = [
   {
@@ -162,6 +162,11 @@ export const docSections: DocSection[] = [
         title: "FlowLinesLayer",
       },
       {
+        slug: "api/flow-corridor-layer",
+        file: "api/flow-corridor-layer.md",
+        title: "FlowCorridorLayer",
+      },
+      {
         slug: "api/animated-arc-layer",
         file: "api/animated-arc-layer.md",
         title: "AnimatedArcLayer",
@@ -180,6 +185,11 @@ export const docSections: DocSection[] = [
         slug: "api/animated-column-layer",
         file: "api/animated-column-layer.md",
         title: "AnimatedColumnLayer",
+      },
+      {
+        slug: "api/animated-bounding-box-layer",
+        file: "api/animated-bounding-box-layer.md",
+        title: "AnimatedBoundingBoxLayer",
       },
       {
         slug: "api/time-filter-extension",
@@ -220,6 +230,11 @@ export const docSections: DocSection[] = [
         slug: "api/binary-features",
         file: "api/binary-features.md",
         title: "Binary Features",
+      },
+      {
+        slug: "api/stt-react",
+        file: "api/stt-react.md",
+        title: "@poopdeck.gl/react",
       },
       {
         slug: "api/stt-maplibre",

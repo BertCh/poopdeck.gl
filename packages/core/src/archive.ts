@@ -50,6 +50,11 @@ import { OpfsTileCache } from './opfs-cache';
 import { decompress, unzstdSync } from './compression';
 import { createSttTileSource, type SttTileSource } from './tile-source';
 import { ThroughputEstimator, type ThroughputEstimate } from './throughput';
+import {
+  getSharedScheduler,
+  isSharedSchedulingEnabled,
+} from './shared-scheduler';
+import { createCancellationError, isCancellationError } from './request-scheduler';
 
 /** `format` discriminator written into every packed manifest. */
 const PACKED_FORMAT = 'stt-packed';
@@ -90,6 +95,18 @@ const DEFAULT_MAX_CONCURRENT_REQUESTS = 24;
  * re-stampede the host in lockstep. Aborts are NEVER retried.
  */
 const DEFAULT_RANGE_RETRY_DELAYS_MS = [250, 1000];
+/** Default fair-share weight for an archive in the process-shared scheduler. */
+const DEFAULT_SCHEDULER_WEIGHT = 1;
+/**
+ * Tier base for the shared scheduler's cross-source EDF priority. A `'low'`
+ * (prefetch/lookahead) range-group is offset by this large constant so it ALWAYS
+ * ranks below any need-now (`'auto'`/`'high'`) group GLOBALLY across sources —
+ * the bandwidth analog of required-vs-optional (§2.7). Need-now groups start at
+ * base 0; within a tier, the EDF distance-to-playhead term orders them. The
+ * constant exceeds any realistic distance-to-playhead in sim-ms so the tiers
+ * never interleave.
+ */
+const SCHEDULER_PREFETCH_TIER_BASE = 1e15;
 /**
  * Default per-transfer stall timeout. hls.js ships 20 s (`fragLoadingTimeOut`)
  * and Shaka ~30 s; without one, a TCP-stalled response hangs its tile forever
@@ -435,6 +452,8 @@ export class STTArchive {
   private retryDelaysMs: number[] = DEFAULT_RANGE_RETRY_DELAYS_MS;
   /** Per-transfer stall timeout; `0` disables (see options). */
   private transferTimeoutMs: number = DEFAULT_TRANSFER_TIMEOUT_MS;
+  /** Fair-share weight in the process-shared scheduler (see options). */
+  private schedulerWeight: number = DEFAULT_SCHEDULER_WEIGHT;
 
   /**
    * Dual-EWMA throughput estimator fed by completed coalesced range
@@ -547,6 +566,13 @@ export class STTArchive {
       }
       if (typeof options.transferTimeoutMs === 'number' && options.transferTimeoutMs >= 0) {
         this.transferTimeoutMs = options.transferTimeoutMs;
+      }
+      if (
+        typeof options.schedulerWeight === 'number' &&
+        Number.isFinite(options.schedulerWeight) &&
+        options.schedulerWeight > 0
+      ) {
+        this.schedulerWeight = options.schedulerWeight;
       }
       if (
         typeof options.directoryPageThresholdBytes === 'number' &&
@@ -1119,8 +1145,15 @@ export class STTArchive {
       }
     }
 
-    const fetchGroup = async (g: Group): Promise<void> => {
-      const buf = await this.fetchObjectRangeWithRetry(this.directoryUrl!, g.start, g.end, signal);
+    // `grpSignal` is the per-group signal: the caller's `signal` on the legacy
+    // path, or the scheduler-provided signal on the shared-scheduler path.
+    const fetchGroup = async (g: Group, grpSignal: AbortSignal | undefined): Promise<void> => {
+      const buf = await this.fetchObjectRangeWithRetry(
+        this.directoryUrl!,
+        g.start,
+        g.end,
+        grpSignal,
+      );
       for (const i of g.members) {
         const d = this.pageTable![i];
         const rel = this.rootLength + d.relOffset - g.start;
@@ -1138,31 +1171,88 @@ export class STTArchive {
       }
     };
 
-    // Register a shared promise per pending page so concurrent queries dedupe.
-    const groupPromises: Promise<void>[] = [];
+    // Page fetches don't carry a play-head, so the scheduler falls back to a
+    // per-archive byte-order / enqueue-order sequence (pages are already sorted
+    // by index = byte order). Directory paging happens at viewport-settle time,
+    // ahead of the tile range fetches the EDF term actually orders, so this is
+    // fine.
+    const groupMinDistance = (): number | null => null;
+
+    // Register a shared promise per pending page so concurrent queries dedupe,
+    // then dispatch all groups through runGroupFetches (shared scheduler when
+    // enabled, legacy cursor runner otherwise). We pre-create a per-group
+    // deferred so the registry can point at the eventual settlement BEFORE
+    // runGroupFetches starts the (possibly scheduler-deferred) fetch — so a
+    // concurrent query that arrives while a group is merely queued still dedups
+    // onto it. The registered promise is `.catch`-guarded so a later caller's
+    // abort can't surface as an unhandled rejection on a different caller.
+    const groupSettled = new Map<
+      Group,
+      { resolve: () => void; reject: (e: unknown) => void }
+    >();
+    // Groups whose deferred has already been settled by `executeGroup`. On the
+    // shared-scheduler path a group cancelled while still QUEUED is dropped by
+    // the scheduler WITHOUT ever invoking `execute` (see request-scheduler
+    // abortEntry), so its `executeGroup` wrapper never runs and never settles
+    // the deferred. We therefore reject any leftover deferred in the `finally`
+    // below — otherwise its `reg.finally` never prunes `pageFetchPromises` and
+    // dedup waiters (`await Promise.all(inflight)`) hang forever.
+    const settledGroups = new Set<Group>();
     for (const g of groups) {
-      const p = fetchGroup(g).finally(() => {
-        for (const i of g.members) this.pageFetchPromises.delete(i);
+      let resolve!: () => void;
+      let reject!: (e: unknown) => void;
+      const promise = new Promise<void>((res, rej) => {
+        resolve = res;
+        reject = rej;
       });
-      for (const i of g.members) this.pageFetchPromises.set(i, p);
-      groupPromises.push(p);
+      groupSettled.set(g, { resolve, reject });
+      const reg = promise.finally(() => {
+        for (const i of g.members) {
+          if (this.pageFetchPromises.get(i) === reg) this.pageFetchPromises.delete(i);
+        }
+      });
+      // Guard against an unhandled rejection: dedup waiters that DO care await
+      // it (and re-observe the rejection); the registry copy must not crash.
+      reg.catch(() => {});
+      for (const i of g.members) this.pageFetchPromises.set(i, reg);
     }
 
-    // Bound concurrency across groups.
-    const limit = Math.max(1, this.maxConcurrentRequests);
-    if (groupPromises.length > limit) {
-      let next = 0;
-      const runner = async (): Promise<void> => {
-        for (;;) {
-          const k = next++;
-          if (k >= groupPromises.length) return;
-          await groupPromises[k];
-        }
-      };
-      await Promise.all(Array.from({ length: limit }, () => runner()));
-    } else {
-      await Promise.all(groupPromises);
+    // Drive the fetches; resolve/reject each group's deferred as it settles so
+    // dedup waiters unblock. An abort propagates to THIS caller (matching the
+    // pre-Phase-2 `await Promise.all(groupPromises)` semantics).
+    let runError: unknown;
+    let threw = false;
+    try {
+      await this.runGroupFetches(
+        groups,
+        async (g, grpSignal) => {
+          const d = groupSettled.get(g)!;
+          settledGroups.add(g);
+          try {
+            await fetchGroup(g, grpSignal);
+            d.resolve();
+          } catch (e) {
+            d.reject(e);
+            throw e;
+          }
+        },
+        groupMinDistance,
+        { signal },
+      );
+    } catch (e) {
+      runError = e;
+      threw = true;
+    } finally {
+      // Settle any group whose `executeGroup` was never invoked (scheduler
+      // dropped it while queued on caller-abort). Without this the deferred —
+      // and its `reg.finally` that prunes `pageFetchPromises` — never fire,
+      // leaking the registry entry and deadlocking later dedup waiters.
+      for (const [g, d] of groupSettled) {
+        if (settledGroups.has(g)) continue;
+        d.reject(runError ?? createCancellationError('Superseded'));
+      }
     }
+    if (threw) throw runError;
     await Promise.all(inflight);
   }
 
@@ -1373,6 +1463,238 @@ export class STTArchive {
   }
 
   /**
+   * Compute the cross-source EDF priority for a coalesced range-group
+   * (multi-source coordination, Phase 2 §2.8). LOWER value = higher priority
+   * (Cesium/scheduler semantics).
+   *
+   *   priority = tierBase + distance-to-playhead-in-sim-ms
+   *
+   * - `tierBase` is 0 for need-now (`'auto'`/`'high'`) groups and a large
+   *   constant for `'low'` (prefetch) groups, so prefetch ALWAYS ranks below
+   *   need-now work globally across archives (the required-vs-optional analog).
+   * - The distance term is the group's MINIMUM distance-to-playhead in sim-ms
+   *   across its members — comparable across archives because they share one
+   *   playhead. Data already passed by the play-head (behind it in the travel
+   *   direction) is pushed far back (a large positive offset) so it never beats
+   *   imminent data; the play-head doesn't need it now.
+   *
+   * When no playhead is threaded in (`options.playheadTime` unset) the distance
+   * term is a per-archive monotonic byte-order / enqueue-order sequence number
+   * instead — tier-correct, but not true cross-source EDF within a tier (see
+   * `TileRequestOptions.playheadTime`). Returns a finite number ≥ 0; this is the
+   * `getPriority` callback the scheduler re-evaluates at dispatch time. It never
+   * returns `< 0` — supersession cancellation is wired via the caller's abort
+   * signal (→ `ScheduledRequest.abort()`), not via negative priority, so the two
+   * mechanisms can't double-cancel.
+   */
+  private groupSchedulerPriority(
+    minDistanceMs: number | null,
+    fallbackSeq: number,
+    fetchPriority: 'high' | 'low' | 'auto' | undefined,
+  ): number {
+    const tierBase = fetchPriority === 'low' ? SCHEDULER_PREFETCH_TIER_BASE : 0;
+    // Within a tier: EDF distance-to-playhead when known, else byte-order /
+    // enqueue-order seq.
+    const term = minDistanceMs !== null && Number.isFinite(minDistanceMs)
+      ? Math.max(0, minDistanceMs)
+      : Math.max(0, fallbackSeq);
+    return tierBase + term;
+  }
+
+  /**
+   * Minimum distance-to-playhead in sim-ms across a set of tile entries, given
+   * the threaded play-head time + direction. Data BEHIND the play-head in the
+   * travel direction is offset by a large constant so it sorts after all data
+   * ahead of (or at) the play-head — it's already been passed. Returns `null`
+   * when no play-head was threaded in (the caller then falls back to a
+   * per-archive byte-order / enqueue-order sequence). See
+   * {@link groupSchedulerPriority}.
+   */
+  private minDistanceToPlayhead(
+    entries: TileEntry[],
+    options: TileRequestOptions | undefined,
+  ): number | null {
+    const t = options?.playheadTime;
+    if (typeof t !== 'number' || !Number.isFinite(t)) return null;
+    const dir = options?.playheadDirection === -1 ? -1 : 1;
+    // Anything more than this far behind the play-head is "already passed".
+    const BEHIND_OFFSET = SCHEDULER_PREFETCH_TIER_BASE / 2;
+    let best = Infinity;
+    for (const e of entries) {
+      // Signed distance in the travel direction (positive = ahead of playhead).
+      const ahead = dir > 0 ? e.timeStart - t : t - e.timeStart;
+      // Distance metric: |t - timeStart|, but penalize data behind the playhead
+      // so imminent-ahead data always wins.
+      const dist = ahead >= 0 ? ahead : BEHIND_OFFSET + Math.abs(ahead);
+      if (dist < best) best = dist;
+    }
+    return Number.isFinite(best) ? best : null;
+  }
+
+  /**
+   * Dispatch a set of coalesced range-group fetches with bounded concurrency,
+   * the unit of work both {@link getTiles} and {@link fetchAndMergePages} hand
+   * off (multi-source coordination, Phase 2 — integration; see
+   * docs/roadmap/multi-source-coordination.md §5 Phase 2).
+   *
+   * TWO CLEANLY-SEPARATED PATHS, chosen by the kill-switch
+   * ({@link isSharedSchedulingEnabled}, default ON):
+   *
+   *  - **DISABLED (the fallback / rollback path):** the EXACT pre-Phase-2
+   *    per-instance cursor runner — `limit` runners pull from a shared `next++`
+   *    cursor so at most `maxConcurrentRequests` group fetches are ever in
+   *    flight for THIS archive. Behaviour is byte-for-byte unchanged from
+   *    before Phase 2.
+   *  - **ENABLED:** each group is `scheduler.schedule(...)`'d on the
+   *    process-shared {@link getSharedScheduler} under THIS archive's
+   *    `sourceId` (its url) + `schedulerWeight`, with a cross-source EDF
+   *    `getPriority` ({@link groupSchedulerPriority}). The global budget is
+   *    shared across all archives; a single archive still draws the whole budget
+   *    (DRR is work-conserving) so there is no single-source regression.
+   *
+   * Supersession: the caller's `options.signal` (the tileset's per-batch
+   * AbortController) is honored in BOTH paths. In the scheduled path the
+   * caller-abort fires the scheduled request's `abort()` — cancelling it whether
+   * queued (dropped, frees nothing) or running (its scheduler signal fires) —
+   * and that scheduler signal is the one passed into `executeGroup`, so retry /
+   * timeout / raceAbort inside it stop promptly. Retry happens INSIDE
+   * `executeGroup` (one slot per logical group across all its retries); the slot
+   * frees on terminal success OR failure via the scheduler's done() handshake.
+   *
+   * `executeGroup` must NEVER reject for a non-abort reason: each call site
+   * already swallows per-group failures into per-tile `null`s, so a rejection
+   * here is only ever an abort (which the scheduler treats as a settled slot).
+   */
+  private async runGroupFetches<G>(
+    groups: G[],
+    executeGroup: (group: G, signal: AbortSignal | undefined) => Promise<void>,
+    groupMinDistanceMs: (group: G) => number | null,
+    options: TileRequestOptions | undefined,
+  ): Promise<void> {
+    if (groups.length === 0) return;
+
+    // ── Kill-switch DISABLED → legacy per-instance cursor runner (unchanged). ──
+    if (!isSharedSchedulingEnabled()) {
+      const limit = Math.max(1, this.maxConcurrentRequests);
+      if (groups.length <= limit) {
+        await Promise.all(groups.map((g) => executeGroup(g, options?.signal)));
+        return;
+      }
+      let next = 0;
+      const runner = async (): Promise<void> => {
+        for (;;) {
+          const i = next++;
+          if (i >= groups.length) return;
+          await executeGroup(groups[i], options?.signal);
+        }
+      };
+      await Promise.all(Array.from({ length: limit }, () => runner()));
+      return;
+    }
+
+    // ── Kill-switch ENABLED → route every group through the shared scheduler. ──
+    const scheduler = getSharedScheduler();
+    const callerSignal = options?.signal;
+    const fetchPriority = options?.fetchPriority;
+
+    // Each group is scheduled independently; we must observe EVERY group's
+    // settlement (success or rejection) so a caller-abort — which rejects all of
+    // them, possibly at different times — never leaves an unhandled rejection
+    // when Promise.all settles on the first one. We therefore record the first
+    // non-abort error ourselves and surface a single AbortError on caller abort.
+    let firstError: unknown;
+    let aborted = false;
+    const removers: Array<() => void> = [];
+
+    // Schedule ONE group on the shared scheduler and return a promise for its
+    // settlement (already error-observed so it never surfaces as an unhandled
+    // rejection). Caller supersession → scheduled-request abort, detached when
+    // the request settles so neither outlives the other.
+    const scheduleOne = (group: G, fallbackSeq: number): Promise<void> => {
+      const minDist = groupMinDistanceMs(group);
+      const req = scheduler.scheduleRequest<void>({
+        sourceId: this.url,
+        weight: this.schedulerWeight,
+        getPriority: () =>
+          this.groupSchedulerPriority(minDist, fallbackSeq, fetchPriority),
+        // The scheduler's signal fires on cancel/abort; pass it to the fetch
+        // so retry/timeout/raceAbort inside executeGroup stop promptly.
+        execute: (schedulerSignal) => executeGroup(group, schedulerSignal),
+      });
+      // Wire caller supersession → scheduled-request abort. One-shot; detached
+      // when the request settles so neither outlives the other (idempotent
+      // abort, slot freed exactly once via the scheduler's done() handshake).
+      if (callerSignal) {
+        if (callerSignal.aborted) {
+          req.abort('Superseded (caller aborted before dispatch)');
+        } else {
+          const onAbort = (): void => req.abort('Superseded (caller aborted)');
+          callerSignal.addEventListener('abort', onAbort, { once: true });
+          removers.push(() => callerSignal.removeEventListener('abort', onAbort));
+        }
+      }
+      // Observe every settlement. A scheduler cancellation or a fetch abort is a
+      // supersession (record `aborted`); any OTHER rejection is a real error
+      // (executeGroup already swallows per-group fetch failures into per-tile
+      // nulls, so this is rare — a programming error or an unexpected throw).
+      return req.promise.then(
+        () => {},
+        (err) => {
+          if (isCancellationError(err) || isAbortError(err)) {
+            aborted = true;
+          } else if (firstError === undefined) {
+            firstError = err;
+          }
+        },
+      );
+    };
+
+    // PER-ARCHIVE CEILING: the shared scheduler's GLOBAL budget bounds the
+    // aggregate in-flight across ALL archives, but a consumer that lowers this
+    // archive's `maxConcurrentRequests` (e.g. the showcase's 12) wants to
+    // throttle THIS dataset's own range concurrency too. So cap how many of THIS
+    // archive's groups are concurrently scheduled (queued+running on the shared
+    // scheduler) at `min(group count, maxConcurrentRequests)`. When the cap is
+    // ≥ the group count (the default 24 ≥ the global budget) every group is
+    // scheduled at once and the global budget alone is binding — no regression
+    // to the work-conserving "single source draws the whole budget" guarantee.
+    const perArchiveCap = Math.max(1, this.maxConcurrentRequests);
+    try {
+      if (groups.length <= perArchiveCap) {
+        await Promise.all(groups.map((g, i) => scheduleOne(g, i)));
+      } else {
+        // `perArchiveCap` runners pull from a shared cursor: each schedules one
+        // group, awaits its settlement, then pulls the next — so at most
+        // `perArchiveCap` of this archive's groups are scheduled at any instant.
+        let next = 0;
+        const runner = async (): Promise<void> => {
+          for (;;) {
+            // Stop pulling new work once the caller superseded this batch: the
+            // already-scheduled groups get aborted via their `onAbort`; the
+            // not-yet-scheduled ones simply never enqueue.
+            if (callerSignal?.aborted) {
+              aborted = true;
+              return;
+            }
+            const i = next++;
+            if (i >= groups.length) return;
+            await scheduleOne(groups[i], i);
+          }
+        };
+        await Promise.all(
+          Array.from({ length: perArchiveCap }, () => runner()),
+        );
+      }
+    } finally {
+      for (const remove of removers) remove();
+    }
+    // Surface a real error first, then an abort (matching the legacy path, where
+    // an in-flight abort rejects the batch with an AbortError).
+    if (firstError !== undefined) throw firstError;
+    if (aborted) throw new DOMException('The operation was aborted.', 'AbortError');
+  }
+
+  /**
    * Fetch many tiles, coalescing contiguous byte ranges into single requests.
    * Returns tiles in the same order as `ids`; missing tiles are `null`.
    */
@@ -1509,7 +1831,11 @@ export class STTArchive {
       // range response also feeds the throughput estimator, at busy-window
       // granularity (see beginTransferSample / endTransferSample) so the
       // concurrent pool can't make each request look like 1/Nth of the link.
-      const fetchGroup = async (group: Group): Promise<void> => {
+      // `signal` is the per-group signal: the caller's `options.signal` on the
+      // legacy path, or the scheduler-provided signal on the shared-scheduler
+      // path (so retry / timeout / raceAbort inside stop the moment the
+      // scheduled request is cancelled — see runGroupFetches).
+      const fetchGroup = async (group: Group, signal: AbortSignal | undefined): Promise<void> => {
         let buffer: ArrayBuffer;
         this.beginTransferSample();
         try {
@@ -1517,7 +1843,7 @@ export class STTArchive {
             group.packId,
             group.start,
             group.end,
-            options?.signal,
+            signal,
             options?.fetchPriority,
           );
           this.endTransferSample(buffer.byteLength);
@@ -1534,7 +1860,7 @@ export class STTArchive {
                   m.entry.packId,
                   m.entry.offset,
                   m.entry.offset + m.entry.length - 1,
-                  options?.signal,
+                  signal,
                   options?.fetchPriority,
                 );
                 this.endTransferSample(single.byteLength);
@@ -1574,24 +1900,19 @@ export class STTArchive {
         );
       };
 
-      const limit = Math.max(1, this.maxConcurrentRequests);
-      if (groups.length <= limit) {
-        for (const group of groups) jobs.push(fetchGroup(group));
-      } else {
-        // More groups than the concurrency budget: `limit` runners pull from a
-        // shared cursor so at most `limit` range requests are ever in flight.
-        let next = 0;
-        const runner = async (): Promise<void> => {
-          for (;;) {
-            const i = next++;
-            if (i >= groups.length) return;
-            await fetchGroup(groups[i]);
-          }
-        };
-        jobs.push(
-          Promise.all(Array.from({ length: limit }, () => runner())).then(() => undefined)
-        );
-      }
+      // Dispatch the coalesced groups — through the process-shared scheduler
+      // when enabled (one slot per group, cross-source EDF + weighted-fair
+      // share), or the legacy per-instance cursor runner when the kill-switch is
+      // off. See runGroupFetches. The EDF distance term uses each group's
+      // members' tile timeStarts vs the threaded play-head.
+      jobs.push(
+        this.runGroupFetches(
+          groups,
+          (group, signal) => fetchGroup(group, signal),
+          (group) => this.minDistanceToPlayhead(group.members.map((m) => m.entry), options),
+          options,
+        ),
+      );
     }
 
     await Promise.all(jobs);

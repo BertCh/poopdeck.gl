@@ -815,6 +815,14 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
           signal,
           onTileReady: hooks?.onTileReady,
           fetchPriority: hooks?.fetchPriority,
+          // Cross-source EDF (multi-source coordination, Phase 2 §2.8): forward
+          // the tileset's play-head time + travel direction so the archive's
+          // shared scheduler ranks range-groups by distance-to-playhead
+          // comparably ACROSS archives that share this play-head. Without this
+          // link the archive falls back to its byte-order / enqueue-order
+          // sequence (tier-correct, but not true cross-source EDF).
+          playheadTime: hooks?.playheadTime,
+          playheadDirection: hooks?.playheadDirection,
         }),
       // Lets the tileset skip giant low-zoom parent-fallback tiles (e.g. a
       // 14 MB z10 tile under a z14 view) before fetching them. Sync directory
