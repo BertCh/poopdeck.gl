@@ -12,25 +12,41 @@ export interface SceneSwitcherProps {
   scenes: Dataset[];
   currentId: string;
   sceneName: string;
+  /**
+   * Single-row variant for the mobile top bar: drops the "AV Cockpit" eyebrow,
+   * tightens the padding, and lets the control fill (and truncate within) its
+   * flex slot. Desktop keeps the labelled two-line card.
+   */
+  compact?: boolean;
 }
 
 const SceneSwitcher: React.FC<SceneSwitcherProps> = ({
   scenes,
   currentId,
   sceneName,
+  compact = false,
 }) => {
   const navigate = useNavigate();
 
   return (
-    <div className="rounded-lg border border-white/10 bg-black/55 backdrop-blur-md px-3 py-2 shadow-xl">
-      <div className="text-[10px] uppercase tracking-wider text-slate-400">
-        AV Cockpit
-      </div>
+    <div
+      className={`rounded-lg border border-white/10 bg-black/55 shadow-xl backdrop-blur-md ${
+        compact ? "px-2.5 py-1.5" : "px-3 py-2"
+      }`}
+    >
+      {!compact && (
+        <div className="text-[10px] uppercase tracking-wider text-slate-400">
+          AV Cockpit
+        </div>
+      )}
       {scenes.length > 1 ? (
         <select
           value={currentId}
           onChange={(e) => navigate(`/drive/${e.target.value}`)}
-          className="mt-1 bg-transparent text-sm font-medium text-slate-100 outline-none cursor-pointer"
+          aria-label="Switch AV scene"
+          className={`cursor-pointer bg-transparent font-medium text-slate-100 outline-none ${
+            compact ? "block w-full max-w-full truncate text-sm" : "mt-1 text-sm"
+          }`}
         >
           {scenes.map((s) => (
             <option key={s.id} value={s.id} className="bg-slate-900 text-slate-100">
@@ -39,7 +55,13 @@ const SceneSwitcher: React.FC<SceneSwitcherProps> = ({
           ))}
         </select>
       ) : (
-        <div className="mt-1 text-sm font-medium text-slate-100">{sceneName}</div>
+        <div
+          className={`truncate font-medium text-slate-100 ${
+            compact ? "text-sm" : "mt-1 text-sm"
+          }`}
+        >
+          {sceneName}
+        </div>
       )}
     </div>
   );

@@ -32,6 +32,16 @@ export interface MetricChartsProps {
   timeController: TimeController;
   /** Moving-window span in ms (default ~8 s). */
   windowMs?: number;
+  /**
+   * Sizing override for the root (default `w-64` for the desktop bottom-left
+   * panel). The mobile sheet passes `w-full`.
+   */
+  className?: string;
+  /**
+   * Drop the panel's own glass chrome (border / background / padding / shadow)
+   * so the strips read as a plain section inside the mobile bottom sheet.
+   */
+  embedded?: boolean;
 }
 
 const DEFAULT_WINDOW_MS = 8000;
@@ -225,12 +235,20 @@ const MetricCharts: React.FC<MetricChartsProps> = ({
   telemetry,
   timeController,
   windowMs = DEFAULT_WINDOW_MS,
+  className,
+  embedded = false,
 }) => {
   const reducedMotion = useReducedMotion();
   const entries = Object.entries(telemetry.fields ?? {});
   if (entries.length === 0) return null;
   return (
-    <div className="w-64 rounded-lg border border-white/10 bg-black/55 px-3 py-2.5 shadow-xl backdrop-blur-md">
+    <div
+      className={`${
+        embedded
+          ? ""
+          : "rounded-lg border border-white/10 bg-black/55 px-3 py-2.5 shadow-xl backdrop-blur-md"
+      } ${className ?? "w-64"}`}
+    >
       <div className="flex flex-col gap-2.5">
         {entries.map(([key, field]) => (
           <Strip

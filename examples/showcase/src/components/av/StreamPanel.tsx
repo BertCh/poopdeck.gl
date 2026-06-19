@@ -30,6 +30,17 @@ export interface StreamPanelProps {
   visibleStreams: Set<AvStreamKey>;
   onToggleStream: (stream: AvStreamKey) => void;
   objectColors?: Record<string, ColorRGBA>;
+  /**
+   * Sizing override for the root (default `w-60` for the desktop left rail).
+   * The mobile sheet passes `w-full`.
+   */
+  className?: string;
+  /**
+   * Drop the panel's own glass chrome (border / background / padding / shadow)
+   * so it reads as a plain content section when nested inside another surface
+   * — the mobile bottom sheet provides its own card + padding.
+   */
+  embedded?: boolean;
 }
 
 const StreamPanel: React.FC<StreamPanelProps> = ({
@@ -38,13 +49,21 @@ const StreamPanel: React.FC<StreamPanelProps> = ({
   visibleStreams,
   onToggleStream,
   objectColors,
+  className,
+  embedded = false,
 }) => {
   const toggleable = presentStreams.filter((s) => LAYER_STREAMS.includes(s));
   const sidecars = presentStreams.filter((s) => !LAYER_STREAMS.includes(s));
   const categories = objectColors ? Object.entries(objectColors) : [];
 
   return (
-    <div className="rounded-lg border border-white/10 bg-black/55 backdrop-blur-md p-3 text-slate-200 shadow-xl w-60">
+    <div
+      className={`text-slate-200 ${
+        embedded
+          ? ""
+          : "rounded-lg border border-white/10 bg-black/55 p-3 shadow-xl backdrop-blur-md"
+      } ${className ?? "w-60"}`}
+    >
       <div className="text-[11px] uppercase tracking-wider text-slate-400 mb-2">
         Streams
       </div>

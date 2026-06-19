@@ -17,12 +17,18 @@ export interface CameraInsetProps {
   /** Resolves a frame's scene-relative url to a fetchable URL. */
   resolveFrameUrl: (relativeUrl: string) => string;
   timeController: TimeController;
+  /**
+   * Sizing override for the root (default `w-56` for the desktop top-right
+   * inset). The mobile chrome passes a smaller thumbnail width.
+   */
+  className?: string;
 }
 
 const CameraInset: React.FC<CameraInsetProps> = ({
   cameras,
   resolveFrameUrl,
   timeController,
+  className,
 }) => {
   const [src, setSrc] = useState<string | null>(null);
   const [broken, setBroken] = useState(false);
@@ -43,7 +49,11 @@ const CameraInset: React.FC<CameraInsetProps> = ({
   }, [cameras, resolveFrameUrl, timeController]);
 
   return (
-    <div className="rounded-lg border border-white/10 bg-black/60 backdrop-blur-md overflow-hidden shadow-xl w-56">
+    <div
+      className={`overflow-hidden rounded-lg border border-white/10 bg-black/60 shadow-xl backdrop-blur-md ${
+        className ?? "w-56"
+      }`}
+    >
       <div className="px-2 py-1 text-[10px] uppercase tracking-wider text-slate-400 border-b border-white/10 flex items-center justify-between">
         <span>{cameras.camera || "Camera"}</span>
         <span className="inline-block h-1.5 w-1.5 rounded-full bg-red-500" />

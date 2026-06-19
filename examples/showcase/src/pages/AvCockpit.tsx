@@ -22,13 +22,15 @@ import { Link, useParams } from "react-router-dom";
 import { usePlayback } from "@poopdeck.gl/react";
 import { datasets, getDatasetById } from "../datasets";
 import { useReducedMotion } from "../lib/reducedMotion";
+import { useIsMobile } from "../lib/useMediaQuery";
 import type { Dataset, ColorRGBA } from "../types";
 import AvDeck from "../components/av/AvDeck";
+import AvMobileChrome from "../components/av/AvMobileChrome";
 import StreamPanel from "../components/av/StreamPanel";
 import MetricCharts from "../components/av/MetricCharts";
 import CameraInset from "../components/av/CameraInset";
 import SceneSwitcher from "../components/av/SceneSwitcher";
-import Timeline from "../components/av/Timeline";
+import Timeline, { type TimelineProps } from "../components/av/Timeline";
 import ObjectInspector, {
   type PickedObject,
 } from "../components/av/ObjectInspector";
@@ -52,6 +54,7 @@ function sceneBaseUrl(dataset: Dataset): string {
 const AvCockpit: React.FC = () => {
   const { sceneId } = useParams<{ sceneId?: string }>();
   const reducedMotion = useReducedMotion();
+  const isMobile = useIsMobile();
 
   // All AV scenes (for the switcher) + the active one.
   const avScenes = useMemo(
@@ -215,6 +218,25 @@ const AvCockpit: React.FC = () => {
     Object.keys(telemetry.fields ?? {}).length > 0;
   const hasCamera = presentStreams.includes("camera") && cameras != null;
 
+  // Shared transport props — fed to the bottom timeline in either layout, so
+  // desktop and mobile drive the SAME TimeController + PlaybackGovernor.
+  const timelineProps: TimelineProps | null = timeRange
+    ? {
+        currentTime: playback.currentTime,
+        timeRange,
+        isPlaying: playback.isPlaying,
+        bufferState: playback.bufferState,
+        governor: playback.governor,
+        onPlayPause: playback.onPlayPause,
+        onSeek: playback.onSeek,
+        onSpeedChange: playback.onSpeedChange,
+        currentSpeedMultiplier: playback.speedMultiplier,
+        targetPlaybackSeconds: dataset.targetPlaybackSeconds ?? 20,
+        autoSpeed: playback.autoSpeed,
+        onAutoSpeedSelect: playback.onAutoSpeedSelect,
+      }
+    : null;
+
   return (
     <div className="fixed inset-0 bg-slate-950 overflow-hidden">
       {/* The map fills the viewport; chrome floats over it. */}
@@ -232,6 +254,33 @@ const AvCockpit: React.FC = () => {
         />
       </div>
 
+      {isMobile ? (
+        <AvMobileChrome
+          scene={scene}
+          dataset={dataset}
+          scenes={avScenes}
+          sceneName={sceneName}
+          timeController={playback.timeController}
+          presentStreams={presentStreams}
+          visibleStreams={visibleStreams}
+          onToggleStream={toggleStream}
+          objectColors={objectColors}
+          telemetry={telemetry}
+          hasTelemetry={hasTelemetry}
+          cameras={cameras}
+          hasCamera={hasCamera}
+          resolveFrameUrl={resolveFrameUrl}
+          egoFollow={egoFollow}
+          onToggleEgoFollow={() => setEgoFollow((v) => !v)}
+          egoPath={egoPath}
+          topDown={topDown}
+          onToggleTopDown={() => setTopDown((v) => !v)}
+          selectedObject={selectedObject}
+          onCloseObject={() => setSelectedObject(null)}
+          timeline={timelineProps}
+        />
+      ) : (
+        <>
       {/* Top-left: scene switcher + camera controls */}
       <div className="absolute top-3 left-3 flex flex-col gap-2">
         <SceneSwitcher
@@ -317,22 +366,9 @@ const AvCockpit: React.FC = () => {
       </div>
 
       {/* Bottom: timeline transport */}
-      {timeRange && (
+      {timelineProps && (
         <div className="absolute bottom-3 left-3 right-3 mx-auto max-w-4xl">
-          <Timeline
-            currentTime={playback.currentTime}
-            timeRange={timeRange}
-            isPlaying={playback.isPlaying}
-            bufferState={playback.bufferState}
-            governor={playback.governor}
-            onPlayPause={playback.onPlayPause}
-            onSeek={playback.onSeek}
-            onSpeedChange={playback.onSpeedChange}
-            currentSpeedMultiplier={playback.speedMultiplier}
-            targetPlaybackSeconds={dataset.targetPlaybackSeconds ?? 20}
-            autoSpeed={playback.autoSpeed}
-            onAutoSpeedSelect={playback.onAutoSpeedSelect}
-          />
+          <Timeline {...timelineProps} />
         </div>
       )}
 
@@ -345,6 +381,8 @@ const AvCockpit: React.FC = () => {
           ← Demos
         </Link>
       </div>
+        </>
+      )}
 
       {/* Loading / empty state */}
       {!scene && !loadError && (

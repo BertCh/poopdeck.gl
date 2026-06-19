@@ -43,6 +43,11 @@ export interface ObjectInspectorProps {
    * the rendered boxes.
    */
   objectColors?: Record<string, ColorRGBA>;
+  /**
+   * Sizing override for the root (default `w-56` for the desktop bottom-right
+   * card). The mobile chrome passes `w-full` so it spans the bottom sheet.
+   */
+  className?: string;
 }
 
 /** A finite number, or undefined — guards against NaN/null tile props. */
@@ -69,6 +74,7 @@ const ObjectInspector: React.FC<ObjectInspectorProps> = ({
   object,
   onClose,
   objectColors,
+  className,
 }) => {
   if (!object) return null;
 
@@ -89,7 +95,11 @@ const ObjectInspector: React.FC<ObjectInspectorProps> = ({
       : "—";
 
   return (
-    <div className="rounded-lg border border-white/10 bg-black/60 backdrop-blur-md shadow-xl w-56 text-slate-200">
+    <div
+      className={`rounded-lg border border-white/10 bg-black/60 text-slate-200 shadow-xl backdrop-blur-md ${
+        className ?? "w-56"
+      }`}
+    >
       <div className="flex items-center justify-between border-b border-white/10 px-3 py-1.5">
         <div className="flex items-center gap-2 min-w-0">
           <span
