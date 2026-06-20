@@ -58,6 +58,7 @@ import {
   SpatioTemporalPickingInfo,
 } from '../spatiotemporal-layer';
 import { TimeFilterExtension } from '../../extensions/time-filter-extension';
+import { SplatExtension } from '../../extensions/splat-extension';
 import {
   CategoryColorExtension,
   CATEGORY_PALETTE_SIZE,
@@ -149,6 +150,25 @@ export interface _AnimatedPointLayerProps {
 
   /** Fallback color for categories absent from `colorMapping`. */
   colorMappingDefault?: Color;
+
+  /**
+   * Per-point RGB straight from three NUMERIC columns (each 0–255), e.g. LIDAR
+   * returns colored by projecting them into camera images at build time (see
+   * `waymo_extract.py --colorize`). When set to `['r','g','b']`, each feature's
+   * fill is `[r, g, b, 255]` read directly from those columns — no palette, no
+   * category lookup. Takes precedence over `fillColor`/`colorMapping`. Ignored
+   * (falls back to the normal color path) if any of the three columns is absent
+   * from the tile. Alpha comes from the layer `opacity`.
+   */
+  rgbColorColumns?: [string, string, string] | null;
+
+  /**
+   * Render points as soft gaussian "splats" instead of hard disks (installs
+   * {@link SplatExtension}). Overlapping splats blend into continuous surfaces —
+   * a colored point-cloud / photogrammetry look. Best with a slightly larger
+   * `radius`, some transparency, and `billboard: true`. @default false
+   */
+  splat?: boolean;
 
   /**
    * Per-feature radius transform, applied to the numeric value of the
@@ -530,6 +550,9 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
     // Transparent fallback: features whose category is absent from
     // `colorMapping` disappear rather than render a misleading color.
     colorMappingDefault: { type: 'color', value: [0, 0, 0, 0] },
+    // Per-point RGB from three numeric columns; null = use the normal color path.
+    rgbColorColumns: { type: 'object', value: null, optional: true, compare: true },
+    splat: false,
     radiusTransform: { type: 'function', value: null, optional: true, compare: false },
 
     // Marker styling forwarded to ScatterplotLayer.
@@ -620,6 +643,13 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
    * uniform.
    */
   private readonly categoryColorExtension = new CategoryColorExtension();
+
+  /**
+   * Singleton SplatExtension. Stateless soft-gaussian fragment effect; added to
+   * the sublayer extension list only when `props.splat` is set (a per-layer
+   * constant, so the list stays stable across this layer's sublayers).
+   */
+  private readonly splatExtension = new SplatExtension();
 
   /**
    * Stable getTime reference. Critical: deck.gl re-runs work when accessor
@@ -828,11 +858,15 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
       ? this.props.elevationProperty
       : '';
     const elevScale = elevProp ? (this.props.elevationScale ?? 1) : 0;
+    // Per-point RGB is baked into the prepared getFillColor buffer, so the
+    // chosen columns belong in the styleKey: changing them must re-expand it.
+    const rgb = this.props.rgbColorColumns;
+    const rgbKey = rgb ? `rgb${rgb.join(',')}` : '';
     return `${fillColorProp}|${radiusProp}|${lineWidthProp}|${
       fillColorProp ? colorListDigest(this.props.colorPalette ?? DEFAULT_PALETTE) : 0
     }|${mapping ? `m${colorMappingDigest(mapping)}` : 'g'}|${
       transform ? `r${functionId(transform)}` : ''
-    }|e${elevProp}:${elevScale}|${updateTriggersDigest(this.props.updateTriggers)}`;
+    }|e${elevProp}:${elevScale}|${rgbKey}|${updateTriggersDigest(this.props.updateTriggers)}`;
   }
 
   /**
@@ -917,8 +951,27 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
 
     let gpuPalette: Color[] | null = null;
 
+    // Per-point RGB from three numeric columns (build-time camera-sampled
+    // colors). Wins over the categorical / palette color path; falls through
+    // to it if any of the three columns is absent from this tile. numericProps
+    // are Float32Array of 0–255 ints → truncate straight into a Uint8 RGBA.
+    const rgbCols = this.props.rgbColorColumns;
+    const rArr = rgbCols ? binary.numericProps[rgbCols[0]] : undefined;
+    const gArr = rgbCols ? binary.numericProps[rgbCols[1]] : undefined;
+    const bArr = rgbCols ? binary.numericProps[rgbCols[2]] : undefined;
+
     // Property-driven color
-    if (fillColorProp) {
+    if (rArr && gArr && bArr) {
+      const out = new Uint8Array(count * 4);
+      for (let i = 0; i < count; i++) {
+        const o = i * 4;
+        out[o] = rArr[i];
+        out[o + 1] = gArr[i];
+        out[o + 2] = bArr[i];
+        out[o + 3] = 255;
+      }
+      attributes.getFillColor = { value: out, size: 4, normalized: true };
+    } else if (fillColorProp) {
       const cat = binary.categoricalProps[fillColorProp];
       const num = binary.numericProps[fillColorProp];
       const palette = this.props.colorPalette ?? DEFAULT_PALETTE;
@@ -1052,6 +1105,10 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
     const extensions = this.composeExtensions([
       this.timeFilterExtension,
       this.categoryColorExtension,
+      // Soft-gaussian splat shaping runs LAST so it shapes the final alpha (after
+      // the time-fade + any categorical color). `splat` is a per-layer constant,
+      // so including it conditionally keeps the list stable across sublayers.
+      ...(this.props.splat ? [this.splatExtension] : []),
     ]);
     // getSubLayerProps inheritance (opacity/pickable/visible, coordinate
     // system, highlight props, …) + user `_subLayerProps.points` overrides.

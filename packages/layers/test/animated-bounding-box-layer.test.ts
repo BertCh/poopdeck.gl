@@ -288,22 +288,24 @@ describe('AnimatedBoundingBoxLayer', () => {
       { track: 'A', lon: 0, lat: 0, t: 1000, heading: -170 * DEG },
     ]);
     const ori = render([tile], 500)[0].props.data.attributes.getOrientation.value;
-    // z carries the heading in degrees; mid-arc is 180° (≡ -180°), never 0°.
-    expect(Math.abs(ori[2])).toBeCloseTo(180, 3);
+    // Slot 1 (yaw) carries the heading in degrees; mid-arc is 180° (≡ -180°),
+    // never 0°. (deck SimpleMeshLayer orientation is [pitch, yaw, roll].)
+    expect(Math.abs(ori[1])).toBeCloseTo(180, 3);
   });
 
-  it('bakes interpolated heading into getOrientation [0, 0, heading°]', () => {
+  it('bakes interpolated heading into getOrientation [0, heading°, 0] (yaw slot)', () => {
     const tile = makeObjTile([
       { track: 'A', lon: 0, lat: 0, t: 0, heading: 0 },
       { track: 'A', lon: 0, lat: 0, t: 1000, heading: Math.PI / 2 },
     ]);
     const ori = render([tile], 500)[0].props.data.attributes.getOrientation.value;
-    expect(ori[0]).toBe(0);
-    expect(ori[1]).toBe(0);
-    expect(ori[2]).toBeCloseTo((Math.PI / 4) * RAD_TO_DEG, 4); // 45°
+    expect(ori[0]).toBe(0); // pitch
+    expect(ori[2]).toBe(0); // roll
+    // yaw (slot 1) about the vertical z-axis — NOT slot 2 (roll about length).
+    expect(ori[1]).toBeCloseTo((Math.PI / 4) * RAD_TO_DEG, 4); // 45°
   });
 
-  it('leaves boxes axis-aligned (orientation z = 0) when no heading column', () => {
+  it('leaves boxes axis-aligned (orientation yaw = 0) when no heading column', () => {
     const tile = makeObjTile([
       { track: 'A', lon: 0, lat: 0, t: 0 },
       { track: 'A', lon: 10, lat: 0, t: 1000 },
@@ -373,8 +375,9 @@ describe('AnimatedBoundingBoxLayer', () => {
       heightProperty: 'hgt_m',
     })[0].props.data.attributes;
     expect(attrs.getScale.value[0]).toBeCloseTo(2, 5); // 4/2
-    // yaw π at t=1000 → ±180° (the same orientation; Float32 π may land on -180).
-    expect(Math.abs(attrs.getOrientation.value[2])).toBeCloseTo(180, 3);
+    // yaw π at t=1000 → ±180° in the yaw slot (1); (the same orientation; Float32
+    // π may land on -180).
+    expect(Math.abs(attrs.getOrientation.value[1])).toBeCloseTo(180, 3);
   });
 
   // ── Per-instance category color ──────────────────────────────────────────
@@ -563,6 +566,85 @@ describe('AnimatedBoundingBoxLayer', () => {
     expect(out.object.track_id).toBe('t-7');
     expect(out.object.category).toBe('car');
     expect(out.object.length).toBeCloseTo(4, 6);
+  });
+
+  // ── Stroked / outline mode ─────────────────────────────────────────────────
+
+  it('renders a 12-edge LineLayer outline (no fill) when filled:false, stroked:true', () => {
+    const tile = makeObjTile([
+      { track: 'A', lon: 0, lat: 0, t: 0, heading: 0, length: 4, width: 2, height: 1.6 },
+      { track: 'A', lon: 0, lat: 0, t: 1000, heading: 0, length: 4, width: 2, height: 1.6 },
+    ]);
+    const layers = render([tile], 500, { filled: false, stroked: true });
+    // Outline-only: a single LineLayer, no SimpleMeshLayer.
+    expect(layers.length).toBe(1);
+    expect(layers[0].constructor.layerName).toBe('LineLayer');
+    // One box → 12 cuboid edges.
+    expect(layers[0].props.data.length).toBe(12);
+    const attrs = layers[0].props.data.attributes;
+    expect(attrs.getSourcePosition.value.length).toBe(12 * 3);
+
+    const M = 111320; // metres per degree (lat=0 → same for lon)
+    const src = attrs.getSourcePosition.value;
+    const tgt = attrs.getTargetPosition.value;
+    // Edge 0 = ground rectangle corner(-L/2,-W/2) → corner(+L/2,-W/2); hx=2, hy=1.
+    expect(src[0]).toBeCloseTo(-2 / M, 9); // lon
+    expect(src[1]).toBeCloseTo(-1 / M, 9); // lat
+    expect(src[2]).toBeCloseTo(0, 9); // sits on the ground
+    expect(tgt[0]).toBeCloseTo(2 / M, 9);
+    expect(tgt[1]).toBeCloseTo(-1 / M, 9);
+    // Edge 8 = a vertical: ground corner (z=0) → roof corner (z=height=1.6).
+    const v = 8 * 3;
+    expect(src[v + 2]).toBeCloseTo(0, 9);
+    expect(tgt[v + 2]).toBeCloseTo(1.6, 5); // height: Float32 fixture, so looser
+  });
+
+  it('yaws the outline corners by heading (length axis follows heading)', () => {
+    const tile = makeObjTile([
+      { track: 'A', lon: 0, lat: 0, t: 0, heading: Math.PI / 2, length: 4, width: 2, height: 1.6 },
+      { track: 'A', lon: 0, lat: 0, t: 1000, heading: Math.PI / 2, length: 4, width: 2, height: 1.6 },
+    ]);
+    const attrs = render([tile], 500, { filled: false, stroked: true })[0].props.data.attributes;
+    const M = 111320;
+    // Edge 0's target is corner(+L/2,-W/2) rotated 90° (north): the length axis
+    // (half = 2) now lies along NORTH (lat), the width (half = 1) along EAST (lon).
+    const tgt = attrs.getTargetPosition.value;
+    expect(tgt[0]).toBeCloseTo(1 / M, 7); // lon ← width
+    expect(tgt[1]).toBeCloseTo(2 / M, 7); // lat ← length
+  });
+
+  it('draws BOTH fill + outline when filled:true, stroked:true (fill takes picks)', () => {
+    const tile = makeObjTile([
+      { track: 'A', lon: 0, lat: 0, t: 0, length: 4, width: 2, height: 1.6 },
+      { track: 'A', lon: 0, lat: 0, t: 1000, length: 4, width: 2, height: 1.6 },
+    ]);
+    const layers = render([tile], 500, { filled: true, stroked: true });
+    expect(layers.length).toBe(2);
+    expect(layers[0].constructor.layerName).toBe('SimpleMeshLayer');
+    expect(layers[0].props.pickable).toBe(true); // solid box is the easy pick target
+    expect(layers[1].constructor.layerName).toBe('LineLayer');
+    expect(layers[1].props.pickable).toBe(false);
+  });
+
+  it('maps a picked edge segment back to its box via the 12-segment stride', () => {
+    const tile = makeObjTile([
+      { track: 'A', lon: 0, lat: 0, t: 0, category: 'car', length: 4, width: 2, height: 1.6 },
+      { track: 'A', lon: 0, lat: 0, t: 1000, category: 'car', length: 4, width: 2, height: 1.6 },
+      { track: 'B', lon: 5, lat: 0, t: 0, category: 'truck', length: 6, width: 2.5, height: 2 },
+      { track: 'B', lon: 5, lat: 0, t: 1000, category: 'truck', length: 6, width: 2.5, height: 2 },
+    ]);
+    const layer = makeLayer({ colorProperty: 'category', filled: false, stroked: true });
+    layer.state = { tiles: [tile] };
+    layer._currentTime = 500;
+    const edges = (layer as any).renderLayers()[0];
+    expect(edges.constructor.layerName).toBe('LineLayer');
+    expect(edges.props.pickable).toBe(true); // outline carries picks when there's no fill
+    expect(edges.props.sttPickStride).toBe(12);
+    expect(edges.props.sttPickRows.length).toBe(2);
+    // Segment 13 is the 2nd edge of box index 1 (13 ÷ 12 = 1) → track B.
+    const out = (layer as any).getPickingInfo({ info: { index: 13 }, sourceLayer: edges });
+    expect(out.object.track_id).toBe('B');
+    expect(out.object.category).toBe('truck');
   });
 
   // ── Caching / lifecycle ──────────────────────────────────────────────────

@@ -200,6 +200,47 @@ indices; the TS decoder pre-shifts them by each feature's
 `triangles: Uint32Array` on `BinaryFeatures` so the renderer can hand it
 straight to deck.gl / WebGL.
 
+#### Space-time cube payload (`vertex_value_matrix`)
+
+Two columns carry per-vertex scalars, and the distinction is the difference
+between *animating geometry* and *animating a value over static geometry*:
+
+| column | shape | use when |
+| --- | --- | --- |
+| `vertex_value` | `List<Float32>`, one value per vertex | each vertex has a single, time-invariant scalar (e.g. drifter sea-surface temperature) while the **geometry** animates along a trail |
+| `vertex_value_matrix` | `List<Float32>`, `vertex_count × num_buckets` per feature, **vertex-major** | the **geometry is static** but each vertex carries a per-bucket *time series* (e.g. flow-corridor counts per hour) |
+
+`vertex_value_matrix` is STT's **space-time cube** primitive. The geometry is
+written once; the temporal variation lives entirely in the value matrix. Each
+feature's row is flattened vertex-major — `matrix[v * num_buckets + b]` is the
+value of vertex `v` in bucket `b` — and `num_buckets` is recorded in the
+schema-level metadata key `stt:vertex_value_buckets` (the reader reshapes the
+flat list back to a `[vertex][bucket]` grid with it). The encoding reuses the
+`vertex_value` `List<Float32>` representation; rows are just longer.
+
+This reframes a tile as a **cube**: the `(x, y)` of each vertex is the spatial
+face, and the bucket axis `b ∈ [0, num_buckets)` (each bucket
+`temporal_bucket_ms` wide, anchored per the [time model](../spec/time-model.md))
+is the temporal face. Because the buckets are columns of one resident array, the
+renderer animates by **selecting the active bucket column at the playhead** —
+no tile re-fetch, no re-upload, no re-decode as the clock advances. The TS
+decoder (`packages/core/src/tile.ts`) concatenates features into one globally
+vertex-major `Float32Array` aligned with the position buffer; layers such as
+[`FlowCorridorLayer`](../api/flow-corridor-layer.md) read the current column per
+frame, and the [`TimeFilterExtension`](../api/time-filter-extension.md) can lift
+the value into the *time-as-height* "squash" cube with a single uniform.
+
+> **Mutually exclusive with `vertex_time`.** A layer carries either per-vertex
+> *timestamps* (`vertex_time`, for trails that move through their own geometry) or
+> a per-vertex *value-over-buckets* matrix (`vertex_value_matrix`, for static
+> geometry whose value pulses) — never both. The builder omits `vertex_time`
+> whenever a matrix is present (`crates/stt-build/src/columnar.rs`).
+
+`vertex_value_matrix` is the payload substrate the forthcoming preprocessing
+framework (cube / aggregation / trend recipes; design doc
+`docs/roadmap/preprocessing-framework.md`) builds on: a build-time analytic that
+produces a per-cell, per-bucket scalar field lands in exactly this column.
+
 ### GeoArrow interop
 
 An STT tile layer **is** a valid [GeoArrow](https://geoarrow.org/format.html)
@@ -219,6 +260,14 @@ tile self-describing to GDAL / GeoPandas / lonboard / QGIS; a reader that wants
 the CRS reads this key, and a reader that ignores it is unaffected (the key is
 additive). Archives that carry only `ARROW:extension:name` (no CRS metadata)
 should be treated as OGC:CRS84.
+
+> **Anchored-local frames.** Coordinates are *always* CRS84 lon/lat at the
+> payload level, but the [scene-bundle profile](../spec/sidecar-assets.md#4-georeferencing-georeferenced-vs-anchored-local)
+> defines an `anchored-local` case where those lon/lat values are a local metric
+> frame *anchored* to an approximate position (e.g. Waymo, whose true georeference
+> is undisclosed) rather than authoritative WGS84. The coordinates are still
+> CRS84-shaped; they are simply not basemap-aligned. The distinction lives in the
+> bundle envelope, not the tile.
 
 Coordinates use the GeoArrow **interleaved** convention
 (`FixedSizeList<Float64, 2>` of `[x, y]` pairs), which matches the

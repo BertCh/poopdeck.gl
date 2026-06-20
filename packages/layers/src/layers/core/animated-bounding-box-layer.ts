@@ -41,14 +41,26 @@
  * uniform). The tile-loading window (`timeWindow`) is UNTOUCHED — it still gates
  * which buckets are resident, and only needs to cover ±one keyframe gap.
  *
- * ── RENDERING: SimpleMeshLayer ORIENTED BOXES (av-cockpit.md §3c) ─────────────
- * Active tracks render through ONE `SimpleMeshLayer` (`@deck.gl/mesh-layers`)
- * instanced over a unit `CubeGeometry` (`@luma.gl/engine`), with the per-instance
- * pose rebuilt each frame from the interpolated samples:
+ * ── RENDERING: ORIENTED BOXES — FILL and/or OUTLINE (av-cockpit.md §3c) ───────
+ * Two interchangeable looks, selected by `filled` / `stroked`:
+ *   • FILLED (`filled`, default) — one `SimpleMeshLayer` (`@deck.gl/mesh-layers`)
+ *     instanced over a unit `CubeGeometry` (`@luma.gl/engine`); the solid,
+ *     phong-lit box (detailed below).
+ *   • STROKED (`stroked`) — one `LineLayer` of each box's 12 true edges (see
+ *     {@link AnimatedBoundingBoxLayer.buildEdges}); the streetscape.gl / nuScenes
+ *     detection-box outline you can see the LIDAR through. Combine with
+ *     `filled:false` for outline-only. The edge corners are computed from the
+ *     same interpolated pose (yaw + dims + ground-lift), so both looks agree.
+ *
+ * The FILLED box's per-instance pose is rebuilt each frame from the interpolated
+ * samples:
  *   • getPosition    → the interpolated point (size-3, lon/lat/alt).
- *   • getOrientation → [0, 0, heading°] — yaw about the vertical (z) axis; the
- *                      interpolated `heading` is radians (0 = +x/east, CCW),
- *                      ANGLE-interpolated (shortest arc) then converted to deg.
+ *   • getOrientation → [0, heading°, 0] — deck.gl SimpleMeshLayer orientation is
+ *                      [pitch, yaw, roll], so heading (a yaw about the vertical z
+ *                      axis) rides slot 1; the interpolated `heading` is radians
+ *                      (0 = +x/east, CCW), ANGLE-interpolated (shortest arc) then
+ *                      converted to deg. (Slot 2 is ROLL — about the length axis —
+ *                      so putting heading there would tip the box on its side.)
  *   • getScale       → [length, width, height] × 0.5 × sizeScale. CubeGeometry
  *                      spans ±1, so the ×0.5 makes one scale unit == one meter.
  *   • getTranslation → [0, 0, height/2 × sizeScale] so the box base rests on the
@@ -164,9 +176,10 @@ export interface _AnimatedBoundingBoxLayerProps {
 
   /**
    * Per-feature yaw column NAME (radians, world frame, 0 = +x/east, CCW
-   * positive — av-cockpit.md §2c). Drives `getOrientation: [0, 0, heading°]`
-   * (z-axis rotation), angle-interpolated between keyframes. When the column is
-   * absent, boxes are axis-aligned.
+   * positive — av-cockpit.md §2c). Drives `getOrientation: [0, heading°, 0]`
+   * (yaw about the vertical z-axis — slot 1 of deck's [pitch, yaw, roll]),
+   * angle-interpolated between keyframes. When the column is absent, boxes are
+   * axis-aligned.
    * @default 'heading'
    */
   headingProperty?: string;
@@ -219,8 +232,45 @@ export interface _AnimatedBoundingBoxLayerProps {
   defaultHeight?: number;
 
   /**
+   * Render the solid (filled, phong-lit) box faces via the `boxes`
+   * `SimpleMeshLayer`. Set `false` together with {@link stroked} for the AV
+   * detection-box look: an outline-only box you can see the LIDAR through. When
+   * BOTH `filled` and `stroked` are false the layer falls back to filled so it
+   * never renders nothing.
+   * @default true
+   */
+  filled?: boolean;
+
+  /**
+   * Draw each box as a crisp 12-EDGE CUBOID OUTLINE (the `edges` `LineLayer`) —
+   * the streetscape.gl / nuScenes-devkit detection-box look. Unlike
+   * {@link wireframe} (a SimpleMeshLayer pass-through that draws the triangle
+   * mesh edges, so every face gets a diagonal), this draws ONLY the 12 true box
+   * edges. Edges inherit each box's per-category color (with the same
+   * appear/disappear fade as the fill). Combine with `filled:false` for an
+   * outline-only box.
+   * @default false
+   */
+  stroked?: boolean;
+
+  /**
+   * On-screen width (pixels) of the {@link stroked} box edges.
+   * @default 1.5
+   */
+  strokeWidth?: number;
+
+  /**
+   * Minimum on-screen width (pixels) of the {@link stroked} box edges, so they
+   * stay visible when the box is far away.
+   * @default 1
+   */
+  strokeWidthMinPixels?: number;
+
+  /**
    * Draw a line wireframe around each box instead of filled faces —
-   * SimpleMeshLayer pass-through.
+   * SimpleMeshLayer pass-through. NOTE: this is the mesh's *triangle* wireframe
+   * (diagonals on every face); for a clean detection-box outline use
+   * {@link stroked} instead.
    * @default false
    */
   wireframe?: boolean;
@@ -440,7 +490,8 @@ function resolveColor(
  * object (the streetscape.gl tracked-object primitive). See the file header for
  * the pool-by-track + per-frame-interpolate model.
  *
- * Sublayer short ids for `_subLayerProps` overrides: **`boxes`**, and (when
+ * Sublayer short ids for `_subLayerProps` overrides: **`boxes`** (filled mesh)
+ * and/or **`edges`** (the 12-edge outline LineLayer when `stroked`), plus (when
  * enabled) **`labels`** (TextLayer) + **`velocity`** (LineLayer).
  */
 export class AnimatedBoundingBoxLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLayer<
@@ -466,6 +517,10 @@ export class AnimatedBoundingBoxLayer<ExtraPropsT extends {} = {}> extends Spati
     defaultLength: { type: 'number', value: 4, min: 0 },
     defaultWidth: { type: 'number', value: 2, min: 0 },
     defaultHeight: { type: 'number', value: 1.6, min: 0 },
+    filled: true,
+    stroked: false,
+    strokeWidth: { type: 'number', value: 1.5, min: 0 },
+    strokeWidthMinPixels: { type: 'number', value: 1, min: 0 },
     wireframe: false,
     // Boolean or material spec — same permissive descriptor SimpleMeshLayer uses.
     material: { type: 'object', value: true, compare: true },
@@ -761,7 +816,16 @@ export class AnimatedBoundingBoxLayer<ExtraPropsT extends {} = {}> extends Spati
       return [];
     }
 
-    const layers: Layer[] = [this.buildBoxes(samples)];
+    // Fill / outline selection. `filled` draws the solid SimpleMeshLayer;
+    // `stroked` adds the crisp 12-edge LineLayer outline. If neither is asked
+    // for, fall back to filled so the layer never renders nothing. Exactly one
+    // of the two carries picking (prefer the fill when present — a solid box is
+    // far easier to click than a thin edge).
+    const wantStroke = this.props.stroked ?? false;
+    const drawFill = (this.props.filled ?? true) || !wantStroke;
+    const layers: Layer[] = [];
+    if (drawFill) layers.push(this.buildBoxes(samples, true));
+    if (wantStroke) layers.push(this.buildEdges(samples, !drawFill));
     if (this.props.showLabels) layers.push(this.buildLabels(samples));
     if (this.props.showVelocity && this.hasSpeedColumn) layers.push(this.buildVelocity(samples));
 
@@ -783,7 +847,7 @@ export class AnimatedBoundingBoxLayer<ExtraPropsT extends {} = {}> extends Spati
   }
 
   /** Build the single oriented-box SimpleMeshLayer over the active samples. */
-  private buildBoxes(samples: Sample[]): SimpleMeshLayer {
+  private buildBoxes(samples: Sample[], pickable: boolean): SimpleMeshLayer {
     const n = samples.length;
     const sizeScale = this.props.sizeScale ?? 1;
     const half = 0.5 * sizeScale;
@@ -801,8 +865,12 @@ export class AnimatedBoundingBoxLayer<ExtraPropsT extends {} = {}> extends Spati
       positions[o3] = s.lon;
       positions[o3 + 1] = s.lat;
       positions[o3 + 2] = s.alt;
-      // Yaw about z; pitch/roll (x/y) stay 0. NaN heading ⇒ axis-aligned.
-      orientations[o3 + 2] = Number.isFinite(s.heading) ? s.heading * RAD_TO_DEG : 0;
+      // deck.gl SimpleMeshLayer orientation is [pitch, yaw, roll] (deg). Heading
+      // is a YAW about the vertical (z) axis, so it goes in slot 1 — NOT slot 2
+      // (roll), which rotates about the box's length/x axis and would tip the box
+      // onto its side while its length stayed pinned east. Matches egoLayers.ts's
+      // ego car. NaN heading ⇒ axis-aligned.
+      orientations[o3 + 1] = Number.isFinite(s.heading) ? s.heading * RAD_TO_DEG : 0;
       scales[o3] = s.length * half;
       scales[o3 + 1] = s.width * half;
       scales[o3 + 2] = s.height * half;
@@ -843,10 +911,121 @@ export class AnimatedBoundingBoxLayer<ExtraPropsT extends {} = {}> extends Spati
       wireframe: this.props.wireframe,
       material: this.props.material,
       extensions,
+      pickable,
       // Per-frame active-track props for getPickingInfo (read off the sublayer).
+      // One row per instance, so the stride is 1 (vs the edges layer's 12).
       sttPickRows: pickRows,
+      sttPickStride: 1,
     });
     const SubLayerClass = this.getSubLayerClass('boxes', SimpleMeshLayer);
+    return new SubLayerClass(props as any);
+  }
+
+  /**
+   * Build the 12-edge cuboid OUTLINE (the `edges` sublayer) over the active
+   * samples — the streetscape.gl / nuScenes-devkit detection-box look. Each
+   * box's 8 corners are computed in the local ground frame (east/north meters),
+   * yawed by `heading`, lifted to its real height, then converted to lon/lat
+   * (the same metres→degrees idiom as the velocity arrows) so the outline tracks
+   * the box pose exactly. The 12 true box edges are emitted as `LineLayer`
+   * segments (NOT the mesh's triangle wireframe, which would diagonal every
+   * face). Every segment inherits its box's per-category color × appear/
+   * disappear fade. `pickable` is set by the caller (only when there is no fill
+   * underneath to take picks).
+   */
+  private buildEdges(samples: Sample[], pickable: boolean): LineLayer {
+    const n = samples.length;
+    const EDGES = 12;
+    const total = n * EDGES;
+    const sizeScale = this.props.sizeScale ?? 1;
+
+    const source = new Float64Array(total * 3);
+    const target = new Float64Array(total * 3);
+    const colors = new Uint8Array(total * 4);
+    const pickRows: PickRow[] = new Array(n);
+
+    // The 12 edges of a cuboid, as index pairs into the 8 corners laid out
+    // below: 0-3 = ground ring (CCW), 4-7 = roof ring, then the 4 verticals.
+    const EDGE_PAIRS: [number, number][] = [
+      [0, 1], [1, 2], [2, 3], [3, 0], // ground rectangle
+      [4, 5], [5, 6], [6, 7], [7, 4], // roof rectangle
+      [0, 4], [1, 5], [2, 6], [3, 7], // verticals
+    ];
+
+    let seg = 0;
+    for (let i = 0; i < n; i++) {
+      const s = samples[i];
+      const hx = s.length * 0.5 * sizeScale; // half-length (box +x / heading axis)
+      const hy = s.width * 0.5 * sizeScale; // half-width
+      const top = s.height * sizeScale; // roof height (base rests on the ground)
+      const yaw = Number.isFinite(s.heading) ? s.heading : 0;
+      const cos = Math.cos(yaw);
+      const sin = Math.sin(yaw);
+      const cosLat = Math.cos((s.lat * Math.PI) / 180);
+      const mPerLon = cosLat !== 0 ? METERS_PER_DEG_LAT * cosLat : METERS_PER_DEG_LAT;
+
+      // Local (dx,dy,dz) metres → [lon,lat,alt]: yaw the planar offset about the
+      // vertical, then convert metres to degrees about this box's anchor.
+      const corner = (dx: number, dy: number, dz: number): [number, number, number] => {
+        const east = dx * cos - dy * sin;
+        const north = dx * sin + dy * cos;
+        return [s.lon + east / mPerLon, s.lat + north / METERS_PER_DEG_LAT, s.alt + dz];
+      };
+      const corners: [number, number, number][] = [
+        corner(-hx, -hy, 0), corner(hx, -hy, 0), corner(hx, hy, 0), corner(-hx, hy, 0),
+        corner(-hx, -hy, top), corner(hx, -hy, top), corner(hx, hy, top), corner(-hx, hy, top),
+      ];
+
+      const c = s.track.color;
+      const alpha = Math.round((c[3] ?? 255) * s.alpha);
+      for (const [a, b] of EDGE_PAIRS) {
+        const o3 = seg * 3;
+        const ca = corners[a];
+        const cb = corners[b];
+        source[o3] = ca[0];
+        source[o3 + 1] = ca[1];
+        source[o3 + 2] = ca[2];
+        target[o3] = cb[0];
+        target[o3 + 1] = cb[1];
+        target[o3 + 2] = cb[2];
+        const o4 = seg * 4;
+        colors[o4] = c[0];
+        colors[o4 + 1] = c[1];
+        colors[o4 + 2] = c[2];
+        colors[o4 + 3] = alpha;
+        seg++;
+      }
+      pickRows[i] = {
+        track_id: s.track.trackId,
+        category: s.track.category,
+        heading: s.heading,
+        length: s.length,
+        width: s.width,
+        height: s.height,
+        speed: s.speed,
+      };
+    }
+
+    const data = {
+      length: total,
+      attributes: {
+        getSourcePosition: { value: source, size: 3 },
+        getTargetPosition: { value: target, size: 3 },
+        getColor: { value: colors, size: 4, normalized: true },
+      },
+    };
+    const props = this.composeSubLayerProps('edges', 'all', {
+      data: data as any,
+      positionFormat: 'XYZ',
+      widthUnits: 'pixels',
+      getWidth: this.props.strokeWidth ?? 1.5,
+      widthMinPixels: this.props.strokeWidthMinPixels ?? 1,
+      pickable,
+      // 12 segments per box, so a hit's segment index ÷ 12 is the box index.
+      sttPickRows: pickRows,
+      sttPickStride: EDGES,
+    });
+    const SubLayerClass = this.getSubLayerClass('edges', LineLayer);
     return new SubLayerClass(props as any);
   }
 
@@ -929,17 +1108,23 @@ export class AnimatedBoundingBoxLayer<ExtraPropsT extends {} = {}> extends Spati
   }
 
   /**
-   * Picking enrichment for the combined boxes sublayer. The active-track array
-   * is rebuilt with the box instance buffer each frame, so `info.index` maps
-   * straight into the `sttPickRows` parallel array carried on the boxes
-   * sublayer — set `info.object` to that track's flat decoded props (the shape
-   * the AV cockpit's click-to-inspect handler reads).
+   * Picking enrichment for whichever sublayer carries picks (the `boxes` fill,
+   * or the `edges` outline when there is no fill). The active-track rows are
+   * rebuilt with that sublayer's instance buffer each frame and tagged with a
+   * `sttPickStride` — 1 for the mesh (one instance per box), 12 for the edges
+   * (one segment per cuboid edge). So the box index is `info.index / stride`;
+   * `info.object` is set to that track's flat decoded props (the shape the AV
+   * cockpit's click-to-inspect handler reads).
    */
   getPickingInfo({ info, sourceLayer }: GetPickingInfoParams): SpatioTemporalPickingInfo {
     const out = info as SpatioTemporalPickingInfo;
-    const rows = (sourceLayer?.props as { sttPickRows?: PickRow[] } | undefined)?.sttPickRows;
-    if (info.index >= 0 && rows && rows[info.index]) {
-      out.object = rows[info.index];
+    const sp = sourceLayer?.props as
+      | { sttPickRows?: PickRow[]; sttPickStride?: number }
+      | undefined;
+    const rows = sp?.sttPickRows;
+    if (info.index >= 0 && rows) {
+      const idx = Math.floor(info.index / (sp?.sttPickStride || 1));
+      if (rows[idx]) out.object = rows[idx];
     }
     return out;
   }

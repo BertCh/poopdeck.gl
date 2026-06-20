@@ -1,0 +1,35 @@
+{
+  "$comment": "STT tiling profile: the OGC WebMercatorQuad tile matrix set plus a normative regularly-spaced `time` dimension (OGC 2D-TMS Annex-J style). See docs/spec/time-model.md §7. This is a convergence/documentation artifact, not an OGC conformance claim. Per-dataset `dimensions[].resolution`, `interval`, and `default` are filled from the dataset manifest's metadata.temporal_bucket_ms and metadata.time_range; the `temporalLod` overrides give the coarser per-zoom time step emitted by --temporal-lod.",
+  "id": "STT-WebMercatorQuad-Time",
+  "title": "STT — WebMercatorQuad with a regular time dimension",
+  "description": "WebMercator spatial pyramid (WebMercatorQuad) crossed with one regularly-spaced temporal axis. The spatial matrices are the registered OGC WebMercatorQuad set, referenced by URI; STT adds the `dimensions` block describing the (zoom, x, y, bucket) addressing used by the directory.",
+  "crs": "http://www.opengis.net/def/crs/EPSG/0/3857",
+  "orderedAxes": ["X", "Y"],
+  "tileMatrixSet": "http://www.opengis.net/def/tilematrixset/OGC/1.0/WebMercatorQuad",
+  "wellKnownScaleSet": "http://www.opengis.net/def/wkss/OGC/1.0/GoogleMapsCompatible",
+  "tileWidth": 256,
+  "tileHeight": 256,
+  "minTileMatrix": "0",
+  "maxTileMatrix": "24",
+  "dimensions": [
+    {
+      "id": "time",
+      "title": "Time",
+      "description": "Regularly-spaced temporal axis. A tile address is (tileMatrix, tileCol, tileRow, time), where `time` is the inclusive start of a half-open bucket [time, time + resolution). All values are Unix epoch milliseconds, UTC. `resolution` is the dataset's metadata.temporal_bucket_ms; `interval` is metadata.time_range; `default` is interval[0].",
+      "unitSymbol": "ms",
+      "unit": "http://www.opengis.net/def/uom/UCUM/0/ms",
+      "resolution": 3600000,
+      "interval": [0, 0],
+      "default": 0,
+      "calendarAligned": false,
+      "$note": "calendarAligned is always false: buckets are fixed millisecond widths anchored to the epoch, never calendar months/years. A reader MUST NOT assume bucket boundaries fall on calendar units."
+    }
+  ],
+  "temporalLod": {
+    "$comment": "Optional. Present iff the dataset was built with --temporal-lod. Each level coarsens the time dimension's resolution at and below max_zoom_level; bucket_ms MUST be a strict, ascending integer multiple of dimensions[time].resolution. Mirrors manifest.metadata.temporal_lod.",
+    "levels": [
+      { "bucket_ms": 86400000, "max_zoom_level": 8 },
+      { "bucket_ms": 2592000000, "max_zoom_level": 4 }
+    ]
+  }
+}

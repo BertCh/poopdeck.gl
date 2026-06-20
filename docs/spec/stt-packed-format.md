@@ -354,12 +354,47 @@ The rationale behind the format's locked-in choices:
 - **D5 — directory compressed at rest.** The `.sttd` object is one
   zstd frame, declared via `directory.encoding` (§3); absent = raw codec bytes, which
   readers also accept. ~2× smaller on the cold-start critical path.
-- **D6 — byte-reproducible builds.** The writer's blob and directory-entry
-  sorts carry total tiebreaks (§5) so an identical rebuild re-derives identical content
-  addresses — rebuilds of unchanged data cannot invalidate the immutable-object cache.
-  (Caveat: payload bytes themselves are reproducible only within one builder run —
-  Arrow IPC schema-metadata serialization order is not pinned across processes; the
-  ordering layer is deterministic given identical payload bytes.)
+- **D6 — byte-reproducible builds (two layers, one open gap).** Reproducibility
+  is what the immutable-object caching economics rest on: an identical rebuild
+  should re-derive identical content addresses so a re-sync skips unchanged packs
+  and unchanged data never invalidates the edge cache. STT's reproducibility has
+  two layers:
+
+  1. **Ordering layer — fully deterministic.** The blob order and the directory
+     entry order carry total tiebreaks (§5: `(z, x, y, time_start,
+     temporal_bucket_ms)`), so given identical payload bytes the pack layout,
+     directory, and every content address are byte-identical across rebuilds —
+     independent of input arrival order or thread scheduling.
+
+  2. **Payload-bytes layer — NOT yet cross-process reproducible.** A tile blob is
+     `zstd(Arrow IPC stream)`, so its content address depends on the IPC bytes
+     being deterministic. They are deterministic *within a single build process*
+     (which is why byte-identical dedup and run-length collapsing work at all),
+     but **not across separate processes**: the Arrow dependency stores Schema and
+     Field custom metadata as `HashMap<String, String>` and serializes it in
+     **iteration order** (`arrow-ipc::convert::metadata_to_fb` does not sort), and
+     Rust's `HashMap` seeds its iteration order per process. So the same logical
+     tile, built in two different processes, can serialize its `stt:*` /
+     `ARROW:extension:*` metadata keys in different orders → different IPC bytes →
+     different blake3 → a different pack name.
+
+  **Consequence (precise).** This is a *cache-efficiency* gap, **not a
+  correctness bug**: a fresh full rebuild produces a self-consistent dataset, the
+  manifest swap is atomic (§2), and stale immutable objects age out via the §2 GC
+  retention pass. What it costs is incremental re-sync (an unchanged dataset
+  rebuilt in a new process re-uploads its packs) and cross-version dedup.
+
+  **Normative target.** A conformant writer SHOULD serialize Arrow schema/field
+  custom metadata in a canonical (lexicographic) key order so payload bytes are
+  reproducible across processes. The reference Rust writer does **not yet** meet
+  this because the pinned `arrow`/`arrow-ipc` version exposes no order-preserving
+  metadata API (the value is stored in, and serialized from, a `HashMap`); the
+  fix path is an upstream `arrow` that sorts metadata at IPC-write time (or a
+  metadata-canonicalizing shim before encode), tracked in the roadmap
+  (`docs/roadmap/stt-packed.md`). Until then the writer
+  mitigates by minimizing per-field metadata entry counts (a 2-key field has only
+  2 possible orders) to raise the cross-process dedup-collision odds. See
+  [conformance §3](./conformance.md#3-conformant-writer-requirements).
 
 ## 8. Non-goals
 - **Low-zoom data volume** (the 80 MB zoom-out) → needs the summary/aggregate tier, not packing.
@@ -410,7 +445,10 @@ dimension made normative:
 
 If OGC ever promotes multi-dimensional tiling to a normative conformance
 class, STT's directory is already expressible in those terms; until then this
-mapping is documentation, not a compliance claim.
+mapping is documentation, not a compliance claim. The full mapping and a
+machine-readable TMS artifact (WebMercatorQuad + a regular `time` dimension) are
+in the [time model spec §7](./time-model.md#7-mapping-to-ogc-tile-matrix-sets-normative)
+and [`tile-matrix-set.json`](./tile-matrix-set.json).
 
 ### 10.2 OGC Moving Features (MF-JSON)
 

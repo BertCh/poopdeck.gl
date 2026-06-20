@@ -1,0 +1,128 @@
+/**
+ * Numeric-attribute quantization (opt-in `stt-build --quantize-attr name=prec`):
+ * a numeric property column (e.g. LiDAR `z` elevation) ships as fixed-point
+ * integers (`UInt16`/`Int32`) plus a reconstruction affine in the property
+ * field metadata (`stt:qa` = `{o,s}`), instead of raw Float64. This pins that
+ * the TS reader detects the affine and reconstructs `value = o + q*s` into the
+ * `numericProps` Float32 the renderer consumes, so a quantized `z` elevates
+ * points exactly as a Float64 `z` did.
+ *
+ * The encoder side (Rust `arrow_tile.rs::build_quantized_numeric`) is
+ * round-tripped in its own unit test; here we build the exact wire shape it
+ * emits and prove the decoder inverts it.
+ */
+
+import { describe, it, expect } from 'vitest';
+import {
+  Field,
+  FixedSizeList,
+  Float64,
+  Int64,
+  RecordBatch,
+  Schema,
+  Struct,
+  Table,
+  Uint16,
+  Uint64,
+  makeData,
+  tableToIPC,
+} from 'apache-arrow';
+import { decodeTile } from '../src/tile';
+import { type TileId } from '../src/types';
+
+const tileId: TileId = { z: 0, x: 0, y: 0, t: 0 };
+
+/** Wrap a single layer's struct data into the STT layer-frame payload. */
+function frameLayer(
+  name: string,
+  schema: Schema,
+  structData: ReturnType<typeof makeData>,
+): Uint8Array {
+  const ipc = tableToIPC(new Table([new RecordBatch(schema, structData as never)]), 'stream');
+  const nameBytes = new TextEncoder().encode(name);
+  const frame = new Uint8Array(2 + 2 + nameBytes.length + 4 + ipc.length);
+  const view = new DataView(frame.buffer);
+  view.setUint16(0, 1, true); // layer count (unaligned frame)
+  view.setUint16(2, nameBytes.length, true);
+  frame.set(nameBytes, 4);
+  view.setUint32(4 + nameBytes.length, ipc.length, true);
+  frame.set(ipc, 4 + nameBytes.length + 4);
+  return frame;
+}
+
+/** Build a Float64-geometry Point tile carrying a quantized UInt16 `z` column. */
+function buildPointTileWithQuantZ(
+  coords: number[],
+  zq: number[],
+  o: number,
+  s: number,
+): Uint8Array {
+  const featureCount = coords.length / 2;
+  const coordValues = makeData({ type: new Float64(), data: Float64Array.from(coords) });
+  const geomData = makeData({
+    type: new FixedSizeList(2, new Field('xy', new Float64(), false)),
+    length: featureCount,
+    nullCount: 0,
+    child: coordValues,
+  });
+  const ids = makeData({
+    type: new Uint64(),
+    length: featureCount,
+    data: BigUint64Array.from({ length: featureCount }, (_, i) => BigInt(i)),
+  });
+  const startTime = makeData({
+    type: new Int64(),
+    length: featureCount,
+    data: BigInt64Array.from({ length: featureCount }, () => 0n),
+  });
+  const endTime = makeData({
+    type: new Int64(),
+    length: featureCount,
+    data: BigInt64Array.from({ length: featureCount }, () => 1n),
+  });
+  const zData = makeData({
+    type: new Uint16(),
+    length: featureCount,
+    nullCount: 0,
+    data: Uint16Array.from(zq),
+  });
+  const fields: Field[] = [
+    new Field('id', new Uint64(), false),
+    new Field('start_time', new Int64(), false),
+    new Field('end_time', new Int64(), false),
+    new Field(
+      'geometry',
+      geomData.type,
+      false,
+      new Map([['ARROW:extension:name', 'geoarrow.point']]),
+    ),
+    new Field('z', new Uint16(), true, new Map([['stt:qa', JSON.stringify({ o, s })]])),
+  ];
+  const schema = new Schema(fields, new Map([['stt:geometry', 'geoarrow.point']]));
+  const structData = makeData({
+    type: new Struct(fields),
+    length: featureCount,
+    nullCount: 0,
+    children: [ids, startTime, endTime, geomData, zData],
+  });
+  return frameLayer('pts', schema, structData);
+}
+
+describe('numeric attribute quantization decode', () => {
+  it('reconstructs Float32 z from a quantized UInt16 column + stt:qa affine', () => {
+    const o = -2.4;
+    const s = 0.05;
+    // Exact grid points (o + k*s) so reconstruction is lossless to compare.
+    const real = [-2.4, 1.05, 15.9, 40.0];
+    const zq = real.map((v) => Math.round((v - o) / s));
+    const coords = [0, 0, 1, 1, 2, 2, 3, 3];
+
+    const tile = decodeTile(buildPointTileWithQuantZ(coords, zq, o, s), tileId);
+    const f = tile.layers[0].features;
+    expect(f.featureCount).toBe(4);
+    expect(f.numericProps.z).toBeInstanceOf(Float32Array);
+    for (let i = 0; i < real.length; i++) {
+      expect(f.numericProps.z[i]).toBeCloseTo(real[i], 5);
+    }
+  });
+});

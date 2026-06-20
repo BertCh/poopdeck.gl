@@ -87,6 +87,27 @@ export const docSections: DocSection[] = [
         blurb: "manifest.json + content-addressed packs + directory (adopted).",
       },
       {
+        slug: "spec/time-model",
+        file: "spec/time-model.md",
+        title: "Time Model",
+        blurb:
+          "The temporal axis: buckets, temporal LOD, read-time pruning, OGC TMS mapping.",
+      },
+      {
+        slug: "spec/sidecar-assets",
+        file: "spec/sidecar-assets.md",
+        title: "Sidecar Assets",
+        blurb:
+          "Scene bundles, non-tile sidecars, and georeferenced vs anchored-local frames.",
+      },
+      {
+        slug: "spec/conformance",
+        file: "spec/conformance.md",
+        title: "Conformance",
+        blurb:
+          "MUST/SHOULD reader & writer requirements, golden fixtures, the reference validator.",
+      },
+      {
         slug: "spec/manifest-schema",
         file: "spec/manifest.schema.json",
         title: "Manifest Schema",

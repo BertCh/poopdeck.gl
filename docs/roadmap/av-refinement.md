@@ -97,9 +97,14 @@ Helper that builds two deck layers from the lightweight `scene.streams.ego.path`
 ## Round 2 — re-gen + data refinements (per-dataset Python + map renderer)
 
 ### R2.1 Georef correctness (av_common + extractors)
-- **nuScenes (Boston)**: map meters are EPSG:3857 web-mercator meters. Multiply the ground-meter
-  conversion by `k = 1/cos(originLat)` (Boston 1.3528; Singapore ≈1.0). Fix `av_common.local_to_lonlat`
-  (or add a `frame='mercator-meters'` mode) — Boston scenes are ~26% compressed today.
+- **nuScenes (Boston/Singapore)**: map meters are TRUE GROUND METERS in a LOCAL frame whose origin
+  is the map's SW corner (`NUSCENES_MAP_ORIGINS`), exactly as the official devkit
+  `export_poses.derive_latlon` treats them — so `av_common.local_to_lonlat(x, y, originLat, originLon)`
+  (ground meters) places the scene correctly on the basemap. ⚠️ Do NOT treat these as EPSG:3857
+  web-mercator meters: nuScenes uses a local metric frame, not the global mercator projection. The
+  former `mercator=True` mode (deflate by `k = 1/cos(originLat)`) was a misdiagnosis — it shifted
+  Boston scenes ~450 m off the basemap and shrank them ~26%; it has been REMOVED. (Verified: the
+  ground-meter output matches the devkit's lat/lon to ~5 m and aligns the HD map with the basemap.)
 - **Argoverse**: city frame is UTM meters; the scene is ~6.9 km from origin → equirectangular is
   ~75 m off. Add `av_common.utm_to_lonlat(E, N, epsg)` via `pyproj` and the AV2 city UTM origins
   (PIT `EPSG:32617` E0 583710.007 N0 4477259.9999; document MIA/ATX/DTW/PAO/WDC). Use it in

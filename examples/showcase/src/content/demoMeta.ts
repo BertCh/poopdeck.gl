@@ -114,6 +114,35 @@ export const CATALOG_EXCLUDED_IDS: string[] = [
   'waymo-phx-night',
   'waymo-sf-night',
   'waymo-phx-dusk-rain',
+  // Camera-colored / surfel render VARIANTS of base AV scenes (same segment,
+  // alternate LIDAR rendering). These are no longer separate scenes: the cockpit
+  // folds them into a per-scene render-mode toggle (Points / Splat / Surfel) that
+  // swaps to the variant's `-splat` / `-surfel` bundle. So they're catalog- AND
+  // switcher-excluded — the headline card + switcher keep the base scene; the
+  // toggle reaches the variant (legacy /drive/<id>-splat deep-links still work).
+  'waymo-sf-day-splat',
+  'waymo-sf-day-surfel',
+  // nuScenes camera-splat variants (`--colorize` bundles, makeColoredSplatVariant).
+  'nuscenes-0061-splat',
+  'nuscenes-0103-splat',
+  'nuscenes-0553-splat',
+  'nuscenes-0655-splat',
+  'nuscenes-0757-splat',
+  'nuscenes-0796-splat',
+  'nuscenes-0916-splat',
+  'nuscenes-1077-splat',
+  'nuscenes-1094-splat',
+  'nuscenes-1100-splat',
+  // Argoverse 2 camera-splat variants (`--colorize` bundles).
+  'argoverse-02678d04-splat',
+  'argoverse-02a00399-splat',
+  'argoverse-0b5142c1-splat',
+  'argoverse-0bae3b5e-splat',
+  'argoverse-25e5c600-splat',
+  'argoverse-92b900b1-splat',
+  // Argoverse 2 oriented-surfel variant (`--surfel` bundle) — reached via the
+  // cockpit's Surfel render-mode toggle on the Miami scene, not a separate card.
+  'argoverse-02a00399-surfel',
 ];
 
 const OSRM_NOTE =

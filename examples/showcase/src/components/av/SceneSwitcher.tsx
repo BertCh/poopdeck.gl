@@ -5,7 +5,7 @@
  * registry renders just the current name (no dropdown).
  */
 import React from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import type { Dataset } from "../../types";
 
 export interface SceneSwitcherProps {
@@ -27,6 +27,13 @@ const SceneSwitcher: React.FC<SceneSwitcherProps> = ({
   compact = false,
 }) => {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+
+  // Carry the control query string (render mode, toggles, density, …) across a
+  // scene switch so view preferences persist; the cockpit re-validates each
+  // param against the new scene and falls back to defaults where it doesn't fit.
+  const goToScene = (id: string) =>
+    navigate({ pathname: `/drive/${id}`, search: searchParams.toString() });
 
   return (
     <div
@@ -42,7 +49,7 @@ const SceneSwitcher: React.FC<SceneSwitcherProps> = ({
       {scenes.length > 1 ? (
         <select
           value={currentId}
-          onChange={(e) => navigate(`/drive/${e.target.value}`)}
+          onChange={(e) => goToScene(e.target.value)}
           aria-label="Switch AV scene"
           className={`cursor-pointer bg-transparent font-medium text-slate-100 outline-none ${
             compact ? "block w-full max-w-full truncate text-sm" : "mt-1 text-sm"

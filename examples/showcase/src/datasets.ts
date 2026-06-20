@@ -272,8 +272,19 @@ function argoverseScene(opts: {
   latitude: number;
   /** Street-level framing; ~18 frames a ~150 m AV2 scene so the cloud reads 3D. */
   zoom?: number;
+  /**
+   * Oriented-surfel splat variant: the bundle was built with
+   * `argoverse_extract.py --surfel` (per-sweep k-NN covariance → orientation +
+   * extents + confidence). Renders the cloud as oriented anisotropic Gaussian
+   * disks via `SplatLayer` — a "formal" splat that reads as surface and evolves
+   * over time — instead of the height ramp. Implies camera color (surfels are
+   * camera-colored). Unlike Waymo, AV2 is georeferenced, so the surfel scene
+   * keeps the real basemap + HD-map substrate the surface reconstruction sits on.
+   */
+  surfel?: boolean;
 }): Dataset {
   const base = `/data/${opts.id}`;
+  const surfel = opts.surfel ?? false;
   return {
     id: opts.id,
     name: opts.name,
@@ -292,7 +303,7 @@ function argoverseScene(opts: {
     // AV2 nanosecond sensor clock ÷1e6 — the large ms values are internally
     // consistent for relative playback (AV2 ships no wall-clock epoch).
     timeRange: opts.timeRange,
-    timeWindow: 2000,
+    timeWindow: 500,
     targetPlaybackSeconds: 16,
     initialViewState: {
       longitude: opts.longitude,
@@ -301,21 +312,34 @@ function argoverseScene(opts: {
       pitch: 55,
       bearing: 20,
     },
-    // No per-point semantic labels in AV2 sensor → color LIDAR by height band.
+    // No per-point semantic labels in AV2 sensor → color LIDAR by height band…
     colorProperty: 'height_band',
     lidarColorMapping: AV_HEIGHT_BAND_COLORS,
     lidarColorMappingDefault: [120, 130, 150, 220],
-    radius: 1.4,
+    // …UNLESS this is the surfel variant: paint per-point r/g/b (sampled by
+    // projecting each return into the 7 ring cameras) and render those colored
+    // returns as oriented Gaussian disks via SplatLayer, brightening/fading
+    // around each sweep's instant (the soft temporal Gaussian). AV2 is
+    // city-scale + sparser per-area than the compact Waymo scenes, so its surfels
+    // get a WIDER temporal window (180 vs Waymo's 120 ms) — each return lingers
+    // longer so the surface reads continuous as the car drives.
+    ...(surfel
+      ? { lidarRgb: true, lidarSurfel: true, lidarSurfelTemporalSigma: 60 }
+      : {}),
+    // Splats read best a touch larger; surfels carry their own per-disk
+    // confidence + temporal alpha, so the layer opacity stays at full.
+    radius: surfel ? 2.4 : 1.4,
     radiusUnits: 'pixels',
-    radiusMinPixels: 1,
-    opacity: 0.9,
+    radiusMinPixels: surfel ? 1.4 : 1,
+    opacity: surfel ? 1 : 0.9,
     avObjectColors: AV_OBJECT_COLORS,
     colorMappingDefault: [150, 160, 175, 220],
     tripColor: [120, 230, 255, 255],
     widthUnits: 'meters',
     tripWidth: 2.2,
     fadeTrail: true,
-    legend: AV_HEIGHT_BAND_LEGEND,
+    // The height-band legend is meaningless for camera-colored surfels → omit it.
+    ...(surfel ? {} : { legend: AV_HEIGHT_BAND_LEGEND }),
   };
 }
 
@@ -341,8 +365,34 @@ function waymoScene(opts: {
   latitude: number;
   /** Street-level framing; ~18 frames a ~150 m Waymo scene so the cloud reads 3D. */
   zoom?: number;
+  /**
+   * Camera-colored splat variant: the bundle was built with
+   * `waymo_extract.py --colorize` (per-point r/g/b from projecting LIDAR into
+   * the 5 cameras). Paints each return its sampled color + renders soft gaussian
+   * splats — a photographic point cloud — instead of the height ramp.
+   */
+  colored?: boolean;
+  /**
+   * Oriented-surfel splat variant: the bundle was built with
+   * `waymo_extract.py --surfel` (per-sweep k-NN covariance → orientation +
+   * extents + confidence). Renders the cloud as oriented anisotropic Gaussian
+   * disks via `SplatLayer` — a "formal" splat that reads as surface and evolves
+   * over time. Implies camera color (surfels are camera-colored).
+   */
+  surfel?: boolean;
+  /**
+   * Override the LIDAR point radius (pixels). Smaller points reduce overplotting
+   * on dense/scattered clouds (e.g. the rain scene, where returns smear) so the
+   * cloud reads at its true resolution instead of a merged blob.
+   */
+  radius?: number;
+  /** Override the LIDAR point floor radius (pixels); pair with a smaller `radius`. */
+  radiusMinPixels?: number;
 }): Dataset {
   const base = `/data/${opts.id}`;
+  const surfel = opts.surfel ?? false;
+  // Surfels are camera-colored too, so the height-band legend is meaningless.
+  const colored = (opts.colored ?? false) || surfel;
   return {
     id: opts.id,
     name: opts.name,
@@ -356,6 +406,10 @@ function waymoScene(opts: {
     avCamerasUrl: `${base}/cameras.json`,
     // No avMapPolyUrl/avMapLineUrl — Waymo Perception v2.0.1 ships no HD map.
     type: 'av',
+    // Waymo discloses no lat/lon → the scene is anchored at an approximate metro
+    // point (right city, wrong streets). Drop the street basemap so the real road
+    // network can't visibly contradict the anchor (the extractor's intent).
+    avLocalFrame: true,
     timeRange: opts.timeRange,
     timeWindow: 2000,
     targetPlaybackSeconds: 20,
@@ -366,21 +420,35 @@ function waymoScene(opts: {
       pitch: 55,
       bearing: 20,
     },
-    // No per-point semantic labels → color LIDAR by height band (like AV2).
+    // No per-point semantic labels → color LIDAR by height band (like AV2)…
     colorProperty: 'height_band',
     lidarColorMapping: AV_HEIGHT_BAND_COLORS,
     lidarColorMappingDefault: [120, 130, 150, 220],
-    radius: 1.4,
+    // …UNLESS this is the camera-colored variant: paint per-point r/g/b (sampled
+    // by projecting each return into the 5 cameras). The SURFEL variant renders
+    // those colored returns as oriented Gaussian disks via SplatLayer; the plain
+    // colored variant renders them as soft round point-splats.
+    ...(surfel
+      ? { lidarRgb: true, lidarSurfel: true, lidarSurfelTemporalSigma: 120 }
+      : colored
+        ? { lidarRgb: true, lidarSplat: true }
+        : {}),
+    // Splats read best a touch larger + slightly transparent so overlaps blend.
+    // A scene can override these (smaller) when its cloud overplots.
+    radius: opts.radius ?? (colored ? 2.4 : 1.4),
     radiusUnits: 'pixels',
-    radiusMinPixels: 1,
-    opacity: 0.9,
+    radiusMinPixels: opts.radiusMinPixels ?? (colored ? 1.4 : 1),
+    // Surfels carry their own per-disk confidence + temporal alpha, so the layer
+    // opacity stays at full; the round point-splats blend better slightly under 1.
+    opacity: surfel ? 1 : colored ? 0.96 : 0.9,
     avObjectColors: AV_OBJECT_COLORS,
     colorMappingDefault: [150, 160, 175, 220],
     tripColor: [120, 230, 255, 255],
     widthUnits: 'meters',
     tripWidth: 2.2,
     fadeTrail: true,
-    legend: AV_HEIGHT_BAND_LEGEND,
+    // The height-band legend is meaningless for camera-colored points → omit it.
+    ...(colored ? {} : { legend: AV_HEIGHT_BAND_LEGEND }),
   };
 }
 
@@ -1720,6 +1788,26 @@ const rawDatasets: Dataset[] = [
     longitude: -79.9333411419541,
     latitude: 40.45610620281625,
   }),
+  // Oriented-surfel splat variant (argoverse_extract.py --surfel) — see the
+  // Miami `-surfel` note below. The cockpit render-mode toggle offers Surfel
+  // automatically because this `<id>-surfel` entry exists.
+  argoverseScene({
+    id: 'argoverse-02678d04-surfel',
+    name: 'Argoverse 2 · Pittsburgh — oriented surfel splat',
+    description:
+      'The same real Argoverse 2 sensor log in Pittsburgh, rendered as a TRUE Gaussian ' +
+      'splat: every LIDAR return becomes an oriented elliptical disk lying on the ' +
+      'surface it sampled — its orientation and size fit from a per-sweep k-NN ' +
+      'covariance, its color projected from the 7 ring cameras. Each disk has a soft ' +
+      'radial Gaussian profile and a soft TEMPORAL Gaussian, so it brightens at its ' +
+      'sweep instant and fades away from it — the surface evolves as the car drives, ' +
+      'depth-tested by the z-buffer (surface splatting, no point dots). Same boxes / ' +
+      'ego / HD map / telemetry as the height-ramp scene.',
+    timeRange: { start: 315969904357, end: 315969920307 },
+    longitude: -79.9333411419541,
+    latitude: 40.45610620281625,
+    surfel: true,
+  }),
   argoverseScene({
     id: 'argoverse-02a00399',
     name: 'Argoverse 2 · Miami',
@@ -1730,6 +1818,31 @@ const rawDatasets: Dataset[] = [
     timeRange: { start: 315966070522, end: 315966086462 },
     longitude: -80.19521021126853,
     latitude: 25.81266355087901,
+  }),
+  // Oriented-surfel splat variant of the Miami scene (argoverse_extract.py
+  // --surfel): every LIDAR return is an oriented elliptical disk lying on the
+  // surface it sampled — orientation + size fit from a per-sweep k-NN covariance,
+  // color projected from the 7 ring cameras — with a soft radial AND temporal
+  // Gaussian, so the surface brightens at each sweep's instant and evolves as the
+  // car drives (SplatLayer, depth-sorted, no point dots). The cockpit's render-
+  // mode toggle (Points / Splat / Surfel) swaps to this `-surfel` bundle; AV2 is
+  // georeferenced so it sits on Miami's real streets + HD map.
+  argoverseScene({
+    id: 'argoverse-02a00399-surfel',
+    name: 'Argoverse 2 · Miami — oriented surfel splat',
+    description:
+      'The same real Argoverse 2 sensor log in Miami, rendered as a TRUE Gaussian ' +
+      'splat: every LIDAR return becomes an oriented elliptical disk lying on the ' +
+      'surface it sampled — its orientation and size fit from a per-sweep k-NN ' +
+      'covariance, its color projected from the 7 ring cameras. Each disk has a ' +
+      'soft radial Gaussian profile and a soft TEMPORAL Gaussian, so it brightens ' +
+      'at its sweep instant and fades away from it — the surface evolves as the car ' +
+      'drives, depth-sorted by the z-buffer (surface splatting, no point dots). ' +
+      'Same boxes / ego / HD map / telemetry as the height-ramp scene.',
+    timeRange: { start: 315966070522, end: 315966086462 },
+    longitude: -80.19521021126853,
+    latitude: 25.81266355087901,
+    surfel: true,
   }),
   argoverseScene({
     id: 'argoverse-0b5142c1',
@@ -1743,6 +1856,23 @@ const rawDatasets: Dataset[] = [
     latitude: 38.903158674858965,
   }),
   argoverseScene({
+    id: 'argoverse-0b5142c1-surfel',
+    name: 'Argoverse 2 · Washington DC — oriented surfel splat',
+    description:
+      'The same real Argoverse 2 sensor log in Washington DC, rendered as a TRUE ' +
+      'Gaussian splat: every LIDAR return becomes an oriented elliptical disk lying on ' +
+      'the surface it sampled — its orientation and size fit from a per-sweep k-NN ' +
+      'covariance, its color projected from the 7 ring cameras. Each disk has a soft ' +
+      'radial Gaussian profile and a soft TEMPORAL Gaussian, so it brightens at its ' +
+      'sweep instant and fades away from it — the surface evolves as the car drives, ' +
+      'depth-tested by the z-buffer (surface splatting, no point dots). Same boxes / ' +
+      'ego / HD map / telemetry as the height-ramp scene.',
+    timeRange: { start: 315968121172, end: 315968137127 },
+    longitude: -76.97901441961996,
+    latitude: 38.903158674858965,
+    surfel: true,
+  }),
+  argoverseScene({
     id: 'argoverse-0bae3b5e',
     name: 'Argoverse 2 · Detroit',
     description:
@@ -1752,6 +1882,23 @@ const rawDatasets: Dataset[] = [
     timeRange: { start: 315969524322, end: 315969540277 },
     longitude: -83.05092955863113,
     latitude: 42.33371685760447,
+  }),
+  argoverseScene({
+    id: 'argoverse-0bae3b5e-surfel',
+    name: 'Argoverse 2 · Detroit — oriented surfel splat',
+    description:
+      'The same real Argoverse 2 sensor log in Detroit, rendered as a TRUE Gaussian ' +
+      'splat: every LIDAR return becomes an oriented elliptical disk lying on the ' +
+      'surface it sampled — its orientation and size fit from a per-sweep k-NN ' +
+      'covariance, its color projected from the 7 ring cameras. Each disk has a soft ' +
+      'radial Gaussian profile and a soft TEMPORAL Gaussian, so it brightens at its ' +
+      'sweep instant and fades away from it — the surface evolves as the car drives, ' +
+      'depth-tested by the z-buffer (surface splatting, no point dots). Same boxes / ' +
+      'ego / HD map / telemetry as the height-ramp scene.',
+    timeRange: { start: 315969524322, end: 315969540277 },
+    longitude: -83.05092955863113,
+    latitude: 42.33371685760447,
+    surfel: true,
   }),
   argoverseScene({
     id: 'argoverse-25e5c600',
@@ -1765,6 +1912,23 @@ const rawDatasets: Dataset[] = [
     latitude: 37.415846217190214,
   }),
   argoverseScene({
+    id: 'argoverse-25e5c600-surfel',
+    name: 'Argoverse 2 · Palo Alto — oriented surfel splat',
+    description:
+      'The same real Argoverse 2 sensor log in Palo Alto, rendered as a TRUE Gaussian ' +
+      'splat: every LIDAR return becomes an oriented elliptical disk lying on the ' +
+      'surface it sampled — its orientation and size fit from a per-sweep k-NN ' +
+      'covariance, its color projected from the 7 ring cameras. Each disk has a soft ' +
+      'radial Gaussian profile and a soft TEMPORAL Gaussian, so it brightens at its ' +
+      'sweep instant and fades away from it — the surface evolves as the car drives, ' +
+      'depth-tested by the z-buffer (surface splatting, no point dots). Same boxes / ' +
+      'ego / HD map / telemetry as the height-ramp scene.',
+    timeRange: { start: 315966104242, end: 315966120187 },
+    longitude: -122.12833142762317,
+    latitude: 37.415846217190214,
+    surfel: true,
+  }),
+  argoverseScene({
     id: 'argoverse-92b900b1',
     name: 'Argoverse 2 · Austin',
     description:
@@ -1774,6 +1938,23 @@ const rawDatasets: Dataset[] = [
     timeRange: { start: 315968947407, end: 315968963357 },
     longitude: -97.70213668235851,
     latitude: 30.255713070218487,
+  }),
+  argoverseScene({
+    id: 'argoverse-92b900b1-surfel',
+    name: 'Argoverse 2 · Austin — oriented surfel splat',
+    description:
+      'The same real Argoverse 2 sensor log in Austin, rendered as a TRUE Gaussian ' +
+      'splat: every LIDAR return becomes an oriented elliptical disk lying on the ' +
+      'surface it sampled — its orientation and size fit from a per-sweep k-NN ' +
+      'covariance, its color projected from the 7 ring cameras. Each disk has a soft ' +
+      'radial Gaussian profile and a soft TEMPORAL Gaussian, so it brightens at its ' +
+      'sweep instant and fades away from it — the surface evolves as the car drives, ' +
+      'depth-tested by the z-buffer (surface splatting, no point dots). Same boxes / ' +
+      'ego / HD map / telemetry as the height-ramp scene.',
+    timeRange: { start: 315968947407, end: 315968963357 },
+    longitude: -97.70213668235851,
+    latitude: 30.255713070218487,
+    surfel: true,
   }),
   // ── Waymo Open Dataset · curated Perception v2.0.1 segments (day/night, SF/PHX,
   //    + the one rain scene). 5-laser LIDAR decoded from range images, 3D box
@@ -1793,6 +1974,50 @@ const rawDatasets: Dataset[] = [
     longitude: -122.41947418420166,
     latitude: 37.774902618839754,
   }),
+  // EXPERIMENT: the same SF-day segment, but the LIDAR is COLORED from the
+  // cameras — each return is projected into whichever of the 5 cameras sees it
+  // (waymo_extract.py --colorize) and painted that pixel's color, then rendered
+  // as soft gaussian splats. ~252° of the cloud is photo-colored; the rear wedge
+  // (no camera) stays slate. Built local-only (Waymo no-redistribution).
+  waymoScene({
+    id: 'waymo-sf-day-splat',
+    name: 'Waymo · SF · Day — camera-colored splats',
+    description:
+      'EXPERIMENT: the same daytime San Francisco Waymo segment, but every LIDAR ' +
+      'return is colored by projecting it into the car’s cameras and sampling ' +
+      'the image pixel — then rendered as soft gaussian splats, so the cloud ' +
+      'looks like a photograph sprayed onto the 3D scene. The forward ~252° is ' +
+      'camera-colored (5 cameras); the rear wedge, which no camera sees, stays a ' +
+      'neutral slate. Same boxes / ego / telemetry as the height-ramp scene.',
+    timeRange: { start: 1559170821400, end: 1559170841225 },
+    longitude: -122.41947418420166,
+    latitude: 37.774902618839754,
+    colored: true,
+  }),
+  // SURFEL SPLAT: the same SF-day segment, but each LIDAR return is a real
+  // ORIENTED anisotropic Gaussian surfel — a flat disk lying on the surface,
+  // oriented by a per-sweep k-NN covariance fit (waymo_extract.py --surfel),
+  // camera-colored, and rendered by SplatLayer with a soft radial AND a soft
+  // temporal Gaussian. So the cloud reads as continuous surface that brightens
+  // and fades around each sweep's instant instead of a field of round dots —
+  // a "formal" splat that renders geometry over time. Built local-only.
+  waymoScene({
+    id: 'waymo-sf-day-surfel',
+    name: 'Waymo · SF · Day — oriented surfel splat',
+    description:
+      'The same daytime San Francisco Waymo segment, rendered as a TRUE Gaussian ' +
+      'splat: every LIDAR return becomes an oriented elliptical disk lying on the ' +
+      'surface it sampled — its orientation and size fit from a per-sweep k-NN ' +
+      'covariance, its color projected from the cameras. Each disk has a soft ' +
+      'radial Gaussian profile and a soft TEMPORAL Gaussian, so it brightens at ' +
+      'its sweep instant and fades away from it — the surface evolves as the car ' +
+      'drives, depth-sorted by the z-buffer (surface splatting, no point dots). ' +
+      'Same boxes / ego / telemetry as the height-ramp scene.',
+    timeRange: { start: 1559170821400, end: 1559170841225 },
+    longitude: -122.41947418420166,
+    latitude: 37.774902618839754,
+    surfel: true,
+  }),
   waymoScene({
     id: 'waymo-phx-day',
     name: 'Waymo · Phoenix · Day',
@@ -1804,6 +2029,24 @@ const rawDatasets: Dataset[] = [
     timeRange: { start: 1513450821409, end: 1513450841108 },
     longitude: -112.074419,
     latitude: 33.448329,
+  }),
+  // Oriented-surfel splat variant (waymo_extract.py --surfel) — the cockpit
+  // render-mode toggle offers Surfel automatically when this entry exists.
+  waymoScene({
+    id: 'waymo-phx-day-surfel',
+    name: 'Waymo · Phoenix · Day — oriented surfel splat',
+    description:
+      'The same daytime Phoenix Waymo segment, rendered as a TRUE Gaussian splat: every ' +
+      'LIDAR return becomes an oriented elliptical disk lying on the surface it sampled — ' +
+      'its orientation and size fit from a per-sweep k-NN covariance, its color projected ' +
+      'from the cameras. Each disk has a soft radial Gaussian profile and a soft TEMPORAL ' +
+      'Gaussian, so it brightens at its sweep instant and fades away from it — the surface ' +
+      'evolves as the car drives, depth-tested by the z-buffer (surface splatting, no ' +
+      'point dots). Same boxes / ego / telemetry as the height-ramp scene.',
+    timeRange: { start: 1513450821409, end: 1513450841108 },
+    longitude: -112.074419,
+    latitude: 33.448329,
+    surfel: true,
   }),
   waymoScene({
     id: 'waymo-phx-night',
@@ -1818,6 +2061,22 @@ const rawDatasets: Dataset[] = [
     latitude: 33.448178,
   }),
   waymoScene({
+    id: 'waymo-phx-night-surfel',
+    name: 'Waymo · Phoenix · Night — oriented surfel splat',
+    description:
+      'The same NIGHT Phoenix Waymo segment, rendered as a TRUE Gaussian splat: every ' +
+      'LIDAR return becomes an oriented elliptical disk lying on the surface it sampled — ' +
+      'its orientation and size fit from a per-sweep k-NN covariance, its color projected ' +
+      'from the cameras. Each disk has a soft radial Gaussian profile and a soft TEMPORAL ' +
+      'Gaussian, so it brightens at its sweep instant and fades away from it — the surface ' +
+      'evolves as the car drives, depth-tested by the z-buffer (surface splatting, no ' +
+      'point dots). Same boxes / ego / telemetry as the height-ramp scene.',
+    timeRange: { start: 1508038141882, end: 1508038161581 },
+    longitude: -112.073977,
+    latitude: 33.448178,
+    surfel: true,
+  }),
+  waymoScene({
     id: 'waymo-sf-night',
     name: 'Waymo · San Francisco · Night',
     description:
@@ -1830,6 +2089,22 @@ const rawDatasets: Dataset[] = [
     latitude: 37.774895,
   }),
   waymoScene({
+    id: 'waymo-sf-night-surfel',
+    name: 'Waymo · San Francisco · Night — oriented surfel splat',
+    description:
+      'The same NIGHT San Francisco Waymo segment, rendered as a TRUE Gaussian splat: ' +
+      'every LIDAR return becomes an oriented elliptical disk lying on the surface it ' +
+      'sampled — its orientation and size fit from a per-sweep k-NN covariance, its color ' +
+      'projected from the cameras. Each disk has a soft radial Gaussian profile and a soft ' +
+      'TEMPORAL Gaussian, so it brightens at its sweep instant and fades away from it — ' +
+      'the surface evolves as the car drives, depth-tested by the z-buffer (surface ' +
+      'splatting, no point dots). Same boxes / ego / telemetry as the height-ramp scene.',
+    timeRange: { start: 1541816058898, end: 1541816078598 },
+    longitude: -122.419489,
+    latitude: 37.774895,
+    surfel: true,
+  }),
+  waymoScene({
     id: 'waymo-phx-dusk-rain',
     name: 'Waymo · Phoenix · Dawn/Dusk (rain)',
     description:
@@ -1840,6 +2115,27 @@ const rawDatasets: Dataset[] = [
     timeRange: { start: 1518657647337, end: 1518657667137 },
     longitude: -112.071638,
     latitude: 33.448412,
+    // Rain scatters the LIDAR, so this cloud overplots more than the dry scenes.
+    // Shrink the points to render at max resolution (less merging into a blob).
+    radius: 0.7,
+    radiusMinPixels: 0.5,
+  }),
+  waymoScene({
+    id: 'waymo-phx-dusk-rain-surfel',
+    name: 'Waymo · Phoenix · Dawn/Dusk (rain) — oriented surfel splat',
+    description:
+      'The same rainy dawn/dusk Phoenix Waymo segment, rendered as a TRUE Gaussian ' +
+      'splat: every LIDAR return becomes an oriented elliptical disk lying on the ' +
+      'surface it sampled — its orientation and size fit from a per-sweep k-NN ' +
+      'covariance, its color projected from the cameras. Each disk has a soft radial ' +
+      'Gaussian profile and a soft TEMPORAL Gaussian, so it brightens at its sweep ' +
+      'instant and fades away from it — the surface evolves as the car drives, ' +
+      'depth-tested by the z-buffer (surface splatting, no point dots). Same boxes / ' +
+      'ego / telemetry as the height-ramp scene.',
+    timeRange: { start: 1518657647337, end: 1518657667137 },
+    longitude: -112.071638,
+    latitude: 33.448412,
+    surfel: true,
   }),
   // ── comma.ai · real I-280 highway segment (ego GPS + CAN telemetry + camera;
   //    NO lidar/objects). Built by comma_extract.py from the comma2k19 HF mirror.
@@ -1888,8 +2184,8 @@ const rawDatasets: Dataset[] = [
       'boxes, ego trail, CAN telemetry, and a front camera. Scene log: "parked truck, ' +
       'construction, intersection, turn."',
     timeRange: { start: 1532402927647, end: 1532402946797 },
-    longitude: 103.788326,
-    latitude: 1.298278,
+    longitude: 103.788327,
+    latitude: 1.298281,
   }),
   nuscenesScene({
     id: 'nuscenes-0103',
@@ -1900,8 +2196,8 @@ const rawDatasets: Dataset[] = [
       'trail, CAN telemetry (speed / steering / throttle / brake), and a front camera. ' +
       'Scene log: "many peds right, wait for turning car, long bike rack left, cyclist."',
     timeRange: { start: 1533151603547, end: 1533151622948 },
-    longitude: -71.052031,
-    latitude: 42.347547,
+    longitude: -71.049976,
+    latitude: 42.351321,
   }),
   nuscenesScene({
     id: 'nuscenes-0553',
@@ -1912,8 +2208,8 @@ const rawDatasets: Dataset[] = [
       'trail, CAN telemetry, and a front camera. Scene log: "wait at intersection, ' +
       'bicycle, large truck, peds."',
     timeRange: { start: 1535489296047, end: 1535489315948 },
-    longitude: -71.046029,
-    latitude: 42.343746,
+    longitude: -71.041856,
+    latitude: 42.346179,
   }),
   nuscenesScene({
     id: 'nuscenes-0655',
@@ -1924,8 +2220,8 @@ const rawDatasets: Dataset[] = [
       'trail, CAN telemetry, and a front camera. Scene log: "parking lot, parked cars, ' +
       'jaywalker, bendy bus."',
     timeRange: { start: 1535385092150, end: 1535385111949 },
-    longitude: -71.041194,
-    latitude: 42.342613,
+    longitude: -71.035317,
+    latitude: 42.344646,
   }),
   nuscenesScene({
     id: 'nuscenes-0757',
@@ -1936,8 +2232,8 @@ const rawDatasets: Dataset[] = [
       'and a front camera. Scene log: "arrive at busy intersection, bus, wait at ' +
       'intersection."',
     timeRange: { start: 1535657108301, end: 1535657128149 },
-    longitude: -71.055076,
-    latitude: 42.341289,
+    longitude: -71.054096,
+    latitude: 42.342856,
   }),
   nuscenesScene({
     id: 'nuscenes-0796',
@@ -1948,8 +2244,8 @@ const rawDatasets: Dataset[] = [
       '3D boxes, ego trail, CAN telemetry, and a front camera. Scene log: "scooter, peds ' +
       'on sidewalk, bus, cars, truck."',
     timeRange: { start: 1538448744447, end: 1538448764047 },
-    longitude: 103.783507,
-    latitude: 1.301416,
+    longitude: 103.783511,
+    latitude: 1.301422,
   }),
   nuscenesScene({
     id: 'nuscenes-0916',
@@ -1960,8 +2256,8 @@ const rawDatasets: Dataset[] = [
       'trail, CAN telemetry, and a front camera. Scene log: "parking lot, bicycle rack, ' +
       'parked bicycles, bus."',
     timeRange: { start: 1538984233547, end: 1538984253447 },
-    longitude: 103.773607,
-    latitude: 1.294311,
+    longitude: 103.773608,
+    latitude: 1.294315,
   }),
   nuscenesScene({
     id: 'nuscenes-1077',
@@ -1972,8 +2268,8 @@ const rawDatasets: Dataset[] = [
       'boxes, ego trail, CAN telemetry, and a front camera. Scene log: "night, big street, ' +
       'bus stop, high speed, construction."',
     timeRange: { start: 1542800367947, end: 1542800387897 },
-    longitude: 103.788307,
-    latitude: 1.316749,
+    longitude: 103.788308,
+    latitude: 1.316754,
   }),
   nuscenesScene({
     id: 'nuscenes-1094',
@@ -1984,8 +2280,8 @@ const rawDatasets: Dataset[] = [
       'class), tracked 3D boxes, ego trail, CAN telemetry, and a front camera. Scene log: ' +
       '"night, after rain, many peds, PMD, ped with bag."',
     timeRange: { start: 1542800847948, end: 1542800867447 },
-    longitude: 103.795694,
-    latitude: 1.310146,
+    longitude: 103.795698,
+    latitude: 1.310148,
   }),
   nuscenesScene({
     id: 'nuscenes-1100',
@@ -1996,8 +2292,8 @@ const rawDatasets: Dataset[] = [
       'class), tracked 3D boxes, ego trail, CAN telemetry, and a front camera. Scene log: ' +
       '"night, peds in sidewalk, peds cross crosswalk."',
     timeRange: { start: 1542800987947, end: 1542801007446 },
-    longitude: 103.794045,
-    latitude: 1.307481,
+    longitude: 103.794048,
+    latitude: 1.307483,
   }),
   {
     id: 'satellites',
@@ -2453,7 +2749,65 @@ const rawDatasets: Dataset[] = [
   },
 ];
 
-export const datasets: Dataset[] = rawDatasets.map((d) => ({
+// ── Camera-colored splat variants (AV scenes with cameras) ───────────────────
+// The camera-equipped AV sources (Waymo done inline; nuScenes + Argoverse 2 here)
+// can color their LIDAR from the imagery: a `-splat` bundle built with
+// `--colorize` bakes per-point r/g/b (each return projected into the cameras),
+// and the cockpit paints + soft-splats them (AnimatedPointLayer rgb + SplatExtension).
+// Rather than hand-duplicate every scene, we DERIVE the variant from each base
+// scene: same framing/streams, but the bundle path is `<id>-splat` and the RGB +
+// splat flags are flipped on. Add a base id here once its `-splat` bundle is built.
+const COLORED_SPLAT_BASE_IDS = new Set<string>([
+  // nuScenes (6 cameras, full 360°) — colored bundles built with --colorize.
+  'nuscenes-0061', 'nuscenes-0103', 'nuscenes-0553', 'nuscenes-0655',
+  'nuscenes-0757', 'nuscenes-0796', 'nuscenes-0916', 'nuscenes-1077',
+  'nuscenes-1094', 'nuscenes-1100',
+  // Argoverse 2 (7 ring cameras) — colored bundles built with --colorize.
+  'argoverse-02678d04', 'argoverse-02a00399', 'argoverse-0b5142c1',
+  'argoverse-0bae3b5e', 'argoverse-25e5c600', 'argoverse-92b900b1',
+]);
+
+function makeColoredSplatVariant(base: Dataset): Dataset {
+  const newId = `${base.id}-splat`;
+  const rebase = (u: string) => u.replace(`/data/${base.id}/`, `/data/${newId}/`);
+  const rebaseOpt = (u?: string) => (u ? rebase(u) : u);
+  // Drop the height/semantic legend — meaningless for camera-colored points.
+  const { legend: _legend, ...rest } = base;
+  return {
+    ...rest,
+    id: newId,
+    name: `${base.name} — camera splats`,
+    description:
+      'Camera-colored splat variant: every LIDAR return is painted by projecting ' +
+      'it into the cameras and sampling the image pixel, then rendered as soft ' +
+      `gaussian splats. ${base.description}`,
+    url: rebase(base.url),
+    avLidarUrl: rebaseOpt(base.avLidarUrl),
+    avSceneUrl: rebaseOpt(base.avSceneUrl),
+    avEgoUrl: rebaseOpt(base.avEgoUrl),
+    avObjectsUrl: rebaseOpt(base.avObjectsUrl),
+    avTelemetryUrl: rebaseOpt(base.avTelemetryUrl),
+    avCamerasUrl: rebaseOpt(base.avCamerasUrl),
+    avMapPolyUrl: rebaseOpt(base.avMapPolyUrl),
+    avMapLineUrl: rebaseOpt(base.avMapLineUrl),
+    lidarRgb: true,
+    lidarSplat: true,
+    // Drop the street basemap (even though these scenes ARE geo-registered): the
+    // camera-colored cloud IS the scene, so the real road network underneath just
+    // competes with it. The cloud then floats on the cockpit's dark backdrop.
+    avLocalFrame: true,
+    // Splats read best a touch larger + slightly transparent so overlaps blend.
+    radius: 2.4,
+    radiusMinPixels: 1.4,
+    opacity: 0.96,
+  };
+}
+
+const coloredSplatVariants: Dataset[] = rawDatasets
+  .filter((d) => COLORED_SPLAT_BASE_IDS.has(d.id))
+  .map(makeColoredSplatVariant);
+
+export const datasets: Dataset[] = [...rawDatasets, ...coloredSplatVariants].map((d) => ({
   ...d,
   url: resolveDataUrl(d.url),
   // The composite `radar` type carries two extra manifest URLs; rewrite them

@@ -136,6 +136,14 @@ function geometryKind(table: Table): GeometryType {
  */
 const STT_QUANT_META_KEY = 'stt:quant';
 
+/**
+ * Field-metadata key flagging a *numeric property* column stored as fixed-point
+ * integers (`value = o + q*s`) instead of Float64. Mirrors `arrow_tile.rs`'s
+ * `STT_QUANT_ATTR_META_KEY`; lives on the property field (the sibling of the
+ * geometry coordinate quantization).
+ */
+const STT_QUANT_ATTR_META_KEY = 'stt:qa';
+
 /** Coordinate-quantization affine (`lon = x0 + qx*sx`, `lat = y0 + qy*sy`). */
 interface QuantAffine {
   x0: number;
@@ -491,10 +499,32 @@ function tableToBinaryFeatures(table: Table): BinaryFeatures {
       }
       categoricalProps[field.name] = { indices, categories };
     } else {
-      // Numeric: f64 column down-converted to f32 for GPU upload.
-      const raw = vec.toArray() as Float64Array | Float32Array;
+      // Numeric: f64 column down-converted to f32 for GPU upload. A column
+      // flagged with the attribute-quant affine (`stt:qa`) ships as fixed-point
+      // ints (UInt16/Int32); reconstruct `value = o + q*s` — mirrors
+      // `arrow_tile.rs`'s `AttrQuant`, the property-column sibling of the
+      // geometry coordinate quantization above.
+      const qaRaw = field.metadata.get(STT_QUANT_ATTR_META_KEY);
+      const raw = vec.toArray() as
+        | Float64Array
+        | Float32Array
+        | Uint16Array
+        | Int32Array;
       const arr = new Float32Array(featureCount);
-      for (let i = 0; i < featureCount; i++) arr[i] = Number(raw[i]);
+      if (qaRaw) {
+        let o = 0;
+        let s = 1;
+        try {
+          const qa = JSON.parse(qaRaw);
+          o = qa.o;
+          s = qa.s;
+        } catch {
+          /* malformed affine — fall through as identity (o=0,s=1) */
+        }
+        for (let i = 0; i < featureCount; i++) arr[i] = o + Number(raw[i]) * s;
+      } else {
+        for (let i = 0; i < featureCount; i++) arr[i] = Number(raw[i]);
+      }
       numericProps[field.name] = arr;
     }
   }

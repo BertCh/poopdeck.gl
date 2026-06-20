@@ -190,6 +190,21 @@ the at-rest numbers above are the baseline to beat.
   one-sitting spec, a reference writer, a hosted validator
   (validate.copc.io), and a drag-and-drop web viewer. `stt-validate` is the
   seed; a hosted validate/inspect page is cheap once the npm publish lands.
+  (The portable-kit half — MUST/SHOULD checklist, golden fixtures, validator
+  contract — is now written: [`docs/spec/conformance.md`](../spec/conformance.md).)
+- **Cross-process reproducible payload bytes** (closes the spec §7-D6 gap) — a
+  tile blob is `zstd(Arrow IPC)`, and `arrow-ipc::convert::metadata_to_fb`
+  serializes Schema/Field `HashMap` custom metadata in per-process iteration
+  order, so the same logical tile built in two processes can get two content
+  addresses. Within a run it's deterministic (dedup works); across runs it
+  defeats incremental re-sync + cross-version dedup (not a correctness bug —
+  manifest swap is atomic, stale objects age out via the §2 GC pass). **Bet:** an
+  `arrow` version that sorts metadata at IPC-write time, or a small
+  metadata-canonicalizing step before `encode_tile`. **Open question:** the fix
+  changes every content address once → a one-time full fleet re-transcode + R2
+  re-sync. Sequence it with the next intentional format bump so the re-sync isn't
+  spent twice. Root-caused in `crates/stt-core/src/arrow_tile.rs` (the two
+  `HashMap::new()` metadata sites).
 
 ## Prior art: COPC & MapLibre Tiles (studied 2026-06-11)
 

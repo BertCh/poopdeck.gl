@@ -55,6 +55,12 @@ export interface AvMobileChromeProps {
   egoPath: { t: number; lon: number; lat: number }[] | null;
   topDown: boolean;
   onToggleTopDown: () => void;
+  /** Fill-rate performance mode (1× pixels + cheaper LIDAR fragments). */
+  perfMode: boolean;
+  onTogglePerfMode: () => void;
+  /** Street basemap on/off (geo-registered scenes only; hidden on avLocalFrame). */
+  showBasemap: boolean;
+  onToggleBasemap: () => void;
   // Picked object
   selectedObject: PickedObject | null;
   onCloseObject: () => void;
@@ -89,6 +95,18 @@ const GridIcon = () => (
   <svg className={ICON} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinejoin="round" aria-hidden>
     <rect x="3.5" y="3.5" width="17" height="17" rx="1.5" />
     <path d="M3.5 9.5h17M3.5 15h17M9.5 3.5v17M15 3.5v17" />
+  </svg>
+);
+
+const BoltIcon = () => (
+  <svg className={ICON} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinejoin="round" strokeLinecap="round" aria-hidden>
+    <path d="M13 2L4.5 13.5H11l-1 8.5L19.5 10H13z" />
+  </svg>
+);
+const MapIcon = () => (
+  <svg className={ICON} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinejoin="round" strokeLinecap="round" aria-hidden>
+    <path d="M9 4L3 6.5v13.5L9 17.5l6 2.5 6-2.5V4l-6 2.5z" />
+    <path d="M9 4v13.5M15 6.5V20" />
   </svg>
 );
 
@@ -142,6 +160,10 @@ const AvMobileChrome: React.FC<AvMobileChromeProps> = ({
   egoPath,
   topDown,
   onToggleTopDown,
+  perfMode,
+  onTogglePerfMode,
+  showBasemap,
+  onToggleBasemap,
   selectedObject,
   onCloseObject,
   timeline,
@@ -190,6 +212,26 @@ const AvMobileChrome: React.FC<AvMobileChromeProps> = ({
         >
           {topDown ? <GridIcon /> : <CubeIcon />}
         </ToggleButton>
+        <ToggleButton
+          active={perfMode}
+          onClick={onTogglePerfMode}
+          label="Performance mode"
+          title="Performance mode — 1× pixels + cheaper LIDAR fragments for smooth dense clouds"
+        >
+          <BoltIcon />
+        </ToggleButton>
+        {/* Basemap on/off — geo-registered scenes only (no basemap is ever drawn
+            for avLocalFrame scenes, so hide the control there). */}
+        {!dataset.avLocalFrame && (
+          <ToggleButton
+            active={showBasemap}
+            onClick={onToggleBasemap}
+            label="Toggle the street basemap"
+            title="Toggle the street basemap under the scene"
+          >
+            <MapIcon />
+          </ToggleButton>
+        )}
       </header>
 
       {/* ── Floating dashcam thumbnail (beneath the bar, right) ────────────── */}

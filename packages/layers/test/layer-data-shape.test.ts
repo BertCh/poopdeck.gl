@@ -1230,6 +1230,105 @@ describe('AnimatedPointLayer with categorical color', () => {
     ]).toEqual([11, 22, 33, 255]);
     expect(built.props.useCategoryColor).toBe(false);
   });
+
+  it('paints per-point RGB from r/g/b numeric columns (rgbColorColumns wins over categorical fillColor)', async () => {
+    vi.resetModules();
+    const mod = await import('../src/layers/core/animated-point-layer');
+    const LayerCtor = mod.AnimatedPointLayer as any;
+
+    const N = 3;
+    const tile = bigPointTile(N);
+    const binary = tile.layers[0].features;
+    // A categorical fillColor is ALSO present — rgbColorColumns must win.
+    binary.categoricalProps['vtype'] = {
+      indices: new Uint16Array(N).fill(1),
+      categories: ['a', 'b'],
+    };
+    binary.numericProps['r'] = new Float32Array([10, 20, 30]);
+    binary.numericProps['g'] = new Float32Array([40, 50, 60]);
+    binary.numericProps['b'] = new Float32Array([70, 80, 90]);
+
+    const layer = Object.create(LayerCtor.prototype);
+    Object.assign(layer, makePointLayerForTile());
+    layer.props = {
+      ...layer.props,
+      colorMapping: { b: [1, 2, 3, 255] as any }, // would apply if rgb didn't win
+      rgbColorColumns: ['r', 'g', 'b'],
+    };
+
+    const prepared = (layer as any).prepareTile(tile, tile.layers[0]);
+    const attrs = prepared.data.attributes;
+
+    expect(attrs.getFillColor).toBeDefined();
+    expect(attrs.getFillColor.value).toBeInstanceOf(Uint8Array);
+    expect(attrs.getFillColor.size).toBe(4);
+    expect(attrs.getFillColor.normalized).toBe(true);
+    // Per-point RGB straight from the columns, alpha forced to 255.
+    expect(Array.from(attrs.getFillColor.value as Uint8Array)).toEqual([
+      10, 40, 70, 255, 20, 50, 80, 255, 30, 60, 90, 255,
+    ]);
+    // The categorical GPU path must NOT have engaged.
+    expect(attrs.instanceCategoryIndex).toBeUndefined();
+  });
+
+  it('falls back to the categorical path when an rgb column is missing', async () => {
+    vi.resetModules();
+    const mod = await import('../src/layers/core/animated-point-layer');
+    const LayerCtor = mod.AnimatedPointLayer as any;
+
+    const N = 2;
+    const tile = bigPointTile(N);
+    const binary = tile.layers[0].features;
+    binary.categoricalProps['vtype'] = {
+      indices: new Uint16Array(N).fill(0),
+      categories: ['a'],
+    };
+    binary.numericProps['r'] = new Float32Array([10, 20]);
+    binary.numericProps['g'] = new Float32Array([40, 50]);
+    // 'b' intentionally absent → rgb path must NOT engage.
+
+    const layer = Object.create(LayerCtor.prototype);
+    Object.assign(layer, makePointLayerForTile());
+    layer.props = { ...layer.props, rgbColorColumns: ['r', 'g', 'b'] };
+
+    const prepared = (layer as any).prepareTile(tile, tile.layers[0]);
+    const attrs = prepared.data.attributes;
+    // No rgb buffer; the categorical GPU index path took over (fillColor='vtype').
+    expect(attrs.instanceCategoryIndex).toBeDefined();
+  });
+
+  it('installs SplatExtension in the sublayer extension list only when splat is set', async () => {
+    vi.resetModules();
+    const mod = await import('../src/layers/core/animated-point-layer');
+    const { SplatExtension } = await import('../src/extensions/splat-extension');
+    const LayerCtor = mod.AnimatedPointLayer as any;
+
+    const hasSplat = (built: any) =>
+      (built.props.extensions as any[]).some(
+        (e) => e?.constructor?.name === 'SplatExtension',
+      );
+
+    const tile = bigPointTile(4);
+
+    // splat off (default) → no SplatExtension.
+    const off = Object.create(LayerCtor.prototype);
+    Object.assign(off, makePointLayerForTile());
+    off.splatExtension = new SplatExtension();
+    const builtOff = (off as any).buildSublayer(
+      (off as any).prepareTile(tile, tile.layers[0]),
+    );
+    expect(hasSplat(builtOff)).toBe(false);
+
+    // splat on → SplatExtension appended (after time + category extensions).
+    const on = Object.create(LayerCtor.prototype);
+    Object.assign(on, makePointLayerForTile());
+    on.splatExtension = new SplatExtension();
+    on.props = { ...on.props, splat: true };
+    const builtOn = (on as any).buildSublayer(
+      (on as any).prepareTile(tile, tile.layers[0]),
+    );
+    expect(hasSplat(builtOn)).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------

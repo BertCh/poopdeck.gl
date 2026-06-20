@@ -7,7 +7,7 @@
  */
 import React from "react";
 import type { ColorRGBA } from "../../types";
-import type { AvScene, AvStreamKey } from "./sceneTypes";
+import type { AvScene, AvStreamKey, AvLidarDensity } from "./sceneTypes";
 
 const STREAM_LABELS: Record<AvStreamKey, string> = {
   lidar: "LIDAR point cloud",
@@ -23,6 +23,56 @@ const LAYER_STREAMS: AvStreamKey[] = ["lidar", "ego", "objects", "map"];
 
 const rgba = (c: ColorRGBA) => `rgba(${c[0]},${c[1]},${c[2]},${(c[3] ?? 255) / 255})`;
 
+/** Compact point-count label, e.g. 407976 → "0.4M", 815951 → "0.8M". */
+const fmtPts = (n: number): string =>
+  n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : `${Math.round(n / 1000)}K`;
+
+/**
+ * Runtime LIDAR density selector, shown indented under the LIDAR stream toggle.
+ * Each tier is a whole archive at a different point count (Waymo bakes four);
+ * picking one swaps the rendered LIDAR archive without touching scene/playback.
+ */
+const LidarDensityRow: React.FC<{
+  densities: AvLidarDensity[];
+  activeId: string;
+  onSelect: (id: string) => void;
+}> = ({ densities, activeId, onSelect }) => (
+  <div className="ml-6 mt-1 mb-0.5">
+    <div className="text-[10px] uppercase tracking-wide text-slate-500 mb-1">
+      Density
+    </div>
+    <div
+      className="flex flex-wrap gap-1"
+      role="radiogroup"
+      aria-label="LIDAR density"
+    >
+      {densities.map((d) => {
+        const active = d.id === activeId;
+        return (
+          <button
+            key={d.id}
+            type="button"
+            role="radio"
+            aria-checked={active}
+            onClick={() => onSelect(d.id)}
+            title={`${d.points.toLocaleString()} points`}
+            className={`rounded border px-1.5 py-0.5 text-[11px] transition-colors ${
+              active
+                ? "border-cyan-300/60 bg-cyan-400/20 text-cyan-100"
+                : "border-white/10 bg-black/40 text-slate-400 hover:bg-white/5"
+            }`}
+          >
+            {d.label}
+            <span className="ml-1 text-[9px] text-slate-500">
+              {fmtPts(d.points)}
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  </div>
+);
+
 export interface StreamPanelProps {
   scene: AvScene;
   /** All streams declared present in scene.json. */
@@ -30,6 +80,13 @@ export interface StreamPanelProps {
   visibleStreams: Set<AvStreamKey>;
   onToggleStream: (stream: AvStreamKey) => void;
   objectColors?: Record<string, ColorRGBA>;
+  /** Active LIDAR density tier id (null = the default / lightest archive). */
+  lidarDensityId?: string | null;
+  /**
+   * Switch the rendered LIDAR archive to a density tier. Omit to hide the
+   * density control (e.g. sources with a single LIDAR archive, or mobile).
+   */
+  onSelectLidarDensity?: (id: string) => void;
   /**
    * Sizing override for the root (default `w-60` for the desktop left rail).
    * The mobile sheet passes `w-full`.
@@ -49,6 +106,8 @@ const StreamPanel: React.FC<StreamPanelProps> = ({
   visibleStreams,
   onToggleStream,
   objectColors,
+  lidarDensityId,
+  onSelectLidarDensity,
   className,
   embedded = false,
 }) => {
@@ -71,6 +130,12 @@ const StreamPanel: React.FC<StreamPanelProps> = ({
       <ul className="space-y-1">
         {toggleable.map((s) => {
           const on = visibleStreams.has(s);
+          const densities =
+            s === "lidar"
+              ? ((scene.streams?.lidar?.densities as
+                  | AvLidarDensity[]
+                  | undefined) ?? [])
+              : [];
           return (
             <li key={s}>
               <button
@@ -91,6 +156,16 @@ const StreamPanel: React.FC<StreamPanelProps> = ({
                   {STREAM_LABELS[s]}
                 </span>
               </button>
+              {s === "lidar" &&
+                on &&
+                onSelectLidarDensity &&
+                densities.length > 1 && (
+                  <LidarDensityRow
+                    densities={densities}
+                    activeId={lidarDensityId ?? densities[0].id}
+                    onSelect={onSelectLidarDensity}
+                  />
+                )}
             </li>
           );
         })}

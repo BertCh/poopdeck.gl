@@ -70,8 +70,36 @@ export interface AvDeckProps {
   reducedMotion: boolean;
   /** Lightweight ego polyline (`scene.streams.ego.path`) → ego car + path-prediction ribbon. */
   egoPath?: EgoPathPoint[] | null;
+  /**
+   * `scene.json`'s `initialView` — the AUTHORITATIVE camera framing, always in sync
+   * with the bundle's tile georef. Preferred over `dataset.initialViewState` (which
+   * is only a hardcoded pre-load fallback) the moment the scene resolves, so a
+   * re-georef never leaves the camera parked over the old/empty location.
+   */
+  sceneView?: {
+    longitude?: number;
+    latitude?: number;
+    zoom?: number;
+    pitch?: number;
+    bearing?: number;
+  } | null;
   /** Click-to-inspect: receives a picked tracked object's decoded props (null = cleared). */
   onSelectObject?: (object: PickedObject | null) => void;
+  /**
+   * Fill-rate performance mode. When on, the deck renders at 1× device pixels
+   * (`useDevicePixels={false}` — the single biggest lever for a fill-bound point
+   * cloud on a retina display) and {@link buildDemoLayers} renders the LIDAR
+   * cloud cheaper (opaque/non-AA raw dots, higher surfel alpha cutoff). Lets the
+   * densest "ultra" raw cloud stay smooth. @default false
+   */
+  perfMode?: boolean;
+  /**
+   * Show the street basemap under geo-registered scenes. Ignored for
+   * `avLocalFrame` scenes (which never draw a basemap). Lets the cockpit drop
+   * the basemap so a camera-colored cloud / surfel surface floats on the dark
+   * backdrop. @default true
+   */
+  showBasemap?: boolean;
 }
 
 /** Which streams own which built layer (by the id suffix buildDemoLayers sets). */
@@ -115,7 +143,10 @@ const AvDeck: React.FC<AvDeckProps> = ({
   topDown,
   reducedMotion,
   egoPath,
+  sceneView,
   onSelectObject,
+  perfMode = false,
+  showBasemap = true,
 }) => {
   // Controlled camera: seeded from the dataset, then driven by ego-follow and
   // the pitch toggle. The user can still drag/zoom (onViewStateChange).
@@ -148,6 +179,18 @@ const AvDeck: React.FC<AvDeckProps> = ({
     // NOT a dep — toggling top-down WITHIN a scene must not recenter the camera.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dataset]);
+
+  // scene.json's `initialView` is authoritative (always matches the bundle's tile
+  // georef). The `[dataset]` effect + useState seed frame from the hardcoded
+  // `dataset.initialViewState` fallback immediately; this snaps to the real
+  // scene framing the moment scene.json resolves (or the scene switches), so the
+  // camera can't drift from the data even if the hardcoded coords go stale. Pitch
+  // still follows the perspective⇄top-down toggle.
+  useEffect(() => {
+    if (!sceneView) return;
+    setViewState((vs: any) => ({ ...vs, ...sceneView, pitch: targetPitch, maxPitch: 75 }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sceneView]);
 
   useEffect(() => {
     if (reducedMotion) {
@@ -254,12 +297,13 @@ const AvDeck: React.FC<AvDeckProps> = ({
       useGlobe: false,
       timeHeightScale: 0,
       plumbing: { registry },
+      perfMode,
     });
     // Honor the stream toggles: drop any layer whose owning stream is hidden.
     return all.filter((l: any) =>
       visibleStreams.has(layerStream(l.id, dataset.id)),
     );
-  }, [dataset, timeController, registry, visibleStreams]);
+  }, [dataset, timeController, registry, visibleStreams, perfMode]);
 
   // Lifecycle reconciliation. A layer filtered out above is unmounted by deck,
   // but the governor source it registered (via onTilesetReady while it was
@@ -332,14 +376,26 @@ const AvDeck: React.FC<AvDeckProps> = ({
       layers={layers}
       onClick={handleClick}
       pickingRadius={4}
+      // Perf mode: render at 1× device pixels. On a 2–3× retina display this is
+      // the single biggest fill-rate lever for the LIDAR cloud (4–9× fewer
+      // fragments shaded/blended), at the cost of a softer image.
+      useDevicePixels={perfMode ? false : true}
       style={{ background: "transparent" }}
     >
-      <Map
-        reuseMaps
-        mapStyle="mapbox://styles/mapbox/dark-v11"
-        mapboxAccessToken={MAPBOX_ACCESS_TOKEN}
-        projection={{ name: "mercator" }}
-      />
+      {/* Street basemap only for geo-registered scenes (nuScenes / Argoverse).
+          Anchored local-frame scenes (Waymo — no disclosed lat/lon) drop it so the
+          real road network can't visibly contradict the approximate anchor; the
+          cloud then floats on the cockpit's dark backdrop. The `showBasemap`
+          toggle lets a geo-registered scene drop it too — e.g. to read the
+          camera-colored surfel surface against the dark backdrop. */}
+      {showBasemap && !dataset.avLocalFrame && (
+        <Map
+          reuseMaps
+          mapStyle="mapbox://styles/mapbox/dark-v11"
+          mapboxAccessToken={MAPBOX_ACCESS_TOKEN}
+          projection={{ name: "mercator" }}
+        />
+      )}
     </DeckGL>
   );
 };

@@ -24,7 +24,18 @@ not the "what's planned" — the current state lives in the spec and API docs.
   [`time-controller`](../api/time-controller.md).
 - [**av-cockpit.md**](./av-cockpit.md) — AV telemetry cockpit demo + the
   cross-workstream build contract. Built; see the showcase AV cockpit and
-  [`AnimatedBoundingBoxLayer`](../api/animated-bounding-box-layer.md).
+  [`AnimatedBoundingBoxLayer`](../api/animated-bounding-box-layer.md). The data
+  contract it defines (scene bundle + sidecars + local-frame georeferencing) is
+  now formalized in [`docs/spec/sidecar-assets.md`](../spec/sidecar-assets.md).
+- [**av-refinement.md**](./av-refinement.md) — fidelity refinement of the cockpit
+  against the canonical viewers (streetscape.gl / nuScenes / AV2 devkits). Round 1
+  (code-only) shipped; Round 2 (re-gen + richer CAN/HD-map data) is the still-open
+  part.
+- [**multi-source-coordination.md**](./multi-source-coordination.md) — coordinate
+  loading *and* timing across N heavy STT datasets on one shared playhead
+  (combined min-gate + a shared request scheduler). Shipped 2026-06-19 in
+  `86bbb0f` (governor N-source registry + `SharedRequestScheduler` in
+  `@poopdeck.gl/core`, behind the `configureSharedScheduler({enabled})` kill-switch).
 - [**rust-audit-2026-06.md**](./rust-audit-2026-06.md) — Rust toolchain audit vs.
   tippecanoe / PMTiles / COPC / MLT. Wave 0 shipped; Waves 1–3 list the still-open
   items (full measure-correct loop, per-feature bbox covering, `stt-tools` crate).
@@ -35,7 +46,6 @@ Genuine future work — nothing implemented yet.
 
 - [**preprocessing-framework.md**](./preprocessing-framework.md) — bake analytics
   (clustering / aggregation / space-time cube / trend) into tiles at build time
-  via a Plan-IR operator DAG + declarative Recipes. Design synthesis only.
-- [**multi-source-coordination.md**](./multi-source-coordination.md) — coordinate
-  loading *and* timing across N heavy STT datasets on one shared playhead
-  (combined min-gate + a shared request scheduler). Design only.
+  via a Plan-IR operator DAG + declarative Recipes. Design synthesis only. The
+  `vertex_value_matrix` payload it builds on is specified in
+  [`docs/architecture/data-format.md` §Space-time cube](../architecture/data-format.md#space-time-cube-payload-vertex_value_matrix).

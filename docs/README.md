@@ -18,7 +18,16 @@ datasets.
   `manifest.json` + content-addressed packs + directory, and the immutable-object
   caching model. Machine-checkable manifest schema: [`manifest.schema.json`](./spec/manifest.schema.json).
 - [**Tile payload**](./architecture/data-format.md): Normative spec of the tile
-  payload (Apache Arrow IPC + GeoArrow), shared across containers.
+  payload (Apache Arrow IPC + GeoArrow), shared across containers, including the
+  space-time cube (`vertex_value_matrix`).
+- [**Time model**](./spec/time-model.md): The temporal axis — Unix-ms UTC, instants
+  vs intervals, fixed-width start-anchored buckets, temporal LOD, read-time pruning,
+  and the OGC TMS mapping ([`tile-matrix-set.json`](./spec/tile-matrix-set.json)).
+- [**Sidecar assets**](./spec/sidecar-assets.md): The scene-bundle profile —
+  multi-stream bundles, non-tile sidecars, and `georeferenced` vs `anchored-local`
+  frames. Machine-checkable [`scene.schema.json`](./spec/scene.schema.json).
+- [**Conformance**](./spec/conformance.md): What a conformant reader/writer
+  MUST/SHOULD do, the golden fixtures, and the `stt-validate` reference validator.
 - [**deck.gl Integration**](./architecture/deckgl-integration.md): How
   `@poopdeck.gl/layers` relates to TileLayer, and where it deliberately departs.
 

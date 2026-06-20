@@ -25,6 +25,7 @@ import {
   FlowmapLayer,
   BundledFlowmapLayer,
   AnimatedBoundingBoxLayer,
+  SplatLayer,
 } from "@poopdeck.gl/layers";
 import type { HeatmapChannelSpec, OverviewPreloadResult } from "@poopdeck.gl/layers";
 import type {
@@ -122,6 +123,16 @@ export interface BuildDemoLayersArgs {
   /** Active summary-tier weight toggle, if the dataset declares one. */
   activeSummaryToggle?: SummaryToggleOption;
   plumbing?: DemoLayerPlumbing;
+  /**
+   * Fill-rate "performance mode" (AV cockpit). When true, the heavy LIDAR layer
+   * trades a little fidelity for frame rate so the densest tiers (e.g. the
+   * "ultra" raw cloud) stay smooth: raw dots render OPAQUE + non-antialiased
+   * (depth-tested opaque writes early-z-reject occluded fragments, no per-frag
+   * blend), and surfel disks discard faint rims sooner (higher `alphaCutoff`,
+   * less overdraw). Pairs with `useDevicePixels={false}` at the DeckGL level —
+   * see {@link AvDeck}. Off by default; only the `av` case reads it. @default false
+   */
+  perfMode?: boolean;
 }
 
 export function buildDemoLayers({
@@ -131,6 +142,7 @@ export function buildDemoLayers({
   timeHeightScale,
   activeSummaryToggle,
   plumbing,
+  perfMode = false,
 }: BuildDemoLayersArgs) {
   const {
     registry,
@@ -781,7 +793,29 @@ export function buildDemoLayers({
           }),
         );
       }
-      if (selectedDataset.avLidarUrl) {
+      if (selectedDataset.avLidarUrl && selectedDataset.lidarSurfel) {
+        // Surfel splat: render the cloud as ORIENTED Gaussian disks (SplatLayer)
+        // that brighten/fade around each sweep's instant — a "formal" splat over
+        // time. The bundle (waymo_extract.py --surfel) bakes the per-return
+        // orientation quaternion + extents + confidence columns SplatLayer reads.
+        layers.push(
+          new SplatLayer({
+            ...propsForStream(selectedDataset.id, selectedDataset.avLidarUrl),
+            id: selectedDataset.id, // bare id → the cockpit's "lidar" toggle
+            data: selectedDataset.avLidarUrl,
+            // Real altitude from the baked `z` column → a true 3D surface.
+            elevationProperty: "z",
+            elevationScale: selectedDataset.elevationScale ?? 1,
+            // Soft temporal Gaussian — the cloud evolves as the playhead moves.
+            temporalSigma: selectedDataset.lidarSurfelTemporalSigma ?? 180,
+            sizeScale: selectedDataset.lidarSurfelSizeScale ?? 1,
+            opacity: selectedDataset.opacity ?? 1,
+            // Perf mode: discard faint disk rims sooner so the heavy surfel
+            // cloud writes far fewer blended fragments (overdraw is the cost).
+            ...(perfMode ? { alphaCutoff: 0.2 } : {}),
+          }),
+        );
+      } else if (selectedDataset.avLidarUrl) {
         layers.push(
           new AnimatedPointLayer({
             ...propsForStream(selectedDataset.id, selectedDataset.avLidarUrl),
@@ -792,6 +826,14 @@ export function buildDemoLayers({
             fillColor: selectedDataset.colorProperty ?? "height_band",
             colorMapping: selectedDataset.lidarColorMapping,
             colorMappingDefault: selectedDataset.lidarColorMappingDefault,
+            // Camera-colored bundles (waymo_extract --colorize) bake per-point
+            // r/g/b columns; paint each return its own sampled color (wins over
+            // the height ramp) and render as soft gaussian splats for the
+            // photographic point-cloud look.
+            ...(selectedDataset.lidarRgb
+              ? { rgbColorColumns: ["r", "g", "b"] as [string, string, string] }
+              : {}),
+            splat: selectedDataset.lidarSplat ?? false,
             // Place each return at its real height (`z`, metres) so the tilted
             // cockpit camera renders a true 3D point CLOUD — not flat dots. The
             // tile carries a numeric `z` column; AnimatedPointLayer now fills the
@@ -811,34 +853,50 @@ export function buildDemoLayers({
             // is invisible; billboarded round points keep each return legible
             // at its real height from any angle.
             billboard: true,
+            // Perf mode: drop the 1px edge antialiasing (a pure fill-rate win,
+            // ~no visual change on a dense cloud). For the RAW (non-splat) path
+            // also force fully OPAQUE points so they become depth-tested opaque
+            // writes — occluded returns early-z-reject instead of blending. The
+            // splat path keeps its translucency (its gaussian rim does the fade).
+            antialiasing: perfMode ? false : true,
             // LIDAR reads best as a dense cloud rather than translucent splats.
-            opacity: selectedDataset.opacity ?? 0.9,
+            opacity:
+              perfMode && !selectedDataset.lidarSplat
+                ? 1
+                : selectedDataset.opacity ?? 0.9,
           }),
         );
       }
-      if (selectedDataset.avEgoUrl) {
-        layers.push(
-          new AnimatedTripsLayer({
-            ...propsForStream(`${selectedDataset.id}-ego`, selectedDataset.avEgoUrl),
-            id: `${selectedDataset.id}-ego`,
-            data: selectedDataset.avEgoUrl,
-            tripColor: selectedDataset.tripColor ?? [120, 230, 255, 255],
-            widthUnits: selectedDataset.widthUnits ?? "meters",
-            tripWidth: selectedDataset.tripWidth ?? 2.2,
-            widthMinPixels: selectedDataset.widthMinPixels ?? 2,
-            widthMaxPixels: selectedDataset.widthMaxPixels,
-            // Show the full ego path for the scene — the whole drive is the
-            // trail. Falls back to the dataset duration so the line never fades
-            // mid-scene; datasets can override for a shorter tail.
-            trailLength:
-              selectedDataset.trailLength ??
-              selectedDataset.timeRange.end - selectedDataset.timeRange.start,
-            fadeTrail: selectedDataset.fadeTrail ?? true,
-            capRounded: selectedDataset.capRounded ?? false,
-            jointRounded: selectedDataset.jointRounded ?? false,
-          }),
-        );
-      }
+      // DISABLED (experiment): the full-scene ego trail (AnimatedTripsLayer).
+      // This cyan trip line traced the whole drive behind the car AND registered
+      // as a REQUIRED governor source, so the playback clock gated on its tiles —
+      // a likely source of stalls/artifacts. Removing the push (rather than just
+      // `visible:false`) takes it out of the layer tree AND out of the gate; the
+      // ego car box + predicted ribbon (egoLayers.ts, lightweight polyline) keep
+      // the vehicle visible. Re-enable by uncommenting this block.
+      // if (selectedDataset.avEgoUrl) {
+      //   layers.push(
+      //     new AnimatedTripsLayer({
+      //       ...propsForStream(`${selectedDataset.id}-ego`, selectedDataset.avEgoUrl),
+      //       id: `${selectedDataset.id}-ego`,
+      //       data: selectedDataset.avEgoUrl,
+      //       tripColor: selectedDataset.tripColor ?? [120, 230, 255, 255],
+      //       widthUnits: selectedDataset.widthUnits ?? "meters",
+      //       tripWidth: selectedDataset.tripWidth ?? 2.2,
+      //       widthMinPixels: selectedDataset.widthMinPixels ?? 2,
+      //       widthMaxPixels: selectedDataset.widthMaxPixels,
+      //       // Show the full ego path for the scene — the whole drive is the
+      //       // trail. Falls back to the dataset duration so the line never fades
+      //       // mid-scene; datasets can override for a shorter tail.
+      //       trailLength:
+      //         selectedDataset.trailLength ??
+      //         selectedDataset.timeRange.end - selectedDataset.timeRange.start,
+      //       fadeTrail: selectedDataset.fadeTrail ?? true,
+      //       capRounded: selectedDataset.capRounded ?? false,
+      //       jointRounded: selectedDataset.jointRounded ?? false,
+      //     }),
+      //   );
+      // }
       if (selectedDataset.avObjectsUrl) {
         layers.push(
           new AnimatedBoundingBoxLayer({
@@ -854,6 +912,13 @@ export function buildDemoLayers({
             lengthProperty: "length",
             widthProperty: "width",
             heightProperty: "height",
+            // Detection-box look: crisp 12-edge cuboid OUTLINES (no solid fill),
+            // so the LIDAR returns inside each box stay visible — the
+            // streetscape.gl / nuScenes-devkit style. Per-object color/heading/
+            // dims drive each outline exactly as they would the fill.
+            filled: false,
+            stroked: true,
+            strokeWidth: 1.6,
             // streetscape.gl refinements: class labels above each box, velocity
             // arrows (derived from speed+heading), and click-to-inspect picking
             // (overrides the baseProps pickable:false for the objects layer only).

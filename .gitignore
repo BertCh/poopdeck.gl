@@ -133,6 +133,10 @@ scripts/data-generation/venv-*/
 scripts/data-generation/osrm-data/
 *.osm.pbf
 *.osrm
+
+# Raw Argoverse 2 sensor logs staged for the AV-cockpit extractor (~1 GB/log;
+# re-downloaded from the public s3://argoverse bucket, deleted after each build).
+scripts/data-generation/av2-raw/
 *.osrm.*
 
 # OSM editing-history inputs for `stt-generate osm-edits` (large; downloaded

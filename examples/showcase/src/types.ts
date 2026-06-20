@@ -421,6 +421,15 @@ export interface Dataset {
    */
   avCamerasUrl?: string;
   /**
+   * The scene rides an APPROXIMATE/anchored local frame, not a real geo-registered
+   * one (e.g. Waymo: the Open Dataset discloses no lat/lon, so the scene is anchored
+   * at a plausible metro point — the metro is right, the streets are not). When
+   * true, the cockpit drops the street basemap (renders the cloud on a plain dark
+   * background) so the real road network can't visibly contradict the anchor.
+   * Georeferenced sources (nuScenes / Argoverse) leave this unset → street basemap.
+   */
+  avLocalFrame?: boolean;
+  /**
    * Tracked-object category → RGBA color. Also present in `scene.json`; the
    * Dataset copy keeps `buildDemoLayers` self-contained (so the standard
    * `DemoPage` render colors object boxes without fetching the manifest).
@@ -433,6 +442,35 @@ export interface Dataset {
   lidarColorMapping?: Record<string, ColorRGBA>;
   /** Fallback color for `height_band` values absent from `lidarColorMapping`. */
   lidarColorMappingDefault?: ColorRGBA;
+  /**
+   * Camera-colored LIDAR: the bundle bakes per-point `r`/`g`/`b` columns
+   * (sampled by projecting each return into the camera images at build time —
+   * `waymo_extract.py --colorize`). When set, the cloud is painted per-point
+   * from those columns instead of the `height_band` ramp.
+   */
+  lidarRgb?: boolean;
+  /**
+   * Render the LIDAR cloud as soft gaussian "splats" (SplatExtension) — a
+   * photographic point-cloud look. Best paired with `lidarRgb`.
+   */
+  lidarSplat?: boolean;
+  /**
+   * Render the LIDAR cloud as ORIENTED ANISOTROPIC GAUSSIAN SURFELS via
+   * `SplatLayer` — a "formal" splat (oriented disks lying on the surface, each
+   * with a soft radial AND soft temporal Gaussian) instead of round dots. The
+   * bundle must be built with `waymo_extract.py --surfel`, which bakes the
+   * per-return orientation quaternion + in-plane extents + confidence columns.
+   * Supersedes the `AnimatedPointLayer` LIDAR path when set.
+   */
+  lidarSurfel?: boolean;
+  /**
+   * Soft temporal-Gaussian width (ms) for `lidarSurfel` — each surfel brightens
+   * at its sweep instant and fades within ±~3σ. Tune to ~1–2× the sweep
+   * interval (Waymo LIDAR ≈ 100 ms). Forwarded to `SplatLayer.temporalSigma`.
+   */
+  lidarSurfelTemporalSigma?: number;
+  /** Multiplier on every surfel's baked extents (`SplatLayer.sizeScale`). */
+  lidarSurfelSizeScale?: number;
   /**
    * HD-map vector streams: drivable-area / lane / crosswalk POLYGONS
    * (`avMapPolyUrl`) and lane-divider / boundary LINES (`avMapLineUrl`), each an

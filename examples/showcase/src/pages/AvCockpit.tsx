@@ -18,7 +18,7 @@
  * loading or "scene not generated yet" state instead of crashing.
  */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 import { usePlayback } from "@poopdeck.gl/react";
 import { datasets, getDatasetById } from "../datasets";
 import { useReducedMotion } from "../lib/reducedMotion";
@@ -39,10 +39,27 @@ import {
   type AvStreamKey,
   type AvTelemetry,
   type AvCameras,
+  type AvLidarDensity,
 } from "../components/av/sceneTypes";
 
 const DEFAULT_SCENE_ID = "av-synthetic";
 const LAYER_STREAMS: AvStreamKey[] = ["lidar", "ego", "objects", "map"];
+
+/**
+ * How the LIDAR cloud is rendered. `raw` = the base bundle's hard point dots
+ * (height-band colored); `splat` / `surfel` each swap to a separately-built
+ * camera-colored bundle (`<id>-splat` / `<id>-surfel`) rendered as soft point
+ * splats / oriented Gaussian surfels. These used to be separate scene entries;
+ * they're now a per-scene toggle that swaps the active dataset.
+ */
+type LidarRenderMode = "raw" | "splat" | "surfel";
+
+/** Label shown on each render-mode pill. */
+const RENDER_MODE_LABELS: Record<LidarRenderMode, string> = {
+  raw: "Points",
+  splat: "Splat",
+  surfel: "Surfel",
+};
 
 /** Base url of a dataset's data dir (strip the trailing manifest filename). */
 function sceneBaseUrl(dataset: Dataset): string {
@@ -56,15 +73,104 @@ const AvCockpit: React.FC = () => {
   const reducedMotion = useReducedMotion();
   const isMobile = useIsMobile();
 
-  // All AV scenes (for the switcher) + the active one.
+  // All AV scenes for the switcher — EXCLUDING the camera-splat / surfel render
+  // variants. Those are no longer separate entries: they're folded into the
+  // per-scene LIDAR render-mode toggle below (Points ⇄ Splat ⇄ Surfel), each
+  // mode swapping to its own `<id>-splat` / `<id>-surfel` bundle.
   const avScenes = useMemo(
-    () => datasets.filter((d) => d.type === "av"),
+    () =>
+      datasets.filter(
+        (d) => d.type === "av" && !/-(?:splat|surfel)$/.test(d.id),
+      ),
     [],
   );
-  const dataset = useMemo(
-    () => getDatasetById(sceneId ?? DEFAULT_SCENE_ID),
-    [sceneId],
+
+  // Resolve the BASE scene from the route. A deep-link straight to a render
+  // variant (`/drive/<id>-splat`) still works: strip the suffix to the base and
+  // seed the matching mode, so old links land on the same visual.
+  const routeId = sceneId ?? DEFAULT_SCENE_ID;
+  const { baseId, routeMode } = useMemo(() => {
+    const m = routeId.match(/^(.*)-(splat|surfel)$/);
+    if (m && getDatasetById(m[1])) {
+      return { baseId: m[1], routeMode: m[2] as LidarRenderMode };
+    }
+    return { baseId: routeId, routeMode: "raw" as LidarRenderMode };
+  }, [routeId]);
+  const baseDataset = useMemo(() => getDatasetById(baseId), [baseId]);
+
+  // ── URL query params hold every cockpit control selection ─────────────────
+  // The controls below (render mode, stream visibility, follow / view / perf /
+  // basemap toggles, LIDAR density) are DERIVED from the query string and write
+  // back to it, so the cockpit's state is bookmarkable, shareable, and survives a
+  // refresh. `setParam(key, null)` drops a param (default-valued URLs stay clean);
+  // writes use `replace` so flipping a toggle doesn't pile up history entries.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const setParam = useCallback(
+    (key: string, value: string | null) => {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          if (value === null) next.delete(key);
+          else next.set(key, value);
+          return next;
+        },
+        { replace: true },
+      );
+    },
+    [setSearchParams],
   );
+
+  const renderModes = useMemo<LidarRenderMode[]>(() => {
+    if (!baseDataset) return [];
+    // `splat` is ALWAYS offered: if the scene ships a camera-colored `<id>-splat`
+    // bundle we swap to it (photographic), otherwise we splat the scene's own
+    // cloud in place (render-only, height-band colors). `surfel` needs the baked
+    // per-return orientation columns, so it's only offered when that bundle exists.
+    const modes: LidarRenderMode[] = ["raw", "splat"];
+    if (getDatasetById(`${baseDataset.id}-surfel`)) modes.push("surfel");
+    return modes;
+  }, [baseDataset]);
+
+  // LIDAR render mode (`?mode=`). Each non-raw mode has its OWN data bundle (built
+  // with --colorize / --surfel); picking a mode swaps the active dataset to that
+  // bundle. The route suffix (`/drive/<id>-splat`) still seeds the default so old
+  // deep-links land on the same visual; an explicit `?mode=` overrides it.
+  const modeParam = searchParams.get("mode") as LidarRenderMode | null;
+  const lidarRenderMode: LidarRenderMode =
+    modeParam && renderModes.includes(modeParam) ? modeParam : routeMode;
+  const setLidarRenderMode = useCallback(
+    (m: LidarRenderMode) => {
+      // Drop the param when it matches the route-derived default to keep a plain
+      // `/drive/<id>` URL clean; write it explicitly otherwise (so a deep-linked
+      // `-splat` route can still be flipped back to Points).
+      setParam("mode", m === routeMode ? null : m);
+    },
+    [routeMode, setParam],
+  );
+
+  // The ACTIVE dataset everything downstream reads (deck, sidecars, density).
+  const dataset = useMemo(() => {
+    if (!baseDataset) return baseDataset;
+    // Surfel: a fully separate baked bundle (no in-place fallback possible).
+    if (lidarRenderMode === "surfel")
+      return getDatasetById(`${baseDataset.id}-surfel`) ?? baseDataset;
+    if (lidarRenderMode === "splat") {
+      // Prefer the camera-colored `-splat` bundle when it exists (best look)…
+      const variant = getDatasetById(`${baseDataset.id}-splat`);
+      if (variant) return variant;
+      // …otherwise splat THIS scene's existing cloud in place — render-only, no
+      // bundle swap (height-band colors instead of camera color). Match the
+      // colored-variant's splat sizing/opacity so overlaps blend into surface.
+      return {
+        ...baseDataset,
+        lidarSplat: true,
+        radius: 2.4,
+        radiusMinPixels: 1.4,
+        opacity: 0.96,
+      };
+    }
+    return baseDataset;
+  }, [baseDataset, lidarRenderMode]);
 
   // ── Sidecars (scene.json + telemetry + cameras) ───────────────────────────
   const [scene, setScene] = useState<AvScene | null>(null);
@@ -162,23 +268,36 @@ const AvCockpit: React.FC = () => {
     return inferred;
   }, [scene, dataset]);
 
-  const [visibleStreams, setVisibleStreams] = useState<Set<AvStreamKey>>(
-    () => new Set(LAYER_STREAMS),
-  );
-  // Default every present LAYER stream to visible whenever the scene resolves.
-  useEffect(() => {
-    setVisibleStreams(
-      new Set(presentStreams.filter((s) => LAYER_STREAMS.includes(s))),
+  // Stream visibility (`?streams=`). No param ⇒ every present LAYER stream is
+  // visible (the default); otherwise only the comma-listed present streams are.
+  // Toggling writes the param, dropping it once everything is back on.
+  const visibleStreams = useMemo<Set<AvStreamKey>>(() => {
+    const layerPresent = presentStreams.filter((s) =>
+      LAYER_STREAMS.includes(s),
     );
-  }, [presentStreams]);
-  const toggleStream = useCallback((s: AvStreamKey) => {
-    setVisibleStreams((prev) => {
-      const next = new Set(prev);
+    const param = searchParams.get("streams");
+    if (param === null) return new Set(layerPresent);
+    const wanted = new Set(param ? (param.split(",") as AvStreamKey[]) : []);
+    return new Set(layerPresent.filter((s) => wanted.has(s)));
+  }, [presentStreams, searchParams]);
+  const toggleStream = useCallback(
+    (s: AvStreamKey) => {
+      const layerPresent = presentStreams.filter((x) =>
+        LAYER_STREAMS.includes(x),
+      );
+      const next = new Set(visibleStreams);
       if (next.has(s)) next.delete(s);
       else next.add(s);
-      return next;
-    });
-  }, []);
+      const allOn =
+        next.size === layerPresent.length &&
+        layerPresent.every((x) => next.has(x));
+      setParam(
+        "streams",
+        allOn ? null : layerPresent.filter((x) => next.has(x)).join(","),
+      );
+    },
+    [presentStreams, visibleStreams, setParam],
+  );
 
   // Object colors: scene.json wins, else the Dataset copy.
   const objectColors = useMemo<Record<string, ColorRGBA> | undefined>(
@@ -192,12 +311,92 @@ const AvCockpit: React.FC = () => {
   // in {@link AvDeck} (a single rAF loop over `egoPath`); here we only own the
   // toggles. When the scene has no polyline the button is present but inert
   // (camera holds), which we surface in its title.
-  const [egoFollow, setEgoFollow] = useState(false);
-  const [topDown, setTopDown] = useState(false);
+  // Camera + render toggles, all URL-backed. follow / top-down default OFF (param
+  // present only when ON); perf / basemap default ON (param present only when OFF)
+  // so the common case keeps a clean URL.
+  const egoFollow = searchParams.get("follow") === "1";
+  const toggleEgoFollow = useCallback(
+    () => setParam("follow", egoFollow ? null : "1"),
+    [egoFollow, setParam],
+  );
+  const topDown = searchParams.get("view") === "top";
+  const toggleTopDown = useCallback(
+    () => setParam("view", topDown ? null : "top"),
+    [topDown, setParam],
+  );
+  // Fill-rate performance mode (1× device pixels + cheaper LIDAR fragments).
+  // DEFAULT ON for the AV cockpit: the scenes are dense, fill-bound point clouds
+  // and 1× device pixels is the single biggest lever (4–9× fewer fragments on a
+  // retina display) for almost no perceptible loss on a moving cloud. The toggle
+  // stays so it can be flipped OFF to A/B against full-quality rendering.
+  const perfMode = searchParams.get("perf") !== "0";
+  const togglePerfMode = useCallback(
+    () => setParam("perf", perfMode ? "0" : null),
+    [perfMode, setParam],
+  );
+  // Street basemap under geo-registered scenes (nuScenes / Argoverse). Default ON
+  // so the cloud overlays real streets; flip OFF to read a camera-colored splat /
+  // surfel surface against the cockpit's dark backdrop (no-op on `avLocalFrame`
+  // scenes, which never draw a basemap — the toggle is hidden for those).
+  const showBasemap = searchParams.get("basemap") !== "0";
+  const toggleBasemap = useCallback(
+    () => setParam("basemap", showBasemap ? "0" : null),
+    [showBasemap, setParam],
+  );
   const egoPath = useMemo<{ t: number; lon: number; lat: number }[] | null>(
     () => (scene?.streams?.ego as any)?.path ?? null,
     [scene],
   );
+
+  // ── LIDAR density selector ────────────────────────────────────────────────
+  // Some sources (Waymo) bake several LIDAR archives at increasing point counts
+  // (scene.json `streams.lidar.densities`); the user A/B's them live. Picking a
+  // tier swaps the rendered archive's manifest url. null = the default (lightest).
+  const lidarDensities = useMemo<AvLidarDensity[]>(
+    () => scene?.streams?.lidar?.densities ?? [],
+    [scene],
+  );
+  // Active LIDAR density tier (`?density=`). Validated against the scene's tiers
+  // so a stale id (e.g. carried from another scene) falls back to the default
+  // (lightest); the default tier is stored as no-param to keep the URL clean.
+  const densityParam = searchParams.get("density");
+  const lidarDensityId =
+    densityParam && lidarDensities.some((d) => d.id === densityParam)
+      ? densityParam
+      : null;
+  const onSelectLidarDensity = useCallback(
+    (id: string) =>
+      setParam(
+        "density",
+        lidarDensities[0] && id === lidarDensities[0].id ? null : id,
+      ),
+    [lidarDensities, setParam],
+  );
+  // Deck reads a density-swapped copy of the dataset (only avLidarUrl differs); a
+  // fresh object identity re-runs the layer memo → reloads the lidar archive →
+  // re-registers it with the governor under the same source id (dataset.id).
+  const datasetForDeck = useMemo<Dataset | undefined>(() => {
+    if (!dataset) return dataset;
+    const tier = lidarDensityId
+      ? lidarDensities.find((d) => d.id === lidarDensityId)
+      : undefined;
+    if (!tier) return dataset;
+    // Denser tiers ship a smaller point radius so a HARD-dot cloud reads as
+    // structure. Soft camera-colored SPLATS fade at their rim (gaussian alpha),
+    // so those sub-pixel ultra/full radii nearly vanish — scale them up (×2) with
+    // a floor so the dense tiers stay prominent. No effect on non-splat scenes.
+    const splat = !!dataset.lidarSplat;
+    const r = (v: number) => (splat ? Math.max(v * 2, 1.4) : v);
+    const rMin = (v: number) => (splat ? Math.max(v * 2, 1.0) : v);
+    return {
+      ...dataset,
+      avLidarUrl: `${sceneBaseUrl(dataset)}/${tier.url}`,
+      ...(tier.radius != null ? { radius: r(tier.radius) } : {}),
+      ...(tier.radiusMinPixels != null
+        ? { radiusMinPixels: rMin(tier.radiusMinPixels) }
+        : {}),
+    };
+  }, [dataset, lidarDensityId, lidarDensities]);
 
   if (!dataset || dataset.type !== "av") {
     return (
@@ -210,7 +409,9 @@ const AvCockpit: React.FC = () => {
     );
   }
 
-  const sceneName = scene?.name ?? dataset.name;
+  // Base-stable name so the switcher label doesn't flip as the render mode
+  // swaps the active dataset to a `-splat` / `-surfel` bundle.
+  const sceneName = baseDataset?.name ?? dataset.name;
   const resolveFrameUrl = (rel: string) => `${sceneBaseUrl(dataset)}/${rel}`;
   const hasTelemetry =
     presentStreams.includes("telemetry") &&
@@ -242,7 +443,7 @@ const AvCockpit: React.FC = () => {
       {/* The map fills the viewport; chrome floats over it. */}
       <div className="absolute inset-0">
         <AvDeck
-          dataset={dataset}
+          dataset={datasetForDeck ?? dataset}
           timeController={playback.timeController}
           visibleStreams={visibleStreams}
           registry={playback.registry}
@@ -250,14 +451,17 @@ const AvCockpit: React.FC = () => {
           topDown={topDown}
           reducedMotion={reducedMotion}
           egoPath={egoPath}
+          sceneView={scene?.initialView ?? null}
           onSelectObject={setSelectedObject}
+          perfMode={perfMode}
+          showBasemap={showBasemap}
         />
       </div>
 
       {isMobile ? (
         <AvMobileChrome
           scene={scene}
-          dataset={dataset}
+          dataset={baseDataset ?? dataset}
           scenes={avScenes}
           sceneName={sceneName}
           timeController={playback.timeController}
@@ -271,10 +475,14 @@ const AvCockpit: React.FC = () => {
           hasCamera={hasCamera}
           resolveFrameUrl={resolveFrameUrl}
           egoFollow={egoFollow}
-          onToggleEgoFollow={() => setEgoFollow((v) => !v)}
+          onToggleEgoFollow={toggleEgoFollow}
           egoPath={egoPath}
           topDown={topDown}
-          onToggleTopDown={() => setTopDown((v) => !v)}
+          onToggleTopDown={toggleTopDown}
+          perfMode={perfMode}
+          onTogglePerfMode={togglePerfMode}
+          showBasemap={showBasemap}
+          onToggleBasemap={toggleBasemap}
           selectedObject={selectedObject}
           onCloseObject={() => setSelectedObject(null)}
           timeline={timelineProps}
@@ -285,13 +493,13 @@ const AvCockpit: React.FC = () => {
       <div className="absolute top-3 left-3 flex flex-col gap-2">
         <SceneSwitcher
           scenes={avScenes}
-          currentId={dataset.id}
+          currentId={baseDataset?.id ?? dataset.id}
           sceneName={sceneName}
         />
         <div className="flex gap-2">
           <button
             type="button"
-            onClick={() => setEgoFollow((v) => !v)}
+            onClick={toggleEgoFollow}
             aria-pressed={egoFollow}
             title={
               egoPath
@@ -308,7 +516,7 @@ const AvCockpit: React.FC = () => {
           </button>
           <button
             type="button"
-            onClick={() => setTopDown((v) => !v)}
+            onClick={toggleTopDown}
             aria-pressed={topDown}
             title="Toggle perspective / top-down view"
             className={`rounded-md border px-2.5 py-1 text-xs backdrop-blur-md transition-colors ${
@@ -319,6 +527,71 @@ const AvCockpit: React.FC = () => {
           >
             {topDown ? "Top-down" : "Perspective"}
           </button>
+          <button
+            type="button"
+            onClick={togglePerfMode}
+            aria-pressed={perfMode}
+            title="Performance mode — render at 1× pixels with cheaper LIDAR fragments so the densest (ultra / raw) clouds stay smooth"
+            className={`rounded-md border px-2.5 py-1 text-xs backdrop-blur-md transition-colors ${
+              perfMode
+                ? "border-amber-300/60 bg-amber-400/20 text-amber-100"
+                : "border-white/10 bg-black/55 text-slate-300 hover:bg-white/5"
+            }`}
+          >
+            ⚡ Perf
+          </button>
+          {/* Basemap on/off — only for geo-registered scenes (avLocalFrame scenes
+              never draw a basemap). Lets the camera-colored surfel surface read
+              against the dark backdrop instead of over Miami's streets. */}
+          {!(datasetForDeck ?? dataset)?.avLocalFrame && (
+            <button
+              type="button"
+              onClick={toggleBasemap}
+              aria-pressed={showBasemap}
+              title="Toggle the street basemap under the scene"
+              className={`rounded-md border px-2.5 py-1 text-xs backdrop-blur-md transition-colors ${
+                showBasemap
+                  ? "border-cyan-300/60 bg-cyan-400/20 text-cyan-100"
+                  : "border-white/10 bg-black/55 text-slate-300 hover:bg-white/5"
+              }`}
+            >
+              {showBasemap ? "Basemap" : "No basemap"}
+            </button>
+          )}
+          {/* LIDAR render mode — Points ⇄ Splat ⇄ Surfel. Kept INSIDE the button
+              row (not a new row) so the top-left container's height stays fixed
+              and never grows into the `top-28` STREAMS panel below. Each pill
+              swaps the active dataset so the cloud re-renders in that mode (a
+              camera-colored `-splat`/`-surfel` bundle when one exists, else an
+              in-place render-only splat) without leaving the scene. */}
+          {renderModes.length > 1 && (
+            <div
+              role="radiogroup"
+              aria-label="LIDAR render mode"
+              className="flex overflow-hidden rounded-md border border-white/10 bg-black/55 backdrop-blur-md"
+            >
+              {renderModes.map((m) => {
+                const active = m === lidarRenderMode;
+                return (
+                  <button
+                    key={m}
+                    type="button"
+                    role="radio"
+                    aria-checked={active}
+                    onClick={() => setLidarRenderMode(m)}
+                    title={`Render the LIDAR cloud as ${RENDER_MODE_LABELS[m].toLowerCase()}`}
+                    className={`px-2.5 py-1 text-xs transition-colors ${
+                      active
+                        ? "bg-cyan-400/20 text-cyan-100"
+                        : "text-slate-300 hover:bg-white/5"
+                    }`}
+                  >
+                    {RENDER_MODE_LABELS[m]}
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
       </div>
 
@@ -331,6 +604,8 @@ const AvCockpit: React.FC = () => {
             visibleStreams={visibleStreams}
             onToggleStream={toggleStream}
             objectColors={objectColors}
+            lidarDensityId={lidarDensityId}
+            onSelectLidarDensity={onSelectLidarDensity}
           />
         </div>
       )}

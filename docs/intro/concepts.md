@@ -11,6 +11,20 @@ Each tile represents:
 - A specific time interval (start time to end time).
 - A collection of features that exist within that space-time volume.
 
+```mermaid
+flowchart LR
+  D["source dataset"] --> Z["spatial pyramid<br/>(zoom z, tile x/y<br/>WebMercatorQuad)"]
+  D --> T["temporal axis<br/>(buckets of<br/>temporal_bucket_ms)"]
+  Z --> A["tile address<br/>(z, x, y, bucket)"]
+  T --> A
+  A --> P["payload:<br/>Arrow IPC + GeoArrow,<br/>features in that<br/>space-time volume"]
+```
+
+The temporal axis is specified in full in the
+[time model](../spec/time-model.md); the addressing maps onto an OGC
+WebMercatorQuad tile matrix set plus a regular time dimension
+([`tile-matrix-set.json`](../spec/tile-matrix-set.json)).
+
 ### Why add Time?
 
 Traditional approaches to animating massive datasets (millions of points) usually involve:
@@ -44,6 +58,25 @@ invalidates the few-KB manifest. Reads are HTTP range requests into packs; the
 reader groups nearby tiles by pack and coalesces their ranges into a handful of
 requests. The full contract is in
 [the packed format spec](../spec/stt-packed-format.md).
+
+```mermaid
+sequenceDiagram
+  participant R as Reader
+  participant CDN as CDN / static host
+  R->>CDN: GET manifest.json (mutable, short TTL)
+  CDN-->>R: metadata + directory pointer + pack table
+  R->>CDN: GET the directory object (immutable) — whole, or just the root page
+  CDN-->>R: directory entries: (z,x,y,bucket) maps to (pack, offset, length)
+  loop per viewport + time window
+    R->>CDN: Range GET into a pack object (coalesced per pack)
+    CDN-->>R: zstd(Arrow IPC) tile blobs
+  end
+  Note over R,CDN: warm reads are served entirely from the edge cache
+```
+
+A cold load is **1 manifest + 1 directory (or root page) + N pack ranges**; for a
+paged directory the directory bytes are proportional to the viewport, not the
+dataset. Everything but the tiny manifest is immutable and edge-cached forever.
 
 ## Key Concepts
 
@@ -134,3 +167,15 @@ hysteresis) when the runway drains instead of advancing into unloaded time,
 and can drive an **Auto speed** that adapts the playback rate to measured
 throughput. The result is "buffering…" semantics — never silently empty
 frames.
+
+## Specifications
+
+This page is the orientation; the normative detail lives in the spec set:
+
+| Spec | Covers |
+| --- | --- |
+| [Packed format](../spec/stt-packed-format.md) | The container: manifest, content-addressed packs, the v5 directory codec (+ paged), caching, reproducibility, standards relationships. Machine-checkable [`manifest.schema.json`](../spec/manifest.schema.json). |
+| [Tile payload](../architecture/data-format.md) | The per-tile Arrow IPC + GeoArrow schema, `vertex_time`, pre-tessellation, and the [space-time cube](../architecture/data-format.md#space-time-cube-payload-vertex_value_matrix) (`vertex_value_matrix`). |
+| [Time model](../spec/time-model.md) | The temporal axis: Unix-ms UTC, instants vs intervals, fixed-width start-anchored buckets, temporal LOD, read-time pruning, and the OGC TMS mapping ([`tile-matrix-set.json`](../spec/tile-matrix-set.json)). |
+| [Sidecar assets](../spec/sidecar-assets.md) | The scene-bundle profile: multi-stream bundles, non-tile sidecars, and `georeferenced` vs `anchored-local` frames. Machine-checkable [`scene.schema.json`](../spec/scene.schema.json). |
+| [Conformance](../spec/conformance.md) | What a conformant reader/writer MUST/SHOULD do, the golden fixtures, and the `stt-validate` reference validator. |

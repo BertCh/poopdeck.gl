@@ -34,9 +34,37 @@ export interface AvScene {
   streams?: Partial<
     Record<
       AvStreamKey,
-      { url?: string; points?: number; categories?: string[] }
+      {
+        url?: string;
+        points?: number;
+        categories?: string[];
+        /**
+         * LIDAR only: alternate archives at increasing point counts (ascending),
+         * driving the cockpit's runtime density selector. `url` above is the
+         * default (lightest) archive; switching density swaps the rendered
+         * archive to one of these without changing scene/playback. (Waymo.)
+         */
+        densities?: AvLidarDensity[];
+      }
     >
   >;
+}
+
+/** One LIDAR density tier (a whole archive at a given point count). */
+export interface AvLidarDensity {
+  /** Stable id, e.g. "low" | "med" | "high" | "ultra". */
+  id: string;
+  /** Selector label, e.g. "Low" | "Ultra". */
+  label: string;
+  /** Point count baked into this tier (for the selector subtitle). */
+  points: number;
+  /** Archive manifest URL, relative to the scene-bundle root. */
+  url: string;
+  /** Point radius (px) for this tier — denser tiers use smaller dots so the
+   *  cloud reads as structure rather than a solid mass. */
+  radius?: number;
+  /** radiusMinPixels for this tier (sub-pixel floor for the dense tiers). */
+  radiusMinPixels?: number;
 }
 
 export type AvStreamKey =

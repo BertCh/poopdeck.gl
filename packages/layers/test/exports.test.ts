@@ -33,6 +33,8 @@ describe('new layer exports (OD flows / icons / columns / Quadbin summary)', () 
       'AnimatedColumnLayer',
       'QuadbinSummaryLayer',
       'FlowmapLayer',
+      'SplatLayer',
+      'SplatPrimitiveLayer',
     ]) {
       expect(index[name], `index.${name}`).toBeTypeOf('function');
       expect(index[name].layerName).toBe(name);

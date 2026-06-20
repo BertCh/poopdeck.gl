@@ -73,6 +73,16 @@ export { AnimatedColumnLayer } from './layers/core/animated-column-layer';
 // look); per-feature categorical color + box dims. Feed it the AV-cockpit
 // `objects/` point archive (one box per tracked object per sample).
 export { AnimatedBoundingBoxLayer } from './layers/core/animated-bounding-box-layer';
+// Oriented anisotropic Gaussian SURFELS that evolve over time — a "formal"
+// splat for STT (surface splatting, not the isotropic point-splat of
+// AnimatedPointLayer.splat). Reads the surfel columns baked by
+// `waymo_extract.py --surfel` (quaternion + in-plane extents + per-surfel
+// confidence) and renders depth-tested oriented disks with a soft radial AND a
+// soft temporal Gaussian, so the cloud reads as continuous surface that brightens
+// and fades around each sample's instant. The custom-Model primitive is exposed
+// for callers who want the splat geometry directly.
+export { SplatLayer } from './layers/core/splat-layer';
+export { SplatPrimitiveLayer } from './layers/internal/splat-primitive-layer';
 
 // Extensions
 export { TimeFilterExtension } from './extensions/time-filter-extension';
@@ -88,6 +98,9 @@ export {
 // Deprecated alias of TimeFilterExtension (kept for back-compat; warns once
 // on construction). TimeFilterExtension now works on SolidPolygonLayer.
 export { PolygonTimeFilterExtension } from './extensions/polygon-time-filter-extension';
+// Soft-gaussian "splat" rendering for ScatterplotLayer points (e.g.
+// camera-colored LIDAR clouds). See AnimatedPointLayer.splat.
+export { SplatExtension } from './extensions/splat-extension';
 
 // NOTE: the playback engine (TimeController, PlaybackGovernor, SttPlayer,
 // decideAutoSpeedMultiplier) lives in @poopdeck.gl/playback and is NO LONGER
@@ -153,6 +166,8 @@ export type { AnimatedLineLayerProps } from './layers/core/animated-line-layer';
 export type { AnimatedIconLayerProps } from './layers/core/animated-icon-layer';
 export type { AnimatedColumnLayerProps } from './layers/core/animated-column-layer';
 export type { AnimatedBoundingBoxLayerProps } from './layers/core/animated-bounding-box-layer';
+export type { SplatLayerProps } from './layers/core/splat-layer';
+export type { SplatPrimitiveLayerProps } from './layers/internal/splat-primitive-layer';
 export type { TimeFilterExtensionProps } from './extensions/time-filter-extension';
 export type { CategoryColorExtensionProps } from './extensions/category-color-extension';
 export type { PolygonTimeFilterExtensionProps } from './extensions/polygon-time-filter-extension';
