@@ -108,6 +108,11 @@ const AV_OBJECT_COLORS: Record<string, ColorRGBA> = {
   traffic_cone: [47, 79, 79, 235], // darkslategrey
   barrier: [112, 128, 144, 225], // slategrey
   other: [150, 160, 175, 220],
+  // SYNTHETIC — render-only, NOT part of the python OBJECT_COLORS dual copy. The
+  // tracks archive carries an extra `category: "ego"` track (the vehicle's own
+  // spacetime spine); the cube ribbon paints it this signature cyan so the ego
+  // thread stands out against the object tracks. No tile/legend dependency.
+  ego: [120, 230, 255, 255],
 };
 
 // HD-map `map_layer` → RGBA. Keys MUST match `av_common.MAP_COLORS`. Polygon
@@ -188,6 +193,77 @@ const AV_HEIGHT_BAND_LEGEND: DatasetLegend = {
   ],
 };
 
+// LIDAR density iso-line ramp (waymo_extract.py --contours). Ordinal bands sparse
+// outer ring → dense core (cool/dim → hot/bright), alpha rising with density so
+// the dense cores — walls, parked cars — pop against the dark cockpit backdrop.
+// DUAL-COPY: keys MUST match `av_common.ISO_DENSITY_BANDS` ('d1'..'d5'); this is
+// the ACTUAL rendered line palette (via the iso variant's `lidarColorMapping`).
+const AV_ISO_DENSITY_COLORS: Record<string, ColorRGBA> = {
+  d1: [78, 96, 188, 150],   // sparse outer ring — dim blue-violet
+  d2: [44, 152, 222, 185],  // cyan-blue
+  d3: [40, 200, 176, 210],  // teal-green
+  d4: [248, 200, 74, 236],  // amber
+  d5: [255, 120, 56, 255],  // dense core — hot orange
+};
+const AV_ISO_DENSITY_LEGEND: DatasetLegend = {
+  title: 'LIDAR return density',
+  items: [
+    { color: '#4e60bc', label: 'sparse' },
+    { color: '#2c98de', label: 'low' },
+    { color: '#28c8b0', label: 'medium' },
+    { color: '#f8c84a', label: 'high' },
+    { color: '#ff7838', label: 'dense (walls / cars)' },
+  ],
+};
+
+// 3D iso-line relief (cockpit "Iso 3D" mode = the `-iso3d` bundle): the contours
+// carry their REAL per-layer height in a numeric `z_layer` column (metres), built
+// by `waymo_extract.py --contours --contour-z-step`. The render lifts each ring to
+// `z_layer × this scale`, so the vertical axis is true LIDAR structure (walls
+// contour up their full height, cars only near the ground). VERTICAL EXAGGERATION
+// only: 1 = true 1:1 with the point cloud; ~2–3 makes the few-metre structure read
+// against the ~100 m-wide scene. Tune to taste.
+const AV_ISO_DENSITY_ELEVATION_SCALE = 2.5;
+
+// Height-graded opacity for the iso3d stack (cockpit "Iso 3D" mode). The contour
+// rings are stacked at their real `z_layer` altitude; viewed top-down, the upper
+// slabs would otherwise occlude everything beneath them. Fading alpha with height
+// — ground crisp, roof translucent — makes the whole stack read coherently from
+// above (you see down through the layers). Range is RAW metres (pre-exaggeration);
+// the Miami scene spans ~0–7 m, so [0, 6] grades across the structure with the top
+// dropping to ~30% alpha. Tune `far` lower for a more see-through roof.
+const AV_ISO_DENSITY_TOP_FADE = { range: [0, 6] as [number, number], near: 1, far: 0.3 };
+// Waymo variant: the Waymo top-LIDAR FOV is vertically shallow (a few metres),
+// so the iso3d stack spans far less height than AV2's georeferenced cloud. A
+// tighter range keeps the same ground-crisp→roof-translucent grading engaged
+// across Waymo's true z-span rather than barely fading. Refined to the scenes'
+// measured span. Local-only (Waymo tiles aren't on R2 — license).
+const AV_ISO_DENSITY_TOP_FADE_WAYMO = {
+  range: [0, 3.5] as [number, number],
+  near: 1,
+  far: 0.3,
+};
+
+/**
+ * Symmetric visible window (ms) for the AV LIDAR cloud — each sweep return is
+ * drawn for `[t − w/2, t + w/2]` around the play-head (TimeFilterExtension
+ * window mode). LIDAR is per-sweep at ~10 Hz (returns stamped with their true
+ * sweep time, tiles bucketed at 200 ms), so a TIGHT window shows essentially
+ * the live sweep ± a couple of neighbours and the cloud reads CRISP while the
+ * ego moves. The old 2 s window kept returns on-screen for a full second on
+ * EITHER side of the play-head, smearing ~1 s of past+future sweeps into a
+ * draggy tail during motion. This does NOT change tile loading: the loader's
+ * prefetch horizon is keyed to playback speed (~5 real-seconds of lookahead),
+ * which dominates this window — so only what the shader DRAWS changes.
+ * Surfel scenes ignore this (SplatLayer fades via its own `temporalSigma`).
+ * Tune here to trade crispness (lower, e.g. 250) vs. cloud density/continuity
+ * (higher, e.g. 450). Paired with window-proportional fades on the LIDAR layer
+ * (buildDemoLayers) so a tight window snaps to full brightness rather than
+ * riding a long soft ramp — the default 300 ms fades alone capped alpha well
+ * below 1 on a sub-second window and re-smeared the tail.
+ */
+const AV_LIDAR_TIME_WINDOW_MS = 500;
+
 /**
  * AV scene-bundle factory for the nuScenes v1.0-mini scenes. Every nuScenes
  * scene emits the identical 6-stream bundle under `/data/<id>/` (lidar / ego /
@@ -218,6 +294,7 @@ function nuscenesScene(opts: {
     avSceneUrl: `${base}/scene.json`,
     avEgoUrl: `${base}/ego/manifest.json`,
     avObjectsUrl: `${base}/objects/manifest.json`,
+    avTracksUrl: `${base}/tracks/manifest.json`,
     avTelemetryUrl: `${base}/telemetry.json`,
     avCamerasUrl: `${base}/cameras.json`,
     avMapPolyUrl: `${base}/map_poly/manifest.json`,
@@ -225,7 +302,7 @@ function nuscenesScene(opts: {
     mapColors: AV_MAP_COLORS,
     type: 'av',
     timeRange: opts.timeRange,
-    timeWindow: 2000,
+    timeWindow: AV_LIDAR_TIME_WINDOW_MS,
     targetPlaybackSeconds: 20,
     initialViewState: {
       longitude: opts.longitude,
@@ -282,9 +359,55 @@ function argoverseScene(opts: {
    * keeps the real basemap + HD-map substrate the surface reconstruction sits on.
    */
   surfel?: boolean;
+  /**
+   * Worldbuild ("scene reconstruction") variant: the bundle was built with
+   * `argoverse_extract.py --world` (a SplatLayer-compatible surfel cloud plus
+   * `is_dynamic` / `world_class` columns, each surfel stamped with its first-seen
+   * time). STATIC surfels persist once revealed so the 3D world accumulates as the
+   * car drives; DYNAMIC surfels smear with a short temporal Gaussian so traffic
+   * reads as motion. Implies camera color. Mutually exclusive with `surfel` /
+   * `scan`.
+   */
+  world?: boolean;
+  /**
+   * Raw-sweep variant: the `<id>-scan` bundle is raw LIDAR with a per-point TRUE
+   * scan-time `start_time` + a phase-ramp `r`/`g`/`b`, rendered as a WAKE-mode
+   * point layer so the rotating scan-line sweeps across the scene like a live
+   * radar. AV2 only. Mutually exclusive with `surfel` / `world`.
+   */
+  scan?: boolean;
+  /**
+   * TRUE-3D density iso-line variant: the `<id>-iso3d` bundle was built with
+   * `argoverse_extract.py --contours --contour-z-step` (density contoured per
+   * HEIGHT LAYER, each contour tagged with its real `z_layer` altitude). Rendered
+   * as iso-lines stacked at true height (`AnimatedPathLayer`, `density_band` ramp,
+   * lifted by `z_layer`). Mutually exclusive with `surfel` / `world` / `scan`.
+   */
+  iso3d?: boolean;
+  /**
+   * FLAT density iso-line variant: the `<id>-iso` bundle (`argoverse_extract.py
+   * --contours`, no z-step) — a high-XY-resolution topographic overview of return
+   * density, drawn flat (`AnimatedPathLayer`, `density_band` ramp). The 2D sibling
+   * of `iso3d`. Mutually exclusive with the others.
+   */
+  iso?: boolean;
 }): Dataset {
   const base = `/data/${opts.id}`;
   const surfel = opts.surfel ?? false;
+  const world = opts.world ?? false;
+  const scan = opts.scan ?? false;
+  const iso3d = opts.iso3d ?? false;
+  const iso = opts.iso ?? false;
+  // Both iso flavours render through the same lidarIso path; iso3d additionally
+  // lifts each contour by its real `z_layer`.
+  const isoAny = iso || iso3d;
+  // world / surfel / scan / iso / iso3d are mutually exclusive — each is a
+  // different cloud representation reading a different bundle.
+  if (Number(surfel) + Number(world) + Number(scan) + Number(iso3d) + Number(iso) > 1) {
+    throw new Error(
+      `argoverseScene(${opts.id}): surfel / world / scan / iso / iso3d are mutually exclusive`,
+    );
+  }
   return {
     id: opts.id,
     name: opts.name,
@@ -294,6 +417,7 @@ function argoverseScene(opts: {
     avSceneUrl: `${base}/scene.json`,
     avEgoUrl: `${base}/ego/manifest.json`,
     avObjectsUrl: `${base}/objects/manifest.json`,
+    avTracksUrl: `${base}/tracks/manifest.json`,
     avTelemetryUrl: `${base}/telemetry.json`,
     avCamerasUrl: `${base}/cameras.json`,
     avMapPolyUrl: `${base}/map_poly/manifest.json`,
@@ -303,43 +427,90 @@ function argoverseScene(opts: {
     // AV2 nanosecond sensor clock ÷1e6 — the large ms values are internally
     // consistent for relative playback (AV2 ships no wall-clock epoch).
     timeRange: opts.timeRange,
-    timeWindow: 500,
+    // Scan mode wants a TIGHT window (~300 ms) so each frame shows roughly one
+    // live rotating sweep as a wake; iso (flat/3d) wants ~one contour window
+    // (260 ms) so the map morphs; points/surfels/world keep the wider window.
+    timeWindow: scan ? 300 : isoAny ? 260 : AV_LIDAR_TIME_WINDOW_MS,
     targetPlaybackSeconds: 16,
     initialViewState: {
       longitude: opts.longitude,
       latitude: opts.latitude,
       zoom: opts.zoom ?? 18,
-      pitch: 55,
+      // The 3D iso relief reads best from a steeper tilt; flat iso sits lower.
+      pitch: iso3d ? 62 : 55,
       bearing: 20,
     },
     // No per-point semantic labels in AV2 sensor → color LIDAR by height band…
-    colorProperty: 'height_band',
-    lidarColorMapping: AV_HEIGHT_BAND_COLORS,
-    lidarColorMappingDefault: [120, 130, 150, 220],
-    // …UNLESS this is the surfel variant: paint per-point r/g/b (sampled by
-    // projecting each return into the 7 ring cameras) and render those colored
-    // returns as oriented Gaussian disks via SplatLayer, brightening/fading
-    // around each sweep's instant (the soft temporal Gaussian). AV2 is
-    // city-scale + sparser per-area than the compact Waymo scenes, so its surfels
-    // get a WIDER temporal window (180 vs Waymo's 120 ms) — each return lingers
-    // longer so the surface reads continuous as the car drives.
+    // …or, for either iso-line variant, by the categorical density band.
+    colorProperty: isoAny ? 'density_band' : 'height_band',
+    lidarColorMapping: isoAny ? AV_ISO_DENSITY_COLORS : AV_HEIGHT_BAND_COLORS,
+    lidarColorMappingDefault: isoAny ? [96, 116, 168, 150] : [120, 130, 150, 220],
+    // …UNLESS this is a camera/phase-colored variant:
+    //   • SURFEL — paint per-point r/g/b (projected into the 7 ring cameras) and
+    //     render those returns as oriented Gaussian disks via SplatLayer,
+    //     brightening/fading around each sweep's instant. AV2 is city-scale +
+    //     sparser per-area than the compact Waymo scenes, so its surfels get a
+    //     WIDER temporal window so the surface reads continuous as the car drives.
+    //   • WORLD — the same camera-colored surfels, but STATIC ones persist once
+    //     revealed (cumulative) so the 3D scene accumulates; dynamic ones smear
+    //     over ~200 ms so traffic still reads as motion (`-world` bundle).
+    //   • SCAN — raw returns colored by a per-point phase ramp (r/g/b), drawn as
+    //     a WAKE-mode point sweep that rotates across the scene (`-scan` bundle).
+    //   • ISO3D — density iso-line contours stacked at their real `z_layer`
+    //     height (`-iso3d` bundle); the cockpit's "Iso 3D" render mode.
     ...(surfel
-      ? { lidarRgb: true, lidarSurfel: true, lidarSurfelTemporalSigma: 60 }
-      : {}),
-    // Splats read best a touch larger; surfels carry their own per-disk
-    // confidence + temporal alpha, so the layer opacity stays at full.
-    radius: surfel ? 2.4 : 1.4,
-    radiusUnits: 'pixels',
-    radiusMinPixels: surfel ? 1.4 : 1,
-    opacity: surfel ? 1 : 0.9,
+      ? { lidarRgb: true, lidarSurfel: true, lidarSurfelTemporalSigma: 1800 }
+      : world
+        ? {
+            lidarRgb: true,
+            lidarWorldbuild: true,
+            lidarWorldbuildRevealFade: 0,
+            lidarWorldbuildDynamicSigma: 200,
+          }
+        : scan
+          ? {
+              lidarRgb: true,
+              lidarScan: true,
+              radius: 1.6,
+              radiusMinPixels: 1,
+              opacity: 1,
+            }
+          : iso3d
+            ? {
+                lidarIso: true,
+                lidarIso3d: true,
+                lidarIsoElevationScale: AV_ISO_DENSITY_ELEVATION_SCALE,
+                // Fade the upper height slabs translucent so the stack reads
+                // coherently from a top-down view (the roof no longer occludes
+                // the structure below it). Keyed on raw `z_layer` metres: ground
+                // (~0 m) stays crisp, the top of the scene (~6 m) drops to ~30%.
+                lidarIsoTopFade: AV_ISO_DENSITY_TOP_FADE,
+              }
+            : iso
+              ? { lidarIso: true } // flat high-XY-res overview (no z lift)
+              : {}),
+    // Splats read best a touch larger; surfels/world carry their own per-disk
+    // confidence + temporal alpha, so the layer opacity stays at full. Scan sets
+    // its own radius/opacity above; iso (flat/3d) renders as paths (radius irrelevant).
+    ...(scan || isoAny
+      ? { radiusUnits: 'pixels' as const }
+      : {
+          radius: surfel || world ? 2.4 : 1.4,
+          radiusUnits: 'pixels' as const,
+          radiusMinPixels: surfel || world ? 1.4 : 1,
+          opacity: surfel || world ? 1 : 0.9,
+        }),
     avObjectColors: AV_OBJECT_COLORS,
     colorMappingDefault: [150, 160, 175, 220],
     tripColor: [120, 230, 255, 255],
     widthUnits: 'meters',
     tripWidth: 2.2,
     fadeTrail: true,
-    // The height-band legend is meaningless for camera-colored surfels → omit it.
-    ...(surfel ? {} : { legend: AV_HEIGHT_BAND_LEGEND }),
+    // The height-band legend is meaningless for camera/phase-colored variants →
+    // omit it; both iso variants show the density-band legend instead.
+    ...(surfel || world || scan
+      ? {}
+      : { legend: isoAny ? AV_ISO_DENSITY_LEGEND : AV_HEIGHT_BAND_LEGEND }),
   };
 }
 
@@ -381,6 +552,31 @@ function waymoScene(opts: {
    */
   surfel?: boolean;
   /**
+   * Density iso-line variant: the bundle was built with `waymo_extract.py
+   * --contours` (windowed 2D density contours of the returns). Renders the LIDAR
+   * as live topographic iso-lines (`AnimatedPathLayer`, `density_band` ramp)
+   * instead of points/surfels — height-independent, so it reads on a flat scene.
+   */
+  iso?: boolean;
+  /**
+   * TRUE-3D density iso-line variant: the bundle was built with `waymo_extract.py
+   * --contours --contour-z-step` (density contoured per HEIGHT LAYER, each contour
+   * tagged with a numeric `z_layer` altitude). Renders like `iso` but lifts each
+   * ring to its real height, so the vertical axis carries actual LIDAR structure.
+   * Mutually exclusive with `surfel` / `iso` / `world` / `colored`.
+   */
+  iso3d?: boolean;
+  /**
+   * Worldbuild ("scene reconstruction") variant: the bundle was built with
+   * `waymo_extract.py --world` (a SplatLayer-compatible surfel cloud + `is_dynamic`
+   * / `world_class` columns, each surfel stamped with its first-seen time). STATIC
+   * surfels persist once revealed so the 3D world accumulates as the car drives;
+   * DYNAMIC surfels smear over ~200 ms so traffic reads as motion. Implies camera
+   * color. Mutually exclusive with `surfel` / `iso` / `colored`. Local-only (Waymo
+   * no-redistribution).
+   */
+  world?: boolean;
+  /**
    * Override the LIDAR point radius (pixels). Smaller points reduce overplotting
    * on dense/scattered clouds (e.g. the rain scene, where returns smear) so the
    * cloud reads at its true resolution instead of a merged blob.
@@ -391,8 +587,22 @@ function waymoScene(opts: {
 }): Dataset {
   const base = `/data/${opts.id}`;
   const surfel = opts.surfel ?? false;
-  // Surfels are camera-colored too, so the height-band legend is meaningless.
-  const colored = (opts.colored ?? false) || surfel;
+  const iso = opts.iso ?? false;
+  const iso3d = opts.iso3d ?? false;
+  const world = opts.world ?? false;
+  // Both iso flavours render through the same lidarIso path (the `density_band`
+  // contour LineStrings); iso3d additionally lifts them by the real `z_layer`.
+  const isoAny = iso || iso3d;
+  // world / surfel / iso / iso3d are mutually exclusive — each reads a different
+  // bundle representation. Guard against an entry accidentally setting two.
+  if (Number(surfel) + Number(iso) + Number(iso3d) + Number(world) > 1) {
+    throw new Error(
+      `waymoScene(${opts.id}): surfel / iso / iso3d / world are mutually exclusive`,
+    );
+  }
+  // Surfels + worldbuild are camera-colored too, so the height-band legend is
+  // meaningless for them as well as the plain `colored` splat variant.
+  const colored = (opts.colored ?? false) || surfel || world;
   return {
     id: opts.id,
     name: opts.name,
@@ -402,6 +612,7 @@ function waymoScene(opts: {
     avSceneUrl: `${base}/scene.json`,
     avEgoUrl: `${base}/ego/manifest.json`,
     avObjectsUrl: `${base}/objects/manifest.json`,
+    avTracksUrl: `${base}/tracks/manifest.json`,
     avTelemetryUrl: `${base}/telemetry.json`,
     avCamerasUrl: `${base}/cameras.json`,
     // No avMapPolyUrl/avMapLineUrl — Waymo Perception v2.0.1 ships no HD map.
@@ -411,28 +622,51 @@ function waymoScene(opts: {
     // network can't visibly contradict the anchor (the extractor's intent).
     avLocalFrame: true,
     timeRange: opts.timeRange,
-    timeWindow: 2000,
+    // Iso-lines are cut per ~200 ms playhead window (waymo_extract --contour-step);
+    // a tight window shows ~one window's contours at a time so the map morphs as
+    // the car drives instead of smearing several windows together. Points/surfels
+    // keep the wider sweep window.
+    timeWindow: isoAny ? 260 : 2000,
     targetPlaybackSeconds: 20,
     initialViewState: {
       longitude: opts.longitude,
       latitude: opts.latitude,
       zoom: opts.zoom ?? 18,
-      pitch: 55,
+      // The 3D relief reads best from a steeper tilt; flat scenes sit lower.
+      pitch: iso3d ? 62 : 55,
       bearing: 20,
     },
     // No per-point semantic labels → color LIDAR by height band (like AV2)…
-    colorProperty: 'height_band',
-    lidarColorMapping: AV_HEIGHT_BAND_COLORS,
-    lidarColorMappingDefault: [120, 130, 150, 220],
+    // …or, for either iso-line variant, by the categorical density band.
+    colorProperty: isoAny ? 'density_band' : 'height_band',
+    lidarColorMapping: isoAny ? AV_ISO_DENSITY_COLORS : AV_HEIGHT_BAND_COLORS,
+    lidarColorMappingDefault: isoAny ? [96, 116, 168, 150] : [120, 130, 150, 220],
     // …UNLESS this is the camera-colored variant: paint per-point r/g/b (sampled
     // by projecting each return into the 5 cameras). The SURFEL variant renders
     // those colored returns as oriented Gaussian disks via SplatLayer; the plain
-    // colored variant renders them as soft round point-splats.
-    ...(surfel
-      ? { lidarRgb: true, lidarSurfel: true, lidarSurfelTemporalSigma: 120 }
-      : colored
-        ? { lidarRgb: true, lidarSplat: true }
-        : {}),
+    // colored variant renders them as soft round point-splats. Both ISO variants
+    // draw the `lidar/` contour LineStrings as AnimatedPathLayer iso-lines; the
+    // 3D one additionally lifts each ring to its real `z_layer` altitude.
+    ...(isoAny
+      ? {
+          lidarIso: true,
+          ...(iso3d
+            ? {
+                lidarIso3d: true,
+                lidarIsoElevationScale: AV_ISO_DENSITY_ELEVATION_SCALE,
+                // Same top-down opacity fade as the AV2 iso3d stack (fade the
+                // upper slabs translucent so it reads from above). Keyed on raw
+                // metres; Waymo's z-span is shallower than AV2 so the range is
+                // tighter to engage the fade across the cloud's true height.
+                lidarIsoTopFade: AV_ISO_DENSITY_TOP_FADE_WAYMO,
+              }
+            : {}),
+        }
+      : surfel
+        ? { lidarRgb: true, lidarSurfel: true, lidarSurfelTemporalSigma: 120 }
+        : colored
+          ? { lidarRgb: true, lidarSplat: true }
+          : {}),
     // Splats read best a touch larger + slightly transparent so overlaps blend.
     // A scene can override these (smaller) when its cloud overplots.
     radius: opts.radius ?? (colored ? 2.4 : 1.4),
@@ -447,8 +681,11 @@ function waymoScene(opts: {
     widthUnits: 'meters',
     tripWidth: 2.2,
     fadeTrail: true,
-    // The height-band legend is meaningless for camera-colored points → omit it.
-    ...(colored ? {} : { legend: AV_HEIGHT_BAND_LEGEND }),
+    // The height-band legend is meaningless for camera-colored points → omit it;
+    // both iso variants show the density-band legend instead of the height band.
+    ...(colored
+      ? {}
+      : { legend: isoAny ? AV_ISO_DENSITY_LEGEND : AV_HEIGHT_BAND_LEGEND }),
   };
 }
 
@@ -1808,6 +2045,47 @@ const rawDatasets: Dataset[] = [
     latitude: 40.45610620281625,
     surfel: true,
   }),
+  // WORLDBUILD variant (argoverse_extract.py --world): the camera-colored surfel
+  // cloud, but STATIC surfels persist once revealed so the 3D scene reconstructs
+  // itself as the car drives, while DYNAMIC surfels (moving traffic) smear over a
+  // short temporal Gaussian. Started with ONE AV2 city (Pittsburgh) to validate;
+  // mirror it to the other cities once the look is confirmed. The cockpit's render-
+  // mode toggle offers "Worldbuild" automatically because this `-world` entry exists.
+  argoverseScene({
+    id: 'argoverse-02678d04-world',
+    name: 'Argoverse 2 · Pittsburgh — worldbuild',
+    description:
+      'The same real Argoverse 2 sensor log in Pittsburgh, rendered as a WORLDBUILD ' +
+      'reconstruction: the camera-colored oriented surfels of the static scene — ' +
+      'roads, buildings, parked cars — PERSIST once the sweep first reveals them, so ' +
+      'the 3D world accumulates and fills in as the car drives, while moving traffic ' +
+      'smears with a short temporal Gaussian so it still reads as motion against the ' +
+      'built-up surface. Same boxes / ego / HD map / telemetry as the height-ramp scene.',
+    timeRange: { start: 315969904357, end: 315969920307 },
+    longitude: -79.9333411419541,
+    latitude: 40.45610620281625,
+    world: true,
+  }),
+  // SWEEP / SCAN variant (argoverse_extract.py --scan): raw LIDAR with each return
+  // stamped at its TRUE scan time + colored by a per-point phase ramp, drawn as a
+  // WAKE-mode point sweep so the rotating scan-line sweeps across the scene like a
+  // live radar. AV2-only (only AV2 builds a `-scan` bundle); the cockpit's render-
+  // mode toggle offers "Sweep" automatically because this `-scan` entry exists.
+  argoverseScene({
+    id: 'argoverse-02678d04-scan',
+    name: 'Argoverse 2 · Pittsburgh — raw sweep',
+    description:
+      'The same real Argoverse 2 sensor log in Pittsburgh, rendered as the RAW LIDAR ' +
+      'sweep: every return is drawn at its true scan instant and colored by a rotating ' +
+      'phase ramp, so the scan-line sweeps across the scene each revolution like a live ' +
+      'radar — a short wake fading behind the leading edge. The unaccumulated, ' +
+      'instrument-true view of how the sensor actually paints the world. Same boxes / ' +
+      'ego / HD map / telemetry as the height-ramp scene.',
+    timeRange: { start: 315969904357, end: 315969920307 },
+    longitude: -79.9333411419541,
+    latitude: 40.45610620281625,
+    scan: true,
+  }),
   argoverseScene({
     id: 'argoverse-02a00399',
     name: 'Argoverse 2 · Miami',
@@ -1844,6 +2122,20 @@ const rawDatasets: Dataset[] = [
     latitude: 25.81266355087901,
     surfel: true,
   }),
+  // SWEEP / SCAN variant of the Miami scene (argoverse_extract.py --scan).
+  argoverseScene({
+    id: 'argoverse-02a00399-scan',
+    name: 'Argoverse 2 · Miami — raw sweep',
+    description:
+      'The same real Argoverse 2 sensor log in Miami, rendered as the RAW LIDAR sweep: ' +
+      'every return is drawn at its true scan instant and colored by a rotating phase ' +
+      'ramp, so the scan-line sweeps across the scene each revolution like a live radar. ' +
+      'Same boxes / ego / HD map / telemetry as the height-ramp scene.',
+    timeRange: { start: 315966070522, end: 315966086462 },
+    longitude: -80.19521021126853,
+    latitude: 25.81266355087901,
+    scan: true,
+  }),
   argoverseScene({
     id: 'argoverse-0b5142c1',
     name: 'Argoverse 2 · Washington DC',
@@ -1871,6 +2163,20 @@ const rawDatasets: Dataset[] = [
     longitude: -76.97901441961996,
     latitude: 38.903158674858965,
     surfel: true,
+  }),
+  // SWEEP / SCAN variant of the Washington DC scene (argoverse_extract.py --scan).
+  argoverseScene({
+    id: 'argoverse-0b5142c1-scan',
+    name: 'Argoverse 2 · Washington DC — raw sweep',
+    description:
+      'The same real Argoverse 2 sensor log in Washington DC, rendered as the RAW LIDAR ' +
+      'sweep: every return is drawn at its true scan instant and colored by a rotating ' +
+      'phase ramp, so the scan-line sweeps across the scene each revolution like a live ' +
+      'radar. Same boxes / ego / HD map / telemetry as the height-ramp scene.',
+    timeRange: { start: 315968121172, end: 315968137127 },
+    longitude: -76.97901441961996,
+    latitude: 38.903158674858965,
+    scan: true,
   }),
   argoverseScene({
     id: 'argoverse-0bae3b5e',
@@ -1900,6 +2206,20 @@ const rawDatasets: Dataset[] = [
     latitude: 42.33371685760447,
     surfel: true,
   }),
+  // SWEEP / SCAN variant of the Detroit scene (argoverse_extract.py --scan).
+  argoverseScene({
+    id: 'argoverse-0bae3b5e-scan',
+    name: 'Argoverse 2 · Detroit — raw sweep',
+    description:
+      'The same real Argoverse 2 sensor log in Detroit, rendered as the RAW LIDAR sweep: ' +
+      'every return is drawn at its true scan instant and colored by a rotating phase ' +
+      'ramp, so the scan-line sweeps across the scene each revolution like a live radar. ' +
+      'Same boxes / ego / HD map / telemetry as the height-ramp scene.',
+    timeRange: { start: 315969524322, end: 315969540277 },
+    longitude: -83.05092955863113,
+    latitude: 42.33371685760447,
+    scan: true,
+  }),
   argoverseScene({
     id: 'argoverse-25e5c600',
     name: 'Argoverse 2 · Palo Alto',
@@ -1928,6 +2248,20 @@ const rawDatasets: Dataset[] = [
     latitude: 37.415846217190214,
     surfel: true,
   }),
+  // SWEEP / SCAN variant of the Palo Alto scene (argoverse_extract.py --scan).
+  argoverseScene({
+    id: 'argoverse-25e5c600-scan',
+    name: 'Argoverse 2 · Palo Alto — raw sweep',
+    description:
+      'The same real Argoverse 2 sensor log in Palo Alto, rendered as the RAW LIDAR ' +
+      'sweep: every return is drawn at its true scan instant and colored by a rotating ' +
+      'phase ramp, so the scan-line sweeps across the scene each revolution like a live ' +
+      'radar. Same boxes / ego / HD map / telemetry as the height-ramp scene.',
+    timeRange: { start: 315966104242, end: 315966120187 },
+    longitude: -122.12833142762317,
+    latitude: 37.415846217190214,
+    scan: true,
+  }),
   argoverseScene({
     id: 'argoverse-92b900b1',
     name: 'Argoverse 2 · Austin',
@@ -1955,6 +2289,167 @@ const rawDatasets: Dataset[] = [
     longitude: -97.70213668235851,
     latitude: 30.255713070218487,
     surfel: true,
+  }),
+  // SWEEP / SCAN variant of the Austin scene (argoverse_extract.py --scan).
+  argoverseScene({
+    id: 'argoverse-92b900b1-scan',
+    name: 'Argoverse 2 · Austin — raw sweep',
+    description:
+      'The same real Argoverse 2 sensor log in Austin, rendered as the RAW LIDAR sweep: ' +
+      'every return is drawn at its true scan instant and colored by a rotating phase ' +
+      'ramp, so the scan-line sweeps across the scene each revolution like a live radar. ' +
+      'Same boxes / ego / HD map / telemetry as the height-ramp scene.',
+    timeRange: { start: 315968947407, end: 315968963357 },
+    longitude: -97.70213668235851,
+    latitude: 30.255713070218487,
+    scan: true,
+  }),
+  // ── Argoverse 2 · TRUE-3D density iso-lines (argoverse_extract.py --contours
+  //    --contour-z-step) for all 6 cities. Density contoured per height layer,
+  //    stacked at real altitude — the cockpit's "Iso 3D" render mode. AV2 is
+  //    georeferenced, so these keep the real basemap + HD-map substrate.
+  argoverseScene({
+    id: 'argoverse-02678d04-iso3d',
+    name: 'Argoverse 2 · Pittsburgh — 3D density iso-lines',
+    description:
+      'The Pittsburgh Argoverse 2 log as a TRUE-3D density field: the LIDAR returns ' +
+      'are binned into height layers and each layer’s XY density is contoured ' +
+      'independently, so the iso-lines stack at their real altitudes — vertical ' +
+      'structure is genuine and the relief morphs as the car drives. Colored by ' +
+      'return density. Same boxes / ego / HD map / telemetry as the height-ramp scene.',
+    timeRange: { start: 315969904357, end: 315969920307 },
+    longitude: -79.9333411419541,
+    latitude: 40.45610620281625,
+    iso3d: true,
+  }),
+  argoverseScene({
+    id: 'argoverse-02a00399-iso3d',
+    name: 'Argoverse 2 · Miami — 3D density iso-lines',
+    description:
+      'The Miami Argoverse 2 log as a TRUE-3D density field: returns binned into ' +
+      'height layers, each contoured independently and stacked at its real altitude, ' +
+      'the relief morphing as the car drives. Colored by return density.',
+    timeRange: { start: 315966070522, end: 315966086462 },
+    longitude: -80.19521021126853,
+    latitude: 25.81266355087901,
+    iso3d: true,
+  }),
+  argoverseScene({
+    id: 'argoverse-0b5142c1-iso3d',
+    name: 'Argoverse 2 · Washington DC — 3D density iso-lines',
+    description:
+      'The Washington DC Argoverse 2 log as a TRUE-3D density field: returns binned ' +
+      'into height layers, each contoured independently and stacked at its real ' +
+      'altitude, the relief morphing as the car drives. Colored by return density.',
+    timeRange: { start: 315968121172, end: 315968137127 },
+    longitude: -76.97901441961996,
+    latitude: 38.903158674858965,
+    iso3d: true,
+  }),
+  argoverseScene({
+    id: 'argoverse-0bae3b5e-iso3d',
+    name: 'Argoverse 2 · Detroit — 3D density iso-lines',
+    description:
+      'The Detroit Argoverse 2 log as a TRUE-3D density field: returns binned into ' +
+      'height layers, each contoured independently and stacked at its real altitude, ' +
+      'the relief morphing as the car drives. Colored by return density.',
+    timeRange: { start: 315969524322, end: 315969540277 },
+    longitude: -83.05092955863113,
+    latitude: 42.33371685760447,
+    iso3d: true,
+  }),
+  argoverseScene({
+    id: 'argoverse-25e5c600-iso3d',
+    name: 'Argoverse 2 · Palo Alto — 3D density iso-lines',
+    description:
+      'The Palo Alto Argoverse 2 log as a TRUE-3D density field: returns binned into ' +
+      'height layers, each contoured independently and stacked at its real altitude, ' +
+      'the relief morphing as the car drives. Colored by return density.',
+    timeRange: { start: 315966104242, end: 315966120187 },
+    longitude: -122.12833142762317,
+    latitude: 37.415846217190214,
+    iso3d: true,
+  }),
+  argoverseScene({
+    id: 'argoverse-92b900b1-iso3d',
+    name: 'Argoverse 2 · Austin — 3D density iso-lines',
+    description:
+      'The Austin Argoverse 2 log as a TRUE-3D density field: returns binned into ' +
+      'height layers, each contoured independently and stacked at its real altitude, ' +
+      'the relief morphing as the car drives. Colored by return density.',
+    timeRange: { start: 315968947407, end: 315968963357 },
+    longitude: -97.70213668235851,
+    latitude: 30.255713070218487,
+    iso3d: true,
+  }),
+  // ── Argoverse 2 · FLAT high-XY-res density iso-lines (the "Iso-lines" overview
+  //    pill) for all 6 cities — the 2D sibling of the iso3d entries above.
+  argoverseScene({
+    id: 'argoverse-02678d04-iso',
+    name: 'Argoverse 2 · Pittsburgh — density iso-lines',
+    description:
+      'The Pittsburgh Argoverse 2 log as a flat high-resolution topographic map of ' +
+      'LIDAR return density — fine iso-density contours re-cut per playhead window, ' +
+      'over the real basemap + HD map.',
+    timeRange: { start: 315969904357, end: 315969920307 },
+    longitude: -79.9333411419541,
+    latitude: 40.45610620281625,
+    iso: true,
+  }),
+  argoverseScene({
+    id: 'argoverse-02a00399-iso',
+    name: 'Argoverse 2 · Miami — density iso-lines',
+    description:
+      'The Miami Argoverse 2 log as a flat high-resolution topographic map of LIDAR ' +
+      'return density — fine iso-density contours re-cut per playhead window.',
+    timeRange: { start: 315966070522, end: 315966086462 },
+    longitude: -80.19521021126853,
+    latitude: 25.81266355087901,
+    iso: true,
+  }),
+  argoverseScene({
+    id: 'argoverse-0b5142c1-iso',
+    name: 'Argoverse 2 · Washington DC — density iso-lines',
+    description:
+      'The Washington DC Argoverse 2 log as a flat high-resolution topographic map ' +
+      'of LIDAR return density — fine iso-density contours per playhead window.',
+    timeRange: { start: 315968121172, end: 315968137127 },
+    longitude: -76.97901441961996,
+    latitude: 38.903158674858965,
+    iso: true,
+  }),
+  argoverseScene({
+    id: 'argoverse-0bae3b5e-iso',
+    name: 'Argoverse 2 · Detroit — density iso-lines',
+    description:
+      'The Detroit Argoverse 2 log as a flat high-resolution topographic map of ' +
+      'LIDAR return density — fine iso-density contours per playhead window.',
+    timeRange: { start: 315969524322, end: 315969540277 },
+    longitude: -83.05092955863113,
+    latitude: 42.33371685760447,
+    iso: true,
+  }),
+  argoverseScene({
+    id: 'argoverse-25e5c600-iso',
+    name: 'Argoverse 2 · Palo Alto — density iso-lines',
+    description:
+      'The Palo Alto Argoverse 2 log as a flat high-resolution topographic map of ' +
+      'LIDAR return density — fine iso-density contours per playhead window.',
+    timeRange: { start: 315966104242, end: 315966120187 },
+    longitude: -122.12833142762317,
+    latitude: 37.415846217190214,
+    iso: true,
+  }),
+  argoverseScene({
+    id: 'argoverse-92b900b1-iso',
+    name: 'Argoverse 2 · Austin — density iso-lines',
+    description:
+      'The Austin Argoverse 2 log as a flat high-resolution topographic map of ' +
+      'LIDAR return density — fine iso-density contours per playhead window.',
+    timeRange: { start: 315968947407, end: 315968963357 },
+    longitude: -97.70213668235851,
+    latitude: 30.255713070218487,
+    iso: true,
   }),
   // ── Waymo Open Dataset · curated Perception v2.0.1 segments (day/night, SF/PHX,
   //    + the one rain scene). 5-laser LIDAR decoded from range images, 3D box
@@ -2013,6 +2508,91 @@ const rawDatasets: Dataset[] = [
       'its sweep instant and fades away from it — the surface evolves as the car ' +
       'drives, depth-sorted by the z-buffer (surface splatting, no point dots). ' +
       'Same boxes / ego / telemetry as the height-ramp scene.',
+    timeRange: { start: 1559170821400, end: 1559170841225 },
+    longitude: -122.41947418420166,
+    latitude: 37.774902618839754,
+    surfel: true,
+  }),
+  // WORLDBUILD: the same SF-day segment built with waymo_extract.py --world — the
+  // camera-colored oriented surfels of the static scene PERSIST once revealed so
+  // the 3D world reconstructs itself as the car drives, while moving traffic smears
+  // with a short temporal Gaussian so it still reads as motion. The cockpit's
+  // render-mode toggle offers "Worldbuild" automatically because this `-world`
+  // bundle exists. Built local-only (Waymo no-redistribution).
+  waymoScene({
+    id: 'waymo-sf-day-world',
+    name: 'Waymo · SF · Day — worldbuild',
+    description:
+      'The same daytime San Francisco Waymo segment, rendered as a WORLDBUILD ' +
+      'reconstruction: the camera-colored oriented surfels of the static scene — ' +
+      'roads, buildings, parked cars — PERSIST once the sweep first reveals them, so ' +
+      'the 3D world accumulates and fills in as the car drives, while moving traffic ' +
+      'smears with a short temporal Gaussian so it still reads as motion against the ' +
+      'built-up surface. Same boxes / ego / telemetry as the height-ramp scene.',
+    timeRange: { start: 1559170821400, end: 1559170841225 },
+    longitude: -122.41947418420166,
+    latitude: 37.774902618839754,
+    world: true,
+  }),
+  // DENSITY ISO-LINES: the same SF-day segment, but the LIDAR is drawn as live
+  // topographic contours of return DENSITY (waymo_extract.py --contours) — a map
+  // of where the cloud clusters (walls, parked cars, vegetation), re-cut per ~200
+  // ms playhead window so it morphs as the car drives. Height-independent, so it
+  // reads richly even though this SF segment is flat. The cockpit's render-mode
+  // toggle offers "Iso-lines" automatically because this `-iso` bundle exists.
+  // Built local-only (Waymo no-redistribution).
+  waymoScene({
+    id: 'waymo-sf-day-iso',
+    name: 'Waymo · SF · Day — density iso-lines',
+    description:
+      'The same daytime San Francisco Waymo segment, rendered as a live ' +
+      'TOPOGRAPHIC MAP of LIDAR return density: the returns are binned onto a ' +
+      'ground grid and drawn as iso-density contours — closed loops hugging the ' +
+      'walls, parked cars, and vegetation the sensor sees most. The contour set ' +
+      'is re-cut for every ~200 ms playhead window, so the map flows and morphs ' +
+      'as the car drives. Because it contours density (not height) it reads ' +
+      'richly even on this flat scene. Same boxes / ego / telemetry as the ' +
+      'height-ramp scene.',
+    timeRange: { start: 1559170821400, end: 1559170841225 },
+    longitude: -122.41947418420166,
+    latitude: 37.774902618839754,
+    iso: true,
+  }),
+  // TRUE-3D DENSITY ISO-LINES: the same SF-day segment, but density is contoured
+  // per HEIGHT LAYER (waymo_extract.py --contours --contour-z-step) so the iso-
+  // lines stack at their REAL altitudes — a wall's contours climb its full height,
+  // a parked car's sit only near the ground, the road reads as a broad slab. The
+  // cockpit offers "Iso 3D" automatically because this `-iso3d` bundle exists.
+  // Built local-only (Waymo no-redistribution).
+  waymoScene({
+    id: 'waymo-sf-day-iso3d',
+    name: 'Waymo · SF · Day — 3D density iso-lines',
+    description:
+      'The daytime San Francisco Waymo segment rendered as a TRUE-3D density ' +
+      'field: the returns are binned into height layers and each layer’s XY ' +
+      'density is contoured independently, so the iso-lines stack at their real ' +
+      'altitudes. Vertical structure is genuine — walls contour up their full ' +
+      'height, parked cars only near the ground, the road as a broad slab — and ' +
+      'the whole relief flows and morphs as the car drives. Colored by return ' +
+      'density. Same boxes / ego / telemetry as the height-ramp scene.',
+    timeRange: { start: 1559170821400, end: 1559170841225 },
+    longitude: -122.41947418420166,
+    latitude: 37.774902618839754,
+    iso3d: true,
+  }),
+  // Geometry-aware decimation A/B (local experiment, --adaptive-decimate): the
+  // SAME surfel scene built at ~4× fewer disks, but the budget spent on edges/
+  // poles (curvature) + one voxel representative per flat region instead of a
+  // uniform stride. Compare side-by-side against the full-density
+  // `waymo-sf-day-surfel` to judge the size↔fidelity tradeoff. Local-only.
+  waymoScene({
+    id: 'waymo-sf-day-surfel-adaptive',
+    name: 'Waymo · SF · Day — oriented surfel splat (adaptive decimation)',
+    description:
+      'The daytime SF surfel scene, decimated geometry-aware: every high-curvature ' +
+      'LIDAR return (edges, poles, vehicle outlines) is kept, the flat majority ' +
+      'is summarized to one voxel representative — ~4× fewer disks than the ' +
+      'full-density bundle for (ideally) the same read. A/B vs waymo-sf-day-surfel.',
     timeRange: { start: 1559170821400, end: 1559170841225 },
     longitude: -122.41947418420166,
     latitude: 37.774902618839754,
@@ -2136,6 +2716,107 @@ const rawDatasets: Dataset[] = [
     longitude: -112.071638,
     latitude: 33.448412,
     surfel: true,
+  }),
+  // TRUE-3D density iso-lines for the remaining 4 Waymo scenes (sf-day's is above).
+  // Density contoured per height layer, stacked at real altitude — the cockpit's
+  // "Iso 3D" render mode. Local-only (Waymo no-redistribution).
+  waymoScene({
+    id: 'waymo-phx-day-iso3d',
+    name: 'Waymo · Phoenix · Day — 3D density iso-lines',
+    description:
+      'The daytime Phoenix Waymo segment as a TRUE-3D density field: returns binned ' +
+      'into height layers, each layer’s XY density contoured independently, so the ' +
+      'iso-lines stack at their real altitudes and the relief morphs as the car ' +
+      'drives. Colored by return density. Same boxes / ego / telemetry as the ' +
+      'height-ramp scene.',
+    timeRange: { start: 1513450821409, end: 1513450841108 },
+    longitude: -112.074419,
+    latitude: 33.448329,
+    iso3d: true,
+  }),
+  waymoScene({
+    id: 'waymo-phx-night-iso3d',
+    name: 'Waymo · Phoenix · Night — 3D density iso-lines',
+    description:
+      'The NIGHT Phoenix Waymo segment as a TRUE-3D density field: returns binned ' +
+      'into height layers, each contoured independently and stacked at its real ' +
+      'altitude, the relief morphing as the car drives. Colored by return density.',
+    timeRange: { start: 1508038141882, end: 1508038161581 },
+    longitude: -112.073977,
+    latitude: 33.448178,
+    iso3d: true,
+  }),
+  waymoScene({
+    id: 'waymo-sf-night-iso3d',
+    name: 'Waymo · San Francisco · Night — 3D density iso-lines',
+    description:
+      'The NIGHT San Francisco Waymo segment as a TRUE-3D density field: returns ' +
+      'binned into height layers, each contoured independently and stacked at its ' +
+      'real altitude, the relief morphing as the car drives. Colored by return density.',
+    timeRange: { start: 1541816058898, end: 1541816078598 },
+    longitude: -122.419489,
+    latitude: 37.774895,
+    iso3d: true,
+  }),
+  waymoScene({
+    id: 'waymo-phx-dusk-rain-iso3d',
+    name: 'Waymo · Phoenix · Dawn/Dusk (rain) — 3D density iso-lines',
+    description:
+      'The rainy dawn/dusk Phoenix Waymo segment as a TRUE-3D density field: returns ' +
+      'binned into height layers, each contoured independently and stacked at its real ' +
+      'altitude. Rain scatters the cloud, so the density structure reads differently ' +
+      'from the dry scenes. Colored by return density.',
+    timeRange: { start: 1518657647337, end: 1518657667137 },
+    longitude: -112.071638,
+    latitude: 33.448412,
+    iso3d: true,
+  }),
+  // FLAT high-XY-res density iso-lines (the "Iso-lines" overview pill) for the
+  // remaining 4 Waymo scenes (sf-day's is above). Same fine-XY contours as the 3D
+  // version but drawn flat. Local-only.
+  waymoScene({
+    id: 'waymo-phx-day-iso',
+    name: 'Waymo · Phoenix · Day — density iso-lines',
+    description:
+      'The daytime Phoenix Waymo segment as a flat high-resolution topographic map ' +
+      'of LIDAR return density — fine iso-density contours re-cut per playhead window.',
+    timeRange: { start: 1513450821409, end: 1513450841108 },
+    longitude: -112.074419,
+    latitude: 33.448329,
+    iso: true,
+  }),
+  waymoScene({
+    id: 'waymo-phx-night-iso',
+    name: 'Waymo · Phoenix · Night — density iso-lines',
+    description:
+      'The NIGHT Phoenix Waymo segment as a flat high-resolution topographic map of ' +
+      'LIDAR return density — fine iso-density contours re-cut per playhead window.',
+    timeRange: { start: 1508038141882, end: 1508038161581 },
+    longitude: -112.073977,
+    latitude: 33.448178,
+    iso: true,
+  }),
+  waymoScene({
+    id: 'waymo-sf-night-iso',
+    name: 'Waymo · San Francisco · Night — density iso-lines',
+    description:
+      'The NIGHT San Francisco Waymo segment as a flat high-resolution topographic ' +
+      'map of LIDAR return density — fine iso-density contours per playhead window.',
+    timeRange: { start: 1541816058898, end: 1541816078598 },
+    longitude: -122.419489,
+    latitude: 37.774895,
+    iso: true,
+  }),
+  waymoScene({
+    id: 'waymo-phx-dusk-rain-iso',
+    name: 'Waymo · Phoenix · Dawn/Dusk (rain) — density iso-lines',
+    description:
+      'The rainy dawn/dusk Phoenix Waymo segment as a flat high-resolution ' +
+      'topographic map of LIDAR return density — fine iso-density contours per window.',
+    timeRange: { start: 1518657647337, end: 1518657667137 },
+    longitude: -112.071638,
+    latitude: 33.448412,
+    iso: true,
   }),
   // ── comma.ai · real I-280 highway segment (ego GPS + CAN telemetry + camera;
   //    NO lidar/objects). Built by comma_extract.py from the comma2k19 HF mirror.
@@ -2786,6 +3467,7 @@ function makeColoredSplatVariant(base: Dataset): Dataset {
     avSceneUrl: rebaseOpt(base.avSceneUrl),
     avEgoUrl: rebaseOpt(base.avEgoUrl),
     avObjectsUrl: rebaseOpt(base.avObjectsUrl),
+    avTracksUrl: rebaseOpt(base.avTracksUrl),
     avTelemetryUrl: rebaseOpt(base.avTelemetryUrl),
     avCamerasUrl: rebaseOpt(base.avCamerasUrl),
     avMapPolyUrl: rebaseOpt(base.avMapPolyUrl),
@@ -2807,7 +3489,32 @@ const coloredSplatVariants: Dataset[] = rawDatasets
   .filter((d) => COLORED_SPLAT_BASE_IDS.has(d.id))
   .map(makeColoredSplatVariant);
 
-export const datasets: Dataset[] = [...rawDatasets, ...coloredSplatVariants].map((d) => ({
+// Experimental AV cockpit render-modes held back from the shipped product (their
+// tiles aren't deployed to R2, so a registered scene would 404 the toggle). The
+// scene factories + registration blocks stay in source (so dev can build/iterate
+// and a future ship just removes a suffix here), but they're filtered out of the
+// runtime registry — `getDatasetById` won't resolve them, so the cockpit shows no
+// Sweep (`-scan`) / Worldbuild (`-world`) / flat Iso-lines (`-iso`) toggle. NOTE:
+// `-iso3d` is intentionally NOT matched (it ships); `-iso$` matches only the flat
+// variant. Drop a group from this pattern to ship that mode (after uploading its
+// tiles + confirming any license).
+const HELD_BACK_AV_MODES = /-(scan|world|iso)$/;
+
+// Waymo Open Dataset tiles are LOCAL-ONLY: the license is non-commercial AND
+// prohibits redistribution, so no waymo-* bundle is ever uploaded to R2. The
+// scenes stay registered for local dev — which serves `public/data` directly and
+// CAN render them — but are filtered out whenever tiles are served remotely
+// (`VITE_DATA_BASE_URL` set = the R2 deploy, where the bundles don't exist), so
+// the public site never references (and 404s) a Waymo scene in the catalog,
+// scene switcher, or `/drive/:id` route. Drop this gate only after the license
+// clears a public sync (and the tiles are actually on R2).
+const WAYMO_LOCAL_ONLY = /^waymo-/;
+const DATA_IS_REMOTE = DATA_BASE_URL !== '';
+
+export const datasets: Dataset[] = [...rawDatasets, ...coloredSplatVariants]
+  .filter((d) => !HELD_BACK_AV_MODES.test(d.id))
+  .filter((d) => !(DATA_IS_REMOTE && WAYMO_LOCAL_ONLY.test(d.id)))
+  .map((d) => ({
   ...d,
   url: resolveDataUrl(d.url),
   // The composite `radar` type carries two extra manifest URLs; rewrite them
@@ -2822,6 +3529,7 @@ export const datasets: Dataset[] = [...rawDatasets, ...coloredSplatVariants].map
   ...(d.avLidarUrl && { avLidarUrl: resolveDataUrl(d.avLidarUrl) }),
   ...(d.avEgoUrl && { avEgoUrl: resolveDataUrl(d.avEgoUrl) }),
   ...(d.avObjectsUrl && { avObjectsUrl: resolveDataUrl(d.avObjectsUrl) }),
+  ...(d.avTracksUrl && { avTracksUrl: resolveDataUrl(d.avTracksUrl) }),
   ...(d.avTelemetryUrl && { avTelemetryUrl: resolveDataUrl(d.avTelemetryUrl) }),
   ...(d.avCamerasUrl && { avCamerasUrl: resolveDataUrl(d.avCamerasUrl) }),
   ...(d.avMapPolyUrl && { avMapPolyUrl: resolveDataUrl(d.avMapPolyUrl) }),

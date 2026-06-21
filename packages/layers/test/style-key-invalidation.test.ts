@@ -46,6 +46,18 @@ vi.mock('@deck.gl/layers', () => {
   };
 });
 
+// SplatLayer's custom-Model primitive imports luma (no GPU here) — swap it for a
+// prop-stashing stand-in like the other fakes.
+vi.mock('../src/layers/internal/splat-primitive-layer', () => {
+  class FakeSplatPrimitiveLayer {
+    props: Record<string, any>;
+    constructor(props: Record<string, any>) {
+      this.props = props;
+    }
+  }
+  return { SplatPrimitiveLayer: FakeSplatPrimitiveLayer };
+});
+
 // Shared mock reproducing the real getSubLayerProps/getSubLayerClass
 // contract — see fake-deck-core.ts.
 vi.mock('@deck.gl/core', async () =>
@@ -270,7 +282,10 @@ describe('AnimatedPathLayer styleKey content invalidation', () => {
     const second = (layer as any).prepareTile(tile, tile.layers[0]);
     expect(second.styleKey).not.toBe(first.styleKey);
     expect(second).not.toBe(first);
-    expect(second.gpuPalette).toBe(layer.props.colorPalette);
+    // Categorical color now expands PER-VERTEX into getColor (the per-feature GPU
+    // index path under-sized the multi-vertex instanced draw). Feature 0 (cat
+    // index 0) picks up the swapped palette[0] = [9,9,9,255] on its first vertex.
+    expect([...second.data.attributes.getColor.value.slice(0, 4)]).toEqual([9, 9, 9, 255]);
   });
 
   it('keeps the cache hit when the palette reference is unchanged', () => {
@@ -283,6 +298,28 @@ describe('AnimatedPathLayer styleKey content invalidation', () => {
     const first = (layer as any).prepareTile(tile, tile.layers[0]);
     const second = (layer as any).prepareTile(tile, tile.layers[0]);
     expect(second).toBe(first);
+  });
+
+  it('invalidates when the iso3d height-opacity ramp (elevationOpacityFar) changes', () => {
+    // A top-fade tweak must re-prepare the tile (re-expands getColor with the new
+    // graded alpha) — otherwise the cached colors would keep the old fade.
+    const layer = makeLayer({
+      pathColor: 'kind',
+      colorMapping: { a: [40, 200, 176, 200], b: [40, 200, 176, 200] },
+      elevationProperty: 'z_layer',
+      elevationOpacityRange: [0, 6],
+      elevationOpacityNear: 1,
+      elevationOpacityFar: 0.3,
+    });
+    const tile = catPathTile();
+    tile.layers[0].features.numericProps['z_layer'] = new Float32Array([0, 6]) as any;
+    const first = (layer as any).prepareTile(tile, tile.layers[0]);
+    layer.props.elevationOpacityFar = 0.1;
+    const second = (layer as any).prepareTile(tile, tile.layers[0]);
+    expect(second.styleKey).not.toBe(first.styleKey);
+    expect(second).not.toBe(first);
+    // Top feature (z=6) alpha follows the new far: round(200 * 0.1) = 20.
+    expect(second.data.attributes.getColor.value[2 * 4 + 3]).toBe(20);
   });
 });
 
@@ -508,6 +545,106 @@ describe('H3SummaryLayer styleKey content invalidation', () => {
         [4, 5, 6, 255],
       ],
     });
+    const [first] = layer.renderLayers();
+    const [second] = layer.renderLayers();
+    expect(second).toBe(first);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SplatLayer — Worldbuild layer-props-key invalidation
+// ---------------------------------------------------------------------------
+
+describe('SplatLayer Worldbuild layerPropsKey invalidation', () => {
+  let LayerCtor: any;
+
+  beforeEach(async () => {
+    vi.resetModules();
+    LayerCtor = (await import('../src/layers/core/splat-layer')).SplatLayer as any;
+  });
+
+  /** Surfel point tile with the mandatory orientation/scale columns. */
+  function surfelTile(n: number) {
+    const positions: number[][] = [];
+    const startTimes: number[] = [];
+    const endTimes: number[] = [];
+    for (let i = 0; i < n; i++) {
+      positions.push([i * 0.001, i * 0.001]);
+      startTimes.push(i * 100);
+      endTimes.push(i * 100);
+    }
+    const tile = makePointTile({ positions, startTimes, endTimes, timeOffset: 0 });
+    const np = tile.layers[0].features.numericProps;
+    np['qx'] = new Float32Array(n).fill(0);
+    np['qy'] = new Float32Array(n).fill(0);
+    np['qz'] = new Float32Array(n).fill(0);
+    np['qw'] = new Float32Array(n).fill(1);
+    np['s_major'] = new Float32Array(n).fill(0.3);
+    np['s_minor'] = new Float32Array(n).fill(0.15);
+    return tile;
+  }
+
+  function makeLayer(opts: Record<string, any> = {}) {
+    const layer = Object.create(LayerCtor.prototype);
+    layer.props = {
+      id: 'splat',
+      quaternionColumns: ['qx', 'qy', 'qz', 'qw'],
+      scaleColumns: ['s_major', 's_minor'],
+      rgbColumns: null,
+      opacityColumn: null,
+      elevationProperty: 'z',
+      elevationScale: 1,
+      fallbackColor: [200, 205, 215, 255],
+      temporalSigma: 180,
+      cumulative: false,
+      revealFade: 0,
+      temporalSigmaDynamic: 0,
+      sizeScale: 1,
+      gaussianFalloff: 3,
+      alphaCutoff: 0.04,
+      timeWindow: 2000,
+      opacity: 1,
+      visible: true,
+      ...opts,
+    };
+    layer.state = { tiles: [surfelTile(3)] };
+    layer.boundGetTime = () => 0;
+    layer.preparedTileCache = new Map();
+    layer.sublayerCache = new Map();
+    layer.lastLayerPropsKey = '';
+    layer.lastTilesRef = null;
+    return layer;
+  }
+
+  it('rebuilds the cached sublayer when `cumulative` flips', () => {
+    const layer = makeLayer({ cumulative: false });
+    const [first] = layer.renderLayers();
+    layer.props.cumulative = true;
+    const [second] = layer.renderLayers();
+    expect(second).not.toBe(first);
+    expect(second.props.cumulative).toBe(true);
+  });
+
+  it('rebuilds the cached sublayer when `revealFade` changes', () => {
+    const layer = makeLayer({ cumulative: true, revealFade: 0 });
+    const [first] = layer.renderLayers();
+    layer.props.revealFade = 1200;
+    const [second] = layer.renderLayers();
+    expect(second).not.toBe(first);
+    expect(second.props.revealFade).toBe(1200);
+  });
+
+  it('rebuilds the cached sublayer when `temporalSigmaDynamic` changes', () => {
+    const layer = makeLayer({ cumulative: true, temporalSigmaDynamic: 200 });
+    const [first] = layer.renderLayers();
+    layer.props.temporalSigmaDynamic = 600;
+    const [second] = layer.renderLayers();
+    expect(second).not.toBe(first);
+    expect(second.props.temporalSigmaDynamic).toBe(600);
+  });
+
+  it('keeps the cache hit when none of the Worldbuild props change', () => {
+    const layer = makeLayer({ cumulative: true, revealFade: 800, temporalSigmaDynamic: 300 });
     const [first] = layer.renderLayers();
     const [second] = layer.renderLayers();
     expect(second).toBe(first);

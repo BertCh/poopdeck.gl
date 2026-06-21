@@ -47,18 +47,38 @@ const LAYER_STREAMS: AvStreamKey[] = ["lidar", "ego", "objects", "map"];
 
 /**
  * How the LIDAR cloud is rendered. `raw` = the base bundle's hard point dots
- * (height-band colored); `splat` / `surfel` each swap to a separately-built
- * camera-colored bundle (`<id>-splat` / `<id>-surfel`) rendered as soft point
- * splats / oriented Gaussian surfels. These used to be separate scene entries;
- * they're now a per-scene toggle that swaps the active dataset.
+ * (height-band colored); `splat` / `surfel` / `iso` / `world` / `scan` each swap
+ * to a separately-built bundle (`<id>-splat` / `<id>-surfel` / `<id>-iso` /
+ * `<id>-world` / `<id>-scan`) rendered as soft point splats / oriented Gaussian
+ * surfels / live density iso-lines / a cumulative worldbuild reconstruction / a
+ * raw rotating sweep. These used to be separate scene entries; they're now a
+ * per-scene toggle that swaps the active dataset. `iso3d` swaps to its OWN
+ * `<id>-iso3d` bundle (density contoured per height layer, each contour tagged
+ * with its real `z_layer` altitude) and lifts the iso-lines to true height — a
+ * genuine 3D density field, not a band→height fake. `cube` is RENDER-ONLY: it
+ * reads the BASE bundle + its `tracks/` archive and lifts the track trajectories
+ * into a Hägerstrand space-time cube (no `-cube` bundle exists).
  */
-type LidarRenderMode = "raw" | "splat" | "surfel";
+type LidarRenderMode =
+  | "raw"
+  | "splat"
+  | "surfel"
+  | "iso"
+  | "iso3d"
+  | "world"
+  | "cube"
+  | "scan";
 
 /** Label shown on each render-mode pill. */
 const RENDER_MODE_LABELS: Record<LidarRenderMode, string> = {
   raw: "Points",
   splat: "Splat",
   surfel: "Surfel",
+  iso: "Iso-lines",
+  iso3d: "Iso 3D",
+  world: "Worldbuild",
+  cube: "Spacetime",
+  scan: "Sweep",
 };
 
 /** Base url of a dataset's data dir (strip the trailing manifest filename). */
@@ -80,7 +100,9 @@ const AvCockpit: React.FC = () => {
   const avScenes = useMemo(
     () =>
       datasets.filter(
-        (d) => d.type === "av" && !/-(?:splat|surfel)$/.test(d.id),
+        (d) =>
+          d.type === "av" &&
+          !/-(?:splat|surfel|iso3d|iso|world|scan)$/.test(d.id),
       ),
     [],
   );
@@ -90,7 +112,11 @@ const AvCockpit: React.FC = () => {
   // seed the matching mode, so old links land on the same visual.
   const routeId = sceneId ?? DEFAULT_SCENE_ID;
   const { baseId, routeMode } = useMemo(() => {
-    const m = routeId.match(/^(.*)-(splat|surfel)$/);
+    // `cube` is render-only (no `-cube` bundle) but a `/drive/<id>-cube` deep-link
+    // should still land on it. `iso3d` / `world` / `scan` ARE real bundle suffixes;
+    // match `iso3d` before the shorter `iso`. The guard below confirms the BASE
+    // exists either way, since the suffix strips to the base id.
+    const m = routeId.match(/^(.*)-(splat|surfel|iso3d|iso|world|scan)$/);
     if (m && getDatasetById(m[1])) {
       return { baseId: m[1], routeMode: m[2] as LidarRenderMode };
     }
@@ -124,10 +150,29 @@ const AvCockpit: React.FC = () => {
     if (!baseDataset) return [];
     // `splat` is ALWAYS offered: if the scene ships a camera-colored `<id>-splat`
     // bundle we swap to it (photographic), otherwise we splat the scene's own
-    // cloud in place (render-only, height-band colors). `surfel` needs the baked
-    // per-return orientation columns, so it's only offered when that bundle exists.
+    // cloud in place (render-only, height-band colors). `surfel` / `iso` each need
+    // their own baked bundle (orientation columns / density-contour lines), so
+    // they're only offered when that `<id>-surfel` / `<id>-iso` bundle exists.
     const modes: LidarRenderMode[] = ["raw", "splat"];
     if (getDatasetById(`${baseDataset.id}-surfel`)) modes.push("surfel");
+    // Flat "Iso-lines" (`-iso`) and TRUE-3D "Iso 3D" (`-iso3d`) are each their
+    // own baked bundle (the 3D one contours density per height layer).
+    if (getDatasetById(`${baseDataset.id}-iso`)) modes.push("iso");
+    if (getDatasetById(`${baseDataset.id}-iso3d`)) modes.push("iso3d");
+    // Worldbuild needs its own `<id>-world` bundle (surfels + is_dynamic /
+    // world_class columns + first-seen times).
+    if (getDatasetById(`${baseDataset.id}-world`)) modes.push("world");
+    // Spacetime (cube) is HELD BACK from the shipped cockpit (see the held-back
+    // note in datasets.ts). The render-only logic below stays dormant (the toggle
+    // is not pushed and the `-cube` deep-link suffix is unmatched, so
+    // `lidarRenderMode` is never "cube"); re-add this push + the CubeControls
+    // import/JSX + the regex suffix to ship it.
+    // Spacetime (cube) is RENDER-ONLY — it reads the base bundle + its `tracks/`
+    // archive. HELD BACK: the toggle is not offered (re-add `modes.push("cube")`
+    // to ship it).
+    // Sweep needs its own `<id>-scan` bundle (raw returns + true scan-time +
+    // phase ramp) — only AV2 builds it, so this auto-gates scan to AV2 scenes.
+    if (getDatasetById(`${baseDataset.id}-scan`)) modes.push("scan");
     return modes;
   }, [baseDataset]);
 
@@ -151,9 +196,23 @@ const AvCockpit: React.FC = () => {
   // The ACTIVE dataset everything downstream reads (deck, sidecars, density).
   const dataset = useMemo(() => {
     if (!baseDataset) return baseDataset;
-    // Surfel: a fully separate baked bundle (no in-place fallback possible).
+    // Surfel / iso / world / scan: each a fully separate baked bundle (no in-place
+    // fallback — fall back to the base if the bundle is missing).
     if (lidarRenderMode === "surfel")
       return getDatasetById(`${baseDataset.id}-surfel`) ?? baseDataset;
+    if (lidarRenderMode === "iso")
+      return getDatasetById(`${baseDataset.id}-iso`) ?? baseDataset;
+    if (lidarRenderMode === "iso3d")
+      return getDatasetById(`${baseDataset.id}-iso3d`) ?? baseDataset;
+    if (lidarRenderMode === "world")
+      return getDatasetById(`${baseDataset.id}-world`) ?? baseDataset;
+    if (lidarRenderMode === "scan")
+      return getDatasetById(`${baseDataset.id}-scan`) ?? baseDataset;
+    // Spacetime cube: a RENDER-ONLY clone of the BASE bundle with `avCube` set —
+    // no bundle swap. buildDemoLayers reads the base + its `tracks/` archive and
+    // lifts the trajectories into the time-as-height cube.
+    if (lidarRenderMode === "cube")
+      return { ...baseDataset, avCube: true };
     if (lidarRenderMode === "splat") {
       // Prefer the camera-colored `-splat` bundle when it exists (best look)…
       const variant = getDatasetById(`${baseDataset.id}-splat`);
@@ -337,8 +396,13 @@ const AvCockpit: React.FC = () => {
   // Street basemap under geo-registered scenes (nuScenes / Argoverse). Default ON
   // so the cloud overlays real streets; flip OFF to read a camera-colored splat /
   // surfel surface against the cockpit's dark backdrop (no-op on `avLocalFrame`
-  // scenes, which never draw a basemap — the toggle is hidden for those).
-  const showBasemap = searchParams.get("basemap") !== "0";
+  // scenes, which never draw a basemap — the toggle is hidden for those). In the
+  // Spacetime CUBE mode the basemap defaults OFF (a street map under a 200 m-tall
+  // cube of ribbons just clutters it), but an explicit `?basemap=1` re-enables it.
+  const cubeMode = lidarRenderMode === "cube";
+  const showBasemap = cubeMode
+    ? searchParams.get("basemap") === "1"
+    : searchParams.get("basemap") !== "0";
   const toggleBasemap = useCallback(
     () => setParam("basemap", showBasemap ? "0" : null),
     [showBasemap, setParam],
@@ -347,6 +411,30 @@ const AvCockpit: React.FC = () => {
     () => (scene?.streams?.ego as any)?.path ?? null,
     [scene],
   );
+
+  // ── Space-time cube (Spacetime render mode) ────────────────────────────────
+  // `heightFactor` is the squash slider (`?squash=`, 0–100 → 0..1): 0 = flat map,
+  // 1 = full cube. It feeds one shader uniform (timeHeightScale, meters per
+  // sim-ms), so dragging it morphs the trajectories into the cube with zero data
+  // re-upload. Only meaningful in cube mode; the slider renders only then.
+  const squashParam = searchParams.get("squash");
+  const heightFactor = (() => {
+    const n = squashParam == null ? 100 : Number(squashParam);
+    return Number.isFinite(n) ? Math.max(0, Math.min(1, n / 100)) : 1;
+  })();
+  // (`setHeightFactor` — the squash slider's onChange — was removed with the
+  // held-back Spacetime cube; re-add it with the CubeControls JSX to ship cube.)
+  // Cube height in metres for the full range at squash 1 (≈200 m reads clearly at
+  // the pulled-back cube framing without dwarfing the streets), divided by the
+  // range duration → metres per sim-ms (the AnimatedTripsLayer / now-plane
+  // uniform). 0 outside cube mode (flat).
+  const rangeHeightMeters = baseDataset?.avCubeRangeHeightMeters ?? 200;
+  const rangeDurationMs = timeRange
+    ? Math.max(1, timeRange.end - timeRange.start)
+    : 1;
+  const timeHeightScale = cubeMode
+    ? (heightFactor * rangeHeightMeters) / rangeDurationMs
+    : 0;
 
   // ── LIDAR density selector ────────────────────────────────────────────────
   // Some sources (Waymo) bake several LIDAR archives at increasing point counts
@@ -455,6 +543,7 @@ const AvCockpit: React.FC = () => {
           onSelectObject={setSelectedObject}
           perfMode={perfMode}
           showBasemap={showBasemap}
+          timeHeightScale={timeHeightScale}
         />
       </div>
 
@@ -497,36 +586,43 @@ const AvCockpit: React.FC = () => {
           sceneName={sceneName}
         />
         <div className="flex gap-2">
-          <button
-            type="button"
-            onClick={toggleEgoFollow}
-            aria-pressed={egoFollow}
-            title={
-              egoPath
-                ? "Recenter the camera on the vehicle"
-                : "Ego-follow (scene has no ego polyline — camera holds)"
-            }
-            className={`rounded-md border px-2.5 py-1 text-xs backdrop-blur-md transition-colors ${
-              egoFollow
-                ? "border-cyan-300/60 bg-cyan-400/20 text-cyan-100"
-                : "border-white/10 bg-black/55 text-slate-300 hover:bg-white/5"
-            }`}
-          >
-            Follow ego
-          </button>
-          <button
-            type="button"
-            onClick={toggleTopDown}
-            aria-pressed={topDown}
-            title="Toggle perspective / top-down view"
-            className={`rounded-md border px-2.5 py-1 text-xs backdrop-blur-md transition-colors ${
-              topDown
-                ? "border-cyan-300/60 bg-cyan-400/20 text-cyan-100"
-                : "border-white/10 bg-black/55 text-slate-300 hover:bg-white/5"
-            }`}
-          >
-            {topDown ? "Top-down" : "Perspective"}
-          </button>
+          {/* Follow / perspective⇄top-down — hidden in the Spacetime CUBE mode
+              (ego-follow is gated off and the cube wants a free static orbit, so
+              chasing the climbing ego worm / snapping top-down would fight it). */}
+          {!cubeMode && (
+            <>
+              <button
+                type="button"
+                onClick={toggleEgoFollow}
+                aria-pressed={egoFollow}
+                title={
+                  egoPath
+                    ? "Recenter the camera on the vehicle"
+                    : "Ego-follow (scene has no ego polyline — camera holds)"
+                }
+                className={`rounded-md border px-2.5 py-1 text-xs backdrop-blur-md transition-colors ${
+                  egoFollow
+                    ? "border-cyan-300/60 bg-cyan-400/20 text-cyan-100"
+                    : "border-white/10 bg-black/55 text-slate-300 hover:bg-white/5"
+                }`}
+              >
+                Follow ego
+              </button>
+              <button
+                type="button"
+                onClick={toggleTopDown}
+                aria-pressed={topDown}
+                title="Toggle perspective / top-down view"
+                className={`rounded-md border px-2.5 py-1 text-xs backdrop-blur-md transition-colors ${
+                  topDown
+                    ? "border-cyan-300/60 bg-cyan-400/20 text-cyan-100"
+                    : "border-white/10 bg-black/55 text-slate-300 hover:bg-white/5"
+                }`}
+              >
+                {topDown ? "Top-down" : "Perspective"}
+              </button>
+            </>
+          )}
           <button
             type="button"
             onClick={togglePerfMode}
@@ -593,6 +689,9 @@ const AvCockpit: React.FC = () => {
             </div>
           )}
         </div>
+        {/* Spacetime CUBE squash slider HELD BACK with the cube mode (the
+            CubeControls import + this JSX are removed; `cubeMode` is always
+            false). Re-add to ship Spacetime. */}
       </div>
 
       {/* Left rail: stream list (below the switcher) */}

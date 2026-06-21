@@ -745,6 +745,51 @@ export function buildDemoLayers({
           ...sourceProps(layerId, true),
         };
       };
+      // ── CUBE / Spacetime ─────────────────────────────────────────────────
+      // Hägerstrand space-time cube of the TRACK trajectories: the `tracks/`
+      // archive (one LineString per track + the synthetic "ego" spine) drawn as
+      // 3D ribbons climbing through the cube — time = altitude (timeHeightScale),
+      // slope = speed — colored by categorical `category`. This is a CLEAN render:
+      // the LIDAR / objects / HD-map pushes are GATED OFF so only the ribbons (and
+      // the now-plane, added by AvDeck) read against the dark backdrop. The lift is
+      // done by AnimatedTripsLayer via the shared `timeHeightScale` baseProp. We
+      // early-return so none of the cloud/box/map layers below get pushed.
+      if (selectedDataset.avCube && selectedDataset.avTracksUrl) {
+        return [
+          new AnimatedTripsLayer({
+            ...baseProps,
+            id: selectedDataset.id, // bare id → the cockpit's "lidar" toggle slot
+            ...sourceProps(selectedDataset.id, true),
+            data: selectedDataset.avTracksUrl,
+            // Categorical `category` (object classes + "ego") → ribbon color via
+            // the property-name form of tripColor; AV_OBJECT_COLORS keeps colors
+            // stable across tiles (and paints the synthetic "ego" track cyan).
+            tripColor: "category",
+            ...(selectedDataset.avObjectColors && {
+              colorMapping: selectedDataset.avObjectColors,
+            }),
+            ...(selectedDataset.colorMappingDefault && {
+              colorMappingDefault: selectedDataset.colorMappingDefault,
+            }),
+            // Full-scene trail with NO fade: every track's whole spacetime thread
+            // stays drawn so the cube reads as a complete bundle of trajectories
+            // (not a moving worm). The clock + now-plane convey "now".
+            trailLength:
+              selectedDataset.timeRange.end - selectedDataset.timeRange.start,
+            fadeTrail: false,
+            // World-space width (~1.5 m) so threads thicken on zoom like real
+            // objects; clamped to a legible 2–6 px band.
+            tripWidth: 1.5,
+            widthUnits: "meters",
+            widthMinPixels: 2,
+            widthMaxPixels: 6,
+            // Rounded caps/joints read better on the climbing 3D threads.
+            capRounded: true,
+            jointRounded: true,
+            opacity: selectedDataset.opacity ?? 0.9,
+          }),
+        ];
+      }
       const layers: any[] = [];
       // HD-map substrate — drawn FIRST so it sits UNDER the LIDAR/ego/objects:
       // drivable-area / crosswalk POLYGONS + lane-divider / boundary LINES, each
@@ -793,7 +838,36 @@ export function buildDemoLayers({
           }),
         );
       }
-      if (selectedDataset.avLidarUrl && selectedDataset.lidarSurfel) {
+      if (selectedDataset.avLidarUrl && selectedDataset.lidarWorldbuild) {
+        // WORLDBUILD: the `-world` surfel cloud rendered as a CUMULATIVE scene
+        // reconstruction. STATIC surfels (is_dynamic = 0) persist once revealed —
+        // a HUGE/effectively-infinite temporalSigma keeps them at full brightness
+        // for the rest of playback — so the 3D world accumulates as the car drives;
+        // DYNAMIC surfels smear with the short `temporalSigmaDynamic` so moving
+        // traffic still reads as motion. `cumulative:true` tells SplatLayer to keep
+        // every revealed static surfel resident; `revealFade` ramps a newly-shown
+        // surfel in. Same baked orientation/extent/color columns as the surfel path.
+        layers.push(
+          new SplatLayer({
+            ...propsForStream(selectedDataset.id, selectedDataset.avLidarUrl),
+            id: selectedDataset.id, // bare id → the cockpit's "lidar" toggle
+            data: selectedDataset.avLidarUrl,
+            elevationProperty: "z",
+            elevationScale: selectedDataset.elevationScale ?? 1,
+            // Accumulate: static surfels persist once revealed (the world builds up).
+            cumulative: true,
+            revealFade: selectedDataset.lidarWorldbuildRevealFade ?? 0,
+            // Static/persistent temporal width — large so revealed static surfels
+            // stay full-bright; the surfel scenes' tuned sigma is a sensible floor.
+            temporalSigma: selectedDataset.lidarSurfelTemporalSigma ?? 1e9,
+            // Dynamic surfels (moving objects) smear over this short window.
+            temporalSigmaDynamic: selectedDataset.lidarWorldbuildDynamicSigma ?? 200,
+            sizeScale: selectedDataset.lidarSurfelSizeScale ?? 1,
+            opacity: selectedDataset.opacity ?? 1,
+            ...(perfMode ? { alphaCutoff: 0.2 } : {}),
+          }),
+        );
+      } else if (selectedDataset.avLidarUrl && selectedDataset.lidarSurfel) {
         // Surfel splat: render the cloud as ORIENTED Gaussian disks (SplatLayer)
         // that brighten/fade around each sweep's instant — a "formal" splat over
         // time. The bundle (waymo_extract.py --surfel) bakes the per-return
@@ -815,6 +889,93 @@ export function buildDemoLayers({
             ...(perfMode ? { alphaCutoff: 0.2 } : {}),
           }),
         );
+      } else if (selectedDataset.avLidarUrl && selectedDataset.lidarIso) {
+        // Density ISO-LINES: the `lidar/` archive is windowed contour LineStrings
+        // (waymo_extract.py --contours) — a live topographic map of where the
+        // cloud clusters, re-cut per playhead window. Drawn as ground-plane paths
+        // colored by the categorical `density_band` ramp. The dataset's tight
+        // `timeWindow` (~260 ms) shows ~one window's contours at a time so the map
+        // morphs as the car drives. Carries the bare `id` so the cockpit's "lidar"
+        // toggle + governor source still resolve.
+        //
+        // ISO 3D (`lidarIso3d`): the `-iso3d` bundle contours density per HEIGHT
+        // LAYER and tags every contour with a numeric `z_layer` (its slab's real
+        // altitude, metres). AnimatedPathLayer lifts each ring to `z_layer ×
+        // scale`, so the vertical axis carries REAL structure (a wall contours up
+        // its whole height, a parked car only near the ground) — not an artificial
+        // band→height map. Still colored by the categorical `density_band` ramp.
+        const iso3d = selectedDataset.lidarIso3d ?? false;
+        layers.push(
+          new AnimatedPathLayer({
+            ...propsForStream(selectedDataset.id, selectedDataset.avLidarUrl),
+            id: selectedDataset.id,
+            data: selectedDataset.avLidarUrl,
+            pathColor: selectedDataset.colorProperty ?? "density_band",
+            colorMapping: selectedDataset.lidarColorMapping,
+            colorMappingDefault: selectedDataset.lidarColorMappingDefault,
+            widthUnits: "pixels",
+            // Lift to the real per-contour height (numeric `z_layer` column);
+            // slightly heavier lines read better terraced against the backdrop.
+            ...(iso3d
+              ? {
+                  elevationProperty: "z_layer",
+                  elevationScale: selectedDataset.lidarIsoElevationScale ?? 1,
+                  // Fade upper slabs translucent so the stack reads top-down
+                  // (see AnimatedPathLayer.elevationOpacity*). Unset ⇒ un-graded.
+                  ...(selectedDataset.lidarIsoTopFade
+                    ? {
+                        elevationOpacityRange:
+                          selectedDataset.lidarIsoTopFade.range,
+                        elevationOpacityNear:
+                          selectedDataset.lidarIsoTopFade.near ?? 1,
+                        elevationOpacityFar:
+                          selectedDataset.lidarIsoTopFade.far ?? 1,
+                      }
+                    : {}),
+                  pathWidth: 2,
+                }
+              : { pathWidth: 1.6 }),
+            widthMinPixels: 1,
+            widthMaxPixels: 4,
+            capRounded: true,
+            jointRounded: true,
+            opacity: selectedDataset.opacity ?? 0.95,
+          }),
+        );
+      } else if (selectedDataset.avLidarUrl && selectedDataset.lidarScan) {
+        // SWEEP / SCAN: raw LIDAR (the `-scan` bundle, AV2 only) with each return
+        // stamped at its TRUE scan time + a per-point phase ramp (r/g/b). Rendered
+        // as a WAKE-mode point cloud so the rotating scan-line sweeps across the
+        // scene each revolution like a live radar — a short tail fading behind the
+        // leading edge. The dataset factory set a tight timeWindow (~300 ms) so a
+        // frame shows roughly one live sweep; the object boxes are protected by the
+        // Math.max(timeWindow, 2000) floor below. 3D via the real `z` column.
+        layers.push(
+          new AnimatedPointLayer({
+            ...propsForStream(selectedDataset.id, selectedDataset.avLidarUrl),
+            id: selectedDataset.id, // bare id → the cockpit's "lidar" toggle
+            data: selectedDataset.avLidarUrl,
+            // Phase-ramp color baked per-point (r/g/b) — the rotating scan hue.
+            rgbColorColumns: ["r", "g", "b"] as [string, string, string],
+            // Wake mode: each return draws as a fading + shrinking tail behind the
+            // sweep's leading edge, so the scan-line reads as a moving sweep.
+            wakeLength: 60,
+            wakeTailScale: 0.1,
+            use3D: true,
+            elevationProperty: "z",
+            elevationScale: selectedDataset.elevationScale ?? 1,
+            radius: selectedDataset.radius ?? 1.6,
+            radiusUnits: selectedDataset.radiusUnits ?? "pixels",
+            radiusScale: selectedDataset.radiusScale ?? 1,
+            radiusMinPixels: selectedDataset.radiusMinPixels ?? 1,
+            radiusMaxPixels: selectedDataset.radiusMaxPixels,
+            // Billboarded round points so each return reads at its real height.
+            billboard: true,
+            // Perf mode: drop the 1px edge antialiasing (pure fill-rate win).
+            antialiasing: perfMode ? false : true,
+            opacity: selectedDataset.opacity ?? 1,
+          }),
+        );
       } else if (selectedDataset.avLidarUrl) {
         layers.push(
           new AnimatedPointLayer({
@@ -834,6 +995,14 @@ export function buildDemoLayers({
               ? { rgbColorColumns: ["r", "g", "b"] as [string, string, string] }
               : {}),
             splat: selectedDataset.lidarSplat ?? false,
+            // Temporal fades scaled to the (tight) LIDAR window so each sweep
+            // SNAPS to full brightness with a short crisp edge instead of the
+            // long soft ramp the 300 ms default produces on a sub-second window
+            // (which caps peak alpha < 1 and re-smears the tail). Quarter-window
+            // fades leave a half-window full-bright core. Surfel scenes take the
+            // SplatLayer branch above and are unaffected (temporalSigma there).
+            fadeInDuration: Math.round(timeWindow * 0.25),
+            fadeOutDuration: Math.round(timeWindow * 0.25),
             // Place each return at its real height (`z`, metres) so the tilted
             // cockpit camera renders a true 3D point CLOUD — not flat dots. The
             // tile carries a numeric `z` column; AnimatedPointLayer now fills the
@@ -903,6 +1072,15 @@ export function buildDemoLayers({
             ...propsForStream(`${selectedDataset.id}-objects`, selectedDataset.avObjectsUrl),
             id: `${selectedDataset.id}-objects`,
             data: selectedDataset.avObjectsUrl,
+            // The box layer interpolates ONE box per track from the two keyframes
+            // BRACKETING the playhead, so the loader must keep ≥2 keyframes (the
+            // objects archive is 1 s-bucketed at ~2 Hz) resident at all times.
+            // The iso LIDAR mode narrows the dataset `timeWindow` to ~260 ms to
+            // show one contour window — far too tight for the boxes, which then
+            // go inactive between their last resident keyframe and the next
+            // bucket loading (the boxes flash in/out). Floor the objects loader
+            // window so the boxes stay locked to the cloud regardless of mode.
+            timeWindow: Math.max(timeWindow, 2000),
             // Categorical `category` → oriented box color via the same
             // colorMapping machinery AnimatedColumnLayer uses.
             colorProperty: "category",

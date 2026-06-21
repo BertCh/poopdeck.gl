@@ -21,6 +21,7 @@
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import DeckGL from "@deck.gl/react";
+import { SolidPolygonLayer } from "@deck.gl/layers";
 import { Map } from "react-map-gl";
 import type { TimeController } from "@poopdeck.gl/playback";
 import type { SourceRegistry } from "@poopdeck.gl/react";
@@ -100,6 +101,13 @@ export interface AvDeckProps {
    * backdrop. @default true
    */
   showBasemap?: boolean;
+  /**
+   * Space-time-cube height scale (meters per sim-ms). 0 (default) renders flat;
+   * > 0 (set only in the "Spacetime" render mode, when `dataset.avCube` is set)
+   * lifts the track ribbons into a Hägerstrand cube and adds a rising now-plane.
+   * @default 0
+   */
+  timeHeightScale?: number;
 }
 
 /** Which streams own which built layer (by the id suffix buildDemoLayers sets). */
@@ -147,7 +155,13 @@ const AvDeck: React.FC<AvDeckProps> = ({
   onSelectObject,
   perfMode = false,
   showBasemap = true,
+  timeHeightScale = 0,
 }) => {
+  // Space-time-cube mode: the track ribbons climb time = altitude. We pull the
+  // camera back + tilt it (and raise maxPitch) so the whole ~200 m-tall cube is
+  // framed, and we GATE OFF the ego-follow chase (you don't chase a climbing
+  // worm — you want the static cube in view).
+  const cubeMode = !!dataset.avCube && timeHeightScale > 0;
   // Controlled camera: seeded from the dataset, then driven by ego-follow and
   // the pitch toggle. The user can still drag/zoom (onViewStateChange).
   const [viewState, setViewState] = useState<any>(() => ({
@@ -185,12 +199,38 @@ const AvDeck: React.FC<AvDeckProps> = ({
   // `dataset.initialViewState` fallback immediately; this snaps to the real
   // scene framing the moment scene.json resolves (or the scene switches), so the
   // camera can't drift from the data even if the hardcoded coords go stale. Pitch
-  // still follows the perspective⇄top-down toggle.
+  // still follows the perspective⇄top-down toggle. SKIP in cube mode — the cube
+  // framing effect below owns the camera there (street-level zoom would clip the
+  // ~200 m-tall cube).
   useEffect(() => {
-    if (!sceneView) return;
+    if (!sceneView || cubeMode) return;
     setViewState((vs: any) => ({ ...vs, ...sceneView, pitch: targetPitch, maxPitch: 75 }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sceneView]);
+  }, [sceneView, cubeMode]);
+
+  // Space-time-cube framing. When the "Spacetime" mode turns on, pull the camera
+  // BACK + tilt it up (and raise maxPitch to 85) so the whole time-as-height cube
+  // is in view rather than the street-level cloud framing. Seeded from the scene
+  // center (sceneView wins, else the dataset fallback). Snaps once on entering
+  // cube mode; the user can then orbit freely. Leaving cube mode lets the
+  // [dataset]/sceneView effects re-frame to street level on the next switch.
+  useEffect(() => {
+    if (!cubeMode) return;
+    const center = sceneView ?? dataset.initialViewState;
+    setViewState((vs: any) => ({
+      ...vs,
+      longitude: center.longitude ?? vs.longitude,
+      latitude: center.latitude ?? vs.latitude,
+      // Zoom out ~4 levels from the street framing so a ~200 m cube fits.
+      zoom: (center.zoom ?? dataset.initialViewState.zoom ?? 18) - 4,
+      pitch: topDown ? 0 : 58,
+      bearing: center.bearing ?? dataset.initialViewState.bearing ?? 20,
+      maxPitch: 85,
+    }));
+    // Only re-run when cube mode toggles or the scene/view changes; topDown is
+    // read fresh from the closure (toggling it within cube mode shouldn't recenter).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cubeMode, sceneView, dataset.id]);
 
   useEffect(() => {
     if (reducedMotion) {
@@ -220,7 +260,9 @@ const AvDeck: React.FC<AvDeckProps> = ({
   // rotateToHeading, + zoom when configured) via a functional update, so it
   // composes with the pitch loop and leaves the user's other adjustments alone.
   useEffect(() => {
-    if (!egoFollow || !egoPath || egoPath.length === 0) return;
+    // Gate the chase OFF in cube mode — you frame the static cube, not chase the
+    // climbing ego worm up the time axis.
+    if (cubeMode || !egoFollow || !egoPath || egoPath.length === 0) return;
     const cfg = followConfig;
 
     // Reduced motion: never animate. Snap the followed channels now and on each
@@ -288,14 +330,14 @@ const AvDeck: React.FC<AvDeckProps> = ({
     };
     raf = requestAnimationFrame(step);
     return () => cancelAnimationFrame(raf);
-  }, [egoFollow, egoPath, followConfig, reducedMotion, timeController]);
+  }, [cubeMode, egoFollow, egoPath, followConfig, reducedMotion, timeController]);
 
   const tileLayers = useMemo(() => {
     const all = buildDemoLayers({
       dataset,
       timeController,
       useGlobe: false,
-      timeHeightScale: 0,
+      timeHeightScale,
       plumbing: { registry },
       perfMode,
     });
@@ -303,7 +345,7 @@ const AvDeck: React.FC<AvDeckProps> = ({
     return all.filter((l: any) =>
       visibleStreams.has(layerStream(l.id, dataset.id)),
     );
-  }, [dataset, timeController, registry, visibleStreams, perfMode]);
+  }, [dataset, timeController, registry, visibleStreams, perfMode, timeHeightScale]);
 
   // Lifecycle reconciliation. A layer filtered out above is unmounted by deck,
   // but the governor source it registered (via onTilesetReady while it was
@@ -339,9 +381,56 @@ const AvDeck: React.FC<AvDeckProps> = ({
     ];
   }, [egoPath, egoTime, visibleStreams]);
 
+  // Space-time-cube "now" plane — a translucent quad rising with the playhead at
+  // z = (egoTime − timeRange.start) × timeHeightScale, spanning the scene/ego
+  // bbox. It rides the same per-tick `egoTime` state as the ego overlays (the
+  // tile-layer ribbons stay memoized + clock-driven). depthWriteEnabled:false so
+  // the plane TINTS the threads it crosses rather than occluding them. Same idiom
+  // as the nyc-taxi-cube now-plane in DemoViewer. Cube mode only.
+  const cubeOverlayLayers = useMemo(() => {
+    if (!cubeMode) return [];
+    // Scene extent: union of the ego polyline, else a small box around center.
+    let minLon = Infinity, minLat = Infinity, maxLon = -Infinity, maxLat = -Infinity;
+    if (egoPath && egoPath.length > 0) {
+      for (const p of egoPath) {
+        if (p.lon < minLon) minLon = p.lon;
+        if (p.lon > maxLon) maxLon = p.lon;
+        if (p.lat < minLat) minLat = p.lat;
+        if (p.lat > maxLat) maxLat = p.lat;
+      }
+      // Pad the bbox a little so the plane fully covers the ribbon bundle.
+      const padLon = (maxLon - minLon) * 0.15 || 0.001;
+      const padLat = (maxLat - minLat) * 0.15 || 0.001;
+      minLon -= padLon; maxLon += padLon; minLat -= padLat; maxLat += padLat;
+    } else {
+      const { longitude, latitude } = dataset.initialViewState;
+      minLon = longitude - 0.002; maxLon = longitude + 0.002;
+      minLat = latitude - 0.0015; maxLat = latitude + 0.0015;
+    }
+    const zNow =
+      Math.max(0, egoTime - dataset.timeRange.start) * timeHeightScale;
+    const plane = [
+      [minLon, minLat, zNow],
+      [maxLon, minLat, zNow],
+      [maxLon, maxLat, zNow],
+      [minLon, maxLat, zNow],
+    ];
+    return [
+      new SolidPolygonLayer({
+        id: `${dataset.id}-cube-now-plane`,
+        data: [plane],
+        getPolygon: (d: any) => d,
+        filled: true,
+        getFillColor: [31, 186, 214, 22],
+        pickable: false,
+        parameters: { depthWriteEnabled: false } as any,
+      }),
+    ];
+  }, [cubeMode, egoPath, egoTime, timeHeightScale, dataset.id, dataset.initialViewState, dataset.timeRange.start]);
+
   const layers = useMemo(
-    () => [...tileLayers, ...egoLayers],
-    [tileLayers, egoLayers],
+    () => [...tileLayers, ...egoLayers, ...cubeOverlayLayers],
+    [tileLayers, egoLayers, cubeOverlayLayers],
   );
 
   // Click-to-inspect: only a hit on the objects layer feeds the inspector card.

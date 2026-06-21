@@ -39,6 +39,7 @@ import {
   colorListDigest,
   colorMappingDigest,
   inheritedPropsDigest,
+  structuralDigest,
   updateTriggersDigest,
 } from '../../lib/style-digest';
 import { resolveAccessorAlias } from '../../lib/accessor-alias';
@@ -143,6 +144,59 @@ export interface _AnimatedPathLayerProps {
    * @default false
    */
   billboard?: boolean;
+  /**
+   * Lift every vertex of a path to a per-FEATURE elevation (metres of altitude),
+   * sourced from this property column. Turns flat ground-plane lines into a 3D
+   * relief — e.g. density iso-contours stacked by their density band (the
+   * classic 3D contour plot). The whole path rides at one height (its feature's
+   * value), so nested contour rings terrace into a hill.
+   *
+   * Resolution mirrors `pathColor`: a CATEGORICAL column resolves through
+   * {@link elevationMapping} (category string → metres); a NUMERIC column uses
+   * the value directly. Either way the result is scaled by {@link
+   * elevationScale}. When the column is absent from a tile (or categorical with
+   * no mapping) that tile stays 2D / flat, byte-identical to the unset render.
+   * Unset ⇒ flat (the tile's `positions` ride to the GPU zero-copy).
+   */
+  elevationProperty?: string | null;
+  /**
+   * Category-string → elevation (metres) map for a CATEGORICAL {@link
+   * elevationProperty} — the height analogue of `colorMapping`. Categories
+   * absent from the map elevate to 0. No effect for a numeric column.
+   */
+  elevationMapping?: Record<string, number> | null;
+  /**
+   * Multiplier applied to each {@link elevationProperty} value (after the
+   * categorical map) before it becomes the path's z. No effect when
+   * `elevationProperty` is unset.
+   * @default 1
+   */
+  elevationScale?: number;
+  /**
+   * Height-graded opacity for a stacked relief: fade each path's color alpha by
+   * its real altitude, so the upper layers go translucent and a stacked iso
+   * surface reads coherently from a TOP-DOWN view (you see down through the roof
+   * to the ground instead of the top slab occluding everything below). The
+   * multiplier ramps LINEARLY from {@link elevationOpacityNear} at the low end of
+   * {@link elevationOpacityRange} to {@link elevationOpacityFar} at the high end
+   * (clamped outside), keyed on the RAW {@link elevationProperty} value in metres
+   * (pre-{@link elevationScale}), so the fade is consistent across tiles
+   * regardless of each tile's own z spread. Only applies on the categorical-color
+   * (per-vertex `getColor`) path and when the elevation column is NUMERIC; unset
+   * ⇒ no grading (alpha is the band color's own). Requires {@link
+   * elevationProperty}.
+   */
+  elevationOpacityRange?: [number, number] | null;
+  /**
+   * Alpha multiplier (0–1) at the LOW end of {@link elevationOpacityRange} — the
+   * ground. @default 1
+   */
+  elevationOpacityNear?: number;
+  /**
+   * Alpha multiplier (0–1) at the HIGH end of {@link elevationOpacityRange} — the
+   * top of the stack. `< 1` fades the upper layers translucent. @default 1
+   */
+  elevationOpacityFar?: number;
 }
 
 /** Complete props accepted by {@link AnimatedPathLayer}. */
@@ -185,13 +239,161 @@ function makeTileKey(tile: Tile, layer: TileLayer): string {
 }
 
 /**
- * Narrow Uint16Array → Float32Array so the GPU CategoryColorExtension can
- * read indices as a float attribute. Allocated once per (tile, prop change)
- * pair and cached on the PreparedTile.
+ * Expand a PER-FEATURE scalar (e.g. a feature's start/end time) to one value
+ * PER-VERTEX, using the path `startIndices`. PathLayer renders SEGMENTS as
+ * instances and maps a per-vertex attribute onto them via its tessellator, so a
+ * per-vertex buffer is the correct granularity — a per-feature one (length =
+ * featureCount) UNDER-SIZES the instanced draw on multi-vertex paths and throws
+ * "vertex buffer is not big enough" on strict drivers (ANGLE/Metal). All vertices
+ * of a feature share its value, so the per-segment read is exact. The output
+ * keeps the source typed-array type (preserving the time precision the layer
+ * already relies on). Mirrors AnimatedTripsLayer's per-vertex time/color.
  */
-function indicesToFloat32(indices: Uint16Array, count: number): Float32Array {
+function expandFeatureScalarToVertex<T extends { [i: number]: number; length: number }>(
+  src: T,
+  startIndices: Uint32Array,
+  featureCount: number,
+  totalVerts: number,
+): T {
+  // Same constructor as the source → same element type (Float64Array stays
+  // Float64Array, so unix-ms times keep the precision the per-feature path had).
+  const out = new (src.constructor as new (n: number) => T)(totalVerts);
+  for (let f = 0; f < featureCount; f++) {
+    const val = src[f];
+    const end = startIndices[f + 1];
+    for (let v = startIndices[f]; v < end; v++) out[v] = val;
+  }
+  return out;
+}
+
+/**
+ * Resolve each feature's categorical color from the palette and expand it to one
+ * RGBA PER-VERTEX. Same instance-granularity reason as {@link
+ * expandFeatureScalarToVertex}: PathLayer carries `getColor` as a per-vertex
+ * attribute its tessellator maps onto segment instances, so a per-feature
+ * `instanceCategoryIndex` (the GPU CategoryColorExtension path, correct for the
+ * point layer) under-sizes the draw for multi-vertex paths. Mirrors
+ * AnimatedTripsLayer.expandCategoryColors.
+ */
+function expandCategoryColors(
+  indices: Uint16Array,
+  palette: Color[],
+  startIndices: Uint32Array,
+  featureCount: number,
+  totalVerts: number,
+  fallback: Color,
+  alphaScale: Float32Array | null,
+): Uint8Array {
+  const out = new Uint8Array(totalVerts * 4);
+  for (let f = 0; f < featureCount; f++) {
+    const c = palette[indices[f]] ?? fallback;
+    const r = c[0];
+    const g = c[1];
+    const b = c[2];
+    // Height-graded alpha (alphaScale, 0–1) folds onto the band color's own alpha
+    // so the fade COMPOSES with the density-band opacity ramp rather than
+    // replacing it. Rounded back into the u8 channel.
+    const a = alphaScale
+      ? Math.round((c[3] ?? 255) * alphaScale[f])
+      : c[3] ?? 255;
+    for (let v = startIndices[f]; v < startIndices[f + 1]; v++) {
+      const o = v * 4;
+      out[o] = r;
+      out[o + 1] = g;
+      out[o + 2] = b;
+      out[o + 3] = a;
+    }
+  }
+  return out;
+}
+
+/**
+ * Per-feature alpha multiplier (0–1) from a feature's RAW altitude, linearly
+ * ramping `near → far` across `[z0, z1]` metres (clamped outside). Used to fade
+ * the upper layers of a stacked iso relief translucent so it reads from a
+ * top-down view. Keyed on the NUMERIC elevation column directly (pre-scale), so
+ * the same real altitude grades to the same alpha in every tile; returns null
+ * when the column is absent (or non-numeric) and the caller skips grading.
+ */
+function elevationAlphaScales(
+  binary: BinaryFeatures,
+  prop: string,
+  range: [number, number],
+  near: number,
+  far: number,
+): Float32Array | null {
+  const num = binary.numericProps[prop];
+  if (!num) return null;
+  const count = binary.featureCount;
+  const z0 = range[0];
+  const span = range[1] - range[0];
   const out = new Float32Array(count);
-  for (let i = 0; i < count; i++) out[i] = indices[i];
+  for (let f = 0; f < count; f++) {
+    let t = span !== 0 ? (num[f] - z0) / span : 0;
+    t = t < 0 ? 0 : t > 1 ? 1 : t;
+    out[f] = near + (far - near) * t;
+  }
+  return out;
+}
+
+/**
+ * Resolve a PER-FEATURE elevation (metres) for every feature in the tile, from
+ * an elevation property column. Mirrors the color resolution: a CATEGORICAL
+ * column maps each feature's category through `mapping` (absent → 0); a NUMERIC
+ * column uses the value directly. The result is scaled by `scale`. Returns null
+ * when the column is absent (or categorical with no mapping) — the caller then
+ * leaves the tile flat / zero-copy.
+ */
+function resolveFeatureElevations(
+  binary: BinaryFeatures,
+  prop: string,
+  mapping: Record<string, number> | null | undefined,
+  scale: number,
+): Float64Array | null {
+  const count = binary.featureCount;
+  const cat = binary.categoricalProps[prop];
+  if (cat && mapping) {
+    const out = new Float64Array(count);
+    for (let f = 0; f < count; f++) {
+      out[f] = (mapping[cat.categories[cat.indices[f]]] ?? 0) * scale;
+    }
+    return out;
+  }
+  const num = binary.numericProps[prop];
+  if (num) {
+    const out = new Float64Array(count);
+    for (let f = 0; f < count; f++) out[f] = num[f] * scale;
+    return out;
+  }
+  return null;
+}
+
+/**
+ * Lift a flat (or already-3D) path-position buffer to XYZ, writing each
+ * feature's elevation into the z of all its vertices (the whole path rides at
+ * one height — correct for stacked iso-contours). Allocates one
+ * `totalVerts × 3` Float64Array per (tile, elevation change); cheap relative to
+ * tesselation and amortized across animation frames, like the per-vertex color
+ * expansion above.
+ */
+function buildElevatedPositions(
+  src: Float64Array,
+  srcDims: number,
+  startIndices: Uint32Array,
+  featureCount: number,
+  totalVerts: number,
+  zPerFeature: Float64Array,
+): Float64Array {
+  const out = new Float64Array(totalVerts * 3);
+  for (let f = 0; f < featureCount; f++) {
+    const z = zPerFeature[f];
+    const end = startIndices[f + 1];
+    for (let v = startIndices[f]; v < end; v++) {
+      out[v * 3] = src[v * srcDims];
+      out[v * 3 + 1] = src[v * srcDims + 1];
+      out[v * 3 + 2] = z;
+    }
+  }
   return out;
 }
 
@@ -246,6 +448,16 @@ export class AnimatedPathLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
     // a same-shape mapping edit invalidates via the digest, not deck's diff.
     colorMapping: { type: 'object', value: null, optional: true, compare: false },
     colorMappingDefault: { type: 'color', value: [120, 120, 120, 255] },
+    // Elevation: unset ⇒ flat (zero-copy positions). Digested by content in the
+    // styleKey / layerPropsKey (compare:false on the mapping), like colorMapping.
+    elevationProperty: { type: 'object', value: null, optional: true, compare: true },
+    elevationMapping: { type: 'object', value: null, optional: true, compare: false },
+    elevationScale: { type: 'number', value: 1 },
+    // Height-graded alpha: unset range ⇒ no grading. Range/near/far ride the
+    // styleKey so a tweak re-prepares the tiles (re-expands getColor).
+    elevationOpacityRange: { type: 'object', value: null, optional: true, compare: true },
+    elevationOpacityNear: { type: 'number', value: 1 },
+    elevationOpacityFar: { type: 'number', value: 1 },
     fadeInDuration: { type: 'number', value: 300, min: 0 },
     fadeOutDuration: { type: 'number', value: 300, min: 0 },
     capRounded: false,
@@ -330,6 +542,7 @@ export class AnimatedPathLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
       this.props.timeWindow,
       this.props.timeHeightScale,
       this.props.timeHeightOrigin,
+      this.props.elevationScale,
       Array.isArray(color) ? color.join(',') : '',
       typeof width === 'number' ? width : 0,
     ].join('|');
@@ -410,6 +623,8 @@ export class AnimatedPathLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
     const widthValue = this.widthValue();
     const colorProp = typeof colorValue === 'string' ? colorValue : '';
     const widthProp = typeof widthValue === 'string' ? widthValue : '';
+    const elevProp =
+      typeof this.props.elevationProperty === 'string' ? this.props.elevationProperty : '';
     // Palette / mapping keyed by CONTENT, not length — a same-size swap must
     // invalidate cached tiles. The digests are memoized per object reference
     // (style-digest.ts), so this is a WeakMap lookup per tile, not a
@@ -419,9 +634,22 @@ export class AnimatedPathLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
     const mapSig = this.props.colorMapping
       ? `m${colorMappingDigest(this.props.colorMapping)}`
       : '';
+    // Elevation signature — column + scale + (categorical) mapping content, so a
+    // height-ramp edit re-prepares the tile (rebuilds the 3D positions buffer).
+    const elevSig = elevProp
+      ? `e${elevProp}:${this.props.elevationScale}:${
+          this.props.elevationMapping ? structuralDigest(this.props.elevationMapping) : ''
+        }`
+      : '';
+    // Height-graded alpha signature — a range/near/far tweak re-expands getColor.
+    const opacityRange = this.props.elevationOpacityRange;
+    const elevOpacSig =
+      elevProp && opacityRange
+        ? `o${opacityRange[0]},${opacityRange[1]}:${this.props.elevationOpacityNear}:${this.props.elevationOpacityFar}`
+        : '';
     const styleKey = `${colorProp}|${widthProp}|${
       colorProp ? colorListDigest(this.props.colorPalette ?? DEFAULT_PALETTE) : 0
-    }|${mapSig}|${updateTriggersDigest(this.props.updateTriggers)}`;
+    }|${mapSig}|${elevSig}|${elevOpacSig}|${updateTriggersDigest(this.props.updateTriggers)}`;
 
     const tileKey = makeTileKey(tile, tileLayer);
     const cached = this.preparedTileCache.get(tileKey);
@@ -431,47 +659,117 @@ export class AnimatedPathLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
     }
 
     const t0 = performance.now();
-    const dims = binary.positionDimensions ?? 2;
+    const srcDims = binary.positionDimensions ?? 2;
+    const totalVerts = binary.startIndices[binary.featureCount];
+
+    // Per-feature elevation (z, metres) → a synthesized XYZ positions buffer.
+    // Lifts flat contour rings into a 3D relief (stacked-by-density iso-lines).
+    // Unset / missing column ⇒ flat: `dims` stays the source value and positions
+    // ride to the GPU zero-copy (byte-identical to before).
+    const zPerFeature = elevProp
+      ? resolveFeatureElevations(
+          binary,
+          elevProp,
+          this.props.elevationMapping,
+          this.props.elevationScale ?? 1,
+        )
+      : null;
+    const dims = zPerFeature ? 3 : srcDims;
+    const positions = zPerFeature
+      ? buildElevatedPositions(
+          binary.positions,
+          srcDims,
+          binary.startIndices,
+          binary.featureCount,
+          totalVerts,
+          zPerFeature,
+        )
+      : binary.positions;
 
     const attributes: PreparedTile['data']['attributes'] = {
       // Accessor-name key for PathLayer's own attribute.
-      getPath: { value: binary.positions, size: dims },
+      getPath: { value: positions, size: dims },
       // Extension-registered attribute names: must match
-      // TimeFilterExtension.initializeState exactly.
-      instanceStartTime: { value: binary.startTimes, size: 1 },
-      instanceEndTime: { value: binary.endTimes, size: 1 },
+      // TimeFilterExtension.initializeState exactly. EXPANDED PER-VERTEX (not
+      // per-feature) — PathLayer instances are SEGMENTS, so a per-feature buffer
+      // under-sizes the instanced draw on multi-vertex paths ("vertex buffer is
+      // not big enough" on ANGLE/Metal). Short lines happened to work because
+      // segments≈features; dense contours / long lane lines do not.
+      instanceStartTime: {
+        value: expandFeatureScalarToVertex(
+          binary.startTimes,
+          binary.startIndices,
+          binary.featureCount,
+          totalVerts,
+        ),
+        size: 1,
+      },
+      instanceEndTime: {
+        value: expandFeatureScalarToVertex(
+          binary.endTimes,
+          binary.startIndices,
+          binary.featureCount,
+          totalVerts,
+        ),
+        size: 1,
+      },
     };
 
-    // Categorical color: GPU path via CategoryColorExtension. The previous
-    // expandPaletteColors() pass allocated a 4n-byte Uint8Array per tile and
-    // walked the indices on the CPU; the GPU path uploads a 4n-byte Float32
-    // attribute (one-time) and samples a shared 16 KB palette texture.
-    let gpuPalette: Color[] | null = null;
+    // Categorical color: resolve each feature's color on the CPU and expand it
+    // PER-VERTEX into `getColor`. The GPU CategoryColorExtension path uploaded a
+    // per-FEATURE `instanceCategoryIndex`, which under-sizes the instanced draw
+    // for multi-vertex paths exactly like the time attributes above — `getColor`
+    // is a native PathLayer accessor its tessellator maps onto segment instances.
+    // Mirrors AnimatedTripsLayer (GPU palette stays null; the extension sits idle
+    // but installed so the shader-pipeline cache key is constant).
+    const gpuPalette: Color[] | null = null;
     if (colorProp) {
       const cat = binary.categoricalProps[colorProp];
       if (cat) {
-        attributes.instanceCategoryIndex = {
-          value: indicesToFloat32(cat.indices, binary.featureCount),
-          size: 1,
-        };
-        // Explicit colorMapping wins over colorPalette: project the
-        // string→color map onto THIS tile's category dictionary so the
-        // GPU palette aligns with `instanceCategoryIndex`. The same category
-        // string then renders the same color in every tile (stable), unlike
-        // colorPalette's first-seen per-tile index assignment.
-        gpuPalette = this.props.colorMapping
+        // Explicit colorMapping wins over colorPalette: project the string→color
+        // map onto THIS tile's category dictionary so the same category renders
+        // the same color in every tile (stable), unlike colorPalette's
+        // first-seen per-tile index assignment.
+        const palette = this.props.colorMapping
           ? paletteFromMapping(
               cat.categories,
               this.props.colorMapping,
               this.props.colorMappingDefault ?? [120, 120, 120, 255],
             )
           : this.props.colorPalette ?? DEFAULT_PALETTE;
+        // Height-graded alpha (top of a stacked relief fades translucent): keyed
+        // on the raw numeric elevation column. Null unless opted in + numeric.
+        const alphaScale =
+          elevProp && opacityRange
+            ? elevationAlphaScales(
+                binary,
+                elevProp,
+                opacityRange,
+                this.props.elevationOpacityNear ?? 1,
+                this.props.elevationOpacityFar ?? 1,
+              )
+            : null;
+        attributes.getColor = {
+          value: expandCategoryColors(
+            cat.indices,
+            palette,
+            binary.startIndices,
+            binary.featureCount,
+            totalVerts,
+            this.props.colorMappingDefault ?? [120, 120, 120, 255],
+            alphaScale,
+          ),
+          size: 4,
+          normalized: true,
+        };
       }
     }
 
     if (widthProp) {
       const values = binary.numericProps[widthProp];
       if (values) {
+        // getWidth is a native PathLayer accessor — its tessellator expands the
+        // per-feature value across the path's segments, so per-feature is fine.
         attributes.getWidth = { value: values, size: 1 };
       }
     }

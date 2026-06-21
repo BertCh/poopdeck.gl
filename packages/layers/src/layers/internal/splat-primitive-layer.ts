@@ -95,11 +95,15 @@ const HEX_CORNERS = [
 /** std140 block: scalars only (each f32 is 4-byte aligned; std140-safe). */
 const uniformBlock = /* glsl */ `\
 layout(std140) uniform splatUniforms {
-  float currentTime;   // play time RELATIVE to the layer timeOffset
-  float temporalSigma; // ms; soft temporal Gaussian width
-  float sizeScale;     // multiplier on the baked surfel extents
-  float falloff;       // radial Gaussian tightness (alpha *= exp(-falloff·r²))
-  float alphaCutoff;   // discard fragments below this final alpha
+  float currentTime;     // play time RELATIVE to the layer timeOffset
+  float temporalSigma;   // ms; soft temporal Gaussian width (static / non-cumulative)
+  float sizeScale;       // multiplier on the baked surfel extents
+  float falloff;         // radial Gaussian tightness (alpha *= exp(-falloff·r²))
+  float alphaCutoff;     // discard fragments below this final alpha
+  float packedQuaternion; // >0.5 ⇒ instanceQuaternions is smallest-three packed
+  float cumulative;      // >0.5 ⇒ Worldbuild accreted reveal for STATIC surfels
+  float revealFade;      // ms; reveal alpha ramp 0→1 for cumulative statics (0 ⇒ instant)
+  float temporalSigmaDynamic; // ms; soft temporal Gaussian width for DYNAMIC surfels
 } splat;
 `;
 
@@ -109,6 +113,10 @@ type SplatUniforms = {
   sizeScale: number;
   falloff: number;
   alphaCutoff: number;
+  packedQuaternion: number;
+  cumulative: number;
+  revealFade: number;
+  temporalSigmaDynamic: number;
 };
 
 const splatUniforms = {
@@ -121,6 +129,10 @@ const splatUniforms = {
     sizeScale: 'f32',
     falloff: 'f32',
     alphaCutoff: 'f32',
+    packedQuaternion: 'f32',
+    cumulative: 'f32',
+    revealFade: 'f32',
+    temporalSigmaDynamic: 'f32',
   },
 } as const;
 
@@ -135,10 +147,25 @@ in vec4 instanceQuaternions;       // surface frame [tangent|bitangent|normal]
 in vec2 instanceScales;            // in-plane half-extents (m): [s_major, s_minor]
 in vec4 instanceColors;            // rgba; a = baked surfel confidence
 in float instanceStartTimes;       // sample time μ_t (relative to timeOffset)
+in float instanceIsDynamic;        // 1 ⇒ moving actor (motion smear); 0 ⇒ static world
 in vec3 instancePickingColors;
 
 out vec2 vUv;
 out vec4 vColor;
+
+// Smallest-three unpack: a unit quaternion has 3 DOF, so the build side
+// (av_common.pack_surfel_quaternions) may store only the three NON-largest
+// components in p.xyz + the largest's index 0..3 in p.w, having sign-flipped so
+// the largest is positive. Reconstruct it as +sqrt(1−a²−b²−c²) and slot the
+// three back around it. MUST mirror the Python encoder's component order.
+vec4 unpackQuat(vec4 p) {
+  float d = sqrt(max(0.0, 1.0 - p.x * p.x - p.y * p.y - p.z * p.z));
+  int m = int(p.w + 0.5);
+  if (m == 0) return vec4(d, p.x, p.y, p.z);
+  if (m == 1) return vec4(p.x, d, p.y, p.z);
+  if (m == 2) return vec4(p.x, p.y, d, p.z);
+  return vec4(p.x, p.y, p.z, d);
+}
 
 // Quaternion → rotation matrix. Columns are the rotated basis vectors, so
 // mat[0]=tangent, mat[1]=bitangent, mat[2]=normal (the build side packs them
@@ -161,20 +188,44 @@ void main(void) {
   geometry.pickingColor = instancePickingColors;
   picking_setPickingColor(geometry.pickingColor);
 
-  // Soft temporal Gaussian, evaluated FIRST: brightest at the sample time,
-  // fading within ±~3σ. At any instant σ (≈ the sweep interval) is far smaller
-  // than the scene span, so the MAJORITY of surfels are off-time. Collapsing
-  // them here — before the quaternion→matrix and the double-precision centre
-  // projection below — skips that per-vertex work for most instances every
-  // frame. Output is identical: a collapsed instance rasterises no fragments
-  // whether it's culled before or after the projection.
-  float dt = (splat.currentTime - instanceStartTimes) / max(splat.temporalSigma, 1.0);
-  float timeWeight = exp(-0.5 * dt * dt);
-  if (timeWeight < 0.0111) {           // beyond ~3σ — fully faded
-    gl_Position = vec4(0.0);           // w=0 ⇒ clipped, no fragments
-    vColor = vec4(0.0);
-    vUv = vec2(0.0);
-    return;
+  // ── TEMPORAL WEIGHT (evaluated FIRST so off-time instances are culled before
+  // the quaternion→matrix and double-precision centre projection below) ───────
+  // Two regimes:
+  //   • WORLDBUILD ACCRETED REVEAL — when cumulative is set AND this is a
+  //     STATIC surfel (isDynamic < 0.5): the surfel APPEARS at its first-seen
+  //     time μ_t and PERSISTS forever after (no symmetric collapse), so the
+  //     static world "builds itself" as the playhead advances. revealFade,
+  //     if >0, ramps its alpha 0→1 over that many ms after it appears; before
+  //     μ_t it is hidden (age < 0).
+  //   • SYMMETRIC GAUSSIAN — every other case (non-cumulative, OR a DYNAMIC
+  //     surfel even under cumulative): the existing brightest-at-μ_t,
+  //     fade-within-±~3σ term, using σ = temporalSigma for statics and
+  //     temporalSigmaDynamic for dynamics. Moving actors therefore read as
+  //     ghosted smears threading through the solid static world.
+  // Backward-compat: cumulative=0 ⇒ the symmetric branch with σ=temporalSigma,
+  // i.e. behaviour identical to the pre-Worldbuild shader.
+  float age = splat.currentTime - instanceStartTimes;
+  float timeWeight;
+  if (splat.cumulative > 0.5 && instanceIsDynamic < 0.5) {
+    if (age < 0.0) {                   // not yet first-seen — hidden
+      gl_Position = vec4(0.0);
+      vColor = vec4(0.0);
+      vUv = vec2(0.0);
+      return;
+    }
+    timeWeight = splat.revealFade > 0.0
+      ? clamp(age / splat.revealFade, 0.0, 1.0)
+      : 1.0;
+  } else {
+    float sigma = mix(splat.temporalSigma, splat.temporalSigmaDynamic, instanceIsDynamic);
+    float dt = age / max(sigma, 1.0);
+    timeWeight = exp(-0.5 * dt * dt);
+    if (timeWeight < 0.0111) {         // beyond ~3σ — fully faded
+      gl_Position = vec4(0.0);         // w=0 ⇒ clipped, no fragments
+      vColor = vec4(0.0);
+      vUv = vec2(0.0);
+      return;
+    }
   }
 
   // Project the surfel centre, keeping the common-space position so the
@@ -183,7 +234,10 @@ void main(void) {
   project_position_to_clipspace(
     instancePositions, instancePositions64Low, vec3(0.0), centerCommon);
 
-  mat3 frame = quatToMat3(instanceQuaternions);
+  vec4 quat = splat.packedQuaternion > 0.5
+    ? unpackQuat(instanceQuaternions)
+    : instanceQuaternions;
+  mat3 frame = quatToMat3(quat);
   vec3 tangent = frame[0];
   vec3 bitangent = frame[1];
 
@@ -235,21 +289,58 @@ type _SplatPrimitiveLayerProps<DataT> = {
   data: LayerDataSource<DataT>;
   /** Surfel centre `[lng, lat, altitude(m)]`. */
   getPosition?: Accessor<DataT, [number, number, number]>;
-  /** Surface-frame quaternion `[qx,qy,qz,qw]` ([tangent|bitangent|normal] cols). */
+  /**
+   * Surface-frame quaternion. Either the full `[qx,qy,qz,qw]`
+   * ([tangent|bitangent|normal] columns), or — when {@link packedQuaternion} is
+   * set — the smallest-three packing `[q_a,q_b,q_c,q_imax]` (the shader rebuilds
+   * the 4th component from the unit constraint).
+   */
   getQuaternion?: Accessor<DataT, [number, number, number, number]>;
+  /**
+   * When true, `getQuaternion` yields the smallest-three packing
+   * `[a,b,c,imax]` and the shader reconstructs the full quaternion. @default false
+   */
+  packedQuaternion?: boolean;
   /** In-plane half-extents `[s_major, s_minor]` in metres. */
   getScale?: Accessor<DataT, [number, number]>;
   /** Per-surfel RGBA (`a` = baked confidence). */
   getColor?: Accessor<DataT, Color>;
   /** Sample time `μ_t`, RELATIVE to {@link timeOffset}. */
   getStartTime?: Accessor<DataT, number>;
+  /**
+   * Per-surfel Worldbuild static/dynamic flag: `1` ⇒ a moving actor (gets the
+   * symmetric motion-smear Gaussian even under {@link cumulative}); `0` ⇒ static
+   * world. Absent ⇒ all static. @default 0
+   */
+  getIsDynamic?: Accessor<DataT, number>;
 
   /** Dynamic play-time getter (called every `draw`, so the layer stays cached). */
   getTime?: (() => number) | null;
   /** Layer time offset; the same value used to relativise `getStartTime`. */
   timeOffset?: number;
-  /** Soft temporal Gaussian width (ms). @default 180 */
+  /** Soft temporal Gaussian width for STATIC surfels (ms). @default 180 */
   temporalSigma?: number;
+  /**
+   * Worldbuild accreted reconstruction: when true, STATIC surfels
+   * (`instanceIsDynamic < 0.5`) APPEAR at their `getStartTime` (the voxel's
+   * first-seen time) and PERSIST forever after — the world builds itself as the
+   * playhead advances — while DYNAMIC surfels keep the symmetric windowed
+   * Gaussian (using {@link temporalSigmaDynamic}). When false the layer is the
+   * plain symmetric-Gaussian splat (a single {@link temporalSigma}). @default false
+   */
+  cumulative?: boolean;
+  /**
+   * Reveal alpha-ramp duration (ms) for a STATIC surfel once it appears under
+   * {@link cumulative} (`timeWeight = clamp(age / revealFade, 0, 1)`). `0` ⇒ it
+   * pops to full alpha instantly. Ignored when `cumulative` is false. @default 0
+   */
+  revealFade?: number;
+  /**
+   * Soft temporal Gaussian width for DYNAMIC surfels (ms). Moving actors read as
+   * ghosted motion smears at this width even under {@link cumulative}. `0`/unset
+   * ⇒ falls back to {@link temporalSigma}. @default 0
+   */
+  temporalSigmaDynamic?: number;
   /** Multiplier on the baked surfel extents. @default 1 */
   sizeScale?: number;
   /** Radial Gaussian tightness (`alpha *= exp(-falloff·r²)`). @default 3 */
@@ -261,12 +352,17 @@ type _SplatPrimitiveLayerProps<DataT> = {
 const defaultProps: DefaultProps<SplatPrimitiveLayerProps> = {
   getPosition: { type: 'accessor', value: (d: any) => d.position },
   getQuaternion: { type: 'accessor', value: [0, 0, 0, 1] },
+  packedQuaternion: { type: 'boolean', value: false },
   getScale: { type: 'accessor', value: [1, 1] },
   getColor: { type: 'accessor', value: [255, 255, 255, 255] },
   getStartTime: { type: 'accessor', value: 0 },
+  getIsDynamic: { type: 'accessor', value: 0 },
   getTime: { type: 'function', value: null, optional: true },
   timeOffset: { type: 'number', value: 0 },
   temporalSigma: { type: 'number', value: 180, min: 1 },
+  cumulative: { type: 'boolean', value: false },
+  revealFade: { type: 'number', value: 0, min: 0 },
+  temporalSigmaDynamic: { type: 'number', value: 0, min: 0 },
   sizeScale: { type: 'number', value: 1, min: 0 },
   falloff: { type: 'number', value: 3, min: 0 },
   alphaCutoff: { type: 'number', value: 0.04, min: 0 },
@@ -332,6 +428,15 @@ export class SplatPrimitiveLayer<DataT = any, ExtraProps extends {} = {}> extend
         accessor: 'getStartTime',
         defaultValue: 0,
       },
+      // Worldbuild static/dynamic flag (0 static, 1 dynamic). Sourced from the
+      // tile's `is_dynamic` numeric column; existing surfel tiles have no such
+      // column, so the default 0 makes every surfel static (= legacy behaviour).
+      instanceIsDynamic: {
+        size: 1,
+        type: 'float32',
+        accessor: 'getIsDynamic',
+        defaultValue: 0,
+      },
     });
   }
 
@@ -356,12 +461,22 @@ export class SplatPrimitiveLayer<DataT = any, ExtraProps extends {} = {}> extend
     // Relativise like TimeFilterExtension: both `currentTime` and the per-surfel
     // `instanceStartTimes` are offsets from `timeOffset`, so the subtraction is
     // f32-exact even though absolute epoch-ms are not.
+    // Dynamic surfels smear at temporalSigmaDynamic; 0/unset ⇒ reuse temporalSigma
+    // so a bundle that only sets temporalSigma behaves uniformly.
+    const sigmaDynamic =
+      this.props.temporalSigmaDynamic > 0
+        ? this.props.temporalSigmaDynamic
+        : this.props.temporalSigma;
     const splatProps: SplatUniforms = {
       currentTime: resolved - timeOffset,
       temporalSigma: this.props.temporalSigma,
       sizeScale: this.props.sizeScale,
       falloff: this.props.falloff,
       alphaCutoff: this.props.alphaCutoff,
+      packedQuaternion: this.props.packedQuaternion ? 1 : 0,
+      cumulative: this.props.cumulative ? 1 : 0,
+      revealFade: this.props.revealFade,
+      temporalSigmaDynamic: sigmaDynamic,
     };
     model.shaderInputs.setProps({ splat: splatProps });
     model.draw(this.context.renderPass);

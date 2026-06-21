@@ -33,8 +33,11 @@ vi.mock('@deck.gl/core', async () =>
 );
 
 /** A point tile of `n` surfels with all the `--surfel` columns populated. */
-function surfelTile(n: number, opts: { withRgb?: boolean; withSurfel?: boolean } = {}) {
-  const { withRgb = true, withSurfel = true } = opts;
+function surfelTile(
+  n: number,
+  opts: { withRgb?: boolean; withSurfel?: boolean; dynamic?: number[] } = {},
+) {
+  const { withRgb = true, withSurfel = true, dynamic } = opts;
   const positions: number[][] = [];
   const startTimes: number[] = [];
   const endTimes: number[] = [];
@@ -61,6 +64,9 @@ function surfelTile(n: number, opts: { withRgb?: boolean; withSurfel?: boolean }
     np['g'] = new Float32Array(n).fill(128);
     np['b'] = new Float32Array(n).fill(64);
   }
+  // Worldbuild per-point static/dynamic column (0/1). Absent unless supplied —
+  // existing surfel tiles have no such column.
+  if (dynamic) np['is_dynamic'] = new Float32Array(dynamic);
   return tile;
 }
 
@@ -168,5 +174,149 @@ describe('SplatLayer surfel sublayer architecture', () => {
     const c = sub.props.data.attributes.instanceColors.value;
     // RGB = fallback; alpha = baked confidence (0.8 → 204).
     expect([...c.slice(0, 4)]).toEqual([200, 205, 215, 204]);
+  });
+
+  it('forwards the Worldbuild props (cumulative/revealFade/temporalSigmaDynamic) to the primitive', async () => {
+    vi.resetModules();
+    const { SplatLayer } = (await import('../src/layers/core/splat-layer')) as any;
+    const tile = surfelTile(3);
+    const layer = makeSplatLayer(SplatLayer, [tile], {
+      cumulative: true,
+      revealFade: 1500,
+      temporalSigmaDynamic: 400,
+    });
+    const [sub] = layer.renderLayers();
+    expect(sub.props.cumulative).toBe(true);
+    expect(sub.props.revealFade).toBe(1500);
+    expect(sub.props.temporalSigmaDynamic).toBe(400);
+    // The static-world width still rides through unchanged.
+    expect(sub.props.temporalSigma).toBe(180);
+  });
+
+  it('defaults the Worldbuild props to the non-cumulative (legacy) behaviour', async () => {
+    vi.resetModules();
+    const { SplatLayer } = (await import('../src/layers/core/splat-layer')) as any;
+    const tile = surfelTile(2);
+    const layer = makeSplatLayer(SplatLayer, [tile]);
+    const [sub] = layer.renderLayers();
+    // makeSplatLayer doesn't set them → they pass through as the test props
+    // (undefined). The point is the sublayer is built and renders fine.
+    expect(sub.props.cumulative).toBeUndefined();
+    expect(sub.props.revealFade).toBeUndefined();
+    expect(sub.props.temporalSigmaDynamic).toBeUndefined();
+  });
+
+  it('builds instanceIsDynamic from the is_dynamic column (0/1, one per feature)', async () => {
+    vi.resetModules();
+    const { SplatLayer } = (await import('../src/layers/core/splat-layer')) as any;
+    // Mixed scene: features 1 and 3 are moving actors.
+    const tile = surfelTile(4, { dynamic: [0, 1, 0, 1] });
+    const layer = makeSplatLayer(SplatLayer, [tile], { cumulative: true });
+    const [sub] = layer.renderLayers();
+
+    const dyn = sub.props.data.attributes.instanceIsDynamic;
+    expect(dyn).toBeDefined();
+    expect(dyn.size).toBe(1);
+    expect(dyn.value).toBeInstanceOf(Float32Array);
+    expect(dyn.value.length).toBe(4);
+    expect([...dyn.value]).toEqual([0, 1, 0, 1]);
+  });
+
+  it('thresholds non-0/1 is_dynamic values at 0.5', async () => {
+    vi.resetModules();
+    const { SplatLayer } = (await import('../src/layers/core/splat-layer')) as any;
+    // Defensive: any ≥0.5 → dynamic, anything below → static.
+    const tile = surfelTile(4, { dynamic: [0.2, 0.5, 0.99, 0] });
+    const [sub] = makeSplatLayer(SplatLayer, [tile], { cumulative: true }).renderLayers();
+    expect([...sub.props.data.attributes.instanceIsDynamic.value]).toEqual([0, 1, 1, 0]);
+  });
+
+  it('degrades gracefully to all-static when the is_dynamic column is absent', async () => {
+    vi.resetModules();
+    const { SplatLayer } = (await import('../src/layers/core/splat-layer')) as any;
+    // Existing surfel tiles have no is_dynamic column — even under cumulative the
+    // attribute is OMITTED (primitive's getIsDynamic default 0 ⇒ all static), and
+    // nothing crashes.
+    const tile = surfelTile(3);
+    const layer = makeSplatLayer(SplatLayer, [tile], { cumulative: true });
+    const sublayers = layer.renderLayers();
+    expect(sublayers).toHaveLength(1);
+    expect(sublayers[0].props.data.attributes.instanceIsDynamic).toBeUndefined();
+    // Still a valid, length-correct splat sublayer.
+    expect(sublayers[0].props.data.length).toBe(3);
+    expect(sublayers[0].props.data.attributes.instancePositions.size).toBe(3);
+  });
+
+  it('auto-detects smallest-three packed quats (q_imax) and flags the sublayer', async () => {
+    vi.resetModules();
+    const { SplatLayer } = (await import('../src/layers/core/splat-layer')) as any;
+    // Identity quaternion packed: largest = w (index 3), other three = 0.
+    const tile = surfelTile(3);
+    const np = tile.layers[0].features.numericProps;
+    for (const c of ['qx', 'qy', 'qz', 'qw']) delete np[c];
+    np['q_a'] = new Float32Array(3).fill(0);
+    np['q_b'] = new Float32Array(3).fill(0);
+    np['q_c'] = new Float32Array(3).fill(0);
+    np['q_imax'] = new Float32Array(3).fill(3);
+    const [sub] = makeSplatLayer(SplatLayer, [tile]).renderLayers();
+
+    // Shader is told to unpack; the size-4 attribute carries [a,b,c,imax].
+    expect(sub.props.packedQuaternion).toBe(true);
+    expect([...sub.props.data.attributes.instanceQuaternions.value.slice(0, 4)]).toEqual([0, 0, 0, 3]);
+  });
+
+  it('legacy (qx,qy,qz,qw) bundles stay unpacked', async () => {
+    vi.resetModules();
+    const { SplatLayer } = (await import('../src/layers/core/splat-layer')) as any;
+    const [sub] = makeSplatLayer(SplatLayer, [surfelTile(2)]).renderLayers();
+    expect(sub.props.packedQuaternion).toBe(false);
+  });
+});
+
+/**
+ * Contract guard: the Python encoder (av_common.pack_surfel_quaternions) and the
+ * GLSL unpack (splat-primitive-layer.ts unpackQuat) must agree exactly, else
+ * surfel orientations silently corrupt. We mirror both in JS and assert the
+ * round-trip reconstructs the rotation for arbitrary unit quaternions.
+ */
+describe('smallest-three quaternion pack/unpack contract', () => {
+  // mirror of av_common.pack_surfel_quaternions
+  function pack(q: number[]): [number, number, number, number] {
+    const n = Math.hypot(q[0], q[1], q[2], q[3]);
+    const c = q.map((v) => v / n);
+    let m = 0;
+    for (let i = 1; i < 4; i++) if (Math.abs(c[i]) > Math.abs(c[m])) m = i;
+    const s = Math.sign(c[m]) || 1;
+    const cc = c.map((v) => v * s);
+    const abc = cc.filter((_, i) => i !== m);
+    return [abc[0], abc[1], abc[2], m];
+  }
+  // mirror of the GLSL unpackQuat
+  function unpack(p: number[]): number[] {
+    const d = Math.sqrt(Math.max(0, 1 - p[0] * p[0] - p[1] * p[1] - p[2] * p[2]));
+    const m = Math.round(p[3]);
+    if (m === 0) return [d, p[0], p[1], p[2]];
+    if (m === 1) return [p[0], d, p[1], p[2]];
+    if (m === 2) return [p[0], p[1], d, p[2]];
+    return [p[0], p[1], p[2], d];
+  }
+
+  it('reconstructs the rotation for arbitrary unit quaternions', () => {
+    // deterministic LCG → reproducible quats (no Math.random)
+    let seed = 12345;
+    const rnd = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff) * 2 - 1;
+    let maxErr = 0;
+    for (let i = 0; i < 1000; i++) {
+      const raw = [rnd(), rnd(), rnd(), rnd()];
+      const n = Math.hypot(raw[0], raw[1], raw[2], raw[3]);
+      if (n < 1e-6) continue;
+      const q0 = raw.map((v) => v / n);
+      const q1 = unpack(pack(q0));
+      // q and −q are the same rotation, so compare |dot| → 1.
+      const dot = Math.abs(q0[0] * q1[0] + q0[1] * q1[1] + q0[2] * q1[2] + q0[3] * q1[3]);
+      maxErr = Math.max(maxErr, 1 - dot);
+    }
+    // Exact (pre-quantization) round-trip — the only error is float epsilon.
+    expect(maxErr).toBeLessThan(1e-9);
   });
 });

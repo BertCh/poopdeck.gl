@@ -472,6 +472,98 @@ export interface Dataset {
   /** Multiplier on every surfel's baked extents (`SplatLayer.sizeScale`). */
   lidarSurfelSizeScale?: number;
   /**
+   * Render the LIDAR as DENSITY ISO-LINES instead of points/surfels: the bundle's
+   * `lidar/` archive is windowed contour LineStrings (built with
+   * `waymo_extract.py --contours`) drawn by `AnimatedPathLayer`, colored by a
+   * categorical `density_band` ramp (`lidarColorMapping`). A height-independent
+   * topographic map of where the cloud clusters, morphing per playhead window.
+   * Supersedes the `AnimatedPointLayer` / surfel LIDAR paths when set.
+   */
+  lidarIso?: boolean;
+  /**
+   * TRUE-3D variant of {@link lidarIso}: the `-iso3d` bundle (built with
+   * `waymo_extract.py --contours --contour-z-step …`) slices the returns into
+   * height layers and contours each layer's XY density independently, tagging
+   * every contour with a numeric `z_layer` (its slab's real altitude, metres).
+   * `AnimatedPathLayer` lifts each ring to `z_layer × {@link
+   * lidarIsoElevationScale}`, so the vertical axis carries REAL structure — a
+   * wall contours up its whole height, a parked car only near the ground.
+   * Implies `lidarIso`; still colored by the categorical `density_band` ramp.
+   */
+  lidarIso3d?: boolean;
+  /**
+   * Vertical exaggeration applied to the `z_layer` altitude for the {@link
+   * lidarIso3d} relief — `1` is true 1:1 scale (matches the point cloud); a
+   * small multiplier (~2–3) makes the few-metre structure read against the
+   * ~100 m-wide scene. Default 1.
+   */
+  lidarIsoElevationScale?: number;
+  /**
+   * Height-graded opacity for the {@link lidarIso3d} stack: fades each contour
+   * ring's alpha by its real altitude so the upper slabs go translucent and the
+   * stack reads coherently from a TOP-DOWN view (you see down through the roof to
+   * the ground rather than the top slab occluding everything below). `range` is
+   * the `[low, high]` altitude in METRES (raw `z_layer`, pre-exaggeration) the
+   * fade spans; `near` is the alpha multiplier at the ground (default 1) and
+   * `far` at the top (e.g. `0.35` → top fades to 35%). Omit for an un-graded
+   * stack. Forwarded to `AnimatedPathLayer.elevationOpacity{Range,Near,Far}`.
+   */
+  lidarIsoTopFade?: { range: [number, number]; near?: number; far?: number };
+  /**
+   * Worldbuild ("scene reconstruction") variant of the surfel splat: instead of
+   * each surfel fading away from its sweep instant, STATIC surfels (`is_dynamic`
+   * = 0) PERSIST once revealed — the cloud accumulates into a built-up 3D world
+   * as the car drives, while DYNAMIC surfels (moving objects) smear with a short
+   * temporal Gaussian so traffic still reads as motion. Renders the `<id>-world`
+   * bundle (SplatLayer-compatible surfel cloud + `is_dynamic` / `world_class`
+   * columns) via {@link SplatLayer} with `cumulative: true`. Implies camera color.
+   */
+  lidarWorldbuild?: boolean;
+  /**
+   * Reveal-fade (ms) for {@link lidarWorldbuild} — how long a freshly-revealed
+   * static surfel ramps from invisible to full as it first appears. 0 = snap on
+   * (the surface "paints in" instantly at each sweep). Forwarded to
+   * `SplatLayer.revealFade`.
+   */
+  lidarWorldbuildRevealFade?: number;
+  /**
+   * Temporal-Gaussian width (ms) for the DYNAMIC surfels in
+   * {@link lidarWorldbuild} — moving-object returns smear over ±~3σ of this so
+   * traffic reads as motion against the persistent static world. Forwarded to
+   * `SplatLayer.temporalSigmaDynamic`.
+   */
+  lidarWorldbuildDynamicSigma?: number;
+  /**
+   * Raw-sweep ("sweep / scan") variant: the `<id>-scan` bundle is raw LIDAR with
+   * a per-point TRUE scan-time `start_time` and a phase-ramp `r`/`g`/`b` color,
+   * rendered as a WAKE-mode {@link AnimatedPointLayer} so the sweep's rotating
+   * scan-line sweeps across the scene like a live radar. AV2 only (only AV2
+   * builds a `-scan` bundle). Implies camera/phase color.
+   */
+  lidarScan?: boolean;
+  /**
+   * Tracked-track LineStrings archive (`tracks/manifest.json`) present in EVERY
+   * base bundle: one LineString per track (object classes + the synthetic "ego"
+   * spine), carrying `vertex_timestamps`, a categorical `category`, and per-vertex
+   * speed. Drives the {@link avCube} space-time-cube render (`AnimatedTripsLayer`
+   * in trail mode, lifted by time = height). Routed through `resolveDataUrl`.
+   */
+  avTracksUrl?: string;
+  /**
+   * Render the scene as a Hägerstrand space-time cube of the TRACK trajectories:
+   * the {@link avTracksUrl} LineStrings are drawn as 3D ribbons climbing through
+   * the cube (time = altitude, slope = speed), with a translucent now-plane riding
+   * the playhead. A render-only flag set on a clone of the base dataset (no bundle
+   * swap — it reads the base + its `tracks/` archive). The cockpit's "Spacetime"
+   * render mode.
+   */
+  avCube?: boolean;
+  /**
+   * Cube height in METRES for the full time range at squash factor 1 (the
+   * {@link avCube} analog of `timeHeight.rangeHeightMeters`). Defaults to ~200.
+   */
+  avCubeRangeHeightMeters?: number;
+  /**
    * HD-map vector streams: drivable-area / lane / crosswalk POLYGONS
    * (`avMapPolyUrl`) and lane-divider / boundary LINES (`avMapLineUrl`), each an
    * STT archive whose features carry a categorical `map_layer` string. Rendered

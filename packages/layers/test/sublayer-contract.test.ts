@@ -105,6 +105,18 @@ vi.mock('@deck.gl/extensions', () => {
   return { DataFilterExtension: FakeDataFilterExtension };
 });
 
+// SplatLayer's custom-Model primitive imports luma (no GPU here) — swap it for a
+// prop-stashing stand-in so SplatLayer's prepare/build path runs without GPU.
+vi.mock('../src/layers/internal/splat-primitive-layer', () => {
+  class FakeSplatPrimitiveLayer implements CapturedLayer {
+    props: Record<string, any>;
+    constructor(props: Record<string, any>) {
+      this.props = props;
+    }
+  }
+  return { SplatPrimitiveLayer: FakeSplatPrimitiveLayer };
+});
+
 /** A sublayer class for `_subLayerProps.<id>.type` substitution tests. */
 class SwappedLayer implements CapturedLayer {
   props: Record<string, any>;
@@ -349,6 +361,62 @@ async function makeH3Layer(props: Record<string, any> = {}) {
   layer.sublayerCache = new Map();
   layer.lastTilesRef = null;
   layer._lastTileIdSet = new Set();
+  return layer;
+}
+
+/** A surfel point tile; `dynamic` (if given) populates the `is_dynamic` column. */
+function baseSurfelTile(dynamic?: number[]) {
+  const n = 3;
+  const tile = makePointTile({
+    positions: [
+      [0, 0],
+      [1, 1],
+      [2, 2],
+    ],
+    startTimes: [0, 100, 200],
+    endTimes: [0, 100, 200],
+    timeOffset: 0,
+  });
+  const np = tile.layers[0].features.numericProps;
+  np['qx'] = new Float32Array(n).fill(0) as any;
+  np['qy'] = new Float32Array(n).fill(0) as any;
+  np['qz'] = new Float32Array(n).fill(0) as any;
+  np['qw'] = new Float32Array(n).fill(1) as any;
+  np['s_major'] = new Float32Array(n).fill(0.3) as any;
+  np['s_minor'] = new Float32Array(n).fill(0.15) as any;
+  if (dynamic) np['is_dynamic'] = new Float32Array(dynamic) as any;
+  return tile;
+}
+
+async function makeSplatLayer(props: Record<string, any> = {}) {
+  const { SplatLayer } = await import('../src/layers/core/splat-layer');
+  const layer: any = Object.create((SplatLayer as any).prototype);
+  layer.props = {
+    id: 'splat',
+    quaternionColumns: ['qx', 'qy', 'qz', 'qw'],
+    scaleColumns: ['s_major', 's_minor'],
+    rgbColumns: null,
+    opacityColumn: null,
+    elevationProperty: 'z',
+    elevationScale: 1,
+    fallbackColor: [200, 205, 215, 255],
+    temporalSigma: 180,
+    cumulative: false,
+    revealFade: 0,
+    temporalSigmaDynamic: 0,
+    sizeScale: 1,
+    gaussianFalloff: 3,
+    alphaCutoff: 0.04,
+    timeWindow: 1000,
+    opacity: 1,
+    visible: true,
+    ...props,
+  };
+  layer.boundGetTime = () => 0;
+  layer.preparedTileCache = new Map();
+  layer.sublayerCache = new Map();
+  layer.lastLayerPropsKey = '';
+  layer.lastTilesRef = null;
   return layer;
 }
 
@@ -712,17 +780,26 @@ describe('accessor-named prop aliases (column-name semantics)', () => {
     }
   });
 
-  it('AnimatedPathLayer: getWidth constant wins over pathWidth; getColor column drives styleKey', async () => {
+  it('AnimatedPathLayer: getWidth constant wins over pathWidth; getColor column expands per-vertex', async () => {
     const layer = await makePathLayer({
       pathWidth: 3,
       getWidth: 12,
       getColor: 'kind',
+      colorPalette: [
+        [10, 20, 30, 255],
+        [40, 50, 60, 255],
+      ],
     });
     const tile = basePathTile();
     const prepared = layer.prepareTile(tile, tile.layers[0]);
     const sub = layer.buildSublayer(prepared);
     expect(sub.props.getWidth).toBe(12);
-    expect(prepared.data.attributes.instanceCategoryIndex).toBeDefined();
+    // Categorical color now expands PER-VERTEX into `getColor` (not a per-feature
+    // `instanceCategoryIndex`, which under-sizes the instanced draw on
+    // multi-vertex paths — "vertex buffer is not big enough" on strict ANGLE).
+    expect(prepared.data.attributes.getColor).toBeDefined();
+    expect([...prepared.data.attributes.getColor.value.slice(0, 4)]).toEqual([10, 20, 30, 255]);
+    expect(prepared.data.attributes.instanceCategoryIndex).toBeUndefined();
   });
 
   it('AnimatedTripsLayer: getColor column expands per-vertex colors; getWidth column rides binary', async () => {
@@ -814,5 +891,63 @@ describe('accessor-named prop aliases (column-name semantics)', () => {
     const [second] = layer.renderLayers();
     expect(second).not.toBe(first);
     expect(second.props.getRadius).toBe(9);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SplatLayer Worldbuild contract (props inheritance + graceful is_dynamic degrade)
+// ---------------------------------------------------------------------------
+
+describe('SplatLayer Worldbuild sublayer contract', () => {
+  it('inherits composite props AND forwards the worldbuild props into the splat sublayer', async () => {
+    const layer = await makeSplatLayer({
+      coordinateSystem: 2,
+      opacity: 0.6,
+      pickable: true,
+      cumulative: true,
+      revealFade: 900,
+      temporalSigmaDynamic: 250,
+    });
+    const tile = baseSurfelTile([0, 1, 0]);
+    layer.state = { tiles: [tile] };
+    const [sub] = layer.renderLayers();
+    // Composite inheritance still flows through composeSubLayerProps.
+    expect(sub.props.coordinateSystem).toBe(2);
+    expect(sub.props.opacity).toBe(0.6);
+    expect(sub.props.pickable).toBe(true);
+    // Worldbuild props reach the primitive.
+    expect(sub.props.cumulative).toBe(true);
+    expect(sub.props.revealFade).toBe(900);
+    expect(sub.props.temporalSigmaDynamic).toBe(250);
+    // Per-tile sublayer id stays parent-shortId-tileKey.
+    expect(sub.props.id).toBe('splat-splats-0/0/0/0:layer0');
+    // The dynamic flag was baked.
+    expect([...sub.props.data.attributes.instanceIsDynamic.value]).toEqual([0, 1, 0]);
+  });
+
+  it('a tile WITHOUT an is_dynamic column still satisfies the contract under cumulative', async () => {
+    const layer = await makeSplatLayer({ cumulative: true, revealFade: 500 });
+    const tile = baseSurfelTile(); // no is_dynamic column (existing surfel tiles)
+    layer.state = { tiles: [tile] };
+    const sublayers = layer.renderLayers();
+    expect(sublayers).toHaveLength(1);
+    const [sub] = sublayers;
+    // Valid, complete sublayer; attribute omitted → primitive defaults to static.
+    expect(sub.props.data.length).toBe(3);
+    expect(sub.props.data.attributes.instanceQuaternions.size).toBe(4);
+    expect(sub.props.data.attributes.instanceIsDynamic).toBeUndefined();
+    expect(sub.props.cumulative).toBe(true);
+  });
+
+  it('a worldbuild prop change invalidates the cached splat sublayer', async () => {
+    const layer = await makeSplatLayer({ cumulative: true, revealFade: 0 });
+    const tile = baseSurfelTile([1, 0, 1]);
+    layer.state = { tiles: [tile] };
+    const [first] = layer.renderLayers();
+    expect(layer.renderLayers()[0]).toBe(first); // unchanged props → same instance
+    layer.props.revealFade = 1500;
+    const [second] = layer.renderLayers();
+    expect(second).not.toBe(first);
+    expect(second.props.revealFade).toBe(1500);
   });
 });

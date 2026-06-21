@@ -63,6 +63,18 @@ vi.mock('@deck.gl/layers', () => {
   };
 });
 
+// SplatLayer's custom-Model primitive imports luma (no GPU here) — swap it for a
+// prop-stashing stand-in so SplatLayer's prepare/build path runs without GPU.
+vi.mock('../src/layers/internal/splat-primitive-layer', () => {
+  class FakeSplatPrimitiveLayer {
+    props: Record<string, any>;
+    constructor(props: Record<string, any>) {
+      this.props = props;
+    }
+  }
+  return { SplatPrimitiveLayer: FakeSplatPrimitiveLayer };
+});
+
 // `@deck.gl/core` is only used for `CompositeLayer` / `LayerExtension` base
 // classes by the @stt layers. The shared mock reproduces the real
 // getSubLayerProps/getSubLayerClass contract (the layers now build sublayer
@@ -659,11 +671,12 @@ describe('AnimatedPathLayer per-tile sublayer architecture (v3)', () => {
     expect(built.props.positionFormat).toBe('XY');
   });
 
-  it('hands categorical color indices to the GPU (no per-feature RGBA buffer)', () => {
-    // Wire a categorical column on a path tile and assert the layer carries
-    // instanceCategoryIndex + useCategoryColor instead of allocating a
-    // 4n-byte Uint8Array.
-    const tile = bigPathTile(8, 4);
+  it('expands categorical color PER-VERTEX (not a per-feature GPU index buffer)', () => {
+    // PathLayer instances are SEGMENTS, so a per-FEATURE instanceCategoryIndex
+    // under-sizes the instanced draw on multi-vertex paths ("vertex buffer is not
+    // big enough" on strict ANGLE). Like AnimatedTripsLayer, the categorical color
+    // is resolved on the CPU and expanded per-vertex into getColor.
+    const tile = bigPathTile(8, 4); // 8 features × 4 verts = 32 verts
     tile.layers[0].features.categoricalProps['kind'] = {
       indices: new Uint16Array([0, 1, 2, 1, 0, 2, 1, 0]),
       categories: ['a', 'b', 'c'],
@@ -677,11 +690,65 @@ describe('AnimatedPathLayer per-tile sublayer architecture (v3)', () => {
       ],
     });
     const attrs = built.props.data.attributes;
-    expect(attrs.getColor).toBeUndefined();
-    expect(attrs.instanceCategoryIndex).toBeDefined();
-    expect(attrs.instanceCategoryIndex.value).toBeInstanceOf(Float32Array);
-    expect(attrs.instanceCategoryIndex.value[2]).toBe(2);
-    expect(built.props.useCategoryColor).toBe(true);
+    expect(attrs.instanceCategoryIndex).toBeUndefined();
+    expect(built.props.useCategoryColor).toBe(false);
+    expect(attrs.getColor).toBeDefined();
+    expect(attrs.getColor.value).toBeInstanceOf(Uint8Array);
+    expect(attrs.getColor.value.length).toBe(32 * 4); // one RGBA per vertex
+    // Feature 0 (cat 0) → palette[0]; feature 2 (cat 2, verts 8..11) → palette[2].
+    expect([...attrs.getColor.value.slice(0, 4)]).toEqual([10, 20, 30, 255]);
+    expect([...attrs.getColor.value.slice(8 * 4, 8 * 4 + 4)]).toEqual([70, 80, 90, 255]);
+  });
+
+  it('grades getColor alpha by raw altitude when elevationOpacityRange is set (iso3d top-fade)', () => {
+    // The iso3d stack fades its upper height slabs translucent so it reads
+    // coherently top-down. Alpha ramps linearly near→far across the raw z range
+    // (metres, pre-elevationScale), folded onto the band color's own alpha. RGB
+    // is untouched; the fade is keyed on the NUMERIC elevation column directly so
+    // it's consistent across tiles regardless of each tile's z spread.
+    const tile = bigPathTile(3, 4); // 3 features × 4 verts = 12 verts
+    tile.layers[0].features.categoricalProps['density_band'] = {
+      indices: new Uint16Array([0, 0, 0]),
+      categories: ['d3'],
+    };
+    // Raw altitudes: ground / mid / top of a [0, 6] m range.
+    tile.layers[0].features.numericProps['z_layer'] = new Float32Array([0, 3, 6]);
+    const built = buildSublayerForTile(tile, {
+      pathColor: 'density_band',
+      colorMapping: { d3: [40, 200, 176, 200] },
+      elevationProperty: 'z_layer',
+      elevationScale: 2.5,
+      elevationOpacityRange: [0, 6],
+      elevationOpacityNear: 1,
+      elevationOpacityFar: 0.3,
+    });
+    const c = built.props.data.attributes.getColor.value;
+    // RGB preserved for every feature; only alpha is graded.
+    expect([...c.slice(0, 3)]).toEqual([40, 200, 176]);
+    // Ground (z=0, t=0): alpha × near=1 → 200.
+    expect(c[0 * 4 + 3]).toBe(200);
+    // Mid (z=3, t=0.5): factor = 1 + (0.3-1)*0.5 = 0.65 → round(200*0.65) = 130.
+    expect(c[4 * 4 + 3]).toBe(130);
+    // Top (z=6, t=1): factor = 0.3 → round(200*0.3) = 60.
+    expect(c[8 * 4 + 3]).toBe(60);
+  });
+
+  it('leaves getColor alpha ungraded when elevationOpacityRange is unset', () => {
+    const tile = bigPathTile(2, 4);
+    tile.layers[0].features.categoricalProps['density_band'] = {
+      indices: new Uint16Array([0, 0]),
+      categories: ['d3'],
+    };
+    tile.layers[0].features.numericProps['z_layer'] = new Float32Array([0, 6]);
+    const built = buildSublayerForTile(tile, {
+      pathColor: 'density_band',
+      colorMapping: { d3: [40, 200, 176, 200] },
+      elevationProperty: 'z_layer',
+      // no elevationOpacityRange → both features keep the band alpha.
+    });
+    const c = built.props.data.attributes.getColor.value;
+    expect(c[0 * 4 + 3]).toBe(200);
+    expect(c[4 * 4 + 3]).toBe(200);
   });
 
   it('declares dataComparator that skips deck.gl prop diff on identical references', () => {
@@ -693,13 +760,14 @@ describe('AnimatedPathLayer per-tile sublayer architecture (v3)', () => {
     expect(cmp(ref, {})).toBe(false);
   });
 
-  it('projects colorMapping onto the tile category dictionary for stable per-category GPU colors', () => {
+  it('projects colorMapping onto the tile category dictionary for stable per-category colors', () => {
     // Mirrors AnimatedTripsLayer: an explicit category-string → color map
     // produces a per-tile palette ALIGNED with this tile's category dictionary,
     // so each category string renders the same color in every tile (unlike
-    // colorPalette's first-seen per-tile index assignment). The GPU
-    // CategoryColorExtension path is retained (instanceCategoryIndex unchanged).
-    const tile = bigPathTile(8, 4);
+    // colorPalette's first-seen per-tile index assignment). Resolved on the CPU
+    // and expanded per-vertex into getColor (the per-feature GPU index path
+    // under-sizes the multi-vertex instanced draw).
+    const tile = bigPathTile(8, 4); // 8 features × 4 verts
     tile.layers[0].features.categoricalProps['kind'] = {
       indices: new Uint16Array([0, 1, 2, 1, 0, 2, 1, 0]),
       categories: ['road_divider', 'lane_divider', 'lane_yellow'],
@@ -720,18 +788,19 @@ describe('AnimatedPathLayer per-tile sublayer architecture (v3)', () => {
       colorMappingDefault: [120, 120, 120, 255],
     });
 
-    // GPU path is preserved: per-feature category index + useCategoryColor.
     const attrs = built.props.data.attributes;
-    expect(attrs.instanceCategoryIndex).toBeDefined();
-    expect(built.props.useCategoryColor).toBe(true);
-    expect(attrs.getColor).toBeUndefined();
+    expect(attrs.instanceCategoryIndex).toBeUndefined();
+    expect(built.props.useCategoryColor).toBe(false);
+    expect(attrs.getColor).toBeDefined();
 
-    // The palette is projected onto the tile's category dictionary order, so
-    // palette[catIndex] === mapping[category] (or the default for absent keys).
-    const palette = built.props.categoryPalette;
-    expect(palette[0]).toEqual([200, 0, 0, 255]); // road_divider → mapped
-    expect(palette[1]).toEqual([120, 120, 120, 255]); // lane_divider → default
-    expect(palette[2]).toEqual([0, 0, 200, 255]); // lane_yellow → mapped
+    // The mapping is projected onto the tile's category dictionary, then expanded
+    // per-vertex, so each feature's vertices carry mapping[category] (or the
+    // default for absent keys). Feature f's first vertex is at byte f*4*4.
+    const vColor = (feature: number) =>
+      [...attrs.getColor.value.slice(feature * 4 * 4, feature * 4 * 4 + 4)];
+    expect(vColor(0)).toEqual([200, 0, 0, 255]); // cat 0 road_divider → mapped
+    expect(vColor(1)).toEqual([120, 120, 120, 255]); // cat 1 lane_divider → default
+    expect(vColor(2)).toEqual([0, 0, 200, 255]); // cat 2 lane_yellow → mapped
   });
 
   it('re-prepares the tile when colorMapping content changes (same-shape edit)', () => {
@@ -760,13 +829,115 @@ describe('AnimatedPathLayer per-tile sublayer architecture (v3)', () => {
     layer.preparedTileCache = new Map();
 
     const first = (layer as any).prepareTile(tile, tile.layers[0]);
-    expect(first.gpuPalette[0]).toEqual([10, 20, 30, 255]);
+    // Per-vertex getColor reflects the mapped color (all features are lane_white).
+    expect([...first.data.attributes.getColor.value.slice(0, 4)]).toEqual([10, 20, 30, 255]);
 
     // Same-shape edit (still one key) — must NOT be served from cache.
     layer.props.colorMapping = { lane_white: [40, 50, 60, 255] };
     const second = (layer as any).prepareTile(tile, tile.layers[0]);
     expect(second).not.toBe(first);
-    expect(second.gpuPalette[0]).toEqual([40, 50, 60, 255]);
+    expect([...second.data.attributes.getColor.value.slice(0, 4)]).toEqual([40, 50, 60, 255]);
+  });
+
+  it('lifts paths to a synthesized XYZ buffer from a categorical elevation mapping (3D iso-lines)', () => {
+    // 3D density iso-lines: each contour ring (one feature) rides at an altitude
+    // keyed to its density band. The flat 2D tile is expanded to a fresh XYZ
+    // positions buffer (z = elevationMapping[category] × scale for ALL of a
+    // feature's vertices), and positionFormat flips to XYZ.
+    const tile = bigPathTile(4, 3); // 4 features × 3 verts = 12 verts
+    tile.layers[0].features.categoricalProps['density_band'] = {
+      indices: new Uint16Array([0, 1, 2, 3]),
+      categories: ['d1', 'd2', 'd3', 'd5'],
+    };
+    const built = buildSublayerForTile(tile, {
+      pathColor: 'density_band',
+      elevationProperty: 'density_band',
+      elevationMapping: { d1: 0, d2: 3, d3: 7, d5: 18 },
+      elevationScale: 2,
+    });
+    const attrs = built.props.data.attributes;
+
+    // Synthesized buffer (NOT the zero-copy 2D tile positions), size 3, XYZ.
+    expect(attrs.getPath.size).toBe(3);
+    expect(attrs.getPath.value).toBeInstanceOf(Float64Array);
+    expect(attrs.getPath.value).not.toBe(tile.layers[0].features.positions);
+    expect(attrs.getPath.value.length).toBe(12 * 3);
+    expect(built.props.positionFormat).toBe('XYZ');
+
+    // z per feature = mapping[band] × scale, applied to every vertex of the
+    // feature. Feature 0 (d1) → 0; feature 3 (d5, verts 9..11) → 18 × 2 = 36.
+    const pos = attrs.getPath.value;
+    expect(pos[0 * 3 + 2]).toBe(0); // feature 0, vertex 0
+    expect(pos[1 * 3 + 2]).toBe(0); // feature 0, vertex 1 (same band height)
+    expect(pos[3 * 3 + 2]).toBe(6); // feature 1 (d2) first vertex: 3 × 2
+    expect(pos[9 * 3 + 2]).toBe(36); // feature 3 (d5) first vertex: 18 × 2
+    // x / y are carried over from the source 2D buffer (bigPathTile: x=k*0.01,
+    // y=feature*0.01). Feature 3, vertex 0 (global index 9): x=0, y=0.03.
+    expect(pos[9 * 3 + 0]).toBeCloseTo(0);
+    expect(pos[9 * 3 + 1]).toBeCloseTo(0.03);
+  });
+
+  it('lifts paths by a NUMERIC elevation column (true-3D z_layer iso-lines)', () => {
+    // The AV "Iso 3D" path: each contour carries a numeric per-feature `z_layer`
+    // (its real slab altitude, metres). No mapping — the numeric value × scale is
+    // the z for all of the feature's vertices.
+    const tile = bigPathTile(3, 4); // 3 features × 4 verts = 12 verts
+    tile.layers[0].features.numericProps['z_layer'] = new Float32Array([0, 2.5, 6]);
+    const built = buildSublayerForTile(tile, {
+      elevationProperty: 'z_layer',
+      elevationScale: 2,
+    });
+    const attrs = built.props.data.attributes;
+    expect(attrs.getPath.size).toBe(3);
+    expect(built.props.positionFormat).toBe('XYZ');
+    const pos = attrs.getPath.value;
+    expect(pos[0 * 3 + 2]).toBe(0); // feature 0 (z_layer 0)
+    expect(pos[4 * 3 + 2]).toBe(5); // feature 1 (z_layer 2.5 × 2), first vertex idx 4
+    expect(pos[8 * 3 + 2]).toBe(12); // feature 2 (z_layer 6 × 2), first vertex idx 8
+  });
+
+  it('stays flat / zero-copy when no elevation property is set', () => {
+    // Unset elevationProperty ⇒ the tile's 2D positions ride to the GPU
+    // unchanged (byte-identical to a non-elevated render).
+    const tile = bigPathTile(4, 3);
+    const built = buildSublayerForTile(tile);
+    const attrs = built.props.data.attributes;
+    expect(attrs.getPath.size).toBe(2);
+    expect(attrs.getPath.value).toBe(tile.layers[0].features.positions);
+    expect(built.props.positionFormat).toBe('XY');
+  });
+
+  it('re-prepares the tile when elevationScale changes (rebuilds the 3D buffer)', () => {
+    const tile = bigPathTile(2, 3);
+    tile.layers[0].features.categoricalProps['density_band'] = {
+      indices: new Uint16Array([0, 1]),
+      categories: ['d1', 'd5'],
+    };
+    const layer = Object.create(LayerCtor.prototype);
+    layer.props = {
+      id: 'test',
+      pathColor: 'density_band',
+      pathWidth: 2,
+      widthUnits: 'pixels',
+      timeWindow: 1000,
+      opacity: 1,
+      visible: true,
+      elevationProperty: 'density_band',
+      elevationMapping: { d1: 0, d5: 10 },
+      elevationScale: 1,
+    };
+    layer.boundGetTime = () => 0;
+    layer.timeFilterExtension = {};
+    layer.categoryColorExtension = {};
+    layer.preparedTileCache = new Map();
+
+    const first = (layer as any).prepareTile(tile, tile.layers[0]);
+    expect(first.data.attributes.getPath.value[3 * 3 + 2]).toBe(10); // feature 1 (d5)
+
+    layer.props.elevationScale = 3;
+    const second = (layer as any).prepareTile(tile, tile.layers[0]);
+    expect(second).not.toBe(first); // not served from cache
+    expect(second.data.attributes.getPath.value[3 * 3 + 2]).toBe(30); // 10 × 3
   });
 });
 
@@ -1785,5 +1956,100 @@ describe('FlowCorridorLayer keeps static corridors visible (window-mode time bou
     );
     expect(built.props.getInstanceStartTime).toBeUndefined();
     expect(built.props.getInstanceEndTime).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SplatLayer Worldbuild accreted-reconstruction data shape
+// ---------------------------------------------------------------------------
+
+describe('SplatLayer Worldbuild data shape', () => {
+  let LayerCtor: any;
+
+  beforeEach(async () => {
+    vi.resetModules();
+    LayerCtor = (await import('../src/layers/core/splat-layer')).SplatLayer as any;
+  });
+
+  /** A surfel point tile; `dynamic` (if given) populates the `is_dynamic` column. */
+  function surfelTile(n: number, dynamic?: number[]) {
+    const positions: number[][] = [];
+    const startTimes: number[] = [];
+    const endTimes: number[] = [];
+    for (let i = 0; i < n; i++) {
+      positions.push([i * 0.001, i * 0.001]);
+      startTimes.push(i * 100);
+      endTimes.push(i * 100);
+    }
+    const tile = makePointTile({ positions, startTimes, endTimes, timeOffset: 0 });
+    const np = tile.layers[0].features.numericProps;
+    np['qx'] = new Float32Array(n).fill(0);
+    np['qy'] = new Float32Array(n).fill(0);
+    np['qz'] = new Float32Array(n).fill(0);
+    np['qw'] = new Float32Array(n).fill(1);
+    np['s_major'] = new Float32Array(n).fill(0.3);
+    np['s_minor'] = new Float32Array(n).fill(0.15);
+    if (dynamic) np['is_dynamic'] = new Float32Array(dynamic);
+    return tile;
+  }
+
+  function makeLayer(tiles: any[], opts: Record<string, any> = {}) {
+    const layer = Object.create(LayerCtor.prototype);
+    layer.props = {
+      id: 'splat',
+      quaternionColumns: ['qx', 'qy', 'qz', 'qw'],
+      scaleColumns: ['s_major', 's_minor'],
+      rgbColumns: null,
+      opacityColumn: null,
+      elevationProperty: 'z',
+      elevationScale: 1,
+      fallbackColor: [200, 205, 215, 255],
+      temporalSigma: 180,
+      sizeScale: 1,
+      gaussianFalloff: 3,
+      alphaCutoff: 0.04,
+      timeWindow: 2000,
+      opacity: 1,
+      visible: true,
+      ...opts,
+    };
+    layer.state = { tiles };
+    layer.boundGetTime = () => 0;
+    layer.preparedTileCache = new Map();
+    layer.sublayerCache = new Map();
+    layer.lastLayerPropsKey = '';
+    layer.lastTilesRef = null;
+    return layer;
+  }
+
+  it('bakes instanceIsDynamic + forwards the worldbuild props with an is_dynamic column', () => {
+    const layer = makeLayer([surfelTile(4, [0, 1, 1, 0])], {
+      cumulative: true,
+      revealFade: 1000,
+      temporalSigmaDynamic: 350,
+    });
+    const [sub] = layer.renderLayers();
+    expect(sub.props.cumulative).toBe(true);
+    expect(sub.props.revealFade).toBe(1000);
+    expect(sub.props.temporalSigmaDynamic).toBe(350);
+    const dyn = sub.props.data.attributes.instanceIsDynamic;
+    expect(dyn.value).toBeInstanceOf(Float32Array);
+    expect([...dyn.value]).toEqual([0, 1, 1, 0]);
+  });
+
+  it('a tile WITHOUT an is_dynamic column still produces a valid worldbuild sublayer', () => {
+    // The hard backward-compat case: existing surfel tiles have no is_dynamic
+    // column. Even with cumulative on, the layer must build a complete sublayer
+    // and simply omit the attribute (primitive defaults every surfel to static).
+    const layer = makeLayer([surfelTile(3)], { cumulative: true, revealFade: 500 });
+    const sublayers = layer.renderLayers();
+    expect(sublayers).toHaveLength(1);
+    const [sub] = sublayers;
+    expect(sub.props.data.length).toBe(3);
+    expect(sub.props.data.attributes.instancePositions.size).toBe(3);
+    expect(sub.props.data.attributes.instanceQuaternions.size).toBe(4);
+    expect(sub.props.data.attributes.instanceStartTimes).toBeDefined();
+    expect(sub.props.data.attributes.instanceIsDynamic).toBeUndefined();
+    expect(sub.props.cumulative).toBe(true);
   });
 });

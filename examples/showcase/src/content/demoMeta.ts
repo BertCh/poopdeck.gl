@@ -121,7 +121,29 @@ export const CATALOG_EXCLUDED_IDS: string[] = [
   // switcher-excluded — the headline card + switcher keep the base scene; the
   // toggle reaches the variant (legacy /drive/<id>-splat deep-links still work).
   'waymo-sf-day-splat',
+  // Waymo oriented-surfel variants — all five scenes ship one; reached via the
+  // cockpit's Surfel render-mode toggle, not a separate card (only sf-day was
+  // listed originally).
   'waymo-sf-day-surfel',
+  'waymo-phx-day-surfel',
+  'waymo-phx-night-surfel',
+  'waymo-sf-night-surfel',
+  'waymo-phx-dusk-rain-surfel',
+  'waymo-sf-day-surfel-adaptive', // local geometry-aware-decimation A/B experiment
+  'waymo-sf-day-iso', // density iso-line render variant (--contours)
+  // TRUE-3D density iso-line variants (--contours --contour-z-step), all 5 Waymo
+  // scenes — reached via the cockpit's "Iso 3D" render-mode toggle, not a card.
+  'waymo-sf-day-iso3d',
+  'waymo-phx-day-iso3d',
+  'waymo-phx-night-iso3d',
+  'waymo-sf-night-iso3d',
+  'waymo-phx-dusk-rain-iso3d',
+  // FLAT high-XY-res density iso-lines (the "Iso-lines" overview pill), all 5
+  // Waymo scenes (sf-day's was listed earlier).
+  'waymo-phx-day-iso',
+  'waymo-phx-night-iso',
+  'waymo-sf-night-iso',
+  'waymo-phx-dusk-rain-iso',
   // nuScenes camera-splat variants (`--colorize` bundles, makeColoredSplatVariant).
   'nuscenes-0061-splat',
   'nuscenes-0103-splat',
@@ -140,9 +162,31 @@ export const CATALOG_EXCLUDED_IDS: string[] = [
   'argoverse-0bae3b5e-splat',
   'argoverse-25e5c600-splat',
   'argoverse-92b900b1-splat',
-  // Argoverse 2 oriented-surfel variant (`--surfel` bundle) — reached via the
-  // cockpit's Surfel render-mode toggle on the Miami scene, not a separate card.
-  'argoverse-02a00399-surfel',
+  // Argoverse 2 oriented-surfel variants (`--surfel` bundles) — each reached via
+  // the cockpit's Surfel render-mode toggle on its city scene, not a separate
+  // card (same treatment as the Waymo surfel variant). All six cities now ship a
+  // surfel bundle; only Miami was listed here originally.
+  'argoverse-02678d04-surfel', // Pittsburgh
+  'argoverse-02a00399-surfel', // Miami
+  'argoverse-0b5142c1-surfel', // Washington DC
+  'argoverse-0bae3b5e-surfel', // Detroit
+  'argoverse-25e5c600-surfel', // Palo Alto
+  'argoverse-92b900b1-surfel', // Austin
+  // Argoverse 2 TRUE-3D density iso-line variants (--contours --contour-z-step),
+  // all six cities — reached via the cockpit's "Iso 3D" render-mode toggle.
+  'argoverse-02678d04-iso3d', // Pittsburgh
+  'argoverse-02a00399-iso3d', // Miami
+  'argoverse-0b5142c1-iso3d', // Washington DC
+  'argoverse-0bae3b5e-iso3d', // Detroit
+  'argoverse-25e5c600-iso3d', // Palo Alto
+  'argoverse-92b900b1-iso3d', // Austin
+  // Argoverse 2 FLAT density iso-lines (the "Iso-lines" overview pill), all 6 cities.
+  'argoverse-02678d04-iso', // Pittsburgh
+  'argoverse-02a00399-iso', // Miami
+  'argoverse-0b5142c1-iso', // Washington DC
+  'argoverse-0bae3b5e-iso', // Detroit
+  'argoverse-25e5c600-iso', // Palo Alto
+  'argoverse-92b900b1-iso', // Austin
 ];
 
 const OSRM_NOTE =

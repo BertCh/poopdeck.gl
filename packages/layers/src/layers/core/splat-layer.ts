@@ -120,6 +120,32 @@ export interface _SplatLayerProps {
    */
   temporalSigma?: number;
 
+  /**
+   * Worldbuild accreted reconstruction. When true, a STATIC surfel
+   * (`is_dynamic` column 0 / absent) appears at its `start_time` (the voxel's
+   * first-seen time) and PERSISTS forever after — the world "builds itself" as
+   * the playhead advances — while a DYNAMIC surfel (`is_dynamic` 1) keeps the
+   * symmetric windowed Gaussian (using {@link temporalSigmaDynamic}) so moving
+   * actors read as ghosted smears threading through the solid static world. When
+   * false the layer is the plain symmetric-Gaussian splat. @default false
+   */
+  cumulative?: boolean;
+
+  /**
+   * Reveal alpha-ramp duration in milliseconds for a STATIC surfel once it
+   * appears under {@link cumulative}: its alpha ramps `0→1` over this many ms
+   * after `start_time`. `0` ⇒ it pops to full alpha instantly; before
+   * `start_time` it is hidden. Ignored when `cumulative` is false. @default 0
+   */
+  revealFade?: number;
+
+  /**
+   * Soft temporal Gaussian width in milliseconds for DYNAMIC surfels. Moving
+   * actors read as ghosted motion smears at this width even under
+   * {@link cumulative}. `0`/unset ⇒ falls back to {@link temporalSigma}. @default 0
+   */
+  temporalSigmaDynamic?: number;
+
   /** Multiplier on every surfel's baked in-plane extents. @default 1 */
   sizeScale?: number;
 
@@ -151,6 +177,10 @@ interface PreparedSplatTile {
     length: number;
     attributes: Record<string, { value: any; size: number; normalized?: boolean }>;
   };
+  /** instanceQuaternions holds smallest-three packing → shader must unpack. */
+  packed: boolean;
+  /** Tile carried an `is_dynamic` column → instanceIsDynamic was baked. */
+  hasDynamic: boolean;
   timeOffset: number;
   tile: Tile;
   layerName: string;
@@ -181,6 +211,9 @@ export class SplatLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLayer
     elevationScale: { type: 'number', value: 1 },
     fallbackColor: { type: 'color', value: DEFAULT_FALLBACK_COLOR },
     temporalSigma: { type: 'number', value: 180, min: 1 },
+    cumulative: { type: 'boolean', value: false },
+    revealFade: { type: 'number', value: 0, min: 0 },
+    temporalSigmaDynamic: { type: 'number', value: 0, min: 0 },
     sizeScale: { type: 'number', value: 1, min: 0 },
     gaussianFalloff: { type: 'number', value: 3, min: 0 },
     alphaCutoff: { type: 'number', value: 0.04, min: 0 },
@@ -232,6 +265,11 @@ export class SplatLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLayer
   private computeLayerPropsKey(): string {
     return [
       this.props.temporalSigma,
+      // Worldbuild props: a mode/prop flip must bust the sublayer cache so the
+      // new uniforms reach the primitive on the next render.
+      this.props.cumulative ? 1 : 0,
+      this.props.revealFade,
+      this.props.temporalSigmaDynamic,
       this.props.sizeScale,
       this.props.gaussianFalloff,
       this.props.alphaCutoff,
@@ -319,7 +357,15 @@ export class SplatLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLayer
     const t0 = performance.now();
     const num = binary.numericProps;
 
-    const [qxN, qyN, qzN, qwN] = this.props.quaternionColumns ?? ['qx', 'qy', 'qz', 'qw'];
+    // Auto-detect smallest-three packed quaternions: a bundle built with
+    // `waymo_extract.py --pack-quat` carries a `q_imax` index column instead of
+    // a full 4th quat component. We bind the three stored components + the index
+    // into the same size-4 attribute; the primitive shader reconstructs the
+    // dropped component from the unit constraint (uniform `packedQuaternion`).
+    const packed = !!num['q_imax'];
+    const [qxN, qyN, qzN, qwN] = packed
+      ? ['q_a', 'q_b', 'q_c', 'q_imax']
+      : (this.props.quaternionColumns ?? ['qx', 'qy', 'qz', 'qw']);
     const [smajN, sminN] = this.props.scaleColumns ?? ['s_major', 's_minor'];
     const qx = num[qxN];
     const qy = num[qyN];
@@ -403,10 +449,24 @@ export class SplatLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLayer
       instanceStartTimes: { value: binary.startTimes, size: 1 },
     };
 
+    // Worldbuild static/dynamic flag (0/1) from the `is_dynamic` numeric column.
+    // Built only when the column is present; otherwise the attribute is OMITTED
+    // and the primitive's `getIsDynamic` default (0) makes every surfel static —
+    // so existing surfel tiles (no `is_dynamic` column) keep working unchanged.
+    const dynArr = num['is_dynamic'];
+    const hasDynamic = !!dynArr;
+    if (dynArr) {
+      const isDynamic = new Float32Array(count);
+      for (let i = 0; i < count; i++) isDynamic[i] = dynArr[i] >= 0.5 ? 1 : 0;
+      attributes.instanceIsDynamic = { value: isDynamic, size: 1 };
+    }
+
     const prepared: PreparedSplatTile = {
       tileKey: makeTileKey(tile, tileLayer),
       styleKey: this.computeStyleKey(),
       data: { length: count, attributes },
+      packed,
+      hasDynamic,
       timeOffset: binary.timeOffset,
       tile,
       layerName: tileLayer.name,
@@ -436,10 +496,18 @@ export class SplatLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLayer
       timeOffset: prepared.timeOffset,
       temporalSigma: this.props.temporalSigma,
 
+      // Worldbuild accreted-reveal wiring (no-ops unless `cumulative`).
+      cumulative: this.props.cumulative,
+      revealFade: this.props.revealFade,
+      temporalSigmaDynamic: this.props.temporalSigmaDynamic,
+
       // Splat shaping.
       sizeScale: this.props.sizeScale,
       falloff: this.props.gaussianFalloff,
       alphaCutoff: this.props.alphaCutoff,
+      // Smallest-three packed quats (auto-detected from the tile's `q_imax`
+      // column) → tell the shader to reconstruct the dropped component.
+      packedQuaternion: prepared.packed,
 
       // Picking: the base getPickingInfo decodes from these on a hit.
       tile: prepared.tile,
