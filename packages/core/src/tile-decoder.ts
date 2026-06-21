@@ -17,6 +17,7 @@
 import { decompress } from './compression';
 import { decodeTile } from './tile';
 import { emit as emitTelemetry } from './telemetry';
+import { createCancellationError } from './request-scheduler';
 import type { Compression, Tile, TileId, TimeRange } from './types';
 
 /** A single decode request. Compressed bytes are owned by the caller. */
@@ -201,7 +202,11 @@ export class WorkerTileDecoder implements TileDecoder {
     }
     this.workers = [];
     for (const { reject } of this.pending.values()) {
-      reject(new Error('WorkerTileDecoder finalized while decode was pending'));
+      // Finalizing cancels in-flight decodes — surface it as an AbortError-style
+      // cancellation (not a hard error) so consumers that unmount/teardown
+      // mid-load (e.g. switching renderers, navigating away) swallow it the same
+      // way they swallow a superseded fetch, instead of logging it as a tile error.
+      reject(createCancellationError('WorkerTileDecoder finalized while decode was pending'));
     }
     this.pending.clear();
     this.requestOwner.clear();

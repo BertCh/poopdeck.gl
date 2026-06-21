@@ -66,41 +66,34 @@ const DEBUG = false;
  * {@link SpatioTemporalLayerProps} via {@link SplatLayerProps}). */
 export interface _SplatLayerProps {
   /**
-   * Four NUMERIC column names holding the surfel orientation quaternion
-   * `[qx, qy, qz, qw]`. The quaternion's rotation-matrix COLUMNS are the
-   * surfel's `[tangent | bitangent | normal]` (the `--surfel` extractor packs
-   * them that way). A tile missing any of the four is skipped (warns once).
-   * @default ['qx','qy','qz','qw']
+   * VECTOR column name (a `FixedSizeList<Float32,4>` baked by
+   * `stt-build --vector-group`) holding each surfel's orientation quaternion
+   * `[qx, qy, qz, qw]`, whose rotation-matrix COLUMNS are the surfel's
+   * `[tangent | bitangent | normal]`. Bound straight to the GPU (zero re-pack on
+   * the main thread). A tile missing it is skipped (warns once).
+   * @default 'surfel_quat'
    */
-  quaternionColumns?: [string, string, string, string];
+  quaternionColumn?: string;
 
   /**
-   * Two NUMERIC column names holding the in-plane half-extents
-   * `[s_major, s_minor]` in metres (the two larger eigen-extents of the local
-   * covariance). A tile missing either is skipped (warns once).
-   * @default ['s_major','s_minor']
+   * VECTOR column name (`FixedSizeList<Float32,2>`) holding the in-plane
+   * half-extents `[s_major, s_minor]` in metres. A tile missing it is skipped.
+   * @default 'surfel_scale'
    */
-  scaleColumns?: [string, string];
+  scaleColumn?: string;
 
   /**
-   * Three NUMERIC column names holding per-surfel RGB (each 0–255). When
-   * present, each surfel is painted that colour; otherwise `fallbackColor` is
-   * used for all surfels.
-   * @default ['r','g','b']
+   * VECTOR column name (`FixedSizeList<UInt8,4>`) holding per-surfel RGBA, with
+   * the baked confidence already folded into the alpha channel. When present
+   * each surfel is painted that colour; otherwise `fallbackColor` is used.
+   * @default 'surfel_rgba'
    */
-  rgbColumns?: [string, string, string] | null;
-
-  /**
-   * NUMERIC column name holding a per-surfel confidence in `[0,1]`, folded into
-   * the disk alpha (× `opacity`). Absent ⇒ full confidence.
-   * @default 'surfel_opacity'
-   */
-  opacityColumn?: string | null;
+  colorColumn?: string | null;
 
   /**
    * NUMERIC column name holding each surfel's altitude in metres (the cloud's
-   * real height). Absent ⇒ z = 0 (a flat carpet — almost never what you want
-   * for a 3D scan).
+   * real height). Bound zero-copy as a separate elevation attribute and scaled
+   * by {@link elevationScale} in the shader. Absent ⇒ z = 0 (a flat carpet).
    * @default 'z'
    */
   elevationProperty?: string | null;
@@ -177,9 +170,9 @@ interface PreparedSplatTile {
     length: number;
     attributes: Record<string, { value: any; size: number; normalized?: boolean }>;
   };
-  /** instanceQuaternions holds smallest-three packing → shader must unpack. */
-  packed: boolean;
-  /** Tile carried an `is_dynamic` column → instanceIsDynamic was baked. */
+  /** Tile carried the per-surfel colour vector column → instanceColors bound. */
+  hasColor: boolean;
+  /** Tile carried an `is_dynamic` column → instanceIsDynamic was bound. */
   hasDynamic: boolean;
   timeOffset: number;
   tile: Tile;
@@ -201,12 +194,11 @@ export class SplatLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLayer
 
   static defaultProps: DefaultProps<SplatLayerProps> = {
     ...SpatioTemporalLayer.defaultProps,
-    // Permissive {type:'object'} descriptors — these hold column-name tuples /
-    // a Color, which deck's typed validators would reject.
-    quaternionColumns: { type: 'object', value: ['qx', 'qy', 'qz', 'qw'], compare: true },
-    scaleColumns: { type: 'object', value: ['s_major', 's_minor'], compare: true },
-    rgbColumns: { type: 'object', value: ['r', 'g', 'b'], optional: true, compare: true },
-    opacityColumn: { type: 'object', value: 'surfel_opacity', optional: true, compare: true },
+    // Permissive {type:'object'} descriptors — these hold column names / a
+    // Color, which deck's typed validators would reject.
+    quaternionColumn: { type: 'object', value: 'surfel_quat', compare: true },
+    scaleColumn: { type: 'object', value: 'surfel_scale', compare: true },
+    colorColumn: { type: 'object', value: 'surfel_rgba', optional: true, compare: true },
     elevationProperty: { type: 'object', value: 'z', optional: true, compare: true },
     elevationScale: { type: 'number', value: 1 },
     fallbackColor: { type: 'color', value: DEFAULT_FALLBACK_COLOR },
@@ -243,22 +235,13 @@ export class SplatLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLayer
    * elevation, fallback color). A change invalidates the prepared cache.
    */
   private computeStyleKey(): string {
-    const q = this.props.quaternionColumns ?? ['qx', 'qy', 'qz', 'qw'];
-    const s = this.props.scaleColumns ?? ['s_major', 's_minor'];
-    const rgb = this.props.rgbColumns;
-    const op = typeof this.props.opacityColumn === 'string' ? this.props.opacityColumn : '';
+    const q = typeof this.props.quaternionColumn === 'string' ? this.props.quaternionColumn : 'surfel_quat';
+    const s = typeof this.props.scaleColumn === 'string' ? this.props.scaleColumn : 'surfel_scale';
+    const c = typeof this.props.colorColumn === 'string' ? this.props.colorColumn : 'none';
     const elev = typeof this.props.elevationProperty === 'string' ? this.props.elevationProperty : '';
-    const elevScale = elev ? (this.props.elevationScale ?? 1) : 0;
-    const fb = this.props.fallbackColor ?? DEFAULT_FALLBACK_COLOR;
-    return [
-      q.join(','),
-      s.join(','),
-      rgb ? rgb.join(',') : 'none',
-      op,
-      `${elev}:${elevScale}`,
-      Array.isArray(fb) ? fb.join('.') : '',
-      updateTriggersDigest(this.props.updateTriggers),
-    ].join('|');
+    // elevationScale / fallbackColor are SHADER UNIFORMS now, not baked into the
+    // prepared attributes — they belong to the layer-props key, not styleKey.
+    return [q, s, c, elev, updateTriggersDigest(this.props.updateTriggers)].join('|');
   }
 
   /** Digest of the layer-level props baked into every sublayer (visual + time). */
@@ -273,6 +256,9 @@ export class SplatLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLayer
       this.props.sizeScale,
       this.props.gaussianFalloff,
       this.props.alphaCutoff,
+      // Shader uniforms (no longer baked into the prepared attributes).
+      this.props.elevationScale,
+      Array.isArray(this.props.fallbackColor) ? this.props.fallbackColor.join('.') : '',
       this.props.timeWindow,
       inheritedPropsDigest(this.props),
       updateTriggersDigest(this.props.updateTriggers),
@@ -308,10 +294,14 @@ export class SplatLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLayer
       this.sublayerCache.clear();
     }
 
+    // styleKey is layer-global (same for every tile this render) — compute it
+    // ONCE here rather than per tile inside prepareTile/buildTileData.
+    const styleKey = this.computeStyleKey();
+
     const sublayers: Layer[] = [];
     for (const tile of tiles) {
       for (const tileLayer of tile.layers) {
-        const prepared = this.prepareTile(tile, tileLayer);
+        const prepared = this.prepareTile(tile, tileLayer, styleKey);
         if (!prepared) continue;
         const cached = this.sublayerCache.get(prepared.tileKey);
         if (cached && cached.preparedKey === prepared && cached.layerPropsKey === layerPropsKey) {
@@ -337,135 +327,102 @@ export class SplatLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLayer
     return sublayers;
   }
 
-  private prepareTile(tile: Tile, tileLayer: TileLayer): PreparedSplatTile | null {
+  private prepareTile(
+    tile: Tile,
+    tileLayer: TileLayer,
+    styleKey: string,
+  ): PreparedSplatTile | null {
     if (tileLayer.features.featureCount === 0) return null;
-    const styleKey = this.computeStyleKey();
     const tileKey = makeTileKey(tile, tileLayer);
     const cached = this.preparedTileCache.get(tileKey);
     if (cached && cached.styleKey === styleKey) return cached;
-    const prepared = this.buildTileData(tile, tileLayer);
+    const prepared = this.buildTileData(tile, tileLayer, styleKey);
     if (prepared) this.preparedTileCache.set(tileKey, prepared);
     return prepared;
   }
 
-  /** Assemble one tile's binary instance attributes from its surfel columns. */
-  private buildTileData(tile: Tile, tileLayer: TileLayer): PreparedSplatTile | null {
+  /**
+   * Bind one tile's GPU-ready instance attributes — **zero per-point work**.
+   *
+   * The surfel quaternion / scale / colour are baked at BUILD time as interleaved
+   * `FixedSizeList` columns (`stt-build --vector-group`), so the decoder hands
+   * each as a contiguous typed array (`binary.vectorProps`) that rides STRAIGHT
+   * to the GPU. Positions stay 2D (zero-copy geometry); altitude rides its own
+   * zero-copy `z` column and is scaled in the shader. The only allocation here is
+   * the tiny attributes record — no per-surfel loops, no large typed arrays. This
+   * is what keeps a new dense ("ultra") tile arriving mid-drive from hitching the
+   * main thread.
+   */
+  private buildTileData(
+    tile: Tile,
+    tileLayer: TileLayer,
+    styleKey: string,
+  ): PreparedSplatTile | null {
     const binary = tileLayer.features;
     const count = binary.featureCount;
     if (count === 0) return null;
 
     const t0 = performance.now();
     const num = binary.numericProps;
+    const vec = binary.vectorProps ?? {};
 
-    // Auto-detect smallest-three packed quaternions: a bundle built with
-    // `waymo_extract.py --pack-quat` carries a `q_imax` index column instead of
-    // a full 4th quat component. We bind the three stored components + the index
-    // into the same size-4 attribute; the primitive shader reconstructs the
-    // dropped component from the unit constraint (uniform `packedQuaternion`).
-    const packed = !!num['q_imax'];
-    const [qxN, qyN, qzN, qwN] = packed
-      ? ['q_a', 'q_b', 'q_c', 'q_imax']
-      : (this.props.quaternionColumns ?? ['qx', 'qy', 'qz', 'qw']);
-    const [smajN, sminN] = this.props.scaleColumns ?? ['s_major', 's_minor'];
-    const qx = num[qxN];
-    const qy = num[qyN];
-    const qz = num[qzN];
-    const qw = num[qwN];
-    const smaj = num[smajN];
-    const smin = num[sminN];
+    const quatN = typeof this.props.quaternionColumn === 'string' ? this.props.quaternionColumn : 'surfel_quat';
+    const scaleN = typeof this.props.scaleColumn === 'string' ? this.props.scaleColumn : 'surfel_scale';
+    const quat = vec[quatN];
+    const scale = vec[scaleN];
 
     // Surfel orientation + extent are mandatory — without them there is no
-    // oriented disk to draw. Skip the tile (and warn once) rather than render a
-    // misleading axis-aligned blob.
-    if (!qx || !qy || !qz || !qw || !smaj || !smin) {
+    // oriented disk to draw. They must be the interleaved vector columns baked
+    // by `stt-build --vector-group`; skip (warn once) rather than mis-render.
+    if (!quat || quat.size !== 4 || !scale || scale.size !== 2) {
       warnOnce(
         'SplatLayer:missingSurfelColumns',
-        `[SplatLayer] tile is missing surfel orientation/scale columns ` +
-          `(${qxN},${qyN},${qzN},${qwN},${smajN},${sminN}); the cloud was not ` +
-          `built with \`waymo_extract.py --surfel\`. Nothing rendered for this tile.`,
+        `[SplatLayer] tile is missing the interleaved surfel vector columns ` +
+          `('${quatN}' FixedSizeList<f32,4> + '${scaleN}' FixedSizeList<f32,2>); ` +
+          `rebuild the bundle with \`stt-build --vector-group\`. Nothing rendered ` +
+          `for this tile.`,
       );
       return null;
     }
 
-    // Centre positions: [lng, lat, z·elevationScale]. Geometry is 2D; z rides a
-    // numeric column. One Float64Array (only allocation in the prepare step).
-    const srcDims = binary.positionDimensions ?? 2;
-    const src = binary.positions;
+    // Centre positions ride the 2D geometry buffer zero-copy; altitude is its own
+    // zero-copy column (scaled in the shader by elevationScale).
     const elevProp = typeof this.props.elevationProperty === 'string' ? this.props.elevationProperty : '';
     const elev = elevProp ? num[elevProp] : undefined;
-    const elevScale = this.props.elevationScale ?? 1;
-    const positions = new Float64Array(count * 3);
-    for (let i = 0; i < count; i++) {
-      positions[i * 3] = src[i * srcDims];
-      positions[i * 3 + 1] = src[i * srcDims + 1];
-      positions[i * 3 + 2] = elev ? elev[i] * elevScale : srcDims > 2 ? src[i * srcDims + 2] : 0;
-    }
 
-    // Quaternion (size 4) + scale (size 2): interleave into packed Float32Arrays.
-    const quats = new Float32Array(count * 4);
-    const scales = new Float32Array(count * 2);
-    for (let i = 0; i < count; i++) {
-      quats[i * 4] = qx[i];
-      quats[i * 4 + 1] = qy[i];
-      quats[i * 4 + 2] = qz[i];
-      quats[i * 4 + 3] = qw[i];
-      scales[i * 2] = smaj[i];
-      scales[i * 2 + 1] = smin[i];
-    }
-
-    // Color RGBA: camera RGB columns (0–255) × baked confidence into alpha.
-    const rgbCols = this.props.rgbColumns;
-    const rArr = rgbCols ? num[rgbCols[0]] : undefined;
-    const gArr = rgbCols ? num[rgbCols[1]] : undefined;
-    const bArr = rgbCols ? num[rgbCols[2]] : undefined;
-    const opName = typeof this.props.opacityColumn === 'string' ? this.props.opacityColumn : '';
-    const opArr = opName ? num[opName] : undefined;
-    const fb = (this.props.fallbackColor ?? DEFAULT_FALLBACK_COLOR) as Color;
-    const colors = new Uint8Array(count * 4);
-    for (let i = 0; i < count; i++) {
-      const o = i * 4;
-      if (rArr && gArr && bArr) {
-        colors[o] = rArr[i];
-        colors[o + 1] = gArr[i];
-        colors[o + 2] = bArr[i];
-      } else {
-        colors[o] = fb[0];
-        colors[o + 1] = fb[1];
-        colors[o + 2] = fb[2];
-      }
-      // Baked confidence → alpha (0–255). Absent ⇒ opaque (the layer `opacity`
-      // and the temporal Gaussian still modulate it in the shader).
-      const conf = opArr ? Math.max(0, Math.min(1, opArr[i])) : 1;
-      colors[o + 3] = Math.round(conf * 255);
-    }
+    // Per-surfel RGBA (baked confidence already in alpha) — the interleaved u8
+    // vector column, bound normalized. Absent ⇒ the shader's fallback colour.
+    const colorN = typeof this.props.colorColumn === 'string' ? this.props.colorColumn : '';
+    const color = colorN ? vec[colorN] : undefined;
+    const hasColor = !!color && color.size === 4;
 
     const attributes: PreparedSplatTile['data']['attributes'] = {
-      instancePositions: { value: positions, size: 3 },
-      instanceQuaternions: { value: quats, size: 4 },
-      instanceScales: { value: scales, size: 2 },
-      instanceColors: { value: colors, size: 4, normalized: true },
-      // Zero-copy: the tile's own start times (relative to binary.timeOffset)
-      // ride straight to the GPU as the temporal-Gaussian centres μ_t.
+      // 2D geometry, zero-copy. (positionDimensions is 2 for surfel tiles.)
+      instancePositions: { value: binary.positions, size: 2 },
+      instanceQuaternions: { value: quat.value, size: 4 },
+      instanceScales: { value: scale.value, size: 2 },
+      // Zero-copy: the tile's own start times ride straight to the GPU as μ_t.
       instanceStartTimes: { value: binary.startTimes, size: 1 },
     };
-
-    // Worldbuild static/dynamic flag (0/1) from the `is_dynamic` numeric column.
-    // Built only when the column is present; otherwise the attribute is OMITTED
-    // and the primitive's `getIsDynamic` default (0) makes every surfel static —
-    // so existing surfel tiles (no `is_dynamic` column) keep working unchanged.
+    if (elev) {
+      attributes.instanceElevations = { value: elev, size: 1 };
+    }
+    if (hasColor) {
+      attributes.instanceColors = { value: color!.value, size: 4, normalized: true };
+    }
+    // Worldbuild static/dynamic flag (0/1) from the `is_dynamic` column, bound
+    // zero-copy (the shader thresholds at 0.5). Absent ⇒ default 0 (all static).
     const dynArr = num['is_dynamic'];
     const hasDynamic = !!dynArr;
     if (dynArr) {
-      const isDynamic = new Float32Array(count);
-      for (let i = 0; i < count; i++) isDynamic[i] = dynArr[i] >= 0.5 ? 1 : 0;
-      attributes.instanceIsDynamic = { value: isDynamic, size: 1 };
+      attributes.instanceIsDynamic = { value: dynArr, size: 1 };
     }
 
     const prepared: PreparedSplatTile = {
       tileKey: makeTileKey(tile, tileLayer),
-      styleKey: this.computeStyleKey(),
+      styleKey,
       data: { length: count, attributes },
-      packed,
+      hasColor,
       hasDynamic,
       timeOffset: binary.timeOffset,
       tile,
@@ -505,9 +462,13 @@ export class SplatLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLayer
       sizeScale: this.props.sizeScale,
       falloff: this.props.gaussianFalloff,
       alphaCutoff: this.props.alphaCutoff,
-      // Smallest-three packed quats (auto-detected from the tile's `q_imax`
-      // column) → tell the shader to reconstruct the dropped component.
-      packedQuaternion: prepared.packed,
+
+      // Elevation + colour are shader uniforms now (z and rgba ride zero-copy
+      // attributes; the scale/fallback apply in the shader). `useVertexColor`
+      // is false when this tile carried no per-surfel colour vector column.
+      elevationScale: this.props.elevationScale ?? 1,
+      useVertexColor: prepared.hasColor,
+      fallbackColor: this.props.fallbackColor ?? DEFAULT_FALLBACK_COLOR,
 
       // Picking: the base getPickingInfo decodes from these on a hit.
       tile: prepared.tile,

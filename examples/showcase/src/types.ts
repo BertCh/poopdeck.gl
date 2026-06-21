@@ -397,6 +397,23 @@ export interface Dataset {
    */
   avLidarUrl?: string;
   /**
+   * Scene-split ("stage + actors") STATIC archive manifest (an STT POINT/surfel
+   * archive). The FIXED environment, built by `argoverse_extract.py --scene-split`
+   * by accumulating every sweep, removing the moving returns (in-box +
+   * ERASOR-style scrub), voxel-downsampling and fitting surfels — baked as ONE
+   * timeless full-range cloud that loads once and persists. Rendered as a
+   * persistent `SplatLayer` backdrop (no playhead filter) UNDER the animated
+   * actors. Set together with {@link avDynamicUrl} + {@link lidarStage}.
+   */
+  avStaticUrl?: string;
+  /**
+   * Scene-split DYNAMIC archive manifest (an STT POINT/surfel archive). The
+   * MOVING agents' per-sweep returns (cars/bikes/pedestrians inside moving
+   * boxes), time-bucketed and animated. On scene-split scenes this is also the
+   * primary `url` / {@link avLidarUrl} so the governor rides it.
+   */
+  avDynamicUrl?: string;
+  /**
    * Ego-trajectory archive manifest (an STT TRIPS archive — one LineString =
    * the ego path). Rendered by `AnimatedTripsLayer`. On LIDAR scenes the
    * primary `url` is the LIDAR archive; on LIDAR-less scenes (comma.ai) this IS
@@ -533,6 +550,32 @@ export interface Dataset {
    * `SplatLayer.temporalSigmaDynamic`.
    */
   lidarWorldbuildDynamicSigma?: number;
+  /**
+   * Scene-split ("stage + actors") render: decompose the LIDAR into two distinct
+   * `SplatLayer`s — a STATIC stage (the fixed environment, {@link avStaticUrl})
+   * drawn as a persistent backdrop, and the DYNAMIC actors ({@link avDynamicUrl})
+   * animated over the playhead. Unlike {@link lidarWorldbuild} (one merged cloud,
+   * a shader branch on `is_dynamic`), this renders two separate archives with
+   * independent load lifecycles. Implies camera-colored surfels on both halves.
+   */
+  lidarStage?: boolean;
+  /**
+   * For {@link lidarStage}: render the static stage with NO playhead filter — an
+   * effectively-infinite `temporalSigma` pins every stage surfel full-bright from
+   * t=0 (a fixed backdrop, not an accreting reveal). Defaults to `true`.
+   */
+  lidarStageStatic?: boolean;
+  /**
+   * For {@link lidarStage}: layer opacity of the static stage backdrop, muted vs
+   * the bright actors so the moving agents pop against it. Defaults to ~0.5.
+   */
+  lidarStageOpacity?: number;
+  /**
+   * For {@link lidarStage}: surfel size multiplier for the DYNAMIC actors, so the
+   * moving agents render chunkier and pop against the recessive stage. Defaults to
+   * ~1.5 (the stage keeps {@link lidarSurfelSizeScale}, default 1).
+   */
+  lidarActorSizeScale?: number;
   /**
    * Raw-sweep ("sweep / scan") variant: the `<id>-scan` bundle is raw LIDAR with
    * a per-point TRUE scan-time `start_time` and a phase-ramp `r`/`g`/`b` color,

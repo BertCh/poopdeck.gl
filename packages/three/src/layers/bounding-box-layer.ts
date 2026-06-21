@@ -1,0 +1,291 @@
+// @poopdeck.gl/three
+// SPDX-License-Identifier: MIT
+// Copyright (c) @poopdeck.gl/three contributors
+
+/**
+ * `BoundingBoxLayer` — one smooth-moving oriented 3D box per tracked object, the
+ * Three port of deck's `AnimatedBoundingBoxLayer`. The objects archive carries one
+ * point snapshot per object per keyframe; {@link buildTrackIndex} pools them by
+ * `track_id` and {@link sampleTracks} interpolates each active track to a pose at
+ * the playhead. Unlike the GPU layers, this re-runs a CPU binary-search + lerp per
+ * frame and rewrites a `LineSegments` of every active box's 12 edges (matching the
+ * deck cockpit's `filled:false, stroked:true` look), plus optional velocity arrows.
+ *
+ * Per-box appear/disappear fade is premultiplied into the edge RGB (fading toward
+ * the dark ground) since `LineBasicMaterial` has no per-vertex alpha.
+ */
+
+import {
+  Group,
+  LineSegments,
+  BufferGeometry,
+  Float32BufferAttribute,
+  LineBasicMaterial,
+} from 'three';
+import type { Tile } from '@poopdeck.gl/core';
+import { BaseSttLayer, type SttLayerContext } from './layer';
+import {
+  buildTrackIndex,
+  sampleTracks,
+  type Track,
+  type BoxSample,
+  type BoxTrackOptions,
+} from './box-tracks';
+import { writeBoxEdges, FLOATS_PER_BOX } from '../geometry/box-edges';
+import type { Projection } from '../projection/local-enu';
+import type { RGBA } from '../lib/color';
+
+export interface BoundingBoxLayerOptions {
+  id?: string;
+  trackIdProperty?: string;
+  colorProperty?: string;
+  colorMapping?: Record<string, RGBA>;
+  colorMappingDefault?: RGBA;
+  headingProperty?: string;
+  lengthProperty?: string;
+  widthProperty?: string;
+  heightProperty?: string;
+  speedProperty?: string;
+  labelProperty?: string;
+  defaultLength?: number;
+  defaultWidth?: number;
+  defaultHeight?: number;
+  sizeScale?: number;
+  fadeInDuration?: number;
+  fadeOutDuration?: number;
+  opacity?: number;
+  showVelocity?: boolean;
+  velocityScale?: number;
+  velocityMinSpeed?: number;
+  velocityColor?: RGBA;
+}
+
+const DEFAULT_COLOR: RGBA = [150, 160, 175, 220];
+const DEFAULT_VELOCITY_COLOR: RGBA = [120, 230, 255, 255];
+
+export class BoundingBoxLayer extends BaseSttLayer {
+  readonly id: string;
+  readonly object = new Group();
+
+  private projection: Projection | null = null;
+  private trackIndex: Map<string, Track> | null = null;
+  private activeSamples: BoxSample[] = [];
+
+  private edges: LineSegments;
+  private edgePositions = new Float32Array(0);
+  private edgeColors = new Float32Array(0);
+  private edgeCapacity = 0; // boxes
+
+  private velocity: LineSegments | null = null;
+  private velPositions = new Float32Array(0);
+  private velColors = new Float32Array(0);
+  private velCapacity = 0;
+
+  private readonly opts: Required<Omit<BoundingBoxLayerOptions, 'id'>>;
+
+  constructor(options: BoundingBoxLayerOptions = {}) {
+    super();
+    this.id = options.id ?? 'objects';
+    this.object.name = this.id;
+    this.object.frustumCulled = false;
+    this.opts = {
+      trackIdProperty: options.trackIdProperty ?? 'track_id',
+      colorProperty: options.colorProperty ?? 'category',
+      colorMapping: options.colorMapping ?? {},
+      colorMappingDefault: options.colorMappingDefault ?? DEFAULT_COLOR,
+      headingProperty: options.headingProperty ?? 'heading',
+      lengthProperty: options.lengthProperty ?? 'length',
+      widthProperty: options.widthProperty ?? 'width',
+      heightProperty: options.heightProperty ?? 'height',
+      speedProperty: options.speedProperty ?? 'speed',
+      labelProperty: options.labelProperty ?? 'category',
+      defaultLength: options.defaultLength ?? 4,
+      defaultWidth: options.defaultWidth ?? 2,
+      defaultHeight: options.defaultHeight ?? 1.6,
+      sizeScale: options.sizeScale ?? 1,
+      fadeInDuration: options.fadeInDuration ?? 200,
+      fadeOutDuration: options.fadeOutDuration ?? 200,
+      opacity: options.opacity ?? 1,
+      showVelocity: options.showVelocity ?? false,
+      velocityScale: options.velocityScale ?? 1.5,
+      velocityMinSpeed: options.velocityMinSpeed ?? 0.3,
+      velocityColor: options.velocityColor ?? DEFAULT_VELOCITY_COLOR,
+    };
+
+    this.edges = new LineSegments(
+      new BufferGeometry(),
+      new LineBasicMaterial({ vertexColors: true, transparent: true, opacity: this.opts.opacity }),
+    );
+    this.edges.frustumCulled = false;
+    this.object.add(this.edges);
+
+    if (this.opts.showVelocity) {
+      this.velocity = new LineSegments(
+        new BufferGeometry(),
+        new LineBasicMaterial({ vertexColors: true, transparent: true, opacity: this.opts.opacity }),
+      );
+      this.velocity.frustumCulled = false;
+      this.object.add(this.velocity);
+    }
+  }
+
+  private trackOptions(): BoxTrackOptions {
+    return {
+      trackIdProperty: this.opts.trackIdProperty,
+      colorProperty: this.opts.colorProperty,
+      colorMapping: this.opts.colorMapping,
+      colorMappingDefault: this.opts.colorMappingDefault,
+      labelProperty: this.opts.labelProperty,
+      headingProperty: this.opts.headingProperty,
+      lengthProperty: this.opts.lengthProperty,
+      widthProperty: this.opts.widthProperty,
+      heightProperty: this.opts.heightProperty,
+      speedProperty: this.opts.speedProperty,
+    };
+  }
+
+  setTiles(tiles: Tile[], ctx: SttLayerContext): void {
+    this.timeOrigin = ctx.timeOrigin;
+    this.projection = ctx.projection;
+    this.trackIndex = buildTrackIndex(tiles, this.trackOptions());
+  }
+
+  setTime(absoluteTimeMs: number): void {
+    if (!this.trackIndex || !this.projection) return;
+    const samples = sampleTracks(this.trackIndex, absoluteTimeMs, {
+      length: this.opts.defaultLength,
+      width: this.opts.defaultWidth,
+      height: this.opts.defaultHeight,
+      fadeIn: this.opts.fadeInDuration,
+      fadeOut: this.opts.fadeOutDuration,
+    });
+    this.activeSamples = samples;
+    this.rebuildEdges(samples);
+    if (this.velocity) this.rebuildVelocity(samples);
+  }
+
+  private rebuildEdges(samples: BoxSample[]): void {
+    const n = samples.length;
+    if (n > this.edgeCapacity) {
+      this.edgeCapacity = Math.max(n, this.edgeCapacity * 2, 16);
+      this.edgePositions = new Float32Array(this.edgeCapacity * FLOATS_PER_BOX);
+      this.edgeColors = new Float32Array(this.edgeCapacity * FLOATS_PER_BOX);
+      this.edges.geometry.dispose();
+      const geom = new BufferGeometry();
+      geom.setAttribute('position', new Float32BufferAttribute(this.edgePositions, 3));
+      geom.setAttribute('color', new Float32BufferAttribute(this.edgeColors, 3));
+      this.edges.geometry = geom;
+    }
+    const pos = this.edgePositions;
+    const col = this.edgeColors;
+    const proj = this.projection!;
+    const ss = this.opts.sizeScale;
+    let o = 0;
+    for (let i = 0; i < n; i++) {
+      const s = samples[i];
+      const [cx, cy, cz] = proj.project(s.lon, s.lat, s.alt);
+      const start = o;
+      o = writeBoxEdges(
+        pos,
+        o,
+        cx,
+        cy,
+        cz,
+        s.heading,
+        s.length * ss,
+        s.width * ss,
+        s.height * ss,
+      );
+      // Fade premultiplied into RGB (LineBasicMaterial has no per-vertex alpha).
+      const a = s.alpha;
+      const r = (s.track.color[0] / 255) * a;
+      const g = (s.track.color[1] / 255) * a;
+      const b = (s.track.color[2] / 255) * a;
+      for (let v = start; v < o; v += 3) {
+        col[v] = r;
+        col[v + 1] = g;
+        col[v + 2] = b;
+      }
+    }
+    this.updateDrawRange(this.edges, n * (FLOATS_PER_BOX / 3));
+  }
+
+  private rebuildVelocity(samples: BoxSample[]): void {
+    const vel = this.velocity!;
+    // Arrows = one segment per moving object (2 verts × 3 floats).
+    const active = samples.filter(
+      (s) => Number.isFinite(s.speed) && s.speed >= this.opts.velocityMinSpeed,
+    );
+    const n = active.length;
+    if (n > this.velCapacity) {
+      this.velCapacity = Math.max(n, this.velCapacity * 2, 16);
+      this.velPositions = new Float32Array(this.velCapacity * 6);
+      this.velColors = new Float32Array(this.velCapacity * 6);
+      vel.geometry.dispose();
+      const geom = new BufferGeometry();
+      geom.setAttribute('position', new Float32BufferAttribute(this.velPositions, 3));
+      geom.setAttribute('color', new Float32BufferAttribute(this.velColors, 3));
+      vel.geometry = geom;
+    }
+    const pos = this.velPositions;
+    const col = this.velColors;
+    const proj = this.projection!;
+    const vc = this.opts.velocityColor;
+    let o = 0;
+    for (let i = 0; i < n; i++) {
+      const s = active[i];
+      const [cx, cy, cz] = proj.project(s.lon, s.lat, s.alt);
+      const len = s.speed * this.opts.velocityScale;
+      const c = Number.isFinite(s.heading) ? Math.cos(s.heading) : 1;
+      const sn = Number.isFinite(s.heading) ? Math.sin(s.heading) : 0;
+      // origin at box top-centre, arrow along heading.
+      const z = cz + s.height * this.opts.sizeScale;
+      pos[o] = cx;
+      pos[o + 1] = cy;
+      pos[o + 2] = z;
+      pos[o + 3] = cx + c * len;
+      pos[o + 4] = cy + sn * len;
+      pos[o + 5] = z;
+      const r = (vc[0] / 255) * s.alpha;
+      const g = (vc[1] / 255) * s.alpha;
+      const b = (vc[2] / 255) * s.alpha;
+      for (let k = 0; k < 6; k += 3) {
+        col[o + k] = r;
+        col[o + k + 1] = g;
+        col[o + k + 2] = b;
+      }
+      o += 6;
+    }
+    this.updateDrawRange(vel, n * 2);
+  }
+
+  private updateDrawRange(line: LineSegments, vertexCount: number): void {
+    const geom = line.geometry;
+    const pos = geom.getAttribute('position') as Float32BufferAttribute | undefined;
+    // No buffers yet (zero active boxes since mount): nothing to draw, and the
+    // attributes don't exist — bail before touching them.
+    if (!pos) {
+      geom.setDrawRange(0, 0);
+      return;
+    }
+    geom.setDrawRange(0, vertexCount);
+    pos.needsUpdate = true;
+    const col = geom.getAttribute('color') as Float32BufferAttribute | undefined;
+    if (col) col.needsUpdate = true;
+    geom.computeBoundingSphere();
+  }
+
+  /** Active interpolated box poses at the last `setTime` (for picking / inspection). */
+  getActiveSamples(): readonly BoxSample[] {
+    return this.activeSamples;
+  }
+
+  dispose(): void {
+    this.edges.geometry.dispose();
+    (this.edges.material as LineBasicMaterial).dispose();
+    if (this.velocity) {
+      this.velocity.geometry.dispose();
+      (this.velocity.material as LineBasicMaterial).dispose();
+    }
+  }
+}

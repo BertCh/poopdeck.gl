@@ -544,6 +544,8 @@ export class AnimatedBoundingBoxLayer<ExtraPropsT extends {} = {}> extends Spati
   private lastTilesRef: Tile[] | null = null;
   /** True when at least one loaded tile carried the speed column (gates arrows). */
   private hasSpeedColumn = false;
+  /** Sim-time of the last box-pose re-interpolation; skips redundant ticks. */
+  private lastBoxFrameTime = NaN;
 
   finalizeState(context: LayerContext): void {
     super.finalizeState(context);
@@ -561,7 +563,12 @@ export class AnimatedBoundingBoxLayer<ExtraPropsT extends {} = {}> extends Spati
   protected _handleTimeUpdate(time: number): void {
     super._handleTimeUpdate(time);
     const { tiles } = this.state;
-    if (tiles && tiles.length > 0) {
+    // Re-interpolate the box poses only when sim-time actually advanced. A
+    // repeated/identical tick (paused-but-emitting clock, duplicate governor
+    // tick) would otherwise force a full renderLayers + instance-buffer reupload
+    // over every track for no visible change.
+    if (tiles && tiles.length > 0 && time !== this.lastBoxFrameTime) {
+      this.lastBoxFrameTime = time;
       this.setState({ boxFrame: ((this.state as any).boxFrame || 0) + 1 });
     }
   }

@@ -25,6 +25,7 @@ import { useReducedMotion } from "../lib/reducedMotion";
 import { useIsMobile } from "../lib/useMediaQuery";
 import type { Dataset, ColorRGBA } from "../types";
 import AvDeck from "../components/av/AvDeck";
+import AvThreeViewer from "../components/av/AvThreeViewer";
 import AvMobileChrome from "../components/av/AvMobileChrome";
 import StreamPanel from "../components/av/StreamPanel";
 import MetricCharts from "../components/av/MetricCharts";
@@ -66,6 +67,7 @@ type LidarRenderMode =
   | "iso"
   | "iso3d"
   | "world"
+  | "stage"
   | "cube"
   | "scan";
 
@@ -77,6 +79,7 @@ const RENDER_MODE_LABELS: Record<LidarRenderMode, string> = {
   iso: "Iso-lines",
   iso3d: "Iso 3D",
   world: "Worldbuild",
+  stage: "Stage",
   cube: "Spacetime",
   scan: "Sweep",
 };
@@ -102,7 +105,7 @@ const AvCockpit: React.FC = () => {
       datasets.filter(
         (d) =>
           d.type === "av" &&
-          !/-(?:splat|surfel|iso3d|iso|world|scan)$/.test(d.id),
+          !/-(?:splat|surfel|iso3d|iso|world|stage|scan)$/.test(d.id),
       ),
     [],
   );
@@ -116,7 +119,7 @@ const AvCockpit: React.FC = () => {
     // should still land on it. `iso3d` / `world` / `scan` ARE real bundle suffixes;
     // match `iso3d` before the shorter `iso`. The guard below confirms the BASE
     // exists either way, since the suffix strips to the base id.
-    const m = routeId.match(/^(.*)-(splat|surfel|iso3d|iso|world|scan)$/);
+    const m = routeId.match(/^(.*)-(splat|surfel|iso3d|iso|world|stage|scan)$/);
     if (m && getDatasetById(m[1])) {
       return { baseId: m[1], routeMode: m[2] as LidarRenderMode };
     }
@@ -162,6 +165,10 @@ const AvCockpit: React.FC = () => {
     // Worldbuild needs its own `<id>-world` bundle (surfels + is_dynamic /
     // world_class columns + first-seen times).
     if (getDatasetById(`${baseDataset.id}-world`)) modes.push("world");
+    // Scene-split "Stage" needs its own `<id>-stage` bundle (a STATIC stage
+    // archive + a DYNAMIC actors archive). HELD BACK in datasets.ts until the look
+    // is verified, so this auto-gates off until that bundle is un-held + built.
+    if (getDatasetById(`${baseDataset.id}-stage`)) modes.push("stage");
     // Spacetime (cube) is HELD BACK from the shipped cockpit (see the held-back
     // note in datasets.ts). The render-only logic below stays dormant (the toggle
     // is not pushed and the `-cube` deep-link suffix is unmatched, so
@@ -206,6 +213,8 @@ const AvCockpit: React.FC = () => {
       return getDatasetById(`${baseDataset.id}-iso3d`) ?? baseDataset;
     if (lidarRenderMode === "world")
       return getDatasetById(`${baseDataset.id}-world`) ?? baseDataset;
+    if (lidarRenderMode === "stage")
+      return getDatasetById(`${baseDataset.id}-stage`) ?? baseDataset;
     if (lidarRenderMode === "scan")
       return getDatasetById(`${baseDataset.id}-scan`) ?? baseDataset;
     // Spacetime cube: a RENDER-ONLY clone of the BASE bundle with `avCube` set —
@@ -236,6 +245,8 @@ const AvCockpit: React.FC = () => {
   const [telemetry, setTelemetry] = useState<AvTelemetry | null>(null);
   const [cameras, setCameras] = useState<AvCameras | null>(null);
   const [loadError, setLoadError] = useState(false);
+  // Renderer backend: the deck.gl cockpit, or the Three.js + TSL (WebGPU) engine.
+  const [renderer, setRenderer] = useState<"deck" | "three">("deck");
   // Click-to-inspect selection (cleared when the scene changes).
   const [selectedObject, setSelectedObject] = useState<PickedObject | null>(null);
   useEffect(() => {
@@ -530,21 +541,32 @@ const AvCockpit: React.FC = () => {
     <div className="fixed inset-0 bg-slate-950 overflow-hidden">
       {/* The map fills the viewport; chrome floats over it. */}
       <div className="absolute inset-0">
-        <AvDeck
-          dataset={datasetForDeck ?? dataset}
-          timeController={playback.timeController}
-          visibleStreams={visibleStreams}
-          registry={playback.registry}
-          egoFollow={egoFollow}
-          topDown={topDown}
-          reducedMotion={reducedMotion}
-          egoPath={egoPath}
-          sceneView={scene?.initialView ?? null}
-          onSelectObject={setSelectedObject}
-          perfMode={perfMode}
-          showBasemap={showBasemap}
-          timeHeightScale={timeHeightScale}
-        />
+        {renderer === "three" ? (
+          <AvThreeViewer
+            dataset={datasetForDeck ?? dataset}
+            timeController={playback.timeController}
+            visibleStreams={visibleStreams}
+            egoFollow={egoFollow}
+            topDown={topDown}
+            perfMode={perfMode}
+          />
+        ) : (
+          <AvDeck
+            dataset={datasetForDeck ?? dataset}
+            timeController={playback.timeController}
+            visibleStreams={visibleStreams}
+            registry={playback.registry}
+            egoFollow={egoFollow}
+            topDown={topDown}
+            reducedMotion={reducedMotion}
+            egoPath={egoPath}
+            sceneView={scene?.initialView ?? null}
+            onSelectObject={setSelectedObject}
+            perfMode={perfMode}
+            showBasemap={showBasemap}
+            timeHeightScale={timeHeightScale}
+          />
+        )}
       </div>
 
       {isMobile ? (
@@ -635,6 +657,22 @@ const AvCockpit: React.FC = () => {
             }`}
           >
             ⚡ Perf
+          </button>
+          {/* Renderer backend — the deck.gl cockpit, or the Three.js + TSL
+              (WebGPU) engine. The Three path runs the LIDAR cloud as oriented
+              Gaussian surfels / billboard splats in a local metric frame. */}
+          <button
+            type="button"
+            onClick={() => setRenderer((r) => (r === "three" ? "deck" : "three"))}
+            aria-pressed={renderer === "three"}
+            title="Switch between the deck.gl renderer and the Three.js + TSL (WebGPU) engine"
+            className={`rounded-md border px-2.5 py-1 text-xs backdrop-blur-md transition-colors ${
+              renderer === "three"
+                ? "border-fuchsia-300/60 bg-fuchsia-400/20 text-fuchsia-100"
+                : "border-white/10 bg-black/55 text-slate-300 hover:bg-white/5"
+            }`}
+          >
+            {renderer === "three" ? "TSL · WebGPU" : "deck.gl"}
           </button>
           {/* Basemap on/off — only for geo-registered scenes (avLocalFrame scenes
               never draw a basemap). Lets the camera-colored surfel surface read

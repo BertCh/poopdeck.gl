@@ -73,6 +73,15 @@ export function collectTransferables(tile: Tile): Transferable[] {
     if (f.numericProps) {
       for (const arr of Object.values(f.numericProps)) addBuffer(arr);
     }
+    // Interleaved vector columns (surfel quat/scale/colour). Usually views into
+    // the Arrow IPC buffer added above, which the dedup set collapses; a fresh
+    // buffer (unaligned legacy frame) transfers on its own. Either way, omitting
+    // them would structured-clone-copy the biggest instance buffers per tile.
+    if (f.vectorProps) {
+      for (const entry of Object.values(f.vectorProps)) {
+        if (entry) addBuffer(entry.value);
+      }
+    }
     if (f.categoricalProps) {
       for (const entry of Object.values(f.categoricalProps)) {
         // The category-index column is the only transferable piece; the

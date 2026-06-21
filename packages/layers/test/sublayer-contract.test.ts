@@ -377,14 +377,19 @@ function baseSurfelTile(dynamic?: number[]) {
     endTimes: [0, 100, 200],
     timeOffset: 0,
   });
-  const np = tile.layers[0].features.numericProps;
-  np['qx'] = new Float32Array(n).fill(0) as any;
-  np['qy'] = new Float32Array(n).fill(0) as any;
-  np['qz'] = new Float32Array(n).fill(0) as any;
-  np['qw'] = new Float32Array(n).fill(1) as any;
-  np['s_major'] = new Float32Array(n).fill(0.3) as any;
-  np['s_minor'] = new Float32Array(n).fill(0.15) as any;
-  if (dynamic) np['is_dynamic'] = new Float32Array(dynamic) as any;
+  const f = tile.layers[0].features;
+  const quat = new Float32Array(n * 4);
+  const scale = new Float32Array(n * 2);
+  for (let i = 0; i < n; i++) {
+    quat[i * 4 + 3] = 1;
+    scale[i * 2] = 0.3;
+    scale[i * 2 + 1] = 0.15;
+  }
+  f.vectorProps = {
+    surfel_quat: { value: quat, size: 4 },
+    surfel_scale: { value: scale, size: 2 },
+  } as any;
+  if (dynamic) f.numericProps['is_dynamic'] = new Float32Array(dynamic) as any;
   return tile;
 }
 
@@ -393,10 +398,9 @@ async function makeSplatLayer(props: Record<string, any> = {}) {
   const layer: any = Object.create((SplatLayer as any).prototype);
   layer.props = {
     id: 'splat',
-    quaternionColumns: ['qx', 'qy', 'qz', 'qw'],
-    scaleColumns: ['s_major', 's_minor'],
-    rgbColumns: null,
-    opacityColumn: null,
+    quaternionColumn: 'surfel_quat',
+    scaleColumn: 'surfel_scale',
+    colorColumn: null,
     elevationProperty: 'z',
     elevationScale: 1,
     fallbackColor: [200, 205, 215, 255],

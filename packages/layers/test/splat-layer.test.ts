@@ -3,13 +3,14 @@
  *
  * SplatLayer renders an STT point cloud as oriented anisotropic Gaussian
  * surfels: per (tile, layer) it builds a reference-stable binary `data` object
- * for one {@link SplatPrimitiveLayer} sublayer, reading the surfel columns baked
- * by `waymo_extract.py --surfel` (quaternion + in-plane extents + confidence)
- * plus camera RGB and the per-feature sample time.
+ * for one {@link SplatPrimitiveLayer} sublayer. The surfel quaternion / scale /
+ * colour are baked at BUILD time as interleaved `FixedSizeList` columns
+ * (`stt-build --vector-group`), so the layer binds them STRAIGHT from
+ * `binary.vectorProps` with **zero per-point work** on the main thread — this
+ * test pins that zero-copy contract (no re-interleave, no large allocations).
  *
  * The custom-`Model` primitive needs a real GPU, so we mock it to a prop-stashing
- * stand-in (the same shape the other layer tests mock ScatterplotLayer to) and
- * assert on the binary `data.attributes` the composite hands it.
+ * stand-in and assert on the binary `data.attributes` the composite hands it.
  */
 
 import { describe, it, expect, vi } from 'vitest';
@@ -32,7 +33,7 @@ vi.mock('@deck.gl/core', async () =>
   (await import('./fake-deck-core')).createDeckCoreMock(),
 );
 
-/** A point tile of `n` surfels with all the `--surfel` columns populated. */
+/** A point tile of `n` surfels with the interleaved `--vector-group` columns. */
 function surfelTile(
   n: number,
   opts: { withRgb?: boolean; withSurfel?: boolean; dynamic?: number[] } = {},
@@ -47,26 +48,34 @@ function surfelTile(
     endTimes.push(i * 100);
   }
   const tile = makePointTile({ positions, startTimes, endTimes, timeOffset: 1_000_000 });
-  const np = tile.layers[0].features.numericProps;
-  np['z'] = new Float32Array(Array.from({ length: n }, (_, i) => (i % 5) - 2));
+  const f = tile.layers[0].features;
+  f.numericProps['z'] = new Float32Array(Array.from({ length: n }, (_, i) => (i % 5) - 2));
+  f.vectorProps = {};
   if (withSurfel) {
-    // Identity-ish quaternions (normal = up) — unit length.
-    np['qx'] = new Float32Array(n).fill(0);
-    np['qy'] = new Float32Array(n).fill(0);
-    np['qz'] = new Float32Array(n).fill(0);
-    np['qw'] = new Float32Array(n).fill(1);
-    np['s_major'] = new Float32Array(n).fill(0.3);
-    np['s_minor'] = new Float32Array(n).fill(0.15);
-    np['surfel_opacity'] = new Float32Array(n).fill(0.8);
+    // Identity-ish quaternions (normal = up) interleaved [qx,qy,qz,qw].
+    const quat = new Float32Array(n * 4);
+    const scale = new Float32Array(n * 2);
+    for (let i = 0; i < n; i++) {
+      quat[i * 4 + 3] = 1; // qw = 1
+      scale[i * 2] = 0.3;
+      scale[i * 2 + 1] = 0.15;
+    }
+    f.vectorProps['surfel_quat'] = { value: quat, size: 4 };
+    f.vectorProps['surfel_scale'] = { value: scale, size: 2 };
   }
   if (withRgb) {
-    np['r'] = new Float32Array(Array.from({ length: n }, (_, i) => i % 256));
-    np['g'] = new Float32Array(n).fill(128);
-    np['b'] = new Float32Array(n).fill(64);
+    // Interleaved RGBA u8 with the baked confidence (0.8 → 204) already in alpha.
+    const rgba = new Uint8Array(n * 4);
+    for (let i = 0; i < n; i++) {
+      rgba[i * 4] = i % 256;
+      rgba[i * 4 + 1] = 128;
+      rgba[i * 4 + 2] = 64;
+      rgba[i * 4 + 3] = 204;
+    }
+    f.vectorProps['surfel_rgba'] = { value: rgba, size: 4 };
   }
-  // Worldbuild per-point static/dynamic column (0/1). Absent unless supplied —
-  // existing surfel tiles have no such column.
-  if (dynamic) np['is_dynamic'] = new Float32Array(dynamic);
+  // Worldbuild per-point static/dynamic column (0/1). Absent unless supplied.
+  if (dynamic) f.numericProps['is_dynamic'] = new Float32Array(dynamic);
   return tile;
 }
 
@@ -76,10 +85,9 @@ function makeSplatLayer(LayerCtor: any, tiles: any[], overrides: Record<string, 
   Object.assign(layer, {
     props: {
       id: 'surfel',
-      quaternionColumns: ['qx', 'qy', 'qz', 'qw'],
-      scaleColumns: ['s_major', 's_minor'],
-      rgbColumns: ['r', 'g', 'b'],
-      opacityColumn: 'surfel_opacity',
+      quaternionColumn: 'surfel_quat',
+      scaleColumn: 'surfel_scale',
+      colorColumn: 'surfel_rgba',
       elevationProperty: 'z',
       elevationScale: 1,
       fallbackColor: [200, 205, 215, 255],
@@ -104,43 +112,48 @@ function makeSplatLayer(LayerCtor: any, tiles: any[], overrides: Record<string, 
 }
 
 describe('SplatLayer surfel sublayer architecture', () => {
-  it('builds one oriented-surfel sublayer with the right binary attributes', async () => {
+  it('binds the interleaved surfel columns zero-copy (no re-pack)', async () => {
     vi.resetModules();
     const { SplatLayer } = (await import('../src/layers/core/splat-layer')) as any;
     const tile = surfelTile(4);
+    const f = tile.layers[0].features;
     const layer = makeSplatLayer(SplatLayer, [tile]);
 
     const sublayers = layer.renderLayers();
     expect(sublayers).toHaveLength(1);
     const attrs = sublayers[0].props.data.attributes;
 
-    // Positions: size-3, z sourced from the `z` column (feature 2 → z = 0).
-    expect(attrs.instancePositions.size).toBe(3);
-    expect(attrs.instancePositions.value).toBeInstanceOf(Float64Array);
-    expect(attrs.instancePositions.value[2 * 3 + 2]).toBe(0); // (2 % 5) - 2 = 0
+    // Positions: 2D geometry, bound ZERO-COPY (same reference, no new array).
+    expect(attrs.instancePositions.size).toBe(2);
+    expect(attrs.instancePositions.value).toBe(f.positions);
+    // Altitude rides its own zero-copy column (feature 2 → z = 0).
+    expect(attrs.instanceElevations.size).toBe(1);
+    expect(attrs.instanceElevations.value).toBe(f.numericProps['z']);
+    expect(attrs.instanceElevations.value[2]).toBe(0); // (2 % 5) - 2 = 0
 
-    // Orientation + extents.
+    // Orientation + extents: bound straight from the vector columns (zero-copy).
     expect(attrs.instanceQuaternions.size).toBe(4);
+    expect(attrs.instanceQuaternions.value).toBe(f.vectorProps!['surfel_quat'].value);
     expect([...attrs.instanceQuaternions.value.slice(0, 4)]).toEqual([0, 0, 0, 1]);
     expect(attrs.instanceScales.size).toBe(2);
-    expect(attrs.instanceScales.value).toBeInstanceOf(Float32Array);
-    expect(attrs.instanceScales.value[0]).toBeCloseTo(0.3, 5);
-    expect(attrs.instanceScales.value[1]).toBeCloseTo(0.15, 5);
+    expect(attrs.instanceScales.value).toBe(f.vectorProps!['surfel_scale'].value);
 
-    // Color: rgb columns into RGB, baked confidence (0.8) → alpha 204.
+    // Colour: the interleaved u8 RGBA, bound normalized & zero-copy.
     expect(attrs.instanceColors.size).toBe(4);
     expect(attrs.instanceColors.normalized).toBe(true);
-    expect(attrs.instanceColors.value).toBeInstanceOf(Uint8Array);
+    expect(attrs.instanceColors.value).toBe(f.vectorProps!['surfel_rgba'].value);
     expect([...attrs.instanceColors.value.slice(0, 4)]).toEqual([0, 128, 64, 204]);
+    expect(sublayers[0].props.useVertexColor).toBe(true);
 
     // Sample times ride zero-copy as the temporal-Gaussian centres μ_t.
-    expect(attrs.instanceStartTimes.value).toBe(tile.layers[0].features.startTimes);
+    expect(attrs.instanceStartTimes.value).toBe(f.startTimes);
 
-    // Temporal wiring forwarded to the primitive.
+    // Temporal + shaping wiring forwarded to the primitive.
     expect(sublayers[0].props.timeOffset).toBe(1_000_000);
     expect(sublayers[0].props.temporalSigma).toBe(180);
     expect(sublayers[0].props.sizeScale).toBe(1);
     expect(sublayers[0].props.falloff).toBe(3);
+    expect(sublayers[0].props.elevationScale).toBe(1);
     expect(sublayers[0].props.data.length).toBe(4);
   });
 
@@ -156,7 +169,7 @@ describe('SplatLayer surfel sublayer architecture', () => {
     expect(second[0].props.data).toBe(first[0].props.data); // identity dataComparator
   });
 
-  it('skips a tile missing the surfel columns (warns, renders nothing)', async () => {
+  it('skips a tile missing the surfel vector columns (warns, renders nothing)', async () => {
     vi.resetModules();
     const { SplatLayer } = (await import('../src/layers/core/splat-layer')) as any;
     const tile = surfelTile(3, { withSurfel: false });
@@ -164,16 +177,17 @@ describe('SplatLayer surfel sublayer architecture', () => {
     expect(layer.renderLayers()).toHaveLength(0);
   });
 
-  it('falls back to fallbackColor when the rgb columns are absent', async () => {
+  it('drops the colour attribute + flags useVertexColor=false when no rgba column', async () => {
     vi.resetModules();
     const { SplatLayer } = (await import('../src/layers/core/splat-layer')) as any;
     const tile = surfelTile(2, { withRgb: false });
     const layer = makeSplatLayer(SplatLayer, [tile]);
 
     const [sub] = layer.renderLayers();
-    const c = sub.props.data.attributes.instanceColors.value;
-    // RGB = fallback; alpha = baked confidence (0.8 → 204).
-    expect([...c.slice(0, 4)]).toEqual([200, 205, 215, 204]);
+    // No per-surfel colour → the shader uses the fallbackColor uniform instead.
+    expect(sub.props.data.attributes.instanceColors).toBeUndefined();
+    expect(sub.props.useVertexColor).toBe(false);
+    expect(sub.props.fallbackColor).toEqual([200, 205, 215, 255]);
   });
 
   it('forwards the Worldbuild props (cumulative/revealFade/temporalSigmaDynamic) to the primitive', async () => {
@@ -193,130 +207,34 @@ describe('SplatLayer surfel sublayer architecture', () => {
     expect(sub.props.temporalSigma).toBe(180);
   });
 
-  it('defaults the Worldbuild props to the non-cumulative (legacy) behaviour', async () => {
+  it('binds instanceIsDynamic zero-copy from the is_dynamic column', async () => {
     vi.resetModules();
     const { SplatLayer } = (await import('../src/layers/core/splat-layer')) as any;
-    const tile = surfelTile(2);
-    const layer = makeSplatLayer(SplatLayer, [tile]);
-    const [sub] = layer.renderLayers();
-    // makeSplatLayer doesn't set them → they pass through as the test props
-    // (undefined). The point is the sublayer is built and renders fine.
-    expect(sub.props.cumulative).toBeUndefined();
-    expect(sub.props.revealFade).toBeUndefined();
-    expect(sub.props.temporalSigmaDynamic).toBeUndefined();
-  });
-
-  it('builds instanceIsDynamic from the is_dynamic column (0/1, one per feature)', async () => {
-    vi.resetModules();
-    const { SplatLayer } = (await import('../src/layers/core/splat-layer')) as any;
-    // Mixed scene: features 1 and 3 are moving actors.
+    // Mixed scene: features 1 and 3 are moving actors. The shader thresholds at
+    // 0.5, so the raw column rides straight through with no CPU pass.
     const tile = surfelTile(4, { dynamic: [0, 1, 0, 1] });
+    const f = tile.layers[0].features;
     const layer = makeSplatLayer(SplatLayer, [tile], { cumulative: true });
     const [sub] = layer.renderLayers();
 
     const dyn = sub.props.data.attributes.instanceIsDynamic;
     expect(dyn).toBeDefined();
     expect(dyn.size).toBe(1);
-    expect(dyn.value).toBeInstanceOf(Float32Array);
-    expect(dyn.value.length).toBe(4);
+    expect(dyn.value).toBe(f.numericProps['is_dynamic']); // zero-copy
     expect([...dyn.value]).toEqual([0, 1, 0, 1]);
-  });
-
-  it('thresholds non-0/1 is_dynamic values at 0.5', async () => {
-    vi.resetModules();
-    const { SplatLayer } = (await import('../src/layers/core/splat-layer')) as any;
-    // Defensive: any ≥0.5 → dynamic, anything below → static.
-    const tile = surfelTile(4, { dynamic: [0.2, 0.5, 0.99, 0] });
-    const [sub] = makeSplatLayer(SplatLayer, [tile], { cumulative: true }).renderLayers();
-    expect([...sub.props.data.attributes.instanceIsDynamic.value]).toEqual([0, 1, 1, 0]);
   });
 
   it('degrades gracefully to all-static when the is_dynamic column is absent', async () => {
     vi.resetModules();
     const { SplatLayer } = (await import('../src/layers/core/splat-layer')) as any;
-    // Existing surfel tiles have no is_dynamic column — even under cumulative the
-    // attribute is OMITTED (primitive's getIsDynamic default 0 ⇒ all static), and
-    // nothing crashes.
+    // Surfel tiles without an is_dynamic column omit the attribute (primitive's
+    // getIsDynamic default 0 ⇒ all static), and nothing crashes.
     const tile = surfelTile(3);
     const layer = makeSplatLayer(SplatLayer, [tile], { cumulative: true });
     const sublayers = layer.renderLayers();
     expect(sublayers).toHaveLength(1);
     expect(sublayers[0].props.data.attributes.instanceIsDynamic).toBeUndefined();
-    // Still a valid, length-correct splat sublayer.
     expect(sublayers[0].props.data.length).toBe(3);
-    expect(sublayers[0].props.data.attributes.instancePositions.size).toBe(3);
-  });
-
-  it('auto-detects smallest-three packed quats (q_imax) and flags the sublayer', async () => {
-    vi.resetModules();
-    const { SplatLayer } = (await import('../src/layers/core/splat-layer')) as any;
-    // Identity quaternion packed: largest = w (index 3), other three = 0.
-    const tile = surfelTile(3);
-    const np = tile.layers[0].features.numericProps;
-    for (const c of ['qx', 'qy', 'qz', 'qw']) delete np[c];
-    np['q_a'] = new Float32Array(3).fill(0);
-    np['q_b'] = new Float32Array(3).fill(0);
-    np['q_c'] = new Float32Array(3).fill(0);
-    np['q_imax'] = new Float32Array(3).fill(3);
-    const [sub] = makeSplatLayer(SplatLayer, [tile]).renderLayers();
-
-    // Shader is told to unpack; the size-4 attribute carries [a,b,c,imax].
-    expect(sub.props.packedQuaternion).toBe(true);
-    expect([...sub.props.data.attributes.instanceQuaternions.value.slice(0, 4)]).toEqual([0, 0, 0, 3]);
-  });
-
-  it('legacy (qx,qy,qz,qw) bundles stay unpacked', async () => {
-    vi.resetModules();
-    const { SplatLayer } = (await import('../src/layers/core/splat-layer')) as any;
-    const [sub] = makeSplatLayer(SplatLayer, [surfelTile(2)]).renderLayers();
-    expect(sub.props.packedQuaternion).toBe(false);
-  });
-});
-
-/**
- * Contract guard: the Python encoder (av_common.pack_surfel_quaternions) and the
- * GLSL unpack (splat-primitive-layer.ts unpackQuat) must agree exactly, else
- * surfel orientations silently corrupt. We mirror both in JS and assert the
- * round-trip reconstructs the rotation for arbitrary unit quaternions.
- */
-describe('smallest-three quaternion pack/unpack contract', () => {
-  // mirror of av_common.pack_surfel_quaternions
-  function pack(q: number[]): [number, number, number, number] {
-    const n = Math.hypot(q[0], q[1], q[2], q[3]);
-    const c = q.map((v) => v / n);
-    let m = 0;
-    for (let i = 1; i < 4; i++) if (Math.abs(c[i]) > Math.abs(c[m])) m = i;
-    const s = Math.sign(c[m]) || 1;
-    const cc = c.map((v) => v * s);
-    const abc = cc.filter((_, i) => i !== m);
-    return [abc[0], abc[1], abc[2], m];
-  }
-  // mirror of the GLSL unpackQuat
-  function unpack(p: number[]): number[] {
-    const d = Math.sqrt(Math.max(0, 1 - p[0] * p[0] - p[1] * p[1] - p[2] * p[2]));
-    const m = Math.round(p[3]);
-    if (m === 0) return [d, p[0], p[1], p[2]];
-    if (m === 1) return [p[0], d, p[1], p[2]];
-    if (m === 2) return [p[0], p[1], d, p[2]];
-    return [p[0], p[1], p[2], d];
-  }
-
-  it('reconstructs the rotation for arbitrary unit quaternions', () => {
-    // deterministic LCG → reproducible quats (no Math.random)
-    let seed = 12345;
-    const rnd = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff) * 2 - 1;
-    let maxErr = 0;
-    for (let i = 0; i < 1000; i++) {
-      const raw = [rnd(), rnd(), rnd(), rnd()];
-      const n = Math.hypot(raw[0], raw[1], raw[2], raw[3]);
-      if (n < 1e-6) continue;
-      const q0 = raw.map((v) => v / n);
-      const q1 = unpack(pack(q0));
-      // q and −q are the same rotation, so compare |dot| → 1.
-      const dot = Math.abs(q0[0] * q1[0] + q0[1] * q1[1] + q0[2] * q1[2] + q0[3] * q1[3]);
-      maxErr = Math.max(maxErr, 1 - dot);
-    }
-    // Exact (pre-quantization) round-trip — the only error is float epsilon.
-    expect(maxErr).toBeLessThan(1e-9);
+    expect(sublayers[0].props.data.attributes.instancePositions.size).toBe(2);
   });
 });

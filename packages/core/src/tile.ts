@@ -144,12 +144,18 @@ const STT_QUANT_META_KEY = 'stt:quant';
  */
 const STT_QUANT_ATTR_META_KEY = 'stt:qa';
 
-/** Coordinate-quantization affine (`lon = x0 + qx*sx`, `lat = y0 + qy*sy`). */
+/**
+ * Coordinate-quantization affine (`lon = x0 + qx*sx`, `lat = y0 + qy*sy`). For
+ * 3D point geometry the altitude axis (`z = z0 + qz*sz`) is present too; absent
+ * for 2D coords.
+ */
 interface QuantAffine {
   x0: number;
   y0: number;
   sx: number;
   sy: number;
+  z0?: number;
+  sz?: number;
 }
 
 /** Read the quantization affine from the geometry field, or undefined (Float64). */
@@ -159,30 +165,34 @@ function readQuantAffine(table: Table): QuantAffine | undefined {
   if (!raw) return undefined;
   try {
     const o = JSON.parse(raw);
-    return { x0: o.x0, y0: o.y0, sx: o.sx, sy: o.sy };
+    return { x0: o.x0, y0: o.y0, sx: o.sx, sy: o.sy, z0: o.z0, sz: o.sz };
   } catch {
     return undefined;
   }
 }
 
 /**
- * Read an interleaved `[lon,lat,...]` coordinate run `[start, end)` out of a
- * geometry leaf. Without an affine the leaf is already a `Float64Array` and we
- * return a zero-copy subarray; with one it's an `i32` grid-index array
- * (`Int32Array`) that we dequantize into a fresh `Float64Array` — even indices
- * are longitude, odd are latitude (the run always starts on a vertex boundary).
+ * Read an interleaved coordinate run `[start, end)` out of a geometry leaf.
+ * `dims` is the coordinate width (2 for `[lon,lat]`, 3 for `[lon,lat,alt]` point
+ * clouds). Without an affine the leaf is already a `Float64Array` and we return
+ * a zero-copy subarray; with one it's an `i32` grid-index array we dequantize
+ * into a fresh `Float64Array` (`lon=x0+qx·sx`, `lat=y0+qy·sy`, `alt=z0+qz·sz`).
  */
 function readCoordRun(
   leaf: ArrayLike<number>,
   start: number,
   end: number,
+  dims: number,
   affine?: QuantAffine,
 ): Float64Array {
   if (!affine) return (leaf as Float64Array).subarray(start, end);
   const out = new Float64Array(end - start);
-  for (let i = start, j = 0; i < end; i += 2, j += 2) {
+  const z0 = affine.z0 ?? 0;
+  const sz = affine.sz ?? 1;
+  for (let i = start, j = 0; i < end; i += dims, j += dims) {
     out[j] = affine.x0 + leaf[i] * affine.sx;
     out[j + 1] = affine.y0 + leaf[i + 1] * affine.sy;
+    if (dims > 2) out[j + 2] = z0 + leaf[i + 2] * sz;
   }
   return out;
 }
@@ -192,14 +202,20 @@ function extractGeometry(
   geomVec: Vector,
   kind: GeometryType,
   affine?: QuantAffine,
-): { positions: Float64Array; startIndices?: Uint32Array } {
+): { positions: Float64Array; startIndices?: Uint32Array; positionDimensions: 2 | 3 } {
   const geom = chunk(geomVec);
 
   if (kind === GeometryType.Point) {
-    // FixedSizeList<Float64|Int32, 2>: the child buffer is interleaved coords.
+    // FixedSizeList<Float64|Int32, 2|3>: the child buffer is interleaved coords.
+    // 3-wide point clouds carry altitude as the 3rd coord (zero-copy 3D), so the
+    // renderer never pads 2D→3D on the main thread.
+    const dims = ((geom.type as any)?.listSize ?? 2) as 2 | 3;
     const coords: ArrayLike<number> = geom.children[0].values;
-    const start = geom.offset * 2;
-    return { positions: readCoordRun(coords, start, start + geom.length * 2, affine) };
+    const start = geom.offset * dims;
+    return {
+      positions: readCoordRun(coords, start, start + geom.length * dims, dims, affine),
+      positionDimensions: dims,
+    };
   }
 
   if (kind === GeometryType.LineString) {
@@ -213,8 +229,8 @@ function extractGeometry(
     for (let i = 0; i <= n; i++) {
       startIndices[i] = featureOffsets[geom.offset + i] - base;
     }
-    const positions = readCoordRun(coords, base * 2, featureOffsets[geom.offset + n] * 2, affine);
-    return { positions, startIndices };
+    const positions = readCoordRun(coords, base * 2, featureOffsets[geom.offset + n] * 2, 2, affine);
+    return { positions, startIndices, positionDimensions: 2 };
   }
 
   // Polygon: List<List<FixedSizeList<Float64|Int32,2>>>. Two levels of offsets:
@@ -240,8 +256,8 @@ function extractGeometry(
     const ringIdx = featureOffsets[geom.offset + i];
     startIndices[i] = ringOffsets[ringIdx] - startVertex;
   }
-  const positions = readCoordRun(coords, startVertex * 2, endVertex * 2, affine);
-  return { positions, startIndices };
+  const positions = readCoordRun(coords, startVertex * 2, endVertex * 2, 2, affine);
+  return { positions, startIndices, positionDimensions: 2 };
 }
 
 /**
@@ -357,7 +373,11 @@ function tableToBinaryFeatures(table: Table): BinaryFeatures {
   // Quantized tiles store i32 grid indices + an affine; reconstruct Float64
   // here so every downstream layer still sees standard lon/lat positions.
   const quantAffine = readQuantAffine(table);
-  const { positions, startIndices } = extractGeometry(geomVec, kind, quantAffine);
+  const { positions, startIndices, positionDimensions } = extractGeometry(
+    geomVec,
+    kind,
+    quantAffine,
+  );
 
   // --- per-vertex times ---
   // v3 layers carry the origin/step pair as schema metadata; v2 layers
@@ -430,6 +450,7 @@ function tableToBinaryFeatures(table: Table): BinaryFeatures {
   // --- properties ---
   const numericProps: Record<string, Float32Array> = {};
   const categoricalProps: BinaryFeatures['categoricalProps'] = {};
+  const vectorProps: BinaryFeatures['vectorProps'] = {};
   const reserved = new Set([
     'id',
     'start_time',
@@ -445,6 +466,20 @@ function tableToBinaryFeatures(table: Table): BinaryFeatures {
     const vec = table.getChild(field.name);
     if (!vec) continue;
     const typeId = (field.type as any).typeId;
+    if (typeId === ArrowType.FixedSizeList) {
+      // Interleaved GPU-ready vector column (FixedSizeList<Float32|UInt8, N>):
+      // the renderer binds the contiguous child buffer straight to a deck.gl
+      // instanced attribute with no per-point re-interleave. Hand back the
+      // child run zero-copy (a subarray into the decoded Arrow buffer — it
+      // shares the IPC buffer the worker transfers, so it survives postMessage).
+      const size = (field.type as any).listSize as number;
+      const data = chunk(vec);
+      const childValues = data.children[0].values as Float32Array | Uint8Array;
+      const start = data.offset * size;
+      const end = start + featureCount * size;
+      vectorProps[field.name] = { value: childValues.subarray(start, end), size };
+      continue;
+    }
     const isDictionary =
       typeId === ArrowType.Dictionary ||
       String(field.type).startsWith('Dictionary');
@@ -510,29 +545,36 @@ function tableToBinaryFeatures(table: Table): BinaryFeatures {
         | Float32Array
         | Uint16Array
         | Int32Array;
-      const arr = new Float32Array(featureCount);
-      if (qaRaw) {
-        let o = 0;
-        let s = 1;
-        try {
-          const qa = JSON.parse(qaRaw);
-          o = qa.o;
-          s = qa.s;
-        } catch {
-          /* malformed affine — fall through as identity (o=0,s=1) */
-        }
-        for (let i = 0; i < featureCount; i++) arr[i] = o + Number(raw[i]) * s;
+      if (!qaRaw && raw instanceof Float32Array && raw.length === featureCount) {
+        // Already the GPU upload type and no fixed-point affine to undo: hand
+        // the Arrow buffer straight through, skipping the f64→f32 copy loop.
+        // (It shares the IPC buffer the worker transfers, like `positions`.)
+        numericProps[field.name] = raw;
       } else {
-        for (let i = 0; i < featureCount; i++) arr[i] = Number(raw[i]);
+        const arr = new Float32Array(featureCount);
+        if (qaRaw) {
+          let o = 0;
+          let s = 1;
+          try {
+            const qa = JSON.parse(qaRaw);
+            o = qa.o;
+            s = qa.s;
+          } catch {
+            /* malformed affine — fall through as identity (o=0,s=1) */
+          }
+          for (let i = 0; i < featureCount; i++) arr[i] = o + Number(raw[i]) * s;
+        } else {
+          for (let i = 0; i < featureCount; i++) arr[i] = Number(raw[i]);
+        }
+        numericProps[field.name] = arr;
       }
-      numericProps[field.name] = arr;
     }
   }
 
   return {
     featureCount,
     geometryType: kind,
-    positionDimensions: 2,
+    positionDimensions,
     positions,
     startIndices,
     featureIds,
@@ -548,6 +590,7 @@ function tableToBinaryFeatures(table: Table): BinaryFeatures {
     triangleOffsets,
     numericProps,
     categoricalProps,
+    vectorProps,
   };
 }
 
@@ -629,6 +672,13 @@ export function getFeatureProperties(
   };
   for (const [name, values] of Object.entries(features.numericProps)) {
     props[name] = values[index];
+  }
+  for (const [name, { value, size }] of Object.entries(
+    features.vectorProps ?? {},
+  )) {
+    // Materialise the feature's component slice as a plain array (picking /
+    // tooltip path only — the render path binds the contiguous buffer instead).
+    props[name] = Array.from(value.subarray(index * size, index * size + size));
   }
   for (const [name, { indices, categories }] of Object.entries(
     features.categoricalProps,

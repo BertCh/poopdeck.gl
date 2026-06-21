@@ -574,13 +574,18 @@ describe('SplatLayer Worldbuild layerPropsKey invalidation', () => {
       endTimes.push(i * 100);
     }
     const tile = makePointTile({ positions, startTimes, endTimes, timeOffset: 0 });
-    const np = tile.layers[0].features.numericProps;
-    np['qx'] = new Float32Array(n).fill(0);
-    np['qy'] = new Float32Array(n).fill(0);
-    np['qz'] = new Float32Array(n).fill(0);
-    np['qw'] = new Float32Array(n).fill(1);
-    np['s_major'] = new Float32Array(n).fill(0.3);
-    np['s_minor'] = new Float32Array(n).fill(0.15);
+    const f = tile.layers[0].features;
+    const quat = new Float32Array(n * 4);
+    const scale = new Float32Array(n * 2);
+    for (let i = 0; i < n; i++) {
+      quat[i * 4 + 3] = 1;
+      scale[i * 2] = 0.3;
+      scale[i * 2 + 1] = 0.15;
+    }
+    f.vectorProps = {
+      surfel_quat: { value: quat, size: 4 },
+      surfel_scale: { value: scale, size: 2 },
+    };
     return tile;
   }
 
@@ -588,10 +593,9 @@ describe('SplatLayer Worldbuild layerPropsKey invalidation', () => {
     const layer = Object.create(LayerCtor.prototype);
     layer.props = {
       id: 'splat',
-      quaternionColumns: ['qx', 'qy', 'qz', 'qw'],
-      scaleColumns: ['s_major', 's_minor'],
-      rgbColumns: null,
-      opacityColumn: null,
+      quaternionColumn: 'surfel_quat',
+      scaleColumn: 'surfel_scale',
+      colorColumn: null,
       elevationProperty: 'z',
       elevationScale: 1,
       fallbackColor: [200, 205, 215, 255],

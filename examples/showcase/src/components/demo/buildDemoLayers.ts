@@ -838,7 +838,70 @@ export function buildDemoLayers({
           }),
         );
       }
-      if (selectedDataset.avLidarUrl && selectedDataset.lidarWorldbuild) {
+      if (
+        selectedDataset.lidarStage &&
+        selectedDataset.avStaticUrl &&
+        selectedDataset.avDynamicUrl
+      ) {
+        // SCENE-SPLIT ("stage + actors"): TWO surfel archives → TWO layers.
+        //   • STATIC stage (the fixed environment, accumulated + ERASOR-scrubbed
+        //     at build): an OPTIONAL governor source that loads once and persists
+        //     (one timeless full-range archive). Rendered with an effectively
+        //     infinite temporalSigma so every surfel stays full-bright from t=0
+        //     regardless of the playhead — a backdrop, no reveal/fade. Muted vs
+        //     the actors. Painted UNDER.
+        //   • DYNAMIC actors (the moving returns, kept per-sweep): the PRIMARY /
+        //     required animated stream, smearing over a short temporal Gaussian so
+        //     traffic reads as motion. Painted OVER, bright.
+        const stageStatic = selectedDataset.lidarStageStatic ?? true;
+        const stageSigma = stageStatic
+          ? 1e9
+          : selectedDataset.lidarSurfelTemporalSigma ?? 1800;
+        const actorSigma = selectedDataset.lidarSurfelTemporalSigma ?? 200;
+        layers.push(
+          new SplatLayer({
+            ...overlayBase,
+            id: `${selectedDataset.id}-stage`,
+            // OPTIONAL: loads coordinated but never gates the clock (HD-map idiom).
+            ...sourceProps(`${selectedDataset.id}-stage`, false),
+            data: selectedDataset.avStaticUrl,
+            elevationProperty: "z",
+            elevationScale: selectedDataset.elevationScale ?? 1,
+            // Always-present backdrop: a huge sigma pins each surfel full-bright
+            // independent of its first_seen vs the playhead (no accreting reveal).
+            temporalSigma: stageSigma,
+            temporalSigmaDynamic: stageSigma,
+            cumulative: false,
+            sizeScale: selectedDataset.lidarSurfelSizeScale ?? 1,
+            // Muted + recessive so the moving agents pop against it. Dim by
+            // default; tune per-scene via lidarStageOpacity.
+            opacity: selectedDataset.lidarStageOpacity ?? 0.42,
+            ...(perfMode ? { alphaCutoff: 0.2 } : {}),
+          }),
+        );
+        layers.push(
+          new SplatLayer({
+            ...propsForStream(selectedDataset.id, selectedDataset.avDynamicUrl),
+            id: selectedDataset.id, // bare id → the cockpit's "lidar" toggle slot
+            data: selectedDataset.avDynamicUrl,
+            elevationProperty: "z",
+            elevationScale: selectedDataset.elevationScale ?? 1,
+            // Moving agents (is_dynamic = 1): a short temporal Gaussian so each
+            // sweep's returns smear into motion rather than freezing or streaking.
+            temporalSigma: actorSigma,
+            temporalSigmaDynamic:
+              selectedDataset.lidarWorldbuildDynamicSigma ?? actorSigma,
+            // POP vs the recessive stage: chunkier disks (sizeScale) + full
+            // opacity + a tighter alphaCutoff so each actor return reads as a solid
+            // agent (discard the faint gaussian rim) instead of a hazy smear. The
+            // bake-time punchier actor colour grade (av_common actor_grade) does the
+            // rest of the pop.
+            sizeScale: selectedDataset.lidarActorSizeScale ?? 1.8,
+            opacity: selectedDataset.opacity ?? 1,
+            alphaCutoff: perfMode ? 0.2 : 0.1,
+          }),
+        );
+      } else if (selectedDataset.avLidarUrl && selectedDataset.lidarWorldbuild) {
         // WORLDBUILD: the `-world` surfel cloud rendered as a CUMULATIVE scene
         // reconstruction. STATIC surfels (is_dynamic = 0) persist once revealed —
         // a HUGE/effectively-infinite temporalSigma keeps them at full brightness

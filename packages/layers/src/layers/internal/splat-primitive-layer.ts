@@ -100,10 +100,15 @@ layout(std140) uniform splatUniforms {
   float sizeScale;       // multiplier on the baked surfel extents
   float falloff;         // radial Gaussian tightness (alpha *= exp(-falloff·r²))
   float alphaCutoff;     // discard fragments below this final alpha
-  float packedQuaternion; // >0.5 ⇒ instanceQuaternions is smallest-three packed
   float cumulative;      // >0.5 ⇒ Worldbuild accreted reveal for STATIC surfels
   float revealFade;      // ms; reveal alpha ramp 0→1 for cumulative statics (0 ⇒ instant)
   float temporalSigmaDynamic; // ms; soft temporal Gaussian width for DYNAMIC surfels
+  float elevationScale;  // multiplier on the raw instanceElevations (z metres)
+  float useVertexColor;  // >0.5 ⇒ use instanceColors, else the fallback*  RGBA
+  float fallbackR;       // fallback colour (0–1), used when useVertexColor < 0.5
+  float fallbackG;
+  float fallbackB;
+  float fallbackA;
 } splat;
 `;
 
@@ -113,10 +118,15 @@ type SplatUniforms = {
   sizeScale: number;
   falloff: number;
   alphaCutoff: number;
-  packedQuaternion: number;
   cumulative: number;
   revealFade: number;
   temporalSigmaDynamic: number;
+  elevationScale: number;
+  useVertexColor: number;
+  fallbackR: number;
+  fallbackG: number;
+  fallbackB: number;
+  fallbackA: number;
 };
 
 const splatUniforms = {
@@ -129,10 +139,15 @@ const splatUniforms = {
     sizeScale: 'f32',
     falloff: 'f32',
     alphaCutoff: 'f32',
-    packedQuaternion: 'f32',
     cumulative: 'f32',
     revealFade: 'f32',
     temporalSigmaDynamic: 'f32',
+    elevationScale: 'f32',
+    useVertexColor: 'f32',
+    fallbackR: 'f32',
+    fallbackG: 'f32',
+    fallbackB: 'f32',
+    fallbackA: 'f32',
   },
 } as const;
 
@@ -141,31 +156,18 @@ const vs = /* glsl */ `\
 #define SHADER_NAME splat-primitive-layer-vertex-shader
 
 in vec2 positions;                 // hexagon corner (u,v); disk rim at r=1
-in vec3 instancePositions;         // surfel centre [lng, lat, altitude(m)]
-in vec3 instancePositions64Low;
+in vec2 instancePositions;         // surfel centre [lng, lat] (2D; zero-copy geometry)
+in vec2 instancePositions64Low;
+in float instanceElevations;       // surfel altitude (m, raw); ×elevationScale here
 in vec4 instanceQuaternions;       // surface frame [tangent|bitangent|normal]
 in vec2 instanceScales;            // in-plane half-extents (m): [s_major, s_minor]
-in vec4 instanceColors;            // rgba; a = baked surfel confidence
+in vec4 instanceColors;            // rgba (0–1, unorm8); a = baked surfel confidence
 in float instanceStartTimes;       // sample time μ_t (relative to timeOffset)
 in float instanceIsDynamic;        // 1 ⇒ moving actor (motion smear); 0 ⇒ static world
 in vec3 instancePickingColors;
 
 out vec2 vUv;
 out vec4 vColor;
-
-// Smallest-three unpack: a unit quaternion has 3 DOF, so the build side
-// (av_common.pack_surfel_quaternions) may store only the three NON-largest
-// components in p.xyz + the largest's index 0..3 in p.w, having sign-flipped so
-// the largest is positive. Reconstruct it as +sqrt(1−a²−b²−c²) and slot the
-// three back around it. MUST mirror the Python encoder's component order.
-vec4 unpackQuat(vec4 p) {
-  float d = sqrt(max(0.0, 1.0 - p.x * p.x - p.y * p.y - p.z * p.z));
-  int m = int(p.w + 0.5);
-  if (m == 0) return vec4(d, p.x, p.y, p.z);
-  if (m == 1) return vec4(p.x, d, p.y, p.z);
-  if (m == 2) return vec4(p.x, p.y, d, p.z);
-  return vec4(p.x, p.y, p.z, d);
-}
 
 // Quaternion → rotation matrix. Columns are the rotated basis vectors, so
 // mat[0]=tangent, mat[1]=bitangent, mat[2]=normal (the build side packs them
@@ -184,7 +186,11 @@ mat3 quatToMat3(vec4 q) {
 }
 
 void main(void) {
-  geometry.worldPosition = instancePositions;
+  // Reassemble the 3D centre from the 2D geometry + the raw elevation column
+  // (both bound zero-copy; z is scaled here instead of on the CPU).
+  vec3 center3 = vec3(instancePositions, instanceElevations * splat.elevationScale);
+  vec3 center3Low = vec3(instancePositions64Low, 0.0);
+  geometry.worldPosition = center3;
   geometry.pickingColor = instancePickingColors;
   picking_setPickingColor(geometry.pickingColor);
 
@@ -231,13 +237,9 @@ void main(void) {
   // Project the surfel centre, keeping the common-space position so the
   // tangent-plane offset can be added there (the deck world-offset idiom).
   vec4 centerCommon;
-  project_position_to_clipspace(
-    instancePositions, instancePositions64Low, vec3(0.0), centerCommon);
+  project_position_to_clipspace(center3, center3Low, vec3(0.0), centerCommon);
 
-  vec4 quat = splat.packedQuaternion > 0.5
-    ? unpackQuat(instanceQuaternions)
-    : instanceQuaternions;
-  mat3 frame = quatToMat3(quat);
+  mat3 frame = quatToMat3(instanceQuaternions);
   vec3 tangent = frame[0];
   vec3 bitangent = frame[1];
 
@@ -254,7 +256,13 @@ void main(void) {
   gl_Position = project_common_position_to_clipspace(posCommon);
 
   vUv = uv;
-  vColor = vec4(instanceColors.rgb, instanceColors.a * layer.opacity * timeWeight);
+  // Per-surfel camera colour (instanceColors) or the constant fallback. The
+  // alpha carries the baked surfel confidence, modulated by layer opacity and
+  // the temporal Gaussian.
+  vec3 rgb = mix(vec3(splat.fallbackR, splat.fallbackG, splat.fallbackB),
+                 instanceColors.rgb, step(0.5, splat.useVertexColor));
+  float baseA = mix(splat.fallbackA, instanceColors.a, step(0.5, splat.useVertexColor));
+  vColor = vec4(rgb, baseA * layer.opacity * timeWeight);
 }
 `;
 
@@ -287,24 +295,28 @@ export type SplatPrimitiveLayerProps<DataT = unknown> = _SplatPrimitiveLayerProp
 /** Props added by {@link SplatPrimitiveLayer}. */
 type _SplatPrimitiveLayerProps<DataT> = {
   data: LayerDataSource<DataT>;
-  /** Surfel centre `[lng, lat, altitude(m)]`. */
-  getPosition?: Accessor<DataT, [number, number, number]>;
+  /** Surfel centre `[lng, lat]` (2D — altitude rides {@link getElevation}). */
+  getPosition?: Accessor<DataT, [number, number]>;
+  /** Surfel altitude (metres, raw); multiplied by {@link elevationScale} in the shader. */
+  getElevation?: Accessor<DataT, number>;
   /**
-   * Surface-frame quaternion. Either the full `[qx,qy,qz,qw]`
-   * ([tangent|bitangent|normal] columns), or — when {@link packedQuaternion} is
-   * set — the smallest-three packing `[q_a,q_b,q_c,q_imax]` (the shader rebuilds
-   * the 4th component from the unit constraint).
+   * Surface-frame quaternion `[qx,qy,qz,qw]` whose rotation-matrix columns are
+   * the surfel's `[tangent|bitangent|normal]`.
    */
   getQuaternion?: Accessor<DataT, [number, number, number, number]>;
-  /**
-   * When true, `getQuaternion` yields the smallest-three packing
-   * `[a,b,c,imax]` and the shader reconstructs the full quaternion. @default false
-   */
-  packedQuaternion?: boolean;
   /** In-plane half-extents `[s_major, s_minor]` in metres. */
   getScale?: Accessor<DataT, [number, number]>;
   /** Per-surfel RGBA (`a` = baked confidence). */
   getColor?: Accessor<DataT, Color>;
+  /** Multiplier on the raw {@link getElevation} value. @default 1 */
+  elevationScale?: number;
+  /**
+   * When false, every surfel uses {@link fallbackColor} instead of the per-surfel
+   * `getColor` attribute (e.g. a colourless cloud). @default true
+   */
+  useVertexColor?: boolean;
+  /** Constant RGBA (0–255) used when {@link useVertexColor} is false. */
+  fallbackColor?: Color;
   /** Sample time `μ_t`, RELATIVE to {@link timeOffset}. */
   getStartTime?: Accessor<DataT, number>;
   /**
@@ -351,10 +363,13 @@ type _SplatPrimitiveLayerProps<DataT> = {
 
 const defaultProps: DefaultProps<SplatPrimitiveLayerProps> = {
   getPosition: { type: 'accessor', value: (d: any) => d.position },
+  getElevation: { type: 'accessor', value: 0 },
   getQuaternion: { type: 'accessor', value: [0, 0, 0, 1] },
-  packedQuaternion: { type: 'boolean', value: false },
   getScale: { type: 'accessor', value: [1, 1] },
   getColor: { type: 'accessor', value: [255, 255, 255, 255] },
+  elevationScale: { type: 'number', value: 1 },
+  useVertexColor: { type: 'boolean', value: true },
+  fallbackColor: { type: 'color', value: [200, 205, 215, 255] },
   getStartTime: { type: 'accessor', value: 0 },
   getIsDynamic: { type: 'accessor', value: 0 },
   getTime: { type: 'function', value: null, optional: true },
@@ -400,14 +415,23 @@ export class SplatPrimitiveLayer<DataT = any, ExtraProps extends {} = {}> extend
     if (!attributeManager) return;
     attributeManager.addInstanced({
       instancePositions: {
-        size: 3,
+        size: 2,
         type: 'float64',
         fp64: this.use64bitPositions(),
         transition: false,
         accessor: 'getPosition',
       },
+      // Altitude rides its own zero-copy column (the tile geometry is 2D); the
+      // shader recombines `xy` + `z·elevationScale` so positions stay zero-copy.
+      instanceElevations: {
+        size: 1,
+        type: 'float32',
+        accessor: 'getElevation',
+        defaultValue: 0,
+      },
       instanceQuaternions: {
         size: 4,
+        type: 'float32',
         accessor: 'getQuaternion',
         defaultValue: [0, 0, 0, 1],
       },
@@ -467,16 +491,22 @@ export class SplatPrimitiveLayer<DataT = any, ExtraProps extends {} = {}> extend
       this.props.temporalSigmaDynamic > 0
         ? this.props.temporalSigmaDynamic
         : this.props.temporalSigma;
+    const fb = (this.props.fallbackColor ?? [200, 205, 215, 255]) as Color;
     const splatProps: SplatUniforms = {
       currentTime: resolved - timeOffset,
       temporalSigma: this.props.temporalSigma,
       sizeScale: this.props.sizeScale,
       falloff: this.props.falloff,
       alphaCutoff: this.props.alphaCutoff,
-      packedQuaternion: this.props.packedQuaternion ? 1 : 0,
       cumulative: this.props.cumulative ? 1 : 0,
       revealFade: this.props.revealFade,
       temporalSigmaDynamic: sigmaDynamic,
+      elevationScale: this.props.elevationScale ?? 1,
+      useVertexColor: this.props.useVertexColor === false ? 0 : 1,
+      fallbackR: (fb[0] ?? 200) / 255,
+      fallbackG: (fb[1] ?? 205) / 255,
+      fallbackB: (fb[2] ?? 215) / 255,
+      fallbackA: (fb[3] ?? 255) / 255,
     };
     model.shaderInputs.setProps({ splat: splatProps });
     model.draw(this.context.renderPass);

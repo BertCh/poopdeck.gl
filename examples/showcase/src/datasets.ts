@@ -2097,6 +2097,8 @@ const rawDatasets: Dataset[] = [
     longitude: -80.19521021126853,
     latitude: 25.81266355087901,
   }),
+  // Scene-split "stage + actors" variants are AUTO-DERIVED from every AV2 + Waymo
+  // base scene (see makeStageVariant / STAGE_BASE_IDS below) — no per-scene entry.
   // Oriented-surfel splat variant of the Miami scene (argoverse_extract.py
   // --surfel): every LIDAR return is an oriented elliptical disk lying on the
   // surface it sampled — orientation + size fit from a per-sweep k-NN covariance,
@@ -2717,6 +2719,8 @@ const rawDatasets: Dataset[] = [
     latitude: 33.448412,
     surfel: true,
   }),
+  // Scene-split "stage + actors" variants are AUTO-DERIVED from every AV2 + Waymo
+  // base scene (see makeStageVariant / STAGE_BASE_IDS) — no per-scene entry here.
   // TRUE-3D density iso-lines for the remaining 4 Waymo scenes (sf-day's is above).
   // Density contoured per height layer, stacked at real altitude — the cockpit's
   // "Iso 3D" render mode. Local-only (Waymo no-redistribution).
@@ -3489,14 +3493,73 @@ const coloredSplatVariants: Dataset[] = rawDatasets
   .filter((d) => COLORED_SPLAT_BASE_IDS.has(d.id))
   .map(makeColoredSplatVariant);
 
+// Scene-split ("stage + actors") variants, auto-derived from the AV2 + Waymo base
+// scenes (built by {argoverse,waymo}_extract.py --scene-split → static/ + dynamic/).
+// nuScenes is EXCLUDED: its 32-beam cloud is too sparse to reconstruct a stage.
+const STAGE_BASE_IDS = new Set<string>([
+  'argoverse-02678d04', 'argoverse-02a00399', 'argoverse-0b5142c1',
+  'argoverse-0bae3b5e', 'argoverse-25e5c600', 'argoverse-92b900b1',
+  'waymo-sf-day', 'waymo-sf-night', 'waymo-phx-day', 'waymo-phx-night',
+  'waymo-phx-dusk-rain',
+]);
+
+function makeStageVariant(base: Dataset): Dataset {
+  const newId = `${base.id}-stage`;
+  const root = `/data/${newId}`;
+  // Height/semantic legend is meaningless for the camera-colored surfel stage.
+  const { legend: _legend, ...rest } = base;
+  return {
+    ...rest,
+    id: newId,
+    name: `${base.name} — stage + actors`,
+    description:
+      'Scene-split: the fixed environment reconstructed as a STATIC surfel "stage" ' +
+      '(every sweep accumulated, the moving returns removed) rendered as a persistent ' +
+      'backdrop, with the DYNAMIC cars / cyclists / pedestrians animated over it. ' +
+      `${base.description}`,
+    // Two LIDAR archives: the animated DYNAMIC actors (primary) + the timeless STATIC
+    // stage. avLidarUrl aliases the actors so single-stream cockpit code resolves.
+    url: `${root}/dynamic/manifest.json`,
+    avLidarUrl: `${root}/dynamic/manifest.json`,
+    avDynamicUrl: `${root}/dynamic/manifest.json`,
+    avStaticUrl: `${root}/static/manifest.json`,
+    avSceneUrl: `${root}/scene.json`,
+    avEgoUrl: `${root}/ego/manifest.json`,
+    avObjectsUrl: `${root}/objects/manifest.json`,
+    avTracksUrl: `${root}/tracks/manifest.json`,
+    avTelemetryUrl: `${root}/telemetry.json`,
+    avCamerasUrl: `${root}/cameras.json`,
+    // HD-map archives only exist for AV2 (Waymo Perception ships none) — rebase if present.
+    ...(base.avMapPolyUrl ? { avMapPolyUrl: `${root}/map_poly/manifest.json` } : {}),
+    ...(base.avMapLineUrl ? { avMapLineUrl: `${root}/map_line/manifest.json` } : {}),
+    // Surfel stage + actors render; clear any base point-mode flags.
+    lidarRgb: true,
+    lidarSurfel: true,
+    lidarStage: true,
+    lidarStageStatic: true,
+    lidarSurfelTemporalSigma: 200, // actors move → tighter temporal smear
+    lidarSplat: false,
+    lidarIso: false,
+    lidarIso3d: false,
+    lidarWorldbuild: false,
+  };
+}
+
+const stageVariants: Dataset[] = rawDatasets
+  .filter((d) => STAGE_BASE_IDS.has(d.id))
+  .map(makeStageVariant);
+
 // Experimental AV cockpit render-modes held back from the shipped product (their
 // tiles aren't deployed to R2, so a registered scene would 404 the toggle). The
 // scene factories + registration blocks stay in source (so dev can build/iterate
 // and a future ship just removes a suffix here), but they're filtered out of the
 // runtime registry — `getDatasetById` won't resolve them, so the cockpit shows no
-// Sweep (`-scan`) / Worldbuild (`-world`) toggle. SHIPPED: flat Iso-lines (`-iso`)
-// and Iso 3D (`-iso3d`) — both intentionally NOT matched here. Drop a group from
-// this pattern to ship that mode (after uploading its tiles + confirming license).
+// Sweep (`-scan`) / Worldbuild (`-world`) toggle. SHIPPED: flat Iso-lines
+// (`-iso`) and Iso 3D (`-iso3d`) — both intentionally NOT matched here. Drop a
+// group from this pattern to ship that mode (after uploading its tiles +
+// confirming license). NOTE: the scene-split Stage (`-stage`) canary is NOT here
+// — it's gated LOCAL-ONLY below (visible in dev so the look can be verified,
+// hidden on the remote deploy until its tiles are R2-synced).
 const HELD_BACK_AV_MODES = /-(scan|world)$/;
 
 // Waymo Open Dataset tiles are LOCAL-ONLY: the license is non-commercial AND
@@ -3508,11 +3571,19 @@ const HELD_BACK_AV_MODES = /-(scan|world)$/;
 // scene switcher, or `/drive/:id` route. Drop this gate only after the license
 // clears a public sync (and the tiles are actually on R2).
 const WAYMO_LOCAL_ONLY = /^waymo-/;
+
+// Scene-split Stage canary: built locally (public/data/<id>-stage) but NOT yet
+// R2-synced, so — like Waymo — show it in local dev (verify the look + tune the
+// --stage-voxel size lever) but hide it on the remote deploy until the bundle is
+// uploaded. Promote it to a permanently-shipped mode (drop this gate) after the
+// aesthetic + size sign-off and the R2 sync.
+const STAGE_LOCAL_ONLY = /-stage$/;
 const DATA_IS_REMOTE = DATA_BASE_URL !== '';
 
-export const datasets: Dataset[] = [...rawDatasets, ...coloredSplatVariants]
+export const datasets: Dataset[] = [...rawDatasets, ...coloredSplatVariants, ...stageVariants]
   .filter((d) => !HELD_BACK_AV_MODES.test(d.id))
   .filter((d) => !(DATA_IS_REMOTE && WAYMO_LOCAL_ONLY.test(d.id)))
+  .filter((d) => !(DATA_IS_REMOTE && STAGE_LOCAL_ONLY.test(d.id)))
   .map((d) => ({
   ...d,
   url: resolveDataUrl(d.url),
@@ -3526,6 +3597,9 @@ export const datasets: Dataset[] = [...rawDatasets, ...coloredSplatVariants]
   // VITE_DATA_BASE_URL resolver so they don't 404 on the R2 deploy.
   ...(d.avSceneUrl && { avSceneUrl: resolveDataUrl(d.avSceneUrl) }),
   ...(d.avLidarUrl && { avLidarUrl: resolveDataUrl(d.avLidarUrl) }),
+  // Scene-split ("stage + actors") carries two extra LIDAR archive manifests.
+  ...(d.avStaticUrl && { avStaticUrl: resolveDataUrl(d.avStaticUrl) }),
+  ...(d.avDynamicUrl && { avDynamicUrl: resolveDataUrl(d.avDynamicUrl) }),
   ...(d.avEgoUrl && { avEgoUrl: resolveDataUrl(d.avEgoUrl) }),
   ...(d.avObjectsUrl && { avObjectsUrl: resolveDataUrl(d.avObjectsUrl) }),
   ...(d.avTracksUrl && { avTracksUrl: resolveDataUrl(d.avTracksUrl) }),

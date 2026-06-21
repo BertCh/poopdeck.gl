@@ -187,6 +187,21 @@ export const CATALOG_EXCLUDED_IDS: string[] = [
   'argoverse-0bae3b5e-iso', // Detroit
   'argoverse-25e5c600-iso', // Palo Alto
   'argoverse-92b900b1-iso', // Austin
+  // Scene-split "stage + actors" variants (makeStageVariant), AV2 + Waymo. Reached
+  // via the cockpit render-mode toggle, not a catalog card; gated LOCAL-ONLY until
+  // their tiles are R2-synced (see STAGE_LOCAL_ONLY in datasets.ts), so they only
+  // appear in local dev — but the contract still requires them to be classified.
+  'argoverse-02678d04-stage', // Pittsburgh
+  'argoverse-02a00399-stage', // Miami
+  'argoverse-0b5142c1-stage', // Washington DC
+  'argoverse-0bae3b5e-stage', // Detroit
+  'argoverse-25e5c600-stage', // Palo Alto
+  'argoverse-92b900b1-stage', // Austin
+  'waymo-sf-day-stage',
+  'waymo-sf-night-stage',
+  'waymo-phx-day-stage',
+  'waymo-phx-night-stage',
+  'waymo-phx-dusk-rain-stage',
 ];
 
 const OSRM_NOTE =

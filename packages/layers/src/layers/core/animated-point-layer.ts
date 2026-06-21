@@ -163,6 +163,16 @@ export interface _AnimatedPointLayerProps {
   rgbColorColumns?: [string, string, string] | null;
 
   /**
+   * Per-point RGBA from ONE interleaved VECTOR column (`FixedSizeList<UInt8,4>`,
+   * baked by `stt-build --vector-group name=r,g,b,a:u8`). When the tile carries
+   * it, the contiguous u8 buffer is bound to `getFillColor` **zero-copy** — no
+   * per-point re-interleave on the main thread (the GPU-ready analogue of
+   * {@link rgbColorColumns}). Takes precedence over every other colour path.
+   * Ignored if the column is absent from the tile. @default 'point_rgba'
+   */
+  colorVectorColumn?: string | null;
+
+  /**
    * Render points as soft gaussian "splats" instead of hard disks (installs
    * {@link SplatExtension}). Overlapping splats blend into continuous surfaces —
    * a colored point-cloud / photogrammetry look. Best with a slightly larger
@@ -552,6 +562,7 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
     colorMappingDefault: { type: 'color', value: [0, 0, 0, 0] },
     // Per-point RGB from three numeric columns; null = use the normal color path.
     rgbColorColumns: { type: 'object', value: null, optional: true, compare: true },
+    colorVectorColumn: { type: 'object', value: 'point_rgba', optional: true, compare: true },
     splat: false,
     radiusTransform: { type: 'function', value: null, optional: true, compare: false },
 
@@ -862,7 +873,8 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
     // chosen columns belong in the styleKey: changing them must re-expand it.
     const rgb = this.props.rgbColorColumns;
     const rgbKey = rgb ? `rgb${rgb.join(',')}` : '';
-    return `${fillColorProp}|${radiusProp}|${lineWidthProp}|${
+    const colorVecKey = typeof this.props.colorVectorColumn === 'string' ? `cv${this.props.colorVectorColumn}` : '';
+    return `${colorVecKey}|${fillColorProp}|${radiusProp}|${lineWidthProp}|${
       fillColorProp ? colorListDigest(this.props.colorPalette ?? DEFAULT_PALETTE) : 0
     }|${mapping ? `m${colorMappingDigest(mapping)}` : 'g'}|${
       transform ? `r${functionId(transform)}` : ''
@@ -951,6 +963,12 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
 
     let gpuPalette: Color[] | null = null;
 
+    // Per-point RGBA from ONE interleaved vector column (baked at build time):
+    // bind the contiguous u8 buffer straight to the GPU, zero re-pack. Wins over
+    // every other colour path; falls through when the column is absent.
+    const colorVecN = typeof this.props.colorVectorColumn === 'string' ? this.props.colorVectorColumn : '';
+    const colorVec = colorVecN ? binary.vectorProps?.[colorVecN] : undefined;
+
     // Per-point RGB from three numeric columns (build-time camera-sampled
     // colors). Wins over the categorical / palette color path; falls through
     // to it if any of the three columns is absent from this tile. numericProps
@@ -961,7 +979,9 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
     const bArr = rgbCols ? binary.numericProps[rgbCols[2]] : undefined;
 
     // Property-driven color
-    if (rArr && gArr && bArr) {
+    if (colorVec && colorVec.size === 4) {
+      attributes.getFillColor = { value: colorVec.value, size: 4, normalized: true };
+    } else if (rArr && gArr && bArr) {
       const out = new Uint8Array(count * 4);
       for (let i = 0; i < count; i++) {
         const o = i * 4;

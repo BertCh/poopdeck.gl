@@ -31,6 +31,12 @@ not the "what's planned" — the current state lives in the spec and API docs.
   against the canonical viewers (streetscape.gl / nuScenes / AV2 devkits). Round 1
   (code-only) shipped; Round 2 (re-gen + richer CAN/HD-map data) is the still-open
   part.
+- [**three-tsl-renderer.md**](./three-tsl-renderer.md) — a second GPU renderer on
+  Three.js + TSL (WebGPU, WebGL2 fallback) with react-three-fiber bindings
+  (`@poopdeck.gl/three`), parallel to the deck.gl renderer. AV LIDAR cockpit on
+  oriented Gaussian surfels + point splats + boxes/maps/ego in a local ENU metric
+  frame; a deck↔TSL toggle in `/drive`. Code-complete + unit-tested; in-browser
+  aesthetic verification is the open part.
 - [**multi-source-coordination.md**](./multi-source-coordination.md) — coordinate
   loading *and* timing across N heavy STT datasets on one shared playhead
   (combined min-gate + a shared request scheduler). Shipped 2026-06-19 in

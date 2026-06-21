@@ -316,6 +316,21 @@ export interface BinaryFeatures {
     indices: Uint16Array;
     categories: string[];
   }>;
+
+  /**
+   * Interleaved fixed-width vector properties — `FixedSizeList<Float32|UInt8, N>`
+   * columns baked at build time (e.g. a `[qx,qy,qz,qw]` surfel quaternion, a
+   * `[s_major,s_minor]` scale, an `[r,g,b,a]` colour). The `value` typed array is
+   * the contiguous, row-major child buffer (feature `i` occupies `[i*size,
+   * (i+1)*size)`), surfaced **zero-copy** so the renderer binds it straight to a
+   * deck.gl instanced attribute with NO per-point re-interleave on the main
+   * thread. `Float32Array` for `f32` leaves, `Uint8Array` (bind as `normalized`)
+   * for `u8` colour leaves.
+   *
+   * Optional only so hand-built fixtures can omit it; `decodeTile` always sets
+   * it (empty when the tile carries no FixedSizeList columns).
+   */
+  vectorProps?: Record<string, { value: Float32Array | Uint8Array; size: number }>;
 }
 
 /** Layer within a tile - uses binary format for GPU efficiency */
