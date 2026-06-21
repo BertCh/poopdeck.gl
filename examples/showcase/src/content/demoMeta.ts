@@ -188,9 +188,10 @@ export const CATALOG_EXCLUDED_IDS: string[] = [
   'argoverse-25e5c600-iso', // Palo Alto
   'argoverse-92b900b1-iso', // Austin
   // Scene-split "stage + actors" variants (makeStageVariant), AV2 + Waymo. Reached
-  // via the cockpit render-mode toggle, not a catalog card; gated LOCAL-ONLY until
-  // their tiles are R2-synced (see STAGE_LOCAL_ONLY in datasets.ts), so they only
-  // appear in local dev — but the contract still requires them to be classified.
+  // via the cockpit render-mode toggle, not a catalog card (so catalog-excluded).
+  // The 6 Argoverse stages SHIPPED (R2-synced); the Waymo stages stay local via
+  // WAYMO_LOCAL_ONLY (no-redistribution). Either way the contract requires them
+  // to be classified here.
   'argoverse-02678d04-stage', // Pittsburgh
   'argoverse-02a00399-stage', // Miami
   'argoverse-0b5142c1-stage', // Washington DC

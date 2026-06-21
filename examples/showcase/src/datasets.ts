@@ -3557,9 +3557,10 @@ const stageVariants: Dataset[] = rawDatasets
 // Sweep (`-scan`) / Worldbuild (`-world`) toggle. SHIPPED: flat Iso-lines
 // (`-iso`) and Iso 3D (`-iso3d`) — both intentionally NOT matched here. Drop a
 // group from this pattern to ship that mode (after uploading its tiles +
-// confirming license). NOTE: the scene-split Stage (`-stage`) canary is NOT here
-// — it's gated LOCAL-ONLY below (visible in dev so the look can be verified,
-// hidden on the remote deploy until its tiles are R2-synced).
+// confirming license). NOTE: the scene-split Stage (`-stage`) mode SHIPPED
+// 2026-06-21 for the 6 Argoverse cities (tiles R2-synced) — so it is NOT held
+// back here. The Waymo `-stage` variants stay hidden on the remote deploy via
+// WAYMO_LOCAL_ONLY below (their underlying LIDAR can't be redistributed).
 const HELD_BACK_AV_MODES = /-(scan|world)$/;
 
 // Waymo Open Dataset tiles are LOCAL-ONLY: the license is non-commercial AND
@@ -3569,21 +3570,16 @@ const HELD_BACK_AV_MODES = /-(scan|world)$/;
 // (`VITE_DATA_BASE_URL` set = the R2 deploy, where the bundles don't exist), so
 // the public site never references (and 404s) a Waymo scene in the catalog,
 // scene switcher, or `/drive/:id` route. Drop this gate only after the license
-// clears a public sync (and the tiles are actually on R2).
+// clears a public sync (and the tiles are actually on R2). This also keeps the
+// Waymo scene-split `-stage` variants local: they match `^waymo-`, so they're
+// filtered on the remote deploy even though the Argoverse `-stage` mode shipped.
 const WAYMO_LOCAL_ONLY = /^waymo-/;
 
-// Scene-split Stage canary: built locally (public/data/<id>-stage) but NOT yet
-// R2-synced, so — like Waymo — show it in local dev (verify the look + tune the
-// --stage-voxel size lever) but hide it on the remote deploy until the bundle is
-// uploaded. Promote it to a permanently-shipped mode (drop this gate) after the
-// aesthetic + size sign-off and the R2 sync.
-const STAGE_LOCAL_ONLY = /-stage$/;
 const DATA_IS_REMOTE = DATA_BASE_URL !== '';
 
 export const datasets: Dataset[] = [...rawDatasets, ...coloredSplatVariants, ...stageVariants]
   .filter((d) => !HELD_BACK_AV_MODES.test(d.id))
   .filter((d) => !(DATA_IS_REMOTE && WAYMO_LOCAL_ONLY.test(d.id)))
-  .filter((d) => !(DATA_IS_REMOTE && STAGE_LOCAL_ONLY.test(d.id)))
   .map((d) => ({
   ...d,
   url: resolveDataUrl(d.url),
