@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const BASE_URL = process.env.STT_URL || 'http://localhost:3000';
-const SCENE = 'argoverse-02a00399-iso3d';
+const SCENE = process.env.SCENE || 'argoverse-02a00399-iso3d';
 const OUTPUT = path.resolve(process.cwd(), 'output/verify-iso3d-miami');
 fs.mkdirSync(OUTPUT, { recursive: true });
 

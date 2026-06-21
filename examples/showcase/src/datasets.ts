@@ -3494,11 +3494,10 @@ const coloredSplatVariants: Dataset[] = rawDatasets
 // scene factories + registration blocks stay in source (so dev can build/iterate
 // and a future ship just removes a suffix here), but they're filtered out of the
 // runtime registry — `getDatasetById` won't resolve them, so the cockpit shows no
-// Sweep (`-scan`) / Worldbuild (`-world`) / flat Iso-lines (`-iso`) toggle. NOTE:
-// `-iso3d` is intentionally NOT matched (it ships); `-iso$` matches only the flat
-// variant. Drop a group from this pattern to ship that mode (after uploading its
-// tiles + confirming any license).
-const HELD_BACK_AV_MODES = /-(scan|world|iso)$/;
+// Sweep (`-scan`) / Worldbuild (`-world`) toggle. SHIPPED: flat Iso-lines (`-iso`)
+// and Iso 3D (`-iso3d`) — both intentionally NOT matched here. Drop a group from
+// this pattern to ship that mode (after uploading its tiles + confirming license).
+const HELD_BACK_AV_MODES = /-(scan|world)$/;
 
 // Waymo Open Dataset tiles are LOCAL-ONLY: the license is non-commercial AND
 // prohibits redistribution, so no waymo-* bundle is ever uploaded to R2. The
