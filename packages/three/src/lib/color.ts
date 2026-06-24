@@ -93,3 +93,59 @@ export function expandRgbColumns(
   }
   return out;
 }
+
+/**
+ * Sample a multi-stop colour ramp. `value` is mapped through `domain` to `[0,1]`
+ * (clamped), then linearly interpolated across the evenly-spaced `range` stops —
+ * the Three analogue of deck's continuous `getColor` ramp (e.g. drifters SST,
+ * earthquake magnitude). Returns 0–255 RGBA.
+ */
+export function rampColorAt(value: number, domain: [number, number], range: RGBA[]): RGBA {
+  if (range.length === 0) return [0, 0, 0, 255];
+  if (range.length === 1) return range[0];
+  const [lo, hi] = domain;
+  const t = hi > lo ? Math.min(1, Math.max(0, (value - lo) / (hi - lo))) : 0;
+  const scaled = t * (range.length - 1);
+  const i = Math.min(range.length - 2, Math.floor(scaled));
+  const f = scaled - i;
+  const a = range[i];
+  const b = range[i + 1];
+  const aa = a[3] ?? 255;
+  const ba = b[3] ?? 255;
+  return [
+    a[0] + (b[0] - a[0]) * f,
+    a[1] + (b[1] - a[1]) * f,
+    a[2] + (b[2] - a[2]) * f,
+    aa + (ba - aa) * f,
+  ];
+}
+
+export interface RampColorSpec {
+  /** Numeric property name in `binary.numericProps`. */
+  property: string;
+  /** `[min, max]` value range mapped to the ramp's ends. */
+  domain: [number, number];
+  /** Evenly-spaced gradient stops (≥1), each `[r,g,b,a]` (0–255). */
+  range: RGBA[];
+  /** Colour when the property is absent. */
+  fallback: RGBA;
+}
+
+/**
+ * Expand a numeric property into a per-feature `Float32Array` RGBA (0..1) via the
+ * continuous {@link rampColorAt} ramp. If the property is absent, every feature
+ * gets `fallback`.
+ */
+export function expandRampColors(binary: BinaryFeatures, spec: RampColorSpec): Float32Array {
+  const count = binary.featureCount;
+  const out = new Float32Array(count * 4);
+  const col = binary.numericProps[spec.property];
+  for (let i = 0; i < count; i++) {
+    const rgba = col ? rampColorAt(col[i], spec.domain, spec.range) : spec.fallback;
+    out[i * 4] = rgba[0] / 255;
+    out[i * 4 + 1] = rgba[1] / 255;
+    out[i * 4 + 2] = rgba[2] / 255;
+    out[i * 4 + 3] = (rgba[3] ?? 255) / 255;
+  }
+  return out;
+}

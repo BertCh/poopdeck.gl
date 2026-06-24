@@ -26,6 +26,7 @@ import { Map } from "react-map-gl";
 import type { TimeController } from "@poopdeck.gl/playback";
 import type { SourceRegistry } from "@poopdeck.gl/react";
 import { buildDemoLayers } from "../demo/buildDemoLayers";
+import { buildGoogle3DTilesLayer } from "./googleTiles";
 import {
   buildEgoFootprintLayer,
   buildEgoPathLayer,
@@ -108,6 +109,32 @@ export interface AvDeckProps {
    * @default 0
    */
   timeHeightScale?: number;
+  /**
+   * Live camera-zoom reporter (throttled to ~0.05-zoom steps). Drives the "Zoom
+   * LOD" HUD, which shows which additive-octree levels are resident at the
+   * current zoom. Fires on user drag/zoom AND the ego-follow camera.
+   */
+  onCameraZoom?: (zoom: number) => void;
+  /**
+   * Overlay Google Photorealistic 3D Tiles (deck.gl `Tile3DLayer`) UNDER the STT
+   * layers. Only meaningful when {@link googleTilesApiKey} is set; the cockpit
+   * gates the toggle on the scene opting in (`dataset.tiles3d`) + a configured
+   * key. @default false
+   */
+  show3DTiles?: boolean;
+  /** Google Maps Platform API key for {@link show3DTiles}. */
+  googleTilesApiKey?: string;
+  /** Receives the photoreal tiles' required data attribution (Google ToS). */
+  onTiles3dAttribution?: (credits: string) => void;
+  /**
+   * Manual vertical trim (metres) on top of the auto-detected ground height for
+   * {@link show3DTiles}. Positive RAISES the mesh, negative lowers it — lets the
+   * user nudge the photoreal ground onto the cloud's streets when the auto-detect
+   * (lowest nearby tile origin) sits a touch high or low. @default 0
+   */
+  tiles3dElevationAdjust?: number;
+  /** Photoreal mesh opacity (0–1); below 1 ghosts it so the LIDAR pops. @default 1 */
+  tiles3dOpacity?: number;
 }
 
 /** Which streams own which built layer (by the id suffix buildDemoLayers sets). */
@@ -156,6 +183,12 @@ const AvDeck: React.FC<AvDeckProps> = ({
   perfMode = false,
   showBasemap = true,
   timeHeightScale = 0,
+  onCameraZoom,
+  show3DTiles = false,
+  googleTilesApiKey,
+  onTiles3dAttribution,
+  tiles3dElevationAdjust = 0,
+  tiles3dOpacity = 1,
 }) => {
   // Space-time-cube mode: the track ribbons climb time = altitude. We pull the
   // camera back + tilt it (and raise maxPitch) so the whole ~200 m-tall cube is
@@ -170,6 +203,18 @@ const AvDeck: React.FC<AvDeckProps> = ({
   }));
   const viewRef = useRef(viewState);
   viewRef.current = viewState;
+
+  // Report live zoom to the cockpit's "Zoom LOD" HUD, throttled to ~0.05-zoom
+  // steps so the follow-cam's per-frame viewState updates don't spam the parent.
+  const lastReportedZoom = useRef<number | null>(null);
+  useEffect(() => {
+    const z = viewState?.zoom;
+    if (typeof z !== "number" || !onCameraZoom) return;
+    if (lastReportedZoom.current !== null && Math.abs(lastReportedZoom.current - z) < 0.05)
+      return;
+    lastReportedZoom.current = z;
+    onCameraZoom(z);
+  }, [viewState?.zoom, onCameraZoom]);
 
   // Pitch toggle: morph between perspective (the dataset's initial pitch) and
   // a top-down plan view. Snaps under reduced motion, eases otherwise.
@@ -428,9 +473,72 @@ const AvDeck: React.FC<AvDeckProps> = ({
     ];
   }, [cubeMode, egoPath, egoTime, timeHeightScale, dataset.id, dataset.initialViewState, dataset.timeRange.start]);
 
+  // Google Photorealistic 3D Tiles backdrop. Built only when the cockpit turns
+  // it on for a key-configured, opted-in scene. Drawn LAST (appended) so the
+  // mesh composites correctly with the LIDAR: each point is drawn (and writes
+  // depth) first, then the buildings depth-test against it — opaque buildings
+  // still occlude returns behind them, but when the mesh is GHOSTED (opacity < 1)
+  // it blends OVER the points behind it so they show THROUGH the translucent
+  // buildings (drawing the tiles first instead discards those points on the depth
+  // test, leaving nothing to show through). The layer renders in geographic
+  // coords, so it lands at the scene's geo-anchor in the same MapView.
+  //
+  // Vertical alignment: Google's mesh uses TRUE WGS84-ellipsoidal heights while
+  // the AV cloud sits at local z≈0, so the city would float ~200 m up. The mesh
+  // is lowered by the local ground height (GroundedTile3DLayer). Prefer the
+  // baked, per-scene `dataset.tiles3dGroundHeight` (measured from the tiles —
+  // reliable + deterministic); only when a scene ships no baked value do we fall
+  // back to AUTO-DETECTING it from the tiles nearest the anchor (frozen on the
+  // first reading; reset on scene switch / toggle).
+  const bakedGround = dataset.tiles3dGroundHeight;
+  const [tiles3dGroundOffset, setTiles3dGroundOffset] = useState(0);
+  const groundFrozenRef = useRef(false);
+  useEffect(() => {
+    groundFrozenRef.current = false;
+    setTiles3dGroundOffset(0);
+  }, [dataset.id, show3DTiles]);
+  const anchorLng = sceneView?.longitude ?? dataset.initialViewState.longitude;
+  const anchorLat = sceneView?.latitude ?? dataset.initialViewState.latitude;
+  const tiles3dLayers = useMemo(() => {
+    if (!show3DTiles || !googleTilesApiKey) return [];
+    // Baked ground when present, else the live auto-detect; then the user's
+    // manual trim (positive raises the mesh).
+    const baseGround = bakedGround ?? tiles3dGroundOffset;
+    return [
+      buildGoogle3DTilesLayer({
+        apiKey: googleTilesApiKey,
+        sceneId: dataset.id,
+        anchor: [anchorLng, anchorLat],
+        elevationOffset: baseGround - tiles3dElevationAdjust,
+        opacity: tiles3dOpacity,
+        // Only auto-detect when the scene ships no baked ground height.
+        onGroundHeight:
+          bakedGround === undefined
+            ? (h) => {
+                if (groundFrozenRef.current) return;
+                groundFrozenRef.current = true;
+                setTiles3dGroundOffset(h);
+              }
+            : undefined,
+        onAttribution: onTiles3dAttribution,
+      }),
+    ];
+  }, [
+    show3DTiles,
+    googleTilesApiKey,
+    dataset.id,
+    anchorLng,
+    anchorLat,
+    bakedGround,
+    tiles3dGroundOffset,
+    tiles3dElevationAdjust,
+    tiles3dOpacity,
+    onTiles3dAttribution,
+  ]);
+
   const layers = useMemo(
-    () => [...tileLayers, ...egoLayers, ...cubeOverlayLayers],
-    [tileLayers, egoLayers, cubeOverlayLayers],
+    () => [...tileLayers, ...egoLayers, ...cubeOverlayLayers, ...tiles3dLayers],
+    [tileLayers, egoLayers, cubeOverlayLayers, tiles3dLayers],
   );
 
   // Click-to-inspect: only a hit on the objects layer feeds the inspector card.
@@ -461,7 +569,14 @@ const AvDeck: React.FC<AvDeckProps> = ({
     <DeckGL
       viewState={viewState}
       onViewStateChange={(e: any) => setViewState(e.viewState)}
-      controller={{ dragRotate: true }}
+      // Additive-octree LOD scenes pack detail down to z22, so let the camera
+      // zoom in far enough to reach the full-resolution residual (deck's default
+      // maxZoom is 20, which would cap you short of the deepest levels). Other
+      // scenes keep the default cap. `maxZoom` is a runtime-honored controller
+      // option that deck's narrow ControllerOptions type omits, hence the cast.
+      controller={
+        { dragRotate: true, maxZoom: dataset.lidarLod ? 23 : 20 } as any
+      }
       layers={layers}
       onClick={handleClick}
       pickingRadius={4}
@@ -476,8 +591,11 @@ const AvDeck: React.FC<AvDeckProps> = ({
           real road network can't visibly contradict the approximate anchor; the
           cloud then floats on the cockpit's dark backdrop. The `showBasemap`
           toggle lets a geo-registered scene drop it too — e.g. to read the
-          camera-colored surfel surface against the dark backdrop. */}
-      {showBasemap && !dataset.avLocalFrame && (
+          camera-colored surfel surface against the dark backdrop. Also dropped
+          while the Google 3D Tiles backdrop is on — the photoreal mesh carries
+          its own ground, so the flat basemap underneath is redundant (and would
+          peek through at the horizon). */}
+      {showBasemap && !dataset.avLocalFrame && !show3DTiles && (
         <Map
           reuseMaps
           mapStyle="mapbox://styles/mapbox/dark-v11"

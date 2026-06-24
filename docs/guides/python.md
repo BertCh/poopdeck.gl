@@ -103,6 +103,23 @@ con.execute("""
 Then `stt-build --input earthquakes.parquet --output earthquakes.stt
 --time-field timestamp --time-format unix-ms --auto`.
 
+> **Skip the export entirely.** A `stt-build` built with `--features duckdb`
+> reads from DuckDB directly — point it at a `.duckdb` file, or use `:memory:`
+> to scan the source file in place:
+>
+> ```bash
+> stt-build --duckdb :memory: \
+>   --sql "SELECT ST_Point(lon, lat) AS geom,
+>                 CAST(EPOCH_MS(strptime(time, '%Y-%m-%dT%H:%M:%SZ')) AS BIGINT) AS timestamp,
+>                 mag, place
+>          FROM read_csv_auto('earthquakes.csv')" \
+>   --geom-column geom --time-field timestamp --time-format unix-ms \
+>   --output earthquakes.stt
+> ```
+>
+> See [docs/roadmap/duckdb-integration.md](../roadmap/duckdb-integration.md) for
+> the input source and the `stt-serve --duckdb` dynamic tile server.
+
 ## 3. pyarrow only (no GeoPandas)
 
 If you already have Arrow tables in memory and don't want a GeoPandas

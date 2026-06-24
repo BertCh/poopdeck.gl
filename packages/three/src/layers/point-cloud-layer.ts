@@ -19,6 +19,7 @@ import {
   createPointMaterial,
   updatePointUniforms,
   type PointMaterialBundle,
+  type PointSizeUnits,
 } from '../tsl/point-material';
 import type { TimeFilterMode } from '../tsl/time-filter-math';
 import type { RGBA } from '../lib/color';
@@ -39,6 +40,16 @@ export interface PointCloudLayerOptions {
   colorMappingDefault?: RGBA;
   /** When set, colour from these RGB columns (0–255) instead of categorical. */
   rgbColumns?: [string, string, string] | null;
+  /**
+   * Continuous-ramp colour (deck `getColor` ramp). When set, each point is
+   * coloured by sampling `rampRange` at `numericProps[rampProperty]` mapped
+   * through `rampDomain`. Wins over the categorical path; ignored if unset.
+   */
+  rampProperty?: string | null;
+  /** `[min,max]` value range mapped to the ramp's ends. @default [0,1] */
+  rampDomain?: [number, number];
+  /** Evenly-spaced gradient stops (≥1), each `[r,g,b,a]` (0–255). */
+  rampRange?: RGBA[];
 
   // elevation
   /** Altitude column (metres). @default 'z' */
@@ -46,8 +57,19 @@ export interface PointCloudLayerOptions {
   elevationScale?: number;
 
   // size / opacity
-  /** World-metre half-size of each point. @default 0.06 */
+  /**
+   * Billboard half-size. World metres when `sizeUnits:'meters'` (default,
+   * AV-unchanged), or CSS pixels when `sizeUnits:'pixels'`. @default 0.06
+   */
   pointSize?: number;
+  /**
+   * `'meters'` = fixed metric size that shrinks with distance (AV default);
+   * `'pixels'` = constant on-screen radius (deck `radiusUnits:'pixels'`).
+   * Pixel sizing needs {@link viewport} pushed on resize. @default 'meters'
+   */
+  sizeUnits?: PointSizeUnits;
+  /** Drawing-buffer size `[w,h]` px (pixel sizing only). @default [1280,720] */
+  viewport?: [number, number];
   opacity?: number;
   splatFalloff?: number;
 
@@ -68,8 +90,8 @@ export class PointCloudLayer extends BaseSttLayer {
 
   private bundle: PointMaterialBundle | null = null;
   private readonly opts: Required<
-    Omit<PointCloudLayerOptions, 'id' | 'rgbColumns' | 'elevationProperty'>
-  > & Pick<PointCloudLayerOptions, 'rgbColumns' | 'elevationProperty'>;
+    Omit<PointCloudLayerOptions, 'id' | 'rgbColumns' | 'elevationProperty' | 'rampProperty'>
+  > & Pick<PointCloudLayerOptions, 'rgbColumns' | 'elevationProperty' | 'rampProperty'>;
 
   constructor(options: PointCloudLayerOptions = {}) {
     super();
@@ -83,10 +105,15 @@ export class PointCloudLayer extends BaseSttLayer {
       colorMapping: options.colorMapping ?? {},
       colorMappingDefault: options.colorMappingDefault ?? DEFAULT_FALLBACK,
       rgbColumns: options.rgbColumns === undefined ? null : options.rgbColumns,
+      rampProperty: options.rampProperty === undefined ? null : options.rampProperty,
+      rampDomain: options.rampDomain ?? [0, 1],
+      rampRange: options.rampRange ?? [[30, 60, 120, 255], [240, 240, 80, 255]],
       elevationProperty:
         options.elevationProperty === undefined ? 'z' : options.elevationProperty,
       elevationScale: options.elevationScale ?? 1,
       pointSize: options.pointSize ?? 0.06,
+      sizeUnits: options.sizeUnits ?? 'meters',
+      viewport: options.viewport ?? [1280, 720],
       opacity: options.opacity ?? 1,
       splatFalloff: options.splatFalloff ?? 3,
       windowHalf: options.windowHalf ?? 250,
@@ -101,6 +128,15 @@ export class PointCloudLayer extends BaseSttLayer {
   private colorMode(): PointColorMode {
     if (this.opts.rgbColumns) {
       return { type: 'rgb', columns: this.opts.rgbColumns, alpha: 1 };
+    }
+    if (this.opts.rampProperty) {
+      return {
+        type: 'ramp',
+        property: this.opts.rampProperty,
+        domain: this.opts.rampDomain,
+        range: this.opts.rampRange,
+        fallback: this.opts.colorMappingDefault,
+      };
     }
     return {
       type: 'categorical',
@@ -120,9 +156,13 @@ export class PointCloudLayer extends BaseSttLayer {
 
     this.disposeGpu();
     if (buf.count === 0) {
+      // No points: hide rather than draw the bare quad with no instances.
       this.object.geometry = makeBillboardQuadGeometry();
+      this.object.position.set(0, 0, 0);
+      this.object.visible = false;
       return;
     }
+    this.object.visible = true;
 
     const geometry = makeBillboardQuadGeometry();
     geometry.instanceCount = buf.count;
@@ -139,14 +179,25 @@ export class PointCloudLayer extends BaseSttLayer {
       mode: this.opts.mode,
       splat: this.opts.splat,
       alphaCutoff: this.opts.alphaCutoff,
+      sizeUnits: this.opts.sizeUnits,
     });
     this.object.geometry = geometry;
     this.object.material = this.bundle.material;
+    // RTC: centres are relative to `origin`; lift the mesh by it. For the AV/ENU
+    // frame origin ≈ [0,0,0] so this is a no-op (AV stays byte-identical).
+    this.object.position.set(buf.origin[0], buf.origin[1], buf.origin[2]);
     this.pushUniforms(this.timeOrigin);
   }
 
   setTime(absoluteTimeMs: number): void {
     this.pushUniforms(absoluteTimeMs);
+  }
+
+  /** Host pushes the drawing-buffer size on resize so `sizeUnits:'pixels'` points
+   *  size against the live canvas (the per-frame `setTime` reads it). No-op for the
+   *  default metre sizing. Mirrors WideLineLayer.setViewport. */
+  setViewport(width: number, height: number): void {
+    this.opts.viewport = [width, height];
   }
 
   private pushUniforms(absoluteTimeMs: number): void {
@@ -163,6 +214,7 @@ export class PointCloudLayer extends BaseSttLayer {
       pointSize: this.opts.pointSize,
       opacity: this.opts.opacity,
       splatFalloff: this.opts.splatFalloff,
+      viewport: this.opts.viewport,
     });
   }
 

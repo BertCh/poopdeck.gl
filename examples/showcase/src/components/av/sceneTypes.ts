@@ -65,6 +65,12 @@ export interface AvLidarDensity {
   radius?: number;
   /** radiusMinPixels for this tier (sub-pixel floor for the dense tiers). */
   radiusMinPixels?: number;
+  /** Additive-octree zoom-LOD archive (`argoverse_extract.py --lod`): each return
+   *  is materialized at one home zoom and the client loads the union of levels. */
+  lod?: boolean;
+  /** Coarsest / finest home-zoom level baked into a `lod` archive (for the HUD). */
+  minZoom?: number;
+  maxZoom?: number;
 }
 
 export type AvStreamKey =

@@ -19,6 +19,7 @@
   },
   "devDependencies": {
     "@types/node": "^20.14.0",
+    "playwright": "^1.60.0",
     "prettier": "^3.3.0",
     "turbo": "^2.0.0",
     "typescript": "^5.4.0",
@@ -26,6 +27,8 @@
   },
   "pnpm": {
     "overrides": {
+      "react": ">=19.2.0 <19.3.0",
+      "react-dom": ">=19.2.0 <19.3.0",
       "@deck.gl/core": "9.3.2",
       "@deck.gl/layers": "9.3.2",
       "@deck.gl/react": "9.3.2",

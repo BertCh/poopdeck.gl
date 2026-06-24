@@ -203,6 +203,20 @@ export const CATALOG_EXCLUDED_IDS: string[] = [
   'waymo-phx-day-stage',
   'waymo-phx-night-stage',
   'waymo-phx-dusk-rain-stage',
+  // Additive-octree zoom-LOD variants (one archive, each return at a single home
+  // zoom). Reached via the cockpit's "Zoom LOD" render-mode toggle, not a catalog
+  // card — same treatment as the other render variants above. AV2 (6) + Waymo (5).
+  'argoverse-02678d04-lod', // Pittsburgh
+  'argoverse-02a00399-lod', // Miami
+  'argoverse-0b5142c1-lod', // Washington DC
+  'argoverse-0bae3b5e-lod', // Detroit
+  'argoverse-25e5c600-lod', // Palo Alto
+  'argoverse-92b900b1-lod', // Austin
+  'waymo-sf-day-lod',
+  'waymo-sf-night-lod',
+  'waymo-phx-day-lod',
+  'waymo-phx-night-lod',
+  'waymo-phx-dusk-rain-lod',
 ];
 
 const OSRM_NOTE =

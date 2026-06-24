@@ -20,7 +20,11 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import type { SttScene } from '../scene/stt-three-scene';
 import type { EgoLayer } from '../layers/ego-layer';
 import { frameBox } from '../scene/camera';
-import { resolveBackend, type RendererBackend } from '../renderer/webgpu-renderer';
+import {
+  createHighLimitDevice,
+  resolveBackend,
+  type RendererBackend,
+} from '../renderer/webgpu-renderer';
 
 export interface StandaloneViewerOptions {
   /** Playback clock — absolute playhead in epoch-ms each frame. */
@@ -69,10 +73,15 @@ export class StandaloneViewer {
 
     const w = this.container.clientWidth || 1;
     const h = this.container.clientHeight || 1;
+    const forceWebGL = this.opts.forceWebGL ?? false;
+    // High-buffer-limit device for the WebGPU path so dense LIDAR sweeps clear
+    // the 256 MB default single-buffer cap (see createHighLimitDevice).
+    const device = forceWebGL ? undefined : await createHighLimitDevice();
     const renderer = new WebGPURenderer({
       antialias: true,
       alpha: true,
-      forceWebGL: this.opts.forceWebGL ?? false,
+      forceWebGL,
+      ...(device ? { device } : {}),
     } as ConstructorParameters<typeof WebGPURenderer>[0]);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     renderer.setSize(w, h);
@@ -96,7 +105,7 @@ export class StandaloneViewer {
       return;
     }
     this.renderer = renderer;
-    this.opts.onBackend?.(resolveBackend(renderer, this.opts.forceWebGL ?? false));
+    this.opts.onBackend?.(resolveBackend(renderer, forceWebGL));
 
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();

@@ -35,13 +35,14 @@
   "dependencies": {
     "@poopdeck.gl/core": "workspace:*",
     "@poopdeck.gl/playback": "workspace:*",
-    "earcut": "^3.0.0"
+    "earcut": "^3.0.0",
+    "h3-js": "^4.1.0"
   },
   "peerDependencies": {
-    "@react-three/drei": ">=9.0.0",
-    "@react-three/fiber": ">=8.15.0",
-    "react": ">=18",
-    "three": ">=0.168.0"
+    "@react-three/drei": ">=10.0.0",
+    "@react-three/fiber": ">=9.0.0",
+    "react": ">=19",
+    "three": ">=0.171.0"
   },
   "peerDependenciesMeta": {
     "@react-three/drei": {
@@ -55,14 +56,14 @@
     }
   },
   "devDependencies": {
-    "@react-three/drei": "^9.114.0",
-    "@react-three/fiber": "^8.17.10",
+    "@react-three/drei": "^10.7.0",
+    "@react-three/fiber": "^9.6.0",
     "@types/earcut": "^2.1.4",
-    "@types/react": "^18.2.0",
-    "@types/three": "^0.171.0",
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0",
-    "three": "^0.171.0",
+    "@types/react": "^19.2.0",
+    "@types/three": "^0.184.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "three": "^0.184.0",
     "typescript": "^5.4.0",
     "vitest": "^1.6.0"
   },

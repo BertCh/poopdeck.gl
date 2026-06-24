@@ -43,8 +43,11 @@ import {
   exp,
   sqrt,
   mix,
-} from 'three/tsl';
-import type { TSLNode, UniformNode } from './time-filter';
+  step,
+  oneMinus,
+  type TSLNode,
+  type UniformNode,
+} from './nodes';
 
 /** Per-frame / per-config surfel uniforms. The layer sets `.value` each tick. */
 export class SurfelUniforms {
@@ -134,22 +137,28 @@ export function createSurfelMaterial(opts: SurfelMaterialOptions = {}): SurfelMa
   const { tangent, bitangent } = quatTangentBitangent(quat);
 
   // ── Temporal weight (mirrors splat-primitive-layer.ts) ──────────────────────
+  // IMPORTANT: `weight`/`visible` are carried to the fragment stage in `vWeight`
+  // (a `varying`). A `select()` (ConditionalNode) fails to build on the WGSL
+  // backend when wrapped in a `varying()` — the if/else control flow can't be
+  // lifted into a varying assignment, so the build throws ("undefined .build").
+  // So this whole block is BRANCH-FREE: `step()` casts a comparison to a 0/1
+  // float and `mix(a, b, t∈{0,1})` is the arithmetic equivalent of `select`.
   const age = u.currentTime.sub(startTime);
   const sigma = max(mix(u.temporalSigma, u.temporalSigmaDynamic, isDynamic), float(1));
   const dt = age.div(sigma);
   const symWeight = exp(dt.mul(dt).mul(-0.5));
-  const symVisible = symWeight.greaterThanEqual(0.0111);
+  const symVisF = step(float(0.0111), symWeight); // symWeight ≥ 0.0111 ? 1 : 0
 
-  const cumWeight = select(
-    u.revealFade.greaterThan(0),
-    age.div(max(u.revealFade, float(1))).clamp(0, 1),
-    float(1),
-  );
-  const cumVisible = age.greaterThanEqual(0);
-  const isCumStatic = u.cumulative.greaterThan(0.5).and(isDynamic.lessThan(0.5));
+  // Cumulative (worldbuild) reveal: statics appear-and-persist, optional ramp.
+  const ramp = age.div(max(u.revealFade, float(1))).clamp(0, 1);
+  const fadeOn = step(float(0.5), u.revealFade); // revealFade > 0 ? 1 : 0
+  const cumWeight = mix(float(1), ramp, fadeOn);
+  const cumVisF = step(float(0), age); // age ≥ 0 ? 1 : 0
+  // cumulative-static instance: cumulative uniform ON and this surfel is static.
+  const cumStaticF = step(float(0.5), u.cumulative).mul(oneMinus(step(float(0.5), isDynamic)));
 
-  const weight = select(isCumStatic, cumWeight, symWeight);
-  const visible = select(select(isCumStatic, cumVisible, symVisible), float(1), float(0));
+  const weight = mix(symWeight, cumWeight, cumStaticF);
+  const visible = mix(symVisF, cumVisF, cumStaticF);
 
   // ── Oriented disk expansion (object space, metres) ──────────────────────────
   const corner = positionGeometry.xy; // hexagon corner (u,v); disk rim at r=1

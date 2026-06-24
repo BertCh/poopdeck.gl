@@ -1073,6 +1073,11 @@ export function buildDemoLayers({
             use3D: true,
             elevationProperty: "z",
             elevationScale: selectedDataset.elevationScale ?? 1,
+            // Additive-octree zoom LOD: load + render the UNION of zoom levels
+            // [minZoom..cameraZoom]. Each return lives at one home zoom, so coarse
+            // levels are a sparse overview and zooming in streams only the deeper
+            // residual (the coarse tiles stay resident). Built with --lod.
+            ...(selectedDataset.lidarLod ? { lodMode: "additive" as const } : {}),
             radius: selectedDataset.radius ?? 1.4,
             radiusUnits: selectedDataset.radiusUnits ?? "pixels",
             radiusScale: selectedDataset.radiusScale ?? 1,

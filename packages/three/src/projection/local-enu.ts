@@ -32,6 +32,10 @@
 /** Metres per degree of latitude — the WGS84-ish constant used by `av_common`. */
 export const METERS_PER_DEG_LAT = 111_320;
 
+/** WGS84 semi-major axis (m) — the sphere radius Web-Mercator and the ECEF globe
+ *  are both built on. Shared by {@link MercatorProjection} and {@link GlobeProjection}. */
+export const EARTH_RADIUS = 6_378_137;
+
 const DEG2RAD = Math.PI / 180;
 
 /** A lon/lat (degrees) anchor that maps to the world origin `(0, 0)`. */
@@ -41,18 +45,49 @@ export interface GeoAnchor {
 }
 
 /**
+ * A per-location East/North/Up basis expressed in **world** space (unit vectors).
+ * For a planar projection (ENU, mercator) this is constant — `(X, Y, Z)`; for the
+ * ECEF globe it rotates per position (radial up, tangent east/north). Layers that
+ * orient geometry to the ground (oriented boxes, extruded columns, billboards that
+ * must lie flat) build their local frame from this instead of assuming Z-up.
+ */
+export interface LocalFrame {
+  /** unit world vector toward local east (+longitude). */
+  east: [number, number, number];
+  /** unit world vector toward local north (+latitude). */
+  north: [number, number, number];
+  /** unit world vector toward local up (+altitude). */
+  up: [number, number, number];
+}
+
+/**
  * A pluggable lon/lat(+alt) → world projection. `LocalEnuProjection` is the AV
- * implementation; mercator-plane and ECEF-globe variants can implement the same
- * surface later for the flat-map / globe scenes.
+ * implementation; {@link MercatorProjection} (flat Z-up plane) and
+ * {@link GlobeProjection} (ECEF sphere) implement the same surface for the
+ * flat-map / globe scenes.
+ *
+ * Two methods beyond `project`/`unproject` carry the information a *general*
+ * renderer needs but the AV cockpit could hardcode:
+ *   • {@link metersPerWorldUnit} — the sizing scale (1 world unit = how many true
+ *     ground metres here). ENU = 1; mercator = `cos(lat)`; globe = 1. Materials
+ *     multiply metric sizes (point radius, column height, surfel extent) by its
+ *     reciprocal so a 2 m object is 2 m everywhere.
+ *   • {@link localFrame} — the per-location E/N/U world basis (constant for planar
+ *     projections, per-position on the globe).
  */
 export interface Projection {
   readonly kind: string;
-  /** Anchor lon/lat that maps to world `(0, 0, *)`. */
+  /** Anchor lon/lat that maps to world `(0, 0, *)` (planar projections) or is the
+   *  view centre (globe). */
   readonly anchor: GeoAnchor;
   /** lon/lat (deg) + altitude (m) → world `[x, y, z]`. */
   project(longitude: number, latitude: number, altitude?: number): [number, number, number];
   /** world `[x, y, z]` → lon/lat (deg) + altitude (m). */
   unproject(x: number, y: number, z?: number): [number, number, number];
+  /** True ground metres represented by one world unit at this location. */
+  metersPerWorldUnit(longitude: number, latitude: number): number;
+  /** Per-location E/N/U unit basis in world space. */
+  localFrame(longitude: number, latitude: number): LocalFrame;
 }
 
 /**
@@ -84,6 +119,16 @@ export class LocalEnuProjection implements Projection {
       this.anchor.latitude + y / METERS_PER_DEG_LAT,
       z,
     ];
+  }
+
+  /** ENU world units ARE metres (the frame the surfel quaternions are baked in). */
+  metersPerWorldUnit(): number {
+    return 1;
+  }
+
+  /** Constant Z-up basis — ENU axes map straight to world `(X, Y, Z)`. */
+  localFrame(): LocalFrame {
+    return { east: [1, 0, 0], north: [0, 1, 0], up: [0, 0, 1] };
   }
 }
 
@@ -121,4 +166,65 @@ export function projectPositionsToEnu(
     out[i * 3 + 2] = z;
   }
   return out;
+}
+
+/**
+ * RTC ("Relative-To-Center") batch projection — the precision-safe generalization
+ * of {@link projectPositionsToEnu} for mercator/globe frames where absolute world
+ * coordinates (~5e7 mercator-metres, ~6.4e6 ECEF-metres) overflow f32's ~7
+ * significant digits and shear geometry by metres.
+ *
+ * Instead of writing absolute world coords, it picks a high-precision `origin`
+ * (f64) and writes each vertex as an f32 OFFSET from it. The caller parents the
+ * resulting `BufferGeometry` under an `Object3D` whose `.position` is that origin:
+ * Three composes the model matrix in f64 on the CPU, so the large translation
+ * stays exact while the GPU only ever sees small (tile-sized) f32 offsets. This is
+ * the spatial analogue of the renderer's per-tile `timeOffset` time rebasing.
+ *
+ * For the ENU/AV path the coords are already tiny near the anchor, so passing
+ * `origin: [0,0,0]` reproduces {@link projectPositionsToEnu} exactly.
+ *
+ * @param origin  explicit world origin; defaults to the first feature's projected
+ *                position (a cheap per-tile-group reference that keeps offsets small).
+ */
+export interface ProjectedPositions {
+  /** vec3 world coordinates, f32, RELATIVE to {@link origin}. */
+  positions: Float32Array;
+  /** f64 world-space origin the positions are relative to (add back for absolute). */
+  origin: [number, number, number];
+}
+
+export function projectPositions(
+  proj: Projection,
+  positions: Float64Array,
+  count: number,
+  dims: 2 | 3,
+  opts: {
+    elevation?: Float32Array;
+    elevScale?: number;
+    origin?: [number, number, number];
+  } = {},
+): ProjectedPositions {
+  const out = new Float32Array(count * 3);
+  if (count === 0) return { positions: out, origin: opts.origin ?? [0, 0, 0] };
+  const elevScale = opts.elevScale ?? 1;
+  const project = (i: number): [number, number, number] => {
+    const lon = positions[i * dims];
+    const lat = positions[i * dims + 1];
+    const alt = opts.elevation
+      ? opts.elevation[i] * elevScale
+      : dims > 2
+        ? positions[i * dims + 2]
+        : 0;
+    return proj.project(lon, lat, alt);
+  };
+  const origin = opts.origin ?? project(0);
+  const [ox, oy, oz] = origin;
+  for (let i = 0; i < count; i++) {
+    const [x, y, z] = project(i);
+    out[i * 3] = x - ox;
+    out[i * 3 + 1] = y - oy;
+    out[i * 3 + 2] = z - oz;
+  }
+  return { positions: out, origin };
 }

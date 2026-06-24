@@ -28,8 +28,15 @@ import { SttTileSource } from './tile-source';
 import { makeGround, type GroundOptions } from './ground';
 
 export interface SttSceneOptions {
-  /** lon/lat anchor that maps to the world origin (usually the scene's view centre). */
+  /** lon/lat anchor that maps to the world origin (usually the scene's view centre).
+   *  Used to build the default {@link LocalEnuProjection} when `projection` is omitted. */
   anchor: GeoAnchor;
+  /**
+   * Pluggable projection. Defaults to a {@link LocalEnuProjection} about `anchor`
+   * (the AV cockpit frame). Pass a `MercatorProjection` / `GlobeProjection` for the
+   * geographic flat-map / globe scenes.
+   */
+  projection?: Projection;
   /** Common time base (epoch-ms) every layer rebases to — usually `timeRange.start`. */
   timeOrigin: number;
   /** Ground options, or `false` for no ground. */
@@ -55,7 +62,7 @@ export class SttScene {
   private disposed = false;
 
   constructor(opts: SttSceneOptions) {
-    this.projection = new LocalEnuProjection(opts.anchor);
+    this.projection = opts.projection ?? new LocalEnuProjection(opts.anchor);
     this.timeOrigin = opts.timeOrigin;
     this.fetchFn = opts.fetch;
     this.root.name = 'stt-scene';

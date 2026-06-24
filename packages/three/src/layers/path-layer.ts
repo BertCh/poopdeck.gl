@@ -131,6 +131,7 @@ export class StaticPathLayer extends BaseSttLayer {
     geom.setAttribute('color', new Float32BufferAttribute(colors, 3));
     geom.computeBoundingSphere();
     this.lines.geometry = geom;
+    this.lines.visible = segCount > 0; // no 0-vertex draw when there are no lines
   }
 
   // Static geometry — nothing animates per frame.

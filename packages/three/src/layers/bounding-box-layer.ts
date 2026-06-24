@@ -34,6 +34,7 @@ import {
 import { writeBoxEdges, FLOATS_PER_BOX } from '../geometry/box-edges';
 import type { Projection } from '../projection/local-enu';
 import type { RGBA } from '../lib/color';
+import type { SttPickable, PickBox } from '../lib/box-pick';
 
 export interface BoundingBoxLayerOptions {
   id?: string;
@@ -63,7 +64,26 @@ export interface BoundingBoxLayerOptions {
 const DEFAULT_COLOR: RGBA = [150, 160, 175, 220];
 const DEFAULT_VELOCITY_COLOR: RGBA = [120, 230, 255, 255];
 
-export class BoundingBoxLayer extends BaseSttLayer {
+/**
+ * A `LineSegments` geometry that ALWAYS carries (zero-length) `position` +
+ * `color` attributes. The box/velocity buffers are allocated lazily (only once
+ * a box is active), but the WebGPU/TSL backend builds a material's vertex
+ * attribute nodes the first time the object is rendered — and a geometry with
+ * NO `position` attribute makes that build throw ("Vertex attribute 'position'
+ * not found"), which aborts the whole frame and blanks the viewport. Seeding
+ * empty attributes lets the material build cleanly and draw nothing (drawRange
+ * 0) until the real buffers arrive. WebGL tolerated the missing attribute;
+ * WebGPU does not.
+ */
+function emptyColoredLineGeometry(): BufferGeometry {
+  const geom = new BufferGeometry();
+  geom.setAttribute('position', new Float32BufferAttribute(new Float32Array(0), 3));
+  geom.setAttribute('color', new Float32BufferAttribute(new Float32Array(0), 3));
+  geom.setDrawRange(0, 0);
+  return geom;
+}
+
+export class BoundingBoxLayer extends BaseSttLayer implements SttPickable {
   readonly id: string;
   readonly object = new Group();
 
@@ -113,18 +133,20 @@ export class BoundingBoxLayer extends BaseSttLayer {
     };
 
     this.edges = new LineSegments(
-      new BufferGeometry(),
+      emptyColoredLineGeometry(),
       new LineBasicMaterial({ vertexColors: true, transparent: true, opacity: this.opts.opacity }),
     );
     this.edges.frustumCulled = false;
+    this.edges.visible = false; // nothing to draw until the first active box
     this.object.add(this.edges);
 
     if (this.opts.showVelocity) {
       this.velocity = new LineSegments(
-        new BufferGeometry(),
+        emptyColoredLineGeometry(),
         new LineBasicMaterial({ vertexColors: true, transparent: true, opacity: this.opts.opacity }),
       );
       this.velocity.frustumCulled = false;
+      this.velocity.visible = false;
       this.object.add(this.velocity);
     }
   }
@@ -262,6 +284,9 @@ export class BoundingBoxLayer extends BaseSttLayer {
   private updateDrawRange(line: LineSegments, vertexCount: number): void {
     const geom = line.geometry;
     const pos = geom.getAttribute('position') as Float32BufferAttribute | undefined;
+    // Hide (don't draw) when empty — a 0-vertex draw is a no-op that the WebGPU
+    // backend warns about ("Draw with a vertex count of 0 is unusual").
+    line.visible = vertexCount > 0;
     // No buffers yet (zero active boxes since mount): nothing to draw, and the
     // attributes don't exist — bail before touching them.
     if (!pos) {
@@ -278,6 +303,35 @@ export class BoundingBoxLayer extends BaseSttLayer {
   /** Active interpolated box poses at the last `setTime` (for picking / inspection). */
   getActiveSamples(): readonly BoxSample[] {
     return this.activeSamples;
+  }
+
+  /** Current-frame world-space OBBs for click-to-inspect picking ({@link SttPickable}). */
+  getPickBoxes(): PickBox[] {
+    if (!this.projection) return [];
+    const ss = this.opts.sizeScale;
+    const out: PickBox[] = [];
+    for (const s of this.activeSamples) {
+      const [cx, cy, cz] = this.projection.project(s.lon, s.lat, s.alt);
+      const hh = (s.height * ss) / 2;
+      out.push({
+        center: [cx, cy, cz + hh],
+        heading: s.heading,
+        halfExtents: [(s.length * ss) / 2, (s.width * ss) / 2, hh],
+        meta: {
+          layerId: this.id,
+          kind: 'object',
+          category: s.track.category || undefined,
+          trackId: s.track.trackId || undefined,
+          speed: Number.isFinite(s.speed) ? s.speed : undefined,
+          // Report the unscaled (true) object dimensions to the inspector.
+          length: Number.isFinite(s.length) ? s.length : undefined,
+          width: Number.isFinite(s.width) ? s.width : undefined,
+          height: Number.isFinite(s.height) ? s.height : undefined,
+          heading: Number.isFinite(s.heading) ? s.heading : undefined,
+        },
+      });
+    }
+    return out;
   }
 
   dispose(): void {

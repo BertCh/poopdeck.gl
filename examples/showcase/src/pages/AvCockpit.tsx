@@ -47,6 +47,23 @@ const DEFAULT_SCENE_ID = "av-synthetic";
 const LAYER_STREAMS: AvStreamKey[] = ["lidar", "ego", "objects", "map"];
 
 /**
+ * Google Maps Platform key for the Photorealistic 3D Tiles toggle (read once at
+ * module load). Unset ⇒ the toggle is hidden everywhere — the feature no-ops
+ * with no key, so nothing breaks when it isn't configured. Set it in the
+ * showcase's `.env.local` (`VITE_GOOGLE_MAPS_API_KEY=…`).
+ */
+const GOOGLE_TILES_API_KEY: string | undefined = (import.meta as any).env
+  ?.VITE_GOOGLE_MAPS_API_KEY;
+
+/**
+ * Default opacity for the Google Photorealistic 3D Tiles mesh when a scene
+ * doesn't override it (`Dataset.tiles3dOpacity`). Ghosted by default so the LIDAR
+ * cloud reads against the buildings — the value the user converged on across
+ * scenes. Set to 1 for an opaque-by-default photoreal backdrop instead.
+ */
+const DEFAULT_TILES3D_OPACITY = 0.29;
+
+/**
  * How the LIDAR cloud is rendered. `raw` = the base bundle's hard point dots
  * (height-band colored); `splat` / `surfel` / `iso` / `world` / `scan` each swap
  * to a separately-built bundle (`<id>-splat` / `<id>-surfel` / `<id>-iso` /
@@ -69,7 +86,8 @@ type LidarRenderMode =
   | "world"
   | "stage"
   | "cube"
-  | "scan";
+  | "scan"
+  | "lod";
 
 /** Label shown on each render-mode pill. */
 const RENDER_MODE_LABELS: Record<LidarRenderMode, string> = {
@@ -82,6 +100,7 @@ const RENDER_MODE_LABELS: Record<LidarRenderMode, string> = {
   stage: "Stage",
   cube: "Spacetime",
   scan: "Sweep",
+  lod: "Zoom LOD",
 };
 
 /** Base url of a dataset's data dir (strip the trailing manifest filename). */
@@ -105,7 +124,7 @@ const AvCockpit: React.FC = () => {
       datasets.filter(
         (d) =>
           d.type === "av" &&
-          !/-(?:splat|surfel|iso3d|iso|world|stage|scan)$/.test(d.id),
+          !/-(?:splat|surfel|iso3d|iso|world|stage|scan|lod)$/.test(d.id),
       ),
     [],
   );
@@ -119,7 +138,7 @@ const AvCockpit: React.FC = () => {
     // should still land on it. `iso3d` / `world` / `scan` ARE real bundle suffixes;
     // match `iso3d` before the shorter `iso`. The guard below confirms the BASE
     // exists either way, since the suffix strips to the base id.
-    const m = routeId.match(/^(.*)-(splat|surfel|iso3d|iso|world|stage|scan)$/);
+    const m = routeId.match(/^(.*)-(splat|surfel|iso3d|iso|world|stage|scan|lod)$/);
     if (m && getDatasetById(m[1])) {
       return { baseId: m[1], routeMode: m[2] as LidarRenderMode };
     }
@@ -180,6 +199,10 @@ const AvCockpit: React.FC = () => {
     // Sweep needs its own `<id>-scan` bundle (raw returns + true scan-time +
     // phase ramp) — only AV2 builds it, so this auto-gates scan to AV2 scenes.
     if (getDatasetById(`${baseDataset.id}-scan`)) modes.push("scan");
+    // Additive-octree zoom LOD needs its own `<id>-lod` bundle (one archive
+    // where each return is materialized at a single home zoom). The client loads
+    // the union of zoom levels and zooming in streams only the residual detail.
+    if (getDatasetById(`${baseDataset.id}-lod`)) modes.push("lod");
     return modes;
   }, [baseDataset]);
 
@@ -217,6 +240,10 @@ const AvCockpit: React.FC = () => {
       return getDatasetById(`${baseDataset.id}-stage`) ?? baseDataset;
     if (lidarRenderMode === "scan")
       return getDatasetById(`${baseDataset.id}-scan`) ?? baseDataset;
+    // Additive zoom LOD: swap to the `-lod` bundle (lidarLod → lodMode:'additive'
+    // on the point layer; the engine loads + renders the union of zoom levels).
+    if (lidarRenderMode === "lod")
+      return getDatasetById(`${baseDataset.id}-lod`) ?? baseDataset;
     // Spacetime cube: a RENDER-ONLY clone of the BASE bundle with `avCube` set —
     // no bundle swap. buildDemoLayers reads the base + its `tracks/` archive and
     // lifts the trajectories into the time-as-height cube.
@@ -247,6 +274,9 @@ const AvCockpit: React.FC = () => {
   const [loadError, setLoadError] = useState(false);
   // Renderer backend: the deck.gl cockpit, or the Three.js + TSL (WebGPU) engine.
   const [renderer, setRenderer] = useState<"deck" | "three">("deck");
+  // Live camera zoom (throttled by AvDeck) — drives the "Zoom LOD" HUD.
+  const [liveZoom, setLiveZoom] = useState<number | null>(null);
+  const handleCameraZoom = useCallback((z: number) => setLiveZoom(z), []);
   // Click-to-inspect selection (cleared when the scene changes).
   const [selectedObject, setSelectedObject] = useState<PickedObject | null>(null);
   useEffect(() => {
@@ -418,6 +448,57 @@ const AvCockpit: React.FC = () => {
     () => setParam("basemap", showBasemap ? "0" : null),
     [showBasemap, setParam],
   );
+
+  // ── Google Photorealistic 3D Tiles (`?tiles3d=`) ──────────────────────────
+  // A deck-only overlay: the scene must opt in (`dataset.tiles3d`), a key must be
+  // configured, and the deck.gl renderer must be active (a Tile3DLayer can't ride
+  // the Three.js engine). When all three hold the cockpit shows a "3D Tiles"
+  // toggle that loads Google's photoreal city mesh under the LIDAR cloud.
+  const tiles3dCapable =
+    !!baseDataset?.tiles3d && !!GOOGLE_TILES_API_KEY && renderer === "deck";
+  const show3DTiles = tiles3dCapable && searchParams.get("tiles3d") === "1";
+  const toggle3DTiles = useCallback(
+    () => setParam("tiles3d", searchParams.get("tiles3d") === "1" ? null : "1"),
+    [searchParams, setParam],
+  );
+  // Google's ToS requires the per-tile data attribution be shown; AvDeck reports
+  // the visible-tiles' copyright union here for the credit chip below. Cleared
+  // when the overlay is off so a stale credit never lingers.
+  const [tiles3dAttribution, setTiles3dAttribution] = useState("");
+  useEffect(() => {
+    if (!show3DTiles) setTiles3dAttribution("");
+  }, [show3DTiles]);
+  // Manual vertical trim (`?tiles3dz=`, metres) on top of AvDeck's auto-detected
+  // ground height — the user nudges the photoreal ground onto the cloud's streets
+  // when auto-detect sits a touch high/low. Positive raises the mesh. Clamped to
+  // ±40 m; 0 (centred) keeps the URL clean.
+  const tiles3dElevAdjust = (() => {
+    const n = Number(searchParams.get("tiles3dz"));
+    return Number.isFinite(n) ? Math.max(-150, Math.min(150, n)) : 0;
+  })();
+  const setTiles3dElevAdjust = useCallback(
+    (v: number) => setParam("tiles3dz", v === 0 ? null : String(v)),
+    [setParam],
+  );
+  // Photoreal mesh opacity (`?tiles3dop=`, 0–100 → 0..1). Ghosts the buildings so
+  // the LIDAR cloud reads against them (useful when the animated cloud drifts
+  // slightly out of sync with the static mesh). Defaults to the scene's baked
+  // `tiles3dOpacity`, else a global ghosted default (the user's repeated pick); the
+  // URL param overrides ⇒ clean URL when it matches the default.
+  const tiles3dDefaultOpacity = baseDataset?.tiles3dOpacity ?? DEFAULT_TILES3D_OPACITY;
+  const tiles3dOpacity = (() => {
+    const p = searchParams.get("tiles3dop");
+    if (p === null) return tiles3dDefaultOpacity;
+    const n = Number(p);
+    return Number.isFinite(n)
+      ? Math.max(0, Math.min(1, n / 100))
+      : tiles3dDefaultOpacity;
+  })();
+  const setTiles3dOpacityPct = useCallback(
+    (pct: number) => setParam("tiles3dop", pct >= 100 ? null : String(pct)),
+    [setParam],
+  );
+
   const egoPath = useMemo<{ t: number; lon: number; lat: number }[] | null>(
     () => (scene?.streams?.ego as any)?.path ?? null,
     [scene],
@@ -545,10 +626,15 @@ const AvCockpit: React.FC = () => {
           <AvThreeViewer
             dataset={datasetForDeck ?? dataset}
             timeController={playback.timeController}
+            timeRange={timeRange}
+            registry={playback.registry}
             visibleStreams={visibleStreams}
             egoFollow={egoFollow}
             topDown={topDown}
             perfMode={perfMode}
+            reducedMotion={reducedMotion}
+            sceneView={scene?.initialView ?? null}
+            onSelectObject={setSelectedObject}
           />
         ) : (
           <AvDeck
@@ -565,9 +651,53 @@ const AvCockpit: React.FC = () => {
             perfMode={perfMode}
             showBasemap={showBasemap}
             timeHeightScale={timeHeightScale}
+            onCameraZoom={
+              lidarRenderMode === "lod" ? handleCameraZoom : undefined
+            }
+            show3DTiles={show3DTiles}
+            googleTilesApiKey={GOOGLE_TILES_API_KEY}
+            onTiles3dAttribution={setTiles3dAttribution}
+            tiles3dElevationAdjust={tiles3dElevAdjust}
+            tiles3dOpacity={tiles3dOpacity}
           />
         )}
       </div>
+
+      {/* "Zoom LOD" HUD: which additive-octree levels are resident at the current
+          camera zoom. The cloud is one archive where each return lives at a single
+          home zoom; the engine loads the union [minZoom..floor(zoom)], so zooming
+          in streams only the deeper residual. */}
+      {lidarRenderMode === "lod" && renderer === "deck" && (() => {
+        const tier = lidarDensities.find((d) => d.lod || d.id === "lod");
+        const lo = tier?.minZoom ?? 14;
+        const hi = tier?.maxZoom ?? 19;
+        const z = liveZoom ?? hi;
+        const resident = Math.max(lo, Math.min(hi, Math.floor(z)));
+        const nLevels = resident - lo + 1;
+        return (
+          <div className="pointer-events-none absolute bottom-24 left-3 z-20 rounded-md border border-cyan-300/20 bg-black/60 px-3 py-2 font-mono text-[11px] leading-relaxed text-cyan-100 backdrop-blur-md">
+            <div className="mb-0.5 text-cyan-300/90">ADDITIVE OCTREE LOD</div>
+            <div>
+              camera&nbsp;<span className="text-white">z{z.toFixed(1)}</span>
+            </div>
+            <div>
+              resident&nbsp;
+              <span className="text-white">
+                z{lo}–z{resident}
+              </span>
+              &nbsp;<span className="text-cyan-300/60">({nLevels}/{hi - lo + 1} levels)</span>
+            </div>
+            {tier?.points ? (
+              <div className="text-cyan-300/60">
+                {(tier.points / 1e6).toFixed(1)}M returns · one home zoom each
+              </div>
+            ) : null}
+            <div className="mt-1 max-w-[15rem] text-[10px] text-slate-300/70">
+              zoom in → deeper levels stream in; the coarse tiles stay resident.
+            </div>
+          </div>
+        );
+      })()}
 
       {isMobile ? (
         <AvMobileChrome
@@ -692,6 +822,25 @@ const AvCockpit: React.FC = () => {
               {showBasemap ? "Basemap" : "No basemap"}
             </button>
           )}
+          {/* Google Photorealistic 3D Tiles — only when the scene opts in
+              (`dataset.tiles3d`), a key is configured, and the deck renderer is
+              active. Loads Google's photoreal city mesh under the cloud as a
+              backdrop. */}
+          {tiles3dCapable && (
+            <button
+              type="button"
+              onClick={toggle3DTiles}
+              aria-pressed={show3DTiles}
+              title="Overlay Google Photorealistic 3D Tiles (real city mesh) under the LIDAR cloud"
+              className={`rounded-md border px-2.5 py-1 text-xs backdrop-blur-md transition-colors ${
+                show3DTiles
+                  ? "border-emerald-300/60 bg-emerald-400/20 text-emerald-100"
+                  : "border-white/10 bg-black/55 text-slate-300 hover:bg-white/5"
+              }`}
+            >
+              3D Tiles
+            </button>
+          )}
           {/* LIDAR render mode — Points ⇄ Splat ⇄ Surfel. Kept INSIDE the button
               row (not a new row) so the top-left container's height stays fixed
               and never grows into the `top-28` STREAMS panel below. Each pill
@@ -794,6 +943,64 @@ const AvCockpit: React.FC = () => {
         </Link>
       </div>
         </>
+      )}
+
+      {/* Google Photorealistic 3D Tiles chrome (shown while the mesh is on):
+          a vertical-trim slider to seat the photoreal ground on the cloud's
+          streets, plus the data-attribution credit Google's ToS requires (the
+          union of the visible tiles' sources, reported by AvDeck). Centered above
+          the timeline so it clears the corner telemetry / inspector panels. */}
+      {show3DTiles && (
+        <div className="absolute bottom-24 left-1/2 z-20 flex -translate-x-1/2 flex-col items-center gap-1">
+          <div className="flex flex-col gap-1.5 rounded-md border border-white/10 bg-black/60 px-3 py-1.5 backdrop-blur-md">
+            <div className="flex items-center gap-2">
+              <span className="w-20 text-[10px] uppercase tracking-wider text-slate-400">
+                Tiles height
+              </span>
+              <span className="text-[10px] text-slate-500">low</span>
+              <input
+                type="range"
+                min={-150}
+                max={150}
+                step={1}
+                value={tiles3dElevAdjust}
+                onChange={(e) => setTiles3dElevAdjust(Number(e.target.value))}
+                className="w-40"
+                style={{ accentColor: "#34d399" }}
+                aria-label="3D tiles vertical alignment (metres)"
+              />
+              <span className="text-[10px] text-slate-500">high</span>
+              <span className="w-10 text-right font-mono text-[10px] text-emerald-200">
+                {tiles3dElevAdjust > 0 ? "+" : ""}
+                {tiles3dElevAdjust}m
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="w-20 text-[10px] uppercase tracking-wider text-slate-400">
+                Tiles opacity
+              </span>
+              <span className="text-[10px] text-slate-500">ghost</span>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                step={1}
+                value={Math.round(tiles3dOpacity * 100)}
+                onChange={(e) => setTiles3dOpacityPct(Number(e.target.value))}
+                className="w-40"
+                style={{ accentColor: "#34d399" }}
+                aria-label="3D tiles opacity (percent)"
+              />
+              <span className="text-[10px] text-slate-500">solid</span>
+              <span className="w-10 text-right font-mono text-[10px] text-emerald-200">
+                {Math.round(tiles3dOpacity * 100)}%
+              </span>
+            </div>
+          </div>
+          <div className="pointer-events-none max-w-[80vw] truncate rounded bg-black/60 px-2 py-0.5 text-[10px] text-slate-300 backdrop-blur-md">
+            {tiles3dAttribution || "Google Photorealistic 3D Tiles"}
+          </div>
+        </div>
       )}
 
       {/* Loading / empty state */}

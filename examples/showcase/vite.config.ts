@@ -77,9 +77,24 @@ export default defineConfig({
   server: {
     port: 3000,
   },
+  // A single `three` instance must back both r3f's reconciler and the engine's
+  // WebGPURenderer — a duplicate copy breaks reconciliation and the renderer.
+  // `react`/`react-dom`/r3f must ALSO be deduped: `@poopdeck.gl/three` ships its
+  // own react in node_modules, and when its dist is served via `/@fs/` (not
+  // pre-bundled) vite would otherwise bind a SECOND React instance → elements
+  // created in the three package fail to render in the showcase tree with
+  // "Objects are not valid as a React child" (mismatched element `$$typeof`).
+  resolve: {
+    dedupe: ['three', 'react', 'react-dom', '@react-three/fiber', '@react-three/drei'],
+  },
   optimizeDeps: {
     include: ['maplibre-gl', 'mapbox-gl'],
     exclude: ['brotli-wasm'],
+    // three/webgpu + three/tsl use top-level await; esbuild dep pre-bundling
+    // needs an esnext target to handle it.
+    esbuildOptions: {
+      target: 'esnext',
+    },
   },
   build: {
     target: 'esnext',

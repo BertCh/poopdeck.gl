@@ -17,13 +17,13 @@
  * truth for the math; keep the two in lockstep.
  */
 
-import { uniform, float, select, saturate, max, mix } from 'three/tsl';
+import { uniform, float, select, saturate, max, mix } from './nodes';
+import type { TSLNode, UniformNode } from './nodes';
 import type { TimeFilterMode, TimeFilterParams } from './time-filter-math';
 
-/** A TSL node (loose alias — the shader-graph glue is structurally typed). */
-export type TSLNode = ReturnType<typeof float>;
-/** A TSL uniform node whose `.value` the renderer sets per frame. */
-export type UniformNode = ReturnType<typeof uniform>;
+// The loose TSL node aliases live in ./nodes (see that file for why); re-export
+// so existing `import { TSLNode } from './time-filter'` consumers keep working.
+export type { TSLNode, UniformNode };
 
 /** Tiny epsilon guarding divisions by a zero ramp width. */
 const EPS = 1e-6;

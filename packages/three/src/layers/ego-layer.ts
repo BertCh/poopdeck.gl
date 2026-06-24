@@ -25,6 +25,7 @@ import { BaseSttLayer, type SttLayerContext } from './layer';
 import { writeBoxEdges, FLOATS_PER_BOX } from '../geometry/box-edges';
 import type { Projection } from '../projection/local-enu';
 import type { RGBA } from '../lib/color';
+import type { SttPickable, PickBox } from '../lib/box-pick';
 
 export interface EgoPose {
   x: number;
@@ -46,7 +47,7 @@ export interface EgoLayerOptions {
 const DEFAULT_TRAIL: RGBA = [80, 200, 255, 160];
 const DEFAULT_MARKER: RGBA = [120, 230, 255, 255];
 
-export class EgoLayer extends BaseSttLayer {
+export class EgoLayer extends BaseSttLayer implements SttPickable {
   readonly id: string;
   readonly object = new Group();
 
@@ -56,6 +57,7 @@ export class EgoLayer extends BaseSttLayer {
   private lat: number[] = [];
   private alt: number[] = [];
   private heading: number[] = [];
+  private currentPose: EgoPose | null = null;
 
   private trail: Line;
   private marker: LineSegments;
@@ -148,24 +150,52 @@ export class EgoLayer extends BaseSttLayer {
     geom.setAttribute('position', new Float32BufferAttribute(pos, 3));
     geom.computeBoundingSphere();
     this.trail.geometry = geom;
+    this.trail.visible = this.times.length > 0; // no 0-vertex draw on an empty trail
 
     const mgeom = new BufferGeometry();
     mgeom.setAttribute('position', new Float32BufferAttribute(this.markerBuf, 3));
     this.marker.geometry.dispose();
     this.marker.geometry = mgeom;
+    this.marker.visible = false; // enabled by setTime once a pose is sampled
   }
 
   setTime(absoluteTimeMs: number): void {
     const pose = this.getEgoPose(absoluteTimeMs);
+    this.currentPose = pose;
     const geom = this.marker.geometry;
     if (!pose) {
+      this.marker.visible = false;
       geom.setDrawRange(0, 0);
       return;
     }
     const [l, w, h] = this.opts.boxSize;
     writeBoxEdges(this.markerBuf, 0, pose.x, pose.y, pose.z, pose.heading, l, w, h);
+    this.marker.visible = true;
     geom.setDrawRange(0, FLOATS_PER_BOX / 3);
     (geom.getAttribute('position') as Float32BufferAttribute).needsUpdate = true;
+  }
+
+  /** Current-frame ego OBB for click-to-inspect picking ({@link SttPickable}). */
+  getPickBoxes(): PickBox[] {
+    const pose = this.currentPose;
+    if (!pose) return [];
+    const [l, w, h] = this.opts.boxSize;
+    return [
+      {
+        center: [pose.x, pose.y, pose.z + h / 2],
+        heading: pose.heading,
+        halfExtents: [l / 2, w / 2, h / 2],
+        meta: {
+          layerId: this.id,
+          kind: 'ego',
+          category: 'ego',
+          length: l,
+          width: w,
+          height: h,
+          heading: Number.isFinite(pose.heading) ? pose.heading : undefined,
+        },
+      },
+    ];
   }
 
   /** Interpolated ego pose in WORLD coordinates at `now` (epoch-ms), or null. */

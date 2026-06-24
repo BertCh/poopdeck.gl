@@ -414,6 +414,22 @@ export interface SpatiotemporalTilesetOptions {
   /** Refinement strategy: 'best-available' (load parent tiles as fallback) or 'no-overlap' (only exact zoom) */
   refinementStrategy?: 'best-available' | 'no-overlap';
 
+  /**
+   * Level-of-detail composition across zoom levels.
+   * - `'parent-fallback'` (default): render the single best (highest loaded)
+   *   zoom; coarser parents are transient fallbacks dropped by
+   *   {@link getVisibleTiles} the moment their children finish streaming.
+   * - `'additive'`: render the UNION of zoom levels `[minZoom..requestedZoom]`
+   *   simultaneously and keep every level resident. For ADDITIVE-OCTREE point
+   *   clouds (built with `stt-build --min-zoom-field=--max-zoom-field=<col>`),
+   *   where each point lives at exactly ONE zoom: a coarse tile holds a sparse
+   *   overview, finer tiles add ONLY the residual detail, so there is no
+   *   double-drawing and zooming in fetches only the deeper levels (the coarse
+   *   tiles are already resident from when the camera was zoomed out).
+   * @default 'parent-fallback'
+   */
+  lodMode?: 'parent-fallback' | 'additive';
+
   /** Enable predictive prefetching for animations */
   enablePrefetch?: boolean;
 
@@ -725,6 +741,7 @@ export class SpatiotemporalTileset {
       maxZoom: options.maxZoom ?? 14,
       temporalBucketMs: options.temporalBucketMs ?? 3600 * 1000,
       refinementStrategy: options.refinementStrategy ?? 'best-available',
+      lodMode: options.lodMode ?? 'parent-fallback',
       enablePrefetch: options.enablePrefetch ?? true,
       // Defaults sized for a few real-time seconds of buffer. See the
       // matching tuning notes in SpatioTemporalLayer.defaultProps.
@@ -993,6 +1010,17 @@ export class SpatiotemporalTileset {
       return [clampedZoom];
     }
 
+    // ADDITIVE-OCTREE LOD: load the FULL union [minZoom..clampedZoom]. Each
+    // point lives at exactly one home zoom, so every level contributes distinct
+    // points and they are all kept resident + rendered together (no parent
+    // de-dup in getVisibleTiles). Zooming in only adds the new deepest levels;
+    // the coarse levels were already fetched when the camera was zoomed out.
+    if (this.options.lodMode === 'additive') {
+      const zoomLevels: number[] = [];
+      for (let z = clampedZoom; z >= minZoom; z--) zoomLevels.push(z);
+      return zoomLevels;
+    }
+
     // 'best-available': primary zoom + up to PARENT_FALLBACK_LEVELS parents.
     // 4 levels covers the common case for sparse global point datasets:
     // a feature isolated within ~150 km at z=10 typically clusters into a
@@ -1021,6 +1049,10 @@ export class SpatiotemporalTileset {
    * skipping is inert unless a `getTileByteSize` lookup is wired.
    */
   private isOversizedParent(tileId: TileId, primaryZoom: number): boolean {
+    // Additive LOD: coarse levels are intentional (the sparse overview), not
+    // throwaway fallbacks — never skip them. They are also small by construction
+    // (one representative per coarse voxel), so the oversize concern doesn't apply.
+    if (this.options.lodMode === 'additive') return false;
     if (tileId.z >= primaryZoom) return false; // primary (or deeper) — always load
     const getSize = this.options.getTileByteSize;
     if (!getSize) return false;
@@ -2803,6 +2835,21 @@ export class SpatiotemporalTileset {
 
   getVisibleTiles(): Tile[] {
     if (this.neededTileKeys.size === 0) return [];
+
+    // ADDITIVE-OCTREE LOD: render EVERY loaded tile in the needed set across all
+    // zoom levels — no parent de-dup. Each point lives at exactly one home zoom,
+    // so a coarse z14 tile and a fine z18 tile hold DISJOINT points (the coarse
+    // overview vs. the residual detail); dropping the coarse parent once its
+    // children load would erase the sparse points that exist nowhere else. The
+    // union is the complete cloud.
+    if (this.options.lodMode === 'additive') {
+      const out: Tile[] = [];
+      for (const key of this.neededTileKeys) {
+        const header = this.tiles.get(key);
+        if (header?.isLoaded && header.tile) out.push(header.tile);
+      }
+      return out;
+    }
 
     // Find the primary (highest) zoom level that has a loaded tile.
     let primaryZoom = -1;

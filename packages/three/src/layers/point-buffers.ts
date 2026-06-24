@@ -15,13 +15,16 @@ import type { Projection } from '../projection/local-enu';
 import {
   expandCategoricalColors,
   expandRgbColumns,
+  expandRampColors,
   type CategoricalColorSpec,
+  type RampColorSpec,
   type RGBA,
 } from '../lib/color';
 
 export type PointColorMode =
   | { type: 'rgb'; columns: [string, string, string]; alpha?: number }
-  | ({ type: 'categorical' } & CategoricalColorSpec);
+  | ({ type: 'categorical' } & CategoricalColorSpec)
+  | ({ type: 'ramp' } & RampColorSpec);
 
 export interface PointBufferOptions {
   colorMode: PointColorMode;
@@ -37,10 +40,16 @@ export interface PointBufferOptions {
 
 export interface PointBuffers {
   count: number;
-  centers: Float32Array; // vec3 ENU metres
+  centers: Float32Array; // vec3, RTC-local (relative to `origin`)
   colors: Float32Array; // vec4 0..1
   starts: Float32Array; // float relative to timeOrigin
   ends: Float32Array; // float relative to timeOrigin
+  /**
+   * RTC origin (absolute projected world coords). `centers` are written
+   * RELATIVE to this; the layer sets `object.position = origin`. For the
+   * ENU/AV frame this is ~[0,0,0] so `centers` stay byte-identical to absolute.
+   */
+  origin: [number, number, number];
   bbox: { min: [number, number, number]; max: [number, number, number] } | null;
 }
 
@@ -60,6 +69,14 @@ function colorsForTile(
   }
   if (mode.type === 'rgb') {
     return expandRgbColumns(b, mode.columns, mode.alpha ?? 1);
+  }
+  if (mode.type === 'ramp') {
+    return expandRampColors(b, {
+      property: mode.property,
+      domain: mode.domain,
+      range: mode.range,
+      fallback: mode.fallback,
+    });
   }
   return expandCategoricalColors(b, {
     property: mode.property,
@@ -93,9 +110,19 @@ export function buildPointBuffers(
       colors: new Float32Array(0),
       starts: new Float32Array(0),
       ends: new Float32Array(0),
+      origin: [0, 0, 0],
       bbox: null,
     };
   }
+
+  // RTC origin = first vertex of the first non-empty point layer, projected
+  // (absolute world). `centers` are written relative to it so the large
+  // mercator/globe magnitude stays in the f64 CPU transform (object.position),
+  // not the f32 buffer. For the ENU/AV frame origin ≈ [0,0,0] → no-op.
+  const firstLayer = parts[0];
+  const firstDims = firstLayer.positionDimensions ?? 2;
+  const firstAlt = firstDims > 2 ? firstLayer.positions[2] : 0;
+  const origin = projection.project(firstLayer.positions[0], firstLayer.positions[1], firstAlt);
 
   const centers = new Float32Array(total * 3);
   const colors = new Float32Array(total * 4);
@@ -120,7 +147,10 @@ export function buildPointBuffers(
       const lon = b.positions[i * dims];
       const lat = b.positions[i * dims + 1];
       const alt = elev ? elev[i] * opts.elevationScale : dims > 2 ? b.positions[i * dims + 2] : 0;
-      const [x, y, z] = projection.project(lon, lat, alt);
+      const p = projection.project(lon, lat, alt);
+      const x = p[0] - origin[0];
+      const y = p[1] - origin[1];
+      const z = p[2] - origin[2];
       const j = o + i;
       centers[j * 3] = x;
       centers[j * 3 + 1] = y;
@@ -149,6 +179,7 @@ export function buildPointBuffers(
     colors,
     starts,
     ends,
+    origin,
     bbox: { min: [minX, minY, minZ], max: [maxX, maxY, maxZ] },
   };
 }

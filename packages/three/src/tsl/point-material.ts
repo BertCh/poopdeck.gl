@@ -25,27 +25,38 @@ import {
   varying,
   uniform,
   float,
+  vec2,
   vec4,
   select,
   exp,
   modelViewMatrix,
   cameraProjectionMatrix,
-} from 'three/tsl';
+  type UniformNode,
+} from './nodes';
 import {
   TimeFilterUniforms,
   timeFilterAlphaNode,
   wakeSizeScaleNode,
   updateTimeFilterUniforms,
-  type UniformNode,
 } from './time-filter';
 import type { TimeFilterMode, TimeFilterParams } from './time-filter-math';
 
-/** Live point uniforms (size in world metres, opacity, splat tightness). */
+/**
+ * Live point uniforms. `pointSize` is the billboard HALF-size: in world metres
+ * when `sizeUnits:'meters'` (default — AV), or in CSS pixels when
+ * `sizeUnits:'pixels'`. `viewport` is the drawing-buffer size in px, used only
+ * by the pixel-sizing path (host pushes it on resize, like wide-line).
+ */
 export class PointUniforms {
   readonly pointSize: UniformNode = uniform(0.06);
   readonly opacity: UniformNode = uniform(1);
   readonly splatFalloff: UniformNode = uniform(3);
+  /** Drawing-buffer size (px); the host updates it on resize. */
+  readonly viewport: UniformNode = uniform(vec2(1280, 720));
 }
+
+/** How {@link PointUniforms.pointSize} is interpreted. @default 'meters' */
+export type PointSizeUnits = 'meters' | 'pixels';
 
 export interface PointMaterialOptions {
   /** Time-filter mode: window (raw), wake (scan sweep), cumulative (worldbuild). */
@@ -54,6 +65,15 @@ export interface PointMaterialOptions {
   splat?: boolean;
   /** Discard fragments below this final alpha. @default 0.01 */
   alphaCutoff?: number;
+  /**
+   * Billboard sizing. `'meters'` (default, AV-unchanged) expands the quad in
+   * view space so a point is a fixed metric size that shrinks with distance.
+   * `'pixels'` (deck `radiusUnits:'pixels'`) expands it in clip space so every
+   * point keeps a constant on-screen radius regardless of depth (needs the
+   * `viewport` uniform, like {@link createWideLineMaterial}).
+   * @default 'meters'
+   */
+  sizeUnits?: PointSizeUnits;
 }
 
 export interface PointMaterialBundle {
@@ -73,32 +93,55 @@ export function createPointMaterial(opts: PointMaterialOptions): PointMaterialBu
   const end = attribute('sttEnd', 'float');
   const corner = positionGeometry.xy;
 
-  const alpha = timeFilterAlphaNode(opts.mode, time, start, end);
+  // VERTEX stage: the time alpha (a `select()`) feeds the wake tail-size only.
+  // Used directly in the vertex computation (never wrapped in a varying), so the
+  // WGSL backend builds it fine.
+  const vertexAlpha = timeFilterAlphaNode(opts.mode, time, start, end);
   // Wake mode shrinks the tail toward `wakeTailScale`; other modes keep full size.
-  const sizeFactor = opts.mode === 'wake' ? wakeSizeScaleNode(time, alpha) : float(1);
+  const sizeFactor = opts.mode === 'wake' ? wakeSizeScaleNode(time, vertexAlpha) : float(1);
   const half = point.pointSize.mul(sizeFactor);
 
-  const viewCenter = modelViewMatrix.mul(vec4(center, 1));
-  const viewPos = vec4(
-    viewCenter.x.add(corner.x.mul(half)),
-    viewCenter.y.add(corner.y.mul(half)),
-    viewCenter.z,
-    viewCenter.w,
-  );
-
   const material = new MeshBasicNodeMaterial();
-  material.vertexNode = cameraProjectionMatrix.mul(viewPos);
+  const sizeUnits: PointSizeUnits = opts.sizeUnits ?? 'meters';
+  if (sizeUnits === 'pixels') {
+    // CLIP-SPACE billboard: project the centre, then push the quad corner by a
+    // constant pixel half-size. corner ∈ [-1,1]², so corner·half = ±half px.
+    // px → NDC = ×2/viewport, NDC → clip = ×clip.w (cancels the perspective
+    // divide so on-screen size is depth-independent). Mirrors wide-line.
+    const clip = cameraProjectionMatrix.mul(modelViewMatrix).mul(vec4(center, 1));
+    const off = corner.mul(half).mul(float(2)).div(point.viewport).mul(clip.w);
+    material.vertexNode = vec4(clip.x.add(off.x), clip.y.add(off.y), clip.z, clip.w);
+  } else {
+    // VIEW-SPACE billboard (default, AV-unchanged): metric size that shrinks
+    // with distance.
+    const viewCenter = modelViewMatrix.mul(vec4(center, 1));
+    const viewPos = vec4(
+      viewCenter.x.add(corner.x.mul(half)),
+      viewCenter.y.add(corner.y.mul(half)),
+      viewCenter.z,
+      viewCenter.w,
+    );
+    material.vertexNode = cameraProjectionMatrix.mul(viewPos);
+  }
 
+  // IMPORTANT (WGSL): vary the RAW per-instance inputs and recompute the time
+  // alpha — a `select()` — in the FRAGMENT stage. A `select()` wrapped in a
+  // `varying()` fails to build on the WGSL backend (the same crash that was
+  // fixed for surfel-material.ts / iso-line-material.ts; point-material was
+  // missed). `start`/`end` are per-instance constants, so the recomputed
+  // fragment alpha is identical to the (formerly varied) vertex alpha.
   const vColor = varying(color);
-  const vAlpha = varying(alpha);
+  const vStart = varying(start);
+  const vEnd = varying(end);
   const vUv = varying(corner);
+  const fragAlpha = timeFilterAlphaNode(opts.mode, time, vStart, vEnd);
 
   const r2 = vUv.dot(vUv);
   const soft = opts.splat ? exp(r2.mul(point.splatFalloff).negate()) : float(1);
   const a = select(
     r2.greaterThan(1),
     float(0),
-    vColor.a.mul(point.opacity).mul(vAlpha).mul(soft),
+    vColor.a.mul(point.opacity).mul(fragAlpha).mul(soft),
   );
 
   material.colorNode = vColor.xyz;
@@ -116,10 +159,12 @@ export function createPointMaterial(opts: PointMaterialOptions): PointMaterialBu
 export interface PointUniformValues {
   relativeCurrentTime: number;
   params?: TimeFilterParams & { wakeTailScale?: number };
-  /** World-metre half-size of each point splat. */
+  /** Billboard half-size — world metres (`sizeUnits:'meters'`) or CSS px (`'pixels'`). */
   pointSize?: number;
   opacity?: number;
   splatFalloff?: number;
+  /** Drawing-buffer size `[w, h]` in px (push on resize; pixel sizing only). */
+  viewport?: [number, number];
 }
 
 export function updatePointUniforms(bundle: PointMaterialBundle, v: PointUniformValues): void {
@@ -127,4 +172,5 @@ export function updatePointUniforms(bundle: PointMaterialBundle, v: PointUniform
   bundle.point.pointSize.value = v.pointSize ?? 0.06;
   bundle.point.opacity.value = v.opacity ?? 1;
   bundle.point.splatFalloff.value = v.splatFalloff ?? 3;
+  if (v.viewport) bundle.point.viewport.value.set(v.viewport[0], v.viewport[1]);
 }

@@ -11,7 +11,7 @@
  * Two on-disk layouts are supported (the renderer auto-detects per tile):
  *   • **vector** (current `stt-build --vector-group`): interleaved FixedSizeList
  *     columns `surfel_quat` (f32×4, full quaternion), `surfel_scale` (f32×2),
- *     `surfel_color` (u8×4 rgba w/ confidence) in `binary.vectorProps`. This is
+ *     `surfel_rgba` (u8×4 rgba w/ confidence) in `binary.vectorProps`. This is
  *     what the rewired deck `SplatLayer` reads.
  *   • **numeric** (legacy): separate `qx,qy,qz,qw` (or smallest-three packed
  *     `q_a,q_b,q_c,q_imax`), `s_major,s_minor`, `r,g,b`, `surfel_opacity` columns

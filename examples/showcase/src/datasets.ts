@@ -274,6 +274,48 @@ const AV_LIDAR_TIME_WINDOW_MS = 500;
  * (which lists every `type:'av'` dataset) and at `/drive/<id>`; the `/demos`
  * catalog curation is separate (see demoMeta `CATALOG_EXCLUDED_IDS`).
  */
+/**
+ * Per-scene Google Photorealistic 3D Tiles config, keyed by BASE scene id.
+ * Presence here ENABLES the toggle on that base scene; the values seed the
+ * cockpit's sliders (the `?tiles3dz=` / `?tiles3dop=` URL params still override).
+ *   • `ground` — local ground ellipsoidal height (m) at the anchor. Google's mesh
+ *     uses true WGS84 ellipsoidal heights while the AV cloud sits at local z≈0, so
+ *     the cockpit lowers the mesh by this much to land it on the streets. Seeded by
+ *     a one-off offline tileset probe, then visually fine-tuned per scene.
+ *   • `opacity` — default mesh opacity (0–1); below 1 ghosts the buildings so the
+ *     LIDAR reads against them. Omit for fully opaque.
+ */
+const AV_TILES3D_CONFIG: Record<
+  string,
+  { ground: number; opacity?: number }
+> = {
+  // Argoverse 2 (georeferenced). Pittsburgh / Miami / Detroit visually fine-tuned;
+  // the rest are auto-estimated by the box-bottom probe (scripts/estimate-3d-tiles-
+  // ground.mjs) — validated to ±2 m on flat AV2 terrain, so likely close, but may
+  // want a small slider trim (more on hilly scenes, like Pittsburgh's ~+8).
+  'argoverse-02678d04': { ground: 237.4 }, // Pittsburgh — tuned (est ~229, hilly)
+  'argoverse-02a00399': { ground: -24 }, // Miami — tuned (est -25.3)
+  'argoverse-0b5142c1': { ground: -6 }, // Washington DC — estimated
+  'argoverse-0bae3b5e': { ground: 146 }, // Detroit — tuned (est 144.3)
+  'argoverse-25e5c600': { ground: -23 }, // Palo Alto — estimated
+  'argoverse-92b900b1': { ground: 111 }, // Austin — estimated
+  // nuScenes (georeferenced; ground-biased probe estimates — noisier because the
+  // Singapore high-rises pollute the tile sample, so expect a per-scene trim).
+  'nuscenes-0061': { ground: 31 }, // One-North
+  'nuscenes-0103': { ground: -25 }, // Boston Seaport
+  'nuscenes-0553': { ground: -21 }, // Boston Seaport
+  'nuscenes-0655': { ground: -20 }, // Boston Seaport
+  'nuscenes-0757': { ground: -20 }, // Boston Seaport
+  'nuscenes-0796': { ground: 25 }, // Queenstown
+  'nuscenes-0916': { ground: 41 }, // Queenstown
+  'nuscenes-1077': { ground: 37 }, // Holland Village
+  'nuscenes-1094': { ground: 32 }, // Holland Village
+  'nuscenes-1100': { ground: 33 }, // Holland Village
+  // NOTE: Waymo scenes are deliberately excluded — they're anchored in an
+  // approximate local frame (no real georef), so the georeferenced photoreal mesh
+  // would never line up with the cloud's streets.
+};
+
 function nuscenesScene(opts: {
   id: string;
   name: string;
@@ -301,6 +343,15 @@ function nuscenesScene(opts: {
     avMapLineUrl: `${base}/map_line/manifest.json`,
     mapColors: AV_MAP_COLORS,
     type: 'av',
+    // Google Photorealistic 3D Tiles toggle — nuScenes is georeferenced (real
+    // Boston Seaport / Singapore), so the photoreal mesh registers with the cloud.
+    ...(AV_TILES3D_CONFIG[opts.id] && {
+      tiles3d: true,
+      tiles3dGroundHeight: AV_TILES3D_CONFIG[opts.id].ground,
+      ...(AV_TILES3D_CONFIG[opts.id].opacity !== undefined && {
+        tiles3dOpacity: AV_TILES3D_CONFIG[opts.id].opacity,
+      }),
+    }),
     timeRange: opts.timeRange,
     timeWindow: AV_LIDAR_TIME_WINDOW_MS,
     targetPlaybackSeconds: 20,
@@ -391,21 +442,37 @@ function argoverseScene(opts: {
    * of `iso3d`. Mutually exclusive with the others.
    */
   iso?: boolean;
+  /**
+   * Additive-octree zoom-LOD variant: the `<id>-lod` bundle was built with
+   * `argoverse_extract.py --lod` (each return materialized at a single per-sweep
+   * `home_zoom`). Rendered through the normal point path with the engine's
+   * `lodMode: 'additive'` — coarse zooms hold a sparse overview, finer zooms add
+   * only the residual, so zooming in streams detail without re-fetching the
+   * coarse cloud. Mutually exclusive with `surfel` / `world` / `scan` / iso.
+   */
+  lod?: boolean;
 }): Dataset {
   const base = `/data/${opts.id}`;
+  // Base scene id with any render-mode suffix stripped, for the 3D-tiles ground
+  // lookup (so every `-lod` / `-surfel` / … variant resolves to its city's value).
+  const tiles3dBaseId = opts.id.replace(
+    /-(?:surfel|world|scan|iso3d|iso|lod|splat|stage)$/,
+    "",
+  );
   const surfel = opts.surfel ?? false;
   const world = opts.world ?? false;
   const scan = opts.scan ?? false;
   const iso3d = opts.iso3d ?? false;
   const iso = opts.iso ?? false;
+  const lod = opts.lod ?? false;
   // Both iso flavours render through the same lidarIso path; iso3d additionally
   // lifts each contour by its real `z_layer`.
   const isoAny = iso || iso3d;
   // world / surfel / scan / iso / iso3d are mutually exclusive — each is a
   // different cloud representation reading a different bundle.
-  if (Number(surfel) + Number(world) + Number(scan) + Number(iso3d) + Number(iso) > 1) {
+  if (Number(surfel) + Number(world) + Number(scan) + Number(iso3d) + Number(iso) + Number(lod) > 1) {
     throw new Error(
-      `argoverseScene(${opts.id}): surfel / world / scan / iso / iso3d are mutually exclusive`,
+      `argoverseScene(${opts.id}): surfel / world / scan / iso / iso3d / lod are mutually exclusive`,
     );
   }
   return {
@@ -424,6 +491,20 @@ function argoverseScene(opts: {
     avMapLineUrl: `${base}/map_line/manifest.json`,
     mapColors: AV_MAP_COLORS,
     type: 'av',
+    // Google Photorealistic 3D Tiles. AV2 is georeferenced, so the photoreal mesh
+    // registers with the cloud's real streets. Every base scene with a config entry
+    // gets the toggle (`tiles3d` on the BASE only — the cockpit gates on it); the
+    // ground height + opacity are keyed by BASE id so EVERY render-mode variant
+    // (`-lod` / `-surfel` / …) carries them too (the cockpit swaps the active
+    // dataset per mode, so without this variants would fall back to the runtime
+    // auto-detect).
+    ...(AV_TILES3D_CONFIG[tiles3dBaseId] && {
+      tiles3dGroundHeight: AV_TILES3D_CONFIG[tiles3dBaseId].ground,
+      ...(AV_TILES3D_CONFIG[tiles3dBaseId].opacity !== undefined && {
+        tiles3dOpacity: AV_TILES3D_CONFIG[tiles3dBaseId].opacity,
+      }),
+      ...(opts.id === tiles3dBaseId && { tiles3d: true }),
+    }),
     // AV2 nanosecond sensor clock ÷1e6 — the large ms values are internally
     // consistent for relative playback (AV2 ships no wall-clock epoch).
     timeRange: opts.timeRange,
@@ -488,7 +569,9 @@ function argoverseScene(opts: {
               }
             : iso
               ? { lidarIso: true } // flat high-XY-res overview (no z lift)
-              : {}),
+              : lod
+                ? { lidarLod: true } // additive-octree zoom LOD (height-band color)
+                : {}),
     // Splats read best a touch larger; surfels/world carry their own per-disk
     // confidence + temporal alpha, so the layer opacity stays at full. Scan sets
     // its own radius/opacity above; iso (flat/3d) renders as paths (radius irrelevant).
@@ -577,6 +660,14 @@ function waymoScene(opts: {
    */
   world?: boolean;
   /**
+   * Additive-octree zoom-LOD variant: the `<id>-lod` bundle was built with
+   * `waymo_extract.py --lod` (each return materialized at one geometry-aware
+   * `home_zoom`). Rendered through the normal point path with `lodMode:'additive'`
+   * — coarse zooms keep a structure-preserving overview, finer zooms add only the
+   * residual. Mutually exclusive with surfel / iso / iso3d / world.
+   */
+  lod?: boolean;
+  /**
    * Override the LIDAR point radius (pixels). Smaller points reduce overplotting
    * on dense/scattered clouds (e.g. the rain scene, where returns smear) so the
    * cloud reads at its true resolution instead of a merged blob.
@@ -590,14 +681,15 @@ function waymoScene(opts: {
   const iso = opts.iso ?? false;
   const iso3d = opts.iso3d ?? false;
   const world = opts.world ?? false;
+  const lod = opts.lod ?? false;
   // Both iso flavours render through the same lidarIso path (the `density_band`
   // contour LineStrings); iso3d additionally lifts them by the real `z_layer`.
   const isoAny = iso || iso3d;
-  // world / surfel / iso / iso3d are mutually exclusive — each reads a different
-  // bundle representation. Guard against an entry accidentally setting two.
-  if (Number(surfel) + Number(iso) + Number(iso3d) + Number(world) > 1) {
+  // world / surfel / iso / iso3d / lod are mutually exclusive — each reads a
+  // different bundle representation. Guard against an entry setting two.
+  if (Number(surfel) + Number(iso) + Number(iso3d) + Number(world) + Number(lod) > 1) {
     throw new Error(
-      `waymoScene(${opts.id}): surfel / iso / iso3d / world are mutually exclusive`,
+      `waymoScene(${opts.id}): surfel / iso / iso3d / world / lod are mutually exclusive`,
     );
   }
   // Surfels + worldbuild are camera-colored too, so the height-band legend is
@@ -619,7 +711,9 @@ function waymoScene(opts: {
     type: 'av',
     // Waymo discloses no lat/lon → the scene is anchored at an approximate metro
     // point (right city, wrong streets). Drop the street basemap so the real road
-    // network can't visibly contradict the anchor (the extractor's intent).
+    // network can't visibly contradict the anchor (the extractor's intent). For the
+    // same reason it gets NO Google 3D Tiles toggle — the photoreal mesh is
+    // georeferenced and would never line up with the approximate-frame cloud.
     avLocalFrame: true,
     timeRange: opts.timeRange,
     // Iso-lines are cut per ~200 ms playhead window (waymo_extract --contour-step);
@@ -666,7 +760,9 @@ function waymoScene(opts: {
         ? { lidarRgb: true, lidarSurfel: true, lidarSurfelTemporalSigma: 120 }
         : colored
           ? { lidarRgb: true, lidarSplat: true }
-          : {}),
+          : lod
+            ? { lidarLod: true } // additive-octree zoom LOD (height-band color)
+            : {}),
     // Splats read best a touch larger + slightly transparent so overlaps blend.
     // A scene can override these (smaller) when its cloud overplots.
     radius: opts.radius ?? (colored ? 2.4 : 1.4),
@@ -2138,6 +2234,102 @@ const rawDatasets: Dataset[] = [
     latitude: 25.81266355087901,
     scan: true,
   }),
+  // ADDITIVE-OCTREE ZOOM LOD variant of the Miami scene (argoverse_extract.py
+  // --lod). One archive where each LIDAR return is materialized at a single
+  // "home zoom" (per-sweep hierarchical voxel subsample): coarse zoom levels
+  // hold a SPARSE overview of the live sweep, finer levels add ONLY the residual
+  // detail. The cockpit's "Zoom LOD" render mode loads the UNION of zoom levels
+  // (lodMode:'additive'), so zooming in streams in detail without re-fetching the
+  // coarse cloud — replacing the 5 fixed density tiers with true zoom-driven LOD.
+  // Starts a touch zoomed-out so the densify-on-zoom reveal is visible.
+  argoverseScene({
+    id: 'argoverse-02a00399-lod',
+    name: 'Argoverse 2 · Miami — additive zoom LOD',
+    description:
+      'The same real Argoverse 2 sensor log in Miami, baked as an ADDITIVE-OCTREE ' +
+      'point cloud: every LIDAR return is assigned a single "home zoom" by a ' +
+      'per-sweep hierarchical voxel subsample, so each point lives in exactly one ' +
+      'zoom level’s tiles. Zoomed out you see a sparse, even overview of the ' +
+      'live sweep; zooming in progressively streams the denser residual detail — ' +
+      'the coarse tiles you already loaded stay resident, so only the extra points ' +
+      'are fetched. Lossless (the union of all levels is the full cloud) and about ' +
+      'half the bytes of the five fixed density tiers it replaces. Same boxes / ' +
+      'ego / HD map / telemetry as the height-ramp scene.',
+    timeRange: { start: 315966070522, end: 315966086462 },
+    longitude: -80.19521021126853,
+    latitude: 25.81266355087901,
+    zoom: 16,
+    lod: true,
+  }),
+  // ── Additive-octree zoom-LOD variants for the other 5 Argoverse cities ──
+  // (argoverse_extract.py --lod). Each is the same sensor log as its base scene,
+  // baked as ONE archive where every return lives at a single geometry-aware home
+  // zoom; the cockpit's "Zoom LOD" mode loads the union of zoom levels.
+  argoverseScene({
+    id: 'argoverse-02678d04-lod',
+    name: 'Argoverse 2 · Pittsburgh — additive zoom LOD',
+    description:
+      'The Pittsburgh Argoverse 2 log as an additive-octree point cloud: each ' +
+      'return is assigned a single geometry-aware home zoom, so a sparse, ' +
+      'structure-preserving overview densifies to the full cloud as you zoom in.',
+    timeRange: { start: 315969904357, end: 315969920307 },
+    longitude: -79.9333411419541,
+    latitude: 40.45610620281625,
+    zoom: 16,
+    lod: true,
+  }),
+  argoverseScene({
+    id: 'argoverse-0b5142c1-lod',
+    name: 'Argoverse 2 · Washington DC — additive zoom LOD',
+    description:
+      'The Washington DC Argoverse 2 log as an additive-octree point cloud: each ' +
+      'return is assigned a single geometry-aware home zoom, so a sparse, ' +
+      'structure-preserving overview densifies to the full cloud as you zoom in.',
+    timeRange: { start: 315968121172, end: 315968137127 },
+    longitude: -76.97901441961996,
+    latitude: 38.903158674858965,
+    zoom: 16,
+    lod: true,
+  }),
+  argoverseScene({
+    id: 'argoverse-0bae3b5e-lod',
+    name: 'Argoverse 2 · Detroit — additive zoom LOD',
+    description:
+      'The Detroit Argoverse 2 log as an additive-octree point cloud: each ' +
+      'return is assigned a single geometry-aware home zoom, so a sparse, ' +
+      'structure-preserving overview densifies to the full cloud as you zoom in.',
+    timeRange: { start: 315969524322, end: 315969540277 },
+    longitude: -83.05092955863113,
+    latitude: 42.33371685760447,
+    zoom: 16,
+    lod: true,
+  }),
+  argoverseScene({
+    id: 'argoverse-25e5c600-lod',
+    name: 'Argoverse 2 · Palo Alto — additive zoom LOD',
+    description:
+      'The Palo Alto Argoverse 2 log as an additive-octree point cloud: each ' +
+      'return is assigned a single geometry-aware home zoom, so a sparse, ' +
+      'structure-preserving overview densifies to the full cloud as you zoom in.',
+    timeRange: { start: 315966104242, end: 315966120187 },
+    longitude: -122.12833142762317,
+    latitude: 37.415846217190214,
+    zoom: 16,
+    lod: true,
+  }),
+  argoverseScene({
+    id: 'argoverse-92b900b1-lod',
+    name: 'Argoverse 2 · Austin — additive zoom LOD',
+    description:
+      'The Austin Argoverse 2 log as an additive-octree point cloud: each ' +
+      'return is assigned a single geometry-aware home zoom, so a sparse, ' +
+      'structure-preserving overview densifies to the full cloud as you zoom in.',
+    timeRange: { start: 315968947407, end: 315968963357 },
+    longitude: -97.70213668235851,
+    latitude: 30.255713070218487,
+    zoom: 16,
+    lod: true,
+  }),
   argoverseScene({
     id: 'argoverse-0b5142c1',
     name: 'Argoverse 2 · Washington DC',
@@ -2821,6 +3013,75 @@ const rawDatasets: Dataset[] = [
     longitude: -112.071638,
     latitude: 33.448412,
     iso: true,
+  }),
+  // ── Additive-octree zoom-LOD variants for the 5 Waymo scenes ──
+  // (waymo_extract.py --lod). LOCAL-ONLY like every Waymo bundle (no-redistribution
+  // license). Each return lives at a single geometry-aware home zoom; the cockpit's
+  // "Zoom LOD" mode loads the union of zoom levels.
+  waymoScene({
+    id: 'waymo-sf-day-lod',
+    name: 'Waymo · San Francisco · Day — additive zoom LOD',
+    description:
+      'The daytime San Francisco Waymo segment as an additive-octree point cloud: ' +
+      'each return lives at a single geometry-aware home zoom, so a sparse, ' +
+      'structure-preserving overview densifies to full resolution as you zoom in.',
+    timeRange: { start: 1559170821400, end: 1559170841225 },
+    longitude: -122.41947418420166,
+    latitude: 37.774902618839754,
+    zoom: 16,
+    lod: true,
+  }),
+  waymoScene({
+    id: 'waymo-phx-day-lod',
+    name: 'Waymo · Phoenix · Day — additive zoom LOD',
+    description:
+      'The daytime Phoenix Waymo segment as an additive-octree point cloud: each ' +
+      'return lives at a single geometry-aware home zoom, so a sparse, ' +
+      'structure-preserving overview densifies to full resolution as you zoom in.',
+    timeRange: { start: 1513450821409, end: 1513450841108 },
+    longitude: -112.074419,
+    latitude: 33.448329,
+    zoom: 16,
+    lod: true,
+  }),
+  waymoScene({
+    id: 'waymo-phx-night-lod',
+    name: 'Waymo · Phoenix · Night — additive zoom LOD',
+    description:
+      'The nighttime Phoenix Waymo segment as an additive-octree point cloud: each ' +
+      'return lives at a single geometry-aware home zoom, so a sparse, ' +
+      'structure-preserving overview densifies to full resolution as you zoom in.',
+    timeRange: { start: 1508038141882, end: 1508038161581 },
+    longitude: -112.073977,
+    latitude: 33.448178,
+    zoom: 16,
+    lod: true,
+  }),
+  waymoScene({
+    id: 'waymo-sf-night-lod',
+    name: 'Waymo · San Francisco · Night — additive zoom LOD',
+    description:
+      'The nighttime San Francisco Waymo segment as an additive-octree point cloud: ' +
+      'each return lives at a single geometry-aware home zoom, so a sparse, ' +
+      'structure-preserving overview densifies to full resolution as you zoom in.',
+    timeRange: { start: 1541816058898, end: 1541816078598 },
+    longitude: -122.419489,
+    latitude: 37.774895,
+    zoom: 16,
+    lod: true,
+  }),
+  waymoScene({
+    id: 'waymo-phx-dusk-rain-lod',
+    name: 'Waymo · Phoenix · Dawn/Dusk (rain) — additive zoom LOD',
+    description:
+      'The rainy dawn/dusk Phoenix Waymo segment as an additive-octree point cloud: ' +
+      'each return lives at a single geometry-aware home zoom, so a sparse, ' +
+      'structure-preserving overview densifies to full resolution as you zoom in.',
+    timeRange: { start: 1518657647337, end: 1518657667137 },
+    longitude: -112.071638,
+    latitude: 33.448412,
+    zoom: 16,
+    lod: true,
   }),
   // ── comma.ai · real I-280 highway segment (ego GPS + CAN telemetry + camera;
   //    NO lidar/objects). Built by comma_extract.py from the comma2k19 HF mirror.

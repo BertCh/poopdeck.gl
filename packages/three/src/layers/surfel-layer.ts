@@ -31,7 +31,7 @@ export interface SurfelLayerOptions {
   quatVectorColumn?: string;
   /** Interleaved scale vector column. @default 'surfel_scale' */
   scaleVectorColumn?: string;
-  /** Interleaved rgba(u8) vector column. @default 'surfel_color' */
+  /** Interleaved rgba(u8) vector column. @default 'surfel_rgba' */
   colorVectorColumn?: string;
   /** Legacy separate quaternion columns when NOT smallest-three packed. @default ['qx','qy','qz','qw'] */
   quaternionColumns?: [string, string, string, string];
@@ -79,7 +79,7 @@ export class SurfelLayer extends BaseSttLayer {
     this.opts = {
       quatVectorColumn: options.quatVectorColumn ?? 'surfel_quat',
       scaleVectorColumn: options.scaleVectorColumn ?? 'surfel_scale',
-      colorVectorColumn: options.colorVectorColumn ?? 'surfel_color',
+      colorVectorColumn: options.colorVectorColumn ?? 'surfel_rgba',
       quaternionColumns: options.quaternionColumns ?? ['qx', 'qy', 'qz', 'qw'],
       scaleColumns: options.scaleColumns ?? ['s_major', 's_minor'],
       rgbColumns: options.rgbColumns === undefined ? ['r', 'g', 'b'] : options.rgbColumns,
@@ -117,9 +117,12 @@ export class SurfelLayer extends BaseSttLayer {
 
     this.disposeGpu();
     if (buf.count === 0) {
+      // No surfels: hide rather than draw the bare hexagon with no instances.
       this.object.geometry = makeHexDiskGeometry();
+      this.object.visible = false;
       return;
     }
+    this.object.visible = true;
 
     const geometry = makeHexDiskGeometry();
     geometry.instanceCount = buf.count;

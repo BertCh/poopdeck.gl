@@ -18,13 +18,23 @@
  */
 
 import { STTArchive } from '@poopdeck.gl/core';
-import type { ArchiveMetadata, Tile } from '@poopdeck.gl/core';
+import type { ArchiveMetadata, Tile, TileId } from '@poopdeck.gl/core';
 
 export interface SttTileSourceOptions {
   /** Resolved archive manifest URL. */
   url: string;
   /** Custom fetch (e.g. to add auth headers / rewrite the base). */
   fetch?: typeof fetch;
+  /**
+   * LOD strategy. `'parent-fallback'` (default) loads the single deepest
+   * (native) zoom — correct for archives where `maxZoom` is self-sufficient.
+   * `'additive'` loads the UNION of every zoom `[minZoom..maxZoom]`: an
+   * additive-octree `-lod` bundle materializes each return at exactly ONE home
+   * zoom, so a coarse level holds sparse overview points that exist in no other
+   * level — loading only `maxZoom` would drop most of the cloud. Mirrors
+   * `SpatiotemporalTileset`'s additive union.
+   */
+  lodMode?: 'parent-fallback' | 'additive';
 }
 
 export interface LoadedSource {
@@ -35,11 +45,13 @@ export interface LoadedSource {
 export class SttTileSource {
   readonly url: string;
   private readonly archive: STTArchive;
+  private readonly lodMode: 'parent-fallback' | 'additive';
   private loaded: LoadedSource | null = null;
   private inflight: Promise<LoadedSource> | null = null;
 
   constructor(opts: SttTileSourceOptions) {
     this.url = opts.url;
+    this.lodMode = opts.lodMode ?? 'parent-fallback';
     this.archive = new STTArchive({ url: opts.url, fetch: opts.fetch });
   }
 
@@ -58,6 +70,31 @@ export class SttTileSource {
 
   private async _load(signal?: AbortSignal): Promise<LoadedSource> {
     const metadata = await this.archive.getMetadata();
+    if (this.lodMode === 'additive') {
+      // Additive octree: each return lives at exactly ONE home zoom, so the
+      // resident cloud is the UNION of [minZoom..maxZoom] — load every level and
+      // dedupe (mirrors SpatiotemporalTileset's additive union). Loading only
+      // maxZoom would drop every coarse-level point.
+      const seen = new Set<string>();
+      const ids: TileId[] = [];
+      for (let z = metadata.minZoom; z <= metadata.maxZoom; z++) {
+        const levelIds = await this.archive.getTileIdsInBounds(
+          metadata.bounds,
+          z,
+          metadata.timeRange,
+        );
+        for (const id of levelIds) {
+          const key = `${id.z}/${id.x}/${id.y}/${id.t}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          ids.push(id);
+        }
+      }
+      const tiles = (await this.archive.getTiles(ids, { signal })).filter(
+        (t): t is Tile => t !== null,
+      );
+      return { metadata, tiles };
+    }
     // Pull every tile at the deepest (native) zoom across the whole span.
     const tiles = await this.archive.getTilesInBounds(
       metadata.bounds,

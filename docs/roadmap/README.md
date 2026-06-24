@@ -45,6 +45,17 @@ not the "what's planned" — the current state lives in the spec and API docs.
 - [**rust-audit-2026-06.md**](./rust-audit-2026-06.md) — Rust toolchain audit vs.
   tippecanoe / PMTiles / COPC / MLT. Wave 0 shipped; Waves 1–3 list the still-open
   items (full measure-correct loop, per-feature bbox covering, `stt-tools` crate).
+- [**postgis-integration.md**](./postgis-integration.md) — PostgreSQL/PostGIS as a
+  first-class `stt-build` **input source** (feature-gated `postgres` module) **and**
+  a new `stt-serve` binary that generates STT tiles **on the fly** from a live
+  PostGIS table (the `ST_AsMVT` analog). Benchmarked on IBTrACS: PostGIS ingest is
+  byte-equivalent to the file path and as fast (0.98×); dynamic serve is ~2 ms/tile.
+- [**duckdb-integration.md**](./duckdb-integration.md) — DuckDB (and anything it can
+  scan — Parquet/CSV/… — in-process, no server) as an `stt-build` **input source**
+  (feature-gated `duckdb` module, statically bundled engine) **and** a second
+  `stt-serve` backend. Same WKB bridge (`ST_AsWKB`), but rows decode from DuckDB's
+  self-describing `ValueRef` (no per-type SQL introspection); read-only file access;
+  spatial extension loaded at runtime. Logically identical tiles to the file path.
 
 ## Forward-looking design (not built)
 
@@ -52,6 +63,13 @@ Genuine future work — nothing implemented yet.
 
 - [**preprocessing-framework.md**](./preprocessing-framework.md) — bake analytics
   (clustering / aggregation / space-time cube / trend) into tiles at build time
-  via a Plan-IR operator DAG + declarative Recipes. Design synthesis only. The
+  via a Plan-IR operator DAG + declarative Recipes. **Comprehensively revised
+  2026-06-22** against the AV/LiDAR exploration (116 emergent operators harvested):
+  adds a **dataset-bigness archetype playbook** (temporally / spatially / metadata /
+  both-big → ordered lever sequences), a **unified spatial × temporal × attribute
+  LOD model** (with the four baked couplings + "one ranking, many zooms"), and the
+  **representation ladder** (overview vs. detail as *different techniques* —
+  auto-dispatched by zoom). Build order now puts a shared **rung registry** before
+  the recipe engine. Design synthesis only — nothing implemented. The
   `vertex_value_matrix` payload it builds on is specified in
   [`docs/architecture/data-format.md` §Space-time cube](../architecture/data-format.md#space-time-cube-payload-vertex_value_matrix).

@@ -120,6 +120,9 @@ examples/showcase/public/data-publish/
 # Ad-hoc evaluation / experiment scratch (write analyses elsewhere — docs/)
 evaluation/
 
+# Benchmark scratch (DuckDB/PostGIS integration: generated .duckdb / parquet / tiles)
+/scratch-*/
+
 # Loose root-level fixtures that occasionally appear during dev
 /test*.html
 /test*.stt

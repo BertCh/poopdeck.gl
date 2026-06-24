@@ -7,7 +7,7 @@ import { LocalEnuProjection } from '../src/projection/local-enu';
 const OPTS: SurfelBufferOptions = {
   quatVectorColumn: 'surfel_quat',
   scaleVectorColumn: 'surfel_scale',
-  colorVectorColumn: 'surfel_color',
+  colorVectorColumn: 'surfel_rgba',
   quaternionColumns: ['qx', 'qy', 'qz', 'qw'],
   scaleColumns: ['s_major', 's_minor'],
   rgbColumns: ['r', 'g', 'b'],
@@ -201,7 +201,7 @@ describe('buildSurfelBuffers', () => {
       vectorProps: {
         surfel_quat: { value: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1]), size: 4 },
         surfel_scale: { value: new Float32Array([0.4, 0.2, 0.5, 0.3]), size: 2 },
-        surfel_color: { value: new Uint8Array([255, 128, 0, 200, 10, 20, 30, 255]), size: 4 },
+        surfel_rgba: { value: new Uint8Array([255, 128, 0, 200, 10, 20, 30, 255]), size: 4 },
       },
     };
     const tile: Tile = {

@@ -489,6 +489,16 @@ export interface Dataset {
   /** Multiplier on every surfel's baked extents (`SplatLayer.sizeScale`). */
   lidarSurfelSizeScale?: number;
   /**
+   * Additive-octree zoom LOD: the bundle was built with `argoverse_extract.py
+   * --lod`, baking a single `home_zoom` per return (per-sweep hierarchical voxel
+   * subsample) so each point is materialized at exactly ONE zoom level. Renders
+   * through the normal `AnimatedPointLayer` point path but with the engine's
+   * `lodMode: 'additive'` — the tileset loads + renders the UNION of zoom levels
+   * `[minZoom..cameraZoom]`, so coarse zooms show a sparse overview and zooming
+   * in streams ONLY the deeper residual detail (the coarse tiles stay resident).
+   */
+  lidarLod?: boolean;
+  /**
    * Render the LIDAR as DENSITY ISO-LINES instead of points/surfels: the bundle's
    * `lidar/` archive is windowed contour LineStrings (built with
    * `waymo_extract.py --contours`) drawn by `AnimatedPathLayer`, colored by a
@@ -617,6 +627,37 @@ export interface Dataset {
   avMapLineUrl?: string;
   /** `map_layer` (categorical) → RGBA for both map streams (fills low-alpha, lines crisp). */
   mapColors?: Record<string, ColorRGBA>;
+  /**
+   * Opt this AV scene into a toggleable Google Photorealistic 3D Tiles overlay
+   * (deck.gl `Tile3DLayer` from `@deck.gl/geo-layers`, pointed at Google's
+   * `tile.googleapis.com` photoreal city mesh). The cockpit shows a "3D Tiles"
+   * toggle ONLY when this is set AND a `VITE_GOOGLE_MAPS_API_KEY` is configured
+   * AND the deck.gl renderer is active (the Three.js engine can't host a deck
+   * layer); flipping it loads the photoreal mesh at the scene's geo-anchor as a
+   * backdrop UNDER the LIDAR cloud + object boxes (depth-tested, so buildings
+   * occlude returns behind them). Geo-registered scenes (nuScenes / Argoverse)
+   * align cleanly; APPROXIMATE local-frame scenes (Waymo — no disclosed georef,
+   * anchored at a plausible metro point) render the real city but won't perfectly
+   * match the cloud's streets. Off by default; deck-renderer AV scenes only.
+   */
+  tiles3d?: boolean;
+  /**
+   * Hard-coded local ground ellipsoidal height (metres) at this scene's anchor,
+   * used to seat {@link tiles3d}. Google's photoreal mesh is referenced to WGS84
+   * ellipsoidal height (e.g. Pittsburgh ground ≈ 230 m) while the AV cloud sits at
+   * local `z ≈ 0`; the cockpit lowers the mesh by this much so the streets line
+   * up. Measured per scene by reading the finest Google tile at the anchor (the
+   * values are baked into `datasets.ts`). When unset, the cockpit falls back to
+   * auto-detecting it from the tiles at runtime (less reliable). The in-app
+   * "3D tiles height" slider trims ± on top of this.
+   */
+  tiles3dGroundHeight?: number;
+  /**
+   * Default opacity (0–1) for this scene's {@link tiles3d} photoreal mesh. Below 1
+   * ghosts the buildings so the LIDAR reads against them. Seeds the cockpit's
+   * "Tiles opacity" slider (the `?tiles3dop=` URL param overrides). @default 1
+   */
+  tiles3dOpacity?: number;
 
   // ─── space-time cube (time = height) ───────────────────────────────────
   /**

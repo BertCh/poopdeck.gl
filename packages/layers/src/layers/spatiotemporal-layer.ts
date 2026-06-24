@@ -102,6 +102,20 @@ export interface _SpatioTemporalLayerProps {
   timeController?: TimeController | null;
 
   /**
+   * Level-of-detail composition across zoom levels (threaded to the tileset).
+   * - `'parent-fallback'` (default): render the single best zoom; coarser
+   *   parents are transient fallbacks dropped once detail streams in.
+   * - `'additive'`: render the UNION of zoom levels `[minZoom..cameraZoom]` and
+   *   keep every level resident. For ADDITIVE-OCTREE point clouds built with
+   *   `stt-build --min-zoom-field=--max-zoom-field=<home_zoom column>`, where
+   *   each point lives at exactly one zoom: coarse tiles are a sparse overview,
+   *   finer tiles add only the residual, so zooming in streams in detail without
+   *   re-fetching the coarse cloud.
+   * @default 'parent-fallback'
+   */
+  lodMode?: 'parent-fallback' | 'additive';
+
+  /**
    * Maximum concurrent in-flight HTTP Range requests. Threaded into the
    * archive's range coalescer as its `maxConcurrentRequests` ceiling, so this
    * is the single knob that bounds actual fetch concurrency.
@@ -286,6 +300,7 @@ const defaultProps: DefaultProps<SpatioTemporalLayerProps> = {
   timeWindow: 86_400_000, // 1 day
   timeRange: { type: 'object', value: null, optional: true, compare: true },
   timeController: { type: 'object', value: null, optional: true, compare: false },
+  lodMode: 'parent-fallback',
 
   // Tile-loading configuration (mirrors deck.gl `TileLayer`).
   // maxRequests is the SINGLE concurrency knob: it's threaded into the
@@ -1057,6 +1072,10 @@ export class SpatioTemporalLayer<
       // Use temporal bucket from metadata for deterministic tile loading
       temporalBucketMs: metadata.temporalBucketMs,
       refinementStrategy: 'best-available', // Load parent tiles as fallback (deck.gl pattern)
+      // Additive-octree LOD: when 'additive', load + render the union of zoom
+      // levels [minZoom..cameraZoom] (each point lives at one home zoom). See the
+      // lodMode prop and SpatiotemporalTilesetOptions.lodMode.
+      lodMode: this.props.lodMode,
       // Prefetch configuration for smooth animation playback
       enablePrefetch: this.props.enablePrefetch,
       prefetchAhead: this.props.prefetchAhead,
