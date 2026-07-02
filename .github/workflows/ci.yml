@@ -30,6 +30,14 @@ jobs:
       # the feature-gated tests.
       - name: cargo test --workspace --all-features
         run: cargo test --workspace --all-features --locked
+        env:
+          # The all-features link jobs (bundled DuckDB C++ + vendored libproj
+          # + arrow, several test binaries linking concurrently) OOM the 7 GB
+          # runner's linker under full debuginfo — ld dies with SIGBUS
+          # ("signal 7, core dumped"). Debuginfo is useless in CI; dropping
+          # it shrinks the link inputs by an order of magnitude.
+          CARGO_PROFILE_DEV_DEBUG: "0"
+          CARGO_PROFILE_TEST_DEBUG: "0"
 
   rust-feature-lanes:
     name: Rust (feature lanes compile)
