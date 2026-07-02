@@ -1,5 +1,13 @@
 # @poopdeck.gl/three
 
+## 0.2.0
+
+### Patch Changes
+
+- Updated dependencies []:
+  - @poopdeck.gl/core@0.2.0
+  - @poopdeck.gl/playback@0.2.0
+
 ## 0.1.1
 
 ### Patch Changes
