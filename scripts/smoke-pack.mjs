@@ -16,7 +16,7 @@
  * Run from the repo root after `pnpm turbo run build`: node scripts/smoke-pack.mjs
  */
 import { execSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync, readdirSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -66,10 +66,19 @@ function importAllExports(dir, pkgNames) {
   const failures = [];
   for (const name of pkgNames) {
     const pj = JSON.parse(readFileSync(join(dir, "node_modules", name, "package.json"), "utf8"));
-    for (const key of Object.keys(pj.exports ?? {})) {
+    for (const [key, target] of Object.entries(pj.exports ?? {})) {
       const spec = name + key.slice(1);
       try {
-        sh(`node --input-type=module -e "const m = await import(process.argv[1]); if (Object.keys(m).length === 0) throw new Error('empty namespace')" ${JSON.stringify(spec)}`, dir);
+        if (key.endsWith(".css")) {
+          // Asset subpaths (e.g. ./styles.css) are for bundlers, not Node's
+          // import() — the gate here is that the exports entry points at a
+          // real, non-empty file in the tarball.
+          const rel = typeof target === "string" ? target : target?.default;
+          const st = statSync(join(dir, "node_modules", name, rel));
+          if (st.size === 0) throw new Error("empty asset file");
+        } else {
+          sh(`node --input-type=module -e "const m = await import(process.argv[1]); if (Object.keys(m).length === 0) throw new Error('empty namespace')" ${JSON.stringify(spec)}`, dir);
+        }
         console.log(`  ok   ${spec}`);
       } catch (e) {
         failures.push(spec);
