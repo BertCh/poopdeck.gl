@@ -173,8 +173,11 @@ jobs:
     name: Bench (regression vs baseline)
     runs-on: ubuntu-latest
     needs: [rust, typescript]
-    # Skipped automatically when no baseline file exists in the repo.
-    if: hashFiles('tools/bench/baselines/*.json') != ''
+    # NOTE: no job-level hashFiles() guard — hashFiles is step-context-only,
+    # and using it in jobs.<id>.if makes GitHub reject the ENTIRE workflow at
+    # parse time (every run "fails" with zero jobs). The baseline JSON is
+    # committed (tools/bench/baselines/earthquakes-ci.json), so the job just
+    # runs; if the baseline is ever removed, delete this job with it.
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
