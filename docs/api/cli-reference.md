@@ -1,8 +1,10 @@
 # CLI Reference
 
-The Rust toolchain ships four core binaries. Build them with
-`cargo build --release` from the repo root; binaries land in
-`target/release/`.
+The Rust toolchain ships four core binaries. Install them from crates.io
+with `cargo install spatiotemporal-tiles --features cli`, grab a prebuilt
+binary from the [GitHub releases page](https://github.com/BertCh/spatiotemporal-tiles/releases)
+(shell/powershell installers included), or build from the repo root with
+`cargo build --release --features cli` (binaries land in `target/release/`).
 
 | Binary          | Purpose                                                            |
 | --------------- | ------------------------------------------------------------------ |
@@ -11,10 +13,11 @@ The Rust toolchain ships four core binaries. Build them with
 | `stt-optimize`  | Analyze an input and recommend `stt-build` flags                   |
 | `stt-validate`  | Verify a packed dataset (or single-file `.stt`), decode every tile |
 
-A fifth, optional binary — **`stt-serve`** — generates STT tiles on the fly from
-a live PostGIS or DuckDB source (see [below](#stt-serve)). It lives in a separate
-crate and is built with a DB feature, e.g.
-`cargo build --release -p stt-serve --features duckdb`.
+A fifth binary — **`stt-serve`** — generates STT tiles on the fly from a live
+PostGIS or DuckDB source (see [below](#stt-serve)). It is included in
+`--features cli`; for a lighter single-backend build use e.g.
+`cargo install spatiotemporal-tiles --features serve-postgres` (skips the
+bundled-DuckDB compile).
 
 ---
 

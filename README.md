@@ -87,10 +87,9 @@ immutable-pack / short-TTL-manifest cache headers).
 
 ### 3. Visualize with deck.gl
 
-> The `@poopdeck.gl/*` packages are **not published to npm yet**. To use them
-> today, build them from this repo (`pnpm install && pnpm build`) and depend on
-> them through a pnpm workspace or `pnpm link` — `npm install @poopdeck.gl/…`
-> will 404 until they ship.
+```bash
+npm install @poopdeck.gl/layers @poopdeck.gl/playback   # deck.gl renderer + clock
+```
 
 ```typescript
 import { AnimatedPointLayer } from "@poopdeck.gl/layers";

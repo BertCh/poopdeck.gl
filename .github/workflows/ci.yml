@@ -7,16 +7,72 @@ on:
 
 jobs:
   rust:
-    name: Rust (cargo test + build)
+    name: Rust (cargo test, default features)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: cargo build --workspace
-        run: cargo build --workspace --all-features
+      # Default features = what `cargo install` users get.
       - name: cargo test --workspace
-        run: cargo test --workspace
+        run: cargo test --workspace --locked
+
+  rust-all-features:
+    name: Rust (cargo test, all features)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Everything at once: facade `cli` (all four bins, both serve
+      # backends), `projection` (proj-sys vendors libproj via cmake), etc.
+      # This is a TEST job — the old CI built --all-features but never ran
+      # the feature-gated tests.
+      - name: cargo test --workspace --all-features
+        run: cargo test --workspace --all-features --locked
+
+  rust-feature-lanes:
+    name: Rust (feature lanes compile)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Each published feature combination must compile on its own —
+      # feature-unification in the workspace jobs would otherwise hide
+      # missing cfg gates until a user hits them.
+      - name: facade serve-postgres only
+        run: cargo check -p spatiotemporal-tiles --no-default-features --features serve-postgres --locked
+      - name: facade serve-duckdb only
+        run: cargo check -p spatiotemporal-tiles --no-default-features --features serve-duckdb --locked
+      - name: facade full cli
+        run: cargo check -p spatiotemporal-tiles --no-default-features --features cli --locked
+      - name: stt-build without geoparquet
+        run: cargo check -p stt-build --no-default-features --locked
+
+  rust-package:
+    name: Rust (cargo package dry-run)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Continuously verifies publishability: package excludes, versioned
+      # path-deps, and manifest errors fail here instead of at release time.
+      # stt-generate is publish = false and explicitly excluded.
+      - name: cargo package --workspace
+        run: cargo package --workspace --exclude stt-generate --locked
+
+  rust-msrv:
+    name: Rust (MSRV check)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Keep in sync with [workspace.package] rust-version in Cargo.toml.
+      - uses: dtolnay/rust-toolchain@1.88
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo check --workspace on MSRV
+        run: cargo check --workspace --locked
 
   rust-duckdb:
     name: Rust (stt-build, duckdb feature)
@@ -107,6 +163,11 @@ jobs:
       - run: pnpm --filter '@poopdeck.gl/three' test
       - run: pnpm --filter '@poopdeck.gl/cesium' test
       - run: pnpm --filter '@poopdeck.gl/showcase' test
+      # Publish-shape gate: pack every tarball, scratch-install with real
+      # peers, import every exports subpath under plain Node, and prove the
+      # react barrel works without the optional @deck.gl peers.
+      - name: smoke-pack (tarball import matrix)
+        run: node scripts/smoke-pack.mjs
 
   bench-regression:
     name: Bench (regression vs baseline)

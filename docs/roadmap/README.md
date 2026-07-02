@@ -113,6 +113,12 @@ behavior lives in the spec and API docs.
 
 Landed but not fully closed — each lists what remains.
 
+- [**shipping-2026-07.md**](./shipping-2026-07.md) — NEW (2026-07-02):
+  distribution decision record + publish backlog owner. One public crate name
+  (`spatiotemporal-tiles` facade owning all four `stt-*` CLI bins) over three
+  internal lib crates; npm `@poopdeck.gl` via changesets + `release-npm.yml`;
+  release-plz + cargo-dist for Rust; DB extensions/Python/Docker counted out.
+  OPEN: execute the first publishes (npm + crates.io + `v0.1.0` tag).
 - [**full-ecosystem-audit-2026-07.md**](./full-ecosystem-audit-2026-07.md) — NEW
   (landed 2026-07-01, after the triage pass): seven-slice multi-agent audit of the
   whole repo, ~140 verified findings. Headline criticals: 63 untracked

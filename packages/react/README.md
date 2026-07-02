@@ -26,11 +26,16 @@ npm install @poopdeck.gl/react react react-dom
 ```
 
 **Peers**: `react` / `react-dom` ≥ 18 (required); `@deck.gl/core` +
-`@deck.gl/react` `>=9.3.0 <10` are declared optional (used by `HoverPreview`
-only) — but note the root barrel currently re-exports `HoverPreview`, so the
-deck peers must be installed even for hooks-only use until the planned
-subpath split lands. Components are styled with standard Tailwind utility
-classes; supply your own Tailwind build or override via `className`.
+`@deck.gl/react` `>=9.3.0 <10` are optional — they are needed only by
+`HoverPreview`, which lives on its own subpath so the base import stays
+deck-free:
+
+```ts
+import { HoverPreview } from "@poopdeck.gl/react/hover-preview";
+```
+
+Components are styled with standard Tailwind utility classes; supply your
+own Tailwind build or override via `className`.
 
 ## Hello world — usePlayback + PlaybackControls
 

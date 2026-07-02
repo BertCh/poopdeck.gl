@@ -1,0 +1,51 @@
+name: Release npm (@poopdeck.gl)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write # push the Version Packages branch + tags
+  pull-requests: write # open/update the Version Packages PR
+  id-token: write # npm provenance / trusted publishing (public repo only)
+
+concurrency:
+  group: release-npm-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # No version pin here — pnpm/action-setup reads packageManager from
+      # package.json; a second pin can only drift.
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+          registry-url: 'https://registry.npmjs.org'
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm turbo run build typecheck test --filter='./packages/*'
+      # Publish-shape gate: real tarballs, real peers, every exports subpath.
+      - name: smoke-pack (pre-publish gate)
+        run: node scripts/smoke-pack.mjs
+      - name: Version PR or publish
+        uses: changesets/action@v1
+        with:
+          version: pnpm run version-packages
+          publish: pnpm run release
+          createGithubReleases: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Bootstrap auth: granular @poopdeck.gl token (secret NPM_TOKEN).
+          # After the first publish, configure a Trusted Publisher on each
+          # npm package (repo BertCh/spatiotemporal-tiles, workflow
+          # release-npm.yml), then delete this secret — npm >= 11.5.1 will
+          # mint OIDC tokens itself. Add NPM_CONFIG_PROVENANCE: 'true' once
+          # the repository is public (provenance requires a public repo).
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
