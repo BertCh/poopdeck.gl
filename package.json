@@ -6,12 +6,12 @@
   "packageManager": "pnpm@10.19.0",
   "workspaces": [
     "packages/*",
-    "examples/*"
+    "examples/*",
+    "tools/*"
   ],
   "scripts": {
     "build": "turbo run build",
     "test": "turbo run test",
-    "lint": "turbo run lint",
     "dev": "turbo run dev --parallel",
     "clean": "turbo run clean && rm -rf node_modules",
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\"",
@@ -50,7 +50,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/robertchristie/spatiotemporal-tiles.git"
+    "url": "https://github.com/BertCh/spatiotemporal-tiles.git"
   },
   "keywords": [
     "tiles",

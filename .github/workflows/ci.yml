@@ -16,9 +16,69 @@ jobs:
       - name: cargo build --workspace
         run: cargo build --workspace --all-features
       - name: cargo test --workspace
-        # stt-generate's satellites GMST test is flaky on CI; exclude until
-        # it's stabilised. Everything else is part of the gate.
-        run: cargo test --workspace --exclude stt-generate
+        run: cargo test --workspace
+
+  rust-duckdb:
+    name: Rust (stt-build, duckdb feature)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Bundled libduckdb is a ~10 min cold compile; rust-cache keeps the
+      # warm path fast.
+      - name: cargo test -p stt-build --features duckdb
+        run: cargo test -p stt-build --features duckdb
+
+  rust-postgres-parity:
+    name: Rust (PostGIS source parity)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgis/postgis:16-3.4
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: stt_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      STT_TEST_PG_DSN: postgresql://postgres:postgres@localhost:5432/stt_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # `--test source_parity -- --ignored` runs exactly the #[ignore]d
+      # postgres parity tests (they are the only ignored tests in that
+      # binary) without sweeping up ignored tests elsewhere.
+      - name: postgres source parity
+        run: cargo test -p stt-build --features postgres --test source_parity -- --ignored
+
+  python:
+    name: Python (data-generation tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: scripts/data-generation/requirements-ci.txt
+      - run: pip install -r scripts/data-generation/requirements-ci.txt
+      - name: AV palette parity (Python ⇄ TS)
+        run: python test_av_palette_parity.py
+        working-directory: scripts/data-generation
+      - name: av_common worldbuild + tracks
+        run: python test_av_common_world_tracks.py
+        working-directory: scripts/data-generation
+      - name: av_common LOD home-zoom
+        run: python test_lod_home_zoom.py
+        working-directory: scripts/data-generation
 
   typescript:
     name: TypeScript (typecheck + vitest)
@@ -26,19 +86,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
-        with:
-          version: 10
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - run: pnpm turbo run build
       - run: pnpm --filter '@poopdeck.gl/core' typecheck
       - run: pnpm --filter '@poopdeck.gl/layers' typecheck
       - run: pnpm --filter '@poopdeck.gl/maplibre' typecheck
+      - run: pnpm --filter '@poopdeck.gl/playback' typecheck
+      - run: pnpm --filter '@poopdeck.gl/react' typecheck
+      - run: pnpm --filter '@poopdeck.gl/three' typecheck
+      - run: pnpm --filter '@poopdeck.gl/cesium' typecheck
       - run: pnpm --filter '@poopdeck.gl/core' test
       - run: pnpm --filter '@poopdeck.gl/layers' test
       - run: pnpm --filter '@poopdeck.gl/maplibre' test
+      - run: pnpm --filter '@poopdeck.gl/playback' test
+      - run: pnpm --filter '@poopdeck.gl/react' test
+      - run: pnpm --filter '@poopdeck.gl/three' test
+      - run: pnpm --filter '@poopdeck.gl/cesium' test
+      - run: pnpm --filter '@poopdeck.gl/showcase' test
 
   bench-regression:
     name: Bench (regression vs baseline)
@@ -51,8 +119,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - uses: pnpm/action-setup@v4
-        with:
-          version: 10
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
@@ -79,8 +145,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
-        with:
-          version: 10
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
@@ -90,15 +154,13 @@ jobs:
       - name: Build packages
         run: pnpm build
       - name: Start showcase
-        # The showcase needs sample .stt files in examples/showcase/public/data.
-        # We don't ship those in CI yet, so this step is intentionally allowed
-        # to fail silently — it will tighten once a small fixture set lands.
         run: |
           pnpm --filter '@poopdeck.gl/showcase' dev &
-          for i in $(seq 1 30); do
-            if curl -fs http://localhost:3000 >/dev/null; then break; fi
+          for i in $(seq 1 60); do
+            if curl -fs http://localhost:3000 >/dev/null; then exit 0; fi
             sleep 1
           done
+          echo "showcase dev server never came up on :3000" >&2
+          exit 1
       - name: Probe all demos
-        continue-on-error: true
         run: pnpm --filter '@poopdeck.gl/render-test' probe

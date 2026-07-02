@@ -22,6 +22,10 @@ Tile payloads are **Apache Arrow IPC** with **GeoArrow**-encoded geometry — a
 standard, columnar, GPU-friendly representation that interops directly with
 `@geoarrow/deck.gl-layers`, Lonboard, and kepler.gl 3.x.
 
+**See it live:** the showcase app (`examples/showcase`, deployed on Cloudflare)
+carries dozens of real-dataset demos, the rendered docs at `/docs`, an AV LIDAR
+cockpit at `/drive`, and a scrollytelling data story at `/story/drifters`.
+
 **Scope:** STT is for temporally-tiled **vector** data — trajectories, events,
 and time-varying features. Time-varying rasters and datacubes are out of scope;
 use [GeoZarr](https://github.com/zarr-developers/geozarr-spec) or COG for those.
@@ -29,8 +33,8 @@ use [GeoZarr](https://github.com/zarr-developers/geozarr-spec) or COG for those.
 ### Key features
 
 - 📦 **Packed, content-addressed** — a dataset is `manifest.json` + many
-  immutable `packs/*.sttp` (each ≤64 MiB) + a directory object. Deploy to
-  R2 / S3 / GCS / nginx; no tile server needed.
+  immutable `packs/*.sttp` (≤64 MiB each by default) + a directory object.
+  Deploy to R2 / S3 / GCS / nginx; no tile server needed.
 - 🌐 **Edge-cacheable by construction** — immutable packs cache forever on a
   plain CDN; only the tiny manifest is mutable. Cacheability is a property of
   the *format*, not the deploy.
@@ -83,6 +87,11 @@ immutable-pack / short-TTL-manifest cache headers).
 
 ### 3. Visualize with deck.gl
 
+> The `@poopdeck.gl/*` packages are **not published to npm yet**. To use them
+> today, build them from this repo (`pnpm install && pnpm build`) and depend on
+> them through a pnpm workspace or `pnpm link` — `npm install @poopdeck.gl/…`
+> will 404 until they ship.
+
 ```typescript
 import { AnimatedPointLayer } from "@poopdeck.gl/layers";
 import { TimeController } from "@poopdeck.gl/playback";
@@ -132,7 +141,7 @@ tiny manifest:
 data/<dataset>/
   manifest.json          # metadata + directory pointer + pack table (mutable, short TTL)
   index/<blake3>.sttd    # the directory: varint tile index, RLE over shared blobs (immutable)
-  packs/<blake3>.sttp    # tile-blob data, ≤64 MiB each (immutable)
+  packs/<blake3>.sttp    # tile-blob data, ≤64 MiB each by default (immutable)
   packs/<blake3>.sttp
   ...
 ```
@@ -159,14 +168,20 @@ spatiotemporal-tiles/
 │   ├── stt-build/          # CLI: GeoParquet -> packed dataset
 │   ├── stt-generate/       # Bundled showcase-dataset generators
 │   ├── stt-optimize/       # Input analysis + recommendations (powers --auto)
-│   └── stt-validate/       # Content-address + CRC32C + decode check (packed or single-file .stt)
+│   ├── stt-validate/       # Content-address + CRC32C + decode check (packed or single-file .stt)
+│   └── stt-serve/          # Dynamic per-request STT tile server over PostGIS/DuckDB
 ├── packages/               # TypeScript
-│   ├── core/               # Archive reader, decoder pool, OPFS cache
-│   ├── layers/             # deck.gl layers + extensions
+│   ├── core/               # Archive reader, decoder pool, OPFS cache + the
+│   │                       #   framework-free RENDER KERNEL every backend shares:
+│   │                       #   core/{time-filter,style,geometry,geo,picking,
+│   │                       #   tileset-adapter,shader-codegen,capabilities}
+│   ├── layers/             # deck.gl backend (layers + extensions)
+│   ├── three/              # Three.js + TSL (WebGPU) backend
+│   ├── maplibre/           # MapLibre GL custom-layer backend
+│   ├── cesium/             # CesiumJS (WGS84 globe) backend
 │   ├── playback/           # Time controller + playback governor (zero-dep)
-│   ├── react/              # React playback hooks + UI controls
-│   └── maplibre/           # MapLibre GL custom-layer adapter
-├── examples/showcase/      # Interactive demo app (deck.gl + MapLibre)
+│   └── react/              # React playback hooks + UI controls
+├── examples/showcase/      # Interactive demo app (deck.gl + MapLibre + Three)
 ├── tools/
 │   ├── bench/              # @poopdeck.gl/core load + decode benchmark (Node)
 │   ├── perf/               # Real-WebGL Playwright perf harness
@@ -186,10 +201,24 @@ pnpm install
 pnpm --filter @poopdeck.gl/core build
 pnpm --filter @poopdeck.gl/core test    # TS reader tests against a real archive
 pnpm --filter @poopdeck.gl/layers build
+pnpm --filter @poopdeck.gl/three build
 pnpm --filter @poopdeck.gl/maplibre build
+pnpm --filter @poopdeck.gl/cesium build
 
 pnpm --filter @poopdeck.gl/showcase dev # Run the showcase locally
 ```
+
+### Rendering backends
+
+STT renders through multiple, interchangeable backends (deck.gl, Three.js+TSL,
+MapLibre, CesiumJS) that all consume the same decoded tiles and playback clock.
+Shared logic (time-filter, color, projection, geometry, picking, tileset glue,
+shader-alpha codegen) lives in a framework-free **render kernel** under
+`@poopdeck.gl/core` sub-paths; each backend is a thin adapter that publishes a
+capability `BackendDescriptor`. See
+[docs/roadmap/renderer-abstraction-2026-06.md](docs/roadmap/renderer-abstraction-2026-06.md)
+for the design and [docs/spec/backend-capabilities.md](docs/spec/backend-capabilities.md)
+for the generated capability matrix.
 
 Tooling:
 
