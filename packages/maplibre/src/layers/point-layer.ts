@@ -11,9 +11,9 @@ import {
   type TileGpuCache,
   toRgba01,
   type RGBA8,
-} from '../base-layer';
-import { TIME_WINDOW_GLSL } from '../shaders/time-window.glsl';
-import { POSITION_DEQUANT_GLSL } from '../shaders/position-quantization.glsl';
+} from '../base-layer.js';
+import { TIME_WINDOW_GLSL } from '../shaders/time-window.glsl.js';
+import { POSITION_DEQUANT_GLSL } from '../shaders/position-quantization.glsl.js';
 
 export interface STTPointLayerOptions extends STTBaseLayerOptions {
   /**

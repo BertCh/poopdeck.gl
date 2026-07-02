@@ -42,7 +42,7 @@
  */
 
 import { PathLayer } from '@deck.gl/layers';
-import { warnOnce } from '../../lib/log';
+import { warnOnce } from '../../lib/log.js';
 
 const PICKING_ATTR_DECL = /in\s+vec3\s+instancePickingColors\s*;\s*/g;
 const PICKING_USE = /geometry\.pickingColor\s*=\s*instancePickingColors\s*;/g;

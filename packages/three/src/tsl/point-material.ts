@@ -33,14 +33,14 @@ import {
   cameraProjectionMatrix,
   type TSLNode,
   type UniformNode,
-} from './nodes';
+} from './nodes.js';
 import {
   TimeFilterUniforms,
   timeFilterAlphaNode,
   wakeSizeScaleNode,
   updateTimeFilterUniforms,
-} from './time-filter';
-import type { TimeFilterMode, TimeFilterParams } from './time-filter-math';
+} from './time-filter.js';
+import type { TimeFilterMode, TimeFilterParams } from './time-filter-math.js';
 
 /**
  * Live point uniforms. `pointSize` is the billboard HALF-size: in world metres

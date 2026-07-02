@@ -21,10 +21,10 @@
 
 import { LineBasicNodeMaterial } from 'three/webgpu';
 import { NormalBlending } from 'three';
-import { attribute, varying, uniform } from './nodes';
-import type { UniformNode } from './nodes';
-import { TimeFilterUniforms, windowAlphaNode, updateTimeFilterUniforms } from './time-filter';
-import type { TimeFilterParams } from './time-filter-math';
+import { attribute, varying, uniform } from './nodes.js';
+import type { UniformNode } from './nodes.js';
+import { TimeFilterUniforms, windowAlphaNode, updateTimeFilterUniforms } from './time-filter.js';
+import type { TimeFilterParams } from './time-filter-math.js';
 
 export interface IsoLineMaterialOptions {
   /** Discard fragments below this final alpha. @default 0.02 */

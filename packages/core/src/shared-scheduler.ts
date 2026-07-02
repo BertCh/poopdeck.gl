@@ -40,7 +40,7 @@
 import {
   SharedRequestScheduler,
   type SharedRequestSchedulerOptions,
-} from './request-scheduler';
+} from './request-scheduler.js';
 
 /** Default global concurrency budget — the legacy per-archive `maxConcurrentRequests`. */
 const DEFAULT_SHARED_MAX_REQUESTS = 24;

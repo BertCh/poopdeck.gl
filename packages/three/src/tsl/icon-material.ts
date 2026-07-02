@@ -43,13 +43,13 @@ import {
   modelViewMatrix,
   cameraProjectionMatrix,
   type UniformNode,
-} from './nodes';
+} from './nodes.js';
 import {
   TimeFilterUniforms,
   timeFilterAlphaNode,
   updateTimeFilterUniforms,
-} from './time-filter';
-import type { TimeFilterMode, TimeFilterParams } from './time-filter-math';
+} from './time-filter.js';
+import type { TimeFilterMode, TimeFilterParams } from './time-filter-math.js';
 
 // Extra TSL builders not yet surfaced on the ./nodes seam (texture sampling +
 // the per-instance rotation trig). Loosely typed like the ./nodes re-exports.

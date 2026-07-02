@@ -27,7 +27,7 @@ import { useEffect, useRef } from "react";
 // keyboard stepping can only land on speeds Auto-speed also produces — no
 // hand-maintained copy to drift.
 import { SPEED_STEPS } from "@poopdeck.gl/playback";
-import type { PlaybackState } from "./use-playback";
+import type { PlaybackState } from "./use-playback.js";
 
 /**
  * A held key auto-repeats; every committed seek routes through

@@ -9,7 +9,7 @@
  */
 
 import { Cartesian3, HeadingPitchRoll, type Camera } from 'cesium';
-import { viewStateToCesiumView, type CesiumViewOptions } from './camera';
+import { viewStateToCesiumView, type CesiumViewOptions } from './camera.js';
 import type { ViewState } from '@poopdeck.gl/core/geo';
 
 /** Drive a real Cesium `Camera` from a {@link ViewState} (the cross-backend view vocabulary). */

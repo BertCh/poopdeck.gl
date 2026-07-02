@@ -15,7 +15,7 @@
  */
 
 import { decompress as fzstdDecompress } from 'fzstd';
-import { Compression } from './types';
+import { Compression } from './types.js';
 
 /**
  * Decompress zstd data synchronously via fzstd (pure JS, ~30 KB, no WASM).

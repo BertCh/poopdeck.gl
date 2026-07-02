@@ -35,12 +35,12 @@
 
 import type { BinaryFeatures, Tile } from '@poopdeck.gl/core';
 import { GeometryType } from '@poopdeck.gl/core';
-import type { Projection } from '../projection/local-enu';
+import type { Projection } from '../projection/local-enu.js';
 import {
   resolveCategoryColor,
   type RGBA,
   type CategoricalColorSpec,
-} from './color';
+} from './color.js';
 
 const DEG2RAD = Math.PI / 180;
 

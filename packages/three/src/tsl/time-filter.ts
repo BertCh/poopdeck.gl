@@ -17,13 +17,13 @@
  * truth for the math; keep the two in lockstep.
  */
 
-import { uniform, float, select, saturate, max, mix } from './nodes';
-import type { TSLNode, UniformNode } from './nodes';
-import type { TimeFilterMode, TimeFilterParams } from './time-filter-math';
+import { uniform, float, select, saturate, max, mix } from './nodes.js';
+import type { TSLNode, UniformNode } from './nodes.js';
+import type { TimeFilterMode, TimeFilterParams } from './time-filter-math.js';
 import { DEFAULT_WAKE_TAIL_SCALE } from '@poopdeck.gl/core/time-filter';
 
 // The loose TSL node aliases live in ./nodes (see that file for why); re-export
-// so existing `import { TSLNode } from './time-filter'` consumers keep working.
+// so existing `import { TSLNode } from './time-filter.js'` consumers keep working.
 export type { TSLNode, UniformNode };
 
 /** Tiny epsilon guarding divisions by a zero ramp width. */

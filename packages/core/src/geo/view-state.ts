@@ -11,7 +11,7 @@
  * type + these helpers. See docs/roadmap/renderer-abstraction-2026-06.md §5.5.
  */
 
-import { EARTH_RADIUS, type Projection } from './local-enu';
+import { EARTH_RADIUS, type Projection } from './local-enu.js';
 
 /** deck-compatible geographic view state. */
 export interface ViewState {

@@ -19,8 +19,8 @@ import type {
   Tile,
   TileId,
   BoundingBox,
-} from './types';
-import { estimateTileSize } from './archive';
+} from './types.js';
+import { estimateTileSize } from './archive.js';
 
 const DEBUG = false;
 

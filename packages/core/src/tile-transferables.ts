@@ -24,7 +24,7 @@
  * which is correct, just a little slower than the zero-copy transfer.
  */
 
-import type { Tile } from './types';
+import type { Tile } from './types.js';
 
 export function collectTransferables(tile: Tile): Transferable[] {
   // TypedArray.buffer is typed as ArrayBufferLike (could be SharedArrayBuffer

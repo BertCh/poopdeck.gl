@@ -30,14 +30,14 @@
 import type { BinaryFeatures, Tile } from '@poopdeck.gl/core';
 import { GeometryType } from '@poopdeck.gl/core';
 import { synthesizeVertexTimes } from '@poopdeck.gl/core/trips';
-import type { Projection } from '../projection/local-enu';
+import type { Projection } from '../projection/local-enu.js';
 import {
   resolveCategoryColor,
   rampColorAt,
   type RGBA,
   type CategoricalColorSpec,
   type RampColorSpec,
-} from './color';
+} from './color.js';
 
 // Moved to the framework-free kernel (`core/trips`) when Cesium became its
 // third consumer; re-exported so existing three importers keep resolving.

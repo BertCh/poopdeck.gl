@@ -37,7 +37,7 @@ import {
 import { getFeatureProperties, type BinaryFeatures } from '@poopdeck.gl/core';
 import { timeFilterAlpha, type TimeFilterMode, type TimeFilterParams } from '@poopdeck.gl/core/time-filter';
 import type { SttPickResult } from '@poopdeck.gl/core/picking';
-import type { FeaturePolyline, PolylineBuild } from './lib/polylines';
+import type { FeaturePolyline, PolylineBuild } from './lib/polylines.js';
 
 /** Pick/attribute identity for one polyline instance. */
 interface InstanceId {

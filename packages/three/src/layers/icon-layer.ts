@@ -21,21 +21,21 @@
 import { Mesh, InstancedBufferAttribute, Box3, Vector3, Sphere } from 'three';
 import type { Texture } from 'three';
 import type { Tile } from '@poopdeck.gl/core';
-import { BaseSttLayer, type SttLayerContext } from './layer';
-import { resolveTimeWindow, type ThreeTimeWindowOptions } from '../lib/time-window';
-import { makeBillboardQuadGeometry } from '../geometry/billboard-quad';
+import { BaseSttLayer, type SttLayerContext } from './layer.js';
+import { resolveTimeWindow, type ThreeTimeWindowOptions } from '../lib/time-window.js';
+import { makeBillboardQuadGeometry } from '../geometry/billboard-quad.js';
 import {
   buildIconBuffers,
   type IconColorMode,
   type IconMappingEntry,
-} from '../lib/icon-buffers';
+} from '../lib/icon-buffers.js';
 import {
   createIconMaterial,
   updateIconUniforms,
   type IconMaterialBundle,
   type IconMode,
-} from '../tsl/icon-material';
-import type { RGBA } from '../lib/color';
+} from '../tsl/icon-material.js';
+import type { RGBA } from '../lib/color.js';
 
 export interface IconLayerOptions extends ThreeTimeWindowOptions {
   id?: string;

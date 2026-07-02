@@ -35,42 +35,42 @@ import {
   LocalEnuProjection,
   type GeoAnchor,
   type Projection,
-} from '../projection/local-enu';
-import { pickBoxes, type SttPickable, type SttPickInfo } from '../lib/box-pick';
-import { createCompleteBufferSource, type SttSourceRegistry } from '../lib/source-registry';
-import { createHighLimitDevice } from '../renderer/webgpu-renderer';
-import { SttTileSource } from '../scene/tile-source';
-import { makeGround, type GroundOptions } from '../scene/ground';
-import { frameBox } from '../scene/camera';
-import type { SttLayer } from '../layers/layer';
-import { SurfelLayer, type SurfelLayerOptions } from '../layers/surfel-layer';
-import { PointCloudLayer, type PointCloudLayerOptions } from '../layers/point-cloud-layer';
-import { BoundingBoxLayer, type BoundingBoxLayerOptions } from '../layers/bounding-box-layer';
-import { StaticPathLayer, type StaticPathLayerOptions } from '../layers/path-layer';
+} from '../projection/local-enu.js';
+import { pickBoxes, type SttPickable, type SttPickInfo } from '../lib/box-pick.js';
+import { createCompleteBufferSource, type SttSourceRegistry } from '../lib/source-registry.js';
+import { createHighLimitDevice } from '../renderer/webgpu-renderer.js';
+import { SttTileSource } from '../scene/tile-source.js';
+import { makeGround, type GroundOptions } from '../scene/ground.js';
+import { frameBox } from '../scene/camera.js';
+import type { SttLayer } from '../layers/layer.js';
+import { SurfelLayer, type SurfelLayerOptions } from '../layers/surfel-layer.js';
+import { PointCloudLayer, type PointCloudLayerOptions } from '../layers/point-cloud-layer.js';
+import { BoundingBoxLayer, type BoundingBoxLayerOptions } from '../layers/bounding-box-layer.js';
+import { StaticPathLayer, type StaticPathLayerOptions } from '../layers/path-layer.js';
 import {
   StaticPolygonLayer,
   type StaticPolygonLayerOptions,
   PolygonLayer,
   type PolygonLayerOptions,
-} from '../layers/polygon-layer';
-import { EgoLayer, type EgoLayerOptions } from '../layers/ego-layer';
-import { IsoLayer, type IsoLayerOptions } from '../layers/iso-layer';
-import { TripsLayer, type TripsLayerOptions } from '../layers/trips-layer';
-import { PathGeoLayer, type PathGeoLayerOptions } from '../layers/path-geo-layer';
-import { OdLineLayer, type OdLineLayerOptions } from '../layers/od-line-layer';
-import { ArcLayer, type ArcLayerOptions } from '../layers/arc-layer';
-import { IconLayer, type IconLayerOptions } from '../layers/icon-layer';
-import { ColumnLayer, type ColumnLayerOptions } from '../layers/column-layer';
-import { TripHeadsLayer, type TripHeadsLayerOptions } from '../layers/trip-heads-layer';
+} from '../layers/polygon-layer.js';
+import { EgoLayer, type EgoLayerOptions } from '../layers/ego-layer.js';
+import { IsoLayer, type IsoLayerOptions } from '../layers/iso-layer.js';
+import { TripsLayer, type TripsLayerOptions } from '../layers/trips-layer.js';
+import { PathGeoLayer, type PathGeoLayerOptions } from '../layers/path-geo-layer.js';
+import { OdLineLayer, type OdLineLayerOptions } from '../layers/od-line-layer.js';
+import { ArcLayer, type ArcLayerOptions } from '../layers/arc-layer.js';
+import { IconLayer, type IconLayerOptions } from '../layers/icon-layer.js';
+import { ColumnLayer, type ColumnLayerOptions } from '../layers/column-layer.js';
+import { TripHeadsLayer, type TripHeadsLayerOptions } from '../layers/trip-heads-layer.js';
 import {
   QuadbinSummaryLayer,
   type QuadbinSummaryLayerOptions,
-} from '../layers/quadbin-summary-layer';
-import { H3SummaryLayer, type H3SummaryLayerOptions } from '../layers/h3-summary-layer';
-import { FlowmapLayer, type FlowmapLayerOptions } from '../layers/flowmap-layer';
-import { FlowCorridorLayer, type FlowCorridorLayerOptions } from '../layers/flow-corridor-layer';
-import { makeGlobeBasemap, type GlobeBasemapOptions } from '../scene/globe-basemap';
-import { GlobeProjection } from '../projection/globe';
+} from '../layers/quadbin-summary-layer.js';
+import { H3SummaryLayer, type H3SummaryLayerOptions } from '../layers/h3-summary-layer.js';
+import { FlowmapLayer, type FlowmapLayerOptions } from '../layers/flowmap-layer.js';
+import { FlowCorridorLayer, type FlowCorridorLayerOptions } from '../layers/flow-corridor-layer.js';
+import { makeGlobeBasemap, type GlobeBasemapOptions } from '../scene/globe-basemap.js';
+import { GlobeProjection } from '../projection/globe.js';
 
 // ─── Context ──────────────────────────────────────────────────────────────────
 

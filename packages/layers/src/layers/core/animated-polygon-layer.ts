@@ -39,23 +39,23 @@
 
 import { SolidPolygonLayer } from '@deck.gl/layers';
 import type { Color, DefaultProps, Layer, LayerContext, Material } from '@deck.gl/core';
-import { SpatioTemporalLayer, SpatioTemporalLayerProps } from '../spatiotemporal-layer';
-import { TimeFilterExtension } from '../../extensions/time-filter-extension';
+import { SpatioTemporalLayer, SpatioTemporalLayerProps } from '../spatiotemporal-layer.js';
+import { TimeFilterExtension } from '../../extensions/time-filter-extension.js';
 import {
   CategoryColorExtension,
   CATEGORY_PALETTE_SIZE,
-} from '../../extensions/category-color-extension';
-import { emit } from '../../lib/telemetry';
-import { warnOnce } from '../../lib/log';
+} from '../../extensions/category-color-extension.js';
+import { emit } from '../../lib/telemetry.js';
+import { warnOnce } from '../../lib/log.js';
 import {
   colorListDigest,
   colorMappingDigest,
   inheritedPropsDigest,
   structuralDigest,
   updateTriggersDigest,
-} from '../../lib/style-digest';
-import { resolveAccessorAlias } from '../../lib/accessor-alias';
-import type { ColorAccessorValue, NumericAccessorValue } from '../../lib/accessor-alias';
+} from '../../lib/style-digest.js';
+import { resolveAccessorAlias } from '../../lib/accessor-alias.js';
+import type { ColorAccessorValue, NumericAccessorValue } from '../../lib/accessor-alias.js';
 import { DEFAULT_POLYGON_PALETTE } from '@poopdeck.gl/core';
 import type { Tile, Layer as TileLayer, BinaryFeatures } from '@poopdeck.gl/core';
 

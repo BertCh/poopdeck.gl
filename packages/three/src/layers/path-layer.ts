@@ -19,8 +19,8 @@ import {
 } from 'three';
 import type { Tile, BinaryFeatures } from '@poopdeck.gl/core';
 import { GeometryType } from '@poopdeck.gl/core';
-import { BaseSttLayer, type SttLayerContext } from './layer';
-import { resolveCategoryColor, type RGBA } from '../lib/color';
+import { BaseSttLayer, type SttLayerContext } from './layer.js';
+import { resolveCategoryColor, type RGBA } from '../lib/color.js';
 
 export interface StaticPathLayerOptions {
   id?: string;

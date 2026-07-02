@@ -33,13 +33,13 @@ import {
   Sphere,
 } from 'three';
 import type { Tile } from '@poopdeck.gl/core';
-import { BaseSttLayer, type SttLayerContext } from './layer';
+import { BaseSttLayer, type SttLayerContext } from './layer.js';
 import {
   buildQuadbinBuffers,
   DEFAULT_QUADBIN_COLOR_RANGE,
   type QuadbinBufferOptions,
-} from '../lib/quadbin-buffers';
-import type { RGBA } from '../lib/color';
+} from '../lib/quadbin-buffers.js';
+import type { RGBA } from '../lib/color.js';
 
 export interface QuadbinSummaryLayerOptions {
   id?: string;

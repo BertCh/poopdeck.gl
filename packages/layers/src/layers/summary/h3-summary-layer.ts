@@ -61,13 +61,13 @@ import {
   type SpatioTemporalLayerProps,
   type SpatioTemporalPickingInfo,
   type SttSublayerPickingProps,
-} from '../spatiotemporal-layer';
+} from '../spatiotemporal-layer.js';
 import {
   colorListDigest,
   inheritedPropsDigest,
   updateTriggersDigest,
-} from '../../lib/style-digest';
-import { warnOnce } from '../../lib/log';
+} from '../../lib/style-digest.js';
+import { warnOnce } from '../../lib/log.js';
 
 const DEBUG = false;
 

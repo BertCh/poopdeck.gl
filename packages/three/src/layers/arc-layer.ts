@@ -18,20 +18,20 @@
 
 import { Mesh, InstancedBufferAttribute, Box3, Vector3, Sphere } from 'three';
 import type { Tile } from '@poopdeck.gl/core';
-import { BaseSttLayer, type SttLayerContext } from './layer';
-import { resolveTimeWindow, type ThreeTimeWindowOptions } from '../lib/time-window';
+import { BaseSttLayer, type SttLayerContext } from './layer.js';
+import { resolveTimeWindow, type ThreeTimeWindowOptions } from '../lib/time-window.js';
 import {
   buildArcBuffers,
   type ArcColorMode,
   type ArcBufferOptions,
-} from '../lib/arc-buffers';
+} from '../lib/arc-buffers.js';
 import {
   createArcMaterial,
   makeArcStripGeometry,
   updateArcUniforms,
   type ArcMaterialBundle,
   type ArcShape,
-} from '../tsl/arc-material';
+} from '../tsl/arc-material.js';
 
 export interface ArcLayerOptions extends ThreeTimeWindowOptions {
   id?: string;

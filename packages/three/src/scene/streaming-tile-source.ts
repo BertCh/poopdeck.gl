@@ -45,8 +45,8 @@ import {
 import { makeTilesetCallbacks } from '@poopdeck.gl/core/tileset-adapter';
 import type { BufferSource, BufferedRunway } from '@poopdeck.gl/playback';
 import { PerspectiveCamera, Vector3 } from 'three';
-import type { Projection } from '../projection/local-enu';
-import { EARTH_RADIUS } from '../projection/local-enu';
+import type { Projection } from '../projection/local-enu.js';
+import { EARTH_RADIUS } from '../projection/local-enu.js';
 
 /** A camera/playback-derived viewport — the input to {@link StreamingTileSource.update}. */
 export interface StreamingViewport {

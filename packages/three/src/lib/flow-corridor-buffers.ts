@@ -31,7 +31,7 @@
 
 import type { BinaryFeatures, Tile } from '@poopdeck.gl/core';
 import { GeometryType } from '@poopdeck.gl/core';
-import type { Projection } from '../projection/local-enu';
+import type { Projection } from '../projection/local-enu.js';
 
 export interface FlowCorridorBufferOptions {
   /** Constant height lift (metres) — keeps ground decals off the basemap. @default 0 */

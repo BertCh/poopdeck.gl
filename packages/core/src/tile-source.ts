@@ -17,8 +17,8 @@
  * structurally without forcing a hard dep on any `@loaders.gl/*` package.
  */
 
-import { STTArchive } from './archive';
-import type { ArchiveMetadata, Tile, TileRequestOptions } from './types';
+import { STTArchive } from './archive.js';
+import type { ArchiveMetadata, Tile, TileRequestOptions } from './types.js';
 
 /** `TileSourceMetadata` shape (subset we populate) from loaders.gl v4.x. */
 export interface SttTileSourceMetadata {

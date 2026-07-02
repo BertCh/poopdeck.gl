@@ -21,9 +21,9 @@
  * iso-contour outlines) on the Three renderer.
  */
 
-import { WideLineLayer, type WideLineLayerOptions } from './wide-line-layer';
-import type { ThreeTimeWindowOptions } from '../lib/time-window';
-import type { LineColorMode } from '../lib/geo-line-buffers';
+import { WideLineLayer, type WideLineLayerOptions } from './wide-line-layer.js';
+import type { ThreeTimeWindowOptions } from '../lib/time-window.js';
+import type { LineColorMode } from '../lib/geo-line-buffers.js';
 
 export interface PathGeoLayerOptions extends ThreeTimeWindowOptions {
   id?: string;

@@ -22,10 +22,10 @@ import {
   LocalEnuProjection,
   type GeoAnchor,
   type Projection,
-} from '../projection/local-enu';
-import type { SttLayer } from '../layers/layer';
-import { SttTileSource } from './tile-source';
-import { makeGround, type GroundOptions } from './ground';
+} from '../projection/local-enu.js';
+import type { SttLayer } from '../layers/layer.js';
+import { SttTileSource } from './tile-source.js';
+import { makeGround, type GroundOptions } from './ground.js';
 
 export interface SttSceneOptions {
   /** lon/lat anchor that maps to the world origin (usually the scene's view centre).

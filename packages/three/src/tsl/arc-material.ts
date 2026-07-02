@@ -47,13 +47,13 @@ import {
   cameraProjectionMatrix,
   type TSLNode,
   type UniformNode,
-} from './nodes';
+} from './nodes.js';
 import {
   TimeFilterUniforms,
   windowAlphaNode,
   updateTimeFilterUniforms,
-} from './time-filter';
-import type { TimeFilterParams } from './time-filter-math';
+} from './time-filter.js';
+import type { TimeFilterParams } from './time-filter-math.js';
 
 export type ArcShape = 'parabolic' | 'greatCircle';
 

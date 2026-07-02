@@ -24,20 +24,20 @@ export {
   type GeoAnchor,
   type LocalFrame,
   type ProjectedPositions,
-} from './projection/local-enu';
-export { MercatorProjection, MAX_MERCATOR_LAT } from './projection/mercator';
-export { GlobeProjection } from './projection/globe';
+} from './projection/local-enu.js';
+export { MercatorProjection, MAX_MERCATOR_LAT } from './projection/mercator.js';
+export { GlobeProjection } from './projection/globe.js';
 export {
   viewStateToCamera,
   cameraToViewState,
   type ViewState,
   type ViewStateCameraOptions,
-} from './projection/view-state';
+} from './projection/view-state.js';
 export {
   frameGlobe,
   setGlobeClip,
   type FrameGlobeOptions,
-} from './scene/globe-camera';
+} from './scene/globe-camera.js';
 
 // ─── Renderer bootstrap ───────────────────────────────────────────────────────
 export {
@@ -48,7 +48,7 @@ export {
   type CreateRendererOptions,
   type CreatedRenderer,
   type RendererBackend,
-} from './renderer/webgpu-renderer';
+} from './renderer/webgpu-renderer.js';
 
 // ─── Time filter (CPU reference math + TSL nodes) ─────────────────────────────
 export {
@@ -60,7 +60,7 @@ export {
   timeFilterAlpha,
   type TimeFilterMode,
   type TimeFilterParams,
-} from './tsl/time-filter-math';
+} from './tsl/time-filter-math.js';
 // Time-window vocabulary bridge: lets every three layer ALSO accept deck's /
 // maplibre's full-width `timeWindow` + `fadeIn/OutDuration`, converting to the
 // internal half-width `windowHalf`/`fadeIn`/`fadeOut` (which stay as aliases).
@@ -68,7 +68,7 @@ export {
   resolveTimeWindow,
   type ThreeTimeWindowOptions,
   type ResolvedTimeWindow,
-} from './lib/time-window';
+} from './lib/time-window.js';
 export {
   TimeFilterUniforms,
   timeFilterAlphaNode,
@@ -80,25 +80,25 @@ export {
   updateTimeFilterUniforms,
   type TSLNode,
   type UniformNode,
-} from './tsl/time-filter';
+} from './tsl/time-filter.js';
 
 // ─── Engine core ──────────────────────────────────────────────────────────────
-export { SttScene, type SttSceneOptions } from './scene/stt-three-scene';
+export { SttScene, type SttSceneOptions } from './scene/stt-three-scene.js';
 export {
   StandaloneViewer,
   type StandaloneViewerOptions,
-} from './viewer/standalone-viewer';
-export { SttTileSource, type SttTileSourceOptions, type LoadedSource } from './scene/tile-source';
-export { makeGround, type GroundOptions } from './scene/ground';
-export { frameBox, type FrameOptions } from './scene/camera';
+} from './viewer/standalone-viewer.js';
+export { SttTileSource, type SttTileSourceOptions, type LoadedSource } from './scene/tile-source.js';
+export { makeGround, type GroundOptions } from './scene/ground.js';
+export { frameBox, type FrameOptions } from './scene/camera.js';
 export {
   BaseSttLayer,
   type SttLayer,
   type SttLayerContext,
-} from './layers/layer';
+} from './layers/layer.js';
 
 // ─── Surfels (hero) ───────────────────────────────────────────────────────────
-export { makeHexDiskGeometry, HEX_CIRCUMRADIUS } from './geometry/hex-disk';
+export { makeHexDiskGeometry, HEX_CIRCUMRADIUS } from './geometry/hex-disk.js';
 export {
   createSurfelMaterial,
   updateSurfelUniforms,
@@ -106,16 +106,16 @@ export {
   type SurfelMaterialOptions,
   type SurfelMaterialBundle,
   type SurfelUniformValues,
-} from './tsl/surfel-material';
-export { SurfelLayer, type SurfelLayerOptions } from './layers/surfel-layer';
+} from './tsl/surfel-material.js';
+export { SurfelLayer, type SurfelLayerOptions } from './layers/surfel-layer.js';
 export {
   buildSurfelBuffers,
   type SurfelBuffers,
   type SurfelBufferOptions,
-} from './layers/surfel-buffers';
+} from './layers/surfel-buffers.js';
 
 // ─── Points (raw / splat / scan / worldbuild) ─────────────────────────────────
-export { makeBillboardQuadGeometry } from './geometry/billboard-quad';
+export { makeBillboardQuadGeometry } from './geometry/billboard-quad.js';
 export {
   createPointMaterial,
   createPointIdMaterial,
@@ -124,15 +124,15 @@ export {
   type PointMaterialOptions,
   type PointMaterialBundle,
   type PointUniformValues,
-} from './tsl/point-material';
-export { PointCloudLayer, type PointCloudLayerOptions } from './layers/point-cloud-layer';
+} from './tsl/point-material.js';
+export { PointCloudLayer, type PointCloudLayerOptions } from './layers/point-cloud-layer.js';
 export {
   buildPointBuffers,
   pointTileKey,
   type PointBuffers,
   type PointBufferOptions,
   type PointColorMode,
-} from './layers/point-buffers';
+} from './layers/point-buffers.js';
 export {
   resolveCategoryColor,
   expandCategoricalColors,
@@ -142,10 +142,10 @@ export {
   type RGBA,
   type CategoricalColorSpec,
   type RampColorSpec,
-} from './lib/color';
+} from './lib/color.js';
 
 // ─── Objects (bounding boxes) + maps + ego ────────────────────────────────────
-export { BoundingBoxLayer, type BoundingBoxLayerOptions } from './layers/bounding-box-layer';
+export { BoundingBoxLayer, type BoundingBoxLayerOptions } from './layers/bounding-box-layer.js';
 export {
   buildTrackIndex,
   sampleTrack,
@@ -158,16 +158,16 @@ export {
   type BoxSample,
   type BoxTrackOptions,
   type BoxDefaults,
-} from './layers/box-tracks';
+} from './layers/box-tracks.js';
 export {
   writeBoxEdges,
   BOX_CORNERS,
   BOX_EDGES,
   FLOATS_PER_BOX,
-} from './geometry/box-edges';
-export { StaticPathLayer, type StaticPathLayerOptions } from './layers/path-layer';
-export { StaticPolygonLayer, type StaticPolygonLayerOptions } from './layers/polygon-layer';
-export { EgoLayer, type EgoLayerOptions, type EgoPose } from './layers/ego-layer';
+} from './geometry/box-edges.js';
+export { StaticPathLayer, type StaticPathLayerOptions } from './layers/path-layer.js';
+export { StaticPolygonLayer, type StaticPolygonLayerOptions } from './layers/polygon-layer.js';
+export { EgoLayer, type EgoLayerOptions, type EgoPose } from './layers/ego-layer.js';
 
 // ─── Density iso-lines (animated contours) ────────────────────────────────────
 export {
@@ -177,8 +177,8 @@ export {
   type IsoLineMaterialBundle,
   type IsoLineUniforms,
   type IsoLineUniformValues,
-} from './tsl/iso-line-material';
-export { IsoLayer, type IsoLayerOptions } from './layers/iso-layer';
+} from './tsl/iso-line-material.js';
+export { IsoLayer, type IsoLayerOptions } from './layers/iso-layer.js';
 
 // ════════════════════════════════════════════════════════════════════════════
 //  GEOGRAPHIC LAYERS (deck parity) — render the non-AV showcase demos in Three
@@ -186,7 +186,7 @@ export { IsoLayer, type IsoLayerOptions } from './layers/iso-layer';
 // ════════════════════════════════════════════════════════════════════════════
 
 // Point geo-parity: continuous ramp colour + pixel-radius sizing.
-export type { PointSizeUnits } from './tsl/point-material';
+export type { PointSizeUnits } from './tsl/point-material.js';
 
 // ─── Wide lines (screen-pixel ribbons: Path / OD-Line / Trips / Corridor) ──────
 export {
@@ -197,32 +197,32 @@ export {
   type WideLineMaterialOptions,
   type WideLineMaterialBundle,
   type WideLineUniformValues,
-} from './tsl/wide-line-material';
-export { makeSegmentQuadGeometry } from './geometry/segment-quad';
+} from './tsl/wide-line-material.js';
+export { makeSegmentQuadGeometry } from './geometry/segment-quad.js';
 export {
   buildLineSegmentBuffers,
   type LineColorMode,
   type LineSegmentBufferOptions,
   type LineSegmentBuffers,
-} from './lib/geo-line-buffers';
-export { WideLineLayer, type WideLineLayerOptions } from './layers/wide-line-layer';
-export { PathGeoLayer, type PathGeoLayerOptions } from './layers/path-geo-layer';
-export { OdLineLayer, type OdLineLayerOptions } from './layers/od-line-layer';
+} from './lib/geo-line-buffers.js';
+export { WideLineLayer, type WideLineLayerOptions } from './layers/wide-line-layer.js';
+export { PathGeoLayer, type PathGeoLayerOptions } from './layers/path-geo-layer.js';
+export { OdLineLayer, type OdLineLayerOptions } from './layers/od-line-layer.js';
 export {
   deriveSourceTargetPositions,
   buildOdLineSegmentBuffers,
   type SourceTargetPositions,
-} from './lib/od-positions';
+} from './lib/od-positions.js';
 
 // ─── Trips (animated trail-mode trajectories) ──────────────────────────────────
-export { TripsLayer, type TripsLayerOptions } from './layers/trips-layer';
+export { TripsLayer, type TripsLayerOptions } from './layers/trips-layer.js';
 export {
   buildTripsBuffers,
   synthesizeVertexTimes,
   type TripsColorMode,
   type TripsBufferOptions,
   type TripsBuffers,
-} from './lib/trips-buffers';
+} from './lib/trips-buffers.js';
 export {
   buildTripIndex,
   sampleHead,
@@ -230,8 +230,8 @@ export {
   type Trip,
   type TripIndex,
   type Head,
-} from './lib/trip-heads';
-export { TripHeadsLayer, type TripHeadsLayerOptions } from './layers/trip-heads-layer';
+} from './lib/trip-heads.js';
+export { TripHeadsLayer, type TripHeadsLayerOptions } from './layers/trip-heads-layer.js';
 
 // ─── Arcs (curved/great-circle OD) ─────────────────────────────────────────────
 export {
@@ -243,14 +243,14 @@ export {
   type ArcMaterialOptions,
   type ArcMaterialBundle,
   type ArcUniformValues,
-} from './tsl/arc-material';
-export { ArcLayer, type ArcLayerOptions } from './layers/arc-layer';
+} from './tsl/arc-material.js';
+export { ArcLayer, type ArcLayerOptions } from './layers/arc-layer.js';
 export {
   buildArcBuffers,
   type ArcColorMode,
   type ArcBufferOptions,
   type ArcBuffers,
-} from './lib/arc-buffers';
+} from './lib/arc-buffers.js';
 
 // ─── Icons (directional billboard markers) ─────────────────────────────────────
 export {
@@ -261,15 +261,15 @@ export {
   type IconMaterialOptions,
   type IconMaterialBundle,
   type IconUniformValues,
-} from './tsl/icon-material';
-export { IconLayer, type IconLayerOptions } from './layers/icon-layer';
+} from './tsl/icon-material.js';
+export { IconLayer, type IconLayerOptions } from './layers/icon-layer.js';
 export {
   buildIconBuffers,
   type IconMappingEntry,
   type IconColorMode,
   type IconBufferOptions,
   type IconBuffers,
-} from './lib/icon-buffers';
+} from './lib/icon-buffers.js';
 
 // ─── Columns (extruded 3D bars) ────────────────────────────────────────────────
 export {
@@ -279,18 +279,18 @@ export {
   type ColumnMaterialOptions,
   type ColumnMaterialBundle,
   type ColumnUniformValues,
-} from './tsl/column-material';
+} from './tsl/column-material.js';
 export {
   makeColumnPrismGeometry,
   circumradiusForIncircle,
-} from './geometry/column-prism';
-export { ColumnLayer, type ColumnLayerOptions } from './layers/column-layer';
+} from './geometry/column-prism.js';
+export { ColumnLayer, type ColumnLayerOptions } from './layers/column-layer.js';
 export {
   buildColumnBuffers,
   type ColumnColorMode,
   type ColumnBufferOptions,
   type ColumnBuffers,
-} from './lib/column-buffers';
+} from './lib/column-buffers.js';
 
 // ─── Polygons (animated fill + extrude; StaticPolygonLayer extends this) ────────
 export {
@@ -301,14 +301,14 @@ export {
   type PolygonUniforms,
   type PolygonMaterialBundle,
   type PolygonUniformValues,
-} from './tsl/polygon-material';
-export { PolygonLayer, type PolygonLayerOptions } from './layers/polygon-layer';
+} from './tsl/polygon-material.js';
+export { PolygonLayer, type PolygonLayerOptions } from './layers/polygon-layer.js';
 export {
   buildPolygonBuffers,
   type PolygonColorMode,
   type PolygonBufferOptions,
   type PolygonBuffers,
-} from './layers/polygon-buffers';
+} from './layers/polygon-buffers.js';
 
 // ─── Summary tier: Quadbin cells ───────────────────────────────────────────────
 export {
@@ -317,35 +317,35 @@ export {
   cellBoundsFromTile,
   type QuadbinTile,
   type CellBounds,
-} from './lib/quadbin-cell';
+} from './lib/quadbin-cell.js';
 export {
   buildQuadbinBuffers,
   rampBucketColor,
   DEFAULT_QUADBIN_COLOR_RANGE,
   type QuadbinBufferOptions,
   type QuadbinBuffers,
-} from './lib/quadbin-buffers';
+} from './lib/quadbin-buffers.js';
 export {
   QuadbinSummaryLayer,
   type QuadbinSummaryLayerOptions,
-} from './layers/quadbin-summary-layer';
+} from './layers/quadbin-summary-layer.js';
 
 // ─── Summary tier: H3 hexagons ─────────────────────────────────────────────────
 export {
   h3IndexFromTile,
   cellBoundaryFromTile,
   type H3Boundary,
-} from './lib/h3-cell';
+} from './lib/h3-cell.js';
 export {
   buildH3Buffers,
   DEFAULT_H3_COLOR_RANGE,
   type H3BufferOptions,
   type H3Buffers,
-} from './lib/h3-buffers';
+} from './lib/h3-buffers.js';
 export {
   H3SummaryLayer,
   type H3SummaryLayerOptions,
-} from './layers/h3-summary-layer';
+} from './layers/h3-summary-layer.js';
 
 // ─── Flowmap family (tapered OD arrows + value-over-time corridors) ─────────────
 export {
@@ -355,17 +355,17 @@ export {
   type FlowArrowMaterialOptions,
   type FlowArrowMaterialBundle,
   type FlowArrowUniformValues,
-} from './tsl/flow-arrow-material';
+} from './tsl/flow-arrow-material.js';
 export {
   makeArrowTemplateGeometry,
   ARROW_TEMPLATE_POSITIONS,
-} from './geometry/arrow-template';
-export { FlowmapLayer, type FlowmapLayerOptions } from './layers/flowmap-layer';
+} from './geometry/arrow-template.js';
+export { FlowmapLayer, type FlowmapLayerOptions } from './layers/flowmap-layer.js';
 export {
   buildFlowmapBuffers,
   type FlowmapBufferOptions,
   type FlowmapBuffers,
-} from './lib/flowmap-buffers';
+} from './lib/flowmap-buffers.js';
 export {
   createFlowCorridorMaterial,
   updateFlowCorridorUniforms,
@@ -373,18 +373,18 @@ export {
   type FlowCorridorMaterialOptions,
   type FlowCorridorMaterialBundle,
   type FlowCorridorUniformValues,
-} from './tsl/flow-corridor-material';
+} from './tsl/flow-corridor-material.js';
 export {
   FlowCorridorLayer,
   type FlowCorridorLayerOptions,
-} from './layers/flow-corridor-layer';
+} from './layers/flow-corridor-layer.js';
 export {
   buildFlowCorridorBuffers,
   bucketPosFromTime,
   type BucketAxis,
   type FlowCorridorBufferOptions,
   type FlowCorridorBuffers,
-} from './lib/flow-corridor-buffers';
+} from './lib/flow-corridor-buffers.js';
 
 // ─── Streaming tile source + real governor BufferSource ────────────────────────
 export {
@@ -399,19 +399,19 @@ export {
   type StreamingTileSourceOptions,
   type DrivableTileset,
   type RunwayTileset,
-} from './scene/streaming-tile-source';
+} from './scene/streaming-tile-source.js';
 
 // ─── Basemap (host-owned maplibre overlay sync + globe earth sphere) ───────────
 export {
   BasemapOverlay,
   type BasemapLike,
   type BasemapOverlayOptions,
-} from './scene/basemap-overlay';
+} from './scene/basemap-overlay.js';
 export {
   makeGlobeBasemap,
   GLOBE_BASEMAP_INSET,
   type GlobeBasemapOptions,
-} from './scene/globe-basemap';
+} from './scene/globe-basemap.js';
 
 // ─── GPU id-colour picking (geographic layers) ─────────────────────────────────
 export {
@@ -423,7 +423,7 @@ export {
   type PickRenderer,
   type RenderTargetCtor,
   type GpuPickerOptions,
-} from './lib/gpu-pick';
+} from './lib/gpu-pick.js';
 
 // ─── Picking (click-to-inspect) ───────────────────────────────────────────────
 export {
@@ -433,19 +433,19 @@ export {
   type SttPickInfo,
   type PickBox,
   type SttPickable,
-} from './lib/box-pick';
+} from './lib/box-pick.js';
 // Merged-buffer point picking (§5.3): pure index → SttPickResult resolution.
 export {
   resolvePointPick,
   parsePointTileKey,
   type ResolvePointPickParams,
-} from './lib/point-pick';
+} from './lib/point-pick.js';
 
 // ─── Playback governor registration ────────────────────────────────────────────
 export {
   createCompleteBufferSource,
   type SttSourceRegistry,
-} from './lib/source-registry';
+} from './lib/source-registry.js';
 
 // ─── Backend capability descriptor (renderer-abstraction Phase 5) ───────────────
-export { threeBackend } from './backend-descriptor';
+export { threeBackend } from './backend-descriptor.js';

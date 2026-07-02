@@ -39,14 +39,14 @@ import {
   modelViewMatrix,
   cameraProjectionMatrix,
   type UniformNode,
-} from './nodes';
+} from './nodes.js';
 import {
   TimeFilterUniforms,
   windowAlphaNode,
   trailAlphaNode,
   updateTimeFilterUniforms,
-} from './time-filter';
-import type { TimeFilterParams } from './time-filter-math';
+} from './time-filter.js';
+import type { TimeFilterParams } from './time-filter-math.js';
 
 export type WideLineMode = 'window' | 'trail' | 'none';
 

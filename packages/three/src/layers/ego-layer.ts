@@ -21,11 +21,11 @@ import {
 } from 'three';
 import type { Tile } from '@poopdeck.gl/core';
 import { GeometryType } from '@poopdeck.gl/core';
-import { BaseSttLayer, type SttLayerContext } from './layer';
-import { writeBoxEdges, FLOATS_PER_BOX } from '../geometry/box-edges';
-import type { Projection } from '../projection/local-enu';
-import type { RGBA } from '../lib/color';
-import type { SttPickable, PickBox } from '../lib/box-pick';
+import { BaseSttLayer, type SttLayerContext } from './layer.js';
+import { writeBoxEdges, FLOATS_PER_BOX } from '../geometry/box-edges.js';
+import type { Projection } from '../projection/local-enu.js';
+import type { RGBA } from '../lib/color.js';
+import type { SttPickable, PickBox } from '../lib/box-pick.js';
 
 export interface EgoPose {
   x: number;

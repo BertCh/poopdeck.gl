@@ -44,14 +44,14 @@
 import type { BinaryFeatures, Tile } from '@poopdeck.gl/core';
 import { GeometryType } from '@poopdeck.gl/core';
 import earcut from 'earcut';
-import type { Projection } from '../projection/local-enu';
+import type { Projection } from '../projection/local-enu.js';
 import {
   resolveCategoryColor,
   rampColorAt,
   type RGBA,
   type CategoricalColorSpec,
   type RampColorSpec,
-} from '../lib/color';
+} from '../lib/color.js';
 
 export type PolygonColorMode =
   | ({ type: 'categorical' } & CategoricalColorSpec)

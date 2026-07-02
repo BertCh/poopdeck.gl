@@ -18,7 +18,7 @@ import { getFeatureProperties } from '@poopdeck.gl/core';
 import type { InstanceProvenance, SttPickResult } from '@poopdeck.gl/core/picking';
 
 /**
- * Parse a `z/x/y/t::layer` {@link import('../layers/point-buffers').pointTileKey}
+ * Parse a `z/x/y/t::layer` {@link import('../layers/point-buffers.js').pointTileKey}
  * back into its {@link TileId}, or `undefined` if the shape is unexpected (so a
  * malformed key never fabricates a bogus tile).
  */

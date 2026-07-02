@@ -42,7 +42,7 @@ import {
   saturate,
   type UniformNode,
   type TSLNode,
-} from './nodes';
+} from './nodes.js';
 
 /** Ambient floor of the baked self-lit shade (shadowed faces stay readable). */
 const COLUMN_AMBIENT = 0.45;
@@ -50,8 +50,8 @@ import {
   TimeFilterUniforms,
   timeFilterAlphaNode,
   updateTimeFilterUniforms,
-} from './time-filter';
-import type { TimeFilterParams } from './time-filter-math';
+} from './time-filter.js';
+import type { TimeFilterParams } from './time-filter-math.js';
 
 /** Live column uniforms (constant opacity multiplier on top of the time window). */
 export class ColumnUniforms {

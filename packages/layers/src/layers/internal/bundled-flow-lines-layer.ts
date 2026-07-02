@@ -35,7 +35,7 @@ import { Layer, project32, picking } from '@deck.gl/core';
 import type { Accessor, Color, DefaultProps, LayerProps, UpdateParameters } from '@deck.gl/core';
 import { Model, Geometry } from '@luma.gl/engine';
 import type { Texture } from '@luma.gl/core';
-import type { BundlePositions } from '../../lib/edge-bundler';
+import type { BundlePositions } from '../../lib/edge-bundler.js';
 
 /**
  * Per-segment ribbon template, `(mix, side)`:

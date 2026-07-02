@@ -54,14 +54,14 @@ import type {
 import {
   SpatioTemporalLayer,
   SpatioTemporalLayerProps,
-} from '../spatiotemporal-layer';
-import { SplatPrimitiveLayer } from '../internal/splat-primitive-layer';
-import { emit } from '../../lib/telemetry';
-import { warnOnce } from '../../lib/log';
+} from '../spatiotemporal-layer.js';
+import { SplatPrimitiveLayer } from '../internal/splat-primitive-layer.js';
+import { emit } from '../../lib/telemetry.js';
+import { warnOnce } from '../../lib/log.js';
 import {
   inheritedPropsDigest,
   updateTriggersDigest,
-} from '../../lib/style-digest';
+} from '../../lib/style-digest.js';
 import type { Tile, Layer as TileLayer } from '@poopdeck.gl/core';
 
 const DEBUG = false;

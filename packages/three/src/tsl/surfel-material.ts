@@ -47,7 +47,7 @@ import {
   oneMinus,
   type TSLNode,
   type UniformNode,
-} from './nodes';
+} from './nodes.js';
 
 /** Per-frame / per-config surfel uniforms. The layer sets `.value` each tick. */
 export class SurfelUniforms {

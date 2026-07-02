@@ -31,10 +31,10 @@
  */
 
 import type { BinaryFeatures, Tile } from '@poopdeck.gl/core';
-import { cellBoundaryFromTile } from './h3-cell';
-import { rampBucketColor } from './quadbin-buffers';
-import type { Projection } from '../projection/local-enu';
-import type { RGBA } from './color';
+import { cellBoundaryFromTile } from './h3-cell.js';
+import { rampBucketColor } from './quadbin-buffers.js';
+import type { Projection } from '../projection/local-enu.js';
+import type { RGBA } from './color.js';
 
 /** Default 6-stop low→high ramp (mirrors the deck H3 layer's DEFAULT_COLOR_RANGE). */
 export const DEFAULT_H3_COLOR_RANGE: RGBA[] = [

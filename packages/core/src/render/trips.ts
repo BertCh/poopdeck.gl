@@ -28,9 +28,9 @@
  * quantize to metres.
  */
 
-import type { BinaryFeatures, Tile } from '../types';
-import { GeometryType } from '../types';
-import type { Projection } from '../geo';
+import type { BinaryFeatures, Tile } from '../types.js';
+import { GeometryType } from '../types.js';
+import type { Projection } from '../geo/index.js';
 
 const EARTH_RADIUS_M = 6_371_000;
 

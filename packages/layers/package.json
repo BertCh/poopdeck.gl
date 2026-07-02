@@ -13,12 +13,14 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "default": "./dist/index.js"
     }
   },
   "files": [
     "dist",
     "src",
+    "!src/**/*.test.*",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "scripts": {
@@ -73,5 +75,8 @@
     "visualization"
   ],
   "author": "Robert Christie",
-  "license": "MIT"
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  }
 }

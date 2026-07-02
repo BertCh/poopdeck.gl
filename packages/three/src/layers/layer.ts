@@ -4,7 +4,7 @@
 
 import type { Object3D } from 'three';
 import type { Tile } from '@poopdeck.gl/core';
-import type { Projection } from '../projection/local-enu';
+import type { Projection } from '../projection/local-enu.js';
 
 /**
  * Context handed to every layer when it (re)builds geometry from tiles.

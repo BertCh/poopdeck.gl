@@ -42,9 +42,9 @@ import {
   modelViewMatrix,
   cameraProjectionMatrix,
   type UniformNode,
-} from './nodes';
-import { TimeFilterUniforms, windowAlphaNode, updateTimeFilterUniforms } from './time-filter';
-import type { TimeFilterParams } from './time-filter-math';
+} from './nodes.js';
+import { TimeFilterUniforms, windowAlphaNode, updateTimeFilterUniforms } from './time-filter.js';
+import type { TimeFilterParams } from './time-filter-math.js';
 
 // Loose TSL builders not surfaced on the ./nodes seam (texture sampling), mirroring
 // icon-material.ts.

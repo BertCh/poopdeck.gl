@@ -32,7 +32,7 @@ import {
   decodePagedRoot,
   DIRECTORY_VERSION,
   type PageDescriptor,
-} from './directory';
+} from './directory.js';
 import {
   type ArchiveMetadata,
   type ArchiveIndex,
@@ -49,17 +49,17 @@ import {
   type HeatmapDomain,
   type HeatmapClassDomain,
   Compression,
-} from './types';
-import { createDefaultTileDecoder, type TileDecoder } from './tile-decoder';
-import { OpfsTileCache } from './opfs-cache';
-import { decompress, unzstdSync } from './compression';
-import { createSttTileSource, type SttTileSource } from './tile-source';
-import { ThroughputEstimator, type ThroughputEstimate } from './throughput';
+} from './types.js';
+import { createDefaultTileDecoder, type TileDecoder } from './tile-decoder.js';
+import { OpfsTileCache } from './opfs-cache.js';
+import { decompress, unzstdSync } from './compression.js';
+import { createSttTileSource, type SttTileSource } from './tile-source.js';
+import { ThroughputEstimator, type ThroughputEstimate } from './throughput.js';
 import {
   getSharedScheduler,
   isSharedSchedulingEnabled,
-} from './shared-scheduler';
-import { createCancellationError, isCancellationError } from './request-scheduler';
+} from './shared-scheduler.js';
+import { createCancellationError, isCancellationError } from './request-scheduler.js';
 
 /** `format` discriminator written into every packed manifest. */
 const PACKED_FORMAT = 'stt-packed';

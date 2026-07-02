@@ -13,8 +13,8 @@
  * fields (min/maxZoom, refinementStrategy, onTileLoad/Unload, onBufferChange, …).
  */
 
-import type { STTArchive } from '../archive';
-import type { SpatiotemporalTilesetOptions } from '../spatiotemporal-tileset';
+import type { STTArchive } from '../archive.js';
+import type { SpatiotemporalTilesetOptions } from '../spatiotemporal-tileset.js';
 
 /** The fetch-callback subset of {@link SpatiotemporalTilesetOptions} that maps 1:1 to the archive. */
 export type TilesetFetchCallbacks = Pick<

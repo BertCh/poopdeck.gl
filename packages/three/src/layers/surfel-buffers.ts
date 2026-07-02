@@ -20,7 +20,7 @@
  */
 
 import type { BinaryFeatures, Tile } from '@poopdeck.gl/core';
-import type { Projection } from '../projection/local-enu';
+import type { Projection } from '../projection/local-enu.js';
 
 export interface SurfelBufferOptions {
   /** Interleaved vector columns (preferred). */

@@ -20,20 +20,20 @@
 
 import { Mesh, InstancedBufferAttribute, InstancedBufferGeometry } from 'three';
 import type { Tile } from '@poopdeck.gl/core';
-import { BaseSttLayer, type SttLayerContext } from './layer';
-import { makeBillboardQuadGeometry } from '../geometry/billboard-quad';
+import { BaseSttLayer, type SttLayerContext } from './layer.js';
+import { makeBillboardQuadGeometry } from '../geometry/billboard-quad.js';
 import {
   createPointMaterial,
   updatePointUniforms,
   type PointMaterialBundle,
-} from '../tsl/point-material';
+} from '../tsl/point-material.js';
 import {
   buildTripIndex,
   sampleHeads,
   type TripIndex,
-} from '../lib/trip-heads';
-import type { Projection } from '../projection/local-enu';
-import type { RGBA } from '../lib/color';
+} from '../lib/trip-heads.js';
+import type { Projection } from '../projection/local-enu.js';
+import type { RGBA } from '../lib/color.js';
 
 export interface TripHeadsLayerOptions {
   id?: string;

@@ -34,21 +34,21 @@ import {
   type Texture,
 } from 'three';
 import type { Tile } from '@poopdeck.gl/core';
-import { BaseSttLayer, type SttLayerContext } from './layer';
-import { resolveTimeWindow, type ThreeTimeWindowOptions } from '../lib/time-window';
-import { makeSegmentQuadGeometry } from '../geometry/segment-quad';
+import { BaseSttLayer, type SttLayerContext } from './layer.js';
+import { resolveTimeWindow, type ThreeTimeWindowOptions } from '../lib/time-window.js';
+import { makeSegmentQuadGeometry } from '../geometry/segment-quad.js';
 import {
   buildFlowCorridorBuffers,
   bucketPosFromTime,
   type FlowCorridorBuffers,
   type BucketAxis,
-} from '../lib/flow-corridor-buffers';
+} from '../lib/flow-corridor-buffers.js';
 import {
   createFlowCorridorMaterial,
   updateFlowCorridorUniforms,
   type FlowCorridorMaterialBundle,
-} from '../tsl/flow-corridor-material';
-import { rampColorAt, type RGBA } from '../lib/color';
+} from '../tsl/flow-corridor-material.js';
+import { rampColorAt, type RGBA } from '../lib/color.js';
 
 export interface FlowCorridorLayerOptions extends ThreeTimeWindowOptions {
   id?: string;

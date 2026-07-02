@@ -14,7 +14,7 @@
 
 import type { BinaryFeatures, Tile } from '@poopdeck.gl/core';
 import { resolveCategoryColor } from '@poopdeck.gl/core/style';
-import type { RGBA } from '../lib/color';
+import type { RGBA } from '../lib/color.js';
 
 /** Held-box window (ms) for a track with a single (un-interpolatable) keyframe. */
 export const SINGLETON_HOLD_MS = 400;

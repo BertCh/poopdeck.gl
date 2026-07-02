@@ -26,7 +26,7 @@ import { GeometryType } from '@poopdeck.gl/core';
 import { GlobeProjection } from '@poopdeck.gl/core/geo';
 import { deriveSourceTargetPositions } from '@poopdeck.gl/core/geometry';
 import type { RGBA255 } from '@poopdeck.gl/core/style';
-import { featureColor, type FeatureColorMode } from './feature-color';
+import { featureColor, type FeatureColorMode } from './feature-color.js';
 
 /** One renderable polyline: absolute ECEF vertices + its animation window. */
 export interface FeaturePolyline {

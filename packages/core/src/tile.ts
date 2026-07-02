@@ -41,7 +41,7 @@ import {
   type Layer,
   type BinaryFeatures,
   GeometryType,
-} from './types';
+} from './types.js';
 
 /** One layer extracted from the payload frame. */
 interface RawLayer {

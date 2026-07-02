@@ -19,18 +19,18 @@
 
 import { Mesh, InstancedBufferAttribute, Box3, Vector3, Sphere } from 'three';
 import type { Tile } from '@poopdeck.gl/core';
-import { BaseSttLayer, type SttLayerContext } from './layer';
-import { makeSegmentQuadGeometry } from '../geometry/segment-quad';
+import { BaseSttLayer, type SttLayerContext } from './layer.js';
+import { makeSegmentQuadGeometry } from '../geometry/segment-quad.js';
 import {
   buildTripsBuffers,
   type TripsColorMode,
   type TripsBufferOptions,
-} from '../lib/trips-buffers';
+} from '../lib/trips-buffers.js';
 import {
   createWideLineMaterial,
   updateWideLineUniforms,
   type WideLineMaterialBundle,
-} from '../tsl/wide-line-material';
+} from '../tsl/wide-line-material.js';
 
 export interface TripsLayerOptions {
   id?: string;

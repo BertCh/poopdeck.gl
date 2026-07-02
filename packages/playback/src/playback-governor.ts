@@ -21,8 +21,8 @@
  * ~130 sim-days. A speed change is therefore a re-plan event.
  */
 
-import { TimeController } from './time-controller';
-import { emit as emitProbe } from './telemetry';
+import { TimeController } from './time-controller.js';
+import { emit as emitProbe } from './telemetry.js';
 
 /**
  * Snapshot of the contiguous loaded span ahead of the playhead, as reported

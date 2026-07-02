@@ -24,8 +24,8 @@
 
 import { PathStyleExtension } from '@deck.gl/extensions';
 import type { DefaultProps } from '@deck.gl/core';
-import { FlowCorridorLayer } from './flow-corridor-layer';
-import type { FlowCorridorLayerProps } from './flow-corridor-layer';
+import { FlowCorridorLayer } from './flow-corridor-layer.js';
+import type { FlowCorridorLayerProps } from './flow-corridor-layer.js';
 import type { BinaryFeatures } from '@poopdeck.gl/core';
 
 export type FlowStrokeLayerProps = {

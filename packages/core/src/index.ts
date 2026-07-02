@@ -32,8 +32,8 @@ export type {
   TileId,
   TileRequestOptions,
   TimeRange,
-} from './types';
-export { Compression, GeometryType } from './types';
+} from './types.js';
+export { Compression, GeometryType } from './types.js';
 
 // ─── Default color palettes (pure data, shared by every renderer) ────────────
 // The single source of truth for the categorical / heatmap defaults; imported
@@ -49,18 +49,18 @@ export {
   DEFAULT_ARC_TARGET_COLOR,
   DEFAULT_SUMMARY_COLOR_RANGE,
   type PaletteRGBA,
-} from './palettes';
+} from './palettes.js';
 
 // ─── Archive / tileset / tile decoding ──────────────────────────────────────
-export { STTArchive, estimateTileSize } from './archive';
+export { STTArchive, estimateTileSize } from './archive.js';
 // Packed-format manifest contract (mirrors Rust `pack::Manifest`; schema at
 // docs/spec/manifest.schema.json).
 export type {
   PackedManifest,
   ManifestDirectoryRef,
   ManifestPackRef,
-} from './archive';
-export { SpatiotemporalTileset } from './spatiotemporal-tileset';
+} from './archive.js';
+export { SpatiotemporalTileset } from './spatiotemporal-tileset.js';
 export type {
   BufferedRunway,
   OverviewPreloadResult,
@@ -68,15 +68,15 @@ export type {
   SpatiotemporalTilesetOptions,
   TileBatchHooks,
   TileTier,
-} from './spatiotemporal-tileset';
-export { decodeTile, getFeatureProperties, toGeoArrowTable } from './tile';
+} from './spatiotemporal-tileset.js';
+export { decodeTile, getFeatureProperties, toGeoArrowTable } from './tile.js';
 
 // ─── Throughput estimation (player buffering) ───────────────────────────────
 export {
   ThroughputEstimator,
   type ThroughputEstimate,
   type ThroughputEstimatorOptions,
-} from './throughput';
+} from './throughput.js';
 
 // ─── Shared request scheduler (multi-source coordination, Phase 2) ──────────
 // Process-shareable global concurrency budget allocated across N sources by
@@ -91,7 +91,7 @@ export {
   type ScheduledRequest,
   type SchedulerStats,
   type SharedRequestSchedulerOptions,
-} from './request-scheduler';
+} from './request-scheduler.js';
 
 // ─── Process-shared scheduler singleton + kill-switch ───────────────────────
 // `getSharedScheduler()` is the one instance every STTArchive draws from;
@@ -103,10 +103,10 @@ export {
   getSharedSchedulerMaxRequests,
   resetSharedScheduler,
   type ConfigureSharedSchedulerOptions,
-} from './shared-scheduler';
+} from './shared-scheduler.js';
 
 // ─── Compression ────────────────────────────────────────────────────────────
-export { decompress, decompressSync } from './compression';
+export { decompress, decompressSync } from './compression.js';
 
 // ─── Tile decoder pipeline ──────────────────────────────────────────────────
 export {
@@ -115,14 +115,14 @@ export {
   createDefaultTileDecoder,
   type TileDecoder,
   type DecodeArgs,
-} from './tile-decoder';
+} from './tile-decoder.js';
 
 // ─── OPFS persistent cache ──────────────────────────────────────────────────
 export {
   OpfsTileCache,
   isOpfsAvailable,
   type OpfsTileCacheOptions,
-} from './opfs-cache';
+} from './opfs-cache.js';
 
 // ─── loaders.gl-conformant surfaces ─────────────────────────────────────────
 // Structural-only — `@poopdeck.gl/core` has no `@loaders.gl/*` runtime dep.
@@ -137,4 +137,4 @@ export {
   type SttGetTileParameters,
   type SttTileSource,
   type SttTileSourceMetadata,
-} from './tile-source';
+} from './tile-source.js';

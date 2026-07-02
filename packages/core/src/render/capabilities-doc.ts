@@ -14,8 +14,8 @@
  * sync on its own.
  */
 
-import { LAYER_KINDS, CAPABILITIES, type BackendDescriptor, type LayerKind } from './capabilities';
-import type { TimeFilterMode } from './time-filter';
+import { LAYER_KINDS, CAPABILITIES, type BackendDescriptor, type LayerKind } from './capabilities.js';
+import type { TimeFilterMode } from './time-filter.js';
 
 const ALL_MODES: TimeFilterMode[] = ['none', 'window', 'wake', 'cumulative', 'trail'];
 

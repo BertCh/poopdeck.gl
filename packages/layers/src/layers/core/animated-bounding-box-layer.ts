@@ -106,13 +106,13 @@ import {
   SpatioTemporalLayer,
   SpatioTemporalLayerProps,
   SpatioTemporalPickingInfo,
-} from '../spatiotemporal-layer';
-import { emit } from '../../lib/telemetry';
-import { warnOnce } from '../../lib/log';
+} from '../spatiotemporal-layer.js';
+import { emit } from '../../lib/telemetry.js';
+import { warnOnce } from '../../lib/log.js';
 import {
   colorMappingDigest,
   updateTriggersDigest,
-} from '../../lib/style-digest';
+} from '../../lib/style-digest.js';
 import type { Tile, BinaryFeatures } from '@poopdeck.gl/core';
 
 const DEBUG = false;

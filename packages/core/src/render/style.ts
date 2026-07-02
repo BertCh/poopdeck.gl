@@ -24,7 +24,7 @@
  * `colorMapping` fallback, not its hot path.
  */
 
-import type { BinaryFeatures } from '../types';
+import type { BinaryFeatures } from '../types.js';
 
 /** RGBA in the 0–255 int range (user-supplied palettes / colorMapping values). */
 export type RGBA255 = readonly [number, number, number, number];

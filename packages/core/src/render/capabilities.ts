@@ -17,9 +17,9 @@
  * definition of the animation modes.
  */
 
-import type { TimeFilterMode } from './time-filter';
-import type { ViewState } from '../geo/view-state';
-import type { SttPickResult } from './picking';
+import type { TimeFilterMode } from './time-filter.js';
+import type { ViewState } from '../geo/view-state.js';
+import type { SttPickResult } from './picking.js';
 
 export type { TimeFilterMode };
 

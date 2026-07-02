@@ -32,8 +32,8 @@ import type {
 } from '@poopdeck.gl/core';
 import { TimeController } from '@poopdeck.gl/playback';
 import type { BufferSource, BufferedRunway } from '@poopdeck.gl/playback';
-import { snapshot, isProbeEnabled } from '../lib/telemetry';
-import { warnOnce } from '../lib/log';
+import { snapshot, isProbeEnabled } from '../lib/telemetry.js';
+import { warnOnce } from '../lib/log.js';
 
 const DEBUG = false;
 

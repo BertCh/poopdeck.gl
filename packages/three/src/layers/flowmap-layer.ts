@@ -37,25 +37,25 @@
 
 import { Group, Mesh, InstancedBufferAttribute, Box3, Vector3, Sphere } from 'three';
 import type { Tile } from '@poopdeck.gl/core';
-import { BaseSttLayer, type SttLayerContext } from './layer';
-import { makeArrowTemplateGeometry } from '../geometry/arrow-template';
-import { makeBillboardQuadGeometry } from '../geometry/billboard-quad';
+import { BaseSttLayer, type SttLayerContext } from './layer.js';
+import { makeArrowTemplateGeometry } from '../geometry/arrow-template.js';
+import { makeBillboardQuadGeometry } from '../geometry/billboard-quad.js';
 import {
   buildFlowmapBuffers,
   type FlowmapBufferOptions,
   type FlowmapBuffers,
-} from '../lib/flowmap-buffers';
+} from '../lib/flowmap-buffers.js';
 import {
   createFlowArrowMaterial,
   updateFlowArrowUniforms,
   type FlowArrowMaterialBundle,
-} from '../tsl/flow-arrow-material';
+} from '../tsl/flow-arrow-material.js';
 import {
   createPointMaterial,
   updatePointUniforms,
   type PointMaterialBundle,
-} from '../tsl/point-material';
-import type { RGBA } from '../lib/color';
+} from '../tsl/point-material.js';
+import type { RGBA } from '../lib/color.js';
 
 /** Cross-fade granularity in fractions of a bucket (matches deck FlowmapLayer.STEP). */
 const STEP = 0.1;

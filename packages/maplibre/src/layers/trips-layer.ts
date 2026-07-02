@@ -22,9 +22,9 @@ import {
   type TileGpuCache,
   toRgba01,
   type RGBA8,
-} from '../base-layer';
-import { lngLatToMercator } from '../lib/projection';
-import { TIME_TRAIL_GLSL } from '../shaders/time-window.glsl';
+} from '../base-layer.js';
+import { lngLatToMercator } from '../lib/projection.js';
+import { TIME_TRAIL_GLSL } from '../shaders/time-window.glsl.js';
 
 // Shared with @poopdeck.gl/layers AnimatedTripsLayer (single source of truth in
 // @poopdeck.gl/core).

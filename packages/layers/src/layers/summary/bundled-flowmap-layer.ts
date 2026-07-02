@@ -36,25 +36,25 @@
 
 import { ScatterplotLayer } from '@deck.gl/layers';
 import type { Color, DefaultProps, Layer } from '@deck.gl/core';
-import { SpatioTemporalLayer, SpatioTemporalLayerProps } from '../spatiotemporal-layer';
-import { FlowLinesLayer } from '../internal/flow-lines-layer';
-import { BundledFlowLinesLayer } from '../internal/bundled-flow-lines-layer';
+import { SpatioTemporalLayer, SpatioTemporalLayerProps } from '../spatiotemporal-layer.js';
+import { FlowLinesLayer } from '../internal/flow-lines-layer.js';
+import { BundledFlowLinesLayer } from '../internal/bundled-flow-lines-layer.js';
 import {
   EdgeBundler,
   StaticBundle,
   isBundlingSupported,
   isStaticBundleSupported,
   subdivide,
-} from '../../lib/edge-bundler';
-import type { Vec2 } from '../../lib/edge-bundler';
-import { deriveSourceTargetPositions } from '../../lib/od-positions';
-import { bucketBlendAt, blendMatrixRow } from '../../lib/vertex-value-blend';
-import { resolveAccessorAlias } from '../../lib/accessor-alias';
-import { emit } from '../../lib/telemetry';
-import { warnOnce } from '../../lib/log';
+} from '../../lib/edge-bundler.js';
+import type { Vec2 } from '../../lib/edge-bundler.js';
+import { deriveSourceTargetPositions } from '../../lib/od-positions.js';
+import { bucketBlendAt, blendMatrixRow } from '../../lib/vertex-value-blend.js';
+import { resolveAccessorAlias } from '../../lib/accessor-alias.js';
+import { emit } from '../../lib/telemetry.js';
+import { warnOnce } from '../../lib/log.js';
 import type { Tile, Layer as TileLayer, BinaryFeatures } from '@poopdeck.gl/core';
 import type { Texture } from '@luma.gl/core';
-import type { _FlowmapLayerProps } from './flowmap-layer';
+import type { _FlowmapLayerProps } from './flowmap-layer.js';
 
 /** Props added by {@link BundledFlowmapLayer} (own KDEEB bundling props only). */
 export interface _BundledFlowmapLayerProps {

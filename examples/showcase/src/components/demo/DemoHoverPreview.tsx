@@ -7,7 +7,7 @@
  */
 import React, { useMemo } from "react";
 import { _GlobeView as GlobeView } from "@deck.gl/core";
-import { HoverPreview } from "@poopdeck.gl/react";
+import { HoverPreview } from "@poopdeck.gl/react/hover-preview";
 import type { Dataset } from "../../types";
 import { buildDemoLayers } from "./buildDemoLayers";
 import {

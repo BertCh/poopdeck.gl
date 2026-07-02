@@ -25,7 +25,7 @@
  * change.
  */
 
-import { warnOnce } from './log';
+import { warnOnce } from './log.js';
 import type { Color } from '@deck.gl/core';
 
 /**

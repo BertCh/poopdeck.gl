@@ -29,20 +29,20 @@
 
 import { Group, Mesh, BufferGeometry, Float32BufferAttribute, Uint32BufferAttribute } from 'three';
 import type { Tile } from '@poopdeck.gl/core';
-import { BaseSttLayer, type SttLayerContext } from './layer';
-import { resolveTimeWindow, type ThreeTimeWindowOptions } from '../lib/time-window';
-import { type RGBA } from '../lib/color';
+import { BaseSttLayer, type SttLayerContext } from './layer.js';
+import { resolveTimeWindow, type ThreeTimeWindowOptions } from '../lib/time-window.js';
+import { type RGBA } from '../lib/color.js';
 import {
   buildPolygonBuffers,
   type PolygonColorMode,
   type PolygonBufferOptions,
-} from './polygon-buffers';
+} from './polygon-buffers.js';
 import {
   createPolygonMaterial,
   updatePolygonUniforms,
   type PolygonMaterialBundle,
   type PolygonTimeMode,
-} from '../tsl/polygon-material';
+} from '../tsl/polygon-material.js';
 
 export interface PolygonLayerOptions extends ThreeTimeWindowOptions {
   id?: string;

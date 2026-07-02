@@ -11,7 +11,7 @@
  */
 
 import earcut from 'earcut';
-import type { BinaryFeatures } from '../types';
+import type { BinaryFeatures } from '../types.js';
 
 /** Dense source/target endpoint buffers derived from a tile's LineString features. */
 export interface SourceTargetPositions {

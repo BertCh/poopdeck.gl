@@ -17,17 +17,17 @@
  */
 
 // Backend capability descriptor (declare-and-prove).
-export { cesiumBackend } from './backend-descriptor';
+export { cesiumBackend } from './backend-descriptor.js';
 
 // The STT layers (browser — need a live Cesium Scene). Each is an
 // `SttRenderNode` built from the render kernel; the pure geometry/colour/
 // interpolation they consume is unit-tested (core + this package's lib/).
-export { CesiumPointLayer, type CesiumPointLayerOptions } from './cesium-point-layer';
-export { CesiumPathLayer, type CesiumPathLayerOptions } from './cesium-path-layer';
-export { CesiumArcLayer, type CesiumArcLayerOptions } from './cesium-arc-layer';
-export { CesiumTripsLayer, type CesiumTripsLayerOptions } from './cesium-trips-layer';
-export { CesiumTripHeadsLayer, type CesiumTripHeadsLayerOptions } from './cesium-trip-heads-layer';
-export { BatchedPolylineLayer, type BatchedPolylineOptions } from './batched-polyline-layer';
+export { CesiumPointLayer, type CesiumPointLayerOptions } from './cesium-point-layer.js';
+export { CesiumPathLayer, type CesiumPathLayerOptions } from './cesium-path-layer.js';
+export { CesiumArcLayer, type CesiumArcLayerOptions } from './cesium-arc-layer.js';
+export { CesiumTripsLayer, type CesiumTripsLayerOptions } from './cesium-trips-layer.js';
+export { CesiumTripHeadsLayer, type CesiumTripHeadsLayerOptions } from './cesium-trip-heads-layer.js';
+export { BatchedPolylineLayer, type BatchedPolylineOptions } from './batched-polyline-layer.js';
 
 // Pure builders (Cesium-free, unit-tested) behind the polyline layers.
 export {
@@ -38,8 +38,8 @@ export {
   type PolylineBuild,
   type PathBuildOptions,
   type ArcBuildOptions,
-} from './lib/polylines';
-export { featureColor, type FeatureColorMode } from './lib/feature-color';
+} from './lib/polylines.js';
+export { featureColor, type FeatureColorMode } from './lib/feature-color.js';
 
 // ViewState ⇄ Cesium camera bridge: pure math (camera) + the runtime applier.
 export {
@@ -48,13 +48,13 @@ export {
   type CesiumView,
   type CesiumViewOptions,
   type ResolvedViewState,
-} from './camera';
-export { applyViewStateToCamera } from './camera-apply';
+} from './camera.js';
+export { applyViewStateToCamera } from './camera-apply.js';
 
 // Render-loop clock bridge: drive the STT playhead from Cesium's render loop
 // (scene.preRender) instead of per-frame React state, and pump requestRender so
 // requestRenderMode idles when paused. READ-only — never advances the controller.
-export { attachCesiumClock, type PlayheadClock, type AttachCesiumClockOptions } from './cesium-clock';
+export { attachCesiumClock, type PlayheadClock, type AttachCesiumClockOptions } from './cesium-clock.js';
 
 // Generated GLSL time-filter alpha for a future Cesium GPU-appearance path.
-export { timeFilterAlphaGlsl } from './shaders';
+export { timeFilterAlphaGlsl } from './shaders.js';

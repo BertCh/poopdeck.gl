@@ -15,14 +15,14 @@
 
 import { Mesh, InstancedBufferAttribute, Box3, Vector3, Sphere } from 'three';
 import type { Tile } from '@poopdeck.gl/core';
-import { BaseSttLayer, type SttLayerContext } from './layer';
-import { makeHexDiskGeometry } from '../geometry/hex-disk';
-import { buildSurfelBuffers } from './surfel-buffers';
+import { BaseSttLayer, type SttLayerContext } from './layer.js';
+import { makeHexDiskGeometry } from '../geometry/hex-disk.js';
+import { buildSurfelBuffers } from './surfel-buffers.js';
 import {
   createSurfelMaterial,
   updateSurfelUniforms,
   type SurfelUniforms,
-} from '../tsl/surfel-material';
+} from '../tsl/surfel-material.js';
 import type { MeshBasicNodeMaterial } from 'three/webgpu';
 
 export interface SurfelLayerOptions {

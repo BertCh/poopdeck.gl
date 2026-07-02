@@ -32,7 +32,7 @@ import {
   type Texture,
   type ColorRepresentation,
 } from 'three';
-import type { GlobeProjection } from '../projection/globe';
+import type { GlobeProjection } from '../projection/globe.js';
 
 /** Inset factor so surface data (at exactly `radius`) doesn't z-fight the sphere. */
 export const GLOBE_BASEMAP_INSET = 0.999;

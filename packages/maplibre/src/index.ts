@@ -25,20 +25,20 @@
 export {
   STTPointLayer,
   type STTPointLayerOptions,
-} from './layers/point-layer';
+} from './layers/point-layer.js';
 export {
   STTLineLayer,
   type STTLineLayerOptions,
-} from './layers/line-layer';
+} from './layers/line-layer.js';
 export {
   STTPolygonLayer,
   type STTPolygonLayerOptions,
-} from './layers/polygon-layer';
-export { STTTripsLayer, type STTTripsLayerOptions } from './layers/trips-layer';
+} from './layers/polygon-layer.js';
+export { STTTripsLayer, type STTTripsLayerOptions } from './layers/trips-layer.js';
 export {
   STTHeatmapLayer,
   type STTHeatmapLayerOptions,
-} from './layers/heatmap-layer';
+} from './layers/heatmap-layer.js';
 export {
   STTBaseLayer,
   cssToDevicePixel,
@@ -48,8 +48,8 @@ export {
   type PickProvenanceEntry,
   type RGBA,
   type RGBA8,
-} from './base-layer';
-export { lngLatToMercator, projectPositions } from './lib/projection';
+} from './base-layer.js';
+export { lngLatToMercator, projectPositions } from './lib/projection.js';
 
 // Shared id-buffer picking result shape (see `STTBaseLayer.pick`). Re-exported
 // from the core picking kernel so consumers don't reach across packages.
@@ -57,9 +57,9 @@ export type { SttPickResult } from '@poopdeck.gl/core/picking';
 
 // Backend capability descriptor — what this adapter declares against the shared
 // `@poopdeck.gl/core/capabilities` vocabulary (renderer-abstraction Phase 5).
-export { maplibreBackend } from './backend-descriptor';
+export { maplibreBackend } from './backend-descriptor.js';
 
 // Backwards-compat alias for the 0.1.x scaffold, which only had a points
 // renderer named STTMaplibreLayer. New code should import STTPointLayer.
-export { STTPointLayer as STTMaplibreLayer } from './layers/point-layer';
-export type { STTPointLayerOptions as STTMaplibreLayerOptions } from './layers/point-layer';
+export { STTPointLayer as STTMaplibreLayer } from './layers/point-layer.js';
+export type { STTPointLayerOptions as STTMaplibreLayerOptions } from './layers/point-layer.js';

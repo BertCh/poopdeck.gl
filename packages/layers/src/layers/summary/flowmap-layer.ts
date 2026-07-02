@@ -42,13 +42,13 @@
 
 import { ScatterplotLayer } from '@deck.gl/layers';
 import type { Color, DefaultProps, Layer } from '@deck.gl/core';
-import { SpatioTemporalLayer, SpatioTemporalLayerProps } from '../spatiotemporal-layer';
-import { FlowLinesLayer } from '../internal/flow-lines-layer';
-import { deriveSourceTargetPositions } from '../../lib/od-positions';
-import { bucketBlendAt, blendMatrixRow } from '../../lib/vertex-value-blend';
-import { resolveAccessorAlias } from '../../lib/accessor-alias';
-import type { ColorAccessorValue } from '../../lib/accessor-alias';
-import { emit } from '../../lib/telemetry';
+import { SpatioTemporalLayer, SpatioTemporalLayerProps } from '../spatiotemporal-layer.js';
+import { FlowLinesLayer } from '../internal/flow-lines-layer.js';
+import { deriveSourceTargetPositions } from '../../lib/od-positions.js';
+import { bucketBlendAt, blendMatrixRow } from '../../lib/vertex-value-blend.js';
+import { resolveAccessorAlias } from '../../lib/accessor-alias.js';
+import type { ColorAccessorValue } from '../../lib/accessor-alias.js';
+import { emit } from '../../lib/telemetry.js';
 import type { Tile, Layer as TileLayer, BinaryFeatures } from '@poopdeck.gl/core';
 
 /** Props added by {@link FlowmapLayer} (own props only — compose with

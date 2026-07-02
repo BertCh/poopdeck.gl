@@ -13,16 +13,18 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "default": "./dist/index.js"
     },
     "./hover-preview": {
       "types": "./dist/hover-preview.d.ts",
-      "import": "./dist/hover-preview.js"
+      "default": "./dist/hover-preview.js"
     }
   },
   "files": [
     "dist",
     "src",
+    "!src/**/*.test.*",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "scripts": {
@@ -83,5 +85,8 @@
     "deck.gl"
   ],
   "author": "Robert Christie",
-  "license": "MIT"
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  }
 }

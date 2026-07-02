@@ -19,9 +19,9 @@ import type { Scene } from 'cesium';
 import type { Tile } from '@poopdeck.gl/core';
 import type { SttRenderNode } from '@poopdeck.gl/core/capabilities';
 import type { SttPickResult } from '@poopdeck.gl/core/picking';
-import { BatchedPolylineLayer, type BatchedPolylineOptions } from './batched-polyline-layer';
-import { buildArcPolylines } from './lib/polylines';
-import type { FeatureColorMode } from './lib/feature-color';
+import { BatchedPolylineLayer, type BatchedPolylineOptions } from './batched-polyline-layer.js';
+import { buildArcPolylines } from './lib/polylines.js';
+import type { FeatureColorMode } from './lib/feature-color.js';
 
 export interface CesiumArcLayerOptions extends Omit<BatchedPolylineOptions, 'arcType'> {
   id?: string;

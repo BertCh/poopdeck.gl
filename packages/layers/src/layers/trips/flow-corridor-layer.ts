@@ -33,9 +33,9 @@
 // not implemented.
 
 import type { DefaultProps } from '@deck.gl/core';
-import { AnimatedTripsLayer } from './animated-trips-layer';
-import type { AnimatedTripsLayerProps } from './animated-trips-layer';
-import { bucketBlendAt, blendMatrixRow } from '../../lib/vertex-value-blend';
+import { AnimatedTripsLayer } from './animated-trips-layer.js';
+import type { AnimatedTripsLayerProps } from './animated-trips-layer.js';
+import { bucketBlendAt, blendMatrixRow } from '../../lib/vertex-value-blend.js';
 import type { BinaryFeatures } from '@poopdeck.gl/core';
 
 /** Props added by {@link FlowCorridorLayer} (own props only — compose with

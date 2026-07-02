@@ -11,7 +11,7 @@
  * ~±2e7 → feed batches through {@link projectPositions} (RTC).
  */
 
-import { EARTH_RADIUS, type GeoAnchor, type LocalFrame, type Projection } from './local-enu';
+import { EARTH_RADIUS, type GeoAnchor, type LocalFrame, type Projection } from './local-enu.js';
 
 const DEG2RAD = Math.PI / 180;
 const RAD2DEG = 180 / Math.PI;

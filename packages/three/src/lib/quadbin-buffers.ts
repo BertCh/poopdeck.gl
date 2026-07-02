@@ -25,9 +25,9 @@
  */
 
 import type { BinaryFeatures, Tile } from '@poopdeck.gl/core';
-import { cellBoundsFromTile } from './quadbin-cell';
-import type { Projection } from '../projection/local-enu';
-import type { RGBA } from './color';
+import { cellBoundsFromTile } from './quadbin-cell.js';
+import type { Projection } from '../projection/local-enu.js';
+import type { RGBA } from './color.js';
 
 /** Default 6-stop low→high ramp (mirrors the deck layer's DEFAULT_COLOR_RANGE). */
 export const DEFAULT_QUADBIN_COLOR_RANGE: RGBA[] = [

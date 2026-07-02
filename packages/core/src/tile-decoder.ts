@@ -14,11 +14,11 @@
  * which is a full frame budget gone.
  */
 
-import { decompress } from './compression';
-import { decodeTile } from './tile';
-import { emit as emitTelemetry } from './telemetry';
-import { createCancellationError } from './request-scheduler';
-import type { Compression, Tile, TileId, TimeRange } from './types';
+import { decompress } from './compression.js';
+import { decodeTile } from './tile.js';
+import { emit as emitTelemetry } from './telemetry.js';
+import { createCancellationError } from './request-scheduler.js';
+import type { Compression, Tile, TileId, TimeRange } from './types.js';
 
 /** A single decode request. Compressed bytes are owned by the caller. */
 export interface DecodeArgs {

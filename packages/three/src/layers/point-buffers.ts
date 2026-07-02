@@ -12,7 +12,7 @@
 import type { BinaryFeatures, Tile, TileId } from '@poopdeck.gl/core';
 import { GeometryType } from '@poopdeck.gl/core';
 import { InstanceProvenance } from '@poopdeck.gl/core/picking';
-import type { Projection } from '../projection/local-enu';
+import type { Projection } from '../projection/local-enu.js';
 import {
   expandCategoricalColors,
   expandRgbColumns,
@@ -20,7 +20,7 @@ import {
   type CategoricalColorSpec,
   type RampColorSpec,
   type RGBA,
-} from '../lib/color';
+} from '../lib/color.js';
 
 export type PointColorMode =
   | { type: 'rgb'; columns: [string, string, string]; alpha?: number }

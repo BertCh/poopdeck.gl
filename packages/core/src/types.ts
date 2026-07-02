@@ -357,7 +357,7 @@ export interface Layer {
    * The original Arrow {@link import('apache-arrow').Table} the layer was
    * decoded from — already a valid GeoArrow record batch. Held so callers
    * can hand it straight to `@geoarrow/deck.gl-layers` (see
-   * {@link import('./tile').toGeoArrowTable}) without re-encoding the
+   * {@link import('./tile.js').toGeoArrowTable}) without re-encoding the
    * typed arrays in {@link BinaryFeatures}.
    *
    * Optional because the worker-pool decoder strips `arrowTable` before
@@ -480,7 +480,7 @@ export interface ArchiveOptions {
    * SSR). Pass an InlineTileDecoder to force inline decoding even in the
    * browser — useful for debugging or environments that block workers.
    */
-  decoder?: import('./tile-decoder').TileDecoder;
+  decoder?: import('./tile-decoder.js').TileDecoder;
   /**
    * Enable the OPFS-backed persistent tile cache. Defaults to `true` in
    * environments that expose `navigator.storage.getDirectory` (modern
@@ -508,7 +508,7 @@ export interface ArchiveOptions {
    * here; production code should leave this unset and let `STTArchive`
    * construct the real one.
    */
-  opfsCacheImpl?: import('./opfs-cache').OpfsTileCache;
+  opfsCacheImpl?: import('./opfs-cache.js').OpfsTileCache;
   /**
    * Max gap (bytes) between two tile byte-ranges that `getTiles` will still
    * bridge into ONE coalesced HTTP range request. Over-fetching the gap

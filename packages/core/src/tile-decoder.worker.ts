@@ -19,10 +19,10 @@
 
 /// <reference lib="webworker" />
 
-import { decompress } from './compression';
-import { decodeTile } from './tile';
-import { collectTransferables } from './tile-transferables';
-import type { Compression, Tile, TileId, TimeRange } from './types';
+import { decompress } from './compression.js';
+import { decodeTile } from './tile.js';
+import { collectTransferables } from './tile-transferables.js';
+import type { Compression, Tile, TileId, TimeRange } from './types.js';
 
 interface DecodeRequest {
   type: 'decode';

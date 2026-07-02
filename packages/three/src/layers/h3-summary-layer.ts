@@ -35,13 +35,13 @@ import {
   Sphere,
 } from 'three';
 import type { Tile } from '@poopdeck.gl/core';
-import { BaseSttLayer, type SttLayerContext } from './layer';
+import { BaseSttLayer, type SttLayerContext } from './layer.js';
 import {
   buildH3Buffers,
   DEFAULT_H3_COLOR_RANGE,
   type H3BufferOptions,
-} from '../lib/h3-buffers';
-import type { RGBA } from '../lib/color';
+} from '../lib/h3-buffers.js';
+import type { RGBA } from '../lib/color.js';
 
 export interface H3SummaryLayerOptions {
   id?: string;

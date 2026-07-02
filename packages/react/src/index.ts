@@ -9,27 +9,27 @@
  *   - usePlayback         wire a TimeController + PlaybackGovernor into React
  *   - usePlaybackHotkeys  standard video-player keyboard map
  *   - PlaybackControls    transport bar + scrubber + density strip + speed
- *   - HoverPreview        YouTube-style scrubber hover thumbnail (deck.gl)
+ *
+ * HoverPreview (YouTube-style scrubber hover thumbnail) lives on the
+ * `@poopdeck.gl/react/hover-preview` subpath because it value-imports the
+ * OPTIONAL `@deck.gl/react` / `@deck.gl/core` peers — keeping it out of this
+ * barrel lets the base package import (and typecheck) without deck.gl.
  *
  * Components are styled with standard Tailwind utility classes; consumers
  * supply their own Tailwind build (or override via `className`).
  */
 
 // Hooks (zero rendering deps — only @poopdeck.gl/playback + react).
-export { usePlayback } from "./hooks/use-playback";
+export { usePlayback } from "./hooks/use-playback.js";
 export type {
   UsePlaybackOptions,
   PlaybackState,
   SourceRegistry,
-} from "./hooks/use-playback";
-export { usePlaybackHotkeys } from "./hooks/use-playback-hotkeys";
-export { useDeckClock } from "./hooks/use-deck-clock";
-export type { DeckClockProps } from "./hooks/use-deck-clock";
+} from "./hooks/use-playback.js";
+export { usePlaybackHotkeys } from "./hooks/use-playback-hotkeys.js";
+export { useDeckClock } from "./hooks/use-deck-clock.js";
+export type { DeckClockProps } from "./hooks/use-deck-clock.js";
 
 // Transport-bar UI (react only).
-export { PlaybackControls } from "./components/PlaybackControls";
-export type { PlaybackControlsProps } from "./components/PlaybackControls";
-
-// Scrubber hover thumbnail (requires the @deck.gl/core + @deck.gl/react peers).
-export { HoverPreview } from "./components/HoverPreview";
-export type { HoverPreviewProps } from "./components/HoverPreview";
+export { PlaybackControls } from "./components/PlaybackControls.js";
+export type { PlaybackControlsProps } from "./components/PlaybackControls.js";

@@ -32,9 +32,9 @@
 
 import { ScatterplotLayer } from '@deck.gl/layers';
 import type { Color, DefaultProps, Layer, LayerContext } from '@deck.gl/core';
-import { SpatioTemporalLayer, SpatioTemporalLayerProps } from '../spatiotemporal-layer';
-import { synthesizeVertexTimes } from './animated-trips-layer';
-import { emit } from '../../lib/telemetry';
+import { SpatioTemporalLayer, SpatioTemporalLayerProps } from '../spatiotemporal-layer.js';
+import { synthesizeVertexTimes } from './animated-trips-layer.js';
+import { emit } from '../../lib/telemetry.js';
 import type { Tile, Layer as TileLayer, BinaryFeatures } from '@poopdeck.gl/core';
 
 const DEBUG = false;

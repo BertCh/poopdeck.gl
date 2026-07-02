@@ -12,27 +12,27 @@
 
 import { Mesh, InstancedBufferAttribute, Box3, Vector3, Sphere } from 'three';
 import type { BinaryFeatures, Tile } from '@poopdeck.gl/core';
-import { BaseSttLayer, type SttLayerContext } from './layer';
-import { resolveTimeWindow, type ThreeTimeWindowOptions } from '../lib/time-window';
-import { makeBillboardQuadGeometry } from '../geometry/billboard-quad';
-import { buildPointBuffers, type PointColorMode } from './point-buffers';
+import { BaseSttLayer, type SttLayerContext } from './layer.js';
+import { resolveTimeWindow, type ThreeTimeWindowOptions } from '../lib/time-window.js';
+import { makeBillboardQuadGeometry } from '../geometry/billboard-quad.js';
+import { buildPointBuffers, type PointColorMode } from './point-buffers.js';
 import {
   createPointMaterial,
   createPointIdMaterial,
   updatePointUniforms,
   type PointMaterialBundle,
   type PointSizeUnits,
-} from '../tsl/point-material';
-import type { TimeFilterMode } from '../tsl/time-filter-math';
+} from '../tsl/point-material.js';
+import type { TimeFilterMode } from '../tsl/time-filter-math.js';
 import { DEFAULT_WAKE_TAIL_SCALE } from '@poopdeck.gl/core/time-filter';
 import {
   InstanceProvenance,
   buildIdColors,
   type SttPickResult,
 } from '@poopdeck.gl/core/picking';
-import { resolvePointPick } from '../lib/point-pick';
-import type { GpuPicker } from '../lib/gpu-pick';
-import type { RGBA } from '../lib/color';
+import { resolvePointPick } from '../lib/point-pick.js';
+import type { GpuPicker } from '../lib/gpu-pick.js';
+import type { RGBA } from '../lib/color.js';
 
 export interface PointCloudLayerOptions extends ThreeTimeWindowOptions {
   id?: string;

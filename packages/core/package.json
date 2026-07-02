@@ -13,57 +13,59 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "default": "./dist/index.js"
     },
     "./time-filter": {
       "types": "./dist/render/time-filter.d.ts",
-      "import": "./dist/render/time-filter.js"
+      "default": "./dist/render/time-filter.js"
     },
     "./style": {
       "types": "./dist/render/style.d.ts",
-      "import": "./dist/render/style.js"
+      "default": "./dist/render/style.js"
     },
     "./geometry": {
       "types": "./dist/render/geometry.d.ts",
-      "import": "./dist/render/geometry.js"
+      "default": "./dist/render/geometry.js"
     },
     "./trips": {
       "types": "./dist/render/trips.d.ts",
-      "import": "./dist/render/trips.js"
+      "default": "./dist/render/trips.js"
     },
     "./shader-codegen": {
       "types": "./dist/render/shader-codegen.d.ts",
-      "import": "./dist/render/shader-codegen.js"
+      "default": "./dist/render/shader-codegen.js"
     },
     "./geo": {
       "types": "./dist/geo/index.d.ts",
-      "import": "./dist/geo/index.js"
+      "default": "./dist/geo/index.js"
     },
     "./picking": {
       "types": "./dist/render/picking.d.ts",
-      "import": "./dist/render/picking.js"
+      "default": "./dist/render/picking.js"
     },
     "./tileset-adapter": {
       "types": "./dist/render/tileset-adapter.d.ts",
-      "import": "./dist/render/tileset-adapter.js"
+      "default": "./dist/render/tileset-adapter.js"
     },
     "./capabilities": {
       "types": "./dist/render/capabilities.d.ts",
-      "import": "./dist/render/capabilities.js"
+      "default": "./dist/render/capabilities.js"
     },
     "./capabilities-doc": {
       "types": "./dist/render/capabilities-doc.d.ts",
-      "import": "./dist/render/capabilities-doc.js"
+      "default": "./dist/render/capabilities-doc.js"
     }
   },
   "files": [
     "dist",
     "src",
+    "!src/**/*.test.*",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "scripts": {
     "build": "tsc && pnpm run build:worker",
-    "build:worker": "esbuild src/tile-decoder.worker.ts --bundle --format=esm --platform=browser --target=esnext --outfile=dist/tile-decoder.worker.js",
+    "build:worker": "esbuild src/tile-decoder.worker.ts --bundle --format=esm --platform=browser --target=esnext --sourcemap --outfile=dist/tile-decoder.worker.js",
     "prepublishOnly": "pnpm run build",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -96,5 +98,8 @@
     "geospatial"
   ],
   "author": "Robert Christie",
-  "license": "MIT"
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  }
 }

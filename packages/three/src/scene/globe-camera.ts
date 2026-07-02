@@ -13,8 +13,8 @@
  */
 
 import { PerspectiveCamera, Vector3 } from 'three';
-import { EARTH_RADIUS } from '../projection/local-enu';
-import { GlobeProjection } from '../projection/globe';
+import { EARTH_RADIUS } from '../projection/local-enu.js';
+import { GlobeProjection } from '../projection/globe.js';
 
 export interface FrameGlobeOptions {
   /** Camera distance from the globe centre, in sphere radii. @default 3 */

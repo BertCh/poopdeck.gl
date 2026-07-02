@@ -21,12 +21,12 @@
  */
 
 // The wall-clock × speed clock.
-export { TimeController } from './time-controller';
-export type { TimeControllerOptions, TimeControllerState } from './time-controller';
+export { TimeController } from './time-controller.js';
+export type { TimeControllerOptions, TimeControllerState } from './time-controller.js';
 
 // Playback buffering governor — the state machine between user intent and the
 // TimeController that gates play/resume/seek on the buffered runway.
-export { PlaybackGovernor } from './playback-governor';
+export { PlaybackGovernor } from './playback-governor.js';
 export type {
   BufferSource,
   BufferedRunway,
@@ -39,19 +39,19 @@ export type {
   PlaybackQoeStats,
   SourceRunway,
   ThroughputEstimate,
-} from './playback-governor';
+} from './playback-governor.js';
 
 // Auto-speed step decision (asymmetric ABR: immediate downshifts, damped
 // upshifts) shared by every consumer of getAutoSpeedSuggestion.
-export { decideAutoSpeedMultiplier, SPEED_STEPS } from './auto-speed';
-export type { AutoSpeedDecisionOptions, AutoSpeedPhase } from './auto-speed';
+export { decideAutoSpeedMultiplier, SPEED_STEPS } from './auto-speed.js';
+export type { AutoSpeedDecisionOptions, AutoSpeedPhase } from './auto-speed.js';
 
 // SttPlayer — the HTMLMediaElement-shaped facade over TimeController +
 // PlaybackGovernor: the recommended single entry point. Owns the
 // baseRate × playbackRate speed model and the throttled 'timeupdate' cadence.
-export { SttPlayer } from './stt-player';
+export { SttPlayer } from './stt-player.js';
 export type {
   SttPlayerEventMap,
   SttPlayerEventName,
   SttPlayerOptions,
-} from './stt-player';
+} from './stt-player.js';

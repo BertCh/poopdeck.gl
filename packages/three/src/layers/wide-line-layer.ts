@@ -17,20 +17,20 @@
 
 import { Mesh, InstancedBufferAttribute, Box3, Vector3, Sphere } from 'three';
 import type { Tile } from '@poopdeck.gl/core';
-import { BaseSttLayer, type SttLayerContext } from './layer';
-import { resolveTimeWindow, type ThreeTimeWindowOptions } from '../lib/time-window';
-import { makeSegmentQuadGeometry } from '../geometry/segment-quad';
+import { BaseSttLayer, type SttLayerContext } from './layer.js';
+import { resolveTimeWindow, type ThreeTimeWindowOptions } from '../lib/time-window.js';
+import { makeSegmentQuadGeometry } from '../geometry/segment-quad.js';
 import {
   buildLineSegmentBuffers,
   type LineColorMode,
   type LineSegmentBufferOptions,
-} from '../lib/geo-line-buffers';
+} from '../lib/geo-line-buffers.js';
 import {
   createWideLineMaterial,
   updateWideLineUniforms,
   type WideLineMaterialBundle,
   type WideLineMode,
-} from '../tsl/wide-line-material';
+} from '../tsl/wide-line-material.js';
 
 export interface WideLineLayerOptions extends ThreeTimeWindowOptions {
   id?: string;

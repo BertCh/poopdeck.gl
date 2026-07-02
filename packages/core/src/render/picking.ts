@@ -13,7 +13,7 @@
  * `@poopdeck.gl/core`.
  */
 
-import type { TileId } from '../types';
+import type { TileId } from '../types.js';
 
 /** Max feature index representable in 24 bits (inclusive). */
 export const MAX_PICK_ID = 0xffffff; // 16,777,215

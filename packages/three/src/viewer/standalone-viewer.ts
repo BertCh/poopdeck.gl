@@ -17,14 +17,14 @@
 import { Scene, PerspectiveCamera, Vector3, Color, AxesHelper } from 'three';
 import { WebGPURenderer } from 'three/webgpu';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import type { SttScene } from '../scene/stt-three-scene';
-import type { EgoLayer } from '../layers/ego-layer';
-import { frameBox } from '../scene/camera';
+import type { SttScene } from '../scene/stt-three-scene.js';
+import type { EgoLayer } from '../layers/ego-layer.js';
+import { frameBox } from '../scene/camera.js';
 import {
   createHighLimitDevice,
   resolveBackend,
   type RendererBackend,
-} from '../renderer/webgpu-renderer';
+} from '../renderer/webgpu-renderer.js';
 
 export interface StandaloneViewerOptions {
   /** Playback clock — absolute playhead in epoch-ms each frame. */

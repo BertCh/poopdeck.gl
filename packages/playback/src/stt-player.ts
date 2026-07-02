@@ -31,7 +31,7 @@
  * driver; layers only READ the clock.
  */
 
-import { TimeController } from './time-controller';
+import { TimeController } from './time-controller.js';
 import {
   PlaybackGovernor,
   type BufferSource,
@@ -40,7 +40,7 @@ import {
   type GovernorWaitingEvent,
   type PlaybackGovernorOptions,
   type PlaybackGovernorState,
-} from './playback-governor';
+} from './playback-governor.js';
 
 export interface SttPlayerOptions {
   /** The dataset's time range (absolute sim-ms). Drives `duration`/`seekable`. */

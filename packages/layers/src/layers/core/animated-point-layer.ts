@@ -56,24 +56,24 @@ import {
   SpatioTemporalLayer,
   SpatioTemporalLayerProps,
   SpatioTemporalPickingInfo,
-} from '../spatiotemporal-layer';
-import { TimeFilterExtension } from '../../extensions/time-filter-extension';
-import { SplatExtension } from '../../extensions/splat-extension';
+} from '../spatiotemporal-layer.js';
+import { TimeFilterExtension } from '../../extensions/time-filter-extension.js';
+import { SplatExtension } from '../../extensions/splat-extension.js';
 import {
   CategoryColorExtension,
   CATEGORY_PALETTE_SIZE,
-} from '../../extensions/category-color-extension';
-import { emit } from '../../lib/telemetry';
-import { warnOnce } from '../../lib/log';
+} from '../../extensions/category-color-extension.js';
+import { emit } from '../../lib/telemetry.js';
+import { warnOnce } from '../../lib/log.js';
 import {
   colorListDigest,
   colorMappingDigest,
   functionId,
   inheritedPropsDigest,
   updateTriggersDigest,
-} from '../../lib/style-digest';
-import { resolveAccessorAlias } from '../../lib/accessor-alias';
-import type { ColorAccessorValue, NumericAccessorValue } from '../../lib/accessor-alias';
+} from '../../lib/style-digest.js';
+import { resolveAccessorAlias } from '../../lib/accessor-alias.js';
+import type { ColorAccessorValue, NumericAccessorValue } from '../../lib/accessor-alias.js';
 import { getFeatureProperties, DEFAULT_CATEGORICAL_PALETTE } from '@poopdeck.gl/core';
 import type { Tile, TileId, Layer as TileLayer, BinaryFeatures } from '@poopdeck.gl/core';
 import { expandCategoricalColors as coreExpandCategoricalColors } from '@poopdeck.gl/core/style';

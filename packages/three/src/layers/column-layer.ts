@@ -20,20 +20,20 @@
 
 import { Mesh, InstancedBufferAttribute, Box3, Vector3, Sphere } from 'three';
 import type { Tile } from '@poopdeck.gl/core';
-import { BaseSttLayer, type SttLayerContext } from './layer';
-import { resolveTimeWindow, type ThreeTimeWindowOptions } from '../lib/time-window';
-import { makeColumnPrismGeometry } from '../geometry/column-prism';
+import { BaseSttLayer, type SttLayerContext } from './layer.js';
+import { resolveTimeWindow, type ThreeTimeWindowOptions } from '../lib/time-window.js';
+import { makeColumnPrismGeometry } from '../geometry/column-prism.js';
 import {
   buildColumnBuffers,
   type ColumnColorMode,
   type ColumnBufferOptions,
-} from '../lib/column-buffers';
+} from '../lib/column-buffers.js';
 import {
   createColumnMaterial,
   updateColumnUniforms,
   type ColumnMaterialBundle,
-} from '../tsl/column-material';
-import type { TimeFilterParams } from '../tsl/time-filter-math';
+} from '../tsl/column-material.js';
+import type { TimeFilterParams } from '../tsl/time-filter-math.js';
 
 export interface ColumnLayerOptions extends ThreeTimeWindowOptions {
   id?: string;

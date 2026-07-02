@@ -55,7 +55,7 @@ import {
   modelViewMatrix,
   cameraProjectionMatrix,
   type UniformNode,
-} from './nodes';
+} from './nodes.js';
 
 export interface FlowArrowMaterialOptions {
   /** Additive blending (glowing flows) vs normal alpha. @default false */

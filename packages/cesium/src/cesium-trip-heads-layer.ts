@@ -30,7 +30,7 @@ import { buildTripIndex, sampleHead, type Trip } from '@poopdeck.gl/core/trips';
 import type { RGBA255 } from '@poopdeck.gl/core/style';
 import type { SttRenderNode } from '@poopdeck.gl/core/capabilities';
 import type { SttPickResult } from '@poopdeck.gl/core/picking';
-import { featureColor, type FeatureColorMode } from './lib/feature-color';
+import { featureColor, type FeatureColorMode } from './lib/feature-color.js';
 
 export interface CesiumTripHeadsLayerOptions {
   id?: string;

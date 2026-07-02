@@ -43,7 +43,7 @@ import {
   MAX_PICK_ID,
   type SttPickResult,
 } from '@poopdeck.gl/core/picking';
-import { projectPositions, quantizePositionsToUint16 } from './lib/projection';
+import { projectPositions, quantizePositionsToUint16 } from './lib/projection.js';
 
 /** RGBA tuple in the 0–1 range used by all STT shader uniforms. */
 export type RGBA = [number, number, number, number];

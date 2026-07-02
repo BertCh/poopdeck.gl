@@ -18,17 +18,17 @@ export {
   type LocalFrame,
   type Projection,
   type ProjectedPositions,
-} from './local-enu';
-export { MercatorProjection, MAX_MERCATOR_LAT } from './mercator';
+} from './local-enu.js';
+export { MercatorProjection, MAX_MERCATOR_LAT } from './mercator.js';
 export {
   GlobeProjection,
   type GlobeDatum,
   type GlobeProjectionOptions,
-} from './globe';
+} from './globe.js';
 export {
   TILE_SIZE,
   WORLD_CIRCUMFERENCE,
   worldUnitsPerPixel,
   zoomForWorldUnitsPerPixel,
   type ViewState,
-} from './view-state';
+} from './view-state.js';

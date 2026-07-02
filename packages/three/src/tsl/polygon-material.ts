@@ -22,10 +22,10 @@
 
 import { MeshBasicNodeMaterial } from 'three/webgpu';
 import { DoubleSide, NormalBlending } from 'three';
-import { attribute, varying, uniform, float } from './nodes';
-import type { UniformNode } from './nodes';
-import { TimeFilterUniforms, windowAlphaNode, updateTimeFilterUniforms } from './time-filter';
-import type { TimeFilterParams } from './time-filter-math';
+import { attribute, varying, uniform, float } from './nodes.js';
+import type { UniformNode } from './nodes.js';
+import { TimeFilterUniforms, windowAlphaNode, updateTimeFilterUniforms } from './time-filter.js';
+import type { TimeFilterParams } from './time-filter-math.js';
 
 export type PolygonTimeMode = 'window' | 'none';
 

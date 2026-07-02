@@ -53,8 +53,8 @@ import type {
   UpdateParameters,
 } from '@deck.gl/core';
 import type { Device, Texture } from '@luma.gl/core';
-import { colorListDigest } from '../lib/style-digest';
-import { warnOnce } from '../lib/log';
+import { colorListDigest } from '../lib/style-digest.js';
+import { warnOnce } from '../lib/log.js';
 
 /**
  * Width of the palette texture. The bump from 256 to 4096 covers real-world

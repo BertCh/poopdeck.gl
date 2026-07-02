@@ -60,11 +60,11 @@ import type {
 import {
   SpatioTemporalLayer,
   type SpatioTemporalLayerProps,
-} from '../spatiotemporal-layer';
-import { warnOnce } from '../../lib/log';
-import { updateTriggersDigest } from '../../lib/style-digest';
-import { resolveAccessorAlias } from '../../lib/accessor-alias';
-import type { WeightAccessorValue } from '../../lib/accessor-alias';
+} from '../spatiotemporal-layer.js';
+import { warnOnce } from '../../lib/log.js';
+import { updateTriggersDigest } from '../../lib/style-digest.js';
+import { resolveAccessorAlias } from '../../lib/accessor-alias.js';
+import type { WeightAccessorValue } from '../../lib/accessor-alias.js';
 import { DEFAULT_HEATMAP_COLOR_RANGE } from '@poopdeck.gl/core';
 import type { Tile } from '@poopdeck.gl/core';
 
