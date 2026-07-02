@@ -6,7 +6,7 @@
   "description": "Interactive showcase for SpatioTemporal Tiles",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "build": "NODE_OPTIONS=--max-old-space-size=6144 tsc --noEmit && NODE_OPTIONS=--max-old-space-size=6144 vite build",
     "preview": "vite preview",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
