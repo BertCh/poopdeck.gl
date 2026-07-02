@@ -4122,13 +4122,13 @@ const rawDatasets: Dataset[] = [
 // scene: same framing/streams, but the bundle path is `<id>-splat` and the RGB +
 // splat flags are flipped on. Add a base id here once its `-splat` bundle is built.
 const COLORED_SPLAT_BASE_IDS = new Set<string>([
-  // nuScenes (6 cameras, full 360°) — colored bundles built with --colorize.
-  'nuscenes-0061', 'nuscenes-0103', 'nuscenes-0553', 'nuscenes-0655',
-  'nuscenes-0757', 'nuscenes-0796', 'nuscenes-0916', 'nuscenes-1077',
-  'nuscenes-1094', 'nuscenes-1100',
   // Argoverse 2 (7 ring cameras) — colored bundles built with --colorize.
   'argoverse-02678d04', 'argoverse-02a00399', 'argoverse-0b5142c1',
   'argoverse-0bae3b5e', 'argoverse-25e5c600', 'argoverse-92b900b1',
+  // nuScenes is NOT here: its `-splat` bundles were never built (no local dir,
+  // nothing on R2), so listing it registered 10 scene-switcher entries whose
+  // manifests 404'd everywhere. Build the bundles (--colorize) and sync them
+  // before re-adding the ids.
 ]);
 
 function makeColoredSplatVariant(base: Dataset): Dataset {
@@ -4254,24 +4254,17 @@ const HELD_BACK_AV_MODES = /-(scan|world)$/;
 // filtered on the remote deploy even though the Argoverse `-stage` mode shipped.
 const WAYMO_LOCAL_ONLY = /^waymo-/;
 
-// Datasets whose tiles exist ONLY in the local `public/data` tree — built and
-// registered, but never R2-synced (their remote manifests 404):
-//   • the 6 Argoverse `-lod` zoom-LOD variants (the Waymo `-lod` variants are
-//     already caught by WAYMO_LOCAL_ONLY above);
-//   • the newer BIXI demos (streets-flow / corridors / points / live).
-// Same mechanism as the Waymo gate: fully reachable in local dev (which serves
-// `public/data` directly), filtered whenever tiles are served remotely so the
-// public site never links (and 404s) them. Remove an id from this pattern
-// after its archives are actually synced to R2.
-const LOCAL_ONLY_DATASETS =
-  /^(?:argoverse-.+-lod|bixi-streets-flow|bixi-corridors|bixi-points|bixi-live)$/;
-
+// (2026-07-02) The former LOCAL_ONLY_DATASETS gate is gone: the 6 Argoverse
+// `-lod` zoom-LOD bundles and the newer BIXI demos (streets-flow / corridors /
+// points / live) are now R2-synced, so every registered non-Waymo dataset
+// resolves remotely. If a future dataset is registered before its archives are
+// synced, reintroduce the gate: filter its id whenever DATA_IS_REMOTE so the
+// public site never links (and 404s) it.
 const DATA_IS_REMOTE = DATA_BASE_URL !== '';
 
 export const datasets: Dataset[] = [...rawDatasets, ...coloredSplatVariants, ...stageVariants]
   .filter((d) => !HELD_BACK_AV_MODES.test(d.id))
   .filter((d) => !(DATA_IS_REMOTE && WAYMO_LOCAL_ONLY.test(d.id)))
-  .filter((d) => !(DATA_IS_REMOTE && LOCAL_ONLY_DATASETS.test(d.id)))
   .map((d) => ({
   ...d,
   url: resolveDataUrl(d.url),
