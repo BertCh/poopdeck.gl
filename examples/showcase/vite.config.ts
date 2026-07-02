@@ -47,6 +47,12 @@ function excludeUnusedPublicFiles(): Plugin {
             if (rel === 'data') skipped.push('data/ (entire tree)');
             return false;
           }
+          // Same for the repack-publish-all.sh STAGING tree (data-publish/):
+          // local-only, multi-GB, and full of >25 MiB packs.
+          if (rel === 'data-publish' || rel.startsWith('data-publish/')) {
+            if (rel === 'data-publish') skipped.push('data-publish/ (entire tree)');
+            return false;
+          }
           // Tile archives (.stt) and intermediate build artifacts (.parquet) are
           // served from R2 (VITE_DATA_BASE_URL), never from the site origin, and
           // far exceed Cloudflare's 25 MiB-per-asset deploy limit — keep them out
