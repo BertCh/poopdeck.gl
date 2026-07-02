@@ -5,7 +5,7 @@
 /**
  * SharedRequestScheduler — a process-shareable request budget allocator for
  * compositing N heterogeneous STT sources (multi-source coordination, Phase 2;
- * see docs/roadmap/multi-source-coordination.md §2.8 / §5 Phase 2).
+ * see docs/roadmap/playback-and-loading.md §4–5).
  *
  * THE PROBLEM. A story or demo may composite several STT datasets of arbitrary,
  * mixed intensity. Today each `STTArchive` runs its own pool of up to 24

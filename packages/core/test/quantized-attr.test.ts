@@ -12,7 +12,7 @@
  * emits and prove the decoder inverts it.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   Field,
   FixedSizeList,
@@ -56,6 +56,7 @@ function buildPointTileWithQuantZ(
   zq: number[],
   o: number,
   s: number,
+  qaRaw?: string,
 ): Uint8Array {
   const featureCount = coords.length / 2;
   const coordValues = makeData({ type: new Float64(), data: Float64Array.from(coords) });
@@ -96,7 +97,7 @@ function buildPointTileWithQuantZ(
       false,
       new Map([['ARROW:extension:name', 'geoarrow.point']]),
     ),
-    new Field('z', new Uint16(), true, new Map([['stt:qa', JSON.stringify({ o, s })]])),
+    new Field('z', new Uint16(), true, new Map([['stt:qa', qaRaw ?? JSON.stringify({ o, s })]])),
   ];
   const schema = new Schema(fields, new Map([['stt:geometry', 'geoarrow.point']]));
   const structData = makeData({
@@ -123,6 +124,25 @@ describe('numeric attribute quantization decode', () => {
     expect(f.numericProps.z).toBeInstanceOf(Float32Array);
     for (let i = 0; i < real.length; i++) {
       expect(f.numericProps.z[i]).toBeCloseTo(real[i], 5);
+    }
+  });
+
+  it('warns ONCE on a malformed stt:qa affine, then falls back to raw ints', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const zq = [3, 7, 11];
+      const coords = [0, 0, 1, 1, 2, 2];
+      const decode = () =>
+        decodeTile(buildPointTileWithQuantZ(coords, zq, 0, 1, '{not json'), tileId);
+      const f = decode().layers[0].features;
+      // Fallback: identity affine (o=0, s=1) — raw fixed-point values.
+      expect(Array.from(f.numericProps.z)).toEqual(zq);
+      // A corrupt archive decodes many tiles — the warning must not repeat.
+      decode();
+      const qaWarns = warn.mock.calls.filter((c) => String(c[0]).includes('stt:qa'));
+      expect(qaWarns).toHaveLength(1);
+    } finally {
+      warn.mockRestore();
     }
   });
 });

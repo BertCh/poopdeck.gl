@@ -26,6 +26,18 @@ export interface DecodeArgs {
   timeRange: TimeRange;
   compressed: ArrayBuffer;
   compression: Compression;
+  /**
+   * Optional abort signal. `WorkerTileDecoder` honors it two ways: aborted
+   * before dispatch, the decode is rejected without ever touching a worker;
+   * aborted mid-flight, the pending promise rejects immediately (freeing the
+   * caller) AND a `{type:'cancel'}` message tells the owning worker to skip
+   * the (comparatively expensive) Arrow IPC parse for a request it hasn't
+   * reached yet — so a tile that scrolled off-screen mid-decode doesn't keep
+   * the small worker pool busy on wasted work. `InlineTileDecoder` only
+   * checks it before starting (no natural mid-decode interruption point on
+   * the fallback path).
+   */
+  signal?: AbortSignal;
 }
 
 export interface TileDecoder {
@@ -38,7 +50,10 @@ export interface TileDecoder {
  * default in Node and as the fallback in browsers when a worker can't start.
  */
 export class InlineTileDecoder implements TileDecoder {
-  async decode({ id, timeRange, compressed, compression }: DecodeArgs): Promise<Tile> {
+  async decode({ id, timeRange, compressed, compression, signal }: DecodeArgs): Promise<Tile> {
+    if (signal?.aborted) {
+      throw createCancellationError('Tile decode cancelled before dispatch');
+    }
     const t0 = typeof performance !== 'undefined' ? performance.now() : Date.now();
     const payload = await decompress(new Uint8Array(compressed), compression);
     const tDecompress = typeof performance !== 'undefined' ? performance.now() : Date.now();
@@ -133,6 +148,9 @@ export class WorkerTileDecoder implements TileDecoder {
     if (this.disposed) {
       return Promise.reject(new Error('WorkerTileDecoder has been finalized'));
     }
+    if (args.signal?.aborted) {
+      return Promise.reject(createCancellationError('Tile decode cancelled before dispatch'));
+    }
     const requestId = this.nextRequestId++;
 
     // Pick the worker with the smallest pending queue. With pool sizes ≤ 4
@@ -159,8 +177,18 @@ export class WorkerTileDecoder implements TileDecoder {
     const tileKey = `${args.id.z}/${args.id.x}/${args.id.y}/${args.id.t}`;
 
     return new Promise<Tile>((resolve, reject) => {
+      // Detach the abort listener on every settlement path (normal
+      // resolve/reject via handleMessage/handleWorkerError/finalize, or the
+      // abort path itself) so a long-lived shared signal (e.g. one
+      // AbortController covering a whole batch fetch) never accumulates a
+      // listener per tile for the life of the signal.
+      let onAbort: (() => void) | undefined;
+      const detachAbort = (): void => {
+        if (onAbort && args.signal) args.signal.removeEventListener('abort', onAbort);
+      };
       this.pending.set(requestId, {
         resolve: (tile) => {
+          detachAbort();
           owner.pending = Math.max(0, owner.pending - 1);
           owner.inFlight.delete(requestId);
           this.requestOwner.delete(requestId);
@@ -175,14 +203,31 @@ export class WorkerTileDecoder implements TileDecoder {
           resolve(tile);
         },
         reject: (err) => {
+          detachAbort();
           owner.pending = Math.max(0, owner.pending - 1);
           owner.inFlight.delete(requestId);
           this.requestOwner.delete(requestId);
           reject(err);
         },
       });
+      if (args.signal) {
+        onAbort = () => {
+          // Still pending? Settle immediately client-side (the caller is
+          // freed without waiting on the worker) and tell the owning worker
+          // to drop it. A response that arrives anyway lands in
+          // handleMessage with no `pending` entry left and is a silent
+          // no-op — the two paths can't double-settle.
+          const pendingRequest = this.pending.get(requestId);
+          if (!pendingRequest) return;
+          this.pending.delete(requestId);
+          owner.worker.postMessage({ type: 'cancel', requestId });
+          pendingRequest.reject(createCancellationError('Tile decode cancelled'));
+        };
+        args.signal.addEventListener('abort', onAbort, { once: true });
+      }
       target.worker.postMessage(
         {
+          type: 'decode',
           requestId,
           id: args.id,
           timeRange: args.timeRange,

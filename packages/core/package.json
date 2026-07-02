@@ -14,32 +14,81 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./time-filter": {
+      "types": "./dist/render/time-filter.d.ts",
+      "import": "./dist/render/time-filter.js"
+    },
+    "./style": {
+      "types": "./dist/render/style.d.ts",
+      "import": "./dist/render/style.js"
+    },
+    "./geometry": {
+      "types": "./dist/render/geometry.d.ts",
+      "import": "./dist/render/geometry.js"
+    },
+    "./trips": {
+      "types": "./dist/render/trips.d.ts",
+      "import": "./dist/render/trips.js"
+    },
+    "./shader-codegen": {
+      "types": "./dist/render/shader-codegen.d.ts",
+      "import": "./dist/render/shader-codegen.js"
+    },
+    "./geo": {
+      "types": "./dist/geo/index.d.ts",
+      "import": "./dist/geo/index.js"
+    },
+    "./picking": {
+      "types": "./dist/render/picking.d.ts",
+      "import": "./dist/render/picking.js"
+    },
+    "./tileset-adapter": {
+      "types": "./dist/render/tileset-adapter.d.ts",
+      "import": "./dist/render/tileset-adapter.js"
+    },
+    "./capabilities": {
+      "types": "./dist/render/capabilities.d.ts",
+      "import": "./dist/render/capabilities.js"
+    },
+    "./capabilities-doc": {
+      "types": "./dist/render/capabilities-doc.d.ts",
+      "import": "./dist/render/capabilities-doc.js"
     }
   },
   "files": [
     "dist",
-    "src"
+    "src",
+    "LICENSE"
   ],
   "scripts": {
     "build": "tsc && pnpm run build:worker",
     "build:worker": "esbuild src/tile-decoder.worker.ts --bundle --format=esm --platform=browser --target=esnext --outfile=dist/tile-decoder.worker.js",
+    "prepublishOnly": "pnpm run build",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint src",
     "clean": "rm -rf dist"
   },
   "dependencies": {
     "apache-arrow": "^17.0.0",
-    "fflate": "^0.7.4",
+    "earcut": "^3.0.0",
     "fzstd": "^0.1.1"
   },
   "devDependencies": {
     "@types/earcut": "^2.1.4",
-    "earcut": "^3.0.0",
     "esbuild": "^0.21.5",
     "typescript": "^5.4.0",
     "vitest": "^1.6.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/BertCh/spatiotemporal-tiles.git",
+    "directory": "packages/core"
+  },
+  "homepage": "https://github.com/BertCh/spatiotemporal-tiles/tree/main/packages/core#readme",
+  "bugs": {
+    "url": "https://github.com/BertCh/spatiotemporal-tiles/issues"
   },
   "keywords": [
     "tiles",

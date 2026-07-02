@@ -25,6 +25,7 @@ import { collectTransferables } from './tile-transferables';
 import type { Compression, Tile, TileId, TimeRange } from './types';
 
 interface DecodeRequest {
+  type: 'decode';
   requestId: number;
   id: TileId;
   timeRange: TimeRange;
@@ -32,16 +33,39 @@ interface DecodeRequest {
   compression: Compression;
 }
 
+interface CancelRequest {
+  type: 'cancel';
+  requestId: number;
+}
+
+type IncomingMessage = DecodeRequest | CancelRequest;
+
 type DecodeResponse =
   | { requestId: number; tile: Tile }
   | { requestId: number; error: string };
 
 const ctx = self as unknown as DedicatedWorkerGlobalScope;
 
-ctx.onmessage = async (event: MessageEvent<DecodeRequest>) => {
-  const { requestId, id, timeRange, compressed, compression } = event.data;
+// Request ids the main thread has cancelled but whose `decode` message this
+// worker hasn't finished processing yet. Checked right after the
+// (unavoidable) decompress step, before the more expensive Arrow IPC parse +
+// binary-feature extraction — the biggest chunk of wasted work a cancel can
+// still save once a request has already been dispatched to this worker. A
+// cancel that loses the race against an already-completed decode leaves a
+// harmless, never-revisited entry here; at one small integer per occurrence
+// this is not worth extra bookkeeping to prune.
+const cancelledRequestIds = new Set<number>();
+
+ctx.onmessage = async (event: MessageEvent<IncomingMessage>) => {
+  const msg = event.data;
+  if (msg.type === 'cancel') {
+    cancelledRequestIds.add(msg.requestId);
+    return;
+  }
+  const { requestId, id, timeRange, compressed, compression } = msg;
   try {
     const payload = await decompress(new Uint8Array(compressed), compression);
+    if (cancelledRequestIds.delete(requestId)) return;
     const tile = decodeTile(payload, id, timeRange);
     // The `arrowTable` field carries an apache-arrow `Table` instance. That
     // class has methods on its prototype and is NOT structured-cloneable —
@@ -53,6 +77,7 @@ ctx.onmessage = async (event: MessageEvent<DecodeRequest>) => {
     const response: DecodeResponse = { requestId, tile };
     ctx.postMessage(response, transferables);
   } catch (err) {
+    if (cancelledRequestIds.delete(requestId)) return; // cancelled, not a real error
     // Tag the error with the tile id so the main thread's `[STL] Tile error`
     // log identifies the offending tile without a separate debug pass.
     const base = err instanceof Error ? err.message : String(err);

@@ -10,7 +10,7 @@
  *   - {@link TimeController}  — a dumb wall-clock × speed rAF clock.
  *   - {@link PlaybackGovernor} — the buffering state machine that wraps the
  *     clock and gates play/resume/seek on a buffered runway ahead of the
- *     playhead (see docs/roadmap/player-buffering.md).
+ *     playhead (see docs/roadmap/playback-and-loading.md).
  *   - {@link decideAutoSpeedMultiplier} — asymmetric ABR step decision.
  *   - {@link SttPlayer} — the HTMLMediaElement-shaped facade over the above;
  *     the recommended single entry point.
@@ -43,7 +43,7 @@ export type {
 
 // Auto-speed step decision (asymmetric ABR: immediate downshifts, damped
 // upshifts) shared by every consumer of getAutoSpeedSuggestion.
-export { decideAutoSpeedMultiplier } from './auto-speed';
+export { decideAutoSpeedMultiplier, SPEED_STEPS } from './auto-speed';
 export type { AutoSpeedDecisionOptions, AutoSpeedPhase } from './auto-speed';
 
 // SttPlayer — the HTMLMediaElement-shaped facade over TimeController +

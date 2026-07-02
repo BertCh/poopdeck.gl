@@ -8,7 +8,7 @@
  *
  * The governor does the honest sustainable-speed math; this module owns the
  * consumer-side snapping/clamping/hysteresis so every Auto-speed UI applies
- * the SAME asymmetric policy (docs/roadmap/player-buffering.md §2, after
+ * the SAME asymmetric policy (docs/roadmap/playback-and-loading.md §2, after
  * hls.js ABR's 0.95-down / 0.7-up factors):
  *
  * - DOWNSHIFTS apply immediately, with no deadband — the suggestion already
@@ -43,7 +43,19 @@ export interface AutoSpeedDecisionOptions {
   upshiftDeadband?: number;
 }
 
-const DEFAULT_STEPS = [0.25, 0.5, 0.75, 1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10] as const;
+/**
+ * The canonical 13-step speed-multiplier ladder shared by every Auto-speed /
+ * keyboard-stepping surface (this module's snapping default, and
+ * `@poopdeck.gl/react`'s `usePlaybackHotkeys`). This is the single source of
+ * truth: retuning it here retunes what Auto-speed can produce AND where +/-
+ * keyboard stepping lands, so the two can never drift out of lockstep.
+ *
+ * (`PlaybackControls.speedPresets` is a distinct 5-button quick-pick, not this
+ * ladder.)
+ */
+export const SPEED_STEPS = [0.25, 0.5, 0.75, 1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10] as const;
+
+const DEFAULT_STEPS = SPEED_STEPS;
 
 /**
  * Decide the next Auto-speed multiplier, or `null` to hold the current one.

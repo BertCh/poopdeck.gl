@@ -10,7 +10,7 @@
  * inverts it within the grid precision.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   Field,
   FixedSizeList,
@@ -70,15 +70,15 @@ function commonColumns(featureCount: number) {
   return { ids, startTime, endTime };
 }
 
-function geomMeta(ext: string, affine: Affine): Map<string, string> {
+function geomMeta(ext: string, affine: Affine | string): Map<string, string> {
   return new Map<string, string>([
     ['ARROW:extension:name', ext],
-    ['stt:quant', JSON.stringify(affine)],
+    ['stt:quant', typeof affine === 'string' ? affine : JSON.stringify(affine)],
   ]);
 }
 
 /** Build a quantized Point tile: FixedSizeList<Int32,2> + affine. */
-function buildQuantizedPointTile(qcoords: number[], affine: Affine): Uint8Array {
+function buildQuantizedPointTile(qcoords: number[], affine: Affine | string): Uint8Array {
   const featureCount = qcoords.length / 2;
   const coordValues = makeData({ type: new Int32(), data: Int32Array.from(qcoords) });
   const geomData = makeData({
@@ -176,6 +176,23 @@ describe('coordinate quantization decode', () => {
     for (let i = 0; i < flat.length; i += 2) {
       expect(f.positions[i]).toBeCloseTo(deq(flat[i], affine.x0, affine.sx), 9);
       expect(f.positions[i + 1]).toBeCloseTo(deq(flat[i + 1], affine.y0, affine.sy), 9);
+    }
+  });
+
+  it('warns ONCE on a malformed stt:quant affine, then falls back to raw coords', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const q = [10, 20];
+      const decode = () => decodeTile(buildQuantizedPointTile(q, '{not json'), tileId);
+      const f = decode().layers[0].features;
+      // Fallback: the leaf ships through as raw fixed-point grid indices.
+      expect(Array.from(f.positions)).toEqual(q);
+      // A corrupt archive decodes many tiles — the warning must not repeat.
+      decode();
+      const quantWarns = warn.mock.calls.filter((c) => String(c[0]).includes('stt:quant'));
+      expect(quantWarns).toHaveLength(1);
+    } finally {
+      warn.mockRestore();
     }
   });
 });

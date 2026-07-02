@@ -1,0 +1,143 @@
+/**
+ * External-driver mode: the controller can hand its per-frame advance to a host
+ * render loop (deck.gl's animation loop via `advanceFrame()`) instead of its own
+ * requestAnimationFrame, so the playhead and the GPU draw share one frame clock.
+ *
+ * The harness stubs rAF + performance.now so frames step deterministically. The
+ * stubbed `cancelAnimationFrame` actually removes the queued callback (unlike a
+ * no-op) so "is the internal loop scheduled?" can be asserted via pendingFrames.
+ */
+
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { TimeController } from '../src/time-controller';
+
+function installFrameHarness() {
+  const state = { now: 0, nextId: 1 };
+  const cbs = new Map<number, (t: number) => void>();
+  const perfSpy = vi.spyOn(performance, 'now').mockImplementation(() => state.now);
+
+  vi.stubGlobal('requestAnimationFrame', (cb: (t: number) => void) => {
+    const id = state.nextId++;
+    cbs.set(id, cb);
+    return id;
+  });
+  vi.stubGlobal('cancelAnimationFrame', (id: number) => {
+    cbs.delete(id);
+  });
+
+  return {
+    /** Advance the virtual wall clock by `ms` and run all queued frames. */
+    advance(ms: number) {
+      state.now += ms;
+      const pending = [...cbs.values()];
+      cbs.clear();
+      for (const cb of pending) cb(state.now);
+    },
+    /** Advance the virtual wall clock by `ms` WITHOUT running queued frames. */
+    setNow(ms: number) {
+      state.now += ms;
+    },
+    /** How many internal rAF callbacks are currently scheduled. */
+    pendingFrames: () => cbs.size,
+    restore() {
+      perfSpy.mockRestore();
+      vi.unstubAllGlobals();
+    },
+  };
+}
+
+describe('TimeController external-driver mode', () => {
+  let h: ReturnType<typeof installFrameHarness>;
+  beforeEach(() => {
+    h = installFrameHarness();
+  });
+  afterEach(() => {
+    h.restore();
+  });
+
+  it('play() does not start the internal rAF when an external clock is attached', () => {
+    const tc = new TimeController({ initialTime: 0, speed: 1 });
+    tc.attachExternalClock();
+    tc.play();
+    expect(tc.isPlaying()).toBe(true);
+    expect(h.pendingFrames()).toBe(0);
+  });
+
+  it('advanceFrame() advances by elapsed × speed × direction', () => {
+    const tc = new TimeController({ initialTime: 0, speed: 2 });
+    tc.attachExternalClock();
+    tc.play();
+    h.setNow(100); // 100ms elapsed × 2× = +200
+    tc.advanceFrame();
+    expect(tc.getTime()).toBeCloseTo(200, 0);
+    h.setNow(50); // +100
+    tc.advanceFrame();
+    expect(tc.getTime()).toBeCloseTo(300, 0);
+    // The internal loop never scheduled itself.
+    expect(h.pendingFrames()).toBe(0);
+  });
+
+  it('advanceFrame() is a no-op while paused', () => {
+    const tc = new TimeController({ initialTime: 500, speed: 1 });
+    tc.attachExternalClock();
+    h.setNow(100);
+    tc.advanceFrame();
+    expect(tc.getTime()).toBe(500);
+  });
+
+  it('advanceFrame() is a no-op when no external clock is attached', () => {
+    const tc = new TimeController({ initialTime: 500, speed: 1 });
+    // Not attached, not playing.
+    tc.advanceFrame();
+    expect(tc.getTime()).toBe(500);
+  });
+
+  it('attachExternalClock() while playing cancels the internal rAF loop', () => {
+    const tc = new TimeController({ initialTime: 0, speed: 1 });
+    tc.play(); // internal mode → schedules one frame
+    expect(h.pendingFrames()).toBe(1);
+    tc.attachExternalClock();
+    expect(h.pendingFrames()).toBe(0); // internal loop cancelled, host takes over
+  });
+
+  it('detachExternalClock() while playing restarts the internal rAF loop', () => {
+    const tc = new TimeController({ initialTime: 0, speed: 1 });
+    tc.attachExternalClock();
+    tc.play();
+    expect(h.pendingFrames()).toBe(0); // external: no internal rAF
+    tc.detachExternalClock();
+    expect(h.pendingFrames()).toBe(1); // internal loop resumed
+  });
+
+  it('preserves bounce boundary handling under advanceFrame()', () => {
+    const tc = new TimeController({
+      initialTime: 90,
+      speed: 1,
+      timeRange: { start: 0, end: 100 },
+      bounce: true,
+    });
+    tc.attachExternalClock();
+    tc.play();
+    h.setNow(20); // 90 + 20 = 110 overshoots end=100 → reflect to 90, reverse
+    tc.advanceFrame();
+    expect(tc.getDirection()).toBe(-1);
+    expect(tc.getTime()).toBeCloseTo(90, 0);
+  });
+
+  it('preserves loop wrap (+ wrap event) under advanceFrame()', () => {
+    const tc = new TimeController({
+      initialTime: 95,
+      speed: 1,
+      timeRange: { start: 0, end: 100 },
+      loop: true,
+    });
+    const wraps: number[] = [];
+    tc.on('wrap', (t) => wraps.push(t));
+    tc.attachExternalClock();
+    tc.play();
+    h.setNow(10); // 95 + 10 = 105 > end → wrap to start
+    tc.advanceFrame();
+    expect(tc.getTime()).toBeCloseTo(0, 0);
+    expect(wraps.length).toBe(1);
+  });
+});

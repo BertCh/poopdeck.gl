@@ -279,4 +279,63 @@ describe('STTArchive (packed format)', () => {
       archive.getTile({ z: e.zoom, x: e.x, y: e.y, t: e.timeStart }),
     ).rejects.toThrow(/Range/);
   });
+
+  describe('manifest version gates (conformance reader-MUST)', () => {
+    /** The fixture dataset with its manifest JSON rewritten through `mutate`. */
+    function datasetWithManifest(mutate: (manifest: any) => void): STTArchive {
+      const dataset = packedFromSingleFile(FIXTURE_BYTES);
+      const manifest = JSON.parse(
+        new TextDecoder().decode(dataset.objects.get('manifest.json')!),
+      );
+      mutate(manifest);
+      dataset.objects.set(
+        'manifest.json',
+        new TextEncoder().encode(JSON.stringify(manifest)),
+      );
+      return new STTArchive({ url: dataset.manifestUrl, fetch: packedFetch(dataset) });
+    }
+
+    it('rejects an unrecognized format', async () => {
+      const archive = datasetWithManifest((m) => {
+        m.format = 'stt-packed-v2';
+      });
+      await expect(archive.getMetadata()).rejects.toThrow(/not a packed manifest/);
+    });
+
+    it('rejects an unrecognized formatVersion', async () => {
+      const archive = datasetWithManifest((m) => {
+        m.formatVersion = 2;
+      });
+      await expect(archive.getMetadata()).rejects.toThrow(/unsupported formatVersion 2/);
+    });
+
+    it('rejects a missing formatVersion', async () => {
+      const archive = datasetWithManifest((m) => {
+        delete m.formatVersion;
+      });
+      await expect(archive.getMetadata()).rejects.toThrow(/unsupported formatVersion/);
+    });
+
+    it('rejects an unrecognized directoryVersion', async () => {
+      const archive = datasetWithManifest((m) => {
+        m.directory.directoryVersion = 4;
+      });
+      await expect(archive.getIndex()).rejects.toThrow(/unsupported directoryVersion 4/);
+    });
+
+    it('rejects a missing directoryVersion', async () => {
+      const archive = datasetWithManifest((m) => {
+        delete m.directory.directoryVersion;
+      });
+      await expect(archive.getIndex()).rejects.toThrow(/unsupported directoryVersion/);
+    });
+
+    it('accepts the golden formatVersion=1 / directoryVersion=5 manifest', async () => {
+      const archive = datasetWithManifest(() => {});
+      const meta = await archive.getMetadata();
+      expect(meta.version).toBe(1);
+      const index = await archive.getIndex();
+      expect(index.tiles.length).toBeGreaterThan(0);
+    });
+  });
 });

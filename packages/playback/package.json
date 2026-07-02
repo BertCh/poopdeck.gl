@@ -18,15 +18,25 @@
   },
   "files": [
     "dist",
-    "src"
+    "src",
+    "LICENSE"
   ],
   "scripts": {
     "build": "tsc",
+    "prepublishOnly": "pnpm run build",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint src",
     "clean": "rm -rf dist tsconfig.tsbuildinfo"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/BertCh/spatiotemporal-tiles.git",
+    "directory": "packages/playback"
+  },
+  "homepage": "https://github.com/BertCh/spatiotemporal-tiles/tree/main/packages/playback#readme",
+  "bugs": {
+    "url": "https://github.com/BertCh/spatiotemporal-tiles/issues"
   },
   "keywords": [
     "playback",

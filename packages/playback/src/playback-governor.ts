@@ -12,7 +12,7 @@
  * playhead, freezes the clock (instead of advancing into unloaded time) when
  * the runway drains, applies resume hysteresis so stall/resume never
  * oscillates, and turns seeks/scrubs into preview-vs-commit operations with a
- * post-seek gate. See docs/roadmap/player-buffering.md for the full rationale
+ * post-seek gate. See docs/roadmap/playback-and-loading.md for the full rationale
  * and the SOTA survey behind the default thresholds.
  *
  * All thresholds are denominated in WALL-clock milliseconds × current |speed|,
@@ -26,7 +26,8 @@ import { emit as emitProbe } from './telemetry';
 
 /**
  * Snapshot of the contiguous loaded span ahead of the playhead, as reported
- * by the core tileset's coverage index (WS-A of the player-buffering plan).
+ * by the core tileset's coverage index (see
+ * docs/roadmap/playback-and-loading.md, the merged player-buffering record).
  */
 export interface BufferedRunway {
   /** Contiguous sim-time span ahead of the query time for which every needed tile is resident. */
@@ -135,7 +136,7 @@ export interface PlaybackGovernorOptions {
    * comfortably ahead. A raw `min()` over those horizons then spuriously
    * stalls the clock the instant the fastest-cadence source's runway dips a
    * few ms below a peer's — exactly the W3C Bug 26436 misfire (see
-   * docs/roadmap/multi-source-coordination.md §2.2 + §2.10: this tolerance is
+   * docs/roadmap/playback-and-loading.md §4: this tolerance is
    * NOT an inherited MSE/HTML mechanism, we must implement it ourselves).
    *
    * The band coalesces sub-tolerance horizon differences BETWEEN required
@@ -282,7 +283,7 @@ export class PlaybackGovernor {
    * yet consumed here). The clock's combined buffer health is folded over the
    * REQUIRED subset only — `min` runway, `AND` complete, nearest frontier —
    * while side-effects (prefetch keep-alive, flush) broadcast to ALL sources.
-   * See docs/roadmap/multi-source-coordination.md §4–5.
+   * See docs/roadmap/playback-and-loading.md §5–6.
    */
   private sources = new Map<
     string,
@@ -933,7 +934,8 @@ export class PlaybackGovernor {
     // the composite then "races ahead" of a required track whose true cost is
     // unknown. Restoring the single-source contract: if ANY required source is
     // bytes-blind there is no honest combined Σbytes, so return null (exactly as
-    // the ETA-blind path does). See multi-source-coordination LOW finding.
+    // the ETA-blind path does). A multi-source review finding — see
+    // docs/roadmap/playback-and-loading.md.
     let anyBytesBlind = false;
     for (const source of required) {
       const cost = source.estimateCost(range);

@@ -37,7 +37,10 @@ export interface TimeRange {
 /** Compression method for tiles */
 export enum Compression {
   None = 0,
-  Gzip = 1,
+  // Byte 1 = gzip, a retired codec that only ever existed in the legacy
+  // single-file `.stt` format. It is permanently reserved (never reuse it):
+  // no writer emits it, it is absent from the packed `manifest.schema.json`
+  // compression enum, and both the Rust and TS readers reject it.
   Zstd = 2,
 }
 
@@ -622,4 +625,18 @@ export interface TileRequestOptions {
    * (+1) when omitted but `playheadTime` is set.
    */
   playheadDirection?: 1 | -1;
+  /**
+   * Current viewport center (geographic). When set, the scheduler adds a
+   * small spatial tie-break to each coalesced range-group's priority — the
+   * squared normalized-mercator distance from the group's nearest member's
+   * tile center to this point, weighted well under one tier/EDF unit (see
+   * `SPATIAL_TIEBREAK_WEIGHT` in archive.ts). It can only ever resolve
+   * requests that are ALREADY essentially tied in time (or, absent a
+   * play-head, never — enqueue-order ties don't happen), never override a
+   * real temporal/tier distinction. Mirrors MapLibre's `coveringTiles()`
+   * sorting ideal tiles by `distanceSq` from the camera-projected center, so
+   * equally-urgent tiles still resolve screen-center-first. Omit it and
+   * priority is unaffected (byte-for-byte the pre-existing behavior).
+   */
+  viewportCenter?: { lon: number; lat: number };
 }

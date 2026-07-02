@@ -5,7 +5,7 @@
 /**
  * Process-shared {@link SharedRequestScheduler} singleton + kill-switch
  * (multi-source coordination, Phase 2 — integration; see
- * docs/roadmap/multi-source-coordination.md §2.5 / §2.8 / §5 Phase 2).
+ * docs/roadmap/playback-and-loading.md §4–5).
  *
  * ─── Why a module singleton ─────────────────────────────────────────────────
  *

@@ -24,6 +24,7 @@ import {
   Schema,
   Struct,
   Table,
+  Uint16,
   Uint32,
   Uint64,
   makeData,
@@ -43,6 +44,13 @@ import { GeometryType, type TileId } from '../src/types';
 function buildPolygonTileWithTriangles(opts: {
   /** When true, write the `stt:has_triangles` schema metadata + column. */
   withTriangles: boolean;
+  /**
+   * Wire width of the `triangles` list's child array. The Rust encoder picks
+   * UInt16 when every feature-local index fits (the common case, half the
+   * bytes) and UInt32 otherwise; the schema is self-describing, so the TS
+   * decoder must handle both. Defaults to 'u32' to match the original fixture.
+   */
+  triangleWireWidth?: 'u16' | 'u32';
 }): Uint8Array {
   // Two square polygons: feature 0 at (0,0)-(1,1), feature 1 at (5,5)-(6,6).
   // Each ring is 5 verts (closing duplicate of vert 0).
@@ -113,10 +121,14 @@ function buildPolygonTileWithTriangles(opts: {
   // Per-feature triangle indices (feature-LOCAL — 0..4 referencing each
   // feature's own 5 ring vertices). Square earcuts into 2 triangles, 6 idx.
   // (one valid earcut for a CCW square: [3,0,1, 3,1,2])
-  const triFlat = new Uint32Array([3, 0, 1, 3, 1, 2, 3, 0, 1, 3, 1, 2]);
-  const triValues = makeData({ type: new Uint32(), data: triFlat });
+  const wireWidth = opts.triangleWireWidth ?? 'u32';
+  const triFlatValues = [3, 0, 1, 3, 1, 2, 3, 0, 1, 3, 1, 2];
+  const triType = wireWidth === 'u16' ? new Uint16() : new Uint32();
+  const triFlat =
+    wireWidth === 'u16' ? new Uint16Array(triFlatValues) : new Uint32Array(triFlatValues);
+  const triValues = makeData({ type: triType, data: triFlat });
   const triData = makeData({
-    type: new List(new Field('item', new Uint32(), false)),
+    type: new List(new Field('item', triType, false)),
     length: featureCount,
     nullCount: 0,
     valueOffsets: new Int32Array([0, 6, 12]),
@@ -224,5 +236,20 @@ describe('decodeTile: pre-tessellated polygon column', () => {
     for (let i = 0; i < f.triangles!.length; i++) {
       expect(f.triangles![i]).toBeLessThan(positionCount);
     }
+  });
+
+  it('decodes a UInt16-width triangles column identically to UInt32 (the common small-feature case)', () => {
+    const payload = buildPolygonTileWithTriangles({
+      withTriangles: true,
+      triangleWireWidth: 'u16',
+    });
+    const tile = decodeTile(payload, tileId);
+    const f = tile.layers[0].features;
+
+    // Decoded/shifted output is always widened to Uint32Array regardless of
+    // the wire width — only the on-disk child array narrows.
+    expect(f.triangles).toBeInstanceOf(Uint32Array);
+    expect(Array.from(f.triangles!.subarray(0, 6))).toEqual([3, 0, 1, 3, 1, 2]);
+    expect(Array.from(f.triangles!.subarray(6, 12))).toEqual([8, 5, 6, 8, 6, 7]);
   });
 });

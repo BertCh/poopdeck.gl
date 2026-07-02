@@ -18,6 +18,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import type { PackedManifest } from '../src';
+import { Compression } from '../src';
 
 const SCHEMA_PATH = fileURLToPath(
   new URL('../../../docs/spec/manifest.schema.json', import.meta.url),
@@ -152,6 +153,26 @@ describe('packed-format manifest contract', () => {
       directory: { ...golden.directory, encoding: 'br' },
     };
     expect(validate(badEncoding, schema).some((e) => /enum/.test(e))).toBe(true);
+  });
+
+  it('the schema compression enum matches the ACTIVE TS Compression codecs (gzip retired)', () => {
+    // F5: mechanically pin the schema's compression enum to the TS Compression
+    // enum so the two can no longer silently drift. gzip was retired with the
+    // legacy single-file format — it is absent from BOTH the packed schema and
+    // the TS enum, and byte 1 stays permanently reserved (never renumber).
+    const CODEC_NAME: Record<Compression, string> = {
+      [Compression.None]: 'none',
+      [Compression.Zstd]: 'zstd',
+    };
+    const schemaCodecs = new Set<string>(schema.properties.compression.enum);
+    const activeCodecs = new Set(
+      [Compression.None, Compression.Zstd].map((c) => CODEC_NAME[c]),
+    );
+    expect(schemaCodecs).toEqual(activeCodecs);
+    // Byte 1 (retired gzip) is neither a TS enum member nor a schema value.
+    expect((Compression as Record<string, unknown>).Gzip).toBeUndefined();
+    expect(Compression.Zstd).toBe(2); // byte 1 stays reserved — never renumber
+    expect(schemaCodecs.has('gzip')).toBe(false);
   });
 
   it('tolerates unknown fields at every envelope level (additive evolution)', () => {

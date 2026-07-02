@@ -89,33 +89,14 @@ describe('directory codec (TS)', () => {
     expect(back.every((e) => e.offset === 0)).toBe(true);
   });
 
-  it('decodes a legacy v4 directory (no pack_id column) as packId 0', () => {
-    // Hand-craft a v4 buffer: version byte 4, then the v4 per-run columns
-    // (run_len, offset flag, length, uncompressed, crc) with NO pack_id column.
-    const buf: number[] = [];
-    const putU = (v: number) => {
-      for (;;) {
-        const b = v & 0x7f;
-        v >>>= 7;
-        if (v !== 0) buf.push(b | 0x80);
-        else { buf.push(b); break; }
-      }
-    };
-    const putI = (v: number) => putU(v < 0 ? -v * 2 - 1 : v * 2); // zig-zag
-    buf.push(4); // DIRECTORY_VERSION = 4
-    putU(1); // N
-    putU(1); // R
-    // one entry's key columns: Δzoom Δhilbert Δx Δy Δtime_start (zig-zag),
-    // duration (zig-zag), feature_count (uvarint), bucket-flag (0)
-    putI(7); putI(0); putI(3); putI(4); putI(1000);
-    putI(500); putU(2); putU(0);
-    // v4 per-run columns: run_len, offset flag (0 = contiguous from 0), length,
-    // uncompressed, crc (4 LE bytes). NO pack_id column.
-    putU(1); putU(0); putU(64); putU(128);
-    buf.push(0xef, 0xbe, 0xad, 0xde);
-    const back = decodeDirectory(Uint8Array.from(buf));
-    expect(back.length).toBe(1);
-    expect(back[0]).toMatchObject({ zoom: 7, x: 3, y: 4, timeStart: 1000, timeEnd: 1500, packId: 0, offset: 0, length: 64 });
+  it('rejects a retired v4 (single-file) directory — the client is packed-only', () => {
+    // A v4 buffer starts with version byte 4 (no pack_id column). The client
+    // only reads packed v5 directories, so v4 must be rejected up front rather
+    // than mis-decoded. The version check is the first thing decodeDirectory
+    // does, so the version byte alone is enough to trigger it.
+    expect(() => decodeDirectory(Uint8Array.from([4, 0, 0]))).toThrow(
+      /unsupported version/i,
+    );
   });
 
   it('round-trips entries including the temporal bucket', () => {

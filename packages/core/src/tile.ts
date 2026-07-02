@@ -145,6 +145,19 @@ const STT_QUANT_META_KEY = 'stt:quant';
 const STT_QUANT_ATTR_META_KEY = 'stt:qa';
 
 /**
+ * Warn-once dedupe for malformed quantization metadata (one warning per
+ * metadata key / column, not one per tile — a corrupt archive decodes many
+ * tiles). Mirrors the fallback warning in `tile-decoder.ts`.
+ */
+const warnedMalformedQuantMeta = new Set<string>();
+
+function warnMalformedQuantMetaOnce(key: string, message: string, err: unknown): void {
+  if (warnedMalformedQuantMeta.has(key)) return;
+  warnedMalformedQuantMeta.add(key);
+  console.warn(message, err);
+}
+
+/**
  * Coordinate-quantization affine (`lon = x0 + qx*sx`, `lat = y0 + qy*sy`). For
  * 3D point geometry the altitude axis (`z = z0 + qz*sz`) is present too; absent
  * for 2D coords.
@@ -166,7 +179,13 @@ function readQuantAffine(table: Table): QuantAffine | undefined {
   try {
     const o = JSON.parse(raw);
     return { x0: o.x0, y0: o.y0, sx: o.sx, sy: o.sy, z0: o.z0, sz: o.sz };
-  } catch {
+  } catch (err) {
+    warnMalformedQuantMetaOnce(
+      STT_QUANT_META_KEY,
+      `[stt] malformed ${STT_QUANT_META_KEY} affine JSON on the geometry field — ` +
+        'coordinates will decode as raw fixed-point grid indices, not lon/lat:',
+      err,
+    );
     return undefined;
   }
 }
@@ -352,7 +371,14 @@ function tableToBinaryFeatures(table: Table): BinaryFeatures {
     | BigInt64Array
     | undefined;
   let timeOffset = 0;
-  if (startRaw && startRaw.length > 0) {
+  // Fast path: the builder can bake the global start-time min into schema
+  // metadata (`stt:time_offset_ms`), letting us skip the min-scan pass over
+  // the whole start-time column. Absent (older tiles / builder not yet
+  // emitting it) → fall back to the exact same min-scan as before.
+  const bakedTimeOffset = table.schema.metadata.get('stt:time_offset_ms');
+  if (bakedTimeOffset != null && bakedTimeOffset !== '') {
+    timeOffset = Number(BigInt(bakedTimeOffset));
+  } else if (startRaw && startRaw.length > 0) {
     let min = Number(startRaw[0]);
     for (let i = 1; i < startRaw.length; i++) {
       const v = Number(startRaw[i]);
@@ -425,7 +451,12 @@ function tableToBinaryFeatures(table: Table): BinaryFeatures {
     if (triVec && startIndices) {
       const triData = chunk(triVec);
       const triOffsets: Int32Array = triData.valueOffsets;
-      const triValues = triData.children[0].values as Uint32Array;
+      // Feature-local indices are UInt16 when they fit (the common case —
+      // halves this column's wire bytes) or UInt32 for oversized features;
+      // the Rust encoder picks per-layer and the Arrow schema is
+      // self-describing, so branch on the runtime child type exactly like
+      // extractVertexTimes already does for its UInt16-delta/Int64 split.
+      const triValues = triData.children[0].values as Uint16Array | Uint32Array;
       const baseOff = triOffsets[triData.offset];
       const total = triOffsets[triData.offset + triData.length] - baseOff;
       triangles = new Uint32Array(total);
@@ -559,8 +590,14 @@ function tableToBinaryFeatures(table: Table): BinaryFeatures {
             const qa = JSON.parse(qaRaw);
             o = qa.o;
             s = qa.s;
-          } catch {
-            /* malformed affine — fall through as identity (o=0,s=1) */
+          } catch (err) {
+            // Malformed affine — fall through as identity (o=0,s=1).
+            warnMalformedQuantMetaOnce(
+              `${STT_QUANT_ATTR_META_KEY}:${field.name}`,
+              `[stt] malformed ${STT_QUANT_ATTR_META_KEY} affine JSON on property ` +
+                `column "${field.name}" — values will decode as raw fixed-point ints:`,
+              err,
+            );
           }
           for (let i = 0; i < featureCount; i++) arr[i] = o + Number(raw[i]) * s;
         } else {

@@ -35,6 +35,22 @@ export type {
 } from './types';
 export { Compression, GeometryType } from './types';
 
+// ─── Default color palettes (pure data, shared by every renderer) ────────────
+// The single source of truth for the categorical / heatmap defaults; imported
+// by both @poopdeck.gl/layers (deck) and @poopdeck.gl/maplibre so the two
+// backends paint identical default colors without hand-copied literals.
+export {
+  DEFAULT_CATEGORICAL_PALETTE,
+  DEFAULT_LINE_PALETTE,
+  DEFAULT_POLYGON_PALETTE,
+  DEFAULT_TRIPS_PALETTE,
+  DEFAULT_HEATMAP_COLOR_RANGE,
+  DEFAULT_ARC_SOURCE_COLOR,
+  DEFAULT_ARC_TARGET_COLOR,
+  DEFAULT_SUMMARY_COLOR_RANGE,
+  type PaletteRGBA,
+} from './palettes';
+
 // ─── Archive / tileset / tile decoding ──────────────────────────────────────
 export { STTArchive, estimateTileSize } from './archive';
 // Packed-format manifest contract (mirrors Rust `pack::Manifest`; schema at

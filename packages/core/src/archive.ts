@@ -27,7 +27,12 @@
  * zstd-compressed), so the fzstd browser path can decode every tile.
  */
 
-import { decodeDirectory, decodePagedRoot, type PageDescriptor } from './directory';
+import {
+  decodeDirectory,
+  decodePagedRoot,
+  DIRECTORY_VERSION,
+  type PageDescriptor,
+} from './directory';
 import {
   type ArchiveMetadata,
   type ArchiveIndex,
@@ -58,6 +63,12 @@ import { createCancellationError, isCancellationError } from './request-schedule
 
 /** `format` discriminator written into every packed manifest. */
 const PACKED_FORMAT = 'stt-packed';
+/**
+ * Manifest schema version this reader understands (`formatVersion`). A strict
+ * const in the manifest schema — conformance requires rejecting anything else,
+ * mirroring the Rust reader (`pack.rs`'s `PACKED_FORMAT_VERSION` check).
+ */
+const PACKED_FORMAT_VERSION = 1;
 
 /** `directory.layout` value for the paged container. */
 const DIRECTORY_LAYOUT_PAGED = 'paged';
@@ -107,6 +118,17 @@ const DEFAULT_SCHEDULER_WEIGHT = 1;
  * never interleave.
  */
 const SCHEDULER_PREFETCH_TIER_BASE = 1e15;
+/**
+ * Weight applied to the spatial tie-break's squared normalized-mercator
+ * distance (range [0, 2]) before it's added into
+ * {@link ArchiveReader.groupSchedulerPriority}'s returned priority. Kept
+ * comfortably under 1 (max contribution 2 × 0.4 = 0.8) so it can only ever
+ * flip an ordering between requests whose EDF/enqueue term already differ by
+ * less than a whole unit — i.e. a genuine near-tie in time — and never
+ * overrides a real temporal or tier distinction (`SCHEDULER_PREFETCH_TIER_BASE`
+ * and typical distance-to-playhead terms are both orders of magnitude larger).
+ */
+const SPATIAL_TIEBREAK_WEIGHT = 0.4;
 /**
  * Default per-transfer stall timeout. hls.js ships 20 s (`fragLoadingTimeOut`)
  * and Shaka ~30 s; without one, a TCP-stalled response hangs its tile forever
@@ -336,7 +358,12 @@ export interface PackedManifest {
   format: string;
   /** Manifest schema version (currently 1). */
   formatVersion: number;
-  /** Per-blob compression codec (`"zstd" | "gzip" | "none"`). */
+  /**
+   * Per-blob compression codec — `"zstd"` or `"none"` for the packed format.
+   * (`"gzip"` is a retired legacy value, absent from the packed schema and
+   * rejected by the reader.) Typed `string` so a reader tolerates any future
+   * codec name rather than throwing on an unknown enum value.
+   */
   compression: string;
   /** Pointer to the immutable, content-addressed directory object. */
   directory: ManifestDirectoryRef;
@@ -654,8 +681,23 @@ export class STTArchive {
             `expected ${JSON.stringify(PACKED_FORMAT)})`,
         );
       }
+      // Conformance reader-MUST: reject unrecognized formatVersion /
+      // directoryVersion, not just format — both are strict consts in the
+      // manifest schema, and the Rust reader rejects them too.
+      if (manifest.formatVersion !== PACKED_FORMAT_VERSION) {
+        throw new Error(
+          `STT manifest: unsupported formatVersion ${JSON.stringify(manifest.formatVersion)} ` +
+            `(expected ${PACKED_FORMAT_VERSION})`,
+        );
+      }
       if (!manifest.directory || !Array.isArray(manifest.packs)) {
         throw new Error('STT manifest: missing directory pointer or pack table');
+      }
+      if (manifest.directory.directoryVersion !== DIRECTORY_VERSION) {
+        throw new Error(
+          `STT manifest: unsupported directoryVersion ` +
+            `${JSON.stringify(manifest.directory.directoryVersion)} (expected ${DIRECTORY_VERSION})`,
+        );
       }
       // Base = manifest URL with the final path segment stripped (keep the
       // trailing slash). `index/...` and `packs/...` keys resolve against it.
@@ -666,8 +708,11 @@ export class STTArchive {
           this.packCompression = Compression.None;
           break;
         case 'gzip':
-          this.packCompression = Compression.Gzip;
-          break;
+          // Retired codec, absent from the packed schema. No packed writer
+          // emits it; reject rather than silently mis-decoding as zstd.
+          throw new Error(
+            "STT manifest: 'gzip' is a retired codec — packed archives are zstd-only",
+          );
         case 'zstd':
         default:
           this.packCompression = Compression.Zstd;
@@ -1177,6 +1222,10 @@ export class STTArchive {
     // ahead of the tile range fetches the EDF term actually orders, so this is
     // fine.
     const groupMinDistance = (): number | null => null;
+    // Page fetches have no natural per-tile spatial entry to compare (a page
+    // covers many tiles across a bbox) — spatial ordering has no obvious
+    // meaning here, so this mirrors groupMinDistance's null.
+    const groupSpatialDistance = (): number | null => null;
 
     // Register a shared promise per pending page so concurrent queries dedupe,
     // then dispatch all groups through runGroupFetches (shared scheduler when
@@ -1237,6 +1286,7 @@ export class STTArchive {
           }
         },
         groupMinDistance,
+        groupSpatialDistance,
         { signal },
       );
     } catch (e) {
@@ -1370,11 +1420,19 @@ export class STTArchive {
     }
   }
 
-  /** Decode compressed tile bytes into a Tile via the configured decoder. */
+  /**
+   * Decode compressed tile bytes into a Tile via the configured decoder.
+   * `signal`, when given, cancels the decode itself (not just the fetch that
+   * produced `compressed`) — a tile that scrolls off-screen while its decode
+   * is still queued/running on a worker is dropped there instead of wasting
+   * pool time on it. Optional: callers with no natural per-tile signal (rare)
+   * simply get the pre-existing uncancellable behavior.
+   */
   private async decodeBytes(
     id: TileId,
     entry: TileEntry,
     compressed: ArrayBuffer,
+    signal?: AbortSignal,
   ): Promise<Tile> {
     // The packed format has NO shared zstd dictionary: every blob is
     // independently zstd-compressed (`compress_zstd_with_dict(_, None)` on the
@@ -1385,18 +1443,21 @@ export class STTArchive {
       timeRange: { start: entry.timeStart, end: entry.timeEnd },
       compressed,
       compression: entry.compression,
+      signal,
     });
   }
 
   /**
    * Decode an already-decompressed payload. Reused for OPFS warm hits — the
    * decoder still has to run the Arrow IPC parse + binary extraction, but
-   * it skips the (often zstd) decompression step entirely.
+   * it skips the (often zstd) decompression step entirely. See
+   * {@link decodeBytes} for `signal`.
    */
   private async decodeDecompressed(
     id: TileId,
     entry: TileEntry,
     decompressed: Uint8Array,
+    signal?: AbortSignal,
   ): Promise<Tile> {
     // Copy into a fresh ArrayBuffer — the worker decoder transfers ownership
     // of the buffer, and we may have other consumers (or the OPFS view)
@@ -1410,6 +1471,7 @@ export class STTArchive {
       timeRange: { start: entry.timeStart, end: entry.timeEnd },
       compressed: buf,
       compression: Compression.None,
+      signal,
     });
   }
 
@@ -1425,7 +1487,7 @@ export class STTArchive {
     if (cached) {
       cached.lastAccess = Date.now();
       this.cacheStats.hits++;
-      return this.decodeBytes(id, entry, cached.bytes);
+      return this.decodeBytes(id, entry, cached.bytes, options?.signal);
     }
 
     // OPFS lookup BEFORE the network. A hit returns decompressed bytes that
@@ -1439,7 +1501,7 @@ export class STTArchive {
       const fromOpfs = await this.opfsCache.get(opfsK);
       if (fromOpfs) {
         this.opfsStats.hits++;
-        return this.decodeDecompressed(id, entry, fromOpfs);
+        return this.decodeDecompressed(id, entry, fromOpfs, options?.signal);
       }
       this.opfsStats.misses++;
     }
@@ -1453,7 +1515,7 @@ export class STTArchive {
       options?.fetchPriority
     );
     this.storeBytes(key, compressed);
-    const tile = await this.decodeBytes(id, entry, compressed);
+    const tile = await this.decodeBytes(id, entry, compressed, options?.signal);
     // Fire-and-forget OPFS write. Slicing the buffer so any later mutation
     // of `compressed` is independent.
     if (this.opfsCache) {
@@ -1491,6 +1553,7 @@ export class STTArchive {
     minDistanceMs: number | null,
     fallbackSeq: number,
     fetchPriority: 'high' | 'low' | 'auto' | undefined,
+    spatialDistSq: number | null,
   ): number {
     const tierBase = fetchPriority === 'low' ? SCHEDULER_PREFETCH_TIER_BASE : 0;
     // Within a tier: EDF distance-to-playhead when known, else byte-order /
@@ -1498,7 +1561,14 @@ export class STTArchive {
     const term = minDistanceMs !== null && Number.isFinite(minDistanceMs)
       ? Math.max(0, minDistanceMs)
       : Math.max(0, fallbackSeq);
-    return tierBase + term;
+    // Sub-unit spatial tie-break — see SPATIAL_TIEBREAK_WEIGHT. `null` (no
+    // viewportCenter threaded in) contributes nothing, so priority is
+    // unaffected unless a caller opts in.
+    const spatialTieBreak =
+      spatialDistSq !== null && Number.isFinite(spatialDistSq)
+        ? Math.min(spatialDistSq, 2) * SPATIAL_TIEBREAK_WEIGHT
+        : 0;
+    return tierBase + term + spatialTieBreak;
   }
 
   /**
@@ -1532,10 +1602,41 @@ export class STTArchive {
   }
 
   /**
+   * Minimum squared normalized-mercator distance from a coalesced group's
+   * member tile centers to the viewport center — the spatial analog of
+   * {@link minDistanceToPlayhead}'s "closest member wins" semantics, but in
+   * space rather than time. Normalized to a zoom-independent [0,1)×[0,1)
+   * world square (not each tile's own zoom-scale pixels) so a mixed
+   * parent-fallback group spanning several zooms still compares fairly.
+   * Squared rather than sqrt'd since only relative ordering matters for a
+   * tie-break and it's cheaper. Returns `null` when no viewport center was
+   * threaded in (`options.viewportCenter` unset) — the caller then
+   * contributes zero spatial term, unchanged from before this existed. See
+   * {@link groupSchedulerPriority}.
+   */
+  private minDistanceToViewportCenter(
+    entries: TileEntry[],
+    options: TileRequestOptions | undefined,
+  ): number | null {
+    const center = options?.viewportCenter;
+    if (!center) return null;
+    const [cx, cy] = lonLatToNormalizedMercator(center.lon, center.lat);
+    let best = Infinity;
+    for (const e of entries) {
+      const scale = 1 << e.zoom;
+      const dx = (e.x + 0.5) / scale - cx;
+      const dy = (e.y + 0.5) / scale - cy;
+      const distSq = dx * dx + dy * dy;
+      if (distSq < best) best = distSq;
+    }
+    return Number.isFinite(best) ? best : null;
+  }
+
+  /**
    * Dispatch a set of coalesced range-group fetches with bounded concurrency,
    * the unit of work both {@link getTiles} and {@link fetchAndMergePages} hand
    * off (multi-source coordination, Phase 2 — integration; see
-   * docs/roadmap/multi-source-coordination.md §5 Phase 2).
+   * docs/roadmap/playback-and-loading.md §5).
    *
    * TWO CLEANLY-SEPARATED PATHS, chosen by the kill-switch
    * ({@link isSharedSchedulingEnabled}, default ON):
@@ -1569,6 +1670,7 @@ export class STTArchive {
     groups: G[],
     executeGroup: (group: G, signal: AbortSignal | undefined) => Promise<void>,
     groupMinDistanceMs: (group: G) => number | null,
+    groupSpatialDistSq: (group: G) => number | null,
     options: TileRequestOptions | undefined,
   ): Promise<void> {
     if (groups.length === 0) return;
@@ -1612,11 +1714,12 @@ export class STTArchive {
     // the request settles so neither outlives the other.
     const scheduleOne = (group: G, fallbackSeq: number): Promise<void> => {
       const minDist = groupMinDistanceMs(group);
+      const spatialDistSq = groupSpatialDistSq(group);
       const req = scheduler.scheduleRequest<void>({
         sourceId: this.url,
         weight: this.schedulerWeight,
         getPriority: () =>
-          this.groupSchedulerPriority(minDist, fallbackSeq, fetchPriority),
+          this.groupSchedulerPriority(minDist, fallbackSeq, fetchPriority, spatialDistSq),
         // The scheduler's signal fires on cancel/abort; pass it to the fetch
         // so retry/timeout/raceAbort inside executeGroup stop promptly.
         execute: (schedulerSignal) => executeGroup(group, schedulerSignal),
@@ -1737,7 +1840,7 @@ export class STTArchive {
         this.cacheStats.hits++;
         const idx = i;
         jobs.push(
-          this.decodeBytes(id, entry, cached.bytes).then((t) => {
+          this.decodeBytes(id, entry, cached.bytes, options?.signal).then((t) => {
             deliver(idx, t);
           })
         );
@@ -1768,7 +1871,7 @@ export class STTArchive {
         if (bytes) {
           this.opfsStats.hits++;
           jobs.push(
-            this.decodeDecompressed(p.id, p.entry, bytes).then((t) => {
+            this.decodeDecompressed(p.id, p.entry, bytes, options?.signal).then((t) => {
               deliver(p.index, t);
             }),
           );
@@ -1874,7 +1977,7 @@ export class STTArchive {
               }
               try {
                 this.storeBytes(this.tileIdToKey(m.id), single);
-                deliver(m.index, await this.decodeBytes(m.id, m.entry, single));
+                deliver(m.index, await this.decodeBytes(m.id, m.entry, single, signal));
                 if (this.opfsCache) {
                   void this.writeOpfsAsync(m.id, m.entry, single.slice(0));
                 }
@@ -1892,7 +1995,7 @@ export class STTArchive {
             const rel = m.entry.offset - group.start;
             const slice = buffer.slice(rel, rel + m.entry.length);
             this.storeBytes(this.tileIdToKey(m.id), slice);
-            deliver(m.index, await this.decodeBytes(m.id, m.entry, slice));
+            deliver(m.index, await this.decodeBytes(m.id, m.entry, slice, signal));
             if (this.opfsCache) {
               void this.writeOpfsAsync(m.id, m.entry, slice.slice(0));
             }
@@ -1910,6 +2013,7 @@ export class STTArchive {
           groups,
           (group, signal) => fetchGroup(group, signal),
           (group) => this.minDistanceToPlayhead(group.members.map((m) => m.entry), options),
+          (group) => this.minDistanceToViewportCenter(group.members.map((m) => m.entry), options),
           options,
         ),
       );
@@ -2248,6 +2352,20 @@ function latToTileY(lat: number, zoom: number): number {
   return Math.floor(
     ((1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2) * (1 << zoom)
   );
+}
+
+/**
+ * Web-Mercator position normalized to [0,1)×[0,1), independent of zoom —
+ * the zoom=0 fractional case of {@link lonToTileX}/{@link latToTileY} (no
+ * floor, no `<< zoom`). Used by {@link ArchiveReader.minDistanceToViewportCenter}
+ * to compare a viewport center against tile centers at whatever zoom each
+ * tile happens to be.
+ */
+function lonLatToNormalizedMercator(lon: number, lat: number): [number, number] {
+  const x = (lon + 180) / 360;
+  const rad = (lat * Math.PI) / 180;
+  const y = (1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2;
+  return [x, y];
 }
 
 /**

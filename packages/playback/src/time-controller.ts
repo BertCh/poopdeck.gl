@@ -85,8 +85,16 @@ export class TimeController {
   private lastUpdateTime?: number;
   private tickThrottleMs: number = 0;
   private lastTickNotifyTime: number = 0;
-  /** True while tick() runs — guards play() against forking a second rAF loop. */
+  /** True while a frame step runs — guards play() against forking a second rAF loop. */
   private inTick = false;
+  /**
+   * When true, an external render loop (e.g. deck.gl via onBeforeRender →
+   * {@link advanceFrame}) owns the per-frame advance and the internal rAF is
+   * suppressed, so the playhead and the GPU draw share one frame clock.
+   * Default false: the controller self-drives via requestAnimationFrame, which
+   * is what maplibre/three/standalone/headless consumers rely on.
+   */
+  private externalDriver = false;
 
   /**
    * Re-anchor the frame clock on tab refocus: rAF was suspended in the
@@ -211,7 +219,11 @@ export class TimeController {
     // inside tick(), e.g. the governor's instantly-passing post-wrap gate):
     // skip the synchronous tick — the outer tick's tail reschedules the one
     // rAF loop; a second sync tick would fork a second loop (2× speed).
-    if (!this.inTick) this.tick();
+    //
+    // In external-driver mode the host render loop (deck.gl) pumps
+    // advanceFrame() each frame, so we never start the internal rAF here — the
+    // next host frame advances the playhead instead.
+    if (!this.externalDriver && !this.inTick) this.tick();
   }
 
   /** Pause playback. No-op (and no playState notification) when already paused — mirrors play(). */
@@ -226,6 +238,50 @@ export class TimeController {
       document.removeEventListener('visibilitychange', this.visibilityHandler);
     }
     this.notifyPlayStateListeners();
+  }
+
+  /**
+   * Hand the per-frame advance to an external render loop (e.g. deck.gl's
+   * animation loop calling {@link advanceFrame} from `onBeforeRender`). The
+   * internal rAF is suppressed so there is exactly one frame clock and no phase
+   * skew between "time advanced" and "scene drawn". Idempotent.
+   */
+  attachExternalClock(): void {
+    if (this.externalDriver) return;
+    this.externalDriver = true;
+    // Stop the self-owned loop; the host loop takes over from here.
+    if (this.animationFrameId !== undefined) {
+      cancelAnimationFrame(this.animationFrameId);
+      this.animationFrameId = undefined;
+    }
+    // Re-anchor so the first host frame doesn't bill the gap since the last
+    // internal tick as elapsed sim-time (MAX_FRAME_DELTA_MS would clamp it, but
+    // this avoids even the clamped jump).
+    if (this.playing) this.lastUpdateTime = performance.now();
+  }
+
+  /**
+   * Restore the self-owned rAF loop (host loop detaching, e.g. deck.gl unmount).
+   * Resumes the internal loop if mid-playback. Idempotent.
+   */
+  detachExternalClock(): void {
+    if (!this.externalDriver) return;
+    this.externalDriver = false;
+    if (this.playing) {
+      this.lastUpdateTime = performance.now();
+      if (!this.inTick) this.tick();
+    }
+  }
+
+  /**
+   * Advance the playhead by one host-driven frame. Call once per frame from the
+   * external render loop after {@link attachExternalClock}. No-op unless an
+   * external clock is attached; the underlying step also no-ops while paused, so
+   * it is safe to call every frame regardless of play state.
+   */
+  advanceFrame(): void {
+    if (!this.externalDriver) return;
+    this._step();
   }
 
   /** Toggle play/pause */
@@ -309,7 +365,13 @@ export class TimeController {
     this.endedListeners.clear();
   }
 
-  private tick = (): void => {
+  /**
+   * Advance the playhead by one frame's worth of wall-clock × speed, handle
+   * range boundaries, and notify listeners. Does NOT schedule the next frame —
+   * the caller owns scheduling: {@link tick} reschedules the internal rAF;
+   * {@link advanceFrame} is called by the external host loop instead.
+   */
+  private _step = (): void => {
     if (!this.playing) return;
 
     const now = performance.now();
@@ -386,11 +448,6 @@ export class TimeController {
       this.inTick = false;
     }
 
-    // Schedule next frame
-    if (this.playing) {
-      this.animationFrameId = requestAnimationFrame(this.tick);
-    }
-
     // TEMP-DIAGNOSTIC (flash repro): ~20Hz (wall, simTime) timeline so tile
     // arrivals can be correlated against the playhead offline.
     {
@@ -403,6 +460,20 @@ export class TimeController {
           probe.timeline.push({ wall: now, sim: this.currentTime });
         }
       }
+    }
+  };
+
+  /**
+   * Self-driven frame: advance once via {@link _step}, then reschedule the
+   * internal rAF. Used only when {@link externalDriver} is false; in
+   * external-driver mode the host loop calls {@link advanceFrame} and this
+   * never runs.
+   */
+  private tick = (): void => {
+    this._step();
+    // Reschedule unless we stopped (ended → pause) or a host loop now drives us.
+    if (this.playing && !this.externalDriver) {
+      this.animationFrameId = requestAnimationFrame(this.tick);
     }
   };
 

@@ -1,6 +1,6 @@
 /**
  * Tests for SharedRequestScheduler (multi-source coordination, Phase 2; see
- * docs/roadmap/multi-source-coordination.md §2.8 / §5 Phase 2).
+ * docs/roadmap/playback-and-loading.md §4–5).
  *
  * The scheduler allocates a fixed global concurrency budget across N
  * heterogeneous sources by dynamic priority (lower value = higher priority,

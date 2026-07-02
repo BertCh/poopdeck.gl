@@ -2,36 +2,33 @@
 // SPDX-License-Identifier: MIT
 //
 // Decoder for the STT directory — the compact columnar run-length tile index
-// that replaces the old Arrow-IPC index. Mirrors the Rust codec in
-// `crates/stt-core/src/directory.rs`. Decodes BOTH v4 (single-file archive,
-// one implicit pack) and v5 (packed format, per-run `pack_id` column +
-// pack-relative offsets):
+// for the packed format. Mirrors the Rust codec in
+// `crates/stt-core/src/directory.rs`. The client is packed-only: it reads v5
+// directories (per-run `pack_id` column + pack-relative offsets). The retired
+// single-file v4 layout (one implicit pack, no `pack_id`) is never handed to
+// the client and is no longer decoded here.
 //
-//   u8      version_tag = 4 or 5
+//   u8      version_tag = 5
 //   uvarint N            entry count
 //   uvarint R            run count
 //   per-entry × N:  Δzoom Δhilbert Δx Δy Δtime_start (zig-zag), duration
 //                   (zig-zag), feature_count (uvarint), bucket presence flag
 //                   (+ value uvarint when present)
-//   per-run × R:    run_length (uvarint),
-//                   Δpack_id (zig-zag, v5 ONLY — absent in v4),
+//   per-run × R:    run_length (uvarint), Δpack_id (zig-zag),
 //                   offset flag (+ raw offset uvarint when non-contiguous),
 //                   length, uncompressed_size, crc32c (u32 LE)
 //
-// In v5 each run's blob lives in a specific pack object. `pack_id` is delta+
-// zig-zag coded against the previous run; the offset contiguity expectation
+// Each run's blob lives in a specific pack object. `pack_id` is delta+zig-zag
+// coded against the previous run; the offset contiguity expectation
 // (`expectedOffset`) resets to 0 whenever the pack changes, so offsets are
 // pack-relative and the first run of each pack rides the cheap `0` sentinel.
-// v4 has no pack_id column (one implicit pack 0) and never resets.
 //
 // Varints are LEB128; signed columns use zig-zag. Values are accumulated as
 // BigInt for exactness, then narrowed to JS numbers for the fields the reader
 // uses (offsets/timestamps within 2^53, as elsewhere in the reader).
 
 /** Directory codec version the TS encoder emits (matches the Rust writer). */
-const DIRECTORY_VERSION = 5;
-/** Oldest directory codec the decoder still reads (single-file v4 archives). */
-const MIN_DIRECTORY_VERSION = 4;
+export const DIRECTORY_VERSION = 5;
 /**
  * Tag for the optional trailing covering section: one signed varint per entry
  * (in directory order) giving `coverTMin - timeStart`. Backward-compatible — a
@@ -179,7 +176,7 @@ export interface DirectoryEntry {
   timeEnd: number;
   /**
    * Packed-format pack index (`manifest.packs[packId]`) holding this blob.
-   * `offset`/`length` are pack-relative. `0` for a v4 single-file directory.
+   * `offset`/`length` are pack-relative.
    */
   packId: number;
   offset: number;
@@ -239,21 +236,18 @@ class Cursor {
   }
 }
 
-/** Decode a v4/v5 directory buffer into tile entries (in directory order). */
+/** Decode a v5 (packed) directory buffer into tile entries (in directory order). */
 export function decodeDirectory(bytes: Uint8Array): DirectoryEntry[] {
   if (bytes.length === 0) {
     throw new Error('STT directory: empty buffer');
   }
   const version = bytes[0];
-  if (version < MIN_DIRECTORY_VERSION || version > DIRECTORY_VERSION) {
+  if (version !== DIRECTORY_VERSION) {
     throw new Error(
-      `STT directory: unsupported version ${version} ` +
-        `(expected ${MIN_DIRECTORY_VERSION}..${DIRECTORY_VERSION})`,
+      `STT directory: unsupported version ${version} (expected ${DIRECTORY_VERSION}; ` +
+        `retired single-file v4 directories are no longer read — the client is packed-only)`,
     );
   }
-  // v5 carries a per-run Δpack_id column and resets the offset contiguity
-  // expectation on every pack change; v4 has neither (one implicit pack 0).
-  const hasPackId = version >= 5;
   const c = new Cursor(bytes);
   c.pos = 1;
 
@@ -308,11 +302,10 @@ export function decodeDirectory(bytes: Uint8Array): DirectoryEntry[] {
   let prevPackId = 0n;
   for (let r = 0; r < runCount; r++) {
     const runLen = Number(c.uvarint());
-    // v5: Δpack_id (zig-zag) precedes the offset sentinel. Reset the offset
+    // Δpack_id (zig-zag) precedes the offset sentinel. Reset the offset
     // contiguity expectation when the pack changes, so the first run of each
-    // pack hits the cheap `0` sentinel (offsets are pack-relative). v4 omits
-    // the column entirely — one implicit pack 0, whole-file offsets.
-    const packId = hasPackId ? prevPackId + c.ivarint() : 0n;
+    // pack hits the cheap `0` sentinel (offsets are pack-relative).
+    const packId = prevPackId + c.ivarint();
     if (packId !== prevPackId) {
       expectedOffset = 0n;
     }
@@ -411,7 +404,7 @@ function putIvarint(out: number[], value: bigint): void {
   putUvarint(out, zigzag(value));
 }
 
-/** Encode tile entries into a v4 directory buffer. Round-trips with `decodeDirectory`. */
+/** Encode tile entries into a v5 directory buffer. Round-trips with `decodeDirectory`. */
 export function encodeDirectory(entries: DirectoryEncodeEntry[]): Uint8Array {
   const sorted = [...entries].sort((a, b) => {
     if (a.zoom !== b.zoom) return a.zoom - b.zoom;

@@ -167,6 +167,17 @@ const PREFETCH_CACHE_FRACTION = 0.5;
 const DEFAULT_MAX_PARENT_TILE_BYTES = 2 * 1024 * 1024;
 
 /**
+ * Bound on how many zoom levels finer {@link SpatiotemporalTileset.getVisibleTiles}'s
+ * zoom-out stand-in pass will search for an already-resident descendant tile
+ * (see {@link SpatiotemporalTileset.collectLoadedDescendants}). Mirrors
+ * `PARENT_FALLBACK_LEVELS`'s reasoning in spirit but capped tighter — the
+ * search is a pure `this.tiles` lookup (no fetch), yet still O(4^depth) per
+ * missing cell, so 2 levels (16 lookups) caps the worst case while covering
+ * the common one-or-two-clicks zoom-out gesture.
+ */
+const CHILD_LOOKAHEAD_LEVELS = 2;
+
+/**
  * Real-time lookahead (ms) used to size the DEFAULT probe horizon of
  * {@link SpatiotemporalTileset.getBufferedRunway}: the horizon covers at
  * least `|animationSpeed| × 10 s` of sim-time, i.e. ten wall-seconds of
@@ -360,6 +371,16 @@ export interface TileBatchHooks {
   playheadTime?: number;
   /** Play-head travel direction (+1 forward / -1 backward) paired with {@link playheadTime}. */
   playheadDirection?: 1 | -1;
+  /**
+   * Current viewport center (geographic). The tileset populates it from its
+   * current viewport bounds so a batch implementation backed by
+   * `STTArchive.getTiles` can forward it as `TileRequestOptions.viewportCenter`,
+   * letting the scheduler add a small spatial tie-break — among range-groups
+   * already tied in EDF/enqueue order, the one nearer the viewport center
+   * resolves first (mirrors MapLibre's `coveringTiles()` distanceSq sort).
+   * Optional; implementations that don't share a scheduler ignore it.
+   */
+  viewportCenter?: { lon: number; lat: number };
 }
 
 /** O(n) set equality used to decide whether the needed-tile set actually changed. */
@@ -1905,6 +1926,16 @@ export class SpatiotemporalTileset {
         // layer's getTileDataBatch into STTArchive.getTiles({playheadTime}).
         playheadTime: this.currentViewport?.time,
         playheadDirection: this.prefetchDirection,
+        // Spatial scheduler tie-break (perf research 2026-07): among
+        // range-groups already tied in EDF/enqueue order, the one nearer the
+        // viewport center resolves first. Forwarded the same way as
+        // playheadTime, into STTArchive.getTiles({viewportCenter}).
+        viewportCenter: this.currentViewport
+          ? {
+              lon: (this.currentViewport.bounds.minLon + this.currentViewport.bounds.maxLon) / 2,
+              lat: (this.currentViewport.bounds.minLat + this.currentViewport.bounds.maxLat) / 2,
+            }
+          : undefined,
       },
     )
       .then((tiles) => {
@@ -2851,14 +2882,22 @@ export class SpatiotemporalTileset {
       return out;
     }
 
-    // Find the primary (highest) zoom level that has a loaded tile.
+    // Find the primary (highest) zoom level NEEDED — not necessarily loaded
+    // yet. `neededTileKeys` already carries a header for every needed tile
+    // the moment selectAndLoadTiles selects it (see there), so this is safe
+    // even before anything has loaded: passes 1-2 below still gate on
+    // `isLoaded` and simply contribute nothing in that case, but pass 3 (the
+    // zoom-out finer-descendant stand-in) NEEDS a primaryZoom even when the
+    // new primary tile is still in flight — that's exactly the case it
+    // exists to cover, so deriving primaryZoom from loaded-only tiles would
+    // make it unreachable right when it matters.
     let primaryZoom = -1;
     for (const key of this.neededTileKeys) {
       const header = this.tiles.get(key);
-      if (!header?.isLoaded) continue;
+      if (!header) continue; // defensive; every needed key has a header
       if (header.id.z > primaryZoom) primaryZoom = header.id.z;
     }
-    if (primaryZoom < 0) return []; // Nothing loaded yet.
+    if (primaryZoom < 0) return []; // Defensive: neededTileKeys guarantees headers.
 
     const tiles: Tile[] = [];
     // Cover set at primary zoom: "x/y/t" of loaded primary tiles.
@@ -2904,7 +2943,59 @@ export class SpatiotemporalTileset {
       if (needed) tiles.push(header.tile);
     }
 
+    // Pass 3: primary-zoom cells that are NEEDED but not yet loaded — the
+    // common case right after a zoom-OUT, while the new coarser tile is
+    // still in flight — fall back to already-resident FINER descendant
+    // tiles as a temporary stand-in. Pure reuse of tiles already sitting in
+    // `this.tiles` (typically what was on screen a moment ago): no new
+    // network requests, no change to what selectAndLoadTiles fetches. Only
+    // meaningful for 'best-available', which is the only strategy that ever
+    // shows anything but the exact requested zoom.
+    if (this.options.refinementStrategy !== 'no-overlap') {
+      for (const key of this.neededTileKeys) {
+        const header = this.tiles.get(key);
+        if (!header || header.id.z !== primaryZoom || header.isLoaded) continue;
+        const { z, x, y, t } = header.id;
+        this.collectLoadedDescendants(z, x, y, t, CHILD_LOOKAHEAD_LEVELS, tiles);
+      }
+    }
+
     return tiles;
+  }
+
+  /**
+   * Recursively collect already-loaded, resident tiles at zoom+1..zoom+depth
+   * covering `(zoom, x, y, t)` into `out`. Stops descending into a quadrant
+   * the instant a loaded tile covers it — checking deeper under an
+   * already-covered cell would just double-render the same area. Render-time
+   * only (see {@link getVisibleTiles}): a quadrant with no resident tile at
+   * any depth is simply left uncovered, never fetched.
+   */
+  private collectLoadedDescendants(
+    zoom: number,
+    x: number,
+    y: number,
+    t: number,
+    depth: number,
+    out: Tile[],
+  ): void {
+    if (depth <= 0 || zoom >= this.options.maxZoom) return;
+    const childZoom = zoom + 1;
+    const childCoords: Array<[number, number]> = [
+      [2 * x, 2 * y],
+      [2 * x + 1, 2 * y],
+      [2 * x, 2 * y + 1],
+      [2 * x + 1, 2 * y + 1],
+    ];
+    for (const [cx, cy] of childCoords) {
+      const key = this.tileIdToKey({ z: childZoom, x: cx, y: cy, t });
+      const header = this.tiles.get(key);
+      if (header?.isLoaded && header.tile) {
+        out.push(header.tile);
+      } else {
+        this.collectLoadedDescendants(childZoom, cx, cy, t, depth - 1, out);
+      }
+    }
   }
   
   /**

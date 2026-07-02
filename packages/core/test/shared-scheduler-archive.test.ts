@@ -1,7 +1,7 @@
 /**
  * Integration test: TWO STTArchives sharing the process-shared
  * SharedRequestScheduler (multi-source coordination, Phase 2 — integration;
- * docs/roadmap/multi-source-coordination.md §5 Phase 2).
+ * docs/roadmap/playback-and-loading.md §5).
  *
  * Proves the three non-negotiable Phase-2 contracts:
  *   (a) the GLOBAL concurrency cap is never exceeded across BOTH archives;
