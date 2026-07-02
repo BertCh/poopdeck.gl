@@ -3,7 +3,7 @@
  * `docs/*.md` files are published on the site, their order, grouping, and
  * display titles. Auto-discovery can't express section grouping or prev/next
  * order, and titles would require eagerly loading every file; the corpus is
- * ~20 files and changes rarely, so an explicit manifest wins.
+ * ~40 files and changes rarely, so an explicit manifest wins.
  *
  * `test/docs-manifest-contract.test.ts` pins this against the content glob:
  * every entry must resolve to a bundled file, and every bundled file must be
@@ -18,6 +18,12 @@ export interface DocEntry {
   title: string;
   /** One-line description for the docs landing cards. */
   blurb?: string;
+  /**
+   * Optional sub-group label within a section. Consecutive entries sharing a
+   * group render under one small sub-header in the sidebar; ungrouped entries
+   * render flat. Grouping is visual only — prev/next order is the flat list.
+   */
+  group?: string;
   /** 'json' renders the raw file as a highlighted JSON page. */
   kind?: "markdown" | "json";
 }
@@ -44,6 +50,13 @@ export const docSections: DocSection[] = [
         file: "intro/concepts.md",
         title: "Core Concepts",
         blurb: "Spatiotemporal tiling, temporal LOD, and optimistic rendering.",
+      },
+      {
+        slug: "intro/choosing",
+        file: "intro/choosing.md",
+        title: "Choosing a Layer & Backend",
+        blurb:
+          "Which layer fits your data shape, and which renderer backend fits your stack.",
       },
     ],
   },
@@ -108,6 +121,20 @@ export const docSections: DocSection[] = [
           "MUST/SHOULD reader & writer requirements, golden fixtures, the reference validator.",
       },
       {
+        slug: "spec/stt-serve-protocol",
+        file: "spec/stt-serve-protocol.md",
+        title: "stt-serve Protocol",
+        blurb:
+          "HTTP surface of the dynamic tile server: routes, status codes, headers, /metadata.json.",
+      },
+      {
+        slug: "spec/backend-capabilities",
+        file: "spec/backend-capabilities.md",
+        title: "Backend Capability Matrix",
+        blurb:
+          "Generated cross-backend table of render traits, capabilities, and time-filter modes.",
+      },
+      {
         slug: "spec/manifest-schema",
         file: "spec/manifest.schema.json",
         title: "Manifest Schema",
@@ -117,101 +144,139 @@ export const docSections: DocSection[] = [
     ],
   },
   {
-    id: "api",
-    label: "JS API",
+    id: "layers",
+    label: "deck.gl Layers",
     blurb:
-      "deck.gl layers and extensions, the playback clock, and the @poopdeck.gl/core reader.",
+      "Every animated layer on the SpatioTemporalLayer chassis — points, paths, polygons, trips, OD flows, splats, and the server-aggregated summary tiers.",
     entries: [
       {
         slug: "api/spatiotemporal-layer",
         file: "api/spatiotemporal-layer.md",
         title: "SpatioTemporalLayer",
+        group: "Core",
       },
       {
         slug: "api/animated-point-layer",
         file: "api/animated-point-layer.md",
         title: "AnimatedPointLayer",
+        group: "Core",
       },
       {
         slug: "api/animated-path-layer",
         file: "api/animated-path-layer.md",
         title: "AnimatedPathLayer",
+        group: "Core",
       },
       {
         slug: "api/animated-polygon-layer",
         file: "api/animated-polygon-layer.md",
         title: "AnimatedPolygonLayer",
-      },
-      {
-        slug: "api/animated-trips-layer",
-        file: "api/animated-trips-layer.md",
-        title: "AnimatedTripsLayer",
-      },
-      {
-        slug: "api/animated-trip-heads-layer",
-        file: "api/animated-trip-heads-layer.md",
-        title: "AnimatedTripHeadsLayer",
-      },
-      {
-        slug: "api/heatmap-time-layer",
-        file: "api/heatmap-time-layer.md",
-        title: "AnimatedHeatmapLayer",
-      },
-      {
-        slug: "api/h3-summary-layer",
-        file: "api/h3-summary-layer.md",
-        title: "H3SummaryLayer",
-      },
-      {
-        slug: "api/quadbin-summary-layer",
-        file: "api/quadbin-summary-layer.md",
-        title: "QuadbinSummaryLayer",
-      },
-      {
-        slug: "api/flowmap-layer",
-        file: "api/flowmap-layer.md",
-        title: "FlowmapLayer",
-      },
-      {
-        slug: "api/bundled-flowmap-layer",
-        file: "api/bundled-flowmap-layer.md",
-        title: "BundledFlowmapLayer",
-      },
-      {
-        slug: "api/flow-lines-layer",
-        file: "api/flow-lines-layer.md",
-        title: "FlowLinesLayer",
-      },
-      {
-        slug: "api/flow-corridor-layer",
-        file: "api/flow-corridor-layer.md",
-        title: "FlowCorridorLayer",
-      },
-      {
-        slug: "api/animated-arc-layer",
-        file: "api/animated-arc-layer.md",
-        title: "AnimatedArcLayer",
-      },
-      {
-        slug: "api/animated-line-layer",
-        file: "api/animated-line-layer.md",
-        title: "AnimatedLineLayer",
-      },
-      {
-        slug: "api/animated-icon-layer",
-        file: "api/animated-icon-layer.md",
-        title: "AnimatedIconLayer",
+        group: "Core",
       },
       {
         slug: "api/animated-column-layer",
         file: "api/animated-column-layer.md",
         title: "AnimatedColumnLayer",
+        group: "Core",
+      },
+      {
+        slug: "api/animated-icon-layer",
+        file: "api/animated-icon-layer.md",
+        title: "AnimatedIconLayer",
+        group: "Core",
       },
       {
         slug: "api/animated-bounding-box-layer",
         file: "api/animated-bounding-box-layer.md",
         title: "AnimatedBoundingBoxLayer",
+        group: "Core",
       },
+      {
+        slug: "api/splat-layer",
+        file: "api/splat-layer.md",
+        title: "SplatLayer",
+        group: "Core",
+      },
+      {
+        slug: "api/animated-trips-layer",
+        file: "api/animated-trips-layer.md",
+        title: "AnimatedTripsLayer",
+        group: "Trips",
+      },
+      {
+        slug: "api/animated-trip-heads-layer",
+        file: "api/animated-trip-heads-layer.md",
+        title: "AnimatedTripHeadsLayer",
+        group: "Trips",
+      },
+      {
+        slug: "api/animated-arc-layer",
+        file: "api/animated-arc-layer.md",
+        title: "AnimatedArcLayer",
+        group: "OD & flow",
+      },
+      {
+        slug: "api/animated-line-layer",
+        file: "api/animated-line-layer.md",
+        title: "AnimatedLineLayer",
+        group: "OD & flow",
+      },
+      {
+        slug: "api/flowmap-layer",
+        file: "api/flowmap-layer.md",
+        title: "FlowmapLayer",
+        group: "OD & flow",
+      },
+      {
+        slug: "api/flow-lines-layer",
+        file: "api/flow-lines-layer.md",
+        title: "FlowLinesLayer",
+        group: "OD & flow",
+      },
+      {
+        slug: "api/bundled-flowmap-layer",
+        file: "api/bundled-flowmap-layer.md",
+        title: "BundledFlowmapLayer",
+        group: "OD & flow",
+      },
+      {
+        slug: "api/flow-corridor-layer",
+        file: "api/flow-corridor-layer.md",
+        title: "FlowCorridorLayer",
+        group: "OD & flow",
+      },
+      {
+        slug: "api/flow-stroke-layer",
+        file: "api/flow-stroke-layer.md",
+        title: "FlowStrokeLayer",
+        group: "OD & flow",
+      },
+      {
+        slug: "api/heatmap-time-layer",
+        file: "api/heatmap-time-layer.md",
+        title: "AnimatedHeatmapLayer",
+        group: "Summary tiers",
+      },
+      {
+        slug: "api/h3-summary-layer",
+        file: "api/h3-summary-layer.md",
+        title: "H3SummaryLayer",
+        group: "Summary tiers",
+      },
+      {
+        slug: "api/quadbin-summary-layer",
+        file: "api/quadbin-summary-layer.md",
+        title: "QuadbinSummaryLayer",
+        group: "Summary tiers",
+      },
+    ],
+  },
+  {
+    id: "extensions",
+    label: "Extensions",
+    blurb:
+      "GPU layer extensions: temporal filtering, categorical color, marching chevrons, and gaussian splats.",
+    entries: [
       {
         slug: "api/time-filter-extension",
         file: "api/time-filter-extension.md",
@@ -222,6 +287,24 @@ export const docSections: DocSection[] = [
         file: "api/category-color-extension.md",
         title: "CategoryColorExtension",
       },
+      {
+        slug: "api/chevron-flow-extension",
+        file: "api/chevron-flow-extension.md",
+        title: "ChevronFlowExtension",
+      },
+      {
+        slug: "api/splat-extension",
+        file: "api/splat-extension.md",
+        title: "SplatExtension",
+      },
+    ],
+  },
+  {
+    id: "playback",
+    label: "Playback",
+    blurb:
+      "The animation clock, the buffering governor, the media-element facade, and the React playback hooks + controls.",
+    entries: [
       {
         slug: "api/stt-player",
         file: "api/stt-player.md",
@@ -238,6 +321,19 @@ export const docSections: DocSection[] = [
         title: "PlaybackGovernor",
       },
       {
+        slug: "api/stt-react",
+        file: "api/stt-react.md",
+        title: "@poopdeck.gl/react",
+      },
+    ],
+  },
+  {
+    id: "core",
+    label: "Core Reader & Kernel",
+    blurb:
+      "The @poopdeck.gl/core reader — archive, tileset, decoder, binary features — and the framework-free render kernel.",
+    entries: [
+      {
         slug: "api/stt-loader",
         file: "api/stt-loader.md",
         title: "Tile Decoding",
@@ -253,14 +349,37 @@ export const docSections: DocSection[] = [
         title: "Binary Features",
       },
       {
-        slug: "api/stt-react",
-        file: "api/stt-react.md",
-        title: "@poopdeck.gl/react",
+        slug: "api/render-kernel",
+        file: "api/render-kernel.md",
+        title: "Render Kernel",
+      },
+    ],
+  },
+  {
+    id: "backends",
+    label: "Renderer Backends",
+    blurb:
+      "Rendering STT beyond deck.gl: Three.js + TSL, MapLibre custom layers, CesiumJS — and the descriptor contract behind the capability matrix.",
+    entries: [
+      {
+        slug: "api/stt-three",
+        file: "api/stt-three.md",
+        title: "@poopdeck.gl/three",
       },
       {
         slug: "api/stt-maplibre",
         file: "api/stt-maplibre.md",
         title: "@poopdeck.gl/maplibre",
+      },
+      {
+        slug: "api/stt-cesium",
+        file: "api/stt-cesium.md",
+        title: "@poopdeck.gl/cesium",
+      },
+      {
+        slug: "api/backend-descriptor",
+        file: "api/backend-descriptor.md",
+        title: "BackendDescriptor",
       },
     ],
   },
@@ -268,13 +387,14 @@ export const docSections: DocSection[] = [
     id: "cli",
     label: "CLI",
     blurb:
-      "stt-build, stt-generate, stt-optimize and stt-validate — every flag, with examples.",
+      "stt-build, stt-generate, stt-optimize, stt-validate and stt-serve — every flag, with examples.",
     entries: [
       {
         slug: "api/cli-reference",
         file: "api/cli-reference.md",
         title: "CLI Reference",
-        blurb: "stt-build · stt-generate · stt-optimize · stt-validate",
+        blurb:
+          "stt-build · stt-generate · stt-optimize · stt-validate · stt-serve",
       },
     ],
   },
@@ -295,6 +415,13 @@ export const docSections: DocSection[] = [
         file: "guides/python.md",
         title: "Building from Python",
         blurb: "GeoPandas / DuckDB / pyarrow → GeoParquet → stt-build.",
+      },
+      {
+        slug: "guides/deploying",
+        file: "guides/deploying.md",
+        title: "Deploying a Dataset",
+        blurb:
+          "R2 / S3 / GCS / nginx: cache regimes, CORS, copy-never-delete.",
       },
     ],
   },

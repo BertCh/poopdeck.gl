@@ -3,7 +3,13 @@
  * alias). The map surface and playback wiring live in shared pieces —
  * `DemoViewer` and `useDemoPlayback` — so the per-demo landing-page embed
  * renders the identical demo; this page is just the fullscreen shell around
- * them (header, viewport frame, bottom transport bar).
+ * them.
+ *
+ * Layout: the map is full-bleed (fills the whole surface, no frame) and the
+ * chrome floats *on top of* it — a title/description panel top-left and the
+ * transport bar bottom-centre — matching the AV cockpit and the in-map
+ * legend/cube chips. This inverts the old "map inset inside page chrome"
+ * frame into "UI inside the map".
  */
 import React, { useMemo, useState } from "react";
 import { useParams, useLocation, Navigate, Link } from "react-router-dom";
@@ -18,6 +24,25 @@ import { usePlaybackHotkeys, PlaybackControls } from "@poopdeck.gl/react";
 
 /** Dataset types the `@poopdeck.gl/maplibre` adapter can mount (see makeSttLayer). */
 const MAPLIBRE_TYPES = new Set(["point", "path", "trips", "polygon", "heatmap"]);
+
+/**
+ * `PlaybackControls` is authored in the site's light editorial theme (dark ink
+ * on a white surface). Floated over the dark map it needs the inverse palette,
+ * so we remap its CSS custom properties on the wrapper instead of forking the
+ * shared, published component. Values mirror the dark in-map chips already in
+ * `DemoViewer` (cube/summary controls) and the app's cyan data accent.
+ */
+const DARK_CONTROL_THEME = {
+  "--ink-900": "#f4f5f7",
+  "--ink-700": "#d5d8de",
+  "--ink-500": "#a0a7b4",
+  "--ink-400": "#7b8494",
+  "--surface": "#262a33",
+  "--hairline": "rgba(255, 255, 255, 0.14)",
+  "--accent": "#1fbad6",
+  "--accent-soft": "rgba(31, 186, 214, 0.16)",
+  "--page-bg": "#15171c",
+} as React.CSSProperties;
 
 const DemoPage: React.FC = () => {
   const { datasetId } = useParams<{ datasetId: string }>();
@@ -54,107 +79,95 @@ const DemoPage: React.FC = () => {
     ? `/demos/${selectedDataset.id}`
     : "/demos";
 
+  // Push DemoViewer's top-left in-map chips (cube / summary toggle) below the
+  // floating header so they don't collide. The header grows by one row when
+  // the renderer toggle is present, so budget a little more for it.
+  const headerInset = maplibreCapable ? 148 : 112;
+
   return (
-    <div
-      className="h-full flex flex-col overflow-hidden"
-      style={{ background: "var(--page-bg)" }}
-    >
-      {/* Header */}
-      <div
-        className="shrink-0 px-5 py-4"
-        style={{ borderBottom: "1px solid var(--hairline)" }}
-      >
+    <div className="h-full relative overflow-hidden" style={{ background: "#0a0d12" }}>
+      {/* Full-bleed map — fills the whole surface; the chrome floats on top. */}
+      <div className="absolute inset-0">
+        {useMaplibre ? (
+          <MaplibreRenderer
+            key={selectedDataset.id}
+            dataset={selectedDataset}
+            timeController={playback.timeController}
+          />
+        ) : (
+          <DemoViewer
+            dataset={selectedDataset}
+            playback={playback}
+            showPerfHud
+            topLeftInset={headerInset}
+            onCameraChange={setCamera}
+          />
+        )}
+      </div>
+
+      {/* Floating header (top-left): back link, title, description, and the
+          optional renderer toggle — a dark frosted panel over the map. */}
+      <div className="glass rounded-md absolute top-3 left-3 z-10 max-w-xs px-3.5 py-3">
         <Link
           to={backTarget}
-          className="inline-flex items-center gap-1 text-xs mb-2 transition-colors"
-          style={{ color: "var(--ink-500)" }}
-          onMouseOver={(e) => (e.currentTarget.style.color = "var(--accent)")}
-          onMouseOut={(e) => (e.currentTarget.style.color = "var(--ink-500)")}
+          className="inline-flex items-center gap-1 text-xs mb-1.5 text-slate-400 transition-colors hover:text-cyan-300"
         >
           <span>←</span> {getDemoMeta(selectedDataset.id) ? "About this demo" : "Demos"}
         </Link>
-        <h1
-          className="font-display text-base font-semibold leading-tight"
-          style={{ color: "var(--ink-900)" }}
-        >
+        <h1 className="font-display text-base font-semibold leading-tight text-slate-100">
           {selectedDataset.name}
         </h1>
-        <p className="text-xs mt-1" style={{ color: "var(--ink-500)" }}>
+        <p className="text-xs mt-1 leading-snug text-slate-400 line-clamp-2">
           {selectedDataset.description}
         </p>
-      </div>
-
-      {/* Map Viewport */}
-      <div className="flex-1 min-h-0 p-3 lg:p-5">
-        <div className="w-full h-full rounded-lg overflow-hidden relative">
-          {useMaplibre ? (
-            <MaplibreRenderer
-              key={selectedDataset.id}
-              dataset={selectedDataset}
-              timeController={playback.timeController}
-            />
-          ) : (
-            <DemoViewer
-              dataset={selectedDataset}
-              playback={playback}
-              showPerfHud
-              onCameraChange={setCamera}
-            />
-          )}
-          {maplibreCapable && (
-            <button
-              onClick={() =>
-                setRenderer((r) => (r === "deck" ? "maplibre" : "deck"))
-              }
-              className="absolute top-3 left-3 z-10 px-2.5 py-1 rounded text-xs font-medium transition-colors"
-              style={{
-                background: "var(--surface)",
-                color: "var(--ink-500)",
-                border: "1px solid var(--hairline)",
-              }}
-              title="Swap the rendering library for the same tileset"
-            >
-              Renderer: {useMaplibre ? "MapLibre" : "deck.gl"}
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* Bottom Controls */}
-      <div
-        className="shrink-0"
-        style={{ background: "var(--surface)", borderTop: "1px solid var(--hairline)" }}
-      >
-        <div className="px-5 py-3">
-          <PlaybackControls
-            currentTime={playback.currentTime}
-            timeRange={selectedDataset.timeRange}
-            isPlaying={playback.isPlaying}
-            bufferState={playback.bufferState}
-            governor={playback.governor}
-            onPlayPause={playback.onPlayPause}
-            onSeek={playback.onSeek}
-            onSpeedChange={playback.onSpeedChange}
-            currentSpeedMultiplier={playback.speedMultiplier}
-            targetPlaybackSeconds={selectedDataset.targetPlaybackSeconds ?? 30}
-            autoSpeed={playback.autoSpeed}
-            onAutoSpeedSelect={playback.onAutoSpeedSelect}
-            // Hover preview is deck-only (it needs the deck camera/render path);
-            // the maplibre renderer doesn't feed a camera, so omit it there.
-            renderPreview={
-              useMaplibre
-                ? undefined
-                : (time) => (
-                    <DemoHoverPreview
-                      key={selectedDataset.id}
-                      dataset={selectedDataset}
-                      camera={camera}
-                      time={time}
-                    />
-                  )
+        {maplibreCapable && (
+          <button
+            onClick={() =>
+              setRenderer((r) => (r === "deck" ? "maplibre" : "deck"))
             }
-          />
-        </div>
+            className="mt-2.5 px-2.5 py-1 rounded text-xs font-medium text-slate-300 border border-white/15 transition-colors hover:bg-white/5"
+            title="Swap the rendering library for the same tileset"
+          >
+            Renderer: {useMaplibre ? "MapLibre" : "deck.gl"}
+          </button>
+        )}
+      </div>
+
+      {/* Floating transport bar (bottom, centred). Dark frosted panel; the
+          shared PlaybackControls is light-themed, so we remap its CSS vars to
+          the dark palette on the wrapper (see DARK_CONTROL_THEME). */}
+      <div
+        className="glass rounded-md absolute bottom-3 left-3 right-3 z-10 mx-auto max-w-4xl px-4 py-3"
+        style={DARK_CONTROL_THEME}
+      >
+        <PlaybackControls
+          currentTime={playback.currentTime}
+          timeRange={selectedDataset.timeRange}
+          isPlaying={playback.isPlaying}
+          bufferState={playback.bufferState}
+          governor={playback.governor}
+          onPlayPause={playback.onPlayPause}
+          onSeek={playback.onSeek}
+          onSpeedChange={playback.onSpeedChange}
+          currentSpeedMultiplier={playback.speedMultiplier}
+          targetPlaybackSeconds={selectedDataset.targetPlaybackSeconds ?? 30}
+          autoSpeed={playback.autoSpeed}
+          onAutoSpeedSelect={playback.onAutoSpeedSelect}
+          // Hover preview is deck-only (it needs the deck camera/render path);
+          // the maplibre renderer doesn't feed a camera, so omit it there.
+          renderPreview={
+            useMaplibre
+              ? undefined
+              : (time) => (
+                  <DemoHoverPreview
+                    key={selectedDataset.id}
+                    dataset={selectedDataset}
+                    camera={camera}
+                    time={time}
+                  />
+                )
+          }
+        />
       </div>
     </div>
   );

@@ -9,7 +9,7 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "lint": "eslint src",
+    "typecheck": "tsc --noEmit",
     "clean": "rm -rf node_modules/.vite dist *.tsbuildinfo && find src -type f \\( -name '*.js' -o -name '*.js.map' -o -name '*.d.ts' -o -name '*.d.ts.map' \\) ! -name '*.config.js' ! -name '*.test.js' -delete"
   },
   "dependencies": {
@@ -47,7 +47,9 @@
     "rehype-slug": "^6.0.0",
     "remark-gfm": "^4.0.1",
     "tailwindcss": "^4.1.18",
-    "three": "^0.184.0"
+    "three": "^0.184.0",
+    "@poopdeck.gl/cesium": "workspace:*",
+    "cesium": "^1.142.0"
   },
   "devDependencies": {
     "@types/react": "^19.2.0",

@@ -62,9 +62,25 @@ For arbitrary GeoParquet input, use `stt-build` directly. See the
 
 ## Creating Your Own App
 
+The `@poopdeck.gl/*` packages are **not yet published to npm** — today,
+build them from the monorepo and consume them via `file:` dependencies:
+
 ```bash
-mkdir my-stt-app && cd my-stt-app
+git clone https://github.com/BertCh/spatiotemporal-tiles
+cd spatiotemporal-tiles
+pnpm install && pnpm build
+
+mkdir ~/my-stt-app && cd ~/my-stt-app
 npm init -y
+npm install <path-to>/spatiotemporal-tiles/packages/core \
+  <path-to>/spatiotemporal-tiles/packages/layers \
+  <path-to>/spatiotemporal-tiles/packages/playback \
+  @deck.gl/react react react-dom
+```
+
+Once published, this becomes:
+
+```bash
 npm install @poopdeck.gl/core @poopdeck.gl/layers @poopdeck.gl/playback @deck.gl/react react react-dom
 ```
 

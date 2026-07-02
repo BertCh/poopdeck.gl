@@ -186,7 +186,7 @@ const AV_HEIGHT_BAND_LEGEND: DatasetLegend = {
   title: 'LIDAR height band (m)',
   items: [
     { color: '#343c9e', label: 'ground' },
-    { color: '#28a8a8', label: 'car-roof' },
+    { color: '#26a8a8', label: 'car-roof' },
     { color: '#aad64a', label: 'mid' },
     { color: '#f8c63c', label: 'building edge' },
     { color: '#fa8c30', label: 'rooftops' },
@@ -1291,6 +1291,326 @@ const rawDatasets: Dataset[] = [
     },
   },
   {
+    // The street-network heatmap with DIRECTION added: same routed-and-baked
+    // per-hour ridership, but the build (`bixi --streets --directional`) also
+    // tracks each edge's net travel direction and PRE-ORIENTS every corridor's
+    // geometry toward its month-dominant flow. FlowCorridorLayer + a
+    // ChevronFlowExtension then slide arrowhead chevrons along each segment the
+    // way riders actually go, so you read the tidal commute — cores fill in the
+    // morning, empty at night — as motion, not just brightness.
+    id: 'bixi-streets-flow',
+    name: 'Montréal BIXI — Directional Flow',
+    sources: ['bixi'],
+    description:
+      'The BIXI street network with direction: every segment’s dominant travel ' +
+      'direction is baked in, and marching chevrons flow along the cycleways the ' +
+      'way riders go while brightness still pulses with the hourly commute. ' +
+      'Source: BIXI Montréal open data.',
+    url: '/data/bixi-streets-flow/manifest.json',
+    type: 'trips',
+    // Same span as bixi-streets. The directional generator prints the exact
+    // matrix start/end — set these to that after the build.
+    timeRange: {
+      start: 1722470400000, // 2024-08-01 00:00 UTC
+      end: 1725148800000,   // 2024-09-01 00:00 UTC
+    },
+    timeWindow: 3600000,
+    targetPlaybackSeconds: 150,
+    initialViewState: {
+      longitude: -73.578,
+      latitude: 45.52,
+      zoom: 12.5, // a touch closer so the chevrons read
+      pitch: 30,
+      bearing: -12,
+    },
+    // Magnitude still drives colour (same measured domain as bixi-streets); the
+    // chevrons carry direction on top.
+    tripGradient: {
+      property: 'vertexValues',
+      domain: [0, 16],
+      colors: [
+        [30, 50, 120, 0],
+        [40, 150, 200, 210],
+        [120, 210, 160, 230],
+        [255, 170, 70, 245],
+        [255, 255, 255, 255],
+      ],
+    },
+    colorMappingDefault: [70, 80, 90, 120],
+    flowMatrix: true,
+    // Directional overlay: pre-oriented corridors + marching chevrons. Tunables
+    // are conservative defaults — easy to retune in-browser without a rebuild.
+    flowDirectional: true,
+    chevronPeriod: 5,
+    chevronSpeed: 0.0006,
+    chevronSkew: 1.5,
+    chevronDuty: 0.45,
+    chevronBaseAlpha: 0.18,
+    trailLength: 0,
+    // A hair wider than bixi-streets so the arrowheads are legible.
+    widthMinPixels: 2,
+    widthMaxPixels: 5,
+    capRounded: false,
+    jointRounded: false,
+    legend: {
+      title: 'BIXI trips per segment / hour · chevrons = flow direction',
+      ramps: [
+        {
+          label: '0 → 16+',
+          colors: ['#1E3278', '#2896C8', '#78D2A0', '#FFAA46', '#FFFFFF'],
+        },
+      ],
+    },
+  },
+  {
+    // A coherent, Sankey-like FLOW NETWORK (Edge-Path Bundling, no streets):
+    // stations cluster into hubs connected by a Delaunay proximity graph, and
+    // every OD flow is routed along the graph's shortest path (cost = length^k),
+    // so flows heading the same way collapse onto SHARED TRUNK LINES that swell
+    // where tributaries join and taper where they leave — little lines entering
+    // and leaving one big line. Width breathes with the active hour; the two
+    // directions draw as twin offset ribbons (inbound vs outbound rush). The
+    // coherent alternative to the abstract smear of force-directed bundling.
+    id: 'bixi-corridors',
+    name: 'Montréal BIXI — Flow Network',
+    sources: ['bixi'],
+    description:
+      'A month of real BIXI trips bundled into a coherent, Sankey-like flow ' +
+      'network: little origin→destination lines merge onto shared trunk lines that ' +
+      'thicken where flows join and thin where they leave, then fan back out — no ' +
+      'streets, no smear. The playhead scrubs the whole of August 2024 hour by hour, ' +
+      'so each trunk breathes with the real commute — weekday rush hours swelling, ' +
+      'nights and weekends fading. Source: BIXI Montréal open data.',
+    url: '/data/bixi-corridors/manifest.json',
+    type: 'trips',
+    // The WHOLE month at hourly resolution (744 buckets). The flow network is
+    // compact (~500 trunks), so even at 744 buckets the biggest overview tile is
+    // ~14 MB uncompressed — well within the worker's decode budget.
+    timeRange: {
+      start: 1722470400000, // 2024-08-01 00:00 UTC
+      end: 1725148800000,   // 2024-09-01 00:00 UTC
+    },
+    timeWindow: 3600000,
+    targetPlaybackSeconds: 150,
+    // City overview: the volume LOD keeps only the heavy trunk lines here, so the
+    // flow network reads cleanly before zooming into neighbourhood detail.
+    initialViewState: {
+      longitude: -73.578,
+      latitude: 45.523,
+      zoom: 11.5,
+      pitch: 35,
+      bearing: -12,
+    },
+    // Width AND colour carry the active-hour traveller count (PER VERTEX, so each
+    // curved trunk tapers along its length AND breathes with the hour). Whole-month
+    // hourly counts, so values are per single hour — domain tuned from the measured
+    // distribution (busiest-hour count per trunk: p90≈47, p95≈76, p97≈96, max≈155)
+    // so green lands mid-network and the busiest trunk-hours saturate white.
+    tripGradient: {
+      property: 'vertexValues',
+      domain: [0, 90], // active single-hour travellers on a trunk
+      colors: [
+        [30, 50, 120, 180],   // quiet
+        [40, 150, 200, 215],  // teal
+        [120, 210, 160, 235], // BIXI green
+        [255, 170, 70, 248],  // arterial orange
+        [255, 255, 255, 255], // busiest trunk-hours
+      ],
+    },
+    colorMappingDefault: [70, 80, 90, 120],
+    // FlowStrokeLayer: trunk geometry loads once; colour animates by active bucket
+    // AND per-vertex width breathes with the hour + tapers along the trunk. Twin
+    // offset ribbons (baked) split the two directions. trailLength 0 keeps trunks lit.
+    flowStroke: true,
+    // SPATIAL widths: trunk thickness is in METRES, so ribbons are anchored to the
+    // ground and thicken/thin as you zoom (like the map itself), clamped to a
+    // pixel range so they stay legible at the overview and bounded up close.
+    widthUnits: 'meters',
+    flowWidthScale: 1,     // metres per √(active single-hour travellers); √155≈12 ⇒ ~680 m
+    flowWidthExponent: 0.5, // √ → area-proportional
+    flowMinFlow: 1,         // near-empty hours collapse to invisible (the pulse)
+    // Twin-ribbon separation is BAKED into the geometry at build time
+    // (--ribbon-offset), so no render-time PathStyleExtension (0 disables it and
+    // keeps the sublayer on the proven FlowCorridorLayer shader layout).
+    flowOffsetWidths: 0,
+    trailLength: 0,
+    widthMinPixels: 1.5,    // quiet trunks stay visible at the overview
+    widthMaxPixels: 30,     // bold but bounded when zoomed in
+    capRounded: true,
+    jointRounded: true,
+    legend: {
+      title: 'BIXI trunk width & colour = travellers / hour',
+      ramps: [
+        {
+          label: '0 → 90+',
+          colors: ['#1E3278', '#2896C8', '#78D2A0', '#FFAA46', '#FFFFFF'],
+        },
+      ],
+    },
+  },
+  {
+    id: 'bixi-points',
+    name: 'Montréal BIXI — Moving Bikes',
+    sources: ['bixi'],
+    description:
+      'Every BIXI ride as a dot gliding along the real bike network — one ' +
+      'moving cyclist per active trip, routed through OSRM and timed to its ' +
+      'actual ride window. The BIXI counterpart of the NYC taxi head-dots. ' +
+      'Source: BIXI Montréal open data + OpenStreetMap (via OSRM).',
+    // Same OSRM-routed per-trip path archive as a `type: 'trips'` ribbons demo
+    // would use — rendered here as moving head-dots (AnimatedTripHeadsLayer:
+    // stock ScatterplotLayer + CPU per-frame head interpolation). One build,
+    // no separate points dataset, exactly like nyc-taxi-points.
+    url: '/data/bixi-points/manifest.json',
+    type: 'trip-heads',
+    // Real archive span from the `bixi --paths` build: Thu 2024-08-15,
+    // 49,974 OSRM-routed rides (all with per-vertex timing). End runs past
+    // midnight UTC to the last ride's dropoff.
+    timeRange: {
+      start: 1723680000000, // 2024-08-15 00:00:00 UTC
+      end: 1723773613449,   // 2024-08-16 02:00:13 UTC (last dropoff)
+    },
+    timeWindow: 20000,
+    // A day of rides in ~10 min so individual bike heads stay readable as they
+    // thread the cycleways (BIXI trips are slower and denser than cabs).
+    targetPlaybackSeconds: 600,
+    initialViewState: {
+      longitude: -73.578,
+      latitude: 45.518,
+      zoom: 14,
+      pitch: 45,
+      bearing: -12,
+    },
+    legend: {
+      title: 'BIXI',
+      items: [{ color: '#E63946', label: 'Active ride' }],
+    },
+    // World-space head dots (meters): a 25 m head reads ~3.5 px at the zoom-14
+    // view and emerges/shrinks on zoom with no pixel floor (radiusMinPixels: 0);
+    // radiusMaxPixels caps a docked bike from ballooning at deep zoom.
+    headColor: [230, 57, 70, 255],
+    headSizeUnits: 'meters',
+    headRadius: 25,      // metres
+    headRadiusMinPixels: 0,
+    headRadiusMaxPixels: 8,
+  },
+  {
+    id: 'bixi-live',
+    name: 'Montréal BIXI — Flow & Riders',
+    sources: ['bixi'],
+    description:
+      'Two views of the same city on one clock: the directional street-network ' +
+      'flow underneath (chevrons pointing the way riders go, corridor brightness ' +
+      'pulsing with the commute) and every individual ride as a moving dot gliding ' +
+      'along its real route on top. Watch the morning rush light the corridors ' +
+      'while thousands of bikes stream through them. Source: BIXI Montréal open data + OSM (via OSRM).',
+    // COMPOSITE: primary = a directional flow-corridor archive built just for this
+    // demo (bixi-live-flow: Aug 15, 25.6k corridors) as a DECORATIVE aggregate base
+    // (static chevrons pulsing colour with volume); overlay = the per-trip OSRM
+    // paths as moving heads (bixi-points) — the live per-trip motion. Both cover
+    // the same single day. Built at 5-MINUTE buckets: finer would over-resolve the
+    // colour pulse AND blow the browser worker's ArrayBuffer on the dense downtown
+    // z13 tile (the per-vertex×bucket matrix decodes DENSE — 1-min = ~5 GB total,
+    // 5-min ≈ 1 GB, 10-min ≈ 0.5 GB). Rebuild: stt-generate bixi --input
+    // <bixi-2024.csv> --from 2024-08-15 --to 2024-08-16 --min-trips 1 --streets
+    // --directional --per-bucket-direction --osm-pbf <quebec.osm.pbf> --bin 5m.
+    url: '/data/bixi-live-flow/manifest.json',
+    type: 'trips',
+    headsOverlayUrl: '/data/bixi-points/manifest.json',
+    // Aug 15 2024 — the single day both archives cover.
+    timeRange: {
+      start: 1723680000000, // 2024-08-15 00:00:00 UTC
+      end: 1723766400000,   // 2024-08-16 00:00:00 UTC (clean 24 h; corridors lit throughout)
+    },
+    // 1h window comfortably covers the current 10-min flow bucket AND the current
+    // tile of active rides for both layers (heads filter trips by the playhead).
+    timeWindow: 3600000,
+    targetPlaybackSeconds: 600, // the day plays in ~10 min (matches bixi-points)
+    initialViewState: {
+      longitude: -73.578,
+      latitude: 45.52,
+      zoom: 13, // wide enough to read the corridors, close enough to see riders
+      pitch: 35,
+      bearing: -12,
+    },
+    // Darkest-possible backdrop: hide every place/road label and sink the land
+    // to near-black, leaving faint streets + water as context so the flow
+    // corridors and moving riders own the frame. The street network is pulled
+    // down to a dark blue-grey (just above the land) so it reads as quiet
+    // context rather than dark-v11's brighter default grey.
+    basemapHideLabels: true,
+    basemapBackgroundColor: '#02040a',
+    basemapRoadColor: '#0a0d14',
+    // ── DECORATIVE corridor base: the aggregate network, styled. Volume drives
+    //    OPACITY (quiet → transparent, busy → solid) via the ramp's alpha stops,
+    //    so busy roads read brighter; the arrowheads take the cardinal DIRECTION
+    //    hue. The live per-trip motion is carried by the moving-point overlay
+    //    (bixi-points), NOT by flashing these arrows. ──
+    tripGradient: {
+      property: 'vertexValues',
+      // 10-min bucket volume: below bixi-streets-flow's [0,16]. Lower the top to
+      // brighten the network; raise it to keep only the busiest corridors lit.
+      domain: [0, 4],
+      colors: [
+        [255, 230, 255, 20],  // white, low
+        [255, 218, 255, 20],  // glowing pale pink
+        [203, 132, 232, 20],  // pink-lilac
+        [143, 92, 213, 40],   // lavender purple
+        [91, 63, 166, 160],   // saturated purple
+        [58, 43, 124, 200],   // deep violet, high
+      ],
+    },
+    colorMappingDefault: [52, 46, 74, 120], // dim violet-grey for no-data segments
+    flowMatrix: true,
+    flowDirectional: true,
+    // The flow archive is SIGNED (--per-bucket-direction), so the layer colours by
+    // |value| (volume). Kept for the geometry pre-orientation (arrows point the
+    // day-dominant direction) — but see chevronPerBucketDirection below.
+    flowSignedDirection: true,
+    chevronPeriod: 8,
+    chevronSpeed: 0, // STATIC — no marching
+    // Static, even arrows: fit a whole number of chevrons per street segment so
+    // they land ~chevronPeriod apart and never truncate at a bend/intersection.
+    chevronUniformSpacing: true,
+    // STATIC CHEVRONS: no per-vertex direction morph/flip (the arrows don't move
+    // or change over time). They point the pre-oriented (day-dominant) winding and
+    // just pulse COLOUR with the volume matrix. This decouples from flowSignedDirection
+    // so the layer still colours by |value| while the chevrons stay put.
+    chevronPerBucketDirection: false,
+    // Not per-trip: the corridor is a calm DECORATIVE base showing aggregate
+    // volume; live per-trip motion is the moving-point overlay (bixi-points).
+    chevronPerTripLight: false,
+    chevronSkew: 1.5,
+    chevronDuty: 0.45,
+    // DE-EMPHASIZED: a higher track alpha shows the road NETWORK as the decoration
+    // and keeps the arrowheads only slightly brighter, so the chevrons read as a
+    // subtle directional texture rather than the focal point.
+    chevronBaseAlpha: 0.5,
+    trailLength: 0,
+    widthMinPixels: 2,
+    widthMaxPixels: 4,
+    capRounded: false,
+    jointRounded: false,
+    // ── Moving riders: luminous BIXI green — the complementary accent that pops
+    //    against the purple corridors. Min 2 px so a bike is always a visible dot
+    //    at the z13 overview (world-space otherwise, so it still grows on zoom-in). ──
+    headColor: [58, 220, 120, 255], // #3ADC78 BIXI green
+    headSizeUnits: 'meters',
+    headRadius: 6,      // metres
+    headRadiusMinPixels: 0,
+    headRadiusMaxPixels: 4,
+    legend: {
+      title: 'Corridor brightness = trips/segment/hour · chevrons = direction',
+      ramps: [
+        {
+          label: '0 → 16+',
+          colors: ['#3A2A6E', '#7052B2', '#9F7CE2', '#CAB6F6', '#F4EEFF'],
+        },
+      ],
+      items: [{ color: '#3ADC78', label: 'Individual ride' }],
+    },
+  },
+  {
     id: 'flights',
     name: 'Flight Traffic',
     sources: ['opensky'],
@@ -1675,6 +1995,104 @@ const rawDatasets: Dataset[] = [
           colors: ['#232D82', '#2896C8', '#FAC850', '#FF963C', '#FFFFFF'],
         },
       ],
+    },
+  },
+  {
+    id: 'nyc-flow-and-riders',
+    name: 'NYC Taxi — Flow & Riders',
+    sources: ['tlc'],
+    description:
+      'Two views of the same city on one clock: the street grid pulsing with ' +
+      'aggregate taxi volume underneath (15-minute corridor flows, quiet streets ' +
+      'dim, arteries glowing) and every individual cab as a moving neon-magenta dot ' +
+      'threading its real route on top. Watch the corridors brighten through the ' +
+      'small hours and midday while thousands of taxis stream through them. ' +
+      'Source: NYC TLC + OpenStreetMap (via OSRM).',
+    // COMPOSITE (mirrors bixi-live "Flow & Riders"): primary = the pre-aggregated
+    // flow-corridor archive (nyc-taxi-flows, static geometry + per-vertex × per-
+    // 15-min-bin value matrix → FlowCorridorLayer, the DIM base); overlay = the
+    // per-trip OSRM paths as moving heads (nyc-taxi-paths → AnimatedTripHeadsLayer,
+    // the BRIGHT riders). Both archives cover the same Jan 1–2 2015 window and both
+    // standalone demos already play exactly this range, so aggregate flow and
+    // individual cabs stay locked to the same instant. Non-directional archive, so
+    // no chevrons — just pulsing corridors + streaming dots.
+    url: '/data/nyc-taxi-flows/manifest.json',
+    type: 'trips',
+    headsOverlayUrl: '/data/nyc-taxi-paths/manifest.json',
+    timeRange: {
+      start: 1420070400000, // 2015-01-01 00:00:00 UTC
+      end: 1420213500000,   // 2015-01-02 13:45:00 UTC — last 15-min bin end
+    },
+    // 1-h window comfortably covers the current 15-min flow bucket AND the tiles of
+    // active trips the heads overlay interpolates (heads only draw a dot for trips
+    // live at the playhead, so a wide loader window never over-draws them).
+    timeWindow: 3600000,
+    // ~40 h in ~15 min (≈160× real time): quick enough to feel the pulse, slow
+    // enough that individual cab dots stay legible as they cross the grid.
+    targetPlaybackSeconds: 900,
+    initialViewState: {
+      longitude: -73.985,
+      latitude: 40.742,
+      zoom: 12.3, // between the flows overview (11.5) and the heads close-up (14)
+      pitch: 40,
+      bearing: -18,
+    },
+    // Near-black backdrop: hide every place/road label and sink the land to
+    // near-black, leaving faint streets + water as quiet context so the flow
+    // corridors and moving cabs own the frame (ported from bixi-live).
+    basemapHideLabels: true,
+    basemapBackgroundColor: '#02040a',
+    basemapRoadColor: '#0a0d14',
+    // ── Traffic corridors: a COOL indigo→cyan→white ramp (quiet → busy), the cold
+    //    complement to the hot-magenta riders so the cabs pop. Same [0,50] domain
+    //    (~p97) as nyc-taxi-flows.
+    //    IMPORTANT: this is a LUMINANCE ramp at FULL alpha, NOT an alpha ramp.
+    //    Corridor geometry is placed per-tile by centroid and never clipped, so a
+    //    corridor crossing a tile edge overlaps its neighbour in a band along the
+    //    boundary. With semi-transparent colours that overlap STACKS under alpha
+    //    blending into a brighter rectangular grid at the tile seams. Full alpha
+    //    kills it (same colour over same colour doesn't brighten) while luminance
+    //    still tells the dim→bright story: quiet streets sit a hair above the
+    //    near-black basemap, arteries glow cyan-white. (Mirrors the standalone
+    //    nyc-taxi-flows ramp, which is near-opaque and seam-free.) ──
+    tripGradient: {
+      property: 'vertexValues',
+      domain: [1, 50], // trips per segment per 15 min, clamped ~p97
+      colors: [
+        [10, 14, 34, 40],    // 0–12 — near-black navy, just above the basemap
+        [22, 58, 120, 50],   // ~12 — deep navy blue
+        [36, 132, 190, 75],  // ~25 — teal-blue (p90: busy crosstown)
+        [110, 205, 235, 100], // ~37 — cyan (arteries)
+        [225, 248, 255, 125], // 50+ — cool white-hot (5th Ave / FDR tier)
+      ],
+    },
+    colorMappingDefault: [10, 13, 30, 255], // opaque near-black for no-data segments
+    flowMatrix: true,
+    trailLength: 0,
+    widthMinPixels: 1,
+    widthMaxPixels: 3,
+    capRounded: false,
+    jointRounded: false,
+    // ── Moving riders: hot neon MAGENTA — a color that actually pops against the
+    //    cool indigo→cyan→white corridors AND the near-black backdrop. Cab-yellow
+    //    washed out over the white-hot busy streets — exactly where cabs cluster
+    //    most — so it read worst where it mattered most. Magenta sits opposite the
+    //    cyan ramp in hue and stays saturated on both the bright arteries and the
+    //    dark side streets. World-space (meters) so a dot grows on zoom-in. ──
+    headColor: [255, 46, 154, 255], // #FF2E9A neon magenta
+    headSizeUnits: 'meters',
+    headRadius: 6, // metres
+    headRadiusMinPixels: 0,
+    headRadiusMaxPixels: 6,
+    legend: {
+      title: 'Corridor brightness = taxi volume / 15 min · dots = live cabs',
+      ramps: [
+        {
+          label: '0 → 50+ trips',
+          colors: ['#16204E', '#1A4E8C', '#228CC3', '#5AC8E6', '#E1F8FF'],
+        },
+      ],
+      items: [{ color: '#FF2E9A', label: 'Active cab' }],
     },
   },
   {
@@ -2097,7 +2515,7 @@ const rawDatasets: Dataset[] = [
       title: 'LIDAR height band (m)',
       items: [
         { color: '#343c9e', label: 'ground' },
-        { color: '#28a8a8', label: 'car-roof' },
+        { color: '#26a8a8', label: 'car-roof' },
         { color: '#aad64a', label: 'mid' },
         { color: '#f8c63c', label: 'building edge' },
         { color: '#fa8c30', label: 'rooftops' },
@@ -3836,11 +4254,24 @@ const HELD_BACK_AV_MODES = /-(scan|world)$/;
 // filtered on the remote deploy even though the Argoverse `-stage` mode shipped.
 const WAYMO_LOCAL_ONLY = /^waymo-/;
 
+// Datasets whose tiles exist ONLY in the local `public/data` tree — built and
+// registered, but never R2-synced (their remote manifests 404):
+//   • the 6 Argoverse `-lod` zoom-LOD variants (the Waymo `-lod` variants are
+//     already caught by WAYMO_LOCAL_ONLY above);
+//   • the newer BIXI demos (streets-flow / corridors / points / live).
+// Same mechanism as the Waymo gate: fully reachable in local dev (which serves
+// `public/data` directly), filtered whenever tiles are served remotely so the
+// public site never links (and 404s) them. Remove an id from this pattern
+// after its archives are actually synced to R2.
+const LOCAL_ONLY_DATASETS =
+  /^(?:argoverse-.+-lod|bixi-streets-flow|bixi-corridors|bixi-points|bixi-live)$/;
+
 const DATA_IS_REMOTE = DATA_BASE_URL !== '';
 
 export const datasets: Dataset[] = [...rawDatasets, ...coloredSplatVariants, ...stageVariants]
   .filter((d) => !HELD_BACK_AV_MODES.test(d.id))
   .filter((d) => !(DATA_IS_REMOTE && WAYMO_LOCAL_ONLY.test(d.id)))
+  .filter((d) => !(DATA_IS_REMOTE && LOCAL_ONLY_DATASETS.test(d.id)))
   .map((d) => ({
   ...d,
   url: resolveDataUrl(d.url),
@@ -3866,13 +4297,9 @@ export const datasets: Dataset[] = [...rawDatasets, ...coloredSplatVariants, ...
   ...(d.avMapLineUrl && { avMapLineUrl: resolveDataUrl(d.avMapLineUrl) }),
 }));
 
-export const DATASETS = datasets;
-
 export function getDatasetById(id: string): Dataset | undefined {
   return datasets.find(d => d.id === id);
 }
-
-export const defaultDatasetId = 'earthquake-activity';
 
 /**
  * The curated set shipped on `npm run build`, in navigation order. The full

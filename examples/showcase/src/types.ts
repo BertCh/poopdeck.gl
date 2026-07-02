@@ -172,6 +172,37 @@ export interface Dataset {
    */
   globeBackgroundColor?: ColorRGBA;
 
+  // ─── Basemap overrides (Mercator viewer only) ──────────────────────────
+  /**
+   * Override the Mapbox basemap style URL for this demo. Defaults to
+   * `mapbox://styles/mapbox/dark-v11`. Use to give a demo a different backdrop
+   * without touching the others.
+   */
+  basemapStyle?: string;
+  /**
+   * Hide every label on the basemap (place titles, road/POI text) by switching
+   * all `symbol` layers to `visibility: none` on map load. Keeps roads, water,
+   * and land geometry — just removes the text. Lets the data own the frame.
+   */
+  basemapHideLabels?: boolean;
+  /**
+   * Darken the basemap to a near-black backdrop by repainting the base
+   * `background` (and land) fill to this CSS color, while roads/water still
+   * render on top for context. Pairs with `basemapHideLabels` for a "darkest
+   * possible, no labels, still-legible streets" look. e.g. `'#02040a'`.
+   */
+  basemapBackgroundColor?: string;
+  /**
+   * Repaint the basemap's road/street `line` layers (`road-*`, `bridge-*`,
+   * `tunnel-*`) to this CSS color, so the street network sinks toward the
+   * backdrop instead of rendering at Mapbox's default grey. Pairs with
+   * `basemapBackgroundColor`: set this a touch lighter than the land fill to
+   * keep streets as faint context, or match the land to hide them entirely.
+   * Type-based (not layer-id) so it survives Mapbox style revisions. e.g.
+   * `'#0a0d14'`.
+   */
+  basemapRoadColor?: string;
+
   /** Property name containing elevation data (e.g., 'altitude', 'elevation') */
   elevationProperty?: string;
   
@@ -285,6 +316,15 @@ export interface Dataset {
   headRadiusMinPixels?: number;
   /** Max on-screen head radius in pixels (meters-mode clamp). */
   headRadiusMaxPixels?: number;
+  /**
+   * Composite overlay: on a `type: 'trips'` dataset, the manifest URL of a
+   * SECOND (per-trip, OSRM-routed) archive rendered ON TOP as moving head-dots
+   * via AnimatedTripHeadsLayer — one dot per active ride gliding over the flow
+   * corridors below, both on the one playhead. The corridor archive stays the
+   * primary/required governor source; the heads overlay loads as an OPTIONAL
+   * source (continue-and-degrade). Reuses the `head*` styling fields above.
+   */
+  headsOverlayUrl?: string;
 
   /**
    * Layer opacity (0-1). Defaults to 0.8. Lower values let dense, overlapping
@@ -318,6 +358,108 @@ export interface Dataset {
    * (the matrix drives the animation, not a trailing fade).
    */
   flowMatrix?: boolean;
+  /**
+   * Render this `type: 'trips'` dataset with {@link FlowStrokeLayer} (a
+   * {@link FlowCorridorLayer} subclass). Like `flowMatrix` the corridor geometry
+   * loads once and colour animates by active bucket, but additionally the per-PATH
+   * WIDTH breathes with the active hour's traveller count, and a constant
+   * perpendicular offset draws opposing directions as twin side-by-side ribbons.
+   * For the `bixi-corridors` archive (`bixi --merged-paths`). Implies `flowMatrix`
+   * semantics; pair with `trailLength: 0`.
+   */
+  flowStroke?: boolean;
+  /** `flowStroke`: width = (active-bucket peak volume) ** this, before
+   * widthScale / widthMin/MaxPixels. 0.5 (√, area-proportional) is the default.
+   * (Corridors at/under `flowMinFlow` render at width 0 — the per-hour pulse.) */
+  flowWidthExponent?: number;
+  /** `flowStroke`: constant twin-ribbon offset, in multiples of the rendered
+   * width (0 disables; ~0.6 leaves a small gap). */
+  flowOffsetWidths?: number;
+  /**
+   * Overlay marching directional chevrons on a `flowMatrix` corridor archive
+   * built with `bixi --streets --directional` (each corridor's geometry is
+   * pre-oriented toward its dominant flow direction). Adds a
+   * {@link ChevronFlowExtension} to the {@link FlowCorridorLayer} so arrowheads
+   * slide along each segment the way riders actually go, while the value matrix
+   * still pulses each corridor's brightness over the day. Requires
+   * `flowMatrix: true`.
+   */
+  flowDirectional?: boolean;
+  /** `flowDirectional`: chevron spacing in line-width units. @default 6 */
+  chevronPeriod?: number;
+  /** `flowDirectional`: march speed (phase width-units per play-head second). @default 0.0006 */
+  chevronSpeed?: number;
+  /** `flowDirectional`: arrowhead sharpness (along-path shear per half-width). @default 1.4 */
+  chevronSkew?: number;
+  /** `flowDirectional`: fraction of each period lit by the chevron band, `[0,1]`. @default 0.5 */
+  chevronDuty?: number;
+  /** `flowDirectional`: alpha of the dim track between chevrons, `[0,1]`. @default 0.15 */
+  chevronBaseAlpha?: number;
+  /**
+   * `flowDirectional`: fit a WHOLE number of chevrons into each path segment so
+   * arrows land evenly (~`chevronPeriod` apart) and are never truncated at a
+   * vertex/joint — a consistent count per unit of corridor length instead of the
+   * raw per-segment spacing that restarts at every bend. Best for STATIC chevrons
+   * (`chevronSpeed: 0`). @default false
+   */
+  chevronUniformSpacing?: boolean;
+  /**
+   * `flowDirectional`: color the chevron arrowheads by the compass bearing they
+   * point, using FOUR cardinal colors (`chevronDirectionColors` = N,E,S,W) blended
+   * cyclically around the compass. Bearing is derived on the GPU and flipped per
+   * bucket, so a corridor's arrows recolor as its dominant flow reverses.
+   * @default false
+   */
+  chevronDirectionColor?: boolean;
+  /** `chevronDirectionColor`: the four cardinal colors `[N,E,S,W]`, each `[r,g,b]` 0–255. @default amber/green/teal/violet */
+  chevronDirectionColors?: [
+    [number, number, number],
+    [number, number, number],
+    [number, number, number],
+    [number, number, number],
+  ];
+  /** `chevronDirectionColor`: bearing offset (deg) of the first color; 45 = intercardinals (NE/SE/SW/NW). @default 0 */
+  chevronDirectionOffset?: number;
+  /**
+   * `flowDirectional` + `flowMatrix`: TWO-SIGNAL per-trip effect. FlowCorridorLayer
+   * derives an AGGREGATE (rolling-window volume → dim track color) and an INSTANT
+   * per-trip flow (→ the color alpha); the chevron arrowheads flash their cardinal
+   * hue as individual trips pass. Needs a FINE (≈1-min) `bixi-live-flow` matrix to
+   * resolve individual trips. @default false
+   */
+  chevronPerTripLight?: boolean;
+  /** `chevronPerTripLight`: arrowhead brightness BETWEEN trip flashes `[0,1]`. @default 0.22 */
+  chevronPerTripFloor?: number;
+  /** `chevronPerTripLight`: AGGREGATE rolling-window HALF-span, ms of data time. @default 240000 (±4 min) */
+  chevronAggregateWindowMs?: number;
+  /** `chevronPerTripLight`: INSTANT normalization top (trailing-sum that reads as a full flash). @default 1.5 */
+  chevronInstantDomain?: number;
+  /** `chevronPerTripLight`: INSTANT trailing-decay time constant, ms of data time. @default 120000 (2 min) */
+  chevronInstantDecayMs?: number;
+  /**
+   * `flowDirectional`: force the chevron per-vertex direction morph OFF while
+   * keeping `flowSignedDirection` on (so the layer still colours by `|value|`).
+   * The arrows stay STATIC — no shape morph or flip — pointing the pre-oriented
+   * winding. Defaults to `flowSignedDirection`. @default = flowSignedDirection
+   */
+  chevronPerBucketDirection?: boolean;
+  /**
+   * `flowSignedDirection`: rolling-window HALF-span (ms of data time) over which the
+   * continuous net-flow DIRECTION is averaged (a coherence ratio). Wider = the arrow
+   * shape/hue morph glides more slowly and smoothly across a flow reversal. Defaults
+   * to `chevronAggregateWindowMs`; set it wider on COARSE (e.g. 10-min) matrices so
+   * the window spans several buckets. @default = chevronAggregateWindowMs
+   */
+  chevronDirectionWindowMs?: number;
+  /**
+   * PER-BUCKET chevron direction. When true, the corridor value matrix is SIGNED
+   * (built by `bixi --streets --per-bucket-direction`): the layer colours by
+   * `|value|` (volume) and hands the per-vertex SIGN to the ChevronFlowExtension,
+   * so each corridor's chevrons FLIP as its dominant flow reverses over the day
+   * (morning inbound → evening outbound) instead of pointing one static winding.
+   * Requires `flowMatrix` + `flowDirectional`.
+   */
+  flowSignedDirection?: boolean;
   /** Trip line width — number (in widthUnits) or numeric property name. */
   tripWidth?: number | string;
   /** Clamp trip width to at least this many on-screen pixels. */
@@ -353,14 +495,6 @@ export interface Dataset {
   // ─── polygon-layer styling (type: 'polygon') ───────────────────────────
   /** Fill polygons (default true). */
   polygonFilled?: boolean;
-  /** Stroke polygon outlines (default false — slow path in AnimatedPolygonLayer). */
-  polygonStroked?: boolean;
-  /** Polygon outline width. */
-  polygonLineWidth?: number;
-  /** Units for `polygonLineWidth`. */
-  polygonLineWidthUnits?: 'pixels' | 'meters' | 'common';
-  /** Polygon outline color (constant). */
-  polygonLineColor?: ColorRGBA;
   /** Polygon fill color — constant RGBA or `colorProperty` for categorical fill. */
   polygonFillColor?: ColorRGBA;
 

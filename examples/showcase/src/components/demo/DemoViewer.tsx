@@ -16,12 +16,10 @@ import Legend from "../Legend";
 import PerformanceMonitor from "../PerformanceMonitor";
 import { buildDemoLayers } from "./buildDemoLayers";
 import type { DemoCamera } from "./previewBasemap";
+import { useDeckClock } from "@poopdeck.gl/react";
 import type { PlaybackState } from "@poopdeck.gl/react";
 import { useReducedMotion } from "../../lib/reducedMotion";
-
-const MAPBOX_ACCESS_TOKEN =
-  (import.meta as any).env?.VITE_MAPBOX_TOKEN ||
-  "pk.eyJ1IjoicmdjZ2VvZyIsImEiOiJjajBuNG1sMjUwMDFlMzNxcWY0M2RqMHI3In0.XfM0BMSqZqjRDcz-oJuadw";
+import { MAPBOX_ACCESS_TOKEN } from "../../lib/mapboxToken";
 
 /**
  * Minimal slice of @poopdeck.gl/core's Tile that the space-time-cube lattice needs.
@@ -46,6 +44,12 @@ export interface DemoViewerProps {
   /** false renders with controller off (embed tap-to-interact shield). */
   interactive?: boolean;
   /**
+   * Push the top-left in-map controls (space-time cube / summary toggle) down
+   * by N px so a host's floating header — the full-bleed fullscreen viewer —
+   * doesn't overlap them. Default 0 (the embed frame has no floating header).
+   */
+  topLeftInset?: number;
+  /**
    * Observe the live camera (for the scrubber hover-preview deck). Fired on
    * mount with the initial camera and on every user view-state change. Passing
    * it does NOT take control of the camera — the uncontrolled `initialViewState`
@@ -59,16 +63,23 @@ const DemoViewer: React.FC<DemoViewerProps> = ({
   playback,
   showPerfHud = false,
   interactive = true,
+  topLeftInset = 0,
   onCameraChange,
 }) => {
   const {
     timeController,
+    isPlaying,
     tilesetRef,
     currentTime,
     overviewPreload,
     registry,
     handleOverviewPreload,
   } = playback;
+
+  // Drive the shared playhead from deck's render loop (one frame clock, no
+  // second rAF) and mirror the controller onto `context.userData.stt` so every
+  // STT layer resolves time with no per-layer `timeController` prop.
+  const deckClock = useDeckClock(timeController, isPlaying);
 
   // Active option for summary-tier weight toggles (e.g. pickup vs dropoff).
   // Reset to the dataset's first option whenever the dataset changes.
@@ -146,9 +157,11 @@ const DemoViewer: React.FC<DemoViewerProps> = ({
   // vertex positions per frame on the NYC taxi dataset.
   const layers = useMemo(
     () =>
+      // No `timeController` prop: the layers resolve it from
+      // `context.userData.stt.timeController`, which `deckClock` sets on the
+      // DeckGL surface below. This is the P1 "layers see time for free" path.
       buildDemoLayers({
         dataset: selectedDataset,
-        timeController,
         useGlobe,
         timeHeightScale,
         activeSummaryToggle,
@@ -160,7 +173,6 @@ const DemoViewer: React.FC<DemoViewerProps> = ({
       }),
     [
       selectedDataset,
-      timeController,
       activeSummaryToggle,
       useGlobe,
       registry,
@@ -378,6 +390,7 @@ const DemoViewer: React.FC<DemoViewerProps> = ({
         {...(autoRotate
           ? { viewState: viewState ?? initialViewState }
           : { initialViewState })}
+        {...deckClock}
         onViewStateChange={handleViewStateChange}
         onResize={handleResize}
         controller={interactive}
@@ -388,7 +401,10 @@ const DemoViewer: React.FC<DemoViewerProps> = ({
         {!useGlobe && (
           <Map
             reuseMaps
-            mapStyle="mapbox://styles/mapbox/dark-v11"
+            mapStyle={
+              selectedDataset.basemapStyle ??
+              "mapbox://styles/mapbox/dark-v11"
+            }
             mapboxAccessToken={MAPBOX_ACCESS_TOKEN}
             projection={{ name: "mercator" }}
             terrain={
@@ -406,6 +422,42 @@ const DemoViewer: React.FC<DemoViewerProps> = ({
                   maxzoom: 14,
                 });
               }
+              // Per-dataset basemap tuning: hide labels (all symbol layers),
+              // sink the base/land fills to a near-black backdrop, and darken
+              // the road/street lines, leaving water geometry for context.
+              // Type-based (not layer-id) so it survives Mapbox style revisions;
+              // property differs per layer type.
+              const hideLabels = selectedDataset.basemapHideLabels;
+              const bg = selectedDataset.basemapBackgroundColor;
+              const roadColor = selectedDataset.basemapRoadColor;
+              if (hideLabels || bg || roadColor) {
+                try {
+                  for (const layer of map.getStyle().layers ?? []) {
+                    if (hideLabels && layer.type === "symbol") {
+                      map.setLayoutProperty(layer.id, "visibility", "none");
+                    }
+                    if (bg) {
+                      if (layer.type === "background") {
+                        map.setPaintProperty(layer.id, "background-color", bg);
+                      } else if (
+                        layer.type === "fill" &&
+                        /land|earth/i.test(layer.id)
+                      ) {
+                        map.setPaintProperty(layer.id, "fill-color", bg);
+                      }
+                    }
+                    if (
+                      roadColor &&
+                      layer.type === "line" &&
+                      /road|street|bridge|tunnel/i.test(layer.id)
+                    ) {
+                      map.setPaintProperty(layer.id, "line-color", roadColor);
+                    }
+                  }
+                } catch {
+                  // A style without the expected layers → leave the basemap as-is.
+                }
+              }
             }}
           />
         )}
@@ -420,7 +472,7 @@ const DemoViewer: React.FC<DemoViewerProps> = ({
 
       {/* Space-time cube controls: squash slider + tile-lattice toggle. */}
       {timeHeight && (
-        <div className="absolute top-3 left-3">
+        <div className="absolute left-3" style={{ top: 12 + topLeftInset }}>
           <CubeControls
             heightFactor={heightFactor}
             onHeightFactor={setHeightFactor}
@@ -434,7 +486,7 @@ const DemoViewer: React.FC<DemoViewerProps> = ({
 
       {/* Summary-tier weight toggle (pickup ↔ dropoff style). */}
       {summaryToggleOptions && summaryToggleOptions.length > 1 && (
-        <div className="absolute top-3 left-3">
+        <div className="absolute left-3" style={{ top: 12 + topLeftInset }}>
           <SummaryToggle
             options={summaryToggleOptions}
             value={activeSummaryToggle?.id}

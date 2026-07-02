@@ -15,8 +15,9 @@ import {
   AnimatedPathLayer,
   AnimatedTripsLayer,
   FlowCorridorLayer,
+  FlowStrokeLayer,
   AnimatedPolygonLayer,
-  HeatmapLayer,
+  AnimatedHeatmapLayer,
   H3SummaryLayer,
   QuadbinSummaryLayer,
   AnimatedArcLayer,
@@ -26,6 +27,7 @@ import {
   BundledFlowmapLayer,
   AnimatedBoundingBoxLayer,
   SplatLayer,
+  ChevronFlowExtension,
 } from "@poopdeck.gl/layers";
 import type { HeatmapChannelSpec, OverviewPreloadResult } from "@poopdeck.gl/layers";
 import type {
@@ -67,7 +69,7 @@ const EARTH_POLYGON: number[][][] = [
  * Per-source registration API the app (the governor owner) hands down so that
  * EVERY layer in a composite is classified into the {@link PlaybackGovernor}'s
  * N-source registry, not just the field. This is Phase 0 of multi-source
- * coordination (docs/roadmap/multi-source-coordination.md §5): the clock must
+ * coordination (docs/roadmap/playback-and-loading.md §5): the clock must
  * wait for every *required* source, while *optional* overlays load but never
  * gate (continue-and-degrade). Keyed by each layer's deck.gl `id`.
  *
@@ -115,8 +117,15 @@ export interface DemoLayerPlumbing {
 
 export interface BuildDemoLayersArgs {
   dataset: Dataset;
-  /** The clock the layers read live time from (the shared one, or a frozen preview one). */
-  timeController: TimeController;
+  /**
+   * The clock the layers read live time from (the shared one, or a frozen
+   * preview one). Optional: omit it to have the layers resolve the controller
+   * from `context.userData.stt.timeController` instead — the deck-idiomatic
+   * global channel set by {@link useDeckClock}. The frozen-preview and
+   * AV-cockpit surfaces pass it explicitly; the main live viewer relies on
+   * userData so no per-layer prop is threaded.
+   */
+  timeController?: TimeController;
   useGlobe: boolean;
   /** Space-time-cube height scale (meters per sim-ms); 0 = flat. */
   timeHeightScale: number;
@@ -302,9 +311,14 @@ export function buildDemoLayers({
       // Static-geometry overviews (flow corridors) carry a per-vertex ×
       // per-bucket value matrix and animate via FlowCorridorLayer — the
       // geometry loads once and only the active bucket column changes.
-      const TripsLayerCtor = selectedDataset.flowMatrix
-        ? FlowCorridorLayer
-        : AnimatedTripsLayer;
+      // flowStroke (bixi-corridors): merged DIRECTED corridors whose per-PATH
+      // width breathes with the active hour + twin offset ribbons. A
+      // FlowCorridorLayer subclass, so it keeps the matrix colour animation.
+      const TripsLayerCtor = selectedDataset.flowStroke
+        ? FlowStrokeLayer
+        : selectedDataset.flowMatrix
+          ? FlowCorridorLayer
+          : AnimatedTripsLayer;
       const tripsLayer = new TripsLayerCtor({
         ...baseProps,
         ...sourceProps(selectedDataset.id, true),
@@ -344,28 +358,114 @@ export function buildDemoLayers({
         widthUnits: selectedDataset.widthUnits ?? "pixels",
         widthMinPixels: selectedDataset.widthMinPixels ?? 2,
         widthMaxPixels: selectedDataset.widthMaxPixels ?? 8,
+        // FlowStrokeLayer breathing-width + twin-ribbon knobs. Only passed when
+        // flowStroke (these are unknown props on the base/corridor layers).
+        ...(selectedDataset.flowStroke && {
+          widthScale: selectedDataset.flowWidthScale ?? 1,
+          widthExponent: selectedDataset.flowWidthExponent ?? 0.5,
+          minFlow: selectedDataset.flowMinFlow ?? 0,
+          offsetWidths: selectedDataset.flowOffsetWidths ?? 0.6,
+        }),
         trailLength: selectedDataset.trailLength ?? 60000,
         fadeTrail: selectedDataset.fadeTrail ?? true,
         // Rounded caps/joints are the dominant fragment-shader cost at small
         // widths; default off and let datasets opt in.
         capRounded: selectedDataset.capRounded ?? false,
         jointRounded: selectedDataset.jointRounded ?? false,
-      });
-      if (useGlobe) {
-        return [
-          new SolidPolygonLayer({
-            id: "earth-background",
-            data: EARTH_POLYGON,
-            getPolygon: (d) => d as any,
-            stroked: false,
-            filled: true,
-            getFillColor:
-              selectedDataset.globeBackgroundColor ?? [36, 39, 48, 255],
+        // flowSignedDirection (bixi-live): the value matrix is SIGNED — the layer
+        // colours by |value| (volume) and hands the sign to the chevron extension
+        // so arrows flip per time-step. Harmless on non-corridor trips layers.
+        ...(selectedDataset.flowSignedDirection && {
+          signedFlow: true,
+          // Direction window feeds chevronDirectionsFor (runs under signedFlow,
+          // independent of per-trip), so pass it here — wide on coarse matrices.
+          ...(selectedDataset.chevronDirectionWindowMs !== undefined && {
+            chevronDirectionWindowMs: selectedDataset.chevronDirectionWindowMs,
           }),
-          tripsLayer,
-        ];
+        }),
+        // chevronPerTripLight (bixi-live): the layer derives a rolling-window
+        // AGGREGATE (→ ramp RGB) and packs an INSTANTANEOUS per-trip flow into the
+        // color's ALPHA byte, so the chevron extension can flash arrows as trips
+        // pass. Dual-set with the extension's `perTripLight` option below.
+        ...(selectedDataset.chevronPerTripLight && {
+          chevronPerTripLight: true,
+          ...(selectedDataset.chevronAggregateWindowMs !== undefined && {
+            chevronAggregateWindowMs: selectedDataset.chevronAggregateWindowMs,
+          }),
+          ...(selectedDataset.chevronInstantDomain !== undefined && {
+            chevronInstantDomain: selectedDataset.chevronInstantDomain,
+          }),
+          ...(selectedDataset.chevronInstantDecayMs !== undefined && {
+            chevronInstantDecayMs: selectedDataset.chevronInstantDecayMs,
+          }),
+        }),
+        // flowDirectional (bixi-streets-flow): a directional-corridor archive
+        // whose geometry is pre-oriented toward dominant flow. Overlay marching
+        // chevrons via the public `extensions` prop — composeExtensions appends
+        // it to the corridor PathLayer, and the matrix colour animation stays.
+        // With flowSignedDirection, the chevrons flip per bucket (perBucketDirection).
+        ...(selectedDataset.flowDirectional && {
+          extensions: [
+            new ChevronFlowExtension({
+              period: selectedDataset.chevronPeriod,
+              speed: selectedDataset.chevronSpeed,
+              skew: selectedDataset.chevronSkew,
+              duty: selectedDataset.chevronDuty,
+              baseAlpha: selectedDataset.chevronBaseAlpha,
+              // Static chevrons opt out of the per-vertex direction morph while the
+              // layer still colours by |value| (signedFlow). Defaults to signedFlow.
+              perBucketDirection:
+                selectedDataset.chevronPerBucketDirection ?? selectedDataset.flowSignedDirection,
+              uniformSpacing: selectedDataset.chevronUniformSpacing,
+              directionColor: selectedDataset.chevronDirectionColor,
+              directionColors: selectedDataset.chevronDirectionColors,
+              directionOffsetDegrees: selectedDataset.chevronDirectionOffset,
+              perTripLight: selectedDataset.chevronPerTripLight,
+              perTripFloor: selectedDataset.chevronPerTripFloor,
+            }),
+          ],
+        }),
+      });
+      const tripsLayers: any[] = useGlobe
+        ? [
+            new SolidPolygonLayer({
+              id: "earth-background",
+              data: EARTH_POLYGON,
+              getPolygon: (d) => d as any,
+              stroked: false,
+              filled: true,
+              getFillColor:
+                selectedDataset.globeBackgroundColor ?? [36, 39, 48, 255],
+            }),
+            tripsLayer,
+          ]
+        : [tripsLayer];
+      // Composite: overlay moving head-dots from a SECOND (per-trip, OSRM-routed)
+      // archive on top of the flow corridors (bixi-live = directional flow +
+      // moving riders). Painter order puts it last (topmost). It's an OPTIONAL
+      // governor source so the light corridor archive still gates the clock while
+      // the heavier per-trip stream loads continue-and-degrade — same split as
+      // the radar/av overlays.
+      if (selectedDataset.headsOverlayUrl) {
+        tripsLayers.push(
+          new AnimatedTripHeadsLayer({
+            ...baseProps,
+            id: `${selectedDataset.id}-heads`,
+            ...sourceProps(`${selectedDataset.id}-heads`, false),
+            data: selectedDataset.headsOverlayUrl,
+            // Overlays never pin the storyboard preview tier (the primary does).
+            overviewPreload: false,
+            onOverviewPreload: undefined,
+            headColor: selectedDataset.headColor ?? [253, 128, 93, 255],
+            headRadiusPixels: selectedDataset.headRadiusPixels ?? 4,
+            sizeUnits: selectedDataset.headSizeUnits,
+            headRadius: selectedDataset.headRadius,
+            headRadiusMinPixels: selectedDataset.headRadiusMinPixels,
+            headRadiusMaxPixels: selectedDataset.headRadiusMaxPixels,
+          }),
+        );
       }
-      return [tripsLayer];
+      return tripsLayers;
     }
     case "heatmap": {
       // Stacked heatmaps now compile down to ONE HeatmapLayer with N
@@ -374,7 +474,7 @@ export function buildDemoLayers({
       const specs = selectedDataset.heatmapLayers ?? [];
       if (specs.length === 0) {
         return [
-          new HeatmapLayer({
+          new AnimatedHeatmapLayer({
             ...baseProps,
             ...sourceProps(selectedDataset.id, true),
             radiusPixels: 30,
@@ -387,8 +487,6 @@ export function buildDemoLayers({
               [189, 0, 38, 255],
             ],
             weightProperty: selectedDataset.weightProperty,
-            // TAA — visible smoothness boost at no measurable cost.
-            historyWeight: 0.15,
           }),
         ];
       }
@@ -403,7 +501,7 @@ export function buildDemoLayers({
         intensity: spec.intensity ?? 1,
       }));
       return [
-        new HeatmapLayer({
+        new AnimatedHeatmapLayer({
           ...baseProps,
           id: `${selectedDataset.id}-heatmap`,
           ...sourceProps(`${selectedDataset.id}-heatmap`, true),
@@ -412,7 +510,6 @@ export function buildDemoLayers({
           weightProperty:
             first.weightProperty ?? selectedDataset.weightProperty,
           channels,
-          historyWeight: 0.15,
         }),
       ];
     }
@@ -422,10 +519,6 @@ export function buildDemoLayers({
           ...baseProps,
           ...sourceProps(selectedDataset.id, true),
           filled: selectedDataset.polygonFilled ?? true,
-          stroked: selectedDataset.polygonStroked ?? false,
-          lineWidthUnits: selectedDataset.polygonLineWidthUnits ?? "pixels",
-          lineWidth: selectedDataset.polygonLineWidth ?? 2,
-          lineColor: selectedDataset.polygonLineColor ?? [31, 186, 214, 255],
           fillColor:
             selectedDataset.colorProperty ||
             selectedDataset.polygonFillColor ||
@@ -647,7 +740,6 @@ export function buildDemoLayers({
           ...baseProps,
           ...sourceProps(selectedDataset.id, true),
           filled: true,
-          stroked: false,
           // String fillColor = property name → GPU categorical fill; colorMapping
           // keeps each dBZ band stable across tiles (the wildfires/severity pattern).
           fillColor: selectedDataset.colorProperty ?? "dbz_band",
@@ -803,7 +895,6 @@ export function buildDemoLayers({
             ...sourceProps(`${selectedDataset.id}-map-poly`, false),
             data: selectedDataset.avMapPolyUrl,
             filled: true,
-            stroked: false,
             fillColor: "map_layer",
             ...(selectedDataset.mapColors && {
               colorMapping: selectedDataset.mapColors,
@@ -1104,36 +1195,10 @@ export function buildDemoLayers({
           }),
         );
       }
-      // DISABLED (experiment): the full-scene ego trail (AnimatedTripsLayer).
-      // This cyan trip line traced the whole drive behind the car AND registered
-      // as a REQUIRED governor source, so the playback clock gated on its tiles —
-      // a likely source of stalls/artifacts. Removing the push (rather than just
-      // `visible:false`) takes it out of the layer tree AND out of the gate; the
-      // ego car box + predicted ribbon (egoLayers.ts, lightweight polyline) keep
-      // the vehicle visible. Re-enable by uncommenting this block.
-      // if (selectedDataset.avEgoUrl) {
-      //   layers.push(
-      //     new AnimatedTripsLayer({
-      //       ...propsForStream(`${selectedDataset.id}-ego`, selectedDataset.avEgoUrl),
-      //       id: `${selectedDataset.id}-ego`,
-      //       data: selectedDataset.avEgoUrl,
-      //       tripColor: selectedDataset.tripColor ?? [120, 230, 255, 255],
-      //       widthUnits: selectedDataset.widthUnits ?? "meters",
-      //       tripWidth: selectedDataset.tripWidth ?? 2.2,
-      //       widthMinPixels: selectedDataset.widthMinPixels ?? 2,
-      //       widthMaxPixels: selectedDataset.widthMaxPixels,
-      //       // Show the full ego path for the scene — the whole drive is the
-      //       // trail. Falls back to the dataset duration so the line never fades
-      //       // mid-scene; datasets can override for a shorter tail.
-      //       trailLength:
-      //         selectedDataset.trailLength ??
-      //         selectedDataset.timeRange.end - selectedDataset.timeRange.start,
-      //       fadeTrail: selectedDataset.fadeTrail ?? true,
-      //       capRounded: selectedDataset.capRounded ?? false,
-      //       jointRounded: selectedDataset.jointRounded ?? false,
-      //     }),
-      //   );
-      // }
+      // NOTE: no full-scene ego trail here by design. A whole-drive AnimatedTripsLayer
+      // registered as a REQUIRED governor source, so the playback clock gated on its
+      // tiles (stalls/artifacts). The ego car box + predicted ribbon (egoLayers.ts)
+      // keep the vehicle visible without gating the clock.
       if (selectedDataset.avObjectsUrl) {
         layers.push(
           new AnimatedBoundingBoxLayer({

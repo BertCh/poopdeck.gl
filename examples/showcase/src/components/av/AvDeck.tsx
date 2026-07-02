@@ -43,10 +43,7 @@ import {
 import type { PickedObject } from "./ObjectInspector";
 import type { Dataset } from "../../types";
 import type { AvStreamKey } from "./sceneTypes";
-
-const MAPBOX_ACCESS_TOKEN =
-  (import.meta as any).env?.VITE_MAPBOX_TOKEN ||
-  "pk.eyJ1IjoicmdjZ2VvZyIsImEiOiJjajBuNG1sMjUwMDFlMzNxcWY0M2RqMHI3In0.XfM0BMSqZqjRDcz-oJuadw";
+import { MAPBOX_ACCESS_TOKEN } from "../../lib/mapboxToken";
 
 export interface AvDeckProps {
   dataset: Dataset;

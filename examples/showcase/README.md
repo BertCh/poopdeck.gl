@@ -6,12 +6,17 @@ dozens of real and synthetic datasets.
 
 ## Pages
 
-- `/` — landing page + dataset gallery
+- `/` — landing page
+- `/demos` — dataset gallery; `/demos/:datasetId` — per-dataset detail page
 - `/demo/:datasetId` — single-dataset deck.gl demo with the time
   controller, the perf HUD, and the `__sttProbe` channel tap
 - `/maplibre/:datasetId` — same data rendered through `@poopdeck.gl/maplibre`
-- `/format` — annotated walk-through of the `.stt` archive layout
-- `/layers` — gallery of every layer kind with an inline code example
+- `/cesium/:datasetId` — same data rendered through `@poopdeck.gl/cesium`
+- `/docs` — the repo's `docs/` rendered as the documentation site
+  (nav manifest: `src/docs/manifest.ts`)
+- `/drive/:sceneId?` — the AV LIDAR cockpit (nuScenes / Argoverse / Waymo /
+  comma scene bundles)
+- `/story/drifters` — scrollytelling ocean-drifter story
 
 ## Data Pipeline
 

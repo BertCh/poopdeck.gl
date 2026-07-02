@@ -935,6 +935,219 @@ export const DEMO_META: Record<string, DemoMeta> = {
     related: ['bixi-flowmap', 'nyc-taxi-flows', 'bixi-flowmap-baked'],
   },
 
+  'bixi-streets-flow': {
+    category: 'mobility',
+    tagline: 'The BIXI street network with direction: marching chevrons flow along each cycleway the way riders actually go.',
+    techniqueTag: 'Streets · directional · chevrons',
+    about: [
+      'The directional cut of the BIXI street network. The heatmap sibling shades ' +
+        'each corridor by how many riders rolled over it but says nothing about ' +
+        'which WAY they went; this build keeps that per-hour brightness and adds ' +
+        'flow. As trips route onto the bike network, each street edge tracks its ' +
+        'net travel direction, and every corridor is pre-oriented toward the ' +
+        'direction most riders take over the month.',
+      'On top of the value matrix (which still pulses each corridor’s brightness ' +
+        'with the hourly commute), a ChevronFlowExtension slides arrowhead ' +
+        'chevrons along each segment in that dominant direction — a pure ' +
+        'fragment-shader overlay driven by the same playhead, so the geometry ' +
+        'still loads once and only a single phase uniform moves per frame. The ' +
+        'REV, de Maisonneuve and the canal path read as rivers with a current: ' +
+        'you see the tide of the city, not just its heat.',
+    ],
+    dataSources: [
+      {
+        name: 'BIXI Montréal — Open Data (trip history)',
+        url: 'https://bixi.com/en/open-data/',
+        license: 'BIXI open data licence',
+        note: 'Real August 2024 trips (origin/destination station + timestamps).',
+      },
+      {
+        name: 'OpenStreetMap (bicycle network via OSRM)',
+        url: 'https://www.openstreetmap.org/',
+        license: 'ODbL',
+      },
+    ],
+    buildCommand:
+      'stt-generate bixi --streets --directional --input bixi-2024.csv \\\n' +
+      '  --from 2024-08-01 --to 2024-09-01 --bin 1h --min-trips 30 \\\n' +
+      '  --osm-pbf osrm-data/quebec-latest.osm.pbf \\\n' +
+      '  --osrm-url http://localhost:5001 \\\n' +
+      '  --output bixi-streets-flow.stt',
+    buildNote:
+      'Same routing as `bixi --streets`, plus `--directional`: it also sums each ' +
+      'edge’s signed net flow and pre-orients every corridor toward its dominant ' +
+      'direction so the client can march chevrons along the winding. Needs the ' +
+      'same local OSRM **bicycle** server for Québec (`REGION=quebec ' +
+      'PROFILE=bicycle scripts/data-generation/setup-osrm.sh`, port 5001).',
+    techniques: [
+      { label: 'FlowCorridorLayer', docPath: '/docs/api/animated-trips-layer' },
+      { label: 'ChevronFlowExtension', docPath: '/docs/api/animated-trips-layer' },
+      { label: 'Binary features (vertex value matrix)', docPath: '/docs/api/binary-features' },
+    ],
+    related: ['bixi-streets', 'bixi-corridors', 'bixi-flowmap'],
+  },
+
+  'bixi-corridors': {
+    category: 'mobility',
+    tagline:
+      'BIXI trips bundled into a coherent, Sankey-like flow network — little lines merge onto shared trunks that breathe with the hourly commute.',
+    techniqueTag: 'Flow network · Edge-Path Bundling · breathing width',
+    about: [
+      'The coherent answer to edge bundling. Force-directed bundling smears a ' +
+        'thousand origin→destination lines into an abstract blob you can’t trace. ' +
+        'Here the flows MERGE instead of smear: stations cluster into hubs joined by ' +
+        'a Delaunay proximity graph, and every trip is routed along the graph’s ' +
+        'shortest path with cost length^k, so flows heading the same way collapse ' +
+        'onto shared TRUNK LINES. The result is a Sankey-like network — little ' +
+        'tributaries enter one big line, ride it, and leave — with no street snap.',
+      'Width is the message: each trunk’s thickness is the √ of the active hour’s ' +
+        'travellers, so trunks swell where flows join at 8am and thin overnight. The ' +
+        'two directions are kept separate and drawn as side-by-side offset ribbons, ' +
+        'so the morning core-bound rush and the evening reverse appear as visibly ' +
+        'asymmetric flows. Fully build-time and deterministic — no GPU bundler, no ' +
+        'OSRM, no thinning.',
+    ],
+    dataSources: [
+      {
+        name: 'BIXI Montréal — Open Data (trip history)',
+        url: 'https://bixi.com/en/open-data/',
+        license: 'BIXI open data licence',
+        note: 'Real August 2024 trips (origin/destination station + timestamps).',
+      },
+    ],
+    buildCommand:
+      'stt-generate bixi --flow-graph --input bixi-2024.csv \\\n' +
+      '  --from 2024-08-01 --to 2024-09-01 --bin 1h --min-trips 20 \\\n' +
+      '  --hub-radius 320 --bundle-k 3.2 --stroke-flow-ratio 0.2 \\\n' +
+      '  --stroke-angle 70 --spline 7 --smooth 2 --ribbon-offset 14 \\\n' +
+      '  --output bixi-corridors.stt',
+    buildNote:
+      'Builds an abstract Edge-Path-Bundling flow network (no streets, no OSRM): ' +
+      'clusters stations into hubs (`--hub-radius`), Delaunay-connects them, and ' +
+      'routes each OD flow along shortest paths weighted by `length^--bundle-k` so ' +
+      'flows merge onto shared trunks, then Catmull-Rom-splines them (`--spline`) ' +
+      'into flowing curves. The whole month animates at hourly resolution. Tune ' +
+      'trunk boldness with `--hub-radius` and bundling strength with `--bundle-k`.',
+    techniques: [
+      { label: 'FlowStrokeLayer (breathing width)', docPath: '/docs/api/animated-trips-layer' },
+      { label: 'Binary features (vertex value matrix)', docPath: '/docs/api/binary-features' },
+      { label: 'CLI: aggregation flags', docPath: '/docs/api/cli-reference' },
+    ],
+    related: ['bixi-streets', 'bixi-flowmap-baked', 'bixi-flowmap'],
+  },
+
+  'bixi-points': {
+    category: 'mobility',
+    tagline:
+      'Every BIXI ride as a dot gliding along the real bike network — one glowing cyclist per active trip.',
+    techniqueTag: 'Moving heads',
+    about: [
+      'The moving-head companion to the BIXI street and flow demos. Instead of ' +
+        'aggregating trips into corridors, each individual ride is routed once ' +
+        'through OSRM on Montréal’s actual BICYCLE network and drawn as a single ' +
+        'dot interpolated along its route at the playhead — so you watch real ' +
+        'cyclists thread the cycleways, the REV and the Lachine Canal path as the ' +
+        'day’s commute ebbs and flows.',
+      'It is the BIXI counterpart of the NYC taxi head-dots: the build emits one ' +
+        'OSRM-routed LineString per trip with per-vertex timestamps (the per-edge ' +
+        'duration shape stretched onto each ride’s real start→end window), and ' +
+        'AnimatedTripHeadsLayer interpolates each head every frame from that ' +
+        'geometry. No separate points dataset — the same archive can also render ' +
+        'as flowing trails. Identical dock pairs are routed once and re-timed per ' +
+        'trip, so a whole day animates from a bounded set of routes.',
+    ],
+    dataSources: [
+      {
+        name: 'BIXI Montréal — Open Data (trip history)',
+        url: 'https://bixi.com/en/open-data/',
+        license: 'BIXI open data licence',
+        note: 'Real 2024 trips (origin/destination station + start/end timestamps).',
+      },
+      {
+        name: 'OpenStreetMap (bicycle network via OSRM)',
+        url: 'https://www.openstreetmap.org/',
+        license: 'ODbL',
+      },
+    ],
+    buildCommand:
+      'stt-generate bixi --paths --input bixi-2024.csv \\\n' +
+      '  --from 2024-08-15 --to 2024-08-16 --max-trips 40000 \\\n' +
+      '  --osrm-url http://localhost:5001 \\\n' +
+      '  --output bixi-points.stt',
+    buildNote:
+      'Routes each individual BIXI trip on the OSM bicycle network and bakes ' +
+      'per-vertex timestamps (the BIXI counterpart of `nyc-rideshare --paths`); ' +
+      'AnimatedTripHeadsLayer animates a moving head-dot per ride. Needs a local ' +
+      'OSRM **bicycle** server for Québec — bring one up with `REGION=quebec ' +
+      'PROFILE=bicycle scripts/data-generation/setup-osrm.sh` (defaults to port ' +
+      '5001). The build prints the exact archive time span to paste into the ' +
+      'dataset’s `timeRange`.',
+    techniques: [
+      { label: 'AnimatedTripHeadsLayer', docPath: '/docs/api/animated-trip-heads-layer' },
+      { label: 'TimeController', docPath: '/docs/api/time-controller' },
+    ],
+    related: ['nyc-taxi-points', 'bixi-streets', 'bixi-flowmap'],
+  },
+
+  'bixi-live': {
+    category: 'mobility',
+    tagline:
+      'Directional street-flow + moving riders on one clock — the corridors light with the commute while thousands of bikes stream through them.',
+    techniqueTag: 'Composite · directional flow + moving heads',
+    about: [
+      'A composite that layers two of the BIXI demos on a single playhead. ' +
+        'Underneath is the directional street-network flow: every cycleway ' +
+        'segment pre-oriented toward its dominant travel direction, with marching ' +
+        'chevrons showing which way riders go and brightness pulsing with the ' +
+        'hour’s ridership. On top, every individual ride from that day glides as a ' +
+        'moving dot along its real OSRM-routed path — one bike per active trip.',
+      'It reuses two already-built archives with no third build: the light, ' +
+        'static-geometry flow-corridor archive (the `bixi-streets-flow` matrix) is ' +
+        'the primary source that gates the clock, and the heavier per-trip paths ' +
+        'archive (`bixi-points`) rides on top as an OPTIONAL governor source — it ' +
+        'streams in continue-and-degrade so the substrate is instant and the riders ' +
+        'fill in. Both are windowed to Thursday 2024-08-15, so the aggregate flow ' +
+        'and the individual rides tell the same day’s story: watch the morning peak ' +
+        'brighten the corridors as the dots surge through them, then ebb by midday.',
+      'The overlay is fully general — any `type: \'trips\'` flow demo gains moving ' +
+        'heads by setting `headsOverlayUrl` to a per-trip paths archive; the ' +
+        'painter order keeps the corridors as a backdrop and the riders on top.',
+    ],
+    dataSources: [
+      {
+        name: 'BIXI Montréal — Open Data (trip history)',
+        url: 'https://bixi.com/en/open-data/',
+        license: 'BIXI open data licence',
+        note: 'Real 2024 trips; the flow matrix aggregates August, the riders are Aug 15.',
+      },
+      {
+        name: 'OpenStreetMap (bicycle network via OSRM)',
+        url: 'https://www.openstreetmap.org/',
+        license: 'ODbL',
+      },
+    ],
+    buildCommand:
+      '# 1. directional flow corridors (the substrate)\n' +
+      'stt-generate bixi --streets --directional --input bixi-2024.csv \\\n' +
+      '  --from 2024-08-01 --to 2024-09-01 --bin 1h \\\n' +
+      '  --osm-pbf osrm-data/quebec-latest.osm.pbf --osrm-url http://localhost:5001 \\\n' +
+      '  --output bixi-streets-flow.stt\n' +
+      '# 2. per-trip moving riders (the overlay)\n' +
+      'stt-generate bixi --paths --input bixi-aug15.csv --max-trips 50000 \\\n' +
+      '  --osrm-url http://localhost:5001 --output bixi-points.stt',
+    buildNote:
+      'No third build — this demo composites the two archives above on one ' +
+      'playhead (flow corridors primary/required, moving heads optional overlay ' +
+      'via `headsOverlayUrl`). Both need a local OSRM **bicycle** server for ' +
+      'Québec (`REGION=quebec PROFILE=bicycle scripts/data-generation/setup-osrm.sh`).',
+    techniques: [
+      { label: 'FlowCorridorLayer (directional)', docPath: '/docs/api/animated-trips-layer' },
+      { label: 'AnimatedTripHeadsLayer', docPath: '/docs/api/animated-trip-heads-layer' },
+      { label: 'Multi-source playback', docPath: '/docs/api/time-controller' },
+    ],
+    related: ['bixi-points', 'bixi-streets-flow', 'nyc-flow-and-riders'],
+  },
+
   'nyc-od-quadbin': {
     category: 'mobility',
     tagline: 'Trip density binned into CARTO Quadbin square cells, extruded by count.',
@@ -1246,6 +1459,67 @@ export const DEMO_META: Record<string, DemoMeta> = {
     related: ['nyc-taxi-trips', 'nyc-taxi-od-summary'],
   },
 
+  'nyc-flow-and-riders': {
+    category: 'mobility',
+    tagline:
+      'Street-flow + moving cabs on one clock — the corridors pulse with taxi volume while thousands of yellow cabs stream through them.',
+    techniqueTag: 'Composite · flow corridors + moving heads',
+    about: [
+      'A composite that layers two of the NYC taxi demos on a single playhead — ' +
+        'the New York cousin of the BIXI "Flow & Riders" view. Underneath is the ' +
+        'pre-aggregated street-network flow: 500K routed trips baked into one ' +
+        'feature per road corridor per 15-minute bin, the whole grid shaded by a ' +
+        'cool indigo→cyan→white ramp so quiet side streets stay dim while the ' +
+        'arteries burn bright. On top, every individual trip glides as a hot ' +
+        'neon-magenta dot along its real OSRM-routed path — one cab per active trip.',
+      'It reuses two already-built archives with no third build: the light, ' +
+        'static-geometry flow-corridor archive (`nyc-taxi-flows`) is the primary ' +
+        'source that gates the clock, and the heavier per-trip paths archive ' +
+        '(`nyc-taxi-paths`) rides on top as an OPTIONAL governor source — it streams ' +
+        'in continue-and-degrade so the substrate is instant and the cabs fill in. ' +
+        'Both are windowed to the same Jan 1–2 2015 span, so the aggregate flow and ' +
+        'the individual trips stay locked to the same instant: watch the corridors ' +
+        'brighten as the dots surge through them.',
+      'The overlay is fully general — any `type: \'trips\'` flow demo gains moving ' +
+        'heads by setting `headsOverlayUrl` to a per-trip paths archive; the painter ' +
+        'order keeps the corridors as a backdrop and the riders on top. Unlike the ' +
+        'BIXI version this archive is non-directional, so there are no chevrons — ' +
+        'just pulsing corridors and streaming cabs.',
+    ],
+    dataSources: [
+      {
+        name: 'NYC TLC Trip Record Data',
+        url: 'https://www.nyc.gov/site/tlc/about/tlc-trip-record-data.page',
+        license: 'NYC Open Data',
+        note: 'Pre-2017 yellow-cab records (with coordinates); windowed to Jan 1–2 2015.',
+      },
+      {
+        name: 'OpenStreetMap (road network via OSRM)',
+        url: 'https://www.openstreetmap.org/',
+        license: 'ODbL',
+      },
+    ],
+    buildCommand:
+      '# 1. flow corridors (the substrate)\n' +
+      'stt-generate nyc-rideshare --flows --flow-bin 15m \\\n' +
+      '  --from-intermediate nyc-taxi-paths-2015-01.parquet \\\n' +
+      '  --output nyc-taxi-flows.stt\n' +
+      '# 2. per-trip moving riders (the overlay)\n' +
+      'stt-generate nyc-rideshare --download 2015-01 --paths \\\n' +
+      '  --max-trips 50000 --output nyc-taxi-paths.stt',
+    buildNote:
+      'No third build — this demo composites the two archives above on one ' +
+      'playhead (flow corridors primary/required, moving heads optional overlay ' +
+      'via `headsOverlayUrl`). The `--paths`/`--flows` builds need a local OSRM ' +
+      'server for New York (`scripts/data-generation/setup-osrm.sh`).',
+    techniques: [
+      { label: 'FlowCorridorLayer', docPath: '/docs/api/animated-trips-layer' },
+      { label: 'AnimatedTripHeadsLayer', docPath: '/docs/api/animated-trip-heads-layer' },
+      { label: 'Multi-source playback', docPath: '/docs/api/time-controller' },
+    ],
+    related: ['nyc-taxi-flows', 'nyc-taxi-points', 'bixi-live'],
+  },
+
   'nyc-taxi-cube': {
     category: 'mobility',
     tagline: 'Hägerstrand’s space-time cube: a million taxi samples stack into a tower of city time.',
@@ -1337,7 +1611,7 @@ export const DEMO_META: Record<string, DemoMeta> = {
     buildCommand: 'stt-generate nyc-rideshare --download 2015-01 --max-trips 50000',
     buildNote: OSRM_NOTE,
     techniques: [
-      { label: 'HeatmapLayer (temporal)', docPath: '/docs/api/heatmap-time-layer' },
+      { label: 'AnimatedHeatmapLayer (temporal)', docPath: '/docs/api/heatmap-time-layer' },
     ],
     related: ['nyc-taxi-od-summary', 'nyc-taxi-cube'],
   },

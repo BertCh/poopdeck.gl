@@ -41,6 +41,7 @@ const DocsLayout: React.FC = () => {
         entries: s.entries.filter(
           (e) =>
             e.title.toLowerCase().includes(q) ||
+            e.group?.toLowerCase().includes(q) ||
             s.label.toLowerCase().includes(q),
         ),
       }))
@@ -66,8 +67,17 @@ const DocsLayout: React.FC = () => {
         <div key={section.id} className="mb-6">
           <div className="eyebrow mb-2">{section.label}</div>
           <ul className="space-y-0.5">
-            {section.entries.map((entry) => (
+            {section.entries.map((entry, i) => (
               <li key={entry.slug}>
+                {/* Sub-group header — shown where the group label changes. */}
+                {entry.group && entry.group !== section.entries[i - 1]?.group && (
+                  <div
+                    className="px-2 pt-2.5 pb-1 text-[10px] font-semibold uppercase tracking-wider"
+                    style={{ color: "var(--ink-400)" }}
+                  >
+                    {entry.group}
+                  </div>
+                )}
                 <NavLink
                   to={`/docs/${entry.slug}`}
                   onClick={() => setDrawerOpen(false)}

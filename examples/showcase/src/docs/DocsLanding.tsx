@@ -38,8 +38,8 @@ const DocsLanding: React.FC = () => {
       >
         A cloud-native, edge-cacheable tile format for streaming massive
         time-variant geospatial datasets — Rust tools to build archives from
-        GeoParquet, and TypeScript layers to animate them in deck.gl or
-        MapLibre.
+        GeoParquet or a live PostGIS/DuckDB source, and TypeScript packages to
+        animate them in deck.gl, Three.js, MapLibre, or Cesium.
       </p>
 
       {/* Section cards */}

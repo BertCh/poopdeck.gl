@@ -2,10 +2,7 @@
  * Pure (React/deck-free) helpers for the scrubber hover preview, split out so
  * they're unit-testable without pulling in the whole deck.gl stack.
  */
-
-const MAPBOX_ACCESS_TOKEN =
-  (import.meta as any).env?.VITE_MAPBOX_TOKEN ||
-  "pk.eyJ1IjoicmdjZ2VvZyIsImEiOiJjajBuNG1sMjUwMDFlMzNxcWY0M2RqMHI3In0.XfM0BMSqZqjRDcz-oJuadw";
+import { MAPBOX_ACCESS_TOKEN } from "../../lib/mapboxToken";
 
 /** The live camera, forwarded from DemoViewer's `onCameraChange`. */
 export interface DemoCamera {

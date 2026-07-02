@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import Layout from "./components/Layout";
 import SiteChrome from "./components/SiteChrome";
+import ErrorBoundary from "./components/ErrorBoundary";
 import HomePage from "./pages/HomePage";
 import DemoPage from "./pages/DemoPage";
 import DemosCatalog from "./pages/DemosCatalog";
@@ -22,6 +23,7 @@ const DocPage = React.lazy(() => import("./docs/DocPage"));
 // the @deck.gl/mesh-layers + camera/gauge chrome; lazy-loaded so the landing
 // and demo bundles don't pay for it.
 const AvCockpit = React.lazy(() => import("./pages/AvCockpit"));
+const CesiumDemoPage = React.lazy(() => import("./pages/CesiumDemoPage"));
 
 const DocsFallback: React.FC = () => (
   <div className="px-8 py-10 text-sm" style={{ color: "var(--ink-400)" }}>
@@ -65,46 +67,59 @@ console.error = function (...args: unknown[]): void {
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <BrowserRouter>
-      <Routes>
-        <Route path="/" element={<Layout />}>
-          {/* "Site" pages share the header chrome + a single scroll surface. */}
-          <Route element={<SiteChrome />}>
-            <Route index element={<HomePage />} />
-            <Route path="demos" element={<DemosCatalog />} />
-            <Route path="demos/:datasetId" element={<DemoDetailPage />} />
+    <ErrorBoundary>
+      <BrowserRouter>
+        <Routes>
+          <Route path="/" element={<Layout />}>
+            {/* "Site" pages share the header chrome + a single scroll surface. */}
+            <Route element={<SiteChrome />}>
+              <Route index element={<HomePage />} />
+              <Route path="demos" element={<DemosCatalog />} />
+              <Route path="demos/:datasetId" element={<DemoDetailPage />} />
+              <Route
+                path="docs"
+                element={
+                  <Suspense fallback={<DocsFallback />}>
+                    <DocsLayout />
+                  </Suspense>
+                }
+              >
+                <Route index element={<DocsLanding />} />
+                {/* Catch-all handles two-segment slugs (api/cli-reference) and
+                    renders a styled 404 for unknown ones. */}
+                <Route path="*" element={<DocPage />} />
+              </Route>
+            </Route>
+
+            {/* Chrome-free fullscreen surfaces. */}
+            <Route path="story/drifters" element={<DrifterStory />} />
             <Route
-              path="docs"
+              path="drive/:sceneId?"
               element={
                 <Suspense fallback={<DocsFallback />}>
-                  <DocsLayout />
+                  <AvCockpit />
                 </Suspense>
               }
-            >
-              <Route index element={<DocsLanding />} />
-              {/* Catch-all handles two-segment slugs (api/cli-reference) and
-                  renders a styled 404 for unknown ones. */}
-              <Route path="*" element={<DocPage />} />
-            </Route>
+            />
+            <Route path="demo/:datasetId" element={<DemoPage />} />
+            {/* Backwards-compat: old `/maplibre/:id` deep-links route to the
+                same dataset; the renderer toggle on DemoPage replaces the
+                previous standalone page. */}
+            <Route path="maplibre/:datasetId" element={<DemoPage />} />
+            {/* CesiumJS (WGS84 globe) backend — the render-kernel Cesium demo.
+                Lazy-loaded (Cesium is heavy); movement catalog (point / path /
+                trips / trip-heads / arc), see CESIUM_SUPPORTED_TYPES. */}
+            <Route
+              path="cesium/:datasetId"
+              element={
+                <Suspense fallback={<DocsFallback />}>
+                  <CesiumDemoPage />
+                </Suspense>
+              }
+            />
           </Route>
-
-          {/* Chrome-free fullscreen surfaces. */}
-          <Route path="story/drifters" element={<DrifterStory />} />
-          <Route
-            path="drive/:sceneId?"
-            element={
-              <Suspense fallback={<DocsFallback />}>
-                <AvCockpit />
-              </Suspense>
-            }
-          />
-          <Route path="demo/:datasetId" element={<DemoPage />} />
-          {/* Backwards-compat: old `/maplibre/:id` deep-links route to the
-              same dataset; the renderer toggle on DemoPage replaces the
-              previous standalone page. */}
-          <Route path="maplibre/:datasetId" element={<DemoPage />} />
-        </Route>
-      </Routes>
-    </BrowserRouter>
+        </Routes>
+      </BrowserRouter>
+    </ErrorBoundary>
   </React.StrictMode>,
 );
