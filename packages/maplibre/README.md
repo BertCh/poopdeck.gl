@@ -8,19 +8,6 @@ between native style layers.
 
 ## Install
 
-> **Not yet published to npm** — today, consume it from the monorepo:
-
-```bash
-git clone https://github.com/BertCh/spatiotemporal-tiles
-cd spatiotemporal-tiles
-pnpm install && pnpm build
-```
-
-Inside the workspace, depend on `"@poopdeck.gl/maplibre": "workspace:*"`;
-from an external app, point a `file:` dependency at `packages/maplibre`.
-
-Once published:
-
 ```bash
 npm install @poopdeck.gl/maplibre maplibre-gl
 ```

@@ -7,19 +7,6 @@ and the render kernel every renderer backend
 
 ## Install
 
-> **Not yet published to npm** — today, consume it from the monorepo:
-
-```bash
-git clone https://github.com/BertCh/spatiotemporal-tiles
-cd spatiotemporal-tiles
-pnpm install && pnpm build
-```
-
-Inside the workspace, depend on `"@poopdeck.gl/core": "workspace:*"`; from an
-external app, point a `file:` dependency at `packages/core`.
-
-Once published:
-
 ```bash
 npm install @poopdeck.gl/core
 ```

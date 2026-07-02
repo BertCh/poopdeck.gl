@@ -7,19 +7,6 @@ HTMLMediaElement-style facade tying them together.
 
 ## Install
 
-> **Not yet published to npm** — today, consume it from the monorepo:
-
-```bash
-git clone https://github.com/BertCh/spatiotemporal-tiles
-cd spatiotemporal-tiles
-pnpm install && pnpm build
-```
-
-Inside the workspace, depend on `"@poopdeck.gl/playback": "workspace:*"`;
-from an external app, point a `file:` dependency at `packages/playback`.
-
-Once published:
-
 ```bash
 npm install @poopdeck.gl/playback
 ```
