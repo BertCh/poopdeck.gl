@@ -23,14 +23,11 @@
  * capture window keys (Space there means "scroll the page").
  */
 import { useEffect, useRef } from "react";
+// The canonical speed-multiplier ladder lives in @poopdeck.gl/playback so
+// keyboard stepping can only land on speeds Auto-speed also produces — no
+// hand-maintained copy to drift.
+import { SPEED_STEPS } from "@poopdeck.gl/playback";
 import type { PlaybackState } from "./use-playback";
-
-/**
- * Same ladder as @poopdeck.gl/playback auto-speed DEFAULT_STEPS (and the
- * PlaybackControls preset row), so keyboard stepping only lands on speeds the
- * UI can display.
- */
-const SPEED_STEPS = [0.25, 0.5, 0.75, 1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10];
 
 /**
  * A held key auto-repeats; every committed seek routes through

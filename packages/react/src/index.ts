@@ -23,6 +23,8 @@ export type {
   SourceRegistry,
 } from "./hooks/use-playback";
 export { usePlaybackHotkeys } from "./hooks/use-playback-hotkeys";
+export { useDeckClock } from "./hooks/use-deck-clock";
+export type { DeckClockProps } from "./hooks/use-deck-clock";
 
 // Transport-bar UI (react only).
 export { PlaybackControls } from "./components/PlaybackControls";

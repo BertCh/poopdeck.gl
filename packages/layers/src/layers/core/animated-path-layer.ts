@@ -44,6 +44,7 @@ import {
 } from '../../lib/style-digest';
 import { resolveAccessorAlias } from '../../lib/accessor-alias';
 import type { ColorAccessorValue, NumericAccessorValue } from '../../lib/accessor-alias';
+import { DEFAULT_LINE_PALETTE } from '@poopdeck.gl/core';
 import type { Tile, Layer as TileLayer, BinaryFeatures } from '@poopdeck.gl/core';
 
 const DEBUG = false;
@@ -202,18 +203,9 @@ export interface _AnimatedPathLayerProps {
 /** Complete props accepted by {@link AnimatedPathLayer}. */
 export type AnimatedPathLayerProps = _AnimatedPathLayerProps & SpatioTemporalLayerProps;
 
-const DEFAULT_PALETTE: Color[] = [
-  [0, 150, 255, 255],
-  [255, 127, 14, 255],
-  [44, 160, 44, 255],
-  [214, 39, 40, 255],
-  [148, 103, 189, 255],
-  [140, 86, 75, 255],
-  [227, 119, 194, 255],
-  [127, 127, 127, 255],
-  [188, 189, 34, 255],
-  [23, 190, 207, 255],
-];
+// Shared with the maplibre adapter (single source of truth in
+// @poopdeck.gl/core).
+const DEFAULT_PALETTE: Color[] = DEFAULT_LINE_PALETTE;
 
 /** See AnimatedTripsLayer for the rationale; same cache shape, window-mode attrs. */
 interface PreparedTile {

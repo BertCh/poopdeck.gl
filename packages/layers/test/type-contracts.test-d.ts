@@ -16,8 +16,6 @@
  *    the subclass's own props AND the `Required<>`-typed base props.
  * 2. The exported `XxxLayerProps` types compose own props + base props +
  *    `CompositeLayerProps`, and `value: null`-default props stay nullable.
- * 3. The deprecated `HeatmapLayer`/`HeatmapLayerProps` rename aliases remain
- *    assignable to the new names.
  */
 
 import {
@@ -28,7 +26,6 @@ import {
   AnimatedPolygonLayer,
   AnimatedTripHeadsLayer,
   AnimatedHeatmapLayer,
-  HeatmapLayer,
   H3SummaryLayer,
 } from '../src';
 import type {
@@ -39,7 +36,6 @@ import type {
   AnimatedPolygonLayerProps,
   AnimatedTripHeadsLayerProps,
   AnimatedHeatmapLayerProps,
-  HeatmapLayerProps,
   H3SummaryLayerProps,
 } from '../src';
 
@@ -182,11 +178,5 @@ const heatmapProps: AnimatedHeatmapLayerProps = {
   radiusPixels: 24,
   channels: [{ id: 'a' }],
 };
-// The deprecated props alias IS the new type.
-const legacyHeatmapProps: HeatmapLayerProps = heatmapProps;
-void legacyHeatmapProps;
-
-// The deprecated class alias IS the new class (same constructor, same type).
-expectType<typeof AnimatedHeatmapLayer>(HeatmapLayer);
-new HeatmapLayer(heatmapProps);
+new AnimatedHeatmapLayer(heatmapProps);
 new MyHeatmapLayer({ ...heatmapProps, a: 1 });

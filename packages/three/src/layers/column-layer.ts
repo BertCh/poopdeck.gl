@@ -21,6 +21,7 @@
 import { Mesh, InstancedBufferAttribute, Box3, Vector3, Sphere } from 'three';
 import type { Tile } from '@poopdeck.gl/core';
 import { BaseSttLayer, type SttLayerContext } from './layer';
+import { resolveTimeWindow, type ThreeTimeWindowOptions } from '../lib/time-window';
 import { makeColumnPrismGeometry } from '../geometry/column-prism';
 import {
   buildColumnBuffers,
@@ -34,7 +35,7 @@ import {
 } from '../tsl/column-material';
 import type { TimeFilterParams } from '../tsl/time-filter-math';
 
-export interface ColumnLayerOptions {
+export interface ColumnLayerOptions extends ThreeTimeWindowOptions {
   id?: string;
   colorMode: ColumnColorMode;
   /** Disk faces (deck `diskResolution`). @default 20 */
@@ -59,10 +60,9 @@ export interface ColumnLayerOptions {
   transparent?: boolean;
   opacity?: number;
   alphaCutoff?: number;
-  // window time params
-  windowHalf?: number;
-  fadeIn?: number;
-  fadeOut?: number;
+  // window time params — full-width `timeWindow` + `fadeIn/OutDuration` and the
+  // lower-level `windowHalf`/`fadeIn`/`fadeOut` aliases come from
+  // ThreeTimeWindowOptions.
 }
 
 export class ColumnLayer extends BaseSttLayer {
@@ -142,11 +142,7 @@ export class ColumnLayer extends BaseSttLayer {
 
   private pushUniforms(absoluteTimeMs: number): void {
     if (!this.bundle) return;
-    const params: TimeFilterParams = {
-      windowHalf: this.opts.windowHalf ?? 0,
-      fadeIn: this.opts.fadeIn ?? 0,
-      fadeOut: this.opts.fadeOut ?? 0,
-    };
+    const params: TimeFilterParams = resolveTimeWindow(this.opts, 0);
     updateColumnUniforms(this.bundle, {
       relativeCurrentTime: this.relativeTime(absoluteTimeMs),
       params,

@@ -22,6 +22,7 @@ import { Mesh, InstancedBufferAttribute, Box3, Vector3, Sphere } from 'three';
 import type { Texture } from 'three';
 import type { Tile } from '@poopdeck.gl/core';
 import { BaseSttLayer, type SttLayerContext } from './layer';
+import { resolveTimeWindow, type ThreeTimeWindowOptions } from '../lib/time-window';
 import { makeBillboardQuadGeometry } from '../geometry/billboard-quad';
 import {
   buildIconBuffers,
@@ -36,7 +37,7 @@ import {
 } from '../tsl/icon-material';
 import type { RGBA } from '../lib/color';
 
-export interface IconLayerOptions {
+export interface IconLayerOptions extends ThreeTimeWindowOptions {
   id?: string;
   /** window (raw) | cumulative (markers persist) | none. @default 'window' */
   mode?: IconMode;
@@ -85,9 +86,8 @@ export interface IconLayerOptions {
   // ── opacity / time params ────────────────────────────────────────────────────
   opacity?: number;
   alphaCutoff?: number;
-  windowHalf?: number;
-  fadeIn?: number;
-  fadeOut?: number;
+  // Full-width `timeWindow` + `fadeIn/OutDuration` and the lower-level
+  // `windowHalf`/`fadeIn`/`fadeOut` aliases come from ThreeTimeWindowOptions.
 }
 
 const DEFAULT_TINT: RGBA = [255, 255, 255, 255];
@@ -192,11 +192,7 @@ export class IconLayer extends BaseSttLayer {
     if (!this.bundle) return;
     updateIconUniforms(this.bundle, {
       relativeCurrentTime: this.relativeTime(absoluteTimeMs),
-      params: {
-        windowHalf: this.opts.windowHalf ?? 0,
-        fadeIn: this.opts.fadeIn ?? 0,
-        fadeOut: this.opts.fadeOut ?? 0,
-      },
+      params: resolveTimeWindow(this.opts, 0),
       opacity: this.opts.opacity ?? 1,
       sizeScale: this.opts.sizeScale ?? 1,
       sizeMinPixels: this.opts.sizeMinPixels ?? 0,

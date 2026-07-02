@@ -66,6 +66,7 @@ import {
 } from '../../lib/style-digest';
 import { resolveAccessorAlias } from '../../lib/accessor-alias';
 import type { ColorAccessorValue, NumericAccessorValue } from '../../lib/accessor-alias';
+import { DEFAULT_CATEGORICAL_PALETTE } from '@poopdeck.gl/core';
 import type { Tile, Layer as TileLayer, BinaryFeatures } from '@poopdeck.gl/core';
 
 const DEBUG = false;
@@ -200,18 +201,9 @@ export interface _AnimatedIconLayerProps {
 export type AnimatedIconLayerProps = _AnimatedIconLayerProps & SpatioTemporalLayerProps;
 
 // Default color palette for categorical data (shared shape with the point layer).
-const DEFAULT_PALETTE: Color[] = [
-  [31, 119, 180, 255],
-  [255, 127, 14, 255],
-  [44, 160, 44, 255],
-  [214, 39, 40, 255],
-  [148, 103, 189, 255],
-  [140, 86, 75, 255],
-  [227, 119, 194, 255],
-  [127, 127, 127, 255],
-  [188, 189, 34, 255],
-  [23, 190, 207, 255],
-];
+// Shared with the maplibre adapter (single source of truth in
+// @poopdeck.gl/core).
+const DEFAULT_PALETTE: Color[] = DEFAULT_CATEGORICAL_PALETTE;
 
 /**
  * Per-tile prepared data. Cached so the `data` object reference handed to

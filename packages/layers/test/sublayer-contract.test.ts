@@ -291,8 +291,8 @@ async function makeHeadsLayer(props: Record<string, any> = {}) {
 }
 
 async function makeHeatmapLayer(props: Record<string, any> = {}) {
-  const { HeatmapLayer } = await import('../src/layers/summary/heatmap-layer');
-  const layer: any = Object.create((HeatmapLayer as any).prototype);
+  const { AnimatedHeatmapLayer } = await import('../src/layers/summary/heatmap-layer');
+  const layer: any = Object.create((AnimatedHeatmapLayer as any).prototype);
   layer.props = {
     id: 'hm',
     timeWindow: 1000,

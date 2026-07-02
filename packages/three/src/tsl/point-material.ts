@@ -31,6 +31,7 @@ import {
   exp,
   modelViewMatrix,
   cameraProjectionMatrix,
+  type TSLNode,
   type UniformNode,
 } from './nodes';
 import {
@@ -83,6 +84,40 @@ export interface PointMaterialBundle {
   mode: TimeFilterMode;
 }
 
+/**
+ * The shared billboard clip-space position node used by both the colour and the
+ * id materials, so they rasterise IDENTICAL quads (a pick must land on the same
+ * pixels the point drew). Factored out verbatim — the emitted TSL graph is the
+ * same whether these ops are inline or in a helper.
+ */
+function billboardVertexNode(
+  center: TSLNode,
+  corner: TSLNode,
+  half: TSLNode,
+  sizeUnits: PointSizeUnits,
+  viewport: UniformNode,
+): TSLNode {
+  if (sizeUnits === 'pixels') {
+    // CLIP-SPACE billboard: project the centre, then push the quad corner by a
+    // constant pixel half-size. corner ∈ [-1,1]², so corner·half = ±half px.
+    // px → NDC = ×2/viewport, NDC → clip = ×clip.w (cancels the perspective
+    // divide so on-screen size is depth-independent). Mirrors wide-line.
+    const clip = cameraProjectionMatrix.mul(modelViewMatrix).mul(vec4(center, 1));
+    const off = corner.mul(half).mul(float(2)).div(viewport).mul(clip.w);
+    return vec4(clip.x.add(off.x), clip.y.add(off.y), clip.z, clip.w);
+  }
+  // VIEW-SPACE billboard (default, AV-unchanged): metric size that shrinks
+  // with distance.
+  const viewCenter = modelViewMatrix.mul(vec4(center, 1));
+  const viewPos = vec4(
+    viewCenter.x.add(corner.x.mul(half)),
+    viewCenter.y.add(corner.y.mul(half)),
+    viewCenter.z,
+    viewCenter.w,
+  );
+  return cameraProjectionMatrix.mul(viewPos);
+}
+
 export function createPointMaterial(opts: PointMaterialOptions): PointMaterialBundle {
   const time = new TimeFilterUniforms();
   const point = new PointUniforms();
@@ -103,26 +138,7 @@ export function createPointMaterial(opts: PointMaterialOptions): PointMaterialBu
 
   const material = new MeshBasicNodeMaterial();
   const sizeUnits: PointSizeUnits = opts.sizeUnits ?? 'meters';
-  if (sizeUnits === 'pixels') {
-    // CLIP-SPACE billboard: project the centre, then push the quad corner by a
-    // constant pixel half-size. corner ∈ [-1,1]², so corner·half = ±half px.
-    // px → NDC = ×2/viewport, NDC → clip = ×clip.w (cancels the perspective
-    // divide so on-screen size is depth-independent). Mirrors wide-line.
-    const clip = cameraProjectionMatrix.mul(modelViewMatrix).mul(vec4(center, 1));
-    const off = corner.mul(half).mul(float(2)).div(point.viewport).mul(clip.w);
-    material.vertexNode = vec4(clip.x.add(off.x), clip.y.add(off.y), clip.z, clip.w);
-  } else {
-    // VIEW-SPACE billboard (default, AV-unchanged): metric size that shrinks
-    // with distance.
-    const viewCenter = modelViewMatrix.mul(vec4(center, 1));
-    const viewPos = vec4(
-      viewCenter.x.add(corner.x.mul(half)),
-      viewCenter.y.add(corner.y.mul(half)),
-      viewCenter.z,
-      viewCenter.w,
-    );
-    material.vertexNode = cameraProjectionMatrix.mul(viewPos);
-  }
+  material.vertexNode = billboardVertexNode(center, corner, half, sizeUnits, point.viewport);
 
   // IMPORTANT (WGSL): vary the RAW per-instance inputs and recompute the time
   // alpha — a `select()` — in the FRAGMENT stage. A `select()` wrapped in a
@@ -173,4 +189,65 @@ export function updatePointUniforms(bundle: PointMaterialBundle, v: PointUniform
   bundle.point.opacity.value = v.opacity ?? 1;
   bundle.point.splatFalloff.value = v.splatFalloff ?? 3;
   if (v.viewport) bundle.point.viewport.value.set(v.viewport[0], v.viewport[1]);
+}
+
+// ── GPU id-buffer pick material (§5.3 merged-buffer picking) ─────────────────────
+//
+// BROWSER-VERIFY ONLY (needs a live WebGPU device). Renders each point's flat
+// per-instance id colour (`sttIdColor`, from `buildIdColors(mergedCount)`) into an
+// off-screen target the picker reads back. It rasterises the SAME billboard quad
+// as the colour material (shared `billboardVertexNode`), and reuses the identical
+// time filter + disc mask so ONLY the points visible this frame are pickable —
+// but the id is written at FULL intensity (never multiplied by alpha), so the
+// decoded RGB is an exact 24-bit index. Bind `updatePointUniforms` to sync its
+// time/size uniforms before the pass. The returned bundle is shape-compatible with
+// {@link PointMaterialBundle}.
+
+/**
+ * Build the point-cloud id material. `opts` mirror the colour material's so the
+ * pick pass matches the on-screen quads (size, splat disc, time-filter mode).
+ */
+export function createPointIdMaterial(opts: PointMaterialOptions): PointMaterialBundle {
+  const time = new TimeFilterUniforms();
+  const point = new PointUniforms();
+
+  const center = attribute('sttCenter', 'vec3');
+  const idColor = attribute('sttIdColor', 'vec3');
+  const start = attribute('sttStart', 'float');
+  const end = attribute('sttEnd', 'float');
+  const corner = positionGeometry.xy;
+
+  const vertexAlpha = timeFilterAlphaNode(opts.mode, time, start, end);
+  const sizeFactor = opts.mode === 'wake' ? wakeSizeScaleNode(time, vertexAlpha) : float(1);
+  const half = point.pointSize.mul(sizeFactor);
+
+  const material = new MeshBasicNodeMaterial();
+  const sizeUnits: PointSizeUnits = opts.sizeUnits ?? 'meters';
+  material.vertexNode = billboardVertexNode(center, corner, half, sizeUnits, point.viewport);
+
+  // FRAGMENT: same WGSL discipline as the colour material — vary the raw inputs
+  // and recompute the `select()` here (a `select()` wrapped in a `varying()`
+  // fails to build on the WGSL backend).
+  const vId = varying(idColor);
+  const vStart = varying(start);
+  const vEnd = varying(end);
+  const vUv = varying(corner);
+  const fragAlpha = timeFilterAlphaNode(opts.mode, time, vStart, vEnd);
+  const r2 = vUv.dot(vUv);
+  const cutoff = opts.alphaCutoff ?? 0.01;
+  // Visible iff inside the disc AND on-time; the id is opaque, everything else
+  // is discarded (alphaTest) so background / off-time points never win a pick.
+  const visible = r2.lessThanEqual(1).and(fragAlpha.greaterThan(float(cutoff)));
+  const a = select(visible, float(1), float(0));
+
+  material.colorNode = vId;
+  material.opacityNode = a;
+  material.transparent = false;
+  material.depthWrite = true;
+  material.depthTest = true;
+  material.side = DoubleSide;
+  material.blending = NormalBlending;
+  material.alphaTest = 0.5;
+
+  return { material, time, point, mode: opts.mode };
 }

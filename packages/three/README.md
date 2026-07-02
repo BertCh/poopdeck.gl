@@ -34,36 +34,55 @@ renderer but natural in Three.
 
 ## Install
 
+> **Not yet published to npm** — today, consume it from the monorepo:
+
 ```bash
-pnpm add @poopdeck.gl/three three
-# for the react-three-fiber bindings:
-pnpm add @react-three/fiber @react-three/drei react react-dom
+git clone https://github.com/BertCh/spatiotemporal-tiles
+cd spatiotemporal-tiles
+pnpm install && pnpm build
 ```
 
-`three` (≥ 0.168) is a peer dependency; `react` / `@react-three/fiber` /
-`@react-three/drei` are optional peers used only by the `/r3f` subpath.
+Inside the workspace, depend on `"@poopdeck.gl/three": "workspace:*"`; from an
+external app, point a `file:` dependency at `packages/three`.
+
+Once published:
+
+```bash
+npm install @poopdeck.gl/three three
+# for the react-three-fiber bindings:
+npm install @react-three/fiber @react-three/drei react react-dom
+```
+
+**Peers**: `three` ≥ 0.171 (required); `react` ≥ 19 / `@react-three/fiber` ≥ 9 /
+`@react-three/drei` ≥ 10 are optional peers used only by the `/r3f` subpath.
 
 ## Quick start (react-three-fiber)
 
 ```tsx
-import { SttScene, SurfelLayer } from "@poopdeck.gl/three";
-import { SttThreeView } from "@poopdeck.gl/three/r3f";
+import { SttCanvas, SttSurfelLayer } from "@poopdeck.gl/three/r3f";
 
-const scene = new SttScene({
-  anchor: { longitude: -79.933, latitude: 40.456 }, // world origin
-  timeOrigin: dataset.timeRange.start,               // common f32 time base
-});
-scene.addLayer(
-  new SurfelLayer({ temporalSigma: 180, rgbColumns: ["r", "g", "b"] }),
-  "https://tiles.example.com/scene/lidar/manifest.json",
-);
-
-<SttThreeView scene={scene} getTime={() => timeController.getTime()} />;
+<SttCanvas
+  anchor={{ longitude: -79.933, latitude: 40.456 }} // world origin
+  timeOrigin={dataset.timeRange.start}              // common f32 time base
+  timeRange={dataset.timeRange}
+  getTime={() => timeController.getTime()}
+>
+  <SttSurfelLayer
+    url="https://tiles.example.com/scene/lidar/manifest.json"
+    temporalSigma={180}
+    rgbColumns={["r", "g", "b"]}
+  />
+</SttCanvas>;
 ```
 
-`<SttThreeView>` owns the `WebGPURenderer`, a Z-up camera with `OrbitControls`,
-calls `scene.load()` (eagerly loading every tile in the scene), frames the camera,
-and drives `scene.setTime(clock)` every frame.
+`<SttCanvas>` owns the `WebGPURenderer` (WebGL2 fallback), a Z-up camera with
+`OrbitControls`, loads each child layer's archive, frames the camera, and reads
+`getTime()` every frame to drive the temporal filter.
+
+Without React, the same wiring is imperative: build an `SttScene` (engine
+export), `scene.addLayer(new SurfelLayer({...}), manifestUrl)`, add
+`scene.root` to your Three scene, `await scene.load()`, then call
+`scene.setTime(t)` from your render loop.
 
 ## Layers
 
@@ -92,6 +111,10 @@ the CPU reference math in `time-filter-math.ts`.
 Pure-function logic (projection round-trip, quaternion math, time-filter alpha,
 colour expansion, tile→attribute wiring) is unit-tested. The GPU material +
 renderer paths have no headless coverage (no WebGL/WebGPU in CI) and are verified
-in-browser. See `docs/roadmap/three-tsl-renderer.md`.
+in-browser. See the [parity roadmap](../../docs/roadmap/three-renderer-parity.md).
+
+## Docs
+
+- [@poopdeck.gl/three reference](../../docs/api/stt-three.md)
 
 MIT.

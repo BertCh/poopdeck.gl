@@ -63,8 +63,9 @@ type GovernorWithCost = PlaybackGovernor & {
   };
 };
 
-// `getSourceRunways` is the multi-source-coordination Phase 4 passthrough (one
-// runway probe per registered governor source). Same dist-staleness guard as
+// `getSourceRunways` is the multi-source per-source runway passthrough (one
+// runway probe per registered governor source; see
+// docs/roadmap/playback-and-loading.md). Same dist-staleness guard as
 // `GovernorWithCost`: the showcase typechecks against @poopdeck.gl/playback's
 // BUILT dist, which may not yet carry the member — this narrow intersection
 // keeps the call typed and becomes a harmless no-op once the rebuilt types
@@ -174,17 +175,19 @@ const SourceRunwayStrip: React.FC<{
           className="relative w-full rounded-full"
           style={{ height: 2, background: "var(--hairline)" }}
         >
-          {width > 0 && (
-            <div
-              className="absolute top-0 h-full rounded-full"
-              style={{
-                left: `${left}%`,
-                width: `${width}%`,
-                background: color,
-                opacity: isGating ? 0.95 : s.required ? 0.55 : 0.3,
-              }}
-            />
-          )}
+          {/* A bone-dry source (runway 0) still paints a minimum-width nub at
+              the playhead — otherwise the one source actually HOLDING the
+              clock is the only one with no marker. CSS max()/min() keep the
+              nub visible without ever painting past the bar's right edge. */}
+          <div
+            className="absolute top-0 h-full rounded-full"
+            style={{
+              left: `min(${left}%, calc(100% - 3px))`,
+              width: `max(${width}%, 3px)`,
+              background: color,
+              opacity: isGating ? 0.95 : s.required ? 0.55 : 0.3,
+            }}
+          />
         </div>
       );
     })}

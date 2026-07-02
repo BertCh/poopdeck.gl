@@ -48,6 +48,8 @@ import {
 } from '../../lib/edge-bundler';
 import type { Vec2 } from '../../lib/edge-bundler';
 import { deriveSourceTargetPositions } from '../../lib/od-positions';
+import { bucketBlendAt, blendMatrixRow } from '../../lib/vertex-value-blend';
+import { resolveAccessorAlias } from '../../lib/accessor-alias';
 import { emit } from '../../lib/telemetry';
 import { warnOnce } from '../../lib/log';
 import type { Tile, Layer as TileLayer, BinaryFeatures } from '@poopdeck.gl/core';
@@ -147,8 +149,6 @@ export class BundledFlowmapLayer<ExtraPropsT extends {} = {}> extends SpatioTemp
     widthMinPixels: { type: 'number', value: 1, min: 0 },
     widthMaxPixels: { type: 'number', value: 12, min: 0 },
     gap: { type: 'number', value: 0.5, min: 0 },
-    greatCircle: false,
-    arcHeight: { type: 'number', value: 0.5, min: 0 },
     nodeRadiusScale: { type: 'number', value: 1.3, min: 0 },
     nodeRadiusUnits: 'pixels',
     nodeRadiusMinPixels: { type: 'number', value: 1.5, min: 0 },
@@ -158,6 +158,8 @@ export class BundledFlowmapLayer<ExtraPropsT extends {} = {}> extends SpatioTemp
     targetColor: { type: 'object', value: DEFAULT_TARGET_COLOR, compare: true },
     nodeColor: { type: 'object', value: DEFAULT_NODE_COLOR, compare: true },
     nodeLineColor: { type: 'object', value: DEFAULT_NODE_LINE_COLOR, compare: true },
+    getSourceColor: { type: 'object', value: null, optional: true, compare: true },
+    getTargetColor: { type: 'object', value: null, optional: true, compare: true },
     // KDEEB bundling props.
     subdivisionPoints: { type: 'number', value: 48, min: 3 },
     kernelRadius: { type: 'number', value: 0.05, min: 0.005, max: 0.5 },
@@ -452,17 +454,13 @@ export class BundledFlowmapLayer<ExtraPropsT extends {} = {}> extends SpatioTemp
     const widths = new Float32Array(n);
     if (nb <= 0 || !matrix) return widths;
 
-    const b0 = Math.floor(stepped);
-    const b1 = Math.min(b0 + 1, nb - 1);
-    const f = stepped - b0;
-    const g = 1 - f;
+    const blend = bucketBlendAt(stepped, nb);
     const widthScale = this.props.widthScale;
     const minFlow = this.props.minFlow;
     const dims = geom.dims;
 
     for (let i = 0; i < n; i++) {
-      const base = geom.srcVertexIndex[i] * nb;
-      const flow = f <= 0 ? matrix[base + b0] : matrix[base + b0] * g + matrix[base + b1] * f;
+      const flow = blendMatrixRow(matrix, geom.srcVertexIndex[i] * nb, blend);
       if (flow <= minFlow) {
         widths[i] = 0;
         continue;
@@ -474,6 +472,31 @@ export class BundledFlowmapLayer<ExtraPropsT extends {} = {}> extends SpatioTemp
     return widths;
   }
 
+  /**
+   * Accessor-alias resolution (audit B1) — mirrors {@link FlowmapLayer}: the
+   * upstream-named alias wins when set; a function-valued alias warns once and
+   * falls back to the legacy prop. Constant colors only.
+   */
+  private sourceColorValue(): Color {
+    const resolved = resolveAccessorAlias(
+      'BundledFlowmapLayer',
+      'getSourceColor',
+      this.props.getSourceColor,
+      this.props.sourceColor,
+    );
+    return (Array.isArray(resolved) ? resolved : DEFAULT_SOURCE_COLOR) as Color;
+  }
+
+  private targetColorValue(): Color {
+    const resolved = resolveAccessorAlias(
+      'BundledFlowmapLayer',
+      'getTargetColor',
+      this.props.getTargetColor,
+      this.props.targetColor,
+    );
+    return (Array.isArray(resolved) ? resolved : DEFAULT_TARGET_COLOR) as Color;
+  }
+
   private computePropsKey(): string {
     return [
       this.props.widthMinPixels,
@@ -481,8 +504,8 @@ export class BundledFlowmapLayer<ExtraPropsT extends {} = {}> extends SpatioTemp
       this.props.widthScale,
       this.props.minFlow,
       this.props.gap,
-      Array.isArray(this.props.sourceColor) ? this.props.sourceColor.join(',') : '',
-      Array.isArray(this.props.targetColor) ? this.props.targetColor.join(',') : '',
+      this.sourceColorValue().join(','),
+      this.targetColorValue().join(','),
       this.props.opacity,
       this.props.visible,
     ].join('|');
@@ -587,12 +610,8 @@ export class BundledFlowmapLayer<ExtraPropsT extends {} = {}> extends SpatioTemp
       bucket0Abs: b.bucket0Abs,
       bucketWidth: b.bucketWidth,
       getCurrentTime: () => this.getCurrentTime(),
-      sourceColor: (Array.isArray(this.props.sourceColor)
-        ? this.props.sourceColor
-        : DEFAULT_SOURCE_COLOR) as Color,
-      targetColor: (Array.isArray(this.props.targetColor)
-        ? this.props.targetColor
-        : DEFAULT_TARGET_COLOR) as Color,
+      sourceColor: this.sourceColorValue(),
+      targetColor: this.targetColorValue(),
       widthScale: this.props.widthScale,
       minFlow: this.props.minFlow,
       widthMinPixels: this.props.widthMinPixels,
@@ -642,12 +661,8 @@ export class BundledFlowmapLayer<ExtraPropsT extends {} = {}> extends SpatioTemp
       data,
       dataComparator: (a: any, c: any) => a === c,
       positionFormat: dims === 3 ? 'XYZ' : 'XY',
-      sourceColor: (Array.isArray(this.props.sourceColor)
-        ? this.props.sourceColor
-        : DEFAULT_SOURCE_COLOR) as Color,
-      targetColor: (Array.isArray(this.props.targetColor)
-        ? this.props.targetColor
-        : DEFAULT_TARGET_COLOR) as Color,
+      sourceColor: this.sourceColorValue(),
+      targetColor: this.targetColorValue(),
       gap: this.props.gap,
       widthMinPixels: this.props.widthMinPixels,
       widthMaxPixels: this.props.widthMaxPixels,

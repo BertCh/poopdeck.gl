@@ -41,47 +41,14 @@ import type {
   LineSegmentBuffers,
 } from './geo-line-buffers';
 
-/** Dense source/target endpoint buffers derived from a tile's LineString features. */
-export interface SourceTargetPositions {
-  /** Interleaved source endpoints, `featureCount * dims` long (feature i's FIRST vertex). */
-  source: Float64Array;
-  /** Interleaved target endpoints, `featureCount * dims` long (feature i's LAST vertex). */
-  target: Float64Array;
-  /** Position dimensions (2 for [lon, lat], 3 for [lon, lat, alt]). */
-  dims: number;
-}
-
-/**
- * Derive dense source (first-vertex) and target (last-vertex) endpoint buffers
- * for every feature in a LineString tile. Faithful port of the deck helper:
- * requires `startIndices`; callers gate on `featureCount > 0 && startIndices`. A
- * single-vertex feature degenerates to source === target.
- */
-export function deriveSourceTargetPositions(
-  binary: BinaryFeatures,
-): SourceTargetPositions {
-  const dims = binary.positionDimensions ?? 2;
-  const featureCount = binary.featureCount;
-  const startIndices = binary.startIndices!;
-  const positions = binary.positions;
-
-  const source = new Float64Array(featureCount * dims);
-  const target = new Float64Array(featureCount * dims);
-
-  for (let i = 0; i < featureCount; i++) {
-    const srcVertex = startIndices[i];
-    const tgtVertex = startIndices[i + 1] - 1;
-    const srcBase = srcVertex * dims;
-    const tgtBase = tgtVertex * dims;
-    const outBase = i * dims;
-    for (let d = 0; d < dims; d++) {
-      source[outBase + d] = positions[srcBase + d];
-      target[outBase + d] = positions[tgtBase + d];
-    }
-  }
-
-  return { source, target, dims };
-}
+// Dense source/target endpoint derivation now lives in the framework-free
+// `@poopdeck.gl/core/geometry` kernel (Phase 2 dedup — byte-identical port,
+// see docs/roadmap/renderer-abstraction-2026-06.md). Re-exported here so OD
+// consumers keep a single three-side import surface.
+export {
+  deriveSourceTargetPositions,
+  type SourceTargetPositions,
+} from '@poopdeck.gl/core/geometry';
 
 // Re-export the line color/option types so OD consumers pull a single surface.
 export type { LineColorMode, LineSegmentBufferOptions, LineSegmentBuffers };

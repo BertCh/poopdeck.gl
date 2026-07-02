@@ -11,20 +11,30 @@
  */
 
 import { Mesh, InstancedBufferAttribute, Box3, Vector3, Sphere } from 'three';
-import type { Tile } from '@poopdeck.gl/core';
+import type { BinaryFeatures, Tile } from '@poopdeck.gl/core';
 import { BaseSttLayer, type SttLayerContext } from './layer';
+import { resolveTimeWindow, type ThreeTimeWindowOptions } from '../lib/time-window';
 import { makeBillboardQuadGeometry } from '../geometry/billboard-quad';
 import { buildPointBuffers, type PointColorMode } from './point-buffers';
 import {
   createPointMaterial,
+  createPointIdMaterial,
   updatePointUniforms,
   type PointMaterialBundle,
   type PointSizeUnits,
 } from '../tsl/point-material';
 import type { TimeFilterMode } from '../tsl/time-filter-math';
+import { DEFAULT_WAKE_TAIL_SCALE } from '@poopdeck.gl/core/time-filter';
+import {
+  InstanceProvenance,
+  buildIdColors,
+  type SttPickResult,
+} from '@poopdeck.gl/core/picking';
+import { resolvePointPick } from '../lib/point-pick';
+import type { GpuPicker } from '../lib/gpu-pick';
 import type { RGBA } from '../lib/color';
 
-export interface PointCloudLayerOptions {
+export interface PointCloudLayerOptions extends ThreeTimeWindowOptions {
   id?: string;
   /** window (raw) | wake (scan) | cumulative (worldbuild). @default 'window' */
   mode?: TimeFilterMode;
@@ -73,10 +83,9 @@ export interface PointCloudLayerOptions {
   opacity?: number;
   splatFalloff?: number;
 
-  // time params
-  windowHalf?: number;
-  fadeIn?: number;
-  fadeOut?: number;
+  // time params — full-width `timeWindow` + `fadeIn/OutDuration` and the
+  // lower-level `windowHalf` (@default 250) / `fadeIn` / `fadeOut` aliases come
+  // from ThreeTimeWindowOptions.
   wakeLength?: number;
   wakeTailScale?: number;
   alphaCutoff?: number;
@@ -89,8 +98,24 @@ export class PointCloudLayer extends BaseSttLayer {
   readonly object = new Mesh();
 
   private bundle: PointMaterialBundle | null = null;
+  // Merged-buffer pick identity (§5.3): merged instance i → (tileKey, featureIndex).
+  private provenance = new InstanceProvenance();
+  private binaryByTileKey = new Map<string, BinaryFeatures>();
+  // Opt-in GPU id-buffer pick pass (lazily built on first pick; browser-verify).
+  private idBundle: PointMaterialBundle | null = null;
+  private idColorsPresent = false;
+  private currentTimeMs = 0;
   private readonly opts: Required<
-    Omit<PointCloudLayerOptions, 'id' | 'rgbColumns' | 'elevationProperty' | 'rampProperty'>
+    Omit<
+      PointCloudLayerOptions,
+      | 'id'
+      | 'rgbColumns'
+      | 'elevationProperty'
+      | 'rampProperty'
+      | 'timeWindow'
+      | 'fadeInDuration'
+      | 'fadeOutDuration'
+    >
   > & Pick<PointCloudLayerOptions, 'rgbColumns' | 'elevationProperty' | 'rampProperty'>;
 
   constructor(options: PointCloudLayerOptions = {}) {
@@ -98,6 +123,7 @@ export class PointCloudLayer extends BaseSttLayer {
     this.id = options.id ?? 'points';
     this.object.name = this.id;
     this.object.frustumCulled = false;
+    const tw = resolveTimeWindow(options, 250);
     this.opts = {
       mode: options.mode ?? 'window',
       splat: options.splat ?? false,
@@ -116,11 +142,11 @@ export class PointCloudLayer extends BaseSttLayer {
       viewport: options.viewport ?? [1280, 720],
       opacity: options.opacity ?? 1,
       splatFalloff: options.splatFalloff ?? 3,
-      windowHalf: options.windowHalf ?? 250,
-      fadeIn: options.fadeIn ?? 0,
-      fadeOut: options.fadeOut ?? 0,
+      windowHalf: tw.windowHalf,
+      fadeIn: tw.fadeIn,
+      fadeOut: tw.fadeOut,
       wakeLength: options.wakeLength ?? 60,
-      wakeTailScale: options.wakeTailScale ?? 0.1,
+      wakeTailScale: options.wakeTailScale ?? DEFAULT_WAKE_TAIL_SCALE,
       alphaCutoff: options.alphaCutoff ?? 0.01,
     };
   }
@@ -148,11 +174,16 @@ export class PointCloudLayer extends BaseSttLayer {
 
   setTiles(tiles: Tile[], ctx: SttLayerContext): void {
     this.timeOrigin = ctx.timeOrigin;
+    this.currentTimeMs = ctx.timeOrigin;
     const buf = buildPointBuffers(tiles, ctx.projection, ctx.timeOrigin, {
       colorMode: this.colorMode(),
       elevationProperty: this.opts.elevationProperty ?? null,
       elevationScale: this.opts.elevationScale,
     });
+    // Adopt the fresh pick-identity buffers (empty when count === 0, so a stale
+    // pick after a reload resolves to null rather than an old feature).
+    this.provenance = buf.provenance;
+    this.binaryByTileKey = buf.binaryByTileKey;
 
     this.disposeGpu();
     if (buf.count === 0) {
@@ -190,6 +221,7 @@ export class PointCloudLayer extends BaseSttLayer {
   }
 
   setTime(absoluteTimeMs: number): void {
+    this.currentTimeMs = absoluteTimeMs;
     this.pushUniforms(absoluteTimeMs);
   }
 
@@ -200,9 +232,8 @@ export class PointCloudLayer extends BaseSttLayer {
     this.opts.viewport = [width, height];
   }
 
-  private pushUniforms(absoluteTimeMs: number): void {
-    if (!this.bundle) return;
-    updatePointUniforms(this.bundle, {
+  private uniformValues(absoluteTimeMs: number) {
+    return {
       relativeCurrentTime: this.relativeTime(absoluteTimeMs),
       params: {
         windowHalf: this.opts.windowHalf,
@@ -215,13 +246,113 @@ export class PointCloudLayer extends BaseSttLayer {
       opacity: this.opts.opacity,
       splatFalloff: this.opts.splatFalloff,
       viewport: this.opts.viewport,
+    };
+  }
+
+  private pushUniforms(absoluteTimeMs: number): void {
+    if (!this.bundle) return;
+    updatePointUniforms(this.bundle, this.uniformValues(absoluteTimeMs));
+  }
+
+  // ── Picking (§5.3 merged-buffer pick identity) ─────────────────────────────
+  //
+  // Two halves: `resolvePick` (pure, unit-tested — merged index → SttPickResult
+  // via the provenance buffer) and `pick` (opt-in GPU id-pass + readback, which
+  // needs a live WebGPU device and is browser-verify only).
+
+  /**
+   * Resolve a merged instance index (as decoded from a GPU id-buffer readback)
+   * to a normalized {@link SttPickResult}, or `null` for a miss. Pure — the
+   * unit-tested seam that closes §5.3; call it directly if you already have a
+   * decoded index from your own pick pass.
+   */
+  resolvePick(index: number, screen?: [number, number]): SttPickResult | null {
+    return resolvePointPick({
+      index,
+      provenance: this.provenance,
+      binaryByTileKey: this.binaryByTileKey,
+      layerId: this.id,
+      screen,
     });
+  }
+
+  /** Lazily build the id material + per-instance `sttIdColor` attribute. */
+  private ensurePickPass(): void {
+    if (!this.idBundle) {
+      this.idBundle = createPointIdMaterial({
+        mode: this.opts.mode,
+        splat: this.opts.splat,
+        alphaCutoff: this.opts.alphaCutoff,
+        sizeUnits: this.opts.sizeUnits,
+      });
+    }
+    if (!this.idColorsPresent && this.provenance.length > 0) {
+      // buildIdColors(count) paints merged instance i with the colour that
+      // decodes back to i — exactly what `resolvePick` expects.
+      const idColors = buildIdColors(this.provenance.length);
+      this.object.geometry.setAttribute('sttIdColor', new InstancedBufferAttribute(idColors, 3));
+      this.idColorsPresent = true;
+    }
+  }
+
+  /**
+   * OPT-IN GPU cloud pick — BROWSER-VERIFY ONLY (needs a live WebGPU device; the
+   * `resolvePick` half is unit-tested). Renders this layer's cloud with the flat
+   * id material into `picker`'s off-screen target, reads back the merged-instance
+   * id at CSS pixel `(cssX, cssY)`, and resolves it through the provenance buffer.
+   *
+   * Leaves normal rendering unchanged: the id material + `sttIdColor` attribute
+   * are built lazily on first call and the render material is restored after the
+   * readback (even on throw).
+   *
+   * CAVEATS (host responsibilities for the GPU pass):
+   *  - Index 0 encodes to black — the default clear colour. Clear the picker's
+   *    target to a sentinel (e.g. white = MAX_PICK_ID) before the pass, else a
+   *    background pixel resolves to point 0. `featureCount` is passed so an id ≥
+   *    the instance count is already reported as a miss.
+   *  - The object is rendered in isolation, so its parent chain must be identity
+   *    (the ENU/AV scene root is) for its world matrix to match the live frame.
+   *
+   * TODO (browser-verify): validate the id pass end-to-end on WebGPU (clear-to-
+   * sentinel wiring + a scene-level multi-layer picker that swaps every pickable
+   * layer to its id material) once a device-backed harness exists.
+   */
+  async pick(
+    picker: GpuPicker,
+    camera: unknown,
+    cssX: number,
+    cssY: number,
+  ): Promise<SttPickResult | null> {
+    if (this.provenance.length === 0 || !this.object.visible) return null;
+    this.ensurePickPass();
+    const idBundle = this.idBundle;
+    if (!idBundle) return null;
+    // Sync the id material's time filter to the live playhead so only points
+    // visible THIS frame are pickable.
+    updatePointUniforms(idBundle, this.uniformValues(this.currentTimeMs));
+
+    const mesh = this.object;
+    const renderMaterial = mesh.material;
+    mesh.material = idBundle.material;
+    let index: number | null;
+    try {
+      index = await picker.pick(mesh, camera, cssX, cssY, {
+        featureCount: this.provenance.length,
+      });
+    } finally {
+      mesh.material = renderMaterial;
+    }
+    if (index == null) return null;
+    return this.resolvePick(index, [cssX, cssY]);
   }
 
   private disposeGpu(): void {
     if (this.object.geometry) this.object.geometry.dispose();
     this.bundle?.material.dispose();
     this.bundle = null;
+    this.idBundle?.material.dispose();
+    this.idBundle = null;
+    this.idColorsPresent = false;
   }
 
   dispose(): void {

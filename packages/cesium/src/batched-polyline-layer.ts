@@ -1,0 +1,236 @@
+// @poopdeck.gl/cesium
+// SPDX-License-Identifier: MIT
+// Copyright (c) @poopdeck.gl/cesium contributors
+
+/**
+ * The shared Cesium machinery behind `CesiumPathLayer` and `CesiumArcLayer`:
+ * one batched `Primitive` of `PolylineGeometry` instances with a per-instance
+ * `ColorGeometryInstanceAttribute` — Cesium's idiomatic way to animate many
+ * geometry colours (one draw-call bucket; a colour write is a batch-table
+ * texel update, not a rebatch).
+ *
+ * Per-frame animation mirrors `CesiumPointLayer.setTime`: the kernel
+ * `timeFilterAlpha` oracle computes each feature's alpha, unchanged alphas are
+ * skipped, and the write reuses one scratch `Uint8Array` (the batch-table
+ * setter copies the value immediately). Colour handles come from
+ * `getGeometryInstanceAttributes`, which exists only after the primitive's
+ * first render — `setTime` runs on `scene.preRender` every frame, so handles
+ * are cached lazily the first frame `primitive.ready` is true.
+ *
+ * Rendering needs a live Cesium `Scene` → browser-verify-only; the pure
+ * builders it consumes (`lib/polylines.ts`) are unit-tested.
+ */
+
+import {
+  ArcType,
+  Cartesian2,
+  Cartesian3,
+  Color,
+  ColorGeometryInstanceAttribute,
+  GeometryInstance,
+  PolylineColorAppearance,
+  PolylineGeometry,
+  Primitive,
+  defined,
+  type Scene,
+} from 'cesium';
+import { getFeatureProperties, type BinaryFeatures } from '@poopdeck.gl/core';
+import { timeFilterAlpha, type TimeFilterMode, type TimeFilterParams } from '@poopdeck.gl/core/time-filter';
+import type { SttPickResult } from '@poopdeck.gl/core/picking';
+import type { FeaturePolyline, PolylineBuild } from './lib/polylines';
+
+/** Pick/attribute identity for one polyline instance. */
+interface InstanceId {
+  layerId: string;
+  binary: BinaryFeatures;
+  featureIndex: number;
+}
+
+interface PolylineEntry {
+  id: InstanceId;
+  start: number; // relative to timeOrigin (ms)
+  end: number;
+  r: number; // base colour channels (0–255) — batch-table colours are u8
+  g: number;
+  b: number;
+  a: number; // base alpha 0..1, multiplied by the time-filter alpha
+  lastAlpha: number;
+  /** Batch-table colour handle; cached on the first ready frame. */
+  attrs: { color: Uint8Array } | null;
+  lon: number; // first vertex, for SttPickResult.coordinate
+  lat: number;
+}
+
+export interface BatchedPolylineOptions {
+  /** Time-filter mode. @default 'window' */
+  mode?: TimeFilterMode;
+  /** Window/wake/cumulative/trail parameters (relative ms). */
+  timeFilter?: TimeFilterParams;
+  /** Line width in pixels. @default 3 */
+  width?: number;
+  /**
+   * Vertex-to-vertex interpolation. `'none'` draws straight 3-D segments
+   * between the (already-sampled/dense) vertices — required for data with
+   * altitude; `'geodesic'` subdivides along the ellipsoid surface (sparse
+   * ground-hugging lines). @default 'none'
+   */
+  arcType?: 'none' | 'geodesic' | 'rhumb';
+}
+
+// Reused for every per-frame colour write; the batch-table setter copies the
+// four bytes immediately, so one shared scratch is safe (same argument as the
+// point layer's SCRATCH_COLOR).
+const SCRATCH_RGBA = new Uint8Array(4);
+
+/** Map the option string onto Cesium's enum (default `'none'`). */
+function toArcType(a: BatchedPolylineOptions['arcType']): ArcType {
+  if (a === 'geodesic') return ArcType.GEODESIC;
+  if (a === 'rhumb') return ArcType.RHUMB;
+  return ArcType.NONE;
+}
+
+/**
+ * Owns the batched primitive + per-frame colour animation. `CesiumPathLayer` /
+ * `CesiumArcLayer` compose this with their pure geometry builder.
+ */
+export class BatchedPolylineLayer {
+  private readonly scene: Scene;
+  private readonly layerId: string;
+  private readonly mode: TimeFilterMode;
+  private readonly params: TimeFilterParams;
+  private readonly width: number;
+  private readonly arcType: ArcType;
+  private primitive: Primitive | null = null;
+  private entries: PolylineEntry[] = [];
+  private attrsCached = false;
+  private timeOrigin = 0;
+
+  constructor(scene: Scene, layerId: string, options: BatchedPolylineOptions = {}) {
+    this.scene = scene;
+    this.layerId = layerId;
+    this.mode = options.mode ?? 'window';
+    this.params = options.timeFilter ?? {};
+    this.width = options.width ?? 3;
+    this.arcType = toArcType(options.arcType);
+  }
+
+  /** Replace the rendered polylines (replace-all, like `CesiumPointLayer.setTiles`). */
+  setPolylines(build: PolylineBuild): void {
+    if (this.primitive) {
+      this.scene.primitives.remove(this.primitive); // destroys the primitive
+      this.primitive = null;
+    }
+    this.entries = [];
+    this.attrsCached = false;
+    this.timeOrigin = build.timeOrigin;
+    if (build.polylines.length === 0) return;
+
+    const instances: GeometryInstance[] = [];
+    for (const p of build.polylines) {
+      const numVerts = p.positions.length / 3;
+      const positions: Cartesian3[] = new Array(numVerts);
+      for (let v = 0; v < numVerts; v++) {
+        positions[v] = new Cartesian3(p.positions[v * 3], p.positions[v * 3 + 1], p.positions[v * 3 + 2]);
+      }
+      const id: InstanceId = { layerId: this.layerId, binary: p.binary, featureIndex: p.featureIndex };
+      const a = (p.color[3] ?? 255) / 255;
+      instances.push(
+        new GeometryInstance({
+          geometry: new PolylineGeometry({
+            positions,
+            width: this.width,
+            vertexFormat: PolylineColorAppearance.VERTEX_FORMAT,
+            arcType: this.arcType,
+          }),
+          attributes: {
+            // Seed fully transparent; the first setTime writes the real alpha.
+            color: ColorGeometryInstanceAttribute.fromColor(
+              new Color(p.color[0] / 255, p.color[1] / 255, p.color[2] / 255, 0),
+            ),
+          },
+          id,
+        }),
+      );
+      this.entries.push({
+        id,
+        start: p.start,
+        end: p.end,
+        r: p.color[0],
+        g: p.color[1],
+        b: p.color[2],
+        a,
+        lastAlpha: NaN,
+        attrs: null,
+        lon: this.firstLon(p),
+        lat: this.firstLat(p),
+      });
+    }
+
+    this.primitive = new Primitive({
+      geometryInstances: instances,
+      appearance: new PolylineColorAppearance({ translucent: true }),
+      asynchronous: false, // deterministic replace-all; no worker round-trip per tile load
+    });
+    this.scene.primitives.add(this.primitive);
+  }
+
+  private firstLon(p: FeaturePolyline): number {
+    const dims = p.binary.positionDimensions ?? 2;
+    const v0 = p.binary.startIndices ? p.binary.startIndices[p.featureIndex] : 0;
+    return p.binary.positions[v0 * dims];
+  }
+
+  private firstLat(p: FeaturePolyline): number {
+    const dims = p.binary.positionDimensions ?? 2;
+    const v0 = p.binary.startIndices ? p.binary.startIndices[p.featureIndex] : 0;
+    return p.binary.positions[v0 * dims + 1];
+  }
+
+  /** Advance to an absolute playhead time (same contract as `CesiumPointLayer.setTime`). */
+  setTime(absoluteMs: number): void {
+    const prim = this.primitive;
+    if (!prim || !prim.ready) return; // batch table exists only after the first render
+    if (!this.attrsCached) {
+      for (const e of this.entries) {
+        e.attrs = prim.getGeometryInstanceAttributes(e.id) as { color: Uint8Array };
+      }
+      this.attrsCached = true;
+    }
+
+    const cur = absoluteMs - this.timeOrigin;
+    const v = SCRATCH_RGBA;
+    for (const e of this.entries) {
+      const alpha = e.a * timeFilterAlpha(this.mode, cur, e.start, e.end, this.params);
+      if (alpha === e.lastAlpha || !e.attrs) continue;
+      e.lastAlpha = alpha;
+      v[0] = e.r;
+      v[1] = e.g;
+      v[2] = e.b;
+      v[3] = Math.round(alpha * 255);
+      e.attrs.color = v; // setter copies the bytes into the batch table
+    }
+  }
+
+  /** Hit-test → the shared `SttPickResult`. */
+  pick(cssX: number, cssY: number): SttPickResult | null {
+    const picked = this.scene.pick(new Cartesian2(cssX, cssY)) as { id?: InstanceId } | undefined;
+    if (!defined(picked) || !picked.id || picked.id.layerId !== this.layerId) return null;
+    const { binary, featureIndex } = picked.id;
+    const entry = this.entries.find((e) => e.id.binary === binary && e.id.featureIndex === featureIndex);
+    return {
+      object: getFeatureProperties(binary, featureIndex),
+      index: featureIndex,
+      layerId: this.layerId,
+      coordinate: entry ? [entry.lon, entry.lat] : undefined,
+      screen: [cssX, cssY],
+    };
+  }
+
+  dispose(): void {
+    if (this.primitive) {
+      this.scene.primitives.remove(this.primitive);
+      this.primitive = null;
+    }
+    this.entries = [];
+  }
+}

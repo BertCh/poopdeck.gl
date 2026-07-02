@@ -2,14 +2,17 @@
  * Polygon geometry adapter — renders POLYGON-type tiles as filled triangles,
  * with optional outline strokes and extruded side walls.
  *
- * Triangulation runs on the CPU at tile-load time via earcut, then we upload
- * the vertices + indices once and toggle alpha per-feature in the vertex
- * shader using the time-window uniforms.
+ * Triangulation runs on the CPU at tile-load time via the shared
+ * `tessellateFeature` kernel (@poopdeck.gl/core/geometry) — the same dispatch
+ * deck and three use — then we upload the vertices + indices once and toggle
+ * alpha per-feature in the vertex shader using the time-window uniforms.
  *
- * Each STT feature is treated as a single ring. Multi-ring polygons (holes)
- * are not yet supported — they need either an additional `holeIndices` field
- * in BinaryFeatures or a convention encoded in the existing `startIndices`.
- * The current STT-build pipeline only emits single rings, so this matches.
+ * The kernel HONORS pre-baked `triangles`/`triangleOffsets` when the tile
+ * carries them (built with `--pre-tessellate`), which is the holes-correct,
+ * multi-ring-correct path. Otherwise it falls back to earcutting the feature's
+ * SINGLE ring (`startIndices[f]…startIndices[f+1]`); multi-ring polygons that
+ * arrive without pre-baked triangles are still treated as one ring, since STT
+ * does not yet emit a `holeIndices` field for the runtime-earcut path.
  *
  * Stroked / extruded parity:
  *   - `stroked: true` adds an outline pass over each ring edge, drawn with the
@@ -19,9 +22,9 @@
  *     to z=0. Pair with `map.setPitch(...)` to actually see the relief.
  */
 
-import earcut from 'earcut';
 import type { Tile, Layer as STTLayer } from '@poopdeck.gl/core';
-import { GeometryType } from '@poopdeck.gl/core';
+import { GeometryType, DEFAULT_POLYGON_PALETTE } from '@poopdeck.gl/core';
+import { tessellateFeature } from '@poopdeck.gl/core/geometry';
 import {
   STTBaseLayer,
   type STTBaseLayerOptions,
@@ -33,19 +36,9 @@ import {
 import { lngLatToMercator } from '../lib/projection';
 import { TIME_WINDOW_GLSL } from '../shaders/time-window.glsl';
 
-// Categorical default palette (matches @poopdeck.gl/layers AnimatedPolygonLayer).
-const DEFAULT_POLY_PALETTE: ReadonlyArray<RGBA8> = [
-  [255, 140, 0, 180],
-  [31, 119, 180, 180],
-  [44, 160, 44, 180],
-  [214, 39, 40, 180],
-  [148, 103, 189, 180],
-  [140, 86, 75, 180],
-  [227, 119, 194, 180],
-  [127, 127, 127, 180],
-  [188, 189, 34, 180],
-  [23, 190, 207, 180],
-];
+// Shared with @poopdeck.gl/layers AnimatedPolygonLayer (single source of truth
+// in @poopdeck.gl/core).
+const DEFAULT_POLY_PALETTE: ReadonlyArray<RGBA8> = DEFAULT_POLYGON_PALETTE;
 
 export interface STTPolygonLayerOptions extends STTBaseLayerOptions {
   /** Fill color as [r, g, b, a] in the 0–1 range. Ignored when `fillColorProperty` is set. */
@@ -54,6 +47,16 @@ export interface STTPolygonLayerOptions extends STTBaseLayerOptions {
   fillColorProperty?: string;
   /** Palette used with `fillColorProperty` (0–255 RGBA). */
   colorPalette?: ReadonlyArray<RGBA8>;
+  /**
+   * Keyed category-STRING → 0–255 RGBA color map (deck/three `colorMapping`
+   * parity). When set, `fillColorProperty`'s category NAME is looked up here so
+   * a category renders the same fill in every tile regardless of per-tile
+   * dictionary order. Unmapped categories fall back to
+   * {@link colorMappingDefault}, then to the positional `colorPalette`.
+   */
+  colorMapping?: Record<string, RGBA8>;
+  /** Fill color for categories absent from {@link colorMapping}. */
+  colorMappingDefault?: RGBA8;
   /** Whether the polygon is filled. Default true. */
   filled?: boolean;
   /** Whether each ring is also drawn as an outline. Default false. */
@@ -217,6 +220,8 @@ export class STTPolygonLayer extends STTBaseLayer {
     color: [number, number, number, number];
     fillColorProperty?: string;
     colorPalette: ReadonlyArray<RGBA8>;
+    colorMapping?: Record<string, RGBA8>;
+    colorMappingDefault?: RGBA8;
     filled: boolean;
     stroked: boolean;
     lineColor: [number, number, number, number];
@@ -234,6 +239,8 @@ export class STTPolygonLayer extends STTBaseLayer {
       color: opts.color ?? [0.99, 0.55, 0.2, 0.7],
       fillColorProperty: opts.fillColorProperty,
       colorPalette: opts.colorPalette ?? DEFAULT_POLY_PALETTE,
+      colorMapping: opts.colorMapping,
+      colorMappingDefault: opts.colorMappingDefault,
       filled: opts.filled ?? true,
       stroked: opts.stroked ?? false,
       lineColor: opts.lineColor ?? [0, 0, 0, 1],
@@ -366,6 +373,8 @@ export class STTPolygonLayer extends STTBaseLayer {
           f,
           this.polyOpts.fillColorProperty,
           this.polyOpts.colorPalette,
+          this.polyOpts.colorMapping,
+          this.polyOpts.colorMappingDefault,
         )
       : null;
 
@@ -387,23 +396,17 @@ export class STTPolygonLayer extends STTBaseLayer {
     const fillIndicesArr: number[] = [];
     let nextVertex = 0;
 
-    // MLT-style pre-baked triangle indices: when the tile carries `triangles`
-    // we skip the per-feature earcut call entirely. Decoder hands us GLOBAL
-    // indices into `positions`, so we just translate them into our local
-    // top-vertex slot as the projection loop runs.
-    const preBakedTris = f.triangles;
-    const preBakedOffsets = f.triangleOffsets;
-    const usePreBaked =
-      !!preBakedTris && !!preBakedOffsets && preBakedOffsets.length === featureCount + 1;
-
     for (let fi = 0; fi < featureCount; fi++) {
       const begin = f.startIndices[fi];
       const end = f.startIndices[fi + 1];
       const ringVertexCount = end - begin;
       if (ringVertexCount < 3) continue;
 
-      // Pre-project the ring once — the projected coords feed both the fill
-      // emit loop and (when used) the earcut input.
+      // Pre-project the ring once — the projected coords feed the fill emit
+      // loop and the stroke/side-wall passes. (Triangulation runs on the raw
+      // lon/lat positions inside the shared kernel; a valid triangulation of a
+      // simple ring is topology-invariant under the mercator map, so the fill
+      // is identical.)
       const projected: Array<[number, number]> = new Array(ringVertexCount);
       for (let v = 0; v < ringVertexCount; v++) {
         const lon = f.positions[(begin + v) * dims];
@@ -412,27 +415,13 @@ export class STTPolygonLayer extends STTBaseLayer {
         projected[v] = [mx, my];
       }
 
-      // Resolve the triangle indices for this feature. Pre-baked indices
-      // are GLOBAL (refer to vertices in the tile's `positions` buffer); we
-      // shift them down to feature-local before emit so the existing loop
-      // that adds `topVertexBase` works unchanged.
-      let tris: number[];
-      if (usePreBaked) {
-        const triBegin = preBakedOffsets![fi];
-        const triEnd = preBakedOffsets![fi + 1];
-        tris = new Array(triEnd - triBegin);
-        for (let t = 0; t < tris.length; t++) {
-          tris[t] = preBakedTris![triBegin + t] - begin;
-        }
-      } else {
-        const flat = new Float64Array(ringVertexCount * 2);
-        for (let v = 0; v < ringVertexCount; v++) {
-          flat[v * 2] = projected[v][0];
-          flat[v * 2 + 1] = projected[v][1];
-        }
-        tris = earcut(flat as unknown as number[], undefined, 2);
-      }
-      if (tris.length === 0) continue;
+      // Resolve the triangle indices for this feature via the shared kernel:
+      // pre-baked `triangles` when the tile carries them, else a single-ring
+      // earcut. Either way the kernel returns GLOBAL indices (into the tile's
+      // `positions` buffer); we shift them down to feature-local (`- begin`) at
+      // emit so the existing loop that adds `topVertexBase` works unchanged.
+      const tris = tessellateFeature(f, fi, { preferPrebaked: true });
+      if (!tris || tris.length === 0) continue;
 
       const ts = f.startTimes[fi];
       const te = f.endTimes[fi];
@@ -455,7 +444,7 @@ export class STTPolygonLayer extends STTBaseLayer {
         nextVertex++;
       }
       for (let t = 0; t < tris.length; t++) {
-        fillIndicesArr.push(topVertexBase + tris[t]);
+        fillIndicesArr.push(topVertexBase + (tris[t] - begin));
       }
 
       // ---- Side walls when extruded ----

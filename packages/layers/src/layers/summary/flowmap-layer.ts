@@ -45,6 +45,9 @@ import type { Color, DefaultProps, Layer } from '@deck.gl/core';
 import { SpatioTemporalLayer, SpatioTemporalLayerProps } from '../spatiotemporal-layer';
 import { FlowLinesLayer } from '../internal/flow-lines-layer';
 import { deriveSourceTargetPositions } from '../../lib/od-positions';
+import { bucketBlendAt, blendMatrixRow } from '../../lib/vertex-value-blend';
+import { resolveAccessorAlias } from '../../lib/accessor-alias';
+import type { ColorAccessorValue } from '../../lib/accessor-alias';
 import { emit } from '../../lib/telemetry';
 import type { Tile, Layer as TileLayer, BinaryFeatures } from '@poopdeck.gl/core';
 
@@ -64,19 +67,26 @@ export interface _FlowmapLayerProps {
   widthMaxPixels?: number;
   /** Source (origin / tail) color. @default [56, 196, 232, 235] */
   sourceColor?: Color;
+  /**
+   * Upstream-vocabulary (ArcLayer) alias of {@link sourceColor}. NOTE: unlike
+   * upstream deck.gl, this accepts a constant Color only — NOT a function
+   * accessor (binary tiles can't run per-feature JS; a function warns once and
+   * falls back to `sourceColor`). When set, it wins over `sourceColor`.
+   */
+  getSourceColor?: ColorAccessorValue | null;
   /** Target (destination / arrowhead) color. @default [255, 142, 64, 245] */
   targetColor?: Color;
+  /**
+   * Upstream-vocabulary alias of {@link targetColor}. Constant Color only — a
+   * function accessor warns once and falls back to `targetColor`. When set, it
+   * wins over `targetColor`.
+   */
+  getTargetColor?: ColorAccessorValue | null;
   /**
    * Perpendicular separation between the two directions of a pair, in units of
    * the arrow width — so A→B and B→A sit side-by-side. @default 0.5
    */
   gap?: number;
-  /** @deprecated No effect — flow arrows are flat. Accepted for back-compat
-   * (a future curved-arrow variant may revive it). */
-  greatCircle?: boolean;
-  /** @deprecated No effect — flow arrows are flat (the old raised-arc knob).
-   * Accepted for back-compat with existing showcase configs. */
-  arcHeight?: number;
   /**
    * Node circle radius in pixels per unit of `sqrt(incidentFlow)`, where
    * incident flow is the sum of the station's current-bucket inbound + outbound
@@ -158,8 +168,6 @@ export class FlowmapLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLay
     widthMinPixels: { type: 'number', value: 1, min: 0 },
     widthMaxPixels: { type: 'number', value: 12, min: 0 },
     gap: { type: 'number', value: 0.5, min: 0 },
-    greatCircle: false,
-    arcHeight: { type: 'number', value: 0.5, min: 0 },
     nodeRadiusScale: { type: 'number', value: 1.3, min: 0 },
     nodeRadiusUnits: 'pixels',
     nodeRadiusMinPixels: { type: 'number', value: 1.5, min: 0 },
@@ -171,6 +179,10 @@ export class FlowmapLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLay
     targetColor: { type: 'object', value: DEFAULT_TARGET_COLOR, compare: true },
     nodeColor: { type: 'object', value: DEFAULT_NODE_COLOR, compare: true },
     nodeLineColor: { type: 'object', value: DEFAULT_NODE_LINE_COLOR, compare: true },
+    // Accessor-named aliases (see the prop docs): unset by default so the
+    // legacy props win unless the caller opts into the upstream vocabulary.
+    getSourceColor: { type: 'object', value: null, optional: true, compare: true },
+    getTargetColor: { type: 'object', value: null, optional: true, compare: true },
   };
 
   /** tileKey → geometry (rebuilt only when a tile appears). */
@@ -266,18 +278,13 @@ export class FlowmapLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLay
     const widths = new Float32Array(n);
     if (nb <= 0 || !matrix) return widths;
 
-    const b0 = Math.floor(stepped);
-    const b1 = Math.min(b0 + 1, nb - 1);
-    const f = stepped - b0;
-    const g = 1 - f;
-
+    const blend = bucketBlendAt(stepped, nb);
     const widthScale = this.props.widthScale;
     const minFlow = this.props.minFlow;
     const dims = geom.dims;
 
     for (let i = 0; i < n; i++) {
-      const base = geom.srcVertexIndex[i] * nb;
-      const flow = f <= 0 ? matrix[base + b0] : matrix[base + b0] * g + matrix[base + b1] * f;
+      const flow = blendMatrixRow(matrix, geom.srcVertexIndex[i] * nb, blend);
       if (flow <= minFlow) {
         widths[i] = 0; // inactive → invisible (this is the animation)
         continue;
@@ -293,13 +300,38 @@ export class FlowmapLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLay
     return widths;
   }
 
+  /**
+   * Accessor-alias resolution (audit B1): the upstream-named alias wins when
+   * set; a function-valued alias warns once and falls back to the legacy prop.
+   * Constant colors only (there is no per-feature color column on OD arrows).
+   */
+  private sourceColorValue(): Color {
+    const resolved = resolveAccessorAlias(
+      'FlowmapLayer',
+      'getSourceColor',
+      this.props.getSourceColor,
+      this.props.sourceColor,
+    );
+    return (Array.isArray(resolved) ? resolved : DEFAULT_SOURCE_COLOR) as Color;
+  }
+
+  private targetColorValue(): Color {
+    const resolved = resolveAccessorAlias(
+      'FlowmapLayer',
+      'getTargetColor',
+      this.props.getTargetColor,
+      this.props.targetColor,
+    );
+    return (Array.isArray(resolved) ? resolved : DEFAULT_TARGET_COLOR) as Color;
+  }
+
   private computePropsKey(): string {
     return [
       this.props.widthMinPixels,
       this.props.widthMaxPixels,
       this.props.gap,
-      Array.isArray(this.props.sourceColor) ? this.props.sourceColor.join(',') : '',
-      Array.isArray(this.props.targetColor) ? this.props.targetColor.join(',') : '',
+      this.sourceColorValue().join(','),
+      this.targetColorValue().join(','),
       this.props.opacity,
       this.props.visible,
     ].join('|');
@@ -402,12 +434,8 @@ export class FlowmapLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLay
       data,
       dataComparator: (a: any, b: any) => a === b,
       positionFormat: dims === 3 ? 'XYZ' : 'XY',
-      sourceColor: (Array.isArray(this.props.sourceColor)
-        ? this.props.sourceColor
-        : DEFAULT_SOURCE_COLOR) as Color,
-      targetColor: (Array.isArray(this.props.targetColor)
-        ? this.props.targetColor
-        : DEFAULT_TARGET_COLOR) as Color,
+      sourceColor: this.sourceColorValue(),
+      targetColor: this.targetColorValue(),
       gap: this.props.gap,
       // Width arrives per-instance in pixels (already scaled); clamp to the px
       // envelope. Zero-flow arrows stay at width 0 → invisible.

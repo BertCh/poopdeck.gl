@@ -20,6 +20,7 @@
 import { uniform, float, select, saturate, max, mix } from './nodes';
 import type { TSLNode, UniformNode } from './nodes';
 import type { TimeFilterMode, TimeFilterParams } from './time-filter-math';
+import { DEFAULT_WAKE_TAIL_SCALE } from '@poopdeck.gl/core/time-filter';
 
 // The loose TSL node aliases live in ./nodes (see that file for why); re-export
 // so existing `import { TSLNode } from './time-filter'` consumers keep working.
@@ -38,7 +39,7 @@ export class TimeFilterUniforms {
   readonly fadeIn: UniformNode = uniform(0);
   readonly fadeOut: UniformNode = uniform(0);
   readonly wakeLength: UniformNode = uniform(0);
-  readonly wakeTailScale: UniformNode = uniform(0.1);
+  readonly wakeTailScale: UniformNode = uniform(DEFAULT_WAKE_TAIL_SCALE);
   readonly trailLength: UniformNode = uniform(0);
   readonly trailFade: UniformNode = uniform(1);
 }
@@ -143,7 +144,7 @@ export function updateTimeFilterUniforms(
   u.fadeIn.value = params.fadeIn ?? 0;
   u.fadeOut.value = params.fadeOut ?? 0;
   u.wakeLength.value = params.wakeLength ?? 0;
-  u.wakeTailScale.value = params.wakeTailScale ?? 0.1;
+  u.wakeTailScale.value = params.wakeTailScale ?? DEFAULT_WAKE_TAIL_SCALE;
   u.trailLength.value = params.trailLength ?? 0;
   u.trailFade.value = params.trailFade ?? 1;
 }

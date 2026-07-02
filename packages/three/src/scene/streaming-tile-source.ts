@@ -42,6 +42,7 @@ import {
   SpatiotemporalTileset,
   type BufferedRunway as CoreBufferedRunway,
 } from '@poopdeck.gl/core';
+import { makeTilesetCallbacks } from '@poopdeck.gl/core/tileset-adapter';
 import type { BufferSource, BufferedRunway } from '@poopdeck.gl/playback';
 import { PerspectiveCamera, Vector3 } from 'three';
 import type { Projection } from '../projection/local-enu';
@@ -208,19 +209,10 @@ export class StreamingTileSource {
       maxCacheSize: this.maxCacheSize,
       maxCacheByteSize: this.maxCacheByteSize,
       enablePrefetch: this.enablePrefetch,
-      getAvailableTiles: (bounds, zoom, timeRange) =>
-        archive.getTileIdsInBounds(bounds, zoom, timeRange),
-      getTileData: (tileId, signal) => archive.getTile(tileId, { signal }),
-      getTileDataBatch: (tileIds, signal, hooks) =>
-        archive.getTiles(tileIds, {
-          signal,
-          onTileReady: hooks?.onTileReady,
-          fetchPriority: hooks?.fetchPriority,
-          playheadTime: hooks?.playheadTime,
-          playheadDirection: hooks?.playheadDirection,
-        }),
-      getTileByteSize: (tileId) => archive.getTileByteSize(tileId),
-      getThroughput: () => archive.getThroughputEstimate(),
+      // Archive-backed fetch callbacks (getAvailableTiles / getTileData /
+      // getTileDataBatch / getTileByteSize / getThroughput) — shared with the
+      // deck path via the core adapter.
+      ...makeTilesetCallbacks(archive),
       // A wired onTileLoad means tiles arrive after the synchronous update()
       // returns — re-publish the resident set so the layer picks them up.
       onTileLoad: () => this.publishIfChanged(),

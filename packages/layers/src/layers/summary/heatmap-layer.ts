@@ -65,17 +65,12 @@ import { warnOnce } from '../../lib/log';
 import { updateTriggersDigest } from '../../lib/style-digest';
 import { resolveAccessorAlias } from '../../lib/accessor-alias';
 import type { WeightAccessorValue } from '../../lib/accessor-alias';
+import { DEFAULT_HEATMAP_COLOR_RANGE } from '@poopdeck.gl/core';
 import type { Tile } from '@poopdeck.gl/core';
 
-const DEFAULT_COLOR_RANGE: Color[] = [
-  [255, 255, 178, 255],
-  [254, 217, 118, 255],
-  [254, 178, 76, 255],
-  [253, 141, 60, 255],
-  [252, 78, 42, 255],
-  [227, 26, 28, 255],
-  [177, 0, 38, 255],
-];
+// Shared with the maplibre adapter (single source of truth in
+// @poopdeck.gl/core).
+const DEFAULT_COLOR_RANGE: Color[] = DEFAULT_HEATMAP_COLOR_RANGE;
 
 /** Max stacked channels — one canonical HeatmapLayer is drawn per channel. */
 const MAX_CHANNELS = 4;
@@ -149,12 +144,6 @@ export interface _AnimatedHeatmapLayerProps {
    */
   channels?: HeatmapChannelSpec[] | null;
   /**
-   * Deprecated/no-op. The old single-pass splat reserved this for a future
-   * TAA blend that never shipped. Accepted for API compatibility and ignored —
-   * the canonical aggregation pipeline has no equivalent.
-   */
-  historyWeight?: number;
-  /**
    * Fade-in duration at the leading edge of the time window (ms). Mapped onto
    * the DataFilterExtension soft range so points fade in rather than pop.
    */
@@ -185,9 +174,6 @@ export interface _AnimatedHeatmapLayerProps {
 
 /** Complete props accepted by {@link AnimatedHeatmapLayer}. */
 export type AnimatedHeatmapLayerProps = _AnimatedHeatmapLayerProps & SpatioTemporalLayerProps;
-
-/** @deprecated Renamed — use {@link AnimatedHeatmapLayerProps}. */
-export type HeatmapLayerProps = AnimatedHeatmapLayerProps;
 
 interface ResolvedChannel {
   id: string;
@@ -220,7 +206,6 @@ const defaultProps: DefaultProps<AnimatedHeatmapLayerProps> = {
   colorRange: { type: 'array', value: DEFAULT_COLOR_RANGE, compare: true },
   colorDomain: { type: 'array', value: null, compare: true, optional: true },
   channels: { type: 'array', value: null, compare: true, optional: true },
-  historyWeight: { type: 'number', value: 0, min: 0, max: 0.95 },
   weightProperty: { type: 'object', value: null, optional: true, compare: true },
   // Accessor-named alias of weightProperty (column-name semantics).
   getWeight: { type: 'object', value: null, optional: true, compare: true },
@@ -467,13 +452,6 @@ export class AnimatedHeatmapLayer<ExtraPropsT extends {} = {}> extends SpatioTem
     return [entry.min, entry.max];
   }
 }
-
-/**
- * @deprecated Renamed — use {@link AnimatedHeatmapLayer}. The old name
- * shadowed `@deck.gl/aggregation-layers`' `HeatmapLayer`; this alias is kept
- * so existing imports keep working and will be removed before npm publish 1.0.
- */
-export { AnimatedHeatmapLayer as HeatmapLayer };
 
 function tileKey(tile: Tile): string {
   const { z, x, y, t } = tile.id;

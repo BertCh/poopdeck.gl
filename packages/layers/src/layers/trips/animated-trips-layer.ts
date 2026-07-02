@@ -41,6 +41,7 @@ import {
 } from '../../lib/style-digest';
 import { resolveAccessorAlias } from '../../lib/accessor-alias';
 import type { ColorAccessorValue, NumericAccessorValue } from '../../lib/accessor-alias';
+import { DEFAULT_TRIPS_PALETTE } from '@poopdeck.gl/core';
 import type { Tile, Layer as TileLayer, BinaryFeatures } from '@poopdeck.gl/core';
 
 const DEBUG = false;
@@ -157,13 +158,9 @@ export interface _AnimatedTripsLayerProps {
 /** Complete props accepted by {@link AnimatedTripsLayer}. */
 export type AnimatedTripsLayerProps = _AnimatedTripsLayerProps & SpatioTemporalLayerProps;
 
-const DEFAULT_PALETTE: Color[] = [
-  [253, 128, 93, 255],
-  [0, 150, 255, 255],
-  [44, 160, 44, 255],
-  [214, 39, 40, 255],
-  [148, 103, 189, 255],
-];
+// Shared with the maplibre adapter (single source of truth in
+// @poopdeck.gl/core).
+const DEFAULT_PALETTE: Color[] = DEFAULT_TRIPS_PALETTE;
 
 /**
  * Build a per-tile palette by mapping the tile's own category dictionary
@@ -403,6 +400,11 @@ function expandGradientColors(
  * contract). Without a `type` override the class is `PathLayer` when
  * `pickable` and the attribute-stripped `NoPickingPathLayer` otherwise.
  */
+/** Shared stable empties for the `extraTrips*` hooks — a fresh `[]`/`{}` per
+ * call would defeat deck's per-extension-set shader-pipeline cache. */
+const EMPTY_EXTENSIONS: unknown[] = [];
+const EMPTY_SUBLAYER_PROPS: Record<string, unknown> = {};
+
 export class AnimatedTripsLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLayer<
   ExtraPropsT & Required<_AnimatedTripsLayerProps>
 > {
@@ -671,6 +673,37 @@ export class AnimatedTripsLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
   }
 
   /**
+   * Post-process the freshly-expanded per-vertex RGBA color buffer (from the
+   * gradient ramp) in place, before it is uploaded as the `getColor` attribute.
+   * Base is a no-op; {@link FlowCorridorLayer} overrides it to pack a SECOND
+   * per-vertex signal (instantaneous per-trip flow) into the alpha byte without
+   * adding a GPU attribute — the RGB carries the aggregate ramp color, the alpha
+   * carries the instant. Called only on the gradient path.
+   */
+  protected finalizeGradientColorBuffer(
+    _colors: Uint8Array,
+    _binary: BinaryFeatures,
+    _totalVerts: number,
+  ): void {
+    // no-op
+  }
+
+  /**
+   * PER-VERTEX chevron direction sign (length `totalVerts`), or `undefined` to
+   * leave direction to the geometry winding. {@link FlowCorridorLayer} overrides
+   * it (when `signedFlow`) to read the sign of the SIGNED value matrix's active
+   * bucket, so `ChevronFlowExtension({ perBucketDirection: true })` flips the
+   * arrows per time-step. Wired to the `instanceChevronDir` attribute — the same
+   * per-vertex plumbing as the gradient `getColor` / dynamic `getWidth` buffers.
+   */
+  protected chevronDirectionsFor(
+    _binary: BinaryFeatures,
+    _totalVerts: number,
+  ): Float32Array | undefined {
+    return undefined;
+  }
+
+  /**
    * Extra token folded into the prepared-tile `styleKey` so a time-driven
    * gradient invalidates the CPU-expanded per-vertex colors as the playhead
    * advances. Base: '' (the static gradient never varies with time).
@@ -692,6 +725,56 @@ export class AnimatedTripsLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
     _binary: BinaryFeatures,
   ): { start: number; end: number } | null {
     return null;
+  }
+
+  /**
+   * PER-VERTEX width override (length `totalVerts`, aligned 1:1 with `positions`
+   * exactly like the gradient `getColor` buffer — PathLayer's `instanceStrokeWidths`
+   * is per-SEGMENT-instanced, so a shorter per-feature buffer under-sizes the draw).
+   * Base: `undefined`, so the static `getWidth`/`tripWidth` accessor wins.
+   * {@link FlowStrokeLayer} overrides it to make width breathe with the active
+   * time-bucket volume (√-scaled) and taper along each trunk, reusing the same
+   * sub-step cache machinery as the gradient color (recomputes exactly when
+   * `gradientStyleSuffix` changes). Anything shorter than `totalVerts` is ignored.
+   */
+  protected widthsFor(
+    _binary: BinaryFeatures,
+    _featureCount: number,
+  ): Float32Array | undefined {
+    return undefined;
+  }
+
+  /**
+   * Extra deck extensions appended (after the time-filter + category-color
+   * singletons) to every sublayer of this instance. MUST return a stable
+   * reference per instance — deck caches compiled shader pipelines per extension
+   * set, so a fresh array each call defeats that cache. Base: a shared empty
+   * array. {@link FlowStrokeLayer} adds a `PathStyleExtension({offset:true})` for
+   * the twin-ribbon offset.
+   */
+  protected extraTripsExtensions(): unknown[] {
+    return EMPTY_EXTENSIONS;
+  }
+
+  /**
+   * Extra sublayer props merged into every trips sublayer (e.g. the constant
+   * `getOffset` that pairs with {@link FlowStrokeLayer}'s offset extension).
+   * Base: a shared empty object. User `_subLayerProps.trips` still wins, as it
+   * is applied last by `composeSubLayerProps`.
+   */
+  protected extraTripsSubLayerProps(): Record<string, unknown> {
+    return EMPTY_SUBLAYER_PROPS;
+  }
+
+  /**
+   * Whether to install the (idle-for-trips) CategoryColorExtension. Base: true.
+   * A subclass that never categorically colors AND needs an extra attribute slot
+   * (e.g. {@link FlowStrokeLayer}, which adds PathStyleExtension's offset) returns
+   * false to drop `instanceCategoryIndex` and stay under WebGL2's 16-attribute
+   * floor. Must be constant per instance (shader-pipeline cache).
+   */
+  protected includeCategoryColorExtension(): boolean {
+    return true;
   }
 
   private prepareTile(tile: Tile, tileLayer: TileLayer): PreparedTile | null {
@@ -736,10 +819,20 @@ export class AnimatedTripsLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
     // Per-vertex time: prefer the tile's own array (zero-copy from Arrow).
     // Fallback synthesizes from feature start/end times; allocated once and
     // cached on the PreparedTile so subsequent renders reuse it.
+    //
+    // EXCEPTION — per-bucket chevron direction (FlowCorridorLayer signedFlow):
+    // this slot carries the per-vertex DIRECTION SIGN instead. Flow-corridor tiles
+    // run window mode, where TimeFilterExtension never reads instanceVertexTime
+    // (only trail mode does), so ChevronFlowExtension({ perBucketDirection }) reads
+    // it for the sign — reusing an allocated-but-idle attribute rather than adding
+    // one (PathLayer already sits at WebGL2's 16-attribute link ceiling).
+    const chevronDirs = this.chevronDirectionsFor(binary, totalVerts);
     const vertexTimes: Float32Array =
-      binary.vertexTimestamps && binary.vertexTimestamps.length >= totalVerts
-        ? binary.vertexTimestamps
-        : synthesizeVertexTimes(binary);
+      chevronDirs && chevronDirs.length >= totalVerts
+        ? chevronDirs
+        : binary.vertexTimestamps && binary.vertexTimestamps.length >= totalVerts
+          ? binary.vertexTimestamps
+          : synthesizeVertexTimes(binary);
 
     const attributes: PreparedTile['data']['attributes'] = {
       // PathLayer's positions attribute — keyed by ACCESSOR NAME `getPath`.
@@ -765,14 +858,18 @@ export class AnimatedTripsLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
       this.props.gradientColorRamp &&
       this.props.gradientColorRamp.length > 0
     ) {
+      const gradientColorBuffer = expandGradientColors(
+        gradientValues,
+        this.props.gradientDomain ?? [0, 1],
+        this.props.gradientColorRamp,
+        totalVerts,
+        this.props.colorMappingDefault ?? [120, 120, 120, 255],
+      );
+      // Seam for a second per-vertex signal packed into alpha (FlowCorridorLayer
+      // per-trip lighting). No-op in the base class.
+      this.finalizeGradientColorBuffer(gradientColorBuffer, binary, totalVerts);
       attributes.getColor = {
-        value: expandGradientColors(
-          gradientValues,
-          this.props.gradientDomain ?? [0, 1],
-          this.props.gradientColorRamp,
-          totalVerts,
-          this.props.colorMappingDefault ?? [120, 120, 120, 255],
-        ),
+        value: gradientColorBuffer,
         size: 4,
         normalized: true,
       };
@@ -822,6 +919,21 @@ export class AnimatedTripsLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
         attributes.getWidth = { value: values, size: 1 };
       }
     }
+    // Dynamic PER-VERTEX width hook (FlowStrokeLayer: active-bucket volume). Wins
+    // over the static `widthProp` when present; recomputed on each sub-step
+    // because gradientStyleSuffix folds the playhead into the styleKey above.
+    // MUST be per-vertex (length totalVerts), NOT per-feature: PathLayer's
+    // `instanceStrokeWidths` is a per-SEGMENT-instanced attribute, so a
+    // featureCount-length buffer is too small for the draw ("vertex buffer is not
+    // big enough"). Per-vertex mirrors the getColor path exactly (and lets width
+    // taper along the line).
+    const dynWidths = this.widthsFor(binary, binary.featureCount);
+    if (dynWidths && dynWidths.length >= totalVerts) {
+      attributes.getWidth = { value: dynWidths, size: 1 };
+    }
+    // NOTE: the per-vertex chevron direction sign (signedFlow) is carried on the
+    // instanceVertexTime attribute above — see the comment there. No separate
+    // attribute is added, to stay under WebGL2's 16-attribute ceiling.
 
     const prepared: PreparedTile = {
       tileKey,
@@ -875,9 +987,18 @@ export class AnimatedTripsLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
     // shader branch via the uniform). User extensions from the top-level
     // `extensions` prop are appended (composeExtensions) — the contract
     // holds as long as the caller's entries compare equal across renders.
+    // Category-color is idle for some subclasses (FlowStrokeLayer colors via the
+    // gradient, never categorically) — dropping its `instanceCategoryIndex`
+    // attribute there frees a WebGL2 vertex-attribute slot for an extra extension
+    // (e.g. PathStyleExtension's offset), which otherwise overflows the 16-slot
+    // floor on GPUs that report exactly 16. The list stays CONSTANT per instance
+    // (the subclass's choice never changes), so shader-pipeline caching holds.
+    const baseExtensions: unknown[] = this.includeCategoryColorExtension()
+      ? [this.timeFilterExtension, this.categoryColorExtension]
+      : [this.timeFilterExtension];
     const extensions = this.composeExtensions([
-      this.timeFilterExtension,
-      this.categoryColorExtension,
+      ...baseExtensions,
+      ...this.extraTripsExtensions(),
     ]);
 
     // getSubLayerProps inheritance (opacity/pickable/visible, coordinate
@@ -906,6 +1027,9 @@ export class AnimatedTripsLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
       // attributes win); they only kick in for tiles missing the property.
       getColor: constColor,
       getWidth: constWidth,
+      // Subclass extras (e.g. FlowStrokeLayer's constant getOffset for the
+      // PathStyleExtension twin-ribbon offset). Empty for the base class.
+      ...this.extraTripsSubLayerProps(),
 
       extensions,
       // Dynamic time: extension reads getTime() on every draw, so we never

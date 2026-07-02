@@ -9,8 +9,9 @@
  * rebases its `[startTime,endTime]` to the scene's common time origin.
  */
 
-import type { BinaryFeatures, Tile } from '@poopdeck.gl/core';
+import type { BinaryFeatures, Tile, TileId } from '@poopdeck.gl/core';
 import { GeometryType } from '@poopdeck.gl/core';
+import { InstanceProvenance } from '@poopdeck.gl/core/picking';
 import type { Projection } from '../projection/local-enu';
 import {
   expandCategoricalColors,
@@ -51,6 +52,30 @@ export interface PointBuffers {
    */
   origin: [number, number, number];
   bbox: { min: [number, number, number]; max: [number, number, number] } | null;
+  /**
+   * Per-merged-instance provenance (the §5.3 pick-identity buffer). Merged
+   * instance `i` — the same `i` a GPU id-buffer pick decodes — resolves via
+   * `provenance.resolve(i)` to its source `(tileKey, featureIndex)`. Populated
+   * in the EXACT order instances are written to {@link centers}, so index
+   * alignment is guaranteed. Empty when `count === 0`.
+   */
+  provenance: InstanceProvenance;
+  /**
+   * `tileKey` → the source layer's {@link BinaryFeatures}, so a resolved
+   * provenance entry can be joined back to columns via
+   * `getFeatureProperties(binary, featureIndex)`. Built from the SAME iteration
+   * (and the same {@link pointTileKey}) as {@link provenance}, so keys line up.
+   */
+  binaryByTileKey: Map<string, BinaryFeatures>;
+}
+
+/**
+ * Stable key for a source `(tile, layer)`: `z/x/y/t::layerName`. The
+ * merged-buffer provenance records this per instance so a decoded pick index
+ * maps back to a specific tile-layer's `BinaryFeatures`.
+ */
+export function pointTileKey(id: TileId, layerName: string): string {
+  return `${id.z}/${id.x}/${id.y}/${id.t}::${layerName}`;
 }
 
 function colorsForTile(
@@ -91,17 +116,22 @@ export function buildPointBuffers(
   timeOrigin: number,
   opts: PointBufferOptions,
 ): PointBuffers {
-  const parts: BinaryFeatures[] = [];
+  const parts: Array<{ features: BinaryFeatures; tileKey: string }> = [];
+  const binaryByTileKey = new Map<string, BinaryFeatures>();
   let total = 0;
   for (const tile of tiles) {
     for (const tl of tile.layers) {
       const b = tl.features;
       if (!b.featureCount) continue;
       if (b.geometryType !== GeometryType.Point) continue;
-      parts.push(b);
+      const key = pointTileKey(tile.id, tl.name);
+      parts.push({ features: b, tileKey: key });
+      binaryByTileKey.set(key, b);
       total += b.featureCount;
     }
   }
+
+  const provenance = new InstanceProvenance();
 
   if (total === 0) {
     return {
@@ -112,6 +142,8 @@ export function buildPointBuffers(
       ends: new Float32Array(0),
       origin: [0, 0, 0],
       bbox: null,
+      provenance,
+      binaryByTileKey,
     };
   }
 
@@ -119,7 +151,7 @@ export function buildPointBuffers(
   // (absolute world). `centers` are written relative to it so the large
   // mercator/globe magnitude stays in the f64 CPU transform (object.position),
   // not the f32 buffer. For the ENU/AV frame origin ≈ [0,0,0] → no-op.
-  const firstLayer = parts[0];
+  const firstLayer = parts[0].features;
   const firstDims = firstLayer.positionDimensions ?? 2;
   const firstAlt = firstDims > 2 ? firstLayer.positions[2] : 0;
   const origin = projection.project(firstLayer.positions[0], firstLayer.positions[1], firstAlt);
@@ -136,7 +168,8 @@ export function buildPointBuffers(
   let maxZ = -Infinity;
 
   let o = 0;
-  for (const b of parts) {
+  for (const part of parts) {
+    const b = part.features;
     const count = b.featureCount;
     const dims = b.positionDimensions ?? 2;
     const elev = opts.elevationProperty ? b.numericProps[opts.elevationProperty] : undefined;
@@ -144,6 +177,10 @@ export function buildPointBuffers(
     const rebase = b.timeOffset - timeOrigin;
 
     for (let i = 0; i < count; i++) {
+      // Provenance MUST be pushed in the same order instances are written
+      // (merged index j = o + i), so `provenance.resolve(j)` aligns with the
+      // GPU id decoded from that instance.
+      provenance.push(part.tileKey, i);
       const lon = b.positions[i * dims];
       const lat = b.positions[i * dims + 1];
       const alt = elev ? elev[i] * opts.elevationScale : dims > 2 ? b.positions[i * dims + 2] : 0;
@@ -181,6 +218,8 @@ export function buildPointBuffers(
     ends,
     origin,
     bbox: { min: [minX, minY, minZ], max: [maxX, maxY, maxZ] },
+    provenance,
+    binaryByTileKey,
   };
 }
 

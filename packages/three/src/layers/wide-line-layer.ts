@@ -18,6 +18,7 @@
 import { Mesh, InstancedBufferAttribute, Box3, Vector3, Sphere } from 'three';
 import type { Tile } from '@poopdeck.gl/core';
 import { BaseSttLayer, type SttLayerContext } from './layer';
+import { resolveTimeWindow, type ThreeTimeWindowOptions } from '../lib/time-window';
 import { makeSegmentQuadGeometry } from '../geometry/segment-quad';
 import {
   buildLineSegmentBuffers,
@@ -31,7 +32,7 @@ import {
   type WideLineMode,
 } from '../tsl/wide-line-material';
 
-export interface WideLineLayerOptions {
+export interface WideLineLayerOptions extends ThreeTimeWindowOptions {
   id?: string;
   /** window (Path/OD-Line) | trail (Trips) | none (static map lines). @default 'none' */
   mode?: WideLineMode;
@@ -47,10 +48,9 @@ export interface WideLineLayerOptions {
   elevationProperty?: string | null;
   elevationScale?: number;
   zLift?: number;
-  // time params
-  windowHalf?: number;
-  fadeIn?: number;
-  fadeOut?: number;
+  // time params — full-width `timeWindow` + `fadeIn/OutDuration` and the
+  // lower-level `windowHalf`/`fadeIn`/`fadeOut` aliases come from
+  // ThreeTimeWindowOptions.
   trailLength?: number;
   trailFade?: number;
 }
@@ -134,9 +134,7 @@ export class WideLineLayer extends BaseSttLayer {
     updateWideLineUniforms(this.bundle, {
       relativeCurrentTime: this.relativeTime(absoluteTimeMs),
       params: {
-        windowHalf: this.opts.windowHalf ?? 0,
-        fadeIn: this.opts.fadeIn ?? 0,
-        fadeOut: this.opts.fadeOut ?? 0,
+        ...resolveTimeWindow(this.opts, 0),
         trailLength: this.opts.trailLength ?? 0,
         trailFade: this.opts.trailFade ?? 1,
       },

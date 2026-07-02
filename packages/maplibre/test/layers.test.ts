@@ -302,8 +302,16 @@ describe('Fade-in/out resolution', () => {
     expect(fadeOut).toBe(250);
   });
 
-  it('defaults to 10% of timeWindow when soft-fade is implied', () => {
+  it('defaults to a HARD 0-cut (unified cross-backend policy, matches deck/three)', () => {
+    // Renderer-abstraction Phase 1 decision: no soft ramp unless explicitly opted in.
     const layer = new STTPointLayer({ ...baseOpts, id: 'p' }) as any;
+    const { fadeIn, fadeOut } = layer.resolveFadeDurations();
+    expect(fadeIn).toBe(0);
+    expect(fadeOut).toBe(0);
+  });
+
+  it('applies the 10%-of-window soft ramp only when softTimeWindow: true is explicit', () => {
+    const layer = new STTPointLayer({ ...baseOpts, id: 'p', softTimeWindow: true }) as any;
     const { fadeIn, fadeOut } = layer.resolveFadeDurations();
     expect(fadeIn).toBe(500); // 5000 * 0.1
     expect(fadeOut).toBe(500);
@@ -350,5 +358,73 @@ describe('STTPointLayer time-window math', () => {
     expect(values).toContain(0);
     expect(values).toContain(10_000);
     expect(gl.drawArrays).toHaveBeenCalledWith(expect.any(Number), 0, 2);
+  });
+});
+
+describe('STTPointLayer position quantization (perf research 2026-07)', () => {
+  it('buildTileGpuCache populates posScale/posOffset from a real (non-degenerate) bbox', () => {
+    const layer = new STTPointLayer({ ...baseOpts, id: 'p' }) as any;
+    layer.supports32BitIndices = true;
+    const gl = makeMockGl();
+    const tile = makePointTile(); // SF + NYC — a genuinely wide mercator bbox.
+    const cache = layer.buildTileGpuCache(gl, tile, tile.layers[0]);
+
+    expect(cache.posScale).toHaveLength(3);
+    expect(cache.posOffset).toHaveLength(3);
+    // x/y ranges must be positive (SF and NYC are far apart in mercator x);
+    // z (altitude) is 0 for every 2D point, so its range collapses to 0.
+    expect(cache.posScale[0]).toBeGreaterThan(0);
+    expect(cache.posScale[1]).toBeGreaterThan(0);
+    expect(cache.posScale[2]).toBe(0);
+  });
+
+  it('drawTile uploads the position buffer as UNSIGNED_SHORT/normalized and sets uPosScale/uPosOffset', () => {
+    const layer = new STTPointLayer({ ...baseOpts, id: 'p' }) as any;
+    layer.supports32BitIndices = true;
+    layer.onContextReady(makeMockGl());
+    const gl = makeMockGl();
+    const tile = makePointTile();
+    const cache = layer.buildTileGpuCache(gl, tile, tile.layers[0]);
+
+    layer.drawTile(gl, tile, tile.layers[0], cache, {
+      matrix: new Float32Array(16),
+      windowStart: 0,
+      windowEnd: 10_000,
+      currentTime: layer.opts.currentTime,
+      zoom: 2,
+    });
+
+    const h = layer.handles;
+    // The position attribute is bound UNSIGNED_SHORT + normalized=true — half
+    // the bytes of the old Float32 upload, decoded to [0,1] for free by the
+    // GPU's fixed-function vertex fetch.
+    expect(gl.vertexAttribPointer).toHaveBeenCalledWith(
+      h.aMercator,
+      3,
+      gl.UNSIGNED_SHORT,
+      true,
+      0,
+      0,
+    );
+    // uPosScale/uPosOffset were set from the cache's quantization params.
+    const scaleCalls = gl.uniform3fv.mock.calls.filter((c: unknown[]) => c[0] === h.uPosScale);
+    const offsetCalls = gl.uniform3fv.mock.calls.filter((c: unknown[]) => c[0] === h.uPosOffset);
+    expect(scaleCalls).toHaveLength(1);
+    expect(offsetCalls).toHaveLength(1);
+    expect(scaleCalls[0][1]).toEqual(cache.posScale);
+    expect(offsetCalls[0][1]).toEqual(cache.posOffset);
+  });
+
+  it('positionBuffer is uploaded as a Uint16Array (half the bytes of the old Float32 buffer)', () => {
+    const layer = new STTPointLayer({ ...baseOpts, id: 'p' }) as any;
+    layer.supports32BitIndices = true;
+    const gl = makeMockGl();
+    const tile = makePointTile();
+    layer.buildTileGpuCache(gl, tile, tile.layers[0]);
+
+    const posBufferCall = gl.bufferData.mock.calls.find(
+      (c: unknown[]) => c[1] instanceof Uint16Array && (c[1] as Uint16Array).length === 6, // 2 points * 3 components
+    );
+    expect(posBufferCall).toBeDefined();
   });
 });

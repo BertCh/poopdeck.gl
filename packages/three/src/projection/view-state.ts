@@ -3,74 +3,47 @@
 // Copyright (c) @poopdeck.gl/three contributors
 
 /**
- * Shared geographic **view state** ⇄ Three camera.
+ * Geographic **view state** ⇄ Three `PerspectiveCamera`.
  *
- * The deck↔three showcase toggle drives both renderers from one
- * `{longitude, latitude, zoom, pitch, bearing}` — the same vocabulary deck's
- * `WebMercatorViewport` / `GlobeViewport` use. These two functions translate that
- * to/from a Three `PerspectiveCamera` so switching renderers keeps the same view,
- * and orbiting the Three camera reports a view state deck can adopt.
+ * The `ViewState` vocabulary + the pure zoom↔ground-resolution helpers now live
+ * in the framework-free kernel `@poopdeck.gl/core/geo` (so a future Cesium /
+ * WebGL-three camera bridge shares them). The two functions here are the
+ * three-specific binding — they touch a Three `PerspectiveCamera` / `Vector3` and
+ * therefore stay in this package. See docs/roadmap/renderer-abstraction-2026-06.md.
  *
- * The implementation is **projection-agnostic**: target placement, the E/N/U
- * basis, and the metric scale all come from the {@link Projection}, so the only
- * per-kind branches are (a) the zoom→ground-resolution formula and (b) recovering
- * the look target (intersect the camera ray with the ground *plane* for mercator,
- * with the *sphere* for the globe). It mirrors deck's mapping: at integer zoom `z`
- * the world is `512·2^z` pixels around, and the camera distance is whatever makes
- * `viewportHeight` px subtend that ground resolution at the target.
- *
- * ENU/AV scenes don't use this — they frame with `frameBox`. Supported kinds:
+ * The implementation is projection-agnostic: target placement, the E/N/U basis,
+ * and the metric scale all come from the {@link Projection}. Supported kinds:
  * `'mercator'` and `'globe'`.
  */
 
 import { MathUtils, PerspectiveCamera, Vector3 } from 'three';
-import { EARTH_RADIUS, type Projection } from './local-enu';
+import {
+  EARTH_RADIUS,
+  worldUnitsPerPixel,
+  zoomForWorldUnitsPerPixel,
+  type Projection,
+  type ViewState,
+} from '@poopdeck.gl/core/geo';
 
-/** deck-compatible geographic view state. */
-export interface ViewState {
-  longitude: number;
-  latitude: number;
-  /** Web-Mercator zoom (world is `512·2^zoom` px around). */
-  zoom: number;
-  /** Tilt from straight-down, degrees. 0 = top-down, →horizon as it grows. @default 0 */
-  pitch?: number;
-  /** Compass rotation, degrees (0 = north up). @default 0 */
-  bearing?: number;
-}
+// Re-export the shared view-state vocabulary so `../projection/view-state`
+// importers keep a single surface.
+export type { ViewState };
 
 export interface ViewStateCameraOptions {
   /** Viewport height in CSS pixels — sets the zoom→distance scale. @default 800 */
   viewportHeight?: number;
 }
 
-const TILE_SIZE = 512;
-const WORLD_CIRCUMFERENCE = 2 * Math.PI * EARTH_RADIUS;
-const DEG2RAD = Math.PI / 180;
+/** The fully-resolved 2.5D view state `cameraToViewState` reports (no roll/altitude —
+ *  a Three MapControls camera has no roll DOF). */
+export type ResolvedViewState = Required<
+  Pick<ViewState, 'longitude' | 'latitude' | 'zoom' | 'pitch' | 'bearing'>
+>;
+
 const RAD2DEG = 180 / Math.PI;
 
 function clamp(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v;
-}
-
-/**
- * World units spanned by one screen pixel at the view-centre, for a given zoom.
- * Mercator world units are mercator-metres (constant per zoom); globe world units
- * are true metres, so the ground resolution shrinks with `cos(lat)`.
- */
-function worldUnitsPerPixel(proj: Projection, zoom: number, latitude: number): number {
-  const base =
-    proj.kind === 'globe'
-      ? WORLD_CIRCUMFERENCE * Math.cos(clamp(latitude, -89, 89) * DEG2RAD)
-      : WORLD_CIRCUMFERENCE;
-  return base / (TILE_SIZE * Math.pow(2, zoom));
-}
-
-function zoomForWorldUnitsPerPixel(proj: Projection, wupp: number, latitude: number): number {
-  const base =
-    proj.kind === 'globe'
-      ? WORLD_CIRCUMFERENCE * Math.cos(clamp(latitude, -89, 89) * DEG2RAD)
-      : WORLD_CIRCUMFERENCE;
-  return Math.log2(base / (TILE_SIZE * wupp));
 }
 
 function v3(t: [number, number, number]): Vector3 {
@@ -85,10 +58,8 @@ function distanceForScale(camera: PerspectiveCamera, wupp: number, viewportHeigh
 }
 
 /** Place `camera` at `distance` from `target`, tilted by deck `pitch`/`bearing`
- *  within the local E/N/U frame. The camera "up" is the **screen-up tangent**
- *  (`fwdH·cos + up·sin`), NOT the radial — radial-up is parallel to the view
- *  direction at top-down (`pitch=0`) and makes `lookAt` degenerate. This matches
- *  maplibre/deck, where `bearing` rotates which compass direction is up on screen. */
+ *  within the local E/N/U frame. Camera "up" is the screen-up tangent
+ *  (`fwdH·cos + up·sin`), matching maplibre/deck. */
 function orientCamera(
   camera: PerspectiveCamera,
   target: Vector3,
@@ -99,19 +70,15 @@ function orientCamera(
   pitchDeg: number,
   bearingDeg: number,
 ): void {
-  const pitch = MathUtils.degToRad(pitchDeg); // 0 = top-down (look straight down)
+  const pitch = MathUtils.degToRad(pitchDeg);
   const bearing = MathUtils.degToRad(bearingDeg);
-  // Compass look direction in the tangent plane (bearing 0 → north, 90 → east).
   const fwdH = new Vector3()
     .addScaledVector(east, Math.sin(bearing))
     .addScaledVector(north, Math.cos(bearing));
-  // target → camera offset = up·cos(pitch) − fwdH·sin(pitch).
   const offset = new Vector3()
     .addScaledVector(up, Math.cos(pitch))
     .addScaledVector(fwdH, -Math.sin(pitch));
   camera.position.copy(target).addScaledVector(offset, distance);
-  // Screen-up = fwdH·cos(pitch) + up·sin(pitch): ⟂ to the view dir at every pitch
-  // (→ fwdH at top-down so bearing controls roll; → up at the horizon).
   camera.up
     .set(0, 0, 0)
     .addScaledVector(fwdH, Math.cos(pitch))
@@ -122,8 +89,6 @@ function orientCamera(
 /** Set near/far to bracket the content at this scale (planet-aware on the globe). */
 function setClip(proj: Projection, camera: PerspectiveCamera, distance: number): void {
   if (proj.kind === 'globe') {
-    // Camera is `distance` above the surface; bracket from just above it to the
-    // far limb of the sphere.
     camera.near = Math.max(1, distance * 0.05);
     camera.far = distance + EARTH_RADIUS * 2.5;
   } else {
@@ -164,7 +129,6 @@ function recoverTarget(proj: Projection, camera: PerspectiveCamera): Vector3 {
   const forward = new Vector3(0, 0, -1).applyQuaternion(camera.quaternion).normalize();
   const p = camera.position;
   if (proj.kind === 'globe') {
-    // |p + t·f|² = R² → quadratic in t.
     const b = 2 * p.dot(forward);
     const c = p.lengthSq() - EARTH_RADIUS * EARTH_RADIUS;
     const disc = b * b - 4 * c;
@@ -175,9 +139,8 @@ function recoverTarget(proj: Projection, camera: PerspectiveCamera): Vector3 {
       const t = t1 >= 0 ? t1 : t2;
       if (t >= 0) return p.clone().addScaledVector(forward, t);
     }
-    return p.clone().setLength(EARTH_RADIUS); // ray misses → nearest surface point
+    return p.clone().setLength(EARTH_RADIUS);
   }
-  // Ground plane z = 0.
   if (Math.abs(forward.z) < 1e-9) return new Vector3(p.x, p.y, 0);
   const t = -p.z / forward.z;
   return p.clone().addScaledVector(forward, t);
@@ -191,7 +154,7 @@ export function cameraToViewState(
   proj: Projection,
   camera: PerspectiveCamera,
   opts: ViewStateCameraOptions = {},
-): Required<ViewState> {
+): ResolvedViewState {
   const viewportHeight = opts.viewportHeight ?? 800;
   const target = recoverTarget(proj, camera);
   const [longitude, latitude] = proj.unproject(target.x, target.y, target.z);
@@ -202,13 +165,9 @@ export function cameraToViewState(
   const north = v3(frame.north);
   const up = v3(frame.up);
 
-  // Pitch from the target→camera offset: offset·up = cos(pitch).
   const offsetDir = camera.position.clone().sub(target).normalize();
   const pitch = Math.acos(clamp(offsetDir.dot(up), -1, 1)) * RAD2DEG;
 
-  // Bearing from the screen-up (camera.up): its tangent component is fwdH·cos(pitch),
-  // i.e. the compass look direction — robust at top-down (where the offset has no
-  // horizontal component but camera.up still encodes bearing). Valid for pitch < 90°.
   const camUp = camera.up;
   const horizUp = camUp.clone().addScaledVector(up, -camUp.dot(up));
   let bearing = 0;

@@ -22,9 +22,10 @@
  */
 
 import { WideLineLayer, type WideLineLayerOptions } from './wide-line-layer';
+import type { ThreeTimeWindowOptions } from '../lib/time-window';
 import type { LineColorMode } from '../lib/geo-line-buffers';
 
-export interface PathGeoLayerOptions {
+export interface PathGeoLayerOptions extends ThreeTimeWindowOptions {
   id?: string;
   /** Per-feature color (categorical / ramp / constant). */
   colorMode: LineColorMode;
@@ -39,11 +40,9 @@ export interface PathGeoLayerOptions {
   elevationProperty?: string | null;
   elevationScale?: number;
   zLift?: number;
-  // window-mode time params
-  /** Half-width of the visibility window (ms). @default 0 (instantaneous) */
-  windowHalf?: number;
-  fadeIn?: number;
-  fadeOut?: number;
+  // window-mode time params — full-width `timeWindow` + `fadeIn/OutDuration`
+  // and the lower-level `windowHalf` (@default 0, instantaneous) / `fadeIn` /
+  // `fadeOut` aliases come from ThreeTimeWindowOptions.
 }
 
 /**
@@ -64,9 +63,15 @@ export class PathGeoLayer extends WideLineLayer {
       elevationProperty: options.elevationProperty ?? null,
       elevationScale: options.elevationScale ?? 1,
       zLift: options.zLift ?? 0,
-      windowHalf: options.windowHalf ?? 0,
-      fadeIn: options.fadeIn ?? 0,
-      fadeOut: options.fadeOut ?? 0,
+      // Forward the full time-window vocabulary as-is; WideLineLayer resolves it
+      // (defaulting windowHalf to 0). Passing the RAW values — not `?? 0` — is
+      // load-bearing: a `windowHalf: 0` fallback would win over `timeWindow`.
+      timeWindow: options.timeWindow,
+      fadeInDuration: options.fadeInDuration,
+      fadeOutDuration: options.fadeOutDuration,
+      windowHalf: options.windowHalf,
+      fadeIn: options.fadeIn,
+      fadeOut: options.fadeOut,
     };
     super(base);
   }

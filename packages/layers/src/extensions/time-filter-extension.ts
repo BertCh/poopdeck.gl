@@ -4,7 +4,14 @@
 
 import { LayerExtension } from '@deck.gl/core';
 import type { Layer, LayerContext, Accessor, DefaultProps } from '@deck.gl/core';
-import { warnOnce } from '../lib/log';
+// Relativization scheme moved to the framework-free kernel; imported for internal
+// use here and re-exported below so the `@poopdeck.gl/layers` barrel is unchanged.
+import {
+  relativizeTime,
+  assertRelTimeInRange,
+  MAX_RELATIVE_TIME_MS,
+  DEFAULT_WAKE_TAIL_SCALE,
+} from '@poopdeck.gl/core/time-filter';
 
 /**
  * Props for layers using TimeFilterExtension
@@ -204,7 +211,7 @@ const defaultProps: DefaultProps<TimeFilterExtensionProps> = {
   trailLength: 0,
   fadeTrail: true,
   wakeLength: 0,
-  wakeTailScale: 0.15,
+  wakeTailScale: DEFAULT_WAKE_TAIL_SCALE,
   cumulative: false,
   timeHeightScale: 0,
   timeHeightOrigin: 0,
@@ -228,22 +235,11 @@ const defaultProps: DefaultProps<TimeFilterExtensionProps> = {
  * mode intentionally spans years and accepts the coarser quantization (its
  * reveal steps by days, far above the millisecond floor).
  */
-export const MAX_RELATIVE_TIME_MS = 16_777_216;
-
-/**
- * Pure helper: relativize an absolute time against a layer's time offset.
- *
- * This is the SINGLE source of truth for the time-relativization scheme.
- * - Attributes (instanceStartTime / instanceEndTime / instanceVertexTime) store
- *   `absoluteTime - layerTimeOffset`.
- * - The `currentTime` shader uniform stores `currentTime - layerTimeOffset`.
- * Both sides are therefore small numbers that fit exactly in f32.
- *
- * Exported so it can be unit-tested for Float32 precision.
- */
-export function relativizeTime(absoluteTime: number, layerTimeOffset: number): number {
-  return absoluteTime - layerTimeOffset;
-}
+// `MAX_RELATIVE_TIME_MS` + `relativizeTime` now live in the framework-free kernel
+// (`@poopdeck.gl/core/time-filter`) so all three renderer backends share ONE copy
+// of the relativization scheme. Re-exported here to preserve this module's (and
+// the `@poopdeck.gl/layers` barrel's) public API. See renderer-abstraction-2026-06.md.
+export { relativizeTime, MAX_RELATIVE_TIME_MS };
 
 /**
  * Layer extension for GPU-based temporal filtering
@@ -519,7 +515,7 @@ export class TimeFilterExtension extends LayerExtension<
       trailLength = 0,
       fadeTrail = true,
       wakeLength = 0,
-      wakeTailScale = 0.15,
+      wakeTailScale = DEFAULT_WAKE_TAIL_SCALE,
       cumulative = false,
       timeHeightScale = 0,
       timeHeightOrigin = 0
@@ -534,19 +530,10 @@ export class TimeFilterExtension extends LayerExtension<
     // comparison are now small numbers that fit exactly in f32.
     const relativeTime = relativizeTime(resolvedTime, timeOffset);
 
-    // Guard the f32 precision contract: a relative time past 2^24 ms loses
-    // millisecond precision in the shader. Warn once if `timeOffset` is wrong.
-    // Cumulative mode intentionally spans years (the reveal steps by days, so
-    // ~tens-of-seconds quantization at that magnitude is irrelevant) — skip the
-    // warning there to avoid a misleading console message.
-    if (!cumulative && Math.abs(relativeTime) > MAX_RELATIVE_TIME_MS) {
-      warnOnce(
-        'TimeFilterExtension:precision',
-        `[TimeFilterExtension] relative time ${relativeTime} exceeds ` +
-          `${MAX_RELATIVE_TIME_MS} ms — Float32 precision is degraded; ` +
-          'check that `timeOffset` matches the tile data.',
-      );
-    }
+    // Guard the f32 precision contract via the shared kernel diagnostic
+    // (warn-once; skipped in cumulative mode, which intentionally spans years).
+    // Fires when `timeOffset` doesn't match the tile data.
+    assertRelTimeInRange(relativeTime, cumulative ? 'cumulative' : 'window', 'TimeFilterExtension');
 
     const timeFilterProps: TimeFilterUniformProps = {
       currentTime: relativeTime,

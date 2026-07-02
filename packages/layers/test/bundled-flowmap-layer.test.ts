@@ -221,8 +221,6 @@ describe('BundledFlowmapLayer', () => {
         widthMinPixels: 1,
         widthMaxPixels: 12,
         gap: 0.5,
-        greatCircle: false,
-        arcHeight: 0.5,
         nodeRadiusScale: 1,
         nodeRadiusMinPixels: 1.5,
         nodeRadiusMaxPixels: 28,

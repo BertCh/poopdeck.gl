@@ -35,6 +35,7 @@ import {
 } from 'three';
 import type { Tile } from '@poopdeck.gl/core';
 import { BaseSttLayer, type SttLayerContext } from './layer';
+import { resolveTimeWindow, type ThreeTimeWindowOptions } from '../lib/time-window';
 import { makeSegmentQuadGeometry } from '../geometry/segment-quad';
 import {
   buildFlowCorridorBuffers,
@@ -49,7 +50,7 @@ import {
 } from '../tsl/flow-corridor-material';
 import { rampColorAt, type RGBA } from '../lib/color';
 
-export interface FlowCorridorLayerOptions {
+export interface FlowCorridorLayerOptions extends ThreeTimeWindowOptions {
   id?: string;
   /** Value domain `[lo, hi]` mapped onto the width range + colour ramp. */
   domain: [number, number];
@@ -69,9 +70,8 @@ export interface FlowCorridorLayerOptions {
   rampResolution?: number;
   // window-mode time filter (corridors are timeless by default → off)
   windowFilter?: boolean;
-  windowHalf?: number;
-  fadeIn?: number;
-  fadeOut?: number;
+  // Full-width `timeWindow` + `fadeIn/OutDuration` and the lower-level
+  // `windowHalf`/`fadeIn`/`fadeOut` aliases come from ThreeTimeWindowOptions.
 }
 
 /** Bake a multi-stop RGBA(0–255) ramp into a 1-D RGBA-float `DataTexture`. */
@@ -191,9 +191,7 @@ export class FlowCorridorLayer extends BaseSttLayer {
       numBuckets: this.numBuckets,
       relativeCurrentTime: this.relativeTime(absoluteTimeMs),
       params: {
-        windowHalf: this.opts.windowHalf ?? 0,
-        fadeIn: this.opts.fadeIn ?? 0,
-        fadeOut: this.opts.fadeOut ?? 0,
+        ...resolveTimeWindow(this.opts, 0),
         trailLength: 0,
         trailFade: 1,
       },

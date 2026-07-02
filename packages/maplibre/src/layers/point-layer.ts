@@ -3,7 +3,7 @@
  */
 
 import type { Tile, Layer as STTLayer } from '@poopdeck.gl/core';
-import { GeometryType } from '@poopdeck.gl/core';
+import { GeometryType, DEFAULT_CATEGORICAL_PALETTE } from '@poopdeck.gl/core';
 import {
   STTBaseLayer,
   type STTBaseLayerOptions,
@@ -13,6 +13,7 @@ import {
   type RGBA8,
 } from '../base-layer';
 import { TIME_WINDOW_GLSL } from '../shaders/time-window.glsl';
+import { POSITION_DEQUANT_GLSL } from '../shaders/position-quantization.glsl';
 
 export interface STTPointLayerOptions extends STTBaseLayerOptions {
   /**
@@ -37,6 +38,17 @@ export interface STTPointLayerOptions extends STTBaseLayerOptions {
    */
   colorPalette?: ReadonlyArray<RGBA8>;
   /**
+   * Keyed category-STRING → 0–255 RGBA color map (deck/three `colorMapping`
+   * parity). When set, `colorProperty`'s category NAME is looked up here so a
+   * category renders the same color in every tile regardless of per-tile
+   * dictionary order — avoiding the positional `colorPalette` reorder hazard.
+   * Unmapped categories fall back to {@link colorMappingDefault}, then to the
+   * positional `colorPalette`.
+   */
+  colorMapping?: Record<string, RGBA8>;
+  /** Color for categories absent from {@link colorMapping}. */
+  colorMappingDefault?: RGBA8;
+  /**
    * Drive per-feature radius (pixels) from a numeric property. Falls back to
    * the constant `radius` if the property is absent.
    */
@@ -45,28 +57,19 @@ export interface STTPointLayerOptions extends STTBaseLayerOptions {
   radiusScale?: number;
 }
 
-// Matches the deck.gl adapter's default palette so the two backends paint the
-// same colours given the same data without extra wiring.
-const DEFAULT_PALETTE: ReadonlyArray<RGBA8> = [
-  [31, 119, 180, 255],
-  [255, 127, 14, 255],
-  [44, 160, 44, 255],
-  [214, 39, 40, 255],
-  [148, 103, 189, 255],
-  [140, 86, 75, 255],
-  [227, 119, 194, 255],
-  [127, 127, 127, 255],
-  [188, 189, 34, 255],
-  [23, 190, 207, 255],
-];
+// Shared with the deck.gl adapter (single source of truth in
+// @poopdeck.gl/core) so both backends paint identical default colours.
+const DEFAULT_PALETTE: ReadonlyArray<RGBA8> = DEFAULT_CATEGORICAL_PALETTE;
 
 const VS_SOURCE = `
   precision highp float;
-  attribute vec3 aMercator;
+  attribute vec3 aMercator;    // per-tile-local UNSIGNED_SHORT, normalized [0,1] — see sttDecodeMercatorPos
   attribute vec2 aTime;
   attribute vec4 aColor;       // per-feature RGBA in 0..1 (constant fallback when uUseFeatureColor=0)
   attribute float aRadius;     // per-feature radius in pixels (when uUseFeatureRadius=1)
   uniform mat4 uMatrix;
+  uniform vec3 uPosScale;
+  uniform vec3 uPosOffset;
   uniform float uAltitudeScale;
   uniform float uRadius;
   uniform float uRadiusScale;
@@ -80,8 +83,10 @@ const VS_SOURCE = `
   varying float vAlpha;
   varying vec4 vColor;
 ${TIME_WINDOW_GLSL}
+${POSITION_DEQUANT_GLSL}
   void main() {
-    vec4 pos = uMatrix * vec4(aMercator.x, aMercator.y, aMercator.z * uAltitudeScale, 1.0);
+    vec3 mercator = sttDecodeMercatorPos(aMercator, uPosScale, uPosOffset);
+    vec4 pos = uMatrix * vec4(mercator.x, mercator.y, mercator.z * uAltitudeScale, 1.0);
     gl_Position = pos;
     float radiusPx = (uUseFeatureRadius > 0.5 ? aRadius : uRadius) * uRadiusScale;
     gl_PointSize = radiusPx * 2.0;
@@ -105,6 +110,74 @@ const FS_SOURCE = `
   }
 `;
 
+// ── id-buffer picking variant (browser-verify-only) ─────────────────────────
+// Same projection + billboard sizing + time-window gating as the visual pass,
+// but each feature paints its flat opaque `encodePickId` colour so a readback
+// recovers the feature index. The disc mask matches the visual FS so only the
+// visible circle is pickable (no square hit box); no antialiased edge — a
+// partially-covered edge texel must still decode to the exact id byte triple.
+const ID_VS_SOURCE = `
+  precision highp float;
+  attribute vec3 aMercator;    // per-tile-local UNSIGNED_SHORT, normalized [0,1] — see sttDecodeMercatorPos
+  attribute vec2 aTime;
+  attribute vec3 aIdColor;     // per-feature encoded id (UNSIGNED_BYTE normalized)
+  attribute float aRadius;
+  uniform mat4 uMatrix;
+  uniform vec3 uPosScale;
+  uniform vec3 uPosOffset;
+  uniform float uAltitudeScale;
+  uniform float uRadius;
+  uniform float uRadiusScale;
+  uniform float uUseFeatureRadius;
+  uniform float uWindowStart;
+  uniform float uWindowEnd;
+  uniform float uFadeIn;
+  uniform float uFadeOut;
+  varying float vAlpha;
+  varying vec3 vIdColor;
+${TIME_WINDOW_GLSL}
+${POSITION_DEQUANT_GLSL}
+  void main() {
+    vec3 mercator = sttDecodeMercatorPos(aMercator, uPosScale, uPosOffset);
+    gl_Position = uMatrix * vec4(mercator.x, mercator.y, mercator.z * uAltitudeScale, 1.0);
+    float radiusPx = (uUseFeatureRadius > 0.5 ? aRadius : uRadius) * uRadiusScale;
+    gl_PointSize = radiusPx * 2.0;
+    vAlpha = sttTimeWindowAlpha(aTime, uWindowStart, uWindowEnd, uFadeIn, uFadeOut);
+    vIdColor = aIdColor;
+  }
+`;
+
+const ID_FS_SOURCE = `
+  precision highp float;
+  varying float vAlpha;
+  varying vec3 vIdColor;
+  void main() {
+    if (vAlpha <= 0.0) discard;         // time-filtered points are not pickable
+    vec2 d = gl_PointCoord - vec2(0.5);
+    if (dot(d, d) > 0.25) discard;      // circular hit area, matches the visual disc
+    gl_FragColor = vec4(vIdColor, 1.0); // exact id bytes, fully opaque
+  }
+`;
+
+interface PointIdProgramHandles {
+  program: WebGLProgram;
+  aMercator: number;
+  aTime: number;
+  aIdColor: number;
+  aRadius: number;
+  uMatrix: WebGLUniformLocation | null;
+  uPosScale: WebGLUniformLocation | null;
+  uPosOffset: WebGLUniformLocation | null;
+  uAltitudeScale: WebGLUniformLocation | null;
+  uRadius: WebGLUniformLocation | null;
+  uRadiusScale: WebGLUniformLocation | null;
+  uUseFeatureRadius: WebGLUniformLocation | null;
+  uWindowStart: WebGLUniformLocation | null;
+  uWindowEnd: WebGLUniformLocation | null;
+  uFadeIn: WebGLUniformLocation | null;
+  uFadeOut: WebGLUniformLocation | null;
+}
+
 interface PointProgramHandles {
   program: WebGLProgram;
   aMercator: number;
@@ -112,6 +185,8 @@ interface PointProgramHandles {
   aColor: number;
   aRadius: number;
   uMatrix: WebGLUniformLocation | null;
+  uPosScale: WebGLUniformLocation | null;
+  uPosOffset: WebGLUniformLocation | null;
   uAltitudeScale: WebGLUniformLocation | null;
   uRadius: WebGLUniformLocation | null;
   uRadiusScale: WebGLUniformLocation | null;
@@ -154,8 +229,11 @@ export class STTPointLayer extends STTBaseLayer {
     colorProperty?: string;
     radiusProperty?: string;
     colorPalette: ReadonlyArray<RGBA8>;
+    colorMapping?: Record<string, RGBA8>;
+    colorMappingDefault?: RGBA8;
   };
   private handles?: PointProgramHandles;
+  private idHandles?: PointIdProgramHandles;
 
   constructor(opts: STTPointLayerOptions) {
     super(opts);
@@ -166,6 +244,8 @@ export class STTPointLayer extends STTBaseLayer {
       colorProperty: opts.colorProperty,
       radiusProperty: opts.radiusProperty,
       colorPalette: opts.colorPalette ?? DEFAULT_PALETTE,
+      colorMapping: opts.colorMapping,
+      colorMappingDefault: opts.colorMappingDefault,
     };
   }
 
@@ -196,6 +276,8 @@ export class STTPointLayer extends STTBaseLayer {
       aColor: gl.getAttribLocation(program, 'aColor'),
       aRadius: gl.getAttribLocation(program, 'aRadius'),
       uMatrix: gl.getUniformLocation(program, 'uMatrix'),
+      uPosScale: gl.getUniformLocation(program, 'uPosScale'),
+      uPosOffset: gl.getUniformLocation(program, 'uPosOffset'),
       uAltitudeScale: gl.getUniformLocation(program, 'uAltitudeScale'),
       uRadius: gl.getUniformLocation(program, 'uRadius'),
       uRadiusScale: gl.getUniformLocation(program, 'uRadiusScale'),
@@ -206,6 +288,28 @@ export class STTPointLayer extends STTBaseLayer {
       uWindowEnd: gl.getUniformLocation(program, 'uWindowEnd'),
       uFadeIn: gl.getUniformLocation(program, 'uFadeIn'),
       uFadeOut: gl.getUniformLocation(program, 'uFadeOut'),
+    };
+
+    // Second program for id-buffer picking. Compiled up-front (like the visual
+    // one) so the first `pick()` doesn't stall; it's a tiny flat-colour shader.
+    const idProgram = this.linkProgram(gl, ID_VS_SOURCE, ID_FS_SOURCE);
+    this.idHandles = {
+      program: idProgram,
+      aMercator: gl.getAttribLocation(idProgram, 'aMercator'),
+      aTime: gl.getAttribLocation(idProgram, 'aTime'),
+      aIdColor: gl.getAttribLocation(idProgram, 'aIdColor'),
+      aRadius: gl.getAttribLocation(idProgram, 'aRadius'),
+      uMatrix: gl.getUniformLocation(idProgram, 'uMatrix'),
+      uPosScale: gl.getUniformLocation(idProgram, 'uPosScale'),
+      uPosOffset: gl.getUniformLocation(idProgram, 'uPosOffset'),
+      uAltitudeScale: gl.getUniformLocation(idProgram, 'uAltitudeScale'),
+      uRadius: gl.getUniformLocation(idProgram, 'uRadius'),
+      uRadiusScale: gl.getUniformLocation(idProgram, 'uRadiusScale'),
+      uUseFeatureRadius: gl.getUniformLocation(idProgram, 'uUseFeatureRadius'),
+      uWindowStart: gl.getUniformLocation(idProgram, 'uWindowStart'),
+      uWindowEnd: gl.getUniformLocation(idProgram, 'uWindowEnd'),
+      uFadeIn: gl.getUniformLocation(idProgram, 'uFadeIn'),
+      uFadeOut: gl.getUniformLocation(idProgram, 'uFadeOut'),
     };
   }
 
@@ -232,6 +336,8 @@ export class STTPointLayer extends STTBaseLayer {
         f,
         this.pointOpts.colorProperty,
         this.pointOpts.colorPalette,
+        this.pointOpts.colorMapping,
+        this.pointOpts.colorMappingDefault,
       );
       if (colors) {
         cache.colorBuffer = this.uploadArrayBuffer(gl, colors);
@@ -258,6 +364,10 @@ export class STTPointLayer extends STTBaseLayer {
       gl.deleteProgram(this.handles.program);
       this.handles = undefined;
     }
+    if (this.idHandles) {
+      gl.deleteProgram(this.idHandles.program);
+      this.idHandles = undefined;
+    }
   }
 
   protected drawTile(
@@ -273,6 +383,8 @@ export class STTPointLayer extends STTBaseLayer {
 
     gl.useProgram(h.program);
     gl.uniformMatrix4fv(h.uMatrix, false, ctx.matrix);
+    gl.uniform3fv(h.uPosScale, c.posScale ?? [1, 1, 1]);
+    gl.uniform3fv(h.uPosOffset, c.posOffset ?? [0, 0, 0]);
     gl.uniform1f(h.uAltitudeScale, 0); // 2D points; altitudes are ignored.
     gl.uniform1f(h.uRadius, this.pointOpts.radius);
     gl.uniform1f(h.uRadiusScale, this.pointOpts.radiusScale);
@@ -292,7 +404,7 @@ export class STTPointLayer extends STTBaseLayer {
     this.bindVaoOrSetup(c, () => {
       gl.bindBuffer(gl.ARRAY_BUFFER, c.positionBuffer);
       gl.enableVertexAttribArray(h.aMercator);
-      gl.vertexAttribPointer(h.aMercator, 3, gl.FLOAT, false, 0, 0);
+      gl.vertexAttribPointer(h.aMercator, 3, gl.UNSIGNED_SHORT, true, 0, 0);
 
       gl.bindBuffer(gl.ARRAY_BUFFER, c.timeBuffer);
       gl.enableVertexAttribArray(h.aTime);
@@ -311,5 +423,81 @@ export class STTPointLayer extends STTBaseLayer {
     });
 
     gl.drawArrays(gl.POINTS, 0, cache.vertexCount);
+  }
+
+  /**
+   * Draw this point tile into the id-pick FBO, painting feature `i` the flat
+   * colour `encodePickId(idBase + i)`. Mirrors {@link drawTile}'s projection,
+   * billboard sizing and time-window gating so the pickable disc matches what
+   * the user sees. Browser-verify-only (the enclosing FBO round-trip needs a
+   * live GPU); the id-colour build + decode join are unit-tested in the base.
+   *
+   * The per-feature id-colour buffer is rebuilt each pick and freed immediately:
+   * `idBase` shifts with whatever tiles are loaded this frame, and picks are
+   * rare user-initiated events, so a persistent per-tile buffer would be stale
+   * cache for no win.
+   */
+  protected drawPickTile(
+    gl: WebGLRenderingContext | WebGL2RenderingContext,
+    _tile: Tile,
+    _layer: STTLayer,
+    cache: TileGpuCache,
+    ctx: DrawContext,
+    idBase: number,
+  ): void {
+    const h = this.idHandles;
+    if (!h) return;
+    const c = cache as PointGpuCache;
+    // One point == one feature, so vertexCount is the feature count here.
+    const count = cache.vertexCount;
+    const idColors = this.buildPickIdColors(count, idBase);
+    const idBuffer = this.uploadArrayBuffer(gl, idColors);
+
+    gl.useProgram(h.program);
+    gl.uniformMatrix4fv(h.uMatrix, false, ctx.matrix);
+    gl.uniform3fv(h.uPosScale, c.posScale ?? [1, 1, 1]);
+    gl.uniform3fv(h.uPosOffset, c.posOffset ?? [0, 0, 0]);
+    gl.uniform1f(h.uAltitudeScale, 0);
+    gl.uniform1f(h.uRadius, this.pointOpts.radius);
+    gl.uniform1f(h.uRadiusScale, this.pointOpts.radiusScale);
+    gl.uniform1f(h.uWindowStart, ctx.windowStart);
+    gl.uniform1f(h.uWindowEnd, ctx.windowEnd);
+    const { fadeIn, fadeOut } = this.resolveFadeDurations();
+    gl.uniform1f(h.uFadeIn, fadeIn);
+    gl.uniform1f(h.uFadeOut, fadeOut);
+    const useFeatureRadius = c.radiusBuffer && h.aRadius >= 0 ? 1 : 0;
+    gl.uniform1f(h.uUseFeatureRadius, useFeatureRadius);
+
+    // Raw attribute binds (no VAO): picking is a rare user-initiated pass, and
+    // the temp id buffer is per-pass, so a cached VAO would just go stale.
+    gl.bindBuffer(gl.ARRAY_BUFFER, c.positionBuffer);
+    gl.enableVertexAttribArray(h.aMercator);
+    gl.vertexAttribPointer(h.aMercator, 3, gl.UNSIGNED_SHORT, true, 0, 0);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, c.timeBuffer);
+    gl.enableVertexAttribArray(h.aTime);
+    gl.vertexAttribPointer(h.aTime, 2, gl.FLOAT, false, 0, 0);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, idBuffer);
+    gl.enableVertexAttribArray(h.aIdColor);
+    gl.vertexAttribPointer(h.aIdColor, 3, gl.UNSIGNED_BYTE, true, 0, 0);
+
+    if (useFeatureRadius && c.radiusBuffer) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, c.radiusBuffer);
+      gl.enableVertexAttribArray(h.aRadius);
+      gl.vertexAttribPointer(h.aRadius, 1, gl.FLOAT, false, 0, 0);
+    }
+
+    gl.drawArrays(gl.POINTS, 0, count);
+
+    // Leave the default-VAO attribute slate clean so the next visual frame's
+    // VAO setup starts fresh, and drop the one-shot id buffer.
+    gl.disableVertexAttribArray(h.aMercator);
+    gl.disableVertexAttribArray(h.aTime);
+    gl.disableVertexAttribArray(h.aIdColor);
+    if (useFeatureRadius && c.radiusBuffer) {
+      gl.disableVertexAttribArray(h.aRadius);
+    }
+    gl.deleteBuffer(idBuffer);
   }
 }

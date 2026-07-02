@@ -13,6 +13,7 @@
  */
 
 import type { BinaryFeatures, Tile } from '@poopdeck.gl/core';
+import { resolveCategoryColor } from '@poopdeck.gl/core/style';
 import type { RGBA } from '../lib/color';
 
 /** Held-box window (ms) for a track with a single (un-interpolatable) keyframe. */
@@ -113,7 +114,7 @@ function resolveColor(
   mapping: Record<string, RGBA>,
   fallback: RGBA,
 ): RGBA {
-  const c = (category && mapping[category]) || fallback;
+  const c = resolveCategoryColor(category, mapping, fallback);
   return [c[0], c[1], c[2], c[3] ?? 255];
 }
 

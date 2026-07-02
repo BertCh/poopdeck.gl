@@ -19,6 +19,7 @@ import type {
 } from '@deck.gl/core';
 import { STTArchive, getFeatureProperties } from '@poopdeck.gl/core';
 import { SpatiotemporalTileset } from '@poopdeck.gl/core';
+import { makeTilesetCallbacks } from '@poopdeck.gl/core/tileset-adapter';
 import type {
   Tile,
   TileId,
@@ -287,6 +288,12 @@ interface SpatioTemporalLayerState {
   frameNumber?: number;
   playStateHandler?: (playing: boolean, speed: number) => void;
   tickHandler?: (time: number) => void;
+  /**
+   * The controller the layer is currently subscribed to, resolved from the
+   * `timeController` prop OR `context.userData.stt.timeController`. Kept in
+   * state so subscribe/unsubscribe keys off the resolved value, not the prop.
+   */
+  resolvedTimeController?: TimeController | null;
   /** Tracks the URL whose archive init is currently in flight, to avoid racing duplicate inits. */
   initializingUrl?: string | null;
 }
@@ -485,11 +492,31 @@ export class SpatioTemporalLayer<
 
   declare state: SpatioTemporalLayerState & { [key: string]: unknown };
 
-  initializeState(_context: LayerContext): void {
+  /**
+   * The {@link TimeController} driving this layer's playhead. Resolution order:
+   *  1. the explicit `timeController` prop (back-compat + standalone use);
+   *  2. an app-global controller mirrored onto deck's shared layer context as
+   *     `context.userData.stt.timeController` — the idiomatic deck channel for
+   *     pushing one value to every layer with no per-layer wiring (the same
+   *     mechanism `context.viewport`/`context.timeline` ride). This lets new
+   *     layers "see" time for free once the host sets `userData`.
+   * Returns null for static, non-animated use.
+   */
+  protected _resolveTimeController(
+    context: LayerContext = this.context,
+  ): TimeController | null {
+    if (this.props.timeController) return this.props.timeController;
+    const userData = context?.userData as
+      | { stt?: { timeController?: TimeController | null } }
+      | undefined;
+    return userData?.stt?.timeController ?? null;
+  }
+
+  initializeState(context: LayerContext): void {
     // Initialize internal time tracking
     this._currentTime = this.props.currentTime;
     this._lastTilesetUpdateTime = this.props.currentTime;
-    
+
     // Create handler for play state changes
     const playStateHandler = (playing: boolean, speed: number) => {
       const { tileset } = this.state;
@@ -497,7 +524,7 @@ export class SpatioTemporalLayer<
         tileset.setAnimationState(playing, speed);
       }
     };
-    
+
     // Create handler for time tick updates - this allows the layer to update
     // without React re-rendering the entire layer tree
     const tickHandler = (time: number) => {
@@ -506,7 +533,12 @@ export class SpatioTemporalLayer<
         this._handleTimeUpdate(time);
       }
     };
-    
+
+    // Resolve the controller now (prop, else the app-global one on
+    // context.userData) and key the subscription lifecycle off the resolved
+    // value rather than the prop.
+    const timeController = this._resolveTimeController(context);
+
     this.setState({
       archive: null,
       tileset: null,
@@ -516,12 +548,13 @@ export class SpatioTemporalLayer<
       isLoaded: false,
       playStateHandler,
       tickHandler,
+      resolvedTimeController: timeController,
     });
 
-    // Subscribe to time controller events if provided
-    if (this.props.timeController) {
-      this.props.timeController.on('playState', playStateHandler);
-      this.props.timeController.on('tick', tickHandler);
+    // Subscribe to time controller events if one was resolved
+    if (timeController) {
+      timeController.on('playState', playStateHandler);
+      timeController.on('tick', tickHandler);
     }
 
     // Initialize archive and tileset
@@ -542,13 +575,15 @@ export class SpatioTemporalLayer<
     // Cancel any pending trailing viewport reselection.
     this._clearViewportSettle();
 
-    // Unsubscribe from time controller
-    if (this.props.timeController) {
+    // Unsubscribe from the controller we actually subscribed to (resolved from
+    // prop or context.userData), not the prop alone.
+    const resolved = this.state.resolvedTimeController;
+    if (resolved) {
       if (this.state.playStateHandler) {
-        this.props.timeController.off('playState', this.state.playStateHandler);
+        resolved.off('playState', this.state.playStateHandler);
       }
       if (this.state.tickHandler) {
-        this.props.timeController.off('tick', this.state.tickHandler);
+        resolved.off('tick', this.state.tickHandler);
       }
     }
     
@@ -577,7 +612,7 @@ export class SpatioTemporalLayer<
   }
 
   updateState(params: UpdateParameters<this>): void {
-    const { changeFlags, oldProps } = params;
+    const { changeFlags } = params;
     const propsChanged = changeFlags.propsChanged;
     // Race guard: `_initArchiveAndTileset` is async, so during the first
     // window after `initializeState` both `state.archive` and
@@ -589,34 +624,42 @@ export class SpatioTemporalLayer<
     const liveUrl = this.state.archive?.url ?? this.state.initializingUrl ?? null;
     const dataChanged = propsChanged && this.props.data !== liveUrl;
     
-    // Handle TimeController changes
-    if (oldProps?.timeController !== this.props.timeController) {
+    // Handle TimeController changes. Resolution is prop → context.userData, so
+    // a change can come from the prop OR — when some other prop change drives
+    // this updateState — from a swapped app-global controller on userData. (A
+    // userData swap alone does not trigger updateState, since userData lives on
+    // the shared context and isn't diffed per-layer; the prop path covers
+    // dynamic swaps, and in practice the controller reference is stable.)
+    const prevController = this.state.resolvedTimeController ?? null;
+    const nextController = this._resolveTimeController();
+    if (prevController !== nextController) {
       // Unsubscribe from old controller
-      if (oldProps?.timeController) {
+      if (prevController) {
         if (this.state.playStateHandler) {
-          oldProps.timeController.off('playState', this.state.playStateHandler);
+          prevController.off('playState', this.state.playStateHandler);
         }
         if (this.state.tickHandler) {
-          oldProps.timeController.off('tick', this.state.tickHandler);
+          prevController.off('tick', this.state.tickHandler);
         }
       }
       // Subscribe to new controller
-      if (this.props.timeController) {
+      if (nextController) {
         if (this.state.playStateHandler) {
-          this.props.timeController.on('playState', this.state.playStateHandler);
+          nextController.on('playState', this.state.playStateHandler);
         }
         if (this.state.tickHandler) {
-          this.props.timeController.on('tick', this.state.tickHandler);
+          nextController.on('tick', this.state.tickHandler);
         }
         // Sync current animation state
         const { tileset } = this.state;
         if (tileset) {
           tileset.setAnimationState(
-            this.props.timeController.isPlaying(),
-            this.props.timeController.getSpeed()
+            nextController.isPlaying(),
+            nextController.getSpeed()
           );
         }
       }
+      this.setState({ resolvedTimeController: nextController });
     }
     
     if (dataChanged) {
@@ -862,9 +905,11 @@ export class SpatioTemporalLayer<
     this._lastViewportSelectWall = performance.now();
     this._clearViewportSettle();
 
-    // Get current time from TimeController if available, otherwise from props
-    const currentTime = this.props.timeController
-      ? this.props.timeController.getTime()
+    // Get current time from the resolved TimeController if available, otherwise
+    // from props.
+    const controller = this.state.resolvedTimeController;
+    const currentTime = controller
+      ? controller.getTime()
       : this.props.currentTime;
     
     // Update internal time tracking
@@ -1082,33 +1127,12 @@ export class SpatioTemporalLayer<
       prefetchSteps: this.props.prefetchSteps,
       tier: this.props.tier,
       summaryZoomRange,
-      getAvailableTiles: (bounds, zoom, timeRange) =>
-        archive.getTileIdsInBounds(bounds, zoom, timeRange),
       getAvailableSummaryTiles,
-      getTileData: (tileId, signal) => archive.getTile(tileId, { signal }),
-      // Route the bulk viewport/prefetch fill through the range coalescer so
-      // a viewport-full of Hilbert-adjacent tiles collapses into a handful of
-      // HTTP Range requests instead of one request per tile. The hooks carry
-      // incremental per-tile delivery (tiles render as their range group
-      // lands) and the fetch-priority hint for lookahead tiers.
-      getTileDataBatch: (tileIds, signal, hooks) =>
-        archive.getTiles(tileIds, {
-          signal,
-          onTileReady: hooks?.onTileReady,
-          fetchPriority: hooks?.fetchPriority,
-          // Cross-source EDF (multi-source coordination, Phase 2 §2.8): forward
-          // the tileset's play-head time + travel direction so the archive's
-          // shared scheduler ranks range-groups by distance-to-playhead
-          // comparably ACROSS archives that share this play-head. Without this
-          // link the archive falls back to its byte-order / enqueue-order
-          // sequence (tier-correct, but not true cross-source EDF).
-          playheadTime: hooks?.playheadTime,
-          playheadDirection: hooks?.playheadDirection,
-        }),
-      // Lets the tileset skip giant low-zoom parent-fallback tiles (e.g. a
-      // 14 MB z10 tile under a z14 view) before fetching them. Sync directory
-      // lookup, no I/O.
-      getTileByteSize: (tileId) => archive.getTileByteSize(tileId),
+      // Archive-backed fetch callbacks (getAvailableTiles / getTileData /
+      // getTileDataBatch / getTileByteSize / getThroughput). Shared with three
+      // + maplibre via the core adapter; see render/tileset-adapter.ts for the
+      // range-coalescer batch hooks + cross-source EDF playhead forwarding.
+      ...makeTilesetCallbacks(archive),
       onTileLoad: (tile) => {
         if (DEBUG) console.log('[STL] Tile loaded:', tile.id);
         this.props.onTileLoad?.(tile);
@@ -1136,9 +1160,6 @@ export class SpatioTemporalLayer<
       onBufferChange: (runway: BufferedRunway) => {
         this.props.onBufferChange?.(runway);
       },
-      // Wire the archive's coalesced-range throughput EWMA into the tileset
-      // so estimateTimeToReadyMs() can compute honest ETAs.
-      getThroughput: () => archive.getThroughputEstimate(),
       // Subclass hook: tier-specific tileset config (e.g. H3SummaryLayer's
       // summary-tier zoom range + 'no-overlap' refinement). Spread LAST so
       // overrides win over the base wiring above.
@@ -1147,9 +1168,10 @@ export class SpatioTemporalLayer<
     
     if (DEBUG) console.log('[STL] Tileset configured with zoom range:', metadata.minZoom, '-', metadata.maxZoom);
     
-    // If time controller is playing, set initial animation state
-    if (this.props.timeController?.isPlaying()) {
-      tileset.setAnimationState(true, this.props.timeController.getSpeed());
+    // If the resolved time controller is playing, set initial animation state
+    const controller = this.state.resolvedTimeController;
+    if (controller?.isPlaying()) {
+      tileset.setAnimationState(true, controller.getSpeed());
     }
 
     // A fresh tileset restarts its selection-version counter; carrying the

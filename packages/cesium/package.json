@@ -1,0 +1,59 @@
+{
+  "name": "@poopdeck.gl/cesium",
+  "version": "0.1.0",
+  "description": "CesiumJS backend for spatiotemporal tiles — renders STT on a real WGS84 globe",
+  "publishConfig": {
+    "access": "public"
+  },
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "pnpm run build",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist tsconfig.tsbuildinfo"
+  },
+  "peerDependencies": {
+    "cesium": "^1"
+  },
+  "dependencies": {
+    "@poopdeck.gl/core": "workspace:*"
+  },
+  "devDependencies": {
+    "cesium": "^1.142.0",
+    "typescript": "^5.4.0",
+    "vitest": "^1.6.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/BertCh/spatiotemporal-tiles.git",
+    "directory": "packages/cesium"
+  },
+  "homepage": "https://github.com/BertCh/spatiotemporal-tiles/tree/main/packages/cesium#readme",
+  "bugs": {
+    "url": "https://github.com/BertCh/spatiotemporal-tiles/issues"
+  },
+  "keywords": [
+    "cesium",
+    "spatiotemporal",
+    "geospatial",
+    "globe"
+  ],
+  "author": "Robert Christie",
+  "license": "MIT"
+}

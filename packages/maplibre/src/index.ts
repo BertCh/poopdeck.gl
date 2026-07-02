@@ -41,13 +41,23 @@ export {
 } from './layers/heatmap-layer';
 export {
   STTBaseLayer,
+  cssToDevicePixel,
   type STTBaseLayerOptions,
   type DrawContext,
   type TileGpuCache,
+  type PickProvenanceEntry,
   type RGBA,
   type RGBA8,
 } from './base-layer';
 export { lngLatToMercator, projectPositions } from './lib/projection';
+
+// Shared id-buffer picking result shape (see `STTBaseLayer.pick`). Re-exported
+// from the core picking kernel so consumers don't reach across packages.
+export type { SttPickResult } from '@poopdeck.gl/core/picking';
+
+// Backend capability descriptor — what this adapter declares against the shared
+// `@poopdeck.gl/core/capabilities` vocabulary (renderer-abstraction Phase 5).
+export { maplibreBackend } from './backend-descriptor';
 
 // Backwards-compat alias for the 0.1.x scaffold, which only had a points
 // renderer named STTMaplibreLayer. New code should import STTPointLayer.

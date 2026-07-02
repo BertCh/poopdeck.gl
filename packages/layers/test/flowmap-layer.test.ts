@@ -105,8 +105,6 @@ describe('FlowmapLayer', () => {
         widthScale: 1,
         widthMinPixels: 1,
         widthMaxPixels: 12,
-        greatCircle: false,
-        arcHeight: 0.5,
         nodeRadiusScale: 1,
         nodeRadiusMinPixels: 1.5,
         nodeRadiusMaxPixels: 28,

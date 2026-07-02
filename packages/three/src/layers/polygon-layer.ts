@@ -30,6 +30,7 @@
 import { Group, Mesh, BufferGeometry, Float32BufferAttribute, Uint32BufferAttribute } from 'three';
 import type { Tile } from '@poopdeck.gl/core';
 import { BaseSttLayer, type SttLayerContext } from './layer';
+import { resolveTimeWindow, type ThreeTimeWindowOptions } from '../lib/time-window';
 import { type RGBA } from '../lib/color';
 import {
   buildPolygonBuffers,
@@ -43,17 +44,15 @@ import {
   type PolygonTimeMode,
 } from '../tsl/polygon-material';
 
-export interface PolygonLayerOptions {
+export interface PolygonLayerOptions extends ThreeTimeWindowOptions {
   id?: string;
   /** How each feature is coloured. @default constant grey */
   colorMode?: PolygonColorMode;
   /** Time-filter mode. @default 'none' (static) */
   mode?: PolygonTimeMode;
-  /** Half-width of the playhead time window (ms), `window` mode. @default 500 */
-  windowHalf?: number;
-  /** Edge fade-in / fade-out ramp (ms), `window` mode. @default 0 */
-  fadeIn?: number;
-  fadeOut?: number;
+  // `window` mode: full-width `timeWindow` + `fadeIn/OutDuration` and the
+  // lower-level `windowHalf` (@default 500) / `fadeIn` / `fadeOut` aliases come
+  // from ThreeTimeWindowOptions.
   /** Height above ground for flat fills (metres). @default 0.02 */
   zLift?: number;
   /** Numeric column extruding each feature into a 3D prism (metres). @default null */
@@ -73,19 +72,22 @@ export class PolygonLayer extends BaseSttLayer {
   private mesh: Mesh;
   private bundle: PolygonMaterialBundle;
 
-  private readonly opts: Required<Omit<PolygonLayerOptions, 'id'>>;
+  private readonly opts: Required<
+    Omit<PolygonLayerOptions, 'id' | 'timeWindow' | 'fadeInDuration' | 'fadeOutDuration'>
+  >;
 
   constructor(options: PolygonLayerOptions = {}) {
     super();
     this.id = options.id ?? 'polygons';
     this.object.name = this.id;
     this.object.frustumCulled = false;
+    const tw = resolveTimeWindow(options, 500);
     this.opts = {
       colorMode: options.colorMode ?? { type: 'constant', color: DEFAULT_COLOR },
       mode: options.mode ?? 'none',
-      windowHalf: options.windowHalf ?? 500,
-      fadeIn: options.fadeIn ?? 0,
-      fadeOut: options.fadeOut ?? 0,
+      windowHalf: tw.windowHalf,
+      fadeIn: tw.fadeIn,
+      fadeOut: tw.fadeOut,
       zLift: options.zLift ?? 0.02,
       extrusionProperty: options.extrusionProperty ?? null,
       elevationScale: options.elevationScale ?? 1,

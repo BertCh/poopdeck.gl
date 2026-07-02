@@ -10,6 +10,7 @@
  */
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { renderHook, cleanup } from "@testing-library/react";
+import { SPEED_STEPS } from "@poopdeck.gl/playback";
 import { usePlaybackHotkeys } from "../src/hooks/use-playback-hotkeys";
 import type { PlaybackState } from "../src/hooks/use-playback";
 
@@ -121,6 +122,14 @@ describe("usePlaybackHotkeys — seeking", () => {
 });
 
 describe("usePlaybackHotkeys — speed ladder", () => {
+  it("steps along the shared @poopdeck.gl/playback SPEED_STEPS ladder (no local copy)", () => {
+    // F3: the ladder is imported from playback, not re-declared here, so this
+    // is now trivially the same array the hook steps along.
+    expect(SPEED_STEPS).toEqual([
+      0.25, 0.5, 0.75, 1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10,
+    ]);
+  });
+
   it("ArrowUp steps to the next-higher preset speed", () => {
     const k = mount({ speed: 1 }); // ladder: …,0.75,1,1.5,… → up = 1.5
     press("ArrowUp");

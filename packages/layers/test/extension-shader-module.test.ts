@@ -20,6 +20,10 @@ import {
   categoryColorUniforms,
 } from '../src/extensions/category-color-extension';
 import { TimeFilterExtension } from '../src/extensions/time-filter-extension';
+import {
+  ChevronFlowExtension,
+  chevronUniforms,
+} from '../src/extensions/chevron-flow-extension';
 import type { Color } from '@deck.gl/core';
 
 function makeShaderInputs() {
@@ -233,6 +237,231 @@ describe('TimeFilterExtension getShaders', () => {
     expect((categoryColorUniforms as any).fs).toContain(
       'layout(std140) uniform categoryColorUniforms',
     );
+  });
+});
+
+describe('ChevronFlowExtension', () => {
+  function getShaderObject(ext: ChevronFlowExtension) {
+    return (ext.getShaders as any).call({}, ext);
+  }
+
+  it('injects a marching chevron into DECKGL_FILTER_COLOR that MULTIPLIES alpha', () => {
+    // Must compose with the matrix/time alpha the host layer already produced —
+    // a `color.a *= …` (never a replace) keeps FlowCorridorLayer's per-vertex
+    // magnitude coloring and any prior TimeFilter fade intact.
+    const inject = getShaderObject(new ChevronFlowExtension()).inject;
+    const filterColor = inject['fs:DECKGL_FILTER_COLOR'] as string;
+    // Default (no directionColor / perTripLight): the plain arrowhead-alpha multiply.
+    expect(filterColor).toContain('color.a *= mix(chevron.baseAlpha, 1.0, chevronHead);');
+    expect(filterColor).toContain('geometry.uv.y'); // along-path distance
+    expect(filterColor).toContain('chevron.phase');
+    // It reads the along-path varying, not a per-vertex attribute — direction
+    // comes from geometry winding.
+    expect(filterColor).not.toMatch(/color\s*=\s*vec4\(/);
+  });
+
+  it('returns a reference-stable shader object (one cache entry per instance)', () => {
+    const ext = new ChevronFlowExtension();
+    expect(getShaderObject(ext)).toBe(getShaderObject(ext));
+  });
+
+  it('declares the uniform block with explicit std140 layout', () => {
+    expect((chevronUniforms as any).fs).toContain('layout(std140) uniform chevronUniforms');
+  });
+
+  it('applies option defaults and flows them to opts (for equals()/digest)', () => {
+    expect(new ChevronFlowExtension().opts).toMatchObject({
+      period: 6,
+      speed: 0.0006,
+      skew: 1.4,
+      duty: 0.5,
+      feather: 0.28,
+      baseAlpha: 0.15,
+      uniformSpacing: false,
+      directionColor: false,
+      directionOffsetDegrees: 0,
+      perTripLight: false,
+      perTripFloor: 0.22,
+    });
+    const a = new ChevronFlowExtension({ period: 8 });
+    const b = new ChevronFlowExtension({ period: 6 });
+    expect(a.equals(b)).toBe(false);
+    expect(a.equals(new ChevronFlowExtension({ period: 8 }))).toBe(true);
+    // uniformSpacing is part of opts, so it must distinguish instances (the
+    // sublayer cache keys on the digest → a toggle must regenerate the shader).
+    expect(
+      new ChevronFlowExtension({ uniformSpacing: true }).equals(
+        new ChevronFlowExtension({ uniformSpacing: false }),
+      ),
+    ).toBe(false);
+  });
+
+  it('uniformSpacing fits a whole number of chevrons per segment via vPathLength', () => {
+    // Off (default): raw per-segment period — byte-identical to the marching
+    // demos, so this option leaves them untouched. No segment-length plumbing.
+    const off = getShaderObject(new ChevronFlowExtension());
+    expect(off.inject['fs:DECKGL_FILTER_COLOR']).not.toContain('chevronSegLen');
+    expect(off.inject['fs:#main-start']).toBeUndefined();
+
+    // On: snap the period so an integer count of chevrons spans the segment,
+    // landing a chevron edge on both ends (no truncation at joints).
+    const on = getShaderObject(new ChevronFlowExtension({ uniformSpacing: true }));
+    const hook = on.inject['fs:DECKGL_FILTER_COLOR'] as string;
+    expect(hook).toContain('floor(chevronSegLen / chevronPeriod + 0.5)'); // round to whole
+    // Still just modulates alpha — the fit changes spacing, not the compositing.
+    expect(hook).toContain('color.a *= mix(chevron.baseAlpha, 1.0, chevronHead);');
+    // vPathLength is only in scope in main(), NOT in the DECKGL_FILTER_COLOR hook
+    // function — so it must be read in fs:#main-start and bridged via a global,
+    // never referenced inside the hook (that was the shader-compile bug).
+    expect(hook).not.toContain('vPathLength');
+    expect(on.inject['fs:#decl']).toContain('float chevronSegLen;');
+    expect(on.inject['fs:#main-start']).toContain('chevronSegLen = vPathLength;');
+  });
+
+  it('uniformSpacing + perBucketDirection both contribute to fs:#decl (not overwritten)', () => {
+    // A Record holds one string per inject key; when both features are on, the
+    // direction-sign varying and the segment-length global must BOTH survive.
+    const both = getShaderObject(
+      new ChevronFlowExtension({ uniformSpacing: true, perBucketDirection: true }),
+    );
+    expect(both.inject['fs:#decl']).toContain('in float vChevronDir;');
+    expect(both.inject['fs:#decl']).toContain('float chevronSegLen;');
+    expect(both.inject['vs:#main-start']).toContain('vChevronDir = instanceVertexTime;');
+    expect(both.inject['fs:#main-start']).toContain('chevronSegLen = vPathLength;');
+  });
+
+  it('directionColor blends FOUR cardinal colors smoothly forward↔reverse by direction', () => {
+    // Off (default): no bearing varying, no rgb rewrite — chevrons inherit the
+    // host color exactly as before.
+    const off = getShaderObject(new ChevronFlowExtension());
+    expect(off.inject['fs:DECKGL_FILTER_COLOR']).not.toContain('vChevronEN');
+    expect(off.inject['fs:DECKGL_FILTER_COLOR']).not.toContain('color.rgb =');
+
+    const on = getShaderObject(
+      new ChevronFlowExtension({
+        directionColor: true,
+        directionColors: [
+          [255, 0, 0], // N red
+          [0, 255, 0], // E green
+          [0, 0, 255], // S blue
+          [255, 255, 0], // W yellow
+        ],
+      }),
+    );
+    // Vertex: the segment (east, north) vector is derived from the endpoints.
+    expect(on.inject['vs:#decl']).toContain('out vec2 vChevronEN;');
+    expect(on.inject['vs:#main-start']).toContain('instanceStartPositions');
+    expect(on.inject['fs:#decl']).toContain('in vec2 vChevronEN;');
+    const hook = on.inject['fs:DECKGL_FILTER_COLOR'] as string;
+    // Cyclic-4 bearing hue inlined TWICE — forward (vChevronEN) and reverse
+    // (-vChevronEN) — then blended by the continuous direction. (No fs:#decl
+    // function; the atan appears for both the forward and reverse heading.)
+    expect(hook).toContain('atan((vChevronEN).x, (vChevronEN).y)');
+    expect(hook).toContain('atan((-vChevronEN).x, (-vChevronEN).y)');
+    expect(hook).toContain('vec3(1.00000, 0.00000, 0.00000)'); // N red
+    expect(hook).toContain('vec3(0.00000, 1.00000, 0.00000)'); // E green
+    expect(hook).toContain('vec3(0.00000, 0.00000, 1.00000)'); // S blue
+    expect(hook).toContain('vec3(1.00000, 1.00000, 0.00000)'); // W yellow
+    // Smooth forward↔reverse blend by (dir+1)/2 → glides through neutral at dir=0.
+    expect(hook).toContain(
+      'vec3 arrowHue = mix(chevronHueRev, chevronHueFwd, (chevronDir + 1.0) * 0.5);',
+    );
+    expect(hook).toContain('color.rgb = mix(color.rgb, arrowHue, chevronHead);');
+  });
+
+  it('continuous signed direction morphs the arrow via signed skew (arrow→flat→arrow)', () => {
+    const on = getShaderObject(new ChevronFlowExtension({ perBucketDirection: true }));
+    const hook = on.inject['fs:DECKGL_FILTER_COLOR'] as string;
+    // Direction is a continuous clamped value, NOT a hard ±1.
+    expect(hook).toContain('float chevronDir = clamp(vChevronDir, -1.0, 1.0);');
+    // Signed skew (no along-flip) = the arrow→flat→arrow morph; march by sign(dir).
+    expect(hook).toContain('float chevronAlong = geometry.uv.y;');
+    expect(hook).toContain('abs(chevronAcross) * chevron.skew * chevronDir');
+    expect(hook).toContain('chevron.phase * sign(chevronDir)');
+    expect(hook).not.toContain('geometry.uv.y * chevronDir'); // no along-flip
+  });
+
+  it('directionColors defaults use a shared array reference (no equals() thrash)', () => {
+    // deck's LayerExtension.equals compares opts arrays by reference; a fresh
+    // default palette per construction would look "changed" every render.
+    const a = new ChevronFlowExtension({ directionColor: true });
+    const b = new ChevronFlowExtension({ directionColor: true });
+    expect(a.opts.directionColors).toBe(b.opts.directionColors);
+    expect(a.equals(b)).toBe(true);
+  });
+
+  it('perTripLight combines aggregate RGB + instant alpha with the cardinal hue', () => {
+    // Off (default): plain host-alpha multiply, no two-signal combine.
+    const off = getShaderObject(new ChevronFlowExtension());
+    expect(off.inject['fs:DECKGL_FILTER_COLOR']).not.toContain('chevronInstant');
+    expect(off.inject['fs:DECKGL_FILTER_COLOR']).toContain(
+      'color.a *= mix(chevron.baseAlpha, 1.0, chevronHead);',
+    );
+
+    const on = getShaderObject(
+      new ChevronFlowExtension({
+        perTripLight: true,
+        perTripFloor: 0.2,
+        directionColor: true,
+        perBucketDirection: true,
+      }),
+    );
+    const hook = on.inject['fs:DECKGL_FILTER_COLOR'] as string;
+    // INSTANT = the packed alpha; AGGREGATE luminance = the packed rgb.
+    expect(hook).toContain('float chevronInstant = color.a;');
+    expect(hook).toContain('dot(color.rgb, vec3(0.299, 0.587, 0.114))');
+    // OPACITY recedes to the floor between trips and pops to full as one passes…
+    expect(hook).toContain('float chevronArrowAlpha = mix(0.2000, 1.0, chevronInstant);');
+    // …the hue is applied at FULL saturation (recession is carried by ALPHA only,
+    // NOT by dimming the hue), and the track keeps the faint aggregate.
+    expect(hook).toContain('color.rgb = mix(color.rgb, arrowHue, chevronHead);');
+    expect(hook).toContain(
+      'color.a = mix(chevronTrackAlpha, chevronArrowAlpha, chevronHead);',
+    );
+    expect(hook).not.toContain('arrowHue * chevronArrowBright'); // no brightness-multiply
+    // No synthetic-highlight leftovers.
+    expect(hook).not.toContain('highlightPhase');
+    expect(hook).not.toContain('vChevronCumDist');
+  });
+
+  it('draw() reduces the play-head into a phase in [0, period)', () => {
+    const ext = new ChevronFlowExtension({ period: 6, speed: 0.0006 });
+    let captured: any = null;
+    const fakeLayer = {
+      props: { getTime: () => 1_722_470_400_000 }, // epoch-ms play-head
+      setShaderModuleProps: (p: any) => {
+        captured = p;
+      },
+    };
+    (ext.draw as any).call(fakeLayer, null, ext);
+    expect(captured).toBeTruthy();
+    expect(captured.chevron.period).toBe(6);
+    // The epoch-ms play-head would destroy f32 precision if passed raw; the
+    // CPU-side modulo keeps it small and bounded.
+    expect(captured.chevron.phase).toBeGreaterThanOrEqual(0);
+    expect(captured.chevron.phase).toBeLessThan(6);
+    expect(Number.isFinite(captured.chevron.phase)).toBe(true);
+  });
+
+  it('shader-module scalars flow through luma ShaderInputs (UBO not dropped)', () => {
+    const shaderInputs = new ShaderInputs<{ chevron: Record<string, unknown> }>(
+      { chevron: chevronUniforms as any },
+      { disableWarnings: true },
+    );
+    shaderInputs.setProps({
+      chevron: {
+        phase: 2.5,
+        period: 6,
+        skew: 1.4,
+        duty: 0.5,
+        feather: 0.28,
+        baseAlpha: 0.15,
+      },
+    });
+    const values = shaderInputs.getUniformValues() as any;
+    expect(values.chevron.phase).toBeCloseTo(2.5);
+    expect(values.chevron.period).toBe(6);
+    expect(values.chevron.baseAlpha).toBeCloseTo(0.15);
   });
 });
 

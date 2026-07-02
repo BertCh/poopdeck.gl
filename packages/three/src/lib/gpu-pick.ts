@@ -25,53 +25,18 @@
  * valid feature. Alpha is reserved (the id material writes a=255 opaque).
  */
 
-/** Max feature index representable in 24 bits (inclusive). */
-export const MAX_PICK_ID = 0xffffff; // 16,777,215
+// The id-colour encode/decode math + per-feature id-colour builder were hoisted
+// verbatim into `@poopdeck.gl/core/picking` (shared by every id-buffer backend).
+// Re-export under three's historical names so this package's public API is
+// unchanged; `GpuPicker` below uses the imported `decodeId` binding directly.
+import {
+  encodePickId as encodeId,
+  decodePickId as decodeId,
+  buildIdColors,
+  MAX_PICK_ID,
+} from '@poopdeck.gl/core/picking';
 
-/**
- * Encode a non-negative 24-bit feature index into an `[r, g, b]` byte triple
- * (each 0..255), big-endian (r = most-significant byte). Pure + deterministic.
- *
- * Throws on out-of-range input so a silently-wrapped id can't masquerade as a
- * different feature.
- */
-export function encodeId(index: number): [number, number, number] {
-  if (!Number.isInteger(index) || index < 0 || index > MAX_PICK_ID) {
-    throw new RangeError(`encodeId: index ${index} out of 24-bit range [0, ${MAX_PICK_ID}]`);
-  }
-  const r = (index >>> 16) & 0xff;
-  const g = (index >>> 8) & 0xff;
-  const b = index & 0xff;
-  return [r, g, b];
-}
-
-/**
- * Decode an `[r, g, b]` byte triple (each 0..255) back into the feature index.
- * Inverse of {@link encodeId}. Pure + deterministic.
- */
-export function decodeId(rgb: readonly [number, number, number]): number {
-  const r = rgb[0] & 0xff;
-  const g = rgb[1] & 0xff;
-  const b = rgb[2] & 0xff;
-  return ((r << 16) | (g << 8) | b) >>> 0;
-}
-
-/**
- * Build an id-colour attribute array (one normalised RGB triple per feature) for
- * a per-feature pick buffer. `floats[3*i .. 3*i+2]` are the 0..1 channels for
- * feature `i`, ready to upload as an instanced vertex attribute that an id
- * material passes straight through to `fragmentNode` (opaque).
- */
-export function buildIdColors(featureCount: number): Float32Array {
-  const out = new Float32Array(featureCount * 3);
-  for (let i = 0; i < featureCount; i++) {
-    const [r, g, b] = encodeId(i);
-    out[i * 3] = r / 255;
-    out[i * 3 + 1] = g / 255;
-    out[i * 3 + 2] = b / 255;
-  }
-  return out;
-}
+export { encodeId, decodeId, buildIdColors, MAX_PICK_ID };
 
 // ── GPU readback helper (visually verified; loosely typed) ──────────────────────
 /* eslint-disable @typescript-eslint/no-explicit-any */

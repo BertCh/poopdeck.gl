@@ -56,6 +56,7 @@ import {
 } from '../../lib/style-digest';
 import { resolveAccessorAlias } from '../../lib/accessor-alias';
 import type { ColorAccessorValue, NumericAccessorValue } from '../../lib/accessor-alias';
+import { DEFAULT_POLYGON_PALETTE } from '@poopdeck.gl/core';
 import type { Tile, Layer as TileLayer, BinaryFeatures } from '@poopdeck.gl/core';
 
 const DEBUG = false;
@@ -64,36 +65,10 @@ const DEBUG = false;
  * {@link SpatioTemporalLayerProps} via {@link AnimatedPolygonLayerProps}). */
 export interface _AnimatedPolygonLayerProps {
   /**
-   * @deprecated Dead prop — outline rendering was never implemented (the
-   * sublayer is a fill-only SolidPolygonLayer) and setting it has no visual
-   * effect. Will be removed; a runtime warning fires when set.
-   * @default false
-   */
-  stroked?: boolean;
-
-  /**
    * Fill the polygon.
    * @default true
    */
   filled?: boolean;
-
-  /**
-   * @deprecated Dead prop — see {@link AnimatedPolygonLayerProps.stroked}.
-   * @default 'pixels'
-   */
-  lineWidthUnits?: 'pixels' | 'meters' | 'common';
-
-  /**
-   * @deprecated Dead prop — see {@link AnimatedPolygonLayerProps.stroked}.
-   * @default 1
-   */
-  lineWidth?: number | string;
-
-  /**
-   * @deprecated Dead prop — see {@link AnimatedPolygonLayerProps.stroked}.
-   * @default [0, 0, 0, 255]
-   */
-  lineColor?: Color | string;
 
   /**
    * Fill color — constant {@link Color}, or column name for categorical coloring.
@@ -191,22 +166,9 @@ export interface _AnimatedPolygonLayerProps {
 /** Complete props accepted by {@link AnimatedPolygonLayer}. */
 export type AnimatedPolygonLayerProps = _AnimatedPolygonLayerProps & SpatioTemporalLayerProps;
 
-// Shared with defaultProps so the dead-outline-prop warning can detect a
-// user-supplied lineColor by reference (deck assigns the default by ref).
-const DEFAULT_LINE_COLOR: Color = [0, 0, 0, 255];
-
-const DEFAULT_PALETTE: Color[] = [
-  [255, 140, 0, 180],
-  [31, 119, 180, 180],
-  [44, 160, 44, 180],
-  [214, 39, 40, 180],
-  [148, 103, 189, 180],
-  [140, 86, 75, 180],
-  [227, 119, 194, 180],
-  [127, 127, 127, 180],
-  [188, 189, 34, 180],
-  [23, 190, 207, 180],
-];
+// Shared with the maplibre adapter (single source of truth in
+// @poopdeck.gl/core).
+const DEFAULT_PALETTE: Color[] = DEFAULT_POLYGON_PALETTE;
 
 /**
  * Per-tile prepared data. Cached so the `data` object reference handed to
@@ -284,17 +246,10 @@ export class AnimatedPolygonLayer<ExtraPropsT extends {} = {}> extends SpatioTem
 
   static defaultProps: DefaultProps<AnimatedPolygonLayerProps> = {
     ...SpatioTemporalLayer.defaultProps,
-    stroked: false,
     filled: true,
-    lineWidthUnits: 'pixels',
-    // Permissive descriptors ({type:'object'} validates anything): these
-    // props legally hold a constant OR a column-name string, which the
-    // 'color'/'number' validators would reject in deck's debug mode.
-    // (lineWidth/lineColor are deprecated dead props but keep the same
-    // declared domain; lineColor's default keeps the DEFAULT_LINE_COLOR
-    // reference so warnIfDeadOutlinePropsSet can detect a user value.)
-    lineWidth: { type: 'object', value: 1, compare: true },
-    lineColor: { type: 'object', value: DEFAULT_LINE_COLOR, compare: true },
+    // Permissive descriptor ({type:'object'} validates anything): fillColor
+    // legally holds a constant OR a column-name string, which the 'color'
+    // validator would reject in deck's debug mode.
     fillColor: { type: 'object', value: [255, 140, 0, 180], compare: true },
     colorPalette: { type: 'array', value: DEFAULT_PALETTE, compare: true },
     // Object-valued mapping — compare:false (digest content via styleKey). The
@@ -374,7 +329,6 @@ export class AnimatedPolygonLayer<ExtraPropsT extends {} = {}> extends SpatioTem
     const fillColor = this.fillColorValue();
     const elevation = this.elevationValue();
     return [
-      this.props.stroked,
       this.props.filled,
       this.props.extruded,
       this.props.elevationScale,
@@ -394,33 +348,8 @@ export class AnimatedPolygonLayer<ExtraPropsT extends {} = {}> extends SpatioTem
     ].join('|');
   }
 
-  /**
-   * The outline props were accepted from day one but no outline has ever been
-   * rendered (the sublayer is a fill-only SolidPolygonLayer). Warn once when
-   * any of them is set to a non-default value rather than silently ignoring
-   * the caller's intent. Scalar compares only — safe to run per render.
-   */
-  private warnIfDeadOutlinePropsSet(): void {
-    // `Required<>`-typed: defaults guarantee 1 / 'pixels' / DEFAULT_LINE_COLOR
-    // when unset, so a non-default value means the user supplied one.
-    const { stroked, lineWidth, lineWidthUnits, lineColor } = this.props;
-    if (
-      stroked === true ||
-      lineWidth !== 1 ||
-      lineWidthUnits !== 'pixels' ||
-      lineColor !== DEFAULT_LINE_COLOR
-    ) {
-      warnOnce(
-        'AnimatedPolygonLayer:deadOutlineProps',
-        '[AnimatedPolygonLayer] stroked/lineColor/lineWidth/lineWidthUnits ' +
-          'are deprecated dead props — polygon outlines are not rendered.',
-      );
-    }
-  }
-
   renderLayers(): Layer[] {
     const t0 = performance.now();
-    this.warnIfDeadOutlinePropsSet();
     const { tiles } = this.state;
     if (!tiles || tiles.length === 0) {
       // No setState here — the empty result is itself the signal to deck.gl

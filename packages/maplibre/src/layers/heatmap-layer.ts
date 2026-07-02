@@ -27,7 +27,7 @@
  */
 
 import type { Tile, Layer as STTLayer } from '@poopdeck.gl/core';
-import { GeometryType } from '@poopdeck.gl/core';
+import { GeometryType, DEFAULT_HEATMAP_COLOR_RANGE } from '@poopdeck.gl/core';
 import {
   STTBaseLayer,
   type STTBaseLayerOptions,
@@ -36,6 +36,7 @@ import {
   type RGBA8,
 } from '../base-layer';
 import { TIME_WINDOW_GLSL } from '../shaders/time-window.glsl';
+import { POSITION_DEQUANT_GLSL } from '../shaders/position-quantization.glsl';
 
 export interface STTHeatmapLayerOptions extends STTBaseLayerOptions {
   /** Splat radius in pixels. */
@@ -68,22 +69,18 @@ export interface STTHeatmapLayerOptions extends STTBaseLayerOptions {
   colorDomain?: [number, number];
 }
 
-const DEFAULT_COLOR_RANGE: ReadonlyArray<RGBA8> = [
-  [255, 255, 178, 255],
-  [254, 217, 118, 255],
-  [254, 178, 76, 255],
-  [253, 141, 60, 255],
-  [252, 78, 42, 255],
-  [227, 26, 28, 255],
-  [177, 0, 38, 255],
-];
+// Shared with @poopdeck.gl/layers HeatmapLayer (single source of truth in
+// @poopdeck.gl/core).
+const DEFAULT_COLOR_RANGE: ReadonlyArray<RGBA8> = DEFAULT_HEATMAP_COLOR_RANGE;
 
 const ACCUM_VS = `
   precision highp float;
-  attribute vec3 aMercator;
+  attribute vec3 aMercator;    // per-tile-local UNSIGNED_SHORT, normalized [0,1] — see sttDecodeMercatorPos
   attribute vec2 aTime;
   attribute float aWeight;
   uniform mat4 uMatrix;
+  uniform vec3 uPosScale;
+  uniform vec3 uPosOffset;
   uniform float uRadius;
   uniform float uWindowStart;
   uniform float uWindowEnd;
@@ -91,8 +88,10 @@ const ACCUM_VS = `
   uniform float uFadeOut;
   varying float vWeight;
 ${TIME_WINDOW_GLSL}
+${POSITION_DEQUANT_GLSL}
   void main() {
-    gl_Position = uMatrix * vec4(aMercator.x, aMercator.y, 0.0, 1.0);
+    vec3 mercator = sttDecodeMercatorPos(aMercator, uPosScale, uPosOffset);
+    gl_Position = uMatrix * vec4(mercator.x, mercator.y, 0.0, 1.0);
     gl_PointSize = uRadius * 2.0;
     vWeight = aWeight * sttTimeWindowAlpha(aTime, uWindowStart, uWindowEnd, uFadeIn, uFadeOut);
   }
@@ -153,6 +152,8 @@ interface AccumProgramHandles {
   aTime: number;
   aWeight: number;
   uMatrix: WebGLUniformLocation | null;
+  uPosScale: WebGLUniformLocation | null;
+  uPosOffset: WebGLUniformLocation | null;
   uRadius: WebGLUniformLocation | null;
   uIntensity: WebGLUniformLocation | null;
   uWindowStart: WebGLUniformLocation | null;
@@ -279,6 +280,8 @@ export class STTHeatmapLayer extends STTBaseLayer {
     this.accum = {
       program: accumProgram,
       aMercator: gl.getAttribLocation(accumProgram, 'aMercator'),
+      uPosScale: gl.getUniformLocation(accumProgram, 'uPosScale'),
+      uPosOffset: gl.getUniformLocation(accumProgram, 'uPosOffset'),
       aTime: gl.getAttribLocation(accumProgram, 'aTime'),
       aWeight: gl.getAttribLocation(accumProgram, 'aWeight'),
       uMatrix: gl.getUniformLocation(accumProgram, 'uMatrix'),
@@ -465,12 +468,14 @@ export class STTHeatmapLayer extends STTBaseLayer {
         };
         gl.uniform1f(ah.uWindowStart, ctx.windowStart);
         gl.uniform1f(ah.uWindowEnd, ctx.windowEnd);
+        gl.uniform3fv(ah.uPosScale, cache.posScale ?? [1, 1, 1]);
+        gl.uniform3fv(ah.uPosOffset, cache.posOffset ?? [0, 0, 0]);
 
         // VAO captures position/time/weight attribute state on first frame.
         this.bindVaoOrSetup(cache, () => {
           gl.bindBuffer(gl.ARRAY_BUFFER, cache.positionBuffer);
           gl.enableVertexAttribArray(ah.aMercator);
-          gl.vertexAttribPointer(ah.aMercator, 3, gl.FLOAT, false, 0, 0);
+          gl.vertexAttribPointer(ah.aMercator, 3, gl.UNSIGNED_SHORT, true, 0, 0);
 
           gl.bindBuffer(gl.ARRAY_BUFFER, cache.timeBuffer);
           gl.enableVertexAttribArray(ah.aTime);

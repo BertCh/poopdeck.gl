@@ -13,6 +13,10 @@ export { AnimatedPathLayer } from './layers/core/animated-path-layer';
 export { AnimatedPolygonLayer } from './layers/core/animated-polygon-layer';
 export { AnimatedTripsLayer } from './layers/trips/animated-trips-layer';
 export { FlowCorridorLayer } from './layers/trips/flow-corridor-layer';
+// Coherent merged directed corridors with breathing (hourly) width + twin
+// offset ribbons — the `bixi-corridors` renderer (bixi --merged-paths).
+export { FlowStrokeLayer } from './layers/trips/flow-stroke-layer';
+export type { FlowStrokeLayerProps } from './layers/trips/flow-stroke-layer';
 // Smooth moving head-dot for trip archives — CPU-interpolated position per
 // frame rendered through a stock ScatterplotLayer (fp64, no jitter, globe,
 // circular markers). Draws one moving marker at the head of each active trip.
@@ -24,10 +28,9 @@ export { NoPickingPathLayer } from './layers/internal/no-picking-path-layer';
 export { FlowLinesLayer } from './layers/internal/flow-lines-layer';
 // Temporal heatmap built ON deck.gl's canonical @deck.gl/aggregation-layers
 // HeatmapLayer (+ DataFilterExtension) — it replaced an earlier hand-rolled
-// GPU-splat wrapper, not the other way around. `HeatmapLayer` is the
-// deprecated pre-rename alias (it shadowed the canonical layer's name);
-// prefer `AnimatedHeatmapLayer`.
-export { AnimatedHeatmapLayer, HeatmapLayer } from './layers/summary/heatmap-layer';
+// GPU-splat wrapper, not the other way around. Named `AnimatedHeatmapLayer`
+// so it does not shadow the canonical deck.gl `HeatmapLayer`.
+export { AnimatedHeatmapLayer } from './layers/summary/heatmap-layer';
 // Server-aggregated summary tier (renders H3 hexes at low zooms).
 export { H3SummaryLayer } from './layers/summary/h3-summary-layer';
 // Server-aggregated Quadbin summary tier (renders Z/X/Y quad cells at low
@@ -84,6 +87,13 @@ export { AnimatedBoundingBoxLayer } from './layers/core/animated-bounding-box-la
 export { SplatLayer } from './layers/core/splat-layer';
 export { SplatPrimitiveLayer } from './layers/internal/splat-primitive-layer';
 
+// Backend capability descriptor — what the deck.gl renderer DECLARES about
+// itself against the shared `@poopdeck.gl/core/capabilities` contract (the
+// declare-and-prove replacement for the hand-maintained parity table). Guarded
+// by test/backend-descriptor.test.ts so it can't claim a layer kind whose class
+// isn't actually exported here.
+export { deckBackend } from './backend-descriptor';
+
 // Extensions
 export { TimeFilterExtension } from './extensions/time-filter-extension';
 // The TimeFilterExtension contract requires callers to relativize all
@@ -95,12 +105,13 @@ export {
   CategoryColorExtension,
   CATEGORY_PALETTE_SIZE,
 } from './extensions/category-color-extension';
-// Deprecated alias of TimeFilterExtension (kept for back-compat; warns once
-// on construction). TimeFilterExtension now works on SolidPolygonLayer.
-export { PolygonTimeFilterExtension } from './extensions/polygon-time-filter-extension';
 // Soft-gaussian "splat" rendering for ScatterplotLayer points (e.g.
 // camera-colored LIDAR clouds). See AnimatedPointLayer.splat.
 export { SplatExtension } from './extensions/splat-extension';
+// Marching directional chevrons over a path (e.g. BIXI street-flow direction).
+// Compose via the `extensions` prop of an animated-trips-family layer.
+export { ChevronFlowExtension } from './extensions/chevron-flow-extension';
+export type { ChevronFlowExtensionOptions } from './extensions/chevron-flow-extension';
 
 // NOTE: the playback engine (TimeController, PlaybackGovernor, SttPlayer,
 // decideAutoSpeedMultiplier) lives in @poopdeck.gl/playback and is NO LONGER
@@ -142,11 +153,10 @@ export type { AnimatedPointLayerProps } from './layers/core/animated-point-layer
 export type { AnimatedPathLayerProps } from './layers/core/animated-path-layer';
 export type { AnimatedPolygonLayerProps } from './layers/core/animated-polygon-layer';
 export type { AnimatedTripsLayerProps } from './layers/trips/animated-trips-layer';
+export type { FlowCorridorLayerProps } from './layers/trips/flow-corridor-layer';
 export type { AnimatedTripHeadsLayerProps } from './layers/trips/animated-trip-heads-layer';
 export type {
   AnimatedHeatmapLayerProps,
-  // Deprecated pre-rename alias of AnimatedHeatmapLayerProps.
-  HeatmapLayerProps,
   HeatmapChannelSpec,
 } from './layers/summary/heatmap-layer';
 export type { H3SummaryLayerProps } from './layers/summary/h3-summary-layer';
@@ -170,5 +180,4 @@ export type { SplatLayerProps } from './layers/core/splat-layer';
 export type { SplatPrimitiveLayerProps } from './layers/internal/splat-primitive-layer';
 export type { TimeFilterExtensionProps } from './extensions/time-filter-extension';
 export type { CategoryColorExtensionProps } from './extensions/category-color-extension';
-export type { PolygonTimeFilterExtensionProps } from './extensions/polygon-time-filter-extension';
 

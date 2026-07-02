@@ -17,8 +17,6 @@
 import { describe, it, expect } from 'vitest';
 import { TimeFilterExtension } from '../src/extensions/time-filter-extension';
 import { CategoryColorExtension } from '../src/extensions/category-color-extension';
-import { PolygonTimeFilterExtension } from '../src/extensions/polygon-time-filter-extension';
-import { _resetWarnOnce } from '../src/lib/log';
 import { makePointTile, makePathTile } from './fake-tile';
 
 /**
@@ -90,35 +88,6 @@ describe('CategoryColorExtension attribute registration', () => {
     expect(perVertex.instanceCategoryIndex.size).toBe(1);
     expect(perVertex.instanceCategoryIndex.type).toBe('float32');
     expect(perVertex.instanceCategoryIndex.stepMode).toBe('dynamic');
-  });
-});
-
-describe('PolygonTimeFilterExtension (deprecated alias)', () => {
-  it('registers the SAME attributes as TimeFilterExtension (the fork is folded in)', () => {
-    const { instanced, perVertex } = captureRegisteredAttributes(
-      new PolygonTimeFilterExtension(),
-    );
-    expect(Object.keys(instanced)).toEqual([]);
-    expect(Object.keys(perVertex).sort()).toEqual(
-      ['instanceEndTime', 'instanceStartTime', 'instanceVertexTime'].sort()
-    );
-  });
-
-  it('is a TimeFilterExtension and warns once on construction', () => {
-    _resetWarnOnce();
-    const warned: string[] = [];
-    const original = console.warn;
-    console.warn = (msg: string) => warned.push(msg);
-    try {
-      const ext = new PolygonTimeFilterExtension();
-      expect(ext).toBeInstanceOf(TimeFilterExtension);
-      new PolygonTimeFilterExtension(); // dedup: still only one warning
-      expect(
-        warned.filter((m) => m.includes('PolygonTimeFilterExtension')).length,
-      ).toBe(1);
-    } finally {
-      console.warn = original;
-    }
   });
 });
 

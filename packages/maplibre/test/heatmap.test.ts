@@ -104,3 +104,46 @@ describe('STTHeatmapLayer', () => {
     expect(vpCalls[vpCalls.length - 1]).toEqual([16, 32, 512, 256]);
   });
 });
+
+describe('STTHeatmapLayer position quantization (perf research 2026-07)', () => {
+  it('buildTileGpuCache populates posScale/posOffset', () => {
+    const layer = new STTHeatmapLayer({ ...baseOpts, id: 'h' }) as any;
+    layer.supports32BitIndices = true;
+    const gl = makeMockGl();
+    const tile = makePropertyPointTile();
+    const cache = layer.buildTileGpuCache(gl, tile, tile.layers[0]);
+    expect(cache.posScale).toHaveLength(3);
+    expect(cache.posOffset).toHaveLength(3);
+  });
+
+  it('the accum pass binds the position attribute as UNSIGNED_SHORT/normalized and sets uPosScale/uPosOffset', () => {
+    const layer = new STTHeatmapLayer({ ...baseOpts, id: 'h' }) as any;
+    layer.supports32BitIndices = true;
+    const gl = makeMockGl();
+    layer.onContextReady(gl);
+    layer.map = makeMockMap();
+    layer.tileset = {
+      update: vi.fn(),
+      getVisibleTiles: () => [],
+      finalize: vi.fn(),
+    };
+    const tile = makePropertyPointTile();
+    layer.loadedTiles.set('k', tile);
+
+    layer.render(gl, new Float32Array(16));
+
+    const h = layer.accum;
+    expect(gl.vertexAttribPointer).toHaveBeenCalledWith(
+      h.aMercator,
+      3,
+      gl.UNSIGNED_SHORT,
+      true,
+      0,
+      0,
+    );
+    const scaleCalls = gl.uniform3fv.mock.calls.filter((c: unknown[]) => c[0] === h.uPosScale);
+    const offsetCalls = gl.uniform3fv.mock.calls.filter((c: unknown[]) => c[0] === h.uPosOffset);
+    expect(scaleCalls.length).toBeGreaterThan(0);
+    expect(offsetCalls.length).toBeGreaterThan(0);
+  });
+});

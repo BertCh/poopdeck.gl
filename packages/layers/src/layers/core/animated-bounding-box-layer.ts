@@ -691,14 +691,36 @@ export class AnimatedBoundingBoxLayer<ExtraPropsT extends {} = {}> extends Spati
     // Sort each track's keyframes by absolute time (cross-tile pooling leaves
     // them tile-ordered) and drop exact-duplicate timestamps. An index-sort
     // permutation keeps the parallel arrays aligned without per-keyframe objects.
+    //
+    // Perf: fold the sort + de-dup into a SINGLE permutation applied by ONE
+    // reorder pass per track. The old path allocated an index array via
+    // Array.from + a stable sort, reordered all 9 parallel arrays, then
+    // allocated a second `keep` array and reordered again — up to 2× the array
+    // churn per track. Here we sort a reused index buffer in place (stable, so
+    // equal timestamps keep insertion order — same as before), compact
+    // duplicates within that same buffer, and reorder exactly once. Output
+    // ordering and semantics are byte-for-byte identical to sort→reorder→dedupe.
+    const order: number[] = [];
     for (const track of tracks.values()) {
-      const n = track.times.length;
+      const times = track.times;
+      const n = times.length;
       if (n > 1) {
-        const order = Array.from({ length: n }, (_, k) => k).sort(
-          (a, b) => track.times[a] - track.times[b],
-        );
+        order.length = n;
+        for (let k = 0; k < n; k++) order[k] = k;
+        // Stable sort by time (ES spec guarantees stability): equal timestamps
+        // stay in their original tile/insertion order, matching the prior sort.
+        order.sort((a, b) => times[a] - times[b]);
+        // Compact out exact-duplicate timestamps in place, keeping the first of
+        // each equal run (equivalent to the former dedupe-after-sort pass).
+        let write = 0;
+        for (let k = 0; k < n; k++) {
+          const idx = order[k];
+          if (k === 0 || times[idx] !== times[order[write - 1]]) {
+            order[write++] = idx;
+          }
+        }
+        if (write !== n) order.length = write;
         reorder(track, order);
-        dedupeByTime(track);
       }
       track.singleton = track.times.length < 2;
     }
@@ -1146,14 +1168,4 @@ function reorder(track: Track, order: number[]): void {
     for (let i = 0; i < order.length; i++) out[i] = src[order[i]];
     (track as any)[k] = out;
   }
-}
-
-/** Drop exact-duplicate timestamps (keep the first) after sorting. */
-function dedupeByTime(track: Track): void {
-  const t = track.times;
-  const keep: number[] = [];
-  for (let i = 0; i < t.length; i++) {
-    if (i === 0 || t[i] !== t[i - 1]) keep.push(i);
-  }
-  if (keep.length !== t.length) reorder(track, keep);
 }

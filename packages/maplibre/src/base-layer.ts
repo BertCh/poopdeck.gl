@@ -24,6 +24,7 @@ import type {
 import {
   STTArchive,
   SpatiotemporalTileset,
+  getFeatureProperties,
   type ArchiveMetadata,
   type BinaryFeatures,
   type BoundingBox,
@@ -33,7 +34,16 @@ import {
   type Layer as STTLayer,
   type GeometryType,
 } from '@poopdeck.gl/core';
-import { projectPositions } from './lib/projection';
+import * as core from '@poopdeck.gl/core/style';
+import { resolveTimeFilterParams } from '@poopdeck.gl/core/time-filter';
+import { makeTilesetCallbacks } from '@poopdeck.gl/core/tileset-adapter';
+import {
+  encodePickId,
+  decodePickId,
+  MAX_PICK_ID,
+  type SttPickResult,
+} from '@poopdeck.gl/core/picking';
+import { projectPositions, quantizePositionsToUint16 } from './lib/projection';
 
 /** RGBA tuple in the 0–1 range used by all STT shader uniforms. */
 export type RGBA = [number, number, number, number];
@@ -89,22 +99,20 @@ export interface STTBaseLayerOptions {
   /**
    * Soft fade ramp at the *leading* edge of the time window, in milliseconds.
    * Features that have just entered the window ramp alpha 0 → 1 across this
-   * many ms. Set 0 for a hard on/off. Defaults to 10% of `timeWindow` when
-   * unset (back-compat with the original `softTimeWindow: true` behaviour).
+   * many ms. Defaults to 0 (hard on/off — the unified deck/three policy)
+   * unless `softTimeWindow: true` is set.
    */
   fadeInDuration?: number;
   /**
    * Soft fade ramp at the *trailing* edge of the time window, in milliseconds.
    * Features about to leave the window ramp alpha 1 → 0 across this many ms.
-   * Defaults to 10% of `timeWindow` when unset.
+   * Defaults to 0 unless `softTimeWindow: true` is set.
    */
   fadeOutDuration?: number;
   /**
-   * Back-compat: when set, controls whether the default fade-in/out durations
-   * (10% of `timeWindow`) are applied. Set to `false` for a hard on/off
-   * window. Ignored if `fadeInDuration` / `fadeOutDuration` are set
-   * explicitly. Older code that only knew about `softTimeWindow` keeps
-   * working.
+   * OPT-IN soft window: when explicitly `true`, both fade durations default to
+   * 10% of `timeWindow` (floored at 1 ms). Ignored if `fadeInDuration` /
+   * `fadeOutDuration` are set explicitly. Unset/false ⇒ hard on/off.
    */
   softTimeWindow?: boolean;
   /**
@@ -134,8 +142,25 @@ export interface STTBaseLayerOptions {
 
 /** Per-tile cached GPU buffers. Created lazily on first draw. */
 export interface TileGpuCache {
-  /** Mercator unit-square positions, stride-3 Float32. */
+  /**
+   * Mercator unit-square positions, stride-3. Layers built via
+   * {@link STTBaseLayer.projectAndUpload} (point, heatmap) upload this
+   * quantized to per-tile-local `UNSIGNED_SHORT` — `posScale`/`posOffset`
+   * are then set and the shader must dequantize (see
+   * `shaders/position-quantization.glsl.ts`). Layers with their own custom
+   * position-building path (e.g. polygon fill triangulation) may still
+   * upload plain Float32 here and leave `posScale`/`posOffset` unset.
+   */
   positionBuffer: WebGLBuffer;
+  /**
+   * Per-axis `[scale, offset]` reconstructing this tile's mercator positions
+   * from the quantized `positionBuffer`: `world = normalized * scale +
+   * offset`. Present iff `positionBuffer` was built by
+   * {@link STTBaseLayer.projectAndUpload} (quantized); absent for a
+   * layer-specific unquantized position buffer.
+   */
+  posScale?: [number, number, number];
+  posOffset?: [number, number, number];
   /** Interleaved [startTime, endTime] per feature, relative to timeOffset. */
   timeBuffer: WebGLBuffer;
   /** Optional per-vertex element indices (lines / polygons). */
@@ -175,6 +200,51 @@ export interface DrawContext {
   currentTime: number;
   /** Map zoom rounded down to integer (matches the tileset's zoom math). */
   zoom: number;
+}
+
+/**
+ * One entry per (tile, layer) drawn into the id-pick FBO in a single pick pass.
+ *
+ * MapLibre keeps each tile in its OWN vertex buffer (unlike three's merged
+ * buffer), so a decoded pixel index is only meaningful once we know which
+ * (tile, layer) it belongs to. We therefore allocate a CONTIGUOUS, 1-based
+ * global id range `[idBase, idBase + count)` per drawn layer (0 stays reserved
+ * for the cleared "no hit" background) and record it here. A decoded global id
+ * `g` resolves to this entry when `idBase <= g < idBase + count`, and the local
+ * feature index is `g - idBase` — the same index `getFeatureProperties` joins on.
+ *
+ * This is the per-tile-VBO analogue of the merged-buffer `InstanceProvenance`
+ * kernel in `@poopdeck.gl/core/picking` (renderer-abstraction §5.3): same
+ * "which feature is this pixel?" contract, different buffer topology.
+ */
+export interface PickProvenanceEntry {
+  tile: Tile;
+  layer: STTLayer;
+  cache: TileGpuCache;
+  /** First (1-based) global pick id assigned to this layer's feature 0. */
+  idBase: number;
+  /** Feature count; ids span the half-open range `[idBase, idBase + count)`. */
+  count: number;
+}
+
+/**
+ * Convert a CSS pixel `(cssX, cssY)` (top-left origin, the coordinate space of
+ * DOM mouse events) to an integer device-pixel `(x, y)` in the GL read space
+ * (bottom-left origin). `dpr` is the device-pixel ratio and `bufferHeight` is
+ * the drawing-buffer (device-pixel) height. Pure so it can be unit-tested
+ * without a GL context — the surrounding readback is browser-verify-only.
+ */
+export function cssToDevicePixel(
+  cssX: number,
+  cssY: number,
+  dpr: number,
+  bufferHeight: number,
+): { x: number; y: number } {
+  const px = Math.floor(cssX * dpr);
+  const pyTop = Math.floor(cssY * dpr);
+  // GL's read origin is bottom-left; DOM events are top-left → flip Y.
+  const py = bufferHeight - 1 - pyTop;
+  return { x: Math.max(0, px), y: Math.max(0, py) };
 }
 
 const tileKey = (id: TileId) => `${id.z}/${id.x}/${id.y}/${id.t}`;
@@ -238,6 +308,24 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
    * Lazily uploaded the first time a subclass asks for it via `getUnitQuad()`.
    */
   protected unitQuadBuffer?: WebGLBuffer;
+
+  /**
+   * The projection matrix captured from the most recent `render()`. Picking
+   * needs it (MapLibre only passes the matrix to `render`, not to our
+   * user-initiated `pick()`), and a pick necessarily follows a frame. `pick()`
+   * returns null before the first render.
+   */
+  protected lastMatrix?: Float32Array;
+
+  // ── id-buffer picking scaffold (lazily allocated on first pick) ──────────
+  /** Offscreen RGBA8 framebuffer the id pass renders into. */
+  private pickFbo?: WebGLFramebuffer;
+  /** Colour texture backing {@link pickFbo}. */
+  private pickTexture?: WebGLTexture;
+  private pickWidth = 0;
+  private pickHeight = 0;
+  /** Reused single-pixel readback scratch (RGBA). */
+  private readonly pickBuffer = new Uint8Array(4);
 
   constructor(opts: STTBaseLayerOptions) {
     this.id = opts.id;
@@ -425,6 +513,16 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
         gl.deleteBuffer(this.unitQuadBuffer);
         this.unitQuadBuffer = undefined;
       }
+      if (this.pickFbo) {
+        gl.deleteFramebuffer(this.pickFbo);
+        this.pickFbo = undefined;
+      }
+      if (this.pickTexture) {
+        gl.deleteTexture(this.pickTexture);
+        this.pickTexture = undefined;
+      }
+      this.pickWidth = 0;
+      this.pickHeight = 0;
       this.onContextLost(gl);
     }
     this.tileGpuCache.clear();
@@ -467,6 +565,8 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
       matrix instanceof Float32Array
         ? matrix
         : new Float32Array(Array.from(matrix));
+    // Stash for user-initiated picking, which has no matrix of its own.
+    this.lastMatrix = m;
 
     const bounds = map.getBounds();
     const zoom = Math.floor(map.getZoom());
@@ -531,6 +631,25 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
   ): void;
 
   /**
+   * OPTIONAL id-buffer pick hook. Subclasses that support hit-testing implement
+   * this to draw one (tile, layer) into the pick FBO with the SAME geometry as
+   * `drawTile`, but painting feature `i` the flat opaque colour
+   * `encodePickId(idBase + i)` (use {@link buildPickIdColors}). No blending, no
+   * antialiasing — the readback must recover the byte triple exactly. Leave it
+   * undefined and the layer is simply non-pickable (`pick()` returns null); this
+   * keeps subclasses that haven't grown an id shader green. Browser-verify-only
+   * (needs a live GL FBO); the id-colour build + decode join are unit-tested.
+   */
+  protected drawPickTile?(
+    gl: WebGLRenderingContext | WebGL2RenderingContext,
+    tile: Tile,
+    layer: STTLayer,
+    cache: TileGpuCache,
+    ctx: DrawContext,
+    idBase: number,
+  ): void;
+
+  /**
    * Build the per-tile cache. Subclasses that need geometry-specific buffers
    * (e.g. polygon indices) override this; the default produces just positions
    * + per-feature times.
@@ -544,12 +663,14 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
     if (!f.positions?.length) return null;
 
     const dims: 2 | 3 = f.positionDimensions === 3 ? 3 : 2;
-    const positions = this.projectAndUpload(gl, f.positions, dims);
+    const { buffer, scale, offset } = this.projectAndUpload(gl, f.positions, dims);
     const times = this.uploadFeatureTimes(gl, f.startTimes, f.endTimes);
 
     const vertexCount = f.positions.length / dims;
     return {
-      positionBuffer: positions,
+      positionBuffer: buffer,
+      posScale: scale,
+      posOffset: offset,
       timeBuffer: times,
       vertexCount,
       indexCount: 0,
@@ -622,17 +743,28 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
     gl.disable(gl.DEPTH_TEST);
   }
 
-  /** Project lon/lat → mercator and upload to a fresh ARRAY_BUFFER. */
+  /**
+   * Project lon/lat → mercator, quantize to per-tile-local `UNSIGNED_SHORT`
+   * (perf research 2026-07 — half the bytes of Float32, no visible precision
+   * loss inside one tile's own bounding box; see `quantizePositionsToUint16`),
+   * and upload to a fresh ARRAY_BUFFER. Callers bind the attribute with
+   * `vertexAttribPointer(loc, 3, gl.UNSIGNED_SHORT, true, 0, 0)`
+   * (`normalized: true`) and dequantize in the shader via
+   * `sttDecodeMercatorPos(aMercator, uPosScale, uPosOffset)`
+   * (`shaders/position-quantization.glsl.ts`), setting `uPosScale`/
+   * `uPosOffset` once per tile draw from the returned `scale`/`offset`.
+   */
   protected projectAndUpload(
     gl: WebGLRenderingContext | WebGL2RenderingContext,
     positions: Float64Array | Float32Array,
     dimensions: 2 | 3,
-  ): WebGLBuffer {
+  ): { buffer: WebGLBuffer; scale: [number, number, number]; offset: [number, number, number] } {
     const projected = projectPositions(positions, dimensions);
+    const { quantized, scale, offset } = quantizePositionsToUint16(projected);
     const buf = gl.createBuffer()!;
     gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-    gl.bufferData(gl.ARRAY_BUFFER, projected, gl.STATIC_DRAW);
-    return buf;
+    gl.bufferData(gl.ARRAY_BUFFER, quantized, gl.STATIC_DRAW);
+    return { buffer: buf, scale, offset };
   }
 
   /**
@@ -674,51 +806,60 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
   }
 
   /**
-   * Resolve the per-feature fade-in / fade-out durations from layer options,
-   * honouring the legacy `softTimeWindow` flag. The window-mode shader fragments
-   * compare against these directly (see `fadeShaderSnippet`).
+   * Resolve the per-feature fade-in / fade-out durations from layer options.
+   * Delegates to the shared kernel resolver (one fade policy across backends):
+   * fades default to a hard 0-cut, with the 10%-of-window soft ramp applied
+   * only on explicit `softTimeWindow: true`. The window-mode shader fragments
+   * compare against these directly.
    *
    * Returns ms (0 = hard cutoff at that edge).
    */
   protected resolveFadeDurations(): { fadeIn: number; fadeOut: number } {
-    const o = this.opts;
-    const haveExplicit =
-      o.fadeInDuration !== undefined || o.fadeOutDuration !== undefined;
-    if (haveExplicit) {
-      return {
-        fadeIn: Math.max(0, o.fadeInDuration ?? 0),
-        fadeOut: Math.max(0, o.fadeOutDuration ?? 0),
-      };
-    }
-    // Default to 10% of the window unless softTimeWindow is explicitly false.
-    const softOn = o.softTimeWindow !== false;
-    const half = Math.max(1, o.timeWindow * 0.1);
-    return softOn ? { fadeIn: half, fadeOut: half } : { fadeIn: 0, fadeOut: 0 };
+    const p = resolveTimeFilterParams(this.opts, { softDefaultFraction: 0.1 });
+    return {
+      fadeIn: Math.max(0, p.fadeIn ?? 0),
+      fadeOut: Math.max(0, p.fadeOut ?? 0),
+    };
   }
 
   /**
    * Expand a categorical `binary` property to a flat per-feature RGBA8 buffer
    * (Uint8Array, normalized=true on GPU). Returns null if the property is
    * missing from the binary features.
+   *
+   * Two coloring modes (deck/three parity):
+   *
+   *  - **Positional palette** (default): each feature's color is
+   *    `palette[categoryIndex % palette.length]`. Simple, but the color a
+   *    category gets depends on its *index* in the tile's own category
+   *    dictionary — so a tile-local category reorder silently recolors it.
+   *
+   *  - **Keyed `colorMapping`** (when supplied): the category STRING
+   *    (`cat.categories[index]`) is looked up in `colorMapping`, falling back to
+   *    `colorMappingDefault`, then to the positional palette (if any), then to
+   *    transparent. This makes a category render the SAME color in every tile
+   *    regardless of per-tile dictionary order — matching deck's `colorMapping`
+   *    / three's `colorMapping`.
    */
   protected expandCategoricalColors(
     binary: BinaryFeatures,
     propertyName: string,
     palette: ReadonlyArray<RGBA8>,
+    colorMapping?: Record<string, RGBA8> | null,
+    colorMappingDefault?: RGBA8,
   ): Uint8Array | null {
-    const cat = binary.categoricalProps[propertyName];
-    if (!cat || palette.length === 0) return null;
-    const n = binary.featureCount;
-    const out = new Uint8Array(n * 4);
-    for (let i = 0; i < n; i++) {
-      const idx = cat.indices[i] % palette.length;
-      const c = palette[idx];
-      out[i * 4] = c[0];
-      out[i * 4 + 1] = c[1];
-      out[i * 4 + 2] = c[2];
-      out[i * 4 + 3] = c[3] ?? 255;
-    }
-    return out;
+    return core.expandCategoricalColors(
+      binary,
+      {
+        property: propertyName,
+        colorMapping,
+        palette,
+        colorMappingDefault,
+        onMissing: 'null',
+        requireMappingOrPalette: true,
+      },
+      'u8',
+    ) as Uint8Array | null;
   }
 
   /**
@@ -779,6 +920,236 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
   }
 
   // ------------------------------------------------------------------------
+  // Picking (id-buffer / FBO)
+  // ------------------------------------------------------------------------
+  //
+  // MapLibre's CustomLayerInterface is invisible to `map.queryRenderedFeatures`,
+  // so STT features have no native hit-testing. This scaffold adds the standard
+  // deck.gl / three id-buffer trick: re-render the layer off-screen with each
+  // feature painted a colour that encodes its integer index, read back the
+  // cursor pixel, and decode it. The 24-bit id packing + `SttPickResult` shape
+  // come from `@poopdeck.gl/core/picking` so every backend is interoperable.
+  //
+  // What's what for testing: the id-colour build (`buildPickIdColors`), the
+  // cursor→pixel math (`cssToDevicePixel`), the global-id allocation
+  // (`buildPickProvenance`) and the decode→join (`resolvePick`) are all pure /
+  // CPU and unit-tested. Only the GL round-trip inside `pick()` (FBO render +
+  // `readPixels`) needs a live GPU and is browser-verify-only.
+
+  /**
+   * Does this layer support id-buffer picking? True iff the subclass provides a
+   * {@link drawPickTile} hook. Layers without one report `pick()` → null.
+   */
+  supportsPicking(): boolean {
+    return typeof this.drawPickTile === 'function';
+  }
+
+  /**
+   * Build a per-feature id-colour attribute (3 bytes / feature) where feature
+   * `i` gets `encodePickId(idBase + i)`. Uploaded as an UNSIGNED_BYTE
+   * `normalized` attribute so the fragment stage passes it straight through and
+   * the RGBA8 readback recovers the exact triple.
+   *
+   * `idBase` is 1-based (id 0 is reserved for the cleared "no hit" background),
+   * so callers pass the {@link PickProvenanceEntry.idBase} they were allocated.
+   */
+  protected buildPickIdColors(count: number, idBase: number): Uint8Array {
+    if (!Number.isInteger(idBase) || idBase < 1) {
+      throw new RangeError(
+        `buildPickIdColors: idBase must be a positive integer (1-based), got ${idBase}`,
+      );
+    }
+    const out = new Uint8Array(count * 3);
+    for (let i = 0; i < count; i++) {
+      const [r, g, b] = encodePickId(idBase + i);
+      out[i * 3] = r;
+      out[i * 3 + 1] = g;
+      out[i * 3 + 2] = b;
+    }
+    return out;
+  }
+
+  /**
+   * Walk the currently loaded tiles/layers in the SAME order `render()` draws
+   * them, filtering by `acceptsGeometry`, and assign each a contiguous global
+   * pick-id range. Returns the provenance table `pick()` renders + resolves
+   * against. Skips (and warns about) any layer that would push the id space
+   * past {@link MAX_PICK_ID} rather than aliasing two features.
+   */
+  protected buildPickProvenance(
+    gl: WebGLRenderingContext | WebGL2RenderingContext,
+  ): PickProvenanceEntry[] {
+    const entries: PickProvenanceEntry[] = [];
+    let cursor = 1; // 1-based; 0 = cleared background = "no hit".
+    for (const tile of this.loadedTiles.values()) {
+      for (const layer of tile.layers) {
+        if (!this.acceptsGeometry(layer.features.geometryType)) continue;
+        const count = layer.features.featureCount;
+        if (count <= 0) continue;
+        if (cursor + count - 1 > MAX_PICK_ID) {
+          console.warn(
+            `[${this.id}] picking id space exhausted (> ${MAX_PICK_ID}); ` +
+              `remaining features this frame are not pickable`,
+          );
+          return entries;
+        }
+        const cache = this.ensureTileGpuCache(gl, tile, layer);
+        if (!cache) continue;
+        entries.push({ tile, layer, cache, idBase: cursor, count });
+        cursor += count;
+      }
+    }
+    return entries;
+  }
+
+  /**
+   * Resolve a read-back id-colour triple against a provenance table into a
+   * {@link SttPickResult}, or null for the background / an unmatched id. Joins
+   * the decoded feature index back to its columns via `getFeatureProperties`.
+   * Pure — the CPU seam every `pick()` test exercises.
+   */
+  protected resolvePick(
+    rgb: readonly [number, number, number],
+    provenance: readonly PickProvenanceEntry[],
+  ): SttPickResult | null {
+    const globalId = decodePickId(rgb);
+    if (globalId <= 0) return null; // cleared background.
+    const entry = provenance.find(
+      (e) => globalId >= e.idBase && globalId < e.idBase + e.count,
+    );
+    if (!entry) return null;
+    const index = globalId - entry.idBase;
+    return {
+      object: getFeatureProperties(entry.layer.features, index),
+      index,
+      tileId: entry.tile.id,
+      layerId: entry.layer.name,
+    };
+  }
+
+  /**
+   * Ensure the offscreen id-pick framebuffer exists and matches the drawing
+   * buffer size. RGBA8 + NEAREST always — ids must survive as exact bytes, so
+   * we never filter or use a float format. Recreated (not reattached) on resize
+   * for driver portability, mirroring the heatmap accumulator.
+   */
+  private ensurePickFbo(
+    gl: WebGLRenderingContext | WebGL2RenderingContext,
+  ): void {
+    const w = gl.drawingBufferWidth | 0;
+    const h = gl.drawingBufferHeight | 0;
+    if (w === this.pickWidth && h === this.pickHeight && this.pickFbo) return;
+    if (this.pickFbo) gl.deleteFramebuffer(this.pickFbo);
+    if (this.pickTexture) gl.deleteTexture(this.pickTexture);
+    this.pickFbo = gl.createFramebuffer()!;
+    this.pickTexture = gl.createTexture()!;
+    gl.bindTexture(gl.TEXTURE_2D, this.pickTexture);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.pickFbo);
+    gl.framebufferTexture2D(
+      gl.FRAMEBUFFER,
+      gl.COLOR_ATTACHMENT0,
+      gl.TEXTURE_2D,
+      this.pickTexture,
+      0,
+    );
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    this.pickWidth = w;
+    this.pickHeight = h;
+  }
+
+  /**
+   * Best-effort device-pixel ratio: the drawing buffer / canvas-CSS ratio when
+   * the map canvas is reachable, else `devicePixelRatio`, else 1. Only used to
+   * position the readback texel, so an off-by-a-fraction is harmless.
+   */
+  private resolvePickDpr(
+    gl: WebGLRenderingContext | WebGL2RenderingContext,
+  ): number {
+    const canvas = (
+      this.map as unknown as { getCanvas?: () => HTMLCanvasElement }
+    )?.getCanvas?.();
+    if (canvas && canvas.clientWidth > 0) {
+      return gl.drawingBufferWidth / canvas.clientWidth;
+    }
+    return (globalThis as { devicePixelRatio?: number }).devicePixelRatio ?? 1;
+  }
+
+  /**
+   * Hit-test the feature under CSS pixel `(cssX, cssY)`. Renders the layer's
+   * features into an offscreen id buffer (via the subclass {@link drawPickTile}
+   * hook), reads back the cursor pixel and decodes it to an
+   * {@link SttPickResult}. Returns null when the layer isn't pickable, hasn't
+   * rendered yet, or the cursor is over empty space.
+   *
+   * The host render target + viewport are captured and restored, so calling
+   * `pick()` never disturbs the visible frame. Browser-verify-only (needs a
+   * live GL FBO + `readPixels`); its CPU pieces are unit-tested.
+   */
+  pick(cssX: number, cssY: number): SttPickResult | null {
+    const gl = this.gl;
+    if (!gl || !this.map || !this.tileset) return null;
+    if (!this.supportsPicking() || !this.drawPickTile) return null;
+    const matrix = this.lastMatrix;
+    if (!matrix) return null; // no frame rendered yet.
+
+    const provenance = this.buildPickProvenance(gl);
+    if (provenance.length === 0) return null;
+
+    // Capture the host's render target + viewport (MapLibre may be draping into
+    // an offscreen target under terrain/globe) so we restore them afterwards.
+    const prevFramebuffer = gl.getParameter(
+      gl.FRAMEBUFFER_BINDING,
+    ) as WebGLFramebuffer | null;
+    const prevViewport = gl.getParameter(gl.VIEWPORT) as Int32Array;
+
+    this.ensurePickFbo(gl);
+    const w = this.pickWidth;
+    const h = this.pickHeight;
+    if (w === 0 || h === 0) return null;
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.pickFbo!);
+    gl.viewport(0, 0, w, h);
+    // Ids are exact — no blending, no depth test, clear to the reserved 0.
+    gl.disable(gl.BLEND);
+    gl.disable(gl.DEPTH_TEST);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+
+    const currentTime = this.opts.currentTime;
+    const zoom = Math.floor(this.map.getZoom());
+    for (const e of provenance) {
+      const ctx: DrawContext = {
+        matrix,
+        currentTime,
+        zoom,
+        windowStart:
+          currentTime - e.cache.timeOffset - this.opts.timeWindow / 2,
+        windowEnd: currentTime - e.cache.timeOffset + this.opts.timeWindow / 2,
+      };
+      this.drawPickTile(gl, e.tile, e.layer, e.cache, ctx, e.idBase);
+    }
+    this.unbindVao();
+
+    const dpr = this.resolvePickDpr(gl);
+    const { x, y } = cssToDevicePixel(cssX, cssY, dpr, h);
+    gl.readPixels(x, y, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, this.pickBuffer);
+
+    // Restore the host's render target before returning.
+    gl.bindFramebuffer(gl.FRAMEBUFFER, prevFramebuffer);
+    gl.viewport(prevViewport[0], prevViewport[1], prevViewport[2], prevViewport[3]);
+
+    return this.resolvePick(
+      [this.pickBuffer[0], this.pickBuffer[1], this.pickBuffer[2]],
+      provenance,
+    );
+  }
+
+  // ------------------------------------------------------------------------
   // Internal
   // ------------------------------------------------------------------------
 
@@ -802,40 +1173,21 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
       enablePrefetch: this.opts.enablePrefetch,
       prefetchAhead: this.opts.prefetchAhead,
       prefetchSteps: this.opts.prefetchSteps,
-      getAvailableTiles: (bounds, zoom, timeRange) =>
-        this.archive.getTileIdsInBounds(bounds, zoom, timeRange),
-      getTileData: (id, signal) => this.archive.getTile(id, { signal }),
-      // Route the bulk viewport/prefetch fill through the range coalescer so
-      // a viewport-full of Hilbert-adjacent tiles collapses into a handful of
-      // HTTP Range requests instead of one request per tile. The hooks carry
-      // incremental per-tile delivery (tiles render as their range group
-      // lands) and the fetch-priority hint for lookahead tiers.
-      getTileDataBatch: (tileIds, signal, hooks) =>
-        this.archive.getTiles(tileIds, {
-          signal,
-          onTileReady: hooks?.onTileReady,
-          fetchPriority: hooks?.fetchPriority,
-          // Cross-source EDF (multi-source coordination, Phase 2 §2.8): forward
-          // the tileset's play-head time + travel direction so the archive's
-          // shared scheduler ranks range-groups by distance-to-playhead
-          // comparably ACROSS archives that share this play-head. Without this
-          // link the archive falls back to its byte-order / enqueue-order
-          // sequence (tier-correct, but not true cross-source EDF).
-          playheadTime: hooks?.playheadTime,
-          playheadDirection: hooks?.playheadDirection,
-        }),
-      // Lets the tileset skip giant low-zoom parent-fallback tiles (e.g. a
-      // 14 MB z10 tile under a z14 view) before fetching them. Sync directory
-      // lookup, no I/O.
-      getTileByteSize: (tileId) => this.archive.getTileByteSize(tileId),
+      // Archive-backed fetch callbacks (getAvailableTiles / getTileData /
+      // getTileDataBatch / getTileByteSize / getThroughput). Shared verbatim
+      // with the deck + three adapters via the core tileset-adapter kernel — it
+      // routes the bulk viewport/prefetch fill through the range coalescer,
+      // carries incremental per-tile delivery + the fetch-priority hint, forwards
+      // the cross-source EDF play-head hints, gates giant parent-fallback tiles
+      // via getTileByteSize, and wires the coalesced-range throughput EWMA so
+      // estimateTimeToReadyMs() computes honest ETAs. See
+      // docs/roadmap/renderer-abstraction-2026-06.md.
+      ...makeTilesetCallbacks(this.archive),
       // Buffered-runway threshold events from the tileset's coverage index,
       // forwarded to the app (which routes them into a PlaybackGovernor).
       onBufferChange: (runway) => {
         this.opts.onBufferChange?.(runway);
       },
-      // Wire the archive's coalesced-range throughput EWMA into the tileset
-      // so estimateTimeToReadyMs() can compute honest ETAs.
-      getThroughput: () => this.archive.getThroughputEstimate(),
       onTileLoad: (tile) => {
         this.loadedTiles.set(tileKey(tile.id), tile);
         this.map?.triggerRepaint();

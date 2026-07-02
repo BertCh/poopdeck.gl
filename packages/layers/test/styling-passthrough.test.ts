@@ -226,8 +226,6 @@ async function makePolygonLayer(props: Record<string, any> = {}) {
     filled: true,
     extruded: false,
     elevation: 0,
-    lineWidth: 1,
-    lineWidthUnits: 'pixels',
     ...props,
   };
   layer._currentTime = 0;
@@ -241,8 +239,8 @@ async function makePolygonLayer(props: Record<string, any> = {}) {
 }
 
 async function makeHeatmapLayer(props: Record<string, any> = {}) {
-  const { HeatmapLayer } = await import('../src/layers/summary/heatmap-layer');
-  const layer: any = Object.create((HeatmapLayer as any).prototype);
+  const { AnimatedHeatmapLayer } = await import('../src/layers/summary/heatmap-layer');
+  const layer: any = Object.create((AnimatedHeatmapLayer as any).prototype);
   layer.props = {
     id: 'hm',
     timeWindow: 1000,

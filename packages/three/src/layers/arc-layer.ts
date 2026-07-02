@@ -19,6 +19,7 @@
 import { Mesh, InstancedBufferAttribute, Box3, Vector3, Sphere } from 'three';
 import type { Tile } from '@poopdeck.gl/core';
 import { BaseSttLayer, type SttLayerContext } from './layer';
+import { resolveTimeWindow, type ThreeTimeWindowOptions } from '../lib/time-window';
 import {
   buildArcBuffers,
   type ArcColorMode,
@@ -32,7 +33,7 @@ import {
   type ArcShape,
 } from '../tsl/arc-material';
 
-export interface ArcLayerOptions {
+export interface ArcLayerOptions extends ThreeTimeWindowOptions {
   id?: string;
   /** parabolic flat-map raised arc | greatCircle spherical (globe). @default 'parabolic' */
   shape?: ArcShape;
@@ -55,10 +56,8 @@ export interface ArcLayerOptions {
   elevationProperty?: string | null;
   elevationScale?: number;
   zLift?: number;
-  // time window params
-  windowHalf?: number;
-  fadeIn?: number;
-  fadeOut?: number;
+  // time window params (full-width `timeWindow` + `fadeIn/OutDuration`, plus the
+  // lower-level `windowHalf`/`fadeIn`/`fadeOut` aliases) via ThreeTimeWindowOptions.
 }
 
 export class ArcLayer extends BaseSttLayer {
@@ -143,11 +142,7 @@ export class ArcLayer extends BaseSttLayer {
     if (!this.bundle) return;
     updateArcUniforms(this.bundle, {
       relativeCurrentTime: this.relativeTime(absoluteTimeMs),
-      params: {
-        windowHalf: this.opts.windowHalf ?? 0,
-        fadeIn: this.opts.fadeIn ?? 0,
-        fadeOut: this.opts.fadeOut ?? 0,
-      },
+      params: resolveTimeWindow(this.opts, 0),
       widthPx: this.opts.widthPx ?? 2,
       opacity: this.opts.opacity ?? 1,
       viewport: this.viewport,

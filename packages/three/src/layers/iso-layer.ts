@@ -17,6 +17,7 @@ import { Group, LineSegments, BufferGeometry, Float32BufferAttribute } from 'thr
 import type { Tile, BinaryFeatures } from '@poopdeck.gl/core';
 import { GeometryType } from '@poopdeck.gl/core';
 import { BaseSttLayer, type SttLayerContext } from './layer';
+import { resolveTimeWindow, type ThreeTimeWindowOptions } from '../lib/time-window';
 import { resolveCategoryColor, type RGBA } from '../lib/color';
 import {
   createIsoLineMaterial,
@@ -24,7 +25,7 @@ import {
   type IsoLineMaterialBundle,
 } from '../tsl/iso-line-material';
 
-export interface IsoLayerOptions {
+export interface IsoLayerOptions extends ThreeTimeWindowOptions {
   id?: string;
   /** Categorical property selecting the contour colour. @default 'density_band' */
   colorProperty?: string;
@@ -36,11 +37,9 @@ export interface IsoLayerOptions {
   elevationScale?: number;
   /** Height above ground for the flat (non-iso3d) case (metres). @default 0.05 */
   zLift?: number;
-  /** Half-width of the playhead time window (ms). @default 130 */
-  windowHalf?: number;
-  /** Edge fade-in / fade-out ramp (ms). @default 0 */
-  fadeIn?: number;
-  fadeOut?: number;
+  // Full-width `timeWindow` + `fadeIn/OutDuration` and the lower-level
+  // `windowHalf` (@default 130) / `fadeIn` / `fadeOut` aliases come from
+  // ThreeTimeWindowOptions.
   opacity?: number;
 }
 
@@ -52,13 +51,16 @@ export class IsoLayer extends BaseSttLayer {
   private lines: LineSegments;
   private bundle: IsoLineMaterialBundle;
 
-  private readonly opts: Required<Omit<IsoLayerOptions, 'id'>>;
+  private readonly opts: Required<
+    Omit<IsoLayerOptions, 'id' | 'timeWindow' | 'fadeInDuration' | 'fadeOutDuration'>
+  >;
 
   constructor(options: IsoLayerOptions = {}) {
     super();
     this.id = options.id ?? 'iso';
     this.object.name = this.id;
     this.object.frustumCulled = false;
+    const tw = resolveTimeWindow(options, 130);
     this.opts = {
       colorProperty: options.colorProperty ?? 'density_band',
       colorMapping: options.colorMapping ?? {},
@@ -66,9 +68,9 @@ export class IsoLayer extends BaseSttLayer {
       elevationProperty: options.elevationProperty ?? null,
       elevationScale: options.elevationScale ?? 1,
       zLift: options.zLift ?? 0.05,
-      windowHalf: options.windowHalf ?? 130,
-      fadeIn: options.fadeIn ?? 0,
-      fadeOut: options.fadeOut ?? 0,
+      windowHalf: tw.windowHalf,
+      fadeIn: tw.fadeIn,
+      fadeOut: tw.fadeOut,
       opacity: options.opacity ?? 0.95,
     };
     this.bundle = createIsoLineMaterial();

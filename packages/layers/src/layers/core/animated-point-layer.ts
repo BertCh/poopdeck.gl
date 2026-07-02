@@ -74,8 +74,10 @@ import {
 } from '../../lib/style-digest';
 import { resolveAccessorAlias } from '../../lib/accessor-alias';
 import type { ColorAccessorValue, NumericAccessorValue } from '../../lib/accessor-alias';
-import { getFeatureProperties } from '@poopdeck.gl/core';
+import { getFeatureProperties, DEFAULT_CATEGORICAL_PALETTE } from '@poopdeck.gl/core';
 import type { Tile, TileId, Layer as TileLayer, BinaryFeatures } from '@poopdeck.gl/core';
+import { expandCategoricalColors as coreExpandCategoricalColors } from '@poopdeck.gl/core/style';
+import type { RGBA255 } from '@poopdeck.gl/core/style';
 
 const DEBUG = false;
 
@@ -344,19 +346,9 @@ export interface _AnimatedPointLayerProps {
 /** Complete props accepted by {@link AnimatedPointLayer}. */
 export type AnimatedPointLayerProps = _AnimatedPointLayerProps & SpatioTemporalLayerProps;
 
-// Default color palette for categorical data
-const DEFAULT_PALETTE: Color[] = [
-  [31, 119, 180, 255],
-  [255, 127, 14, 255],
-  [44, 160, 44, 255],
-  [214, 39, 40, 255],
-  [148, 103, 189, 255],
-  [140, 86, 75, 255],
-  [227, 119, 194, 255],
-  [127, 127, 127, 255],
-  [188, 189, 34, 255],
-  [23, 190, 207, 255],
-];
+// Default color palette for categorical data — the single source of truth in
+// @poopdeck.gl/core, shared with the maplibre adapter.
+const DEFAULT_PALETTE: Color[] = DEFAULT_CATEGORICAL_PALETTE;
 
 /**
  * Per-tile prepared data. Cached so the `data` object reference handed to
@@ -477,33 +469,6 @@ function deriveSlabSchema(built: PreparedTile): SlabSchema {
 function makeTileKey(tile: Tile, layer: TileLayer): string {
   const { z, x, y, t } = tile.id;
   return `${z}/${x}/${y}/${t}:${layer.name}`;
-}
-
-/**
- * Expand category indices into a flat Uint8Array RGBA buffer using an
- * explicit colorMapping (category STRING → Color). The CPU path is
- * unavoidable here because the GPU palette texture can only be indexed by
- * a numeric category id, not by an arbitrary string key.
- */
-function expandMappedColors(
-  indices: Uint16Array,
-  categories: readonly string[],
-  count: number,
-  mapping: Record<string, Color>,
-  fallback: Color,
-): Uint8Array {
-  const out = new Uint8Array(count * 4);
-  for (let i = 0; i < count; i++) {
-    const idx = indices[i];
-    const cat = idx === 0xffff ? undefined : categories[idx];
-    const color = (cat !== undefined && mapping[cat]) || fallback;
-    const o = i * 4;
-    out[o] = color[0];
-    out[o + 1] = color[1];
-    out[o + 2] = color[2];
-    out[o + 3] = color[3] ?? 255;
-  }
-  return out;
 }
 
 /**
@@ -940,8 +905,14 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
     let positions: Float64Array;
     if (srcDims === 3) {
       if (elevValues) {
-        positions = Float64Array.from(binary.positions.subarray(0, count * 3));
+        // Single pass: copy x/y from the Arrow buffer and bake in the
+        // elevation-column z, so the source buffer is never mutated and we
+        // avoid a second sweep over `positions`.
+        const src = binary.positions;
+        positions = new Float64Array(count * 3);
         for (let i = 0; i < count; i++) {
+          positions[i * 3] = src[i * 3];
+          positions[i * 3 + 1] = src[i * 3 + 1];
           positions[i * 3 + 2] = elevValues[i] * elevScale;
         }
       } else {
@@ -1003,13 +974,15 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
           const fallback =
             this.props.colorMappingDefault ?? ([0, 0, 0, 0] as Color);
           attributes.getFillColor = {
-            value: expandMappedColors(
-              cat.indices,
-              cat.categories,
-              count,
-              this.props.colorMapping,
-              fallback,
-            ),
+            value: coreExpandCategoricalColors(
+              binary,
+              {
+                property: fillColorProp,
+                colorMapping: this.props.colorMapping as Record<string, RGBA255>,
+                colorMappingDefault: fallback as RGBA255,
+              },
+              'u8',
+            ) as Uint8Array,
             size: 4,
             normalized: true,
           };

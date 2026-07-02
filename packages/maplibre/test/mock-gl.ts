@@ -232,6 +232,25 @@ export function makeMockGl(
     clearColor: vi.fn(),
     uniform1i: vi.fn(),
     uniform3fv: vi.fn(),
+
+    // Single-pixel readback for the id-buffer picker. Real GL fills `out` from
+    // the bound framebuffer; the mock instead copies whatever `_readPixelsValue`
+    // the test staged, so the picker's decode/join can be exercised without a
+    // GPU. Defaults to the cleared "no hit" pixel (all zero).
+    _readPixelsValue: new Uint8Array([0, 0, 0, 0]),
+    readPixels: vi.fn(
+      (
+        _x: number,
+        _y: number,
+        _w: number,
+        _h: number,
+        _format: number,
+        _type: number,
+        out: Uint8Array,
+      ) => {
+        out.set(gl._readPixelsValue.subarray(0, out.length));
+      },
+    ),
   };
 
   return gl;

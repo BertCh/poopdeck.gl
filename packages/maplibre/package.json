@@ -18,11 +18,13 @@
   },
   "files": [
     "dist",
-    "src"
+    "src",
+    "LICENSE"
   ],
   "scripts": {
     "build": "tsc",
-    "test": "vitest run --passWithNoTests",
+    "prepublishOnly": "pnpm run build",
+    "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "clean": "rm -rf dist tsconfig.tsbuildinfo"
   },
@@ -38,6 +40,15 @@
     "maplibre-gl": "^4.7.0",
     "typescript": "^5.4.0",
     "vitest": "^1.6.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/BertCh/spatiotemporal-tiles.git",
+    "directory": "packages/maplibre"
+  },
+  "homepage": "https://github.com/BertCh/spatiotemporal-tiles/tree/main/packages/maplibre#readme",
+  "bugs": {
+    "url": "https://github.com/BertCh/spatiotemporal-tiles/issues"
   },
   "keywords": [
     "stt",

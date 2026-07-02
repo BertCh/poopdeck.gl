@@ -15,7 +15,7 @@
  */
 
 import type { Tile, Layer as STTLayer } from '@poopdeck.gl/core';
-import { GeometryType } from '@poopdeck.gl/core';
+import { GeometryType, DEFAULT_LINE_PALETTE as CORE_LINE_PALETTE } from '@poopdeck.gl/core';
 import {
   STTBaseLayer,
   type STTBaseLayerOptions,
@@ -27,19 +27,9 @@ import {
 import { lngLatToMercator } from '../lib/projection';
 import { TIME_WINDOW_GLSL } from '../shaders/time-window.glsl';
 
-// Default categorical palette (matches @poopdeck.gl/layers AnimatedPathLayer's).
-const DEFAULT_LINE_PALETTE: ReadonlyArray<RGBA8> = [
-  [0, 150, 255, 255],
-  [255, 127, 14, 255],
-  [44, 160, 44, 255],
-  [214, 39, 40, 255],
-  [148, 103, 189, 255],
-  [140, 86, 75, 255],
-  [227, 119, 194, 255],
-  [127, 127, 127, 255],
-  [188, 189, 34, 255],
-  [23, 190, 207, 255],
-];
+// Shared with @poopdeck.gl/layers AnimatedPathLayer (single source of truth in
+// @poopdeck.gl/core).
+const DEFAULT_LINE_PALETTE: ReadonlyArray<RGBA8> = CORE_LINE_PALETTE;
 
 export interface STTLineLayerOptions extends STTBaseLayerOptions {
   /** Line color as [r, g, b, a] in the 0–1 range. Ignored when `colorProperty` is set. */
@@ -52,6 +42,16 @@ export interface STTLineLayerOptions extends STTBaseLayerOptions {
   colorProperty?: string;
   /** Palette used with `colorProperty` (0–255 RGBA). */
   colorPalette?: ReadonlyArray<RGBA8>;
+  /**
+   * Keyed category-STRING → 0–255 RGBA color map (deck/three `colorMapping`
+   * parity). When set, `colorProperty`'s category NAME is looked up here so a
+   * category renders the same color in every tile regardless of per-tile
+   * dictionary order. Unmapped categories fall back to
+   * {@link colorMappingDefault}, then to the positional `colorPalette`.
+   */
+  colorMapping?: Record<string, RGBA8>;
+  /** Color for categories absent from {@link colorMapping}. */
+  colorMappingDefault?: RGBA8;
   /** Drive per-feature pixel width from a numeric property name. */
   widthProperty?: string;
 }
@@ -161,6 +161,8 @@ export class STTLineLayer extends STTBaseLayer {
     colorProperty?: string;
     widthProperty?: string;
     colorPalette: ReadonlyArray<RGBA8>;
+    colorMapping?: Record<string, RGBA8>;
+    colorMappingDefault?: RGBA8;
   };
   private handles?: LineProgramHandles;
 
@@ -173,6 +175,8 @@ export class STTLineLayer extends STTBaseLayer {
       colorProperty: opts.colorProperty,
       widthProperty: opts.widthProperty,
       colorPalette: opts.colorPalette ?? DEFAULT_LINE_PALETTE,
+      colorMapping: opts.colorMapping,
+      colorMappingDefault: opts.colorMappingDefault,
     };
   }
 
@@ -266,6 +270,8 @@ export class STTLineLayer extends STTBaseLayer {
           f,
           this.lineOpts.colorProperty,
           this.lineOpts.colorPalette,
+          this.lineOpts.colorMapping,
+          this.lineOpts.colorMappingDefault,
         )
       : null;
     const featureWidths = this.lineOpts.widthProperty

@@ -6,6 +6,10 @@
  * SplatLayer — render a spatiotemporal point cloud as **oriented anisotropic
  * Gaussian surfels** that evolve over time: a "formal" splat for STT.
  *
+ * Renderer parity: `@poopdeck.gl/three`'s `SurfelLayer` is the Three analogue of
+ * this layer — same primitive, same `--surfel`-baked columns (see that class's
+ * docstring for the cross-reference back here).
+ *
  * Where {@link AnimatedPointLayer} `splat: true` draws each return as a soft
  * round billboard (an isotropic point splat — no orientation, no surface), this
  * layer draws each feature as a real oriented elliptical disk lying in its local

@@ -61,6 +61,14 @@ export {
   type TimeFilterMode,
   type TimeFilterParams,
 } from './tsl/time-filter-math';
+// Time-window vocabulary bridge: lets every three layer ALSO accept deck's /
+// maplibre's full-width `timeWindow` + `fadeIn/OutDuration`, converting to the
+// internal half-width `windowHalf`/`fadeIn`/`fadeOut` (which stay as aliases).
+export {
+  resolveTimeWindow,
+  type ThreeTimeWindowOptions,
+  type ResolvedTimeWindow,
+} from './lib/time-window';
 export {
   TimeFilterUniforms,
   timeFilterAlphaNode,
@@ -110,6 +118,7 @@ export {
 export { makeBillboardQuadGeometry } from './geometry/billboard-quad';
 export {
   createPointMaterial,
+  createPointIdMaterial,
   updatePointUniforms,
   PointUniforms,
   type PointMaterialOptions,
@@ -119,6 +128,7 @@ export {
 export { PointCloudLayer, type PointCloudLayerOptions } from './layers/point-cloud-layer';
 export {
   buildPointBuffers,
+  pointTileKey,
   type PointBuffers,
   type PointBufferOptions,
   type PointColorMode,
@@ -424,9 +434,18 @@ export {
   type PickBox,
   type SttPickable,
 } from './lib/box-pick';
+// Merged-buffer point picking (§5.3): pure index → SttPickResult resolution.
+export {
+  resolvePointPick,
+  parsePointTileKey,
+  type ResolvePointPickParams,
+} from './lib/point-pick';
 
 // ─── Playback governor registration ────────────────────────────────────────────
 export {
   createCompleteBufferSource,
   type SttSourceRegistry,
 } from './lib/source-registry';
+
+// ─── Backend capability descriptor (renderer-abstraction Phase 5) ───────────────
+export { threeBackend } from './backend-descriptor';

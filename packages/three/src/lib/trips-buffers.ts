@@ -29,6 +29,7 @@
 
 import type { BinaryFeatures, Tile } from '@poopdeck.gl/core';
 import { GeometryType } from '@poopdeck.gl/core';
+import { synthesizeVertexTimes } from '@poopdeck.gl/core/trips';
 import type { Projection } from '../projection/local-enu';
 import {
   resolveCategoryColor,
@@ -37,6 +38,10 @@ import {
   type CategoricalColorSpec,
   type RampColorSpec,
 } from './color';
+
+// Moved to the framework-free kernel (`core/trips`) when Cesium became its
+// third consumer; re-exported so existing three importers keep resolving.
+export { synthesizeVertexTimes };
 
 export type TripsColorMode =
   | ({ type: 'categorical' } & CategoricalColorSpec)
@@ -64,79 +69,6 @@ export interface TripsBuffers {
   timeB: Float32Array; // float, relative — per-vertex trail time at endpoint B
   origin: [number, number, number];
   bbox: { min: [number, number, number]; max: [number, number, number] } | null;
-}
-
-const EARTH_RADIUS_M = 6_371_000;
-
-/** Haversine distance in metres. Inputs in degrees. */
-function haversineMeters(lon1: number, lat1: number, lon2: number, lat2: number): number {
-  const dLat = ((lat2 - lat1) * Math.PI) / 180;
-  const dLon = ((lon2 - lon1) * Math.PI) / 180;
-  const lat1Rad = (lat1 * Math.PI) / 180;
-  const lat2Rad = (lat2 * Math.PI) / 180;
-  const sinDLat = Math.sin(dLat / 2);
-  const sinDLon = Math.sin(dLon / 2);
-  const a = sinDLat * sinDLat + Math.cos(lat1Rad) * Math.cos(lat2Rad) * sinDLon * sinDLon;
-  return 2 * EARTH_RADIUS_M * Math.asin(Math.sqrt(a));
-}
-
-/**
- * Per-vertex time fallback when the tile lacks `vertexTimestamps`. Distributes
- * each feature's `[startTime,endTime]` across its vertices by cumulative
- * haversine distance. Verbatim port of deck `synthesizeVertexTimes` — output is
- * tile-relative (same frame as `startTimes`/`endTimes`).
- */
-export function synthesizeVertexTimes(binary: BinaryFeatures): Float32Array {
-  const startIndices = binary.startIndices!;
-  const totalVerts = startIndices[binary.featureCount];
-  const out = new Float32Array(totalVerts);
-  const dims = binary.positionDimensions ?? 2;
-  const positions = binary.positions;
-
-  // Reused per-feature distance buffer (grow-only) — one allocation per tile.
-  let cum = new Float64Array(0);
-
-  for (let i = 0; i < binary.featureCount; i++) {
-    const v0 = startIndices[i];
-    const v1 = startIndices[i + 1];
-    const numVerts = v1 - v0;
-    const featureStart = binary.startTimes ? binary.startTimes[i] : 0;
-    const featureEnd = binary.endTimes ? binary.endTimes[i] : 0;
-    const duration = featureEnd - featureStart;
-
-    if (numVerts <= 1) {
-      if (numVerts === 1) out[v0] = featureStart;
-      continue;
-    }
-    if (duration <= 0) {
-      for (let v = 0; v < numVerts; v++) out[v0 + v] = featureStart;
-      continue;
-    }
-
-    if (cum.length < numVerts) cum = new Float64Array(numVerts);
-    cum[0] = 0;
-    let total = 0;
-    for (let v = 1; v < numVerts; v++) {
-      const aBase = (v0 + v - 1) * dims;
-      const bBase = (v0 + v) * dims;
-      total += haversineMeters(
-        positions[aBase],
-        positions[aBase + 1],
-        positions[bBase],
-        positions[bBase + 1],
-      );
-      cum[v] = total;
-    }
-
-    if (total <= 0) {
-      for (let v = 0; v < numVerts; v++) out[v0 + v] = featureStart;
-      continue;
-    }
-    for (let v = 0; v < numVerts; v++) {
-      out[v0 + v] = featureStart + (cum[v] / total) * duration;
-    }
-  }
-  return out;
 }
 
 function featureColor(b: BinaryFeatures, f: number, mode: TripsColorMode): RGBA {

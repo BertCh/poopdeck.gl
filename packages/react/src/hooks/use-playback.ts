@@ -70,20 +70,11 @@ export interface PlaybackState {
   play: () => void;
   pause: () => void;
   /**
-   * Multi-source registration API (Phase 0): wire EACH layer's tileset into the
-   * governor as a classified source (field/primary required, overlays optional)
-   * so the clock waits for every required source. Renderers should prefer this
-   * over the single-source {@link handleTilesetReady} below.
+   * Multi-source registration API: wire EACH layer's tileset into the governor
+   * as a classified source (field/primary required, overlays optional) so the
+   * clock waits for every required source.
    */
   registry: SourceRegistry;
-  /**
-   * @deprecated Single-source plumbing — hands ONE tileset to the governor as
-   * the required `'default'` source (clears any other sources). Kept for
-   * single-layer surfaces that have not migrated to {@link registry}.
-   */
-  handleTilesetReady: (tileset: BufferSource) => void;
-  /** @deprecated See {@link PlaybackState.handleTilesetReady}. */
-  handleBufferChange: (runway: BufferedRunway) => void;
   handleOverviewPreload: (result: OverviewPreloadResult) => void;
 }
 
@@ -122,7 +113,7 @@ export function usePlayback(options: UsePlaybackOptions = {}): PlaybackState {
   const [speedMultiplier, setSpeedMultiplier] = useState(1.0);
   const [autoSpeed, setAutoSpeed] = useState(false);
 
-  // ── Playback governor (player-buffering WS-B) ──────────────────────────────
+  // ── Playback governor (docs/roadmap/playback-and-loading.md) ───────────────
   // One governor per mounted demo, wrapping the shared TimeController: play /
   // pause / seek all route through it so playback gates on the tileset's
   // buffered runway (start gate, mid-playback stall, post-seek gate) instead
@@ -269,9 +260,9 @@ export function usePlayback(options: UsePlaybackOptions = {}): PlaybackState {
     [timeController, baseAnimationSpeed],
   );
 
-  // ── Opt-in Auto speed (player-buffering WS-D) ──────────────────────────────
+  // ── Opt-in Auto speed (docs/roadmap/playback-and-loading.md) ───────────────
   // While Auto is selected, apply the governor's sustainable-speed suggestion
-  // through the shared asymmetric policy (player-buffering §2, after hls.js
+  // through the shared asymmetric policy (after hls.js
   // ABR's 0.95-down / 0.7-up): DOWNSHIFTS apply immediately with no deadband
   // — on the 5 s cadence AND the moment the governor enters a gate
   // ('waiting'), since a gate entry means the current speed is outrunning the
@@ -309,23 +300,10 @@ export function usePlayback(options: UsePlaybackOptions = {}): PlaybackState {
 
   const handleAutoSpeedSelect = useCallback(() => setAutoSpeed(true), []);
 
-  // Governor plumbing for the STT layers: the tileset (the BufferSource)
-  // arrives async after archive init; buffer-runway events route into the
-  // governor for immediate gate/stall evaluation.
-  const handleTilesetReady = useCallback((tileset: BufferSource) => {
-    tilesetRef.current = tileset;
-    governorRef.current?.setSource(tileset);
-  }, []);
-  const handleBufferChange = useCallback(
-    (runway: BufferedRunway) => governorRef.current?.notifyBufferChange(runway),
-    [],
-  );
-
-  // Multi-source registration (Phase 0): each layer registers its own tileset
+  // Governor plumbing for the STT layers: each layer registers its own tileset
   // as a classified governor source. `tilesetRef` tracks the FIRST required
   // source so the cube lattice / overview pollers (which read one BufferSource)
-  // still have a handle even when the field arrives via the registry rather than
-  // the legacy single-source path. The governor's removeSource/addSource are
+  // still have a handle. The governor's removeSource/addSource are
   // re-evaluation points; on a buffer change we forward to notifyBufferChange
   // (the governor re-probes every source itself — the runway arg is advisory).
   const registry = useMemo<SourceRegistry>(
@@ -345,7 +323,7 @@ export function usePlayback(options: UsePlaybackOptions = {}): PlaybackState {
     [],
   );
 
-  // ── Storyboard preview tier (player-buffering WS-C4) ───────────────────────
+  // ── Storyboard preview tier (docs/roadmap/playback-and-loading.md) ─────────
   // The layer preloads + pins the coarsest tiles across the full time range
   // (budget-gated per dataset) so scrubbing always shows a coarse preview.
   // The outcome surfaces as a one-line stat in the perf HUD.
@@ -379,8 +357,6 @@ export function usePlayback(options: UsePlaybackOptions = {}): PlaybackState {
     play,
     pause,
     registry,
-    handleTilesetReady,
-    handleBufferChange,
     handleOverviewPreload,
   };
 }

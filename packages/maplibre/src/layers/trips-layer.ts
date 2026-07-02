@@ -14,7 +14,7 @@
  */
 
 import type { Tile, Layer as STTLayer } from '@poopdeck.gl/core';
-import { GeometryType } from '@poopdeck.gl/core';
+import { GeometryType, DEFAULT_TRIPS_PALETTE as CORE_TRIPS_PALETTE } from '@poopdeck.gl/core';
 import {
   STTBaseLayer,
   type STTBaseLayerOptions,
@@ -26,13 +26,9 @@ import {
 import { lngLatToMercator } from '../lib/projection';
 import { TIME_TRAIL_GLSL } from '../shaders/time-window.glsl';
 
-const DEFAULT_TRIPS_PALETTE: ReadonlyArray<RGBA8> = [
-  [253, 128, 93, 255],
-  [0, 150, 255, 255],
-  [44, 160, 44, 255],
-  [214, 39, 40, 255],
-  [148, 103, 189, 255],
-];
+// Shared with @poopdeck.gl/layers AnimatedTripsLayer (single source of truth in
+// @poopdeck.gl/core).
+const DEFAULT_TRIPS_PALETTE: ReadonlyArray<RGBA8> = CORE_TRIPS_PALETTE;
 
 export interface STTTripsLayerOptions extends STTBaseLayerOptions {
   /** Constant line colour (overridden by colorProperty). */

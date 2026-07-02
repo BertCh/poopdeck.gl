@@ -62,7 +62,7 @@ import type {
   LayerContext,
 } from '@deck.gl/core';
 import { QuadkeyLayer } from '@deck.gl/geo-layers';
-import { getFeatureProperties } from '@poopdeck.gl/core';
+import { getFeatureProperties, DEFAULT_SUMMARY_COLOR_RANGE } from '@poopdeck.gl/core';
 import type {
   ArchiveMetadata,
   BinaryFeatures,
@@ -129,14 +129,9 @@ export interface _QuadbinSummaryLayerProps {
 export type QuadbinSummaryLayerProps = _QuadbinSummaryLayerProps &
   SpatioTemporalLayerProps;
 
-const DEFAULT_COLOR_RANGE: Color[] = [
-  [255, 255, 204, 220],
-  [199, 233, 180, 230],
-  [127, 205, 187, 235],
-  [65, 182, 196, 240],
-  [44, 127, 184, 245],
-  [37, 52, 148, 255],
-];
+// Shared with H3SummaryLayer via @poopdeck.gl/core (audit F2) so the two
+// summary-tier ramps can't drift apart.
+const DEFAULT_COLOR_RANGE = DEFAULT_SUMMARY_COLOR_RANGE as Color[];
 
 /**
  * Cached per-tile rows array. We keep the source `BinaryFeatures` reference
