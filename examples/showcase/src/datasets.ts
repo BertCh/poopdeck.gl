@@ -4254,17 +4254,21 @@ const HELD_BACK_AV_MODES = /-(scan|world)$/;
 // filtered on the remote deploy even though the Argoverse `-stage` mode shipped.
 const WAYMO_LOCAL_ONLY = /^waymo-/;
 
-// (2026-07-02) The former LOCAL_ONLY_DATASETS gate is gone: the 6 Argoverse
-// `-lod` zoom-LOD bundles and the newer BIXI demos (streets-flow / corridors /
-// points / live) are now R2-synced, so every registered non-Waymo dataset
-// resolves remotely. If a future dataset is registered before its archives are
-// synced, reintroduce the gate: filter its id whenever DATA_IS_REMOTE so the
-// public site never links (and 404s) it.
+// (2026-07-02) The BIXI demos (streets-flow / corridors / points / live via
+// its bixi-live-flow stem) are R2-synced and un-gated — verified 200 on
+// tiles.poopdeck.gl. The Argoverse `-lod` zoom-LOD variants stay gated: their
+// local `argoverse-*-lod/` dirs are extractor working trees (ego/lidar
+// parquet), the STT bundles were never built, and all six manifests 404 on
+// R2. Remove an id from this pattern only after its archive is built AND
+// synced (probe `<base>/data/<stem>/manifest.json` first).
+const LOCAL_ONLY_DATASETS = /^argoverse-.+-lod$/;
+
 const DATA_IS_REMOTE = DATA_BASE_URL !== '';
 
 export const datasets: Dataset[] = [...rawDatasets, ...coloredSplatVariants, ...stageVariants]
   .filter((d) => !HELD_BACK_AV_MODES.test(d.id))
   .filter((d) => !(DATA_IS_REMOTE && WAYMO_LOCAL_ONLY.test(d.id)))
+  .filter((d) => !(DATA_IS_REMOTE && LOCAL_ONLY_DATASETS.test(d.id)))
   .map((d) => ({
   ...d,
   url: resolveDataUrl(d.url),
