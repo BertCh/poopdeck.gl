@@ -23,7 +23,7 @@ see [Custom Data](#custom-data-using-stt-build) below.
 2. **Build the tools:**
    ```bash
    cargo install --path crates/stt-generate
-   cargo install --path crates/stt-build
+   cargo install --path crates/spatiotemporal-tiles   # stt-build + the other CLIs
    ```
 
 ## Quick Start
@@ -687,8 +687,12 @@ cd examples/showcase && pnpm dev
 ### stt-build Not Found
 
 ```bash
-cargo install --path crates/stt-build
+cargo install --path crates/spatiotemporal-tiles
 ```
+
+(The `stt-build` binary lives in the `spatiotemporal-tiles` facade crate;
+`crates/stt-build` is the library only. If an old source install owns the
+binary name, add `--force`.)
 
 ### Out of Memory
 

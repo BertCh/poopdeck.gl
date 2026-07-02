@@ -59,6 +59,14 @@ export interface PlaybackState {
   isPlaying: boolean;
   bufferState: PlaybackGovernorState;
   speedMultiplier: number;
+  /**
+   * Same value as `speedMultiplier`, under `PlaybackControls`' prop name —
+   * together with the echoed `timeRange` this makes
+   * `<PlaybackControls {...pb} />` just work.
+   */
+  currentSpeedMultiplier: number;
+  /** The `timeRange` option echoed back (for spreading into PlaybackControls). */
+  timeRange?: { start: number; end: number };
   autoSpeed: boolean;
   overviewPreload: OverviewPreloadResult | null;
   baseAnimationSpeed: number;
@@ -88,7 +96,11 @@ export interface UsePlaybackOptions {
   baseSpeed?: number;
   /** Loop at the range end (default true). */
   loop?: boolean;
-  /** Initial playhead; defaults to the range start. */
+  /**
+   * Initial playhead (clamped into `timeRange` when both are given); defaults
+   * to the range start. Mount-time only — a later `timeRange` change resets
+   * the playhead to the new range start.
+   */
   initialTime?: number;
 }
 
@@ -161,8 +173,19 @@ export function usePlayback(options: UsePlaybackOptions = {}): PlaybackState {
     return () => governor.off("statechange", onStateChange);
   }, [governor]);
 
+  // Track the range VALUE actually applied so the reset below runs only when
+  // the range genuinely changes — `governor` must stay a dep (a range swap has
+  // to drop the old source), but the governor's async arrival re-fires this
+  // effect on mount with the same range, and an unguarded body would reset the
+  // playhead to rangeStart, silently clobbering the constructor's
+  // `initialTime`.
+  const appliedRangeRef = useRef<{ start: number; end: number } | null>(null);
   useEffect(() => {
     if (rangeStart != null && rangeEnd != null) {
+      const prev = appliedRangeRef.current;
+      if (prev && prev.start === rangeStart && prev.end === rangeEnd) return;
+      const firstApply = prev == null;
+      appliedRangeRef.current = { start: rangeStart, end: rangeEnd };
       // Drop the previous range's tileset before resetting the clock — the
       // layer finalizes it during its own re-init, and the governor must not
       // query a finalized source. The new tileset re-attaches via
@@ -171,14 +194,22 @@ export function usePlayback(options: UsePlaybackOptions = {}): PlaybackState {
       governor?.requestPause();
       governor?.setSource(null);
       timeController.setTimeRange({ start: rangeStart, end: rangeEnd });
-      timeController.setTime(rangeStart);
+      // The mount-time application honours `initialTime` (clamped into range);
+      // a LATER range change is a dataset swap and starts at the new range
+      // start — initialTime is a mount-time concept.
+      const startAt =
+        firstApply && initialTime != null
+          ? Math.min(Math.max(initialTime, rangeStart), rangeEnd)
+          : rangeStart;
+      timeController.setTime(startAt);
       timeController.setSpeed(baseAnimationSpeed * speedMultiplier);
       setIsPlaying(false);
       setSpeedMultiplier(1.0);
       setAutoSpeed(false);
     }
-    // speedMultiplier is read for the speed reset but deliberately not a dep —
-    // this effect must run only on range/speed/controller/governor changes.
+    // speedMultiplier is read for the speed reset and initialTime only on the
+    // first application, but both are deliberately not deps — this effect must
+    // run only on range/speed/controller/governor changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rangeStart, rangeEnd, baseAnimationSpeed, timeController, governor]);
 
@@ -347,6 +378,8 @@ export function usePlayback(options: UsePlaybackOptions = {}): PlaybackState {
     isPlaying,
     bufferState,
     speedMultiplier,
+    currentSpeedMultiplier: speedMultiplier,
+    timeRange,
     autoSpeed,
     overviewPreload,
     baseAnimationSpeed,

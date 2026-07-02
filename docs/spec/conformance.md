@@ -75,8 +75,9 @@ cases.
 ### 2.3 The reference validator
 
 `stt-validate <dataset>` (the `stt-validate` crate) is the executable
-specification of the integrity contract. It accepts a packed dataset directory,
-its `manifest.json`, or a single-file `.stt`, and runs, by cost tier:
+specification of the integrity contract. It accepts a packed dataset directory
+or its `manifest.json` (the single-file `.stt` container is an internal build
+intermediate — spec D3 — and is not accepted), and runs, by cost tier:
 
 **Cheap (all tiles):**
 - **content-addressing integrity** — every `packs/*.sttp` and `index/*.sttd`

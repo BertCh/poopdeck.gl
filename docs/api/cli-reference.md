@@ -1,23 +1,23 @@
 # CLI Reference
 
 The Rust toolchain ships four core binaries. Install them from crates.io
-with `cargo install spatiotemporal-tiles --features cli`, grab a prebuilt
+with `cargo install spatiotemporal-tiles`, grab a prebuilt
 binary from the [GitHub releases page](https://github.com/BertCh/spatiotemporal-tiles/releases)
 (shell/powershell installers included), or build from the repo root with
-`cargo build --release --features cli` (binaries land in `target/release/`).
+`cargo build --release -p spatiotemporal-tiles` (binaries land in
+`target/release/`).
 
 | Binary          | Purpose                                                            |
 | --------------- | ------------------------------------------------------------------ |
 | `stt-build`     | Convert a GeoParquet file **or a PostGIS/DuckDB query** into a packed STT dataset |
 | `stt-generate`  | Download + build the bundled showcase datasets                     |
 | `stt-optimize`  | Analyze an input and recommend `stt-build` flags                   |
-| `stt-validate`  | Verify a packed dataset (or single-file `.stt`), decode every tile |
+| `stt-validate`  | Verify a packed dataset, decode every tile |
 
 A fifth binary — **`stt-serve`** — generates STT tiles on the fly from a live
-PostGIS or DuckDB source (see [below](#stt-serve)). It is included in
-`--features cli`; for a lighter single-backend build use e.g.
-`cargo install spatiotemporal-tiles --features serve-postgres` (skips the
-bundled-DuckDB compile).
+PostGIS or DuckDB source (see [below](#stt-serve)). The default install gives
+it the PostGIS backend; `--features cli` (or `--features serve`) adds the
+embedded-DuckDB backend, a heavy bundled C++ compile.
 
 ---
 
@@ -390,12 +390,10 @@ recipes.
 
 ## `stt-optimize`
 
-Inspects an input and prints recommended `stt-build` flags. `analyze` also
-accepts an existing archive via `--stt` (single-file `.stt` only —
-it does not open packed dataset directories) and supports
-`--format json` / `--output <FILE>` (`-o`) for machine-readable output, plus
-`--verbose` for per-recommendation detail; `recommend` takes the same
-`--output <FILE>`.
+Inspects a GeoParquet input and prints recommended `stt-build` flags.
+`analyze` supports `--format json` / `--output <FILE>` (`-o`) for
+machine-readable output, plus `--verbose` for per-recommendation detail;
+`recommend` takes the same `--output <FILE>`.
 
 ```bash
 stt-optimize analyze --input data.parquet --time-field timestamp \
@@ -414,14 +412,13 @@ recommendations but not compression — the packed format is zstd-only).
 
 ## `stt-validate`
 
-Validates an STT dataset. Accepts the canonical **packed format** — pass
-the dataset directory or its `manifest.json` — or a single-file
-`.stt` archive.
+Validates an STT dataset in the **packed format** — pass the dataset
+directory or its `manifest.json`. (The single-file `.stt` container is an
+internal build intermediate and is not accepted.)
 
 ```bash
 stt-validate my-dataset/ [--json] [--fail-fast] [--skip-decode]
 stt-validate my-dataset/manifest.json
-stt-validate archive.stt
 ```
 
 Checks performed:

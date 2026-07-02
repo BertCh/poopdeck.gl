@@ -134,6 +134,13 @@ export type { ProbeChannel } from './lib/telemetry.js';
 // `onOverviewPreload` callback (re-exported from @poopdeck.gl/core for convenience).
 export type { OverviewPreloadResult } from '@poopdeck.gl/core';
 
+// Governor-wiring callback parameter types: what `onTilesetReady` /
+// `onBufferChange` hand you, re-exported so a consumer can type its handlers
+// (`(tileset: SpatiotemporalTileset & BufferSource) => …`) without adding
+// @poopdeck.gl/core or /playback as a direct dependency.
+export type { SpatiotemporalTileset } from '@poopdeck.gl/core';
+export type { BufferSource, BufferedRunway } from '@poopdeck.gl/playback';
+
 // Accessor-named prop aliases (audit B1): value-domain unions for the
 // upstream-vocabulary props (getFillColor/getColor/getWidth/…) — constant or
 // column-name string; function accessors warn once and are ignored.

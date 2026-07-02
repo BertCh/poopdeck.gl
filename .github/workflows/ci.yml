@@ -41,12 +41,16 @@ jobs:
       # Each published feature combination must compile on its own —
       # feature-unification in the workspace jobs would otherwise hide
       # missing cfg gates until a user hits them.
+      - name: facade lib only (no features)
+        run: cargo check -p spatiotemporal-tiles --no-default-features --locked
+      - name: facade bare serve (both backends)
+        run: cargo check -p spatiotemporal-tiles --no-default-features --features serve --bins --locked
       - name: facade serve-postgres only
-        run: cargo check -p spatiotemporal-tiles --no-default-features --features serve-postgres --locked
+        run: cargo check -p spatiotemporal-tiles --no-default-features --features serve-postgres --bins --locked
       - name: facade serve-duckdb only
-        run: cargo check -p spatiotemporal-tiles --no-default-features --features serve-duckdb --locked
+        run: cargo check -p spatiotemporal-tiles --no-default-features --features serve-duckdb --bins --locked
       - name: facade full cli
-        run: cargo check -p spatiotemporal-tiles --no-default-features --features cli --locked
+        run: cargo check -p spatiotemporal-tiles --no-default-features --features cli --bins --locked
       - name: stt-build without geoparquet
         run: cargo check -p stt-build --no-default-features --locked
 

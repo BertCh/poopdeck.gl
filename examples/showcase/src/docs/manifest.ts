@@ -405,6 +405,13 @@ export const docSections: DocSection[] = [
       "End-to-end recipes: build the showcase datasets, or bring your own data from Python.",
     entries: [
       {
+        slug: "guides/csv-quickstart",
+        file: "guides/csv-quickstart.md",
+        title: "From CSV to an Animated Map",
+        blurb:
+          "The fastest onboarding path: CSV → DuckDB → stt-build → deck.gl + React, all on published packages.",
+      },
+      {
         slug: "guides/data-generation",
         file: "guides/data-generation.md",
         title: "Data Generation",

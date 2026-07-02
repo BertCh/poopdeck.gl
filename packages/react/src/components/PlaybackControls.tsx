@@ -29,7 +29,12 @@ export interface PlaybackControlsProps {
   onSeek: (time: number) => void;
   onSpeedChange: (multiplier: number) => void;
   currentSpeedMultiplier: number;
-  targetPlaybackSeconds: number;
+  /**
+   * How long the full range should take to play at 1× — drives the remaining-
+   * time readout. Default 60. (Matches `usePlayback`'s convention of
+   * `baseSpeed = (end - start) / (target * 1000)`.)
+   */
+  targetPlaybackSeconds?: number;
   /** Whether the opt-in Auto speed mode is active. */
   autoSpeed: boolean;
   /** Select Auto speed mode (any explicit preset/slider choice exits it). */
@@ -204,7 +209,7 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({
   onSeek,
   onSpeedChange,
   currentSpeedMultiplier,
-  targetPlaybackSeconds,
+  targetPlaybackSeconds = 60,
   autoSpeed,
   onAutoSpeedSelect,
   renderPreview,

@@ -21,35 +21,61 @@ deck-free:
 import { HoverPreview } from "@poopdeck.gl/react/hover-preview";
 ```
 
-Components are styled with standard Tailwind utility classes; supply your
-own Tailwind build or override via `className`.
+## Styling
+
+The components render styled after ONE import — no Tailwind required:
+
+```ts
+import "@poopdeck.gl/react/styles.css";
+```
+
+That stylesheet carries the utility classes the components use (compiled at
+package build; **no preflight/reset**, so it can't affect your app's own
+styles) plus defaults for the theme tokens. Re-theme by overriding the
+tokens anywhere in your CSS:
+
+```css
+:root {
+  --accent: #e11d48;        /* play button, active states, scrubber fill */
+  --surface: #16181d;       /* control surfaces */
+  --ink-900: #f5f7fa;       /* strongest text */
+  --ink-500: #9aa3b2;       /* labels */
+  --ink-400: #6b7280;       /* captions */
+  --hairline: #2a2e37;      /* separators / outlines */
+  --accent-soft: rgba(225, 29, 72, 0.12);
+  --page-bg: #0b0d12;
+}
+```
+
+If your app already runs **Tailwind v4**, you can skip the stylesheet and
+generate the classes yourself — Tailwind does not scan `node_modules` by
+default, so register the package explicitly (and define the theme tokens
+above):
+
+```css
+@import "tailwindcss";
+@source "../node_modules/@poopdeck.gl/react/src";
+```
+
+Individual elements also accept `className` overrides.
 
 ## Hello world — usePlayback + PlaybackControls
 
 ```tsx
 import { usePlayback, PlaybackControls } from "@poopdeck.gl/react";
+import "@poopdeck.gl/react/styles.css";
 
 function Transport({ timeRange }: { timeRange: { start: number; end: number } }) {
   const pb = usePlayback({ timeRange, baseSpeed: 3600 });
-
-  return (
-    <PlaybackControls
-      currentTime={pb.currentTime}
-      timeRange={timeRange}
-      isPlaying={pb.isPlaying}
-      bufferState={pb.bufferState}
-      governor={pb.governor}
-      onPlayPause={pb.onPlayPause}
-      onSeek={pb.onSeek}
-      onSpeedChange={pb.onSpeedChange}
-      currentSpeedMultiplier={pb.speedMultiplier}
-      targetPlaybackSeconds={60}
-      autoSpeed={pb.autoSpeed}
-      onAutoSpeedSelect={pb.onAutoSpeedSelect}
-    />
-  );
+  return <PlaybackControls {...pb} />;
 }
 ```
+
+The hook's return is spread-compatible with `PlaybackControls` — it echoes
+`timeRange` and exposes the current speed under both names
+(`speedMultiplier` / `currentSpeedMultiplier`). Every prop can still be
+passed individually when you need to interpose (e.g. wrap `onSeek` to update
+a URL param).
 
 Wire layers into the same playhead via `pb.timeController` (the
 `timeController` prop on any `@poopdeck.gl/layers` layer) and register each

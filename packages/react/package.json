@@ -6,10 +6,13 @@
     "access": "public"
   },
   "type": "module",
-  "sideEffects": false,
+  "sideEffects": [
+    "*.css"
+  ],
   "main": "./dist/index.js",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "style": "./dist/styles.css",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -18,7 +21,8 @@
     "./hover-preview": {
       "types": "./dist/hover-preview.d.ts",
       "default": "./dist/hover-preview.js"
-    }
+    },
+    "./styles.css": "./dist/styles.css"
   },
   "files": [
     "dist",
@@ -28,7 +32,8 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && pnpm run build:css",
+    "build:css": "tailwindcss -i src/styles.css -o dist/styles.css --minify",
     "prepublishOnly": "pnpm run build",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -56,6 +61,8 @@
   "devDependencies": {
     "@deck.gl/core": "^9.3.2",
     "@deck.gl/react": "^9.3.2",
+    "@tailwindcss/cli": "^4.1.0",
+    "tailwindcss": "^4.1.0",
     "@testing-library/dom": "^10.4.0",
     "@testing-library/react": "^16.1.0",
     "@types/react": "^19.2.0",

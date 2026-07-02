@@ -7,9 +7,7 @@ peers (`@deck.gl/core`, `@deck.gl/react` — needed only for `HoverPreview`) are
 peer dependencies. The package owns the [`TimeController`](./time-controller.md) +
 [`PlaybackGovernor`](./playback-governor.md) lifecycle for you and surfaces it as
 reactive React state, so a host app wires layers and renders a transport bar
-without re-implementing the buffering choreography. Components are styled with
-plain Tailwind utility classes; bring your own Tailwind build (or override via
-`className`).
+without re-implementing the buffering choreography.
 
 ## Install
 
@@ -17,6 +15,28 @@ plain Tailwind utility classes; bring your own Tailwind build (or override via
 pnpm add @poopdeck.gl/react react react-dom
 # HoverPreview also needs the deck.gl peers:
 pnpm add @deck.gl/core @deck.gl/react
+```
+
+## Styling
+
+Import the shipped stylesheet once and the components render fully styled —
+no Tailwind required in your app:
+
+```ts
+import "@poopdeck.gl/react/styles.css";
+```
+
+It contains the utility classes the components use (compiled at package
+build; no preflight/reset, so it cannot affect the host app) plus defaults
+for the theme tokens (`--accent`, `--surface`, `--ink-900`, `--ink-500`,
+`--ink-400`, `--hairline`, `--accent-soft`, `--page-bg`) — override any of
+them in your own CSS to re-theme. Apps that already run Tailwind v4 can skip
+the stylesheet, but must register the package for scanning (Tailwind ignores
+`node_modules` by default) and define those tokens themselves:
+
+```css
+@import "tailwindcss";
+@source "../node_modules/@poopdeck.gl/react/src";
 ```
 
 ## usePlayback
@@ -68,7 +88,7 @@ const layers = [
 | `timeRange` | `{ start: number; end: number }` | — | Full data span (sim-ms). Drives the clock range and the slider. |
 | `baseSpeed` | `number` | `1000` | Wall-ms → sim-ms base rate at 1× (the controller's `speed`); multiplied by the user's speed preset. |
 | `loop` | `boolean` | `true` | Wrap to the range start at the end. |
-| `initialTime` | `number` | `timeRange.start` | Initial playhead position. |
+| `initialTime` | `number` | `timeRange.start` | Initial playhead position (clamped into `timeRange`). Mount-time only — a later `timeRange` change resets to the new range start. |
 
 ### `PlaybackState` (return value)
 
@@ -81,6 +101,8 @@ const layers = [
 | `isPlaying` | `boolean` | User-intent play bit, mirrored from the governor. |
 | `bufferState` | `PlaybackGovernorState` | Governor machine state (`idle`/`starting`/`playing`/`buffering`/`seeking`). |
 | `speedMultiplier` | `number` | Current speed multiplier over `baseSpeed`. |
+| `currentSpeedMultiplier` | `number` | Same value under `PlaybackControls`' prop name, so `<PlaybackControls {...playback} />` spreads cleanly. |
+| `timeRange` | `{ start: number; end: number } \| undefined` | The `timeRange` option echoed back (for the spread). |
 | `autoSpeed` | `boolean` | Whether opt-in Auto speed mode is active. |
 | `overviewPreload` | `OverviewPreloadResult \| null` | Storyboard-tier preload outcome (perf HUD). |
 | `baseAnimationSpeed` | `number` | The resolved `baseSpeed` (defaulted to 1000). |
@@ -172,9 +194,18 @@ bar, hover timestamp, ETA chip, a data-volume density strip, speed presets + fin
 the governor directly (`beginScrub`/`scrubTo`/`endScrub`); committed seeks route
 through `onSeek` so the page owns the commit path.
 
+`usePlayback`'s return is spread-compatible — it echoes `timeRange` and
+exposes the speed under both `speedMultiplier` and `currentSpeedMultiplier`:
+
 ```tsx
 import { PlaybackControls } from '@poopdeck.gl/react';
 
+<PlaybackControls {...playback} />
+```
+
+Or pass the props individually to interpose on any of them:
+
+```tsx
 <PlaybackControls
   currentTime={playback.currentTime}
   timeRange={timeRange}
@@ -204,7 +235,7 @@ import { PlaybackControls } from '@poopdeck.gl/react';
 | `onSeek` | `(time: number) => void` | Committed seek (keyboard arrows on the slider, jump-to-start). |
 | `onSpeedChange` | `(multiplier: number) => void` | Speed preset / slider change. |
 | `currentSpeedMultiplier` | `number` | Active speed multiplier (lights the matching preset). |
-| `targetPlaybackSeconds` | `number` | Wall-seconds the dataset plays in at 1× — drives the "time left" readout. |
+| `targetPlaybackSeconds` | `number` | Optional (default `60`). Wall-seconds the dataset plays in at 1× — drives the "time left" readout. |
 | `autoSpeed` | `boolean` | Whether Auto speed mode is active. |
 | `onAutoSpeedSelect` | `() => void` | Select Auto speed (any explicit choice exits it). |
 | `renderPreview` | `(time: number) => React.ReactNode` | Optional. When supplied, a "Preview" toggle appears; hovering the scrubber renders the map at the settled hovered time. Pair with `HoverPreview`. |

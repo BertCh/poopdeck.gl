@@ -75,6 +75,43 @@ describe("usePlayback", () => {
     expect(result.current.isPlaying).toBe(false);
   });
 
+  it("honours initialTime when a timeRange is also given", () => {
+    // Regression: the range effect used to run on mount (and again when the
+    // governor arrived) and setTime(rangeStart), silently clobbering
+    // initialTime — a deep-linked `?t=` playhead always snapped to the start.
+    const { result } = renderHook(() =>
+      usePlayback({ timeRange: { start: 1_000, end: 5_000 }, initialTime: 3_000 }),
+    );
+    expect(result.current.currentTime).toBe(3_000);
+    expect(result.current.timeController.getTime()).toBe(3_000);
+  });
+
+  it("clamps an out-of-range initialTime into the range", () => {
+    const { result } = renderHook(() =>
+      usePlayback({ timeRange: { start: 1_000, end: 5_000 }, initialTime: 9_000 }),
+    );
+    expect(result.current.timeController.getTime()).toBe(5_000);
+  });
+
+  it("a LATER range change resets to the new range start (initialTime is mount-only)", () => {
+    const { result, rerender } = renderHook((props) => usePlayback(props), {
+      initialProps: {
+        timeRange: { start: 1_000, end: 5_000 },
+        initialTime: 3_000,
+        baseSpeed: 1_000,
+      },
+    });
+    expect(result.current.timeController.getTime()).toBe(3_000);
+    act(() =>
+      rerender({
+        timeRange: { start: 10_000, end: 20_000 },
+        initialTime: 3_000,
+        baseSpeed: 1_000,
+      }),
+    );
+    expect(result.current.timeController.getTime()).toBe(10_000);
+  });
+
   it("disposes the governor on unmount", () => {
     const disposeSpy = vi.spyOn(PlaybackGovernor.prototype, "dispose");
     const { unmount } = renderHook(() =>

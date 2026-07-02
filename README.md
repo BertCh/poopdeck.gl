@@ -58,18 +58,23 @@ use [GeoZarr](https://github.com/zarr-developers/geozarr-spec) or COG for those.
 
 ## Quick start
 
-### 1. Build the CLI
+Starting from a CSV? The [CSV → animated map guide](./docs/guides/csv-quickstart.md)
+is the fastest end-to-end path (DuckDB one-liner included).
+
+### 1. Install the CLIs
 
 ```bash
-git clone https://github.com/BertCh/spatiotemporal-tiles.git
-cd spatiotemporal-tiles
-cargo build --release
+cargo install spatiotemporal-tiles
 ```
+
+Installs `stt-build`, `stt-validate`, `stt-optimize`, and `stt-serve`. (Or
+build from a checkout with `cargo build --release` and use
+`./target/release/stt-build`.)
 
 ### 2. Build a packed dataset from GeoParquet
 
 ```bash
-./target/release/stt-build \
+stt-build \
   --input data.parquet \
   --output tiles \
   --time-field timestamp \
@@ -77,6 +82,11 @@ cargo build --release
   --min-zoom 0 --max-zoom 8 \
   --temporal-bucket 1h
 ```
+
+Not sure about the knobs? `--auto` analyzes the input and picks the zoom
+range, temporal bucket, and compression for you (explicit flags still win).
+Keep `--max-zoom` honest for dense point data — deep zooms multiply tile
+counts fast. Check the result with `stt-validate tiles`.
 
 This writes a `tiles/` directory (`manifest.json` + `index/*.sttd` +
 `packs/*.sttp`). The input must be a Parquet file with either a WKB/GeoArrow
@@ -109,6 +119,10 @@ const layer = new AnimatedPointLayer({
 
 See [`docs/api/`](./docs/api/) for the full layer catalog
 (paths, trips, polygons, heatmap, H3 summary).
+
+React apps get the clock, buffering governor, and a ready-made transport bar
+from [`@poopdeck.gl/react`](./packages/react) (`usePlayback` +
+`<PlaybackControls {...pb} />` + one CSS import).
 
 ### …or with native MapLibre GL
 

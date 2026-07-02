@@ -44,7 +44,7 @@ normalises it into GeoParquet, and shells out to `stt-build`.
 ```bash
 # Build the toolchain
 cargo install --path ../crates/stt-generate
-cargo install --path ../crates/stt-build
+cargo install --path ../crates/spatiotemporal-tiles   # stt-build + the other CLIs
 
 # Generate everything into the showcase's public/data
 stt-generate all --output-dir showcase/public/data --skip-existing

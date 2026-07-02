@@ -1,0 +1,33 @@
+/* @poopdeck.gl/react — compiled to dist/styles.css at build.
+ *
+ * One import makes the components render styled in ANY app:
+ *
+ *   import "@poopdeck.gl/react/styles.css";
+ *
+ * The file carries (a) the Tailwind utilities the components use, compiled
+ * from this package's sources (theme + utilities layers ONLY — no preflight,
+ * so importing it cannot reset the host app's styles), and (b) default values
+ * for the theme tokens below. Apps that already run Tailwind v4 can instead
+ * register this package for scanning and define the tokens themselves:
+ *
+ *   @import "tailwindcss";
+ *   @source "../node_modules/@poopdeck.gl/react/src";
+ */
+@layer theme, utilities;
+@import "tailwindcss/theme" layer(theme);
+@import "tailwindcss/utilities" layer(utilities);
+@source "./";
+
+:root {
+  /* Theme tokens the components consume (override any of these in your own
+   * CSS — a later :root rule or any ancestor element wins). Defaults are the
+   * showcase's light "paper" theme. */
+  --page-bg: #fbfbf9; /* app background behind translucent panels */
+  --surface: #ffffff; /* panel / control surfaces */
+  --ink-900: #15171c; /* strongest text */
+  --ink-500: #6b7280; /* muted text / labels */
+  --ink-400: #9aa1ad; /* faint text / captions */
+  --hairline: #e7e6e0; /* 1px separators, control outlines */
+  --accent: #0a7790; /* play button, active states, scrubber fill */
+  --accent-soft: rgba(10, 119, 144, 0.08); /* hover / selected washes */
+}
