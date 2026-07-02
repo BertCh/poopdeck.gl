@@ -1,13 +1,17 @@
 # System overview
 
-STT has two stacks: a **Rust** toolchain that turns GeoParquet into a **packed
-dataset** (`manifest.json` + content-addressed packs), and a **TypeScript**
-client that streams tiles from that dataset into deck.gl.
+STT has two stacks: a **Rust** toolchain that accepts either a GeoParquet file
+or a live **PostGIS**/**DuckDB** source, and either builds a **packed
+dataset** (`manifest.json` + content-addressed packs) or serves tiles
+dynamically, per request, over HTTP (`stt-serve`); and a **TypeScript**
+client that streams tiles from that dataset into one of four renderer
+backends — deck.gl, Three.js, MapLibre, or Cesium.
 
 ```mermaid
 graph TD
     subgraph "Input data"
         PARQUET[GeoParquet]
+        DB[(PostGIS / DuckDB)]
     end
 
     subgraph "Rust toolchain"
@@ -15,11 +19,13 @@ graph TD
         OPTIMIZE[stt-optimize]
         VALIDATE[stt-validate]
         GEN[stt-generate]
+        SERVE[stt-serve]
         CORE_RS[stt-core]
         BUILD --> CORE_RS
         OPTIMIZE --> CORE_RS
         VALIDATE --> CORE_RS
         GEN --> BUILD
+        SERVE --> CORE_RS
     end
 
     subgraph "Storage (static host / CDN)"
@@ -33,7 +39,7 @@ graph TD
         OPFS["OPFS persistent cache"]
         DECODER["WorkerTileDecoder pool"]
         TILESET[SpatiotemporalTileset]
-        LAYERS["@poopdeck.gl/layers OR @poopdeck.gl/maplibre layers"]
+        LAYERS["renderer backend: layers (deck) / three / maplibre / cesium"]
         ARCHIVE --> OPFS
         ARCHIVE --> DECODER
         DECODER --> TILESET
@@ -41,9 +47,12 @@ graph TD
     end
 
     PARQUET --> BUILD
+    DB --> BUILD
+    DB --> SERVE
     BUILD --> MANIFEST
     MANIFEST -->|GET| ARCHIVE
     PACKS -->|HTTP Range| ARCHIVE
+    SERVE -->|HTTP, per-request tiles| ARCHIVE
 ```
 
 ## Rust toolchain
@@ -78,8 +87,16 @@ adds coarser-bucket aggregate tiles so animating decades of data picks
 the appropriate temporal LOD; `--pre-tessellate` runs earcut at build time
 and stores triangle indices in a sidecar column.
 
-Inputs must be GeoParquet. Convert other formats first:
-`ogr2ogr -f Parquet out.parquet in.geojson`, or use DuckDB
+GeoParquet is the default file input. A live **PostGIS** or **DuckDB** source
+is a first-class alternative: pass `--postgres <CONN>` or `--duckdb <PATH>`
+instead of `--input` and `stt-build` reads features straight from a table or
+query, geometry bridged through WKB — everything downstream (LOD,
+quantization, summary tiers) works unchanged. See
+[cli-reference.md](../api/cli-reference.md) for the connection and query
+flags.
+
+For anyone with neither: convert to GeoParquet first —
+`ogr2ogr -f Parquet out.parquet in.geojson`, or DuckDB
 (`COPY ... TO 'out.parquet' (FORMAT 'parquet')`). See
 [Building from Python](../guides/python.md) for GeoPandas / DuckDB / pyarrow
 recipes.
@@ -101,9 +118,41 @@ feature-count and temporal-extent consistency. Suitable for CI.
 
 ### `stt-generate`
 Convenience CLI that downloads + processes + builds the showcase datasets
-(earthquakes, AIS, flights, hurricanes, wildfires, NYC rideshare, NYC taxi
-points, satellites, drifters, drifters-hourly, animals, OSM edits).
+(earthquakes, AIS, flights, hurricanes, wildfires, storms, NYC rideshare,
+NYC taxi points, BIXI, satellites, drifters, drifters-hourly, animals,
+OSM edits).
 Each subcommand emits GeoParquet and calls `stt-build` internally.
+
+### `stt-serve`
+An axum HTTP server that generates STT tiles **on the fly**, one per request,
+from a live PostGIS or DuckDB source — the `ST_AsMVT` analog for the STT
+format. No `manifest.json` or packs are written to disk; each tile is
+produced, encoded, and returned within the request. Two backends, selected by
+`--postgres <CONN>` or `--duckdb <PATH>` (mutually exclusive): PostGIS uses an
+async connection pool, while DuckDB (embedded, blocking) runs its pool
+checkout, query, decode, and encode on a blocking task.
+
+Each `GET /tiles/{z}/{x}/{y}/{t}.stt` request maps `(z, x, y)` to a WGS84
+bounding box and `t` to a temporal bucket, runs a source query filtered by
+that bbox and time window, decodes the matching rows to features, and encodes
+exactly one tile. Parity with `stt-build` comes from a shared
+`EncoderConfig`/`build_options` seam: both binaries parse the same flags
+(clip, simplify, pre-tessellate, min-/max-zoom-field, per-tile budget,
+attribute filter, coordinate/attribute quantization, vector grouping) into
+the same config types and call the same per-tile encode path, so a served
+tile is byte-identical to the offline-built tile for the same `(z, x, y, t)`
+and source rows. `--summary-tier` (cross-tile aggregation) and
+`--adaptive-temporal` (windows sized across a cell's whole time range) are
+rejected at startup — neither can be computed from a single tile's rows;
+pre-bake them with `stt-build` and serve the resulting static archive
+instead. `GET /metadata.json` reports the dataset's extent, time range, zoom
+range, and (if configured) heatmap domain; `--config <FILE>` serves several
+datasets from one process under `/{name}/…`.
+
+Tiles are regenerated on every request — there is no app-level cache — so
+unlike the packed format this path is not edge-cacheable; that is the
+trade-off for serving directly off a live source. See
+[cli-reference.md](../api/cli-reference.md) for the full flag surface.
 
 ### `stt-core`
 The library every CLI uses. Owns the archive format, Arrow tile codec,
@@ -137,6 +186,30 @@ compression abstraction, Hilbert/temporal indexing, and metadata.
   using `@loaders.gl/*` can drop STT into their existing tile source
   plumbing. See the [tile decoding](../api/stt-loader.md) page.
 
+### `@poopdeck.gl/core` render kernel
+The framework-free logic every renderer backend shares, exposed as tree-shakeable
+sub-paths so the four backends stay CONSISTENT by importing one copy instead of
+hand-maintaining forks (see
+[renderer-abstraction-2026-06.md](../roadmap/renderer-abstraction-2026-06.md)):
+- **`core/time-filter`** — the CPU time-filter alpha (window/wake/cumulative/trail),
+  `relativizeTime` + the `MAX_RELATIVE_TIME_MS` f32 guard, `resolveTimeFilterParams`
+  (full-width `timeWindow` ⇄ half-width vocabulary), and `DEFAULT_WAKE_TAIL_SCALE`.
+- **`core/shader-codegen`** — the scalar alpha authored ONCE as an `Expr` AST
+  (`ALPHA_EXPR`); `evalExpr` is the CPU oracle and `emitGLSL100`/`emitGLSL300`
+  machine-emit each backend's shader snippet (no hand-copied GPU math).
+- **`core/style`** — categorical / ramp / RGB color expansion (`'u8'`|`'f32'`).
+- **`core/geometry`** — OD endpoint derivation + pre-baked-aware `tessellateFeature`.
+- **`core/geo`** — pluggable `Projection` (`LocalEnu`/`Mercator`/`Globe` with a
+  WGS84-ellipsoid datum) + `ViewState` (with `roll`/`altitude`) + zoom helpers.
+- **`core/picking`** — `SttPickResult` shape, the 24-bit id scheme, and the
+  `InstanceProvenance` merged-buffer identity contract.
+- **`core/tileset-adapter`** — `makeTilesetCallbacks(archive)`, the single
+  `SpatiotemporalTileset` fetch-callback bundle all backends consume.
+- **`core/capabilities`** — the `LayerKind`/`Capability`/`TimeFilterMode`
+  vocabulary + `BackendDescriptor` + typed `Degradation` + `assertDescriptorConsistent`
+  over-claim gate. Each backend publishes a descriptor; the generated
+  [backend-capabilities.md](../spec/backend-capabilities.md) is the matrix.
+
 ### `@poopdeck.gl/layers`
 - **`SpatioTemporalLayer`** — composite layer; owns the archive + tileset,
   delegates rendering to specialized sublayers.
@@ -148,17 +221,15 @@ compression abstraction, Hilbert/temporal indexing, and metadata.
 - **`AnimatedHeatmapLayer`** — temporal density heatmap built on the canonical
   `@deck.gl/aggregation-layers` HeatmapLayer + `DataFilterExtension`
   (per-channel categorical splits, bake-time intensity-domain support;
-  visible-tile data is consolidated into one buffer set per channel). The
-  `HeatmapLayer` name remains as a deprecated alias.
+  visible-tile data is consolidated into one buffer set per channel).
 - **`FlowCorridorLayer`** — static corridor geometry animated by a per-vertex
   × per-bucket value matrix (pre-aggregated flow overviews).
 - **`H3SummaryLayer`** — renders the server-aggregated summary tier as
   extrudable H3 hexagons (wraps `H3HexagonLayer`).
 - **`TimeFilterExtension`** — relativizes time against a per-layer
   `timeOffset` so f32 stays exact; supports window mode (whole feature on
-  / off) and trail mode (per-vertex fade).
-- **`PolygonTimeFilterExtension`** — same idea for `SolidPolygonLayer`,
-  which can't take `TimeFilterExtension` directly.
+  / off) and trail mode (per-vertex fade). Runs on both instanced layers and
+  `SolidPolygonLayer` directly.
 - **`CategoryColorExtension`** — texture-based palette lookup, scales to
   many categories without CPU-side color expansion.
 - **`TimeController`** — `requestAnimationFrame`-driven playback clock.
@@ -166,15 +237,34 @@ compression abstraction, Hilbert/temporal indexing, and metadata.
   buffered runway ahead of the playhead and can auto-adapt playback speed to
   measured throughput.
 
+### `@poopdeck.gl/three`
+The same tiles + clock rendered through a Three.js **WebGPU** renderer with TSL
+node materials, as a retained scene that merges resident tiles into one
+`InstancedMesh` per layer (rebased to a scene-wide `timeOrigin`). Owns its own
+scene/camera/projection (`core/geo`) + streaming; the basemap rides a separate
+camera-synced overlay canvas (TSL compiles only on `WebGPURenderer`, so it can't
+interleave into a WebGL context). Near-deck-parity layer catalog; defers GPU
+heatmap + live edge-bundling. See
+[three-renderer-parity.md](../roadmap/three-renderer-parity.md).
+
 ### `@poopdeck.gl/maplibre`
 Same archive reader and tileset, rendered through MapLibre GL's
 `CustomLayerInterface` in raw WebGL — for sites that don't want a deck.gl
 dependency or that need to interleave STT layers between native MapLibre
-style layers. Five layer classes mirror the deck.gl coverage:
+style layers. Five layer classes mirror a subset of the deck.gl coverage:
 `STTPointLayer`, `STTLineLayer`, `STTPolygonLayer`, `STTTripsLayer`,
-`STTHeatmapLayer`. Mercator-only — the shaders assume the mercator
-projection, so there is no globe support (unlike the deck.gl stack). See
+`STTHeatmapLayer` (`window`/`trail` time modes only). Mercator-only — the
+shaders assume the mercator projection, so there is no globe support. See
 [stt-maplibre.md](../api/stt-maplibre.md).
+
+### `@poopdeck.gl/cesium`
+A CesiumJS backend that renders STT on a real **WGS84 globe** (CesiumJS is
+Apache-2.0; no Cesium ion token needed). The first green-field consumer of the
+render kernel — a `CesiumPointLayer` (`SttRenderNode`) + a `BackendDescriptor` +
+a `ViewState`⇄Cesium camera bridge, built entirely from `core/{geo,style,
+time-filter,shader-codegen,tileset-adapter,picking}` with no new shared code. A
+worked `point` scaffold today (rendering is browser-verified). See
+[stt-cesium.md](../api/stt-cesium.md).
 
 ## Design decisions
 

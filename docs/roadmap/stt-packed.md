@@ -1,13 +1,23 @@
 # Packed format — roadmap / deferred work
 
-> **Status: format SHIPPED 2026-06-07** (deployed to R2, all datasets). Every
-> item below is still open / deferred as of 2026-06-10.
+> **Status: format SHIPPED 2026-06-07** (deployed to R2, all datasets); the
+> **paged directory** shipped + committed 2026-06-11 (`92dc0d1`, `b503e24`). The
+> live spec is [`docs/spec/stt-packed-format.md`](../spec/stt-packed-format.md)
+> (paged container in §4.1). Everything else below is still open / deferred.
 
-The packed format is **adopted and live** (see
-[`docs/spec/stt-packed-format.md`](../spec/stt-packed-format.md)). The items
-below were deliberately **deferred** during the 2026-06 formalization pass — they
-are architectural bets, not cleanup, and were not in scope. Recorded here so the
-direction isn't lost.
+The packed format is **adopted and live**. The bets below were deliberately
+**deferred** during the 2026-06 formalization pass — architectural, not cleanup,
+and out of scope then. §3 is the one that shipped, kept here as a compact
+decision record (rationale, not behavior). Recorded so the direction isn't lost.
+
+> **Triage 2026-07-01:** re-confirmed against code. §1 and §2 stay **counted
+> out** (architectural bets with no forcing cost today — revive §1 when
+> cross-dataset dedup or incremental deploys become a real cost, §2 if the
+> `--streaming-arrow` temp-single-file detour actually hurts; §2 is also the
+> prerequisite for retiring the legacy single-file scripts in §5). §3's only
+> remainder is the user-run rollout ops (below). §4 stays a measured NO-GO;
+> note the world-grid cross-reference added there. §5 items carry individual
+> statuses inline.
 
 ## 1. Global content-addressed pack store
 
@@ -53,82 +63,72 @@ build (index pass to decide ordering, payload pass to write packs).
 
 ## 3. Paged directory with temporal pruning (COPC-informed) — ✅ SHIPPED 2026-06-11
 
-> **SHIPPED.** Implemented end-to-end (Rust codec + writer, TS reader,
-> manifest contract, `stt-validate`, the `repack-directory` migration tool) and
-> specified in [`stt-packed-format.md` §4.1](../spec/stt-packed-format.md). See
-> the implementation plan + decisions in
-> [`paged-directory.md`](./paged-directory.md). Geo-bbox descriptor frozen by the
-> A/B sim; leaf codec is unchanged v5; the TS public surface (and therefore the
-> tileset + deck.gl/maplibre layers) is untouched. **Open: fleet re-transcode +
-> R2 re-sync** (held per the dev-settling policy — flip on with
-> `repack-directory <manifest> <out> 4096`). The sketch below is the original
-> feasibility note this supersedes.
+> **SHIPPED + COMMITTED** (`92dc0d1`, `b503e24`). Rust codec + writer
+> (`directory_page.rs`), TS reader (`decodePagedRoot` + paged
+> `getIndex`/`ensurePages` in `archive.ts`), manifest contract, `stt-validate`
+> checks, and the `repack-directory` migration tool. Wire format specified in
+> [`stt-packed-format.md` §4.1](../spec/stt-packed-format.md). This section is the
+> compressed decision record (the standalone `paged-directory.md` plan it absorbs
+> has been deleted). The leaf codec is unchanged v5 and the TS public surface —
+> tileset + deck.gl/maplibre layers — is untouched.
 
-**Today:** the `.sttd` directory is a single whole-load blob on the cold-start
-critical path (spec §6: cold load = manifest + **entire directory** + pack
-ranges). Measured at-rest sizes across the showcase fleet (2026-06-11, pre-zstd):
-5.9 KB (nyc-taxi-flows) → **15.8 MB** (nyc-taxi-points, ais-all-us), with five
-datasets over 7 MB. zstd-at-rest (D5) halves that but doesn't change the shape:
-cost grows with dataset size, not with what the session actually views. The spec
-already leaves "per-section framing (for partial directory reads)" open — this is
-that bet, designed.
+**Problem.** The `.sttd` directory was a single whole-load blob on the cold-start
+critical path — nothing could be requested until the whole directory was
+resident. Measured fleet directories ran 5.9 KB → 15.8 MB; cost grew with dataset
+size, not with what the session actually views. Paging makes cold start
+proportional to the viewport/time-window footprint: a few-KB root page + only the
+leaf pages the session visits, with temporal pruning *before* any leaf fetch.
+Small datasets stay one read — request amplification never fires.
 
-**Bet:** adopt COPC's paged-hierarchy design (see *Prior art* below), plus the
-one improvement its community temporal extension added:
+**Decisions (resolved).**
 
-- Fixed-width entries; a sentinel field discriminates *data entry* vs *pointer
-  to a child directory page* vs *empty-but-descend* — one homogeneous record
-  type, no framing (entry count = page bytes / entry size).
-- Pages cut every K tree levels; subtrees under a node-count threshold are
-  inlined into the parent page so small datasets stay **one root page** and
-  request amplification never fires. (COPC: K=4, inline ≤50 nodes; typical
-  ≤5-level files = whole directory in one small read.)
-- **Hoist `t_min`/`t_max` (and the `cover_t_min` bound) onto the page-pointer
-  entries themselves**, so a reader prunes whole subtrees/pages by time *without
-  fetching them*. This is the COPC temporal extension's headline trick and a
-  strict generalization of our `cover_t_min` covering section.
+- **D1 — single-level (root + leaf pages), not a multi-level tree.** Max fleet
+  directory ~560 K entries → ~137 pages at 4096/page → a ~7 KB root. COPC's
+  K-level paging earns its keep at 1.2 B points; at our scale a flat page-table is
+  simpler and fully covers the fleet. Door left open for a future level.
+- **D2 — a leaf page is the existing v5 codec, verbatim.** Each leaf is a
+  contiguous slice of directory order `(zoom, hilbert, time_start)` run through the
+  unchanged `encode_directory`/`decodeDirectory`. Slicing resets delta state +
+  splits RLE runs at boundaries (the measured +6–19% at-rest cost); reusing the
+  fuzzed v5 codec makes the only new bytes the root page + framing.
+- **D3 — page descriptor = geo-bbox + zoom-range + `[t_min, t_max]` +
+  `cover_t_min` (FROZEN by the step-0 A/B sim).** Geo-bbox matched or beat the
+  Hilbert-key-range model on every dataset where paging matters — nyc-taxi-points
+  **9.5% / 15.5%** of whole-load (med/p90) vs hilbert 11.4% / 36.5%, drifters
+  **25.0% / 35.1%** vs 26.3% / 66.1%; only ais-all-us favoured hilbert (2.7% /
+  4.4% vs 0.9% / 1.8%) in an already-sub-5% regime. Geo-bbox wins the p90 tail
+  because a viewport box maps to a Hilbert *interval* that falsely keeps
+  spatially-distant pages, while geo-bbox tests real overlap. Bonus: zoom-correct,
+  **no Hilbert port in TS**, composes with the future per-tile `geoarrow.box`
+  covering column.
+- **D4 — one content-addressed `.sttd`; root is a byte-range prefix.** Layout
+  `[root page][leaf 0][leaf 1]…`; the reader range-GETs `bytes=0-(rootLength-1)`
+  for the root, then ranges for leaves — never a second addressing path (the COPC
+  anti-lesson). **Small-dataset fast path:** `length ≤ threshold` GETs the whole
+  object and skips paging (wildfires-shaped datasets behave as before). Inlining
+  the root into `manifest.json` (saves one RTT) is a noted future opt, deferred
+  (it couples immutable-derived data into the mutable manifest).
+- **D5 — `directoryVersion: 6` + `layout: "paged"`; v5 whole-load path retained.**
+  Readers branch on layout: `paged` → the new query path; absent/`single` → the
+  existing whole-load path, unchanged, for every un-migrated dataset.
+- **D6 — per-page zstd, NO shared dictionary.** Each leaf is its own zstd frame so
+  it is independently fetchable/decodable (the fzstd dictionary-less TS path keeps
+  working). This forfeits the whole-directory zstd window (+6–19% generally; +117%
+  on earthquakes, whose blob-dedup redundancy compresses 3.7× under one window) —
+  **accepted:** paid once by the immutable CDN-cached object, *not* a per-session
+  cost, while per-session bytes drop 1–2 orders of magnitude. A shared dict in the
+  root would recover it but breaks the fzstd contract; parked (revisit only if
+  at-rest `.sttd` size becomes a real problem — it is off the per-session path).
 
-**Unlocks:** cold start proportional to the viewport/time-window footprint, not
-dataset size — a 15 MB directory becomes a few-KB root page + pages for visited
-subtrees; temporal pruning before any page fetch; the directory stops being the
-reason large datasets feel slow to open.
-
-**Feasibility: MEASURED VIABLE (2026-06-11,
-`crates/stt-core/examples/directory-paging-sim.rs` over five real packed
-directories).** Pages = contiguous slices of directory order
-`(zoom, hilbert, time_start)` — the PMTiles leaf-directory model — each page
-independently codec'd + zstd'd, root models ~32 B/page (first key, offset/len,
-t-bounds):
-
-| dataset (entries) | paged at-rest vs whole (4096/page) | viewport-query bytes, med / p90 (% of whole-load) |
-|---|---|---|
-| ais-all-us (560 K) | +19% | **0.9% / 1.8%** |
-| earthquakes (351 K) | **+117%** (see dict note) | 3.0% / 3.1% |
-| nyc-taxi-points (559 K) | +12% | 11.4% / 36.5% |
-| nyc-rideshare (371 K) | +14% | 10.0% / 33.4% |
-| drifters (256 K) | +7% | 26.3% / 66.1% |
-
-- Sweet spot **1024–4096 entries/page** (~60–130 KB zstd'd pages — the range
-  coalescer's comfort zone). RLE/delta resets at page boundaries are noise;
-  the real paging cost is losing the whole-directory zstd window.
-- **Earthquakes anomaly → shared zstd dictionary**: its blob-dedup redundancy
-  compresses 3.7× under one window; per-page zstd forfeits that (+117%). A
-  zstd dict trained once and shipped in the manifest (or root page) should
-  recover most of it for all datasets.
-- Page-level **time pruning rarely fires** under spatial-major order (each
-  page spans most of the time range on fleet-shaped data) — the t-bounds on
-  page pointers earn their keep on temporally sparse/bursty datasets
-  (wildfires-shaped), while viewport pruning via the hilbert key range does
-  the heavy lifting everywhere. Keep both; they're each ~16 B/page.
-- Wide-time data (drifters) wins least (med 4×, p90 1.6×) because its queries
-  genuinely need entries spread across many pages — inherent, not a design
-  flaw.
-
-**Remaining open questions:** interaction with the global-coalesce fetch layer
-(pages are just more ranges to coalesce); whether the root page lives inline in
-`manifest.json` to save a request (COPC needs 3 requests to first render —
-adopt **requests-to-first-frame** as a tracked metric either way); shared-dict
-training set and versioning.
+**Still open (rollout — user-run ops, not code; the tooling is complete).**
+Fleet re-transcode + R2 re-sync + a browser-verify of a live paged dataset (held
+per the dev-settling policy). Flip on per dataset with
+`repack-directory <manifest> <out> 4096` (directory-only re-pack — the packs are
+byte-unchanged, so re-sync is cheap; `repack-publish-all.sh` already paginates by
+default with `PAGE_ENTRIES=4096`). Track **requests-to-first-frame** +
+**bytes-to-first-frame** across the flip (the COPC "3 reads" benchmark) — this
+is the same combined verify+sync gate that playback §7 and av-cockpit §4 carry;
+run it once for all three.
 
 ## 4. Lightweight column encodings (MLT-informed)
 
@@ -174,37 +174,43 @@ implications (precision at deep zoom, the f32-precision shader path), not an
 encoding pass. Park it as its own bet if payload size becomes a priority;
 the at-rest numbers above are the baseline to beat.
 
-## 5. Smaller follow-ups
+> **Cross-reference (2026-07-01):** coordinate quantization DID ship — but in
+> the **world-grid** form (`stt-build --quantize-coords <m>`: i32 world-grid
+> leaf + reconstruction affine), deliberately NOT the tile-local variant parked
+> above, because the world grid preserves cross-tile content-address dedup
+> that tile-local coords destroy. Measured −25..47% on coord-heavy datasets;
+> the AV LiDAR fleet ships on it. Read this §4 as "encoding *transforms*
+> declined; quantization landed via the world-grid route"; the tile-local bet
+> stays parked with the same trigger.
 
-- **`stt-optimize` packed awareness** — it still analyses GeoParquet and legacy
-  single-file `.stt`; teach its loader to read a packed dataset so it can
-  re-analyse shipped datasets directly.
-- **Retire single-file measurement scripts** once (1)/(2) land —
-  `scripts/optimize-tiles.sh` and `reprocess-run.sh` are single-file-only
-  (now labelled LEGACY).
-- **Requests-to-first-frame metric** — COPC reaches first render in 3 range
-  requests (589 B header probe → root directory page → root chunk). Measure
-  STT's cold-start equivalent (manifest → directory → first slice) and track it
-  as a number; it's the user-facing cost that §3 exists to cut.
-- **Adoption kit** — COPC's spread was driven less by range reads than by a
-  one-sitting spec, a reference writer, a hosted validator
-  (validate.copc.io), and a drag-and-drop web viewer. `stt-validate` is the
-  seed; a hosted validate/inspect page is cheap once the npm publish lands.
-  (The portable-kit half — MUST/SHOULD checklist, golden fixtures, validator
-  contract — is now written: [`docs/spec/conformance.md`](../spec/conformance.md).)
-- **Cross-process reproducible payload bytes** (closes the spec §7-D6 gap) — a
-  tile blob is `zstd(Arrow IPC)`, and `arrow-ipc::convert::metadata_to_fb`
-  serializes Schema/Field `HashMap` custom metadata in per-process iteration
-  order, so the same logical tile built in two processes can get two content
-  addresses. Within a run it's deterministic (dedup works); across runs it
-  defeats incremental re-sync + cross-version dedup (not a correctness bug —
-  manifest swap is atomic, stale objects age out via the §2 GC pass). **Bet:** an
-  `arrow` version that sorts metadata at IPC-write time, or a small
-  metadata-canonicalizing step before `encode_tile`. **Open question:** the fix
-  changes every content address once → a one-time full fleet re-transcode + R2
-  re-sync. Sequence it with the next intentional format bump so the re-sync isn't
-  spent twice. Root-caused in `crates/stt-core/src/arrow_tile.rs` (the two
-  `HashMap::new()` metadata sites).
+## 5. Smaller follow-ups — triaged 2026-07-01
+
+- **`stt-optimize` packed awareness — COUNTED OUT.** Its loader reads GeoParquet
+  + legacy single-file `.stt` only; a packed-manifest loader is a low-risk
+  additive variant, but nothing currently needs to re-analyse a shipped packed
+  dataset (analysis runs pre-build on sources). Revive with the first real
+  re-analysis ask.
+- **Retire single-file measurement scripts — COUNTED OUT (blocked by design).**
+  `scripts/optimize-tiles.sh` / `reprocess-run.sh` are labelled LEGACY and stay
+  until §2's streaming `PackWriter` deletes the single-file write path they
+  exercise — deleting them earlier would drop the only coverage of that path.
+- **Requests-to-first-frame metric — folded into the §3 rollout (user-run ops).**
+  Capture requests/bytes-to-first-frame (manifest → directory → first slice, the
+  COPC "3 reads" benchmark) as part of the fleet re-transcode + R2 re-sync +
+  browser-verify pass — measuring it before the paged flip is live would just
+  measure the old layout.
+- **Adoption kit — COUNTED OUT until npm publish.** The portable half is written
+  ([`docs/spec/conformance.md`](../spec/conformance.md)); the hosted
+  validate/inspect page is explicitly gated on the npm publish landing (its own
+  workstream), as originally stated.
+- **Cross-process reproducible payload bytes** — owned by
+  [`data-sources-and-encoder.md`](./data-sources-and-encoder.md), where it is
+  now **resolved-by-path** (2026-07-01): the encoder side is deterministic
+  (sorted `BTreeMap`s) with logical-fingerprint guard tests in
+  `crates/stt-core/tests/reproducible_build.rs`; strict byte-identity waits on
+  the workspace arrow upgrade (arrow-ipc ≥59 sorts IPC metadata keys), with the
+  `#[ignore]`d byte-identity test as the acceptance gate. The gap is narrower
+  than this bullet originally implied.
 
 ## Prior art: COPC & MapLibre Tiles (studied 2026-06-11)
 

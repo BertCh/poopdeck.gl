@@ -49,14 +49,13 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 | `sourceColor` | `Color` | `[56,196,232,235]` | Origin / tail color (the arrow interpolates source→target along its length). |
 | `targetColor` | `Color` | `[255,142,64,245]` | Destination / arrowhead color. |
 | `gap` | `number` | `0.5` | Perpendicular separation between the two directions of a pair, in units of the arrow width — so A→B and B→A sit side-by-side. |
-| `greatCircle` | `boolean` | `false` | **Deprecated / ignored** — flow arrows are flat (reserved for a future curved variant). |
-| `arcHeight` | `number` | `0.5` | **Deprecated / ignored** — the old raised-arc knob; accepted for back-compat. |
 
 ### Node circles
 
 | Prop | Type | Default | Description |
 |------|------|---------|-------------|
 | `nodeRadiusScale` | `number` | `1.3` | Node circle radius in pixels per `sqrt(incidentFlow)` (inbound + outbound current-bucket volume). Also drives the arrow endpoint insets. |
+| `nodeRadiusUnits` | `'meters' \| 'pixels'` | `'pixels'` | Units for the node-circle radius. `'pixels'` keeps a constant on-screen size at every zoom; `'meters'` scales circles with the map so a dense overview shrinks them instead of blowing out into overlapping blobs (still clamped by `nodeRadiusMinPixels`/`nodeRadiusMaxPixels`). With `'meters'`, `nodeRadiusScale` is a metres-per-`sqrt(flow)` factor, so it needs a much larger value than in pixels. |
 | `nodeRadiusMinPixels` | `number` | `1.5` | Minimum node radius in pixels. |
 | `nodeRadiusMaxPixels` | `number` | `28` | Maximum node radius in pixels. |
 | `nodeColor` | `Color` | `[232,238,255,170]` | Node circle fill color. |
@@ -85,7 +84,7 @@ stt-generate bixi --input DonneesOuvertes2024.csv \
   --output bixi-flowmap.stt
 ```
 
-By default the generator **clusters** stations per zoom and confines each zoom's hub-to-hub corridors to a single-zoom band (a per-feature `[min_zoom, max_zoom]`) so coarse aggregates never bleed into the full-resolution deep zooms. Tune the hub coarseness with `--cluster-radius <px>` (default `40`), or pass `--no-cluster` to fall back to the legacy volume-based `min_zoom` LOD (full-resolution corridors at every zoom, minor pairs dropped at low zoom). Either way this is *not* temporal thinning — every bucket is kept for every emitted corridor.
+By default the generator **clusters** stations per zoom and confines each zoom's hub-to-hub corridors to a single-zoom band (a per-feature `[min_zoom, max_zoom]`) so coarse aggregates never bleed into the full-resolution deep zooms. Tune the hub coarseness with `--cluster-radius <px>` (default `40`), or pass `--no-cluster` to emit one full-resolution corridor per OD pair with an open-ended, volume-based `min_zoom` (busy pairs appear at low zoom, minor pairs only reveal on zoom-in). Either way this is *not* temporal thinning — every bucket is kept for every emitted corridor.
 
 ## See also
 
@@ -93,3 +92,7 @@ By default the generator **clusters** stations per zoom and confines each zoom's
 - [`AnimatedArcLayer`](./animated-arc-layer.md) — per-trip OD arcs (window-mode, no aggregation).
 - [`QuadbinSummaryLayer`](./quadbin-summary-layer.md) / [`H3SummaryLayer`](./h3-summary-layer.md) — other summary tiers.
 - [Binary features](./binary-features.md) — the `vertexValueMatrix` encoding.
+
+## Source
+
+[packages/layers/src/layers/summary/flowmap-layer.ts](../../packages/layers/src/layers/summary/flowmap-layer.ts)

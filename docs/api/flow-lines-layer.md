@@ -61,3 +61,7 @@ Binary input (one instanced buffer per attribute) is also supported via deck.gl'
 
 - [`FlowmapLayer`](./flowmap-layer.md) — animated OD flowmap that renders this primitive from `vertexValueMatrix` tiles.
 - [`AnimatedArcLayer`](./animated-arc-layer.md) — raised-arc OD rendering (the non-arrow alternative).
+
+## Source
+
+[packages/layers/src/layers/internal/flow-lines-layer.ts](../../packages/layers/src/layers/internal/flow-lines-layer.ts)

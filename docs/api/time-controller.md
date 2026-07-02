@@ -155,4 +155,4 @@ When you pass a `TimeController` to a layer via the `timeController` prop, the l
 
 ## Source
 
-[packages/layers/src/time-controller.ts](../../packages/layers/src/time-controller.ts)
+[packages/playback/src/time-controller.ts](../../packages/playback/src/time-controller.ts)

@@ -53,6 +53,36 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 | `pathWidth` | `number \| string` | `3` | Path width: constant, or a numeric property name. |
 | `getWidth` | `number \| string \| null` | `null` | Upstream-vocabulary alias of `pathWidth` (same domain rules). |
 | `colorPalette` | `Color[]` | 10-color palette | Palette for categorical `pathColor` (GPU lookup via `CategoryColorExtension`, up to 4096 entries). |
+| `colorMapping` | `Record<string, Color> \| null` | `null` | Explicit category-string → color map for categorical `pathColor`. Resolved per-tile against each tile's own category dictionary, so the same category (e.g. an HD-map `lane_divider` class) renders the same color in every tile — unlike `colorPalette`, whose indices are assigned per-tile in first-seen order. Takes precedence over `colorPalette` when set. |
+| `colorMappingDefault` | `Color` | `[120, 120, 120, 255]` | Fallback color for categories absent from `colorMapping`. |
+
+## Elevation (space-time relief)
+
+A path layer is normally flat: every vertex rides the tile's ground-plane
+`z`. Setting `elevationProperty` lifts each **feature** (the whole path, not
+individual vertices) to a per-feature altitude, turning a set of flat rings —
+most usefully nested density iso-contours — into a 3D terraced relief, the
+classic stacked contour plot. Combined with `elevationOpacityRange`, the
+upper terraces can also be graded translucent so a top-down camera sees
+through the roof to the layers underneath instead of the topmost band
+occluding everything below it.
+
+| Property | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `elevationProperty` | `string \| null` | `null` | Property column supplying each feature's elevation (metres). Resolution mirrors `pathColor`: a CATEGORICAL column resolves through `elevationMapping` (category string → metres); a NUMERIC column is used directly. Either way the result is multiplied by `elevationScale`. A whole path rides at one height — its own feature's value — so nested rings terrace into a hill instead of warping per-vertex. Unset (or a categorical column with no mapping) leaves the tile flat, with positions riding to the GPU zero-copy. |
+| `elevationMapping` | `Record<string, number> \| null` | `null` | Category-string → elevation (metres) map for a CATEGORICAL `elevationProperty` — the height analogue of `colorMapping`. Categories absent from the map elevate to 0. No effect on a numeric column. |
+| `elevationScale` | `number` | `1` | Multiplier applied to each `elevationProperty` value (after the categorical map, if any) before it becomes the path's z. No effect when `elevationProperty` is unset. |
+| `elevationOpacityRange` | `[number, number] \| null` | `null` | Enables height-graded opacity: the color alpha of each path is scaled by a factor that ramps LINEARLY from `elevationOpacityNear` at the low end of this range to `elevationOpacityFar` at the high end (clamped outside the range). The ramp is keyed on the RAW `elevationProperty` value in metres — *before* `elevationScale` — so the fade stays consistent across tiles regardless of each tile's own elevation spread. Only applies on the categorical color path (per-vertex `getColor`) and only when `elevationProperty` is a NUMERIC column; requires `elevationProperty` to be set. Unset means no grading — alpha is just the band color's own. |
+| `elevationOpacityNear` | `number` | `1` | Alpha multiplier (0–1) at the LOW end of `elevationOpacityRange` — the ground layer of the stack. |
+| `elevationOpacityFar` | `number` | `1` | Alpha multiplier (0–1) at the HIGH end of `elevationOpacityRange` — the top of the stack. Values below `1` fade the upper terraces translucent. |
+
+Together, a density-band categorical color plus a numeric elevation column
+produce a readable 3D iso-surface from a single dataset: `pathColor`/
+`colorMapping` paint each ring by its density band, `elevationProperty`/
+`elevationScale` stack the bands into a hill by that same (or a related)
+band value, and `elevationOpacityRange` thins out the upper terraces so nothing
+above ground level fully hides the terrain underneath it when viewed from
+above.
 
 ## Architecture & performance
 
@@ -81,4 +111,4 @@ The sublayer short id for `_subLayerProps` overrides is **`paths`**. Without a `
 
 ## Source
 
-[packages/layers/src/animated-path-layer.ts](../../packages/layers/src/animated-path-layer.ts)
+[packages/layers/src/layers/core/animated-path-layer.ts](../../packages/layers/src/layers/core/animated-path-layer.ts)

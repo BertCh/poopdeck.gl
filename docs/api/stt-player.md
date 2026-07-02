@@ -142,5 +142,5 @@ Pick `baseRate` so the dataset plays in a target wall duration (`span / targetMs
 
 ## Source
 
-[packages/layers/src/stt-player.ts](../../packages/layers/src/stt-player.ts) ·
+[packages/playback/src/stt-player.ts](../../packages/playback/src/stt-player.ts) ·
 underlying pieces: [TimeController](./time-controller.md), [PlaybackGovernor](./playback-governor.md)

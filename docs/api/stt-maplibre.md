@@ -13,9 +13,10 @@ If you can take a deck.gl dependency, [`@poopdeck.gl/layers`](./spatiotemporal-l
 still has a few advantages — rounded joints/dashes, GPU picking, GPU-side
 category-color extension, cross-tile consolidation. The MapLibre adapter trades
 those off for a much smaller bundle and the ability to interleave between
-native MapLibre style layers. It covers every layer kind the deck.gl
-adapter does: points, lines, polygons (with optional stroke + extrusion),
-animated trips, and density heatmaps.
+native MapLibre style layers. It covers five layer kinds — points, lines,
+polygons (with optional stroke + extrusion), animated trips, and density
+heatmaps; the deck-only kinds (arcs, flowmaps, summary tiers, …) are listed
+in the [backend capability matrix](../spec/backend-capabilities.md).
 
 ## Install
 
@@ -147,9 +148,9 @@ const tileset = layer.getTileset(); // undefined until metadata resolves
 | `enablePrefetch` | `boolean` | tileset default (`true`) | Predictive prefetch for animation |
 | `prefetchAhead` | `number` | tileset default (30 s) | Lookahead in ms of sim time |
 | `prefetchSteps` | `number` | tileset default (4) | Number of prefetch time buckets |
-| `fadeInDuration` | `number` | 10 % of `timeWindow` | Leading-edge alpha ramp (ms) |
-| `fadeOutDuration` | `number` | 10 % of `timeWindow` | Trailing-edge alpha ramp (ms) |
-| `softTimeWindow` | `boolean` | `true` | Shortcut — `false` zeroes the fades |
+| `fadeInDuration` | `number` | `0` (hard cut) | Leading-edge alpha ramp (ms); an explicit value always wins over `softTimeWindow` |
+| `fadeOutDuration` | `number` | `0` (hard cut) | Trailing-edge alpha ramp (ms); an explicit value always wins over `softTimeWindow` |
+| `softTimeWindow` | `boolean` | `false` | Opt-in: `true` defaults both fades to 10 % of `timeWindow` (deck/three parity is the hard-cut default) |
 | `onTilesetReady` | `(tileset) => void` | — | Fired once per archive init with the live tileset (satisfies the governor's `BufferSource` contract) |
 | `onBufferChange` | `(runway: BufferedRunway) => void` | — | Buffered-runway threshold events from the tileset's coverage index, forwarded as-is |
 
@@ -160,6 +161,8 @@ const tileset = layer.getTileset(); // undefined until metadata resolves
 | `color` | `[r, g, b, a]` | `[0.31, 0.76, 0.97, 1.0]` | Constant fill colour. 0–1 floats or 0–255 ints — the range is auto-detected (any RGB channel > 1 ⇒ 0–255), so deck.gl-style colors port directly |
 | `colorProperty` | `string` | — | Categorical property → palette lookup |
 | `colorPalette` | `RGBA8[]` | 10-stop categorical | Palette for `colorProperty` (0–255) |
+| `colorMapping` | `Record<string, RGBA8>` | — | Keyed category-name → color map (deck/three parity): stable per-category colors regardless of per-tile dictionary order. Unmapped categories fall back to `colorMappingDefault`, then to the positional `colorPalette` |
+| `colorMappingDefault` | `RGBA8` | — | Color for categories absent from `colorMapping` |
 | `radius` | `number` | `4` | Constant pixel radius |
 | `radiusProperty` | `string` | — | Numeric property name driving per-feature radius |
 | `radiusScale` | `number` | `1` | Multiplier on per-feature radius |
@@ -171,6 +174,7 @@ const tileset = layer.getTileset(); // undefined until metadata resolves
 | `color` | `[r, g, b, a]` | `[0.31, 0.76, 0.97, 1.0]` | Constant stroke colour (range auto-detected) |
 | `colorProperty` | `string` | — | Categorical property → palette lookup |
 | `colorPalette` | `RGBA8[]` | 10-stop categorical | Palette for `colorProperty` |
+| `colorMapping` / `colorMappingDefault` | `Record<string, RGBA8>` / `RGBA8` | — | Keyed category-name → color map + fallback (same semantics as `STTPointLayer`) |
 | `width` | `number` | `2` | Constant pixel width |
 | `widthProperty` | `string` | — | Numeric property driving per-feature width |
 | `widthScale` | `number` | `1` | Multiplier on per-feature width |
@@ -182,6 +186,7 @@ const tileset = layer.getTileset(); // undefined until metadata resolves
 | `color` | `[r, g, b, a]` | `[0.99, 0.55, 0.2, 0.7]` | Constant fill colour (range auto-detected) |
 | `fillColorProperty` | `string` | — | Categorical fill property → palette lookup |
 | `colorPalette` | `RGBA8[]` | 10-stop categorical | Palette for `fillColorProperty` |
+| `colorMapping` / `colorMappingDefault` | `Record<string, RGBA8>` / `RGBA8` | — | Keyed category-name → color map + fallback (same semantics as `STTPointLayer`) |
 | `filled` | `boolean` | `true` | Render the polygon fill |
 | `stroked` | `boolean` | `false` | Draw a stroked outline over each ring |
 | `lineColor` | `[r, g, b, a]` | `[0, 0, 0, 1]` | Outline colour (used with `stroked`) |
@@ -201,7 +206,7 @@ const tileset = layer.getTileset(); // undefined until metadata resolves
 | `widthProperty` | `string` | — | Numeric property driving per-feature width |
 | `widthScale` | `number` | `1` | Multiplier on per-feature width |
 | `trailLength` | `number` | `180_000` | Trail length in ms |
-| `fadeTrail` | `boolean` | `true` | Ramp alpha 1→0 across the trail age (vs. constant alpha) |
+| `fadeTrail` | `boolean` | `true` | Ramp alpha 1→0 across the trail age; `false` keeps the trail solid. Uploaded as the shared `trailFade` blend factor at `0`/`1`, matching core/deck/three semantics |
 
 `STTTripsLayer` consumes `binary.vertexTimestamps` when present; otherwise it
 interpolates between `startTimes` / `endTimes`.

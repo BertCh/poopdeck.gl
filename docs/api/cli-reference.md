@@ -1,15 +1,20 @@
 # CLI Reference
 
-The Rust toolchain ships four binaries. Build them with
+The Rust toolchain ships four core binaries. Build them with
 `cargo build --release` from the repo root; binaries land in
 `target/release/`.
 
 | Binary          | Purpose                                                            |
 | --------------- | ------------------------------------------------------------------ |
-| `stt-build`     | Convert a GeoParquet file into a packed STT dataset                |
+| `stt-build`     | Convert a GeoParquet file **or a PostGIS/DuckDB query** into a packed STT dataset |
 | `stt-generate`  | Download + build the bundled showcase datasets                     |
 | `stt-optimize`  | Analyze an input and recommend `stt-build` flags                   |
 | `stt-validate`  | Verify a packed dataset (or single-file `.stt`), decode every tile |
+
+A fifth, optional binary — **`stt-serve`** — generates STT tiles on the fly from
+a live PostGIS or DuckDB source (see [below](#stt-serve)). It lives in a separate
+crate and is built with a DB feature, e.g.
+`cargo build --release -p stt-serve --features duckdb`.
 
 ---
 
@@ -27,12 +32,41 @@ dataset directory containing `manifest.json` (tiny, mutable), one
 `packs/<blake3>.sttp` objects (immutable, forever-cacheable). Deploy the
 directory with `scripts/r2-sync.sh` (immutable packs + short-TTL manifest).
 
-### Required
+### Input & output
 
 | Flag | Description |
 | ---- | ----------- |
-| `-i, --input <PATH>` | Source GeoParquet file |
-| `-o, --output <PATH>` | Output dataset **directory**. A path ending in `.stt` has the extension stripped for convenience, so `-o foo.stt` produces `foo/{manifest.json,index/,packs/}`. |
+| `-i, --input <PATH>` | Source GeoParquet file. Required unless a database source (below) replaces it. |
+| `-o, --output <PATH>` | (required) Output dataset **directory**. A path ending in `.stt` has the extension stripped for convenience, so `-o foo.stt` produces `foo/{manifest.json,index/,packs/}`. |
+
+### Database input sources (opt-in)
+
+Instead of `--input`, `stt-build` can read features directly from a **PostGIS**
+or **DuckDB** query and build the identical packed archive it would from a file
+(no export step). Geometry bridges through WKB (`ST_AsEWKB` / `ST_AsWKB`), so
+everything downstream — LOD, quantization, summary tiers, `--publish` — works
+unchanged. `--postgres`/`--duckdb` are mutually exclusive with each other and
+with `--input`, which then becomes optional. Each reader is behind an
+off-by-default cargo feature, so build with the matching feature:
+`cargo build --release -p stt-build --features postgres` (or `duckdb`).
+The full design + benchmarks are in
+[db-input-adaptors.md](../roadmap/db-input-adaptors.md).
+
+| Flag | Default | Description |
+| ---- | ------- | ----------- |
+| `--postgres <CONN>` | — | Read from a PostGIS table/query (`--features postgres`). Env fallback: `STT_POSTGRES_URL` / `DATABASE_URL`. Connection is NoTls (localhost / trusted-network). |
+| `--duckdb <PATH>` | — | Read from a DuckDB database file (`--features duckdb`, engine statically bundled — no system lib). A real file opens read-only; `:memory:` opens a fresh in-memory DB for scanning external files via `--sql` (e.g. `read_parquet(...)`). Env fallback: `STT_DUCKDB_PATH`. |
+| `--table <NAME>` | — | Source table to read (optionally schema-qualified, e.g. `public.hurricane_obs`). Mutually exclusive with `--sql`; provide exactly one. |
+| `--sql <SELECT>` | — | Arbitrary SQL `SELECT` to read from (wrapped as a subquery). Mutually exclusive with `--table`. Must expose `--geom-column` and `--time-field`. |
+| `--geom-column <NAME>` | `geom` | Geometry column. Must be (or reproject to) EPSG:4326 lon/lat. |
+| `--where <SQL>` | — | Optional SQL predicate appended to a `--table` read (e.g. `--where "iso_time >= '1970-01-01'"`). |
+| `--source-srid <SRID>` | — | Reproject the source geometry from this EPSG code to 4326 at ingest (PostGIS `ST_Transform`; DuckDB `ST_Transform(..., always_xy => true)`). |
+
+The `--time-field` / `--time-format` / `--end-time-field` flags below apply
+identically to a DB source. Per-vertex list columns (`vertex_timestamps`,
+`vertex_values`, `vertex_value_matrix`) are bridged from array/`LIST` columns of
+the matching element type. **Pre-1970 timestamps still fail** (unsigned epoch) —
+filter them in `--where`/`--sql`.
 
 ### Time
 
@@ -88,11 +122,24 @@ reader fetches only the leaves its viewport / time-window touches).
 
 | Flag | Default | Description |
 | ---- | ------- | ----------- |
-| `--publish` | off | Deploy-ready build: raises the zstd level to 19 (−10..19% on the wire, decode-free) for serve-as-is output. The directory is already paged by default, so this only bumps the level; `--zstd-level` overrides it. This is what `stt-generate` uses, so a from-source build is publish-quality without a separate re-transcode. (Coordinate quantization stays a per-dataset opt-in via `--quantize-coords`.) |
+| `--publish` | off | Deploy-ready build: raises the zstd level to 19 for serve-as-is output (see `--zstd-level` for why); `--zstd-level` overrides it. The directory is already paged by default, so this only bumps the level. This is what `stt-generate` uses, so a from-source build is publish-quality without a separate re-transcode. (Coordinate quantization stays a per-dataset opt-in via `--quantize-coords`.) |
 | `--zstd-level <1..22>` | `3` | zstd level for tile blobs + directory. Default 3 is zstd's "fast" tier; a publish build should pass 19 — the format is write-once / serve-many, so the higher (one-time, offline) build CPU buys −10..19% on every client fetch, and decode is level-independent (free on the client). 19 ≈ 22 on STT tiles, so there's no reason to go past 19. |
 | `--quantize-coords <METERS>` | `0` | Opt-in coordinate quantization: store geometry as fixed-point integers at this ground precision in **meters** instead of Float64 lon/lat. `0` keeps Float64 GeoArrow coords. Coordinates are the dominant, near-incompressible tile column, so e.g. `--quantize-coords 1` (sub-meter error) is the largest size lever — measured −25..47% on trip/path datasets. Trade-off: a quantized tile is no longer self-describing Float64 GeoArrow (the per-tile affine rides in geometry field metadata; the STT reader reconstructs Float64). |
 | `--single-directory` | off | Opt OUT of the paged directory and emit a single whole-load `.sttd` instead. For small datasets paging is ~free (one leaf, whole-loaded by the reader); the single shape only saves a few hundred bytes of root. |
 | `--page-entries <N>` | `4096` | Entries per leaf page (the sim-validated 1024–4096 sweet spot). Ignored with `--single-directory`. |
+
+### Column encoding & packing (opt-in)
+
+Per-column encoders that trade raw Float64 fidelity for size, or repack scalar
+columns into GPU-ready shapes. All are off by default (output stays
+byte-identical unless opted in).
+
+| Flag | Default | Description |
+| ---- | ------- | ----------- |
+| `--quantize-attr <NAME=PREC>` | — | Store the named Float64 property as fixed-point integers at the given precision (in the property's own units) instead of raw Float64, with a per-column affine in field metadata (the reader reconstructs Float64). Repeatable: `--quantize-attr z=0.05 --quantize-attr speed=0.1`. A raw Float64 attribute is near-incompressible; for a LiDAR `z` elevation this is the largest size lever after the geometry — measured ~−80% on the `z` column. |
+| `--quantize-attrs-auto` | off | Automatically quantize EVERY Float64 numeric property (that has no explicit `--quantize-attr` precision) to a range-adaptive `UInt16`: the column's `[min, max]` span is mapped onto 16 bits (~65k levels), the reader reconstructs Float64. 16 bits of dynamic range is visually lossless for STT's scalar fields — the "born-optimized" default for generated datasets. |
+| `--vector-group <NAME=COLS[:f32\|u8]>` | — | Fuse several scalar numeric properties into ONE interleaved GPU-ready column (`FixedSizeList<f32\|u8, width>`) so the renderer binds it zero-copy with no per-point re-interleave on the main thread. Format: `NAME=col1,col2,…[:f32\|:u8]` (default leaf `f32`; use `u8` for 0–255 RGBA). The component order is the vector's component order. Repeatable: `--vector-group surfel_quat=qx,qy,qz,qw --vector-group surfel_rgba=r,g,b,a:u8`. The source scalar columns are removed from the tile. |
+| `--point-elevation-column <NAME>` | — | Fold a numeric property into POINT geometry as the 3rd (altitude) coordinate, so the tile ships true 3D points (`FixedSizeList<_,3>`) the renderer binds zero-copy — no per-point pad-to-3D on the main thread. The column is removed from the property set (it lives in the geometry). Only affects POINT layers. Pairs with `--quantize-coords` (the z axis is quantized to the same ground precision). |
 
 ### Per-tile budgets (opt-in)
 
@@ -196,11 +243,11 @@ pipeline for those features.
 
 When set, the archive carries one summary tile per `(zoom, x, y, t)` in
 addition to the raw tier — readers dispatch between them automatically
-from `metadata.summaryTier`. `h3` is the available scheme.
+from `metadata.summaryTier`. `h3` and `quadbin` are the available schemes.
 
 | Flag | Default | Description |
 | ---- | ------- | ----------- |
-| `--summary-tier <SCHEME>` | — | `h3` (`quadbin` is reserved and not currently accepted) |
+| `--summary-tier <SCHEME>` | — | `h3` (Uber H3 hexes) or `quadbin` (CARTO quadbin) |
 | `--summary-min-zoom <N>` | `min-zoom` | Lowest zoom for summary tiles |
 | `--summary-max-zoom <N>` | `min(min-zoom + 4, max-zoom)` | Highest zoom for summary tiles |
 | `--summary-columns <SPEC>` | `""` | Comma-separated `name:agg` list, e.g. `magnitude:mean,magnitude:max,depth:sum`. `count` is always implicit. |
@@ -321,8 +368,8 @@ Subcommands:
 | `flights` | OpenSky Network ADS-B (Mondays 2017–2020); `--paths` emits LineString trajectories instead of points |
 | `hurricanes` | NOAA IBTrACS historical archive |
 | `wildfires` | NIFC perimeters (1000+ acres) |
-| `nyc-rideshare` | NYC TLC trips + OSRM routing; `--paths` for LineString trajectories, `--flows` for pre-aggregated corridor flows (`--flow-bin` default `15m`, `--flow-snap-meters` default `30` merges nearby road nodes; 0 = exact OSRM geometry) |
-| `bixi` | Montréal BIXI open-data trips → directed origin→destination flowmap (one 2-vertex O→D arc per station pair carrying a per-bucket count matrix). `--input` is required (the BIXI `.zip`/`.csv` or a directory). Build-time per-zoom station clustering is on by default (`--cluster-radius`, `--no-cluster`); `--bake-bundling` bakes KDEEB edge bundling into the geometry; `--streets` routes onto the OSM bicycle network instead (needs `--osm-pbf` + a bicycle-profile `--osrm-url`). |
+| `nyc-rideshare` | NYC TLC trips + OSRM routing; `--paths` for LineString trajectories, `--flows` for pre-aggregated corridor flows binned to intersection-to-intersection road segments (`--flow-bin` default `15m`), `--od` for one straight 2-vertex origin→destination LineString per trip (no OSRM — the `AnimatedArcLayer`/`AnimatedLineLayer` overview geometry; mutually exclusive with `--paths`/`--flows`); `--with-bearing` adds a per-feature `bearing` numeric column (initial O→D great-circle heading with `--od`, heading toward the next trip point for point trajectories) |
+| `bixi` | Montréal BIXI open-data trips → directed origin→destination flowmap (one 2-vertex O→D arc per station pair carrying a per-bucket count matrix). `--input` is required (the BIXI `.zip`/`.csv` or a directory). Build-time per-zoom station clustering is on by default (`--cluster-radius`, `--no-cluster`); `--bake-bundling` bakes KDEEB edge bundling into the geometry; `--streets` routes onto the OSM bicycle network instead (needs `--osm-pbf` + a bicycle-profile `--osrm-url`), with `--directional` baking per-segment travel direction into that output; `--merged-paths` synthesizes twin-ribbon directed corridors from the same bicycle-routed OD pairs, and `--flow-graph` builds an abstract Sankey-like bundled flow network (no streets/OSRM) — mutually exclusive geometry modes. |
 | `nyc-taxi-points` | derived from `nyc-rideshare` via polyline interpolation |
 | `satellites` | CelesTrak TLE + SGP4 propagation |
 | `drifters` | NOAA Global Drifter Program 6-hourly buoy trajectories |
@@ -343,7 +390,9 @@ recipes.
 Inspects an input and prints recommended `stt-build` flags. `analyze` also
 accepts an existing archive via `--stt` (single-file `.stt` only —
 it does not open packed dataset directories) and supports
-`--format json` / `-o <FILE>` for machine-readable output.
+`--format json` / `--output <FILE>` (`-o`) for machine-readable output, plus
+`--verbose` for per-recommendation detail; `recommend` takes the same
+`--output <FILE>`.
 
 ```bash
 stt-optimize analyze --input data.parquet --time-field timestamp \
@@ -393,6 +442,68 @@ Checks performed:
 
 Exits non-zero on any failure. Suitable for CI gating any dataset that
 ships with the project.
+
+---
+
+## `stt-serve`
+
+Optional binary (separate crate) that generates STT tiles **on the fly** from a
+live PostGIS or DuckDB source — the `ST_AsMVT` analog for the STT format, with no
+pre-bake. It shares `stt-build`'s per-tile encoder, so a served tile is
+byte-identical to the offline-built tile for the same `(z,x,y,t)` and source
+rows. Build with a backend feature:
+
+```bash
+cargo build --release -p stt-serve --features postgres   # or: --features duckdb
+
+# PostGIS backend:
+stt-serve --postgres "$PGURL" --table hurricane_obs --geom-column geom \
+          --time-field iso_time --temporal-bucket 7d --min-zoom 3 --max-zoom 8
+
+# DuckDB backend (no database server needed — point at a .duckdb file):
+stt-serve --duckdb hurricane.duckdb --table hurricane_obs --geom-column geom \
+          --time-field iso_time --temporal-bucket 7d
+```
+
+Endpoints: `GET /tiles/{z}/{x}/{y}/{t}.stt` (a below-threshold tile returns `204
+No Content`), `GET /metadata.json`, `GET /health`; with `--config`, each dataset
+is served under `GET /{name}/tiles/{z}/{x}/{y}/{t}.stt` /
+`GET /{name}/metadata.json` plus a `GET /datasets` catalog, and each dataset's
+metadata advertises its own prefixed `tileUrlTemplate`
+(`/{name}/tiles/{z}/{x}/{y}/{t}.stt`) so a client can point a tileset at it
+unchanged. Full HTTP semantics:
+[the `stt-serve` protocol spec](../spec/stt-serve-protocol.md).
+
+| Flag | Default | Description |
+| ---- | ------- | ----------- |
+| `--postgres <CONN>` | — | PostGIS backend (deadpool pool, NoTls). Env fallback: `STT_POSTGRES_URL` / `DATABASE_URL`. Mutually exclusive with `--duckdb`. |
+| `--duckdb <PATH>` | — | DuckDB backend (r2d2 pool; read-only file, or `:memory:` for external-file `--sql` scans). Env fallback: `STT_DUCKDB_PATH`. Mutually exclusive with `--postgres`. |
+| `--table <NAME>` / `--sql <SELECT>` | — | Source table or arbitrary `SELECT` (provide exactly one). A `--sql` source must expose `--geom-column` and `--time-field`. |
+| `--geom-column <NAME>` | `geom` | Geometry column (must be EPSG:4326 lon/lat — reproject at ingest, not per tile). |
+| `--time-field <NAME>` | `timestamp` | Timestamp column (timestamp/timestamptz, or an integer column read per `--time-format`). |
+| `--end-time-field <NAME>` / `--time-format <FMT>` | — / `iso8601` | Optional end-time column; wire format of an integer time column (matches `stt-build`). |
+| `--min-zoom <N>` / `--max-zoom <N>` | `0` / `14` | Zoom range advertised in `/metadata.json` and within which LOD levels apply. |
+| `--temporal-bucket <DUR>` | `1h` | Base bucket size — must match how clients address tiles in time. |
+| `--temporal-lod <SPEC>` | — | Coarser-bucket pyramid (e.g. `1d,30d` or `1d@8,30d@4`); at an applicable zoom the server widens to that level's bucket (coarsest wins). |
+| `--layer <NAME>` | `default` | Layer name embedded in each tile. |
+| `--config <PATH>` | — | Multi-dataset mode: JSON file `{ "datasets": [ {…}, … ] }` where each entry carries the same fields as these flags (kebab-case; unknown keys rejected). Each dataset serves under `/{name}/…`. |
+| `--name <NAME>` | derived | Dataset name — the `/{name}/…` URL segment and the metadata `name` in `--config` mode. Single-dataset mode derives it from the table/query and serves at the root. |
+| `--pool-size <N>` | `8` | Connection-pool size for whichever backend is active — `max_size` on the deadpool pool for `--postgres`, or the r2d2 pool for `--duckdb`. |
+| `--heatmap-weight <PROP>` | — | Numeric property driving `HeatmapLayer` weight. Its `[min, 95th percentile]` (per `--heatmap-class` if set) is computed ONCE at startup via a SQL aggregate over the whole source and advertised as `heatmapDomain` in `/metadata.json` — matches `stt-build --heatmap-weight`. |
+| `--heatmap-class <PROP>` | — | Categorical property whose distinct values become per-class `heatmapDomain` entries (capped at 8). Matches `stt-build --heatmap-class`. |
+| `--bind <ADDR>` | `127.0.0.1:8088` | Listen address. |
+
+`stt-serve` also accepts the full offline **per-tile** flag surface
+(`--simplify`/`--simplify-max-zoom`/`--time-aware-simplify`, `--pre-tessellate`,
+`--no-clip`/`--clip-min-vertices`, `--min-zoom-field`/`--max-zoom-field`, the
+per-tile budgets `--maximum-tile-bytes`/`--maximum-tile-features`/
+`--drop-densest-as-needed`, `--exclude`/`--include`/`--exclude-all`,
+`--min-features-per-tile`) and the **encoder-global** flags (`--quantize-coords`,
+`--quantize-attr`, `--quantize-attrs-auto`, `--vector-group`,
+`--point-elevation-column`, `--vertex-time-precision`) — installed identically to
+the offline build via the shared `build_options` module. `--summary-tier` and
+`--adaptive-temporal` are **not** servable per single-tile request (rejected at
+startup — pre-bake them with `stt-build`).
 
 ---
 

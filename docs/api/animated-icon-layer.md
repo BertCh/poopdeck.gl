@@ -52,4 +52,4 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 
 ## Source
 
-[packages/layers/src/animated-icon-layer.ts](../../packages/layers/src/animated-icon-layer.ts)
+[packages/layers/src/layers/core/animated-icon-layer.ts](../../packages/layers/src/layers/core/animated-icon-layer.ts)

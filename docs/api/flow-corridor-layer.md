@@ -39,7 +39,7 @@ The active-bucket scalar is colored through the inherited per-vertex gradient pr
 
 ## Properties
 
-Inherits all properties from [`AnimatedTripsLayer`](./animated-trips-layer.md) (and through it [`SpatioTemporalLayer`](./spatiotemporal-layer.md)). `FlowCorridorLayer` adds no new constructor props — it overrides how the gradient scalar is sourced. The relevant inherited props are:
+Inherits all properties from [`AnimatedTripsLayer`](./animated-trips-layer.md) (and through it [`SpatioTemporalLayer`](./spatiotemporal-layer.md)). The relevant inherited props are:
 
 | Property | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
@@ -47,6 +47,23 @@ Inherits all properties from [`AnimatedTripsLayer`](./animated-trips-layer.md) (
 | `gradientColorRamp` | `Color[]` | `[]` | Low→high color stops (piecewise-lerped) for the pulsing color. |
 | `tripWidth` | `number \| string` | `3` | Corridor line width (constant; widths do not animate here). |
 | `widthUnits` / `widthScale` / `widthMinPixels` / `widthMaxPixels` | — | — | `PathLayer` width controls (see `AnimatedTripsLayer`). |
+
+`FlowCorridorLayer` also adds its own props, all optional, that control how the active-bucket scalar is derived and how a paired [`ChevronFlowExtension`](./chevron-flow-extension.md) reads direction/intensity off it:
+
+| Property | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `signedFlow` | `boolean` | `false` | Treats the value matrix as **signed**: `abs(value)` drives the color (volume) while the sign carries per-bucket travel direction. Set this for tiles built with `bixi --streets --per-bucket-direction`. When on, `chevronDirectionsFor` emits a continuous `[-1, 1]` directional-coherence signal (a rolling `Σsigned / Σ|value|` ratio) instead of the default plain-magnitude blend, so a paired `ChevronFlowExtension` can morph arrow shape/hue/march smoothly between forward and reverse. |
+| `chevronPerTripLight` | `boolean` | `false` | Switches the gradient source to a **two-signal** mode built for `ChevronFlowExtension({ perTripLight: true })`: the RGB channel becomes a rolling-window aggregate mean of `abs(value)` (the "style over a granular period" color), and the color buffer's alpha byte is packed with a separate instantaneous per-trip flash (a short trailing decay of the nearest fine bucket) — no extra GPU attribute is needed. |
+| `chevronAggregateWindowMs` | `number` | `240000` | Half-span, in ms of data time, of the rolling window used for the `chevronPerTripLight` RGB aggregate (±4 min by default). Wider windows smooth the ramp color further. |
+| `chevronInstantDomain` | `number` | `1.5` | Normalization top for the `chevronPerTripLight` instant flash: a trailing-sum value at or above this reads as a full-brightness flash in the alpha channel. Non-positive values fall back to the default. |
+| `chevronInstantDecayMs` | `number` | `120000` | Trailing exponential decay time constant, in ms of data time, for the `chevronPerTripLight` instant flash (2 min by default) — controls how long a segment stays lit after a trip passes. |
+| `chevronDirectionWindowMs` | `number` | `chevronAggregateWindowMs` | Half-span, in ms of data time, of the rolling window used for the `signedFlow` directional-coherence signal. Defaults to sharing the aggregate window so color and direction resolve at the same temporal granularity; set separately to decouple them. |
+
+These props power the directional chevron rendering used by the `bixi-streets-flow` demo, where `signedFlow` + `chevronPerTripLight` on this layer pair with a `ChevronFlowExtension` added via the inherited `extensions` prop.
+
+## Related layers
+
+[`FlowStrokeLayer`](./flow-stroke-layer.md) extends `FlowCorridorLayer` for merged, directed corridor networks — it keeps the same per-vertex time-bucket coloring and adds breathing width plus twin directional offset ribbons. [`ChevronFlowExtension`](./chevron-flow-extension.md) is the standalone `LayerExtension` form of the marching-arrow effect this layer's `signedFlow` / `chevronPerTripLight` props are designed to feed — it can also be applied to any other `PathLayer`-based layer.
 
 ## Difference from FlowmapLayer / FlowLinesLayer
 

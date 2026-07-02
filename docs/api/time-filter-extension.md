@@ -137,8 +137,8 @@ Other built-in optimizations: the shader-injection object is memoized per extens
 ## Limitations
 
 - The three time attributes plus a layer's own attributes can brush WebGL2's 16-vertex-attribute guaranteed minimum when stacked with fp64 positions, picking, and `CategoryColorExtension`. On GPUs reporting exactly 16 slots, deck.gl logs a link warning and falls back to a non-picking shader; rendering proceeds. `AnimatedPathLayer`/`AnimatedTripsLayer` avoid this by default via `NoPickingPathLayer`. The constructor's `mode` option is reserved and has no effect.
-- `PolygonTimeFilterExtension` is a deprecated alias (warns once on construction) — `TimeFilterExtension` works on `SolidPolygonLayer` directly.
+- `TimeFilterExtension` works on `SolidPolygonLayer` directly (no separate polygon extension needed).
 
 ## Source
 
-[packages/layers/src/time-filter-extension.ts](../../packages/layers/src/time-filter-extension.ts)
+[packages/layers/src/extensions/time-filter-extension.ts](../../packages/layers/src/extensions/time-filter-extension.ts)

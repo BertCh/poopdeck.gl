@@ -119,6 +119,7 @@ new PlaybackGovernor(timeController: TimeController, opts?: PlaybackGovernorOpti
 | `seekSettleMs` | `number` | `200` | How long a scrub position must rest before a UI should commit it as a real seek. The governor doesn't run this timer — it's exposed (as the readonly `seekSettleMs` field) so scrubbing UIs share one knob. |
 | `maxStartWaitMs` | `number` | `8000` | Escape hatch: start degraded if a gate hasn't passed by then. |
 | `getThroughput` | `() => ThroughputEstimate` | `null` | Optional throughput getter for `getAutoSpeedSuggestion`; when absent the governor implies one from the source's own `estimateTimeToReadyMs`. |
+| `runwayToleranceMs` | `number` | `200` | Multi-source cadence tolerance band (see [Multiple sources](#multiple-sources-n-source-gate)). Wall-ms × \|speed\|; a required source within this of the leading required frontier is not counted as starved. `0` = exact raw-min gating. |
 
 ## Methods
 
@@ -137,10 +138,13 @@ new PlaybackGovernor(timeController: TimeController, opts?: PlaybackGovernorOpti
 
 | Method | Description |
 | :--- | :--- |
-| `setSource(source)` | Attach (or replace) the readiness oracle. The governor may sit in `starting` with no source — it passes the gate the moment the source proves readiness, or starts degraded after `maxStartWaitMs`. |
+| `addSource(id, source, {required?, weight?})` | Register (or replace) one classified source in the N-source registry (see [Multiple sources](#multiple-sources-n-source-gate)). `required` (default `true`) gates the clock; optional sources never gate but still load and count toward cost/ETA. `weight` (default `1`) is a bandwidth-share hint for the shared scheduler. A source lacking `getBufferedRunway` is rejected with a console warning. |
+| `removeSource(id)` | Drop a source from the registry by id (no-op if absent). |
+| `setSource(source)` | Back-compat single-source shim: clears the registry and (when non-null) registers `source` as the required `'default'` source. New code should prefer `addSource`/`removeSource` so overlays can be classified. The governor may sit in `starting` with no source — it passes the gate the moment the required set proves readiness, or starts degraded after `maxStartWaitMs`. |
 | `notifyBufferChange(runway)` | Consumer-forwarded buffer event (layer `onBufferChange` → here). Re-emits as `progress` and triggers an immediate gate/stall evaluation in addition to the 250 ms gated cadence. |
 | `getEtaMs()` | Honest ETA (wall-ms) until the current gate window is ready; `null` when unknown. |
 | `getBufferedRanges(opts?)` | Passthrough to the source (for a buffered-bar UI); `[]` without a source. |
+| `getSourceRunways()` | Per-source `{ id, required, runwaySimMs, complete, bytesPending }[]` snapshot for a multi-track buffered bar (the gating source is the `min` over required); `[]` with no sources. |
 | `estimateCost(range)` | Byte/tile cost of making `range` fully buffered for the current viewport (passthrough to the source's directory math; zeros without a source). UIs use it for ETA chips and timeline density strips. |
 | `getQoeStats()` | Snapshot of the session's QoE counters (below). |
 | `getAutoSpeedSuggestion()` | Maximum sustainable playback speed (see below); `Infinity` when the upcoming horizon has nothing left to load, `null` when unknown. |
@@ -197,7 +201,7 @@ A CI probe asserting `stallCount` stays bounded catches freeze/lurch failure mod
 
 `getAutoSpeedSuggestion()` returns the maximum sustainable playback speed (TimeController units — sim-ms per wall-ms) the measured network can feed, derived from the byte cost of the next 8 wall-seconds at the current speed with a 0.7 safety factor (ABR-style). Returns `Infinity` when the upcoming horizon has nothing left to load (everything buffered ⇒ the network imposes no cap) — consumers clamp it to their max step via `decideAutoSpeedMultiplier`, so a fully-cached dataset rises to full speed instead of freezing at whatever multiplier Auto last chose. Returns `null` when the math cannot be honest: throughput unknown, or tiles pending whose byte sizes the directory doesn't expose.
 
-Consumers apply the snapping/clamping/asymmetry via the shared policy in `decideAutoSpeedMultiplier` (exported from `@poopdeck.gl/playback`): **downshifts apply immediately with no deadband; upshifts are damped** (cadence-only, and only past a 25 % relative deadband), and the result snaps to a preset-like step list (defaults: 0.25–10×; override via an optional fourth `{ steps, minMultiplier, maxMultiplier, upshiftDeadband }` argument). It returns `null` to hold the current multiplier.
+Consumers apply the snapping/clamping/asymmetry via the shared policy in `decideAutoSpeedMultiplier` (exported from `@poopdeck.gl/playback`): **downshifts apply immediately with no deadband; upshifts are damped** (cadence-only, and only past a 25 % relative deadband), and the result snaps to a preset-like step list (default: the exported `SPEED_STEPS` ladder, 0.25–10×; override via an optional fourth `{ steps, minMultiplier, maxMultiplier, upshiftDeadband }` argument). It returns `null` to hold the current multiplier.
 
 ```typescript
 import { decideAutoSpeedMultiplier } from '@poopdeck.gl/playback';
@@ -213,8 +217,71 @@ if (raw != null) {
 }
 ```
 
+## Multiple sources (N-source gate)
+
+A single governor can gate one shared clock on **N composited sources** — a story
+or cockpit overlaying several datasets on one playhead. Register each with
+`addSource(id, source, { required, weight })`; the gate folds over the **required**
+subset:
+
+- **runway** = `min` `simMs` over required — the clock waits for the slowest
+  required source (MSE's `HAVE_ENOUGH_DATA` = all active buffers ready);
+- **complete** = **AND** over required — never stall on a finished source;
+- **ETA** = `max`, **cost** = `Σ` over the contributing sources.
+
+**Optional** sources (`required: false`) never gate — they continue-and-degrade:
+they load and render what's resident and still count toward cost/ETA, but a lagging
+optional source never freezes the clock. Classify lightweight overlays optional and
+heavy base layers required so the playhead locks to the data that matters. With zero
+required sources the clock never stalls.
+
+**Cadence tolerance band (`runwayToleranceMs`).** Sources with different temporal
+chunking almost never share a buffered horizon, so a raw `min()` spuriously stalls
+the instant the fastest-cadence source's runway dips a few ms below a peer (the W3C
+Bug 26436 misfire — this is *not* an inherited MSE mechanism; STT implements it). A
+required source within `runwayToleranceMs × |speed|` of the leading required frontier
+is treated as if it reached the leader before the `min`, absorbing cadence jitter
+**without** lowering genuine stall protection. Default `200` (the tick-probe
+interval); `0` reproduces exact raw-min gating.
+
+`setSource(s)` is the single-source shim: it clears the registry and registers `s` as
+the required `'default'` source, so an app that never composites behaves exactly as
+before.
+
+## Shared request scheduler
+
+By default each `SpatiotemporalTileset`'s archive opens up to its own concurrency cap
+(24), and N composited archives fight for bandwidth with no shared budget. The
+process-shared **`SharedRequestScheduler`** (in `@poopdeck.gl/core`) is one global
+authority all archives draw from: a global `maxRequests` budget, priority-ordered by
+**EDF on exact time-to-playhead** (comparable across archives sharing one playhead),
+**weighted-fair** slot share (deficit round-robin over the per-source `weight`) so no
+required source starves another, work-conserving (an idle source's slots are
+reclaimed), a `done()` handshake on completion or failure, and negative-priority
+cancellation for tiles the playhead has passed.
+
+The default budget (24) equals the legacy per-archive cap, so a single-dataset scene
+is unchanged (work-conservation lets one source draw all 24 slots). Toggle or re-tune
+it with the kill-switch:
+
+```typescript
+import { configureSharedScheduler } from '@poopdeck.gl/core';
+
+// ROLLBACK: every archive reverts to its legacy per-instance runner (no behavior
+// change to the gate). The one flag to flip if request sharing misbehaves.
+configureSharedScheduler({ enabled: false });
+
+// Re-tune the global concurrency budget (replaces the singleton — do it at startup,
+// not mid-playback). Omitted fields are left unchanged; the flag defaults to enabled.
+configureSharedScheduler({ maxRequests: 32 });
+```
+
+Design rationale (the SoTA survey, the N-source fold, the scheduler): the
+[playback & loading decision record](../roadmap/playback-and-loading.md).
+
 ## Source
 
-[packages/layers/src/playback-governor.ts](../../packages/layers/src/playback-governor.ts) ·
-[packages/layers/src/auto-speed.ts](../../packages/layers/src/auto-speed.ts) ·
-design doc: `docs/roadmap/player-buffering.md`
+[packages/playback/src/playback-governor.ts](../../packages/playback/src/playback-governor.ts) ·
+[packages/playback/src/auto-speed.ts](../../packages/playback/src/auto-speed.ts) ·
+[packages/core/src/request-scheduler.ts](../../packages/core/src/request-scheduler.ts) ·
+design doc: [`docs/roadmap/playback-and-loading.md`](../roadmap/playback-and-loading.md)

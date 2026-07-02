@@ -31,7 +31,7 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 
 | Property | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `elevation` / `getElevation` | `number \| string` | `0` | Column height — constant or a numeric property-column name. |
+| `elevation` / `getElevation` | `number \| string` | `1000` | Column height — constant or a numeric property-column name. |
 | `elevationScale` | `number` | `1` | Multiplier on every elevation (e.g. metres per unit). |
 | `radius` | `number` | `100` | Column disk radius, in `radiusUnits`. |
 | `radiusUnits` | `'meters' \| 'pixels' \| 'common'` | `'meters'` | Radius units. |
@@ -40,6 +40,13 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 | `fillColor` / `getFillColor` | `Color \| string` | `[255,140,0,255]` | Fill — constant RGBA or a categorical property-column name (GPU palette). |
 | `colorPalette` | `Color[]` | 10-stop | Palette for a categorical `fillColor` column. |
 | `wireframe` / `filled` / `stroked` / `flatShading` | `boolean` | — | `ColumnLayer` style pass-throughs. |
+| `angle` | `number` | `0` | Disk rotation (degrees, counter-clockwise) — `ColumnLayer` pass-through. |
+| `vertices` | `Position[] \| null` | `null` | Custom disk cross-section replacing the regular polygon — `ColumnLayer` pass-through. |
+| `offset` | `[number, number]` | `[0, 0]` | Disk offset from the anchor, in radius multiples — `ColumnLayer` pass-through. |
+| `coverage` | `number` | `1` | Radius multiplier `[0, 1]` shrinking each column within its footprint. |
+| `lineColor` / `getLineColor` | `Color` | `[0,0,0,255]` | Outline stroke color (constant only) — drawn when `stroked` is true. |
+| `lineWidth` / `getLineWidth` | `number` | `1` | Outline stroke width (constant only), in `lineWidthUnits`. |
+| `lineWidthUnits` | `'meters' \| 'pixels' \| 'common'` | `'meters'` | Outline stroke width units. |
 | `material` | `Material` | `true` | Lighting material for the extrusion. |
 | `fadeInDuration` / `fadeOutDuration` | `number` | `300` | Window fade ramps (ms). |
 
@@ -51,4 +58,4 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 
 ## Source
 
-[packages/layers/src/animated-column-layer.ts](../../packages/layers/src/animated-column-layer.ts)
+[packages/layers/src/layers/core/animated-column-layer.ts](../../packages/layers/src/layers/core/animated-column-layer.ts)

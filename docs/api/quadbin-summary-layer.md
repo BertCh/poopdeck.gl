@@ -27,11 +27,11 @@ const layer = new QuadbinSummaryLayer({
 
 ## Cell encoding
 
-The Quadbin cell id is a **CARTO Quadbin u64** (header `0b100`, mode bit, 5-bit zoom at bits 56–52, 52-bit left-aligned Morton x/y). The Rust aggregator (`stt-build`) encodes it and the TS [`quadbin-cell`](../../packages/layers/src/quadbin-cell.ts) helper decodes it to `(z, x, y)` → Bing quadkey string. The encode/decode are exact mirror-images, validated against CARTO's reference value `(0,0,0) → 0x480fffffffffffff`.
+The Quadbin cell id is a **CARTO Quadbin u64** (header `0b100`, mode bit, 5-bit zoom at bits 56–52, 52-bit left-aligned Morton x/y). The Rust aggregator (`stt-build`) encodes it and the TS [`quadbin-cell`](../../packages/layers/src/lib/quadbin-cell.ts) helper decodes it to `(z, x, y)` → Bing quadkey string. The encode/decode are exact mirror-images, validated against CARTO's reference value `(0,0,0) → 0x480fffffffffffff`.
 
 ## Properties
 
-Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
+Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md). One base default changes: `maxCacheSize` is **500** (summary tiles are few but row-heavy).
 
 | Property | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
@@ -52,4 +52,4 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 
 ## Source
 
-[packages/layers/src/quadbin-summary-layer.ts](../../packages/layers/src/quadbin-summary-layer.ts) · cell helper: [quadbin-cell.ts](../../packages/layers/src/quadbin-cell.ts)
+[packages/layers/src/layers/summary/quadbin-summary-layer.ts](../../packages/layers/src/layers/summary/quadbin-summary-layer.ts) · cell helper: [quadbin-cell.ts](../../packages/layers/src/lib/quadbin-cell.ts)

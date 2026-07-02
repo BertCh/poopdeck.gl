@@ -45,6 +45,27 @@ data/<dataset>/
   `R2_PRUNE_RETENTION`, escape hatch `--prune-now`). Edge caches need no purge
   either way — an evicted-at-origin object simply ages out of the edge.
 
+```mermaid
+flowchart LR
+  subgraph MUT["mutable · max-age=60"]
+    M["manifest.json\nmetadata + packs table + directory pointer"]
+  end
+  subgraph IMM["immutable · content-addressed · max-age=1y"]
+    D["index/*.sttd — directory\ntile id → (pack_id, offset, len)"]
+    P0["packs/*.sttp\ntile blobs"]
+    P1["packs/*.sttp\n..."]
+  end
+  M -->|"1. directory.key"| D
+  M -.->|"packs[i] defines pack_id i"| P0
+  D -->|"2. (pack_id, offset, len)\nHTTP Range request"| P0
+  D --> P1
+```
+
+A cold reader fetches the manifest, then the directory (with the paged layout,
+only the root page plus the leaf pages its viewport/time window touches), then
+issues coalesced Range requests into packs. A deploy re-uploads only new
+content-addressed objects and rewrites the manifest.
+
 ## 3. `manifest.json` schema
 
 ```json
@@ -455,7 +476,7 @@ and [`tile-matrix-set.json`](./tile-matrix-set.json).
 [OGC Moving Features JSON](https://docs.ogc.org/is/19-045r3/19-045r3.html) is
 the semantic ancestor: it standardizes *trajectory encodings*
 (`MF_TemporalGeometry`, per-coordinate timestamp arrays — the same model as
-our per-vertex `vertex_times`). But it is feature-at-a-time JSON with no
+our per-vertex `vertex_time` column). But it is feature-at-a-time JSON with no
 tiling, no columnar layout, and no GPU story — a payload semantics standard,
 not a delivery format. The natural convergence point is an ingest path
 (`stt-build --input mf-json`): MF-JSON trajectories map losslessly onto STT's

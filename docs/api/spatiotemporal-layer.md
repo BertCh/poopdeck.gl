@@ -65,6 +65,12 @@ Inherits from all [CompositeLayer](https://deck.gl/docs/api-reference/core/compo
 | :--- | :--- | :--- | :--- |
 | `tier` | `'auto' \| 'summary' \| 'raw'` | `'auto'` | Which tier the tileset draws from when the archive carries a server-aggregated summary tier (`stt-build --summary-tier`). `'auto'` uses the summary tier at zooms inside its `[minZoom, maxZoom]` band and the raw tier above it, so a wide low-zoom view streams a few thousand aggregated cells instead of millions of raw features. `'summary'` always uses the summary tier; `'raw'` always uses the raw tier. No effect on archives without a summary tier. |
 
+### Level of detail
+
+| Property  | Type                            | Default             | Description                                                                            |
+| :-------- | :------------------------------- | :------------------ | :--------------------------------------------------------------------------------------- |
+| `lodMode` | `'parent-fallback' \| 'additive'` | `'parent-fallback'` | How the tileset composes tiles across zoom levels (threaded straight to `SpatiotemporalTilesetOptions.lodMode`). `'parent-fallback'` renders the single best zoom for the current viewport, with coarser parent tiles kept only as a transient fallback until matching detail streams in. `'additive'` renders the UNION of zoom levels `[minZoom..cameraZoom]` and keeps every level resident instead of dropping parents once children arrive. Use `'additive'` for additive-octree point clouds built with `stt-build --min-zoom-field=--max-zoom-field=<home_zoom column>`, where each point lives at exactly one zoom level: coarse tiles are a sparse overview and finer tiles add only the residual, so zooming in streams in new detail without re-fetching the coarse cloud. |
+
 ### GlobeView / projection helpers
 
 | Property          | Type             | Default | Description                                                           |
@@ -186,4 +192,4 @@ The layer is optimized for high-performance animation:
 
 ## Source
 
-[packages/layers/src/spatiotemporal-layer.ts](../../packages/layers/src/spatiotemporal-layer.ts)
+[packages/layers/src/layers/spatiotemporal-layer.ts](../../packages/layers/src/layers/spatiotemporal-layer.ts)

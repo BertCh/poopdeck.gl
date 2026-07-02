@@ -54,19 +54,23 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 | `elevation`    | `number \| string` | `0`                  | Elevation for extruded polygons: constant, or a numeric property name.          |
 | `getElevation` | `number \| string \| null` | `null`        | Upstream-vocabulary alias of `elevation` (same domain rules).                   |
 | `colorPalette` | `Color[]`          | 10-color palette     | Palette for categorical `fillColor` (GPU lookup, up to 4096 entries).           |
+| `colorMapping` | `Record<string, Color> \| null` | `null`  | Explicit category-string → color map. When set together with a string `fillColor`, each tile resolves its own category dictionary through this map into a per-tile palette, so a category keeps the same color across tiles whose dictionaries differ in order or subset — the bare `colorPalette` assigns colors by first-seen category index and drifts tile to tile. Stays on the GPU `CategoryColorExtension` path (the mapping only changes how the per-tile palette is built, not how it's sampled). Categories absent from the map fall back to `colorMappingDefault`. |
+| `colorMappingDefault` | `Color`    | `[0, 0, 0, 0]`        | Fallback color for categories absent from `colorMapping` (transparent by default). |
 
-### Outline props (no effect)
+### No outline pass
 
-`stroked`, `lineWidthUnits`, `lineWidth`, and `lineColor` have **no visual effect**: the fill sublayer is a `SolidPolygonLayer` with no outline pass. They remain on the type for API compatibility, and a runtime warning fires when they are set.
+The fill sublayer is a `SolidPolygonLayer`, which has no outline pass — there
+are no `stroked` / `lineWidth` / `lineColor` props on this layer. For outlined
+polygons, overlay an [`AnimatedPathLayer`](./animated-path-layer.md) on the
+ring geometry.
 
 ## Architecture & performance
 
 - **GPU time filtering**: the shared
   [`TimeFilterExtension`](./time-filter-extension.md) runs directly on
   `SolidPolygonLayer` — polygons upload once per tile and time-window
-  changes only update uniforms. (`PolygonTimeFilterExtension` is available
-  as a deprecated alias.) Categorical fill colors likewise lift to the GPU
-  via [`CategoryColorExtension`](./category-color-extension.md).
+  changes only update uniforms. Categorical fill colors likewise lift to the
+  GPU via [`CategoryColorExtension`](./category-color-extension.md).
 - **Per-vertex attribute expansion**: `SolidPolygonLayer`'s fill model is
   non-instanced, so the extension attributes resolve to per-vertex there
   and the layer expands start/end times, category indices, and per-feature
@@ -93,4 +97,4 @@ The sublayer short id for `_subLayerProps` overrides is **`polygons`**: `_subLay
 
 ## Source
 
-[packages/layers/src/animated-polygon-layer.ts](../../packages/layers/src/animated-polygon-layer.ts)
+[packages/layers/src/layers/core/animated-polygon-layer.ts](../../packages/layers/src/layers/core/animated-polygon-layer.ts)

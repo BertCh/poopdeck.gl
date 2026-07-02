@@ -40,13 +40,13 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 | `headRadiusPixels` | `number` | `4` | Head radius in pixels (used when `sizeUnits === 'pixels'`). |
 | `headRadius` | `number` | `0` | Head radius in metres (used when `sizeUnits === 'meters'`; falls back to `headRadiusPixels`). |
 | `headRadiusMinPixels` | `number` | `0` | Minimum on-screen head radius in pixels (meters-mode clamp). |
-| `headRadiusMaxPixels` | `number` | unbounded | Maximum on-screen head radius in pixels (meters-mode clamp). |
+| `headRadiusMaxPixels` | `number` | `1e9` (effectively unbounded) | Maximum on-screen head radius in pixels (meters-mode clamp). |
 
 ## How it works
 
 1. **Tile prepare** (once per tile, cached): the tile's `positions`/`startIndices`/`startTimes`/`endTimes` are referenced zero-copy; per-vertex times come from `vertexTimestamps` when present, otherwise they are synthesized distance-proportionally.
 2. **Per frame**: for every trip *active* at the playhead, a binary-search + lerp finds the head position along its path. Inactive trips are simply not emitted (a trip pops in at its start and out at its end). The active heads are handed to a `ScatterplotLayer` as a binary `data` buffer.
-3. Like [`FlowCorridorLayer`](./animated-trips-layer.md), the layer forces a `renderLayers()` pass each frame so the CPU-computed positions advance.
+3. Like [`FlowCorridorLayer`](./flow-corridor-layer.md), the layer bumps a state counter to force a `renderLayers()` pass each frame so the CPU-computed positions advance (unlike [`AnimatedTripsLayer`](./animated-trips-layer.md), which animates via a shader uniform and only needs a redraw).
 
 Cost scales with the number of *active* trips over the visible tiles (a few thousand at most at metro scale) — well under 1 ms/frame.
 

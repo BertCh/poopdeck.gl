@@ -13,8 +13,8 @@
 ## 1. Why a profile
 
 The core format answers "stream one georeferenced vector dataset over space and
-time." Three needs fall *outside* a single packed dataset and motivated this
-profile — each previously handled by ad-hoc code with no written contract:
+time." This profile defines a written contract for three needs that fall
+*outside* a single packed dataset:
 
 1. **Multiple co-registered streams on one playhead.** An AV scene is a lidar
    point cloud *and* an ego trajectory *and* tracked-object boxes *and* an HD
@@ -28,7 +28,7 @@ profile — each previously handled by ad-hoc code with no written contract:
 3. **Approximate / local-frame georeferencing.** Some sources (e.g. Waymo
    Perception) disclose no usable global georeference. Their geometry is a local
    metric frame *anchored* to a plausible lon/lat, not authoritative WGS84 — a
-   case the core spec's CRS pinning (§3.4) did not previously cover.
+   case the core spec's CRS pinning (§3.4) does not cover.
 
 This document makes all three normative so a third party can produce or consume
 a scene bundle, and so the profile's deviations from the core spec are explicit
@@ -46,8 +46,10 @@ subdirectory), and zero or more **sidecar files**:
   lidar/                  # packed STT point dataset   (manifest.json + index/ + packs/)
   ego/                    # packed STT trips dataset    (one LineString = ego path)
   objects/                # packed STT point dataset    (one point / object / sample)
+  tracks/                 # [optional] packed STT line dataset (one trail / tracked object)
   map_poly/               # [optional] packed STT polygon dataset (HD-map fills)
   map_line/               # [optional] packed STT line dataset    (HD-map dividers)
+  static/ + dynamic/      # [optional] scene-split pair: timeless "stage" + animated "actors"
   telemetry.json          # [optional] CAN-bus time-series sidecar
   cameras.json            # [optional] camera keyframe sidecar
   cam/0000.jpg ...        # [optional] camera frame images (relative URLs in cameras.json)
@@ -86,8 +88,7 @@ round-trip. The machine-checkable definition is
   "dataset": "nuScenes v1.0-mini",
   "license": "CC-BY-NC-SA-4.0",
   "location": "boston-seaport",
-  "frame": "georeferenced",                 // RECOMMENDED (§4); inferred from `georef` if absent
-  "georef": { "originLat": 42.33685, "originLon": -71.05785 },
+  "georef": { "originLat": 42.33685, "originLon": -71.05785 },  // always present (§4.1)
   "timeRange": { "start": 1700000000000, "end": 1700000020000 },  // Unix ms, UTC
   "initialView": { "longitude": -71.0506, "latitude": 42.3413, "zoom": 18, "pitch": 55, "bearing": 20 },
   "objectColors": { "car": [255,158,0,235], "pedestrian": [0,80,230,240], "...": [] },
@@ -96,6 +97,7 @@ round-trip. The machine-checkable definition is
     "lidar":     { "url": "lidar/manifest.json", "points": 159996 },
     "ego":       { "url": "ego/manifest.json", "path": [{ "t": 1700000000000, "lon": -71.05, "lat": 42.34 }] },
     "objects":   { "url": "objects/manifest.json", "categories": ["car", "pedestrian"] },
+    "tracks":    { "url": "tracks/manifest.json", "count": 59, "categories": ["car", "ego", "pedestrian"] },
     "map":       { "polyUrl": "map_poly/manifest.json", "lineUrl": "map_line/manifest.json", "layers": ["drivable_area"] },
     "telemetry": { "url": "telemetry.json" },
     "camera":    { "url": "cameras.json" }
@@ -103,9 +105,19 @@ round-trip. The machine-checkable definition is
 }
 ```
 
+The `lidar` stream may additionally carry presentation hints (`colored`,
+`splat`, `style`, `scan`) and a `densities` array of selectable lidar variants,
+each pointing at its own packed dataset. A **scene-split** bundle adds a
+`stage` stream — the static, timeless accumulated surfel cloud (built with one
+full-range temporal bucket) that renders under the animated lidar "actors"
+stream. Both are defined in [`scene.schema.json`](./scene.schema.json).
+
 - **All `url` values are relative to the bundle directory.** A consumer resolves
   them against `scene.json`'s own URL, so a bundle relocates (local ↔ R2) without
   rewriting.
+- **`georef` is always present** and carries `{originLat, originLon}` for every
+  scene, `georeferenced` or `anchored-local`. It does not by itself say which
+  frame a scene is in — see §4.1.
 - `objectColors` / `lidarColors` are the categorical palettes baked at build time
   (mirroring the canonical `OBJECT_COLORS` / `LIDARSEG_COLORS`); they let the
   client color without inferring a palette. **If a client keeps its own copy of
@@ -119,9 +131,11 @@ each carries so the cockpit can render them uniformly (full column list in
 
 | stream | geometry | key columns | notes |
 | --- | --- | --- | --- |
-| `lidar` | Point | `height_band` (categorical), `z`, `intensity`, optional `seg_class` | colored by `seg_class` when present, else `height_band` |
+| `lidar` | Point | `height_band` (categorical), `z`, optional `seg_class` | colored by `seg_class` when present, else `height_band`. (`intensity` is **legacy** — accepted as a producer arg but no longer emitted; `av_common.write_lidar_points` intentionally drops it as near-incompressible dead weight the render path never reads.) |
 | `ego` | LineString | `vertex_timestamps`, optional `vertex_values` (speed) | one trip = the ego path; per-vertex time drives the trail |
 | `objects` | Point | `category`, `heading` (rad, 0 = east, CCW+), `length`/`width`/`height`, `track_id`, `speed` | rendered as oriented boxes by [`AnimatedBoundingBoxLayer`](../api/animated-bounding-box-layer.md) |
+| `tracks` | LineString | `vertex_timestamps`, `vertex_values` (speed m/s), `category` | one trail per tracked object (ego folded in as category `"ego"`); mirrors `ego` but multi-row |
+| `stage` | Point | same as `lidar` | scene-split bundles: the static accumulated surfel cloud, built with one full-range temporal bucket |
 | `map_poly` / `map_line` | Polygon / LineString | `map_layer` (categorical) | **static**: built with one temporal bucket ≥ scene duration so the map loads once and persists |
 
 > **Categorical-column gotcha (normative for producers).** `stt-build` promotes
@@ -194,10 +208,10 @@ content-GC'd. A consumer MUST NOT assume a sidecar URL is immutable.
 
 The core spec pins every tile's coordinates to **OGC:CRS84** lon/lat
 (§3.4 / [GeoArrow interop](../architecture/data-format.md#geoarrow-interop)).
-That payload invariant is **unchanged** here: a scene-bundle tile's geometry is
-always interleaved `[lon, lat]` degrees. What this profile adds is a normative
-notion of *how trustworthy that georeference is*, because some sources only
-support an approximate one.
+That payload invariant holds here too: a scene-bundle tile's geometry is always
+interleaved `[lon, lat]` degrees. This profile additionally classifies *how
+trustworthy that lon/lat is*, because some sources only support an approximate
+placement.
 
 A scene bundle is in one of two **frames**:
 
@@ -210,36 +224,49 @@ A scene bundle is in one of two **frames**:
   - *Argoverse 2:* the city-frame UTM zone projected via a proper CRS transform
     (`pyproj`), removing the ~75 m equirectangular error at multi-km range.
 
-  `scene.json.georef` carries the `{originLat, originLon}` anchor. The scene
-  renders on a **real basemap** and the geometry lines up with streets.
+  `scene.json.georef` carries the `{originLat, originLon}` this projection is
+  anchored to. The scene renders on a **real basemap** and the geometry lines up
+  with streets.
 
 - **`anchored-local`** — the source discloses no usable global georeference (e.g.
   Waymo Perception, whose world origin is undisclosed and ~48 km from its sensor
   origin). The producer recovers a **local ENU metric frame** (subtract the first
-  frame's world translation) and *anchors* it at a plausible city lon/lat. The
-  result is internally consistent but **not basemap-aligned**: the point cloud
-  will not match real streets. Such scenes render on a **neutral / dark basemap**
-  and the place label states the anchoring honestly (e.g.
-  `"San Francisco (Waymo world frame, anchored)"`).
+  frame's world translation) and *anchors* it at a plausible city lon/lat, which
+  `scene.json.georef` also carries. The result is internally consistent but
+  **not basemap-aligned**: the point cloud will not match real streets. Such
+  scenes render on a **neutral / dark basemap** and the place label states the
+  anchoring honestly (e.g. `"San Francisco (Waymo world frame, anchored)"`).
 
-### 4.1 Signaling the frame
+### 4.1 `georef` is unconditional; it does not signal the frame
 
-- **Current (normative) behavior — inferred.** A consumer determines the frame
-  by the presence of `scene.json.georef`: **present → `georeferenced`**, **absent
-  → `anchored-local`**. The producer additionally encodes the disclaimer in
-  `location` / `description` for `anchored-local` scenes.
-- **Recommended (additive) evolution.** Producers SHOULD emit an explicit
-  `scene.json.frame: "georeferenced" | "anchored-local"` field so the distinction
-  is not inferred from a sibling key's presence. It is additive: a reader that
-  sees `frame` uses it; one that doesn't falls back to the `georef`-presence rule
-  above. Emitting both keeps old and new readers correct.
+`scene.json.georef` is a **required field on every scene**
+([`scene.schema.json`](./scene.schema.json)). The sole producer,
+`av_common.write_scene_json`, takes `origin_lat`/`origin_lon` as required
+parameters, and every extractor — including `waymo_extract.py`, the
+`anchored-local` source — calls it and gets a `georef` object back. A
+`georeferenced` scene and an `anchored-local` scene therefore carry the
+identical `{originLat, originLon}` shape; only the meaning of the numbers
+differs (an authoritative geodetic origin vs. an anchor point). Nothing about
+`georef`'s presence, absence, or shape distinguishes the two frames.
 
-> A future tile-level signal (a per-dataset `frame`/`crs` flag in `metadata`)
-> would let even a bare stream sub-dataset — opened without its `scene.json` —
-> know not to expect basemap alignment. Until then, the frame lives only in the
-> bundle envelope, and an `anchored-local` stream opened standalone will *look*
-> CRS84 (its coords are lon/lat) while being only approximately placed. This is
-> the one place a stream is not fully self-describing.
+Which frame a given scene is in is a **fact a consumer already knows out of
+band, per dataset** — not something it reads off `scene.json`. The showcase
+frontend, for example, carries a static `avLocalFrame: true` flag on each
+dataset entry backed by an `anchored-local` source
+(`examples/showcase/src/datasets.ts`); it does not derive that flag from
+anything in the bundle. The producer still writes the disclaimer into
+`location` / `description` for `anchored-local` scenes (e.g.
+`"San Francisco (Waymo world frame, anchored)"`) so a human reading the bundle
+can tell, even though a program cannot.
+
+> A future signal — either an explicit `scene.json.frame` field or a per-tile
+> `frame`/`crs` flag in a stream's own `metadata` — would let a consumer, and a
+> bare stream sub-dataset opened without its `scene.json`, determine trust
+> level from the data itself rather than an external per-dataset table. Until
+> such a signal exists, an `anchored-local` stream opened standalone *looks*
+> identical to a `georeferenced` one (its coords are lon/lat either way) while
+> being only approximately placed. This is the one place a stream is not fully
+> self-describing.
 
 ## 5. Relationship to the core spec
 
@@ -258,15 +285,15 @@ A scene bundle is in one of two **frames**:
 
 **Producers MUST:**
 - emit a `scene.json` conforming to [`scene.schema.json`](./scene.schema.json),
-  with relative `url`s, a UTC-ms `timeRange`, and only the streams that exist;
+  with relative `url`s, a UTC-ms `timeRange`, `georef`, and only the streams
+  that exist;
 - ship each tiled stream as a conformant packed STT dataset;
 - sort `telemetry.json` `samples` and `cameras.json` `frames` ascending by time;
 - use non-numeric labels for categorical columns (`height_band`, `map_layer`);
-- include `georef` for `georeferenced` scenes and omit it for `anchored-local`
-  ones, labeling the latter's anchoring honestly.
+- label an `anchored-local` scene's anchoring honestly in `location` /
+  `description` (e.g. `"San Francisco (Waymo world frame, anchored)"`).
 
 **Producers SHOULD:**
-- emit an explicit `scene.json.frame`;
 - bake the categorical palettes (`objectColors`, and `lidarColors` when lidar is
   semantically colored) into `scene.json`.
 
@@ -274,10 +301,8 @@ A scene bundle is in one of two **frames**:
 - resolve all `url`s relative to `scene.json`;
 - treat sidecars and `scene.json` as **mutable** (revalidate; never cache as
   immutable);
-- render `anchored-local` scenes on a neutral basemap and not assume basemap
+- know which frame (`georeferenced` vs `anchored-local`) a given dataset is in
+  from an out-of-band, per-dataset fact — not from `scene.json` (§4.1) — and
+  render `anchored-local` scenes on a neutral basemap without assuming basemap
   alignment;
 - prefer the bundle's baked palettes over any local copy.
-
-**Consumers SHOULD:**
-- determine the frame from `frame` when present, falling back to `georef`
-  presence.

@@ -121,4 +121,4 @@ The sublayer short id for `_subLayerProps` overrides is **`trips`**.
 
 ## Source
 
-[packages/layers/src/animated-trips-layer.ts](../../packages/layers/src/animated-trips-layer.ts)
+[packages/layers/src/layers/trips/animated-trips-layer.ts](../../packages/layers/src/layers/trips/animated-trips-layer.ts)

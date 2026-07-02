@@ -92,6 +92,7 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 | `antialiasing`       | `boolean`                         | `true`  | Smooth-edge antialiasing; disable to fix blending artifacts under some depth-test `parameters`. |
 | `fadeInDuration`     | `number`                          | `300`   | Duration (ms) for points to fade in.               |
 | `fadeOutDuration`    | `number`                          | `300`   | Duration (ms) for points to fade out (window mode).|
+| `splat`              | `boolean`                         | `false` | Render points as soft-gaussian splats instead of hard antialiased disks (installs [`SplatExtension`](./splat-extension.md)). Overlapping splats blend into continuous surfaces — a colored point-cloud / "poor-man's-photogrammetry" look rather than a field of discs. Pairs well with `rgbColorColumns`, a slightly larger `radius`, some transparency, and `billboard: true`. |
 
 ### Mode Options
 
@@ -115,11 +116,19 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 | `colorPalette`        | `Color[]`          | 10-color palette     | Palette for categorical `fillColor` (GPU path, up to 4096 entries).            |
 | `colorMapping`        | `Record<string, Color> \| null` | `null`  | Explicit category-string → color map. The only way to get stable colors across tiles whose categorical column contains different category subsets. Forces the CPU palette-expansion path (the GPU texture can't look up by string). |
 | `colorMappingDefault` | `Color`            | `[0, 0, 0, 0]`       | Fallback for categories absent from `colorMapping` (transparent: unknown categories disappear rather than mislead). |
+| `rgbColorColumns`     | `[string, string, string] \| null` | `null` | Per-point RGB read straight from three NUMERIC property columns (each 0–255), e.g. LIDAR returns colored by projecting them into camera images at build time (`waymo_extract.py --colorize`). Fill is `[r, g, b, 255]` — no palette, no category lookup. Alpha comes from layer `opacity`. Takes precedence over `fillColor`/`colorMapping`; ignored (falls back to the normal color path) if any of the three columns is absent. |
+| `colorVectorColumn`   | `string \| null`   | `'point_rgba'`       | Per-point RGBA from ONE interleaved VECTOR column (`FixedSizeList<UInt8,4>`, baked by `stt-build --vector-group point_rgba=r,g,b,a:u8`). When the tile carries it, the contiguous u8 buffer is bound to `getFillColor` **zero-copy** — the GPU-ready analogue of `rgbColorColumns`. Takes precedence over every other color path; ignored if the column is absent from the tile. |
 | `radiusTransform`     | `(v: number) => number \| null` | `null`  | Per-feature transform applied to the `radius` property value before GPU upload (e.g. magnitude → area). |
 
 ### 3D props
 
-`use3D`, `elevationProperty`, and `elevationScale` are accepted for API compatibility, but 3D is inferred from the tile's `positionDimensions` automatically — 3D tiles ride zero-copy, 2D tiles are padded with z=0. `elevationProperty`/`elevationScale` are no-ops.
+| Property            | Type               | Default | Description |
+| :------------------- | :----------------- | :------ | :--- |
+| `elevationProperty`  | `string \| null`   | `null`  | Numeric property name to source per-point elevation (z) from. Tile geometry is 2D (lon/lat); when set, each point's z is baked as `column[i] * elevationScale` into the position buffer at tile-prepare time, on both the per-tile sublayer path and the cumulative slab path. Negative and zero values pass through unchanged (e.g. below-grade to rooftop LIDAR returns). Left unset (the default), z stays 0 — byte-identical to a flat 2D render. |
+| `elevationScale`     | `number`           | `1`     | Multiplier applied to every `elevationProperty` value before it becomes z. No effect when `elevationProperty` is unset. |
+| `use3D`              | `boolean`          | `false` | Accepted for API compatibility only — has **no effect**. 3D is inferred automatically: tiles whose `positionDimensions` is 3 ride their z zero-copy, 2D tiles are padded with z=0 (or with the `elevationProperty`-baked z, if set), regardless of this flag. |
+
+3D handling is otherwise fully automatic — there is no separate "3D mode" to opt into beyond setting `elevationProperty` (for 2D tiles) or building the archive with 3D positions in the first place.
 
 ## Architecture & performance
 
@@ -141,9 +150,19 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
   open slab grows. Picking resolves through per-tile provenance ranges.
 - **Picking**: `getPickingInfo` enriches hits with `info.tile` and decodes
   the picked feature's columns into `info.object` at event rate.
+- **Splat rendering** (`splat: true`): installs [`SplatExtension`](./splat-extension.md), a
+  fragment-only effect with no extra attributes or uniforms. It multiplies
+  each fragment's alpha by a radial gaussian falloff from the point's
+  center (`geometry.uv`, the disk's unit position) out to its rim, turning
+  the hard antialiased disk into a soft blob. It always runs last in the
+  sublayer's extension list — after [`TimeFilterExtension`](./time-filter-extension.md)
+  and [`CategoryColorExtension`](./category-color-extension.md) — and
+  multiplies into the alpha those extensions already wrote rather than
+  replacing it, so temporal fades and categorical colors still apply
+  underneath the splat shaping.
 
 The sublayer short id for `_subLayerProps` overrides is **`points`** (covers both per-tile and slab sublayers): `_subLayerProps: { points: { type: MyLayer, ... } }`.
 
 ## Source
 
-[packages/layers/src/animated-point-layer.ts](../../packages/layers/src/animated-point-layer.ts)
+[packages/layers/src/layers/core/animated-point-layer.ts](../../packages/layers/src/layers/core/animated-point-layer.ts)

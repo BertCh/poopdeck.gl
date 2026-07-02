@@ -30,7 +30,7 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 | Property | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `color` / `getColor` | `Color \| string` | `[0,150,255,255]` | Segment color: constant RGBA or a categorical property-column name. |
-| `width` / `getWidth` | `number \| string` | `2` | Segment width — constant or per-feature numeric column. |
+| `width` / `getWidth` | `number \| string` | `1` | Segment width — constant or per-feature numeric column. |
 | `widthUnits` | `'pixels' \| 'meters' \| 'common'` | `'pixels'` | Width units. |
 | `widthScale` / `widthMinPixels` / `widthMaxPixels` | `number` | — | Width scaling + pixel clamps. |
 | `colorPalette` | `Color[]` | 10-stop | Palette for a categorical `color` column. |
@@ -43,4 +43,4 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 
 ## Source
 
-[packages/layers/src/animated-line-layer.ts](../../packages/layers/src/animated-line-layer.ts)
+[packages/layers/src/layers/core/animated-line-layer.ts](../../packages/layers/src/layers/core/animated-line-layer.ts)

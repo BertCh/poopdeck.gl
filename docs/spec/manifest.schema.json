@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://spatiotemporal-tiles.dev/spec/manifest.schema.json",
+  "$id": "https://poopdeck.gl/spec/manifest.schema.json",
   "title": "STT packed-format manifest",
   "description": "Canonical schema for the per-dataset `manifest.json` of the STT packed format (formatVersion 1). This is the cross-language wire contract: the Rust writer (`crate::pack::Manifest`) and every reader (TS `@poopdeck.gl/core` `PackedManifest`, Rust `PackedReader`) MUST agree with this document. Unknown properties are permitted at every envelope level (additive evolution within formatVersion 1): readers MUST ignore fields they do not recognize. See docs/spec/stt-packed-format.md.",
   "type": "object",
@@ -15,8 +15,8 @@
       "const": 1
     },
     "compression": {
-      "description": "Per-blob compression codec. Every tile blob is compressed independently (no shared zstd dictionary), so a streaming reader can decode any blob in isolation.",
-      "enum": ["zstd", "gzip", "none"]
+      "description": "Per-blob compression codec. Every tile blob is compressed independently (no shared zstd dictionary), so a streaming reader can decode any blob in isolation. The format is zstd-only: `zstd` is the default and only real codec (it beats gzip on both ratio and browser-side decode speed, so no writer has ever emitted gzip), and `none` exists only for already-incompressible blobs. The canonical reader (Rust `PackedReader`) rejects any value outside this set.",
+      "enum": ["zstd", "none"]
     },
     "directory": {
       "description": "Pointer to the single immutable, content-addressed directory object (the v5 run-length index). The object is either a single whole-load buffer (default) or a paged container — root page + leaf pages — selected by `layout`. Either way the leaf codec is v5; `layout`, not `directoryVersion`, discriminates the container shape.",

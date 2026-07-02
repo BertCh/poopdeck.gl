@@ -24,25 +24,41 @@ pnpm add @deck.gl/core @deck.gl/react
 Generalizes a dataset's `{ timeRange, baseSpeed }` into full playback state. It
 constructs the `TimeController` + `PlaybackGovernor`, drives a 20 Hz-throttled UI
 clock (the layers read the controller directly — never this state), handles speed
-and opt-in Auto speed, and exposes the tileset/buffer handoff the renderer layers
-call back into. Returns once-stable handlers you pass straight through as layer
-and `PlaybackControls` props.
+and opt-in Auto speed, and exposes a `registry` that classifies every layer's
+tileset into the governor's N-source gate (see [PlaybackGovernor → Multiple
+sources](./playback-governor.md#multiple-sources-n-source-gate)). Returns
+once-stable handlers you pass straight through as layer and `PlaybackControls`
+props.
 
-```typescript
-import { usePlayback } from '@poopdeck.gl/react';
+Each STT layer registers its own tileset under a stable id when it becomes
+ready — `required: true` for the field/primary layer (it gates the clock),
+`required: false` for optional overlays (they load but never gate). Pair
+`usePlayback` with [`useDeckClock`](#usedeckclock) to drive the shared
+`TimeController` from deck's own render loop and hand it to layers via
+`context.userData.stt.timeController`, so no layer needs a `timeController` prop:
+
+```tsx
+import { usePlayback, useDeckClock } from '@poopdeck.gl/react';
+import DeckGL from '@deck.gl/react';
 
 const playback = usePlayback({
   timeRange: { start, end },
   baseSpeed: (end - start) / 60_000, // dataset plays in ~60 s at 1×
 });
+const deckClock = useDeckClock(playback.timeController, playback.isPlaying);
 
-// Wire the governor handoff into your STT layer:
-new AnimatedTripsLayer({
-  data: manifestUrl,
-  timeController: playback.timeController,
-  onTilesetReady: playback.handleTilesetReady,
-  onBufferChange: playback.handleBufferChange,
-});
+const layers = [
+  new AnimatedTripsLayer({
+    id: 'trips',
+    data: manifestUrl,
+    onTilesetReady: (tileset) =>
+      playback.registry.registerSource('trips', tileset, { required: true }),
+    onBufferChange: (runway) =>
+      playback.registry.onBufferChange('trips', runway),
+  }),
+];
+
+<DeckGL {...deckClock} layers={layers} />;
 ```
 
 ### `UsePlaybackOptions`
@@ -58,9 +74,9 @@ new AnimatedTripsLayer({
 
 | Member | Type | Description |
 | :--- | :--- | :--- |
-| `timeController` | `TimeController` | The animation clock — pass to layers via their `timeController` prop. |
+| `timeController` | `TimeController` | The shared animation clock. Hand it to layers via `useDeckClock`'s `userData` channel, or pass it directly as a layer's `timeController` prop. |
 | `governor` | `PlaybackGovernor \| null` | The buffer-gating governor (null only on the first paint). Pass to `PlaybackControls`. |
-| `tilesetRef` | `React.MutableRefObject<BufferSource \| null>` | Live tileset handle (e.g. for polling `getVisibleTiles`). |
+| `tilesetRef` | `React.MutableRefObject<BufferSource \| null>` | Handle to the first `required` registered tileset (e.g. for polling `getVisibleTiles`). |
 | `currentTime` | `number` | 20 Hz-throttled UI clock (slider/label only, not the layers). |
 | `isPlaying` | `boolean` | User-intent play bit, mirrored from the governor. |
 | `bufferState` | `PlaybackGovernorState` | Governor machine state (`idle`/`starting`/`playing`/`buffering`/`seeking`). |
@@ -70,9 +86,55 @@ new AnimatedTripsLayer({
 | `baseAnimationSpeed` | `number` | The resolved `baseSpeed` (defaulted to 1000). |
 | `onPlayPause` / `onSeek` / `onSpeedChange` / `onAutoSpeedSelect` | handlers | Transport callbacks for `PlaybackControls`. |
 | `play` / `pause` | `() => void` | Imperative play/pause for visibility-driven embeds. |
-| `handleTilesetReady` | `(tileset: BufferSource) => void` | Pass as the layer's `onTilesetReady`. |
-| `handleBufferChange` | `(runway: BufferedRunway) => void` | Pass as the layer's `onBufferChange`. |
+| `registry` | `SourceRegistry` | Multi-source registration API for the governor — see below. Wire each layer's `onTilesetReady`/`onBufferChange` through it. |
 | `handleOverviewPreload` | `(result: OverviewPreloadResult) => void` | Pass as the layer's overview-preload callback. |
+
+### `SourceRegistry`
+
+The registry classifies every layer's tileset into the governor's N-source gate
+(one call per layer, keyed by a stable id — typically the layer's deck.gl `id`),
+so the clock waits for every `required` source while optional overlays load
+without gating it.
+
+| Member | Type | Description |
+| :--- | :--- | :--- |
+| `registerSource(id, tileset, opts?)` | `(id: string, tileset: BufferSource, opts?: { required?: boolean; weight?: number }) => void` | Register (or replace) one source. `required` (default `true`) gates the clock; `weight` (default `1`) is a bandwidth-share hint. Call from the layer's `onTilesetReady`. |
+| `unregisterSource(id)` | `(id: string) => void` | Drop a source by id (no-op if absent) — call on layer unmount. |
+| `onBufferChange(id, runway)` | `(id: string, runway: BufferedRunway) => void` | Forward the layer's `onBufferChange`. The governor re-probes every registered source itself, so `runway` is advisory — it just triggers an immediate gate/stall re-evaluation. |
+
+`SourceRegistry` mirrors `PlaybackGovernor.addSource`/`removeSource`/
+`notifyBufferChange` one-to-one; see [PlaybackGovernor → Multiple
+sources](./playback-governor.md#multiple-sources-n-source-gate) for the full
+gating semantics.
+
+## useDeckClock
+
+Binds a `TimeController` to a deck.gl render surface so the playhead advances
+inside deck's own animation loop instead of on its own `requestAnimationFrame`
+— one frame clock, no phase skew between "time advanced" and "scene drawn".
+Returns props to spread straight onto `<DeckGL>`. Kept separate from
+`usePlayback` so non-deck consumers (maplibre, three, a standalone canvas) can
+keep driving the same `TimeController` off its self-owned rAF instead.
+
+```tsx
+import { usePlayback, useDeckClock } from '@poopdeck.gl/react';
+import DeckGL from '@deck.gl/react';
+
+const playback = usePlayback({ timeRange, baseSpeed });
+const deckClock = useDeckClock(playback.timeController, playback.isPlaying);
+
+<DeckGL {...deckClock} layers={layers} />;
+```
+
+`useDeckClock(timeController: TimeController, isPlaying: boolean): DeckClockProps`
+
+### `DeckClockProps`
+
+| Prop | Type | Description |
+| :--- | :--- | :--- |
+| `_animate` | `boolean` | deck.gl's unconditional-redraw flag. `true` while playing, so `onBeforeRender` fires every frame; `false` while paused (seeks and interactions still redraw through deck's normal path). |
+| `onBeforeRender` | `() => void` | Advances `timeController` by one frame, in lockstep with deck's render loop. |
+| `userData` | `{ stt: { timeController: TimeController } }` | The `context.userData.stt` channel every STT layer reads time from, so layers need no per-layer `timeController` prop. |
 
 ## usePlaybackHotkeys
 

@@ -6,7 +6,7 @@ It's a **drop-in superset** of `FlowmapLayer`: it consumes the same OD `vertexVa
 
 ## How it works
 
-The bundler implements **KDEEB** (Kernel-Density Edge Bundling — Hurter, Ersoy & Telea 2012) with a **CUBu**-style GPU pipeline (van der Zwan & Telea 2016) — the method behind the smooth, river-like bundles in the classic edge-bundling figures. (We prototyped force-directed bundling first, but its pairwise spring/electrostatic forces are O(E²) and look kinky; KDEEB is both smoother and GPU-native.)
+The bundler implements **KDEEB** (Kernel-Density Edge Bundling — Hurter, Ersoy & Telea 2012) with a **CUBu**-style GPU pipeline (van der Zwan & Telea 2016) — the method behind the smooth, river-like bundles in the classic edge-bundling figures. It relaxes each edge's control points toward a shared kernel-density field, so geometrically-close flows converge into smooth bundled rivers entirely on the GPU.
 
 Each edge is resampled to `subdivisionPoints` control points, then **15 annealed iterations** run on the GPU, one per frame so the rivers visibly settle:
 
@@ -109,3 +109,7 @@ Reach for `BundledFlowmapLayer` at **overview zooms with many crossing corridors
 ## Device support
 
 The density splat additively blends into a float texture, which needs the WebGL2 `EXT_color_buffer_float` + `EXT_float_blend` capabilities (luma.gl features `float32-renderable-webgl` + `texture-blend-float-webgl`). Universal on desktop WebGL2 but absent on some mobile GPUs; there the layer degrades gracefully to straight arrows. The capability gate is exported as `isBundlingSupported(device)`, and the bundling engine itself as `EdgeBundler` for callers who want to bundle their own OD edges directly.
+
+## Source
+
+[packages/layers/src/layers/summary/bundled-flowmap-layer.ts](../../packages/layers/src/layers/summary/bundled-flowmap-layer.ts)

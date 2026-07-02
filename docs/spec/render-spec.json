@@ -1,0 +1,60 @@
+{
+  "$comment": "STT render-kernel shader-codegen contract (renderer-abstraction-2026-06 §5.1). The scalar time-filter alpha is authored once as an Expr AST in @poopdeck.gl/core/shader-codegen and machine-emitted per backend. This file STATES the frozen op-set so it is a declared contract, not something discovered by reading emitters. Enforced by packages/core/test/render-spec-contract.test.ts — the ALPHA_EXPR ASTs must stay inside `ops` and `variables`, and adding an op is gated on every emitter listed in `emitters` compiling it.",
+  "version": 1,
+  "ops": [
+    "uniform",
+    "attr",
+    "const",
+    "add",
+    "sub",
+    "mul",
+    "div",
+    "min",
+    "max",
+    "step",
+    "clamp01",
+    "select"
+  ],
+  "opSemantics": {
+    "step": "step(edge, x) = x >= edge ? 1 : 0 (GLSL step argument order)",
+    "clamp01": "clamp(x, 0, 1)",
+    "select": "select(c, t, f) = c != 0 ? t : f; emitted as a ternary and evaluated lazily, so an untaken div-by-zero branch is never computed"
+  },
+  "variables": {
+    "uniforms": [
+      "currentTime",
+      "windowHalf",
+      "fadeIn",
+      "fadeOut",
+      "wakeLength",
+      "trailLength",
+      "trailFade"
+    ],
+    "attributes": ["startTime", "endTime", "vertexTime"]
+  },
+  "modes": ["window", "wake", "cumulative", "trail"],
+  "emitters": [
+    {
+      "name": "emitGLSL300",
+      "package": "@poopdeck.gl/core",
+      "dialect": "GLSL ES 3.00 (deck.gl inject snippet)"
+    },
+    {
+      "name": "emitGLSL100",
+      "package": "@poopdeck.gl/core",
+      "dialect": "GLSL ES 1.00 (maplibre custom layer)"
+    },
+    {
+      "name": "emitTSL",
+      "package": "@poopdeck.gl/three",
+      "dialect": "three.js TSL node graph (WebGPU)",
+      "status": "planned — three still uses hand-written TSL nodes pinned to the CPU oracle by parity tests"
+    }
+  ],
+  "exclusions": {
+    "$comment": "Deliberately OUTSIDE the frozen op-set; each stays per-backend, pinned to the CPU oracle by parity tests rather than codegen.",
+    "surfelTemporalGaussian": "exp(dt^2 * -0.5) temporal weight (SplatLayer/SurfelLayer)",
+    "radialFalloff": "exp(-falloff * r^2) splat disc falloff",
+    "wakeSizeScale": "vertex-stage size multiplier (not a fragment alpha)"
+  }
+}

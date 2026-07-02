@@ -68,4 +68,4 @@ The GPU lookup indexes the palette by the per-tile category **index**. The STT l
 
 ## Source
 
-[packages/layers/src/category-color-extension.ts](../../packages/layers/src/category-color-extension.ts)
+[packages/layers/src/extensions/category-color-extension.ts](../../packages/layers/src/extensions/category-color-extension.ts)

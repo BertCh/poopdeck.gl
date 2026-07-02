@@ -54,4 +54,4 @@ The sublayer short id for `_subLayerProps` overrides is **`arcs`**.
 
 ## Source
 
-[packages/layers/src/animated-arc-layer.ts](../../packages/layers/src/animated-arc-layer.ts) · shared endpoint helper: [od-positions.ts](../../packages/layers/src/od-positions.ts)
+[packages/layers/src/layers/core/animated-arc-layer.ts](../../packages/layers/src/layers/core/animated-arc-layer.ts) · shared endpoint helper: [od-positions.ts](../../packages/layers/src/lib/od-positions.ts)

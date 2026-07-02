@@ -117,7 +117,7 @@ Differences a deck.gl user will notice, beyond the tileset:
   but drops upstream's `DataT` parameter: tiles are binary Arrow columns, so
   there is no per-row datum type for accessors to receive — `data` is always
   the archive URL string. The temporal heatmap is exported as
-  `AnimatedHeatmapLayer` (`HeatmapLayer` remains as a deprecated alias).
+  `AnimatedHeatmapLayer` (named to avoid shadowing deck.gl's own `HeatmapLayer`).
 - **No attribute transitions.** Binary pass-through plus per-tile sublayers
   makes deck's `transitions` unsupportable; tiles appear with a time-window
   fade instead.

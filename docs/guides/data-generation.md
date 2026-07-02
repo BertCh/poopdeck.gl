@@ -11,9 +11,11 @@ directly (for your own data).
 > commands work as written; just expect a directory, not a single file. Deploy
 > the directory with `scripts/r2-sync.sh` (immutable packs + short-TTL manifest).
 
-For getting your own data into the GeoParquet input `stt-build` requires,
-see [Building from Python](./python.md) — it covers GeoPandas, DuckDB,
-and pyarrow.
+For getting your own data into GeoParquet — the primary `stt-build` input
+this guide assumes — see [Building from Python](./python.md); it covers
+GeoPandas, DuckDB, and pyarrow. `stt-build` can also read straight from a
+live **PostGIS** or **DuckDB** query with no GeoParquet export step at all;
+see [Custom Data](#custom-data-using-stt-build) below.
 
 ## Prerequisites
 
@@ -216,8 +218,7 @@ stt-generate nyc-rideshare \
 - `--download`: Download TLC data for a month (YYYY-MM; pre-2017 months carry real lat/lon)
 - `--paths`: Output LineString paths instead of points
 - `--flows`: Output pre-aggregated corridor flows (segment counts per time bin)
-- `--flow-bin`: Time bin for `--flows` aggregation, default `15m`
-- `--flow-snap-meters`: `--flows` snap grid (metres) that merges nearby road nodes into fewer corridors, default `30` (0 = exact OSRM geometry, heavy)
+- `--flow-bin`: Time bin for `--flows` aggregation, default `15m`. Flows are binned onto intersection-to-intersection road segments from the OSRM route geometry
 - `--from-intermediate`: Re-build from a kept intermediate Parquet (e.g. re-bin `--flows` from a `--paths` intermediate without re-routing through OSRM)
 - `--od`: Output one straight origin→destination LineString per trip (2 vertices, no OSRM needed) — feeds the `AnimatedArcLayer` / `AnimatedLineLayer` flow layers, which read the first vertex as source and the last as target. Mutually exclusive with `--paths` / `--flows`
 - `--with-bearing`: Add a per-feature `bearing` numeric column (degrees, 0 = N, clockwise) — origin→destination initial azimuth in `--od` mode, heading toward the next point otherwise. Drives `AnimatedIconLayer` marker rotation
@@ -252,6 +253,10 @@ stt-generate bixi \
 - `--no-cluster`: Disable clustering and fall back to a volume-based LOD (minor pairs dropped at low zoom)
 - `--bake-bundling`: Bake KDEEB edge bundling into the tile geometry (smooth multi-vertex "rivers" rendered with `BundledFlowmapLayer({ preBundled: true })`); requires clustering. Tuned with `--bundle-points` (default 24), `--bundle-kernel` (0.05), `--bundle-iterations` (15), `--bundle-smoothing` (0.5)
 - `--streets`: Route OD pairs onto the Montréal OSM **bicycle** network instead of straight arcs (per-segment street corridors, the BIXI counterpart of `nyc-rideshare --flows`). Requires `--osm-pbf <file.osm.pbf>` and a bicycle-profile `--osrm-url` (default `http://localhost:5001`). Incompatible with `--bake-bundling`/`--no-cluster`/`--cluster-radius`
+- `--directional`: `--streets` modifier — pre-orients every corridor's geometry toward its month-dominant travel direction so the client can march directional chevrons along each segment (`ChevronFlowExtension`). `--per-bucket-direction` additionally emits a signed per-bucket flow matrix so chevrons flip per time-step (morning inbound → evening outbound)
+- `--merged-paths`: Synthesize coherent **directed corridors**: route each OD pair on the bike network, accumulate directed per-edge ridership, then merge edges into long corridors with a per-vertex × per-hour volume matrix (rendered by `FlowStrokeLayer`; `--stroke-angle` tunes junction continuation, default 50°). Mutually exclusive with `--streets`/`--bake-bundling`
+- `--flow-graph`: Build an abstract Delaunay-bundled hub-to-hub flow network (no street routing; `--hub-radius` metres per hub, default 250). Mutually exclusive with the street/arc modes
+- `--paths`: Emit one OSRM-routed LineString **per individual trip** with per-vertex timestamps (moving-dots demos via `AnimatedTripHeadsLayer`), instead of aggregated flows
 - `--skip-build`: Write only the intermediate GeoParquet (no stt-build)
 
 ### NYC Taxi Points (`nyc-taxi-points`)
@@ -449,10 +454,10 @@ stt-generate storms \
 
 ## Custom Data (Using stt-build)
 
-`stt-build` accepts **GeoParquet only** (`.parquet` / `.geoparquet`). For
-other formats, convert first — see [Building from Python](./python.md) for
-GeoPandas / DuckDB / pyarrow recipes, or use `ogr2ogr -f Parquet
-out.parquet in.geojson`.
+`stt-build`'s primary input is a **GeoParquet** file (`.parquet` /
+`.geoparquet`). For other formats, convert first — see
+[Building from Python](./python.md) for GeoPandas / DuckDB / pyarrow
+recipes, or use `ogr2ogr -f Parquet out.parquet in.geojson`.
 
 Two input constraints are enforced from the GeoParquet `geo` footer:
 
@@ -479,6 +484,60 @@ stt-build \
 temporal bucket based on the data's spatial density and temporal
 distribution. Any flag you pass explicitly still wins. (Compression is
 not auto-tuned — the packed format is zstd-only.)
+
+### From a database (PostGIS / DuckDB)
+
+`stt-build` can also read features straight from a live **PostGIS** table/query
+or a **DuckDB** database/file, with no GeoParquet export step — `--postgres`
+or `--duckdb` replaces `--input` and everything downstream (LOD, quantization,
+summary tiers) is identical. Each backend is behind an off-by-default cargo
+feature:
+
+```bash
+cargo build --release -p stt-build --features duckdb   # or: --features postgres
+```
+
+```bash
+# DuckDB, scanning a source file in place (":memory:" opens a scratch DB):
+stt-build --duckdb :memory: \
+  --sql "SELECT ST_Point(lon, lat) AS geom, timestamp, mag FROM read_parquet('quakes.parquet')" \
+  --geom-column geom --time-field timestamp --time-format unix-ms \
+  --output quakes.stt
+
+# PostGIS, reading a table directly:
+stt-build --postgres "$DATABASE_URL" --table hurricane_obs --geom-column geom \
+  --time-field iso_time --time-format iso8601 \
+  --output hurricanes.stt
+```
+
+`--table` and `--sql` are mutually exclusive (provide exactly one), and both
+accept the same `--time-field`/`--time-format`/`--end-time-field` and
+per-vertex list-column flags as the GeoParquet path. `--auto` isn't supported
+here — `stt-optimize` reads a GeoParquet file, so pick zoom range and temporal
+bucket manually for a DB source. See
+[Building from Python](./python.md#2-duckdb--geoparquet-no-python-deps-beyond-duckdb)
+for a worked DuckDB example and the
+[CLI reference](../api/cli-reference.md#stt-build) for the full flag list,
+including `--where` and `--source-srid`.
+
+### Serving tiles on the fly instead of pre-baking an archive
+
+If you don't want to run `stt-build` ahead of time and ship a `.stt` archive,
+`stt-serve` generates the same tiles per-request straight from a live
+PostGIS table/query or DuckDB database — one process, any number of
+datasets, no offline build step:
+
+```bash
+stt-serve --postgres "$DATABASE_URL" --table hurricane_obs --geom-column geom \
+  --time-field iso_time --time-format iso8601 --bind 0.0.0.0:8080
+```
+
+It shares `stt-build`'s tiler and encoder, so a served tile is byte-identical
+to what an offline build of the same fixed bucket would produce — this is a
+runtime alternative to the batch workflow above, not a different format. See
+[the full protocol spec](../spec/stt-serve-protocol.md) for the route shapes,
+multi-dataset `--config` files, and caching semantics, and the
+[CLI reference](../api/cli-reference.md#stt-serve) for the flag list.
 
 ### Adding a temporal LOD pyramid
 
@@ -536,6 +595,31 @@ Rows with null or unparseable geometry are **skipped** with a count
 warning (they have no position to tile at — they are never placed at
 (0,0)). Pass `--strict-geometry` to fail the build on the first such row
 instead.
+
+## AV Scene Bundles (Python extractors)
+
+The `/drive` cockpit scenes are **scene bundles** — multi-stream datasets
+(lidar / ego / objects / tracks / HD-map / telemetry / camera sidecars) whose
+format is specified in [Sidecar assets](../spec/sidecar-assets.md). They are
+built by Python extractors in `scripts/data-generation/`, not by
+`stt-generate`:
+
+- `nuscenes_extract.py`, `argoverse_extract.py`, `waymo_extract.py`,
+  `comma_extract.py` (plus `av_synthetic.py`) — one per source dataset. All
+  share `av_common.py`, which normalizes each stream to GeoParquet, shells out
+  to `stt-build` per stream, and writes the `scene.json` envelope
+  (`write_scene_json`, the reference producer for
+  [`scene.schema.json`](../spec/scene.schema.json)).
+- `argoverse_batch.sh` / `waymo_batch.sh` build one cockpit scene per city /
+  per curated segment end-to-end (download → extract → build → clean up).
+- Optional modes: `--surfel` (oriented-Gaussian surfel columns),
+  `--scene-split` (static "stage" + animated "actors" pair), `--colorize`
+  (camera-projected RGB), `--contours` (density iso-lines).
+
+Each source needs its own Python environment and license acceptance — nuScenes
+and Argoverse 2 are CC-BY-NC-SA; the Waymo Open Dataset license forbids
+redistribution, so Waymo bundles stay local. Per-source setup lives in
+[`scripts/data-generation/README.md`](../../scripts/data-generation/README.md).
 
 ## Best Practices
 

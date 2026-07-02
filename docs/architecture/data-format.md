@@ -73,7 +73,7 @@ version.
 struct ArchiveHeader {
     magic: [u8; 4],             // "STT\x04" (4th byte doubles as the version)
     version: u8,                // 4
-    compression: u8,            // 0 = none, 1 = gzip, 2 = zstd
+    compression: u8,            // 0 = none, 2 = zstd (1 = gzip: RETIRED/reserved)
     index_offset: u64,          // start of Index, bytes from file start
     index_length: u64,
     metadata_offset: u64,       // start of Metadata
@@ -95,9 +95,11 @@ Tile blobs are written immediately after the header, back to back, with no
 padding. The directory tells a reader where each one starts and how long it
 is.
 
-Each blob is **zstd(layer frame)** (the default — `stt-build` is zstd-only),
-**gzip(layer frame)**, or the raw layer frame, depending on the header's
-`compression` byte.
+Each blob is **zstd(layer frame)** (the default — `stt-build` is zstd-only)
+or the raw layer frame, depending on the header's `compression` byte.
+Compression **byte 1 (gzip) is retired/reserved**: no writer emits it, and
+the in-repo reader version-rejects v2 (gzip) single-file archives before the
+compression byte is ever read, so byte 1 is never observed on a v4 archive.
 
 **Deduplication.** The buffered ("optimized") v4 writer and the packed
 `PackWriter` blake3-hash each compressed blob and write byte-identical blobs
@@ -139,30 +141,114 @@ it from the same alignment math. Layer count is therefore capped at
 `0x7fff`. Frames with the flag unset carry no padding; readers MUST accept
 both shapes. See the packed spec §5.1.
 
+The whole payload, unwrapped:
+
+```mermaid
+flowchart TD
+  B["tile blob — one per (z, x, y, t)"] --> Z["zstd frame"]
+  Z --> LF["layer frame\nu16 layer_count, then per layer:\nname + u32 ipc_len (+ optional 8-byte alignment pad)"]
+  LF --> IPC["Arrow IPC stream\none RecordBatch per layer"]
+  IPC --> SM["schema metadata\nstt:layer · stt:time_offset_ms\nstt:vertex_time_origin_ms / _step_ms\nstt:vertex_value_buckets · stt:has_triangles\n(+ stt:quant / stt:qa on quantized fields)"]
+  IPC --> COL["columns\nid · start_time · end_time · geometry (GeoArrow)\nvertex_time · vertex_value(_matrix) · triangles\nproperty columns · vector groups"]
+```
+
 ### Per-layer Arrow schema
 
 | column              | type                                    | nullability | notes                                |
 | ------------------- | --------------------------------------- | ----------- | ------------------------------------ |
-| `id`                | `UInt64`                                | non-null    | per-feature id (H3 cell index in summary tiles) |
+| `id`                | `UInt64`                                | non-null    | per-feature id (H3 / quadbin cell index in summary tiles) |
 | `start_time`        | `Int64`                                 | non-null    | Unix ms, absolute                    |
 | `end_time`          | `Int64`                                 | non-null    | Unix ms, absolute                    |
-| `geometry`          | GeoArrow Point / LineString / Polygon   | non-null    | interleaved f64 lon/lat              |
+| `geometry`          | GeoArrow Point / LineString / Polygon   | non-null    | interleaved lon/lat, `Float64` by default (`Int32` fixed-point when coordinate-quantized, `[x,y,z]` when the point-elevation fold is applied) — see below |
 | `vertex_time`       | `List<UInt16>` (deltas) or `List<Int64>` (exact) | nullable | per-vertex times (LineString only) — see below |
 | `vertex_value`      | `List<Float32>`                         | nullable    | per-vertex scalar (e.g. SST on drifters/currents); decoded to `BinaryFeatures.vertexValues` |
 | `vertex_value_matrix` | `List<Float32>`                       | nullable    | per-vertex × per-bucket value matrix (vertex-major) for static-geometry overview animation; bucket count in schema metadata `stt:vertex_value_buckets` |
-| `triangles`         | `List<UInt32>`                          | non-null    | feature-local earcut indices (Polygon, `--pre-tessellate`) |
-| `<prop>`            | `Float64` (numeric) or `Dictionary<UInt16, Utf8>` (categorical) | nullable | one column per property, by name |
+| `triangles`         | `List<UInt16>` or `List<UInt32>`        | non-null    | feature-local earcut indices (Polygon, `--pre-tessellate`); `UInt16` when the feature-local max index fits, else `UInt32` |
+| `<prop>`            | `Float64` (numeric) or `Dictionary<UInt16, Utf8>` (categorical); `UInt16`/`Int32` fixed-point when attribute-quantized | nullable | one column per property, by name — see below |
+| `<vector-group>`    | `FixedSizeList<Float32 \| UInt8, N>`    | nullable    | interleaved GPU-ready vector column fused from N scalar properties (`--vector-group NAME=col1,col2,…[:f32\|u8]`, e.g. `surfel_quat=qx,qy,qz,qw` or `point_rgba=r,g,b,a:u8`); decoded to `BinaryFeatures.vectorProps` and bound zero-copy to an instanced attribute. The source scalar columns are removed from the tile. |
 
 Geometry uses the GeoArrow extension metadata key
 `ARROW:extension:name` with values `geoarrow.point`, `geoarrow.linestring`,
 or `geoarrow.polygon` — see [GeoArrow interop](#geoarrow-interop) below.
-Coordinates are interleaved `[x, y]` in WGS84 degrees; the writer does
-**not** quantize or delta-encode — per-blob zstd on the IPC bytes does the
-work (the writer is zstd-only; gzip remains a readable value for older
-single-file archives).
+Coordinates are interleaved `[x, y]` pairs (`[x, y, z]` for elevation-folded
+points — see below) in WGS84 degrees. By default the leaf is `Float64` and
+the writer does **not** quantize or delta-encode it — per-blob zstd on the
+IPC bytes does the work (the writer is zstd-only). A layer built with
+coordinate quantization ships the identical List/FixedSizeList nesting with
+an `Int32` leaf instead — see below.
 
 Layers within one tile MUST agree on feature count for the rows they each
 cover, but they MAY carry different property columns.
+
+#### Coordinate quantization
+
+A layer built with coordinate quantization stores its geometry leaf as
+**`Int32` grid indices** instead of `Float64` lon/lat. The List/FixedSizeList
+nesting is unchanged — Point is still `FixedSizeList<_, 2>`, LineString still
+`List<FixedSizeList<_, 2>>`, Polygon still `List<List<FixedSizeList<_, 2>>>` —
+only the leaf `DataType` and its values change, so a reader that already
+walks the nesting only has to branch on the leaf type.
+
+The reconstruction affine rides in the `geometry` field's **field-level**
+Arrow metadata:
+
+| field metadata key | value                                                     |
+| ------------------- | ---------------------------------------------------------- |
+| `stt:quant`          | JSON `{"x0","y0","sx","sy"}` (adds `"z0","sz"` for elevation-folded points — see below) |
+
+A reader reconstructs each coordinate as `lon = x0 + qx * sx`,
+`lat = y0 + qy * sy` (and, for 3D points, `alt = z0 + qz * sz`). Absence of
+`stt:quant` on the `geometry` field means the leaf is the default `Float64`
+lon/lat; a reader MUST check for the key rather than assume `Float64` (the
+Arrow `DataType` — `Int32` vs `Float64` — also distinguishes the two shapes,
+but the metadata key is the documented contract, and is required to recover
+`x0`/`y0`/`sx`/`sy`).
+
+The grid is a single **world-anchored** grid — origin `(x0, y0) = (-180,
+-90)` and a uniform step in degrees, `sx = sy = meters_precision / 111320`
+(mean meters per degree of latitude) — not a per-tile, bbox-relative grid.
+This is deliberate: a bbox-relative grid would give the same real-world
+coordinate a different quantized index in different tiles, defeating the
+packed format's content-addressed blob dedup; a world-anchored grid keeps
+identical geometry byte-identical across tiles. `x0`, `y0`, `sx`, `sy` are
+therefore identical across every tile of a dataset built at one precision.
+Because the step is uniform in degrees, ground precision in meters is
+`meters_precision` at the equator and `meters_precision * cos(lat)`
+elsewhere — always at or finer than the requested precision, never coarser.
+Worst-case reconstruction error is half a quantum (`~meters_precision / 2`).
+Quantized indices are clamped to the `Int32` range.
+
+> Quantized geometry is no longer literal GeoArrow — see the callout in
+> [GeoArrow interop](#geoarrow-interop).
+
+#### Point-elevation fold (3D points)
+
+A layer can fold a numeric property into POINT geometry as a 3rd coordinate
+instead of shipping it as a separate property column. The geometry leaf
+becomes `FixedSizeList<_, 3>` of `[x, y, z]` (rather than the default
+`FixedSizeList<_, 2>`); the folded property is removed from the layer's
+property set entirely — it exists only inside the geometry. Only POINT
+layers are affected; on LineString/Polygon layers the fold is a no-op and
+the named column, if present, ships as an ordinary property. A reader
+distinguishes 2D from 3D points purely from the geometry field's
+`FixedSizeList` width — there is no separate metadata flag for the fold
+itself.
+
+The fold composes independently with [coordinate quantization](#coordinate-quantization):
+
+- **Without** coordinate quantization: the leaf is `Float64`, 3-wide, and
+  the `geometry` field carries no `stt:quant` metadata.
+- **With** coordinate quantization: the leaf is `Int32`, 3-wide, and the
+  `stt:quant` affine carries the additional `z0`/`sz` keys. `z0` is a fixed
+  global datum (`z0 = 0`, not a per-layer minimum — unlike the attribute
+  quantization offset below) so identical altitudes stay byte-identical
+  across tiles, the same dedup-preserving reasoning as the `x`/`y` world
+  grid. `z` is metres, not degrees, so `sz` is the requested ground
+  precision directly (`sz = meters_precision`, vs. `sx`/`sy` which are in
+  degrees since `x`/`y` are lon/lat), giving `alt = z0 + qz * sz`.
+
+A feature with no value for the folded property encodes `z = 0`
+(`qz = 0` when quantized).
 
 #### `vertex_time` (per-vertex timestamps)
 
@@ -195,10 +281,11 @@ values as absolute Unix ms; a reader that sees `List<UInt16>` reconstructs
 key `stt:has_triangles = "true"`). The column is emitted only for polygon
 layers — an over-eager builder that attaches it to a point/line layer has
 it silently dropped at encode time. The Rust writer stores feature-LOCAL
-indices; the TS decoder pre-shifts them by each feature's
-`startIndices[i]` and exposes a single tile-global
-`triangles: Uint32Array` on `BinaryFeatures` so the renderer can hand it
-straight to deck.gl / WebGL.
+indices, narrowed to `List<UInt16>` when every feature-local index fits in
+16 bits (the common case) and `List<UInt32>` otherwise; the TS decoder
+pre-shifts them by each feature's `startIndices[i]` and exposes a single
+tile-global `triangles: Uint32Array` on `BinaryFeatures` so the renderer can
+hand it straight to deck.gl / WebGL.
 
 #### Space-time cube payload (`vertex_value_matrix`)
 
@@ -241,6 +328,46 @@ framework (cube / aggregation / trend recipes; design doc
 `docs/roadmap/preprocessing-framework.md`) builds on: a build-time analytic that
 produces a per-cell, per-bucket scalar field lands in exactly this column.
 
+#### Numeric attribute quantization
+
+Any `<prop>` numeric column can ship as fixed-point integers instead of
+`Float64` — either at an explicit per-column ground precision, or, for every
+otherwise-raw numeric column, range-adaptively (the column's own
+`[min, max]` span mapped onto the full 16-bit index space). An explicit
+per-column precision always wins over the range-adaptive default for that
+column.
+
+A quantized property field carries the reconstruction affine in its own
+**field-level** Arrow metadata:
+
+| field metadata key | value             |
+| ------------------- | ------------------ |
+| `stt:qa`              | JSON `{"o","s"}`  |
+
+A reader reconstructs the value as `value = o + q * s`. Absence of `stt:qa`
+on a numeric property field means the column is the default `Float64`; a
+reader MUST check for the key rather than infer quantization from the Arrow
+`DataType` alone. A `null` cell stays `null` in the quantized column —
+quantization never manufactures a value for a missing one. The property
+folded by the [point-elevation fold](#point-elevation-fold-3d-points), if
+any, is removed from the property set before quantization runs, so it is
+never separately attribute-quantized.
+
+| mode | leaf type | `o` / `s` |
+| --- | --- | --- |
+| explicit precision | `UInt16` if the quantized range fits 16 bits, else `Int32` | `o` = the column's finite minimum; `s` = the requested precision |
+| range-adaptive (auto) | always `UInt16` | `o` = the column's finite minimum (`0.0` if the tile has none); `s` = `(max - min) / 65535` (or `1.0` when there's no range — a constant column, or none, or a single finite value) |
+
+Unlike the [coordinate-quantization](#coordinate-quantization) affine, whose
+`x0`/`y0`/`sx`/`sy` are fixed dataset-wide constants, `o` and `s` here are
+derived from **that tile's own** column values, so the same property's
+`stt:qa` affine — and, under the explicit-precision mode, even its leaf type
+(`UInt16` vs `Int32`) — can differ from tile to tile. A reader decodes
+`stt:qa` fresh from each tile's schema rather than caching it across tiles of
+the same property. The range-adaptive mode fixes the leaf to `UInt16` in
+every tile (it never falls back to `Int32`), so a reader need not branch on
+leaf width in that mode — only the affine varies.
+
 ### GeoArrow interop
 
 An STT tile layer **is** a valid [GeoArrow](https://geoarrow.org/format.html)
@@ -274,10 +401,28 @@ Coordinates use the GeoArrow **interleaved** convention
 `xy` storage Lonboard and `@geoarrow/deck.gl-layers` consume by
 default. Polygons are encoded as `List<List<FixedSizeList<Float64, 2>>>`
 (rings inside features), and linestrings as `List<FixedSizeList<Float64, 2>>`.
+This is the default shape only — see the callout immediately below for the
+two encoder features that depart from it.
 
-The schema-level metadata also carries `stt:layer` (the layer name) and a
-legacy `stt:geometry` key for back-compat; readers SHOULD prefer the standard
-field-level key and fall back to `stt:geometry` only when it is absent.
+> **Quantized / elevation-folded tiles are not literal GeoArrow.** The
+> "is a valid GeoArrow record batch" guarantee above assumes the default
+> `Float64`, 2-wide interleaved leaf. A layer built with [coordinate
+> quantization](#coordinate-quantization) (`Int32` leaf) or the
+> [point-elevation fold](#point-elevation-fold-3d-points) (3-wide leaf) no
+> longer matches what a generic GeoArrow consumer
+> (`@geoarrow/deck.gl-layers`, Lonboard, geoarrow-rs) expects, and such a
+> consumer will misread the coordinates. A reader MUST check the `geometry`
+> field for `stt:quant` (and inspect the `FixedSizeList` width) before
+> treating a tile as vanilla GeoArrow; the STT decoder
+> (`packages/core/src/tile.ts`) always does.
+
+The schema-level metadata also carries `stt:layer` (the layer name),
+`stt:time_offset_ms` (the layer's minimum `start_time`, baked at encode time
+so a reader can relativize times against a Float32-safe offset without a
+min-scan over the column — written whenever a start-time column exists), and
+a legacy `stt:geometry` key for back-compat; readers SHOULD prefer the
+standard field-level key and fall back to `stt:geometry` only when it is
+absent.
 
 In TypeScript, the decoded `Layer` exposes both surfaces:
 
@@ -306,6 +451,26 @@ pipeline may emit a `default_originals` companion layer containing
 unsimplified geometry when `--simplify` is used; clients can pick the
 appropriate one based on zoom. Summary-tier tiles use the layer name
 `summary` by default (overridable via `--summary-layer`).
+
+#### Per-vertex column names across the pipeline
+
+One per-vertex concept is spelled differently at each stage. The input
+(GeoParquet) columns are **plural**; the wire (Arrow) columns are **singular**
+(matching `start_time` / `end_time` and deck.gl's `getTimestamps`); the decoded
+TypeScript fields are camelCase. This is the canonical contract:
+
+| concept | input column (GeoParquet) | wire column (Arrow — **FROZEN**) | decoded TS field (`BinaryFeatures`) |
+| --- | --- | --- | --- |
+| per-vertex timestamps    | `vertex_timestamps`   | `vertex_time`         | `vertexTimestamps`  |
+| per-vertex scalar value  | `vertex_values`       | `vertex_value`        | `vertexValues`      |
+| per-vertex × per-bucket matrix | `vertex_value_matrix` | `vertex_value_matrix` | `vertexValueMatrix` |
+
+The plural→singular flip on the first two rows is **intentional** — the wire
+names are frozen (see [the packed spec](../spec/stt-packed-format.md)).
+`vertex_value_matrix` keeps a single name through all three stages (only the
+case changes). The input reader matches the plural column name exactly, with no
+singular fallback: a singular `vertex_time` / `vertex_value` *input* column is
+not recognized and its data decodes to a silent `null`.
 
 ## Dictionary (optional — no shipped producer)
 
@@ -382,7 +547,7 @@ new fields.
 
   // Optional — present when the archive was built with --summary-tier
   "summary_tier": {
-    "scheme": "h3",
+    "scheme": "h3",              // "h3" (Uber H3 hexes) or "quadbin" (CARTO quadbin)
     "min_zoom": 0,
     "max_zoom": 4,
     "cell_resolution_per_zoom": [0, 1, 2, 3, 4],
@@ -390,7 +555,9 @@ new fields.
       { "name": "_count", "agg": "count" },
       { "name": "magnitude", "agg": "mean" }
     ],
-    "layer_name": "summary"
+    "layer_name": "summary",
+    "sub_buckets": 1             // >1 (--summary-sub-buckets N; keep ≤32) emits
+                                 // bucket_0..bucket_<N-1> per-cell count columns
   },
 
   // Optional — present when the archive was built with --temporal-lod.
@@ -449,6 +616,13 @@ extra request.
 - New per-layer columns are tolerated automatically — they appear in the
   Arrow schema and a property-aware client passes them through to the
   renderer.
+- Coordinate quantization (`stt:quant`) and numeric attribute quantization
+  (`stt:qa`) are opt-in re-typings of the *existing* `geometry` and `<prop>`
+  columns, not new columns — unlike a new column, a reader that doesn't
+  check for these keys won't skip the data, it will silently misdecode it
+  (e.g. reading raw `Int32` grid indices as tiny lon/lat degrees, or a raw
+  quantized index as an enormous property value). A reader MUST check both
+  keys before decoding `geometry` / any numeric `<prop>` field.
 - New metadata fields use serde defaults so old archives decode under new
   readers; new fields are skipped when unset so new archives decode under
   old readers that ignore them.

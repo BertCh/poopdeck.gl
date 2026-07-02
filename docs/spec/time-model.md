@@ -32,6 +32,16 @@ This single-scalar choice is what lets the directory delta-code the time column
 to ~1 byte per entry (§4 of the packed spec) and lets the GPU do per-frame time
 filtering with one `f64`/`i64` uniform.
 
+> **Non-negativity (normative).** Every *absolute* feature and metadata time MUST
+> be **non-negative** ms-since-epoch (`t ≥ 0`); the reference builder **rejects
+> pre-1970 (negative) timestamps** in both strictness modes, because the
+> in-memory temporal index is **unsigned** (`TimeRange.start`/`end` and
+> `TileId.t` are `u64`). This narrows — it does not contradict — the `i64`
+> payload/wire representation: the tile `start_time`/`end_time` columns are
+> `Int64` and the directory codec stores **signed `i64`** values, so a
+> `cover_t_min` *delta* against `time_start` and a per-leaf `t_min`/`t_max`
+> descriptor may be negative even though the absolute times they encode are not.
+
 ## 2. Feature time — instants and intervals
 
 Every feature carries two absolute timestamps in its tile payload (see the
@@ -255,6 +265,11 @@ the per-vertex trajectory lineage.
 
 - **MUST** represent all times as `i64` Unix-ms UTC; no timezone or calendar
   semantics are carried by the format.
+- **MUST** use **non-negative** absolute times (`t ≥ 0`); the reference builder
+  rejects pre-1970 (negative) timestamps because the in-memory temporal index
+  (`TimeRange`, `TileId.t`) is unsigned `u64`. (The directory codec stores signed
+  `i64`, so `cover_t_min` deltas and per-leaf `t_min`/`t_max` may still be
+  negative.)
 - **MUST** represent instantaneous features as `start_time == end_time`.
 - **MUST** place each feature in exactly one base bucket
   (`floor(start_time / temporal_bucket_ms) * temporal_bucket_ms`); a writer MUST

@@ -1,8 +1,9 @@
 # Building STT archives from Python
 
-`stt-build` requires its input as **GeoParquet**. This guide shows three
-ways to produce that GeoParquet from data you already have in Python:
-GeoPandas, plain DuckDB, and a small mixed pipeline.
+The common Python path into `stt-build` is **GeoParquet**. This guide shows
+three ways to produce that GeoParquet from data you already have in Python:
+GeoPandas, plain DuckDB, and a small mixed pipeline. (`stt-build` can also
+read PostGIS or DuckDB directly with no export step — see the note in §2.)
 
 The pattern is always: get your data into Arrow / Parquet with a geometry
 column and a timestamp column, then shell out to `stt-build`.
@@ -117,8 +118,9 @@ Then `stt-build --input earthquakes.parquet --output earthquakes.stt
 >   --output earthquakes.stt
 > ```
 >
-> See [docs/roadmap/duckdb-integration.md](../roadmap/duckdb-integration.md) for
-> the input source and the `stt-serve --duckdb` dynamic tile server.
+> See [docs/roadmap/db-input-adaptors.md](../roadmap/db-input-adaptors.md) for
+> the DuckDB (and PostGIS) input source and the `stt-serve --duckdb` dynamic tile
+> server.
 
 ## 3. pyarrow only (no GeoPandas)
 

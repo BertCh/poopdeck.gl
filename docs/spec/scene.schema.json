@@ -4,7 +4,7 @@
   "title": "STT scene bundle manifest (scene.json)",
   "description": "The envelope for a multi-stream STT 'scene bundle' (the AV-cockpit profile, docs/spec/sidecar-assets.md). It points at the per-stream packed STT datasets and the non-tile sidecars, and declares the bundle's georeferencing. Authority: scripts/data-generation/av_common.py (write_scene_json) and examples/showcase/src/datasets.ts.",
   "type": "object",
-  "required": ["id", "name", "timeRange", "streams"],
+  "required": ["id", "name", "timeRange", "streams", "georef"],
   "additionalProperties": true,
   "properties": {
     "id": { "type": "string", "description": "Stable scene id; matches the bundle directory name." },
@@ -14,14 +14,9 @@
     "license": { "type": "string", "description": "SPDX id or license name of the source data." },
     "location": { "type": "string", "description": "Place label. For anchored-local frames this MUST state the anchoring honestly, e.g. 'San Francisco (Waymo world frame, anchored)'." },
     "description": { "type": "string" },
-    "frame": {
-      "type": "string",
-      "enum": ["georeferenced", "anchored-local"],
-      "description": "RECOMMENDED (additive). Explicit georeferencing mode (see §4). Until producers emit it, readers infer the mode from the presence of `georef` (present → georeferenced; absent → anchored-local)."
-    },
     "georef": {
       "type": "object",
-      "description": "Present iff the scene is georeferenced from a documented map origin. Absent for anchored-local frames.",
+      "description": "Always present: the map origin the stream geometry is projected/anchored around (see §4). For a `georeferenced` scene, {originLat, originLon} is the authoritative WGS84 origin the local sensor frame was projected from. For an `anchored-local` scene, it is a plausible city lon/lat the source's undisclosed local frame is anchored to, not an authoritative geodetic origin. Which of the two applies to a given scene is not signaled by this object's shape or presence — see §4.1.",
       "required": ["originLat", "originLon"],
       "additionalProperties": false,
       "properties": {
@@ -70,7 +65,25 @@
           "required": ["url"],
           "properties": {
             "url": { "type": "string", "description": "Relative path to a packed STT point dataset (e.g. 'lidar/manifest.json')." },
-            "points": { "type": "integer" }
+            "points": { "type": "integer" },
+            "colored": { "type": "boolean", "description": "Points carry per-return r/g/b (camera-colorized)." },
+            "splat": { "type": "string", "description": "Splat rendering hint: 'soft' (gaussian point splats) or 'surfel' (oriented surfel columns present)." },
+            "style": { "type": "string", "description": "Presentation hint for the cockpit (e.g. 'actors' in a scene-split bundle)." },
+            "scan": { "type": "boolean", "description": "Wake/scan-style sweep visualization hint." },
+            "densities": {
+              "type": "array",
+              "description": "Alternative lidar variants selectable in the cockpit (e.g. the stage/actors pair in a scene-split bundle), each pointing at its own packed dataset.",
+              "items": {
+                "type": "object",
+                "required": ["id", "url"],
+                "properties": {
+                  "id": { "type": "string" },
+                  "label": { "type": "string" },
+                  "points": { "type": "integer" },
+                  "url": { "type": "string" }
+                }
+              }
+            }
           }
         },
         "ego": {
@@ -99,6 +112,28 @@
           "properties": {
             "url": { "type": "string", "description": "Relative path to a packed STT point dataset (one point per tracked object per sample)." },
             "categories": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "tracks": {
+          "type": "object",
+          "required": ["url"],
+          "properties": {
+            "url": { "type": "string", "description": "Relative path to a packed STT LineString dataset — one per-object trail per tracked object (distinct from `ego`, which is the ego vehicle only)." },
+            "count": { "type": "integer" },
+            "categories": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "stage": {
+          "type": "object",
+          "description": "Scene-split bundles only: the STATIC, timeless accumulated surfel cloud (the 'stage'), rendered under the animated lidar 'actors' stream.",
+          "required": ["url"],
+          "properties": {
+            "url": { "type": "string", "description": "Relative path to a packed STT point dataset built with one full-range temporal bucket." },
+            "points": { "type": "integer" },
+            "colored": { "type": "boolean" },
+            "splat": { "type": "string" },
+            "style": { "type": "string" },
+            "static": { "type": "boolean", "description": "Always true — the stream is temporally constant." }
           }
         },
         "map": {

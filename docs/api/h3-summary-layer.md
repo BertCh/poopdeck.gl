@@ -74,4 +74,4 @@ The sublayer short id for `_subLayerProps` overrides is **`hexagons`**: `_subLay
 
 ## Source
 
-[packages/layers/src/h3-summary-layer.ts](../../packages/layers/src/h3-summary-layer.ts)
+[packages/layers/src/layers/summary/h3-summary-layer.ts](../../packages/layers/src/layers/summary/h3-summary-layer.ts)

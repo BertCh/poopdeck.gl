@@ -1,9 +1,7 @@
 # AnimatedHeatmapLayer
 
-> **Export name.** This layer is exported as **`AnimatedHeatmapLayer`**.
-> `HeatmapLayer` is a deprecated alias (same class, same props;
-> `HeatmapLayerProps` likewise aliases `AnimatedHeatmapLayerProps`) — it still
-> works, but new code should use `AnimatedHeatmapLayer` to avoid shadowing
+> **Export name.** This layer is exported as **`AnimatedHeatmapLayer`**
+> (with props type `AnimatedHeatmapLayerProps`) — named to avoid shadowing
 > `@deck.gl/aggregation-layers`' own `HeatmapLayer`.
 
 The `AnimatedHeatmapLayer` renders temporal point data as an animated density
@@ -38,7 +36,7 @@ f32 precision: both the per-point filter value and `filterRange` are
 relativized against a single layer time offset (the first visible tile's
 offset), keeping both sides of the shader comparison inside the Float32
 mantissa budget (≈ 2²⁴ ms ≈ 4.6 h around the offset; longer-spanning windows
-quantize at the edges — the same bound the previous layer had).
+quantize at the edges).
 
 It extends [`SpatioTemporalLayer`](./spatiotemporal-layer.md) and supports up
 to four stacked categorical channels, each rendered as its own canonical
@@ -128,7 +126,6 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 | `debounceTimeout` | `number` | `500` | Interaction debounce (ms) before re-aggregating during pan/zoom (canonical pass-through). |
 | `fadeInDuration` | `number` | `0` | Leading-edge fade (ms), mapped onto the filter soft-range |
 | `fadeOutDuration` | `number` | `0` | Trailing-edge fade (ms) |
-| `historyWeight` | `number` | `0` | **Deprecated / no-op.** Accepted for API compatibility; the canonical aggregation pipeline has no TAA blend. |
 
 ### Stacked channels (`channels`)
 
@@ -158,4 +155,4 @@ single-outlier dimming.
 
 ## Source
 
-[`packages/layers/src/heatmap-layer.ts`](../../packages/layers/src/heatmap-layer.ts)
+[`packages/layers/src/layers/summary/heatmap-layer.ts`](../../packages/layers/src/layers/summary/heatmap-layer.ts)

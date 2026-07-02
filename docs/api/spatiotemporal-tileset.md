@@ -83,6 +83,7 @@ const visibleTiles = tileset.getVisibleTiles();
 | Option               | Type                                | Default            | Description                                            |
 | :------------------- | :---------------------------------- | :----------------- | :----------------------------------------------------- |
 | `refinementStrategy` | `'best-available' \| 'no-overlap'`  | `'best-available'` | `'best-available'` surfaces parent tiles (up to 4 zoom levels back) while detailed tiles load — also covers the gap when `--min-features-per-tile` drops sparse deep-zoom tiles. `'no-overlap'` loads only the exact zoom (used by the summary tier, where a parent would double-draw aggregated cells). |
+| `lodMode`            | `'parent-fallback' \| 'additive'`   | `'parent-fallback'`| `'parent-fallback'` renders the single best (highest loaded) zoom; coarser parents are transient fallbacks dropped the moment their children finish streaming. `'additive'` renders the UNION of zoom levels `[minZoom..requestedZoom]` simultaneously and keeps every level resident — for additive-octree point clouds (built with `stt-build --min-zoom-field`/`--max-zoom-field`), where each point lives at exactly one zoom, a coarse tile holds a sparse overview and finer tiles add only the residual detail, so there is no double-drawing and zooming in fetches only the deeper levels. |
 
 ### Prefetch Options
 

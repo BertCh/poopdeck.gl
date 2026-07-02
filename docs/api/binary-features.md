@@ -96,6 +96,19 @@ interface BinaryFeatures {
     indices: Uint16Array;
     categories: string[];
   }>;
+
+  /**
+   * Interleaved fixed-width vector columns — `FixedSizeList<Float32|UInt8, N>`
+   * baked at build time with `--vector-group NAME=cols[:f32|u8]` (e.g. a
+   * `[qx,qy,qz,qw]` surfel quaternion, or an `[r,g,b,a]` u8 colour). Each
+   * `value` is the contiguous row-major child buffer — feature `i` occupies
+   * `[i*size, (i+1)*size)` — surfaced zero-copy so the renderer binds it
+   * straight to a deck.gl instanced attribute with no per-point re-interleave.
+   * `Float32Array` for `f32` leaves, `Uint8Array` (bind as `normalized`) for
+   * `u8` colour leaves. `decodeTile` always sets it (empty when the tile
+   * carries no FixedSizeList columns).
+   */
+  vectorProps?: Record<string, { value: Float32Array | Uint8Array; size: number }>;
 }
 ```
 
@@ -206,7 +219,10 @@ The render path never materializes per-feature objects; for picking,
 tooltips, and debugging use `getFeatureProperties(features, index)` from
 `@poopdeck.gl/core` — it decodes ONE feature's columns into a plain object
 (`id`, absolute `start_time`/`end_time`, every numeric and categorical
-column; categorical nulls decode to `null`).
+column; categorical nulls decode to `null`). Each `vectorProps` entry is
+included too, materialized as a plain `number[]` of length `size` (e.g. a
+4-element quaternion or RGBA array) rather than the zero-copy typed-array
+slice the render path binds.
 
 ## Source
 
