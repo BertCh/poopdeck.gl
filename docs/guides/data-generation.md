@@ -40,11 +40,11 @@ directory (default `examples/showcase/public/data`).
 stt-generate all --output-dir examples/showcase/public/data --skip-existing
 ```
 
-The remaining datasets (`ais`, `flights`, `nyc-rideshare`, `bixi`,
+The remaining datasets (`ais`, `flights`, `nyc-rideshare`, `bixi`, `gtfs`,
 `nyc-taxi-points`, `satellites`, `drifters`, `drifters-hourly`, `animals`,
-`osm-edits`, `storms`) require per-run parameters (download dates, an OSRM
-server, an existing source archive, etc.) or long downloads and are NOT
-built by `all` — run them individually.
+`osm-edits`, `storms`, `nwm`) require per-run parameters (download dates, an
+OSRM server, a GTFS feed, an existing source archive, etc.) or long downloads
+and are NOT built by `all` — run them individually.
 
 ### Generate Individual Datasets
 
@@ -70,10 +70,10 @@ stt-generate flights --date 2020-01-06 --output flights.stt
 stt-generate nyc-rideshare --synthetic --num-trips 1000 \
   --osrm-url http://localhost:5000 --output nyc-rideshare.stt
 
-# NYC taxi POINTS derived from an existing path archive → nyc-taxi-points.stt
-# (--input defaults to examples/showcase/public/data/nyc-taxi-paths.stt)
+# NYC taxi POINTS derived from an existing path dataset → nyc-taxi-points.stt
+# (--input defaults to examples/showcase/public/data/nyc-taxi-paths)
 stt-generate nyc-taxi-points \
-  --input examples/showcase/public/data/nyc-taxi-paths.stt \
+  --input examples/showcase/public/data/nyc-taxi-paths \
   --output nyc-taxi-points.stt
 
 # Satellite orbits from CelesTrak TLE + SGP4 → satellites.stt
@@ -259,21 +259,63 @@ stt-generate bixi \
 - `--paths`: Emit one OSRM-routed LineString **per individual trip** with per-vertex timestamps (moving-dots demos via `AnimatedTripHeadsLayer`), instead of aggregated flows
 - `--skip-build`: Write only the intermediate GeoParquet (no stt-build)
 
+### GTFS Transit Ballet (`gtfs`)
+
+Expands a static [GTFS](https://gtfs.org/) feed for **one service date** into a
+paths dataset: every scheduled vehicle journey (trip) becomes a LineString
+along its `shapes.txt` geometry with per-vertex timestamps interpolated in
+shape-distance between consecutive `stop_times.txt` entries. It is the transit
+counterpart of `bixi --paths` / `nyc-rideshare --paths` but needs **no routing
+server** — the feed already carries both the geometry and the timetable.
+Rendered with `type: 'trip-heads'`, a whole country's timetable animates as a
+Mini-Tokyo-3D-style ballet of gliding vehicles.
+
+A trip is included iff its `service_id` is active on `--date` (weekly
+`calendar.txt` plus `calendar_dates.txt` exceptions). GTFS times past `24:00:00`
+are anchored at local midnight of the service date in the feed's agency
+timezone, then emitted as absolute Unix ms. `route_type` is emitted as a string
+label (`bus`/`rail`/`tram`/…), not the numeric GTFS code, so categorical
+`colorMapping` works.
+
+```bash
+# The busiest fully-defined NL OVapi service date (Friday, ~121k trips):
+stt-generate gtfs \
+  --feed data/gtfs-nl/feed \
+  --date 20260703 \
+  --output examples/showcase/public/data/gtfs-nl
+```
+
+**Options:**
+- `--feed`: Extracted GTFS feed directory (**required**) — needs `trips.txt`,
+  `stop_times.txt`, `routes.txt`, and `calendar_dates.txt` and/or
+  `calendar.txt`; `shapes.txt` and `stops.txt` are used when present
+- `--date`: Service date to expand, `YYYYMMDD` (**required**)
+- `--output` / `--out`: Output packed dataset directory (or a `*.parquet` path
+  to stop at the intermediate), default `examples/showcase/public/data/gtfs-transit`
+- `--bin`: Temporal bucket for the output archive's tile chunking, default `1h`
+- `--max-trips`: Cap the number of trips, evenly subsampled across the day for a
+  legible fleet (deterministic stride), default: every scheduled trip
+- `--headsign`: Also emit each trip's `trip_headsign` as a string property
+  (off by default — it is a high-cardinality categorical)
+- `--min-zoom` / `--max-zoom`: Build pyramid zoom range, default 6–14
+- `--skip-build`: Write only the intermediate GeoParquet (no stt-build)
+
 ### NYC Taxi Points (`nyc-taxi-points`)
 
 Derives a Point dataset from an already-built `nyc-taxi-paths` LineString
-archive by interpolating each trip's polyline at a fixed time interval — no
-OSRM re-run, the routed geometries baked into the `.stt` are reused as-is.
+dataset by interpolating each trip's polyline at a fixed time interval — no
+OSRM re-run, the routed geometries baked into the packed dataset are reused
+as-is.
 
 ```bash
 stt-generate nyc-taxi-points \
-  --input examples/showcase/public/data/nyc-taxi-paths.stt \
+  --input examples/showcase/public/data/nyc-taxi-paths \
   --interval-seconds 15 \
   --output nyc-taxi-points.stt
 ```
 
 **Options:**
-- `--input`: Source LineString `.stt` archive, default `examples/showcase/public/data/nyc-taxi-paths.stt`
+- `--input`: Source LineString packed dataset (a directory or its `manifest.json`), default `examples/showcase/public/data/nyc-taxi-paths`
 - `--interval-seconds`: Time spacing between interpolated points (smaller = smoother animation, larger output), default: 15
 - `--max-trips`: Cap on trips processed (for quick iteration), default: all
 - `--temporal-bucket`: Output archive tile bucket, default `30m`
@@ -452,6 +494,50 @@ stt-generate storms \
 - `--no-download`: Use cached downloaded volumes only; never hit S3
 - `--skip-build`: Write only the intermediate parquet for each archive
 
+### NWM River Discharge (`nwm`)
+
+Animates hourly/daily modeled discharge from the NOAA **National Water Model**
+v3.0 retrospective (`chrtout.zarr` on anonymous S3) over the NHDPlusV2 CONUS
+river network as `vertex_value_matrix` flow corridors — the continental-scale
+sibling of `bixi --streets`, with zero new tile-format features. Chunk fetch,
+reduce, and assemble stages are all resumable via on-disk caches, so the March
+hourly window reuses the year's downloaded chunks and daily medians.
+
+```bash
+# Demo 1 — full-year daily absolute discharge:
+stt-generate nwm --window 2019 --bin 1d --value log-q \
+  --output examples/showcase/public/data/nwm-rivers-2019
+
+# Demo 2 — March hourly flood anomaly (reuses the 2019 daily pass for medians):
+stt-generate nwm --window 2019-03 --bin 1h --value log-anomaly \
+  --output examples/showcase/public/data/nwm-rivers-flood-2019-03
+```
+
+**Options:**
+- `--flowlines`: NHDPlus flowlines GeoParquet (COMID / StreamOrde / Hydroseq /
+  LevelPathI / Divergence / DnHydroseq / WKB geometry), default
+  `data/nwm/nhd-flowlines-order3.parquet`
+- `--window`: Value window, `YYYY` (full year) or `YYYY-MM` (one month), default `2019`
+- `--bin`: Temporal bucket, `1d` (daily mean) or `1h` (hourly; month windows only), default `1d`
+- `--value`: Value encoding — `log-q` (log10 absolute discharge) or `log-anomaly`
+  (log2 anomaly vs the reach's 2019 daily median), default `log-q`
+- `--output` / `--out`: Output packed dataset directory (or a `*.parquet` path
+  to stop at the intermediate), default `examples/showcase/public/data/nwm-rivers-2019`
+- `--zooms`: Zoom pyramid, `LO-HI` or a single `Z`, default `4-8` (density LOD by
+  stream order — each river is emitted once at full resolution, not decimated per zoom)
+- `--detail-zoom`: Geometry detail — 2-px vertex spacing is targeted at this zoom
+  and kept at every rendered zoom, default 11
+- `--chunk-buckets`: Matrix columns per streamed temporal tile; `0` (default) =
+  auto (~30 columns), which caps the decoded matrix on dense low-zoom tiles
+- `--min-order-override`: Override the per-band Strahler-order threshold
+  (default ladder z≤5 → ≥6, z6–7 → ≥5, z8+ → ≥4)
+- `--max-reach-stripes`: Process only the first N of the 93 reach stripes — cheap
+  smoke tests (most flowlines then count as join misses; not for real builds)
+- `--cache-dir`: Cache directory for compressed zarr chunk objects, default `data/nwm/chrtout-cache`
+- `--reduced-dir`: Directory for persisted per-stripe reduced series, default `data/nwm/reduced`
+- `--skip-download`: Fail if a needed chunk is not already cached instead of downloading
+- `--skip-build`: Write only the intermediate GeoParquet (no stt-build)
+
 ## Custom Data (Using stt-build)
 
 `stt-build`'s primary input is a **GeoParquet** file (`.parquet` /
@@ -567,8 +653,8 @@ stt-build -i quakes.parquet -o quakes.stt \
   --summary-columns magnitude:mean,magnitude:max
 ```
 
-The summary tier runs in the in-memory pipeline only — combining it with
-`--streaming-arrow` is an error (see Memory Management below).
+The summary tier is built from the loaded features after the raw tier, so it
+works with either the default build or `--streaming`.
 
 ### Time Format Options
 
@@ -639,27 +725,21 @@ stt-generate flights --sample-seconds 60  # 1 position per aircraft per minute
 
 ### 3. Memory Management
 
-For multi-GB inputs, switch `stt-build` to its Arrow-native streaming
-pipeline so peak RSS stays bounded by one Parquet batch plus the active
-spill budget:
+For large inputs, `stt-build --streaming` writes tiles as each zoom level
+completes and streams them straight into the `PackWriter`, instead of
+generating every tile up front — which trims peak RAM at the cost of some
+parallelism:
 
 ```bash
 stt-build -i huge-input.parquet -o out.stt \
   --time-field timestamp --time-format unix-ms \
-  --streaming-arrow
+  --streaming
 ```
 
-The standard `--streaming` flag is an older path that writes tiles per
-zoom level — fine for medium inputs but holds the per-zoom feature set
-in RAM (and is ignored when `--temporal-lod` is set). `--streaming-arrow`
-is the right answer for >10 GB inputs.
-
-`--streaming-arrow` has restrictions: it **errors** when combined with
-`--summary-tier`, `--heatmap-weight`, `--heatmap-class`, or
-`--metadata-output` (those passes run after the in-memory pipeline's
-finalize), ignores `--temporal-lod` with a warning, and is
-single-threaded (`--workers` is ignored). Use the in-memory pipeline for
-those features.
+`--streaming` is ignored when `--temporal-lod` is set (the temporal-LOD
+pyramid runs through the in-memory pipeline), and `--style-hints` is skipped
+under it. The summary tier, heatmap domain, and `--metadata-output` still
+apply — they run over the loaded features after the raw tier is written.
 
 ## Validating Output
 
@@ -696,7 +776,7 @@ binary name, add `--force`.)
 
 ### Out of Memory
 
-Switch to the streaming Arrow pipeline (above) and raise
+Switch to the `--streaming` pipeline (above) and raise
 `--min-features-per-tile` to drop tiny deep-zoom tiles. The TS reader's
 `'best-available'` refinement surfaces dropped features from their
 parent tiles.
