@@ -229,19 +229,23 @@ const AvThreeViewer: React.FC<AvThreeViewerProps> = ({
   const handlePick = useCallback(
     (info: SttPickInfo | null) => {
       if (!onSelectObject) return;
-      onSelectObject(
-        info
-          ? {
-              category: info.category,
-              track_id: info.trackId,
-              speed: info.speed,
-              length: info.length,
-              width: info.width,
-              height: info.height,
-              heading: info.heading,
-            }
-          : null,
-      );
+      // `SttPickInfo` is now a discriminated union (`SttBoxPickInfo` |
+      // `SttPointPickInfo`); the cockpit inspector only surfaces object/ego BOXES,
+      // so narrow on `kind` before reading the box-only fields. A point-cloud hit
+      // (or a miss) clears the selection.
+      if (info && (info.kind === "object" || info.kind === "ego")) {
+        onSelectObject({
+          category: info.category,
+          track_id: info.trackId,
+          speed: info.speed,
+          length: info.length,
+          width: info.width,
+          height: info.height,
+          heading: info.heading,
+        });
+      } else {
+        onSelectObject(null);
+      }
     },
     [onSelectObject],
   );

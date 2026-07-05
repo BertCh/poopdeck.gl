@@ -40,6 +40,10 @@ const KIND_TO_EXPORT: Record<LayerKind, string | null> = {
   // Not natively rendered by three; no class expected.
   heatmap: null,
   flowStroke: null,
+  text: null,
+  mesh: null,
+  pointCloud: null,
+  hexbin: null,
 };
 
 const exports = three as Record<string, unknown>;

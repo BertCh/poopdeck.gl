@@ -36,8 +36,11 @@
     "clean": "rm -rf dist tsconfig.tsbuildinfo"
   },
   "dependencies": {
+    "3d-tiles-renderer": "^0.4.28",
     "@poopdeck.gl/core": "workspace:*",
     "@poopdeck.gl/playback": "workspace:*",
+    "@takram/three-atmosphere": "^0.19.1",
+    "@takram/three-geospatial": "^0.9.1",
     "earcut": "^3.0.0",
     "h3-js": "^4.1.0"
   },

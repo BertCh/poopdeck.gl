@@ -16,8 +16,12 @@
  *  - TSL compiles only on `WebGPURenderer`, so the basemap is a camera-synced
  *    overlay canvas (`interleavedBasemap: false`), NOT interleaved into a shared
  *    GL context.
- *  - Picking is CPU ray-OBB today (`GpuPicker` exists but is not the wired
- *    mechanism), so `pickMechanism: 'cpu-ray'`.
+ *  - Picking is HYBRID: instanced clouds are picked by a wired GPU id-buffer
+ *    pass (`GpuPicker` → provenance resolve), while the tens of object/ego boxes
+ *    stay on the CPU ray-OBB test. The descriptor has one `pickMechanism` slot
+ *    and no `'hybrid'` member, so it declares `'gpu-id'` (the id-buffer readback,
+ *    matching the deck backend for the identical technique); the box path is the
+ *    CPU-side complement noted here.
  *  - GPU heatmap + live edge-bundling are deferred; user `LayerExtension`-style
  *    hooks, time-as-height, and camera roll are not implemented → those caps are
  *    `false` and the two affected layer kinds declare typed fallbacks.
@@ -45,6 +49,26 @@ const UNSUPPORTED_KINDS: Partial<Record<LayerKind, LayerKindSupport>> = {
     supported: false,
     fallbackKind: 'flowCorridor',
     reason: 'no FlowStrokeLayer in three; use FlowCorridorLayer',
+  },
+  text: {
+    supported: false,
+    fallbackKind: 'icon',
+    reason: 'text layer not yet ported to the three backend',
+  },
+  mesh: {
+    supported: false,
+    fallbackKind: 'boundingBox',
+    reason: 'mesh layer not yet ported to the three backend',
+  },
+  pointCloud: {
+    supported: false,
+    fallbackKind: 'point',
+    reason: 'point-cloud layer not yet ported to the three backend',
+  },
+  hexbin: {
+    supported: false,
+    fallbackKind: 'h3Summary',
+    reason: 'hexbin layer not yet ported to the three backend',
   },
 };
 
@@ -75,7 +99,7 @@ export const threeBackend: BackendDescriptor = {
   layerKinds,
   projectsOnCpu: true,
   tilesetOwnership: 'shared',
-  pickMechanism: 'cpu-ray',
+  pickMechanism: 'gpu-id',
   interleavedBasemap: false,
   basemapProjection: 'mercator',
 };

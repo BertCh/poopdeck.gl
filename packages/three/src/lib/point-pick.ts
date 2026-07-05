@@ -16,6 +16,7 @@
 import type { BinaryFeatures, TileId } from '@poopdeck.gl/core';
 import { getFeatureProperties } from '@poopdeck.gl/core';
 import type { InstanceProvenance, SttPickResult } from '@poopdeck.gl/core/picking';
+import type { SttPointPickInfo } from './box-pick.js';
 
 /**
  * Parse a `z/x/y/t::layer` {@link import('../layers/point-buffers.js').pointTileKey}
@@ -74,4 +75,24 @@ export function resolvePointPick(params: ResolvePointPickParams): SttPickResult 
   if (tileId) result.tileId = tileId;
   if (screen) result.screen = screen;
   return result;
+}
+
+/**
+ * Adapt a resolved core {@link SttPickResult} into the pick controller's
+ * discriminated {@link SttPointPickInfo} (`kind: 'point'`), so a GPU point-cloud
+ * hit reaches the SAME `onPick` / `onHover` callback as a CPU box hit. Pure —
+ * the unit-tested tail of the hover/click resolution chain (decoded id →
+ * `resolvePointPick` → here). Optional fields are copied only when present so a
+ * consumer can `'coordinate' in info`-test them meaningfully.
+ */
+export function pointPickToInfo(result: SttPickResult): SttPointPickInfo {
+  const info: SttPointPickInfo = {
+    kind: 'point',
+    layerId: result.layerId,
+    index: result.index,
+    object: result.object,
+  };
+  if (result.coordinate) info.coordinate = result.coordinate;
+  if (result.tileId) info.tileId = result.tileId;
+  return info;
 }

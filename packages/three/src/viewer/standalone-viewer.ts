@@ -18,6 +18,7 @@ import { Scene, PerspectiveCamera, Vector3, Color, AxesHelper } from 'three';
 import { WebGPURenderer } from 'three/webgpu';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import type { SttScene } from '../scene/stt-three-scene.js';
+import { cameraToViewport } from '../scene/streaming-tile-source.js';
 import type { EgoLayer } from '../layers/ego-layer.js';
 import { frameBox } from '../scene/camera.js';
 import {
@@ -25,6 +26,28 @@ import {
   resolveBackend,
   type RendererBackend,
 } from '../renderer/webgpu-renderer.js';
+import {
+  createSttAtmosphere,
+  type AtmosphereOptions,
+  type SttAtmosphere,
+} from '../scene/atmosphere.js';
+import {
+  createStt3DTiles,
+  type Stt3DTiles,
+  type Stt3DTilesOptions,
+} from '../scene/tiles-3d.js';
+import { createSttGlobeControls, type SttGlobeControls } from '../scene/globe-controls.js';
+import { frameGlobe } from '../scene/globe-camera.js';
+import { GlobeProjection } from '../projection/globe.js';
+
+/**
+ * Minimum interval (ms) between viewport pumps into the streaming tileset. The
+ * tileset debounces internally, but re-deriving the frustum footprint every
+ * frame is wasted work when the camera is idle — a ~10 Hz cadence keeps
+ * streaming responsive without per-frame cost. (Playhead time rides along on the
+ * same pump, so temporal selection lags by at most this interval — imperceptible.)
+ */
+const STREAM_UPDATE_MS = 100;
 
 export interface StandaloneViewerOptions {
   /** Playback clock — absolute playhead in epoch-ms each frame. */
@@ -37,6 +60,28 @@ export interface StandaloneViewerOptions {
   pitchDeg?: number;
   headingDeg?: number;
   onBackend?: (backend: RendererBackend) => void;
+  /**
+   * Opt-in physically-based atmosphere / sky / day-night (WebGPU only; ignored on
+   * the WebGL2 fallback). `true` enables it with defaults; an options object tunes
+   * it (see {@link AtmosphereOptions}). Omit / `false` (default) keeps the current
+   * behaviour exactly. Most impactful on globe scenes. The sun tracks the playhead
+   * time each frame via `getTime`.
+   */
+  atmosphere?: boolean | AtmosphereOptions;
+  /**
+   * Opt-in OGC 3D Tiles overlay (real terrain, Google Photorealistic Tiles, Cesium
+   * Ion). Adds the tileset group to the scene and drives its LOD update each frame.
+   * Co-registers with STT's ECEF globe world — a globe scene MUST use the `'wgs84'`
+   * datum (see {@link createStt3DTiles}). Omit (default) keeps the current scene
+   * untouched. Works on both the WebGPU and WebGL2 paths.
+   */
+  tiles3d?: Stt3DTilesOptions;
+  /**
+   * Use ellipsoid-aware `GlobeControls` instead of `OrbitControls` for globe
+   * navigation (horizon-aware, zoom-to-cursor, auto earth-scale near/far). Reuses
+   * the {@link tiles3d} ellipsoid frame when both are set. @default false
+   */
+  globeControls?: boolean;
   /** Log diagnostics + drop a bright axes gizmo at the cloud centre (bring-up). */
   debug?: boolean;
 }
@@ -53,6 +98,22 @@ export class StandaloneViewer {
   private lastEgo: Vector3 | null = null;
   private followEgo: boolean;
   private topDown: boolean;
+  /** Cached at load: does the scene hold any viewport-driven streaming layer? */
+  private streaming = false;
+  /** Timestamp of the last streaming viewport pump (for the STREAM_UPDATE_MS throttle). */
+  private lastStreamUpdate = 0;
+  /** Previous playhead time — a change ⇒ animating (drives prefetch). */
+  private lastTime = Number.NaN;
+  /** Streaming scenes start empty; re-frame once the first tiles give real bounds. */
+  private framedToData = false;
+  /** Opt-in atmosphere (WebGPU only); when set, drives the per-frame render. */
+  private atmosphere: SttAtmosphere | null = null;
+  /** Opt-in OGC 3D Tiles overlay; when set, pumped each frame. */
+  private tiles3d: Stt3DTiles | null = null;
+  /** Ellipsoid-aware globe controls (replaces OrbitControls when `globeControls`). */
+  private globeControlsHandle: SttGlobeControls | null = null;
+  /** Cached at construction: use GlobeControls rather than OrbitControls. */
+  private readonly useGlobeControls: boolean;
 
   constructor(
     private readonly container: HTMLElement,
@@ -61,6 +122,7 @@ export class StandaloneViewer {
   ) {
     this.followEgo = opts.followEgo ?? false;
     this.topDown = opts.topDown ?? false;
+    this.useGlobeControls = opts.globeControls ?? false;
     this.camera = new PerspectiveCamera(50, 1, 0.1, 5000);
     this.camera.up.set(0, 0, 1); // Z-up world
     this.camera.position.set(40, -40, 30);
@@ -105,15 +167,22 @@ export class StandaloneViewer {
       return;
     }
     this.renderer = renderer;
-    this.opts.onBackend?.(resolveBackend(renderer, forceWebGL));
+    const backend = resolveBackend(renderer, forceWebGL);
+    this.opts.onBackend?.(backend);
 
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
-    this.controls = new OrbitControls(this.camera, el);
-    this.controls.enableDamping = true;
-    this.controls.dampingFactor = 0.12;
+    // OrbitControls is the default; a globe scene opts into GlobeControls instead
+    // (created below, once the tileset ellipsoid exists).
+    if (!this.useGlobeControls) {
+      this.controls = new OrbitControls(this.camera, el);
+      this.controls.enableDamping = true;
+      this.controls.dampingFactor = 0.12;
+    }
 
-    // Eager-load the scene, then frame the camera to the cloud.
+    // Load the scene (eager sources resolve fully; streaming sources build their
+    // tileset), then frame the camera. Streaming scenes have no tiles yet, so the
+    // initial frame targets empty bounds — the loop re-frames once tiles arrive.
     try {
       await this.scene.load();
     } catch (err) {
@@ -121,7 +190,73 @@ export class StandaloneViewer {
       console.error('[StandaloneViewer] scene load failed', err);
     }
     if (this.disposed) return;
-    this.frame();
+    this.streaming = this.scene.hasStreamingLayers();
+
+    // Opt-in OGC 3D Tiles overlay (real terrain / Google Photorealistic / Ion).
+    // Standard meshes, so it works on both backends. Added to the scene here so
+    // the atmosphere post-pipeline (below) draws it too. Set up before framing so
+    // the globe view can position the camera against the tileset ellipsoid.
+    if (this.opts.tiles3d) {
+      try {
+        const tiles = await createStt3DTiles({
+          ...this.opts.tiles3d,
+          renderer,
+          scene: this.threeScene,
+          camera: this.camera,
+          projection: this.scene.projection,
+        });
+        if (this.disposed) tiles.dispose();
+        else this.tiles3d = tiles;
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error('[StandaloneViewer] 3D tiles setup failed; continuing without them', err);
+      }
+    }
+
+    // Opt-in ellipsoid-aware globe navigation (replaces OrbitControls). Reuses the
+    // tileset's aligned ellipsoid frame when tiles3d is on.
+    if (this.useGlobeControls) {
+      try {
+        const gc = await createSttGlobeControls({
+          scene: this.threeScene,
+          camera: this.camera,
+          domElement: el,
+          projection: this.scene.projection,
+          tiles: this.tiles3d,
+        });
+        if (this.disposed) gc.dispose();
+        else this.globeControlsHandle = gc;
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error('[StandaloneViewer] globe controls setup failed', err);
+      }
+    }
+
+    // Frame: a globe scene parks a whole-earth overview (GlobeControls then refines
+    // near/far each frame); everything else fits the data bounds via OrbitControls.
+    if (this.useGlobeControls) this.frameGlobeView();
+    else this.frame();
+
+    // Opt-in atmosphere: WebGPU only (the pass→MRT→aerialPerspective pipeline and
+    // TSL sky/light nodes compile only on WebGPURenderer). On WebGL2 we simply
+    // skip it and keep the plain render path — a graceful, crash-free degrade.
+    if (this.opts.atmosphere && backend === 'webgpu') {
+      const atmoOpts = this.opts.atmosphere === true ? {} : this.opts.atmosphere;
+      try {
+        const atmosphere = await createSttAtmosphere({
+          ...atmoOpts,
+          renderer,
+          scene: this.threeScene,
+          camera: this.camera,
+          projection: this.scene.projection,
+        });
+        if (this.disposed) atmosphere.dispose();
+        else this.atmosphere = atmosphere;
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error('[StandaloneViewer] atmosphere setup failed; rendering without it', err);
+      }
+    }
 
     this.resizeObs = new ResizeObserver(() => this.onResize());
     this.resizeObs.observe(this.container);
@@ -186,6 +321,17 @@ export class StandaloneViewer {
     );
   }
 
+  /**
+   * Park a whole-earth overview for a globe scene (the entry view for globe +
+   * 3D-tiles navigation). `frameGlobe` sets an initial earth-scale near/far via
+   * `setGlobeClip`; `GlobeControls` then refines the clip each frame. A no-op on a
+   * non-globe projection (globe controls only make sense on the globe).
+   */
+  private frameGlobeView(): void {
+    const proj = this.scene.projection;
+    if (proj instanceof GlobeProjection) frameGlobe(this.camera, proj);
+  }
+
   setFollowEgo(on: boolean): void {
     this.followEgo = on;
     this.lastEgo = null;
@@ -204,6 +350,8 @@ export class StandaloneViewer {
     this.renderer.setSize(w, h);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
+    // 3D-tiles LOD is screen-space-error driven; refresh its reference resolution.
+    this.tiles3d?.setResolutionFromRenderer();
   }
 
   private loop = (): void => {
@@ -211,6 +359,8 @@ export class StandaloneViewer {
     this.raf = requestAnimationFrame(this.loop);
     const t = this.opts.getTime();
     this.scene.setTime(t);
+
+    if (this.streaming) this.driveStreaming(t);
 
     if (this.followEgo && this.opts.egoLayer && this.controls) {
       const pose = this.opts.egoLayer.getEgoPose(t);
@@ -223,16 +373,70 @@ export class StandaloneViewer {
     } else {
       this.lastEgo = null;
     }
-    this.controls?.update();
+    // Controls: ellipsoid-aware globe navigation, else orbit. GlobeControls
+    // self-times its delta and adjusts the camera near/far as it updates.
+    if (this.globeControlsHandle) this.globeControlsHandle.update();
+    else this.controls?.update();
+
+    // Pump 3D-tiles LOD AFTER the camera matrix is current for this frame (the
+    // controls above updated it), BEFORE the draw so new tiles show this frame.
+    if (this.tiles3d) {
+      this.camera.updateMatrixWorld();
+      this.tiles3d.update();
+    }
+
     // Backend is initialized (we awaited it) → synchronous render, no warning.
-    this.renderer.render(this.threeScene, this.camera);
+    // With the atmosphere on, advance the sun to the playhead time and draw
+    // THROUGH its aerial-perspective pipeline (it falls back to a plain render
+    // internally when aerial perspective is off), else render the scene directly.
+    if (this.atmosphere) {
+      this.atmosphere.update(t);
+      this.atmosphere.render();
+    } else {
+      this.renderer.render(this.threeScene, this.camera);
+    }
   };
+
+  /**
+   * Feed the camera-derived viewport into the scene's streaming sources. Time
+   * rides along so the tileset selects the right temporal buckets; the play/pause
+   * heuristic (time advancing ⇒ animating) keeps prefetch alive. Throttled to
+   * STREAM_UPDATE_MS; the first non-empty bounds trigger a one-time re-frame so a
+   * streaming scene (which loads no tiles up front) still frames itself.
+   */
+  private driveStreaming(t: number): void {
+    this.scene.setAnimationState(t !== this.lastTime);
+    this.lastTime = t;
+
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    if (now - this.lastStreamUpdate >= STREAM_UPDATE_MS) {
+      this.lastStreamUpdate = now;
+      const width = this.container.clientWidth || 1;
+      const height = this.container.clientHeight || 1;
+      const { bounds, zoom } = cameraToViewport(this.scene.projection, this.camera, {
+        width,
+        height,
+      });
+      this.scene.updateStreaming({ bounds, zoom, time: t });
+    }
+
+    if (!this.framedToData && !this.scene.computeBounds().isEmpty()) {
+      this.framedToData = true;
+      this.frame();
+    }
+  }
 
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
     cancelAnimationFrame(this.raf);
     this.resizeObs?.disconnect();
+    this.atmosphere?.dispose();
+    this.atmosphere = null;
+    this.globeControlsHandle?.dispose();
+    this.globeControlsHandle = null;
+    this.tiles3d?.dispose();
+    this.tiles3d = null;
     this.controls?.dispose();
     if (this.renderer) {
       const el = this.renderer.domElement as HTMLCanvasElement;

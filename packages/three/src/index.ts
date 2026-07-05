@@ -83,14 +83,57 @@ export {
 } from './tsl/time-filter.js';
 
 // ─── Engine core ──────────────────────────────────────────────────────────────
-export { SttScene, type SttSceneOptions } from './scene/stt-three-scene.js';
+export {
+  SttScene,
+  type SttSceneOptions,
+  type AddLayerOptions,
+} from './scene/stt-three-scene.js';
 export {
   StandaloneViewer,
   type StandaloneViewerOptions,
 } from './viewer/standalone-viewer.js';
+// ─── Atmosphere (opt-in, WebGPU-only physically-based sky / sun / day-night) ────
+export {
+  createSttAtmosphere,
+  computeWorldToEcef,
+  geodeticToEcef,
+  enuBasisEcef,
+  resolveSunDate,
+  resolveAtmosphereOptions,
+  type SttAtmosphere,
+  type AtmosphereOptions,
+  type ResolvedAtmosphereOptions,
+  type CreateSttAtmosphereOptions,
+} from './scene/atmosphere.js';
+// ─── OGC 3D Tiles (opt-in: real terrain / Google Photorealistic / Cesium Ion) ───
+export {
+  createStt3DTiles,
+  resolveTilesSource,
+  resolveStt3DTilesOptions,
+  ecefToWorldMatrix,
+  alignTilesGroup,
+  type Stt3DTilesSource,
+  type ResolvedTilesSource,
+  type Stt3DTilesOptions,
+  type ResolvedStt3DTilesOptions,
+  type CreateStt3DTilesOptions,
+  type Stt3DTiles,
+} from './scene/tiles-3d.js';
+export {
+  createSttGlobeControls,
+  type CreateSttGlobeControlsOptions,
+  type SttGlobeControls,
+} from './scene/globe-controls.js';
 export { SttTileSource, type SttTileSourceOptions, type LoadedSource } from './scene/tile-source.js';
 export { makeGround, type GroundOptions } from './scene/ground.js';
 export { frameBox, type FrameOptions } from './scene/camera.js';
+export {
+  isGlobeProjection,
+  rigModeFor,
+  resolveCanvasProjection,
+  globeControlLimits,
+  type RigMode,
+} from './scene/projection-rig.js';
 export {
   BaseSttLayer,
   type SttLayer,
@@ -125,7 +168,11 @@ export {
   type PointMaterialBundle,
   type PointUniformValues,
 } from './tsl/point-material.js';
-export { PointCloudLayer, type PointCloudLayerOptions } from './layers/point-cloud-layer.js';
+export {
+  PointCloudLayer,
+  type PointCloudLayerOptions,
+  type SttPointPickable,
+} from './layers/point-cloud-layer.js';
 export {
   buildPointBuffers,
   pointTileKey,
@@ -397,6 +444,7 @@ export {
   createTilesetBufferSource,
   type StreamingViewport,
   type StreamingTileSourceOptions,
+  type StreamingLayerOptions,
   type DrivableTileset,
   type RunwayTileset,
 } from './scene/streaming-tile-source.js';
@@ -431,13 +479,18 @@ export {
   pickBoxes,
   type Vec3,
   type SttPickInfo,
+  type SttPickInfoBase,
+  type SttBoxPickInfo,
+  type SttPointPickInfo,
   type PickBox,
   type SttPickable,
 } from './lib/box-pick.js';
-// Merged-buffer point picking (§5.3): pure index → SttPickResult resolution.
+// Merged-buffer point picking (§5.3): pure index → SttPickResult resolution, and
+// the adapter that maps that result into the pick controller's SttPointPickInfo.
 export {
   resolvePointPick,
   parsePointTileKey,
+  pointPickToInfo,
   type ResolvePointPickParams,
 } from './lib/point-pick.js';
 

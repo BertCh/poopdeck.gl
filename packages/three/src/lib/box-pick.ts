@@ -19,12 +19,24 @@
  * ENU metric world). This matches `geometry/box-edges.ts`.
  */
 
+import type { TileId } from '@poopdeck.gl/core';
+
 export type Vec3 = readonly [number, number, number];
 
-/** Result of a successful pick — structurally a superset of the cockpit's PickedObject. */
-export interface SttPickInfo {
-  /** Id of the layer that owns the hit box. */
+/** Fields shared by every pick-hit variant surfaced to `onPick` (click) / `onHover`. */
+export interface SttPickInfoBase {
+  /** Id of the STT layer that owns the hit. */
   layerId: string;
+  /** World-space hit point (ENU metres), when the pick resolves one. */
+  worldPoint?: Vec3;
+}
+
+/**
+ * A hit on a CPU oriented object/ego box (ray-OBB) — the shape {@link pickBoxes}
+ * returns. `worldPoint` is always the ray/box entry point. Structurally a superset
+ * of the cockpit's PickedObject.
+ */
+export interface SttBoxPickInfo extends SttPickInfoBase {
   kind: 'object' | 'ego';
   category?: string;
   trackId?: string | number;
@@ -36,9 +48,37 @@ export interface SttPickInfo {
   height?: number;
   /** Heading (radians, CCW from +x). */
   heading?: number;
-  /** World-space hit point (ENU metres). */
+  /** World-space hit point (ENU metres) — the ray/box entry. */
   worldPoint: Vec3;
 }
+
+/**
+ * A hit on a GPU-instanced point-cloud feature (id-buffer readback → provenance
+ * resolve). Mapped from a core `SttPickResult` by `pointPickToInfo` in
+ * `./point-pick.ts`, so the same `onPick` / `onHover` callback receives both box
+ * and point hits, discriminated by `kind`.
+ */
+export interface SttPointPickInfo extends SttPickInfoBase {
+  kind: 'point';
+  /** Feature index within its `(tile, layer)` `BinaryFeatures`. */
+  index: number;
+  /** Decoded feature properties, or null when unresolved. */
+  object: Record<string, unknown> | null;
+  /** Geographic `[lng, lat]` of the picked feature. */
+  coordinate?: [number, number];
+  /** The picked tile, when the provenance key parses. */
+  tileId?: TileId;
+}
+
+/**
+ * Any hit surfaced by the pick controller: a CPU box hit ({@link SttBoxPickInfo})
+ * or a GPU point-cloud hit ({@link SttPointPickInfo}), discriminated by `kind`.
+ *
+ * Widened from the old box-only shape — a consumer that narrows on `kind` (the
+ * idiomatic pattern) keeps working unchanged; the `'point'` arm is purely
+ * additive (GPU cloud picking).
+ */
+export type SttPickInfo = SttBoxPickInfo | SttPointPickInfo;
 
 /** A yaw-aligned oriented box to hit-test, plus the metadata to surface on a hit. */
 export interface PickBox {
@@ -49,7 +89,7 @@ export interface PickBox {
   /** Half-extents along the box's local (length, width, height) axes — scaled. */
   halfExtents: Vec3;
   /** Metadata returned when this box is the nearest hit. */
-  meta: Omit<SttPickInfo, 'worldPoint'>;
+  meta: Omit<SttBoxPickInfo, 'worldPoint'>;
 }
 
 /** A layer that contributes pickable boxes for the current frame. */
@@ -112,7 +152,7 @@ export function rayObbHit(origin: Vec3, dir: Vec3, box: PickBox): number | null 
 }
 
 /** Nearest box hit along the ray, or `null` if nothing is hit. */
-export function pickBoxes(origin: Vec3, dir: Vec3, boxes: readonly PickBox[]): SttPickInfo | null {
+export function pickBoxes(origin: Vec3, dir: Vec3, boxes: readonly PickBox[]): SttBoxPickInfo | null {
   let best: PickBox | null = null;
   let bestT = Infinity;
   for (const box of boxes) {

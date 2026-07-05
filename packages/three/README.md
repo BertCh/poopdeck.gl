@@ -86,6 +86,24 @@ All animated layers share the TSL **time-filter** (`window` / `wake` / `trail` /
 `cumulative` / `none`) — the node mirror of deck's `TimeFilterExtension`, pinned by
 the CPU reference math in `time-filter-math.ts`.
 
+## Geo rendering & interaction
+
+All of the following are **opt-in** and backward-compatible (omit them and the
+renderer behaves exactly as before). WebGPU-first; features that need WebGPU
+degrade gracefully on the WebGL2 fallback.
+
+| Feature | How to enable | Notes |
+| --- | --- | --- |
+| **Projection** | `<SttCanvas projection={new MercatorProjection(c)} />` / `new GlobeProjection(c, EARTH_RADIUS, { datum: 'wgs84' })` | default is local-ENU; Mercator = exact web-mercator, Globe = ECEF with an orbit rig |
+| **Streaming** | `<SttCanvas streaming />` or `scene.addLayer(l, url, { streaming: true })` | viewport-driven LOD / frustum cull / eviction / prefetch via `StreamingTileSource`; eager load-everything stays the default |
+| **GPU picking + hover** | `<SttCanvas onPick={…} onHover={…} />` | GPU id-buffer picks instanced clouds; CPU ray-OBB picks boxes |
+| **Atmosphere / sky / day-night** | `<SttCanvas atmosphere />` or `<SttAtmosphere />` | physically-based sky + sun + aerial perspective (`@takram/three-atmosphere`, WebGPU only); sun tracks the playhead |
+| **3D Tiles / terrain / photorealistic** | `<SttTiles3D source={{ google: { apiToken } }} globeControls />` | OGC 3D Tiles via `3d-tiles-renderer` — self-hosted `url`, Google Photorealistic, or Cesium Ion — with ellipsoid-aware `GlobeControls` |
+
+The street basemap for flat scenes is a host-owned maplibre/mapbox map that the
+renderer camera-syncs beneath the transparent canvas (`BasemapOverlay`) — not an
+in-engine tile layer.
+
 ## Architecture
 
 - **Engine** (framework-agnostic): the `WebGPURenderer` bootstrap, the `SttScene`
@@ -103,5 +121,6 @@ in-browser. See the [parity roadmap](../../docs/roadmap/three-renderer-parity.md
 ## Docs
 
 - [@poopdeck.gl/three reference](../../docs/api/stt-three.md)
+- [SoTA geo-renderer upgrade (2026-07)](../../docs/roadmap/three-renderer-sota-2026-07.md)
 
 MIT.

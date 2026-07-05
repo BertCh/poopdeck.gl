@@ -93,7 +93,24 @@ export interface PointCloudLayerOptions extends ThreeTimeWindowOptions {
 
 const DEFAULT_FALLBACK: RGBA = [150, 160, 175, 220];
 
-export class PointCloudLayer extends BaseSttLayer {
+/**
+ * A layer that answers a GPU id-buffer pick for its instanced geometry — the
+ * point-cloud analogue of the CPU {@link import('../lib/box-pick.js').SttPickable}
+ * box registry. The pick controller registers these and, when a CPU box pick
+ * misses, runs {@link SttPointPickable.pick} at the cursor. `PointCloudLayer`
+ * satisfies it structurally; the interface lets the r3f layer keep a typed set
+ * without importing the concrete class.
+ */
+export interface SttPointPickable {
+  pick(
+    picker: GpuPicker,
+    camera: unknown,
+    cssX: number,
+    cssY: number,
+  ): Promise<SttPickResult | null>;
+}
+
+export class PointCloudLayer extends BaseSttLayer implements SttPointPickable {
   readonly id: string;
   readonly object = new Mesh();
 
@@ -296,26 +313,24 @@ export class PointCloudLayer extends BaseSttLayer {
   }
 
   /**
-   * OPT-IN GPU cloud pick — BROWSER-VERIFY ONLY (needs a live WebGPU device; the
-   * `resolvePick` half is unit-tested). Renders this layer's cloud with the flat
-   * id material into `picker`'s off-screen target, reads back the merged-instance
-   * id at CSS pixel `(cssX, cssY)`, and resolves it through the provenance buffer.
+   * GPU cloud pick — wired into the r3f `PickController` (a CPU box-pick miss
+   * falls through to this). Renders this layer's cloud with the flat id material
+   * into `picker`'s off-screen target, reads back the merged-instance id at CSS
+   * pixel `(cssX, cssY)`, and resolves it through the provenance buffer. The
+   * `resolvePick` half is unit-tested; the render + readback needs a live GPU
+   * device and is browser-verify per the package's test policy.
    *
    * Leaves normal rendering unchanged: the id material + `sttIdColor` attribute
    * are built lazily on first call and the render material is restored after the
    * readback (even on throw).
    *
-   * CAVEATS (host responsibilities for the GPU pass):
-   *  - Index 0 encodes to black — the default clear colour. Clear the picker's
-   *    target to a sentinel (e.g. white = MAX_PICK_ID) before the pass, else a
-   *    background pixel resolves to point 0. `featureCount` is passed so an id ≥
-   *    the instance count is already reported as a miss.
+   * NOTES:
+   *  - Background handling lives in {@link GpuPicker}: it clears the id target to
+   *    a sentinel (white = MAX_PICK_ID) so an empty pixel is a miss while feature
+   *    index 0 (black) stays a valid hit. `featureCount` is passed so an id ≥ the
+   *    instance count is likewise reported as a miss.
    *  - The object is rendered in isolation, so its parent chain must be identity
    *    (the ENU/AV scene root is) for its world matrix to match the live frame.
-   *
-   * TODO (browser-verify): validate the id pass end-to-end on WebGPU (clear-to-
-   * sentinel wiring + a scene-level multi-layer picker that swaps every pickable
-   * layer to its id material) once a device-backed harness exists.
    */
   async pick(
     picker: GpuPicker,
@@ -331,17 +346,20 @@ export class PointCloudLayer extends BaseSttLayer {
     // visible THIS frame are pickable.
     updatePointUniforms(idBundle, this.uniformValues(this.currentTimeMs));
 
+    // Swap to the id material only for the picker's SYNCHRONOUS render window
+    // (onBeforeRender → render → onAfterRender all run before the async readback
+    // yields), so a concurrent main-scene render can't flash the id colours.
     const mesh = this.object;
     const renderMaterial = mesh.material;
-    mesh.material = idBundle.material;
-    let index: number | null;
-    try {
-      index = await picker.pick(mesh, camera, cssX, cssY, {
-        featureCount: this.provenance.length,
-      });
-    } finally {
-      mesh.material = renderMaterial;
-    }
+    const index = await picker.pick(mesh, camera, cssX, cssY, {
+      featureCount: this.provenance.length,
+      onBeforeRender: () => {
+        mesh.material = idBundle.material;
+      },
+      onAfterRender: () => {
+        mesh.material = renderMaterial;
+      },
+    });
     if (index == null) return null;
     return this.resolvePick(index, [cssX, cssY]);
   }

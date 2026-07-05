@@ -23,8 +23,13 @@ import {
   type GeoAnchor,
   type Projection,
 } from '../projection/local-enu.js';
-import type { SttLayer } from '../layers/layer.js';
+import type { SttLayer, SttLayerContext } from '../layers/layer.js';
 import { SttTileSource } from './tile-source.js';
+import {
+  StreamingTileSource,
+  type StreamingLayerOptions,
+  type StreamingViewport,
+} from './streaming-tile-source.js';
 import { makeGround, type GroundOptions } from './ground.js';
 
 export interface SttSceneOptions {
@@ -43,12 +48,39 @@ export interface SttSceneOptions {
   ground?: GroundOptions | false;
   /** Custom fetch for archive requests (base rewrite / auth). */
   fetch?: typeof fetch;
+  /**
+   * Scene-level streaming default applied to every {@link SttScene.addLayer} that
+   * doesn't override it. `true` streams all layers with the archive defaults; an
+   * options object streams with those tileset knobs. Omit / `false` (the default)
+   * keeps the backward-compatible EAGER load-everything path
+   * ({@link SttTileSource}). A per-layer `streaming` option always wins.
+   */
+  streaming?: boolean | StreamingLayerOptions;
 }
 
-interface SceneSource {
+/** Per-layer overrides for {@link SttScene.addLayer}. */
+export interface AddLayerOptions {
+  /**
+   * Back this layer with the viewport-driven {@link StreamingTileSource} (real
+   * LOD selection + prefetch + eviction) instead of the eager
+   * {@link SttTileSource}. `true` streams with the archive defaults; an options
+   * object passes tileset knobs; omit to inherit the scene's `streaming` default.
+   * `false` forces eager even when the scene defaults to streaming.
+   */
+  streaming?: boolean | StreamingLayerOptions;
+}
+
+interface EagerSceneSource {
+  kind: 'eager';
   source: SttTileSource;
   layer: SttLayer;
 }
+interface StreamingSceneSource {
+  kind: 'streaming';
+  source: StreamingTileSource;
+  layer: SttLayer;
+}
+type SceneSource = EagerSceneSource | StreamingSceneSource;
 
 export class SttScene {
   /** Add this to the host scene graph. */
@@ -57,6 +89,7 @@ export class SttScene {
   readonly timeOrigin: number;
 
   private readonly fetchFn?: typeof fetch;
+  private readonly defaultStreaming?: boolean | StreamingLayerOptions;
   private readonly sources: SceneSource[] = [];
   private readonly layers: SttLayer[] = [];
   private disposed = false;
@@ -65,20 +98,52 @@ export class SttScene {
     this.projection = opts.projection ?? new LocalEnuProjection(opts.anchor);
     this.timeOrigin = opts.timeOrigin;
     this.fetchFn = opts.fetch;
+    this.defaultStreaming = opts.streaming;
     this.root.name = 'stt-scene';
     if (opts.ground !== false) {
       this.root.add(makeGround(opts.ground ?? {}));
     }
   }
 
-  /** Register a layer whose geometry comes from an archive at `url`. */
-  addLayer(layer: SttLayer, url: string): this {
+  /** The rebuild context every layer receives from `setTiles`. */
+  private layerContext(): SttLayerContext {
+    return { projection: this.projection, timeOrigin: this.timeOrigin };
+  }
+
+  /**
+   * Register a layer whose geometry comes from an archive at `url`. Eager
+   * (load-everything) by default; pass `{ streaming: true }` (or a
+   * {@link StreamingLayerOptions} object) — or set the scene-level `streaming`
+   * default — to back it with the viewport-driven {@link StreamingTileSource}
+   * instead. Streaming layers are fed by {@link updateStreaming} + a live
+   * `onTilesChanged` re-publish rather than the one-shot {@link load}.
+   */
+  addLayer(layer: SttLayer, url: string, opts: AddLayerOptions = {}): this {
     this.layers.push(layer);
     this.root.add(layer.object);
-    this.sources.push({
-      source: new SttTileSource({ url, fetch: this.fetchFn }),
-      layer,
-    });
+    const streaming = opts.streaming ?? this.defaultStreaming;
+    if (streaming) {
+      const streamOpts = streaming === true ? {} : streaming;
+      const source = new StreamingTileSource({ url, fetch: this.fetchFn, ...streamOpts });
+      // Replace-all rebuild on every real residency change (initial select +
+      // async tile arrivals via the source's internal onTileLoad re-publish).
+      source.setOnTilesChanged((tiles) => {
+        if (this.disposed) return;
+        try {
+          layer.setTiles(tiles, this.layerContext());
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.error(`[stt-three] streaming layer "${layer.id}" setTiles failed`, err);
+        }
+      });
+      this.sources.push({ kind: 'streaming', source, layer });
+    } else {
+      this.sources.push({
+        kind: 'eager',
+        source: new SttTileSource({ url, fetch: this.fetchFn }),
+        layer,
+      });
+    }
     return this;
   }
 
@@ -89,18 +154,62 @@ export class SttScene {
     return this;
   }
 
-  /** Eagerly load every source and build its layer. Resolves when all are resident. */
+  /**
+   * Prepare every source. EAGER sources load their whole archive and build the
+   * layer immediately. STREAMING sources only build their archive + tileset here
+   * (cheap — a metadata fetch); their tiles arrive later, viewport-driven, via
+   * {@link updateStreaming} → `onTilesChanged`. Resolves when all are ready.
+   */
   async load(signal?: AbortSignal): Promise<void> {
     await Promise.all(
-      this.sources.map(async ({ source, layer }) => {
-        const { tiles } = await source.load(signal);
+      this.sources.map(async (s) => {
+        if (s.kind === 'streaming') {
+          await s.source.load();
+          return;
+        }
+        const { tiles } = await s.source.load(signal);
         if (this.disposed) return;
-        layer.setTiles(tiles, {
-          projection: this.projection,
-          timeOrigin: this.timeOrigin,
-        });
+        s.layer.setTiles(tiles, this.layerContext());
       }),
     );
+  }
+
+  /**
+   * Pump a camera/playback-derived viewport into every streaming source; each
+   * fires its layer's `setTiles` when its resident set actually changes. A no-op
+   * for a purely-eager scene. Cheap and idempotent — safe to call every frame
+   * (the host should still throttle; the underlying tileset also debounces).
+   */
+  updateStreaming(viewport: StreamingViewport): void {
+    for (const s of this.sources) {
+      if (s.kind === 'streaming') s.source.update(viewport);
+    }
+  }
+
+  /**
+   * Forward the playback animation state to every streaming source (keeps
+   * prefetch alive while gated). A no-op for a purely-eager scene.
+   */
+  setAnimationState(isAnimating: boolean, speed = 0): void {
+    for (const s of this.sources) {
+      if (s.kind === 'streaming') s.source.setAnimationState(isAnimating, speed);
+    }
+  }
+
+  /** `true` when at least one layer is backed by a {@link StreamingTileSource}. */
+  hasStreamingLayers(): boolean {
+    return this.sources.some((s) => s.kind === 'streaming');
+  }
+
+  /**
+   * The scene's streaming sources — for wiring the real
+   * {@link TilesetBufferSource} into the playback governor (honest buffered-bar
+   * coverage) and for tests that inject a mock tileset via `attachTileset`.
+   */
+  getStreamingSources(): readonly StreamingTileSource[] {
+    const out: StreamingTileSource[] = [];
+    for (const s of this.sources) if (s.kind === 'streaming') out.push(s.source);
+    return out;
   }
 
   /** Advance the playhead (absolute epoch-ms). Cheap — uniform writes only.

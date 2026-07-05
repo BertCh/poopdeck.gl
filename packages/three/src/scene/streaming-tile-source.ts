@@ -91,6 +91,18 @@ export interface StreamingTileSourceOptions {
 }
 
 /**
+ * The streaming-tileset knobs a HOST forwards when opting a layer into
+ * streaming (see {@link SttScene.addLayer} / the r3f `streaming` prop). `url`,
+ * `fetch`, and `onTilesChanged` are omitted because the driver wires them from
+ * the layer's archive URL + resident-set callback — the caller only tunes the
+ * LOD/cache/prefetch behaviour.
+ */
+export type StreamingLayerOptions = Omit<
+  StreamingTileSourceOptions,
+  'url' | 'fetch' | 'onTilesChanged'
+>;
+
+/**
  * Stable identity key for a {@link Tile} used by the resident-set diff. A tile's
  * `id` (`z/x/y/t`) is its address; two `getVisibleTiles` calls that return the
  * same addresses describe the same resident set even if the array order or the
@@ -391,7 +403,11 @@ export function cameraToViewport(
   const centerLat = sumLat / hits.length;
   const bounds: BoundingBox = { minLon, minLat, maxLon, maxLat };
 
-  const zoom = zoomFromCamera(proj, camera, viewportPx, centerLat, hits);
+  // Slippy tiles live at INTEGER zoom levels, so floor the continuous zoom before
+  // clamping — exactly as the deck path does (`Math.floor(viewport.zoom)`). Passing
+  // a fractional zoom (e.g. 13.14) to `tileset.update` makes `getAvailableTiles`
+  // query a non-existent zoom → zero tiles selected → nothing ever renders.
+  const zoom = Math.floor(zoomFromCamera(proj, camera, viewportPx, centerLat, hits));
   const clampedZoom = clamp(
     zoom,
     opts.minZoom ?? -Infinity,

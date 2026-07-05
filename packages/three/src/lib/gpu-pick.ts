@@ -29,6 +29,7 @@
 // verbatim into `@poopdeck.gl/core/picking` (shared by every id-buffer backend).
 // Re-export under three's historical names so this package's public API is
 // unchanged; `GpuPicker` below uses the imported `decodeId` binding directly.
+import { Color } from 'three';
 import {
   encodePickId as encodeId,
   decodePickId as decodeId,
@@ -38,6 +39,13 @@ import {
 
 export { encodeId, decodeId, buildIdColors, MAX_PICK_ID };
 
+/**
+ * Background clear colour for the id pass: white decodes to {@link MAX_PICK_ID},
+ * which is `>=` any real `featureCount`, so an empty-background readback is
+ * reported as a miss — while feature index 0 (black) stays a valid hit.
+ */
+const SENTINEL_CLEAR = 0xffffff;
+
 // ── GPU readback helper (visually verified; loosely typed) ──────────────────────
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -46,16 +54,27 @@ export interface PickRenderer {
   domElement: HTMLCanvasElement;
   getPixelRatio(): number;
   setRenderTarget(target: any | null): void;
+  getRenderTarget?(): any | null;
   render(scene: any, camera: any): void;
-  /** three's async readback: fills/returns a TypedArray of the target pixels. */
+  /**
+   * three's async readback. NOTE: on the unified `WebGPURenderer` (WebGPU *and*
+   * WebGL2 backends) this RETURNS the pixels — its 6th/7th args are
+   * `textureIndex`/`faceIndex`, NOT an output buffer. So we consume the resolved
+   * `TypedArray` rather than a pre-allocated `out` (the old code passed a buffer
+   * as `textureIndex` and read back all-zeros → every pick decoded index 0).
+   */
   readRenderTargetPixelsAsync(
     target: any,
     x: number,
     y: number,
     width: number,
     height: number,
-    out?: ArrayBufferView,
   ): Promise<ArrayBufferView>;
+  // Clear-colour save/restore for the sentinel background (see `pick`). Optional
+  // so a lightweight mock renderer without them still drives the decode path.
+  getClearColor?(target: any): any;
+  getClearAlpha?(): number;
+  setClearColor?(color: any, alpha?: number): void;
 }
 
 /** A render target ctor compatible with three's `RenderTarget` shape. */
@@ -71,6 +90,17 @@ export interface GpuPickerOptions {
    * (e.g. the cleared background) is reported as a miss (`null`).
    */
   featureCount?: number;
+  /**
+   * Run just before the (synchronous) id render — e.g. swap `scene` to its flat
+   * id material.
+   */
+  onBeforeRender?: () => void;
+  /**
+   * Run just after the id render, in the same `finally` that restores the render
+   * target — i.e. BEFORE the async readback yields — so a swapped-in id material
+   * is restored without a concurrent render flashing it on-screen.
+   */
+  onAfterRender?: () => void;
 }
 
 /**
@@ -87,13 +117,11 @@ export class GpuPicker {
   private readonly TargetCtor: RenderTargetCtor;
   private readonly size: number;
   private target: any | null = null;
-  private readonly buffer: Uint8Array;
 
   constructor(renderer: PickRenderer, TargetCtor: RenderTargetCtor, size = 1) {
     this.renderer = renderer;
     this.TargetCtor = TargetCtor;
     this.size = Math.max(1, Math.floor(size));
-    this.buffer = new Uint8Array(this.size * this.size * 4);
   }
 
   private ensureTarget(): any {
@@ -114,10 +142,11 @@ export class GpuPicker {
    * cleared background / out of the drawn feature range. The caller must have
    * applied the id material to `scene` (and restored it afterward).
    *
-   * NOTE: this offsets the camera's projection so the 1×1 target captures just
-   * the cursor texel — three's `Camera.setViewOffset` is the usual mechanism;
-   * here we render the full frame into the target and read the cursor pixel,
-   * which is simpler and adequate for a small (≤ few px) target.
+   * The pass clears to a {@link SENTINEL_CLEAR} background (see the field doc) so
+   * an empty pixel resolves to a miss rather than feature 0; the previous
+   * clear-colour is restored (even on throw). We render the full frame into the
+   * target and read the cursor pixel — simpler than `Camera.setViewOffset` and
+   * adequate for a small (≤ few px) target.
    */
   async pick(
     scene: any,
@@ -140,22 +169,41 @@ export class GpuPicker {
     const readX = Math.max(0, Math.round(px - half));
     const readY = Math.max(0, Math.round(py - half));
 
-    const prevTarget = (renderer as any).getRenderTarget?.() ?? null;
-    renderer.setRenderTarget(target);
-    renderer.render(scene, camera);
-    await renderer.readRenderTargetPixelsAsync(
+    const prevTarget = renderer.getRenderTarget?.() ?? null;
+    // Save + swap the clear colour so the id pass's background is the sentinel,
+    // not black (feature 0).
+    const savedColor = renderer.getClearColor ? renderer.getClearColor(new Color()) : null;
+    const savedAlpha = renderer.getClearAlpha ? renderer.getClearAlpha() : 1;
+    renderer.setClearColor?.(SENTINEL_CLEAR, 1);
+
+    // Render the id pass, then restore the render target + clear colour
+    // SYNCHRONOUSLY — before the async readback yields. Otherwise a concurrent
+    // render (e.g. the r3f RenderPump's per-rAF `advance()`) could fire during
+    // the `await` gap and draw the main scene into this 1×1 pick target. The
+    // readback takes `target` explicitly, so it stays correct after the restore.
+    try {
+      opts.onBeforeRender?.();
+      renderer.setRenderTarget(target);
+      renderer.render(scene, camera);
+    } finally {
+      renderer.setRenderTarget(prevTarget);
+      if (savedColor !== null) renderer.setClearColor?.(savedColor, savedAlpha);
+      opts.onAfterRender?.();
+    }
+    // The unified renderer RETURNS the pixels (no output-buffer arg); consume the
+    // resolved TypedArray.
+    const pixels = await renderer.readRenderTargetPixelsAsync(
       target,
       readX,
       readY,
       this.size,
       this.size,
-      this.buffer,
     );
-    renderer.setRenderTarget(prevTarget);
 
-    // Sample the centre texel of the read square.
+    // Sample the centre texel of the read square (RGBA8, one byte per channel).
+    const data = pixels as unknown as Uint8Array;
     const ci = (Math.floor(this.size / 2) * this.size + Math.floor(this.size / 2)) * 4;
-    const index = decodeId([this.buffer[ci], this.buffer[ci + 1], this.buffer[ci + 2]]);
+    const index = decodeId([data[ci], data[ci + 1], data[ci + 2]]);
 
     const featureCount = opts.featureCount;
     if (featureCount !== undefined && index >= featureCount) return null;

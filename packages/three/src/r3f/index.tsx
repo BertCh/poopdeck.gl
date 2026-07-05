@@ -27,24 +27,56 @@
 
 import * as React from 'react';
 import { Canvas, useThree, useFrame, type GLProps } from '@react-three/fiber';
-import { MapControls } from '@react-three/drei';
+import { MapControls, OrbitControls } from '@react-three/drei';
 import { WebGPURenderer } from 'three/webgpu';
-import { Box3, Vector2, Vector3, type PerspectiveCamera } from 'three';
+import { Box3, RenderTarget, Vector2, Vector3, type PerspectiveCamera } from 'three';
 import type { Tile } from '@poopdeck.gl/core';
+import { type GeoAnchor, type Projection } from '../projection/local-enu.js';
 import {
-  LocalEnuProjection,
-  type GeoAnchor,
-  type Projection,
-} from '../projection/local-enu.js';
-import { pickBoxes, type SttPickable, type SttPickInfo } from '../lib/box-pick.js';
+  pickBoxes,
+  type SttPickable,
+  type SttPickInfo,
+  type SttBoxPickInfo,
+} from '../lib/box-pick.js';
+import { pointPickToInfo } from '../lib/point-pick.js';
+import { GpuPicker, type PickRenderer, type RenderTargetCtor } from '../lib/gpu-pick.js';
 import { createCompleteBufferSource, type SttSourceRegistry } from '../lib/source-registry.js';
-import { createHighLimitDevice } from '../renderer/webgpu-renderer.js';
+import { createHighLimitDevice, resolveBackend } from '../renderer/webgpu-renderer.js';
+import {
+  createSttAtmosphere,
+  type AtmosphereOptions,
+  type SttAtmosphere,
+} from '../scene/atmosphere.js';
+import {
+  createStt3DTiles,
+  type Stt3DTiles,
+  type Stt3DTilesOptions,
+  type Stt3DTilesSource,
+} from '../scene/tiles-3d.js';
+import { createSttGlobeControls, type SttGlobeControls } from '../scene/globe-controls.js';
 import { SttTileSource } from '../scene/tile-source.js';
+import {
+  StreamingTileSource,
+  cameraToViewport,
+  createTilesetBufferSource,
+  type StreamingLayerOptions,
+} from '../scene/streaming-tile-source.js';
 import { makeGround, type GroundOptions } from '../scene/ground.js';
 import { frameBox } from '../scene/camera.js';
+import { frameGlobe } from '../scene/globe-camera.js';
+import { viewStateToCamera, type ViewState } from '../projection/view-state.js';
+import {
+  isGlobeProjection,
+  resolveCanvasProjection,
+  globeControlLimits,
+} from '../scene/projection-rig.js';
 import type { SttLayer } from '../layers/layer.js';
 import { SurfelLayer, type SurfelLayerOptions } from '../layers/surfel-layer.js';
-import { PointCloudLayer, type PointCloudLayerOptions } from '../layers/point-cloud-layer.js';
+import {
+  PointCloudLayer,
+  type PointCloudLayerOptions,
+  type SttPointPickable,
+} from '../layers/point-cloud-layer.js';
 import { BoundingBoxLayer, type BoundingBoxLayerOptions } from '../layers/bounding-box-layer.js';
 import { StaticPathLayer, type StaticPathLayerOptions } from '../layers/path-layer.js';
 import {
@@ -81,12 +113,24 @@ interface SttSceneCtx {
   egoRef: React.MutableRefObject<EgoLayer | null>;
   /** Layers contributing pickable boxes (objects + ego) for click-to-inspect. */
   pickables: React.MutableRefObject<Set<SttPickable>>;
+  /**
+   * Instanced point-cloud layers answering a GPU id-buffer pick — consulted when
+   * a CPU box pick misses (hover + click). Separate from {@link pickables}
+   * because the mechanism differs (async GPU readback vs sync ray-OBB).
+   */
+  pointPickables: React.MutableRefObject<Set<SttPointPickable>>;
   /** All mounted layers — CameraRig frames to the union of their world AABBs. */
   layers: React.MutableRefObject<Set<SttLayer>>;
   /** Playback governor source registry (so the clock gates on buffer readiness). */
   registry?: SttSourceRegistry;
   /** Scene time range (epoch-ms) reported as the buffered span to the governor. */
   timeRange?: { start: number; end: number };
+  /**
+   * Canvas-level streaming default a layer inherits when it omits its own
+   * `streaming` prop. Omit / `false` = the backward-compatible eager Suspense
+   * path for every layer.
+   */
+  streaming?: boolean | StreamingLayerOptions;
 }
 const Ctx = React.createContext<SttSceneCtx | null>(null);
 
@@ -94,6 +138,27 @@ function useSttScene(): SttSceneCtx {
   const c = React.useContext(Ctx);
   if (!c) throw new Error('STT layer components must be rendered inside <SttCanvas>');
   return c;
+}
+
+/**
+ * Minimum interval (ms) between viewport pumps into a streaming tileset (the
+ * RenderPump advances every rAF; the tileset debounces, but re-deriving the
+ * frustum footprint every frame is wasted work when the camera is idle).
+ */
+const STREAM_UPDATE_MS = 100;
+
+/**
+ * Resolve a layer's `streaming` prop against the canvas-level default: an
+ * explicit prop wins (including `false` to force eager), else the canvas default,
+ * else eager. Returns `false` (eager) or the resolved tileset options.
+ */
+function useResolvedStreaming(
+  prop: boolean | StreamingLayerOptions | undefined,
+): false | { opts: StreamingLayerOptions } {
+  const { streaming: canvasDefault } = useSttScene();
+  const chosen = prop ?? canvasDefault;
+  if (!chosen) return false;
+  return { opts: chosen === true ? {} : chosen };
 }
 
 // ─── Suspense tile loader (with a bounded LRU) ──────────────────────────────────
@@ -291,6 +356,184 @@ function useEngineLayer<L extends SttLayer>(
   return layer;
 }
 
+/**
+ * The streaming sibling of {@link useEngineLayer}: builds geometry from a
+ * viewport-driven {@link StreamingTileSource} instead of a one-shot eager load.
+ *
+ * Per rAF (via the RenderPump's `advance`): derive the camera viewport
+ * (frustum-footprint bounds + slippy zoom) from the live camera + CSS canvas
+ * size, pump it into the tileset (throttled), then advance the layer time
+ * uniform. The tileset re-selects/loads/evicts and re-publishes its resident set
+ * through `onTilesChanged`, which rebuilds the layer's buffers. The governor gets
+ * the REAL {@link TilesetBufferSource} so the buffered bar reflects honest
+ * coverage (vs the eager path's always-complete source).
+ */
+function useStreamingEngineLayer<L extends SttLayer>(
+  make: () => L,
+  source: StreamingTileSource,
+  deps: React.DependencyList,
+  gov: { sourceId?: string; required?: boolean },
+): L {
+  const { projection, timeOrigin, getTime, layers, registry, timeRange } = useSttScene();
+  const gl = useThree((s) => s.gl);
+  const camera = useThree((s) => s.camera) as PerspectiveCamera;
+  const size = useThree((s) => s.size);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const layer = React.useMemo(make, deps);
+
+  // Resident-set callback: rebuild the layer's buffers on every real residency
+  // change. Kick off the (idempotent) tileset init here — `update()` is inert
+  // until it resolves — and dispose the source on unmount.
+  React.useEffect(() => {
+    source.setOnTilesChanged((tiles) => {
+      try {
+        layer.setTiles(tiles, { projection, timeOrigin });
+      } catch (err) {
+        warnOnce(`setTiles:${gov.sourceId}`, `[stt-three] streaming setTiles failed for ${gov.sourceId}`, err);
+      }
+    });
+    void source.load();
+    return () => source.dispose();
+  }, [source, layer, projection, timeOrigin, gov.sourceId]);
+
+  const lastUpdate = React.useRef(0);
+  const lastTime = React.useRef(Number.NaN);
+  // CRITICAL (as in the eager path): a per-frame throw must NOT kill the render
+  // loop — swallow it (logged once) so the next frame paints.
+  useFrame(() => {
+    const t = getTime();
+    try {
+      const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+      if (now - lastUpdate.current >= STREAM_UPDATE_MS) {
+        lastUpdate.current = now;
+        const md = source.getMetadata();
+        const vp = cameraToViewport(
+          projection,
+          camera,
+          { width: size.width, height: size.height },
+          md ? { minZoom: md.minZoom, maxZoom: md.maxZoom } : {},
+        );
+        source.update({ bounds: vp.bounds, zoom: vp.zoom, time: t });
+      }
+      // Without a governor, keep prefetch alive via a play/pause heuristic (time
+      // advancing ⇒ animating). With one, the governor drives animation state
+      // through the registered TilesetBufferSource, so we leave it alone.
+      if (!registry) source.setAnimationState(t !== lastTime.current);
+    } catch (err) {
+      warnOnce(`stream:${gov.sourceId}`, `[stt-three] streaming update failed for ${gov.sourceId}`, err);
+    }
+    lastTime.current = t;
+    try {
+      layer.setTime(t);
+    } catch (err) {
+      warnOnce(`setTime:${gov.sourceId}`, `[stt-three] setTime failed for ${gov.sourceId}`, err);
+    }
+  });
+
+  // Pixel-sizing viewport push (device px), mirroring the eager path.
+  React.useEffect(() => {
+    const dims = gl.getDrawingBufferSize(new Vector2());
+    (layer as unknown as { setViewport?: (w: number, h: number) => void }).setViewport?.(
+      dims.x,
+      dims.y,
+    );
+  }, [layer, gl, size.width, size.height]);
+
+  // Bounds membership: CameraRig frames to the union of layer AABBs (which grow
+  // as streaming tiles arrive).
+  React.useEffect(() => {
+    const set = layers.current;
+    set.add(layer);
+    return () => {
+      set.delete(layer);
+    };
+  }, [layer, layers]);
+
+  // Governor: register the REAL tileset BufferSource once the tileset exists so
+  // the buffered bar / Auto-speed / ETA reflect honest streaming coverage. Falls
+  // back to a complete source if the runway surface is somehow absent.
+  React.useEffect(() => {
+    const id = gov.sourceId;
+    if (!registry || !id) return;
+    let cancelled = false;
+    void source.load().then(() => {
+      if (cancelled) return;
+      const bs = createTilesetBufferSource(source) ?? createCompleteBufferSource(timeRange);
+      registry.registerSource(id, bs, { required: gov.required ?? true });
+    });
+    return () => {
+      cancelled = true;
+      registry.unregisterSource(id);
+    };
+  }, [registry, gov.sourceId, gov.required, source, timeRange]);
+
+  React.useEffect(() => () => layer.dispose(), [layer]);
+  return layer;
+}
+
+/**
+ * Generic EAGER layer mount — the shared body every `Stt*Layer` renders when it
+ * is NOT streaming (the backward-compatible default). Suspends on the full
+ * archive load, then builds + governs the layer via {@link useEngineLayer}.
+ */
+function EagerLayerMount<L extends SttLayer>(props: {
+  make: () => L;
+  url: string;
+  lodMode?: 'additive';
+  sourceId?: string;
+  sourceRequired?: boolean;
+  /** Governor `required` default when `sourceRequired` is omitted (map overlays pass false). */
+  defaultRequired?: boolean;
+  /** Optional extra registration hook (pickables / ego). Stable per mount site. */
+  extra?: (layer: L) => void;
+}): React.ReactElement {
+  const tiles = useSttTiles(props.url, props.lodMode);
+  const layer = useEngineLayer(props.make, tiles, [props.url, props.lodMode], {
+    sourceId: props.sourceId,
+    cacheKey: tileCacheKey(props.url, props.lodMode),
+    required: props.sourceRequired ?? props.defaultRequired,
+  });
+  // Stable per mount site (a given fiber always renders the same layer kind), so
+  // the extra hook's order is consistent across this fiber's renders.
+  if (props.extra) props.extra(layer);
+  return <primitive object={layer.object} dispose={null} />;
+}
+
+/**
+ * Generic STREAMING layer mount — the shared body every `Stt*Layer` renders when
+ * opted into streaming. Builds a {@link StreamingTileSource} (rebuilt only on
+ * url/lodMode change) and drives it via {@link useStreamingEngineLayer}.
+ */
+function StreamingLayerMount<L extends SttLayer>(props: {
+  make: () => L;
+  url: string;
+  lodMode?: 'additive';
+  opts: StreamingLayerOptions;
+  sourceId?: string;
+  sourceRequired?: boolean;
+  defaultRequired?: boolean;
+  extra?: (layer: L) => void;
+}): React.ReactElement {
+  const source = React.useMemo(
+    () =>
+      new StreamingTileSource({
+        ...props.opts,
+        url: props.url,
+        lodMode: props.lodMode ?? props.opts.lodMode,
+      }),
+    // Rebuild only on url/lodMode change (opts changes after mount are ignored,
+    // mirroring the eager path's [url, lodMode] deps).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [props.url, props.lodMode],
+  );
+  const layer = useStreamingEngineLayer(props.make, source, [props.url, props.lodMode], {
+    sourceId: props.sourceId,
+    required: props.sourceRequired ?? props.defaultRequired,
+  });
+  if (props.extra) props.extra(layer);
+  return <primitive object={layer.object} dispose={null} />;
+}
+
 interface UrlProp {
   url: string;
   /** Additive-octree LOD: load the UNION of all zoom levels (see SttTileSource). */
@@ -300,234 +543,261 @@ interface UrlProp {
    * @default true (map overlays pass false, matching the deck path).
    */
   sourceRequired?: boolean;
+  /**
+   * Back this layer with the viewport-driven {@link StreamingTileSource} (real
+   * LOD selection + prefetch + eviction) instead of the eager load-everything
+   * Suspense path. `true` streams with the archive defaults; an options object
+   * passes tileset knobs. Omit to inherit the `<SttCanvas streaming>` default.
+   * Eager is the backward-compatible default.
+   */
+  streaming?: boolean | StreamingLayerOptions;
 }
 
 export function SttSurfelLayer(props: SurfelLayerOptions & UrlProp): React.ReactElement {
-  const { url, lodMode, sourceRequired, ...opts } = props;
-  const tiles = useSttTiles(url, lodMode);
-  const layer = useEngineLayer(() => new SurfelLayer(opts), tiles, [url, lodMode], {
-    sourceId: opts.id,
-    cacheKey: tileCacheKey(url, lodMode),
-    required: sourceRequired,
-  });
-  return <primitive object={layer.object} dispose={null} />;
+  const { url, lodMode, sourceRequired, streaming, ...opts } = props;
+  const resolved = useResolvedStreaming(streaming);
+  const make = (): SurfelLayer => new SurfelLayer(opts);
+  return resolved ? (
+    <StreamingLayerMount make={make} url={url} lodMode={lodMode} opts={resolved.opts} sourceId={opts.id} sourceRequired={sourceRequired} />
+  ) : (
+    <EagerLayerMount make={make} url={url} lodMode={lodMode} sourceId={opts.id} sourceRequired={sourceRequired} />
+  );
 }
 
 export function SttPointCloudLayer(props: PointCloudLayerOptions & UrlProp): React.ReactElement {
-  const { url, lodMode, sourceRequired, ...opts } = props;
-  const tiles = useSttTiles(url, lodMode);
-  const layer = useEngineLayer(() => new PointCloudLayer(opts), tiles, [url, lodMode], {
-    sourceId: opts.id,
-    cacheKey: tileCacheKey(url, lodMode),
-    required: sourceRequired,
-  });
-  return <primitive object={layer.object} dispose={null} />;
+  const { url, lodMode, sourceRequired, streaming, ...opts } = props;
+  const resolved = useResolvedStreaming(streaming);
+  const { pointPickables } = useSttScene();
+  const make = (): PointCloudLayer => new PointCloudLayer(opts);
+  // Register the cloud for GPU id-buffer picking (both modes). Mirrors the box
+  // registration in SttBoundingBoxLayer; the controller only runs the GPU pass
+  // when a box pick misses and an `onPick`/`onHover` consumer is present.
+  const extra = (layer: PointCloudLayer): void => {
+    React.useEffect(() => {
+      const set = pointPickables.current;
+      set.add(layer);
+      return () => {
+        set.delete(layer);
+      };
+    }, [layer]);
+  };
+  return resolved ? (
+    <StreamingLayerMount make={make} url={url} lodMode={lodMode} opts={resolved.opts} sourceId={opts.id} sourceRequired={sourceRequired} extra={extra} />
+  ) : (
+    <EagerLayerMount make={make} url={url} lodMode={lodMode} sourceId={opts.id} sourceRequired={sourceRequired} extra={extra} />
+  );
 }
 
 export function SttBoundingBoxLayer(props: BoundingBoxLayerOptions & UrlProp): React.ReactElement {
-  const { url, lodMode, sourceRequired, ...opts } = props;
+  const { url, lodMode, sourceRequired, streaming, ...opts } = props;
+  const resolved = useResolvedStreaming(streaming);
   const { pickables } = useSttScene();
-  const tiles = useSttTiles(url, lodMode);
-  const layer = useEngineLayer(() => new BoundingBoxLayer(opts), tiles, [url, lodMode], {
-    sourceId: opts.id,
-    cacheKey: tileCacheKey(url, lodMode),
-    required: sourceRequired,
-  });
-  React.useEffect(() => {
-    const set = pickables.current;
-    set.add(layer);
-    return () => {
-      set.delete(layer);
-    };
-  }, [layer, pickables]);
-  return <primitive object={layer.object} dispose={null} />;
+  const make = (): BoundingBoxLayer => new BoundingBoxLayer(opts);
+  // Register the layer's boxes for click-to-inspect (both modes).
+  const extra = (layer: BoundingBoxLayer): void => {
+    React.useEffect(() => {
+      const set = pickables.current;
+      set.add(layer);
+      return () => {
+        set.delete(layer);
+      };
+    }, [layer]);
+  };
+  return resolved ? (
+    <StreamingLayerMount make={make} url={url} lodMode={lodMode} opts={resolved.opts} sourceId={opts.id} sourceRequired={sourceRequired} extra={extra} />
+  ) : (
+    <EagerLayerMount make={make} url={url} lodMode={lodMode} sourceId={opts.id} sourceRequired={sourceRequired} extra={extra} />
+  );
 }
 
 export function SttMapPolygonLayer(props: StaticPolygonLayerOptions & UrlProp): React.ReactElement {
-  const { url, lodMode, sourceRequired, ...opts } = props;
-  const tiles = useSttTiles(url, lodMode);
-  const layer = useEngineLayer(() => new StaticPolygonLayer(opts), tiles, [url, lodMode], {
-    sourceId: opts.id,
-    cacheKey: tileCacheKey(url, lodMode),
-    // Map overlays load coordinated but never gate the clock (HD-map idiom).
-    required: sourceRequired ?? false,
-  });
-  return <primitive object={layer.object} dispose={null} />;
+  const { url, lodMode, sourceRequired, streaming, ...opts } = props;
+  const resolved = useResolvedStreaming(streaming);
+  const make = (): StaticPolygonLayer => new StaticPolygonLayer(opts);
+  // Map overlays load coordinated but never gate the clock (HD-map idiom).
+  return resolved ? (
+    <StreamingLayerMount make={make} url={url} lodMode={lodMode} opts={resolved.opts} sourceId={opts.id} sourceRequired={sourceRequired} defaultRequired={false} />
+  ) : (
+    <EagerLayerMount make={make} url={url} lodMode={lodMode} sourceId={opts.id} sourceRequired={sourceRequired} defaultRequired={false} />
+  );
 }
 
 export function SttMapLineLayer(props: StaticPathLayerOptions & UrlProp): React.ReactElement {
-  const { url, lodMode, sourceRequired, ...opts } = props;
-  const tiles = useSttTiles(url, lodMode);
-  const layer = useEngineLayer(() => new StaticPathLayer(opts), tiles, [url, lodMode], {
-    sourceId: opts.id,
-    cacheKey: tileCacheKey(url, lodMode),
-    required: sourceRequired ?? false,
-  });
-  return <primitive object={layer.object} dispose={null} />;
+  const { url, lodMode, sourceRequired, streaming, ...opts } = props;
+  const resolved = useResolvedStreaming(streaming);
+  const make = (): StaticPathLayer => new StaticPathLayer(opts);
+  return resolved ? (
+    <StreamingLayerMount make={make} url={url} lodMode={lodMode} opts={resolved.opts} sourceId={opts.id} sourceRequired={sourceRequired} defaultRequired={false} />
+  ) : (
+    <EagerLayerMount make={make} url={url} lodMode={lodMode} sourceId={opts.id} sourceRequired={sourceRequired} defaultRequired={false} />
+  );
 }
 
 export function SttIsoLayer(props: IsoLayerOptions & UrlProp): React.ReactElement {
-  const { url, lodMode, sourceRequired, ...opts } = props;
-  const tiles = useSttTiles(url, lodMode);
-  const layer = useEngineLayer(() => new IsoLayer(opts), tiles, [url, lodMode], {
-    sourceId: opts.id,
-    cacheKey: tileCacheKey(url, lodMode),
-    required: sourceRequired,
-  });
-  return <primitive object={layer.object} dispose={null} />;
+  const { url, lodMode, sourceRequired, streaming, ...opts } = props;
+  const resolved = useResolvedStreaming(streaming);
+  const make = (): IsoLayer => new IsoLayer(opts);
+  return resolved ? (
+    <StreamingLayerMount make={make} url={url} lodMode={lodMode} opts={resolved.opts} sourceId={opts.id} sourceRequired={sourceRequired} />
+  ) : (
+    <EagerLayerMount make={make} url={url} lodMode={lodMode} sourceId={opts.id} sourceRequired={sourceRequired} />
+  );
 }
 
 export function SttTripsLayer(props: TripsLayerOptions & UrlProp): React.ReactElement {
-  const { url, lodMode, sourceRequired, ...opts } = props;
-  const tiles = useSttTiles(url, lodMode);
-  const layer = useEngineLayer(() => new TripsLayer(opts), tiles, [url, lodMode], {
-    sourceId: opts.id,
-    cacheKey: tileCacheKey(url, lodMode),
-    required: sourceRequired,
-  });
-  return <primitive object={layer.object} dispose={null} />;
+  const { url, lodMode, sourceRequired, streaming, ...opts } = props;
+  const resolved = useResolvedStreaming(streaming);
+  const make = (): TripsLayer => new TripsLayer(opts);
+  return resolved ? (
+    <StreamingLayerMount make={make} url={url} lodMode={lodMode} opts={resolved.opts} sourceId={opts.id} sourceRequired={sourceRequired} />
+  ) : (
+    <EagerLayerMount make={make} url={url} lodMode={lodMode} sourceId={opts.id} sourceRequired={sourceRequired} />
+  );
 }
 
 export function SttPathLayer(props: PathGeoLayerOptions & UrlProp): React.ReactElement {
-  const { url, lodMode, sourceRequired, ...opts } = props;
-  const tiles = useSttTiles(url, lodMode);
-  const layer = useEngineLayer(() => new PathGeoLayer(opts), tiles, [url, lodMode], {
-    sourceId: opts.id,
-    cacheKey: tileCacheKey(url, lodMode),
-    required: sourceRequired,
-  });
-  return <primitive object={layer.object} dispose={null} />;
+  const { url, lodMode, sourceRequired, streaming, ...opts } = props;
+  const resolved = useResolvedStreaming(streaming);
+  const make = (): PathGeoLayer => new PathGeoLayer(opts);
+  return resolved ? (
+    <StreamingLayerMount make={make} url={url} lodMode={lodMode} opts={resolved.opts} sourceId={opts.id} sourceRequired={sourceRequired} />
+  ) : (
+    <EagerLayerMount make={make} url={url} lodMode={lodMode} sourceId={opts.id} sourceRequired={sourceRequired} />
+  );
 }
 
 export function SttOdLineLayer(props: OdLineLayerOptions & UrlProp): React.ReactElement {
-  const { url, lodMode, sourceRequired, ...opts } = props;
-  const tiles = useSttTiles(url, lodMode);
-  const layer = useEngineLayer(() => new OdLineLayer(opts), tiles, [url, lodMode], {
-    sourceId: opts.id,
-    cacheKey: tileCacheKey(url, lodMode),
-    required: sourceRequired,
-  });
-  return <primitive object={layer.object} dispose={null} />;
+  const { url, lodMode, sourceRequired, streaming, ...opts } = props;
+  const resolved = useResolvedStreaming(streaming);
+  const make = (): OdLineLayer => new OdLineLayer(opts);
+  return resolved ? (
+    <StreamingLayerMount make={make} url={url} lodMode={lodMode} opts={resolved.opts} sourceId={opts.id} sourceRequired={sourceRequired} />
+  ) : (
+    <EagerLayerMount make={make} url={url} lodMode={lodMode} sourceId={opts.id} sourceRequired={sourceRequired} />
+  );
 }
 
 export function SttArcLayer(props: ArcLayerOptions & UrlProp): React.ReactElement {
-  const { url, lodMode, sourceRequired, ...opts } = props;
-  const tiles = useSttTiles(url, lodMode);
-  const layer = useEngineLayer(() => new ArcLayer(opts), tiles, [url, lodMode], {
-    sourceId: opts.id,
-    cacheKey: tileCacheKey(url, lodMode),
-    required: sourceRequired,
-  });
-  return <primitive object={layer.object} dispose={null} />;
+  const { url, lodMode, sourceRequired, streaming, ...opts } = props;
+  const resolved = useResolvedStreaming(streaming);
+  const make = (): ArcLayer => new ArcLayer(opts);
+  return resolved ? (
+    <StreamingLayerMount make={make} url={url} lodMode={lodMode} opts={resolved.opts} sourceId={opts.id} sourceRequired={sourceRequired} />
+  ) : (
+    <EagerLayerMount make={make} url={url} lodMode={lodMode} sourceId={opts.id} sourceRequired={sourceRequired} />
+  );
 }
 
 export function SttIconLayer(props: IconLayerOptions & UrlProp): React.ReactElement {
-  const { url, lodMode, sourceRequired, ...opts } = props;
-  const tiles = useSttTiles(url, lodMode);
-  const layer = useEngineLayer(() => new IconLayer(opts), tiles, [url, lodMode], {
-    sourceId: opts.id,
-    cacheKey: tileCacheKey(url, lodMode),
-    required: sourceRequired,
-  });
-  return <primitive object={layer.object} dispose={null} />;
+  const { url, lodMode, sourceRequired, streaming, ...opts } = props;
+  const resolved = useResolvedStreaming(streaming);
+  const make = (): IconLayer => new IconLayer(opts);
+  return resolved ? (
+    <StreamingLayerMount make={make} url={url} lodMode={lodMode} opts={resolved.opts} sourceId={opts.id} sourceRequired={sourceRequired} />
+  ) : (
+    <EagerLayerMount make={make} url={url} lodMode={lodMode} sourceId={opts.id} sourceRequired={sourceRequired} />
+  );
 }
 
 export function SttColumnLayer(props: ColumnLayerOptions & UrlProp): React.ReactElement {
-  const { url, lodMode, sourceRequired, ...opts } = props;
-  const tiles = useSttTiles(url, lodMode);
-  const layer = useEngineLayer(() => new ColumnLayer(opts), tiles, [url, lodMode], {
-    sourceId: opts.id,
-    cacheKey: tileCacheKey(url, lodMode),
-    required: sourceRequired,
-  });
-  return <primitive object={layer.object} dispose={null} />;
+  const { url, lodMode, sourceRequired, streaming, ...opts } = props;
+  const resolved = useResolvedStreaming(streaming);
+  const make = (): ColumnLayer => new ColumnLayer(opts);
+  return resolved ? (
+    <StreamingLayerMount make={make} url={url} lodMode={lodMode} opts={resolved.opts} sourceId={opts.id} sourceRequired={sourceRequired} />
+  ) : (
+    <EagerLayerMount make={make} url={url} lodMode={lodMode} sourceId={opts.id} sourceRequired={sourceRequired} />
+  );
 }
 
 export function SttPolygonLayer(props: PolygonLayerOptions & UrlProp): React.ReactElement {
-  const { url, lodMode, sourceRequired, ...opts } = props;
-  const tiles = useSttTiles(url, lodMode);
-  const layer = useEngineLayer(() => new PolygonLayer(opts), tiles, [url, lodMode], {
-    sourceId: opts.id,
-    cacheKey: tileCacheKey(url, lodMode),
-    required: sourceRequired,
-  });
-  return <primitive object={layer.object} dispose={null} />;
+  const { url, lodMode, sourceRequired, streaming, ...opts } = props;
+  const resolved = useResolvedStreaming(streaming);
+  const make = (): PolygonLayer => new PolygonLayer(opts);
+  return resolved ? (
+    <StreamingLayerMount make={make} url={url} lodMode={lodMode} opts={resolved.opts} sourceId={opts.id} sourceRequired={sourceRequired} />
+  ) : (
+    <EagerLayerMount make={make} url={url} lodMode={lodMode} sourceId={opts.id} sourceRequired={sourceRequired} />
+  );
 }
 
 export function SttTripHeadsLayer(props: TripHeadsLayerOptions & UrlProp): React.ReactElement {
-  const { url, lodMode, sourceRequired, ...opts } = props;
-  const tiles = useSttTiles(url, lodMode);
-  const layer = useEngineLayer(() => new TripHeadsLayer(opts), tiles, [url, lodMode], {
-    sourceId: opts.id,
-    cacheKey: tileCacheKey(url, lodMode),
-    required: sourceRequired,
-  });
-  return <primitive object={layer.object} dispose={null} />;
+  const { url, lodMode, sourceRequired, streaming, ...opts } = props;
+  const resolved = useResolvedStreaming(streaming);
+  const make = (): TripHeadsLayer => new TripHeadsLayer(opts);
+  return resolved ? (
+    <StreamingLayerMount make={make} url={url} lodMode={lodMode} opts={resolved.opts} sourceId={opts.id} sourceRequired={sourceRequired} />
+  ) : (
+    <EagerLayerMount make={make} url={url} lodMode={lodMode} sourceId={opts.id} sourceRequired={sourceRequired} />
+  );
 }
 
 export function SttQuadbinLayer(props: QuadbinSummaryLayerOptions & UrlProp): React.ReactElement {
-  const { url, lodMode, sourceRequired, ...opts } = props;
-  const tiles = useSttTiles(url, lodMode);
-  const layer = useEngineLayer(() => new QuadbinSummaryLayer(opts), tiles, [url, lodMode], {
-    sourceId: opts.id,
-    cacheKey: tileCacheKey(url, lodMode),
-    required: sourceRequired,
-  });
-  return <primitive object={layer.object} dispose={null} />;
+  const { url, lodMode, sourceRequired, streaming, ...opts } = props;
+  const resolved = useResolvedStreaming(streaming);
+  const make = (): QuadbinSummaryLayer => new QuadbinSummaryLayer(opts);
+  return resolved ? (
+    <StreamingLayerMount make={make} url={url} lodMode={lodMode} opts={resolved.opts} sourceId={opts.id} sourceRequired={sourceRequired} />
+  ) : (
+    <EagerLayerMount make={make} url={url} lodMode={lodMode} sourceId={opts.id} sourceRequired={sourceRequired} />
+  );
 }
 
 export function SttH3Layer(props: H3SummaryLayerOptions & UrlProp): React.ReactElement {
-  const { url, lodMode, sourceRequired, ...opts } = props;
-  const tiles = useSttTiles(url, lodMode);
-  const layer = useEngineLayer(() => new H3SummaryLayer(opts), tiles, [url, lodMode], {
-    sourceId: opts.id,
-    cacheKey: tileCacheKey(url, lodMode),
-    required: sourceRequired,
-  });
-  return <primitive object={layer.object} dispose={null} />;
+  const { url, lodMode, sourceRequired, streaming, ...opts } = props;
+  const resolved = useResolvedStreaming(streaming);
+  const make = (): H3SummaryLayer => new H3SummaryLayer(opts);
+  return resolved ? (
+    <StreamingLayerMount make={make} url={url} lodMode={lodMode} opts={resolved.opts} sourceId={opts.id} sourceRequired={sourceRequired} />
+  ) : (
+    <EagerLayerMount make={make} url={url} lodMode={lodMode} sourceId={opts.id} sourceRequired={sourceRequired} />
+  );
 }
 
 export function SttFlowmapLayer(props: FlowmapLayerOptions & UrlProp): React.ReactElement {
-  const { url, lodMode, sourceRequired, ...opts } = props;
-  const tiles = useSttTiles(url, lodMode);
-  const layer = useEngineLayer(() => new FlowmapLayer(opts), tiles, [url, lodMode], {
-    sourceId: opts.id,
-    cacheKey: tileCacheKey(url, lodMode),
-    required: sourceRequired,
-  });
-  return <primitive object={layer.object} dispose={null} />;
+  const { url, lodMode, sourceRequired, streaming, ...opts } = props;
+  const resolved = useResolvedStreaming(streaming);
+  const make = (): FlowmapLayer => new FlowmapLayer(opts);
+  return resolved ? (
+    <StreamingLayerMount make={make} url={url} lodMode={lodMode} opts={resolved.opts} sourceId={opts.id} sourceRequired={sourceRequired} />
+  ) : (
+    <EagerLayerMount make={make} url={url} lodMode={lodMode} sourceId={opts.id} sourceRequired={sourceRequired} />
+  );
 }
 
 export function SttFlowCorridorLayer(props: FlowCorridorLayerOptions & UrlProp): React.ReactElement {
-  const { url, lodMode, sourceRequired, ...opts } = props;
-  const tiles = useSttTiles(url, lodMode);
-  const layer = useEngineLayer(() => new FlowCorridorLayer(opts), tiles, [url, lodMode], {
-    sourceId: opts.id,
-    cacheKey: tileCacheKey(url, lodMode),
-    required: sourceRequired,
-  });
-  return <primitive object={layer.object} dispose={null} />;
+  const { url, lodMode, sourceRequired, streaming, ...opts } = props;
+  const resolved = useResolvedStreaming(streaming);
+  const make = (): FlowCorridorLayer => new FlowCorridorLayer(opts);
+  return resolved ? (
+    <StreamingLayerMount make={make} url={url} lodMode={lodMode} opts={resolved.opts} sourceId={opts.id} sourceRequired={sourceRequired} />
+  ) : (
+    <EagerLayerMount make={make} url={url} lodMode={lodMode} sourceId={opts.id} sourceRequired={sourceRequired} />
+  );
 }
 
 export function SttEgoLayer(props: EgoLayerOptions & UrlProp): React.ReactElement {
-  const { url, lodMode, sourceRequired, ...opts } = props;
+  const { url, lodMode, sourceRequired, streaming, ...opts } = props;
+  const resolved = useResolvedStreaming(streaming);
   const { egoRef, pickables } = useSttScene();
-  const tiles = useSttTiles(url, lodMode);
-  const layer = useEngineLayer(() => new EgoLayer(opts), tiles, [url, lodMode], {
-    sourceId: opts.id,
-    cacheKey: tileCacheKey(url, lodMode),
-    required: sourceRequired,
-  });
-  React.useEffect(() => {
-    egoRef.current = layer;
-    const set = pickables.current;
-    set.add(layer);
-    return () => {
-      if (egoRef.current === layer) egoRef.current = null;
-      set.delete(layer);
-    };
-  }, [layer, egoRef, pickables]);
-  return <primitive object={layer.object} dispose={null} />;
+  const make = (): EgoLayer => new EgoLayer(opts);
+  // Publish the ego layer + its pickable box (both modes).
+  const extra = (layer: EgoLayer): void => {
+    React.useEffect(() => {
+      egoRef.current = layer;
+      const set = pickables.current;
+      set.add(layer);
+      return () => {
+        if (egoRef.current === layer) egoRef.current = null;
+        set.delete(layer);
+      };
+    }, [layer]);
+  };
+  return resolved ? (
+    <StreamingLayerMount make={make} url={url} lodMode={lodMode} opts={resolved.opts} sourceId={opts.id} sourceRequired={sourceRequired} extra={extra} />
+  ) : (
+    <EagerLayerMount make={make} url={url} lodMode={lodMode} sourceId={opts.id} sourceRequired={sourceRequired} extra={extra} />
+  );
 }
 
 /**
@@ -557,27 +827,34 @@ export function SttGlobeBasemap(
 const FOLLOW_TAU_S = 0.25;
 
 function CameraRig(props: {
+  projection: Projection;
   followEgo: boolean;
   topDown: boolean;
   pitchDeg?: number;
   headingDeg?: number;
+  /** Explicit initial geographic view (geo demos); overrides the bounds-fit below. */
+  initialViewState?: ViewState;
   egoRef: React.MutableRefObject<EgoLayer | null>;
   layers: React.MutableRefObject<Set<SttLayer>>;
   getTime: () => number;
   reducedMotion: boolean;
 }): null {
-  const { followEgo, topDown, pitchDeg, headingDeg, egoRef, layers, getTime, reducedMotion } =
+  const { projection, followEgo, topDown, pitchDeg, headingDeg, initialViewState, egoRef, layers, getTime, reducedMotion } =
     props;
   const camera = useThree((s) => s.camera) as PerspectiveCamera;
   const get = useThree((s) => s.get);
   // Eased ego position (the camera target chases this); null = snap next frame.
   const easedEgo = React.useRef<Vector3 | null>(null);
   const framed = React.useRef(false);
+  // Globe scenes orbit the earth centre with a per-anchor north up; every planar
+  // projection (ENU, mercator) uses the flat Z-up ground rig below.
+  const globe = isGlobeProjection(projection) ? projection : null;
 
-  // Z-up world.
+  // Z-up world — flat projections only. On the globe there is no single world-up;
+  // `frameGlobe` sets `camera.up` to the anchor's north, so leave it be.
   React.useEffect(() => {
-    camera.up.set(0, 0, 1);
-  }, [camera]);
+    if (!globe) camera.up.set(0, 0, 1);
+  }, [camera, globe]);
 
   // Re-frame to bounds when follow turns off or the view (top-down) flips. A
   // dataset switch remounts the whole Canvas, so a fresh rig re-frames anyway.
@@ -590,6 +867,42 @@ function CameraRig(props: {
    // Guard: a throw in the camera rig must not kill r3f's render loop either.
    try {
     const controls = get().controls as { target: Vector3; update: () => void } | null;
+
+    // Geo demos supply an explicit initial view state (lng/lat/zoom/pitch/bearing).
+    // Place the camera via the projection-aware bridge — correct at web-mercator AND
+    // planet scales, and the exact inverse of the basemap `cameraToViewState` sync —
+    // instead of the AV/ENU bounds-fit below (whose metre-scale distance clamps put
+    // a city-scale mercator scene entirely outside the frustum). One-shot: controls
+    // own the camera afterwards.
+    if (!framed.current && initialViewState) {
+      const target = viewStateToCamera(projection, initialViewState, camera, {
+        viewportHeight: Math.max(1, get().size.height),
+      });
+      if (controls?.target) {
+        controls.target.copy(target);
+        controls.update();
+      }
+      framed.current = true;
+      return;
+    }
+
+    // Globe: park a whole-earth overview above the anchor once, then hand off to
+    // OrbitControls (or, if `<SttTiles3D globeControls>` is mounted, its ellipsoid
+    // GlobeControls). No ground-plane ego-follow / AABB fit applies on the sphere.
+    if (globe) {
+      if (!framed.current) {
+        const center = frameGlobe(camera, globe, {
+          longitude: globe.anchor.longitude,
+          latitude: globe.anchor.latitude,
+        });
+        if (controls?.target) {
+          controls.target.copy(center);
+          controls.update();
+        }
+        framed.current = true;
+      }
+      return;
+    }
 
     // Ego-follow: glide the camera + orbit target toward the live ego pose with a
     // time-based exponential filter (smooth + frame-rate independent), preserving
@@ -700,30 +1013,328 @@ function RenderPump(): null {
   return null;
 }
 
-// ─── Picking (click-to-inspect) ────────────────────────────────────────────────
+// ─── Atmosphere (opt-in physically-based sky / sun / day-night) ─────────────────
 
 /**
- * Hit-tests a click against the registered pickable layers' boxes (objects +
- * ego) and reports the nearest hit (or `null` on a miss) via `onPick`. A pointer
- * gesture that moves past a small threshold is treated as an OrbitControls drag,
- * not a pick. Mounted only when an `onPick` consumer is present.
+ * Takes over the render loop while a live {@link SttAtmosphere} exists: a
+ * render-priority (`> 0`) `useFrame` disables r3f's automatic render, so we drive
+ * the atmosphere's `pass → MRT → aerialPerspective` pipeline instead — after the
+ * priority-0 layer `setTime` and the camera rig have run for this frame. The sun
+ * is advanced to the playhead time each frame. A throw here is swallowed (logged
+ * once) so a transient node hiccup can't strand the canvas.
+ */
+function AtmosphereRenderLoop(props: {
+  atmosphere: SttAtmosphere;
+  getTime: () => number;
+}): null {
+  const { atmosphere, getTime } = props;
+  useFrame(() => {
+    try {
+      atmosphere.update(getTime());
+      atmosphere.render();
+    } catch (err) {
+      warnOnce('atmosphere-frame', '[stt-three] atmosphere frame failed', err);
+    }
+  }, 1);
+  return null;
+}
+
+/**
+ * Sets up the atmosphere for the live r3f scene/camera/renderer and, once ready,
+ * mounts {@link AtmosphereRenderLoop} to render through it. WebGPU only — on the
+ * WebGL2 fallback (or before the async setup resolves) this renders nothing and
+ * r3f's default render stays in charge, so the scene never blanks and WebGL2
+ * degrades gracefully. Options are read once at setup (like `ground`); change the
+ * `anchor`/`getDate`/feature flags before mount.
+ */
+function AtmosphereController(props: {
+  options: boolean | AtmosphereOptions;
+  forceWebGL: boolean;
+}): React.ReactElement | null {
+  const { projection, getTime } = useSttScene();
+  const gl = useThree((s) => s.gl);
+  const scene = useThree((s) => s.scene);
+  const camera = useThree((s) => s.camera);
+  const [atmosphere, setAtmosphere] = React.useState<SttAtmosphere | null>(null);
+  // Options are effectively static per scene (mirrors the `ground` build-once
+  // idiom); read from a ref so an inline-object prop doesn't churn the setup.
+  const optionsRef = React.useRef(props.options);
+  optionsRef.current = props.options;
+
+  React.useEffect(() => {
+    const backend = resolveBackend(gl as unknown as import('three/webgpu').WebGPURenderer, props.forceWebGL);
+    if (backend !== 'webgpu') return; // graceful WebGL2 degrade — leave r3f rendering
+    const opts = optionsRef.current;
+    const atmoOpts = opts === true ? {} : opts;
+    let handle: SttAtmosphere | null = null;
+    let cancelled = false;
+    void createSttAtmosphere({
+      ...atmoOpts,
+      renderer: gl as unknown as import('three/webgpu').WebGPURenderer,
+      scene,
+      camera,
+      projection,
+    })
+      .then((a) => {
+        if (cancelled) {
+          a.dispose();
+          return;
+        }
+        handle = a;
+        setAtmosphere(a);
+      })
+      .catch((err) => {
+        warnOnce('atmosphere-setup', '[stt-three] atmosphere setup failed; rendering without it', err);
+      });
+    return () => {
+      cancelled = true;
+      handle?.dispose();
+      setAtmosphere(null);
+    };
+    // Build once per scene/camera/renderer/projection; options read via ref.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gl, scene, camera, projection, props.forceWebGL]);
+
+  return atmosphere ? <AtmosphereRenderLoop atmosphere={atmosphere} getTime={getTime} /> : null;
+}
+
+/**
+ * Declarative atmosphere child — render `<SttAtmosphere />` inside an `<SttCanvas>`
+ * as an alternative to the `atmosphere` prop (use ONE of the two, not both). Opt-in,
+ * WebGPU-only, default-off elsewhere.
+ */
+export function SttAtmosphere(props: AtmosphereOptions & { forceWebGL?: boolean }): React.ReactElement {
+  const { forceWebGL = false, ...options } = props;
+  return <AtmosphereController options={options} forceWebGL={forceWebGL} />;
+}
+
+// ─── OGC 3D Tiles (opt-in: real terrain / Google Photorealistic / Cesium Ion) ────
+
+/** Stable dependency key so the tileset rebuilds only on a real source change. */
+function tilesSourceKey(s: Stt3DTilesSource): string {
+  if ('google' in s) return `google:${s.google.apiToken}`;
+  if ('ion' in s) return `ion:${s.ion.apiToken}:${s.ion.assetId}`;
+  return `url:${s.url}`;
+}
+
+/** Props for {@link SttTiles3D}. */
+export interface SttTiles3DProps extends Stt3DTilesOptions {
+  /**
+   * Use ellipsoid-aware `GlobeControls` while mounted (horizon-aware,
+   * zoom-to-cursor, auto earth-scale near/far), disabling the `<SttCanvas>` default
+   * `MapControls` until unmount. @default false
+   */
+  globeControls?: boolean;
+  /** Force the WebGL2 backend detection (matches the canvas). @default false */
+  forceWebGL?: boolean;
+}
+
+/**
+ * Declarative OGC 3D Tiles child for an `<SttCanvas>` — mounts a tileset (real
+ * terrain, Google Photorealistic Tiles, or a Cesium Ion asset) into the canvas
+ * scene and drives its LOD from the existing per-frame `RenderPump` path.
+ *
+ * It wires the VANILLA `3d-tiles-renderer/three` `TilesRenderer` into the SttCanvas
+ * scene (NOT `3d-tiles-renderer/r3f`, which would manage its own camera/controls
+ * and fight SttCanvas). Because the group is added to the same scene, it **composes
+ * with the atmosphere feature**: when the atmosphere is on it renders the tiles
+ * through the same `pass → aerialPerspective` pipeline (tiles pump at frame
+ * priority 0, the atmosphere draws at priority 1, so tiles are current before the
+ * draw); when it is off, r3f's default render draws the tiles.
+ *
+ * **Opt-in, default-OFF.** Live tiles need network + a GPU + (google/ion) a token,
+ * so this is browser-verified. Note: `<SttCanvas>` uses a local-ENU projection, so
+ * tiles co-register around the canvas anchor; a full-earth globe view is best set
+ * up with a globe host + `globeControls`.
+ */
+export function SttTiles3D(props: SttTiles3DProps): null {
+  const { globeControls = false, forceWebGL: _forceWebGL, ...tilesOpts } = props;
+  const { projection } = useSttScene();
+  const gl = useThree((s) => s.gl);
+  const scene = useThree((s) => s.scene);
+  const camera = useThree((s) => s.camera);
+  const size = useThree((s) => s.size);
+  const defaultControls = useThree((s) => s.controls) as { enabled: boolean } | null;
+  const [handle, setHandle] = React.useState<Stt3DTiles | null>(null);
+  const [globe, setGlobe] = React.useState<SttGlobeControls | null>(null);
+
+  // Options are effectively static per source (build-once idiom, like `ground` /
+  // the atmosphere); read from a ref so an inline-object prop doesn't churn setup.
+  const optsRef = React.useRef(tilesOpts);
+  optsRef.current = tilesOpts;
+  const sourceKey = tilesSourceKey(tilesOpts.source);
+
+  React.useEffect(() => {
+    let h: Stt3DTiles | null = null;
+    let g: SttGlobeControls | null = null;
+    let cancelled = false;
+    const renderer = gl as unknown as import('three/webgpu').WebGPURenderer;
+    void (async () => {
+      const t = await createStt3DTiles({ ...optsRef.current, renderer, scene, camera, projection });
+      if (cancelled) {
+        t.dispose();
+        return;
+      }
+      h = t;
+      setHandle(t);
+      if (globeControls) {
+        const gc = await createSttGlobeControls({
+          scene,
+          camera,
+          domElement: gl.domElement,
+          projection,
+          tiles: t,
+        });
+        if (cancelled) {
+          gc.dispose();
+          return;
+        }
+        g = gc;
+        setGlobe(gc);
+      }
+    })().catch((err) => {
+      warnOnce('tiles3d-setup', '[stt-three] 3D tiles setup failed; rendering without them', err);
+    });
+    return () => {
+      cancelled = true;
+      g?.dispose();
+      h?.dispose();
+      setHandle(null);
+      setGlobe(null);
+    };
+    // Rebuild on renderer/scene/camera/projection/source/globeControls change;
+    // other options are read via ref (build-once).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gl, scene, camera, projection, sourceKey, globeControls]);
+
+  // While GlobeControls owns navigation, disable the SttCanvas default MapControls
+  // (they fight over the same pointer); restore it when this unmounts.
+  React.useEffect(() => {
+    if (!globe || !defaultControls) return;
+    const prev = defaultControls.enabled;
+    defaultControls.enabled = false;
+    return () => {
+      defaultControls.enabled = prev;
+    };
+  }, [globe, defaultControls]);
+
+  // Refresh the SSE reference resolution on canvas resize.
+  React.useEffect(() => {
+    handle?.setResolutionFromRenderer();
+  }, [handle, size.width, size.height]);
+
+  // Per-frame (priority 0, before the atmosphere's priority-1 render): advance the
+  // globe controls (if any), then pump tiles LOD with a current camera matrix.
+  useFrame(() => {
+    try {
+      if (globe) globe.update();
+      if (handle) {
+        camera.updateMatrixWorld();
+        handle.update();
+      }
+    } catch (err) {
+      warnOnce('tiles3d-frame', '[stt-three] 3D tiles frame failed', err);
+    }
+  });
+
+  return null;
+}
+
+// ─── Picking (click-to-inspect + hover) ─────────────────────────────────────────
+
+/**
+ * Pointer-driven picking against the registered pickables, in two mechanisms and
+ * in order:
+ *  1. CPU ray-OBB over the object/ego boxes ({@link pickBoxes}) — synchronous.
+ *  2. On a box MISS (and only if any point clouds are registered): a GPU
+ *     id-buffer pass at the cursor ({@link GpuPicker}) resolved through each
+ *     cloud's provenance buffer — async (a GPU readback).
+ *
+ * The hit (or `null`) is reported to `onPick` on a click and, throttled to one
+ * pick per animation frame, to `onHover` on a pointer-move. A gesture that moves
+ * past a small threshold is an OrbitControls drag, not a click; hover is
+ * suppressed while a button is held (dragging). Mounted only when an `onPick` or
+ * `onHover` consumer is present — otherwise pointer events pass straight to the
+ * controls.
+ *
+ * The click path is unchanged for box hits (still synchronous) and for empty
+ * space when no clouds are registered (still a synchronous `null`); the GPU cloud
+ * fall-through is purely additive.
  */
 function PickController(props: {
   onPick?: (info: SttPickInfo | null) => void;
+  onHover?: (info: SttPickInfo | null) => void;
   pickables: React.MutableRefObject<Set<SttPickable>>;
+  pointPickables: React.MutableRefObject<Set<SttPointPickable>>;
 }): null {
   const camera = useThree((s) => s.camera);
   const raycaster = useThree((s) => s.raycaster);
   const gl = useThree((s) => s.gl);
-  const { pickables } = props;
+  const { pickables, pointPickables } = props;
   const hasPick = !!props.onPick;
+  const hasHover = !!props.onHover;
   const onPickRef = React.useRef(props.onPick);
   onPickRef.current = props.onPick;
+  const onHoverRef = React.useRef(props.onHover);
+  onHoverRef.current = props.onHover;
 
   React.useEffect(() => {
-    if (!hasPick) return; // no consumer → don't intercept pointer events
+    if (!hasPick && !hasHover) return; // no consumer → don't intercept pointer events
     const el = gl.domElement;
     const DRAG_PX = 6; // a drag past this is an orbit, not a click
+
+    // One shared GPU id-buffer picker (a 1×1 readback target), lazily built on
+    // the first cloud pick and disposed on teardown.
+    let picker: GpuPicker | null = null;
+    const ensurePicker = (): GpuPicker => {
+      picker ??= new GpuPicker(
+        gl as unknown as PickRenderer,
+        RenderTarget as unknown as RenderTargetCtor,
+        1,
+      );
+      return picker;
+    };
+
+    // Client (viewport) px → NDC for the CPU ray + canvas-local CSS px for the
+    // GPU picker. Null when the canvas has no layout box yet.
+    const project = (
+      clientX: number,
+      clientY: number,
+    ): { ndc: Vector2; localX: number; localY: number } | null => {
+      const rect = el.getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0) return null;
+      const localX = clientX - rect.left;
+      const localY = clientY - rect.top;
+      const ndc = new Vector2((localX / rect.width) * 2 - 1, -(localY / rect.height) * 2 + 1);
+      return { ndc, localX, localY };
+    };
+
+    // (1) Synchronous CPU box pick — identical to the click-only path.
+    const boxPickAt = (clientX: number, clientY: number): SttBoxPickInfo | null => {
+      const p = project(clientX, clientY);
+      if (!p) return null;
+      raycaster.setFromCamera(p.ndc, camera);
+      const o = raycaster.ray.origin;
+      const d = raycaster.ray.direction;
+      const boxes = Array.from(pickables.current).flatMap((pk) => pk.getPickBoxes());
+      return pickBoxes([o.x, o.y, o.z], [d.x, d.y, d.z], boxes);
+    };
+
+    // (2) Async GPU cloud pick — first hit across the registered clouds.
+    const cloudPickAt = async (clientX: number, clientY: number): Promise<SttPickInfo | null> => {
+      const clouds = pointPickables.current;
+      if (clouds.size === 0) return null;
+      const p = project(clientX, clientY);
+      if (!p) return null;
+      const gpu = ensurePicker();
+      for (const cloud of clouds) {
+        const res = await cloud.pick(gpu, camera, p.localX, p.localY);
+        if (res) return pointPickToInfo(res);
+      }
+      return null;
+    };
+
+    // ── Click gesture state (drag vs click discrimination) ──
     let downX = 0;
     let downY = 0;
     let moved = false;
@@ -732,32 +1343,82 @@ function PickController(props: {
       downY = e.clientY;
       moved = false;
     };
+
+    // ── Hover, coalesced to one pick per animation frame ──
+    let hoverScheduled = false;
+    let hoverX = 0;
+    let hoverY = 0;
+    let hoverSeq = 0; // bumped every hover to drop stale async cloud results
+    const runHover = (): void => {
+      hoverScheduled = false;
+      if (!onHoverRef.current) return;
+      // Bump first, so an in-flight cloud pick from a prior frame is invalidated
+      // even when this frame resolves synchronously (a box hit or an empty null).
+      const seq = ++hoverSeq;
+      const box = boxPickAt(hoverX, hoverY);
+      if (box) {
+        onHoverRef.current(box);
+        return;
+      }
+      if (pointPickables.current.size === 0) {
+        onHoverRef.current(null);
+        return;
+      }
+      void cloudPickAt(hoverX, hoverY).then((hit) => {
+        if (seq === hoverSeq) onHoverRef.current?.(hit);
+      });
+    };
+
     const onMove = (e: PointerEvent): void => {
-      if (Math.hypot(e.clientX - downX, e.clientY - downY) > DRAG_PX) moved = true;
+      const dragging = e.buttons !== 0; // any button held ⇒ orbit/pan, not hover
+      if (dragging && Math.hypot(e.clientX - downX, e.clientY - downY) > DRAG_PX) moved = true;
+      if (hasHover && !dragging) {
+        hoverX = e.clientX;
+        hoverY = e.clientY;
+        if (!hoverScheduled) {
+          hoverScheduled = true;
+          requestAnimationFrame(runHover);
+        }
+      }
     };
+
     const onUp = (e: PointerEvent): void => {
+      if (!hasPick) return;
       if (moved || Math.hypot(e.clientX - downX, e.clientY - downY) > DRAG_PX) return;
-      const rect = el.getBoundingClientRect();
-      if (rect.width === 0 || rect.height === 0) return;
-      const ndc = new Vector2(
-        ((e.clientX - rect.left) / rect.width) * 2 - 1,
-        -((e.clientY - rect.top) / rect.height) * 2 + 1,
-      );
-      raycaster.setFromCamera(ndc, camera);
-      const o = raycaster.ray.origin;
-      const d = raycaster.ray.direction;
-      const boxes = Array.from(pickables.current).flatMap((p) => p.getPickBoxes());
-      onPickRef.current?.(pickBoxes([o.x, o.y, o.z], [d.x, d.y, d.z], boxes));
+      const box = boxPickAt(e.clientX, e.clientY);
+      if (box) {
+        onPickRef.current?.(box);
+        return;
+      }
+      // Box miss: fall through to the GPU cloud pass, else report a sync null
+      // (the unchanged empty-space behaviour when no clouds are registered).
+      if (pointPickables.current.size === 0) {
+        onPickRef.current?.(null);
+        return;
+      }
+      void cloudPickAt(e.clientX, e.clientY).then((hit) => onPickRef.current?.(hit));
     };
+
+    // Clear hover when the pointer leaves the canvas (and drop any in-flight pick).
+    const onLeave = (): void => {
+      if (!hasHover) return;
+      hoverSeq++;
+      onHoverRef.current?.(null);
+    };
+
     el.addEventListener('pointerdown', onDown);
     el.addEventListener('pointermove', onMove);
     el.addEventListener('pointerup', onUp);
+    el.addEventListener('pointerleave', onLeave);
     return () => {
       el.removeEventListener('pointerdown', onDown);
       el.removeEventListener('pointermove', onMove);
       el.removeEventListener('pointerup', onUp);
+      el.removeEventListener('pointerleave', onLeave);
+      picker?.dispose();
+      picker = null;
     };
-  }, [gl, camera, raycaster, pickables, hasPick]);
+  }, [gl, camera, raycaster, pickables, pointPickables, hasPick, hasHover]);
 
   return null;
 }
@@ -852,8 +1513,32 @@ const DEFAULT_GPU_FALLBACK = (
 // ─── Canvas ───────────────────────────────────────────────────────────────────
 
 export interface SttCanvasProps {
-  /** lon/lat anchor mapped to the world origin (usually the scene view centre). */
+  /**
+   * lon/lat anchor mapped to the world origin (usually the scene view centre).
+   * Used to build the default ENU projection, and as the camera-framing / basemap
+   * centre hint (e.g. the whole-earth overview the globe rig parks above).
+   */
   anchor: GeoAnchor;
+  /**
+   * The lon/lat(+alt) → world {@link Projection} the whole scene renders under.
+   * Omit for the backward-compatible default `new LocalEnuProjection(anchor)`
+   * (metric ENU — the AV / local-scene frame every existing demo uses). Pass a
+   * `MercatorProjection` for a flat web-map frame, or a `GlobeProjection` for a 3D
+   * globe (which also switches the camera rig to an earth-orbit + enables the
+   * atmosphere / 3D-tiles / `<SttGlobeBasemap>` globe path). Build it with the
+   * exported projection classes; it is read once per scene (a change remounts the
+   * scene graph like a dataset switch).
+   *
+   * @example
+   * // Flat web-map (Mercator):
+   * <SttCanvas anchor={c} projection={new MercatorProjection(c)} …/>
+   * @example
+   * // 3D globe (WGS84 datum co-registers 3D-tiles / atmosphere):
+   * <SttCanvas anchor={c} projection={new GlobeProjection(c, EARTH_RADIUS, { datum: 'wgs84' })} …>
+   *   <SttGlobeBasemap />
+   * </SttCanvas>
+   */
+  projection?: Projection;
   /** Common time base (epoch-ms) — usually `timeRange.start`. */
   timeOrigin: number;
   /** Playback clock — absolute playhead in epoch-ms each frame. */
@@ -867,6 +1552,13 @@ export interface SttCanvasProps {
   registry?: SttSourceRegistry;
   /** Scene time range (epoch-ms) reported as the buffered span to the governor. */
   timeRange?: { start: number; end: number };
+  /**
+   * Canvas-level streaming default: every child layer that omits its own
+   * `streaming` prop inherits this. `true` streams all layers with archive
+   * defaults; an options object passes tileset knobs. Omit / `false` (default)
+   * keeps the backward-compatible eager Suspense path. Per-layer `streaming` wins.
+   */
+  streaming?: boolean | StreamingLayerOptions;
   followEgo?: boolean;
   topDown?: boolean;
   forceWebGL?: boolean;
@@ -874,23 +1566,48 @@ export interface SttCanvasProps {
   pitchDeg?: number;
   headingDeg?: number;
   /**
+   * Initial geographic camera placement (deck-parity: `longitude`/`latitude`/`zoom`
+   * + optional `pitch`/`bearing`). When set, the camera is positioned via
+   * `viewStateToCamera` for the active projection — correct across Mercator (web-
+   * mercator) and Globe (planet) scales — instead of the AV/ENU bounds-fit. Strongly
+   * recommended for geo demos; omit for AV/ENU scenes (which fit to layer bounds).
+   */
+  initialViewState?: ViewState;
+  /**
    * Device pixel ratio cap. Lower (e.g. 1) for fill-bound clouds on retina — the
    * single biggest perf lever. @default clamped device ratio [1, 2].
    */
   pixelRatio?: number;
   /** Snap (no easing/damping) for `prefers-reduced-motion`. @default false */
   reducedMotion?: boolean;
+  /**
+   * Opt-in physically-based atmosphere / sky / day-night (WebGPU only; the WebGL2
+   * fallback keeps r3f's default render, so it degrades gracefully). `true` uses
+   * defaults; an options object tunes it (see {@link AtmosphereOptions}). Omit /
+   * `false` (default) leaves the current render path untouched. When on, the sun
+   * tracks the playhead time each frame. Prefer this OR a `<SttAtmosphere>` child,
+   * not both.
+   */
+  atmosphere?: boolean | AtmosphereOptions;
   ground?: GroundOptions | false;
   className?: string;
   style?: React.CSSProperties;
   /** Loading fallback while layers' archives load. @default null */
   fallback?: React.ReactNode;
   /**
-   * Click-to-inspect callback. Fires with the nearest hit object/ego box on a
-   * click, or `null` when clicking empty space. Omit to disable picking (pointer
-   * events pass straight through to OrbitControls).
+   * Click-to-inspect callback. Fires with the nearest hit on a click (a CPU
+   * object/ego box, or a GPU-picked point-cloud feature when the click misses
+   * every box), or `null` when clicking empty space. Omit to disable click
+   * picking (pointer events pass straight through to the controls).
    */
   onPick?: (info: SttPickInfo | null) => void;
+  /**
+   * Hover callback. Fires on pointer-move (throttled to one pick per animation
+   * frame) with the hovered hit — a box or a GPU-picked point-cloud feature — or
+   * `null` when hovering empty space / on leaving the canvas. Suppressed while a
+   * button is held (an orbit/pan drag). Omit to disable hover.
+   */
+  onHover?: (info: SttPickInfo | null) => void;
   /**
    * Shown when WebGPU/WebGL2 is unavailable or the Canvas subtree errors.
    * @default a built-in "needs WebGPU or WebGL2" message
@@ -902,34 +1619,43 @@ export interface SttCanvasProps {
 export function SttCanvas(props: SttCanvasProps): React.ReactElement {
   const {
     anchor,
+    projection: projectionProp,
     timeOrigin,
     getTime,
     registry,
     timeRange,
+    streaming,
     followEgo = false,
     topDown = false,
     forceWebGL = false,
     background = '#05070d',
     pitchDeg,
     headingDeg,
+    initialViewState,
     pixelRatio,
     reducedMotion = false,
+    atmosphere,
     ground = {},
     className,
     style,
     fallback = null,
     onPick,
+    onHover,
     renderFallback = DEFAULT_GPU_FALLBACK,
     children,
   } = props;
 
   const gpuOk = React.useMemo(() => canRenderGpu(), []);
+  // Caller-supplied projection wins; else the backward-compatible ENU default.
   const projection = React.useMemo(
-    () => new LocalEnuProjection(anchor),
-    [anchor.longitude, anchor.latitude],
+    () => resolveCanvasProjection(projectionProp, anchor),
+    [projectionProp, anchor.longitude, anchor.latitude],
   );
+  // Globe scenes swap the flat MapControls for an earth-orbit OrbitControls.
+  const globe = isGlobeProjection(projection) ? projection : null;
   const egoRef = React.useRef<EgoLayer | null>(null);
   const pickables = React.useRef<Set<SttPickable>>(new Set());
+  const pointPickables = React.useRef<Set<SttPointPickable>>(new Set());
   const layers = React.useRef<Set<SttLayer>>(new Set());
   // Stabilise the time range by value so the governor-registration effect doesn't
   // re-register every render on a fresh object identity.
@@ -946,11 +1672,13 @@ export function SttCanvas(props: SttCanvasProps): React.ReactElement {
       getTime,
       egoRef,
       pickables,
+      pointPickables,
       layers,
       registry,
       timeRange: stableTimeRange,
+      streaming,
     }),
-    [projection, timeOrigin, getTime, registry, stableTimeRange],
+    [projection, timeOrigin, getTime, registry, stableTimeRange, streaming],
   );
   const groundObj = React.useMemo(
     () => (ground === false ? null : makeGround(ground)),
@@ -979,23 +1707,47 @@ export function SttCanvas(props: SttCanvasProps): React.ReactElement {
         <Ctx.Provider value={ctx}>
           {groundObj && <primitive object={groundObj} dispose={null} />}
           <CameraRig
+            projection={projection}
             followEgo={followEgo}
             topDown={topDown}
             pitchDeg={pitchDeg}
             headingDeg={headingDeg}
+            initialViewState={initialViewState}
             egoRef={egoRef}
             layers={layers}
             getTime={getTime}
             reducedMotion={reducedMotion}
           />
-          {/* MapControls (not OrbitControls) so left-drag PANS across the ground
-              plane — a map-style gesture matching the deck cockpit's MapController
-              — instead of orbiting a point. Right-drag still rotates; wheel zooms.
-              Panning is in the XY plane because the camera up is Z. */}
-          <MapControls makeDefault enableDamping={!reducedMotion} dampingFactor={0.12} />
+          {globe ? (
+            /* Globe: OrbitControls about the earth centre — left-drag rotates the
+               planet, wheel zooms, with earth-scale distance clamps. Panning is off
+               so the orbit target stays pinned to the centre. Both this and the flat
+               MapControls set `makeDefault`, so `<SttTiles3D globeControls>` finds
+               and disables whichever is active while its ellipsoid GlobeControls own
+               navigation (no double-instantiate / fight). */
+            <OrbitControls
+              makeDefault
+              enablePan={false}
+              enableDamping={!reducedMotion}
+              dampingFactor={0.12}
+              {...globeControlLimits(globe)}
+            />
+          ) : (
+            /* MapControls (not OrbitControls) so left-drag PANS across the ground
+               plane — a map-style gesture matching the deck cockpit's MapController
+               — instead of orbiting a point. Right-drag still rotates; wheel zooms.
+               Panning is in the XY plane because the camera up is Z. */
+            <MapControls makeDefault enableDamping={!reducedMotion} dampingFactor={0.12} />
+          )}
           <RenderPump />
+          {atmosphere && <AtmosphereController options={atmosphere} forceWebGL={forceWebGL} />}
           <GlDisposer />
-          <PickController onPick={onPick} pickables={pickables} />
+          <PickController
+            onPick={onPick}
+            onHover={onHover}
+            pickables={pickables}
+            pointPickables={pointPickables}
+          />
           <React.Suspense fallback={fallback}>{children}</React.Suspense>
         </Ctx.Provider>
       </Canvas>
