@@ -25,6 +25,10 @@ const DocPage = React.lazy(() => import("./docs/DocPage"));
 const AvCockpit = React.lazy(() => import("./pages/AvCockpit"));
 const CesiumDemoPage = React.lazy(() => import("./pages/CesiumDemoPage"));
 
+// The visual architecture explainer (hand-authored SVG diagrams, no map
+// deps) — lazy so the landing bundle doesn't carry it.
+const HowItWorks = React.lazy(() => import("./pages/HowItWorks"));
+
 const DocsFallback: React.FC = () => (
   <div className="px-8 py-10 text-sm" style={{ color: "var(--ink-400)" }}>
     Loading documentation…
@@ -75,6 +79,14 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
             <Route element={<SiteChrome />}>
               <Route index element={<HomePage />} />
               <Route path="demos" element={<DemosCatalog />} />
+              <Route
+                path="how-it-works"
+                element={
+                  <Suspense fallback={<DocsFallback />}>
+                    <HowItWorks />
+                  </Suspense>
+                }
+              />
               <Route path="demos/:datasetId" element={<DemoDetailPage />} />
               <Route
                 path="docs"

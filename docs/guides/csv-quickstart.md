@@ -69,8 +69,10 @@ stt-build \
 stt-validate public/tiles/my-dataset
 ```
 
-`--auto` runs the analyzer first and picks a zoom range, temporal bucket,
-and compression to fit the data; any flag you pass explicitly still wins.
+`--auto` runs the analyzer first and picks a zoom range and temporal bucket
+to fit the data; any flag you pass explicitly still wins. (Compression is
+not auto-tuned — the packed format is zstd-only; set the level with
+`--zstd-level` or `--publish`.)
 
 **Mind the zoom range** if you set it yourself: the default is `0–14`, and
 dense point data at z14 can explode into 100k+ tiles and a long build. For

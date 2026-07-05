@@ -11,6 +11,7 @@ export const GITHUB_URL = "https://github.com/BertCh/spatiotemporal-tiles";
  */
 const NAV_ITEMS: { label: string; to: string }[] = [
   { label: "Demos", to: "/demos" },
+  { label: "How it works", to: "/how-it-works" },
   { label: "Docs", to: "/docs" },
   { label: "Story", to: "/story/drifters" },
 ];

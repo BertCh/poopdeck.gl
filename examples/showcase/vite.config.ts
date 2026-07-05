@@ -47,7 +47,7 @@ function excludeUnusedPublicFiles(): Plugin {
             if (rel === 'data') skipped.push('data/ (entire tree)');
             return false;
           }
-          // Same for the repack-publish-all.sh STAGING tree (data-publish/):
+          // Same for the local data-publish/ staging tree:
           // local-only, multi-GB, and full of >25 MiB packs.
           if (rel === 'data-publish' || rel.startsWith('data-publish/')) {
             if (rel === 'data-publish') skipped.push('data-publish/ (entire tree)');

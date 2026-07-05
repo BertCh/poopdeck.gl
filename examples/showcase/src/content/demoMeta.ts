@@ -231,18 +231,9 @@ export const DEMO_META: Record<string, DemoMeta> = {
     tagline: '43 years of satellite-tracked surface buoys, shaded by sea-surface temperature.',
     techniqueTag: 'Trips · SST gradient · globe',
     about: [
-      'Since 1979 the Global Drifter Program has seeded the oceans with ' +
-        'satellite-tracked surface buoys. Each buoy reports its position and ' +
-        'the temperature of the water around it as currents carry it along — ' +
-        'and together their tracks trace the circulatory system of the ocean: ' +
-        'gyres, boundary currents, and the long slow drift between them.',
-      'Every ribbon here is one buoy. Color is carried per vertex, so a track ' +
-        'warms from blue to red as the buoy rides into warmer water — the Gulf ' +
-        'Stream’s warm core reads orange while its poleward tail cools to ' +
-        'blue. The full 43-year record streams as spatiotemporal tiles and ' +
-        'plays in about two minutes.',
-      'This demo is also a data story: "Adrift" walks through the program’s ' +
-        'history on a scroll-driven globe.',
+      'Since 1979 the Global Drifter Program has deployed satellite-tracked surface buoys across the oceans. Each buoy reports its position and the surrounding water temperature as currents carry it. Their tracks trace ocean circulation: gyres, boundary currents, and the drift between them.',
+      'Each ribbon is one buoy. Color is per-vertex sea-surface temperature: a track shifts from blue to red as the buoy enters warmer water. The full 43-year record streams as spatiotemporal tiles and plays in about two minutes.',
+      'This demo is also a data story: "Adrift" walks through the program’s history on a scroll-driven globe.',
     ],
     dataSources: [
       {
@@ -272,16 +263,8 @@ export const DEMO_META: Record<string, DemoMeta> = {
     tagline: 'Virtual particles advected through NASA ECCO model currents — the modeled twin of the drifters.',
     techniqueTag: 'Trips · speed gradient · globe',
     about: [
-      'Where the drifter demo shows the ocean as buoys actually experienced ' +
-        'it, this one shows the ocean as a model understands it. NASA/JPL’s ' +
-        'ECCO state estimate reconstructs the global ocean circulation; here, ' +
-        'thousands of virtual particles are advected through its surface ' +
-        'velocity fields for a year and rendered as flowing ribbons.',
-      'Each ribbon is shaded along its length by current speed: calm interior ' +
-        'waters read deep blue while the swift western-boundary currents — the ' +
-        'Gulf Stream, the Kuroshio, the Agulhas — flare yellow and red. Played ' +
-        'next to the drifters, it is a model-versus-observation comparison you ' +
-        'can watch.',
+      'The modeled companion to the drifter demo. NASA/JPL’s ECCO state estimate reconstructs global ocean circulation; here thousands of virtual particles are advected through its surface velocity fields for a year and rendered as ribbons.',
+      'Each ribbon is shaded along its length by current speed: slow interior waters blue, fast western-boundary currents (Gulf Stream, Kuroshio, Agulhas) yellow to red. Played next to the drifters, it is a model-versus-observation comparison.',
     ],
     dataSources: [
       {
@@ -309,14 +292,8 @@ export const DEMO_META: Record<string, DemoMeta> = {
     tagline: 'Five years of global M4+ seismicity tracing the plate boundaries.',
     techniqueTag: 'Points · magnitude',
     about: [
-      'Every magnitude-4.0+ earthquake recorded by the USGS between 2020 and ' +
-        '2024 — tens of thousands of events that, played back, draw the ' +
-        'boundaries of the tectonic plates: the Pacific Ring of Fire, the ' +
-        'mid-Atlantic ridge, the Alpide belt through the Himalaya.',
-      'Marker size scales with magnitude and color steps through magnitude ' +
-        'bands, so the rare M7+ events flash large and dark red against the ' +
-        'steady background crackle of M4s. A 30-day rolling window keeps the ' +
-        'map legible across the five-year sweep.',
+      'Every magnitude-4.0+ earthquake recorded by the USGS between 2020 and 2024 — tens of thousands of events. Played back, they outline the tectonic plate boundaries: the Pacific Ring of Fire, the mid-Atlantic ridge, the Alpide belt through the Himalaya.',
+      'Marker size scales with magnitude and color steps through magnitude bands, so M7+ events read large and dark red against the smaller M4s. A 30-day rolling window keeps the map legible across the five-year span.',
     ],
     dataSources: [
       {
@@ -338,17 +315,8 @@ export const DEMO_META: Record<string, DemoMeta> = {
     tagline: 'The same seismic catalog, stood up as 3D columns — bar height is magnitude.',
     techniqueTag: 'Columns · 3D extrusion',
     about: [
-      'This is the earthquake catalog from the points demo, rendered a second ' +
-        'way: every event becomes an extruded column whose height is its ' +
-        'magnitude. Where the point map reads as a flat scatter, the columns ' +
-        'turn the Ring of Fire into a literal landscape — a forest of spikes ' +
-        'rising along the subduction zones, the rare great quakes towering ' +
-        'over the background M4 crackle.',
-      'It reuses the exact same archive as the points demo — nothing was ' +
-        'rebuilt. Only the layer changed: `AnimatedColumnLayer` reads the ' +
-        'numeric `magnitude` column as per-feature elevation, and the shared ' +
-        'time filter fades columns in and out across a 30-day rolling window. ' +
-        'Tilt the camera and pan out to trace the plate boundaries in relief.',
+      'The earthquake catalog from the points demo, rendered a second way: every event is an extruded column whose height is its magnitude. The columns give the Ring of Fire relief — dense spikes along the subduction zones, the largest quakes tallest.',
+      'It reuses the same archive as the points demo — nothing was rebuilt; only the layer changed. `AnimatedColumnLayer` reads the numeric `magnitude` column as per-feature elevation, and the shared time filter fades columns in and out across a 30-day rolling window.',
     ],
     dataSources: [
       {
@@ -374,26 +342,9 @@ export const DEMO_META: Record<string, DemoMeta> = {
       'The 2020 Iowa derecho rebuilt from raw NEXRAD radar — reflectivity bands, storm cells, and tracks, all baked at build time.',
     techniqueTag: 'Radar · 3-layer composite',
     about: [
-      'On 10 August 2020 a derecho — a long-lived, fast-moving wall of ' +
-        'thunderstorms — raced east across the Midwest, organizing into a ' +
-        'classic bow echo and flattening crops and towns from eastern Nebraska ' +
-        'through Iowa with 100+ mph winds. This demo reconstructs that afternoon ' +
-        'from the raw NOAA NEXRAD Level II archive of three radar sites ' +
-        '(Omaha, Des Moines, and the Quad Cities), mosaicked into one moving ' +
-        'picture of the storm.',
-      'Everything the browser would normally choke on happens at build time, in ' +
-        'Rust. Each radar volume is decoded from its polar sweeps, every gate is ' +
-        'reprojected to lon/lat with the standard 4/3-earth beam model, the three ' +
-        'sites are max-combined onto a common grid per 5-minute scan, that grid ' +
-        'is contoured into filled NWS-palette reflectivity bands, and a ' +
-        "SCIT-style tracker links storm cells across scans into tracks. The " +
-        'browser just renders finished vector tiles.',
-      'Three STT archives drive one composite render: the contour bands ' +
-        '(`AnimatedPolygonLayer`, colored by a categorical `dbz_band`) are the ' +
-        'animated precipitation field; storm-cell centroids ' +
-        '(`AnimatedPointLayer`) mark the hardest cores; and cell tracks ' +
-        '(`AnimatedTripsLayer`) trail behind each cell, shaded by intensity over ' +
-        'time — the storm drawing its own path across the map.',
+      'On 10 August 2020 a derecho — a long-lived line of thunderstorms — moved east across the Midwest, organizing into a bow echo and causing damage from eastern Nebraska through Iowa with 100+ mph winds. This demo reconstructs that afternoon from the raw NOAA NEXRAD Level II archive of three radar sites (Omaha, Des Moines, Quad Cities), mosaicked into one field.',
+      'All processing happens at build time, in Rust. Each radar volume is decoded from its polar sweeps, every gate reprojected to lon/lat with the 4/3-earth beam model, the three sites max-combined onto a common grid per 5-minute scan, the grid contoured into filled NWS-palette reflectivity bands, and a SCIT-style tracker links storm cells across scans into tracks. The browser renders finished vector tiles.',
+      'Three STT archives drive one composite render: contour bands (`AnimatedPolygonLayer`, colored by categorical `dbz_band`) are the precipitation field; storm-cell centroids (`AnimatedPointLayer`) mark the cores; cell tracks (`AnimatedTripsLayer`) trail behind each cell, shaded by intensity over time.',
     ],
     dataSources: [
       {
@@ -426,26 +377,9 @@ export const DEMO_META: Record<string, DemoMeta> = {
       'A streetscape.gl-style cockpit for an autonomous-vehicle drive — LIDAR, tracked objects, the ego path, and CAN gauges.',
     techniqueTag: 'AV cockpit · 3-layer composite',
     about: [
-      'Autonomous-vehicle logs are some of the densest spatiotemporal data ' +
-        'there is: a spinning LIDAR returns hundreds of thousands of 3D points ' +
-        'per second, a perception stack tracks every car and pedestrian as an ' +
-        'oriented 3D box, the vehicle records its own pose, and the CAN bus ' +
-        'streams speed, steering, and acceleration dozens of times a second. ' +
-        'This demo packages one 20-second drive as spatiotemporal tiles and ' +
-        'replays it the way Aurora/Uber’s open-source streetscape.gl (avs.auto) ' +
-        'viewer does — on a real basemap, with a cockpit around it.',
-      'Three STT archives compose into one render: an accumulated LIDAR point ' +
-        'cloud (`AnimatedPointLayer`, colored by a categorical `height_band` so ' +
-        'the ground reads cool and rooftops read warm); the ego trajectory ' +
-        '(`AnimatedTripsLayer`); and tracked objects as oriented extruded boxes ' +
-        '(`AnimatedBoundingBoxLayer`, colored by class). The bespoke cockpit at ' +
-        '`/drive/av-synthetic` adds a stream list, radial CAN-bus gauges, a ' +
-        'timeline scrubber, and a camera inset — all reading the same playback ' +
-        'clock the layers animate on.',
-      'This scene is synthetic — generated offline with no external download, so ' +
-        'the whole cockpit is runnable today. The same bundle layout is produced ' +
-        'by adapters for real datasets (nuScenes, comma.ai, Argoverse 2), which ' +
-        'georeference each scene’s local map frame onto a documented lat/lon origin.',
+      'Autonomous-vehicle logs are among the densest spatiotemporal data: a spinning LIDAR returns hundreds of thousands of 3D points per second, a perception stack tracks each car and pedestrian as an oriented 3D box, the vehicle records its pose, and the CAN bus streams speed, steering, and acceleration many times a second. This demo packages one 20-second drive as spatiotemporal tiles and replays it in a streetscape.gl-style (avs.auto) cockpit on a real basemap.',
+      'Three STT archives compose into one render: an accumulated LIDAR point cloud (`AnimatedPointLayer`, colored by categorical `height_band`); the ego trajectory (`AnimatedTripsLayer`); and tracked objects as oriented extruded boxes (`AnimatedBoundingBoxLayer`, colored by class). The cockpit at `/drive/av-synthetic` adds a stream list, radial CAN-bus gauges, a timeline scrubber, and a camera inset, all on the same playback clock.',
+      'This scene is synthetic — generated offline with no external download, so the cockpit is runnable without any data access. The same bundle layout is produced by adapters for real datasets (nuScenes, comma.ai, Argoverse 2), which georeference each scene’s local frame onto a documented lat/lon origin.',
     ],
     dataSources: [
       {
@@ -476,20 +410,9 @@ export const DEMO_META: Record<string, DemoMeta> = {
       'A real nuScenes drive — the fullest cockpit: LIDAR, tracked 3D boxes, CAN gauges, and a front camera in Boston.',
     techniqueTag: 'AV cockpit · all streams',
     about: [
-      'nuScenes (Motional) is the reference multimodal autonomous-driving dataset: a ' +
-        '32-beam LIDAR, six cameras, radar, GPS/IMU, and the full CAN bus, with 1.4 million ' +
-        'hand-annotated 3D boxes across Boston and Singapore. This is one real 20-second ' +
-        'mini-split scene in Boston Seaport — and all ten v1.0-mini scenes (Boston + Singapore, ' +
-        'day and night) are wired into the cockpit: switch between them from the scene picker.',
-      'The cockpit at `/drive/nuscenes-0103` composes the accumulated LIDAR cloud — colored by ' +
-        'per-point nuScenes-lidarseg SEMANTIC class (cars orange, people blue, road grey, canopy ' +
-        'green) rather than a height ramp — the ego trail, tracked objects as oriented 3D boxes ' +
-        'colored by class, the radial CAN gauges (speed / steering / throttle / brake), and a ' +
-        'front-camera inset — all on one playback clock, georeferenced onto a real Boston basemap ' +
-        'from the map’s documented origin.',
-      'Built by `nuscenes_extract.py` from the login-gated v1.0-mini + CAN-bus expansion + ' +
-        'map-expansion + lidarseg, with the LIDAR decimated to ~174k points and each return ' +
-        'tagged with its semantic class.',
+      'nuScenes (Motional) is a reference multimodal autonomous-driving dataset: a 32-beam LIDAR, six cameras, radar, GPS/IMU, and the full CAN bus, with 1.4 million hand-annotated 3D boxes across Boston and Singapore. This is one 20-second v1.0-mini scene in Boston Seaport; all ten mini scenes (Boston + Singapore, day and night) are in the cockpit — switch between them from the scene picker.',
+      'The cockpit at `/drive/nuscenes-0103` composes the accumulated LIDAR cloud — colored by per-point nuScenes-lidarseg semantic class (cars orange, people blue, road grey, canopy green) — the ego trail, tracked objects as oriented 3D boxes colored by class, radial CAN gauges (speed / steering / throttle / brake), and a front-camera inset, all on one playback clock, georeferenced onto a Boston basemap from the map’s documented origin.',
+      'Built by `nuscenes_extract.py` from the login-gated v1.0-mini + CAN-bus expansion + map-expansion + lidarseg, with the LIDAR decimated to ~174k points and each return tagged with its semantic class.',
     ],
     dataSources: [
       {
@@ -522,22 +445,9 @@ export const DEMO_META: Record<string, DemoMeta> = {
       'Real Argoverse 2 sensor logs across six US cities — LIDAR, tracked 3D boxes, HD-map lanes, camera + telemetry.',
     techniqueTag: 'AV cockpit · real LIDAR',
     about: [
-      'These are real autonomous-vehicle logs from Argoverse 2 — ~16-second drives ' +
-        'captured by a 64-beam LIDAR rig with a full perception stack. One scene per ' +
-        'AV2 city ships (Pittsburgh, Miami, Austin, Detroit, Palo Alto, Washington DC); ' +
-        'switch between them in the cockpit. Every LIDAR return, every tracked car / ' +
-        'pedestrian / cyclist box, the HD map, and the ego pose are georeferenced from ' +
-        'each city’s coordinate frame (via the AV2 devkit’s exact CRS) onto a real ' +
-        'basemap and served as spatiotemporal tiles.',
-      'The cockpit at `/drive/argoverse-02678d04` composes the full stream set on one ' +
-        'shared playback clock: the accumulated LIDAR cloud (colored by height band), ' +
-        'the ego trail, tracked objects as oriented 3D boxes, the HD-map substrate ' +
-        '(lane boundaries + lane centerlines + drivable areas + crosswalks), a ' +
-        'ring-camera inset, and a telemetry gauge panel. Argoverse logs carry no CAN ' +
-        'bus, so speed / acceleration / yaw-rate / heading are DERIVED from the ego pose.',
-      'Built by `argoverse_extract.py` (driven by `argoverse_batch.sh`) from public ' +
-        'sensor logs pulled with no auth from the Argoverse AWS Open Data bucket; each ' +
-        'scene is decimated to ~190k LIDAR points and drops zero-point (occluded) GT boxes.',
+      'Real autonomous-vehicle logs from Argoverse 2 — ~16-second drives captured by a 64-beam LIDAR rig with a full perception stack. One scene per AV2 city ships (Pittsburgh, Miami, Austin, Detroit, Palo Alto, Washington DC); switch between them in the cockpit. Every LIDAR return, tracked car / pedestrian / cyclist box, the HD map, and the ego pose are georeferenced from each city’s coordinate frame (via the AV2 devkit CRS) onto a real basemap and served as spatiotemporal tiles.',
+      'The cockpit at `/drive/argoverse-02678d04` composes the full stream set on one playback clock: the accumulated LIDAR cloud (colored by height band), the ego trail, tracked objects as oriented 3D boxes, the HD-map substrate (lane boundaries + centerlines + drivable areas + crosswalks), a ring-camera inset, and a telemetry gauge panel. Argoverse logs carry no CAN bus, so speed / acceleration / yaw-rate / heading are derived from the ego pose.',
+      'Built by `argoverse_extract.py` (driven by `argoverse_batch.sh`) from public sensor logs pulled with no auth from the Argoverse AWS Open Data bucket; each scene is decimated to ~190k LIDAR points and drops zero-point (occluded) GT boxes.',
     ],
     dataSources: [
       {
@@ -568,26 +478,9 @@ export const DEMO_META: Record<string, DemoMeta> = {
       'Real Waymo Open Dataset perception scenes — 5-laser LIDAR, tracked 3D boxes with real velocity, camera + telemetry, across SF & Phoenix, day & night (+ rain).',
     techniqueTag: 'AV cockpit · real LIDAR',
     about: [
-      'These are real autonomous-vehicle segments from the Waymo Open Dataset — ' +
-        '~20-second drives captured by a 5-laser LIDAR rig (one 64-beam mid-range ' +
-        'top sensor + four short-range) and a full perception stack. Five curated ' +
-        'scenes ship — dense daytime San Francisco, daytime + night Phoenix, night ' +
-        'San Francisco, and a rare dawn/dusk RAIN scene — switchable in the cockpit. ' +
-        'Every LIDAR return, every tracked vehicle / pedestrian / cyclist box (with ' +
-        'Waymo’s real per-box velocity), and the ego pose are served as spatiotemporal tiles.',
-      'The cockpit at `/drive/waymo-sf-day` composes the streams on one shared ' +
-        'playback clock: the accumulated LIDAR cloud (colored by height band), the ego ' +
-        'trail, tracked objects as oriented 3D boxes with velocity arrows, a FRONT-camera ' +
-        'inset, and a telemetry gauge panel. Waymo Perception carries no CAN bus, so ' +
-        'speed / acceleration / yaw-rate / heading are DERIVED from the ego pose. Waymo ' +
-        'discloses no georeferencing and the v2.0.1 release ships no HD map, so each ' +
-        'scene is anchored to an approximate local frame on a neutral dark basemap — the ' +
-        'lidar itself is the map.',
-      'Built by `waymo_extract.py` (driven by `waymo_batch.sh`) from the *modular ' +
-        'Parquet* release (v2.0.1): the components are read with pyarrow and the LIDAR ' +
-        'range images are decoded to a point cloud in pure numpy — no TensorFlow / ' +
-        'waymo-open-dataset library. Each scene is decimated to ~400k LIDAR points and ' +
-        'drops zero-point (occluded) GT boxes.',
+      'Real autonomous-vehicle segments from the Waymo Open Dataset — ~20-second drives captured by a 5-laser LIDAR rig (one 64-beam mid-range top sensor + four short-range) and a full perception stack. Five curated scenes ship — daytime San Francisco, daytime and night Phoenix, night San Francisco, and one dawn/dusk rain scene — switchable in the cockpit. Every LIDAR return, tracked vehicle / pedestrian / cyclist box (with Waymo’s per-box velocity), and the ego pose are served as spatiotemporal tiles.',
+      'The cockpit at `/drive/waymo-sf-day` composes the streams on one playback clock: the accumulated LIDAR cloud (colored by height band), the ego trail, tracked objects as oriented 3D boxes with velocity arrows, a front-camera inset, and a telemetry gauge panel. Waymo Perception carries no CAN bus, so speed / acceleration / yaw-rate / heading are derived from the ego pose. Waymo discloses no georeferencing and the v2.0.1 release ships no HD map, so each scene is anchored to an approximate local frame on a neutral basemap.',
+      'Built by `waymo_extract.py` (driven by `waymo_batch.sh`) from the modular Parquet release (v2.0.1): the components are read with pyarrow and the LIDAR range images are decoded to a point cloud in pure numpy — no TensorFlow / waymo-open-dataset library. Each scene is decimated to ~400k LIDAR points and drops zero-point (occluded) GT boxes.',
     ],
     dataSources: [
       {
@@ -619,18 +512,9 @@ export const DEMO_META: Record<string, DemoMeta> = {
       'A real comma.ai dashcam drive — GPS path + live CAN-bus gauges on California I-280.',
     techniqueTag: 'AV cockpit · CAN telemetry',
     about: [
-      'comma.ai’s comma2k19 is 33 hours of real California highway driving logged from ' +
-        'a windshield device: GPS, a 9-axis IMU, the road camera, and every CAN-bus ' +
-        'message the car emits. This scene is one 60-second segment on I-280 between ' +
-        'San Francisco and San Jose — a steady ~76 mph cruise.',
-      'Unlike the LIDAR scenes, a comma log has no point cloud and no perception boxes, ' +
-        'so the cockpit at `/drive/comma-280-1641` shows the streams it does have: the ' +
-        'GPS ego trail on the map, the radial CAN gauges (speed, steering, acceleration) ' +
-        'reading the real telemetry at the playhead, and the road-camera frame. The ' +
-        'cockpit adapts to whatever streams a scene contains.',
-      'Built by `comma_extract.py` from the public comma2k19 HuggingFace mirror — one ' +
-        'segment’s ECEF poses (→ lat/lon), CAN speed / steering, and IMU acceleration. ' +
-        'No 10 GB chunk needed.',
+      'comma.ai’s comma2k19 is 33 hours of California highway driving logged from a windshield device: GPS, a 9-axis IMU, the road camera, and every CAN-bus message the car emits. This scene is one 60-second segment on I-280 between San Francisco and San Jose, a steady ~76 mph cruise.',
+      'Unlike the LIDAR scenes, a comma log has no point cloud and no perception boxes, so the cockpit at `/drive/comma-280-1641` shows the streams it has: the GPS ego trail, radial CAN gauges (speed, steering, acceleration) at the playhead, and the road-camera frame. The cockpit adapts to whatever streams a scene contains.',
+      'Built by `comma_extract.py` from the public comma2k19 HuggingFace mirror — one segment’s ECEF poses (→ lat/lon), CAN speed / steering, and IMU acceleration. No 10 GB chunk needed.',
     ],
     dataSources: [
       {
@@ -657,18 +541,8 @@ export const DEMO_META: Record<string, DemoMeta> = {
     tagline: 'Every taxi trip as an arc from where it began to where it ended.',
     techniqueTag: 'Arcs · OD flows',
     about: [
-      'A taxi trip is, at heart, a single origin→destination pair: a pickup ' +
-        'point, a dropoff point, and the time in between. This demo draws each ' +
-        'trip as an arc bowed between the two — no route, just the flow — and ' +
-        'animates them in and out as their pickup→dropoff intervals slide ' +
-        'under a 30-minute window. The arcs warm from cyan at the origin to ' +
-        'orange at the destination, so direction reads at a glance.',
-      'The geometry is the minimal case for the STT format: a 2-vertex ' +
-        'LineString per feature. `AnimatedArcLayer` derives instanced ' +
-        'source/target positions from the first and last vertex of each tile ' +
-        'feature, so no special arc tile type is needed. The data here is ' +
-        'synthetic (generated offline, no routing engine), but the same ' +
-        '`--od` generator builds real arcs from TLC trip records.',
+      'A taxi trip is an origin→destination pair: a pickup point, a dropoff point, and the time between. Each trip is drawn as an arc bowed between the two — no route — animated in and out as its pickup→dropoff interval passes through a 30-minute window. Arcs run cyan at the origin to orange at the destination, so direction is legible.',
+      'The geometry is the minimal case for the STT format: a 2-vertex LineString per feature. `AnimatedArcLayer` derives instanced source/target positions from the first and last vertex of each feature, so no special arc tile type is needed. The data here is synthetic (generated offline, no routing engine); the same `--od` generator builds real arcs from TLC trip records.',
     ],
     dataSources: [
       {
@@ -693,30 +567,12 @@ export const DEMO_META: Record<string, DemoMeta> = {
 
   'bixi-flowmap': {
     category: 'mobility',
-    tagline: 'A month of real Montréal BIXI trips as weighted flows that breathe with the commute.',
+    tagline: 'A month of real Montréal BIXI trips as an origin→destination flowmap, animated by hourly demand.',
     techniqueTag: 'Flowmap · OD matrix',
     about: [
-      'flowmap.gl popularized the origin→destination flowmap: one weighted ' +
-        'arrow per station-pair, node circles sized by total flow. This demo ' +
-        'gives it a fourth dimension — time. Every directed BIXI station-pair ' +
-        'for August 2024 carries an hourly trip-count time series, so corridors ' +
-        'swell and recede with demand as the playhead scrubs the month: ' +
-        'downtown fills on weekday mornings, the Plateau and the Lachine Canal ' +
-        'light up on summer evenings and weekends.',
-      'It reuses the same geometry-once / animate-from-a-matrix trick as the ' +
-        'taxi flow corridors: each OD pair is a single 2-vertex corridor ' +
-        'carrying a `[2 × buckets]` `vertexValueMatrix`. `FlowmapLayer` draws ' +
-        'it as a flowmap.gl-style **tapered arrow** (via `FlowLinesLayer`) — ' +
-        'width from the active bucket — and sums incident flow at each dock for ' +
-        'the node circles, so the tile loads once and only the playhead moves.',
-      'The per-zoom aggregation is baked into the tiles: the build clusters ' +
-        'stations into hubs per zoom (the same hierarchical clustering ' +
-        'flowmap.gl does at runtime, done once at build time), so low zooms ' +
-        'show a few fat hub-to-hub corridors and full per-station detail ' +
-        'returns as you zoom in. The data is real: ~1.9M trips from BIXI ' +
-        'Montréal open data, aggregated into directed OD corridors at hourly ' +
-        'resolution. No thinning — clustering AGGREGATES flow rather than ' +
-        'dropping it, and every hourly bucket is kept for every corridor.',
+      'flowmap.gl popularized the origin→destination flowmap: one weighted arrow per station-pair, node circles sized by total flow. This demo adds time. Every directed BIXI station-pair for August 2024 carries an hourly trip-count series, so arrow widths vary with demand as the playhead scrubs the month: downtown fills on weekday mornings, the Plateau and the Lachine Canal on summer evenings and weekends.',
+      'It uses the same geometry-once / animate-from-a-matrix approach as the taxi flow corridors: each OD pair is a single 2-vertex corridor carrying a `[2 × buckets]` `vertexValueMatrix`. `FlowmapLayer` draws it as a tapered arrow (via `FlowLinesLayer`), width from the active bucket, and sums incident flow at each dock for the node circles, so the tile loads once and only the playhead moves.',
+      'Per-zoom aggregation is baked into the tiles: the build clusters stations into hubs per zoom (the hierarchical clustering flowmap.gl does at runtime, done once at build time), so low zooms show a few hub-to-hub corridors and full per-station detail returns as you zoom in. ~1.9M trips from BIXI Montréal open data, aggregated into directed OD corridors at hourly resolution. No thinning — clustering aggregates flow rather than dropping it, and every hourly bucket is kept for every corridor.',
     ],
     dataSources: [
       {
@@ -754,32 +610,12 @@ export const DEMO_META: Record<string, DemoMeta> = {
 
   'bixi-flowmap-bundled': {
     category: 'mobility',
-    tagline: 'The BIXI flowmap, with close corridors relaxed into smooth rivers on the GPU.',
+    tagline: 'The BIXI flowmap with close corridors bundled into rivers on the GPU (KDEEB).',
     techniqueTag: 'GPU edge bundling · KDEEB',
     about: [
-      'The origin→destination flowmap has a clutter problem: at an overview ' +
-        'zoom, hundreds of station-pair arrows cross into an unreadable hairball. ' +
-        'Edge bundling is the classic fix — pull geometrically-close flows ' +
-        'together so corridors heading the same way merge into smooth rivers. ' +
-        'This demo runs kernel-density edge bundling (KDEEB; Hurter & Telea ' +
-        '2012) entirely on the GPU.',
-      'KDEEB is the method behind the smooth bundles in the classic figures: ' +
-        'each iteration splats every edge point into a density texture, then ' +
-        'advects the points up the density gradient (toward where neighbouring ' +
-        'edges already are — mean-shift), resamples, and runs a 1D Laplacian ' +
-        'smoothing pass that removes the zig-zags. The kernel shrinks each ' +
-        'iteration to tighten the bundles. It all lives in float textures with ' +
-        'ping-pong render passes — the same texture-as-memory trick cosmos.gl ' +
-        'uses — so the geometry never round-trips through the CPU, and you can ' +
-        'watch the straight arrows settle into rivers over the first ~15 frames.',
-      'It reuses the exact same BIXI tiles as the unbundled flowmap — bundling ' +
-        'is purely client-side, no separate build. The bundle is a stable ' +
-        'spatial skeleton, computed once per tile and kept resident on the GPU; ' +
-        'only each ribbon’s WIDTH animates with the hourly demand, sampled ' +
-        'on the GPU from the per-corridor vertexValueMatrix. Direction reads ' +
-        'from the source→target color gradient along each river. On a device ' +
-        'that can’t additively blend into a float texture it falls back to ' +
-        'straight arrows.',
+      'At an overview zoom, hundreds of station-pair arrows overlap into an unreadable tangle. Edge bundling is the standard fix: pull geometrically-close flows together so corridors heading the same way merge. This demo runs kernel-density edge bundling (KDEEB; Hurter & Telea 2012) entirely on the GPU.',
+      'Each iteration splats every edge point into a density texture, advects the points up the density gradient (mean-shift toward neighbouring edges), resamples, and runs a 1D Laplacian smoothing pass. The kernel shrinks each iteration to tighten the bundles. It runs in float textures with ping-pong render passes, so the geometry never round-trips through the CPU and the bundling converges over the first ~15 frames.',
+      'It reuses the same BIXI tiles as the unbundled flowmap — bundling is client-side, no separate build. The bundle is computed once per tile and kept on the GPU; only each ribbon’s width animates with hourly demand, sampled from the per-corridor vertexValueMatrix. Direction reads from the source→target color gradient. On a device that can’t additively blend into a float texture it falls back to straight arrows.',
     ],
     dataSources: [
       {
@@ -815,31 +651,12 @@ export const DEMO_META: Record<string, DemoMeta> = {
   },
   'bixi-flowmap-baked': {
     category: 'mobility',
-    tagline: 'The same edge bundling, but BAKED into the tiles at build time.',
+    tagline: 'The same edge bundling, baked into the tiles at build time.',
     techniqueTag: 'Baked edge bundling · KDEEB',
     about: [
-      'Edge bundling untangles a flowmap by pulling geometrically-close ' +
-        'corridors into smooth rivers. The sister demo runs that on the GPU at ' +
-        'render time; this one moves the entire computation into the build. A ' +
-        'deterministic CPU port of KDEEB (Hurter & Telea 2012) bundles each ' +
-        'zoom’s corridors once and writes the resulting rivers into the tiles as ' +
-        'ordinary multi-vertex polylines — so the client just draws the curve.',
-      'The key constraint is that bundling is a GLOBAL operation: the river a ' +
-        'corridor joins depends on the whole edge set, so bundling tile-local ' +
-        'subsets independently would seam. The generator sidesteps this by ' +
-        'bundling each zoom’s complete clustered hub-pair set with one density ' +
-        'field, then emitting whole (un-clipped) corridors banded to that single ' +
-        'zoom — the same per-zoom clustering the flowmap already bakes, now with ' +
-        'the geometry pre-relaxed. Determinism matters because the packs are ' +
-        'content-addressed: KDEEB uses a uniform (non-random) step and a pinned ' +
-        'density resolution, so a rebuild is byte-identical.',
-      'What you trade vs the live GPU demo: the bundle is fixed at build time ' +
-        '(no interactive kernel tuning). What you gain: no per-frame relaxation ' +
-        'and no settling animation, a bundle that’s stable as you pan and zoom, ' +
-        'reproducible output, and — because there’s no density splat — no ' +
-        '`EXT_float_blend` requirement, so it renders on mobile GPUs the live ' +
-        'bundler falls back on. Ribbon WIDTH still animates from the hourly ' +
-        'vertexValueMatrix exactly as before.',
+      'Edge bundling merges geometrically-close corridors. The sister demo runs it on the GPU at render time; this one moves the whole computation into the build. A deterministic CPU port of KDEEB (Hurter & Telea 2012) bundles each zoom’s corridors once and writes the result into the tiles as multi-vertex polylines, so the client just draws the curve.',
+      'Bundling is a global operation: the bundle a corridor joins depends on the whole edge set, so bundling tile-local subsets independently would seam. The generator bundles each zoom’s complete clustered hub-pair set with one density field, then emits whole (un-clipped) corridors banded to that zoom — the same per-zoom clustering the flowmap bakes, with the geometry pre-bundled. Determinism matters because the packs are content-addressed: KDEEB uses a uniform (non-random) step and a pinned density resolution, so a rebuild is byte-identical.',
+      'Trade-off vs the live GPU demo: the bundle is fixed at build time (no interactive kernel tuning). In exchange: no per-frame relaxation, a bundle stable as you pan and zoom, reproducible output, and no `EXT_float_blend` requirement, so it renders on mobile GPUs where the live bundler falls back. Ribbon width still animates from the hourly vertexValueMatrix.',
     ],
     dataSources: [
       {
@@ -884,23 +701,11 @@ export const DEMO_META: Record<string, DemoMeta> = {
 
   'bixi-streets': {
     category: 'mobility',
-    tagline: 'A month of BIXI trips routed onto Montréal’s bike network — the cycleways riders actually use, lit by the hourly commute.',
+    tagline: 'A month of BIXI trips routed onto Montréal’s bike network, per-hour ridership shaded onto each segment.',
     techniqueTag: 'Streets · pre-aggregated · gradient',
     about: [
-      'The street-network companion to the BIXI flowmap: instead of straight ' +
-        'origin→destination arcs, every trip is routed through OSRM on Montréal’s ' +
-        'actual BICYCLE network — cycleways, the REV, the Lachine Canal path, and ' +
-        'shared streets — and its per-hour ridership is baked onto each road ' +
-        'segment. The gradient shades each corridor by how many riders rolled ' +
-        'over it, so quiet side streets stay dim indigo while de Maisonneuve and ' +
-        'the REV burn white-hot at rush hour.',
-      'It reuses the taxi-flow corridor pipeline end to end: OD pairs are routed ' +
-        'once (not per trip — counts already collapse millions of trips onto a ' +
-        'bounded pair set), each routed segment is matched back to its OSM edge, ' +
-        'and traversals accumulate per edge × per hour into one corridor feature ' +
-        'carrying a per-vertex value matrix. The build attaches a road-class ' +
-        '`min_zoom` so major arteries show in the overview and every cycleway ' +
-        'fills in on zoom-in. No thinning — aggregation IS the visualization.',
+      'The street-network companion to the BIXI flowmap: instead of straight origin→destination arcs, every trip is routed through OSRM on Montréal’s bicycle network — cycleways, the REV, the Lachine Canal path, shared streets — and its per-hour ridership is aggregated onto each road segment. The gradient shades each corridor by rider count, from dim side streets to bright arterials like de Maisonneuve and the REV at rush hour.',
+      'It reuses the taxi-flow corridor pipeline end to end: OD pairs are routed once (counts already collapse millions of trips onto a bounded pair set), each routed segment is matched back to its OSM edge, and traversals accumulate per edge × per hour into one corridor feature carrying a per-vertex value matrix. The build attaches a road-class `min_zoom` so major arterials show in the overview and cycleways fill in on zoom-in. No thinning — aggregation is the visualization.',
     ],
     dataSources: [
       {
@@ -937,22 +742,11 @@ export const DEMO_META: Record<string, DemoMeta> = {
 
   'bixi-streets-flow': {
     category: 'mobility',
-    tagline: 'The BIXI street network with direction: marching chevrons flow along each cycleway the way riders actually go.',
+    tagline: 'The BIXI street network with direction: chevrons march along each cycleway toward the dominant travel direction.',
     techniqueTag: 'Streets · directional · chevrons',
     about: [
-      'The directional cut of the BIXI street network. The heatmap sibling shades ' +
-        'each corridor by how many riders rolled over it but says nothing about ' +
-        'which WAY they went; this build keeps that per-hour brightness and adds ' +
-        'flow. As trips route onto the bike network, each street edge tracks its ' +
-        'net travel direction, and every corridor is pre-oriented toward the ' +
-        'direction most riders take over the month.',
-      'On top of the value matrix (which still pulses each corridor’s brightness ' +
-        'with the hourly commute), a ChevronFlowExtension slides arrowhead ' +
-        'chevrons along each segment in that dominant direction — a pure ' +
-        'fragment-shader overlay driven by the same playhead, so the geometry ' +
-        'still loads once and only a single phase uniform moves per frame. The ' +
-        'REV, de Maisonneuve and the canal path read as rivers with a current: ' +
-        'you see the tide of the city, not just its heat.',
+      'The directional cut of the BIXI street network. The heatmap sibling shades each corridor by rider count but not direction; this build keeps that per-hour brightness and adds direction. As trips route onto the bike network, each street edge tracks its net travel direction, and every corridor is pre-oriented toward the direction most riders take over the month.',
+      'On top of the value matrix (which varies each corridor’s brightness with the hourly demand), a ChevronFlowExtension slides arrowhead chevrons along each segment in that direction — a fragment-shader overlay driven by the same playhead, so the geometry loads once and only a single phase uniform moves per frame. The REV, de Maisonneuve and the canal path read as directed flows, not just intensity.',
     ],
     dataSources: [
       {
@@ -989,23 +783,11 @@ export const DEMO_META: Record<string, DemoMeta> = {
 
   'bixi-corridors': {
     category: 'mobility',
-    tagline:
-      'BIXI trips bundled into a coherent, Sankey-like flow network — little lines merge onto shared trunks that breathe with the hourly commute.',
+    tagline: 'BIXI trips bundled into a Sankey-like flow network — origin→destination lines merge onto shared trunks, widths animated by hourly demand.',
     techniqueTag: 'Flow network · Edge-Path Bundling · breathing width',
     about: [
-      'The coherent answer to edge bundling. Force-directed bundling smears a ' +
-        'thousand origin→destination lines into an abstract blob you can’t trace. ' +
-        'Here the flows MERGE instead of smear: stations cluster into hubs joined by ' +
-        'a Delaunay proximity graph, and every trip is routed along the graph’s ' +
-        'shortest path with cost length^k, so flows heading the same way collapse ' +
-        'onto shared TRUNK LINES. The result is a Sankey-like network — little ' +
-        'tributaries enter one big line, ride it, and leave — with no street snap.',
-      'Width is the message: each trunk’s thickness is the √ of the active hour’s ' +
-        'travellers, so trunks swell where flows join at 8am and thin overnight. The ' +
-        'two directions are kept separate and drawn as side-by-side offset ribbons, ' +
-        'so the morning core-bound rush and the evening reverse appear as visibly ' +
-        'asymmetric flows. Fully build-time and deterministic — no GPU bundler, no ' +
-        'OSRM, no thinning.',
+      'An alternative to density edge bundling. Here flows merge rather than smear: stations cluster into hubs joined by a Delaunay proximity graph, and every trip is routed along the graph’s shortest path with cost length^k, so flows heading the same way collapse onto shared trunk lines. The result is a Sankey-like network — tributaries enter a trunk, ride it, and leave — with no street snapping.',
+      'Each trunk’s width is the √ of the active hour’s travellers, so trunks widen where flows join in the morning peak and thin overnight. The two directions are drawn as side-by-side offset ribbons, so the morning inbound rush and the evening reverse read as asymmetric flows. Fully build-time and deterministic — no GPU bundler, no OSRM, no thinning.',
     ],
     dataSources: [
       {
@@ -1038,23 +820,11 @@ export const DEMO_META: Record<string, DemoMeta> = {
 
   'bixi-points': {
     category: 'mobility',
-    tagline:
-      'Every BIXI ride as a dot gliding along the real bike network — one glowing cyclist per active trip.',
+    tagline: 'Every BIXI ride as a moving dot along its real OSRM-routed bike route — one per active trip.',
     techniqueTag: 'Moving heads',
     about: [
-      'The moving-head companion to the BIXI street and flow demos. Instead of ' +
-        'aggregating trips into corridors, each individual ride is routed once ' +
-        'through OSRM on Montréal’s actual BICYCLE network and drawn as a single ' +
-        'dot interpolated along its route at the playhead — so you watch real ' +
-        'cyclists thread the cycleways, the REV and the Lachine Canal path as the ' +
-        'day’s commute ebbs and flows.',
-      'It is the BIXI counterpart of the NYC taxi head-dots: the build emits one ' +
-        'OSRM-routed LineString per trip with per-vertex timestamps (the per-edge ' +
-        'duration shape stretched onto each ride’s real start→end window), and ' +
-        'AnimatedTripHeadsLayer interpolates each head every frame from that ' +
-        'geometry. No separate points dataset — the same archive can also render ' +
-        'as flowing trails. Identical dock pairs are routed once and re-timed per ' +
-        'trip, so a whole day animates from a bounded set of routes.',
+      'The moving-head companion to the BIXI street and flow demos. Instead of aggregating trips into corridors, each ride is routed once through OSRM on Montréal’s bicycle network and drawn as a single dot interpolated along its route at the playhead — one moving cyclist per active trip along the cycleways, the REV and the Lachine Canal path.',
+      'It is the BIXI counterpart of the NYC taxi head-dots: the build emits one OSRM-routed LineString per trip with per-vertex timestamps (the per-edge duration shape stretched onto each ride’s start→end window), and AnimatedTripHeadsLayer interpolates each head every frame. No separate points dataset — the same archive can also render as trails. Identical dock pairs are routed once and re-timed per trip, so a whole day animates from a bounded set of routes.',
     ],
     dataSources: [
       {
@@ -1089,29 +859,121 @@ export const DEMO_META: Record<string, DemoMeta> = {
     related: ['nyc-taxi-points', 'bixi-streets', 'bixi-flowmap'],
   },
 
-  'bixi-live': {
+  'gtfs-nl': {
     category: 'mobility',
     tagline:
-      'Directional street-flow + moving riders on one clock — the corridors light with the commute while thousands of bikes stream through them.',
+      'Every scheduled train, bus, tram, metro and ferry in the Netherlands for one Friday — 121,031 journeys moving on the national timetable.',
+    techniqueTag: 'Moving heads · schedule expansion',
+    about: [
+      'A whole country’s public transport as one animated timetable, at national scale. Every vehicle scheduled for Friday 2026-07-03 is a dot moving along its real route: intercity trains across the Randstad, night buses after midnight, ferries to the Wadden islands.',
+      'No vehicle positions are recorded — the static GTFS feed is the data. The build expands the service calendar to one concrete day, then places each trip along its published route shape by matching the stop-time distances (`shape_dist_traveled`), interpolating per-vertex timestamps between consecutive stops (dwell included). 97.5% of trips carry exact shape-distance timing; the rest (shapeless trips) fall back to stop-to-stop lines.',
+      'The archive holds all 121,031 trips with per-vertex timing; AnimatedTripHeadsLayer interpolates every active vehicle per frame. Zoom into Amsterdam or Utrecht Centraal at rush hour for dense platform activity, or zoom out for the whole network.',
+    ],
+    dataSources: [
+      {
+        name: 'OVapi / NDOV — Netherlands national GTFS',
+        url: 'https://gtfs.ovapi.nl/nl/',
+        license: 'CC0',
+        note: 'Complete national timetable (42 agencies incl. NS, all city transit); refreshed daily.',
+      },
+    ],
+    buildCommand:
+      'stt-generate gtfs --feed data/gtfs-nl/feed --date 20260703 \\\n' +
+      '  --output examples/showcase/public/data/gtfs-nl',
+    buildNote:
+      'Download + unzip https://gtfs.ovapi.nl/nl/gtfs-nl.zip first; the feed ' +
+      'refreshes daily and only covers its published window, so pick a --date ' +
+      'inside it. The build prints the exact archive time span to paste into ' +
+      'the dataset’s `timeRange`.',
+    techniques: [
+      { label: 'AnimatedTripHeadsLayer', docPath: '/docs/api/animated-trip-heads-layer' },
+      { label: 'TimeController', docPath: '/docs/api/time-controller' },
+    ],
+    related: ['bixi-points', 'nyc-taxi-points'],
+  },
+
+  'nwm-rivers-2019': {
+    category: 'earth-ocean',
+    tagline: 'The continental river network through the 2019 flood year — modeled daily discharge on every order-4+ reach.',
+    techniqueTag: 'Flow matrix · zoom-banded network',
+    about: [
+      'NOAA’s National Water Model simulates hourly streamflow for 2.7 million river reaches across the continental US. This demo reduces the 2019 retrospective to daily means and bakes it onto the USGS NHDPlus river network as a per-vertex × per-day value matrix — the bixi-streets recipe at continental scale. Brightness is absolute discharge on a log ramp, from dim creeks to the bright Mississippi.',
+      'The network itself is zoom-banded by Strahler stream order: the CONUS overview carries only order-6+ mainstems (merged into long runs along NHDPlus LevelPath/Hydroseq and resampled to ~2 px vertex spacing), and each zoom step adds smaller tributaries down to order 4 at z8. Geometry loads once per tile; playback is pure bucket selection, so scrubbing a year of national hydrology re-fetches nothing.',
+      'The spring snowmelt pulse moves down the Missouri and upper Mississippi in March; 2019 was the wettest year on record across much of the basin.',
+    ],
+    dataSources: [
+      {
+        name: 'NOAA National Water Model v3.0 retrospective (1979–2023)',
+        url: 'https://registry.opendata.aws/nwm-archive/',
+        license: 'US Government open data — no restrictions',
+        note: 'Hourly modeled streamflow, reduced here to daily means. This demo is a derived product, not original NOAA data.',
+      },
+      {
+        name: 'USGS NHDPlusV2 flowline network',
+        url: 'https://www.epa.gov/waterdata/nhdplus-national-data',
+        license: 'US public domain',
+        note: 'Reach geometry, stream order and mainstem topology (COMID join to NWM feature_id).',
+      },
+    ],
+    buildCommand:
+      'stt-generate nwm --window 2019 --bin 1d --value log-q \\\n' +
+      '  --output examples/showcase/public/data/nwm-rivers-2019',
+    buildNote:
+      'Downloads ~11 GB of Zarr chunks from the NWM S3 bucket on first run ' +
+      '(cached + resumable under data/nwm/); needs the NHDPlus flowline ' +
+      'GeoParquet exported by scripts/data-generation (see the design doc ' +
+      'docs/roadmap/nwm-rivers-demo-2026-07.md).',
+    techniques: [
+      { label: 'FlowCorridorLayer', docPath: '/docs/api/flow-corridor-layer' },
+      { label: 'TimeController', docPath: '/docs/api/time-controller' },
+    ],
+    related: ['nwm-rivers-flood-2019-03', 'bixi-streets'],
+  },
+
+  'nwm-rivers-flood-2019-03': {
+    category: 'earth-ocean',
+    tagline:
+      'The March 2019 bomb-cyclone flood hour by hour — every reach colored by how far above its own normal it runs.',
+    techniqueTag: 'Flow matrix · anomaly encoding',
+    about: [
+      'The hourly companion to the year-of-flow demo, scoped to March 2019 — the bomb cyclone that dropped rain on frozen snowpack and produced major flooding across Nebraska, Iowa and the Missouri basin. Same network and matrix machinery, but each reach is colored by log2(flow ÷ its own 2019 median): an anomaly encoding, not absolute discharge.',
+      'The anomaly encoding is what makes the flood legible. On an absolute ramp the Mississippi always dominates; on the anomaly ramp a creek running fifty times its normal flow reads as bright as a mainstem. Normal flow is dim blue, high water yellow to orange, the extreme crest white as it propagates downstream over days.',
+      'The per-reach medians come from the year demo’s daily reduce, so the two demos share their download cache and geometry pipeline end to end.',
+    ],
+    dataSources: [
+      {
+        name: 'NOAA National Water Model v3.0 retrospective (1979–2023)',
+        url: 'https://registry.opendata.aws/nwm-archive/',
+        license: 'US Government open data — no restrictions',
+        note: 'Hourly modeled streamflow for March 2019. This demo is a derived product, not original NOAA data.',
+      },
+      {
+        name: 'USGS NHDPlusV2 flowline network',
+        url: 'https://www.epa.gov/waterdata/nhdplus-national-data',
+        license: 'US public domain',
+      },
+    ],
+    buildCommand:
+      'stt-generate nwm --window 2019-03 --bin 1h --value log-anomaly \\\n' +
+      '  --output examples/showcase/public/data/nwm-rivers-flood-2019-03',
+    buildNote:
+      'Run the nwm-rivers-2019 build first — the anomaly’s per-reach medians ' +
+      'come from its cached daily reduce (then this build reuses every chunk).',
+    techniques: [
+      { label: 'FlowCorridorLayer', docPath: '/docs/api/flow-corridor-layer' },
+      { label: 'TimeController', docPath: '/docs/api/time-controller' },
+    ],
+    related: ['nwm-rivers-2019', 'storm-radar'],
+  },
+
+  'bixi-live': {
+    category: 'mobility',
+    tagline: 'Directional street-flow and moving riders on one clock: aggregate corridors under individual rides.',
     techniqueTag: 'Composite · directional flow + moving heads',
     about: [
-      'A composite that layers two of the BIXI demos on a single playhead. ' +
-        'Underneath is the directional street-network flow: every cycleway ' +
-        'segment pre-oriented toward its dominant travel direction, with marching ' +
-        'chevrons showing which way riders go and brightness pulsing with the ' +
-        'hour’s ridership. On top, every individual ride from that day glides as a ' +
-        'moving dot along its real OSRM-routed path — one bike per active trip.',
-      'It reuses two already-built archives with no third build: the light, ' +
-        'static-geometry flow-corridor archive (the `bixi-streets-flow` matrix) is ' +
-        'the primary source that gates the clock, and the heavier per-trip paths ' +
-        'archive (`bixi-points`) rides on top as an OPTIONAL governor source — it ' +
-        'streams in continue-and-degrade so the substrate is instant and the riders ' +
-        'fill in. Both are windowed to Thursday 2024-08-15, so the aggregate flow ' +
-        'and the individual rides tell the same day’s story: watch the morning peak ' +
-        'brighten the corridors as the dots surge through them, then ebb by midday.',
-      'The overlay is fully general — any `type: \'trips\'` flow demo gains moving ' +
-        'heads by setting `headsOverlayUrl` to a per-trip paths archive; the ' +
-        'painter order keeps the corridors as a backdrop and the riders on top.',
+      'A composite that layers two BIXI demos on a single playhead. Underneath is the directional street-network flow: every cycleway segment pre-oriented toward its dominant direction, with chevrons showing which way riders go and brightness following the hour’s ridership. On top, every ride from that day moves as a dot along its real OSRM-routed path — one bike per active trip.',
+      'It reuses two already-built archives with no third build: the light, static-geometry flow-corridor archive (the `bixi-streets-flow` matrix) is the primary source that gates the clock; the heavier per-trip paths archive (`bixi-points`) rides on top as an optional governor source, streaming in continue-and-degrade so the substrate is instant and the riders fill in. Both are windowed to Thursday 2024-08-15, so the aggregate flow and the individual rides stay on the same day.',
+      'The overlay is fully general — any `type: \'trips\'` flow demo gains moving heads by setting `headsOverlayUrl` to a per-trip paths archive; the painter order keeps the corridors as a backdrop and the riders on top.',
     ],
     dataSources: [
       {
@@ -1153,18 +1015,8 @@ export const DEMO_META: Record<string, DemoMeta> = {
     tagline: 'Trip density binned into CARTO Quadbin square cells, extruded by count.',
     techniqueTag: 'Quadbin summary · square cells',
     about: [
-      'The summary tier is how STT renders a dataset too dense to draw ' +
-        'feature-by-feature: the build step aggregates points into cells and ' +
-        'ships one row per cell. This demo uses the CARTO Quadbin scheme — a ' +
-        'Z/X/Y square-cell grid — as the square-grid counterpart to the H3 ' +
-        'hex summary. Each cell is extruded by the number of pickup/dropoff ' +
-        'points that fall inside it, so Midtown rises into a block of towers.',
-      'The whole chain is STT-native: the Rust `stt-build --summary-tier ' +
-        'quadbin` aggregator encodes each cell as a CARTO Quadbin u64, and ' +
-        '`QuadbinSummaryLayer` decodes it to a quadkey for deck.gl’s ' +
-        'QuadkeyLayer. The tileset dispatches to the aggregated tier inside ' +
-        'its zoom band automatically — zoom in past it and the raw points ' +
-        'take over.',
+      'The summary tier renders a dataset too dense to draw feature-by-feature: the build aggregates points into cells and ships one row per cell. This demo uses the CARTO Quadbin scheme — a Z/X/Y square-cell grid — as the counterpart to the H3 hex summary. Each cell is extruded by the number of pickup/dropoff points inside it, so Midtown rises highest.',
+      'The whole chain is STT-native: the Rust `stt-build --summary-tier quadbin` aggregator encodes each cell as a CARTO Quadbin u64, and `QuadbinSummaryLayer` decodes it to a quadkey for deck.gl’s QuadkeyLayer. The tileset dispatches to the aggregated tier inside its zoom band automatically — zoom in past it and the raw points take over.',
     ],
     dataSources: [
       {
@@ -1194,13 +1046,8 @@ export const DEMO_META: Record<string, DemoMeta> = {
     tagline: 'Four Atlantic seasons of storm tracks from the IBTrACS best-track archive.',
     techniqueTag: 'Points · tracks',
     about: [
-      'The IBTrACS archive merges every agency’s storm observations into a ' +
-        'single best-track record. This demo plays the Atlantic basin from ' +
-        '2020 through 2023 — including the record-breaking 2020 season, which ' +
-        'exhausted the storm-name alphabet and pushed into the Greek letters.',
-      'Each storm advances as a chain of 6-hourly fixes sweeping westward off ' +
-        'Africa, curving up through the Caribbean and along the US seaboard. A ' +
-        'two-week window keeps whole storm lifecycles on screen at once.',
+      'The IBTrACS archive merges every agency’s storm observations into a single best-track record. This demo plays the Atlantic basin from 2020 through 2023 — including the record-breaking 2020 season, which exhausted the storm-name alphabet and pushed into the Greek letters.',
+      'Each storm advances as a chain of 6-hourly fixes moving westward off Africa, then curving up through the Caribbean and along the US seaboard. A two-week window keeps whole storm lifecycles on screen at once.',
     ],
     dataSources: [
       {
@@ -1222,14 +1069,8 @@ export const DEMO_META: Record<string, DemoMeta> = {
     tagline: 'US wildfire perimeters over four seasons, polygons sized by burn severity.',
     techniqueTag: 'Polygons · temporal',
     about: [
-      'Final fire perimeters for every US wildfire over 1,000 acres from 2020 ' +
-        'through 2023, from the National Interagency Fire Center. The 2020 ' +
-        'season alone reads as a wall of flame down the West Coast — the ' +
-        'August Complex, the first "gigafire" of the modern record, burned ' +
-        'over a million acres.',
-      'Unlike the point demos, these are real polygon geometries: perimeters ' +
-        'are pre-tessellated at build time and stream in as GPU-ready ' +
-        'triangles, colored by severity class from moderate to catastrophic.',
+      'Final fire perimeters for every US wildfire over 1,000 acres from 2020 through 2023, from the National Interagency Fire Center. The 2020 season fills the West Coast — the August Complex, the first "gigafire" of the modern record, burned over a million acres.',
+      'Unlike the point demos, these are real polygon geometries: perimeters are pre-tessellated at build time and stream in as GPU-ready triangles, colored by severity class from moderate to catastrophic.',
     ],
     dataSources: [
       {
@@ -1249,18 +1090,11 @@ export const DEMO_META: Record<string, DemoMeta> = {
   // ── Mobility ─────────────────────────────────────────────────────────────
   'ship-traffic': {
     category: 'mobility',
-    tagline: '16,000 vessels over 24 hours — AIS pings with comet wakes tracing the shipping lanes.',
+    tagline: '16,000 vessels over 24 hours of AIS pings, each with a 30-minute comet wake.',
     techniqueTag: 'Points · wake trails',
     about: [
-      'Every AIS transponder ping in US waters over one January day in 2023: ' +
-        'nearly sixteen thousand vessels, from container ships threading the ' +
-        'Houston Ship Channel to fishing fleets working the Gulf and ferries ' +
-        'crossing Puget Sound.',
-      'Each vessel renders as a world-space dot with a 30-minute comet wake — ' +
-        'past pings fade and shrink behind the moving head, so shipping lanes ' +
-        'emerge as braided streams without drawing a single line geometry. ' +
-        'Dots are sized in meters, not pixels: zoom into a harbor and vessels ' +
-        'grow to their physical footprint.',
+      'Every AIS transponder ping in US waters over one January day in 2023: nearly sixteen thousand vessels, from container ships in the Houston Ship Channel to fishing fleets in the Gulf and ferries on Puget Sound.',
+      'Each vessel is a world-space dot with a 30-minute comet wake — past pings fade and shrink behind the moving head, so shipping lanes emerge without any line geometry. Dots are sized in meters, not pixels: zoom into a harbor and vessels grow to their physical footprint.',
     ],
     dataSources: [
       {
@@ -1283,14 +1117,8 @@ export const DEMO_META: Record<string, DemoMeta> = {
     tagline: 'A day of US air traffic — aircraft positions with 5-minute contrails, lifted by altitude.',
     techniqueTag: 'Points · 3D · wake trails',
     about: [
-      'Twenty-four hours of aircraft positions over the United States from ' +
-        'the OpenSky Network’s crowdsourced ADS-B receivers. The morning ' +
-        'east-coast departure banks, the transcontinental flows, and the ' +
-        'red-eye lull all play out in about a minute.',
-      'Each aircraft is a point lifted to its actual altitude (pitch the ' +
-        'camera to see the vertical structure of the airways) trailing a ' +
-        'five-minute contrail — at jet speeds that wake stretches roughly ' +
-        '75 km, painting the route structure without any line geometry.',
+      'Twenty-four hours of aircraft positions over the United States from the OpenSky Network’s crowdsourced ADS-B receivers. The morning east-coast departures, the transcontinental flows, and the overnight lull play out in about a minute.',
+      'Each aircraft is a point lifted to its actual altitude (pitch the camera to see the vertical structure of the airways), trailing a five-minute contrail — at jet speeds that wake is roughly 75 km long, showing route structure without any line geometry.',
     ],
     dataSources: [
       {
@@ -1314,13 +1142,8 @@ export const DEMO_META: Record<string, DemoMeta> = {
     tagline: 'The same day of air traffic as full 3-D trajectories with fading trails.',
     techniqueTag: 'Trips · 3D',
     about: [
-      'The companion to the flights demo: the same day of OpenSky traffic, ' +
-        'but rendered as continuous 3-D trajectories rather than discrete ' +
-        'pings. Each flight is a line through space and time — climb-out, ' +
-        'cruise, and descent read as geometry when you pitch the camera.',
-      'Trip lines interpolate the playhead position along per-vertex ' +
-        'timestamps, so aircraft glide smoothly between observations with a ' +
-        'two-minute trail fading behind each one.',
+      'The companion to the flights demo: the same day of OpenSky traffic, rendered as continuous 3-D trajectories rather than discrete pings. Each flight is a line through space and time — climb-out, cruise, and descent read as geometry when you pitch the camera.',
+      'Trip lines interpolate the playhead position along per-vertex timestamps, so aircraft move smoothly between observations with a two-minute trail behind each one.',
     ],
     dataSources: [
       {
@@ -1341,19 +1164,11 @@ export const DEMO_META: Record<string, DemoMeta> = {
 
   'nyc-taxi-trips': {
     category: 'mobility',
-    tagline: 'Half a million OSRM-routed cab trips animated on the GPU as flowing ribbons.',
+    tagline: 'Half a million OSRM-routed cab trips animated on the GPU as trails.',
     techniqueTag: 'Animated trails',
     about: [
-      'Every yellow-cab trip from New Year’s Day 2015, routed through the ' +
-        'actual Manhattan street network with OSRM so each trip follows real ' +
-        'streets — not straight pickup-to-dropoff lines. Per-segment timing ' +
-        'comes from OSRM’s duration annotations, so cabs slow through ' +
-        'midtown and sprint up the FDR.',
-      'Animation runs entirely on the GPU: every vertex carries a timestamp, ' +
-        'and a time-filter shader fades each ribbon in over the trailing ' +
-        'window as the playhead advances — so half a million trips animate by ' +
-        'updating one uniform, with no per-frame CPU work. The cyan ribbons ' +
-        'fade toward their tails like long-exposure headlights.',
+      'Every yellow-cab trip from New Year’s Day 2015, routed through the Manhattan street network with OSRM so each trip follows real streets rather than straight pickup-to-dropoff lines. Per-segment timing comes from OSRM’s duration annotations, so cabs are slower through midtown and faster on the FDR.',
+      'Animation runs entirely on the GPU: every vertex carries a timestamp, and a time-filter shader fades each trail in over the trailing window as the playhead advances — so half a million trips animate by updating one uniform, with no per-frame CPU work. The cyan trails fade toward their tails.',
     ],
     dataSources: [
       {
@@ -1381,17 +1196,11 @@ export const DEMO_META: Record<string, DemoMeta> = {
 
   'nyc-taxi-points': {
     category: 'mobility',
-    tagline: 'The same routed trips as moving head-dots — one glowing cab per active trip.',
+    tagline: 'The same routed trips as moving head-dots — one cab per active trip.',
     techniqueTag: 'Moving heads',
     about: [
-      'The same OSRM-routed trip archive as the ribbons demo, rendered as ' +
-        'animated head positions instead of trails: one moving dot per active ' +
-        'cab, interpolated along its route at the playhead. At street zoom the ' +
-        'dots flow through the grid like blood cells through capillaries.',
-      'No separate "points" dataset exists — each cab’s head position is ' +
-        'interpolated from the full trip geometry every frame and drawn as a ' +
-        'plain circle, so both this demo and the ribbons read from the ' +
-        'identical archive. One build, two renderings.',
+      'The same OSRM-routed trip archive as the trails demo, rendered as animated head positions instead of trails: one moving dot per active cab, interpolated along its route at the playhead. At street zoom the dots move through the grid.',
+      'No separate "points" dataset exists — each cab’s head position is interpolated from the full trip geometry every frame and drawn as a circle, so this demo and the trails demo read from the same archive. One build, two renderings.',
     ],
     dataSources: [
       {
@@ -1418,19 +1227,11 @@ export const DEMO_META: Record<string, DemoMeta> = {
 
   'nyc-taxi-flows': {
     category: 'mobility',
-    tagline: 'The street grid pulsing with taxi volume — trips pre-aggregated into 15-minute corridor flows.',
+    tagline: 'Taxi volume pre-aggregated into 15-minute road-corridor flows.',
     techniqueTag: 'Trips · pre-aggregated · gradient',
     about: [
-      'The overview companion to the per-trip demos: the same 500K routed ' +
-        'trips, aggregated at build time into one feature per road corridor ' +
-        'per 15-minute bin. Per-vertex values carry the traversal count, so ' +
-        'the gradient shades each street by how many cabs rolled over it — ' +
-        'side streets stay dim indigo while Fifth Avenue and the FDR burn ' +
-        'white-hot.',
-      'This is the format’s answer to the "zoomed-out trajectory soup" ' +
-        'problem: rather than thinning trips client-side, the build emits a ' +
-        'purpose-built aggregate tier. The whole network pulses once per bin ' +
-        'as new counts light up and the previous bin fades.',
+      'The overview companion to the per-trip demos: the same 500K routed trips, aggregated at build time into one feature per road corridor per 15-minute bin. Per-vertex values carry the traversal count, so the gradient shades each street by cab count — from dim side streets to bright arterials like Fifth Avenue and the FDR.',
+      'This is the format’s answer to zoomed-out trajectory clutter: rather than thinning trips client-side, the build emits a purpose-built aggregate tier. The network updates once per bin as new counts appear and the previous bin fades.',
     ],
     dataSources: [
       {
@@ -1461,30 +1262,12 @@ export const DEMO_META: Record<string, DemoMeta> = {
 
   'nyc-flow-and-riders': {
     category: 'mobility',
-    tagline:
-      'Street-flow + moving cabs on one clock — the corridors pulse with taxi volume while thousands of yellow cabs stream through them.',
+    tagline: 'Street-flow and moving cabs on one clock: aggregate corridors under individual trips.',
     techniqueTag: 'Composite · flow corridors + moving heads',
     about: [
-      'A composite that layers two of the NYC taxi demos on a single playhead — ' +
-        'the New York cousin of the BIXI "Flow & Riders" view. Underneath is the ' +
-        'pre-aggregated street-network flow: 500K routed trips baked into one ' +
-        'feature per road corridor per 15-minute bin, the whole grid shaded by a ' +
-        'cool indigo→cyan→white ramp so quiet side streets stay dim while the ' +
-        'arteries burn bright. On top, every individual trip glides as a hot ' +
-        'neon-magenta dot along its real OSRM-routed path — one cab per active trip.',
-      'It reuses two already-built archives with no third build: the light, ' +
-        'static-geometry flow-corridor archive (`nyc-taxi-flows`) is the primary ' +
-        'source that gates the clock, and the heavier per-trip paths archive ' +
-        '(`nyc-taxi-paths`) rides on top as an OPTIONAL governor source — it streams ' +
-        'in continue-and-degrade so the substrate is instant and the cabs fill in. ' +
-        'Both are windowed to the same Jan 1–2 2015 span, so the aggregate flow and ' +
-        'the individual trips stay locked to the same instant: watch the corridors ' +
-        'brighten as the dots surge through them.',
-      'The overlay is fully general — any `type: \'trips\'` flow demo gains moving ' +
-        'heads by setting `headsOverlayUrl` to a per-trip paths archive; the painter ' +
-        'order keeps the corridors as a backdrop and the riders on top. Unlike the ' +
-        'BIXI version this archive is non-directional, so there are no chevrons — ' +
-        'just pulsing corridors and streaming cabs.',
+      'A composite that layers two NYC taxi demos on a single playhead — the New York counterpart of the BIXI "Flow & Riders" view. Underneath is the pre-aggregated street-network flow: 500K routed trips baked into one feature per road corridor per 15-minute bin, shaded by an indigo→cyan→white ramp from dim side streets to bright arterials. On top, every trip moves as a neon-magenta dot along its real OSRM-routed path — one cab per active trip.',
+      'It reuses two already-built archives with no third build: the light, static-geometry flow-corridor archive (`nyc-taxi-flows`) is the primary source that gates the clock; the heavier per-trip paths archive (`nyc-taxi-paths`) rides on top as an optional governor source, streaming in continue-and-degrade so the substrate is instant and the cabs fill in. Both are windowed to the same Jan 1–2 2015 span, so the aggregate flow and the individual trips stay on the same instant.',
+      'The overlay is fully general — any `type: \'trips\'` flow demo gains moving heads by setting `headsOverlayUrl` to a per-trip paths archive; the painter order keeps the corridors as a backdrop and the riders on top. Unlike the BIXI version this archive is non-directional, so there are no chevrons — just the corridors and the moving cabs.',
     ],
     dataSources: [
       {
@@ -1522,18 +1305,11 @@ export const DEMO_META: Record<string, DemoMeta> = {
 
   'nyc-taxi-cube': {
     category: 'mobility',
-    tagline: 'Hägerstrand’s space-time cube: a million taxi samples stack into a tower of city time.',
+    tagline: 'Hägerstrand’s space-time cube: a million taxi samples stacked by timestamp into a 3D volume.',
     techniqueTag: 'Space-time cube',
     about: [
-      'The classic of time geography, rendered live: every pickup, en-route ' +
-        'sample and dropoff from New Year’s morning 2015 lifts to the ' +
-        'altitude of its timestamp. Green pickup strata form at street level ' +
-        'each minute, gold en-route threads climb between them (steep thread ' +
-        '= stuck in traffic), and the night accumulates into a glowing cube.',
-      'The wireframe boxes are the tiling system made visible: each box is ' +
-        'one spatiotemporal tile — a spatial footprint crossed with a ' +
-        'temporal bucket — drawn as it streams in. The squash slider morphs ' +
-        'the cube back down to a flat map.',
+      'The classic of time geography: every pickup, en-route sample and dropoff from New Year’s morning 2015 is lifted to the altitude of its timestamp. Green pickup strata form at street level each minute, gold en-route threads climb between them (a steeper thread means slower traffic), and the night accumulates into a cube.',
+      'The wireframe boxes are the tiling system made visible: each box is one spatiotemporal tile — a spatial footprint crossed with a temporal bucket — drawn as it streams in. The squash slider flattens the cube back to a map.',
     ],
     dataSources: [
       {
@@ -1561,15 +1337,8 @@ export const DEMO_META: Record<string, DemoMeta> = {
     tagline: 'Pickups vs dropoffs as extruded H3 hexes — the build-side summary tier.',
     techniqueTag: 'H3 summary · extruded',
     about: [
-      '1.36 million pickups and dropoffs binned into H3 hexagons at build ' +
-        'time, with per-hex sums for each 30-minute slice. Toggle between ' +
-        'pickups (green) and dropoffs (red) to watch the morning flow ' +
-        'reverse: people picked up in residential neighborhoods, dropped in ' +
-        'midtown — then back again.',
-      'This is the summary tier in isolation: instead of streaming raw ' +
-        'points, the archive carries pre-aggregated hex densities that stay ' +
-        'lightweight at any zoom. Extrusion height and color both encode ' +
-        'trips per hex.',
+      '1.36 million pickups and dropoffs binned into H3 hexagons at build time, with per-hex sums for each 30-minute slice. Toggle between pickups (green) and dropoffs (red) to see the flow reverse over the day: pickups in residential neighborhoods, dropoffs in midtown, then back again.',
+      'This is the summary tier in isolation: instead of streaming raw points, the archive carries pre-aggregated hex densities that stay lightweight at any zoom. Extrusion height and color both encode trips per hex.',
     ],
     dataSources: [
       {
@@ -1590,16 +1359,11 @@ export const DEMO_META: Record<string, DemoMeta> = {
 
   'nyc-taxi-od-heatmap': {
     category: 'mobility',
-    tagline: 'Pickup and dropoff density as stacked GPU heatmaps that never go muddy.',
+    tagline: 'Pickup and dropoff density as two screen-blended GPU heatmap channels.',
     techniqueTag: 'Heatmap · dual channel',
     about: [
-      'The first hours of 2015 as competing density fields: pickups splat ' +
-        'green, dropoffs red, each class accumulated into its own channel of ' +
-        'a single GPU pass and composited with per-class screen blending — so ' +
-        'where the two overlap, the colors layer instead of muddying.',
-      'A 30-minute window slides across the night, and the city’s pulse ' +
-        'reads directly: bar districts glow green with pickups at closing ' +
-        'time while residential blocks bloom red.',
+      'The first hours of 2015 as two density fields: pickups green, dropoffs red, each accumulated into its own channel of a single GPU pass and composited with per-class screen blending, so overlaps layer rather than mixing to mud.',
+      'A 30-minute window slides across the night: bar districts show green pickups at closing time while residential blocks show red dropoffs.',
     ],
     dataSources: [
       {
@@ -1621,14 +1385,8 @@ export const DEMO_META: Record<string, DemoMeta> = {
     tagline: 'A year of tracked animal movement from GBIF, colored by taxonomic class.',
     techniqueTag: 'Trips · categorical',
     about: [
-      'Tracking studies aggregated by GBIF — albatrosses circling the ' +
-        'Southern Ocean, white storks commuting between Europe and Africa, ' +
-        'marine mammals working the coasts — with multi-year deployments ' +
-        'folded into a single calendar year so the seasonal rhythm reads as ' +
-        'one cycle.',
-      'Tracks are colored by coarse taxonomic class, resolved at build time ' +
-        'against the GBIF backbone: birds cyan, mammals coral, fish teal. ' +
-        'Four-day fading trails turn individual fixes into migration arcs.',
+      'Tracking studies aggregated by GBIF — albatrosses in the Southern Ocean, white storks between Europe and Africa, marine mammals along the coasts — with multi-year deployments folded into a single calendar year so the seasonal pattern reads as one cycle.',
+      'Tracks are colored by coarse taxonomic class, resolved at build time against the GBIF backbone: birds cyan, mammals coral, fish teal. Four-day fading trails connect individual fixes into migration arcs.',
     ],
     dataSources: [
       {
@@ -1648,19 +1406,11 @@ export const DEMO_META: Record<string, DemoMeta> = {
   // ── Built world & life ───────────────────────────────────────────────────
   'osm-nyc-draw': {
     category: 'built-life',
-    tagline: 'New York draws itself: 19 years of OpenStreetMap node creations, ink that never fades.',
+    tagline: '19 years of OpenStreetMap node creations in New York, each persisting once placed, colored by year.',
     techniqueTag: 'Cumulative points',
     about: [
-      'Every tagged node ever created in OpenStreetMap’s New York City, ' +
-        'appearing at the moment a mapper first placed it and persisting — so ' +
-        'the city literally draws itself over 19 years. Color encodes the ' +
-        'creation year: the cool blue skeleton of the 2007–2009 TIGER-era ' +
-        'imports, then waves of warmer color as successive mapping ' +
-        'generations fill in shops, benches, and hydrants.',
-      'Cumulative playback is a different rendering problem from a sliding ' +
-        'window: everything stays resident. Played tiles consolidate into ' +
-        'large GPU slabs (a handful of draw calls instead of hundreds) while ' +
-        'the shader handles the progressive reveal.',
+      'Every tagged node ever created in OpenStreetMap’s New York City, appearing when a mapper first placed it and persisting after, so the map fills in over 19 years. Color encodes the creation year: the blue 2007–2009 TIGER-era imports, then warmer colors as later mapping fills in shops, benches, and hydrants.',
+      'Cumulative playback is a different rendering problem from a sliding window: everything stays resident. Played tiles consolidate into large GPU slabs (a handful of draw calls instead of hundreds) while the shader handles the progressive reveal.',
     ],
     dataSources: [
       {
@@ -1689,14 +1439,8 @@ export const DEMO_META: Record<string, DemoMeta> = {
     tagline: 'Two decades of NYC mapping activity as H3 hex densities — edits or sessions.',
     techniqueTag: 'H3 summary',
     about: [
-      'Every OpenStreetMap changeset touching New York City from 2007 to ' +
-        '2025, hex-binned by month. Toggle between total edits (the volume of ' +
-        'work) and sessions (how many distinct sittings) — bulk imports spike ' +
-        'the former, sustained community mapping the latter.',
-      'Edit counts are brutally heavy-tailed (a single import changeset can ' +
-        'carry tens of thousands of edits), so the demo renders a flat ' +
-        'choropleth with a percentile-tuned color domain rather than ' +
-        'extruding 30-kilometer towers.',
+      'Every OpenStreetMap changeset touching New York City from 2007 to 2025, hex-binned by month. Toggle between total edits (the volume of work) and sessions (how many distinct sittings) — bulk imports spike the former, sustained community mapping the latter.',
+      'Edit counts are heavily heavy-tailed (a single import changeset can carry tens of thousands of edits), so the demo renders a flat choropleth with a percentile-tuned color domain rather than extruding very tall columns.',
     ],
     dataSources: [
       {
@@ -1724,13 +1468,8 @@ export const DEMO_META: Record<string, DemoMeta> = {
     tagline: 'The same changesets colored by editing tool — Potlatch to JOSM to iD to StreetComplete.',
     techniqueTag: 'Points · categorical',
     about: [
-      'The tooling history of OpenStreetMap, told through one city: each ' +
-        'changeset colored by the editor that made it. Purple Potlatch edits ' +
-        'dominate the early years, power-user JOSM blue runs throughout, the ' +
-        'green tide of the browser-based iD editor arrives in 2013, and ' +
-        'orange StreetComplete dots mark the mobile micro-mapping era.',
-      'Same archive as the hex-density demo, rendered raw with a categorical ' +
-        'palette — one build serving two stories.',
+      'The tooling history of OpenStreetMap through one city: each changeset colored by the editor that made it. Purple Potlatch dominates the early years, JOSM blue runs throughout, the browser-based iD editor (green) arrives in 2013, and orange StreetComplete marks the mobile micro-mapping era.',
+      'Same archive as the hex-density demo, rendered raw with a categorical palette — one build, two views.',
     ],
     dataSources: [
       {

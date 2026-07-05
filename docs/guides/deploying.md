@@ -61,8 +61,8 @@ The same recipe ports to S3 + CloudFront, GCS, or a plain nginx box:
 
 `stt-build --publish` (which `stt-generate` passes automatically) produces
 serve-as-is output — zstd level 19 and the default paged directory — so a
-from-source build needs no separate re-transcode step. Validate before
-syncing:
+from-source build is deploy-ready as written, with no separate repack step.
+Validate before syncing:
 
 ```bash
 target/release/stt-validate path/to/dataset/manifest.json

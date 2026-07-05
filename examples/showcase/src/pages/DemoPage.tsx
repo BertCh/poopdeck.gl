@@ -19,6 +19,9 @@ import DemoViewer from "../components/demo/DemoViewer";
 import DemoHoverPreview from "../components/demo/DemoHoverPreview";
 import type { DemoCamera } from "../components/demo/previewBasemap";
 import MaplibreRenderer from "../components/MaplibreRenderer";
+import SttThreeGeoViewer, {
+  datasetSupportsThree,
+} from "../components/demo/SttThreeGeoViewer";
 import { useDemoPlayback } from "../components/demo/useDemoPlayback";
 import { usePlaybackHotkeys, PlaybackControls } from "@poopdeck.gl/react";
 
@@ -58,14 +61,18 @@ const DemoPage: React.FC = () => {
   // fullscreen-only: the scrolling embed pages must not capture window keys.
   usePlaybackHotkeys(playback, selectedDataset?.timeRange);
 
-  // Renderer toggle (deck.gl ↔ maplibre). The legacy `/maplibre/:id`
-  // deep-links land directly on the maplibre renderer; the toggle keeps
-  // both reachable from either route. maplibre adapter is mercator-only.
-  const [renderer, setRenderer] = useState<"deck" | "maplibre">(
+  // Renderer toggle (deck.gl ↔ maplibre ↔ Three). The legacy `/maplibre/:id`
+  // deep-links land directly on the maplibre renderer; the toggle keeps every
+  // capable renderer reachable from either route. maplibre adapter is
+  // mercator-only; the `@poopdeck.gl/three` (TSL/WebGPU) path handles the FLAT,
+  // metro-scale geo demos (see `datasetSupportsThree`).
+  const [renderer, setRenderer] = useState<"deck" | "maplibre" | "three">(
     location.pathname.startsWith("/maplibre/") ? "maplibre" : "deck",
   );
   const maplibreCapable =
     selectedDataset != null && MAPLIBRE_TYPES.has(selectedDataset.type);
+  const threeCapable =
+    selectedDataset != null && datasetSupportsThree(selectedDataset);
 
   // Live camera from the deck viewer — fed to the scrubber's hover preview so
   // the thumbnail mirrors what the user is looking at.
@@ -73,6 +80,8 @@ const DemoPage: React.FC = () => {
 
   if (!selectedDataset) return <Navigate to="/" replace />;
   const useMaplibre = renderer === "maplibre" && maplibreCapable;
+  const useThree = renderer === "three" && threeCapable;
+  const hasAltRenderer = maplibreCapable || threeCapable;
 
   // Catalog demos link back to their landing page; excluded ones to the grid.
   const backTarget = getDemoMeta(selectedDataset.id)
@@ -82,7 +91,7 @@ const DemoPage: React.FC = () => {
   // Push DemoViewer's top-left in-map chips (cube / summary toggle) below the
   // floating header so they don't collide. The header grows by one row when
   // the renderer toggle is present, so budget a little more for it.
-  const headerInset = maplibreCapable ? 148 : 112;
+  const headerInset = hasAltRenderer ? 148 : 112;
 
   return (
     <div className="h-full relative overflow-hidden" style={{ background: "#0a0d12" }}>
@@ -93,6 +102,13 @@ const DemoPage: React.FC = () => {
             key={selectedDataset.id}
             dataset={selectedDataset}
             timeController={playback.timeController}
+          />
+        ) : useThree ? (
+          <SttThreeGeoViewer
+            key={selectedDataset.id}
+            dataset={selectedDataset}
+            playback={playback}
+            topLeftInset={headerInset}
           />
         ) : (
           <DemoViewer
@@ -120,16 +136,40 @@ const DemoPage: React.FC = () => {
         <p className="text-xs mt-1 leading-snug text-slate-400 line-clamp-2">
           {selectedDataset.description}
         </p>
-        {maplibreCapable && (
-          <button
-            onClick={() =>
-              setRenderer((r) => (r === "deck" ? "maplibre" : "deck"))
-            }
-            className="mt-2.5 px-2.5 py-1 rounded text-xs font-medium text-slate-300 border border-white/15 transition-colors hover:bg-white/5"
+        {hasAltRenderer && (
+          <div
+            className="mt-2.5 inline-flex gap-1.5"
+            role="radiogroup"
+            aria-label="Renderer"
             title="Swap the rendering library for the same tileset"
           >
-            Renderer: {useMaplibre ? "MapLibre" : "deck.gl"}
-          </button>
+            {(
+              [
+                { id: "deck", label: "deck.gl", active: !useMaplibre && !useThree },
+                ...(maplibreCapable
+                  ? [{ id: "maplibre" as const, label: "MapLibre", active: useMaplibre }]
+                  : []),
+                ...(threeCapable
+                  ? [{ id: "three" as const, label: "Three", active: useThree }]
+                  : []),
+              ] as { id: "deck" | "maplibre" | "three"; label: string; active: boolean }[]
+            ).map((r) => (
+              <button
+                key={r.id}
+                type="button"
+                role="radio"
+                aria-checked={r.active}
+                onClick={() => setRenderer(r.id)}
+                className={`px-2.5 py-1 rounded text-xs font-medium border transition-colors ${
+                  r.active
+                    ? "border-cyan-300/60 bg-cyan-400/20 text-cyan-100"
+                    : "border-white/15 text-slate-300 hover:bg-white/5"
+                }`}
+              >
+                {r.label}
+              </button>
+            ))}
+          </div>
         )}
       </div>
 
@@ -154,9 +194,9 @@ const DemoPage: React.FC = () => {
           autoSpeed={playback.autoSpeed}
           onAutoSpeedSelect={playback.onAutoSpeedSelect}
           // Hover preview is deck-only (it needs the deck camera/render path);
-          // the maplibre renderer doesn't feed a camera, so omit it there.
+          // the maplibre + Three renderers don't feed a deck camera, so omit it.
           renderPreview={
-            useMaplibre
+            useMaplibre || useThree
               ? undefined
               : (time) => (
                   <DemoHoverPreview
