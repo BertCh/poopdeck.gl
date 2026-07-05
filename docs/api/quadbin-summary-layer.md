@@ -43,6 +43,28 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 | `coverage` | `number` | `0.92` | Cell coverage (0..1); lower values leave gaps between cells. |
 | `onMetadataLoad` | `(meta: ArchiveMetadata) => void` | `null` | Fired once per archive init with the decoded metadata. |
 
+### Stroke & material
+
+Pass-throughs to deck.gl's `QuadkeyLayer` (→ `GeoCellLayer` → `PolygonLayer`). They surface the cell outline — the underlying `PolygonLayer` defaults `stroked: true`, giving every cell an un-disable-able 1px black border, so set `stroked: false` for a clean heatmap-style fill — plus the extrusion lighting material. `getLineColor` / `getLineWidth` are upstream-vocabulary aliases: unlike upstream deck.gl they accept a **constant** value only (summary cells bake no per-cell stroke column — a function accessor or column-name string warns once and falls back to `lineColor` / `lineWidth`); when set they win over the legacy prop.
+
+| Property | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `filled` | `boolean` | `true` | Fill each cell. When `false`, cells render outline-only (pair with `stroked`). |
+| `stroked` | `boolean` | `true` | Draw each cell's outline. Set `false` for a borderless heatmap-style fill. |
+| `lineColor` | `Color` | `[0, 0, 0, 255]` | Cell outline color (constant). Only takes effect when `stroked`. |
+| `getLineColor` | `Color \| null` | `null` | Upstream-vocabulary alias of `lineColor` (constant `Color` only). Wins over `lineColor` when set. |
+| `lineWidth` | `number` | `1` | Cell outline width, in `lineWidthUnits`. Only takes effect when `stroked`. |
+| `getLineWidth` | `number \| null` | `null` | Upstream-vocabulary alias of `lineWidth` (constant number only). Wins over `lineWidth` when set. |
+| `lineWidthUnits` | `'meters' \| 'common' \| 'pixels'` | `'meters'` | Units for `lineWidth`. |
+| `lineWidthScale` | `number` | `1` | Multiplier applied to every outline width. |
+| `lineWidthMinPixels` | `number` | `0` | Minimum outline width in pixels — clamps the outline so 1m borders stay visible at planet-scale summary zooms. |
+| `lineWidthMaxPixels` | `number` | `Number.MAX_SAFE_INTEGER` | Maximum outline width in pixels. |
+| `lineJointRounded` | `boolean` | `false` | Round the joints between outline segments. |
+| `lineMiterLimit` | `number` | `4` | Miter limit for mitered outline joints. |
+| `lineDashJustified` | `boolean` | `false` | Justify dashes to segment endpoints (only meaningful with a dash array supplied via the PathStyle extension). |
+| `wireframe` | `boolean` | `false` | Draw the edges of extruded cells as a wireframe. Only takes effect when `extruded`. |
+| `material` | `Material \| boolean` | `true` | Lighting material for extruded cells. `true` for the default phong material, `false` to disable lighting, or a material spec `{ambient, diffuse, shininess, specularColor}`. Only takes effect when `extruded`. |
+
 ## Behavior notes
 
 - **No tier, no render**: archives without a Quadbin summary tier render nothing; the layer warns once ("rebuild with `stt-build --summary-tier quadbin`").

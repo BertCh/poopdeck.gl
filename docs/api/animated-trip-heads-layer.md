@@ -41,6 +41,17 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 | `headRadius` | `number` | `0` | Head radius in metres (used when `sizeUnits === 'meters'`; falls back to `headRadiusPixels`). |
 | `headRadiusMinPixels` | `number` | `0` | Minimum on-screen head radius in pixels (meters-mode clamp). |
 | `headRadiusMaxPixels` | `number` | `1e9` (effectively unbounded) | Maximum on-screen head radius in pixels (meters-mode clamp). |
+| `radiusScale` | `number` | `1` | Global multiplier applied to every head radius before the min/max-pixel clamp (`ScatterplotLayer` `radiusScale` pass-through) — a one-knob emphasis pulse without touching the per-dot radius. |
+| `headBillboard` | `boolean` | `false` | Render the head dots as camera-facing billboards (`ScatterplotLayer` `billboard` pass-through) — matters in the globe / pitched / space-time-cube views where a ground-plane disk would foreshorten. |
+| `antialiasing` | `boolean` | `true` | Smooth-edge antialiasing (`ScatterplotLayer` `antialiasing` pass-through). Disable to reduce blending artifacts on dense overlapping dots. |
+| `headStroked` | `boolean` | `false` | Draw an outline ring around each head (`ScatterplotLayer` `stroked` pass-through). |
+| `headFilled` | `boolean` | `true` | Fill the head disk (`ScatterplotLayer` `filled` pass-through). Set `false` with `headStroked` for hollow rings. |
+| `headStrokeColor` | `Color` | `[0, 0, 0, 255]` | Outline color (RGBA, 0–255), forwarded to `ScatterplotLayer` `getLineColor`. Constant only. |
+| `headStrokeWidth` | `number` | `1` | Outline width, forwarded to `ScatterplotLayer` `getLineWidth`. Constant only; interpreted in `lineWidthUnits` and clamped by the pixel bounds below. |
+| `lineWidthUnits` | `'pixels' \| 'meters' \| 'common'` | `'meters'` | Units for `headStrokeWidth` (`ScatterplotLayer` `lineWidthUnits` pass-through). Deck-parity default: world-space meters. |
+| `lineWidthScale` | `number` | `1` | Global multiplier for the outline width (`ScatterplotLayer` `lineWidthScale` pass-through). |
+| `lineWidthMinPixels` | `number` | `0` | Minimum on-screen outline width in pixels (`ScatterplotLayer` `lineWidthMinPixels` pass-through). |
+| `lineWidthMaxPixels` | `number` | `Number.MAX_SAFE_INTEGER` (effectively unbounded) | Maximum on-screen outline width in pixels (`ScatterplotLayer` `lineWidthMaxPixels` pass-through). |
 
 ## How it works
 

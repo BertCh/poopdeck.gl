@@ -113,7 +113,23 @@ import {
   colorMappingDigest,
   updateTriggersDigest,
 } from '../../lib/style-digest.js';
-import type { Tile, BinaryFeatures } from '@poopdeck.gl/core';
+import { resolveAccessorAlias } from '../../lib/accessor-alias.js';
+import type { ColorAccessorValue } from '../../lib/accessor-alias.js';
+import {
+  buildTrackIndex as kernelBuildTrackIndex,
+  sampleTrack as kernelSampleTrack,
+  makePickRow,
+  RAD_TO_DEG,
+  METERS_PER_DEG_LAT,
+  SINGLETON_HOLD_MS,
+} from '../../lib/track-kernel.js';
+import type {
+  Track,
+  Sample,
+  TrackPickRow,
+  TrackFieldConfig,
+} from '../../lib/track-kernel.js';
+import type { Tile } from '@poopdeck.gl/core';
 
 const DEBUG = false;
 
@@ -123,21 +139,6 @@ const DEBUG = false;
  * factor to make one scale unit == one meter of box dimension.
  */
 const UNIT_CUBE = new CubeGeometry();
-
-/** Radians → degrees, for the heading → getOrientation z-rotation. */
-const RAD_TO_DEG = 180 / Math.PI;
-
-/** Meters per degree of latitude (equirectangular small-offset conversion). */
-const METERS_PER_DEG_LAT = 111_320;
-
-/**
- * Hold window (ms) granted to a DEGENERATE track that has only ONE loaded
- * keyframe (which can't be interpolated). Real AV object archives always carry a
- * `track_id` column with multiple keyframes per track, so this only guards
- * malformed/track-less input: such a box is shown for ±half this around its lone
- * keyframe instead of vanishing at the measure-zero instant it exists.
- */
-const SINGLETON_HOLD_MS = 600;
 
 /** Props added by {@link AnimatedBoundingBoxLayer} (own props only — compose
  * with {@link SpatioTemporalLayerProps} via {@link AnimatedBoundingBoxLayerProps}). */
@@ -267,6 +268,46 @@ export interface _AnimatedBoundingBoxLayerProps {
   strokeWidthMinPixels?: number;
 
   /**
+   * Distinct constant RGBA color for the {@link stroked} 12-edge outline
+   * (forwarded to the `edges` LineLayer's `getColor`). When `null` (the default)
+   * each edge INHERITS its box's per-category fill color × the appear/disappear
+   * fade, so the outline tracks the fill. Set a constant color (e.g. a bright
+   * cyan) for the classic detection-box look — a crisp bright outline over a
+   * dimmer fill. The appear/disappear fade still rides this color's alpha.
+   * (deck LineLayer `getColor` default is `[0, 0, 0, 255]`; here `null`
+   * preserves STT's inherited-fill behavior instead.)
+   * @default null
+   */
+  strokeColor?: Color | null;
+
+  /**
+   * Upstream-vocabulary alias of {@link strokeColor} (constant Color only — same
+   * domain as the legacy prop; a function accessor warns once and falls back to
+   * `strokeColor`). When set, it wins over `strokeColor`. A property-column NAME
+   * is not supported for the outline color (the outline inherits the per-category
+   * fill by default); pass a constant for a distinct outline.
+   */
+  getLineColor?: ColorAccessorValue | null;
+
+  /**
+   * Units for the {@link stroked} box-edge width — forwarded to the `edges`
+   * LineLayer's `widthUnits`. `'pixels'` (the default, matching deck's LineLayer)
+   * keeps the outline a constant on-screen thickness; `'meters'`/`'common'` make
+   * it scale with zoom.
+   * @default 'pixels'
+   */
+  strokeWidthUnits?: 'pixels' | 'meters' | 'common';
+
+  /**
+   * Maximum on-screen width (pixels) of the {@link stroked} box edges — an upper
+   * clamp forwarded to the `edges` LineLayer's `widthMaxPixels`, so a
+   * meters/common-unit outline doesn't blow up to a thick slab when zoomed in.
+   * Defaults to no clamp (deck LineLayer's `Number.MAX_SAFE_INTEGER`).
+   * @default Number.MAX_SAFE_INTEGER
+   */
+  strokeWidthMaxPixels?: number;
+
+  /**
    * Draw a line wireframe around each box instead of filled faces —
    * SimpleMeshLayer pass-through. NOTE: this is the mesh's *triangle* wireframe
    * (diagonals on every face); for a clean detection-box outline use
@@ -366,123 +407,16 @@ const DEFAULT_COLOR: Color = [160, 160, 160, 255];
 const DEFAULT_VELOCITY_COLOR: Color = [80, 255, 220, 255];
 
 /**
- * One tracked object's pooled keyframes, in ABSOLUTE epoch-ms and sorted
- * ascending by time. Parallel arrays (one entry per keyframe) keep the pooling
- * allocation-light; per-track constants (color/label) are baked once.
+ * Flat decoded props attached to `info.object` on a pick (AV inspector shape).
+ * Alias of the kernel's shared row shape so this file's existing references
+ * keep working.
  */
-interface Track {
-  trackId: string;
-  /** Absolute keyframe times (ms), strictly ascending after de-dup. */
-  times: number[];
-  lon: number[];
-  lat: number[];
-  /** Altitude (0 for 2D point archives). */
-  alt: number[];
-  /** Heading per keyframe (radians); NaN where the column is absent. */
-  heading: number[];
-  /** Box dims per keyframe (meters); NaN where the column is absent. */
-  length: number[];
-  width: number[];
-  height: number[];
-  /** Speed per keyframe (m/s); NaN where the column is absent. */
-  speed: number[];
-  /** Baked RGBA from this track's `category` via colorMapping (alpha pre-fade). */
-  color: [number, number, number, number];
-  /** The `labelProperty` value (stringified), for the optional TextLayer. */
-  label: string;
-  /** The `category` (colorProperty) value, for picking. */
-  category: string;
-  /** True when the track has a single loaded keyframe (held, not interpolated). */
-  singleton: boolean;
-}
-
-/** One interpolated box at the playhead (the per-frame render unit). */
-interface Sample {
-  lon: number;
-  lat: number;
-  alt: number;
-  /** Heading in radians; NaN ⇒ axis-aligned. */
-  heading: number;
-  length: number;
-  width: number;
-  height: number;
-  speed: number;
-  /** Appear/disappear fade factor in [0,1] (folded into the box alpha). */
-  alpha: number;
-  track: Track;
-}
-
-/** Flat decoded props attached to `info.object` on a pick (AV inspector shape). */
-interface PickRow {
-  track_id: string;
-  category: string;
-  heading: number;
-  length: number;
-  width: number;
-  height: number;
-  speed: number;
-}
+type PickRow = TrackPickRow;
 
 /** One label row for the optional TextLayer (rebuilt per frame from samples). */
 interface LabelRow {
   position: [number, number, number];
   text: string;
-}
-
-/** Linear interpolation. */
-function lerp(a: number, b: number, f: number): number {
-  return a + (b - a) * f;
-}
-
-/**
- * Shortest-arc angular interpolation (radians). Interpolating headings as plain
- * numbers would spin the box the long way around the ±π seam (e.g. 179°→-179°);
- * normalizing the delta into (-π, π] takes the short way. NaN endpoints (absent
- * heading column) degrade gracefully to whichever side is finite.
- */
-function lerpAngle(a: number, b: number, f: number): number {
-  if (!Number.isFinite(a)) return b;
-  if (!Number.isFinite(b)) return a;
-  const twoPi = Math.PI * 2;
-  let d = (b - a) % twoPi;
-  if (d > Math.PI) d -= twoPi;
-  else if (d < -Math.PI) d += twoPi;
-  return a + d * f;
-}
-
-/** Lerp a dimension that may be NaN (absent column) — fall back to a default. */
-function lerpDim(a: number, b: number, f: number, fallback: number): number {
-  const af = Number.isFinite(a);
-  const bf = Number.isFinite(b);
-  if (af && bf) return lerp(a, b, f);
-  if (af) return a;
-  if (bf) return b;
-  return fallback;
-}
-
-/** Resolve one feature's categorical (string) column value, or '' if absent. */
-function readCategorical(binary: BinaryFeatures, prop: string, i: number): string {
-  const cat = binary.categoricalProps[prop];
-  if (cat) {
-    const idx = cat.indices[i];
-    return idx === 0xffff ? '' : (cat.categories[idx] ?? '');
-  }
-  const num = binary.numericProps[prop];
-  if (num) {
-    const v = num[i];
-    return Number.isFinite(v) ? String(v) : '';
-  }
-  return '';
-}
-
-/** Category STRING → RGBA via colorMapping (fallback when absent/unmapped). */
-function resolveColor(
-  category: string,
-  mapping: Record<string, Color> | null | undefined,
-  fallback: Color,
-): [number, number, number, number] {
-  const c = (category && mapping && mapping[category]) || fallback;
-  return [c[0], c[1], c[2], c[3] ?? 255];
 }
 
 /**
@@ -521,6 +455,16 @@ export class AnimatedBoundingBoxLayer<ExtraPropsT extends {} = {}> extends Spati
     stroked: false,
     strokeWidth: { type: 'number', value: 1.5, min: 0 },
     strokeWidthMinPixels: { type: 'number', value: 1, min: 0 },
+    // Outline color: null = inherit each box's per-category fill × fade (the
+    // pre-existing behavior); a constant Color makes a distinct detection-box
+    // outline. Permissive descriptor — legally holds null OR a Color (which the
+    // 'color' validator would reject for null).
+    strokeColor: { type: 'object', value: null, optional: true, compare: true },
+    // Accessor-named alias of strokeColor — unset by default so the legacy prop
+    // wins unless the caller opts into the upstream vocabulary.
+    getLineColor: { type: 'object', value: null, optional: true, compare: true },
+    strokeWidthUnits: 'pixels',
+    strokeWidthMaxPixels: { type: 'number', value: Number.MAX_SAFE_INTEGER, min: 0 },
     wireframe: false,
     // Boolean or material spec — same permissive descriptor SimpleMeshLayer uses.
     material: { type: 'object', value: true, compare: true },
@@ -599,221 +543,85 @@ export class AnimatedBoundingBoxLayer<ExtraPropsT extends {} = {}> extends Spati
   }
 
   /**
-   * Pool every loaded tile's object snapshots into a `track_id`-keyed map, each
-   * track's keyframes rebased to absolute epoch-ms and sorted. O(total
-   * snapshots); runs only when the tile set or a feeding prop changes.
+   * Resolve the {@link stroked} outline color (accessor-alias B1): the
+   * `getLineColor` upstream alias wins when set, else the `strokeColor` legacy
+   * prop; a function-valued alias warns once and falls back. `null` (both unset)
+   * means "inherit each box's per-category fill × fade" — applied in
+   * {@link buildEdges}, so it is NOT part of {@link computeIndexKey} (the edges
+   * are rebuilt every frame from the samples, not cached).
+   */
+  private strokeColorValue(): Color | string | null {
+    return resolveAccessorAlias<Color | string | null>(
+      'AnimatedBoundingBoxLayer',
+      'getLineColor',
+      this.props.getLineColor,
+      this.props.strokeColor ?? null,
+    );
+  }
+
+  /**
+   * Resolve which tile columns the shared track kernel reads, from this layer's
+   * props (defaults applied here so the kernel receives a fully-resolved config).
+   */
+  private trackFieldConfig(): TrackFieldConfig {
+    return {
+      trackIdProperty: this.props.trackIdProperty || 'track_id',
+      colorProperty: typeof this.props.colorProperty === 'string' ? this.props.colorProperty : '',
+      labelProperty: this.props.labelProperty || 'category',
+      headingProperty: this.props.headingProperty || 'heading',
+      lengthProperty: this.props.lengthProperty || 'length',
+      widthProperty: this.props.widthProperty || 'width',
+      heightProperty: this.props.heightProperty || 'height',
+      speedProperty: this.props.speedProperty || 'speed',
+      colorMapping: this.props.colorMapping,
+      colorMappingDefault: (this.props.colorMappingDefault ?? DEFAULT_COLOR) as Color,
+    };
+  }
+
+  /**
+   * Pool every loaded tile's object snapshots into a `track_id`-keyed map via
+   * the shared {@link kernelBuildTrackIndex}, then layer on this layer's own
+   * telemetry + missing-track-id warning. Runs only when the tile set or a
+   * feeding prop changes.
    */
   private buildTrackIndex(tiles: Tile[]): Map<string, Track> {
     const t0 = performance.now();
-    const trackIdProp = this.props.trackIdProperty || 'track_id';
-    const colorProp = typeof this.props.colorProperty === 'string' ? this.props.colorProperty : '';
-    const labelProp = this.props.labelProperty || 'category';
-    const headingProp = this.props.headingProperty || 'heading';
-    const lengthProp = this.props.lengthProperty || 'length';
-    const widthProp = this.props.widthProperty || 'width';
-    const heightProp = this.props.heightProperty || 'height';
-    const speedProp = this.props.speedProperty || 'speed';
-    const fallbackColor = (this.props.colorMappingDefault ?? DEFAULT_COLOR) as Color;
+    const cfg = this.trackFieldConfig();
+    const result = kernelBuildTrackIndex(tiles, cfg);
 
-    const tracks = new Map<string, Track>();
-    let hasSpeed = false;
-    let trackIdMissing = false;
-    let synthetic = 0;
-    let total = 0;
-
-    for (const tile of tiles) {
-      for (const tileLayer of tile.layers) {
-        const binary = tileLayer.features;
-        const count = binary.featureCount;
-        if (count === 0) continue;
-
-        const dims = binary.positionDimensions ?? 2;
-        const positions = binary.positions;
-        const starts = binary.startTimes;
-        const offset = binary.timeOffset;
-        const trackCol = binary.categoricalProps[trackIdProp];
-        const heading = binary.numericProps[headingProp] ?? null;
-        const length = binary.numericProps[lengthProp] ?? null;
-        const width = binary.numericProps[widthProp] ?? null;
-        const height = binary.numericProps[heightProp] ?? null;
-        const speed = binary.numericProps[speedProp] ?? null;
-        if (speed) hasSpeed = true;
-        if (!trackCol) trackIdMissing = true;
-
-        for (let i = 0; i < count; i++) {
-          total++;
-          // Group key: the track id, or a unique synthetic key (degenerate,
-          // un-interpolated) when the column is absent.
-          let key: string;
-          if (trackCol) {
-            const idx = trackCol.indices[i];
-            key = idx === 0xffff ? `∅${synthetic++}` : (trackCol.categories[idx] ?? `∅${synthetic++}`);
-          } else {
-            key = `∅${synthetic++}`;
-          }
-
-          let track = tracks.get(key);
-          if (!track) {
-            const category = colorProp ? readCategorical(binary, colorProp, i) : '';
-            track = {
-              trackId: trackCol ? key : '',
-              times: [],
-              lon: [],
-              lat: [],
-              alt: [],
-              heading: [],
-              length: [],
-              width: [],
-              height: [],
-              speed: [],
-              color: resolveColor(category, this.props.colorMapping, fallbackColor),
-              label: readCategorical(binary, labelProp, i),
-              category,
-              singleton: false,
-            };
-            tracks.set(key, track);
-          }
-
-          const b = i * dims;
-          track.times.push(starts[i] + offset); // → absolute epoch-ms
-          track.lon.push(positions[b]);
-          track.lat.push(positions[b + 1]);
-          track.alt.push(dims > 2 ? positions[b + 2] : 0);
-          track.heading.push(heading ? heading[i] : NaN);
-          track.length.push(length ? length[i] : NaN);
-          track.width.push(width ? width[i] : NaN);
-          track.height.push(height ? height[i] : NaN);
-          track.speed.push(speed ? speed[i] : NaN);
-        }
-      }
-    }
-
-    // Sort each track's keyframes by absolute time (cross-tile pooling leaves
-    // them tile-ordered) and drop exact-duplicate timestamps. An index-sort
-    // permutation keeps the parallel arrays aligned without per-keyframe objects.
-    //
-    // Perf: fold the sort + de-dup into a SINGLE permutation applied by ONE
-    // reorder pass per track. The old path allocated an index array via
-    // Array.from + a stable sort, reordered all 9 parallel arrays, then
-    // allocated a second `keep` array and reordered again — up to 2× the array
-    // churn per track. Here we sort a reused index buffer in place (stable, so
-    // equal timestamps keep insertion order — same as before), compact
-    // duplicates within that same buffer, and reorder exactly once. Output
-    // ordering and semantics are byte-for-byte identical to sort→reorder→dedupe.
-    const order: number[] = [];
-    for (const track of tracks.values()) {
-      const times = track.times;
-      const n = times.length;
-      if (n > 1) {
-        order.length = n;
-        for (let k = 0; k < n; k++) order[k] = k;
-        // Stable sort by time (ES spec guarantees stability): equal timestamps
-        // stay in their original tile/insertion order, matching the prior sort.
-        order.sort((a, b) => times[a] - times[b]);
-        // Compact out exact-duplicate timestamps in place, keeping the first of
-        // each equal run (equivalent to the former dedupe-after-sort pass).
-        let write = 0;
-        for (let k = 0; k < n; k++) {
-          const idx = order[k];
-          if (k === 0 || times[idx] !== times[order[write - 1]]) {
-            order[write++] = idx;
-          }
-        }
-        if (write !== n) order.length = write;
-        reorder(track, order);
-      }
-      track.singleton = track.times.length < 2;
-    }
-
-    if (trackIdMissing) {
+    if (result.trackIdMissing) {
       warnOnce(
         'AnimatedBoundingBoxLayer:noTrackId',
-        `[AnimatedBoundingBoxLayer] no \`${trackIdProp}\` column — object snapshots ` +
-          `cannot be grouped into tracks, so each is shown as a held box ` +
+        `[AnimatedBoundingBoxLayer] no \`${cfg.trackIdProperty}\` column — object ` +
+          `snapshots cannot be grouped into tracks, so each is shown as a held box ` +
           `(${SINGLETON_HOLD_MS}ms) with no interpolation. Build the objects ` +
           `archive with a track-id column for smooth single-box rendering.`,
       );
     }
 
-    this.hasSpeedColumn = hasSpeed;
+    this.hasSpeedColumn = result.hasSpeedColumn;
     emit('tilePrepare', {
       layer: 'AnimatedBoundingBoxLayer',
-      tracks: tracks.size,
-      snapshots: total,
+      tracks: result.tracks.size,
+      snapshots: result.totalSnapshots,
       ms: performance.now() - t0,
     });
-    return tracks;
+    return result.tracks;
   }
 
   /**
-   * Interpolate one track's box pose at absolute `now`, or null when the track
-   * is inactive (the playhead is outside its keyframe span). Singletons are held
-   * for ±{@link SINGLETON_HOLD_MS}/2 around their lone keyframe.
+   * Interpolate one track's box pose at absolute `now` via the shared
+   * {@link kernelSampleTrack}, feeding it this layer's geometric defaults + fade
+   * durations. Returns null when the track is inactive.
    */
   private sampleTrack(track: Track, now: number): Sample | null {
-    const { times } = track;
-    const n = times.length;
-    if (n === 0) return null;
-
-    const first = times[0];
-    const last = times[n - 1];
-    const pad = track.singleton ? SINGLETON_HOLD_MS / 2 : 0;
-    if (now < first - pad || now > last + pad) return null;
-
-    let lo: number;
-    let hi: number;
-    let frac: number;
-    if (n === 1) {
-      lo = hi = 0;
-      frac = 0;
-    } else {
-      const c = now < first ? first : now > last ? last : now;
-      // Largest lo with times[lo] <= c (times strictly ascending).
-      lo = 0;
-      hi = n - 1;
-      while (hi - lo > 1) {
-        const mid = (lo + hi) >> 1;
-        if (times[mid] <= c) lo = mid;
-        else hi = mid;
-      }
-      const denom = times[hi] - times[lo];
-      frac = denom > 0 ? (c - times[lo]) / denom : 0;
-    }
-
-    const length = lerpDim(track.length[lo], track.length[hi], frac, this.props.defaultLength ?? 4);
-    const width = lerpDim(track.width[lo], track.width[hi], frac, this.props.defaultWidth ?? 2);
-    const height = lerpDim(track.height[lo], track.height[hi], frac, this.props.defaultHeight ?? 1.6);
-    const speedLo = track.speed[lo];
-    const speedHi = track.speed[hi];
-    const speed = Number.isFinite(speedLo) || Number.isFinite(speedHi)
-      ? lerpDim(speedLo, speedHi, frac, 0)
-      : NaN;
-
-    // CPU appear/disappear fade (playhead-time ramp), folded into the box alpha.
-    let alpha = 1;
-    const fadeIn = this.props.fadeInDuration ?? 0;
-    const fadeOut = this.props.fadeOutDuration ?? 0;
-    if (fadeIn > 0) {
-      const age = now - first;
-      if (age < fadeIn) alpha *= Math.max(0, Math.min(1, age / fadeIn));
-    }
-    if (fadeOut > 0) {
-      const remaining = last - now;
-      if (remaining < fadeOut) alpha *= Math.max(0, Math.min(1, remaining / fadeOut));
-    }
-
-    return {
-      lon: lerp(track.lon[lo], track.lon[hi], frac),
-      lat: lerp(track.lat[lo], track.lat[hi], frac),
-      alt: lerp(track.alt[lo], track.alt[hi], frac),
-      heading: lerpAngle(track.heading[lo], track.heading[hi], frac),
-      length,
-      width,
-      height,
-      speed,
-      alpha,
-      track,
-    };
+    return kernelSampleTrack(track, now, {
+      defaultLength: this.props.defaultLength ?? 4,
+      defaultWidth: this.props.defaultWidth ?? 2,
+      defaultHeight: this.props.defaultHeight ?? 1.6,
+      fadeInDuration: this.props.fadeInDuration ?? 0,
+      fadeOutDuration: this.props.fadeOutDuration ?? 0,
+    });
   }
 
   renderLayers(): Layer[] {
@@ -911,32 +719,45 @@ export class AnimatedBoundingBoxLayer<ExtraPropsT extends {} = {}> extends Spati
       colors[o4 + 1] = c[1];
       colors[o4 + 2] = c[2];
       colors[o4 + 3] = Math.round((c[3] ?? 255) * s.alpha);
-      pickRows[i] = {
-        track_id: s.track.trackId,
-        category: s.track.category,
-        heading: s.heading,
-        length: s.length,
-        width: s.width,
-        height: s.height,
-        speed: s.speed,
-      };
+      pickRows[i] = makePickRow(s);
     }
 
+    // getPosition + getColor bind straight from binary data.attributes. But
+    // getOrientation/getScale/getTranslation CANNOT be fed as binary attributes:
+    // deck's SimpleMeshLayer folds all three into ONE computed
+    // `instanceModelMatrix` attribute whose accessor is an ARRAY, built ONLY from
+    // the `props.getOrientation`/`getScale`/`getTranslation` — a per-instance
+    // `data.attributes.getOrientation`/… is silently dropped (every box would
+    // render at identity heading, unit scale, and no ground-lift). Supply them as
+    // function accessors indexing the per-instance buffers.
     const data = {
       length: n,
       attributes: {
         getPosition: { value: positions, size: 3 },
-        getOrientation: { value: orientations, size: 3 },
-        getScale: { value: scales, size: 3 },
-        getTranslation: { value: translations, size: 3 },
         getColor: { value: colors, size: 4, normalized: true },
       },
+    };
+    const getOrientation = (_: unknown, info: { index: number }): [number, number, number] => {
+      const o = info.index * 3;
+      return [orientations[o], orientations[o + 1], orientations[o + 2]];
+    };
+    const getScale = (_: unknown, info: { index: number }): [number, number, number] => {
+      const o = info.index * 3;
+      return [scales[o], scales[o + 1], scales[o + 2]];
+    };
+    const getTranslation = (_: unknown, info: { index: number }): [number, number, number] => {
+      const o = info.index * 3;
+      return [translations[o], translations[o + 1], translations[o + 2]];
     };
 
     const extensions = this.composeExtensions([]);
     const props = this.composeSubLayerProps('boxes', 'all', {
       data: data as any,
       mesh: UNIT_CUBE,
+      // Per-instance pose accessors (see the note above).
+      getOrientation,
+      getScale,
+      getTranslation,
       wireframe: this.props.wireframe,
       material: this.props.material,
       extensions,
@@ -958,9 +779,13 @@ export class AnimatedBoundingBoxLayer<ExtraPropsT extends {} = {}> extends Spati
    * (the same metres→degrees idiom as the velocity arrows) so the outline tracks
    * the box pose exactly. The 12 true box edges are emitted as `LineLayer`
    * segments (NOT the mesh's triangle wireframe, which would diagonal every
-   * face). Every segment inherits its box's per-category color × appear/
-   * disappear fade. `pickable` is set by the caller (only when there is no fill
-   * underneath to take picks).
+   * face). Each segment inherits its box's per-category color × appear/
+   * disappear fade — UNLESS {@link _AnimatedBoundingBoxLayerProps.strokeColor}
+   * (or its `getLineColor` alias) sets a distinct constant outline color, which
+   * still rides the same fade on its alpha. Width/units/clamp come from
+   * `strokeWidth`/`strokeWidthUnits`/`strokeWidthMinPixels`/`strokeWidthMaxPixels`.
+   * `pickable` is set by the caller (only when there is no fill underneath to
+   * take picks).
    */
   private buildEdges(samples: Sample[], pickable: boolean): LineLayer {
     const n = samples.length;
@@ -972,6 +797,17 @@ export class AnimatedBoundingBoxLayer<ExtraPropsT extends {} = {}> extends Spati
     const target = new Float64Array(total * 3);
     const colors = new Uint8Array(total * 4);
     const pickRows: PickRow[] = new Array(n);
+
+    // Distinct constant outline color when strokeColor / getLineColor resolves to
+    // a Color; else (null, or an unsupported column-name string) each edge
+    // inherits its box's per-category fill. Normalize to RGBA up front so the
+    // per-segment bake below stays a plain copy. The appear/disappear fade still
+    // rides the alpha in BOTH branches.
+    const strokeColor = this.strokeColorValue();
+    const strokeArr = Array.isArray(strokeColor) ? (strokeColor as number[]) : null;
+    const strokeRGBA: [number, number, number, number] | null = strokeArr
+      ? [strokeArr[0], strokeArr[1], strokeArr[2], strokeArr[3] ?? 255]
+      : null;
 
     // The 12 edges of a cuboid, as index pairs into the 8 corners laid out
     // below: 0-3 = ground ring (CCW), 4-7 = roof ring, then the 4 verticals.
@@ -1005,7 +841,9 @@ export class AnimatedBoundingBoxLayer<ExtraPropsT extends {} = {}> extends Spati
         corner(-hx, -hy, top), corner(hx, -hy, top), corner(hx, hy, top), corner(-hx, hy, top),
       ];
 
-      const c = s.track.color;
+      // Distinct constant outline overrides the inherited fill; the fade rides
+      // its alpha either way.
+      const c = strokeRGBA ?? s.track.color;
       const alpha = Math.round((c[3] ?? 255) * s.alpha);
       for (const [a, b] of EDGE_PAIRS) {
         const o3 = seg * 3;
@@ -1024,15 +862,7 @@ export class AnimatedBoundingBoxLayer<ExtraPropsT extends {} = {}> extends Spati
         colors[o4 + 3] = alpha;
         seg++;
       }
-      pickRows[i] = {
-        track_id: s.track.trackId,
-        category: s.track.category,
-        heading: s.heading,
-        length: s.length,
-        width: s.width,
-        height: s.height,
-        speed: s.speed,
-      };
+      pickRows[i] = makePickRow(s);
     }
 
     const data = {
@@ -1046,9 +876,10 @@ export class AnimatedBoundingBoxLayer<ExtraPropsT extends {} = {}> extends Spati
     const props = this.composeSubLayerProps('edges', 'all', {
       data: data as any,
       positionFormat: 'XYZ',
-      widthUnits: 'pixels',
+      widthUnits: this.props.strokeWidthUnits ?? 'pixels',
       getWidth: this.props.strokeWidth ?? 1.5,
       widthMinPixels: this.props.strokeWidthMinPixels ?? 1,
+      widthMaxPixels: this.props.strokeWidthMaxPixels ?? Number.MAX_SAFE_INTEGER,
       pickable,
       // 12 segments per box, so a hit's segment index ÷ 12 is the box index.
       sttPickRows: pickRows,
@@ -1156,16 +987,5 @@ export class AnimatedBoundingBoxLayer<ExtraPropsT extends {} = {}> extends Spati
       if (rows[idx]) out.object = rows[idx];
     }
     return out;
-  }
-}
-
-/** In-place permute every parallel array of a track by `order` (index-sort). */
-function reorder(track: Track, order: number[]): void {
-  const keys: (keyof Track)[] = ['times', 'lon', 'lat', 'alt', 'heading', 'length', 'width', 'height', 'speed'];
-  for (const k of keys) {
-    const src = track[k] as number[];
-    const out = new Array(src.length);
-    for (let i = 0; i < order.length; i++) out[i] = src[order[i]];
-    (track as any)[k] = out;
   }
 }

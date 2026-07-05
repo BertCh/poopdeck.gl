@@ -806,7 +806,7 @@ describe('accessor-named prop aliases (column-name semantics)', () => {
     expect(prepared.data.attributes.instanceCategoryIndex).toBeUndefined();
   });
 
-  it('AnimatedTripsLayer: getColor column expands per-vertex colors; getWidth column rides binary', async () => {
+  it('AnimatedTripsLayer: getColor AND getWidth columns expand per-vertex', async () => {
     const layer = await makeTripsLayer({
       getColor: 'kind',
       getWidth: 'speed',
@@ -819,9 +819,17 @@ describe('accessor-named prop aliases (column-name semantics)', () => {
     const prepared = layer.prepareTile(tile, tile.layers[0]);
     expect(prepared.data.attributes.getColor).toBeDefined();
     expect([...prepared.data.attributes.getColor.value.slice(0, 4)]).toEqual([10, 20, 30, 255]);
-    expect(prepared.data.attributes.getWidth.value).toBe(
-      tile.layers[0].features.numericProps['speed'],
-    );
+    // getWidth must be PER-VERTEX (totalVerts=4), not the per-feature `speed`
+    // column (length 2). PathLayer's binary path binds the size-1 buffer
+    // directly, so a featureCount-length buffer under-sizes the instanced draw
+    // ("vertex buffer is not big enough"). Each feature's speed splats onto its
+    // own vertices: features [4,8] over 2+2 verts → [4,4,8,8].
+    const speed = tile.layers[0].features.numericProps['speed'];
+    const totalVerts = tile.layers[0].features.startIndices[tile.layers[0].features.featureCount];
+    expect(prepared.data.attributes.getWidth.value.length).toBe(totalVerts);
+    expect(Array.from(prepared.data.attributes.getWidth.value)).toEqual([4, 4, 8, 8]);
+    // Not the zero-copy per-feature buffer.
+    expect(prepared.data.attributes.getWidth.value).not.toBe(speed);
   });
 
   it('AnimatedPolygonLayer: getElevation column expands per-vertex; constant feeds extrusion', async () => {

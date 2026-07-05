@@ -327,6 +327,31 @@ function expandCategoryColors(
 }
 
 /**
+ * Expand a per-FEATURE scalar column (e.g. a Strahler-order `width`) to one
+ * value per vertex. PathLayer's `instanceStrokeWidths` (accessor `getWidth`) is
+ * a per-SEGMENT-instanced attribute sized to the tessellated vertex count, and
+ * deck.gl's binary interface binds a size-matched buffer DIRECTLY (fast path in
+ * `Attribute.setBinaryValue`, since the layer's `startIndices` already equals
+ * `data.startIndices`). A featureCount-length buffer is therefore too small for
+ * the draw — the exact "vertex buffer is not big enough" crash. Splatting the
+ * feature's scalar across its vertices (identical to the categorical-color and
+ * gradient paths) yields the correct per-vertex granularity.
+ */
+function expandFeatureWidths(
+  values: ArrayLike<number>,
+  startIndices: Uint32Array,
+  featureCount: number,
+  totalVerts: number,
+): Float32Array {
+  const out = new Float32Array(totalVerts);
+  for (let f = 0; f < featureCount; f++) {
+    const w = values[f];
+    for (let v = startIndices[f]; v < startIndices[f + 1]; v++) out[v] = w;
+  }
+  return out;
+}
+
+/**
  * Map a per-vertex scalar array through a color ramp to one RGBA per vertex,
  * so PathLayer shades each line *along its length* (its tessellator carries
  * `getColor` as a per-vertex attribute and interpolates it across segments).
@@ -911,12 +936,24 @@ export class AnimatedTripsLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
     // can't ride PathLayer's segment tessellation, so we color via getColor.
     const gpuPalette: Color[] | null = null;
 
-    // Property-driven width is already a Float32Array of length featureCount
-    // — pass it through with zero copy.
+    // Property-driven width is a per-FEATURE column (length featureCount).
+    // PathLayer's `instanceStrokeWidths` is per-SEGMENT-instanced (sized to the
+    // tessellated vertex count) and deck.gl's binary path binds a size-1 buffer
+    // DIRECTLY, so a featureCount-length buffer under-sizes the draw ("vertex
+    // buffer is not big enough"). Splat the feature scalar across its vertices,
+    // exactly like the categorical-color / gradient paths above.
     if (widthProp) {
       const values = binary.numericProps[widthProp];
       if (values) {
-        attributes.getWidth = { value: values, size: 1 };
+        attributes.getWidth = {
+          value: expandFeatureWidths(
+            values,
+            binary.startIndices,
+            binary.featureCount,
+            totalVerts,
+          ),
+          size: 1,
+        };
       }
     }
     // Dynamic PER-VERTEX width hook (FlowStrokeLayer: active-bucket volume). Wins

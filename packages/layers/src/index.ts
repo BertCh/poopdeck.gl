@@ -31,6 +31,10 @@ export { FlowLinesLayer } from './layers/internal/flow-lines-layer.js';
 // GPU-splat wrapper, not the other way around. Named `AnimatedHeatmapLayer`
 // so it does not shadow the canonical deck.gl `HeatmapLayer`.
 export { AnimatedHeatmapLayer } from './layers/summary/heatmap-layer.js';
+// Runtime hexbin composite over @deck.gl/aggregation-layers HexagonLayer (kind
+// 'hexbin') — the discrete/pickable/extruded analog of AnimatedHeatmapLayer;
+// reuses buildConsolidatedChannelData + animates via DataFilterExtension range.
+export { AnimatedHexagonLayer } from './layers/summary/animated-hexagon-layer.js';
 // Server-aggregated summary tier (renders H3 hexes at low zooms).
 export { H3SummaryLayer } from './layers/summary/h3-summary-layer.js';
 // Server-aggregated Quadbin summary tier (renders Z/X/Y quad cells at low
@@ -86,6 +90,18 @@ export { AnimatedBoundingBoxLayer } from './layers/core/animated-bounding-box-la
 // for callers who want the splat geometry directly.
 export { SplatLayer } from './layers/core/splat-layer.js';
 export { SplatPrimitiveLayer } from './layers/internal/splat-primitive-layer.js';
+// Time-filtered map labels (kind 'text') — decodes each tile's string column to
+// stable CPU rows once, then CPU-filters against the playhead (deck TextLayer
+// needs string ROWS + a FontAtlasManager, so it can't run the binary interface).
+export { AnimatedTextLayer } from './layers/core/animated-text-layer.js';
+// Animated glTF/OBJ instances (kind 'mesh') — one interpolated SimpleMeshLayer
+// instance per active track over the AV objects/ point archive; static mesh (or
+// per-category meshMapping) is a per-layer prop, motion/color ride the tracks.
+export { AnimatedMeshLayer } from './layers/core/animated-mesh-layer.js';
+// Time-windowed 3D point clouds (kind 'pointCloud') — zero-copy binary
+// getPosition/getNormal/getColor over deck PointCloudLayer + TimeFilterExtension
+// window mode; the scan/overview primitive (no cumulative-slab reveal path).
+export { AnimatedPointCloudLayer } from './layers/core/animated-point-cloud-layer.js';
 
 // Backend capability descriptor — what the deck.gl renderer DECLARES about
 // itself against the shared `@poopdeck.gl/core/capabilities` contract (the
@@ -112,6 +128,24 @@ export { SplatExtension } from './extensions/splat-extension.js';
 // Compose via the `extensions` prop of an animated-trips-family layer.
 export { ChevronFlowExtension } from './extensions/chevron-flow-extension.js';
 export type { ChevronFlowExtensionOptions } from './extensions/chevron-flow-extension.js';
+// Filter features by any baked numeric column against a [min,max] range (hard
+// step) or soft range (smoothstep fade) — the poopdeck-native port of deck.gl's
+// DataFilterExtension for binary STT tiles. Opt-in via `filterProperty` on
+// AnimatedPointLayer / AnimatedPathLayer; zero cost when unset.
+export { DataFilterExtension } from './extensions/data-filter-extension.js';
+// Collision-based de-cluttering for STT layers — deck.gl's CollisionFilterExtension
+// works as-is via the `extensions` prop for the constant case (great for thinning
+// AnimatedIconLayer / AnimatedTextLayer labels); `collisionFilterProps` ergonomically
+// wires the CONSTANT collision props. A data-driven `collisionPriorityProperty` is
+// DEFERRED (warns once and falls back to the constant priority — per-feature ranking
+// needs a layer-level baked `collisionPriorities` attribute, unlike DataFilterExtension's
+// wired `filterProperty`).
+export {
+  CollisionFilterExtension,
+  collisionFilterProps,
+  COLLISION_PRIORITY_MIN,
+  COLLISION_PRIORITY_MAX,
+} from './extensions/collision-filter-extension.js';
 
 // NOTE: the playback engine (TimeController, PlaybackGovernor, SttPlayer,
 // decideAutoSpeedMultiplier) lives in @poopdeck.gl/playback and is NO LONGER
@@ -166,6 +200,7 @@ export type {
   AnimatedHeatmapLayerProps,
   HeatmapChannelSpec,
 } from './layers/summary/heatmap-layer.js';
+export type { AnimatedHexagonLayerProps } from './layers/summary/animated-hexagon-layer.js';
 export type { H3SummaryLayerProps } from './layers/summary/h3-summary-layer.js';
 export type { QuadbinSummaryLayerProps } from './layers/summary/quadbin-summary-layer.js';
 export type { FlowmapLayerProps } from './layers/summary/flowmap-layer.js';
@@ -185,6 +220,18 @@ export type { AnimatedColumnLayerProps } from './layers/core/animated-column-lay
 export type { AnimatedBoundingBoxLayerProps } from './layers/core/animated-bounding-box-layer.js';
 export type { SplatLayerProps } from './layers/core/splat-layer.js';
 export type { SplatPrimitiveLayerProps } from './layers/internal/splat-primitive-layer.js';
+export type { AnimatedTextLayerProps } from './layers/core/animated-text-layer.js';
+export type { AnimatedMeshLayerProps } from './layers/core/animated-mesh-layer.js';
+export type { AnimatedPointCloudLayerProps } from './layers/core/animated-point-cloud-layer.js';
 export type { TimeFilterExtensionProps } from './extensions/time-filter-extension.js';
 export type { CategoryColorExtensionProps } from './extensions/category-color-extension.js';
+export type {
+  DataFilterExtensionProps,
+  DataFilterExtensionOptions,
+  DataFilterRange,
+} from './extensions/data-filter-extension.js';
+export type {
+  CollisionFilterOptions,
+  CollisionFilterProps,
+} from './extensions/collision-filter-extension.js';
 

@@ -47,6 +47,18 @@ const layerKinds = Object.fromEntries(
     if (kind === 'arc') {
       return [kind, { supported: false, fallbackKind: 'line', reason: DECK_REFERRAL }];
     }
+    if (kind === 'text') {
+      return [kind, { supported: false, fallbackKind: 'icon', reason: DECK_REFERRAL }];
+    }
+    if (kind === 'mesh') {
+      return [kind, { supported: false, fallbackKind: 'boundingBox', reason: DECK_REFERRAL }];
+    }
+    if (kind === 'pointCloud') {
+      return [kind, { supported: false, fallbackKind: 'point', reason: DECK_REFERRAL }];
+    }
+    if (kind === 'hexbin') {
+      return [kind, { supported: false, fallbackKind: 'h3Summary', reason: DECK_REFERRAL }];
+    }
     return [kind, { supported: false, reason: DECK_REFERRAL }];
   }),
 ) as Record<LayerKind, LayerKindSupport>;

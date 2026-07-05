@@ -58,6 +58,8 @@ import {
   SpatioTemporalPickingInfo,
 } from '../spatiotemporal-layer.js';
 import { TimeFilterExtension } from '../../extensions/time-filter-extension.js';
+import { DataFilterExtension } from '../../extensions/data-filter-extension.js';
+import type { DataFilterRange } from '../../extensions/data-filter-extension.js';
 import { SplatExtension } from '../../extensions/splat-extension.js';
 import {
   CategoryColorExtension,
@@ -73,7 +75,11 @@ import {
   updateTriggersDigest,
 } from '../../lib/style-digest.js';
 import { resolveAccessorAlias } from '../../lib/accessor-alias.js';
-import type { ColorAccessorValue, NumericAccessorValue } from '../../lib/accessor-alias.js';
+import type {
+  ColorAccessorValue,
+  NumericAccessorValue,
+  WeightAccessorValue,
+} from '../../lib/accessor-alias.js';
 import { getFeatureProperties, DEFAULT_CATEGORICAL_PALETTE } from '@poopdeck.gl/core';
 import type { Tile, TileId, Layer as TileLayer, BinaryFeatures } from '@poopdeck.gl/core';
 import { expandCategoricalColors as coreExpandCategoricalColors } from '@poopdeck.gl/core/style';
@@ -341,6 +347,47 @@ export interface _AnimatedPointLayerProps {
    * @default 1
    */
   elevationScale?: number;
+
+  /**
+   * GPU range filter — the NAME of a baked numeric column to filter points by
+   * (installs {@link DataFilterExtension}). Points whose value in this column
+   * falls inside {@link filterRange} render; the rest are hidden (or soft-faded
+   * via {@link filterSoftRange}). Composes WITH the time filter — a point must
+   * pass both the time window and the column range.
+   *
+   * Accessor-alias of deck.gl's `getFilterValue`: pass a column NAME, not a
+   * function (STT tiles are binary — a function warns once and is ignored).
+   * Unset (the default) ⇒ the extension is not installed at all: zero
+   * attribute, zero uniform, zero shader change. A tile that lacks the named
+   * column renders unfiltered (the filter idles for that tile). Ignored in
+   * `cumulative` mode (slabs bake a fixed schema).
+   * @default null
+   */
+  filterProperty?: WeightAccessorValue | null;
+
+  /**
+   * Inclusive `[min, max]` bounds for {@link filterProperty}. `null` (default)
+   * means "no range yet" — the column is still bound, so a range set later
+   * animates purely by uniform with no tile re-preparation. No effect unless
+   * `filterProperty` is set.
+   * @default null
+   */
+  filterRange?: DataFilterRange | null;
+
+  /**
+   * Optional soft `[min, max]` inside {@link filterRange}: points between the
+   * soft and hard bounds fade rather than hard-clip. No effect unless
+   * `filterProperty` + `filterRange` are set.
+   * @default null
+   */
+  filterSoftRange?: DataFilterRange | null;
+
+  /**
+   * Enable/disable the column filter without dropping the bound attribute.
+   * Effective only when `filterProperty` + a valid `filterRange` are set.
+   * @default true
+   */
+  filterEnabled?: boolean;
 }
 
 /** Complete props accepted by {@link AnimatedPointLayer}. */
@@ -565,6 +612,14 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
     // Allow negative scale (e.g. invert depth) — z values themselves may be
     // negative (below-grade returns), so the multiplier is unconstrained too.
     elevationScale: { type: 'number', value: 1 },
+
+    // Column range filter (DataFilterExtension). Unset ⇒ not installed.
+    // Permissive {type:'object'} descriptors: filterProperty holds a column
+    // name; the ranges hold a [min,max] tuple OR null (rejected by 'array').
+    filterProperty: { type: 'object', value: null, optional: true, compare: true },
+    filterRange: { type: 'object', value: null, optional: true, compare: true },
+    filterSoftRange: { type: 'object', value: null, optional: true, compare: true },
+    filterEnabled: true,
   };
 
   /** Per-tile prepared-data cache. Pruned to the live tile set each render. */
@@ -628,6 +683,15 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
   private readonly splatExtension = new SplatExtension();
 
   /**
+   * Singleton DataFilterExtension. Composed into a sublayer's extension list
+   * ONLY when `filterProperty` is set (a per-layer constant, so the list stays
+   * stable across this layer's sublayers). Constructed unconditionally like
+   * {@link splatExtension} — a no-op object alloc; it contributes no attribute,
+   * uniform or shader unless actually installed.
+   */
+  private readonly dataFilterExtension = new DataFilterExtension({ filterSize: 1 });
+
+  /**
    * Stable getTime reference. Critical: deck.gl re-runs work when accessor
    * function references change; a fresh arrow every render defeats the cache.
    */
@@ -685,6 +749,20 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
   }
 
   /**
+   * Resolve `filterProperty` to a baked-column NAME. Accessor-alias of deck's
+   * `getFilterValue`: a function-valued prop warns once and is ignored (there
+   * is no legacy prop, so the fallback is "no filter" — `undefined`).
+   */
+  private filterPropertyValue(): string | undefined {
+    return resolveAccessorAlias<string | undefined>(
+      'AnimatedPointLayer',
+      'filterProperty',
+      this.props.filterProperty,
+      undefined,
+    );
+  }
+
+  /**
    * Compute a digest of the layer-level props that affect every sublayer.
    * When this changes we throw away the entire sublayer cache.
    */
@@ -726,6 +804,14 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
       // lives in `prepared` and is keyed via preparedKey.
       Array.isArray(fillColor) ? fillColor.join(',') : '',
       typeof radius === 'number' ? radius : 0,
+      // Column-filter uniforms (DataFilterExtension). A range/enabled change is
+      // a uniform-only edit, so — like timeWindow — it rebuilds the cached
+      // sublayers (whose props carry the values) rather than re-preparing tiles.
+      Array.isArray(this.props.filterRange) ? this.props.filterRange.join(',') : '',
+      Array.isArray(this.props.filterSoftRange)
+        ? this.props.filterSoftRange.join(',')
+        : '',
+      this.props.filterEnabled,
     ].join('|');
   }
 
@@ -839,11 +925,15 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
     const rgb = this.props.rgbColorColumns;
     const rgbKey = rgb ? `rgb${rgb.join(',')}` : '';
     const colorVecKey = typeof this.props.colorVectorColumn === 'string' ? `cv${this.props.colorVectorColumn}` : '';
+    // Filter column NAME is baked into the `filterValue` attribute, so a change
+    // must re-prepare tiles (and, via the new preparedKey, rebuild sublayers —
+    // covering the unset↔set toggle that adds/removes DataFilterExtension).
+    const filterProp = this.filterPropertyValue() ?? '';
     return `${colorVecKey}|${fillColorProp}|${radiusProp}|${lineWidthProp}|${
       fillColorProp ? colorListDigest(this.props.colorPalette ?? DEFAULT_PALETTE) : 0
     }|${mapping ? `m${colorMappingDigest(mapping)}` : 'g'}|${
       transform ? `r${functionId(transform)}` : ''
-    }|e${elevProp}:${elevScale}|${rgbKey}|${updateTriggersDigest(this.props.updateTriggers)}`;
+    }|e${elevProp}:${elevScale}|${rgbKey}|f${filterProp}|${updateTriggersDigest(this.props.updateTriggers)}`;
   }
 
   /**
@@ -1045,6 +1135,26 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
       }
     }
 
+    // Column range filter (DataFilterExtension): bind the named numeric column
+    // to the `filterValue` attribute zero-copy (already a Float32Array). Absent
+    // column ⇒ no attribute baked → the sublayer idles the filter for this tile
+    // (renders unfiltered), mirroring how a missing color/radius column falls
+    // back. A categorical column can't be range-filtered in v1 — warn once.
+    const filterProp = this.filterPropertyValue();
+    if (filterProp && !this.props.cumulative) {
+      const values = binary.numericProps[filterProp];
+      if (values) {
+        attributes.filterValue = { value: values, size: 1 };
+      } else if (binary.categoricalProps[filterProp]) {
+        warnOnce(
+          'AnimatedPointLayer:filterPropertyCategorical',
+          `[AnimatedPointLayer] filterProperty "${filterProp}" is a categorical ` +
+            'column; v1 range-filters NUMERIC columns only. The filter is ignored ' +
+            'for tiles where the column is categorical.',
+        );
+      }
+    }
+
     const prepared: PreparedTile = {
       tileKey,
       styleKey,
@@ -1071,6 +1181,12 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
     const timeWindow = this.props.timeWindow;
     const radiusValue = this.radiusValue();
     const fillColorValue = this.fillColorValue();
+    // Column filter: install DataFilterExtension only when a column is named
+    // (per-layer constant ⇒ stable list across this layer's sublayers). Whether
+    // THIS tile actually baked the attribute gates the per-tile enable, so a
+    // tile missing the column renders unfiltered (idle extension).
+    const filterProp = this.filterPropertyValue();
+    const hasFilter = !!prepared.data.attributes.filterValue;
     const constRadius = typeof radiusValue === 'number' ? radiusValue : 5;
     const constColor = (Array.isArray(fillColorValue)
       ? fillColorValue
@@ -1098,6 +1214,10 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
     const extensions = this.composeExtensions([
       this.timeFilterExtension,
       this.categoryColorExtension,
+      // Column range filter, when a filterProperty is set. Multiplies its own
+      // in/out (or soft-fade) factor into color.a — commutes with the time and
+      // categorical alphas, so it composes cleanly with both.
+      ...(filterProp ? [this.dataFilterExtension] : []),
       // Soft-gaussian splat shaping runs LAST so it shapes the final alpha (after
       // the time-fade + any categorical color). `splat` is a per-layer constant,
       // so including it conditionally keeps the list stable across sublayers.
@@ -1136,6 +1256,18 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
       // work when the flag is true.
       useCategoryColor: useGpuCategory,
       ...(useGpuCategory ? { categoryPalette: prepared.gpuPalette! } : {}),
+
+      // DataFilterExtension wiring (only when a filterProperty is set). The
+      // constant getFilterValue is the fallback for tiles missing the column;
+      // filterEnabled is additionally gated on THIS tile having baked it.
+      ...(filterProp
+        ? {
+            getFilterValue: 0,
+            filterEnabled: hasFilter && this.props.filterEnabled !== false,
+            filterRange: this.props.filterRange ?? null,
+            filterSoftRange: this.props.filterSoftRange ?? null,
+          }
+        : {}),
     });
     // `_subLayerProps: { points: { type } }` swaps the sublayer class — the
     // CompositeLayer-native renderSubLayers-style override point.
@@ -1190,6 +1322,17 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
   private renderConsolidated(): Layer[] {
     const t0 = performance.now();
     const { tiles } = this.state;
+
+    // Cumulative slabs bake a fixed attribute schema (positions/times/colors/
+    // category/radii) and never pack a filter column — so filterProperty is a
+    // no-op here, same as property-driven strokeWidth. Warn once.
+    if (this.filterPropertyValue()) {
+      warnOnce(
+        'AnimatedPointLayer:cumulativeFilterProperty',
+        '[AnimatedPointLayer] filterProperty is not applied in cumulative mode ' +
+          '(consolidated slabs bake a fixed schema); the column filter is ignored.',
+      );
+    }
 
     // Data switch / pre-load: collapse everything so the next archive starts clean.
     if (!tiles || tiles.length === 0) {

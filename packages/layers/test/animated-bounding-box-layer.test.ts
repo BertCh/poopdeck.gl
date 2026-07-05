@@ -79,6 +79,14 @@ vi.mock('@deck.gl/core', async () =>
 const RAD_TO_DEG = 180 / Math.PI;
 const DEG = Math.PI / 180;
 
+// Per-instance orientation/scale/translation reach the GPU via FUNCTION
+// accessors (deck's SimpleMeshLayer folds them into the computed
+// instanceModelMatrix built from the props — a binary data.attributes.* is
+// dropped). Read the value the matrix updater actually consumes per instance.
+const oriOf = (layer: any, i = 0): number[] => layer.props.getOrientation(null, { index: i });
+const sclOf = (layer: any, i = 0): number[] => layer.props.getScale(null, { index: i });
+const xlnOf = (layer: any, i = 0): number[] => layer.props.getTranslation(null, { index: i });
+
 /** Build a categorical {indices, categories} column from string values. */
 function categorical(values: string[]): { indices: Uint16Array; categories: string[] } {
   const categories: string[] = [];
@@ -217,6 +225,11 @@ describe('AnimatedBoundingBoxLayer', () => {
     expect(LayerCtor.defaultProps.showVelocity).toBe(false);
     expect(LayerCtor.defaultProps.speedProperty).toBe('speed');
     expect(LayerCtor.defaultProps.velocityColor.value).toEqual([80, 255, 220, 255]);
+    // Outline (stroked) parity props.
+    expect(LayerCtor.defaultProps.strokeColor.value).toBe(null);
+    expect(LayerCtor.defaultProps.getLineColor.value).toBe(null);
+    expect(LayerCtor.defaultProps.strokeWidthUnits).toBe('pixels');
+    expect(LayerCtor.defaultProps.strokeWidthMaxPixels.value).toBe(Number.MAX_SAFE_INTEGER);
     // Base defaults spread in.
     expect(LayerCtor.defaultProps.timeWindow).toBeDefined();
     expect(LayerCtor.defaultProps.tier).toBeDefined();
@@ -287,7 +300,7 @@ describe('AnimatedBoundingBoxLayer', () => {
       { track: 'A', lon: 0, lat: 0, t: 0, heading: 170 * DEG },
       { track: 'A', lon: 0, lat: 0, t: 1000, heading: -170 * DEG },
     ]);
-    const ori = render([tile], 500)[0].props.data.attributes.getOrientation.value;
+    const ori = oriOf(render([tile], 500)[0]);
     // Slot 1 (yaw) carries the heading in degrees; mid-arc is 180° (≡ -180°),
     // never 0°. (deck SimpleMeshLayer orientation is [pitch, yaw, roll].)
     expect(Math.abs(ori[1])).toBeCloseTo(180, 3);
@@ -298,7 +311,7 @@ describe('AnimatedBoundingBoxLayer', () => {
       { track: 'A', lon: 0, lat: 0, t: 0, heading: 0 },
       { track: 'A', lon: 0, lat: 0, t: 1000, heading: Math.PI / 2 },
     ]);
-    const ori = render([tile], 500)[0].props.data.attributes.getOrientation.value;
+    const ori = oriOf(render([tile], 500)[0]);
     expect(ori[0]).toBe(0); // pitch
     expect(ori[2]).toBe(0); // roll
     // yaw (slot 1) about the vertical z-axis — NOT slot 2 (roll about length).
@@ -310,8 +323,34 @@ describe('AnimatedBoundingBoxLayer', () => {
       { track: 'A', lon: 0, lat: 0, t: 0 },
       { track: 'A', lon: 10, lat: 0, t: 1000 },
     ]);
-    const ori = render([tile], 500)[0].props.data.attributes.getOrientation.value;
+    const ori = oriOf(render([tile], 500)[0]);
     expect(Array.from(ori)).toEqual([0, 0, 0]);
+  });
+
+  it('feeds DISTINCT per-instance heading/scale/ground-lift to the getOrientation/getScale/getTranslation accessors', () => {
+    // These are function accessors, NOT binary attributes: deck's SimpleMeshLayer
+    // would silently drop a data.attributes.getOrientation/getScale/getTranslation.
+    const tile = makeObjTile([
+      { track: 'A', lon: 0, lat: 0, t: 0, heading: 0, length: 4, width: 2, height: 1.6 },
+      { track: 'A', lon: 0, lat: 0, t: 1000, heading: 0, length: 4, width: 2, height: 1.6 },
+      { track: 'B', lon: 1, lat: 0, t: 0, heading: Math.PI / 2, length: 6, width: 3, height: 2 },
+      { track: 'B', lon: 1, lat: 0, t: 1000, heading: Math.PI / 2, length: 6, width: 3, height: 2 },
+    ]);
+    const boxes = render([tile], 500)[0];
+    expect(typeof boxes.props.getOrientation).toBe('function');
+    expect(typeof boxes.props.getScale).toBe('function');
+    expect(typeof boxes.props.getTranslation).toBe('function');
+    expect(boxes.props.data.attributes.getOrientation).toBeUndefined();
+    expect(boxes.props.data.attributes.getScale).toBeUndefined();
+    expect(boxes.props.data.attributes.getTranslation).toBeUndefined();
+    // Track A: yaw 0, half-dims 2/1/0.8, lift 0.8.
+    expect(oriOf(boxes, 0)[1]).toBeCloseTo(0, 4);
+    expect(sclOf(boxes, 0)[0]).toBeCloseTo(2, 5);
+    expect(xlnOf(boxes, 0)[2]).toBeCloseTo(0.8, 5);
+    // Track B: yaw 90°, half-dims 3/1.5/1, lift 1.
+    expect(oriOf(boxes, 1)[1]).toBeCloseTo(90, 3);
+    expect(sclOf(boxes, 1)[0]).toBeCloseTo(3, 5);
+    expect(xlnOf(boxes, 1)[2]).toBeCloseTo(1, 5);
   });
 
   it('bakes length/width/height into getScale × 0.5 (CubeGeometry spans ±1) and ground-lift', () => {
@@ -319,12 +358,13 @@ describe('AnimatedBoundingBoxLayer', () => {
       { track: 'A', lon: 0, lat: 0, t: 0, length: 4.5, width: 1.8, height: 1.6 },
       { track: 'A', lon: 0, lat: 0, t: 1000, length: 4.5, width: 1.8, height: 1.6 },
     ]);
-    const attrs = render([tile], 500)[0].props.data.attributes;
-    expect(attrs.getScale.value[0]).toBeCloseTo(2.25, 5); // 4.5 / 2
-    expect(attrs.getScale.value[1]).toBeCloseTo(0.9, 5); // 1.8 / 2
-    expect(attrs.getScale.value[2]).toBeCloseTo(0.8, 5); // 1.6 / 2
+    const boxes = render([tile], 500)[0];
+    const scl = sclOf(boxes);
+    expect(scl[0]).toBeCloseTo(2.25, 5); // 4.5 / 2
+    expect(scl[1]).toBeCloseTo(0.9, 5); // 1.8 / 2
+    expect(scl[2]).toBeCloseTo(0.8, 5); // 1.6 / 2
     // Lift = height/2 so the base rests on the ground.
-    expect(attrs.getTranslation.value[2]).toBeCloseTo(0.8, 5);
+    expect(xlnOf(boxes)[2]).toBeCloseTo(0.8, 5);
   });
 
   it('falls back to constant default dims when no dim columns are present', () => {
@@ -332,15 +372,16 @@ describe('AnimatedBoundingBoxLayer', () => {
       { track: 'A', lon: 0, lat: 0, t: 0 },
       { track: 'A', lon: 0, lat: 0, t: 1000 },
     ]);
-    const attrs = render([tile], 500, {
+    const boxes = render([tile], 500, {
       defaultLength: 6,
       defaultWidth: 3,
       defaultHeight: 2,
-    })[0].props.data.attributes;
-    expect(attrs.getScale.value[0]).toBeCloseTo(3, 5); // 6/2
-    expect(attrs.getScale.value[1]).toBeCloseTo(1.5, 5); // 3/2
-    expect(attrs.getScale.value[2]).toBeCloseTo(1, 5); // 2/2
-    expect(attrs.getTranslation.value[2]).toBeCloseTo(1, 5); // 2/2
+    })[0];
+    const scl = sclOf(boxes);
+    expect(scl[0]).toBeCloseTo(3, 5); // 6/2
+    expect(scl[1]).toBeCloseTo(1.5, 5); // 3/2
+    expect(scl[2]).toBeCloseTo(1, 5); // 2/2
+    expect(xlnOf(boxes)[2]).toBeCloseTo(1, 5); // 2/2
   });
 
   it('applies sizeScale uniformly to scale and ground-lift', () => {
@@ -348,10 +389,11 @@ describe('AnimatedBoundingBoxLayer', () => {
       { track: 'A', lon: 0, lat: 0, t: 0, length: 4, width: 2, height: 1.6 },
       { track: 'A', lon: 0, lat: 0, t: 1000, length: 4, width: 2, height: 1.6 },
     ]);
-    const attrs = render([tile], 500, { sizeScale: 2 })[0].props.data.attributes;
-    expect(attrs.getScale.value[0]).toBeCloseTo(4, 5); // 4 × 0.5 × 2
-    expect(attrs.getScale.value[2]).toBeCloseTo(1.6, 5); // 1.6 × 0.5 × 2
-    expect(attrs.getTranslation.value[2]).toBeCloseTo(1.6, 5); // 1.6/2 × 2
+    const boxes = render([tile], 500, { sizeScale: 2 })[0];
+    const scl = sclOf(boxes);
+    expect(scl[0]).toBeCloseTo(4, 5); // 4 × 0.5 × 2
+    expect(scl[2]).toBeCloseTo(1.6, 5); // 1.6 × 0.5 × 2
+    expect(xlnOf(boxes)[2]).toBeCloseTo(1.6, 5); // 1.6/2 × 2
   });
 
   it('honors custom heading/length/width/height/track-id property names', () => {
@@ -367,17 +409,17 @@ describe('AnimatedBoundingBoxLayer', () => {
     f.numericProps['len_m'] = new Float32Array([4, 4]);
     f.numericProps['wid_m'] = new Float32Array([2, 2]);
     f.numericProps['hgt_m'] = new Float32Array([2, 2]);
-    const attrs = render([tile], 1000, {
+    const boxes = render([tile], 1000, {
       trackIdProperty: 'tid',
       headingProperty: 'yaw',
       lengthProperty: 'len_m',
       widthProperty: 'wid_m',
       heightProperty: 'hgt_m',
-    })[0].props.data.attributes;
-    expect(attrs.getScale.value[0]).toBeCloseTo(2, 5); // 4/2
+    })[0];
+    expect(sclOf(boxes)[0]).toBeCloseTo(2, 5); // 4/2
     // yaw π at t=1000 → ±180° in the yaw slot (1); (the same orientation; Float32
     // π may land on -180).
-    expect(Math.abs(attrs.getOrientation.value[1])).toBeCloseTo(180, 3);
+    expect(Math.abs(oriOf(boxes)[1])).toBeCloseTo(180, 3);
   });
 
   // ── Per-instance category color ──────────────────────────────────────────
@@ -645,6 +687,113 @@ describe('AnimatedBoundingBoxLayer', () => {
     const out = (layer as any).getPickingInfo({ info: { index: 13 }, sourceLayer: edges });
     expect(out.object.track_id).toBe('B');
     expect(out.object.category).toBe('truck');
+  });
+
+  // ── Outline color / width parity (strokeColor / strokeWidthUnits / -MaxPixels) ─
+
+  it('inherits the per-category fill color for the outline when strokeColor is unset', () => {
+    const tile = makeObjTile([
+      { track: 'A', lon: 0, lat: 0, t: 0, category: 'car', length: 4, width: 2, height: 1.6 },
+      { track: 'A', lon: 0, lat: 0, t: 1000, category: 'car', length: 4, width: 2, height: 1.6 },
+    ]);
+    const layers = render([tile], 500, {
+      filled: false,
+      stroked: true,
+      colorProperty: 'category',
+      colorMapping: { car: [80, 170, 255, 255] },
+    });
+    const color = layers[0].props.data.attributes.getColor.value;
+    // Default (strokeColor null) → edges inherit the box's category fill color.
+    expect(Array.from(color.slice(0, 4))).toEqual([80, 170, 255, 255]);
+  });
+
+  it('bakes a distinct constant strokeColor into every edge, overriding the fill', () => {
+    const tile = makeObjTile([
+      { track: 'A', lon: 0, lat: 0, t: 0, category: 'car', length: 4, width: 2, height: 1.6 },
+      { track: 'A', lon: 0, lat: 0, t: 1000, category: 'car', length: 4, width: 2, height: 1.6 },
+    ]);
+    const layers = render([tile], 500, {
+      filled: false,
+      stroked: true,
+      colorProperty: 'category',
+      colorMapping: { car: [80, 170, 255, 255] },
+      strokeColor: [0, 255, 255, 255],
+    });
+    const color = layers[0].props.data.attributes.getColor.value;
+    expect(color.length).toBe(12 * 4); // one box → 12 edges
+    // First AND last (12th) edge both carry the distinct cyan outline, not the fill.
+    expect(Array.from(color.slice(0, 4))).toEqual([0, 255, 255, 255]);
+    expect(Array.from(color.slice(44, 48))).toEqual([0, 255, 255, 255]);
+  });
+
+  it('still rides the appear/disappear fade on the strokeColor alpha', () => {
+    const tile = makeObjTile([
+      { track: 'A', lon: 0, lat: 0, t: 0, length: 4, width: 2, height: 1.6 },
+      { track: 'A', lon: 0, lat: 0, t: 1000, length: 4, width: 2, height: 1.6 },
+    ]);
+    // 100ms into a 200ms fade-in → alpha ≈ 0.5 → 255 × 0.5 on the outline color.
+    const color = render([tile], 100, {
+      filled: false,
+      stroked: true,
+      strokeColor: [10, 20, 30, 255],
+      fadeInDuration: 200,
+    })[0].props.data.attributes.getColor.value;
+    expect(Array.from(color.slice(0, 3))).toEqual([10, 20, 30]);
+    expect(color[3]).toBeGreaterThan(100);
+    expect(color[3]).toBeLessThan(160);
+  });
+
+  it('lets the getLineColor alias win over strokeColor for the outline color', () => {
+    const tile = makeObjTile([
+      { track: 'A', lon: 0, lat: 0, t: 0, length: 4, width: 2, height: 1.6 },
+      { track: 'A', lon: 0, lat: 0, t: 1000, length: 4, width: 2, height: 1.6 },
+    ]);
+    const color = render([tile], 500, {
+      filled: false,
+      stroked: true,
+      strokeColor: [255, 0, 0, 255],
+      getLineColor: [0, 255, 0, 255],
+    })[0].props.data.attributes.getColor.value;
+    expect(Array.from(color.slice(0, 4))).toEqual([0, 255, 0, 255]);
+  });
+
+  it('falls back to strokeColor when getLineColor is a function accessor', () => {
+    const tile = makeObjTile([
+      { track: 'A', lon: 0, lat: 0, t: 0, length: 4, width: 2, height: 1.6 },
+      { track: 'A', lon: 0, lat: 0, t: 1000, length: 4, width: 2, height: 1.6 },
+    ]);
+    // Function accessors can't run against binary tiles — warn once and fall back.
+    const color = render([tile], 500, {
+      filled: false,
+      stroked: true,
+      strokeColor: [12, 34, 56, 255],
+      getLineColor: () => [0, 0, 0, 255],
+    })[0].props.data.attributes.getColor.value;
+    expect(Array.from(color.slice(0, 4))).toEqual([12, 34, 56, 255]);
+  });
+
+  it('forwards strokeWidthUnits to the outline LineLayer widthUnits (default pixels)', () => {
+    const tile = makeObjTile([
+      { track: 'A', lon: 0, lat: 0, t: 0, length: 4, width: 2, height: 1.6 },
+      { track: 'A', lon: 0, lat: 0, t: 1000, length: 4, width: 2, height: 1.6 },
+    ]);
+    expect(render([tile], 500, { filled: false, stroked: true })[0].props.widthUnits).toBe(
+      'pixels',
+    );
+    const meters = render([tile], 500, { filled: false, stroked: true, strokeWidthUnits: 'meters' });
+    expect(meters[0].props.widthUnits).toBe('meters');
+  });
+
+  it('forwards strokeWidthMaxPixels to the outline LineLayer widthMaxPixels (default no clamp)', () => {
+    const tile = makeObjTile([
+      { track: 'A', lon: 0, lat: 0, t: 0, length: 4, width: 2, height: 1.6 },
+      { track: 'A', lon: 0, lat: 0, t: 1000, length: 4, width: 2, height: 1.6 },
+    ]);
+    expect(
+      render([tile], 500, { filled: false, stroked: true })[0].props.widthMaxPixels,
+    ).toBe(Number.MAX_SAFE_INTEGER);
+    const clamped = render([tile], 500, { filled: false, stroked: true, strokeWidthMaxPixels: 8 });
+    expect(clamped[0].props.widthMaxPixels).toBe(8);
   });
 
   // ── Caching / lifecycle ──────────────────────────────────────────────────

@@ -119,6 +119,16 @@ Landed but not fully closed — each lists what remains.
   internal lib crates; npm `@poopdeck.gl` via changesets + `release-npm.yml`;
   release-plz + cargo-dist for Rust; DB extensions/Python/Docker counted out.
   OPEN: execute the first publishes (npm + crates.io + `v0.1.0` tag).
+- [**stt-optimize-intelligence-2026-07.md**](./stt-optimize-intelligence-2026-07.md)
+  — NEW (2026-07-02): stt-optimize from zoom-range guesser to **profiler +
+  advisor + doctor** ("measure, don't model"). Shipped same day through P2.5:
+  `inspect`/`diff` (measured per-column costs, `--fail-on-growth`), the
+  evidence-based advisor layer (`recommend --explain`, `--auto encode`,
+  lossy-never-auto-applied), the `style_hints` metadata block
+  (`stt-build --style-hints` + TS `metadata.styleHints` parse), and the
+  `doctor` linter (`--strict` CI gate). User docs:
+  [Tuning your tiles](../guides/tuning-tiles.md). OPEN: FE layer auto-wiring
+  of style hints; P3 `--auto-measure` loop stays trigger-gated.
 - [**full-ecosystem-audit-2026-07.md**](./full-ecosystem-audit-2026-07.md) — NEW
   (landed 2026-07-01, after the triage pass): seven-slice multi-agent audit of the
   whole repo, ~140 verified findings. Headline criticals: 63 untracked

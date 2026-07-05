@@ -49,6 +49,10 @@ const KIND_TO_EXPORT: Partial<Record<LayerKind, string>> = {
   flowmap: 'FlowmapLayer',
   flowCorridor: 'FlowCorridorLayer',
   flowStroke: 'FlowStrokeLayer',
+  text: 'AnimatedTextLayer',
+  mesh: 'AnimatedMeshLayer',
+  pointCloud: 'AnimatedPointCloudLayer',
+  hexbin: 'AnimatedHexagonLayer',
 };
 
 const exports = barrel as Record<string, unknown>;

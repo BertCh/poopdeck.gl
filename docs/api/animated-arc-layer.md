@@ -38,6 +38,7 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 | `widthUnits` | `'pixels' \| 'meters' \| 'common'` | `'pixels'` | Width units. |
 | `widthScale` / `widthMinPixels` / `widthMaxPixels` | `number` | — | Width scaling + pixel clamps (`ArcLayer` pass-through). |
 | `greatCircle` | `boolean` | `false` | Bow arcs along a great-circle path (long-haul / globe flows). |
+| `numSegments` | `number` | `50` | Arc tessellation segment count — higher is smoother, lower is cheaper (`ArcLayer` pass-through). |
 | `arcHeight` / `getHeight` | `number` | `1` | Arc height multiplier; `0` = flat. Constant only. |
 | `arcTilt` / `getTilt` | `number` | `0` | Sideways tilt (degrees) to separate arcs sharing endpoints. Constant only. |
 | `colorPalette` | `Color[]` | 10-stop | Palette for a categorical `sourceColor`/`targetColor` column. |

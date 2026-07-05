@@ -46,6 +46,8 @@ import type {
   GetPickingInfoParams,
   Layer,
   LayerContext,
+  Material,
+  Unit,
 } from '@deck.gl/core';
 import { H3HexagonLayer } from '@deck.gl/geo-layers';
 import { getFeatureProperties, DEFAULT_SUMMARY_COLOR_RANGE } from '@poopdeck.gl/core';
@@ -67,6 +69,11 @@ import {
   inheritedPropsDigest,
   updateTriggersDigest,
 } from '../../lib/style-digest.js';
+import { resolveAccessorAlias } from '../../lib/accessor-alias.js';
+import type {
+  ColorAccessorValue,
+  NumericAccessorValue,
+} from '../../lib/accessor-alias.js';
 import { warnOnce } from '../../lib/log.js';
 
 const DEBUG = false;
@@ -106,6 +113,106 @@ export interface _H3SummaryLayerProps {
    * between adjacent hexes — useful for a heatmap-style look at low zooms.
    */
   coverage?: number;
+
+  /* ── Outline / stroke family (H3HexagonLayer pass-throughs) ─────────────
+   * The wrapped H3HexagonLayer forwards these to its internal PolygonLayer /
+   * ColumnLayer. They were never surfaced, so the outline was pinned at the
+   * deck defaults (a black 1px hex border you could neither recolor nor
+   * disable). Same documented tile-seam overdraw caveat as the fill: outlines
+   * double-draw along tile boundaries. */
+
+  /**
+   * Draw the per-hex outline stroke (the hex-grid look). Matches deck's
+   * H3HexagonLayer default.
+   * @default true
+   */
+  stroked?: boolean;
+
+  /**
+   * Fill each hex. Set `false` (with `stroked: true`) for an outline-only
+   * hex grid.
+   * @default true
+   */
+  filled?: boolean;
+
+  /**
+   * Draw the extruded-prism edges as a wireframe. Only visible when
+   * `extruded: true`.
+   * @default false
+   */
+  wireframe?: boolean;
+
+  /**
+   * Outline color — a constant {@link Color}. The wrapped sublayer's
+   * `getLineColor` was stuck at deck's default black; this surfaces it.
+   * @default [0, 0, 0, 255]
+   */
+  lineColor?: Color;
+
+  /**
+   * Upstream-vocabulary alias of {@link lineColor}. NOTE: unlike upstream
+   * deck.gl this accepts a constant {@link Color} only (the summary outline is
+   * one color for the whole grid — there is no per-cell stroke column); a
+   * function accessor or a column-name string warns/ignores and falls back to
+   * `lineColor`. When set to a constant Color, it wins over `lineColor`.
+   */
+  getLineColor?: ColorAccessorValue | null;
+
+  /**
+   * Outline width — a constant number, interpreted in {@link lineWidthUnits}
+   * and clamped by `lineWidthMinPixels`/`lineWidthMaxPixels`. Only drawn when
+   * `stroked: true`.
+   * @default 1
+   */
+  lineWidth?: number;
+
+  /**
+   * Upstream-vocabulary alias of {@link lineWidth} (constant number only — no
+   * per-cell width column; a function accessor warns once and falls back to
+   * `lineWidth`). When set, it wins over `lineWidth`.
+   */
+  getLineWidth?: NumericAccessorValue | null;
+
+  /**
+   * Units for {@link lineWidth}. Deck parity: world-space meters.
+   * @default 'meters'
+   */
+  lineWidthUnits?: Unit;
+
+  /**
+   * Outline width multiplier.
+   * @default 1
+   */
+  lineWidthScale?: number;
+
+  /**
+   * Minimum on-screen outline width in pixels — the practical lever that keeps
+   * hex-grid borders visible at summary zooms (meters-based widths collapse
+   * below a pixel when zoomed out).
+   * @default 0
+   */
+  lineWidthMinPixels?: number;
+
+  /**
+   * Maximum on-screen outline width in pixels.
+   * @default Number.MAX_SAFE_INTEGER
+   */
+  lineWidthMaxPixels?: number;
+
+  /**
+   * Lighting material for extruded hexes — H3HexagonLayer pass-through.
+   * Applies only when `extruded: true`. `true` uses the default lit material.
+   * @default true
+   */
+  material?: Material | boolean;
+
+  /**
+   * High-precision hexagon rendering. `'auto'` picks per-cell fidelity
+   * (irregular low-res cells + pentagons render hi-fi); `true`/`false` force
+   * it. H3HexagonLayer pass-through.
+   * @default 'auto'
+   */
+  highPrecision?: boolean | 'auto';
 
   /** Fired once per archive init with the decoded metadata. */
   onMetadataLoad?: ((meta: ArchiveMetadata) => void) | null;
@@ -184,6 +291,24 @@ const defaultProps: DefaultProps<H3SummaryLayerProps> = {
   extruded: false,
   elevationScale: 1,
   coverage: { type: 'number', value: 0.92, min: 0, max: 1 },
+  // Outline / stroke family — deck's H3HexagonLayer (→ PolygonLayer) defaults,
+  // preserving the previously-implicit black hex border while making it
+  // recolorable / disablable.
+  stroked: true,
+  filled: true,
+  wireframe: false,
+  lineColor: { type: 'color', value: [0, 0, 0, 255] },
+  // Accessor-named aliases (see the prop docs): unset so the legacy prop wins
+  // unless the caller opts into the upstream vocabulary.
+  getLineColor: { type: 'object', value: null, optional: true, compare: true },
+  lineWidth: { type: 'number', value: 1, min: 0 },
+  getLineWidth: { type: 'object', value: null, optional: true, compare: true },
+  lineWidthUnits: 'meters',
+  lineWidthScale: { type: 'number', value: 1, min: 0 },
+  lineWidthMinPixels: { type: 'number', value: 0, min: 0 },
+  lineWidthMaxPixels: { type: 'number', value: Number.MAX_SAFE_INTEGER, min: 0 },
+  material: true,
+  highPrecision: 'auto',
   onMetadataLoad: { type: 'function', value: null, optional: true },
 };
 
@@ -340,6 +465,45 @@ export class H3SummaryLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalL
   }
 
   /**
+   * Accessor-alias resolution (audit B1): the upstream-named `getLineColor`
+   * alias wins when set to a constant Color; a function-valued alias (or a
+   * column-name string, which a summary outline can't source per-cell) warns
+   * once / is ignored and falls back to the `lineColor` constant.
+   */
+  private lineColorValue(): Color {
+    const resolved = resolveAccessorAlias(
+      'H3SummaryLayer',
+      'getLineColor',
+      this.props.getLineColor as Color | undefined,
+      this.props.lineColor ?? ([0, 0, 0, 255] as Color),
+    );
+    // The outline is a single constant color for the whole grid; a stray
+    // column-name string has no per-cell source here, so coerce to the
+    // constant default rather than forward an invalid accessor.
+    return Array.isArray(resolved)
+      ? resolved
+      : (this.props.lineColor ?? ([0, 0, 0, 255] as Color));
+  }
+
+  /**
+   * Accessor-alias resolution for the constant outline width: `getLineWidth`
+   * wins when set to a number; a function/column value warns/ignores and falls
+   * back to the `lineWidth` constant.
+   */
+  private lineWidthValue(): number {
+    // Widen T to `number | string` so a column-name-shaped `getLineWidth`
+    // type-checks (the summary outline has no per-cell width source, so a
+    // string is coerced back to the constant below).
+    const resolved = resolveAccessorAlias<number | string>(
+      'H3SummaryLayer',
+      'getLineWidth',
+      this.props.getLineWidth,
+      this.props.lineWidth ?? 1,
+    );
+    return typeof resolved === 'number' ? resolved : (this.props.lineWidth ?? 1);
+  }
+
+  /**
    * Quantise `value` into a color from `colorRange`, using the active
    * color domain. Returns the last colour for values above the domain max.
    */
@@ -395,19 +559,35 @@ export class H3SummaryLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalL
       ];
     }
 
+    // Resolve the constant outline color/width ONCE per render (they're
+    // layer-level, not per-cell) so both the style digest and the sublayer
+    // props see the same accessor-alias-resolved value.
+    const lineColor = this.lineColorValue();
+    const lineWidth = this.lineWidthValue();
+    const material = this.props.material;
+    const materialKey =
+      material === true ? 't' : material === false ? 'f' : JSON.stringify(material);
+
     // Layer-level style digest — when ANY of these change every cached
     // H3HexagonLayer is stale and we rebuild. The domain is included so a
     // streaming-in tile that widens the auto-fit domain invalidates the
     // cache (otherwise the rampColor accessor would be stale). colorRange is
     // keyed by CONTENT (memoized digest), not length — a same-size ramp swap
     // must invalidate cached sublayers, same fix as the animated layers'
-    // palettes. Inherited composite props (getSubLayerProps surface +
-    // _subLayerProps) and the user's updateTriggers ride the key too.
+    // palettes. The outline/stroke family is folded in too so a stroke restyle
+    // rebuilds the cached hexagons. Inherited composite props (getSubLayerProps
+    // surface + _subLayerProps) and the user's updateTriggers ride the key too.
     const styleKey =
       `${this.props.extruded ? 1 : 0}|${this.props.elevationScale ?? 1}` +
       `|${this.props.coverage ?? 0.92}|${this.props.pickable ? 1 : 0}` +
       `|${this.props.opacity ?? 1}|${domain[0]}|${domain[1]}` +
       `|${weightProp}|${colorListDigest(this.props.colorRange ?? DEFAULT_COLOR_RANGE)}` +
+      `|st${this.props.stroked ? 1 : 0}|fl${this.props.filled ? 1 : 0}` +
+      `|wf${this.props.wireframe ? 1 : 0}` +
+      `|lc${Array.isArray(lineColor) ? lineColor.join(',') : ''}|lw${lineWidth}` +
+      `|lwu${this.props.lineWidthUnits}|lws${this.props.lineWidthScale}` +
+      `|lwmin${this.props.lineWidthMinPixels}|lwmax${this.props.lineWidthMaxPixels}` +
+      `|mat${materialKey}|hp${this.props.highPrecision}` +
       `|${inheritedPropsDigest(this.props)}` +
       `|${updateTriggersDigest(this.props.updateTriggers)}`;
 
@@ -445,8 +625,25 @@ export class H3SummaryLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalL
           : 0,
         extruded: !!this.props.extruded,
         coverage: this.props.coverage ?? 0.92,
+        // Outline / stroke family — pass-throughs to H3HexagonLayer's internal
+        // PolygonLayer / ColumnLayer. getLineColor/getLineWidth are constants
+        // (the summary outline is one style for the whole grid), not per-cell
+        // accessors.
+        stroked: this.props.stroked,
+        filled: this.props.filled,
+        wireframe: this.props.wireframe,
+        getLineColor: lineColor,
+        getLineWidth: lineWidth,
+        lineWidthUnits: this.props.lineWidthUnits,
+        lineWidthScale: this.props.lineWidthScale,
+        lineWidthMinPixels: this.props.lineWidthMinPixels,
+        lineWidthMaxPixels: this.props.lineWidthMaxPixels,
+        material: this.props.material,
+        highPrecision: this.props.highPrecision,
         // updateTriggers ensures deck.gl rebuilds the fill-color and elevation
-        // buffers when the props they read from change.
+        // buffers when the props they read from change. The constant outline
+        // color/width ride triggers too so a restyle re-evaluates them even if
+        // the (rebuilt) sublayer were somehow diffed rather than replaced.
         updateTriggers: {
           ...this.props.updateTriggers,
           getFillColor: [
@@ -461,6 +658,11 @@ export class H3SummaryLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalL
             this.props.elevationScale,
             this.props.updateTriggers?.getElevation,
           ],
+          getLineColor: [
+            Array.isArray(lineColor) ? lineColor.join(',') : '',
+            this.props.updateTriggers?.getLineColor,
+          ],
+          getLineWidth: [lineWidth, this.props.updateTriggers?.getLineWidth],
         },
       });
       // `_subLayerProps: { hexagons: { type } }` swaps the sublayer class.

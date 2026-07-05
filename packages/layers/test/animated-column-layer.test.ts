@@ -96,6 +96,9 @@ describe('AnimatedColumnLayer per-tile sublayer architecture', () => {
         lineColor: [0, 0, 0, 255],
         lineWidth: 1,
         lineWidthUnits: 'meters',
+        lineWidthScale: 1,
+        lineWidthMinPixels: 0,
+        lineWidthMaxPixels: Number.MAX_SAFE_INTEGER,
         material: true,
         timeWindow: 1000,
         fadeInDuration: 300,
@@ -255,6 +258,41 @@ describe('AnimatedColumnLayer per-tile sublayer architecture', () => {
     expect(built.props.diskResolution).toBe(12);
     expect(built.props.coverage).toBe(0.8);
     expect(built.props.extruded).toBe(false);
+  });
+
+  it('forwards the outline-width scale/clamp trio to the sublayer', () => {
+    // Symmetric with lineWidthUnits + constant lineWidth/lineColor — the
+    // outline-width scale/min/max only bite when stroked:true, but they must
+    // reach the ColumnLayer sublayer unconditionally.
+    const built = buildSublayerForTile(bigPointTile(5), {
+      stroked: true,
+      lineWidthScale: 3,
+      lineWidthMinPixels: 2,
+      lineWidthMaxPixels: 40,
+    });
+    expect(built.props.lineWidthScale).toBe(3);
+    expect(built.props.lineWidthMinPixels).toBe(2);
+    expect(built.props.lineWidthMaxPixels).toBe(40);
+  });
+
+  it('forwards the outline-width trio defaults (matching deck ColumnLayer)', () => {
+    const built = buildSublayerForTile(bigPointTile(5));
+    expect(built.props.lineWidthScale).toBe(1);
+    expect(built.props.lineWidthMinPixels).toBe(0);
+    expect(built.props.lineWidthMaxPixels).toBe(Number.MAX_SAFE_INTEGER);
+  });
+
+  it('rebuilds the cached ColumnLayer when an outline-width prop changes', () => {
+    // The trio changes GPU output, so it must be folded into the layer-props
+    // digest — otherwise a cached sublayer would ignore the change.
+    const layer = makeLayer();
+    const tile = bigPointTile(3);
+    layer.state = { tiles: [tile] };
+    const first = (layer as any).renderLayers();
+    layer.props.lineWidthMinPixels = 5;
+    const second = (layer as any).renderLayers();
+    expect(second[0]).not.toBe(first[0]);
+    expect(second[0].props.lineWidthMinPixels).toBe(5);
   });
 
   it('forwards constant elevation/fillColor fallbacks for the no-column case', () => {

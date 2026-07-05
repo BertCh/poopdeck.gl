@@ -62,6 +62,75 @@ export interface _AnimatedTripHeadsLayerProps {
   headRadiusMinPixels?: number;
   /** Maximum on-screen head radius in pixels. @default unbounded */
   headRadiusMaxPixels?: number;
+  /**
+   * Global multiplier applied to every head radius (before the pixel
+   * min/max clamp) — ScatterplotLayer `radiusScale` pass-through. Useful for a
+   * one-knob emphasis pulse without touching the per-dot radius.
+   * @default 1
+   */
+  radiusScale?: number;
+  /**
+   * Render the head dots as camera-facing billboards — ScatterplotLayer
+   * `billboard` pass-through. Matters in the globe / pitched / space-time-cube
+   * views this layer supports, where a ground-plane disk would foreshorten.
+   * @default false
+   */
+  headBillboard?: boolean;
+  /**
+   * Smooth-edge antialiasing — ScatterplotLayer `antialiasing` pass-through.
+   * Disable to reduce blending artifacts on dense overlapping dots.
+   * @default true
+   */
+  antialiasing?: boolean;
+
+  /* ── Outline / contrast-ring subsystem ─────────────────────────────────
+   * A stroked ring around each moving dot keeps it legible over busy
+   * basemaps. These map onto the ScatterplotLayer outline props; `head*`
+   * names mirror the layer's `head*` fill vocabulary. */
+
+  /**
+   * Draw an outline ring around each head — ScatterplotLayer `stroked`
+   * pass-through (was hardcoded `false`). @default false
+   */
+  headStroked?: boolean;
+  /**
+   * Fill the head disk — ScatterplotLayer `filled` pass-through (was
+   * hardcoded `true`). Set `false` with `headStroked` for hollow rings.
+   * @default true
+   */
+  headFilled?: boolean;
+  /**
+   * Outline color (RGBA, 0-255) — forwarded to ScatterplotLayer
+   * `getLineColor`. Constant only (the active-only output buffer packs no
+   * per-feature stroke column). @default [0, 0, 0, 255]
+   */
+  headStrokeColor?: Color;
+  /**
+   * Outline width — forwarded to ScatterplotLayer `getLineWidth`. Constant
+   * only; interpreted in {@link lineWidthUnits} and clamped by the pixel
+   * bounds below. @default 1
+   */
+  headStrokeWidth?: number;
+  /**
+   * Units for {@link headStrokeWidth} — ScatterplotLayer `lineWidthUnits`
+   * pass-through. Deck-parity default: world-space meters. @default 'meters'
+   */
+  lineWidthUnits?: 'pixels' | 'meters' | 'common';
+  /**
+   * Global multiplier for the outline width — ScatterplotLayer
+   * `lineWidthScale` pass-through. @default 1
+   */
+  lineWidthScale?: number;
+  /**
+   * Minimum on-screen outline width in pixels — ScatterplotLayer
+   * `lineWidthMinPixels` pass-through. @default 0
+   */
+  lineWidthMinPixels?: number;
+  /**
+   * Maximum on-screen outline width in pixels — ScatterplotLayer
+   * `lineWidthMaxPixels` pass-through. @default unbounded
+   */
+  lineWidthMaxPixels?: number;
 }
 
 /** Complete props accepted by {@link AnimatedTripHeadsLayer}. */
@@ -69,6 +138,7 @@ export type AnimatedTripHeadsLayerProps = _AnimatedTripHeadsLayerProps &
   SpatioTemporalLayerProps;
 
 const DEFAULT_HEAD_COLOR: Color = [253, 128, 93, 255];
+const DEFAULT_HEAD_STROKE_COLOR: Color = [0, 0, 0, 255];
 
 /**
  * Per-tile prepared data. The typed arrays are referenced DIRECTLY from the
@@ -116,6 +186,18 @@ export class AnimatedTripHeadsLayer<ExtraPropsT extends {} = {}> extends SpatioT
     headRadius: { type: 'number', value: 0, min: 0 },
     headRadiusMinPixels: { type: 'number', value: 0, min: 0 },
     headRadiusMaxPixels: { type: 'number', value: 1e9, min: 0 },
+    radiusScale: { type: 'number', value: 1, min: 0 },
+    headBillboard: false,
+    antialiasing: true,
+    // Outline subsystem — ScatterplotLayer defaults (stroked off, filled on).
+    headStroked: false,
+    headFilled: true,
+    headStrokeColor: { type: 'color', value: [0, 0, 0, 255] },
+    headStrokeWidth: { type: 'number', value: 1, min: 0 },
+    lineWidthUnits: 'meters',
+    lineWidthScale: { type: 'number', value: 1, min: 0 },
+    lineWidthMinPixels: { type: 'number', value: 0, min: 0 },
+    lineWidthMaxPixels: { type: 'number', value: Number.MAX_SAFE_INTEGER, min: 0 },
   };
 
   /** Per-tile prepared-data cache. Pruned to the visible tile set each render. */
@@ -276,6 +358,9 @@ export class AnimatedTripHeadsLayer<ExtraPropsT extends {} = {}> extends SpatioT
     const color = (Array.isArray(this.props.headColor)
       ? this.props.headColor
       : DEFAULT_HEAD_COLOR) as Color;
+    const strokeColor = (Array.isArray(this.props.headStrokeColor)
+      ? this.props.headStrokeColor
+      : DEFAULT_HEAD_STROKE_COLOR) as Color;
     // In meters mode pass the meter radius (headRadius); else the pixel value.
     // The `||` chain is deliberate (headRadius defaults to 0 = unset).
     const radius = sizeInMeters
@@ -312,11 +397,22 @@ export class AnimatedTripHeadsLayer<ExtraPropsT extends {} = {}> extends SpatioT
           pickable: false,
           getFillColor: color,
           getRadius: radius,
+          radiusScale: this.props.radiusScale,
           radiusUnits: sizeInMeters ? 'meters' : 'pixels',
           radiusMinPixels: this.props.headRadiusMinPixels,
           radiusMaxPixels: this.props.headRadiusMaxPixels,
-          stroked: false,
-          filled: true,
+          billboard: this.props.headBillboard,
+          antialiasing: this.props.antialiasing,
+          // Outline / contrast-ring (constants — the active-only buffer packs
+          // no per-feature stroke column).
+          stroked: this.props.headStroked,
+          filled: this.props.headFilled,
+          getLineColor: strokeColor,
+          getLineWidth: this.props.headStrokeWidth,
+          lineWidthUnits: this.props.lineWidthUnits,
+          lineWidthScale: this.props.lineWidthScale,
+          lineWidthMinPixels: this.props.lineWidthMinPixels,
+          lineWidthMaxPixels: this.props.lineWidthMaxPixels,
           // Source tile rides along for family parity (picking context).
           tile: prepared.tile,
           sttFeatures: prepared.features,

@@ -48,6 +48,8 @@ import {
   type SummaryColumn,
   type HeatmapDomain,
   type HeatmapClassDomain,
+  type StyleHints,
+  type PropertyStyleHint,
   Compression,
 } from './types.js';
 import { createDefaultTileDecoder, type TileDecoder } from './tile-decoder.js';
@@ -1021,6 +1023,7 @@ export class STTArchive {
           }))
         : undefined,
       heatmapDomain: parseHeatmapDomain(json.heatmap_domain),
+      styleHints: parseStyleHints(json.style_hints),
     };
     return this.metadataCache;
   }
@@ -2456,4 +2459,107 @@ function parseHeatmapDomain(raw: unknown): HeatmapDomain | undefined {
     .filter((c): c is HeatmapClassDomain => c !== null);
   if (classes.length === 0) return undefined;
   return { classes };
+}
+
+/** The `layer_hint` values this reader recognizes (anything else is dropped). */
+const LAYER_HINT_VALUES: ReadonlyArray<NonNullable<StyleHints['layerHint']>> = [
+  'points',
+  'paths',
+  'trips',
+  'polygons',
+];
+
+/** The numeric percentile fields of a `style_hints` property entry (wire and TS names coincide). */
+const NUMERIC_HINT_FIELDS = ['min', 'p50', 'p90', 'p95', 'p97', 'p99', 'max'] as const;
+
+/**
+ * Parse one `style_hints.properties[]` entry into a {@link PropertyStyleHint}.
+ * Returns `null` for a malformed entry (missing name, or a known field with
+ * the wrong type) so {@link parseStyleHints} can drop entries INDIVIDUALLY
+ * instead of rejecting the whole block. `null` field values are treated as
+ * absent (the Rust writer may null-fill instead of omitting); unknown extra
+ * keys are ignored for forward compatibility.
+ */
+function parsePropertyStyleHint(raw: unknown): PropertyStyleHint | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const p = raw as Record<string, unknown>;
+  if (typeof p.name !== 'string' || p.name.length === 0) return null;
+  const out: PropertyStyleHint = { name: p.name };
+  for (const key of NUMERIC_HINT_FIELDS) {
+    const v = p[key];
+    if (v == null) continue; // absent (or null-filled) → optional field stays unset
+    if (typeof v !== 'number' || !Number.isFinite(v)) return null;
+    out[key] = v;
+  }
+  const domain = p.suggested_domain;
+  if (domain != null) {
+    if (
+      !Array.isArray(domain) ||
+      domain.length !== 2 ||
+      typeof domain[0] !== 'number' ||
+      !Number.isFinite(domain[0]) ||
+      typeof domain[1] !== 'number' ||
+      !Number.isFinite(domain[1])
+    ) {
+      return null;
+    }
+    out.suggestedDomain = [domain[0], domain[1]];
+  }
+  const cardinality = p.cardinality;
+  if (cardinality != null) {
+    if (typeof cardinality !== 'number' || !Number.isFinite(cardinality)) return null;
+    out.cardinality = cardinality;
+  }
+  return out;
+}
+
+/**
+ * Parse the `style_hints` block from an archive's JSON metadata into the
+ * camelCase TS shape ({@link StyleHints}). Returns `undefined` for archives
+ * that don't carry one — and NEVER throws: a missing/malformed block degrades
+ * to `undefined`, a malformed `properties[]` entry is dropped individually
+ * (the rest of the block survives), a non-array `properties` degrades to an
+ * empty list, and unknown extra keys are ignored for forward compatibility.
+ *
+ * The hints are build-time-measured DEFAULTS only — layer props / spec /
+ * user config always override them.
+ */
+export function parseStyleHints(json: unknown): StyleHints | undefined {
+  if (!json || typeof json !== 'object' || Array.isArray(json)) return undefined;
+  const r = json as Record<string, unknown>;
+  if (typeof r.version !== 'number' || !Number.isFinite(r.version)) return undefined;
+  const properties = Array.isArray(r.properties)
+    ? (r.properties as unknown[])
+        .map(parsePropertyStyleHint)
+        .filter((p): p is PropertyStyleHint => p !== null)
+    : [];
+  const out: StyleHints = { version: r.version, properties };
+  const playback = r.suggested_playback_seconds;
+  if (typeof playback === 'number' && Number.isFinite(playback)) {
+    out.suggestedPlaybackSeconds = playback;
+  }
+  const layerHint = r.layer_hint;
+  if (
+    typeof layerHint === 'string' &&
+    (LAYER_HINT_VALUES as readonly string[]).includes(layerHint)
+  ) {
+    out.layerHint = layerHint as NonNullable<StyleHints['layerHint']>;
+  }
+  return out;
+}
+
+/**
+ * Look up the bake-time suggested color/size ramp domain for `property` in
+ * an archive's {@link StyleHints}. Returns `undefined` when the archive
+ * carries no hints, the property has no entry, or the entry carries no
+ * domain (e.g. a categorical property). The domain is a build-time-measured
+ * DEFAULT (`[min, ~p97]`, endpoints rounded outward) — callers should always
+ * let layer/spec/user config override it.
+ */
+export function suggestedDomainFor(
+  hints: StyleHints | undefined,
+  property: string,
+): [number, number] | undefined {
+  if (!hints || !Array.isArray(hints.properties)) return undefined;
+  return hints.properties.find((p) => p.name === property)?.suggestedDomain;
 }

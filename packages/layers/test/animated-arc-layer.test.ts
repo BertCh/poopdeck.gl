@@ -164,6 +164,11 @@ describe('AnimatedArcLayer per-tile sublayer architecture (v3)', () => {
     expect(gc.props.greatCircle).toBe(true);
   });
 
+  it('forwards the numSegments arc-tessellation prop to ArcLayer', () => {
+    const built = buildSublayerForTile(odTile(3), { numSegments: 12 });
+    expect(built.props.numSegments).toBe(12);
+  });
+
   it('forwards arcHeight / arcTilt as ArcLayer getHeight / getTilt constants', () => {
     const built = buildSublayerForTile(odTile(3), { arcHeight: 0.5, arcTilt: 30 });
     expect(built.props.getHeight).toBe(0.5);

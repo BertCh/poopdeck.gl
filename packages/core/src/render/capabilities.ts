@@ -44,6 +44,10 @@ export const LAYER_KINDS = [
   'flowStroke',
   'isoLines',
   'ego',
+  'text',
+  'mesh',
+  'pointCloud',
+  'hexbin',
 ] as const;
 export type LayerKind = (typeof LAYER_KINDS)[number];
 

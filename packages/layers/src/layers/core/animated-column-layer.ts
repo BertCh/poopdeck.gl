@@ -224,6 +224,29 @@ export interface _AnimatedColumnLayerProps {
   lineWidthUnits?: 'pixels' | 'meters' | 'common';
 
   /**
+   * Multiplier applied to every outline width — ColumnLayer pass-through. Only
+   * takes effect when `stroked` is true.
+   * @default 1
+   */
+  lineWidthScale?: number;
+
+  /**
+   * Minimum outline width in pixels — ColumnLayer pass-through. Clamps the
+   * rendered outline so it stays visible when zoomed out. Only takes effect
+   * when `stroked` is true.
+   * @default 0
+   */
+  lineWidthMinPixels?: number;
+
+  /**
+   * Maximum outline width in pixels — ColumnLayer pass-through. Clamps the
+   * rendered outline so it stops growing when zoomed in. Only takes effect when
+   * `stroked` is true.
+   * @default Number.MAX_SAFE_INTEGER
+   */
+  lineWidthMaxPixels?: number;
+
+  /**
    * Lighting material for extruded columns — ColumnLayer pass-through. `true`
    * for the default phong material, `false` to disable lighting, or a material
    * spec `{ambient, diffuse, shininess, specularColor}`.
@@ -377,6 +400,11 @@ export class AnimatedColumnLayer<ExtraPropsT extends {} = {}> extends SpatioTemp
     lineColor: { type: 'color', value: [0, 0, 0, 255] },
     lineWidth: { type: 'number', value: 1, min: 0 },
     lineWidthUnits: 'meters',
+    // Outline-width scale/clamp trio (deck ColumnLayer defaults) — only take
+    // effect when `stroked` is true. Symmetric with lineWidthUnits/lineWidth.
+    lineWidthScale: { type: 'number', value: 1, min: 0 },
+    lineWidthMinPixels: { type: 'number', value: 0, min: 0 },
+    lineWidthMaxPixels: { type: 'number', value: Number.MAX_SAFE_INTEGER, min: 0 },
     // Same permissive descriptor ColumnLayer uses: boolean or material spec.
     material: { type: 'object', value: true, compare: true },
     // Fade ramps, forwarded to TimeFilterExtension (window mode).
@@ -493,6 +521,9 @@ export class AnimatedColumnLayer<ExtraPropsT extends {} = {}> extends SpatioTemp
       this.props.elevationScale,
       this.props.lineWidth,
       this.props.lineWidthUnits,
+      this.props.lineWidthScale,
+      this.props.lineWidthMinPixels,
+      this.props.lineWidthMaxPixels,
       Array.isArray(lineColor) ? lineColor.join(',') : '',
       structuralDigest(this.props.material),
       // Composite props that getSubLayerProps bakes into every sublayer
@@ -742,6 +773,9 @@ export class AnimatedColumnLayer<ExtraPropsT extends {} = {}> extends SpatioTemp
       elevationScale: this.props.elevationScale,
       material: this.props.material,
       lineWidthUnits: this.props.lineWidthUnits,
+      lineWidthScale: this.props.lineWidthScale,
+      lineWidthMinPixels: this.props.lineWidthMinPixels,
+      lineWidthMaxPixels: this.props.lineWidthMaxPixels,
 
       // Constant fallbacks — used when the binary attribute is absent. The
       // binary getElevation / getFillColor wins when present.

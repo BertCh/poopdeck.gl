@@ -55,6 +55,10 @@ const layerKinds = {
     supported: false,
     reason: 'no dedicated ego layer; AV cockpit composes point/icon layers',
   },
+  text: { supported: true }, // AnimatedTextLayer
+  mesh: { supported: true }, // AnimatedMeshLayer
+  pointCloud: { supported: true }, // AnimatedPointCloudLayer
+  hexbin: { supported: true }, // AnimatedHexagonLayer
 } satisfies Record<LayerKind, LayerKindSupport>;
 
 // Belt-and-suspenders honesty: iterate the runtime vocabulary so that even an

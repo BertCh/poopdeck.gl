@@ -700,6 +700,23 @@ describe('AnimatedPathLayer per-tile sublayer architecture (v3)', () => {
     expect([...attrs.getColor.value.slice(8 * 4, 8 * 4 + 4)]).toEqual([70, 80, 90, 255]);
   });
 
+  it('expands a data-driven pathWidth PER-VERTEX (not a per-feature getWidth buffer)', () => {
+    // getWidth is a native PathLayer accessor carried as a PER-VERTEX attribute
+    // its tessellator maps onto SEGMENT instances. A per-FEATURE buffer (length =
+    // featureCount) under-sizes the instanced draw on multi-vertex paths and
+    // throws "vertex buffer is not big enough" on strict ANGLE/Metal — deck binds
+    // a named binary buffer verbatim, so it must already be per-vertex.
+    const tile = bigPathTile(3, 4); // 3 features × 4 verts = 12 verts
+    tile.layers[0].features.numericProps['w'] = new Float32Array([2, 5, 9]);
+    const built = buildSublayerForTile(tile, { pathWidth: 'w' });
+    const attrs = built.props.data.attributes;
+    expect(attrs.getWidth).toBeDefined();
+    expect(attrs.getWidth.value).toBeInstanceOf(Float32Array);
+    // One value per vertex (12), NOT one per feature (3).
+    expect(attrs.getWidth.value.length).toBe(12);
+    expect([...attrs.getWidth.value]).toEqual([2, 2, 2, 2, 5, 5, 5, 5, 9, 9, 9, 9]);
+  });
+
   it('grades getColor alpha by raw altitude when elevationOpacityRange is set (iso3d top-fade)', () => {
     // The iso3d stack fades its upper height slabs translucent so it reads
     // coherently top-down. Alpha ramps linearly near→far across the raw z range

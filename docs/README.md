@@ -74,6 +74,12 @@ into a deck.gl sublayer.
 - [**SplatLayer**](./api/splat-layer.md): Point clouds (LIDAR) as oriented
   anisotropic Gaussian surfels — elliptical disks in the surface frame with a
   soft temporal Gaussian weight, no per-frame sort.
+- [**AnimatedPointCloudLayer**](./api/animated-point-cloud-layer.md): Time-windowed
+  3D point clouds (LIDAR) on deck.gl's `PointCloudLayer`, with optional per-point RGBA.
+- [**AnimatedMeshLayer**](./api/animated-mesh-layer.md): Animated glTF/OBJ mesh
+  instances interpolated along per-object tracks (the AV-cockpit `objects/` overlay).
+- [**AnimatedTextLayer**](./api/animated-text-layer.md): Time-filtered map labels
+  with categorical color, background, and SDF outlines.
 
 **Trips**
 
@@ -109,6 +115,9 @@ into a deck.gl sublayer.
   tier rendered as hexagons.
 - [**QuadbinSummaryLayer**](./api/quadbin-summary-layer.md): Server-aggregated
   Quadbin (quadkey) summary tier.
+- [**AnimatedHexagonLayer**](./api/animated-hexagon-layer.md): GPU-binned,
+  optionally-extruded hexagon aggregation of time-filtered points — the discrete
+  sibling of AnimatedHeatmapLayer.
 
 ### Extensions
 
@@ -122,6 +131,15 @@ into a deck.gl sublayer.
 - [**SplatExtension**](./api/splat-extension.md): Fragment-shader gaussian
   falloff turning `ScatterplotLayer` points into soft splats; powers
   `AnimatedPointLayer`'s `splat` prop.
+- [**DataFilterExtension**](./api/data-filter-extension.md): Range-filter (and
+  soft-fade) instances by a baked numeric column — a poopdeck-native port of
+  deck.gl's DataFilterExtension.
+- [**CollisionFilterExtension**](./api/collision-filter-extension.md): Hide
+  colliding instances (overlapping labels / icons) by priority.
+- [**deck.gl extensions on STT layers**](./api/extensions.md): which stock
+  deck extensions (Brushing/Mask/Clip/PathStyle) work as-is via the
+  `extensions` prop, the two adapted ones (DataFilter/Collision), and the
+  three skipped — with reasons.
 
 ### Playback (`@poopdeck.gl/playback`)
 

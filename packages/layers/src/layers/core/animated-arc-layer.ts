@@ -69,6 +69,12 @@ export interface _AnimatedArcLayerProps {
    */
   greatCircle?: boolean;
   /**
+   * Number of segments used to tessellate each arc — higher is smoother, lower
+   * is cheaper. ArcLayer pass-through (constant only).
+   * @default 50
+   */
+  numSegments?: number;
+  /**
    * Source-endpoint color — constant {@link Color}, or property name for
    * categorical coloring. NOTE: when EITHER endpoint names a category column
    * the whole arc is colored by that column (see the class docstring) — the
@@ -223,6 +229,7 @@ export class AnimatedArcLayer<ExtraPropsT extends {} = {}> extends SpatioTempora
   static defaultProps: DefaultProps<AnimatedArcLayerProps> = {
     ...SpatioTemporalLayer.defaultProps,
     greatCircle: false,
+    numSegments: { type: 'number', value: 50, min: 1 },
     widthUnits: 'pixels',
     widthScale: { type: 'number', value: 1, min: 0 },
     widthMinPixels: { type: 'number', value: 0, min: 0 },
@@ -344,6 +351,7 @@ export class AnimatedArcLayer<ExtraPropsT extends {} = {}> extends SpatioTempora
     const width = this.widthValue();
     return [
       this.props.greatCircle,
+      this.props.numSegments,
       this.props.widthUnits,
       this.props.widthScale,
       this.props.widthMinPixels,
@@ -566,6 +574,7 @@ export class AnimatedArcLayer<ExtraPropsT extends {} = {}> extends SpatioTempora
       dataComparator: (a: any, b: any) => a === b,
       positionFormat: prepared.dims === 3 ? 'XYZ' : 'XY',
       greatCircle: this.props.greatCircle,
+      numSegments: this.props.numSegments,
       // `Required<>`-typed (defaults guarantee values) — no `??` refetches.
       widthUnits: this.props.widthUnits,
       widthScale: this.props.widthScale,

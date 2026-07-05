@@ -40,6 +40,7 @@
 import { SolidPolygonLayer } from '@deck.gl/layers';
 import type { Color, DefaultProps, Layer, LayerContext, Material } from '@deck.gl/core';
 import { SpatioTemporalLayer, SpatioTemporalLayerProps } from '../spatiotemporal-layer.js';
+import { NoPickingPathLayer } from '../internal/no-picking-path-layer.js';
 import { TimeFilterExtension } from '../../extensions/time-filter-extension.js';
 import {
   CategoryColorExtension,
@@ -151,6 +152,87 @@ export interface _AnimatedPolygonLayerProps {
   material?: Material;
 
   /**
+   * Draw the polygon-ring OUTLINES. Mirrors deck.gl's composite PolygonLayer,
+   * which pairs a `SolidPolygonLayer` fill with a `PathLayer` stroke: when
+   * `true`, this layer emits a SECOND sublayer per tile — an outline PathLayer
+   * fed from the SAME baked ring `positions` + `startIndices` (zero extra
+   * decode) and time-filtered in lock-step with the fill. `false` (the
+   * default) is byte-identical to the fill-only render with zero extra cost —
+   * no outline sublayer is constructed.
+   *
+   * The outline is styled by `getLineColor` / `getLineWidth` /
+   * `lineWidthUnits` / `lineWidthMinPixels` / `lineJointRounded` /
+   * `lineMiterLimit` / `lineDashJustified`.
+   *
+   * NOTE (tile-seam overdraw): like the fill, an outline whose polygon spans a
+   * tile boundary double-draws along the seam (the ring is split across
+   * sublayers). Accepted — same limitation documented for the fill.
+   * @default false
+   */
+  stroked?: boolean;
+
+  /**
+   * Outline / wireframe color — a constant {@link Color}. Feeds BOTH the
+   * `stroked` outline PathLayer AND the `wireframe:true` extruded-edge color
+   * (`SolidPolygonLayer.getLineColor`), which otherwise stays locked at black.
+   * Accepts a constant Color (the accessor-alias convention: a function warns
+   * once and falls back to the deck default). @default [0, 0, 0, 255]
+   */
+  getLineColor?: ColorAccessorValue | null;
+
+  /**
+   * Outline width — a constant number, or a property-column NAME for
+   * per-feature width. Only takes effect when `stroked` is true. Interpreted
+   * in {@link lineWidthUnits} and clamped by {@link lineWidthMinPixels}.
+   * A function accessor warns once and falls back to the constant default.
+   * @default 1
+   */
+  getLineWidth?: NumericAccessorValue | null;
+
+  /**
+   * Units for {@link getLineWidth} — outline PathLayer pass-through. Deck's
+   * composite PolygonLayer defaults to `'meters'`. @default 'meters'
+   */
+  lineWidthUnits?: 'pixels' | 'meters' | 'common';
+
+  /**
+   * Clamp the outline width to at least this many on-screen pixels so thin
+   * borders stay visible at low zoom — outline PathLayer pass-through. Only
+   * applies when `stroked` is true. @default 0
+   */
+  lineWidthMinPixels?: number;
+
+  /**
+   * Rounded outline joints — outline PathLayer pass-through
+   * (`PathLayer.jointRounded`). Only applies when `stroked` is true.
+   * @default false
+   */
+  lineJointRounded?: boolean;
+
+  /**
+   * Miter-joint length cap (multiples of line width) for the outline —
+   * outline PathLayer pass-through (`PathLayer.miterLimit`), applies when
+   * `lineJointRounded` is false. Only applies when `stroked` is true.
+   * @default 4
+   */
+  lineMiterLimit?: number;
+
+  /**
+   * Justify outline dashes to segment endpoints — outline PathLayer
+   * pass-through (`PathLayer.dashJustified`). Inert unless a `PathStyleExtension`
+   * dash is also supplied via the top-level `extensions` prop; surfaced for
+   * deck parity. Only applies when `stroked` is true. @default false
+   */
+  lineDashJustified?: boolean;
+
+  /**
+   * Tesselate XYZ (3D) polygons on their largest-area plane instead of
+   * assuming the ground plane — `SolidPolygonLayer._full3d` pass-through.
+   * @default false
+   */
+  _full3d?: boolean;
+
+  /**
    * Fade-in duration (ms).
    * @default 500
    */
@@ -194,6 +276,22 @@ interface PreparedTile {
    * the indices directly through `data.attributes.indices`.
    */
   hasPreBakedTriangles: boolean;
+  /**
+   * PER-VERTEX outline widths for the `stroked` outline PathLayer, resolved
+   * when `getLineWidth` is a property-column NAME. Null for constant widths
+   * (the constant rides on the sublayer prop). Length = vertexCount.
+   *
+   * PathLayer draws SEGMENTS as instances, and with binary `data` +
+   * `_pathType:'loop'` its tessellator sets numInstances to the total
+   * ring-vertex count (the startIndices sentinel), NOT featureCount. Because
+   * deck.gl binds a buffer supplied by attribute name verbatim (the
+   * startIndices auto-expansion path is bypassed when the tile's startIndices
+   * are the very ref the tessellator adopted — always the case here), a
+   * per-FEATURE buffer under-sizes the instanced draw and throws "vertex
+   * buffer is not big enough" on ANGLE/Metal. So this is expanded per-vertex
+   * exactly like the fill's time / elevation attributes — see expandPerVertex.
+   */
+  outlineWidths: Float32Array | null;
   /** Source tile + decoded columns — picking enrichment context (references, not copies). */
   tile: Tile;
   features: BinaryFeatures;
@@ -267,6 +365,22 @@ export class AnimatedPolygonLayer<ExtraPropsT extends {} = {}> extends SpatioTem
     wireframe: false,
     // Same permissive descriptor SolidPolygonLayer uses: boolean or material spec.
     material: { type: 'object', value: true, compare: true },
+    // Outline subsystem (deck PolygonLayer parity). Off by default → the
+    // fill-only render is byte-identical and pays zero extra cost.
+    stroked: false,
+    // Permissive descriptor ({type:'object'}): getLineColor holds a constant
+    // Color (the 'color' validator would reject a function/column string in
+    // deck's debug mode). Default = deck SolidPolygonLayer's black edge color.
+    getLineColor: { type: 'object', value: [0, 0, 0, 255], compare: true },
+    // Constant OR column name — permissive descriptor. Default matches deck
+    // PolygonLayer's getLineWidth.
+    getLineWidth: { type: 'object', value: 1, compare: true },
+    lineWidthUnits: 'meters',
+    lineWidthMinPixels: { type: 'number', value: 0, min: 0 },
+    lineJointRounded: false,
+    lineMiterLimit: { type: 'number', value: 4, min: 0 },
+    lineDashJustified: false,
+    _full3d: false,
     fadeInDuration: { type: 'number', value: 500, min: 0 },
     fadeOutDuration: { type: 'number', value: 500, min: 0 },
   };
@@ -281,7 +395,7 @@ export class AnimatedPolygonLayer<ExtraPropsT extends {} = {}> extends SpatioTem
    */
   private sublayerCache = new Map<
     string,
-    { layer: SolidPolygonLayer; preparedKey: PreparedTile; layerPropsKey: string }
+    { layers: Layer[]; preparedKey: PreparedTile; layerPropsKey: string }
   >();
 
   /** Digest of every prop baked into a sublayer at construction. */
@@ -325,14 +439,44 @@ export class AnimatedPolygonLayer<ExtraPropsT extends {} = {}> extends SpatioTem
     );
   }
 
+  /**
+   * Resolve the constant outline / wireframe color. Constant-only (accessor
+   * alias): a function warns once and falls back to deck's black edge default.
+   * Used by both the `wireframe:true` fill edges and the `stroked` outline.
+   */
+  private lineColorValue(): Color {
+    return resolveAccessorAlias(
+      'AnimatedPolygonLayer',
+      'getLineColor',
+      this.props.getLineColor as Color | undefined,
+      [0, 0, 0, 255] as Color,
+    );
+  }
+
+  /**
+   * Resolve the outline width — a constant number OR a property-column name.
+   * A function warns once and falls back to the constant default (1).
+   */
+  private lineWidthValue(): number | string | undefined {
+    return resolveAccessorAlias<number | string>(
+      'AnimatedPolygonLayer',
+      'getLineWidth',
+      this.props.getLineWidth,
+      1,
+    );
+  }
+
   private computeLayerPropsKey(): string {
     const fillColor = this.fillColorValue();
     const elevation = this.elevationValue();
+    const lineColor = this.lineColorValue();
+    const lineWidth = this.lineWidthValue();
     return [
       this.props.filled,
       this.props.extruded,
       this.props.elevationScale,
       this.props.wireframe,
+      this.props._full3d,
       structuralDigest(this.props.material),
       typeof elevation === 'number' ? elevation : 0,
       // Composite props that getSubLayerProps bakes into every sublayer
@@ -345,6 +489,16 @@ export class AnimatedPolygonLayer<ExtraPropsT extends {} = {}> extends SpatioTem
       this.props.fadeOutDuration,
       // fillColor constant branch only; categorical branch lives in `prepared`.
       Array.isArray(fillColor) ? fillColor.join(',') : '',
+      // Outline subsystem — toggling any of these rebuilds the cached sublayers
+      // (fill edge color + the whole outline PathLayer).
+      this.props.stroked,
+      Array.isArray(lineColor) ? lineColor.join(',') : '',
+      typeof lineWidth === 'number' ? lineWidth : 0,
+      this.props.lineWidthUnits,
+      this.props.lineWidthMinPixels,
+      this.props.lineJointRounded,
+      this.props.lineMiterLimit,
+      this.props.lineDashJustified,
     ].join('|');
   }
 
@@ -392,16 +546,21 @@ export class AnimatedPolygonLayer<ExtraPropsT extends {} = {}> extends SpatioTem
           cached.preparedKey === prepared &&
           cached.layerPropsKey === layerPropsKey
         ) {
-          sublayers.push(cached.layer);
+          for (const l of cached.layers) sublayers.push(l);
           continue;
         }
-        const layer = this.buildSublayer(prepared);
+        // Fill first (draws under the outline), then the optional stroke.
+        const layers: Layer[] = [this.buildSublayer(prepared)];
+        if (this.props.stroked) {
+          const outline = this.buildOutlineSublayer(prepared);
+          if (outline) layers.push(outline);
+        }
         this.sublayerCache.set(prepared.tileKey, {
-          layer,
+          layers,
           preparedKey: prepared,
           layerPropsKey,
         });
-        sublayers.push(layer);
+        for (const l of layers) sublayers.push(l);
       }
     }
 
@@ -426,12 +585,15 @@ export class AnimatedPolygonLayer<ExtraPropsT extends {} = {}> extends SpatioTem
 
     const fillColorValue = this.fillColorValue();
     const elevationValue = this.elevationValue();
+    const lineWidthValue = this.lineWidthValue();
     const fillColorProp = typeof fillColorValue === 'string' ? fillColorValue : '';
     const elevationProp = typeof elevationValue === 'string' ? elevationValue : '';
+    // Property-column name for a per-feature outline width (else '').
+    const lineWidthProp = typeof lineWidthValue === 'string' ? lineWidthValue : '';
     // Palette keyed by CONTENT (memoized digest), not length — matches the
     // sibling layers' stale-key fix. updateTriggers ride the key so a user
     // trigger bump re-prepares the tile.
-    const styleKey = `${fillColorProp}|${elevationProp}|${
+    const styleKey = `${fillColorProp}|${elevationProp}|${lineWidthProp}|${
       fillColorProp
         ? this.props.colorMapping
           ? `m${colorMappingDigest(this.props.colorMapping)}`
@@ -531,6 +693,22 @@ export class AnimatedPolygonLayer<ExtraPropsT extends {} = {}> extends SpatioTem
       attributes.indices = { value: binary.triangles!, size: 1 };
     }
 
+    // Per-vertex outline width column (stroked outline PathLayer). Only when
+    // getLineWidth resolves to a property-column name that the tile carries.
+    // Constant widths ride on the sublayer prop instead. Baked regardless of
+    // `stroked` (a layer-level prop) so toggling stroked on reuses the cache.
+    // EXPANDED PER-VERTEX (not per-feature): PathLayer's binary-mode
+    // tessellator sizes the instanced draw to the total ring-vertex count, so a
+    // per-feature buffer under-sizes it and throws on ANGLE/Metal — see the
+    // PreparedTile.outlineWidths doc and expandPerVertex.
+    let outlineWidths: Float32Array | null = null;
+    if (lineWidthProp) {
+      const values = binary.numericProps[lineWidthProp];
+      if (values) {
+        outlineWidths = expandPerVertex(values, startIndices, featureCount, vertexCount);
+      }
+    }
+
     const prepared: PreparedTile = {
       tileKey,
       styleKey,
@@ -543,6 +721,7 @@ export class AnimatedPolygonLayer<ExtraPropsT extends {} = {}> extends SpatioTem
       dims,
       gpuPalette,
       hasPreBakedTriangles,
+      outlineWidths,
       tile,
       features: binary,
     };
@@ -600,9 +779,14 @@ export class AnimatedPolygonLayer<ExtraPropsT extends {} = {}> extends SpatioTem
       elevationScale: this.props.elevationScale,
       wireframe: this.props.wireframe,
       material: this.props.material,
+      _full3d: this.props._full3d,
 
       // Constant fallback — used when binary getFillColor isn't present.
       getFillColor: constFillColor,
+      // Wireframe edge color (SolidPolygonLayer draws the extruded outline with
+      // this). Without it the edges lock at deck's black default — surfacing
+      // getLineColor here makes `wireframe:true` colorable even without stroked.
+      getLineColor: this.lineColorValue(),
       ...(this.props.extruded && typeof elevationValue === 'number'
         ? { getElevation: elevationValue }
         : {}),
@@ -632,6 +816,93 @@ export class AnimatedPolygonLayer<ExtraPropsT extends {} = {}> extends SpatioTem
     });
     // `_subLayerProps: { polygons: { type } }` swaps the sublayer class.
     const SubLayerClass = this.getSubLayerClass('polygons', SolidPolygonLayer);
+    return new SubLayerClass(props as any);
+  }
+
+  /**
+   * Build the `stroked` outline sublayer — deck's composite PolygonLayer draws
+   * the ring strokes with a `PathLayer` alongside the `SolidPolygonLayer`
+   * fill; this replicates that. The outline is fed the SAME baked ring
+   * `positions` + `startIndices` as the fill (zero extra decode) with
+   * `_pathType:'loop'` so each feature's ring closes, and it reuses the fill's
+   * per-vertex `instanceStartTime` / `instanceEndTime` buffers so the outline
+   * time-filters and fades in lock-step with the fill.
+   *
+   * MULTI-RING / HOLES: the tile format carries only feature-level
+   * `startIndices` (one contiguous vertex run per feature — the decoder packs a
+   * polygon's exterior + holes, or a MultiPolygon's parts, into one run and
+   * discards the ring boundaries; see the module docstring). PathLayer strokes
+   * that whole run as a SINGLE closed loop, so a holed / multi-ring polygon
+   * draws a spurious BRIDGE segment from the last vertex of one ring to the
+   * first of the next (a visible diagonal cutting across the polygon), plus a
+   * closing segment — the interior holes are not separately outlined. This is
+   * the best fidelity available from the binary geometry; a faithful per-ring
+   * outline needs per-ring sub-indices baked into the tile format, which it
+   * does not currently carry. Single-ring polygons (the common case) are exact.
+   *
+   * Non-pickable (the fill owns picking) → routes through `NoPickingPathLayer`
+   * to stay inside WebGL2's 16-vertex-attribute budget (PathLayer's picking
+   * attribute + TimeFilterExtension's three would otherwise crowd it).
+   * Returns null when the tile has no usable ring geometry.
+   */
+  private buildOutlineSublayer(prepared: PreparedTile): Layer | null {
+    const positions = prepared.data.attributes.getPolygon;
+    if (!positions || prepared.data.length === 0) return null;
+
+    const lineColorValue = this.lineColorValue();
+    const lineWidthValue = this.lineWidthValue();
+    const constLineWidth = typeof lineWidthValue === 'number' ? lineWidthValue : 1;
+
+    // Reuse the fill's per-vertex time buffers so the stroke filters/fades with
+    // the fill; add a per-vertex getWidth column only when width is data-driven.
+    const attributes: PreparedTile['data']['attributes'] = {
+      getPath: { value: positions.value, size: prepared.dims },
+      instanceStartTime: prepared.data.attributes.instanceStartTime,
+      instanceEndTime: prepared.data.attributes.instanceEndTime,
+    };
+    if (prepared.outlineWidths) {
+      attributes.getWidth = { value: prepared.outlineWidths, size: 1 };
+    }
+
+    const outlineData = {
+      length: prepared.data.length,
+      startIndices: prepared.data.startIndices,
+      attributes,
+    };
+
+    const props = this.composeSubLayerProps('outline', prepared.tileKey, {
+      data: outlineData as any,
+      dataComparator: (a: any, b: any) => a === b,
+      // Each feature's ring is a closed loop; 'loop' adds the closing segment
+      // (a no-op degenerate segment for already-closed rings).
+      _pathType: 'loop',
+      positionFormat: prepared.dims === 3 ? 'XYZ' : 'XY',
+
+      getColor: lineColorValue,
+      getWidth: constLineWidth,
+      widthUnits: this.props.lineWidthUnits,
+      widthMinPixels: this.props.lineWidthMinPixels,
+      jointRounded: this.props.lineJointRounded,
+      miterLimit: this.props.lineMiterLimit,
+      dashJustified: this.props.lineDashJustified,
+
+      // Time filtering only (constant color → no CategoryColorExtension), which
+      // also keeps the PathLayer attribute count within the WebGL2 minimum.
+      extensions: this.composeExtensions([this.timeFilterExtension]),
+      getTime: this.boundGetTime,
+      timeOffset: prepared.timeOffset,
+      timeWindow: this.props.timeWindow,
+      fadeInDuration: this.props.fadeInDuration,
+      fadeOutDuration: this.props.fadeOutDuration,
+
+      // Outlines are not pick targets; the fill enriches picking.
+      pickable: false,
+
+      tile: prepared.tile,
+      sttFeatures: prepared.features,
+    });
+    // `_subLayerProps: { outline: { type } }` swaps the outline sublayer class.
+    const SubLayerClass = this.getSubLayerClass('outline', NoPickingPathLayer);
     return new SubLayerClass(props as any);
   }
 }

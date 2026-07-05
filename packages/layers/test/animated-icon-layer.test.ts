@@ -78,7 +78,11 @@ describe('AnimatedIconLayer per-tile sublayer architecture', () => {
         angle: 0,
         color: [255, 255, 255, 255],
         size: 12,
+        pixelOffset: [0, 0],
         sizeUnits: 'pixels',
+        sizeBasis: 'height',
+        alphaCutoff: 0.05,
+        textureParameters: null,
         fadeInDuration: 300,
         fadeOutDuration: 300,
         timeWindow: 1000,
@@ -315,6 +319,97 @@ describe('AnimatedIconLayer per-tile sublayer architecture', () => {
     // Window-mode fade ramps are forwarded to the TimeFilterExtension.
     expect(built.props.fadeInDuration).toBe(300);
     expect(built.props.fadeOutDuration).toBe(300);
+  });
+
+  it('forwards a constant [x,y] pixelOffset to the getPixelOffset accessor (no attribute)', () => {
+    const built = buildSublayerForTile(bigPointTile(3), { pixelOffset: [4, -8] });
+    const attrs = built.props.data.attributes;
+    // Constant offset → no per-feature buffer; rides the scalar accessor.
+    expect(attrs.getPixelOffset).toBeUndefined();
+    expect(built.props.getPixelOffset).toEqual([4, -8]);
+  });
+
+  it('defaults getPixelOffset to [0,0] (deck default) when unset', () => {
+    const built = buildSublayerForTile(bigPointTile(3));
+    expect(built.props.getPixelOffset).toEqual([0, 0]);
+  });
+
+  it('bakes a size-2 vector column into the getPixelOffset instanced attribute (zero-copy)', () => {
+    const N = 3;
+    const tile = bigPointTile(N);
+    // Interleaved [x0,y0, x1,y1, x2,y2] size-2 column.
+    const off = new Float32Array([1, 2, 3, 4, 5, 6]);
+    tile.layers[0].features.vectorProps = { screenOff: { value: off, size: 2 } };
+
+    const built = buildSublayerForTile(tile, { pixelOffset: 'screenOff' });
+    const attrs = built.props.data.attributes;
+    expect(attrs.getPixelOffset.value).toBe(off); // zero-copy ride-along
+    expect(attrs.getPixelOffset.size).toBe(2);
+    expect(attrs.getPixelOffset.value[4]).toBe(5);
+    // Constant fallback still present for features without the buffer.
+    expect(built.props.getPixelOffset).toEqual([0, 0]);
+  });
+
+  it('resolves the getPixelOffset alias (column name) over pixelOffset', () => {
+    const N = 2;
+    const tile = bigPointTile(N);
+    const off = new Float32Array([7, 8, 9, 10]);
+    tile.layers[0].features.vectorProps = { po: { value: off, size: 2 } };
+
+    // getPixelOffset alias holds a COLUMN NAME (not a function) — it wins.
+    const built = buildSublayerForTile(tile, { getPixelOffset: 'po', pixelOffset: [1, 1] });
+    const attrs = built.props.data.attributes;
+    expect(attrs.getPixelOffset.value).toBe(off);
+    expect(attrs.getPixelOffset.value[3]).toBe(10);
+  });
+
+  it('ignores a non-size-2 vector column for pixelOffset (falls back to constant)', () => {
+    const N = 2;
+    const tile = bigPointTile(N);
+    // size-4 column is not a valid pixel offset — must not bind.
+    tile.layers[0].features.vectorProps = {
+      rgba: { value: new Float32Array([1, 2, 3, 4, 5, 6, 7, 8]), size: 4 },
+    };
+    const built = buildSublayerForTile(tile, { pixelOffset: 'rgba' });
+    expect(built.props.data.attributes.getPixelOffset).toBeUndefined();
+    expect(built.props.getPixelOffset).toEqual([0, 0]);
+  });
+
+  it('forwards alphaCutoff (default 0.05) and an override', () => {
+    const dflt = buildSublayerForTile(bigPointTile(3));
+    expect(dflt.props.alphaCutoff).toBe(0.05);
+    const over = buildSublayerForTile(bigPointTile(3), { alphaCutoff: 0.5 });
+    expect(over.props.alphaCutoff).toBe(0.5);
+  });
+
+  it('forwards sizeBasis (default height) and a width override', () => {
+    const dflt = buildSublayerForTile(bigPointTile(3));
+    expect(dflt.props.sizeBasis).toBe('height');
+    const over = buildSublayerForTile(bigPointTile(3), { sizeBasis: 'width' });
+    expect(over.props.sizeBasis).toBe('width');
+  });
+
+  it('forwards textureParameters verbatim to the sublayer', () => {
+    const dflt = buildSublayerForTile(bigPointTile(3));
+    expect(dflt.props.textureParameters).toBeNull();
+    const params = { minFilter: 'nearest', magFilter: 'nearest' };
+    const over = buildSublayerForTile(bigPointTile(3), { textureParameters: params });
+    expect(over.props.textureParameters).toBe(params);
+  });
+
+  it('rebuilds the cached IconLayer when alphaCutoff / sizeBasis change', () => {
+    const layer = makeLayer();
+    const tile = bigPointTile(3);
+    layer.state = { tiles: [tile] };
+    const first = (layer as any).renderLayers();
+    layer.props.alphaCutoff = 0.3;
+    const second = (layer as any).renderLayers();
+    expect(second[0]).not.toBe(first[0]);
+    expect(second[0].props.alphaCutoff).toBe(0.3);
+    layer.props.sizeBasis = 'width';
+    const third = (layer as any).renderLayers();
+    expect(third[0]).not.toBe(second[0]);
+    expect(third[0].props.sizeBasis).toBe('width');
   });
 
   it('declares dataComparator that skips deck.gl prop diff on identical references', () => {

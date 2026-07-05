@@ -186,9 +186,27 @@ export const docSections: DocSection[] = [
         group: "Core",
       },
       {
+        slug: "api/animated-text-layer",
+        file: "api/animated-text-layer.md",
+        title: "AnimatedTextLayer",
+        group: "Core",
+      },
+      {
         slug: "api/animated-bounding-box-layer",
         file: "api/animated-bounding-box-layer.md",
         title: "AnimatedBoundingBoxLayer",
+        group: "Core",
+      },
+      {
+        slug: "api/animated-mesh-layer",
+        file: "api/animated-mesh-layer.md",
+        title: "AnimatedMeshLayer",
+        group: "Core",
+      },
+      {
+        slug: "api/animated-point-cloud-layer",
+        file: "api/animated-point-cloud-layer.md",
+        title: "AnimatedPointCloudLayer",
         group: "Core",
       },
       {
@@ -258,6 +276,12 @@ export const docSections: DocSection[] = [
         group: "Summary tiers",
       },
       {
+        slug: "api/animated-hexagon-layer",
+        file: "api/animated-hexagon-layer.md",
+        title: "AnimatedHexagonLayer",
+        group: "Summary tiers",
+      },
+      {
         slug: "api/h3-summary-layer",
         file: "api/h3-summary-layer.md",
         title: "H3SummaryLayer",
@@ -277,6 +301,23 @@ export const docSections: DocSection[] = [
     blurb:
       "GPU layer extensions: temporal filtering, categorical color, marching chevrons, and gaussian splats.",
     entries: [
+      {
+        slug: "api/extensions",
+        file: "api/extensions.md",
+        title: "deck.gl Extensions",
+        blurb:
+          "Which @deck.gl/extensions work as-is on STT layers, the two ported (data-filter, collision), and the three skipped.",
+      },
+      {
+        slug: "api/data-filter-extension",
+        file: "api/data-filter-extension.md",
+        title: "DataFilterExtension",
+      },
+      {
+        slug: "api/collision-filter-extension",
+        file: "api/collision-filter-extension.md",
+        title: "CollisionFilterExtension",
+      },
       {
         slug: "api/time-filter-extension",
         file: "api/time-filter-extension.md",
@@ -429,6 +470,13 @@ export const docSections: DocSection[] = [
         title: "Deploying a Dataset",
         blurb:
           "R2 / S3 / GCS / nginx: cache regimes, CORS, copy-never-delete.",
+      },
+      {
+        slug: "guides/tuning-tiles",
+        file: "guides/tuning-tiles.md",
+        title: "Tuning Your Tiles",
+        blurb:
+          "The measure → interpret → decide loop: analyze, --auto, inspect, doctor, diff, style hints.",
       },
     ],
   },

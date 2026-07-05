@@ -102,9 +102,18 @@ export class FlowCorridorLayer<ExtraPropsT extends {} = {}> extends AnimatedTrip
    */
   private static readonly STEP = 0.5;
 
-  // Global bucket axis, cached from the first matrix tile seen. All flow tiles
-  // share one axis (every corridor spans the whole range), so a single cache
-  // serves the time-driven `setState` gate in `_handleTimeUpdate`.
+  // Bucket AXIS cached from the first matrix tile seen — used only to gate the
+  // time-driven `setState` in `_handleTimeUpdate`. `_bucketWidth` is the per-
+  // bucket duration, which is UNIFORM across tiles (whole-range corridors AND
+  // time-CHUNKED archives, where each chunk carries a slice of the same uniform
+  // bin), so a single anchor + width gates the whole timeline. `_bucket0Abs` is
+  // an arbitrary-but-stable anchor (the first tile's start); only *relative*
+  // sub-step changes matter for the gate, so its absolute value is irrelevant.
+  // NOTE: `_numBuckets` is the first tile's OWN column count — for a chunked
+  // archive that is one chunk's worth, NOT the global timeline, so it must never
+  // clamp the global gate (doing so froze animation once the playhead left the
+  // anchor chunk). Per-tile bucket selection is done self-contained in
+  // `posFromBinary`; this axis is purely the re-render trigger.
   private _bucket0Abs = 0;
   private _bucketWidth = 0;
   private _numBuckets = 0;
@@ -354,11 +363,14 @@ export class FlowCorridorLayer<ExtraPropsT extends {} = {}> extends AnimatedTrip
     // Until a matrix tile has populated the axis there's nothing to animate;
     // the first tile's prepareTile will render correctly on load regardless.
     if (this._numBuckets <= 0 || this._bucketWidth <= 0) return;
-    let pos = (time - this._bucket0Abs) / this._bucketWidth;
-    if (pos < 0) pos = 0;
-    const max = this._numBuckets - 1;
-    if (pos > max) pos = max;
-    const step = Math.round(pos / FlowCorridorLayer.STEP);
+    // Global sub-step of the playhead against the uniform bin width. NOT clamped
+    // to `_numBuckets` (that is one chunk's column count, not the timeline) —
+    // clamping froze the re-render gate once the playhead left the anchor
+    // chunk. Only whether `step` CHANGED matters; each visible tile then
+    // re-expands its own active column via `posFromBinary` (clamped per-tile).
+    const step = Math.round(
+      (time - this._bucket0Abs) / this._bucketWidth / FlowCorridorLayer.STEP,
+    );
     if (step !== this._lastStep) {
       this._lastStep = step;
       // setState (not setNeedsRedraw) re-runs renderLayers() → prepareTile,

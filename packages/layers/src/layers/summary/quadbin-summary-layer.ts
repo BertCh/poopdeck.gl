@@ -60,6 +60,7 @@ import type {
   GetPickingInfoParams,
   Layer,
   LayerContext,
+  Material,
 } from '@deck.gl/core';
 import { QuadkeyLayer } from '@deck.gl/geo-layers';
 import { getFeatureProperties, DEFAULT_SUMMARY_COLOR_RANGE } from '@poopdeck.gl/core';
@@ -79,8 +80,11 @@ import {
 import {
   colorListDigest,
   inheritedPropsDigest,
+  structuralDigest,
   updateTriggersDigest,
 } from '../../lib/style-digest.js';
+import { resolveAccessorAlias } from '../../lib/accessor-alias.js';
+import type { ColorAccessorValue, NumericAccessorValue } from '../../lib/accessor-alias.js';
 import { warnOnce } from '../../lib/log.js';
 
 const DEBUG = false;
@@ -121,6 +125,114 @@ export interface _QuadbinSummaryLayerProps {
    */
   coverage?: number;
 
+  /**
+   * Fill each cell. When `false`, cells render as outline-only (pair with
+   * `stroked`). Forwarded to the QuadkeyLayer → PolygonLayer `filled` prop.
+   * @default true
+   */
+  filled?: boolean;
+
+  /**
+   * Draw each cell's outline. The underlying PolygonLayer defaults this to
+   * `true`, giving every cell an un-disable-able 1px black border — set
+   * `stroked:false` for a clean heatmap-style fill.
+   * @default true
+   */
+  stroked?: boolean;
+
+  /**
+   * Cell outline color (constant {@link Color}). Only takes effect when
+   * `stroked`. Forwarded to the sublayer `getLineColor`.
+   * @default [0, 0, 0, 255]
+   */
+  lineColor?: Color;
+
+  /**
+   * Upstream-vocabulary alias of {@link lineColor}. NOTE: unlike upstream
+   * deck.gl this accepts a CONSTANT {@link Color} — NOT a per-feature function
+   * (binary summary cells can't run JS accessors; a function warns once and
+   * falls back to `lineColor`). When set, it wins over `lineColor`.
+   */
+  getLineColor?: ColorAccessorValue | null;
+
+  /**
+   * Cell outline width — a constant number, in `lineWidthUnits`. Only takes
+   * effect when `stroked`. Summary cells bake no per-cell width column, so
+   * (unlike the raw-tier layers) there is no data-driven form; a column-name
+   * string or function warns/ignores and falls back to the constant.
+   * Forwarded to the sublayer `getLineWidth`.
+   * @default 1
+   */
+  lineWidth?: number;
+
+  /**
+   * Upstream-vocabulary alias of {@link lineWidth} (constant number only — no
+   * per-cell width column; a column-name string or function warns/ignores and
+   * falls back to `lineWidth`). When set, it wins over `lineWidth`.
+   */
+  getLineWidth?: NumericAccessorValue | null;
+
+  /**
+   * Units for `lineWidth` — `'meters'`, `'common'`, or `'pixels'`.
+   * PolygonLayer pass-through.
+   * @default 'meters'
+   */
+  lineWidthUnits?: 'meters' | 'common' | 'pixels';
+
+  /**
+   * Multiplier applied to every outline width. PolygonLayer pass-through.
+   * @default 1
+   */
+  lineWidthScale?: number;
+
+  /**
+   * Minimum outline width in pixels — clamps the outline so 1m borders stay
+   * visible at planet-scale summary zooms. PolygonLayer pass-through.
+   * @default 0
+   */
+  lineWidthMinPixels?: number;
+
+  /**
+   * Maximum outline width in pixels. PolygonLayer pass-through.
+   * @default Number.MAX_SAFE_INTEGER
+   */
+  lineWidthMaxPixels?: number;
+
+  /**
+   * Round the joints between outline segments. PolygonLayer pass-through.
+   * @default false
+   */
+  lineJointRounded?: boolean;
+
+  /**
+   * Miter limit for mitered outline joints. PolygonLayer pass-through.
+   * @default 4
+   */
+  lineMiterLimit?: number;
+
+  /**
+   * Justify dashes to segment endpoints (only meaningful with a dash array
+   * supplied via the PathStyle extension). PolygonLayer pass-through.
+   * @default false
+   */
+  lineDashJustified?: boolean;
+
+  /**
+   * Draw the edges of extruded cells as a wireframe. Only takes effect when
+   * `extruded`. PolygonLayer pass-through.
+   * @default false
+   */
+  wireframe?: boolean;
+
+  /**
+   * Lighting material for extruded cells — PolygonLayer pass-through. `true`
+   * for the default phong material, `false` to disable lighting, or a
+   * material spec `{ambient, diffuse, shininess, specularColor}`. Only takes
+   * effect when `extruded`.
+   * @default true
+   */
+  material?: Material;
+
   /** Fired once per archive init with the decoded metadata. */
   onMetadataLoad?: ((meta: ArchiveMetadata) => void) | null;
 }
@@ -132,6 +244,10 @@ export type QuadbinSummaryLayerProps = _QuadbinSummaryLayerProps &
 // Shared with H3SummaryLayer via @poopdeck.gl/core (audit F2) so the two
 // summary-tier ramps can't drift apart.
 const DEFAULT_COLOR_RANGE = DEFAULT_SUMMARY_COLOR_RANGE as Color[];
+
+// deck.gl PolygonLayer's own getLineColor default — the forced-on black 1px
+// border the `stroked` gap is about.
+const DEFAULT_LINE_COLOR: Color = [0, 0, 0, 255];
 
 /**
  * Cached per-tile rows array. We keep the source `BinaryFeatures` reference
@@ -182,6 +298,22 @@ const defaultProps: DefaultProps<QuadbinSummaryLayerProps> = {
   extruded: false,
   elevationScale: 1,
   coverage: { type: 'number', value: 0.92, min: 0, max: 1 },
+  filled: true,
+  stroked: true,
+  lineColor: { type: 'color', value: DEFAULT_LINE_COLOR },
+  getLineColor: { type: 'object', value: null, optional: true, compare: true },
+  lineWidth: { type: 'number', value: 1, min: 0 },
+  getLineWidth: { type: 'object', value: null, optional: true, compare: true },
+  lineWidthUnits: 'meters',
+  lineWidthScale: 1,
+  lineWidthMinPixels: { type: 'number', value: 0, min: 0 },
+  lineWidthMaxPixels: { type: 'number', value: Number.MAX_SAFE_INTEGER },
+  lineJointRounded: false,
+  lineMiterLimit: 4,
+  lineDashJustified: false,
+  wireframe: false,
+  // Same permissive descriptor SolidPolygonLayer uses: boolean or material spec.
+  material: { type: 'object', value: true, compare: true },
   onMetadataLoad: { type: 'function', value: null, optional: true },
 };
 
@@ -353,6 +485,38 @@ export class QuadbinSummaryLayer<
     return range[idx];
   }
 
+  /**
+   * Accessor-alias resolution (audit B1): the upstream-named alias wins when
+   * set; a function-valued alias warns once and falls back to the legacy
+   * `lineColor` constant. Column-name strings are not meaningful for a cell
+   * outline color (a single numeric cell column can't be RGBA), so a
+   * non-array result falls back to the default constant.
+   */
+  private lineColorValue(): Color {
+    const v = resolveAccessorAlias(
+      'QuadbinSummaryLayer',
+      'getLineColor',
+      this.props.getLineColor as Color | undefined,
+      this.props.lineColor,
+    );
+    return Array.isArray(v) ? (v as Color) : DEFAULT_LINE_COLOR;
+  }
+
+  /**
+   * Accessor-alias resolution for the constant outline width. A column-name
+   * string falls back to the constant `1` (summary cells bake no per-cell
+   * line-width column), matching AnimatedPointLayer's getLineWidth handling.
+   */
+  private lineWidthValue(): number {
+    const v = resolveAccessorAlias(
+      'QuadbinSummaryLayer',
+      'getLineWidth',
+      this.props.getLineWidth,
+      this.props.lineWidth,
+    );
+    return typeof v === 'number' ? v : 1;
+  }
+
   renderLayers(): Layer[] {
     const { tiles } = this.state;
     if (!tiles || tiles.length === 0) return [];
@@ -404,11 +568,22 @@ export class QuadbinSummaryLayer<
     // must invalidate cached sublayers, same fix as the animated layers'
     // palettes. Inherited composite props (getSubLayerProps surface +
     // _subLayerProps) and the user's updateTriggers ride the key too.
+    const lineColor = this.lineColorValue();
+    const lineWidth = this.lineWidthValue();
     const styleKey =
       `${this.props.extruded ? 1 : 0}|${this.props.elevationScale ?? 1}` +
       `|${this.props.coverage ?? 0.92}|${this.props.pickable ? 1 : 0}` +
       `|${this.props.opacity ?? 1}|${domain[0]}|${domain[1]}` +
       `|${weightProp}|${colorListDigest(this.props.colorRange ?? DEFAULT_COLOR_RANGE)}` +
+      // Stroke / fill / extrusion-lighting props — each changes GPU output, so
+      // a change must invalidate every cached QuadkeyLayer.
+      `|${this.props.filled ? 1 : 0}|${this.props.stroked ? 1 : 0}` +
+      `|${lineColor.join(',')}|${lineWidth}` +
+      `|${this.props.lineWidthUnits}|${this.props.lineWidthScale}` +
+      `|${this.props.lineWidthMinPixels}|${this.props.lineWidthMaxPixels}` +
+      `|${this.props.lineJointRounded ? 1 : 0}|${this.props.lineMiterLimit}` +
+      `|${this.props.lineDashJustified ? 1 : 0}|${this.props.wireframe ? 1 : 0}` +
+      `|${structuralDigest(this.props.material)}` +
       `|${inheritedPropsDigest(this.props)}` +
       `|${updateTriggersDigest(this.props.updateTriggers)}`;
 
@@ -446,8 +621,24 @@ export class QuadbinSummaryLayer<
           : 0,
         extruded: !!this.props.extruded,
         coverage: this.props.coverage ?? 0.92,
-        // updateTriggers ensures deck.gl rebuilds the fill-color and elevation
-        // buffers when the props they read from change.
+        // Fill / stroke / extrusion-lighting pass-throughs → QuadkeyLayer →
+        // GeoCellLayer → PolygonLayer. `stroked` (default true upstream) is
+        // the un-disable-able-black-border escape hatch.
+        filled: this.props.filled,
+        stroked: this.props.stroked,
+        getLineColor: lineColor,
+        getLineWidth: lineWidth,
+        lineWidthUnits: this.props.lineWidthUnits,
+        lineWidthScale: this.props.lineWidthScale,
+        lineWidthMinPixels: this.props.lineWidthMinPixels,
+        lineWidthMaxPixels: this.props.lineWidthMaxPixels,
+        lineJointRounded: this.props.lineJointRounded,
+        lineMiterLimit: this.props.lineMiterLimit,
+        lineDashJustified: this.props.lineDashJustified,
+        wireframe: this.props.wireframe,
+        material: this.props.material,
+        // updateTriggers ensures deck.gl rebuilds the fill-color, elevation,
+        // and outline buffers when the props they read from change.
         updateTriggers: {
           ...this.props.updateTriggers,
           getFillColor: [
@@ -462,6 +653,11 @@ export class QuadbinSummaryLayer<
             this.props.elevationScale,
             this.props.updateTriggers?.getElevation,
           ],
+          getLineColor: [
+            lineColor.join(','),
+            this.props.updateTriggers?.getLineColor,
+          ],
+          getLineWidth: [lineWidth, this.props.updateTriggers?.getLineWidth],
         },
       });
       // `_subLayerProps: { quadbins: { type } }` swaps the sublayer class.

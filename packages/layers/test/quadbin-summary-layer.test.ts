@@ -262,6 +262,123 @@ describe('QuadbinSummaryLayer: picking enrichment', () => {
   });
 });
 
+describe('QuadbinSummaryLayer: stroke / fill / material pass-throughs', () => {
+  it('forwards a default black 1px outline (getLineColor / getLineWidth) even when the layer-level line props are unset', async () => {
+    const layer = await makeQuadbinLayer();
+    const [sub] = layer.renderLayers();
+    // PolygonLayer's own defaults, surfaced so a caller can see them.
+    expect(sub.props.getLineColor).toEqual([0, 0, 0, 255]);
+    expect(sub.props.getLineWidth).toBe(1);
+  });
+
+  it('stroked:false forwards to the sublayer (the un-disable-able border escape hatch)', async () => {
+    const layer = await makeQuadbinLayer({ stroked: false });
+    const [sub] = layer.renderLayers();
+    expect(sub.props.stroked).toBe(false);
+  });
+
+  it('filled:false forwards to the sublayer (outline-only cells)', async () => {
+    const layer = await makeQuadbinLayer({ filled: false });
+    const [sub] = layer.renderLayers();
+    expect(sub.props.filled).toBe(false);
+  });
+
+  it('lineColor constant drives getLineColor', async () => {
+    const layer = await makeQuadbinLayer({ lineColor: [10, 20, 30, 200] });
+    const [sub] = layer.renderLayers();
+    expect(sub.props.getLineColor).toEqual([10, 20, 30, 200]);
+  });
+
+  it('getLineColor alias wins over lineColor', async () => {
+    const layer = await makeQuadbinLayer({
+      lineColor: [10, 20, 30, 200],
+      getLineColor: [1, 2, 3, 4],
+    });
+    const [sub] = layer.renderLayers();
+    expect(sub.props.getLineColor).toEqual([1, 2, 3, 4]);
+  });
+
+  it('a function-valued getLineColor warns once and falls back to lineColor', async () => {
+    const layer = await makeQuadbinLayer({
+      lineColor: [7, 7, 7, 255],
+      getLineColor: () => [9, 9, 9, 9],
+    });
+    const [sub] = layer.renderLayers();
+    expect(sub.props.getLineColor).toEqual([7, 7, 7, 255]);
+  });
+
+  it('lineWidth constant drives getLineWidth; getLineWidth alias wins; a column name falls back to 1', async () => {
+    const a = await makeQuadbinLayer({ lineWidth: 4 });
+    expect(a.renderLayers()[0].props.getLineWidth).toBe(4);
+
+    const b = await makeQuadbinLayer({ lineWidth: 4, getLineWidth: 9 });
+    expect(b.renderLayers()[0].props.getLineWidth).toBe(9);
+
+    // No per-cell width column is baked → a column-name string falls back to 1.
+    const c = await makeQuadbinLayer({ getLineWidth: 'some_col' });
+    expect(c.renderLayers()[0].props.getLineWidth).toBe(1);
+
+    // The LEGACY `lineWidth` prop is a CONSTANT only (summary cells bake no
+    // per-cell width column). A column-name string is not honored — it falls
+    // back to the constant 1, matching the corrected prop doc/type (no
+    // `| string`). Pins that the prop never silently reads a per-cell column.
+    const d = await makeQuadbinLayer({ lineWidth: 'my_width_col' as any });
+    expect(d.renderLayers()[0].props.getLineWidth).toBe(1);
+  });
+
+  it('forwards the line-width styling group (units / scale / min / max / joint / miter / dash)', async () => {
+    const layer = await makeQuadbinLayer({
+      lineWidthUnits: 'pixels',
+      lineWidthScale: 2,
+      lineWidthMinPixels: 3,
+      lineWidthMaxPixels: 40,
+      lineJointRounded: true,
+      lineMiterLimit: 6,
+      lineDashJustified: true,
+    });
+    const [sub] = layer.renderLayers();
+    expect(sub.props.lineWidthUnits).toBe('pixels');
+    expect(sub.props.lineWidthScale).toBe(2);
+    expect(sub.props.lineWidthMinPixels).toBe(3);
+    expect(sub.props.lineWidthMaxPixels).toBe(40);
+    expect(sub.props.lineJointRounded).toBe(true);
+    expect(sub.props.lineMiterLimit).toBe(6);
+    expect(sub.props.lineDashJustified).toBe(true);
+  });
+
+  it('forwards wireframe + material for extruded-cell lighting', async () => {
+    const material = { ambient: 0.5, diffuse: 0.4, shininess: 12 };
+    const layer = await makeQuadbinLayer({
+      extruded: true,
+      wireframe: true,
+      material,
+    });
+    const [sub] = layer.renderLayers();
+    expect(sub.props.wireframe).toBe(true);
+    expect(sub.props.material).toBe(material);
+  });
+});
+
+describe('QuadbinSummaryLayer: stroke-prop cache invalidation', () => {
+  it('a stroked change invalidates the cached sublayer', async () => {
+    const layer = await makeQuadbinLayer({ stroked: true });
+    const [first] = layer.renderLayers();
+    layer.props.stroked = false;
+    const [second] = layer.renderLayers();
+    expect(second).not.toBe(first);
+    expect(second.props.stroked).toBe(false);
+  });
+
+  it('a lineColor change invalidates the cached sublayer', async () => {
+    const layer = await makeQuadbinLayer({ lineColor: [0, 0, 0, 255] });
+    const [first] = layer.renderLayers();
+    layer.props.lineColor = [255, 0, 0, 255];
+    const [second] = layer.renderLayers();
+    expect(second).not.toBe(first);
+    expect(second.props.getLineColor).toEqual([255, 0, 0, 255]);
+  });
+});
+
 describe('QuadbinSummaryLayer: defensive empty cases', () => {
   it('renders nothing when there are no tiles', async () => {
     const layer = await makeQuadbinLayer();

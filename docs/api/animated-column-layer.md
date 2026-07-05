@@ -47,6 +47,9 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 | `lineColor` / `getLineColor` | `Color` | `[0,0,0,255]` | Outline stroke color (constant only) — drawn when `stroked` is true. |
 | `lineWidth` / `getLineWidth` | `number` | `1` | Outline stroke width (constant only), in `lineWidthUnits`. |
 | `lineWidthUnits` | `'meters' \| 'pixels' \| 'common'` | `'meters'` | Outline stroke width units. |
+| `lineWidthScale` | `number` | `1` | Outline width multiplier — applies when `stroked` is true. |
+| `lineWidthMinPixels` | `number` | `0` | Minimum outline width in pixels — applies when `stroked` is true. |
+| `lineWidthMaxPixels` | `number` | `Number.MAX_SAFE_INTEGER` | Maximum outline width in pixels — applies when `stroked` is true. |
 | `material` | `Material` | `true` | Lighting material for the extrusion. |
 | `fadeInDuration` / `fadeOutDuration` | `number` | `300` | Window fade ramps (ms). |
 

@@ -80,6 +80,13 @@ export interface ArchiveMetadata {
    * magnitudes, AIS speed, etc.).
    */
   heatmapDomain?: HeatmapDomain;
+  /**
+   * Optional bake-time style hints (measured value percentiles, suggested
+   * ramp domains, playback duration, layer kind). These are build-time-
+   * measured DEFAULTS only — layer props / spec / user config always
+   * override them. Absent for archives built before the hints were added.
+   */
+  styleHints?: StyleHints;
 }
 
 /** Aggregation scheme for the summary tier. */
@@ -137,6 +144,63 @@ export interface HeatmapClassDomain {
 /** Container for the bake-time HeatmapLayer domain metadata. */
 export interface HeatmapDomain {
   classes: HeatmapClassDomain[];
+}
+
+/**
+ * Build-time-measured style hint for one tile property. Every value here is
+ * a DEFAULT measured by the writer over the whole dataset — layer props /
+ * spec / user config always override it.
+ *
+ * Numeric properties carry the percentile fields plus {@link suggestedDomain};
+ * categorical (string) properties carry only `name` + {@link cardinality}
+ * (the numeric fields are absent, never null-filled).
+ */
+export interface PropertyStyleHint {
+  /** Property (column) name the hint describes. */
+  name: string;
+  /** Measured minimum value (numeric properties only). */
+  min?: number;
+  /** Measured 50th-percentile value (numeric properties only). */
+  p50?: number;
+  /** Measured 90th-percentile value (numeric properties only). */
+  p90?: number;
+  /** Measured 95th-percentile value (numeric properties only). */
+  p95?: number;
+  /** Measured 97th-percentile value (numeric properties only). */
+  p97?: number;
+  /** Measured 99th-percentile value (numeric properties only). */
+  p99?: number;
+  /** Measured maximum value (numeric properties only). */
+  max?: number;
+  /**
+   * Suggested color/size ramp domain: `[min, p97]` with each endpoint
+   * rounded OUTWARD to 2 significant figures (bakes in the "clamp the ramp
+   * at ~p97" convention so outliers don't wash out the ramp). A DEFAULT
+   * only — always overridable.
+   */
+  suggestedDomain?: [number, number];
+  /** Distinct-value count (categorical properties only). */
+  cardinality?: number;
+}
+
+/**
+ * Optional bake-time styling hints folded into the archive metadata
+ * (`style_hints` on the wire). Everything here is a build-time-measured
+ * DEFAULT the renderer / spec / user config can always override; archives
+ * without the block behave exactly as before.
+ */
+export interface StyleHints {
+  /** `style_hints` block schema version (currently 1). */
+  version: number;
+  /** Per-property measured hints. */
+  properties: PropertyStyleHint[];
+  /**
+   * Suggested duration (seconds) for one full playback of the dataset's
+   * time range, derived from its temporal bucket count. A DEFAULT only.
+   */
+  suggestedPlaybackSeconds?: number;
+  /** Suggested primary layer kind for the dataset. A DEFAULT only. */
+  layerHint?: 'points' | 'paths' | 'trips' | 'polygons';
 }
 
 /** Layer information */

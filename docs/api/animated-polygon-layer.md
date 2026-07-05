@@ -57,12 +57,23 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 | `colorMapping` | `Record<string, Color> \| null` | `null`  | Explicit category-string → color map. When set together with a string `fillColor`, each tile resolves its own category dictionary through this map into a per-tile palette, so a category keeps the same color across tiles whose dictionaries differ in order or subset — the bare `colorPalette` assigns colors by first-seen category index and drifts tile to tile. Stays on the GPU `CategoryColorExtension` path (the mapping only changes how the per-tile palette is built, not how it's sampled). Categories absent from the map fall back to `colorMappingDefault`. |
 | `colorMappingDefault` | `Color`    | `[0, 0, 0, 0]`        | Fallback color for categories absent from `colorMapping` (transparent by default). |
 
-### No outline pass
+### Outline pass
 
-The fill sublayer is a `SolidPolygonLayer`, which has no outline pass — there
-are no `stroked` / `lineWidth` / `lineColor` props on this layer. For outlined
-polygons, overlay an [`AnimatedPathLayer`](./animated-path-layer.md) on the
-ring geometry.
+Set `stroked: true` to draw an outline. This emits a **second sublayer** per
+tile — a `PathLayer` on the polygon ring geometry (`_pathType: 'loop'`), drawn
+over the fill. The outline is only constructed when `stroked` is true. For a
+standalone outline with no fill, set `filled: false` and `stroked: true`.
+
+| Property             | Type                               | Default          | Description                                                                     |
+| :------------------- | :--------------------------------- | :--------------- | :------------------------------------------------------------------------------ |
+| `stroked`            | `boolean`                          | `false`          | Draw a `PathLayer` outline on each polygon's rings (a second sublayer per tile). |
+| `getLineColor`       | `Color \| string \| null`          | `[0, 0, 0, 255]` | Outline color: a constant RGBA or a property-column NAME (not a function accessor). Also sets the `wireframe: true` extruded-edge color, which otherwise stays black. |
+| `getLineWidth`       | `number \| string \| null`         | `1`              | Outline width: a constant or a numeric property-column name. Interpreted in `lineWidthUnits`, clamped by `lineWidthMinPixels`. Only takes effect when `stroked`. |
+| `lineWidthUnits`     | `'pixels' \| 'meters' \| 'common'` | `'meters'`       | Units for `getLineWidth` (PathLayer pass-through).                              |
+| `lineWidthMinPixels` | `number`                           | `0`              | Clamp the outline to at least this many on-screen pixels so thin borders stay visible at low zoom. |
+| `lineJointRounded`   | `boolean`                          | `false`          | Rounded outline joints (`PathLayer.jointRounded`).                              |
+| `lineMiterLimit`     | `number`                           | `4`              | Miter-joint length cap (multiples of line width); applies when `lineJointRounded` is false. |
+| `lineDashJustified`  | `boolean`                          | `false`          | Justify outline dashes to segment endpoints (deck parity).                     |
 
 ## Architecture & performance
 
@@ -93,7 +104,7 @@ ring geometry.
   `opacity < 1` the two halves blend twice along the seam; extruded
   polygons can z-fight. Prefer fully-opaque fills.
 
-The sublayer short id for `_subLayerProps` overrides is **`polygons`**: `_subLayerProps: { polygons: { type: MyLayer, ... } }`.
+The sublayer short ids for `_subLayerProps` overrides are **`polygons`** (the fill) and **`outline`** (the `stroked` `PathLayer`): `_subLayerProps: { polygons: { type: MyLayer, ... }, outline: { ... } }`.
 
 ## Source
 

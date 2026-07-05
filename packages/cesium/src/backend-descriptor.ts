@@ -39,6 +39,10 @@ function layerKinds(): Record<LayerKind, LayerKindSupport> {
     else if (kind === 'flowmap' || kind === 'flowCorridor' || kind === 'flowStroke')
       out[kind] = { supported: false, fallbackKind: 'line', reason: UNBUILT };
     else if (kind === 'isoLines') out[kind] = { supported: false, fallbackKind: 'path', reason: UNBUILT };
+    else if (kind === 'text') out[kind] = { supported: false, fallbackKind: 'icon', reason: UNBUILT };
+    else if (kind === 'mesh') out[kind] = { supported: false, fallbackKind: 'boundingBox', reason: UNBUILT };
+    else if (kind === 'pointCloud') out[kind] = { supported: false, fallbackKind: 'point', reason: UNBUILT };
+    else if (kind === 'hexbin') out[kind] = { supported: false, fallbackKind: 'h3Summary', reason: UNBUILT };
     else out[kind] = { supported: false, reason: UNBUILT };
   }
   return out;

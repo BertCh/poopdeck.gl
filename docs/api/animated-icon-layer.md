@@ -40,7 +40,11 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 | `color` / `getColor` | `Color \| string` | `[255,255,255,255]` | Tint — constant or a categorical column (GPU palette; only meaningful for `mask: true` icons). |
 | `size` / `getSize` | `number \| string` | `12` | Icon size — constant or numeric column. |
 | `sizeUnits` / `sizeScale` / `sizeMinPixels` / `sizeMaxPixels` | — | — | `IconLayer` sizing pass-throughs. |
+| `sizeBasis` | `'height' \| 'width'` | `'height'` | Which dimension of a non-square icon `size` measures — `IconLayer` pass-through. |
+| `pixelOffset` / `getPixelOffset` | `[number, number] \| string` | `[0, 0]` | Screen-space `[x, y]` pixel offset — constant or a size-2 property-column name. |
 | `billboard` | `boolean` | `true` | Face the camera in 3D views. |
+| `alphaCutoff` | `number` | `0.05` | Alpha discard threshold `[0, 1]`; crisps masked-icon edges. |
+| `textureParameters` | `Record<string, unknown> \| null` | `null` | Atlas sampler params (filtering/wrap); `null` keeps `IconManager` defaults. |
 | `colorPalette` | `Color[]` | 10-stop | Palette for a categorical `color` column. |
 | `fadeInDuration` / `fadeOutDuration` | `number` | `300` | Window fade ramps (ms). |
 

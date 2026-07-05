@@ -29,6 +29,8 @@ import type { Color, DefaultProps, Layer, LayerContext } from '@deck.gl/core';
 import { SpatioTemporalLayer, SpatioTemporalLayerProps } from '../spatiotemporal-layer.js';
 import { NoPickingPathLayer } from '../internal/no-picking-path-layer.js';
 import { TimeFilterExtension } from '../../extensions/time-filter-extension.js';
+import { DataFilterExtension } from '../../extensions/data-filter-extension.js';
+import type { DataFilterRange } from '../../extensions/data-filter-extension.js';
 import {
   CategoryColorExtension,
   CATEGORY_PALETTE_SIZE,
@@ -43,7 +45,11 @@ import {
   updateTriggersDigest,
 } from '../../lib/style-digest.js';
 import { resolveAccessorAlias } from '../../lib/accessor-alias.js';
-import type { ColorAccessorValue, NumericAccessorValue } from '../../lib/accessor-alias.js';
+import type {
+  ColorAccessorValue,
+  NumericAccessorValue,
+  WeightAccessorValue,
+} from '../../lib/accessor-alias.js';
 import { DEFAULT_LINE_PALETTE } from '@poopdeck.gl/core';
 import type { Tile, Layer as TileLayer, BinaryFeatures } from '@poopdeck.gl/core';
 
@@ -198,6 +204,60 @@ export interface _AnimatedPathLayerProps {
    * top of the stack. `< 1` fades the upper layers translucent. @default 1
    */
   elevationOpacityFar?: number;
+
+  /**
+   * GPU range filter — the NAME of a baked numeric column to filter paths by
+   * (installs {@link DataFilterExtension}). A path renders when its value in
+   * this column is inside {@link filterRange}, else it is hidden (or soft-faded
+   * via {@link filterSoftRange}). Composes WITH the time filter (a path must
+   * pass both). The per-feature value is expanded per-vertex like the path's
+   * time attributes, so multi-vertex paths filter as a whole.
+   *
+   * Accessor-alias of deck.gl's `getFilterValue`: pass a column NAME, not a
+   * function (STT tiles are binary — a function warns once and is ignored).
+   * Unset (default) ⇒ the extension is not installed: zero cost.
+   *
+   * ATTRIBUTE-BUDGET: PathLayer's fp64 position split leaves the per-pipeline
+   * vertex-attribute count tight. On the default non-pickable path
+   * (`NoPickingPathLayer`, which reclaims the picking slot) the count sits at 15
+   * with `TimeFilterExtension`, and adding the CategoryColorExtension attribute
+   * OR this filter attribute lands it at WebGL2's guaranteed 16-slot floor —
+   * installing BOTH would make 17, a fatal link failure (blank paths) on GPUs
+   * that report exactly 16. Because the path family never uses the GPU category
+   * path (categorical color is expanded on the CPU into `getColor`), the layer
+   * DROPS the idle `CategoryColorExtension` whenever a filter is installed and
+   * spends that slot on `filterValue` instead — so the default path stays at 16
+   * and links fine everywhere. CAVEAT: with `pickable: true` the sublayer is the
+   * stock `PathLayer` (keeps `instancePickingColors`), so filter + picking is 17
+   * and overflows on exactly-16 GPUs (see the separate `pickable` warning);
+   * prefer `pickable: false` (the default) when filtering, or `AnimatedPointLayer`
+   * where the budget is roomy.
+   * @default null
+   */
+  filterProperty?: WeightAccessorValue | null;
+
+  /**
+   * Inclusive `[min, max]` bounds for {@link filterProperty}. `null` (default)
+   * idles the filter (renders all) while keeping the column bound, so a range
+   * set later animates by uniform with no re-preparation. No effect unless
+   * `filterProperty` is set.
+   * @default null
+   */
+  filterRange?: DataFilterRange | null;
+
+  /**
+   * Optional soft `[min, max]` inside {@link filterRange} for a fade instead of
+   * a hard clip. No effect unless `filterProperty` + `filterRange` are set.
+   * @default null
+   */
+  filterSoftRange?: DataFilterRange | null;
+
+  /**
+   * Enable/disable the column filter without dropping the bound attribute.
+   * Effective only with `filterProperty` + a valid `filterRange`.
+   * @default true
+   */
+  filterEnabled?: boolean;
 }
 
 /** Complete props accepted by {@link AnimatedPathLayer}. */
@@ -456,6 +516,13 @@ export class AnimatedPathLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
     jointRounded: false,
     miterLimit: { type: 'number', value: 4, min: 0 },
     billboard: false,
+
+    // Column range filter (DataFilterExtension). Unset ⇒ not installed.
+    // Permissive {type:'object'} descriptors (see the point layer).
+    filterProperty: { type: 'object', value: null, optional: true, compare: true },
+    filterRange: { type: 'object', value: null, optional: true, compare: true },
+    filterSoftRange: { type: 'object', value: null, optional: true, compare: true },
+    filterEnabled: true,
   };
 
   private preparedTileCache = new Map<string, PreparedTile>();
@@ -481,6 +548,14 @@ export class AnimatedPathLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
    */
   private readonly timeFilterExtension = new TimeFilterExtension({ mode: 'window' });
   private readonly categoryColorExtension = new CategoryColorExtension();
+  /**
+   * Singleton DataFilterExtension, composed in only when `filterProperty` is
+   * set (per-layer constant ⇒ stable list). When installed it REPLACES the
+   * idle CategoryColorExtension in the sublayer extension list so the path
+   * pipeline stays at WebGL2's 16-slot vertex-attribute floor rather than
+   * overflowing to 17 — see the `filterProperty` prop docs.
+   */
+  private readonly dataFilterExtension = new DataFilterExtension({ filterSize: 1 });
   private readonly boundGetTime: () => number = () => this.getCurrentTime();
 
   finalizeState(context: LayerContext): void {
@@ -512,6 +587,20 @@ export class AnimatedPathLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
     );
   }
 
+  /**
+   * Resolve `filterProperty` to a baked-column NAME (accessor-alias of deck's
+   * `getFilterValue`; a function warns once and is ignored — no legacy prop, so
+   * the fallback is "no filter").
+   */
+  private filterPropertyValue(): string | undefined {
+    return resolveAccessorAlias<string | undefined>(
+      'AnimatedPathLayer',
+      'filterProperty',
+      this.props.filterProperty,
+      undefined,
+    );
+  }
+
   private computeLayerPropsKey(): string {
     const color = this.colorValue();
     const width = this.widthValue();
@@ -537,6 +626,14 @@ export class AnimatedPathLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
       this.props.elevationScale,
       Array.isArray(color) ? color.join(',') : '',
       typeof width === 'number' ? width : 0,
+      // Column-filter uniforms (DataFilterExtension) — a range/enabled edit is
+      // uniform-only, so it rebuilds the cached sublayers (whose props carry the
+      // values) rather than re-preparing tiles, like timeWindow above.
+      Array.isArray(this.props.filterRange) ? this.props.filterRange.join(',') : '',
+      Array.isArray(this.props.filterSoftRange)
+        ? this.props.filterSoftRange.join(',')
+        : '',
+      this.props.filterEnabled,
     ].join('|');
   }
 
@@ -615,6 +712,7 @@ export class AnimatedPathLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
     const widthValue = this.widthValue();
     const colorProp = typeof colorValue === 'string' ? colorValue : '';
     const widthProp = typeof widthValue === 'string' ? widthValue : '';
+    const filterProp = this.filterPropertyValue() ?? '';
     const elevProp =
       typeof this.props.elevationProperty === 'string' ? this.props.elevationProperty : '';
     // Palette / mapping keyed by CONTENT, not length — a same-size swap must
@@ -639,9 +737,13 @@ export class AnimatedPathLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
       elevProp && opacityRange
         ? `o${opacityRange[0]},${opacityRange[1]}:${this.props.elevationOpacityNear}:${this.props.elevationOpacityFar}`
         : '';
+    // Filter column NAME is baked (per-vertex) into `filterValue`, so a change
+    // re-prepares tiles and — via the new preparedKey — rebuilds sublayers,
+    // covering the unset↔set toggle that adds/removes DataFilterExtension.
+    const filterSig = filterProp ? `f${filterProp}` : '';
     const styleKey = `${colorProp}|${widthProp}|${
       colorProp ? colorListDigest(this.props.colorPalette ?? DEFAULT_PALETTE) : 0
-    }|${mapSig}|${elevSig}|${elevOpacSig}|${updateTriggersDigest(this.props.updateTriggers)}`;
+    }|${mapSig}|${elevSig}|${elevOpacSig}|${filterSig}|${updateTriggersDigest(this.props.updateTriggers)}`;
 
     const tileKey = makeTileKey(tile, tileLayer);
     const cached = this.preparedTileCache.get(tileKey);
@@ -760,9 +862,55 @@ export class AnimatedPathLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
     if (widthProp) {
       const values = binary.numericProps[widthProp];
       if (values) {
-        // getWidth is a native PathLayer accessor — its tessellator expands the
-        // per-feature value across the path's segments, so per-feature is fine.
-        attributes.getWidth = { value: values, size: 1 };
+        // getWidth is a native PathLayer accessor, carried as a PER-VERTEX
+        // attribute its tessellator maps onto segment instances. A per-FEATURE
+        // buffer (length = featureCount) under-sizes the instanced draw on
+        // multi-vertex paths exactly like the time attributes above and throws
+        // "vertex buffer is not big enough" on ANGLE/Metal — deck binds a
+        // named binary buffer verbatim, so it must already be per-vertex.
+        // Force Float32 (getWidth is a float32 attribute) before expanding.
+        const widthValues =
+          values instanceof Float32Array ? values : new Float32Array(values);
+        attributes.getWidth = {
+          value: expandFeatureScalarToVertex(
+            widthValues,
+            binary.startIndices,
+            binary.featureCount,
+            totalVerts,
+          ),
+          size: 1,
+        };
+      }
+    }
+
+    // Column range filter (DataFilterExtension). The value is per-FEATURE, but —
+    // exactly like the time attributes above — PathLayer instances are SEGMENTS,
+    // so a per-feature buffer under-sizes the instanced draw on multi-vertex
+    // paths ("vertex buffer is not big enough" on ANGLE/Metal). Expand it
+    // per-VERTEX; every vertex of a path shares its feature's value. Absent
+    // column ⇒ no attribute → the sublayer idles the filter for this tile. A
+    // categorical column can't be range-filtered in v1 — warn once.
+    if (filterProp) {
+      const values = binary.numericProps[filterProp];
+      if (values) {
+        const filterValues =
+          values instanceof Float32Array ? values : new Float32Array(values);
+        attributes.filterValue = {
+          value: expandFeatureScalarToVertex(
+            filterValues,
+            binary.startIndices,
+            binary.featureCount,
+            totalVerts,
+          ),
+          size: 1,
+        };
+      } else if (binary.categoricalProps[filterProp]) {
+        warnOnce(
+          'AnimatedPathLayer:filterPropertyCategorical',
+          `[AnimatedPathLayer] filterProperty "${filterProp}" is a categorical ` +
+            'column; v1 range-filters NUMERIC columns only. The filter is ignored ' +
+            'for tiles where the column is categorical.',
+        );
       }
     }
 
@@ -815,13 +963,35 @@ export class AnimatedPathLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
       );
     }
 
+    // Column range filter — install DataFilterExtension only when a column is
+    // named (per-layer constant ⇒ stable list). `hasFilter` gates the per-tile
+    // enable so a tile missing the column renders unfiltered.
+    const filterProp = this.filterPropertyValue();
+    const hasFilter = !!prepared.data.attributes.filterValue;
+
     // Keep the extension list constant across sublayers — see
     // animated-trips-layer.ts for the cache-storm rationale. User extensions
     // from the top-level `extensions` prop are appended (composeExtensions).
-    const extensions = this.composeExtensions([
-      this.timeFilterExtension,
-      this.categoryColorExtension,
-    ]);
+    //
+    // ATTRIBUTE-BUDGET: the non-pickable path pipeline (NoPickingPathLayer, 12
+    // attrs) + TimeFilterExtension's 3 sits at 15, then ONE more extension
+    // attribute lands it at WebGL2's guaranteed 16-slot floor. Installing BOTH
+    // CategoryColorExtension (`instanceCategoryIndex`) AND DataFilterExtension
+    // (`filterValue`) would make 17 — a fatal per-pipeline link FAILURE (blank
+    // paths) on the many GPUs that report exactly 16 slots. The path family
+    // never uses the GPU category path (categorical color is expanded on the
+    // CPU into `getColor`; `gpuPalette` is always null here), so the
+    // CategoryColorExtension is pure dead weight. When a column filter is
+    // installed we therefore DROP the idle CategoryColorExtension and spend that
+    // one free slot on `filterValue` instead — net 16, no overflow. `filterProp`
+    // is a per-LAYER constant, so the list stays stable across this layer's
+    // sublayers (the shader-cache contract holds). See the `filterProperty`
+    // prop docs.
+    const extensions = this.composeExtensions(
+      filterProp
+        ? [this.timeFilterExtension, this.dataFilterExtension]
+        : [this.timeFilterExtension, this.categoryColorExtension],
+    );
     // getSubLayerProps inheritance (opacity/pickable/visible, coordinate
     // system, highlight props, …) + user `_subLayerProps.paths` overrides.
     // Only runs inside this cache-gated build path — never per frame.
@@ -866,6 +1036,18 @@ export class AnimatedPathLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
 
       useCategoryColor: useGpuCategory,
       ...(useGpuCategory ? { categoryPalette: prepared.gpuPalette! } : {}),
+
+      // DataFilterExtension wiring (only when a filterProperty is set). The
+      // constant getFilterValue is the fallback for tiles missing the column;
+      // filterEnabled is additionally gated on THIS tile having baked it.
+      ...(filterProp
+        ? {
+            getFilterValue: 0,
+            filterEnabled: hasFilter && this.props.filterEnabled !== false,
+            filterRange: this.props.filterRange ?? null,
+            filterSoftRange: this.props.filterSoftRange ?? null,
+          }
+        : {}),
     });
     // Pickable sublayers must use the stock PathLayer: NoPickingPathLayer
     // strips `instancePickingColors`, so forwarding pickable:true into it

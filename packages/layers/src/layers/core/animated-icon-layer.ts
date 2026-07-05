@@ -72,6 +72,20 @@ import type { Tile, Layer as TileLayer, BinaryFeatures } from '@poopdeck.gl/core
 const DEBUG = false;
 
 /**
+ * Value domain of the {@link _AnimatedIconLayerProps.getPixelOffset} alias: a
+ * constant `[x, y]` screen-space offset, a size-2 property-column NAME (an
+ * interleaved `vectorProps` column baked at build time), or — like the other
+ * accessor aliases — a function that warns once and falls back. Mirrors
+ * {@link NumericAccessorValue} but two-wide (deck.gl's `getPixelOffset` is a
+ * size-2 accessor).
+ */
+export type PixelOffsetAccessorValue =
+  | [number, number]
+  | number[]
+  | string
+  | ((d: unknown) => unknown);
+
+/**
  * One entry of an `iconMapping` — the sub-rectangle of the atlas a named icon
  * occupies, plus anchor / mask flags. Mirrors deck.gl `IconLayer`'s mapping
  * shape; forwarded verbatim to the sublayer.
@@ -178,11 +192,55 @@ export interface _AnimatedIconLayerProps {
   sizeMaxPixels?: number;
 
   /**
+   * Which dimension of a non-square icon `size` measures. `'height'` scales the
+   * icon so its rendered height equals `size` (width follows the aspect ratio);
+   * `'width'` scales by width instead. No effect on square icons.
+   * `IconLayer` pass-through.
+   * @default 'height'
+   */
+  sizeBasis?: 'height' | 'width';
+
+  /**
+   * Screen-space pixel offset — a constant `[x, y]` applied to every icon, or a
+   * size-2 property-column NAME (an interleaved `vectorProps` column) baked
+   * per-feature into the `getPixelOffset` instanced attribute. Same
+   * constant-or-column domain as {@link size}/{@link angle}, but two-wide.
+   * `IconLayer` pass-through / accessor.
+   * @default [0, 0]
+   */
+  pixelOffset?: [number, number] | string;
+
+  /**
+   * Upstream-vocabulary alias of {@link pixelOffset}. Accepts a constant
+   * `[x, y]` OR a size-2 property-column NAME — NOT a function accessor (a
+   * function warns once and falls back to `pixelOffset`). When set, it wins over
+   * `pixelOffset`.
+   */
+  getPixelOffset?: PixelOffsetAccessorValue | null;
+
+  /**
+   * Alpha discard threshold in `[0, 1]`. Fragments whose (icon × tint) alpha is
+   * below this cutoff are dropped, which crisps the masked-icon edge and keeps
+   * translucent sprite fringes from depth-writing. `IconLayer` pass-through.
+   * @default 0.05
+   */
+  alphaCutoff?: number;
+
+  /**
    * Render icons as billboards (always face the camera in 3D views) —
    * `IconLayer` pass-through.
    * @default true
    */
   billboard?: boolean;
+
+  /**
+   * Sampler parameters for the icon-atlas texture — filtering (`minFilter` /
+   * `magFilter` / `mipmapFilter`) and wrap (`addressModeU` / `addressModeV`).
+   * `null` leaves deck.gl's `IconManager` defaults in place. Forwarded verbatim
+   * to the sublayer `IconLayer` (a luma.gl `SamplerProps` object).
+   * @default null
+   */
+  textureParameters?: Record<string, unknown> | null;
 
   /**
    * Fade-in duration for appearing icons (ms).
@@ -284,12 +342,16 @@ export class AnimatedIconLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
     angle: { type: 'object', value: 0, compare: true },
     color: { type: 'object', value: [255, 255, 255, 255], compare: true },
     size: { type: 'object', value: 12, compare: true },
+    // Constant [x,y] OR a size-2 column name — permissive descriptor for the
+    // same reason as angle/color/size.
+    pixelOffset: { type: 'object', value: [0, 0], compare: true },
 
     // Accessor-named aliases: unset by default so the legacy props win unless
     // the caller opts into the upstream vocabulary.
     getAngle: { type: 'object', value: null, optional: true, compare: true },
     getColor: { type: 'object', value: null, optional: true, compare: true },
     getSize: { type: 'object', value: null, optional: true, compare: true },
+    getPixelOffset: { type: 'object', value: null, optional: true, compare: true },
 
     colorPalette: { type: 'array', value: DEFAULT_PALETTE, compare: true },
 
@@ -298,7 +360,14 @@ export class AnimatedIconLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
     sizeScale: { type: 'number', value: 1, min: 0 },
     sizeMinPixels: { type: 'number', value: 0, min: 0 },
     sizeMaxPixels: { type: 'number', value: Number.MAX_SAFE_INTEGER, min: 0 },
+    sizeBasis: 'height',
     billboard: true,
+
+    // Masked-icon edge crisping — deck default 0.05.
+    alphaCutoff: { type: 'number', value: 0.05, min: 0, max: 1 },
+
+    // Atlas sampler params — null keeps IconManager's defaults (deck default).
+    textureParameters: { type: 'object', value: null, optional: true, compare: true },
 
     // Fade ramps, forwarded to TimeFilterExtension (window mode).
     fadeInDuration: { type: 'number', value: 300, min: 0 },
@@ -382,6 +451,15 @@ export class AnimatedIconLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
     );
   }
 
+  private pixelOffsetValue(): [number, number] | number[] | string | undefined {
+    return resolveAccessorAlias<[number, number] | number[] | string>(
+      'AnimatedIconLayer',
+      'getPixelOffset',
+      this.props.getPixelOffset,
+      this.props.pixelOffset,
+    );
+  }
+
   /**
    * Compute a digest of the layer-level props that affect every sublayer.
    * When this changes we throw away the entire sublayer cache.
@@ -390,6 +468,7 @@ export class AnimatedIconLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
     const angle = this.angleValue();
     const color = this.colorValue();
     const size = this.sizeValue();
+    const pixelOffset = this.pixelOffsetValue();
     return [
       this.props.icon,
       // iconAtlas/iconMapping identity — a swap rebuilds every sublayer.
@@ -398,7 +477,11 @@ export class AnimatedIconLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
       this.props.sizeScale,
       this.props.sizeMinPixels,
       this.props.sizeMaxPixels,
+      this.props.sizeBasis,
       this.props.billboard,
+      this.props.alphaCutoff,
+      // Atlas sampler config — a swap changes the GPU texture's filtering/wrap.
+      JSON.stringify(this.props.textureParameters ?? null),
       // Composite props that getSubLayerProps bakes into every sublayer
       // (opacity/pickable/visible, coordinateSystem, modelMatrix, highlight
       // props, _subLayerProps overrides…) plus the user's updateTriggers.
@@ -409,11 +492,13 @@ export class AnimatedIconLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
       this.props.fadeOutDuration,
       this.props.timeHeightScale,
       this.props.timeHeightOrigin,
-      // angle/color/size constant branches only — the property-driven path
-      // lives in `prepared` and is keyed via preparedKey/styleKey.
+      // angle/color/size/pixelOffset constant branches only — the
+      // property-driven path lives in `prepared` and is keyed via
+      // preparedKey/styleKey.
       typeof angle === 'number' ? angle : 0,
       Array.isArray(color) ? color.join(',') : '',
       typeof size === 'number' ? size : 0,
+      Array.isArray(pixelOffset) ? pixelOffset.join(',') : '',
     ].join('|');
   }
 
@@ -495,13 +580,15 @@ export class AnimatedIconLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
     const angle = this.angleValue();
     const color = this.colorValue();
     const size = this.sizeValue();
+    const pixelOffset = this.pixelOffsetValue();
     const angleProp = typeof angle === 'string' ? angle : '';
     const colorProp = typeof color === 'string' ? color : '';
     const sizeProp = typeof size === 'string' ? size : '';
+    const pixelOffsetProp = typeof pixelOffset === 'string' ? pixelOffset : '';
     // Palette identity matters only when color is a column name. Digests are
     // memoized per object reference (style-digest.ts), so this stays a WeakMap
     // lookup per tile, not a re-serialization.
-    return `${angleProp}|${colorProp}|${sizeProp}|${
+    return `${angleProp}|${colorProp}|${sizeProp}|${pixelOffsetProp}|${
       colorProp ? colorListDigest(this.props.colorPalette ?? DEFAULT_PALETTE) : 0
     }|${updateTriggersDigest(this.props.updateTriggers)}`;
   }
@@ -535,9 +622,11 @@ export class AnimatedIconLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
     const angleValue = this.angleValue();
     const colorValue = this.colorValue();
     const sizeValue = this.sizeValue();
+    const pixelOffsetValue = this.pixelOffsetValue();
     const angleProp = typeof angleValue === 'string' ? angleValue : '';
     const colorProp = typeof colorValue === 'string' ? colorValue : '';
     const sizeProp = typeof sizeValue === 'string' ? sizeValue : '';
+    const pixelOffsetProp = typeof pixelOffsetValue === 'string' ? pixelOffsetValue : '';
     const styleKey = this.computeStyleKey();
     const tileKey = makeTileKey(tile, tileLayer);
 
@@ -572,6 +661,17 @@ export class AnimatedIconLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
     if (sizeProp) {
       const values = binary.numericProps[sizeProp];
       if (values) attributes.getSize = { value: values, size: 1 };
+    }
+
+    // Property-driven pixel offset — a size-2 interleaved `vectorProps` column
+    // ([x0,y0, x1,y1, …]) bound zero-copy to the getPixelOffset instanced
+    // attribute. Only a size-2 column qualifies; anything else falls through to
+    // the constant offset.
+    if (pixelOffsetProp) {
+      const vec = binary.vectorProps?.[pixelOffsetProp];
+      if (vec && vec.size === 2) {
+        attributes.getPixelOffset = { value: vec.value, size: 2 };
+      }
     }
 
     // Property-driven color — categorical only (GPU path). A numeric color
@@ -616,11 +716,15 @@ export class AnimatedIconLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
     const angleValue = this.angleValue();
     const colorValue = this.colorValue();
     const sizeValue = this.sizeValue();
+    const pixelOffsetValue = this.pixelOffsetValue();
     const constAngle = typeof angleValue === 'number' ? angleValue : 0;
     const constSize = typeof sizeValue === 'number' ? sizeValue : 12;
     const constColor = (Array.isArray(colorValue)
       ? colorValue
       : ([255, 255, 255, 255] as Color)) as Color;
+    const constPixelOffset = (Array.isArray(pixelOffsetValue)
+      ? pixelOffsetValue
+      : [0, 0]) as [number, number];
 
     if (!this.props.iconAtlas || !this.props.iconMapping) {
       warnOnce(
@@ -671,12 +775,17 @@ export class AnimatedIconLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
       sizeScale: this.props.sizeScale,
       sizeMinPixels: this.props.sizeMinPixels,
       sizeMaxPixels: this.props.sizeMaxPixels,
+      sizeBasis: this.props.sizeBasis,
       billboard: this.props.billboard,
+      alphaCutoff: this.props.alphaCutoff,
+      // Atlas sampler params (filtering/wrap); null keeps IconManager defaults.
+      textureParameters: this.props.textureParameters,
 
       // Constant fallbacks — used when the matching binary attribute is absent.
       getAngle: constAngle,
       getSize: constSize,
       getColor: constColor,
+      getPixelOffset: constPixelOffset,
 
       // Time-as-height (space-time cube): whole icons lift by start time.
       timeHeightScale: this.props.timeHeightScale,
