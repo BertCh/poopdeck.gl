@@ -52,13 +52,14 @@ version, missing `packs`, bad key pattern, bad directory version) and that
 
 Tiny, deterministic, byte-stable datasets live under
 `packages/core/test/fixtures/` and are read by the TS reader tests to prove
-cross-implementation agreement (Rust writes → TS reads):
+cross-implementation agreement. The two packed fixtures are the genuine
+**Rust writes → TS reads** cases; `sample.stt` is a frozen legacy artifact:
 
 | fixture | exercises |
 | --- | --- |
 | `packed-golden/` | manifest folding, v5 directory decode (12 entries), **byte-identical blob dedup** (3 tiles share one physical blob), multi-pack cutting |
 | `paged-golden/` + `paged-golden-single/` | the **paged ⇄ whole-load differential**: the same 252-tile corpus emitted both ways, asserting paged queries return *byte-identical* results to a whole-load directory while fetching only the leaf pages a viewport/zoom/time window touches |
-| `sample.stt` | single-file → packed transcode + tile decode (geometry, numeric + categorical properties, dictionary null-bitmap) |
+| `sample.stt` (frozen legacy v4 fixture) | a test helper transcodes it to an in-memory packed dataset, then the packed reader decodes its tiles (geometry, numeric + categorical properties, dictionary null-bitmap). Not written by the current Rust toolchain — the single-file writer was removed |
 
 They are **committed, not regenerated per build**, so they double as a
 regression corpus. Regenerate after an intentional format change with:
@@ -76,8 +77,8 @@ cases.
 
 `stt-validate <dataset>` (the `stt-validate` crate) is the executable
 specification of the integrity contract. It accepts a packed dataset directory
-or its `manifest.json` (the single-file `.stt` container is an internal build
-intermediate — spec D3 — and is not accepted), and runs, by cost tier:
+or its `manifest.json` (the single-file `.stt` container has been removed — only
+the packed format is accepted), and runs, by cost tier:
 
 **Cheap (all tiles):**
 - **content-addressing integrity** — every `packs/*.sttp` and `index/*.sttd`
@@ -155,10 +156,11 @@ A conformant writer **SHOULD**:
 - order blobs and directory entries with the §5 total tiebreaks so a rebuild is
   byte-reproducible — **and** serialize Arrow schema/field custom metadata in a
   canonical (lexicographic) key order so content addresses are reproducible
-  *across processes*. The reference Rust writer meets the former but **not yet**
-  the latter (a pinned-`arrow` limitation; see
-  [packed-format §7-D6](./stt-packed-format.md#7-design-decisions)) — this is the
-  one published conformance gap;
+  *across processes*. The reference Rust writer meets **both** on Arrow ≥59
+  (sorted-`BTreeMap` metadata assembly + Arrow 59's stable IPC metadata
+  serialization; see
+  [packed-format §7-D6](./stt-packed-format.md#7-design-decisions)) — the former
+  cross-process gap that existed under Arrow 54 is now closed;
 - compress the directory at rest (`directory.encoding: "zstd"`);
 - emit a paged directory (`layout: "paged"`) for large datasets so cold readers
   fetch directory bytes proportional to the viewport.

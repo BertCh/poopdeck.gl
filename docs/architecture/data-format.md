@@ -4,9 +4,12 @@
 > Arrow IPC + GeoArrow), which is identical regardless of container. The
 > **container** is the packed format —
 > [`docs/spec/stt-packed-format.md`](../spec/stt-packed-format.md), which also
-> specifies the v5 directory codec (§4 there). The single-file layout
-> under "Top-level layout" below is the **single-file container**, used as the
-> streaming/transcode intermediate.
+> specifies the v5 directory codec (§4 there). The single-file layout under
+> "Top-level layout" below documents the **retired single-file container** —
+> removed from the Rust toolchain (no writer, reader, or transcode) and no
+> longer read by either reference reader; it survives only as a committed legacy
+> fixture (`sample.stt`) that a test helper transcodes to packed so the existing
+> cross-implementation tests keep exercising its tiles.
 
 An STT dataset combines a spatial tile pyramid with a temporal axis. Tile
 payloads are **Apache Arrow IPC** record batches with **GeoArrow**-encoded
@@ -14,9 +17,9 @@ geometry, so a browser can decode a tile with one library (`apache-arrow`) and
 feed the resulting columnar buffers directly to deck.gl.
 
 This document is the normative spec for the tile payload. The Rust authority is
-`crates/stt-core/src/arrow_tile.rs` (payload), `crates/stt-core/src/archive.rs`
-(single-file container) and `crates/stt-core/src/directory.rs` (the tile
-index codec); the TypeScript reader (packed format only) lives in
+`crates/stt-core/src/arrow_tile.rs` (payload), `crates/stt-core/src/pack.rs`
+(packed container) and `crates/stt-core/src/directory.rs` (the tile
+index codec); the TypeScript reader lives in
 `packages/core/src/archive.ts` / `tile.ts`. If this document and the code
 disagree, the code wins — please open a PR.
 
@@ -26,8 +29,13 @@ disagree, the code wins — please open a PR.
 > container is the packed format (`manifest.json` + content-addressed
 > `packs/*.sttp` + `index/*.sttd`); see
 > [`stt-packed-format.md`](../spec/stt-packed-format.md). The single-file
-> container is produced as the bounded-RAM streaming intermediate that is
-> transcoded to packs.
+> container has been **removed** from the Rust toolchain — `stt-build` emits the
+> packed format directly (the non-arrow `--streaming` path streams into the
+> `PackWriter`). Neither reference reader decodes it anymore (the TypeScript
+> reader is packed-only). The layout below is retained only as a paper record of
+> the committed `sample.stt` fixture, which a test-only helper
+> (`packages/core/test/helpers/packed-fixture.ts`, `parseV4`) transcodes to an
+> in-memory packed dataset before the packed reader consumes it.
 
 ```
 ┌─────────────────────────┐  offset 0
@@ -59,13 +67,16 @@ version.
 | `STT\x01`    | 1       | retired (pre-Arrow protobuf tiles)                  |
 | `STT\x02`    | 2       | retired (gzip + BLAKE3-64 dedup)                    |
 | `STT\x03`    | 3       | retired (zstd + CRC32C, no dedup)                   |
-| `STT\x04`    | 4       | single-file container (dedup + run-length directory); the streaming/transcode intermediate |
+| `STT\x04`    | 4       | single-file container (dedup + run-length directory); retired — read by neither reference reader, kept only as the committed `sample.stt` test fixture |
 
 > The **current container is the packed format**, which has no single-file magic
 > — a dataset is identified by `manifest.json` with `"format": "stt-packed"`. The
-> magic table above applies only to single-file archives, and the in-repo
-> reader (`stt-core::archive::ArchiveReader`) accepts **only v4** — v1–v3 are
-> rejected. Readers MUST refuse archives whose version they do not understand.
+> magic table above applies only to single-file archives, which neither reference
+> reader decodes anymore: the Rust in-repo reader has been removed, and the
+> TypeScript reader is packed-only (`packages/core/src/directory.ts` rejects any
+> non-v5 directory). The v4 codec survives only as a test-only helper (`parseV4`)
+> that transcodes the frozen `sample.stt` fixture. Readers MUST refuse archives
+> whose version they do not understand.
 
 ## Header (64 bytes, little-endian)
 
@@ -97,21 +108,20 @@ is.
 
 Each blob is **zstd(layer frame)** (the default — `stt-build` is zstd-only)
 or the raw layer frame, depending on the header's `compression` byte.
-Compression **byte 1 (gzip) is retired/reserved**: no writer emits it, and
-the in-repo reader version-rejects v2 (gzip) single-file archives before the
-compression byte is ever read, so byte 1 is never observed on a v4 archive.
+Compression **byte 1 (gzip) is retired/reserved**: no writer ever emitted it,
+and no reference reader accepts a v2 (gzip) archive, so byte 1 is never observed
+on a v4 blob.
 
-**Deduplication.** The buffered ("optimized") v4 writer and the packed
-`PackWriter` blake3-hash each compressed blob and write byte-identical blobs
-once — a static cell repeated across time buckets stores one physical blob,
-which the directory's run-length encoding then collapses into a single run.
-The eager (streaming) v4 writer appends every blob unconditionally.
+**Deduplication.** The packed `PackWriter` blake3-hashes each compressed blob
+and writes byte-identical blobs once — a static cell repeated across time
+buckets stores one physical blob, which the directory's run-length encoding
+then collapses into a single run.
 
 Every blob carries a **CRC32C of its compressed bytes** as an integrity tag
 in its directory entry. Verification status:
 
-- The Rust `ArchiveReader` (`stt-core::archive`) checks the tag on every
-  `read_payload`, and `stt-validate` checks all tiles up front.
+- The Rust packed reader (`stt-core::PackedReader`) verifies the tag on read,
+  and `stt-validate` checks all tiles up front.
 - The TypeScript reader (`packages/core/src/archive.ts`) decodes the tag from
   the directory but does **not** verify it on the hot decode path — a corrupt
   blob surfaces as an Arrow/zstd decode error instead. Readers SHOULD verify
@@ -474,16 +484,14 @@ not recognized and its data decodes to a silent `null`.
 
 ## Dictionary (optional — no shipped producer)
 
-The header reserves a slot (`dictionary_offset` / `dictionary_length`) for a
-single shared zstd dictionary that would apply to every tile blob. The
-plumbing exists (`ArchiveWriter::create_optimized*` trains a ~112 KiB
-dictionary in buffered mode; `ArchiveReader` loads it at open and feeds the
-per-tile zstd decoder), but **no producer in this repo ships one**:
-`stt-build` writes packed datasets via `PackWriter` (explicitly
-dictionary-less so the browser's `fzstd` decoder works), and its
-`--streaming-arrow` single-file intermediate doesn't train one either. The
-packed format has **no dictionary slot at all** — every blob is an
-independent zstd frame. `dictionary_offset == 0` means no dictionary.
+The single-file header reserves a slot (`dictionary_offset` /
+`dictionary_length`) for a single shared zstd dictionary that would apply to
+every tile blob, but **no producer ever shipped one** — the Rust single-file
+writer and reader that trained and loaded it have been removed, and `stt-build`
+writes packed datasets via `PackWriter` (explicitly dictionary-less so the
+browser's `fzstd` decoder works). The packed format has **no dictionary slot at
+all** — every blob is an independent zstd frame. `dictionary_offset == 0` means
+no dictionary.
 
 ## Index (the directory)
 
@@ -496,7 +504,8 @@ single-file container embeds the same codec at the header's
 `index_offset` (its variant has no per-run `pack_id` column —
 whole-file offsets, decoded as `pack_id = 0`).
 
-Each entry decodes to these logical fields (`stt-core::archive::TileEntry`):
+Each entry decodes to these logical fields (`stt_core::TileEntry`, defined in
+`directory.rs`):
 
 | field                 | type            | description                                              |
 | --------------------- | --------------- | -------------------------------------------------------- |
@@ -595,7 +604,8 @@ overridable via `ArchiveOptions.coalesceGapBytes`) — tuned for HTTP/2
 against edge caches, where re-fetching a small gap is cheaper than an
 extra request.
 
-**Single-file container** (Rust `ArchiveReader`, transcode input only):
+**Single-file container** (the retired format's read order, mirrored by the
+`parseV4` test helper that transcodes the `sample.stt` fixture to packed):
 
 1. Bytes `[0, 64)` → header. Verify magic and version.
 2. If `dictionary_length > 0`: read the dictionary slot and construct a
@@ -631,8 +641,8 @@ extra request.
 
 ## Validating an archive
 
-`stt-validate <dataset>` accepts a packed dataset directory, its
-`manifest.json`, or a single-file `.stt`. For packed inputs it first
+`stt-validate <dataset>` accepts a packed dataset directory or its
+`manifest.json` (the single-file `.stt` container has been removed). It first
 verifies the content-addressing contract (every pack/directory object
 blake3-hashes to its filename, declared lengths match, no out-of-range
 `pack_id`), then verifies every tile's CRC32C, decodes each payload, and

@@ -46,6 +46,12 @@ per-deploy; cache-key implications (still immutable, so unaffected); how
 
 ## 2. Streaming `PackWriter` (closes spec D3)
 
+> **Update 2026-07: DONE — the single-file write path + `--streaming-arrow` were
+> removed.** `stt-build` builds packed directories directly; the non-arrow
+> `--streaming` path streams tiles into the `PackWriter`. The single-file
+> `ArchiveWriter`/`ArchiveReader`, the transcode functions, and the `.stt`
+> container are gone — D3 is closed. (Prose below is the historical record.)
+
 **Today:** the only reason the single-file `ArchiveWriter` / `write_tail` write
 path still exists is that `stt-build --streaming-arrow` needs a bounded-RAM
 intermediate, and `PackWriter` currently buffers all tiles in memory to compute
@@ -184,6 +190,12 @@ the at-rest numbers above are the baseline to beat.
 > stays parked with the same trigger.
 
 ## 5. Smaller follow-ups — triaged 2026-07-01
+
+> **Update 2026-07: DONE — the single-file write path + `--streaming-arrow` were
+> removed**, so the legacy single-file measurement scripts
+> (`optimize-tiles.sh`, `reprocess-run.sh`) and the transcode/repack examples
+> that exercised it were deleted along with it. (Prose below is the historical
+> record.)
 
 - **`stt-optimize` packed awareness — COUNTED OUT.** Its loader reads GeoParquet
   + legacy single-file `.stt` only; a packed-manifest loader is a low-risk

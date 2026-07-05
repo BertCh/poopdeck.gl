@@ -76,9 +76,9 @@ directory. Pipeline:
 6. **Write**: `stt-core::PackWriter` orders blobs for locality, per-blob
    zstd-compresses and byte-dedups them (no shared dictionary), then cuts the
    stream into content-addressed packs (≤64 MiB each) and emits `manifest.json`
-   + `index/<hash>.sttd` + `packs/<hash>.sttp`. The bounded-RAM
-   `--streaming-arrow` path builds a temp single-file archive first, then
-   transcodes it to packs.
+   + `index/<hash>.sttd` + `packs/<hash>.sttp`. The lower-memory `--streaming`
+   path writes tiles into the same `PackWriter` as each zoom level completes,
+   trimming peak RAM on large inputs.
 
 Optional pipeline extras: `--summary-tier h3` adds a server-aggregated
 H3-hex tier alongside the raw tier (so 100M-feature point datasets render
@@ -102,15 +102,15 @@ For anyone with neither: convert to GeoParquet first —
 recipes.
 
 ### `stt-optimize`
-Reads a Parquet or `.stt` and prints recommended `stt-build` settings —
+Reads a GeoParquet input and prints recommended `stt-build` settings —
 zoom range, temporal bucket size, compression — based on the data's
 spatial density and temporal distribution. Wired into the builder via
 `stt-build --auto`: every flag the user did NOT pass explicitly is
 filled in from the recommendation.
 
 ### `stt-validate`
-Opens a packed dataset (a directory or its `manifest.json`) — or a
-single-file `.stt` — and reports anomalies. For packed inputs it first checks the
+Opens a packed dataset (a directory or its `manifest.json`) and reports
+anomalies. It first checks the
 **content-addressing contract** (each pack/directory object blake3-hashes to its
 filename, declared lengths match, no out-of-range `pack_id`), then verifies every
 tile's CRC32C, decodes each Arrow IPC payload, and checks
@@ -155,7 +155,7 @@ trade-off for serving directly off a live source. See
 [cli-reference.md](../api/cli-reference.md) for the full flag surface.
 
 ### `stt-core`
-The library every CLI uses. Owns the archive format, Arrow tile codec,
+The library every CLI uses. Owns the packed format, Arrow tile codec,
 compression abstraction, Hilbert/temporal indexing, and metadata.
 
 ## TypeScript stack

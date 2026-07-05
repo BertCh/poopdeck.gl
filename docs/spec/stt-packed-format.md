@@ -116,10 +116,10 @@ the build.
 
 The directory (`index/<hash>.sttd`) is a pure columnar binary buffer
 (`crates/stt-core/src/directory.rs`), inspired by PMTiles v3: delta + zig-zag
-varint key columns plus blob-run RLE. v5 is the retired single-file v4 codec
-extended with pack awareness (`DIRECTORY_VERSION = 5`); readers keep v4 decode
-only for transcoding old archives. Specified in full here since this is the
-codec's only deployment.
+varint key columns plus blob-run RLE. v5 is the pack-aware directory codec
+(`DIRECTORY_VERSION = 5`), extending the earlier single-file v4 codec with
+pack awareness. Specified in full here since this is the codec's only
+deployment.
 
 **Varints.** Unsigned values use LEB128; signed deltas use LEB128 over a zig-zag
 mapping `zz(v) = (v << 1) ^ (v >> 63)`. Deltas are computed with wrapping
@@ -263,8 +263,8 @@ excludes the query zoom, its **geo bbox** misses the viewport, or its
 **`[t_min, t_max]`** misses the time window — all without fetching the leaf. The
 geographic bbox (rather than a Hilbert key range) is zoom-correct and needs no
 Hilbert index in the reader; it was frozen over the alternative by an A/B sim
-(`crates/stt-core/examples/directory-paging-sim.rs`): at 4096 entries/page it
-matched or beat Hilbert-range pruning on every dataset where paging matters
+at 4096 entries/page: it matched or beat Hilbert-range pruning on every dataset
+where paging matters
 (nyc-taxi-points 9.5%/15.5% of whole-load med/p90; drifters 25.0%/35.1%),
 because a viewport box maps to a Hilbert *interval* that falsely keeps
 spatially-distant pages while geo-bbox tests real overlap. It also composes with
@@ -295,8 +295,9 @@ and cross-page key order is monotonic in `(zoom, hilbert, time_start)`.
    content address — **byte-reproducible across identical rebuilds**, which is what the
    immutable-pack caching economics rest on. The directory entry sort gets the same
    treatment: `(zoom, hilbert, time_start, temporal_bucket_ms)`.
-2. Per-blob zstd, byte-identical dedup (blake3). **No shared dictionary** (keeps the
-   fzstd TS reader able to decode — same contract as `create_reordered`).
+2. Per-blob zstd, byte-identical dedup (blake3). **No shared dictionary** — each blob
+   decompresses standalone (keeps the fzstd TS reader able to decode without a
+   cross-blob dictionary).
 3. Cut the ordered, deduped blob stream into packs of **≤ `pack_target_bytes`** (default
    **64 MiB**, override `--pack-size`). Never split a blob across packs.
 4. Assign `pack_id` in cut order; `offset_in_pack` resets to 0 per pack.
@@ -362,11 +363,12 @@ The rationale behind the format's locked-in choices:
   than the target gets its own oversized pack (blobs are never split).
 - **D2 — content address = blake3, 128-bit** (32 hex chars). blake3 is already the
   dedup hash; 128 bits is collision-safe at our object counts and keeps keys short.
-- **D3 — the single-file container is an intermediate, not a deployment target.** The
-  single-file writer is not a deployment output; it serves as (a) the bounded-RAM
-  **intermediate** that `stt-build --streaming-arrow` transcodes into packs, and (b) the
-  read side that `transcode_archive_to_packs` consumes to migrate older archives. The
-  single-file *read* path is retained for transcode.
+- **D3 — the single-file container has been removed.** `stt-build` builds packed
+  directories directly: the in-memory pipeline hands blobs to the `PackWriter`, and the
+  lower-memory non-arrow `--streaming` path streams tiles into the same `PackWriter` as
+  each zoom level completes. The old single-file writer, the `--streaming-arrow` transcode
+  intermediate, and every transcode path are gone; datasets are rebuilt from source rather
+  than transcoded.
 - **D4 — manifest freshness = short `max-age` + `must-revalidate`.** `manifest.json`
   ships `max-age=60, must-revalidate`; packs/index ship `immutable, max-age=31536000`.
   Revalidation (`REVALIDATED`) keeps the tiny manifest fresh without a mandatory purge;
@@ -387,34 +389,35 @@ The rationale behind the format's locked-in choices:
      directory, and every content address are byte-identical across rebuilds —
      independent of input arrival order or thread scheduling.
 
-  2. **Payload-bytes layer — NOT yet cross-process reproducible.** A tile blob is
-     `zstd(Arrow IPC stream)`, so its content address depends on the IPC bytes
-     being deterministic. They are deterministic *within a single build process*
-     (which is why byte-identical dedup and run-length collapsing work at all),
-     but **not across separate processes**: the Arrow dependency stores Schema and
-     Field custom metadata as `HashMap<String, String>` and serializes it in
-     **iteration order** (`arrow-ipc::convert::metadata_to_fb` does not sort), and
-     Rust's `HashMap` seeds its iteration order per process. So the same logical
-     tile, built in two different processes, can serialize its `stt:*` /
-     `ARROW:extension:*` metadata keys in different orders → different IPC bytes →
-     different blake3 → a different pack name.
+  2. **Payload-bytes layer — cross-process reproducible on Arrow ≥59.** A tile
+     blob is `zstd(Arrow IPC stream)`, so its content address depends on the IPC
+     bytes being deterministic. `arrow_tile::encode_layer_cfg` assembles all
+     schema- and field-level custom metadata from **sorted `BTreeMap`s**, and the
+     pinned `arrow` 59 IPC writer serializes that metadata in **stable (sorted)
+     key order**. So the same logical tile, built in two different processes,
+     serializes its `stt:*` / `ARROW:extension:*` metadata keys in identical order
+     → byte-identical IPC bytes → identical blake3 → the same pack name.
 
-  **Consequence (precise).** This is a *cache-efficiency* gap, **not a
-  correctness bug**: a fresh full rebuild produces a self-consistent dataset, the
-  manifest swap is atomic (§2), and stale immutable objects age out via the §2 GC
-  retention pass. What it costs is incremental re-sync (an unchanged dataset
-  rebuilt in a new process re-uploads its packs) and cross-version dedup.
+     This was an open gap under Arrow 54, which stored Schema/Field metadata in a
+     per-process-seeded `HashMap` and emitted it in iteration order (the encoder
+     always fed sorted `BTreeMap`s; only the writer's ordering lagged). The
+     upgrade to Arrow ≥59 closed it.
 
-  **Normative target.** A conformant writer SHOULD serialize Arrow schema/field
-  custom metadata in a canonical (lexicographic) key order so payload bytes are
-  reproducible across processes. The reference Rust writer does **not yet** meet
-  this because the pinned `arrow`/`arrow-ipc` version exposes no order-preserving
-  metadata API (the value is stored in, and serialized from, a `HashMap`); the
-  fix path is an upstream `arrow` that sorts metadata at IPC-write time (or a
-  metadata-canonicalizing shim before encode), tracked in the roadmap
-  (`docs/roadmap/stt-packed.md`). Until then the writer
-  mitigates by minimizing per-field metadata entry counts (a 2-key field has only
-  2 possible orders) to raise the cross-process dedup-collision odds. See
+  **Consequence (precise).** Cross-process reproducibility makes incremental
+  re-sync and cross-version dedup exact: an unchanged dataset rebuilt in a fresh
+  process re-produces byte-identical packs, so nothing re-uploads, and identical
+  tiles across datasets/versions share one physical object. (Correctness never
+  depended on this — a fresh full rebuild always produced a self-consistent
+  dataset, the manifest swap is atomic (§2), and stale objects age out via the §2
+  GC retention pass; reproducibility is a *cache-efficiency* win on top.)
+
+  **Conformance.** A conformant writer SHOULD serialize Arrow schema/field custom
+  metadata in a canonical (lexicographic) key order so payload bytes are
+  reproducible across processes. The reference Rust writer **meets this on Arrow
+  ≥59** (sorted-`BTreeMap` metadata assembly + Arrow 59's stable IPC metadata
+  serialization); `crates/stt-core/tests/reproducible_build.rs` guards it with an
+  active `same_tile_encodes_byte_identically` test (formerly an `#[ignore]`d
+  canary under Arrow 54). See
   [conformance §3](./conformance.md#3-conformant-writer-requirements).
 
 ## 8. Non-goals
@@ -432,12 +435,17 @@ STT has **three independent version axes**; this spec governs only the first.
 | **Tile payload** encoding | Arrow IPC schema / GeoArrow field metadata | — | Per-tile geometry + properties; archive-format-independent. |
 
 Packed format v1 emits directory v5. The single-file container (magic
-`STT\x04`, "v4") is a fourth, retired axis — readable for transcode, never
-written as output. Bumping any axis is a separate, independently-negotiated change.
+`STT\x04`, "v4") is a fourth, retired axis — removed from the Rust toolchain
+(no writer, reader, or transcode) and no longer read by either reference reader;
+it survives only as a committed legacy fixture (`sample.stt`) that a test helper
+transcodes to packed. Bumping any axis is a separate, independently-negotiated
+change.
 
 **File extensions:** `.sttp` = pack object (tile blob data), `.sttd` = directory
-object (the v5 index), `manifest.json` = the per-dataset manifest. `.stt` = the
-single-file archive (the internal streaming/transcode intermediate).
+object (the v5 index), `manifest.json` = the per-dataset manifest. `.stt` is no
+longer a container extension — the single-file archive has been removed;
+`stt-build` accepts a `-o foo.stt` output path only as shorthand, stripping the
+extension to a `foo/` dataset directory.
 
 ## 10. Relationship to standards
 

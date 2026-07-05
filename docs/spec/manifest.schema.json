@@ -84,8 +84,64 @@
       }
     },
     "metadata": {
-      "description": "The full stt-core `Metadata` JSON, folded in verbatim (snake_case keys) so a cold reader needs no separate metadata object. Opaque to this schema; see crate::metadata::Metadata.",
-      "type": "object"
+      "description": "The full stt-core `Metadata` JSON, folded in verbatim (snake_case keys) so a cold reader needs no separate metadata object. Opaque to this schema except for the OPTIONAL `style_hints` block pinned below; see crate::metadata::Metadata.",
+      "type": "object",
+      "properties": {
+        "style_hints": {
+          "description": "OPTIONAL build-time style hints (additive; written by `stt-build --style-hints`). Per-property statistics plus archive-level rendering DEFAULTS a renderer may adopt and a user can always override. Old readers are unaffected — absent means no hints.",
+          "type": "object",
+          "required": ["version", "properties"],
+          "properties": {
+            "version": {
+              "description": "Style-hints block schema version. This schema describes version 1.",
+              "const": 1
+            },
+            "properties": {
+              "description": "Per-property statistics. NUMERIC properties carry the percentile fields plus `suggested_domain` (`cardinality` absent); CATEGORICAL (string) properties carry ONLY `name` + `cardinality` — the numeric fields are absent from the JSON, not null-filled.",
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["name"],
+                "properties": {
+                  "name": {
+                    "description": "Property (tile column) name.",
+                    "type": "string"
+                  },
+                  "min": { "description": "Minimum observed value (numeric only).", "type": "number" },
+                  "p50": { "description": "50th percentile (numeric only).", "type": "number" },
+                  "p90": { "description": "90th percentile (numeric only).", "type": "number" },
+                  "p95": { "description": "95th percentile (numeric only).", "type": "number" },
+                  "p97": { "description": "97th percentile (numeric only).", "type": "number" },
+                  "p99": { "description": "99th percentile (numeric only).", "type": "number" },
+                  "max": { "description": "Maximum observed value (numeric only).", "type": "number" },
+                  "suggested_domain": {
+                    "description": "Suggested render domain `[min, p97]`, each endpoint rounded OUTWARD to 2 significant figures. p97 (not max) encodes the project's manual 'domain clamps at ~p97' tuning convention — a single outlier must not dim the whole ramp (numeric only).",
+                    "type": "array",
+                    "items": { "type": "number" },
+                    "minItems": 2,
+                    "maxItems": 2
+                  },
+                  "cardinality": {
+                    "description": "Distinct-value count (categorical only; the profiler caps it at 10000, so treat the cap value as 'at least this many'). Tolerates `null` for writer flexibility, but the canonical writer omits the key on numeric properties.",
+                    "type": ["integer", "null"],
+                    "minimum": 0
+                  }
+                }
+              }
+            },
+            "suggested_playback_seconds": {
+              "description": "Suggested playback duration in seconds: `clamp(round(sqrt(bucket_count)), 20, 90)` where `bucket_count` = time-range duration / `temporal_bucket_ms`. Absent when the bucket size is unknown/zero.",
+              "type": "integer",
+              "minimum": 20,
+              "maximum": 90
+            },
+            "layer_hint": {
+              "description": "Dominant produced layer kind (absent when none could be derived). Lines with per-vertex times hint `trips`; timeless lines hint `paths`.",
+              "enum": ["points", "paths", "trips", "polygons"]
+            }
+          }
+        }
+      }
     }
   }
 }
