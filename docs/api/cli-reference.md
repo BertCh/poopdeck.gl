@@ -11,7 +11,7 @@ binary from the [GitHub releases page](https://github.com/BertCh/spatiotemporal-
 | --------------- | ------------------------------------------------------------------ |
 | `stt-build`     | Convert a GeoParquet file **or a PostGIS/DuckDB query** into a packed STT dataset |
 | `stt-generate`  | Download + build the bundled showcase datasets                     |
-| `stt-optimize`  | Analyze an input and recommend `stt-build` flags                   |
+| `stt-optimize`  | Analyze an input and recommend `stt-build` flags; inspect/diff/doctor built tilesets |
 | `stt-validate`  | Verify a packed dataset, decode every tile |
 
 A fifth binary — **`stt-serve`** — generates STT tiles on the fly from a live
@@ -107,7 +107,7 @@ load); they are never placed at (0,0).
 | Flag | Default | Description |
 | ---- | ------- | ----------- |
 | `--temporal-bucket <DUR>` | `1h` | Base bucket size (e.g. `30m`, `1h`, `6h`, `1d`) |
-| `--temporal-lod <SPEC>` | — | Coarser-bucket pyramid, e.g. `1d,30d` or `1d@8,30d@4`. Each entry MUST be a multiple of `--temporal-bucket`, sorted ascending. `@N` clamps that level to zooms ≤ N. In-memory pipeline only (`--streaming` is ignored when set; `--streaming-arrow` warns and skips LOD). |
+| `--temporal-lod <SPEC>` | — | Coarser-bucket pyramid, e.g. `1d,30d` or `1d@8,30d@4`. Each entry MUST be a multiple of `--temporal-bucket`, sorted ascending. `@N` clamps that level to zooms ≤ N. In-memory pipeline only (`--streaming` is ignored when set). |
 | `--adaptive-temporal <N>` | — | Adaptive temporal chunking: instead of fixed buckets, partition each tile's features into windows of ~N features (dense periods get fine windows, sparse periods coarse ones). In-memory builds only. |
 
 ### Pack layout & compression
@@ -125,7 +125,7 @@ reader fetches only the leaves its viewport / time-window touches).
 
 | Flag | Default | Description |
 | ---- | ------- | ----------- |
-| `--publish` | off | Deploy-ready build: raises the zstd level to 19 for serve-as-is output (see `--zstd-level` for why); `--zstd-level` overrides it. The directory is already paged by default, so this only bumps the level. This is what `stt-generate` uses, so a from-source build is publish-quality without a separate re-transcode. (Coordinate quantization stays a per-dataset opt-in via `--quantize-coords`.) |
+| `--publish` | off | Deploy-ready build: raises the zstd level to 19 for serve-as-is output (see `--zstd-level` for why); `--zstd-level` overrides it. The directory is already paged by default, so this only bumps the level. This is what `stt-generate` uses, so a from-source build is publish-quality as written (no separate repack pass). (Coordinate quantization stays a per-dataset opt-in via `--quantize-coords`.) |
 | `--zstd-level <1..22>` | `3` | zstd level for tile blobs + directory. Default 3 is zstd's "fast" tier; a publish build should pass 19 — the format is write-once / serve-many, so the higher (one-time, offline) build CPU buys −10..19% on every client fetch, and decode is level-independent (free on the client). 19 ≈ 22 on STT tiles, so there's no reason to go past 19. |
 | `--quantize-coords <METERS>` | `0` | Opt-in coordinate quantization: store geometry as fixed-point integers at this ground precision in **meters** instead of Float64 lon/lat. `0` keeps Float64 GeoArrow coords. Coordinates are the dominant, near-incompressible tile column, so e.g. `--quantize-coords 1` (sub-meter error) is the largest size lever — measured −25..47% on trip/path datasets. Trade-off: a quantized tile is no longer self-describing Float64 GeoArrow (the per-tile affine rides in geometry field metadata; the STT reader reconstructs Float64). |
 | `--single-directory` | off | Opt OUT of the paged directory and emit a single whole-load `.sttd` instead. For small datasets paging is ~free (one leaf, whole-loaded by the reader); the single shape only saves a few hundred bytes of root. |
@@ -178,8 +178,7 @@ attributes are untouched.
 | `--max-zoom-field <NAME>` | — | Per-feature numeric property naming the DEEPEST zoom a feature appears at (LOD ceiling). A feature is skipped at any zoom above its value. Paired with `--min-zoom-field` it confines a feature to a zoom band `[min_zoom, max_zoom]` — e.g. coarse-zoom clustered/aggregated overviews that must not bleed into full-resolution deep zooms. |
 
 The per-tile budgets and attribute-control flags hook into the in-memory build
-path only; `--streaming-arrow` **errors** when combined with any of them (see
-[Streaming pipelines](#streaming-pipelines)).
+path only.
 
 ### Trajectory clipping
 
@@ -221,26 +220,23 @@ step coarser than the ceiling is stored as exact i64 timestamps instead
 
 | Flag | Default | Description |
 | ---- | ------- | ----------- |
-| `--streaming` | off | Write tiles as each zoom level completes (lower peak RAM, some parallelism lost). Ignored when `--temporal-lod` is set. |
-| `--streaming-arrow` | off | Arrow-native streaming — reads Parquet batches lazily, peak RSS bounded by one batch + the active spill budget. Required for >10 GB inputs. Streams to a temp single-file archive, then transcodes to the packed directory (the `--blob-ordering` applies during the transcode pass). |
-| `-w, --workers <N>` | `4` | Parallel worker threads (in-memory pipelines; **ignored** by `--streaming-arrow`, which is single-threaded) |
+| `--streaming` | off | Write tiles as each zoom level completes, streaming them straight into the `PackWriter` (lower peak RAM, some parallelism lost). Ignored when `--temporal-lod` is set. |
+| `-w, --workers <N>` | `4` | Parallel worker threads |
 | `--min-features-per-tile <N>` | `1` | Drop tiles below this count. Useful for sparse points — the TS reader's `'best-available'` refinement surfaces dropped features from parents. |
 
-`--streaming-arrow` refuses flag combinations it cannot honour rather than
-silently dropping them — it **errors** when combined with `--summary-tier`,
-`--heatmap-weight`, `--heatmap-class`, `--metadata-output`, the per-tile
-budgets (`--maximum-tile-bytes` / `--maximum-tile-features` /
-`--drop-densest-as-needed`), or the attribute-control flags (`--exclude` /
-`--include` / `--exclude-all`) — those passes run after the in-memory
-pipeline's finalize. `--temporal-lod` is ignored with a warning, and
-`--adaptive-temporal` does not apply (fixed buckets only). Use the in-memory
-pipeline for those features.
+`--streaming` is ignored when `--temporal-lod` is set (a warning is logged; the
+temporal-LOD pyramid needs the in-memory pipeline), and `--style-hints` is
+skipped under it. The per-tile budgets and attribute-control flags likewise
+apply to the in-memory build path only. The `--summary-tier`,
+`--heatmap-weight`/`--heatmap-class`, and `--metadata-output` passes run over
+the loaded features after the raw tier is written, so they compose with
+`--streaming`.
 
 ### Auto-tuning
 
 | Flag | Default | Description |
 | ---- | ------- | ----------- |
-| `--auto` | off | Run `stt-optimize` over the input first and fill in any zoom / temporal-bucket flag the user did not pass explicitly. The analyzer's compression recommendation is NOT applied — the packed format is zstd-only. |
+| `--auto [MODE]` | off | Run `stt-optimize` over the input first and fill in flags the user did not pass explicitly. Bare `--auto` (= `--auto basic`) fills in the zoom range and temporal bucket only, exactly as before; the analyzer's compression recommendation is NOT applied — the packed format is zstd-only. `--auto encode` additionally applies the advisors' **non-lossy byte-level levers**: the zstd level (19, the `--publish` equivalent — the directory is already paged by default), `--blob-ordering`, and `--pack-size`. **Lossy advice is never auto-applied in either mode** — quantization (`--quantize-coords`, `--quantize-attrs-auto`) and the per-tile budgets are logged loudly as `suggested, not applied: <flag> — <why>` for the user to opt in. Semantic levers (`--temporal-lod`, `--adaptive-temporal`, `--summary-tier`, `--min-zoom-field`) are likewise suggestion-only in both modes. An explicitly passed flag always wins over any auto value. |
 
 ### Summary tier (server-aggregated low-zoom tier)
 
@@ -267,6 +263,28 @@ metadata so the renderer doesn't fall back to a runtime GPU readback.
 | ---- | ------- | ----------- |
 | `--heatmap-weight <PROP>` | — | Numeric property driving per-splat weight. The build computes its `[min, 95p]` across all features. |
 | `--heatmap-class <PROP>` | — | Categorical property whose unique values become per-class entries (up to 8). |
+
+### Style hints (build-time render defaults)
+
+| Flag | Default | Description |
+| ---- | ------- | ----------- |
+| `--style-hints` | off | Profile the loaded features and bake a `style_hints` block into the archive metadata (and therefore `manifest.json`). In-memory pipeline only — skipped with a warning under `--streaming`. |
+
+The block carries, per numeric property, `min`/`p50`/`p90`/`p95`/`p97`/`p99`/`max`
+plus a `suggested_domain` of `[min, p97]` with each endpoint rounded **outward**
+to 2 significant figures — the p97 clamp bakes in the project's manual
+domain-tuning convention (one outlier must not dim the whole ramp). Categorical
+(string) properties carry only their distinct-value count (`cardinality`,
+capped at 10 000). Two archive-level hints ride along: a
+`suggested_playback_seconds` (`clamp(round(sqrt(bucket_count)), 20, 90)`) and a
+`layer_hint` (`points`/`paths`/`trips`/`polygons`, from the kinds the build
+produced — lines with per-vertex times hint `trips`).
+
+Hints are **defaults**: a renderer or user can always override every one of
+them. Values are sampled at a deterministic stride capped at ~250k values per
+property (memory guard), so re-builds of the same input emit identical hints.
+The block is additive — readers that don't know it are unaffected. Wire shape:
+[`manifest.schema.json`](../spec/manifest.schema.json).
 
 ### Metadata
 
@@ -373,6 +391,8 @@ Subcommands:
 | `wildfires` | NIFC perimeters (1000+ acres) |
 | `nyc-rideshare` | NYC TLC trips + OSRM routing; `--paths` for LineString trajectories, `--flows` for pre-aggregated corridor flows binned to intersection-to-intersection road segments (`--flow-bin` default `15m`), `--od` for one straight 2-vertex origin→destination LineString per trip (no OSRM — the `AnimatedArcLayer`/`AnimatedLineLayer` overview geometry; mutually exclusive with `--paths`/`--flows`); `--with-bearing` adds a per-feature `bearing` numeric column (initial O→D great-circle heading with `--od`, heading toward the next trip point for point trajectories) |
 | `bixi` | Montréal BIXI open-data trips → directed origin→destination flowmap (one 2-vertex O→D arc per station pair carrying a per-bucket count matrix). `--input` is required (the BIXI `.zip`/`.csv` or a directory). Build-time per-zoom station clustering is on by default (`--cluster-radius`, `--no-cluster`); `--bake-bundling` bakes KDEEB edge bundling into the geometry; `--streets` routes onto the OSM bicycle network instead (needs `--osm-pbf` + a bicycle-profile `--osrm-url`), with `--directional` baking per-segment travel direction into that output; `--merged-paths` synthesizes twin-ribbon directed corridors from the same bicycle-routed OD pairs, and `--flow-graph` builds an abstract Sankey-like bundled flow network (no streets/OSRM) — mutually exclusive geometry modes. |
+| `gtfs` | Static GTFS feed → country-scale transit "ballet": every trip scheduled on one service `--date YYYYMMDD` (weekly `calendar.txt` when present + `calendar_dates.txt` exceptions; `exception_type=2` removals win) becomes a LineString along its shape with per-vertex timestamps interpolated in shape-distance between stop times — no routing server needed, animated with `type: 'trip-heads'`. `--feed <dir>` is the extracted feed (for the bundled NL OVapi feed the busiest fully-defined date is `20260703`, a Friday, ~121k trips). Handles `>24:00:00` clock times; timestamps are absolute Unix ms anchored at local midnight in the feed's agency timezone (the GTFS "noon − 12 h" DST rule is deliberately simplified away — only ±1 h off for times crossing the 02:00 switch on the two DST nights a year). Per-trip fallbacks: unusable `shape_dist_traveled` → nearest-point projection onto the shape, missing shape → straight stop-to-stop lines; dwell is kept as a duplicated stop vertex; drops are counted per reason. Properties: numeric `trip_id`, categorical `route_type` **string label** (bus/rail/tram/metro/ferry — never the numeric code), `route_short_name`, `agency_id`, opt-in `--headsign`. Also: `--bin` (default `1h`), `--max-trips` (even temporal stride), `--min-zoom`/`--max-zoom` (default 6–14), `--skip-build`; `--out` is an alias of `--output`. |
+| `nwm` | NOAA National Water Model v3.0 **retrospective** discharge (`chrtout.zarr` on anonymous S3 — the chunks are bare zstd int32 frames, fetched with plain HTTPS + the `zstd` crate, no zarr crate) joined to NHDPlusV2 flowlines (`--flowlines` GeoParquet, default `data/nwm/nhd-flowlines-order3.parquet`, `COMID == feature_id`) → the CONUS river network "breathing" as `vertex_value_matrix` flow corridors. `--window YYYY\|YYYY-MM` × `--bin 1d\|1h` (hourly is month-scoped; `1d` = daily mean) selects the bucket axis; `--value log-q` bakes `round(log10(max(q,0.01)),2)` absolute discharge, `--value log-anomaly` bakes `round(clamp(log2(q/median2019),0,6),2)` flood anomaly (auto-ensures the window year's `1d` reduce for the per-reach medians; intermittent reaches → NaN → fallback color). Per zoom band (`--zooms`, default `4-8`; stream-order ladder z≤5 ≥6 / z6–7 ≥5 / z8+ ≥4, `--min-order-override` replaces it) reaches are mainstem-merged within runs of constant `(LevelPathI, StreamOrde)` walked along `DnHydroseq`, resampled to ~2-px vertex spacing, and emitted as a `[z,z]`-banded copy (`min_zoom` = `max_zoom` = z) — per-zoom copies are required because `--simplify` cannot touch matrices, so the build runs without simplification. Chunk downloads cache at `data/nwm/chrtout-cache/` and per-stripe reduced series at `data/nwm/reduced/` (both resumable skip-if-exists; `--skip-download` fails instead of fetching). Properties: `order`, `width` (2^(order−4), clamped to [0.5, 16]). Also: `--detail-zoom` (default 11 — the zoom whose ~2-px spacing the geometry is resampled to), `--chunk-buckets` (default 0 = auto ~30 matrix columns per temporal tile), `--max-reach-stripes` (smoke tests only), `--skip-build`; `--out` is an alias of `--output`. |
 | `nyc-taxi-points` | derived from `nyc-rideshare` via polyline interpolation |
 | `satellites` | CelesTrak TLE + SGP4 propagation |
 | `drifters` | NOAA Global Drifter Program 6-hourly buoy trajectories |
@@ -390,10 +410,10 @@ recipes.
 
 ## `stt-optimize`
 
-Inspects a GeoParquet input and prints recommended `stt-build` flags.
-`analyze` supports `--format json` / `--output <FILE>` (`-o`) for
-machine-readable output, plus `--verbose` for per-recommendation detail;
-`recommend` takes the same `--output <FILE>`.
+Profiles both sides of a build: `analyze`/`recommend` inspect a GeoParquet
+**input** and print recommended `stt-build` flags; `inspect`/`diff`/`doctor`
+open a **built** packed dataset and report where the bytes went — and, for
+`doctor`, what to do about it.
 
 ```bash
 stt-optimize analyze --input data.parquet --time-field timestamp \
@@ -403,18 +423,114 @@ stt-optimize recommend --input data.parquet --time-field timestamp \
   --time-format unix-ms --show-command
 ```
 
+`analyze` supports `--format json` / `--output <FILE>` (`-o`) for
+machine-readable output, plus `--verbose` for per-recommendation detail;
+`recommend` takes the same `--output <FILE>`. The analyze report includes a
+measured-encoding section — a deterministic sample of the input pushed
+through the real encoder + zstd — which also calibrates the per-zoom size
+estimates. Both reports carry an **Advisor** section: evidence-based
+suggestions for `stt-build` flags beyond the zoom/bucket basics
+(quantization, temporal LOD, wire layout, per-tile budgets), each with the
+dataset-specific rationale, a measured/estimated projection where available,
+a confidence grade, and a `[LOSSY - opt-in]` marker on anything that would
+discard or degrade data. The JSON report includes the same entries verbatim
+as an `advice` array.
+
 `recommend --show-command` prints a copy-pasteable `stt-build` invocation
-that bakes in the recommendation. The same logic runs inside
+that bakes in the recommendation, including the **non-lossy** advisor flags
+(lossy levers never join the command). The same logic runs inside
 `stt-build --auto` (which applies the zoom-range and temporal-bucket
-recommendations but not compression — the packed format is zstd-only).
+recommendations but not compression — the packed format is zstd-only;
+`stt-build --auto encode` additionally applies the non-lossy byte-level
+advisor levers — see [Auto-tuning](#auto-tuning)).
+
+### `stt-optimize recommend`
+
+| Flag | Description |
+| ---- | ----------- |
+| `-i, --input <PATH>` | Source GeoParquet file |
+| `-t, --time-field <NAME>` | Timestamp column (default `timestamp`) |
+| `--time-format <FMT>` | `iso8601` (default), `unix-sec`, or `unix-ms` |
+| `-o, --output <FILE>` | Write the JSON config to a file instead of stdout |
+| `--show-command` | Print a copy-pasteable `stt-build` invocation (non-lossy advisor flags included; lossy levers never join it) |
+| `--explain` | Print an evidence table of every advisor suggestion after the config JSON — flag, value, confidence, projected effect, and the dataset-specific why — including lossy levers, marked `[LOSSY - opt-in]` (surfaced only; never auto-applied) |
+
+### `stt-optimize inspect`
+
+Reports on a built packed dataset: per-zoom directory stats (entries,
+distinct blobs, blob bytes, time buckets), dedup and compression ratios,
+and per-column compressed-cost attribution with encoding notes.
+
+```bash
+stt-optimize inspect --archive my-dataset/ --sample 200
+stt-optimize inspect --archive my-dataset/ --format json -o inspect.json
+```
+
+| Flag | Description |
+| ---- | ----------- |
+| `-a, --archive <DIR>` | Packed dataset directory or its `manifest.json` (single and paged directory layouts both work) |
+| `--sample <N>` | Decode only a deterministic, evenly-spread sample of at most N tiles (`stt-validate --sample` semantics; `0` skips the decode pass). Directory-derived stats (per-zoom, dedup, wire totals) always cover every entry. |
+| `--format <FMT>` | `text` (default) or `json` |
+| `-o, --output <FILE>` | Write the report to a file instead of stdout |
+
+### `stt-optimize diff`
+
+Inspects two built tilesets and compares them — totals, per-zoom directory
+stats, and per-column costs, each as absolute and percent deltas (rows
+present on only one side are flagged). Made for before/after re-encode
+comparisons and fleet-reprocess size gates.
+
+```bash
+stt-optimize diff --before old-dataset/ --after new-dataset/
+stt-optimize diff --before old/ --after new/ --fail-on-growth 5 --format json
+```
+
+| Flag | Description |
+| ---- | ----------- |
+| `--before <DIR>` / `--after <DIR>` | The two packed datasets (directory or `manifest.json`) |
+| `--sample <N>` | Sample the decode pass on both sides (as `inspect --sample`); the totals and the growth gate stay exact |
+| `--format <FMT>` | `text` (default) or `json` |
+| `-o, --output <FILE>` | Write the report to a file instead of stdout |
+| `--fail-on-growth <PCT>` | Exit non-zero after printing if `after` total compressed blob bytes exceed `before` by more than PCT percent |
+
+### `stt-optimize doctor`
+
+Lints a built tileset: severity-ranked findings (`CRITICAL` / `WARNING` /
+`INFO`), each citing the tileset's **measured** numbers, with the concrete
+remediation flag(s) and — where derivable from the measured column costs —
+a projected win. The doctor never re-encodes anything; every projection is
+labeled as an estimate. An empty report means the tileset passes every rule.
+
+```bash
+stt-optimize doctor --archive my-dataset/
+stt-optimize doctor --archive my-dataset/ --strict --format json -o doctor.json
+```
+
+Rules (stable kebab-case codes, also the JSON `code` field):
+`raw-f64-column` (plain Float64 property columns → `--quantize-attr` /
+`--quantize-attrs-auto`), `expensive-feature-ids` (near-incompressible
+hash-like ids), `dead-columns` (constant/all-null columns → `--exclude`,
+one finding per column, sampled evidence), `z0-bomb` (deep shallow pyramid
+under tiny bounds → `--min-zoom`), `unpaged-large` (whole-load directory
+past 10k entries → repack paged), `oversized-blobs` (tiles past 1 MiB
+compressed), and `missing-summary-tier` (huge point dataset with no
+aggregated tier → `--summary-tier`).
+
+| Flag | Description |
+| ---- | ----------- |
+| `-a, --archive <DIR>` | Packed dataset directory or its `manifest.json` |
+| `--sample <N>` | Sample the inspect decode pass (as `inspect --sample`); directory-derived rules always cover every entry. `--sample 0` skips the inspect decode, which disables the column-cost rules (`raw-f64-column`, `expensive-feature-ids`). |
+| `--format <FMT>` | `text` (default) or `json` |
+| `-o, --output <FILE>` | Write the report to a file instead of stdout |
+| `--strict` | Exit non-zero **after printing** if any Warning-or-worse finding exists — the CI-gate analog of `diff --fail-on-growth`. Info findings never trip it. |
 
 ---
 
 ## `stt-validate`
 
 Validates an STT dataset in the **packed format** — pass the dataset
-directory or its `manifest.json`. (The single-file `.stt` container is an
-internal build intermediate and is not accepted.)
+directory or its `manifest.json`. (The single-file `.stt` container has been
+removed; only the packed format is accepted.)
 
 ```bash
 stt-validate my-dataset/ [--json] [--fail-fast] [--skip-decode]
@@ -447,14 +563,18 @@ ships with the project.
 
 ## `stt-serve`
 
-Optional binary (separate crate) that generates STT tiles **on the fly** from a
-live PostGIS or DuckDB source — the `ST_AsMVT` analog for the STT format, with no
-pre-bake. It shares `stt-build`'s per-tile encoder, so a served tile is
-byte-identical to the offline-built tile for the same `(z,x,y,t)` and source
-rows. Build with a backend feature:
+Optional binary (feature-gated in the `spatiotemporal-tiles` crate) that
+generates STT tiles **on the fly** from a live PostGIS or DuckDB source — the
+`ST_AsMVT` analog for the STT format, with no pre-bake. It shares `stt-build`'s
+per-tile encoder, so a served tile is byte-identical to the offline-built tile
+for the same `(z,x,y,t)` and source rows. The default build already ships the
+PostGIS backend; opt into the embedded-DuckDB backend with a feature:
 
 ```bash
-cargo build --release -p stt-serve --features postgres   # or: --features duckdb
+# Default install already includes the PostGIS serve backend:
+cargo build --release -p spatiotemporal-tiles
+# Add the embedded-DuckDB backend (heavy bundled C++ compile); `--features serve` enables both:
+cargo build --release -p spatiotemporal-tiles --features serve-duckdb
 
 # PostGIS backend:
 stt-serve --postgres "$PGURL" --table hurricane_obs --geom-column geom \
@@ -521,6 +641,6 @@ binaries. The one you're most likely to need:
     <in_dir/manifest.json> <out_dir> [pack_size_mb=64] [ordering=auto]
   ```
 
-Others (`repack`, `packed-stats`, `pack-transcode`, `verify-packed`,
-`simulate_layout`, …) are analysis/benchmark aids — see
+Others (`packed-stats`, `reoptimize`, `point_column_stats`,
+`encoding-experiment`, …) are analysis/benchmark aids — see
 `crates/stt-core/examples/README.md`.
