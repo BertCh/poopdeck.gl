@@ -1,5 +1,26 @@
 # @poopdeck.gl/layers
 
+## 0.3.0
+
+### Minor Changes
+
+- deck.gl parity superset. New layers on the SpatioTemporalLayer chassis:
+  `AnimatedHexagonLayer` (discrete, pickable hexbin — the analog of
+  `AnimatedHeatmapLayer`), `AnimatedMeshLayer` (one interpolated glTF/OBJ instance
+  per tracked object), `AnimatedPointCloudLayer` (lit, time-windowed 3D points),
+  and `AnimatedTextLayer` (time-filtered map labels). Two ported extensions:
+  `DataFilterExtension` (GPU range-filter by a baked numeric column) and
+  `CollisionFilterExtension` (de-clutter overlapping icons/labels), each with a
+  spreadable `*Props` helper; deck's constant-config extensions pass through
+  unchanged. Box and mesh layers now share one factored-out track kernel
+  (pooling, binary-search + lerp, shortest-arc heading, appear/disappear fade).
+
+### Patch Changes
+
+- Updated dependencies
+  - @poopdeck.gl/core@0.3.0
+  - @poopdeck.gl/playback@0.3.0
+
 ## 0.2.0
 
 ### Patch Changes

@@ -1,6 +1,6 @@
 {
   "name": "@poopdeck.gl/playback",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Framework- and renderer-agnostic playback engine (clock, buffering governor, media-element facade) for time-series and spatiotemporal visualization",
   "publishConfig": {
     "access": "public"

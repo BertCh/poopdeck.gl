@@ -1,5 +1,13 @@
 # @poopdeck.gl/core
 
+## 0.3.0
+
+### Minor Changes
+
+- Reader-side style hints. Add `parseStyleHints` and `suggestedDomainFor`, plus
+  the `StyleHints` / `PropertyStyleHint` types, so an archive can carry render
+  defaults (color domains, property roles) that the layers consume.
+
 ## 0.2.0
 
 ## 0.1.1
