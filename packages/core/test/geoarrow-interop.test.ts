@@ -28,7 +28,15 @@ const DATASET = packedFromSingleFile(FIXTURE_BYTES);
 
 /** A fresh packed archive over the transcoded sample fixture. */
 function sampleArchive(): STTArchive {
-  return new STTArchive({ url: DATASET.manifestUrl, fetch: packedFetch(DATASET) });
+  // The v4 fixture is legacy-unaligned but UNQUANTIZED — its tables are
+  // valid GeoArrow, so the semantic default `retainArrowIpc: 'auto'` keeps
+  // the IPC bytes and the hand-off works with no extra option (the
+  // aliasing-keyed 'auto' used to drop them here: a real regression this
+  // suite now guards against by relying on the default).
+  return new STTArchive({
+    url: DATASET.manifestUrl,
+    fetch: packedFetch(DATASET),
+  });
 }
 
 describe('GeoArrow interop', () => {

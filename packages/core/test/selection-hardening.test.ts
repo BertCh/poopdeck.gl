@@ -12,17 +12,21 @@
  *    slice can be a real network round-trip for paged archives), so a stale
  *    (slower) viewport's result must not clobber a newer pass's needed set
  *    when it resolves out of order.
+ *
+ * 3. Selection failure surfacing (format review 2026-07) — a rejecting
+ *    directory query must not die as an unhandled rejection with the
+ *    fast-path key stamped (which blocked all retries for that viewport);
+ *    it surfaces via onTileError and the next update() retries.
+ *
+ * 4. Prefetch stale-plan guard — a prefetch pass superseded by
+ *    flushPrefetch() while awaiting its directory slice must drop its plan
+ *    instead of enqueuing tiles for the flushed playhead/direction.
  */
 
 import { describe, it, expect, vi } from 'vitest';
 import { SpatiotemporalTileset } from '../src/spatiotemporal-tileset';
 import type { TileId, BoundingBox, Tile } from '../src/types';
-
-const BUCKET_MS = 1000;
-const fakeTile = (id: TileId): Tile =>
-  ({ id, timeRange: { start: id.t, end: id.t + BUCKET_MS }, layers: [] }) as unknown as Tile;
-
-const settle = (ms = 25): Promise<void> => new Promise((r) => setTimeout(r, ms));
+import { BUCKET_MS, fakeTile, settle } from './helpers/fixtures';
 
 /** Coverage-index queries use the FULL_TIME_RANGE sentinel (start ≈ -8.64e15). */
 const isCoverageRange = (r: { start: number }): boolean => r.start < -1e15;
@@ -119,6 +123,113 @@ describe('selectAndLoadTiles generation guard', () => {
     // bailed at its generation check before mutating any shared state.
     expect(tileset.getVisibleTiles().map((t) => t.id.x)).toEqual([100]);
     expect(loaded.map((t) => t.x)).toEqual([100]);
+
+    tileset.finalize();
+  });
+});
+
+describe('selection failure surfacing', () => {
+  it('a rejecting directory query surfaces via onTileError and the next update retries', async () => {
+    let failuresLeft = 1;
+    const getAvailableTiles = vi.fn(
+      async (_b: BoundingBox, z: number): Promise<TileId[]> => {
+        if (failuresLeft > 0) {
+          failuresLeft--;
+          throw new Error('paged leaf fetch blipped');
+        }
+        return [{ z, x: 0, y: 0, t: 0 }];
+      },
+    );
+    const errors: Array<{ message: string; id: TileId }> = [];
+    const tileset = new SpatiotemporalTileset({
+      minZoom: 0,
+      maxZoom: 12,
+      enablePrefetch: false,
+      refinementStrategy: 'no-overlap',
+      temporalBucketMs: BUCKET_MS,
+      getAvailableTiles,
+      getTileData: async (id: TileId) => fakeTile(id),
+      getTileDataBatch: async (ids: TileId[]) => ids.map(fakeTile),
+      onTileError: (err, id) => errors.push({ message: err.message, id }),
+    });
+
+    const viewport = {
+      bounds: { minLon: 0, minLat: 0, maxLon: 1, maxLat: 1 },
+      zoom: 6,
+      time: 500,
+      timeWindow: 100,
+    };
+    tileset.update(viewport);
+    await settle();
+    // The failure surfaced (sentinel x/y = -1: a selection-pass failure, no
+    // single tile implicated) instead of dying as an unhandled rejection.
+    expect(errors.length).toBe(1);
+    expect(errors[0].message).toMatch(/blipped/);
+    expect(errors[0].id.x).toBe(-1);
+    expect(tileset.getVisibleTiles()).toEqual([]);
+
+    // The IDENTICAL viewport again: the fast-path key was cleared on failure,
+    // so the selection re-runs (it used to short-circuit forever) and loads.
+    tileset.update(viewport);
+    await settle();
+    expect(tileset.getVisibleTiles().map((t) => t.id.x)).toEqual([0]);
+
+    tileset.finalize();
+  });
+});
+
+describe('prefetch stale-plan guard', () => {
+  it('a plan superseded by flushPrefetch() mid-await enqueues nothing', async () => {
+    // Selection queries (span = timeWindow) resolve immediately; the prefetch
+    // pass's WIDE look-ahead slice is gated so the flush races ahead of it.
+    const gated: Array<(ids: TileId[]) => void> = [];
+    const getAvailableTiles = async (
+      _b: BoundingBox,
+      z: number,
+      r: { start: number; end: number },
+    ): Promise<TileId[]> => {
+      if (r.end - r.start > 10_000) {
+        return new Promise<TileId[]>((resolve) => {
+          gated.push(resolve);
+        });
+      }
+      return [{ z, x: 0, y: 0, t: 0 }];
+    };
+    const loaded: TileId[] = [];
+    const tileset = new SpatiotemporalTileset({
+      minZoom: 0,
+      maxZoom: 12,
+      enablePrefetch: true,
+      refinementStrategy: 'no-overlap',
+      temporalBucketMs: BUCKET_MS,
+      getAvailableTiles,
+      getTileData: async (id: TileId) => fakeTile(id),
+      getTileDataBatch: async (ids: TileId[]) => {
+        loaded.push(...ids);
+        return ids.map(fakeTile);
+      },
+    });
+
+    tileset.update({
+      bounds: { minLon: 0, minLat: 0, maxLon: 1, maxLat: 1 },
+      zoom: 6,
+      time: 500,
+      timeWindow: 100,
+    });
+    tileset.setAnimationState(true, 1);
+    await settle();
+    expect(gated.length).toBeGreaterThanOrEqual(1);
+
+    // Supersede the awaited plan, then let its directory slice resolve LATE
+    // with a pile of future buckets.
+    tileset.flushPrefetch();
+    gated[0](
+      Array.from({ length: 8 }, (_, i) => ({ z: 6, x: 0, y: 0, t: (i + 1) * BUCKET_MS })),
+    );
+    await settle();
+
+    // The stale plan enqueued nothing: only the selection's tile loaded.
+    expect(loaded.map((t) => t.t)).toEqual([0]);
 
     tileset.finalize();
   });

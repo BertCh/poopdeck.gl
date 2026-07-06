@@ -19,6 +19,8 @@ import {
   packedFromSingleFile,
   type InMemoryPackedDataset,
 } from './helpers/packed-fixture';
+import { bufferToArrayBuffer, settle } from './helpers/fixtures';
+import { installShim, uninstallShim } from './helpers/opfs-shim';
 
 const FIXTURE = fileURLToPath(new URL('./fixtures/sample.stt', import.meta.url));
 const FIXTURE_BYTES = new Uint8Array(readFileSync(FIXTURE));
@@ -26,10 +28,6 @@ const FIXTURE_BYTES = new Uint8Array(readFileSync(FIXTURE));
 // OPFS fingerprint now derives from the manifest's content-addressed directory
 // key (stable across packs), NOT a per-response ETag.
 const DATASET = packedFromSingleFile(FIXTURE_BYTES, { manifestUrl: 'mem://data/sample/manifest.json' });
-
-function bufferToArrayBuffer(buf: Uint8Array): ArrayBuffer {
-  return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
-}
 
 /**
  * A counting `fetch` over an in-memory packed dataset. `.calls` counts ALL
@@ -66,101 +64,6 @@ function rangeFetch(): { fetch: typeof fetch; stats: { calls: number } } {
 
 const MANIFEST_URL = DATASET.manifestUrl;
 
-/** Same in-memory OPFS shim as opfs-cache.test.ts. */
-class MemDirectoryHandle {
-  _files = new Map<string, Uint8Array>();
-  _subdirs = new Map<string, MemDirectoryHandle>();
-  async getFileHandle(name: string, options?: { create?: boolean }) {
-    if (!this._files.has(name)) {
-      if (options?.create) this._files.set(name, new Uint8Array());
-      else {
-        const err: any = new Error(`NotFoundError: ${name}`);
-        err.name = 'NotFoundError';
-        throw err;
-      }
-    }
-    return {
-      getFile: async () => {
-        const bytes = this._files.get(name)!;
-        return {
-          arrayBuffer: async () =>
-            bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
-          text: async () => new TextDecoder().decode(bytes),
-        };
-      },
-      createWritable: async () => {
-        const chunks: Uint8Array[] = [];
-        return {
-          write: async (data: any) => {
-            let bytes: Uint8Array;
-            if (typeof data === 'string') bytes = new TextEncoder().encode(data);
-            else if (data instanceof Uint8Array) bytes = data;
-            else bytes = new Uint8Array(data);
-            chunks.push(new Uint8Array(bytes));
-          },
-          close: async () => {
-            const total = chunks.reduce((s, c) => s + c.byteLength, 0);
-            const out = new Uint8Array(total);
-            let o = 0;
-            for (const c of chunks) {
-              out.set(c, o);
-              o += c.byteLength;
-            }
-            this._files.set(name, out);
-          },
-        };
-      },
-    };
-  }
-  async getDirectoryHandle(name: string, options?: { create?: boolean }) {
-    let sub = this._subdirs.get(name);
-    if (!sub) {
-      if (!options?.create) {
-        const err: any = new Error(`NotFoundError: ${name}`);
-        err.name = 'NotFoundError';
-        throw err;
-      }
-      sub = new MemDirectoryHandle();
-      this._subdirs.set(name, sub);
-    }
-    return sub;
-  }
-  async removeEntry(name: string) {
-    this._files.delete(name);
-  }
-}
-
-let originalNavigatorDescriptor: PropertyDescriptor | undefined;
-function installShim(): MemDirectoryHandle {
-  const root = new MemDirectoryHandle();
-  originalNavigatorDescriptor = Object.getOwnPropertyDescriptor(
-    globalThis,
-    'navigator',
-  );
-  Object.defineProperty(globalThis, 'navigator', {
-    configurable: true,
-    writable: true,
-    value: {
-      ...(originalNavigatorDescriptor?.value ?? {}),
-      storage: { getDirectory: async () => root },
-    },
-  });
-  return root;
-}
-
-function uninstallShim() {
-  if (originalNavigatorDescriptor) {
-    Object.defineProperty(globalThis, 'navigator', originalNavigatorDescriptor);
-    originalNavigatorDescriptor = undefined;
-  } else {
-    try {
-      delete (globalThis as any).navigator;
-    } catch {
-      /* ignore */
-    }
-  }
-}
-
 describe('STTArchive + OpfsTileCache integration', () => {
   it('writes a decompressed payload to OPFS on cold miss', async () => {
     installShim();
@@ -174,7 +77,7 @@ describe('STTArchive + OpfsTileCache integration', () => {
       expect(tile).not.toBeNull();
       // The OPFS write is fire-and-forget; await a tick so the microtask
       // chain that decompresses + writes can finish before we inspect.
-      await new Promise((r) => setTimeout(r, 50));
+      await settle(50);
       expect(cache.getEntryCount()).toBeGreaterThanOrEqual(1);
       expect(cache.getBytes()).toBeGreaterThan(0);
     } finally {
@@ -197,7 +100,7 @@ describe('STTArchive + OpfsTileCache integration', () => {
         const idx = await a.getIndex();
         const e = idx.tiles[0];
         await a.getTile({ z: e.zoom, x: e.x, y: e.y, t: e.timeStart });
-        await new Promise((r) => setTimeout(r, 50));
+        await settle(50);
       }
 
       // Warm pass — same OPFS cache, fresh archive (simulates page reload).
@@ -249,7 +152,7 @@ describe('STTArchive + OpfsTileCache integration', () => {
         const idx = await a.getIndex();
         const e = idx.tiles[0];
         await a.getTile({ z: e.zoom, x: e.x, y: e.y, t: e.timeStart });
-        await new Promise((r) => setTimeout(r, 50));
+        await settle(50);
       }
 
       // Same URL, redeployed (different directory hash) — should miss OPFS and

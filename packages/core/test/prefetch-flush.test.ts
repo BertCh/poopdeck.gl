@@ -12,32 +12,13 @@
 import { describe, it, expect, vi } from 'vitest';
 import { SpatiotemporalTileset } from '../src/spatiotemporal-tileset';
 import type { TileId, BoundingBox, Tile } from '../src/types';
+import { BOUNDS, BUCKET_MS, fakeTile, makeAvailableTiles, settle } from './helpers/fixtures';
 
-const BOUNDS: BoundingBox = { minLon: -180, minLat: -85, maxLon: 180, maxLat: 85 };
-const BUCKET_MS = 1000;
 const N_BUCKETS = 100;
 
-function fakeTile(id: TileId): Tile {
-  return { id, timeRange: { start: id.t, end: id.t + BUCKET_MS }, layers: [] } as Tile;
-}
-
 /** One tile per bucket at (x=0, y=0) whose interval overlaps the range. */
-function availableTiles(
-  _b: BoundingBox,
-  z: number,
-  range: { start: number; end: number },
-): TileId[] {
-  const ids: TileId[] = [];
-  const first = Math.max(0, Math.floor(range.start / BUCKET_MS));
-  const last = Math.min(N_BUCKETS - 1, Math.floor(range.end / BUCKET_MS));
-  for (let i = first; i <= last; i++) {
-    const t = i * BUCKET_MS;
-    if (t + BUCKET_MS >= range.start && t <= range.end) ids.push({ z, x: 0, y: 0, t });
-  }
-  return ids;
-}
+const availableTiles = makeAvailableTiles(N_BUCKETS);
 
-const settle = (ms = 25): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 /** A gated batch request: stays pending until resolved, rejects on abort. */
 interface GatedBatch {

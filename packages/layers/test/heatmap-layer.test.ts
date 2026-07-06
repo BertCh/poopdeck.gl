@@ -169,13 +169,4 @@ describe('HeatmapLayer: time relativization (f32 precision)', () => {
     expect(layerRelStart).toBe(relativeStart + delta);
     expect(Math.fround(layerRelStart)).toBe(layerRelStart);
   });
-
-  it('loses ms precision once the relative span exceeds the 24-bit mantissa', () => {
-    // 2^24 = 16_777_216 is the largest integer representable in f32 with
-    // ms precision. Anything in the next 2^24 range quantizes to even values.
-    const MAX = 16_777_216;
-    expect(Math.fround(MAX)).toBe(MAX);
-    const justPast = MAX + 1; // odd, not representable
-    expect(Math.fround(justPast)).not.toBe(justPast);
-  });
 });

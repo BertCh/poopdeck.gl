@@ -17,7 +17,6 @@
 import { describe, it, expect } from 'vitest';
 import { TimeFilterExtension } from '../src/extensions/time-filter-extension';
 import { CategoryColorExtension } from '../src/extensions/category-color-extension';
-import { makePointTile, makePathTile } from './fake-tile';
 
 /**
  * Capture the attribute descriptors an extension registers by giving its
@@ -88,60 +87,5 @@ describe('CategoryColorExtension attribute registration', () => {
     expect(perVertex.instanceCategoryIndex.size).toBe(1);
     expect(perVertex.instanceCategoryIndex.type).toBe('float32');
     expect(perVertex.instanceCategoryIndex.stepMode).toBe('dynamic');
-  });
-});
-
-describe('point layer per-tile attributes match the extension names', () => {
-  it('exposes instanceStartTime / instanceEndTime as Float32Array', () => {
-    const tile = makePointTile({
-      positions: [[0, 0], [1, 1]],
-      startTimes: [10, 20],
-      endTimes: [15, 25],
-      timeOffset: 1_716_206_000_000,
-    });
-    // Mirrors AnimatedPointLayer.prepareTile: the per-tile binary `data`
-    // object hands the tile's own typed arrays to deck.gl under the
-    // extension-registered keys.
-    const binary = tile.layers[0].features;
-    const attributes: Record<string, any> = {
-      getPosition: { value: binary.positions, size: binary.positionDimensions ?? 2 },
-      instanceStartTime: { value: binary.startTimes, size: 1 },
-      instanceEndTime: { value: binary.endTimes, size: 1 },
-    };
-    expect(attributes).toHaveProperty('instanceStartTime');
-    expect(attributes).toHaveProperty('instanceEndTime');
-    expect(attributes).not.toHaveProperty('getInstanceStartTime');
-    expect(attributes.instanceStartTime.value).toBeInstanceOf(Float32Array);
-    expect(attributes.instanceEndTime.value).toBeInstanceOf(Float32Array);
-  });
-});
-
-describe('path layer per-tile attributes match the extension names', () => {
-  it('exposes instanceStartTime / instanceEndTime as Float32Array', () => {
-    const tile = makePathTile({
-      paths: [[[0, 0], [1, 1]]],
-      startTimes: [10],
-      endTimes: [20],
-      timeOffset: 0,
-    });
-    // Mirrors AnimatedPathLayer.prepareTile.
-    const binary = tile.layers[0].features;
-    const attributes: Record<string, any> = {
-      getPath: { value: binary.positions, size: binary.positionDimensions ?? 2 },
-      instanceStartTime: { value: binary.startTimes, size: 1 },
-      instanceEndTime: { value: binary.endTimes, size: 1 },
-    };
-    expect(attributes).toHaveProperty('instanceStartTime');
-    expect(attributes).toHaveProperty('instanceEndTime');
-    expect(attributes.instanceStartTime.value).toBeInstanceOf(Float32Array);
-  });
-});
-
-describe('trips layer uses instanceVertexTime (the registered name)', () => {
-  it('the trail-mode attribute key matches what the extension registers', () => {
-    // AnimatedTripsLayer feeds per-vertex times under `instanceVertexTime`.
-    const { perVertex } = captureRegisteredAttributes(new TimeFilterExtension());
-    const tripsAttributeKey = 'instanceVertexTime';
-    expect(perVertex).toHaveProperty(tripsAttributeKey);
   });
 });

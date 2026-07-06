@@ -36,6 +36,8 @@ interface SynthTile {
   timeStart: number;
   timeEnd: number;
   bucketMs?: number; // when set, the synth index emits the column
+  /** Dummy blob byte length (default 1) — lets tests tell tiers apart. */
+  blobSize?: number;
 }
 
 let synthSeq = 0;
@@ -51,8 +53,10 @@ function buildSyntheticArchive(opts: {
 }): InMemoryPackedDataset {
   const tiles = opts.tiles;
   // Dummy tile blobs — the reader path under test only walks the directory.
-  // Each tile has a 1-byte payload so offsets stay distinct.
-  const tileBlobs: Uint8Array[] = tiles.map((_, i) => new Uint8Array([i & 0xff]));
+  // Each tile has a 1-byte payload (unless sized) so offsets stay distinct.
+  const tileBlobs: Uint8Array[] = tiles.map((t, i) =>
+    new Uint8Array(t.blobSize ?? 1).fill(i & 0xff),
+  );
 
   // One pack holding all blobs back-to-back; the directory's offsets are
   // pack-relative (packId 0).
@@ -220,14 +224,16 @@ describe('temporal LOD: getTileIdsInBoundsForTemporalLod', () => {
     const bounds = { minLon: -180, minLat: -85, maxLon: 180, maxLat: 85 };
     const range = { start: 0, end: DAY };
 
+    // Returned ids are stamped with the requested tier's bucketMs so every
+    // downstream key stays distinct from the base tile sharing a z/x/y/t.
     const baseIds = await archive.getTileIdsInBoundsForTemporalLod(bounds, 5, range, HOUR);
     expect(baseIds).toEqual([
-      { z: 5, x: 0, y: 0, t: 0 },
-      { z: 5, x: 0, y: 0, t: HOUR },
+      { z: 5, x: 0, y: 0, t: 0, bucketMs: HOUR },
+      { z: 5, x: 0, y: 0, t: HOUR, bucketMs: HOUR },
     ]);
 
     const lodIds = await archive.getTileIdsInBoundsForTemporalLod(bounds, 5, range, DAY);
-    expect(lodIds).toEqual([{ z: 5, x: 0, y: 0, t: 0 }]);
+    expect(lodIds).toEqual([{ z: 5, x: 0, y: 0, t: 0, bucketMs: DAY }]);
   });
 
   it('returns an empty list for a bucket size the archive does not carry', async () => {
@@ -278,7 +284,7 @@ describe('temporal LOD: getTileIdsInBoundsForTemporalLod', () => {
       { start: 0, end: HOUR },
       HOUR,
     );
-    expect(ids).toEqual([{ z: 5, x: 0, y: 0, t: 0 }]);
+    expect(ids).toEqual([{ z: 5, x: 0, y: 0, t: 0, bucketMs: HOUR }]);
     // And a non-matching bucket gets nothing back.
     const noneIds = await archive.getTileIdsInBoundsForTemporalLod(
       bounds,
@@ -287,6 +293,49 @@ describe('temporal LOD: getTileIdsInBoundsForTemporalLod', () => {
       DAY,
     );
     expect(noneIds).toEqual([]);
+  });
+});
+
+describe('temporal LOD: tier-qualified directory resolution (aliasing regression)', () => {
+  // Base HOUR tile and DAY LOD tile share z/x/y/timeStart — before the
+  // tier-qualified keys, tileEntryByKey was last-write-wins and BOTH ids
+  // resolved to whichever entry merged last.
+  function aliasedArchive(): STTArchive {
+    const bytes = buildSyntheticArchive({
+      tiles: [
+        { zoom: 5, x: 0, y: 0, timeStart: 0, timeEnd: HOUR, bucketMs: HOUR, blobSize: 1 },
+        { zoom: 5, x: 0, y: 0, timeStart: 0, timeEnd: DAY, bucketMs: DAY, blobSize: 2 },
+      ],
+      metadata: {
+        name: 'aliased',
+        bounds: { min_lon: -180, min_lat: -85, max_lon: 180, max_lat: 85 },
+        time_range: { start: 0, end: DAY },
+        temporal_bucket_ms: HOUR,
+        temporal_lod: [{ bucket_ms: DAY, max_zoom_level: 8 }],
+      },
+      writeBucketColumn: true,
+    });
+    return new STTArchive({ url: bytes.manifestUrl, fetch: rangeFetch(bytes) });
+  }
+
+  it('a plain id resolves the BASE entry; a bucketMs id resolves ITS LOD entry', async () => {
+    const archive = aliasedArchive();
+    await archive.getIndex();
+    // Directory byte size is a pure findTileEntry read — 1 byte base blob,
+    // 2 byte LOD blob.
+    expect(archive.getTileByteSize({ z: 5, x: 0, y: 0, t: 0 })).toBe(1);
+    expect(archive.getTileByteSize({ z: 5, x: 0, y: 0, t: 0, bucketMs: DAY })).toBe(2);
+    expect(archive.getTileByteSize({ z: 5, x: 0, y: 0, t: 0, bucketMs: HOUR })).toBe(1);
+  });
+
+  it('the interval-scan fallback stays tier-filtered (a base point query mid-span cannot land on the DAY tile)', async () => {
+    const archive = aliasedArchive();
+    await archive.getIndex();
+    // t = 2 h: no base bucket starts there and the only interval covering it
+    // is the DAY LOD tile — a base-tier lookup must NOT resolve to it.
+    expect(archive.getTileByteSize({ z: 5, x: 0, y: 0, t: 2 * HOUR })).toBeUndefined();
+    // The same instant addressed AT the LOD tier finds the DAY tile.
+    expect(archive.getTileByteSize({ z: 5, x: 0, y: 0, t: 2 * HOUR, bucketMs: DAY })).toBe(2);
   });
 });
 

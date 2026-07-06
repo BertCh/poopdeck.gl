@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import type { Tile, BinaryFeatures } from '@poopdeck.gl/core';
+import { odMatrixTile, TWO_PAIRS } from './fake-od';
 
 vi.mock('@deck.gl/layers', () => {
   class FakeScatterplotLayer {
@@ -37,57 +37,6 @@ vi.mock('../src/layers/internal/flow-lines-layer', () => {
 vi.mock('@deck.gl/core', async () =>
   (await import('./fake-deck-core')).createDeckCoreMock(),
 );
-
-/**
- * Build an OD tile of 2-vertex features, each carrying a per-bucket count.
- * `flows[i]` is feature i's per-bucket count array (length = numBuckets); both
- * its vertices get that array in the global vertex-major matrix.
- */
-function odMatrixTile(
-  features: { source: [number, number]; target: [number, number]; flows: number[] }[],
-): Tile {
-  const n = features.length;
-  const nb = features[0].flows.length;
-  const positions = new Float64Array(n * 2 * 2);
-  const startIndices = new Uint32Array(n + 1);
-  const matrix = new Float32Array(n * 2 * nb);
-  for (let i = 0; i < n; i++) {
-    startIndices[i] = i * 2;
-    positions[i * 4] = features[i].source[0];
-    positions[i * 4 + 1] = features[i].source[1];
-    positions[i * 4 + 2] = features[i].target[0];
-    positions[i * 4 + 3] = features[i].target[1];
-    // Both vertices (global indices 2i, 2i+1) carry the feature's bucket series.
-    for (let b = 0; b < nb; b++) {
-      matrix[(i * 2) * nb + b] = features[i].flows[b];
-      matrix[(i * 2 + 1) * nb + b] = features[i].flows[b];
-    }
-  }
-  startIndices[n] = n * 2;
-
-  const binary: BinaryFeatures = {
-    featureCount: n,
-    geometryType: 1 as any,
-    positionDimensions: 2,
-    positions,
-    startIndices,
-    featureIds: new Uint32Array(n),
-    startTimes: new Float32Array(n).fill(0),
-    endTimes: new Float32Array(n).fill(nb * 1000), // 1000 ms/bucket
-    timeOffset: 0,
-    vertexValueMatrix: matrix,
-    vertexValueBuckets: nb,
-    numericProps: {},
-    categoricalProps: {},
-  };
-  return {
-    id: { z: 12, x: 1, y: 1, t: 0 } as any,
-    timeRange: { start: 0, end: nb * 1000 } as any,
-    layers: [
-      { name: 'layer0', extent: 4096, features: binary, geometryExtensionName: 'geoarrow.linestring' } as any,
-    ],
-  } as any;
-}
 
 describe('FlowmapLayer', () => {
   let LayerCtor: any;
@@ -130,11 +79,6 @@ describe('FlowmapLayer', () => {
       return layer;
     };
   });
-
-  const TWO_PAIRS = [
-    { source: [0, 0] as [number, number], target: [1, 1] as [number, number], flows: [10, 0, 5] },
-    { source: [2, 2] as [number, number], target: [3, 3] as [number, number], flows: [0, 8, 0] },
-  ];
 
   it('emits one FlowLinesLayer per tile plus one node ScatterplotLayer overlay', () => {
     const layer = makeLayer(0);

@@ -36,13 +36,14 @@ import {
   type Polyline,
   type Scene,
 } from 'cesium';
-import { GeometryType, getFeatureProperties, type BinaryFeatures, type Tile } from '@poopdeck.gl/core';
+import { getFeatureProperties, type BinaryFeatures, type Tile } from '@poopdeck.gl/core';
 import { GlobeProjection } from '@poopdeck.gl/core/geo';
 import { buildTripIndex, trimTrail, type Trip } from '@poopdeck.gl/core/trips';
 import type { RGBA255 } from '@poopdeck.gl/core/style';
 import type { SttRenderNode } from '@poopdeck.gl/core/capabilities';
 import type { SttPickResult } from '@poopdeck.gl/core/picking';
 import { featureColor, type FeatureColorMode } from './lib/feature-color.js';
+import { lineStringTimeOrigin } from './lib/polylines.js';
 
 export interface CesiumTripsLayerOptions {
   id?: string;
@@ -132,16 +133,7 @@ export class CesiumTripsLayer implements SttRenderNode {
 
     // Scene-wide time origin = first LineString layer's timeOffset (the same
     // convention as every other layer in this package).
-    this.timeOrigin = 0;
-    outer: for (const tile of tiles) {
-      for (const tl of tile.layers) {
-        const b = tl.features;
-        if (b.geometryType === GeometryType.LineString && b.featureCount > 0 && b.startIndices) {
-          this.timeOrigin = b.timeOffset;
-          break outer;
-        }
-      }
-    }
+    this.timeOrigin = lineStringTimeOrigin(tiles);
 
     const index = buildTripIndex(tiles, GLOBE, this.timeOrigin, { precision: 'f64' });
     this.origin = index.origin;

@@ -1,6 +1,6 @@
 {
   "name": "@poopdeck.gl/three",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Three.js + TSL (Three Shading Language / WebGPU) renderer for SpatioTemporal Tiles — an independent, GPU-native alternative to the deck.gl renderer, with optional react-three-fiber bindings. First-class AV LIDAR cockpit (oriented Gaussian surfels in a local metric frame).",
   "publishConfig": {
     "access": "public"

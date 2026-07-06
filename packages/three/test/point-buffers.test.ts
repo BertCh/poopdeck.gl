@@ -1,41 +1,23 @@
 import { describe, it, expect } from 'vitest';
 import { GeometryType } from '@poopdeck.gl/core';
-import type { BinaryFeatures, Tile } from '@poopdeck.gl/core';
+import type { BinaryFeatures } from '@poopdeck.gl/core';
 import { buildPointBuffers } from '../src/layers/point-buffers';
 import { LocalEnuProjection } from '../src/projection/local-enu';
 import { MercatorProjection } from '../src/projection/mercator';
 import type { RGBA } from '../src/lib/color';
+import { makePointTile } from './_support/features';
+import { expectEmptyBuffers } from './_support/rtc';
 
 const anchor = { longitude: -71.05, latitude: 42.35 };
 const proj = new LocalEnuProjection(anchor);
 
-function pointTile(
+const pointTile = (
   count: number,
   positions: number[],
   partial: Partial<BinaryFeatures>,
   timeOffset = 0,
   geometryType = GeometryType.Point,
-): Tile {
-  const features: BinaryFeatures = {
-    featureCount: count,
-    geometryType,
-    positionDimensions: 2,
-    positions: new Float64Array(positions),
-    featureIds: new Uint32Array(count),
-    startTimes: new Float32Array(count),
-    endTimes: new Float32Array(count),
-    timeOffset,
-    numericProps: {},
-    categoricalProps: {},
-    vectorProps: {},
-    ...partial,
-  };
-  return {
-    id: { z: 18, x: 0, y: 0, t: timeOffset },
-    timeRange: { start: timeOffset, end: timeOffset + 1000 },
-    layers: [{ name: 'lidar', extent: 0, features, geometryExtensionName: 'geoarrow.point' }],
-  };
-}
+) => makePointTile(count, positions, partial, { timeOffset, geometryType, layerName: 'lidar', z: 18 });
 
 const SEG: Record<string, RGBA> = {
   road: [80, 90, 120, 255],
@@ -180,6 +162,6 @@ describe('buildPointBuffers', () => {
       elevationProperty: 'z',
       elevationScale: 1,
     });
-    expect(buf.count).toBe(0);
+    expectEmptyBuffers(buf);
   });
 });

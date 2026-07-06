@@ -20,7 +20,8 @@
 /// <reference lib="webworker" />
 
 import { decompress } from './compression.js';
-import { decodeTile } from './tile.js';
+import { decodeTile, type TemplateRegistry } from './tile.js';
+import { verifyCrc32c } from './crc32c.js';
 import { collectTransferables } from './tile-transferables.js';
 import type { Compression, Tile, TileId, TimeRange } from './types.js';
 
@@ -31,6 +32,12 @@ interface DecodeRequest {
   timeRange: TimeRange;
   compressed: ArrayBuffer;
   compression: Compression;
+  /** Directory CRC-32C of `compressed`; verified before decompress when set. */
+  expectedCrc32c?: number;
+  /** Declared `manifest.formatVersion` (spec §5.2 authority check). */
+  formatVersion?: number;
+  /** Include the decompressed payload in the response (OPFS write reuse). */
+  returnPayload?: boolean;
 }
 
 interface CancelRequest {
@@ -38,10 +45,20 @@ interface CancelRequest {
   requestId: number;
 }
 
-type IncomingMessage = DecodeRequest | CancelRequest;
+/**
+ * The dataset's v2 schema-template registry, structured-cloned from the pool
+ * wrapper. Sent as the FIRST message after every spawn/respawn (packed v2
+ * design §4.4), so it is always present before any v2 decode request.
+ */
+interface TemplatesMessage {
+  type: 'templates';
+  templates: TemplateRegistry;
+}
+
+type IncomingMessage = DecodeRequest | CancelRequest | TemplatesMessage;
 
 type DecodeResponse =
-  | { requestId: number; tile: Tile }
+  | { requestId: number; tile: Tile; payload?: Uint8Array }
   | { requestId: number; error: string };
 
 const ctx = self as unknown as DedicatedWorkerGlobalScope;
@@ -56,17 +73,39 @@ const ctx = self as unknown as DedicatedWorkerGlobalScope;
 // this is not worth extra bookkeeping to prune.
 const cancelledRequestIds = new Set<number>();
 
+/** v2 schema-template registry (see {@link TemplatesMessage}). */
+let templates: TemplateRegistry | undefined;
+
 ctx.onmessage = async (event: MessageEvent<IncomingMessage>) => {
   const msg = event.data;
+  if (msg.type === 'templates') {
+    // UNION-merge (content-addressed — a shared hash is identical bytes by
+    // construction), mirroring WorkerTileDecoder.setTemplates: successive
+    // registry installs from multiple archives sharing this worker
+    // accumulate instead of clobbering each other.
+    if (!templates) templates = new Map();
+    for (const [hash, bytes] of msg.templates) templates.set(hash, bytes);
+    return;
+  }
   if (msg.type === 'cancel') {
     cancelledRequestIds.add(msg.requestId);
     return;
   }
   const { requestId, id, timeRange, compressed, compression } = msg;
   try {
+    // Integrity gate BEFORE decompression (off the main thread): the
+    // directory CRC covers the compressed bytes, so a corrupt frame fails
+    // loudly here instead of as a confusing fzstd/IPC parse error — or
+    // worse, decoding cleanly into garbage.
+    if (msg.expectedCrc32c !== undefined) {
+      verifyCrc32c(new Uint8Array(compressed), msg.expectedCrc32c);
+    }
     const payload = await decompress(new Uint8Array(compressed), compression);
     if (cancelledRequestIds.delete(requestId)) return;
-    const tile = decodeTile(payload, id, timeRange);
+    const tile = decodeTile(payload, id, timeRange, {
+      templates,
+      formatVersion: msg.formatVersion,
+    });
     // The `arrowTable` field carries an apache-arrow `Table` instance. That
     // class has methods on its prototype and is NOT structured-cloneable —
     // postMessage would throw. Strip it before transfer. The raw IPC bytes
@@ -75,6 +114,17 @@ ctx.onmessage = async (event: MessageEvent<IncomingMessage>) => {
     for (const layer of tile.layers) delete layer.arrowTable;
     const transferables = collectTransferables(tile);
     const response: DecodeResponse = { requestId, tile };
+    if (msg.returnPayload) {
+      // Hand the decompressed bytes back for the main thread's OPFS write
+      // (saves its re-decompress). The payload's buffer usually IS the
+      // decoded Arrow buffer already in `transferables` (zero-copy tiles);
+      // only add it when it isn't, since duplicate transfers throw.
+      response.payload = payload;
+      const payloadBuffer = payload.buffer as ArrayBuffer;
+      if (!transferables.includes(payloadBuffer)) {
+        transferables.push(payloadBuffer);
+      }
+    }
     ctx.postMessage(response, transferables);
   } catch (err) {
     if (cancelledRequestIds.delete(requestId)) return; // cancelled, not a real error

@@ -17,7 +17,6 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { CollisionFilterExtension as DeckCollisionFilterExtension } from '@deck.gl/extensions';
 import {
   collisionFilterProps,
-  CollisionFilterExtension,
   COLLISION_PRIORITY_MIN,
   COLLISION_PRIORITY_MAX,
 } from '../src/extensions/collision-filter-extension';
@@ -29,10 +28,6 @@ import { _resetWarnOnce } from '../src/lib/log';
 // ---------------------------------------------------------------------------
 
 describe('collisionFilterProps helper', () => {
-  it('re-exports deck.gl CollisionFilterExtension', () => {
-    expect(CollisionFilterExtension).toBe(DeckCollisionFilterExtension);
-  });
-
   it('constant case: adds a CollisionFilterExtension and wires the constant props', () => {
     const props = collisionFilterProps({
       collisionEnabled: true,

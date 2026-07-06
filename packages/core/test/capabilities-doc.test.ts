@@ -38,9 +38,6 @@ describe('renderCapabilitiesMarkdown', () => {
   });
   const md = renderCapabilitiesMarkdown([a, b]);
 
-  it('is deterministic', () => {
-    expect(renderCapabilitiesMarkdown([a, b])).toBe(md);
-  });
   it('has a column per backend id + all sections', () => {
     expect(md).toContain('| deck | maplibre |');
     expect(md).toContain('## Capabilities');

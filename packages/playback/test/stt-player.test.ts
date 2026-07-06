@@ -268,6 +268,30 @@ describe('SttPlayer', () => {
     expect(p.getAutoSpeedMultiplierSuggestion()).toBe(Infinity);
   });
 
+  it('mirrors the scrub bracket: isScrubbing + forwarded scrubstart/scrubend events', () => {
+    const { source } = makeSource();
+    const p = makePlayer();
+    p.setSource(source);
+    const starts: number[] = [];
+    const ends: number[] = [];
+    p.on('scrubstart', (t) => starts.push(t));
+    p.on('scrubend', (t) => ends.push(t));
+
+    expect(p.isScrubbing).toBe(false);
+    p.beginScrub();
+    expect(p.isScrubbing).toBe(true);
+    expect(starts).toEqual([0]); // playhead at the grab
+
+    p.scrubTo(4_000); // preview only — no bracket events
+    expect(starts).toEqual([0]);
+    expect(ends).toEqual([]);
+
+    p.endScrub(4_000);
+    expect(p.isScrubbing).toBe(false);
+    expect(ends).toEqual([4_000]);
+    expect(p.currentTime).toBe(4_000);
+  });
+
   it('on() returns a working unsubscriber', () => {
     const { source, state } = makeSource();
     state.runwaySimMs = 1_000_000;

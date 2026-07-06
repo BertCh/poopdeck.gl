@@ -1,37 +1,18 @@
 import { describe, it, expect } from 'vitest';
-import { GeometryType } from '@poopdeck.gl/core';
-import type { BinaryFeatures, Tile } from '@poopdeck.gl/core';
+import type { BinaryFeatures } from '@poopdeck.gl/core';
 import {
   buildFlowCorridorBuffers,
   bucketPosFromTime,
 } from '../src/lib/flow-corridor-buffers';
 import { LocalEnuProjection } from '../src/projection/local-enu';
 import { MercatorProjection } from '../src/projection/mercator';
+import { makeLineTile } from './_support/features';
+import { expectEmptyBuffers, expectRtcMercator } from './_support/rtc';
 
 const anchor = { longitude: -73.57, latitude: 45.5 };
 
-function flowTile(partial: Partial<BinaryFeatures>, timeOffset = 0): Tile {
-  const features: BinaryFeatures = {
-    featureCount: 1,
-    geometryType: GeometryType.LineString,
-    positionDimensions: 2,
-    positions: new Float64Array(0),
-    featureIds: new Uint32Array(1),
-    startTimes: new Float32Array(1),
-    endTimes: new Float32Array(1),
-    startIndices: new Uint32Array([0, 0]),
-    timeOffset,
-    numericProps: {},
-    categoricalProps: {},
-    vectorProps: {},
-    ...partial,
-  };
-  return {
-    id: { z: 12, x: 0, y: 0, t: timeOffset },
-    timeRange: { start: timeOffset, end: timeOffset + 1000 },
-    layers: [{ name: 'flow', extent: 0, features, geometryExtensionName: 'geoarrow.linestring' }],
-  };
-}
+const flowTile = (partial: Partial<BinaryFeatures>, timeOffset = 0) =>
+  makeLineTile(partial, { timeOffset, layerName: 'flow', z: 12 });
 
 describe('buildFlowCorridorBuffers', () => {
   const proj = new LocalEnuProjection(anchor);
@@ -136,11 +117,8 @@ describe('buildFlowCorridorBuffers', () => {
       vertexValueBuckets: 1,
     });
     const buf = buildFlowCorridorBuffers([tile], merc, 0, {});
-    expect(buf.count).toBe(1);
+    expectRtcMercator(buf, { a: buf.posA[0], b: buf.posB[0] });
     expect(buf.numBuckets).toBe(1);
-    expect(Math.abs(buf.origin[0])).toBeGreaterThan(1e6);
-    expect(Math.abs(buf.posA[0])).toBeLessThan(1);
-    expect(Math.abs(buf.posB[0])).toBeLessThan(500);
   });
 
   it('returns empty for a non-matrix line tile (no vertexValueMatrix)', () => {
@@ -153,9 +131,8 @@ describe('buildFlowCorridorBuffers', () => {
       // no vertexValueMatrix / buckets
     });
     const buf = buildFlowCorridorBuffers([tile], proj, 0, {});
-    expect(buf.count).toBe(0);
+    expectEmptyBuffers(buf);
     expect(buf.numBuckets).toBe(0);
-    expect(buf.bbox).toBeNull();
     expect(buf.axis).toBeNull();
   });
 

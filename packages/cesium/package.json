@@ -1,6 +1,6 @@
 {
   "name": "@poopdeck.gl/cesium",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "CesiumJS backend for spatiotemporal tiles — renders STT on a real WGS84 globe",
   "publishConfig": {
     "access": "public"

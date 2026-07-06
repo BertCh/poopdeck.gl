@@ -19,6 +19,7 @@ import type {
   Tile,
   TileId,
   BoundingBox,
+  TemporalLodLevel,
 } from './types.js';
 import { estimateTileSize } from './archive.js';
 
@@ -165,6 +166,27 @@ const PREFETCH_CACHE_FRACTION = 0.5;
  * primary display zoom is NEVER subject to this — we always load what we draw.
  */
 const DEFAULT_MAX_PARENT_TILE_BYTES = 2 * 1024 * 1024;
+
+/**
+ * How many zoom levels below the primary display zoom the 'best-available'
+ * refinement strategy loads as coarse fallbacks (see getZoomLevelsToLoad).
+ * 4 levels covers the common case for sparse global point datasets: a feature
+ * isolated within ~150 km at z=10 typically clusters into a 2+ feature tile
+ * by z=6 (300 km/cell). Higher numbers don't add load pressure (each lower
+ * zoom has 4x fewer cells) but they DO grow the O(4^zDiff) ancestor-cover
+ * check in getVisibleTiles, so we cap. Also the clamp ceiling for the
+ * scrub-LOD spatial degrade ({@link ScrubLodOptions.spatialZoomDrop}) — a
+ * drop inside this band targets tiles the parent-fallback path already
+ * fetches, so a degraded scrub often needs zero new fetches.
+ */
+const PARENT_FALLBACK_LEVELS = 4;
+
+/**
+ * Default {@link ScrubLodOptions.spatialZoomDrop}: two zooms coarser is a
+ * crisp preview at 1/16th the tile count, and stays well inside the
+ * parent-fallback band (largely already-resident tiles).
+ */
+const DEFAULT_SCRUB_ZOOM_DROP = 2;
 
 /**
  * Bound on how many zoom levels finer {@link SpatiotemporalTileset.getVisibleTiles}'s
@@ -406,6 +428,51 @@ function setsEqual(a: Set<string>, b: Set<string>): boolean {
  */
 export type TileTier = 'raw' | 'summary' | 'auto';
 
+/**
+ * Scrub-time LOD degradation — the "motion tier" served while the user drags
+ * the timeline (docs/roadmap/scrub-lod-2026-07.md §5–6). Both axes default
+ * OFF (the kill switch): with this option absent, {@link
+ * SpatiotemporalTileset.setInteractive} stores the interactive bit and
+ * changes nothing else, so today's behavior is byte-identical.
+ *
+ * The degraded tier is PREVIEW-ONLY (the plan's G7 contract): tile
+ * SELECTION degrades while interactive, but the readiness/buffer APIs
+ * (`getBufferedRunway` / `getBufferedRanges` / `estimateCost`) and the
+ * prefetch planner keep measuring/warming the FINE base tier, so a
+ * playback gate on scrub release re-arms against full detail — never
+ * against the coarse preview.
+ */
+export interface ScrubLodOptions {
+  /**
+   * SPATIAL axis (plan P1): while interactive, drop the requested (primary)
+   * zoom by {@link spatialZoomDrop} so selection targets coarser tiles —
+   * usually ones the parent-fallback path already fetched.
+   * @default false
+   */
+  spatial?: boolean;
+
+  /**
+   * Zoom levels dropped while interactive (spatial axis). Clamped to
+   * `[0, PARENT_FALLBACK_LEVELS]` so the coarse target stays inside the
+   * band the fallback path already loads.
+   * @default 2
+   */
+  spatialZoomDrop?: number;
+
+  /**
+   * TEMPORAL axis (plan P2): while interactive, route selection through the
+   * archive's temporal-LOD pyramid — the coarsest level covering the
+   * requested zoom (the `pickTemporalLodForZoom` snap) — instead of the
+   * base-bucket tiles. No-ops cleanly unless the archive was built with
+   * `--temporal-lod` AND both {@link SpatiotemporalTilesetOptions.temporalLodLevels}
+   * and {@link SpatiotemporalTilesetOptions.getAvailableTemporalLodTiles}
+   * are wired (capability detection). Zooms dispatched to the summary tier
+   * keep using it — summary is already a reduced tier.
+   * @default false
+   */
+  temporal?: boolean;
+}
+
 export interface SpatiotemporalTilesetOptions {
   /** Maximum concurrent tile requests */
   maxRequests?: number;
@@ -416,7 +483,14 @@ export interface SpatiotemporalTilesetOptions {
   /** Maximum number of tiles to cache */
   maxCacheSize?: number;
 
-  /** Maximum cache size in bytes */
+  /**
+   * Maximum cache size in bytes (decoded tiles; default 2 GiB). Byte
+   * accounting is alias-deduped (each backing buffer counted once), so
+   * zero-copy datasets genuinely occupy up to this budget — the old
+   * double-counting estimator made them plateau around half of it.
+   * Memory-constrained deployments (mobile Safari) should set this
+   * explicitly.
+   */
   maxCacheByteSize?: number;
 
   /** Minimum zoom level available in data */
@@ -475,6 +549,35 @@ export interface SpatiotemporalTilesetOptions {
    * Ignored when `tier !== 'auto'`.
    */
   summaryZoomRange?: { minZoom: number; maxZoom: number };
+
+  /**
+   * Scrub-time LOD degradation policy (see {@link ScrubLodOptions}).
+   * Absent/empty = the kill switch: {@link SpatiotemporalTileset.setInteractive}
+   * becomes stored state only and behavior is identical to today.
+   */
+  scrubLod?: ScrubLodOptions;
+
+  /**
+   * The archive's temporal-LOD pyramid levels (from
+   * `ArchiveMetadata.temporalLod`), enabling the scrub-LOD temporal axis.
+   * Absent for archives built without `--temporal-lod` — the temporal axis
+   * then no-ops regardless of {@link scrubLod}.
+   */
+  temporalLodLevels?: TemporalLodLevel[];
+
+  /**
+   * Optional callback to enumerate the tiles of ONE temporal-LOD tier (wire
+   * `STTArchive.getTileIdsInBoundsForTemporalLod` here). Used only while
+   * interactive with `scrubLod.temporal` enabled; the base
+   * {@link getAvailableTiles} keeps serving every other query (selection at
+   * rest, prefetch, coverage index, overview preload).
+   */
+  getAvailableTemporalLodTiles?: (
+    bounds: BoundingBox,
+    zoom: number,
+    timeRange: { start: number; end: number },
+    bucketMs: number
+  ) => Promise<TileId[]>;
 
   /** Callback to get available raw tiles for bounds/time. */
   getAvailableTiles: (
@@ -561,7 +664,15 @@ export interface SpatiotemporalTilesetOptions {
   /** Callback when tile unloads */
   onTileUnload?: (tile: Tile) => void;
 
-  /** Callback on error */
+  /**
+   * Callback on error. `tileId` is usually the failing tile; a DATASET-level
+   * failure (a selection pass that could not query the directory, e.g. a
+   * transient paged-leaf fetch failure) is signalled with the sentinel
+   * `{x: -1, y: -1}` — this callback's signature requires a TileId, so
+   * consumers keying per-tile state should ignore negative coordinates
+   * (`@poopdeck.gl/layers` translates the sentinel to `undefined` at its
+   * prop boundary).
+   */
   onTileError?: (error: Error, tileId: TileId) => void;
 }
 
@@ -624,6 +735,14 @@ export class SpatiotemporalTileset {
   private lastUpdateTime: number = 0;
   private isAnimating: boolean = false;
 
+  /**
+   * Interactive/motion bit (scrub-LOD P0): true while the user is actively
+   * scrubbing the timeline (the PlaybackGovernor broadcasts its drag bracket
+   * here via {@link setInteractive}). Stored state only unless a
+   * {@link ScrubLodOptions} axis is enabled.
+   */
+  private interactive: boolean = false;
+
   // Prefetch direction hysteresis. `prefetchDirection` is the committed
   // direction (+1 forward / -1 backward); `pendingFlipCount` counts how many
   // consecutive frames pointed the opposite way.
@@ -657,6 +776,14 @@ export class SpatiotemporalTileset {
    * IDENTICAL params; it cannot order two concurrent different-param passes.
    */
   private selectGeneration = 0;
+  /**
+   * Monotonic stamp for the async `prefetchFutureTiles` pass, mirroring
+   * {@link selectGeneration}: a pass captures it before its awaited
+   * directory queries and bails afterwards if a newer pass — or a
+   * `flushPrefetch()` (seek, spatial move, direction flip) — superseded it,
+   * so a stale plan can't enqueue tiles for the wrong playhead/direction.
+   */
+  private prefetchGeneration = 0;
 
   // Separate queues for priority management
   private priorityQueue: TileId[] = []; // High priority - current time tiles
@@ -770,6 +897,10 @@ export class SpatiotemporalTileset {
       prefetchSteps: options.prefetchSteps ?? 4,
       tier: options.tier ?? 'auto',
       summaryZoomRange: options.summaryZoomRange ?? null,
+      // Scrub-LOD (motion tier): all axes default OFF — the kill switch.
+      scrubLod: options.scrubLod ?? null,
+      temporalLodLevels: options.temporalLodLevels ?? null,
+      getAvailableTemporalLodTiles: options.getAvailableTemporalLodTiles ?? null,
       getAvailableTiles: options.getAvailableTiles,
       getAvailableSummaryTiles: options.getAvailableSummaryTiles ?? null,
       getTileData: options.getTileData,
@@ -914,6 +1045,119 @@ export class SpatiotemporalTileset {
   }
 
   /**
+   * Set the interactive/motion bit (scrub-LOD P0). The PlaybackGovernor
+   * broadcasts `true` on beginScrub and `false` on endScrub through the
+   * optional `BufferSource.setInteractive` hook, exactly like its
+   * `setAnimationState` keep-alive.
+   *
+   * With no {@link ScrubLodOptions} axis enabled (the default) this is
+   * STORED STATE ONLY — no selection change, no fetch, byte-identical
+   * behavior (the kill switch). With an axis enabled, the transition
+   * invalidates the selection fast-path and re-runs selection immediately:
+   * on `true` the next pass serves the degraded motion tier; on `false` the
+   * fine settle tier is restored without waiting for the next clock tick
+   * (release must not leave a coarse selection as the priority working set
+   * while the post-seek gate fills — the G7 contract).
+   */
+  setInteractive(interactive: boolean): void {
+    if (this.interactive === interactive) return;
+    this.interactive = interactive;
+    if (!this.scrubLodEnabled()) return; // kill switch: bit only, zero behavior change
+    this.lastSelectKey = '';
+    this.selectAndLoadTiles();
+  }
+
+  /** Current interactive/motion bit (see {@link setInteractive}). */
+  get isInteractive(): boolean {
+    return this.interactive;
+  }
+
+  /** True when ANY scrub-LOD axis is switched on (the feature's master gate). */
+  private scrubLodEnabled(): boolean {
+    const cfg = this.options.scrubLod;
+    return !!cfg && (cfg.spatial === true || cfg.temporal === true);
+  }
+
+  /**
+   * The zoom SELECTION should target: the viewport zoom, minus the scrub-LOD
+   * spatial drop while interactive (plan P1, §5.2). Clamped so the drop
+   * never exceeds the parent-fallback band (those coarse tiles are what the
+   * fallback path already fetches — often zero new fetches) nor undershoots
+   * `minZoom`. Selection-only: the coverage index, buffer/readiness APIs,
+   * prefetch planner, and overview tier all keep using the undegraded zoom.
+   */
+  private effectiveSelectionZoom(zoom: number): number {
+    if (!this.interactive) return zoom;
+    const cfg = this.options.scrubLod;
+    if (!cfg?.spatial) return zoom;
+    const drop = Math.max(
+      0,
+      Math.min(
+        Math.floor(cfg.spatialZoomDrop ?? DEFAULT_SCRUB_ZOOM_DROP),
+        PARENT_FALLBACK_LEVELS,
+      ),
+    );
+    return Math.max(this.options.minZoom, zoom - drop);
+  }
+
+  /**
+   * The temporal-LOD bucket selection should request while interactive
+   * (plan P2), or `null` for the base tier. Non-null only when: the drag is
+   * held, the temporal axis is enabled, the archive declares a pyramid AND
+   * the LOD enumeration callback is wired (capability detection — archives
+   * built without `--temporal-lod` no-op here), and the picked level is
+   * genuinely coarser than the base bucket. The pick mirrors
+   * `STTArchive.pickTemporalLodForZoom`: the coarsest level whose
+   * `maxZoomLevel` covers the requested (already-degraded) zoom.
+   */
+  private scrubTemporalLodBucketMs(selectionZoom: number): number | null {
+    if (!this.interactive) return null;
+    const cfg = this.options.scrubLod;
+    if (!cfg?.temporal) return null;
+    const levels = this.options.temporalLodLevels;
+    if (!levels || levels.length === 0) return null;
+    if (!this.options.getAvailableTemporalLodTiles) return null;
+    let pick: TemporalLodLevel | null = null;
+    for (const level of levels) {
+      if (selectionZoom <= level.maxZoomLevel && (pick === null || level.bucketMs > pick.bucketMs)) {
+        pick = level;
+      }
+    }
+    if (!pick || pick.bucketMs === this.options.temporalBucketMs) return null;
+    return pick.bucketMs;
+  }
+
+  /**
+   * The "available tiles" call for the SELECTION pass only: while a scrub
+   * holds a temporal-LOD bucket, raw-tier zooms are served from that LOD
+   * tier; summary-tier zooms keep the summary dispatch (already a reduced
+   * tier). Every other caller (prefetch, coverage index, overview) stays on
+   * {@link fetchAvailableTilesForZoom} — the settle tier.
+   */
+  private async fetchSelectionTilesForZoom(
+    bounds: BoundingBox,
+    zoom: number,
+    timeRange: { start: number; end: number },
+    scrubBucketMs: number | null,
+  ): Promise<TileId[]> {
+    if (scrubBucketMs !== null && this.pickTierForZoom(zoom) === 'raw') {
+      const ids = await this.options.getAvailableTemporalLodTiles!(
+        bounds,
+        zoom,
+        timeRange,
+        scrubBucketMs,
+      );
+      // `STTArchive.getTileIdsInBoundsForTemporalLod` stamps `bucketMs`
+      // itself; normalize for custom callbacks so a LOD id can never alias
+      // a base tile's keys (tileIdToKey folds the bucket in).
+      return ids.map((id) =>
+        id.bucketMs === undefined ? { ...id, bucketMs: scrubBucketMs } : id,
+      );
+    }
+    return this.fetchAvailableTilesForZoom(bounds, zoom, timeRange);
+  }
+
+  /**
    * Run prefetchFutureTiles(), but at most once per PREFETCH_DEBOUNCE_MS of
    * wall-clock time. Coalesces the per-tick "selectAndLoadTiles → prefetch"
    * storm during fast playback into one prefetch pass per ~quarter-second.
@@ -1042,13 +1286,8 @@ export class SpatiotemporalTileset {
       return zoomLevels;
     }
 
-    // 'best-available': primary zoom + up to PARENT_FALLBACK_LEVELS parents.
-    // 4 levels covers the common case for sparse global point datasets:
-    // a feature isolated within ~150 km at z=10 typically clusters into a
-    // 2+ feature tile by z=6 (300 km/cell). Higher numbers don't add load
-    // pressure (each lower zoom has 4x fewer cells) but they DO grow the
-    // O(4^zDiff) ancestor-cover check in getVisibleTiles, so we cap.
-    const PARENT_FALLBACK_LEVELS = 4;
+    // 'best-available': primary zoom + up to PARENT_FALLBACK_LEVELS parents
+    // (see the module constant for the sizing rationale).
     const zoomLevels: number[] = [clampedZoom];
     for (let i = 1; i <= PARENT_FALLBACK_LEVELS; i++) {
       const z = clampedZoom - i;
@@ -1119,15 +1358,26 @@ export class SpatiotemporalTileset {
       end: time + timeWindow / 2,
     };
 
+    // Scrub-LOD motion tier (docs/roadmap/scrub-lod-2026-07.md): while the
+    // interactive bit is held AND an axis is enabled, SELECTION degrades —
+    // a coarser requested zoom (P1) and/or the temporal-LOD pyramid tier
+    // (P2). Both resolve to the pass-through values when off, and both are
+    // selection-only: coverage/runway math, prefetch, and the overview tier
+    // stay on the fine settle tier (the G7 preview-only contract).
+    const selectionZoom = this.effectiveSelectionZoom(zoom);
+    const scrubBucketMs = this.scrubTemporalLodBucketMs(selectionZoom);
+
     // Cheap fast-path: when the (bounds, zoom, time-range) signature is
     // identical to the previous call we'd just rebuild the same
     // `neededTileKeys` set and recompute equality. Skip the awaited
     // `getAvailableTiles` chain entirely. Running on a TimeController
     // tick that hasn't crossed a bucket boundary, this is the common
-    // case and the await round-trip is the dominant cost.
+    // case and the await round-trip is the dominant cost. The scrub-LOD
+    // degrade state is part of the signature so an interactive toggle
+    // between identical viewports still reselects.
     const selectKey =
       `${bounds.minLon}|${bounds.minLat}|${bounds.maxLon}|${bounds.maxLat}` +
-      `|${zoom}|${timeRange.start}|${timeRange.end}`;
+      `|${zoom}|${selectionZoom}|${scrubBucketMs ?? ''}|${timeRange.start}|${timeRange.end}`;
     if (selectKey === this.lastSelectKey) {
       return;
     }
@@ -1180,8 +1430,9 @@ export class SpatiotemporalTileset {
     }
 
     // Get zoom levels to load (supports LOD with parent tiles). The first
-    // entry is the primary (clamped display) zoom; the rest are coarser parents.
-    const zoomLevels = this.getZoomLevelsToLoad(zoom);
+    // entry is the primary (clamped display) zoom; the rest are coarser
+    // parents. Built from the (possibly scrub-degraded) selection zoom.
+    const zoomLevels = this.getZoomLevelsToLoad(selectionZoom);
     const primaryZoom = zoomLevels[0];
 
     // Mark tiles as used (for LRU)
@@ -1201,12 +1452,34 @@ export class SpatiotemporalTileset {
     // This is much faster than sequential queries, especially for initial load.
     // Dispatches between raw and summary tiers per zoom based on the
     // configured tier setting (see pickTierForZoom).
-    const tileIdsByZoom = await Promise.all(
-      zoomLevels.map(async (z) => ({
-        zoom: z,
-        tileIds: await this.fetchAvailableTilesForZoom(bounds, z, timeRange),
-      }))
-    );
+    let tileIdsByZoom: Array<{ zoom: number; tileIds: TileId[] }>;
+    try {
+      tileIdsByZoom = await Promise.all(
+        zoomLevels.map(async (z) => ({
+          zoom: z,
+          tileIds: await this.fetchSelectionTilesForZoom(bounds, z, timeRange, scrubBucketMs),
+        }))
+      );
+    } catch (error) {
+      // A transient directory failure (e.g. a paged-leaf range request
+      // blipping) used to escape as an unhandled rejection — no caller
+      // awaits this method — and the selection pass silently died. Worse,
+      // `lastSelectKey` was stamped above, so the next identical update()
+      // short-circuited on the fast path and never retried. Clear the key
+      // (only if no newer pass superseded us — its key is the current
+      // truth) so the next update() re-runs the selection, and surface the
+      // failure through the existing per-tile error channel. The sentinel
+      // x/y of -1 marks a selection-pass failure: no single tile is
+      // implicated. Aborts are expected supersession, not errors.
+      if (generation === this.selectGeneration) this.lastSelectKey = '';
+      if (!(error instanceof Error) || error.name !== 'AbortError') {
+        this.options.onTileError?.(
+          error instanceof Error ? error : new Error(String(error)),
+          { z: zoom, x: -1, y: -1, t: time },
+        );
+      }
+      return;
+    }
 
     // A newer selection started while we awaited — its viewport is the current
     // truth. Drop this stale result before it mutates any shared state.
@@ -1269,7 +1542,7 @@ export class SpatiotemporalTileset {
 
           // Add to HIGH PRIORITY queue for current time tiles
           // These always load before prefetch tiles
-          if (z === zoom) {
+          if (z === selectionZoom) {
             // Primary zoom - front of priority queue
             this.priorityQueue.unshift(tileId);
           } else {
@@ -1304,7 +1577,7 @@ export class SpatiotemporalTileset {
                 prefetchKeys.delete(key);
               }
               // Enqueue at priority (front for primary zoom).
-              if (z === zoom) {
+              if (z === selectionZoom) {
                 this.priorityQueue.unshift(tileId);
               } else {
                 this.priorityQueue.push(tileId);
@@ -1390,8 +1663,11 @@ export class SpatiotemporalTileset {
     // Use the hysteresis-smoothed committed prefetch direction. A single
     // backward scrub frame will not flip this (see updatePrefetchDirection).
     const direction = this.prefetchDirection;
-    
-    // Get zoom levels to prefetch
+
+    // Get zoom levels to prefetch. Deliberately the UNdegraded viewport zoom
+    // even mid-scrub: prefetch is what warms the FINE settle tier while a
+    // settle-commit gate holds (scrub-LOD G7 — the coarse motion tier is
+    // selection-only and preview-only).
     const zoomLevels = this.getZoomLevelsToLoad(zoom);
     const primaryZoom = zoomLevels[0];
     const now = Date.now();
@@ -1454,13 +1730,20 @@ export class SpatiotemporalTileset {
       fullRangeEnd: new Date(fullRange.end).toISOString(),
     });
 
+    const generation = ++this.prefetchGeneration;
     const results = await Promise.allSettled(
       zoomLevels.map(async (z) => {
         const tileIds = await this.fetchAvailableTilesForZoom(bounds, z, fullRange);
         return { zoom: z, tileIds };
       })
     );
-    
+
+    // A flush (seek / spatial move / direction flip) or a newer prefetch
+    // pass superseded this plan while we awaited the directory queries —
+    // enqueuing its candidates now would warm buckets for a stale playhead
+    // or direction (and recreate headers flushPrefetch just dropped).
+    if (generation !== this.prefetchGeneration) return;
+
     // Flatten the candidate tiles across all zoom levels into one list.
     const candidates: TileId[] = [];
     for (const result of results) {
@@ -1738,7 +2021,10 @@ export class SpatiotemporalTileset {
     if (!this.priorityQueueDirty) return;
     this.priorityQueueDirty = false;
     const { time, zoom } = this.currentViewport;
-    const primaryZoom = this.getZoomLevelsToLoad(zoom)[0];
+    // Class boundary matches what selection enqueued: the (possibly
+    // scrub-degraded) primary zoom, so a coarse motion-tier primary still
+    // sorts ahead of its parents during a drag.
+    const primaryZoom = this.getZoomLevelsToLoad(this.effectiveSelectionZoom(zoom))[0];
     this.priorityQueue.sort((a, b) => {
       const classA = a.z === primaryZoom ? 0 : 1;
       const classB = b.z === primaryZoom ? 0 : 1;
@@ -2329,7 +2615,10 @@ export class SpatiotemporalTileset {
     // (3) Re-plan: clear the runway anchor so the next prefetch pass
     //     re-issues immediately, and invalidate the selection fast-path so a
     //     flushed tile that is ALSO needed at priority is re-enqueued by the
-    //     next selection pass.
+    //     next selection pass. Bump the prefetch generation so an in-flight
+    //     prefetchFutureTiles pass (awaiting its directory queries) drops
+    //     its now-stale plan instead of enqueuing against the flushed state.
+    this.prefetchGeneration++;
     this.lastPrefetchEndTime = undefined;
     this.lastSelectKey = '';
   }
@@ -2614,6 +2903,10 @@ export class SpatiotemporalTileset {
    * discarded. A cheap signature check makes repeat calls free.
    */
   private maybeRebuildCoverageIndex(bounds: BoundingBox, zoom: number): void {
+    // Deliberately the UNdegraded zoom: the coverage index (and every
+    // readiness API on top of it) stays honest about the FINE primary tier
+    // even while a scrub-LOD drag degrades selection (G7 — gates on release
+    // must re-arm against full detail, never the coarse preview).
     const primaryZoom = this.getZoomLevelsToLoad(zoom)[0];
     // Quantize to the SAME tolerance the prefetch flush applies (see
     // quantizedSpatialKey): a smoothly drifting camera (AV ego-follow, eased
@@ -3086,7 +3379,15 @@ export class SpatiotemporalTileset {
   // Helper methods
   
   private tileIdToKey(id: TileId): string {
-    return `${id.z}/${id.x}/${id.y}/${id.t}`;
+    // `@<bucketMs>` keeps a temporal-LOD (scrub preview) tile's identity
+    // distinct from the base tile sharing its z/x/y/t across EVERY keyed
+    // registry (cache headers, needed set, priority/prefetch queues). Base
+    // ids keep the historical key, so the coverage index — built from the
+    // base-tier enumeration — stays base-keyed and a resident LOD tile can
+    // never satisfy base coverage (the G7 preview-only contract).
+    return id.bucketMs !== undefined
+      ? `${id.z}/${id.x}/${id.y}/${id.t}@${id.bucketMs}`
+      : `${id.z}/${id.x}/${id.y}/${id.t}`;
   }
   
   // Tile-size estimation lives in archive.ts (estimateTileSize) so the archive

@@ -1,36 +1,23 @@
 import { describe, it, expect } from 'vitest';
 import { GeometryType } from '@poopdeck.gl/core';
-import type { BinaryFeatures, Tile } from '@poopdeck.gl/core';
+import type { BinaryFeatures } from '@poopdeck.gl/core';
 import { buildPolygonBuffers } from '../src/layers/polygon-buffers';
 import { LocalEnuProjection } from '../src/projection/local-enu';
 import { MercatorProjection } from '../src/projection/mercator';
 import type { RGBA } from '../src/lib/color';
+import { makeLineTile } from './_support/features';
+import { expectEmptyBuffers } from './_support/rtc';
 
 const anchor = { longitude: -71.05, latitude: 42.35 };
 const proj = new LocalEnuProjection(anchor);
 
-function polyTile(partial: Partial<BinaryFeatures>, timeOffset = 0): Tile {
-  const features: BinaryFeatures = {
-    featureCount: 1,
-    geometryType: GeometryType.Polygon,
-    positionDimensions: 2,
-    positions: new Float64Array(0),
-    featureIds: new Uint32Array(1),
-    startTimes: new Float32Array(1),
-    endTimes: new Float32Array(1),
-    startIndices: new Uint32Array([0, 0]),
+const polyTile = (partial: Partial<BinaryFeatures>, timeOffset = 0) =>
+  makeLineTile(partial, {
     timeOffset,
-    numericProps: {},
-    categoricalProps: {},
-    vectorProps: {},
-    ...partial,
-  };
-  return {
-    id: { z: 14, x: 0, y: 0, t: timeOffset },
-    timeRange: { start: timeOffset, end: timeOffset + 1000 },
-    layers: [{ name: 'poly', extent: 0, features, geometryExtensionName: 'geoarrow.polygon' }],
-  };
-}
+    layerName: 'poly',
+    geometryType: GeometryType.Polygon,
+    geometryExtensionName: 'geoarrow.polygon',
+  });
 
 // A small CCW square ~10 m on a side, centred near the anchor.
 function square(d = 0.0001): number[] {
@@ -153,7 +140,6 @@ describe('buildPolygonBuffers', () => {
     const buf2 = buildPolygonBuffers([line], proj, 0, {
       colorMode: { type: 'constant', color: RED },
     });
-    expect(buf2.vertexCount).toBe(0);
-    expect(buf2.bbox).toBeNull();
+    expectEmptyBuffers(buf2);
   });
 });

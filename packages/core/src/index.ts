@@ -30,6 +30,7 @@ export type {
   Tile,
   TileEntry,
   TileId,
+  TileMetaJson,
   TileRequestOptions,
   TimeRange,
 } from './types.js';
@@ -52,13 +53,15 @@ export {
 } from './palettes.js';
 
 // ─── Archive / tileset / tile decoding ──────────────────────────────────────
-export { STTArchive, estimateTileSize } from './archive.js';
+export { STTArchive, estimateTileSize, KNOWN_MANIFEST_CAPABILITIES } from './archive.js';
 // Packed-format manifest contract (mirrors Rust `pack::Manifest`; schema at
-// docs/spec/manifest.schema.json).
+// docs/spec/manifest.schema.json). `ManifestSchemaTemplate` is the
+// formatVersion-2 `schemas` table entry (spec §3.2).
 export type {
   PackedManifest,
   ManifestDirectoryRef,
   ManifestPackRef,
+  ManifestSchemaTemplate,
 } from './archive.js';
 export { SpatiotemporalTileset } from './spatiotemporal-tileset.js';
 export type {
@@ -70,6 +73,10 @@ export type {
   TileTier,
 } from './spatiotemporal-tileset.js';
 export { decodeTile, getFeatureProperties, toGeoArrowTable } from './tile.js';
+// Packed formatVersion-2 decode plumbing: the schema-template registry built
+// from `manifest.schemas` at open (spec §3.2) and the decodeTile options that
+// carry it + the declared formatVersion (spec §5.2 authority rule).
+export type { TemplateRegistry, DecodeTileOptions } from './tile.js';
 
 // ─── Throughput estimation (player buffering) ───────────────────────────────
 export {
@@ -107,6 +114,12 @@ export {
 
 // ─── Compression ────────────────────────────────────────────────────────────
 export { decompress, decompressSync } from './compression.js';
+
+// ─── Integrity (CRC-32C, the directory's per-blob checksum) ──────────────────
+export { crc32c, verifyCrc32c } from './crc32c.js';
+
+// ─── Content addressing (blake3-128, the packed format's object/template hash)
+export { blake3, blake3Hex128 } from './blake3.js';
 
 // ─── Tile decoder pipeline ──────────────────────────────────────────────────
 export {

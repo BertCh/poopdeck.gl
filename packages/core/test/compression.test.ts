@@ -5,12 +5,13 @@
  * reject it (byte 1 stays permanently reserved) rather than silently
  * mis-decoding. Real zstd round-trips are exercised by the archive contract
  * tests against Rust-produced payloads; here we cover the passthrough and
- * rejection contracts plus the zstd decoder entry point.
+ * rejection contracts. Real zstd payloads round-trip through the archive
+ * contract tests.
  */
 
 import { describe, it, expect } from 'vitest';
 
-import { decompress, decompressSync, unzstdSync } from '../src/compression';
+import { decompress, decompressSync } from '../src/compression';
 import { Compression } from '../src/types';
 
 function makePayload(): Uint8Array {
@@ -52,13 +53,5 @@ describe('decompressSync()', () => {
     expect(() => decompressSync(new Uint8Array(0), 1 as any)).toThrow(
       /Unknown or retired compression/i,
     );
-  });
-
-  it('zstd decoder is callable (real payloads covered by archive contract tests)', () => {
-    // unzstdSync is re-exported so consumers can decode zstd payloads
-    // without pulling fzstd directly. Smoke-test existence + that it
-    // rejects nonsense input.
-    expect(typeof unzstdSync).toBe('function');
-    expect(() => unzstdSync(new Uint8Array([0x00, 0x00]))).toThrow();
   });
 });

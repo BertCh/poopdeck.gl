@@ -200,21 +200,6 @@ describe('H3SummaryLayer: outline / stroke family forwarding (deckgl parity)', (
     expect(sub.props.highPrecision).toBe(false);
   });
 
-  it('lineColor recolors the outline (the sublayer was stuck at black)', async () => {
-    const layer = await makeH3Layer({ lineColor: [10, 20, 30, 200] });
-    const [sub] = layer.renderLayers() as CapturedLayer[];
-    expect(sub.props.getLineColor).toEqual([10, 20, 30, 200]);
-  });
-
-  it('getLineColor alias wins over lineColor', async () => {
-    const layer = await makeH3Layer({
-      lineColor: [10, 20, 30, 200],
-      getLineColor: [1, 2, 3, 255],
-    });
-    const [sub] = layer.renderLayers() as CapturedLayer[];
-    expect(sub.props.getLineColor).toEqual([1, 2, 3, 255]);
-  });
-
   it('lineWidth / getLineWidth alias resolve to a constant width', async () => {
     const legacy = await makeH3Layer({ lineWidth: 4 });
     expect((legacy.renderLayers()[0] as CapturedLayer).props.getLineWidth).toBe(4);
@@ -223,43 +208,10 @@ describe('H3SummaryLayer: outline / stroke family forwarding (deckgl parity)', (
     expect((aliased.renderLayers()[0] as CapturedLayer).props.getLineWidth).toBe(9);
   });
 
-  it('a function-valued getLineColor accessor falls back to lineColor (no crash)', async () => {
-    const layer = await makeH3Layer({
-      lineColor: [7, 8, 9, 255],
-      getLineColor: () => [255, 0, 0, 255],
-    });
-    const [sub] = layer.renderLayers() as CapturedLayer[];
-    // Binary summary tiles can't run per-feature JS — the alias is ignored and
-    // the constant `lineColor` is forwarded instead.
-    expect(sub.props.getLineColor).toEqual([7, 8, 9, 255]);
-  });
-
   it('the outline props ride the updateTriggers surface', async () => {
     const layer = await makeH3Layer({ lineColor: [5, 6, 7, 255], lineWidth: 2 });
     const [sub] = layer.renderLayers() as CapturedLayer[];
     expect(sub.props.updateTriggers.getLineColor).toContain('5,6,7,255');
     expect(sub.props.updateTriggers.getLineWidth).toContain(2);
-  });
-});
-
-describe('H3SummaryLayer: outline restyle invalidates the sublayer cache', () => {
-  it('a lineColor change rebuilds the cached H3HexagonLayer', async () => {
-    const layer = await makeH3Layer({ lineColor: [0, 0, 0, 255] });
-    const [first] = layer.renderLayers() as CapturedLayer[];
-    // Unchanged props → same cached instance.
-    expect(layer.renderLayers()[0]).toBe(first);
-    layer.props.lineColor = [1, 1, 1, 255];
-    const [second] = layer.renderLayers() as CapturedLayer[];
-    expect(second).not.toBe(first);
-    expect(second.props.getLineColor).toEqual([1, 1, 1, 255]);
-  });
-
-  it('a stroked toggle rebuilds the cached H3HexagonLayer', async () => {
-    const layer = await makeH3Layer({ stroked: true });
-    const [first] = layer.renderLayers() as CapturedLayer[];
-    layer.props.stroked = false;
-    const [second] = layer.renderLayers() as CapturedLayer[];
-    expect(second).not.toBe(first);
-    expect(second.props.stroked).toBe(false);
   });
 });

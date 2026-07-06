@@ -25,12 +25,9 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { STTArchive } from '../src/archive';
 import { GeometryType } from '../src/types';
+import { bufferToArrayBuffer } from './helpers/fixtures';
 
 const FIXTURE_DIR = fileURLToPath(new URL('./fixtures/packed-golden/', import.meta.url));
-
-function bufferToArrayBuffer(buf: Uint8Array): ArrayBuffer {
-  return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
-}
 
 interface FetchLog {
   /** Every requested path (relative to the fixture dir). */

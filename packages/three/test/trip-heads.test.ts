@@ -7,6 +7,7 @@ import {
   sampleHeads,
 } from '../src/lib/trip-heads';
 import { LocalEnuProjection } from '../src/projection/local-enu';
+import { makeLineTile } from './_support/features';
 
 const anchor = { longitude: -71.05, latitude: 42.35 };
 const proj = new LocalEnuProjection(anchor);
@@ -22,26 +23,18 @@ function lineTile(
   geometryType = GeometryType.LineString,
 ): Tile {
   const featureCount = startIndices.length - 1;
-  const features: BinaryFeatures = {
-    featureCount,
-    geometryType,
-    positionDimensions: 2,
-    positions: new Float64Array(positions),
-    startIndices: new Uint32Array(startIndices),
-    featureIds: new Uint32Array(featureCount),
-    startTimes: new Float32Array(startTimes),
-    endTimes: new Float32Array(endTimes),
-    timeOffset,
-    numericProps: {},
-    categoricalProps: {},
-    vectorProps: {},
-    ...partial,
-  };
-  return {
-    id: { z: 14, x: 0, y: 0, t: timeOffset },
-    timeRange: { start: timeOffset, end: timeOffset + 1000 },
-    layers: [{ name: 'trips', extent: 0, features, geometryExtensionName: 'geoarrow.linestring' }],
-  };
+  return makeLineTile(
+    {
+      featureCount,
+      positions: new Float64Array(positions),
+      startIndices: new Uint32Array(startIndices),
+      featureIds: new Uint32Array(featureCount),
+      startTimes: new Float32Array(startTimes),
+      endTimes: new Float32Array(endTimes),
+      ...partial,
+    },
+    { timeOffset, geometryType, layerName: 'trips' },
+  );
 }
 
 // A two-vertex trip 100 m due east of the anchor, active over t∈[0,1000].

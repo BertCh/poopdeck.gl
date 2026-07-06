@@ -17,13 +17,10 @@
 import { describe, it, expect, vi } from 'vitest';
 import { SpatiotemporalTileset } from '../src/spatiotemporal-tileset';
 import type { TileId, BoundingBox } from '../src/types';
-
-const BOUNDS: BoundingBox = { minLon: -180, minLat: -85, maxLon: 180, maxLat: 85 };
+import { BOUNDS, flush as tick } from './helpers/fixtures';
 
 /** A minimal truthy "tile" — getVisibleTiles only needs header.tile non-null. */
 const fakeTile = (id: TileId) => ({ id, featureCount: 0, layers: [] }) as unknown;
-
-const tick = () => new Promise((r) => setTimeout(r, 0));
 
 describe('SpatiotemporalTileset additive LOD — union loading', () => {
   function zoomsQueried(lodMode: 'additive' | 'parent-fallback', minZoom: number,

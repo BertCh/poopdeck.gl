@@ -64,6 +64,17 @@ export interface BufferSource {
    * its own runway (a stall deadlock that only the escape hatch breaks).
    */
   setAnimationState?(isAnimating: boolean, speed?: number): void;
+  /**
+   * Optional (the core tileset has it): the interactive/motion bit — true
+   * from {@link PlaybackGovernor.beginScrub} until {@link
+   * PlaybackGovernor.endScrub} (scrub-LOD P0, docs/roadmap/scrub-lod-2026-07.md).
+   * A loader MAY serve a cheaper preview tier while it is held (coarser
+   * spatial zoom and/or a coarser temporal-LOD bucket) and MUST restore its
+   * settle tier when it clears. Preview-only by contract: readiness
+   * reporting ({@link getBufferedRunway} et al.) stays honest about the fine
+   * tier, so gates on release re-arm against full detail.
+   */
+  setInteractive?(interactive: boolean): void;
 }
 
 /** Network throughput estimate (archive dual-EWMA, see WS-A5). */
@@ -180,6 +191,14 @@ export type GovernorEventMap = {
   progress: (runway: BufferedRunway) => void;
   /** Playback parked at a non-looping range boundary (media-element 'ended'). */
   ended: (time: number) => void;
+  /**
+   * The scrubber was grabbed (payload: playhead at the grab). Everything
+   * until 'scrubend' is preview-only; sources were told via
+   * {@link BufferSource.setInteractive}.
+   */
+  scrubstart: (time: number) => void;
+  /** The scrubber was released (payload: the committed position). */
+  scrubend: (time: number) => void;
 };
 
 /**
@@ -365,6 +384,8 @@ export class PlaybackGovernor {
     ready: new Set(),
     progress: new Set(),
     ended: new Set(),
+    scrubstart: new Set(),
+    scrubend: new Set(),
   };
 
   /**
@@ -517,6 +538,15 @@ export class PlaybackGovernor {
   }
 
   /**
+   * True while the scrubber is held ({@link beginScrub} … {@link endScrub}).
+   * The same bit that suppresses gates internally, exposed so UIs/loaders
+   * can observe the drag bracket (scrub-LOD P0).
+   */
+  get isScrubbing(): boolean {
+    return this.scrubbing;
+  }
+
+  /**
    * True while in degraded creep: a gate passed via the maxStartWaitMs
    * escape hatch and playback is advancing pinned to the buffered frontier
    * (data-arrival rate) instead of free-running wall-clock × speed. UIs can
@@ -573,11 +603,21 @@ export class PlaybackGovernor {
       required: opts.required ?? true,
       weight: opts.weight ?? 1,
     });
+    // Assert the CURRENT interactive bit on registration (mirrors the
+    // animation-state re-assertion gates make on every source): a source
+    // registered mid-drag must see `true` — the broadcast in beginScrub
+    // predates it — and a source carrying a stale `true` from an earlier
+    // lifecycle is synchronized back to `false` outside a drag.
+    source.setInteractive?.(this.scrubbing);
     this.evaluateNow();
   }
 
   /** Remove a source from the registry by id (no-op if absent). */
   removeSource(id: string): void {
+    // A source dropped mid-drag would otherwise keep interactive=true
+    // forever — endScrub's clearing broadcast only reaches sources still
+    // registered. Clear the bit on its way out.
+    if (this.scrubbing) this.sources.get(id)?.source.setInteractive?.(false);
     this.sources.delete(id);
     this.evaluateNow();
   }
@@ -598,6 +638,12 @@ export class PlaybackGovernor {
    * escape-hatches) correctly.
    */
   setSource(source: BufferSource | null): void {
+    // Sources swapped out mid-drag must not keep interactive=true forever —
+    // clear the bit before they leave the registry (endScrub can no longer
+    // reach them). The replacement gets the current bit via addSource.
+    if (this.scrubbing) {
+      for (const s of this.allSources()) s.setInteractive?.(false);
+    }
     this.sources.clear();
     // addSource calls evaluateNow on success; on a bad-source rejection it
     // returns early WITHOUT evaluating, so re-evaluate here unconditionally.
@@ -674,11 +720,20 @@ export class PlaybackGovernor {
    * The scrubber was grabbed. Freezes the clock for a stable preview; no
    * state change and no fetch churn — every position until
    * {@link endScrub} is preview-only.
+   *
+   * Scrub-LOD P0: the interactive bit is broadcast to EVERY source
+   * (required + optional — optional sources load too) via the optional
+   * {@link BufferSource.setInteractive}, and 'scrubstart' fires, so loaders
+   * MAY degrade to a cheaper preview tier for the duration of the drag.
+   * Idempotent: a second grab of an already-held thumb is the same drag.
    */
   beginScrub(): void {
     if (this.rejectDisposedUse()) return;
+    if (this.scrubbing) return; // already dragging — same bracket
     this.scrubbing = true;
     this.pauseClock();
+    for (const source of this.allSources()) source.setInteractive?.(true);
+    this.emit('scrubstart', this.timeController.getTime());
   }
 
   /**
@@ -693,7 +748,15 @@ export class PlaybackGovernor {
   /** The scrubber was released — commit the final position as a real seek. */
   endScrub(time: number): void {
     if (this.rejectDisposedUse()) return;
+    const wasScrubbing = this.scrubbing;
     this.scrubbing = false;
+    if (wasScrubbing) {
+      // Clear the interactive bit BEFORE the commit below: a scrub-LOD
+      // loader restores its fine (settle) tier first, so the commit's flush
+      // + post-seek gate measure full detail — the G7 preview-only contract.
+      for (const source of this.allSources()) source.setInteractive?.(false);
+      this.emit('scrubend', time);
+    }
     const alreadyCommitted = this.scrubCommittedTime === time;
     this.scrubCommittedTime = null;
     if (alreadyCommitted) {
@@ -995,6 +1058,15 @@ export class PlaybackGovernor {
     this.listeners.ready.clear();
     this.listeners.progress.clear();
     this.listeners.ended.clear();
+    this.listeners.scrubstart.clear();
+    this.listeners.scrubend.clear();
+    // Disposal mid-drag: the endScrub that would clear the interactive bit
+    // will never come (the instance is inert), so stand every source down
+    // before dropping the registry — a loader must not stay pinned to its
+    // degraded scrub tier forever.
+    if (this.scrubbing) {
+      for (const s of this.allSources()) s.setInteractive?.(false);
+    }
     this.sources.clear();
   }
 

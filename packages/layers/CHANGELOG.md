@@ -1,5 +1,16 @@
 # @poopdeck.gl/layers
 
+## 0.4.0
+
+### Minor Changes
+
+- `scrubLod` prop: degrade tile selection while the user scrubs the
+  timeline (spatial zoom-drop / temporal-LOD routing), preview-only and
+  default off.
+- `onTileError` now passes `tileId: undefined` for dataset-level failures
+  instead of a sentinel tile.
+- Version alignment with @poopdeck.gl/core 0.4.0 (packed v2 reader).
+
 ## 0.3.0
 
 ### Minor Changes

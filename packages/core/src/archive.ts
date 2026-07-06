@@ -55,8 +55,11 @@ import {
 import { createDefaultTileDecoder, type TileDecoder } from './tile-decoder.js';
 import { OpfsTileCache } from './opfs-cache.js';
 import { decompress, unzstdSync } from './compression.js';
+import { blake3Hex128 } from './blake3.js';
+import type { TemplateRegistry } from './tile.js';
 import { createSttTileSource, type SttTileSource } from './tile-source.js';
 import { ThroughputEstimator, type ThroughputEstimate } from './throughput.js';
+import { forEachBufferView } from './tile-transferables.js';
 import {
   getSharedScheduler,
   isSharedSchedulingEnabled,
@@ -65,12 +68,47 @@ import { createCancellationError, isCancellationError } from './request-schedule
 
 /** `format` discriminator written into every packed manifest. */
 const PACKED_FORMAT = 'stt-packed';
+/** The frozen 0.3.x packed format: no object magic, v1 layer frames. */
+const PACKED_FORMAT_VERSION_V1 = 1;
 /**
- * Manifest schema version this reader understands (`formatVersion`). A strict
- * const in the manifest schema — conformance requires rejecting anything else,
- * mirroring the Rust reader (`pack.rs`'s `PACKED_FORMAT_VERSION` check).
+ * The 2026-07 coordinated byte break (packed spec §5.2 / design doc
+ * `stt-packed-v2-design-2026-07.md`): `STTP`/`STTD` object magic with
+ * object-absolute blob offsets, manifest-embedded `schemas` templates, and
+ * the sectioned, template-referencing layer frame v2.
  */
-const PACKED_FORMAT_VERSION = 1;
+const PACKED_FORMAT_VERSION_V2 = 2;
+/**
+ * Every `manifest.formatVersion` this reader understands. A closed enum in
+ * the manifest schema — conformance requires rejecting anything else at
+ * open, mirroring the Rust reader (`pack.rs`'s
+ * `SUPPORTED_PACKED_FORMAT_VERSIONS`).
+ */
+const SUPPORTED_PACKED_FORMAT_VERSIONS: readonly number[] = [
+  PACKED_FORMAT_VERSION_V1,
+  PACKED_FORMAT_VERSION_V2,
+];
+/**
+ * Byte length of the v2 object magic prelude (`"STTD"`/`"STTP"` + u8
+ * version(2) + 3 zero bytes). v2 directory reads skip it (blob offsets in
+ * the directory are already object-absolute, so pack reads need no shift).
+ */
+const OBJECT_MAGIC_LEN = 8;
+
+/**
+ * `manifest.capabilities` values this reader implements — the
+ * required-to-understand feature registry (docs/spec/stt-packed-format.md
+ * §3.1). Each capability RE-TYPES existing tile columns (quantized geometry,
+ * quantized numeric properties, elevation-folded 3-component points), so a
+ * reader that lacks one wouldn't fail downstream — it would silently misdecode
+ * (e.g. Int32 grid indices read as microscopic lon/lat degrees). Conformance
+ * requires refusing, at open, a dataset declaring anything outside this set,
+ * mirroring the Rust reader (`pack.rs`'s `KNOWN_CAPABILITIES`).
+ */
+export const KNOWN_MANIFEST_CAPABILITIES: readonly string[] = [
+  'coord-quant',
+  'attr-quant',
+  'elevation-fold',
+];
 
 /** `directory.layout` value for the paged container. */
 const DIRECTORY_LAYOUT_PAGED = 'paged';
@@ -347,6 +385,20 @@ export interface ManifestPackRef {
 }
 
 /**
+ * One schema-template entry of a formatVersion-2 manifest's `schemas` table
+ * (packed spec §3.2): the blake3-128 content hash of the raw template bytes
+ * (32 lowercase hex chars — the hex form of the 16-byte reference v2 layer
+ * frames embed) and the raw template bytes, base64-encoded (standard
+ * alphabet, padded). Mirrors the Rust `pack::SchemaTemplateRef`.
+ */
+export interface ManifestSchemaTemplate {
+  /** blake3-128 of the RAW (decoded) template bytes, lowercase hex. */
+  hash: string;
+  /** The raw template bytes, base64. */
+  data: string;
+}
+
+/**
  * The packed-format `manifest.json` — metadata + directory pointer + pack
  * table folded into one tiny object. Mirrors the Rust `pack::Manifest`.
  *
@@ -358,8 +410,26 @@ export interface ManifestPackRef {
 export interface PackedManifest {
   /** Format discriminator. Always {@link PACKED_FORMAT} (`"stt-packed"`). */
   format: string;
-  /** Manifest schema version (currently 1). */
+  /** Manifest schema version (1 = frozen 0.3.x layout, 2 = 2026-07 break). */
   formatVersion: number;
+  /**
+   * formatVersion 2 ONLY (v1 manifests MUST NOT carry the key): the
+   * dataset's Arrow IPC schema templates, embedded (spec §3.2). Sorted by
+   * `hash` and deduped by the writer. The reader validates
+   * `blake3_128(data) == hash` for every entry at open — a corrupt manifest
+   * fails loudly, dataset-level, before any tile fetch — then builds the
+   * hash → bytes template registry v2 layer frames resolve against.
+   */
+  schemas?: ManifestSchemaTemplate[];
+  /**
+   * OPTIONAL required-to-understand feature declarations (spec §3.1). Each
+   * entry names a feature the writer used that RE-TYPES existing tile columns
+   * (registry: {@link KNOWN_MANIFEST_CAPABILITIES}); a reader MUST refuse a
+   * dataset declaring a capability it does not implement. Absent = none used
+   * (the shape of every pre-capabilities manifest). Additive columns never
+   * need a capability.
+   */
+  capabilities?: string[];
   /**
    * Per-blob compression codec — `"zstd"` or `"none"` for the packed format.
    * (`"gzip"` is a retired legacy value, absent from the packed schema and
@@ -367,12 +437,63 @@ export interface PackedManifest {
    * codec name rather than throwing on an unknown enum value.
    */
   compression: string;
+  /**
+   * OPTIONAL: the concrete blob byte-ordering the writer laid down
+   * (`"spatial" | "time-major" | "hilbert3" | "morton3"`). Informational —
+   * the reader indexes by `(z, x, y, t)` regardless. Absent on pre-2026-07
+   * archives (the order is then inferable only from the pack layout).
+   */
+  blobOrdering?: string;
   /** Pointer to the immutable, content-addressed directory object. */
   directory: ManifestDirectoryRef;
   /** Ordered pack table; a pack's array index IS its `packId`. */
   packs: ManifestPackRef[];
   /** The verbatim stt-core Metadata JSON (snake_case keys). */
   metadata: any;
+}
+
+/** Standard-alphabet base64 → bytes (`atob` exists in browsers and Node ≥ 16). */
+function base64ToBytes(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+/**
+ * Decode + hash-validate a v2 manifest's `schemas` table into the decode-side
+ * {@link TemplateRegistry} (packed spec §3.2). Every entry must base64-decode
+ * to NON-EMPTY bytes whose blake3-128 equals its declared `hash` — the loud,
+ * dataset-level failure mode for corrupt manifests, surfaced at open before
+ * any tile fetch. Mirrors the Rust `pack::build_template_registry`.
+ */
+function buildTemplateRegistry(schemas: ManifestSchemaTemplate[]): TemplateRegistry {
+  const registry: TemplateRegistry = new Map();
+  for (let i = 0; i < schemas.length; i++) {
+    const entry = schemas[i];
+    if (!entry || typeof entry.hash !== 'string' || typeof entry.data !== 'string') {
+      throw new Error(`STT manifest: schemas[${i}] is malformed (need {hash, data} strings)`);
+    }
+    let data: Uint8Array;
+    try {
+      data = base64ToBytes(entry.data);
+    } catch (e) {
+      throw new Error(
+        `STT manifest: schemas[${i}] (${entry.hash}): base64 decode failed: ${(e as Error).message}`,
+      );
+    }
+    if (data.length === 0) {
+      throw new Error(`STT manifest: schemas[${i}] (${entry.hash}): template bytes are empty`);
+    }
+    const actual = blake3Hex128(data);
+    if (actual !== entry.hash) {
+      throw new Error(
+        `STT manifest: schemas[${i}]: template bytes hash to ${actual}, declared ${entry.hash}`,
+      );
+    }
+    registry.set(entry.hash, data);
+  }
+  return registry;
 }
 
 /** Normalize any HeadersInit into a plain record, preserving plain-object key casing. */
@@ -414,34 +535,38 @@ function mergeRequestInit(base: RequestInit, override?: RequestInit): RequestIni
 /**
  * Estimate a decoded tile's in-memory size (bytes). Exported so the tileset
  * uses one consistent accounting implementation.
+ *
+ * Counts each BACKING ArrayBuffer once, at its full `byteLength` — the same
+ * Set-of-buffers dedup `collectTransferables` uses. Zero-copy tiles alias
+ * many views (positions, numericProps, vectorProps, arrowIpc) onto the one
+ * decoded Arrow IPC buffer; summing per-view byteLengths double-counted such
+ * tiles ~2×, overstating the cache and evicting them early. Full buffer
+ * length (not the view's) is what the tile actually retains: a subarray
+ * keeps its whole backing buffer alive.
  */
 export function estimateTileSize(tile: Tile): number {
   let size = 1000; // base overhead
   if (!tile?.layers) return size;
+  const seen = new Set<ArrayBufferLike>();
+  const add = (view: ArrayBufferView | undefined | null): void => {
+    if (!view || !ArrayBuffer.isView(view) || seen.has(view.buffer)) return;
+    seen.add(view.buffer);
+    size += view.buffer.byteLength;
+  };
   for (const layer of tile.layers) {
-    // The retained raw IPC bytes (GeoArrow hand-off; see Layer.arrowIpc)
-    // keep the decoded payload buffer alive for the tile's lifetime, so
-    // they count toward the byte budget like any other buffer.
-    if (layer?.arrowIpc) size += layer.arrowIpc.byteLength;
+    // The retained raw IPC bytes (GeoArrow hand-off; see Layer.arrowIpc and
+    // the v2 spliced-props sibling) keep the decoded payload buffers alive
+    // for the tile's lifetime, so they count toward the byte budget like
+    // any other buffer.
+    add(layer?.arrowIpc);
+    add(layer?.arrowIpcProps);
     const f = layer?.features;
     if (!f) continue;
-    size += f.positions.byteLength;
-    size += f.featureIds.byteLength;
-    size += f.startTimes.byteLength;
-    size += f.endTimes.byteLength;
-    if (f.startIndices) size += f.startIndices.byteLength;
-    if (f.vertexTimestamps) size += f.vertexTimestamps.byteLength;
-    if (f.vertexValues) size += f.vertexValues.byteLength;
-    if (f.globalFeatureIds) size += f.globalFeatureIds.byteLength;
-    // Pre-tessellated meshes and 64-bit feature ids are often the largest
-    // buffers in a tile; counting them keeps the byte-budget eviction honest
-    // (and matches collectTransferables, which transfers these zero-copy).
-    if (f.triangles) size += f.triangles.byteLength;
-    if (f.triangleOffsets) size += f.triangleOffsets.byteLength;
-    if (f.featureIds64) size += f.featureIds64.byteLength;
-    for (const arr of Object.values(f.numericProps)) size += arr.byteLength;
-    for (const { indices, categories } of Object.values(f.categoricalProps)) {
-      size += indices.byteLength;
+    // Every BinaryFeatures buffer field, via the shared enumeration (same
+    // list collectTransferables transfers — the two can't drift).
+    forEachBufferView(f, add);
+    // Category-string tables aren't buffers; account them separately.
+    for (const { categories } of Object.values(f.categoricalProps)) {
       for (const c of categories) size += c.length * 2 + 16;
     }
   }
@@ -463,6 +588,27 @@ export class STTArchive {
   private baseUrl?: string;
   /** Pack compression codec parsed from the manifest (per-blob, no dict). */
   private packCompression = Compression.Zstd;
+  /**
+   * `manifest.formatVersion` (1 | 2), the AUTHORITATIVE discriminator (spec
+   * §5.2). Set by `fetchManifest`; forwarded to every decode so a
+   * mixed-version dataset fails loudly instead of misparsing.
+   */
+  private formatVersion = PACKED_FORMAT_VERSION_V1;
+  /**
+   * v2 only: the schema-template registry built (and blake3-validated) from
+   * `manifest.schemas` at open. ONE object shared by the inline decoder, the
+   * worker pool (which re-sends it on every spawn/respawn) and the OPFS warm
+   * path — the §4.4 distribution contract.
+   */
+  private templateRegistry?: TemplateRegistry;
+  /** The decoder instance {@link templateRegistry} was last installed on. */
+  private templatesInstalledOn?: TileDecoder;
+  /**
+   * Byte offset of directory codec data inside the `.sttd` object: 8 under
+   * formatVersion 2 (the `STTD` magic prelude), 0 under v1. Pack reads need
+   * no equivalent — v2 blob offsets are already object-absolute.
+   */
+  private directoryDataStart = 0;
   private metadataCache?: ArchiveMetadata;
   private indexCache?: ArchiveIndex;
   /** Promise guard so concurrent callers share one directory fetch+decode. */
@@ -502,8 +648,22 @@ export class STTArchive {
 
   /** "z/x/y" -> temporal entries at that spatial cell. */
   private tileEntryIndex = new Map<string, TileEntry[]>();
-  /** "z/x/y/t" -> exact entry. */
+  /** "z/x/y/t/<bucketMs|'base'>" -> exact entry (see {@link tileEntryKey}). */
   private tileEntryByKey = new Map<string, TileEntry>();
+  /**
+   * The dataset's base temporal bucket width (manifest
+   * `metadata.temporal_bucket_ms`, same 1 h default as {@link getMetadata}).
+   * Cached at manifest fetch so the SYNCHRONOUS {@link findTileEntry} can
+   * resolve tier-qualified keys without awaiting metadata.
+   */
+  private baseTemporalBucketMs = 3600 * 1000;
+  /**
+   * True when the manifest declares a temporal-LOD pyramid
+   * (`metadata.temporal_lod` non-empty) — only then can two directory
+   * entries share one `z/x/y/timeStart` across tiers, so only then does
+   * {@link findTileEntry}'s interval-scan fallback filter by tier.
+   */
+  private temporalLodDeclared = false;
 
   // --- Paged directory (Wave 2) -------------------------------------------
   /**
@@ -545,6 +705,11 @@ export class STTArchive {
   private decoder?: TileDecoder;
   private decoderOption?: TileDecoder;
 
+  /** Verify each blob's directory CRC-32C before decode (see options). */
+  private verifyChecksums = true;
+  /** Raw-IPC retention policy for decoded layers (see options). */
+  private retainArrowIpc: boolean | 'auto' = 'auto';
+
   /**
    * Persistent OPFS cache for decompressed tile payloads. `undefined` when
    * the caller opted out or OPFS isn't reachable; null after construction
@@ -582,6 +747,12 @@ export class STTArchive {
           transport(input, mergeRequestInit(loadFetch, init))) as typeof fetch;
       }
       this.decoderOption = options.decoder;
+      if (options.verifyChecksums === false) {
+        this.verifyChecksums = false;
+      }
+      if (options.retainArrowIpc !== undefined) {
+        this.retainArrowIpc = options.retainArrowIpc;
+      }
       if (typeof options.coalesceGapBytes === 'number' && options.coalesceGapBytes >= 0) {
         this.coalesceGapBytes = options.coalesceGapBytes;
       }
@@ -641,6 +812,27 @@ export class STTArchive {
     return this.decoder;
   }
 
+  /**
+   * The decoder with the dataset's v2 template registry installed (§4.4).
+   * Idempotent per decoder instance; a v1 dataset (no registry) is a no-op.
+   * Every decode call site goes through here so the registry can never be
+   * missing when a v2 frame reaches `decodeTile` — and a custom decoder
+   * that doesn't implement `setTemplates` still fails DESCRIPTIVELY there
+   * (never a silently-empty tile).
+   */
+  private getPreparedDecoder(): TileDecoder {
+    const decoder = this.getDecoder();
+    if (
+      this.templateRegistry &&
+      decoder.setTemplates &&
+      this.templatesInstalledOn !== decoder
+    ) {
+      decoder.setTemplates(this.templateRegistry);
+      this.templatesInstalledOn = decoder;
+    }
+    return decoder;
+  }
+
   /** Release worker resources, if any. */
   finalize(): void {
     this.decoder?.finalize();
@@ -684,13 +876,44 @@ export class STTArchive {
         );
       }
       // Conformance reader-MUST: reject unrecognized formatVersion /
-      // directoryVersion, not just format — both are strict consts in the
-      // manifest schema, and the Rust reader rejects them too.
-      if (manifest.formatVersion !== PACKED_FORMAT_VERSION) {
+      // directoryVersion, not just format — both are closed enums/consts in
+      // the manifest schema, and the Rust reader rejects them too.
+      if (!SUPPORTED_PACKED_FORMAT_VERSIONS.includes(manifest.formatVersion)) {
         throw new Error(
           `STT manifest: unsupported formatVersion ${JSON.stringify(manifest.formatVersion)} ` +
-            `(expected ${PACKED_FORMAT_VERSION})`,
+            `(expected one of ${SUPPORTED_PACKED_FORMAT_VERSIONS.join(', ')})`,
         );
+      }
+      // formatVersion 2: build the schema-template registry from the
+      // embedded `schemas` table, hash-validating EVERY entry at open (spec
+      // §3.2) — a corrupt manifest fails loudly, dataset-level, before any
+      // tile fetch. An absent table is legal (self-contained inline-schema
+      // frames); a v1 manifest carrying one is not (spec §3 envelope rule).
+      if (manifest.formatVersion === PACKED_FORMAT_VERSION_V2) {
+        if (manifest.schemas !== undefined && !Array.isArray(manifest.schemas)) {
+          throw new Error('STT manifest: schemas must be an array of {hash, data} entries');
+        }
+        this.templateRegistry = buildTemplateRegistry(manifest.schemas ?? []);
+      } else if (manifest.schemas !== undefined) {
+        throw new Error(
+          'STT manifest: formatVersion-1 manifests must not carry a schemas table (spec §3.2)',
+        );
+      }
+      this.formatVersion = manifest.formatVersion;
+      // Conformance reader-MUST: refuse a dataset declaring a capability this
+      // reader does not implement (spec §3.1). A capability re-types EXISTING
+      // columns, so skipping this check wouldn't fail later — it would
+      // silently misdecode, mid-session, per tile.
+      if (Array.isArray(manifest.capabilities)) {
+        const unknown = manifest.capabilities.filter(
+          (c) => !KNOWN_MANIFEST_CAPABILITIES.includes(c),
+        );
+        if (unknown.length > 0) {
+          throw new Error(
+            `STT manifest: dataset requires capabilities this reader does not implement: ` +
+              `${unknown.join(', ')} (implemented: ${KNOWN_MANIFEST_CAPABILITIES.join(', ')})`,
+          );
+        }
       }
       if (!manifest.directory || !Array.isArray(manifest.packs)) {
         throw new Error('STT manifest: missing directory pointer or pack table');
@@ -720,6 +943,13 @@ export class STTArchive {
           this.packCompression = Compression.Zstd;
           break;
       }
+      // Temporal-tier facts for the synchronous directory lookups
+      // (findTileEntry): the base bucket width and whether a temporal-LOD
+      // pyramid exists at all. Defaults mirror getMetadata's.
+      const metaJson = manifest.metadata ?? {};
+      this.baseTemporalBucketMs = metaJson.temporal_bucket_ms ?? 3600 * 1000;
+      this.temporalLodDeclared =
+        Array.isArray(metaJson.temporal_lod) && metaJson.temporal_lod.length > 0;
       // OPFS fingerprint = the content-addressed directory hash. It changes iff
       // the dataset's tiles change, and is stable across the dataset's packs.
       this.archiveFingerprint = manifest.directory.key;
@@ -1051,6 +1281,12 @@ export class STTArchive {
           "(this reader supports absent or 'zstd')",
       );
     }
+    // v2 `.sttd` objects open with the 8-byte `STTD` magic prelude; the codec
+    // bytes (root frame + leaves) follow it, and `rootLength` keeps meaning
+    // the root frame's at-rest length (spec §2.1) — so all paged math below
+    // is unchanged once offsets are shifted by the prelude.
+    this.directoryDataStart =
+      this.formatVersion === PACKED_FORMAT_VERSION_V2 ? OBJECT_MAGIC_LEN : 0;
 
     // Paged + large: fetch ONLY the root page (a prefix range GET), build the
     // page table, and leave the entry maps empty — leaves stream in on demand
@@ -1063,9 +1299,11 @@ export class STTArchive {
       const rootBuf = await this.fetchObjectRangeWithRetry(
         this.directoryUrl,
         0,
-        dref.rootLength - 1,
+        this.directoryDataStart + dref.rootLength - 1,
       );
-      const root = decodePagedRoot(this.unframeDirectory(new Uint8Array(rootBuf)));
+      const root = decodePagedRoot(
+        this.unframeDirectory(this.stripDirectoryMagic(new Uint8Array(rootBuf))),
+      );
       this.paged = true;
       this.rootLength = dref.rootLength;
       this.pageTable = root.pages;
@@ -1078,14 +1316,15 @@ export class STTArchive {
     }
 
     // Whole-load path (single, or a paged directory small enough to grab in one
-    // GET). One whole-object fetch, validated against `directory.length`.
+    // GET). One whole-object fetch, validated against `directory.length` (which
+    // covers the ENTIRE object including the v2 magic — spec §2.1).
     this.paged = false;
     const buffer = await this.fetchWholeObjectWithRetry(
       this.directoryUrl,
       'directory',
       dref.length,
     );
-    const bytes = new Uint8Array(buffer);
+    const bytes = this.stripDirectoryMagic(new Uint8Array(buffer));
     const raw =
       dref.layout === DIRECTORY_LAYOUT_PAGED
         ? this.decodePagedWhole(bytes, dref.rootLength ?? 0)
@@ -1104,6 +1343,33 @@ export class STTArchive {
     return this.directoryZstd ? unzstdSync(bytes) : bytes;
   }
 
+  /**
+   * Validate + strip the v2 `STTD` object magic prelude (`"STTD"` +
+   * version 2 + 3 zero bytes) off directory bytes; v1 passes through
+   * untouched. Mirrors the Rust `pack::directory_codec_bytes`.
+   */
+  private stripDirectoryMagic(bytes: Uint8Array): Uint8Array {
+    if (this.formatVersion !== PACKED_FORMAT_VERSION_V2) return bytes;
+    if (
+      bytes.byteLength < OBJECT_MAGIC_LEN ||
+      bytes[0] !== 0x53 || // 'S'
+      bytes[1] !== 0x54 || // 'T'
+      bytes[2] !== 0x54 || // 'T'
+      bytes[3] !== 0x44 // 'D'
+    ) {
+      throw new Error('STT directory object: missing STTD magic (formatVersion 2)');
+    }
+    if (bytes[4] !== 2) {
+      throw new Error(
+        `STT directory object: unsupported object version ${bytes[4]} (this reader knows 2)`,
+      );
+    }
+    if (bytes[5] !== 0 || bytes[6] !== 0 || bytes[7] !== 0) {
+      throw new Error('STT directory object: reserved magic bytes must be zero');
+    }
+    return bytes.subarray(OBJECT_MAGIC_LEN);
+  }
+
   /** Map a decoded `DirectoryEntry` to the reader's internal `TileEntry`. */
   private toTileEntry(e: ReturnType<typeof decodeDirectory>[number]): TileEntry {
     return {
@@ -1118,12 +1384,31 @@ export class STTArchive {
       featureCount: e.featureCount,
       compression: this.packCompression,
       uncompressedSize: e.uncompressedSize,
+      crc32c: e.crc32c,
       temporalBucketMs: e.temporalBucketMs,
       coverTMin: e.coverTMin,
     };
   }
 
-  /** Insert entries into the (z/x/y → list) and (z/x/y/t → entry) maps. */
+  /**
+   * `tileEntryByKey` key: `z/x/y/t` qualified by the entry's temporal-LOD
+   * tag (`temporalBucketMs`, `'base'` when the column is absent). A
+   * temporal-LOD tile shares its `z/x/y/timeStart` with the base tile whose
+   * bucket starts at the same instant, so an unqualified key made the map
+   * last-write-wins across tiers — a LOD tile silently shadowed (or was
+   * shadowed by) its base twin.
+   */
+  private tileEntryKey(
+    z: number,
+    x: number,
+    y: number,
+    t: number,
+    bucketMs: number | undefined,
+  ): string {
+    return `${z}/${x}/${y}/${t}/${bucketMs ?? 'base'}`;
+  }
+
+  /** Insert entries into the (z/x/y → list) and tier-qualified key maps. */
   private mergeEntries(entries: TileEntry[]): void {
     for (const entry of entries) {
       const spatialKey = `${entry.zoom}/${entry.x}/${entry.y}`;
@@ -1134,7 +1419,7 @@ export class STTArchive {
       }
       list.push(entry);
       this.tileEntryByKey.set(
-        `${entry.zoom}/${entry.x}/${entry.y}/${entry.timeStart}`,
+        this.tileEntryKey(entry.zoom, entry.x, entry.y, entry.timeStart, entry.temporalBucketMs),
         entry,
       );
     }
@@ -1182,7 +1467,9 @@ export class STTArchive {
     const groups: Group[] = [];
     for (const i of pending) {
       const d = this.pageTable[i];
-      const start = this.rootLength + d.relOffset;
+      // Leaf offsets are relative to the end of the root frame; the object
+      // itself additionally opens with the v2 magic prelude when present.
+      const start = this.directoryDataStart + this.rootLength + d.relOffset;
       const end = start + d.length - 1;
       const cur = groups[groups.length - 1];
       if (cur && start - (cur.end + 1) <= this.coalesceGapBytes) {
@@ -1204,7 +1491,7 @@ export class STTArchive {
       );
       for (const i of g.members) {
         const d = this.pageTable![i];
-        const rel = this.rootLength + d.relOffset - g.start;
+        const rel = this.directoryDataStart + this.rootLength + d.relOffset - g.start;
         const frame = new Uint8Array(buf, rel, d.length);
         const entries = decodeDirectory(this.unframeDirectory(frame)).map((e) =>
           this.toTileEntry(e),
@@ -1344,6 +1631,15 @@ export class STTArchive {
    */
   private async ensurePagesForTiles(ids: TileId[], signal?: AbortSignal): Promise<void> {
     if (!this.paged || !this.pageTable || ids.length === 0) return;
+    // Upper prune bound (see below): the widest bucket any tile in this
+    // archive can have — the base bucket or any declared temporal-LOD tier.
+    // getMetadata() is a pure cache read here (the manifest was fetched by
+    // the getIndex() that made the archive paged in the first place).
+    const meta = await this.getMetadata();
+    const maxBucketMs = Math.max(
+      meta.temporalBucketMs ?? 3600 * 1000,
+      ...(meta.temporalLod ?? []).map((l) => l.bucketMs),
+    );
     const needed = new Set<number>();
     for (const id of ids) {
       const [minLon, minLat, maxLon, maxLat] = tileToLonLatBounds(id.z, id.x, id.y);
@@ -1353,19 +1649,73 @@ export class STTArchive {
         if (id.z < p.minZoom || id.z > p.maxZoom) continue;
         if (p.maxLon < minLon || maxLon < p.minLon) continue;
         if (p.maxLat < minLat || maxLat < p.minLat) continue;
-        if (p.tMax < id.t || p.tMin > id.t) continue;
+        // Point query by bucket key: `tMax` = max(timeEnd) bounds every
+        // contained bucket's end, so `tMax < t` is a sound prune. `tMin` is
+        // NOT a bound on bucket starts — it derives from
+        // min(coverTMin ?? timeStart) (spec §4.1) and a tile's coverTMin (its
+        // earliest feature start) can EXCEED its bucket's timeStart, so
+        // pruning on `tMin > t` missed tiles whose bucket starts before the
+        // leaf's covering bound (getTile({t: timeStart}) returned null).
+        if (p.tMax < id.t) continue;
+        // Sound UPPER prune. For the leaf holding the queried tile:
+        //   tMin = min over the leaf of (coverTMin ?? timeStart)   (spec §4.1)
+        //        <= (coverTMin ?? timeStart) of the queried tile.
+        // The queried tile is addressed by its bucket start, timeStart = id.t.
+        //   - coverTMin absent  → the contribution is timeStart = id.t.
+        //   - coverTMin present → coverTMin is the earliest feature
+        //     start_time in the tile (time-model §5), and every feature is
+        //     assigned to the bucket CONTAINING its start (time-model §3.1),
+        //     so every start < timeStart + bucketMs(tile); writers may only
+        //     move starts EARLIER (the covering delta is signed for clip
+        //     continuity), never past the bucket end. Hence
+        //     coverTMin < id.t + bucketMs(tile) <= id.t + maxBucketMs.
+        // Either way tMin <= id.t + maxBucketMs, so a leaf with
+        // tMin > id.t + maxBucketMs cannot hold the tile — without this
+        // bound, a point query near the dataset start faulted in EVERY
+        // spatially-matching later leaf.
+        if (p.tMin > id.t + maxBucketMs) continue;
         needed.add(i);
       }
     }
     if (needed.size > 0) await this.fetchAndMergePages([...needed], signal);
   }
 
-  /** Resolve a TileId to its directory entry. */
+  /**
+   * Resolve a TileId to its directory entry. An id carrying `bucketMs`
+   * (from {@link getTileIdsInBoundsForTemporalLod}) addresses that
+   * temporal-LOD tier; a plain id addresses the base tier — the two can
+   * share a `z/x/y/t`, so the lookup is tier-qualified end to end.
+   */
   private findTileEntry(id: TileId): TileEntry | undefined {
-    const exact = this.tileEntryByKey.get(`${id.z}/${id.x}/${id.y}/${id.t}`);
+    const base = this.baseTemporalBucketMs;
+    const want = id.bucketMs ?? base;
+    // Exact key: the entry may be tagged with its bucket width, or untagged
+    // (`'base'` — legacy archives and pre-LOD builds). An untagged entry IS
+    // a base-tier entry, so it also satisfies a base-bucket lookup.
+    const exact =
+      this.tileEntryByKey.get(this.tileEntryKey(id.z, id.x, id.y, id.t, want)) ??
+      (want === base
+        ? this.tileEntryByKey.get(this.tileEntryKey(id.z, id.x, id.y, id.t, undefined))
+        : undefined);
     if (exact) return exact;
     const entries = this.tileEntryIndex.get(`${id.z}/${id.x}/${id.y}`);
-    return entries?.find((e) => e.timeStart <= id.t && e.timeEnd >= id.t);
+    if (!entries) return undefined;
+    // Interval-scan fallback. Tier-filtered only when the archive declares
+    // a temporal-LOD pyramid — only then can two tiers alias one z/x/y/t
+    // (a base point query must not resolve to the coarse tile spanning it,
+    // and vice versa). Pyramid-less archives keep the historical unfiltered
+    // scan: there is exactly one tier to find, and some legacy fixtures tag
+    // entries with a bucket that differs from the manifest's
+    // `temporal_bucket_ms`.
+    if (!this.temporalLodDeclared) {
+      return entries.find((e) => e.timeStart <= id.t && e.timeEnd >= id.t);
+    }
+    return entries.find(
+      (e) =>
+        (e.temporalBucketMs ?? base) === want &&
+        e.timeStart <= id.t &&
+        e.timeEnd >= id.t,
+    );
   }
 
   /**
@@ -1381,7 +1731,11 @@ export class STTArchive {
   }
 
   private tileIdToKey(id: TileId): string {
-    return `${id.z}/${id.x}/${id.y}/${id.t}`;
+    // `@<bucketMs>` keeps a temporal-LOD tile's cache identity distinct from
+    // the base tile sharing its z/x/y/t; base ids keep the historical key.
+    return id.bucketMs !== undefined
+      ? `${id.z}/${id.x}/${id.y}/${id.t}@${id.bucketMs}`
+      : `${id.z}/${id.x}/${id.y}/${id.t}`;
   }
 
   /**
@@ -1393,15 +1747,32 @@ export class STTArchive {
    */
   private opfsKey(id: TileId): string | null {
     if (!this.archiveFingerprint) return null;
-    return `${this.url}::${id.z}/${id.x}/${id.y}/${id.t}::${this.archiveFingerprint}`;
+    return `${this.url}::${this.tileIdToKey(id)}::${this.archiveFingerprint}`;
   }
 
   /**
-   * Persist decompressed bytes to OPFS in the background. Decompressing the
-   * payload again on the main thread is wasted CPU on the cold path, but it
+   * Persist the decoder's own decompressed payload to OPFS in the
+   * background — the zero-extra-work path: the default decoders hand their
+   * decompressed bytes back with the tile (`DecodeArgs.onPayload`), so
+   * nothing is re-decompressed on the main thread. On every subsequent
+   * reload that same key skips both the HTTP fetch and the zstd decompress.
+   */
+  private async writeOpfsPayload(key: string, payload: Uint8Array): Promise<void> {
+    const cache = this.opfsCache;
+    if (!cache) return;
+    try {
+      await cache.set(key, payload);
+    } catch {
+      // Best-effort: an OPFS error must never break the data path.
+    }
+  }
+
+  /**
+   * FALLBACK OPFS write for decoders that don't hand their decompressed
+   * payload back (a custom `ArchiveOptions.decoder` ignoring `onPayload`):
+   * re-decompress on the main thread. Wasted CPU on the cold path, but it
    * runs AFTER the tile has been delivered to the caller — so it doesn't
-   * block any user-visible work. On every subsequent reload that same key
-   * skips both the HTTP fetch and the zstd decompress.
+   * block any user-visible work.
    */
   private async writeOpfsAsync(
     id: TileId,
@@ -1430,24 +1801,54 @@ export class STTArchive {
    * is still queued/running on a worker is dropped there instead of wasting
    * pool time on it. Optional: callers with no natural per-tile signal (rare)
    * simply get the pre-existing uncancellable behavior.
+   *
+   * `writeToOpfs` marks the network-miss call sites (fresh bytes worth
+   * persisting): after a successful decode the payload is written to OPFS in
+   * the background, reusing the decoder's own decompressed bytes when the
+   * decoder hands them back (`onPayload`) and falling back to a main-thread
+   * re-decompress for custom decoders that don't.
    */
   private async decodeBytes(
     id: TileId,
     entry: TileEntry,
     compressed: ArrayBuffer,
     signal?: AbortSignal,
+    writeToOpfs = false,
   ): Promise<Tile> {
     // The packed format has NO shared zstd dictionary: every blob is
     // independently zstd-compressed (`compress_zstd_with_dict(_, None)` on the
     // writer), so the fzstd browser path decodes every tile. There's nothing
     // to guard against here.
-    return this.getDecoder().decode({
+    const opfsKey = writeToOpfs && this.opfsCache ? this.opfsKey(id) : null;
+    let opfsPayload: Uint8Array | undefined;
+    const tile = await this.getPreparedDecoder().decode({
       id,
       timeRange: { start: entry.timeStart, end: entry.timeEnd },
       compressed,
       compression: entry.compression,
+      // Integrity (T1.4): the directory CRC-32C covers the compressed bytes;
+      // verified in the decoder (off main thread on the worker path) before
+      // decompression. `0` = "no checksum recorded" (see TileEntry.crc32c).
+      expectedCrc32c:
+        this.verifyChecksums && entry.crc32c ? entry.crc32c : undefined,
+      // Authority rule (spec §5.2): the manifest's declared version rides
+      // every decode so a mixed-version dataset fails loudly by name.
+      formatVersion: this.formatVersion,
+      onPayload: opfsKey
+        ? (payload) => {
+            opfsPayload = payload;
+          }
+        : undefined,
       signal,
     });
+    if (opfsKey) {
+      if (opfsPayload) {
+        void this.writeOpfsPayload(opfsKey, opfsPayload);
+      } else {
+        void this.writeOpfsAsync(id, entry, compressed.slice(0));
+      }
+    }
+    return this.applyIpcRetention(tile);
   }
 
   /**
@@ -1469,13 +1870,53 @@ export class STTArchive {
     // (the decoder protocol requires a transferable buffer).
     const buf = new ArrayBuffer(decompressed.byteLength);
     new Uint8Array(buf).set(decompressed);
-    return this.getDecoder().decode({
+    // No CRC verification here: the directory CRC covers COMPRESSED bytes,
+    // and this path starts from an already-decompressed OPFS payload. The
+    // OPFS fingerprint (content-addressed directory hash) covaries with the
+    // blob bytes, so a stale v1 payload MISSES rather than misparses; warm
+    // v2 payloads decode via the same registry as network payloads (§4.4).
+    const tile = await this.getPreparedDecoder().decode({
       id,
       timeRange: { start: entry.timeStart, end: entry.timeEnd },
       compressed: buf,
       compression: Compression.None,
+      formatVersion: this.formatVersion,
       signal,
     });
+    return this.applyIpcRetention(tile);
+  }
+
+  /**
+   * Apply the {@link ArchiveOptions.retainArrowIpc} policy to a freshly
+   * decoded tile. `'auto'` drops a layer's raw IPC reference (and any
+   * inline-decoded `arrowTable`, which pins the same buffers) only when NO
+   * extracted column is a view into the IPC buffer — for such layers
+   * (quantized/converted tiles) retention is pure memory overhead; for
+   * zero-copy layers dropping frees nothing, so the GeoArrow hand-off is
+   * kept. `true` keeps everything (pre-option behavior); `false` always
+   * drops. Dropped layers are flagged so `toGeoArrowTable()` can name the
+   * option in its error.
+   */
+  private applyIpcRetention(tile: Tile): Tile {
+    const mode = this.retainArrowIpc;
+    if (mode === true) return tile;
+    for (const layer of tile.layers) {
+      if (!layer.arrowIpc && !layer.arrowTable) continue;
+      // 'auto' is SEMANTIC, not aliasing-based: drop only for
+      // coordinate-quantized layers, whose tables are not literal GeoArrow
+      // (a generic consumer misreads Int32 grid indices as lon/lat — the
+      // hand-off was never spec-valid there), and keep everything else so
+      // `toGeoArrowTable()` stays available exactly where it is valid —
+      // including legacy unaligned frames whose columns are copies.
+      if (mode === 'auto' && !layer.coordinatesQuantized) {
+        continue;
+      }
+      layer.arrowIpc = undefined;
+      layer.arrowIpcProps = undefined;
+      layer.arrowTable = undefined;
+      layer.arrowIpcDropped = true;
+    }
+    return tile;
   }
 
   /** Fetch and decode a single tile. */
@@ -1490,7 +1931,15 @@ export class STTArchive {
     if (cached) {
       cached.lastAccess = Date.now();
       this.cacheStats.hits++;
-      return this.decodeBytes(id, entry, cached.bytes, options?.signal);
+      try {
+        return await this.decodeBytes(id, entry, cached.bytes, options?.signal);
+      } catch (err) {
+        if (isAbortError(err)) throw err;
+        // Poisoned cache entry (CRC mismatch / corrupt bytes): evict it and
+        // fall through ONCE to the network path — otherwise the poison would
+        // rethrow on every retry with no way to self-heal.
+        this.dropCachedBytes(key);
+      }
     }
 
     // OPFS lookup BEFORE the network. A hit returns decompressed bytes that
@@ -1518,13 +1967,9 @@ export class STTArchive {
       options?.fetchPriority
     );
     this.storeBytes(key, compressed);
-    const tile = await this.decodeBytes(id, entry, compressed, options?.signal);
-    // Fire-and-forget OPFS write. Slicing the buffer so any later mutation
-    // of `compressed` is independent.
-    if (this.opfsCache) {
-      void this.writeOpfsAsync(id, entry, compressed.slice(0));
-    }
-    return tile;
+    // Network miss → decode + fire-and-forget OPFS write (the decoder hands
+    // its decompressed payload back, so nothing is re-decompressed here).
+    return this.decodeBytes(id, entry, compressed, options?.signal, true);
   }
 
   /**
@@ -1842,10 +2287,22 @@ export class STTArchive {
         cached.lastAccess = Date.now();
         this.cacheStats.hits++;
         const idx = i;
+        const cacheKey = key;
         jobs.push(
-          this.decodeBytes(id, entry, cached.bytes, options?.signal).then((t) => {
-            deliver(idx, t);
-          })
+          this.decodeBytes(id, entry, cached.bytes, options?.signal).then(
+            (t) => {
+              deliver(idx, t);
+            },
+            (err) => {
+              // Same per-tile semantics as the network group path: one bad
+              // tile must not fail the whole batch. Evict the poisoned
+              // entry so the next request re-fetches instead of replaying
+              // the same corrupt bytes forever.
+              if (isAbortError(err)) throw err;
+              this.dropCachedBytes(cacheKey);
+              deliver(idx, null);
+            }
+          )
         );
       } else {
         this.cacheStats.misses++;
@@ -1874,9 +2331,18 @@ export class STTArchive {
         if (bytes) {
           this.opfsStats.hits++;
           jobs.push(
-            this.decodeDecompressed(p.id, p.entry, bytes, options?.signal).then((t) => {
-              deliver(p.index, t);
-            }),
+            this.decodeDecompressed(p.id, p.entry, bytes, options?.signal).then(
+              (t) => {
+                deliver(p.index, t);
+              },
+              (err) => {
+                // Disk-corrupted/truncated OPFS payloads reject the same
+                // way poisoned byteCache entries do — keep the per-tile
+                // null contract instead of failing the whole batch.
+                if (isAbortError(err)) throw err;
+                deliver(p.index, null);
+              }
+            ),
           );
         } else {
           this.opfsStats.misses++;
@@ -1980,14 +2446,14 @@ export class STTArchive {
               }
               try {
                 this.storeBytes(this.tileIdToKey(m.id), single);
-                deliver(m.index, await this.decodeBytes(m.id, m.entry, single, signal));
-                if (this.opfsCache) {
-                  void this.writeOpfsAsync(m.id, m.entry, single.slice(0));
-                }
+                deliver(m.index, await this.decodeBytes(m.id, m.entry, single, signal, true));
               } catch (decodeError) {
                 if (isAbortError(decodeError)) throw decodeError;
                 // Decode failure: same per-tile `null` semantics as a fetch
                 // failure (the bytes arrived but the payload is unusable).
+                // Evict what we just cached — a poisoned entry would reject
+                // every later batch from the cache-hit path.
+                this.dropCachedBytes(this.tileIdToKey(m.id));
               }
             }),
           );
@@ -1998,9 +2464,15 @@ export class STTArchive {
             const rel = m.entry.offset - group.start;
             const slice = buffer.slice(rel, rel + m.entry.length);
             this.storeBytes(this.tileIdToKey(m.id), slice);
-            deliver(m.index, await this.decodeBytes(m.id, m.entry, slice, signal));
-            if (this.opfsCache) {
-              void this.writeOpfsAsync(m.id, m.entry, slice.slice(0));
+            try {
+              deliver(m.index, await this.decodeBytes(m.id, m.entry, slice, signal, true));
+            } catch (decodeError) {
+              if (isAbortError(decodeError)) throw decodeError;
+              // Decode failure (e.g. a crc32c mismatch on one corrupt blob):
+              // per-tile `null`, same as the per-member fallback path — one
+              // bad tile must not fail its whole coalesced group. Evict what
+              // we just cached so the poison can't replay from cache hits.
+              this.dropCachedBytes(this.tileIdToKey(m.id));
             }
           })
         );
@@ -2036,6 +2508,20 @@ export class STTArchive {
     });
     this.currentCacheBytes += bytes.byteLength;
     this.evictIfNeeded();
+  }
+
+  /**
+   * Evict one cached compressed payload (poisoned-entry recovery). Bytes are
+   * cached BEFORE decode/CRC verification, so a corrupt blob would otherwise
+   * sit in the cache rejecting every future decode of that tile — dropping
+   * it lets the next request re-fetch and self-heal after transient
+   * corruption.
+   */
+  private dropCachedBytes(key: string): void {
+    const existing = this.byteCache.get(key);
+    if (!existing) return;
+    this.byteCache.delete(key);
+    this.currentCacheBytes -= existing.byteSize;
   }
 
   private evictIfNeeded(): void {
@@ -2141,9 +2627,11 @@ export class STTArchive {
         // bucket-edge `timeStart`), so a tile whose data is entirely AFTER the
         // window is skipped without a fetch. The pushed TileId still addresses
         // by `timeStart` (the bucket boundary) — covering tightens the *filter*,
-        // not the *address*.
+        // not the *address*. `bucketMs` stamps the id with its tier so every
+        // downstream key (directory lookup, byte/OPFS caches, tileset
+        // registries) stays distinct from the base tile sharing its z/x/y/t.
         if (e.timeEnd >= timeRange.start && (e.coverTMin ?? e.timeStart) <= timeRange.end) {
-          ids.push({ z: e.zoom, x: e.x, y: e.y, t: e.timeStart });
+          ids.push({ z: e.zoom, x: e.x, y: e.y, t: e.timeStart, bucketMs });
         }
       }
     }
@@ -2329,6 +2817,7 @@ export class STTArchive {
     return createSttTileSource(this);
   }
 }
+
 
 /** Web-Mercator tile coordinates covering a bounding box at a zoom. */
 function boundsToTiles(bounds: BoundingBox, zoom: number): [number, number][] {

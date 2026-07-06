@@ -5,7 +5,8 @@
 /**
  * Tile decoding: turn an STT tile payload into deck.gl-ready binary features.
  *
- * A tile payload is the *layer frame* produced by the Rust builder:
+ * A **formatVersion-1** tile payload is the *layer frame* produced by the
+ * Rust builder:
  *
  * ```text
  * [u16 layerCount | ALIGNED_FRAME_FLAG]
@@ -20,6 +21,16 @@
  * position after `ipcLen`. Frames without the flag (all archives written
  * before the flag existed) carry no padding and parse exactly as before.
  *
+ * A **formatVersion-2** payload opens with the `0xFFFF` escape (unreachable
+ * in v1, whose aligned path caps the count at `0x7fff`) and carries the
+ * sectioned, template-referencing frame of packed spec §5.2: per layer a
+ * schema reference (inline section or 16-byte blake3-128 hash resolved
+ * against the manifest's template registry), a skippable section TOC, the
+ * canonical-JSON `TILE_META` section, and the Arrow IPC stream **tails**
+ * (dictionary batches + record batch + EOS) for the CORE and optional PROPS
+ * batches. The reader splices `concat(template, tail)` back into a stock
+ * Arrow stream — see {@link decodeTile}'s options for the registry plumbing.
+ *
  * Each layer's Arrow IPC stream holds one RecordBatch whose `geometry` column
  * is GeoArrow-encoded (interleaved f64 coordinates). We extract the underlying
  * typed-array buffers into {@link BinaryFeatures} — the columnar shape deck.gl
@@ -27,16 +38,20 @@
  */
 
 import {
+  makeData,
   RecordBatch,
   Schema,
+  Struct,
   Table,
   tableFromIPC,
   Type as ArrowType,
+  type Field,
   type Vector,
 } from 'apache-arrow';
 import {
   type Tile,
   type TileId,
+  type TileMetaJson,
   type TimeRange,
   type Layer,
   type BinaryFeatures,
@@ -92,6 +107,355 @@ function parseLayerFrame(payload: Uint8Array): RawLayer[] {
     if (aligned) pos += (8 - (pos & 7)) & 7;
     const ipc = readBytes(ipcLen);
     layers.push({ name, ipc });
+  }
+  return layers;
+}
+
+// ─── Layer frame v2 (packed formatVersion 2, spec §5.2) ─────────────────────
+
+/** Leading u16 escape of the v2 sectioned frame (spec §5.2). */
+const FRAME_V2_ESCAPE = 0xffff;
+/** `frame_version` byte of the v2 frame. */
+const FRAME_V2_VERSION = 2;
+
+// Section tag registry (unknown tags are SKIPPABLE via their TOC length).
+const SECTION_INLINE_SCHEMA_CORE = 0x01;
+const SECTION_TILE_META = 0x02;
+const SECTION_CORE_BATCH = 0x03;
+const SECTION_INLINE_SCHEMA_PROPS = 0x04;
+const SECTION_PROPS_BATCH = 0x05;
+
+// Per-layer schema reference kinds.
+const REF_KIND_INLINE = 0;
+const REF_KIND_TEMPLATE_HASH = 1;
+const REF_KIND_NO_PROPS = 2;
+
+/**
+ * The dataset's schema-template registry: blake3-128 hex (32 lowercase hex
+ * chars, the string form of the 16-byte hash a v2 frame embeds) → the raw
+ * template bytes. Built (and hash-validated) from `manifest.schemas` at
+ * archive open; v2 frames with `ref_kind 1` resolve against it. See packed
+ * spec §3.2 and the worker-distribution contract in `tile-decoder.ts`.
+ */
+export type TemplateRegistry = Map<string, Uint8Array>;
+
+/** Options for {@link decodeTile} (all optional — v1 decoding needs none). */
+export interface DecodeTileOptions {
+  /**
+   * Schema-template registry for formatVersion-2 frames (`manifest.schemas`,
+   * validated at open). Required to decode v2 frames that reference
+   * templates by hash; self-contained v2 frames (inline schema sections)
+   * and every v1 frame decode without it.
+   */
+  templates?: TemplateRegistry;
+  /**
+   * The dataset's declared `manifest.formatVersion`. When set, it is
+   * enforced against the payload (spec §5.2 authority rule): a v2 frame
+   * reached through a v1-declared manifest is a hard error, and vice versa
+   * — the frame escape is defense-in-depth, never a negotiation channel.
+   * Omitted (standalone `decodeTile` callers), the payload is sniffed.
+   */
+  formatVersion?: number;
+}
+
+/** One layer parsed out of a v2 frame: spliced IPC streams + TILE_META. */
+interface RawLayerV2 {
+  name: string;
+  /** `concat(core template, CORE_BATCH tail)` — a stock Arrow IPC stream. */
+  coreIpc: Uint8Array;
+  /** As above for the PROPS batch; absent when `ref_kind_props = 2`. */
+  propsIpc?: Uint8Array;
+  tileMeta: TileMetaJson;
+}
+
+/** 16 raw hash bytes → 32 lowercase hex chars (the registry key form). */
+function hashBytesToHex(bytes: Uint8Array): string {
+  let hex = '';
+  for (let i = 0; i < bytes.length; i++) hex += bytes[i].toString(16).padStart(2, '0');
+  return hex;
+}
+
+/**
+ * Splice a schema template onto a `*_BATCH` section tail, with the normative
+ * guards of spec §5.2.1: both parts MUST begin with the `0xFFFFFFFF`
+ * encapsulation/continuation marker. Without the guard, stray zero bytes
+ * parse as a legacy 4-byte end-of-stream and the tile silently decodes
+ * EMPTY (arrow-rs) or silently loses zero-copy (arrow-js) — the exact
+ * failure the spike proved, so it must be a loud, named error instead.
+ */
+function spliceIpc(template: Uint8Array, tail: Uint8Array, what: string): Uint8Array {
+  const startsWithContinuation = (b: Uint8Array): boolean =>
+    b.length >= 4 && b[0] === 0xff && b[1] === 0xff && b[2] === 0xff && b[3] === 0xff;
+  if (!startsWithContinuation(template)) {
+    throw new Error(
+      `${what}: schema template does not start with an encapsulated Arrow message`,
+    );
+  }
+  if (!startsWithContinuation(tail)) {
+    throw new Error(
+      `${what}: batch section does not start with the 0xFFFFFFFF continuation marker ` +
+        '(corrupt or misaligned section — a stray-zero prefix would otherwise silently ' +
+        'decode as an EMPTY tile)',
+    );
+  }
+  const out = new Uint8Array(template.length + tail.length);
+  out.set(template, 0);
+  out.set(tail, template.length);
+  return out;
+}
+
+/** Resolve a v2 layer's schema template: inline section or registry lookup. */
+function resolveV2Template(
+  refKind: number,
+  hashHex: string | undefined,
+  inline: Uint8Array | undefined,
+  templates: TemplateRegistry | undefined,
+  what: string,
+): Uint8Array {
+  if (refKind === REF_KIND_INLINE) {
+    if (!inline) {
+      throw new Error(`${what}: inline schema section missing from the frame`);
+    }
+    return inline;
+  }
+  // REF_KIND_TEMPLATE_HASH — the caller already rejected other kinds.
+  if (!templates) {
+    // NEVER a silent empty tile: a v2 hash reference without the registry is
+    // a plumbing failure (decode reached before the manifest's registry was
+    // distributed) and must say so by name.
+    throw new Error(
+      `${what}: frame references schema template ${hashHex} but no template registry ` +
+        'is available — a formatVersion-2 dataset must be opened through its manifest ' +
+        '(the registry is built from manifest.schemas at open and re-sent to every ' +
+        'decode worker on spawn)',
+    );
+  }
+  const template = templates.get(hashHex!);
+  if (!template) {
+    throw new Error(
+      `${what}: schema template ${hashHex} is not in the dataset's registry ` +
+        '(manifest.schemas is incomplete or the frame is corrupt)',
+    );
+  }
+  return template;
+}
+
+/**
+ * Validate a freshly-parsed `TILE_META` object against the spec §5.2.2 key
+ * shapes. Parseable-but-malformed JSON (`t0` as a string, a `qa` affine as
+ * an object, a one-element `vt`, …) would otherwise flow through
+ * {@link resolveMetaFromTileMeta} into extraction as silent NaNs — wrong
+ * times/values with no error anywhere. Unknown keys stay ignored (the
+ * additive contract); the KNOWN keys must carry their declared shape.
+ * `label` names the tile + layer, and every error names the offending key.
+ */
+function validateTileMeta(meta: unknown, label: string): TileMetaJson {
+  const fail = (what: string, value: unknown): never => {
+    throw new Error(
+      `${label}: malformed TILE_META — ${what}, got ${JSON.stringify(value)}`,
+    );
+  };
+  const isFinite_ = (v: unknown): v is number =>
+    typeof v === 'number' && Number.isFinite(v);
+  const isAffinePair = (v: unknown): v is [number, number] =>
+    Array.isArray(v) && v.length === 2 && isFinite_(v[0]) && isFinite_(v[1]);
+
+  if (meta === null || typeof meta !== 'object' || Array.isArray(meta)) {
+    fail('the section must be a JSON object', meta);
+  }
+  const m = meta as Record<string, unknown>;
+  if (m.t0 !== undefined && !isFinite_(m.t0)) {
+    fail("'t0' must be a finite number (Unix ms)", m.t0);
+  }
+  if (m.vt !== undefined && !isAffinePair(m.vt)) {
+    fail("'vt' must be a [origin_ms, step_ms] pair of finite numbers", m.vt);
+  }
+  if (m.vb !== undefined && !isFinite_(m.vb)) {
+    fail("'vb' must be a finite number", m.vb);
+  }
+  if (m.sorted !== undefined && typeof m.sorted !== 'boolean') {
+    fail("'sorted' must be a boolean", m.sorted);
+  }
+  if (m.qa !== undefined) {
+    if (m.qa === null || typeof m.qa !== 'object' || Array.isArray(m.qa)) {
+      fail("'qa' must be an object of column → [o, s] pairs", m.qa);
+    }
+    for (const [column, affine] of Object.entries(m.qa as object)) {
+      if (!isAffinePair(affine)) {
+        fail(`'qa' affine for column "${column}" must be an [o, s] pair of finite numbers`, affine);
+      }
+    }
+  }
+  return m as TileMetaJson;
+}
+
+/**
+ * Parse a v2 sectioned layer frame (spec §5.2) into per-layer spliced Arrow
+ * IPC streams + TILE_META. `tileLabel` names the tile in every error.
+ */
+function parseLayerFrameV2(
+  payload: Uint8Array,
+  tileLabel: string,
+  templates: TemplateRegistry | undefined,
+): RawLayerV2[] {
+  const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
+  let pos = 0;
+  const readU8 = () => {
+    if (pos + 1 > payload.byteLength) {
+      throw new Error(`${tileLabel}: v2 layer frame truncated`);
+    }
+    return payload[pos++];
+  };
+  const readU16 = () => {
+    if (pos + 2 > payload.byteLength) {
+      throw new Error(`${tileLabel}: v2 layer frame truncated`);
+    }
+    const v = view.getUint16(pos, true);
+    pos += 2;
+    return v;
+  };
+  const readU32 = () => {
+    if (pos + 4 > payload.byteLength) {
+      throw new Error(`${tileLabel}: v2 layer frame truncated`);
+    }
+    const v = view.getUint32(pos, true);
+    pos += 4;
+    return v;
+  };
+  const readBytes = (len: number) => {
+    if (pos + len > payload.byteLength) {
+      throw new Error(`${tileLabel}: v2 layer frame truncated`);
+    }
+    const slice = payload.subarray(pos, pos + len);
+    pos += len;
+    return slice;
+  };
+  /** Skip the derived pad to the next 8-byte boundary (never stored). */
+  const skipPad = () => {
+    readBytes((8 - (pos & 7)) & 7);
+  };
+
+  const escape = readU16();
+  if (escape !== FRAME_V2_ESCAPE) {
+    // Callers dispatch on the escape; this is belt-and-braces.
+    throw new Error(`${tileLabel}: not a v2 layer frame`);
+  }
+  const frameVersion = readU8();
+  if (frameVersion !== FRAME_V2_VERSION) {
+    throw new Error(
+      `${tileLabel}: unsupported layer-frame version ${frameVersion} (this reader knows v2)`,
+    );
+  }
+  const flags = readU8();
+  if (flags !== 0) {
+    throw new Error(
+      `${tileLabel}: reserved v2 layer-frame flags must be 0, got 0x${flags.toString(16)}`,
+    );
+  }
+  const count = readU16();
+  const layers: RawLayerV2[] = [];
+  for (let i = 0; i < count; i++) {
+    const nameLen = readU16();
+    const name = new TextDecoder().decode(readBytes(nameLen));
+    const label = `tile ${tileLabel} layer '${name}'`;
+
+    const readRef = (what: string): { kind: number; hashHex?: string } => {
+      const kind = readU8();
+      if (kind === REF_KIND_TEMPLATE_HASH) {
+        return { kind, hashHex: hashBytesToHex(readBytes(16)) };
+      }
+      if (kind === REF_KIND_INLINE || kind === REF_KIND_NO_PROPS) {
+        return { kind };
+      }
+      throw new Error(
+        `${label} ${what}: unknown schema ref_kind ${kind} (this reader knows 0..=2)`,
+      );
+    };
+    const core = readRef('core');
+    if (core.kind === REF_KIND_NO_PROPS) {
+      throw new Error(
+        `${label}: ref_kind_core 2 is invalid (every layer has a CORE batch)`,
+      );
+    }
+    const props = readRef('props');
+
+    const sectionCount = readU8();
+    const toc: Array<{ tag: number; length: number }> = [];
+    for (let s = 0; s < sectionCount; s++) {
+      const tag = readU8();
+      const length = readU32();
+      toc.push({ tag, length });
+    }
+    skipPad();
+
+    // Unknown tags land in the map like any other (harmlessly unused) —
+    // skipping happens by never consulting them, exactly the additive
+    // evolution the TOC exists for. Duplicates are frame corruption.
+    const sections = new Map<number, Uint8Array>();
+    for (const { tag, length } of toc) {
+      const bytes = readBytes(length);
+      skipPad();
+      if (sections.has(tag)) {
+        throw new Error(
+          `${label}: duplicate section tag 0x${tag.toString(16)} in the TOC`,
+        );
+      }
+      sections.set(tag, bytes);
+    }
+
+    // TILE_META: canonical JSON; unknown keys ignored (additive contract).
+    let tileMeta: TileMetaJson = {};
+    const tileMetaBytes = sections.get(SECTION_TILE_META);
+    if (tileMetaBytes) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(new TextDecoder().decode(tileMetaBytes));
+      } catch (err) {
+        throw new Error(
+          `${label}: TILE_META JSON decode failed: ${(err as Error).message}`,
+        );
+      }
+      // Shape gate (spec §5.2.2): reject malformed-but-parseable JSON HERE,
+      // loudly and by key — never as downstream NaN times/values.
+      tileMeta = validateTileMeta(parsed, label);
+    }
+
+    const coreTemplate = resolveV2Template(
+      core.kind,
+      core.hashHex,
+      sections.get(SECTION_INLINE_SCHEMA_CORE),
+      templates,
+      `${label} core`,
+    );
+    const coreTail = sections.get(SECTION_CORE_BATCH);
+    if (!coreTail) {
+      throw new Error(`${label}: CORE_BATCH section missing`);
+    }
+    const coreIpc = spliceIpc(coreTemplate, coreTail, `${label} core`);
+
+    let propsIpc: Uint8Array | undefined;
+    if (props.kind === REF_KIND_NO_PROPS) {
+      if (sections.has(SECTION_PROPS_BATCH)) {
+        throw new Error(
+          `${label}: PROPS_BATCH section present but ref_kind_props declares no props`,
+        );
+      }
+    } else {
+      const propsTemplate = resolveV2Template(
+        props.kind,
+        props.hashHex,
+        sections.get(SECTION_INLINE_SCHEMA_PROPS),
+        templates,
+        `${label} props`,
+      );
+      const propsTail = sections.get(SECTION_PROPS_BATCH);
+      if (!propsTail) {
+        throw new Error(`${label}: PROPS_BATCH section missing`);
+      }
+      propsIpc = spliceIpc(propsTemplate, propsTail, `${label} props`);
+    }
+
+    layers.push({ name, coreIpc, propsIpc, tileMeta });
   }
   return layers;
 }
@@ -155,6 +519,15 @@ function warnMalformedQuantMetaOnce(key: string, message: string, err: unknown):
   if (warnedMalformedQuantMeta.has(key)) return;
   warnedMalformedQuantMeta.add(key);
   console.warn(message, err);
+}
+
+/**
+ * Test-only: clear the module-level "warned once" dedup set so a `beforeEach`
+ * can isolate the "warns exactly once" assertions from any earlier case in the
+ * same worker that tripped the same metadata key.
+ */
+export function _resetQuantWarnings(): void {
+  warnedMalformedQuantMeta.clear();
 }
 
 /**
@@ -339,8 +712,234 @@ function extractVertexFloats(vec: Vector | null): Float32Array | undefined {
   return out;
 }
 
+/**
+ * Per-tile-varying metadata, RESOLVED to one shape before extraction — the
+ * convergence point of the two wire sources:
+ *
+ * - **v1**: Arrow schema/field metadata (`stt:time_offset_ms`,
+ *   `stt:vertex_time_*`, `stt:vertex_value_buckets`, per-field `stt:qa`) via
+ *   {@link resolveMetaFromSchema};
+ * - **v2**: the frame's `TILE_META` section (`t0` / `vt` / `vb` / `qa` /
+ *   `sorted`) via {@link resolveMetaFromTileMeta} — v2 templates carry only
+ *   dataset-constant metadata, so the schema copies are ABSENT by design.
+ *
+ * `tableToBinaryFeatures` reads only this object, so the extraction paths
+ * cannot fork between the two formats.
+ */
+interface ResolvedTileMeta {
+  /**
+   * Baked minimum feature start-time (Unix ms). `undefined` → the extractor
+   * falls back to the exact min-scan over the start-time column (older v1
+   * tiles / v2 tiles with no start-time column).
+   */
+  timeOffset?: number;
+  /** Vertex-time u16-delta origin (ms). 0 when absolute Int64 vertex times. */
+  vertexTimeOrigin: number;
+  /** Vertex-time u16-delta step (ms). 1 when absolute Int64 vertex times. */
+  vertexTimeStep: number;
+  /** Bucket count of the vertex-value matrix; 0 = no matrix on this tile. */
+  vertexValueBuckets: number;
+  /** Attribute-quantization affines (`value = o + q*s`) per property column. */
+  qa: Map<string, { o: number; s: number }>;
+  /** v2 `TILE_META.sorted`: rows stable-sorted by `start_time`. v1: absent. */
+  sorted?: boolean;
+}
+
+/**
+ * Resolve the per-tile metadata from a v1 layer's Arrow schema — the exact
+ * reads `tableToBinaryFeatures` historically did inline, hoisted so v1 and
+ * v2 converge on {@link ResolvedTileMeta} before extraction.
+ */
+function resolveMetaFromSchema(table: Table): ResolvedTileMeta {
+  // Fast path: the builder can bake the global start-time min into schema
+  // metadata (`stt:time_offset_ms`), letting the extractor skip the min-scan
+  // pass over the whole start-time column. Absent (older tiles / builder not
+  // yet emitting it) → undefined → the extractor's min-scan fallback.
+  const baked = table.schema.metadata.get('stt:time_offset_ms');
+  const timeOffset =
+    baked != null && baked !== '' ? Number(BigInt(baked)) : undefined;
+
+  const qa = new Map<string, { o: number; s: number }>();
+  for (const field of table.schema.fields) {
+    const qaRaw = field.metadata.get(STT_QUANT_ATTR_META_KEY);
+    if (!qaRaw) continue;
+    try {
+      const parsed = JSON.parse(qaRaw);
+      qa.set(field.name, { o: parsed.o, s: parsed.s });
+    } catch (err) {
+      // Malformed affine — record identity (o=0,s=1) so the column decodes
+      // as raw fixed-point ints, mirroring the pre-resolve behavior.
+      warnMalformedQuantMetaOnce(
+        `${STT_QUANT_ATTR_META_KEY}:${field.name}`,
+        `[stt] malformed ${STT_QUANT_ATTR_META_KEY} affine JSON on property ` +
+          `column "${field.name}" — values will decode as raw fixed-point ints:`,
+        err,
+      );
+      qa.set(field.name, { o: 0, s: 1 });
+    }
+  }
+
+  // v3 layers carry the origin/step pair as schema metadata; v2 layers (and
+  // v3 layers with the i64 fallback) leave them absent, which we treat as
+  // (origin=0, step=1) so the delta-vs-absolute branch still produces
+  // correct numbers (the Int64 path ignores both).
+  return {
+    timeOffset,
+    vertexTimeOrigin: Number(table.schema.metadata.get('stt:vertex_time_origin_ms') ?? 0),
+    vertexTimeStep: Number(table.schema.metadata.get('stt:vertex_time_step_ms') ?? 1),
+    vertexValueBuckets: Number(table.schema.metadata.get('stt:vertex_value_buckets') ?? 0),
+    qa,
+  };
+}
+
+/**
+ * Resolve the per-tile metadata from a v2 frame's `TILE_META` section.
+ * Presence rules (spec §5.2.2): a key is present iff the feature is — an
+ * absent `qa` column key means not-quantized, absent `t0` means no
+ * start-time column (→ min-scan fallback yields 0 on an empty column),
+ * absent `vt` means absolute Int64 vertex times.
+ */
+function resolveMetaFromTileMeta(meta: TileMetaJson): ResolvedTileMeta {
+  const qa = new Map<string, { o: number; s: number }>();
+  if (meta.qa) {
+    for (const [name, affine] of Object.entries(meta.qa)) {
+      qa.set(name, { o: affine[0], s: affine[1] });
+    }
+  }
+  return {
+    timeOffset: meta.t0,
+    vertexTimeOrigin: meta.vt ? meta.vt[0] : 0,
+    vertexTimeStep: meta.vt ? meta.vt[1] : 1,
+    vertexValueBuckets: meta.vb ?? 0,
+    qa,
+    sorted: meta.sorted,
+  };
+}
+
+/**
+ * Mirror Rust's `{:.17e}` float formatting (`AttrQuant::to_json`): one
+ * integer digit, 17 fractional digits, exponent with no `+` sign or zero
+ * padding — full f64 round-trip precision, byte-identical to the v1
+ * writer's field metadata so decode-side consumers can't tell the formats
+ * apart even at the string level.
+ */
+function rustExp17(v: number): string {
+  return v.toExponential(17).replace('e+', 'e');
+}
+
+/**
+ * The schema-level metadata entries a v2 `TILE_META` re-injects, with the
+ * exact v1 assembler formatting (integer `to_string()`); presence mirrors
+ * the section's (an absent key stays absent, exactly like Rust's
+ * `merge_v2_layer`). `sorted` has no v1 counterpart and is never injected.
+ */
+function tileMetaSchemaEntries(meta: TileMetaJson): Array<[string, string]> {
+  const entries: Array<[string, string]> = [];
+  if (meta.t0 !== undefined) entries.push(['stt:time_offset_ms', String(meta.t0)]);
+  if (meta.vt) {
+    entries.push(['stt:vertex_time_origin_ms', String(meta.vt[0])]);
+    entries.push(['stt:vertex_time_step_ms', String(meta.vt[1])]);
+  }
+  if (meta.vb !== undefined) entries.push(['stt:vertex_value_buckets', String(meta.vb)]);
+  return entries;
+}
+
+/**
+ * Re-inject a hoisted attribute-quant affine onto its property field
+ * (v1 `stt:qa` JSON shape `{"o":..,"s":..}`, byte-identical formatting).
+ */
+function withQaFieldMetadata(field: Field, qa: TileMetaJson['qa']): Field {
+  const affine = qa?.[field.name];
+  if (!affine) return field;
+  return field.clone({
+    metadata: new Map([
+      ...field.metadata,
+      [
+        STT_QUANT_ATTR_META_KEY,
+        `{"o":${rustExp17(affine[0])},"s":${rustExp17(affine[1])}}`,
+      ],
+    ]),
+  });
+}
+
+/**
+ * Merge a v2 layer's decoded CORE and PROPS tables back into ONE table —
+ * the v1-shaped record batch every consumer downstream of decode sees, so
+ * the core/props section split stays invisible (design §4.1). Zero-copy:
+ * the merged batch reuses both source batches' column `Data` children.
+ *
+ * The merged schema carries the union of both schemas' (dataset-constant)
+ * metadata PLUS the `TILE_META`-hoisted per-tile values re-injected with
+ * the exact v1 formatting (per-field `stt:qa`, schema-level
+ * `stt:time_offset_ms` / `stt:vertex_time_*` / `stt:vertex_value_buckets`)
+ * — mirroring Rust's `merge_v2_layer`, so the `toGeoArrowTable()` hand-off
+ * carries every `stt:*` key a v1 table does.
+ */
+function mergeCorePropsTables(
+  core: Table,
+  props: Table,
+  meta: TileMetaJson,
+  what: string,
+): Table {
+  if (props.numRows !== core.numRows) {
+    throw new Error(
+      `${what}: CORE/PROPS row counts disagree: ${core.numRows} vs ${props.numRows}`,
+    );
+  }
+  const coreBatch = core.batches[0];
+  const propsBatch = props.batches[0];
+  if (!coreBatch || !propsBatch || core.batches.length !== 1 || props.batches.length !== 1) {
+    throw new Error(
+      `${what}: expected exactly one record batch per spliced stream ` +
+        `(got ${core.batches.length} core / ${props.batches.length} props)`,
+    );
+  }
+  // Attribute-quant affines only ever land on property columns (reserved
+  // CORE columns are never attr-quantized), matching merge_v2_layer.
+  const fields = [
+    ...core.schema.fields,
+    ...props.schema.fields.map((f) => withQaFieldMetadata(f, meta.qa)),
+  ];
+  const metadata = new Map([
+    ...core.schema.metadata,
+    ...props.schema.metadata,
+    ...tileMetaSchemaEntries(meta),
+  ]);
+  // Dictionary columns only occur among property columns (reserved CORE
+  // columns are never dictionaries), so the props schema's dictionary table
+  // carries over unchanged; the per-column dictionaries themselves ride the
+  // column `Data` and survive the merge regardless.
+  const schema = new Schema(fields, metadata, props.schema.dictionaries);
+  const data = makeData({
+    type: new Struct(fields),
+    length: coreBatch.numRows,
+    nullCount: 0,
+    children: [...coreBatch.data.children, ...propsBatch.data.children],
+  });
+  return new Table(schema, [new RecordBatch(schema, data)]);
+}
+
+/**
+ * The no-props (`ref_kind_props = 2`) counterpart of the re-injection in
+ * {@link mergeCorePropsTables}: rebuild the CORE table's schema with the
+ * `TILE_META` schema-level keys folded in (Rust's `merge_v2_layer` runs the
+ * same injection with `props = None`). Zero-copy — the record-batch `Data`
+ * is reused; returns the input table untouched when there is nothing to
+ * inject.
+ */
+function injectTileMetaIntoCoreTable(core: Table, meta: TileMetaJson): Table {
+  const entries = tileMetaSchemaEntries(meta);
+  if (entries.length === 0) return core;
+  const metadata = new Map([...core.schema.metadata, ...entries]);
+  const schema = new Schema(core.schema.fields, metadata, core.schema.dictionaries);
+  return new Table(
+    schema,
+    core.batches.map((b) => new RecordBatch(schema, b.data)),
+  );
+}
+
 /** Convert one Arrow RecordBatch table into deck.gl binary features. */
-function tableToBinaryFeatures(table: Table): BinaryFeatures {
+function tableToBinaryFeatures(table: Table, meta: ResolvedTileMeta): BinaryFeatures {
   const kind = geometryKind(table);
   const featureCount = table.numRows;
 
@@ -371,13 +970,12 @@ function tableToBinaryFeatures(table: Table): BinaryFeatures {
     | BigInt64Array
     | undefined;
   let timeOffset = 0;
-  // Fast path: the builder can bake the global start-time min into schema
-  // metadata (`stt:time_offset_ms`), letting us skip the min-scan pass over
-  // the whole start-time column. Absent (older tiles / builder not yet
-  // emitting it) → fall back to the exact same min-scan as before.
-  const bakedTimeOffset = table.schema.metadata.get('stt:time_offset_ms');
-  if (bakedTimeOffset != null && bakedTimeOffset !== '') {
-    timeOffset = Number(BigInt(bakedTimeOffset));
+  // Fast path: the resolved meta carries the baked global start-time min
+  // (v1 `stt:time_offset_ms` / v2 `TILE_META.t0`), letting us skip the
+  // min-scan pass over the whole start-time column. Absent (older tiles /
+  // no start-time column) → fall back to the exact same min-scan as before.
+  if (meta.timeOffset !== undefined) {
+    timeOffset = meta.timeOffset;
   } else if (startRaw && startRaw.length > 0) {
     let min = Number(startRaw[0]);
     for (let i = 1; i < startRaw.length; i++) {
@@ -406,17 +1004,15 @@ function tableToBinaryFeatures(table: Table): BinaryFeatures {
   );
 
   // --- per-vertex times ---
-  // v3 layers carry the origin/step pair as schema metadata; v2 layers
-  // (and v3 layers with the i64 fallback) leave them absent, which we
-  // treat as (origin=0, step=1) so the delta-vs-absolute branch still
-  // produces correct numbers (Int64 path ignores both).
-  const origin = Number(table.schema.metadata.get('stt:vertex_time_origin_ms') ?? 0);
-  const step = Number(table.schema.metadata.get('stt:vertex_time_step_ms') ?? 1);
+  // The u16-delta origin/step pair rides the resolved meta (v1 schema
+  // metadata / v2 TILE_META `vt`); absent → (origin=0, step=1) so the
+  // delta-vs-absolute branch still produces correct numbers (the Int64
+  // path ignores both).
   const vertexTimestamps = extractVertexTimes(
     table.getChild('vertex_time') ?? null,
     timeOffset,
-    origin,
-    step,
+    meta.vertexTimeOrigin,
+    meta.vertexTimeStep,
   );
 
   // --- per-vertex scalar values (e.g. SST) ---
@@ -427,14 +1023,13 @@ function tableToBinaryFeatures(table: Table): BinaryFeatures {
   // numBuckets). extractVertexFloats concatenates features in the same order
   // as `positions`, so the result is globally vertex-major:
   // matrix[globalVertex * numBuckets + bucket]. The renderer selects the
-  // active bucket column from the playhead. `num_buckets` rides schema
-  // metadata; absent → 0 (no matrix on this tile).
+  // active bucket column from the playhead. The bucket count rides the
+  // resolved meta (v1 schema metadata / v2 TILE_META `vb`); absent → 0
+  // (no matrix on this tile).
   const vertexValueMatrix = extractVertexFloats(
     table.getChild('vertex_value_matrix') ?? null,
   );
-  const vertexValueBuckets = Number(
-    table.schema.metadata.get('stt:vertex_value_buckets') ?? 0,
-  );
+  const vertexValueBuckets = meta.vertexValueBuckets;
 
   // --- pre-baked triangle indices (MLT-style polygon meshes) ---
   // The Rust writer stores feature-LOCAL indices so we shift each feature's
@@ -566,39 +1161,26 @@ function tableToBinaryFeatures(table: Table): BinaryFeatures {
       categoricalProps[field.name] = { indices, categories };
     } else {
       // Numeric: f64 column down-converted to f32 for GPU upload. A column
-      // flagged with the attribute-quant affine (`stt:qa`) ships as fixed-point
+      // with an attribute-quant affine (v1 `stt:qa` field metadata / v2
+      // TILE_META `qa`, both resolved into `meta.qa`) ships as fixed-point
       // ints (UInt16/Int32); reconstruct `value = o + q*s` — mirrors
       // `arrow_tile.rs`'s `AttrQuant`, the property-column sibling of the
       // geometry coordinate quantization above.
-      const qaRaw = field.metadata.get(STT_QUANT_ATTR_META_KEY);
+      const qaAffine = meta.qa.get(field.name);
       const raw = vec.toArray() as
         | Float64Array
         | Float32Array
         | Uint16Array
         | Int32Array;
-      if (!qaRaw && raw instanceof Float32Array && raw.length === featureCount) {
+      if (!qaAffine && raw instanceof Float32Array && raw.length === featureCount) {
         // Already the GPU upload type and no fixed-point affine to undo: hand
         // the Arrow buffer straight through, skipping the f64→f32 copy loop.
         // (It shares the IPC buffer the worker transfers, like `positions`.)
         numericProps[field.name] = raw;
       } else {
         const arr = new Float32Array(featureCount);
-        if (qaRaw) {
-          let o = 0;
-          let s = 1;
-          try {
-            const qa = JSON.parse(qaRaw);
-            o = qa.o;
-            s = qa.s;
-          } catch (err) {
-            // Malformed affine — fall through as identity (o=0,s=1).
-            warnMalformedQuantMetaOnce(
-              `${STT_QUANT_ATTR_META_KEY}:${field.name}`,
-              `[stt] malformed ${STT_QUANT_ATTR_META_KEY} affine JSON on property ` +
-                `column "${field.name}" — values will decode as raw fixed-point ints:`,
-              err,
-            );
-          }
+        if (qaAffine) {
+          const { o, s } = qaAffine;
           for (let i = 0; i < featureCount; i++) arr[i] = o + Number(raw[i]) * s;
         } else {
           for (let i = 0; i < featureCount; i++) arr[i] = Number(raw[i]);
@@ -628,11 +1210,18 @@ function tableToBinaryFeatures(table: Table): BinaryFeatures {
     numericProps,
     categoricalProps,
     vectorProps,
+    timesSorted: meta.sorted,
   };
 }
 
 /**
  * Decode an uncompressed tile payload into a {@link Tile}.
+ *
+ * Accepts both layer-frame shapes: the v1 frame (aligned and legacy,
+ * byte-for-byte the pre-v2 path) and the v2 sectioned frame (leading
+ * `0xFFFF` escape). Decoding a v2 frame that references templates by hash
+ * needs the dataset's registry via `options.templates` — see
+ * {@link DecodeTileOptions}.
  *
  * @param payload   The decompressed layer-frame bytes.
  * @param id        The tile identity.
@@ -642,23 +1231,88 @@ function tableToBinaryFeatures(table: Table): BinaryFeatures {
  *                  defaulted to a zero-width range at the tile's own `t`
  *                  timestamp — callers that need the precise span (the
  *                  `Archive` reader) always pass it explicitly.
+ * @param options   v2 decode plumbing (template registry + the manifest's
+ *                  declared formatVersion for the §5.2 authority check).
  */
 export function decodeTile(
   payload: Uint8Array,
   id: TileId,
-  timeRange: TimeRange = { start: id.t, end: id.t }
+  timeRange: TimeRange = { start: id.t, end: id.t },
+  options?: DecodeTileOptions,
 ): Tile {
+  const tileKey = `${id.z}/${id.x}/${id.y}/${id.t}`;
+  const isV2 =
+    payload.byteLength >= 2 && (payload[0] | (payload[1] << 8)) === FRAME_V2_ESCAPE;
+  // Authority rule (spec §5.2): `manifest.formatVersion` is the
+  // discriminator; the frame escape is defense-in-depth. A mixed-version
+  // dataset is corrupt/misassembled and MUST fail loudly, not decode.
+  const declared = options?.formatVersion;
+  if (declared !== undefined) {
+    if (declared === 1 && isV2) {
+      throw new Error(
+        `tile ${tileKey}: v2 layer frame reached through a formatVersion-1 manifest ` +
+          '(mixed-version dataset — spec §5.2 authority rule)',
+      );
+    }
+    if (declared === 2 && !isV2) {
+      throw new Error(
+        `tile ${tileKey}: v1 layer frame reached through a formatVersion-2 manifest ` +
+          '(mixed-version dataset — spec §5.2 authority rule)',
+      );
+    }
+  }
+
+  if (isV2) {
+    const rawLayers = parseLayerFrameV2(payload, tileKey, options?.templates);
+    const layers: Layer[] = rawLayers.map((raw) => {
+      const coreTable = tableFromIPC(raw.coreIpc);
+      // Eager PROPS materialization (design §4.1 — this reader ships
+      // eager-only): parse the PROPS batch now and merge its columns into
+      // the core table's, so the section split is invisible downstream.
+      // Both paths re-inject the TILE_META-hoisted metadata (v1 parity).
+      const table = raw.propsIpc
+        ? mergeCorePropsTables(
+            coreTable,
+            tableFromIPC(raw.propsIpc),
+            raw.tileMeta,
+            `tile ${tileKey} layer '${raw.name}'`,
+          )
+        : injectTileMetaIntoCoreTable(coreTable, raw.tileMeta);
+      return {
+        name: raw.name,
+        extent: 0, // coordinates are real lon/lat; no quantization extent
+        features: tableToBinaryFeatures(table, resolveMetaFromTileMeta(raw.tileMeta)),
+        geometryExtensionName: geometryExtensionName(table),
+        coordinatesQuantized: readQuantAffine(table) !== undefined,
+        // The merged (core + props) table — the v1-shaped GeoArrow hand-off.
+        arrowTable: table,
+        // The spliced core/props streams: what the worker path transfers and
+        // `toGeoArrowTable()` rehydrates (re-merging) on the main thread.
+        arrowIpc: raw.coreIpc,
+        arrowIpcProps: raw.propsIpc,
+        // The parsed TILE_META (plain JSON, structured-cloneable) so the
+        // worker-path rehydrate re-injects the same metadata (see above).
+        tileMeta: raw.tileMeta,
+      };
+    });
+    return { id, timeRange, layers };
+  }
+
   const rawLayers = parseLayerFrame(payload);
   const layers: Layer[] = rawLayers.map((raw) => {
     const table = tableFromIPC(raw.ipc);
     return {
       name: raw.name,
       extent: 0, // coordinates are real lon/lat; no quantization extent
-      features: tableToBinaryFeatures(table),
+      features: tableToBinaryFeatures(table, resolveMetaFromSchema(table)),
       // Standard GeoArrow extension name (e.g. `geoarrow.point`). Surfaced
       // so a GeoArrow-aware consumer can branch on it without looking at
       // the Arrow schema directly.
       geometryExtensionName: geometryExtensionName(table),
+      // Coordinate quantization (`stt:quant`) makes the layer no longer
+      // literal GeoArrow — the semantic signal `retainArrowIpc: 'auto'`
+      // keys on.
+      coordinatesQuantized: readQuantAffine(table) !== undefined,
       // Hold the underlying Arrow Table so `toGeoArrowTable()` is a
       // zero-copy hand-off into `@geoarrow/deck.gl-layers` / Lonboard.
       arrowTable: table,
@@ -750,11 +1404,31 @@ export function toGeoArrowTable(layer: Layer): Table {
   if (!table && layer.arrowIpc) {
     // Worker-decoded tiles arrive without the (non-cloneable) Table but
     // with the layer's raw IPC bytes; rehydrate on first use and memoize
-    // so repeat calls don't re-parse.
+    // so repeat calls don't re-parse. v2 layers with property columns carry
+    // TWO streams (spliced core + props) — re-merge them, re-injecting the
+    // layer's TILE_META (`layer.tileMeta` rides postMessage as plain JSON),
+    // so the rehydrated table matches the inline-decoded shape exactly.
     table = tableFromIPC(layer.arrowIpc);
+    if (layer.arrowIpcProps) {
+      table = mergeCorePropsTables(
+        table,
+        tableFromIPC(layer.arrowIpcProps),
+        layer.tileMeta ?? {},
+        `STT layer '${layer.name}'`,
+      );
+    } else if (layer.tileMeta) {
+      table = injectTileMetaIntoCoreTable(table, layer.tileMeta);
+    }
     layer.arrowTable = table;
   }
   if (!table) {
+    if (layer.arrowIpcDropped) {
+      throw new Error(
+        `STT layer '${layer.name}': the raw Arrow IPC bytes were dropped to save ` +
+          "memory (ArchiveOptions.retainArrowIpc, default 'auto') — construct the " +
+          'archive with retainArrowIpc: true to keep them for toGeoArrowTable().',
+      );
+    }
     throw new Error(
       `STT layer '${layer.name}' has no backing Arrow Table — toGeoArrowTable() ` +
         'only works for layers produced by decodeTile().',

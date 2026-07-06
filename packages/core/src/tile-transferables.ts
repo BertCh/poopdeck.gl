@@ -24,7 +24,57 @@
  * which is correct, just a little slower than the zero-copy transfer.
  */
 
-import type { Tile } from './types.js';
+import type { BinaryFeatures, Tile } from './types.js';
+
+
+/**
+ * Visit every typed-array view held by a {@link BinaryFeatures} — THE single
+ * enumeration of buffer-bearing fields, shared by `collectTransferables`
+ * (worker transfer list) and `estimateTileSize` (cache byte accounting) so
+ * the two can never drift when a new column lands (this diff's own history:
+ * `estimateTileSize` had silently fallen behind on `vertexValueMatrix` /
+ * `vectorProps` before they were re-synced). Layer-level extras (`arrowIpc`,
+ * `arrowIpcProps`) are NOT features fields — callers that want them add them
+ * themselves.
+ *
+ * Defensive: skips any field whose value is not a real typed array (see the
+ * module doc); the callback only ever receives genuine `ArrayBufferView`s.
+ */
+export function forEachBufferView(
+  features: BinaryFeatures,
+  cb: (view: ArrayBufferView) => void,
+): void {
+  const visit = (v: ArrayBufferView | undefined | null): void => {
+    if (v && ArrayBuffer.isView(v)) cb(v);
+  };
+  visit(features.positions);
+  visit(features.featureIds);
+  visit(features.startTimes);
+  visit(features.endTimes);
+  visit(features.startIndices);
+  visit(features.vertexTimestamps);
+  visit(features.vertexValues);
+  visit(features.vertexValueMatrix);
+  visit(features.globalFeatureIds);
+  visit(features.triangles);
+  visit(features.triangleOffsets);
+  visit(features.featureIds64);
+  if (features.numericProps) {
+    for (const arr of Object.values(features.numericProps)) visit(arr);
+  }
+  if (features.vectorProps) {
+    for (const entry of Object.values(features.vectorProps)) {
+      if (entry) visit(entry.value);
+    }
+  }
+  if (features.categoricalProps) {
+    for (const entry of Object.values(features.categoricalProps)) {
+      // The category-index column is the only buffer-bearing piece; the
+      // category-string table is plain JS strings.
+      if (entry) visit(entry.indices);
+    }
+  }
+}
 
 export function collectTransferables(tile: Tile): Transferable[] {
   // TypedArray.buffer is typed as ArrayBufferLike (could be SharedArrayBuffer
@@ -44,52 +94,18 @@ export function collectTransferables(tile: Tile): Transferable[] {
     // Raw per-layer Arrow IPC bytes (the GeoArrow hand-off; rehydrated
     // lazily by `toGeoArrowTable()` on the main thread). Usually a view
     // into the decoded payload buffer, which the dedup set collapses with
-    // any column views sharing it.
+    // any column views sharing it. `arrowIpcProps` is the v2 spliced-props
+    // sibling (template + PROPS tail) — same treatment, or it silently
+    // structured-clone-copies across the worker boundary.
     addBuffer(layer?.arrowIpc);
+    addBuffer(layer?.arrowIpcProps);
     const f = layer?.features;
     if (!f) continue;
-    addBuffer(f.positions);
-    addBuffer(f.featureIds);
-    addBuffer(f.startTimes);
-    addBuffer(f.endTimes);
-    addBuffer(f.startIndices);
-    addBuffer(f.vertexTimestamps);
-    // Per-vertex scalar values (e.g. drifter SST) align 1:1 with positions —
-    // omitting them structured-clone-copies a positions-sized buffer per tile.
-    addBuffer(f.vertexValues);
-    // Per-vertex × per-bucket value matrix (flow corridors) — numBuckets× the
-    // size of positions, so the most important buffer to transfer, not clone.
-    addBuffer(f.vertexValueMatrix);
-    addBuffer(f.globalFeatureIds);
-    // Pre-tessellated polygon meshes (`--pre-tessellate`) and H3 summary
-    // tiles carry their largest buffers here: `triangles` (3 indices per
-    // triangle, frequently larger than `positions`) and the 64-bit feature
-    // ids (H3 cell indices). Omitting them silently structured-CLONE-copies
-    // the biggest buffer in the tile across the worker boundary, eating the
-    // pre-tessellation decode win and the summary-tier id payload.
-    addBuffer(f.triangles);
-    addBuffer(f.triangleOffsets);
-    addBuffer(f.featureIds64);
-    if (f.numericProps) {
-      for (const arr of Object.values(f.numericProps)) addBuffer(arr);
-    }
-    // Interleaved vector columns (surfel quat/scale/colour). Usually views into
-    // the Arrow IPC buffer added above, which the dedup set collapses; a fresh
-    // buffer (unaligned legacy frame) transfers on its own. Either way, omitting
-    // them would structured-clone-copy the biggest instance buffers per tile.
-    if (f.vectorProps) {
-      for (const entry of Object.values(f.vectorProps)) {
-        if (entry) addBuffer(entry.value);
-      }
-    }
-    if (f.categoricalProps) {
-      for (const entry of Object.values(f.categoricalProps)) {
-        // The category-index column is the only transferable piece; the
-        // category-string table travels via structured clone (small and
-        // shared across tiles).
-        if (entry) addBuffer(entry.indices);
-      }
-    }
+    // Every BinaryFeatures buffer field, via the shared enumeration —
+    // omitting one silently structured-CLONE-copies that buffer across the
+    // worker boundary (the biggest ones live here: triangles, featureIds64,
+    // vertexValueMatrix, vectorProps).
+    forEachBufferView(f, addBuffer);
   }
   return Array.from(seen) as Transferable[];
 }

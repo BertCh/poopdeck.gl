@@ -19,30 +19,11 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { SpatiotemporalTileset } from '../src/spatiotemporal-tileset';
 import type { TileId, BoundingBox, Tile } from '../src/types';
+import { BOUNDS, BUCKET_MS, fakeTile, makeAvailableTiles } from './helpers/fixtures';
+import { advanceClock, installClock } from './helpers/clock';
 
-const BOUNDS: BoundingBox = { minLon: -180, minLat: -85, maxLon: 180, maxLat: 85 };
-const BUCKET_MS = 1000;
 const N_BUCKETS = 60;
-
-function fakeTile(id: TileId): Tile {
-  return { id, timeRange: { start: id.t, end: id.t + BUCKET_MS }, layers: [] } as Tile;
-}
-
-/** One tile per bucket at (x=0, y=0) whose interval overlaps the range. */
-function availableTiles(
-  _b: BoundingBox,
-  z: number,
-  range: { start: number; end: number },
-): TileId[] {
-  const ids: TileId[] = [];
-  const first = Math.max(0, Math.floor(range.start / BUCKET_MS));
-  const last = Math.min(N_BUCKETS - 1, Math.floor(range.end / BUCKET_MS));
-  for (let i = first; i <= last; i++) {
-    const t = i * BUCKET_MS;
-    if (t + BUCKET_MS >= range.start && t <= range.end) ids.push({ z, x: 0, y: 0, t });
-  }
-  return ids;
-}
+const availableTiles = makeAvailableTiles(N_BUCKETS);
 
 const settle = (ms = 10): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -81,17 +62,6 @@ function makeHarness() {
     await settle();
   };
   return { tileset, loadBucket, loadWindow, releaseBatches };
-}
-
-/** Shift Date.now() forward by `ms` (cumulative) without faking timers. */
-let clockOffset = 0;
-function advanceClock(ms: number): void {
-  clockOffset += ms;
-}
-function installClock(): void {
-  clockOffset = 0;
-  const realNow = Date.now.bind(Date);
-  vi.spyOn(Date, 'now').mockImplementation(() => realNow() + clockOffset);
 }
 
 afterEach(() => {

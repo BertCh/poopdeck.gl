@@ -21,18 +21,16 @@ import { describe, it, expect, afterEach, beforeEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { STTArchive } from '../src/archive';
+import { crc32c } from '../src/crc32c';
 import { encodeDirectory } from '../src/directory';
 import {
   configureSharedScheduler,
   resetSharedScheduler,
 } from '../src/shared-scheduler';
+import { bufferToArrayBuffer, flush } from './helpers/fixtures';
 
 const FIXTURE = fileURLToPath(new URL('./fixtures/sample.stt', import.meta.url));
 const FIXTURE_BYTES = new Uint8Array(readFileSync(FIXTURE));
-
-function bufferToArrayBuffer(buf: Uint8Array): ArrayBuffer {
-  return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
-}
 
 /**
  * Pull the fixture's first decodable blob + its metadata once, by parsing the
@@ -145,7 +143,8 @@ function makeSpatialDataset(
       uncompressedSize: e.uncompressedSize,
       featureCount: e.featureCount,
       hilbert: i,
-      crc32c: i + 1,
+      // Real blob decoded through the verifying reader → true CRC-32C.
+      crc32c: crc32c(blob),
     });
   });
   const dir = encodeDirectory(entries);
@@ -198,7 +197,6 @@ function gatedFetchByPath(objects: Map<string, Uint8Array>, manifestUrl: string,
   }) as unknown as typeof fetch;
 }
 
-const flush = () => new Promise<void>((r) => setTimeout(r, 0));
 const flushMany = async (n: number): Promise<void> => {
   for (let i = 0; i < n; i++) await flush();
 };

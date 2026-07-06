@@ -12,12 +12,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { SpatiotemporalTileset } from '../src/spatiotemporal-tileset';
 import type { TileId, BoundingBox, Tile } from '../src/types';
-
-const BOUNDS: BoundingBox = { minLon: -180, minLat: -85, maxLon: 180, maxLat: 85 };
-
-function fakeTile(id: TileId): Tile {
-  return { id, timeRange: { start: 0, end: 1000 }, layers: [] } as Tile;
-}
+import { BOUNDS, fakeTile } from './helpers/fixtures';
 
 describe('SpatiotemporalTileset batched (coalesced) loads', () => {
   it('routes a multi-tile pass through getTileDataBatch and loads every tile', async () => {

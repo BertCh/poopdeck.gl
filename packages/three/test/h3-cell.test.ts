@@ -1,13 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import { cellToLatLng, h3IndexToSplitLong } from 'h3-js';
-import { GeometryType } from '@poopdeck.gl/core';
-import type { BinaryFeatures, Tile } from '@poopdeck.gl/core';
 import { h3IndexFromTile, cellBoundaryFromTile } from '../src/lib/h3-cell';
 import {
   buildH3Buffers,
   DEFAULT_H3_COLOR_RANGE,
 } from '../src/lib/h3-buffers';
 import { LocalEnuProjection } from '../src/projection/local-enu';
+import { makeVectorTile as summaryTile } from './_support/features';
 
 // ── Reference H3 cell ids ────────────────────────────────────────────────────
 // `8928308280fffff` — the res-9 SF cell from h3-js's README, centroid
@@ -59,33 +58,6 @@ describe('h3-cell decode', () => {
 // ── buffer builder ──────────────────────────────────────────────────────────
 const anchor = { longitude: -122.418, latitude: 37.776 };
 const proj = new LocalEnuProjection(anchor);
-
-function summaryTile(
-  ids: bigint[],
-  counts: number[],
-  layerName = 'summary',
-): Tile {
-  const n = ids.length;
-  const features: BinaryFeatures = {
-    featureCount: n,
-    geometryType: GeometryType.Point,
-    positionDimensions: 2,
-    positions: new Float64Array(n * 2),
-    featureIds: new Uint32Array(n),
-    featureIds64: BigUint64Array.from(ids),
-    startTimes: new Float32Array(n),
-    endTimes: new Float32Array(n),
-    timeOffset: 0,
-    numericProps: { count: new Float32Array(counts) },
-    categoricalProps: {},
-    vectorProps: {},
-  };
-  return {
-    id: { z: 4, x: 0, y: 0, t: 0 },
-    timeRange: { start: 0, end: 1 },
-    layers: [{ name: layerName, extent: 0, features, geometryExtensionName: 'geoarrow.point' }],
-  };
-}
 
 // Two adjacent res-9 SF cells (neighbours of SF_RES9_HEX), for multi-cell tests.
 const NEIGHBOR_A = '8928308280bffff';

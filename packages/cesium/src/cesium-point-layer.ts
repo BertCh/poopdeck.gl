@@ -21,13 +21,13 @@
  */
 
 import { Cartesian2, Cartesian3, Color, PointPrimitiveCollection, defined, type PointPrimitive, type Scene } from 'cesium';
-import { GeometryType, getFeatureProperties, type Tile } from '@poopdeck.gl/core';
-import { GlobeProjection } from '@poopdeck.gl/core/geo';
-import { expandCategoricalColors, type RGBA255 } from '@poopdeck.gl/core/style';
+import { getFeatureProperties, type Tile } from '@poopdeck.gl/core';
+import type { RGBA255 } from '@poopdeck.gl/core/style';
 import { timeFilterAlpha, type TimeFilterMode, type TimeFilterParams } from '@poopdeck.gl/core/time-filter';
 import type { BinaryFeatures } from '@poopdeck.gl/core';
 import type { SttRenderNode } from '@poopdeck.gl/core/capabilities';
 import type { SttPickResult } from '@poopdeck.gl/core/picking';
+import { buildPointEntries } from './lib/points.js';
 
 export interface CesiumPointLayerOptions {
   id?: string;
@@ -59,8 +59,6 @@ interface PointEntry {
   featureIndex: number;
 }
 
-const DEFAULT_COLOR: RGBA255 = [200, 205, 215, 255];
-
 // Reused for every per-frame colour write so setTime allocates nothing. JS is
 // single-threaded and setTime runs to completion synchronously, so one shared
 // scratch is safe even across multiple layer instances. It MUST stay a distinct
@@ -76,7 +74,6 @@ export class CesiumPointLayer implements SttRenderNode {
   private readonly mode: TimeFilterMode;
   private readonly params: TimeFilterParams;
   private readonly opts: CesiumPointLayerOptions;
-  private readonly globe = new GlobeProjection({ longitude: 0, latitude: 0 }, undefined, { datum: 'wgs84' });
   private timeOrigin = 0;
   private entries: PointEntry[] = [];
 
@@ -95,63 +92,38 @@ export class CesiumPointLayer implements SttRenderNode {
     this.collection.removeAll();
     this.entries = [];
 
-    const pointLayers: BinaryFeatures[] = [];
-    for (const tile of tiles) {
-      for (const layer of tile.layers) {
-        if (layer.features.geometryType === GeometryType.Point && layer.features.featureCount > 0) {
-          pointLayers.push(layer.features);
-        }
-      }
-    }
-    if (pointLayers.length === 0) return;
+    // Pure geometry/colour/rebase assembly lives in the Cesium-free builder;
+    // this method only turns each FeaturePoint into a Cesium primitive.
+    const build = buildPointEntries(tiles, {
+      colorProperty: this.opts.colorProperty,
+      colorMapping: this.opts.colorMapping,
+      colorMappingDefault: this.opts.colorMappingDefault,
+    });
+    if (build.points.length === 0) return; // no points — leave the prior timeOrigin untouched
+    this.timeOrigin = build.timeOrigin;
 
-    this.timeOrigin = pointLayers[0].timeOffset;
     const pixelSize = this.opts.pixelSize ?? 6;
-    const def = this.opts.colorMappingDefault ?? DEFAULT_COLOR;
-
-    for (const b of pointLayers) {
-      const dims = b.positionDimensions ?? 2;
-      const rebase = b.timeOffset - this.timeOrigin;
-      const colors = this.opts.colorProperty
-        ? (expandCategoricalColors(
-            b,
-            { property: this.opts.colorProperty, colorMapping: this.opts.colorMapping, colorMappingDefault: def, onMissing: 'fill' },
-            'u8',
-          ) as Uint8Array)
-        : null;
-
-      for (let i = 0; i < b.featureCount; i++) {
-        const lon = b.positions[i * dims];
-        const lat = b.positions[i * dims + 1];
-        const alt = dims > 2 ? b.positions[i * dims + 2] : 0;
-        const [x, y, z] = this.globe.project(lon, lat, alt);
-        // Normalize colour channels to 0..1 ONCE here so the per-frame setTime
-        // loop never re-divides by 255.
-        const r = (colors ? colors[i * 4] : def[0]) / 255;
-        const g = (colors ? colors[i * 4 + 1] : def[1]) / 255;
-        const bb = (colors ? colors[i * 4 + 2] : def[2]) / 255;
-        const a = (colors ? colors[i * 4 + 3] : def[3] ?? 255) / 255;
-        const pp = this.collection.add({
-          position: new Cartesian3(x, y, z),
-          color: new Color(r, g, bb, a),
-          pixelSize,
-          id: { layerId: this.id, binary: b, featureIndex: i },
-        });
-        this.entries.push({
-          pp,
-          start: b.startTimes[i] + rebase,
-          end: b.endTimes[i] + rebase,
-          r,
-          g,
-          b: bb,
-          a,
-          lastAlpha: NaN, // NaN !== anything → force the first setTime to write
-          lon,
-          lat,
-          binary: b,
-          featureIndex: i,
-        });
-      }
+    for (const fp of build.points) {
+      const pp = this.collection.add({
+        position: new Cartesian3(fp.x, fp.y, fp.z),
+        color: new Color(fp.r, fp.g, fp.b, fp.a),
+        pixelSize,
+        id: { layerId: this.id, binary: fp.binary, featureIndex: fp.featureIndex },
+      });
+      this.entries.push({
+        pp,
+        start: fp.start,
+        end: fp.end,
+        r: fp.r,
+        g: fp.g,
+        b: fp.b,
+        a: fp.a,
+        lastAlpha: NaN, // NaN !== anything → force the first setTime to write
+        lon: fp.lon,
+        lat: fp.lat,
+        binary: fp.binary,
+        featureIndex: fp.featureIndex,
+      });
     }
   }
 

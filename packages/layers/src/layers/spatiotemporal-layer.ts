@@ -178,6 +178,28 @@ export interface _SpatioTemporalLayerProps {
   tier?: 'auto' | 'summary' | 'raw';
 
   /**
+   * Scrub-time LOD degradation (docs/roadmap/scrub-lod-2026-07.md): while
+   * the user drags the timeline (the PlaybackGovernor's beginScrub…endScrub
+   * bracket, broadcast to the tileset via `setInteractive`), tile SELECTION
+   * may degrade to a cheaper "motion tier":
+   * - `spatial`: request a coarser zoom (`spatialZoomDrop` levels, default 2)
+   *   — usually tiles the parent-fallback path already fetched.
+   * - `temporal`: route selection through the archive's temporal-LOD
+   *   pyramid (requires an archive built with `--temporal-lod`; silently
+   *   no-ops otherwise).
+   * The degraded tier is preview-only: buffered-runway/gate math and
+   * prefetch keep tracking the fine tier, and release restores it.
+   * `null`/absent (default) is the kill switch — behavior is identical to
+   * today, scrub state is stored but changes nothing.
+   * @default null
+   */
+  scrubLod?: {
+    spatial?: boolean;
+    spatialZoomDrop?: number;
+    temporal?: boolean;
+  } | null;
+
+  /**
    * Called when all tiles in the current viewport×window selection have
    * finished loading (the `TileLayer.onViewportLoad` moment), with the
    * loaded tile array. Fires once per selection settle: again only after
@@ -195,6 +217,9 @@ export interface _SpatioTemporalLayerProps {
   /**
    * Called when a tile's fetch/decode fails after the loader's retries.
    * Mirrors `TileLayer.onTileError`, plus the failing tile's id as context.
+   * `tileId` is `undefined` for DATASET-level failures (a tile-selection
+   * pass that could not query the directory — e.g. a transient paged-leaf
+   * fetch failure), which have no single failing tile.
    * Default (null) logs via `console.error`, matching TileLayer.
    */
   onTileError?: ((error: Error, tileId?: TileId) => void) | null;
@@ -333,6 +358,10 @@ const defaultProps: DefaultProps<SpatioTemporalLayerProps> = {
   // Summary-tier dispatch: 'auto' transparently swaps to the aggregated
   // tier at low zoom when the archive has one (no-op otherwise).
   tier: 'auto',
+
+  // Scrub-time LOD degradation: off (the kill switch) until browser-verified
+  // on the heavy demos — see docs/roadmap/scrub-lod-2026-07.md §8.5.
+  scrubLod: { type: 'object', value: null, optional: true, compare: true },
 
   // GlobeView helpers: null/false = derive from the viewport (the default).
   zoomOverride: null,
@@ -1106,6 +1135,24 @@ export class SpatioTemporalLayer<
           archive.getSummaryTileIdsInBounds(bounds, zoom, timeRange)
       : undefined;
 
+    // Temporal-LOD pyramid (scrub-LOD P2). Capability detection mirrors the
+    // summary-tier wiring above: only archives built with `--temporal-lod`
+    // carry `metadata.temporalLod`, and only then is the LOD enumeration
+    // callback wired — everything no-ops cleanly on every other archive.
+    // Inert until the `scrubLod.temporal` axis is switched on.
+    const temporalLodLevels =
+      metadata.temporalLod && metadata.temporalLod.length > 0
+        ? metadata.temporalLod
+        : undefined;
+    const getAvailableTemporalLodTiles = temporalLodLevels
+      ? (
+          bounds: BoundingBox,
+          zoom: number,
+          timeRange: { start: number; end: number },
+          bucketMs: number,
+        ) => archive.getTileIdsInBoundsForTemporalLod(bounds, zoom, timeRange, bucketMs)
+      : undefined;
+
     // Create tileset with archive as data source
     const tileset = new SpatiotemporalTileset({
       maxRequests: this.props.maxRequests,
@@ -1128,6 +1175,10 @@ export class SpatioTemporalLayer<
       tier: this.props.tier,
       summaryZoomRange,
       getAvailableSummaryTiles,
+      // Scrub-LOD motion tier (kill-switched off by default; see the prop).
+      scrubLod: this.props.scrubLod ?? undefined,
+      temporalLodLevels,
+      getAvailableTemporalLodTiles,
       // Archive-backed fetch callbacks (getAvailableTiles / getTileData /
       // getTileDataBatch / getTileByteSize / getThroughput). Shared with three
       // + maplibre via the core adapter; see render/tileset-adapter.ts for the
@@ -1147,11 +1198,17 @@ export class SpatioTemporalLayer<
         this.props.onTileUnload?.(tile);
       },
       onTileError: (error, tileId) => {
+        // Core signals dataset-level failures (a selection pass that could
+        // not query the directory) with the sentinel TileId {x:-1, y:-1} —
+        // its own callback requires a TileId. This prop is already typed
+        // `tileId?: TileId`, so translate the sentinel to undefined rather
+        // than leaking a phantom tile key to app code.
+        const realTileId = tileId && tileId.x >= 0 ? tileId : undefined;
         if (this.props.onTileError) {
-          this.props.onTileError(error, tileId);
+          this.props.onTileError(error, realTileId);
         } else {
           // TileLayer's default: errors surface in the console.
-          console.error('[STL] Tile error:', tileId, error);
+          console.error('[STL] Tile error:', realTileId ?? '(dataset-level)', error);
         }
       },
       // ── Player-buffering plumbing (WS-A/WS-B contract) ──────────────────

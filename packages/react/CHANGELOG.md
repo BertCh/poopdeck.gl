@@ -1,5 +1,12 @@
 # @poopdeck.gl/react
 
+## 0.4.0
+
+### Minor Changes
+
+- Version alignment with @poopdeck.gl/core 0.4.0 (packed formatVersion 2
+  reader, CRC-32C verification, capabilities gate).
+
 ## 0.3.0
 
 ### Patch Changes

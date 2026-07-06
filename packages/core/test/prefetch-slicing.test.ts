@@ -22,30 +22,12 @@
 import { describe, it, expect, vi } from 'vitest';
 import { SpatiotemporalTileset, type TileBatchHooks } from '../src/spatiotemporal-tileset';
 import type { TileId, BoundingBox, Tile } from '../src/types';
+import { BOUNDS, BUCKET_MS, fakeTile, makeAvailableTiles } from './helpers/fixtures';
 
-const BOUNDS: BoundingBox = { minLon: -180, minLat: -85, maxLon: 180, maxLat: 85 };
-const BUCKET_MS = 1000;
 const N_BUCKETS = 600;
 
-function fakeTile(id: TileId): Tile {
-  return { id, timeRange: { start: id.t, end: id.t + BUCKET_MS }, layers: [] } as Tile;
-}
-
 /** Synthetic single-cell archive: one tile per bucket at the requested zoom. */
-function availableTiles(
-  _b: BoundingBox,
-  z: number,
-  range: { start: number; end: number },
-): TileId[] {
-  const ids: TileId[] = [];
-  const first = Math.max(0, Math.floor(range.start / BUCKET_MS));
-  const last = Math.min(N_BUCKETS - 1, Math.floor(range.end / BUCKET_MS));
-  for (let i = first; i <= last; i++) {
-    const t = i * BUCKET_MS;
-    if (t + BUCKET_MS >= range.start && t <= range.end) ids.push({ z, x: 0, y: 0, t });
-  }
-  return ids;
-}
+const availableTiles = makeAvailableTiles(N_BUCKETS);
 
 /** Partition spy calls into priority (contains t=0) and prefetch (all t>0). */
 function splitCalls(calls: unknown[][]): { priority: TileId[][]; prefetch: TileId[][] } {

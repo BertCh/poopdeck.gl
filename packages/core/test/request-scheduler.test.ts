@@ -16,6 +16,7 @@ import {
   SharedRequestScheduler,
   isCancellationError,
 } from '../src/request-scheduler';
+import { flush } from './helpers/fixtures';
 
 /** A manually-settled promise plus a record of whether/when it was invoked. */
 interface Controllable<T> {
@@ -52,9 +53,6 @@ function controllable<T = void>(): Controllable<T> {
     signal: () => sig,
   };
 }
-
-/** Flush all currently-queued microtasks so promise reactions run. */
-const flush = () => new Promise<void>((r) => setTimeout(r, 0));
 
 /**
  * Attach a rejection observer to `p` SYNCHRONOUSLY so it never registers as an

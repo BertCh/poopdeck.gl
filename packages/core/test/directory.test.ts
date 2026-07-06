@@ -10,7 +10,12 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { encodeDirectory, decodeDirectory, type DirectoryEncodeEntry } from '../src/directory';
+import {
+  encodeDirectory,
+  decodeDirectory,
+  decodePagedRoot,
+  type DirectoryEncodeEntry,
+} from '../src/directory';
 
 const base: DirectoryEncodeEntry = {
   zoom: 5,
@@ -169,5 +174,94 @@ describe('directory codec (TS)', () => {
     const bytes = encodeDirectory([base]);
     bytes[0] = 9;
     expect(() => decodeDirectory(bytes)).toThrow(/version/);
+  });
+});
+
+describe('decodeDirectory corruption guards', () => {
+  it('rejects an empty buffer', () => {
+    expect(() => decodeDirectory(new Uint8Array(0))).toThrow(/empty buffer/);
+  });
+
+  it('rejects a varint that runs off the end of the buffer', () => {
+    // Version byte 5, then a single 0x80 (continuation bit set, no following
+    // byte) — the first uvarint read (entry count N) walks past the end.
+    expect(() => decodeDirectory(Uint8Array.from([5, 0x80]))).toThrow(
+      /truncated varint/,
+    );
+  });
+
+  it('rejects a run whose run_length exceeds the entry count', () => {
+    // n=1, runCount=1, one all-zero entry (6 ivarints + featureCount +
+    // bucketPresent = 8 zero bytes), then a run declaring run_length=2.
+    const bytes = Uint8Array.from([
+      5, // version
+      1, // n = 1
+      1, // runCount = 1
+      0, 0, 0, 0, 0, 0, // Δzoom Δhilbert Δx Δy Δtime duration (all 0)
+      0, // featureCount = 0
+      0, // bucketPresent = 0
+      2, // run_length = 2  (> n)
+      0, // Δpack_id = 0
+      0, // offset flag = 0 (contiguous)
+      0, // length = 0
+      0, // uncompressed_size = 0
+      0, 0, 0, 0, // crc32c u32
+    ]);
+    expect(() => decodeDirectory(bytes)).toThrow(/run length exceeds entry count/);
+  });
+
+  it('rejects when the runs cover fewer entries than declared', () => {
+    // n=2 but the single run only covers run_length=1 entry → cursor (1) != n.
+    const bytes = Uint8Array.from([
+      5, // version
+      2, // n = 2
+      1, // runCount = 1
+      0, 0, 0, 0, 0, 0, 0, 0, // entry 0 (8 zero bytes)
+      0, 0, 0, 0, 0, 0, 0, 0, // entry 1 (8 zero bytes)
+      1, // run_length = 1  (covers only entry 0)
+      0, // Δpack_id = 0
+      0, // offset flag = 0
+      0, // length = 0
+      0, // uncompressed_size = 0
+      0, 0, 0, 0, // crc32c u32
+    ]);
+    expect(() => decodeDirectory(bytes)).toThrow(
+      /runs covered 1 entries, expected 2/,
+    );
+  });
+});
+
+describe('decodePagedRoot error branches', () => {
+  /** A minimal 12-byte root header (version, kind, reserved u16, pageCount, pageEntries). */
+  function rootHeader(version: number, kind: number, pageCount: number): Uint8Array {
+    const bytes = new Uint8Array(12);
+    const dv = new DataView(bytes.buffer);
+    dv.setUint8(0, version);
+    dv.setUint8(1, kind);
+    dv.setUint32(4, pageCount, true);
+    return bytes;
+  }
+
+  it('rejects a buffer shorter than the fixed root header', () => {
+    expect(() => decodePagedRoot(new Uint8Array(8))).toThrow(/truncated header/);
+  });
+
+  it('rejects an unsupported root version', () => {
+    expect(() => decodePagedRoot(rootHeader(2, 0, 0))).toThrow(
+      /unsupported version 2/,
+    );
+  });
+
+  it('rejects an unsupported descriptor kind', () => {
+    expect(() => decodePagedRoot(rootHeader(1, 7, 0))).toThrow(
+      /unsupported descriptor kind 7/,
+    );
+  });
+
+  it('rejects a header that claims more pages than the buffer can hold', () => {
+    // pageCount=3 needs 12 + 3*52 = 168 bytes, but only the 12-byte header exists.
+    expect(() => decodePagedRoot(rootHeader(1, 0, 3))).toThrow(
+      /truncated \(12 B, need 168 for 3 pages\)/,
+    );
   });
 });

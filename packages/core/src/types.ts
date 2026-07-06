@@ -16,6 +16,17 @@ export interface TileId {
   y: number;
   /** Timestamp (Unix milliseconds) */
   t: number;
+  /**
+   * Temporal-LOD bucket width (ms) this id addresses, for archives that
+   * carry a temporal-LOD pyramid. Set by
+   * `STTArchive.getTileIdsInBoundsForTemporalLod` on the ids it returns;
+   * absent = the base tier. Load-bearing for identity: a LOD tile shares
+   * `z/x/y/t` with the base tile whose bucket starts at the same instant,
+   * so every key derived from a TileId (archive directory/byte-cache/OPFS
+   * lookups, tileset cache/needed/priority registries) folds `bucketMs` in
+   * to keep the two tiers distinct.
+   */
+  bucketMs?: number;
 }
 
 /** Geographic bounding box in WGS84 coordinates */
@@ -385,6 +396,15 @@ export interface BinaryFeatures {
   }>;
 
   /**
+   * True when this tile's rows are stable-sorted by `start_time` — declared
+   * by the packed formatVersion-2 frame's `TILE_META.sorted` flag (spec
+   * §5.2.3), enabling window slicing / future partial decode. `undefined`
+   * for v1 tiles and synthetic fixtures: per the spec, readers MUST NOT
+   * assume sortedness without the flag.
+   */
+  timesSorted?: boolean;
+
+  /**
    * Interleaved fixed-width vector properties — `FixedSizeList<Float32|UInt8, N>`
    * columns baked at build time (e.g. a `[qx,qy,qz,qw]` surfel quaternion, a
    * `[s_major,s_minor]` scale, an `[r,g,b,a]` colour). The `value` typed array is
@@ -398,6 +418,24 @@ export interface BinaryFeatures {
    * it (empty when the tile carries no FixedSizeList columns).
    */
   vectorProps?: Record<string, { value: Float32Array | Uint8Array; size: number }>;
+}
+
+/**
+ * The v2 `TILE_META` section: per-tile-varying metadata hoisted out of the
+ * (dataset-constant, template-resident) Arrow schema. Canonical JSON, keys
+ * sorted, no whitespace; unknown keys MUST be ignored (spec §5.2.2).
+ */
+export interface TileMetaJson {
+  /** Attribute-quant affines, `column → [o, s]` (v1 `stt:qa`). */
+  qa?: Record<string, [number, number]>;
+  /** Rows are stable-sorted by `start_time` (spec §5.2.3). */
+  sorted?: boolean;
+  /** Minimum feature start-time (v1 `stt:time_offset_ms`). */
+  t0?: number;
+  /** Vertex-value matrix bucket count (v1 `stt:vertex_value_buckets`). */
+  vb?: number;
+  /** `[origin_ms, step_ms]` (v1 `stt:vertex_time_origin_ms`/`_step_ms`). */
+  vt?: [number, number];
 }
 
 /** Layer within a tile - uses binary format for GPU efficiency */
@@ -440,6 +478,41 @@ export interface Layer {
    * layer's typed-array columns.
    */
   arrowIpc?: Uint8Array;
+  /**
+   * packed formatVersion 2 only: the layer's spliced PROPS Arrow IPC stream
+   * (property columns ride their own schema/template in a v2 frame — spec
+   * §5.2). Present iff the layer has property columns; {@link arrowIpc} then
+   * holds the spliced CORE stream and `toGeoArrowTable()` re-merges the two
+   * when rehydrating a worker-decoded layer. Dropped together with
+   * {@link arrowIpc} under `ArchiveOptions.retainArrowIpc`.
+   */
+  arrowIpcProps?: Uint8Array;
+  /**
+   * packed formatVersion 2 only: the layer's parsed `TILE_META` section
+   * (spec §5.2.2). Plain JSON — unlike {@link arrowTable} it survives the
+   * worker→main postMessage boundary — so `toGeoArrowTable()` can re-inject
+   * the hoisted per-tile metadata (`stt:qa` / `stt:time_offset_ms` /
+   * `stt:vertex_*`) into a rehydrated Table's schema exactly like the
+   * inline decode path (and Rust's `merge_v2_layer`) does. Absent on v1
+   * layers, whose schemas carry the keys on the wire already.
+   */
+  tileMeta?: TileMetaJson;
+  /**
+   * Set when the archive dropped this layer's {@link arrowIpc} (and
+   * {@link arrowTable}) reference per `ArchiveOptions.retainArrowIpc` —
+   * distinguishes "dropped to save memory" (a clear, actionable
+   * `toGeoArrowTable()` error naming the option) from "never had one"
+   * (synthetic test layers).
+   */
+  arrowIpcDropped?: boolean;
+  /**
+   * True when the layer's geometry leaf is `stt:quant` fixed-point `Int32`
+   * grid indices rather than Float64 lon/lat — i.e. the layer is NOT literal
+   * GeoArrow (a generic consumer would misread the coordinates). This is the
+   * semantic signal `ArchiveOptions.retainArrowIpc: 'auto'` keys on when
+   * deciding to drop the IPC bytes.
+   */
+  coordinatesQuantized?: boolean;
 }
 
 /** Decoded tile with binary features */
@@ -466,6 +539,14 @@ export interface TileEntry {
   featureCount: number;
   compression: Compression;
   uncompressedSize: number;
+  /**
+   * CRC-32C (Castagnoli) of the blob's compressed bytes, from the directory.
+   * Verified before decompression when `ArchiveOptions.verifyChecksums` is on.
+   * `0` (the TS `encodeDirectory` default for synthetic archives) means "no
+   * checksum recorded" and skips verification; `undefined` for hand-built
+   * test entries behaves the same.
+   */
+  crc32c?: number;
   /**
    * Temporal bucket size in milliseconds this tile spans.
    *
@@ -532,9 +613,15 @@ export interface ArchiveOptions {
   url: string;
   /** Custom fetch function (for adding auth headers, etc.) */
   fetch?: typeof fetch;
-  /** Enable request caching */
+  /**
+   * @deprecated Never read. The in-memory compressed-byte cache is always on
+   * (device-aware size); OPFS persistence is controlled by {@link opfsCache}.
+   */
   cache?: boolean;
-  /** Maximum cache size in bytes */
+  /**
+   * @deprecated Never read. The byte-cache budget is device-aware (512 MB
+   * desktop / 256 MB low-memory) and not configurable through this field.
+   */
   maxCacheSize?: number;
   /** loaders.gl-style options; see {@link SttLoadOptions} for what is consumed. */
   loadOptions?: SttLoadOptions;
@@ -546,21 +633,53 @@ export interface ArchiveOptions {
    */
   decoder?: import('./tile-decoder.js').TileDecoder;
   /**
-   * Enable the OPFS-backed persistent tile cache. Defaults to `true` in
-   * environments that expose `navigator.storage.getDirectory` (modern
-   * browsers) and `false` everywhere else (Node, SSR, sandboxed iframes).
+   * Verify each fetched blob's CRC-32C (from the directory) over its
+   * compressed bytes BEFORE decompression, on both the worker and inline
+   * decode paths. A mismatch rejects that tile's decode with a distinctive
+   * "crc32c mismatch" error through the normal per-tile error surface —
+   * corruption that preserves lengths (middlebox, bad cache) can no longer
+   * pass silently. Entries whose directory CRC is `0`/absent (synthetic test
+   * archives) and OPFS-decompressed warm hits (no compressed bytes to check)
+   * skip verification.
    *
-   * **Defaults to `false`.** When enabled, decompressed tile payloads are
-   * stored under the Origin Private File System keyed by `(url, tileId,
-   * archiveFingerprint)`. On a tab reload the cache survives, so
-   * re-rendering the same viewport skips both the HTTP range request AND
-   * the zstd decompress step — only the Arrow IPC parse runs.
+   * **Defaults to `true`.** Pass `false` to restore the pre-verification
+   * behavior (the kill switch; the CRC cost is trivial next to zstd).
+   */
+  verifyChecksums?: boolean;
+  /**
+   * Whether decoded layers keep their raw Arrow IPC bytes (`Layer.arrowIpc` /
+   * `Layer.arrowTable`) for lazy `toGeoArrowTable()` rehydration:
+   *
+   * - `'auto'` (**default**): SEMANTIC — drop the reference only for
+   *   coordinate-quantized layers (`stt:quant`), whose tables are not
+   *   literal GeoArrow anyway (a generic consumer misreads Int32 grid
+   *   indices as lon/lat, so the hand-off was never spec-valid there);
+   *   keep it for every layer where `toGeoArrowTable()` is actually valid,
+   *   including legacy unaligned-frame archives whose columns are copies.
+   * - `true`: always keep — required if you call `toGeoArrowTable()` on
+   *   quantized archives and are prepared to handle the Int32 leaf.
+   * - `false`: always drop — smallest memory, `toGeoArrowTable()` throws.
+   *
+   * `toGeoArrowTable()` on a dropped layer throws an error naming this
+   * option.
+   */
+  retainArrowIpc?: boolean | 'auto';
+  /**
+   * Enable the OPFS-backed persistent tile cache.
+   *
+   * **Defaults to `false`** everywhere (including browsers that expose
+   * `navigator.storage.getDirectory`) — persistence is strictly opt-in.
+   * When enabled, decompressed tile payloads are stored under the Origin
+   * Private File System keyed by `(url, tileId, archiveFingerprint)`. On a
+   * tab reload the cache survives, so re-rendering the same viewport skips
+   * both the HTTP range request AND the zstd decompress step — only the
+   * Arrow IPC parse runs.
    *
    * Only enable this when the archive fits comfortably in
    * `opfsCacheMaxBytes` AND users revisit the same viewport across reloads.
-   * Cold tile loads cost an extra main-thread zstd decompress per tile
-   * (the worker decoder's decompressed bytes are not yet plumbed back to
-   * the cache writer), which hurts initial pan/zoom on large archives.
+   * The default decoders hand their decompressed bytes back to the cache
+   * writer (no duplicate decompress); a custom {@link decoder} that ignores
+   * `DecodeArgs.onPayload` falls back to one extra decompress per cold tile.
    */
   opfsCache?: boolean;
   /** Soft byte budget for the OPFS cache. Defaults to 512 MB. */

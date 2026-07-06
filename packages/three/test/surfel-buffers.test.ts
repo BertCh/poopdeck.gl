@@ -3,6 +3,7 @@ import { GeometryType } from '@poopdeck.gl/core';
 import type { BinaryFeatures, Tile } from '@poopdeck.gl/core';
 import { buildSurfelBuffers, type SurfelBufferOptions } from '../src/layers/surfel-buffers';
 import { LocalEnuProjection } from '../src/projection/local-enu';
+import { makePointTile } from './_support/features';
 
 const OPTS: SurfelBufferOptions = {
   quatVectorColumn: 'surfel_quat',
@@ -20,7 +21,7 @@ const OPTS: SurfelBufferOptions = {
 const anchor = { longitude: -122.4, latitude: 37.77 };
 const proj = new LocalEnuProjection(anchor);
 
-/** Build a minimal one-layer Tile holding the given numeric columns. */
+/** Build a minimal one-layer surfel Tile holding the given numeric columns. */
 function makeTile(
   count: number,
   positions: number[],
@@ -30,24 +31,16 @@ function makeTile(
 ): Tile {
   const num: Record<string, Float32Array> = {};
   for (const [k, v] of Object.entries(numericProps)) num[k] = new Float32Array(v);
-  const features: BinaryFeatures = {
-    featureCount: count,
-    geometryType: GeometryType.Point,
-    positionDimensions: 2,
-    positions: new Float64Array(positions),
-    featureIds: new Uint32Array(count),
-    startTimes: new Float32Array(startTimes),
-    endTimes: new Float32Array(startTimes),
-    timeOffset,
-    numericProps: num,
-    categoricalProps: {},
-    vectorProps: {},
-  };
-  return {
-    id: { z: 18, x: 0, y: 0, t: timeOffset },
-    timeRange: { start: timeOffset, end: timeOffset + 1000 },
-    layers: [{ name: 'lidar', extent: 0, features, geometryExtensionName: 'geoarrow.point' }],
-  };
+  return makePointTile(
+    count,
+    positions,
+    {
+      startTimes: new Float32Array(startTimes),
+      endTimes: new Float32Array(startTimes),
+      numericProps: num,
+    },
+    { timeOffset, layerName: 'lidar', z: 18 },
+  );
 }
 
 describe('buildSurfelBuffers', () => {

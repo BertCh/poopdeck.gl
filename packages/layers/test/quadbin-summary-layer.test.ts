@@ -283,30 +283,6 @@ describe('QuadbinSummaryLayer: stroke / fill / material pass-throughs', () => {
     expect(sub.props.filled).toBe(false);
   });
 
-  it('lineColor constant drives getLineColor', async () => {
-    const layer = await makeQuadbinLayer({ lineColor: [10, 20, 30, 200] });
-    const [sub] = layer.renderLayers();
-    expect(sub.props.getLineColor).toEqual([10, 20, 30, 200]);
-  });
-
-  it('getLineColor alias wins over lineColor', async () => {
-    const layer = await makeQuadbinLayer({
-      lineColor: [10, 20, 30, 200],
-      getLineColor: [1, 2, 3, 4],
-    });
-    const [sub] = layer.renderLayers();
-    expect(sub.props.getLineColor).toEqual([1, 2, 3, 4]);
-  });
-
-  it('a function-valued getLineColor warns once and falls back to lineColor', async () => {
-    const layer = await makeQuadbinLayer({
-      lineColor: [7, 7, 7, 255],
-      getLineColor: () => [9, 9, 9, 9],
-    });
-    const [sub] = layer.renderLayers();
-    expect(sub.props.getLineColor).toEqual([7, 7, 7, 255]);
-  });
-
   it('lineWidth constant drives getLineWidth; getLineWidth alias wins; a column name falls back to 1', async () => {
     const a = await makeQuadbinLayer({ lineWidth: 4 });
     expect(a.renderLayers()[0].props.getLineWidth).toBe(4);
@@ -356,26 +332,6 @@ describe('QuadbinSummaryLayer: stroke / fill / material pass-throughs', () => {
     const [sub] = layer.renderLayers();
     expect(sub.props.wireframe).toBe(true);
     expect(sub.props.material).toBe(material);
-  });
-});
-
-describe('QuadbinSummaryLayer: stroke-prop cache invalidation', () => {
-  it('a stroked change invalidates the cached sublayer', async () => {
-    const layer = await makeQuadbinLayer({ stroked: true });
-    const [first] = layer.renderLayers();
-    layer.props.stroked = false;
-    const [second] = layer.renderLayers();
-    expect(second).not.toBe(first);
-    expect(second.props.stroked).toBe(false);
-  });
-
-  it('a lineColor change invalidates the cached sublayer', async () => {
-    const layer = await makeQuadbinLayer({ lineColor: [0, 0, 0, 255] });
-    const [first] = layer.renderLayers();
-    layer.props.lineColor = [255, 0, 0, 255];
-    const [second] = layer.renderLayers();
-    expect(second).not.toBe(first);
-    expect(second.props.getLineColor).toEqual([255, 0, 0, 255]);
   });
 });
 

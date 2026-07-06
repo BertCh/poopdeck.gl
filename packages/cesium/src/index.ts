@@ -34,12 +34,20 @@ export {
   buildPathPolylines,
   buildArcPolylines,
   sampleGreatCircleArc,
+  lineStringTimeOrigin,
   type FeaturePolyline,
   type PolylineBuild,
   type PathBuildOptions,
   type ArcBuildOptions,
 } from './lib/polylines.js';
 export { featureColor, type FeatureColorMode } from './lib/feature-color.js';
+export {
+  buildPointEntries,
+  collectPointLayers,
+  type FeaturePoint,
+  type PointBuild,
+  type PointBuildOptions,
+} from './lib/points.js';
 
 // ViewState ⇄ Cesium camera bridge: pure math (camera) + the runtime applier.
 export {

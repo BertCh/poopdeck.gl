@@ -18,7 +18,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import type { PackedManifest } from '../src';
-import { Compression } from '../src';
+import { Compression, KNOWN_MANIFEST_CAPABILITIES } from '../src';
 
 const SCHEMA_PATH = fileURLToPath(
   new URL('../../../docs/spec/manifest.schema.json', import.meta.url),
@@ -98,20 +98,47 @@ const schema: Schema = JSON.parse(readFileSync(SCHEMA_PATH, 'utf8'));
 const golden = JSON.parse(readFileSync(GOLDEN_MANIFEST_PATH, 'utf8'));
 
 describe('packed-format manifest contract', () => {
-  it('the published schema is well-formed and v1', () => {
+  it('the published schema is well-formed and covers formatVersion 1 and 2', () => {
     expect(schema.$schema).toContain('json-schema.org');
     expect(schema.properties.format.const).toBe('stt-packed');
-    expect(schema.properties.formatVersion.const).toBe(1);
+    // formatVersion is the closed [1, 2] enum — the authoritative
+    // discriminator (packed spec §5.2); readers refuse anything else at open.
+    expect(schema.properties.formatVersion.enum).toEqual([1, 2]);
     expect(schema.properties.directory.properties.directoryVersion.const).toBe(5);
     // directory.encoding is additive: declared (so its vocabulary is pinned)
     // but never required (pre-encoding manifests omit it).
     expect(schema.properties.directory.properties.encoding.enum).toEqual(['zstd']);
     expect(schema.properties.directory.required).not.toContain('encoding');
+    // formatVersion-2 `schemas` table (packed spec §3.2): declared with the
+    // {hash, data} entry shape, never required (v1 manifests omit the key).
+    const schemas = schema.properties.schemas;
+    expect(schemas.type).toBe('array');
+    expect(schemas.items.required).toEqual(['hash', 'data']);
+    expect(schemas.items.properties.hash.pattern).toBe('^[0-9a-f]{32}$');
+    expect(schema.required).not.toContain('schemas');
   });
 
   it('the Rust-produced golden manifest conforms to the schema', () => {
     const errors = validate(golden, schema);
     expect(errors).toEqual([]);
+  });
+
+  it('the Rust-produced formatVersion-2 golden manifest conforms too (schemas table)', () => {
+    const goldenV2 = JSON.parse(
+      readFileSync(
+        fileURLToPath(new URL('./fixtures/v2-golden/manifest.json', import.meta.url)),
+        'utf8',
+      ),
+    );
+    expect(validate(goldenV2, schema)).toEqual([]);
+    // Assignable to the exported type, with the v2 additions populated.
+    const m: PackedManifest = goldenV2;
+    expect(m.formatVersion).toBe(2);
+    expect(m.schemas!.length).toBeGreaterThan(0);
+    // Sorted by hash + deduped (byte-reproducible manifests, spec §3.2).
+    const hashes = m.schemas!.map((s) => s.hash);
+    expect(hashes).toEqual([...hashes].sort());
+    expect(new Set(hashes).size).toBe(hashes.length);
   });
 
   it('the golden manifest is assignable to the exported PackedManifest type', () => {
@@ -129,8 +156,15 @@ describe('packed-format manifest contract', () => {
     const wrongFormat = { ...golden, format: 'stt-v4' };
     expect(validate(wrongFormat, schema).length).toBeGreaterThan(0);
 
-    const wrongVersion = { ...golden, formatVersion: 2 };
+    // 2 is a valid formatVersion since the 2026-07 byte break; 3 is not.
+    const wrongVersion = { ...golden, formatVersion: 3 };
     expect(validate(wrongVersion, schema).length).toBeGreaterThan(0);
+
+    const badSchemaEntry = {
+      ...golden,
+      schemas: [{ hash: 'NOT-HEX', data: 'AAAA' }],
+    };
+    expect(validate(badSchemaEntry, schema).some((e) => /does not match/.test(e))).toBe(true);
 
     const missingPacks = { ...golden };
     delete (missingPacks as Record<string, unknown>).packs;
@@ -173,6 +207,38 @@ describe('packed-format manifest contract', () => {
     expect((Compression as Record<string, unknown>).Gzip).toBeUndefined();
     expect(Compression.Zstd).toBe(2); // byte 1 stays reserved — never renumber
     expect(schemaCodecs.has('gzip')).toBe(false);
+  });
+
+  it('capabilities is additive: optional, open-ended string array (must-understand, §3.1)', () => {
+    // Schema pin: declared (so its shape is pinned) but never required — the
+    // golden fixture (no re-typing feature used) omits the key entirely.
+    const cap = schema.properties.capabilities;
+    expect(cap.type).toBe('array');
+    expect(cap.items.type).toBe('string');
+    expect(cap.items.enum).toBeUndefined(); // open-ended registry, by design
+    expect(schema.required).not.toContain('capabilities');
+    expect('capabilities' in golden).toBe(false);
+
+    // A quantized build's declaration validates…
+    expect(validate({ ...golden, capabilities: ['coord-quant', 'attr-quant'] }, schema)).toEqual([]);
+    // …and so does a FUTURE registry entry: readers enforce their own
+    // implemented set (and refuse), the schema envelope stays open.
+    expect(validate({ ...golden, capabilities: ['from-the-future'] }, schema)).toEqual([]);
+    // A non-string entry is drift, not evolution.
+    expect(validate({ ...golden, capabilities: [42] }, schema).length).toBeGreaterThan(0);
+
+    // The TS reader's implemented set is pinned against the schema's
+    // machine-readable registry — the SINGLE source of truth both reference
+    // implementations assert against (the Rust side pins in
+    // crates/stt-core/tests/capability_registry.rs), so a registry addition
+    // on either side fails CI until the schema and both readers agree.
+    const registry = (schema as Record<string, unknown>)['x-stt-capability-registry'];
+    expect(Array.isArray(registry)).toBe(true);
+    expect([...KNOWN_MANIFEST_CAPABILITIES].sort()).toEqual(
+      [...(registry as string[])].sort()
+    );
+    const m: PackedManifest = { ...golden, capabilities: ['coord-quant'] };
+    expect(m.capabilities).toEqual(['coord-quant']);
   });
 
   it('tolerates unknown fields at every envelope level (additive evolution)', () => {

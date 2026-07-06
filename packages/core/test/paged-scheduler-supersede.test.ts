@@ -29,10 +29,7 @@ import {
   resetSharedScheduler,
   getSharedScheduler,
 } from '../src/shared-scheduler';
-
-function bufferToArrayBuffer(buf: Uint8Array): ArrayBuffer {
-  return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
-}
+import { bufferToArrayBuffer, flush } from './helpers/fixtures';
 
 // ── Paged-root codec (encode side) — mirrors directory.ts `decodePagedRoot`. ──
 const PAGED_ROOT_VERSION = 1;
@@ -118,6 +115,9 @@ function makePagedDataset(pageCount: number, manifestUrl: string): {
       length: 1,
       uncompressedSize: 1,
       featureCount: 1,
+      // Explicit "no checksum": these 1-byte blobs are never decoded by
+      // this suite (it exercises page scheduling, not payloads).
+      crc32c: 0,
     };
     const frame = encodeDirectory([entry]);
     leafFrames.push(frame);
@@ -223,8 +223,6 @@ function gatedFetch(
     };
   }) as unknown as typeof fetch;
 }
-
-const flush = () => new Promise<void>((r) => setTimeout(r, 0));
 
 describe('paged page-fetch + SharedRequestScheduler supersession (Wave 3)', () => {
   beforeEach(() => resetSharedScheduler());

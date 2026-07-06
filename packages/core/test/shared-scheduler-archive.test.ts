@@ -20,6 +20,7 @@ import { describe, it, expect, afterEach, beforeEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { STTArchive } from '../src/archive';
+import { crc32c } from '../src/crc32c';
 import { encodeDirectory } from '../src/directory';
 import {
   configureSharedScheduler,
@@ -27,6 +28,7 @@ import {
   getSharedScheduler,
 } from '../src/shared-scheduler';
 import { packedFromSingleFile } from './helpers/packed-fixture';
+import { bufferToArrayBuffer, flush } from './helpers/fixtures';
 
 const FIXTURE = fileURLToPath(new URL('./fixtures/sample.stt', import.meta.url));
 const FIXTURE_BYTES = new Uint8Array(readFileSync(FIXTURE));
@@ -34,10 +36,6 @@ const DATASET = packedFromSingleFile(FIXTURE_BYTES);
 const DATASET_PACK_KEYS = [...DATASET.objects.keys()]
   .filter((k) => k.startsWith('packs/'))
   .sort();
-
-function bufferToArrayBuffer(buf: Uint8Array): ArrayBuffer {
-  return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
-}
 
 /** Pull the fixture's first decodable blob + its metadata once. */
 async function fixtureBlobAndMeta(): Promise<{ blob: Uint8Array; meta: any; e: any }> {
@@ -87,7 +85,8 @@ function makeDataset(
       uncompressedSize: e.uncompressedSize,
       featureCount: e.featureCount,
       hilbert: i,
-      crc32c: i + 1,
+      // Real blob decoded through the verifying reader → true CRC-32C.
+      crc32c: crc32c(blob),
       temporalBucketMs: e.temporalBucketMs,
     });
   }
@@ -188,9 +187,6 @@ function gatedFetch(
     };
   }) as unknown as typeof fetch;
 }
-
-/** Flush microtasks so scheduler pump + fetch reactions settle. */
-const flush = () => new Promise<void>((r) => setTimeout(r, 0));
 
 /** A shared gate/concurrency tracker for the gated fetch. */
 interface SharedGate {

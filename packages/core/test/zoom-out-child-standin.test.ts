@@ -11,11 +11,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import { SpatiotemporalTileset } from '../src/spatiotemporal-tileset';
 import type { TileId, BoundingBox, Tile } from '../src/types';
+import { fakeTile, flush as tick } from './helpers/fixtures';
 
-const fakeTile = (id: TileId): Tile =>
-  ({ id, timeRange: { start: id.t, end: id.t + 1000 }, layers: [] }) as unknown as Tile;
-
-const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
 /** Drain enough macrotasks for a multi-zoom-level 'best-available' fetch to settle. */
 const settle = async (ticks = 5): Promise<void> => {
   for (let i = 0; i < ticks; i++) await tick();

@@ -2,7 +2,7 @@
  * usePlayback: the React lifecycle/wiring over the @poopdeck.gl/playback engine.
  *
  * The engine itself (TimeController + PlaybackGovernor behavior) is covered by
- * that package's 89 tests; here we assert the React adapter — that mounting
+ * that package's own tests; here we assert the React adapter — that mounting
  * builds the controller + governor, the returned handlers route to the
  * governor's intent, options are reflected, a range change resets transient
  * state, and unmount disposes the governor. Fake timers + a stubbed rAF mirror

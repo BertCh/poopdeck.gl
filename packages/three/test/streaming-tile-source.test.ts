@@ -1,64 +1,13 @@
 import { describe, it, expect, vi } from 'vitest';
-import type { BoundingBox, Tile, TileId } from '@poopdeck.gl/core';
 import type { BufferedRunway as CoreBufferedRunway } from '@poopdeck.gl/core';
 import {
   StreamingTileSource,
   TilesetBufferSource,
   residentSetEqual,
   tileKey,
-  type DrivableTileset,
   type RunwayTileset,
 } from '../src/scene/streaming-tile-source';
-
-function tile(id: TileId): Tile {
-  return {
-    id,
-    timeRange: { start: id.t, end: id.t + 1000 },
-    layers: [],
-  } as Tile;
-}
-
-const VIEWPORT = {
-  bounds: { minLon: -1, minLat: -1, maxLon: 1, maxLat: 1 } as BoundingBox,
-  zoom: 14,
-  time: 5000,
-};
-
-/** A mock tileset whose visible set is controllable per-test. */
-function mockTileset(initial: Tile[] = []): DrivableTileset & {
-  updates: Array<{ bounds: BoundingBox; zoom: number; time: number; timeWindow: number }>;
-  setVisible(t: Tile[]): void;
-  clearCalls: number;
-} {
-  let visible = initial;
-  const updates: Array<{
-    bounds: BoundingBox;
-    zoom: number;
-    time: number;
-    timeWindow: number;
-  }> = [];
-  let clearCalls = 0;
-  return {
-    updates,
-    get clearCalls() {
-      return clearCalls;
-    },
-    setVisible(t: Tile[]) {
-      visible = t;
-    },
-    update(v) {
-      updates.push(v);
-      return 0;
-    },
-    getVisibleTiles() {
-      return visible;
-    },
-    setAnimationState: vi.fn(),
-    clear() {
-      clearCalls++;
-    },
-  };
-}
+import { mockTileset, tile, VIEWPORT } from './_support/streaming';
 
 describe('tileKey / residentSetEqual', () => {
   it('keys by tile address (z/x/y/t)', () => {

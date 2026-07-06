@@ -67,6 +67,18 @@ function collectLineLayers(tiles: Tile[]): BinaryFeatures[] {
   return layers;
 }
 
+/**
+ * The scene-wide time origin for LineString-based layers: the first animatable
+ * LineString layer's `timeOffset`, or 0 when there is none. This is the same
+ * first-match convention `buildPathPolylines` / `buildArcPolylines` rebase to;
+ * `CesiumTripsLayer` needs only the scalar (its geometry origin comes from the
+ * core `buildTripIndex`), so it is factored out here rather than re-scanned.
+ */
+export function lineStringTimeOrigin(tiles: Tile[]): number {
+  const layers = collectLineLayers(tiles);
+  return layers.length > 0 ? layers[0].timeOffset : 0;
+}
+
 export interface PathBuildOptions {
   /** Per-feature colour. @default constant opaque grey */
   color?: FeatureColorMode;

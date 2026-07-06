@@ -1,6 +1,4 @@
 import { describe, it, expect } from 'vitest';
-import { GeometryType } from '@poopdeck.gl/core';
-import type { BinaryFeatures, Tile } from '@poopdeck.gl/core';
 import {
   quadbinToTile,
   tileToBounds,
@@ -12,7 +10,7 @@ import {
   DEFAULT_QUADBIN_COLOR_RANGE,
 } from '../src/lib/quadbin-buffers';
 import { LocalEnuProjection } from '../src/projection/local-enu';
-import type { RGBA } from '../src/lib/color';
+import { makeVectorTile as summaryTile } from './_support/features';
 
 // ── Reference Quadbin encoder (1:1 port of crates/stt-build/src/quadbin.rs) ──
 // so the test generates valid u64 cell ids the decoder must invert.
@@ -102,33 +100,6 @@ describe('rampBucketColor', () => {
 // ── buffer builder ──────────────────────────────────────────────────────────
 const anchor = { longitude: 0, latitude: 0 };
 const proj = new LocalEnuProjection(anchor);
-
-function summaryTile(
-  ids: bigint[],
-  counts: number[],
-  layerName = 'summary',
-): Tile {
-  const n = ids.length;
-  const features: BinaryFeatures = {
-    featureCount: n,
-    geometryType: GeometryType.Point,
-    positionDimensions: 2,
-    positions: new Float64Array(n * 2),
-    featureIds: new Uint32Array(n),
-    featureIds64: BigUint64Array.from(ids),
-    startTimes: new Float32Array(n),
-    endTimes: new Float32Array(n),
-    timeOffset: 0,
-    numericProps: { count: new Float32Array(counts) },
-    categoricalProps: {},
-    vectorProps: {},
-  };
-  return {
-    id: { z: 4, x: 0, y: 0, t: 0 },
-    timeRange: { start: 0, end: 1 },
-    layers: [{ name: layerName, extent: 0, features, geometryExtensionName: 'geoarrow.point' }],
-  };
-}
 
 describe('buildQuadbinBuffers', () => {
   it('emits 4 verts + 6 indices per decodable cell, RTC origin set', () => {

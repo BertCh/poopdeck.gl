@@ -1,5 +1,14 @@
 # @poopdeck.gl/playback
 
+## 0.4.0
+
+### Minor Changes
+
+- `PlaybackGovernor.isScrubbing` + `scrubstart`/`scrubend` events, and the
+  optional `BufferSource.setInteractive(bool)` broadcast (drives scrub-LOD
+  in the tileset). The interactive bit is asserted on source add and cleared
+  on remove/replace/dispose.
+
 ## 0.3.0
 
 ## 0.2.0

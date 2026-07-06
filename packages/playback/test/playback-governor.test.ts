@@ -30,6 +30,9 @@ function makeSource() {
     flushes: 0,
     runwayCalls: [] as Array<{ time: number; direction: 1 | -1; horizonSimMs?: number }>,
     costCalls: [] as Array<{ start: number; end: number }>,
+    interactiveCalls: [] as boolean[],
+    /** Interleaved op log: 'flush' | 'interactive:true' | 'interactive:false'. */
+    ops: [] as string[],
   };
   const source: BufferSource = {
     getBufferedRunway(time, direction, horizonSimMs) {
@@ -53,6 +56,11 @@ function makeSource() {
     },
     flushPrefetch() {
       state.flushes++;
+      state.ops.push('flush');
+    },
+    setInteractive(interactive: boolean) {
+      state.interactiveCalls.push(interactive);
+      state.ops.push(`interactive:${interactive}`);
     },
   };
   return { source, state };
@@ -504,6 +512,165 @@ describe('PlaybackGovernor', () => {
       vi.advanceTimersByTime(350);
       expect(g.state).toBe('playing');
       expect(ready).toHaveBeenCalledWith({ degraded: true });
+    });
+  });
+
+  describe('scrub-LOD interactive signal (P0 — the bit reaches the loader)', () => {
+    it('beginScrub broadcasts setInteractive(true) to ALL sources; endScrub clears it', () => {
+      const a = makeSource();
+      const b = makeSource();
+      const g = makeGovernor();
+      // Registration asserts the CURRENT bit (false outside a drag), so a
+      // source carrying a stale `true` from an earlier lifecycle is synced.
+      g.addSource('heavy', a.source, { required: true });
+      g.addSource('overlay', b.source, { required: false }); // optional sources load too
+      expect(a.state.interactiveCalls).toEqual([false]);
+      expect(b.state.interactiveCalls).toEqual([false]);
+
+      g.beginScrub();
+      expect(g.isScrubbing).toBe(true);
+      expect(a.state.interactiveCalls).toEqual([false, true]);
+      expect(b.state.interactiveCalls).toEqual([false, true]);
+
+      g.scrubTo(1234); // previews never re-broadcast
+      expect(a.state.interactiveCalls).toEqual([false, true]);
+
+      g.endScrub(1234);
+      expect(g.isScrubbing).toBe(false);
+      expect(a.state.interactiveCalls).toEqual([false, true, false]);
+      expect(b.state.interactiveCalls).toEqual([false, true, false]);
+    });
+
+    it('clears the bit BEFORE the commit flush, so the loader restores its fine tier first (G7)', () => {
+      const { source, state } = makeSource();
+      const g = makeGovernor({ source }); // registration syncs the bit → false
+      g.beginScrub();
+      g.endScrub(5_000);
+      expect(state.ops).toEqual([
+        'interactive:false',
+        'interactive:true',
+        'interactive:false',
+        'flush',
+      ]);
+    });
+
+    it('fires scrubstart/scrubend exactly once per drag bracket (idempotent grabs)', () => {
+      const { source } = makeSource();
+      const g = makeGovernor({ source });
+      const starts: number[] = [];
+      const ends: number[] = [];
+      g.on('scrubstart', (t) => starts.push(t));
+      g.on('scrubend', (t) => ends.push(t));
+
+      tc.setTime(7_000);
+      g.beginScrub();
+      g.beginScrub(); // a second grab of a held thumb is the same drag
+      expect(starts).toEqual([7_000]);
+
+      g.endScrub(9_000);
+      expect(ends).toEqual([9_000]);
+
+      // endScrub without a drag commits a seek but is NOT a scrub bracket.
+      g.endScrub(11_000);
+      expect(ends).toEqual([9_000]);
+      expect(tc.getTime()).toBe(11_000);
+    });
+
+    it('a source registered mid-drag receives the interactive bit, and release clears it', () => {
+      const early = makeSource();
+      const late = makeSource();
+      const g = makeGovernor();
+      g.addSource('early', early.source);
+
+      g.beginScrub();
+      g.addSource('late', late.source);
+      expect(late.state.interactiveCalls).toEqual([true]);
+
+      g.endScrub(0);
+      expect(late.state.interactiveCalls).toEqual([true, false]);
+      expect(early.state.interactiveCalls).toEqual([false, true, false]);
+    });
+
+    it('removeSource mid-drag clears the bit on its way out (endScrub can no longer reach it)', () => {
+      const kept = makeSource();
+      const dropped = makeSource();
+      const g = makeGovernor();
+      g.addSource('kept', kept.source);
+      g.addSource('dropped', dropped.source);
+
+      g.beginScrub();
+      expect(dropped.state.interactiveCalls).toEqual([false, true]);
+
+      g.removeSource('dropped');
+      // Cleared AT removal — without this the source stayed degraded forever.
+      expect(dropped.state.interactiveCalls).toEqual([false, true, false]);
+
+      g.endScrub(0);
+      // The removed source hears nothing further; the kept one clears normally.
+      expect(dropped.state.interactiveCalls).toEqual([false, true, false]);
+      expect(kept.state.interactiveCalls).toEqual([false, true, false]);
+    });
+
+    it('removeSource outside a drag does not broadcast anything', () => {
+      const { source, state } = makeSource();
+      const g = makeGovernor();
+      g.addSource('x', source);
+      g.removeSource('x');
+      expect(state.interactiveCalls).toEqual([false]); // registration sync only
+    });
+
+    it('setSource mid-drag clears the bit on every replaced source; the replacement gets true', () => {
+      const old = makeSource();
+      const next = makeSource();
+      const g = makeGovernor();
+      g.addSource('default', old.source);
+
+      g.beginScrub();
+      expect(old.state.interactiveCalls).toEqual([false, true]);
+
+      g.setSource(next.source);
+      expect(old.state.interactiveCalls).toEqual([false, true, false]); // swapped out → cleared
+      expect(next.state.interactiveCalls).toEqual([true]); // current bit asserted at add
+
+      g.endScrub(0);
+      expect(old.state.interactiveCalls).toEqual([false, true, false]); // unreachable, unchanged
+      expect(next.state.interactiveCalls).toEqual([true, false]);
+    });
+
+    it('dispose mid-drag stands every source down (the endScrub that would clear it never comes)', () => {
+      const a = makeSource();
+      const b = makeSource();
+      const g = makeGovernor();
+      g.addSource('a', a.source);
+      g.addSource('b', b.source, { required: false });
+
+      g.beginScrub();
+      expect(a.state.interactiveCalls).toEqual([false, true]);
+
+      g.dispose();
+      expect(a.state.interactiveCalls).toEqual([false, true, false]);
+      expect(b.state.interactiveCalls).toEqual([false, true, false]);
+
+      // The disposed instance is inert — no further broadcasts on endScrub.
+      g.endScrub(0);
+      expect(a.state.interactiveCalls).toEqual([false, true, false]);
+    });
+
+    it('dispose outside a drag does not broadcast anything', () => {
+      const { source, state } = makeSource();
+      const g = makeGovernor({ source });
+      g.dispose();
+      expect(state.interactiveCalls).toEqual([false]); // registration sync only
+    });
+
+    it('tolerates sources without the optional setInteractive hook', () => {
+      const { source } = makeSource();
+      delete (source as { setInteractive?: unknown }).setInteractive;
+      const g = makeGovernor({ source });
+      expect(() => {
+        g.beginScrub();
+        g.endScrub(100);
+      }).not.toThrow();
     });
   });
 

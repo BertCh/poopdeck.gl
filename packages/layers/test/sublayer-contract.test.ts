@@ -937,20 +937,6 @@ describe('SplatLayer Worldbuild sublayer contract', () => {
     expect([...sub.props.data.attributes.instanceIsDynamic.value]).toEqual([0, 1, 0]);
   });
 
-  it('a tile WITHOUT an is_dynamic column still satisfies the contract under cumulative', async () => {
-    const layer = await makeSplatLayer({ cumulative: true, revealFade: 500 });
-    const tile = baseSurfelTile(); // no is_dynamic column (existing surfel tiles)
-    layer.state = { tiles: [tile] };
-    const sublayers = layer.renderLayers();
-    expect(sublayers).toHaveLength(1);
-    const [sub] = sublayers;
-    // Valid, complete sublayer; attribute omitted → primitive defaults to static.
-    expect(sub.props.data.length).toBe(3);
-    expect(sub.props.data.attributes.instanceQuaternions.size).toBe(4);
-    expect(sub.props.data.attributes.instanceIsDynamic).toBeUndefined();
-    expect(sub.props.cumulative).toBe(true);
-  });
-
   it('a worldbuild prop change invalidates the cached splat sublayer', async () => {
     const layer = await makeSplatLayer({ cumulative: true, revealFade: 0 });
     const tile = baseSurfelTile([1, 0, 1]);

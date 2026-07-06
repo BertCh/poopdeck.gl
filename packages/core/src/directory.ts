@@ -161,12 +161,11 @@ export function decodePagedRoot(bytes: Uint8Array): PagedRoot {
 }
 
 /**
- * A decoded directory entry. The integrity crc32c and the Hilbert key are read
- * (to advance the cursor) but not surfaced — the reader addresses tiles by
- * (zoom, x, y, time), not by Hilbert index. `encodeDirectory` therefore
- * defaults Hilbert to 0; the TS codec is decode-for-reading /
- * encode-for-synthetic-tests, not a faithful re-encoder of a Rust archive's
- * Hilbert column.
+ * A decoded directory entry. The Hilbert key is read (to advance the cursor)
+ * but not surfaced — the reader addresses tiles by (zoom, x, y, time), not by
+ * Hilbert index. `encodeDirectory` therefore defaults Hilbert to 0; the TS
+ * codec is decode-for-reading / encode-for-synthetic-tests, not a faithful
+ * re-encoder of a Rust archive's Hilbert column.
  */
 export interface DirectoryEntry {
   zoom: number;
@@ -183,6 +182,15 @@ export interface DirectoryEntry {
   length: number;
   uncompressedSize: number;
   featureCount: number;
+  /**
+   * CRC-32C (Castagnoli) of the blob's compressed bytes, as written by the
+   * Rust encoder (`crc32c_tag(&compressed)`). Verified by the decode path
+   * before decompression when `ArchiveOptions.verifyChecksums` is on. `0`
+   * means "no checksum recorded" — the `encodeDirectory` default for
+   * synthetic test archives (a real CRC of 0 is a 2⁻³² coincidence, and the
+   * consequence is merely a skipped verification, never a false failure).
+   */
+  crc32c: number;
   temporalBucketMs?: number;
   /**
    * Tight lower covering bound — the earliest feature *start* time actually in
@@ -314,7 +322,7 @@ export function decodeDirectory(bytes: Uint8Array): DirectoryEntry[] {
     const offset = offFlag === 0n ? expectedOffset : c.uvarint();
     const length = Number(c.uvarint());
     const uncompressedSize = Number(c.uvarint());
-    c.u32le(); // crc32c integrity tag — not verified client-side
+    const crc32c = c.u32le();
 
     if (cursor + runLen > n) {
       throw new Error('STT directory: run length exceeds entry count');
@@ -333,6 +341,7 @@ export function decodeDirectory(bytes: Uint8Array): DirectoryEntry[] {
         length,
         uncompressedSize,
         featureCount: key.featureCount,
+        crc32c,
         temporalBucketMs: key.temporalBucketMs,
       };
       cursor++;
@@ -362,7 +371,7 @@ export function decodeDirectory(bytes: Uint8Array): DirectoryEntry[] {
 // synthetic archives; the production writer is the Rust `stt-core`).
 // ----------------------------------------------------------------------------
 
-/** A directory entry to encode. `hilbert`/`crc32c`/`packId` default to 0. */
+/** A directory entry to encode. `hilbert`/`packId` default to 0. */
 export interface DirectoryEncodeEntry {
   zoom: number;
   x: number;
@@ -376,7 +385,14 @@ export interface DirectoryEncodeEntry {
   uncompressedSize: number;
   featureCount: number;
   hilbert?: number;
-  crc32c?: number;
+  /**
+   * CRC-32C of the compressed blob. REQUIRED — pass the real CRC (the
+   * `crc32c()` helper) for decodable blobs, or an explicit `0` to mean "no
+   * checksum recorded" (the reader skips verification for 0). Required
+   * rather than defaulted so a synthetic-archive author cannot silently opt
+   * a test out of the default-on verification path by omission.
+   */
+  crc32c: number;
   temporalBucketMs?: number;
   /** Tight lower covering bound (see `DirectoryEntry.coverTMin`). */
   coverTMin?: number;

@@ -3,7 +3,6 @@ import {
   LAYER_KINDS,
   CAPABILITIES,
   assertDescriptorConsistent,
-  type Capability,
   type LayerKind,
   type ConformanceEvidence,
 } from '@poopdeck.gl/core/capabilities';
@@ -95,8 +94,10 @@ describe('threeBackend descriptor — structural conformance gate', () => {
     }
   });
 
-  it('(b) assertDescriptorConsistent == [] against evidence built from real exports + claimed caps/modes', () => {
-    // Layer-kind evidence: a kind is proven iff its mapped class is a real export.
+  it('(b) assertDescriptorConsistent flags no over-claim for layer kinds (real exports) or modes', () => {
+    // Layer-kind evidence: a kind is proven iff its mapped class is a real export —
+    // derived INDEPENDENTLY of the descriptor's own claim, so a kind claimed with no
+    // backing class surfaces as a violation. This is the genuine over-claim gate.
     const provenKinds = new Set<LayerKind>();
     for (const kind of LAYER_KINDS) {
       if (!threeBackend.layerKinds[kind].supported) continue;
@@ -105,17 +106,19 @@ describe('threeBackend descriptor — structural conformance gate', () => {
         provenKinds.add(kind);
       }
     }
-    // Capability evidence: the caps the descriptor claims true (structural gate —
-    // these are retro-documented as shipping reality).
-    const provenCaps = new Set<Capability>(
-      CAPABILITIES.filter((cap) => threeBackend.capabilities[cap]),
-    );
-    // Time-filter mode evidence: three ships CPU-ref + TSL nodes for each claimed
-    // mode (windowAlpha/wakeAlpha/cumulativeAlpha/trailAlpha are real exports).
+    // Time-filter mode evidence is the descriptor's claimed modes; those are gated
+    // independently by the "backed by real alpha exports" case below.
     const provenModes = new Set(threeBackend.timeFilterModes);
-
+    // The capability axis is DELIBERATELY not gated here. Capabilities are
+    // cross-cutting runtime behaviours (globe/picking/extrude3d/metricSizing) with
+    // no 1:1 structural export to prove them, so deriving evidence from
+    // `threeBackend.capabilities` (as this case used to) is a self-fulfilling
+    // tautology that can never fail. We pass the full capability set so this case
+    // asserts ONLY the two axes it can honestly prove structurally — layer kinds
+    // and modes; capability conformance is a Tier-2 pixel/behavioural concern the
+    // user browser-verifies (see vitest.config.ts).
     const evidence: ConformanceEvidence = {
-      capabilities: provenCaps,
+      capabilities: new Set(CAPABILITIES),
       layerKinds: provenKinds,
       timeFilterModes: provenModes,
     };

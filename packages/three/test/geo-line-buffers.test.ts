@@ -1,37 +1,15 @@
 import { describe, it, expect } from 'vitest';
-import { GeometryType } from '@poopdeck.gl/core';
-import type { BinaryFeatures, Tile } from '@poopdeck.gl/core';
+import type { BinaryFeatures } from '@poopdeck.gl/core';
 import { buildLineSegmentBuffers } from '../src/lib/geo-line-buffers';
 import { LocalEnuProjection } from '../src/projection/local-enu';
 import { MercatorProjection } from '../src/projection/mercator';
+import { makeLineTile } from './_support/features';
+import { expectEmptyBuffers, expectRtcMercator } from './_support/rtc';
 
 const anchor = { longitude: -71.05, latitude: 42.35 };
 
-function lineTile(
-  partial: Partial<BinaryFeatures>,
-  timeOffset = 0,
-): Tile {
-  const features: BinaryFeatures = {
-    featureCount: 1,
-    geometryType: GeometryType.LineString,
-    positionDimensions: 2,
-    positions: new Float64Array(0),
-    featureIds: new Uint32Array(1),
-    startTimes: new Float32Array(1),
-    endTimes: new Float32Array(1),
-    startIndices: new Uint32Array([0, 0]),
-    timeOffset,
-    numericProps: {},
-    categoricalProps: {},
-    vectorProps: {},
-    ...partial,
-  };
-  return {
-    id: { z: 14, x: 0, y: 0, t: timeOffset },
-    timeRange: { start: timeOffset, end: timeOffset + 1000 },
-    layers: [{ name: 'lines', extent: 0, features, geometryExtensionName: 'geoarrow.linestring' }],
-  };
-}
+const lineTile = (partial: Partial<BinaryFeatures>, timeOffset = 0) =>
+  makeLineTile(partial, { timeOffset, layerName: 'lines' });
 
 describe('buildLineSegmentBuffers', () => {
   const proj = new LocalEnuProjection(anchor);
@@ -80,10 +58,7 @@ describe('buildLineSegmentBuffers', () => {
     const buf = buildLineSegmentBuffers([tile], merc, 0, {
       colorMode: { type: 'constant', color: [10, 20, 30, 255] },
     });
-    expect(buf.count).toBe(1);
-    expect(Math.abs(buf.origin[0])).toBeGreaterThan(1e6); // huge absolute mercator x
-    expect(Math.abs(buf.posA[0])).toBeLessThan(1); // A is the origin → ~0
-    expect(Math.abs(buf.posB[0])).toBeLessThan(500); // B within a few hundred metres
+    expectRtcMercator(buf, { a: buf.posA[0], b: buf.posB[0] });
   });
 
   it('returns empty for a tile with no line features', () => {
@@ -91,7 +66,6 @@ describe('buildLineSegmentBuffers', () => {
     const buf = buildLineSegmentBuffers([tile], proj, 0, {
       colorMode: { type: 'constant', color: [0, 0, 0, 255] },
     });
-    expect(buf.count).toBe(0);
-    expect(buf.bbox).toBeNull();
+    expectEmptyBuffers(buf);
   });
 });

@@ -271,94 +271,9 @@ describe('AnimatedPointLayer per-tile sublayer architecture (v3)', () => {
     expect(positions[5]).toBe(0);
   });
 
-  it('builds one ScatterplotLayer per tile (no cross-tile consolidation)', () => {
-    const layer = makeLayer();
-    const a = bigPointTile(20);
-    a.id = { z: 14, x: 1, y: 2, t: 0 };
-    const b = bigPointTile(15);
-    b.id = { z: 14, x: 1, y: 3, t: 0 };
-    layer.state = { tiles: [a, b] };
-    const sublayers = (layer as any).renderLayers();
-    expect(sublayers.length).toBe(2);
-  });
-
-  it("uses each tile's own timeOffset (no cross-tile rebasing)", () => {
-    // The v3 promise: every tile renders through its own sublayer with its
-    // own TimeFilterExtension uniforms. v2 rebased onto a single offset and
-    // had to copy startTimes / endTimes into a fresh consolidated buffer.
-    const layer = makeLayer();
-    const a = bigPointTile(3);
-    a.id = { z: 14, x: 1, y: 2, t: 0 };
-    a.layers[0].features.timeOffset = 1_700_000_000_000;
-    const b = bigPointTile(3);
-    b.id = { z: 14, x: 1, y: 3, t: 0 };
-    b.layers[0].features.timeOffset = 1_700_086_400_000;
-    layer.state = { tiles: [a, b] };
-    const [subA, subB] = (layer as any).renderLayers();
-    expect(subA.props.timeOffset).toBe(1_700_000_000_000);
-    expect(subB.props.timeOffset).toBe(1_700_086_400_000);
-  });
-
-  it('caches PreparedTile so the data object reference is stable across renders', () => {
-    const layer = makeLayer();
-    const tile = bigPointTile(5);
-    const first = (layer as any).prepareTile(tile, tile.layers[0]);
-    const second = (layer as any).prepareTile(tile, tile.layers[0]);
-    expect(second).toBe(first);
-    expect(second.data).toBe(first.data);
-  });
-
-  it('returns the SAME ScatterplotLayer instance per tile across renders when nothing changed', () => {
-    const layer = makeLayer();
-    const a = bigPointTile(3);
-    a.id = { z: 14, x: 1, y: 2, t: 0 };
-    const b = bigPointTile(3);
-    b.id = { z: 14, x: 1, y: 3, t: 0 };
-    layer.state = { tiles: [a, b] };
-    const first = (layer as any).renderLayers();
-    const second = (layer as any).renderLayers();
-    expect(second[0]).toBe(first[0]);
-    expect(second[1]).toBe(first[1]);
-  });
-
-  it('rebuilds the cached ScatterplotLayer when a tile-level prop changes', () => {
-    const layer = makeLayer();
-    const tile = bigPointTile(3);
-    layer.state = { tiles: [tile] };
-    const first = (layer as any).renderLayers();
-    layer.props.radiusScale = 7;
-    const second = (layer as any).renderLayers();
-    expect(second[0]).not.toBe(first[0]);
-    expect(second[0].props.radiusScale).toBe(7);
-  });
-
-  it('drops sublayer-cache entries for tiles that leave the visible set', () => {
-    const layer = makeLayer();
-    const a = bigPointTile(3);
-    a.id = { z: 14, x: 1, y: 2, t: 0 };
-    const b = bigPointTile(3);
-    b.id = { z: 14, x: 1, y: 3, t: 0 };
-    layer.state = { tiles: [a, b] };
-    (layer as any).renderLayers();
-    expect((layer as any).sublayerCache.size).toBe(2);
-
-    layer.state = { tiles: [a] };
-    (layer as any).renderLayers();
-    expect((layer as any).sublayerCache.size).toBe(1);
-  });
-
   it('passes the bound getTime getter so the time uniform advances each draw', () => {
     const built = buildSublayerForTile(bigPointTile(3));
     expect(typeof built.props.getTime).toBe('function');
-  });
-
-  it('declares dataComparator that skips deck.gl prop diff on identical references', () => {
-    const built = buildSublayerForTile(bigPointTile(3));
-    const cmp = built.props.dataComparator;
-    expect(typeof cmp).toBe('function');
-    const ref = {};
-    expect(cmp(ref, ref)).toBe(true);
-    expect(cmp(ref, {})).toBe(false);
   });
 });
 
@@ -768,15 +683,6 @@ describe('AnimatedPathLayer per-tile sublayer architecture (v3)', () => {
     expect(c[4 * 4 + 3]).toBe(200);
   });
 
-  it('declares dataComparator that skips deck.gl prop diff on identical references', () => {
-    const built = buildSublayerForTile(bigPathTile(3, 4));
-    const cmp = built.props.dataComparator;
-    expect(typeof cmp).toBe('function');
-    const ref = {};
-    expect(cmp(ref, ref)).toBe(true);
-    expect(cmp(ref, {})).toBe(false);
-  });
-
   it('projects colorMapping onto the tile category dictionary for stable per-category colors', () => {
     // Mirrors AnimatedTripsLayer: an explicit category-string → color map
     // produces a per-tile palette ALIGNED with this tile's category dictionary,
@@ -1000,17 +906,6 @@ describe('AnimatedTripsLayer per-tile sublayer architecture (v3)', () => {
     };
   });
 
-  it('builds one PathLayer per tile (no cross-tile consolidation)', () => {
-    const layer = makeLayer();
-    layer.state = { tiles: [bigPathTile(20, 5), bigPathTile(15, 4)] };
-    // Give the two tiles distinct ids so makeTileKey doesn't collide.
-    layer.state.tiles[0].id = { z: 14, x: 1, y: 2, t: 0 };
-    layer.state.tiles[1].id = { z: 14, x: 1, y: 3, t: 0 };
-    const sublayers = (layer as any).renderLayers();
-    // Each tile has 1 layer; expect 1 sublayer per tile.
-    expect(sublayers.length).toBe(2);
-  });
-
   it('hands deck.gl the binary {length, startIndices, attributes} shape', () => {
     const layer = makeLayer();
     const tile = bigPathTile(50, 4);
@@ -1050,17 +945,6 @@ describe('AnimatedTripsLayer per-tile sublayer architecture (v3)', () => {
     expect(attrs.getWidth).toBeUndefined();
   });
 
-  it('caches PreparedTile so the data object reference is stable across renders', () => {
-    const layer = makeLayer();
-    const tile = bigPathTile(5, 4);
-    const first = (layer as any).prepareTile(tile, tile.layers[0]);
-    const second = (layer as any).prepareTile(tile, tile.layers[0]);
-    // Stable identity is what lets deck.gl skip re-tesselation / GPU
-    // re-upload on the next render when nothing changed.
-    expect(second).toBe(first);
-    expect(second.data).toBe(first.data);
-  });
-
   it('sets positionFormat from tile dims so 2D paths are not misread as XYZ', () => {
     const layer = makeLayer();
     const tile = bigPathTile(3, 4);
@@ -1078,24 +962,6 @@ describe('AnimatedTripsLayer per-tile sublayer architecture (v3)', () => {
     // Without this, the trail uniform would freeze at the snapshot value
     // between layer rebuilds — visible as "freeze then jump" stutter.
     expect(typeof built.props.getTime).toBe('function');
-  });
-
-  it("uses each tile's own timeOffset (no cross-tile rebasing)", () => {
-    // Independence is the architectural promise of the v3 design: every tile
-    // is rendered through its own sublayer with its own TimeFilterExtension
-    // uniforms. The v2 consolidation pass rebased every tile onto a single
-    // layer-wide offset, defeating zero-copy on the time arrays.
-    const layer = makeLayer();
-    const a = bigPathTile(3, 4);
-    a.id = { z: 14, x: 1, y: 2, t: 0 };
-    a.layers[0].features.timeOffset = 1_700_000_000_000;
-    const b = bigPathTile(3, 4);
-    b.id = { z: 14, x: 1, y: 3, t: 0 };
-    b.layers[0].features.timeOffset = 1_700_086_400_000; // +1 day
-    layer.state = { tiles: [a, b] };
-    const [subA, subB] = (layer as any).renderLayers();
-    expect(subA.props.timeOffset).toBe(1_700_000_000_000);
-    expect(subB.props.timeOffset).toBe(1_700_086_400_000);
   });
 
   it('uses tile.vertexTimestamps directly (zero copy) when present', () => {
@@ -1143,54 +1009,6 @@ describe('AnimatedTripsLayer per-tile sublayer architecture (v3)', () => {
     layer.state = { tiles: [a] };
     (layer as any).renderLayers();
     expect((layer as any).preparedTileCache.size).toBe(1);
-  });
-
-  it('returns the SAME PathLayer instance per tile across renders when nothing changed', () => {
-    // Reference stability is the whole point of the sublayer cache: deck.gl's
-    // matcher short-circuits the entire updateState / prop-diff pass when the
-    // same instance comes back. Per-frame `new PathLayer(...)` was 30-60% of
-    // frame time once 50+ tiles were on screen.
-    const layer = makeLayer();
-    const a = bigPathTile(3, 4);
-    a.id = { z: 14, x: 1, y: 2, t: 0 };
-    const b = bigPathTile(3, 4);
-    b.id = { z: 14, x: 1, y: 3, t: 0 };
-    layer.state = { tiles: [a, b] };
-    const first = (layer as any).renderLayers();
-    const second = (layer as any).renderLayers();
-    expect(second.length).toBe(2);
-    expect(second[0]).toBe(first[0]);
-    expect(second[1]).toBe(first[1]);
-  });
-
-  it('rebuilds the cached PathLayer when a tile-level prop changes', () => {
-    // Layer-prop changes (trailLength, widthScale, …) must invalidate every
-    // cached sublayer; otherwise the new prop would apply only to newly
-    // arriving tiles and produce a visible split-render.
-    const layer = makeLayer();
-    const tile = bigPathTile(3, 4);
-    layer.state = { tiles: [tile] };
-    const first = (layer as any).renderLayers();
-    // Mutate a baked layer-level prop and re-render.
-    layer.props.trailLength = 12345;
-    const second = (layer as any).renderLayers();
-    expect(second[0]).not.toBe(first[0]);
-    expect(second[0].props.trailLength).toBe(12345);
-  });
-
-  it('drops sublayer-cache entries for tiles that leave the visible set', () => {
-    const layer = makeLayer();
-    const a = bigPathTile(3, 4);
-    a.id = { z: 14, x: 1, y: 2, t: 0 };
-    const b = bigPathTile(3, 4);
-    b.id = { z: 14, x: 1, y: 3, t: 0 };
-    layer.state = { tiles: [a, b] };
-    (layer as any).renderLayers();
-    expect((layer as any).sublayerCache.size).toBe(2);
-
-    layer.state = { tiles: [a] };
-    (layer as any).renderLayers();
-    expect((layer as any).sublayerCache.size).toBe(1);
   });
 
   it('expands trip categorical color to a per-vertex getColor buffer (PathLayer segment instances)', () => {
@@ -1296,19 +1114,6 @@ describe('AnimatedTripsLayer per-tile sublayer architecture (v3)', () => {
     const col = built.props.data.attributes.getColor.value;
     // Single-stop ramp → every vertex is the ramp color, not the palette color.
     expect([col[0], col[1], col[2], col[3]]).toEqual([1, 2, 3, 255]);
-  });
-
-  it('declares dataComparator that skips deck.gl prop diff on identical references', () => {
-    const layer = makeLayer();
-    const tile = bigPathTile(3, 4);
-    const built = (layer as any).buildSublayer(
-      (layer as any).prepareTile(tile, tile.layers[0]),
-    );
-    const cmp = built.props.dataComparator;
-    expect(typeof cmp).toBe('function');
-    const ref = {};
-    expect(cmp(ref, ref)).toBe(true);
-    expect(cmp(ref, {})).toBe(false);
   });
 });
 
@@ -1689,50 +1494,6 @@ describe('AnimatedPolygonLayer per-tile sublayer architecture (v3)', () => {
     expect(elev.value[binary.startIndices[2] + 2]).toBe(30);
   });
 
-  it('builds one SolidPolygonLayer per tile (no cross-tile consolidation)', () => {
-    const layer = makeLayer();
-    const a = bigPolygonTile(3);
-    a.id = { z: 14, x: 1, y: 2, t: 0 };
-    const b = bigPolygonTile(4);
-    b.id = { z: 14, x: 1, y: 3, t: 0 };
-    layer.state = { tiles: [a, b] };
-    const sublayers = (layer as any).renderLayers();
-    expect(sublayers.length).toBe(2);
-  });
-
-  it("uses each tile's own timeOffset (no layer-wide rebasing)", () => {
-    const layer = makeLayer();
-    const a = bigPolygonTile(2);
-    a.id = { z: 14, x: 1, y: 2, t: 0 };
-    a.layers[0].features.timeOffset = 1_700_000_000_000;
-    const b = bigPolygonTile(2);
-    b.id = { z: 14, x: 1, y: 3, t: 0 };
-    b.layers[0].features.timeOffset = 1_700_086_400_000;
-    layer.state = { tiles: [a, b] };
-    const [subA, subB] = (layer as any).renderLayers();
-    expect(subA.props.timeOffset).toBe(1_700_000_000_000);
-    expect(subB.props.timeOffset).toBe(1_700_086_400_000);
-  });
-
-  it('caches PreparedTile so the data object reference is stable across renders', () => {
-    const layer = makeLayer();
-    const tile = bigPolygonTile(3);
-    const first = (layer as any).prepareTile(tile, tile.layers[0]);
-    const second = (layer as any).prepareTile(tile, tile.layers[0]);
-    expect(second).toBe(first);
-    expect(second.data).toBe(first.data);
-  });
-
-  it('returns the SAME SolidPolygonLayer per tile across renders when nothing changed', () => {
-    const layer = makeLayer();
-    const a = bigPolygonTile(3);
-    a.id = { z: 14, x: 1, y: 2, t: 0 };
-    layer.state = { tiles: [a] };
-    const [first] = (layer as any).renderLayers();
-    const [second] = (layer as any).renderLayers();
-    expect(second).toBe(first);
-  });
-
   it('polygons fade/visibility-toggle via uniform updates only (no rebuild)', () => {
     // The architectural promise of lifting filtering to the GPU: changing
     // the play head (via getTime) must NOT rebuild the SolidPolygonLayer.
@@ -1782,44 +1543,6 @@ describe('AnimatedPolygonLayer per-tile sublayer architecture (v3)', () => {
     expect(attrs.instanceCategoryIndex.value[binary.startIndices[2]]).toBe(2);
     expect(attrs.instanceCategoryIndex.value[binary.startIndices[3] + 1]).toBe(1);
     expect(built.props.useCategoryColor).toBe(true);
-  });
-
-  it('declares dataComparator that skips deck.gl prop diff on identical references', () => {
-    const layer = makeLayer();
-    const tile = bigPolygonTile(2);
-    const built = (layer as any).buildSublayer(
-      (layer as any).prepareTile(tile, tile.layers[0]),
-    );
-    const cmp = built.props.dataComparator;
-    expect(typeof cmp).toBe('function');
-    const ref = {};
-    expect(cmp(ref, ref)).toBe(true);
-    expect(cmp(ref, {})).toBe(false);
-  });
-
-  it('rebuilds the cached SolidPolygonLayer when a tile-level prop changes', () => {
-    const layer = makeLayer();
-    const tile = bigPolygonTile(3);
-    layer.state = { tiles: [tile] };
-    const first = (layer as any).renderLayers();
-    layer.props.extruded = true;
-    const second = (layer as any).renderLayers();
-    expect(second[0]).not.toBe(first[0]);
-    expect(second[0].props.extruded).toBe(true);
-  });
-
-  it('drops sublayer-cache entries for tiles that leave the visible set', () => {
-    const layer = makeLayer();
-    const a = bigPolygonTile(2);
-    a.id = { z: 14, x: 1, y: 2, t: 0 };
-    const b = bigPolygonTile(2);
-    b.id = { z: 14, x: 1, y: 3, t: 0 };
-    layer.state = { tiles: [a, b] };
-    (layer as any).renderLayers();
-    expect((layer as any).sublayerCache.size).toBe(2);
-    layer.state = { tiles: [a] };
-    (layer as any).renderLayers();
-    expect((layer as any).sublayerCache.size).toBe(1);
   });
 
   it('passes pre-baked triangle indices to SolidPolygonLayer when present', () => {
@@ -1973,104 +1696,5 @@ describe('FlowCorridorLayer keeps static corridors visible (window-mode time bou
     );
     expect(built.props.getInstanceStartTime).toBeUndefined();
     expect(built.props.getInstanceEndTime).toBeUndefined();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// SplatLayer Worldbuild accreted-reconstruction data shape
-// ---------------------------------------------------------------------------
-
-describe('SplatLayer Worldbuild data shape', () => {
-  let LayerCtor: any;
-
-  beforeEach(async () => {
-    vi.resetModules();
-    LayerCtor = (await import('../src/layers/core/splat-layer')).SplatLayer as any;
-  });
-
-  /** A surfel point tile; `dynamic` (if given) populates the `is_dynamic` column. */
-  function surfelTile(n: number, dynamic?: number[]) {
-    const positions: number[][] = [];
-    const startTimes: number[] = [];
-    const endTimes: number[] = [];
-    for (let i = 0; i < n; i++) {
-      positions.push([i * 0.001, i * 0.001]);
-      startTimes.push(i * 100);
-      endTimes.push(i * 100);
-    }
-    const tile = makePointTile({ positions, startTimes, endTimes, timeOffset: 0 });
-    const f = tile.layers[0].features;
-    const quat = new Float32Array(n * 4);
-    const scale = new Float32Array(n * 2);
-    for (let i = 0; i < n; i++) {
-      quat[i * 4 + 3] = 1;
-      scale[i * 2] = 0.3;
-      scale[i * 2 + 1] = 0.15;
-    }
-    f.vectorProps = {
-      surfel_quat: { value: quat, size: 4 },
-      surfel_scale: { value: scale, size: 2 },
-    };
-    if (dynamic) f.numericProps['is_dynamic'] = new Float32Array(dynamic);
-    return tile;
-  }
-
-  function makeLayer(tiles: any[], opts: Record<string, any> = {}) {
-    const layer = Object.create(LayerCtor.prototype);
-    layer.props = {
-      id: 'splat',
-      quaternionColumn: 'surfel_quat',
-      scaleColumn: 'surfel_scale',
-      colorColumn: null,
-      elevationProperty: 'z',
-      elevationScale: 1,
-      fallbackColor: [200, 205, 215, 255],
-      temporalSigma: 180,
-      sizeScale: 1,
-      gaussianFalloff: 3,
-      alphaCutoff: 0.04,
-      timeWindow: 2000,
-      opacity: 1,
-      visible: true,
-      ...opts,
-    };
-    layer.state = { tiles };
-    layer.boundGetTime = () => 0;
-    layer.preparedTileCache = new Map();
-    layer.sublayerCache = new Map();
-    layer.lastLayerPropsKey = '';
-    layer.lastTilesRef = null;
-    return layer;
-  }
-
-  it('bakes instanceIsDynamic + forwards the worldbuild props with an is_dynamic column', () => {
-    const layer = makeLayer([surfelTile(4, [0, 1, 1, 0])], {
-      cumulative: true,
-      revealFade: 1000,
-      temporalSigmaDynamic: 350,
-    });
-    const [sub] = layer.renderLayers();
-    expect(sub.props.cumulative).toBe(true);
-    expect(sub.props.revealFade).toBe(1000);
-    expect(sub.props.temporalSigmaDynamic).toBe(350);
-    const dyn = sub.props.data.attributes.instanceIsDynamic;
-    expect(dyn.value).toBeInstanceOf(Float32Array);
-    expect([...dyn.value]).toEqual([0, 1, 1, 0]);
-  });
-
-  it('a tile WITHOUT an is_dynamic column still produces a valid worldbuild sublayer', () => {
-    // The hard backward-compat case: existing surfel tiles have no is_dynamic
-    // column. Even with cumulative on, the layer must build a complete sublayer
-    // and simply omit the attribute (primitive defaults every surfel to static).
-    const layer = makeLayer([surfelTile(3)], { cumulative: true, revealFade: 500 });
-    const sublayers = layer.renderLayers();
-    expect(sublayers).toHaveLength(1);
-    const [sub] = sublayers;
-    expect(sub.props.data.length).toBe(3);
-    expect(sub.props.data.attributes.instancePositions.size).toBe(2);
-    expect(sub.props.data.attributes.instanceQuaternions.size).toBe(4);
-    expect(sub.props.data.attributes.instanceStartTimes).toBeDefined();
-    expect(sub.props.data.attributes.instanceIsDynamic).toBeUndefined();
-    expect(sub.props.cumulative).toBe(true);
   });
 });

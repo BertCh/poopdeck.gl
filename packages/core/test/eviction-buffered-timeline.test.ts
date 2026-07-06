@@ -23,36 +23,19 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { SpatiotemporalTileset } from '../src/spatiotemporal-tileset';
 import type { TileId, BoundingBox, Tile } from '../src/types';
+import { BUCKET_MS, fakeTile, makeAvailableTiles } from './helpers/fixtures';
+import { advanceClock, installClock } from './helpers/clock';
 
 const WEST: BoundingBox = { minLon: -170, minLat: -60, maxLon: -10, maxLat: 60 };
 const EAST: BoundingBox = { minLon: 10, minLat: -60, maxLon: 170, maxLat: 60 };
-const BUCKET_MS = 1000;
 const N_BUCKETS = 60;
 
-function fakeTile(id: TileId): Tile {
-  return { id, timeRange: { start: id.t, end: id.t + BUCKET_MS }, layers: [] } as Tile;
-}
-
 /**
- * One tile per bucket whose interval overlaps the range; x is
- * viewport-derived (west → x=0, east → x=1) so a viewport change genuinely
- * changes the needed-tile set AND the coverage index contents.
+ * One tile per bucket whose interval overlaps the range; x is viewport-derived
+ * (west → x=0, east → x=1) so a viewport change genuinely changes the
+ * needed-tile set AND the coverage index contents.
  */
-function availableTiles(
-  b: BoundingBox,
-  z: number,
-  range: { start: number; end: number },
-): TileId[] {
-  const x = b.maxLon <= 0 ? 0 : 1;
-  const ids: TileId[] = [];
-  const first = Math.max(0, Math.floor(range.start / BUCKET_MS));
-  const last = Math.min(N_BUCKETS - 1, Math.floor(range.end / BUCKET_MS));
-  for (let i = first; i <= last; i++) {
-    const t = i * BUCKET_MS;
-    if (t + BUCKET_MS >= range.start && t <= range.end) ids.push({ z, x, y: 0, t });
-  }
-  return ids;
-}
+const availableTiles = makeAvailableTiles(N_BUCKETS, (b) => (b.maxLon <= 0 ? 0 : 1));
 
 const settle = (ms = 10): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -93,17 +76,6 @@ const enableBufferTracking = async (tileset: SpatiotemporalTileset): Promise<voi
   tileset.getBufferedRanges();
   await settle();
 };
-
-/** Shift Date.now() forward by `ms` (cumulative) without faking timers. */
-let clockOffset = 0;
-function advanceClock(ms: number): void {
-  clockOffset += ms;
-}
-function installClock(): void {
-  clockOffset = 0;
-  const realNow = Date.now.bind(Date);
-  vi.spyOn(Date, 'now').mockImplementation(() => realNow() + clockOffset);
-}
 
 afterEach(() => {
   vi.restoreAllMocks();

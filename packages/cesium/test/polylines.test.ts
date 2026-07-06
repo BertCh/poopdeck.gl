@@ -9,6 +9,7 @@ import {
   buildPathPolylines,
   buildArcPolylines,
   sampleGreatCircleArc,
+  lineStringTimeOrigin,
 } from '../src/lib/polylines';
 import { featureColor } from '../src/lib/feature-color';
 
@@ -170,6 +171,27 @@ describe('buildArcPolylines', () => {
     const build = buildArcPolylines([tile]);
     expect(build.polylines[0].binary).toBe(tile.layers[0].features);
     expect(build.polylines[1].featureIndex).toBe(1);
+  });
+});
+
+describe('lineStringTimeOrigin', () => {
+  it('returns the first animatable LineString layer timeOffset', () => {
+    const t0 = lineTile([0, 0, 1, 0], [0, 2], [0], [100], {}, 5000);
+    const t1 = lineTile([2, 0, 3, 0], [0, 2], [0], [100], {}, 8000);
+    expect(lineStringTimeOrigin([t0, t1])).toBe(5000);
+  });
+
+  it('returns 0 when there is no animatable LineString layer', () => {
+    expect(lineStringTimeOrigin([])).toBe(0);
+    const points = lineTile([0, 0, 1, 0], [0, 2], [0], [1], { geometryType: GeometryType.Point }, 9000);
+    expect(lineStringTimeOrigin([points])).toBe(0);
+  });
+
+  it('skips layers with zero features or no startIndices', () => {
+    const empty = lineTile([], [0], [], [], {}, 1000); // featureCount 0
+    const noIdx = lineTile([0, 0, 1, 0], [0, 2], [0], [100], { startIndices: undefined }, 2000);
+    const good = lineTile([2, 0, 3, 0], [0, 2], [0], [100], {}, 7000);
+    expect(lineStringTimeOrigin([empty, noIdx, good])).toBe(7000);
   });
 });
 

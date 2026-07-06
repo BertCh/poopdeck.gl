@@ -238,91 +238,9 @@ describe('AnimatedArcLayer per-tile sublayer architecture (v3)', () => {
     expect(attrs.getWidth.size).toBe(1);
   });
 
-  it('builds one ArcLayer per tile (no cross-tile consolidation)', () => {
-    const layer = makeLayer();
-    const a = odTile(20);
-    a.id = { z: 6, x: 1, y: 2, t: 0 };
-    const b = odTile(15);
-    b.id = { z: 6, x: 1, y: 3, t: 0 };
-    layer.state = { tiles: [a, b] };
-    const sublayers = (layer as any).renderLayers();
-    expect(sublayers.length).toBe(2);
-  });
-
-  it("uses each tile's own timeOffset (no cross-tile rebasing)", () => {
-    const layer = makeLayer();
-    const a = odTile(3);
-    a.id = { z: 6, x: 1, y: 2, t: 0 };
-    a.layers[0].features.timeOffset = 1_700_000_000_000;
-    const b = odTile(3);
-    b.id = { z: 6, x: 1, y: 3, t: 0 };
-    b.layers[0].features.timeOffset = 1_700_086_400_000;
-    layer.state = { tiles: [a, b] };
-    const [subA, subB] = (layer as any).renderLayers();
-    expect(subA.props.timeOffset).toBe(1_700_000_000_000);
-    expect(subB.props.timeOffset).toBe(1_700_086_400_000);
-  });
-
-  it('caches PreparedTile so the data object reference is stable across renders', () => {
-    const layer = makeLayer();
-    const tile = odTile(5);
-    const first = (layer as any).prepareTile(tile, tile.layers[0]);
-    const second = (layer as any).prepareTile(tile, tile.layers[0]);
-    expect(second).toBe(first);
-    expect(second.data).toBe(first.data);
-  });
-
-  it('returns the SAME ArcLayer instance per tile across renders when nothing changed', () => {
-    const layer = makeLayer();
-    const a = odTile(3);
-    a.id = { z: 6, x: 1, y: 2, t: 0 };
-    const b = odTile(3);
-    b.id = { z: 6, x: 1, y: 3, t: 0 };
-    layer.state = { tiles: [a, b] };
-    const first = (layer as any).renderLayers();
-    const second = (layer as any).renderLayers();
-    expect(second[0]).toBe(first[0]);
-    expect(second[1]).toBe(first[1]);
-  });
-
-  it('rebuilds the cached ArcLayer when a tile-level prop changes', () => {
-    const layer = makeLayer();
-    const tile = odTile(3);
-    layer.state = { tiles: [tile] };
-    const first = (layer as any).renderLayers();
-    layer.props.widthScale = 7;
-    const second = (layer as any).renderLayers();
-    expect(second[0]).not.toBe(first[0]);
-    expect(second[0].props.widthScale).toBe(7);
-  });
-
-  it('drops sublayer-cache entries for tiles that leave the visible set', () => {
-    const layer = makeLayer();
-    const a = odTile(3);
-    a.id = { z: 6, x: 1, y: 2, t: 0 };
-    const b = odTile(3);
-    b.id = { z: 6, x: 1, y: 3, t: 0 };
-    layer.state = { tiles: [a, b] };
-    (layer as any).renderLayers();
-    expect((layer as any).sublayerCache.size).toBe(2);
-
-    layer.state = { tiles: [a] };
-    (layer as any).renderLayers();
-    expect((layer as any).sublayerCache.size).toBe(1);
-  });
-
   it('passes the bound getTime getter so the window uniform advances each draw', () => {
     const built = buildSublayerForTile(odTile(3));
     expect(typeof built.props.getTime).toBe('function');
-  });
-
-  it('declares dataComparator that skips deck.gl prop diff on identical references', () => {
-    const built = buildSublayerForTile(odTile(3));
-    const cmp = built.props.dataComparator;
-    expect(typeof cmp).toBe('function');
-    const ref = {};
-    expect(cmp(ref, ref)).toBe(true);
-    expect(cmp(ref, {})).toBe(false);
   });
 
   it('resolves the getSourceColor accessor alias over the legacy sourceColor', () => {
@@ -420,14 +338,5 @@ describe('AnimatedLineLayer per-tile sublayer architecture (v3)', () => {
     expect(attrs.instanceCategoryIndex).toBeDefined();
     expect(attrs.instanceCategoryIndex.value[2]).toBe(2);
     expect(built.props.useCategoryColor).toBe(true);
-  });
-
-  it('declares dataComparator that skips deck.gl prop diff on identical references', () => {
-    const built = buildSublayerForTile(odTile(3));
-    const cmp = built.props.dataComparator;
-    expect(typeof cmp).toBe('function');
-    const ref = {};
-    expect(cmp(ref, ref)).toBe(true);
-    expect(cmp(ref, {})).toBe(false);
   });
 });

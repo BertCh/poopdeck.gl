@@ -1,9 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
 import { Group } from 'three';
-import type { BoundingBox, Tile, TileId } from '@poopdeck.gl/core';
+import type { Tile } from '@poopdeck.gl/core';
 import { SttScene } from '../src/scene/stt-three-scene';
 import type { SttLayer, SttLayerContext } from '../src/layers/layer';
-import type { DrivableTileset } from '../src/scene/streaming-tile-source';
+import { mockTileset, tile, VIEWPORT } from './_support/streaming';
 
 /**
  * The new opt-in streaming DRIVE path through {@link SttScene}: opting a layer
@@ -15,15 +15,6 @@ import type { DrivableTileset } from '../src/scene/streaming-tile-source';
  */
 
 const ANCHOR = { longitude: 0, latitude: 0 };
-const VIEWPORT = {
-  bounds: { minLon: -1, minLat: -1, maxLon: 1, maxLat: 1 } as BoundingBox,
-  zoom: 14,
-  time: 5000,
-};
-
-function tile(id: TileId): Tile {
-  return { id, timeRange: { start: id.t, end: id.t + 1000 }, layers: [] } as Tile;
-}
 
 /** A minimal SttLayer with spy hooks and a real Object3D (root.add needs one). */
 class FakeLayer implements SttLayer {
@@ -32,32 +23,6 @@ class FakeLayer implements SttLayer {
   setTime = vi.fn<[number], void>();
   dispose = vi.fn<[], void>();
   constructor(readonly id: string) {}
-}
-
-/** Controllable mock of the core tileset surface {@link SttScene} drives. */
-function mockTileset(initial: Tile[] = []): DrivableTileset & {
-  setVisible(t: Tile[]): void;
-  updateCount: number;
-} {
-  let visible = initial;
-  let updateCount = 0;
-  return {
-    get updateCount() {
-      return updateCount;
-    },
-    setVisible(t: Tile[]) {
-      visible = t;
-    },
-    update() {
-      updateCount++;
-      return 0;
-    },
-    getVisibleTiles() {
-      return visible;
-    },
-    setAnimationState: vi.fn(),
-    clear: vi.fn(),
-  };
 }
 
 describe('SttScene streaming drive path', () => {

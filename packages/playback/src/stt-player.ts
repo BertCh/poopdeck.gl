@@ -89,6 +89,10 @@ export type SttPlayerEventMap = {
   ended: (time: number) => void;
   /** `playbackRate` changed (the multiplier — `baseRate` changes do not fire it). */
   ratechange: (rate: number) => void;
+  /** Scrubber grabbed (payload: playhead at the grab) — preview mode until 'scrubend'. */
+  scrubstart: (time: number) => void;
+  /** Scrubber released (payload: the committed position). */
+  scrubend: (time: number) => void;
 };
 
 export type SttPlayerEventName = keyof SttPlayerEventMap;
@@ -122,6 +126,8 @@ export class SttPlayer {
     progress: new Set(),
     ended: new Set(),
     ratechange: new Set(),
+    scrubstart: new Set(),
+    scrubend: new Set(),
   };
 
   constructor(options: SttPlayerOptions) {
@@ -153,6 +159,8 @@ export class SttPlayer {
       this.governor.on('ready', (e) => this.emit('ready', e)),
       this.governor.on('progress', (r) => this.emit('progress', r)),
       this.governor.on('ended', (t) => this.emit('ended', t)),
+      this.governor.on('scrubstart', (t) => this.emit('scrubstart', t)),
+      this.governor.on('scrubend', (t) => this.emit('scrubend', t)),
     );
   }
 
@@ -272,6 +280,11 @@ export class SttPlayer {
   /** Scrubber released: commit the final position as a real seek. */
   endScrub(time: number): void {
     this.governor.endScrub(time);
+  }
+
+  /** True while the scrubber is held (beginScrub … endScrub). */
+  get isScrubbing(): boolean {
+    return this.governor.isScrubbing;
   }
 
   // ── Plumbing (layer callbacks → governor) ───────────────────────────────

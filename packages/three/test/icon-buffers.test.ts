@@ -1,41 +1,23 @@
 import { describe, it, expect } from 'vitest';
 import { GeometryType } from '@poopdeck.gl/core';
-import type { BinaryFeatures, Tile } from '@poopdeck.gl/core';
+import type { BinaryFeatures } from '@poopdeck.gl/core';
 import { buildIconBuffers, type IconMappingEntry } from '../src/lib/icon-buffers';
 import { LocalEnuProjection } from '../src/projection/local-enu';
 import type { RGBA } from '../src/lib/color';
+import { makePointTile } from './_support/features';
+import { expectEmptyBuffers } from './_support/rtc';
 
 const anchor = { longitude: -71.05, latitude: 42.35 };
 const proj = new LocalEnuProjection(anchor);
 const DEG2RAD = Math.PI / 180;
 
-function pointTile(
+const pointTile = (
   count: number,
   positions: number[],
   partial: Partial<BinaryFeatures>,
   timeOffset = 0,
   geometryType = GeometryType.Point,
-): Tile {
-  const features: BinaryFeatures = {
-    featureCount: count,
-    geometryType,
-    positionDimensions: 2,
-    positions: new Float64Array(positions),
-    featureIds: new Uint32Array(count),
-    startTimes: new Float32Array(count),
-    endTimes: new Float32Array(count),
-    timeOffset,
-    numericProps: {},
-    categoricalProps: {},
-    vectorProps: {},
-    ...partial,
-  };
-  return {
-    id: { z: 12, x: 0, y: 0, t: timeOffset },
-    timeRange: { start: timeOffset, end: timeOffset + 1000 },
-    layers: [{ name: 'vessels', extent: 0, features, geometryExtensionName: 'geoarrow.point' }],
-  };
-}
+) => makePointTile(count, positions, partial, { timeOffset, geometryType, layerName: 'vessels' });
 
 // 256x128 atlas, a centred 'marker' rect + an off-centre-anchor 'pin'.
 const ATLAS_W = 256;
@@ -186,7 +168,6 @@ describe('buildIconBuffers', () => {
       sizeProperty: null,
       colorMode: { type: 'constant', color: [255, 255, 255, 255] },
     });
-    expect(buf.count).toBe(0);
-    expect(buf.bbox).toBeNull();
+    expectEmptyBuffers(buf);
   });
 });

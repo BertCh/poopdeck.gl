@@ -15,7 +15,8 @@
  */
 
 import { decompress } from './compression.js';
-import { decodeTile } from './tile.js';
+import { decodeTile, type TemplateRegistry } from './tile.js';
+import { verifyCrc32c } from './crc32c.js';
 import { emit as emitTelemetry } from './telemetry.js';
 import { createCancellationError } from './request-scheduler.js';
 import type { Compression, Tile, TileId, TimeRange } from './types.js';
@@ -26,6 +27,26 @@ export interface DecodeArgs {
   timeRange: TimeRange;
   compressed: ArrayBuffer;
   compression: Compression;
+  /**
+   * Expected CRC-32C of `compressed` (from the archive directory). When set,
+   * the decoder verifies it BEFORE decompressing — on the worker path the
+   * check runs off the main thread — and rejects with a distinctive
+   * "crc32c mismatch" error on disagreement. Omitted when verification is
+   * disabled (`ArchiveOptions.verifyChecksums: false`), when the directory
+   * recorded no checksum, or when the input is already decompressed (OPFS
+   * warm hits).
+   */
+  expectedCrc32c?: number;
+  /**
+   * Optional hand-back of the DECOMPRESSED payload bytes, invoked before the
+   * decode promise resolves (success path only). The archive requests this
+   * when an OPFS write will follow, so the cache writer reuses the worker's
+   * decompressed bytes instead of re-decompressing on the main thread. On
+   * the worker path the payload rides the same transferred buffer as the
+   * tile's columns (zero extra copy); decoders that don't support the hook
+   * simply never call it and the archive falls back to re-decompressing.
+   */
+  onPayload?: (payload: Uint8Array) => void;
   /**
    * Optional abort signal. `WorkerTileDecoder` honors it two ways: aborted
    * before dispatch, the decode is rejected without ever touching a worker;
@@ -38,11 +59,49 @@ export interface DecodeArgs {
    * the fallback path).
    */
   signal?: AbortSignal;
+  /**
+   * The dataset's declared `manifest.formatVersion` (1 | 2), forwarded to
+   * `decodeTile` for the packed spec §5.2 authority check — a v2 frame
+   * reached through a v1 manifest (or vice versa) fails loudly instead of
+   * decoding. Omitted (custom callers), the payload is sniffed.
+   */
+  formatVersion?: number;
+}
+
+/**
+ * Union-merge one template registry into another (content-addressed, so a
+ * shared hash always maps to identical bytes — merging can never conflict).
+ * Merges into a decoder-OWNED map: the caller's registry object is never
+ * adopted or mutated, and repeated installs from multiple archives sharing
+ * one decoder accumulate instead of clobbering.
+ */
+function mergeTemplates(
+  existing: TemplateRegistry | undefined,
+  incoming: TemplateRegistry,
+): TemplateRegistry {
+  const merged = existing ?? new Map<string, Uint8Array>();
+  for (const [hash, bytes] of incoming) merged.set(hash, bytes);
+  return merged;
 }
 
 export interface TileDecoder {
   decode(args: DecodeArgs): Promise<Tile>;
   finalize(): void;
+  /**
+   * OPTIONAL: install the dataset's formatVersion-2 schema-template registry
+   * (built + blake3-validated from `manifest.schemas` at archive open) so v2
+   * frames can resolve their 16-byte template-hash references.
+   *
+   * Distribution contract (packed v2 design §4.4, normative): the archive
+   * calls this once per decoder; a pool implementation MUST (re)send the
+   * registry to every worker on EVERY spawn AND respawn, BEFORE dispatching
+   * decodes to it, and the inline decoder + OPFS warm path share the same
+   * registry object. A v2 decode that reaches a hash reference without the
+   * registry rejects descriptively (never a silently-empty tile). Decoders
+   * that don't implement it simply can't decode hash-referencing v2 frames
+   * (v1 datasets and inline-schema v2 frames are unaffected).
+   */
+  setTemplates?(templates: TemplateRegistry): void;
 }
 
 /**
@@ -50,14 +109,48 @@ export interface TileDecoder {
  * default in Node and as the fallback in browsers when a worker can't start.
  */
 export class InlineTileDecoder implements TileDecoder {
-  async decode({ id, timeRange, compressed, compression, signal }: DecodeArgs): Promise<Tile> {
+  /** v2 schema-template registry, shared with the OPFS warm path (§4.4). */
+  private templates?: TemplateRegistry;
+
+  setTemplates(templates: TemplateRegistry): void {
+    // UNION-merge, never replace: template hashes are content-addressed
+    // (blake3-128 of the bytes), so a key collision is by definition
+    // identical bytes and merging is always safe — while replacement let
+    // two v2 archives sharing one decoder clobber each other's registries
+    // (the second archive's install broke every hash-referencing decode of
+    // the first).
+    this.templates = mergeTemplates(this.templates, templates);
+  }
+
+  async decode({
+    id,
+    timeRange,
+    compressed,
+    compression,
+    expectedCrc32c,
+    onPayload,
+    signal,
+    formatVersion,
+  }: DecodeArgs): Promise<Tile> {
     if (signal?.aborted) {
       throw createCancellationError('Tile decode cancelled before dispatch');
     }
     const t0 = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    // Integrity gate BEFORE decompression: the directory CRC covers the
+    // compressed bytes, and a corrupt frame should fail loudly here rather
+    // than as a confusing fzstd/IPC parse error (or worse, decode cleanly).
+    if (expectedCrc32c !== undefined) {
+      verifyCrc32c(new Uint8Array(compressed), expectedCrc32c);
+    }
     const payload = await decompress(new Uint8Array(compressed), compression);
     const tDecompress = typeof performance !== 'undefined' ? performance.now() : Date.now();
-    const tile = decodeTile(payload, id, timeRange);
+    const tile = decodeTile(payload, id, timeRange, {
+      templates: this.templates,
+      formatVersion,
+    });
+    // Success-path payload hand-back (OPFS write reuse) — mirrors the worker
+    // response, which only carries the payload for a successful decode.
+    onPayload?.(payload);
     const t1 = typeof performance !== 'undefined' ? performance.now() : Date.now();
     // Emit telemetry only when the probe is enabled. Capturing compressed
     // + decompressed sizes lets the perf probe attribute slow decodes to
@@ -82,6 +175,8 @@ export class InlineTileDecoder implements TileDecoder {
 interface PendingRequest {
   resolve: (tile: Tile) => void;
   reject: (err: Error) => void;
+  /** Forwarded from `DecodeArgs.onPayload`; fed by the worker's response. */
+  onPayload?: (payload: Uint8Array) => void;
 }
 
 interface PooledWorker {
@@ -112,6 +207,12 @@ export class WorkerTileDecoder implements TileDecoder {
   private nextRequestId = 1;
   private disposed = false;
   private readonly workerUrl: URL;
+  /**
+   * v2 schema-template registry. (Re)sent to EVERY worker on every spawn and
+   * respawn — see {@link setTemplates} and `spawnWorker` — so a crash-replaced
+   * worker can never receive a v2 decode before it holds the registry.
+   */
+  private templates?: TemplateRegistry;
 
   constructor(options: { poolSize?: number; workerUrl?: URL } = {}) {
     const poolSize =
@@ -141,7 +242,30 @@ export class WorkerTileDecoder implements TileDecoder {
     const entry: PooledWorkerEntry = { worker, pending: 0, inFlight: new Set() };
     worker.onmessage = (e) => this.handleMessage(e);
     worker.onerror = (e) => this.handleWorkerError(entry, e);
+    // Registry distribution (§4.4, normative): a freshly-spawned worker —
+    // including a crash REPLACEMENT — gets the template registry as its very
+    // first message. Decode dispatches only ever follow on the same message
+    // queue, so the worker can never see a v2 decode registry-less.
+    if (this.templates) {
+      worker.postMessage({ type: 'templates', templates: this.templates });
+    }
     return entry;
+  }
+
+  /**
+   * Install a dataset's v2 template registry and broadcast the decoder's
+   * (merged) registry to every live worker. UNION-merge, never replace —
+   * hashes are content-addressed, so merging is always safe, and two v2
+   * archives sharing one decoder keep BOTH registries resolvable (see
+   * `mergeTemplates`). Future spawns/respawns re-send the merged map
+   * automatically (`spawnWorker`).
+   */
+  setTemplates(templates: TemplateRegistry): void {
+    this.templates = mergeTemplates(this.templates, templates);
+    if (this.disposed) return;
+    for (const { worker } of this.workers) {
+      worker.postMessage({ type: 'templates', templates: this.templates });
+    }
   }
 
   decode(args: DecodeArgs): Promise<Tile> {
@@ -187,6 +311,7 @@ export class WorkerTileDecoder implements TileDecoder {
         if (onAbort && args.signal) args.signal.removeEventListener('abort', onAbort);
       };
       this.pending.set(requestId, {
+        onPayload: args.onPayload,
         resolve: (tile) => {
           detachAbort();
           owner.pending = Math.max(0, owner.pending - 1);
@@ -233,6 +358,13 @@ export class WorkerTileDecoder implements TileDecoder {
           timeRange: args.timeRange,
           compressed: compressedCopy,
           compression: args.compression,
+          expectedCrc32c: args.expectedCrc32c,
+          formatVersion: args.formatVersion,
+          // Only ask for the decompressed payload back when the caller will
+          // consume it (an OPFS write) — it usually rides an already-
+          // transferred buffer, but there's no point widening the response
+          // otherwise.
+          returnPayload: args.onPayload !== undefined,
         },
         [compressedCopy],
       );
@@ -259,7 +391,7 @@ export class WorkerTileDecoder implements TileDecoder {
 
   private handleMessage(event: MessageEvent<unknown>) {
     const data = event.data as
-      | { requestId: number; tile: Tile }
+      | { requestId: number; tile: Tile; payload?: Uint8Array }
       | { requestId: number; error: string }
       | undefined;
     if (!data || typeof data.requestId !== 'number') return;
@@ -269,6 +401,10 @@ export class WorkerTileDecoder implements TileDecoder {
     if ('error' in data) {
       pending.reject(new Error(data.error));
     } else {
+      // Decompressed-payload hand-back (requested via `returnPayload`),
+      // delivered BEFORE resolve so the caller observes it by the time the
+      // decode promise settles.
+      if (data.payload && pending.onPayload) pending.onPayload(data.payload);
       pending.resolve(data.tile);
     }
   }

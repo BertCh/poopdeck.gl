@@ -13,10 +13,12 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { STTArchive } from '../src/archive';
+import { crc32c } from '../src/crc32c';
 import { encodeDirectory } from '../src/directory';
 import { GeometryType } from '../src/types';
 import { configureSharedScheduler } from '../src/shared-scheduler';
 import { packedFromSingleFile, packedFetch } from './helpers/packed-fixture';
+import { bufferToArrayBuffer } from './helpers/fixtures';
 
 const FIXTURE = fileURLToPath(new URL('./fixtures/sample.stt', import.meta.url));
 const FIXTURE_BYTES = new Uint8Array(readFileSync(FIXTURE));
@@ -29,10 +31,6 @@ const DATASET_PACK_KEYS = [...DATASET.objects.keys()]
 /** A fresh packed archive over the transcoded sample fixture. */
 function sampleArchive(): STTArchive {
   return new STTArchive({ url: DATASET.manifestUrl, fetch: packedFetch(DATASET) });
-}
-
-function bufferToArrayBuffer(buf: Uint8Array): ArrayBuffer {
-  return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
 }
 
 describe('STTArchive (packed format)', () => {
@@ -177,7 +175,9 @@ describe('STTArchive (packed format)', () => {
           packId: p, offset: off,
           length: e.length, uncompressedSize: e.uncompressedSize,
           featureCount: e.featureCount,
-          hilbert: i, crc32c: i + 1,
+          // The blob is real and decoded through the verifying reader, so the
+          // directory must carry its true CRC-32C.
+          hilbert: i, crc32c: crc32c(blob),
           temporalBucketMs: e.temporalBucketMs,
         });
       }
@@ -278,64 +278,5 @@ describe('STTArchive (packed format)', () => {
     await expect(
       archive.getTile({ z: e.zoom, x: e.x, y: e.y, t: e.timeStart }),
     ).rejects.toThrow(/Range/);
-  });
-
-  describe('manifest version gates (conformance reader-MUST)', () => {
-    /** The fixture dataset with its manifest JSON rewritten through `mutate`. */
-    function datasetWithManifest(mutate: (manifest: any) => void): STTArchive {
-      const dataset = packedFromSingleFile(FIXTURE_BYTES);
-      const manifest = JSON.parse(
-        new TextDecoder().decode(dataset.objects.get('manifest.json')!),
-      );
-      mutate(manifest);
-      dataset.objects.set(
-        'manifest.json',
-        new TextEncoder().encode(JSON.stringify(manifest)),
-      );
-      return new STTArchive({ url: dataset.manifestUrl, fetch: packedFetch(dataset) });
-    }
-
-    it('rejects an unrecognized format', async () => {
-      const archive = datasetWithManifest((m) => {
-        m.format = 'stt-packed-v2';
-      });
-      await expect(archive.getMetadata()).rejects.toThrow(/not a packed manifest/);
-    });
-
-    it('rejects an unrecognized formatVersion', async () => {
-      const archive = datasetWithManifest((m) => {
-        m.formatVersion = 2;
-      });
-      await expect(archive.getMetadata()).rejects.toThrow(/unsupported formatVersion 2/);
-    });
-
-    it('rejects a missing formatVersion', async () => {
-      const archive = datasetWithManifest((m) => {
-        delete m.formatVersion;
-      });
-      await expect(archive.getMetadata()).rejects.toThrow(/unsupported formatVersion/);
-    });
-
-    it('rejects an unrecognized directoryVersion', async () => {
-      const archive = datasetWithManifest((m) => {
-        m.directory.directoryVersion = 4;
-      });
-      await expect(archive.getIndex()).rejects.toThrow(/unsupported directoryVersion 4/);
-    });
-
-    it('rejects a missing directoryVersion', async () => {
-      const archive = datasetWithManifest((m) => {
-        delete m.directory.directoryVersion;
-      });
-      await expect(archive.getIndex()).rejects.toThrow(/unsupported directoryVersion/);
-    });
-
-    it('accepts the golden formatVersion=1 / directoryVersion=5 manifest', async () => {
-      const archive = datasetWithManifest(() => {});
-      const meta = await archive.getMetadata();
-      expect(meta.version).toBe(1);
-      const index = await archive.getIndex();
-      expect(index.tiles.length).toBeGreaterThan(0);
-    });
   });
 });

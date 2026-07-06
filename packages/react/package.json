@@ -1,6 +1,6 @@
 {
   "name": "@poopdeck.gl/react",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "React hooks and UI components for spatiotemporal/time-series playback — usePlayback, keyboard controls, a transport bar + scrubber + density strip, and a scrubber hover-preview",
   "publishConfig": {
     "access": "public"

@@ -264,17 +264,36 @@ beforeEach(() => {
 // ---------------------------------------------------------------------------
 
 describe('user extensions merge into the internal extension list', () => {
-  it('AnimatedPointLayer: appends user extensions after the internal pair', async () => {
-    const userExt = new UserExtensionA();
-    const layer = await makePointLayer({ extensions: [userExt] });
-    layer.state = { tiles: [basePointTile()] };
-    const [sub] = layer.renderLayers();
-    expect(sub.props.extensions).toEqual([
-      layer.timeFilterExtension,
-      layer.categoryColorExtension,
-      userExt,
-    ]);
-  });
+  // Point + heatmap resolve extensions in renderLayers(); path/trips/polygon in
+  // buildSublayer(). Point/path/trips/polygon append the user list after the
+  // internal [timeFilter, categoryColor] pair; heatmap appends after its single
+  // internal DataFilterExtension. Each layer copy-pastes its OWN extension-merge
+  // path, so this runs the assertion against every one.
+  it.each([
+    { name: 'AnimatedPointLayer', make: makePointLayer, tile: basePointTile, via: 'render' as const },
+    { name: 'AnimatedPathLayer', make: makePathLayer, tile: basePathTile, via: 'build' as const },
+    { name: 'AnimatedTripsLayer', make: makeTripsLayer, tile: basePathTile, via: 'build' as const },
+    { name: 'AnimatedPolygonLayer', make: makePolygonLayer, tile: basePolygonTile, via: 'build' as const },
+    { name: 'AnimatedHeatmapLayer', make: makeHeatmapLayer, tile: basePointTile, via: 'render' as const, heatmap: true },
+  ])(
+    '$name: appends user extensions after the internal extension(s)',
+    async ({ make, tile, via, heatmap }) => {
+      const userExt = new UserExtensionA();
+      const layer = await make({ extensions: [userExt] });
+      let sub: any;
+      if (via === 'render') {
+        layer.state = { tiles: [tile()] };
+        [sub] = layer.renderLayers();
+      } else {
+        const t = tile();
+        sub = layer.buildSublayer(layer.prepareTile(t, t.layers[0]));
+      }
+      const expected = heatmap
+        ? [layer._dataFilter, userExt]
+        : [layer.timeFilterExtension, layer.categoryColorExtension, userExt];
+      expect(sub.props.extensions).toEqual(expected);
+    },
+  );
 
   it('AnimatedPointLayer: no user extensions → exactly the internal pair', async () => {
     const layer = await makePointLayer();
@@ -284,40 +303,6 @@ describe('user extensions merge into the internal extension list', () => {
       layer.timeFilterExtension,
       layer.categoryColorExtension,
     ]);
-  });
-
-  it('AnimatedTripsLayer / AnimatedPathLayer: user extensions ride into PathLayer sublayers', async () => {
-    const userExt = new UserExtensionA();
-    for (const make of [makeTripsLayer, makePathLayer]) {
-      const layer = await make({ extensions: [userExt] });
-      const tile = basePathTile();
-      const sub = layer.buildSublayer(layer.prepareTile(tile, tile.layers[0]));
-      expect(sub.props.extensions).toEqual([
-        layer.timeFilterExtension,
-        layer.categoryColorExtension,
-        userExt,
-      ]);
-    }
-  });
-
-  it('AnimatedPolygonLayer: user extensions ride into SolidPolygonLayer sublayers', async () => {
-    const userExt = new UserExtensionA();
-    const layer = await makePolygonLayer({ extensions: [userExt] });
-    const tile = basePolygonTile();
-    const sub = layer.buildSublayer(layer.prepareTile(tile, tile.layers[0]));
-    expect(sub.props.extensions).toEqual([
-      layer.timeFilterExtension,
-      layer.categoryColorExtension,
-      userExt,
-    ]);
-  });
-
-  it('AnimatedHeatmapLayer: user extensions append after the internal DataFilterExtension', async () => {
-    const userExt = new UserExtensionA();
-    const layer = await makeHeatmapLayer({ extensions: [userExt] });
-    layer.state = { tiles: [basePointTile()] };
-    const [sub] = layer.renderLayers();
-    expect(sub.props.extensions).toEqual([layer._dataFilter, userExt]);
   });
 
   it('adding a user extension between renders rebuilds the cached sublayer', async () => {

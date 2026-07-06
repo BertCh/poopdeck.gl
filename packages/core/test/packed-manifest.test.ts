@@ -1,22 +1,26 @@
 /**
- * Packed-format manifest parsing + validation.
+ * Packed-manifest parse + validation suite.
  *
- * Replaces the old v4 single-file header tests (magic / version byte /
- * dictionary slot) — the reader no longer reads a 64-byte header or a shared
- * dictionary. These tests cover the manifest the reader DOES read now: format
- * discriminator, pack table, folded metadata, and clear errors for malformed
- * or non-packed manifests. The full Rust↔TS contract lives in
- * `archive.test.ts` (transcoded fixture) and `packed-golden.test.ts` (real
- * Rust-produced packed dataset).
+ * All reader-side manifest validation lives here: the format discriminator,
+ * the pack table, folded metadata, the format/directory version gates
+ * (conformance reader-MUSTs), and clear errors for malformed or non-packed
+ * manifests. Two fixtures feed this: a hand-built minimal single-tile dataset
+ * (`buildPackedDataset`) for the parse/error cases, and the transcoded real
+ * Rust fixture (`packedFromSingleFile`) for the version-gate cases. The full
+ * Rust↔TS decode contract lives in `archive.test.ts` (transcoded fixture) and
+ * `packed-golden.test.ts` (real Rust-produced packed dataset).
  */
 
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { STTArchive } from '../src/archive';
 import { encodeDirectory } from '../src/directory';
+import { packedFromSingleFile, packedFetch } from './helpers/packed-fixture';
+import { bufferToArrayBuffer } from './helpers/fixtures';
 
-function bufferToArrayBuffer(buf: Uint8Array): ArrayBuffer {
-  return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
-}
+const FIXTURE = fileURLToPath(new URL('./fixtures/sample.stt', import.meta.url));
+const FIXTURE_BYTES = new Uint8Array(readFileSync(FIXTURE));
 
 /**
  * Build a minimal in-memory packed dataset (one tile, one pack, no compression)
@@ -167,5 +171,85 @@ describe('packed-format manifest', () => {
     await expect(
       archive.getTile({ z: e.zoom, x: e.x, y: e.y, t: e.timeStart }),
     ).rejects.toThrow(/pack 5/);
+  });
+});
+
+describe('manifest version gates (conformance reader-MUST)', () => {
+  /** The fixture dataset with its manifest JSON rewritten through `mutate`. */
+  function datasetWithManifest(mutate: (manifest: any) => void): STTArchive {
+    const dataset = packedFromSingleFile(FIXTURE_BYTES);
+    const manifest = JSON.parse(
+      new TextDecoder().decode(dataset.objects.get('manifest.json')!),
+    );
+    mutate(manifest);
+    dataset.objects.set(
+      'manifest.json',
+      new TextEncoder().encode(JSON.stringify(manifest)),
+    );
+    return new STTArchive({ url: dataset.manifestUrl, fetch: packedFetch(dataset) });
+  }
+
+  it('rejects an unrecognized format', async () => {
+    const archive = datasetWithManifest((m) => {
+      m.format = 'stt-packed-v2';
+    });
+    await expect(archive.getMetadata()).rejects.toThrow(/not a packed manifest/);
+  });
+
+  it('rejects an unrecognized formatVersion', async () => {
+    // 2 is now implemented (packed v2, spec §5.2) — the gate moves to 3.
+    const archive = datasetWithManifest((m) => {
+      m.formatVersion = 3;
+    });
+    await expect(archive.getMetadata()).rejects.toThrow(/unsupported formatVersion 3/);
+  });
+
+  it('rejects a missing formatVersion', async () => {
+    const archive = datasetWithManifest((m) => {
+      delete m.formatVersion;
+    });
+    await expect(archive.getMetadata()).rejects.toThrow(/unsupported formatVersion/);
+  });
+
+  it('rejects an unrecognized directoryVersion', async () => {
+    const archive = datasetWithManifest((m) => {
+      m.directory.directoryVersion = 4;
+    });
+    await expect(archive.getIndex()).rejects.toThrow(/unsupported directoryVersion 4/);
+  });
+
+  it('rejects a missing directoryVersion', async () => {
+    const archive = datasetWithManifest((m) => {
+      delete m.directory.directoryVersion;
+    });
+    await expect(archive.getIndex()).rejects.toThrow(/unsupported directoryVersion/);
+  });
+
+  it('rejects a manifest declaring a capability this reader does not implement', async () => {
+    // Only the UNKNOWN entry is named — coord-quant is implemented. A
+    // capability re-types existing columns, so proceeding would silently
+    // misdecode; conformance requires the loud refusal at open.
+    const archive = datasetWithManifest((m) => {
+      m.capabilities = ['coord-quant', 'from-the-future'];
+    });
+    await expect(archive.getMetadata()).rejects.toThrow(
+      /capabilities this reader does not implement: from-the-future \(/,
+    );
+  });
+
+  it('accepts a manifest declaring only implemented capabilities', async () => {
+    const archive = datasetWithManifest((m) => {
+      m.capabilities = ['coord-quant', 'attr-quant', 'elevation-fold'];
+    });
+    const meta = await archive.getMetadata();
+    expect(meta.version).toBe(1);
+  });
+
+  it('accepts the golden formatVersion=1 / directoryVersion=5 manifest', async () => {
+    const archive = datasetWithManifest(() => {});
+    const meta = await archive.getMetadata();
+    expect(meta.version).toBe(1);
+    const index = await archive.getIndex();
+    expect(index.tiles.length).toBeGreaterThan(0);
   });
 });

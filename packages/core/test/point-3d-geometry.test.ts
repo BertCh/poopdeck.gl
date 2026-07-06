@@ -17,31 +17,17 @@ import {
   Float64,
   Int32,
   Int64,
-  RecordBatch,
   Schema,
   Struct,
-  Table,
   Uint64,
   makeData,
-  tableToIPC,
 } from 'apache-arrow';
 import { decodeTile } from '../src/tile';
 import { type TileId } from '../src/types';
+import { frameLayer } from './helpers/fixtures';
 
 const tileId: TileId = { z: 0, x: 0, y: 0, t: 0 };
 
-function frameLayer(name: string, schema: Schema, structData: ReturnType<typeof makeData>): Uint8Array {
-  const ipc = tableToIPC(new Table([new RecordBatch(schema, structData as never)]), 'stream');
-  const nameBytes = new TextEncoder().encode(name);
-  const frame = new Uint8Array(2 + 2 + nameBytes.length + 4 + ipc.length);
-  const view = new DataView(frame.buffer);
-  view.setUint16(0, 1, true);
-  view.setUint16(2, nameBytes.length, true);
-  frame.set(nameBytes, 4);
-  view.setUint32(4 + nameBytes.length, ipc.length, true);
-  frame.set(ipc, 4 + nameBytes.length + 4);
-  return frame;
-}
 
 function buildPointTile(
   coords3: number[], // [lon,lat,alt, …] OR i32 grid indices

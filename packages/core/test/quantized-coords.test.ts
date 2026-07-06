@@ -10,25 +10,29 @@
  * inverts it within the grid precision.
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   Field,
   FixedSizeList,
   Int32,
   Int64,
   List,
-  RecordBatch,
   Schema,
   Struct,
-  Table,
   Uint64,
   makeData,
-  tableToIPC,
 } from 'apache-arrow';
-import { decodeTile } from '../src/tile';
+import { decodeTile, _resetQuantWarnings } from '../src/tile';
 import { GeometryType, type TileId } from '../src/types';
+import { frameLayer } from './helpers/fixtures';
 
 const tileId: TileId = { z: 0, x: 0, y: 0, t: 0 };
+
+// The malformed-meta warning dedups on a module-level Set; reset it so the
+// "warns ONCE" case is isolated from any earlier case tripping the same key.
+beforeEach(() => {
+  _resetQuantWarnings();
+});
 
 interface Affine {
   x0: number;
@@ -38,18 +42,6 @@ interface Affine {
 }
 
 /** Wrap a single layer's struct data into the STT layer-frame payload. */
-function frameLayer(name: string, schema: Schema, structData: ReturnType<typeof makeData>): Uint8Array {
-  const ipc = tableToIPC(new Table([new RecordBatch(schema, structData as never)]), 'stream');
-  const nameBytes = new TextEncoder().encode(name);
-  const frame = new Uint8Array(2 + 2 + nameBytes.length + 4 + ipc.length);
-  const view = new DataView(frame.buffer);
-  view.setUint16(0, 1, true); // layer count (unaligned frame)
-  view.setUint16(2, nameBytes.length, true);
-  frame.set(nameBytes, 4);
-  view.setUint32(4 + nameBytes.length, ipc.length, true);
-  frame.set(ipc, 4 + nameBytes.length + 4);
-  return frame;
-}
 
 function commonColumns(featureCount: number) {
   const ids = makeData({

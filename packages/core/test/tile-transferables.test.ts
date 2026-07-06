@@ -24,7 +24,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { collectTransferables } from '../src/tile-transferables';
+import { collectTransferables, forEachBufferView } from '../src/tile-transferables';
 import { GeometryType, type Tile } from '../src/types';
 
 function makeMinimalTile(): Tile {
@@ -113,6 +113,7 @@ describe('collectTransferables (worker tile-transfer helper)', () => {
       categories: ['a', 'b'],
     };
     tile.layers[0].arrowIpc = new Uint8Array([0xff, 0xff, 0xff, 0xff]);
+    tile.layers[0].arrowIpcProps = new Uint8Array([0xee, 0xee, 0xee, 0xee]);
     const transferables = collectTransferables(tile);
     expect(transferables).toContain(f.startIndices.buffer);
     expect(transferables).toContain(f.vertexTimestamps.buffer);
@@ -122,8 +123,10 @@ describe('collectTransferables (worker tile-transfer helper)', () => {
     expect(transferables).toContain(f.globalFeatureIds.buffer);
     expect(transferables).toContain(f.numericProps['speed'].buffer);
     expect(transferables).toContain(f.categoricalProps['kind'].indices.buffer);
-    // The raw per-layer IPC bytes travel zero-copy too (GeoArrow hand-off).
+    // The raw per-layer IPC bytes travel zero-copy too (GeoArrow hand-off),
+    // as do the v2 spliced-props bytes (Layer.arrowIpcProps).
     expect(transferables).toContain(tile.layers[0].arrowIpc!.buffer);
+    expect(transferables).toContain(tile.layers[0].arrowIpcProps!.buffer);
     // The category-string table is structured-cloned (not transferable).
     for (const t of transferables) {
       expect(Array.isArray(t)).toBe(false);
@@ -208,5 +211,51 @@ describe('collectTransferables (worker tile-transfer helper)', () => {
   it('tolerates a Tile with a malformed layers field', () => {
     expect(collectTransferables({ layers: undefined } as any)).toEqual([]);
     expect(collectTransferables(null as any)).toEqual([]);
+  });
+});
+
+
+describe('forEachBufferView (shared buffer enumeration)', () => {
+  it('visits exactly the buffer set collectTransferables transfers (drift guard)', () => {
+    // Every buffer-bearing BinaryFeatures field populated, each on its own
+    // backing buffer — if a future column is added to one enumeration but
+    // not the shared helper, the set comparison here fails.
+    const features = {
+      featureCount: 2,
+      geometryType: GeometryType.Point,
+      positionDimensions: 2,
+      positions: new Float64Array(4),
+      featureIds: new Uint32Array(2),
+      startTimes: new Float32Array(2),
+      endTimes: new Float32Array(2),
+      startIndices: new Uint32Array(3),
+      vertexTimestamps: new Float32Array(2),
+      vertexValues: new Float32Array(2),
+      vertexValueMatrix: new Float32Array(4),
+      globalFeatureIds: new Uint32Array(2),
+      triangles: new Uint32Array(3),
+      triangleOffsets: new Uint32Array(2),
+      featureIds64: new BigUint64Array(2),
+      timeOffset: 0,
+      numericProps: { speed: new Float32Array(2) },
+      vectorProps: { quat: { value: new Float32Array(8), size: 4 } },
+      categoricalProps: { kind: { indices: new Uint16Array(2), categories: ['a'] } },
+    };
+    const tile: Tile = {
+      id: { z: 0, x: 0, y: 0, t: 0 },
+      timeRange: { start: 0, end: 1 },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      layers: [{ name: 'l', extent: 0, features: features as any }],
+    };
+    const visited = new Set<ArrayBufferLike>();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    forEachBufferView(features as any, (v) => visited.add(v.buffer));
+    const transferred = new Set(collectTransferables(tile));
+    // collectTransferables = forEachBufferView + the Layer-level arrowIpc /
+    // arrowIpcProps (absent on this synthetic layer), so the sets must be
+    // identical.
+    expect(new Set(transferred)).toEqual(visited);
+    // And nothing was silently skipped: one buffer per populated field.
+    expect(visited.size).toBe(15);
   });
 });

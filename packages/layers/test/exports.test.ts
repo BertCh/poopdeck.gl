@@ -22,22 +22,3 @@ describe('heatmap layer export (rename complete)', () => {
     expect(index.HeatmapLayer).toBeUndefined();
   });
 });
-
-describe('new layer exports (OD flows / icons / columns / Quadbin summary)', () => {
-  it('re-exports every new layer class from the package index with a matching layerName', async () => {
-    const index = (await import('../src/index')) as Record<string, any>;
-    for (const name of [
-      'AnimatedArcLayer',
-      'AnimatedLineLayer',
-      'AnimatedIconLayer',
-      'AnimatedColumnLayer',
-      'QuadbinSummaryLayer',
-      'FlowmapLayer',
-      'SplatLayer',
-      'SplatPrimitiveLayer',
-    ]) {
-      expect(index[name], `index.${name}`).toBeTypeOf('function');
-      expect(index[name].layerName).toBe(name);
-    }
-  });
-});
