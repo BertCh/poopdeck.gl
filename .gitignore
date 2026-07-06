@@ -149,3 +149,4 @@ scripts/data-generation/av2-raw/
 *.osm.bz2
 *.osm.opl
 .claude/
+.npmrc
