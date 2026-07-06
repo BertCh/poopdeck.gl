@@ -84,12 +84,15 @@ dataset. Everything but the tiny manifest is immutable and edge-cached forever.
 
 Each tile payload is one Apache Arrow `RecordBatch` per layer, with geometry
 encoded as standard **GeoArrow** (interleaved `[x, y]` Float64 inside a
-`FixedSizeList`). Coordinates are absolute WGS84 — no delta or zig-zag
-encoding — so a tile is "a chunk of the source dataset, broken up by
+`FixedSizeList`). By default coordinates are absolute WGS84 — no delta or
+zig-zag encoding — so a tile is "a chunk of the source dataset, broken up by
 `(zoom, x, y, time)`" and a decompressed tile opens directly in any Arrow tool
 (GeoPandas, Lonboard, …). Per-blob zstd does the size compression; the client
 decodes with `apache-arrow` + a small zstd decoder, and the columnar buffers
-feed the GPU directly. See [the payload spec](../architecture/data-format.md).
+feed the GPU directly. (Opt-in [coordinate quantization](../architecture/data-format.md#coordinate-quantization)
+replaces the Float64 leaf with `Int32` fixed-point grid indices — smaller
+tiles, but no longer literal GeoArrow; the tile self-describes it via
+`stt:quant`.) See [the payload spec](../architecture/data-format.md).
 
 ### 2. Temporal Bucketing
 

@@ -70,10 +70,19 @@ interface BufferSource {
   // keeps prefetching ahead (otherwise a frozen clock reads as "paused",
   // prefetch stops, and the gate could never fill its own runway).
   setAnimationState?(isAnimating: boolean, speed?: number): void;
+  // Optional: the interactive/motion bit — true from beginScrub until
+  // endScrub. A loader MAY serve a cheaper preview tier while it is held
+  // (coarser spatial zoom and/or a coarser temporal-LOD bucket) and MUST
+  // restore its settle tier when it clears. Preview-only by contract:
+  // readiness reporting stays honest about the fine tier, so gates on release
+  // re-arm against full detail.
+  setInteractive?(interactive: boolean): void;
 }
 ```
 
 A source missing `getBufferedRunway` is rejected with a console warning and gating degrades to the `maxStartWaitMs` escape hatch.
+
+Across the scrub bracket (`beginScrub` … `endScrub`) the governor broadcasts `setInteractive(true)` then `setInteractive(false)` to **every** registered source (required and optional). The bit is also re-asserted when a source is added/removed/replaced mid-drag and cleared if the governor is disposed mid-drag, so a custom loader that implements `setInteractive` never gets stranded on its degraded preview tier.
 
 ## States
 
@@ -129,9 +138,9 @@ new PlaybackGovernor(timeController: TimeController, opts?: PlaybackGovernorOpti
 | :--- | :--- |
 | `requestPlay()` | User pressed play. Gates the start on the buffered runway. While `ended`, restarts from the range start (the range end when travelling in reverse) — the media-element replay convention. |
 | `requestPause()` | User pressed pause. Sticks even while a gate is in progress. |
-| `beginScrub()` | Scrubber grabbed: freezes the clock; everything until `endScrub` is preview-only (no fetch churn). |
+| `beginScrub()` | Scrubber grabbed: freezes the clock; everything until `endScrub` is preview-only (no fetch churn). **Idempotent** — a second grab of an already-held thumb is the same drag. Fires `scrubstart` and broadcasts `setInteractive(true)` to every source. |
 | `scrubTo(time)` | Preview a scrub position — moves the clock so resident tiles render, WITHOUT committing a seek. |
-| `endScrub(time)` | Scrubber released — commits the final position as a real seek. Releasing on a position a settle-commit already committed skips the duplicate commit and just lifts the scrub hold (re-basing the escape-hatch clock). |
+| `endScrub(time)` | Scrubber released — commits the final position as a real seek. Broadcasts `setInteractive(false)` and fires `scrubend` before the commit (so a scrub-LOD loader restores its fine tier first, and the flush + post-seek gate measure full detail). Releasing on a position a settle-commit already committed skips the duplicate commit and just lifts the scrub hold (re-basing the escape-hatch clock). |
 | `seekTo(time)` | Programmatic committed seek (keyboard arrows, story beats). Flushes prefetch, moves the clock, re-gates if intent is playing. Mid-scrub it acts as the settle-commit: the pipeline warms, but playback resumes only on `endScrub`. |
 
 ### Wiring and queries
@@ -158,6 +167,7 @@ new PlaybackGovernor(timeController: TimeController, opts?: PlaybackGovernorOpti
 | `paused` | `boolean` | User intent, HTMLMediaElement-shaped: true when the user does not want playback. Stays `false` through `starting`/`buffering`/`seeking` gates (the user pressed play; the machine is just not there yet), so UIs can drive the play/pause glyph from this single bit instead of mirroring intent. |
 | `ended` | `boolean` | True while parked at a non-looping range boundary (media-element `'ended'`). Cleared by any committed seek; `requestPlay()` while ended restarts from the range start. |
 | `isCreeping` | `boolean` | True while in degraded creep (playing pinned to the frontier at data-arrival rate). |
+| `isScrubbing` | `boolean` | True while the scrubber is held (`beginScrub` … `endScrub`) — the same bit that suppresses gates internally, exposed so UIs/loaders can observe the drag bracket. |
 | `isDisposed` | `boolean` | True once `dispose()` has run. |
 | `seekSettleMs` | `number` | The shared scrub-settle knob. |
 
@@ -169,9 +179,11 @@ governor.on('waiting',     ({ state, etaMs }: GovernorWaitingEvent) => {});
 governor.on('ready',       ({ degraded }: GovernorReadyEvent) => {});
 governor.on('progress',    (runway: BufferedRunway) => {});
 governor.on('ended',       (time: number) => {});
+governor.on('scrubstart',  (time: number) => {});
+governor.on('scrubend',    (time: number) => {});
 ```
 
-`waiting` fires whenever a gate is entered (the clock is frozen) with an honest `etaMs` when computable; `ready` fires when a gate passes and the clock starts (`degraded: true` when the escape hatch fired). `progress` re-emits forwarded buffer events. `ended` fires when playback parks at a non-looping range boundary (media-element `'ended'` — distinct from a user pause; show a replay affordance). `on()` returns an unsubscribe function; `off(event, callback)` also works:
+`waiting` fires whenever a gate is entered (the clock is frozen) with an honest `etaMs` when computable; `ready` fires when a gate passes and the clock starts (`degraded: true` when the escape hatch fired). `progress` re-emits forwarded buffer events. `ended` fires when playback parks at a non-looping range boundary (media-element `'ended'` — distinct from a user pause; show a replay affordance). `scrubstart` fires when the scrubber is grabbed (payload: the playhead at the grab) and `scrubend` when it is released (payload: the committed position) — across that bracket the governor broadcasts `setInteractive(true/false)` to every source, so a scrub-LOD loader can drive a cheaper preview tier during the drag. `on()` returns an unsubscribe function; `off(event, callback)` also works:
 
 ```typescript
 const unsubscribe = governor.on('statechange', (state) => setBadge(state));

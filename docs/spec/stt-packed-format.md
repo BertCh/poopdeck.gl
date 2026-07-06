@@ -1,7 +1,21 @@
-# STT Packed Format (v1) — Specification
+# STT Packed Format — Specification
 
 The canonical STT container. Machine-checkable manifest
 contract: [`manifest.schema.json`](./manifest.schema.json). Versioning model: §9.
+
+Two packed format versions are current: **formatVersion 1** (the 0.3.x
+layout — frozen; §§2–8 describe it and remain normative for v1 datasets) and
+**formatVersion 2** (the 2026-07 coordinated byte break — object magic §9.2,
+manifest schema templates §3.2, sectioned layer frame §5.2). Everything not
+called out as version-specific is common to both. `manifest.formatVersion`
+is the **authoritative** discriminator between them (§5.2 authority rule).
+
+> **Spec license.** The STT specification documents — everything under
+> `docs/spec/` plus the tile-payload spec
+> [`docs/architecture/data-format.md`](../architecture/data-format.md) — are
+> licensed [CC-BY-4.0](https://creativecommons.org/licenses/by/4.0/).
+> The reference implementations remain MIT like the rest of the repository.
+> Implementing this specification requires no code from this repository.
 
 ## 1. Motivation
 
@@ -42,8 +56,13 @@ data/<dataset>/
   is BOTH unreferenced by the dataset's current manifest AND older than a retention
   window that exceeds every cached manifest's TTL plus the longest expected session
   (the reference deploy script `scripts/r2-sync.sh` defaults to 7 days, override
-  `R2_PRUNE_RETENTION`, escape hatch `--prune-now`). Edge caches need no purge
-  either way — an evicted-at-origin object simply ages out of the edge.
+  `R2_PRUNE_RETENTION`, escape hatch `--prune-now`). The reference script
+  additionally applies a one-deploy **grace rule** — before uploading, it captures
+  the references of the *currently-deployed* manifest and protects them from GC for
+  that deploy cycle — and a major republish that changes every object SHOULD defer
+  pruning entirely (`--no-prune`) until the retention window has passed. Edge
+  caches need no purge either way — an evicted-at-origin object simply ages out
+  of the edge.
 
 ```mermaid
 flowchart LR
@@ -72,6 +91,7 @@ content-addressed objects and rewrites the manifest.
 {
   "format": "stt-packed",
   "formatVersion": 1,
+  "capabilities": ["attr-quant", "coord-quant"],
   "compression": "zstd",
   "directory": { "key": "index/<hash>.sttd", "length": 1234567, "directoryVersion": 5, "encoding": "zstd",
                  "layout": "paged", "rootLength": 7024, "pageCount": 137, "pageEntries": 4096 },
@@ -100,10 +120,16 @@ content-addressed objects and rewrites the manifest.
   When `"paged"`, `rootLength` (at-rest byte length of the root prefix), `pageCount` and
   `pageEntries` accompany it. The leaf codec is unchanged v5 — `layout`, not
   `directoryVersion`, discriminates the container.
+- `capabilities` (OPTIONAL): required-to-understand feature declarations — see §3.1.
+  Absent = none used (the shape of every pre-capabilities manifest; writers omit the
+  key rather than emit an empty array).
 - **Unknown fields are permitted at every envelope level** and MUST be ignored by
-  readers (additive evolution within `formatVersion` 1). The JSON Schema encodes
-  this: `format`, `formatVersion` and `directoryVersion` are strict consts, the
-  envelopes are open.
+  readers (additive evolution within a `formatVersion`). The JSON Schema encodes
+  this: `format` and `directoryVersion` are strict consts, `formatVersion` is
+  the closed enum `[1, 2]`, the envelopes are open.
+- `formatVersion: 2` manifests additionally carry the **`schemas`** table
+  (§3.2) — the dataset's Arrow schema templates, embedded. v1 manifests MUST
+  NOT carry it.
 
 The manifest envelope is the **cross-language wire contract**. Its authoritative,
 machine-checkable definition is [`manifest.schema.json`](./manifest.schema.json),
@@ -111,6 +137,84 @@ which is pinned in CI against the Rust writer (`crate::pack::Manifest`), the TS
 reader type (`@poopdeck.gl/core` `PackedManifest`) and the golden fixture
 (`packages/core/test/manifest-schema.test.ts`). Any drift between the three fails
 the build.
+
+### 3.1 Required-to-understand capabilities (`capabilities`)
+
+Most format evolution is additive: a new column or manifest field that old
+readers safely ignore. A small class of features is different — they **re-type
+existing tile columns**, so a reader that predates them doesn't fail, it
+silently misdecodes (e.g. `stt:quant` Int32 grid indices read as microscopic
+lon/lat degrees, mid-session, per tile). `capabilities` is the manifest-level
+must-understand declaration (the same mechanism as Zarr v3's `must_understand`)
+that converts the format's worst failure mode — silent garbage — into its best:
+a loud refusal at open.
+
+- A **writer MUST** declare, for each registry feature below it used, that
+  feature's capability string. A build that used none MUST omit the key
+  entirely, so pre-capabilities manifests and non-quantized builds stay
+  byte-identical. Entry order is not significant; the reference writer emits
+  the list sorted + deduped so manifest bytes are byte-reproducible regardless
+  of flag order.
+- A **reader MUST** refuse a dataset whose `capabilities` contains any string
+  outside the set the reader itself implements, naming the unknown entries in
+  the error. It MUST NOT warn-and-proceed: every capability marks data that
+  decodes to garbage, not to an error, without the feature.
+- **Additive features never get a capability.** New columns (`triangles`,
+  vector groups, summary tiers, …) and new manifest fields are ignored safely
+  by old readers — declaring them here would lock those readers out
+  gratuitously.
+
+Registry (`formatVersion` 1):
+
+| capability | declared when the writer… | payload mechanism |
+| --- | --- | --- |
+| `coord-quant` | quantized geometry to fixed-point `Int32` (`--quantize-coords`) | `stt:quant` metadata on the `geometry` field |
+| `attr-quant` | quantized any numeric property column (`--quantize-attr` / `--quantize-attrs-auto`) | `stt:qa` metadata on the property field |
+| `elevation-fold` | folded a property into POINT z (`--point-elevation-column`) | 3-component point leaf instead of 2 |
+
+The value vocabulary is deliberately open-ended (the envelope rules above
+stay intact): future registry entries are added by spec revision without a
+schema change, and a reader enforces **its own** implemented set — not this
+table's snapshot — so a v1 reader correctly refuses a dataset from a future
+writer that declares a capability the reader has never heard of.
+
+### 3.2 Schema templates (`schemas`) — formatVersion 2
+
+A v2 layer frame (§5.2) does not repeat its Arrow IPC schema in every tile;
+the schema **template** is written once, embedded in the manifest:
+
+```jsonc
+{
+  "formatVersion": 2,
+  "schemas": [
+    { "hash": "<blake3-128 hex (32 chars) of the raw template bytes>",
+      "data": "<base64 (standard, padded) of the raw template bytes>" }
+  ]
+  // directory / packs / metadata / capabilities: unchanged shape
+}
+```
+
+- A **template** is a layer's Arrow IPC stream bytes from offset 0 through
+  the end of the encapsulated *Schema message* (continuation `0xFFFFFFFF` +
+  `i32 metadata_len` + flatbuffer; the schema message has `bodyLength 0`).
+  Templates carry only **dataset-constant** metadata — per-tile-varying keys
+  live in the frame's `TILE_META` section (§5.2.2).
+- `schemas` MUST be **sorted by `hash`** and deduped (byte-reproducible
+  manifests). A writer includes exactly the templates its frames reference.
+- A reader MUST validate every entry at open (`blake3_128(data) == hash`) —
+  a corrupt manifest fails loudly, dataset-level, before any tile fetch. It
+  then builds the hash → bytes **template registry** the frame decoder
+  resolves references against.
+- Templates are keyed per **distinct stripped schema**, not per layer:
+  per-tile type selection (attr-quant `UInt16` vs `Float64` fallback,
+  `vertex_time` u16-delta vs `Int64`, `triangles` u16/u32) legitimately
+  yields several templates per layer. Realized cardinality is expected in
+  the single digits per dataset; at 1–2 templates × ~900 B raw the manifest
+  grows by low KB.
+- Embedding (rather than an external `schemas/<hash>` object class) is
+  deliberate: no new object class for deploy tooling, no template-404
+  failure mode that bricks a dataset, no extra cold-start fetch — every
+  session already fetches the manifest.
 
 ## 4. Directory format v5
 
@@ -130,6 +234,94 @@ time_start)` — the codec's own (stable) sort key; the writer pre-sorts with
 the additional `temporal_bucket_ms` tiebreak of §5, which the stable sort
 preserves — so every key column is near-monotonic and delta-codes to ~1 byte
 per entry.
+
+### The Hilbert key (normative)
+
+The `hilbert` component of the sort key — and therefore the wire `Δhilbert`
+column and the paged container's cross-page monotonicity check (§4.1) — is
+defined exactly as follows. A third-party writer MUST produce these values
+bit-for-bit or its directory will not decode compatibly.
+
+`hilbert(z, x, y)` is the index of the tile's `(x, y)` on the **traditional
+Hilbert curve** (D. Hilbert, 1891) over the full `2^z × 2^z` tile grid of the
+entry's **own zoom** (curve order = `z`). Coordinates are the standard
+XYZ/WebMercatorQuad tile coordinates used everywhere in STT — `x` = column
+increasing eastward, `y` = row increasing southward from the top-left
+(northwest) origin — fed to the algorithm as raw integers with **no axis flip
+or reorientation**. The convention is the classic bottom-up rotate-and-
+accumulate `xy2d` algorithm (the widely published Wikipedia form):
+
+```text
+fn hilbert(z, x, y) -> u64:
+    if z == 0: return 0          # single tile; order-0 curve is degenerate
+    n = 1 << z                   # grid size at this zoom
+    h = 0
+    s = n / 2                    # walk bits from most- to least-significant
+    while s > 0:
+        rx = (x & s) != 0 ? 1 : 0
+        ry = (y & s) != 0 ? 1 : 0
+        h += s * s * ((3 * rx) XOR ry)
+        # rotate/reflect the quadrant so the remaining low bits are in the
+        # canonical frame (n-1-x is a pure bit complement: n-1 is all ones)
+        if ry == 0:
+            if rx == 1:
+                x = (n - 1) - x
+                y = (n - 1) - y
+            swap(x, y)
+        s = s / 2
+    return h
+```
+
+Consequences of the convention, usable as quick orientation checks:
+
+- the curve **enters** the grid at `(0, 0)` (the NW tile, `h = 0`) and
+  **exits** at `(2^z − 1, 0)` (the NE tile, `h = 4^z − 1`);
+- at `z = 1` the traversal order is `(0,0) → (0,1) → (1,1) → (1,0)` =
+  `h 0, 1, 2, 3` (NW, SW, SE, NE);
+- consecutive `h` values are always edge-adjacent tiles (the locality property
+  range coalescing rests on).
+
+Keys are **per-zoom**: the same `(x, y)` yields different values at different
+zooms, and the directory sorts by `(zoom, hilbert, …)` so keys never compare
+across zooms. `h < 4^z` fits `u64` at every zoom the format addresses (the
+WebMercatorQuad matrix set tops out at z24 → `h < 2^48`; the codec itself
+assumes only `hilbert < 2^63`, the blockquote below). The reference
+implementation is
+`TileId::hilbert_index` (`crates/stt-core/src/tile.rs`), which delegates to
+`hilbert_2d::xy2h_discrete(x, y, order = z, Variant::Hilbert)` — that crate's
+traditional variant computes exactly the algorithm above (the equivalence is
+test-enforced, exhaustively at low zooms, in
+`crates/stt-core/tests/hilbert_vectors.rs`).
+
+**Normative test vectors** (pinned against the reference implementation by
+`crates/stt-core/tests/hilbert_vectors.rs`; the spec table and the test table
+are the same table):
+
+| z  | x     | y     | h           |
+|----|-------|-------|-------------|
+| 0  | 0     | 0     | 0           |
+| 1  | 0     | 0     | 0           |
+| 1  | 0     | 1     | 1           |
+| 1  | 1     | 1     | 2           |
+| 1  | 1     | 0     | 3           |
+| 2  | 0     | 0     | 0           |
+| 2  | 0     | 3     | 5           |
+| 2  | 1     | 2     | 7           |
+| 2  | 3     | 3     | 10          |
+| 2  | 2     | 1     | 13          |
+| 2  | 3     | 0     | 15          |
+| 8  | 0     | 0     | 0           |
+| 8  | 0     | 255   | 21845       |
+| 8  | 255   | 255   | 43690       |
+| 8  | 255   | 0     | 65535       |
+| 8  | 128   | 128   | 32768       |
+| 8  | 100   | 200   | 28272       |
+| 14 | 0     | 0     | 0           |
+| 14 | 0     | 16383 | 89478485    |
+| 14 | 16383 | 16383 | 178956970   |
+| 14 | 16383 | 0     | 268435455   |
+| 14 | 8192  | 8192  | 134217728   |
+| 14 | 12345 | 6789  | 214230386   |
 
 **Layout.**
 
@@ -305,9 +497,9 @@ and cross-page key order is monotonic in `(zoom, hilbert, time_start)`.
    blake3 each finished pack and the at-rest directory → content-addressed filenames.
 6. Emit `manifest.json` (metadata + directory pointer + pack table).
 
-### 5.1 Tile payload layer frame (alignment rule)
+### 5.1 Tile payload layer frame v1 (alignment rule)
 
-A tile blob decompresses to the *layer frame*:
+A **formatVersion-1** tile blob decompresses to the *layer frame*:
 
 ```text
 [u16 layer_count | 0x8000]
@@ -323,7 +515,101 @@ offset forces a copy of every buffer). The pad length is **never stored** — re
 derive it as `(8 - pos % 8) % 8` from the position after `ipc_len`; `ipc_len` is the
 exact IPC byte length, padding excluded. Frames with the flag unset carry no padding
 and decode without it; readers MUST accept both. The flag caps the layer count at
-`0x7fff` (layer counts are tiny in practice).
+`0x7fff` — v2 writers additionally cap it one lower, because
+`0x7fff | 0x8000 == 0xFFFF` is the v2 escape (§5.2).
+
+### 5.2 Tile payload layer frame v2 (sectioned, template-referencing)
+
+A **formatVersion-2** tile blob decompresses to the sectioned frame:
+
+```text
+u16  0xFFFF                    # v2 escape (unreachable in v1: the v1 writer
+                               #   rejects layer_count | 0x8000 == 0xFFFF)
+u8   frame_version = 2
+u8   flags = 0                 # reserved, MUST be 0
+u16  layer_count
+per layer:
+  u16  name_len, [name utf8]
+  u8   ref_kind_core           # 0 = INLINE_SCHEMA_CORE section present;
+                               # 1 = the next 16 bytes are the template hash
+  [16] core template hash      # present iff ref_kind_core == 1
+  u8   ref_kind_props          # 0/1 as above; 2 = NO props sections at all
+  [16] props template hash     # present iff ref_kind_props == 1
+  u8   section_count
+  per section (TOC): u8 tag, u32 length     # at-rest bytes, pad excluded
+  [pad to 8, derived]
+  per section: [section bytes][pad to 8, derived]
+```
+
+**Authority rule.** `manifest.formatVersion` is the authoritative
+discriminator; the `0xFFFF` escape is defense-in-depth, not a negotiation
+channel. A v2 frame reached through a v1-declared manifest is a **hard
+error**, and vice versa. (Deployed 0.3.x readers already hard-reject
+`formatVersion != 1` by name at open — the v2 failure mode for old clients
+is the loud refusal, by design.)
+
+**Section tag registry** (unknown tags are SKIPPABLE via their TOC length —
+additive evolution):
+
+| tag | name | content |
+| --- | --- | --- |
+| 0x01 | `INLINE_SCHEMA_CORE` | full IPC schema prefix (self-contained mode) |
+| 0x02 | `TILE_META` | canonical per-tile metadata JSON (§5.2.2) |
+| 0x03 | `CORE_BATCH` | IPC tail: dictionary batch(es) + record batch + EOS |
+| 0x04 | `INLINE_SCHEMA_PROPS` | as 0x01, props schema |
+| 0x05 | `PROPS_BATCH` | as 0x03, props schema |
+
+Reserved columns (`id`/times/geometry/`vertex_*`/`triangles`) form the
+**CORE** batch; non-reserved property columns form the **PROPS** batch with
+its own schema/template, emitted only when properties exist
+(`ref_kind_props = 2` otherwise). Alignment follows §5.1: pads to 8 are
+derived, never stored; TOC lengths are exact at-rest byte counts.
+
+#### 5.2.1 Template splice (normative guards)
+
+A `*_BATCH` section is the layer's Arrow IPC stream **tail** — dictionary
+batches are per-tile (categories vary) and MUST live in the tail; an empty
+tile still carries one DictionaryBatch per dictionary column; the 8-byte
+end-of-stream marker (`FFFFFFFF 00000000`) belongs to the tail. The reader
+materializes `concat(template, section)` and hands it to a stock Arrow
+reader, resolving `ref_kind 1` hashes through the manifest's template
+registry (§3.2) and `ref_kind 0` through the inline section.
+
+Guards: the splice MUST use exactly the TOC-declared section length, and
+readers MUST verify the section (and the template) begins with the
+`0xFFFFFFFF` continuation marker — stray zero bytes otherwise parse as a
+legacy 4-byte end-of-stream and **silently empty the tile** in arrow-rs (and
+silently drop zero-copy in arrow-js). A frame that references a template
+hash absent from the registry is a hard error naming the hash.
+
+#### 5.2.2 `TILE_META` section
+
+Per-tile-varying metadata, hoisted out of the (now dataset-constant) Arrow
+schema. Canonical serialization: JSON, keys sorted, no whitespace. Readers
+MUST ignore unknown keys. A key is present iff the corresponding feature is:
+
+| key | v1 equivalent | present iff |
+| --- | --- | --- |
+| `qa` | `stt:qa` field metadata, as `{column: [o, s]}` | any property column is quantized (absence of a column key = not quantized) |
+| `sorted` | — (new) | rows are stable-sorted by `start_time` |
+| `t0` | `stt:time_offset_ms` | a start-time column exists |
+| `vb` | `stt:vertex_value_buckets` | a vertex-value matrix exists |
+| `vt` | `stt:vertex_time_origin_ms`/`stt:vertex_time_step_ms`, as `[origin, step]` | vertex_time is u16-delta encoded |
+
+```json
+{"qa":{"speed":[0.0,0.15]},"sorted":true,"t0":1577836800000,"vb":24,"vt":[1577836800000,1000]}
+```
+
+Readers MUST source these from `TILE_META` in v2; dataset-constant keys
+(`ARROW:extension:name`, `ARROW:extension:metadata`, `stt:quant`,
+`stt:layer`, `stt:geometry`, `stt:has_triangles`) stay in the template.
+
+#### 5.2.3 Row order
+
+v2 writers stable-sort each layer's rows by `start_time` at encode, AFTER
+feature-id assignment (ids are order-independent), and declare it via
+`TILE_META.sorted: true` — enabling client window slicing and future partial
+decode. Readers MUST NOT assume sortedness without the flag.
 
 ## 6. Reader flow (identical contract, Rust + TS)
 
@@ -430,11 +716,12 @@ STT has **three independent version axes**; this spec governs only the first.
 
 | Axis | Where | Current | Meaning |
 | --- | --- | --- | --- |
-| Packed **format** version | `manifest.formatVersion` | **1** | The manifest envelope + object layout described here. |
+| Packed **format** version | `manifest.formatVersion` | **2** (writer default; **1** frozen, kill-switch `stt-build --format-version 1`) | The manifest envelope + object layout + layer-frame shape described here. |
 | **Directory** codec version | `manifest.directory.directoryVersion` | **5** | The run-length tile index encoding (`crate::directory`). v5 adds the per-run `pack_id` column + pack-relative offsets over v4. |
 | **Tile payload** encoding | Arrow IPC schema / GeoArrow field metadata | — | Per-tile geometry + properties; archive-format-independent. |
 
-Packed format v1 emits directory v5. The single-file container (magic
+Packed format v1 AND v2 emit directory v5 (v2 wraps the same codec bytes in
+an 8-byte object magic prelude, §9.2). The single-file container (magic
 `STT\x04`, "v4") is a fourth, retired axis — removed from the Rust toolchain
 (no writer, reader, or transcode) and no longer read by either reference reader;
 it survives only as a committed legacy fixture (`sample.stt`) that a test helper
@@ -442,10 +729,126 @@ transcodes to packed. Bumping any axis is a separate, independently-negotiated
 change.
 
 **File extensions:** `.sttp` = pack object (tile blob data), `.sttd` = directory
-object (the v5 index), `manifest.json` = the per-dataset manifest. `.stt` is no
+object (the v5 index), `manifest.json` = the per-dataset manifest, `.sttb` = the
+single-file **bundle** interchange profile (§13, non-normative draft — a whole
+dataset as one file for hand-off, never for serving). `.stt` is no
 longer a container extension — the single-file archive has been removed;
 `stt-build` accepts a `-o foo.stt` output path only as shorthand, stripping the
 extension to a `foo/` dataset directory.
+
+### 9.1 Stability & versioning promise
+
+What bumps each axis, made explicit (§3's "unknown fields are permitted"
+rule generalized):
+
+- **`formatVersion` (packed format)** bumps only when a conformant v1 reader
+  could **misread** a dataset — a changed meaning for an existing manifest
+  field, object layout, or addressing rule. Adding new optional manifest
+  fields does **not** bump it: every envelope level is open, readers MUST
+  ignore unknown fields, and the JSON Schema encodes exactly that. Within a
+  `formatVersion`, evolution is **additive-only**.
+- **`directoryVersion` (directory codec)** bumps when the byte layout of the
+  `.sttd` codec changes such that a v5 decoder would misdecode it. A new
+  *trailing section tag* (like the covering section's tag 1) is additive —
+  old decoders stop at the first unrecognized tag — but because trailing
+  sections carry no length prefix, an unrecognized tag hides every section
+  after it; a second section therefore effectively spends the remaining
+  headroom, and the planned v6 moves to length-prefixed tagged sections.
+  A new root-page `descriptor_kind` (§4.1) is additive the same way: the
+  byte is reserved precisely so new descriptor shapes don't bump the codec.
+- **Tile payload** evolves per its own spec
+  ([`data-format.md`](../architecture/data-format.md)): new columns and new
+  schema-metadata keys are additive; **re-typings of existing columns**
+  (`stt:quant`, `stt:qa`) are the dangerous class — the writer declares each
+  one in `manifest.capabilities` (§3.1) so a reader that lacks it refuses at
+  open instead of misdecoding.
+- **Deprecation promise:** shipped datasets are immutable, so no spec
+  revision may retroactively invalidate a dataset that was conformant when
+  written. Readers stay backward-compatible within a major axis version;
+  writers MAY always emit the older shape.
+
+### 9.2 Media types & magic bytes
+
+Intended media type registrations (vendor tree; registration is planned, not
+yet filed — producers SHOULD serve these today so the eventual registration
+is a no-op):
+
+| object | media type |
+| --- | --- |
+| `manifest.json` | `application/vnd.stt.manifest+json` |
+| `.sttd` directory object | `application/vnd.stt.directory` |
+| `.sttp` pack object | `application/vnd.stt.pack` |
+| uncompressed layer frame (`stt-serve` tile responses) | `application/vnd.stt.tile` |
+
+The earlier informal `application/x-stt-tile` label (still emitted by
+`stt-serve` today — see the
+[serve protocol §3.4.3](./stt-serve-protocol.md#343-success-response)) uses
+the deprecated `x-` prefix and retires when the `vnd.` types register.
+
+**Magic bytes:** under **formatVersion 2**, every object self-identifies
+with an 8-byte magic prelude:
+
+```text
+.sttp = "STTP" u8 version(2) 0x00 0x00 0x00   # then concatenated zstd blobs
+.sttd = "STTD" u8 version(2) 0x00 0x00 0x00   # then root frame (+ leaves)
+```
+
+Readers MUST validate the tag and version byte and require the reserved
+bytes to be zero. Directory blob offsets are **object-absolute** (a pack's
+first blob sits at offset 8), so the directory codec is unchanged. The
+manifest `length` fields and the blake3 content addresses cover the
+**entire object including the magic**. `rootLength` keeps meaning the root
+frame's at-rest length — a paged reader's cold root fetch is
+`bytes=0..(8+rootLength-1)`, validating the magic before the root math;
+leaf `rel_offset` stays relative to the end of the root frame.
+
+**formatVersion-1** objects carry **no magic number** — a v1 `.sttp` is
+headerless concatenated zstd frames, and a v1 `.sttd` begins with the bare
+codec version byte (or a zstd frame when `directory.encoding: "zstd"`), so
+`file(1)` cannot identify either; a v1 dataset is identified by its
+`manifest.json` (`"format": "stt-packed"`). The `.sttb` bundle (§13)
+carries its own `STTB` magic prelude from day one under either version.
+
+### 9.3 Changelog
+
+- **v2 (2026-07)** — the coordinated byte break (design:
+  `docs/roadmap/stt-packed-v2-design-2026-07.md`; every wire-breaking change
+  batched into ONE version bump so content addresses churn once):
+  `STTP`/`STTD` object magic with object-absolute blob offsets (§9.2);
+  manifest-embedded schema templates (`schemas`, §3.2) killing the per-tile
+  schema tax; the sectioned, template-referencing layer frame v2 with
+  `TILE_META` and skippable section TOC (§5.2); rows stable-sorted by
+  `start_time` (§5.2.3). Directory codec v5 and the manifest envelope are
+  otherwise unchanged. `stt-build` emits v2 by default; `--format-version 1`
+  is the one-release transitional kill switch, byte-identical to the 0.3.x
+  writer (golden-pinned). `stt-serve` responses stay v1 frames (the serve
+  protocol has no version channel; see
+  [`stt-serve-protocol.md`](./stt-serve-protocol.md)).
+- **v1, builder-behavior (2026-07)** — synthetic feature ids (string-id and
+  id-less features, clipped segments) moved from Rust's toolchain-unspecified
+  `DefaultHasher` to a pinned FNV-1a 64. Not a wire change — readers are
+  unaffected — but a **one-time content-address churn**: the first rebuild of
+  an affected dataset re-uploads every pack, and a deployment mixing a
+  pre-change archive with a post-change live `stt-serve` over the same source
+  disagrees on synthetic ids for identical features (rebuild the archive to
+  realign). The old hasher was never stable across Rust toolchains, so this
+  churn event class already existed — pinning FNV-1a makes it the last one.
+  Features with explicit numeric GeoJSON ids are unaffected.
+- **v1, additive (2026-07)** — `manifest.capabilities` required-to-understand
+  declarations (§3.1): registry `coord-quant` / `attr-quant` /
+  `elevation-fold`; writers omit the key when unused (no byte change for
+  existing builds), readers refuse unknown entries at open. The
+  machine-readable registry is the schema's top-level
+  `x-stt-capability-registry` array, pinned by both reference readers' test
+  suites.
+- **v1 (2026-07)** — first spec-complete revision of the packed format:
+  manifest envelope (`formatVersion: 1`), directory codec v5 (per-run
+  `pack_id`, pack-relative offsets, covering section), optional paged
+  directory container (root_version 1, descriptor_kind 0), aligned layer
+  frame (`0x8000`), normative Hilbert key definition with test vectors,
+  security considerations (§11) and container limits (§12). Earlier
+  single-file containers (`STT\x01`–`STT\x04`) are retired and documented in
+  the payload spec's magic table only as a paper record.
 
 ## 10. Relationship to standards
 
@@ -556,3 +959,133 @@ tile opens directly in geoarrow-python / GeoPandas / Lonboard. The container
 described in this spec is format-agnostic above the blob level; GeoArrow is
 the normative payload contract (see
 [`docs/architecture/data-format.md`](../architecture/data-format.md)).
+
+## 11. Security considerations
+
+A reader consuming a dataset from an untrusted origin processes three
+attacker-controlled inputs: the manifest JSON, the directory codec bytes, and
+the compressed tile blobs.
+
+- **Decompression bounds.** Every directory entry declares
+  `uncompressed_size`; a reader MUST bound decompression by it (allocate at
+  most `uncompressed_size`, fail if the zstd frame produces more) rather than
+  trusting the zstd frame header — otherwise a crafted blob is a
+  decompression bomb. The same applies to the at-rest directory: decode
+  output is bounded by the declared entry/page counts, not by whatever the
+  frame inflates to.
+- **Manifest validation.** A reader SHOULD validate the manifest against
+  [`manifest.schema.json`](./manifest.schema.json) before use. In particular
+  the schema's pack/index **key pattern** (`packs/<32-hex>.sttp`,
+  `index/<32-hex>.sttd`) is the path-traversal guard: object keys are
+  relative names within the dataset prefix, and a reader MUST NOT follow
+  absolute keys, parent-relative (`../`) keys, or keys addressing a different
+  origin. Resolve keys strictly against the manifest's own base URL/prefix.
+- **Allocation caps.** Directory `N` (entry count), `R` (run count), and the
+  paged root's `page_count` are attacker-controlled varints/integers; a
+  reader SHOULD sanity-cap them (and cross-check `Σ run_length == N`, leaf
+  byte ranges within the object, `Σ entry_count == N`) before sizing
+  allocations. The reference decoders error on truncation and on run/entry
+  mismatches rather than trusting counts.
+- **Integrity tags are not authentication.** `crc32c` and the blake3 content
+  addresses detect corruption and enable dedup; they do not authenticate a
+  hostile origin. Serve datasets over TLS; treat the manifest URL as the
+  trust anchor (its content addresses then pin the immutable objects).
+- **Adversarial-decode hardening.** The reference v5/paged decoders are
+  property-tested never to panic on arbitrary and mutated inputs
+  (`crates/stt-core/tests/adversarial_decode.rs`); an independent
+  implementation SHOULD apply equivalent fuzz/property testing to its decode
+  surface.
+
+## 12. Container limits
+
+Normative ceilings implied by the wire types, plus the reserved escape
+hatches. These are documented so an implementer hits a spec sentence, not a
+silent overflow:
+
+- **u32 blob caps.** A directory entry's `length` (compressed blob),
+  `uncompressed_size`, and `feature_count` are `u32` → a single tile blob and
+  its decompressed payload are each capped at **4 GiB − 1**, and a tile at
+  ~4.29 B features. The per-layer `ipc_len` in the layer frame (§5.1) is also
+  `u32`. A writer MUST fail loudly, never wrap, when a tile exceeds these.
+- **Single-level page table.** The paged directory (§4.1) has one root and
+  one level of leaves. The root grows 52 B/page; at the default 4096
+  entries/page the practical ceiling is roughly **5–10 M directory entries**
+  (~1200–2400 pages, a 60–130 KB root) before the root itself deserves
+  paging. The escape hatch is reserved, additive: a multi-level root ships as
+  a new `descriptor_kind` (§4.1's reserved byte), not a codec bump.
+- **`packs[]` linearity.** The manifest's pack table is O(packs) JSON on the
+  *mutable* critical path. At the default 64 MiB target a 10 TB dataset is
+  ~160 K entries → a ~15 MB manifest, which defeats the "tiny mutable object"
+  design. The escape hatch is reserved, additive: a future optional
+  `packsRef` indirection (a content-addressed `packs.json` object holding the
+  table) keeps the mutable manifest tiny; readers that don't know the field
+  ignore it per §3, so it ships under `formatVersion` 1 with a writer opt-in.
+- **Directory entry count.** The codec itself is varint-sized (no hard `N`
+  cap below `u64`), but see §11 for the reader-side allocation caps, and the
+  fleet-scale note in §4.1 (the whole fleet today is ~560 K entries).
+
+## 13. Bundle profile (`.sttb`) — interchange, non-normative DRAFT
+
+> Status: **non-normative draft.** Implemented and shipped by `stt-bundle`
+> (see the [CLI reference](../api/cli-reference.md#stt-bundle)) and covered
+> by round-trip tests, but not yet frozen as a normative part of this spec.
+> It corresponds to §6 of the packed-v2 design
+> (`docs/roadmap/stt-packed-v2-design-2026-07.md`) and ships independently
+> of any byte-breaking revision — it is a container *around* the packed
+> objects, not a change to them.
+
+A `dataset.sttb` is a packed dataset as **one file**, restoring the
+"download one file" usability property the exploded layout gave up
+(PMTiles-style hand-off). Strictly an **interchange** profile: the CDN story
+remains the exploded layout, and nothing serves bundles over HTTP ranges.
+
+```text
+"STTB"  u8 version(1)  [3 × 0x00]   # 8-byte magic prelude
+u32     header_len                  # little-endian
+[header JSON, header_len bytes]
+[zero pad to the next 8-byte boundary]
+[objects back-to-back, each at an 8-byte-aligned offset]
+```
+
+Header JSON:
+
+```jsonc
+{
+  "manifest": { /* the dataset's manifest.json, VERBATIM */ },
+  "objects": [
+    // canonical order: directory first, then packs in pack_id order, then
+    // any future manifest object tables in listed order (formatVersion 2
+    // adds NO objects — its `schemas` templates are embedded in the
+    // manifest, §3.2, and ride the verbatim manifest bytes)
+    { "key": "index/<hash>.sttd", "offset": 16,   "length": 812 },
+    { "key": "packs/<hash>.sttp", "offset": 832,  "length": 4096 }
+  ]
+}
+```
+
+Rules:
+
+- `offset` / `length` are u64 byte positions within the bundle file, emitted
+  as JSON numbers — exact through 2^53 (a 9-PB bundle) for JavaScript
+  readers.
+- Object offsets are 8-byte aligned; inter-object gaps are zero padding.
+- The manifest is embedded **verbatim** so unpacking reproduces
+  `manifest.json` byte-identically; every other object round-trips
+  byte-identically by construction (objects are content-addressed, and
+  `stt-bundle` re-verifies each blake3 key on both pack and unpack).
+- Packing is deterministic: one dataset ⇒ one bundle byte stream.
+- The container is **object-agnostic** — keys and bytes are opaque to it —
+  so it carries `formatVersion` 1 and 2 datasets (and future manifest
+  revisions) unchanged; the embedded manifest's `formatVersion` governs how
+  the unpacked/bundle-backed dataset is read.
+- Consumers MUST apply §11's key rules to header keys before resolving them
+  to filesystem paths on unpack: relative paths only, no `..`/`.`/empty
+  segments, no absolute keys.
+- Truncated, wrong-magic, wrong-version or malformed-header bundles MUST be
+  rejected loudly at open, never partially decoded.
+
+`stt-validate` accepts a `.sttb` directly: the integrity tier verifies each
+in-bundle object's blake3 against its key exactly like the exploded case,
+and the decode tier runs through the bundle-backed reader
+(`PackedReader::open_bundle`), whose pack reads are `(offset, length)`
+windows into the single mapping.

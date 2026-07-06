@@ -177,25 +177,23 @@ manifest/metadata first — a small format addition that shouldn't ride along
 casually. The build log now names every drop loudly; revive the validate
 surfacing together with the next manifest-schema rev.
 
-### P1 — determinism / reproducible-build guard  ·  **RESOLVED PATH RECORDED 2026-07-01**
+### P1 — determinism / reproducible-build guard  ·  **CLOSED 2026-07-04 (arrow ≥59 shipped)**
 **Lesson #4** + the **non-deterministic-encoding/dedup bug** (Arrow metadata
-`HashMap` ordering), which undermines content-addressed pack dedup and
-reproducible builds. Current state, verified:
+`HashMap` ordering), which undermined content-addressed pack dedup and
+reproducible builds. Closed end-to-end:
 
 - **Encoder side DONE:** field/schema metadata is assembled from sorted
   `BTreeMap`s (`arrow_tile.rs`), removing our own contribution.
-- **Guard tests DONE:** `crates/stt-core/tests/reproducible_build.rs` enforces
-  logical-fingerprint reproducibility (500 reps) + stable lengths; the strict
-  byte-identity test `same_tile_encodes_byte_identically` exists but is
-  `#[ignore]`d — arrow-ipc **54**'s `metadata_to_fb` iterates the `HashMap`
-  unsorted at serialize time.
-- **The fix is a verified upstream upgrade, not code here:** arrow-ipc **59**'s
-  `metadata_to_fb` explicitly sorts keys (`ordered_keys.sort()` — checked against
-  the arrow-rs source 2026-07-01). **Counted out as local work** — do NOT
-  hand-roll a flatbuffer canonicalization pass; ship the workspace arrow upgrade
-  (54 → ≥59, which also closes the arrow54-vs-duckdb-arrow58 row-API split in the
-  DuckDB adaptor), then un-`#[ignore]` the byte-identity test as the acceptance
-  gate. The comparator-promotion nicety rides along then.
+- **Upstream fix SHIPPED:** the workspace arrow upgrade (54 → 59, landed with
+  the 2026-07 transcode-removal batch) brought arrow-ipc 59's sorted
+  `metadata_to_fb` (`ordered_keys.sort()` — verified against the arrow-rs
+  source 2026-07-01), closing the serialize-time ordering gap. No local
+  flatbuffer canonicalization was ever written, per the recorded plan.
+- **Acceptance gate ACTIVE:** `crates/stt-core/tests/reproducible_build.rs`
+  now runs `same_tile_encodes_byte_identically` un-`#[ignore]`d alongside the
+  logical-fingerprint reproducibility (500 reps) + stable-length guards —
+  builds are byte-reproducible cross-process; see
+  `docs/spec/stt-packed-format.md` §7 D6 for the normative statement.
 
 ### P2 — single source of truth for build flags across the language boundary  ·  **COUNTED OUT 2026-07-01**
 **Lesson #5.** The Python extractors (`av_common.run_stt_build` + batch scripts)

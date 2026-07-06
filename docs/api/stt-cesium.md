@@ -47,7 +47,8 @@ window.CESIUM_BASE_URL = 'https://cdn.jsdelivr.net/npm/cesium@1.142.0/Build/Cesi
 | `CesiumTripsLayer` | class | Vehicle trails — per-frame CPU trail trim (`core/trips` `trimTrail`) into a `PolylineCollection`, arc-length tail fade material |
 | `CesiumTripHeadsLayer` | class | Moving head-dots — per-frame `sampleHead` interpolation (`core/trips`) onto `PointPrimitive`s |
 | `BatchedPolylineLayer` | class | The shared batched-`Primitive` machinery behind the path/arc layers (advanced use) |
-| `buildPathPolylines` / `buildArcPolylines` / `sampleGreatCircleArc` | functions | The pure (Cesium-free, unit-tested) geometry builders behind the polyline layers |
+| `buildPathPolylines` / `buildArcPolylines` / `sampleGreatCircleArc` / `lineStringTimeOrigin` | functions | The pure (Cesium-free, unit-tested) geometry builders behind the polyline layers (`lineStringTimeOrigin` = their shared scene-wide time origin) |
+| `buildPointEntries` / `collectPointLayers` | functions | The pure (Cesium-free, unit-tested) point builders behind `CesiumPointLayer` — CPU assembly of per-feature ECEF points |
 | `featureColor` | function | Per-feature constant/categorical/ramp colour dispatch over `core/style` scalar lookups |
 | `cesiumBackend` | `BackendDescriptor` | This backend's declared capabilities / layer-kind support, against `@poopdeck.gl/core/capabilities` |
 | `viewStateToCesiumView` | function | Pure `ViewState` → Cesium camera-parameter math (no Cesium runtime import) |
@@ -61,6 +62,51 @@ There is no shared base layer or archive-owning helper like MapLibre's
 and feeds tiles to the layer (see [How it works](#how-it-works)). Every layer
 class has the same surface: `setTiles(tiles)`, `setTime(absoluteMs)`,
 `pick(cssX, cssY)`, `dispose()`.
+
+### Pure point builders
+
+`CesiumPointLayer` is a thin Cesium shell over a pure CPU core, exactly like the
+polyline layers. `buildPointEntries` does the per-feature ECEF assembly behind
+`setTiles`; `collectPointLayers` gathers the non-empty Point layers it walks.
+Both are Cesium-free and unit-tested. `lineStringTimeOrigin` (exported alongside
+the polyline builders) returns the first animatable LineString layer's
+`timeOffset` — the scene-wide origin `CesiumTripsLayer` shares.
+
+```ts
+// Every non-empty Point layer across the tiles, in tile/layer order.
+function collectPointLayers(tiles: Tile[]): BinaryFeatures[];
+
+// One ECEF point per Point feature; times rebased to the first Point layer's
+// timeOffset. Empty build ({ points: [], timeOrigin: 0 }) when no Point features.
+function buildPointEntries(tiles: Tile[], opts?: PointBuildOptions): PointBuild;
+
+// First animatable LineString layer's timeOffset (0 when none) — shared by CesiumTripsLayer.
+function lineStringTimeOrigin(tiles: Tile[]): number;
+
+interface PointBuildOptions {
+  colorProperty?: string;                      // categorical property to colour by
+  colorMapping?: Record<string, RGBA255>;      // category → colour
+  colorMappingDefault?: RGBA255;               // unmapped/absent (0–255) — @default opaque grey
+}
+
+interface PointBuild {
+  points: FeaturePoint[];
+  timeOrigin: number;                          // absolute ms all start/end are relative to
+}
+
+interface FeaturePoint {
+  x: number; y: number; z: number;             // absolute ECEF position (metres)
+  r: number; g: number; b: number; a: number;  // base colour, pre-normalized to 0..1
+  start: number; end: number;                  // active window, relative to timeOrigin (ms)
+  lon: number; lat: number;                    // source degrees — the picking coordinate
+  binary: BinaryFeatures;                      // picking provenance
+  featureIndex: number;
+}
+```
+
+These mirror the polyline builders (`FeaturePolyline` / `PolylineBuild`).
+Factoring them out is a pure refactor — `CesiumPointLayer` and `CesiumTripsLayer`
+options and behaviour are unchanged.
 
 ## Quick start
 

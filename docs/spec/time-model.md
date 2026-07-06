@@ -11,12 +11,16 @@
 STT is a spatial tile pyramid crossed with a temporal axis: a tile is addressed
 by `(zoom, x, y, bucket)`. This document specifies the `bucket` half.
 
-The Rust authorities are `crates/stt-build/src/tiler.rs` (bucketing,
-covering bounds, LOD validation) and `crates/stt-core/src/metadata.rs`
-(`time_range`, `temporal_lod`); the TS authority is
-`packages/core/src/archive.ts` (LOD selection, time-window pruning) and
-`packages/playback/src/time-controller.ts` (the playhead). If this document and
-the code disagree, the code wins — please open a PR.
+**This document is normative.** The reference implementations are
+`crates/stt-build/src/tiler.rs` (bucketing, covering bounds, LOD validation)
+and `crates/stt-core/src/metadata.rs` (`time_range`, `temporal_lod`) on the
+Rust side, and `packages/core/src/archive.ts` (LOD selection, time-window
+pruning) plus `packages/playback/src/time-controller.ts` (the playhead) on the
+TS side. If an implementation and this document disagree, that divergence is a
+**bug in one of them** — resolved by an erratum to whichever is wrong, never by
+silently redefining the spec to match the code. Spec revisions follow the
+stability promise and changelog in the
+[packed spec §9.1/§9.3](./stt-packed-format.md#91-stability--versioning-promise).
 
 ## 1. Time base — Unix milliseconds, UTC
 
@@ -31,6 +35,12 @@ presentation edge only.
 This single-scalar choice is what lets the directory delta-code the time column
 to ~1 byte per entry (§4 of the packed spec) and lets the GPU do per-frame time
 filtering with one `f64`/`i64` uniform.
+
+> **Leap seconds (normative).** Times are Unix milliseconds, which have **no
+> representation for a leap second** (there is no `23:59:60`). Whether an
+> upstream feed smeared or stepped across a leap second is the **producer's
+> presentation concern**: STT stores the Unix-ms scalar it is given and never
+> reinterprets or adjusts it.
 
 > **Non-negativity (normative).** Every *absolute* feature and metadata time MUST
 > be **non-negative** ms-since-epoch (`t ≥ 0`); the reference builder **rejects
@@ -75,12 +85,27 @@ everywhere in a tier) and **anchored to the epoch**, not to any calendar unit:
 bucket(t) = floor(t / temporal_bucket_ms) * temporal_bucket_ms
 ```
 
+`temporal_bucket_ms` MUST be **> 0** — a zero or negative width makes
+`bucket(t)` undefined, and the reference builder rejects it.
+
+> **Boundary semantics (normative).** Bucket *assignment* is half-open;
+> feature *validity* is inclusive. An instant exactly on a bucket boundary
+> (`start_time == b`) belongs to bucket `b` — never to the preceding bucket —
+> because assignment is the floor formula above over half-open
+> `[b, b + temporal_bucket_ms)`. Meanwhile a feature's `[start_time,
+> end_time]` interval is inclusive at **both** ends (§2), so an interval
+> feature from an earlier bucket whose `end_time == b` is still *valid* at
+> the boundary instant even though no feature is ever *assigned* to a bucket
+> by its end. The two rules never conflict: assignment places bytes,
+> validity drives pruning and rendering.
+
 > **Calendar caveat (normative).** Buckets are fixed millisecond widths, never
 > calendar-aware. A "1 month" LOD is `2_592_000_000 ms` = exactly **30 days**,
 > *not* a calendar month; "1 year" would be `31_536_000_000 ms` = 365 days, with
 > no leap-year handling. Producers that need calendar-aligned aggregation must
 > pre-aggregate upstream and present the result as fixed-width buckets, or use
-> the (future) [summary tier](../architecture/data-format.md). A reader MUST NOT
+> the [summary tier](../architecture/data-format.md#summary-tier-layers)
+> (shipped — `stt-build --summary-tier`). A reader MUST NOT
 > assume bucket boundaries fall on calendar units.
 
 ### 3.1 Feature → bucket assignment
@@ -140,6 +165,18 @@ the base buckets.
 - Each level carries a `max_zoom_level`: the deepest spatial zoom at which that
   coarse tier is still the right choice.
 
+**Content contract (normative).** A conformant coarse-tier tile contains
+**exactly the base features, re-bucketed at the coarser width**: for a given
+spatial cell, the coarse tile for bucket `[B, B + bucket_ms)` holds the union
+of the features of every base bucket that coarse bucket spans — identical
+features, identical geometry and times, **no reduction, aggregation, or
+thinning**. A coarse tier trades request count for bytes, nothing else, and a
+reader may rely on feature identity between tiers (the same feature `id`
+resolves to the same feature in every tier that contains it). Reduced or
+aggregated tiers are a **future declared variant** — they will be announced
+by an explicit metadata field when specified — not silently permitted; two
+writers emitting "1d" tiers today MUST agree on the identity semantics above.
+
 Recorded in metadata as:
 
 ```jsonc
@@ -187,7 +224,17 @@ per entry:
   Stored as a signed delta against `time_start` in the directory's covering
   section (§4 of the packed spec); `None` on pre-covering archives, where readers
   fall back to `time_start`.
-- **`time_end`** — the tile's inclusive upper temporal bound.
+- **`time_end`** — the tile's inclusive upper temporal bound. A writer MUST
+  set it to the **maximum feature `end_time` actually in the tile** — the
+  *tight* bound, not the nominal bucket end `time_start +
+  temporal_bucket_ms - 1`. This is load-bearing for correctness, not an
+  optimization: an interval feature lives only in its *start* bucket (§3.1),
+  so it is findable by a later query window **only because** `time_end` was
+  widened to cover it. A writer emitting nominal bucket ends would produce a
+  dataset that decodes cleanly yet silently loses every interval feature from
+  queries after its start bucket — the reader's prune below would discard the
+  tile. (When every feature ends inside the bucket, the tight bound is *below*
+  the nominal end and additionally saves wasted fetches.)
 
 A reader keeps a tile for a query window `[w_start, w_end]` iff:
 
@@ -271,11 +318,21 @@ the per-vertex trajectory lineage.
   `i64`, so `cover_t_min` deltas and per-leaf `t_min`/`t_max` may still be
   negative.)
 - **MUST** represent instantaneous features as `start_time == end_time`.
+- **MUST** use a strictly positive bucket width (`temporal_bucket_ms > 0`) in
+  every tier.
 - **MUST** place each feature in exactly one base bucket
   (`floor(start_time / temporal_bucket_ms) * temporal_bucket_ms`); a writer MUST
-  NOT silently duplicate a feature across buckets.
+  NOT silently duplicate a feature across buckets. Assignment is half-open —
+  an instant exactly on a bucket boundary belongs to the bucket it starts —
+  while feature validity `[start_time, end_time]` stays inclusive (§3).
+- **MUST** set each directory entry's `time_end` to the **maximum feature
+  `end_time` in the tile** (the tight bound, §5) — interval features are
+  findable after their start bucket only through it.
 - LOD levels **MUST** be strictly-increasing exact multiples of the base bucket,
   stored sorted ascending, each with a `max_zoom_level`.
+- A coarse LOD tile **MUST** contain exactly the base features re-bucketed at
+  the coarser width — no reduction, aggregation, or thinning (§4); reduced
+  tiers are a future *declared* variant, not silently permitted.
 - A reader **MUST** prune by `time_end >= w_start AND (cover_t_min ?? time_start)
   <= w_end`, and **MUST** fall back to `time_start` when `cover_t_min` is absent.
 - A reader **MUST NOT** assume bucket boundaries align to calendar units.

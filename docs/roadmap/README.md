@@ -23,10 +23,12 @@ min-width fix. The recurring cross-doc items that remain genuinely open are:
 **(1)** the user-run rollout/verify ops gate (fleet re-transcode + R2 re-sync +
 browser-verify, shared by stt-packed §3 / playback §7 / av-cockpit §4),
 **(2)** the three-renderer general showcase wiring (the one open engineering
-keystone), **(3)** renderer-abstraction **Decision 6** (GPU-conformance CI —
-gates the whole Phase-1 shader rewire), and **(4)** the workspace **arrow
-upgrade to ≥59** (restores byte-reproducible packs; arrow-ipc ≥59 sorts IPC
-metadata). Plus the freshly-landed ecosystem audit below.
+keystone), and **(3)** renderer-abstraction **Decision 6** (GPU-conformance CI —
+gates the whole Phase-1 shader rewire). Item (4) of the original list — the
+workspace **arrow upgrade to ≥59** — CLOSED 2026-07-04: arrow 59 shipped with
+the transcode-removal batch, restoring byte-reproducible packs
+(`docs/spec/stt-packed-format.md` §7 D6). Plus the freshly-landed ecosystem
+audit below.
 
 ## Shipped — decision records (kept for rationale)
 
@@ -69,6 +71,12 @@ behavior lives in the spec and API docs.
   CLI in [`cli-reference`](../api/cli-reference.md). Merges the former
   `postgis-integration.md` + `duckdb-integration.md`. §8 re-pointed 2026-07-01 at
   the triaged backlog (several "open" items there had already shipped).
+- [**static-vs-db-2026-07.md**](./static-vs-db-2026-07.md) — NEW (2026-07-05):
+  are packed archives "rolling a custom DB", and does dynamic DuckDB/PostGIS
+  serving beat them? Verdict: warm single-node latency is a tie (~2–3 ms both);
+  static wins structurally (edge cacheability, cost ∝ build not requests,
+  directory-as-client-planner); DB keeps the live/ad-hoc tier. Confirms the
+  current hybrid; benchmarks in [`db-input-adaptors.md`](./db-input-adaptors.md) §6.
 - [**naming-types-consistency-2026-06.md**](./naming-types-consistency-2026-06.md)
   — cross-language (Rust/TS/Python/docs) naming/types/formats consistency audit.
   Phases 0–4 implemented (fixed the one real bug: scalar `--time-field`
@@ -113,6 +121,30 @@ behavior lives in the spec and API docs.
 
 Landed but not fully closed — each lists what remains.
 
+- [**stt-format-review-2026-07.md**](./stt-format-review-2026-07.md) — NEW
+  (2026-07-05): comprehensive review of the STT format itself (packed container,
+  v5 directory codec, Arrow/GeoArrow payload, time model) with findings ranked in
+  five tiers + a phased plan. **Phases A (integrity / loud failure) + B (spec
+  hardening & independent implementability) + T1.1 (non-trajectory coverage
+  clipping, kill-switched via `--whole-feature-placement`) + the D2 client-memory
+  items are implemented.** Phase C (the one coordinated byte break) shipped as
+  [stt-packed-v2-design](./stt-packed-v2-design-2026-07.md). OPEN: temporal-LOD
+  reader wiring (D1 — has its own [scrub-LOD plan](./scrub-lod-2026-07.md)),
+  interior-tile / quadtree polygon coverage, and the Phase E scale tier (E1
+  streaming build landed; E2/E3 wait for a forcing dataset).
+- [**stt-packed-v2-design-2026-07.md**](./stt-packed-v2-design-2026-07.md) — NEW
+  (2026-07-05, **FROZEN — all execution stages COMPLETE**): executes Phase C of
+  the format review, batching every wire-breaking change into ONE `formatVersion`
+  bump so content addresses churn once. Shipped: manifest-embedded schema
+  templates (kills the per-tile schema tax — measured −44.8% pack bytes on
+  hurricanes), sectioned layer frame v2 + `TILE_META`, `STTP`/`STTD` object magic,
+  time-sorted rows, the `.sttb` bundle profile (`stt-bundle`), dual v1/v2 readers
+  (Rust + TS), the `--format-version 1` kill switch, and the spill-to-disk
+  `PackWriter` + parallel encode loop (E1). Stage III measurement SKIPPED both
+  ride-alongs (`rel-times32`, `narrow-ids`) and CONFIRMED the row-sort default.
+  Live spec: [`stt-packed-format.md`](../spec/stt-packed-format.md). OPEN (out of
+  campaign scope): demo-fleet republish, lazy-props client materialization,
+  serve-v2.
 - [**shipping-2026-07.md**](./shipping-2026-07.md) — NEW (2026-07-02):
   distribution decision record + publish backlog owner. One public crate name
   (`spatiotemporal-tiles` facade owning all four `stt-*` CLI bins) over three
@@ -172,6 +204,22 @@ Landed but not fully closed — each lists what remains.
 
 Genuine future work — nothing implemented yet.
 
+- [**blob-ordering-heuristic-2026-07.md**](./blob-ordering-heuristic-2026-07.md)
+  — **SHIPPED 2026-07-05** (from a directory-only density sweep over all 36 local
+  archives — the probe built for the demo-page "cube laid down in a line" utility).
+  F1+F2: `choose()` now uses **occupied-extent** space bits (not raw max-zoom) and
+  handles the shallow-time/snapshot pole → a better `auto` pick on **12/36**
+  archives. F3: an opt-in `--blob-ordering measured` mode + `stt-optimize
+  order-audit` advisor, both on a shared range-read simulator
+  (`crates/stt-core/src/ordering_sim.rs`). F4a: the resolved order is recorded in
+  `manifest.blobOrdering`. **Key lesson (§3):** building the simulator overturned
+  this doc's own break-proxy — ranking by request count was catastrophically wrong
+  (it called a 669 MiB read "cheapest"); the shipped metric is the blended
+  `bytes + reads × gap`, and morton3 is reported-but-never-selected. Still open:
+  the fixed equal-weight scrub/pan query mix, and whether `measured` should ever
+  become the `auto` default. Adjacent to
+  [stt-format-review](./stt-format-review-2026-07.md) and
+  [stt-optimize-intelligence](./stt-optimize-intelligence-2026-07.md).
 - [**dataset-candidates-2026-07.md**](./dataset-candidates-2026-07.md) — NEW
   (2026-07-01, analysis-only): license-verified shortlist of new large showcase
   datasets that would force genuinely new rendering/representation techniques

@@ -1,6 +1,6 @@
 # CLI Reference
 
-The Rust toolchain ships four core binaries. Install them from crates.io
+The Rust toolchain ships five core binaries. Install them from crates.io
 with `cargo install spatiotemporal-tiles`, grab a prebuilt
 binary from the [GitHub releases page](https://github.com/BertCh/spatiotemporal-tiles/releases)
 (shell/powershell installers included), or build from the repo root with
@@ -13,8 +13,9 @@ binary from the [GitHub releases page](https://github.com/BertCh/spatiotemporal-
 | `stt-generate`  | Download + build the bundled showcase datasets                     |
 | `stt-optimize`  | Analyze an input and recommend `stt-build` flags; inspect/diff/doctor built tilesets |
 | `stt-validate`  | Verify a packed dataset, decode every tile |
+| `stt-bundle`    | Pack a dataset into a single-file `.sttb` interchange bundle, or unpack one |
 
-A fifth binary — **`stt-serve`** — generates STT tiles on the fly from a live
+A sixth binary — **`stt-serve`** — generates STT tiles on the fly from a live
 PostGIS or DuckDB source (see [below](#stt-serve)). The default install gives
 it the PostGIS backend; `--features cli` (or `--features serve`) adds the
 embedded-DuckDB backend, a heavy bundled C++ compile.
@@ -114,9 +115,11 @@ load); they are never placed at (0,0).
 
 | Flag | Default | Description |
 | ---- | ------- | ----------- |
-| `--blob-ordering <ORD>` | `auto` | Tile-blob layout before packs are cut: `auto` (picks from the dataset's space-vs-time cardinality: wide-time → spatial-major, else 3D-Hilbert), or explicit `spatial`, `time-major`, `hilbert3`, `morton3`. Better locality → fewer packs touched per viewport → fewer client range requests. `eager` is accepted for backward-compat and maps to `auto`. |
+| `--blob-ordering <ORD>` | `auto` | Tile-blob layout before packs are cut: `auto` (picks from the dataset's **occupied** space-vs-time extent: shallow/wide-time → spatial-major, else 3D-Hilbert), `measured` (opt-in; simulate per-ordering range-read cost and pick the cheapest — see `stt-optimize order-audit`), or explicit `spatial`, `time-major`, `hilbert3`, `morton3` (morton3 is research-only — the auto/measured pickers never select it). The resolved order is recorded in `manifest.blobOrdering`. Better locality → fewer packs touched per viewport → fewer client range requests. `eager` is accepted for backward-compat and maps to `auto`. |
 | `--pack-size <MIB>` | `64` | Target pack object size in MiB. A single blob larger than the target gets its own pack rather than being split. Smaller → finer cache granularity, more objects; larger → fewer, coarser objects. Stay well under the CDN per-object cap (512 MB). |
+| `--pack-memory-budget <MIB>` | `512` | In-memory budget for the tile payloads the pack writer buffers between encode and finalize. Beyond the budget, payloads spill to a temp file inside the output directory (removed on success and failure alike) and are read back during finalize; the ~100 B of per-tile directory metadata always stays in RAM. **Purely a memory-behaviour lever — output bytes are identical at any budget.** `0` = unlimited (hold every payload in RAM, the legacy behaviour). |
 | `--compression <ALGO>` | `zstd` | The packed format is **zstd-only** — every tile blob is compressed per-blob with zstd. `gzip`/`none` are rejected; drop the flag. |
+| `--format-version <1\|2>` | `2` | Packed format version to emit. `2` (default) = schema templates embedded in the manifest (kills the per-tile schema tax), sectioned layer frames with `TILE_META` + time-sorted rows, and `STTP`/`STTD` object magic (packed spec §5.2/§9.2). `1` is the transitional **kill switch**: it reproduces the frozen 0.3.x writer **byte-for-byte** (golden-pinned), so a v2 regression can be rolled back by rebuilding; it is also what `stt-serve` byte-parity checks build against (serve always emits v1 frames). v1 emission is kept for one release and then removed. |
 
 ### Size & layout
 
@@ -190,6 +193,7 @@ sub-trajectory animates correctly.
 | ---- | ------- | ----------- |
 | `--no-clip` | off | Disable clipping — entire trajectory lives in the centroid tile |
 | `--clip-min-vertices <N>` | `2` | Skip clipping for paths shorter than this |
+| `--whole-feature-placement` | off | Kill switch for the default coverage-clipping of NON-trajectory geometry (polygons, MultiPolygons, timeless (Multi)LineStrings, MultiPoints): restore legacy whole-feature placement, where the entire feature lands only in the single tile containing its representative point — neighbouring tiles it spans then render a hole. |
 
 ### Simplification
 
@@ -294,6 +298,7 @@ The block is additive — readers that don't know it are unaffected. Wire shape:
 | `--description <STR>` | Description |
 | `--attribution <STR>` | Attribution text |
 | `--metadata-output <PATH>` | Also write a sidecar JSON for the showcase config (its `filename` points at `<dir>/manifest.json`) |
+| `--no-manifest-capabilities` | Escape hatch: do NOT declare required-to-understand features in `manifest.capabilities` (restores pre-capabilities manifest bytes for a quantized / elevation-fold build). Only for byte-compat with tooling that predates the capability check — a reader lacking a declared feature then silently misdecodes the re-typed columns instead of refusing at open. Builds using none of those features are unaffected (the key is omitted either way). |
 | `-v, --verbose` | Debug-level tracing |
 
 ### Examples
@@ -392,7 +397,7 @@ Subcommands:
 | `nyc-rideshare` | NYC TLC trips + OSRM routing; `--paths` for LineString trajectories, `--flows` for pre-aggregated corridor flows binned to intersection-to-intersection road segments (`--flow-bin` default `15m`), `--od` for one straight 2-vertex origin→destination LineString per trip (no OSRM — the `AnimatedArcLayer`/`AnimatedLineLayer` overview geometry; mutually exclusive with `--paths`/`--flows`); `--with-bearing` adds a per-feature `bearing` numeric column (initial O→D great-circle heading with `--od`, heading toward the next trip point for point trajectories) |
 | `bixi` | Montréal BIXI open-data trips → directed origin→destination flowmap (one 2-vertex O→D arc per station pair carrying a per-bucket count matrix). `--input` is required (the BIXI `.zip`/`.csv` or a directory). Build-time per-zoom station clustering is on by default (`--cluster-radius`, `--no-cluster`); `--bake-bundling` bakes KDEEB edge bundling into the geometry; `--streets` routes onto the OSM bicycle network instead (needs `--osm-pbf` + a bicycle-profile `--osrm-url`), with `--directional` baking per-segment travel direction into that output; `--merged-paths` synthesizes twin-ribbon directed corridors from the same bicycle-routed OD pairs, and `--flow-graph` builds an abstract Sankey-like bundled flow network (no streets/OSRM) — mutually exclusive geometry modes. |
 | `gtfs` | Static GTFS feed → country-scale transit "ballet": every trip scheduled on one service `--date YYYYMMDD` (weekly `calendar.txt` when present + `calendar_dates.txt` exceptions; `exception_type=2` removals win) becomes a LineString along its shape with per-vertex timestamps interpolated in shape-distance between stop times — no routing server needed, animated with `type: 'trip-heads'`. `--feed <dir>` is the extracted feed (for the bundled NL OVapi feed the busiest fully-defined date is `20260703`, a Friday, ~121k trips). Handles `>24:00:00` clock times; timestamps are absolute Unix ms anchored at local midnight in the feed's agency timezone (the GTFS "noon − 12 h" DST rule is deliberately simplified away — only ±1 h off for times crossing the 02:00 switch on the two DST nights a year). Per-trip fallbacks: unusable `shape_dist_traveled` → nearest-point projection onto the shape, missing shape → straight stop-to-stop lines; dwell is kept as a duplicated stop vertex; drops are counted per reason. Properties: numeric `trip_id`, categorical `route_type` **string label** (bus/rail/tram/metro/ferry — never the numeric code), `route_short_name`, `agency_id`, opt-in `--headsign`. Also: `--bin` (default `1h`), `--max-trips` (even temporal stride), `--min-zoom`/`--max-zoom` (default 6–14), `--skip-build`; `--out` is an alias of `--output`. |
-| `nwm` | NOAA National Water Model v3.0 **retrospective** discharge (`chrtout.zarr` on anonymous S3 — the chunks are bare zstd int32 frames, fetched with plain HTTPS + the `zstd` crate, no zarr crate) joined to NHDPlusV2 flowlines (`--flowlines` GeoParquet, default `data/nwm/nhd-flowlines-order3.parquet`, `COMID == feature_id`) → the CONUS river network "breathing" as `vertex_value_matrix` flow corridors. `--window YYYY\|YYYY-MM` × `--bin 1d\|1h` (hourly is month-scoped; `1d` = daily mean) selects the bucket axis; `--value log-q` bakes `round(log10(max(q,0.01)),2)` absolute discharge, `--value log-anomaly` bakes `round(clamp(log2(q/median2019),0,6),2)` flood anomaly (auto-ensures the window year's `1d` reduce for the per-reach medians; intermittent reaches → NaN → fallback color). Per zoom band (`--zooms`, default `4-8`; stream-order ladder z≤5 ≥6 / z6–7 ≥5 / z8+ ≥4, `--min-order-override` replaces it) reaches are mainstem-merged within runs of constant `(LevelPathI, StreamOrde)` walked along `DnHydroseq`, resampled to ~2-px vertex spacing, and emitted as a `[z,z]`-banded copy (`min_zoom` = `max_zoom` = z) — per-zoom copies are required because `--simplify` cannot touch matrices, so the build runs without simplification. Chunk downloads cache at `data/nwm/chrtout-cache/` and per-stripe reduced series at `data/nwm/reduced/` (both resumable skip-if-exists; `--skip-download` fails instead of fetching). Properties: `order`, `width` (2^(order−4), clamped to [0.5, 16]). Also: `--detail-zoom` (default 11 — the zoom whose ~2-px spacing the geometry is resampled to), `--chunk-buckets` (default 0 = auto ~30 matrix columns per temporal tile), `--max-reach-stripes` (smoke tests only), `--skip-build`; `--out` is an alias of `--output`. |
+| `nwm` | NOAA National Water Model v3.0 **retrospective** discharge (`chrtout.zarr` on anonymous S3 — the chunks are bare zstd int32 frames, fetched with plain HTTPS + the `zstd` crate, no zarr crate) joined to NHDPlusV2 flowlines (`--flowlines` GeoParquet, default `data/nwm/nhd-flowlines-order3.parquet`, `COMID == feature_id`) → the CONUS river network "breathing" as `vertex_value_matrix` flow corridors. `--window YYYY\|YYYY-MM` × `--bin 1d\|1h` (hourly is month-scoped; `1d` = daily mean) selects the bucket axis; `--value self-scaled` (**default**) bakes `round(clamp((log10 q − p2)/(p98 − p2),0,1),2)` — each reach mapped from its own annual [p2,p98] log-discharge onto [0,1] (seasonal variation, not absolute size), `--value log-q` bakes `round(log10(max(q,0.01)),2)` absolute discharge, `--value log-anomaly` bakes `round(clamp(log2(q/median2019),0,6),2)` flood anomaly (auto-ensures the window year's `1d` reduce for the per-reach medians; intermittent reaches → NaN → fallback color). Per zoom band (`--zooms`, default `4-8`; stream-order ladder z≤5 ≥6 / z6–7 ≥5 / z8+ ≥4, `--min-order-override` replaces it) reaches are mainstem-merged within runs of constant `(LevelPathI, StreamOrde)` walked along `DnHydroseq`, resampled to ~2-px vertex spacing, and emitted as a `[z,z]`-banded copy (`min_zoom` = `max_zoom` = z) — per-zoom copies are required because `--simplify` cannot touch matrices, so the build runs without simplification. Chunk downloads cache at `data/nwm/chrtout-cache/` and per-stripe reduced series at `data/nwm/reduced/` (both resumable skip-if-exists; `--skip-download` fails instead of fetching). Properties: `order`, `width` (2^(order−4), clamped to [0.5, 16]). Also: `--detail-zoom` (default 11 — the zoom whose ~2-px spacing the geometry is resampled to), `--chunk-buckets` (default 0 = auto ~30 matrix columns per temporal tile), `--max-reach-stripes` (smoke tests only), `--skip-build`; `--out` is an alias of `--output`. |
 | `nyc-taxi-points` | derived from `nyc-rideshare` via polyline interpolation |
 | `satellites` | CelesTrak TLE + SGP4 propagation |
 | `drifters` | NOAA Global Drifter Program 6-hourly buoy trajectories |
@@ -524,17 +529,44 @@ aggregated tier → `--summary-tier`).
 | `-o, --output <FILE>` | Write the report to a file instead of stdout |
 | `--strict` | Exit non-zero **after printing** if any Warning-or-worse finding exists — the CI-gate analog of `diff --fail-on-growth`. Info findings never trip it. |
 
+### `stt-optimize order-audit`
+
+Audits a built tileset's **blob ordering**: over the native-tier directory (no
+payload decode), it simulates the two canonical access patterns — scrub a
+viewport across all time, pan one instant across space — under the reader's
+range coalescing, and ranks the four orderings by a blended cost
+(`bytes_read + reads × gap`, so request count and over-read are both priced).
+It prints the per-ordering cost table, the measured recommendation, what `auto`
+would pick, and the archive's currently-recorded `manifest.blobOrdering`. It
+never re-sorts anything — rebuild with `--blob-ordering measured` to adopt the
+recommendation. `morton3` is shown for comparison but never recommended.
+
+```bash
+stt-optimize order-audit --archive my-dataset/
+stt-optimize order-audit --archive my-dataset/ --strict --format json -o order.json
+```
+
+| Flag | Description |
+| ---- | ----------- |
+| `-a, --archive <DIR>` | Packed dataset directory or its `manifest.json` |
+| `--format <FMT>` | `text` (default) or `json` |
+| `-o, --output <FILE>` | Write the report to a file instead of stdout |
+| `--strict` | Exit non-zero if the archive's recorded ordering isn't the measured recommendation. Archives with no recorded ordering (pre-2026-07) warn and pass. |
+
 ---
 
 ## `stt-validate`
 
 Validates an STT dataset in the **packed format** — pass the dataset
-directory or its `manifest.json`. (The single-file `.stt` container has been
+directory, its `manifest.json`, or a single-file `.sttb` bundle (the
+integrity tier then verifies each in-bundle object's blake3 against its key
+exactly like the exploded case). (The single-file `.stt` container has been
 removed; only the packed format is accepted.)
 
 ```bash
 stt-validate my-dataset/ [--json] [--fail-fast] [--skip-decode]
 stt-validate my-dataset/manifest.json
+stt-validate my-dataset.sttb
 ```
 
 Checks performed:
@@ -548,6 +580,10 @@ Checks performed:
 4. Every payload decodes as a layer frame of Arrow IPC streams.
 5. Feature counts in tile entries match the decoded layer rows.
 6. Tile temporal extents lie inside the dataset's metadata time range.
+7. Every feature's interval is sane (`end_time >= start_time`); violations are counted across the decoded tiles and the first offender named.
+8. Each tile entry's directory `time_end` is **tight** — it equals the max feature `end_time` across the tile's layers. Readers prune interval queries on `time_end`, so a nominal bucket end silently hides interval features.
+9. When the metadata declares a **summary tier**, every summary-layer `id` is a valid H3/Quadbin cell index at the tier's resolution for the tile's zoom (a sequential `id` column — the blank-render bug — fails).
+10. Metadata totals (`tile_count`/`feature_count`) match the directory-derived totals; zeroed totals from pre-0.1.1 writers warn instead of failing.
 
 | Flag | Description |
 | ---- | ----------- |
@@ -558,6 +594,41 @@ Checks performed:
 
 Exits non-zero on any failure. Suitable for CI gating any dataset that
 ships with the project.
+
+---
+
+## `stt-bundle`
+
+Packs an exploded packed dataset (its `manifest.json` + content-addressed
+objects) into **one `.sttb` file** for interchange — the "download one file"
+property the packed layout gave up — and unpacks it back. Objects round-trip
+**byte-identical**: they are content-addressed, `pack` re-hashes every one on
+the way in, and `unpack` re-verifies the result with the same integrity pass
+`stt-validate` runs (any mismatch exits non-zero). Bundling is deterministic:
+the same dataset packs to byte-identical bundle bytes.
+
+Strictly an interchange profile (spec §13, non-normative draft): the
+CDN/serving story remains the exploded layout — nothing serves bundles over
+HTTP ranges. The container is object-agnostic (keys and bytes are opaque),
+so it carries any manifest `formatVersion` unchanged.
+
+```bash
+stt-bundle pack my-dataset/ -o my-dataset.sttb    # dir or manifest.json
+stt-bundle unpack my-dataset.sttb -o my-dataset/
+stt-validate my-dataset.sttb                      # bundles validate directly
+```
+
+| Flag | Description |
+| ---- | ----------- |
+| `-o, --output <PATH>` | `pack`: the output `.sttb` path. `unpack`: the output dataset directory (created if missing). |
+
+Container shape: 8-byte magic (`"STTB"`, version 1, three zero bytes), a
+little-endian `u32` header length, a JSON header
+`{ "manifest": <verbatim manifest.json>, "objects": [ { "key", "offset",
+"length" } ] }`, then the objects back-to-back at 8-byte-aligned offsets in
+manifest order (directory first, then packs in `pack_id` order). See the
+[packed-format spec §13](../spec/stt-packed-format.md#13-bundle-profile-sttb--interchange-non-normative-draft)
+for the full layout.
 
 ---
 
@@ -599,7 +670,8 @@ unchanged. Full HTTP semantics:
 | `--postgres <CONN>` | — | PostGIS backend (deadpool pool, NoTls). Env fallback: `STT_POSTGRES_URL` / `DATABASE_URL`. Mutually exclusive with `--duckdb`. |
 | `--duckdb <PATH>` | — | DuckDB backend (r2d2 pool; read-only file, or `:memory:` for external-file `--sql` scans). Env fallback: `STT_DUCKDB_PATH`. Mutually exclusive with `--postgres`. |
 | `--table <NAME>` / `--sql <SELECT>` | — | Source table or arbitrary `SELECT` (provide exactly one). A `--sql` source must expose `--geom-column` and `--time-field`. |
-| `--geom-column <NAME>` | `geom` | Geometry column (must be EPSG:4326 lon/lat — reproject at ingest, not per tile). |
+| `--geom-column <NAME>` | `geom` | Geometry column (EPSG:4326 lon/lat, unless `--source-srid` says otherwise). |
+| `--source-srid <SRID>` | — | SRID of the stored geometry when it is NOT 4326: every per-tile query reprojects it to 4326 before filtering and encoding (the exact `stt-build --source-srid` ingest expressions), and the startup metadata extent is reprojected too. Costs a per-row transform that bypasses a plain spatial index — store 4326 for the fast path. |
 | `--time-field <NAME>` | `timestamp` | Timestamp column (timestamp/timestamptz, or an integer column read per `--time-format`). |
 | `--end-time-field <NAME>` / `--time-format <FMT>` | — / `iso8601` | Optional end-time column; wire format of an integer time column (matches `stt-build`). |
 | `--min-zoom <N>` / `--max-zoom <N>` | `0` / `14` | Zoom range advertised in `/metadata.json` and within which LOD levels apply. |
@@ -615,7 +687,10 @@ unchanged. Full HTTP semantics:
 
 `stt-serve` also accepts the full offline **per-tile** flag surface
 (`--simplify`/`--simplify-max-zoom`/`--time-aware-simplify`, `--pre-tessellate`,
-`--no-clip`/`--clip-min-vertices`, `--min-zoom-field`/`--max-zoom-field`, the
+`--no-clip`/`--clip-min-vertices`, `--whole-feature-placement` (serve-parity
+with the `stt-build` kill switch — a file archive built with that flag and a
+live serve of the same source must set BOTH or their tiles diverge),
+`--min-zoom-field`/`--max-zoom-field`, the
 per-tile budgets `--maximum-tile-bytes`/`--maximum-tile-features`/
 `--drop-densest-as-needed`, `--exclude`/`--include`/`--exclude-all`,
 `--min-features-per-tile`) and the **encoder-global** flags (`--quantize-coords`,

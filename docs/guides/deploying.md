@@ -22,7 +22,11 @@ Two rules follow from the immutable half:
    packs during a deploy 404s live sessions that opened the old manifest.
 2. **Garbage-collect with a retention window.** Delete an unreferenced pack
    only after every cached manifest and open session could have drained
-   (the reference script defaults to 7 days).
+   (the reference script defaults to 7 days). "Unreferenced" must be judged
+   against the *deployed* manifest too, not just the build being uploaded:
+   the reference script reads the currently-deployed `manifest.json` before
+   uploading and protects everything it references for one deploy cycle
+   (the **grace rule** of the [format spec §2](../spec/stt-packed-format.md)).
 
 ## Cloudflare R2 (the reference deploy)
 
@@ -35,8 +39,34 @@ cp .env.r2.example .env          # fill in R2 account / token / bucket
 scripts/r2-sync.sh --dry-run     # review what would change
 scripts/r2-sync.sh               # sync everything under public/data + GC
 scripts/r2-sync.sh flights       # one dataset, e.g. after a rebuild
+scripts/r2-sync.sh --no-prune    # upload only, defer GC — use for major republishes
+scripts/r2-sync.sh --prune-now   # GC without the retention window (disaster cleanup)
 STT_DATA_DIR=path/to/staging scripts/r2-sync.sh   # deploy a staging tree
 ```
+
+### GC, the grace rule, and major republishes
+
+The GC pass deletes a `packs/`/`index/` object only when it is unreferenced
+by the **local** manifests being deployed, unreferenced by the
+**currently-deployed** manifests (fetched read-only before anything uploads —
+the one-deploy *grace rule*), and older than the retention window
+(`R2_PRUNE_RETENTION`, default `7d`). If the deployed manifests exist but
+cannot be read, the script uploads normally and skips GC for that run
+(fail-safe). `--prune-now` drops only the age gate — the grace rule still
+protects the previous deploy, but anything older than that can 404 live
+sessions, and the script warns loudly when the deployed manifest still
+references objects the new deploy does not.
+
+For a **major republish** that changes every object (a format-version bump, a
+full rebuild), the recommended mode is `--no-prune`: upload additively, flip
+the manifests, and let a later default sync garbage-collect the old objects
+once the retention window has passed.
+
+One consequence of the grace rule: a dataset that is deleted locally but still
+deployed keeps protecting its own objects (its remote manifest is re-read on
+every sync). To retire a dataset, delete its remote `manifest.json` first —
+e.g. `rclone deletefile r2:<bucket>/data/<stem>/manifest.json` — then let a
+later sync collect the now-unreferenced objects.
 
 Browser clients fetch cross-origin, so the bucket needs a CORS policy allowing
 `GET`/`HEAD` with the `Range` request header and exposing `Content-Range` /

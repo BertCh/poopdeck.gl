@@ -132,10 +132,10 @@ byte-sets all match Rust⇄TS, with golden fixtures. The gaps are at the edges:
 - **PostGIS parity is CI-dormant**: `source_parity.rs:97,120` are `#[ignore]`d behind `STT_TEST_PG_DSN`
   while the DuckDB twins run by default — the branch's headline "db-parity" claim has no default
   enforcement on the PG side.
-- **Wire bytes still not reproducible** (known, still open): arrow-54 serializes schema metadata in
-  HashMap order; logical reproducibility is test-guarded (500-iteration fingerprints) but the strict
-  byte-identity canary is `#[ignore]`d (`reproducible_build.rs:224`) — content-addressed dedup is
-  logical-only.
+- **Wire bytes reproducible — CLOSED 2026-07-04** (was open at audit time: arrow-54 serialized schema
+  metadata in HashMap order, byte-identity canary `#[ignore]`d): the workspace arrow upgrade to ≥59
+  shipped; `same_tile_encodes_byte_identically` (`reproducible_build.rs`) is active and
+  content-addressed dedup is byte-exact cross-process — see `docs/spec/stt-packed-format.md` §7 D6.
 - Sec→ms overflow forks: file `checked_mul` errors (`timestamp.rs:70-74`) vs DB `saturating_mul`
   silently saturates (`postgres_input.rs:621`, `duckdb_input.rs:723`).
 - File reader silently drops Dictionary/LargeUtf8/Utf8View/Int16/unsigned property columns

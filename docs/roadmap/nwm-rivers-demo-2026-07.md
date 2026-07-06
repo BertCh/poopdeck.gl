@@ -10,8 +10,10 @@ FlowCorridorLayer — zero new tile-format features, zero new layer code.
 Ship **option (b): two demos sharing one geometry pipeline**:
 
 1. **`nwm-rivers-2019`** — full year 2019, **daily** buckets (365), value =
-   `log10(q)` absolute discharge. The continental network breathing through a
-   record flood year. ≈ **0.3–0.45 GiB** on disk.
+   **self-scaled** per reach (each reach's own annual [p2, p98] log-discharge →
+   [0, 1]) so colour shows each river's seasonal *variation*, not its absolute
+   size. The continental network breathing through a record flood year. ≈
+   **0.3–0.45 GiB** on disk. (`log-q` absolute discharge kept as a `--value` option.)
 2. **`nwm-rivers-flood-2019-03`** — March 2019, **hourly** buckets (744), value =
    `log2(q / median2019)` flood **anomaly**. The Missouri bomb-cyclone flood wave
    propagating downstream hour by hour. ≈ **0.6–0.9 GiB** on disk.
@@ -154,10 +156,17 @@ pre-resampled copy with its own consistent matrix.
 Matrix is f32-only (no `stt:qa`), and the ramp is linear over `domain` — so bake
 the transfer function into the values at generate time:
 
-- **Demo 1 (year, daily)**: `v = round(log10(max(q, 0.01)), 2)` ∈ [−2, 5].
-  Absolute discharge on a log axis — the Mississippi stays dominant, seasonal
-  pulses read as brightness waves. `tripGradient.domain: [0, 5]` (1 → 100,000 m³/s),
-  legend labeled at decade stops. Fill (−999900) → `NaN` → `colorMappingDefault`.
+- **Demo 1 (year, daily)**: `v = round(clamp((log10 q − p2) / (p98 − p2), 0, 1), 2)`
+  — **self-scaled** per reach: each reach's own annual [p2, p98] log-discharge
+  mapped onto [0, 1], so colour reads seasonal *variation* rather than absolute
+  size and a headwater creek's snowmelt pulse lights up as vividly as the
+  Mississippi's crest (absolute `log-q` left the great rivers pinning the scale
+  and every tributary a flat dim — the original blow-out). A
+  `SELF_SCALE_MIN_LOG_SPAN = 0.30` floor keeps near-constant/regulated reaches
+  dim instead of amplifying their noise to full contrast. `tripGradient.domain:
+  [0, 1]` (annual low → annual high). Fill (−999900) or a reach with no finite
+  range → `NaN` → `colorMappingDefault`. (`log-q` is retained as a `--value`
+  option for the absolute read.)
 - **Demo 2 (March, hourly)**: `v = round(clamp(log2(q / median_2019), 0, 6), 2)`
   — **flood anomaly**; a creek at 50× median lights up like a mainstem, which is
   exactly the flood-wave read (absolute discharge would leave the flooding

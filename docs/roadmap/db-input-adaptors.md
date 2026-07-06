@@ -112,9 +112,17 @@ logs its active parity-affecting config at startup so an operator can confirm it
 **Not servable per single-tile request** (rejected at startup with a clear
 error): `--summary-tier` (cross-tile H3/quadbin aggregation) and
 `--adaptive-temporal` (windows sized across a cell's whole time range) — pre-bake
-these and serve the static archive. Source geometry must be EPSG:4326 (index in
-4326; reproject at ingest with `stt-build --source-srid`, never in a per-tile
-filter — that would defeat the spatial index).
+these and serve the static archive. Non-4326 source geometry is served via
+`stt-serve --source-srid` (per-tile `ST_Transform` before the bbox filter,
+mirroring the ingest expressions) — correct but index-bypassing; store 4326 (or
+add a PostGIS functional index on the transform) for the fast path.
+
+`stt-serve` also **pins property kinds from the source's result schema at
+startup** (DuckDB: `LIMIT 0` probe; PostGIS: statement prepare) — the same
+schema-pinning an offline build derives from the Parquet schema (and, since the
+same probe was threaded into `stt-build`'s DB sources, from the DB result schema
+there too), so an all-NULL-within-one-tile column no longer drifts the layer
+schema on any path.
 
 ## 4. Cross-source parity testing
 
@@ -174,9 +182,10 @@ properties a file build couldn't carry — never diverge on the same logical dat
 ### PostGIS-specific
 
 - Column types are resolved **up front** from the PG type
-  (`int2`/`int4`/`int8`/float/bool/text/`timestamp[tz]`/`date`/`json`/`jsonb`).
-  `int2` and `timestamp`/`timestamptz`/`date`-as-integer-ms and `json`/`jsonb`
-  as nested JSON are the additive superset over the file reader.
+  (`int2`/`int4`/`int8`/float/`numeric`/bool/text/`timestamp[tz]`/`date`/
+  `json`/`jsonb`). `int2`, `numeric` (→ nearest-f64 via the decimal conversion
+  shared with DuckDB), `timestamp`/`timestamptz`/`date`-as-integer-ms, and
+  `json`/`jsonb` as nested JSON are the additive superset over the file reader.
 - Geometry bridges via `ST_AsEWKB` (SRID-prefixed EWKB), decoded by the same
   `parse_wkb_geometry`.
 - Streaming uses a server-side `DECLARE … CURSOR` + `FETCH` loop, so memory is
@@ -189,9 +198,11 @@ properties a file build couldn't carry — never diverge on the same logical dat
 
 - Rows decode from DuckDB's **self-describing `ValueRef`** (one tagged value per
   cell), so — unlike PostGIS's up-front schema resolution — no per-type
-  introspection is needed. SQL `NULL` is `ValueRef::Null`; unmappable types (raw
-  `GEOMETRY`, decimals, nested types) decode to `None` and are dropped per row.
-  Per-vertex arrays arrive as `Value::List`.
+  introspection is needed. SQL `NULL` is `ValueRef::Null`; `DECIMAL` maps to a
+  nearest-f64 number (via the one decimal conversion shared with the PostGIS
+  `numeric` arm, so identical values agree across engines); unmappable types
+  (raw `GEOMETRY`, intervals, nested types) decode to `None` and are dropped
+  per row. Per-vertex arrays arrive as `Value::List`.
 - The **spatial extension** is a separate downloadable extension (not bundled,
   not auto-loadable). The reader runs `INSTALL spatial; LOAD spatial;` on connect
   (a one-time network fetch cached under `~/.duckdb`) and pins the session to

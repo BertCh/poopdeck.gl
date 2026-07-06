@@ -72,7 +72,7 @@ const visibleTiles = tileset.getVisibleTiles();
 | `maxRequests`      | `number` | `24`          | Concurrency budget for the single-tile / prefetch paths. The coalesced priority path sends the whole viewport×window working set in one batch and lets the archive bound in-flight HTTP requests internally; this caps the per-tile + prefetch fan-out. |
 | `debounceTime`     | `number` | `0`           | Debounce (ms) before loading after a viewport change. |
 | `maxCacheSize`     | `number` | `2000`        | Maximum tiles in the LRU cache.                 |
-| `maxCacheByteSize` | `number` | `2147483648`  | Maximum decoded bytes in the cache (2 GiB).     |
+| `maxCacheByteSize` | `number` | `2147483648`  | Maximum decoded bytes in the cache (2 GiB). Accounting is alias-deduped (honest): zero-copy datasets genuinely fill the budget where they previously plateaued ~half; set explicitly on memory-constrained targets. |
 | `minZoom`          | `number` | `0`           | Minimum zoom level available in data.           |
 | `maxZoom`          | `number` | `14`          | Maximum zoom level available in data (the layers replace this from archive metadata). |
 | `temporalBucketMs` | `number` | `3600000`     | Temporal bucket size in ms (from archive metadata). Aligns prefetch to bucket boundaries and is the granularity of the buffer model. |
@@ -102,7 +102,25 @@ Prefetch dispatches in small, time-ordered, byte-budgeted SLICES (~1 s of measur
 | `tier` | `'raw' \| 'summary' \| 'auto'` | `'auto'` | Tile-tier dispatch for archives with a server-aggregated summary tier. `'auto'` uses summary tiles when the zoom is inside `summaryZoomRange` and raw tiles otherwise. Falls back to `'raw'` whenever `getAvailableSummaryTiles` is unwired. |
 | `summaryZoomRange` | `{ minZoom, maxZoom }` | `null` | Inclusive zoom range covered by the archive's summary tier. Only consulted by `'auto'`. |
 
-Temporal-LOD dispatch is **not** yet wired into the tileset. The reader API exposes it — `STTArchive.pickTemporalLodForZoom`, `getTileIdsInBoundsForTemporalLod`, and `getTilesInBoundsForTemporalLod` — but no tileset or renderer calls them automatically today, so an app that wants coarser temporal tiers must select the LOD level and request those tiles itself.
+Temporal-LOD dispatch is now wired into the tileset, but only via the opt-in [Scrub-LOD](#scrub-lod-motion-tier) `scrubLod.temporal` axis (default off, and only when the archive was built with `--temporal-lod`). The underlying reader API — `STTArchive.pickTemporalLodForZoom`, `getTileIdsInBoundsForTemporalLod`, and `getTilesInBoundsForTemporalLod` — is also exposed directly, so an app that wants coarser temporal tiers outside the scrub path can select the LOD level and request those tiles itself.
+
+### Scrub-LOD (motion tier)
+
+Opt-in, default off. While the user drags the timeline, tile SELECTION may degrade to a cheaper preview tier; the readiness/buffer APIs (`getBufferedRunway` / `getBufferedRanges` / `estimateCost`) and the prefetch planner keep measuring/warming the FINE base tier, so a playback gate on scrub release re-arms against full detail — never the coarse preview.
+
+| Option | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `scrubLod` | `ScrubLodOptions` | `null` | Scrub-time LOD degradation policy (see below). Absent/empty = the kill switch: `setInteractive` becomes stored state only and behavior is byte-identical to today. |
+| `temporalLodLevels` | `TemporalLodLevel[]` | `null` | The archive's temporal-LOD pyramid levels (from `ArchiveMetadata.temporalLod`), enabling the `scrubLod.temporal` axis. Absent for archives built without `--temporal-lod` — the temporal axis then no-ops regardless of `scrubLod`. |
+| `getAvailableTemporalLodTiles` | `(bounds, zoom, timeRange, bucketMs) => Promise<TileId[]>` | `null` | Enumerate the tiles of ONE temporal-LOD tier (wire `STTArchive.getTileIdsInBoundsForTemporalLod`). Used only while interactive with `scrubLod.temporal` enabled; the base `getAvailableTiles` still serves every other query. |
+
+`ScrubLodOptions` has two independent axes, both default OFF; an absent/empty object is byte-identical to today (the kill switch):
+
+| Field | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `spatial` | `boolean` | `false` | While interactive, drop the requested (primary) zoom by `spatialZoomDrop` so selection targets coarser tiles — usually ones the parent-fallback path already fetched. |
+| `spatialZoomDrop` | `number` | `2` | Zoom levels dropped while interactive (spatial axis). Clamped to `[0, 4]` (`PARENT_FALLBACK_LEVELS`) so the coarse target stays inside the band the fallback path already loads. |
+| `temporal` | `boolean` | `false` | While interactive, route selection through the archive's temporal-LOD pyramid — the coarsest level covering the requested zoom — instead of the base-bucket tiles. No-ops unless the archive was built with `--temporal-lod` AND both `temporalLodLevels` and `getAvailableTemporalLodTiles` are wired (capability detection). Zooms already dispatched to the summary tier keep using it (summary is already a reduced tier). |
 
 ### Callbacks
 
@@ -110,7 +128,7 @@ Temporal-LOD dispatch is **not** yet wired into the tileset. The reader API expo
 | :------------- | :----------------------------- | :--------------------------------- |
 | `onTileLoad`   | `(tile: Tile) => void`         | Called when a tile loads.          |
 | `onTileUnload` | `(tile: Tile) => void`         | Called when a tile is evicted.     |
-| `onTileError`  | `(error: Error, tileId) => void` | Called on tile load error.       |
+| `onTileError`  | `(error: Error, tileId) => void` | Called on tile load error. Dataset-level failures (selection pass could not query the directory) use the sentinel `tileId {x: -1, y: -1}` — ignore negative coords when keying per-tile state. |
 | `onBufferChange` | `(runway: BufferedRunway) => void` | Invoked with a fresh `BufferedRunway` (probed from the play head in the committed prefetch direction) whenever a needed tile loads, a tile is evicted, or the needed-tile set changes. Trailing-edge throttled to ≤ 10 Hz. Wiring this enables coverage-index maintenance (one extra `getAvailableTiles` call per viewport change). |
 
 ## Methods
@@ -131,6 +149,10 @@ Returns the loaded tiles for the current selection. Parent-fallback tiles are in
 ### `setAnimationState(playing, speed)`
 
 Inform the tileset about animation playback state for prefetch sizing and direction. The `PlaybackGovernor` also asserts this while a gate holds the clock frozen, so prefetch keeps reaching ahead during buffering.
+
+### `setInteractive(interactive: boolean): void` / `isInteractive: boolean` (getter)
+
+Set/read the interactive (motion) bit — the `PlaybackGovernor` toggles it `true` on `beginScrub` and `false` on `endScrub`, driving the preview tier while the timeline is scrubbed. With no [Scrub-LOD](#scrub-lod-motion-tier) axis enabled (the default) this is STORED STATE ONLY — no selection change, no fetch, byte-identical behavior (the kill switch). With an axis enabled, the transition re-runs selection immediately: `true` serves the degraded motion tier; `false` restores the fine settle tier without waiting for the next clock tick.
 
 ### `isLoaded: boolean` (getter)
 

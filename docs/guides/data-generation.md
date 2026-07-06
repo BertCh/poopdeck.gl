@@ -504,8 +504,8 @@ reduce, and assemble stages are all resumable via on-disk caches, so the March
 hourly window reuses the year's downloaded chunks and daily medians.
 
 ```bash
-# Demo 1 — full-year daily absolute discharge:
-stt-generate nwm --window 2019 --bin 1d --value log-q \
+# Demo 1 — full-year daily flow, each reach self-scaled to its own annual range:
+stt-generate nwm --window 2019 --bin 1d --value self-scaled \
   --output examples/showcase/public/data/nwm-rivers-2019
 
 # Demo 2 — March hourly flood anomaly (reuses the 2019 daily pass for medians):
@@ -519,8 +519,10 @@ stt-generate nwm --window 2019-03 --bin 1h --value log-anomaly \
   `data/nwm/nhd-flowlines-order3.parquet`
 - `--window`: Value window, `YYYY` (full year) or `YYYY-MM` (one month), default `2019`
 - `--bin`: Temporal bucket, `1d` (daily mean) or `1h` (hourly; month windows only), default `1d`
-- `--value`: Value encoding — `log-q` (log10 absolute discharge) or `log-anomaly`
-  (log2 anomaly vs the reach's 2019 daily median), default `log-q`
+- `--value`: Value encoding — `self-scaled` (each reach mapped from its own
+  annual [p2, p98] log-discharge onto [0,1] — seasonal variation, not absolute
+  size), `log-q` (log10 absolute discharge) or `log-anomaly` (log2 anomaly vs the
+  reach's 2019 daily median), default `self-scaled`
 - `--output` / `--out`: Output packed dataset directory (or a `*.parquet` path
   to stop at the intermediate), default `examples/showcase/public/data/nwm-rivers-2019`
 - `--zooms`: Zoom pyramid, `LO-HI` or a single `Z`, default `4-8` (density LOD by

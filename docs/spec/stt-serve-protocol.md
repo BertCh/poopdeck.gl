@@ -94,8 +94,8 @@ Generates and returns exactly one tile.
 
 | Param | Type | Meaning |
 | --- | --- | --- |
-| `z` | `u8` | Zoom level (slippy-map convention). Outside a type/parse failure this is not range-checked against `--min-zoom`/`--max-zoom` before querying — a request at an unconfigured zoom simply queries and, most likely, encodes an empty tile (§3.4.3). |
-| `x`, `y` | `u32` | Tile column/row at `z` (slippy-map convention). |
+| `z` | `u8` | Zoom level (slippy-map convention). Hard-bounded: `z > 31` returns `400` (§3.4.5) — beyond 31 the `2^z` grid exceeds the `u32` x/y space. It is **not** range-checked against `--min-zoom`/`--max-zoom` — a request at an unconfigured (but in-bounds) zoom simply queries and, most likely, encodes an empty tile (§3.4.3). |
+| `x`, `y` | `u32` | Tile column/row at `z` (slippy-map convention); must lie in the `2^z` grid — `x ≥ 2^z` or `y ≥ 2^z` returns `400` (§3.4.5). |
 | `t` | the whole final path segment, as text | A **Unix-ms integer**. A trailing `.stt` suffix (the convention `tileUrlTemplate` in `/metadata.json` advertises) is stripped before parsing, so it is accepted but not required — `.../1700000000000` and `.../1700000000000.stt` are equivalent requests. |
 
 `z`, `x`, and `y` are extracted by axum's typed path matching: a segment that
@@ -160,7 +160,11 @@ x-stt-gen-micros: <integer>
   exactly as it would decode one tile's payload after unwrapping the
   corresponding pack blob's zstd frame.
 - **`Content-Type: application/x-stt-tile`.** A custom media type; there is no
-  registered IANA type for this payload.
+  registered IANA type for this payload, and the `x-` prefix is deprecated
+  practice. The planned vendor-tree registrations
+  ([packed spec §9.2](./stt-packed-format.md#92-media-types--magic-bytes)) will
+  add a `vnd.` type for the uncompressed layer frame; when one is registered
+  the server will switch and this label retires.
 - **`Cache-Control: no-store`.** Explicit and unconditional — see §7.
 - **`x-stt-gen-micros`.** Server-side generation time in **microseconds**, as
   a decimal integer string. The clock starts once the request parameters have
@@ -195,12 +199,13 @@ dataset's off-data tiles.
 
 | Status | Cause | Body |
 | --- | --- | --- |
+| `400 Bad Request` | `z > 31`, or `x`/`y` outside the `2^z` tile grid | `tile out of range: need z <= 31 and x, y < 2^z` (plain text) |
 | `400 Bad Request` | `t` does not parse as an integer after stripping a trailing `.stt` | `t must be an integer (ms since epoch)` (plain text) |
 | `404 Not Found` | (multi-dataset mode only) `{dataset}` does not match any configured dataset | `unknown dataset '<name>'` (plain text) |
-| `500 Internal Server Error` | the source query, row decode, or tile encode fails (connection error, malformed SQL from a bad `--sql`/`--where`, encoder error, …) | the `anyhow` error chain rendered as text (not JSON) via `{:#}` — outermost context first |
+| `500 Internal Server Error` | the source query, row decode, or tile encode fails (connection error, malformed SQL from a bad `--sql`/`--where`, encoder error, …) | the fixed string `internal error generating tile` (plain text) — the full `anyhow` error chain (which can contain SQL and connection strings) goes to the server log only, never the client |
 
-Every `500` is also logged server-side (`tracing::warn!`) with the failing
-`(z, x, y, t)`.
+Every `500` is also logged server-side (`tracing::error!`) with the failing
+`(z, x, y, t)` and the full error chain.
 
 ## 4. `/metadata.json` field reference
 
@@ -224,7 +229,7 @@ Every `500` is also logged server-side (`tracing::warn!`) with the failing
 | --- | --- | --- | --- |
 | `format` | string | yes | `"stt-postgis-dynamic"` or `"stt-duckdb-dynamic"` — identifies the *live* origin, distinct from the packed manifest's `format: "stt-packed"`. |
 | `name` | string | yes | Resolved dataset name: the `--name` override, else the table name (schema-qualified table's last segment) or `"query"` for a `--sql` source. |
-| `boundingBox` | `[[minLon,minLat],[maxLon,maxLat]]` | yes | The whole source's spatial extent from a startup `ST_Extent`-style aggregate. Falls back to `[[-180,-90],[180,90]]` if the source is empty. |
+| `boundingBox` | `[[minLon,minLat],[maxLon,maxLat]]` | yes | The whole source's spatial extent from a startup `ST_Extent`-style aggregate (reprojected to 4326 first when `--source-srid` is set). Falls back to `[[-180,-90],[180,90]]` if the source is empty. |
 | `timeRange` | `{ start, end }` (Unix ms) | yes | `MIN`/`MAX` of `--time-field` over the whole source, converted to ms per `--time-format` for an integer time column. Falls back to `{0, 0}` if the source is empty. |
 | `minZoom` / `maxZoom` | `u8` | yes | Echo `--min-zoom` / `--max-zoom`. |
 | `temporalBucketMs` | `u64` | yes | The **base** bucket (`--temporal-bucket`, parsed to ms). Does not reflect per-request LOD widening (§3.4.2) — a client reads `temporalLod` for that. |
@@ -282,6 +287,14 @@ bytes, so the two need not match exactly.
 
 `--postgres` and `--duckdb` are mutually exclusive; `stt-serve` refuses to
 start if both (or neither, with no env fallback resolving one) are given.
+
+At startup, both backends additionally probe the source's **result schema**
+(DuckDB: a `LIMIT 0` execution of the tile projection; PostGIS: a statement
+prepare) to pin each property column's tile kind — the same schema-pinning an
+offline GeoParquet build derives from the Parquet schema — so a column that
+happens to be all-NULL within one tile still gets its (all-null) column there
+instead of drifting the layer schema across tiles. A failed probe logs a
+warning and falls back to per-tile value sniffing.
 
 ## 6. Multi-dataset `--config` file
 
@@ -358,10 +371,32 @@ failure per request) because a single tile's rows cannot answer them:
   range, not a single bucket's rows.
 
 Both must be pre-baked with `stt-build` and served as a static archive
-instead. Source geometry must already be EPSG:4326 lon/lat (index the table
-in 4326 — reproject at ingest with `stt-build --source-srid`, never inside a
-per-tile filter, which would defeat the spatial index the bbox predicate
-relies on).
+instead.
+
+**Frame version: serve stays v1** (packed-v2 design §7). `stt-serve`
+responses are ALWAYS the v1 layer frame
+([data-format.md §Layer frame](../architecture/data-format.md#layer-frame)),
+even now that `stt-build` emits packed formatVersion 2 by default: inline
+schemas are the only mode that makes sense for a manifest-less server (there
+is nowhere to carry schema templates), and responses are `no-store` (§7), so
+the v2 frame's template amortization buys nothing. This protocol has **no
+version channel** — a future serve-v2 MUST add a `formatVersion` field to
+`/metadata.json` FIRST, before any frame change. The byte-parity story of §8
+is therefore scoped: a served tile is byte-identical to the offline tile of
+a **`--format-version 1`** build (the frozen 0.3.x layout), not of a default
+v2 build, whose frames differ by design.
+
+Non-4326 source geometry is served via `--source-srid <SRID>` (mirroring
+`stt-build --source-srid` at ingest): every per-tile query reprojects the
+stored geometry to 4326 **before** both the bbox filter and the WKB
+projection (DuckDB: `ST_Transform(geom, 'EPSG:<srid>', 'EPSG:4326')` with
+`always_xy`; PostGIS: `ST_Transform(ST_SetSRID(geom, <srid>), 4326)` — the
+exact ingest expressions), and the startup metadata extent is reprojected the
+same way, so advertised bounds and served tiles are always lon/lat. The
+trade-off: the per-row transform bypasses a plain spatial index on the raw
+column, so tile queries scan without index help — on PostGIS a functional
+index on the transform expression restores index use; on either engine,
+storing 4326 remains the fast path.
 
 ## 9. Relationship to the rest of the spec
 

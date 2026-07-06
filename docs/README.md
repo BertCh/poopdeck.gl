@@ -195,7 +195,7 @@ into a deck.gl sublayer.
 ### CLI Tools
 
 - [**CLI Reference**](./api/cli-reference.md): `stt-build`, `stt-generate`,
-  `stt-optimize`, `stt-validate`, `stt-serve`.
+  `stt-optimize`, `stt-validate`, `stt-bundle`, `stt-serve`.
 
 ## Guides
 

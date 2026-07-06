@@ -16,12 +16,18 @@ payloads are **Apache Arrow IPC** record batches with **GeoArrow**-encoded
 geometry, so a browser can decode a tile with one library (`apache-arrow`) and
 feed the resulting columnar buffers directly to deck.gl.
 
-This document is the normative spec for the tile payload. The Rust authority is
-`crates/stt-core/src/arrow_tile.rs` (payload), `crates/stt-core/src/pack.rs`
-(packed container) and `crates/stt-core/src/directory.rs` (the tile
-index codec); the TypeScript reader lives in
-`packages/core/src/archive.ts` / `tile.ts`. If this document and the code
-disagree, the code wins — please open a PR.
+**This document is the normative spec for the tile payload.** The reference
+implementations are `crates/stt-core/src/arrow_tile.rs` (payload),
+`crates/stt-core/src/pack.rs` (packed container) and
+`crates/stt-core/src/directory.rs` (the tile index codec) on the Rust side,
+and `packages/core/src/archive.ts` / `tile.ts` on the TypeScript side. If an
+implementation and this document disagree, that divergence is a **bug in one
+of them** — resolved by an erratum to whichever is wrong, never by silently
+redefining the spec to match the code. Spec revisions follow the stability
+promise and changelog in the
+[packed spec §9.1/§9.3](../spec/stt-packed-format.md#91-stability--versioning-promise).
+(This spec page is CC-BY-4.0 alongside `docs/spec/` — see the license note in
+the packed spec's header.)
 
 ## Top-level layout (single-file container)
 
@@ -142,6 +148,30 @@ per layer:
 All integers are little-endian. `ipc stream bytes` is the output of an Arrow
 `StreamWriter` containing exactly one `RecordBatch`.
 
+**Arrow IPC envelope (normative):**
+
+- **Stream format only.** Each layer's bytes are an Arrow IPC **stream**
+  (schema message, then record batch), *not* the IPC file format — no
+  `ARROW1` magic, no footer.
+- **Exactly one `RecordBatch` per layer on write.** A conformant writer
+  emits one record batch per layer. A conformant reader MAY accept a
+  multi-batch stream by concatenating batches in stream order, but MUST NOT
+  depend on more than one being present.
+- **No IPC-level body compression.** Record-batch bodies are raw (no
+  `LZ4_FRAME`/`ZSTD` IPC body codec) — compression is the per-blob zstd
+  frame around the whole layer frame, and the zero-copy GPU path depends on
+  the IPC buffers arriving uncompressed.
+- **No delta dictionaries.** Dictionary-encoded columns (categorical
+  properties) ship their complete dictionary inside the layer's own stream;
+  delta dictionary batches and dictionary replacement are not permitted —
+  every tile decodes standalone.
+
+**Size ceilings (normative):** `ipc_len` is `u32`, capping one layer's IPC
+stream at 4 GiB − 1; the directory likewise caps a tile's compressed blob
+length, uncompressed payload size, and `feature_count` at `u32` — see the
+[packed spec §12 (Container limits)](../spec/stt-packed-format.md#12-container-limits).
+A writer MUST fail loudly at these ceilings, never wrap or clamp.
+
 When the leading `u16`'s `ALIGNED_FRAME_FLAG` (`0x8000`) bit is set, the
 writer inserts `(8 - pos % 8) % 8` zero bytes after each `ipc_len` so every
 IPC stream starts 8-byte aligned relative to the payload start — the
@@ -161,6 +191,42 @@ flowchart TD
   IPC --> SM["schema metadata\nstt:layer · stt:time_offset_ms\nstt:vertex_time_origin_ms / _step_ms\nstt:vertex_value_buckets · stt:has_triangles\n(+ stt:quant / stt:qa on quantized fields)"]
   IPC --> COL["columns\nid · start_time · end_time · geometry (GeoArrow)\nvertex_time · vertex_value(_matrix) · triangles\nproperty columns · vector groups"]
 ```
+
+### Layer frame v2 (packed formatVersion 2)
+
+Datasets written as packed **formatVersion 2** replace the frame above with
+the **sectioned, template-referencing** frame — normatively specified in the
+[packed spec §5.2](../spec/stt-packed-format.md#52-tile-payload-layer-frame-v2-sectioned-template-referencing).
+The Arrow envelope rules above (stream format, one `RecordBatch` per layer,
+no IPC body compression, no delta dictionaries, u32 size ceilings) are
+unchanged; what moves is *where* the schema and the per-tile metadata live:
+
+- The layer's Arrow IPC **schema message** is hoisted into a per-dataset
+  **template** (referenced by blake3-128 hash, resolved through
+  `manifest.schemas`) instead of being repeated in every tile — the frame
+  carries only the stream **tail** (dictionary batches + record batch +
+  end-of-stream), and the reader splices `concat(template, tail)` back into
+  a stock Arrow stream. Dictionary batches stay per-tile (categories vary);
+  an empty tile still carries one DictionaryBatch per dictionary column.
+- Reserved columns form a **CORE** batch and property columns a **PROPS**
+  batch (own schema/template), each in its own TOC section, so properties
+  can be decoded lazily and unknown future sections are skippable.
+- The **per-tile-varying** schema-metadata keys of the diagram above —
+  `stt:qa` (per property field), `stt:time_offset_ms`,
+  `stt:vertex_time_origin_ms`/`stt:vertex_time_step_ms`,
+  `stt:vertex_value_buckets` — move into the frame's canonical-JSON
+  `TILE_META` section (`qa` / `t0` / `vt` / `vb`, plus `sorted`). The
+  dataset-constant keys (`stt:layer`, `stt:geometry`, `stt:quant`,
+  `stt:has_triangles`, the GeoArrow extension metadata) stay in the
+  template. Reference decoders **re-inject** the TILE_META values into the
+  decoded batch's schema/field metadata, so every consumer downstream of
+  decode sees the v1-shaped layer of this document, unchanged.
+- v2 rows are stable-sorted by `start_time` at encode (after feature-id
+  assignment), declared by `TILE_META.sorted`.
+
+`stt-serve` responses keep emitting the v1 frame regardless of build
+version (see the [serve protocol](../spec/stt-serve-protocol.md)); the v2
+frame appears only inside packed formatVersion-2 datasets.
 
 ### Per-layer Arrow schema
 
@@ -378,6 +444,48 @@ the same property. The range-adaptive mode fixes the leaf to `UInt16` in
 every tile (it never falls back to `Int32`), so a reader need not branch on
 leaf width in that mode — only the affine varies.
 
+### Summary-tier layers
+
+An archive built with `--summary-tier` carries pre-aggregated cell tiles at
+low zooms, declared by `metadata.summary_tier` (see
+[Metadata](#metadata-utf-8-json)). A summary tile is an ordinary tile — same
+layer frame, same Arrow envelope, same required columns — with these
+additional normative constraints:
+
+- **Layer name.** The summary layer is named `summary_tier.layer_name`
+  (default `summary`, `--summary-layer`).
+- **`id` is a cell index, not a feature id (normative).** In a summary layer
+  the `id` column MUST be a **valid cell index of the declared
+  `summary_tier.scheme`** — an H3 cell index (`"h3"`) or a CARTO quadbin cell
+  index (`"quadbin"`) — at the resolution
+  `summary_tier.cell_resolution_per_zoom[z - summary_tier.min_zoom]` for the
+  tile's zoom `z` (clamped to the table's ends outside
+  `[min_zoom, max_zoom]`). This MUST is written in blood: renderers derive
+  the cell polygon from the id, and any `u64` "decodes" — three shipped
+  archives once carried sequential row numbers in `id`, decoded cleanly,
+  passed validation, and rendered **blank** (the 2026-07 summary-id repair
+  incident). `stt-validate` now checks cell-id validity per
+  scheme/resolution.
+- **Geometry.** The `geometry` column is a GeoArrow **Point at the cell's
+  centroid** — a representative lon/lat for picking and fallbacks; the cell
+  outline is reconstructed client-side from the id (h3-js for H3, the
+  quadbin→tile math for quadbin).
+- **Aggregate columns.** The layer always carries a `count` `Float64`
+  property (features aggregated into the cell). Each `summary_tier.columns[]`
+  entry with a non-`count` `agg` ships as one additional `Float64` property
+  column; a cell with no source values for a column is `null`, never `0`.
+- **`sub_buckets` contract.** When `summary_tier.sub_buckets = N > 1`
+  (`--summary-sub-buckets N`, keep ≤ 32), the layer carries N additional
+  `Float64` columns named `bucket_0 … bucket_<N-1>`: `bucket_i` counts the
+  source features assigned to sub-bucket
+  `i = min(floor((t − bucket_start) / w), N − 1)` with sub-width
+  `w = max(floor(temporal_bucket_ms / N), 1)` — the clamp makes the last
+  sub-bucket absorb any division remainder. The renderer animates inside an
+  outer bucket by indexing these columns with a uniform — no re-fetch.
+- **Times.** Per-cell `start_time` / `end_time` are the min/max observed
+  source timestamps in the cell (tight, per the
+  [time model](../spec/time-model.md)), not the bucket edges.
+
 ### GeoArrow interop
 
 An STT tile layer **is** a valid [GeoArrow](https://geoarrow.org/format.html)
@@ -554,7 +662,8 @@ new fields.
   "properties": {},
   "temporal_bucket_ms": 3600000,
 
-  // Optional — present when the archive was built with --summary-tier
+  // Optional — present when the archive was built with --summary-tier;
+  // the layer-level contract is in "Summary-tier layers" above
   "summary_tier": {
     "scheme": "h3",              // "h3" (Uber H3 hexes) or "quadbin" (CARTO quadbin)
     "min_zoom": 0,
@@ -632,7 +741,11 @@ extra request.
   check for these keys won't skip the data, it will silently misdecode it
   (e.g. reading raw `Int32` grid indices as tiny lon/lat degrees, or a raw
   quantized index as an enormous property value). A reader MUST check both
-  keys before decoding `geometry` / any numeric `<prop>` field.
+  keys before decoding `geometry` / any numeric `<prop>` field. The writer
+  additionally declares each such re-typing in `manifest.capabilities`
+  (`coord-quant` / `attr-quant` / `elevation-fold` — packed spec §3.1), so a
+  reader that lacks the feature refuses the dataset at open instead of
+  misdecoding it.
 - New metadata fields use serde defaults so old archives decode under new
   readers; new fields are skipped when unset so new archives decode under
   old readers that ignore them.

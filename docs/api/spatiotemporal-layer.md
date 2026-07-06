@@ -71,6 +71,12 @@ Inherits from all [CompositeLayer](https://deck.gl/docs/api-reference/core/compo
 | :-------- | :------------------------------- | :------------------ | :--------------------------------------------------------------------------------------- |
 | `lodMode` | `'parent-fallback' \| 'additive'` | `'parent-fallback'` | How the tileset composes tiles across zoom levels (threaded straight to `SpatiotemporalTilesetOptions.lodMode`). `'parent-fallback'` renders the single best zoom for the current viewport, with coarser parent tiles kept only as a transient fallback until matching detail streams in. `'additive'` renders the UNION of zoom levels `[minZoom..cameraZoom]` and keeps every level resident instead of dropping parents once children arrive. Use `'additive'` for additive-octree point clouds built with `stt-build --min-zoom-field=--max-zoom-field=<home_zoom column>`, where each point lives at exactly one zoom level: coarse tiles are a sparse overview and finer tiles add only the residual, so zooming in streams in new detail without re-fetching the coarse cloud. |
 
+### Scrub-LOD (motion tier)
+
+| Property | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `scrubLod` | `{ spatial?: boolean; spatialZoomDrop?: number; temporal?: boolean } \| null` | `null` | Opt-in scrub-time LOD degradation. While the user drags the timeline, tile SELECTION may degrade to a cheaper preview tier: `spatial` requests a coarser zoom (`spatialZoomDrop` levels, default 2, clamped `[0, 4]`) — usually tiles the parent-fallback path already fetched; `temporal` routes selection through the archive's temporal-LOD pyramid (requires an archive built with `stt-build --temporal-lod`, else silently no-ops). The degraded tier is preview-only — buffered-runway/gate math and prefetch keep tracking the fine tier, and release restores it. `null` (default) is the kill switch: scrub state is stored but changes nothing. Threaded straight to `SpatiotemporalTilesetOptions.scrubLod`; see the tileset's [`ScrubLodOptions`](./spatiotemporal-tileset.md#scrub-lod-motion-tier) for exact field semantics. The `temporal` axis auto-wires the tileset's `temporalLodLevels` + `getAvailableTemporalLodTiles` from `ArchiveMetadata.temporalLod` when the archive carries the pyramid (capability detection). |
+
 ### GlobeView / projection helpers
 
 | Property          | Type             | Default | Description                                                           |
@@ -99,7 +105,7 @@ Inherits from all [CompositeLayer](https://deck.gl/docs/api-reference/core/compo
 | `onViewportLoad` | `(tiles: Tile[]) => void`             | Called when all tiles in the current viewport×window selection have finished loading (the `TileLayer.onViewportLoad` moment). Fires once per selection settle — again only after the selection itself changes (pan/zoom or the time window crossing a bucket) and re-settles, never per tile. |
 | `onTileLoad`     | `(tile: Tile) => void`                | Called when a single tile successfully loads.          |
 | `onTileUnload`   | `(tile: Tile) => void`                | Called when a tile is evicted from the cache.          |
-| `onTileError`    | `(error: Error, tileId?: TileId) => void` | Called when a tile's fetch/decode fails after the loader's retries. Default (`null`) logs via `console.error`, matching TileLayer. |
+| `onTileError`    | `(error: Error, tileId?: TileId) => void` | Called when a tile's fetch/decode fails after the loader's retries. `tileId` is `undefined` for dataset-level failures (a selection pass that could not query the directory). Default (`null`) logs via `console.error`, matching TileLayer. |
 | `onTilesetReady` | `(tileset: SpatiotemporalTileset & BufferSource) => void` | Fired ONCE per archive/tileset initialization (and again if `data` changes), with the live tileset. The tileset satisfies the [`BufferSource`](./playback-governor.md) readiness contract, so apps hand it straight to a `PlaybackGovernor` via `governor.setSource(tileset)`. |
 | `onBufferChange` | `(runway: BufferedRunway) => void`    | Forwarded from the tileset's buffer bookkeeping: fires when the buffered runway around the playhead crosses a threshold (not per tile load). Forward this to `PlaybackGovernor.notifyBufferChange(runway)` so gating reacts immediately instead of waiting for the governor's poll cadence. |
 

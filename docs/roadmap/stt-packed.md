@@ -51,6 +51,16 @@ per-deploy; cache-key implications (still immutable, so unaffected); how
 > `--streaming` path streams tiles into the `PackWriter`. The single-file
 > `ArchiveWriter`/`ArchiveReader`, the transcode functions, and the `.stt`
 > container are gone — D3 is closed. (Prose below is the historical record.)
+>
+> **Update 2026-07-05 (packed-v2 E1): the spill-to-disk `PackWriter` shipped.**
+> `--pack-memory-budget` (default 512 MiB, 0 = unlimited) caps the payload
+> bytes buffered in RAM; excess payloads spill to a temp file in the output
+> dir and are read back record-by-record inside finalize's chunked parallel
+> compression. Output bytes are identical at any budget (the total-order sort
+> keys make arrival order irrelevant). The per-tile encode loop is now also
+> parallel (deterministic ordered hand-off), and the dead
+> `build_streaming_from_batches` pipeline was deleted. Numbers:
+> `stt-packed-v2-design-2026-07.md` §9.5.
 
 **Today:** the only reason the single-file `ArchiveWriter` / `write_tail` write
 path still exists is that `stt-build --streaming-arrow` needs a bounded-RAM
@@ -96,7 +106,9 @@ Small datasets stay one read — request amplification never fires.
   contiguous slice of directory order `(zoom, hilbert, time_start)` run through the
   unchanged `encode_directory`/`decodeDirectory`. Slicing resets delta state +
   splits RLE runs at boundaries (the measured +6–19% at-rest cost); reusing the
-  fuzzed v5 codec makes the only new bytes the root page + framing.
+  adversarially-tested v5 codec (property-based round-trip + never-panic decode,
+  `crates/stt-core/tests/adversarial_decode.rs`) makes the only new bytes the
+  root page + framing.
 - **D3 — page descriptor = geo-bbox + zoom-range + `[t_min, t_max]` +
   `cover_t_min` (FROZEN by the step-0 A/B sim).** Geo-bbox matched or beat the
   Hilbert-key-range model on every dataset where paging matters — nyc-taxi-points
@@ -114,9 +126,14 @@ Small datasets stay one read — request amplification never fires.
   object and skips paging (wildfires-shaped datasets behave as before). Inlining
   the root into `manifest.json` (saves one RTT) is a noted future opt, deferred
   (it couples immutable-derived data into the mutable manifest).
-- **D5 — `directoryVersion: 6` + `layout: "paged"`; v5 whole-load path retained.**
-  Readers branch on layout: `paged` → the new query path; absent/`single` → the
-  existing whole-load path, unchanged, for every un-migrated dataset.
+- **D5 — `layout: "paged"` discriminates the container; `directoryVersion` stays 5;
+  v5 whole-load path retained.** *(As drafted this bumped `directoryVersion` to 6;
+  as shipped the leaf codec is unchanged, so `layout` — not the codec version —
+  discriminates the container and `directoryVersion` remains `5`. See
+  [`stt-packed-format.md`](../spec/stt-packed-format.md); the reserved "planned v6"
+  there is the unrelated length-prefixed-tagged-sections work.)* Readers branch on
+  layout: `paged` → the new query path; absent/`single` → the existing whole-load
+  path, unchanged, for every un-migrated dataset.
 - **D6 — per-page zstd, NO shared dictionary.** Each leaf is its own zstd frame so
   it is independently fetchable/decodable (the fzstd dictionary-less TS path keeps
   working). This forfeits the whole-directory zstd window (+6–19% generally; +117%

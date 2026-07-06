@@ -100,7 +100,7 @@ new SttPlayer(options: SttPlayerOptions)
 
 ### Scrubbing
 
-`beginScrub()` / `scrubTo(time)` / `endScrub(time)` — preview-vs-commit passthroughs to the governor (grab freezes the clock; previews render resident tiles with no fetch churn; release commits a real seek). The readonly `seekSettleMs` field is the shared settle-debounce knob for UIs that commit a rested thumb mid-drag.
+`beginScrub()` / `scrubTo(time)` / `endScrub(time)` — preview-vs-commit passthroughs to the governor (grab freezes the clock; previews render resident tiles with no fetch churn; release commits a real seek). The readonly `seekSettleMs` field is the shared settle-debounce knob for UIs that commit a rested thumb mid-drag. The `isScrubbing` getter is `true` while the thumb is held (`beginScrub` … `endScrub`) — a passthrough to [`governor.isScrubbing`](./playback-governor.md).
 
 ### Plumbing and queries
 
@@ -128,9 +128,11 @@ player.on('ready', ({ degraded }) => {});
 player.on('progress', (runway) => {});
 player.on('ended', (time) => {});
 player.on('ratechange', (rate) => {});
+player.on('scrubstart', (time) => {});   // scrubber grabbed (payload: playhead at the grab)
+player.on('scrubend', (time) => {});     // scrubber released (payload: committed position)
 ```
 
-`on()` returns an unsubscribe function; `off(event, callback)` also works. At a non-looping range end, `'pause'` fires before `'ended'` (media-element ordering).
+`on()` returns an unsubscribe function; `off(event, callback)` also works. At a non-looping range end, `'pause'` fires before `'ended'` (media-element ordering). `'scrubstart'` / `'scrubend'` re-emit the governor's scrub bracket (see [PlaybackGovernor events](./playback-governor.md#events)).
 
 ## Speed model
 
