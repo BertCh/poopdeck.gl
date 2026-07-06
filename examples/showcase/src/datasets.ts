@@ -1613,8 +1613,8 @@ const rawDatasets: Dataset[] = [
     id: 'nwm-rivers-2019',
     name: 'US Rivers — A Year of Flow',
     sources: ['noaa', 'usgs'],
-    description: 'The continental river network over the 2019 flood year — NOAA National Water Model hourly discharge reduced to daily means on every NHDPlus reach of stream order 4+. Brightness is absolute flow on a log scale. Source: NOAA NWM v3.0 retrospective + USGS NHDPlusV2 (both public domain).',
-    // Rebuild: stt-generate nwm --window 2019 --bin 1d --value log-q
+    description: 'The continental river network over the 2019 flood year — NOAA National Water Model hourly discharge reduced to daily means on every NHDPlus reach of stream order 4+. Each reach is scaled against its own annual low→high, so a headwater creek’s spring pulse reads as vividly as the Mississippi’s crest — color shows how each river varies through the year, not how much water it carries. Source: NOAA NWM v3.0 retrospective + USGS NHDPlusV2 (both public domain).',
+    // Rebuild: stt-generate nwm --window 2019 --bin 1d --value self-scaled
     //   --output examples/showcase/public/data/nwm-rivers-2019
     // (zarr chunks + reduced stripes cache under data/nwm/; resumable.)
     url: '/data/nwm-rivers-2019/manifest.json',
@@ -1638,20 +1638,22 @@ const rawDatasets: Dataset[] = [
     },
     basemapHideLabels: true,
     basemapBackgroundColor: '#02040a',
-    // Values are log10(m³/s) baked at generate time (matrix is linear-ramped).
-    // domain [0,5] = 1 → 100,000 m³/s; sub-1 flows clamp into the dim end.
+    // Values are self-scaled per reach: (log10 q − p2)/(p98 − p2) ∈ [0,1] baked
+    // at generate time (matrix is linear-ramped). 0 = that reach's own annual
+    // low, 1 = its own annual high — so the ramp reads seasonal variation, not
+    // absolute size, and big rivers no longer pin the scale.
     tripGradient: {
       property: 'vertexValues',
-      domain: [0, 5],
+      domain: [0, 1],
       colors: [
-        [22, 42, 92, 90],     // ~1 m³/s — creeks, barely-there indigo
-        [32, 96, 168, 150],   // ~30 m³/s — small rivers
-        [56, 160, 216, 200],  // ~1,000 m³/s — majors
-        [150, 222, 242, 235], // ~30,000 m³/s — great rivers
-        [255, 255, 255, 255], // 100,000 m³/s — Mississippi in flood
+        [24, 40, 78, 70],     // annual low — baseflow, faint indigo
+        [36, 92, 160, 140],   // rising limb
+        [60, 168, 216, 195],  // mid-season
+        [150, 226, 244, 228], // high water
+        [255, 255, 255, 255], // annual crest — white
       ],
     },
-    // NaN buckets (model fill / intermittent reaches) — faint slate "dry" bed.
+    // NaN buckets (model fill / reaches with no finite range) — faint slate bed.
     colorMappingDefault: [45, 55, 70, 80],
     flowMatrix: true,
     trailLength: 0,
@@ -1663,11 +1665,11 @@ const rawDatasets: Dataset[] = [
     capRounded: false,
     jointRounded: false,
     legend: {
-      title: 'Daily mean discharge (log scale)',
+      title: 'Flow within each reach’s own year',
       ramps: [
         {
-          label: '1 → 100,000 m³/s',
-          colors: ['#162A5C', '#2060A8', '#38A0D8', '#96DEF2', '#FFFFFF'],
+          label: 'annual low → annual high',
+          colors: ['#18284E', '#245CA0', '#3CA8D8', '#96E2F4', '#FFFFFF'],
         },
       ],
     },

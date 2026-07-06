@@ -11,6 +11,8 @@ import DemoEmbed from "../components/demo/DemoEmbed";
 import DemoCard from "../components/DemoCard";
 import { SourceLogo } from "../components/SourceLogo";
 import { VizBadge } from "../components/VizBadge";
+import CubeInLine from "../components/demo/CubeInLine";
+import { profileIdFromUrl } from "../lib/densityProfile";
 
 /**
  * Per-demo landing page (`/demos/:id`): live embed up top, then the
@@ -161,6 +163,9 @@ const DemoDetailPage: React.FC = () => {
           </aside>
         </div>
 
+        {/* Under the hood: this demo's own cube, laid down in a line (hideable) */}
+        <UnderTheHood url={dataset.url} />
+
         {/* Related demos */}
         {related.length > 0 && (
           <section className="mt-12">
@@ -198,6 +203,53 @@ const Section: React.FC<{ title: string; children: React.ReactNode }> = ({
     <div className="mt-3">{children}</div>
   </section>
 );
+
+/**
+ * Below-the-fold "meta" explorer: this dataset's space-time cube laid down in a
+ * line, with the real density that decides which blob-ordering wins. Collapsed
+ * by default; the profile only fetches once opened (CubeInLine loads it lazily).
+ */
+const UnderTheHood: React.FC<{ url: string }> = ({ url }) => {
+  const [open, setOpen] = useState(false);
+  const id = profileIdFromUrl(url);
+  if (!id) return null; // no local archive → nothing to profile
+  return (
+    <section className="mt-12">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="flex w-full items-center gap-2 pb-2 text-left"
+        style={{ borderBottom: "1px solid var(--hairline)" }}
+      >
+        <span
+          className="inline-block transition-transform"
+          style={{ color: "var(--ink-400)", transform: open ? "rotate(90deg)" : "none" }}
+          aria-hidden="true"
+        >
+          ▸
+        </span>
+        <h2 className="font-display text-base font-semibold" style={{ color: "var(--ink-900)" }}>
+          Under the hood: this dataset's space-time cube, laid down in a line
+        </h2>
+      </button>
+      {open ? (
+        <div className="mt-4">
+          <p className="text-xs mb-3 max-w-2xl" style={{ color: "var(--ink-500)", lineHeight: 1.65 }}>
+            A meta view of the format itself: how this archive's data mass sits across space and
+            time, and how the <span className="font-mono">--blob-ordering</span> walk that flattens
+            the cube into one byte string trades off range reads. Switch datasets to watch the
+            winning walk flip.{" "}
+            <Link to="/how-it-works#archive" style={{ color: "var(--accent)" }}>
+              How it works →
+            </Link>
+          </p>
+          <CubeInLine id={id} />
+        </div>
+      ) : null}
+    </section>
+  );
+};
 
 /** Build-command code block with a copy button. */
 const CommandBlock: React.FC<{ command: string }> = ({ command }) => {

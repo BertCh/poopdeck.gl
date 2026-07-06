@@ -67,7 +67,8 @@ is the fastest end-to-end path (DuckDB one-liner included).
 cargo install spatiotemporal-tiles
 ```
 
-Installs `stt-build`, `stt-validate`, `stt-optimize`, and `stt-serve`. (Or
+Installs `stt-build`, `stt-validate`, `stt-optimize`, `stt-bundle`, and
+`stt-serve`. (Or
 build from a checkout with `cargo build --release` and use
 `./target/release/stt-build`.)
 
@@ -181,7 +182,8 @@ spatiotemporal-tiles/
 │   ├── stt-build/          # CLI: GeoParquet -> packed dataset
 │   ├── stt-generate/       # Bundled showcase-dataset generators
 │   ├── stt-optimize/       # Input analysis + recommendations (powers --auto)
-│   ├── stt-validate/       # Content-address + CRC32C + decode check (packed or single-file .stt)
+│   ├── stt-validate/       # Content-address + CRC32C + decode check (packed dirs or .sttb bundles)
+│   ├── stt-bundle/         # Pack/unpack single-file .sttb interchange bundles
 │   └── stt-serve/          # Dynamic per-request STT tile server over PostGIS/DuckDB
 ├── packages/               # TypeScript
 │   ├── core/               # Archive reader, decoder pool, OPFS cache + the

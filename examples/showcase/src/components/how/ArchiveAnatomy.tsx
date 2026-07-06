@@ -1,5 +1,6 @@
 import React from "react";
 import SpaceTimeCurve from "./SpaceTimeCurve";
+import { CubeInLineExplorer } from "../demo/CubeInLine";
 
 /**
  * "Inside the archive" figures: the three-file layout, the cold-start
@@ -532,6 +533,18 @@ const ArchiveAnatomy: React.FC = () => (
     <DirectoryPruning />
     <DirectoryInternals />
     <SpaceTimeCurve />
+    <CubeInLineExplorer
+      title="Deeper still: the same walk on real archives"
+      blurb={
+        <>
+          The cube above is idealized — every cell full. Real archives are sparse and lopsided, and
+          that shape is exactly what <span style={{ fontFamily: MONO }}>--blob-ordering auto</span>{" "}
+          reads to pick a walk. Switch datasets and watch the winner flip: a buoy's multi-year track
+          over a few cells wants <span style={{ fontFamily: MONO }}>spatial</span>; a day of flights
+          wants the 3D-Hilbert generalist. Density is sampled from each archive's directory.
+        </>
+      }
+    />
     <PackDiagram />
   </div>
 );

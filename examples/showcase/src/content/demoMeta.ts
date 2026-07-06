@@ -897,7 +897,7 @@ export const DEMO_META: Record<string, DemoMeta> = {
     tagline: 'The continental river network through the 2019 flood year — modeled daily discharge on every order-4+ reach.',
     techniqueTag: 'Flow matrix · zoom-banded network',
     about: [
-      'NOAA’s National Water Model simulates hourly streamflow for 2.7 million river reaches across the continental US. This demo reduces the 2019 retrospective to daily means and bakes it onto the USGS NHDPlus river network as a per-vertex × per-day value matrix — the bixi-streets recipe at continental scale. Brightness is absolute discharge on a log ramp, from dim creeks to the bright Mississippi.',
+      'NOAA’s National Water Model simulates hourly streamflow for 2.7 million river reaches across the continental US. This demo reduces the 2019 retrospective to daily means and bakes it onto the USGS NHDPlus river network as a per-vertex × per-day value matrix — the bixi-streets recipe at continental scale. Each reach is scaled against its own annual low→high (robust 2nd–98th percentile in log space), so color reads how each river varies through the year rather than how much water it carries: a headwater creek’s snowmelt pulse lights up as vividly as the Mississippi’s crest, instead of the great rivers pinning the whole scale.',
       'The network itself is zoom-banded by Strahler stream order: the CONUS overview carries only order-6+ mainstems (merged into long runs along NHDPlus LevelPath/Hydroseq and resampled to ~2 px vertex spacing), and each zoom step adds smaller tributaries down to order 4 at z8. Geometry loads once per tile; playback is pure bucket selection, so scrubbing a year of national hydrology re-fetches nothing.',
       'The spring snowmelt pulse moves down the Missouri and upper Mississippi in March; 2019 was the wettest year on record across much of the basin.',
     ],
@@ -916,7 +916,7 @@ export const DEMO_META: Record<string, DemoMeta> = {
       },
     ],
     buildCommand:
-      'stt-generate nwm --window 2019 --bin 1d --value log-q \\\n' +
+      'stt-generate nwm --window 2019 --bin 1d --value self-scaled \\\n' +
       '  --output examples/showcase/public/data/nwm-rivers-2019',
     buildNote:
       'Downloads ~11 GB of Zarr chunks from the NWM S3 bucket on first run ' +
