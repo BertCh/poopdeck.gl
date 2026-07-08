@@ -12,6 +12,7 @@
   },
   "rules": {
     "unicorn/no-new-array": "off",
+    "unicorn/no-useless-spread": "off",
     "vitest/require-mock-type-parameters": "off",
     "vitest/expect-expect": "off",
     "vitest/no-conditional-expect": "off",
