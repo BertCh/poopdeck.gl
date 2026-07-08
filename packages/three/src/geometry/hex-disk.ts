@@ -45,7 +45,10 @@ export const HEX_FAN_INDICES = [0, 1, 2, 0, 2, 3, 0, 3, 4, 0, 4, 5];
  */
 export function makeHexDiskGeometry(): InstancedBufferGeometry {
   const geometry = new InstancedBufferGeometry();
-  geometry.setAttribute('position', new Float32BufferAttribute(hexCornerPositions(), 3));
+  geometry.setAttribute(
+    'position',
+    new Float32BufferAttribute(hexCornerPositions(), 3),
+  );
   geometry.setIndex(HEX_FAN_INDICES);
   return geometry;
 }

@@ -22,12 +22,12 @@
  * Mount this ONLY on a fullscreen surface: scrolling/embed pages must not
  * capture window keys (Space there means "scroll the page").
  */
-import { useEffect, useRef } from "react";
+import { useEffect, useRef } from 'react';
 // The canonical speed-multiplier ladder lives in @poopdeck.gl/playback so
 // keyboard stepping can only land on speeds Auto-speed also produces — no
 // hand-maintained copy to drift.
-import { SPEED_STEPS } from "@poopdeck.gl/playback";
-import type { PlaybackState } from "./use-playback.js";
+import { SPEED_STEPS } from '@poopdeck.gl/playback';
+import type { PlaybackState } from './use-playback.js';
 
 /**
  * A held key auto-repeats; every committed seek routes through
@@ -43,7 +43,7 @@ function isEditableTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   if (target.isContentEditable) return true;
   const tag = target.tagName;
-  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
 }
 
 export function usePlaybackHotkeys(
@@ -104,40 +104,40 @@ export function usePlaybackHotkeys(
       };
 
       switch (event.key) {
-        case " ":
-        case "k":
-        case "K":
+        case ' ':
+        case 'k':
+        case 'K':
           pb.onPlayPause();
           break; // preventDefault below: Space must not scroll the page
-        case "ArrowLeft":
+        case 'ArrowLeft':
           seekBy(-0.02);
           break;
-        case "ArrowRight":
+        case 'ArrowRight':
           seekBy(0.02);
           break;
-        case "j":
-        case "J":
+        case 'j':
+        case 'J':
           seekBy(-0.1);
           break;
-        case "l":
-        case "L":
+        case 'l':
+        case 'L':
           seekBy(0.1);
           break;
-        case "Home":
+        case 'Home':
           seekTo(range.start);
           break;
-        case "End":
+        case 'End':
           seekTo(range.end);
           break;
-        case "ArrowUp":
+        case 'ArrowUp':
           stepSpeed(1);
           break;
-        case "ArrowDown":
+        case 'ArrowDown':
           stepSpeed(-1);
           break;
         default: {
           // Digits 0–9: jump to N×10% of the range.
-          if (event.key.length === 1 && event.key >= "0" && event.key <= "9") {
+          if (event.key.length === 1 && event.key >= '0' && event.key <= '9') {
             seekTo(range.start + (span * Number(event.key)) / 10);
             break;
           }
@@ -149,7 +149,7 @@ export function usePlaybackHotkeys(
       event.preventDefault();
     };
 
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
   }, [enabled]);
 }

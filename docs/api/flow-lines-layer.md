@@ -29,7 +29,7 @@ import { FlowLinesLayer } from '@poopdeck.gl/layers';
 const layer = new FlowLinesLayer({
   id: 'flows',
   data: flows,
-  getSourcePosition: (d) => d.from,   // [lng, lat]
+  getSourcePosition: (d) => d.from, // [lng, lat]
   getTargetPosition: (d) => d.to,
   getWidth: (d) => Math.sqrt(d.count), // pixels
   getEndpointOffsets: (d) => [d.fromRadius, d.toRadius], // pixels
@@ -45,17 +45,17 @@ Binary input (one instanced buffer per attribute) is also supported via deck.gl'
 
 ## Properties
 
-| Prop | Type | Default | Description |
-|------|------|---------|-------------|
-| `getSourcePosition` | `Accessor<Position>` | `d.sourcePosition` | Origin position. |
-| `getTargetPosition` | `Accessor<Position>` | `d.targetPosition` | Destination position. |
-| `getWidth` | `Accessor<number>` | `1` | Per-flow width in **pixels** (already scaled, not normalized). |
-| `getEndpointOffsets` | `Accessor<[number, number]>` | `[0, 0]` | `[sourceInset, targetInset]` in pixels — pulls the ends in so the arrow meets the node-circle edge. |
-| `sourceColor` | `Color` | `[0,150,255,255]` | Origin / tail color. |
-| `targetColor` | `Color` | `[255,127,14,255]` | Destination / arrowhead color. |
-| `gap` | `number` | `0.5` | Perpendicular separation of the two directions, in units of the arrow width. |
-| `widthMinPixels` | `number` | `0` | Clamp width to at least this many pixels. |
-| `widthMaxPixels` | `number` | `Number.MAX_SAFE_INTEGER` | Clamp width to at most this many pixels. |
+| Prop                 | Type                         | Default                   | Description                                                                                         |
+| -------------------- | ---------------------------- | ------------------------- | --------------------------------------------------------------------------------------------------- |
+| `getSourcePosition`  | `Accessor<Position>`         | `d.sourcePosition`        | Origin position.                                                                                    |
+| `getTargetPosition`  | `Accessor<Position>`         | `d.targetPosition`        | Destination position.                                                                               |
+| `getWidth`           | `Accessor<number>`           | `1`                       | Per-flow width in **pixels** (already scaled, not normalized).                                      |
+| `getEndpointOffsets` | `Accessor<[number, number]>` | `[0, 0]`                  | `[sourceInset, targetInset]` in pixels — pulls the ends in so the arrow meets the node-circle edge. |
+| `sourceColor`        | `Color`                      | `[0,150,255,255]`         | Origin / tail color.                                                                                |
+| `targetColor`        | `Color`                      | `[255,127,14,255]`        | Destination / arrowhead color.                                                                      |
+| `gap`                | `number`                     | `0.5`                     | Perpendicular separation of the two directions, in units of the arrow width.                        |
+| `widthMinPixels`     | `number`                     | `0`                       | Clamp width to at least this many pixels.                                                           |
+| `widthMaxPixels`     | `number`                     | `Number.MAX_SAFE_INTEGER` | Clamp width to at most this many pixels.                                                            |
 
 ## See also
 

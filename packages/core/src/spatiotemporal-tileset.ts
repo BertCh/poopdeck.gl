@@ -4,10 +4,10 @@
 
 /**
  * Spatiotemporal Tileset Manager
- * 
+ *
  * Inspired by deck.gl's Tileset2D but extended for the temporal dimension.
  * Manages tile lifecycle, request queue, caching, and viewport-based tile selection.
- * 
+ *
  * Performance optimizations (120fps target):
  * - Priority queue ensures current tiles load before prefetch
  * - Prefetch uses up to 50% of maxRequests for smooth animation
@@ -15,12 +15,7 @@
  * - Prefetch steps scaled based on playback speed
  */
 
-import type {
-  Tile,
-  TileId,
-  BoundingBox,
-  TemporalLodLevel,
-} from './types.js';
+import type { Tile, TileId, BoundingBox, TemporalLodLevel } from './types.js';
 import { estimateTileSize } from './archive.js';
 
 const DEBUG = false;
@@ -225,7 +220,12 @@ const BUFFER_CHANGE_THROTTLE_MS = 100;
 const FULL_TIME_RANGE = { start: -8.64e15, end: 8.64e15 };
 
 /** Whole-world bounds used to enumerate the overview (storyboard) tier. */
-const WORLD_BOUNDS: BoundingBox = { minLon: -180, minLat: -90, maxLon: 180, maxLat: 90 };
+const WORLD_BOUNDS: BoundingBox = {
+  minLon: -180,
+  minLat: -90,
+  maxLon: 180,
+  maxLat: 90,
+};
 
 /**
  * Default byte budget for {@link SpatiotemporalTileset.preloadOverviewTier}.
@@ -576,14 +576,14 @@ export interface SpatiotemporalTilesetOptions {
     bounds: BoundingBox,
     zoom: number,
     timeRange: { start: number; end: number },
-    bucketMs: number
+    bucketMs: number,
   ) => Promise<TileId[]>;
 
   /** Callback to get available raw tiles for bounds/time. */
   getAvailableTiles: (
     bounds: BoundingBox,
     zoom: number,
-    timeRange: { start: number; end: number }
+    timeRange: { start: number; end: number },
   ) => Promise<TileId[]>;
 
   /**
@@ -595,7 +595,7 @@ export interface SpatiotemporalTilesetOptions {
   getAvailableSummaryTiles?: (
     bounds: BoundingBox,
     zoom: number,
-    timeRange: { start: number; end: number }
+    timeRange: { start: number; end: number },
   ) => Promise<TileId[]>;
 
   /** Callback to fetch tile data (with optional abort signal for cancellation) */
@@ -620,7 +620,7 @@ export interface SpatiotemporalTilesetOptions {
   getTileDataBatch?: (
     tileIds: TileId[],
     signal?: AbortSignal,
-    hooks?: TileBatchHooks
+    hooks?: TileBatchHooks,
   ) => Promise<(Tile | null)[]>;
 
   /**
@@ -702,13 +702,13 @@ export interface SpatiotemporalTileHeader {
  */
 export class SpatiotemporalTileset {
   options: Required<SpatiotemporalTilesetOptions>;
-  
+
   // Tile registry
   private tiles: Map<string, SpatiotemporalTileHeader> = new Map();
-  
+
   // Active requests tracking
   private activeRequests: Set<string> = new Set();
-  
+
   // Viewport state
   private currentViewport: {
     bounds: BoundingBox;
@@ -716,20 +716,20 @@ export class SpatiotemporalTileset {
     time: number;
     timeWindow: number;
   } | null = null;
-  
+
   // Debounce timer
   private debounceTimer: NodeJS.Timeout | null = null;
-  
+
   // Frame tracking (for render optimization)
   private frameNumber = 0;
-  
+
   // Cache statistics
   private cacheStats = {
     hits: 0,
     misses: 0,
     evictions: 0,
   };
-  
+
   // Animation state for prefetching
   private animationSpeed: number = 0;
   private lastUpdateTime: number = 0;
@@ -805,7 +805,7 @@ export class SpatiotemporalTileset {
   private static readonly PREFETCH_DEBOUNCE_MS = 250;
   private lastPrefetchAt = 0;
   private prefetchPendingTimer: ReturnType<typeof setTimeout> | null = null;
-  
+
   // ── Buffer model state (WS-A) ──────────────────────────────────────────
   // Coverage tracking is LAZY: the index costs one extra getAvailableTiles
   // call per spatial viewport change, so it's only maintained once a buffer
@@ -839,7 +839,10 @@ export class SpatiotemporalTileset {
    * the current window, so "not in the needed set" is their normal operating
    * condition, not supersession.
    */
-  private inflightPrefetch = new Set<{ controller: AbortController; keys: string[] }>();
+  private inflightPrefetch = new Set<{
+    controller: AbortController;
+    keys: string[];
+  }>();
 
   /**
    * In-flight PRIORITY-tier batches. A batch shares one AbortController
@@ -849,7 +852,10 @@ export class SpatiotemporalTileset {
    * trailing edge always supersedes a few members per pass; aborting then
    * would kill the still-needed rest of the batch with them.
    */
-  private inflightPriority = new Set<{ controller: AbortController; keys: string[] }>();
+  private inflightPriority = new Set<{
+    controller: AbortController;
+    keys: string[];
+  }>();
 
   // ── Overview (storyboard) tier state (WS-C4) ─────────────────────────────
   /** Pinned-overview tiles awaiting fetch; drained ONLY when priority is idle. */
@@ -868,10 +874,10 @@ export class SpatiotemporalTileset {
   // This is the authoritative set of tiles that should be visible for current viewport/time
   // getVisibleTiles() just returns loaded tiles from this set - O(k) not O(n)
   private neededTileKeys: Set<string> = new Set();
-  
+
   // Version tracking for cache invalidation
   private neededTilesVersion: number = 0;
-  
+
   constructor(options: SpatiotemporalTilesetOptions) {
     this.options = {
       // Concurrency budget for the single-tile / prefetch paths. The COALESCED
@@ -900,13 +906,15 @@ export class SpatiotemporalTileset {
       // Scrub-LOD (motion tier): all axes default OFF — the kill switch.
       scrubLod: options.scrubLod ?? null,
       temporalLodLevels: options.temporalLodLevels ?? null,
-      getAvailableTemporalLodTiles: options.getAvailableTemporalLodTiles ?? null,
+      getAvailableTemporalLodTiles:
+        options.getAvailableTemporalLodTiles ?? null,
       getAvailableTiles: options.getAvailableTiles,
       getAvailableSummaryTiles: options.getAvailableSummaryTiles ?? null,
       getTileData: options.getTileData,
       getTileDataBatch: options.getTileDataBatch ?? null,
       getTileByteSize: options.getTileByteSize ?? null,
-      maxParentTileBytes: options.maxParentTileBytes ?? DEFAULT_MAX_PARENT_TILE_BYTES,
+      maxParentTileBytes:
+        options.maxParentTileBytes ?? DEFAULT_MAX_PARENT_TILE_BYTES,
       onBufferChange: options.onBufferChange ?? null,
       getThroughput: options.getThroughput ?? null,
       onTileLoad: options.onTileLoad ?? (() => {}),
@@ -959,7 +967,7 @@ export class SpatiotemporalTileset {
     }
     return this.options.getAvailableTiles(bounds, zoom, timeRange);
   }
-  
+
   /**
    * Update the committed prefetch direction with hysteresis.
    *
@@ -1005,7 +1013,12 @@ export class SpatiotemporalTileset {
    * Call this when animation starts/stops or speed changes
    */
   setAnimationState(isAnimating: boolean, speed: number = 0): void {
-    if (DEBUG) console.log('[Tileset] setAnimationState:', { isAnimating, speed, enablePrefetch: this.options.enablePrefetch });
+    if (DEBUG)
+      console.log('[Tileset] setAnimationState:', {
+        isAnimating,
+        speed,
+        enablePrefetch: this.options.enablePrefetch,
+      });
     const wasAnimating = this.isAnimating;
     this.isAnimating = isAnimating;
     this.animationSpeed = speed;
@@ -1038,7 +1051,10 @@ export class SpatiotemporalTileset {
       } else if (!isAnimating && wasAnimating) {
         // When animation pauses, ensure tiles for current time are loaded
         // This handles the case where loading was lagging behind animation
-        if (DEBUG) console.log('[Tileset] Animation paused, ensuring current time tiles are loaded');
+        if (DEBUG)
+          console.log(
+            '[Tileset] Animation paused, ensuring current time tiles are loaded',
+          );
         this.selectAndLoadTiles();
       }
     }
@@ -1119,7 +1135,10 @@ export class SpatiotemporalTileset {
     if (!this.options.getAvailableTemporalLodTiles) return null;
     let pick: TemporalLodLevel | null = null;
     for (const level of levels) {
-      if (selectionZoom <= level.maxZoomLevel && (pick === null || level.bucketMs > pick.bucketMs)) {
+      if (
+        selectionZoom <= level.maxZoomLevel &&
+        (pick === null || level.bucketMs > pick.bucketMs)
+      ) {
         pick = level;
       }
     }
@@ -1181,20 +1200,23 @@ export class SpatiotemporalTileset {
       this.prefetchFutureTiles();
     }, wait);
   }
-  
+
   /**
    * Update tileset with new viewport
    * Returns new frame number if tiles changed
    */
-  update(viewport: {
-    bounds: BoundingBox;
-    zoom: number;
-    time: number;
-    timeWindow: number;
-  }, skipDebounce: boolean = false): number {
+  update(
+    viewport: {
+      bounds: BoundingBox;
+      zoom: number;
+      time: number;
+      timeWindow: number;
+    },
+    skipDebounce: boolean = false,
+  ): number {
     const previousTime = this.currentViewport?.time;
     this.currentViewport = viewport;
-    
+
     // Track animation speed based on time changes
     const now = Date.now();
     if (previousTime !== undefined) {
@@ -1233,12 +1255,12 @@ export class SpatiotemporalTileset {
       }
     }
     this.lastUpdateTime = now;
-    
+
     // Cancel pending debounce if viewport changed
     if (this.debounceTimer) {
       clearTimeout(this.debounceTimer);
     }
-    
+
     // Skip debounce for time-only changes during animation
     if (skipDebounce || this.options.debounceTime === 0) {
       this.selectAndLoadTiles();
@@ -1248,10 +1270,10 @@ export class SpatiotemporalTileset {
         this.selectAndLoadTiles();
       }, this.options.debounceTime);
     }
-    
+
     return this.frameNumber;
   }
-  
+
   /**
    * Get zoom levels to load based on refinement strategy
    *
@@ -1297,7 +1319,7 @@ export class SpatiotemporalTileset {
 
     return zoomLevels;
   }
-  
+
   /**
    * Whether a tile is an OVERSIZED parent-fallback tile that should be skipped.
    *
@@ -1396,12 +1418,28 @@ export class SpatiotemporalTileset {
     const prev = this.lastSpatialBounds;
     let spatialFlush = false;
     if (prev !== undefined) {
-      const lonSpan = Math.max(bounds.maxLon - bounds.minLon, prev.maxLon - prev.minLon, 1e-9);
-      const latSpan = Math.max(bounds.maxLat - bounds.minLat, prev.maxLat - prev.minLat, 1e-9);
-      const dCenterLon = Math.abs((bounds.minLon + bounds.maxLon) - (prev.minLon + prev.maxLon)) / 2;
-      const dCenterLat = Math.abs((bounds.minLat + bounds.maxLat) - (prev.minLat + prev.maxLat)) / 2;
-      const dSpanLon = Math.abs((bounds.maxLon - bounds.minLon) - (prev.maxLon - prev.minLon));
-      const dSpanLat = Math.abs((bounds.maxLat - bounds.minLat) - (prev.maxLat - prev.minLat));
+      const lonSpan = Math.max(
+        bounds.maxLon - bounds.minLon,
+        prev.maxLon - prev.minLon,
+        1e-9,
+      );
+      const latSpan = Math.max(
+        bounds.maxLat - bounds.minLat,
+        prev.maxLat - prev.minLat,
+        1e-9,
+      );
+      const dCenterLon =
+        Math.abs(bounds.minLon + bounds.maxLon - (prev.minLon + prev.maxLon)) /
+        2;
+      const dCenterLat =
+        Math.abs(bounds.minLat + bounds.maxLat - (prev.minLat + prev.maxLat)) /
+        2;
+      const dSpanLon = Math.abs(
+        bounds.maxLon - bounds.minLon - (prev.maxLon - prev.minLon),
+      );
+      const dSpanLat = Math.abs(
+        bounds.maxLat - bounds.minLat - (prev.maxLat - prev.minLat),
+      );
       spatialFlush =
         zoom !== this.lastSpatialZoom ||
         dCenterLon > lonSpan * SPATIAL_FLUSH_TOLERANCE ||
@@ -1438,7 +1476,7 @@ export class SpatiotemporalTileset {
     // Mark tiles as used (for LRU)
     const now = Date.now();
     const neededTileKeys = new Set<string>();
-    
+
     // Generation guard: this method is async (the getAvailableTiles slice can
     // be a real network round-trip for paged directories), so two passes for
     // DIFFERENT viewports may be in flight at once. If the earlier (now stale)
@@ -1457,8 +1495,13 @@ export class SpatiotemporalTileset {
       tileIdsByZoom = await Promise.all(
         zoomLevels.map(async (z) => ({
           zoom: z,
-          tileIds: await this.fetchSelectionTilesForZoom(bounds, z, timeRange, scrubBucketMs),
-        }))
+          tileIds: await this.fetchSelectionTilesForZoom(
+            bounds,
+            z,
+            timeRange,
+            scrubBucketMs,
+          ),
+        })),
       );
     } catch (error) {
       // A transient directory failure (e.g. a paged-leaf range request
@@ -1493,9 +1536,11 @@ export class SpatiotemporalTileset {
     // prefetch removals into ONE filter pass after the loop — mirroring the
     // `queuedKeys` pattern prefetchFutureTiles already uses.
     const priorityKeys = new Set<string>();
-    for (const qid of this.priorityQueue) priorityKeys.add(this.tileIdToKey(qid));
+    for (const qid of this.priorityQueue)
+      priorityKeys.add(this.tileIdToKey(qid));
     const prefetchKeys = new Set<string>();
-    for (const qid of this.prefetchQueue) prefetchKeys.add(this.tileIdToKey(qid));
+    for (const qid of this.prefetchQueue)
+      prefetchKeys.add(this.tileIdToKey(qid));
     const promotedFromPrefetch = new Set<string>();
     let enqueuedPriority = false;
 
@@ -1589,7 +1634,7 @@ export class SpatiotemporalTileset {
         }
       }
     }
-    
+
     // Drop the promoted tiles from the prefetch queue in a single O(Q) pass
     // (they are now queued at priority) instead of an O(Q) splice per tile.
     if (promotedFromPrefetch.size > 0) {
@@ -1642,11 +1687,11 @@ export class SpatiotemporalTileset {
       this.notifyBufferChange();
     }
   }
-  
+
   /**
    * Prefetch tiles ahead of current animation time
    * This ensures smooth playback by loading tiles before they're needed
-   * 
+   *
    * OPTIMIZATION: Uses deterministic bucket-aligned prefetching when temporalBucketMs is set.
    * Instead of arbitrary future times, we prefetch at exact bucket boundaries.
    * This ensures:
@@ -1656,10 +1701,10 @@ export class SpatiotemporalTileset {
    */
   private async prefetchFutureTiles(): Promise<void> {
     if (!this.currentViewport) return;
-    
+
     const { bounds, zoom, time, timeWindow } = this.currentViewport;
     const { prefetchAhead, prefetchSteps } = this.options;
-    
+
     // Use the hysteresis-smoothed committed prefetch direction. A single
     // backward scrub frame will not flip this (see updatePrefetchDirection).
     const direction = this.prefetchDirection;
@@ -1671,15 +1716,19 @@ export class SpatiotemporalTileset {
     const zoomLevels = this.getZoomLevelsToLoad(zoom);
     const primaryZoom = zoomLevels[0];
     const now = Date.now();
-    
+
     // How far ahead to prefetch, in SIM time. During a running animation, cover
     // a fixed slice of REAL playback time (speed × LOOKAHEAD) so a fast scrub
     // prefetches one big contiguous chunk that coalesces into a few range
     // requests. Fall back to the configured window-based lookahead when paused
     // (speed ≈ 0) so a stationary view still warms its immediate neighbourhood.
     const speed = Math.abs(this.animationSpeed); // sim-ms per real-ms
-    const windowAhead = (prefetchAhead > 0 ? prefetchAhead : timeWindow) * prefetchSteps;
-    const effectiveAhead = Math.max(windowAhead, speed * PREFETCH_LOOKAHEAD_REAL_MS);
+    const windowAhead =
+      (prefetchAhead > 0 ? prefetchAhead : timeWindow) * prefetchSteps;
+    const effectiveAhead = Math.max(
+      windowAhead,
+      speed * PREFETCH_LOOKAHEAD_REAL_MS,
+    );
     const prefetchEndTime = time + direction * effectiveAhead;
 
     // Throttle on the remaining prefetched "runway": skip the wide load while the
@@ -1706,7 +1755,7 @@ export class SpatiotemporalTileset {
       }
     }
     this.lastPrefetchEndTime = prefetchEndTime;
-    
+
     // One query per zoom level covering the whole prefetch range. The previous
     // implementation enumerated every bucket boundary in [startTime, endTime]
     // and issued one getAvailableTiles() call per (bucket × zoom). For datasets
@@ -1723,19 +1772,24 @@ export class SpatiotemporalTileset {
       end: endTime + timeWindow / 2,
     };
 
-    if (DEBUG) console.log('[Tileset] Wide-range prefetch:', {
-      time: new Date(time).toISOString(),
-      zoomLevels,
-      fullRangeStart: new Date(fullRange.start).toISOString(),
-      fullRangeEnd: new Date(fullRange.end).toISOString(),
-    });
+    if (DEBUG)
+      console.log('[Tileset] Wide-range prefetch:', {
+        time: new Date(time).toISOString(),
+        zoomLevels,
+        fullRangeStart: new Date(fullRange.start).toISOString(),
+        fullRangeEnd: new Date(fullRange.end).toISOString(),
+      });
 
     const generation = ++this.prefetchGeneration;
     const results = await Promise.allSettled(
       zoomLevels.map(async (z) => {
-        const tileIds = await this.fetchAvailableTilesForZoom(bounds, z, fullRange);
+        const tileIds = await this.fetchAvailableTilesForZoom(
+          bounds,
+          z,
+          fullRange,
+        );
         return { zoom: z, tileIds };
-      })
+      }),
     );
 
     // A flush (seek / spatial move / direction flip) or a newer prefetch
@@ -1847,22 +1901,29 @@ export class SpatiotemporalTileset {
     // next pass re-plans when the head nears the REAL frontier instead of
     // trusting a span nobody fetched. (Only correct our own claim — a
     // concurrent flush/flip may have reset it while we awaited.)
-    if (newTilesAdded >= prefetchBudget && this.lastPrefetchEndTime === prefetchEndTime) {
+    if (
+      newTilesAdded >= prefetchBudget &&
+      this.lastPrefetchEndTime === prefetchEndTime
+    ) {
       this.lastPrefetchEndTime =
         time + direction * (coveredAheadMs + this.options.temporalBucketMs);
     }
 
     // Log prefetch results
     if (DEBUG) {
-      console.log('[Tileset] Prefetch results:', { totalTilesFound, newTilesAdded, prefetchQueueLength: this.prefetchQueue.length });
+      console.log('[Tileset] Prefetch results:', {
+        totalTilesFound,
+        newTilesAdded,
+        prefetchQueueLength: this.prefetchQueue.length,
+      });
     }
-    
+
     // Process the prefetch queue now that tiles are added
     if (newTilesAdded > 0) {
       this.processRequestQueue();
     }
   }
-  
+
   /**
    * Process request queues. Priority (current-time) tiles always dispatch
    * first; two accounting models, one per dispatch path:
@@ -1881,7 +1942,10 @@ export class SpatiotemporalTileset {
    *   (half animating, a third paused) and never starving priority.
    */
   private async processRequestQueue(): Promise<void> {
-    if (DEBUG && (this.priorityQueue.length > 0 || this.prefetchQueue.length > 0)) {
+    if (
+      DEBUG &&
+      (this.priorityQueue.length > 0 || this.prefetchQueue.length > 0)
+    ) {
       console.log('[Tileset] processRequestQueue:', {
         activeRequests: this.activeRequests.size,
         priorityQueue: this.priorityQueue.length,
@@ -1899,7 +1963,8 @@ export class SpatiotemporalTileset {
 
     if (!batchFn) {
       // ── Per-tile path: slot accounting in tiles (a tile IS a request). ──
-      const availableSlots = this.options.maxRequests - this.activeRequests.size;
+      const availableSlots =
+        this.options.maxRequests - this.activeRequests.size;
       if (availableSlots <= 0) return;
 
       let usedSlots = 0;
@@ -1946,7 +2011,10 @@ export class SpatiotemporalTileset {
     // viewport×window into a handful of parallel requests.
     if (this.priorityQueue.length > 0) {
       const candidates: TileId[] = [];
-      while (this.priorityQueue.length > 0 && candidates.length < MAX_COALESCE_BATCH) {
+      while (
+        this.priorityQueue.length > 0 &&
+        candidates.length < MAX_COALESCE_BATCH
+      ) {
         candidates.push(this.priorityQueue.shift()!);
       }
       this.startTileBatch(candidates);
@@ -1969,7 +2037,10 @@ export class SpatiotemporalTileset {
       const sizeFn = this.options.getTileByteSize;
       const candidates: TileId[] = [];
       let sliceBytes = 0;
-      while (this.prefetchQueue.length > 0 && candidates.length < MAX_COALESCE_BATCH) {
+      while (
+        this.prefetchQueue.length > 0 &&
+        candidates.length < MAX_COALESCE_BATCH
+      ) {
         const next = this.prefetchQueue[0];
         const size = sizeFn?.(next) ?? PREFETCH_UNKNOWN_TILE_BYTES;
         // A slice always takes at least one tile, even one bigger than the
@@ -1997,10 +2068,14 @@ export class SpatiotemporalTileset {
    */
   private prefetchSliceBytes(): number {
     const bytesPerMs = this.options.getThroughput?.().bytesPerMs ?? null;
-    if (bytesPerMs === null || bytesPerMs <= 0) return PREFETCH_SLICE_COLD_BYTES;
+    if (bytesPerMs === null || bytesPerMs <= 0)
+      return PREFETCH_SLICE_COLD_BYTES;
     return Math.min(
       PREFETCH_SLICE_MAX_BYTES,
-      Math.max(PREFETCH_SLICE_MIN_BYTES, bytesPerMs * PREFETCH_SLICE_TARGET_REAL_MS),
+      Math.max(
+        PREFETCH_SLICE_MIN_BYTES,
+        bytesPerMs * PREFETCH_SLICE_TARGET_REAL_MS,
+      ),
     );
   }
 
@@ -2024,7 +2099,9 @@ export class SpatiotemporalTileset {
     // Class boundary matches what selection enqueued: the (possibly
     // scrub-degraded) primary zoom, so a coarse motion-tier primary still
     // sorts ahead of its parents during a drag.
-    const primaryZoom = this.getZoomLevelsToLoad(this.effectiveSelectionZoom(zoom))[0];
+    const primaryZoom = this.getZoomLevelsToLoad(
+      this.effectiveSelectionZoom(zoom),
+    )[0];
     this.priorityQueue.sort((a, b) => {
       const classA = a.z === primaryZoom ? 0 : 1;
       const classB = b.z === primaryZoom ? 0 : 1;
@@ -2032,7 +2109,7 @@ export class SpatiotemporalTileset {
       return Math.abs(a.t - time) - Math.abs(b.t - time);
     });
   }
-  
+
   /**
    * Start loading a single tile
    * Returns true if load was started, false if skipped
@@ -2043,7 +2120,10 @@ export class SpatiotemporalTileset {
    * `tier` tags the request so `flushPrefetch()` can abort in-flight
    * PREFETCH work without touching priority fetches.
    */
-  private startTileLoad(tileId: TileId, tier: RequestTier = 'priority'): boolean {
+  private startTileLoad(
+    tileId: TileId,
+    tier: RequestTier = 'priority',
+  ): boolean {
     const key = this.tileIdToKey(tileId);
 
     // Skip if already loading, loaded, or cancelled.
@@ -2068,7 +2148,8 @@ export class SpatiotemporalTileset {
     if (inflightRecord) this.inflightPrefetch.add(inflightRecord);
 
     // Load tile with abort signal
-    this.options.getTileData(tileId, abortController.signal)
+    this.options
+      .getTileData(tileId, abortController.signal)
       .then((tile) => {
         if (!header.isCancelled && tile) {
           header.tile = tile;
@@ -2105,7 +2186,7 @@ export class SpatiotemporalTileset {
 
     return true;
   }
-  
+
   /**
    * Start loading a batch of tiles in ONE coalesced fetch.
    *
@@ -2125,17 +2206,29 @@ export class SpatiotemporalTileset {
    *
    * Returns the number of tiles actually started.
    */
-  private startTileBatch(tileIds: TileId[], tier: RequestTier = 'priority'): number {
+  private startTileBatch(
+    tileIds: TileId[],
+    tier: RequestTier = 'priority',
+  ): number {
     const batchFn = this.options.getTileDataBatch;
     if (!batchFn) return 0;
 
     // Filter to loadable tiles, marking each as loading under ONE shared abort.
     const abortController = new AbortController();
-    const started: { id: TileId; key: string; header: SpatiotemporalTileHeader }[] = [];
+    const started: {
+      id: TileId;
+      key: string;
+      header: SpatiotemporalTileHeader;
+    }[] = [];
     for (const tileId of tileIds) {
       const key = this.tileIdToKey(tileId);
       const header = this.tiles.get(key);
-      if (!header || header.isLoading || header.isLoaded || header.isCancelled) {
+      if (
+        !header ||
+        header.isLoading ||
+        header.isLoaded ||
+        header.isCancelled
+      ) {
         continue;
       }
       header.isLoading = true;
@@ -2149,7 +2242,10 @@ export class SpatiotemporalTileset {
     // batches are abortable only via flushPrefetch; PRIORITY batches are
     // judged whole-batch by cancelSupersededRequests. (Overview batches need
     // no registry — their members' pinned flag already exempts them.)
-    const inflightRecord = { controller: abortController, keys: started.map((s) => s.key) };
+    const inflightRecord = {
+      controller: abortController,
+      keys: started.map((s) => s.key),
+    };
     const registry =
       tier === 'prefetch'
         ? this.inflightPrefetch
@@ -2161,9 +2257,11 @@ export class SpatiotemporalTileset {
     // TEMP-DIAGNOSTIC (flash repro): record batch dispatches per tier with
     // queue state, so offline analysis can see whether the play head is being
     // served by prefetch (ahead-of-time) or priority (on-demand) loads.
-    const probeBatch = (globalThis as unknown as {
-      __sttProbe?: { enabled?: boolean; batches?: unknown[] };
-    }).__sttProbe;
+    const probeBatch = (
+      globalThis as unknown as {
+        __sttProbe?: { enabled?: boolean; batches?: unknown[] };
+      }
+    ).__sttProbe;
     const probeT0 = typeof performance !== 'undefined' ? performance.now() : 0;
     if (probeBatch?.enabled && Array.isArray(probeBatch.batches)) {
       probeBatch.batches.push({
@@ -2218,8 +2316,14 @@ export class SpatiotemporalTileset {
         // playheadTime, into STTArchive.getTiles({viewportCenter}).
         viewportCenter: this.currentViewport
           ? {
-              lon: (this.currentViewport.bounds.minLon + this.currentViewport.bounds.maxLon) / 2,
-              lat: (this.currentViewport.bounds.minLat + this.currentViewport.bounds.maxLat) / 2,
+              lon:
+                (this.currentViewport.bounds.minLon +
+                  this.currentViewport.bounds.maxLon) /
+                2,
+              lat:
+                (this.currentViewport.bounds.minLat +
+                  this.currentViewport.bounds.maxLat) /
+                2,
             }
           : undefined,
       },
@@ -2261,7 +2365,8 @@ export class SpatiotemporalTileset {
           this.activeRequests.delete(key);
         }
         if (registry) registry.delete(inflightRecord);
-        if (tier === 'overview') this.settleOverviewKeys(started.map((s) => s.key));
+        if (tier === 'overview')
+          this.settleOverviewKeys(started.map((s) => s.key));
         this.processRequestQueue();
         this.extendPrefetchIfDrained();
       });
@@ -2394,7 +2499,11 @@ export class SpatiotemporalTileset {
    *                     `max(4 × timeWindow, |animationSpeed| × 10 s)`, and
    *                     always at least one temporal bucket.
    */
-  getBufferedRunway(time: number, direction: 1 | -1, horizonSimMs?: number): BufferedRunway {
+  getBufferedRunway(
+    time: number,
+    direction: 1 | -1,
+    horizonSimMs?: number,
+  ): BufferedRunway {
     this.ensureBufferTracking();
     const bucketMs = this.options.temporalBucketMs;
     const timeWindow = this.currentViewport?.timeWindow ?? bucketMs;
@@ -2408,11 +2517,21 @@ export class SpatiotemporalTileset {
     if (!idx) {
       // Index not built yet (no viewport, or the async directory slice is
       // still in flight): report "nothing buffered" rather than guessing.
-      return { simMs: 0, bytesPending: 0, horizonSimMs: horizon, complete: false };
+      return {
+        simMs: 0,
+        bytesPending: 0,
+        horizonSimMs: horizon,
+        complete: false,
+      };
     }
     if (idx.timeRange === null) {
       // The viewport has no tiles at ANY time: nothing can be missing.
-      return { simMs: horizon, bytesPending: 0, horizonSimMs: horizon, complete: true };
+      return {
+        simMs: horizon,
+        bytesPending: 0,
+        horizonSimMs: horizon,
+        complete: true,
+      };
     }
 
     // Clamp the probe at the edge of the available data in the travel
@@ -2482,11 +2601,16 @@ export class SpatiotemporalTileset {
    * (default 64); buckets beyond the cap are truncated. Cheap enough to
    * poll at ~1 Hz. Returns `[]` until the coverage index is built.
    */
-  getBufferedRanges(opts?: { maxRanges?: number }): Array<{ start: number; end: number }> {
+  getBufferedRanges(opts?: {
+    maxRanges?: number;
+  }): Array<{ start: number; end: number }> {
     this.ensureBufferTracking();
     const idx = this.coverageIndex;
     if (!idx || idx.timeRange === null) return [];
-    const maxRanges = Math.max(1, Math.floor(opts?.maxRanges ?? DEFAULT_MAX_BUFFERED_RANGES));
+    const maxRanges = Math.max(
+      1,
+      Math.floor(opts?.maxRanges ?? DEFAULT_MAX_BUFFERED_RANGES),
+    );
     const bucketMs = this.options.temporalBucketMs;
 
     const ranges: Array<{ start: number; end: number }> = [];
@@ -2523,7 +2647,10 @@ export class SpatiotemporalTileset {
    * network. `bytes` is 0 when `getTileByteSize` is unwired (sizes unknown)
    * or before the coverage index is built.
    */
-  estimateCost(range: { start: number; end: number }): { bytes: number; tiles: number } {
+  estimateCost(range: { start: number; end: number }): {
+    bytes: number;
+    tiles: number;
+  } {
     this.ensureBufferTracking();
     const idx = this.coverageIndex;
     if (!idx || idx.timeRange === null) return { bytes: 0, tiles: 0 };
@@ -2693,7 +2820,8 @@ export class SpatiotemporalTileset {
   ): Promise<void> {
     const zooms: number[] = [];
     const zMax = Math.min(maxZoom, this.options.maxZoom);
-    for (let z = Math.max(0, this.options.minZoom); z <= zMax; z++) zooms.push(z);
+    for (let z = Math.max(0, this.options.minZoom); z <= zMax; z++)
+      zooms.push(z);
 
     // Directory slice: every overview-zoom tile, whole world, all of time —
     // the same enumeration pattern the coverage index uses (zero tile I/O).
@@ -2701,12 +2829,19 @@ export class SpatiotemporalTileset {
     try {
       const perZoom = await Promise.all(
         zooms.map((z) =>
-          this.fetchAvailableTilesForZoom(WORLD_BOUNDS, z, { ...FULL_TIME_RANGE }),
+          this.fetchAvailableTilesForZoom(WORLD_BOUNDS, z, {
+            ...FULL_TIME_RANGE,
+          }),
         ),
       );
       ids = perZoom.flat();
     } catch {
-      this.settleOverview(state, { loaded: false, bytes: 0, tiles: 0, reason: 'error' });
+      this.settleOverview(state, {
+        loaded: false,
+        bytes: 0,
+        tiles: 0,
+        reason: 'error',
+      });
       return;
     }
     // The tileset was cleared/finalized while we awaited the directory.
@@ -2724,7 +2859,12 @@ export class SpatiotemporalTileset {
     }
 
     if (candidates.length === 0) {
-      this.settleOverview(state, { loaded: false, bytes: 0, tiles: 0, reason: 'no-tiles' });
+      this.settleOverview(state, {
+        loaded: false,
+        bytes: 0,
+        tiles: 0,
+        reason: 'no-tiles',
+      });
       return;
     }
 
@@ -2790,7 +2930,10 @@ export class SpatiotemporalTileset {
     const state = this.overviewState;
     const requeue: TileId[] = [];
     const candidates: TileId[] = [];
-    while (this.overviewQueue.length > 0 && candidates.length < MAX_COALESCE_BATCH) {
+    while (
+      this.overviewQueue.length > 0 &&
+      candidates.length < MAX_COALESCE_BATCH
+    ) {
       const id = this.overviewQueue.shift()!;
       const key = this.tileIdToKey(id);
       const header = this.tiles.get(key);
@@ -2859,7 +3002,8 @@ export class SpatiotemporalTileset {
     }
     if (
       !this.warnedPinnedOverCacheLimit &&
-      (pinnedBytes > this.options.maxCacheByteSize || pinnedCount > this.options.maxCacheSize)
+      (pinnedBytes > this.options.maxCacheByteSize ||
+        pinnedCount > this.options.maxCacheSize)
     ) {
       this.warnedPinnedOverCacheLimit = true;
       console.warn(
@@ -2870,11 +3014,18 @@ export class SpatiotemporalTileset {
       );
     }
 
-    this.settleOverview(state, { loaded: true, bytes: state.bytes, tiles: state.tiles });
+    this.settleOverview(state, {
+      loaded: true,
+      bytes: state.bytes,
+      tiles: state.tiles,
+    });
   }
 
   /** Resolve the overview attempt exactly once (keeps result for repeat calls). */
-  private settleOverview(state: OverviewState, result: OverviewPreloadResult): void {
+  private settleOverview(
+    state: OverviewState,
+    result: OverviewPreloadResult,
+  ): void {
     if (state.settled) return;
     state.settled = true;
     state.pendingKeys.clear();
@@ -2890,7 +3041,10 @@ export class SpatiotemporalTileset {
   private ensureBufferTracking(): void {
     this.bufferTrackingEnabled = true;
     if (this.currentViewport) {
-      this.maybeRebuildCoverageIndex(this.currentViewport.bounds, this.currentViewport.zoom);
+      this.maybeRebuildCoverageIndex(
+        this.currentViewport.bounds,
+        this.currentViewport.zoom,
+      );
     }
   }
 
@@ -2948,7 +3102,13 @@ export class SpatiotemporalTileset {
                 end: bucketStarts[bucketStarts.length - 1] + bucketMs,
               }
             : null;
-        this.coverageIndex = { signature, bucketStarts, buckets, keySet, timeRange };
+        this.coverageIndex = {
+          signature,
+          bucketStarts,
+          buckets,
+          keySet,
+          timeRange,
+        };
         this.notifyBufferChange();
       })
       .catch(() => {
@@ -2986,7 +3146,7 @@ export class SpatiotemporalTileset {
 
   /**
    * Evict tiles not recently used (LRU)
-   * 
+   *
    * PERFORMANCE: Grace period reduced from 5 minutes to 60 seconds
    * to prevent memory bloat while still supporting animation loops.
    */
@@ -3030,7 +3190,7 @@ export class SpatiotemporalTileset {
       for (const [tileKey, header] of this.tiles) {
         const isNeeded =
           neededTileKeys.has(tileKey) || (bufferedKeys?.has(tileKey) ?? false);
-        const isRecent = (now - header.lastUsed) < GRACE_PERIOD;
+        const isRecent = now - header.lastUsed < GRACE_PERIOD;
 
         // An in-flight header must never be deleted out from under its
         // batch: the batch's deliverTile() holds a direct reference and
@@ -3107,7 +3267,7 @@ export class SpatiotemporalTileset {
     // Evicting a loaded tile can shrink the buffered runway.
     if (evictedLoaded) this.notifyBufferChange();
   }
-  
+
   /**
    * Get visible tiles for rendering.
    *
@@ -3249,7 +3409,14 @@ export class SpatiotemporalTileset {
         const header = this.tiles.get(key);
         if (!header || header.id.z !== primaryZoom || header.isLoaded) continue;
         const { z, x, y, t } = header.id;
-        this.collectLoadedDescendants(z, x, y, t, CHILD_LOOKAHEAD_LEVELS, tiles);
+        this.collectLoadedDescendants(
+          z,
+          x,
+          y,
+          t,
+          CHILD_LOOKAHEAD_LEVELS,
+          tiles,
+        );
       }
     }
 
@@ -3290,7 +3457,7 @@ export class SpatiotemporalTileset {
       }
     }
   }
-  
+
   /**
    * Get cache statistics.
    *
@@ -3357,7 +3524,7 @@ export class SpatiotemporalTileset {
     // no longer authoritative once we've torn down the tile registry.
     this.lastSelectKey = '';
   }
-  
+
   /**
    * Finalize and cleanup
    */
@@ -3375,9 +3542,9 @@ export class SpatiotemporalTileset {
     }
     this.clear();
   }
-  
+
   // Helper methods
-  
+
   private tileIdToKey(id: TileId): string {
     // `@<bucketMs>` keeps a temporal-LOD (scrub preview) tile's identity
     // distinct from the base tile sharing its z/x/y/t across EVERY keyed
@@ -3389,8 +3556,7 @@ export class SpatiotemporalTileset {
       ? `${id.z}/${id.x}/${id.y}/${id.t}@${id.bucketMs}`
       : `${id.z}/${id.x}/${id.y}/${id.t}`;
   }
-  
+
   // Tile-size estimation lives in archive.ts (estimateTileSize) so the archive
   // and the tileset share one complete, consistent accounting implementation.
 }
-

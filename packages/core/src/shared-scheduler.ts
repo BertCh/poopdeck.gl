@@ -84,7 +84,9 @@ export interface ConfigureSharedSchedulerOptions extends SharedRequestSchedulerO
  */
 export function getSharedScheduler(): SharedRequestScheduler {
   if (!state.scheduler) {
-    state.scheduler = new SharedRequestScheduler({ maxRequests: state.maxRequests });
+    state.scheduler = new SharedRequestScheduler({
+      maxRequests: state.maxRequests,
+    });
   }
   return state.scheduler;
 }
@@ -102,11 +104,17 @@ export function getSharedScheduler(): SharedRequestScheduler {
  *
  * Both fields are optional; omitted fields are left unchanged.
  */
-export function configureSharedScheduler(options: ConfigureSharedSchedulerOptions = {}): void {
+export function configureSharedScheduler(
+  options: ConfigureSharedSchedulerOptions = {},
+): void {
   if (typeof options.enabled === 'boolean') {
     state.enabled = options.enabled;
   }
-  if (typeof options.maxRequests === 'number' && Number.isFinite(options.maxRequests) && options.maxRequests >= 1) {
+  if (
+    typeof options.maxRequests === 'number' &&
+    Number.isFinite(options.maxRequests) &&
+    options.maxRequests >= 1
+  ) {
     const next = Math.floor(options.maxRequests);
     if (next !== state.maxRequests) {
       state.maxRequests = next;

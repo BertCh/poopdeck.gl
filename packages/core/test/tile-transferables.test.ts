@@ -24,7 +24,10 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { collectTransferables, forEachBufferView } from '../src/tile-transferables';
+import {
+  collectTransferables,
+  forEachBufferView,
+} from '../src/tile-transferables';
 import { GeometryType, type Tile } from '../src/types';
 
 function makeMinimalTile(): Tile {
@@ -169,7 +172,8 @@ describe('collectTransferables (worker tile-transfer helper)', () => {
     // Two numeric columns, one of which is `undefined` (the production
     // symptom). The good column must still be transferable.
     f.numericProps['speed'] = new Float32Array([1, 2]);
-    (f.numericProps as Record<string, Float32Array | undefined>)['bad'] = undefined;
+    (f.numericProps as Record<string, Float32Array | undefined>)['bad'] =
+      undefined;
     expect(() => collectTransferables(tile)).not.toThrow();
     const transferables = collectTransferables(tile);
     expect(transferables).toContain(f.numericProps['speed'].buffer);
@@ -182,7 +186,12 @@ describe('collectTransferables (worker tile-transfer helper)', () => {
       indices: new Uint16Array([0, 1]),
       categories: ['a', 'b'],
     };
-    (f.categoricalProps as Record<string, { indices: Uint16Array; categories: string[] } | undefined>)['bad'] = undefined;
+    (
+      f.categoricalProps as Record<
+        string,
+        { indices: Uint16Array; categories: string[] } | undefined
+      >
+    )['bad'] = undefined;
     expect(() => collectTransferables(tile)).not.toThrow();
   });
 
@@ -190,7 +199,11 @@ describe('collectTransferables (worker tile-transfer helper)', () => {
     // Forward compat: a tile that grew an extra (non-feature) layer shape
     // shouldn't crash the worker.
     const tile = makeMinimalTile();
-    (tile.layers as any).push({ name: 'broken', extent: 0, features: undefined });
+    (tile.layers as any).push({
+      name: 'broken',
+      extent: 0,
+      features: undefined,
+    });
     expect(() => collectTransferables(tile)).not.toThrow();
     // The intact layer's buffers still ride along.
     expect(collectTransferables(tile).length).toBe(4);
@@ -213,7 +226,6 @@ describe('collectTransferables (worker tile-transfer helper)', () => {
     expect(collectTransferables(null as any)).toEqual([]);
   });
 });
-
 
 describe('forEachBufferView (shared buffer enumeration)', () => {
   it('visits exactly the buffer set collectTransferables transfers (drift guard)', () => {
@@ -239,7 +251,9 @@ describe('forEachBufferView (shared buffer enumeration)', () => {
       timeOffset: 0,
       numericProps: { speed: new Float32Array(2) },
       vectorProps: { quat: { value: new Float32Array(8), size: 4 } },
-      categoricalProps: { kind: { indices: new Uint16Array(2), categories: ['a'] } },
+      categoricalProps: {
+        kind: { indices: new Uint16Array(2), categories: ['a'] },
+      },
     };
     const tile: Tile = {
       id: { z: 0, x: 0, y: 0, t: 0 },

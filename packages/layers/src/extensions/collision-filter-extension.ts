@@ -113,7 +113,10 @@ function clampPriority(value: number): number {
       `[collisionFilterProps] collisionPriority ${value} is outside deck's ` +
         `[${COLLISION_PRIORITY_MIN}, ${COLLISION_PRIORITY_MAX}] range; clamping.`,
     );
-    return Math.max(COLLISION_PRIORITY_MIN, Math.min(COLLISION_PRIORITY_MAX, value));
+    return Math.max(
+      COLLISION_PRIORITY_MIN,
+      Math.min(COLLISION_PRIORITY_MAX, value),
+    );
   }
   return value;
 }
@@ -165,6 +168,7 @@ export function collisionFilterProps(
     getCollisionPriority: clampPriority(collisionPriority),
   };
   if (collisionGroup !== undefined) props.collisionGroup = collisionGroup;
-  if (collisionTestProps !== undefined) props.collisionTestProps = collisionTestProps;
+  if (collisionTestProps !== undefined)
+    props.collisionTestProps = collisionTestProps;
   return props;
 }

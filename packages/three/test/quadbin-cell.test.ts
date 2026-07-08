@@ -103,7 +103,10 @@ const proj = new LocalEnuProjection(anchor);
 
 describe('buildQuadbinBuffers', () => {
   it('emits 4 verts + 6 indices per decodable cell, RTC origin set', () => {
-    const tile = summaryTile([tileToQuadbin(4, 5, 6), tileToQuadbin(4, 5, 7)], [1, 9]);
+    const tile = summaryTile(
+      [tileToQuadbin(4, 5, 6), tileToQuadbin(4, 5, 7)],
+      [1, 9],
+    );
     const buf = buildQuadbinBuffers([tile], proj, { colorDomain: [0, 10] });
     expect(buf.count).toBe(2);
     expect(buf.positions.length).toBe(2 * 4 * 3);
@@ -118,13 +121,17 @@ describe('buildQuadbinBuffers', () => {
   });
 
   it('colours each cell by the count ramp over the pinned domain', () => {
-    const tile = summaryTile([tileToQuadbin(4, 5, 6), tileToQuadbin(4, 5, 7)], [0, 100]);
+    const tile = summaryTile(
+      [tileToQuadbin(4, 5, 6), tileToQuadbin(4, 5, 7)],
+      [0, 100],
+    );
     const buf = buildQuadbinBuffers([tile], proj, {
       colorDomain: [0, 100],
       colorRange: DEFAULT_QUADBIN_COLOR_RANGE,
     });
     const low = DEFAULT_QUADBIN_COLOR_RANGE[0];
-    const high = DEFAULT_QUADBIN_COLOR_RANGE[DEFAULT_QUADBIN_COLOR_RANGE.length - 1];
+    const high =
+      DEFAULT_QUADBIN_COLOR_RANGE[DEFAULT_QUADBIN_COLOR_RANGE.length - 1];
     // cell 0 (count 0) → first stop; cell 1 (count 100 ≥ hi) → last stop.
     expect(buf.colors[0]).toBeCloseTo(low[0] / 255, 5);
     const c1 = 4 * 4; // cell 1, vert 0
@@ -133,8 +140,14 @@ describe('buildQuadbinBuffers', () => {
 
   it('coverage shrinks the quad toward its centroid', () => {
     const id = tileToQuadbin(4, 5, 6);
-    const full = buildQuadbinBuffers([summaryTile([id], [1])], proj, { colorDomain: [0, 1], coverage: 1 });
-    const half = buildQuadbinBuffers([summaryTile([id], [1])], proj, { colorDomain: [0, 1], coverage: 0.5 });
+    const full = buildQuadbinBuffers([summaryTile([id], [1])], proj, {
+      colorDomain: [0, 1],
+      coverage: 1,
+    });
+    const half = buildQuadbinBuffers([summaryTile([id], [1])], proj, {
+      colorDomain: [0, 1],
+      coverage: 0.5,
+    });
     // origin is the SW corner; with coverage<1 the SW corner moves inward (toward centroid),
     // so its offset magnitude from the full-quad origin grows positive in x.
     const fullW = full.bbox!.max[0] - full.bbox!.min[0];
@@ -143,11 +156,18 @@ describe('buildQuadbinBuffers', () => {
   });
 
   it('auto-domain uses visible cells when colorDomain is null', () => {
-    const tile = summaryTile([tileToQuadbin(4, 5, 6), tileToQuadbin(4, 5, 7)], [2, 8]);
+    const tile = summaryTile(
+      [tileToQuadbin(4, 5, 6), tileToQuadbin(4, 5, 7)],
+      [2, 8],
+    );
     const buf = buildQuadbinBuffers([tile], proj, {});
     // Lowest count maps to first stop, highest (== hi) to last stop.
-    expect(buf.colors[0]).toBeCloseTo(DEFAULT_QUADBIN_COLOR_RANGE[0][0] / 255, 5);
-    const last = DEFAULT_QUADBIN_COLOR_RANGE[DEFAULT_QUADBIN_COLOR_RANGE.length - 1];
+    expect(buf.colors[0]).toBeCloseTo(
+      DEFAULT_QUADBIN_COLOR_RANGE[0][0] / 255,
+      5,
+    );
+    const last =
+      DEFAULT_QUADBIN_COLOR_RANGE[DEFAULT_QUADBIN_COLOR_RANGE.length - 1];
     expect(buf.colors[16]).toBeCloseTo(last[0] / 255, 5);
   });
 

@@ -26,7 +26,6 @@
 
 import type { BinaryFeatures, Tile } from './types.js';
 
-
 /**
  * Visit every typed-array view held by a {@link BinaryFeatures} — THE single
  * enumeration of buffer-bearing fields, shared by `collectTransferables`

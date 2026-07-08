@@ -55,8 +55,16 @@ function twoCorridorTile(widths: number[]): BinaryFeatures {
     positionDimensions: 2,
     // Non-degenerate coords so synthesizeVertexTimes doesn't early-out.
     positions: new Float64Array([
-      0, 0, 0.1, 0.1, // feature 0
-      1, 1, 1.1, 1.1, 1.2, 1.2, // feature 1
+      0,
+      0,
+      0.1,
+      0.1, // feature 0
+      1,
+      1,
+      1.1,
+      1.1,
+      1.2,
+      1.2, // feature 1
     ]),
     startIndices,
     featureIds: new Uint32Array([0, 1]),

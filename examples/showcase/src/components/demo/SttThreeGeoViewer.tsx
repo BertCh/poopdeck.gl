@@ -33,12 +33,12 @@ import React, {
   useMemo,
   useRef,
   useState,
-} from "react";
-import maplibregl from "maplibre-gl";
-import "maplibre-gl/dist/maplibre-gl.css";
-import { useThree, useFrame } from "@react-three/fiber";
-import type { PerspectiveCamera } from "three";
-import type { PlaybackState } from "@poopdeck.gl/react";
+} from 'react';
+import maplibregl from 'maplibre-gl';
+import 'maplibre-gl/dist/maplibre-gl.css';
+import { useThree, useFrame } from '@react-three/fiber';
+import type { PerspectiveCamera } from 'three';
+import type { PlaybackState } from '@poopdeck.gl/react';
 import {
   BasemapOverlay,
   MercatorProjection,
@@ -49,7 +49,7 @@ import {
   type Projection,
   type RGBA,
   type SttSourceRegistry,
-} from "@poopdeck.gl/three";
+} from '@poopdeck.gl/three';
 import {
   SttCanvas,
   SttGlobeBasemap,
@@ -64,10 +64,10 @@ import {
   SttFlowmapLayer,
   SttFlowCorridorLayer,
   SttPolygonLayer,
-} from "@poopdeck.gl/three/r3f";
-import type { Dataset, DatasetType } from "../../types";
-import { useReducedMotion } from "../../lib/reducedMotion";
-import Legend from "../Legend";
+} from '@poopdeck.gl/three/r3f';
+import type { Dataset, DatasetType } from '../../types';
+import { useReducedMotion } from '../../lib/reducedMotion';
+import Legend from '../Legend';
 
 /** App cyan — the shared constant fallback colour across the geo layers. */
 const DEFAULT_COLOR: RGBA = [31, 186, 214, 255];
@@ -78,7 +78,7 @@ const DEFAULT_RAMP: RGBA[] = [
 ];
 /** CARTO's free dark style — the showcase's maplibre default (needs no token). */
 const BASEMAP_STYLE =
-  "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json";
+  'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json';
 
 /**
  * Dataset types the Three geo path can render today (a subset of `buildDemoLayers`
@@ -86,17 +86,17 @@ const BASEMAP_STYLE =
  * (deck composite) and `av` (own {@link AvThreeViewer}) are excluded.
  */
 const THREE_GEO_TYPES = new Set<DatasetType>([
-  "point",
-  "trip-heads",
-  "path",
-  "trips",
-  "arc",
-  "column",
-  "summary",
-  "quadbin-summary",
-  "flowmap",
-  "flowmap-bundled",
-  "polygon",
+  'point',
+  'trip-heads',
+  'path',
+  'trips',
+  'arc',
+  'column',
+  'summary',
+  'quadbin-summary',
+  'flowmap',
+  'flowmap-bundled',
+  'polygon',
 ]);
 
 /**
@@ -110,16 +110,27 @@ export function datasetSupportsThree(dataset: Dataset): boolean {
 
 /** categorical | ramp | constant — structurally identical to every Stt*Layer colorMode. */
 type GeoColorMode =
-  | { type: "categorical"; property: string; mapping: Record<string, RGBA>; fallback: RGBA }
-  | { type: "ramp"; property: string; domain: [number, number]; range: RGBA[]; fallback: RGBA }
-  | { type: "constant"; color: RGBA };
+  | {
+      type: 'categorical';
+      property: string;
+      mapping: Record<string, RGBA>;
+      fallback: RGBA;
+    }
+  | {
+      type: 'ramp';
+      property: string;
+      domain: [number, number];
+      range: RGBA[];
+      fallback: RGBA;
+    }
+  | { type: 'constant'; color: RGBA };
 
 /** Resolve a per-feature colour the way `buildDemoLayers` picks the deck colour:
  *  per-vertex gradient → categorical `colorProperty`+`colorMapping` → constant. */
 function featureColorMode(ds: Dataset, constFallback: RGBA): GeoColorMode {
   if (ds.tripGradient) {
     return {
-      type: "ramp",
+      type: 'ramp',
       property: ds.tripGradient.property,
       domain: ds.tripGradient.domain,
       range: ds.tripGradient.colors as RGBA[],
@@ -128,17 +139,18 @@ function featureColorMode(ds: Dataset, constFallback: RGBA): GeoColorMode {
   }
   if (ds.colorProperty && ds.colorMapping) {
     return {
-      type: "categorical",
+      type: 'categorical',
       property: ds.colorProperty,
       mapping: ds.colorMapping as Record<string, RGBA>,
       fallback: (ds.colorMappingDefault as RGBA | undefined) ?? constFallback,
     };
   }
-  return { type: "constant", color: constFallback };
+  return { type: 'constant', color: constFallback };
 }
 
-const asRGBA = (c: [number, number, number, number] | undefined): RGBA | undefined =>
-  c as RGBA | undefined;
+const asRGBA = (
+  c: [number, number, number, number] | undefined,
+): RGBA | undefined => c as RGBA | undefined;
 const constColor = (
   c: [number, number, number, number] | undefined,
   fallback: RGBA,
@@ -152,21 +164,25 @@ const constColor = (
  */
 function renderGeoLayers(ds: Dataset, perfMode: boolean): React.ReactNode {
   switch (ds.type) {
-    case "point": {
-      const sizeUnits = ds.radiusUnits === "pixels" ? "pixels" : "meters";
+    case 'point': {
+      const sizeUnits = ds.radiusUnits === 'pixels' ? 'pixels' : 'meters';
       const hasCat = !!(ds.colorProperty && ds.colorMapping);
       return (
         <SttPointCloudLayer
           id={ds.id}
           url={ds.url}
-          mode={ds.cumulative ? "cumulative" : ds.wakeLength ? "wake" : "window"}
+          mode={
+            ds.cumulative ? 'cumulative' : ds.wakeLength ? 'wake' : 'window'
+          }
           timeWindow={ds.timeWindow}
           sizeUnits={sizeUnits}
-          pointSize={ds.radius ?? (sizeUnits === "pixels" ? 3 : 40)}
+          pointSize={ds.radius ?? (sizeUnits === 'pixels' ? 3 : 40)}
           colorProperty={hasCat ? ds.colorProperty : undefined}
-          colorMapping={hasCat ? (ds.colorMapping as Record<string, RGBA>) : undefined}
+          colorMapping={
+            hasCat ? (ds.colorMapping as Record<string, RGBA>) : undefined
+          }
           colorMappingDefault={asRGBA(ds.colorMappingDefault) ?? DEFAULT_COLOR}
-          elevationProperty={ds.use3D ? ds.elevationProperty ?? "z" : null}
+          elevationProperty={ds.use3D ? (ds.elevationProperty ?? 'z') : null}
           elevationScale={ds.elevationScale ?? 1}
           wakeLength={ds.wakeLength}
           wakeTailScale={ds.wakeTailScale}
@@ -175,7 +191,7 @@ function renderGeoLayers(ds: Dataset, perfMode: boolean): React.ReactNode {
         />
       );
     }
-    case "trip-heads":
+    case 'trip-heads':
       return (
         <SttTripHeadsLayer
           id={ds.id}
@@ -185,18 +201,21 @@ function renderGeoLayers(ds: Dataset, perfMode: boolean): React.ReactNode {
           opacity={ds.opacity ?? 0.9}
         />
       );
-    case "path":
+    case 'path':
       return (
         <SttPathLayer
           id={ds.id}
           url={ds.url}
-          colorMode={featureColorMode(ds, constColor(ds.pathColor, DEFAULT_COLOR))}
-          widthPx={typeof ds.pathWidth === "number" ? ds.pathWidth : 3}
+          colorMode={featureColorMode(
+            ds,
+            constColor(ds.pathColor, DEFAULT_COLOR),
+          )}
+          widthPx={typeof ds.pathWidth === 'number' ? ds.pathWidth : 3}
           timeWindow={ds.timeWindow}
           opacity={ds.opacity ?? 0.8}
         />
       );
-    case "trips": {
+    case 'trips': {
       // Static-geometry value-matrix corridors (flowMatrix / flowStroke) →
       // FlowCorridorLayer (width + colour animate from the per-segment matrix).
       // Everything else is a trailing AnimatedTripsLayer.
@@ -206,7 +225,9 @@ function renderGeoLayers(ds: Dataset, perfMode: boolean): React.ReactNode {
             id={ds.id}
             url={ds.url}
             domain={ds.tripGradient?.domain ?? ds.summaryColorDomain ?? [0, 60]}
-            ramp={(ds.tripGradient?.colors as RGBA[] | undefined) ?? DEFAULT_RAMP}
+            ramp={
+              (ds.tripGradient?.colors as RGBA[] | undefined) ?? DEFAULT_RAMP
+            }
             minWidthPx={ds.widthMinPixels ?? 1}
             maxWidthPx={ds.widthMaxPixels ?? 8}
             opacity={ds.opacity ?? 0.85}
@@ -215,8 +236,11 @@ function renderGeoLayers(ds: Dataset, perfMode: boolean): React.ReactNode {
           <SttTripsLayer
             id={ds.id}
             url={ds.url}
-            colorMode={featureColorMode(ds, constColor(ds.tripColor, DEFAULT_COLOR))}
-            widthPx={typeof ds.tripWidth === "number" ? ds.tripWidth : 4}
+            colorMode={featureColorMode(
+              ds,
+              constColor(ds.tripColor, DEFAULT_COLOR),
+            )}
+            widthPx={typeof ds.tripWidth === 'number' ? ds.tripWidth : 4}
             trailLength={ds.trailLength ?? 60000}
             trailFade={ds.fadeTrail === false ? 0 : 1}
             opacity={ds.opacity ?? 0.85}
@@ -241,29 +265,40 @@ function renderGeoLayers(ds: Dataset, perfMode: boolean): React.ReactNode {
       }
       return primary;
     }
-    case "arc":
+    case 'arc':
       return (
         <SttArcLayer
           id={ds.id}
           url={ds.url}
-          sourceColor={{ type: "constant", color: constColor(ds.arcSourceColor, [56, 196, 232, 210]) }}
-          targetColor={{ type: "constant", color: constColor(ds.arcTargetColor, [255, 142, 64, 220]) }}
+          sourceColor={{
+            type: 'constant',
+            color: constColor(ds.arcSourceColor, [56, 196, 232, 210]),
+          }}
+          targetColor={{
+            type: 'constant',
+            color: constColor(ds.arcTargetColor, [255, 142, 64, 220]),
+          }}
           widthPx={ds.arcWidth ?? 1.5}
           height={ds.arcHeight ?? 1}
           // On the globe an arc should ride a great circle; the dataset flag wins,
           // else default to greatCircle for globe demos and parabolic for flat.
-          shape={(ds.arcGreatCircle ?? ds.useGlobe) ? "greatCircle" : "parabolic"}
+          shape={
+            (ds.arcGreatCircle ?? ds.useGlobe) ? 'greatCircle' : 'parabolic'
+          }
           timeWindow={ds.timeWindow}
           fadeInDuration={ds.fadeInDuration ?? 300}
           opacity={ds.opacity ?? 0.85}
         />
       );
-    case "column":
+    case 'column':
       return (
         <SttColumnLayer
           id={ds.id}
           url={ds.url}
-          colorMode={featureColorMode(ds, constColor(ds.columnFillColor, [253, 128, 93, 220]))}
+          colorMode={featureColorMode(
+            ds,
+            constColor(ds.columnFillColor, [253, 128, 93, 220]),
+          )}
           radius={ds.columnRadius ?? 100}
           diskResolution={ds.columnDiskResolution ?? 12}
           elevationProperty={ds.elevationProperty ?? null}
@@ -272,13 +307,13 @@ function renderGeoLayers(ds: Dataset, perfMode: boolean): React.ReactNode {
           opacity={ds.opacity ?? 0.9}
         />
       );
-    case "summary":
-    case "quadbin-summary": {
+    case 'summary':
+    case 'quadbin-summary': {
       // Use the first weight-toggle option (the default view) if the demo declares
       // one, else its single-weight settings.
       const toggle = ds.summaryToggleWeights?.[0];
       const weightProperty =
-        toggle?.weightProperty ?? ds.summaryWeightProperty ?? "count";
+        toggle?.weightProperty ?? ds.summaryWeightProperty ?? 'count';
       const colorRange = (toggle?.colorRange ?? ds.summaryColorRange) as
         | RGBA[]
         | undefined;
@@ -292,14 +327,14 @@ function renderGeoLayers(ds: Dataset, perfMode: boolean): React.ReactNode {
         coverage: ds.summaryCoverage ?? 0.92,
         opacity: 0.85,
       };
-      return ds.type === "summary" ? (
+      return ds.type === 'summary' ? (
         <SttH3Layer {...common} />
       ) : (
         <SttQuadbinLayer {...common} />
       );
     }
-    case "flowmap":
-    case "flowmap-bundled":
+    case 'flowmap':
+    case 'flowmap-bundled':
       // No GPU edge-bundling in the Three engine yet — both render as flowmap.gl
       // tapered arrows (the bundled variant falls back to straight arrows).
       return (
@@ -318,12 +353,15 @@ function renderGeoLayers(ds: Dataset, perfMode: boolean): React.ReactNode {
           opacity={ds.opacity ?? 0.9}
         />
       );
-    case "polygon":
+    case 'polygon':
       return (
         <SttPolygonLayer
           id={ds.id}
           url={ds.url}
-          colorMode={featureColorMode(ds, constColor(ds.polygonFillColor, [31, 186, 214, 180]))}
+          colorMode={featureColorMode(
+            ds,
+            constColor(ds.polygonFillColor, [31, 186, 214, 180]),
+          )}
           mode="window"
           timeWindow={ds.timeWindow}
           opacity={ds.opacity ?? 0.8}
@@ -353,10 +391,15 @@ function BasemapSync(props: {
   const overlayRef = useRef<BasemapOverlay | null>(null);
 
   useEffect(() => {
-    const overlay = new BasemapOverlay(map as unknown as BasemapLike, projection, camera, {
-      viewportHeight: Math.max(1, height),
-      enabled,
-    });
+    const overlay = new BasemapOverlay(
+      map as unknown as BasemapLike,
+      projection,
+      camera,
+      {
+        viewportHeight: Math.max(1, height),
+        enabled,
+      },
+    );
     overlayRef.current = overlay;
     overlay.resize();
     return () => {
@@ -438,7 +481,7 @@ const SttThreeGeoViewer: React.FC<SttThreeGeoViewerProps> = ({
   const projection = useMemo<Projection>(
     () =>
       isGlobe
-        ? new GlobeProjection(anchor, EARTH_RADIUS, { datum: "wgs84" })
+        ? new GlobeProjection(anchor, EARTH_RADIUS, { datum: 'wgs84' })
         : new MercatorProjection(anchor),
     [isGlobe, anchor],
   );
@@ -473,29 +516,29 @@ const SttThreeGeoViewer: React.FC<SttThreeGeoViewerProps> = ({
     // Per-dataset basemap tuning (same intent as DemoViewer's Mapbox onLoad):
     // hide labels / darken land / tint roads. Type-based so it survives style
     // revisions; wrapped because the CARTO style's layer set differs from Mapbox.
-    m.on("style.load", () => {
+    m.on('style.load', () => {
       try {
         const hideLabels = dataset.basemapHideLabels;
         const bg = dataset.basemapBackgroundColor;
         const roadColor = dataset.basemapRoadColor;
         if (!hideLabels && !bg && !roadColor) return;
         for (const layer of m.getStyle().layers ?? []) {
-          if (hideLabels && layer.type === "symbol") {
-            m.setLayoutProperty(layer.id, "visibility", "none");
+          if (hideLabels && layer.type === 'symbol') {
+            m.setLayoutProperty(layer.id, 'visibility', 'none');
           }
           if (bg) {
-            if (layer.type === "background") {
-              m.setPaintProperty(layer.id, "background-color", bg);
-            } else if (layer.type === "fill" && /land|earth/i.test(layer.id)) {
-              m.setPaintProperty(layer.id, "fill-color", bg);
+            if (layer.type === 'background') {
+              m.setPaintProperty(layer.id, 'background-color', bg);
+            } else if (layer.type === 'fill' && /land|earth/i.test(layer.id)) {
+              m.setPaintProperty(layer.id, 'fill-color', bg);
             }
           }
           if (
             roadColor &&
-            layer.type === "line" &&
+            layer.type === 'line' &&
             /road|street|bridge|tunnel/i.test(layer.id)
           ) {
-            m.setPaintProperty(layer.id, "line-color", roadColor);
+            m.setPaintProperty(layer.id, 'line-color', roadColor);
           }
         }
       } catch {
@@ -523,7 +566,7 @@ const SttThreeGeoViewer: React.FC<SttThreeGeoViewerProps> = ({
         <div
           ref={basemapContainerRef}
           className="absolute inset-0"
-          style={{ visibility: showBasemap ? "visible" : "hidden" }}
+          style={{ visibility: showBasemap ? 'visible' : 'hidden' }}
         />
       )}
 
@@ -541,7 +584,7 @@ const SttThreeGeoViewer: React.FC<SttThreeGeoViewerProps> = ({
         // Flat: no engine ground + transparent clear so the maplibre canvas shows
         // through. Globe: the SttGlobeBasemap sphere is the surface; clear to space.
         ground={false}
-        background={isGlobe ? "#05070d" : "transparent"}
+        background={isGlobe ? '#05070d' : 'transparent'}
         atmosphere={isGlobe ? atmosphere : false}
         // Geo archives are large (a taxi-trips archive is tens of millions of
         // segments at native zoom over its full span); the eager load-everything
@@ -552,12 +595,16 @@ const SttThreeGeoViewer: React.FC<SttThreeGeoViewerProps> = ({
         initialViewState={initialViewState}
         headingDeg={dataset.initialViewState.bearing ?? 0}
         pitchDeg={dataset.initialViewState.pitch ?? 45}
-        style={{ position: "absolute", inset: 0 }}
+        style={{ position: 'absolute', inset: 0 }}
       >
         {renderGeoLayers(dataset, false)}
         {isGlobe && <SttGlobeBasemap color={globeColor} />}
         {!isGlobe && map && (
-          <BasemapSync map={map} projection={projection} enabled={showBasemap} />
+          <BasemapSync
+            map={map}
+            projection={projection}
+            enabled={showBasemap}
+          />
         )}
       </SttCanvas>
 
@@ -572,11 +619,11 @@ const SttThreeGeoViewer: React.FC<SttThreeGeoViewerProps> = ({
             title="Toggle the physically-based atmosphere / sky (WebGPU only)"
             className={`rounded-md border px-2.5 py-1 text-xs backdrop-blur-md transition-colors ${
               atmosphere
-                ? "border-cyan-300/60 bg-cyan-400/20 text-cyan-100"
-                : "border-white/10 bg-black/55 text-slate-300 hover:bg-white/5"
+                ? 'border-cyan-300/60 bg-cyan-400/20 text-cyan-100'
+                : 'border-white/10 bg-black/55 text-slate-300 hover:bg-white/5'
             }`}
           >
-            {atmosphere ? "Atmosphere" : "No atmosphere"}
+            {atmosphere ? 'Atmosphere' : 'No atmosphere'}
           </button>
         ) : (
           <button
@@ -586,11 +633,11 @@ const SttThreeGeoViewer: React.FC<SttThreeGeoViewerProps> = ({
             title="Toggle the street basemap under the data"
             className={`rounded-md border px-2.5 py-1 text-xs backdrop-blur-md transition-colors ${
               showBasemap
-                ? "border-cyan-300/60 bg-cyan-400/20 text-cyan-100"
-                : "border-white/10 bg-black/55 text-slate-300 hover:bg-white/5"
+                ? 'border-cyan-300/60 bg-cyan-400/20 text-cyan-100'
+                : 'border-white/10 bg-black/55 text-slate-300 hover:bg-white/5'
             }`}
           >
-            {showBasemap ? "Basemap" : "No basemap"}
+            {showBasemap ? 'Basemap' : 'No basemap'}
           </button>
         )}
       </div>

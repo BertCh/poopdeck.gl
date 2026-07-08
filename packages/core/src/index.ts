@@ -53,7 +53,11 @@ export {
 } from './palettes.js';
 
 // ─── Archive / tileset / tile decoding ──────────────────────────────────────
-export { STTArchive, estimateTileSize, KNOWN_MANIFEST_CAPABILITIES } from './archive.js';
+export {
+  STTArchive,
+  estimateTileSize,
+  KNOWN_MANIFEST_CAPABILITIES,
+} from './archive.js';
 // Packed-format manifest contract (mirrors Rust `pack::Manifest`; schema at
 // docs/spec/manifest.schema.json). `ManifestSchemaTemplate` is the
 // formatVersion-2 `schemas` table entry (spec §3.2).

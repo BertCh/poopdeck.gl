@@ -4,7 +4,7 @@
  * rendered headings (including duplicate dedupe → `#usage-1`), so TOC anchors
  * always match the DOM ids. The slugger is reset per call for that parity.
  */
-import GithubSlugger from "github-slugger";
+import GithubSlugger from 'github-slugger';
 
 export interface TocHeading {
   level: 2 | 3;
@@ -15,9 +15,9 @@ export interface TocHeading {
 /** Strip inline markdown (code spans, links, emphasis) for display text. */
 function plainText(md: string): string {
   return md
-    .replace(/`([^`]*)`/g, "$1")
-    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
-    .replace(/[*_]{1,2}([^*_]+)[*_]{1,2}/g, "$1")
+    .replace(/`([^`]*)`/g, '$1')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/[*_]{1,2}([^*_]+)[*_]{1,2}/g, '$1')
     .trim();
 }
 
@@ -25,8 +25,8 @@ export function extractHeadings(raw: string): TocHeading[] {
   const slugger = new GithubSlugger();
   const headings: TocHeading[] = [];
   let inFence = false;
-  let fenceMarker = "";
-  for (const line of raw.split("\n")) {
+  let fenceMarker = '';
+  for (const line of raw.split('\n')) {
     const fence = line.match(/^\s*(```+|~~~+)/);
     if (fence) {
       if (!inFence) {

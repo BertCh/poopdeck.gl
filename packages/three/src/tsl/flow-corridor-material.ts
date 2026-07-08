@@ -43,7 +43,11 @@ import {
   cameraProjectionMatrix,
   type UniformNode,
 } from './nodes.js';
-import { TimeFilterUniforms, windowAlphaNode, updateTimeFilterUniforms } from './time-filter.js';
+import {
+  TimeFilterUniforms,
+  windowAlphaNode,
+  updateTimeFilterUniforms,
+} from './time-filter.js';
 import type { TimeFilterParams } from './time-filter-math.js';
 
 // Loose TSL builders not surfaced on the ./nodes seam (texture sampling), mirroring
@@ -143,7 +147,12 @@ export function createFlowCorridorMaterial(
   const off = perp.mul(side).mul(widthPx).div(flow.viewport).mul(clip.w);
 
   const material = new MeshBasicNodeMaterial();
-  material.vertexNode = vec4(clip.x.add(off.x), clip.y.add(off.y), clip.z, clip.w);
+  material.vertexNode = vec4(
+    clip.x.add(off.x),
+    clip.y.add(off.y),
+    clip.z,
+    clip.w,
+  );
 
   // ── FRAGMENT: ramp colour by the (re-sampled) blended value + opacity ────────
   // Re-sample in the fragment stage so the ramp lookup is per-pixel-smooth and we

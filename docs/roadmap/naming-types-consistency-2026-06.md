@@ -75,8 +75,8 @@ Each former open item was either **made** or **counted out** with rationale:
 
 The codebase is structurally healthy and the wire format is sound. The dominant weakness was that
 **consistency across the Rust ↔ TS ↔ Python ↔ docs boundary was maintained by hand and by prose**
-(`// MUST stay in lockstep`) with almost no mechanical enforcement — so drift was a matter of *when*,
-not *if*, and had already happened (the AV `MAP_COLORS` palette silently diverged in hue between the
+(`// MUST stay in lockstep`) with almost no mechanical enforcement — so drift was a matter of _when_,
+not _if_, and had already happened (the AV `MAP_COLORS` palette silently diverged in hue between the
 Python generator and the TS showcase). Three risk clusters drove the plan: duplicated constants with
 no parity test; spec↔implementation drift (shipped features never reaching the normative docs); and
 renderer vocabulary forks (`timeWindow` vs `windowHalf`, `SplatLayer` vs `SurfelLayer`, keyed vs
@@ -87,7 +87,7 @@ tests plus the F9 flag-documentation gates. Nothing on this audit remains schedu
 
 - **Wire tokens are frozen** by deployed R2 archives + the published spec: do **not** rename wire
   columns (`vertex_time`/`vertex_value`), the `.stt` suffix, or renumber compression bytes. Fix docs
-  + in-memory names; add aliases only.
+  - in-memory names; add aliases only.
 - **`u64`→`i64`** on `TimeRange`/`TileId` is a breaking `stt-core` change — counted out (Phase 5,
   above): the documented non-negative invariant shipped instead; revisit only at a semver-major, and
   it must not contradict the `Int64` payload columns.
@@ -105,6 +105,6 @@ tests plus the F9 flag-documentation gates. Nothing on this audit remains schedu
 
 ---
 
-*Historical detail — the full 27-finding catalog, the F1–F12 formalization table, and the 13-item
+_Historical detail — the full 27-finding catalog, the F1–F12 formalization table, and the 13-item
 quick-wins list — is executed history as of Phases 0–4; recover it from the working-tree diff and
-git history rather than re-reading it here.*
+git history rather than re-reading it here._

@@ -86,7 +86,12 @@ export function lerpAngle(a: number, b: number, f: number): number {
 }
 
 /** Lerp a dimension that may be NaN (absent column) — fall back to a default. */
-export function lerpDim(a: number, b: number, f: number, fallback: number): number {
+export function lerpDim(
+  a: number,
+  b: number,
+  f: number,
+  fallback: number,
+): number {
   const af = Number.isFinite(a);
   const bf = Number.isFinite(b);
   if (af && bf) return lerp(a, b, f);
@@ -95,7 +100,11 @@ export function lerpDim(a: number, b: number, f: number, fallback: number): numb
   return fallback;
 }
 
-function readCategorical(binary: BinaryFeatures, prop: string, i: number): string {
+function readCategorical(
+  binary: BinaryFeatures,
+  prop: string,
+  i: number,
+): string {
   const cat = binary.categoricalProps[prop];
   if (cat) {
     const idx = cat.indices[i];
@@ -119,7 +128,10 @@ function resolveColor(
 }
 
 /** Pool every loaded tile's object snapshots into a `track_id`-keyed, sorted index. */
-export function buildTrackIndex(tiles: Tile[], opts: BoxTrackOptions): Map<string, Track> {
+export function buildTrackIndex(
+  tiles: Tile[],
+  opts: BoxTrackOptions,
+): Map<string, Track> {
   const tracks = new Map<string, Track>();
   let synthetic = 0;
 
@@ -144,14 +156,19 @@ export function buildTrackIndex(tiles: Tile[], opts: BoxTrackOptions): Map<strin
         let key: string;
         if (trackCol) {
           const idx = trackCol.indices[i];
-          key = idx === 0xffff ? `∅${synthetic++}` : (trackCol.categories[idx] ?? `∅${synthetic++}`);
+          key =
+            idx === 0xffff
+              ? `∅${synthetic++}`
+              : (trackCol.categories[idx] ?? `∅${synthetic++}`);
         } else {
           key = `∅${synthetic++}`;
         }
 
         let track = tracks.get(key);
         if (!track) {
-          const category = opts.colorProperty ? readCategorical(binary, opts.colorProperty, i) : '';
+          const category = opts.colorProperty
+            ? readCategorical(binary, opts.colorProperty, i)
+            : '';
           track = {
             trackId: trackCol ? key : '',
             times: [],
@@ -163,7 +180,11 @@ export function buildTrackIndex(tiles: Tile[], opts: BoxTrackOptions): Map<strin
             width: [],
             height: [],
             speed: [],
-            color: resolveColor(category, opts.colorMapping, opts.colorMappingDefault),
+            color: resolveColor(
+              category,
+              opts.colorMapping,
+              opts.colorMappingDefault,
+            ),
             label: readCategorical(binary, opts.labelProperty, i),
             category,
             singleton: false,
@@ -200,7 +221,17 @@ export function buildTrackIndex(tiles: Tile[], opts: BoxTrackOptions): Map<strin
   return tracks;
 }
 
-const PARALLEL_KEYS = ['times', 'lon', 'lat', 'alt', 'heading', 'length', 'width', 'height', 'speed'] as const;
+const PARALLEL_KEYS = [
+  'times',
+  'lon',
+  'lat',
+  'alt',
+  'heading',
+  'length',
+  'width',
+  'height',
+  'speed',
+] as const;
 
 function reorder(track: Track, order: number[]): void {
   for (const k of PARALLEL_KEYS) {
@@ -219,7 +250,11 @@ function dedupeByTime(track: Track): void {
 }
 
 /** Interpolate one track's box pose at absolute `now`, or null when inactive. */
-export function sampleTrack(track: Track, now: number, defaults: BoxDefaults): BoxSample | null {
+export function sampleTrack(
+  track: Track,
+  now: number,
+  defaults: BoxDefaults,
+): BoxSample | null {
   const { times } = track;
   const n = times.length;
   if (n === 0) return null;
@@ -248,22 +283,36 @@ export function sampleTrack(track: Track, now: number, defaults: BoxDefaults): B
     frac = denom > 0 ? (c - times[lo]) / denom : 0;
   }
 
-  const length = lerpDim(track.length[lo], track.length[hi], frac, defaults.length);
+  const length = lerpDim(
+    track.length[lo],
+    track.length[hi],
+    frac,
+    defaults.length,
+  );
   const width = lerpDim(track.width[lo], track.width[hi], frac, defaults.width);
-  const height = lerpDim(track.height[lo], track.height[hi], frac, defaults.height);
+  const height = lerpDim(
+    track.height[lo],
+    track.height[hi],
+    frac,
+    defaults.height,
+  );
   const speedLo = track.speed[lo];
   const speedHi = track.speed[hi];
   const speed =
-    Number.isFinite(speedLo) || Number.isFinite(speedHi) ? lerpDim(speedLo, speedHi, frac, 0) : NaN;
+    Number.isFinite(speedLo) || Number.isFinite(speedHi)
+      ? lerpDim(speedLo, speedHi, frac, 0)
+      : NaN;
 
   let alpha = 1;
   if (defaults.fadeIn > 0) {
     const age = now - first;
-    if (age < defaults.fadeIn) alpha *= Math.max(0, Math.min(1, age / defaults.fadeIn));
+    if (age < defaults.fadeIn)
+      alpha *= Math.max(0, Math.min(1, age / defaults.fadeIn));
   }
   if (defaults.fadeOut > 0) {
     const remaining = last - now;
-    if (remaining < defaults.fadeOut) alpha *= Math.max(0, Math.min(1, remaining / defaults.fadeOut));
+    if (remaining < defaults.fadeOut)
+      alpha *= Math.max(0, Math.min(1, remaining / defaults.fadeOut));
   }
 
   return {

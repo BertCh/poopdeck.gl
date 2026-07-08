@@ -144,7 +144,9 @@ describe('referenced packed datasets are well-formed', () => {
       const dir = manifestPath.slice(0, manifestPath.lastIndexOf('/') + 1);
       for (const ref of [manifest.directory!, ...manifest.packs!]) {
         expect(ref.key, `${url} ref.key`).toBeTruthy();
-        expect(ref.key!.startsWith('packs/') || ref.key!.startsWith('index/')).toBe(true);
+        expect(
+          ref.key!.startsWith('packs/') || ref.key!.startsWith('index/'),
+        ).toBe(true);
         expect(
           existsSync(dir + ref.key!),
           `${url} → sibling object ${ref.key} missing on disk`,

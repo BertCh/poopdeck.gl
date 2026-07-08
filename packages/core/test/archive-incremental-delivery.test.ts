@@ -18,14 +18,20 @@ import type { Tile, TileId } from '../src/types';
 import { packedFromSingleFile, packedFetch } from './helpers/packed-fixture';
 import type { InMemoryPackedDataset } from './helpers/packed-fixture';
 
-const FIXTURE = fileURLToPath(new URL('./fixtures/sample.stt', import.meta.url));
+const FIXTURE = fileURLToPath(
+  new URL('./fixtures/sample.stt', import.meta.url),
+);
 const BASE = packedFromSingleFile(new Uint8Array(readFileSync(FIXTURE)));
 
 /**
  * Derive a two-tile / two-pack dataset from the transcoded fixture: tile B is
  * tile A's blob byte-for-byte, registered at x+1 in its own pack object.
  */
-function twoPackDataset(): { ds: InMemoryPackedDataset; idA: TileId; idB: TileId } {
+function twoPackDataset(): {
+  ds: InMemoryPackedDataset;
+  idA: TileId;
+  idB: TileId;
+} {
   const manifest = JSON.parse(
     new TextDecoder().decode(BASE.objects.get('manifest.json')!),
   );
@@ -47,7 +53,11 @@ function twoPackDataset(): { ds: InMemoryPackedDataset; idA: TileId; idB: TileId
     new TextEncoder().encode(
       JSON.stringify({
         ...manifest,
-        directory: { ...manifest.directory, key: 'index/directory.sttd', length: dir.length },
+        directory: {
+          ...manifest.directory,
+          key: 'index/directory.sttd',
+          length: dir.length,
+        },
         packs: [
           { key: 'packs/pack-a.sttp', length: packBytes.length },
           { key: 'packs/pack-b.sttp', length: blob.length },
@@ -56,7 +66,12 @@ function twoPackDataset(): { ds: InMemoryPackedDataset; idA: TileId; idB: TileId
     ),
   );
 
-  const toId = (e: typeof a): TileId => ({ z: e.zoom, x: e.x, y: e.y, t: e.timeStart });
+  const toId = (e: typeof a): TileId => ({
+    z: e.zoom,
+    x: e.x,
+    y: e.y,
+    t: e.timeStart,
+  });
   return {
     ds: { objects, manifestUrl: BASE.manifestUrl },
     idA: toId(a),
@@ -70,7 +85,10 @@ describe('STTArchive.getTiles incremental delivery', () => {
     const base = packedFetch(ds);
     let releaseGate!: () => void;
     const gate = new Promise<void>((r) => (releaseGate = r));
-    const gatedFetch: typeof fetch = (async (url: string, init?: RequestInit) => {
+    const gatedFetch: typeof fetch = (async (
+      url: string,
+      init?: RequestInit,
+    ) => {
       if (url.includes('packs/pack-b')) await gate;
       return base(url, init);
     }) as typeof fetch;

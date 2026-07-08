@@ -28,19 +28,27 @@ import { unzstdSync } from '../src/compression';
 import { STTArchive } from '../src/archive';
 import { GeometryType } from '../src/types';
 
-const FIXTURE_DIR = fileURLToPath(new URL('./fixtures/packed-golden/', import.meta.url));
+const FIXTURE_DIR = fileURLToPath(
+  new URL('./fixtures/packed-golden/', import.meta.url),
+);
 
 const ALIGNED_FRAME_FLAG = 0x8000;
 
 /** Read the golden fixture's first blob (tile k=0: packId 0, offset 0). */
 function goldenPayload(): Uint8Array {
-  const manifest = JSON.parse(readFileSync(FIXTURE_DIR + 'manifest.json', 'utf8'));
-  let dirBytes = new Uint8Array(readFileSync(FIXTURE_DIR + manifest.directory.key));
+  const manifest = JSON.parse(
+    readFileSync(FIXTURE_DIR + 'manifest.json', 'utf8'),
+  );
+  let dirBytes = new Uint8Array(
+    readFileSync(FIXTURE_DIR + manifest.directory.key),
+  );
   if (manifest.directory.encoding === 'zstd') dirBytes = unzstdSync(dirBytes);
   const entries = decodeDirectory(dirBytes);
   const entry = entries.find((e) => e.packId === 0 && e.offset === 0)!;
   expect(entry).toBeDefined();
-  const pack = new Uint8Array(readFileSync(FIXTURE_DIR + manifest.packs[0].key));
+  const pack = new Uint8Array(
+    readFileSync(FIXTURE_DIR + manifest.packs[0].key),
+  );
   const blob = pack.subarray(entry.offset, entry.offset + entry.length);
   const payload = unzstdSync(blob);
   // Copy into a fresh buffer at byteOffset 0 so alignment within the
@@ -52,7 +60,11 @@ function goldenPayload(): Uint8Array {
 /** Walk a frame, honouring the aligned-frame padding rule, and return each
  *  layer's `[name, ipcStart, ipcLen]`. */
 function walkFrame(payload: Uint8Array): Array<[string, number, number]> {
-  const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
+  const view = new DataView(
+    payload.buffer,
+    payload.byteOffset,
+    payload.byteLength,
+  );
   const rawCount = view.getUint16(0, true);
   const aligned = (rawCount & ALIGNED_FRAME_FLAG) !== 0;
   const count = rawCount & ~ALIGNED_FRAME_FLAG;
@@ -143,7 +155,8 @@ describe('directory at-rest encoding', () => {
         const m = mutateManifest(JSON.parse(new TextDecoder().decode(bytes)));
         bytes = new TextEncoder().encode(JSON.stringify(m));
       }
-      const range = (init?.headers as Record<string, string> | undefined)?.Range;
+      const range = (init?.headers as Record<string, string> | undefined)
+        ?.Range;
       const m = /bytes=(\d+)-(\d+)/.exec(range ?? '');
       if (!m) {
         return {
@@ -151,7 +164,10 @@ describe('directory at-rest encoding', () => {
           status: 200,
           statusText: 'OK',
           arrayBuffer: async () =>
-            bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
+            bytes.buffer.slice(
+              bytes.byteOffset,
+              bytes.byteOffset + bytes.byteLength,
+            ),
         };
       }
       const start = Number(m[1]);
@@ -166,7 +182,7 @@ describe('directory at-rest encoding', () => {
     }) as unknown as typeof fetch;
   }
 
-  it("decodes a zstd-encoded directory declared via directory.encoding", async () => {
+  it('decodes a zstd-encoded directory declared via directory.encoding', async () => {
     const archive = new STTArchive({
       url: 'https://cdn.example/data/packed-golden/manifest.json',
       fetch: fixtureFetch(),
@@ -183,7 +199,9 @@ describe('directory at-rest encoding', () => {
         directory: { ...m.directory, encoding: 'br' },
       })),
     });
-    await expect(archive.getIndex()).rejects.toThrow(/unknown directory encoding/);
+    await expect(archive.getIndex()).rejects.toThrow(
+      /unknown directory encoding/,
+    );
   });
 
   it('still validates the at-rest (compressed) length against directory.length', async () => {

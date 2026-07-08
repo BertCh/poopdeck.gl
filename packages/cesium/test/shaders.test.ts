@@ -16,7 +16,10 @@ describe('timeFilterAlphaGlsl (Cesium consumes the same ALPHA_EXPR as deck)', ()
   });
 
   it('honors a nameMap to the host shader vars', () => {
-    const s = timeFilterAlphaGlsl('cumulative', { currentTime: 'czm_frameTime', startTime: 'v_start' });
+    const s = timeFilterAlphaGlsl('cumulative', {
+      currentTime: 'czm_frameTime',
+      startTime: 'v_start',
+    });
     expect(s).toContain('czm_frameTime');
     expect(s).toContain('v_start');
     expect(s).not.toContain('startTime');

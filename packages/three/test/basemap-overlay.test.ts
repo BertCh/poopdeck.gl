@@ -36,7 +36,13 @@ class MockMap implements BasemapLike {
 
 const anchor = { longitude: -73.98, latitude: 40.75 };
 
-function cameraAt(vs: { longitude: number; latitude: number; zoom: number; pitch?: number; bearing?: number }) {
+function cameraAt(vs: {
+  longitude: number;
+  latitude: number;
+  zoom: number;
+  pitch?: number;
+  bearing?: number;
+}) {
   const proj = new MercatorProjection(anchor);
   const camera = new PerspectiveCamera(50, 1, 0.1, 1e9);
   camera.up.set(0, 0, 1);
@@ -46,7 +52,13 @@ function cameraAt(vs: { longitude: number; latitude: number; zoom: number; pitch
 
 describe('BasemapOverlay', () => {
   it('jumpTo receives the camera view state on sync', () => {
-    const want = { longitude: -73.98, latitude: 40.75, zoom: 12, pitch: 30, bearing: 45 };
+    const want = {
+      longitude: -73.98,
+      latitude: 40.75,
+      zoom: 12,
+      pitch: 30,
+      bearing: 45,
+    };
     const { proj, camera } = cameraAt(want);
     const map = new MockMap();
     const overlay = new BasemapOverlay(map, proj, camera);
@@ -62,7 +74,11 @@ describe('BasemapOverlay', () => {
   });
 
   it('does not sync while detached, and snaps on attach', () => {
-    const { proj, camera } = cameraAt({ longitude: -73.98, latitude: 40.75, zoom: 10 });
+    const { proj, camera } = cameraAt({
+      longitude: -73.98,
+      latitude: 40.75,
+      zoom: 10,
+    });
     const map = new MockMap();
     const overlay = new BasemapOverlay(map, proj, camera, { enabled: false });
 
@@ -83,7 +99,11 @@ describe('BasemapOverlay', () => {
     const proj = new MercatorProjection(anchor);
     const camera = new PerspectiveCamera(50, 1, 0.1, 1e9);
     camera.up.set(0, 0, 1);
-    viewStateToCamera(proj, { longitude: -73.98, latitude: 40.75, zoom: 11 }, camera);
+    viewStateToCamera(
+      proj,
+      { longitude: -73.98, latitude: 40.75, zoom: 11 },
+      camera,
+    );
     const map = new MockMap();
     const overlay = new BasemapOverlay(map, proj, camera);
 
@@ -91,14 +111,22 @@ describe('BasemapOverlay', () => {
     const z0 = map.last.zoom;
 
     // Re-place the camera at a deeper zoom; the next sync should report it.
-    viewStateToCamera(proj, { longitude: -73.98, latitude: 40.75, zoom: 14 }, camera);
+    viewStateToCamera(
+      proj,
+      { longitude: -73.98, latitude: 40.75, zoom: 14 },
+      camera,
+    );
     overlay.sync();
     expect(map.last.zoom).toBeGreaterThan(z0);
     expect(map.last.zoom).toBeCloseTo(14, 3);
   });
 
   it('exposes the host canvas and forwards resize', () => {
-    const { proj, camera } = cameraAt({ longitude: -73.98, latitude: 40.75, zoom: 10 });
+    const { proj, camera } = cameraAt({
+      longitude: -73.98,
+      latitude: 40.75,
+      zoom: 10,
+    });
     const map = new MockMap();
     const overlay = new BasemapOverlay(map, proj, camera);
 
@@ -108,7 +136,11 @@ describe('BasemapOverlay', () => {
   });
 
   it('dispose detaches and removes the host map (idempotent)', () => {
-    const { proj, camera } = cameraAt({ longitude: -73.98, latitude: 40.75, zoom: 10 });
+    const { proj, camera } = cameraAt({
+      longitude: -73.98,
+      latitude: 40.75,
+      zoom: 10,
+    });
     const map = new MockMap();
     const overlay = new BasemapOverlay(map, proj, camera);
 
@@ -124,7 +156,11 @@ describe('BasemapOverlay', () => {
   });
 
   it('tolerates a minimal map without optional methods', () => {
-    const { proj, camera } = cameraAt({ longitude: -73.98, latitude: 40.75, zoom: 10 });
+    const { proj, camera } = cameraAt({
+      longitude: -73.98,
+      latitude: 40.75,
+      zoom: 10,
+    });
     const calls: JumpArgs[] = [];
     const bare: BasemapLike = { jumpTo: (o) => calls.push(o) };
     const overlay = new BasemapOverlay(bare, proj, camera);

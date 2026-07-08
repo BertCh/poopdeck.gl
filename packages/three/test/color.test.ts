@@ -10,7 +10,10 @@ import {
   type RGBA,
 } from '../src/lib/color';
 
-function baseFeatures(count: number, partial: Partial<BinaryFeatures>): BinaryFeatures {
+function baseFeatures(
+  count: number,
+  partial: Partial<BinaryFeatures>,
+): BinaryFeatures {
   return {
     featureCount: count,
     geometryType: GeometryType.Point,
@@ -35,7 +38,9 @@ const FALLBACK: RGBA = [150, 160, 175, 220];
 
 describe('resolveCategoryColor', () => {
   it('maps a known label', () => {
-    expect(resolveCategoryColor('0-2', HEIGHT, FALLBACK)).toEqual([40, 120, 190, 255]);
+    expect(resolveCategoryColor('0-2', HEIGHT, FALLBACK)).toEqual([
+      40, 120, 190, 255,
+    ]);
   });
   it('falls back for unknown or undefined labels', () => {
     expect(resolveCategoryColor('nope', HEIGHT, FALLBACK)).toBe(FALLBACK);
@@ -125,7 +130,9 @@ describe('rampColorAt', () => {
 
 describe('expandRampColors', () => {
   it('expands a numeric column through the ramp (0..1 rgba)', () => {
-    const b = baseFeatures(3, { numericProps: { mag: new Float32Array([0, 5, 10]) } });
+    const b = baseFeatures(3, {
+      numericProps: { mag: new Float32Array([0, 5, 10]) },
+    });
     const out = expandRampColors(b, {
       property: 'mag',
       domain: [0, 10],

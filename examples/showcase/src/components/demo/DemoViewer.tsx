@@ -5,21 +5,27 @@
  * the per-demo landing-page embed (`/demos/:id`); playback state arrives via
  * the shared `useDemoPlayback` hook so the two surfaces cannot drift.
  */
-import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
-import DeckGL from "@deck.gl/react";
-import { _GlobeView as GlobeView } from "@deck.gl/core";
-import { LineLayer, SolidPolygonLayer } from "@deck.gl/layers";
-import { Map } from "react-map-gl";
-import type { BufferSource } from "@poopdeck.gl/playback";
-import type { Dataset, SummaryToggleOption } from "../../types";
-import Legend from "../Legend";
-import PerformanceMonitor from "../PerformanceMonitor";
-import { buildDemoLayers } from "./buildDemoLayers";
-import type { DemoCamera } from "./previewBasemap";
-import { useDeckClock } from "@poopdeck.gl/react";
-import type { PlaybackState } from "@poopdeck.gl/react";
-import { useReducedMotion } from "../../lib/reducedMotion";
-import { MAPBOX_ACCESS_TOKEN } from "../../lib/mapboxToken";
+import React, {
+  useState,
+  useMemo,
+  useEffect,
+  useRef,
+  useCallback,
+} from 'react';
+import DeckGL from '@deck.gl/react';
+import { _GlobeView as GlobeView } from '@deck.gl/core';
+import { LineLayer, SolidPolygonLayer } from '@deck.gl/layers';
+import { Map } from 'react-map-gl';
+import type { BufferSource } from '@poopdeck.gl/playback';
+import type { Dataset, SummaryToggleOption } from '../../types';
+import Legend from '../Legend';
+import PerformanceMonitor from '../PerformanceMonitor';
+import { buildDemoLayers } from './buildDemoLayers';
+import type { DemoCamera } from './previewBasemap';
+import { useDeckClock } from '@poopdeck.gl/react';
+import type { PlaybackState } from '@poopdeck.gl/react';
+import { useReducedMotion } from '../../lib/reducedMotion';
+import { MAPBOX_ACCESS_TOKEN } from '../../lib/mapboxToken';
 
 /**
  * Minimal slice of @poopdeck.gl/core's Tile that the space-time-cube lattice needs.
@@ -128,7 +134,7 @@ const DemoViewer: React.FC<DemoViewerProps> = ({
   useEffect(() => {
     setLatticeTiles([]);
     if (!timeHeight) return;
-    let prevSig = "";
+    let prevSig = '';
     const poll = setInterval(() => {
       const tileset = tilesetRef.current as
         | (BufferSource & { getVisibleTiles?: () => LatticeTile[] })
@@ -138,7 +144,7 @@ const DemoViewer: React.FC<DemoViewerProps> = ({
       const sig = tiles
         .map((t) => `${t.id.z}/${t.id.x}/${t.id.y}/${t.id.t}`)
         .sort()
-        .join(",");
+        .join(',');
       if (sig === prevSig) return;
       prevSig = sig;
       setLatticeTiles(
@@ -188,11 +194,15 @@ const DemoViewer: React.FC<DemoViewerProps> = ({
   const cubeLayers = useMemo(() => {
     if (!timeHeight || timeHeightScale <= 0) return [];
     const origin = selectedDataset.timeRange.start;
-    const clampT = (t: number) => Math.max(0, Math.min(rangeDurationMs, t - origin));
+    const clampT = (t: number) =>
+      Math.max(0, Math.min(rangeDurationMs, t - origin));
     const out: any[] = [];
 
     // Union of loaded tile footprints — reused as the now-plane extent.
-    let minLon = Infinity, minLat = Infinity, maxLon = -Infinity, maxLat = -Infinity;
+    let minLon = Infinity,
+      minLat = Infinity,
+      maxLon = -Infinity,
+      maxLat = -Infinity;
 
     // The loaded set mixes in the pinned z0–z1 storyboard-overview tiles,
     // whose world-spanning boxes would dwarf the city. The lattice tells the
@@ -202,7 +212,10 @@ const DemoViewer: React.FC<DemoViewerProps> = ({
     const viewTiles = latticeTiles.filter((t) => t.id.z === latticeZ);
 
     if (viewTiles.length > 0) {
-      const segments: { s: [number, number, number]; t: [number, number, number] }[] = [];
+      const segments: {
+        s: [number, number, number];
+        t: [number, number, number];
+      }[] = [];
       for (const tile of viewTiles) {
         const { z, x, y } = tile.id;
         const n = 2 ** z;
@@ -210,13 +223,18 @@ const DemoViewer: React.FC<DemoViewerProps> = ({
         const lonE = ((x + 1) / n) * 360 - 180;
         const latN = tileLat(y, n);
         const latS = tileLat(y + 1, n);
-        minLon = Math.min(minLon, lonW); maxLon = Math.max(maxLon, lonE);
-        minLat = Math.min(minLat, latS); maxLat = Math.max(maxLat, latN);
+        minLon = Math.min(minLon, lonW);
+        maxLon = Math.max(maxLon, lonE);
+        minLat = Math.min(minLat, latS);
+        maxLat = Math.max(maxLat, latN);
         if (!showLattice) continue;
         const z0 = clampT(tile.timeRange.start) * timeHeightScale;
         const z1 = clampT(tile.timeRange.end) * timeHeightScale;
         const corners: [number, number][] = [
-          [lonW, latS], [lonE, latS], [lonE, latN], [lonW, latN],
+          [lonW, latS],
+          [lonE, latS],
+          [lonE, latN],
+          [lonW, latN],
         ];
         for (let i = 0; i < 4; i++) {
           const a = corners[i];
@@ -230,13 +248,13 @@ const DemoViewer: React.FC<DemoViewerProps> = ({
       if (segments.length > 0) {
         out.push(
           new LineLayer({
-            id: "stt-tile-lattice",
+            id: 'stt-tile-lattice',
             data: segments,
             getSourcePosition: (d: any) => d.s,
             getTargetPosition: (d: any) => d.t,
             getColor: [31, 186, 214, 100],
             getWidth: 1,
-            widthUnits: "pixels",
+            widthUnits: 'pixels',
             pickable: false,
           }),
         );
@@ -245,8 +263,10 @@ const DemoViewer: React.FC<DemoViewerProps> = ({
     if (minLon > maxLon) {
       // No tiles yet — seed the plane around the camera target.
       const { longitude, latitude } = selectedDataset.initialViewState;
-      minLon = longitude - 0.25; maxLon = longitude + 0.25;
-      minLat = latitude - 0.2; maxLat = latitude + 0.2;
+      minLon = longitude - 0.25;
+      maxLon = longitude + 0.25;
+      minLat = latitude - 0.2;
+      maxLat = latitude + 0.2;
     }
 
     if (timeHeight.nowPlane !== false) {
@@ -259,7 +279,7 @@ const DemoViewer: React.FC<DemoViewerProps> = ({
       ];
       out.push(
         new SolidPolygonLayer({
-          id: "cube-now-plane",
+          id: 'cube-now-plane',
           data: [plane],
           getPolygon: (d: any) => d,
           filled: true,
@@ -284,7 +304,7 @@ const DemoViewer: React.FC<DemoViewerProps> = ({
 
   const views = useMemo(
     () =>
-      useGlobe ? [new GlobeView({ id: "globe", resolution: 10 })] : undefined,
+      useGlobe ? [new GlobeView({ id: 'globe', resolution: 10 })] : undefined,
     [useGlobe],
   );
   const initialViewState = useMemo((): any => {
@@ -328,7 +348,8 @@ const DemoViewer: React.FC<DemoViewerProps> = ({
       setViewState((vs: any) => {
         const cur = vs?.globe ?? vs;
         if (!cur) return vs;
-        const longitude = ((cur.longitude + DEG_PER_SEC * dt + 540) % 360) - 180;
+        const longitude =
+          ((cur.longitude + DEG_PER_SEC * dt + 540) % 360) - 180;
         return { globe: { ...cur, longitude } };
       });
       raf = requestAnimationFrame(step);
@@ -402,22 +423,21 @@ const DemoViewer: React.FC<DemoViewerProps> = ({
           <Map
             reuseMaps
             mapStyle={
-              selectedDataset.basemapStyle ??
-              "mapbox://styles/mapbox/dark-v11"
+              selectedDataset.basemapStyle ?? 'mapbox://styles/mapbox/dark-v11'
             }
             mapboxAccessToken={MAPBOX_ACCESS_TOKEN}
-            projection={{ name: "mercator" }}
+            projection={{ name: 'mercator' }}
             terrain={
               selectedDataset.use3D
-                ? { source: "mapbox-dem", exaggeration: 1.5 }
+                ? { source: 'mapbox-dem', exaggeration: 1.5 }
                 : undefined
             }
             onLoad={(evt) => {
               const map = evt.target;
-              if (selectedDataset.use3D && !map.getSource("mapbox-dem")) {
-                map.addSource("mapbox-dem", {
-                  type: "raster-dem",
-                  url: "mapbox://mapbox.mapbox-terrain-dem-v1",
+              if (selectedDataset.use3D && !map.getSource('mapbox-dem')) {
+                map.addSource('mapbox-dem', {
+                  type: 'raster-dem',
+                  url: 'mapbox://mapbox.mapbox-terrain-dem-v1',
                   tileSize: 512,
                   maxzoom: 14,
                 });
@@ -433,25 +453,25 @@ const DemoViewer: React.FC<DemoViewerProps> = ({
               if (hideLabels || bg || roadColor) {
                 try {
                   for (const layer of map.getStyle().layers ?? []) {
-                    if (hideLabels && layer.type === "symbol") {
-                      map.setLayoutProperty(layer.id, "visibility", "none");
+                    if (hideLabels && layer.type === 'symbol') {
+                      map.setLayoutProperty(layer.id, 'visibility', 'none');
                     }
                     if (bg) {
-                      if (layer.type === "background") {
-                        map.setPaintProperty(layer.id, "background-color", bg);
+                      if (layer.type === 'background') {
+                        map.setPaintProperty(layer.id, 'background-color', bg);
                       } else if (
-                        layer.type === "fill" &&
+                        layer.type === 'fill' &&
                         /land|earth/i.test(layer.id)
                       ) {
-                        map.setPaintProperty(layer.id, "fill-color", bg);
+                        map.setPaintProperty(layer.id, 'fill-color', bg);
                       }
                     }
                     if (
                       roadColor &&
-                      layer.type === "line" &&
+                      layer.type === 'line' &&
                       /road|street|bridge|tunnel/i.test(layer.id)
                     ) {
-                      map.setPaintProperty(layer.id, "line-color", roadColor);
+                      map.setPaintProperty(layer.id, 'line-color', roadColor);
                     }
                   }
                 } catch {
@@ -498,7 +518,10 @@ const DemoViewer: React.FC<DemoViewerProps> = ({
       {/* Perf HUD (collapsed chip; top-right because the Legend owns the
           bottom-right corner). Carries the storyboard-preload outcome. */}
       {showPerfHud && (
-        <PerformanceMonitor anchor="top-right" overviewPreload={overviewPreload} />
+        <PerformanceMonitor
+          anchor="top-right"
+          overviewPreload={overviewPreload}
+        />
       )}
     </div>
   );
@@ -522,19 +545,19 @@ const CubeControls: React.FC<{
     <div
       className="rounded px-3 py-2 flex flex-col gap-1.5"
       style={{
-        background: "rgba(36, 39, 48, 0.95)",
-        border: "1px solid #3A414C",
+        background: 'rgba(36, 39, 48, 0.95)',
+        border: '1px solid #3A414C',
         minWidth: 170,
       }}
     >
       <div
         className="text-[10px] font-semibold tracking-widest"
-        style={{ color: "#A0A7B4" }}
+        style={{ color: '#A0A7B4' }}
       >
         TIME = HEIGHT
       </div>
       <div className="flex items-center gap-2">
-        <span className="text-[10px]" style={{ color: "#6B7280" }}>
+        <span className="text-[10px]" style={{ color: '#6B7280' }}>
           flat
         </span>
         <input
@@ -544,23 +567,23 @@ const CubeControls: React.FC<{
           value={Math.round(heightFactor * 100)}
           onChange={(e) => onHeightFactor(Number(e.target.value) / 100)}
           className="flex-1"
-          style={{ accentColor: "#1FBAD6" }}
+          style={{ accentColor: '#1FBAD6' }}
           aria-label="Time-as-height squash factor"
         />
-        <span className="text-[10px]" style={{ color: "#6B7280" }}>
+        <span className="text-[10px]" style={{ color: '#6B7280' }}>
           cube
         </span>
       </div>
       {onShowLattice && (
         <label
           className="flex items-center gap-1.5 text-[11px] cursor-pointer select-none"
-          style={{ color: "#A0A7B4" }}
+          style={{ color: '#A0A7B4' }}
         >
           <input
             type="checkbox"
             checked={showLattice}
             onChange={(e) => onShowLattice(e.target.checked)}
-            style={{ accentColor: "#1FBAD6" }}
+            style={{ accentColor: '#1FBAD6' }}
           />
           STT tile lattice
         </label>
@@ -583,7 +606,10 @@ const SummaryToggle: React.FC<{
   return (
     <div
       className="inline-flex items-center rounded overflow-hidden"
-      style={{ background: "rgba(36, 39, 48, 0.95)", border: "1px solid #3A414C" }}
+      style={{
+        background: 'rgba(36, 39, 48, 0.95)',
+        border: '1px solid #3A414C',
+      }}
       role="group"
       aria-label="Summary weight"
     >
@@ -592,7 +618,7 @@ const SummaryToggle: React.FC<{
         const swatch =
           opt.legendColors?.[opt.legendColors.length - 2] ??
           opt.legendColors?.[opt.legendColors.length - 1] ??
-          "#1FBAD6";
+          '#1FBAD6';
         return (
           <button
             key={opt.id}
@@ -600,10 +626,10 @@ const SummaryToggle: React.FC<{
             onClick={() => onChange(opt.id)}
             className="px-3 py-1.5 text-xs transition-colors flex items-center gap-1.5"
             style={{
-              background: active ? "#1FBAD6" : "transparent",
-              color: active ? "#000" : "#A0A7B4",
+              background: active ? '#1FBAD6' : 'transparent',
+              color: active ? '#000' : '#A0A7B4',
               borderRight:
-                i < options.length - 1 ? "1px solid #3A414C" : undefined,
+                i < options.length - 1 ? '1px solid #3A414C' : undefined,
             }}
             aria-pressed={active}
           >

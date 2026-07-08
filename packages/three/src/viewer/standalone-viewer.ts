@@ -36,7 +36,10 @@ import {
   type Stt3DTiles,
   type Stt3DTilesOptions,
 } from '../scene/tiles-3d.js';
-import { createSttGlobeControls, type SttGlobeControls } from '../scene/globe-controls.js';
+import {
+  createSttGlobeControls,
+  type SttGlobeControls,
+} from '../scene/globe-controls.js';
 import { frameGlobe } from '../scene/globe-camera.js';
 import { GlobeProjection } from '../projection/globe.js';
 
@@ -209,7 +212,10 @@ export class StandaloneViewer {
         else this.tiles3d = tiles;
       } catch (err) {
         // eslint-disable-next-line no-console
-        console.error('[StandaloneViewer] 3D tiles setup failed; continuing without them', err);
+        console.error(
+          '[StandaloneViewer] 3D tiles setup failed; continuing without them',
+          err,
+        );
       }
     }
 
@@ -241,7 +247,8 @@ export class StandaloneViewer {
     // TSL sky/light nodes compile only on WebGPURenderer). On WebGL2 we simply
     // skip it and keep the plain render path — a graceful, crash-free degrade.
     if (this.opts.atmosphere && backend === 'webgpu') {
-      const atmoOpts = this.opts.atmosphere === true ? {} : this.opts.atmosphere;
+      const atmoOpts =
+        this.opts.atmosphere === true ? {} : this.opts.atmosphere;
       try {
         const atmosphere = await createSttAtmosphere({
           ...atmoOpts,
@@ -254,7 +261,10 @@ export class StandaloneViewer {
         else this.atmosphere = atmosphere;
       } catch (err) {
         // eslint-disable-next-line no-console
-        console.error('[StandaloneViewer] atmosphere setup failed; rendering without it', err);
+        console.error(
+          '[StandaloneViewer] atmosphere setup failed; rendering without it',
+          err,
+        );
       }
     }
 
@@ -268,7 +278,7 @@ export class StandaloneViewer {
     if (!this.controls) return;
     const box = this.scene.computeBounds();
     const center = frameBox(this.camera, box, {
-      pitchDeg: this.topDown ? 89 : this.opts.pitchDeg ?? 55,
+      pitchDeg: this.topDown ? 89 : (this.opts.pitchDeg ?? 55),
       headingDeg: this.opts.headingDeg ?? 20,
       margin: 1.4,
       // Street-level cap: a big drive spans hundreds of m, but fitting it all
@@ -297,7 +307,11 @@ export class StandaloneViewer {
     const layers = this.scene.getLayers().map((l) => {
       const o = l.object as unknown as {
         type: string;
-        geometry?: { instanceCount?: number; drawRange?: { count: number }; boundingBox?: unknown };
+        geometry?: {
+          instanceCount?: number;
+          drawRange?: { count: number };
+          boundingBox?: unknown;
+        };
       };
       const g = o.geometry;
       return {
@@ -312,8 +326,12 @@ export class StandaloneViewer {
       '[stt-three] scene loaded ' +
         JSON.stringify({
           boundsEmpty: box.isEmpty(),
-          min: box.isEmpty() ? null : box.min.toArray().map((n) => Math.round(n)),
-          max: box.isEmpty() ? null : box.max.toArray().map((n) => Math.round(n)),
+          min: box.isEmpty()
+            ? null
+            : box.min.toArray().map((n) => Math.round(n)),
+          max: box.isEmpty()
+            ? null
+            : box.max.toArray().map((n) => Math.round(n)),
           cameraPos: this.camera.position.toArray().map((n) => Math.round(n)),
           time: this.opts.getTime(),
           layers,
@@ -366,7 +384,8 @@ export class StandaloneViewer {
       const pose = this.opts.egoLayer.getEgoPose(t);
       if (pose) {
         const ego = new Vector3(pose.x, pose.y, pose.z);
-        if (this.lastEgo) this.camera.position.add(ego.clone().sub(this.lastEgo));
+        if (this.lastEgo)
+          this.camera.position.add(ego.clone().sub(this.lastEgo));
         this.controls.target.copy(ego);
         this.lastEgo = ego;
       }
@@ -408,15 +427,20 @@ export class StandaloneViewer {
     this.scene.setAnimationState(t !== this.lastTime);
     this.lastTime = t;
 
-    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    const now =
+      typeof performance !== 'undefined' ? performance.now() : Date.now();
     if (now - this.lastStreamUpdate >= STREAM_UPDATE_MS) {
       this.lastStreamUpdate = now;
       const width = this.container.clientWidth || 1;
       const height = this.container.clientHeight || 1;
-      const { bounds, zoom } = cameraToViewport(this.scene.projection, this.camera, {
-        width,
-        height,
-      });
+      const { bounds, zoom } = cameraToViewport(
+        this.scene.projection,
+        this.camera,
+        {
+          width,
+          height,
+        },
+      );
       this.scene.updateStreaming({ bounds, zoom, time: t });
     }
 

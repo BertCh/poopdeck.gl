@@ -169,7 +169,12 @@ export function lerpAngle(a: number, b: number, f: number): number {
 }
 
 /** Lerp a dimension that may be NaN (absent column) — fall back to a default. */
-export function lerpDim(a: number, b: number, f: number, fallback: number): number {
+export function lerpDim(
+  a: number,
+  b: number,
+  f: number,
+  fallback: number,
+): number {
   const af = Number.isFinite(a);
   const bf = Number.isFinite(b);
   if (af && bf) return lerp(a, b, f);
@@ -179,7 +184,11 @@ export function lerpDim(a: number, b: number, f: number, fallback: number): numb
 }
 
 /** Resolve one feature's categorical (string) column value, or '' if absent. */
-export function readCategorical(binary: BinaryFeatures, prop: string, i: number): string {
+export function readCategorical(
+  binary: BinaryFeatures,
+  prop: string,
+  i: number,
+): string {
   const cat = binary.categoricalProps[prop];
   if (cat) {
     const idx = cat.indices[i];
@@ -223,7 +232,10 @@ export function makePickRow(s: Sample): TrackPickRow {
  * changes. Emits no telemetry / warnings — it returns the counts + the
  * `trackIdMissing` flag so each renderer can warn with its own layer name.
  */
-export function buildTrackIndex(tiles: Tile[], cfg: TrackFieldConfig): TrackIndexResult {
+export function buildTrackIndex(
+  tiles: Tile[],
+  cfg: TrackFieldConfig,
+): TrackIndexResult {
   const trackIdProp = cfg.trackIdProperty || 'track_id';
   const colorProp = cfg.colorProperty;
   const labelProp = cfg.labelProperty || 'category';
@@ -266,14 +278,19 @@ export function buildTrackIndex(tiles: Tile[], cfg: TrackFieldConfig): TrackInde
         let key: string;
         if (trackCol) {
           const idx = trackCol.indices[i];
-          key = idx === 0xffff ? `∅${synthetic++}` : (trackCol.categories[idx] ?? `∅${synthetic++}`);
+          key =
+            idx === 0xffff
+              ? `∅${synthetic++}`
+              : (trackCol.categories[idx] ?? `∅${synthetic++}`);
         } else {
           key = `∅${synthetic++}`;
         }
 
         let track = tracks.get(key);
         if (!track) {
-          const category = colorProp ? readCategorical(binary, colorProp, i) : '';
+          const category = colorProp
+            ? readCategorical(binary, colorProp, i)
+            : '';
           track = {
             trackId: trackCol ? key : '',
             times: [],
@@ -332,7 +349,12 @@ export function buildTrackIndex(tiles: Tile[], cfg: TrackFieldConfig): TrackInde
     track.singleton = track.times.length < 2;
   }
 
-  return { tracks, hasSpeedColumn: hasSpeed, trackIdMissing, totalSnapshots: total };
+  return {
+    tracks,
+    hasSpeedColumn: hasSpeed,
+    trackIdMissing,
+    totalSnapshots: total,
+  };
 }
 
 /**
@@ -340,7 +362,11 @@ export function buildTrackIndex(tiles: Tile[], cfg: TrackFieldConfig): TrackInde
  * inactive (the playhead is outside its keyframe span). Singletons are held for
  * ±{@link SINGLETON_HOLD_MS}/2 around their lone keyframe.
  */
-export function sampleTrack(track: Track, now: number, cfg: TrackSampleConfig): Sample | null {
+export function sampleTrack(
+  track: Track,
+  now: number,
+  cfg: TrackSampleConfig,
+): Sample | null {
   const { times } = track;
   const n = times.length;
   if (n === 0) return null;
@@ -370,14 +396,30 @@ export function sampleTrack(track: Track, now: number, cfg: TrackSampleConfig): 
     frac = denom > 0 ? (c - times[lo]) / denom : 0;
   }
 
-  const length = lerpDim(track.length[lo], track.length[hi], frac, cfg.defaultLength);
-  const width = lerpDim(track.width[lo], track.width[hi], frac, cfg.defaultWidth);
-  const height = lerpDim(track.height[lo], track.height[hi], frac, cfg.defaultHeight);
+  const length = lerpDim(
+    track.length[lo],
+    track.length[hi],
+    frac,
+    cfg.defaultLength,
+  );
+  const width = lerpDim(
+    track.width[lo],
+    track.width[hi],
+    frac,
+    cfg.defaultWidth,
+  );
+  const height = lerpDim(
+    track.height[lo],
+    track.height[hi],
+    frac,
+    cfg.defaultHeight,
+  );
   const speedLo = track.speed[lo];
   const speedHi = track.speed[hi];
-  const speed = Number.isFinite(speedLo) || Number.isFinite(speedHi)
-    ? lerpDim(speedLo, speedHi, frac, 0)
-    : NaN;
+  const speed =
+    Number.isFinite(speedLo) || Number.isFinite(speedHi)
+      ? lerpDim(speedLo, speedHi, frac, 0)
+      : NaN;
 
   // CPU appear/disappear fade (playhead-time ramp), folded into the instance alpha.
   let alpha = 1;
@@ -389,7 +431,8 @@ export function sampleTrack(track: Track, now: number, cfg: TrackSampleConfig): 
   }
   if (fadeOut > 0) {
     const remaining = last - now;
-    if (remaining < fadeOut) alpha *= Math.max(0, Math.min(1, remaining / fadeOut));
+    if (remaining < fadeOut)
+      alpha *= Math.max(0, Math.min(1, remaining / fadeOut));
   }
 
   return {
@@ -417,7 +460,17 @@ export function sampleTrack(track: Track, now: number, cfg: TrackSampleConfig): 
  * dense and its last entry the real last kept keyframe.
  */
 function reorder(track: Track, order: number[]): void {
-  const keys: (keyof Track)[] = ['times', 'lon', 'lat', 'alt', 'heading', 'length', 'width', 'height', 'speed'];
+  const keys: (keyof Track)[] = [
+    'times',
+    'lon',
+    'lat',
+    'alt',
+    'heading',
+    'length',
+    'width',
+    'height',
+    'speed',
+  ];
   for (const k of keys) {
     const src = track[k] as number[];
     const out = new Array(order.length);

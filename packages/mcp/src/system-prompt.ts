@@ -38,8 +38,12 @@ function familyKey(name: string): string {
 
 function formatTimeRange(d: DatasetSummary): string {
   if (!d.timeRange) return 'no time range';
-  const start = Number.isFinite(d.timeRange.start) ? new Date(d.timeRange.start).toISOString() : '?';
-  const end = Number.isFinite(d.timeRange.end) ? new Date(d.timeRange.end).toISOString() : '?';
+  const start = Number.isFinite(d.timeRange.start)
+    ? new Date(d.timeRange.start).toISOString()
+    : '?';
+  const end = Number.isFinite(d.timeRange.end)
+    ? new Date(d.timeRange.end).toISOString()
+    : '?';
   return `${start} → ${end}`;
 }
 
@@ -50,8 +54,13 @@ function formatBounds(d: DatasetSummary): string {
 }
 
 function formatOne(d: DatasetSummary): string {
-  const zoom = d.minZoom !== undefined && d.maxZoom !== undefined ? `z${d.minZoom}-${d.maxZoom}` : 'z?';
-  const summary = d.hasSummaryTier ? `, summary tier (${d.summaryScheme ?? 'unknown scheme'})` : '';
+  const zoom =
+    d.minZoom !== undefined && d.maxZoom !== undefined
+      ? `z${d.minZoom}-${d.maxZoom}`
+      : 'z?';
+  const summary = d.hasSummaryTier
+    ? `, summary tier (${d.summaryScheme ?? 'unknown scheme'})`
+    : '';
   // `featureCount` is `undefined` when the manifest doesn't know it (see
   // manifest.ts — a 0 alongside non-empty packs means "unknown", not zero). A
   // literal 0 is likewise not worth surfacing, so only print a positive count —
@@ -115,7 +124,8 @@ export function buildSystemPrompt(datasets: DatasetSummary[]): string {
         count: members.length,
       });
     } else {
-      for (const d of members) individual.push({ line: formatOne(d), count: 1 });
+      for (const d of members)
+        individual.push({ line: formatOne(d), count: 1 });
     }
   }
 
@@ -125,8 +135,15 @@ export function buildSystemPrompt(datasets: DatasetSummary[]): string {
   const shownCount = shown.reduce((n, e) => n + e.count, 0);
   const omitted = datasets.length - shownCount;
   if (omitted > 0) {
-    lines.push(`- …and ${omitted.toLocaleString('en-US')} more — call \`list_datasets\` for the full catalog.`);
+    lines.push(
+      `- …and ${omitted.toLocaleString('en-US')} more — call \`list_datasets\` for the full catalog.`,
+    );
   }
 
-  return [header, '', `Available datasets (${datasets.length}):`, ...lines].join('\n');
+  return [
+    header,
+    '',
+    `Available datasets (${datasets.length}):`,
+    ...lines,
+  ].join('\n');
 }

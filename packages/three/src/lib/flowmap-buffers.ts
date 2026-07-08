@@ -81,7 +81,8 @@ function nodeKey(lon: number, lat: number): string {
  */
 function posFromBinary(binary: BinaryFeatures, time: number): number | null {
   const nb = binary.vertexValueBuckets ?? 0;
-  if (nb <= 0 || !binary.startTimes || binary.startTimes.length === 0) return null;
+  if (nb <= 0 || !binary.startTimes || binary.startTimes.length === 0)
+    return null;
   const rel0 = binary.startTimes[0];
   const span = binary.endTimes[0] - rel0;
   if (span <= 0) return null;
@@ -93,13 +94,21 @@ function posFromBinary(binary: BinaryFeatures, time: number): number | null {
   return pos;
 }
 
-function collectOdLayers(tiles: Tile[]): { layers: BinaryFeatures[]; total: number } {
+function collectOdLayers(tiles: Tile[]): {
+  layers: BinaryFeatures[];
+  total: number;
+} {
   const layers: BinaryFeatures[] = [];
   let total = 0;
   for (const tile of tiles) {
     for (const tl of tile.layers) {
       const b = tl.features;
-      if (!b.featureCount || b.geometryType !== GeometryType.LineString || !b.startIndices) continue;
+      if (
+        !b.featureCount ||
+        b.geometryType !== GeometryType.LineString ||
+        !b.startIndices
+      )
+        continue;
       layers.push(b);
       total += b.featureCount;
     }
@@ -146,7 +155,11 @@ export function buildFlowmapBuffers(
   const first = layers[0];
   const fdims = first.positionDimensions ?? 2;
   const fAlt = fdims > 2 ? first.positions[2] : 0;
-  const origin = projection.project(first.positions[0], first.positions[1], fAlt);
+  const origin = projection.project(
+    first.positions[0],
+    first.positions[1],
+    fAlt,
+  );
   const [ox, oy, oz] = origin;
 
   const posSource = new Float32Array(total * 3);
@@ -158,13 +171,24 @@ export function buildFlowmapBuffers(
   const tgtKey: string[] = new Array(total);
 
   // node key → { center (RTC vec3), accumulated incident flow }.
-  const nodeFlow = new Map<string, { cx: number; cy: number; cz: number; flow: number }>();
+  const nodeFlow = new Map<
+    string,
+    { cx: number; cy: number; cz: number; flow: number }
+  >();
 
-  let minX = Infinity, minY = Infinity, minZ = Infinity;
-  let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+  let minX = Infinity,
+    minY = Infinity,
+    minZ = Infinity;
+  let maxX = -Infinity,
+    maxY = -Infinity,
+    maxZ = -Infinity;
   const bump = (x: number, y: number, z: number): void => {
-    if (x < minX) minX = x; if (y < minY) minY = y; if (z < minZ) minZ = z;
-    if (x > maxX) maxX = x; if (y > maxY) maxY = y; if (z > maxZ) maxZ = z;
+    if (x < minX) minX = x;
+    if (y < minY) minY = y;
+    if (z < minZ) minZ = z;
+    if (x > maxX) maxX = x;
+    if (y > maxY) maxY = y;
+    if (z > maxZ) maxZ = z;
   };
 
   let o = 0; // global flow index across tiles
@@ -195,10 +219,18 @@ export function buildFlowmapBuffers(
 
       const ps = projection.project(srcLon, srcLat, srcAlt);
       const pt = projection.project(tgtLon, tgtLat, tgtAlt);
-      const sx = ps[0] - ox, sy = ps[1] - oy, sz = ps[2] - oz;
-      const tx = pt[0] - ox, ty = pt[1] - oy, tz = pt[2] - oz;
-      posSource[j * 3] = sx; posSource[j * 3 + 1] = sy; posSource[j * 3 + 2] = sz;
-      posTarget[j * 3] = tx; posTarget[j * 3 + 1] = ty; posTarget[j * 3 + 2] = tz;
+      const sx = ps[0] - ox,
+        sy = ps[1] - oy,
+        sz = ps[2] - oz;
+      const tx = pt[0] - ox,
+        ty = pt[1] - oy,
+        tz = pt[2] - oz;
+      posSource[j * 3] = sx;
+      posSource[j * 3 + 1] = sy;
+      posSource[j * 3 + 2] = sz;
+      posTarget[j * 3] = tx;
+      posTarget[j * 3 + 1] = ty;
+      posTarget[j * 3 + 2] = tz;
       bump(sx, sy, sz);
       bump(tx, ty, tz);
 
@@ -211,7 +243,10 @@ export function buildFlowmapBuffers(
       let flow = 0;
       if (nb > 0 && matrix) {
         const base = vSrc * nb;
-        flow = f <= 0 ? matrix[base + b0] : matrix[base + b0] * g + matrix[base + b1] * f;
+        flow =
+          f <= 0
+            ? matrix[base + b0]
+            : matrix[base + b0] * g + matrix[base + b1] * f;
       }
       if (flow <= minFlow) {
         widths[j] = 0; // inactive → invisible (this is the animation)
@@ -234,8 +269,13 @@ export function buildFlowmapBuffers(
   {
     let n = 0;
     for (const [key, e] of nodeFlow) {
-      const r = Math.min(rmax, Math.max(rmin, nodeRadiusScale * Math.sqrt(e.flow)));
-      nodeCenters[n * 3] = e.cx; nodeCenters[n * 3 + 1] = e.cy; nodeCenters[n * 3 + 2] = e.cz;
+      const r = Math.min(
+        rmax,
+        Math.max(rmin, nodeRadiusScale * Math.sqrt(e.flow)),
+      );
+      nodeCenters[n * 3] = e.cx;
+      nodeCenters[n * 3 + 1] = e.cy;
+      nodeCenters[n * 3 + 2] = e.cz;
       nodeRadii[n] = r;
       nodeRadiusByKey.set(key, r);
       n++;

@@ -9,14 +9,14 @@ description: >-
   the view_map MCP tool, which composes the spec for you.
 license: MIT
 metadata:
-  version: "0.4.0"
+  version: '0.4.0'
 ---
 
 # Wiring a deck.gl layer for STT data
 
 `@poopdeck.gl/layers` ships one deck.gl layer per geometry/visual idiom, all built
 on the `SpatioTemporalLayer` chassis (shared time/tier/prefetch props). Pick the
-layer by what the data *is* and how you want it to read.
+layer by what the data _is_ and how you want it to read.
 
 > Not installed yet, or hitting a deck.gl/luma.gl peer-dependency error? See
 > **installing-poopdeck** — `@poopdeck.gl/layers` needs the deck.gl 9.3.x peer set
@@ -35,16 +35,16 @@ majors are a common cause of a layer that never draws.
 
 ## Step 1 — Pick the layer (`@@type`)
 
-| Data / intent | Layer `@@type` |
-|---|---|
-| Points / events | `AnimatedPointLayer` (`splat: true` for soft blobs) |
-| Static line features | `AnimatedPathLayer` |
-| Moving objects with tails (GPS tracks, vehicles, trips) | `AnimatedTripsLayer` (+ `AnimatedTripHeadsLayer` for lead markers) |
-| Polygons / areas | `AnimatedPolygonLayer` |
-| Origin→destination flows | `FlowmapLayer`, `BundledFlowmapLayer`, `FlowCorridorLayer`, `FlowStrokeLayer` |
-| Density / heat | `AnimatedHeatmapLayer` |
-| Pre-aggregated H3 / Quadbin summary tier | `H3SummaryLayer` / `QuadbinSummaryLayer` |
-| Binned hex aggregation | `AnimatedHexagonLayer` |
+| Data / intent                                                      | Layer `@@type`                                                                                                                                                                                     |
+| ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Points / events                                                    | `AnimatedPointLayer` (`splat: true` for soft blobs)                                                                                                                                                |
+| Static line features                                               | `AnimatedPathLayer`                                                                                                                                                                                |
+| Moving objects with tails (GPS tracks, vehicles, trips)            | `AnimatedTripsLayer` (+ `AnimatedTripHeadsLayer` for lead markers)                                                                                                                                 |
+| Polygons / areas                                                   | `AnimatedPolygonLayer`                                                                                                                                                                             |
+| Origin→destination flows                                           | `FlowmapLayer`, `BundledFlowmapLayer`, `FlowCorridorLayer`, `FlowStrokeLayer`                                                                                                                      |
+| Density / heat                                                     | `AnimatedHeatmapLayer`                                                                                                                                                                             |
+| Pre-aggregated H3 / Quadbin summary tier                           | `H3SummaryLayer` / `QuadbinSummaryLayer`                                                                                                                                                           |
+| Binned hex aggregation                                             | `AnimatedHexagonLayer`                                                                                                                                                                             |
 | Arcs / lines / icons / columns / text / mesh / point-cloud / boxes | `AnimatedArcLayer`, `AnimatedLineLayer`, `AnimatedIconLayer`, `AnimatedColumnLayer`, `AnimatedTextLayer`, `AnimatedMeshLayer`, `AnimatedPointCloudLayer`, `AnimatedBoundingBoxLayer`, `SplatLayer` |
 
 Not sure? `describe_dataset` → `styleHints.layer_hint` (`points`/`paths`/`trips`/
@@ -56,7 +56,7 @@ Not sure? `describe_dataset` → `styleHints.layer_hint` (`points`/`paths`/`trip
 These come from the chassis, so they work on all layers above:
 
 - `data` — the manifest URL (string) in a JSON spec; or an `STTArchive`/`{tiles,
-  accessToken}` object in code.
+accessToken}` object in code.
 - `currentTime` — Unix ms; the playhead. **Must be inside the dataset's `timeRange`
   or nothing draws.**
 - `timeWindow` — ms of data shown around `currentTime` (default `86_400_000` = 1 day).
@@ -129,7 +129,13 @@ name). `data` in a JSON spec must be a manifest **URL string**.
 
 ```ts
 import { AnimatedTripsLayer } from '@poopdeck.gl/layers';
-new AnimatedTripsLayer({ id: 'trips', data: manifestUrl, currentTime, timeWindow: 3600000, trailLength: 180000 });
+new AnimatedTripsLayer({
+  id: 'trips',
+  data: manifestUrl,
+  currentTime,
+  timeWindow: 3600000,
+  trailLength: 180000,
+});
 ```
 
 For non-deck backends see the **choosing-a-renderer** skill (`@poopdeck.gl/three`

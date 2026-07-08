@@ -78,7 +78,10 @@ const UNSUPPORTED_KINDS: Partial<Record<LayerKind, LayerKindSupport>> = {
  * key) rather than a silently-absent declaration.
  */
 const layerKinds = Object.fromEntries(
-  LAYER_KINDS.map((kind) => [kind, UNSUPPORTED_KINDS[kind] ?? { supported: true }]),
+  LAYER_KINDS.map((kind) => [
+    kind,
+    UNSUPPORTED_KINDS[kind] ?? { supported: true },
+  ]),
 ) as Record<LayerKind, LayerKindSupport>;
 
 export const threeBackend: BackendDescriptor = {

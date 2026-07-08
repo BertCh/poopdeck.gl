@@ -16,7 +16,8 @@ function percentiles(values, qs = [0.05, 0.5, 0.95, 0.99]) {
     return Object.fromEntries(qs.map((q) => [q, 0]));
   }
   const sorted = [...values].sort((a, b) => a - b);
-  const at = (q) => sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))];
+  const at = (q) =>
+    sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))];
   return Object.fromEntries(qs.map((q) => [q, at(q)]));
 }
 
@@ -33,7 +34,8 @@ export function summarizeSample(label, sample) {
     label,
     durationMs,
     frameCount: frames.length,
-    fps_mean: frames.length > 0 ? +(1000 * frames.length / durationMs).toFixed(1) : 0,
+    fps_mean:
+      frames.length > 0 ? +((1000 * frames.length) / durationMs).toFixed(1) : 0,
     fps_p5: +fpsPct[0.05].toFixed(1),
     fps_p50: +fpsPct[0.5].toFixed(1),
     fps_p95: +fpsPct[0.95].toFixed(1),
@@ -43,7 +45,10 @@ export function summarizeSample(label, sample) {
     frame_max_ms: frames.length > 0 ? +Math.max(...frames).toFixed(2) : 0,
     longTaskCount: longTasks.length,
     longTaskTotalMs: +longTasksTotalMs.toFixed(0),
-    longTaskMaxMs: longTasks.length > 0 ? +Math.max(...longTasks.map((t) => t.duration)).toFixed(0) : 0,
+    longTaskMaxMs:
+      longTasks.length > 0
+        ? +Math.max(...longTasks.map((t) => t.duration)).toFixed(0)
+        : 0,
     networkCount: sample.networkCount || 0,
     networkMb: +((sample.networkBytes || 0) / 1024 / 1024).toFixed(2),
   };
@@ -56,13 +61,15 @@ export function printConsoleSummary(run) {
 
   console.log('');
   console.log('='.repeat(96));
-  console.log(`${run.demo} [${run.backend}]   ${run.scenarios.length} scenarios   ` +
-              `workers=${run.workerCount}   heap=+${(run.heapDeltaMb).toFixed(1)}MB`);
+  console.log(
+    `${run.demo} [${run.backend}]   ${run.scenarios.length} scenarios   ` +
+      `workers=${run.workerCount}   heap=+${run.heapDeltaMb.toFixed(1)}MB`,
+  );
   console.log('='.repeat(96));
 
   console.log(
     `  ${W('scenario', 16)} ${Wr('fps_p50', 8)} ${Wr('fps_p5', 8)} ${Wr('frame_p95', 11)} ` +
-    `${Wr('longTasks', 11)} ${Wr('maxLT', 8)} ${Wr('netMB', 8)}`
+      `${Wr('longTasks', 11)} ${Wr('maxLT', 8)} ${Wr('netMB', 8)}`,
   );
   console.log('  ' + '-'.repeat(94));
   for (const s of run.scenarios) {
@@ -70,8 +77,8 @@ export function printConsoleSummary(run) {
     const marker = jank ? '  <- jank' : '';
     console.log(
       `  ${W(s.label, 16)} ${Wr(s.fps_p50, 8)} ${Wr(s.fps_p5, 8)} ` +
-      `${Wr(s.frame_p95_ms + 'ms', 11)} ${Wr(s.longTaskCount, 11)} ` +
-      `${Wr(s.longTaskMaxMs + 'ms', 8)} ${Wr(s.networkMb, 8)}${marker}`
+        `${Wr(s.frame_p95_ms + 'ms', 11)} ${Wr(s.longTaskCount, 11)} ` +
+        `${Wr(s.longTaskMaxMs + 'ms', 8)} ${Wr(s.networkMb, 8)}${marker}`,
     );
   }
   console.log('');
@@ -97,21 +104,25 @@ export function diffAgainstBaseline(current, baseline, tolerance = 0.15) {
   // Index scenarios by label for cross-comparison.
   const cBy = Object.fromEntries(current.scenarios.map((s) => [s.label, s]));
   const bBy = Object.fromEntries(baseline.scenarios.map((s) => [s.label, s]));
-  const labels = Array.from(new Set([...Object.keys(cBy), ...Object.keys(bBy)]));
+  const labels = Array.from(
+    new Set([...Object.keys(cBy), ...Object.keys(bBy)]),
+  );
 
   for (const label of labels) {
     const c = cBy[label];
     const b = bBy[label];
     if (!c || !b) {
-      lines.push(`  ${label.padEnd(16)} ${!c ? 'missing in current' : 'missing in baseline'}`);
+      lines.push(
+        `  ${label.padEnd(16)} ${!c ? 'missing in current' : 'missing in baseline'}`,
+      );
       continue;
     }
     const checks = [
-      { key: 'fps_p50',        dir: 'higher' },
-      { key: 'fps_p5',         dir: 'higher' },
-      { key: 'frame_p95_ms',   dir: 'lower'  },
-      { key: 'longTaskCount',  dir: 'lower'  },
-      { key: 'longTaskMaxMs',  dir: 'lower'  },
+      { key: 'fps_p50', dir: 'higher' },
+      { key: 'fps_p5', dir: 'higher' },
+      { key: 'frame_p95_ms', dir: 'lower' },
+      { key: 'longTaskCount', dir: 'lower' },
+      { key: 'longTaskMaxMs', dir: 'lower' },
     ];
     for (const { key, dir } of checks) {
       const cv = c[key];
@@ -120,15 +131,33 @@ export function diffAgainstBaseline(current, baseline, tolerance = 0.15) {
       const rel = (cv - bv) / bv;
       const regressed = dir === 'lower' ? rel > tolerance : rel < -tolerance;
       const marker = regressed ? 'REGRESS' : 'ok';
-      lines.push(`  ${label.padEnd(16)} ${key.padEnd(16)} ${bv} → ${cv} (${(rel*100).toFixed(1)}%)  ${marker}`);
-      if (regressed) regressions.push({ scenario: label, key, baseline: bv, current: cv, rel });
+      lines.push(
+        `  ${label.padEnd(16)} ${key.padEnd(16)} ${bv} → ${cv} (${(rel * 100).toFixed(1)}%)  ${marker}`,
+      );
+      if (regressed)
+        regressions.push({
+          scenario: label,
+          key,
+          baseline: bv,
+          current: cv,
+          rel,
+        });
     }
   }
   return { regressions, lines };
 }
 
 /** Standardize the run object shape so downstream tools can rely on it. */
-export function buildRun({ demo, backend, startedAt, durationMs, scenarios, workerCount, heapDeltaBytes, harnessVersion }) {
+export function buildRun({
+  demo,
+  backend,
+  startedAt,
+  durationMs,
+  scenarios,
+  workerCount,
+  heapDeltaBytes,
+  harnessVersion,
+}) {
   return {
     schemaVersion: 1,
     harnessVersion,

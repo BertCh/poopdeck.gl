@@ -90,18 +90,28 @@ export interface ColumnBuffers {
   bbox: { min: [number, number, number]; max: [number, number, number] } | null;
 }
 
-function featureColor(b: BinaryFeatures, f: number, mode: ColumnColorMode): RGBA {
+function featureColor(
+  b: BinaryFeatures,
+  f: number,
+  mode: ColumnColorMode,
+): RGBA {
   if (mode.type === 'constant') return mode.color;
   if (mode.type === 'ramp') {
     const col = b.numericProps[mode.property];
     return col ? rampColorAt(col[f], mode.domain, mode.range) : mode.fallback;
   }
   const cat = b.categoricalProps[mode.property];
-  const label = cat && cat.indices[f] !== 0xffff ? cat.categories[cat.indices[f]] : undefined;
+  const label =
+    cat && cat.indices[f] !== 0xffff
+      ? cat.categories[cat.indices[f]]
+      : undefined;
   return resolveCategoryColor(label, mode.mapping, mode.fallback);
 }
 
-function collectPointLayers(tiles: Tile[]): { layers: BinaryFeatures[]; total: number } {
+function collectPointLayers(tiles: Tile[]): {
+  layers: BinaryFeatures[];
+  total: number;
+} {
   const layers: BinaryFeatures[] = [];
   let total = 0;
   for (const tile of tiles) {
@@ -151,7 +161,11 @@ export function buildColumnBuffers(
     if (baseProp) return baseProp[0] + zLift;
     return (fdims > 2 ? first.positions[2] : 0) + zLift;
   })();
-  const origin = projection.project(first.positions[0], first.positions[1], firstBaseZ);
+  const origin = projection.project(
+    first.positions[0],
+    first.positions[1],
+    firstBaseZ,
+  );
 
   const bases = new Float32Array(total * 3);
   const basisX = new Float32Array(total * 3);
@@ -160,13 +174,19 @@ export function buildColumnBuffers(
   const colors = new Float32Array(total * 4);
   const starts = new Float32Array(total);
   const ends = new Float32Array(total);
-  let minX = Infinity, minY = Infinity, minZ = Infinity;
-  let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+  let minX = Infinity,
+    minY = Infinity,
+    minZ = Infinity;
+  let maxX = -Infinity,
+    maxY = -Infinity,
+    maxZ = -Infinity;
 
   let o = 0; // instance index
   for (const b of layers) {
     const dims = b.positionDimensions ?? fdims;
-    const elev = opts.elevationProperty ? b.numericProps[opts.elevationProperty] : undefined;
+    const elev = opts.elevationProperty
+      ? b.numericProps[opts.elevationProperty]
+      : undefined;
     const baseElev = opts.baseElevationProperty
       ? b.numericProps[opts.baseElevationProperty]
       : undefined;
@@ -175,7 +195,8 @@ export function buildColumnBuffers(
       const lon = b.positions[f * dims];
       const lat = b.positions[f * dims + 1];
       const baseZ =
-        (baseElev ? baseElev[f] : dims > 2 ? b.positions[f * dims + 2] : 0) + zLift;
+        (baseElev ? baseElev[f] : dims > 2 ? b.positions[f * dims + 2] : 0) +
+        zLift;
       const [px, py, pz] = projection.project(lon, lat, baseZ);
 
       bases[o * 3] = px - origin[0];
@@ -189,7 +210,9 @@ export function buildColumnBuffers(
       const hWorld = hMetres * inv;
 
       const frame = projection.localFrame(lon, lat);
-      const e = frame.east, n = frame.north, u = frame.up;
+      const e = frame.east,
+        n = frame.north,
+        u = frame.up;
       basisX[o * 3] = e[0] * rWorld;
       basisX[o * 3 + 1] = e[1] * rWorld;
       basisX[o * 3 + 2] = e[2] * rWorld;
@@ -210,11 +233,22 @@ export function buildColumnBuffers(
       ends[o] = (b.endTimes ? b.endTimes[f] : 0) + rebase;
 
       // bbox over the foot and the top of the column (covers the extrusion).
-      const bx = bases[o * 3], by = bases[o * 3 + 1], bz = bases[o * 3 + 2];
-      const tx = bx + basisZ[o * 3], ty = by + basisZ[o * 3 + 1], tz = bz + basisZ[o * 3 + 2];
-      for (const [x, y, z] of [[bx, by, bz], [tx, ty, tz]] as const) {
-        if (x < minX) minX = x; if (y < minY) minY = y; if (z < minZ) minZ = z;
-        if (x > maxX) maxX = x; if (y > maxY) maxY = y; if (z > maxZ) maxZ = z;
+      const bx = bases[o * 3],
+        by = bases[o * 3 + 1],
+        bz = bases[o * 3 + 2];
+      const tx = bx + basisZ[o * 3],
+        ty = by + basisZ[o * 3 + 1],
+        tz = bz + basisZ[o * 3 + 2];
+      for (const [x, y, z] of [
+        [bx, by, bz],
+        [tx, ty, tz],
+      ] as const) {
+        if (x < minX) minX = x;
+        if (y < minY) minY = y;
+        if (z < minZ) minZ = z;
+        if (x > maxX) maxX = x;
+        if (y > maxY) maxY = y;
+        if (z > maxZ) maxZ = z;
       }
       o++;
     }

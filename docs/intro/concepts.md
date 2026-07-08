@@ -7,6 +7,7 @@ This guide introduces the fundamental concepts behind Spatiotemporal Tiles (STT)
 A **Spatiotemporal Tile** is a unit of data that organizes geospatial features not just by space (X, Y coordinates at a Zoom level) but also by **Time**. Unlike traditional vector tiles (MVT) which are static snapshots, an STT tile is addressed by `(zoom, x, y, time bucket)` and contains the features that exist within that space-time volume.
 
 Each tile represents:
+
 - A specific spatial bounds (Web Mercator tile).
 - A specific time interval (start time to end time).
 - A collection of features that exist within that space-time volume.
@@ -28,6 +29,7 @@ WebMercatorQuad tile matrix set plus a regular time dimension
 ### Why add Time?
 
 Traditional approaches to animating massive datasets (millions of points) usually involve:
+
 1.  **Loading everything:** Heavy memory usage, slow initial load.
 2.  **GeoJSON per frame:** Huge network overhead, redundant data.
 3.  **Filtering static tiles:** CPU intensive on the client to filter millions of points every frame.
@@ -37,7 +39,7 @@ STT solves this by pre-indexing data temporally. The client only downloads data 
 ## The packed container
 
 A dataset is **not** one big file. It is a small tree of objects designed so
-that *cacheability is a property of the format* — a dumb CDN or static host
+that _cacheability is a property of the format_ — a dumb CDN or static host
 (S3, R2, GCS) serves it efficiently with no server-side code:
 
 - **`manifest.json`** — the only mutable object. Tiny; embeds the full dataset
@@ -145,6 +147,7 @@ available when you know your access pattern.
 ### Optimistic Rendering
 
 The STT client implementation (`@poopdeck.gl/core`) is designed for smooth animation. It employs **Optimistic Rendering**:
+
 - It immediately displays whatever data is available in the cache.
 - It fetches higher-resolution or adjacent temporal data in the background.
 - It never blocks the animation loop waiting for network requests.
@@ -175,10 +178,10 @@ frames.
 
 This page is the orientation; the normative detail lives in the spec set:
 
-| Spec | Covers |
-| --- | --- |
-| [Packed format](../spec/stt-packed-format.md) | The container: manifest, content-addressed packs, the v5 directory codec (+ paged), caching, reproducibility, standards relationships. Machine-checkable [`manifest.schema.json`](../spec/manifest.schema.json). |
-| [Tile payload](../architecture/data-format.md) | The per-tile Arrow IPC + GeoArrow schema, `vertex_time`, pre-tessellation, and the [space-time cube](../architecture/data-format.md#space-time-cube-payload-vertex_value_matrix) (`vertex_value_matrix`). |
-| [Time model](../spec/time-model.md) | The temporal axis: Unix-ms UTC, instants vs intervals, fixed-width start-anchored buckets, temporal LOD, read-time pruning, and the OGC TMS mapping ([`tile-matrix-set.json`](../spec/tile-matrix-set.json)). |
-| [Sidecar assets](../spec/sidecar-assets.md) | The scene-bundle profile: multi-stream bundles, non-tile sidecars, and `georeferenced` vs `anchored-local` frames. Machine-checkable [`scene.schema.json`](../spec/scene.schema.json). |
-| [Conformance](../spec/conformance.md) | What a conformant reader/writer MUST/SHOULD do, the golden fixtures, and the `stt-validate` reference validator. |
+| Spec                                           | Covers                                                                                                                                                                                                           |
+| ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [Packed format](../spec/stt-packed-format.md)  | The container: manifest, content-addressed packs, the v5 directory codec (+ paged), caching, reproducibility, standards relationships. Machine-checkable [`manifest.schema.json`](../spec/manifest.schema.json). |
+| [Tile payload](../architecture/data-format.md) | The per-tile Arrow IPC + GeoArrow schema, `vertex_time`, pre-tessellation, and the [space-time cube](../architecture/data-format.md#space-time-cube-payload-vertex_value_matrix) (`vertex_value_matrix`).        |
+| [Time model](../spec/time-model.md)            | The temporal axis: Unix-ms UTC, instants vs intervals, fixed-width start-anchored buckets, temporal LOD, read-time pruning, and the OGC TMS mapping ([`tile-matrix-set.json`](../spec/tile-matrix-set.json)).    |
+| [Sidecar assets](../spec/sidecar-assets.md)    | The scene-bundle profile: multi-stream bundles, non-tile sidecars, and `georeferenced` vs `anchored-local` frames. Machine-checkable [`scene.schema.json`](../spec/scene.schema.json).                           |
+| [Conformance](../spec/conformance.md)          | What a conformant reader/writer MUST/SHOULD do, the golden fixtures, and the `stt-validate` reference validator.                                                                                                 |

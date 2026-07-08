@@ -24,7 +24,7 @@ const layer = new ScatterplotLayer({
 
   extensions: [new SplatExtension()],
 
-  getPosition: d => d.coordinates,
+  getPosition: (d) => d.coordinates,
   getRadius: 8,
   billboard: true,
 });

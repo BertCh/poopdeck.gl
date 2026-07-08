@@ -57,11 +57,9 @@ async function openDemo(page: Page): Promise<void> {
   await waitForWebGLCanvas(page);
   // Let tile requests settle. networkidle can be flaky with streaming tile
   // loads, so we bound it and then give deck.gl extra frames to draw.
-  await page
-    .waitForLoadState('networkidle', { timeout: 45_000 })
-    .catch(() => {
-      /* streaming tiles may never fully idle — that's fine */
-    });
+  await page.waitForLoadState('networkidle', { timeout: 45_000 }).catch(() => {
+    /* streaming tiles may never fully idle — that's fine */
+  });
   await page.waitForTimeout(3000);
 }
 
@@ -106,8 +104,10 @@ test.describe('@poopdeck.gl/layers showcase rendering', () => {
     ).toBeGreaterThan(20);
 
     const noisy = fatalErrors(sink);
-    expect(noisy, `Rendering errors during initial draw:\n${noisy.join('\n')}`)
-      .toHaveLength(0);
+    expect(
+      noisy,
+      `Rendering errors during initial draw:\n${noisy.join('\n')}`,
+    ).toHaveLength(0);
   });
 
   test('2. time filter changes the rendered frame (float32 precision guard)', async ({
@@ -232,8 +232,10 @@ test.describe('@poopdeck.gl/layers showcase rendering', () => {
     );
 
     const noisy = fatalErrors(sink);
-    expect(noisy, `Rendering errors during time scrub:\n${noisy.join('\n')}`)
-      .toHaveLength(0);
+    expect(
+      noisy,
+      `Rendering errors during time scrub:\n${noisy.join('\n')}`,
+    ).toHaveLength(0);
   });
 
   test('3. measures FPS during animation playback', async ({ page }) => {

@@ -20,11 +20,16 @@ import type { TileId, BoundingBox } from '../src/types';
 import { BOUNDS, flush as tick } from './helpers/fixtures';
 
 /** A minimal truthy "tile" — getVisibleTiles only needs header.tile non-null. */
-const fakeTile = (id: TileId) => ({ id, featureCount: 0, layers: [] }) as unknown;
+const fakeTile = (id: TileId) =>
+  ({ id, featureCount: 0, layers: [] }) as unknown;
 
 describe('SpatiotemporalTileset additive LOD — union loading', () => {
-  function zoomsQueried(lodMode: 'additive' | 'parent-fallback', minZoom: number,
-                        maxZoom: number, cameraZoom: number) {
+  function zoomsQueried(
+    lodMode: 'additive' | 'parent-fallback',
+    minZoom: number,
+    maxZoom: number,
+    cameraZoom: number,
+  ) {
     const queried = new Set<number>();
     const tileset = new SpatiotemporalTileset({
       minZoom,
@@ -32,13 +37,21 @@ describe('SpatiotemporalTileset additive LOD — union loading', () => {
       lodMode,
       enablePrefetch: false,
       refinementStrategy: 'best-available',
-      getAvailableTiles: async (_b: BoundingBox, z: number): Promise<TileId[]> => {
+      getAvailableTiles: async (
+        _b: BoundingBox,
+        z: number,
+      ): Promise<TileId[]> => {
         queried.add(z);
         return [{ z, x: 0, y: 0, t: 0 }];
       },
       getTileData: async (id: TileId) => fakeTile(id),
     });
-    tileset.update({ bounds: BOUNDS, zoom: cameraZoom, time: 0, timeWindow: 1000 });
+    tileset.update({
+      bounds: BOUNDS,
+      zoom: cameraZoom,
+      time: 0,
+      timeWindow: 1000,
+    });
     return { tileset, queried };
   }
 
@@ -63,7 +76,9 @@ describe('SpatiotemporalTileset additive LOD — union loading', () => {
   it('additive clamps the union to the archive minZoom', async () => {
     const { tileset, queried } = zoomsQueried('additive', 14, 19, 19);
     await tick();
-    expect([...queried].sort((a, b) => a - b)).toEqual([14, 15, 16, 17, 18, 19]);
+    expect([...queried].sort((a, b) => a - b)).toEqual([
+      14, 15, 16, 17, 18, 19,
+    ]);
     tileset.finalize();
   });
 });
@@ -79,7 +94,10 @@ describe('SpatiotemporalTileset additive LOD — getVisibleTiles retains parents
       lodMode,
       enablePrefetch: false,
       refinementStrategy: 'best-available',
-      getAvailableTiles: async (_b: BoundingBox, z: number): Promise<TileId[]> => {
+      getAvailableTiles: async (
+        _b: BoundingBox,
+        z: number,
+      ): Promise<TileId[]> => {
         if (z === 15) {
           return [
             { z: 15, x: 0, y: 0, t: 0 },

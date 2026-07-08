@@ -32,7 +32,11 @@ describe('resolveTilesSource — source → plugin/URL wiring', () => {
       apiToken: 'g',
       autoRefreshToken: true,
     });
-    expect(resolveTilesSource({ google: { apiToken: 'g', autoRefreshToken: false } })).toEqual({
+    expect(
+      resolveTilesSource({
+        google: { apiToken: 'g', autoRefreshToken: false },
+      }),
+    ).toEqual({
       kind: 'google',
       apiToken: 'g',
       autoRefreshToken: false,
@@ -46,17 +50,27 @@ describe('resolveTilesSource — source → plugin/URL wiring', () => {
       assetId: 1,
       autoRefreshToken: true,
     });
-    expect(resolveTilesSource({ ion: { apiToken: 'i', assetId: '96188' } })).toMatchObject({
+    expect(
+      resolveTilesSource({ ion: { apiToken: 'i', assetId: '96188' } }),
+    ).toMatchObject({
       kind: 'ion',
       assetId: '96188',
     });
   });
 
   it('throws on missing tokens / assetId / empty source', () => {
-    expect(() => resolveTilesSource({ google: { apiToken: '' } })).toThrow(/apiToken/);
-    expect(() => resolveTilesSource({ ion: { apiToken: '', assetId: 1 } })).toThrow(/apiToken/);
-    expect(() => resolveTilesSource({ ion: { apiToken: 'i', assetId: '' } })).toThrow(/assetId/);
-    expect(() => resolveTilesSource({ url: '' })).toThrow(/url.*google.*ion|source/i);
+    expect(() => resolveTilesSource({ google: { apiToken: '' } })).toThrow(
+      /apiToken/,
+    );
+    expect(() =>
+      resolveTilesSource({ ion: { apiToken: '', assetId: 1 } }),
+    ).toThrow(/apiToken/);
+    expect(() =>
+      resolveTilesSource({ ion: { apiToken: 'i', assetId: '' } }),
+    ).toThrow(/assetId/);
+    expect(() => resolveTilesSource({ url: '' })).toThrow(
+      /url.*google.*ion|source/i,
+    );
   });
 });
 
@@ -100,14 +114,18 @@ describe('resolveStt3DTilesOptions — defaults', () => {
 describe('ecefToWorldMatrix — globe scenes (uniform scale, INVERSE of world→ECEF)', () => {
   it('is the identity for a default-radius wgs84 globe (tiles already in STT world)', () => {
     const m = ecefToWorldMatrix(
-      new GlobeProjection({ longitude: 10, latitude: 20 }, EARTH_RADIUS, { datum: 'wgs84' }),
+      new GlobeProjection({ longitude: 10, latitude: 20 }, EARTH_RADIUS, {
+        datum: 'wgs84',
+      }),
     );
     expect(m.equals(new Matrix4())).toBe(true);
   });
 
   it('is a pure uniform scale radius/EARTH_RADIUS at a custom radius', () => {
     const R = 100;
-    const m = ecefToWorldMatrix(new GlobeProjection({ longitude: 0, latitude: 0 }, R));
+    const m = ecefToWorldMatrix(
+      new GlobeProjection({ longitude: 0, latitude: 0 }, R),
+    );
     const e = m.elements;
     expect(e[0]).toBeCloseTo(R / EARTH_RADIUS, 15);
     expect(e[5]).toBeCloseTo(R / EARTH_RADIUS, 15);
@@ -123,16 +141,27 @@ describe('ecefToWorldMatrix — globe scenes (uniform scale, INVERSE of world→
 describe('alignTilesGroup — co-registers ECEF-metre tiles with STT globe world', () => {
   it('leaves the group untransformed for a default-radius globe', () => {
     const group = new Group();
-    alignTilesGroup(group, new GlobeProjection({ longitude: 0, latitude: 0 }, EARTH_RADIUS, { datum: 'wgs84' }));
+    alignTilesGroup(
+      group,
+      new GlobeProjection({ longitude: 0, latitude: 0 }, EARTH_RADIUS, {
+        datum: 'wgs84',
+      }),
+    );
     expect(group.position.length()).toBe(0);
     expect(group.scale.x).toBeCloseTo(1, 15);
-    expect(group.quaternion.equals(group.quaternion.clone().identity())).toBe(true);
+    expect(group.quaternion.equals(group.quaternion.clone().identity())).toBe(
+      true,
+    );
   });
 
   it('maps a WGS84-ECEF tile vertex onto the exact GlobeProjection world position', () => {
     // A tile vertex is authored in WGS84 ECEF metres; after the group transform it
     // must land where GlobeProjection('wgs84') puts that lon/lat/height.
-    const globe = new GlobeProjection({ longitude: 0, latitude: 0 }, EARTH_RADIUS, { datum: 'wgs84' });
+    const globe = new GlobeProjection(
+      { longitude: 0, latitude: 0 },
+      EARTH_RADIUS,
+      { datum: 'wgs84' },
+    );
     const group = new Group();
     alignTilesGroup(group, globe);
     const lon = -73.9857;
@@ -146,7 +175,9 @@ describe('alignTilesGroup — co-registers ECEF-metre tiles with STT globe world
 
   it('scales ECEF tiles onto a non-default globe radius', () => {
     const R = 100;
-    const globe = new GlobeProjection({ longitude: 0, latitude: 0 }, R, { datum: 'wgs84' });
+    const globe = new GlobeProjection({ longitude: 0, latitude: 0 }, R, {
+      datum: 'wgs84',
+    });
     const group = new Group();
     alignTilesGroup(group, globe);
     expect(group.scale.x).toBeCloseTo(R / EARTH_RADIUS, 15);
@@ -162,9 +193,16 @@ describe('alignTilesGroup — co-registers ECEF-metre tiles with STT globe world
     alignTilesGroup(group, new LocalEnuProjection(anchor));
     // The anchor's ECEF lands at the local world origin.
     const anchorEcef = geodeticToEcef(anchor.longitude, anchor.latitude, 0);
-    expect(anchorEcef.clone().applyMatrix4(group.matrixWorld).length()).toBeLessThan(1e-3);
+    expect(
+      anchorEcef.clone().applyMatrix4(group.matrixWorld).length(),
+    ).toBeLessThan(1e-3);
     // 100 m up the geodetic normal in ECEF → local +Z (0, 0, 100).
     const up = geodeticToEcef(anchor.longitude, anchor.latitude, 100);
-    expect(up.clone().applyMatrix4(group.matrixWorld).distanceTo(new Vector3(0, 0, 100))).toBeLessThan(1e-3);
+    expect(
+      up
+        .clone()
+        .applyMatrix4(group.matrixWorld)
+        .distanceTo(new Vector3(0, 0, 100)),
+    ).toBeLessThan(1e-3);
   });
 });

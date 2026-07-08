@@ -24,7 +24,12 @@ export interface OdFeature {
  */
 export function odMatrixTile(
   features: OdFeature[],
-  id: { z: number; x: number; y: number; t: number } = { z: 12, x: 1, y: 1, t: 0 },
+  id: { z: number; x: number; y: number; t: number } = {
+    z: 12,
+    x: 1,
+    y: 1,
+    t: 0,
+  },
 ): Tile {
   const n = features.length;
   const nb = features[0].flows.length;

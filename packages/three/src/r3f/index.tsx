@@ -29,7 +29,13 @@ import * as React from 'react';
 import { Canvas, useThree, useFrame, type GLProps } from '@react-three/fiber';
 import { MapControls, OrbitControls } from '@react-three/drei';
 import { WebGPURenderer } from 'three/webgpu';
-import { Box3, RenderTarget, Vector2, Vector3, type PerspectiveCamera } from 'three';
+import {
+  Box3,
+  RenderTarget,
+  Vector2,
+  Vector3,
+  type PerspectiveCamera,
+} from 'three';
 import type { Tile } from '@poopdeck.gl/core';
 import { type GeoAnchor, type Projection } from '../projection/local-enu.js';
 import {
@@ -39,9 +45,19 @@ import {
   type SttBoxPickInfo,
 } from '../lib/box-pick.js';
 import { pointPickToInfo } from '../lib/point-pick.js';
-import { GpuPicker, type PickRenderer, type RenderTargetCtor } from '../lib/gpu-pick.js';
-import { createCompleteBufferSource, type SttSourceRegistry } from '../lib/source-registry.js';
-import { createHighLimitDevice, resolveBackend } from '../renderer/webgpu-renderer.js';
+import {
+  GpuPicker,
+  type PickRenderer,
+  type RenderTargetCtor,
+} from '../lib/gpu-pick.js';
+import {
+  createCompleteBufferSource,
+  type SttSourceRegistry,
+} from '../lib/source-registry.js';
+import {
+  createHighLimitDevice,
+  resolveBackend,
+} from '../renderer/webgpu-renderer.js';
 import {
   createSttAtmosphere,
   type AtmosphereOptions,
@@ -53,7 +69,10 @@ import {
   type Stt3DTilesOptions,
   type Stt3DTilesSource,
 } from '../scene/tiles-3d.js';
-import { createSttGlobeControls, type SttGlobeControls } from '../scene/globe-controls.js';
+import {
+  createSttGlobeControls,
+  type SttGlobeControls,
+} from '../scene/globe-controls.js';
 import { SttTileSource } from '../scene/tile-source.js';
 import {
   StreamingTileSource,
@@ -71,14 +90,23 @@ import {
   globeControlLimits,
 } from '../scene/projection-rig.js';
 import type { SttLayer } from '../layers/layer.js';
-import { SurfelLayer, type SurfelLayerOptions } from '../layers/surfel-layer.js';
+import {
+  SurfelLayer,
+  type SurfelLayerOptions,
+} from '../layers/surfel-layer.js';
 import {
   PointCloudLayer,
   type PointCloudLayerOptions,
   type SttPointPickable,
 } from '../layers/point-cloud-layer.js';
-import { BoundingBoxLayer, type BoundingBoxLayerOptions } from '../layers/bounding-box-layer.js';
-import { StaticPathLayer, type StaticPathLayerOptions } from '../layers/path-layer.js';
+import {
+  BoundingBoxLayer,
+  type BoundingBoxLayerOptions,
+} from '../layers/bounding-box-layer.js';
+import {
+  StaticPathLayer,
+  type StaticPathLayerOptions,
+} from '../layers/path-layer.js';
 import {
   StaticPolygonLayer,
   type StaticPolygonLayerOptions,
@@ -88,20 +116,44 @@ import {
 import { EgoLayer, type EgoLayerOptions } from '../layers/ego-layer.js';
 import { IsoLayer, type IsoLayerOptions } from '../layers/iso-layer.js';
 import { TripsLayer, type TripsLayerOptions } from '../layers/trips-layer.js';
-import { PathGeoLayer, type PathGeoLayerOptions } from '../layers/path-geo-layer.js';
-import { OdLineLayer, type OdLineLayerOptions } from '../layers/od-line-layer.js';
+import {
+  PathGeoLayer,
+  type PathGeoLayerOptions,
+} from '../layers/path-geo-layer.js';
+import {
+  OdLineLayer,
+  type OdLineLayerOptions,
+} from '../layers/od-line-layer.js';
 import { ArcLayer, type ArcLayerOptions } from '../layers/arc-layer.js';
 import { IconLayer, type IconLayerOptions } from '../layers/icon-layer.js';
-import { ColumnLayer, type ColumnLayerOptions } from '../layers/column-layer.js';
-import { TripHeadsLayer, type TripHeadsLayerOptions } from '../layers/trip-heads-layer.js';
+import {
+  ColumnLayer,
+  type ColumnLayerOptions,
+} from '../layers/column-layer.js';
+import {
+  TripHeadsLayer,
+  type TripHeadsLayerOptions,
+} from '../layers/trip-heads-layer.js';
 import {
   QuadbinSummaryLayer,
   type QuadbinSummaryLayerOptions,
 } from '../layers/quadbin-summary-layer.js';
-import { H3SummaryLayer, type H3SummaryLayerOptions } from '../layers/h3-summary-layer.js';
-import { FlowmapLayer, type FlowmapLayerOptions } from '../layers/flowmap-layer.js';
-import { FlowCorridorLayer, type FlowCorridorLayerOptions } from '../layers/flow-corridor-layer.js';
-import { makeGlobeBasemap, type GlobeBasemapOptions } from '../scene/globe-basemap.js';
+import {
+  H3SummaryLayer,
+  type H3SummaryLayerOptions,
+} from '../layers/h3-summary-layer.js';
+import {
+  FlowmapLayer,
+  type FlowmapLayerOptions,
+} from '../layers/flowmap-layer.js';
+import {
+  FlowCorridorLayer,
+  type FlowCorridorLayerOptions,
+} from '../layers/flow-corridor-layer.js';
+import {
+  makeGlobeBasemap,
+  type GlobeBasemapOptions,
+} from '../scene/globe-basemap.js';
 import { GlobeProjection } from '../projection/globe.js';
 
 // ─── Context ──────────────────────────────────────────────────────────────────
@@ -136,7 +188,8 @@ const Ctx = React.createContext<SttSceneCtx | null>(null);
 
 function useSttScene(): SttSceneCtx {
   const c = React.useContext(Ctx);
-  if (!c) throw new Error('STT layer components must be rendered inside <SttCanvas>');
+  if (!c)
+    throw new Error('STT layer components must be rendered inside <SttCanvas>');
   return c;
 }
 
@@ -257,7 +310,11 @@ export function useSttTiles(url: string, lodMode?: 'additive'): Tile[] {
   // blank the whole canvas via the error boundary — render this archive empty
   // (logged once). `invalidateSttTiles(url)` or a reload retries.
   if (entry.status === 'error') {
-    warnOnce(`tiles:${key}`, `[stt-three] tiles failed to load (${url}); rendering empty`, entry.error);
+    warnOnce(
+      `tiles:${key}`,
+      `[stt-three] tiles failed to load (${url}); rendering empty`,
+      entry.error,
+    );
     return [];
   }
   return entry.tiles!;
@@ -289,7 +346,8 @@ function useEngineLayer<L extends SttLayer>(
   deps: React.DependencyList,
   gov: LayerGovernance,
 ): L {
-  const { projection, timeOrigin, getTime, layers, registry, timeRange } = useSttScene();
+  const { projection, timeOrigin, getTime, layers, registry, timeRange } =
+    useSttScene();
   const gl = useThree((s) => s.gl);
   const size = useThree((s) => s.size);
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -299,7 +357,11 @@ function useEngineLayer<L extends SttLayer>(
     try {
       layer.setTiles(tiles, { projection, timeOrigin });
     } catch (err) {
-      warnOnce(`setTiles:${gov.sourceId}`, `[stt-three] setTiles failed for ${gov.sourceId}`, err);
+      warnOnce(
+        `setTiles:${gov.sourceId}`,
+        `[stt-three] setTiles failed for ${gov.sourceId}`,
+        err,
+      );
     }
   }, [layer, tiles, projection, timeOrigin]);
   // CRITICAL: a per-frame throw here (transient decode/NaN, a WGSL build hiccup)
@@ -309,7 +371,11 @@ function useEngineLayer<L extends SttLayer>(
     try {
       layer.setTime(getTime());
     } catch (err) {
-      warnOnce(`setTime:${gov.sourceId}`, `[stt-three] setTime failed for ${gov.sourceId}`, err);
+      warnOnce(
+        `setTime:${gov.sourceId}`,
+        `[stt-three] setTime failed for ${gov.sourceId}`,
+        err,
+      );
     }
   });
 
@@ -346,10 +412,9 @@ function useEngineLayer<L extends SttLayer>(
   // on mount and on every resize; a no-op for layers without `setViewport`.
   React.useEffect(() => {
     const dims = gl.getDrawingBufferSize(new Vector2());
-    (layer as unknown as { setViewport?: (w: number, h: number) => void }).setViewport?.(
-      dims.x,
-      dims.y,
-    );
+    (
+      layer as unknown as { setViewport?: (w: number, h: number) => void }
+    ).setViewport?.(dims.x, dims.y);
   }, [layer, gl, size.width, size.height]);
 
   React.useEffect(() => () => layer.dispose(), [layer]);
@@ -374,7 +439,8 @@ function useStreamingEngineLayer<L extends SttLayer>(
   deps: React.DependencyList,
   gov: { sourceId?: string; required?: boolean },
 ): L {
-  const { projection, timeOrigin, getTime, layers, registry, timeRange } = useSttScene();
+  const { projection, timeOrigin, getTime, layers, registry, timeRange } =
+    useSttScene();
   const gl = useThree((s) => s.gl);
   const camera = useThree((s) => s.camera) as PerspectiveCamera;
   const size = useThree((s) => s.size);
@@ -389,7 +455,11 @@ function useStreamingEngineLayer<L extends SttLayer>(
       try {
         layer.setTiles(tiles, { projection, timeOrigin });
       } catch (err) {
-        warnOnce(`setTiles:${gov.sourceId}`, `[stt-three] streaming setTiles failed for ${gov.sourceId}`, err);
+        warnOnce(
+          `setTiles:${gov.sourceId}`,
+          `[stt-three] streaming setTiles failed for ${gov.sourceId}`,
+          err,
+        );
       }
     });
     void source.load();
@@ -403,7 +473,8 @@ function useStreamingEngineLayer<L extends SttLayer>(
   useFrame(() => {
     const t = getTime();
     try {
-      const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+      const now =
+        typeof performance !== 'undefined' ? performance.now() : Date.now();
       if (now - lastUpdate.current >= STREAM_UPDATE_MS) {
         lastUpdate.current = now;
         const md = source.getMetadata();
@@ -420,23 +491,30 @@ function useStreamingEngineLayer<L extends SttLayer>(
       // through the registered TilesetBufferSource, so we leave it alone.
       if (!registry) source.setAnimationState(t !== lastTime.current);
     } catch (err) {
-      warnOnce(`stream:${gov.sourceId}`, `[stt-three] streaming update failed for ${gov.sourceId}`, err);
+      warnOnce(
+        `stream:${gov.sourceId}`,
+        `[stt-three] streaming update failed for ${gov.sourceId}`,
+        err,
+      );
     }
     lastTime.current = t;
     try {
       layer.setTime(t);
     } catch (err) {
-      warnOnce(`setTime:${gov.sourceId}`, `[stt-three] setTime failed for ${gov.sourceId}`, err);
+      warnOnce(
+        `setTime:${gov.sourceId}`,
+        `[stt-three] setTime failed for ${gov.sourceId}`,
+        err,
+      );
     }
   });
 
   // Pixel-sizing viewport push (device px), mirroring the eager path.
   React.useEffect(() => {
     const dims = gl.getDrawingBufferSize(new Vector2());
-    (layer as unknown as { setViewport?: (w: number, h: number) => void }).setViewport?.(
-      dims.x,
-      dims.y,
-    );
+    (
+      layer as unknown as { setViewport?: (w: number, h: number) => void }
+    ).setViewport?.(dims.x, dims.y);
   }, [layer, gl, size.width, size.height]);
 
   // Bounds membership: CameraRig frames to the union of layer AABBs (which grow
@@ -458,7 +536,9 @@ function useStreamingEngineLayer<L extends SttLayer>(
     let cancelled = false;
     void source.load().then(() => {
       if (cancelled) return;
-      const bs = createTilesetBufferSource(source) ?? createCompleteBufferSource(timeRange);
+      const bs =
+        createTilesetBufferSource(source) ??
+        createCompleteBufferSource(timeRange);
       registry.registerSource(id, bs, { required: gov.required ?? true });
     });
     return () => {
@@ -526,10 +606,15 @@ function StreamingLayerMount<L extends SttLayer>(props: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [props.url, props.lodMode],
   );
-  const layer = useStreamingEngineLayer(props.make, source, [props.url, props.lodMode], {
-    sourceId: props.sourceId,
-    required: props.sourceRequired ?? props.defaultRequired,
-  });
+  const layer = useStreamingEngineLayer(
+    props.make,
+    source,
+    [props.url, props.lodMode],
+    {
+      sourceId: props.sourceId,
+      required: props.sourceRequired ?? props.defaultRequired,
+    },
+  );
   if (props.extra) props.extra(layer);
   return <primitive object={layer.object} dispose={null} />;
 }
@@ -553,18 +638,35 @@ interface UrlProp {
   streaming?: boolean | StreamingLayerOptions;
 }
 
-export function SttSurfelLayer(props: SurfelLayerOptions & UrlProp): React.ReactElement {
+export function SttSurfelLayer(
+  props: SurfelLayerOptions & UrlProp,
+): React.ReactElement {
   const { url, lodMode, sourceRequired, streaming, ...opts } = props;
   const resolved = useResolvedStreaming(streaming);
   const make = (): SurfelLayer => new SurfelLayer(opts);
   return resolved ? (
-    <StreamingLayerMount make={make} url={url} lodMode={lodMode} opts={resolved.opts} sourceId={opts.id} sourceRequired={sourceRequired} />
+    <StreamingLayerMount
+      make={make}
+      url={url}
+      lodMode={lodMode}
+      opts={resolved.opts}
+      sourceId={opts.id}
+      sourceRequired={sourceRequired}
+    />
   ) : (
-    <EagerLayerMount make={make} url={url} lodMode={lodMode} sourceId={opts.id} sourceRequired={sourceRequired} />
+    <EagerLayerMount
+      make={make}
+      url={url}
+      lodMode={lodMode}
+      sourceId={opts.id}
+      sourceRequired={sourceRequired}
+    />
   );
 }
 
-export function SttPointCloudLayer(props: PointCloudLayerOptions & UrlProp): React.ReactElement {
+export function SttPointCloudLayer(
+  props: PointCloudLayerOptions & UrlProp,
+): React.ReactElement {
   const { url, lodMode, sourceRequired, streaming, ...opts } = props;
   const resolved = useResolvedStreaming(streaming);
   const { pointPickables } = useSttScene();
@@ -582,13 +684,30 @@ export function SttPointCloudLayer(props: PointCloudLayerOptions & UrlProp): Rea
     }, [layer]);
   };
   return resolved ? (
-    <StreamingLayerMount make={make} url={url} lodMode={lodMode} opts={resolved.opts} sourceId={opts.id} sourceRequired={sourceRequired} extra={extra} />
+    <StreamingLayerMount
+      make={make}
+      url={url}
+      lodMode={lodMode}
+      opts={resolved.opts}
+      sourceId={opts.id}
+      sourceRequired={sourceRequired}
+      extra={extra}
+    />
   ) : (
-    <EagerLayerMount make={make} url={url} lodMode={lodMode} sourceId={opts.id} sourceRequired={sourceRequired} extra={extra} />
+    <EagerLayerMount
+      make={make}
+      url={url}
+      lodMode={lodMode}
+      sourceId={opts.id}
+      sourceRequired={sourceRequired}
+      extra={extra}
+    />
   );
 }
 
-export function SttBoundingBoxLayer(props: BoundingBoxLayerOptions & UrlProp): React.ReactElement {
+export function SttBoundingBoxLayer(
+  props: BoundingBoxLayerOptions & UrlProp,
+): React.ReactElement {
   const { url, lodMode, sourceRequired, streaming, ...opts } = props;
   const resolved = useResolvedStreaming(streaming);
   const { pickables } = useSttScene();
@@ -604,179 +723,425 @@ export function SttBoundingBoxLayer(props: BoundingBoxLayerOptions & UrlProp): R
     }, [layer]);
   };
   return resolved ? (
-    <StreamingLayerMount make={make} url={url} lodMode={lodMode} opts={resolved.opts} sourceId={opts.id} sourceRequired={sourceRequired} extra={extra} />
+    <StreamingLayerMount
+      make={make}
+      url={url}
+      lodMode={lodMode}
+      opts={resolved.opts}
+      sourceId={opts.id}
+      sourceRequired={sourceRequired}
+      extra={extra}
+    />
   ) : (
-    <EagerLayerMount make={make} url={url} lodMode={lodMode} sourceId={opts.id} sourceRequired={sourceRequired} extra={extra} />
+    <EagerLayerMount
+      make={make}
+      url={url}
+      lodMode={lodMode}
+      sourceId={opts.id}
+      sourceRequired={sourceRequired}
+      extra={extra}
+    />
   );
 }
 
-export function SttMapPolygonLayer(props: StaticPolygonLayerOptions & UrlProp): React.ReactElement {
+export function SttMapPolygonLayer(
+  props: StaticPolygonLayerOptions & UrlProp,
+): React.ReactElement {
   const { url, lodMode, sourceRequired, streaming, ...opts } = props;
   const resolved = useResolvedStreaming(streaming);
   const make = (): StaticPolygonLayer => new StaticPolygonLayer(opts);
   // Map overlays load coordinated but never gate the clock (HD-map idiom).
   return resolved ? (
-    <StreamingLayerMount make={make} url={url} lodMode={lodMode} opts={resolved.opts} sourceId={opts.id} sourceRequired={sourceRequired} defaultRequired={false} />
+    <StreamingLayerMount
+      make={make}
+      url={url}
+      lodMode={lodMode}
+      opts={resolved.opts}
+      sourceId={opts.id}
+      sourceRequired={sourceRequired}
+      defaultRequired={false}
+    />
   ) : (
-    <EagerLayerMount make={make} url={url} lodMode={lodMode} sourceId={opts.id} sourceRequired={sourceRequired} defaultRequired={false} />
+    <EagerLayerMount
+      make={make}
+      url={url}
+      lodMode={lodMode}
+      sourceId={opts.id}
+      sourceRequired={sourceRequired}
+      defaultRequired={false}
+    />
   );
 }
 
-export function SttMapLineLayer(props: StaticPathLayerOptions & UrlProp): React.ReactElement {
+export function SttMapLineLayer(
+  props: StaticPathLayerOptions & UrlProp,
+): React.ReactElement {
   const { url, lodMode, sourceRequired, streaming, ...opts } = props;
   const resolved = useResolvedStreaming(streaming);
   const make = (): StaticPathLayer => new StaticPathLayer(opts);
   return resolved ? (
-    <StreamingLayerMount make={make} url={url} lodMode={lodMode} opts={resolved.opts} sourceId={opts.id} sourceRequired={sourceRequired} defaultRequired={false} />
+    <StreamingLayerMount
+      make={make}
+      url={url}
+      lodMode={lodMode}
+      opts={resolved.opts}
+      sourceId={opts.id}
+      sourceRequired={sourceRequired}
+      defaultRequired={false}
+    />
   ) : (
-    <EagerLayerMount make={make} url={url} lodMode={lodMode} sourceId={opts.id} sourceRequired={sourceRequired} defaultRequired={false} />
+    <EagerLayerMount
+      make={make}
+      url={url}
+      lodMode={lodMode}
+      sourceId={opts.id}
+      sourceRequired={sourceRequired}
+      defaultRequired={false}
+    />
   );
 }
 
-export function SttIsoLayer(props: IsoLayerOptions & UrlProp): React.ReactElement {
+export function SttIsoLayer(
+  props: IsoLayerOptions & UrlProp,
+): React.ReactElement {
   const { url, lodMode, sourceRequired, streaming, ...opts } = props;
   const resolved = useResolvedStreaming(streaming);
   const make = (): IsoLayer => new IsoLayer(opts);
   return resolved ? (
-    <StreamingLayerMount make={make} url={url} lodMode={lodMode} opts={resolved.opts} sourceId={opts.id} sourceRequired={sourceRequired} />
+    <StreamingLayerMount
+      make={make}
+      url={url}
+      lodMode={lodMode}
+      opts={resolved.opts}
+      sourceId={opts.id}
+      sourceRequired={sourceRequired}
+    />
   ) : (
-    <EagerLayerMount make={make} url={url} lodMode={lodMode} sourceId={opts.id} sourceRequired={sourceRequired} />
+    <EagerLayerMount
+      make={make}
+      url={url}
+      lodMode={lodMode}
+      sourceId={opts.id}
+      sourceRequired={sourceRequired}
+    />
   );
 }
 
-export function SttTripsLayer(props: TripsLayerOptions & UrlProp): React.ReactElement {
+export function SttTripsLayer(
+  props: TripsLayerOptions & UrlProp,
+): React.ReactElement {
   const { url, lodMode, sourceRequired, streaming, ...opts } = props;
   const resolved = useResolvedStreaming(streaming);
   const make = (): TripsLayer => new TripsLayer(opts);
   return resolved ? (
-    <StreamingLayerMount make={make} url={url} lodMode={lodMode} opts={resolved.opts} sourceId={opts.id} sourceRequired={sourceRequired} />
+    <StreamingLayerMount
+      make={make}
+      url={url}
+      lodMode={lodMode}
+      opts={resolved.opts}
+      sourceId={opts.id}
+      sourceRequired={sourceRequired}
+    />
   ) : (
-    <EagerLayerMount make={make} url={url} lodMode={lodMode} sourceId={opts.id} sourceRequired={sourceRequired} />
+    <EagerLayerMount
+      make={make}
+      url={url}
+      lodMode={lodMode}
+      sourceId={opts.id}
+      sourceRequired={sourceRequired}
+    />
   );
 }
 
-export function SttPathLayer(props: PathGeoLayerOptions & UrlProp): React.ReactElement {
+export function SttPathLayer(
+  props: PathGeoLayerOptions & UrlProp,
+): React.ReactElement {
   const { url, lodMode, sourceRequired, streaming, ...opts } = props;
   const resolved = useResolvedStreaming(streaming);
   const make = (): PathGeoLayer => new PathGeoLayer(opts);
   return resolved ? (
-    <StreamingLayerMount make={make} url={url} lodMode={lodMode} opts={resolved.opts} sourceId={opts.id} sourceRequired={sourceRequired} />
+    <StreamingLayerMount
+      make={make}
+      url={url}
+      lodMode={lodMode}
+      opts={resolved.opts}
+      sourceId={opts.id}
+      sourceRequired={sourceRequired}
+    />
   ) : (
-    <EagerLayerMount make={make} url={url} lodMode={lodMode} sourceId={opts.id} sourceRequired={sourceRequired} />
+    <EagerLayerMount
+      make={make}
+      url={url}
+      lodMode={lodMode}
+      sourceId={opts.id}
+      sourceRequired={sourceRequired}
+    />
   );
 }
 
-export function SttOdLineLayer(props: OdLineLayerOptions & UrlProp): React.ReactElement {
+export function SttOdLineLayer(
+  props: OdLineLayerOptions & UrlProp,
+): React.ReactElement {
   const { url, lodMode, sourceRequired, streaming, ...opts } = props;
   const resolved = useResolvedStreaming(streaming);
   const make = (): OdLineLayer => new OdLineLayer(opts);
   return resolved ? (
-    <StreamingLayerMount make={make} url={url} lodMode={lodMode} opts={resolved.opts} sourceId={opts.id} sourceRequired={sourceRequired} />
+    <StreamingLayerMount
+      make={make}
+      url={url}
+      lodMode={lodMode}
+      opts={resolved.opts}
+      sourceId={opts.id}
+      sourceRequired={sourceRequired}
+    />
   ) : (
-    <EagerLayerMount make={make} url={url} lodMode={lodMode} sourceId={opts.id} sourceRequired={sourceRequired} />
+    <EagerLayerMount
+      make={make}
+      url={url}
+      lodMode={lodMode}
+      sourceId={opts.id}
+      sourceRequired={sourceRequired}
+    />
   );
 }
 
-export function SttArcLayer(props: ArcLayerOptions & UrlProp): React.ReactElement {
+export function SttArcLayer(
+  props: ArcLayerOptions & UrlProp,
+): React.ReactElement {
   const { url, lodMode, sourceRequired, streaming, ...opts } = props;
   const resolved = useResolvedStreaming(streaming);
   const make = (): ArcLayer => new ArcLayer(opts);
   return resolved ? (
-    <StreamingLayerMount make={make} url={url} lodMode={lodMode} opts={resolved.opts} sourceId={opts.id} sourceRequired={sourceRequired} />
+    <StreamingLayerMount
+      make={make}
+      url={url}
+      lodMode={lodMode}
+      opts={resolved.opts}
+      sourceId={opts.id}
+      sourceRequired={sourceRequired}
+    />
   ) : (
-    <EagerLayerMount make={make} url={url} lodMode={lodMode} sourceId={opts.id} sourceRequired={sourceRequired} />
+    <EagerLayerMount
+      make={make}
+      url={url}
+      lodMode={lodMode}
+      sourceId={opts.id}
+      sourceRequired={sourceRequired}
+    />
   );
 }
 
-export function SttIconLayer(props: IconLayerOptions & UrlProp): React.ReactElement {
+export function SttIconLayer(
+  props: IconLayerOptions & UrlProp,
+): React.ReactElement {
   const { url, lodMode, sourceRequired, streaming, ...opts } = props;
   const resolved = useResolvedStreaming(streaming);
   const make = (): IconLayer => new IconLayer(opts);
   return resolved ? (
-    <StreamingLayerMount make={make} url={url} lodMode={lodMode} opts={resolved.opts} sourceId={opts.id} sourceRequired={sourceRequired} />
+    <StreamingLayerMount
+      make={make}
+      url={url}
+      lodMode={lodMode}
+      opts={resolved.opts}
+      sourceId={opts.id}
+      sourceRequired={sourceRequired}
+    />
   ) : (
-    <EagerLayerMount make={make} url={url} lodMode={lodMode} sourceId={opts.id} sourceRequired={sourceRequired} />
+    <EagerLayerMount
+      make={make}
+      url={url}
+      lodMode={lodMode}
+      sourceId={opts.id}
+      sourceRequired={sourceRequired}
+    />
   );
 }
 
-export function SttColumnLayer(props: ColumnLayerOptions & UrlProp): React.ReactElement {
+export function SttColumnLayer(
+  props: ColumnLayerOptions & UrlProp,
+): React.ReactElement {
   const { url, lodMode, sourceRequired, streaming, ...opts } = props;
   const resolved = useResolvedStreaming(streaming);
   const make = (): ColumnLayer => new ColumnLayer(opts);
   return resolved ? (
-    <StreamingLayerMount make={make} url={url} lodMode={lodMode} opts={resolved.opts} sourceId={opts.id} sourceRequired={sourceRequired} />
+    <StreamingLayerMount
+      make={make}
+      url={url}
+      lodMode={lodMode}
+      opts={resolved.opts}
+      sourceId={opts.id}
+      sourceRequired={sourceRequired}
+    />
   ) : (
-    <EagerLayerMount make={make} url={url} lodMode={lodMode} sourceId={opts.id} sourceRequired={sourceRequired} />
+    <EagerLayerMount
+      make={make}
+      url={url}
+      lodMode={lodMode}
+      sourceId={opts.id}
+      sourceRequired={sourceRequired}
+    />
   );
 }
 
-export function SttPolygonLayer(props: PolygonLayerOptions & UrlProp): React.ReactElement {
+export function SttPolygonLayer(
+  props: PolygonLayerOptions & UrlProp,
+): React.ReactElement {
   const { url, lodMode, sourceRequired, streaming, ...opts } = props;
   const resolved = useResolvedStreaming(streaming);
   const make = (): PolygonLayer => new PolygonLayer(opts);
   return resolved ? (
-    <StreamingLayerMount make={make} url={url} lodMode={lodMode} opts={resolved.opts} sourceId={opts.id} sourceRequired={sourceRequired} />
+    <StreamingLayerMount
+      make={make}
+      url={url}
+      lodMode={lodMode}
+      opts={resolved.opts}
+      sourceId={opts.id}
+      sourceRequired={sourceRequired}
+    />
   ) : (
-    <EagerLayerMount make={make} url={url} lodMode={lodMode} sourceId={opts.id} sourceRequired={sourceRequired} />
+    <EagerLayerMount
+      make={make}
+      url={url}
+      lodMode={lodMode}
+      sourceId={opts.id}
+      sourceRequired={sourceRequired}
+    />
   );
 }
 
-export function SttTripHeadsLayer(props: TripHeadsLayerOptions & UrlProp): React.ReactElement {
+export function SttTripHeadsLayer(
+  props: TripHeadsLayerOptions & UrlProp,
+): React.ReactElement {
   const { url, lodMode, sourceRequired, streaming, ...opts } = props;
   const resolved = useResolvedStreaming(streaming);
   const make = (): TripHeadsLayer => new TripHeadsLayer(opts);
   return resolved ? (
-    <StreamingLayerMount make={make} url={url} lodMode={lodMode} opts={resolved.opts} sourceId={opts.id} sourceRequired={sourceRequired} />
+    <StreamingLayerMount
+      make={make}
+      url={url}
+      lodMode={lodMode}
+      opts={resolved.opts}
+      sourceId={opts.id}
+      sourceRequired={sourceRequired}
+    />
   ) : (
-    <EagerLayerMount make={make} url={url} lodMode={lodMode} sourceId={opts.id} sourceRequired={sourceRequired} />
+    <EagerLayerMount
+      make={make}
+      url={url}
+      lodMode={lodMode}
+      sourceId={opts.id}
+      sourceRequired={sourceRequired}
+    />
   );
 }
 
-export function SttQuadbinLayer(props: QuadbinSummaryLayerOptions & UrlProp): React.ReactElement {
+export function SttQuadbinLayer(
+  props: QuadbinSummaryLayerOptions & UrlProp,
+): React.ReactElement {
   const { url, lodMode, sourceRequired, streaming, ...opts } = props;
   const resolved = useResolvedStreaming(streaming);
   const make = (): QuadbinSummaryLayer => new QuadbinSummaryLayer(opts);
   return resolved ? (
-    <StreamingLayerMount make={make} url={url} lodMode={lodMode} opts={resolved.opts} sourceId={opts.id} sourceRequired={sourceRequired} />
+    <StreamingLayerMount
+      make={make}
+      url={url}
+      lodMode={lodMode}
+      opts={resolved.opts}
+      sourceId={opts.id}
+      sourceRequired={sourceRequired}
+    />
   ) : (
-    <EagerLayerMount make={make} url={url} lodMode={lodMode} sourceId={opts.id} sourceRequired={sourceRequired} />
+    <EagerLayerMount
+      make={make}
+      url={url}
+      lodMode={lodMode}
+      sourceId={opts.id}
+      sourceRequired={sourceRequired}
+    />
   );
 }
 
-export function SttH3Layer(props: H3SummaryLayerOptions & UrlProp): React.ReactElement {
+export function SttH3Layer(
+  props: H3SummaryLayerOptions & UrlProp,
+): React.ReactElement {
   const { url, lodMode, sourceRequired, streaming, ...opts } = props;
   const resolved = useResolvedStreaming(streaming);
   const make = (): H3SummaryLayer => new H3SummaryLayer(opts);
   return resolved ? (
-    <StreamingLayerMount make={make} url={url} lodMode={lodMode} opts={resolved.opts} sourceId={opts.id} sourceRequired={sourceRequired} />
+    <StreamingLayerMount
+      make={make}
+      url={url}
+      lodMode={lodMode}
+      opts={resolved.opts}
+      sourceId={opts.id}
+      sourceRequired={sourceRequired}
+    />
   ) : (
-    <EagerLayerMount make={make} url={url} lodMode={lodMode} sourceId={opts.id} sourceRequired={sourceRequired} />
+    <EagerLayerMount
+      make={make}
+      url={url}
+      lodMode={lodMode}
+      sourceId={opts.id}
+      sourceRequired={sourceRequired}
+    />
   );
 }
 
-export function SttFlowmapLayer(props: FlowmapLayerOptions & UrlProp): React.ReactElement {
+export function SttFlowmapLayer(
+  props: FlowmapLayerOptions & UrlProp,
+): React.ReactElement {
   const { url, lodMode, sourceRequired, streaming, ...opts } = props;
   const resolved = useResolvedStreaming(streaming);
   const make = (): FlowmapLayer => new FlowmapLayer(opts);
   return resolved ? (
-    <StreamingLayerMount make={make} url={url} lodMode={lodMode} opts={resolved.opts} sourceId={opts.id} sourceRequired={sourceRequired} />
+    <StreamingLayerMount
+      make={make}
+      url={url}
+      lodMode={lodMode}
+      opts={resolved.opts}
+      sourceId={opts.id}
+      sourceRequired={sourceRequired}
+    />
   ) : (
-    <EagerLayerMount make={make} url={url} lodMode={lodMode} sourceId={opts.id} sourceRequired={sourceRequired} />
+    <EagerLayerMount
+      make={make}
+      url={url}
+      lodMode={lodMode}
+      sourceId={opts.id}
+      sourceRequired={sourceRequired}
+    />
   );
 }
 
-export function SttFlowCorridorLayer(props: FlowCorridorLayerOptions & UrlProp): React.ReactElement {
+export function SttFlowCorridorLayer(
+  props: FlowCorridorLayerOptions & UrlProp,
+): React.ReactElement {
   const { url, lodMode, sourceRequired, streaming, ...opts } = props;
   const resolved = useResolvedStreaming(streaming);
   const make = (): FlowCorridorLayer => new FlowCorridorLayer(opts);
   return resolved ? (
-    <StreamingLayerMount make={make} url={url} lodMode={lodMode} opts={resolved.opts} sourceId={opts.id} sourceRequired={sourceRequired} />
+    <StreamingLayerMount
+      make={make}
+      url={url}
+      lodMode={lodMode}
+      opts={resolved.opts}
+      sourceId={opts.id}
+      sourceRequired={sourceRequired}
+    />
   ) : (
-    <EagerLayerMount make={make} url={url} lodMode={lodMode} sourceId={opts.id} sourceRequired={sourceRequired} />
+    <EagerLayerMount
+      make={make}
+      url={url}
+      lodMode={lodMode}
+      sourceId={opts.id}
+      sourceRequired={sourceRequired}
+    />
   );
 }
 
-export function SttEgoLayer(props: EgoLayerOptions & UrlProp): React.ReactElement {
+export function SttEgoLayer(
+  props: EgoLayerOptions & UrlProp,
+): React.ReactElement {
   const { url, lodMode, sourceRequired, streaming, ...opts } = props;
   const resolved = useResolvedStreaming(streaming);
   const { egoRef, pickables } = useSttScene();
@@ -794,9 +1159,24 @@ export function SttEgoLayer(props: EgoLayerOptions & UrlProp): React.ReactElemen
     }, [layer]);
   };
   return resolved ? (
-    <StreamingLayerMount make={make} url={url} lodMode={lodMode} opts={resolved.opts} sourceId={opts.id} sourceRequired={sourceRequired} extra={extra} />
+    <StreamingLayerMount
+      make={make}
+      url={url}
+      lodMode={lodMode}
+      opts={resolved.opts}
+      sourceId={opts.id}
+      sourceRequired={sourceRequired}
+      extra={extra}
+    />
   ) : (
-    <EagerLayerMount make={make} url={url} lodMode={lodMode} sourceId={opts.id} sourceRequired={sourceRequired} extra={extra} />
+    <EagerLayerMount
+      make={make}
+      url={url}
+      lodMode={lodMode}
+      sourceId={opts.id}
+      sourceRequired={sourceRequired}
+      extra={extra}
+    />
   );
 }
 
@@ -811,13 +1191,17 @@ export function SttGlobeBasemap(
   const { globe: globeProp, ...opts } = props;
   const { projection } = useSttScene();
   const globe =
-    globeProp ?? (projection instanceof GlobeProjection ? projection : undefined);
+    globeProp ??
+    (projection instanceof GlobeProjection ? projection : undefined);
   if (!globe) {
     throw new Error(
       'SttGlobeBasemap needs a GlobeProjection: render inside a globe scene or pass `globe`.',
     );
   }
-  const mesh = React.useMemo(() => makeGlobeBasemap(globe, opts), [globe, opts]);
+  const mesh = React.useMemo(
+    () => makeGlobeBasemap(globe, opts),
+    [globe, opts],
+  );
   return <primitive object={mesh} dispose={null} />;
 }
 
@@ -839,8 +1223,18 @@ function CameraRig(props: {
   getTime: () => number;
   reducedMotion: boolean;
 }): null {
-  const { projection, followEgo, topDown, pitchDeg, headingDeg, initialViewState, egoRef, layers, getTime, reducedMotion } =
-    props;
+  const {
+    projection,
+    followEgo,
+    topDown,
+    pitchDeg,
+    headingDeg,
+    initialViewState,
+    egoRef,
+    layers,
+    getTime,
+    reducedMotion,
+  } = props;
   const camera = useThree((s) => s.camera) as PerspectiveCamera;
   const get = useThree((s) => s.get);
   // Eased ego position (the camera target chases this); null = snap next frame.
@@ -864,96 +1258,99 @@ function CameraRig(props: {
   }, [followEgo, topDown]);
 
   useFrame((_state, delta) => {
-   // Guard: a throw in the camera rig must not kill r3f's render loop either.
-   try {
-    const controls = get().controls as { target: Vector3; update: () => void } | null;
+    // Guard: a throw in the camera rig must not kill r3f's render loop either.
+    try {
+      const controls = get().controls as {
+        target: Vector3;
+        update: () => void;
+      } | null;
 
-    // Geo demos supply an explicit initial view state (lng/lat/zoom/pitch/bearing).
-    // Place the camera via the projection-aware bridge — correct at web-mercator AND
-    // planet scales, and the exact inverse of the basemap `cameraToViewState` sync —
-    // instead of the AV/ENU bounds-fit below (whose metre-scale distance clamps put
-    // a city-scale mercator scene entirely outside the frustum). One-shot: controls
-    // own the camera afterwards.
-    if (!framed.current && initialViewState) {
-      const target = viewStateToCamera(projection, initialViewState, camera, {
-        viewportHeight: Math.max(1, get().size.height),
-      });
-      if (controls?.target) {
-        controls.target.copy(target);
-        controls.update();
+      // Geo demos supply an explicit initial view state (lng/lat/zoom/pitch/bearing).
+      // Place the camera via the projection-aware bridge — correct at web-mercator AND
+      // planet scales, and the exact inverse of the basemap `cameraToViewState` sync —
+      // instead of the AV/ENU bounds-fit below (whose metre-scale distance clamps put
+      // a city-scale mercator scene entirely outside the frustum). One-shot: controls
+      // own the camera afterwards.
+      if (!framed.current && initialViewState) {
+        const target = viewStateToCamera(projection, initialViewState, camera, {
+          viewportHeight: Math.max(1, get().size.height),
+        });
+        if (controls?.target) {
+          controls.target.copy(target);
+          controls.update();
+        }
+        framed.current = true;
+        return;
       }
-      framed.current = true;
-      return;
-    }
 
-    // Globe: park a whole-earth overview above the anchor once, then hand off to
-    // OrbitControls (or, if `<SttTiles3D globeControls>` is mounted, its ellipsoid
-    // GlobeControls). No ground-plane ego-follow / AABB fit applies on the sphere.
-    if (globe) {
+      // Globe: park a whole-earth overview above the anchor once, then hand off to
+      // OrbitControls (or, if `<SttTiles3D globeControls>` is mounted, its ellipsoid
+      // GlobeControls). No ground-plane ego-follow / AABB fit applies on the sphere.
+      if (globe) {
+        if (!framed.current) {
+          const center = frameGlobe(camera, globe, {
+            longitude: globe.anchor.longitude,
+            latitude: globe.anchor.latitude,
+          });
+          if (controls?.target) {
+            controls.target.copy(center);
+            controls.update();
+          }
+          framed.current = true;
+        }
+        return;
+      }
+
+      // Ego-follow: glide the camera + orbit target toward the live ego pose with a
+      // time-based exponential filter (smooth + frame-rate independent), preserving
+      // the user's orbit offset. Snaps on the first frame and under reduced motion.
+      if (followEgo && egoRef.current && controls?.target) {
+        const pose = egoRef.current.getEgoPose(getTime());
+        if (pose) {
+          const want = new Vector3(pose.x, pose.y, pose.z);
+          const prev = easedEgo.current;
+          let next: Vector3;
+          if (!prev || reducedMotion) {
+            next = want.clone();
+          } else {
+            const dt = Math.min(delta || 0.016, 0.1);
+            const a = 1 - Math.exp(-dt / FOLLOW_TAU_S);
+            next = prev.clone().lerp(want, a);
+          }
+          if (prev) camera.position.add(next.clone().sub(prev));
+          controls.target.copy(next);
+          controls.update();
+          easedEgo.current = next;
+        }
+        return;
+      }
+      easedEgo.current = null;
+
+      // Initial / re-frame: fit the camera to the union of the layers' world AABBs
+      // once they exist (dominated by the LIDAR cloud's real bbox). Bounds-aware so
+      // a 60 m scene and a 400 m drive both frame correctly — the old fixed 60/130 m
+      // distance mis-scaled every scene whose extent wasn't ~60 m.
       if (!framed.current) {
-        const center = frameGlobe(camera, globe, {
-          longitude: globe.anchor.longitude,
-          latitude: globe.anchor.latitude,
-        });
-        if (controls?.target) {
-          controls.target.copy(center);
-          controls.update();
+        const box = new Box3().makeEmpty();
+        for (const l of layers.current) box.expandByObject(l.object);
+        if (!box.isEmpty()) {
+          const center = frameBox(camera, box, {
+            pitchDeg: topDown ? 89 : (pitchDeg ?? 55),
+            headingDeg: headingDeg ?? 20,
+            margin: 1.5,
+            minDistance: 20,
+            maxDistance: topDown ? 320 : 160,
+          });
+          if (controls?.target) {
+            controls.target.copy(center);
+            controls.update();
+          }
+          framed.current = true;
         }
-        framed.current = true;
       }
-      return;
+    } catch (err) {
+      warnOnce('camera-rig', '[stt-three] camera rig frame failed', err);
     }
-
-    // Ego-follow: glide the camera + orbit target toward the live ego pose with a
-    // time-based exponential filter (smooth + frame-rate independent), preserving
-    // the user's orbit offset. Snaps on the first frame and under reduced motion.
-    if (followEgo && egoRef.current && controls?.target) {
-      const pose = egoRef.current.getEgoPose(getTime());
-      if (pose) {
-        const want = new Vector3(pose.x, pose.y, pose.z);
-        const prev = easedEgo.current;
-        let next: Vector3;
-        if (!prev || reducedMotion) {
-          next = want.clone();
-        } else {
-          const dt = Math.min(delta || 0.016, 0.1);
-          const a = 1 - Math.exp(-dt / FOLLOW_TAU_S);
-          next = prev.clone().lerp(want, a);
-        }
-        if (prev) camera.position.add(next.clone().sub(prev));
-        controls.target.copy(next);
-        controls.update();
-        easedEgo.current = next;
-      }
-      return;
-    }
-    easedEgo.current = null;
-
-    // Initial / re-frame: fit the camera to the union of the layers' world AABBs
-    // once they exist (dominated by the LIDAR cloud's real bbox). Bounds-aware so
-    // a 60 m scene and a 400 m drive both frame correctly — the old fixed 60/130 m
-    // distance mis-scaled every scene whose extent wasn't ~60 m.
-    if (!framed.current) {
-      const box = new Box3().makeEmpty();
-      for (const l of layers.current) box.expandByObject(l.object);
-      if (!box.isEmpty()) {
-        const center = frameBox(camera, box, {
-          pitchDeg: topDown ? 89 : pitchDeg ?? 55,
-          headingDeg: headingDeg ?? 20,
-          margin: 1.5,
-          minDistance: 20,
-          maxDistance: topDown ? 320 : 160,
-        });
-        if (controls?.target) {
-          controls.target.copy(center);
-          controls.update();
-        }
-        framed.current = true;
-      }
-    }
-   } catch (err) {
-     warnOnce('camera-rig', '[stt-three] camera rig frame failed', err);
-   }
   });
 
   return null;
@@ -1055,14 +1452,19 @@ function AtmosphereController(props: {
   const gl = useThree((s) => s.gl);
   const scene = useThree((s) => s.scene);
   const camera = useThree((s) => s.camera);
-  const [atmosphere, setAtmosphere] = React.useState<SttAtmosphere | null>(null);
+  const [atmosphere, setAtmosphere] = React.useState<SttAtmosphere | null>(
+    null,
+  );
   // Options are effectively static per scene (mirrors the `ground` build-once
   // idiom); read from a ref so an inline-object prop doesn't churn the setup.
   const optionsRef = React.useRef(props.options);
   optionsRef.current = props.options;
 
   React.useEffect(() => {
-    const backend = resolveBackend(gl as unknown as import('three/webgpu').WebGPURenderer, props.forceWebGL);
+    const backend = resolveBackend(
+      gl as unknown as import('three/webgpu').WebGPURenderer,
+      props.forceWebGL,
+    );
     if (backend !== 'webgpu') return; // graceful WebGL2 degrade — leave r3f rendering
     const opts = optionsRef.current;
     const atmoOpts = opts === true ? {} : opts;
@@ -1084,7 +1486,11 @@ function AtmosphereController(props: {
         setAtmosphere(a);
       })
       .catch((err) => {
-        warnOnce('atmosphere-setup', '[stt-three] atmosphere setup failed; rendering without it', err);
+        warnOnce(
+          'atmosphere-setup',
+          '[stt-three] atmosphere setup failed; rendering without it',
+          err,
+        );
       });
     return () => {
       cancelled = true;
@@ -1095,7 +1501,9 @@ function AtmosphereController(props: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gl, scene, camera, projection, props.forceWebGL]);
 
-  return atmosphere ? <AtmosphereRenderLoop atmosphere={atmosphere} getTime={getTime} /> : null;
+  return atmosphere ? (
+    <AtmosphereRenderLoop atmosphere={atmosphere} getTime={getTime} />
+  ) : null;
 }
 
 /**
@@ -1103,7 +1511,9 @@ function AtmosphereController(props: {
  * as an alternative to the `atmosphere` prop (use ONE of the two, not both). Opt-in,
  * WebGPU-only, default-off elsewhere.
  */
-export function SttAtmosphere(props: AtmosphereOptions & { forceWebGL?: boolean }): React.ReactElement {
+export function SttAtmosphere(
+  props: AtmosphereOptions & { forceWebGL?: boolean },
+): React.ReactElement {
   const { forceWebGL = false, ...options } = props;
   return <AtmosphereController options={options} forceWebGL={forceWebGL} />;
 }
@@ -1148,13 +1558,19 @@ export interface SttTiles3DProps extends Stt3DTilesOptions {
  * up with a globe host + `globeControls`.
  */
 export function SttTiles3D(props: SttTiles3DProps): null {
-  const { globeControls = false, forceWebGL: _forceWebGL, ...tilesOpts } = props;
+  const {
+    globeControls = false,
+    forceWebGL: _forceWebGL,
+    ...tilesOpts
+  } = props;
   const { projection } = useSttScene();
   const gl = useThree((s) => s.gl);
   const scene = useThree((s) => s.scene);
   const camera = useThree((s) => s.camera);
   const size = useThree((s) => s.size);
-  const defaultControls = useThree((s) => s.controls) as { enabled: boolean } | null;
+  const defaultControls = useThree((s) => s.controls) as {
+    enabled: boolean;
+  } | null;
   const [handle, setHandle] = React.useState<Stt3DTiles | null>(null);
   const [globe, setGlobe] = React.useState<SttGlobeControls | null>(null);
 
@@ -1170,7 +1586,13 @@ export function SttTiles3D(props: SttTiles3DProps): null {
     let cancelled = false;
     const renderer = gl as unknown as import('three/webgpu').WebGPURenderer;
     void (async () => {
-      const t = await createStt3DTiles({ ...optsRef.current, renderer, scene, camera, projection });
+      const t = await createStt3DTiles({
+        ...optsRef.current,
+        renderer,
+        scene,
+        camera,
+        projection,
+      });
       if (cancelled) {
         t.dispose();
         return;
@@ -1193,7 +1615,11 @@ export function SttTiles3D(props: SttTiles3DProps): null {
         setGlobe(gc);
       }
     })().catch((err) => {
-      warnOnce('tiles3d-setup', '[stt-three] 3D tiles setup failed; rendering without them', err);
+      warnOnce(
+        'tiles3d-setup',
+        '[stt-three] 3D tiles setup failed; rendering without them',
+        err,
+      );
     });
     return () => {
       cancelled = true;
@@ -1305,23 +1731,34 @@ function PickController(props: {
       if (rect.width === 0 || rect.height === 0) return null;
       const localX = clientX - rect.left;
       const localY = clientY - rect.top;
-      const ndc = new Vector2((localX / rect.width) * 2 - 1, -(localY / rect.height) * 2 + 1);
+      const ndc = new Vector2(
+        (localX / rect.width) * 2 - 1,
+        -(localY / rect.height) * 2 + 1,
+      );
       return { ndc, localX, localY };
     };
 
     // (1) Synchronous CPU box pick — identical to the click-only path.
-    const boxPickAt = (clientX: number, clientY: number): SttBoxPickInfo | null => {
+    const boxPickAt = (
+      clientX: number,
+      clientY: number,
+    ): SttBoxPickInfo | null => {
       const p = project(clientX, clientY);
       if (!p) return null;
       raycaster.setFromCamera(p.ndc, camera);
       const o = raycaster.ray.origin;
       const d = raycaster.ray.direction;
-      const boxes = Array.from(pickables.current).flatMap((pk) => pk.getPickBoxes());
+      const boxes = Array.from(pickables.current).flatMap((pk) =>
+        pk.getPickBoxes(),
+      );
       return pickBoxes([o.x, o.y, o.z], [d.x, d.y, d.z], boxes);
     };
 
     // (2) Async GPU cloud pick — first hit across the registered clouds.
-    const cloudPickAt = async (clientX: number, clientY: number): Promise<SttPickInfo | null> => {
+    const cloudPickAt = async (
+      clientX: number,
+      clientY: number,
+    ): Promise<SttPickInfo | null> => {
       const clouds = pointPickables.current;
       if (clouds.size === 0) return null;
       const p = project(clientX, clientY);
@@ -1371,7 +1808,11 @@ function PickController(props: {
 
     const onMove = (e: PointerEvent): void => {
       const dragging = e.buttons !== 0; // any button held ⇒ orbit/pan, not hover
-      if (dragging && Math.hypot(e.clientX - downX, e.clientY - downY) > DRAG_PX) moved = true;
+      if (
+        dragging &&
+        Math.hypot(e.clientX - downX, e.clientY - downY) > DRAG_PX
+      )
+        moved = true;
       if (hasHover && !dragging) {
         hoverX = e.clientX;
         hoverY = e.clientY;
@@ -1384,7 +1825,8 @@ function PickController(props: {
 
     const onUp = (e: PointerEvent): void => {
       if (!hasPick) return;
-      if (moved || Math.hypot(e.clientX - downX, e.clientY - downY) > DRAG_PX) return;
+      if (moved || Math.hypot(e.clientX - downX, e.clientY - downY) > DRAG_PX)
+        return;
       const box = boxPickAt(e.clientX, e.clientY);
       if (box) {
         onPickRef.current?.(box);
@@ -1396,7 +1838,9 @@ function PickController(props: {
         onPickRef.current?.(null);
         return;
       }
-      void cloudPickAt(e.clientX, e.clientY).then((hit) => onPickRef.current?.(hit));
+      void cloudPickAt(e.clientX, e.clientY).then((hit) =>
+        onPickRef.current?.(hit),
+      );
     };
 
     // Clear hover when the pointer leaves the canvas (and drop any in-flight pick).
@@ -1436,7 +1880,9 @@ function makeGl(forceWebGL: boolean): GLProps {
   // them — we build the WebGPURenderer with just r3f's canvas + our options.
   // Casts bridge a duplicate-`OffscreenCanvas` DOM-lib type and r3f's WebGL-
   // shaped GLProps vs the WebGPURenderer factory.
-  const factory = async (props: { canvas: HTMLCanvasElement | OffscreenCanvas }) => {
+  const factory = async (props: {
+    canvas: HTMLCanvasElement | OffscreenCanvas;
+  }) => {
     // Raise the device buffer-size ceiling on the WebGPU path so a dense LIDAR
     // sweep's single ~hundreds-of-MB vertex buffer doesn't blow the 256 MB
     // default cap (deck.gl renders it fine; WebGPU defaults are stricter).
@@ -1506,7 +1952,8 @@ const FALLBACK_STYLE: React.CSSProperties = {
 
 const DEFAULT_GPU_FALLBACK = (
   <div style={FALLBACK_STYLE}>
-    This renderer needs WebGPU or WebGL2, which isn’t available here — try the deck.gl renderer.
+    This renderer needs WebGPU or WebGL2, which isn’t available here — try the
+    deck.gl renderer.
   </div>
 );
 
@@ -1662,7 +2109,10 @@ export function SttCanvas(props: SttCanvasProps): React.ReactElement {
   const trStart = timeRange?.start;
   const trEnd = timeRange?.end;
   const stableTimeRange = React.useMemo(
-    () => (trStart !== undefined && trEnd !== undefined ? { start: trStart, end: trEnd } : undefined),
+    () =>
+      trStart !== undefined && trEnd !== undefined
+        ? { start: trStart, end: trEnd }
+        : undefined,
     [trStart, trEnd],
   );
   const ctx = React.useMemo<SttSceneCtx>(
@@ -1737,10 +2187,19 @@ export function SttCanvas(props: SttCanvasProps): React.ReactElement {
                plane — a map-style gesture matching the deck cockpit's MapController
                — instead of orbiting a point. Right-drag still rotates; wheel zooms.
                Panning is in the XY plane because the camera up is Z. */
-            <MapControls makeDefault enableDamping={!reducedMotion} dampingFactor={0.12} />
+            <MapControls
+              makeDefault
+              enableDamping={!reducedMotion}
+              dampingFactor={0.12}
+            />
           )}
           <RenderPump />
-          {atmosphere && <AtmosphereController options={atmosphere} forceWebGL={forceWebGL} />}
+          {atmosphere && (
+            <AtmosphereController
+              options={atmosphere}
+              forceWebGL={forceWebGL}
+            />
+          )}
           <GlDisposer />
           <PickController
             onPick={onPick}

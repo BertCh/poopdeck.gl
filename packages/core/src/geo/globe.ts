@@ -21,7 +21,12 @@
  * Coords are large (~radius) → feed through {@link projectPositions} (RTC).
  */
 
-import { EARTH_RADIUS, type GeoAnchor, type LocalFrame, type Projection } from './local-enu.js';
+import {
+  EARTH_RADIUS,
+  type GeoAnchor,
+  type LocalFrame,
+  type Projection,
+} from './local-enu.js';
 
 const DEG2RAD = Math.PI / 180;
 const RAD2DEG = 180 / Math.PI;
@@ -61,7 +66,11 @@ export class GlobeProjection implements Projection {
     this.scale = radius / EARTH_RADIUS;
   }
 
-  project(longitude: number, latitude: number, altitude = 0): [number, number, number] {
+  project(
+    longitude: number,
+    latitude: number,
+    altitude = 0,
+  ): [number, number, number] {
     const lon = longitude * DEG2RAD;
     const lat = latitude * DEG2RAD;
     const cosLat = Math.cos(lat);
@@ -100,14 +109,18 @@ export class GlobeProjection implements Projection {
       const th = Math.atan2(a * zm, b * p);
       const sinTh = Math.sin(th);
       const cosTh = Math.cos(th);
-      const lat = Math.atan2(zm + ep2 * b * sinTh * sinTh * sinTh, p - WGS84_E2 * a * cosTh * cosTh * cosTh);
+      const lat = Math.atan2(
+        zm + ep2 * b * sinTh * sinTh * sinTh,
+        p - WGS84_E2 * a * cosTh * cosTh * cosTh,
+      );
       const sinLat = Math.sin(lat);
       const n = a / Math.sqrt(1 - WGS84_E2 * sinLat * sinLat);
       const h = p / Math.cos(lat) - n;
       return [longitude, lat * RAD2DEG, h];
     }
     const r = Math.hypot(x, y, z);
-    if (r === 0) return [this.anchor.longitude, this.anchor.latitude, -this.radius];
+    if (r === 0)
+      return [this.anchor.longitude, this.anchor.latitude, -this.radius];
     const latitude = Math.asin(clamp(z / r, -1, 1)) * RAD2DEG;
     const longitude = Math.atan2(y, x) * RAD2DEG;
     // r is in world units; convert the height back to metres via `scale`.

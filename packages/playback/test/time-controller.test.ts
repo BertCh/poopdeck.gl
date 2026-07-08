@@ -16,7 +16,9 @@ function installFrameHarness() {
 
   // performance.now is not always reassignable via globalThis; spy on the
   // method itself so the controller's `performance.now()` calls are stubbed.
-  const perfSpy = vi.spyOn(performance, 'now').mockImplementation(() => state.now);
+  const perfSpy = vi
+    .spyOn(performance, 'now')
+    .mockImplementation(() => state.now);
 
   vi.stubGlobal('requestAnimationFrame', (cb: (t: number) => void) => {
     callbacks.push(cb);
@@ -211,7 +213,11 @@ describe('TimeController', () => {
   });
 
   it('throttles tick notifications to tickThrottleMs', () => {
-    const tc = new TimeController({ initialTime: 0, speed: 1, tickThrottleMs: 100 });
+    const tc = new TimeController({
+      initialTime: 0,
+      speed: 1,
+      tickThrottleMs: 100,
+    });
     const listener = vi.fn();
     tc.on('tick', listener);
     tc.play();

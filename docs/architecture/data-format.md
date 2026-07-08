@@ -68,12 +68,12 @@ requests per addressable unit.
 The first four bytes are the magic number; the trailing byte is the format
 version.
 
-| Magic        | Version | Status                                              |
-| ------------ | ------- | --------------------------------------------------- |
-| `STT\x01`    | 1       | retired (pre-Arrow protobuf tiles)                  |
-| `STT\x02`    | 2       | retired (gzip + BLAKE3-64 dedup)                    |
-| `STT\x03`    | 3       | retired (zstd + CRC32C, no dedup)                   |
-| `STT\x04`    | 4       | single-file container (dedup + run-length directory); retired — read by neither reference reader, kept only as the committed `sample.stt` test fixture |
+| Magic     | Version | Status                                                                                                                                                 |
+| --------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `STT\x01` | 1       | retired (pre-Arrow protobuf tiles)                                                                                                                     |
+| `STT\x02` | 2       | retired (gzip + BLAKE3-64 dedup)                                                                                                                       |
+| `STT\x03` | 3       | retired (zstd + CRC32C, no dedup)                                                                                                                      |
+| `STT\x04` | 4       | single-file container (dedup + run-length directory); retired — read by neither reference reader, kept only as the committed `sample.stt` test fixture |
 
 > The **current container is the packed format**, which has no single-file magic
 > — a dataset is identified by `manifest.json` with `"format": "stt-packed"`. The
@@ -151,7 +151,7 @@ All integers are little-endian. `ipc stream bytes` is the output of an Arrow
 **Arrow IPC envelope (normative):**
 
 - **Stream format only.** Each layer's bytes are an Arrow IPC **stream**
-  (schema message, then record batch), *not* the IPC file format — no
+  (schema message, then record batch), _not_ the IPC file format — no
   `ARROW1` magic, no footer.
 - **Exactly one `RecordBatch` per layer on write.** A conformant writer
   emits one record batch per layer. A conformant reader MAY accept a
@@ -199,7 +199,7 @@ the **sectioned, template-referencing** frame — normatively specified in the
 [packed spec §5.2](../spec/stt-packed-format.md#52-tile-payload-layer-frame-v2-sectioned-template-referencing).
 The Arrow envelope rules above (stream format, one `RecordBatch` per layer,
 no IPC body compression, no delta dictionaries, u32 size ceilings) are
-unchanged; what moves is *where* the schema and the per-tile metadata live:
+unchanged; what moves is _where_ the schema and the per-tile metadata live:
 
 - The layer's Arrow IPC **schema message** is hoisted into a per-dataset
   **template** (referenced by blake3-128 hash, resolved through
@@ -230,18 +230,18 @@ frame appears only inside packed formatVersion-2 datasets.
 
 ### Per-layer Arrow schema
 
-| column              | type                                    | nullability | notes                                |
-| ------------------- | --------------------------------------- | ----------- | ------------------------------------ |
-| `id`                | `UInt64`                                | non-null    | per-feature id (H3 / quadbin cell index in summary tiles) |
-| `start_time`        | `Int64`                                 | non-null    | Unix ms, absolute                    |
-| `end_time`          | `Int64`                                 | non-null    | Unix ms, absolute                    |
-| `geometry`          | GeoArrow Point / LineString / Polygon   | non-null    | interleaved lon/lat, `Float64` by default (`Int32` fixed-point when coordinate-quantized, `[x,y,z]` when the point-elevation fold is applied) — see below |
-| `vertex_time`       | `List<UInt16>` (deltas) or `List<Int64>` (exact) | nullable | per-vertex times (LineString only) — see below |
-| `vertex_value`      | `List<Float32>`                         | nullable    | per-vertex scalar (e.g. SST on drifters/currents); decoded to `BinaryFeatures.vertexValues` |
-| `vertex_value_matrix` | `List<Float32>`                       | nullable    | per-vertex × per-bucket value matrix (vertex-major) for static-geometry overview animation; bucket count in schema metadata `stt:vertex_value_buckets` |
-| `triangles`         | `List<UInt16>` or `List<UInt32>`        | non-null    | feature-local earcut indices (Polygon, `--pre-tessellate`); `UInt16` when the feature-local max index fits, else `UInt32` |
-| `<prop>`            | `Float64` (numeric) or `Dictionary<UInt16, Utf8>` (categorical); `UInt16`/`Int32` fixed-point when attribute-quantized | nullable | one column per property, by name — see below |
-| `<vector-group>`    | `FixedSizeList<Float32 \| UInt8, N>`    | nullable    | interleaved GPU-ready vector column fused from N scalar properties (`--vector-group NAME=col1,col2,…[:f32\|u8]`, e.g. `surfel_quat=qx,qy,qz,qw` or `point_rgba=r,g,b,a:u8`); decoded to `BinaryFeatures.vectorProps` and bound zero-copy to an instanced attribute. The source scalar columns are removed from the tile. |
+| column                | type                                                                                                                   | nullability | notes                                                                                                                                                                                                                                                                                                                    |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `id`                  | `UInt64`                                                                                                               | non-null    | per-feature id (H3 / quadbin cell index in summary tiles)                                                                                                                                                                                                                                                                |
+| `start_time`          | `Int64`                                                                                                                | non-null    | Unix ms, absolute                                                                                                                                                                                                                                                                                                        |
+| `end_time`            | `Int64`                                                                                                                | non-null    | Unix ms, absolute                                                                                                                                                                                                                                                                                                        |
+| `geometry`            | GeoArrow Point / LineString / Polygon                                                                                  | non-null    | interleaved lon/lat, `Float64` by default (`Int32` fixed-point when coordinate-quantized, `[x,y,z]` when the point-elevation fold is applied) — see below                                                                                                                                                                |
+| `vertex_time`         | `List<UInt16>` (deltas) or `List<Int64>` (exact)                                                                       | nullable    | per-vertex times (LineString only) — see below                                                                                                                                                                                                                                                                           |
+| `vertex_value`        | `List<Float32>`                                                                                                        | nullable    | per-vertex scalar (e.g. SST on drifters/currents); decoded to `BinaryFeatures.vertexValues`                                                                                                                                                                                                                              |
+| `vertex_value_matrix` | `List<Float32>`                                                                                                        | nullable    | per-vertex × per-bucket value matrix (vertex-major) for static-geometry overview animation; bucket count in schema metadata `stt:vertex_value_buckets`                                                                                                                                                                   |
+| `triangles`           | `List<UInt16>` or `List<UInt32>`                                                                                       | non-null    | feature-local earcut indices (Polygon, `--pre-tessellate`); `UInt16` when the feature-local max index fits, else `UInt32`                                                                                                                                                                                                |
+| `<prop>`              | `Float64` (numeric) or `Dictionary<UInt16, Utf8>` (categorical); `UInt16`/`Int32` fixed-point when attribute-quantized | nullable    | one column per property, by name — see below                                                                                                                                                                                                                                                                             |
+| `<vector-group>`      | `FixedSizeList<Float32 \| UInt8, N>`                                                                                   | nullable    | interleaved GPU-ready vector column fused from N scalar properties (`--vector-group NAME=col1,col2,…[:f32\|u8]`, e.g. `surfel_quat=qx,qy,qz,qw` or `point_rgba=r,g,b,a:u8`); decoded to `BinaryFeatures.vectorProps` and bound zero-copy to an instanced attribute. The source scalar columns are removed from the tile. |
 
 Geometry uses the GeoArrow extension metadata key
 `ARROW:extension:name` with values `geoarrow.point`, `geoarrow.linestring`,
@@ -268,9 +268,9 @@ walks the nesting only has to branch on the leaf type.
 The reconstruction affine rides in the `geometry` field's **field-level**
 Arrow metadata:
 
-| field metadata key | value                                                     |
-| ------------------- | ---------------------------------------------------------- |
-| `stt:quant`          | JSON `{"x0","y0","sx","sy"}` (adds `"z0","sz"` for elevation-folded points — see below) |
+| field metadata key | value                                                                                   |
+| ------------------ | --------------------------------------------------------------------------------------- |
+| `stt:quant`        | JSON `{"x0","y0","sx","sy"}` (adds `"z0","sz"` for elevation-folded points — see below) |
 
 A reader reconstructs each coordinate as `lon = x0 + qx * sx`,
 `lat = y0 + qy * sy` (and, for 3D points, `alt = z0 + qz * sz`). Absence of
@@ -334,10 +334,10 @@ column. The writer encodes it as `List<UInt16>` **deltas** relative to a per-lay
 `origin + delta * step`. The origin and step are recorded in the layer's
 **schema-level** Arrow metadata under the keys:
 
-| schema metadata key            | meaning                                  |
-| ------------------------------ | ---------------------------------------- |
-| `stt:vertex_time_origin_ms`    | absolute Unix-ms origin (`i64` as string) |
-| `stt:vertex_time_step_ms`      | ms per delta unit (`u32` as string)       |
+| schema metadata key         | meaning                                   |
+| --------------------------- | ----------------------------------------- |
+| `stt:vertex_time_origin_ms` | absolute Unix-ms origin (`i64` as string) |
+| `stt:vertex_time_step_ms`   | ms per delta unit (`u32` as string)       |
 
 The encoder picks the smallest `step` (≥ 1) that keeps every
 `(t - origin)` inside `u16::MAX`, **bounded by a precision ceiling**
@@ -366,12 +366,12 @@ hand it straight to deck.gl / WebGL.
 #### Space-time cube payload (`vertex_value_matrix`)
 
 Two columns carry per-vertex scalars, and the distinction is the difference
-between *animating geometry* and *animating a value over static geometry*:
+between _animating geometry_ and _animating a value over static geometry_:
 
-| column | shape | use when |
-| --- | --- | --- |
-| `vertex_value` | `List<Float32>`, one value per vertex | each vertex has a single, time-invariant scalar (e.g. drifter sea-surface temperature) while the **geometry** animates along a trail |
-| `vertex_value_matrix` | `List<Float32>`, `vertex_count × num_buckets` per feature, **vertex-major** | the **geometry is static** but each vertex carries a per-bucket *time series* (e.g. flow-corridor counts per hour) |
+| column                | shape                                                                       | use when                                                                                                                             |
+| --------------------- | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `vertex_value`        | `List<Float32>`, one value per vertex                                       | each vertex has a single, time-invariant scalar (e.g. drifter sea-surface temperature) while the **geometry** animates along a trail |
+| `vertex_value_matrix` | `List<Float32>`, `vertex_count × num_buckets` per feature, **vertex-major** | the **geometry is static** but each vertex carries a per-bucket _time series_ (e.g. flow-corridor counts per hour)                   |
 
 `vertex_value_matrix` is STT's **space-time cube** primitive. The geometry is
 written once; the temporal variation lives entirely in the value matrix. Each
@@ -391,11 +391,11 @@ decoder (`packages/core/src/tile.ts`) concatenates features into one globally
 vertex-major `Float32Array` aligned with the position buffer; layers such as
 [`FlowCorridorLayer`](../api/flow-corridor-layer.md) read the current column per
 frame, and the [`TimeFilterExtension`](../api/time-filter-extension.md) can lift
-the value into the *time-as-height* "squash" cube with a single uniform.
+the value into the _time-as-height_ "squash" cube with a single uniform.
 
 > **Mutually exclusive with `vertex_time`.** A layer carries either per-vertex
-> *timestamps* (`vertex_time`, for trails that move through their own geometry) or
-> a per-vertex *value-over-buckets* matrix (`vertex_value_matrix`, for static
+> _timestamps_ (`vertex_time`, for trails that move through their own geometry) or
+> a per-vertex _value-over-buckets_ matrix (`vertex_value_matrix`, for static
 > geometry whose value pulses) — never both. The builder omits `vertex_time`
 > whenever a matrix is present (`crates/stt-build/src/columnar.rs`).
 
@@ -416,9 +416,9 @@ column.
 A quantized property field carries the reconstruction affine in its own
 **field-level** Arrow metadata:
 
-| field metadata key | value             |
-| ------------------- | ------------------ |
-| `stt:qa`              | JSON `{"o","s"}`  |
+| field metadata key | value            |
+| ------------------ | ---------------- |
+| `stt:qa`           | JSON `{"o","s"}` |
 
 A reader reconstructs the value as `value = o + q * s`. Absence of `stt:qa`
 on a numeric property field means the column is the default `Float64`; a
@@ -429,10 +429,10 @@ folded by the [point-elevation fold](#point-elevation-fold-3d-points), if
 any, is removed from the property set before quantization runs, so it is
 never separately attribute-quantized.
 
-| mode | leaf type | `o` / `s` |
-| --- | --- | --- |
-| explicit precision | `UInt16` if the quantized range fits 16 bits, else `Int32` | `o` = the column's finite minimum; `s` = the requested precision |
-| range-adaptive (auto) | always `UInt16` | `o` = the column's finite minimum (`0.0` if the tile has none); `s` = `(max - min) / 65535` (or `1.0` when there's no range — a constant column, or none, or a single finite value) |
+| mode                  | leaf type                                                  | `o` / `s`                                                                                                                                                                           |
+| --------------------- | ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| explicit precision    | `UInt16` if the quantized range fits 16 bits, else `Int32` | `o` = the column's finite minimum; `s` = the requested precision                                                                                                                    |
+| range-adaptive (auto) | always `UInt16`                                            | `o` = the column's finite minimum (`0.0` if the tile has none); `s` = `(max - min) / 65535` (or `1.0` when there's no range — a constant column, or none, or a single finite value) |
 
 Unlike the [coordinate-quantization](#coordinate-quantization) affine, whose
 `x0`/`y0`/`sx`/`sy` are fixed dataset-wide constants, `o` and `s` here are
@@ -492,24 +492,24 @@ An STT tile layer **is** a valid [GeoArrow](https://geoarrow.org/format.html)
 record batch. The Rust writer (`crates/stt-core/src/arrow_tile.rs`) tags
 the `geometry` field's Arrow metadata with the standard extension keys:
 
-| field metadata key          | values                                                     |
-| --------------------------- | ---------------------------------------------------------- |
-| `ARROW:extension:name`      | `geoarrow.point` / `geoarrow.linestring` / `geoarrow.polygon` |
-| `ARROW:extension:metadata`  | `{"crs":"OGC:CRS84","crs_type":"authority_code"}`          |
+| field metadata key         | values                                                        |
+| -------------------------- | ------------------------------------------------------------- |
+| `ARROW:extension:name`     | `geoarrow.point` / `geoarrow.linestring` / `geoarrow.polygon` |
+| `ARROW:extension:metadata` | `{"crs":"OGC:CRS84","crs_type":"authority_code"}`             |
 
 The `ARROW:extension:metadata` value is the GeoArrow per-type metadata JSON.
 STT pins the CRS to **OGC:CRS84** — WGS84 with the GeoJSON longitude-first axis
-order, matching the interleaved `[lon, lat]` storage — *not* `EPSG:4326`, whose
+order, matching the interleaved `[lon, lat]` storage — _not_ `EPSG:4326`, whose
 strict (lat/lon) axis order would mislabel the data. Carrying it makes every
 tile self-describing to GDAL / GeoPandas / lonboard / QGIS; a reader that wants
 the CRS reads this key, and a reader that ignores it is unaffected (the key is
 additive). Archives that carry only `ARROW:extension:name` (no CRS metadata)
 should be treated as OGC:CRS84.
 
-> **Anchored-local frames.** Coordinates are *always* CRS84 lon/lat at the
+> **Anchored-local frames.** Coordinates are _always_ CRS84 lon/lat at the
 > payload level, but the [scene-bundle profile](../spec/sidecar-assets.md#4-georeferencing-georeferenced-vs-anchored-local)
 > defines an `anchored-local` case where those lon/lat values are a local metric
-> frame *anchored* to an approximate position (e.g. Waymo, whose true georeference
+> frame _anchored_ to an approximate position (e.g. Waymo, whose true georeference
 > is undisclosed) rather than authoritative WGS84. The coordinates are still
 > CRS84-shaped; they are simply not basemap-aligned. The distinction lives in the
 > bundle envelope, not the tile.
@@ -577,17 +577,17 @@ One per-vertex concept is spelled differently at each stage. The input
 (matching `start_time` / `end_time` and deck.gl's `getTimestamps`); the decoded
 TypeScript fields are camelCase. This is the canonical contract:
 
-| concept | input column (GeoParquet) | wire column (Arrow — **FROZEN**) | decoded TS field (`BinaryFeatures`) |
-| --- | --- | --- | --- |
-| per-vertex timestamps    | `vertex_timestamps`   | `vertex_time`         | `vertexTimestamps`  |
-| per-vertex scalar value  | `vertex_values`       | `vertex_value`        | `vertexValues`      |
-| per-vertex × per-bucket matrix | `vertex_value_matrix` | `vertex_value_matrix` | `vertexValueMatrix` |
+| concept                        | input column (GeoParquet) | wire column (Arrow — **FROZEN**) | decoded TS field (`BinaryFeatures`) |
+| ------------------------------ | ------------------------- | -------------------------------- | ----------------------------------- |
+| per-vertex timestamps          | `vertex_timestamps`       | `vertex_time`                    | `vertexTimestamps`                  |
+| per-vertex scalar value        | `vertex_values`           | `vertex_value`                   | `vertexValues`                      |
+| per-vertex × per-bucket matrix | `vertex_value_matrix`     | `vertex_value_matrix`            | `vertexValueMatrix`                 |
 
 The plural→singular flip on the first two rows is **intentional** — the wire
 names are frozen (see [the packed spec](../spec/stt-packed-format.md)).
 `vertex_value_matrix` keeps a single name through all three stages (only the
 case changes). The input reader matches the plural column name exactly, with no
-singular fallback: a singular `vertex_time` / `vertex_value` *input* column is
+singular fallback: a singular `vertex_time` / `vertex_value` _input_ column is
 not recognized and its data decodes to a silent `null`.
 
 ## Dictionary (optional — no shipped producer)
@@ -615,22 +615,22 @@ whole-file offsets, decoded as `pack_id = 0`).
 Each entry decodes to these logical fields (`stt_core::TileEntry`, defined in
 `directory.rs`):
 
-| field                 | type            | description                                              |
-| --------------------- | --------------- | -------------------------------------------------------- |
-| `zoom`                | `u8`            | zoom level                                               |
-| `x`                   | `u32`           | tile x                                                   |
-| `y`                   | `u32`           | tile y                                                   |
-| `time_start`          | `i64`           | inclusive temporal start, Unix ms (bucket boundary)      |
-| `time_end`            | `i64`           | inclusive temporal end, Unix ms                          |
-| `pack_id`             | `u32`           | pack object index (always 0 in a single-file archive)    |
-| `offset`              | `u64`           | byte offset of the compressed blob (pack-relative; whole-file in single-file) |
-| `length`              | `u32`           | compressed blob length                                   |
-| `uncompressed_size`   | `u32`           | uncompressed payload length                              |
-| `feature_count`       | `u32`           | total features across the tile's layers                  |
-| `hilbert`             | `u64`           | Hilbert index of `(zoom, x, y)` — directory sort key     |
-| `crc32c`              | `u32`           | CRC32C of the compressed blob (integrity tag)            |
-| `temporal_bucket_ms`  | `Option<u64>`   | bucket size this tile covers (base vs temporal-LOD tier) |
-| `cover_t_min`         | `Option<i64>`   | tight lower covering bound — earliest feature start actually in the tile |
+| field                | type          | description                                                                   |
+| -------------------- | ------------- | ----------------------------------------------------------------------------- |
+| `zoom`               | `u8`          | zoom level                                                                    |
+| `x`                  | `u32`         | tile x                                                                        |
+| `y`                  | `u32`         | tile y                                                                        |
+| `time_start`         | `i64`         | inclusive temporal start, Unix ms (bucket boundary)                           |
+| `time_end`           | `i64`         | inclusive temporal end, Unix ms                                               |
+| `pack_id`            | `u32`         | pack object index (always 0 in a single-file archive)                         |
+| `offset`             | `u64`         | byte offset of the compressed blob (pack-relative; whole-file in single-file) |
+| `length`             | `u32`         | compressed blob length                                                        |
+| `uncompressed_size`  | `u32`         | uncompressed payload length                                                   |
+| `feature_count`      | `u32`         | total features across the tile's layers                                       |
+| `hilbert`            | `u64`         | Hilbert index of `(zoom, x, y)` — directory sort key                          |
+| `crc32c`             | `u32`         | CRC32C of the compressed blob (integrity tag)                                 |
+| `temporal_bucket_ms` | `Option<u64>` | bucket size this tile covers (base vs temporal-LOD tier)                      |
+| `cover_t_min`        | `Option<i64>` | tight lower covering bound — earliest feature start actually in the tile      |
 
 The Hilbert ordering is what makes range coalescing work: viewport tiles at
 the same zoom level tend to be contiguous in blob order, so a reader can
@@ -652,7 +652,12 @@ new fields.
   "name": "earthquakes",
   "description": "USGS feed",
   "attribution": "USGS",
-  "bounds": { "min_lon": -180.0, "min_lat": -85.05, "max_lon": 180.0, "max_lat": 85.05 },
+  "bounds": {
+    "min_lon": -180.0,
+    "min_lat": -85.05,
+    "max_lon": 180.0,
+    "max_lat": 85.05,
+  },
   "time_range": { "start": 1577836800000, "end": 1735689599000 },
   "min_zoom": 0,
   "max_zoom": 8,
@@ -665,17 +670,17 @@ new fields.
   // Optional — present when the archive was built with --summary-tier;
   // the layer-level contract is in "Summary-tier layers" above
   "summary_tier": {
-    "scheme": "h3",              // "h3" (Uber H3 hexes) or "quadbin" (CARTO quadbin)
+    "scheme": "h3", // "h3" (Uber H3 hexes) or "quadbin" (CARTO quadbin)
     "min_zoom": 0,
     "max_zoom": 4,
     "cell_resolution_per_zoom": [0, 1, 2, 3, 4],
     "columns": [
       { "name": "_count", "agg": "count" },
-      { "name": "magnitude", "agg": "mean" }
+      { "name": "magnitude", "agg": "mean" },
     ],
     "layer_name": "summary",
-    "sub_buckets": 1             // >1 (--summary-sub-buckets N; keep ≤32) emits
-                                 // bucket_0..bucket_<N-1> per-cell count columns
+    "sub_buckets": 1, // >1 (--summary-sub-buckets N; keep ≤32) emits
+    // bucket_0..bucket_<N-1> per-cell count columns
   },
 
   // Optional — present when the archive was built with --temporal-lod.
@@ -683,8 +688,8 @@ new fields.
   // sorted ascending. Readers pick the coarsest level whose
   // max_zoom_level >= current zoom.
   "temporal_lod": [
-    { "bucket_ms": 86400000,   "max_zoom_level": 8 },
-    { "bucket_ms": 2592000000, "max_zoom_level": 4 }
+    { "bucket_ms": 86400000, "max_zoom_level": 8 },
+    { "bucket_ms": 2592000000, "max_zoom_level": 4 },
   ],
 
   // Optional — present when built with --heatmap-weight / --heatmap-class.
@@ -692,9 +697,9 @@ new fields.
   // max) instead of doing a runtime GPU readback.
   "heatmap_domain": {
     "classes": [
-      { "id": "default", "min": 4.0, "max": 6.2, "property": "magnitude" }
-    ]
-  }
+      { "id": "default", "min": 4.0, "max": 6.2, "property": "magnitude" },
+    ],
+  },
 }
 ```
 
@@ -736,7 +741,7 @@ extra request.
   Arrow schema and a property-aware client passes them through to the
   renderer.
 - Coordinate quantization (`stt:quant`) and numeric attribute quantization
-  (`stt:qa`) are opt-in re-typings of the *existing* `geometry` and `<prop>`
+  (`stt:qa`) are opt-in re-typings of the _existing_ `geometry` and `<prop>`
   columns, not new columns — unlike a new column, a reader that doesn't
   check for these keys won't skip the data, it will silently misdecode it
   (e.g. reading raw `Int32` grid indices as tiny lon/lat degrees, or a raw

@@ -140,7 +140,9 @@ function basePointTile() {
     endTimes: [1, 2, 3],
     timeOffset: 0,
   });
-  tile.layers[0].features.numericProps['mag'] = new Float32Array([1, 2, 3]) as any;
+  tile.layers[0].features.numericProps['mag'] = new Float32Array([
+    1, 2, 3,
+  ]) as any;
   tile.layers[0].features.categoricalProps['kind'] = {
     indices: new Uint16Array([0, 1, 0]),
     categories: ['a', 'b'],
@@ -164,7 +166,9 @@ function basePathTile() {
     endTimes: [100, 100],
     timeOffset: 0,
   });
-  tile.layers[0].features.numericProps['speed'] = new Float32Array([4, 8]) as any;
+  tile.layers[0].features.numericProps['speed'] = new Float32Array([
+    4, 8,
+  ]) as any;
   tile.layers[0].features.categoricalProps['kind'] = {
     indices: new Uint16Array([0, 1]),
     categories: ['a', 'b'],
@@ -173,7 +177,8 @@ function basePathTile() {
 }
 
 async function makePointLayer(props: Record<string, any> = {}) {
-  const { AnimatedPointLayer } = await import('../src/layers/core/animated-point-layer');
+  const { AnimatedPointLayer } =
+    await import('../src/layers/core/animated-point-layer');
   const layer: any = Object.create((AnimatedPointLayer as any).prototype);
   layer.props = {
     id: 'pts',
@@ -196,7 +201,8 @@ async function makePointLayer(props: Record<string, any> = {}) {
 }
 
 async function makePathLayer(props: Record<string, any> = {}) {
-  const { AnimatedPathLayer } = await import('../src/layers/core/animated-path-layer');
+  const { AnimatedPathLayer } =
+    await import('../src/layers/core/animated-path-layer');
   const layer: any = Object.create((AnimatedPathLayer as any).prototype);
   layer.props = {
     id: 'paths',
@@ -219,7 +225,8 @@ async function makePathLayer(props: Record<string, any> = {}) {
 }
 
 async function makeTripsLayer(props: Record<string, any> = {}) {
-  const { AnimatedTripsLayer } = await import('../src/layers/trips/animated-trips-layer');
+  const { AnimatedTripsLayer } =
+    await import('../src/layers/trips/animated-trips-layer');
   const layer: any = Object.create((AnimatedTripsLayer as any).prototype);
   layer.props = {
     id: 'trips',
@@ -243,7 +250,8 @@ async function makeTripsLayer(props: Record<string, any> = {}) {
 }
 
 async function makePolygonLayer(props: Record<string, any> = {}) {
-  const { AnimatedPolygonLayer } = await import('../src/layers/core/animated-polygon-layer');
+  const { AnimatedPolygonLayer } =
+    await import('../src/layers/core/animated-polygon-layer');
   const layer: any = Object.create((AnimatedPolygonLayer as any).prototype);
   layer.props = {
     id: 'poly',
@@ -267,9 +275,8 @@ async function makePolygonLayer(props: Record<string, any> = {}) {
 }
 
 async function makeHeadsLayer(props: Record<string, any> = {}) {
-  const { AnimatedTripHeadsLayer } = await import(
-    '../src/layers/trips/animated-trip-heads-layer'
-  );
+  const { AnimatedTripHeadsLayer } =
+    await import('../src/layers/trips/animated-trip-heads-layer');
   const layer: any = Object.create((AnimatedTripHeadsLayer as any).prototype);
   layer.props = {
     id: 'heads',
@@ -291,7 +298,8 @@ async function makeHeadsLayer(props: Record<string, any> = {}) {
 }
 
 async function makeHeatmapLayer(props: Record<string, any> = {}) {
-  const { AnimatedHeatmapLayer } = await import('../src/layers/summary/heatmap-layer');
+  const { AnimatedHeatmapLayer } =
+    await import('../src/layers/summary/heatmap-layer');
   const layer: any = Object.create((AnimatedHeatmapLayer as any).prototype);
   layer.props = {
     id: 'hm',
@@ -342,7 +350,8 @@ function makeSummaryTile() {
 }
 
 async function makeH3Layer(props: Record<string, any> = {}) {
-  const { H3SummaryLayer } = await import('../src/layers/summary/h3-summary-layer');
+  const { H3SummaryLayer } =
+    await import('../src/layers/summary/h3-summary-layer');
   const layer: any = Object.create((H3SummaryLayer as any).prototype);
   layer.props = {
     id: 'h3',
@@ -471,7 +480,10 @@ describe('getSubLayerProps inheritance (composite props reach sublayers)', () =>
   });
 
   it('AnimatedTripsLayer: inherits wrapLongitude but keeps its explicit positionFormat', async () => {
-    const layer = await makeTripsLayer({ wrapLongitude: true, positionFormat: 'XYZ' });
+    const layer = await makeTripsLayer({
+      wrapLongitude: true,
+      positionFormat: 'XYZ',
+    });
     const tile = basePathTile();
     const sub = layer.buildSublayer(layer.prepareTile(tile, tile.layers[0]));
     expect(sub.props.wrapLongitude).toBe(true);
@@ -509,7 +521,10 @@ describe('getSubLayerProps inheritance (composite props reach sublayers)', () =>
   });
 
   it('HeatmapLayer: inherits modelMatrix into channel sublayers, forces pickable:false', async () => {
-    const layer = await makeHeatmapLayer({ modelMatrix: MODEL_MATRIX, pickable: true });
+    const layer = await makeHeatmapLayer({
+      modelMatrix: MODEL_MATRIX,
+      pickable: true,
+    });
     const tile = basePointTile();
     layer.state = { tiles: [tile] };
     const [sub] = layer.renderLayers();
@@ -541,7 +556,9 @@ describe('user updateTriggers invalidate caches and forward into sublayers', () 
     layer.props.updateTriggers = { getFillColor: 2 };
     const [second] = layer.renderLayers();
     expect(second).not.toBe(first);
-    expect(layer.preparedTileCache.values().next().value).not.toBe(firstPrepared);
+    expect(layer.preparedTileCache.values().next().value).not.toBe(
+      firstPrepared,
+    );
     // Forwarding: the merged updateTriggers reach the sublayer props.
     expect(second.props.updateTriggers.getFillColor).toBe(2);
   });
@@ -631,7 +648,9 @@ describe('user updateTriggers invalidate caches and forward into sublayers', () 
   });
 
   it('H3SummaryLayer: user triggers merge into the computed accessor triggers', async () => {
-    const layer = await makeH3Layer({ updateTriggers: { getFillColor: 'user-v1' } });
+    const layer = await makeH3Layer({
+      updateTriggers: { getFillColor: 'user-v1' },
+    });
     const [first] = layer.renderLayers();
     expect(first.props.updateTriggers.getFillColor).toContain('user-v1');
 
@@ -745,7 +764,10 @@ describe('accessor-named prop aliases (column-name semantics)', () => {
   });
 
   it('AnimatedPointLayer: legacy props alone still work (no alias set)', async () => {
-    const layer = await makePointLayer({ fillColor: [7, 7, 7, 255], radius: 11 });
+    const layer = await makePointLayer({
+      fillColor: [7, 7, 7, 255],
+      radius: 11,
+    });
     const tile = basePointTile();
     const sub = layer.buildSublayer(layer.prepareTile(tile, tile.layers[0]));
     expect(sub.props.getFillColor).toEqual([7, 7, 7, 255]);
@@ -802,7 +824,9 @@ describe('accessor-named prop aliases (column-name semantics)', () => {
     // `instanceCategoryIndex`, which under-sizes the instanced draw on
     // multi-vertex paths — "vertex buffer is not big enough" on strict ANGLE).
     expect(prepared.data.attributes.getColor).toBeDefined();
-    expect([...prepared.data.attributes.getColor.value.slice(0, 4)]).toEqual([10, 20, 30, 255]);
+    expect([...prepared.data.attributes.getColor.value.slice(0, 4)]).toEqual([
+      10, 20, 30, 255,
+    ]);
     expect(prepared.data.attributes.instanceCategoryIndex).toBeUndefined();
   });
 
@@ -818,16 +842,23 @@ describe('accessor-named prop aliases (column-name semantics)', () => {
     const tile = basePathTile();
     const prepared = layer.prepareTile(tile, tile.layers[0]);
     expect(prepared.data.attributes.getColor).toBeDefined();
-    expect([...prepared.data.attributes.getColor.value.slice(0, 4)]).toEqual([10, 20, 30, 255]);
+    expect([...prepared.data.attributes.getColor.value.slice(0, 4)]).toEqual([
+      10, 20, 30, 255,
+    ]);
     // getWidth must be PER-VERTEX (totalVerts=4), not the per-feature `speed`
     // column (length 2). PathLayer's binary path binds the size-1 buffer
     // directly, so a featureCount-length buffer under-sizes the instanced draw
     // ("vertex buffer is not big enough"). Each feature's speed splats onto its
     // own vertices: features [4,8] over 2+2 verts → [4,4,8,8].
     const speed = tile.layers[0].features.numericProps['speed'];
-    const totalVerts = tile.layers[0].features.startIndices[tile.layers[0].features.featureCount];
+    const totalVerts =
+      tile.layers[0].features.startIndices[
+        tile.layers[0].features.featureCount
+      ];
     expect(prepared.data.attributes.getWidth.value.length).toBe(totalVerts);
-    expect(Array.from(prepared.data.attributes.getWidth.value)).toEqual([4, 4, 8, 8]);
+    expect(Array.from(prepared.data.attributes.getWidth.value)).toEqual([
+      4, 4, 8, 8,
+    ]);
     // Not the zero-copy per-feature buffer.
     expect(prepared.data.attributes.getWidth.value).not.toBe(speed);
   });
@@ -852,22 +883,38 @@ describe('accessor-named prop aliases (column-name semantics)', () => {
       endTimes: [100, 100],
       timeOffset: 0,
     });
-    tile.layers[0].features.numericProps['height'] = new Float32Array([10, 20]) as any;
+    tile.layers[0].features.numericProps['height'] = new Float32Array([
+      10, 20,
+    ]) as any;
 
-    const columnLayer = await makePolygonLayer({ getElevation: 'height', extruded: true });
+    const columnLayer = await makePolygonLayer({
+      getElevation: 'height',
+      extruded: true,
+    });
     const prepared = columnLayer.prepareTile(tile, tile.layers[0]);
     expect(prepared.data.attributes.getElevation).toBeDefined();
     expect(prepared.data.attributes.getElevation.value[0]).toBe(10);
 
-    const constLayer = await makePolygonLayer({ getElevation: 44, extruded: true, elevation: 7 });
-    const sub = constLayer.buildSublayer(constLayer.prepareTile(tile, tile.layers[0]));
+    const constLayer = await makePolygonLayer({
+      getElevation: 44,
+      extruded: true,
+      elevation: 7,
+    });
+    const sub = constLayer.buildSublayer(
+      constLayer.prepareTile(tile, tile.layers[0]),
+    );
     expect(sub.props.getElevation).toBe(44); // alias beats legacy `elevation`
   });
 
   it('HeatmapLayer: getWeight column wins over weightProperty', async () => {
     const tile = basePointTile();
-    tile.layers[0].features.numericProps['fare'] = new Float32Array([2, 4, 6]) as any;
-    const layer = await makeHeatmapLayer({ weightProperty: 'mag', getWeight: 'fare' });
+    tile.layers[0].features.numericProps['fare'] = new Float32Array([
+      2, 4, 6,
+    ]) as any;
+    const layer = await makeHeatmapLayer({
+      weightProperty: 'mag',
+      getWeight: 'fare',
+    });
     layer.state = { tiles: [tile] };
     const [sub] = layer.renderLayers();
     expect([...sub.props.data.attributes.getWeight.value]).toEqual([2, 4, 6]);
@@ -887,7 +934,9 @@ describe('accessor-named prop aliases (column-name semantics)', () => {
       const [sub] = layer.renderLayers();
       expect([...sub.props.data.attributes.getWeight.value]).toEqual([1, 2, 3]); // 'mag'
       expect(
-        warnSpy.mock.calls.some(([msg]) => String(msg).includes('function accessor')),
+        warnSpy.mock.calls.some(([msg]) =>
+          String(msg).includes('function accessor'),
+        ),
       ).toBe(true);
     } finally {
       warnSpy.mockRestore();
@@ -934,7 +983,9 @@ describe('SplatLayer Worldbuild sublayer contract', () => {
     // Per-tile sublayer id stays parent-shortId-tileKey.
     expect(sub.props.id).toBe('splat-splats-0/0/0/0:layer0');
     // The dynamic flag was baked.
-    expect([...sub.props.data.attributes.instanceIsDynamic.value]).toEqual([0, 1, 0]);
+    expect([...sub.props.data.attributes.instanceIsDynamic.value]).toEqual([
+      0, 1, 0,
+    ]);
   });
 
   it('a worldbuild prop change invalidates the cached splat sublayer', async () => {

@@ -41,8 +41,14 @@ describe('InstanceProvenance (merged-buffer pick identity)', () => {
     p.push('12/1/2/0::points', 6);
     p.push('12/1/3/0::points', 0);
     expect(p.length).toBe(3);
-    expect(p.resolve(0)).toEqual({ tileKey: '12/1/2/0::points', featureIndex: 5 });
-    expect(p.resolve(2)).toEqual({ tileKey: '12/1/3/0::points', featureIndex: 0 });
+    expect(p.resolve(0)).toEqual({
+      tileKey: '12/1/2/0::points',
+      featureIndex: 5,
+    });
+    expect(p.resolve(2)).toEqual({
+      tileKey: '12/1/3/0::points',
+      featureIndex: 0,
+    });
     expect(p.resolve(3)).toBeNull();
   });
 });

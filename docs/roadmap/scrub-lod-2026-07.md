@@ -68,30 +68,30 @@ uncertainty are marked `⚠`.
 ### 2.1 The unifying pattern — a motion tier and a settle tier
 
 Every mature system that stays responsive under interaction keeps **two
-representations**: a cheap one addressable at any point for *motion*, and an
-expensive one for the *settled* frame.
+representations**: a cheap one addressable at any point for _motion_, and an
+expensive one for the _settled_ frame.
 
-| Domain | Motion tier | Settle tier | Switch trigger |
-| :-- | :-- | :-- | :-- |
-| NLE editing | low-res **proxy** media | full-res original (relink) | render/grade |
-| Video seek | **I-frame-only track** / storyboard sprites (WebVTT `#xywh`, Roku BIF, HLS `EXT-X-I-FRAMES-ONLY`) | full GOP decode | scrub release |
-| Web map | scaled **parent tile** (`best-available`) | exact-zoom tile | camera `idle` |
-| 3D/terrain | coarse ancestor (SSE, "kicking") | SSE-selected fine tile | camera settle |
-| Sci-vis (VTK/ParaView) | **interactive** low-quality pass (decimated / points / bbox) | **still** full-res pass | interaction end |
-| Time-series chart | coarse **pyramid level** (bucket ≈ pixel-width) | raw series | zoom settle |
+| Domain                 | Motion tier                                                                                       | Settle tier                | Switch trigger  |
+| :--------------------- | :------------------------------------------------------------------------------------------------ | :------------------------- | :-------------- |
+| NLE editing            | low-res **proxy** media                                                                           | full-res original (relink) | render/grade    |
+| Video seek             | **I-frame-only track** / storyboard sprites (WebVTT `#xywh`, Roku BIF, HLS `EXT-X-I-FRAMES-ONLY`) | full GOP decode            | scrub release   |
+| Web map                | scaled **parent tile** (`best-available`)                                                         | exact-zoom tile            | camera `idle`   |
+| 3D/terrain             | coarse ancestor (SSE, "kicking")                                                                  | SSE-selected fine tile     | camera settle   |
+| Sci-vis (VTK/ParaView) | **interactive** low-quality pass (decimated / points / bbox)                                      | **still** full-res pass    | interaction end |
+| Time-series chart      | coarse **pyramid level** (bucket ≈ pixel-width)                                                   | raw series                 | zoom settle     |
 
 The motion tier's defining discipline (from I-frame tracks): it must be
 **independently addressable / decodable** — no cross-tile decode dependency — so a
 jump to any point is instant. And "**disappearing detail is worse than
 late-arriving detail**" (Cesium "Ancestor Meets SSE" / "Kicking"): keep the coarse
-tier visible *under* the fine tier until the fine one lands, rather than blanking.
+tier visible _under_ the fine tier until the fine one lands, rather than blanking.
 
 ### 2.2 Bound working resolution by output pixels — on both axes
 
 M4 (Jugel et al., PVLDB 2014) and Grafana's `maxDataPoints` state the temporal case:
 you can never display more distinct values than the timeline has **pixels**, so
 effective resolution = visible-span ÷ chart-pixel-width (Grafana's default
-`maxDataPoints` *is* the panel width; interval ≈ range / maxDataPoints, e.g. 7 d /
+`maxDataPoints` _is_ the panel width; interval ≈ range / maxDataPoints, e.g. 7 d /
 1000 px ≈ 10 min/point). Cesium's screen-space-error is the identical rule in space:
 never carry more geometric detail than a pixel of on-screen error
 (`maximumScreenSpaceError` default 16 px). **This makes "how coarse should the
@@ -144,7 +144,7 @@ ground-resolution ≈ viewport pixel size.
 - **Predictive budget, not reactive** — Funkhouser & Séquin (SIGGRAPH 93): assign
   each object Cost (est. render time) + Benefit (screen size, accuracy, focus,
   motion), maximize benefit within a per-frame Cost budget. Crucially **estimate cost
-  *before* drawing** — pure feedback control "will tend to overshoot and oscillate,
+  _before_ drawing** — pure feedback control "will tend to overshoot and oscillate,
   especially on an abrupt change in detail." Combine prediction + a feedback trim.
 - **Anti-popping** — Hoppe geomorphs (SIGGRAPH 96/97, smooth interpolation between
   levels over frames); **hysteresis** (different up/down thresholds so a boundary
@@ -160,11 +160,11 @@ ground-resolution ≈ viewport pixel size.
   latest matters"); deck.gl/MapLibre abort no-longer-visible tiles. Aggressive cancel
   saves bandwidth but causes **refetch churn** on reversal → keep a small LRU.
 - **Settle detection** — trailing-edge **debounce** is the near-universal "user
-  stopped" detector; idiom = *throttle a cheap preview during motion + debounce the
-  expensive final load*; `requestIdleCallback` for the refinement pass (⚠ not
+  stopped" detector; idiom = _throttle a cheap preview during motion + debounce the
+  expensive final load_; `requestIdleCallback` for the refinement pass (⚠ not
   Baseline — Safari disables it; needs a `setTimeout` shim).
 - **Motion prediction** — **ATLAS** (Chan et al., VAST 2008) prefetches adjacent time
-  ranges *in the pan direction* across >1 B records with LOD management — **the
+  ranges _in the pan direction_ across >1 B records with LOD management — **the
   closest precedent for a scrubbing timeline.** ForeCache (SIGMOD 2016) combines
   momentum + hotspot models (+430% latency, +25% accuracy). All mispredict at
   reversals/abrupt stops → balance against cancellation; cold-start after a jump.
@@ -187,7 +187,7 @@ parent-fallback (≤ `PARENT_FALLBACK_LEVELS` = 4) + the pinned z0..z1
 `preloadOverviewTier()` spatial storyboard; **the key finding — a fully-built but
 UNWIRED temporal-LOD pyramid** (`temporal_lod` metadata + `pickTemporalLodForZoom`
 / `getTileIdsInBoundsForTemporalLod`, opt-in, never on the hot path; the default
-`getTileIdsInBounds` filtered LOD tiles *out*); the summary (H3/Quadbin) tier —
+`getTileIdsInBounds` filtered LOD tiles _out_); the summary (H3/Quadbin) tier —
 genuinely fewer features, auto-dispatched by `pickTierForZoom`, the model to
 copy; paged zoom ∧ bbox ∧ time pruning; the shared EDF + DRR scheduler (already
 ranked by temporal distance to playhead); and the auto-speed pipeline + dual-EWMA
@@ -203,11 +203,11 @@ governor → layer → `tileset.setInteractive`), **G2** (a scrub-aware policy
 degrades the requested zoom via `zoomOverride`), **G3** (temporal-LOD
 auto-selection wired — inert until enabled). What remains:
 
-| # | Gap | Phase |
-| :-- | :-- | :-- |
-| G4 | No coarse-time preload symmetric to `preloadOverviewTier`; the fallback ladder base → temporal-LOD → summary → overview isn't fully realized. | P2 residue / P4 |
-| G5 | The coarse-time aggregator only re-buckets — it does **not** reduce feature count (`tiler.rs`: "collapse 1000 points into 50 means is left as a follow-up"), so a coarse-time tile can still hold every feature in the cell — coarser in time but not guaranteed cheaper to fetch/decode. No M4/LTTB/voxel reduction in the pyramid. | P3 |
-| G6 | No throughput-/velocity-driven LOD controller; no ATLAS-style scrub-velocity prefetch; no cross-fade / hysteresis tuning. | P4 |
+| #   | Gap                                                                                                                                                                                                                                                                                                                                  | Phase           |
+| :-- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :-------------- |
+| G4  | No coarse-time preload symmetric to `preloadOverviewTier`; the fallback ladder base → temporal-LOD → summary → overview isn't fully realized.                                                                                                                                                                                        | P2 residue / P4 |
+| G5  | The coarse-time aggregator only re-buckets — it does **not** reduce feature count (`tiler.rs`: "collapse 1000 points into 50 means is left as a follow-up"), so a coarse-time tile can still hold every feature in the cell — coarser in time but not guaranteed cheaper to fetch/decode. No M4/LTTB/voxel reduction in the pyramid. | P3              |
+| G6  | No throughput-/velocity-driven LOD controller; no ATLAS-style scrub-velocity prefetch; no cross-fade / hysteresis tuning.                                                                                                                                                                                                            | P4              |
 
 **The essential correctness contract (G7 — held by the shipped code):** the
 coarse scrub tier is **preview-only and never gates**. The scrub hold already
@@ -222,8 +222,8 @@ buffering state machine, the property that let it ship kill-switched.
 
 One new concept — an **interactive (motion) state** on the tileset — plus a
 **degrade policy** mapping it to a coarser requested tier on two independent
-axes; everything else reuses existing machinery. The scrub tier is *a scheduling
-decision*, not a rendering hack — its own tier/sourceId in the shared scheduler,
+axes; everything else reuses existing machinery. The scrub tier is _a scheduling
+decision_, not a rendering hack — its own tier/sourceId in the shared scheduler,
 EDF-ranked, superseded-cancelled — so the kill-switch + interactive flag give a
 clean rollback (the multi-source bet, paid off again). The shape that shipped:
 
@@ -249,7 +249,7 @@ throughput (the spatial analog of auto-speed's contended bound), clamped to
 `[0, PARENT_FALLBACK_LEVELS]` so the parent tiles the fallback path already
 fetches are the coarse target — often **zero new fetches**. Settle reuses
 `seekSettleMs` (settle-commit warms the fine tier mid-drag, release commits — no
-new timer). Anti-pop: keep the coarse tier resident *under* the fine tier
+new timer). Anti-pop: keep the coarse tier resident _under_ the fine tier
 (ADD-style) until the fine tile lands — "disappearing detail is worse than
 late-arriving detail" — with a `raster-fade`-style 200–300 ms cross-fade and
 **hysteresis** on `N`/`B` so a jittery drag can't oscillate the tier.
@@ -264,23 +264,24 @@ opt-in produces (spatial parent/overview always present; temporal LOD when built
 with `--temporal-lod`; summary when built); on settle, refine to base. **P0** —
 interactive signal end-to-end: `PlaybackGovernor` exposes `isScrubbing` +
 `'scrubstart'`/`'scrubend'` → layer → `tileset.setInteractive()` (establishes G1
-+ the G7 preview-only contract). **P1** — spatial degrade: `spatialZoomDrop N`
-fed through the existing `zoomOverride`/primary-zoom path, overview tier as
-floor; `N = 0` restored on `endScrub`, `commitSeek` refines; options landed as
-`ScrubLodOptions` on the tileset (packages/core). **P2** — temporal-LOD
-auto-selection: capability-detects `metadata.temporal_lod`, routes through
-`pickTemporalLodForZoom` + `getTileIdsInBoundsForTemporalLod(B)` while
-interactive, base unchanged when absent; wired but **inert until enabled**; the
-gate keeps tracking the fine base tier (G7).
+
+- the G7 preview-only contract). **P1** — spatial degrade: `spatialZoomDrop N`
+  fed through the existing `zoomOverride`/primary-zoom path, overview tier as
+  floor; `N = 0` restored on `endScrub`, `commitSeek` refines; options landed as
+  `ScrubLodOptions` on the tileset (packages/core). **P2** — temporal-LOD
+  auto-selection: capability-detects `metadata.temporal_lod`, routes through
+  `pickTemporalLodForZoom` + `getTileIdsInBoundsForTemporalLod(B)` while
+  interactive, base unchanged when absent; wired but **inert until enabled**; the
+  gate keeps tracking the fine base tier (G7).
 
 **Track B / P3 — a genuinely-cheap baked scrub tier — OPEN (closes G5).** Extend
-the temporal-LOD aggregator (`generate_lod_level`) to *reduce feature count*: per
+the temporal-LOD aggregator (`generate_lod_level`) to _reduce feature count_: per
 (cell, coarse-bucket) keep **M4 min/max/first/last** (no level hides extrema) for
 scalar/line data, or **voxel/LTTB decimation** for point clouds (reuse
 `lod_home_zoom` / `adaptive_lidar_select`), with **independently-decodable**
 coarse tiles (I-frame-track discipline) so any scrub instant is one cheap fetch.
 New golden fixtures + `stt-validate` checks: coarse tier ⊆ base, extrema
-preserved, byte-cost ≪ base. Only then is P2's temporal tier actually *cheap* —
+preserved, byte-cost ≪ base. Only then is P2's temporal tier actually _cheap_ —
 scrubbing fast, not just correct. Track A is the storyboard bridging to it.
 
 **P4 — coordinator-level polish (OPEN; higher risk).** Scrub-velocity prefetch
@@ -300,7 +301,7 @@ counters so "responsive" is a number, not a vibe: **scrub time-to-first-pixel**
 (`scrubTo` → rendered frame reflecting the new instant; target < one 60 Hz frame
 from a resident coarse tile); **fresh-frame fraction** (% of drag frames showing
 data for the current instant, any tier, vs stale/blank); **bytes-during-scrub**
-(should *drop* vs the base-tier churn baseline — the efficiency proof);
+(should _drop_ vs the base-tier churn baseline — the efficiency proof);
 **settle-to-full-detail latency** (`endScrub` → fine tier resident);
 **pop/oscillation count** (LOD-tier switches per scrub; hysteresis keeps it
 ~1–2); **no single-dataset regression** (`scrubLod` off is byte- and
@@ -340,8 +341,8 @@ transcript; primary anchors by domain:
   `progressiveResolutionHeightFraction`, `skipLevelOfDetail`) + selection-algorithm
   ("Ancestor Meets SSE"/"Kicking"); quantized-mesh-1.0.
 - **Interaction-aware LOD:** Funkhouser & Séquin SIGGRAPH 93 (predictive budget);
-  Hoppe SIGGRAPH 96/97 (progressive meshes, geomorph, VDR); Luebke et al. *LOD for 3D
-  Graphics* (taxonomy, hysteresis); VTK `SetDesiredUpdateRate` / ParaView still-vs-
+  Hoppe SIGGRAPH 96/97 (progressive meshes, geomorph, VDR); Luebke et al. _LOD for 3D
+  Graphics_ (taxonomy, hysteresis); VTK `SetDesiredUpdateRate` / ParaView still-vs-
   interactive; three.js `LOD`; Interruptible Rendering (Woolley/Luebke/Watson 2002 ⚠);
   Velocity-Based LOD Reduction in VR (arXiv 2301.09394).
 - **Temporal LOD:** M4 (Jugel et al., PVLDB 2014); LTTB (Steinarsson 2013 ⚠) +

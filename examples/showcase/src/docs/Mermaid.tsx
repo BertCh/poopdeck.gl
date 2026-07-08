@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from 'react';
 
 let nextId = 0;
 
@@ -17,10 +17,10 @@ const Mermaid: React.FC<{ code: string }> = ({ code }) => {
     let cancelled = false;
     (async () => {
       try {
-        const mermaid = (await import("mermaid")).default;
+        const mermaid = (await import('mermaid')).default;
         mermaid.initialize({
           startOnLoad: false,
-          theme: "neutral",
+          theme: 'neutral',
           fontFamily:
             "system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
         });
@@ -29,7 +29,7 @@ const Mermaid: React.FC<{ code: string }> = ({ code }) => {
         const { svg } = await mermaid.render(idRef.current, code);
         if (!cancelled) setSvg(svg);
       } catch (err) {
-        console.warn("[docs] mermaid render failed:", err);
+        console.warn('[docs] mermaid render failed:', err);
         if (!cancelled) setFailed(true);
       }
     })();
@@ -43,8 +43,8 @@ const Mermaid: React.FC<{ code: string }> = ({ code }) => {
       <pre
         className="code-block px-4 py-3 my-4 overflow-x-auto rounded-md"
         style={{
-          background: "var(--surface-sunken)",
-          border: "1px solid var(--hairline)",
+          background: 'var(--surface-sunken)',
+          border: '1px solid var(--hairline)',
         }}
       >
         {code}
@@ -56,8 +56,8 @@ const Mermaid: React.FC<{ code: string }> = ({ code }) => {
       <div
         className="my-4 rounded-md px-4 py-8 text-center text-xs"
         style={{
-          background: "var(--surface-sunken)",
-          color: "var(--ink-400)",
+          background: 'var(--surface-sunken)',
+          color: 'var(--ink-400)',
         }}
       >
         Rendering diagram…

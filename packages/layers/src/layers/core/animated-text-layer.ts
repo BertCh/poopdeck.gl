@@ -399,9 +399,9 @@ function clamp01(x: number): number {
  *
  * Sublayer short id for `_subLayerProps` overrides: **`text`**.
  */
-export class AnimatedTextLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLayer<
-  ExtraPropsT & Required<_AnimatedTextLayerProps>
-> {
+export class AnimatedTextLayer<
+  ExtraPropsT extends {} = {},
+> extends SpatioTemporalLayer<ExtraPropsT & Required<_AnimatedTextLayerProps>> {
   static layerName = 'AnimatedTextLayer';
 
   static defaultProps: DefaultProps<AnimatedTextLayerProps> = {
@@ -418,7 +418,12 @@ export class AnimatedTextLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
     // ({type:'object'}), which the 'color' validator would reject for a string.
     color: { type: 'object', value: DEFAULT_TEXT_COLOR, compare: true },
     getColor: { type: 'object', value: null, optional: true, compare: true },
-    colorMapping: { type: 'object', value: null, optional: true, compare: true },
+    colorMapping: {
+      type: 'object',
+      value: null,
+      optional: true,
+      compare: true,
+    },
     colorMappingDefault: { type: 'color', value: [0, 0, 0, 0] },
 
     // Size / angle: constant OR column name — permissive descriptor.
@@ -479,7 +484,10 @@ export class AnimatedTextLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
    * `_updateText` glyph re-layout does NOT re-run every frame (the getColor
    * updateTrigger re-uploads just the colour).
    */
-  private fadeCache = new Map<string, { sig: string; rows: TextRow[]; fulls: TextRow[] }>();
+  private fadeCache = new Map<
+    string,
+    { sig: string; rows: TextRow[]; fulls: TextRow[] }
+  >();
   /** Tile-array identity from the previous render (prune only on a real change). */
   private lastTilesRef: Tile[] | null = null;
   /** Sim-time of the last CPU re-filter; skips redundant identical ticks. */
@@ -595,7 +603,8 @@ export class AnimatedTextLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
     if (this.lastTilesRef !== tiles) {
       const live = new Set<string>();
       for (const tile of tiles) {
-        for (const tileLayer of tile.layers) live.add(makeTileKey(tile, tileLayer));
+        for (const tileLayer of tile.layers)
+          live.add(makeTileKey(tile, tileLayer));
       }
       for (const key of this.decodedCache.keys()) {
         if (!live.has(key)) this.decodedCache.delete(key);
@@ -633,7 +642,9 @@ export class AnimatedTextLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
           fadeActive,
         );
         if (rows.length === 0) continue;
-        layers.push(this.buildTextSublayer(decoded, rows, sig, fadeActive, now));
+        layers.push(
+          this.buildTextSublayer(decoded, rows, sig, fadeActive, now),
+        );
       }
     }
 
@@ -645,7 +656,9 @@ export class AnimatedTextLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
     });
     if (DEBUG) {
       // eslint-disable-next-line no-console
-      console.log(`AnimatedTextLayer: ${tiles.length} tiles → ${layers.length} sublayers`);
+      console.log(
+        `AnimatedTextLayer: ${tiles.length} tiles → ${layers.length} sublayers`,
+      );
     }
     return layers;
   }
@@ -677,10 +690,24 @@ export class AnimatedTextLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
 
     const colorValue = this.colorValue();
     const colorProp = typeof colorValue === 'string' ? colorValue : '';
-    const constColor: [number, number, number, number] = Array.isArray(colorValue)
-      ? [colorValue[0], colorValue[1], colorValue[2], (colorValue[3] ?? 255) as number]
-      : [DEFAULT_TEXT_COLOR[0], DEFAULT_TEXT_COLOR[1], DEFAULT_TEXT_COLOR[2], 255];
-    const fallbackColor = (this.props.colorMappingDefault ?? [0, 0, 0, 0]) as Color;
+    const constColor: [number, number, number, number] = Array.isArray(
+      colorValue,
+    )
+      ? [
+          colorValue[0],
+          colorValue[1],
+          colorValue[2],
+          (colorValue[3] ?? 255) as number,
+        ]
+      : [
+          DEFAULT_TEXT_COLOR[0],
+          DEFAULT_TEXT_COLOR[1],
+          DEFAULT_TEXT_COLOR[2],
+          255,
+        ];
+    const fallbackColor = (this.props.colorMappingDefault ?? [
+      0, 0, 0, 0,
+    ]) as Color;
 
     const sizeValue = this.sizeValue();
     const sizeProp = typeof sizeValue === 'string' ? sizeValue : '';
@@ -696,10 +723,18 @@ export class AnimatedTextLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
     for (let i = 0; i < count; i++) {
       const b = i * dims;
       const color: [number, number, number, number] = colorProp
-        ? resolveColor(readText(binary, colorProp, i), this.props.colorMapping, fallbackColor)
+        ? resolveColor(
+            readText(binary, colorProp, i),
+            this.props.colorMapping,
+            fallbackColor,
+          )
         : [constColor[0], constColor[1], constColor[2], constColor[3]];
       const row: TextRow = {
-        position: [positions[b], positions[b + 1], dims > 2 ? positions[b + 2] : 0],
+        position: [
+          positions[b],
+          positions[b + 1],
+          dims > 2 ? positions[b + 2] : 0,
+        ],
         text: readText(binary, textProp, i),
         startTime: starts[i] + offset,
         endTime: ends[i] + offset,
@@ -829,12 +864,18 @@ export class AnimatedTextLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
     const bd = (this.props.borderColor ?? [0, 0, 0, 255]) as Color;
     const getBackgroundColor = fadeActive
       ? (d: TextRow): [number, number, number, number] => [
-          bg[0], bg[1], bg[2], Math.round((bg[3] ?? 255) * (d.fade ?? 1)),
+          bg[0],
+          bg[1],
+          bg[2],
+          Math.round((bg[3] ?? 255) * (d.fade ?? 1)),
         ]
       : bg;
     const getBorderColor = fadeActive
       ? (d: TextRow): [number, number, number, number] => [
-          bd[0], bd[1], bd[2], Math.round((bd[3] ?? 255) * (d.fade ?? 1)),
+          bd[0],
+          bd[1],
+          bd[2],
+          Math.round((bd[3] ?? 255) * (d.fade ?? 1)),
         ]
       : bd;
 
@@ -847,8 +888,12 @@ export class AnimatedTextLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
       getPosition: (d: TextRow) => d.position,
       getColor: (d: TextRow) => d.color,
       // Per-feature size/angle ride a reader; constants ride the scalar prop.
-      getSize: decoded.sizeIsColumn ? (d: TextRow) => d.size ?? constSize : constSize,
-      getAngle: decoded.angleIsColumn ? (d: TextRow) => d.angle ?? constAngle : constAngle,
+      getSize: decoded.sizeIsColumn
+        ? (d: TextRow) => d.size ?? constSize
+        : constSize,
+      getAngle: decoded.angleIsColumn
+        ? (d: TextRow) => d.angle ?? constAngle
+        : constAngle,
 
       // Constant accessor pass-throughs.
       getTextAnchor: this.props.getTextAnchor,
@@ -914,10 +959,17 @@ export class AnimatedTextLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
    * into `info.object` (the base-class TileLayer contract, but keyed off the row
    * subset rather than the raw feature index).
    */
-  getPickingInfo({ info, sourceLayer }: GetPickingInfoParams): SpatioTemporalPickingInfo {
+  getPickingInfo({
+    info,
+    sourceLayer,
+  }: GetPickingInfoParams): SpatioTemporalPickingInfo {
     const out = info as SpatioTemporalPickingInfo;
     const sp = sourceLayer?.props as
-      | { tile?: Tile | null; sttFeatures?: BinaryFeatures; sttRows?: TextRow[] }
+      | {
+          tile?: Tile | null;
+          sttFeatures?: BinaryFeatures;
+          sttRows?: TextRow[];
+        }
       | undefined;
     const tile = sp?.tile ?? null;
     out.sourceTile = tile;

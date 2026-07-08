@@ -32,7 +32,13 @@
  */
 
 import { Layer, project32, picking } from '@deck.gl/core';
-import type { Accessor, Color, DefaultProps, LayerProps, UpdateParameters } from '@deck.gl/core';
+import type {
+  Accessor,
+  Color,
+  DefaultProps,
+  LayerProps,
+  UpdateParameters,
+} from '@deck.gl/core';
 import { Model, Geometry } from '@luma.gl/engine';
 import type { Texture } from '@luma.gl/core';
 import type { BundlePositions } from '../../lib/edge-bundler.js';
@@ -245,7 +251,8 @@ void main(void) {
 `;
 
 /** Complete props for {@link BundledFlowLinesLayer}. */
-export type BundledFlowLinesLayerProps = _BundledFlowLinesLayerProps & LayerProps;
+export type BundledFlowLinesLayerProps = _BundledFlowLinesLayerProps &
+  LayerProps;
 
 type _BundledFlowLinesLayerProps = {
   /**
@@ -253,7 +260,10 @@ type _BundledFlowLinesLayerProps = {
    * `instanceEdgeIndex` / `instanceSegmentIndex` attributes (built once per
    * bundle by the composite).
    */
-  data: { length: number; attributes: Record<string, { value: Float32Array; size: number }> };
+  data: {
+    length: number;
+    attributes: Record<string, { value: Float32Array; size: number }>;
+  };
   /**
    * The bundle whose `positionTexture` is bound every draw — either the live
    * {@link EdgeBundler} (still relaxing) or a baked {@link StaticBundle}.
@@ -306,23 +316,37 @@ const defaultProps: DefaultProps<BundledFlowLinesLayerProps> = {
   gap: { type: 'number', value: 0.5, min: 0 },
 };
 
-function toVec4(color: Color | undefined, fallback: Color): [number, number, number, number] {
+function toVec4(
+  color: Color | undefined,
+  fallback: Color,
+): [number, number, number, number] {
   const c = (color ?? fallback) as unknown as number[];
-  return [(c[0] ?? 0) / 255, (c[1] ?? 0) / 255, (c[2] ?? 0) / 255, (c[3] ?? 255) / 255];
+  return [
+    (c[0] ?? 0) / 255,
+    (c[1] ?? 0) / 255,
+    (c[2] ?? 0) / 255,
+    (c[3] ?? 255) / 255,
+  ];
 }
 
 /**
  * GPU-resident bundled-ribbon layer. See the file docstring for the geometry and
  * the fully-on-GPU width/position sampling.
  */
-export class BundledFlowLinesLayer extends Layer<Required<_BundledFlowLinesLayerProps>> {
+export class BundledFlowLinesLayer extends Layer<
+  Required<_BundledFlowLinesLayerProps>
+> {
   static layerName = 'BundledFlowLinesLayer';
   static defaultProps = defaultProps;
 
   declare state: { model?: Model };
 
   getShaders() {
-    return super.getShaders({ vs, fs, modules: [project32, picking, bundledFlowUniforms] });
+    return super.getShaders({
+      vs,
+      fs,
+      modules: [project32, picking, bundledFlowUniforms],
+    });
   }
 
   // Bundled rivers are explicit per-segment geometry; no antimeridian wrap.
@@ -335,7 +359,11 @@ export class BundledFlowLinesLayer extends Layer<Required<_BundledFlowLinesLayer
     if (!attributeManager) return;
     attributeManager.addInstanced({
       instanceEdgeIndex: { size: 1, accessor: 'getEdgeIndex', defaultValue: 0 },
-      instanceSegmentIndex: { size: 1, accessor: 'getSegmentIndex', defaultValue: 0 },
+      instanceSegmentIndex: {
+        size: 1,
+        accessor: 'getSegmentIndex',
+        defaultValue: 0,
+      },
     });
   }
 
@@ -356,7 +384,10 @@ export class BundledFlowLinesLayer extends Layer<Required<_BundledFlowLinesLayer
 
     // Live playhead → continuous bucket position (no quantization).
     const time = this.props.getCurrentTime();
-    let bucketPos = this.props.bucketWidth > 0 ? (time - this.props.bucket0Abs) / this.props.bucketWidth : 0;
+    let bucketPos =
+      this.props.bucketWidth > 0
+        ? (time - this.props.bucket0Abs) / this.props.bucketWidth
+        : 0;
     const maxBucket = this.props.numBuckets - 1;
     if (bucketPos < 0) bucketPos = 0;
     if (bucketPos > maxBucket) bucketPos = maxBucket;
@@ -394,7 +425,10 @@ export class BundledFlowLinesLayer extends Layer<Required<_BundledFlowLinesLayer
       geometry: new Geometry({
         topology: 'triangle-list',
         attributes: {
-          positions: { size: 2, value: new Float32Array(RIBBON_TEMPLATE_POSITIONS) },
+          positions: {
+            size: 2,
+            value: new Float32Array(RIBBON_TEMPLATE_POSITIONS),
+          },
         },
       }),
       isInstanced: true,

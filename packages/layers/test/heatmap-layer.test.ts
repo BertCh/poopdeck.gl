@@ -23,12 +23,18 @@ function makeBinaryFixture(timeOffset = 1_700_000_000_000): BinaryFeatures {
   // 6 features: 3 pickup, 2 dropoff, 1 transit.
   // Positions are arbitrary lon/lat; times are relative to timeOffset.
   const positions = new Float64Array([
-    -74, 40.7, // 0
-    -74.01, 40.72, // 1
-    -74.02, 40.74, // 2
-    -73.98, 40.76, // 3
-    -73.95, 40.78, // 4
-    -73.99, 40.75, // 5
+    -74,
+    40.7, // 0
+    -74.01,
+    40.72, // 1
+    -74.02,
+    40.74, // 2
+    -73.98,
+    40.76, // 3
+    -73.95,
+    40.78, // 4
+    -73.99,
+    40.75, // 5
   ]);
   const startTimes = new Float32Array([0, 1_000, 2_000, 3_000, 4_000, 5_000]);
   const endTimes = new Float32Array([500, 1_500, 2_500, 3_500, 4_500, 5_500]);
@@ -71,7 +77,10 @@ describe('buildConsolidatedChannelData: per-channel masking + packing', () => {
     const tile = wrapTile(makeBinaryFixture());
     const data = buildConsolidatedChannelData(
       [tile],
-      { categoryFilter: { property: 'status', values: ['pickup'] }, intensity: 1 },
+      {
+        categoryFilter: { property: 'status', values: ['pickup'] },
+        intensity: 1,
+      },
       undefined,
       1_700_000_000_000,
     );
@@ -90,7 +99,10 @@ describe('buildConsolidatedChannelData: per-channel masking + packing', () => {
     const tile = wrapTile(makeBinaryFixture());
     const data = buildConsolidatedChannelData(
       [tile],
-      { categoryFilter: { property: 'nonexistent', values: ['x'] }, intensity: 1 },
+      {
+        categoryFilter: { property: 'nonexistent', values: ['x'] },
+        intensity: 1,
+      },
       undefined,
       1_700_000_000_000,
     );
@@ -101,7 +113,10 @@ describe('buildConsolidatedChannelData: per-channel masking + packing', () => {
     const tile = wrapTile(makeBinaryFixture());
     const data = buildConsolidatedChannelData(
       [tile],
-      { categoryFilter: { property: 'status', values: ['ghost'] }, intensity: 1 },
+      {
+        categoryFilter: { property: 'status', values: ['ghost'] },
+        intensity: 1,
+      },
       undefined,
       1_700_000_000_000,
     );
@@ -124,17 +139,31 @@ describe('buildConsolidatedChannelData: per-channel masking + packing', () => {
 
   it('defaults weight to 1 and folds the per-channel intensity in', () => {
     const tile = wrapTile(makeBinaryFixture());
-    const data = buildConsolidatedChannelData([tile], { intensity: 2 }, undefined, 1_700_000_000_000);
+    const data = buildConsolidatedChannelData(
+      [tile],
+      { intensity: 2 },
+      undefined,
+      1_700_000_000_000,
+    );
     expect(data!.length).toBe(6);
     // weight = (no weightProperty → 1) × intensity(2)
-    expect(Array.from(data!.attributes.getWeight.value)).toEqual([2, 2, 2, 2, 2, 2]);
+    expect(Array.from(data!.attributes.getWeight.value)).toEqual([
+      2, 2, 2, 2, 2, 2,
+    ]);
   });
 
   it('sources weight from weightProperty × intensity', () => {
     const tile = wrapTile(makeBinaryFixture());
-    const data = buildConsolidatedChannelData([tile], { intensity: 0.5 }, 'fare', 1_700_000_000_000);
+    const data = buildConsolidatedChannelData(
+      [tile],
+      { intensity: 0.5 },
+      'fare',
+      1_700_000_000_000,
+    );
     // fare = [10..60] × 0.5
-    expect(Array.from(data!.attributes.getWeight.value)).toEqual([5, 10, 15, 20, 25, 30]);
+    expect(Array.from(data!.attributes.getWeight.value)).toEqual([
+      5, 10, 15, 20, 25, 30,
+    ]);
   });
 
   it('consolidates across tiles and relativizes times against the layer offset', () => {
@@ -143,7 +172,12 @@ describe('buildConsolidatedChannelData: per-channel masking + packing', () => {
     // the +3_600_000 ms delta so the consolidated filter values are comparable.
     const tileA = wrapTile(makeBinaryFixture(layerOffset), 0);
     const tileB = wrapTile(makeBinaryFixture(layerOffset + 3_600_000), 1);
-    const data = buildConsolidatedChannelData([tileA, tileB], { intensity: 1 }, undefined, layerOffset);
+    const data = buildConsolidatedChannelData(
+      [tileA, tileB],
+      { intensity: 1 },
+      undefined,
+      layerOffset,
+    );
     expect(data!.length).toBe(12); // 6 + 6
     // tileA feature 0 start=0 + delta 0 → 0
     expect(data!.attributes.getFilterValue.value[0]).toBe(0);

@@ -42,7 +42,10 @@ export interface ColumnPrismGeometry {
  * @param sides  number of disk faces (deck `diskResolution`); clamped to ≥ 3.
  * @param angle  disk rotation in radians (deck `angle`, CCW). @default 0
  */
-export function makeColumnPrismGeometry(sides: number, angle = 0): ColumnPrismGeometry {
+export function makeColumnPrismGeometry(
+  sides: number,
+  angle = 0,
+): ColumnPrismGeometry {
   const n = Math.max(3, Math.floor(sides));
   const R = circumradiusForIncircle(n);
 
@@ -93,8 +96,14 @@ export function makeColumnPrismGeometry(sides: number, angle = 0): ColumnPrismGe
   }
 
   const geometry = new InstancedBufferGeometry();
-  geometry.setAttribute('position', new Float32BufferAttribute(new Float32Array(positions), 3));
-  geometry.setAttribute('normal', new Float32BufferAttribute(new Float32Array(normals), 3));
+  geometry.setAttribute(
+    'position',
+    new Float32BufferAttribute(new Float32Array(positions), 3),
+  );
+  geometry.setAttribute(
+    'normal',
+    new Float32BufferAttribute(new Float32Array(normals), 3),
+  );
   geometry.setIndex(indices);
 
   return { geometry, vertexCount: positions.length / 3 };

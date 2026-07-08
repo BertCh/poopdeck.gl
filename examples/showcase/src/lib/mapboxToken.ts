@@ -6,11 +6,11 @@
  * should use a URL-restricted token, and fresh clones must bring their own.
  */
 export const MAPBOX_ACCESS_TOKEN: string =
-  (import.meta as any).env?.VITE_MAPBOX_TOKEN || "";
+  (import.meta as any).env?.VITE_MAPBOX_TOKEN || '';
 
-if (!MAPBOX_ACCESS_TOKEN && typeof console !== "undefined") {
+if (!MAPBOX_ACCESS_TOKEN && typeof console !== 'undefined') {
   console.warn(
-    "[showcase] VITE_MAPBOX_TOKEN is not set — Mapbox basemap surfaces will " +
-      "not load. Copy examples/showcase/.env.example to .env.local and set it.",
+    '[showcase] VITE_MAPBOX_TOKEN is not set — Mapbox basemap surfaces will ' +
+      'not load. Copy examples/showcase/.env.example to .env.local and set it.',
   );
 }

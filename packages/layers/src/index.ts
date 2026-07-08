@@ -116,7 +116,10 @@ export { TimeFilterExtension } from './extensions/time-filter-extension.js';
 // per-feature/per-vertex times against a layer timeOffset — export the
 // canonical helper + the f32 precision ceiling so consumers don't have to
 // re-derive the scheme.
-export { relativizeTime, MAX_RELATIVE_TIME_MS } from './extensions/time-filter-extension.js';
+export {
+  relativizeTime,
+  MAX_RELATIVE_TIME_MS,
+} from './extensions/time-filter-extension.js';
 export {
   CategoryColorExtension,
   CATEGORY_PALETTE_SIZE,
@@ -234,4 +237,3 @@ export type {
   CollisionFilterOptions,
   CollisionFilterProps,
 } from './extensions/collision-filter-extension.js';
-

@@ -52,7 +52,15 @@ function bigPointTile(n: number) {
 
 const ATLAS = 'https://example.test/atlas.png';
 const MAPPING = {
-  vessel: { x: 0, y: 0, width: 64, height: 64, anchorX: 32, anchorY: 32, mask: true },
+  vessel: {
+    x: 0,
+    y: 0,
+    width: 64,
+    height: 64,
+    anchorX: 32,
+    anchorY: 32,
+    mask: true,
+  },
 };
 
 describe('AnimatedIconLayer per-tile sublayer architecture', () => {
@@ -129,7 +137,9 @@ describe('AnimatedIconLayer per-tile sublayer architecture', () => {
 
     // Zero-copy: same Float32Array references the tile carries, under the
     // exact keys TimeFilterExtension.initializeState registers.
-    expect(attrs.instanceStartTime.value).toBe(tile.layers[0].features.startTimes);
+    expect(attrs.instanceStartTime.value).toBe(
+      tile.layers[0].features.startTimes,
+    );
     expect(attrs.instanceStartTime.size).toBe(1);
     expect(attrs.instanceEndTime.value).toBe(tile.layers[0].features.endTimes);
     expect(attrs.instanceEndTime.size).toBe(1);
@@ -249,7 +259,9 @@ describe('AnimatedIconLayer per-tile sublayer architecture', () => {
   });
 
   it('forwards a constant [x,y] pixelOffset to the getPixelOffset accessor (no attribute)', () => {
-    const built = buildSublayerForTile(bigPointTile(3), { pixelOffset: [4, -8] });
+    const built = buildSublayerForTile(bigPointTile(3), {
+      pixelOffset: [4, -8],
+    });
     const attrs = built.props.data.attributes;
     // Constant offset → no per-feature buffer; rides the scalar accessor.
     expect(attrs.getPixelOffset).toBeUndefined();
@@ -266,7 +278,9 @@ describe('AnimatedIconLayer per-tile sublayer architecture', () => {
     const tile = bigPointTile(N);
     // Interleaved [x0,y0, x1,y1, x2,y2] size-2 column.
     const off = new Float32Array([1, 2, 3, 4, 5, 6]);
-    tile.layers[0].features.vectorProps = { screenOff: { value: off, size: 2 } };
+    tile.layers[0].features.vectorProps = {
+      screenOff: { value: off, size: 2 },
+    };
 
     const built = buildSublayerForTile(tile, { pixelOffset: 'screenOff' });
     const attrs = built.props.data.attributes;
@@ -284,7 +298,10 @@ describe('AnimatedIconLayer per-tile sublayer architecture', () => {
     tile.layers[0].features.vectorProps = { po: { value: off, size: 2 } };
 
     // getPixelOffset alias holds a COLUMN NAME (not a function) — it wins.
-    const built = buildSublayerForTile(tile, { getPixelOffset: 'po', pixelOffset: [1, 1] });
+    const built = buildSublayerForTile(tile, {
+      getPixelOffset: 'po',
+      pixelOffset: [1, 1],
+    });
     const attrs = built.props.data.attributes;
     expect(attrs.getPixelOffset.value).toBe(off);
     expect(attrs.getPixelOffset.value[3]).toBe(10);
@@ -320,7 +337,9 @@ describe('AnimatedIconLayer per-tile sublayer architecture', () => {
     const dflt = buildSublayerForTile(bigPointTile(3));
     expect(dflt.props.textureParameters).toBeNull();
     const params = { minFilter: 'nearest', magFilter: 'nearest' };
-    const over = buildSublayerForTile(bigPointTile(3), { textureParameters: params });
+    const over = buildSublayerForTile(bigPointTile(3), {
+      textureParameters: params,
+    });
     expect(over.props.textureParameters).toBe(params);
   });
 

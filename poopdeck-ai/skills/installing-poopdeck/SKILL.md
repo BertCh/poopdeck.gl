@@ -10,7 +10,7 @@ description: >-
   wants a minimal working setup before wiring layers or building datasets.
 license: MIT
 metadata:
-  version: "0.4.0"
+  version: '0.4.0'
 ---
 
 # Installing poopdeck.gl & scaffolding a project
@@ -22,8 +22,8 @@ Two independent toolchains — install whichever the task needs (usually both):
 - **`@poopdeck.gl/*` npm packages** — render an archive in the browser (the
   consumer side). Peer-depend on deck.gl.
 
-You do **not** need the CLIs to *render* an existing/hosted `.stt`, and you don't
-need the npm packages to *build* one. Install for the side you're on.
+You do **not** need the CLIs to _render_ an existing/hosted `.stt`, and you don't
+need the npm packages to _build_ one. Install for the side you're on.
 
 ## Install the CLIs
 
@@ -40,7 +40,7 @@ That installs five binaries with the light, pure-Rust dependency set:
 - **DuckDB input** — heavy C++ build, off by default:
   `cargo install spatiotemporal-tiles --features duckdb`.
 - **`stt-generate`** (the bundled reference datasets — earthquakes, drifters,
-  GTFS, …) is a **dev/from-source** binary, *not* part of the facade. Run it from
+  GTFS, …) is a **dev/from-source** binary, _not_ part of the facade. Run it from
   a repo checkout: `cargo run -p stt-generate --release -- <dataset>`. See
   **generating-stt-datasets**.
 
@@ -55,13 +55,13 @@ Sanity check: `stt-build --help` (or `./target/release/stt-build --help`).
 Add the poopdeck package for your job **plus its deck.gl peers** — this is the step
 people get wrong.
 
-| You want to… | Package |
-|---|---|
-| Render STT layers on a deck.gl map | `@poopdeck.gl/layers` |
-| React playback UI (scrub/play controls, clock hook) | `@poopdeck.gl/react` |
-| Framework-free playback engine (governor, prefetch) | `@poopdeck.gl/playback` |
-| Read an archive directly (`STTArchive`, manifest) | `@poopdeck.gl/core` |
-| Non-deck backends | `@poopdeck.gl/three` (WebGPU/TSL), `@poopdeck.gl/maplibre`, `@poopdeck.gl/cesium` |
+| You want to…                                        | Package                                                                           |
+| --------------------------------------------------- | --------------------------------------------------------------------------------- |
+| Render STT layers on a deck.gl map                  | `@poopdeck.gl/layers`                                                             |
+| React playback UI (scrub/play controls, clock hook) | `@poopdeck.gl/react`                                                              |
+| Framework-free playback engine (governor, prefetch) | `@poopdeck.gl/playback`                                                           |
+| Read an archive directly (`STTArchive`, manifest)   | `@poopdeck.gl/core`                                                               |
+| Non-deck backends                                   | `@poopdeck.gl/three` (WebGPU/TSL), `@poopdeck.gl/maplibre`, `@poopdeck.gl/cesium` |
 
 `@poopdeck.gl/layers` re-exports what it needs from `core`, so for a deck.gl app you
 usually install just `layers` + the deck.gl peers.
@@ -92,7 +92,7 @@ Rules:
 - pnpm/yarn workspaces: peers resolve from the app, so install the deck.gl set in
   the **app** package, not a shared lib.
 
-If a map renders blank *after* install, go to **debugging-blank-renders** —
+If a map renders blank _after_ install, go to **debugging-blank-renders** —
 "peer/version mismatch" is one of its first checks.
 
 ## Minimal working scaffold (deck.gl)
@@ -111,8 +111,8 @@ new Deck({
     new AnimatedPointLayer({
       id: 'quakes',
       data: 'https://tiles.example.com/earthquakes/manifest.json', // manifest URL
-      currentTime: 1700000000000,   // Unix ms, inside the archive's timeRange
-      timeWindow: 86_400_000,       // 1 day of data around currentTime
+      currentTime: 1700000000000, // Unix ms, inside the archive's timeRange
+      timeWindow: 86_400_000, // 1 day of data around currentTime
     }),
   ],
 });

@@ -10,7 +10,11 @@ import {
   type BoxTrackOptions,
   type BoxDefaults,
 } from '../src/layers/box-tracks';
-import { writeBoxEdges, FLOATS_PER_BOX, BOX_EDGES } from '../src/geometry/box-edges';
+import {
+  writeBoxEdges,
+  FLOATS_PER_BOX,
+  BOX_EDGES,
+} from '../src/geometry/box-edges';
 import type { RGBA } from '../src/lib/color';
 
 const OPTS: BoxTrackOptions = {
@@ -25,13 +29,25 @@ const OPTS: BoxTrackOptions = {
   heightProperty: 'height',
   speedProperty: 'speed',
 };
-const DEF: BoxDefaults = { length: 4, width: 2, height: 1.6, fadeIn: 0, fadeOut: 0 };
+const DEF: BoxDefaults = {
+  length: 4,
+  width: 2,
+  height: 1.6,
+  fadeIn: 0,
+  fadeOut: 0,
+};
 
 /** A tile with `count` object snapshots; per-keyframe columns are parallel arrays. */
 function objectTile(
   trackIds: string[],
   starts: number[],
-  cols: { lon: number[]; lat: number[]; heading?: number[]; category?: string[]; speed?: number[] },
+  cols: {
+    lon: number[];
+    lat: number[];
+    heading?: number[];
+    category?: string[];
+    speed?: number[];
+  },
   timeOffset = 0,
 ): Tile {
   const count = trackIds.length;
@@ -66,7 +82,9 @@ function objectTile(
       ...(cols.category
         ? {
             category: {
-              indices: new Uint16Array(cols.category.map((c) => catCats.indexOf(c))),
+              indices: new Uint16Array(
+                cols.category.map((c) => catCats.indexOf(c)),
+              ),
               categories: catCats,
             },
           }
@@ -77,7 +95,14 @@ function objectTile(
   return {
     id: { z: 18, x: 0, y: 0, t: timeOffset },
     timeRange: { start: timeOffset, end: timeOffset + 1000 },
-    layers: [{ name: 'objects', extent: 0, features, geometryExtensionName: 'geoarrow.point' }],
+    layers: [
+      {
+        name: 'objects',
+        extent: 0,
+        features,
+        geometryExtensionName: 'geoarrow.point',
+      },
+    ],
   };
 }
 
@@ -104,8 +129,18 @@ describe('lerpDim', () => {
 
 describe('buildTrackIndex + sampleTrack', () => {
   it('pools keyframes per track across tiles and interpolates position', () => {
-    const t1 = objectTile(['A'], [0], { lon: [-71], lat: [42], heading: [0], category: ['car'] }, 1000);
-    const t2 = objectTile(['A'], [1000], { lon: [-71.001], lat: [42], heading: [0], category: ['car'] }, 1000);
+    const t1 = objectTile(
+      ['A'],
+      [0],
+      { lon: [-71], lat: [42], heading: [0], category: ['car'] },
+      1000,
+    );
+    const t2 = objectTile(
+      ['A'],
+      [1000],
+      { lon: [-71.001], lat: [42], heading: [0], category: ['car'] },
+      1000,
+    );
     const idx = buildTrackIndex([t1, t2], OPTS);
     expect(idx.size).toBe(1);
     const track = idx.get('A')!;

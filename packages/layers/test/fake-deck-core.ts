@@ -83,7 +83,9 @@ export function createDeckCoreMock() {
         operation,
       };
       const overridingSublayerProps =
-        overridingProps && sublayerProps.id && overridingProps[sublayerProps.id];
+        overridingProps &&
+        sublayerProps.id &&
+        overridingProps[sublayerProps.id];
       const overridingSublayerTriggers =
         overridingSublayerProps && overridingSublayerProps.updateTriggers;
       const sublayerId = sublayerProps.id || 'sublayer';

@@ -1,19 +1,19 @@
-import React from "react";
-import { Link } from "react-router";
-import PipelineFlow from "../components/how/PipelineFlow";
-import SpaceTimeDiagram from "../components/how/SpaceTimeDiagram";
-import CoverLookback from "../components/how/CoverLookback";
-import TrajectoryClipping from "../components/how/TrajectoryClipping";
-import ArchiveAnatomy from "../components/how/ArchiveAnatomy";
-import TileAnatomy from "../components/how/TileAnatomy";
-import DecodePipeline from "../components/how/DecodePipeline";
-import PlaybackDiagram from "../components/how/PlaybackDiagram";
-import TechniquesGrid from "../components/how/TechniquesGrid";
-import BuildIntelligence from "../components/how/BuildIntelligence";
-import PackagesMap from "../components/how/PackagesMap";
-import ParityKernel from "../components/how/ParityKernel";
-import DesignDecisions from "../components/how/DesignDecisions";
-import { useReducedMotion } from "../lib/reducedMotion";
+import React from 'react';
+import { Link } from 'react-router';
+import PipelineFlow from '../components/how/PipelineFlow';
+import SpaceTimeDiagram from '../components/how/SpaceTimeDiagram';
+import CoverLookback from '../components/how/CoverLookback';
+import TrajectoryClipping from '../components/how/TrajectoryClipping';
+import ArchiveAnatomy from '../components/how/ArchiveAnatomy';
+import TileAnatomy from '../components/how/TileAnatomy';
+import DecodePipeline from '../components/how/DecodePipeline';
+import PlaybackDiagram from '../components/how/PlaybackDiagram';
+import TechniquesGrid from '../components/how/TechniquesGrid';
+import BuildIntelligence from '../components/how/BuildIntelligence';
+import PackagesMap from '../components/how/PackagesMap';
+import ParityKernel from '../components/how/ParityKernel';
+import DesignDecisions from '../components/how/DesignDecisions';
+import { useReducedMotion } from '../lib/reducedMotion';
 
 /**
  * `/how-it-works` — the visual explainer for STT itself: the build→publish→
@@ -32,15 +32,69 @@ interface SectionDef {
 }
 
 const SECTIONS: SectionDef[] = [
-  { id: "pipeline", n: "01", kicker: "The pipeline", title: "Four stages, no servers", toc: "Pipeline" },
-  { id: "space-time", n: "02", kicker: "The idea", title: "Tiles cut in space and time", toc: "Space × time" },
-  { id: "archive", n: "03", kicker: "The archive", title: "Three files, three round trips", toc: "Archive" },
-  { id: "tile", n: "04", kicker: "The payload", title: "Inside a tile", toc: "Tile" },
-  { id: "playback", n: "05", kicker: "The runtime", title: "Streamed like video", toc: "Playback" },
-  { id: "techniques", n: "06", kicker: "The levers", title: "What keeps it small and smooth", toc: "Techniques" },
-  { id: "intelligence", n: "07", kicker: "The analyst", title: "The build tunes itself", toc: "Intelligence" },
-  { id: "parts", n: "08", kicker: "The parts", title: "Crates and packages", toc: "Parts" },
-  { id: "design", n: "09", kicker: "Rationale", title: "Why it's built this way", toc: "Design" },
+  {
+    id: 'pipeline',
+    n: '01',
+    kicker: 'The pipeline',
+    title: 'Four stages, no servers',
+    toc: 'Pipeline',
+  },
+  {
+    id: 'space-time',
+    n: '02',
+    kicker: 'The idea',
+    title: 'Tiles cut in space and time',
+    toc: 'Space × time',
+  },
+  {
+    id: 'archive',
+    n: '03',
+    kicker: 'The archive',
+    title: 'Three files, three round trips',
+    toc: 'Archive',
+  },
+  {
+    id: 'tile',
+    n: '04',
+    kicker: 'The payload',
+    title: 'Inside a tile',
+    toc: 'Tile',
+  },
+  {
+    id: 'playback',
+    n: '05',
+    kicker: 'The runtime',
+    title: 'Streamed like video',
+    toc: 'Playback',
+  },
+  {
+    id: 'techniques',
+    n: '06',
+    kicker: 'The levers',
+    title: 'What keeps it small and smooth',
+    toc: 'Techniques',
+  },
+  {
+    id: 'intelligence',
+    n: '07',
+    kicker: 'The analyst',
+    title: 'The build tunes itself',
+    toc: 'Intelligence',
+  },
+  {
+    id: 'parts',
+    n: '08',
+    kicker: 'The parts',
+    title: 'Crates and packages',
+    toc: 'Parts',
+  },
+  {
+    id: 'design',
+    n: '09',
+    kicker: 'Rationale',
+    title: "Why it's built this way",
+    toc: 'Design',
+  },
 ];
 
 const Section: React.FC<{
@@ -50,18 +104,28 @@ const Section: React.FC<{
 }> = ({ def, lede, children }) => (
   <section id={def.id} className="mt-14 sm:mt-16 scroll-mt-6">
     <div className="flex items-baseline gap-2">
-      <span className="font-mono text-[11px] font-semibold" style={{ color: "var(--accent)" }}>
+      <span
+        className="font-mono text-[11px] font-semibold"
+        style={{ color: 'var(--accent)' }}
+      >
         {def.n}
       </span>
       <span className="eyebrow">{def.kicker}</span>
     </div>
     <h2
       className="text-xl sm:text-2xl font-semibold mt-1.5"
-      style={{ color: "var(--ink-900)", fontFamily: '"Fraunces", Georgia, serif', letterSpacing: "-0.02em" }}
+      style={{
+        color: 'var(--ink-900)',
+        fontFamily: '"Fraunces", Georgia, serif',
+        letterSpacing: '-0.02em',
+      }}
     >
       {def.title}
     </h2>
-    <p className="text-[13px] mt-2 mb-5 max-w-2xl" style={{ color: "var(--ink-500)", lineHeight: 1.7 }}>
+    <p
+      className="text-[13px] mt-2 mb-5 max-w-2xl"
+      style={{ color: 'var(--ink-500)', lineHeight: 1.7 }}
+    >
       {lede}
     </p>
     {children}
@@ -70,24 +134,24 @@ const Section: React.FC<{
 
 const NEXT_LINKS: { to: string; title: string; blurb: string }[] = [
   {
-    to: "/docs/architecture/system-overview",
-    title: "System Overview",
-    blurb: "The same architecture in prose, with links into every subsystem.",
+    to: '/docs/architecture/system-overview',
+    title: 'System Overview',
+    blurb: 'The same architecture in prose, with links into every subsystem.',
   },
   {
-    to: "/docs/spec/stt-packed-format",
-    title: "Packed Format spec",
-    blurb: "The normative directory, pack and manifest contract.",
+    to: '/docs/spec/stt-packed-format',
+    title: 'Packed Format spec',
+    blurb: 'The normative directory, pack and manifest contract.',
   },
   {
-    to: "/docs/intro/concepts",
-    title: "Core Concepts",
-    blurb: "Time windows, temporal LOD and optimistic rendering, defined.",
+    to: '/docs/intro/concepts',
+    title: 'Core Concepts',
+    blurb: 'Time windows, temporal LOD and optimistic rendering, defined.',
   },
   {
-    to: "/demos",
-    title: "The demos",
-    blurb: "Every technique on this page, running on real datasets.",
+    to: '/demos',
+    title: 'The demos',
+    blurb: 'Every technique on this page, running on real datasets.',
   },
 ];
 
@@ -96,7 +160,9 @@ const HowItWorks: React.FC = () => {
 
   const jump = (id: string) => (e: React.MouseEvent) => {
     e.preventDefault();
-    document.getElementById(id)?.scrollIntoView({ behavior: reduced ? "auto" : "smooth" });
+    document
+      .getElementById(id)
+      ?.scrollIntoView({ behavior: reduced ? 'auto' : 'smooth' });
   };
 
   return (
@@ -106,16 +172,24 @@ const HowItWorks: React.FC = () => {
         <span className="eyebrow">Architecture</span>
         <h1
           className="text-3xl sm:text-4xl font-semibold mt-2"
-          style={{ color: "var(--ink-900)", fontFamily: '"Fraunces", Georgia, serif', letterSpacing: "-0.02em", lineHeight: 1.12 }}
+          style={{
+            color: 'var(--ink-900)',
+            fontFamily: '"Fraunces", Georgia, serif',
+            letterSpacing: '-0.02em',
+            lineHeight: 1.12,
+          }}
         >
           How spatiotemporal tiles work
         </h1>
-        <p className="text-sm mt-4 max-w-2xl" style={{ color: "var(--ink-700)", lineHeight: 1.75 }}>
+        <p
+          className="text-sm mt-4 max-w-2xl"
+          style={{ color: 'var(--ink-700)', lineHeight: 1.75 }}
+        >
           Map tiles solved "the world is too big to send" by cutting space into
-          a pyramid. STT applies the same cut to time: every tile is also
-          sliced into time buckets, packed into static files, and streamed like
-          video — buffered ahead of a playhead, animated entirely on the GPU.
-          This page is the whole system, end to end.
+          a pyramid. STT applies the same cut to time: every tile is also sliced
+          into time buckets, packed into static files, and streamed like video —
+          buffered ahead of a playhead, animated entirely on the GPU. This page
+          is the whole system, end to end.
         </p>
 
         <nav aria-label="On this page" className="mt-6 flex flex-wrap gap-1.5">
@@ -125,14 +199,18 @@ const HowItWorks: React.FC = () => {
               href={`#${s.id}`}
               onClick={jump(s.id)}
               className="rounded-full px-3 py-1 text-[11px] font-medium transition-colors"
-              style={{ border: "1px solid var(--hairline)", color: "var(--ink-500)", background: "var(--surface)" }}
+              style={{
+                border: '1px solid var(--hairline)',
+                color: 'var(--ink-500)',
+                background: 'var(--surface)',
+              }}
               onMouseOver={(e) => {
-                e.currentTarget.style.color = "var(--accent)";
-                e.currentTarget.style.borderColor = "var(--accent)";
+                e.currentTarget.style.color = 'var(--accent)';
+                e.currentTarget.style.borderColor = 'var(--accent)';
               }}
               onMouseOut={(e) => {
-                e.currentTarget.style.color = "var(--ink-500)";
-                e.currentTarget.style.borderColor = "var(--hairline)";
+                e.currentTarget.style.color = 'var(--ink-500)';
+                e.currentTarget.style.borderColor = 'var(--hairline)';
               }}
             >
               {s.n} · {s.toc}
@@ -181,10 +259,10 @@ const HowItWorks: React.FC = () => {
           def={SECTIONS[2]}
           lede={
             <>
-              Millions of tiles would mean millions of URLs. Instead the
-              archive is a handful of immutable, content-addressed objects: a
-              directory that knows where every tile lives, and packs read by
-              HTTP range. Anything that can serve a static file can serve STT.
+              Millions of tiles would mean millions of URLs. Instead the archive
+              is a handful of immutable, content-addressed objects: a directory
+              that knows where every tile lives, and packs read by HTTP range.
+              Anything that can serve a static file can serve STT.
             </>
           }
         >
@@ -214,10 +292,10 @@ const HowItWorks: React.FC = () => {
           def={SECTIONS[4]}
           lede={
             <>
-              The runtime treats sim-time the way a video player treats
-              seconds: buffer a runway ahead of the playhead, gate the clock on
-              it, and never let the picture outrun the data. Rendering stays
-              cheap because animation is a shader, not a data update.
+              The runtime treats sim-time the way a video player treats seconds:
+              buffer a runway ahead of the playhead, gate the clock on it, and
+              never let the picture outrun the data. Rendering stays cheap
+              because animation is a shader, not a data update.
             </>
           }
         >
@@ -231,8 +309,8 @@ const HowItWorks: React.FC = () => {
             <>
               Every lever below is measured, opt-in and recorded in tile
               metadata — the reader reconstructs exact values on decode. In
-              practice they compound to 4–6× smaller archives that animate at
-              60 fps.
+              practice they compound to 4–6× smaller archives that animate at 60
+              fps.
             </>
           }
         >
@@ -247,8 +325,8 @@ const HowItWorks: React.FC = () => {
               The levers above are powerful and easy to misuse, so the toolchain
               ships its own analyst. It profiles the source, measures each lever
               on a real sample of the data, and recommends flags with a
-              confidence grade — while a firewall guarantees it never throws data
-              away to hit a size target unless you say so.
+              confidence grade — while a firewall guarantees it never throws
+              data away to hit a size target unless you say so.
             </>
           }
         >
@@ -278,10 +356,10 @@ const HowItWorks: React.FC = () => {
           def={SECTIONS[8]}
           lede={
             <>
-              Formats live or die on their constraints. These are the
-              locked-in choices — each one traded away flexibility to buy
-              something measurable, and each is written down in the spec so
-              the trade stays visible.
+              Formats live or die on their constraints. These are the locked-in
+              choices — each one traded away flexibility to buy something
+              measurable, and each is written down in the spec so the trade
+              stays visible.
             </>
           }
         >
@@ -297,18 +375,37 @@ const HowItWorks: React.FC = () => {
                 key={l.to}
                 to={l.to}
                 className="group rounded-lg p-3.5 transition-colors"
-                style={{ background: "var(--surface)", border: "1px solid var(--hairline)" }}
+                style={{
+                  background: 'var(--surface)',
+                  border: '1px solid var(--hairline)',
+                }}
               >
                 <span
                   className="font-display text-[13px] font-semibold inline-flex items-center gap-1"
-                  style={{ color: "var(--ink-900)" }}
+                  style={{ color: 'var(--ink-900)' }}
                 >
                   {l.title}
-                  <svg viewBox="0 0 24 24" width="11" height="11" aria-hidden="true" style={{ color: "var(--accent)" }}>
-                    <path fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M5 12h13M13 6l6 6-6 6" />
+                  <svg
+                    viewBox="0 0 24 24"
+                    width="11"
+                    height="11"
+                    aria-hidden="true"
+                    style={{ color: 'var(--accent)' }}
+                  >
+                    <path
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M5 12h13M13 6l6 6-6 6"
+                    />
                   </svg>
                 </span>
-                <p className="mt-1 text-[11px] leading-relaxed" style={{ color: "var(--ink-500)" }}>
+                <p
+                  className="mt-1 text-[11px] leading-relaxed"
+                  style={{ color: 'var(--ink-500)' }}
+                >
                   {l.blurb}
                 </p>
               </Link>

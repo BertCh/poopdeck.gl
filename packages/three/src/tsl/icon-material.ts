@@ -59,7 +59,10 @@ const sin = TSL.sin as unknown as (...a: any[]) => any;
 
 /** Icon time-filter modes (deck `AnimatedIconLayer` is window-only; cumulative
  *  added here for the "leave a marker trail" worldbuild look). */
-export type IconMode = Extract<TimeFilterMode, 'window' | 'cumulative' | 'none'>;
+export type IconMode = Extract<
+  TimeFilterMode,
+  'window' | 'cumulative' | 'none'
+>;
 
 /** Live icon uniforms: pixel-size clamp, opacity, and the canvas size in px. */
 export class IconUniforms {
@@ -94,7 +97,9 @@ export interface IconMaterialBundle {
   mode: IconMode;
 }
 
-export function createIconMaterial(opts: IconMaterialOptions): IconMaterialBundle {
+export function createIconMaterial(
+  opts: IconMaterialOptions,
+): IconMaterialBundle {
   const time = new TimeFilterUniforms();
   const icon = new IconUniforms();
 
@@ -132,7 +137,12 @@ export function createIconMaterial(opts: IconMaterialOptions): IconMaterialBundl
   const offY = ry.mul(half).mul(float(2)).div(icon.viewport.y).mul(clip.w);
 
   const material = new MeshBasicNodeMaterial();
-  material.vertexNode = vec4(clip.x.add(offX), clip.y.add(offY), clip.z, clip.w);
+  material.vertexNode = vec4(
+    clip.x.add(offX),
+    clip.y.add(offY),
+    clip.z,
+    clip.w,
+  );
 
   // ── FRAGMENT: atlas sample (rotated UV) × tint × time alpha ──────────────────
   // The UNROTATED corner [-1,1]² maps to the atlas rect — the GEOMETRY was rotated
@@ -181,11 +191,16 @@ export interface IconUniformValues {
   viewport?: [number, number];
 }
 
-export function updateIconUniforms(bundle: IconMaterialBundle, v: IconUniformValues): void {
+export function updateIconUniforms(
+  bundle: IconMaterialBundle,
+  v: IconUniformValues,
+): void {
   updateTimeFilterUniforms(bundle.time, v.relativeCurrentTime, v.params);
   if (v.opacity !== undefined) bundle.icon.opacity.value = v.opacity;
   if (v.sizeScale !== undefined) bundle.icon.sizeScale.value = v.sizeScale;
-  if (v.sizeMinPixels !== undefined) bundle.icon.sizeMinPixels.value = v.sizeMinPixels;
-  if (v.sizeMaxPixels !== undefined) bundle.icon.sizeMaxPixels.value = v.sizeMaxPixels;
+  if (v.sizeMinPixels !== undefined)
+    bundle.icon.sizeMinPixels.value = v.sizeMinPixels;
+  if (v.sizeMaxPixels !== undefined)
+    bundle.icon.sizeMaxPixels.value = v.sizeMaxPixels;
   if (v.viewport) bundle.icon.viewport.value.set(v.viewport[0], v.viewport[1]);
 }

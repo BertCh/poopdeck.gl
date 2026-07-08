@@ -51,7 +51,11 @@ function clamp(v: number, lo: number, hi: number): number {
  * Mercator world units are mercator-metres (constant per zoom); globe world units
  * are true metres, so the ground resolution shrinks with `cos(lat)`.
  */
-export function worldUnitsPerPixel(proj: Projection, zoom: number, latitude: number): number {
+export function worldUnitsPerPixel(
+  proj: Projection,
+  zoom: number,
+  latitude: number,
+): number {
   const base =
     proj.kind === 'globe'
       ? WORLD_CIRCUMFERENCE * Math.cos(clamp(latitude, -89, 89) * DEG2RAD)
@@ -60,7 +64,11 @@ export function worldUnitsPerPixel(proj: Projection, zoom: number, latitude: num
 }
 
 /** Inverse of {@link worldUnitsPerPixel}: the zoom that yields a given ground resolution. */
-export function zoomForWorldUnitsPerPixel(proj: Projection, wupp: number, latitude: number): number {
+export function zoomForWorldUnitsPerPixel(
+  proj: Projection,
+  wupp: number,
+  latitude: number,
+): number {
   const base =
     proj.kind === 'globe'
       ? WORLD_CIRCUMFERENCE * Math.cos(clamp(latitude, -89, 89) * DEG2RAD)

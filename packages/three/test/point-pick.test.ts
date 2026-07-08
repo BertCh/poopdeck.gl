@@ -22,7 +22,11 @@
 import { describe, it, expect } from 'vitest';
 import type { BinaryFeatures, TileId } from '@poopdeck.gl/core';
 import { buildPointBuffers, pointTileKey } from '../src/layers/point-buffers';
-import { resolvePointPick, parsePointTileKey, pointPickToInfo } from '../src/lib/point-pick';
+import {
+  resolvePointPick,
+  parsePointTileKey,
+  pointPickToInfo,
+} from '../src/lib/point-pick';
 import { buildIdColors, decodeId } from '../src/lib/gpu-pick';
 import { LocalEnuProjection } from '../src/projection/local-enu';
 import type { RGBA } from '../src/lib/color';
@@ -37,11 +41,24 @@ const pointTile = (
   layerName: string,
   positions: number[],
   partial: Partial<BinaryFeatures> = {},
-) => makePointTile(positions.length / 2, positions, partial, { id, layerName, timeOffset: id.t });
+) =>
+  makePointTile(positions.length / 2, positions, partial, {
+    id,
+    layerName,
+    timeOffset: id.t,
+  });
 
-const CLASS: Record<string, RGBA> = { ground: [80, 90, 120, 255], veg: [40, 200, 80, 255] };
+const CLASS: Record<string, RGBA> = {
+  ground: [80, 90, 120, 255],
+  veg: [40, 200, 80, 255],
+};
 const OPTS = {
-  colorMode: { type: 'categorical' as const, property: 'cls', mapping: CLASS, fallback: [0, 0, 0, 0] as RGBA },
+  colorMode: {
+    type: 'categorical' as const,
+    property: 'cls',
+    mapping: CLASS,
+    fallback: [0, 0, 0, 0] as RGBA,
+  },
   elevationProperty: 'z',
   elevationScale: 1,
 };
@@ -52,20 +69,36 @@ const OPTS = {
 // (`mag` for provenance, `intensity` for hover) plus explicit featureIds.
 const idA: TileId = { z: 16, x: 5, y: 6, t: 0 };
 const idB: TileId = { z: 16, x: 7, y: 8, t: 500 };
-const tileA = pointTile(idA, 'lidar', [anchor.longitude, anchor.latitude, anchor.longitude + 0.001, anchor.latitude], {
-  numericProps: { z: new Float32Array([0, 0]) },
-  categoricalProps: {
-    seg_class: { indices: new Uint16Array([0, 1]), categories: ['road', 'vehicle'] },
-    cls: { indices: new Uint16Array([0, 1]), categories: ['ground', 'veg'] },
+const tileA = pointTile(
+  idA,
+  'lidar',
+  [
+    anchor.longitude,
+    anchor.latitude,
+    anchor.longitude + 0.001,
+    anchor.latitude,
+  ],
+  {
+    numericProps: { z: new Float32Array([0, 0]) },
+    categoricalProps: {
+      seg_class: {
+        indices: new Uint16Array([0, 1]),
+        categories: ['road', 'vehicle'],
+      },
+      cls: { indices: new Uint16Array([0, 1]), categories: ['ground', 'veg'] },
+    },
   },
-});
+);
 const tileB = pointTile(
   idB,
   'lidar',
   [
-    anchor.longitude + 0.002, anchor.latitude + 0.001,
-    anchor.longitude + 0.003, anchor.latitude + 0.002,
-    anchor.longitude + 0.004, anchor.latitude + 0.003, // the last (merged index 4)
+    anchor.longitude + 0.002,
+    anchor.latitude + 0.001,
+    anchor.longitude + 0.003,
+    anchor.latitude + 0.002,
+    anchor.longitude + 0.004,
+    anchor.latitude + 0.003, // the last (merged index 4)
   ],
   {
     numericProps: {
@@ -93,12 +126,24 @@ describe('buildPointBuffers provenance', () => {
     expect(buf.provenance.length).toBe(5);
 
     // First point → tile A feature 0.
-    expect(buf.provenance.resolve(0)).toEqual({ tileKey: pointTileKey(idA, 'lidar'), featureIndex: 0 });
+    expect(buf.provenance.resolve(0)).toEqual({
+      tileKey: pointTileKey(idA, 'lidar'),
+      featureIndex: 0,
+    });
     // Boundary: last of tile A, first of tile B.
-    expect(buf.provenance.resolve(1)).toEqual({ tileKey: pointTileKey(idA, 'lidar'), featureIndex: 1 });
-    expect(buf.provenance.resolve(2)).toEqual({ tileKey: pointTileKey(idB, 'lidar'), featureIndex: 0 });
+    expect(buf.provenance.resolve(1)).toEqual({
+      tileKey: pointTileKey(idA, 'lidar'),
+      featureIndex: 1,
+    });
+    expect(buf.provenance.resolve(2)).toEqual({
+      tileKey: pointTileKey(idB, 'lidar'),
+      featureIndex: 0,
+    });
     // Last point → tile B feature 2.
-    expect(buf.provenance.resolve(4)).toEqual({ tileKey: pointTileKey(idB, 'lidar'), featureIndex: 2 });
+    expect(buf.provenance.resolve(4)).toEqual({
+      tileKey: pointTileKey(idB, 'lidar'),
+      featureIndex: 2,
+    });
     // Out of range → null.
     expect(buf.provenance.resolve(5)).toBeNull();
     expect(buf.provenance.resolve(-1)).toBeNull();
@@ -106,8 +151,12 @@ describe('buildPointBuffers provenance', () => {
 
   it('exposes tileKey → source BinaryFeatures for join-back', () => {
     const buf = buildPointBuffers([tileA, tileB], proj, 0, OPTS);
-    expect(buf.binaryByTileKey.get(pointTileKey(idA, 'lidar'))).toBe(tileA.layers[0].features);
-    expect(buf.binaryByTileKey.get(pointTileKey(idB, 'lidar'))).toBe(tileB.layers[0].features);
+    expect(buf.binaryByTileKey.get(pointTileKey(idA, 'lidar'))).toBe(
+      tileA.layers[0].features,
+    );
+    expect(buf.binaryByTileKey.get(pointTileKey(idB, 'lidar'))).toBe(
+      tileB.layers[0].features,
+    );
     expect(buf.binaryByTileKey.size).toBe(2);
   });
 
@@ -163,7 +212,12 @@ describe('resolvePointPick', () => {
   it('returns null for an out-of-range index (background / stale pick)', () => {
     const buf = buildPointBuffers([tileA, tileB], proj, 0, OPTS);
     expect(
-      resolvePointPick({ index: 99, provenance: buf.provenance, binaryByTileKey: buf.binaryByTileKey, layerId: 'points' }),
+      resolvePointPick({
+        index: 99,
+        provenance: buf.provenance,
+        binaryByTileKey: buf.binaryByTileKey,
+        layerId: 'points',
+      }),
     ).toBeNull();
   });
 
@@ -171,7 +225,12 @@ describe('resolvePointPick', () => {
     const buf = buildPointBuffers([tileA], proj, 0, OPTS);
     // Provenance from a 2-point layer, but an empty binary map → unresolvable.
     expect(
-      resolvePointPick({ index: 0, provenance: buf.provenance, binaryByTileKey: new Map(), layerId: 'points' }),
+      resolvePointPick({
+        index: 0,
+        provenance: buf.provenance,
+        binaryByTileKey: new Map(),
+        layerId: 'points',
+      }),
     ).toBeNull();
   });
 });
@@ -203,12 +262,19 @@ describe('pointPickToInfo', () => {
     expect(info.layerId).toBe('points');
     expect(info.index).toBe(2);
     expect(info.object).toEqual({ intensity: 30, id: 202 });
-    expect(info.coordinate).toEqual([anchor.longitude + 0.004, anchor.latitude + 0.003]);
+    expect(info.coordinate).toEqual([
+      anchor.longitude + 0.004,
+      anchor.latitude + 0.003,
+    ]);
     expect(info.tileId).toEqual(idB);
   });
 
   it('omits coordinate/tileId when the result lacks them', () => {
-    const info = pointPickToInfo({ object: null, index: -1, layerId: 'points' });
+    const info = pointPickToInfo({
+      object: null,
+      index: -1,
+      layerId: 'points',
+    });
     expect(info.kind).toBe('point');
     expect(info.object).toBeNull();
     expect(info.index).toBe(-1);

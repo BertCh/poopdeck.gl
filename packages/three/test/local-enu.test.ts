@@ -18,7 +18,8 @@ function localToLonLat(
   originLat: number,
 ): [number, number] {
   const lat = originLat + yMeters / METERS_PER_DEG_LAT;
-  const lon = originLon + xMeters / (METERS_PER_DEG_LAT * Math.cos(originLat * DEG2RAD));
+  const lon =
+    originLon + xMeters / (METERS_PER_DEG_LAT * Math.cos(originLat * DEG2RAD));
   return [lon, lat];
 }
 
@@ -37,7 +38,12 @@ describe('LocalEnuProjection', () => {
     // Sweep a few metric offsets a scene might contain (±150 m around ego).
     for (const xm of [-150, -10, 0, 37.5, 150]) {
       for (const ym of [-150, -3.3, 0, 88, 150]) {
-        const [lon, lat] = localToLonLat(xm, ym, anchor.longitude, anchor.latitude);
+        const [lon, lat] = localToLonLat(
+          xm,
+          ym,
+          anchor.longitude,
+          anchor.latitude,
+        );
         const [x, y] = proj.project(lon, lat, 0);
         // Round-trips to sub-millimetre — the east scale is frozen at lat0 on
         // both sides, so the only error is f64 rounding.
@@ -110,7 +116,9 @@ describe('projectPositionsToEnu', () => {
 describe('projectPositions (RTC)', () => {
   it('with origin [0,0,0] reproduces projectPositionsToEnu exactly', () => {
     const proj = new LocalEnuProjection({ longitude: -122.4, latitude: 37.77 });
-    const positions = new Float64Array([-122.4, 37.77, -122.399, 37.771, -122.401, 37.769]);
+    const positions = new Float64Array([
+      -122.4, 37.77, -122.399, 37.771, -122.401, 37.769,
+    ]);
     const elevation = new Float32Array([3, 9, 1]);
     const absolute = projectPositionsToEnu(proj, positions, 3, 2, elevation, 1);
     const rtc = projectPositions(proj, positions, 3, 2, {
@@ -125,7 +133,8 @@ describe('projectPositions (RTC)', () => {
     const proj = new MercatorProjection();
     // ~1 km of points near a high-magnitude mercator location (NYC).
     const lonlat: number[] = [];
-    for (let i = 0; i < 8; i++) lonlat.push(-73.98 + i * 0.001, 40.75 + i * 0.0005);
+    for (let i = 0; i < 8; i++)
+      lonlat.push(-73.98 + i * 0.001, 40.75 + i * 0.0005);
     const positions = new Float64Array(lonlat);
     const { positions: rel, origin } = projectPositions(proj, positions, 8, 2);
 
@@ -151,7 +160,12 @@ describe('projectPositions (RTC)', () => {
 
   it('handles an empty buffer', () => {
     const proj = new MercatorProjection();
-    const { positions, origin } = projectPositions(proj, new Float64Array(0), 0, 2);
+    const { positions, origin } = projectPositions(
+      proj,
+      new Float64Array(0),
+      0,
+      2,
+    );
     expect(positions.length).toBe(0);
     expect(origin).toEqual([0, 0, 0]);
   });

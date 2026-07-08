@@ -9,7 +9,7 @@ description: >-
   the cause.
 license: MIT
 metadata:
-  version: "0.4.0"
+  version: '0.4.0'
 ---
 
 # Debugging a blank STT render
@@ -33,7 +33,7 @@ most are diagnosable from the archive alone, before touching renderer code.
 - Get the range: `describe_dataset` → `timeRange {start, end}` (or the
   `stt://datasets/<name>` resource). Set `currentTime` to `timeRange.start` and a
   `timeWindow` wide enough to include some data (default is 86,400,000 ms = 1 day).
-- Nothing *moving* during playback → the `TimeController`/`currentTime` isn't being
+- Nothing _moving_ during playback → the `TimeController`/`currentTime` isn't being
   advanced, or the window is so wide everything shows at once. See the
   **adding-playback** skill.
 

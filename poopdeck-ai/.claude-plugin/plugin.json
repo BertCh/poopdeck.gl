@@ -10,5 +10,12 @@
   "homepage": "https://poopdeck.gl",
   "repository": "https://github.com/BertCh/spatiotemporal-tiles",
   "license": "MIT",
-  "keywords": ["mcp", "agent-skills", "geospatial", "deck.gl", "spatiotemporal-tiles", "dataviz"]
+  "keywords": [
+    "mcp",
+    "agent-skills",
+    "geospatial",
+    "deck.gl",
+    "spatiotemporal-tiles",
+    "dataviz"
+  ]
 }

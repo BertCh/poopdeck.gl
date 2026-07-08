@@ -1,5 +1,5 @@
-import React from "react";
-import type { DatasetType } from "../types";
+import React from 'react';
+import type { DatasetType } from '../types';
 
 /**
  * Visualization-type badge. Each `DatasetType` gets a distinct color + a tiny
@@ -16,11 +16,11 @@ import type { DatasetType } from "../types";
 const S = 11; // glyph box (px) — sits with the 10px uppercase label
 
 const stroke = {
-  fill: "none",
-  stroke: "currentColor",
+  fill: 'none',
+  stroke: 'currentColor',
   strokeWidth: 1.7,
-  strokeLinecap: "round" as const,
-  strokeLinejoin: "round" as const,
+  strokeLinecap: 'round' as const,
+  strokeLinejoin: 'round' as const,
 };
 
 const svg = (children: React.ReactNode) => (
@@ -33,7 +33,14 @@ const svg = (children: React.ReactNode) => (
 // One filled dot inside a faint ring — a located feature.
 const PointGlyph = svg(
   <>
-    <circle cx="12" cy="12" r="8.5" {...stroke} strokeWidth={1.5} opacity={0.45} />
+    <circle
+      cx="12"
+      cy="12"
+      r="8.5"
+      {...stroke}
+      strokeWidth={1.5}
+      opacity={0.45}
+    />
     <circle cx="12" cy="12" r="4" fill="currentColor" />
   </>,
 );
@@ -63,13 +70,22 @@ const TripHeadsGlyph = svg(
 const HeatmapGlyph = svg(
   <>
     <circle cx="12" cy="12" r="9" {...stroke} strokeWidth={1.4} opacity={0.3} />
-    <circle cx="12" cy="12" r="6" {...stroke} strokeWidth={1.5} opacity={0.55} />
+    <circle
+      cx="12"
+      cy="12"
+      r="6"
+      {...stroke}
+      strokeWidth={1.5}
+      opacity={0.55}
+    />
     <circle cx="12" cy="12" r="2.8" fill="currentColor" />
   </>,
 );
 
 // A closed area outline.
-const PolygonGlyph = svg(<path {...stroke} d="M12 3.5 20 9.2 17 19 7 19 4 9.2 Z" />);
+const PolygonGlyph = svg(
+  <path {...stroke} d="M12 3.5 20 9.2 17 19 7 19 4 9.2 Z" />,
+);
 
 // Flat-top hexagon — the H3 summary cell.
 const SummaryGlyph = svg(
@@ -120,7 +136,14 @@ const QuadbinGlyph = svg(
   <>
     <rect x="4.5" y="4.5" width="15" height="15" rx="1" {...stroke} />
     <path {...stroke} d="M12 4.5v15M4.5 12h15" />
-    <rect x="5.6" y="5.6" width="5.8" height="5.8" fill="currentColor" opacity={0.85} />
+    <rect
+      x="5.6"
+      y="5.6"
+      width="5.8"
+      height="5.8"
+      fill="currentColor"
+      opacity={0.85}
+    />
   </>,
 );
 
@@ -128,7 +151,11 @@ const QuadbinGlyph = svg(
 const AvGlyph = svg(
   <>
     <rect x="8" y="3.5" width="8" height="13" rx="2" {...stroke} />
-    <path {...stroke} d="M12 16.5 6 21M12 16.5 18 21M12 16.5 12 21.5" opacity={0.6} />
+    <path
+      {...stroke}
+      d="M12 16.5 6 21M12 16.5 18 21M12 16.5 12 21.5"
+      opacity={0.6}
+    />
     <circle cx="12" cy="8" r="1.4" fill="currentColor" />
   </>,
 );
@@ -148,20 +175,24 @@ export interface VizDef {
  * brand teal — it's the hero technique.
  */
 export const VIZ_REGISTRY: Record<DatasetType, VizDef> = {
-  point: { label: "Points", color: "#C8432F", icon: PointGlyph },
-  radar: { label: "Radar", color: "#3FA7C4", icon: PolygonGlyph },
-  path: { label: "Paths", color: "#2A8A60", icon: PathGlyph },
-  trips: { label: "Trips", color: "#0A7790", icon: TripsGlyph },
-  "trip-heads": { label: "Heads", color: "#2A6FB0", icon: TripHeadsGlyph },
-  heatmap: { label: "Heatmap", color: "#C2671B", icon: HeatmapGlyph },
-  polygon: { label: "Polygons", color: "#7A4DB3", icon: PolygonGlyph },
-  summary: { label: "H3 summary", color: "#A93C76", icon: SummaryGlyph },
-  arc: { label: "Arcs", color: "#3F54B6", icon: ArcGlyph },
-  column: { label: "Columns", color: "#94701A", icon: ColumnGlyph },
-  "quadbin-summary": { label: "Quadbin", color: "#6B7C26", icon: QuadbinGlyph },
-  flowmap: { label: "Flowmap", color: "#C72C68", icon: FlowmapGlyph },
-  "flowmap-bundled": { label: "Bundled flowmap", color: "#9B2C8C", icon: BundledFlowmapGlyph },
-  av: { label: "AV cockpit", color: "#1F8FB0", icon: AvGlyph },
+  point: { label: 'Points', color: '#C8432F', icon: PointGlyph },
+  radar: { label: 'Radar', color: '#3FA7C4', icon: PolygonGlyph },
+  path: { label: 'Paths', color: '#2A8A60', icon: PathGlyph },
+  trips: { label: 'Trips', color: '#0A7790', icon: TripsGlyph },
+  'trip-heads': { label: 'Heads', color: '#2A6FB0', icon: TripHeadsGlyph },
+  heatmap: { label: 'Heatmap', color: '#C2671B', icon: HeatmapGlyph },
+  polygon: { label: 'Polygons', color: '#7A4DB3', icon: PolygonGlyph },
+  summary: { label: 'H3 summary', color: '#A93C76', icon: SummaryGlyph },
+  arc: { label: 'Arcs', color: '#3F54B6', icon: ArcGlyph },
+  column: { label: 'Columns', color: '#94701A', icon: ColumnGlyph },
+  'quadbin-summary': { label: 'Quadbin', color: '#6B7C26', icon: QuadbinGlyph },
+  flowmap: { label: 'Flowmap', color: '#C72C68', icon: FlowmapGlyph },
+  'flowmap-bundled': {
+    label: 'Bundled flowmap',
+    color: '#9B2C8C',
+    icon: BundledFlowmapGlyph,
+  },
+  av: { label: 'AV cockpit', color: '#1F8FB0', icon: AvGlyph },
 };
 
 /** `#RRGGBB` → `rgba(r,g,b,a)`; used for the soft chip fill. */
@@ -183,7 +214,7 @@ export const VizBadge: React.FC<{
   type: DatasetType;
   label?: string;
   className?: string;
-}> = ({ type, label, className = "" }) => {
+}> = ({ type, label, className = '' }) => {
   const def = VIZ_REGISTRY[type];
   if (!def) return null;
   return (

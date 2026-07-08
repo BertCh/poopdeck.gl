@@ -66,12 +66,18 @@ describe('TimeFilterExtension attribute registration', () => {
     // vertex). 'dynamic' resolves per model — 'instance' on instanced layers,
     // 'vertex' on SolidPolygonLayer — exactly like upstream
     // DataFilterExtension's filterValues.
-    const { instanced, perVertex } = captureRegisteredAttributes(new TimeFilterExtension());
+    const { instanced, perVertex } = captureRegisteredAttributes(
+      new TimeFilterExtension(),
+    );
     expect(Object.keys(instanced)).toEqual([]);
     expect(Object.keys(perVertex).sort()).toEqual(
-      ['instanceEndTime', 'instanceStartTime', 'instanceVertexTime'].sort()
+      ['instanceEndTime', 'instanceStartTime', 'instanceVertexTime'].sort(),
     );
-    for (const name of ['instanceStartTime', 'instanceEndTime', 'instanceVertexTime']) {
+    for (const name of [
+      'instanceStartTime',
+      'instanceEndTime',
+      'instanceVertexTime',
+    ]) {
       expect(perVertex[name].size).toBe(1);
       expect(perVertex[name].type).toBe('float32');
       expect(perVertex[name].stepMode).toBe('dynamic');
@@ -81,7 +87,9 @@ describe('TimeFilterExtension attribute registration', () => {
 
 describe('CategoryColorExtension attribute registration', () => {
   it('registers instanceCategoryIndex via add() + stepMode dynamic', () => {
-    const { instanced, perVertex } = captureRegisteredAttributes(new CategoryColorExtension());
+    const { instanced, perVertex } = captureRegisteredAttributes(
+      new CategoryColorExtension(),
+    );
     expect(Object.keys(instanced)).toEqual([]);
     expect(Object.keys(perVertex)).toEqual(['instanceCategoryIndex']);
     expect(perVertex.instanceCategoryIndex.size).toBe(1);

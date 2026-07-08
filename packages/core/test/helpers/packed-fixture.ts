@@ -10,7 +10,10 @@
  * GET → 200, Range → 206) from in-memory objects.
  */
 
-import { encodeDirectory, type DirectoryEncodeEntry } from '../../src/directory';
+import {
+  encodeDirectory,
+  type DirectoryEncodeEntry,
+} from '../../src/directory';
 
 function bufferToArrayBuffer(buf: Uint8Array): ArrayBuffer {
   return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
@@ -55,7 +58,9 @@ function parseV4(bytes: Uint8Array): {
   const metadataLength = Number(view.getBigUint64(30, true));
 
   const metadataJson = JSON.parse(
-    new TextDecoder().decode(bytes.subarray(metadataOffset, metadataOffset + metadataLength)),
+    new TextDecoder().decode(
+      bytes.subarray(metadataOffset, metadataOffset + metadataLength),
+    ),
   );
 
   // Decode the v4 directory inline (the production decoder is v4/v5-capable, but
@@ -79,13 +84,20 @@ function parseV4(bytes: Uint8Array): {
   };
   const u32le = (): number => {
     const v =
-      (dir[pos] | (dir[pos + 1] << 8) | (dir[pos + 2] << 16) | (dir[pos + 3] << 24)) >>> 0;
+      (dir[pos] |
+        (dir[pos + 1] << 8) |
+        (dir[pos + 2] << 16) |
+        (dir[pos + 3] << 24)) >>>
+      0;
     pos += 4;
     return v;
   };
 
   const version = dir[pos++];
-  if (version !== 4) throw new Error(`packed-fixture: expected v4 source directory, got ${version}`);
+  if (version !== 4)
+    throw new Error(
+      `packed-fixture: expected v4 source directory, got ${version}`,
+    );
   const n = Number(uvarint());
   const runCount = Number(uvarint());
   interface Key {
@@ -180,7 +192,11 @@ function parseV4(bytes: Uint8Array): {
  */
 export function packedFromSingleFile(
   v4: Uint8Array,
-  opts: { manifestUrl?: string; packTargetBytes?: number; directoryKey?: string } = {},
+  opts: {
+    manifestUrl?: string;
+    packTargetBytes?: number;
+    directoryKey?: string;
+  } = {},
 ): InMemoryPackedDataset {
   const manifestUrl = opts.manifestUrl ?? 'mem://data/sample/manifest.json';
   const packTargetBytes = opts.packTargetBytes ?? Number.MAX_SAFE_INTEGER;
@@ -188,7 +204,8 @@ export function packedFromSingleFile(
 
   // Dedup blobs by their (offset,length) in the source file → one physical
   // blob each, preserving the fixture's own dedup.
-  const blobKey = (e: { offset: number; length: number }) => `${e.offset}:${e.length}`;
+  const blobKey = (e: { offset: number; length: number }) =>
+    `${e.offset}:${e.length}`;
   const blobOrder: string[] = [];
   const blobBytes = new Map<string, Uint8Array>();
   for (const e of entries) {
@@ -274,7 +291,10 @@ export function packedFromSingleFile(
     packs: packRefs,
     metadata: metadataJson,
   };
-  objects.set('manifest.json', new TextEncoder().encode(JSON.stringify(manifest)));
+  objects.set(
+    'manifest.json',
+    new TextEncoder().encode(JSON.stringify(manifest)),
+  );
 
   return { objects, manifestUrl };
 }
@@ -327,12 +347,22 @@ export function packedFetch(
     log?.paths.push(key);
     const bytes = ds.objects.get(key);
     if (!bytes) {
-      return { ok: false, status: 404, statusText: 'Not Found', arrayBuffer: async () => new ArrayBuffer(0) };
+      return {
+        ok: false,
+        status: 404,
+        statusText: 'Not Found',
+        arrayBuffer: async () => new ArrayBuffer(0),
+      };
     }
     const range = (init?.headers as Record<string, string> | undefined)?.Range;
     const m = /bytes=(\d+)-(\d+)/.exec(range ?? '');
     if (!m) {
-      return { ok: true, status: 200, statusText: 'OK', arrayBuffer: async () => bufferToArrayBuffer(bytes) };
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        arrayBuffer: async () => bufferToArrayBuffer(bytes),
+      };
     }
     log?.ranges.push({ path: key, range: range! });
     const start = Number(m[1]);
@@ -345,7 +375,10 @@ export function packedFetch(
       ok: true,
       status: 206,
       statusText: 'Partial Content',
-      headers: { get: (name: string) => (name.toLowerCase() === 'content-range' ? contentRange : null) },
+      headers: {
+        get: (name: string) =>
+          name.toLowerCase() === 'content-range' ? contentRange : null,
+      },
       arrayBuffer: async () => bufferToArrayBuffer(slice),
     };
   }) as unknown as typeof fetch;

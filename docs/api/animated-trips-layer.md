@@ -35,8 +35,8 @@ const layer = new AnimatedTripsLayer({
   data: '/data/drifters/manifest.json',
   currentTime,
   trailLength: 14 * 86400000,
-  gradientProperty: 'vertexValues',     // the tile's per-vertex scalar channel
-  gradientDomain: [271, 305],           // Kelvin
+  gradientProperty: 'vertexValues', // the tile's per-vertex scalar channel
+  gradientDomain: [271, 305], // Kelvin
   gradientColorRamp: [
     [49, 54, 149, 255],
     [255, 255, 191, 255],
@@ -51,38 +51,38 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 
 ### Render Options
 
-| Property | Type | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `widthUnits` | `'pixels' \| 'meters' \| 'common'` | `'pixels'` | `'meters'` makes widths world-space so trails thicken/thin with zoom (clamped by the pixel bounds). |
-| `widthScale` | `number` | `1` | Global multiplier for path widths. |
-| `widthMinPixels` | `number` | `2` | Minimum width in pixels. |
-| `widthMaxPixels` | `number` | `10` | Maximum width in pixels. |
-| `trailLength` | `number` | `180000` | Trail length in milliseconds (3 minutes default). |
-| `fadeTrail` | `boolean` | `true` | Fade the trail older→transparent (vs a solid constant-opacity snake). |
-| `capRounded` | `boolean` | `true` | Round caps on path ends. |
-| `jointRounded` | `boolean` | `true` | Round joints between path segments. |
-| `miterLimit` | `number` | `4` | Miter-joint length cap in multiples of line width (PathLayer pass-through; applies when `jointRounded` is `false`). |
-| `billboard` | `boolean` | `false` | Extrude lines in screen space so they always face the camera (PathLayer pass-through). |
+| Property         | Type                               | Default    | Description                                                                                                         |
+| :--------------- | :--------------------------------- | :--------- | :------------------------------------------------------------------------------------------------------------------ |
+| `widthUnits`     | `'pixels' \| 'meters' \| 'common'` | `'pixels'` | `'meters'` makes widths world-space so trails thicken/thin with zoom (clamped by the pixel bounds).                 |
+| `widthScale`     | `number`                           | `1`        | Global multiplier for path widths.                                                                                  |
+| `widthMinPixels` | `number`                           | `2`        | Minimum width in pixels.                                                                                            |
+| `widthMaxPixels` | `number`                           | `10`       | Maximum width in pixels.                                                                                            |
+| `trailLength`    | `number`                           | `180000`   | Trail length in milliseconds (3 minutes default).                                                                   |
+| `fadeTrail`      | `boolean`                          | `true`     | Fade the trail older→transparent (vs a solid constant-opacity snake).                                               |
+| `capRounded`     | `boolean`                          | `true`     | Round caps on path ends.                                                                                            |
+| `jointRounded`   | `boolean`                          | `true`     | Round joints between path segments.                                                                                 |
+| `miterLimit`     | `number`                           | `4`        | Miter-joint length cap in multiples of line width (PathLayer pass-through; applies when `jointRounded` is `false`). |
+| `billboard`      | `boolean`                          | `false`    | Extrude lines in screen space so they always face the camera (PathLayer pass-through).                              |
 
 ### Data Accessors
 
-| Property | Type | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `tripColor` | `Color \| string` | `[253, 128, 93, 255]` | Trip color: constant RGBA, or a property name for categorical coloring. |
-| `getColor` | `Color \| string \| null` | `null` | Upstream-vocabulary (TripsLayer/PathLayer) alias of `tripColor`. Accepts a constant or a property-column NAME — NOT a function accessor (a function warns once and falls back). When set, it wins. |
-| `tripWidth` | `number \| string` | `3` | Trip width: constant, or a numeric property name. |
-| `getWidth` | `number \| string \| null` | `null` | Upstream-vocabulary alias of `tripWidth` (same domain rules). |
-| `colorPalette` | `Color[]` | 5-color palette | Palette for categorical `tripColor`. Indices are assigned per-tile in first-seen order — use `colorMapping` for cross-tile stability. |
-| `colorMapping` | `Record<string, Color> \| null` | `null` | Explicit category-string → color map, resolved per-tile against each tile's own category dictionary so colors stay consistent across tiles. Takes precedence over `colorPalette`. |
-| `colorMappingDefault` | `Color` | `[120, 120, 120, 255]` | Fallback for categories absent from `colorMapping` (also the gradient `NaN` fallback). |
+| Property              | Type                            | Default                | Description                                                                                                                                                                                        |
+| :-------------------- | :------------------------------ | :--------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tripColor`           | `Color \| string`               | `[253, 128, 93, 255]`  | Trip color: constant RGBA, or a property name for categorical coloring.                                                                                                                            |
+| `getColor`            | `Color \| string \| null`       | `null`                 | Upstream-vocabulary (TripsLayer/PathLayer) alias of `tripColor`. Accepts a constant or a property-column NAME — NOT a function accessor (a function warns once and falls back). When set, it wins. |
+| `tripWidth`           | `number \| string`              | `3`                    | Trip width: constant, or a numeric property name.                                                                                                                                                  |
+| `getWidth`            | `number \| string \| null`      | `null`                 | Upstream-vocabulary alias of `tripWidth` (same domain rules).                                                                                                                                      |
+| `colorPalette`        | `Color[]`                       | 5-color palette        | Palette for categorical `tripColor`. Indices are assigned per-tile in first-seen order — use `colorMapping` for cross-tile stability.                                                              |
+| `colorMapping`        | `Record<string, Color> \| null` | `null`                 | Explicit category-string → color map, resolved per-tile against each tile's own category dictionary so colors stay consistent across tiles. Takes precedence over `colorPalette`.                  |
+| `colorMappingDefault` | `Color`                         | `[120, 120, 120, 255]` | Fallback for categories absent from `colorMapping` (also the gradient `NaN` fallback).                                                                                                             |
 
 ### Per-vertex gradient
 
-| Property | Type | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `gradientProperty` | `string \| null` | `null` | Names which per-vertex scalar channel to color by — the one supported channel is `'vertexValues'` (see [Binary Features](./binary-features.md)). When set and the tile carries that channel, each vertex's value maps through the ramp, shading the line *along its length*. Takes precedence over categorical `tripColor`. |
-| `gradientDomain` | `[number, number]` | `[0, 1]` | Value range mapped onto the ramp. |
-| `gradientColorRamp` | `Color[]` | `[]` | Low→high color stops (piecewise-lerped). |
+| Property            | Type               | Default  | Description                                                                                                                                                                                                                                                                                                                 |
+| :------------------ | :----------------- | :------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `gradientProperty`  | `string \| null`   | `null`   | Names which per-vertex scalar channel to color by — the one supported channel is `'vertexValues'` (see [Binary Features](./binary-features.md)). When set and the tile carries that channel, each vertex's value maps through the ramp, shading the line _along its length_. Takes precedence over categorical `tripColor`. |
+| `gradientDomain`    | `[number, number]` | `[0, 1]` | Value range mapped onto the ramp.                                                                                                                                                                                                                                                                                           |
+| `gradientColorRamp` | `Color[]`          | `[]`     | Low→high color stops (piecewise-lerped).                                                                                                                                                                                                                                                                                    |
 
 ## Tile loading window
 
@@ -90,11 +90,11 @@ The layer widens the effective loading window to `max(timeWindow, 2 × trailLeng
 
 ## Difference from AnimatedPathLayer
 
-| Feature | AnimatedPathLayer | AnimatedTripsLayer |
-|---------|-------------------|-------------------|
-| Effect | Whole paths on/off with window fade | Progressive drawing ("moving vehicle") |
-| Time granularity | Per-feature `[start, end]` | Per-vertex timestamps |
-| Use case | Ship tracks, flight paths | Taxi routes, delivery animations |
+| Feature          | AnimatedPathLayer                   | AnimatedTripsLayer                     |
+| ---------------- | ----------------------------------- | -------------------------------------- |
+| Effect           | Whole paths on/off with window fade | Progressive drawing ("moving vehicle") |
+| Time granularity | Per-feature `[start, end]`          | Per-vertex timestamps                  |
+| Use case         | Ship tracks, flight paths           | Taxi routes, delivery animations       |
 
 To show a moving marker at each vehicle's current position instead of a trail, see [`AnimatedTripHeadsLayer`](./animated-trip-heads-layer.md), which interpolates the head position per frame and draws it on a stock ScatterplotLayer.
 

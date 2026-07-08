@@ -21,7 +21,11 @@
 import { useEffect, useRef } from 'react';
 import { Viewer, Rectangle, Ellipsoid, Math as CesiumMath } from 'cesium';
 import 'cesium/Build/Cesium/Widgets/widgets.css';
-import { STTArchive, SpatiotemporalTileset, type BoundingBox } from '@poopdeck.gl/core';
+import {
+  STTArchive,
+  SpatiotemporalTileset,
+  type BoundingBox,
+} from '@poopdeck.gl/core';
 import { makeTilesetCallbacks } from '@poopdeck.gl/core/tileset-adapter';
 import {
   applyViewStateToCamera,
@@ -35,7 +39,8 @@ import type { Dataset } from '../types';
 // Set before any Viewer is created; runs when this lazily-loaded module imports.
 if (typeof window !== 'undefined') {
   const w = window as unknown as { CESIUM_BASE_URL?: string };
-  w.CESIUM_BASE_URL ??= 'https://cdn.jsdelivr.net/npm/cesium@1.142.0/Build/Cesium/';
+  w.CESIUM_BASE_URL ??=
+    'https://cdn.jsdelivr.net/npm/cesium@1.142.0/Build/Cesium/';
 }
 
 export interface CesiumRendererProps {
@@ -47,7 +52,10 @@ export interface CesiumRendererProps {
   timeController: TimeController;
 }
 
-export default function CesiumRenderer({ dataset, timeController }: CesiumRendererProps) {
+export default function CesiumRenderer({
+  dataset,
+  timeController,
+}: CesiumRendererProps) {
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Build the viewer + layer + streaming tileset once per dataset. timeController
@@ -87,13 +95,19 @@ export default function CesiumRenderer({ dataset, timeController }: CesiumRender
     if (scene.moon) scene.moon.show = false;
     scene.globe.showGroundAtmosphere = false;
     scene.globe.maximumScreenSpaceError = 8; // fewer solid-colour ellipsoid tiles (no imagery to lose)
-    scene.debugShowFramesPerSecond = new URLSearchParams(window.location.search).has('fps');
+    scene.debugShowFramesPerSecond = new URLSearchParams(
+      window.location.search,
+    ).has('fps');
 
     const layer = buildCesiumLayer(scene, dataset);
     if (!layer) {
       // CesiumDemoPage gates on CESIUM_SUPPORTED_TYPES; this is the belt to
       // that suspender (a direct URL to an unsupported dataset type).
-      console.error('[CesiumRenderer] unsupported dataset type', dataset.type, dataset.id);
+      console.error(
+        '[CesiumRenderer] unsupported dataset type',
+        dataset.type,
+        dataset.id,
+      );
       viewer.destroy();
       return;
     }
@@ -120,7 +134,15 @@ export default function CesiumRenderer({ dataset, timeController }: CesiumRender
       (t) => {
         layer.setTime(t);
         if (tileset && view) {
-          tileset.update({ bounds: view.bounds, zoom: view.zoom, time: t, timeWindow: loaderTimeWindow }, true);
+          tileset.update(
+            {
+              bounds: view.bounds,
+              zoom: view.zoom,
+              time: t,
+              timeWindow: loaderTimeWindow,
+            },
+            true,
+          );
         }
       },
       { requestRender: true },
@@ -146,7 +168,8 @@ export default function CesiumRenderer({ dataset, timeController }: CesiumRender
               maxLat: CesiumMath.toDegrees(rect.north),
             }
           : metaBounds; // whole-globe view, antimeridian crossing, or global opt-out → full extent
-      if (dataset.zoomOverride !== undefined) return { bounds, zoom: dataset.zoomOverride };
+      if (dataset.zoomOverride !== undefined)
+        return { bounds, zoom: dataset.zoomOverride };
       const c = cam.positionCartographic;
       const { zoom } = cesiumViewToViewState({
         longitude: CesiumMath.toDegrees(c.longitude),
@@ -156,7 +179,10 @@ export default function CesiumRenderer({ dataset, timeController }: CesiumRender
         pitchRad: cam.pitch,
         rollRad: cam.roll,
       });
-      return { bounds, zoom: Math.min(maxZoom, Math.max(minZoom, Math.round(zoom))) };
+      return {
+        bounds,
+        zoom: Math.min(maxZoom, Math.max(minZoom, Math.round(zoom))),
+      };
     };
 
     void (async () => {
@@ -188,7 +214,12 @@ export default function CesiumRenderer({ dataset, timeController }: CesiumRender
           if (disposed || !tileset) return;
           view = cameraToStreamView(meta.bounds, meta.minZoom, meta.maxZoom);
           tileset.update(
-            { bounds: view.bounds, zoom: view.zoom, time: timeController.getTime(), timeWindow: loaderTimeWindow },
+            {
+              bounds: view.bounds,
+              zoom: view.zoom,
+              time: timeController.getTime(),
+              timeWindow: loaderTimeWindow,
+            },
             false, // debounced viewport change
           );
         };
@@ -201,7 +232,12 @@ export default function CesiumRenderer({ dataset, timeController }: CesiumRender
         // Seed the initial (already-framed) viewport.
         view = cameraToStreamView(meta.bounds, meta.minZoom, meta.maxZoom);
         tileset.update(
-          { bounds: view.bounds, zoom: view.zoom, time: timeController.getTime(), timeWindow: loaderTimeWindow },
+          {
+            bounds: view.bounds,
+            zoom: view.zoom,
+            time: timeController.getTime(),
+            timeWindow: loaderTimeWindow,
+          },
           true,
         );
       } catch (err) {

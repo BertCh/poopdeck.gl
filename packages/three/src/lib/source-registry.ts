@@ -49,7 +49,9 @@ export function createCompleteBufferSource(timeRange?: {
   start: number;
   end: number;
 }): BufferSource {
-  const ranges = timeRange ? [{ start: timeRange.start, end: timeRange.end }] : [];
+  const ranges = timeRange
+    ? [{ start: timeRange.start, end: timeRange.end }]
+    : [];
   const runway: BufferedRunway = {
     simMs: Infinity,
     bytesPending: 0,

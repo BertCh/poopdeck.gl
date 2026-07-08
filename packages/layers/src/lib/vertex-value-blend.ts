@@ -33,7 +33,10 @@ export interface BucketBlend {
  * sub-step). At the last column `b1 === b0`, so the blend degenerates to a
  * plain read.
  */
-export function bucketBlendAt(stepped: number, numBuckets: number): BucketBlend {
+export function bucketBlendAt(
+  stepped: number,
+  numBuckets: number,
+): BucketBlend {
   const b0 = Math.floor(stepped);
   const b1 = Math.min(b0 + 1, numBuckets - 1);
   return { b0, b1, f: stepped - b0 };

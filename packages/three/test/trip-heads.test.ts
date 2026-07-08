@@ -1,11 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { GeometryType } from '@poopdeck.gl/core';
 import type { BinaryFeatures, Tile } from '@poopdeck.gl/core';
-import {
-  buildTripIndex,
-  sampleHead,
-  sampleHeads,
-} from '../src/lib/trip-heads';
+import { buildTripIndex, sampleHead, sampleHeads } from '../src/lib/trip-heads';
 import { LocalEnuProjection } from '../src/projection/local-enu';
 import { makeLineTile } from './_support/features';
 
@@ -41,7 +37,12 @@ function lineTile(
 function eastwardTrip(timeOffset = 0): Tile {
   const dLon = 100 / (111_320 * Math.cos((anchor.latitude * Math.PI) / 180));
   return lineTile(
-    [anchor.longitude, anchor.latitude, anchor.longitude + dLon, anchor.latitude],
+    [
+      anchor.longitude,
+      anchor.latitude,
+      anchor.longitude + dLon,
+      anchor.latitude,
+    ],
     [0, 2],
     [0],
     [1000],
@@ -84,9 +85,12 @@ describe('buildTripIndex', () => {
     const dLon = 1 / (111_320 * Math.cos((anchor.latitude * Math.PI) / 180));
     const tile = lineTile(
       [
-        anchor.longitude, anchor.latitude,
-        anchor.longitude + 100 * dLon, anchor.latitude,
-        anchor.longitude + 300 * dLon, anchor.latitude,
+        anchor.longitude,
+        anchor.latitude,
+        anchor.longitude + 100 * dLon,
+        anchor.latitude,
+        anchor.longitude + 300 * dLon,
+        anchor.latitude,
       ],
       [0, 3],
       [0],
@@ -125,9 +129,12 @@ describe('sampleHead', () => {
     const dLon = 1 / (111_320 * Math.cos((anchor.latitude * Math.PI) / 180));
     const tile = lineTile(
       [
-        anchor.longitude, anchor.latitude,
-        anchor.longitude + 100 * dLon, anchor.latitude,
-        anchor.longitude + 200 * dLon, anchor.latitude,
+        anchor.longitude,
+        anchor.latitude,
+        anchor.longitude + 100 * dLon,
+        anchor.latitude,
+        anchor.longitude + 200 * dLon,
+        anchor.latitude,
       ],
       [0, 3],
       [0],

@@ -8,9 +8,9 @@
  * viewport on the DemoPage without leaking state.
  */
 
-import React, { useEffect, useMemo, useRef } from "react";
-import maplibregl from "maplibre-gl";
-import "maplibre-gl/dist/maplibre-gl.css";
+import React, { useEffect, useMemo, useRef } from 'react';
+import maplibregl from 'maplibre-gl';
+import 'maplibre-gl/dist/maplibre-gl.css';
 import {
   STTPointLayer,
   STTLineLayer,
@@ -19,15 +19,15 @@ import {
   STTHeatmapLayer,
   type STTBaseLayer,
   type RGBA8,
-} from "@poopdeck.gl/maplibre";
-import type { TimeController } from "@poopdeck.gl/playback";
-import type { Dataset } from "../types";
+} from '@poopdeck.gl/maplibre';
+import type { TimeController } from '@poopdeck.gl/playback';
+import type { Dataset } from '../types';
 
 // CARTO's free dark style. We accept any style URL via prop, but this is the
 // sensible default so we stay visually consistent with the deck.gl viewport
 // (Mapbox dark-v11).
 const DEFAULT_BASEMAP_STYLE =
-  "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json";
+  'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json';
 
 export interface MaplibreRendererProps {
   dataset: Dataset;
@@ -37,7 +37,7 @@ export interface MaplibreRendererProps {
   /** Optional className applied to the outer container. */
   className?: string;
   /** Map projection. Defaults to mercator; pass 'globe' for the globe view. */
-  projection?: "mercator" | "globe";
+  projection?: 'mercator' | 'globe';
 }
 
 const MaplibreRenderer: React.FC<MaplibreRendererProps> = ({
@@ -45,7 +45,7 @@ const MaplibreRenderer: React.FC<MaplibreRendererProps> = ({
   timeController,
   basemapStyle = DEFAULT_BASEMAP_STYLE,
   className,
-  projection = "mercator",
+  projection = 'mercator',
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
@@ -76,7 +76,7 @@ const MaplibreRenderer: React.FC<MaplibreRendererProps> = ({
     mapRef.current = map;
     // setProjection lives on the runtime map, not the constructor — apply on
     // load so the style is ready, and reapply when the prop changes below.
-    map.on("style.load", () => {
+    map.on('style.load', () => {
       try {
         (map as any).setProjection?.({ type: projection });
       } catch {
@@ -87,7 +87,7 @@ const MaplibreRenderer: React.FC<MaplibreRendererProps> = ({
     const sttLayer = makeSttLayer(dataset, initialTime);
     layerRef.current = sttLayer;
 
-    map.on("load", () => {
+    map.on('load', () => {
       if (!sttLayer) return;
       map.addLayer(sttLayer as unknown as maplibregl.CustomLayerInterface);
     });
@@ -105,11 +105,11 @@ const MaplibreRenderer: React.FC<MaplibreRendererProps> = ({
     const onTick = (t: number) => {
       layerRef.current?.setCurrentTime(t);
     };
-    timeController.on("tick", onTick);
+    timeController.on('tick', onTick);
     // Sync once on mount so the first frame doesn't render stale.
     layerRef.current?.setCurrentTime(timeController.getTime());
     return () => {
-      timeController.off("tick", onTick);
+      timeController.off('tick', onTick);
     };
   }, [timeController]);
 
@@ -126,9 +126,7 @@ const MaplibreRenderer: React.FC<MaplibreRendererProps> = ({
     }
   }, [projection]);
 
-  return (
-    <div ref={containerRef} className={className ?? "w-full h-full"} />
-  );
+  return <div ref={containerRef} className={className ?? 'w-full h-full'} />;
 };
 
 export default MaplibreRenderer;
@@ -149,7 +147,7 @@ function makeSttLayer(
     autoRepaint: true,
   };
   switch (dataset.type) {
-    case "point":
+    case 'point':
       return new STTPointLayer({
         ...base,
         color: [0.12, 0.73, 0.84, 0.95],
@@ -157,14 +155,14 @@ function makeSttLayer(
         colorProperty: dataset.colorProperty,
         radiusProperty: dataset.radiusProperty,
       });
-    case "path":
+    case 'path':
       return new STTLineLayer({
         ...base,
         color: [1.0, 0.84, 0.0, 0.9],
         width: 2,
         colorProperty: dataset.colorProperty,
       });
-    case "trips":
+    case 'trips':
       return new STTTripsLayer({
         ...base,
         color: [0.12, 0.73, 0.84, 1],
@@ -172,7 +170,7 @@ function makeSttLayer(
         trailLength: Math.max(dataset.timeWindow / 4, 30_000),
         colorProperty: dataset.colorProperty,
       });
-    case "polygon":
+    case 'polygon':
       return new STTPolygonLayer({
         ...base,
         color: [0.94, 0.42, 0.13, 0.55],
@@ -181,7 +179,7 @@ function makeSttLayer(
         lineColor: [0.2, 0.2, 0.25, 0.9],
         fillColorProperty: dataset.colorProperty,
       });
-    case "heatmap": {
+    case 'heatmap': {
       const first = dataset.heatmapLayers?.[0];
       const colorRange: RGBA8[] | undefined = first?.colorRange as
         | RGBA8[]

@@ -45,12 +45,12 @@ export function crc32c(bytes: Uint8Array): number {
  */
 export function verifyCrc32c(bytes: Uint8Array, expected: number): void {
   const actual = crc32c(bytes);
-  if (actual !== (expected >>> 0)) {
+  if (actual !== expected >>> 0) {
     const hex = (v: number): string => `0x${v.toString(16).padStart(8, '0')}`;
     throw new Error(
       `STT tile crc32c mismatch: computed ${hex(actual)} over ${bytes.length} ` +
-        `compressed bytes, directory says ${hex(expected >>> 0)} — the blob was `
-        + 'corrupted in transit or at rest (set ArchiveOptions.verifyChecksums: ' +
+        `compressed bytes, directory says ${hex(expected >>> 0)} — the blob was ` +
+        'corrupted in transit or at rest (set ArchiveOptions.verifyChecksums: ' +
         'false to bypass verification)',
     );
   }

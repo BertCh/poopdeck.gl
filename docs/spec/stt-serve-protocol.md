@@ -31,27 +31,27 @@ edge-cacheable (§7).
 
 ## 2. Serving modes
 
-| Mode | Selected by | Routes live at |
-| --- | --- | --- |
-| **Single-dataset** | default (no `--config`) | the process root: `/metadata.json`, `/tiles/…` |
-| **Multi-dataset** | `--config <file.json>` | `/{dataset}/metadata.json`, `/{dataset}/tiles/…`, plus a catalog at `/datasets` |
+| Mode               | Selected by             | Routes live at                                                                  |
+| ------------------ | ----------------------- | ------------------------------------------------------------------------------- |
+| **Single-dataset** | default (no `--config`) | the process root: `/metadata.json`, `/tiles/…`                                  |
+| **Multi-dataset**  | `--config <file.json>`  | `/{dataset}/metadata.json`, `/{dataset}/tiles/…`, plus a catalog at `/datasets` |
 
 A multi-dataset `--config` file lists one JSON object per dataset, each with
 the same fields as the CLI flags (§6). Every dataset gets its own connection
 pool, its own resolved `TileConfig`, and its own **explicit** encoder
 configuration (never a process-wide global) — so several datasets with
-*different* quantization, vector grouping, or temporal bucketing are served
+_different_ quantization, vector grouping, or temporal bucketing are served
 concurrently from one process without cross-contaminating each other's
 settings. Single-dataset mode is the CLI-flags-describe-one-dataset case,
 served at the root for backward compatibility.
 
 ## 3. Routes
 
-| Method & path (single-dataset) | Method & path (multi-dataset) | §  |
-| --- | --- | --- |
-| `GET /health` | `GET /health` | 3.1 |
-| `GET /metadata.json` | `GET /{dataset}/metadata.json` | 3.2 |
-| — | `GET /datasets` | 3.3 |
+| Method & path (single-dataset)   | Method & path (multi-dataset)              | §   |
+| -------------------------------- | ------------------------------------------ | --- |
+| `GET /health`                    | `GET /health`                              | 3.1 |
+| `GET /metadata.json`             | `GET /{dataset}/metadata.json`             | 3.2 |
+| —                                | `GET /datasets`                            | 3.3 |
 | `GET /tiles/{z}/{x}/{y}/{t}.stt` | `GET /{dataset}/tiles/{z}/{x}/{y}/{t}.stt` | 3.4 |
 
 ### 3.1 `GET /health`
@@ -77,9 +77,14 @@ The dataset catalog:
 ```jsonc
 {
   "datasets": [
-    { "name": "obs", "metadata": { /* the same object /metadata.json returns for this dataset */ } },
-    { "name": "trips", "metadata": { "...": "..." } }
-  ]
+    {
+      "name": "obs",
+      "metadata": {
+        /* the same object /metadata.json returns for this dataset */
+      },
+    },
+    { "name": "trips", "metadata": { "...": "..." } },
+  ],
 }
 ```
 
@@ -92,11 +97,11 @@ Generates and returns exactly one tile.
 
 **Path parameters:**
 
-| Param | Type | Meaning |
-| --- | --- | --- |
-| `z` | `u8` | Zoom level (slippy-map convention). Hard-bounded: `z > 31` returns `400` (§3.4.5) — beyond 31 the `2^z` grid exceeds the `u32` x/y space. It is **not** range-checked against `--min-zoom`/`--max-zoom` — a request at an unconfigured (but in-bounds) zoom simply queries and, most likely, encodes an empty tile (§3.4.3). |
-| `x`, `y` | `u32` | Tile column/row at `z` (slippy-map convention); must lie in the `2^z` grid — `x ≥ 2^z` or `y ≥ 2^z` returns `400` (§3.4.5). |
-| `t` | the whole final path segment, as text | A **Unix-ms integer**. A trailing `.stt` suffix (the convention `tileUrlTemplate` in `/metadata.json` advertises) is stripped before parsing, so it is accepted but not required — `.../1700000000000` and `.../1700000000000.stt` are equivalent requests. |
+| Param    | Type                                  | Meaning                                                                                                                                                                                                                                                                                                                      |
+| -------- | ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `z`      | `u8`                                  | Zoom level (slippy-map convention). Hard-bounded: `z > 31` returns `400` (§3.4.5) — beyond 31 the `2^z` grid exceeds the `u32` x/y space. It is **not** range-checked against `--min-zoom`/`--max-zoom` — a request at an unconfigured (but in-bounds) zoom simply queries and, most likely, encodes an empty tile (§3.4.3). |
+| `x`, `y` | `u32`                                 | Tile column/row at `z` (slippy-map convention); must lie in the `2^z` grid — `x ≥ 2^z` or `y ≥ 2^z` returns `400` (§3.4.5).                                                                                                                                                                                                  |
+| `t`      | the whole final path segment, as text | A **Unix-ms integer**. A trailing `.stt` suffix (the convention `tileUrlTemplate` in `/metadata.json` advertises) is stripped before parsing, so it is accepted but not required — `.../1700000000000` and `.../1700000000000.stt` are equivalent requests.                                                                  |
 
 `z`, `x`, and `y` are extracted by axum's typed path matching: a segment that
 doesn't parse as its declared integer type (non-numeric, or out of `u8`/`u32`
@@ -114,7 +119,7 @@ never missed by the bbox predicate; it is deliberately loose. The exact
 per-tile placement (which features actually belong in this tile, including
 trajectory clipping) is performed afterward by the same placement code
 `stt-build` uses — the buffer only affects which rows the SQL query fetches as
-*candidates*, never which end up in the tile.
+_candidates_, never which end up in the tile.
 
 #### 3.4.2 Temporal bucket resolution
 
@@ -197,11 +202,11 @@ dataset's off-data tiles.
 
 #### 3.4.5 Error responses
 
-| Status | Cause | Body |
-| --- | --- | --- |
-| `400 Bad Request` | `z > 31`, or `x`/`y` outside the `2^z` tile grid | `tile out of range: need z <= 31 and x, y < 2^z` (plain text) |
-| `400 Bad Request` | `t` does not parse as an integer after stripping a trailing `.stt` | `t must be an integer (ms since epoch)` (plain text) |
-| `404 Not Found` | (multi-dataset mode only) `{dataset}` does not match any configured dataset | `unknown dataset '<name>'` (plain text) |
+| Status                      | Cause                                                                                                                               | Body                                                                                                                                                                                        |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400 Bad Request`           | `z > 31`, or `x`/`y` outside the `2^z` tile grid                                                                                    | `tile out of range: need z <= 31 and x, y < 2^z` (plain text)                                                                                                                               |
+| `400 Bad Request`           | `t` does not parse as an integer after stripping a trailing `.stt`                                                                  | `t must be an integer (ms since epoch)` (plain text)                                                                                                                                        |
+| `404 Not Found`             | (multi-dataset mode only) `{dataset}` does not match any configured dataset                                                         | `unknown dataset '<name>'` (plain text)                                                                                                                                                     |
 | `500 Internal Server Error` | the source query, row decode, or tile encode fails (connection error, malformed SQL from a bad `--sql`/`--where`, encoder error, …) | the fixed string `internal error generating tile` (plain text) — the full `anyhow` error chain (which can contain SQL and connection strings) goes to the server log only, never the client |
 
 Every `500` is also logged server-side (`tracing::error!`) with the failing
@@ -211,32 +216,39 @@ Every `500` is also logged server-side (`tracing::error!`) with the failing
 
 ```jsonc
 {
-  "format": "stt-postgis-dynamic",              // or "stt-duckdb-dynamic"
+  "format": "stt-postgis-dynamic", // or "stt-duckdb-dynamic"
   "name": "hurricane_obs",
-  "boundingBox": [[-179.9, -71.2], [179.8, 81.0]],
+  "boundingBox": [
+    [-179.9, -71.2],
+    [179.8, 81.0],
+  ],
   "timeRange": { "start": 946684800000, "end": 1700000000000 },
   "minZoom": 3,
   "maxZoom": 8,
   "temporalBucketMs": 604800000,
   "featureCount": 48538,
   "tileUrlTemplate": "/tiles/{z}/{x}/{y}/{t}.stt",
-  "heatmapDomain": { "classes": [ { "id": "default", "min": 0.0, "max": 4.7, "property": "wind_kt" } ] },
-  "temporalLod": [ { "bucket_ms": 2592000000, "max_zoom_level": 4 } ]
+  "heatmapDomain": {
+    "classes": [
+      { "id": "default", "min": 0.0, "max": 4.7, "property": "wind_kt" },
+    ],
+  },
+  "temporalLod": [{ "bucket_ms": 2592000000, "max_zoom_level": 4 }],
 }
 ```
 
-| Key | Type | Always present? | Meaning |
-| --- | --- | --- | --- |
-| `format` | string | yes | `"stt-postgis-dynamic"` or `"stt-duckdb-dynamic"` — identifies the *live* origin, distinct from the packed manifest's `format: "stt-packed"`. |
-| `name` | string | yes | Resolved dataset name: the `--name` override, else the table name (schema-qualified table's last segment) or `"query"` for a `--sql` source. |
-| `boundingBox` | `[[minLon,minLat],[maxLon,maxLat]]` | yes | The whole source's spatial extent from a startup `ST_Extent`-style aggregate (reprojected to 4326 first when `--source-srid` is set). Falls back to `[[-180,-90],[180,90]]` if the source is empty. |
-| `timeRange` | `{ start, end }` (Unix ms) | yes | `MIN`/`MAX` of `--time-field` over the whole source, converted to ms per `--time-format` for an integer time column. Falls back to `{0, 0}` if the source is empty. |
-| `minZoom` / `maxZoom` | `u8` | yes | Echo `--min-zoom` / `--max-zoom`. |
-| `temporalBucketMs` | `u64` | yes | The **base** bucket (`--temporal-bucket`, parsed to ms). Does not reflect per-request LOD widening (§3.4.2) — a client reads `temporalLod` for that. |
-| `featureCount` | `i64` | yes | `COUNT(*)` over the whole source at startup — a dataset-wide count, not a per-tile count. |
-| `tileUrlTemplate` | string | yes | Always the literal `"/tiles/{z}/{x}/{y}/{t}.stt"`, **even in multi-dataset mode** — it is not prefixed with `/{dataset}`. A multi-dataset client must prepend the dataset segment itself. |
-| `heatmapDomain` | `{ classes: HeatmapClassDomain[] }` | only if `--heatmap-weight` or `--heatmap-class` is set | See §4.1. Key is **absent** (not `null`) when neither flag is set. |
-| `temporalLod` | `TemporalLodLevel[]` | only if `--temporal-lod` is set | The parsed LOD pyramid, so a client can discover which zooms get a coarser bucket. Key is **absent** when `--temporal-lod` is unset. Note: unlike every other key in this object, array elements keep their Rust field names verbatim — `bucket_ms` / `max_zoom_level`, snake_case — because `TemporalLodLevel` has no camelCase rename. |
+| Key                   | Type                                | Always present?                                        | Meaning                                                                                                                                                                                                                                                                                                                                  |
+| --------------------- | ----------------------------------- | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `format`              | string                              | yes                                                    | `"stt-postgis-dynamic"` or `"stt-duckdb-dynamic"` — identifies the _live_ origin, distinct from the packed manifest's `format: "stt-packed"`.                                                                                                                                                                                            |
+| `name`                | string                              | yes                                                    | Resolved dataset name: the `--name` override, else the table name (schema-qualified table's last segment) or `"query"` for a `--sql` source.                                                                                                                                                                                             |
+| `boundingBox`         | `[[minLon,minLat],[maxLon,maxLat]]` | yes                                                    | The whole source's spatial extent from a startup `ST_Extent`-style aggregate (reprojected to 4326 first when `--source-srid` is set). Falls back to `[[-180,-90],[180,90]]` if the source is empty.                                                                                                                                      |
+| `timeRange`           | `{ start, end }` (Unix ms)          | yes                                                    | `MIN`/`MAX` of `--time-field` over the whole source, converted to ms per `--time-format` for an integer time column. Falls back to `{0, 0}` if the source is empty.                                                                                                                                                                      |
+| `minZoom` / `maxZoom` | `u8`                                | yes                                                    | Echo `--min-zoom` / `--max-zoom`.                                                                                                                                                                                                                                                                                                        |
+| `temporalBucketMs`    | `u64`                               | yes                                                    | The **base** bucket (`--temporal-bucket`, parsed to ms). Does not reflect per-request LOD widening (§3.4.2) — a client reads `temporalLod` for that.                                                                                                                                                                                     |
+| `featureCount`        | `i64`                               | yes                                                    | `COUNT(*)` over the whole source at startup — a dataset-wide count, not a per-tile count.                                                                                                                                                                                                                                                |
+| `tileUrlTemplate`     | string                              | yes                                                    | Always the literal `"/tiles/{z}/{x}/{y}/{t}.stt"`, **even in multi-dataset mode** — it is not prefixed with `/{dataset}`. A multi-dataset client must prepend the dataset segment itself.                                                                                                                                                |
+| `heatmapDomain`       | `{ classes: HeatmapClassDomain[] }` | only if `--heatmap-weight` or `--heatmap-class` is set | See §4.1. Key is **absent** (not `null`) when neither flag is set.                                                                                                                                                                                                                                                                       |
+| `temporalLod`         | `TemporalLodLevel[]`                | only if `--temporal-lod` is set                        | The parsed LOD pyramid, so a client can discover which zooms get a coarser bucket. Key is **absent** when `--temporal-lod` is unset. Note: unlike every other key in this object, array elements keep their Rust field names verbatim — `bucket_ms` / `max_zoom_level`, snake_case — because `TemporalLodLevel` has no camelCase rename. |
 
 Every **top-level** key besides the `temporalLod` array's own field names is
 camelCase (the loaders.gl `TileSource`-style runtime-descriptor convention),
@@ -260,12 +272,12 @@ over the whole dataset — same shape, live source:
 }
 ```
 
-| `--heatmap-weight` | `--heatmap-class` | Aggregate | `classes` |
-| --- | --- | --- | --- |
-| set | unset | `min(weight)`, `percentile_cont(0.95)` (Postgres) / `quantile_cont(weight, 0.95)` (DuckDB), over the whole source | one entry, `id: "default"` |
-| set | set | the same aggregate, `GROUP BY` class, `ORDER BY` class, capped at **8** groups | one entry per distinct class value (as `id`), `property` set |
-| unset | set | `DISTINCT` class values, capped at **8**, `ORDER BY` class | one entry per value, `min: 1.0, max: 1.0, property: null` (an enumeration, not an intensity domain) |
-| unset | unset | not computed | key absent from `/metadata.json` |
+| `--heatmap-weight` | `--heatmap-class` | Aggregate                                                                                                         | `classes`                                                                                           |
+| ------------------ | ----------------- | ----------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| set                | unset             | `min(weight)`, `percentile_cont(0.95)` (Postgres) / `quantile_cont(weight, 0.95)` (DuckDB), over the whole source | one entry, `id: "default"`                                                                          |
+| set                | set               | the same aggregate, `GROUP BY` class, `ORDER BY` class, capped at **8** groups                                    | one entry per distinct class value (as `id`), `property` set                                        |
+| unset              | set               | `DISTINCT` class values, capped at **8**, `ORDER BY` class                                                        | one entry per value, `min: 1.0, max: 1.0, property: null` (an enumeration, not an intensity domain) |
+| unset              | unset             | not computed                                                                                                      | key absent from `/metadata.json`                                                                    |
 
 The percentile is the **database's own continuous percentile function**, which
 may differ marginally from the offline build's floor-index percentile — this
@@ -274,16 +286,16 @@ bytes, so the two need not match exactly.
 
 ## 5. Backends
 
-| | `--postgres <CONN>` | `--duckdb <PATH>` |
-| --- | --- | --- |
-| Engine | PostgreSQL/PostGIS, external server | DuckDB, embedded (statically bundled — no system lib, no server) |
-| Pool | `deadpool_postgres`, async, `NoTls`, `RecyclingMethod::Fast` | `r2d2`, blocking (`duckdb::Connection` is `Send` but `!Sync`) |
-| `--pool-size` | `deadpool_postgres::Pool` `max_size` | `r2d2::Pool` `max_size`, with the CLI value itself clamped to a minimum of `1` before it reaches the pool builder |
-| Env fallback | `STT_POSTGRES_URL`, then `DATABASE_URL` | `STT_DUCKDB_PATH` |
-| Per-request execution | runs on the async reactor for the query; row decode + tile encode are CPU-bound and run on `spawn_blocking` | pool checkout, query, decode, **and** encode all run on one `spawn_blocking` worker (nothing about DuckDB is async) |
-| Extra setup | none beyond the pool | every **new physical connection** (not every checkout) runs `INSTALL spatial; LOAD spatial; SET TimeZone='UTC';` — a one-time network fetch for the extension, cached under `~/.duckdb`, and UTC pinning so `epoch_ms`/`ST_AsWKB` math is timezone-independent |
-| File access | n/a (server-managed) | a real `.duckdb` file opens **read-only** (never mutates the source, coexists with another process holding it); `:memory:` (or an empty path) opens a **fresh in-memory database**, logged with a warning that pooled connections share one in-memory DB via `try_clone` starting empty — only a `--sql` that scans external files (e.g. `read_parquet(...)`) works there, not a pre-existing table name |
-| Malformed rows | both backends decode with `InputStrictness::Warn` — a row that fails to parse is warned about and coerced/dropped rather than failing the whole request | (same) |
+|                       | `--postgres <CONN>`                                                                                                                                     | `--duckdb <PATH>`                                                                                                                                                                                                                                                                                                                                                                                        |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Engine                | PostgreSQL/PostGIS, external server                                                                                                                     | DuckDB, embedded (statically bundled — no system lib, no server)                                                                                                                                                                                                                                                                                                                                         |
+| Pool                  | `deadpool_postgres`, async, `NoTls`, `RecyclingMethod::Fast`                                                                                            | `r2d2`, blocking (`duckdb::Connection` is `Send` but `!Sync`)                                                                                                                                                                                                                                                                                                                                            |
+| `--pool-size`         | `deadpool_postgres::Pool` `max_size`                                                                                                                    | `r2d2::Pool` `max_size`, with the CLI value itself clamped to a minimum of `1` before it reaches the pool builder                                                                                                                                                                                                                                                                                        |
+| Env fallback          | `STT_POSTGRES_URL`, then `DATABASE_URL`                                                                                                                 | `STT_DUCKDB_PATH`                                                                                                                                                                                                                                                                                                                                                                                        |
+| Per-request execution | runs on the async reactor for the query; row decode + tile encode are CPU-bound and run on `spawn_blocking`                                             | pool checkout, query, decode, **and** encode all run on one `spawn_blocking` worker (nothing about DuckDB is async)                                                                                                                                                                                                                                                                                      |
+| Extra setup           | none beyond the pool                                                                                                                                    | every **new physical connection** (not every checkout) runs `INSTALL spatial; LOAD spatial; SET TimeZone='UTC';` — a one-time network fetch for the extension, cached under `~/.duckdb`, and UTC pinning so `epoch_ms`/`ST_AsWKB` math is timezone-independent                                                                                                                                           |
+| File access           | n/a (server-managed)                                                                                                                                    | a real `.duckdb` file opens **read-only** (never mutates the source, coexists with another process holding it); `:memory:` (or an empty path) opens a **fresh in-memory database**, logged with a warning that pooled connections share one in-memory DB via `try_clone` starting empty — only a `--sql` that scans external files (e.g. `read_parquet(...)`) works there, not a pre-existing table name |
+| Malformed rows        | both backends decode with `InputStrictness::Warn` — a row that fails to parse is warned about and coerced/dropped rather than failing the whole request | (same)                                                                                                                                                                                                                                                                                                                                                                                                   |
 
 `--postgres` and `--duckdb` are mutually exclusive; `stt-serve` refuses to
 start if both (or neither, with no env fallback resolving one) are given.
@@ -302,15 +314,23 @@ warning and falls back to per-tile value sniffing.
 {
   "datasets": [
     {
-      "name": "obs", "postgres": "postgresql://x", "table": "hurricane_obs",
-      "time-field": "iso_time", "temporal-bucket": "7d", "quantize-coords": 50.0
+      "name": "obs",
+      "postgres": "postgresql://x",
+      "table": "hurricane_obs",
+      "time-field": "iso_time",
+      "temporal-bucket": "7d",
+      "quantize-coords": 50.0,
     },
     {
-      "name": "trips", "duckdb": "trips.duckdb", "sql": "SELECT * FROM t",
-      "geom-column": "the_geom", "time-format": "unix-ms",
-      "min-zoom": 2, "max-zoom": 10
-    }
-  ]
+      "name": "trips",
+      "duckdb": "trips.duckdb",
+      "sql": "SELECT * FROM t",
+      "geom-column": "the_geom",
+      "time-format": "unix-ms",
+      "min-zoom": 2,
+      "max-zoom": 10,
+    },
+  ],
 }
 ```
 
@@ -329,11 +349,11 @@ warning and falls back to per-tile value sniffing.
 
 ## 7. Caching semantics
 
-| Route | `Cache-Control` |
-| --- | --- |
-| `GET /tiles/…` | `no-store`, set explicitly on every `200` response |
+| Route                                            | `Cache-Control`                                     |
+| ------------------------------------------------ | --------------------------------------------------- |
+| `GET /tiles/…`                                   | `no-store`, set explicitly on every `200` response  |
 | `GET /metadata.json`, `/{dataset}/metadata.json` | none set — no explicit caching directive either way |
-| `GET /datasets`, `GET /health` | none set |
+| `GET /datasets`, `GET /health`                   | none set                                            |
 
 Tiles are **regenerated on every request**; there is no server-side response
 cache and no on-disk artifact analogous to a pack. This is the deliberate
@@ -341,7 +361,7 @@ live-source trade-off: a pre-baked [packed archive](./stt-packed-format.md) is
 content-addressed and edge-cacheable forever, while `stt-serve` trades that
 away for always-current data. A reverse proxy or CDN placed in front of
 `stt-serve` can still cache individual `(z, x, y, t)` responses on its own
-terms (the explicit `no-store` only governs *this* server's own intent, not
+terms (the explicit `no-store` only governs _this_ server's own intent, not
 what an intermediary is permitted to layer on top) — see
 [`db-input-adaptors.md` §6.3](../roadmap/db-input-adaptors.md#63-when-to-use-which)
 for when a pre-bake is the better fit than dynamic serving.
@@ -367,7 +387,7 @@ failure per request) because a single tile's rows cannot answer them:
 
 - `--summary-tier` — cross-tile H3/quadbin aggregation spans many spatial
   tiles by construction.
-- `--adaptive-temporal` — its window size is chosen from a cell's *whole* time
+- `--adaptive-temporal` — its window size is chosen from a cell's _whole_ time
   range, not a single bucket's rows.
 
 Both must be pre-baked with `stt-build` and served as a static archive
@@ -411,5 +431,5 @@ storing 4326 remains the fast path.
   [directory/paging conformance requirements](./conformance.md) — those apply
   to the packed container this server does not write.
 - See [`sidecar-assets.md`](./sidecar-assets.md) for the unrelated notion of
-  *sidecar* (non-tile) files in a scene bundle — `stt-serve` has no sidecar
+  _sidecar_ (non-tile) files in a scene bundle — `stt-serve` has no sidecar
   concept; every response is either a tile or the dataset descriptor.

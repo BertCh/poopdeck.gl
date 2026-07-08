@@ -12,5 +12,9 @@
  * three build.
  */
 
-export { buildTripIndex, sampleHead, sampleHeads } from '@poopdeck.gl/core/trips';
+export {
+  buildTripIndex,
+  sampleHead,
+  sampleHeads,
+} from '@poopdeck.gl/core/trips';
 export type { Trip, TripIndex, Head } from '@poopdeck.gl/core/trips';

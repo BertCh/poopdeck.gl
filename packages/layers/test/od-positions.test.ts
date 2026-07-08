@@ -63,7 +63,9 @@ describe('deriveSourceTargetPositions', () => {
       endTimes: [1],
       timeOffset: 0,
     });
-    const { source, target } = deriveSourceTargetPositions(tile.layers[0].features);
+    const { source, target } = deriveSourceTargetPositions(
+      tile.layers[0].features,
+    );
     expect(source).toBeInstanceOf(Float64Array);
     expect(target).toBeInstanceOf(Float64Array);
   });
@@ -82,7 +84,9 @@ describe('deriveSourceTargetPositions', () => {
       endTimes: [1],
       timeOffset: 0,
     });
-    const { source, target } = deriveSourceTargetPositions(tile.layers[0].features);
+    const { source, target } = deriveSourceTargetPositions(
+      tile.layers[0].features,
+    );
     // Source is the FIRST vertex, target the LAST — the [1,1] and [2,2]
     // intermediate vertices are dropped (an arc/line has only two ends).
     expect([source[0], source[1]]).toEqual([0, 0]);
@@ -108,7 +112,9 @@ describe('deriveSourceTargetPositions', () => {
       endTimes: [1, 1],
       timeOffset: 0,
     });
-    const { source, target } = deriveSourceTargetPositions(tile.layers[0].features);
+    const { source, target } = deriveSourceTargetPositions(
+      tile.layers[0].features,
+    );
     expect([source[0], source[1]]).toEqual([0, 0]);
     expect([target[0], target[1]]).toEqual([1, 1]);
     expect([source[2], source[3]]).toEqual([10, 10]);
@@ -119,8 +125,12 @@ describe('deriveSourceTargetPositions', () => {
     // makePathTile only builds 2D tiles, so assemble a 3D BinaryFeatures by
     // hand: 1 feature, 2 vertices, [lon, lat, alt] interleaved.
     const positions = new Float64Array([
-      0, 0, 100, // source vertex
-      5, 6, 200, // target vertex
+      0,
+      0,
+      100, // source vertex
+      5,
+      6,
+      200, // target vertex
     ]);
     const binary: any = {
       featureCount: 1,

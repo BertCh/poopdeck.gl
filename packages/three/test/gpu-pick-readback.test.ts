@@ -39,7 +39,10 @@ class FakeRenderTarget {
  * everywhere except the CENTRE texel, which carries `rgb`. The filler lets a
  * `size > 1` case prove the picker samples the centre, not texel 0.
  */
-function pixelsWithCenter(size: number, rgb: readonly [number, number, number]): Uint8Array {
+function pixelsWithCenter(
+  size: number,
+  rgb: readonly [number, number, number],
+): Uint8Array {
   const buf = new Uint8Array(size * size * 4);
   for (let i = 0; i < buf.length; i += 4) {
     buf[i] = 9;
@@ -72,10 +75,19 @@ function makeHarness(opts: HarnessOptions) {
 
   const state = {
     log: [] as string[],
-    readbackArgs: null as null | { target: unknown; x: number; y: number; w: number; h: number },
+    readbackArgs: null as null | {
+      target: unknown;
+      x: number;
+      y: number;
+      w: number;
+      h: number;
+    },
     readbackArgCount: 0,
     createdTargets: [] as FakeRenderTarget[],
-    setClearColorCalls: [] as Array<{ color: unknown; alpha: number | undefined }>,
+    setClearColorCalls: [] as Array<{
+      color: unknown;
+      alpha: number | undefined;
+    }>,
   };
 
   let currentTarget: unknown = null;
@@ -86,7 +98,12 @@ function makeHarness(opts: HarnessOptions) {
     getRenderTarget: () => currentTarget,
     setRenderTarget: (t: unknown) => {
       currentTarget = t;
-      const label = t === null ? 'null' : t instanceof FakeRenderTarget ? 'pickTarget' : 'other';
+      const label =
+        t === null
+          ? 'null'
+          : t instanceof FakeRenderTarget
+            ? 'pickTarget'
+            : 'other';
       state.log.push(`setRenderTarget:${label}`);
     },
     render: () => {
@@ -165,12 +182,24 @@ describe('GpuPicker readback: pixel -> id resolution', () => {
     const featureCount = 10;
     const black = makeHarness({ pixels: pixelsWithCenter(1, [0, 0, 0]) });
     const white = makeHarness({ pixels: pixelsWithCenter(1, [255, 255, 255]) });
-    const hit = await new GpuPicker(black.renderer, black.TargetCtor).pick({}, {}, 0, 0, {
-      featureCount,
-    });
-    const miss = await new GpuPicker(white.renderer, white.TargetCtor).pick({}, {}, 0, 0, {
-      featureCount,
-    });
+    const hit = await new GpuPicker(black.renderer, black.TargetCtor).pick(
+      {},
+      {},
+      0,
+      0,
+      {
+        featureCount,
+      },
+    );
+    const miss = await new GpuPicker(white.renderer, white.TargetCtor).pick(
+      {},
+      {},
+      0,
+      0,
+      {
+        featureCount,
+      },
+    );
     expect(hit).toBe(0);
     expect(miss).toBeNull();
   });
@@ -180,10 +209,14 @@ describe('GpuPicker readback: pixel -> id resolution', () => {
     const hitH = makeHarness({ pixels: pixelsWithCenter(1, encodeId(fc - 1)) });
     const missH = makeHarness({ pixels: pixelsWithCenter(1, encodeId(fc)) });
     expect(
-      await new GpuPicker(hitH.renderer, hitH.TargetCtor).pick({}, {}, 0, 0, { featureCount: fc }),
+      await new GpuPicker(hitH.renderer, hitH.TargetCtor).pick({}, {}, 0, 0, {
+        featureCount: fc,
+      }),
     ).toBe(fc - 1);
     expect(
-      await new GpuPicker(missH.renderer, missH.TargetCtor).pick({}, {}, 0, 0, { featureCount: fc }),
+      await new GpuPicker(missH.renderer, missH.TargetCtor).pick({}, {}, 0, 0, {
+        featureCount: fc,
+      }),
     ).toBeNull();
   });
 
@@ -208,15 +241,27 @@ describe('GpuPicker readback: plumbing (regression for the fixed real-readback b
   });
 
   it('reads back the cursor pixel with a bottom-left Y-flip at dpr=1', async () => {
-    const h = makeHarness({ dpr: 1, canvasHeight: 100, pixels: pixelsWithCenter(1, encodeId(1)) });
-    await new GpuPicker(h.renderer, h.TargetCtor).pick({}, {}, 20, 30, { featureCount: 10 });
+    const h = makeHarness({
+      dpr: 1,
+      canvasHeight: 100,
+      pixels: pixelsWithCenter(1, encodeId(1)),
+    });
+    await new GpuPicker(h.renderer, h.TargetCtor).pick({}, {}, 20, 30, {
+      featureCount: 10,
+    });
     // px = floor(20*1) = 20; pyTop = 30; py = 100 - 1 - 30 = 69.
     expect(h.state.readbackArgs).toMatchObject({ x: 20, y: 69, w: 1, h: 1 });
   });
 
   it('scales the cursor coords by device-pixel-ratio', async () => {
-    const h = makeHarness({ dpr: 2, canvasHeight: 200, pixels: pixelsWithCenter(1, encodeId(1)) });
-    await new GpuPicker(h.renderer, h.TargetCtor).pick({}, {}, 20, 30, { featureCount: 10 });
+    const h = makeHarness({
+      dpr: 2,
+      canvasHeight: 200,
+      pixels: pixelsWithCenter(1, encodeId(1)),
+    });
+    await new GpuPicker(h.renderer, h.TargetCtor).pick({}, {}, 20, 30, {
+      featureCount: 10,
+    });
     // px = floor(20*2) = 40; pyTop = floor(30*2) = 60; py = 200 - 1 - 60 = 139.
     expect(h.state.readbackArgs).toMatchObject({ x: 40, y: 139, w: 1, h: 1 });
   });
@@ -247,8 +292,14 @@ describe('GpuPicker readback: plumbing (regression for the fixed real-readback b
       'readback',
     ]);
     // The saved alpha (0.5), not the sentinel's 1, is what gets restored.
-    expect(h.state.setClearColorCalls[0]).toEqual({ color: 0xffffff, alpha: 1 });
-    expect(h.state.setClearColorCalls[1]).toEqual({ color: SAVED_COLOR_MARKER, alpha: SAVED_ALPHA });
+    expect(h.state.setClearColorCalls[0]).toEqual({
+      color: 0xffffff,
+      alpha: 1,
+    });
+    expect(h.state.setClearColorCalls[1]).toEqual({
+      color: SAVED_COLOR_MARKER,
+      alpha: SAVED_ALPHA,
+    });
   });
 
   it('drives the decode path with a minimal renderer lacking clear-colour methods', async () => {
@@ -256,9 +307,15 @@ describe('GpuPicker readback: plumbing (regression for the fixed real-readback b
     const id = 512;
     const h = makeHarness({ pixels: pixelsWithCenter(1, encodeId(id)) });
     expect(h.renderer.getClearColor).toBeUndefined();
-    const result = await new GpuPicker(h.renderer, h.TargetCtor).pick({}, {}, 5, 5, {
-      featureCount: 1000,
-    });
+    const result = await new GpuPicker(h.renderer, h.TargetCtor).pick(
+      {},
+      {},
+      5,
+      5,
+      {
+        featureCount: 1000,
+      },
+    );
     expect(result).toBe(id);
   });
 

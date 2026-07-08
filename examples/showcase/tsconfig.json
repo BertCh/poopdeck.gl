@@ -23,4 +23,3 @@
   "include": ["src", ".react-router/types/**/*"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }
-

@@ -3,7 +3,7 @@ import {
   index,
   layout,
   route,
-} from "@react-router/dev/routes";
+} from '@react-router/dev/routes';
 
 /**
  * Route tree (framework mode) — mirrors the former hand-written <Routes> in
@@ -17,27 +17,27 @@ import {
  *                   SiteChrome (chrome-free) but still under Layout.
  */
 export default [
-  layout("components/Layout.tsx", [
-    layout("components/SiteChrome.tsx", [
-      index("pages/HomePage.tsx"),
-      route("demos", "pages/DemosCatalog.tsx"),
-      route("how-it-works", "pages/HowItWorks.tsx"),
-      route("demos/:datasetId", "pages/DemoDetailPage.tsx"),
-      route("docs", "docs/DocsLayout.tsx", [
-        index("docs/DocsLanding.tsx"),
+  layout('components/Layout.tsx', [
+    layout('components/SiteChrome.tsx', [
+      index('pages/HomePage.tsx'),
+      route('demos', 'pages/DemosCatalog.tsx'),
+      route('how-it-works', 'pages/HowItWorks.tsx'),
+      route('demos/:datasetId', 'pages/DemoDetailPage.tsx'),
+      route('docs', 'docs/DocsLayout.tsx', [
+        index('docs/DocsLanding.tsx'),
         // Catch-all handles two-segment slugs (api/cli-reference) and renders
         // a styled 404 for unknown ones.
-        route("*", "docs/DocPage.tsx"),
+        route('*', 'docs/DocPage.tsx'),
       ]),
     ]),
 
     // Chrome-free fullscreen surfaces (client-only; never prerendered).
-    route("story/drifters", "pages/DrifterStory.tsx"),
-    route("drive/:sceneId?", "pages/AvCockpit.tsx"),
-    route("demo/:datasetId", "pages/DemoPage.tsx"),
+    route('story/drifters', 'pages/DrifterStory.tsx'),
+    route('drive/:sceneId?', 'pages/AvCockpit.tsx'),
+    route('demo/:datasetId', 'pages/DemoPage.tsx'),
     // Backwards-compat: old /maplibre/:id deep-links route to the same viewer.
     // Same module reused → needs a distinct id.
-    route("maplibre/:datasetId", "pages/DemoPage.tsx", { id: "demo-maplibre" }),
-    route("cesium/:datasetId", "pages/CesiumDemoPage.tsx"),
+    route('maplibre/:datasetId', 'pages/DemoPage.tsx', { id: 'demo-maplibre' }),
+    route('cesium/:datasetId', 'pages/CesiumDemoPage.tsx'),
   ]),
 ] satisfies RouteConfig;

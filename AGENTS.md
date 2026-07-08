@@ -44,7 +44,7 @@ Arrow IPC with GeoArrow-encoded geometry.
   budget — STT's whole philosophy is comprehensive data. To manage size, **clamp
   the zoom range** (keep `--max-zoom` honest) and use **temporal bucketing**
   (`--temporal-bucket`). The **summary** (H3/Quadbin) and **raster** tiers are
-  *opt-in coarse-zoom aids* for very large datasets, **not** a substitute for the
+  _opt-in coarse-zoom aids_ for very large datasets, **not** a substitute for the
   raw tier.
 - **The archive/manifest is the contract.** `manifest.json` carries capabilities,
   the temporal block, the pack table, and (if built with `--style-hints`)
@@ -57,21 +57,21 @@ Arrow IPC with GeoArrow-encoded geometry.
 
 ## Routing table — "to do X, look here"
 
-| You want to… | Tool / package | Canonical docs |
-|---|---|---|
-| Turn **your own** GeoParquet / PostGIS / DuckDB into a `.stt` | `stt-build` (`--auto` to infer knobs) | `docs/guides/csv-quickstart.md`, `docs/api/cli-reference.md` |
-| Get build knobs recommended from a source file | `stt-optimize` (powers `stt-build --auto`) | `docs/api/cli-reference.md`, `docs/guides/tuning-tiles.md` |
-| Shrink / lint / diff / audit a **built** archive | `stt-optimize inspect`/`doctor`/`diff`/`order-audit` | `docs/guides/tuning-tiles.md` |
-| Serve tiles dynamically off a live DB | `stt-serve` (PostGIS/DuckDB, axum) | `docs/api/cli-reference.md`, `docs/spec/stt-serve-protocol.md` |
-| Publish a static archive to a CDN/R2 | sync the dir tree; `scripts/r2-sync.sh` sets cache headers | `docs/guides/deploying.md` |
-| Check integrity / decode / schema / temporal consistency | `stt-validate` (CI-suitable) | `docs/api/cli-reference.md` |
-| Pack/unpack a single-file `.sttb` interchange bundle | `stt-bundle` | `docs/api/cli-reference.md` |
-| Generate a **bundled reference** dataset (earthquakes, drifters, GTFS, …) | `stt-generate` | `docs/guides/data-generation.md` |
-| Read an archive in TS (Range fetch + decode + cache) | `@poopdeck.gl/core` (`STTArchive`, tileset) | `docs/api/stt-loader.md`, `docs/api/spatiotemporal-tileset.md` |
-| Render on a deck.gl map / pick a layer | `@poopdeck.gl/layers` (`SpatioTemporalLayer`, `Animated*Layer`) | `docs/api/spatiotemporal-layer.md`, `docs/architecture/deckgl-integration.md` |
-| Render on Three.js (WebGPU) / MapLibre / Cesium | `@poopdeck.gl/{three,maplibre,cesium}` | `docs/api/stt-three.md`, `docs/api/stt-maplibre.md`, `docs/api/stt-cesium.md` |
-| Add a shader extension (TimeFilter, DataFilter, CategoryColor, …) | `@poopdeck.gl/layers` extensions | `docs/api/extensions.md` |
-| Wire the play/scrub clock + React UI | `@poopdeck.gl/playback` + `@poopdeck.gl/react` | `docs/api/stt-player.md`, `docs/api/stt-react.md` |
+| You want to…                                                              | Tool / package                                                  | Canonical docs                                                                |
+| ------------------------------------------------------------------------- | --------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| Turn **your own** GeoParquet / PostGIS / DuckDB into a `.stt`             | `stt-build` (`--auto` to infer knobs)                           | `docs/guides/csv-quickstart.md`, `docs/api/cli-reference.md`                  |
+| Get build knobs recommended from a source file                            | `stt-optimize` (powers `stt-build --auto`)                      | `docs/api/cli-reference.md`, `docs/guides/tuning-tiles.md`                    |
+| Shrink / lint / diff / audit a **built** archive                          | `stt-optimize inspect`/`doctor`/`diff`/`order-audit`            | `docs/guides/tuning-tiles.md`                                                 |
+| Serve tiles dynamically off a live DB                                     | `stt-serve` (PostGIS/DuckDB, axum)                              | `docs/api/cli-reference.md`, `docs/spec/stt-serve-protocol.md`                |
+| Publish a static archive to a CDN/R2                                      | sync the dir tree; `scripts/r2-sync.sh` sets cache headers      | `docs/guides/deploying.md`                                                    |
+| Check integrity / decode / schema / temporal consistency                  | `stt-validate` (CI-suitable)                                    | `docs/api/cli-reference.md`                                                   |
+| Pack/unpack a single-file `.sttb` interchange bundle                      | `stt-bundle`                                                    | `docs/api/cli-reference.md`                                                   |
+| Generate a **bundled reference** dataset (earthquakes, drifters, GTFS, …) | `stt-generate`                                                  | `docs/guides/data-generation.md`                                              |
+| Read an archive in TS (Range fetch + decode + cache)                      | `@poopdeck.gl/core` (`STTArchive`, tileset)                     | `docs/api/stt-loader.md`, `docs/api/spatiotemporal-tileset.md`                |
+| Render on a deck.gl map / pick a layer                                    | `@poopdeck.gl/layers` (`SpatioTemporalLayer`, `Animated*Layer`) | `docs/api/spatiotemporal-layer.md`, `docs/architecture/deckgl-integration.md` |
+| Render on Three.js (WebGPU) / MapLibre / Cesium                           | `@poopdeck.gl/{three,maplibre,cesium}`                          | `docs/api/stt-three.md`, `docs/api/stt-maplibre.md`, `docs/api/stt-cesium.md` |
+| Add a shader extension (TimeFilter, DataFilter, CategoryColor, …)         | `@poopdeck.gl/layers` extensions                                | `docs/api/extensions.md`                                                      |
+| Wire the play/scrub clock + React UI                                      | `@poopdeck.gl/playback` + `@poopdeck.gl/react`                  | `docs/api/stt-player.md`, `docs/api/stt-react.md`                             |
 
 The `stt-*` CLIs are the workhorses (think `wrangler`); their canonical flag
 surface is **`docs/api/cli-reference.md`**. This table intentionally mirrors the
@@ -137,7 +137,7 @@ run commands you can verify from the manifests — do not invent scripts.
 
 - **Claude Code:** install the **`poopdeck-ai` plugin** from this repo root — it
   wires an **MCP server** (`@poopdeck.gl/mcp`, live dataset discovery / analysis /
-  `@deck.gl/json` map composition / gated build+validate) *and* a set of **Agent
+  `@deck.gl/json` map composition / gated build+validate) _and_ a set of **Agent
   Skills** that route between the CLIs and MCP tools. Start with the
   `poopdeck-overview` skill (the router). See `poopdeck-ai/README.md`.
 - **Other harnesses (Cursor / Codex / Gemini CLI):** the Skills are authored to

@@ -8,12 +8,12 @@ Companion audits: `full-ecosystem-audit-2026-07.md` (release-story criticals —
 
 ## Distribution pathways (decided)
 
-| channel | artifact | mechanism |
-|---|---|---|
-| npm `@poopdeck.gl` | 7 packages: core, playback, layers, maplibre, three, cesium, react | changesets (fixed/lockstep group) + `release-npm.yml`; `pnpm -r publish` rewrites `workspace:*` |
-| crates.io | **one public name**: `spatiotemporal-tiles` (facade lib + all 4 CLI bins, feature-gated) over 3 internal lib crates: `stt-core`, `stt-build`, `stt-optimize` | release-plz (lockstep `version_group`, tag `v{ver}`) + Trusted Publishing |
-| GitHub Releases | prebuilt `stt-*` binaries, 5 targets + shell/powershell installers | cargo-dist on tag push (`release.yml`, generated/vendored) |
-| Cloudflare (existing) | showcase site + R2 tile data | unchanged (`wrangler`, `scripts/r2-sync.sh`) |
+| channel               | artifact                                                                                                                                                     | mechanism                                                                                       |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------- |
+| npm `@poopdeck.gl`    | 7 packages: core, playback, layers, maplibre, three, cesium, react                                                                                           | changesets (fixed/lockstep group) + `release-npm.yml`; `pnpm -r publish` rewrites `workspace:*` |
+| crates.io             | **one public name**: `spatiotemporal-tiles` (facade lib + all 4 CLI bins, feature-gated) over 3 internal lib crates: `stt-core`, `stt-build`, `stt-optimize` | release-plz (lockstep `version_group`, tag `v{ver}`) + Trusted Publishing                       |
+| GitHub Releases       | prebuilt `stt-*` binaries, 5 targets + shell/powershell installers                                                                                           | cargo-dist on tag push (`release.yml`, generated/vendored)                                      |
+| Cloudflare (existing) | showcase site + R2 tile data                                                                                                                                 | unchanged (`wrangler`, `scripts/r2-sync.sh`)                                                    |
 
 ## Naming rationale
 
@@ -24,7 +24,7 @@ Companion audits: `full-ecosystem-audit-2026-07.md` (release-story criticals —
   reserves that namespace for when it lands.
 - The facade is the bevy/gix model: users type ONE name
   (`cargo add spatiotemporal-tiles`, `cargo install spatiotemporal-tiles
-  --features cli`); `stt-core/build/optimize` publish only because cargo
+--features cli`); `stt-core/build/optimize` publish only because cargo
   requires published deps, and carry "internal implementation crate" banners.
 - `crates/stt-validate` and `crates/stt-serve` were dissolved into the facade
   as feature-gated `src/bin/` targets (binary names unchanged: `stt-build`,
@@ -86,7 +86,7 @@ flips public.
 
 - **DB extensions** (pgrx Postgres extension, DuckDB community extension):
   the DB story is input adaptors + the `stt-serve` binary (the `ST_AsMVT`
-  analog, per `db-input-adaptors.md`). Nothing runs *inside* a database.
+  analog, per `db-input-adaptors.md`). Nothing runs _inside_ a database.
 - **Python packaging**: `scripts/data-generation/*` stay internal scripts
   (dataset-specific licenses, per-dataset venvs).
 - **Docker image / Homebrew tap**: not this wave; cargo-dist's installers +

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo } from "react";
+import React, { useCallback, useEffect, useMemo } from 'react';
 import {
   Link,
   useLoaderData,
@@ -6,20 +6,20 @@ import {
   useParams,
   type ClientLoaderFunctionArgs,
   type LoaderFunctionArgs,
-} from "react-router";
+} from 'react-router';
 import {
   GITHUB_BLOB_BASE,
   docSections,
   getDocEntry,
   getSectionForSlug,
-} from "./manifest";
-import { fileLoader, manifestSchemaRaw } from "./content";
-import { extractHeadings } from "./headings";
-import Markdown from "./Markdown";
-import CodeBlock from "./CodeBlock";
-import Toc from "./Toc";
-import PrevNext from "./PrevNext";
-import { useDocsContext } from "./DocsLayout";
+} from './manifest';
+import { fileLoader, manifestSchemaRaw } from './content';
+import { extractHeadings } from './headings';
+import Markdown from './Markdown';
+import CodeBlock from './CodeBlock';
+import Toc from './Toc';
+import PrevNext from './PrevNext';
+import { useDocsContext } from './DocsLayout';
 
 /**
  * One documentation page. The markdown body is read in the route `loader` so
@@ -37,25 +37,25 @@ import { useDocsContext } from "./DocsLayout";
 
 type DocData =
   | { slug: string; notFound: true }
-  | { slug: string; notFound?: false; kind: "markdown" | "json"; raw: string };
+  | { slug: string; notFound?: false; kind: 'markdown' | 'json'; raw: string };
 
 export async function loader({ params }: LoaderFunctionArgs): Promise<DocData> {
-  const slug = params["*"] ?? "";
+  const slug = params['*'] ?? '';
   const entry = getDocEntry(slug);
-  if (!entry) throw new Response("Not found", { status: 404 });
-  if (entry.kind === "json") {
-    return { slug, kind: "json", raw: manifestSchemaRaw };
+  if (!entry) throw new Response('Not found', { status: 404 });
+  if (entry.kind === 'json') {
+    return { slug, kind: 'json', raw: manifestSchemaRaw };
   }
   const load = fileLoader(entry.file);
-  if (!load) throw new Response("Not found", { status: 404 });
-  return { slug, kind: "markdown", raw: await load() };
+  if (!load) throw new Response('Not found', { status: 404 });
+  return { slug, kind: 'markdown', raw: await load() };
 }
 
 export async function clientLoader({
   params,
   serverLoader,
 }: ClientLoaderFunctionArgs): Promise<DocData> {
-  const slug = params["*"] ?? "";
+  const slug = params['*'] ?? '';
   // Unknown slug isn't prerendered → no baked data to fetch; render the 404.
   if (!getDocEntry(slug)) return { slug, notFound: true };
   return serverLoader<DocData>();
@@ -63,7 +63,7 @@ export async function clientLoader({
 
 const DocPage: React.FC = () => {
   const params = useParams();
-  const slug = params["*"] ?? "";
+  const slug = params['*'] ?? '';
   const data = useLoaderData() as DocData;
   const entry = getDocEntry(slug);
   const section = getSectionForSlug(slug);
@@ -72,8 +72,8 @@ const DocPage: React.FC = () => {
   const getContainer = useCallback(() => contentRef.current, [contentRef]);
 
   const notFound = data.notFound === true || !entry;
-  const raw = notFound ? "" : data.raw;
-  const isSchema = !notFound && data.kind === "json";
+  const raw = notFound ? '' : data.raw;
+  const isSchema = !notFound && data.kind === 'json';
 
   // Scroll handling: new slug → top; hash present → anchor (after paint).
   // Both against the docs container — the window never scrolls.
@@ -83,7 +83,7 @@ const DocPage: React.FC = () => {
       const id = decodeURIComponent(location.hash.slice(1));
       // Let the markdown commit first.
       requestAnimationFrame(() => {
-        document.getElementById(id)?.scrollIntoView({ block: "start" });
+        document.getElementById(id)?.scrollIntoView({ block: 'start' });
       });
     } else {
       contentRef.current?.scrollTo({ top: 0 });
@@ -108,12 +108,12 @@ const DocPage: React.FC = () => {
           <>
             <h1>Manifest Schema</h1>
             <p>
-              The machine-checkable contract for a packed dataset's{" "}
+              The machine-checkable contract for a packed dataset's{' '}
               <code>manifest.json</code> (JSON Schema 2020-12). It is pinned in
               CI against the Rust writer (<code>stt_core::pack::Manifest</code>)
-              and the TypeScript reader (<code>PackedManifest</code> in{" "}
-              <code>@poopdeck.gl/core</code>). See the{" "}
-              <Link to="/docs/spec/stt-packed-format">packed format spec</Link>{" "}
+              and the TypeScript reader (<code>PackedManifest</code> in{' '}
+              <code>@poopdeck.gl/core</code>). See the{' '}
+              <Link to="/docs/spec/stt-packed-format">packed format spec</Link>{' '}
               for the semantics.
             </p>
             <CodeBlock code={prettyJson(raw)} language="json" />
@@ -132,7 +132,7 @@ const DocPage: React.FC = () => {
               href={`${GITHUB_BLOB_BASE}docs/${entry.file}`}
               target="_blank"
               rel="noopener noreferrer"
-              style={{ color: "var(--ink-400)" }}
+              style={{ color: 'var(--ink-400)' }}
             >
               Edit this page on GitHub ↗
             </a>
@@ -164,11 +164,11 @@ const NotFound: React.FC<{ slug: string }> = ({ slug }) => (
     <span className="eyebrow">Documentation</span>
     <h1
       className="font-display text-2xl font-bold mt-2"
-      style={{ color: "var(--ink-900)" }}
+      style={{ color: 'var(--ink-900)' }}
     >
       Page not found
     </h1>
-    <p className="text-sm mt-3" style={{ color: "var(--ink-500)" }}>
+    <p className="text-sm mt-3" style={{ color: 'var(--ink-500)' }}>
       No documentation page at <code className="code-block">/docs/{slug}</code>.
       Try one of these sections:
     </p>
@@ -178,7 +178,7 @@ const NotFound: React.FC<{ slug: string }> = ({ slug }) => (
           <Link
             to={`/docs/${s.entries[0].slug}`}
             className="text-sm font-medium"
-            style={{ color: "var(--accent)" }}
+            style={{ color: 'var(--accent)' }}
           >
             {s.label} →
           </Link>

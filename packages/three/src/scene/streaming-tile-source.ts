@@ -33,11 +33,7 @@
  */
 
 import { STTArchive } from '@poopdeck.gl/core';
-import type {
-  ArchiveMetadata,
-  BoundingBox,
-  Tile,
-} from '@poopdeck.gl/core';
+import type { ArchiveMetadata, BoundingBox, Tile } from '@poopdeck.gl/core';
 import {
   SpatiotemporalTileset,
   type BufferedRunway as CoreBufferedRunway,
@@ -114,7 +110,10 @@ export function tileKey(tile: Tile): string {
 }
 
 /** `true` when two tile arrays describe the same resident set (by address). */
-export function residentSetEqual(a: readonly Tile[], b: readonly Tile[]): boolean {
+export function residentSetEqual(
+  a: readonly Tile[],
+  b: readonly Tile[],
+): boolean {
   if (a === b) return true;
   if (a.length !== b.length) return false;
   const seen = new Set<string>();
@@ -133,7 +132,12 @@ export function residentSetEqual(a: readonly Tile[], b: readonly Tile[]): boolea
  */
 export interface DrivableTileset {
   update(
-    viewport: { bounds: BoundingBox; zoom: number; time: number; timeWindow: number },
+    viewport: {
+      bounds: BoundingBox;
+      zoom: number;
+      time: number;
+      timeWindow: number;
+    },
     skipDebounce?: boolean,
   ): number;
   getVisibleTiles(): Tile[];
@@ -323,11 +327,7 @@ function intersectGround(origin: Vector3, dir: Vector3): Vector3 | null {
   if (Math.abs(dir.z) < 1e-9) return null;
   const t = -origin.z / dir.z;
   if (!Number.isFinite(t) || t <= 0) return null;
-  return new Vector3(
-    origin.x + dir.x * t,
-    origin.y + dir.y * t,
-    0,
-  );
+  return new Vector3(origin.x + dir.x * t, origin.y + dir.y * t, 0);
 }
 
 /**
@@ -407,7 +407,9 @@ export function cameraToViewport(
   // clamping — exactly as the deck path does (`Math.floor(viewport.zoom)`). Passing
   // a fractional zoom (e.g. 13.14) to `tileset.update` makes `getAvailableTiles`
   // query a non-existent zoom → zero tiles selected → nothing ever renders.
-  const zoom = Math.floor(zoomFromCamera(proj, camera, viewportPx, centerLat, hits));
+  const zoom = Math.floor(
+    zoomFromCamera(proj, camera, viewportPx, centerLat, hits),
+  );
   const clampedZoom = clamp(
     zoom,
     opts.minZoom ?? -Infinity,
@@ -486,9 +488,18 @@ function clamp(x: number, lo: number, hi: number): number {
  * {@link SpatiotemporalTileset} satisfies it; tests pass a mock.
  */
 export interface RunwayTileset {
-  getBufferedRunway(time: number, direction: 1 | -1, horizonSimMs?: number): CoreBufferedRunway;
-  getBufferedRanges(opts?: { maxRanges?: number }): Array<{ start: number; end: number }>;
-  estimateCost(range: { start: number; end: number }): { bytes: number; tiles: number };
+  getBufferedRunway(
+    time: number,
+    direction: 1 | -1,
+    horizonSimMs?: number,
+  ): CoreBufferedRunway;
+  getBufferedRanges(opts?: {
+    maxRanges?: number;
+  }): Array<{ start: number; end: number }>;
+  estimateCost(range: { start: number; end: number }): {
+    bytes: number;
+    tiles: number;
+  };
   estimateTimeToReadyMs(range: { start: number; end: number }): number | null;
   flushPrefetch(): void;
   setAnimationState?(isAnimating: boolean, speed?: number): void;
@@ -508,7 +519,11 @@ export interface RunwayTileset {
 export class TilesetBufferSource implements BufferSource {
   constructor(private readonly tileset: RunwayTileset) {}
 
-  getBufferedRunway(time: number, direction: 1 | -1, horizonSimMs?: number): BufferedRunway {
+  getBufferedRunway(
+    time: number,
+    direction: 1 | -1,
+    horizonSimMs?: number,
+  ): BufferedRunway {
     const r = this.tileset.getBufferedRunway(time, direction, horizonSimMs);
     return {
       simMs: r.simMs,
@@ -518,11 +533,16 @@ export class TilesetBufferSource implements BufferSource {
     };
   }
 
-  getBufferedRanges(opts?: { maxRanges?: number }): Array<{ start: number; end: number }> {
+  getBufferedRanges(opts?: {
+    maxRanges?: number;
+  }): Array<{ start: number; end: number }> {
     return this.tileset.getBufferedRanges(opts);
   }
 
-  estimateCost(range: { start: number; end: number }): { bytes: number; tiles: number } {
+  estimateCost(range: { start: number; end: number }): {
+    bytes: number;
+    tiles: number;
+  } {
     return this.tileset.estimateCost(range);
   }
 
@@ -548,7 +568,10 @@ export function createTilesetBufferSource(
 ): TilesetBufferSource | null {
   const ts = source.getTileset();
   // The streaming tileset implements the runway surface; narrow structurally.
-  if (ts && typeof (ts as Partial<RunwayTileset>).getBufferedRunway === 'function') {
+  if (
+    ts &&
+    typeof (ts as Partial<RunwayTileset>).getBufferedRunway === 'function'
+  ) {
     return new TilesetBufferSource(ts as unknown as RunwayTileset);
   }
   return null;

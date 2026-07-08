@@ -6,7 +6,15 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { Field, FixedSizeList, Float64, Table, makeData, tableToIPC, vectorFromArray } from 'apache-arrow';
+import {
+  Field,
+  FixedSizeList,
+  Float64,
+  Table,
+  makeData,
+  tableToIPC,
+  vectorFromArray,
+} from 'apache-arrow';
 
 import {
   InlineTileDecoder,
@@ -64,7 +72,10 @@ class FakeWorker {
    * exercise the decompressed-payload hand-back (the `returnPayload` path).
    */
   respond(requestId: number, tile: unknown, payload?: Uint8Array) {
-    const data = payload !== undefined ? { requestId, tile, payload } : { requestId, tile };
+    const data =
+      payload !== undefined
+        ? { requestId, tile, payload }
+        : { requestId, tile };
     this.onmessage?.({ data } as MessageEvent<unknown>);
   }
 
@@ -103,7 +114,10 @@ describe('WorkerTileDecoder respawn', () => {
   });
 
   it('rejects pending requests and replaces the crashed worker', async () => {
-    const decoder = new WorkerTileDecoder({ poolSize: 2, workerUrl: new URL('file:///fake-worker.js') });
+    const decoder = new WorkerTileDecoder({
+      poolSize: 2,
+      workerUrl: new URL('file:///fake-worker.js'),
+    });
     expect(FakeWorker.all).toHaveLength(2);
 
     const compressed = new ArrayBuffer(8);
@@ -131,7 +145,10 @@ describe('WorkerTileDecoder respawn', () => {
   });
 
   it('finalize terminates every live worker exactly once', () => {
-    const decoder = new WorkerTileDecoder({ poolSize: 3, workerUrl: new URL('file:///fake-worker.js') });
+    const decoder = new WorkerTileDecoder({
+      poolSize: 3,
+      workerUrl: new URL('file:///fake-worker.js'),
+    });
     expect(FakeWorker.all).toHaveLength(3);
 
     decoder.finalize();
@@ -176,7 +193,10 @@ describe('WorkerTileDecoder mid-flight cancellation (perf research 2026-07)', ()
   });
 
   it('rejects before ever posting to a worker when the signal is already aborted', async () => {
-    const decoder = new WorkerTileDecoder({ poolSize: 1, workerUrl: new URL('file:///fake-worker.js') });
+    const decoder = new WorkerTileDecoder({
+      poolSize: 1,
+      workerUrl: new URL('file:///fake-worker.js'),
+    });
     const controller = new AbortController();
     controller.abort();
 
@@ -195,7 +215,10 @@ describe('WorkerTileDecoder mid-flight cancellation (perf research 2026-07)', ()
   });
 
   it('aborting mid-flight rejects immediately and posts a cancel message to the owning worker', async () => {
-    const decoder = new WorkerTileDecoder({ poolSize: 1, workerUrl: new URL('file:///fake-worker.js') });
+    const decoder = new WorkerTileDecoder({
+      poolSize: 1,
+      workerUrl: new URL('file:///fake-worker.js'),
+    });
     const controller = new AbortController();
 
     const promise = decoder.decode({
@@ -222,7 +245,10 @@ describe('WorkerTileDecoder mid-flight cancellation (perf research 2026-07)', ()
   });
 
   it('a late worker response after abort is a harmless no-op (no double-settle)', async () => {
-    const decoder = new WorkerTileDecoder({ poolSize: 1, workerUrl: new URL('file:///fake-worker.js') });
+    const decoder = new WorkerTileDecoder({
+      poolSize: 1,
+      workerUrl: new URL('file:///fake-worker.js'),
+    });
     const controller = new AbortController();
 
     const promise = decoder.decode({
@@ -234,7 +260,9 @@ describe('WorkerTileDecoder mid-flight cancellation (perf research 2026-07)', ()
     });
 
     const worker = FakeWorker.all[0];
-    const requestId = worker.postedMessages.find((m) => m.type === 'decode').requestId;
+    const requestId = worker.postedMessages.find(
+      (m) => m.type === 'decode',
+    ).requestId;
 
     controller.abort();
     await expect(promise).rejects.toMatchObject({ name: 'AbortError' });
@@ -245,7 +273,10 @@ describe('WorkerTileDecoder mid-flight cancellation (perf research 2026-07)', ()
   });
 
   it('freed slot bookkeeping: an aborted decode lets a new request pick the same worker as least-pending', async () => {
-    const decoder = new WorkerTileDecoder({ poolSize: 1, workerUrl: new URL('file:///fake-worker.js') });
+    const decoder = new WorkerTileDecoder({
+      poolSize: 1,
+      workerUrl: new URL('file:///fake-worker.js'),
+    });
     const controller = new AbortController();
 
     const first = decoder.decode({
@@ -268,7 +299,9 @@ describe('WorkerTileDecoder mid-flight cancellation (perf research 2026-07)', ()
       compressed: new ArrayBuffer(8),
       compression: Compression.None,
     });
-    const secondMsg = worker.postedMessages.filter((m) => m.type === 'decode').at(-1);
+    const secondMsg = worker.postedMessages
+      .filter((m) => m.type === 'decode')
+      .at(-1);
     expect(secondMsg).toBeDefined();
     worker.respond(secondMsg.requestId, { layers: [] });
     await expect(second).resolves.toEqual({ layers: [] });
@@ -340,7 +373,10 @@ describe('WorkerTileDecoder payload hand-back + error branch', () => {
   });
 
   it('requests returnPayload only when the caller supplies onPayload', async () => {
-    const decoder = new WorkerTileDecoder({ poolSize: 1, workerUrl: new URL('file:///fake-worker.js') });
+    const decoder = new WorkerTileDecoder({
+      poolSize: 1,
+      workerUrl: new URL('file:///fake-worker.js'),
+    });
     const worker = FakeWorker.all[0];
 
     const p1 = decoder.decode({
@@ -369,7 +405,10 @@ describe('WorkerTileDecoder payload hand-back + error branch', () => {
   });
 
   it('invokes onPayload with the worker-returned payload before resolving', async () => {
-    const decoder = new WorkerTileDecoder({ poolSize: 1, workerUrl: new URL('file:///fake-worker.js') });
+    const decoder = new WorkerTileDecoder({
+      poolSize: 1,
+      workerUrl: new URL('file:///fake-worker.js'),
+    });
     const worker = FakeWorker.all[0];
     const payload = Uint8Array.from([1, 2, 3, 4]);
     const seen: Array<'payload' | 'resolve'> = [];
@@ -385,7 +424,9 @@ describe('WorkerTileDecoder payload hand-back + error branch', () => {
       },
     });
 
-    const requestId = worker.postedMessages.find((m) => m.type === 'decode').requestId;
+    const requestId = worker.postedMessages.find(
+      (m) => m.type === 'decode',
+    ).requestId;
     worker.respond(requestId, { layers: [] }, payload);
     const tile = await promise;
     seen.push('resolve');
@@ -398,7 +439,10 @@ describe('WorkerTileDecoder payload hand-back + error branch', () => {
   });
 
   it('rejects with the worker-reported error message', async () => {
-    const decoder = new WorkerTileDecoder({ poolSize: 1, workerUrl: new URL('file:///fake-worker.js') });
+    const decoder = new WorkerTileDecoder({
+      poolSize: 1,
+      workerUrl: new URL('file:///fake-worker.js'),
+    });
     const worker = FakeWorker.all[0];
 
     const promise = decoder.decode({
@@ -408,7 +452,9 @@ describe('WorkerTileDecoder payload hand-back + error branch', () => {
       compression: Compression.None,
     });
 
-    const requestId = worker.postedMessages.find((m) => m.type === 'decode').requestId;
+    const requestId = worker.postedMessages.find(
+      (m) => m.type === 'decode',
+    ).requestId;
     worker.respondError(requestId, 'tableFromIPC blew up');
     await expect(promise).rejects.toThrow('tableFromIPC blew up');
 
@@ -435,7 +481,10 @@ describe('WorkerTileDecoder template-registry distribution (packed v2 §4.4)', (
   ]);
 
   it('broadcasts the registry to EVERY live worker on setTemplates', () => {
-    const decoder = new WorkerTileDecoder({ poolSize: 3, workerUrl: new URL('file:///fake-worker.js') });
+    const decoder = new WorkerTileDecoder({
+      poolSize: 3,
+      workerUrl: new URL('file:///fake-worker.js'),
+    });
     decoder.setTemplates(registry);
     for (const w of FakeWorker.all) {
       const msg = w.postedMessages.find((m) => m.type === 'templates');
@@ -449,14 +498,19 @@ describe('WorkerTileDecoder template-registry distribution (packed v2 §4.4)', (
   });
 
   it('setTemplates MERGES registries — two archives sharing one decoder keep both resolvable', () => {
-    const decoder = new WorkerTileDecoder({ poolSize: 1, workerUrl: new URL('file:///fake-worker.js') });
+    const decoder = new WorkerTileDecoder({
+      poolSize: 1,
+      workerUrl: new URL('file:///fake-worker.js'),
+    });
     const other = new Map<string, Uint8Array>([
       ['ffeeddccbbaa99887766554433221100', Uint8Array.from([9, 9])],
     ]);
     decoder.setTemplates(registry);
     decoder.setTemplates(other); // second archive's install must not clobber
     const worker = FakeWorker.all[0];
-    const last = worker.postedMessages.filter((m) => m.type === 'templates').at(-1);
+    const last = worker.postedMessages
+      .filter((m) => m.type === 'templates')
+      .at(-1);
     expect([...last.templates.keys()].sort()).toEqual(
       [...registry.keys(), ...other.keys()].sort(),
     );
@@ -472,7 +526,10 @@ describe('WorkerTileDecoder template-registry distribution (packed v2 §4.4)', (
   });
 
   it('re-sends the registry to a crash-respawned worker BEFORE any decode dispatch', async () => {
-    const decoder = new WorkerTileDecoder({ poolSize: 1, workerUrl: new URL('file:///fake-worker.js') });
+    const decoder = new WorkerTileDecoder({
+      poolSize: 1,
+      workerUrl: new URL('file:///fake-worker.js'),
+    });
     decoder.setTemplates(registry);
     const first = FakeWorker.all[0];
 
@@ -488,7 +545,10 @@ describe('WorkerTileDecoder template-registry distribution (packed v2 §4.4)', (
     // The replacement worker holds the registry as its FIRST message —
     // the respawn-safety half of the §4.4 contract.
     const replacement = FakeWorker.all.find((w) => !w.terminated)!;
-    expect(replacement.postedMessages[0]).toEqual({ type: 'templates', templates: registry });
+    expect(replacement.postedMessages[0]).toEqual({
+      type: 'templates',
+      templates: registry,
+    });
 
     // A decode dispatched to the replacement necessarily queues AFTER it.
     const next = decoder.decode({
@@ -499,7 +559,9 @@ describe('WorkerTileDecoder template-registry distribution (packed v2 §4.4)', (
     });
     const types = replacement.postedMessages.map((m) => m.type);
     expect(types.indexOf('templates')).toBeLessThan(types.indexOf('decode'));
-    const decodeMsg = replacement.postedMessages.find((m) => m.type === 'decode');
+    const decodeMsg = replacement.postedMessages.find(
+      (m) => m.type === 'decode',
+    );
     replacement.respond(decodeMsg.requestId, { layers: [] });
     await expect(next).resolves.toEqual({ layers: [] });
 
@@ -507,16 +569,25 @@ describe('WorkerTileDecoder template-registry distribution (packed v2 §4.4)', (
   });
 
   it('a worker spawned AFTER setTemplates still receives the registry (spawn-time send)', () => {
-    const decoder = new WorkerTileDecoder({ poolSize: 2, workerUrl: new URL('file:///fake-worker.js') });
+    const decoder = new WorkerTileDecoder({
+      poolSize: 2,
+      workerUrl: new URL('file:///fake-worker.js'),
+    });
     decoder.setTemplates(registry);
     FakeWorker.all[1].crash('boom');
     const spawned = FakeWorker.all[2];
-    expect(spawned.postedMessages[0]).toEqual({ type: 'templates', templates: registry });
+    expect(spawned.postedMessages[0]).toEqual({
+      type: 'templates',
+      templates: registry,
+    });
     decoder.finalize();
   });
 
   it('forwards the declared formatVersion on every decode message (authority rule)', async () => {
-    const decoder = new WorkerTileDecoder({ poolSize: 1, workerUrl: new URL('file:///fake-worker.js') });
+    const decoder = new WorkerTileDecoder({
+      poolSize: 1,
+      workerUrl: new URL('file:///fake-worker.js'),
+    });
     const worker = FakeWorker.all[0];
     const p = decoder.decode({
       id: { z: 0, x: 0, y: 0, t: 0 },
@@ -555,12 +626,18 @@ describe('InlineTileDecoder template-registry merge (two v2 archives, one decode
     const frame = buildV2Frame([
       {
         name: 'default',
-        refCore: { kind: REF_KIND_TEMPLATE_HASH, hash: templateHashBytes(template) },
+        refCore: {
+          kind: REF_KIND_TEMPLATE_HASH,
+          hash: templateHashBytes(template),
+        },
         refProps: { kind: REF_KIND_NO_PROPS },
         sections: [[SECTION_CORE_BATCH, tail]],
       },
     ]);
-    return { frame, registry: new Map([[templateHashHex(template), template]]) };
+    return {
+      frame,
+      registry: new Map([[templateHashHex(template), template]]),
+    };
   }
 
   it('decodes tiles from BOTH archives after their registries install sequentially', async () => {
@@ -582,9 +659,13 @@ describe('InlineTileDecoder template-registry merge (two v2 archives, one decode
     // Before the union-merge fix, B's install REPLACED the registry and A's
     // template hash stopped resolving ("not in the dataset's registry").
     const tileA = await decode(a.frame, 1);
-    expect(Array.from(tileA.layers[0].features.numericProps.speed)).toEqual([1.5]);
+    expect(Array.from(tileA.layers[0].features.numericProps.speed)).toEqual([
+      1.5,
+    ]);
     const tileB = await decode(b.frame, 2);
-    expect(Array.from(tileB.layers[0].features.numericProps.heading)).toEqual([1.5]);
+    expect(Array.from(tileB.layers[0].features.numericProps.heading)).toEqual([
+      1.5,
+    ]);
   });
 });
 

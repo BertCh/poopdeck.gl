@@ -15,7 +15,12 @@
  * down, 0 = horizon → `cesiumPitch = viewPitch - 90`. `heading = bearing`.
  */
 
-import { GlobeProjection, worldUnitsPerPixel, zoomForWorldUnitsPerPixel, type ViewState } from '@poopdeck.gl/core/geo';
+import {
+  GlobeProjection,
+  worldUnitsPerPixel,
+  zoomForWorldUnitsPerPixel,
+  type ViewState,
+} from '@poopdeck.gl/core/geo';
 
 const DEG2RAD = Math.PI / 180;
 const RAD2DEG = 180 / Math.PI;
@@ -23,7 +28,9 @@ const DEFAULT_VIEWPORT_HEIGHT = 800;
 const DEFAULT_FOV_RAD = 60 * DEG2RAD;
 
 // The WGS84 globe drives the zoom↔ground-resolution math (matches Cesium's frame).
-const GLOBE = new GlobeProjection({ longitude: 0, latitude: 0 }, undefined, { datum: 'wgs84' });
+const GLOBE = new GlobeProjection({ longitude: 0, latitude: 0 }, undefined, {
+  datum: 'wgs84',
+});
 
 export interface CesiumViewOptions {
   /** Viewport height in CSS px — sets the zoom→height scale. @default 800 */
@@ -44,10 +51,18 @@ export interface CesiumView {
 }
 
 /** Fully-resolved view state (every field present), the inverse's return shape. */
-export type ResolvedViewState = Required<Pick<ViewState, 'longitude' | 'latitude' | 'zoom' | 'pitch' | 'bearing' | 'roll'>>;
+export type ResolvedViewState = Required<
+  Pick<
+    ViewState,
+    'longitude' | 'latitude' | 'zoom' | 'pitch' | 'bearing' | 'roll'
+  >
+>;
 
 /** ViewState → Cesium camera params. Pure (no Cesium runtime). */
-export function viewStateToCesiumView(v: ViewState, opts: CesiumViewOptions = {}): CesiumView {
+export function viewStateToCesiumView(
+  v: ViewState,
+  opts: CesiumViewOptions = {},
+): CesiumView {
   const viewportHeight = opts.viewportHeight ?? DEFAULT_VIEWPORT_HEIGHT;
   const fov = opts.fovRadians ?? DEFAULT_FOV_RAD;
   const wupp = worldUnitsPerPixel(GLOBE, v.zoom, v.latitude);
@@ -63,7 +78,10 @@ export function viewStateToCesiumView(v: ViewState, opts: CesiumViewOptions = {}
 }
 
 /** Cesium camera params → ViewState. Pure inverse of {@link viewStateToCesiumView}. */
-export function cesiumViewToViewState(view: CesiumView, opts: CesiumViewOptions = {}): ResolvedViewState {
+export function cesiumViewToViewState(
+  view: CesiumView,
+  opts: CesiumViewOptions = {},
+): ResolvedViewState {
   const viewportHeight = opts.viewportHeight ?? DEFAULT_VIEWPORT_HEIGHT;
   const fov = opts.fovRadians ?? DEFAULT_FOV_RAD;
   const wupp = (view.height * 2 * Math.tan(fov / 2)) / viewportHeight;

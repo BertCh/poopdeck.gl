@@ -12,10 +12,17 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { STTArchive, parseStyleHints, suggestedDomainFor } from '../src/archive';
+import {
+  STTArchive,
+  parseStyleHints,
+  suggestedDomainFor,
+} from '../src/archive';
 import { encodeDirectory } from '../src/directory';
 import type { StyleHints } from '../src/types';
-import { packedFetch, type InMemoryPackedDataset } from './helpers/packed-fixture';
+import {
+  packedFetch,
+  type InMemoryPackedDataset,
+} from './helpers/packed-fixture';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -211,12 +218,22 @@ function buildSyntheticArchive(metadata: unknown): InMemoryPackedDataset {
     format: 'stt-packed',
     formatVersion: 1,
     compression: 'none',
-    directory: { key: 'index/dir.sttd', length: indexBytes.byteLength, directoryVersion: 5 },
+    directory: {
+      key: 'index/dir.sttd',
+      length: indexBytes.byteLength,
+      directoryVersion: 5,
+    },
     packs: [{ key: 'packs/p0.sttp', length: pack.byteLength }],
     metadata,
   };
-  objects.set('manifest.json', new TextEncoder().encode(JSON.stringify(manifest)));
-  return { objects, manifestUrl: `mem://style-hints-${synthSeq++}/manifest.json` };
+  objects.set(
+    'manifest.json',
+    new TextEncoder().encode(JSON.stringify(manifest)),
+  );
+  return {
+    objects,
+    manifestUrl: `mem://style-hints-${synthSeq++}/manifest.json`,
+  };
 }
 
 const BASE_METADATA = {
@@ -228,23 +245,40 @@ const BASE_METADATA = {
 
 describe('style hints: metadata round-trip', () => {
   it('decodes style_hints from archive metadata JSON', async () => {
-    const ds = buildSyntheticArchive({ ...BASE_METADATA, style_hints: WIRE_FIXTURE });
-    const archive = new STTArchive({ url: ds.manifestUrl, fetch: packedFetch(ds) });
+    const ds = buildSyntheticArchive({
+      ...BASE_METADATA,
+      style_hints: WIRE_FIXTURE,
+    });
+    const archive = new STTArchive({
+      url: ds.manifestUrl,
+      fetch: packedFetch(ds),
+    });
     const meta = await archive.getMetadata();
     expect(meta.styleHints).toEqual(EXPECTED_HINTS);
-    expect(suggestedDomainFor(meta.styleHints, 'magnitude')).toEqual([0.1, 5.3]);
+    expect(suggestedDomainFor(meta.styleHints, 'magnitude')).toEqual([
+      0.1, 5.3,
+    ]);
   });
 
   it('leaves styleHints undefined for archives without the block', async () => {
     const ds = buildSyntheticArchive(BASE_METADATA);
-    const archive = new STTArchive({ url: ds.manifestUrl, fetch: packedFetch(ds) });
+    const archive = new STTArchive({
+      url: ds.manifestUrl,
+      fetch: packedFetch(ds),
+    });
     const meta = await archive.getMetadata();
     expect(meta.styleHints).toBeUndefined();
   });
 
   it('never throws on a malformed block — metadata still parses', async () => {
-    const ds = buildSyntheticArchive({ ...BASE_METADATA, style_hints: 'garbage' });
-    const archive = new STTArchive({ url: ds.manifestUrl, fetch: packedFetch(ds) });
+    const ds = buildSyntheticArchive({
+      ...BASE_METADATA,
+      style_hints: 'garbage',
+    });
+    const archive = new STTArchive({
+      url: ds.manifestUrl,
+      fetch: packedFetch(ds),
+    });
     const meta = await archive.getMetadata();
     expect(meta.styleHints).toBeUndefined();
     expect(meta.name).toBe('hints');

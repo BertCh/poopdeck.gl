@@ -105,7 +105,9 @@ function basePointTile() {
     endTimes: [1, 2, 3],
     timeOffset: 0,
   });
-  tile.layers[0].features.numericProps['mag'] = new Float32Array([1, 2, 3]) as any;
+  tile.layers[0].features.numericProps['mag'] = new Float32Array([
+    1, 2, 3,
+  ]) as any;
   return tile;
 }
 
@@ -144,7 +146,8 @@ function basePolygonTile() {
 }
 
 async function makePointLayer(props: Record<string, any> = {}) {
-  const { AnimatedPointLayer } = await import('../src/layers/core/animated-point-layer');
+  const { AnimatedPointLayer } =
+    await import('../src/layers/core/animated-point-layer');
   const layer: any = Object.create((AnimatedPointLayer as any).prototype);
   layer.props = {
     id: 'pts',
@@ -167,7 +170,8 @@ async function makePointLayer(props: Record<string, any> = {}) {
 }
 
 async function makePathLayer(props: Record<string, any> = {}) {
-  const { AnimatedPathLayer } = await import('../src/layers/core/animated-path-layer');
+  const { AnimatedPathLayer } =
+    await import('../src/layers/core/animated-path-layer');
   const layer: any = Object.create((AnimatedPathLayer as any).prototype);
   layer.props = {
     id: 'paths',
@@ -190,7 +194,8 @@ async function makePathLayer(props: Record<string, any> = {}) {
 }
 
 async function makeTripsLayer(props: Record<string, any> = {}) {
-  const { AnimatedTripsLayer } = await import('../src/layers/trips/animated-trips-layer');
+  const { AnimatedTripsLayer } =
+    await import('../src/layers/trips/animated-trips-layer');
   const layer: any = Object.create((AnimatedTripsLayer as any).prototype);
   layer.props = {
     id: 'trips',
@@ -215,7 +220,8 @@ async function makeTripsLayer(props: Record<string, any> = {}) {
 }
 
 async function makePolygonLayer(props: Record<string, any> = {}) {
-  const { AnimatedPolygonLayer } = await import('../src/layers/core/animated-polygon-layer');
+  const { AnimatedPolygonLayer } =
+    await import('../src/layers/core/animated-polygon-layer');
   const layer: any = Object.create((AnimatedPolygonLayer as any).prototype);
   layer.props = {
     id: 'poly',
@@ -239,7 +245,8 @@ async function makePolygonLayer(props: Record<string, any> = {}) {
 }
 
 async function makeHeatmapLayer(props: Record<string, any> = {}) {
-  const { AnimatedHeatmapLayer } = await import('../src/layers/summary/heatmap-layer');
+  const { AnimatedHeatmapLayer } =
+    await import('../src/layers/summary/heatmap-layer');
   const layer: any = Object.create((AnimatedHeatmapLayer as any).prototype);
   layer.props = {
     id: 'hm',
@@ -270,11 +277,37 @@ describe('user extensions merge into the internal extension list', () => {
   // internal DataFilterExtension. Each layer copy-pastes its OWN extension-merge
   // path, so this runs the assertion against every one.
   it.each([
-    { name: 'AnimatedPointLayer', make: makePointLayer, tile: basePointTile, via: 'render' as const },
-    { name: 'AnimatedPathLayer', make: makePathLayer, tile: basePathTile, via: 'build' as const },
-    { name: 'AnimatedTripsLayer', make: makeTripsLayer, tile: basePathTile, via: 'build' as const },
-    { name: 'AnimatedPolygonLayer', make: makePolygonLayer, tile: basePolygonTile, via: 'build' as const },
-    { name: 'AnimatedHeatmapLayer', make: makeHeatmapLayer, tile: basePointTile, via: 'render' as const, heatmap: true },
+    {
+      name: 'AnimatedPointLayer',
+      make: makePointLayer,
+      tile: basePointTile,
+      via: 'render' as const,
+    },
+    {
+      name: 'AnimatedPathLayer',
+      make: makePathLayer,
+      tile: basePathTile,
+      via: 'build' as const,
+    },
+    {
+      name: 'AnimatedTripsLayer',
+      make: makeTripsLayer,
+      tile: basePathTile,
+      via: 'build' as const,
+    },
+    {
+      name: 'AnimatedPolygonLayer',
+      make: makePolygonLayer,
+      tile: basePolygonTile,
+      via: 'build' as const,
+    },
+    {
+      name: 'AnimatedHeatmapLayer',
+      make: makeHeatmapLayer,
+      tile: basePointTile,
+      via: 'render' as const,
+      heatmap: true,
+    },
   ])(
     '$name: appends user extensions after the internal extension(s)',
     async ({ make, tile, via, heatmap }) => {
@@ -466,13 +499,14 @@ describe('AnimatedPointLayer ScatterplotLayer pass-throughs', () => {
   it('cumulative mode: a column strokeWidth warns and is not baked (slabs pack a fixed schema)', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
-      const layer = await makePointLayer({ cumulative: true, strokeWidth: 'mag' });
+      const layer = await makePointLayer({
+        cumulative: true,
+        strokeWidth: 'mag',
+      });
       const tile = basePointTile();
       const built = layer.buildTileData(tile, tile.layers[0]);
       expect(built.data.attributes.getLineWidth).toBeUndefined();
-      expect(warn).toHaveBeenCalledWith(
-        expect.stringContaining('cumulative'),
-      );
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('cumulative'));
     } finally {
       warn.mockRestore();
     }
@@ -485,7 +519,12 @@ describe('AnimatedPointLayer ScatterplotLayer pass-throughs', () => {
 
 describe('AnimatedPolygonLayer SolidPolygonLayer pass-throughs', () => {
   it('forwards wireframe, material, and elevationScale', async () => {
-    const material = { ambient: 0.5, diffuse: 0.5, shininess: 32, specularColor: [60, 64, 70] };
+    const material = {
+      ambient: 0.5,
+      diffuse: 0.5,
+      shininess: 32,
+      specularColor: [60, 64, 70],
+    };
     const layer = await makePolygonLayer({
       extruded: true,
       wireframe: true,
@@ -500,7 +539,11 @@ describe('AnimatedPolygonLayer SolidPolygonLayer pass-throughs', () => {
   });
 
   it('an elevationScale change invalidates cached sublayers', async () => {
-    const layer = await makePolygonLayer({ extruded: true, elevation: 10, elevationScale: 1 });
+    const layer = await makePolygonLayer({
+      extruded: true,
+      elevation: 10,
+      elevationScale: 1,
+    });
     layer.state = { tiles: [basePolygonTile()] };
     const [first] = layer.renderLayers();
     expect(layer.renderLayers()[0]).toBe(first);
@@ -594,17 +637,26 @@ describe('AnimatedPolygonLayer categorical colorMapping', () => {
       [10, 10, 10, 255],
       [20, 20, 20, 255],
     ];
-    const layer = await makePolygonLayer({ fillColor: 'severity', colorPalette: palette });
+    const layer = await makePolygonLayer({
+      fillColor: 'severity',
+      colorPalette: palette,
+    });
     const tile = severityPolygonTile(['moderate', 'extreme'], [0, 1]);
     expect(layer.prepareTile(tile, tile.layers[0]).gpuPalette).toBe(palette);
   });
 
   it('a colorMapping change re-prepares the tile (styleKey invalidation)', async () => {
-    const layer = await makePolygonLayer({ fillColor: 'severity', colorMapping: MAPPING });
+    const layer = await makePolygonLayer({
+      fillColor: 'severity',
+      colorMapping: MAPPING,
+    });
     const tile = severityPolygonTile(['moderate', 'extreme'], [0, 1]);
     const first = layer.prepareTile(tile, tile.layers[0]);
     expect(layer.prepareTile(tile, tile.layers[0])).toBe(first); // cached
-    layer.props.colorMapping = { moderate: [1, 2, 3, 255], extreme: [4, 5, 6, 255] };
+    layer.props.colorMapping = {
+      moderate: [1, 2, 3, 255],
+      extreme: [4, 5, 6, 255],
+    };
     const second = layer.prepareTile(tile, tile.layers[0]);
     expect(second).not.toBe(first);
     expect(second.gpuPalette).toEqual([

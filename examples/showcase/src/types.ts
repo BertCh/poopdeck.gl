@@ -156,10 +156,10 @@ export interface Dataset {
     bearing: number;
   };
   legend?: DatasetLegend;
-  
+
   /** Enable 3D visualization with altitude/elevation */
   use3D?: boolean;
-  
+
   /** Use GlobeView instead of Mercator projection (for global satellite data) */
   useGlobe?: boolean;
 
@@ -205,10 +205,10 @@ export interface Dataset {
 
   /** Property name containing elevation data (e.g., 'altitude', 'elevation') */
   elevationProperty?: string;
-  
+
   /** Scale factor for elevation values (e.g., for unit conversion) */
   elevationScale?: number;
-  
+
   /** Property name for categorical coloring (passed to layers as colorProperty) */
   colorProperty?: string;
 
@@ -286,7 +286,7 @@ export interface Dataset {
 
   /** Stroke width clamp in pixels. */
   lineWidthMinPixels?: number;
-  
+
   /** Property name for weight (used in heatmap layers) */
   weightProperty?: string;
 
@@ -986,7 +986,10 @@ export function tileLoadingProps(timeWindow: number, playbackSpeed: number) {
   const PREFETCH_REAL_SECONDS = 5;
   return {
     enablePrefetch: true,
-    prefetchAhead: Math.max(timeWindow, playbackSpeed * 1000 * PREFETCH_REAL_SECONDS),
+    prefetchAhead: Math.max(
+      timeWindow,
+      playbackSpeed * 1000 * PREFETCH_REAL_SECONDS,
+    ),
     prefetchSteps: 4,
     // Browsers cap to ~6 concurrent connections per HTTP/1.1 origin; asking
     // for more just queues inside the network layer and deepens the decode
@@ -994,6 +997,3 @@ export function tileLoadingProps(timeWindow: number, playbackSpeed: number) {
     maxRequests: 12,
   };
 }
-
-
-

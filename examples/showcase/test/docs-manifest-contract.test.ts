@@ -35,20 +35,30 @@ describe('docs manifest ↔ glob contract', () => {
   it('every bundled file is either routed or explicitly excluded', () => {
     const routed = new Set([...manifestFiles, ...EXCLUDED_DOC_FILES]);
     for (const file of bundled) {
-      expect(routed.has(file), `bundled docs/${file} is unrouted and not in EXCLUDED_DOC_FILES`).toBe(true);
+      expect(
+        routed.has(file),
+        `bundled docs/${file} is unrouted and not in EXCLUDED_DOC_FILES`,
+      ).toBe(true);
     }
   });
 
   it('the glob does NOT bundle internal docs (roadmap, audits)', () => {
     for (const file of bundled) {
-      expect(file.startsWith('roadmap/'), `internal doc bundled: ${file}`).toBe(false);
-      expect(/audit|sota-eval|upstream-library/.test(file), `internal doc bundled: ${file}`).toBe(false);
+      expect(file.startsWith('roadmap/'), `internal doc bundled: ${file}`).toBe(
+        false,
+      );
+      expect(
+        /audit|sota-eval|upstream-library/.test(file),
+        `internal doc bundled: ${file}`,
+      ).toBe(false);
     }
   });
 
   it('json entries resolve to files on disk', () => {
     for (const e of flatDocEntries.filter((x) => x.kind === 'json')) {
-      const p = fileURLToPath(new URL(`../../../docs/${e.file}`, import.meta.url));
+      const p = fileURLToPath(
+        new URL(`../../../docs/${e.file}`, import.meta.url),
+      );
       expect(existsSync(p), `${e.file} missing on disk`).toBe(true);
     }
   });
@@ -58,7 +68,9 @@ describe('docs manifest ↔ glob contract', () => {
     expect(new Set(slugs).size).toBe(slugs.length);
     for (const e of flatDocEntries) {
       if (e.kind === 'json') continue;
-      expect(e.file, `${e.slug} should mirror its file path`).toBe(`${e.slug}.md`);
+      expect(e.file, `${e.slug} should mirror its file path`).toBe(
+        `${e.slug}.md`,
+      );
     }
   });
 
@@ -79,11 +91,15 @@ describe('docs manifest ↔ glob contract', () => {
 
 describe('docs link rewriting', () => {
   it('rewrites sibling and cross-section .md links to /docs routes', () => {
-    expect(rewriteHref('./animated-path-layer.md', 'api/animated-point-layer.md')).toEqual({
+    expect(
+      rewriteHref('./animated-path-layer.md', 'api/animated-point-layer.md'),
+    ).toEqual({
       kind: 'internal',
       to: '/docs/api/animated-path-layer',
     });
-    expect(rewriteHref('../spec/stt-packed-format.md', 'api/cli-reference.md')).toEqual({
+    expect(
+      rewriteHref('../spec/stt-packed-format.md', 'api/cli-reference.md'),
+    ).toEqual({
       kind: 'internal',
       to: '/docs/spec/stt-packed-format',
     });
@@ -98,14 +114,19 @@ describe('docs link rewriting', () => {
       kind: 'internal',
       to: '/docs/spec/manifest-schema',
     });
-    expect(rewriteHref('./manifest.schema.json', 'spec/stt-packed-format.md')).toEqual({
+    expect(
+      rewriteHref('./manifest.schema.json', 'spec/stt-packed-format.md'),
+    ).toEqual({
       kind: 'internal',
       to: '/docs/spec/manifest-schema',
     });
   });
 
   it('sends repo-source links escaping docs/ to GitHub (branch main)', () => {
-    const r = rewriteHref('../../packages/layers/src/animated-point-layer.ts', 'api/animated-point-layer.md');
+    const r = rewriteHref(
+      '../../packages/layers/src/animated-point-layer.ts',
+      'api/animated-point-layer.md',
+    );
     expect(r.kind).toBe('external');
     expect((r as { href: string }).href).toBe(
       'https://github.com/BertCh/spatiotemporal-tiles/blob/main/packages/layers/src/animated-point-layer.ts',
@@ -113,7 +134,9 @@ describe('docs link rewriting', () => {
   });
 
   it('passes through absolute URLs and fragments', () => {
-    expect(rewriteHref('https://geoarrow.org/format.html', 'api/binary-features.md')).toEqual({
+    expect(
+      rewriteHref('https://geoarrow.org/format.html', 'api/binary-features.md'),
+    ).toEqual({
       kind: 'external',
       href: 'https://geoarrow.org/format.html',
     });
@@ -124,7 +147,9 @@ describe('docs link rewriting', () => {
   });
 
   it('preserves fragments on internal links', () => {
-    expect(rewriteHref('./concepts.md#temporal-lod', 'intro/concepts.md')).toEqual({
+    expect(
+      rewriteHref('./concepts.md#temporal-lod', 'intro/concepts.md'),
+    ).toEqual({
       kind: 'internal',
       to: '/docs/intro/concepts#temporal-lod',
     });

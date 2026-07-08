@@ -36,7 +36,11 @@ import {
   type Polyline,
   type Scene,
 } from 'cesium';
-import { getFeatureProperties, type BinaryFeatures, type Tile } from '@poopdeck.gl/core';
+import {
+  getFeatureProperties,
+  type BinaryFeatures,
+  type Tile,
+} from '@poopdeck.gl/core';
 import { GlobeProjection } from '@poopdeck.gl/core/geo';
 import { buildTripIndex, trimTrail, type Trip } from '@poopdeck.gl/core/trips';
 import type { RGBA255 } from '@poopdeck.gl/core/style';
@@ -83,7 +87,12 @@ const TRAIL_FABRIC_SOURCE = `czm_material czm_getMaterial(czm_materialInput mate
 }`;
 
 function makeTrailMaterial(rgba: RGBA255, fade: boolean): Material {
-  const color = new Color(rgba[0] / 255, rgba[1] / 255, rgba[2] / 255, (rgba[3] ?? 255) / 255);
+  const color = new Color(
+    rgba[0] / 255,
+    rgba[1] / 255,
+    rgba[2] / 255,
+    (rgba[3] ?? 255) / 255,
+  );
   if (!fade) return Material.fromType('Color', { color });
   return new Material({
     fabric: {
@@ -96,7 +105,9 @@ function makeTrailMaterial(rgba: RGBA255, fade: boolean): Material {
 }
 
 // The WGS84 globe — Cesium's native frame.
-const GLOBE = new GlobeProjection({ longitude: 0, latitude: 0 }, undefined, { datum: 'wgs84' });
+const GLOBE = new GlobeProjection({ longitude: 0, latitude: 0 }, undefined, {
+  datum: 'wgs84',
+});
 
 export class CesiumTripsLayer implements SttRenderNode {
   readonly id: string;
@@ -118,7 +129,10 @@ export class CesiumTripsLayer implements SttRenderNode {
     this.id = options.id ?? 'stt-cesium-trips';
     this.scene = scene;
     this.trailLength = options.trailLength ?? 300_000;
-    this.colorMode = options.color ?? { type: 'constant', color: DEFAULT_COLOR };
+    this.colorMode = options.color ?? {
+      type: 'constant',
+      color: DEFAULT_COLOR,
+    };
     this.width = options.width ?? 3;
     this.fadeTrail = options.fadeTrail ?? true;
     this.collection = new PolylineCollection();
@@ -135,7 +149,9 @@ export class CesiumTripsLayer implements SttRenderNode {
     // convention as every other layer in this package).
     this.timeOrigin = lineStringTimeOrigin(tiles);
 
-    const index = buildTripIndex(tiles, GLOBE, this.timeOrigin, { precision: 'f64' });
+    const index = buildTripIndex(tiles, GLOBE, this.timeOrigin, {
+      precision: 'f64',
+    });
     this.origin = index.origin;
 
     let maxVerts = 0;
@@ -152,7 +168,11 @@ export class CesiumTripsLayer implements SttRenderNode {
         width: this.width,
         material,
         show: false,
-        id: { layerId: this.id, binary: trip.binary, featureIndex: trip.featureIndex },
+        id: {
+          layerId: this.id,
+          binary: trip.binary,
+          featureIndex: trip.featureIndex,
+        },
       });
       this.entries.push({ trip, polyline, pool: [], active: false });
       if (trip.numVerts > maxVerts) maxVerts = trip.numVerts;
@@ -200,9 +220,16 @@ export class CesiumTripsLayer implements SttRenderNode {
   /** Hit-test → the shared `SttPickResult`. */
   pick(cssX: number, cssY: number): SttPickResult | null {
     const picked = this.scene.pick(new Cartesian2(cssX, cssY)) as
-      | { id?: { layerId: string; binary: BinaryFeatures; featureIndex: number } }
+      | {
+          id?: {
+            layerId: string;
+            binary: BinaryFeatures;
+            featureIndex: number;
+          };
+        }
       | undefined;
-    if (!defined(picked) || !picked.id || picked.id.layerId !== this.id) return null;
+    if (!defined(picked) || !picked.id || picked.id.layerId !== this.id)
+      return null;
     const { binary, featureIndex } = picked.id;
     const dims = binary.positionDimensions ?? 2;
     const v0 = binary.startIndices ? binary.startIndices[featureIndex] : 0;
@@ -210,7 +237,10 @@ export class CesiumTripsLayer implements SttRenderNode {
       object: getFeatureProperties(binary, featureIndex),
       index: featureIndex,
       layerId: this.id,
-      coordinate: [binary.positions[v0 * dims], binary.positions[v0 * dims + 1]],
+      coordinate: [
+        binary.positions[v0 * dims],
+        binary.positions[v0 * dims + 1],
+      ],
       screen: [cssX, cssY],
     };
   }

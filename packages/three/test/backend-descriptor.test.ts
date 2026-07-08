@@ -56,7 +56,10 @@ describe('threeBackend descriptor — structural conformance gate', () => {
   it('(c) declares every LayerKind key; every unsupported kind carries a reason', () => {
     for (const kind of LAYER_KINDS) {
       const support = threeBackend.layerKinds[kind];
-      expect(support, `missing declaration for layer kind "${kind}"`).toBeDefined();
+      expect(
+        support,
+        `missing declaration for layer kind "${kind}"`,
+      ).toBeDefined();
       if (!support.supported) {
         expect(
           support.reason,
@@ -65,14 +68,19 @@ describe('threeBackend descriptor — structural conformance gate', () => {
       }
     }
     // No stray keys beyond the frozen vocabulary.
-    expect(Object.keys(threeBackend.layerKinds).sort()).toEqual([...LAYER_KINDS].sort());
+    expect(Object.keys(threeBackend.layerKinds).sort()).toEqual(
+      [...LAYER_KINDS].sort(),
+    );
   });
 
   it('(a) every supported kind maps to a real renderer class exported from ../src/index', () => {
     for (const kind of LAYER_KINDS) {
       if (!threeBackend.layerKinds[kind].supported) continue;
       const exportName = KIND_TO_EXPORT[kind];
-      expect(exportName, `no export mapping for supported kind "${kind}"`).toBeTruthy();
+      expect(
+        exportName,
+        `no export mapping for supported kind "${kind}"`,
+      ).toBeTruthy();
       const cls = exports[exportName as string];
       expect(
         typeof cls,
@@ -85,7 +93,10 @@ describe('threeBackend descriptor — structural conformance gate', () => {
     for (const kind of LAYER_KINDS) {
       const support = threeBackend.layerKinds[kind];
       if (support.supported) continue;
-      expect(support.fallbackKind, `unsupported "${kind}" should name a fallback`).toBeTruthy();
+      expect(
+        support.fallbackKind,
+        `unsupported "${kind}" should name a fallback`,
+      ).toBeTruthy();
       const target = threeBackend.layerKinds[support.fallbackKind as LayerKind];
       expect(
         target?.supported,
@@ -136,7 +147,10 @@ describe('threeBackend descriptor — structural conformance gate', () => {
     for (const mode of threeBackend.timeFilterModes) {
       const name = MODE_TO_EXPORT[mode];
       expect(name, `no export mapping for mode "${mode}"`).toBeTruthy();
-      expect(typeof exports[name], `mode "${mode}" expects export "${name}"`).toBe('function');
+      expect(
+        typeof exports[name],
+        `mode "${mode}" expects export "${name}"`,
+      ).toBe('function');
     }
   });
 });

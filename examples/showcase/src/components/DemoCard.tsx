@@ -1,8 +1,8 @@
-import React from "react";
-import { Link } from "react-router";
-import { SourceLogo } from "./SourceLogo";
-import { VizBadge } from "./VizBadge";
-import type { CatalogEntry } from "../content/demoMeta";
+import React from 'react';
+import { Link } from 'react-router';
+import { SourceLogo } from './SourceLogo';
+import { VizBadge } from './VizBadge';
+import type { CatalogEntry } from '../content/demoMeta';
 
 /**
  * Catalog card shared by `/demos` and the "Related demos" rail on per-demo
@@ -15,25 +15,25 @@ const DemoCard: React.FC<{ entry: CatalogEntry }> = ({ entry }) => {
     <Link
       to={`/demos/${dataset.id}`}
       className="group block rounded-md p-4 -m-1 transition-colors"
-      style={{ border: "1px solid transparent" }}
+      style={{ border: '1px solid transparent' }}
       onMouseOver={(e) => {
-        e.currentTarget.style.borderColor = "var(--hairline)";
-        e.currentTarget.style.background = "var(--surface)";
+        e.currentTarget.style.borderColor = 'var(--hairline)';
+        e.currentTarget.style.background = 'var(--surface)';
       }}
       onMouseOut={(e) => {
-        e.currentTarget.style.borderColor = "transparent";
-        e.currentTarget.style.background = "transparent";
+        e.currentTarget.style.borderColor = 'transparent';
+        e.currentTarget.style.background = 'transparent';
       }}
     >
       <h3
         className="text-sm font-medium transition-colors group-hover:[color:var(--accent)]"
-        style={{ color: "var(--ink-900)" }}
+        style={{ color: 'var(--ink-900)' }}
       >
         {dataset.name}
       </h3>
       <p
         className="text-xs mt-1.5 line-clamp-2"
-        style={{ color: "var(--ink-500)", lineHeight: 1.5 }}
+        style={{ color: 'var(--ink-500)', lineHeight: 1.5 }}
       >
         {meta.tagline ?? dataset.description}
       </p>

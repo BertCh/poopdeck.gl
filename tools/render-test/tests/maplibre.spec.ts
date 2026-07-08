@@ -42,12 +42,13 @@ function fatalErrors(sink: ErrorSink): string[] {
 async function openMaplibreDemo(page: Page): Promise<void> {
   await page.goto(MAPLIBRE_PATH, { waitUntil: 'domcontentloaded' });
   // The MapLibre map mounts inside the page; wait for *some* canvas to exist.
-  await page.locator('canvas').first().waitFor({ state: 'attached', timeout: 60_000 });
   await page
-    .waitForLoadState('networkidle', { timeout: 45_000 })
-    .catch(() => {
-      /* tile loads may never fully idle; that's fine */
-    });
+    .locator('canvas')
+    .first()
+    .waitFor({ state: 'attached', timeout: 60_000 });
+  await page.waitForLoadState('networkidle', { timeout: 45_000 }).catch(() => {
+    /* tile loads may never fully idle; that's fine */
+  });
   // A few frames for the STT layer's archive read + tileset to settle.
   await page.waitForTimeout(4000);
 }
@@ -61,13 +62,15 @@ test.describe('@poopdeck.gl/maplibre showcase rendering', () => {
     const canvas = page.locator('canvas').first();
     await expect(canvas).toBeVisible();
 
-    await mapViewport(page).screenshot({
-      path: outputPath('maplibre-01-canvas.png'),
-    }).catch(async () => {
-      // The MaplibrePage uses a slightly different container; fall back to
-      // a full-page screenshot if our standard helper doesn't find it.
-      await page.screenshot({ path: outputPath('maplibre-01-canvas.png') });
-    });
+    await mapViewport(page)
+      .screenshot({
+        path: outputPath('maplibre-01-canvas.png'),
+      })
+      .catch(async () => {
+        // The MaplibrePage uses a slightly different container; fall back to
+        // a full-page screenshot if our standard helper doesn't find it.
+        await page.screenshot({ path: outputPath('maplibre-01-canvas.png') });
+      });
 
     const stats = await canvasPixelStats(page);
     if (!stats) {
@@ -84,7 +87,10 @@ test.describe('@poopdeck.gl/maplibre showcase rendering', () => {
         }
         return null;
       });
-      expect(fallback, 'No canvas with non-zero dimensions found').not.toBeNull();
+      expect(
+        fallback,
+        'No canvas with non-zero dimensions found',
+      ).not.toBeNull();
       return;
     }
 
@@ -98,6 +104,9 @@ test.describe('@poopdeck.gl/maplibre showcase rendering', () => {
     ).toBeGreaterThan(10);
 
     const noisy = fatalErrors(sink);
-    expect(noisy, `Rendering errors on MapLibre route:\n${noisy.join('\n')}`).toHaveLength(0);
+    expect(
+      noisy,
+      `Rendering errors on MapLibre route:\n${noisy.join('\n')}`,
+    ).toHaveLength(0);
   });
 });

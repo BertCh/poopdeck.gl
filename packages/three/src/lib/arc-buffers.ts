@@ -94,18 +94,29 @@ function featureColor(b: BinaryFeatures, f: number, mode: ArcColorMode): RGBA {
     return col ? rampColorAt(col[f], mode.domain, mode.range) : mode.fallback;
   }
   const cat = b.categoricalProps[mode.property];
-  const label = cat && cat.indices[f] !== 0xffff ? cat.categories[cat.indices[f]] : undefined;
+  const label =
+    cat && cat.indices[f] !== 0xffff
+      ? cat.categories[cat.indices[f]]
+      : undefined;
   return resolveCategoryColor(label, mode.mapping, mode.fallback);
 }
 
 /** Collect LineString layers + total arc (feature) count. */
-function collectArcLayers(tiles: Tile[]): { layers: BinaryFeatures[]; arcCount: number } {
+function collectArcLayers(tiles: Tile[]): {
+  layers: BinaryFeatures[];
+  arcCount: number;
+} {
   const layers: BinaryFeatures[] = [];
   let arcCount = 0;
   for (const tile of tiles) {
     for (const tl of tile.layers) {
       const b = tl.features;
-      if (!b.featureCount || b.geometryType !== GeometryType.LineString || !b.startIndices) continue;
+      if (
+        !b.featureCount ||
+        b.geometryType !== GeometryType.LineString ||
+        !b.startIndices
+      )
+        continue;
       layers.push(b);
       arcCount += b.featureCount;
     }
@@ -139,8 +150,14 @@ export function buildArcBuffers(
   });
   if (arcCount === 0) return empty();
 
-  const sourceMode: ArcColorMode = opts.sourceColor ?? { type: 'constant', color: DEFAULT_SOURCE };
-  const targetMode: ArcColorMode = opts.targetColor ?? { type: 'constant', color: DEFAULT_TARGET };
+  const sourceMode: ArcColorMode = opts.sourceColor ?? {
+    type: 'constant',
+    color: DEFAULT_SOURCE,
+  };
+  const targetMode: ArcColorMode = opts.targetColor ?? {
+    type: 'constant',
+    color: DEFAULT_TARGET,
+  };
   const zLift = opts.zLift ?? 0;
   const elevScale = opts.elevationScale ?? 1;
   const constHeight = opts.height ?? 1;
@@ -148,7 +165,11 @@ export function buildArcBuffers(
   // RTC origin = first feature's source (first) vertex, projected (absolute world).
   const first = layers[0];
   const fdims = first.positionDimensions ?? 2;
-  const origin = projection.project(first.positions[0], first.positions[1], zLift);
+  const origin = projection.project(
+    first.positions[0],
+    first.positions[1],
+    zLift,
+  );
 
   const posSource = new Float32Array(arcCount * 3);
   const posTarget = new Float32Array(arcCount * 3);
@@ -157,14 +178,22 @@ export function buildArcBuffers(
   const starts = new Float32Array(arcCount);
   const ends = new Float32Array(arcCount);
   const heights = new Float32Array(arcCount);
-  let minX = Infinity, minY = Infinity, minZ = Infinity;
-  let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+  let minX = Infinity,
+    minY = Infinity,
+    minZ = Infinity;
+  let maxX = -Infinity,
+    maxY = -Infinity,
+    maxZ = -Infinity;
 
   let a = 0; // arc instance index
   for (const b of layers) {
     const dims = b.positionDimensions ?? fdims;
-    const elev = opts.elevationProperty ? b.numericProps[opts.elevationProperty] : undefined;
-    const heightCol = opts.heightProperty ? b.numericProps[opts.heightProperty] : undefined;
+    const elev = opts.elevationProperty
+      ? b.numericProps[opts.elevationProperty]
+      : undefined;
+    const heightCol = opts.heightProperty
+      ? b.numericProps[opts.heightProperty]
+      : undefined;
     const rebase = b.timeOffset - timeOrigin;
     const si = b.startIndices!;
     for (let f = 0; f < b.featureCount; f++) {
@@ -173,31 +202,62 @@ export function buildArcBuffers(
       const srcBase = srcVertex * dims;
       const tgtBase = tgtVertex * dims;
 
-      const srcZ = (elev ? elev[f] * elevScale : dims > 2 ? b.positions[srcBase + 2] : 0) + zLift;
-      const tgtZ = (elev ? elev[f] * elevScale : dims > 2 ? b.positions[tgtBase + 2] : 0) + zLift;
-      const ps = projection.project(b.positions[srcBase], b.positions[srcBase + 1], srcZ);
-      const pt = projection.project(b.positions[tgtBase], b.positions[tgtBase + 1], tgtZ);
-      const sx = ps[0] - origin[0], sy = ps[1] - origin[1], sz = ps[2] - origin[2];
-      const tx = pt[0] - origin[0], ty = pt[1] - origin[1], tz = pt[2] - origin[2];
+      const srcZ =
+        (elev ? elev[f] * elevScale : dims > 2 ? b.positions[srcBase + 2] : 0) +
+        zLift;
+      const tgtZ =
+        (elev ? elev[f] * elevScale : dims > 2 ? b.positions[tgtBase + 2] : 0) +
+        zLift;
+      const ps = projection.project(
+        b.positions[srcBase],
+        b.positions[srcBase + 1],
+        srcZ,
+      );
+      const pt = projection.project(
+        b.positions[tgtBase],
+        b.positions[tgtBase + 1],
+        tgtZ,
+      );
+      const sx = ps[0] - origin[0],
+        sy = ps[1] - origin[1],
+        sz = ps[2] - origin[2];
+      const tx = pt[0] - origin[0],
+        ty = pt[1] - origin[1],
+        tz = pt[2] - origin[2];
 
-      posSource[a * 3] = sx; posSource[a * 3 + 1] = sy; posSource[a * 3 + 2] = sz;
-      posTarget[a * 3] = tx; posTarget[a * 3 + 1] = ty; posTarget[a * 3 + 2] = tz;
+      posSource[a * 3] = sx;
+      posSource[a * 3 + 1] = sy;
+      posSource[a * 3 + 2] = sz;
+      posTarget[a * 3] = tx;
+      posTarget[a * 3 + 1] = ty;
+      posTarget[a * 3 + 2] = tz;
 
       const cs = featureColor(b, f, sourceMode);
       const ct = featureColor(b, f, targetMode);
-      colorSource[a * 4] = cs[0] / 255; colorSource[a * 4 + 1] = cs[1] / 255;
-      colorSource[a * 4 + 2] = cs[2] / 255; colorSource[a * 4 + 3] = (cs[3] ?? 255) / 255;
-      colorTarget[a * 4] = ct[0] / 255; colorTarget[a * 4 + 1] = ct[1] / 255;
-      colorTarget[a * 4 + 2] = ct[2] / 255; colorTarget[a * 4 + 3] = (ct[3] ?? 255) / 255;
+      colorSource[a * 4] = cs[0] / 255;
+      colorSource[a * 4 + 1] = cs[1] / 255;
+      colorSource[a * 4 + 2] = cs[2] / 255;
+      colorSource[a * 4 + 3] = (cs[3] ?? 255) / 255;
+      colorTarget[a * 4] = ct[0] / 255;
+      colorTarget[a * 4 + 1] = ct[1] / 255;
+      colorTarget[a * 4 + 2] = ct[2] / 255;
+      colorTarget[a * 4 + 3] = (ct[3] ?? 255) / 255;
 
       starts[a] = (b.startTimes ? b.startTimes[f] : 0) + rebase;
       ends[a] = (b.endTimes ? b.endTimes[f] : 0) + rebase;
       heights[a] = heightCol ? heightCol[f] : constHeight;
 
       // bbox tracks both endpoints (the raised mid is bounded by their span).
-      for (const [x, y, zz] of [[sx, sy, sz], [tx, ty, tz]] as const) {
-        if (x < minX) minX = x; if (y < minY) minY = y; if (zz < minZ) minZ = zz;
-        if (x > maxX) maxX = x; if (y > maxY) maxY = y; if (zz > maxZ) maxZ = zz;
+      for (const [x, y, zz] of [
+        [sx, sy, sz],
+        [tx, ty, tz],
+      ] as const) {
+        if (x < minX) minX = x;
+        if (y < minY) minY = y;
+        if (zz < minZ) minZ = zz;
+        if (x > maxX) maxX = x;
+        if (y > maxY) maxY = y;
+        if (zz > maxZ) maxZ = zz;
       }
       a++;
     }
@@ -205,7 +265,13 @@ export function buildArcBuffers(
 
   return {
     count: arcCount,
-    posSource, posTarget, colorSource, colorTarget, starts, ends, heights,
+    posSource,
+    posTarget,
+    colorSource,
+    colorTarget,
+    starts,
+    ends,
+    heights,
     origin,
     bbox: { min: [minX, minY, minZ], max: [maxX, maxY, maxZ] },
   };

@@ -4,7 +4,10 @@
 import { describe, it, expect } from 'vitest';
 import { GeometryType } from '../src/types';
 import type { BinaryFeatures } from '../src/types';
-import { deriveSourceTargetPositions, tessellateFeature } from '../src/render/geometry';
+import {
+  deriveSourceTargetPositions,
+  tessellateFeature,
+} from '../src/render/geometry';
 
 function lineBf(partial: Partial<BinaryFeatures>): BinaryFeatures {
   return {
@@ -85,7 +88,9 @@ describe('tessellateFeature', () => {
       triangles: new Uint32Array([0, 1, 2, 0, 2, 3, 10, 11, 12]),
       triangleOffsets: new Uint32Array([0, 6, 9]),
     });
-    expect(Array.from(tessellateFeature(binary, 0)!)).toEqual([0, 1, 2, 0, 2, 3]);
+    expect(Array.from(tessellateFeature(binary, 0)!)).toEqual([
+      0, 1, 2, 0, 2, 3,
+    ]);
     expect(Array.from(tessellateFeature(binary, 1)!)).toEqual([10, 11, 12]);
   });
 
@@ -99,7 +104,8 @@ describe('tessellateFeature', () => {
     });
     const idx = tessellateFeature(binary, 0)!;
     expect(idx.length).toBe(6);
-    for (const i of idx) expect(i).toBeGreaterThanOrEqual(0), expect(i).toBeLessThan(4);
+    for (const i of idx)
+      (expect(i).toBeGreaterThanOrEqual(0), expect(i).toBeLessThan(4));
   });
 
   it('shifts fallback indices by the feature start (second feature)', () => {
@@ -111,7 +117,8 @@ describe('tessellateFeature', () => {
       startIndices: new Uint32Array([0, 3, 7]),
     });
     const idx = tessellateFeature(binary, 1)!;
-    for (const i of idx) expect(i).toBeGreaterThanOrEqual(3), expect(i).toBeLessThan(7);
+    for (const i of idx)
+      (expect(i).toBeGreaterThanOrEqual(3), expect(i).toBeLessThan(7));
   });
 
   it('prefers the fallback when preferPrebaked is false', () => {
@@ -123,7 +130,9 @@ describe('tessellateFeature', () => {
       triangles: new Uint32Array([0, 1, 2]),
       triangleOffsets: new Uint32Array([0, 3]),
     });
-    expect(tessellateFeature(binary, 0, { preferPrebaked: false })!.length).toBe(6); // earcut, not the 3-index prebaked
+    expect(
+      tessellateFeature(binary, 0, { preferPrebaked: false })!.length,
+    ).toBe(6); // earcut, not the 3-index prebaked
   });
 
   it('returns null for degenerate / non-polygon features', () => {

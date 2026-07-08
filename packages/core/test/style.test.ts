@@ -35,29 +35,49 @@ const GREY: RGBA255 = [120, 120, 120, 255];
 
 describe('resolveCategoryColor (three + box-tracks parity)', () => {
   const mapping = { car: RED, bus: BLUE };
-  it('maps a known label', () => expect(resolveCategoryColor('car', mapping, GREY)).toEqual(RED));
-  it('falls back on unmapped', () => expect(resolveCategoryColor('boat', mapping, GREY)).toEqual(GREY));
-  it('falls back on undefined', () => expect(resolveCategoryColor(undefined, mapping, GREY)).toEqual(GREY));
+  it('maps a known label', () =>
+    expect(resolveCategoryColor('car', mapping, GREY)).toEqual(RED));
+  it('falls back on unmapped', () =>
+    expect(resolveCategoryColor('boat', mapping, GREY)).toEqual(GREY));
+  it('falls back on undefined', () =>
+    expect(resolveCategoryColor(undefined, mapping, GREY)).toEqual(GREY));
   it('falls back on empty string (box-tracks convention)', () =>
     expect(resolveCategoryColor('', mapping, GREY)).toEqual(GREY));
-  it('falls back with null mapping', () => expect(resolveCategoryColor('car', null, GREY)).toEqual(GREY));
+  it('falls back with null mapping', () =>
+    expect(resolveCategoryColor('car', null, GREY)).toEqual(GREY));
 });
 
 describe('expandCategoricalColors', () => {
-  const cat = { indices: new Uint16Array([0, 1, NULL_CATEGORY_INDEX]), categories: ['car', 'bus'] };
+  const cat = {
+    indices: new Uint16Array([0, 1, NULL_CATEGORY_INDEX]),
+    categories: ['car', 'bus'],
+  };
   const binary = bf({ featureCount: 3, categoricalProps: { kind: cat } });
   const mapping = { car: RED, bus: BLUE };
 
   it('u8 keyed output matches deck/maplibre expandMappedColors', () => {
     const out = expandCategoricalColors(
       binary,
-      { property: 'kind', colorMapping: mapping, colorMappingDefault: [0, 0, 0, 0] },
+      {
+        property: 'kind',
+        colorMapping: mapping,
+        colorMappingDefault: [0, 0, 0, 0],
+      },
       'u8',
     ) as Uint8Array;
     expect(Array.from(out)).toEqual([
-      255, 0, 0, 255, // car
-      0, 0, 255, 255, // bus
-      0, 0, 0, 0, // NULL index → default (transparent)
+      255,
+      0,
+      0,
+      255, // car
+      0,
+      0,
+      255,
+      255, // bus
+      0,
+      0,
+      0,
+      0, // NULL index → default (transparent)
     ]);
   });
 
@@ -76,7 +96,12 @@ describe('expandCategoricalColors', () => {
   it("onMissing 'fill' paints every feature with the default when the prop is absent", () => {
     const out = expandCategoricalColors(
       bf({ featureCount: 2 }),
-      { property: 'missing', colorMapping: mapping, colorMappingDefault: GREY, onMissing: 'fill' },
+      {
+        property: 'missing',
+        colorMapping: mapping,
+        colorMappingDefault: GREY,
+        onMissing: 'fill',
+      },
       'u8',
     ) as Uint8Array;
     expect(Array.from(out)).toEqual([120, 120, 120, 255, 120, 120, 120, 255]);
@@ -84,7 +109,11 @@ describe('expandCategoricalColors', () => {
 
   it("onMissing 'null' (default) returns null when the prop is absent", () => {
     expect(
-      expandCategoricalColors(bf({ featureCount: 2 }), { property: 'missing', colorMapping: mapping }, 'u8'),
+      expandCategoricalColors(
+        bf({ featureCount: 2 }),
+        { property: 'missing', colorMapping: mapping },
+        'u8',
+      ),
     ).toBeNull();
   });
 
@@ -100,7 +129,11 @@ describe('expandCategoricalColors', () => {
 
   it('requireMappingOrPalette guard returns null with neither mapping nor palette', () => {
     expect(
-      expandCategoricalColors(binary, { property: 'kind', requireMappingOrPalette: true }, 'u8'),
+      expandCategoricalColors(
+        binary,
+        { property: 'kind', requireMappingOrPalette: true },
+        'u8',
+      ),
     ).toBeNull();
   });
 
@@ -125,11 +158,22 @@ describe('expandRgbColumns', () => {
     },
   });
   it('reads three columns (u8)', () => {
-    const out = expandRgbColumns(binary, ['r', 'g', 'b'], 'u8', 200) as Uint8Array;
+    const out = expandRgbColumns(
+      binary,
+      ['r', 'g', 'b'],
+      'u8',
+      200,
+    ) as Uint8Array;
     expect(Array.from(out)).toEqual([255, 128, 0, 200, 0, 255, 64, 200]);
   });
   it('fills fallback when a column is missing', () => {
-    const out = expandRgbColumns(binary, ['r', 'g', 'nope'], 'u8', 255, [1, 2, 3, 255]) as Uint8Array;
+    const out = expandRgbColumns(
+      binary,
+      ['r', 'g', 'nope'],
+      'u8',
+      255,
+      [1, 2, 3, 255],
+    ) as Uint8Array;
     expect(Array.from(out.slice(0, 4))).toEqual([1, 2, 3, 255]);
   });
 });
@@ -148,7 +192,11 @@ describe('rampColorAt + expandRampColors', () => {
   });
   it('expands a numeric column, fallback when absent', () => {
     const binary = bf({ featureCount: 1, numericProps: {} });
-    const out = expandRampColors(binary, { property: 'v', domain: [0, 10], range, fallback: [9, 9, 9, 255] }, 'u8') as Uint8Array;
+    const out = expandRampColors(
+      binary,
+      { property: 'v', domain: [0, 10], range, fallback: [9, 9, 9, 255] },
+      'u8',
+    ) as Uint8Array;
     expect(Array.from(out)).toEqual([9, 9, 9, 255]);
   });
 });

@@ -18,7 +18,7 @@ npm install @poopdeck.gl/react react react-dom
 deck-free:
 
 ```ts
-import { HoverPreview } from "@poopdeck.gl/react/hover-preview";
+import { HoverPreview } from '@poopdeck.gl/react/hover-preview';
 ```
 
 ## Styling
@@ -26,7 +26,7 @@ import { HoverPreview } from "@poopdeck.gl/react/hover-preview";
 The components render styled after ONE import — no Tailwind required:
 
 ```ts
-import "@poopdeck.gl/react/styles.css";
+import '@poopdeck.gl/react/styles.css';
 ```
 
 That stylesheet carries the utility classes the components use (compiled at
@@ -36,12 +36,12 @@ tokens anywhere in your CSS:
 
 ```css
 :root {
-  --accent: #e11d48;        /* play button, active states, scrubber fill */
-  --surface: #16181d;       /* control surfaces */
-  --ink-900: #f5f7fa;       /* strongest text */
-  --ink-500: #9aa3b2;       /* labels */
-  --ink-400: #6b7280;       /* captions */
-  --hairline: #2a2e37;      /* separators / outlines */
+  --accent: #e11d48; /* play button, active states, scrubber fill */
+  --surface: #16181d; /* control surfaces */
+  --ink-900: #f5f7fa; /* strongest text */
+  --ink-500: #9aa3b2; /* labels */
+  --ink-400: #6b7280; /* captions */
+  --hairline: #2a2e37; /* separators / outlines */
   --accent-soft: rgba(225, 29, 72, 0.12);
   --page-bg: #0b0d12;
 }
@@ -53,7 +53,7 @@ default, so register the package explicitly (and define the theme tokens
 above):
 
 ```css
-@import "tailwindcss";
+@import 'tailwindcss';
 @source "../node_modules/@poopdeck.gl/react/src";
 ```
 
@@ -62,10 +62,14 @@ Individual elements also accept `className` overrides.
 ## Hello world — usePlayback + PlaybackControls
 
 ```tsx
-import { usePlayback, PlaybackControls } from "@poopdeck.gl/react";
-import "@poopdeck.gl/react/styles.css";
+import { usePlayback, PlaybackControls } from '@poopdeck.gl/react';
+import '@poopdeck.gl/react/styles.css';
 
-function Transport({ timeRange }: { timeRange: { start: number; end: number } }) {
+function Transport({
+  timeRange,
+}: {
+  timeRange: { start: number; end: number };
+}) {
   const pb = usePlayback({ timeRange, baseSpeed: 3600 });
   return <PlaybackControls {...pb} />;
 }

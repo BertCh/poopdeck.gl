@@ -58,7 +58,9 @@ const KIND_TO_EXPORT: Partial<Record<LayerKind, string>> = {
 const exports = barrel as Record<string, unknown>;
 
 /** Kinds this descriptor claims are supported. */
-const supportedKinds = LAYER_KINDS.filter((k) => deckBackend.layerKinds[k].supported);
+const supportedKinds = LAYER_KINDS.filter(
+  (k) => deckBackend.layerKinds[k].supported,
+);
 
 describe('deckBackend — the descriptor is exported', () => {
   it('re-exports deckBackend from the package index', () => {
@@ -70,15 +72,20 @@ describe('deckBackend — the descriptor is exported', () => {
 describe('deckBackend — every supported kind maps to a real export (a)', () => {
   it('every supported kind has a KIND_TO_EXPORT entry', () => {
     for (const kind of supportedKinds) {
-      expect(KIND_TO_EXPORT[kind], `KIND_TO_EXPORT.${kind}`).toBeTypeOf('string');
+      expect(KIND_TO_EXPORT[kind], `KIND_TO_EXPORT.${kind}`).toBeTypeOf(
+        'string',
+      );
     }
   });
 
-  it.each(supportedKinds)('kind "%s" is backed by a live exported class', (kind) => {
-    const name = KIND_TO_EXPORT[kind]!;
-    const cls = exports[name];
-    expect(cls, `barrel.${name} (kind=${kind})`).toBeTypeOf('function');
-  });
+  it.each(supportedKinds)(
+    'kind "%s" is backed by a live exported class',
+    (kind) => {
+      const name = KIND_TO_EXPORT[kind]!;
+      const cls = exports[name];
+      expect(cls, `barrel.${name} (kind=${kind})`).toBeTypeOf('function');
+    },
+  );
 });
 
 describe('deckBackend — no over-claim vs. actual exports (b)', () => {
@@ -96,7 +103,9 @@ describe('deckBackend — no over-claim vs. actual exports (b)', () => {
     // gate proves catalog coverage, not GPU pixels — those are the deferred
     // nightly readback). The gate still fails on any capability/mode the
     // descriptor claims that is absent from these sets.
-    const provenCaps = new Set<Capability>(CAPABILITIES.filter((c) => deckBackend.capabilities[c]));
+    const provenCaps = new Set<Capability>(
+      CAPABILITIES.filter((c) => deckBackend.capabilities[c]),
+    );
     const provenModes = new Set<TimeFilterMode>(deckBackend.timeFilterModes);
 
     const evidence: ConformanceEvidence = {

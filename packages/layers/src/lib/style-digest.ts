@@ -124,7 +124,10 @@ export function extensionsDigest(
   if (!extensions || extensions.length === 0) return '';
   return extensions
     .map((e) => {
-      const ext = e as { constructor?: { name?: string }; opts?: unknown } | null;
+      const ext = e as {
+        constructor?: { name?: string };
+        opts?: unknown;
+      } | null;
       return `${ext?.constructor?.name ?? '?'}${structuralDigest(ext?.opts)}`;
     })
     .join(',');

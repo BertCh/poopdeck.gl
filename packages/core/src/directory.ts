@@ -350,7 +350,9 @@ export function decodeDirectory(bytes: Uint8Array): DirectoryEntry[] {
   }
 
   if (cursor !== n) {
-    throw new Error(`STT directory: runs covered ${cursor} entries, expected ${n}`);
+    throw new Error(
+      `STT directory: runs covered ${cursor} entries, expected ${n}`,
+    );
   }
 
   // Optional trailing covering section(s). A pre-covering archive's buffer ends
@@ -455,7 +457,7 @@ export function encodeDirectory(entries: DirectoryEncodeEntry[]): Uint8Array {
       sorted[j].offset === head.offset &&
       sorted[j].length === head.length &&
       sorted[j].uncompressedSize === head.uncompressedSize &&
-      ((sorted[j].crc32c ?? 0) >>> 0) === crc
+      (sorted[j].crc32c ?? 0) >>> 0 === crc
     ) {
       j++;
     }
@@ -492,8 +494,14 @@ export function encodeDirectory(entries: DirectoryEncodeEntry[]): Uint8Array {
     if (!Number.isInteger(e.y) || e.y < 0 || e.y > 0xffffffff) {
       throw new Error(`encodeDirectory: y ${e.y} out of u32 range`);
     }
-    if (!Number.isInteger(e.featureCount) || e.featureCount < 0 || e.featureCount > 0xffffffff) {
-      throw new Error(`encodeDirectory: featureCount ${e.featureCount} out of u32 range`);
+    if (
+      !Number.isInteger(e.featureCount) ||
+      e.featureCount < 0 ||
+      e.featureCount > 0xffffffff
+    ) {
+      throw new Error(
+        `encodeDirectory: featureCount ${e.featureCount} out of u32 range`,
+      );
     }
     const z = BigInt(e.zoom);
     const h = BigInt(e.hilbert ?? 0);
@@ -539,7 +547,12 @@ export function encodeDirectory(entries: DirectoryEncodeEntry[]): Uint8Array {
     }
     putUvarint(out, BigInt(r.length));
     putUvarint(out, BigInt(r.uncompressed));
-    out.push(r.crc & 0xff, (r.crc >>> 8) & 0xff, (r.crc >>> 16) & 0xff, (r.crc >>> 24) & 0xff);
+    out.push(
+      r.crc & 0xff,
+      (r.crc >>> 8) & 0xff,
+      (r.crc >>> 16) & 0xff,
+      (r.crc >>> 24) & 0xff,
+    );
     expectedOffset = r.offset + BigInt(r.length);
   }
 

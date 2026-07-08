@@ -69,7 +69,11 @@ const ALIGNED_FRAME_FLAG = 0x8000;
 
 /** Parse the layer frame into its constituent Arrow IPC streams. */
 function parseLayerFrame(payload: Uint8Array): RawLayer[] {
-  const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
+  const view = new DataView(
+    payload.buffer,
+    payload.byteOffset,
+    payload.byteLength,
+  );
   let pos = 0;
   const readU16 = () => {
     const v = view.getUint16(pos, true);
@@ -171,7 +175,8 @@ interface RawLayerV2 {
 /** 16 raw hash bytes → 32 lowercase hex chars (the registry key form). */
 function hashBytesToHex(bytes: Uint8Array): string {
   let hex = '';
-  for (let i = 0; i < bytes.length; i++) hex += bytes[i].toString(16).padStart(2, '0');
+  for (let i = 0; i < bytes.length; i++)
+    hex += bytes[i].toString(16).padStart(2, '0');
   return hex;
 }
 
@@ -183,9 +188,17 @@ function hashBytesToHex(bytes: Uint8Array): string {
  * EMPTY (arrow-rs) or silently loses zero-copy (arrow-js) — the exact
  * failure the spike proved, so it must be a loud, named error instead.
  */
-function spliceIpc(template: Uint8Array, tail: Uint8Array, what: string): Uint8Array {
+function spliceIpc(
+  template: Uint8Array,
+  tail: Uint8Array,
+  what: string,
+): Uint8Array {
   const startsWithContinuation = (b: Uint8Array): boolean =>
-    b.length >= 4 && b[0] === 0xff && b[1] === 0xff && b[2] === 0xff && b[3] === 0xff;
+    b.length >= 4 &&
+    b[0] === 0xff &&
+    b[1] === 0xff &&
+    b[2] === 0xff &&
+    b[3] === 0xff;
   if (!startsWithContinuation(template)) {
     throw new Error(
       `${what}: schema template does not start with an encapsulated Arrow message`,
@@ -282,7 +295,10 @@ function validateTileMeta(meta: unknown, label: string): TileMetaJson {
     }
     for (const [column, affine] of Object.entries(m.qa as object)) {
       if (!isAffinePair(affine)) {
-        fail(`'qa' affine for column "${column}" must be an [o, s] pair of finite numbers`, affine);
+        fail(
+          `'qa' affine for column "${column}" must be an [o, s] pair of finite numbers`,
+          affine,
+        );
       }
     }
   }
@@ -298,7 +314,11 @@ function parseLayerFrameV2(
   tileLabel: string,
   templates: TemplateRegistry | undefined,
 ): RawLayerV2[] {
-  const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
+  const view = new DataView(
+    payload.buffer,
+    payload.byteOffset,
+    payload.byteLength,
+  );
   let pos = 0;
   const readU8 = () => {
     if (pos + 1 > payload.byteLength) {
@@ -515,7 +535,11 @@ const STT_QUANT_ATTR_META_KEY = 'stt:qa';
  */
 const warnedMalformedQuantMeta = new Set<string>();
 
-function warnMalformedQuantMetaOnce(key: string, message: string, err: unknown): void {
+function warnMalformedQuantMetaOnce(
+  key: string,
+  message: string,
+  err: unknown,
+): void {
   if (warnedMalformedQuantMeta.has(key)) return;
   warnedMalformedQuantMeta.add(key);
   console.warn(message, err);
@@ -594,7 +618,11 @@ function extractGeometry(
   geomVec: Vector,
   kind: GeometryType,
   affine?: QuantAffine,
-): { positions: Float64Array; startIndices?: Uint32Array; positionDimensions: 2 | 3 } {
+): {
+  positions: Float64Array;
+  startIndices?: Uint32Array;
+  positionDimensions: 2 | 3;
+} {
   const geom = chunk(geomVec);
 
   if (kind === GeometryType.Point) {
@@ -605,7 +633,13 @@ function extractGeometry(
     const coords: ArrayLike<number> = geom.children[0].values;
     const start = geom.offset * dims;
     return {
-      positions: readCoordRun(coords, start, start + geom.length * dims, dims, affine),
+      positions: readCoordRun(
+        coords,
+        start,
+        start + geom.length * dims,
+        dims,
+        affine,
+      ),
       positionDimensions: dims,
     };
   }
@@ -621,7 +655,13 @@ function extractGeometry(
     for (let i = 0; i <= n; i++) {
       startIndices[i] = featureOffsets[geom.offset + i] - base;
     }
-    const positions = readCoordRun(coords, base * 2, featureOffsets[geom.offset + n] * 2, 2, affine);
+    const positions = readCoordRun(
+      coords,
+      base * 2,
+      featureOffsets[geom.offset + n] * 2,
+      2,
+      affine,
+    );
     return { positions, startIndices, positionDimensions: 2 };
   }
 
@@ -648,7 +688,13 @@ function extractGeometry(
     const ringIdx = featureOffsets[geom.offset + i];
     startIndices[i] = ringOffsets[ringIdx] - startVertex;
   }
-  const positions = readCoordRun(coords, startVertex * 2, endVertex * 2, 2, affine);
+  const positions = readCoordRun(
+    coords,
+    startVertex * 2,
+    endVertex * 2,
+    2,
+    affine,
+  );
   return { positions, startIndices, positionDimensions: 2 };
 }
 
@@ -785,9 +831,15 @@ function resolveMetaFromSchema(table: Table): ResolvedTileMeta {
   // correct numbers (the Int64 path ignores both).
   return {
     timeOffset,
-    vertexTimeOrigin: Number(table.schema.metadata.get('stt:vertex_time_origin_ms') ?? 0),
-    vertexTimeStep: Number(table.schema.metadata.get('stt:vertex_time_step_ms') ?? 1),
-    vertexValueBuckets: Number(table.schema.metadata.get('stt:vertex_value_buckets') ?? 0),
+    vertexTimeOrigin: Number(
+      table.schema.metadata.get('stt:vertex_time_origin_ms') ?? 0,
+    ),
+    vertexTimeStep: Number(
+      table.schema.metadata.get('stt:vertex_time_step_ms') ?? 1,
+    ),
+    vertexValueBuckets: Number(
+      table.schema.metadata.get('stt:vertex_value_buckets') ?? 0,
+    ),
     qa,
   };
 }
@@ -835,12 +887,14 @@ function rustExp17(v: number): string {
  */
 function tileMetaSchemaEntries(meta: TileMetaJson): Array<[string, string]> {
   const entries: Array<[string, string]> = [];
-  if (meta.t0 !== undefined) entries.push(['stt:time_offset_ms', String(meta.t0)]);
+  if (meta.t0 !== undefined)
+    entries.push(['stt:time_offset_ms', String(meta.t0)]);
   if (meta.vt) {
     entries.push(['stt:vertex_time_origin_ms', String(meta.vt[0])]);
     entries.push(['stt:vertex_time_step_ms', String(meta.vt[1])]);
   }
-  if (meta.vb !== undefined) entries.push(['stt:vertex_value_buckets', String(meta.vb)]);
+  if (meta.vb !== undefined)
+    entries.push(['stt:vertex_value_buckets', String(meta.vb)]);
   return entries;
 }
 
@@ -888,7 +942,12 @@ function mergeCorePropsTables(
   }
   const coreBatch = core.batches[0];
   const propsBatch = props.batches[0];
-  if (!coreBatch || !propsBatch || core.batches.length !== 1 || props.batches.length !== 1) {
+  if (
+    !coreBatch ||
+    !propsBatch ||
+    core.batches.length !== 1 ||
+    props.batches.length !== 1
+  ) {
     throw new Error(
       `${what}: expected exactly one record batch per spliced stream ` +
         `(got ${core.batches.length} core / ${props.batches.length} props)`,
@@ -931,7 +990,11 @@ function injectTileMetaIntoCoreTable(core: Table, meta: TileMetaJson): Table {
   const entries = tileMetaSchemaEntries(meta);
   if (entries.length === 0) return core;
   const metadata = new Map([...core.schema.metadata, ...entries]);
-  const schema = new Schema(core.schema.fields, metadata, core.schema.dictionaries);
+  const schema = new Schema(
+    core.schema.fields,
+    metadata,
+    core.schema.dictionaries,
+  );
   return new Table(
     schema,
     core.batches.map((b) => new RecordBatch(schema, b.data)),
@@ -939,7 +1002,10 @@ function injectTileMetaIntoCoreTable(core: Table, meta: TileMetaJson): Table {
 }
 
 /** Convert one Arrow RecordBatch table into deck.gl binary features. */
-function tableToBinaryFeatures(table: Table, meta: ResolvedTileMeta): BinaryFeatures {
+function tableToBinaryFeatures(
+  table: Table,
+  meta: ResolvedTileMeta,
+): BinaryFeatures {
   const kind = geometryKind(table);
   const featureCount = table.numRows;
 
@@ -993,7 +1059,8 @@ function tableToBinaryFeatures(table: Table, meta: ResolvedTileMeta): BinaryFeat
 
   // --- geometry ---
   const geomVec = table.getChild('geometry');
-  if (!geomVec) throw new Error('STT tile layer is missing its geometry column');
+  if (!geomVec)
+    throw new Error('STT tile layer is missing its geometry column');
   // Quantized tiles store i32 grid indices + an affine; reconstruct Float64
   // here so every downstream layer still sees standard lon/lat positions.
   const quantAffine = readQuantAffine(table);
@@ -1016,7 +1083,9 @@ function tableToBinaryFeatures(table: Table, meta: ResolvedTileMeta): BinaryFeat
   );
 
   // --- per-vertex scalar values (e.g. SST) ---
-  const vertexValues = extractVertexFloats(table.getChild('vertex_value') ?? null);
+  const vertexValues = extractVertexFloats(
+    table.getChild('vertex_value') ?? null,
+  );
 
   // --- per-vertex × per-bucket value matrix (static-geometry overview) ---
   // Each feature's list is its flat vertex-major matrix (vertex_count *
@@ -1103,7 +1172,10 @@ function tableToBinaryFeatures(table: Table, meta: ResolvedTileMeta): BinaryFeat
       const childValues = data.children[0].values as Float32Array | Uint8Array;
       const start = data.offset * size;
       const end = start + featureCount * size;
-      vectorProps[field.name] = { value: childValues.subarray(start, end), size };
+      vectorProps[field.name] = {
+        value: childValues.subarray(start, end),
+        size,
+      };
       continue;
     }
     const isDictionary =
@@ -1129,7 +1201,12 @@ function tableToBinaryFeatures(table: Table, meta: ResolvedTileMeta): BinaryFeat
       const validity = data.nullBitmap;
       const hasValidity = validity && validity.byteLength > 0;
       for (let i = 0; i < featureCount; i++) {
-        if (hasValidity && (validity[(i + data.offset) >> 3] & (1 << ((i + data.offset) & 7))) === 0) {
+        if (
+          hasValidity &&
+          (validity[(i + data.offset) >> 3] &
+            (1 << ((i + data.offset) & 7))) ===
+            0
+        ) {
           indices[i] = 0xffff;
         } else {
           // Widen narrower key types up to Uint16. Arrow stores keys as
@@ -1172,7 +1249,11 @@ function tableToBinaryFeatures(table: Table, meta: ResolvedTileMeta): BinaryFeat
         | Float32Array
         | Uint16Array
         | Int32Array;
-      if (!qaAffine && raw instanceof Float32Array && raw.length === featureCount) {
+      if (
+        !qaAffine &&
+        raw instanceof Float32Array &&
+        raw.length === featureCount
+      ) {
         // Already the GPU upload type and no fixed-point affine to undo: hand
         // the Arrow buffer straight through, skipping the f64→f32 copy loop.
         // (It shares the IPC buffer the worker transfers, like `positions`.)
@@ -1181,7 +1262,8 @@ function tableToBinaryFeatures(table: Table, meta: ResolvedTileMeta): BinaryFeat
         const arr = new Float32Array(featureCount);
         if (qaAffine) {
           const { o, s } = qaAffine;
-          for (let i = 0; i < featureCount; i++) arr[i] = o + Number(raw[i]) * s;
+          for (let i = 0; i < featureCount; i++)
+            arr[i] = o + Number(raw[i]) * s;
         } else {
           for (let i = 0; i < featureCount; i++) arr[i] = Number(raw[i]);
         }
@@ -1242,7 +1324,8 @@ export function decodeTile(
 ): Tile {
   const tileKey = `${id.z}/${id.x}/${id.y}/${id.t}`;
   const isV2 =
-    payload.byteLength >= 2 && (payload[0] | (payload[1] << 8)) === FRAME_V2_ESCAPE;
+    payload.byteLength >= 2 &&
+    (payload[0] | (payload[1] << 8)) === FRAME_V2_ESCAPE;
   // Authority rule (spec §5.2): `manifest.formatVersion` is the
   // discriminator; the frame escape is defense-in-depth. A mixed-version
   // dataset is corrupt/misassembled and MUST fail loudly, not decode.
@@ -1281,7 +1364,10 @@ export function decodeTile(
       return {
         name: raw.name,
         extent: 0, // coordinates are real lon/lat; no quantization extent
-        features: tableToBinaryFeatures(table, resolveMetaFromTileMeta(raw.tileMeta)),
+        features: tableToBinaryFeatures(
+          table,
+          resolveMetaFromTileMeta(raw.tileMeta),
+        ),
         geometryExtensionName: geometryExtensionName(table),
         coordinatesQuantized: readQuantAffine(table) !== undefined,
         // The merged (core + props) table — the v1-shaped GeoArrow hand-off.
@@ -1453,7 +1539,13 @@ export function toGeoArrowTable(layer: Layer): Table {
   });
   const fields = table.schema.fields.slice();
   fields[geomIdx] = patched;
-  const newSchema = new Schema(fields, table.schema.metadata, table.schema.dictionaries);
-  const newBatches = table.batches.map((b) => new RecordBatch(newSchema, b.data));
+  const newSchema = new Schema(
+    fields,
+    table.schema.metadata,
+    table.schema.dictionaries,
+  );
+  const newBatches = table.batches.map(
+    (b) => new RecordBatch(newSchema, b.data),
+  );
   return new Table(newSchema, newBatches);
 }

@@ -24,7 +24,12 @@ export interface FidelityResult {
   width: number;
   height: number;
   /** "blessed" when no baseline existed before and we just wrote one. */
-  status: 'compared' | 'blessed' | 'baseline-missing' | 'size-mismatch' | 'capture-failed';
+  status:
+    | 'compared'
+    | 'blessed'
+    | 'baseline-missing'
+    | 'size-mismatch'
+    | 'capture-failed';
   /** Optional reason string for size-mismatch / capture-failed. */
   reason?: string;
 }
@@ -111,10 +116,7 @@ export async function captureAndDiff(
   }
 
   const baseline = PNG.sync.read(fs.readFileSync(baselinePath));
-  if (
-    baseline.width !== current.width ||
-    baseline.height !== current.height
-  ) {
+  if (baseline.width !== current.width || baseline.height !== current.height) {
     return {
       currentPath,
       baselinePath,

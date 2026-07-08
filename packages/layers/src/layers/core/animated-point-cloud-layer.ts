@@ -81,7 +81,11 @@ import type { ColorAccessorValue } from '../../lib/accessor-alias.js';
 import { DEFAULT_CATEGORICAL_PALETTE } from '@poopdeck.gl/core';
 import { expandCategoricalColors as coreExpandCategoricalColors } from '@poopdeck.gl/core/style';
 import type { RGBA255 } from '@poopdeck.gl/core/style';
-import type { Tile, Layer as TileLayer, BinaryFeatures } from '@poopdeck.gl/core';
+import type {
+  Tile,
+  Layer as TileLayer,
+  BinaryFeatures,
+} from '@poopdeck.gl/core';
 
 const DEBUG = false;
 
@@ -221,7 +225,10 @@ interface PreparedTile {
   /** Reference-stable data object for PointCloudLayer's binary interface. */
   data: {
     length: number;
-    attributes: Record<string, { value: any; size: number; normalized?: boolean }>;
+    attributes: Record<
+      string,
+      { value: any; size: number; normalized?: boolean }
+    >;
   };
   /** Per-tile time reference; passed to TimeFilterExtension as `timeOffset`. */
   timeOffset: number;
@@ -277,7 +284,9 @@ function padPositionsTo3D(
  */
 export class AnimatedPointCloudLayer<
   ExtraPropsT extends {} = {},
-> extends SpatioTemporalLayer<ExtraPropsT & Required<_AnimatedPointCloudLayerProps>> {
+> extends SpatioTemporalLayer<
+  ExtraPropsT & Required<_AnimatedPointCloudLayerProps>
+> {
   static layerName = 'AnimatedPointCloudLayer';
 
   static defaultProps: DefaultProps<AnimatedPointCloudLayerProps> = {
@@ -294,14 +303,39 @@ export class AnimatedPointCloudLayer<
     // prop wins unless the caller opts into the upstream vocabulary.
     getColor: { type: 'object', value: null, optional: true, compare: true },
     colorPalette: { type: 'array', value: DEFAULT_PALETTE, compare: true },
-    colorMapping: { type: 'object', value: null, optional: true, compare: false },
+    colorMapping: {
+      type: 'object',
+      value: null,
+      optional: true,
+      compare: false,
+    },
     // Transparent fallback: features whose category is absent from
     // `colorMapping` disappear rather than render a misleading colour.
     colorMappingDefault: { type: 'color', value: [0, 0, 0, 0] },
-    rgbColorColumns: { type: 'object', value: null, optional: true, compare: true },
-    colorVectorColumn: { type: 'object', value: 'point_rgba', optional: true, compare: true },
-    normalColumn: { type: 'object', value: 'normal', optional: true, compare: true },
-    elevationProperty: { type: 'object', value: null, optional: true, compare: true },
+    rgbColorColumns: {
+      type: 'object',
+      value: null,
+      optional: true,
+      compare: true,
+    },
+    colorVectorColumn: {
+      type: 'object',
+      value: 'point_rgba',
+      optional: true,
+      compare: true,
+    },
+    normalColumn: {
+      type: 'object',
+      value: 'normal',
+      optional: true,
+      compare: true,
+    },
+    elevationProperty: {
+      type: 'object',
+      value: null,
+      optional: true,
+      compare: true,
+    },
     // Allow negative scale (e.g. invert depth) — z values themselves may be
     // negative (below-grade returns), so the multiplier is unconstrained.
     elevationScale: { type: 'number', value: 1 },
@@ -334,7 +368,9 @@ export class AnimatedPointCloudLayer<
    * per-feature start/end attributes are read — the per-vertex time attribute
    * is unused.
    */
-  private readonly timeFilterExtension = new TimeFilterExtension({ mode: 'window' });
+  private readonly timeFilterExtension = new TimeFilterExtension({
+    mode: 'window',
+  });
 
   /**
    * Singleton CategoryColorExtension. Always installed; when a tile lacks
@@ -409,7 +445,8 @@ export class AnimatedPointCloudLayer<
     if (this.lastTilesRef !== tiles) {
       const live = new Set<string>();
       for (const tile of tiles) {
-        for (const tileLayer of tile.layers) live.add(makeTileKey(tile, tileLayer));
+        for (const tileLayer of tile.layers)
+          live.add(makeTileKey(tile, tileLayer));
       }
       for (const key of this.preparedTileCache.keys()) {
         if (!live.has(key)) this.preparedTileCache.delete(key);
@@ -476,16 +513,24 @@ export class AnimatedPointCloudLayer<
     const colorProp = typeof color === 'string' ? color : '';
     const mapping = this.props.colorMapping;
     const elevProp =
-      typeof this.props.elevationProperty === 'string' ? this.props.elevationProperty : '';
+      typeof this.props.elevationProperty === 'string'
+        ? this.props.elevationProperty
+        : '';
     const elevScale = elevProp ? (this.props.elevationScale ?? 1) : 0;
     const rgb = this.props.rgbColorColumns;
     const rgbKey = rgb ? `rgb${rgb.join(',')}` : '';
     const colorVecKey =
-      typeof this.props.colorVectorColumn === 'string' ? `cv${this.props.colorVectorColumn}` : '';
+      typeof this.props.colorVectorColumn === 'string'
+        ? `cv${this.props.colorVectorColumn}`
+        : '';
     const normalKey =
-      typeof this.props.normalColumn === 'string' ? `n${this.props.normalColumn}` : '';
+      typeof this.props.normalColumn === 'string'
+        ? `n${this.props.normalColumn}`
+        : '';
     return `${colorVecKey}|${normalKey}|${colorProp}|${
-      colorProp ? colorListDigest(this.props.colorPalette ?? DEFAULT_PALETTE) : 0
+      colorProp
+        ? colorListDigest(this.props.colorPalette ?? DEFAULT_PALETTE)
+        : 0
     }|${mapping ? `m${colorMappingDigest(mapping)}` : 'g'}|e${elevProp}:${elevScale}|${rgbKey}|${updateTriggersDigest(
       this.props.updateTriggers,
     )}`;
@@ -503,7 +548,12 @@ export class AnimatedPointCloudLayer<
     const tileKey = makeTileKey(tile, tileLayer);
     const cached = this.preparedTileCache.get(tileKey);
     if (cached && cached.styleKey === styleKey) {
-      emit('tilePrepare', { layer: 'AnimatedPointCloudLayer', tileKey, cached: true, ms: 0 });
+      emit('tilePrepare', {
+        layer: 'AnimatedPointCloudLayer',
+        tileKey,
+        cached: true,
+        ms: 0,
+      });
       return cached;
     }
     const prepared = this.buildTileData(tile, tileLayer, styleKey, tileKey);
@@ -533,7 +583,9 @@ export class AnimatedPointCloudLayer<
     // path and the rare 3D-tile path can apply it. Unset / missing column ⇒
     // z stays 0 (byte-identical to a flat render).
     const elevProp =
-      typeof this.props.elevationProperty === 'string' ? this.props.elevationProperty : '';
+      typeof this.props.elevationProperty === 'string'
+        ? this.props.elevationProperty
+        : '';
     const elevValues = elevProp ? binary.numericProps[elevProp] : undefined;
     const elevScale = this.props.elevationScale ?? 1;
 
@@ -555,7 +607,12 @@ export class AnimatedPointCloudLayer<
         positions = binary.positions;
       }
     } else {
-      positions = padPositionsTo3D(binary.positions, count, elevValues, elevScale);
+      positions = padPositionsTo3D(
+        binary.positions,
+        count,
+        elevValues,
+        elevScale,
+      );
     }
 
     const attributes: PreparedTile['data']['attributes'] = {
@@ -569,7 +626,10 @@ export class AnimatedPointCloudLayer<
 
     // Per-point surface normal from an interleaved [nx,ny,nz] vector column,
     // bound zero-copy. Absent ⇒ deck's default getNormal [0,0,1].
-    const normalN = typeof this.props.normalColumn === 'string' ? this.props.normalColumn : '';
+    const normalN =
+      typeof this.props.normalColumn === 'string'
+        ? this.props.normalColumn
+        : '';
     const normal = normalN ? vec[normalN] : undefined;
     if (normal && normal.size === 3) {
       attributes.getNormal = { value: normal.value, size: 3 };
@@ -581,7 +641,9 @@ export class AnimatedPointCloudLayer<
     // bind the contiguous u8 buffer straight to the GPU, zero re-pack. Wins
     // over every other colour path; falls through when the column is absent.
     const colorVecN =
-      typeof this.props.colorVectorColumn === 'string' ? this.props.colorVectorColumn : '';
+      typeof this.props.colorVectorColumn === 'string'
+        ? this.props.colorVectorColumn
+        : '';
     const colorVec = colorVecN ? vec[colorVecN] : undefined;
 
     // Per-point RGB from three numeric columns (build-time camera-sampled
@@ -593,7 +655,11 @@ export class AnimatedPointCloudLayer<
     const bArr = rgbCols ? binary.numericProps[rgbCols[2]] : undefined;
 
     if (colorVec && colorVec.size === 4) {
-      attributes.getColor = { value: colorVec.value, size: 4, normalized: true };
+      attributes.getColor = {
+        value: colorVec.value,
+        size: 4,
+        normalized: true,
+      };
     } else if (rArr && gArr && bArr) {
       const out = new Uint8Array(count * 4);
       for (let i = 0; i < count; i++) {
@@ -612,13 +678,17 @@ export class AnimatedPointCloudLayer<
       if (cat) {
         if (this.props.colorMapping) {
           // CPU branch: indexed by category string → no GPU string→int hash.
-          const fallback = this.props.colorMappingDefault ?? ([0, 0, 0, 0] as Color);
+          const fallback =
+            this.props.colorMappingDefault ?? ([0, 0, 0, 0] as Color);
           attributes.getColor = {
             value: coreExpandCategoricalColors(
               binary,
               {
                 property: colorProp,
-                colorMapping: this.props.colorMapping as Record<string, RGBA255>,
+                colorMapping: this.props.colorMapping as Record<
+                  string,
+                  RGBA255
+                >,
                 colorMappingDefault: fallback as RGBA255,
               },
               'u8',
@@ -633,12 +703,14 @@ export class AnimatedPointCloudLayer<
           // extension instead REPLACES colour in the fragment stage AFTER
           // lighting (`color = vec4(palette.rgb, …)`), discarding the lit vColor
           // → flat/unshaded points, inconsistent with this lit layer's purpose.
-          const fallback = this.props.colorMappingDefault ?? ([0, 0, 0, 0] as Color);
+          const fallback =
+            this.props.colorMappingDefault ?? ([0, 0, 0, 0] as Color);
           const out = new Uint8Array(count * 4);
           const pl = palette.length;
           for (let i = 0; i < count; i++) {
             const cIdx = cat.indices[i];
-            const c = cIdx === 0xffff ? fallback : (palette[cIdx % pl] ?? fallback);
+            const c =
+              cIdx === 0xffff ? fallback : (palette[cIdx % pl] ?? fallback);
             const o = i * 4;
             out[o] = c[0];
             out[o + 1] = c[1];
@@ -649,7 +721,8 @@ export class AnimatedPointCloudLayer<
         }
       } else if (num && this.props.colorMapping) {
         // Numeric column + mapping: stringify lookup (rare).
-        const fallback = this.props.colorMappingDefault ?? ([0, 0, 0, 0] as Color);
+        const fallback =
+          this.props.colorMappingDefault ?? ([0, 0, 0, 0] as Color);
         const out = new Uint8Array(count * 4);
         for (let i = 0; i < count; i++) {
           const c = this.props.colorMapping[String(num[i])] || fallback;
@@ -688,7 +761,9 @@ export class AnimatedPointCloudLayer<
     // `Required<>`-typed: the defaultProps value guarantees values here.
     const timeWindow = this.props.timeWindow;
     const colorValue = this.colorValue();
-    const constColor = (Array.isArray(colorValue) ? colorValue : DEFAULT_COLOR) as Color;
+    const constColor = (
+      Array.isArray(colorValue) ? colorValue : DEFAULT_COLOR
+    ) as Color;
 
     // CategoryColorExtension props: when this tile uses the GPU palette path we
     // pass the resolved palette + useCategoryColor=true. Otherwise the

@@ -172,7 +172,9 @@ export class GpuPicker {
     const prevTarget = renderer.getRenderTarget?.() ?? null;
     // Save + swap the clear colour so the id pass's background is the sentinel,
     // not black (feature 0).
-    const savedColor = renderer.getClearColor ? renderer.getClearColor(new Color()) : null;
+    const savedColor = renderer.getClearColor
+      ? renderer.getClearColor(new Color())
+      : null;
     const savedAlpha = renderer.getClearAlpha ? renderer.getClearAlpha() : 1;
     renderer.setClearColor?.(SENTINEL_CLEAR, 1);
 
@@ -202,7 +204,8 @@ export class GpuPicker {
 
     // Sample the centre texel of the read square (RGBA8, one byte per channel).
     const data = pixels as unknown as Uint8Array;
-    const ci = (Math.floor(this.size / 2) * this.size + Math.floor(this.size / 2)) * 4;
+    const ci =
+      (Math.floor(this.size / 2) * this.size + Math.floor(this.size / 2)) * 4;
     const index = decodeId([data[ci], data[ci + 1], data[ci + 2]]);
 
     const featureCount = opts.featureCount;

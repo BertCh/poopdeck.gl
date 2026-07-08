@@ -4,60 +4,64 @@
      build-first invocation) whenever a BackendDescriptor changes. There is
      currently no automated check that this file stays in sync with the
      descriptors, so regeneration is a manual step. -->
+
 # STT backend capability matrix
 
 ## Traits
-| Trait | deck | three | maplibre | cesium |
-| --- | --- | --- | --- | --- |
-| projectsOnCpu | no | yes | yes | yes |
-| tilesetOwnership | shared | shared | per-layer | shared |
-| pickMechanism | gpu-id | cpu-ray | none | host |
-| interleavedBasemap | yes | no | yes | yes |
-| basemapProjection | mercator | mercator | mercator | globe |
+
+| Trait              | deck     | three    | maplibre  | cesium |
+| ------------------ | -------- | -------- | --------- | ------ |
+| projectsOnCpu      | no       | yes      | yes       | yes    |
+| tilesetOwnership   | shared   | shared   | per-layer | shared |
+| pickMechanism      | gpu-id   | cpu-ray  | none      | host   |
+| interleavedBasemap | yes      | no       | yes       | yes    |
+| basemapProjection  | mercator | mercator | mercator  | globe  |
 
 ## Capabilities
-| Capability | deck | three | maplibre | cesium |
-| --- | --- | --- | --- | --- |
-| globe | ✅ | ✅ | — | ✅ |
-| picking | ✅ | ✅ | — | ✅ |
-| extrude3d | ✅ | ✅ | ✅ | ✅ |
-| metricSizing | ✅ | ✅ | — | ✅ |
-| gpuHeatmap | ✅ | — | ✅ | — |
-| liveBundling | ✅ | — | — | — |
-| timeAsHeight | ✅ | — | — | — |
-| interleavedBasemap | ✅ | — | ✅ | ✅ |
-| userExtensions | ✅ | — | — | — |
-| cameraRoll | — | — | — | ✅ |
+
+| Capability         | deck | three | maplibre | cesium |
+| ------------------ | ---- | ----- | -------- | ------ |
+| globe              | ✅   | ✅    | —        | ✅     |
+| picking            | ✅   | ✅    | —        | ✅     |
+| extrude3d          | ✅   | ✅    | ✅       | ✅     |
+| metricSizing       | ✅   | ✅    | —        | ✅     |
+| gpuHeatmap         | ✅   | —     | ✅       | —      |
+| liveBundling       | ✅   | —     | —        | —      |
+| timeAsHeight       | ✅   | —     | —        | —      |
+| interleavedBasemap | ✅   | —     | ✅       | ✅     |
+| userExtensions     | ✅   | —     | —        | —      |
+| cameraRoll         | —    | —     | —        | ✅     |
 
 ## Time-filter modes
-| Mode | deck | three | maplibre | cesium |
-| --- | --- | --- | --- | --- |
-| none | — | — | — | — |
-| window | ✅ | ✅ | ✅ | ✅ |
-| wake | ✅ | ✅ | — | ✅ |
-| cumulative | ✅ | ✅ | — | ✅ |
-| trail | ✅ | ✅ | ✅ | ✅ |
+
+| Mode       | deck | three | maplibre | cesium |
+| ---------- | ---- | ----- | -------- | ------ |
+| none       | —    | —     | —        | —      |
+| window     | ✅   | ✅    | ✅       | ✅     |
+| wake       | ✅   | ✅    | —        | ✅     |
+| cumulative | ✅   | ✅    | —        | ✅     |
+| trail      | ✅   | ✅    | ✅       | ✅     |
 
 ## Layer kinds (✅ native · ↳ fallback · — unsupported)
-| Layer kind | deck | three | maplibre | cesium |
-| --- | --- | --- | --- | --- |
-| point | ✅ | ✅ | ✅ | ✅ |
-| path | ✅ | ✅ | — | ✅ |
-| polygon | ✅ | ✅ | ✅ | — |
-| arc | ✅ | ✅ | ↳ line | ✅ |
-| line | ✅ | ✅ | ✅ | ✅ |
-| icon | ✅ | ✅ | — | — |
-| column | ✅ | ✅ | — | — |
-| trips | ✅ | ✅ | ✅ | ✅ |
-| tripHeads | ✅ | ✅ | — | ✅ |
-| boundingBox | ✅ | ✅ | — | — |
-| surfel | ✅ | ✅ | — | ↳ point |
-| heatmap | ✅ | ↳ point | ✅ | — |
-| h3Summary | ✅ | ✅ | — | — |
-| quadbinSummary | ✅ | ✅ | — | — |
-| flowmap | ✅ | ✅ | — | ↳ line |
-| flowCorridor | ✅ | ✅ | — | ↳ line |
-| flowStroke | ✅ | ↳ flowCorridor | — | ↳ line |
-| isoLines | ↳ path | ✅ | — | ↳ path |
-| ego | — | ✅ | — | — |
 
+| Layer kind     | deck   | three          | maplibre | cesium  |
+| -------------- | ------ | -------------- | -------- | ------- |
+| point          | ✅     | ✅             | ✅       | ✅      |
+| path           | ✅     | ✅             | —        | ✅      |
+| polygon        | ✅     | ✅             | ✅       | —       |
+| arc            | ✅     | ✅             | ↳ line   | ✅      |
+| line           | ✅     | ✅             | ✅       | ✅      |
+| icon           | ✅     | ✅             | —        | —       |
+| column         | ✅     | ✅             | —        | —       |
+| trips          | ✅     | ✅             | ✅       | ✅      |
+| tripHeads      | ✅     | ✅             | —        | ✅      |
+| boundingBox    | ✅     | ✅             | —        | —       |
+| surfel         | ✅     | ✅             | —        | ↳ point |
+| heatmap        | ✅     | ↳ point        | ✅       | —       |
+| h3Summary      | ✅     | ✅             | —        | —       |
+| quadbinSummary | ✅     | ✅             | —        | —       |
+| flowmap        | ✅     | ✅             | —        | ↳ line  |
+| flowCorridor   | ✅     | ✅             | —        | ↳ line  |
+| flowStroke     | ✅     | ↳ flowCorridor | —        | ↳ line  |
+| isoLines       | ↳ path | ✅             | —        | ↳ path  |
+| ego            | —      | ✅             | —        | —       |

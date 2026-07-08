@@ -1,6 +1,9 @@
 {
   "$schema": "https://unpkg.com/@changesets/config@3.1.1/schema.json",
-  "changelog": ["@changesets/changelog-github", { "repo": "BertCh/spatiotemporal-tiles" }],
+  "changelog": [
+    "@changesets/changelog-github",
+    { "repo": "BertCh/spatiotemporal-tiles" }
+  ],
   "commit": false,
   "fixed": [["@poopdeck.gl/*"]],
   "linked": [],

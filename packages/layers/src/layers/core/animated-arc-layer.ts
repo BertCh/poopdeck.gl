@@ -38,7 +38,10 @@
 
 import { ArcLayer } from '@deck.gl/layers';
 import type { Color, DefaultProps, Layer, LayerContext } from '@deck.gl/core';
-import { SpatioTemporalLayer, SpatioTemporalLayerProps } from '../spatiotemporal-layer.js';
+import {
+  SpatioTemporalLayer,
+  SpatioTemporalLayerProps,
+} from '../spatiotemporal-layer.js';
 import { TimeFilterExtension } from '../../extensions/time-filter-extension.js';
 import {
   CategoryColorExtension,
@@ -52,10 +55,17 @@ import {
   updateTriggersDigest,
 } from '../../lib/style-digest.js';
 import { resolveAccessorAlias } from '../../lib/accessor-alias.js';
-import type { ColorAccessorValue, NumericAccessorValue } from '../../lib/accessor-alias.js';
+import type {
+  ColorAccessorValue,
+  NumericAccessorValue,
+} from '../../lib/accessor-alias.js';
 import { deriveSourceTargetPositions } from '../../lib/od-positions.js';
 import { DEFAULT_LINE_PALETTE } from '@poopdeck.gl/core';
-import type { Tile, Layer as TileLayer, BinaryFeatures } from '@poopdeck.gl/core';
+import type {
+  Tile,
+  Layer as TileLayer,
+  BinaryFeatures,
+} from '@poopdeck.gl/core';
 
 const DEBUG = false;
 
@@ -168,7 +178,8 @@ export interface _AnimatedArcLayerProps {
 }
 
 /** Complete props accepted by {@link AnimatedArcLayer}. */
-export type AnimatedArcLayerProps = _AnimatedArcLayerProps & SpatioTemporalLayerProps;
+export type AnimatedArcLayerProps = _AnimatedArcLayerProps &
+  SpatioTemporalLayerProps;
 
 const DEFAULT_SOURCE_COLOR: Color = [0, 150, 255, 255];
 const DEFAULT_TARGET_COLOR: Color = [255, 127, 14, 255];
@@ -183,7 +194,10 @@ interface PreparedTile {
   styleKey: string;
   data: {
     length: number;
-    attributes: Record<string, { value: any; size: number; normalized?: boolean }>;
+    attributes: Record<
+      string,
+      { value: any; size: number; normalized?: boolean }
+    >;
   };
   timeOffset: number;
   dims: number;
@@ -221,9 +235,9 @@ function indicesToFloat32(indices: Uint16Array, count: number): Float32Array {
  * NoPickingPathLayer on the path family is not a concern here — picking works
  * through the stock layer).
  */
-export class AnimatedArcLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLayer<
-  ExtraPropsT & Required<_AnimatedArcLayerProps>
-> {
+export class AnimatedArcLayer<
+  ExtraPropsT extends {} = {},
+> extends SpatioTemporalLayer<ExtraPropsT & Required<_AnimatedArcLayerProps>> {
   static layerName = 'AnimatedArcLayer';
 
   static defaultProps: DefaultProps<AnimatedArcLayerProps> = {
@@ -242,8 +256,18 @@ export class AnimatedArcLayer<ExtraPropsT extends {} = {}> extends SpatioTempora
     width: { type: 'object', value: 2, compare: true },
     // Accessor-named aliases (see the prop docs): unset by default so the
     // legacy props win unless the caller opts into the upstream vocabulary.
-    getSourceColor: { type: 'object', value: null, optional: true, compare: true },
-    getTargetColor: { type: 'object', value: null, optional: true, compare: true },
+    getSourceColor: {
+      type: 'object',
+      value: null,
+      optional: true,
+      compare: true,
+    },
+    getTargetColor: {
+      type: 'object',
+      value: null,
+      optional: true,
+      compare: true,
+    },
     getWidth: { type: 'object', value: null, optional: true, compare: true },
     arcHeight: { type: 'number', value: 1, min: 0 },
     getHeight: { type: 'object', value: null, optional: true, compare: true },
@@ -272,7 +296,9 @@ export class AnimatedArcLayer<ExtraPropsT extends {} = {}> extends SpatioTempora
    * per-feature start/end pair is registered. The trail-mode per-vertex time
    * attribute is unused.
    */
-  private readonly timeFilterExtension = new TimeFilterExtension({ mode: 'window' });
+  private readonly timeFilterExtension = new TimeFilterExtension({
+    mode: 'window',
+  });
   private readonly categoryColorExtension = new CategoryColorExtension();
   private readonly boundGetTime: () => number = () => this.getCurrentTime();
 
@@ -389,7 +415,8 @@ export class AnimatedArcLayer<ExtraPropsT extends {} = {}> extends SpatioTempora
     if (this.lastTilesRef !== tiles) {
       const live = new Set<string>();
       for (const tile of tiles) {
-        for (const tileLayer of tile.layers) live.add(makeTileKey(tile, tileLayer));
+        for (const tileLayer of tile.layers)
+          live.add(makeTileKey(tile, tileLayer));
       }
       for (const key of this.preparedTileCache.keys()) {
         if (!live.has(key)) this.preparedTileCache.delete(key);
@@ -438,7 +465,9 @@ export class AnimatedArcLayer<ExtraPropsT extends {} = {}> extends SpatioTempora
     });
     if (DEBUG) {
       // eslint-disable-next-line no-console
-      console.log(`AnimatedArcLayer: ${tiles.length} tiles → ${sublayers.length} sublayers`);
+      console.log(
+        `AnimatedArcLayer: ${tiles.length} tiles → ${sublayers.length} sublayers`,
+      );
     }
     return sublayers;
   }
@@ -455,13 +484,20 @@ export class AnimatedArcLayer<ExtraPropsT extends {} = {}> extends SpatioTempora
     // this is a WeakMap lookup per tile, not a re-serialization. The user's
     // updateTriggers ride the key too so a trigger bump re-prepares the tile.
     const styleKey = `${colorProp}|${widthProp}|${
-      colorProp ? colorListDigest(this.props.colorPalette ?? DEFAULT_PALETTE) : 0
+      colorProp
+        ? colorListDigest(this.props.colorPalette ?? DEFAULT_PALETTE)
+        : 0
     }|${updateTriggersDigest(this.props.updateTriggers)}`;
 
     const tileKey = makeTileKey(tile, tileLayer);
     const cached = this.preparedTileCache.get(tileKey);
     if (cached && cached.styleKey === styleKey) {
-      emit('tilePrepare', { layer: 'AnimatedArcLayer', tileKey, cached: true, ms: 0 });
+      emit('tilePrepare', {
+        layer: 'AnimatedArcLayer',
+        tileKey,
+        cached: true,
+        ms: 0,
+      });
       return cached;
     }
 
@@ -533,12 +569,12 @@ export class AnimatedArcLayer<ExtraPropsT extends {} = {}> extends SpatioTempora
     const sourceColorValue = this.sourceColorValue();
     const targetColorValue = this.targetColorValue();
     const widthValue = this.widthValue();
-    const constSourceColor = (Array.isArray(sourceColorValue)
-      ? sourceColorValue
-      : DEFAULT_SOURCE_COLOR) as Color;
-    const constTargetColor = (Array.isArray(targetColorValue)
-      ? targetColorValue
-      : DEFAULT_TARGET_COLOR) as Color;
+    const constSourceColor = (
+      Array.isArray(sourceColorValue) ? sourceColorValue : DEFAULT_SOURCE_COLOR
+    ) as Color;
+    const constTargetColor = (
+      Array.isArray(targetColorValue) ? targetColorValue : DEFAULT_TARGET_COLOR
+    ) as Color;
     const constWidth = typeof widthValue === 'number' ? widthValue : 2;
     // `Required<>`-typed: the defaultProps value guarantees a number here.
     const timeWindow = this.props.timeWindow;

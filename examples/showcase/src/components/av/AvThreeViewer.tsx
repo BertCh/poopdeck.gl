@@ -22,9 +22,9 @@
  *     Spacetime `cube` mode (no trips-layer port yet).
  */
 
-import React, { useCallback, useMemo } from "react";
-import type { TimeController } from "@poopdeck.gl/playback";
-import type { RGBA, SttPickInfo, SttSourceRegistry } from "@poopdeck.gl/three";
+import React, { useCallback, useMemo } from 'react';
+import type { TimeController } from '@poopdeck.gl/playback';
+import type { RGBA, SttPickInfo, SttSourceRegistry } from '@poopdeck.gl/three';
 import {
   SttCanvas,
   SttSurfelLayer,
@@ -34,10 +34,10 @@ import {
   SttMapLineLayer,
   SttEgoLayer,
   SttIsoLayer,
-} from "@poopdeck.gl/three/r3f";
-import type { Dataset } from "../../types";
-import type { AvStreamKey } from "./sceneTypes";
-import type { PickedObject } from "./ObjectInspector";
+} from '@poopdeck.gl/three/r3f';
+import type { Dataset } from '../../types';
+import type { AvStreamKey } from './sceneTypes';
+import type { PickedObject } from './ObjectInspector';
 
 export interface AvThreeViewerProps {
   dataset: Dataset;
@@ -68,7 +68,7 @@ export interface AvThreeViewerProps {
   onSelectObject?: (object: PickedObject | null) => void;
 }
 
-const RGB_COLUMNS: [string, string, string] = ["r", "g", "b"];
+const RGB_COLUMNS: [string, string, string] = ['r', 'g', 'b'];
 
 /** The LIDAR layer element(s) for the dataset's render mode (mirrors buildDemoLayers `case 'av'`). */
 function renderLidar(dataset: Dataset, perfMode: boolean): React.ReactNode {
@@ -85,7 +85,9 @@ function renderLidar(dataset: Dataset, perfMode: boolean): React.ReactNode {
   // Mirrors buildDemoLayers.ts stage branch.
   if (dataset.lidarStage && dataset.avStaticUrl && dataset.avDynamicUrl) {
     const stageStatic = dataset.lidarStageStatic ?? true;
-    const stageSigma = stageStatic ? 1e9 : dataset.lidarSurfelTemporalSigma ?? 1800;
+    const stageSigma = stageStatic
+      ? 1e9
+      : (dataset.lidarSurfelTemporalSigma ?? 1800);
     const actorSigma = dataset.lidarSurfelTemporalSigma ?? 200;
     return (
       <>
@@ -105,7 +107,9 @@ function renderLidar(dataset: Dataset, perfMode: boolean): React.ReactNode {
           id={dataset.id}
           rgbColumns={rgb ?? RGB_COLUMNS}
           temporalSigma={actorSigma}
-          temporalSigmaDynamic={dataset.lidarWorldbuildDynamicSigma ?? actorSigma}
+          temporalSigmaDynamic={
+            dataset.lidarWorldbuildDynamicSigma ?? actorSigma
+          }
           sizeScale={dataset.lidarActorSizeScale ?? 1.8}
           opacity={opacity}
           alphaCutoff={perfMode ? 0.2 : 0.1}
@@ -156,11 +160,15 @@ function renderLidar(dataset: Dataset, perfMode: boolean): React.ReactNode {
       <SttIsoLayer
         url={url}
         id={dataset.id}
-        colorProperty={dataset.colorProperty ?? "density_band"}
-        colorMapping={dataset.lidarColorMapping as Record<string, RGBA> | undefined}
-        colorMappingDefault={dataset.lidarColorMappingDefault as RGBA | undefined}
-        elevationProperty={iso3d ? "z_layer" : null}
-        elevationScale={iso3d ? dataset.lidarIsoElevationScale ?? 1 : 1}
+        colorProperty={dataset.colorProperty ?? 'density_band'}
+        colorMapping={
+          dataset.lidarColorMapping as Record<string, RGBA> | undefined
+        }
+        colorMappingDefault={
+          dataset.lidarColorMappingDefault as RGBA | undefined
+        }
+        elevationProperty={iso3d ? 'z_layer' : null}
+        elevationScale={iso3d ? (dataset.lidarIsoElevationScale ?? 1) : 1}
         windowHalf={isoWindow / 2}
         fadeIn={Math.round(isoWindow * 0.25)}
         fadeOut={Math.round(isoWindow * 0.25)}
@@ -191,11 +199,13 @@ function renderLidar(dataset: Dataset, perfMode: boolean): React.ReactNode {
       id={dataset.id}
       // Additive-octree zoom LOD: load the UNION of all zoom levels (each return
       // lives at one home zoom), not just maxZoom — else the cloud is sparse.
-      lodMode={dataset.lidarLod ? "additive" : undefined}
+      lodMode={dataset.lidarLod ? 'additive' : undefined}
       mode="window"
       splat={dataset.lidarSplat ?? false}
-      colorProperty={dataset.colorProperty ?? "height_band"}
-      colorMapping={dataset.lidarColorMapping as Record<string, RGBA> | undefined}
+      colorProperty={dataset.colorProperty ?? 'height_band'}
+      colorMapping={
+        dataset.lidarColorMapping as Record<string, RGBA> | undefined
+      }
       colorMappingDefault={dataset.lidarColorMappingDefault as RGBA | undefined}
       rgbColumns={rgb}
       elevationScale={dataset.elevationScale ?? 1}
@@ -233,7 +243,7 @@ const AvThreeViewer: React.FC<AvThreeViewerProps> = ({
       // `SttPointPickInfo`); the cockpit inspector only surfaces object/ego BOXES,
       // so narrow on `kind` before reading the box-only fields. A point-cloud hit
       // (or a miss) clears the selection.
-      if (info && (info.kind === "object" || info.kind === "ego")) {
+      if (info && (info.kind === 'object' || info.kind === 'ego')) {
         onSelectObject({
           category: info.category,
           track_id: info.trackId,
@@ -264,7 +274,8 @@ const AvThreeViewer: React.FC<AvThreeViewerProps> = ({
       dataset.initialViewState.latitude,
     ],
   );
-  const headingDeg = sceneView?.bearing ?? dataset.initialViewState.bearing ?? 20;
+  const headingDeg =
+    sceneView?.bearing ?? dataset.initialViewState.bearing ?? 20;
   // Authoritative origin = the range the shared clock actually spans (scene.json),
   // not the dataset placeholder — keeps the f32 rebasing consistent with getTime().
   const timeOrigin = (timeRange ?? dataset.timeRange).start;
@@ -287,16 +298,16 @@ const AvThreeViewer: React.FC<AvThreeViewerProps> = ({
       reducedMotion={reducedMotion}
       onPick={handlePick}
     >
-      {visibleStreams.has("lidar") && renderLidar(dataset, perfMode)}
+      {visibleStreams.has('lidar') && renderLidar(dataset, perfMode)}
 
-      {visibleStreams.has("map") && dataset.avMapPolyUrl && (
+      {visibleStreams.has('map') && dataset.avMapPolyUrl && (
         <SttMapPolygonLayer
           url={dataset.avMapPolyUrl}
           id={`${dataset.id}-map-poly`}
           colorMapping={dataset.mapColors as Record<string, RGBA> | undefined}
         />
       )}
-      {visibleStreams.has("map") && dataset.avMapLineUrl && (
+      {visibleStreams.has('map') && dataset.avMapLineUrl && (
         <SttMapLineLayer
           url={dataset.avMapLineUrl}
           id={`${dataset.id}-map-line`}
@@ -304,18 +315,20 @@ const AvThreeViewer: React.FC<AvThreeViewerProps> = ({
         />
       )}
 
-      {visibleStreams.has("objects") && dataset.avObjectsUrl && (
+      {visibleStreams.has('objects') && dataset.avObjectsUrl && (
         <SttBoundingBoxLayer
           url={dataset.avObjectsUrl}
           id={`${dataset.id}-objects`}
           colorProperty="category"
-          colorMapping={dataset.avObjectColors as Record<string, RGBA> | undefined}
+          colorMapping={
+            dataset.avObjectColors as Record<string, RGBA> | undefined
+          }
           colorMappingDefault={dataset.colorMappingDefault as RGBA | undefined}
           showVelocity
         />
       )}
 
-      {visibleStreams.has("ego") && dataset.avEgoUrl && (
+      {visibleStreams.has('ego') && dataset.avEgoUrl && (
         <SttEgoLayer url={dataset.avEgoUrl} id={`${dataset.id}-ego`} />
       )}
     </SttCanvas>

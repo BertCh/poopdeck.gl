@@ -5,27 +5,30 @@
  * a layer (and its tile fetches). Missing streams simply don't appear — no hard
  * fail. Below the toggles, the tracked-object category color legend.
  */
-import React from "react";
-import type { ColorRGBA } from "../../types";
-import type { AvScene, AvStreamKey, AvLidarDensity } from "./sceneTypes";
+import React from 'react';
+import type { ColorRGBA } from '../../types';
+import type { AvScene, AvStreamKey, AvLidarDensity } from './sceneTypes';
 
 const STREAM_LABELS: Record<AvStreamKey, string> = {
-  lidar: "LIDAR point cloud",
-  ego: "Ego trajectory",
-  objects: "Tracked objects",
-  map: "HD map",
-  telemetry: "CAN telemetry",
-  camera: "Camera",
+  lidar: 'LIDAR point cloud',
+  ego: 'Ego trajectory',
+  objects: 'Tracked objects',
+  map: 'HD map',
+  telemetry: 'CAN telemetry',
+  camera: 'Camera',
 };
 
 /** Streams that map to a deck layer (and so are meaningfully toggleable). */
-const LAYER_STREAMS: AvStreamKey[] = ["lidar", "ego", "objects", "map"];
+const LAYER_STREAMS: AvStreamKey[] = ['lidar', 'ego', 'objects', 'map'];
 
-const rgba = (c: ColorRGBA) => `rgba(${c[0]},${c[1]},${c[2]},${(c[3] ?? 255) / 255})`;
+const rgba = (c: ColorRGBA) =>
+  `rgba(${c[0]},${c[1]},${c[2]},${(c[3] ?? 255) / 255})`;
 
 /** Compact point-count label, e.g. 407976 → "0.4M", 815951 → "0.8M". */
 const fmtPts = (n: number): string =>
-  n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : `${Math.round(n / 1000)}K`;
+  n >= 1_000_000
+    ? `${(n / 1_000_000).toFixed(1)}M`
+    : `${Math.round(n / 1000)}K`;
 
 /**
  * Runtime LIDAR density selector, shown indented under the LIDAR stream toggle.
@@ -58,8 +61,8 @@ const LidarDensityRow: React.FC<{
             title={`${d.points.toLocaleString()} points`}
             className={`rounded border px-1.5 py-0.5 text-[11px] transition-colors ${
               active
-                ? "border-cyan-300/60 bg-cyan-400/20 text-cyan-100"
-                : "border-white/10 bg-black/40 text-slate-400 hover:bg-white/5"
+                ? 'border-cyan-300/60 bg-cyan-400/20 text-cyan-100'
+                : 'border-white/10 bg-black/40 text-slate-400 hover:bg-white/5'
             }`}
           >
             {d.label}
@@ -119,9 +122,9 @@ const StreamPanel: React.FC<StreamPanelProps> = ({
     <div
       className={`text-slate-200 ${
         embedded
-          ? ""
-          : "rounded-lg border border-white/10 bg-black/55 p-3 shadow-xl backdrop-blur-md"
-      } ${className ?? "w-60"}`}
+          ? ''
+          : 'rounded-lg border border-white/10 bg-black/55 p-3 shadow-xl backdrop-blur-md'
+      } ${className ?? 'w-60'}`}
     >
       <div className="text-[11px] uppercase tracking-wider text-slate-400 mb-2">
         Streams
@@ -131,7 +134,7 @@ const StreamPanel: React.FC<StreamPanelProps> = ({
         {toggleable.map((s) => {
           const on = visibleStreams.has(s);
           const densities =
-            s === "lidar"
+            s === 'lidar'
               ? ((scene.streams?.lidar?.densities as
                   | AvLidarDensity[]
                   | undefined) ?? [])
@@ -147,16 +150,16 @@ const StreamPanel: React.FC<StreamPanelProps> = ({
                 <span
                   className={`inline-block h-3.5 w-3.5 rounded-sm border ${
                     on
-                      ? "border-cyan-300 bg-cyan-400/80"
-                      : "border-white/25 bg-transparent"
+                      ? 'border-cyan-300 bg-cyan-400/80'
+                      : 'border-white/25 bg-transparent'
                   }`}
                   aria-hidden
                 />
-                <span className={on ? "text-slate-100" : "text-slate-500"}>
+                <span className={on ? 'text-slate-100' : 'text-slate-500'}>
                   {STREAM_LABELS[s]}
                 </span>
               </button>
-              {s === "lidar" &&
+              {s === 'lidar' &&
                 on &&
                 onSelectLidarDensity &&
                 densities.length > 1 && (
@@ -185,7 +188,7 @@ const StreamPanel: React.FC<StreamPanelProps> = ({
         </div>
       )}
 
-      {categories.length > 0 && visibleStreams.has("objects") && (
+      {categories.length > 0 && visibleStreams.has('objects') && (
         <div className="mt-3 pt-2 border-t border-white/10">
           <div className="text-[11px] uppercase tracking-wider text-slate-400 mb-1.5">
             Object classes
@@ -199,7 +202,7 @@ const StreamPanel: React.FC<StreamPanelProps> = ({
                   aria-hidden
                 />
                 <span className="text-slate-300 truncate" title={cat}>
-                  {cat.replace(/_/g, " ")}
+                  {cat.replace(/_/g, ' ')}
                 </span>
               </li>
             ))}
@@ -211,7 +214,7 @@ const StreamPanel: React.FC<StreamPanelProps> = ({
         <div className="mt-3 pt-2 border-t border-white/10 text-[10px] leading-snug text-slate-500">
           {scene.dataset && (
             <div>
-              Source:{" "}
+              Source:{' '}
               {scene.datasetUrl ? (
                 <a
                   href={scene.datasetUrl}

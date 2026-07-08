@@ -42,18 +42,18 @@ Two export pitfalls the build catches with a hard error:
 
 - **Wrong CRS.** A GeoParquet file whose geometry column declares any CRS
   other than `OGC:CRS84` / `EPSG:4326` (e.g. a Web Mercator export) fails
-  with: *"GeoParquet geometry column 'geometry' declares CRS EPSG:3857
+  with: _"GeoParquet geometry column 'geometry' declares CRS EPSG:3857
   (WGS 84 / Pseudo-Mercator), but stt-build requires lon/lat degrees
-  (OGC:CRS84 / EPSG:4326). Reproject the input before export…"* — the
+  (OGC:CRS84 / EPSG:4326). Reproject the input before export…"_ — the
   `to_crs(4326)` line above is the fix.
 - **Native geoarrow encoding.** `gdf.to_parquet(...,
-  geometry_encoding="geoarrow")` writes line/polygon geometry in a layout
+geometry_encoding="geoarrow")` writes line/polygon geometry in a layout
   the build cannot ingest and fails with a re-export hint. Keep the
   default WKB encoding (or pass `geometry_encoding="WKB"` explicitly).
 - **Nanosecond timestamps.** Native Arrow Timestamp columns are read
   directly, but only at ms/µs precision — pandas `datetime64[ns]` exports
-  as a nanosecond Timestamp and fails with *"Unsupported timestamp column
-  type"*. The Int64 conversion above sidesteps it.
+  as a nanosecond Timestamp and fails with _"Unsupported timestamp column
+  type"_. The Int64 conversion above sidesteps it.
 
 Pre-1970 timestamps are rejected in all modes — the STT temporal index
 stores unsigned ms-since-epoch. Filter or re-epoch historical rows before

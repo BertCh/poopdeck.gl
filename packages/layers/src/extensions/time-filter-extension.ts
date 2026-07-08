@@ -3,7 +3,12 @@
 // Copyright (c) @poopdeck.gl/layers contributors
 
 import { LayerExtension } from '@deck.gl/core';
-import type { Layer, LayerContext, Accessor, DefaultProps } from '@deck.gl/core';
+import type {
+  Layer,
+  LayerContext,
+  Accessor,
+  DefaultProps,
+} from '@deck.gl/core';
 // Relativization scheme moved to the framework-free kernel; imported for internal
 // use here and re-exported below so the `@poopdeck.gl/layers` barrel is unchanged.
 import {
@@ -197,8 +202,8 @@ const timeFilterUniforms = {
     wakeTailScale: 'f32',
     cumulative: 'f32',
     heightScale: 'f32',
-    heightOrigin: 'f32'
-  }
+    heightOrigin: 'f32',
+  },
 };
 
 const defaultProps: DefaultProps<TimeFilterExtensionProps> = {
@@ -317,7 +322,10 @@ export class TimeFilterExtension extends LayerExtension<
     super({ ...defaultOptions, ...options });
   }
 
-  getShaders(this: Layer<TimeFilterExtensionProps>, extension: TimeFilterExtension) {
+  getShaders(
+    this: Layer<TimeFilterExtensionProps>,
+    extension: TimeFilterExtension,
+  ) {
     if (extension.cachedShaders) return extension.cachedShaders;
     const shaders = {
       modules: [timeFilterUniforms],
@@ -435,8 +443,8 @@ export class TimeFilterExtension extends LayerExtension<
         `,
         'fs:DECKGL_FILTER_COLOR': `
           color.a *= vTimeAlpha;
-        `
-      }
+        `,
+      },
     };
     extension.cachedShaders = shaders;
     return shaders;
@@ -445,7 +453,7 @@ export class TimeFilterExtension extends LayerExtension<
   initializeState(
     this: Layer<TimeFilterExtensionProps>,
     _context: LayerContext,
-    _extension: TimeFilterExtension
+    _extension: TimeFilterExtension,
   ): void {
     const attributeManager = this.getAttributeManager();
     if (!attributeManager) return;
@@ -503,7 +511,7 @@ export class TimeFilterExtension extends LayerExtension<
   draw(
     this: Layer<TimeFilterExtensionProps>,
     _params: unknown,
-    _extension: TimeFilterExtension
+    _extension: TimeFilterExtension,
   ): void {
     const {
       currentTime = 0,
@@ -518,12 +526,13 @@ export class TimeFilterExtension extends LayerExtension<
       wakeTailScale = DEFAULT_WAKE_TAIL_SCALE,
       cumulative = false,
       timeHeightScale = 0,
-      timeHeightOrigin = 0
+      timeHeightOrigin = 0,
     } = this.props;
 
     // PERFORMANCE: Use getTime() if provided for dynamic time updates
     // This allows the layer to be cached while time updates each frame
-    const resolvedTime = typeof getTime === 'function' ? getTime() : currentTime;
+    const resolvedTime =
+      typeof getTime === 'function' ? getTime() : currentTime;
 
     // CRITICAL float32 fix: subtract the layer's timeOffset so the uniform
     // matches the relative attribute values. Both sides of the shader
@@ -533,7 +542,11 @@ export class TimeFilterExtension extends LayerExtension<
     // Guard the f32 precision contract via the shared kernel diagnostic
     // (warn-once; skipped in cumulative mode, which intentionally spans years).
     // Fires when `timeOffset` doesn't match the tile data.
-    assertRelTimeInRange(relativeTime, cumulative ? 'cumulative' : 'window', 'TimeFilterExtension');
+    assertRelTimeInRange(
+      relativeTime,
+      cumulative ? 'cumulative' : 'window',
+      'TimeFilterExtension',
+    );
 
     const timeFilterProps: TimeFilterUniformProps = {
       currentTime: relativeTime,
@@ -550,7 +563,7 @@ export class TimeFilterExtension extends LayerExtension<
       // subtraction are small f32-exact numbers. (A multi-day span overflows
       // ms precision in f32, but at meters-per-hour height scales the error
       // is micrometers of altitude — irrelevant.)
-      heightOrigin: relativizeTime(timeHeightOrigin, timeOffset)
+      heightOrigin: relativizeTime(timeHeightOrigin, timeOffset),
     };
 
     this.setShaderModuleProps({ timeFilter: timeFilterProps });

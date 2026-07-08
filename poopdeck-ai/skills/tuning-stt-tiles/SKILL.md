@@ -9,7 +9,7 @@ description: >-
   temporal bucketing, and non-lossy byte levers — NEVER by thinning features.
 license: MIT
 metadata:
-  version: "0.4.0"
+  version: '0.4.0'
 ---
 
 # Tuning STT tiles for publishing
@@ -25,7 +25,7 @@ All of `stt-optimize`'s reporting subcommands emit `--format json`.
 
 ## The cardinal rule — no thinning
 
-STT's philosophy is *comprehensive data*. **Never drop, sample, or aggregate
+STT's philosophy is _comprehensive data_. **Never drop, sample, or aggregate
 features just to hit a byte budget.** Legitimate size levers, in order:
 
 1. **Clamp the zoom range** (`--min-zoom`/`--max-zoom` at build) to what will
@@ -33,7 +33,7 @@ features just to hit a byte budget.** Legitimate size levers, in order:
 2. **Coarsen the temporal bucket** (`--temporal-bucket`) and add a
    **`--temporal-lod`** pyramid so coarse zooms are cheap without losing the fine tier.
 3. **Non-lossy byte levers** (below): zstd level, blob-ordering, pack size.
-4. **Opt-in coarse tiers**: `--summary-tier h3|quadbin` and raster are *additions*
+4. **Opt-in coarse tiers**: `--summary-tier h3|quadbin` and raster are _additions_
    for low-zoom density, not replacements for the raw features.
 
 Lossy encoding (`--quantize-coords`, `--quantize-attrs-auto`) is opt-in and only
@@ -53,15 +53,15 @@ on evidence — see `stt-optimize doctor`/`recommend`'s LOSSY-marked advice.
 
 `doctor` finding `code`s and their fixes (closed set):
 
-| code | meaning | remediation |
-|---|---|---|
-| `raw-f64-column` | unquantized float column dominates bytes | `--quantize-attr NAME=PREC` (opt-in, lossy) |
-| `expensive-feature-ids` | high-cardinality id column is costly | drop / dict-encode the id |
-| `dead-columns` | columns that never vary | `--exclude` them |
-| `z0-bomb` | a whole dataset crammed under tiny bounds at z0 | raise `--min-zoom` |
-| `unpaged-large` | whole-load directory on a big archive | rebuild (paged directory is default) |
-| `oversized-blobs` | individual tiles too large | clamp zoom / coarsen bucket |
-| `missing-summary-tier` | no coarse-zoom aggregate | add `--summary-tier` |
+| code                    | meaning                                         | remediation                                 |
+| ----------------------- | ----------------------------------------------- | ------------------------------------------- |
+| `raw-f64-column`        | unquantized float column dominates bytes        | `--quantize-attr NAME=PREC` (opt-in, lossy) |
+| `expensive-feature-ids` | high-cardinality id column is costly            | drop / dict-encode the id                   |
+| `dead-columns`          | columns that never vary                         | `--exclude` them                            |
+| `z0-bomb`               | a whole dataset crammed under tiny bounds at z0 | raise `--min-zoom`                          |
+| `unpaged-large`         | whole-load directory on a big archive           | rebuild (paged directory is default)        |
+| `oversized-blobs`       | individual tiles too large                      | clamp zoom / coarsen bucket                 |
+| `missing-summary-tier`  | no coarse-zoom aggregate                        | add `--summary-tier`                        |
 
 ## Step 2 — Re-encode for publish
 

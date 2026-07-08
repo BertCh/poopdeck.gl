@@ -53,7 +53,9 @@ export interface AutoSpeedDecisionOptions {
  * (`PlaybackControls.speedPresets` is a distinct 5-button quick-pick, not this
  * ladder.)
  */
-export const SPEED_STEPS = [0.25, 0.5, 0.75, 1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10] as const;
+export const SPEED_STEPS = [
+  0.25, 0.5, 0.75, 1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10,
+] as const;
 
 const DEFAULT_STEPS = SPEED_STEPS;
 
@@ -84,7 +86,10 @@ export function decideAutoSpeedMultiplier(
   if (snapped > prevMultiplier) {
     // Upshift: damped — cadence-only, and only past the deadband.
     if (phase !== 'cadence') return null;
-    if (prevMultiplier > 0 && (snapped - prevMultiplier) / prevMultiplier <= deadband) {
+    if (
+      prevMultiplier > 0 &&
+      (snapped - prevMultiplier) / prevMultiplier <= deadband
+    ) {
       return null;
     }
   }

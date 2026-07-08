@@ -19,7 +19,10 @@
 import { Mesh, InstancedBufferAttribute, Box3, Vector3, Sphere } from 'three';
 import type { Tile } from '@poopdeck.gl/core';
 import { BaseSttLayer, type SttLayerContext } from './layer.js';
-import { resolveTimeWindow, type ThreeTimeWindowOptions } from '../lib/time-window.js';
+import {
+  resolveTimeWindow,
+  type ThreeTimeWindowOptions,
+} from '../lib/time-window.js';
 import {
   buildArcBuffers,
   type ArcColorMode,
@@ -96,7 +99,12 @@ export class ArcLayer extends BaseSttLayer {
 
   setTiles(tiles: Tile[], ctx: SttLayerContext): void {
     this.timeOrigin = ctx.timeOrigin;
-    const buf = buildArcBuffers(tiles, ctx.projection, ctx.timeOrigin, this.bufferOptions());
+    const buf = buildArcBuffers(
+      tiles,
+      ctx.projection,
+      ctx.timeOrigin,
+      this.bufferOptions(),
+    );
 
     this.disposeGpu();
     if (buf.count === 0) {
@@ -109,16 +117,39 @@ export class ArcLayer extends BaseSttLayer {
 
     const geometry = makeArcStripGeometry();
     geometry.instanceCount = buf.count;
-    geometry.setAttribute('sttPosSource', new InstancedBufferAttribute(buf.posSource, 3));
-    geometry.setAttribute('sttPosTarget', new InstancedBufferAttribute(buf.posTarget, 3));
-    geometry.setAttribute('sttColorSource', new InstancedBufferAttribute(buf.colorSource, 4));
-    geometry.setAttribute('sttColorTarget', new InstancedBufferAttribute(buf.colorTarget, 4));
-    geometry.setAttribute('sttStart', new InstancedBufferAttribute(buf.starts, 1));
+    geometry.setAttribute(
+      'sttPosSource',
+      new InstancedBufferAttribute(buf.posSource, 3),
+    );
+    geometry.setAttribute(
+      'sttPosTarget',
+      new InstancedBufferAttribute(buf.posTarget, 3),
+    );
+    geometry.setAttribute(
+      'sttColorSource',
+      new InstancedBufferAttribute(buf.colorSource, 4),
+    );
+    geometry.setAttribute(
+      'sttColorTarget',
+      new InstancedBufferAttribute(buf.colorTarget, 4),
+    );
+    geometry.setAttribute(
+      'sttStart',
+      new InstancedBufferAttribute(buf.starts, 1),
+    );
     geometry.setAttribute('sttEnd', new InstancedBufferAttribute(buf.ends, 1));
-    geometry.setAttribute('sttHeight', new InstancedBufferAttribute(buf.heights, 1));
+    geometry.setAttribute(
+      'sttHeight',
+      new InstancedBufferAttribute(buf.heights, 1),
+    );
     if (buf.bbox) {
-      geometry.boundingBox = new Box3(new Vector3(...buf.bbox.min), new Vector3(...buf.bbox.max));
-      geometry.boundingSphere = geometry.boundingBox.getBoundingSphere(new Sphere());
+      geometry.boundingBox = new Box3(
+        new Vector3(...buf.bbox.min),
+        new Vector3(...buf.bbox.max),
+      );
+      geometry.boundingSphere = geometry.boundingBox.getBoundingSphere(
+        new Sphere(),
+      );
     }
 
     this.bundle = createArcMaterial({
@@ -130,7 +161,11 @@ export class ArcLayer extends BaseSttLayer {
     this.object.geometry = geometry;
     this.object.material = this.bundle.material;
     // origin lives in the uniform too (greatCircle slerp recovers absolute ECEF).
-    this.bundle.arc.origin.value.set(buf.origin[0], buf.origin[1], buf.origin[2]);
+    this.bundle.arc.origin.value.set(
+      buf.origin[0],
+      buf.origin[1],
+      buf.origin[2],
+    );
     this.pushUniforms(this.timeOrigin);
   }
 

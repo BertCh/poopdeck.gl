@@ -61,7 +61,13 @@ describe('SttPlayer', () => {
 
   beforeEach(() => {
     vi.useFakeTimers({
-      toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'performance'],
+      toFake: [
+        'setTimeout',
+        'clearTimeout',
+        'setInterval',
+        'clearInterval',
+        'performance',
+      ],
     });
     vi.stubGlobal('requestAnimationFrame', () => 0);
     vi.stubGlobal('cancelAnimationFrame', () => {});
@@ -207,7 +213,11 @@ describe('SttPlayer', () => {
 
     const { source, state } = makeSource();
     state.complete = true;
-    const p = makePlayer({ timeRange: { start: 0, end: 1000 }, baseRate: 1, loop: false });
+    const p = makePlayer({
+      timeRange: { start: 0, end: 1000 },
+      baseRate: 1,
+      loop: false,
+    });
     p.setSource(source);
     const onEnded = vi.fn();
     const onPause = vi.fn();

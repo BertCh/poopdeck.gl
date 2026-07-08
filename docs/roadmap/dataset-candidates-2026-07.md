@@ -16,7 +16,7 @@ confirmed by an actual anonymous request where possible. Each verdict is against
 never the AWS Open Data registry (listing implies nothing about license — nuScenes counterexample).
 
 **Hard requirement applied throughout:** processed STT tiles are publicly rehosted on Cloudflare R2, so
-redistribution of *derived products* must be permitted. CC-BY / public-domain / CC0 / ODbL pass;
+redistribution of _derived products_ must be permitted. CC-BY / public-domain / CC0 / ODbL pass;
 non-commercial or no-redistribution terms are blockers (the Waymo lesson).
 
 ---
@@ -29,14 +29,14 @@ The tile format today is strictly **vector-feature**: Point / LineString / Polyg
 opt-in quantization. Confirmed **absent** from the payload (they exist only as build-time intermediates or
 unbuilt roadmap items in `preprocessing-framework.md`):
 
-| Gap | Evidence |
-|---|---|
-| Raster / gridded time-series tiles | `raster_tier` scaffold was removed (`stt-core/src/metadata.rs`); radar pipeline vectorizes grids to isoband polygons at build |
-| Eulerian vector fields + particle advection | no flow-field primitive anywhere; "currents" are Lagrangian trips |
-| Volumetric (3D field) data | voxels only as LiDAR build-time decimation concept; rendered output is 2D-geometry surfels |
-| Analytic / parametric motion | all motion is baked sampled vertices; `satellites.rs` runs SGP4 **at build** (60 s steps) and bakes LineStrings, dropping altitude |
-| True vertical axis over time | 3D `[x,y,z]` points exist (elevation fold) but no dataset exercises a *changing* z |
-| Schedule/graph-constrained movement | **closed by §C** — the GTFS generator schedule-expands a national feed at build |
+| Gap                                         | Evidence                                                                                                                           |
+| ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| Raster / gridded time-series tiles          | `raster_tier` scaffold was removed (`stt-core/src/metadata.rs`); radar pipeline vectorizes grids to isoband polygons at build      |
+| Eulerian vector fields + particle advection | no flow-field primitive anywhere; "currents" are Lagrangian trips                                                                  |
+| Volumetric (3D field) data                  | voxels only as LiDAR build-time decimation concept; rendered output is 2D-geometry surfels                                         |
+| Analytic / parametric motion                | all motion is baked sampled vertices; `satellites.rs` runs SGP4 **at build** (60 s steps) and bakes LineStrings, dropping altitude |
+| True vertical axis over time                | 3D `[x,y,z]` points exist (elevation fold) but no dataset exercises a _changing_ z                                                 |
+| Schedule/graph-constrained movement         | **closed by §C** — the GTFS generator schedule-expands a national feed at build                                                    |
 
 The candidates below are chosen to hit these gaps.
 
@@ -78,13 +78,13 @@ The candidates below are chosen to hit these gaps.
 
 ### C. Schedule-constrained national transit ballet — **Netherlands GTFS** ⭐ — SHIPPED (local; verify + R2 open)
 
-| Country | Feed (verified) | Size | Scale | License | shapes.txt | GTFS-RT |
-|---|---|---|---|---|---|---|
-| **Netherlands** | `gtfs.ovapi.nl/nl/gtfs-nl.zip` (daily) | 226 MB | 907 K trips, 18.1 M stop_times | **CC0** (NDOV/OVapi) | **yes, 7.39 M pts** | **open, no key** (incl. vehiclePositions.pb) |
-| Switzerland | `data.opentransportdata.swiss/...gtfs2020/permalink` | 188 MB | 1.66 M trips, 26.4 M stop_times | YES, attribution + keep-updated duty | **no** (geOps mirror `gtfs.geops.ch/dl/gtfs_complete.zip` adds them) | TripUpdates only, keyed, 2 req/min |
-| Germany | `download.gtfs.de/germany/free/latest.zip` | 262 MB | 1.67 M trips, 34.5 M stop_times | CC BY 4.0 (DELFI) | no (paid tier only) | yes (CC BY-SA) |
-| Norway / Sweden / Finland | Entur / Trafiklab / Fintraffic | — | national | NLOD 2.0 / CC0 / CC-BY | varies | yes |
-| Japan (ODPT) | — | — | — | **NO / risky** — see §3 | — | — |
+| Country                   | Feed (verified)                                      | Size   | Scale                           | License                              | shapes.txt                                                           | GTFS-RT                                      |
+| ------------------------- | ---------------------------------------------------- | ------ | ------------------------------- | ------------------------------------ | -------------------------------------------------------------------- | -------------------------------------------- |
+| **Netherlands**           | `gtfs.ovapi.nl/nl/gtfs-nl.zip` (daily)               | 226 MB | 907 K trips, 18.1 M stop_times  | **CC0** (NDOV/OVapi)                 | **yes, 7.39 M pts**                                                  | **open, no key** (incl. vehiclePositions.pb) |
+| Switzerland               | `data.opentransportdata.swiss/...gtfs2020/permalink` | 188 MB | 1.66 M trips, 26.4 M stop_times | YES, attribution + keep-updated duty | **no** (geOps mirror `gtfs.geops.ch/dl/gtfs_complete.zip` adds them) | TripUpdates only, keyed, 2 req/min           |
+| Germany                   | `download.gtfs.de/germany/free/latest.zip`           | 262 MB | 1.67 M trips, 34.5 M stop_times | CC BY 4.0 (DELFI)                    | no (paid tier only)                                                  | yes (CC BY-SA)                               |
+| Norway / Sweden / Finland | Entur / Trafiklab / Fintraffic                       | —      | national                        | NLOD 2.0 / CC0 / CC-BY               | varies                                                               | yes                                          |
+| Japan (ODPT)              | —                                                    | —      | —                               | **NO / risky** — see §3              | —                                                                    | —                                            |
 
 - **Why compelling:** Mini Tokyo 3D, nation-scale — every train, bus, tram and ferry in a country moving on
   schedule for 24 h. NL was the lowest-risk start (CC0 + real geometry + free realtime positions); CH is the
@@ -105,7 +105,7 @@ The candidates below are chosen to hit these gaps.
   string column gets promoted to Numeric by stt-build inference and categorical `colorMapping` silently
   no-ops (the storm-radar lesson). Fully deterministic output ordering.
 - Rebuild: `stt-generate gtfs --feed data/gtfs-nl/feed --date 20260703 --output
-  examples/showcase/public/data/gtfs-nl` (feed refreshes daily; a stale `--date` just matches fewer
+examples/showcase/public/data/gtfs-nl` (feed refreshes daily; a stale `--date` just matches fewer
   services — re-download and re-date together).
 - Showcase: `datasets.ts` entry `gtfs-nl`, `type: 'trip-heads'`, 121,031 journeys for Fri 2026-07-03
   (first departure 00:19 local; >24:00:00 night network runs to ~10:23 Sat), 2 px NS-yellow heads on a
@@ -119,7 +119,7 @@ The candidates below are chosen to hit these gaps.
   2027 → build against `api.waterdata.usgs.gov`). Reach geometry: NHDPlus (US-gov public domain; frozen in
   favor of 3DHP but downloadable). Avoid MERIT Hydro unless electing its ODbL branch (its other branch is NC).
 - **License: YES.** Registry: "Open Data. There are no restrictions on the use of this data."
-- **Why compelling:** the continental river network *breathing* through floods and droughts — the 2019
+- **Why compelling:** the continental river network _breathing_ through floods and droughts — the 2019
   flood year at reach scale. No well-known public visualization does this; genuinely novel content.
 - **Technique delivered:** **flow-corridor + `vertex_value_matrix` at national scale** on a natural network,
   with zoom-dependent network generalization (stream-order pruning per zoom) baked by the generator.
@@ -184,15 +184,15 @@ The candidates below are chosen to hit these gaps.
 
 One new capability (a gridded tile tier) unlocks a whole family. All license-clean:
 
-| Dataset | Access (verified) | Cadence / span | License |
-|---|---|---|---|
-| **GOES-16/18/19 full-disk imagery** (ABI L2 CMIP) | `s3://noaa-goes19/ABI-L2-CMIPF/…` anonymous; 25–411 MB NetCDF / 10 min; >4.7 PB | 10 min, 2017→ | NODD open |
-| **GPM IMERG precipitation** | GES DISC / Earthdata S3 (login), 0.1° global half-hourly, ~0.5 TB/yr | 30 min, 1998→ | **CC-BY 4.0** (registry) / NASA open |
-| **VIIRS nighttime lights (EOG VNL)** | `eogdata.mines.edu/nighttime_light/annual/v22/` no-auth GeoTIFF | annual (monthly avail.), 2012→ | **CC-BY 4.0** (explicit on product page) |
-| **Hansen Global Forest Change** | `storage.googleapis.com/earthenginepartners-hansen/GFC-2024-v1.12/` — `lossyear` band = per-pixel YEAR of loss; <10 GB/band global | annual, 2000–2024 | **CC-BY 4.0** (verbatim on page) |
-| **GHSL built-up surface** | JRC open FTP, 100 m, epochs 1975–2030 | 5-yr epochs | EC reuse w/ attribution |
-| **NSIDC sea-ice concentration CDR** | NOAA@NSIDC HTTPS, daily 25 km polar grids | daily, 1978→ | US-gov, cite |
-| **Google Open Buildings 2.5D Temporal** | GCS GeoTIFFs by country; presence/height/count channels, ~4 m eff. | annual, 2016–2023, Global South only | **dual CC-BY 4.0 / ODbL — elect CC-BY** |
+| Dataset                                           | Access (verified)                                                                                                                  | Cadence / span                       | License                                  |
+| ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------ | ---------------------------------------- |
+| **GOES-16/18/19 full-disk imagery** (ABI L2 CMIP) | `s3://noaa-goes19/ABI-L2-CMIPF/…` anonymous; 25–411 MB NetCDF / 10 min; >4.7 PB                                                    | 10 min, 2017→                        | NODD open                                |
+| **GPM IMERG precipitation**                       | GES DISC / Earthdata S3 (login), 0.1° global half-hourly, ~0.5 TB/yr                                                               | 30 min, 1998→                        | **CC-BY 4.0** (registry) / NASA open     |
+| **VIIRS nighttime lights (EOG VNL)**              | `eogdata.mines.edu/nighttime_light/annual/v22/` no-auth GeoTIFF                                                                    | annual (monthly avail.), 2012→       | **CC-BY 4.0** (explicit on product page) |
+| **Hansen Global Forest Change**                   | `storage.googleapis.com/earthenginepartners-hansen/GFC-2024-v1.12/` — `lossyear` band = per-pixel YEAR of loss; <10 GB/band global | annual, 2000–2024                    | **CC-BY 4.0** (verbatim on page)         |
+| **GHSL built-up surface**                         | JRC open FTP, 100 m, epochs 1975–2030                                                                                              | 5-yr epochs                          | EC reuse w/ attribution                  |
+| **NSIDC sea-ice concentration CDR**               | NOAA@NSIDC HTTPS, daily 25 km polar grids                                                                                          | daily, 1978→                         | US-gov, cite                             |
+| **Google Open Buildings 2.5D Temporal**           | GCS GeoTIFFs by country; presence/height/count channels, ~4 m eff.                                                                 | annual, 2016–2023, Global South only | **dual CC-BY 4.0 / ODbL — elect CC-BY**  |
 
 - **Why compelling:** global rainfall pulse (IMERG), a 13-year urbanization glow time-lapse (VNL), the
   deforestation front marching across the Amazon (Hansen lossyear), Global-South cities growing upward
@@ -248,15 +248,15 @@ One new capability (a gridded tile tier) unlocks a whole family. All license-cle
 
 ## 3. Blocked or conditional (verified verbatim — do not use without re-reading) — BLOCKED
 
-| Dataset | Verdict |
-|---|---|
-| **OpenSky ADS-B** | **HARD BLOCKER** — non-profit research/education only; no distribution outside licensee's institute; restrictions attach to "any and all subsequent uses and disclosures". Escape hatch: their separately-licensed **CC-BY 4.0 Zenodo derivatives** (e.g. 2019–2020 crowdsourced air traffic, ~41.9 M flights, doi:10.5281/zenodo.3931948). |
-| **Global Fishing Watch** | **CC BY-NC 4.0** — derived tiles redistributable but non-commercial only; usable only if the showcase is definitively non-commercial. Legacy GEE V1 subset is CC-BY-SA. |
-| **Gaia DR3** | **CC BY-NC 3.0 IGO** (not BY-SA as often assumed) — NC blocker. |
-| **WWLLN / Earth Networks lightning** | Copyrighted/commercial, no redistribution. GLM is the open substitute. |
-| **ESA DISCOS** | Registration-gated, no redistribution right. |
-| **Japan ODPT transit** | Bespoke license, full text unverifiable without an account; patchwork CC-BY subsets only. Legal risk for public rehosting. |
-| **MERIT Hydro** | Dual CC-BY-NC / ODbL — usable **only** by electing ODbL (share-alike). Prefer NHDPlus/NWM. |
+| Dataset                              | Verdict                                                                                                                                                                                                                                                                                                                                     |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **OpenSky ADS-B**                    | **HARD BLOCKER** — non-profit research/education only; no distribution outside licensee's institute; restrictions attach to "any and all subsequent uses and disclosures". Escape hatch: their separately-licensed **CC-BY 4.0 Zenodo derivatives** (e.g. 2019–2020 crowdsourced air traffic, ~41.9 M flights, doi:10.5281/zenodo.3931948). |
+| **Global Fishing Watch**             | **CC BY-NC 4.0** — derived tiles redistributable but non-commercial only; usable only if the showcase is definitively non-commercial. Legacy GEE V1 subset is CC-BY-SA.                                                                                                                                                                     |
+| **Gaia DR3**                         | **CC BY-NC 3.0 IGO** (not BY-SA as often assumed) — NC blocker.                                                                                                                                                                                                                                                                             |
+| **WWLLN / Earth Networks lightning** | Copyrighted/commercial, no redistribution. GLM is the open substitute.                                                                                                                                                                                                                                                                      |
+| **ESA DISCOS**                       | Registration-gated, no redistribution right.                                                                                                                                                                                                                                                                                                |
+| **Japan ODPT transit**               | Bespoke license, full text unverifiable without an account; patchwork CC-BY subsets only. Legal risk for public rehosting.                                                                                                                                                                                                                  |
+| **MERIT Hydro**                      | Dual CC-BY-NC / ODbL — usable **only** by electing ODbL (share-alike). Prefer NHDPlus/NWM.                                                                                                                                                                                                                                                  |
 
 ## 3b. Operational time-bombs (consolidated — check before any new build)
 
@@ -296,7 +296,7 @@ tier family (GOES/IMERG/VNL/Hansen — one format investment, many demos; interi
 today), NEXRAD Level-II volumes (hold until there's appetite for volume rendering), ICESat-2 regional photon
 clouds (reuses surfel machinery).
 
-**Pairing strategy (standing):** each new *technique* ships with one flagship dataset, and each flagship
+**Pairing strategy (standing):** each new _technique_ ships with one flagship dataset, and each flagship
 reuses an existing demo as its foil — wind particles over the existing storm-radar derecho; GLM lightning
 over the hurricane tracks; NWM rivers beside the BIXI street-flow family (now realized); analytic satellites
 replacing the baked satellites demo.

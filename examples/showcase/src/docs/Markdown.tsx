@@ -1,11 +1,11 @@
-import React from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import rehypeSlug from "rehype-slug";
-import { Link } from "react-router";
-import { rewriteHref } from "./links";
-import CodeBlock from "./CodeBlock";
-import Mermaid from "./Mermaid";
+import React from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import rehypeSlug from 'rehype-slug';
+import { Link } from 'react-router';
+import { rewriteHref } from './links';
+import CodeBlock from './CodeBlock';
+import Mermaid from './Mermaid';
 
 /**
  * The docs markdown renderer: GFM tables, slugged headings with hover
@@ -23,7 +23,7 @@ const Markdown: React.FC<{
   const scrollToHash = (hash: string) => {
     const el = document.getElementById(decodeURIComponent(hash));
     if (!el) return;
-    el.scrollIntoView({ block: "start", behavior: "smooth" });
+    el.scrollIntoView({ block: 'start', behavior: 'smooth' });
   };
 
   return (
@@ -34,10 +34,10 @@ const Markdown: React.FC<{
         a({ href, children }) {
           if (!href) return <span>{children}</span>;
           const link = rewriteHref(href, currentFile);
-          if (link.kind === "internal") {
+          if (link.kind === 'internal') {
             return <Link to={link.to}>{children}</Link>;
           }
-          if (link.kind === "hash") {
+          if (link.kind === 'hash') {
             return (
               <a
                 href={`#${link.hash}`}
@@ -45,7 +45,7 @@ const Markdown: React.FC<{
                   // The window never scrolls (body overflow:hidden) — scroll
                   // the docs container instead of relying on default behavior.
                   e.preventDefault();
-                  history.replaceState(null, "", `#${link.hash}`);
+                  history.replaceState(null, '', `#${link.hash}`);
                   scrollToHash(link.hash);
                   void scrollContainer; // container handled by scrollIntoView
                 }}
@@ -67,24 +67,24 @@ const Markdown: React.FC<{
         },
         code(props) {
           const { className, children } = props;
-          const match = /language-([\w-]+)/.exec(className || "");
+          const match = /language-([\w-]+)/.exec(className || '');
           const value = String(children);
           if (!match) {
             // Inline code (block code always carries a language-* class via
             // the fence, and our docs never use bare fences — verified).
             // Bare fences still land here with a newline; render them as a
             // plain block.
-            if (value.includes("\n")) {
+            if (value.includes('\n')) {
               return <CodeBlock code={value} language="text" />;
             }
             return <code className={className}>{children}</code>;
           }
-          if (match[1] === "mermaid") return <Mermaid code={value} />;
+          if (match[1] === 'mermaid') return <Mermaid code={value} />;
           return <CodeBlock code={value} language={match[1]} />;
         },
-        h2: makeHeading("h2"),
-        h3: makeHeading("h3"),
-        h4: makeHeading("h4"),
+        h2: makeHeading('h2'),
+        h3: makeHeading('h3'),
+        h4: makeHeading('h4'),
         table({ children }) {
           return (
             <div className="overflow-x-auto">
@@ -99,7 +99,7 @@ const Markdown: React.FC<{
   );
 };
 
-function makeHeading(Tag: "h2" | "h3" | "h4") {
+function makeHeading(Tag: 'h2' | 'h3' | 'h4') {
   const Heading: React.FC<React.HTMLAttributes<HTMLHeadingElement>> = ({
     id,
     children,
@@ -111,14 +111,14 @@ function makeHeading(Tag: "h2" | "h3" | "h4") {
         <a
           href={`#${id}`}
           className="ml-2 no-underline opacity-0 group-hover/h:opacity-60 transition-opacity"
-          style={{ color: "var(--accent)" }}
+          style={{ color: 'var(--accent)' }}
           aria-label="Link to this section"
           onClick={(e) => {
             e.preventDefault();
-            history.replaceState(null, "", `#${id}`);
+            history.replaceState(null, '', `#${id}`);
             document
               .getElementById(id)
-              ?.scrollIntoView({ block: "start", behavior: "smooth" });
+              ?.scrollIntoView({ block: 'start', behavior: 'smooth' });
           }}
         >
           #

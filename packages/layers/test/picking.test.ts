@@ -107,7 +107,8 @@ describe('SpatioTemporalLayer.getPickingInfo', () => {
 
   beforeEach(async () => {
     vi.resetModules();
-    const { SpatioTemporalLayer } = await import('../src/layers/spatiotemporal-layer');
+    const { SpatioTemporalLayer } =
+      await import('../src/layers/spatiotemporal-layer');
     layer = Object.create((SpatioTemporalLayer as any).prototype);
     tile = richPointTile();
   });
@@ -167,7 +168,10 @@ describe('SpatioTemporalLayer.getPickingInfo', () => {
   });
 
   it('respects an object a sublayer already resolved', () => {
-    const params = pickParams(1, { tile, sttFeatures: tile.layers[0].features });
+    const params = pickParams(1, {
+      tile,
+      sttFeatures: tile.layers[0].features,
+    });
     const preResolved = { already: 'here' };
     params.info.object = preResolved;
     const info = layer.getPickingInfo(params);
@@ -185,7 +189,8 @@ describe('sublayers carry tile + sttFeatures (TileLayer convention)', () => {
   });
 
   it('AnimatedPointLayer per-tile sublayer', async () => {
-    const { AnimatedPointLayer } = await import('../src/layers/core/animated-point-layer');
+    const { AnimatedPointLayer } =
+      await import('../src/layers/core/animated-point-layer');
     const layer: any = Object.create((AnimatedPointLayer as any).prototype);
     layer.props = {
       id: 'pts',
@@ -212,7 +217,8 @@ describe('sublayers carry tile + sttFeatures (TileLayer convention)', () => {
     ['pickable (stock PathLayer)', true],
     ['non-pickable (NoPickingPathLayer)', false],
   ])('AnimatedPathLayer sublayer, %s', async (_name, pickable) => {
-    const { AnimatedPathLayer } = await import('../src/layers/core/animated-path-layer');
+    const { AnimatedPathLayer } =
+      await import('../src/layers/core/animated-path-layer');
     const layer: any = Object.create((AnimatedPathLayer as any).prototype);
     layer.props = {
       id: 'paths',
@@ -280,7 +286,8 @@ describe('AnimatedPointLayer cumulative slab picking', () => {
   }
 
   it('maps a slab pick back to its source tile and decodes its columns', async () => {
-    const { AnimatedPointLayer } = await import('../src/layers/core/animated-point-layer');
+    const { AnimatedPointLayer } =
+      await import('../src/layers/core/animated-point-layer');
     const layer = makeCumulativeLayer(AnimatedPointLayer);
 
     const a = makePointTile({
@@ -307,11 +314,16 @@ describe('AnimatedPointLayer cumulative slab picking', () => {
     const info = layer.getPickingInfo(pickParams(3, sprops));
     expect(info.tile).toBe(b);
     expect(info.sourceTile).toBe(b);
-    expect(info.object).toMatchObject({ speed: 2.5, kind: 'bus', start_time: 1020 });
+    expect(info.object).toMatchObject({
+      speed: 2.5,
+      kind: 'bus',
+      start_time: 1020,
+    });
   });
 
   it('reports tile: null for a pick whose absorbed tile was evicted', async () => {
-    const { AnimatedPointLayer } = await import('../src/layers/core/animated-point-layer');
+    const { AnimatedPointLayer } =
+      await import('../src/layers/core/animated-point-layer');
     const layer = makeCumulativeLayer(AnimatedPointLayer);
 
     const a = makePointTile({
@@ -351,7 +363,8 @@ describe('AnimatedPointLayer cumulative slab picking', () => {
 describe('H3SummaryLayer.getPickingInfo', () => {
   it('enriches the picked row with the full aggregated columns', async () => {
     vi.resetModules();
-    const { H3SummaryLayer } = await import('../src/layers/summary/h3-summary-layer');
+    const { H3SummaryLayer } =
+      await import('../src/layers/summary/h3-summary-layer');
     const layer: any = Object.create((H3SummaryLayer as any).prototype);
 
     const tile = richPointTile();
@@ -382,7 +395,8 @@ describe('SpatioTemporalLayer._maybeFireViewportLoad', () => {
 
   beforeEach(async () => {
     vi.resetModules();
-    const { SpatioTemporalLayer } = await import('../src/layers/spatiotemporal-layer');
+    const { SpatioTemporalLayer } =
+      await import('../src/layers/spatiotemporal-layer');
     layer = Object.create((SpatioTemporalLayer as any).prototype);
     calls = [];
     layer.props = { onViewportLoad: (tiles: unknown[]) => calls.push(tiles) };
@@ -391,7 +405,11 @@ describe('SpatioTemporalLayer._maybeFireViewportLoad', () => {
 
   it('fires once per settled selection version', () => {
     const tiles = ['tile'];
-    const tileset = { selectionVersion: 1, isLoaded: false, getVisibleTiles: () => tiles };
+    const tileset = {
+      selectionVersion: 1,
+      isLoaded: false,
+      getVisibleTiles: () => tiles,
+    };
 
     layer._maybeFireViewportLoad(tileset);
     expect(calls).toHaveLength(0); // still loading
@@ -410,14 +428,22 @@ describe('SpatioTemporalLayer._maybeFireViewportLoad', () => {
   });
 
   it('never fires before the first real selection (version 0)', () => {
-    const tileset = { selectionVersion: 0, isLoaded: true, getVisibleTiles: () => [] };
+    const tileset = {
+      selectionVersion: 0,
+      isLoaded: true,
+      getVisibleTiles: () => [],
+    };
     layer._maybeFireViewportLoad(tileset);
     expect(calls).toHaveLength(0);
   });
 
   it('does nothing when onViewportLoad is not set', () => {
     layer.props = {};
-    const tileset = { selectionVersion: 1, isLoaded: true, getVisibleTiles: () => [] };
+    const tileset = {
+      selectionVersion: 1,
+      isLoaded: true,
+      getVisibleTiles: () => [],
+    };
     expect(() => layer._maybeFireViewportLoad(tileset)).not.toThrow();
   });
 });

@@ -4,7 +4,7 @@
 
 /**
  * Refactored SpatioTemporalLayer using Tileset pattern
- * 
+ *
  * Based on deck.gl TileLayer architecture with loaders.gl integration
  */
 
@@ -231,7 +231,9 @@ export interface _SpatioTemporalLayerProps {
    * straight to a `PlaybackGovernor` via `governor.setSource(tileset)`.
    * Mirrors the `onTileLoad` callback pattern.
    */
-  onTilesetReady?: ((tileset: SpatiotemporalTileset & BufferSource) => void) | null;
+  onTilesetReady?:
+    | ((tileset: SpatiotemporalTileset & BufferSource) => void)
+    | null;
 
   /**
    * Forwarded from the tileset's buffer bookkeeping: fires when the buffered
@@ -301,7 +303,8 @@ export interface _SpatioTemporalLayerProps {
 }
 
 /** Complete props accepted by {@link SpatioTemporalLayer}. */
-export type SpatioTemporalLayerProps = _SpatioTemporalLayerProps & CompositeLayerProps;
+export type SpatioTemporalLayerProps = _SpatioTemporalLayerProps &
+  CompositeLayerProps;
 
 interface SpatioTemporalLayerState {
   archive: STTArchive | null;
@@ -331,7 +334,12 @@ const defaultProps: DefaultProps<SpatioTemporalLayerProps> = {
   currentTime: 0,
   timeWindow: 86_400_000, // 1 day
   timeRange: { type: 'object', value: null, optional: true, compare: true },
-  timeController: { type: 'object', value: null, optional: true, compare: false },
+  timeController: {
+    type: 'object',
+    value: null,
+    optional: true,
+    compare: false,
+  },
   lodMode: 'parent-fallback',
 
   // Tile-loading configuration (mirrors deck.gl `TileLayer`).
@@ -407,7 +415,7 @@ const defaultProps: DefaultProps<SpatioTemporalLayerProps> = {
  * Required<CompositeLayerProps>`.
  */
 export class SpatioTemporalLayer<
-  ExtraPropsT extends {} = {}
+  ExtraPropsT extends {} = {},
 > extends CompositeLayer<ExtraPropsT & Required<_SpatioTemporalLayerProps>> {
   static layerName = 'SpatioTemporalLayer';
 
@@ -444,7 +452,7 @@ export class SpatioTemporalLayer<
       }),
     );
   }
-  
+
   // Internal time tracking - updated every tick without setState overhead
   // Sublayers read from this via getCurrentTime() method
   protected _currentTime: number = 0;
@@ -597,7 +605,9 @@ export class SpatioTemporalLayer<
       if (typeof cancelAnimationFrame === 'function') {
         cancelAnimationFrame(this._tileLoadRafId);
       } else {
-        clearTimeout(this._tileLoadRafId as unknown as ReturnType<typeof setTimeout>);
+        clearTimeout(
+          this._tileLoadRafId as unknown as ReturnType<typeof setTimeout>,
+        );
       }
       this._tileLoadRafId = null;
     }
@@ -615,7 +625,7 @@ export class SpatioTemporalLayer<
         resolved.off('tick', this.state.tickHandler);
       }
     }
-    
+
     // Cleanup tileset + archive resources (the archive owns the worker-pool
     // decoder when one is in use; we must terminate it on unmount or the
     // workers stay alive across navigations).
@@ -650,9 +660,10 @@ export class SpatioTemporalLayer<
     // matches it — without that check, the first `updateState` after init
     // (where `state.archive` is still null) re-fires `_initArchiveAndTileset`
     // and we get two parallel archive setups racing to attach workers.
-    const liveUrl = this.state.archive?.url ?? this.state.initializingUrl ?? null;
+    const liveUrl =
+      this.state.archive?.url ?? this.state.initializingUrl ?? null;
     const dataChanged = propsChanged && this.props.data !== liveUrl;
-    
+
     // Handle TimeController changes. Resolution is prop → context.userData, so
     // a change can come from the prop OR — when some other prop change drives
     // this updateState — from a swapped app-global controller on userData. (A
@@ -684,28 +695,28 @@ export class SpatioTemporalLayer<
         if (tileset) {
           tileset.setAnimationState(
             nextController.isPlaying(),
-            nextController.getSpeed()
+            nextController.getSpeed(),
           );
         }
       }
       this.setState({ resolvedTimeController: nextController });
     }
-    
+
     if (dataChanged) {
       // Reinitialize with new data source
       this._initArchiveAndTileset();
       return;
     }
-    
+
     // Following deck.gl TileLayer pattern:
     // Always update tileset on any change (viewport, props, etc)
     // The tileset itself will detect what changed and update accordingly
     this._updateTileset(changeFlags);
   }
-  
+
   /**
    * Handle time updates from TimeController tick events
-   * 
+   *
    * PERFORMANCE OPTIMIZED:
    * - Updates _currentTime directly (no setState overhead)
    * - Only calls setState when tiles actually change (infrequent)
@@ -725,10 +736,10 @@ export class SpatioTemporalLayer<
   protected _handleTimeUpdate(time: number): void {
     const { tileset } = this.state;
     if (!tileset) return;
-    
+
     // Always update internal time tracking (no setState overhead)
     this._currentTime = time;
-    
+
     // Check if we need to update the tileset (throttled). `timeWindow` is
     // `Required<>`-typed: the default guarantees a value here.
     const timeWindow = this.props.timeWindow;
@@ -754,15 +765,18 @@ export class SpatioTemporalLayer<
       if (viewport) {
         const bounds = this.getViewportBounds(viewport);
         const zoom = this.getZoomLevel(viewport);
-        
+
         // Update tileset - this triggers prefetch for upcoming tiles
-        tileset.update({
-          bounds,
-          zoom,
-          time,
-          timeWindow,
-        }, true); // skipDebounce = true for animation
-        
+        tileset.update(
+          {
+            bounds,
+            zoom,
+            time,
+            timeWindow,
+          },
+          true,
+        ); // skipDebounce = true for animation
+
         // Check if tiles actually changed
         const newTiles = tileset.getVisibleTiles();
         if (this._tilesChanged(newTiles)) {
@@ -780,7 +794,7 @@ export class SpatioTemporalLayer<
         this._maybeFireViewportLoad(tileset);
       }
     }
-    
+
     // PERFORMANCE: For time-only changes, use setNeedsRedraw() instead of setNeedsUpdate()
     // This triggers a redraw WITHOUT calling renderLayers() - the memoized layer is reused
     // Time updates happen via the getTime() getter in TimeFilterExtension.draw()
@@ -788,7 +802,7 @@ export class SpatioTemporalLayer<
       this.setNeedsRedraw();
     }
   }
-  
+
   /**
    * Schedule a coalesced tiles-state update after tile load(s).
    *
@@ -884,9 +898,11 @@ export class SpatioTemporalLayer<
     // TEMP-DIAGNOSTIC (flash repro): record visible-tile set deltas with the
     // sim time at the swap, so removed-before-replaced churn shows up offline.
     {
-      const probe = (globalThis as unknown as {
-        __sttProbe?: { enabled?: boolean; tileSwaps?: unknown[] };
-      }).__sttProbe;
+      const probe = (
+        globalThis as unknown as {
+          __sttProbe?: { enabled?: boolean; tileSwaps?: unknown[] };
+        }
+      ).__sttProbe;
       if (probe?.enabled && Array.isArray(probe.tileSwaps)) {
         const added: string[] = [];
         const removed: string[] = [];
@@ -922,7 +938,10 @@ export class SpatioTemporalLayer<
       !changeFlags.dataChanged;
     if (viewportOnly) {
       const nowWall = performance.now();
-      if (nowWall - this._lastViewportSelectWall < MIN_VIEWPORT_TILESET_WALL_MS) {
+      if (
+        nowWall - this._lastViewportSelectWall <
+        MIN_VIEWPORT_TILESET_WALL_MS
+      ) {
         this.setNeedsRedraw();
         this._scheduleViewportSettle();
         return;
@@ -940,34 +959,38 @@ export class SpatioTemporalLayer<
     const currentTime = controller
       ? controller.getTime()
       : this.props.currentTime;
-    
+
     // Update internal time tracking
     this._currentTime = currentTime;
-    
+
     // Check if it's a time-only change for debouncing logic
-    const timeChanged = changeFlags.propsChanged && currentTime !== this._lastTilesetUpdateTime;
+    const timeChanged =
+      changeFlags.propsChanged && currentTime !== this._lastTilesetUpdateTime;
     const skipDebounce = timeChanged && !changeFlags.propsOrDataChanged;
-    
+
     // Get viewport bounds and zoom
     const viewport = this.context.viewport;
     if (!viewport) {
       if (DEBUG) console.log('[STL] No viewport available');
       return;
     }
-    
+
     const bounds = this.getViewportBounds(viewport);
     const zoom = this.getZoomLevel(viewport);
-    
+
     // Get effective time window - subclasses can override for trail rendering etc.
     const timeWindow = this.getEffectiveTimeWindow();
-    
+
     // Update tileset - this returns a new frameNumber if tiles changed
-    const frameNumber = tileset.update({
-      bounds,
-      zoom,
-      time: currentTime,
-      timeWindow,
-    }, skipDebounce);
+    const frameNumber = tileset.update(
+      {
+        bounds,
+        zoom,
+        time: currentTime,
+        timeWindow,
+      },
+      skipDebounce,
+    );
 
     // Get visible tiles (optimistic rendering - show what we have)
     const tiles = tileset.getVisibleTiles();
@@ -1047,7 +1070,11 @@ export class SpatioTemporalLayer<
     this._viewportSettleTimer = setTimeout(() => {
       this._viewportSettleTimer = null;
       if (this._finalized || !this.state.tileset) return;
-      this._updateTileset({ viewportChanged: true, propsChanged: false, dataChanged: false });
+      this._updateTileset({
+        viewportChanged: true,
+        propsChanged: false,
+        dataChanged: false,
+      });
     }, MIN_VIEWPORT_TILESET_WALL_MS);
   }
 
@@ -1062,7 +1089,7 @@ export class SpatioTemporalLayer<
   /**
    * Get the effective time window for tile loading.
    * Subclasses can override this to account for trail rendering, etc.
-   * 
+   *
    * For trail rendering, the time window should be at least 2x the trail length
    * to ensure tiles containing trail data are loaded.
    */
@@ -1097,13 +1124,13 @@ export class SpatioTemporalLayer<
     this.state.initializingUrl = targetUrl;
 
     const archive = new STTArchive({
-        url: targetUrl,
-        loadOptions: this.props.loadOptions,
-        // Single concurrency knob: the tileset's `maxRequests` IS the archive's
-        // in-flight Range-request ceiling. Previously the archive used its own
-        // default (24) and the layer's `maxRequests` never reached the wire, so
-        // setting it had no effect on actual fetch concurrency.
-        maxConcurrentRequests: this.props.maxRequests,
+      url: targetUrl,
+      loadOptions: this.props.loadOptions,
+      // Single concurrency knob: the tileset's `maxRequests` IS the archive's
+      // in-flight Range-request ceiling. Previously the archive used its own
+      // default (24) and the layer's `maxRequests` never reached the wire, so
+      // setting it had no effect on actual fetch concurrency.
+      maxConcurrentRequests: this.props.maxRequests,
     });
 
     // Get metadata to configure tileset zoom range
@@ -1131,8 +1158,11 @@ export class SpatioTemporalLayer<
       ? { minZoom: summaryTier.minZoom, maxZoom: summaryTier.maxZoom }
       : undefined;
     const getAvailableSummaryTiles = summaryTier
-      ? (bounds: BoundingBox, zoom: number, timeRange: { start: number; end: number }) =>
-          archive.getSummaryTileIdsInBounds(bounds, zoom, timeRange)
+      ? (
+          bounds: BoundingBox,
+          zoom: number,
+          timeRange: { start: number; end: number },
+        ) => archive.getSummaryTileIdsInBounds(bounds, zoom, timeRange)
       : undefined;
 
     // Temporal-LOD pyramid (scrub-LOD P2). Capability detection mirrors the
@@ -1150,7 +1180,13 @@ export class SpatioTemporalLayer<
           zoom: number,
           timeRange: { start: number; end: number },
           bucketMs: number,
-        ) => archive.getTileIdsInBoundsForTemporalLod(bounds, zoom, timeRange, bucketMs)
+        ) =>
+          archive.getTileIdsInBoundsForTemporalLod(
+            bounds,
+            zoom,
+            timeRange,
+            bucketMs,
+          )
       : undefined;
 
     // Create tileset with archive as data source
@@ -1208,7 +1244,11 @@ export class SpatioTemporalLayer<
           this.props.onTileError(error, realTileId);
         } else {
           // TileLayer's default: errors surface in the console.
-          console.error('[STL] Tile error:', realTileId ?? '(dataset-level)', error);
+          console.error(
+            '[STL] Tile error:',
+            realTileId ?? '(dataset-level)',
+            error,
+          );
         }
       },
       // ── Player-buffering plumbing (WS-A/WS-B contract) ──────────────────
@@ -1222,9 +1262,15 @@ export class SpatioTemporalLayer<
       // overrides win over the base wiring above.
       ...this.getTilesetOptionOverrides(metadata),
     });
-    
-    if (DEBUG) console.log('[STL] Tileset configured with zoom range:', metadata.minZoom, '-', metadata.maxZoom);
-    
+
+    if (DEBUG)
+      console.log(
+        '[STL] Tileset configured with zoom range:',
+        metadata.minZoom,
+        '-',
+        metadata.maxZoom,
+      );
+
     // If the resolved time controller is playing, set initial animation state
     const controller = this.state.resolvedTimeController;
     if (controller?.isPlaying()) {
@@ -1241,12 +1287,20 @@ export class SpatioTemporalLayer<
     // re-runs, dropping cache entries that referenced the previous
     // archive's tiles). Without this the cache holds stale entries until
     // the natural "different tile key" prune kicks in on the next render.
-    this.setState({ archive, tileset, metadata, initializingUrl: null, tiles: [] });
+    this.setState({
+      archive,
+      tileset,
+      metadata,
+      initializingUrl: null,
+      tiles: [],
+    });
 
     // Hand the live tileset to the app exactly once per init, after state is
     // committed. The tileset implements the BufferSource readiness contract
     // (runway/cost/ETA queries), which is what a PlaybackGovernor consumes.
-    this.props.onTilesetReady?.(tileset as SpatiotemporalTileset & BufferSource);
+    this.props.onTilesetReady?.(
+      tileset as SpatiotemporalTileset & BufferSource,
+    );
 
     // Storyboard tier (WS-C4): kick the budget-gated overview preload WITHOUT
     // blocking init — the fetches ride the lowest request tier behind any
@@ -1333,19 +1387,19 @@ export class SpatioTemporalLayer<
     if (this.props.zoomOverride != null) {
       return this.props.zoomOverride;
     }
-    
+
     // Convert deck.gl zoom to tile zoom
     // Clamp to available zoom range from archive metadata
     const zoom = Math.floor(viewport.zoom);
     const { archive, metadata } = this.state;
-    
+
     if (archive && metadata) {
       // Use metadata from state
       const minZoom = metadata.minZoom;
       const maxZoom = metadata.maxZoom;
       return Math.max(minZoom, Math.min(maxZoom, zoom));
     }
-    
+
     return zoom;
   }
 
@@ -1355,7 +1409,7 @@ export class SpatioTemporalLayer<
   get isLoaded(): boolean {
     return this.state.isLoaded;
   }
-  
+
   /**
    * Get the current animation time.
    * Sublayers should use this instead of this.state.currentTime for performance.
@@ -1461,7 +1515,10 @@ export class SpatioTemporalLayer<
    * into one sublayer) resolve through per-tile provenance instead — see
    * `AnimatedPointLayer.getPickingInfo`.
    */
-  getPickingInfo({ info, sourceLayer }: GetPickingInfoParams): SpatioTemporalPickingInfo {
+  getPickingInfo({
+    info,
+    sourceLayer,
+  }: GetPickingInfoParams): SpatioTemporalPickingInfo {
     const out = info as SpatioTemporalPickingInfo;
     const sprops = sourceLayer?.props as SttSublayerPickingProps | undefined;
     const tile = sprops?.tile ?? null;
@@ -1471,7 +1528,8 @@ export class SpatioTemporalLayer<
       // Respect an object a sublayer already resolved (e.g. JS-row
       // sublayers); only binary sublayers leave it undefined.
       if (out.object === undefined && sprops?.sttFeatures) {
-        out.object = getFeatureProperties(sprops.sttFeatures, info.index) ?? undefined;
+        out.object =
+          getFeatureProperties(sprops.sttFeatures, info.index) ?? undefined;
       }
     }
     return out;
@@ -1484,7 +1542,3 @@ export class SpatioTemporalLayer<
     return [];
   }
 }
-
-
-
-

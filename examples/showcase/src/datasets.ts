@@ -12,15 +12,18 @@ import { Dataset, ColorRGBA, DatasetLegend } from './types';
  * cool (deep blue), recent ones warm (red). Keyed by year string so the point
  * layer's `colorMapping` can color each creation by the year it first appeared.
  */
-function osmYearColors(startYear: number, endYear: number): Record<string, ColorRGBA> {
+function osmYearColors(
+  startYear: number,
+  endYear: number,
+): Record<string, ColorRGBA> {
   const stops: ColorRGBA[] = [
-    [37, 52, 148, 255],   // deep blue (oldest)
-    [44, 127, 184, 255],  // blue
-    [65, 182, 196, 255],  // cyan
+    [37, 52, 148, 255], // deep blue (oldest)
+    [44, 127, 184, 255], // blue
+    [65, 182, 196, 255], // cyan
     [120, 198, 121, 255], // green
-    [255, 204, 92, 255],  // yellow
-    [253, 141, 60, 255],  // orange
-    [227, 26, 28, 255],   // red (newest)
+    [255, 204, 92, 255], // yellow
+    [253, 141, 60, 255], // orange
+    [227, 26, 28, 255], // red (newest)
   ];
   const out: Record<string, ColorRGBA> = {};
   const span = Math.max(1, endYear - startYear);
@@ -54,14 +57,14 @@ const OSM_YEAR_COLORS = osmYearColors(2007, 2026);
 // outermost bands are open-ended: "<-2" and ">10"). A key that doesn't match a
 // band label silently no-ops to `lidarColorMappingDefault`.
 const AV_HEIGHT_BAND_COLORS: Record<string, ColorRGBA> = {
-  '<-2': [46, 30, 96, 255],     // below grade — deep indigo
-  '-2-0': [52, 60, 158, 255],   // ground — blue
-  '0-2': [40, 120, 190, 255],   // curb / low — cyan-blue
-  '2-4': [38, 168, 168, 255],   // car-roof height — teal
-  '4-6': [72, 196, 120, 255],   // green
-  '6-8': [170, 214, 74, 255],   // lime
-  '8-10': [248, 198, 60, 255],  // building edge — amber
-  '>10': [250, 140, 48, 255],   // rooftops / canopy — orange
+  '<-2': [46, 30, 96, 255], // below grade — deep indigo
+  '-2-0': [52, 60, 158, 255], // ground — blue
+  '0-2': [40, 120, 190, 255], // curb / low — cyan-blue
+  '2-4': [38, 168, 168, 255], // car-roof height — teal
+  '4-6': [72, 196, 120, 255], // green
+  '6-8': [170, 214, 74, 255], // lime
+  '8-10': [248, 198, 60, 255], // building edge — amber
+  '>10': [250, 140, 48, 255], // rooftops / canopy — orange
 };
 
 /**
@@ -156,12 +159,16 @@ const AV_MAP_COLORS: Record<string, ColorRGBA> = {
  * path is rewritten to `<base>/data/<stem>/manifest.json`. Unset → served from
  * the showcase origin (local `public/data`), so behavior is unchanged by default.
  */
-const DATA_BASE_URL: string = ((import.meta as any).env?.VITE_DATA_BASE_URL ?? '')
+const DATA_BASE_URL: string = (
+  (import.meta as any).env?.VITE_DATA_BASE_URL ?? ''
+)
   .toString()
   .replace(/\/$/, '');
 
 function resolveDataUrl(url: string): string {
-  return DATA_BASE_URL && url.startsWith('/data/') ? `${DATA_BASE_URL}${url}` : url;
+  return DATA_BASE_URL && url.startsWith('/data/')
+    ? `${DATA_BASE_URL}${url}`
+    : url;
 }
 
 // Shared cockpit legend for the semantic-LIDAR scenes (hex of AV_LIDARSEG_COLORS;
@@ -199,11 +206,11 @@ const AV_HEIGHT_BAND_LEGEND: DatasetLegend = {
 // DUAL-COPY: keys MUST match `av_common.ISO_DENSITY_BANDS` ('d1'..'d5'); this is
 // the ACTUAL rendered line palette (via the iso variant's `lidarColorMapping`).
 const AV_ISO_DENSITY_COLORS: Record<string, ColorRGBA> = {
-  d1: [78, 96, 188, 150],   // sparse outer ring — dim blue-violet
-  d2: [44, 152, 222, 185],  // cyan-blue
-  d3: [40, 200, 176, 210],  // teal-green
-  d4: [248, 200, 74, 236],  // amber
-  d5: [255, 120, 56, 255],  // dense core — hot orange
+  d1: [78, 96, 188, 150], // sparse outer ring — dim blue-violet
+  d2: [44, 152, 222, 185], // cyan-blue
+  d3: [40, 200, 176, 210], // teal-green
+  d4: [248, 200, 74, 236], // amber
+  d5: [255, 120, 56, 255], // dense core — hot orange
 };
 const AV_ISO_DENSITY_LEGEND: DatasetLegend = {
   title: 'LIDAR return density',
@@ -232,7 +239,11 @@ const AV_ISO_DENSITY_ELEVATION_SCALE = 2.5;
 // above (you see down through the layers). Range is RAW metres (pre-exaggeration);
 // the Miami scene spans ~0–7 m, so [0, 6] grades across the structure with the top
 // dropping to ~30% alpha. Tune `far` lower for a more see-through roof.
-const AV_ISO_DENSITY_TOP_FADE = { range: [0, 6] as [number, number], near: 1, far: 0.3 };
+const AV_ISO_DENSITY_TOP_FADE = {
+  range: [0, 6] as [number, number],
+  near: 1,
+  far: 0.3,
+};
 // Waymo variant: the Waymo top-LIDAR FOV is vertically shallow (a few metres),
 // so the iso3d stack spans far less height than AV2's georeferenced cloud. A
 // tighter range keeps the same ground-crisp→roof-translucent grading engaged
@@ -285,36 +296,34 @@ const AV_LIDAR_TIME_WINDOW_MS = 500;
  *   • `opacity` — default mesh opacity (0–1); below 1 ghosts the buildings so the
  *     LIDAR reads against them. Omit for fully opaque.
  */
-const AV_TILES3D_CONFIG: Record<
-  string,
-  { ground: number; opacity?: number }
-> = {
-  // Argoverse 2 (georeferenced). Pittsburgh / Miami / Detroit visually fine-tuned;
-  // the rest are auto-estimated by the box-bottom probe (scripts/estimate-3d-tiles-
-  // ground.mjs) — validated to ±2 m on flat AV2 terrain, so likely close, but may
-  // want a small slider trim (more on hilly scenes, like Pittsburgh's ~+8).
-  'argoverse-02678d04': { ground: 237.4 }, // Pittsburgh — tuned (est ~229, hilly)
-  'argoverse-02a00399': { ground: -24 }, // Miami — tuned (est -25.3)
-  'argoverse-0b5142c1': { ground: -6 }, // Washington DC — estimated
-  'argoverse-0bae3b5e': { ground: 146 }, // Detroit — tuned (est 144.3)
-  'argoverse-25e5c600': { ground: -23 }, // Palo Alto — estimated
-  'argoverse-92b900b1': { ground: 111 }, // Austin — estimated
-  // nuScenes (georeferenced; ground-biased probe estimates — noisier because the
-  // Singapore high-rises pollute the tile sample, so expect a per-scene trim).
-  'nuscenes-0061': { ground: 31 }, // One-North
-  'nuscenes-0103': { ground: -25 }, // Boston Seaport
-  'nuscenes-0553': { ground: -21 }, // Boston Seaport
-  'nuscenes-0655': { ground: -20 }, // Boston Seaport
-  'nuscenes-0757': { ground: -20 }, // Boston Seaport
-  'nuscenes-0796': { ground: 25 }, // Queenstown
-  'nuscenes-0916': { ground: 41 }, // Queenstown
-  'nuscenes-1077': { ground: 37 }, // Holland Village
-  'nuscenes-1094': { ground: 32 }, // Holland Village
-  'nuscenes-1100': { ground: 33 }, // Holland Village
-  // NOTE: Waymo scenes are deliberately excluded — they're anchored in an
-  // approximate local frame (no real georef), so the georeferenced photoreal mesh
-  // would never line up with the cloud's streets.
-};
+const AV_TILES3D_CONFIG: Record<string, { ground: number; opacity?: number }> =
+  {
+    // Argoverse 2 (georeferenced). Pittsburgh / Miami / Detroit visually fine-tuned;
+    // the rest are auto-estimated by the box-bottom probe (scripts/estimate-3d-tiles-
+    // ground.mjs) — validated to ±2 m on flat AV2 terrain, so likely close, but may
+    // want a small slider trim (more on hilly scenes, like Pittsburgh's ~+8).
+    'argoverse-02678d04': { ground: 237.4 }, // Pittsburgh — tuned (est ~229, hilly)
+    'argoverse-02a00399': { ground: -24 }, // Miami — tuned (est -25.3)
+    'argoverse-0b5142c1': { ground: -6 }, // Washington DC — estimated
+    'argoverse-0bae3b5e': { ground: 146 }, // Detroit — tuned (est 144.3)
+    'argoverse-25e5c600': { ground: -23 }, // Palo Alto — estimated
+    'argoverse-92b900b1': { ground: 111 }, // Austin — estimated
+    // nuScenes (georeferenced; ground-biased probe estimates — noisier because the
+    // Singapore high-rises pollute the tile sample, so expect a per-scene trim).
+    'nuscenes-0061': { ground: 31 }, // One-North
+    'nuscenes-0103': { ground: -25 }, // Boston Seaport
+    'nuscenes-0553': { ground: -21 }, // Boston Seaport
+    'nuscenes-0655': { ground: -20 }, // Boston Seaport
+    'nuscenes-0757': { ground: -20 }, // Boston Seaport
+    'nuscenes-0796': { ground: 25 }, // Queenstown
+    'nuscenes-0916': { ground: 41 }, // Queenstown
+    'nuscenes-1077': { ground: 37 }, // Holland Village
+    'nuscenes-1094': { ground: 32 }, // Holland Village
+    'nuscenes-1100': { ground: 33 }, // Holland Village
+    // NOTE: Waymo scenes are deliberately excluded — they're anchored in an
+    // approximate local frame (no real georef), so the georeferenced photoreal mesh
+    // would never line up with the cloud's streets.
+  };
 
 function nuscenesScene(opts: {
   id: string;
@@ -457,7 +466,7 @@ function argoverseScene(opts: {
   // lookup (so every `-lod` / `-surfel` / … variant resolves to its city's value).
   const tiles3dBaseId = opts.id.replace(
     /-(?:surfel|world|scan|iso3d|iso|lod|splat|stage)$/,
-    "",
+    '',
   );
   const surfel = opts.surfel ?? false;
   const world = opts.world ?? false;
@@ -470,7 +479,15 @@ function argoverseScene(opts: {
   const isoAny = iso || iso3d;
   // world / surfel / scan / iso / iso3d are mutually exclusive — each is a
   // different cloud representation reading a different bundle.
-  if (Number(surfel) + Number(world) + Number(scan) + Number(iso3d) + Number(iso) + Number(lod) > 1) {
+  if (
+    Number(surfel) +
+      Number(world) +
+      Number(scan) +
+      Number(iso3d) +
+      Number(iso) +
+      Number(lod) >
+    1
+  ) {
     throw new Error(
       `argoverseScene(${opts.id}): surfel / world / scan / iso / iso3d / lod are mutually exclusive`,
     );
@@ -525,7 +542,9 @@ function argoverseScene(opts: {
     // …or, for either iso-line variant, by the categorical density band.
     colorProperty: isoAny ? 'density_band' : 'height_band',
     lidarColorMapping: isoAny ? AV_ISO_DENSITY_COLORS : AV_HEIGHT_BAND_COLORS,
-    lidarColorMappingDefault: isoAny ? [96, 116, 168, 150] : [120, 130, 150, 220],
+    lidarColorMappingDefault: isoAny
+      ? [96, 116, 168, 150]
+      : [120, 130, 150, 220],
     // …UNLESS this is a camera/phase-colored variant:
     //   • SURFEL — paint per-point r/g/b (projected into the 7 ring cameras) and
     //     render those returns as oriented Gaussian disks via SplatLayer,
@@ -687,7 +706,10 @@ function waymoScene(opts: {
   const isoAny = iso || iso3d;
   // world / surfel / iso / iso3d / lod are mutually exclusive — each reads a
   // different bundle representation. Guard against an entry setting two.
-  if (Number(surfel) + Number(iso) + Number(iso3d) + Number(world) + Number(lod) > 1) {
+  if (
+    Number(surfel) + Number(iso) + Number(iso3d) + Number(world) + Number(lod) >
+    1
+  ) {
     throw new Error(
       `waymoScene(${opts.id}): surfel / iso / iso3d / world / lod are mutually exclusive`,
     );
@@ -734,7 +756,9 @@ function waymoScene(opts: {
     // …or, for either iso-line variant, by the categorical density band.
     colorProperty: isoAny ? 'density_band' : 'height_band',
     lidarColorMapping: isoAny ? AV_ISO_DENSITY_COLORS : AV_HEIGHT_BAND_COLORS,
-    lidarColorMappingDefault: isoAny ? [96, 116, 168, 150] : [120, 130, 150, 220],
+    lidarColorMappingDefault: isoAny
+      ? [96, 116, 168, 150]
+      : [120, 130, 150, 220],
     // …UNLESS this is the camera-colored variant: paint per-point r/g/b (sampled
     // by projecting each return into the 5 cameras). The SURFEL variant renders
     // those colored returns as oriented Gaussian disks via SplatLayer; the plain
@@ -796,7 +820,7 @@ const rawDatasets: Dataset[] = [
     type: 'summary',
     timeRange: {
       start: 1420070400000, // 2015-01-01 00:00:00 UTC
-      end: 1420213385000,   // 2015-01-02 15:43:05 UTC
+      end: 1420213385000, // 2015-01-02 15:43:05 UTC
     },
     timeWindow: 1800000, // 30 min — matches the archive's temporal bucket
     targetPlaybackSeconds: 60, // full time-range plays in ~1 min
@@ -852,8 +876,14 @@ const rawDatasets: Dataset[] = [
     legend: {
       title: 'Trips per hex (30 min)',
       ramps: [
-        { label: 'Pickups',  colors: ['#103a20', '#26ae58', '#90f0a8', '#dafcda'] },
-        { label: 'Dropoffs', colors: ['#3a0d0d', '#d85432', '#fcc678', '#fff0d2'] },
+        {
+          label: 'Pickups',
+          colors: ['#103a20', '#26ae58', '#90f0a8', '#dafcda'],
+        },
+        {
+          label: 'Dropoffs',
+          colors: ['#3a0d0d', '#d85432', '#fcc678', '#fff0d2'],
+        },
       ],
     },
   },
@@ -893,21 +923,21 @@ const rawDatasets: Dataset[] = [
     colorProperty: 'mag_band',
     colorMapping: {
       '1-M4.5-5': [254, 229, 217, 255],
-      '2-M5-6':   [252, 174, 145, 255],
-      '3-M6-7':   [251, 106,  74, 255],
-      '4-M7-8':   [222,  45,  38, 255],
-      '5-M8+':    [165,  15,  21, 255],
+      '2-M5-6': [252, 174, 145, 255],
+      '3-M6-7': [251, 106, 74, 255],
+      '4-M7-8': [222, 45, 38, 255],
+      '5-M8+': [165, 15, 21, 255],
     },
     colorMappingDefault: [120, 120, 120, 255],
     legend: {
-      title: "Magnitude",
+      title: 'Magnitude',
       items: [
-        { color: "#FEE5D9", label: "M4.5–5.0" },
-        { color: "#FCAE91", label: "M5.0–6.0" },
-        { color: "#FB6A4A", label: "M6.0–7.0" },
-        { color: "#DE2D26", label: "M7.0–8.0" },
-        { color: "#A50F15", label: "M8.0+" }
-      ]
+        { color: '#FEE5D9', label: 'M4.5–5.0' },
+        { color: '#FCAE91', label: 'M5.0–6.0' },
+        { color: '#FB6A4A', label: 'M6.0–7.0' },
+        { color: '#DE2D26', label: 'M7.0–8.0' },
+        { color: '#A50F15', label: 'M8.0+' },
+      ],
     },
   },
   {
@@ -916,7 +946,8 @@ const rawDatasets: Dataset[] = [
     id: 'earthquake-columns',
     name: 'Earthquakes as 3D Columns',
     sources: ['usgs'],
-    description: 'Global M4.0+ catalog as extruded columns; column height is magnitude. Same archive as the points demo. AnimatedColumnLayer.',
+    description:
+      'Global M4.0+ catalog as extruded columns; column height is magnitude. Same archive as the points demo. AnimatedColumnLayer.',
     url: '/data/earthquakes-v2/manifest.json',
     type: 'column',
     timeRange: {
@@ -954,12 +985,13 @@ const rawDatasets: Dataset[] = [
     // arcs, animated by trip time. Synthetic offline data (no OSRM).
     id: 'nyc-od-arcs',
     name: 'NYC Taxi Origin→Destination Arcs',
-    description: '~5.8K synthetic NYC taxi trips as origin→destination arcs, animated by pickup→dropoff time. AnimatedArcLayer.',
+    description:
+      '~5.8K synthetic NYC taxi trips as origin→destination arcs, animated by pickup→dropoff time. AnimatedArcLayer.',
     url: '/data/nyc-od-arcs/manifest.json',
     type: 'arc',
     timeRange: {
       start: 1705276800000, // 2024-01-15 00:00 UTC
-      end: 1705364736000,   // ~24 h later
+      end: 1705364736000, // ~24 h later
     },
     timeWindow: 1800000, // 30-min slice — arcs whose [pickup, dropoff] overlaps
     targetPlaybackSeconds: 45,
@@ -1028,7 +1060,10 @@ const rawDatasets: Dataset[] = [
     legend: {
       title: 'Points per Quadbin cell (1 h)',
       ramps: [
-        { label: 'Density', colors: ['#0c2c4c', '#2696c2', '#b4ece2', '#f0fcf0'] },
+        {
+          label: 'Density',
+          colors: ['#0c2c4c', '#2696c2', '#b4ece2', '#f0fcf0'],
+        },
       ],
     },
   },
@@ -1042,12 +1077,13 @@ const rawDatasets: Dataset[] = [
     id: 'bixi-flowmap',
     name: 'Montréal BIXI — OD Flowmap',
     sources: ['bixi'],
-    description: 'A month of real Montréal BIXI trips (August 2024) as an origin→destination flowmap: station-pair arrows sized by hourly demand, node circles sized by dock traffic. FlowmapLayer.',
+    description:
+      'A month of real Montréal BIXI trips (August 2024) as an origin→destination flowmap: station-pair arrows sized by hourly demand, node circles sized by dock traffic. FlowmapLayer.',
     url: '/data/bixi-flowmap/manifest.json',
     type: 'flowmap',
     timeRange: {
       start: 1722470400000, // 2024-08-01 00:00 UTC
-      end: 1725148800000,   // 2024-09-01 00:00 UTC
+      end: 1725148800000, // 2024-09-01 00:00 UTC
     },
     // 1 h — matches the flow matrix bucket. Cosmetic for this type: the matrix
     // decode (not a time window) drives the animation.
@@ -1090,14 +1126,15 @@ const rawDatasets: Dataset[] = [
     id: 'bixi-flowmap-bundled',
     name: 'BIXI Edge Bundling',
     sources: ['bixi'],
-    description: 'A month of real Montréal BIXI trips (August 2024), origin→destination flows bundled into rivers by GPU kernel-density edge bundling (KDEEB). Ribbon width follows hourly demand.',
+    description:
+      'A month of real Montréal BIXI trips (August 2024), origin→destination flows bundled into rivers by GPU kernel-density edge bundling (KDEEB). Ribbon width follows hourly demand.',
     // Denser build than the unbundled flowmap (min-trips 5, cluster-radius 15) —
     // thousands of corridors per overview tile, to load up the GPU bundler.
     url: '/data/bixi-flowmap-dense/manifest.json',
     type: 'flowmap-bundled',
     timeRange: {
       start: 1722470400000, // 2024-08-01 00:00 UTC
-      end: 1725148800000,   // 2024-09-01 00:00 UTC
+      end: 1725148800000, // 2024-09-01 00:00 UTC
     },
     timeWindow: 3600000,
     targetPlaybackSeconds: 90,
@@ -1150,13 +1187,14 @@ const rawDatasets: Dataset[] = [
     id: 'bixi-flowmap-baked',
     name: 'BIXI Baked Bundling',
     sources: ['bixi'],
-    description: 'A month of real Montréal BIXI trips (August 2024) with edge bundling precomputed at build time: corridors bundled by a deterministic CPU KDEEB pass and stored as polylines, so the client draws the precomputed curves with no GPU bundler. Ribbon width follows hourly demand.',
+    description:
+      'A month of real Montréal BIXI trips (August 2024) with edge bundling precomputed at build time: corridors bundled by a deterministic CPU KDEEB pass and stored as polylines, so the client draws the precomputed curves with no GPU bundler. Ribbon width follows hourly demand.',
     url: '/data/bixi-flowmap-baked/manifest.json',
     type: 'flowmap-bundled',
     flowPreBundled: true,
     timeRange: {
       start: 1722470400000, // 2024-08-01 00:00 UTC
-      end: 1725148800000,   // 2024-09-01 00:00 UTC
+      end: 1725148800000, // 2024-09-01 00:00 UTC
     },
     timeWindow: 3600000,
     targetPlaybackSeconds: 90,
@@ -1211,14 +1249,15 @@ const rawDatasets: Dataset[] = [
     id: 'bixi-streets',
     name: 'Montréal BIXI — Street Network',
     sources: ['bixi'],
-    description: "A month of real BIXI trips routed onto Montréal's bike network and aggregated into hourly street-segment flows. Pre-aggregated overview companion to the BIXI flowmap. Source: BIXI Montréal open data.",
+    description:
+      "A month of real BIXI trips routed onto Montréal's bike network and aggregated into hourly street-segment flows. Pre-aggregated overview companion to the BIXI flowmap. Source: BIXI Montréal open data.",
     url: '/data/bixi-streets/manifest.json',
     type: 'trips',
     // August 2024 (same span as the BIXI flowmap). The generator prints the exact
     // matrix start/end — set these to that after the build.
     timeRange: {
       start: 1722470400000, // 2024-08-01 00:00 UTC
-      end: 1725148800000,   // 2024-09-01 00:00 UTC
+      end: 1725148800000, // 2024-09-01 00:00 UTC
     },
     // One 1-hour aggregation bin per tile bucket; loader auto-widens for the trail.
     timeWindow: 3600000,
@@ -1227,7 +1266,7 @@ const rawDatasets: Dataset[] = [
     initialViewState: {
       longitude: -73.578,
       latitude: 45.52,
-      zoom: 12,      // streets + cycleways visible (cycleway/tertiary surface ~z11)
+      zoom: 12, // streets + cycleways visible (cycleway/tertiary surface ~z11)
       pitch: 30,
       bearing: -12,
     },
@@ -1239,10 +1278,10 @@ const rawDatasets: Dataset[] = [
       property: 'vertexValues',
       domain: [0, 16], // trips per segment per hour, clamped ~p97
       colors: [
-        [30, 50, 120, 165],   // 0–4  — dim indigo (quiet side streets)
-        [40, 150, 200, 210],  // ~4   — teal
-        [120, 210, 160, 230],  // ~8  — BIXI green (busy cycleways, ~p90)
-        [255, 170, 70, 245],  // ~12  — orange (arteries: de Maisonneuve / REV)
+        [30, 50, 120, 165], // 0–4  — dim indigo (quiet side streets)
+        [40, 150, 200, 210], // ~4   — teal
+        [120, 210, 160, 230], // ~8  — BIXI green (busy cycleways, ~p90)
+        [255, 170, 70, 245], // ~12  — orange (arteries: de Maisonneuve / REV)
         [255, 255, 255, 255], // 16+  — white-hot (the busiest corridor-hours)
       ],
     },
@@ -1278,14 +1317,15 @@ const rawDatasets: Dataset[] = [
     id: 'bixi-streets-flow',
     name: 'Montréal BIXI — Directional Flow',
     sources: ['bixi'],
-    description: 'The BIXI street network with direction: each segment carries its dominant travel direction, drawn as marching chevrons; brightness follows hourly demand. Source: BIXI Montréal open data.',
+    description:
+      'The BIXI street network with direction: each segment carries its dominant travel direction, drawn as marching chevrons; brightness follows hourly demand. Source: BIXI Montréal open data.',
     url: '/data/bixi-streets-flow/manifest.json',
     type: 'trips',
     // Same span as bixi-streets. The directional generator prints the exact
     // matrix start/end — set these to that after the build.
     timeRange: {
       start: 1722470400000, // 2024-08-01 00:00 UTC
-      end: 1725148800000,   // 2024-09-01 00:00 UTC
+      end: 1725148800000, // 2024-09-01 00:00 UTC
     },
     timeWindow: 3600000,
     targetPlaybackSeconds: 150,
@@ -1347,7 +1387,8 @@ const rawDatasets: Dataset[] = [
     id: 'bixi-corridors',
     name: 'Montréal BIXI — Flow Network',
     sources: ['bixi'],
-    description: 'A month of real BIXI trips (August 2024) bundled into a Sankey-like flow network: origin→destination lines merge onto shared trunk lines that thicken where flows join and thin where they leave. Playback scrubs August 2024 hour by hour. Source: BIXI Montréal open data.',
+    description:
+      'A month of real BIXI trips (August 2024) bundled into a Sankey-like flow network: origin→destination lines merge onto shared trunk lines that thicken where flows join and thin where they leave. Playback scrubs August 2024 hour by hour. Source: BIXI Montréal open data.',
     url: '/data/bixi-corridors/manifest.json',
     type: 'trips',
     // The WHOLE month at hourly resolution (744 buckets). The flow network is
@@ -1355,7 +1396,7 @@ const rawDatasets: Dataset[] = [
     // ~14 MB uncompressed — well within the worker's decode budget.
     timeRange: {
       start: 1722470400000, // 2024-08-01 00:00 UTC
-      end: 1725148800000,   // 2024-09-01 00:00 UTC
+      end: 1725148800000, // 2024-09-01 00:00 UTC
     },
     timeWindow: 3600000,
     targetPlaybackSeconds: 150,
@@ -1377,10 +1418,10 @@ const rawDatasets: Dataset[] = [
       property: 'vertexValues',
       domain: [0, 90], // active single-hour travellers on a trunk
       colors: [
-        [30, 50, 120, 180],   // quiet
-        [40, 150, 200, 215],  // teal
+        [30, 50, 120, 180], // quiet
+        [40, 150, 200, 215], // teal
         [120, 210, 160, 235], // BIXI green
-        [255, 170, 70, 248],  // arterial orange
+        [255, 170, 70, 248], // arterial orange
         [255, 255, 255, 255], // busiest trunk-hours
       ],
     },
@@ -1393,16 +1434,16 @@ const rawDatasets: Dataset[] = [
     // ground and thicken/thin as you zoom (like the map itself), clamped to a
     // pixel range so they stay legible at the overview and bounded up close.
     widthUnits: 'meters',
-    flowWidthScale: 1,     // metres per √(active single-hour travellers); √155≈12 ⇒ ~680 m
+    flowWidthScale: 1, // metres per √(active single-hour travellers); √155≈12 ⇒ ~680 m
     flowWidthExponent: 0.5, // √ → area-proportional
-    flowMinFlow: 1,         // near-empty hours collapse to invisible (the pulse)
+    flowMinFlow: 1, // near-empty hours collapse to invisible (the pulse)
     // Twin-ribbon separation is BAKED into the geometry at build time
     // (--ribbon-offset), so no render-time PathStyleExtension (0 disables it and
     // keeps the sublayer on the proven FlowCorridorLayer shader layout).
     flowOffsetWidths: 0,
     trailLength: 0,
-    widthMinPixels: 1.5,    // quiet trunks stay visible at the overview
-    widthMaxPixels: 30,     // bold but bounded when zoomed in
+    widthMinPixels: 1.5, // quiet trunks stay visible at the overview
+    widthMaxPixels: 30, // bold but bounded when zoomed in
     capRounded: true,
     jointRounded: true,
     legend: {
@@ -1419,7 +1460,8 @@ const rawDatasets: Dataset[] = [
     id: 'bixi-points',
     name: 'Montréal BIXI — Moving Bikes',
     sources: ['bixi'],
-    description: 'Every BIXI ride as a dot moving along the real bike network — one dot per active trip, routed through OSRM and timed to its ride window. BIXI counterpart of the NYC taxi head-dots. Source: BIXI Montréal open data + OpenStreetMap (via OSRM).',
+    description:
+      'Every BIXI ride as a dot moving along the real bike network — one dot per active trip, routed through OSRM and timed to its ride window. BIXI counterpart of the NYC taxi head-dots. Source: BIXI Montréal open data + OpenStreetMap (via OSRM).',
     // Same OSRM-routed per-trip path archive as a `type: 'trips'` ribbons demo
     // would use — rendered here as moving head-dots (AnimatedTripHeadsLayer:
     // stock ScatterplotLayer + CPU per-frame head interpolation). One build,
@@ -1431,7 +1473,7 @@ const rawDatasets: Dataset[] = [
     // midnight UTC to the last ride's dropoff.
     timeRange: {
       start: 1723680000000, // 2024-08-15 00:00:00 UTC
-      end: 1723773613449,   // 2024-08-16 02:00:13 UTC (last dropoff)
+      end: 1723773613449, // 2024-08-16 02:00:13 UTC (last dropoff)
     },
     timeWindow: 20000,
     // A day of rides in ~10 min so individual bike heads stay readable as they
@@ -1453,7 +1495,7 @@ const rawDatasets: Dataset[] = [
     // radiusMaxPixels caps a docked bike from ballooning at deep zoom.
     headColor: [230, 57, 70, 255],
     headSizeUnits: 'meters',
-    headRadius: 25,      // metres
+    headRadius: 25, // metres
     headRadiusMinPixels: 0,
     headRadiusMaxPixels: 8,
   },
@@ -1461,7 +1503,8 @@ const rawDatasets: Dataset[] = [
     id: 'bixi-live',
     name: 'Montréal BIXI — Flow & Riders',
     sources: ['bixi'],
-    description: 'Two layers on one clock: directional street-network flow underneath (chevrons, brightness by hourly demand) and every ride as a moving dot on its real route on top. Source: BIXI Montréal open data + OSM (via OSRM).',
+    description:
+      'Two layers on one clock: directional street-network flow underneath (chevrons, brightness by hourly demand) and every ride as a moving dot on its real route on top. Source: BIXI Montréal open data + OSM (via OSRM).',
     // COMPOSITE: primary = a directional flow-corridor archive built just for this
     // demo (bixi-live-flow: Aug 15, 25.6k corridors) as a DECORATIVE aggregate base
     // (static chevrons pulsing colour with volume); overlay = the per-trip OSRM
@@ -1478,7 +1521,7 @@ const rawDatasets: Dataset[] = [
     // Aug 15 2024 — the single day both archives cover.
     timeRange: {
       start: 1723680000000, // 2024-08-15 00:00:00 UTC
-      end: 1723766400000,   // 2024-08-16 00:00:00 UTC (clean 24 h; corridors lit throughout)
+      end: 1723766400000, // 2024-08-16 00:00:00 UTC (clean 24 h; corridors lit throughout)
     },
     // 1h window comfortably covers the current 10-min flow bucket AND the current
     // tile of active rides for both layers (heads filter trips by the playhead).
@@ -1510,12 +1553,12 @@ const rawDatasets: Dataset[] = [
       // brighten the network; raise it to keep only the busiest corridors lit.
       domain: [0, 4],
       colors: [
-        [255, 230, 255, 20],  // white, low
-        [255, 218, 255, 20],  // glowing pale pink
-        [203, 132, 232, 20],  // pink-lilac
-        [143, 92, 213, 40],   // lavender purple
-        [91, 63, 166, 160],   // saturated purple
-        [58, 43, 124, 200],   // deep violet, high
+        [255, 230, 255, 20], // white, low
+        [255, 218, 255, 20], // glowing pale pink
+        [203, 132, 232, 20], // pink-lilac
+        [143, 92, 213, 40], // lavender purple
+        [91, 63, 166, 160], // saturated purple
+        [58, 43, 124, 200], // deep violet, high
       ],
     },
     colorMappingDefault: [52, 46, 74, 120], // dim violet-grey for no-data segments
@@ -1554,7 +1597,7 @@ const rawDatasets: Dataset[] = [
     //    at the z13 overview (world-space otherwise, so it still grows on zoom-in). ──
     headColor: [58, 220, 120, 255], // #3ADC78 BIXI green
     headSizeUnits: 'meters',
-    headRadius: 6,      // metres
+    headRadius: 6, // metres
     headRadiusMinPixels: 0,
     headRadiusMaxPixels: 4,
     legend: {
@@ -1572,7 +1615,8 @@ const rawDatasets: Dataset[] = [
     id: 'gtfs-nl',
     name: 'Netherlands — National Transit Ballet',
     sources: ['ovapi'],
-    description: 'Every scheduled public-transport vehicle in the Netherlands for one Friday — 121,031 train, bus, tram, metro and ferry journeys expanded from the national CC0 GTFS timetable and positioned along their route geometry. Source: OVapi / NDOV national GTFS (CC0).',
+    description:
+      'Every scheduled public-transport vehicle in the Netherlands for one Friday — 121,031 train, bus, tram, metro and ferry journeys expanded from the national CC0 GTFS timetable and positioned along their route geometry. Source: OVapi / NDOV national GTFS (CC0).',
     // Rebuild: stt-generate gtfs --feed data/gtfs-nl/feed --date 20260703
     //   --output examples/showcase/public/data/gtfs-nl
     // (feed refreshes daily at gtfs.ovapi.nl/nl/gtfs-nl.zip; a stale --date
@@ -1584,7 +1628,7 @@ const rawDatasets: Dataset[] = [
     // the night network deep into Saturday morning (last arrival ~10:23 local).
     timeRange: {
       start: 1783030740000, // 2026-07-02 22:19:00 UTC = Fri 00:19 local
-      end: 1783153380000,   // 2026-07-04 08:23:00 UTC = Sat 10:23 local
+      end: 1783153380000, // 2026-07-04 08:23:00 UTC = Sat 10:23 local
     },
     timeWindow: 20000,
     // ~34 h span in ~13 min — the core service day passes in about nine
@@ -1613,7 +1657,8 @@ const rawDatasets: Dataset[] = [
     id: 'nwm-rivers-2019',
     name: 'US Rivers — A Year of Flow',
     sources: ['noaa', 'usgs'],
-    description: 'The continental river network over the 2019 flood year — NOAA National Water Model hourly discharge reduced to daily means on every NHDPlus reach of stream order 4+. Each reach is scaled against its own annual low→high, so a headwater creek’s spring pulse reads as vividly as the Mississippi’s crest — color shows how each river varies through the year, not how much water it carries. Source: NOAA NWM v3.0 retrospective + USGS NHDPlusV2 (both public domain).',
+    description:
+      'The continental river network over the 2019 flood year — NOAA National Water Model hourly discharge reduced to daily means on every NHDPlus reach of stream order 4+. Each reach is scaled against its own annual low→high, so a headwater creek’s spring pulse reads as vividly as the Mississippi’s crest — color shows how each river varies through the year, not how much water it carries. Source: NOAA NWM v3.0 retrospective + USGS NHDPlusV2 (both public domain).',
     // Rebuild: stt-generate nwm --window 2019 --bin 1d --value self-scaled
     //   --output examples/showcase/public/data/nwm-rivers-2019
     // (zarr chunks + reduced stripes cache under data/nwm/; resumable.)
@@ -1622,7 +1667,7 @@ const rawDatasets: Dataset[] = [
     // Clean UTC year boundaries — matrix bucket 0 starts 2019-01-01.
     timeRange: {
       start: 1546300800000, // 2019-01-01 00:00 UTC
-      end: 1577836800000,   // 2020-01-01 00:00 UTC
+      end: 1577836800000, // 2020-01-01 00:00 UTC
     },
     // One daily aggregation bin per matrix bucket.
     timeWindow: 86400000,
@@ -1646,9 +1691,9 @@ const rawDatasets: Dataset[] = [
       property: 'vertexValues',
       domain: [0, 1],
       colors: [
-        [24, 40, 78, 70],     // annual low — baseflow, faint indigo
-        [36, 92, 160, 140],   // rising limb
-        [60, 168, 216, 195],  // mid-season
+        [24, 40, 78, 70], // annual low — baseflow, faint indigo
+        [36, 92, 160, 140], // rising limb
+        [60, 168, 216, 195], // mid-season
         [150, 226, 244, 228], // high water
         [255, 255, 255, 255], // annual crest — white
       ],
@@ -1660,7 +1705,7 @@ const rawDatasets: Dataset[] = [
     // Static per-feature width baked from Strahler order (constant per merged
     // mainstem run); pixel clamps keep creeks hairline and mainstems bold.
     tripWidth: 'width',
-    widthMinPixels: .2,
+    widthMinPixels: 0.2,
     widthMaxPixels: 1.5,
     capRounded: false,
     jointRounded: false,
@@ -1678,7 +1723,8 @@ const rawDatasets: Dataset[] = [
     id: 'nwm-rivers-flood-2019-03',
     name: 'US Rivers — March 2019 Flood Wave',
     sources: ['noaa', 'usgs'],
-    description: 'The March 2019 bomb-cyclone flood, hour by hour: each river reach colored by how far above its own 2019 median it is running, so flooding tributaries read as brightly as the mainstems they feed. Source: NOAA NWM v3.0 retrospective + USGS NHDPlusV2 (both public domain).',
+    description:
+      'The March 2019 bomb-cyclone flood, hour by hour: each river reach colored by how far above its own 2019 median it is running, so flooding tributaries read as brightly as the mainstems they feed. Source: NOAA NWM v3.0 retrospective + USGS NHDPlusV2 (both public domain).',
     // Rebuild: stt-generate nwm --window 2019-03 --bin 1h --value log-anomaly
     //   --output examples/showcase/public/data/nwm-rivers-flood-2019-03
     // (anomaly medians come from the 2019 daily reduce — run the year demo first.)
@@ -1687,7 +1733,7 @@ const rawDatasets: Dataset[] = [
     // Clean UTC month boundaries — hourly matrix over March 2019.
     timeRange: {
       start: 1551398400000, // 2019-03-01 00:00 UTC
-      end: 1554076800000,   // 2019-04-01 00:00 UTC
+      end: 1554076800000, // 2019-04-01 00:00 UTC
     },
     // One hourly bin per matrix bucket.
     timeWindow: 3600000,
@@ -1708,10 +1754,10 @@ const rawDatasets: Dataset[] = [
       property: 'vertexValues',
       domain: [0, 6],
       colors: [
-        [40, 56, 96, 70],     // ≤1× median — network at rest, dim blue
-        [40, 130, 160, 140],  // ~2× — elevated
-        [235, 215, 90, 215],  // ~8× — high water
-        [255, 140, 50, 245],  // ~24× — flood
+        [40, 56, 96, 70], // ≤1× median — network at rest, dim blue
+        [40, 130, 160, 140], // ~2× — elevated
+        [235, 215, 90, 215], // ~8× — high water
+        [255, 140, 50, 245], // ~24× — flood
         [255, 255, 255, 255], // 64×+ — extreme crest
       ],
     },
@@ -1743,8 +1789,8 @@ const rawDatasets: Dataset[] = [
     url: '/data/flights/manifest.json',
     type: 'point',
     timeRange: {
-      start: 1578268800000,  // 2020-01-06 00:00 UTC
-      end: 1578355190000,    // 2020-01-06 23:59 UTC
+      start: 1578268800000, // 2020-01-06 00:00 UTC
+      end: 1578355190000, // 2020-01-06 23:59 UTC
     },
     // Comet-wake aesthetic, mirrored from ship-traffic: every position ping
     // behind the play head fades and shrinks into a trail behind each
@@ -1753,22 +1799,20 @@ const rawDatasets: Dataset[] = [
     // need an hour. timeWindow is 2× wakeLength so the tile loader covers the
     // past half of the wake (the shader filter is independent of the loader
     // window — see TimeFilterExtension.wakeLength docstring).
-    wakeLength: 300000,     // 5-minute contrail behind each aircraft
-    wakeTailScale: 0.15,    // tail shrinks to 15% of head radius
-    timeWindow: 600000,     // 10-min loader window → 5-min past coverage
+    wakeLength: 300000, // 5-minute contrail behind each aircraft
+    wakeTailScale: 0.15, // tail shrinks to 15% of head radius
+    timeWindow: 600000, // 10-min loader window → 5-min past coverage
     targetPlaybackSeconds: 60, // full time-range plays in ~1 min
     initialViewState: {
       longitude: -98.5,
       latitude: 39.8,
       zoom: 4,
       pitch: 45,
-      bearing: 0
+      bearing: 0,
     },
     legend: {
-      title: "Aircraft",
-      items: [
-        { color: "#4FC3F7", label: "In Flight" },
-      ]
+      title: 'Aircraft',
+      items: [{ color: '#4FC3F7', label: 'In Flight' }],
     },
     use3D: true,
     elevationProperty: 'altitude', // Altitude stored in properties (feet)
@@ -1805,10 +1849,8 @@ const rawDatasets: Dataset[] = [
       bearing: 0,
     },
     legend: {
-      title: "Flight Paths",
-      items: [
-        { color: "#4FC3F7", label: "Active Flight" },
-      ]
+      title: 'Flight Paths',
+      items: [{ color: '#4FC3F7', label: 'Active Flight' }],
     },
     use3D: true,
     elevationScale: 1, // Altitude already in meters (scaled during processing)
@@ -1820,8 +1862,8 @@ const rawDatasets: Dataset[] = [
     url: '/data/adsb-paths/manifest.json',
     type: 'trips',
     timeRange: {
-      start: 1578268800000,  // 2020-01-06 00:00:00 UTC
-      end: 1578354650000,    // 2020-01-06 23:50:50 UTC
+      start: 1578268800000, // 2020-01-06 00:00:00 UTC
+      end: 1578354650000, // 2020-01-06 23:50:50 UTC
     },
     timeWindow: 3600000, // 1 hour window for trips
     targetPlaybackSeconds: 60, // full time-range plays in ~1 min
@@ -1830,13 +1872,11 @@ const rawDatasets: Dataset[] = [
       latitude: 39.8,
       zoom: 4,
       pitch: 60,
-      bearing: 0
+      bearing: 0,
     },
     legend: {
-      title: "Flight Trips",
-      items: [
-        { color: "#FD805D", label: "Active Flight" },
-      ]
+      title: 'Flight Trips',
+      items: [{ color: '#FD805D', label: 'Active Flight' }],
     },
     use3D: true,
     elevationScale: 1, // Altitude already in meters (scaled during processing)
@@ -1864,18 +1904,19 @@ const rawDatasets: Dataset[] = [
       latitude: 25,
       zoom: 4,
       pitch: 0,
-      bearing: 0
+      bearing: 0,
     },
   },
   {
     id: 'nyc-rideshare',
     name: 'NYC Yellow Taxi',
-    description: 'NYC TLC taxi pickups and dropoffs — 1M points (Jan 1, 2015, first 2.8h)',
+    description:
+      'NYC TLC taxi pickups and dropoffs — 1M points (Jan 1, 2015, first 2.8h)',
     url: '/data/nyc-rideshare/manifest.json',
     type: 'point',
     timeRange: {
-      start: 1420070400000,  // 2015-01-01 00:00:00 UTC (first chronological trip)
-      end:   1420080391000,  // 2015-01-01 02:46:31 UTC (50K-trip cap)
+      start: 1420070400000, // 2015-01-01 00:00:00 UTC (first chronological trip)
+      end: 1420080391000, // 2015-01-01 02:46:31 UTC (50K-trip cap)
     },
     // Comet-wake aesthetic, mirrored from ship-traffic: each cab leaves a
     // fading, shrinking trail of its recent positions. A 60s wake spans ~4
@@ -1883,24 +1924,24 @@ const rawDatasets: Dataset[] = [
     // comet at the zoom-12 view, short enough not to smear into the trips-ribbon
     // look. timeWindow is 2× wakeLength so the loader covers the past half of
     // the wake (the shader filter is independent of the loader window).
-    wakeLength: 60000,      // 60s comet trail behind each cab
-    wakeTailScale: 0.15,    // tail shrinks to 15% of head radius
-    timeWindow: 120000,     // 2-min loader window → 60s past coverage
+    wakeLength: 60000, // 60s comet trail behind each cab
+    wakeTailScale: 0.15, // tail shrinks to 15% of head radius
+    timeWindow: 120000, // 2-min loader window → 60s past coverage
     targetPlaybackSeconds: 60, // full time-range plays in ~1 min
     initialViewState: {
       longitude: -73.98,
       latitude: 40.75,
       zoom: 12,
       pitch: 45,
-      bearing: 0
+      bearing: 0,
     },
     legend: {
-      title: "Trip Status",
+      title: 'Trip Status',
       items: [
-        { color: "#4CAF50", label: "Pickup" },
-        { color: "#2196F3", label: "En Route" },
-        { color: "#FF5722", label: "Dropoff" }
-      ]
+        { color: '#4CAF50', label: 'Pickup' },
+        { color: '#2196F3', label: 'En Route' },
+        { color: '#FF5722', label: 'Dropoff' },
+      ],
     },
     // World-space dots, mirrored from ship-traffic: `radius` is in METERS so
     // cabs scale with zoom like real objects. No pixel floor
@@ -1917,12 +1958,13 @@ const rawDatasets: Dataset[] = [
   {
     id: 'nyc-taxi-od-heatmap',
     name: 'NYC Pickups vs Dropoffs',
-    description: 'Density heatmap of NYC taxi pickups (green) vs dropoffs (red), Jan 1, 2015',
+    description:
+      'Density heatmap of NYC taxi pickups (green) vs dropoffs (red), Jan 1, 2015',
     url: '/data/nyc-rideshare/manifest.json',
     type: 'heatmap',
     timeRange: {
-      start: 1420070400000,  // 2015-01-01 00:00:00 UTC
-      end:   1420080391000,  // 2015-01-01 02:46:31 UTC
+      start: 1420070400000, // 2015-01-01 00:00:00 UTC
+      end: 1420080391000, // 2015-01-01 02:46:31 UTC
     },
     // 30 min window — wide enough that point density forms readable heat
     // (both pickup-green and dropoff-red halos visible side-by-side), narrow
@@ -1977,8 +2019,14 @@ const rawDatasets: Dataset[] = [
     legend: {
       title: 'Pickup vs Dropoff Density',
       ramps: [
-        { label: 'Pickups',  colors: ['#0d3a1f', '#26ae58', '#90f0a8', '#dafcda'] },
-        { label: 'Dropoffs', colors: ['#3a0d0d', '#d85432', '#fcc678', '#fff0d2'] },
+        {
+          label: 'Pickups',
+          colors: ['#0d3a1f', '#26ae58', '#90f0a8', '#dafcda'],
+        },
+        {
+          label: 'Dropoffs',
+          colors: ['#3a0d0d', '#d85432', '#fcc678', '#fff0d2'],
+        },
       ],
     },
   },
@@ -1995,8 +2043,8 @@ const rawDatasets: Dataset[] = [
     url: '/data/nyc-taxi-paths/manifest.json',
     type: 'trip-heads',
     timeRange: {
-      start: 1420070400000,  // 2015-01-01 00:00:00 UTC
-      end: 1420213385000,    // 2015-01-02 13:43:05 UTC
+      start: 1420070400000, // 2015-01-01 00:00:00 UTC
+      end: 1420213385000, // 2015-01-02 13:43:05 UTC
     },
     timeWindow: 20000,
     // Slower than the 1-min default so individual cab heads stay readable.
@@ -2017,7 +2065,7 @@ const rawDatasets: Dataset[] = [
     // radiusMaxPixels: 8 caps a stopped cab at deep zoom.
     headColor: [253, 128, 93, 255],
     headSizeUnits: 'meters',
-    headRadius: 20,      // metres
+    headRadius: 20, // metres
     headRadiusMinPixels: 0,
     headRadiusMaxPixels: 8,
   },
@@ -2028,23 +2076,21 @@ const rawDatasets: Dataset[] = [
     url: '/data/nyc-taxi-paths/manifest.json',
     type: 'path',
     timeRange: {
-      start: 1420070400000,  // 2015-01-01 00:00:00 UTC
-      end: 1420213385000,    // 2015-01-02 13:43:05 UTC
+      start: 1420070400000, // 2015-01-01 00:00:00 UTC
+      end: 1420213385000, // 2015-01-02 13:43:05 UTC
     },
     timeWindow: 60000, // 1 min window for 1.5 day dataset
     targetPlaybackSeconds: 60, // full time-range plays in ~1 min
     initialViewState: {
       longitude: -73.98,
       latitude: 40.75,
-      zoom: 14,  // Higher zoom = fewer tiles loaded
+      zoom: 14, // Higher zoom = fewer tiles loaded
       pitch: 45,
-      bearing: -15
+      bearing: -15,
     },
     legend: {
-      title: "Taxi Trips",
-      items: [
-        { color: "#FFD700", label: "Active Trip" },
-      ]
+      title: 'Taxi Trips',
+      items: [{ color: '#FFD700', label: 'Active Trip' }],
     },
     // Match nyc-taxi-trips: rounded caps/joints are the dominant fragment cost
     // on dense Manhattan paths and the rounding is invisible at 2–8 px widths.
@@ -2062,12 +2108,13 @@ const rawDatasets: Dataset[] = [
     id: 'nyc-taxi-flows',
     name: 'NYC Taxi Flow',
     sources: ['tlc'],
-    description: '500K NYC taxi trips aggregated into 15-minute road-segment flows. Pre-aggregated overview companion to the per-trip paths demos. Source: NYC TLC.',
+    description:
+      '500K NYC taxi trips aggregated into 15-minute road-segment flows. Pre-aggregated overview companion to the per-trip paths demos. Source: NYC TLC.',
     url: '/data/nyc-taxi-flows/manifest.json',
     type: 'trips',
     timeRange: {
-      start: 1420070400000,  // 2015-01-01 00:00:00 UTC
-      end: 1420213500000,    // 2015-01-02 13:45:00 UTC — last 15-min bin end
+      start: 1420070400000, // 2015-01-01 00:00:00 UTC
+      end: 1420213500000, // 2015-01-02 13:45:00 UTC — last 15-min bin end
     },
     // One 15-min aggregation bin per tile bucket; the loader auto-widens to
     // cover the trail.
@@ -2077,7 +2124,7 @@ const rawDatasets: Dataset[] = [
     initialViewState: {
       longitude: -73.97,
       latitude: 40.75,
-      zoom: 11.5,   // overview framing — the whole grid, not single blocks
+      zoom: 11.5, // overview framing — the whole grid, not single blocks
       pitch: 30,
       bearing: -15,
     },
@@ -2089,10 +2136,10 @@ const rawDatasets: Dataset[] = [
       property: 'vertexValues',
       domain: [0, 50], // trips per segment per 15 min, clamped ~p97
       colors: [
-        [35, 45, 130, 170],   // 0–12 — dim indigo (most side streets)
-        [40, 150, 200, 210],  // ~12 — teal
-        [250, 200, 80, 235],  // ~25 — amber (p90: busy crosstown streets)
-        [255, 150, 60, 245],  // ~37 — orange (arteries)
+        [35, 45, 130, 170], // 0–12 — dim indigo (most side streets)
+        [40, 150, 200, 210], // ~12 — teal
+        [250, 200, 80, 235], // ~25 — amber (p90: busy crosstown streets)
+        [255, 150, 60, 245], // ~37 — orange (arteries)
         [255, 255, 255, 255], // 50+ — white-hot (5th Ave / FDR tier)
       ],
     },
@@ -2123,7 +2170,8 @@ const rawDatasets: Dataset[] = [
     id: 'nyc-flow-and-riders',
     name: 'NYC Taxi — Flow & Riders',
     sources: ['tlc'],
-    description: 'Two layers on one clock: the street grid colored by aggregate taxi volume underneath (15-minute corridor flows) and every cab as a moving dot on its real route on top. Source: NYC TLC + OpenStreetMap (via OSRM).',
+    description:
+      'Two layers on one clock: the street grid colored by aggregate taxi volume underneath (15-minute corridor flows) and every cab as a moving dot on its real route on top. Source: NYC TLC + OpenStreetMap (via OSRM).',
     // COMPOSITE (mirrors bixi-live "Flow & Riders"): primary = the pre-aggregated
     // flow-corridor archive (nyc-taxi-flows, static geometry + per-vertex × per-
     // 15-min-bin value matrix → FlowCorridorLayer, the DIM base); overlay = the
@@ -2137,7 +2185,7 @@ const rawDatasets: Dataset[] = [
     headsOverlayUrl: '/data/nyc-taxi-paths/manifest.json',
     timeRange: {
       start: 1420070400000, // 2015-01-01 00:00:00 UTC
-      end: 1420213500000,   // 2015-01-02 13:45:00 UTC — last 15-min bin end
+      end: 1420213500000, // 2015-01-02 13:45:00 UTC — last 15-min bin end
     },
     // 1-h window comfortably covers the current 15-min flow bucket AND the tiles of
     // active trips the heads overlay interpolates (heads only draw a dot for trips
@@ -2175,9 +2223,9 @@ const rawDatasets: Dataset[] = [
       property: 'vertexValues',
       domain: [1, 50], // trips per segment per 15 min, clamped ~p97
       colors: [
-        [10, 14, 34, 40],    // 0–12 — near-black navy, just above the basemap
-        [22, 58, 120, 50],   // ~12 — deep navy blue
-        [36, 132, 190, 75],  // ~25 — teal-blue (p90: busy crosstown)
+        [10, 14, 34, 40], // 0–12 — near-black navy, just above the basemap
+        [22, 58, 120, 50], // ~12 — deep navy blue
+        [36, 132, 190, 75], // ~25 — teal-blue (p90: busy crosstown)
         [110, 205, 235, 100], // ~37 — cyan (arteries)
         [225, 248, 255, 125], // 50+ — cool white-hot (5th Ave / FDR tier)
       ],
@@ -2228,12 +2276,13 @@ const rawDatasets: Dataset[] = [
     id: 'nyc-taxi-cube',
     name: 'NYC Taxi Space-Time Cube',
     sources: ['tlc'],
-    description: 'Time as height: a million taxi position samples from Jan 1, 2015 stacked into a cube — green pickups, red dropoffs, gold en-route trails. Wireframe boxes are the space-time tiles streaming in. Source: NYC TLC.',
+    description:
+      'Time as height: a million taxi position samples from Jan 1, 2015 stacked into a cube — green pickups, red dropoffs, gold en-route trails. Wireframe boxes are the space-time tiles streaming in. Source: NYC TLC.',
     url: '/data/nyc-rideshare/manifest.json',
     type: 'point',
     timeRange: {
-      start: 1420070400000,  // 2015-01-01 00:00:00 — midnight, New Year's Eve peak
-      end: 1420080391000,    // 2015-01-01 02:46:31 — same 50K-trip cut as nyc-rideshare
+      start: 1420070400000, // 2015-01-01 00:00:00 — midnight, New Year's Eve peak
+      end: 1420080391000, // 2015-01-01 02:46:31 — same 50K-trip cut as nyc-rideshare
     },
     // Cumulative mode: DemoPage widens the loader window to 2× the range, so
     // the whole night stays resident and the shader does the progressive
@@ -2287,12 +2336,13 @@ const rawDatasets: Dataset[] = [
     id: 'nyc-taxi-trips',
     name: 'NYC Yellow Cab Trips',
     sources: ['tlc'],
-    description: 'Animated yellow-cab trip lines across Manhattan. Source: NYC TLC.',
+    description:
+      'Animated yellow-cab trip lines across Manhattan. Source: NYC TLC.',
     url: '/data/nyc-taxi-paths/manifest.json',
     type: 'trips',
     timeRange: {
-      start: 1420070400000,  // 2015-01-01 00:00:00 UTC
-      end: 1420213385000,    // 2015-01-02 13:43:05 UTC
+      start: 1420070400000, // 2015-01-01 00:00:00 UTC
+      end: 1420213385000, // 2015-01-02 13:43:05 UTC
     },
     // Tile-load window: trail is 10s, so 20s comfortably covers the trail plus
     // a margin for tiles arriving slightly ahead of the playhead.
@@ -2303,15 +2353,13 @@ const rawDatasets: Dataset[] = [
     initialViewState: {
       longitude: -73.98,
       latitude: 40.75,
-      zoom: 14,  // Higher zoom = fewer tiles loaded
+      zoom: 14, // Higher zoom = fewer tiles loaded
       pitch: 45,
-      bearing: -15
+      bearing: -15,
     },
     legend: {
-      title: "Taxi Trips",
-      items: [
-        { color: "#1FBAD6", label: "Active Trip" },
-      ]
+      title: 'Taxi Trips',
+      items: [{ color: '#1FBAD6', label: 'Active Trip' }],
     },
     // Trail config (AnimatedTripsLayer / PathLayer).
     // World-space width (metres), mirrored from the maritime points' "render by
@@ -2322,7 +2370,7 @@ const rawDatasets: Dataset[] = [
     tripColor: [31, 186, 214, 255],
     trailLength: 12500,
     widthUnits: 'meters',
-    tripWidth: 10,          // metres
+    tripWidth: 10, // metres
     widthMinPixels: 0,
     widthMaxPixels: 6,
     fadeTrail: true,
@@ -2332,7 +2380,8 @@ const rawDatasets: Dataset[] = [
   {
     id: 'nyc-taxi-heads',
     name: 'NYC Yellow Cabs',
-    description: 'Animated yellow-cab positions across Manhattan. Source: NYC TLC.',
+    description:
+      'Animated yellow-cab positions across Manhattan. Source: NYC TLC.',
     url: '/data/nyc-taxi-paths/manifest.json',
     // Head-dot via AnimatedTripHeadsLayer (vanilla ScatterplotLayer + CPU head
     // interpolation).
@@ -2361,7 +2410,7 @@ const rawDatasets: Dataset[] = [
     // radiusMaxPixels: 8 caps a stopped cab at deep zoom.
     headColor: [253, 128, 93, 255],
     headSizeUnits: 'meters',
-    headRadius: 20,      // metres
+    headRadius: 20, // metres
     headRadiusMinPixels: 0,
     headRadiusMaxPixels: 8,
   },
@@ -2369,21 +2418,22 @@ const rawDatasets: Dataset[] = [
     id: 'ship-traffic',
     name: 'US Maritime Traffic',
     sources: ['noaa'],
-    description: 'NOAA Marine Cadastre AIS — 15.9K vessels over 24h (Jan 9, 2023)',
+    description:
+      'NOAA Marine Cadastre AIS — 15.9K vessels over 24h (Jan 9, 2023)',
     url: '/data/ais-all-us/manifest.json',
     type: 'point',
     timeRange: {
       start: 1673222400000, // 2023-01-09T00:00:00Z (from actual data)
-      end: 1673308799000,   // 2023-01-09T23:59:59Z (from actual data)
+      end: 1673308799000, // 2023-01-09T23:59:59Z (from actual data)
     },
     // Wake aesthetic: every AIS ping behind the play head fades and shrinks
     // to form a comet trail behind each vessel. `wakeLength` is the trail's
     // temporal span; `timeWindow` is set to 2× that so the tile loader still
     // covers the past half of the wake (the shader filter is independent of
     // the loader window — see TimeFilterExtension.wakeLength docstring).
-    wakeLength: 3600000,    // 30-minute wake behind each ship
-    wakeTailScale: 0.15,    // tail shrinks to 15% of head radius
-    timeWindow: 5600000,    // 60-min loader window → 30-min past coverage
+    wakeLength: 3600000, // 30-minute wake behind each ship
+    wakeTailScale: 0.15, // tail shrinks to 15% of head radius
+    timeWindow: 5600000, // 60-min loader window → 30-min past coverage
     targetPlaybackSeconds: 60, // full time-range plays in ~1 min
     // World-space dots: `radius` is in METERS, so vessels scale with zoom like
     // real objects (300 m radius ≈ a large-vessel / berth footprint). No pixel
@@ -2403,7 +2453,7 @@ const rawDatasets: Dataset[] = [
       latitude: 30,
       zoom: 4,
       pitch: 0,
-      bearing: 0
+      bearing: 0,
     },
     // Color each ping by the tile's `vessel_type` categorical column (emitted
     // by the AIS generator). colorMapping keys are the exact category strings
@@ -2411,25 +2461,25 @@ const rawDatasets: Dataset[] = [
     // `special` has no legend swatch — folded into the gray "Other".
     colorProperty: 'vessel_type',
     colorMapping: {
-      cargo:     [74, 144, 226, 255],  // #4A90E2
-      tanker:    [245, 166, 35, 255],  // #F5A623
-      passenger: [80, 227, 194, 255],  // #50E3C2
-      fishing:   [184, 233, 134, 255], // #B8E986
-      towing:    [155, 89, 182, 255],  // #9B59B6
-      other:     [128, 128, 128, 255], // #808080
-      special:   [128, 128, 128, 255], // grouped under "Other"
+      cargo: [74, 144, 226, 255], // #4A90E2
+      tanker: [245, 166, 35, 255], // #F5A623
+      passenger: [80, 227, 194, 255], // #50E3C2
+      fishing: [184, 233, 134, 255], // #B8E986
+      towing: [155, 89, 182, 255], // #9B59B6
+      other: [128, 128, 128, 255], // #808080
+      special: [128, 128, 128, 255], // grouped under "Other"
     },
     colorMappingDefault: [128, 128, 128, 255],
     legend: {
-      title: "Vessel Type",
+      title: 'Vessel Type',
       items: [
-        { color: "#4A90E2", label: "Cargo" },
-        { color: "#F5A623", label: "Tanker" },
-        { color: "#50E3C2", label: "Passenger" },
-        { color: "#B8E986", label: "Fishing" },
-        { color: "#9B59B6", label: "Towing" },
-        { color: "#808080", label: "Other" }
-      ]
+        { color: '#4A90E2', label: 'Cargo' },
+        { color: '#F5A623', label: 'Tanker' },
+        { color: '#50E3C2', label: 'Passenger' },
+        { color: '#B8E986', label: 'Fishing' },
+        { color: '#9B59B6', label: 'Towing' },
+        { color: '#808080', label: 'Other' },
+      ],
     },
   },
   {
@@ -2440,7 +2490,7 @@ const rawDatasets: Dataset[] = [
     type: 'polygon',
     timeRange: {
       start: 1590969600000, // 2020-06-01T00:00:00Z
-      end: 1702339200000,   // 2023-12-11T00:00:00Z
+      end: 1702339200000, // 2023-12-11T00:00:00Z
     },
     timeWindow: 86400000 * 30, // 30 day window for multi-year data
     targetPlaybackSeconds: 60, // full time-range plays in ~1 min
@@ -2449,7 +2499,7 @@ const rawDatasets: Dataset[] = [
       latitude: 40,
       zoom: 4,
       pitch: 0,
-      bearing: 0
+      bearing: 0,
     },
     // Color each perimeter by the tile's `severity` categorical column (emitted
     // by the wildfires generator). colorMapping keys are the exact severity
@@ -2459,27 +2509,28 @@ const rawDatasets: Dataset[] = [
     // and rare in this 1000+-acre cut — kept pale rather than dropped.
     colorProperty: 'severity',
     colorMapping: {
-      low:          [255, 245, 200, 255],
-      moderate:     [255, 237, 160, 255], // #FFEDA0
-      high:         [254, 178, 76, 255],  // #FEB24C
-      extreme:      [240, 59, 32, 255],   // #F03B20
-      catastrophic: [189, 0, 38, 255],    // #BD0026
+      low: [255, 245, 200, 255],
+      moderate: [255, 237, 160, 255], // #FFEDA0
+      high: [254, 178, 76, 255], // #FEB24C
+      extreme: [240, 59, 32, 255], // #F03B20
+      catastrophic: [189, 0, 38, 255], // #BD0026
     },
     colorMappingDefault: [180, 180, 180, 255],
     legend: {
-      title: "Fire Severity",
+      title: 'Fire Severity',
       items: [
-        { color: "#FFEDA0", label: "Moderate (1K-10K acres)" },
-        { color: "#FEB24C", label: "High (10K-50K acres)" },
-        { color: "#F03B20", label: "Extreme (50K-100K acres)" },
-        { color: "#BD0026", label: "Catastrophic (100K+ acres)" }
-      ]
+        { color: '#FFEDA0', label: 'Moderate (1K-10K acres)' },
+        { color: '#FEB24C', label: 'High (10K-50K acres)' },
+        { color: '#F03B20', label: 'Extreme (50K-100K acres)' },
+        { color: '#BD0026', label: 'Catastrophic (100K+ acres)' },
+      ],
     },
   },
   {
     id: 'storm-radar',
     name: 'Iowa Derecho — Storm Radar',
-    description: 'The 10 August 2020 Midwest derecho: NWS reflectivity contour bands, storm-cell centroids, and cell tracks, baked at build time from NOAA NEXRAD Level II (reprojection, multi-radar mosaic, contouring, and cell tracking done by stt-generate). Source: NOAA NEXRAD.',
+    description:
+      'The 10 August 2020 Midwest derecho: NWS reflectivity contour bands, storm-cell centroids, and cell tracks, baked at build time from NOAA NEXRAD Level II (reprojection, multi-radar mosaic, contouring, and cell tracking done by stt-generate). Source: NOAA NEXRAD.',
     // Primary `url` = the reflectivity FIELD manifest; cells + tracks overlay.
     url: '/data/storm-field/manifest.json',
     radarCellsUrl: '/data/storm-cells/manifest.json',
@@ -2488,7 +2539,7 @@ const rawDatasets: Dataset[] = [
     sources: ['noaa'],
     timeRange: {
       start: Date.UTC(2020, 7, 10, 16, 0, 0), // 2020-08-10 16:00Z
-      end: Date.UTC(2020, 7, 10, 22, 0, 0),   // 2020-08-10 22:00Z (Omaha→Quad Cities)
+      end: Date.UTC(2020, 7, 10, 22, 0, 0), // 2020-08-10 22:00Z (Omaha→Quad Cities)
     },
     timeWindow: 600000, // 10-min loader window (volume scans ~5 min)
     targetPlaybackSeconds: 75,
@@ -2566,7 +2617,8 @@ const rawDatasets: Dataset[] = [
   {
     id: 'av-synthetic',
     name: 'AV Cockpit — Synthetic Drive',
-    description: 'A 20-second synthetic urban drive in a streetscape.gl-style AV cockpit: accumulated LIDAR point cloud (colored by height band), ego trajectory, tracked-object 3D boxes, and CAN-bus gauges. Cockpit at /drive/av-synthetic.',
+    description:
+      'A 20-second synthetic urban drive in a streetscape.gl-style AV cockpit: accumulated LIDAR point cloud (colored by height band), ego trajectory, tracked-object 3D boxes, and CAN-bus gauges. Cockpit at /drive/av-synthetic.',
     // Primary `url` = the LIDAR point archive; ego + objects overlay; the
     // cockpit additionally reads scene.json + the telemetry/camera sidecars.
     url: '/data/av-synthetic/lidar/manifest.json',
@@ -2633,7 +2685,8 @@ const rawDatasets: Dataset[] = [
   argoverseScene({
     id: 'argoverse-02678d04',
     name: 'Argoverse 2 · Pittsburgh',
-    description: 'Real Argoverse 2 sensor log, Pittsburgh: 64-beam LIDAR, tracked-object 3D boxes, ego trajectory, HD-map substrate (lane boundaries + centerlines, drivable areas, crosswalks), a ring-camera inset, and ego-derived telemetry (AV2 ships no CAN bus).',
+    description:
+      'Real Argoverse 2 sensor log, Pittsburgh: 64-beam LIDAR, tracked-object 3D boxes, ego trajectory, HD-map substrate (lane boundaries + centerlines, drivable areas, crosswalks), a ring-camera inset, and ego-derived telemetry (AV2 ships no CAN bus).',
     timeRange: { start: 315969904357, end: 315969920307 },
     longitude: -79.9333411419541,
     latitude: 40.45610620281625,
@@ -2644,7 +2697,8 @@ const rawDatasets: Dataset[] = [
   argoverseScene({
     id: 'argoverse-02678d04-surfel',
     name: 'Argoverse 2 · Pittsburgh — oriented surfel splat',
-    description: 'The Pittsburgh Argoverse 2 log as a Gaussian surfel splat: each LIDAR return is an oriented camera-colored disk, fit from a per-sweep k-NN covariance, fading in and out around its sweep time. Same boxes / ego / HD map / telemetry as the height-ramp scene.',
+    description:
+      'The Pittsburgh Argoverse 2 log as a Gaussian surfel splat: each LIDAR return is an oriented camera-colored disk, fit from a per-sweep k-NN covariance, fading in and out around its sweep time. Same boxes / ego / HD map / telemetry as the height-ramp scene.',
     timeRange: { start: 315969904357, end: 315969920307 },
     longitude: -79.9333411419541,
     latitude: 40.45610620281625,
@@ -2659,7 +2713,8 @@ const rawDatasets: Dataset[] = [
   argoverseScene({
     id: 'argoverse-02678d04-world',
     name: 'Argoverse 2 · Pittsburgh — worldbuild',
-    description: 'The Pittsburgh Argoverse 2 log as a worldbuild reconstruction: static camera-colored surfels persist once revealed so the scene accumulates as the car drives; dynamic surfels smear over a short temporal window. Same boxes / ego / HD map / telemetry as the height-ramp scene.',
+    description:
+      'The Pittsburgh Argoverse 2 log as a worldbuild reconstruction: static camera-colored surfels persist once revealed so the scene accumulates as the car drives; dynamic surfels smear over a short temporal window. Same boxes / ego / HD map / telemetry as the height-ramp scene.',
     timeRange: { start: 315969904357, end: 315969920307 },
     longitude: -79.9333411419541,
     latitude: 40.45610620281625,
@@ -2673,7 +2728,8 @@ const rawDatasets: Dataset[] = [
   argoverseScene({
     id: 'argoverse-02678d04-scan',
     name: 'Argoverse 2 · Pittsburgh — raw sweep',
-    description: 'The Pittsburgh Argoverse 2 log as the raw LIDAR sweep: each return drawn at its true scan instant, colored by a rotating phase ramp, so the scan-line sweeps across the scene each revolution. Same boxes / ego / HD map / telemetry as the height-ramp scene.',
+    description:
+      'The Pittsburgh Argoverse 2 log as the raw LIDAR sweep: each return drawn at its true scan instant, colored by a rotating phase ramp, so the scan-line sweeps across the scene each revolution. Same boxes / ego / HD map / telemetry as the height-ramp scene.',
     timeRange: { start: 315969904357, end: 315969920307 },
     longitude: -79.9333411419541,
     latitude: 40.45610620281625,
@@ -2682,7 +2738,8 @@ const rawDatasets: Dataset[] = [
   argoverseScene({
     id: 'argoverse-02a00399',
     name: 'Argoverse 2 · Miami',
-    description: 'Real Argoverse 2 sensor log, Miami: 64-beam LIDAR, tracked-object 3D boxes, ego trajectory, HD-map substrate with lane centerlines, a ring-camera inset, and ego-derived telemetry.',
+    description:
+      'Real Argoverse 2 sensor log, Miami: 64-beam LIDAR, tracked-object 3D boxes, ego trajectory, HD-map substrate with lane centerlines, a ring-camera inset, and ego-derived telemetry.',
     timeRange: { start: 315966070522, end: 315966086462 },
     longitude: -80.19521021126853,
     latitude: 25.81266355087901,
@@ -2700,7 +2757,8 @@ const rawDatasets: Dataset[] = [
   argoverseScene({
     id: 'argoverse-02a00399-surfel',
     name: 'Argoverse 2 · Miami — oriented surfel splat',
-    description: 'The Miami Argoverse 2 log as a Gaussian surfel splat: each LIDAR return is an oriented camera-colored disk, fit from a per-sweep k-NN covariance, fading in and out around its sweep time. Same boxes / ego / HD map / telemetry as the height-ramp scene.',
+    description:
+      'The Miami Argoverse 2 log as a Gaussian surfel splat: each LIDAR return is an oriented camera-colored disk, fit from a per-sweep k-NN covariance, fading in and out around its sweep time. Same boxes / ego / HD map / telemetry as the height-ramp scene.',
     timeRange: { start: 315966070522, end: 315966086462 },
     longitude: -80.19521021126853,
     latitude: 25.81266355087901,
@@ -2710,7 +2768,8 @@ const rawDatasets: Dataset[] = [
   argoverseScene({
     id: 'argoverse-02a00399-scan',
     name: 'Argoverse 2 · Miami — raw sweep',
-    description: 'The Miami Argoverse 2 log as the raw LIDAR sweep: each return drawn at its true scan instant, colored by a rotating phase ramp, so the scan-line sweeps across the scene each revolution. Same boxes / ego / HD map / telemetry as the height-ramp scene.',
+    description:
+      'The Miami Argoverse 2 log as the raw LIDAR sweep: each return drawn at its true scan instant, colored by a rotating phase ramp, so the scan-line sweeps across the scene each revolution. Same boxes / ego / HD map / telemetry as the height-ramp scene.',
     timeRange: { start: 315966070522, end: 315966086462 },
     longitude: -80.19521021126853,
     latitude: 25.81266355087901,
@@ -2727,7 +2786,8 @@ const rawDatasets: Dataset[] = [
   argoverseScene({
     id: 'argoverse-02a00399-lod',
     name: 'Argoverse 2 · Miami — additive zoom LOD',
-    description: 'The Miami Argoverse 2 log as an additive-octree point cloud: each LIDAR return assigned a single home zoom by a per-sweep hierarchical voxel subsample. Zoomed out shows a sparse overview; zooming in streams the residual detail while the coarse tiles stay resident. Lossless, and about half the bytes of the five fixed density tiers it replaces. Same boxes / ego / HD map / telemetry as the height-ramp scene.',
+    description:
+      'The Miami Argoverse 2 log as an additive-octree point cloud: each LIDAR return assigned a single home zoom by a per-sweep hierarchical voxel subsample. Zoomed out shows a sparse overview; zooming in streams the residual detail while the coarse tiles stay resident. Lossless, and about half the bytes of the five fixed density tiers it replaces. Same boxes / ego / HD map / telemetry as the height-ramp scene.',
     timeRange: { start: 315966070522, end: 315966086462 },
     longitude: -80.19521021126853,
     latitude: 25.81266355087901,
@@ -2741,7 +2801,8 @@ const rawDatasets: Dataset[] = [
   argoverseScene({
     id: 'argoverse-02678d04-lod',
     name: 'Argoverse 2 · Pittsburgh — additive zoom LOD',
-    description: 'The Pittsburgh Argoverse 2 log as an additive-octree point cloud: each return assigned a single geometry-aware home zoom, so a sparse overview densifies to the full cloud as you zoom in.',
+    description:
+      'The Pittsburgh Argoverse 2 log as an additive-octree point cloud: each return assigned a single geometry-aware home zoom, so a sparse overview densifies to the full cloud as you zoom in.',
     timeRange: { start: 315969904357, end: 315969920307 },
     longitude: -79.9333411419541,
     latitude: 40.45610620281625,
@@ -2751,7 +2812,8 @@ const rawDatasets: Dataset[] = [
   argoverseScene({
     id: 'argoverse-0b5142c1-lod',
     name: 'Argoverse 2 · Washington DC — additive zoom LOD',
-    description: 'The Washington DC Argoverse 2 log as an additive-octree point cloud: each return assigned a single geometry-aware home zoom, so a sparse overview densifies to the full cloud as you zoom in.',
+    description:
+      'The Washington DC Argoverse 2 log as an additive-octree point cloud: each return assigned a single geometry-aware home zoom, so a sparse overview densifies to the full cloud as you zoom in.',
     timeRange: { start: 315968121172, end: 315968137127 },
     longitude: -76.97901441961996,
     latitude: 38.903158674858965,
@@ -2761,7 +2823,8 @@ const rawDatasets: Dataset[] = [
   argoverseScene({
     id: 'argoverse-0bae3b5e-lod',
     name: 'Argoverse 2 · Detroit — additive zoom LOD',
-    description: 'The Detroit Argoverse 2 log as an additive-octree point cloud: each return assigned a single geometry-aware home zoom, so a sparse overview densifies to the full cloud as you zoom in.',
+    description:
+      'The Detroit Argoverse 2 log as an additive-octree point cloud: each return assigned a single geometry-aware home zoom, so a sparse overview densifies to the full cloud as you zoom in.',
     timeRange: { start: 315969524322, end: 315969540277 },
     longitude: -83.05092955863113,
     latitude: 42.33371685760447,
@@ -2771,7 +2834,8 @@ const rawDatasets: Dataset[] = [
   argoverseScene({
     id: 'argoverse-25e5c600-lod',
     name: 'Argoverse 2 · Palo Alto — additive zoom LOD',
-    description: 'The Palo Alto Argoverse 2 log as an additive-octree point cloud: each return assigned a single geometry-aware home zoom, so a sparse overview densifies to the full cloud as you zoom in.',
+    description:
+      'The Palo Alto Argoverse 2 log as an additive-octree point cloud: each return assigned a single geometry-aware home zoom, so a sparse overview densifies to the full cloud as you zoom in.',
     timeRange: { start: 315966104242, end: 315966120187 },
     longitude: -122.12833142762317,
     latitude: 37.415846217190214,
@@ -2781,7 +2845,8 @@ const rawDatasets: Dataset[] = [
   argoverseScene({
     id: 'argoverse-92b900b1-lod',
     name: 'Argoverse 2 · Austin — additive zoom LOD',
-    description: 'The Austin Argoverse 2 log as an additive-octree point cloud: each return assigned a single geometry-aware home zoom, so a sparse overview densifies to the full cloud as you zoom in.',
+    description:
+      'The Austin Argoverse 2 log as an additive-octree point cloud: each return assigned a single geometry-aware home zoom, so a sparse overview densifies to the full cloud as you zoom in.',
     timeRange: { start: 315968947407, end: 315968963357 },
     longitude: -97.70213668235851,
     latitude: 30.255713070218487,
@@ -2791,7 +2856,8 @@ const rawDatasets: Dataset[] = [
   argoverseScene({
     id: 'argoverse-0b5142c1',
     name: 'Argoverse 2 · Washington DC',
-    description: 'Real Argoverse 2 sensor log, Washington DC: 64-beam LIDAR, tracked-object 3D boxes, ego trajectory, HD-map substrate with lane centerlines, a ring-camera inset, and ego-derived telemetry.',
+    description:
+      'Real Argoverse 2 sensor log, Washington DC: 64-beam LIDAR, tracked-object 3D boxes, ego trajectory, HD-map substrate with lane centerlines, a ring-camera inset, and ego-derived telemetry.',
     timeRange: { start: 315968121172, end: 315968137127 },
     longitude: -76.97901441961996,
     latitude: 38.903158674858965,
@@ -2799,7 +2865,8 @@ const rawDatasets: Dataset[] = [
   argoverseScene({
     id: 'argoverse-0b5142c1-surfel',
     name: 'Argoverse 2 · Washington DC — oriented surfel splat',
-    description: 'The Washington DC Argoverse 2 log as a Gaussian surfel splat: each LIDAR return is an oriented camera-colored disk, fit from a per-sweep k-NN covariance, fading in and out around its sweep time. Same boxes / ego / HD map / telemetry as the height-ramp scene.',
+    description:
+      'The Washington DC Argoverse 2 log as a Gaussian surfel splat: each LIDAR return is an oriented camera-colored disk, fit from a per-sweep k-NN covariance, fading in and out around its sweep time. Same boxes / ego / HD map / telemetry as the height-ramp scene.',
     timeRange: { start: 315968121172, end: 315968137127 },
     longitude: -76.97901441961996,
     latitude: 38.903158674858965,
@@ -2809,7 +2876,8 @@ const rawDatasets: Dataset[] = [
   argoverseScene({
     id: 'argoverse-0b5142c1-scan',
     name: 'Argoverse 2 · Washington DC — raw sweep',
-    description: 'The Washington DC Argoverse 2 log as the raw LIDAR sweep: each return drawn at its true scan instant, colored by a rotating phase ramp, so the scan-line sweeps across the scene each revolution. Same boxes / ego / HD map / telemetry as the height-ramp scene.',
+    description:
+      'The Washington DC Argoverse 2 log as the raw LIDAR sweep: each return drawn at its true scan instant, colored by a rotating phase ramp, so the scan-line sweeps across the scene each revolution. Same boxes / ego / HD map / telemetry as the height-ramp scene.',
     timeRange: { start: 315968121172, end: 315968137127 },
     longitude: -76.97901441961996,
     latitude: 38.903158674858965,
@@ -2818,7 +2886,8 @@ const rawDatasets: Dataset[] = [
   argoverseScene({
     id: 'argoverse-0bae3b5e',
     name: 'Argoverse 2 · Detroit',
-    description: 'Real Argoverse 2 sensor log, Detroit: 64-beam LIDAR, tracked-object 3D boxes, ego trajectory, HD-map substrate with lane centerlines, a ring-camera inset, and ego-derived telemetry.',
+    description:
+      'Real Argoverse 2 sensor log, Detroit: 64-beam LIDAR, tracked-object 3D boxes, ego trajectory, HD-map substrate with lane centerlines, a ring-camera inset, and ego-derived telemetry.',
     timeRange: { start: 315969524322, end: 315969540277 },
     longitude: -83.05092955863113,
     latitude: 42.33371685760447,
@@ -2826,7 +2895,8 @@ const rawDatasets: Dataset[] = [
   argoverseScene({
     id: 'argoverse-0bae3b5e-surfel',
     name: 'Argoverse 2 · Detroit — oriented surfel splat',
-    description: 'The Detroit Argoverse 2 log as a Gaussian surfel splat: each LIDAR return is an oriented camera-colored disk, fit from a per-sweep k-NN covariance, fading in and out around its sweep time. Same boxes / ego / HD map / telemetry as the height-ramp scene.',
+    description:
+      'The Detroit Argoverse 2 log as a Gaussian surfel splat: each LIDAR return is an oriented camera-colored disk, fit from a per-sweep k-NN covariance, fading in and out around its sweep time. Same boxes / ego / HD map / telemetry as the height-ramp scene.',
     timeRange: { start: 315969524322, end: 315969540277 },
     longitude: -83.05092955863113,
     latitude: 42.33371685760447,
@@ -2836,7 +2906,8 @@ const rawDatasets: Dataset[] = [
   argoverseScene({
     id: 'argoverse-0bae3b5e-scan',
     name: 'Argoverse 2 · Detroit — raw sweep',
-    description: 'The Detroit Argoverse 2 log as the raw LIDAR sweep: each return drawn at its true scan instant, colored by a rotating phase ramp, so the scan-line sweeps across the scene each revolution. Same boxes / ego / HD map / telemetry as the height-ramp scene.',
+    description:
+      'The Detroit Argoverse 2 log as the raw LIDAR sweep: each return drawn at its true scan instant, colored by a rotating phase ramp, so the scan-line sweeps across the scene each revolution. Same boxes / ego / HD map / telemetry as the height-ramp scene.',
     timeRange: { start: 315969524322, end: 315969540277 },
     longitude: -83.05092955863113,
     latitude: 42.33371685760447,
@@ -2845,7 +2916,8 @@ const rawDatasets: Dataset[] = [
   argoverseScene({
     id: 'argoverse-25e5c600',
     name: 'Argoverse 2 · Palo Alto',
-    description: 'Real Argoverse 2 sensor log, Palo Alto: 64-beam LIDAR, tracked-object 3D boxes, ego trajectory, HD-map substrate with lane centerlines, a ring-camera inset, and ego-derived telemetry.',
+    description:
+      'Real Argoverse 2 sensor log, Palo Alto: 64-beam LIDAR, tracked-object 3D boxes, ego trajectory, HD-map substrate with lane centerlines, a ring-camera inset, and ego-derived telemetry.',
     timeRange: { start: 315966104242, end: 315966120187 },
     longitude: -122.12833142762317,
     latitude: 37.415846217190214,
@@ -2853,7 +2925,8 @@ const rawDatasets: Dataset[] = [
   argoverseScene({
     id: 'argoverse-25e5c600-surfel',
     name: 'Argoverse 2 · Palo Alto — oriented surfel splat',
-    description: 'The Palo Alto Argoverse 2 log as a Gaussian surfel splat: each LIDAR return is an oriented camera-colored disk, fit from a per-sweep k-NN covariance, fading in and out around its sweep time. Same boxes / ego / HD map / telemetry as the height-ramp scene.',
+    description:
+      'The Palo Alto Argoverse 2 log as a Gaussian surfel splat: each LIDAR return is an oriented camera-colored disk, fit from a per-sweep k-NN covariance, fading in and out around its sweep time. Same boxes / ego / HD map / telemetry as the height-ramp scene.',
     timeRange: { start: 315966104242, end: 315966120187 },
     longitude: -122.12833142762317,
     latitude: 37.415846217190214,
@@ -2863,7 +2936,8 @@ const rawDatasets: Dataset[] = [
   argoverseScene({
     id: 'argoverse-25e5c600-scan',
     name: 'Argoverse 2 · Palo Alto — raw sweep',
-    description: 'The Palo Alto Argoverse 2 log as the raw LIDAR sweep: each return drawn at its true scan instant, colored by a rotating phase ramp, so the scan-line sweeps across the scene each revolution. Same boxes / ego / HD map / telemetry as the height-ramp scene.',
+    description:
+      'The Palo Alto Argoverse 2 log as the raw LIDAR sweep: each return drawn at its true scan instant, colored by a rotating phase ramp, so the scan-line sweeps across the scene each revolution. Same boxes / ego / HD map / telemetry as the height-ramp scene.',
     timeRange: { start: 315966104242, end: 315966120187 },
     longitude: -122.12833142762317,
     latitude: 37.415846217190214,
@@ -2872,7 +2946,8 @@ const rawDatasets: Dataset[] = [
   argoverseScene({
     id: 'argoverse-92b900b1',
     name: 'Argoverse 2 · Austin',
-    description: 'Real Argoverse 2 sensor log, Austin: 64-beam LIDAR, tracked-object 3D boxes, ego trajectory, HD-map substrate with lane centerlines, a ring-camera inset, and ego-derived telemetry.',
+    description:
+      'Real Argoverse 2 sensor log, Austin: 64-beam LIDAR, tracked-object 3D boxes, ego trajectory, HD-map substrate with lane centerlines, a ring-camera inset, and ego-derived telemetry.',
     timeRange: { start: 315968947407, end: 315968963357 },
     longitude: -97.70213668235851,
     latitude: 30.255713070218487,
@@ -2880,7 +2955,8 @@ const rawDatasets: Dataset[] = [
   argoverseScene({
     id: 'argoverse-92b900b1-surfel',
     name: 'Argoverse 2 · Austin — oriented surfel splat',
-    description: 'The Austin Argoverse 2 log as a Gaussian surfel splat: each LIDAR return is an oriented camera-colored disk, fit from a per-sweep k-NN covariance, fading in and out around its sweep time. Same boxes / ego / HD map / telemetry as the height-ramp scene.',
+    description:
+      'The Austin Argoverse 2 log as a Gaussian surfel splat: each LIDAR return is an oriented camera-colored disk, fit from a per-sweep k-NN covariance, fading in and out around its sweep time. Same boxes / ego / HD map / telemetry as the height-ramp scene.',
     timeRange: { start: 315968947407, end: 315968963357 },
     longitude: -97.70213668235851,
     latitude: 30.255713070218487,
@@ -2890,7 +2966,8 @@ const rawDatasets: Dataset[] = [
   argoverseScene({
     id: 'argoverse-92b900b1-scan',
     name: 'Argoverse 2 · Austin — raw sweep',
-    description: 'The Austin Argoverse 2 log as the raw LIDAR sweep: each return drawn at its true scan instant, colored by a rotating phase ramp, so the scan-line sweeps across the scene each revolution. Same boxes / ego / HD map / telemetry as the height-ramp scene.',
+    description:
+      'The Austin Argoverse 2 log as the raw LIDAR sweep: each return drawn at its true scan instant, colored by a rotating phase ramp, so the scan-line sweeps across the scene each revolution. Same boxes / ego / HD map / telemetry as the height-ramp scene.',
     timeRange: { start: 315968947407, end: 315968963357 },
     longitude: -97.70213668235851,
     latitude: 30.255713070218487,
@@ -2903,7 +2980,8 @@ const rawDatasets: Dataset[] = [
   argoverseScene({
     id: 'argoverse-02678d04-iso3d',
     name: 'Argoverse 2 · Pittsburgh — 3D density iso-lines',
-    description: 'The Pittsburgh Argoverse 2 log as a true-3D density field: LIDAR returns binned into height layers, each layer contoured independently and stacked at its real altitude, so the relief morphs as the car drives. Colored by return density. Same boxes / ego / HD map / telemetry as the height-ramp scene.',
+    description:
+      'The Pittsburgh Argoverse 2 log as a true-3D density field: LIDAR returns binned into height layers, each layer contoured independently and stacked at its real altitude, so the relief morphs as the car drives. Colored by return density. Same boxes / ego / HD map / telemetry as the height-ramp scene.',
     timeRange: { start: 315969904357, end: 315969920307 },
     longitude: -79.9333411419541,
     latitude: 40.45610620281625,
@@ -2912,7 +2990,8 @@ const rawDatasets: Dataset[] = [
   argoverseScene({
     id: 'argoverse-02a00399-iso3d',
     name: 'Argoverse 2 · Miami — 3D density iso-lines',
-    description: 'The Miami Argoverse 2 log as a true-3D density field: returns binned into height layers, each contoured independently and stacked at its real altitude. Colored by return density.',
+    description:
+      'The Miami Argoverse 2 log as a true-3D density field: returns binned into height layers, each contoured independently and stacked at its real altitude. Colored by return density.',
     timeRange: { start: 315966070522, end: 315966086462 },
     longitude: -80.19521021126853,
     latitude: 25.81266355087901,
@@ -2921,7 +3000,8 @@ const rawDatasets: Dataset[] = [
   argoverseScene({
     id: 'argoverse-0b5142c1-iso3d',
     name: 'Argoverse 2 · Washington DC — 3D density iso-lines',
-    description: 'The Washington DC Argoverse 2 log as a true-3D density field: returns binned into height layers, each contoured independently and stacked at its real altitude. Colored by return density.',
+    description:
+      'The Washington DC Argoverse 2 log as a true-3D density field: returns binned into height layers, each contoured independently and stacked at its real altitude. Colored by return density.',
     timeRange: { start: 315968121172, end: 315968137127 },
     longitude: -76.97901441961996,
     latitude: 38.903158674858965,
@@ -2930,7 +3010,8 @@ const rawDatasets: Dataset[] = [
   argoverseScene({
     id: 'argoverse-0bae3b5e-iso3d',
     name: 'Argoverse 2 · Detroit — 3D density iso-lines',
-    description: 'The Detroit Argoverse 2 log as a true-3D density field: returns binned into height layers, each contoured independently and stacked at its real altitude. Colored by return density.',
+    description:
+      'The Detroit Argoverse 2 log as a true-3D density field: returns binned into height layers, each contoured independently and stacked at its real altitude. Colored by return density.',
     timeRange: { start: 315969524322, end: 315969540277 },
     longitude: -83.05092955863113,
     latitude: 42.33371685760447,
@@ -2939,7 +3020,8 @@ const rawDatasets: Dataset[] = [
   argoverseScene({
     id: 'argoverse-25e5c600-iso3d',
     name: 'Argoverse 2 · Palo Alto — 3D density iso-lines',
-    description: 'The Palo Alto Argoverse 2 log as a true-3D density field: returns binned into height layers, each contoured independently and stacked at its real altitude. Colored by return density.',
+    description:
+      'The Palo Alto Argoverse 2 log as a true-3D density field: returns binned into height layers, each contoured independently and stacked at its real altitude. Colored by return density.',
     timeRange: { start: 315966104242, end: 315966120187 },
     longitude: -122.12833142762317,
     latitude: 37.415846217190214,
@@ -2948,7 +3030,8 @@ const rawDatasets: Dataset[] = [
   argoverseScene({
     id: 'argoverse-92b900b1-iso3d',
     name: 'Argoverse 2 · Austin — 3D density iso-lines',
-    description: 'The Austin Argoverse 2 log as a true-3D density field: returns binned into height layers, each contoured independently and stacked at its real altitude. Colored by return density.',
+    description:
+      'The Austin Argoverse 2 log as a true-3D density field: returns binned into height layers, each contoured independently and stacked at its real altitude. Colored by return density.',
     timeRange: { start: 315968947407, end: 315968963357 },
     longitude: -97.70213668235851,
     latitude: 30.255713070218487,
@@ -2959,7 +3042,8 @@ const rawDatasets: Dataset[] = [
   argoverseScene({
     id: 'argoverse-02678d04-iso',
     name: 'Argoverse 2 · Pittsburgh — density iso-lines',
-    description: 'The Pittsburgh Argoverse 2 log as a flat topographic map of LIDAR return density — iso-density contours re-cut per playhead window, over the real basemap + HD map.',
+    description:
+      'The Pittsburgh Argoverse 2 log as a flat topographic map of LIDAR return density — iso-density contours re-cut per playhead window, over the real basemap + HD map.',
     timeRange: { start: 315969904357, end: 315969920307 },
     longitude: -79.9333411419541,
     latitude: 40.45610620281625,
@@ -2968,7 +3052,8 @@ const rawDatasets: Dataset[] = [
   argoverseScene({
     id: 'argoverse-02a00399-iso',
     name: 'Argoverse 2 · Miami — density iso-lines',
-    description: 'The Miami Argoverse 2 log as a flat topographic map of LIDAR return density — iso-density contours re-cut per playhead window.',
+    description:
+      'The Miami Argoverse 2 log as a flat topographic map of LIDAR return density — iso-density contours re-cut per playhead window.',
     timeRange: { start: 315966070522, end: 315966086462 },
     longitude: -80.19521021126853,
     latitude: 25.81266355087901,
@@ -2977,7 +3062,8 @@ const rawDatasets: Dataset[] = [
   argoverseScene({
     id: 'argoverse-0b5142c1-iso',
     name: 'Argoverse 2 · Washington DC — density iso-lines',
-    description: 'The Washington DC Argoverse 2 log as a flat topographic map of LIDAR return density — iso-density contours per playhead window.',
+    description:
+      'The Washington DC Argoverse 2 log as a flat topographic map of LIDAR return density — iso-density contours per playhead window.',
     timeRange: { start: 315968121172, end: 315968137127 },
     longitude: -76.97901441961996,
     latitude: 38.903158674858965,
@@ -2986,7 +3072,8 @@ const rawDatasets: Dataset[] = [
   argoverseScene({
     id: 'argoverse-0bae3b5e-iso',
     name: 'Argoverse 2 · Detroit — density iso-lines',
-    description: 'The Detroit Argoverse 2 log as a flat topographic map of LIDAR return density — iso-density contours per playhead window.',
+    description:
+      'The Detroit Argoverse 2 log as a flat topographic map of LIDAR return density — iso-density contours per playhead window.',
     timeRange: { start: 315969524322, end: 315969540277 },
     longitude: -83.05092955863113,
     latitude: 42.33371685760447,
@@ -2995,7 +3082,8 @@ const rawDatasets: Dataset[] = [
   argoverseScene({
     id: 'argoverse-25e5c600-iso',
     name: 'Argoverse 2 · Palo Alto — density iso-lines',
-    description: 'The Palo Alto Argoverse 2 log as a flat topographic map of LIDAR return density — iso-density contours per playhead window.',
+    description:
+      'The Palo Alto Argoverse 2 log as a flat topographic map of LIDAR return density — iso-density contours per playhead window.',
     timeRange: { start: 315966104242, end: 315966120187 },
     longitude: -122.12833142762317,
     latitude: 37.415846217190214,
@@ -3004,7 +3092,8 @@ const rawDatasets: Dataset[] = [
   argoverseScene({
     id: 'argoverse-92b900b1-iso',
     name: 'Argoverse 2 · Austin — density iso-lines',
-    description: 'The Austin Argoverse 2 log as a flat topographic map of LIDAR return density — iso-density contours per playhead window.',
+    description:
+      'The Austin Argoverse 2 log as a flat topographic map of LIDAR return density — iso-density contours per playhead window.',
     timeRange: { start: 315968947407, end: 315968963357 },
     longitude: -97.70213668235851,
     latitude: 30.255713070218487,
@@ -3018,7 +3107,8 @@ const rawDatasets: Dataset[] = [
   waymoScene({
     id: 'waymo-sf-day',
     name: 'Waymo · San Francisco · Day',
-    description: 'Real Waymo Open Dataset perception segment, daytime San Francisco: 5-laser LIDAR (decoded from range images), tracked-object 3D boxes with per-box velocity, ego trajectory, a front-camera inset, and ego-derived telemetry (Waymo ships no CAN bus). Anchored to an approximate local frame (Waymo discloses no georeferencing).',
+    description:
+      'Real Waymo Open Dataset perception segment, daytime San Francisco: 5-laser LIDAR (decoded from range images), tracked-object 3D boxes with per-box velocity, ego trajectory, a front-camera inset, and ego-derived telemetry (Waymo ships no CAN bus). Anchored to an approximate local frame (Waymo discloses no georeferencing).',
     timeRange: { start: 1559170821400, end: 1559170841225 },
     longitude: -122.41947418420166,
     latitude: 37.774902618839754,
@@ -3031,7 +3121,8 @@ const rawDatasets: Dataset[] = [
   waymoScene({
     id: 'waymo-sf-day-splat',
     name: 'Waymo · SF · Day — camera-colored splats',
-    description: 'The daytime San Francisco Waymo segment with each LIDAR return colored by projecting it into the cameras and sampling the pixel, rendered as soft gaussian splats. The forward ~252° is camera-colored (5 cameras); the rear wedge, seen by no camera, stays neutral slate. Same boxes / ego / telemetry as the height-ramp scene.',
+    description:
+      'The daytime San Francisco Waymo segment with each LIDAR return colored by projecting it into the cameras and sampling the pixel, rendered as soft gaussian splats. The forward ~252° is camera-colored (5 cameras); the rear wedge, seen by no camera, stays neutral slate. Same boxes / ego / telemetry as the height-ramp scene.',
     timeRange: { start: 1559170821400, end: 1559170841225 },
     longitude: -122.41947418420166,
     latitude: 37.774902618839754,
@@ -3047,7 +3138,8 @@ const rawDatasets: Dataset[] = [
   waymoScene({
     id: 'waymo-sf-day-surfel',
     name: 'Waymo · SF · Day — oriented surfel splat',
-    description: 'The daytime San Francisco Waymo segment as a Gaussian surfel splat: each LIDAR return is an oriented camera-colored disk, fit from a per-sweep k-NN covariance, fading in and out around its sweep time. Same boxes / ego / telemetry as the height-ramp scene.',
+    description:
+      'The daytime San Francisco Waymo segment as a Gaussian surfel splat: each LIDAR return is an oriented camera-colored disk, fit from a per-sweep k-NN covariance, fading in and out around its sweep time. Same boxes / ego / telemetry as the height-ramp scene.',
     timeRange: { start: 1559170821400, end: 1559170841225 },
     longitude: -122.41947418420166,
     latitude: 37.774902618839754,
@@ -3062,7 +3154,8 @@ const rawDatasets: Dataset[] = [
   waymoScene({
     id: 'waymo-sf-day-world',
     name: 'Waymo · SF · Day — worldbuild',
-    description: 'The daytime San Francisco Waymo segment as a worldbuild reconstruction: static camera-colored surfels persist once revealed so the scene accumulates as the car drives; dynamic surfels smear over a short temporal window. Same boxes / ego / telemetry as the height-ramp scene.',
+    description:
+      'The daytime San Francisco Waymo segment as a worldbuild reconstruction: static camera-colored surfels persist once revealed so the scene accumulates as the car drives; dynamic surfels smear over a short temporal window. Same boxes / ego / telemetry as the height-ramp scene.',
     timeRange: { start: 1559170821400, end: 1559170841225 },
     longitude: -122.41947418420166,
     latitude: 37.774902618839754,
@@ -3078,7 +3171,8 @@ const rawDatasets: Dataset[] = [
   waymoScene({
     id: 'waymo-sf-day-iso',
     name: 'Waymo · SF · Day — density iso-lines',
-    description: 'The daytime San Francisco Waymo segment as a live topographic map of LIDAR return density: returns binned onto a ground grid and drawn as iso-density contours, re-cut per ~200 ms playhead window. Same boxes / ego / telemetry as the height-ramp scene.',
+    description:
+      'The daytime San Francisco Waymo segment as a live topographic map of LIDAR return density: returns binned onto a ground grid and drawn as iso-density contours, re-cut per ~200 ms playhead window. Same boxes / ego / telemetry as the height-ramp scene.',
     timeRange: { start: 1559170821400, end: 1559170841225 },
     longitude: -122.41947418420166,
     latitude: 37.774902618839754,
@@ -3093,7 +3187,8 @@ const rawDatasets: Dataset[] = [
   waymoScene({
     id: 'waymo-sf-day-iso3d',
     name: 'Waymo · SF · Day — 3D density iso-lines',
-    description: 'The daytime San Francisco Waymo segment as a true-3D density field: returns binned into height layers, each contoured independently and stacked at its real altitude. Colored by return density. Same boxes / ego / telemetry as the height-ramp scene.',
+    description:
+      'The daytime San Francisco Waymo segment as a true-3D density field: returns binned into height layers, each contoured independently and stacked at its real altitude. Colored by return density. Same boxes / ego / telemetry as the height-ramp scene.',
     timeRange: { start: 1559170821400, end: 1559170841225 },
     longitude: -122.41947418420166,
     latitude: 37.774902618839754,
@@ -3107,7 +3202,8 @@ const rawDatasets: Dataset[] = [
   waymoScene({
     id: 'waymo-sf-day-surfel-adaptive',
     name: 'Waymo · SF · Day — oriented surfel splat (adaptive decimation)',
-    description: 'The daytime SF surfel scene, decimated geometry-aware: high-curvature returns (edges, poles, vehicle outlines) kept, the flat majority summarized to one voxel representative — about 4× fewer disks than the full-density bundle. A/B vs waymo-sf-day-surfel.',
+    description:
+      'The daytime SF surfel scene, decimated geometry-aware: high-curvature returns (edges, poles, vehicle outlines) kept, the flat majority summarized to one voxel representative — about 4× fewer disks than the full-density bundle. A/B vs waymo-sf-day-surfel.',
     timeRange: { start: 1559170821400, end: 1559170841225 },
     longitude: -122.41947418420166,
     latitude: 37.774902618839754,
@@ -3116,7 +3212,8 @@ const rawDatasets: Dataset[] = [
   waymoScene({
     id: 'waymo-phx-day',
     name: 'Waymo · Phoenix · Day',
-    description: 'Real Waymo Open Dataset segment, daytime suburban Phoenix: 5-laser LIDAR, tracked-object 3D box tracks (vehicles, pedestrians, cyclists) with per-box velocity, ego trajectory, a front-camera inset, and ego-derived telemetry. Anchored to an approximate local frame (Waymo discloses no georeferencing).',
+    description:
+      'Real Waymo Open Dataset segment, daytime suburban Phoenix: 5-laser LIDAR, tracked-object 3D box tracks (vehicles, pedestrians, cyclists) with per-box velocity, ego trajectory, a front-camera inset, and ego-derived telemetry. Anchored to an approximate local frame (Waymo discloses no georeferencing).',
     timeRange: { start: 1513450821409, end: 1513450841108 },
     longitude: -112.074419,
     latitude: 33.448329,
@@ -3126,7 +3223,8 @@ const rawDatasets: Dataset[] = [
   waymoScene({
     id: 'waymo-phx-day-surfel',
     name: 'Waymo · Phoenix · Day — oriented surfel splat',
-    description: 'The daytime Phoenix Waymo segment as a Gaussian surfel splat: each LIDAR return is an oriented camera-colored disk, fit from a per-sweep k-NN covariance, fading in and out around its sweep time. Same boxes / ego / telemetry as the height-ramp scene.',
+    description:
+      'The daytime Phoenix Waymo segment as a Gaussian surfel splat: each LIDAR return is an oriented camera-colored disk, fit from a per-sweep k-NN covariance, fading in and out around its sweep time. Same boxes / ego / telemetry as the height-ramp scene.',
     timeRange: { start: 1513450821409, end: 1513450841108 },
     longitude: -112.074419,
     latitude: 33.448329,
@@ -3135,7 +3233,8 @@ const rawDatasets: Dataset[] = [
   waymoScene({
     id: 'waymo-phx-night',
     name: 'Waymo · Phoenix · Night',
-    description: 'Real Waymo Open Dataset night segment, Phoenix: 5-laser LIDAR, tracked-object 3D box tracks with per-box velocity, ego trajectory, a front-camera inset, and ego-derived telemetry (Waymo ships no CAN bus). Anchored to an approximate local frame on a neutral basemap.',
+    description:
+      'Real Waymo Open Dataset night segment, Phoenix: 5-laser LIDAR, tracked-object 3D box tracks with per-box velocity, ego trajectory, a front-camera inset, and ego-derived telemetry (Waymo ships no CAN bus). Anchored to an approximate local frame on a neutral basemap.',
     timeRange: { start: 1508038141882, end: 1508038161581 },
     longitude: -112.073977,
     latitude: 33.448178,
@@ -3143,7 +3242,8 @@ const rawDatasets: Dataset[] = [
   waymoScene({
     id: 'waymo-phx-night-surfel',
     name: 'Waymo · Phoenix · Night — oriented surfel splat',
-    description: 'The night Phoenix Waymo segment as a Gaussian surfel splat: each LIDAR return is an oriented camera-colored disk, fit from a per-sweep k-NN covariance, fading in and out around its sweep time. Same boxes / ego / telemetry as the height-ramp scene.',
+    description:
+      'The night Phoenix Waymo segment as a Gaussian surfel splat: each LIDAR return is an oriented camera-colored disk, fit from a per-sweep k-NN covariance, fading in and out around its sweep time. Same boxes / ego / telemetry as the height-ramp scene.',
     timeRange: { start: 1508038141882, end: 1508038161581 },
     longitude: -112.073977,
     latitude: 33.448178,
@@ -3152,7 +3252,8 @@ const rawDatasets: Dataset[] = [
   waymoScene({
     id: 'waymo-sf-night',
     name: 'Waymo · San Francisco · Night',
-    description: 'Real Waymo Open Dataset night segment, San Francisco: 5-laser LIDAR, tracked-object 3D box tracks (vehicles, pedestrians, cyclists) with per-box velocity, ego trajectory, a front-camera inset, and ego-derived telemetry. Anchored to an approximate local frame (Waymo discloses no georeferencing).',
+    description:
+      'Real Waymo Open Dataset night segment, San Francisco: 5-laser LIDAR, tracked-object 3D box tracks (vehicles, pedestrians, cyclists) with per-box velocity, ego trajectory, a front-camera inset, and ego-derived telemetry. Anchored to an approximate local frame (Waymo discloses no georeferencing).',
     timeRange: { start: 1541816058898, end: 1541816078598 },
     longitude: -122.419489,
     latitude: 37.774895,
@@ -3160,7 +3261,8 @@ const rawDatasets: Dataset[] = [
   waymoScene({
     id: 'waymo-sf-night-surfel',
     name: 'Waymo · San Francisco · Night — oriented surfel splat',
-    description: 'The night San Francisco Waymo segment as a Gaussian surfel splat: each LIDAR return is an oriented camera-colored disk, fit from a per-sweep k-NN covariance, fading in and out around its sweep time. Same boxes / ego / telemetry as the height-ramp scene.',
+    description:
+      'The night San Francisco Waymo segment as a Gaussian surfel splat: each LIDAR return is an oriented camera-colored disk, fit from a per-sweep k-NN covariance, fading in and out around its sweep time. Same boxes / ego / telemetry as the height-ramp scene.',
     timeRange: { start: 1541816058898, end: 1541816078598 },
     longitude: -122.419489,
     latitude: 37.774895,
@@ -3169,7 +3271,8 @@ const rawDatasets: Dataset[] = [
   waymoScene({
     id: 'waymo-phx-dusk-rain',
     name: 'Waymo · Phoenix · Dawn/Dusk (rain)',
-    description: 'Real Waymo Open Dataset dawn/dusk segment, Phoenix, in rain — the only wet scene in the validation split. 5-laser LIDAR (rain scatters returns), tracked-object 3D box tracks with per-box velocity, ego trajectory, a front-camera inset, and ego-derived telemetry. Anchored to an approximate local frame.',
+    description:
+      'Real Waymo Open Dataset dawn/dusk segment, Phoenix, in rain — the only wet scene in the validation split. 5-laser LIDAR (rain scatters returns), tracked-object 3D box tracks with per-box velocity, ego trajectory, a front-camera inset, and ego-derived telemetry. Anchored to an approximate local frame.',
     timeRange: { start: 1518657647337, end: 1518657667137 },
     longitude: -112.071638,
     latitude: 33.448412,
@@ -3181,7 +3284,8 @@ const rawDatasets: Dataset[] = [
   waymoScene({
     id: 'waymo-phx-dusk-rain-surfel',
     name: 'Waymo · Phoenix · Dawn/Dusk (rain) — oriented surfel splat',
-    description: 'The rainy dawn/dusk Phoenix Waymo segment as a Gaussian surfel splat: each LIDAR return is an oriented camera-colored disk, fit from a per-sweep k-NN covariance, fading in and out around its sweep time. Same boxes / ego / telemetry as the height-ramp scene.',
+    description:
+      'The rainy dawn/dusk Phoenix Waymo segment as a Gaussian surfel splat: each LIDAR return is an oriented camera-colored disk, fit from a per-sweep k-NN covariance, fading in and out around its sweep time. Same boxes / ego / telemetry as the height-ramp scene.',
     timeRange: { start: 1518657647337, end: 1518657667137 },
     longitude: -112.071638,
     latitude: 33.448412,
@@ -3195,7 +3299,8 @@ const rawDatasets: Dataset[] = [
   waymoScene({
     id: 'waymo-phx-day-iso3d',
     name: 'Waymo · Phoenix · Day — 3D density iso-lines',
-    description: 'The daytime Phoenix Waymo segment as a true-3D density field: returns binned into height layers, each contoured independently and stacked at its real altitude. Colored by return density. Same boxes / ego / telemetry as the height-ramp scene.',
+    description:
+      'The daytime Phoenix Waymo segment as a true-3D density field: returns binned into height layers, each contoured independently and stacked at its real altitude. Colored by return density. Same boxes / ego / telemetry as the height-ramp scene.',
     timeRange: { start: 1513450821409, end: 1513450841108 },
     longitude: -112.074419,
     latitude: 33.448329,
@@ -3204,7 +3309,8 @@ const rawDatasets: Dataset[] = [
   waymoScene({
     id: 'waymo-phx-night-iso3d',
     name: 'Waymo · Phoenix · Night — 3D density iso-lines',
-    description: 'The night Phoenix Waymo segment as a true-3D density field: returns binned into height layers, each contoured independently and stacked at its real altitude. Colored by return density.',
+    description:
+      'The night Phoenix Waymo segment as a true-3D density field: returns binned into height layers, each contoured independently and stacked at its real altitude. Colored by return density.',
     timeRange: { start: 1508038141882, end: 1508038161581 },
     longitude: -112.073977,
     latitude: 33.448178,
@@ -3213,7 +3319,8 @@ const rawDatasets: Dataset[] = [
   waymoScene({
     id: 'waymo-sf-night-iso3d',
     name: 'Waymo · San Francisco · Night — 3D density iso-lines',
-    description: 'The night San Francisco Waymo segment as a true-3D density field: returns binned into height layers, each contoured independently and stacked at its real altitude. Colored by return density.',
+    description:
+      'The night San Francisco Waymo segment as a true-3D density field: returns binned into height layers, each contoured independently and stacked at its real altitude. Colored by return density.',
     timeRange: { start: 1541816058898, end: 1541816078598 },
     longitude: -122.419489,
     latitude: 37.774895,
@@ -3222,7 +3329,8 @@ const rawDatasets: Dataset[] = [
   waymoScene({
     id: 'waymo-phx-dusk-rain-iso3d',
     name: 'Waymo · Phoenix · Dawn/Dusk (rain) — 3D density iso-lines',
-    description: 'The rainy dawn/dusk Phoenix Waymo segment as a true-3D density field: returns binned into height layers, each contoured independently and stacked at its real altitude. Rain scatters the cloud, so the density structure reads differently from the dry scenes. Colored by return density.',
+    description:
+      'The rainy dawn/dusk Phoenix Waymo segment as a true-3D density field: returns binned into height layers, each contoured independently and stacked at its real altitude. Rain scatters the cloud, so the density structure reads differently from the dry scenes. Colored by return density.',
     timeRange: { start: 1518657647337, end: 1518657667137 },
     longitude: -112.071638,
     latitude: 33.448412,
@@ -3234,7 +3342,8 @@ const rawDatasets: Dataset[] = [
   waymoScene({
     id: 'waymo-phx-day-iso',
     name: 'Waymo · Phoenix · Day — density iso-lines',
-    description: 'The daytime Phoenix Waymo segment as a flat topographic map of LIDAR return density — iso-density contours re-cut per playhead window.',
+    description:
+      'The daytime Phoenix Waymo segment as a flat topographic map of LIDAR return density — iso-density contours re-cut per playhead window.',
     timeRange: { start: 1513450821409, end: 1513450841108 },
     longitude: -112.074419,
     latitude: 33.448329,
@@ -3243,7 +3352,8 @@ const rawDatasets: Dataset[] = [
   waymoScene({
     id: 'waymo-phx-night-iso',
     name: 'Waymo · Phoenix · Night — density iso-lines',
-    description: 'The night Phoenix Waymo segment as a flat topographic map of LIDAR return density — iso-density contours re-cut per playhead window.',
+    description:
+      'The night Phoenix Waymo segment as a flat topographic map of LIDAR return density — iso-density contours re-cut per playhead window.',
     timeRange: { start: 1508038141882, end: 1508038161581 },
     longitude: -112.073977,
     latitude: 33.448178,
@@ -3252,7 +3362,8 @@ const rawDatasets: Dataset[] = [
   waymoScene({
     id: 'waymo-sf-night-iso',
     name: 'Waymo · San Francisco · Night — density iso-lines',
-    description: 'The night San Francisco Waymo segment as a flat topographic map of LIDAR return density — iso-density contours per playhead window.',
+    description:
+      'The night San Francisco Waymo segment as a flat topographic map of LIDAR return density — iso-density contours per playhead window.',
     timeRange: { start: 1541816058898, end: 1541816078598 },
     longitude: -122.419489,
     latitude: 37.774895,
@@ -3261,7 +3372,8 @@ const rawDatasets: Dataset[] = [
   waymoScene({
     id: 'waymo-phx-dusk-rain-iso',
     name: 'Waymo · Phoenix · Dawn/Dusk (rain) — density iso-lines',
-    description: 'The rainy dawn/dusk Phoenix Waymo segment as a flat topographic map of LIDAR return density — iso-density contours per window.',
+    description:
+      'The rainy dawn/dusk Phoenix Waymo segment as a flat topographic map of LIDAR return density — iso-density contours per window.',
     timeRange: { start: 1518657647337, end: 1518657667137 },
     longitude: -112.071638,
     latitude: 33.448412,
@@ -3274,7 +3386,8 @@ const rawDatasets: Dataset[] = [
   waymoScene({
     id: 'waymo-sf-day-lod',
     name: 'Waymo · San Francisco · Day — additive zoom LOD',
-    description: 'The daytime San Francisco Waymo segment as an additive-octree point cloud: each return assigned a single geometry-aware home zoom, so a sparse overview densifies to full resolution as you zoom in.',
+    description:
+      'The daytime San Francisco Waymo segment as an additive-octree point cloud: each return assigned a single geometry-aware home zoom, so a sparse overview densifies to full resolution as you zoom in.',
     timeRange: { start: 1559170821400, end: 1559170841225 },
     longitude: -122.41947418420166,
     latitude: 37.774902618839754,
@@ -3284,7 +3397,8 @@ const rawDatasets: Dataset[] = [
   waymoScene({
     id: 'waymo-phx-day-lod',
     name: 'Waymo · Phoenix · Day — additive zoom LOD',
-    description: 'The daytime Phoenix Waymo segment as an additive-octree point cloud: each return assigned a single geometry-aware home zoom, so a sparse overview densifies to full resolution as you zoom in.',
+    description:
+      'The daytime Phoenix Waymo segment as an additive-octree point cloud: each return assigned a single geometry-aware home zoom, so a sparse overview densifies to full resolution as you zoom in.',
     timeRange: { start: 1513450821409, end: 1513450841108 },
     longitude: -112.074419,
     latitude: 33.448329,
@@ -3294,7 +3408,8 @@ const rawDatasets: Dataset[] = [
   waymoScene({
     id: 'waymo-phx-night-lod',
     name: 'Waymo · Phoenix · Night — additive zoom LOD',
-    description: 'The night Phoenix Waymo segment as an additive-octree point cloud: each return assigned a single geometry-aware home zoom, so a sparse overview densifies to full resolution as you zoom in.',
+    description:
+      'The night Phoenix Waymo segment as an additive-octree point cloud: each return assigned a single geometry-aware home zoom, so a sparse overview densifies to full resolution as you zoom in.',
     timeRange: { start: 1508038141882, end: 1508038161581 },
     longitude: -112.073977,
     latitude: 33.448178,
@@ -3304,7 +3419,8 @@ const rawDatasets: Dataset[] = [
   waymoScene({
     id: 'waymo-sf-night-lod',
     name: 'Waymo · San Francisco · Night — additive zoom LOD',
-    description: 'The night San Francisco Waymo segment as an additive-octree point cloud: each return assigned a single geometry-aware home zoom, so a sparse overview densifies to full resolution as you zoom in.',
+    description:
+      'The night San Francisco Waymo segment as an additive-octree point cloud: each return assigned a single geometry-aware home zoom, so a sparse overview densifies to full resolution as you zoom in.',
     timeRange: { start: 1541816058898, end: 1541816078598 },
     longitude: -122.419489,
     latitude: 37.774895,
@@ -3314,7 +3430,8 @@ const rawDatasets: Dataset[] = [
   waymoScene({
     id: 'waymo-phx-dusk-rain-lod',
     name: 'Waymo · Phoenix · Dawn/Dusk (rain) — additive zoom LOD',
-    description: 'The rainy dawn/dusk Phoenix Waymo segment as an additive-octree point cloud: each return assigned a single geometry-aware home zoom, so a sparse overview densifies to full resolution as you zoom in.',
+    description:
+      'The rainy dawn/dusk Phoenix Waymo segment as an additive-octree point cloud: each return assigned a single geometry-aware home zoom, so a sparse overview densifies to full resolution as you zoom in.',
     timeRange: { start: 1518657647337, end: 1518657667137 },
     longitude: -112.071638,
     latitude: 33.448412,
@@ -3327,7 +3444,8 @@ const rawDatasets: Dataset[] = [
   {
     id: 'comma-280-1641',
     name: 'comma.ai · I-280 Highway',
-    description: 'Real comma2k19 highway segment, California I-280 (San Francisco ↔ San Jose): GPS ego path, CAN-bus telemetry (speed / steering / acceleration), and a road-camera frame. No LIDAR or tracked objects — camera + CAN + GNSS only.',
+    description:
+      'Real comma2k19 highway segment, California I-280 (San Francisco ↔ San Jose): GPS ego path, CAN-bus telemetry (speed / steering / acceleration), and a road-camera frame. No LIDAR or tracked objects — camera + CAN + GNSS only.',
     url: '/data/comma-280-1641/ego/manifest.json',
     avSceneUrl: '/data/comma-280-1641/scene.json',
     avEgoUrl: '/data/comma-280-1641/ego/manifest.json',
@@ -3339,7 +3457,13 @@ const rawDatasets: Dataset[] = [
     timeRange: { start: 1700000000000, end: 1700000059949 },
     timeWindow: 4000,
     targetPlaybackSeconds: 60,
-    initialViewState: { longitude: -122.4021, latitude: 37.5774, zoom: 15, pitch: 50, bearing: 0 },
+    initialViewState: {
+      longitude: -122.4021,
+      latitude: 37.5774,
+      zoom: 15,
+      pitch: 50,
+      bearing: 0,
+    },
     tripColor: [120, 230, 255, 255],
     widthUnits: 'meters',
     tripWidth: 3,
@@ -3359,7 +3483,8 @@ const rawDatasets: Dataset[] = [
   nuscenesScene({
     id: 'nuscenes-0061',
     name: 'nuScenes · One-North (construction)',
-    description: 'Real nuScenes mini scene, Singapore one-north: construction zone at an intersection with a parked truck. 32-beam LIDAR (semantic class), tracked 3D boxes, ego trail, CAN telemetry, and a front camera. Scene log: "parked truck, construction, intersection, turn."',
+    description:
+      'Real nuScenes mini scene, Singapore one-north: construction zone at an intersection with a parked truck. 32-beam LIDAR (semantic class), tracked 3D boxes, ego trail, CAN telemetry, and a front camera. Scene log: "parked truck, construction, intersection, turn."',
     timeRange: { start: 1532402927647, end: 1532402946797 },
     longitude: 103.788327,
     latitude: 1.298281,
@@ -3367,7 +3492,8 @@ const rawDatasets: Dataset[] = [
   nuscenesScene({
     id: 'nuscenes-0103',
     name: 'nuScenes · Boston Seaport (pedestrians)',
-    description: 'Real nuScenes mini scene, Boston Seaport: pedestrians as the ego waits for a turning car. 32-beam LIDAR (semantic class), tracked 3D boxes, ego trail, CAN telemetry (speed / steering / throttle / brake), and a front camera. Scene log: "many peds right, wait for turning car, long bike rack left, cyclist."',
+    description:
+      'Real nuScenes mini scene, Boston Seaport: pedestrians as the ego waits for a turning car. 32-beam LIDAR (semantic class), tracked 3D boxes, ego trail, CAN telemetry (speed / steering / throttle / brake), and a front camera. Scene log: "many peds right, wait for turning car, long bike rack left, cyclist."',
     timeRange: { start: 1533151603547, end: 1533151622948 },
     longitude: -71.049976,
     latitude: 42.351321,
@@ -3375,7 +3501,8 @@ const rawDatasets: Dataset[] = [
   nuscenesScene({
     id: 'nuscenes-0553',
     name: 'nuScenes · Boston Seaport (bicycle)',
-    description: 'Real nuScenes mini scene, Boston Seaport: waiting at an intersection beside a bicycle and a large truck. 32-beam LIDAR (semantic class), tracked 3D boxes, ego trail, CAN telemetry, and a front camera. Scene log: "wait at intersection, bicycle, large truck, peds."',
+    description:
+      'Real nuScenes mini scene, Boston Seaport: waiting at an intersection beside a bicycle and a large truck. 32-beam LIDAR (semantic class), tracked 3D boxes, ego trail, CAN telemetry, and a front camera. Scene log: "wait at intersection, bicycle, large truck, peds."',
     timeRange: { start: 1535489296047, end: 1535489315948 },
     longitude: -71.041856,
     latitude: 42.346179,
@@ -3383,7 +3510,8 @@ const rawDatasets: Dataset[] = [
   nuscenesScene({
     id: 'nuscenes-0655',
     name: 'nuScenes · Boston Seaport (parking lot)',
-    description: 'Real nuScenes mini scene, Boston Seaport: a parking lot with parked cars, a jaywalker, and a bendy bus. 32-beam LIDAR (semantic class), tracked 3D boxes, ego trail, CAN telemetry, and a front camera. Scene log: "parking lot, parked cars, jaywalker, bendy bus."',
+    description:
+      'Real nuScenes mini scene, Boston Seaport: a parking lot with parked cars, a jaywalker, and a bendy bus. 32-beam LIDAR (semantic class), tracked 3D boxes, ego trail, CAN telemetry, and a front camera. Scene log: "parking lot, parked cars, jaywalker, bendy bus."',
     timeRange: { start: 1535385092150, end: 1535385111949 },
     longitude: -71.035317,
     latitude: 42.344646,
@@ -3391,7 +3519,8 @@ const rawDatasets: Dataset[] = [
   nuscenesScene({
     id: 'nuscenes-0757',
     name: 'nuScenes · Boston Seaport (busy intersection)',
-    description: 'Real nuScenes mini scene, Boston Seaport: arriving at a busy intersection with a bus. 32-beam LIDAR (semantic class), tracked 3D boxes, ego trail, CAN telemetry, and a front camera. Scene log: "arrive at busy intersection, bus, wait at intersection."',
+    description:
+      'Real nuScenes mini scene, Boston Seaport: arriving at a busy intersection with a bus. 32-beam LIDAR (semantic class), tracked 3D boxes, ego trail, CAN telemetry, and a front camera. Scene log: "arrive at busy intersection, bus, wait at intersection."',
     timeRange: { start: 1535657108301, end: 1535657128149 },
     longitude: -71.054096,
     latitude: 42.342856,
@@ -3399,7 +3528,8 @@ const rawDatasets: Dataset[] = [
   nuscenesScene({
     id: 'nuscenes-0796',
     name: 'nuScenes · Queenstown (scooters)',
-    description: 'Real nuScenes mini scene, Singapore Queenstown: a scooter and pedestrians on the sidewalk amid buses, cars, and a truck. 32-beam LIDAR (semantic class), tracked 3D boxes, ego trail, CAN telemetry, and a front camera. Scene log: "scooter, peds on sidewalk, bus, cars, truck."',
+    description:
+      'Real nuScenes mini scene, Singapore Queenstown: a scooter and pedestrians on the sidewalk amid buses, cars, and a truck. 32-beam LIDAR (semantic class), tracked 3D boxes, ego trail, CAN telemetry, and a front camera. Scene log: "scooter, peds on sidewalk, bus, cars, truck."',
     timeRange: { start: 1538448744447, end: 1538448764047 },
     longitude: 103.783511,
     latitude: 1.301422,
@@ -3407,7 +3537,8 @@ const rawDatasets: Dataset[] = [
   nuscenesScene({
     id: 'nuscenes-0916',
     name: 'nuScenes · Queenstown (parking)',
-    description: 'Real nuScenes mini scene, Singapore Queenstown: a parking lot with a bicycle rack and parked bicycles. 32-beam LIDAR (semantic class), tracked 3D boxes, ego trail, CAN telemetry, and a front camera. Scene log: "parking lot, bicycle rack, parked bicycles, bus."',
+    description:
+      'Real nuScenes mini scene, Singapore Queenstown: a parking lot with a bicycle rack and parked bicycles. 32-beam LIDAR (semantic class), tracked 3D boxes, ego trail, CAN telemetry, and a front camera. Scene log: "parking lot, bicycle rack, parked bicycles, bus."',
     timeRange: { start: 1538984233547, end: 1538984253447 },
     longitude: 103.773608,
     latitude: 1.294315,
@@ -3415,7 +3546,8 @@ const rawDatasets: Dataset[] = [
   nuscenesScene({
     id: 'nuscenes-1077',
     name: 'nuScenes · Holland Village (night)',
-    description: 'Real nuScenes mini scene, Singapore Holland Village: a night drive down a big street past a bus stop at high speed. 32-beam LIDAR (semantic class), tracked 3D boxes, ego trail, CAN telemetry, and a front camera. Scene log: "night, big street, bus stop, high speed, construction."',
+    description:
+      'Real nuScenes mini scene, Singapore Holland Village: a night drive down a big street past a bus stop at high speed. 32-beam LIDAR (semantic class), tracked 3D boxes, ego trail, CAN telemetry, and a front camera. Scene log: "night, big street, bus stop, high speed, construction."',
     timeRange: { start: 1542800367947, end: 1542800387897 },
     longitude: 103.788308,
     latitude: 1.316754,
@@ -3423,7 +3555,8 @@ const rawDatasets: Dataset[] = [
   nuscenesScene({
     id: 'nuscenes-1094',
     name: 'nuScenes · Holland Village (night, after rain)',
-    description: 'Real nuScenes mini scene, Singapore Holland Village: a night drive after rain, with many pedestrians and a personal mobility device. 32-beam LIDAR (semantic class), tracked 3D boxes, ego trail, CAN telemetry, and a front camera. Scene log: "night, after rain, many peds, PMD, ped with bag."',
+    description:
+      'Real nuScenes mini scene, Singapore Holland Village: a night drive after rain, with many pedestrians and a personal mobility device. 32-beam LIDAR (semantic class), tracked 3D boxes, ego trail, CAN telemetry, and a front camera. Scene log: "night, after rain, many peds, PMD, ped with bag."',
     timeRange: { start: 1542800847948, end: 1542800867447 },
     longitude: 103.795698,
     latitude: 1.310148,
@@ -3431,7 +3564,8 @@ const rawDatasets: Dataset[] = [
   nuscenesScene({
     id: 'nuscenes-1100',
     name: 'nuScenes · Holland Village (night crossing)',
-    description: 'Real nuScenes mini scene, Singapore Holland Village: a night drive with pedestrians on the sidewalk and crossing at a crosswalk. 32-beam LIDAR (semantic class), tracked 3D boxes, ego trail, CAN telemetry, and a front camera. Scene log: "night, peds in sidewalk, peds cross crosswalk."',
+    description:
+      'Real nuScenes mini scene, Singapore Holland Village: a night drive with pedestrians on the sidewalk and crossing at a crosswalk. 32-beam LIDAR (semantic class), tracked 3D boxes, ego trail, CAN telemetry, and a front camera. Scene log: "night, peds in sidewalk, peds cross crosswalk."',
     timeRange: { start: 1542800987947, end: 1542801007446 },
     longitude: 103.794048,
     latitude: 1.307483,
@@ -3439,7 +3573,8 @@ const rawDatasets: Dataset[] = [
   {
     id: 'satellites',
     name: 'Satellite Orbits',
-    description: '~12,700 low-Earth-orbit satellites from CelesTrak over 24h (2026-05-31). Globe by default; toggle flat at top-left.',
+    description:
+      '~12,700 low-Earth-orbit satellites from CelesTrak over 24h (2026-05-31). Globe by default; toggle flat at top-left.',
     url: '/data/satellites/manifest.json',
     type: 'trips', // Use trips layer for animated satellite movement
     useGlobe: true, // Render on 3D globe for orbital visualization
@@ -3452,7 +3587,7 @@ const rawDatasets: Dataset[] = [
     // If you regenerate with a fixed `--start-time`, update these to match.
     timeRange: {
       start: 1780261200000, // first sim step in the regenerated archive (2026-05-31)
-      end: 1780347600000,   // start + 24h (2026-06-11 rebuild: 5m buckets, pinned --start-time)
+      end: 1780347600000, // start + 24h (2026-06-11 rebuild: 5m buckets, pinned --start-time)
     },
     // Time window controls which segments are loaded/visible
     // For LEO satellites with ~90 min orbits and ~40 min segments, use larger window
@@ -3463,15 +3598,13 @@ const rawDatasets: Dataset[] = [
       latitude: 20,
       zoom: 0.5,
       pitch: 0,
-      bearing: 0
+      bearing: 0,
     },
     // 24h plays in ~15 min: LEO ground tracks move fast, so a slower playback
     // lets the eye follow individual streaks instead of a blur.
     legend: {
-      title: "Orbit",
-      items: [
-        { color: "#1FBAD6", label: "LEO satellite" },
-      ]
+      title: 'Orbit',
+      items: [{ color: '#1FBAD6', label: 'LEO satellite' }],
     },
     zoomOverride: 0,
     useGlobalBounds: true,
@@ -3517,12 +3650,12 @@ const rawDatasets: Dataset[] = [
     // (the ordered palette path is per-tile and would jitter).
     colorProperty: 'taxon_group',
     colorMapping: {
-      bird:    [79, 195, 247, 235],
-      mammal:  [255, 138, 101, 235],
-      fish:    [77, 182, 172, 235],
+      bird: [79, 195, 247, 235],
+      mammal: [255, 138, 101, 235],
+      fish: [77, 182, 172, 235],
       reptile: [174, 213, 129, 235],
-      insect:  [255, 213, 79, 235],
-      other:   [176, 190, 197, 200],
+      insect: [255, 213, 79, 235],
+      other: [176, 190, 197, 200],
     },
     colorMappingDefault: [176, 190, 197, 200],
     opacity: 0.8,
@@ -3532,7 +3665,7 @@ const rawDatasets: Dataset[] = [
     // so the hero global arc view (zoom 1.2) stays visible instead of vanishing
     // sub-pixel; widthMaxPixels: 3 caps it once zoomed deep into a flyway.
     widthUnits: 'meters',
-    tripWidth: 14000,   // ~14 km → ~3 px at zoom 5, floored to 1 px globally
+    tripWidth: 14000, // ~14 km → ~3 px at zoom 5, floored to 1 px globally
     widthMinPixels: 1,
     widthMaxPixels: 3,
     trailLength: 86400000 * 4, // 4-day fading trail shows the migration arc
@@ -3569,8 +3702,8 @@ const rawDatasets: Dataset[] = [
     // of the default dark sphere.
     globeBackgroundColor: [240, 240, 236, 255],
     timeRange: {
-      start: 287884800000,  // 1979-02-15 — first fix in the GDP record
-      end: 1667844000000,   // 2022-11-07 — last fix (PMEL interpolated product ends here)
+      start: 287884800000, // 1979-02-15 — first fix in the GDP record
+      end: 1667844000000, // 2022-11-07 — last fix (PMEL interpolated product ends here)
     },
     // ~43 years compress into ~10 min, so sim-time races by; the loader window
     // is wide (weekly build buckets → ~30 buckets) and the trail long so each
@@ -3597,11 +3730,11 @@ const rawDatasets: Dataset[] = [
       property: 'vertexValues',
       domain: [0, 30], // °C
       colors: [
-        [44, 90, 200, 235],  // ≤ 0 °C  — deep blue
+        [44, 90, 200, 235], // ≤ 0 °C  — deep blue
         [40, 180, 200, 235], // ~7.5 °C — teal
         [250, 210, 90, 235], // ~15 °C  — yellow
         [244, 140, 60, 235], // ~22 °C  — orange
-        [220, 50, 47, 235],  // ≥ 30 °C — red
+        [220, 50, 47, 235], // ≥ 30 °C — red
       ],
     },
     colorMappingDefault: [130, 130, 130, 170],
@@ -3633,7 +3766,8 @@ const rawDatasets: Dataset[] = [
     id: 'ecco-currents',
     name: 'Modeled Ocean Currents',
     sources: ['noaa'],
-    description: 'Virtual particles advected through NASA ECCO surface currents, shaded by current speed. Modeled companion to the drifter tracks. Source: NASA/JPL ECCO V4r4.',
+    description:
+      'Virtual particles advected through NASA ECCO surface currents, shaded by current speed. Modeled companion to the drifter tracks. Source: NASA/JPL ECCO V4r4.',
     url: '/data/ecco-currents/manifest.json',
     type: 'trips',
     useGlobe: true,
@@ -3641,7 +3775,7 @@ const rawDatasets: Dataset[] = [
     globeBackgroundColor: [240, 240, 236, 255],
     timeRange: {
       start: 1481889600000, // 2016-12-16 — first ECCO monthly field
-      end: 1512993600000,   // 2017-12-11 — last advected vertex
+      end: 1512993600000, // 2017-12-11 — last advected vertex
     },
     // ~1 year over ~1 min; wide loader window + long trail so each current
     // ribbon persists a few real seconds.
@@ -3663,11 +3797,11 @@ const rawDatasets: Dataset[] = [
       property: 'vertexValues',
       domain: [0, 0.6], // m/s
       colors: [
-        [12, 44, 132, 235],  // ~0 m/s    — calm interior, deep blue
+        [12, 44, 132, 235], // ~0 m/s    — calm interior, deep blue
         [34, 124, 190, 235], // ~0.15 m/s — blue
         [60, 200, 180, 235], // ~0.3 m/s  — teal
         [250, 210, 90, 235], // ~0.45 m/s — yellow
-        [220, 50, 47, 235],  // ≥0.6 m/s  — fast jet, red
+        [220, 50, 47, 235], // ≥0.6 m/s  — fast jet, red
       ],
     },
     colorMappingDefault: [130, 130, 130, 170],
@@ -3744,7 +3878,10 @@ const rawDatasets: Dataset[] = [
     legend: {
       title: 'Year created',
       ramps: [
-        { label: '2007 → 2026', colors: ['#253494', '#41b6c4', '#78c679', '#fd8d3c', '#e31a1c'] },
+        {
+          label: '2007 → 2026',
+          colors: ['#253494', '#41b6c4', '#78c679', '#fd8d3c', '#e31a1c'],
+        },
       ],
     },
   },
@@ -3818,8 +3955,14 @@ const rawDatasets: Dataset[] = [
     legend: {
       title: 'OSM editing activity (per hex)',
       ramps: [
-        { label: 'Edits',    colors: ['#0c2c40', '#26ae9c', '#aae6c8', '#e0faeb'] },
-        { label: 'Sessions', colors: ['#1c1840', '#6850bc', '#c4aaf4', '#e8dcfc'] },
+        {
+          label: 'Edits',
+          colors: ['#0c2c40', '#26ae9c', '#aae6c8', '#e0faeb'],
+        },
+        {
+          label: 'Sessions',
+          colors: ['#1c1840', '#6850bc', '#c4aaf4', '#e8dcfc'],
+        },
       ],
     },
   },
@@ -3897,8 +4040,12 @@ const rawDatasets: Dataset[] = [
 // splat flags are flipped on. Add a base id here once its `-splat` bundle is built.
 const COLORED_SPLAT_BASE_IDS = new Set<string>([
   // Argoverse 2 (7 ring cameras) — colored bundles built with --colorize.
-  'argoverse-02678d04', 'argoverse-02a00399', 'argoverse-0b5142c1',
-  'argoverse-0bae3b5e', 'argoverse-25e5c600', 'argoverse-92b900b1',
+  'argoverse-02678d04',
+  'argoverse-02a00399',
+  'argoverse-0b5142c1',
+  'argoverse-0bae3b5e',
+  'argoverse-25e5c600',
+  'argoverse-92b900b1',
   // nuScenes is NOT here: its `-splat` bundles were never built (no local dir,
   // nothing on R2), so listing it registered 10 scene-switcher entries whose
   // manifests 404'd everywhere. Build the bundles (--colorize) and sync them
@@ -3907,7 +4054,8 @@ const COLORED_SPLAT_BASE_IDS = new Set<string>([
 
 function makeColoredSplatVariant(base: Dataset): Dataset {
   const newId = `${base.id}-splat`;
-  const rebase = (u: string) => u.replace(`/data/${base.id}/`, `/data/${newId}/`);
+  const rebase = (u: string) =>
+    u.replace(`/data/${base.id}/`, `/data/${newId}/`);
   const rebaseOpt = (u?: string) => (u ? rebase(u) : u);
   // Drop the height/semantic legend — meaningless for camera-colored points.
   const { legend: _legend, ...rest } = base;
@@ -3947,9 +4095,16 @@ const coloredSplatVariants: Dataset[] = rawDatasets
 // scenes (built by {argoverse,waymo}_extract.py --scene-split → static/ + dynamic/).
 // nuScenes is EXCLUDED: its 32-beam cloud is too sparse to reconstruct a stage.
 const STAGE_BASE_IDS = new Set<string>([
-  'argoverse-02678d04', 'argoverse-02a00399', 'argoverse-0b5142c1',
-  'argoverse-0bae3b5e', 'argoverse-25e5c600', 'argoverse-92b900b1',
-  'waymo-sf-day', 'waymo-sf-night', 'waymo-phx-day', 'waymo-phx-night',
+  'argoverse-02678d04',
+  'argoverse-02a00399',
+  'argoverse-0b5142c1',
+  'argoverse-0bae3b5e',
+  'argoverse-25e5c600',
+  'argoverse-92b900b1',
+  'waymo-sf-day',
+  'waymo-sf-night',
+  'waymo-phx-day',
+  'waymo-phx-night',
   'waymo-phx-dusk-rain',
 ]);
 
@@ -3976,8 +4131,12 @@ function makeStageVariant(base: Dataset): Dataset {
     avTelemetryUrl: `${root}/telemetry.json`,
     avCamerasUrl: `${root}/cameras.json`,
     // HD-map archives only exist for AV2 (Waymo Perception ships none) — rebase if present.
-    ...(base.avMapPolyUrl ? { avMapPolyUrl: `${root}/map_poly/manifest.json` } : {}),
-    ...(base.avMapLineUrl ? { avMapLineUrl: `${root}/map_line/manifest.json` } : {}),
+    ...(base.avMapPolyUrl
+      ? { avMapPolyUrl: `${root}/map_poly/manifest.json` }
+      : {}),
+    ...(base.avMapLineUrl
+      ? { avMapLineUrl: `${root}/map_line/manifest.json` }
+      : {}),
     // Surfel stage + actors render; clear any base point-mode flags.
     lidarRgb: true,
     lidarSurfel: true,
@@ -4032,36 +4191,44 @@ const WAYMO_LOCAL_ONLY = /^waymo-/;
 // never `<stem>/manifest.json`; the latter 404s even for live scenes.
 const DATA_IS_REMOTE = DATA_BASE_URL !== '';
 
-export const datasets: Dataset[] = [...rawDatasets, ...coloredSplatVariants, ...stageVariants]
+export const datasets: Dataset[] = [
+  ...rawDatasets,
+  ...coloredSplatVariants,
+  ...stageVariants,
+]
   .filter((d) => !HELD_BACK_AV_MODES.test(d.id))
   .filter((d) => !(DATA_IS_REMOTE && WAYMO_LOCAL_ONLY.test(d.id)))
   .map((d) => ({
-  ...d,
-  url: resolveDataUrl(d.url),
-  // The composite `radar` type carries two extra manifest URLs; rewrite them
-  // through the same VITE_DATA_BASE_URL resolver or they 404 on the R2 deploy
-  // while the primary field manifest loads.
-  ...(d.radarCellsUrl && { radarCellsUrl: resolveDataUrl(d.radarCellsUrl) }),
-  ...(d.radarTracksUrl && { radarTracksUrl: resolveDataUrl(d.radarTracksUrl) }),
-  // The composite `av` type carries the scene manifest, two overlay archive
-  // manifests, and two sidecar JSONs; rewrite all of them through the same
-  // VITE_DATA_BASE_URL resolver so they don't 404 on the R2 deploy.
-  ...(d.avSceneUrl && { avSceneUrl: resolveDataUrl(d.avSceneUrl) }),
-  ...(d.avLidarUrl && { avLidarUrl: resolveDataUrl(d.avLidarUrl) }),
-  // Scene-split ("stage + actors") carries two extra LIDAR archive manifests.
-  ...(d.avStaticUrl && { avStaticUrl: resolveDataUrl(d.avStaticUrl) }),
-  ...(d.avDynamicUrl && { avDynamicUrl: resolveDataUrl(d.avDynamicUrl) }),
-  ...(d.avEgoUrl && { avEgoUrl: resolveDataUrl(d.avEgoUrl) }),
-  ...(d.avObjectsUrl && { avObjectsUrl: resolveDataUrl(d.avObjectsUrl) }),
-  ...(d.avTracksUrl && { avTracksUrl: resolveDataUrl(d.avTracksUrl) }),
-  ...(d.avTelemetryUrl && { avTelemetryUrl: resolveDataUrl(d.avTelemetryUrl) }),
-  ...(d.avCamerasUrl && { avCamerasUrl: resolveDataUrl(d.avCamerasUrl) }),
-  ...(d.avMapPolyUrl && { avMapPolyUrl: resolveDataUrl(d.avMapPolyUrl) }),
-  ...(d.avMapLineUrl && { avMapLineUrl: resolveDataUrl(d.avMapLineUrl) }),
-}));
+    ...d,
+    url: resolveDataUrl(d.url),
+    // The composite `radar` type carries two extra manifest URLs; rewrite them
+    // through the same VITE_DATA_BASE_URL resolver or they 404 on the R2 deploy
+    // while the primary field manifest loads.
+    ...(d.radarCellsUrl && { radarCellsUrl: resolveDataUrl(d.radarCellsUrl) }),
+    ...(d.radarTracksUrl && {
+      radarTracksUrl: resolveDataUrl(d.radarTracksUrl),
+    }),
+    // The composite `av` type carries the scene manifest, two overlay archive
+    // manifests, and two sidecar JSONs; rewrite all of them through the same
+    // VITE_DATA_BASE_URL resolver so they don't 404 on the R2 deploy.
+    ...(d.avSceneUrl && { avSceneUrl: resolveDataUrl(d.avSceneUrl) }),
+    ...(d.avLidarUrl && { avLidarUrl: resolveDataUrl(d.avLidarUrl) }),
+    // Scene-split ("stage + actors") carries two extra LIDAR archive manifests.
+    ...(d.avStaticUrl && { avStaticUrl: resolveDataUrl(d.avStaticUrl) }),
+    ...(d.avDynamicUrl && { avDynamicUrl: resolveDataUrl(d.avDynamicUrl) }),
+    ...(d.avEgoUrl && { avEgoUrl: resolveDataUrl(d.avEgoUrl) }),
+    ...(d.avObjectsUrl && { avObjectsUrl: resolveDataUrl(d.avObjectsUrl) }),
+    ...(d.avTracksUrl && { avTracksUrl: resolveDataUrl(d.avTracksUrl) }),
+    ...(d.avTelemetryUrl && {
+      avTelemetryUrl: resolveDataUrl(d.avTelemetryUrl),
+    }),
+    ...(d.avCamerasUrl && { avCamerasUrl: resolveDataUrl(d.avCamerasUrl) }),
+    ...(d.avMapPolyUrl && { avMapPolyUrl: resolveDataUrl(d.avMapPolyUrl) }),
+    ...(d.avMapLineUrl && { avMapLineUrl: resolveDataUrl(d.avMapLineUrl) }),
+  }));
 
 export function getDatasetById(id: string): Dataset | undefined {
-  return datasets.find(d => d.id === id);
+  return datasets.find((d) => d.id === id);
 }
 
 /**
@@ -4071,21 +4238,21 @@ export function getDatasetById(id: string): Dataset | undefined {
  * any id via `getDatasetById`, so old deep-links keep working in dev.
  */
 export const SHIPPED_DATASET_IDS: string[] = [
-  'ocean-drifters',     // Ocean Currents — surface-drifter tracks (observed)
-  'ecco-currents',      // Modeled Ocean Currents — ECCO advected particles
-  'nyc-taxi-points',    // NYC Taxi Points — trip-heads layer, full nyc-taxi-paths.stt
-  'nyc-taxi-trips',     // NYC Yellow Cab Trips
-  'osm-nyc-draw',       // OSM Editing — NYC (cumulative "draw")
-  'ship-traffic',       // US Maritime Traffic — vessel points
+  'ocean-drifters', // Ocean Currents — surface-drifter tracks (observed)
+  'ecco-currents', // Modeled Ocean Currents — ECCO advected particles
+  'nyc-taxi-points', // NYC Taxi Points — trip-heads layer, full nyc-taxi-paths.stt
+  'nyc-taxi-trips', // NYC Yellow Cab Trips
+  'osm-nyc-draw', // OSM Editing — NYC (cumulative "draw")
+  'ship-traffic', // US Maritime Traffic — vessel points
   // After the first 6 (the home-page grid is `navDatasets.slice(0, 6)`), so
   // it lands in navigation without bumping a grid card.
-  'nyc-taxi-flows',     // NYC Taxi Flow — pre-aggregated overview corridors
-  'storm-radar',        // Iowa Derecho — NEXRAD radar composite (field+cells+tracks)
+  'nyc-taxi-flows', // NYC Taxi Flow — pre-aggregated overview corridors
+  'storm-radar', // Iowa Derecho — NEXRAD radar composite (field+cells+tracks)
 ];
 
-export const shippedDatasets: Dataset[] = SHIPPED_DATASET_IDS
-  .map((id) => datasets.find((d) => d.id === id))
-  .filter((d): d is Dataset => Boolean(d));
+export const shippedDatasets: Dataset[] = SHIPPED_DATASET_IDS.map((id) =>
+  datasets.find((d) => d.id === id),
+).filter((d): d is Dataset => Boolean(d));
 
 /**
  * Datasets surfaced in the showcase (the Overview grid). This curated demo

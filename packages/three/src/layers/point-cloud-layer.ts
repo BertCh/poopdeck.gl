@@ -13,7 +13,10 @@
 import { Mesh, InstancedBufferAttribute, Box3, Vector3, Sphere } from 'three';
 import type { BinaryFeatures, Tile } from '@poopdeck.gl/core';
 import { BaseSttLayer, type SttLayerContext } from './layer.js';
-import { resolveTimeWindow, type ThreeTimeWindowOptions } from '../lib/time-window.js';
+import {
+  resolveTimeWindow,
+  type ThreeTimeWindowOptions,
+} from '../lib/time-window.js';
 import { makeBillboardQuadGeometry } from '../geometry/billboard-quad.js';
 import { buildPointBuffers, type PointColorMode } from './point-buffers.js';
 import {
@@ -133,7 +136,11 @@ export class PointCloudLayer extends BaseSttLayer implements SttPointPickable {
       | 'fadeInDuration'
       | 'fadeOutDuration'
     >
-  > & Pick<PointCloudLayerOptions, 'rgbColumns' | 'elevationProperty' | 'rampProperty'>;
+  > &
+    Pick<
+      PointCloudLayerOptions,
+      'rgbColumns' | 'elevationProperty' | 'rampProperty'
+    >;
 
   constructor(options: PointCloudLayerOptions = {}) {
     super();
@@ -148,11 +155,17 @@ export class PointCloudLayer extends BaseSttLayer implements SttPointPickable {
       colorMapping: options.colorMapping ?? {},
       colorMappingDefault: options.colorMappingDefault ?? DEFAULT_FALLBACK,
       rgbColumns: options.rgbColumns === undefined ? null : options.rgbColumns,
-      rampProperty: options.rampProperty === undefined ? null : options.rampProperty,
+      rampProperty:
+        options.rampProperty === undefined ? null : options.rampProperty,
       rampDomain: options.rampDomain ?? [0, 1],
-      rampRange: options.rampRange ?? [[30, 60, 120, 255], [240, 240, 80, 255]],
+      rampRange: options.rampRange ?? [
+        [30, 60, 120, 255],
+        [240, 240, 80, 255],
+      ],
       elevationProperty:
-        options.elevationProperty === undefined ? 'z' : options.elevationProperty,
+        options.elevationProperty === undefined
+          ? 'z'
+          : options.elevationProperty,
       elevationScale: options.elevationScale ?? 1,
       pointSize: options.pointSize ?? 0.06,
       sizeUnits: options.sizeUnits ?? 'meters',
@@ -214,13 +227,27 @@ export class PointCloudLayer extends BaseSttLayer implements SttPointPickable {
 
     const geometry = makeBillboardQuadGeometry();
     geometry.instanceCount = buf.count;
-    geometry.setAttribute('sttCenter', new InstancedBufferAttribute(buf.centers, 3));
-    geometry.setAttribute('sttColor', new InstancedBufferAttribute(buf.colors, 4));
-    geometry.setAttribute('sttStart', new InstancedBufferAttribute(buf.starts, 1));
+    geometry.setAttribute(
+      'sttCenter',
+      new InstancedBufferAttribute(buf.centers, 3),
+    );
+    geometry.setAttribute(
+      'sttColor',
+      new InstancedBufferAttribute(buf.colors, 4),
+    );
+    geometry.setAttribute(
+      'sttStart',
+      new InstancedBufferAttribute(buf.starts, 1),
+    );
     geometry.setAttribute('sttEnd', new InstancedBufferAttribute(buf.ends, 1));
     if (buf.bbox) {
-      geometry.boundingBox = new Box3(new Vector3(...buf.bbox.min), new Vector3(...buf.bbox.max));
-      geometry.boundingSphere = geometry.boundingBox.getBoundingSphere(new Sphere());
+      geometry.boundingBox = new Box3(
+        new Vector3(...buf.bbox.min),
+        new Vector3(...buf.bbox.max),
+      );
+      geometry.boundingSphere = geometry.boundingBox.getBoundingSphere(
+        new Sphere(),
+      );
     }
 
     this.bundle = createPointMaterial({
@@ -307,7 +334,10 @@ export class PointCloudLayer extends BaseSttLayer implements SttPointPickable {
       // buildIdColors(count) paints merged instance i with the colour that
       // decodes back to i — exactly what `resolvePick` expects.
       const idColors = buildIdColors(this.provenance.length);
-      this.object.geometry.setAttribute('sttIdColor', new InstancedBufferAttribute(idColors, 3));
+      this.object.geometry.setAttribute(
+        'sttIdColor',
+        new InstancedBufferAttribute(idColors, 3),
+      );
       this.idColorsPresent = true;
     }
   }

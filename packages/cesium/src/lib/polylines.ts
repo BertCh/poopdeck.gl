@@ -50,7 +50,9 @@ export interface PolylineBuild {
 }
 
 // One WGS84 globe for every build — Cesium's native frame (§5.2: datum matters).
-const GLOBE = new GlobeProjection({ longitude: 0, latitude: 0 }, undefined, { datum: 'wgs84' });
+const GLOBE = new GlobeProjection({ longitude: 0, latitude: 0 }, undefined, {
+  datum: 'wgs84',
+});
 
 const DEFAULT_COLOR: RGBA255 = [200, 205, 215, 255];
 
@@ -59,7 +61,11 @@ function collectLineLayers(tiles: Tile[]): BinaryFeatures[] {
   for (const tile of tiles) {
     for (const tl of tile.layers) {
       const b = tl.features;
-      if (b.featureCount > 0 && b.geometryType === GeometryType.LineString && b.startIndices) {
+      if (
+        b.featureCount > 0 &&
+        b.geometryType === GeometryType.LineString &&
+        b.startIndices
+      ) {
         layers.push(b);
       }
     }
@@ -92,12 +98,18 @@ export interface PathBuildOptions {
  * polyline needs two ends. Times are rebased to the first layer's
  * `timeOffset`, mirroring `CesiumPointLayer.setTiles`.
  */
-export function buildPathPolylines(tiles: Tile[], opts: PathBuildOptions = {}): PolylineBuild {
+export function buildPathPolylines(
+  tiles: Tile[],
+  opts: PathBuildOptions = {},
+): PolylineBuild {
   const layers = collectLineLayers(tiles);
   if (layers.length === 0) return { polylines: [], timeOrigin: 0 };
 
   const timeOrigin = layers[0].timeOffset;
-  const mode: FeatureColorMode = opts.color ?? { type: 'constant', color: DEFAULT_COLOR };
+  const mode: FeatureColorMode = opts.color ?? {
+    type: 'constant',
+    color: DEFAULT_COLOR,
+  };
   const zLift = opts.zLift ?? 0;
   const polylines: FeaturePolyline[] = [];
 
@@ -115,7 +127,11 @@ export function buildPathPolylines(tiles: Tile[], opts: PathBuildOptions = {}): 
       for (let v = 0; v < nv; v++) {
         const base = (v0 + v) * dims;
         const alt = (dims > 2 ? b.positions[base + 2] : 0) + zLift;
-        const [x, y, z] = GLOBE.project(b.positions[base], b.positions[base + 1], alt);
+        const [x, y, z] = GLOBE.project(
+          b.positions[base],
+          b.positions[base + 1],
+          alt,
+        );
         pos[v * 3] = x;
         pos[v * 3 + 1] = y;
         pos[v * 3 + 2] = z;
@@ -167,8 +183,12 @@ export function sampleGreatCircleArc(
   const chord = Math.hypot(bx - ax, by - ay, bz - az);
 
   // Unit direction vectors + the angle between them.
-  const iax = ax / ra, iay = ay / ra, iaz = az / ra;
-  const ibx = bx / rb, iby = by / rb, ibz = bz / rb;
+  const iax = ax / ra,
+    iay = ay / ra,
+    iaz = az / ra;
+  const ibx = bx / rb,
+    iby = by / rb,
+    ibz = bz / rb;
   const cos = Math.min(1, Math.max(-1, iax * ibx + iay * iby + iaz * ibz));
   const theta = Math.acos(cos);
   const sinTheta = Math.sin(theta);
@@ -184,14 +204,20 @@ export function sampleGreatCircleArc(
       dy = iay * wa + iby * wb;
       dz = iaz * wa + ibz * wb;
       const len = Math.hypot(dx, dy, dz);
-      dx /= len; dy /= len; dz /= len;
+      dx /= len;
+      dy /= len;
+      dz /= len;
     } else {
       // Near-parallel (or antipodal) — linear fallback, normalized when possible.
       dx = iax + (ibx - iax) * t;
       dy = iay + (iby - iay) * t;
       dz = iaz + (ibz - iaz) * t;
       const len = Math.hypot(dx, dy, dz);
-      if (len > 1e-6) { dx /= len; dy /= len; dz /= len; }
+      if (len > 1e-6) {
+        dx /= len;
+        dy /= len;
+        dz /= len;
+      }
     }
     const radius = ra + (rb - ra) * t;
     const lift = height * chord * 4 * t * (1 - t);
@@ -207,12 +233,18 @@ export function sampleGreatCircleArc(
  * collapses to its first (source) / last (target) vertex via the kernel's
  * `deriveSourceTargetPositions`, then sweeps {@link sampleGreatCircleArc}.
  */
-export function buildArcPolylines(tiles: Tile[], opts: ArcBuildOptions = {}): PolylineBuild {
+export function buildArcPolylines(
+  tiles: Tile[],
+  opts: ArcBuildOptions = {},
+): PolylineBuild {
   const layers = collectLineLayers(tiles);
   if (layers.length === 0) return { polylines: [], timeOrigin: 0 };
 
   const timeOrigin = layers[0].timeOffset;
-  const mode: FeatureColorMode = opts.color ?? { type: 'constant', color: DEFAULT_COLOR };
+  const mode: FeatureColorMode = opts.color ?? {
+    type: 'constant',
+    color: DEFAULT_COLOR,
+  };
   const height = opts.height ?? 1;
   const samples = Math.max(2, opts.samples ?? 33);
   const zLift = opts.zLift ?? 0;

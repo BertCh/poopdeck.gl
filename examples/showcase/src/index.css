@@ -1,4 +1,4 @@
-@import "tailwindcss";
+@import 'tailwindcss';
 @plugin "@tailwindcss/typography";
 
 /* Tailwind v4 auto-detection skips node_modules, so utility classes used only
@@ -14,15 +14,15 @@
     /* Light, minimal theme. Few fills/outlines — hierarchy comes from type
        and ink weights, not boxes. The map canvas itself stays dark (its
        data colors are tuned for it); these tokens style the UI around it. */
-    --page-bg: #fbfbf9;       /* warm paper white */
+    --page-bg: #fbfbf9; /* warm paper white */
     --surface: #ffffff;
     --surface-sunken: #f3f2ee; /* faint fill for code/map frames */
-    --ink-900: #15171c;       /* headings, near-black */
-    --ink-700: #353a44;       /* strong body */
-    --ink-500: #6b7280;       /* muted body / labels */
-    --ink-400: #9aa1ad;       /* faint / captions */
-    --hairline: #e7e6e0;      /* used sparingly */
-    --accent: #0a7790;        /* deep cyan — echoes the data trails, readable on white */
+    --ink-900: #15171c; /* headings, near-black */
+    --ink-700: #353a44; /* strong body */
+    --ink-500: #6b7280; /* muted body / labels */
+    --ink-400: #9aa1ad; /* faint / captions */
+    --hairline: #e7e6e0; /* used sparingly */
+    --accent: #0a7790; /* deep cyan — echoes the data trails, readable on white */
     --accent-soft: rgba(10, 119, 144, 0.08);
   }
 
@@ -32,14 +32,24 @@
     box-sizing: border-box;
   }
 
-  html, body, #root {
+  html,
+  body,
+  #root {
     width: 100%;
     height: 100%;
     overflow: hidden;
   }
 
   body {
-    font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    font-family:
+      system-ui,
+      -apple-system,
+      BlinkMacSystemFont,
+      'Segoe UI',
+      Roboto,
+      Helvetica,
+      Arial,
+      sans-serif;
     font-size: 0.875rem;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
@@ -76,7 +86,15 @@
 /* Headings use the same system sans as body — hierarchy comes from weight,
    size, and tracking, matching the deck.gl / vis.gl docs aesthetic. */
 .font-display {
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  font-family:
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    Roboto,
+    Helvetica,
+    Arial,
+    sans-serif;
   letter-spacing: -0.015em;
 }
 
@@ -91,7 +109,9 @@
 }
 
 .code-block {
-  font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+  font-family:
+    ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Monaco, Consolas,
+    'Liberation Mono', 'Courier New', monospace;
   font-size: 12px;
   line-height: 1.6;
   tab-size: 2;
@@ -122,7 +142,7 @@
 
 .docs-prose h1,
 .docs-prose h2 {
-  font-family: "Fraunces", Georgia, serif;
+  font-family: 'Fraunces', Georgia, serif;
   letter-spacing: -0.02em;
 }
 
@@ -180,18 +200,18 @@
 .story-root {
   /* Dark, oceanic palette for the immersive sections; the reading interludes
      re-use the app's warm paper tokens. */
-  --story-abyss: #060a14;       /* deepest background behind the globe */
-  --story-deep: #0a1424;        /* panel navy */
-  --story-ink: #f4f1ea;         /* near-white on dark */
-  --story-ink-soft: #b7c0cf;    /* muted on dark */
-  --story-ink-faint: #76829a;   /* faint on dark */
-  --story-warm: #f0c14b;        /* warm SST accent (yellow) */
-  --story-hot: #dc4a3f;         /* hot SST accent (red) */
-  --story-cool: #28b4c8;        /* cool SST accent (teal) */
-  --story-paper: #fbfbf9;       /* reading-interlude background */
+  --story-abyss: #060a14; /* deepest background behind the globe */
+  --story-deep: #0a1424; /* panel navy */
+  --story-ink: #f4f1ea; /* near-white on dark */
+  --story-ink-soft: #b7c0cf; /* muted on dark */
+  --story-ink-faint: #76829a; /* faint on dark */
+  --story-warm: #f0c14b; /* warm SST accent (yellow) */
+  --story-hot: #dc4a3f; /* hot SST accent (red) */
+  --story-cool: #28b4c8; /* cool SST accent (teal) */
+  --story-paper: #fbfbf9; /* reading-interlude background */
 
-  --serif: "Newsreader", Georgia, "Times New Roman", serif;
-  --display: "Fraunces", Georgia, serif;
+  --serif: 'Newsreader', Georgia, 'Times New Roman', serif;
+  --display: 'Fraunces', Georgia, serif;
 
   font-family: var(--serif);
   color: var(--story-ink);
@@ -217,7 +237,9 @@
     transition-delay: 0ms !important;
     scroll-behavior: auto !important;
   }
-  .story-root { scroll-behavior: auto; }
+  .story-root {
+    scroll-behavior: auto;
+  }
 }
 
 /* The fixed globe stage sits behind everything; content scrolls over it. */
@@ -227,11 +249,17 @@
   z-index: 0;
   background: radial-gradient(120% 120% at 50% 30%, #0d1830 0%, #060a14 70%);
   transition: opacity 600ms ease;
-  pointer-events: none;  /* re-enabled per-act so the globe is draggable */
+  pointer-events: none; /* re-enabled per-act so the globe is draggable */
 }
-.story-stage--idle { opacity: 0; }
-.story-stage--live { opacity: 1; }
-.story-stage .map-viewport > div:first-child { background: transparent !important; }
+.story-stage--idle {
+  opacity: 0;
+}
+.story-stage--live {
+  opacity: 1;
+}
+.story-stage .map-viewport > div:first-child {
+  background: transparent !important;
+}
 
 .story-flow {
   position: relative;
@@ -255,7 +283,10 @@
 }
 
 /* ── Scrolly "act": transparent steps over the fixed globe ──────────────── */
-.story-act { position: relative; z-index: 1; }
+.story-act {
+  position: relative;
+  z-index: 1;
+}
 .story-step {
   min-height: 92vh;
   display: flex;
@@ -273,11 +304,21 @@
   box-shadow: 0 24px 70px -30px rgba(0, 0, 0, 0.9);
   opacity: 0.25;
   transform: translateY(22px);
-  transition: opacity 600ms ease, transform 600ms ease;
+  transition:
+    opacity 600ms ease,
+    transform 600ms ease;
 }
-.story-step--active .story-step-card { opacity: 1; transform: translateY(0); }
-.story-step-card p { color: var(--story-ink-soft); line-height: 1.62; }
-.story-step-card p + p { margin-top: 0.85rem; }
+.story-step--active .story-step-card {
+  opacity: 1;
+  transform: translateY(0);
+}
+.story-step-card p {
+  color: var(--story-ink-soft);
+  line-height: 1.62;
+}
+.story-step-card p + p {
+  margin-top: 0.85rem;
+}
 
 /* ── Reading interlude: opaque, covers the globe ────────────────────────── */
 .story-interlude {
@@ -290,8 +331,14 @@
   background: var(--story-deep);
   color: var(--story-ink-soft);
 }
-.story-prose { font-family: var(--serif); font-size: 1.18rem; line-height: 1.72; }
-.story-prose p + p { margin-top: 1.15rem; }
+.story-prose {
+  font-family: var(--serif);
+  font-size: 1.18rem;
+  line-height: 1.72;
+}
+.story-prose p + p {
+  margin-top: 1.15rem;
+}
 .story-dropcap::first-letter {
   font-family: var(--display);
   font-weight: 700;
@@ -303,7 +350,9 @@
 }
 
 /* ── Figure + credit ────────────────────────────────────────────────────── */
-.story-figure { margin: 0; }
+.story-figure {
+  margin: 0;
+}
 .story-figure img {
   display: block;
   width: 100%;
@@ -324,8 +373,12 @@
   text-transform: uppercase;
   color: var(--ink-400);
 }
-.story-interlude--dark .story-figcaption { color: var(--story-ink-soft); }
-.story-interlude--dark .story-credit { color: var(--story-ink-faint); }
+.story-interlude--dark .story-figcaption {
+  color: var(--story-ink-soft);
+}
+.story-interlude--dark .story-credit {
+  color: var(--story-ink-faint);
+}
 
 /* ── People cards ───────────────────────────────────────────────────────── */
 .story-person {
@@ -334,21 +387,38 @@
   border-radius: 14px;
   padding: 1.4rem;
   height: 100%;
-  transition: transform 200ms ease, box-shadow 200ms ease;
+  transition:
+    transform 200ms ease,
+    box-shadow 200ms ease;
 }
 .story-person:hover {
   transform: translateY(-3px);
-  box-shadow: 0 18px 40px -24px rgba(0,0,0,0.35);
+  box-shadow: 0 18px 40px -24px rgba(0, 0, 0, 0.35);
 }
 .story-monogram {
-  width: 56px; height: 56px; border-radius: 50%;
-  display: flex; align-items: center; justify-content: center;
-  font-family: var(--display); font-weight: 700; font-size: 1.25rem;
-  color: #fff; letter-spacing: 0.01em; flex: none;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: 1.25rem;
+  color: #fff;
+  letter-spacing: 0.01em;
+  flex: none;
 }
 
 /* ── Timeline ───────────────────────────────────────────────────────────── */
-.story-timeline-rail { background: linear-gradient(90deg, var(--story-cool), var(--story-warm), var(--story-hot)); }
+.story-timeline-rail {
+  background: linear-gradient(
+    90deg,
+    var(--story-cool),
+    var(--story-warm),
+    var(--story-hot)
+  );
+}
 
 /* ── Stat counters ──────────────────────────────────────────────────────── */
 .story-stat-num {
@@ -361,6 +431,13 @@
 
 /* ── SST gradient chip (re-used in legend + diagram) ────────────────────── */
 .story-sst-ramp {
-  background: linear-gradient(90deg, #2C5AC8, #28B4C8, #FAD25A, #F48C3C, #DC322F);
+  background: linear-gradient(
+    90deg,
+    #2c5ac8,
+    #28b4c8,
+    #fad25a,
+    #f48c3c,
+    #dc322f
+  );
   border-radius: 999px;
 }

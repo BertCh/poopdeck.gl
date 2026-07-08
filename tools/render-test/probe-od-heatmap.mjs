@@ -31,7 +31,9 @@ const browser = await chromium.launch({
   ],
 });
 
-const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+const ctx = await browser.newContext({
+  viewport: { width: 1280, height: 800 },
+});
 const page = await ctx.newPage();
 const consoleErrors = [];
 const pageErrors = [];
@@ -45,24 +47,35 @@ page.on('pageerror', (err) => pageErrors.push(`${err.name}: ${err.message}`));
 const url = `${BASE_URL}/demo/nyc-taxi-od-heatmap`;
 console.log(`→ navigating to ${url}`);
 await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60_000 });
-await page.locator('.map-viewport').first().waitFor({ state: 'visible', timeout: 30_000 });
+await page
+  .locator('.map-viewport')
+  .first()
+  .waitFor({ state: 'visible', timeout: 30_000 });
 
 // Let tiles load.
 console.log('… waiting for tile loads');
 await page.waitForTimeout(10_000);
 
-await page.screenshot({ path: path.join(OUTPUT, '01-initial.png'), fullPage: false });
+await page.screenshot({
+  path: path.join(OUTPUT, '01-initial.png'),
+  fullPage: false,
+});
 console.log('✓ wrote 01-initial.png');
 
 // Sample some pixels from the canvas to verify both layers are contributing color.
 const colorSample = await page.evaluate(() => {
-  const canvases = Array.from(document.querySelectorAll('.map-viewport canvas'));
-  const dc = canvases.find((c) => !(c.className || '').includes('mapboxgl-canvas'));
+  const canvases = Array.from(
+    document.querySelectorAll('.map-viewport canvas'),
+  );
+  const dc = canvases.find(
+    (c) => !(c.className || '').includes('mapboxgl-canvas'),
+  );
   if (!dc) return { ok: false, reason: 'no-canvas' };
   // deck.gl uses preserveDrawingBuffer=false → readPixels via gl, not 2d ctx.
   const gl = dc.getContext('webgl2') || dc.getContext('webgl');
   if (!gl) return { ok: false, reason: 'no-gl' };
-  const w = dc.width, h = dc.height;
+  const w = dc.width,
+    h = dc.height;
   // Force a redraw flush.
   const pixels = new Uint8Array(w * h * 4);
   try {
@@ -70,10 +83,16 @@ const colorSample = await page.evaluate(() => {
   } catch (e) {
     return { ok: false, reason: `readPixels failed: ${e.message}` };
   }
-  let greenish = 0, reddish = 0, opaque = 0, samples = 0;
+  let greenish = 0,
+    reddish = 0,
+    opaque = 0,
+    samples = 0;
   // Sample every 200th pixel
   for (let i = 0; i < pixels.length; i += 4 * 200) {
-    const r = pixels[i], g = pixels[i + 1], b = pixels[i + 2], a = pixels[i + 3];
+    const r = pixels[i],
+      g = pixels[i + 1],
+      b = pixels[i + 2],
+      a = pixels[i + 3];
     if (a === 0) continue;
     samples++;
     opaque++;
@@ -95,20 +114,26 @@ const playSelectors = [
 let played = false;
 for (const sel of playSelectors) {
   const loc = page.locator(sel).first();
-  if (await loc.count() > 0) {
+  if ((await loc.count()) > 0) {
     await loc.click().catch(() => {});
     played = true;
     console.log(`✓ clicked ${sel}`);
     break;
   }
 }
-if (!played) console.log('⚠ could not find play button; sampling without animation');
+if (!played)
+  console.log('⚠ could not find play button; sampling without animation');
 
 await page.waitForTimeout(4000);
-await page.screenshot({ path: path.join(OUTPUT, '02-mid-animation.png'), fullPage: false });
+await page.screenshot({
+  path: path.join(OUTPUT, '02-mid-animation.png'),
+  fullPage: false,
+});
 console.log('✓ wrote 02-mid-animation.png');
 
-const fatal = [...consoleErrors, ...pageErrors].filter((e) => FATAL.some((p) => p.test(e)));
+const fatal = [...consoleErrors, ...pageErrors].filter((e) =>
+  FATAL.some((p) => p.test(e)),
+);
 const report = {
   url,
   consoleErrorCount: consoleErrors.length,
@@ -119,7 +144,10 @@ const report = {
   pageErrorSample: pageErrors.slice(0, 5),
   colorSample,
 };
-fs.writeFileSync(path.join(OUTPUT, 'report.json'), JSON.stringify(report, null, 2));
+fs.writeFileSync(
+  path.join(OUTPUT, 'report.json'),
+  JSON.stringify(report, null, 2),
+);
 fs.writeFileSync(path.join(OUTPUT, 'console.log'), allConsole.join('\n'));
 console.log('\n=== REPORT ===');
 console.log(JSON.stringify(report, null, 2));

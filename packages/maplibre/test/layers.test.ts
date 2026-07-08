@@ -311,7 +311,11 @@ describe('Fade-in/out resolution', () => {
   });
 
   it('applies the 10%-of-window soft ramp only when softTimeWindow: true is explicit', () => {
-    const layer = new STTPointLayer({ ...baseOpts, id: 'p', softTimeWindow: true }) as any;
+    const layer = new STTPointLayer({
+      ...baseOpts,
+      id: 'p',
+      softTimeWindow: true,
+    }) as any;
     const { fadeIn, fadeOut } = layer.resolveFadeDurations();
     expect(fadeIn).toBe(500); // 5000 * 0.1
     expect(fadeOut).toBe(500);
@@ -346,8 +350,10 @@ describe('STTPointLayer time-window math', () => {
     // Drive a render manually.
     layer.drawTile(gl, tile, tile.layers[0], cache, {
       matrix: new Float32Array(16),
-      windowStart: layer.opts.currentTime - cache.timeOffset - layer.opts.timeWindow / 2,
-      windowEnd: layer.opts.currentTime - cache.timeOffset + layer.opts.timeWindow / 2,
+      windowStart:
+        layer.opts.currentTime - cache.timeOffset - layer.opts.timeWindow / 2,
+      windowEnd:
+        layer.opts.currentTime - cache.timeOffset + layer.opts.timeWindow / 2,
       currentTime: layer.opts.currentTime,
       zoom: 2,
     });
@@ -407,8 +413,12 @@ describe('STTPointLayer position quantization (perf research 2026-07)', () => {
       0,
     );
     // uPosScale/uPosOffset were set from the cache's quantization params.
-    const scaleCalls = gl.uniform3fv.mock.calls.filter((c: unknown[]) => c[0] === h.uPosScale);
-    const offsetCalls = gl.uniform3fv.mock.calls.filter((c: unknown[]) => c[0] === h.uPosOffset);
+    const scaleCalls = gl.uniform3fv.mock.calls.filter(
+      (c: unknown[]) => c[0] === h.uPosScale,
+    );
+    const offsetCalls = gl.uniform3fv.mock.calls.filter(
+      (c: unknown[]) => c[0] === h.uPosOffset,
+    );
     expect(scaleCalls).toHaveLength(1);
     expect(offsetCalls).toHaveLength(1);
     expect(scaleCalls[0][1]).toEqual(cache.posScale);
@@ -423,7 +433,8 @@ describe('STTPointLayer position quantization (perf research 2026-07)', () => {
     layer.buildTileGpuCache(gl, tile, tile.layers[0]);
 
     const posBufferCall = gl.bufferData.mock.calls.find(
-      (c: unknown[]) => c[1] instanceof Uint16Array && (c[1] as Uint16Array).length === 6, // 2 points * 3 components
+      (c: unknown[]) =>
+        c[1] instanceof Uint16Array && (c[1] as Uint16Array).length === 6, // 2 points * 3 components
     );
     expect(posBufferCall).toBeDefined();
   });

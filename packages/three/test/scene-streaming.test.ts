@@ -28,7 +28,11 @@ class FakeLayer implements SttLayer {
 describe('SttScene streaming drive path', () => {
   it('opts a layer into streaming and drives setTiles via updateStreaming', () => {
     const layer = new FakeLayer('objects');
-    const scene = new SttScene({ anchor: ANCHOR, timeOrigin: 0, ground: false });
+    const scene = new SttScene({
+      anchor: ANCHOR,
+      timeOrigin: 0,
+      ground: false,
+    });
     scene.addLayer(layer, 'archive.stt', { streaming: true });
 
     expect(scene.hasStreamingLayers()).toBe(true);
@@ -66,7 +70,11 @@ describe('SttScene streaming drive path', () => {
 
   it('leaves eager (default) layers untouched by updateStreaming', () => {
     const layer = new FakeLayer('eager');
-    const scene = new SttScene({ anchor: ANCHOR, timeOrigin: 0, ground: false });
+    const scene = new SttScene({
+      anchor: ANCHOR,
+      timeOrigin: 0,
+      ground: false,
+    });
     scene.addLayer(layer, 'archive.stt'); // no opts → eager default
 
     expect(scene.hasStreamingLayers()).toBe(false);
@@ -89,14 +97,20 @@ describe('SttScene streaming drive path', () => {
     scene.addLayer(forcedEager, 'b.stt', { streaming: false }); // explicit override
 
     expect(scene.getStreamingSources()).toHaveLength(1);
-    scene.getStreamingSources()[0].attachTileset(mockTileset([tile({ z: 1, x: 0, y: 0, t: 0 })]));
+    scene
+      .getStreamingSources()[0]
+      .attachTileset(mockTileset([tile({ z: 1, x: 0, y: 0, t: 0 })]));
     scene.updateStreaming(VIEWPORT);
     expect(streamed.setTiles).toHaveBeenCalledTimes(1);
     expect(forcedEager.setTiles).not.toHaveBeenCalled();
   });
 
   it('forwards setAnimationState to every streaming source', () => {
-    const scene = new SttScene({ anchor: ANCHOR, timeOrigin: 0, ground: false });
+    const scene = new SttScene({
+      anchor: ANCHOR,
+      timeOrigin: 0,
+      ground: false,
+    });
     scene.addLayer(new FakeLayer('objects'), 'a.stt', { streaming: true });
     const ts = mockTileset();
     scene.getStreamingSources()[0].attachTileset(ts);
@@ -106,7 +120,11 @@ describe('SttScene streaming drive path', () => {
   });
 
   it('disposes both eager and streaming sources', () => {
-    const scene = new SttScene({ anchor: ANCHOR, timeOrigin: 0, ground: false });
+    const scene = new SttScene({
+      anchor: ANCHOR,
+      timeOrigin: 0,
+      ground: false,
+    });
     scene.addLayer(new FakeLayer('stream'), 'a.stt', { streaming: true });
     scene.addLayer(new FakeLayer('eager'), 'b.stt');
     const ts = mockTileset();

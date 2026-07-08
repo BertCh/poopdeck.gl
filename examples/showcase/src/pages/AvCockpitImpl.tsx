@@ -17,34 +17,34 @@
  * Missing streams simply hide their panel; a missing/blank bundle shows a
  * loading or "scene not generated yet" state instead of crashing.
  */
-import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Link, useParams, useSearchParams } from "react-router";
-import { usePlayback } from "@poopdeck.gl/react";
-import { datasets, getDatasetById } from "../datasets";
-import { useReducedMotion } from "../lib/reducedMotion";
-import { useIsMobile } from "../lib/useMediaQuery";
-import type { Dataset, ColorRGBA } from "../types";
-import AvDeck from "../components/av/AvDeck";
-import AvThreeViewer from "../components/av/AvThreeViewer";
-import AvMobileChrome from "../components/av/AvMobileChrome";
-import StreamPanel from "../components/av/StreamPanel";
-import MetricCharts from "../components/av/MetricCharts";
-import CameraInset from "../components/av/CameraInset";
-import SceneSwitcher from "../components/av/SceneSwitcher";
-import Timeline, { type TimelineProps } from "../components/av/Timeline";
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { Link, useParams, useSearchParams } from 'react-router';
+import { usePlayback } from '@poopdeck.gl/react';
+import { datasets, getDatasetById } from '../datasets';
+import { useReducedMotion } from '../lib/reducedMotion';
+import { useIsMobile } from '../lib/useMediaQuery';
+import type { Dataset, ColorRGBA } from '../types';
+import AvDeck from '../components/av/AvDeck';
+import AvThreeViewer from '../components/av/AvThreeViewer';
+import AvMobileChrome from '../components/av/AvMobileChrome';
+import StreamPanel from '../components/av/StreamPanel';
+import MetricCharts from '../components/av/MetricCharts';
+import CameraInset from '../components/av/CameraInset';
+import SceneSwitcher from '../components/av/SceneSwitcher';
+import Timeline, { type TimelineProps } from '../components/av/Timeline';
 import ObjectInspector, {
   type PickedObject,
-} from "../components/av/ObjectInspector";
+} from '../components/av/ObjectInspector';
 import {
   type AvScene,
   type AvStreamKey,
   type AvTelemetry,
   type AvCameras,
   type AvLidarDensity,
-} from "../components/av/sceneTypes";
+} from '../components/av/sceneTypes';
 
-const DEFAULT_SCENE_ID = "av-synthetic";
-const LAYER_STREAMS: AvStreamKey[] = ["lidar", "ego", "objects", "map"];
+const DEFAULT_SCENE_ID = 'av-synthetic';
+const LAYER_STREAMS: AvStreamKey[] = ['lidar', 'ego', 'objects', 'map'];
 
 /**
  * Google Maps Platform key for the Photorealistic 3D Tiles toggle (read once at
@@ -78,36 +78,36 @@ const DEFAULT_TILES3D_OPACITY = 0.29;
  * into a Hägerstrand space-time cube (no `-cube` bundle exists).
  */
 type LidarRenderMode =
-  | "raw"
-  | "splat"
-  | "surfel"
-  | "iso"
-  | "iso3d"
-  | "world"
-  | "stage"
-  | "cube"
-  | "scan"
-  | "lod";
+  | 'raw'
+  | 'splat'
+  | 'surfel'
+  | 'iso'
+  | 'iso3d'
+  | 'world'
+  | 'stage'
+  | 'cube'
+  | 'scan'
+  | 'lod';
 
 /** Label shown on each render-mode pill. */
 const RENDER_MODE_LABELS: Record<LidarRenderMode, string> = {
-  raw: "Points",
-  splat: "Splat",
-  surfel: "Surfel",
-  iso: "Iso-lines",
-  iso3d: "Iso 3D",
-  world: "Worldbuild",
-  stage: "Stage",
-  cube: "Spacetime",
-  scan: "Sweep",
-  lod: "Zoom LOD",
+  raw: 'Points',
+  splat: 'Splat',
+  surfel: 'Surfel',
+  iso: 'Iso-lines',
+  iso3d: 'Iso 3D',
+  world: 'Worldbuild',
+  stage: 'Stage',
+  cube: 'Spacetime',
+  scan: 'Sweep',
+  lod: 'Zoom LOD',
 };
 
 /** Base url of a dataset's data dir (strip the trailing manifest filename). */
 function sceneBaseUrl(dataset: Dataset): string {
   // dataset.avSceneUrl is the resolved scene.json url; its dir is the bundle root.
   const u = dataset.avSceneUrl ?? dataset.url;
-  return u.replace(/\/[^/]*$/, "");
+  return u.replace(/\/[^/]*$/, '');
 }
 
 const AvCockpit: React.FC = () => {
@@ -123,7 +123,7 @@ const AvCockpit: React.FC = () => {
     () =>
       datasets.filter(
         (d) =>
-          d.type === "av" &&
+          d.type === 'av' &&
           !/-(?:splat|surfel|iso3d|iso|world|stage|scan|lod)$/.test(d.id),
       ),
     [],
@@ -138,11 +138,13 @@ const AvCockpit: React.FC = () => {
     // should still land on it. `iso3d` / `world` / `scan` ARE real bundle suffixes;
     // match `iso3d` before the shorter `iso`. The guard below confirms the BASE
     // exists either way, since the suffix strips to the base id.
-    const m = routeId.match(/^(.*)-(splat|surfel|iso3d|iso|world|stage|scan|lod)$/);
+    const m = routeId.match(
+      /^(.*)-(splat|surfel|iso3d|iso|world|stage|scan|lod)$/,
+    );
     if (m && getDatasetById(m[1])) {
       return { baseId: m[1], routeMode: m[2] as LidarRenderMode };
     }
-    return { baseId: routeId, routeMode: "raw" as LidarRenderMode };
+    return { baseId: routeId, routeMode: 'raw' as LidarRenderMode };
   }, [routeId]);
   const baseDataset = useMemo(() => getDatasetById(baseId), [baseId]);
 
@@ -175,19 +177,19 @@ const AvCockpit: React.FC = () => {
     // cloud in place (render-only, height-band colors). `surfel` / `iso` each need
     // their own baked bundle (orientation columns / density-contour lines), so
     // they're only offered when that `<id>-surfel` / `<id>-iso` bundle exists.
-    const modes: LidarRenderMode[] = ["raw", "splat"];
-    if (getDatasetById(`${baseDataset.id}-surfel`)) modes.push("surfel");
+    const modes: LidarRenderMode[] = ['raw', 'splat'];
+    if (getDatasetById(`${baseDataset.id}-surfel`)) modes.push('surfel');
     // Flat "Iso-lines" (`-iso`) and TRUE-3D "Iso 3D" (`-iso3d`) are each their
     // own baked bundle (the 3D one contours density per height layer).
-    if (getDatasetById(`${baseDataset.id}-iso`)) modes.push("iso");
-    if (getDatasetById(`${baseDataset.id}-iso3d`)) modes.push("iso3d");
+    if (getDatasetById(`${baseDataset.id}-iso`)) modes.push('iso');
+    if (getDatasetById(`${baseDataset.id}-iso3d`)) modes.push('iso3d');
     // Worldbuild needs its own `<id>-world` bundle (surfels + is_dynamic /
     // world_class columns + first-seen times).
-    if (getDatasetById(`${baseDataset.id}-world`)) modes.push("world");
+    if (getDatasetById(`${baseDataset.id}-world`)) modes.push('world');
     // Scene-split "Stage" needs its own `<id>-stage` bundle (a STATIC stage
     // archive + a DYNAMIC actors archive). HELD BACK in datasets.ts until the look
     // is verified, so this auto-gates off until that bundle is un-held + built.
-    if (getDatasetById(`${baseDataset.id}-stage`)) modes.push("stage");
+    if (getDatasetById(`${baseDataset.id}-stage`)) modes.push('stage');
     // Spacetime (cube) is HELD BACK from the shipped cockpit (see the held-back
     // note in datasets.ts). The render-only logic below stays dormant (the toggle
     // is not pushed and the `-cube` deep-link suffix is unmatched, so
@@ -198,11 +200,11 @@ const AvCockpit: React.FC = () => {
     // to ship it).
     // Sweep needs its own `<id>-scan` bundle (raw returns + true scan-time +
     // phase ramp) — only AV2 builds it, so this auto-gates scan to AV2 scenes.
-    if (getDatasetById(`${baseDataset.id}-scan`)) modes.push("scan");
+    if (getDatasetById(`${baseDataset.id}-scan`)) modes.push('scan');
     // Additive-octree zoom LOD needs its own `<id>-lod` bundle (one archive
     // where each return is materialized at a single home zoom). The client loads
     // the union of zoom levels and zooming in streams only the residual detail.
-    if (getDatasetById(`${baseDataset.id}-lod`)) modes.push("lod");
+    if (getDatasetById(`${baseDataset.id}-lod`)) modes.push('lod');
     return modes;
   }, [baseDataset]);
 
@@ -210,7 +212,7 @@ const AvCockpit: React.FC = () => {
   // with --colorize / --surfel); picking a mode swaps the active dataset to that
   // bundle. The route suffix (`/drive/<id>-splat`) still seeds the default so old
   // deep-links land on the same visual; an explicit `?mode=` overrides it.
-  const modeParam = searchParams.get("mode") as LidarRenderMode | null;
+  const modeParam = searchParams.get('mode') as LidarRenderMode | null;
   const lidarRenderMode: LidarRenderMode =
     modeParam && renderModes.includes(modeParam) ? modeParam : routeMode;
   const setLidarRenderMode = useCallback(
@@ -218,7 +220,7 @@ const AvCockpit: React.FC = () => {
       // Drop the param when it matches the route-derived default to keep a plain
       // `/drive/<id>` URL clean; write it explicitly otherwise (so a deep-linked
       // `-splat` route can still be flipped back to Points).
-      setParam("mode", m === routeMode ? null : m);
+      setParam('mode', m === routeMode ? null : m);
     },
     [routeMode, setParam],
   );
@@ -228,28 +230,27 @@ const AvCockpit: React.FC = () => {
     if (!baseDataset) return baseDataset;
     // Surfel / iso / world / scan: each a fully separate baked bundle (no in-place
     // fallback — fall back to the base if the bundle is missing).
-    if (lidarRenderMode === "surfel")
+    if (lidarRenderMode === 'surfel')
       return getDatasetById(`${baseDataset.id}-surfel`) ?? baseDataset;
-    if (lidarRenderMode === "iso")
+    if (lidarRenderMode === 'iso')
       return getDatasetById(`${baseDataset.id}-iso`) ?? baseDataset;
-    if (lidarRenderMode === "iso3d")
+    if (lidarRenderMode === 'iso3d')
       return getDatasetById(`${baseDataset.id}-iso3d`) ?? baseDataset;
-    if (lidarRenderMode === "world")
+    if (lidarRenderMode === 'world')
       return getDatasetById(`${baseDataset.id}-world`) ?? baseDataset;
-    if (lidarRenderMode === "stage")
+    if (lidarRenderMode === 'stage')
       return getDatasetById(`${baseDataset.id}-stage`) ?? baseDataset;
-    if (lidarRenderMode === "scan")
+    if (lidarRenderMode === 'scan')
       return getDatasetById(`${baseDataset.id}-scan`) ?? baseDataset;
     // Additive zoom LOD: swap to the `-lod` bundle (lidarLod → lodMode:'additive'
     // on the point layer; the engine loads + renders the union of zoom levels).
-    if (lidarRenderMode === "lod")
+    if (lidarRenderMode === 'lod')
       return getDatasetById(`${baseDataset.id}-lod`) ?? baseDataset;
     // Spacetime cube: a RENDER-ONLY clone of the BASE bundle with `avCube` set —
     // no bundle swap. buildDemoLayers reads the base + its `tracks/` archive and
     // lifts the trajectories into the time-as-height cube.
-    if (lidarRenderMode === "cube")
-      return { ...baseDataset, avCube: true };
-    if (lidarRenderMode === "splat") {
+    if (lidarRenderMode === 'cube') return { ...baseDataset, avCube: true };
+    if (lidarRenderMode === 'splat') {
       // Prefer the camera-colored `-splat` bundle when it exists (best look)…
       const variant = getDatasetById(`${baseDataset.id}-splat`);
       if (variant) return variant;
@@ -273,18 +274,20 @@ const AvCockpit: React.FC = () => {
   const [cameras, setCameras] = useState<AvCameras | null>(null);
   const [loadError, setLoadError] = useState(false);
   // Renderer backend: the deck.gl cockpit, or the Three.js + TSL (WebGPU) engine.
-  const [renderer, setRenderer] = useState<"deck" | "three">("deck");
+  const [renderer, setRenderer] = useState<'deck' | 'three'>('deck');
   // Live camera zoom (throttled by AvDeck) — drives the "Zoom LOD" HUD.
   const [liveZoom, setLiveZoom] = useState<number | null>(null);
   const handleCameraZoom = useCallback((z: number) => setLiveZoom(z), []);
   // Click-to-inspect selection (cleared when the scene changes).
-  const [selectedObject, setSelectedObject] = useState<PickedObject | null>(null);
+  const [selectedObject, setSelectedObject] = useState<PickedObject | null>(
+    null,
+  );
   useEffect(() => {
     setSelectedObject(null);
   }, [dataset]);
 
   useEffect(() => {
-    if (!dataset || dataset.type !== "av") return;
+    if (!dataset || dataset.type !== 'av') return;
     let cancelled = false;
     setScene(null);
     setTelemetry(null);
@@ -360,11 +363,11 @@ const AvCockpit: React.FC = () => {
     }
     // No scene yet: infer from the Dataset's archive urls so the deck still
     // renders something before scene.json lands.
-    const inferred: AvStreamKey[] = ["lidar"];
-    if (dataset?.avEgoUrl) inferred.push("ego");
-    if (dataset?.avObjectsUrl) inferred.push("objects");
-    if (dataset?.avTelemetryUrl) inferred.push("telemetry");
-    if (dataset?.avCamerasUrl) inferred.push("camera");
+    const inferred: AvStreamKey[] = ['lidar'];
+    if (dataset?.avEgoUrl) inferred.push('ego');
+    if (dataset?.avObjectsUrl) inferred.push('objects');
+    if (dataset?.avTelemetryUrl) inferred.push('telemetry');
+    if (dataset?.avCamerasUrl) inferred.push('camera');
     return inferred;
   }, [scene, dataset]);
 
@@ -375,9 +378,9 @@ const AvCockpit: React.FC = () => {
     const layerPresent = presentStreams.filter((s) =>
       LAYER_STREAMS.includes(s),
     );
-    const param = searchParams.get("streams");
+    const param = searchParams.get('streams');
     if (param === null) return new Set(layerPresent);
-    const wanted = new Set(param ? (param.split(",") as AvStreamKey[]) : []);
+    const wanted = new Set(param ? (param.split(',') as AvStreamKey[]) : []);
     return new Set(layerPresent.filter((s) => wanted.has(s)));
   }, [presentStreams, searchParams]);
   const toggleStream = useCallback(
@@ -392,8 +395,8 @@ const AvCockpit: React.FC = () => {
         next.size === layerPresent.length &&
         layerPresent.every((x) => next.has(x));
       setParam(
-        "streams",
-        allOn ? null : layerPresent.filter((x) => next.has(x)).join(","),
+        'streams',
+        allOn ? null : layerPresent.filter((x) => next.has(x)).join(','),
       );
     },
     [presentStreams, visibleStreams, setParam],
@@ -414,14 +417,14 @@ const AvCockpit: React.FC = () => {
   // Camera + render toggles, all URL-backed. follow / top-down default OFF (param
   // present only when ON); perf / basemap default ON (param present only when OFF)
   // so the common case keeps a clean URL.
-  const egoFollow = searchParams.get("follow") === "1";
+  const egoFollow = searchParams.get('follow') === '1';
   const toggleEgoFollow = useCallback(
-    () => setParam("follow", egoFollow ? null : "1"),
+    () => setParam('follow', egoFollow ? null : '1'),
     [egoFollow, setParam],
   );
-  const topDown = searchParams.get("view") === "top";
+  const topDown = searchParams.get('view') === 'top';
   const toggleTopDown = useCallback(
-    () => setParam("view", topDown ? null : "top"),
+    () => setParam('view', topDown ? null : 'top'),
     [topDown, setParam],
   );
   // Fill-rate performance mode (1× device pixels + cheaper LIDAR fragments).
@@ -429,9 +432,9 @@ const AvCockpit: React.FC = () => {
   // and 1× device pixels is the single biggest lever (4–9× fewer fragments on a
   // retina display) for almost no perceptible loss on a moving cloud. The toggle
   // stays so it can be flipped OFF to A/B against full-quality rendering.
-  const perfMode = searchParams.get("perf") !== "0";
+  const perfMode = searchParams.get('perf') !== '0';
   const togglePerfMode = useCallback(
-    () => setParam("perf", perfMode ? "0" : null),
+    () => setParam('perf', perfMode ? '0' : null),
     [perfMode, setParam],
   );
   // Street basemap under geo-registered scenes (nuScenes / Argoverse). Default ON
@@ -440,12 +443,12 @@ const AvCockpit: React.FC = () => {
   // scenes, which never draw a basemap — the toggle is hidden for those). In the
   // Spacetime CUBE mode the basemap defaults OFF (a street map under a 200 m-tall
   // cube of ribbons just clutters it), but an explicit `?basemap=1` re-enables it.
-  const cubeMode = lidarRenderMode === "cube";
+  const cubeMode = lidarRenderMode === 'cube';
   const showBasemap = cubeMode
-    ? searchParams.get("basemap") === "1"
-    : searchParams.get("basemap") !== "0";
+    ? searchParams.get('basemap') === '1'
+    : searchParams.get('basemap') !== '0';
   const toggleBasemap = useCallback(
-    () => setParam("basemap", showBasemap ? "0" : null),
+    () => setParam('basemap', showBasemap ? '0' : null),
     [showBasemap, setParam],
   );
 
@@ -455,29 +458,29 @@ const AvCockpit: React.FC = () => {
   // the Three.js engine). When all three hold the cockpit shows a "3D Tiles"
   // toggle that loads Google's photoreal city mesh under the LIDAR cloud.
   const tiles3dCapable =
-    !!baseDataset?.tiles3d && !!GOOGLE_TILES_API_KEY && renderer === "deck";
-  const show3DTiles = tiles3dCapable && searchParams.get("tiles3d") === "1";
+    !!baseDataset?.tiles3d && !!GOOGLE_TILES_API_KEY && renderer === 'deck';
+  const show3DTiles = tiles3dCapable && searchParams.get('tiles3d') === '1';
   const toggle3DTiles = useCallback(
-    () => setParam("tiles3d", searchParams.get("tiles3d") === "1" ? null : "1"),
+    () => setParam('tiles3d', searchParams.get('tiles3d') === '1' ? null : '1'),
     [searchParams, setParam],
   );
   // Google's ToS requires the per-tile data attribution be shown; AvDeck reports
   // the visible-tiles' copyright union here for the credit chip below. Cleared
   // when the overlay is off so a stale credit never lingers.
-  const [tiles3dAttribution, setTiles3dAttribution] = useState("");
+  const [tiles3dAttribution, setTiles3dAttribution] = useState('');
   useEffect(() => {
-    if (!show3DTiles) setTiles3dAttribution("");
+    if (!show3DTiles) setTiles3dAttribution('');
   }, [show3DTiles]);
   // Manual vertical trim (`?tiles3dz=`, metres) on top of AvDeck's auto-detected
   // ground height — the user nudges the photoreal ground onto the cloud's streets
   // when auto-detect sits a touch high/low. Positive raises the mesh. Clamped to
   // ±40 m; 0 (centred) keeps the URL clean.
   const tiles3dElevAdjust = (() => {
-    const n = Number(searchParams.get("tiles3dz"));
+    const n = Number(searchParams.get('tiles3dz'));
     return Number.isFinite(n) ? Math.max(-150, Math.min(150, n)) : 0;
   })();
   const setTiles3dElevAdjust = useCallback(
-    (v: number) => setParam("tiles3dz", v === 0 ? null : String(v)),
+    (v: number) => setParam('tiles3dz', v === 0 ? null : String(v)),
     [setParam],
   );
   // Photoreal mesh opacity (`?tiles3dop=`, 0–100 → 0..1). Ghosts the buildings so
@@ -485,9 +488,10 @@ const AvCockpit: React.FC = () => {
   // slightly out of sync with the static mesh). Defaults to the scene's baked
   // `tiles3dOpacity`, else a global ghosted default (the user's repeated pick); the
   // URL param overrides ⇒ clean URL when it matches the default.
-  const tiles3dDefaultOpacity = baseDataset?.tiles3dOpacity ?? DEFAULT_TILES3D_OPACITY;
+  const tiles3dDefaultOpacity =
+    baseDataset?.tiles3dOpacity ?? DEFAULT_TILES3D_OPACITY;
   const tiles3dOpacity = (() => {
-    const p = searchParams.get("tiles3dop");
+    const p = searchParams.get('tiles3dop');
     if (p === null) return tiles3dDefaultOpacity;
     const n = Number(p);
     return Number.isFinite(n)
@@ -495,7 +499,7 @@ const AvCockpit: React.FC = () => {
       : tiles3dDefaultOpacity;
   })();
   const setTiles3dOpacityPct = useCallback(
-    (pct: number) => setParam("tiles3dop", pct >= 100 ? null : String(pct)),
+    (pct: number) => setParam('tiles3dop', pct >= 100 ? null : String(pct)),
     [setParam],
   );
 
@@ -509,7 +513,7 @@ const AvCockpit: React.FC = () => {
   // 1 = full cube. It feeds one shader uniform (timeHeightScale, meters per
   // sim-ms), so dragging it morphs the trajectories into the cube with zero data
   // re-upload. Only meaningful in cube mode; the slider renders only then.
-  const squashParam = searchParams.get("squash");
+  const squashParam = searchParams.get('squash');
   const heightFactor = (() => {
     const n = squashParam == null ? 100 : Number(squashParam);
     return Number.isFinite(n) ? Math.max(0, Math.min(1, n / 100)) : 1;
@@ -539,7 +543,7 @@ const AvCockpit: React.FC = () => {
   // Active LIDAR density tier (`?density=`). Validated against the scene's tiers
   // so a stale id (e.g. carried from another scene) falls back to the default
   // (lightest); the default tier is stored as no-param to keep the URL clean.
-  const densityParam = searchParams.get("density");
+  const densityParam = searchParams.get('density');
   const lidarDensityId =
     densityParam && lidarDensities.some((d) => d.id === densityParam)
       ? densityParam
@@ -547,7 +551,7 @@ const AvCockpit: React.FC = () => {
   const onSelectLidarDensity = useCallback(
     (id: string) =>
       setParam(
-        "density",
+        'density',
         lidarDensities[0] && id === lidarDensities[0].id ? null : id,
       ),
     [lidarDensities, setParam],
@@ -578,7 +582,7 @@ const AvCockpit: React.FC = () => {
     };
   }, [dataset, lidarDensityId, lidarDensities]);
 
-  if (!dataset || dataset.type !== "av") {
+  if (!dataset || dataset.type !== 'av') {
     return (
       <div className="fixed inset-0 bg-slate-950 text-slate-300 flex flex-col items-center justify-center gap-3">
         <div className="text-lg font-medium">Unknown AV scene</div>
@@ -594,10 +598,10 @@ const AvCockpit: React.FC = () => {
   const sceneName = baseDataset?.name ?? dataset.name;
   const resolveFrameUrl = (rel: string) => `${sceneBaseUrl(dataset)}/${rel}`;
   const hasTelemetry =
-    presentStreams.includes("telemetry") &&
+    presentStreams.includes('telemetry') &&
     telemetry != null &&
     Object.keys(telemetry.fields ?? {}).length > 0;
-  const hasCamera = presentStreams.includes("camera") && cameras != null;
+  const hasCamera = presentStreams.includes('camera') && cameras != null;
 
   // Shared transport props — fed to the bottom timeline in either layout, so
   // desktop and mobile drive the SAME TimeController + PlaybackGovernor.
@@ -622,7 +626,7 @@ const AvCockpit: React.FC = () => {
     <div className="fixed inset-0 bg-slate-950 overflow-hidden">
       {/* The map fills the viewport; chrome floats over it. */}
       <div className="absolute inset-0">
-        {renderer === "three" ? (
+        {renderer === 'three' ? (
           <AvThreeViewer
             dataset={datasetForDeck ?? dataset}
             timeController={playback.timeController}
@@ -652,7 +656,7 @@ const AvCockpit: React.FC = () => {
             showBasemap={showBasemap}
             timeHeightScale={timeHeightScale}
             onCameraZoom={
-              lidarRenderMode === "lod" ? handleCameraZoom : undefined
+              lidarRenderMode === 'lod' ? handleCameraZoom : undefined
             }
             show3DTiles={show3DTiles}
             googleTilesApiKey={GOOGLE_TILES_API_KEY}
@@ -667,37 +671,43 @@ const AvCockpit: React.FC = () => {
           camera zoom. The cloud is one archive where each return lives at a single
           home zoom; the engine loads the union [minZoom..floor(zoom)], so zooming
           in streams only the deeper residual. */}
-      {lidarRenderMode === "lod" && renderer === "deck" && (() => {
-        const tier = lidarDensities.find((d) => d.lod || d.id === "lod");
-        const lo = tier?.minZoom ?? 14;
-        const hi = tier?.maxZoom ?? 19;
-        const z = liveZoom ?? hi;
-        const resident = Math.max(lo, Math.min(hi, Math.floor(z)));
-        const nLevels = resident - lo + 1;
-        return (
-          <div className="pointer-events-none absolute bottom-24 left-3 z-20 rounded-md border border-cyan-300/20 bg-black/60 px-3 py-2 font-mono text-[11px] leading-relaxed text-cyan-100 backdrop-blur-md">
-            <div className="mb-0.5 text-cyan-300/90">ADDITIVE OCTREE LOD</div>
-            <div>
-              camera&nbsp;<span className="text-white">z{z.toFixed(1)}</span>
-            </div>
-            <div>
-              resident&nbsp;
-              <span className="text-white">
-                z{lo}–z{resident}
-              </span>
-              &nbsp;<span className="text-cyan-300/60">({nLevels}/{hi - lo + 1} levels)</span>
-            </div>
-            {tier?.points ? (
-              <div className="text-cyan-300/60">
-                {(tier.points / 1e6).toFixed(1)}M returns · one home zoom each
+      {lidarRenderMode === 'lod' &&
+        renderer === 'deck' &&
+        (() => {
+          const tier = lidarDensities.find((d) => d.lod || d.id === 'lod');
+          const lo = tier?.minZoom ?? 14;
+          const hi = tier?.maxZoom ?? 19;
+          const z = liveZoom ?? hi;
+          const resident = Math.max(lo, Math.min(hi, Math.floor(z)));
+          const nLevels = resident - lo + 1;
+          return (
+            <div className="pointer-events-none absolute bottom-24 left-3 z-20 rounded-md border border-cyan-300/20 bg-black/60 px-3 py-2 font-mono text-[11px] leading-relaxed text-cyan-100 backdrop-blur-md">
+              <div className="mb-0.5 text-cyan-300/90">ADDITIVE OCTREE LOD</div>
+              <div>
+                camera&nbsp;<span className="text-white">z{z.toFixed(1)}</span>
               </div>
-            ) : null}
-            <div className="mt-1 max-w-[15rem] text-[10px] text-slate-300/70">
-              zoom in → deeper levels stream in; the coarse tiles stay resident.
+              <div>
+                resident&nbsp;
+                <span className="text-white">
+                  z{lo}–z{resident}
+                </span>
+                &nbsp;
+                <span className="text-cyan-300/60">
+                  ({nLevels}/{hi - lo + 1} levels)
+                </span>
+              </div>
+              {tier?.points ? (
+                <div className="text-cyan-300/60">
+                  {(tier.points / 1e6).toFixed(1)}M returns · one home zoom each
+                </div>
+              ) : null}
+              <div className="mt-1 max-w-[15rem] text-[10px] text-slate-300/70">
+                zoom in → deeper levels stream in; the coarse tiles stay
+                resident.
+              </div>
             </div>
-          </div>
-        );
-      })()}
+          );
+        })()}
 
       {isMobile ? (
         <AvMobileChrome
@@ -730,218 +740,220 @@ const AvCockpit: React.FC = () => {
         />
       ) : (
         <>
-      {/* Top-left: scene switcher + camera controls */}
-      <div className="absolute top-3 left-3 flex flex-col gap-2">
-        <SceneSwitcher
-          scenes={avScenes}
-          currentId={baseDataset?.id ?? dataset.id}
-          sceneName={sceneName}
-        />
-        <div className="flex gap-2">
-          {/* Follow / perspective⇄top-down — hidden in the Spacetime CUBE mode
+          {/* Top-left: scene switcher + camera controls */}
+          <div className="absolute top-3 left-3 flex flex-col gap-2">
+            <SceneSwitcher
+              scenes={avScenes}
+              currentId={baseDataset?.id ?? dataset.id}
+              sceneName={sceneName}
+            />
+            <div className="flex gap-2">
+              {/* Follow / perspective⇄top-down — hidden in the Spacetime CUBE mode
               (ego-follow is gated off and the cube wants a free static orbit, so
               chasing the climbing ego worm / snapping top-down would fight it). */}
-          {!cubeMode && (
-            <>
+              {!cubeMode && (
+                <>
+                  <button
+                    type="button"
+                    onClick={toggleEgoFollow}
+                    aria-pressed={egoFollow}
+                    title={
+                      egoPath
+                        ? 'Recenter the camera on the vehicle'
+                        : 'Ego-follow (scene has no ego polyline — camera holds)'
+                    }
+                    className={`rounded-md border px-2.5 py-1 text-xs backdrop-blur-md transition-colors ${
+                      egoFollow
+                        ? 'border-cyan-300/60 bg-cyan-400/20 text-cyan-100'
+                        : 'border-white/10 bg-black/55 text-slate-300 hover:bg-white/5'
+                    }`}
+                  >
+                    Follow ego
+                  </button>
+                  <button
+                    type="button"
+                    onClick={toggleTopDown}
+                    aria-pressed={topDown}
+                    title="Toggle perspective / top-down view"
+                    className={`rounded-md border px-2.5 py-1 text-xs backdrop-blur-md transition-colors ${
+                      topDown
+                        ? 'border-cyan-300/60 bg-cyan-400/20 text-cyan-100'
+                        : 'border-white/10 bg-black/55 text-slate-300 hover:bg-white/5'
+                    }`}
+                  >
+                    {topDown ? 'Top-down' : 'Perspective'}
+                  </button>
+                </>
+              )}
               <button
                 type="button"
-                onClick={toggleEgoFollow}
-                aria-pressed={egoFollow}
-                title={
-                  egoPath
-                    ? "Recenter the camera on the vehicle"
-                    : "Ego-follow (scene has no ego polyline — camera holds)"
-                }
+                onClick={togglePerfMode}
+                aria-pressed={perfMode}
+                title="Performance mode — render at 1× pixels with cheaper LIDAR fragments so the densest (ultra / raw) clouds stay smooth"
                 className={`rounded-md border px-2.5 py-1 text-xs backdrop-blur-md transition-colors ${
-                  egoFollow
-                    ? "border-cyan-300/60 bg-cyan-400/20 text-cyan-100"
-                    : "border-white/10 bg-black/55 text-slate-300 hover:bg-white/5"
+                  perfMode
+                    ? 'border-amber-300/60 bg-amber-400/20 text-amber-100'
+                    : 'border-white/10 bg-black/55 text-slate-300 hover:bg-white/5'
                 }`}
               >
-                Follow ego
+                ⚡ Perf
               </button>
-              <button
-                type="button"
-                onClick={toggleTopDown}
-                aria-pressed={topDown}
-                title="Toggle perspective / top-down view"
-                className={`rounded-md border px-2.5 py-1 text-xs backdrop-blur-md transition-colors ${
-                  topDown
-                    ? "border-cyan-300/60 bg-cyan-400/20 text-cyan-100"
-                    : "border-white/10 bg-black/55 text-slate-300 hover:bg-white/5"
-                }`}
-              >
-                {topDown ? "Top-down" : "Perspective"}
-              </button>
-            </>
-          )}
-          <button
-            type="button"
-            onClick={togglePerfMode}
-            aria-pressed={perfMode}
-            title="Performance mode — render at 1× pixels with cheaper LIDAR fragments so the densest (ultra / raw) clouds stay smooth"
-            className={`rounded-md border px-2.5 py-1 text-xs backdrop-blur-md transition-colors ${
-              perfMode
-                ? "border-amber-300/60 bg-amber-400/20 text-amber-100"
-                : "border-white/10 bg-black/55 text-slate-300 hover:bg-white/5"
-            }`}
-          >
-            ⚡ Perf
-          </button>
-          {/* Renderer backend — the deck.gl cockpit, or the Three.js + TSL
+              {/* Renderer backend — the deck.gl cockpit, or the Three.js + TSL
               (WebGPU) engine. The Three path runs the LIDAR cloud as oriented
               Gaussian surfels / billboard splats in a local metric frame. */}
-          <button
-            type="button"
-            onClick={() => setRenderer((r) => (r === "three" ? "deck" : "three"))}
-            aria-pressed={renderer === "three"}
-            title="Switch between the deck.gl renderer and the Three.js + TSL (WebGPU) engine"
-            className={`rounded-md border px-2.5 py-1 text-xs backdrop-blur-md transition-colors ${
-              renderer === "three"
-                ? "border-fuchsia-300/60 bg-fuchsia-400/20 text-fuchsia-100"
-                : "border-white/10 bg-black/55 text-slate-300 hover:bg-white/5"
-            }`}
-          >
-            {renderer === "three" ? "TSL · WebGPU" : "deck.gl"}
-          </button>
-          {/* Basemap on/off — only for geo-registered scenes (avLocalFrame scenes
+              <button
+                type="button"
+                onClick={() =>
+                  setRenderer((r) => (r === 'three' ? 'deck' : 'three'))
+                }
+                aria-pressed={renderer === 'three'}
+                title="Switch between the deck.gl renderer and the Three.js + TSL (WebGPU) engine"
+                className={`rounded-md border px-2.5 py-1 text-xs backdrop-blur-md transition-colors ${
+                  renderer === 'three'
+                    ? 'border-fuchsia-300/60 bg-fuchsia-400/20 text-fuchsia-100'
+                    : 'border-white/10 bg-black/55 text-slate-300 hover:bg-white/5'
+                }`}
+              >
+                {renderer === 'three' ? 'TSL · WebGPU' : 'deck.gl'}
+              </button>
+              {/* Basemap on/off — only for geo-registered scenes (avLocalFrame scenes
               never draw a basemap). Lets the camera-colored surfel surface read
               against the dark backdrop instead of over Miami's streets. */}
-          {!(datasetForDeck ?? dataset)?.avLocalFrame && (
-            <button
-              type="button"
-              onClick={toggleBasemap}
-              aria-pressed={showBasemap}
-              title="Toggle the street basemap under the scene"
-              className={`rounded-md border px-2.5 py-1 text-xs backdrop-blur-md transition-colors ${
-                showBasemap
-                  ? "border-cyan-300/60 bg-cyan-400/20 text-cyan-100"
-                  : "border-white/10 bg-black/55 text-slate-300 hover:bg-white/5"
-              }`}
-            >
-              {showBasemap ? "Basemap" : "No basemap"}
-            </button>
-          )}
-          {/* Google Photorealistic 3D Tiles — only when the scene opts in
+              {!(datasetForDeck ?? dataset)?.avLocalFrame && (
+                <button
+                  type="button"
+                  onClick={toggleBasemap}
+                  aria-pressed={showBasemap}
+                  title="Toggle the street basemap under the scene"
+                  className={`rounded-md border px-2.5 py-1 text-xs backdrop-blur-md transition-colors ${
+                    showBasemap
+                      ? 'border-cyan-300/60 bg-cyan-400/20 text-cyan-100'
+                      : 'border-white/10 bg-black/55 text-slate-300 hover:bg-white/5'
+                  }`}
+                >
+                  {showBasemap ? 'Basemap' : 'No basemap'}
+                </button>
+              )}
+              {/* Google Photorealistic 3D Tiles — only when the scene opts in
               (`dataset.tiles3d`), a key is configured, and the deck renderer is
               active. Loads Google's photoreal city mesh under the cloud as a
               backdrop. */}
-          {tiles3dCapable && (
-            <button
-              type="button"
-              onClick={toggle3DTiles}
-              aria-pressed={show3DTiles}
-              title="Overlay Google Photorealistic 3D Tiles (real city mesh) under the LIDAR cloud"
-              className={`rounded-md border px-2.5 py-1 text-xs backdrop-blur-md transition-colors ${
-                show3DTiles
-                  ? "border-emerald-300/60 bg-emerald-400/20 text-emerald-100"
-                  : "border-white/10 bg-black/55 text-slate-300 hover:bg-white/5"
-              }`}
-            >
-              3D Tiles
-            </button>
-          )}
-          {/* LIDAR render mode — Points ⇄ Splat ⇄ Surfel. Kept INSIDE the button
+              {tiles3dCapable && (
+                <button
+                  type="button"
+                  onClick={toggle3DTiles}
+                  aria-pressed={show3DTiles}
+                  title="Overlay Google Photorealistic 3D Tiles (real city mesh) under the LIDAR cloud"
+                  className={`rounded-md border px-2.5 py-1 text-xs backdrop-blur-md transition-colors ${
+                    show3DTiles
+                      ? 'border-emerald-300/60 bg-emerald-400/20 text-emerald-100'
+                      : 'border-white/10 bg-black/55 text-slate-300 hover:bg-white/5'
+                  }`}
+                >
+                  3D Tiles
+                </button>
+              )}
+              {/* LIDAR render mode — Points ⇄ Splat ⇄ Surfel. Kept INSIDE the button
               row (not a new row) so the top-left container's height stays fixed
               and never grows into the `top-28` STREAMS panel below. Each pill
               swaps the active dataset so the cloud re-renders in that mode (a
               camera-colored `-splat`/`-surfel` bundle when one exists, else an
               in-place render-only splat) without leaving the scene. */}
-          {renderModes.length > 1 && (
-            <div
-              role="radiogroup"
-              aria-label="LIDAR render mode"
-              className="flex overflow-hidden rounded-md border border-white/10 bg-black/55 backdrop-blur-md"
-            >
-              {renderModes.map((m) => {
-                const active = m === lidarRenderMode;
-                return (
-                  <button
-                    key={m}
-                    type="button"
-                    role="radio"
-                    aria-checked={active}
-                    onClick={() => setLidarRenderMode(m)}
-                    title={`Render the LIDAR cloud as ${RENDER_MODE_LABELS[m].toLowerCase()}`}
-                    className={`px-2.5 py-1 text-xs transition-colors ${
-                      active
-                        ? "bg-cyan-400/20 text-cyan-100"
-                        : "text-slate-300 hover:bg-white/5"
-                    }`}
-                  >
-                    {RENDER_MODE_LABELS[m]}
-                  </button>
-                );
-              })}
+              {renderModes.length > 1 && (
+                <div
+                  role="radiogroup"
+                  aria-label="LIDAR render mode"
+                  className="flex overflow-hidden rounded-md border border-white/10 bg-black/55 backdrop-blur-md"
+                >
+                  {renderModes.map((m) => {
+                    const active = m === lidarRenderMode;
+                    return (
+                      <button
+                        key={m}
+                        type="button"
+                        role="radio"
+                        aria-checked={active}
+                        onClick={() => setLidarRenderMode(m)}
+                        title={`Render the LIDAR cloud as ${RENDER_MODE_LABELS[m].toLowerCase()}`}
+                        className={`px-2.5 py-1 text-xs transition-colors ${
+                          active
+                            ? 'bg-cyan-400/20 text-cyan-100'
+                            : 'text-slate-300 hover:bg-white/5'
+                        }`}
+                      >
+                        {RENDER_MODE_LABELS[m]}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
             </div>
-          )}
-        </div>
-        {/* Spacetime CUBE squash slider HELD BACK with the cube mode (the
+            {/* Spacetime CUBE squash slider HELD BACK with the cube mode (the
             CubeControls import + this JSX are removed; `cubeMode` is always
             false). Re-add to ship Spacetime. */}
-      </div>
+          </div>
 
-      {/* Left rail: stream list (below the switcher) */}
-      {scene && (
-        <div className="absolute top-28 left-3">
-          <StreamPanel
-            scene={scene}
-            presentStreams={presentStreams}
-            visibleStreams={visibleStreams}
-            onToggleStream={toggleStream}
-            objectColors={objectColors}
-            lidarDensityId={lidarDensityId}
-            onSelectLidarDensity={onSelectLidarDensity}
-          />
-        </div>
-      )}
+          {/* Left rail: stream list (below the switcher) */}
+          {scene && (
+            <div className="absolute top-28 left-3">
+              <StreamPanel
+                scene={scene}
+                presentStreams={presentStreams}
+                visibleStreams={visibleStreams}
+                onToggleStream={toggleStream}
+                objectColors={objectColors}
+                lidarDensityId={lidarDensityId}
+                onSelectLidarDensity={onSelectLidarDensity}
+              />
+            </div>
+          )}
 
-      {/* Top-right: camera inset */}
-      {hasCamera && (
-        <div className="absolute top-3 right-3">
-          <CameraInset
-            cameras={cameras!}
-            resolveFrameUrl={resolveFrameUrl}
-            timeController={playback.timeController}
-          />
-        </div>
-      )}
+          {/* Top-right: camera inset */}
+          {hasCamera && (
+            <div className="absolute top-3 right-3">
+              <CameraInset
+                cameras={cameras!}
+                resolveFrameUrl={resolveFrameUrl}
+                timeController={playback.timeController}
+              />
+            </div>
+          )}
 
-      {/* Bottom-left: telemetry strip-charts (Cabana / XVIZ-Metrics style) */}
-      {hasTelemetry && (
-        <div className="absolute bottom-20 left-3">
-          <MetricCharts
-            telemetry={telemetry!}
-            timeController={playback.timeController}
-          />
-        </div>
-      )}
+          {/* Bottom-left: telemetry strip-charts (Cabana / XVIZ-Metrics style) */}
+          {hasTelemetry && (
+            <div className="absolute bottom-20 left-3">
+              <MetricCharts
+                telemetry={telemetry!}
+                timeController={playback.timeController}
+              />
+            </div>
+          )}
 
-      {/* Bottom-right: picked-object inspector (renders nothing until a click) */}
-      <div className="absolute bottom-20 right-3">
-        <ObjectInspector
-          object={selectedObject}
-          onClose={() => setSelectedObject(null)}
-          objectColors={objectColors}
-        />
-      </div>
+          {/* Bottom-right: picked-object inspector (renders nothing until a click) */}
+          <div className="absolute bottom-20 right-3">
+            <ObjectInspector
+              object={selectedObject}
+              onClose={() => setSelectedObject(null)}
+              objectColors={objectColors}
+            />
+          </div>
 
-      {/* Bottom: timeline transport */}
-      {timelineProps && (
-        <div className="absolute bottom-3 left-3 right-3 mx-auto max-w-4xl">
-          <Timeline {...timelineProps} />
-        </div>
-      )}
+          {/* Bottom: timeline transport */}
+          {timelineProps && (
+            <div className="absolute bottom-3 left-3 right-3 mx-auto max-w-4xl">
+              <Timeline {...timelineProps} />
+            </div>
+          )}
 
-      {/* Exit + scene meta (top-center) */}
-      <div className="absolute top-3 left-1/2 -translate-x-1/2 flex items-center gap-3">
-        <Link
-          to="/demos"
-          className="rounded-md border border-white/10 bg-black/55 backdrop-blur-md px-3 py-1.5 text-xs text-slate-300 hover:bg-white/5"
-        >
-          ← Demos
-        </Link>
-      </div>
+          {/* Exit + scene meta (top-center) */}
+          <div className="absolute top-3 left-1/2 -translate-x-1/2 flex items-center gap-3">
+            <Link
+              to="/demos"
+              className="rounded-md border border-white/10 bg-black/55 backdrop-blur-md px-3 py-1.5 text-xs text-slate-300 hover:bg-white/5"
+            >
+              ← Demos
+            </Link>
+          </div>
         </>
       )}
 
@@ -966,12 +978,12 @@ const AvCockpit: React.FC = () => {
                 value={tiles3dElevAdjust}
                 onChange={(e) => setTiles3dElevAdjust(Number(e.target.value))}
                 className="w-40"
-                style={{ accentColor: "#34d399" }}
+                style={{ accentColor: '#34d399' }}
                 aria-label="3D tiles vertical alignment (metres)"
               />
               <span className="text-[10px] text-slate-500">high</span>
               <span className="w-10 text-right font-mono text-[10px] text-emerald-200">
-                {tiles3dElevAdjust > 0 ? "+" : ""}
+                {tiles3dElevAdjust > 0 ? '+' : ''}
                 {tiles3dElevAdjust}m
               </span>
             </div>
@@ -988,7 +1000,7 @@ const AvCockpit: React.FC = () => {
                 value={Math.round(tiles3dOpacity * 100)}
                 onChange={(e) => setTiles3dOpacityPct(Number(e.target.value))}
                 className="w-40"
-                style={{ accentColor: "#34d399" }}
+                style={{ accentColor: '#34d399' }}
                 aria-label="3D tiles opacity (percent)"
               />
               <span className="text-[10px] text-slate-500">solid</span>
@@ -998,7 +1010,7 @@ const AvCockpit: React.FC = () => {
             </div>
           </div>
           <div className="pointer-events-none max-w-[80vw] truncate rounded bg-black/60 px-2 py-0.5 text-[10px] text-slate-300 backdrop-blur-md">
-            {tiles3dAttribution || "Google Photorealistic 3D Tiles"}
+            {tiles3dAttribution || 'Google Photorealistic 3D Tiles'}
           </div>
         </div>
       )}
@@ -1018,8 +1030,8 @@ const AvCockpit: React.FC = () => {
               Scene bundle not found
             </div>
             <div className="text-slate-400">
-              The tiles for <code className="text-slate-300">{dataset.id}</code>{" "}
-              aren&apos;t generated yet. Run the{" "}
+              The tiles for <code className="text-slate-300">{dataset.id}</code>{' '}
+              aren&apos;t generated yet. Run the{' '}
               <code className="text-slate-300">av_synthetic.py</code> adapter to
               build them.
             </div>

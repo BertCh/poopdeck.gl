@@ -116,11 +116,16 @@ function featureColor(b: BinaryFeatures, f: number, mode: IconColorMode): RGBA {
   if (mode.type === 'constant') return mode.color;
   const cat = b.categoricalProps[mode.property];
   const label =
-    cat && cat.indices[f] !== 0xffff ? cat.categories[cat.indices[f]] : undefined;
+    cat && cat.indices[f] !== 0xffff
+      ? cat.categories[cat.indices[f]]
+      : undefined;
   return resolveCategoryColor(label, mode.mapping, mode.fallback);
 }
 
-function collectPointLayers(tiles: Tile[]): { layers: BinaryFeatures[]; total: number } {
+function collectPointLayers(tiles: Tile[]): {
+  layers: BinaryFeatures[];
+  total: number;
+} {
   const layers: BinaryFeatures[] = [];
   let total = 0;
   for (const tile of tiles) {
@@ -192,13 +197,19 @@ export function buildIconBuffers(
   // RTC origin = first feature of the first layer, projected (absolute world).
   const first = layers[0];
   const fdims = first.positionDimensions ?? 2;
-  const firstElev = opts.elevationProperty ? first.numericProps[opts.elevationProperty] : undefined;
+  const firstElev = opts.elevationProperty
+    ? first.numericProps[opts.elevationProperty]
+    : undefined;
   const firstAlt = firstElev
     ? firstElev[0] * elevScale
     : fdims > 2
       ? first.positions[2]
       : 0;
-  const origin = projection.project(first.positions[0], first.positions[1], firstAlt);
+  const origin = projection.project(
+    first.positions[0],
+    first.positions[1],
+    firstAlt,
+  );
   const [ox, oy, oz] = origin;
 
   const centers = new Float32Array(total * 3);
@@ -209,24 +220,40 @@ export function buildIconBuffers(
   const colors = new Float32Array(total * 4);
   const starts = new Float32Array(total);
   const ends = new Float32Array(total);
-  let minX = Infinity, minY = Infinity, minZ = Infinity;
-  let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+  let minX = Infinity,
+    minY = Infinity,
+    minZ = Infinity;
+  let maxX = -Infinity,
+    maxY = -Infinity,
+    maxZ = -Infinity;
 
   let o = 0;
   for (const b of layers) {
     const count = b.featureCount;
     const dims = b.positionDimensions ?? fdims;
-    const elev = opts.elevationProperty ? b.numericProps[opts.elevationProperty] : undefined;
-    const angleCol = opts.angleProperty ? b.numericProps[opts.angleProperty] : undefined;
-    const sizeCol = opts.sizeProperty ? b.numericProps[opts.sizeProperty] : undefined;
+    const elev = opts.elevationProperty
+      ? b.numericProps[opts.elevationProperty]
+      : undefined;
+    const angleCol = opts.angleProperty
+      ? b.numericProps[opts.angleProperty]
+      : undefined;
+    const sizeCol = opts.sizeProperty
+      ? b.numericProps[opts.sizeProperty]
+      : undefined;
     const rebase = b.timeOffset - timeOrigin;
 
     for (let i = 0; i < count; i++) {
       const lon = b.positions[i * dims];
       const lat = b.positions[i * dims + 1];
-      const alt = elev ? elev[i] * elevScale : dims > 2 ? b.positions[i * dims + 2] : 0;
+      const alt = elev
+        ? elev[i] * elevScale
+        : dims > 2
+          ? b.positions[i * dims + 2]
+          : 0;
       const [x, y, z] = projection.project(lon, lat, alt);
-      const px = x - ox, py = y - oy, pz = z - oz;
+      const px = x - ox,
+        py = y - oy,
+        pz = z - oz;
       const j = o + i;
       centers[j * 3] = px;
       centers[j * 3 + 1] = py;

@@ -184,7 +184,9 @@ describe('AnimatedHexagonLayer composite', () => {
   it('sources the weight from getColorWeight (accessor-alias → column name)', () => {
     const layer = makeLayer({ getColorWeight: 'mag' });
     const tile = bigPointTile(3);
-    tile.layers[0].features.numericProps['mag'] = new Float32Array([10, 20, 30]);
+    tile.layers[0].features.numericProps['mag'] = new Float32Array([
+      10, 20, 30,
+    ]);
     layer.state = { tiles: [tile] };
     const attrs = layer.renderLayers()[0].props.data.attributes;
     expect(Array.from(attrs.getColorWeight.value)).toEqual([10, 20, 30]);
@@ -310,9 +312,15 @@ describe('AnimatedHexagonLayer composite', () => {
     expect(d1.attributes.getColorWeight).toBe(d1.attributes.getElevationWeight);
     // The heavy consolidated buffers are REUSED verbatim — only wrapper identity
     // changes (position + filter-value buffers stay put; bins don't move).
-    expect(d1.attributes.getColorWeight.value).toBe(d0.attributes.getColorWeight.value);
-    expect(d1.attributes.getPosition.value).toBe(d0.attributes.getPosition.value);
-    expect(d1.attributes.getFilterValue.value).toBe(d0.attributes.getFilterValue.value);
+    expect(d1.attributes.getColorWeight.value).toBe(
+      d0.attributes.getColorWeight.value,
+    );
+    expect(d1.attributes.getPosition.value).toBe(
+      d0.attributes.getPosition.value,
+    );
+    expect(d1.attributes.getFilterValue.value).toBe(
+      d0.attributes.getFilterValue.value,
+    );
     // filterRange follows the window.
     expect(layer.renderLayers()[0].props.filterRange).toEqual([4500, 5500]);
   });
@@ -350,9 +358,15 @@ describe('AnimatedHexagonLayer composite', () => {
     const layerOffset = 1_700_000_000_000;
     const layer = makeLayer();
     const a = bigPointTile(3, layerOffset, { z: 12, x: 1, y: 2, t: 0 });
-    const b = bigPointTile(3, layerOffset + 3_600_000, { z: 12, x: 1, y: 3, t: 1 });
+    const b = bigPointTile(3, layerOffset + 3_600_000, {
+      z: 12,
+      x: 1,
+      y: 3,
+      t: 1,
+    });
     layer.state = { tiles: [a, b] };
-    const fv = layer.renderLayers()[0].props.data.attributes.getFilterValue.value;
+    const fv =
+      layer.renderLayers()[0].props.data.attributes.getFilterValue.value;
     expect(fv.length).toBe(6);
     // tile b feature 0 start=0 shifted by +3_600_000 ms delta.
     expect(fv[3]).toBe(3_600_000);

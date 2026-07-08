@@ -58,8 +58,12 @@ describe('view-state ⇄ camera (mercator)', () => {
   it('higher zoom puts the camera closer to the ground', () => {
     const near = makeCamera();
     const far = makeCamera();
-    viewStateToCamera(proj, { longitude: 0, latitude: 0, zoom: 14 }, near, { viewportHeight: VH });
-    viewStateToCamera(proj, { longitude: 0, latitude: 0, zoom: 4 }, far, { viewportHeight: VH });
+    viewStateToCamera(proj, { longitude: 0, latitude: 0, zoom: 14 }, near, {
+      viewportHeight: VH,
+    });
+    viewStateToCamera(proj, { longitude: 0, latitude: 0, zoom: 4 }, far, {
+      viewportHeight: VH,
+    });
     expect(near.position.z).toBeLessThan(far.position.z);
   });
 });
@@ -82,7 +86,9 @@ describe('view-state ⇄ camera (globe)', () => {
 
   it('sets a radial camera up (no global Z-up on the globe)', () => {
     const cam = makeCamera();
-    viewStateToCamera(proj, { longitude: 45, latitude: 45, zoom: 6 }, cam, { viewportHeight: VH });
+    viewStateToCamera(proj, { longitude: 45, latitude: 45, zoom: 6 }, cam, {
+      viewportHeight: VH,
+    });
     const radial = new Vector3(...proj.project(45, 45, 0)).normalize();
     // up should be perpendicular to the radial (a tangent vector), not equal to Z.
     expect(Math.abs(cam.up.dot(radial))).toBeLessThan(1e-6);

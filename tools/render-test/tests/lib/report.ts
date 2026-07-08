@@ -35,8 +35,10 @@ export interface SweepReport {
 
 const formatMB = (v: number | null) => (v == null ? '—' : `${v.toFixed(1)} MB`);
 const formatMs = (v: number | null) => (v == null ? '—' : `${v.toFixed(1)} ms`);
-const formatPct = (v: number | null) => (v == null ? '—' : `${(v * 100).toFixed(2)}%`);
-const formatFps = (v: number | null) => (v == null ? '—' : `${v.toFixed(1)} fps`);
+const formatPct = (v: number | null) =>
+  v == null ? '—' : `${(v * 100).toFixed(2)}%`;
+const formatFps = (v: number | null) =>
+  v == null ? '—' : `${v.toFixed(1)} fps`;
 
 function esc(s: string): string {
   return s
@@ -82,7 +84,10 @@ function fidelityBadge(fid: FidelityResult | null): string {
 
 function metricsTable(m: DatasetMetrics | null): string {
   if (!m) return '<div class="muted">No metrics collected.</div>';
-  const probeRow = (label: string, p: { count: number; p50: number; p95: number } | null) =>
+  const probeRow = (
+    label: string,
+    p: { count: number; p50: number; p95: number } | null,
+  ) =>
     `<tr><td>${label}</td><td>${p ? p.count : '—'}</td><td>${p ? formatMs(p.p50) : '—'}</td><td>${p ? formatMs(p.p95) : '—'}</td></tr>`;
   return `
     <table class="metrics">
@@ -103,10 +108,15 @@ function metricsTable(m: DatasetMetrics | null): string {
     </table>`;
 }
 
-function fidelityBlock(datasetId: string, anchor: AnchorResult, baseURL: string): string {
+function fidelityBlock(
+  datasetId: string,
+  anchor: AnchorResult,
+  baseURL: string,
+): string {
   const fid = anchor.fidelity;
   if (!fid) return '<div class="muted">No fidelity capture.</div>';
-  const rel = (p: string | null) => (p ? path.relative(baseURL, p).replace(/\\/g, '/') : null);
+  const rel = (p: string | null) =>
+    p ? path.relative(baseURL, p).replace(/\\/g, '/') : null;
   const current = rel(fid.currentPath);
   const baseline = rel(fid.baselinePath);
   const diff = rel(fid.diffPath);
@@ -159,8 +169,12 @@ function datasetSection(d: DatasetResult, outputRoot: string): string {
 export function renderReport(report: SweepReport, outputRoot: string): string {
   const ok = report.results.filter((r) => r.status === 'ok').length;
   const total = report.results.length;
-  const failed = report.results.filter((r) => r.status === 'render-failed').length;
-  const missingData = report.results.filter((r) => r.status === 'data-missing').length;
+  const failed = report.results.filter(
+    (r) => r.status === 'render-failed',
+  ).length;
+  const missingData = report.results.filter(
+    (r) => r.status === 'data-missing',
+  ).length;
   const fidelityRegressions = report.results.flatMap((r) =>
     r.anchors.filter((a) => (a.fidelity?.diffRatio ?? 0) > 0.02),
   ).length;
@@ -221,7 +235,10 @@ export function renderReport(report: SweepReport, outputRoot: string): string {
 </html>`;
 }
 
-export function writeReport(report: SweepReport, outputRoot: string): {
+export function writeReport(
+  report: SweepReport,
+  outputRoot: string,
+): {
   jsonPath: string;
   htmlPath: string;
 } {

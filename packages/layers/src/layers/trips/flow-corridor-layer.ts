@@ -74,11 +74,12 @@ export interface _FlowCorridorLayerProps {
 }
 
 /** Complete props accepted by {@link FlowCorridorLayer}. */
-export type FlowCorridorLayerProps = _FlowCorridorLayerProps & AnimatedTripsLayerProps;
+export type FlowCorridorLayerProps = _FlowCorridorLayerProps &
+  AnimatedTripsLayerProps;
 
-export class FlowCorridorLayer<ExtraPropsT extends {} = {}> extends AnimatedTripsLayer<
-  ExtraPropsT & Required<_FlowCorridorLayerProps>
-> {
+export class FlowCorridorLayer<
+  ExtraPropsT extends {} = {},
+> extends AnimatedTripsLayer<ExtraPropsT & Required<_FlowCorridorLayerProps>> {
   static layerName = 'FlowCorridorLayer';
 
   static defaultProps: DefaultProps<FlowCorridorLayerProps> = {
@@ -170,7 +171,8 @@ export class FlowCorridorLayer<ExtraPropsT extends {} = {}> extends AnimatedTrip
    */
   private posFromBinary(binary: BinaryFeatures, time: number): number | null {
     const nb = binary.vertexValueBuckets ?? 0;
-    if (nb <= 0 || !binary.startTimes || binary.startTimes.length === 0) return null;
+    if (nb <= 0 || !binary.startTimes || binary.startTimes.length === 0)
+      return null;
     const rel0 = binary.startTimes[0]; // relative to timeOffset (0 for flows)
     const span = binary.endTimes[0] - rel0;
     if (span <= 0) return null;
@@ -216,7 +218,8 @@ export class FlowCorridorLayer<ExtraPropsT extends {} = {}> extends AnimatedTrip
     // colour (the INSTANT flash rides the alpha byte in finalizeGradientColorBuffer).
     if (this.perTripLight) {
       const bucketWidth = (binary.endTimes[0] - binary.startTimes[0]) / nb;
-      const w = bucketWidth > 0 ? Math.round(this.aggregateWindowMs / bucketWidth) : 0;
+      const w =
+        bucketWidth > 0 ? Math.round(this.aggregateWindowMs / bucketWidth) : 0;
       const c = Math.round(pos); // window center = nearest bucket
       const lo = Math.max(0, c - w);
       const hi = Math.min(nb - 1, c + w);
@@ -236,7 +239,8 @@ export class FlowCorridorLayer<ExtraPropsT extends {} = {}> extends AnimatedTrip
     // direction — colour is the VOLUME, so blend ABSOLUTE values (blending signed
     // values would dip through zero at a flip and dim a busy corridor). The
     // chevron reads the sign separately in chevronDirectionsFor().
-    const stepped = Math.round(pos / FlowCorridorLayer.STEP) * FlowCorridorLayer.STEP;
+    const stepped =
+      Math.round(pos / FlowCorridorLayer.STEP) * FlowCorridorLayer.STEP;
     const blend = bucketBlendAt(stepped, nb);
     for (let v = 0; v < totalVerts; v++) {
       out[v] = blendMatrixRow(matrix, v * nb, blend, signed);
@@ -261,13 +265,21 @@ export class FlowCorridorLayer<ExtraPropsT extends {} = {}> extends AnimatedTrip
     const nb = binary.vertexValueBuckets ?? 0;
     const matrix = binary.vertexValueMatrix;
     if (nb <= 0 || !matrix || matrix.length < totalVerts * nb) return;
-    if (!binary.startTimes || !binary.endTimes || binary.startTimes.length === 0) return;
+    if (
+      !binary.startTimes ||
+      !binary.endTimes ||
+      binary.startTimes.length === 0
+    )
+      return;
 
     const pos = this.posFromBinary(binary, this.getCurrentTime()) ?? 0;
     const b0 = Math.round(pos); // nearest fine bucket
     const bucketWidth = (binary.endTimes[0] - binary.startTimes[0]) / nb;
     // Trailing exponential weights over the last K buckets (decay in buckets).
-    const decayBuckets = bucketWidth > 0 ? Math.max(this.instantDecayMs / bucketWidth, 1e-3) : 1e-3;
+    const decayBuckets =
+      bucketWidth > 0
+        ? Math.max(this.instantDecayMs / bucketWidth, 1e-3)
+        : 1e-3;
     const kMax = Math.min(nb - 1, Math.max(1, Math.ceil(decayBuckets * 3)));
     const weights = new Float32Array(kMax + 1);
     for (let k = 0; k <= kMax; k++) weights[k] = Math.exp(-k / decayBuckets);
@@ -310,7 +322,8 @@ export class FlowCorridorLayer<ExtraPropsT extends {} = {}> extends AnimatedTrip
     // (Collapses to ±1 on a coarse matrix where the window rounds to one bucket —
     // the smooth morph needs the FINE 1-min archive.)
     const bucketWidth = (binary.endTimes[0] - binary.startTimes[0]) / nb;
-    const w = bucketWidth > 0 ? Math.round(this.directionWindowMs / bucketWidth) : 0;
+    const w =
+      bucketWidth > 0 ? Math.round(this.directionWindowMs / bucketWidth) : 0;
     const c = Math.round(pos); // window center = nearest bucket
     const lo = Math.max(0, c - w);
     const hi = Math.min(nb - 1, c + w);

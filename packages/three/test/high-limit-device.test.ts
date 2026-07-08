@@ -16,7 +16,9 @@ const ADAPTER_LIMITS = {
   maxTextureDimension2D: 16_384,
 };
 
-function installFakeGpu(overrides: Partial<{ adapter: unknown; throwOnDevice: boolean }> = {}) {
+function installFakeGpu(
+  overrides: Partial<{ adapter: unknown; throwOnDevice: boolean }> = {},
+) {
   const adapter = {
     features: new Set(['shader-f16', 'depth32float-stencil8']),
     limits: ADAPTER_LIMITS,
@@ -26,7 +28,8 @@ function installFakeGpu(overrides: Partial<{ adapter: unknown; throwOnDevice: bo
     },
   };
   const gpu = {
-    requestAdapter: async () => ('adapter' in overrides ? overrides.adapter : adapter),
+    requestAdapter: async () =>
+      'adapter' in overrides ? overrides.adapter : adapter,
   };
   vi.stubGlobal('navigator', { gpu });
 }
@@ -38,7 +41,9 @@ afterEach(() => {
 describe('createHighLimitDevice', () => {
   it('requests a device with buffer limits raised to the adapter maximum', async () => {
     installFakeGpu();
-    const device = (await createHighLimitDevice()) as { requested: { requiredLimits: Record<string, number> } };
+    const device = (await createHighLimitDevice()) as {
+      requested: { requiredLimits: Record<string, number> };
+    };
     expect(device).toBeTruthy();
     expect(device.requested.requiredLimits).toEqual({
       maxBufferSize: ADAPTER_LIMITS.maxBufferSize,
@@ -48,14 +53,23 @@ describe('createHighLimitDevice', () => {
 
   it("raises the cap well above Three's 256 MB single-buffer default", async () => {
     installFakeGpu();
-    const device = (await createHighLimitDevice()) as { requested: { requiredLimits: Record<string, number> } };
-    expect(device.requested.requiredLimits.maxBufferSize).toBeGreaterThan(268_435_456);
+    const device = (await createHighLimitDevice()) as {
+      requested: { requiredLimits: Record<string, number> };
+    };
+    expect(device.requested.requiredLimits.maxBufferSize).toBeGreaterThan(
+      268_435_456,
+    );
   });
 
   it('forwards every supported adapter feature (mirroring Three)', async () => {
     installFakeGpu();
-    const device = (await createHighLimitDevice()) as { requested: { requiredFeatures: string[] } };
-    expect(device.requested.requiredFeatures).toEqual(['shader-f16', 'depth32float-stencil8']);
+    const device = (await createHighLimitDevice()) as {
+      requested: { requiredFeatures: string[] };
+    };
+    expect(device.requested.requiredFeatures).toEqual([
+      'shader-f16',
+      'depth32float-stencil8',
+    ]);
   });
 
   it('returns undefined when WebGPU is unavailable (callers fall back to WebGL2)', async () => {

@@ -22,7 +22,9 @@ async function main(): Promise<void> {
       process.stdout.write(err.message);
       return;
     }
-    process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
+    process.stderr.write(
+      `${err instanceof Error ? err.message : String(err)}\n`,
+    );
     process.exitCode = 1;
     return;
   }
@@ -33,7 +35,9 @@ async function main(): Promise<void> {
     const transport = new StdioServerTransport();
     await server.connect(transport);
     // stdout is the JSON-RPC wire — every log line goes to stderr.
-    process.stderr.write(`stt-mcp: stdio transport connected (data-root: ${config.dataRoot})\n`);
+    process.stderr.write(
+      `stt-mcp: stdio transport connected (data-root: ${config.dataRoot})\n`,
+    );
     return;
   }
 
@@ -59,7 +63,9 @@ async function main(): Promise<void> {
 
   const httpServer = createHttpServer((req, res) => {
     transport.handleRequest(req, res).catch((err: unknown) => {
-      process.stderr.write(`stt-mcp: request handling failed: ${err instanceof Error ? err.stack ?? err.message : String(err)}\n`);
+      process.stderr.write(
+        `stt-mcp: request handling failed: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}\n`,
+      );
       if (!res.headersSent) {
         res.writeHead(500, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ error: 'internal error' }));
@@ -77,6 +83,8 @@ async function main(): Promise<void> {
 }
 
 main().catch((err: unknown) => {
-  process.stderr.write(`stt-mcp: fatal: ${err instanceof Error ? err.stack ?? err.message : String(err)}\n`);
+  process.stderr.write(
+    `stt-mcp: fatal: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}\n`,
+  );
   process.exitCode = 1;
 });

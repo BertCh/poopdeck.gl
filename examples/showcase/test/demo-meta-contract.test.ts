@@ -31,7 +31,10 @@ function docFilePath(docPath: string): string {
 describe('demo catalog curation invariants', () => {
   it('every DEMO_META key resolves to a real dataset id', () => {
     for (const id of metaIds) {
-      expect(getDatasetById(id), `DEMO_META["${id}"] has no dataset`).toBeTruthy();
+      expect(
+        getDatasetById(id),
+        `DEMO_META["${id}"] has no dataset`,
+      ).toBeTruthy();
     }
   });
 
@@ -51,24 +54,36 @@ describe('demo catalog curation invariants', () => {
 
   it('excluded-by-design ids have no DEMO_META entry (re-inclusion is a reviewed act)', () => {
     for (const id of CATALOG_EXCLUDED_IDS) {
-      expect(DEMO_META[id], `${id} is excluded but has a DEMO_META entry`).toBeUndefined();
+      expect(
+        DEMO_META[id],
+        `${id} is excluded but has a DEMO_META entry`,
+      ).toBeUndefined();
     }
   });
 
   it('every SHIPPED dataset has a DEMO_META entry', () => {
     for (const id of SHIPPED_DATASET_IDS) {
-      expect(DEMO_META[id], `shipped dataset ${id} missing from catalog`).toBeTruthy();
+      expect(
+        DEMO_META[id],
+        `shipped dataset ${id} missing from catalog`,
+      ).toBeTruthy();
     }
   });
 
   it('categories are valid and every category is non-empty', () => {
     for (const [id, meta] of Object.entries(DEMO_META)) {
       expect(CATEGORY_ORDER, `${id}.category`).toContain(meta.category);
-      expect(CATEGORY_LABELS[meta.category], `${id}.category label`).toBeTruthy();
+      expect(
+        CATEGORY_LABELS[meta.category],
+        `${id}.category label`,
+      ).toBeTruthy();
     }
     const catalog = getCatalog();
     for (const cat of CATEGORY_ORDER) {
-      expect(catalog.get(cat)!.length, `category ${cat} is empty`).toBeGreaterThan(0);
+      expect(
+        catalog.get(cat)!.length,
+        `category ${cat} is empty`,
+      ).toBeGreaterThan(0);
     }
   });
 });
@@ -119,8 +134,14 @@ describe('demo meta editorial content', () => {
       it('related ids resolve, are catalog members, and never self-reference', () => {
         for (const rid of meta.related) {
           expect(rid, `${id}.related`).not.toBe(id);
-          expect(getDatasetById(rid), `${id}.related → ${rid} not a dataset`).toBeTruthy();
-          expect(DEMO_META[rid], `${id}.related → ${rid} not in catalog`).toBeTruthy();
+          expect(
+            getDatasetById(rid),
+            `${id}.related → ${rid} not a dataset`,
+          ).toBeTruthy();
+          expect(
+            DEMO_META[rid],
+            `${id}.related → ${rid} not in catalog`,
+          ).toBeTruthy();
         }
       });
     });

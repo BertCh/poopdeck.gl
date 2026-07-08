@@ -82,7 +82,9 @@ export interface WideLineMaterialBundle {
  * RGBA 0..1), `sttStart`/`sttEnd` (float, window mode), `sttTimeA`/`sttTimeB`
  * (float, trail mode — relative ms), on a {@link makeSegmentQuadGeometry}.
  */
-export function createWideLineMaterial(opts: WideLineMaterialOptions = {}): WideLineMaterialBundle {
+export function createWideLineMaterial(
+  opts: WideLineMaterialOptions = {},
+): WideLineMaterialBundle {
   const mode: WideLineMode = opts.mode ?? 'none';
   const time = new TimeFilterUniforms();
   const line = new WideLineUniforms();
@@ -106,7 +108,12 @@ export function createWideLineMaterial(opts: WideLineMaterialOptions = {}): Wide
   const off = perp.mul(side).mul(line.widthPx).div(line.viewport).mul(clip.w);
 
   const material = new MeshBasicNodeMaterial();
-  material.vertexNode = vec4(clip.x.add(off.x), clip.y.add(off.y), clip.z, clip.w);
+  material.vertexNode = vec4(
+    clip.x.add(off.x),
+    clip.y.add(off.y),
+    clip.z,
+    clip.w,
+  );
 
   // ── FRAGMENT: gradient colour + time alpha ──────────────────────────────────
   const colA = attribute('sttColorA', 'vec4');
@@ -150,7 +157,10 @@ export interface WideLineUniformValues {
 }
 
 /** Push the playhead + width/viewport into the uniforms. Call once per frame. */
-export function updateWideLineUniforms(bundle: WideLineMaterialBundle, v: WideLineUniformValues): void {
+export function updateWideLineUniforms(
+  bundle: WideLineMaterialBundle,
+  v: WideLineUniformValues,
+): void {
   updateTimeFilterUniforms(bundle.time, v.relativeCurrentTime, v.params);
   if (v.widthPx !== undefined) bundle.line.widthPx.value = v.widthPx;
   if (v.opacity !== undefined) bundle.line.opacity.value = v.opacity;

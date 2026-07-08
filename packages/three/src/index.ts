@@ -124,7 +124,11 @@ export {
   type CreateSttGlobeControlsOptions,
   type SttGlobeControls,
 } from './scene/globe-controls.js';
-export { SttTileSource, type SttTileSourceOptions, type LoadedSource } from './scene/tile-source.js';
+export {
+  SttTileSource,
+  type SttTileSourceOptions,
+  type LoadedSource,
+} from './scene/tile-source.js';
 export { makeGround, type GroundOptions } from './scene/ground.js';
 export { frameBox, type FrameOptions } from './scene/camera.js';
 export {
@@ -192,7 +196,10 @@ export {
 } from './lib/color.js';
 
 // ─── Objects (bounding boxes) + maps + ego ────────────────────────────────────
-export { BoundingBoxLayer, type BoundingBoxLayerOptions } from './layers/bounding-box-layer.js';
+export {
+  BoundingBoxLayer,
+  type BoundingBoxLayerOptions,
+} from './layers/bounding-box-layer.js';
 export {
   buildTrackIndex,
   sampleTrack,
@@ -212,9 +219,19 @@ export {
   BOX_EDGES,
   FLOATS_PER_BOX,
 } from './geometry/box-edges.js';
-export { StaticPathLayer, type StaticPathLayerOptions } from './layers/path-layer.js';
-export { StaticPolygonLayer, type StaticPolygonLayerOptions } from './layers/polygon-layer.js';
-export { EgoLayer, type EgoLayerOptions, type EgoPose } from './layers/ego-layer.js';
+export {
+  StaticPathLayer,
+  type StaticPathLayerOptions,
+} from './layers/path-layer.js';
+export {
+  StaticPolygonLayer,
+  type StaticPolygonLayerOptions,
+} from './layers/polygon-layer.js';
+export {
+  EgoLayer,
+  type EgoLayerOptions,
+  type EgoPose,
+} from './layers/ego-layer.js';
 
 // ─── Density iso-lines (animated contours) ────────────────────────────────────
 export {
@@ -252,9 +269,18 @@ export {
   type LineSegmentBufferOptions,
   type LineSegmentBuffers,
 } from './lib/geo-line-buffers.js';
-export { WideLineLayer, type WideLineLayerOptions } from './layers/wide-line-layer.js';
-export { PathGeoLayer, type PathGeoLayerOptions } from './layers/path-geo-layer.js';
-export { OdLineLayer, type OdLineLayerOptions } from './layers/od-line-layer.js';
+export {
+  WideLineLayer,
+  type WideLineLayerOptions,
+} from './layers/wide-line-layer.js';
+export {
+  PathGeoLayer,
+  type PathGeoLayerOptions,
+} from './layers/path-geo-layer.js';
+export {
+  OdLineLayer,
+  type OdLineLayerOptions,
+} from './layers/od-line-layer.js';
 export {
   deriveSourceTargetPositions,
   buildOdLineSegmentBuffers,
@@ -278,7 +304,10 @@ export {
   type TripIndex,
   type Head,
 } from './lib/trip-heads.js';
-export { TripHeadsLayer, type TripHeadsLayerOptions } from './layers/trip-heads-layer.js';
+export {
+  TripHeadsLayer,
+  type TripHeadsLayerOptions,
+} from './layers/trip-heads-layer.js';
 
 // ─── Arcs (curved/great-circle OD) ─────────────────────────────────────────────
 export {
@@ -349,7 +378,10 @@ export {
   type PolygonMaterialBundle,
   type PolygonUniformValues,
 } from './tsl/polygon-material.js';
-export { PolygonLayer, type PolygonLayerOptions } from './layers/polygon-layer.js';
+export {
+  PolygonLayer,
+  type PolygonLayerOptions,
+} from './layers/polygon-layer.js';
 export {
   buildPolygonBuffers,
   type PolygonColorMode,
@@ -407,7 +439,10 @@ export {
   makeArrowTemplateGeometry,
   ARROW_TEMPLATE_POSITIONS,
 } from './geometry/arrow-template.js';
-export { FlowmapLayer, type FlowmapLayerOptions } from './layers/flowmap-layer.js';
+export {
+  FlowmapLayer,
+  type FlowmapLayerOptions,
+} from './layers/flowmap-layer.js';
 export {
   buildFlowmapBuffers,
   type FlowmapBufferOptions,

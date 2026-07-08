@@ -215,7 +215,9 @@ function simulateRendererBuild(tile: ReturnType<typeof decodeTile>): number {
   const triangles = features.triangles;
   const triangleOffsets = features.triangleOffsets;
   const usePreBaked =
-    !!triangles && !!triangleOffsets && triangleOffsets.length === featureCount + 1;
+    !!triangles &&
+    !!triangleOffsets &&
+    triangleOffsets.length === featureCount + 1;
 
   // Return the total triangle-index count produced for the tile. Both paths
   // produce the same count for the same polygons; the difference is in CPU
@@ -272,10 +274,20 @@ describe('decode-to-renderable: pre-tessellated polygons', () => {
     // production renderer, not something a unit test can pin without flaking.
     // What we CAN assert deterministically is output equivalence: both paths
     // must produce the same triangle-index count for the same polygons.
-    const without = buildSyntheticPolygonTile({ n: N, verts: V, withTriangles: false });
-    const withT = buildSyntheticPolygonTile({ n: N, verts: V, withTriangles: true });
+    const without = buildSyntheticPolygonTile({
+      n: N,
+      verts: V,
+      withTriangles: false,
+    });
+    const withT = buildSyntheticPolygonTile({
+      n: N,
+      verts: V,
+      withTriangles: true,
+    });
 
-    const idxLegacy = simulateRendererBuild(decodeTile(without.payload, tileId));
+    const idxLegacy = simulateRendererBuild(
+      decodeTile(without.payload, tileId),
+    );
     const idxBaked = simulateRendererBuild(decodeTile(withT.payload, tileId));
 
     // Both paths emit the same number of triangle indices for each feature
@@ -296,8 +308,16 @@ describe('decode-to-renderable: pre-tessellated polygons', () => {
     // feature. With 10k features that's ~5.4 MiB raw; Arrow IPC overhead is
     // negligible and the buffer is mostly incompressible so we expect the
     // bytes-on-the-wire delta to be ≤ ~200% of the geometry column.
-    const without = buildSyntheticPolygonTile({ n: N, verts: V, withTriangles: false });
-    const withT = buildSyntheticPolygonTile({ n: N, verts: V, withTriangles: true });
+    const without = buildSyntheticPolygonTile({
+      n: N,
+      verts: V,
+      withTriangles: false,
+    });
+    const withT = buildSyntheticPolygonTile({
+      n: N,
+      verts: V,
+      withTriangles: true,
+    });
     expect(withT.bytesIpc).toBeGreaterThan(without.bytesIpc);
     // Each feature's geometry contributes ~50 verts × 16 bytes = 800 bytes.
     // Triangles add ~144 × 4 = 576 bytes. Ratio cap of 2.0 has plenty of

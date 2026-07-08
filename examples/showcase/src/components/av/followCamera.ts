@@ -18,7 +18,7 @@
  * any frame delta. Everything here is pure + configurable so it can be unit
  * tested and tuned without touching the render code.
  */
-import { egoSampleAt, type EgoPathPoint } from "./egoLayers";
+import { egoSampleAt, type EgoPathPoint } from './egoLayers';
 
 /** Tunables for the ego-follow camera. See {@link DEFAULT_FOLLOW_CONFIG}. */
 export interface FollowCameraConfig {
@@ -95,7 +95,11 @@ export function shortestAngleDelta(a: number, b: number): number {
 }
 
 /** Ease an angle (degrees) toward `target` along the shortest arc by `alpha`. */
-export function smoothAngle(current: number, target: number, alpha: number): number {
+export function smoothAngle(
+  current: number,
+  target: number,
+  alpha: number,
+): number {
   return current + shortestAngleDelta(current, target) * alpha;
 }
 

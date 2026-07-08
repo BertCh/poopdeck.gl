@@ -82,5 +82,9 @@ export function resolveTimeWindow(
   // `softDefaultFraction` policy the fades default to 0 and half-width wins over
   // full-width — byte-identical to the historical three-native behaviour.
   const p = resolveTimeFilterParams(o, { defaultWindowHalf });
-  return { windowHalf: p.windowHalf ?? 0, fadeIn: p.fadeIn ?? 0, fadeOut: p.fadeOut ?? 0 };
+  return {
+    windowHalf: p.windowHalf ?? 0,
+    fadeIn: p.fadeIn ?? 0,
+    fadeOut: p.fadeOut ?? 0,
+  };
 }

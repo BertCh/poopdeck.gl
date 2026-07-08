@@ -34,17 +34,17 @@ Timeline (all verified against code/registries 2026-07-07):
 
 Where the normative behavior lives (per-topic pointers into the spec):
 
-| topic | spec section |
-| --- | --- |
-| required-to-understand capabilities | [§3.1](../spec/stt-packed-format.md) |
-| schema templates (`schemas`) | [§3.2](../spec/stt-packed-format.md) |
-| directory v5 + the Hilbert key (normative, with test vectors) | [§4](../spec/stt-packed-format.md) |
-| paged container (`layout: "paged"`) | [§4.1](../spec/stt-packed-format.md) |
-| layer frame v2 (sectioned, template-referencing) | [§5.2](../spec/stt-packed-format.md) |
-| design decisions (incl. reproducible-builds D6) | [§7](../spec/stt-packed-format.md) |
-| versioning, media types, magic bytes, changelog | [§9](../spec/stt-packed-format.md) |
-| container limits (u32 caps, root scale, packs-array) | [§12](../spec/stt-packed-format.md) |
-| bundle profile `.sttb` | [§13](../spec/stt-packed-format.md) |
+| topic                                                         | spec section                         |
+| ------------------------------------------------------------- | ------------------------------------ |
+| required-to-understand capabilities                           | [§3.1](../spec/stt-packed-format.md) |
+| schema templates (`schemas`)                                  | [§3.2](../spec/stt-packed-format.md) |
+| directory v5 + the Hilbert key (normative, with test vectors) | [§4](../spec/stt-packed-format.md)   |
+| paged container (`layout: "paged"`)                           | [§4.1](../spec/stt-packed-format.md) |
+| layer frame v2 (sectioned, template-referencing)              | [§5.2](../spec/stt-packed-format.md) |
+| design decisions (incl. reproducible-builds D6)               | [§7](../spec/stt-packed-format.md)   |
+| versioning, media types, magic bytes, changelog               | [§9](../spec/stt-packed-format.md)   |
+| container limits (u32 caps, root scale, packs-array)          | [§12](../spec/stt-packed-format.md)  |
+| bundle profile `.sttb`                                        | [§13](../spec/stt-packed-format.md)  |
 
 **Genuinely open** (details in §10): demo-fleet republish to v2 + R2 sync +
 browser-verify (user-run ops gate); lazy-props client materialization; serve-v2;
@@ -59,7 +59,7 @@ From the 2026-07 deep review (independently assessed, not just self-claimed) —
 no shipping open format has these:
 
 1. **The temporal directory** — `(z,x,y,t)`-keyed delta+zigzag varint columns
-   with blob-run RLE that collapses *time-identical* content (the temporal
+   with blob-run RLE that collapses _time-identical_ content (the temporal
    analogue of PMTiles collapsing ocean tiles), plus `cover_t_min`
    backward-coverage and per-leaf `[t_min,t_max]` page pruning. The format's
    central contribution; competitive with PMTiles v3 on its own terms while
@@ -90,23 +90,24 @@ prior art to copy: temporal axis on the directory; temporal budgeting; 3D
 (hence shipping builder + deck.gl layers together).
 
 **Squeeze risk, stated plainly:** the defensible moat is the temporal directory
-+ reproducible builds + trajectory primitives *plus the renderer stack*. The
-container alone is squeezable by a future MLT temporal extension or GeoZarr
-from either side. The spec-hardening tier (review T6 → Phase B, implemented
-2026-07-05) is what converts "nice internal format" into "the open standard for
-temporally-tiled vector data" before someone else names that category.
+
+- reproducible builds + trajectory primitives _plus the renderer stack_. The
+  container alone is squeezable by a future MLT temporal extension or GeoZarr
+  from either side. The spec-hardening tier (review T6 → Phase B, implemented
+  2026-07-05) is what converts "nice internal format" into "the open standard for
+  temporally-tiled vector data" before someone else names that category.
 
 ## 3. Measured baselines
 
 ### 3.1 v1 byte-level probe (arrow 59, zstd-3, single point layer)
 
-| Config | raw payload | zstd | note |
-|---|---|---|---|
-| 0 features, no props | 1,048 B | **429 B** | pure fixed tax: frame (16 B) + IPC schema/messages |
-| 0 features, +2 props | 1,560 B | 547 B | +512 B raw per 2 fields |
-| 1 feature ≡ 2 features | 1,688 B | ~570 B | arrow-rs pads each buffer to 64 B |
-| 1,000 features | 41,880 B | 6,592 B | marginal ≈ 40.8 B/feat raw → 6.2 B/feat zstd |
-| 1,000 features, quantized | 33,944 B | 3,720 B | → 3.3 B/feat zstd |
+| Config                    | raw payload | zstd      | note                                               |
+| ------------------------- | ----------- | --------- | -------------------------------------------------- |
+| 0 features, no props      | 1,048 B     | **429 B** | pure fixed tax: frame (16 B) + IPC schema/messages |
+| 0 features, +2 props      | 1,560 B     | 547 B     | +512 B raw per 2 fields                            |
+| 1 feature ≡ 2 features    | 1,688 B     | ~570 B    | arrow-rs pads each buffer to 64 B                  |
+| 1,000 features            | 41,880 B    | 6,592 B   | marginal ≈ 40.8 B/feat raw → 6.2 B/feat zstd       |
+| 1,000 features, quantized | 33,944 B    | 3,720 B   | → 3.3 B/feat zstd                                  |
 
 Fleet reality check (`stt-optimize inspect` on `earthquakes-v2`): 102,225 tiles
 / 522,982 feature-rows / 117 MB compressed → average compressed blob ≈ 1.1 KB,
@@ -129,12 +130,12 @@ qa-affines/t0/categories/row-count; TS splice zero-copy under apache-arrow 17.
 
 ### 3.3 Stage III A/B (measured 2026-07-05; identical flags except `--format-version`, zstd-19, w8)
 
-| dataset | shape | v1 pack B | v2 pack B | Δ pack | dir B v1→v2 | manifest B v1→v2 | templates (raw B) | wall s v1→v2 |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| hurricanes | sparse global points, 4 dict cols, quantized | 10,049,785 | 6,392,849 | **−36.4 %** | 141,368→144,348 | 1,035→3,093 | 2 (1,408) | 26.2→29.3 |
-| ecco | current trajectories, vertex_time+values, long-lived | 733,409,267 | 702,361,861 | **−4.2 %** | 768,905→767,620 | 2,007→5,254 | 3 (2,240) | 143.0→159.8 |
-| taxi | dense urban trajectories, short trips | 132,399,630 | 131,853,238 | **−0.4 %** | 3,838→3,832 | 1,152→4,315 | 3 (2,176) | 42.4→45.5 |
-| ais | dense coastal points, categorical-heavy | 292,576,474 | 276,000,619 | **−5.7 %** | 205,504→208,757 | 1,440→3,498 | 2 (1,408) | 64.6→68.6 |
+| dataset    | shape                                                | v1 pack B   | v2 pack B   | Δ pack      | dir B v1→v2     | manifest B v1→v2 | templates (raw B) | wall s v1→v2 |
+| ---------- | ---------------------------------------------------- | ----------- | ----------- | ----------- | --------------- | ---------------- | ----------------- | ------------ |
+| hurricanes | sparse global points, 4 dict cols, quantized         | 10,049,785  | 6,392,849   | **−36.4 %** | 141,368→144,348 | 1,035→3,093      | 2 (1,408)         | 26.2→29.3    |
+| ecco       | current trajectories, vertex_time+values, long-lived | 733,409,267 | 702,361,861 | **−4.2 %**  | 768,905→767,620 | 2,007→5,254      | 3 (2,240)         | 143.0→159.8  |
+| taxi       | dense urban trajectories, short trips                | 132,399,630 | 131,853,238 | **−0.4 %**  | 3,838→3,832     | 1,152→4,315      | 3 (2,176)         | 42.4→45.5    |
+| ais        | dense coastal points, categorical-heavy              | 292,576,474 | 276,000,619 | **−5.7 %**  | 205,504→208,757 | 1,440→3,498      | 2 (1,408)         | 64.6→68.6    |
 
 Reading: the schema-tax saving scales inversely with tile size, as predicted —
 −36 % on sparse-tile hurricanes (12,886 tiles, ~780 B/tile pack), −4…−6 % on
@@ -165,14 +166,14 @@ spec §4.1 behavior:
 - **D2 — a leaf page is the existing v5 codec, verbatim.** Slicing resets delta
   state + splits RLE runs at boundaries (the measured +6–19 % at-rest cost);
   reusing the adversarially-tested codec makes the only new bytes the root page
-  + framing.
+  - framing.
 - **D3 — page descriptor = geo-bbox, not Hilbert key range (FROZEN by the
   step-0 A/B sim).** Geo-bbox matched or beat the Hilbert-range model on every
   dataset where paging matters — nyc-taxi-points **9.5 % / 15.5 %** of
   whole-load (med/p90) vs hilbert 11.4 % / 36.5 %; drifters **25.0 % / 35.1 %**
   vs 26.3 % / 66.1 %; only ais-all-us favoured hilbert (2.7 % / 4.4 % vs 0.9 % /
   1.8 %) in an already-sub-5 % regime. Geo-bbox wins the p90 tail because a
-  viewport box maps to a Hilbert *interval* that falsely keeps
+  viewport box maps to a Hilbert _interval_ that falsely keeps
   spatially-distant pages, while geo-bbox tests real overlap. Bonus:
   zoom-correct, and **no Hilbert port in TS**.
 - **D4 — one content-addressed `.sttd`; root is a byte-range prefix.** Never a
@@ -215,7 +216,7 @@ the decisions worth keeping:
   templates/dataset realized (type splits like vertex_time u16/i64 are
   legitimate); `--v2-inline-schemas` stays a theoretical escape.
 - **Core/props split.** Reserved columns form the CORE batch; property columns
-  a separate PROPS batch with its own template — the format *enables* lazy
+  a separate PROPS batch with its own template — the format _enables_ lazy
   property decode, but the shipped TS reader is eager-only
   (behavior-identical to v1). When lazy materialization is built it must run
   its Arrow parse in the decode worker and re-account cached byteSize through
@@ -273,7 +274,7 @@ the decisions worth keeping:
 - **Lightweight column encodings: NO-GO** (2026-06-11,
   `crates/stt-core/examples/encoding-experiment.rs`, 400-tile samples of
   drifters / ais-all-us / flights; all variants re-zstd'd since packed is
-  zstd-per-blob). Integer time columns: delta-varint wins big *relatively*
+  zstd-per-blob). Integer time columns: delta-varint wins big _relatively_
   (vertex_time −31 % drifters, feature times −55 % flights, −23 % ais) but
   those columns are only **~0.3–0.8 % of post-zstd payload** — negligible
   absolute. Coordinates (~57 % of drifters payload) get **worse** under
@@ -283,18 +284,18 @@ the decisions worth keeping:
   packing entirely in a zstd-at-rest format. Conclusion: no encoding pass pays
   for its decoder port.
 - **Transforms vs quantization (rust-audit resolution).** The NO-GO above
-  tested *transforms* (delta/bitpack) on *un-quantized* f64 — quantization was
+  tested _transforms_ (delta/bitpack) on _un-quantized_ f64 — quantization was
   the real, untested lever, and it shipped as opt-in world-grid
   `--quantize-coords <m>` (i32 world-grid leaf + reconstruction affine,
   deliberately NOT tile-local — per-tile grids cost +61 % by destroying
   cross-tile content-address dedup; the naive osm-streets case went from
   +57.7 % to −1.8 % under the world grid). Measured −25..47 % on coord-heavy
   datasets; AV LiDAR ships on it (z14 20→4.4 B/pt). Read the pair as:
-  *encoding transforms declined; quantization landed via the world-grid route.*
+  _encoding transforms declined; quantization landed via the world-grid route._
 - **`rel-times32`: SKIPPED** (Stage III, 2026-07-05). Projected blob-byte
   saving median ≈ +0.2 % (< the 1 % SKIP line) and the sign FLIPS on dense
   tiles — sorted absolute Int64 times (constant high 5 bytes per value) are
-  *more* zstd-redundant per row than dense Int32 offsets: taxi re-encodes
+  _more_ zstd-redundant per row than dense Int32 offsets: taxi re-encodes
   **+46 %**, ais **+34 %** larger as rel-Int32. Kill shot: on ecco 125,526 /
   134,045 features (**94 %**) overflow Int32 ms relative to bucket t0
   (long-lived tracks), so end_time would need a per-tile fallback for near-zero
@@ -302,13 +303,13 @@ the decisions worth keeping:
   −61 %), which is precisely what strands rel32.
 - **`narrow-ids`: SKIPPED** (Stage III). Median ≈ +0.2 %. UInt64 sequential
   ids carry 4 always-zero high bytes that zstd folds into its match model
-  almost for free — halving the raw width often *hurts* (u32 re-encoded LARGER
+  almost for free — halving the raw width often _hurts_ (u32 re-encoded LARGER
   than u64 on ais z8, taxi z10, and every dataset's shallow-zoom groups). The
   one mild positive (ecco, ids replicated across clipped segments) tops out at
   +2.2 % on the optimistic bound only.
 - **Blob ordering: request count is a broken cost primary** (2026-07-05,
   learned building the measured picker). A first cut ranked orderings by
-  coalesced range-read *count*; on drifters that recommended `time-major` at
+  coalesced range-read _count_; on drifters that recommended `time-major` at
   "2 reads" — which transfer **669 MiB** (a scattered spatial band fuses into
   one archive-spanning range at the reader's 2 MiB coalescing gap) vs
   `spatial`'s 184 MiB in 94 requests. Ranking by count called the 669 MiB read
@@ -373,7 +374,7 @@ Content-addressed packs are the stronger integrity story — **never add a secon
 addressing path beside them** (this froze paged-directory D4).
 
 **MLT** (columnar MVT successor, official release 2026-01) — benchmarks:
-1.1–2× smaller than *gzipped* MVT, 2–3× faster decode, property-only scans
+1.1–2× smaller than _gzipped_ MVT, 2–3× faster decode, property-only scans
 3.7–4.4× faster, lazy geometry-skip 14.8× — columnar's killer app is
 **skipping**, not just compression (the motivation for v2's sectioned
 core/props split). Real-world caveat: on already-optimized tilesets the size
@@ -389,16 +390,16 @@ experimental) — both ecosystems leave STT's time-native wedge uncontested.
 
 **Scorecard** (format review, 2026-07):
 
-| vs | STT wins | STT loses | Steal |
-|---|---|---|---|
-| **PMTiles v3** | temporal axis; >512 MB CDN cacheability; reproducible builds; run-RLE across *time* | single-file interchange; spec governance/media type; brand neutrality | spec-in-own-repo; bundle profile |
-| **MLT/MVT** | columnar GPU-zero-copy; time; GeoArrow interop | per-tile fixed overhead (429 B vs single-digit); no column projection; no lightweight int encodings (measured trade, mostly justified) | lazy property scan economics; feature-scoped encodings only where re-measured |
-| **COPC** | time axis (COPC core has none); CDN-native objects | graceful degradation (quantized STT breaks vanilla GeoArrow readers); extension registry | registry w/ owner prefixes; "N reads to first frame" as normative budget; strided in-blob sampling |
-| **Parquet/GeoParquet** | tile-granular random access; GPU-readiness; time-addressed delivery | column stats/predicate pushdown; column projection; schema-once amortization | per-page column stats (paged-root descriptor kind 1); logical time types |
-| **Zarr v3** | vector payloads; directory compactness | `must_understand` extension flags; codec/container separation | `capabilities` array is exactly Zarr's `must_understand` |
-| **Hex Tiles** | open, exact geometry, published spec | marketing/platform integration | nothing technical |
+| vs                     | STT wins                                                                            | STT loses                                                                                                                              | Steal                                                                                              |
+| ---------------------- | ----------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| **PMTiles v3**         | temporal axis; >512 MB CDN cacheability; reproducible builds; run-RLE across _time_ | single-file interchange; spec governance/media type; brand neutrality                                                                  | spec-in-own-repo; bundle profile                                                                   |
+| **MLT/MVT**            | columnar GPU-zero-copy; time; GeoArrow interop                                      | per-tile fixed overhead (429 B vs single-digit); no column projection; no lightweight int encodings (measured trade, mostly justified) | lazy property scan economics; feature-scoped encodings only where re-measured                      |
+| **COPC**               | time axis (COPC core has none); CDN-native objects                                  | graceful degradation (quantized STT breaks vanilla GeoArrow readers); extension registry                                               | registry w/ owner prefixes; "N reads to first frame" as normative budget; strided in-blob sampling |
+| **Parquet/GeoParquet** | tile-granular random access; GPU-readiness; time-addressed delivery                 | column stats/predicate pushdown; column projection; schema-once amortization                                                           | per-page column stats (paged-root descriptor kind 1); logical time types                           |
+| **Zarr v3**            | vector payloads; directory compactness                                              | `must_understand` extension flags; codec/container separation                                                                          | `capabilities` array is exactly Zarr's `must_understand`                                           |
+| **Hex Tiles**          | open, exact geometry, published spec                                                | marketing/platform integration                                                                                                         | nothing technical                                                                                  |
 
-*Update 2026-07-05:* several "loses" cells were since closed — single-file
+_Update 2026-07-05:_ several "loses" cells were since closed — single-file
 interchange (bundle §13), per-tile fixed overhead (v2 templates), magic bytes +
 `vnd.` media types (spec §9.2), `capabilities` must-understand (spec §3.1),
 schema-once amortization (v2). Column projection is partially closed
@@ -427,10 +428,10 @@ reproducible-rebuild tests, and every committed fixture pass unchanged):
 Benchmark (M-series MBP, 12 cores / 36 GB, release; synthetic GeoParquet, 20 M
 points, z0–3, 6 h buckets, 8 workers; 9,386 tiles, 31 packs, 2.03 GB output):
 
-| budget | wall | peak RSS | byte-identical |
-| --- | --- | --- | --- |
-| 512 MiB (spill; default) | 359.5 s | 14.71 GiB | — (reference) |
-| 0 (unlimited/legacy) | 338.1 s | 16.41 GiB | `diff -r` clean vs spill |
+| budget                   | wall    | peak RSS  | byte-identical           |
+| ------------------------ | ------- | --------- | ------------------------ |
+| 512 MiB (spill; default) | 359.5 s | 14.71 GiB | — (reference)            |
+| 0 (unlimited/legacy)     | 338.1 s | 16.41 GiB | `diff -r` clean vs spill |
 
 Spilling traded **−1.83 GB peak RSS (−10.4 %) for +21 s wall (+6.3 %)**; the
 spill file transiently held ~4.3 GB of payloads. E1 removed the
@@ -474,20 +475,20 @@ encode loop on the non-streaming path).
   a shipped packed dataset (analysis runs pre-build on sources). Counted out,
   trigger: the first real re-analysis ask.
 - **Rust-audit tail** (all deliberately parked 2026-07-01):
-  - *Full measure-and-correct build loop* — a rebuild-cost multiplier with no
+  - _Full measure-and-correct build loop_ — a rebuild-cost multiplier with no
     consumer (budgets are opt-in and unused by the fleet). Trigger: first real
     tile-budget user.
-  - *Per-feature bbox covering column* — paged per-page geo bounds already
+  - _Per-feature bbox covering column_ — paged per-page geo bounds already
     deliver the coarse pruning win. Trigger: a client-side spatial-predicate
     use case.
-  - *`Dataset` trait for stt-generate* — superseded; absorbed into the
+  - _`Dataset` trait for stt-generate_ — superseded; absorbed into the
     preprocessing-framework design (its Recipe/`Dataset` trait IS this item,
     Phase 5 there). Revive with that framework, not independently.
-  - *`-zg` density-derived auto-maxzoom* — confirmed absent by grep 2026-07-01
+  - _`-zg` density-derived auto-maxzoom_ — confirmed absent by grep 2026-07-01
     (the 2026-06-11 "shipped" checkbox was wrong); every shipped dataset pins
     its zoom range explicitly. Trigger: third-party `stt-build` adoption makes
     zero-config builds a priority.
-  - *`stt-tools` crate promotion* — original trigger was "revive alongside
+  - _`stt-tools` crate promotion_ — original trigger was "revive alongside
     crates.io publishing." **Trigger FIRED 2026-07-05** (0.3.0 shipped to
     crates.io) — **needs re-triage**, not silent count-out: decide whether the
     `cargo run --example` maintenance tools graduate to a published crate.

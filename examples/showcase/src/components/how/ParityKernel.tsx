@@ -1,4 +1,4 @@
-import React from "react";
+import React from 'react';
 
 /**
  * "One formula, every engine" figure — the clearest evidence of the
@@ -39,8 +39,8 @@ const Box: React.FC<{
       width={w}
       height={h}
       rx="6"
-      fill={accent ? "var(--accent-soft)" : "var(--surface-sunken)"}
-      stroke={accent ? "var(--accent)" : "var(--ink-400)"}
+      fill={accent ? 'var(--accent-soft)' : 'var(--surface-sunken)'}
+      stroke={accent ? 'var(--accent)' : 'var(--ink-400)'}
       strokeWidth="1"
     />
     <text
@@ -55,7 +55,13 @@ const Box: React.FC<{
       {title}
     </text>
     {sub ? (
-      <text x={x + w / 2} y={y + 30} fontSize="9" textAnchor="middle" fill="var(--ink-500)">
+      <text
+        x={x + w / 2}
+        y={y + 30}
+        fontSize="9"
+        textAnchor="middle"
+        fill="var(--ink-500)"
+      >
         {sub}
       </text>
     ) : null}
@@ -76,10 +82,10 @@ const Box: React.FC<{
 
 /** The four backends and where each fan-out curve lands. */
 const TARGETS: { name: string; dialect: string; emit: string; cx: number }[] = [
-  { name: "deck.gl", dialect: "GLSL ES 1.00", emit: "emitGLSL100", cx: 58 },
-  { name: "MapLibre", dialect: "GLSL ES 3.00", emit: "emitGLSL300", cx: 172 },
-  { name: "Three.js", dialect: "TSL · WebGPU nodes", emit: "emitTSL", cx: 286 },
-  { name: "Cesium", dialect: "GLSL ES 3.00", emit: "emitGLSL300", cx: 400 },
+  { name: 'deck.gl', dialect: 'GLSL ES 1.00', emit: 'emitGLSL100', cx: 58 },
+  { name: 'MapLibre', dialect: 'GLSL ES 3.00', emit: 'emitGLSL300', cx: 172 },
+  { name: 'Three.js', dialect: 'TSL · WebGPU nodes', emit: 'emitTSL', cx: 286 },
+  { name: 'Cesium', dialect: 'GLSL ES 3.00', emit: 'emitGLSL300', cx: 400 },
 ];
 
 const BOX_W = 104;
@@ -91,9 +97,15 @@ const BRACKET_Y = 232;
 const ParityKernel: React.FC = () => (
   <div
     className="rounded-lg p-4"
-    style={{ background: "var(--surface)", border: "1px solid var(--hairline)" }}
+    style={{
+      background: 'var(--surface)',
+      border: '1px solid var(--hairline)',
+    }}
   >
-    <h4 className="font-display text-[13px] font-semibold" style={{ color: "var(--ink-900)" }}>
+    <h4
+      className="font-display text-[13px] font-semibold"
+      style={{ color: 'var(--ink-900)' }}
+    >
       One formula, every engine
     </h4>
 
@@ -213,25 +225,29 @@ const ParityKernel: React.FC = () => (
           textAnchor="middle"
           fill="var(--ink-400)"
         >
-          core/test/shader-codegen.test.ts — evalExpr == oracle over 2000 random envs
+          core/test/shader-codegen.test.ts — evalExpr == oracle over 2000 random
+          envs
         </text>
       </svg>
     </div>
 
-    <p className="mt-2 text-[11px] leading-relaxed" style={{ color: "var(--ink-500)" }}>
-      This is the guarantee behind the capability matrix above: the renderers are
-      thin dialects of one kernel, not four parallel gate implementations. The
-      alpha math is authored once — as a framework-free CPU function in{" "}
+    <p
+      className="mt-2 text-[11px] leading-relaxed"
+      style={{ color: 'var(--ink-500)' }}
+    >
+      This is the guarantee behind the capability matrix above: the renderers
+      are thin dialects of one kernel, not four parallel gate implementations.
+      The alpha math is authored once — as a framework-free CPU function in{' '}
       <span className="font-mono">@poopdeck.gl/core</span> and mirrored as an
       expression AST — and machine-emitted into each backend's shading language.
       A conformance test asserts every emission returns the same number as that
-      CPU oracle, so a{" "}
+      CPU oracle, so a{' '}
       <span
         className="rounded px-1.5 py-0.5 font-mono text-[10px]"
-        style={{ background: "var(--accent-soft)", color: "var(--accent)" }}
+        style={{ background: 'var(--accent-soft)', color: 'var(--accent)' }}
       >
         trail
-      </span>{" "}
+      </span>{' '}
       looks and times identically whether you draw it in deck.gl or on a Cesium
       globe. Change the formula once and every renderer inherits it.
     </p>

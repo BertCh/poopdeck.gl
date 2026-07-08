@@ -10,7 +10,10 @@ import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 
 export function makeManifestJson(
-  overrides: { metadata?: Record<string, unknown>; [key: string]: unknown } = {},
+  overrides: {
+    metadata?: Record<string, unknown>;
+    [key: string]: unknown;
+  } = {},
 ): unknown {
   const { metadata: metadataOverrides, ...topOverrides } = overrides;
   return {
@@ -54,16 +57,26 @@ export function makeManifestJson(
 }
 
 /** Writes `datasets` (relative POSIX path -> manifest JSON) under a fresh temp directory; returns the root path. */
-export async function writeFixtureDataRoot(datasets: Record<string, unknown>): Promise<string> {
+export async function writeFixtureDataRoot(
+  datasets: Record<string, unknown>,
+): Promise<string> {
   const root = await mkdtemp(path.join(tmpdir(), 'stt-mcp-test-'));
   for (const [rel, manifest] of Object.entries(datasets)) {
     const dir = path.join(root, ...rel.split('/'));
     await mkdir(dir, { recursive: true });
-    await writeFile(path.join(dir, 'manifest.json'), JSON.stringify(manifest), 'utf8');
+    await writeFile(
+      path.join(dir, 'manifest.json'),
+      JSON.stringify(manifest),
+      'utf8',
+    );
     // A couple of decoy sibling files/dirs a real packed dataset carries,
     // to make sure the scanner doesn't misfire on them.
     await mkdir(path.join(dir, 'packs'), { recursive: true });
-    await writeFile(path.join(dir, 'packs', 'not-a-manifest.sttp'), 'binary-ish', 'utf8');
+    await writeFile(
+      path.join(dir, 'packs', 'not-a-manifest.sttp'),
+      'binary-ish',
+      'utf8',
+    );
   }
   return root;
 }
@@ -78,7 +91,9 @@ export async function cleanupDataRoot(root: string): Promise<void> {
  * keys like `README.md` or `api/cli-reference.md`. Clean up with
  * {@link cleanupDataRoot}.
  */
-export async function writeFixtureDocsRoot(files: Record<string, string>): Promise<string> {
+export async function writeFixtureDocsRoot(
+  files: Record<string, string>,
+): Promise<string> {
   const root = await mkdtemp(path.join(tmpdir(), 'stt-mcp-docs-'));
   for (const [rel, text] of Object.entries(files)) {
     const segments = rel.split('/');

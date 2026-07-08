@@ -14,14 +14,20 @@
 import { describe, it, expect } from 'vitest';
 import { SpatiotemporalTileset } from '../src/spatiotemporal-tileset';
 import type { TileId, BoundingBox, Tile } from '../src/types';
-import { BOUNDS, BUCKET_MS, fakeTile, makeAvailableTiles } from './helpers/fixtures';
+import {
+  BOUNDS,
+  BUCKET_MS,
+  fakeTile,
+  makeAvailableTiles,
+} from './helpers/fixtures';
 
 const N_BUCKETS = 50;
 
 /** One tile per bucket at (x=0, y=0) whose interval overlaps the range. */
 const availableTiles = makeAvailableTiles(N_BUCKETS);
 
-const settle = (ms = 30): Promise<void> => new Promise((r) => setTimeout(r, ms));
+const settle = (ms = 30): Promise<void> =>
+  new Promise((r) => setTimeout(r, ms));
 
 interface GatedBatch {
   ids: TileId[];
@@ -63,7 +69,10 @@ describe('SpatiotemporalTileset selection settle', () => {
     expect(tileset.isLoaded).toBe(true);
     expect(tileset.selectionVersion).toBe(0);
 
-    tileset.update({ bounds: BOUNDS, zoom: 6, time: 0, timeWindow: BUCKET_MS }, true);
+    tileset.update(
+      { bounds: BOUNDS, zoom: 6, time: 0, timeWindow: BUCKET_MS },
+      true,
+    );
     await settle();
 
     expect(tileset.selectionVersion).toBe(1);
@@ -74,7 +83,10 @@ describe('SpatiotemporalTileset selection settle', () => {
     expect(tileset.isLoaded).toBe(true);
 
     // Identical viewport/window: the selection fast-path keeps the version.
-    tileset.update({ bounds: BOUNDS, zoom: 6, time: 0, timeWindow: BUCKET_MS }, true);
+    tileset.update(
+      { bounds: BOUNDS, zoom: 6, time: 0, timeWindow: BUCKET_MS },
+      true,
+    );
     await settle();
     expect(tileset.selectionVersion).toBe(1);
     expect(tileset.isLoaded).toBe(true);
@@ -97,7 +109,10 @@ describe('SpatiotemporalTileset selection settle', () => {
     const batches: GatedBatch[] = [];
     const tileset = makeTileset(batches);
 
-    tileset.update({ bounds: BOUNDS, zoom: 6, time: 0, timeWindow: BUCKET_MS }, true);
+    tileset.update(
+      { bounds: BOUNDS, zoom: 6, time: 0, timeWindow: BUCKET_MS },
+      true,
+    );
     await settle();
     expect(tileset.isLoaded).toBe(false);
 

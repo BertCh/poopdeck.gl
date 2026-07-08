@@ -19,19 +19,25 @@
  * in sync. The follow easing is a single rAF loop with time-based smoothing —
  * see {@link followCamera} for why (and how it's configured).
  */
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import DeckGL from "@deck.gl/react";
-import { SolidPolygonLayer } from "@deck.gl/layers";
-import { Map } from "react-map-gl";
-import type { TimeController } from "@poopdeck.gl/playback";
-import type { SourceRegistry } from "@poopdeck.gl/react";
-import { buildDemoLayers } from "../demo/buildDemoLayers";
-import { buildGoogle3DTilesLayer } from "./googleTiles";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
+import DeckGL from '@deck.gl/react';
+import { SolidPolygonLayer } from '@deck.gl/layers';
+import { Map } from 'react-map-gl';
+import type { TimeController } from '@poopdeck.gl/playback';
+import type { SourceRegistry } from '@poopdeck.gl/react';
+import { buildDemoLayers } from '../demo/buildDemoLayers';
+import { buildGoogle3DTilesLayer } from './googleTiles';
 import {
   buildEgoFootprintLayer,
   buildEgoPathLayer,
   type EgoPathPoint,
-} from "./egoLayers";
+} from './egoLayers';
 import {
   DEFAULT_FOLLOW_CONFIG,
   desiredCameraAt,
@@ -39,11 +45,11 @@ import {
   shortestAngleDelta,
   smoothAngle,
   type FollowCameraConfig,
-} from "./followCamera";
-import type { PickedObject } from "./ObjectInspector";
-import type { Dataset } from "../../types";
-import type { AvStreamKey } from "./sceneTypes";
-import { MAPBOX_ACCESS_TOKEN } from "../../lib/mapboxToken";
+} from './followCamera';
+import type { PickedObject } from './ObjectInspector';
+import type { Dataset } from '../../types';
+import type { AvStreamKey } from './sceneTypes';
+import { MAPBOX_ACCESS_TOKEN } from '../../lib/mapboxToken';
 
 export interface AvDeckProps {
   dataset: Dataset;
@@ -136,29 +142,29 @@ export interface AvDeckProps {
 
 /** Which streams own which built layer (by the id suffix buildDemoLayers sets). */
 function layerStream(layerId: string, datasetId: string): AvStreamKey {
-  if (layerId === `${datasetId}-ego`) return "ego";
-  if (layerId === `${datasetId}-objects`) return "objects";
+  if (layerId === `${datasetId}-ego`) return 'ego';
+  if (layerId === `${datasetId}-objects`) return 'objects';
   if (
     layerId === `${datasetId}-map-poly` ||
     layerId === `${datasetId}-map-line`
   )
-    return "map";
-  return "lidar"; // the primary layer carries the bare dataset id
+    return 'map';
+  return 'lidar'; // the primary layer carries the bare dataset id
 }
 
 /** Tile streams that register a governor source (telemetry/camera are sidecars). */
-const GOVERNED_STREAMS: AvStreamKey[] = ["lidar", "ego", "objects", "map"];
+const GOVERNED_STREAMS: AvStreamKey[] = ['lidar', 'ego', 'objects', 'map'];
 
 /** Governor source id(s) a stream registers — the inverse of {@link layerStream}. */
 function streamSourceIds(stream: AvStreamKey, datasetId: string): string[] {
   switch (stream) {
-    case "ego":
+    case 'ego':
       return [`${datasetId}-ego`];
-    case "objects":
+    case 'objects':
       return [`${datasetId}-objects`];
-    case "map":
+    case 'map':
       return [`${datasetId}-map-poly`, `${datasetId}-map-line`];
-    case "lidar":
+    case 'lidar':
       return [datasetId]; // primary layer carries the bare dataset id
     default:
       return []; // telemetry / camera are sidecar JSON, not governor sources
@@ -206,8 +212,11 @@ const AvDeck: React.FC<AvDeckProps> = ({
   const lastReportedZoom = useRef<number | null>(null);
   useEffect(() => {
     const z = viewState?.zoom;
-    if (typeof z !== "number" || !onCameraZoom) return;
-    if (lastReportedZoom.current !== null && Math.abs(lastReportedZoom.current - z) < 0.05)
+    if (typeof z !== 'number' || !onCameraZoom) return;
+    if (
+      lastReportedZoom.current !== null &&
+      Math.abs(lastReportedZoom.current - z) < 0.05
+    )
       return;
     lastReportedZoom.current = z;
     onCameraZoom(z);
@@ -215,7 +224,7 @@ const AvDeck: React.FC<AvDeckProps> = ({
 
   // Pitch toggle: morph between perspective (the dataset's initial pitch) and
   // a top-down plan view. Snaps under reduced motion, eases otherwise.
-  const targetPitch = topDown ? 0 : dataset.initialViewState.pitch ?? 55;
+  const targetPitch = topDown ? 0 : (dataset.initialViewState.pitch ?? 55);
 
   // Re-frame the camera on a scene switch. `viewState` is seeded ONCE by the
   // useState initializer above, so without this the camera stays parked over
@@ -230,7 +239,11 @@ const AvDeck: React.FC<AvDeckProps> = ({
   useEffect(() => {
     if (framedSceneIdRef.current === dataset.id) return;
     framedSceneIdRef.current = dataset.id;
-    setViewState({ ...dataset.initialViewState, pitch: targetPitch, maxPitch: 75 });
+    setViewState({
+      ...dataset.initialViewState,
+      pitch: targetPitch,
+      maxPitch: 75,
+    });
     // targetPitch is read fresh from this render's closure but is deliberately
     // NOT a dep — toggling top-down WITHIN a scene must not recenter the camera.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -246,7 +259,12 @@ const AvDeck: React.FC<AvDeckProps> = ({
   // ~200 m-tall cube).
   useEffect(() => {
     if (!sceneView || cubeMode) return;
-    setViewState((vs: any) => ({ ...vs, ...sceneView, pitch: targetPitch, maxPitch: 75 }));
+    setViewState((vs: any) => ({
+      ...vs,
+      ...sceneView,
+      pitch: targetPitch,
+      maxPitch: 75,
+    }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sceneView, cubeMode]);
 
@@ -283,7 +301,8 @@ const AvDeck: React.FC<AvDeckProps> = ({
     const step = () => {
       setViewState((vs: any) => {
         const next = vs.pitch + (targetPitch - vs.pitch) * 0.18;
-        if (Math.abs(targetPitch - next) < 0.3) return { ...vs, pitch: targetPitch };
+        if (Math.abs(targetPitch - next) < 0.3)
+          return { ...vs, pitch: targetPitch };
         raf = requestAnimationFrame(step);
         return { ...vs, pitch: next };
       });
@@ -322,7 +341,7 @@ const AvDeck: React.FC<AvDeckProps> = ({
         }));
       };
       snap();
-      return timeController.on("tick", snap);
+      return timeController.on('tick', snap);
     }
 
     let raf = 0;
@@ -340,7 +359,8 @@ const AvDeck: React.FC<AvDeckProps> = ({
         const aZoom = first ? 1 : expAlpha(dt, cfg.zoomTau);
         first = false;
         setViewState((vs: any) => {
-          const longitude = vs.longitude + (want.longitude - vs.longitude) * aPos;
+          const longitude =
+            vs.longitude + (want.longitude - vs.longitude) * aPos;
           const latitude = vs.latitude + (want.latitude - vs.latitude) * aPos;
           const next: any = { ...vs, longitude, latitude };
           if (want.bearing !== undefined) {
@@ -356,7 +376,8 @@ const AvDeck: React.FC<AvDeckProps> = ({
             next.bearing !== undefined
               ? Math.abs(shortestAngleDelta(vs.bearing ?? 0, next.bearing))
               : 0;
-          const dZoom = next.zoom !== undefined ? Math.abs(next.zoom - vs.zoom) : 0;
+          const dZoom =
+            next.zoom !== undefined ? Math.abs(next.zoom - vs.zoom) : 0;
           if (
             Math.abs(longitude - vs.longitude) < 1e-7 &&
             Math.abs(latitude - vs.latitude) < 1e-7 &&
@@ -372,7 +393,14 @@ const AvDeck: React.FC<AvDeckProps> = ({
     };
     raf = requestAnimationFrame(step);
     return () => cancelAnimationFrame(raf);
-  }, [cubeMode, egoFollow, egoPath, followConfig, reducedMotion, timeController]);
+  }, [
+    cubeMode,
+    egoFollow,
+    egoPath,
+    followConfig,
+    reducedMotion,
+    timeController,
+  ]);
 
   const tileLayers = useMemo(() => {
     const all = buildDemoLayers({
@@ -387,7 +415,14 @@ const AvDeck: React.FC<AvDeckProps> = ({
     return all.filter((l: any) =>
       visibleStreams.has(layerStream(l.id, dataset.id)),
     );
-  }, [dataset, timeController, registry, visibleStreams, perfMode, timeHeightScale]);
+  }, [
+    dataset,
+    timeController,
+    registry,
+    visibleStreams,
+    perfMode,
+    timeHeightScale,
+  ]);
 
   // Lifecycle reconciliation. A layer filtered out above is unmounted by deck,
   // but the governor source it registered (via onTilesetReady while it was
@@ -413,10 +448,11 @@ const AvDeck: React.FC<AvDeckProps> = ({
   useEffect(() => {
     if (!egoPath || egoPath.length === 0) return;
     setEgoTime(timeController.getTime());
-    return timeController.on("tick", (t: number) => setEgoTime(t));
+    return timeController.on('tick', (t: number) => setEgoTime(t));
   }, [egoPath, timeController]);
   const egoLayers = useMemo(() => {
-    if (!egoPath || egoPath.length === 0 || !visibleStreams.has("ego")) return [];
+    if (!egoPath || egoPath.length === 0 || !visibleStreams.has('ego'))
+      return [];
     return [
       buildEgoPathLayer({ path: egoPath, time: egoTime }),
       buildEgoFootprintLayer({ path: egoPath, time: egoTime }),
@@ -432,7 +468,10 @@ const AvDeck: React.FC<AvDeckProps> = ({
   const cubeOverlayLayers = useMemo(() => {
     if (!cubeMode) return [];
     // Scene extent: union of the ego polyline, else a small box around center.
-    let minLon = Infinity, minLat = Infinity, maxLon = -Infinity, maxLat = -Infinity;
+    let minLon = Infinity,
+      minLat = Infinity,
+      maxLon = -Infinity,
+      maxLat = -Infinity;
     if (egoPath && egoPath.length > 0) {
       for (const p of egoPath) {
         if (p.lon < minLon) minLon = p.lon;
@@ -443,11 +482,16 @@ const AvDeck: React.FC<AvDeckProps> = ({
       // Pad the bbox a little so the plane fully covers the ribbon bundle.
       const padLon = (maxLon - minLon) * 0.15 || 0.001;
       const padLat = (maxLat - minLat) * 0.15 || 0.001;
-      minLon -= padLon; maxLon += padLon; minLat -= padLat; maxLat += padLat;
+      minLon -= padLon;
+      maxLon += padLon;
+      minLat -= padLat;
+      maxLat += padLat;
     } else {
       const { longitude, latitude } = dataset.initialViewState;
-      minLon = longitude - 0.002; maxLon = longitude + 0.002;
-      minLat = latitude - 0.0015; maxLat = latitude + 0.0015;
+      minLon = longitude - 0.002;
+      maxLon = longitude + 0.002;
+      minLat = latitude - 0.0015;
+      maxLat = latitude + 0.0015;
     }
     const zNow =
       Math.max(0, egoTime - dataset.timeRange.start) * timeHeightScale;
@@ -468,7 +512,15 @@ const AvDeck: React.FC<AvDeckProps> = ({
         parameters: { depthWriteEnabled: false } as any,
       }),
     ];
-  }, [cubeMode, egoPath, egoTime, timeHeightScale, dataset.id, dataset.initialViewState, dataset.timeRange.start]);
+  }, [
+    cubeMode,
+    egoPath,
+    egoTime,
+    timeHeightScale,
+    dataset.id,
+    dataset.initialViewState,
+    dataset.timeRange.start,
+  ]);
 
   // Google Photorealistic 3D Tiles backdrop. Built only when the cockpit turns
   // it on for a key-configured, opted-in scene. Drawn LAST (appended) so the
@@ -542,9 +594,9 @@ const AvDeck: React.FC<AvDeckProps> = ({
   const handleClick = useCallback(
     (info: any) => {
       if (!onSelectObject) return;
-      const id = String(info?.layer?.id ?? "");
+      const id = String(info?.layer?.id ?? '');
       const o = info?.object;
-      if (o && id.endsWith("-objects")) {
+      if (o && id.endsWith('-objects')) {
         const p = o.properties ?? o;
         onSelectObject({
           category: p.category,
@@ -581,7 +633,7 @@ const AvDeck: React.FC<AvDeckProps> = ({
       // the single biggest fill-rate lever for the LIDAR cloud (4–9× fewer
       // fragments shaded/blended), at the cost of a softer image.
       useDevicePixels={perfMode ? false : true}
-      style={{ background: "transparent" }}
+      style={{ background: 'transparent' }}
     >
       {/* Street basemap only for geo-registered scenes (nuScenes / Argoverse).
           Anchored local-frame scenes (Waymo — no disclosed lat/lon) drop it so the
@@ -597,7 +649,7 @@ const AvDeck: React.FC<AvDeckProps> = ({
           reuseMaps
           mapStyle="mapbox://styles/mapbox/dark-v11"
           mapboxAccessToken={MAPBOX_ACCESS_TOKEN}
-          projection={{ name: "mercator" }}
+          projection={{ name: 'mercator' }}
         />
       )}
     </DeckGL>

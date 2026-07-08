@@ -42,7 +42,9 @@ describe('telemetry', () => {
   });
 
   it('emit() is a no-op when __sttProbe is unset (no global mutation, no throw)', () => {
-    expect(() => emit('consolidations', { ms: 1, n: 1, layer: 'x' })).not.toThrow();
+    expect(() =>
+      emit('consolidations', { ms: 1, n: 1, layer: 'x' }),
+    ).not.toThrow();
     expect(
       (globalThis as unknown as { __sttProbe?: ProbeBag }).__sttProbe,
     ).toBeUndefined();

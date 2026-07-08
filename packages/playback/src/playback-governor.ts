@@ -51,9 +51,18 @@ export interface BufferedRunway {
  * drive it with a plain object.
  */
 export interface BufferSource {
-  getBufferedRunway(time: number, direction: 1 | -1, horizonSimMs?: number): BufferedRunway;
-  getBufferedRanges(opts?: { maxRanges?: number }): Array<{ start: number; end: number }>;
-  estimateCost(range: { start: number; end: number }): { bytes: number; tiles: number };
+  getBufferedRunway(
+    time: number,
+    direction: 1 | -1,
+    horizonSimMs?: number,
+  ): BufferedRunway;
+  getBufferedRanges(opts?: {
+    maxRanges?: number;
+  }): Array<{ start: number; end: number }>;
+  estimateCost(range: { start: number; end: number }): {
+    bytes: number;
+    tiles: number;
+  };
   estimateTimeToReadyMs(range: { start: number; end: number }): number | null;
   flushPrefetch(): void;
   /**
@@ -94,7 +103,12 @@ export interface ThroughputEstimate {
  * - `seeking`   — a committed seek while intent is "playing"; clock frozen,
  *                 waiting for a plain (startup-sized) post-seek gate.
  */
-export type PlaybackGovernorState = 'idle' | 'starting' | 'playing' | 'buffering' | 'seeking';
+export type PlaybackGovernorState =
+  | 'idle'
+  | 'starting'
+  | 'playing'
+  | 'buffering'
+  | 'seeking';
 
 export interface PlaybackGovernorOptions {
   /**
@@ -394,7 +408,10 @@ export class PlaybackGovernor {
    * range end, or legacy code pausing directly) drops user intent; a speed
    * change (which fires playState while playing) is a re-plan event.
    */
-  private readonly playStateHandler = (playing: boolean, _speed: number): void => {
+  private readonly playStateHandler = (
+    playing: boolean,
+    _speed: number,
+  ): void => {
     if (this.suppressPlayStateSync || this.disposed) return;
     if (!playing && this._state === 'playing' && this.userWantsPlayback) {
       // External pause — honor it as user intent so we don't resurrect playback.
@@ -498,7 +515,10 @@ export class PlaybackGovernor {
     this.emit('ended', time);
   };
 
-  constructor(timeController: TimeController, opts: PlaybackGovernorOptions = {}) {
+  constructor(
+    timeController: TimeController,
+    opts: PlaybackGovernorOptions = {},
+  ) {
     this.timeController = timeController;
     this.startGateWallMs = opts.startGateWallMs ?? 2000;
     this.lowWatermarkWallMs = opts.lowWatermarkWallMs ?? 600;
@@ -508,7 +528,10 @@ export class PlaybackGovernor {
     this.getThroughput = opts.getThroughput ?? null;
     // Tolerance defaults to one tick-probe interval of consumption (see option
     // docs + §6 Decision 1). A negative value would invert the band, so clamp.
-    this.runwayToleranceMs = Math.max(0, opts.runwayToleranceMs ?? TICK_PROBE_INTERVAL_MS);
+    this.runwayToleranceMs = Math.max(
+      0,
+      opts.runwayToleranceMs ?? TICK_PROBE_INTERVAL_MS,
+    );
     if (opts.source) this.setSource(opts.source);
 
     this.timeController.on('playState', this.playStateHandler);
@@ -558,13 +581,19 @@ export class PlaybackGovernor {
   }
 
   /** Register an event listener. Returns an unsubscribe function. */
-  on<K extends GovernorEventName>(event: K, callback: GovernorEventMap[K]): () => void {
+  on<K extends GovernorEventName>(
+    event: K,
+    callback: GovernorEventMap[K],
+  ): () => void {
     this.listeners[event].add(callback);
     return () => this.off(event, callback);
   }
 
   /** Unregister an event listener. */
-  off<K extends GovernorEventName>(event: K, callback: GovernorEventMap[K]): void {
+  off<K extends GovernorEventName>(
+    event: K,
+    callback: GovernorEventMap[K],
+  ): void {
     this.listeners[event].delete(callback);
   }
 
@@ -590,7 +619,9 @@ export class PlaybackGovernor {
     source: BufferSource,
     opts: { required?: boolean; weight?: number } = {},
   ): void {
-    if (typeof (source as Partial<BufferSource>).getBufferedRunway !== 'function') {
+    if (
+      typeof (source as Partial<BufferSource>).getBufferedRunway !== 'function'
+    ) {
       // eslint-disable-next-line no-console
       console.warn(
         '[PlaybackGovernor] source lacks the buffering API (getBufferedRunway); ' +
@@ -690,7 +721,9 @@ export class PlaybackGovernor {
       this.endedAtBoundary = false;
       const range = this.timeController.getTimeRange();
       if (range) {
-        this.commitSeek(this.timeController.getSpeed() < 0 ? range.end : range.start);
+        this.commitSeek(
+          this.timeController.getSpeed() < 0 ? range.end : range.start,
+        );
         return;
       }
     }
@@ -712,7 +745,8 @@ export class PlaybackGovernor {
     // budget — undo any animating-at-speed assertion a gate made. Broadcasts
     // to all sources (required AND optional): optional sources never gate the
     // clock but they DO load, so they must also be told to stand down.
-    for (const source of this.allSources()) source.setAnimationState?.(false, 0);
+    for (const source of this.allSources())
+      source.setAnimationState?.(false, 0);
     this.setState('idle');
   }
 
@@ -816,7 +850,9 @@ export class PlaybackGovernor {
    * Returns [] when there are no required sources. (Phase 4 may surface a
    * richer per-source multi-track bar; this keeps the single-bar contract.)
    */
-  getBufferedRanges(opts?: { maxRanges?: number }): Array<{ start: number; end: number }> {
+  getBufferedRanges(opts?: {
+    maxRanges?: number;
+  }): Array<{ start: number; end: number }> {
     const required = this.requiredSources();
     if (required.length === 0) return [];
     // Probe each source WITHOUT maxRanges for the intersection inputs: a
@@ -842,7 +878,10 @@ export class PlaybackGovernor {
    * composite must do. Zeros without any source. UIs use it for ETA chips and
    * timeline density strips.
    */
-  estimateCost(range: { start: number; end: number }): { bytes: number; tiles: number } {
+  estimateCost(range: { start: number; end: number }): {
+    bytes: number;
+    tiles: number;
+  } {
     let bytes = 0;
     let tiles = 0;
     for (const source of this.allSources()) {
@@ -1012,7 +1051,9 @@ export class PlaybackGovernor {
         else if (etaMs > 0 && cost.bytes > 0) {
           const linkRate = cost.bytes / etaMs; // = sharedLinkRate (see above)
           maxLinkRateBytesPerMs =
-            maxLinkRateBytesPerMs == null ? linkRate : Math.max(maxLinkRateBytesPerMs, linkRate);
+            maxLinkRateBytesPerMs == null
+              ? linkRate
+              : Math.max(maxLinkRateBytesPerMs, linkRate);
         }
       }
     }
@@ -1028,10 +1069,18 @@ export class PlaybackGovernor {
 
     let aggregateBytesPerMs: number | null = null;
     const throughput = this.getThroughput?.();
-    if (throughput && throughput.bytesPerMs != null && throughput.bytesPerMs > 0) {
+    if (
+      throughput &&
+      throughput.bytesPerMs != null &&
+      throughput.bytesPerMs > 0
+    ) {
       // Read as the AGGREGATE shared-link rate (see throughput assumption above).
       aggregateBytesPerMs = throughput.bytesPerMs;
-    } else if (!anyEtaBlind && maxLinkRateBytesPerMs != null && maxLinkRateBytesPerMs > 0) {
+    } else if (
+      !anyEtaBlind &&
+      maxLinkRateBytesPerMs != null &&
+      maxLinkRateBytesPerMs > 0
+    ) {
       // No direct estimator wired — imply the shared-link rate from the per-source
       // ETAs (bytes_i / eta_i, all equal to the one link rate; max is the most
       // defensible single estimate). Contention is applied below by dividing this
@@ -1205,7 +1254,11 @@ export class PlaybackGovernor {
     }
     this._state = next;
     this.emit('statechange', next);
-    emitProbe('playback', { event: 'statechange', state: next, ...this.getQoeStats() });
+    emitProbe('playback', {
+      event: 'statechange',
+      state: next,
+      ...this.getQoeStats(),
+    });
   }
 
   /**
@@ -1224,7 +1277,11 @@ export class PlaybackGovernor {
   }
 
   private isGated(): boolean {
-    return this._state === 'starting' || this._state === 'buffering' || this._state === 'seeking';
+    return (
+      this._state === 'starting' ||
+      this._state === 'buffering' ||
+      this._state === 'seeking'
+    );
   }
 
   /**
@@ -1256,7 +1313,10 @@ export class PlaybackGovernor {
     }
   }
 
-  private enterGate(state: 'starting' | 'buffering' | 'seeking', factor: number): void {
+  private enterGate(
+    state: 'starting' | 'buffering' | 'seeking',
+    factor: number,
+  ): void {
     this.gateFactor = factor;
     this.gateStartedAtWall = nowWall();
     this.pauseClock();
@@ -1267,11 +1327,17 @@ export class PlaybackGovernor {
     // see BufferSource). Broadcast to optional sources too: they must keep
     // loading even though they don't gate.
     const gateSpeed = this.timeController.getSpeed();
-    for (const source of this.allSources()) source.setAnimationState?.(true, gateSpeed);
+    for (const source of this.allSources())
+      source.setAnimationState?.(true, gateSpeed);
     this.setState(state);
     const etaMs = this.getEtaMs();
     this.emit('waiting', { state, etaMs });
-    emitProbe('playback', { event: 'waiting', state, etaMs, ...this.getQoeStats() });
+    emitProbe('playback', {
+      event: 'waiting',
+      state,
+      etaMs,
+      ...this.getQoeStats(),
+    });
     // Evaluate once immediately (the gate may already be satisfied — e.g. a
     // backward seek into cached time); otherwise poll at the gated cadence.
     if (!this.evaluateGate()) {
@@ -1348,7 +1414,13 @@ export class PlaybackGovernor {
         // small floor so an instant network passes a cold gate). Without
         // this, gates scale linearly with |speed| and a 10× sweep can demand
         // sim-years of runway that no loader is meant to hold up front.
-        passed = this.predictsPlaythrough(time, direction, requiredSimMs, runway, absSpeed);
+        passed = this.predictsPlaythrough(
+          time,
+          direction,
+          requiredSimMs,
+          runway,
+          absSpeed,
+        );
       }
     }
     if (!passed && nowWall() - this.gateStartedAtWall >= this.maxStartWaitMs) {
@@ -1380,7 +1452,12 @@ export class PlaybackGovernor {
     this.setState('playing');
     this.playClock();
     this.emit('ready', { degraded });
-    emitProbe('playback', { event: 'ready', state: 'playing', degraded, ...this.getQoeStats() });
+    emitProbe('playback', {
+      event: 'ready',
+      state: 'playing',
+      degraded,
+      ...this.getQoeStats(),
+    });
     return true;
   }
 
@@ -1466,7 +1543,16 @@ export class PlaybackGovernor {
       // Same canplaythrough predictor as the gate: don't stall when the
       // loader is predicted to outrun consumption — a thin runway on a fast
       // network is fine; a thin runway on a slow one is an imminent dry-out.
-      if (this.predictsPlaythrough(time, direction, watermarkSimMs, runway, absSpeed)) return;
+      if (
+        this.predictsPlaythrough(
+          time,
+          direction,
+          watermarkSimMs,
+          runway,
+          absSpeed,
+        )
+      )
+        return;
       this.enterGate('buffering', this.resumeFactor);
     }
   }
@@ -1512,7 +1598,10 @@ export class PlaybackGovernor {
   private gateRange(): { start: number; end: number } {
     const speed = this.timeController.getSpeed();
     const factor = this.isGated() ? this.gateFactor : 1;
-    const spanSimMs = Math.max(1, this.startGateWallMs * Math.abs(speed) * factor);
+    const spanSimMs = Math.max(
+      1,
+      this.startGateWallMs * Math.abs(speed) * factor,
+    );
     const time = this.timeController.getTime();
     return speed < 0
       ? { start: time - spanSimMs, end: time }

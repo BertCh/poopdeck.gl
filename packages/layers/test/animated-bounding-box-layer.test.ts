@@ -83,12 +83,18 @@ const DEG = Math.PI / 180;
 // accessors (deck's SimpleMeshLayer folds them into the computed
 // instanceModelMatrix built from the props — a binary data.attributes.* is
 // dropped). Read the value the matrix updater actually consumes per instance.
-const oriOf = (layer: any, i = 0): number[] => layer.props.getOrientation(null, { index: i });
-const sclOf = (layer: any, i = 0): number[] => layer.props.getScale(null, { index: i });
-const xlnOf = (layer: any, i = 0): number[] => layer.props.getTranslation(null, { index: i });
+const oriOf = (layer: any, i = 0): number[] =>
+  layer.props.getOrientation(null, { index: i });
+const sclOf = (layer: any, i = 0): number[] =>
+  layer.props.getScale(null, { index: i });
+const xlnOf = (layer: any, i = 0): number[] =>
+  layer.props.getTranslation(null, { index: i });
 
 /** Build a categorical {indices, categories} column from string values. */
-function categorical(values: string[]): { indices: Uint16Array; categories: string[] } {
+function categorical(values: string[]): {
+  indices: Uint16Array;
+  categories: string[];
+} {
   const categories: string[] = [];
   const map = new Map<string, number>();
   const indices = new Uint16Array(values.length);
@@ -121,7 +127,10 @@ interface ObjRow {
 /** Build a fake object (point) tile of tracked-object snapshots. */
 function makeObjTile(
   rows: ObjRow[],
-  opts: { timeOffset?: number; tileId?: { z: number; x: number; y: number; t: number } } = {},
+  opts: {
+    timeOffset?: number;
+    tileId?: { z: number; x: number; y: number; t: number };
+  } = {},
 ): Tile {
   const tile = makePointTile({
     positions: rows.map((r) => [r.lon, r.lat]),
@@ -132,14 +141,26 @@ function makeObjTile(
   });
   const f = tile.layers[0].features;
   if (rows.some((r) => r.track !== undefined)) {
-    f.categoricalProps['track_id'] = categorical(rows.map((r) => r.track ?? ''));
+    f.categoricalProps['track_id'] = categorical(
+      rows.map((r) => r.track ?? ''),
+    );
   }
   if (rows.some((r) => r.category !== undefined)) {
-    f.categoricalProps['category'] = categorical(rows.map((r) => r.category ?? ''));
+    f.categoricalProps['category'] = categorical(
+      rows.map((r) => r.category ?? ''),
+    );
   }
-  for (const col of ['heading', 'length', 'width', 'height', 'speed'] as const) {
+  for (const col of [
+    'heading',
+    'length',
+    'width',
+    'height',
+    'speed',
+  ] as const) {
     if (rows.some((r) => r[col] !== undefined)) {
-      f.numericProps[col] = new Float32Array(rows.map((r) => (r[col] ?? NaN) as number));
+      f.numericProps[col] = new Float32Array(
+        rows.map((r) => (r[col] ?? NaN) as number),
+      );
     }
   }
   return tile;
@@ -224,12 +245,16 @@ describe('AnimatedBoundingBoxLayer', () => {
     expect(LayerCtor.defaultProps.labelProperty).toBe('category');
     expect(LayerCtor.defaultProps.showVelocity).toBe(false);
     expect(LayerCtor.defaultProps.speedProperty).toBe('speed');
-    expect(LayerCtor.defaultProps.velocityColor.value).toEqual([80, 255, 220, 255]);
+    expect(LayerCtor.defaultProps.velocityColor.value).toEqual([
+      80, 255, 220, 255,
+    ]);
     // Outline (stroked) parity props.
     expect(LayerCtor.defaultProps.strokeColor.value).toBe(null);
     expect(LayerCtor.defaultProps.getLineColor.value).toBe(null);
     expect(LayerCtor.defaultProps.strokeWidthUnits).toBe('pixels');
-    expect(LayerCtor.defaultProps.strokeWidthMaxPixels.value).toBe(Number.MAX_SAFE_INTEGER);
+    expect(LayerCtor.defaultProps.strokeWidthMaxPixels.value).toBe(
+      Number.MAX_SAFE_INTEGER,
+    );
     // Base defaults spread in.
     expect(LayerCtor.defaultProps.timeWindow).toBeDefined();
     expect(LayerCtor.defaultProps.tier).toBeDefined();
@@ -331,10 +356,46 @@ describe('AnimatedBoundingBoxLayer', () => {
     // These are function accessors, NOT binary attributes: deck's SimpleMeshLayer
     // would silently drop a data.attributes.getOrientation/getScale/getTranslation.
     const tile = makeObjTile([
-      { track: 'A', lon: 0, lat: 0, t: 0, heading: 0, length: 4, width: 2, height: 1.6 },
-      { track: 'A', lon: 0, lat: 0, t: 1000, heading: 0, length: 4, width: 2, height: 1.6 },
-      { track: 'B', lon: 1, lat: 0, t: 0, heading: Math.PI / 2, length: 6, width: 3, height: 2 },
-      { track: 'B', lon: 1, lat: 0, t: 1000, heading: Math.PI / 2, length: 6, width: 3, height: 2 },
+      {
+        track: 'A',
+        lon: 0,
+        lat: 0,
+        t: 0,
+        heading: 0,
+        length: 4,
+        width: 2,
+        height: 1.6,
+      },
+      {
+        track: 'A',
+        lon: 0,
+        lat: 0,
+        t: 1000,
+        heading: 0,
+        length: 4,
+        width: 2,
+        height: 1.6,
+      },
+      {
+        track: 'B',
+        lon: 1,
+        lat: 0,
+        t: 0,
+        heading: Math.PI / 2,
+        length: 6,
+        width: 3,
+        height: 2,
+      },
+      {
+        track: 'B',
+        lon: 1,
+        lat: 0,
+        t: 1000,
+        heading: Math.PI / 2,
+        length: 6,
+        width: 3,
+        height: 2,
+      },
     ]);
     const boxes = render([tile], 500)[0];
     expect(typeof boxes.props.getOrientation).toBe('function');
@@ -355,8 +416,24 @@ describe('AnimatedBoundingBoxLayer', () => {
 
   it('bakes length/width/height into getScale × 0.5 (CubeGeometry spans ±1) and ground-lift', () => {
     const tile = makeObjTile([
-      { track: 'A', lon: 0, lat: 0, t: 0, length: 4.5, width: 1.8, height: 1.6 },
-      { track: 'A', lon: 0, lat: 0, t: 1000, length: 4.5, width: 1.8, height: 1.6 },
+      {
+        track: 'A',
+        lon: 0,
+        lat: 0,
+        t: 0,
+        length: 4.5,
+        width: 1.8,
+        height: 1.6,
+      },
+      {
+        track: 'A',
+        lon: 0,
+        lat: 0,
+        t: 1000,
+        length: 4.5,
+        width: 1.8,
+        height: 1.6,
+      },
     ]);
     const boxes = render([tile], 500)[0];
     const scl = sclOf(boxes);
@@ -398,7 +475,10 @@ describe('AnimatedBoundingBoxLayer', () => {
 
   it('honors custom heading/length/width/height/track-id property names', () => {
     const tile = makePointTile({
-      positions: [[0, 0], [0, 0]],
+      positions: [
+        [0, 0],
+        [0, 0],
+      ],
       startTimes: [0, 1000],
       endTimes: [0, 1000],
       timeOffset: 0,
@@ -466,8 +546,9 @@ describe('AnimatedBoundingBoxLayer', () => {
       { track: 'A', lon: 0, lat: 0, t: 0 },
       { track: 'A', lon: 0, lat: 0, t: 1000 },
     ]);
-    const color = render([tile], 500, { colorMappingDefault: [10, 20, 30, 255] })[0].props
-      .data.attributes.getColor.value;
+    const color = render([tile], 500, {
+      colorMappingDefault: [10, 20, 30, 255],
+    })[0].props.data.attributes.getColor.value;
     expect(Array.from(color.slice(0, 4))).toEqual([10, 20, 30, 255]);
   });
 
@@ -521,13 +602,22 @@ describe('AnimatedBoundingBoxLayer', () => {
 
   it('reads a custom labelProperty (e.g. track_id) for the label text', () => {
     const tile = makePointTile({
-      positions: [[0, 0], [0, 0]],
+      positions: [
+        [0, 0],
+        [0, 0],
+      ],
       startTimes: [0, 1000],
       endTimes: [0, 1000],
       timeOffset: 0,
     });
-    tile.layers[0].features.categoricalProps['track_id'] = categorical(['t-7', 't-7']);
-    const layers = render([tile], 500, { showLabels: true, labelProperty: 'track_id' });
+    tile.layers[0].features.categoricalProps['track_id'] = categorical([
+      't-7',
+      't-7',
+    ]);
+    const layers = render([tile], 500, {
+      showLabels: true,
+      labelProperty: 'track_id',
+    });
     const data = layers[1].props.data;
     expect(layers[1].props.getText(data[0])).toBe('t-7');
   });
@@ -537,7 +627,10 @@ describe('AnimatedBoundingBoxLayer', () => {
       { track: 'A', lon: 0, lat: 0, t: 0, heading: 0, speed: 10 }, // east
       { track: 'A', lon: 0, lat: 0, t: 1000, heading: 0, speed: 10 },
     ]);
-    const layers = render([tile], 500, { showVelocity: true, velocityScale: 2 });
+    const layers = render([tile], 500, {
+      showVelocity: true,
+      velocityScale: 2,
+    });
     expect(layers.length).toBe(2);
     const vel = layers[1];
     expect(vel.constructor.layerName).toBe('LineLayer');
@@ -557,7 +650,8 @@ describe('AnimatedBoundingBoxLayer', () => {
       { track: 'A', lon: 5, lat: 10, t: 0, heading: 0, speed: 0.1 }, // < 0.3
       { track: 'A', lon: 5, lat: 10, t: 1000, heading: 0, speed: 0.1 },
     ]);
-    const attrs = render([tile], 500, { showVelocity: true })[1].props.data.attributes;
+    const attrs = render([tile], 500, { showVelocity: true })[1].props.data
+      .attributes;
     const src = attrs.getSourcePosition.value;
     const tgt = attrs.getTargetPosition.value;
     expect(tgt[0]).toBe(src[0]);
@@ -575,10 +669,29 @@ describe('AnimatedBoundingBoxLayer', () => {
 
   it('emits boxes + labels + velocity together (3 sublayers) when both are on', () => {
     const tile = makeObjTile([
-      { track: 'A', lon: 0, lat: 0, t: 0, category: 'car', speed: 5, heading: 0 },
-      { track: 'A', lon: 0, lat: 0, t: 1000, category: 'car', speed: 5, heading: 0 },
+      {
+        track: 'A',
+        lon: 0,
+        lat: 0,
+        t: 0,
+        category: 'car',
+        speed: 5,
+        heading: 0,
+      },
+      {
+        track: 'A',
+        lon: 0,
+        lat: 0,
+        t: 1000,
+        category: 'car',
+        speed: 5,
+        heading: 0,
+      },
     ]);
-    const layers = render([tile], 500, { showLabels: true, showVelocity: true });
+    const layers = render([tile], 500, {
+      showLabels: true,
+      showVelocity: true,
+    });
     expect(layers.length).toBe(3);
     expect(layers[0].props.mesh).toBeDefined();
     expect(layers[1].constructor.layerName).toBe('TextLayer');
@@ -589,8 +702,30 @@ describe('AnimatedBoundingBoxLayer', () => {
 
   it('attaches per-track pick rows and resolves info.object on a hit', () => {
     const tile = makeObjTile([
-      { track: 't-7', lon: 0, lat: 0, t: 0, category: 'car', heading: 0, length: 4, width: 2, height: 1.6, speed: 8 },
-      { track: 't-7', lon: 10, lat: 0, t: 1000, category: 'car', heading: 0, length: 4, width: 2, height: 1.6, speed: 8 },
+      {
+        track: 't-7',
+        lon: 0,
+        lat: 0,
+        t: 0,
+        category: 'car',
+        heading: 0,
+        length: 4,
+        width: 2,
+        height: 1.6,
+        speed: 8,
+      },
+      {
+        track: 't-7',
+        lon: 10,
+        lat: 0,
+        t: 1000,
+        category: 'car',
+        heading: 0,
+        length: 4,
+        width: 2,
+        height: 1.6,
+        speed: 8,
+      },
     ]);
     const layer = makeLayer({ colorProperty: 'category' });
     layer.state = { tiles: [tile] };
@@ -614,8 +749,26 @@ describe('AnimatedBoundingBoxLayer', () => {
 
   it('renders a 12-edge LineLayer outline (no fill) when filled:false, stroked:true', () => {
     const tile = makeObjTile([
-      { track: 'A', lon: 0, lat: 0, t: 0, heading: 0, length: 4, width: 2, height: 1.6 },
-      { track: 'A', lon: 0, lat: 0, t: 1000, heading: 0, length: 4, width: 2, height: 1.6 },
+      {
+        track: 'A',
+        lon: 0,
+        lat: 0,
+        t: 0,
+        heading: 0,
+        length: 4,
+        width: 2,
+        height: 1.6,
+      },
+      {
+        track: 'A',
+        lon: 0,
+        lat: 0,
+        t: 1000,
+        heading: 0,
+        length: 4,
+        width: 2,
+        height: 1.6,
+      },
     ]);
     const layers = render([tile], 500, { filled: false, stroked: true });
     // Outline-only: a single LineLayer, no SimpleMeshLayer.
@@ -643,10 +796,29 @@ describe('AnimatedBoundingBoxLayer', () => {
 
   it('yaws the outline corners by heading (length axis follows heading)', () => {
     const tile = makeObjTile([
-      { track: 'A', lon: 0, lat: 0, t: 0, heading: Math.PI / 2, length: 4, width: 2, height: 1.6 },
-      { track: 'A', lon: 0, lat: 0, t: 1000, heading: Math.PI / 2, length: 4, width: 2, height: 1.6 },
+      {
+        track: 'A',
+        lon: 0,
+        lat: 0,
+        t: 0,
+        heading: Math.PI / 2,
+        length: 4,
+        width: 2,
+        height: 1.6,
+      },
+      {
+        track: 'A',
+        lon: 0,
+        lat: 0,
+        t: 1000,
+        heading: Math.PI / 2,
+        length: 4,
+        width: 2,
+        height: 1.6,
+      },
     ]);
-    const attrs = render([tile], 500, { filled: false, stroked: true })[0].props.data.attributes;
+    const attrs = render([tile], 500, { filled: false, stroked: true })[0].props
+      .data.attributes;
     const M = 111320;
     // Edge 0's target is corner(+L/2,-W/2) rotated 90° (north): the length axis
     // (half = 2) now lies along NORTH (lat), the width (half = 1) along EAST (lon).
@@ -670,12 +842,52 @@ describe('AnimatedBoundingBoxLayer', () => {
 
   it('maps a picked edge segment back to its box via the 12-segment stride', () => {
     const tile = makeObjTile([
-      { track: 'A', lon: 0, lat: 0, t: 0, category: 'car', length: 4, width: 2, height: 1.6 },
-      { track: 'A', lon: 0, lat: 0, t: 1000, category: 'car', length: 4, width: 2, height: 1.6 },
-      { track: 'B', lon: 5, lat: 0, t: 0, category: 'truck', length: 6, width: 2.5, height: 2 },
-      { track: 'B', lon: 5, lat: 0, t: 1000, category: 'truck', length: 6, width: 2.5, height: 2 },
+      {
+        track: 'A',
+        lon: 0,
+        lat: 0,
+        t: 0,
+        category: 'car',
+        length: 4,
+        width: 2,
+        height: 1.6,
+      },
+      {
+        track: 'A',
+        lon: 0,
+        lat: 0,
+        t: 1000,
+        category: 'car',
+        length: 4,
+        width: 2,
+        height: 1.6,
+      },
+      {
+        track: 'B',
+        lon: 5,
+        lat: 0,
+        t: 0,
+        category: 'truck',
+        length: 6,
+        width: 2.5,
+        height: 2,
+      },
+      {
+        track: 'B',
+        lon: 5,
+        lat: 0,
+        t: 1000,
+        category: 'truck',
+        length: 6,
+        width: 2.5,
+        height: 2,
+      },
     ]);
-    const layer = makeLayer({ colorProperty: 'category', filled: false, stroked: true });
+    const layer = makeLayer({
+      colorProperty: 'category',
+      filled: false,
+      stroked: true,
+    });
     layer.state = { tiles: [tile] };
     layer._currentTime = 500;
     const edges = (layer as any).renderLayers()[0];
@@ -684,7 +896,10 @@ describe('AnimatedBoundingBoxLayer', () => {
     expect(edges.props.sttPickStride).toBe(12);
     expect(edges.props.sttPickRows.length).toBe(2);
     // Segment 13 is the 2nd edge of box index 1 (13 ÷ 12 = 1) → track B.
-    const out = (layer as any).getPickingInfo({ info: { index: 13 }, sourceLayer: edges });
+    const out = (layer as any).getPickingInfo({
+      info: { index: 13 },
+      sourceLayer: edges,
+    });
     expect(out.object.track_id).toBe('B');
     expect(out.object.category).toBe('truck');
   });
@@ -693,8 +908,26 @@ describe('AnimatedBoundingBoxLayer', () => {
 
   it('inherits the per-category fill color for the outline when strokeColor is unset', () => {
     const tile = makeObjTile([
-      { track: 'A', lon: 0, lat: 0, t: 0, category: 'car', length: 4, width: 2, height: 1.6 },
-      { track: 'A', lon: 0, lat: 0, t: 1000, category: 'car', length: 4, width: 2, height: 1.6 },
+      {
+        track: 'A',
+        lon: 0,
+        lat: 0,
+        t: 0,
+        category: 'car',
+        length: 4,
+        width: 2,
+        height: 1.6,
+      },
+      {
+        track: 'A',
+        lon: 0,
+        lat: 0,
+        t: 1000,
+        category: 'car',
+        length: 4,
+        width: 2,
+        height: 1.6,
+      },
     ]);
     const layers = render([tile], 500, {
       filled: false,
@@ -709,8 +942,26 @@ describe('AnimatedBoundingBoxLayer', () => {
 
   it('bakes a distinct constant strokeColor into every edge, overriding the fill', () => {
     const tile = makeObjTile([
-      { track: 'A', lon: 0, lat: 0, t: 0, category: 'car', length: 4, width: 2, height: 1.6 },
-      { track: 'A', lon: 0, lat: 0, t: 1000, category: 'car', length: 4, width: 2, height: 1.6 },
+      {
+        track: 'A',
+        lon: 0,
+        lat: 0,
+        t: 0,
+        category: 'car',
+        length: 4,
+        width: 2,
+        height: 1.6,
+      },
+      {
+        track: 'A',
+        lon: 0,
+        lat: 0,
+        t: 1000,
+        category: 'car',
+        length: 4,
+        width: 2,
+        height: 1.6,
+      },
     ]);
     const layers = render([tile], 500, {
       filled: false,
@@ -777,10 +1028,14 @@ describe('AnimatedBoundingBoxLayer', () => {
       { track: 'A', lon: 0, lat: 0, t: 0, length: 4, width: 2, height: 1.6 },
       { track: 'A', lon: 0, lat: 0, t: 1000, length: 4, width: 2, height: 1.6 },
     ]);
-    expect(render([tile], 500, { filled: false, stroked: true })[0].props.widthUnits).toBe(
-      'pixels',
-    );
-    const meters = render([tile], 500, { filled: false, stroked: true, strokeWidthUnits: 'meters' });
+    expect(
+      render([tile], 500, { filled: false, stroked: true })[0].props.widthUnits,
+    ).toBe('pixels');
+    const meters = render([tile], 500, {
+      filled: false,
+      stroked: true,
+      strokeWidthUnits: 'meters',
+    });
     expect(meters[0].props.widthUnits).toBe('meters');
   });
 
@@ -790,9 +1045,14 @@ describe('AnimatedBoundingBoxLayer', () => {
       { track: 'A', lon: 0, lat: 0, t: 1000, length: 4, width: 2, height: 1.6 },
     ]);
     expect(
-      render([tile], 500, { filled: false, stroked: true })[0].props.widthMaxPixels,
+      render([tile], 500, { filled: false, stroked: true })[0].props
+        .widthMaxPixels,
     ).toBe(Number.MAX_SAFE_INTEGER);
-    const clamped = render([tile], 500, { filled: false, stroked: true, strokeWidthMaxPixels: 8 });
+    const clamped = render([tile], 500, {
+      filled: false,
+      stroked: true,
+      strokeWidthMaxPixels: 8,
+    });
     expect(clamped[0].props.widthMaxPixels).toBe(8);
   });
 
@@ -815,7 +1075,18 @@ describe('AnimatedBoundingBoxLayer', () => {
     (layer as any).renderLayers();
     expect((layer as any).trackIndex).toBe(firstIndex);
     // New tiles array → rebuild.
-    layer.state = { tiles: [a, makeObjTile([{ track: 'B', lon: 1, lat: 1, t: 0 }, { track: 'B', lon: 2, lat: 1, t: 1000 }], { tileId: { z: 16, x: 1, y: 3, t: 0 } })] };
+    layer.state = {
+      tiles: [
+        a,
+        makeObjTile(
+          [
+            { track: 'B', lon: 1, lat: 1, t: 0 },
+            { track: 'B', lon: 2, lat: 1, t: 1000 },
+          ],
+          { tileId: { z: 16, x: 1, y: 3, t: 0 } },
+        ),
+      ],
+    };
     (layer as any).renderLayers();
     expect((layer as any).trackIndex).not.toBe(firstIndex);
     expect((layer as any).trackIndex.size).toBe(2);

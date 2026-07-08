@@ -1,7 +1,7 @@
-import React from "react";
-import { Link, NavLink } from "react-router";
+import React from 'react';
+import { Link, NavLink } from 'react-router';
 
-export const GITHUB_URL = "https://github.com/BertCh/spatiotemporal-tiles";
+export const GITHUB_URL = 'https://github.com/BertCh/spatiotemporal-tiles';
 
 /**
  * Site-wide top bar shared by the landing page, demo catalog, per-demo pages
@@ -10,10 +10,10 @@ export const GITHUB_URL = "https://github.com/BertCh/spatiotemporal-tiles";
  * viewer and the drifters story render outside SiteChrome and never see it.
  */
 const NAV_ITEMS: { label: string; to: string }[] = [
-  { label: "Demos", to: "/demos" },
-  { label: "How it works", to: "/how-it-works" },
-  { label: "Docs", to: "/docs" },
-  { label: "Story", to: "/story/drifters" },
+  { label: 'Demos', to: '/demos' },
+  { label: 'How it works', to: '/how-it-works' },
+  { label: 'Docs', to: '/docs' },
+  { label: 'Story', to: '/story/drifters' },
 ];
 
 const SiteHeader: React.FC = () => {
@@ -21,16 +21,16 @@ const SiteHeader: React.FC = () => {
     <header
       className="shrink-0 flex items-center justify-between px-5 sm:px-7 lg:px-12 h-12"
       style={{
-        background: "var(--page-bg)",
-        borderBottom: "1px solid var(--hairline)",
+        background: 'var(--page-bg)',
+        borderBottom: '1px solid var(--hairline)',
       }}
     >
       <Link
         to="/"
         className="font-display text-sm font-bold tracking-tight"
-        style={{ color: "var(--ink-900)" }}
+        style={{ color: 'var(--ink-900)' }}
       >
-        poopdeck<span style={{ color: "var(--ink-400)" }}>.gl</span>
+        poopdeck<span style={{ color: 'var(--ink-400)' }}>.gl</span>
       </Link>
 
       <nav className="flex items-center gap-4 sm:gap-6" aria-label="Site">
@@ -40,16 +40,16 @@ const SiteHeader: React.FC = () => {
             to={item.to}
             className="text-xs sm:text-[13px] font-medium transition-colors"
             style={({ isActive }) => ({
-              color: isActive ? "var(--accent)" : "var(--ink-500)",
+              color: isActive ? 'var(--accent)' : 'var(--ink-500)',
             })}
-            onMouseOver={(e) => (e.currentTarget.style.color = "var(--accent)")}
+            onMouseOver={(e) => (e.currentTarget.style.color = 'var(--accent)')}
             onMouseOut={(e) => {
               // NavLink re-applies the style fn on render; restore the muted
               // ink only when the link isn't the active route.
-              const active = e.currentTarget.getAttribute("aria-current");
+              const active = e.currentTarget.getAttribute('aria-current');
               e.currentTarget.style.color = active
-                ? "var(--accent)"
-                : "var(--ink-500)";
+                ? 'var(--accent)'
+                : 'var(--ink-500)';
             }}
           >
             {item.label}
@@ -60,9 +60,9 @@ const SiteHeader: React.FC = () => {
           target="_blank"
           rel="noopener noreferrer"
           className="text-xs sm:text-[13px] font-medium transition-colors inline-flex items-center gap-1"
-          style={{ color: "var(--ink-500)" }}
-          onMouseOver={(e) => (e.currentTarget.style.color = "var(--accent)")}
-          onMouseOut={(e) => (e.currentTarget.style.color = "var(--ink-500)")}
+          style={{ color: 'var(--ink-500)' }}
+          onMouseOver={(e) => (e.currentTarget.style.color = 'var(--accent)')}
+          onMouseOut={(e) => (e.currentTarget.style.color = 'var(--ink-500)')}
         >
           GitHub
           <svg

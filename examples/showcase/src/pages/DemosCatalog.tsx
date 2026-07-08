@@ -1,11 +1,11 @@
-import React from "react";
+import React from 'react';
 import {
   CATEGORY_ORDER,
   CATEGORY_LABELS,
   CATEGORY_BLURBS,
   getCatalog,
-} from "../content/demoMeta";
-import DemoCard from "../components/DemoCard";
+} from '../content/demoMeta';
+import DemoCard from '../components/DemoCard';
 
 /**
  * The full demo catalog (`/demos`): every healthy dataset grouped by theme.
@@ -21,13 +21,13 @@ const DemosCatalog: React.FC = () => {
         <span className="eyebrow">Demos</span>
         <h1
           className="font-display text-2xl sm:text-3xl font-bold mt-2"
-          style={{ color: "var(--ink-900)", lineHeight: 1.15 }}
+          style={{ color: 'var(--ink-900)', lineHeight: 1.15 }}
         >
           The catalog
         </h1>
         <p
           className="text-sm mt-3 max-w-xl"
-          style={{ color: "var(--ink-500)", lineHeight: 1.7 }}
+          style={{ color: 'var(--ink-500)', lineHeight: 1.7 }}
         >
           Every demo streams a real dataset as spatiotemporal tiles. Each page
           explains the data, how the archive was built, and which layers render
@@ -41,15 +41,15 @@ const DemosCatalog: React.FC = () => {
             <section key={cat} className="mt-10 sm:mt-12">
               <div
                 className="pb-2 mb-4"
-                style={{ borderBottom: "1px solid var(--hairline)" }}
+                style={{ borderBottom: '1px solid var(--hairline)' }}
               >
                 <h2
                   className="font-display text-base font-semibold"
-                  style={{ color: "var(--ink-900)" }}
+                  style={{ color: 'var(--ink-900)' }}
                 >
                   {CATEGORY_LABELS[cat]}
                 </h2>
-                <p className="text-xs mt-1" style={{ color: "var(--ink-400)" }}>
+                <p className="text-xs mt-1" style={{ color: 'var(--ink-400)' }}>
                   {CATEGORY_BLURBS[cat]}
                 </p>
               </div>

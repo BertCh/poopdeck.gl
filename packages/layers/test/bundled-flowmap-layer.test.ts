@@ -122,7 +122,9 @@ vi.mock('../src/lib/edge-bundler', () => {
   };
 });
 
-vi.mock('@deck.gl/core', async () => (await import('./fake-deck-core')).createDeckCoreMock());
+vi.mock('@deck.gl/core', async () =>
+  (await import('./fake-deck-core')).createDeckCoreMock(),
+);
 
 describe('BundledFlowmapLayer', () => {
   let LayerCtor: any;
@@ -337,7 +339,10 @@ describe('BundledFlowmapLayer', () => {
   it('aggregates incident flow into node circles (CPU path unchanged)', () => {
     const layer = makeLayer(0); // bucket 0: only edge 0 active at flow 10
     layer.state = { tiles: [odMatrixTile(TWO_PAIRS)] };
-    const nodes = layer.renderLayers()[1].props.data as { position: number[]; radius: number }[];
+    const nodes = layer.renderLayers()[1].props.data as {
+      position: number[];
+      radius: number;
+    }[];
     expect(nodes.length).toBe(2);
     expect(nodes.map((n) => n.radius)).toEqual([Math.sqrt(10), Math.sqrt(10)]);
   });

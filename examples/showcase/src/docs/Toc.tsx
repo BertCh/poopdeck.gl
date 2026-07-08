@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from "react";
-import type { TocHeading } from "./headings";
+import React, { useEffect, useState } from 'react';
+import type { TocHeading } from './headings';
 
 /**
  * On-this-page TOC (xl+ screens). Scroll-spy runs an IntersectionObserver
@@ -32,7 +32,7 @@ const Toc: React.FC<{
           }
         }
       },
-      { root, rootMargin: "0px 0px -70% 0px" },
+      { root, rootMargin: '0px 0px -70% 0px' },
     );
     for (const h of headings) {
       const el = document.getElementById(h.id);
@@ -53,15 +53,15 @@ const Toc: React.FC<{
               href={`#${h.id}`}
               className="block leading-snug transition-colors"
               style={{
-                color: h.id === activeId ? "var(--accent)" : "var(--ink-500)",
+                color: h.id === activeId ? 'var(--accent)' : 'var(--ink-500)',
                 fontWeight: h.id === activeId ? 600 : 400,
               }}
               onClick={(e) => {
                 e.preventDefault();
-                history.replaceState(null, "", `#${h.id}`);
+                history.replaceState(null, '', `#${h.id}`);
                 document
                   .getElementById(h.id)
-                  ?.scrollIntoView({ block: "start", behavior: "smooth" });
+                  ?.scrollIntoView({ block: 'start', behavior: 'smooth' });
               }}
             >
               {h.text}

@@ -11,22 +11,28 @@
  * legend/cube chips. This inverts the old "map inset inside page chrome"
  * frame into "UI inside the map".
  */
-import React, { useMemo, useState } from "react";
-import { useParams, useLocation, Navigate, Link } from "react-router";
-import { getDatasetById } from "../datasets";
-import { getDemoMeta } from "../content/demoMeta";
-import DemoViewer from "../components/demo/DemoViewer";
-import DemoHoverPreview from "../components/demo/DemoHoverPreview";
-import type { DemoCamera } from "../components/demo/previewBasemap";
-import MaplibreRenderer from "../components/MaplibreRenderer";
+import React, { useMemo, useState } from 'react';
+import { useParams, useLocation, Navigate, Link } from 'react-router';
+import { getDatasetById } from '../datasets';
+import { getDemoMeta } from '../content/demoMeta';
+import DemoViewer from '../components/demo/DemoViewer';
+import DemoHoverPreview from '../components/demo/DemoHoverPreview';
+import type { DemoCamera } from '../components/demo/previewBasemap';
+import MaplibreRenderer from '../components/MaplibreRenderer';
 import SttThreeGeoViewer, {
   datasetSupportsThree,
-} from "../components/demo/SttThreeGeoViewer";
-import { useDemoPlayback } from "../components/demo/useDemoPlayback";
-import { usePlaybackHotkeys, PlaybackControls } from "@poopdeck.gl/react";
+} from '../components/demo/SttThreeGeoViewer';
+import { useDemoPlayback } from '../components/demo/useDemoPlayback';
+import { usePlaybackHotkeys, PlaybackControls } from '@poopdeck.gl/react';
 
 /** Dataset types the `@poopdeck.gl/maplibre` adapter can mount (see makeSttLayer). */
-const MAPLIBRE_TYPES = new Set(["point", "path", "trips", "polygon", "heatmap"]);
+const MAPLIBRE_TYPES = new Set([
+  'point',
+  'path',
+  'trips',
+  'polygon',
+  'heatmap',
+]);
 
 /**
  * `PlaybackControls` is authored in the site's light editorial theme (dark ink
@@ -36,22 +42,22 @@ const MAPLIBRE_TYPES = new Set(["point", "path", "trips", "polygon", "heatmap"])
  * `DemoViewer` (cube/summary controls) and the app's cyan data accent.
  */
 const DARK_CONTROL_THEME = {
-  "--ink-900": "#f4f5f7",
-  "--ink-700": "#d5d8de",
-  "--ink-500": "#a0a7b4",
-  "--ink-400": "#7b8494",
-  "--surface": "#262a33",
-  "--hairline": "rgba(255, 255, 255, 0.14)",
-  "--accent": "#1fbad6",
-  "--accent-soft": "rgba(31, 186, 214, 0.16)",
-  "--page-bg": "#15171c",
+  '--ink-900': '#f4f5f7',
+  '--ink-700': '#d5d8de',
+  '--ink-500': '#a0a7b4',
+  '--ink-400': '#7b8494',
+  '--surface': '#262a33',
+  '--hairline': 'rgba(255, 255, 255, 0.14)',
+  '--accent': '#1fbad6',
+  '--accent-soft': 'rgba(31, 186, 214, 0.16)',
+  '--page-bg': '#15171c',
 } as React.CSSProperties;
 
 const DemoPage: React.FC = () => {
   const { datasetId } = useParams<{ datasetId: string }>();
   const location = useLocation();
   const selectedDataset = useMemo(
-    () => getDatasetById(datasetId || ""),
+    () => getDatasetById(datasetId || ''),
     [datasetId],
   );
 
@@ -66,8 +72,8 @@ const DemoPage: React.FC = () => {
   // capable renderer reachable from either route. maplibre adapter is
   // mercator-only; the `@poopdeck.gl/three` (TSL/WebGPU) path handles the FLAT,
   // metro-scale geo demos (see `datasetSupportsThree`).
-  const [renderer, setRenderer] = useState<"deck" | "maplibre" | "three">(
-    location.pathname.startsWith("/maplibre/") ? "maplibre" : "deck",
+  const [renderer, setRenderer] = useState<'deck' | 'maplibre' | 'three'>(
+    location.pathname.startsWith('/maplibre/') ? 'maplibre' : 'deck',
   );
   const maplibreCapable =
     selectedDataset != null && MAPLIBRE_TYPES.has(selectedDataset.type);
@@ -79,14 +85,14 @@ const DemoPage: React.FC = () => {
   const [camera, setCamera] = useState<DemoCamera | null>(null);
 
   if (!selectedDataset) return <Navigate to="/" replace />;
-  const useMaplibre = renderer === "maplibre" && maplibreCapable;
-  const useThree = renderer === "three" && threeCapable;
+  const useMaplibre = renderer === 'maplibre' && maplibreCapable;
+  const useThree = renderer === 'three' && threeCapable;
   const hasAltRenderer = maplibreCapable || threeCapable;
 
   // Catalog demos link back to their landing page; excluded ones to the grid.
   const backTarget = getDemoMeta(selectedDataset.id)
     ? `/demos/${selectedDataset.id}`
-    : "/demos";
+    : '/demos';
 
   // Push DemoViewer's top-left in-map chips (cube / summary toggle) below the
   // floating header so they don't collide. The header grows by one row when
@@ -94,7 +100,10 @@ const DemoPage: React.FC = () => {
   const headerInset = hasAltRenderer ? 148 : 112;
 
   return (
-    <div className="h-full relative overflow-hidden" style={{ background: "#0a0d12" }}>
+    <div
+      className="h-full relative overflow-hidden"
+      style={{ background: '#0a0d12' }}
+    >
       {/* Full-bleed map — fills the whole surface; the chrome floats on top. */}
       <div className="absolute inset-0">
         {useMaplibre ? (
@@ -128,7 +137,8 @@ const DemoPage: React.FC = () => {
           to={backTarget}
           className="inline-flex items-center gap-1 text-xs mb-1.5 text-slate-400 transition-colors hover:text-cyan-300"
         >
-          <span>←</span> {getDemoMeta(selectedDataset.id) ? "About this demo" : "Demos"}
+          <span>←</span>{' '}
+          {getDemoMeta(selectedDataset.id) ? 'About this demo' : 'Demos'}
         </Link>
         <h1 className="font-display text-base font-semibold leading-tight text-slate-100">
           {selectedDataset.name}
@@ -145,14 +155,28 @@ const DemoPage: React.FC = () => {
           >
             {(
               [
-                { id: "deck", label: "deck.gl", active: !useMaplibre && !useThree },
+                {
+                  id: 'deck',
+                  label: 'deck.gl',
+                  active: !useMaplibre && !useThree,
+                },
                 ...(maplibreCapable
-                  ? [{ id: "maplibre" as const, label: "MapLibre", active: useMaplibre }]
+                  ? [
+                      {
+                        id: 'maplibre' as const,
+                        label: 'MapLibre',
+                        active: useMaplibre,
+                      },
+                    ]
                   : []),
                 ...(threeCapable
-                  ? [{ id: "three" as const, label: "Three", active: useThree }]
+                  ? [{ id: 'three' as const, label: 'Three', active: useThree }]
                   : []),
-              ] as { id: "deck" | "maplibre" | "three"; label: string; active: boolean }[]
+              ] as {
+                id: 'deck' | 'maplibre' | 'three';
+                label: string;
+                active: boolean;
+              }[]
             ).map((r) => (
               <button
                 key={r.id}
@@ -162,8 +186,8 @@ const DemoPage: React.FC = () => {
                 onClick={() => setRenderer(r.id)}
                 className={`px-2.5 py-1 rounded text-xs font-medium border transition-colors ${
                   r.active
-                    ? "border-cyan-300/60 bg-cyan-400/20 text-cyan-100"
-                    : "border-white/15 text-slate-300 hover:bg-white/5"
+                    ? 'border-cyan-300/60 bg-cyan-400/20 text-cyan-100'
+                    : 'border-white/15 text-slate-300 hover:bg-white/5'
                 }`}
               >
                 {r.label}

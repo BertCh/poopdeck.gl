@@ -10,7 +10,11 @@
  * is the ready-made snippet for the GPU-appearance path (browser-verify to wire).
  */
 
-import { ALPHA_EXPR, emitGLSL300, type TimeFilterModeKey } from '@poopdeck.gl/core/shader-codegen';
+import {
+  ALPHA_EXPR,
+  emitGLSL300,
+  type TimeFilterModeKey,
+} from '@poopdeck.gl/core/shader-codegen';
 
 /**
  * The GLSL expression computing the time-filter alpha for `mode`. Pass a `nameMap`
@@ -18,6 +22,9 @@ import { ALPHA_EXPR, emitGLSL300, type TimeFilterModeKey } from '@poopdeck.gl/co
  * `endTime`, `windowHalf`, `fadeIn`, `fadeOut`, `wakeLength`, `trailLength`,
  * `trailFade`, `vertexTime`) to the host shader's variable names.
  */
-export function timeFilterAlphaGlsl(mode: TimeFilterModeKey, nameMap?: Record<string, string>): string {
+export function timeFilterAlphaGlsl(
+  mode: TimeFilterModeKey,
+  nameMap?: Record<string, string>,
+): string {
   return emitGLSL300(ALPHA_EXPR[mode], nameMap);
 }

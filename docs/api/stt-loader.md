@@ -21,7 +21,7 @@ import {
   InlineTileDecoder,
   WorkerTileDecoder,
   createDefaultTileDecoder,
-} from "@poopdeck.gl/core";
+} from '@poopdeck.gl/core';
 
 interface TileDecoder {
   decode(args: {
@@ -76,12 +76,12 @@ The reader understands two frame shapes, discriminated by
 
 - **v1** — `[u16 layerCount | flags]` followed by, per layer,
   `[u16 nameLen][name][u32 ipcLen][pad][Arrow IPC stream]`. The leading u16's
-  top bit marks the *aligned* frame (every IPC stream starts 8-byte aligned,
+  top bit marks the _aligned_ frame (every IPC stream starts 8-byte aligned,
   which is what lets apache-arrow wrap its buffers zero-copy); frames without
   the flag carry no padding and parse identically. Needs no `options`.
 - **v2** — the sectioned, template-referencing frame (leading `0xFFFF`
   escape). Each layer references a shared Arrow schema template by 16-byte
-  blake3-128 hash and carries only the IPC stream *tail*; the reader splices
+  blake3-128 hash and carries only the IPC stream _tail_; the reader splices
   `concat(template, tail)` back into a stock stream. Decoding a v2 frame that
   references a template by hash **requires** the dataset's template registry
   via `options.templates` — so a v2 dataset MUST be opened through its
@@ -90,10 +90,10 @@ The reader understands two frame shapes, discriminated by
 
 `options` is `DecodeTileOptions` (both fields optional — v1 decoding needs none):
 
-| Field | Type | Description |
-| :--- | :--- | :--- |
-| `templates` | `TemplateRegistry` | The `hash → template bytes` map built from `manifest.schemas` at archive open. Required to decode v2 frames that reference a template by hash; v1 and self-contained (inline-schema) v2 frames decode without it. |
-| `formatVersion` | `number` | The manifest's declared version. When set, it is enforced against the payload (spec §5.2 authority rule): a v2 frame reached through a v1-declared manifest — or vice versa — is a hard error. Omitted, the payload is sniffed. |
+| Field           | Type               | Description                                                                                                                                                                                                                     |
+| :-------------- | :----------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `templates`     | `TemplateRegistry` | The `hash → template bytes` map built from `manifest.schemas` at archive open. Required to decode v2 frames that reference a template by hash; v1 and self-contained (inline-schema) v2 frames decode without it.               |
+| `formatVersion` | `number`           | The manifest's declared version. When set, it is enforced against the payload (spec §5.2 authority rule): a v2 frame reached through a v1-declared manifest — or vice versa — is a hard error. Omitted, the payload is sniffed. |
 
 `TemplateRegistry` is `Map<string, Uint8Array>`.
 
@@ -101,23 +101,23 @@ The reader understands two frame shapes, discriminated by
 
 ```typescript
 interface Tile {
-  id: TileId;                 // { z, x, y, t }
-  timeRange: TimeRange;       // { start, end } in Unix ms
+  id: TileId; // { z, x, y, t }
+  timeRange: TimeRange; // { start, end } in Unix ms
   layers: Layer[];
 }
 
 interface Layer {
   name: string;
-  extent: number;                  // always 0 — coordinates are real lon/lat, no quantization
-  features: BinaryFeatures;        // GPU-ready typed arrays
-  geometryExtensionName: string;   // 'geoarrow.point' | 'geoarrow.linestring' | 'geoarrow.polygon'
-                                   // ('' only for pre-v2 archives — treat as unknown)
-  arrowTable?: Table;              // the decoded GeoArrow record batch (absent after a worker hop)
-  arrowIpc?: Uint8Array;           // raw per-layer Arrow IPC bytes (cloneable; survives workers)
-  arrowIpcProps?: Uint8Array;      // v2 only: the spliced PROPS IPC stream (present iff the layer has property columns)
-  tileMeta?: TileMetaJson;         // v2 only: parsed TILE_META (plain JSON; survives workers; re-injected on rehydrate)
-  arrowIpcDropped?: boolean;       // set when retainArrowIpc dropped the IPC bytes — toGeoArrowTable() then throws
-  coordinatesQuantized?: boolean;  // true when the geometry leaf is stt:quant Int32 grid indices, not lon/lat
+  extent: number; // always 0 — coordinates are real lon/lat, no quantization
+  features: BinaryFeatures; // GPU-ready typed arrays
+  geometryExtensionName: string; // 'geoarrow.point' | 'geoarrow.linestring' | 'geoarrow.polygon'
+  // ('' only for pre-v2 archives — treat as unknown)
+  arrowTable?: Table; // the decoded GeoArrow record batch (absent after a worker hop)
+  arrowIpc?: Uint8Array; // raw per-layer Arrow IPC bytes (cloneable; survives workers)
+  arrowIpcProps?: Uint8Array; // v2 only: the spliced PROPS IPC stream (present iff the layer has property columns)
+  tileMeta?: TileMetaJson; // v2 only: parsed TILE_META (plain JSON; survives workers; re-injected on rehydrate)
+  arrowIpcDropped?: boolean; // set when retainArrowIpc dropped the IPC bytes — toGeoArrowTable() then throws
+  coordinatesQuantized?: boolean; // true when the geometry leaf is stt:quant Int32 grid indices, not lon/lat
 }
 ```
 
@@ -132,11 +132,15 @@ spec, readers MUST NOT assume sortedness without the flag).
 ## GeoArrow hand-off
 
 ```typescript
-import { toGeoArrowTable } from "@poopdeck.gl/core";
-import { GeoArrowPathLayer } from "@geoarrow/deck.gl-layers";
+import { toGeoArrowTable } from '@poopdeck.gl/core';
+import { GeoArrowPathLayer } from '@geoarrow/deck.gl-layers';
 
 const table = toGeoArrowTable(tile.layers[0]);
-new GeoArrowPathLayer({ id: "paths", data: table, getPath: table.getChild("geometry")! });
+new GeoArrowPathLayer({
+  id: 'paths',
+  data: table,
+  getPath: table.getChild('geometry')!,
+});
 ```
 
 `toGeoArrowTable(layer)` returns an Arrow `Table` whose `geometry` field
@@ -202,13 +206,13 @@ template registry (built from `manifest.schemas`) and the declared
 accepts these `ArchiveOptions` fields governing checksum verification and the
 raw-IPC memory trade-off. All are optional.
 
-| Option | Type | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `verifyChecksums` | `boolean` | `true` | Verify each fetched blob's CRC-32C (from the directory) over its **compressed** bytes BEFORE decompression, on both the worker and inline decode paths. A mismatch rejects that tile's decode with a distinctive `crc32c mismatch` error through the normal per-tile error surface. Entries whose directory CRC is `0`/absent (synthetic archives) and OPFS-decompressed warm hits (no compressed bytes to check) skip verification. Pass `false` as a kill switch (the CRC cost is trivial next to zstd). |
-| `retainArrowIpc` | `boolean \| 'auto'` | `'auto'` | Whether decoded layers keep their raw Arrow IPC bytes (`arrowIpc` / `arrowTable`) for lazy `toGeoArrowTable()`. `'auto'` drops the reference only for coordinate-quantized (`stt:quant`) layers — whose tables are not literal GeoArrow anyway — and keeps it everywhere `toGeoArrowTable()` is valid. `true` always keeps; `false` always drops (smallest memory). `toGeoArrowTable()` on a dropped layer throws an error naming this option. |
-| `opfsCache` | `boolean` | `false` | Enable the OPFS-backed persistent tile cache. **Now defaults to `false` everywhere** (including browsers exposing `navigator.storage.getDirectory`) — persistence is strictly opt-in. On the cold path it costs a duplicate main-thread zstd decompress per tile, so leave it off unless the archive fits in `opfsCacheMaxBytes` AND users revisit the same viewport across reloads. |
-| `cache` | `boolean` | — | **Deprecated, never read.** The in-memory compressed-byte cache is always on and device-aware. |
-| `maxCacheSize` | `number` | — | **Deprecated, never read.** The byte-cache budget is device-aware (512 MB desktop / 256 MB low-memory) and not configurable through this field. |
+| Option            | Type                | Default  | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| :---------------- | :------------------ | :------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `verifyChecksums` | `boolean`           | `true`   | Verify each fetched blob's CRC-32C (from the directory) over its **compressed** bytes BEFORE decompression, on both the worker and inline decode paths. A mismatch rejects that tile's decode with a distinctive `crc32c mismatch` error through the normal per-tile error surface. Entries whose directory CRC is `0`/absent (synthetic archives) and OPFS-decompressed warm hits (no compressed bytes to check) skip verification. Pass `false` as a kill switch (the CRC cost is trivial next to zstd). |
+| `retainArrowIpc`  | `boolean \| 'auto'` | `'auto'` | Whether decoded layers keep their raw Arrow IPC bytes (`arrowIpc` / `arrowTable`) for lazy `toGeoArrowTable()`. `'auto'` drops the reference only for coordinate-quantized (`stt:quant`) layers — whose tables are not literal GeoArrow anyway — and keeps it everywhere `toGeoArrowTable()` is valid. `true` always keeps; `false` always drops (smallest memory). `toGeoArrowTable()` on a dropped layer throws an error naming this option.                                                             |
+| `opfsCache`       | `boolean`           | `false`  | Enable the OPFS-backed persistent tile cache. **Now defaults to `false` everywhere** (including browsers exposing `navigator.storage.getDirectory`) — persistence is strictly opt-in. On the cold path it costs a duplicate main-thread zstd decompress per tile, so leave it off unless the archive fits in `opfsCacheMaxBytes` AND users revisit the same viewport across reloads.                                                                                                                       |
+| `cache`           | `boolean`           | —        | **Deprecated, never read.** The in-memory compressed-byte cache is always on and device-aware.                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `maxCacheSize`    | `number`            | —        | **Deprecated, never read.** The byte-cache budget is device-aware (512 MB desktop / 256 MB low-memory) and not configurable through this field.                                                                                                                                                                                                                                                                                                                                                            |
 
 ## Integrity & content-addressing primitives
 
@@ -216,15 +220,15 @@ The checksum and content-address functions the reader uses internally are also
 exported for tests and custom pipelines:
 
 ```typescript
-import { crc32c, verifyCrc32c, blake3, blake3Hex128 } from "@poopdeck.gl/core";
+import { crc32c, verifyCrc32c, blake3, blake3Hex128 } from '@poopdeck.gl/core';
 ```
 
-| Export | Signature | Description |
-| :--- | :--- | :--- |
-| `crc32c` | `(bytes: Uint8Array) => number` | CRC-32C (Castagnoli) as an unsigned 32-bit int — the directory's per-blob checksum, computed over the blob's compressed bytes. |
-| `verifyCrc32c` | `(bytes: Uint8Array, expected: number) => void` | Throws a distinctive `crc32c mismatch` error when `crc32c(bytes) !== expected`. Shared by the worker and inline decode paths so the two surface the identical message. |
-| `blake3` | `(input: Uint8Array, outLen?: number) => Uint8Array` | BLAKE3 hash truncated to `outLen` bytes (≤ 32, default 32). The packed format's blake3-128 object/template addresses are the first 16 bytes. |
-| `blake3Hex128` | `(input: Uint8Array) => string` | blake3-128 as 32 lowercase hex chars — the content-address form (`manifest.schemas[].hash`, `index/<hash>.sttd`, `packs/<hash>.sttp`). |
+| Export         | Signature                                            | Description                                                                                                                                                            |
+| :------------- | :--------------------------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `crc32c`       | `(bytes: Uint8Array) => number`                      | CRC-32C (Castagnoli) as an unsigned 32-bit int — the directory's per-blob checksum, computed over the blob's compressed bytes.                                         |
+| `verifyCrc32c` | `(bytes: Uint8Array, expected: number) => void`      | Throws a distinctive `crc32c mismatch` error when `crc32c(bytes) !== expected`. Shared by the worker and inline decode paths so the two surface the identical message. |
+| `blake3`       | `(input: Uint8Array, outLen?: number) => Uint8Array` | BLAKE3 hash truncated to `outLen` bytes (≤ 32, default 32). The packed format's blake3-128 object/template addresses are the first 16 bytes.                           |
+| `blake3Hex128` | `(input: Uint8Array) => string`                      | blake3-128 as 32 lowercase hex chars — the content-address form (`manifest.schemas[].hash`, `index/<hash>.sttd`, `packs/<hash>.sttp`).                                 |
 
 Related exported types: `DecodeTileOptions`, `TemplateRegistry`,
 `ManifestSchemaTemplate` (a `{ hash, data }` entry of a v2 manifest's `schemas`

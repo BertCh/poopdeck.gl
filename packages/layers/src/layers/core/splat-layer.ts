@@ -45,12 +45,7 @@
  * intended consumer, is a tilted MapView).
  */
 
-import type {
-  Color,
-  DefaultProps,
-  Layer,
-  LayerContext,
-} from '@deck.gl/core';
+import type { Color, DefaultProps, Layer, LayerContext } from '@deck.gl/core';
 import {
   SpatioTemporalLayer,
   SpatioTemporalLayerProps,
@@ -172,7 +167,10 @@ interface PreparedSplatTile {
   styleKey: string;
   data: {
     length: number;
-    attributes: Record<string, { value: any; size: number; normalized?: boolean }>;
+    attributes: Record<
+      string,
+      { value: any; size: number; normalized?: boolean }
+    >;
   };
   /** Tile carried the per-surfel colour vector column → instanceColors bound. */
   hasColor: boolean;
@@ -191,9 +189,9 @@ function makeTileKey(tile: Tile, layer: TileLayer): string {
 /**
  * Spatiotemporal oriented-Gaussian-surfel layer. See the file docstring.
  */
-export class SplatLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLayer<
-  ExtraPropsT & Required<_SplatLayerProps>
-> {
+export class SplatLayer<
+  ExtraPropsT extends {} = {},
+> extends SpatioTemporalLayer<ExtraPropsT & Required<_SplatLayerProps>> {
   static layerName = 'SplatLayer';
 
   static defaultProps: DefaultProps<SplatLayerProps> = {
@@ -202,8 +200,18 @@ export class SplatLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLayer
     // Color, which deck's typed validators would reject.
     quaternionColumn: { type: 'object', value: 'surfel_quat', compare: true },
     scaleColumn: { type: 'object', value: 'surfel_scale', compare: true },
-    colorColumn: { type: 'object', value: 'surfel_rgba', optional: true, compare: true },
-    elevationProperty: { type: 'object', value: 'z', optional: true, compare: true },
+    colorColumn: {
+      type: 'object',
+      value: 'surfel_rgba',
+      optional: true,
+      compare: true,
+    },
+    elevationProperty: {
+      type: 'object',
+      value: 'z',
+      optional: true,
+      compare: true,
+    },
     elevationScale: { type: 'number', value: 1 },
     fallbackColor: { type: 'color', value: DEFAULT_FALLBACK_COLOR },
     temporalSigma: { type: 'number', value: 180, min: 1 },
@@ -220,7 +228,11 @@ export class SplatLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLayer
   /** Per-tile sublayer-instance cache — stable refs let deck skip prop diff. */
   private sublayerCache = new Map<
     string,
-    { layer: SplatPrimitiveLayer; preparedKey: PreparedSplatTile; layerPropsKey: string }
+    {
+      layer: SplatPrimitiveLayer;
+      preparedKey: PreparedSplatTile;
+      layerPropsKey: string;
+    }
   >();
   private lastLayerPropsKey = '';
   private lastTilesRef: Tile[] | null = null;
@@ -239,13 +251,31 @@ export class SplatLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLayer
    * elevation, fallback color). A change invalidates the prepared cache.
    */
   private computeStyleKey(): string {
-    const q = typeof this.props.quaternionColumn === 'string' ? this.props.quaternionColumn : 'surfel_quat';
-    const s = typeof this.props.scaleColumn === 'string' ? this.props.scaleColumn : 'surfel_scale';
-    const c = typeof this.props.colorColumn === 'string' ? this.props.colorColumn : 'none';
-    const elev = typeof this.props.elevationProperty === 'string' ? this.props.elevationProperty : '';
+    const q =
+      typeof this.props.quaternionColumn === 'string'
+        ? this.props.quaternionColumn
+        : 'surfel_quat';
+    const s =
+      typeof this.props.scaleColumn === 'string'
+        ? this.props.scaleColumn
+        : 'surfel_scale';
+    const c =
+      typeof this.props.colorColumn === 'string'
+        ? this.props.colorColumn
+        : 'none';
+    const elev =
+      typeof this.props.elevationProperty === 'string'
+        ? this.props.elevationProperty
+        : '';
     // elevationScale / fallbackColor are SHADER UNIFORMS now, not baked into the
     // prepared attributes — they belong to the layer-props key, not styleKey.
-    return [q, s, c, elev, updateTriggersDigest(this.props.updateTriggers)].join('|');
+    return [
+      q,
+      s,
+      c,
+      elev,
+      updateTriggersDigest(this.props.updateTriggers),
+    ].join('|');
   }
 
   /** Digest of the layer-level props baked into every sublayer (visual + time). */
@@ -262,7 +292,9 @@ export class SplatLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLayer
       this.props.alphaCutoff,
       // Shader uniforms (no longer baked into the prepared attributes).
       this.props.elevationScale,
-      Array.isArray(this.props.fallbackColor) ? this.props.fallbackColor.join('.') : '',
+      Array.isArray(this.props.fallbackColor)
+        ? this.props.fallbackColor.join('.')
+        : '',
       this.props.timeWindow,
       inheritedPropsDigest(this.props),
       updateTriggersDigest(this.props.updateTriggers),
@@ -281,7 +313,8 @@ export class SplatLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLayer
     if (this.lastTilesRef !== tiles) {
       const live = new Set<string>();
       for (const tile of tiles) {
-        for (const tileLayer of tile.layers) live.add(makeTileKey(tile, tileLayer));
+        for (const tileLayer of tile.layers)
+          live.add(makeTileKey(tile, tileLayer));
       }
       for (const key of this.preparedTileCache.keys()) {
         if (!live.has(key)) this.preparedTileCache.delete(key);
@@ -308,12 +341,20 @@ export class SplatLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLayer
         const prepared = this.prepareTile(tile, tileLayer, styleKey);
         if (!prepared) continue;
         const cached = this.sublayerCache.get(prepared.tileKey);
-        if (cached && cached.preparedKey === prepared && cached.layerPropsKey === layerPropsKey) {
+        if (
+          cached &&
+          cached.preparedKey === prepared &&
+          cached.layerPropsKey === layerPropsKey
+        ) {
           sublayers.push(cached.layer);
           continue;
         }
         const layer = this.buildSublayer(prepared);
-        this.sublayerCache.set(prepared.tileKey, { layer, preparedKey: prepared, layerPropsKey });
+        this.sublayerCache.set(prepared.tileKey, {
+          layer,
+          preparedKey: prepared,
+          layerPropsKey,
+        });
         sublayers.push(layer);
       }
     }
@@ -326,7 +367,9 @@ export class SplatLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLayer
     });
     if (DEBUG) {
       // eslint-disable-next-line no-console
-      console.log(`SplatLayer: ${tiles.length} tiles → ${sublayers.length} sublayers`);
+      console.log(
+        `SplatLayer: ${tiles.length} tiles → ${sublayers.length} sublayers`,
+      );
     }
     return sublayers;
   }
@@ -370,8 +413,14 @@ export class SplatLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLayer
     const num = binary.numericProps;
     const vec = binary.vectorProps ?? {};
 
-    const quatN = typeof this.props.quaternionColumn === 'string' ? this.props.quaternionColumn : 'surfel_quat';
-    const scaleN = typeof this.props.scaleColumn === 'string' ? this.props.scaleColumn : 'surfel_scale';
+    const quatN =
+      typeof this.props.quaternionColumn === 'string'
+        ? this.props.quaternionColumn
+        : 'surfel_quat';
+    const scaleN =
+      typeof this.props.scaleColumn === 'string'
+        ? this.props.scaleColumn
+        : 'surfel_scale';
     const quat = vec[quatN];
     const scale = vec[scaleN];
 
@@ -391,12 +440,16 @@ export class SplatLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLayer
 
     // Centre positions ride the 2D geometry buffer zero-copy; altitude is its own
     // zero-copy column (scaled in the shader by elevationScale).
-    const elevProp = typeof this.props.elevationProperty === 'string' ? this.props.elevationProperty : '';
+    const elevProp =
+      typeof this.props.elevationProperty === 'string'
+        ? this.props.elevationProperty
+        : '';
     const elev = elevProp ? num[elevProp] : undefined;
 
     // Per-surfel RGBA (baked confidence already in alpha) — the interleaved u8
     // vector column, bound normalized. Absent ⇒ the shader's fallback colour.
-    const colorN = typeof this.props.colorColumn === 'string' ? this.props.colorColumn : '';
+    const colorN =
+      typeof this.props.colorColumn === 'string' ? this.props.colorColumn : '';
     const color = colorN ? vec[colorN] : undefined;
     const hasColor = !!color && color.size === 4;
 
@@ -412,7 +465,11 @@ export class SplatLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLayer
       attributes.instanceElevations = { value: elev, size: 1 };
     }
     if (hasColor) {
-      attributes.instanceColors = { value: color!.value, size: 4, normalized: true };
+      attributes.instanceColors = {
+        value: color!.value,
+        size: 4,
+        normalized: true,
+      };
     }
     // Worldbuild static/dynamic flag (0/1) from the `is_dynamic` column, bound
     // zero-copy (the shader thresholds at 0.5). Absent ⇒ default 0 (all static).

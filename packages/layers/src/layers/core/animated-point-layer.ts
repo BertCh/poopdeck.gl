@@ -80,8 +80,16 @@ import type {
   NumericAccessorValue,
   WeightAccessorValue,
 } from '../../lib/accessor-alias.js';
-import { getFeatureProperties, DEFAULT_CATEGORICAL_PALETTE } from '@poopdeck.gl/core';
-import type { Tile, TileId, Layer as TileLayer, BinaryFeatures } from '@poopdeck.gl/core';
+import {
+  getFeatureProperties,
+  DEFAULT_CATEGORICAL_PALETTE,
+} from '@poopdeck.gl/core';
+import type {
+  Tile,
+  TileId,
+  Layer as TileLayer,
+  BinaryFeatures,
+} from '@poopdeck.gl/core';
 import { expandCategoricalColors as coreExpandCategoricalColors } from '@poopdeck.gl/core/style';
 import type { RGBA255 } from '@poopdeck.gl/core/style';
 
@@ -391,7 +399,8 @@ export interface _AnimatedPointLayerProps {
 }
 
 /** Complete props accepted by {@link AnimatedPointLayer}. */
-export type AnimatedPointLayerProps = _AnimatedPointLayerProps & SpatioTemporalLayerProps;
+export type AnimatedPointLayerProps = _AnimatedPointLayerProps &
+  SpatioTemporalLayerProps;
 
 // Default color palette for categorical data — the single source of truth in
 // @poopdeck.gl/core, shared with the maplibre adapter.
@@ -412,7 +421,10 @@ interface PreparedTile {
   /** Reference-stable data object for ScatterplotLayer's binary interface. */
   data: {
     length: number;
-    attributes: Record<string, { value: any; size: number; normalized?: boolean }>;
+    attributes: Record<
+      string,
+      { value: any; size: number; normalized?: boolean }
+    >;
   };
   /** Per-tile time reference; passed to TimeFilterExtension as `timeOffset`. */
   timeOffset: number;
@@ -546,7 +558,9 @@ function indicesToFloat32(indices: Uint16Array, count: number): Float32Array {
  * `_subLayerProps: { points: { type: MyLayer, ...props } }` swaps the
  * sublayer class / overrides sublayer props (deck's CompositeLayer contract).
  */
-export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLayer<
+export class AnimatedPointLayer<
+  ExtraPropsT extends {} = {},
+> extends SpatioTemporalLayer<
   ExtraPropsT & Required<_AnimatedPointLayerProps>
 > {
   static layerName = 'AnimatedPointLayer';
@@ -564,19 +578,49 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
     radius: { type: 'object', value: 5, compare: true },
     // Accessor-named aliases (see the prop docs): unset by default so the
     // legacy props win unless the caller opts into the upstream vocabulary.
-    getFillColor: { type: 'object', value: null, optional: true, compare: true },
+    getFillColor: {
+      type: 'object',
+      value: null,
+      optional: true,
+      compare: true,
+    },
     getRadius: { type: 'object', value: null, optional: true, compare: true },
-    getLineColor: { type: 'object', value: null, optional: true, compare: true },
+    getLineColor: {
+      type: 'object',
+      value: null,
+      optional: true,
+      compare: true,
+    },
     colorPalette: { type: 'array', value: DEFAULT_PALETTE, compare: true },
-    colorMapping: { type: 'object', value: null, optional: true, compare: false },
+    colorMapping: {
+      type: 'object',
+      value: null,
+      optional: true,
+      compare: false,
+    },
     // Transparent fallback: features whose category is absent from
     // `colorMapping` disappear rather than render a misleading color.
     colorMappingDefault: { type: 'color', value: [0, 0, 0, 0] },
     // Per-point RGB from three numeric columns; null = use the normal color path.
-    rgbColorColumns: { type: 'object', value: null, optional: true, compare: true },
-    colorVectorColumn: { type: 'object', value: 'point_rgba', optional: true, compare: true },
+    rgbColorColumns: {
+      type: 'object',
+      value: null,
+      optional: true,
+      compare: true,
+    },
+    colorVectorColumn: {
+      type: 'object',
+      value: 'point_rgba',
+      optional: true,
+      compare: true,
+    },
     splat: false,
-    radiusTransform: { type: 'function', value: null, optional: true, compare: false },
+    radiusTransform: {
+      type: 'function',
+      value: null,
+      optional: true,
+      compare: false,
+    },
 
     // Marker styling forwarded to ScatterplotLayer.
     stroked: false,
@@ -584,11 +628,20 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
     strokeColor: { type: 'color', value: [0, 0, 0, 255] },
     // Constant-or-column domain, same permissive descriptor as fillColor/radius.
     strokeWidth: { type: 'object', value: 1, compare: true },
-    getLineWidth: { type: 'object', value: null, optional: true, compare: true },
+    getLineWidth: {
+      type: 'object',
+      value: null,
+      optional: true,
+      compare: true,
+    },
     lineWidthUnits: 'meters',
     lineWidthScale: { type: 'number', value: 1, min: 0 },
     lineWidthMinPixels: { type: 'number', value: 0, min: 0 },
-    lineWidthMaxPixels: { type: 'number', value: Number.MAX_SAFE_INTEGER, min: 0 },
+    lineWidthMaxPixels: {
+      type: 'number',
+      value: Number.MAX_SAFE_INTEGER,
+      min: 0,
+    },
     billboard: false,
     antialiasing: true,
 
@@ -608,7 +661,12 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
     // from the tile's positionDimensions; `elevationProperty` additionally
     // sources per-point z from a numeric column on 2D tiles. `use3D` is a hint.
     use3D: false,
-    elevationProperty: { type: 'object', value: null, optional: true, compare: true },
+    elevationProperty: {
+      type: 'object',
+      value: null,
+      optional: true,
+      compare: true,
+    },
     // Allow negative scale (e.g. invert depth) — z values themselves may be
     // negative (below-grade returns), so the multiplier is unconstrained too.
     elevationScale: { type: 'number', value: 1 },
@@ -616,9 +674,19 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
     // Column range filter (DataFilterExtension). Unset ⇒ not installed.
     // Permissive {type:'object'} descriptors: filterProperty holds a column
     // name; the ranges hold a [min,max] tuple OR null (rejected by 'array').
-    filterProperty: { type: 'object', value: null, optional: true, compare: true },
+    filterProperty: {
+      type: 'object',
+      value: null,
+      optional: true,
+      compare: true,
+    },
     filterRange: { type: 'object', value: null, optional: true, compare: true },
-    filterSoftRange: { type: 'object', value: null, optional: true, compare: true },
+    filterSoftRange: {
+      type: 'object',
+      value: null,
+      optional: true,
+      compare: true,
+    },
     filterEnabled: true,
   };
 
@@ -634,7 +702,11 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
    */
   private sublayerCache = new Map<
     string,
-    { layer: ScatterplotLayer; preparedKey: PreparedTile; layerPropsKey: string }
+    {
+      layer: ScatterplotLayer;
+      preparedKey: PreparedTile;
+      layerPropsKey: string;
+    }
   >();
 
   /** Digest of every prop baked into a sublayer at construction time. */
@@ -664,7 +736,9 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
    * the per-vertex time attribute is unused. Restricting registration to
    * start/end frees a vertex-attribute slot for the picking buffer.
    */
-  private readonly timeFilterExtension = new TimeFilterExtension({ mode: 'window' });
+  private readonly timeFilterExtension = new TimeFilterExtension({
+    mode: 'window',
+  });
 
   /**
    * Singleton CategoryColorExtension. Like the time filter, it's stateless —
@@ -689,7 +763,9 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
    * {@link splatExtension} — a no-op object alloc; it contributes no attribute,
    * uniform or shader unless actually installed.
    */
-  private readonly dataFilterExtension = new DataFilterExtension({ filterSize: 1 });
+  private readonly dataFilterExtension = new DataFilterExtension({
+    filterSize: 1,
+  });
 
   /**
    * Stable getTime reference. Critical: deck.gl re-runs work when accessor
@@ -807,7 +883,9 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
       // Column-filter uniforms (DataFilterExtension). A range/enabled change is
       // a uniform-only edit, so — like timeWindow — it rebuilds the cached
       // sublayers (whose props carry the values) rather than re-preparing tiles.
-      Array.isArray(this.props.filterRange) ? this.props.filterRange.join(',') : '',
+      Array.isArray(this.props.filterRange)
+        ? this.props.filterRange.join(',')
+        : '',
       Array.isArray(this.props.filterSoftRange)
         ? this.props.filterSoftRange.join(',')
         : '',
@@ -836,7 +914,8 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
     if (this.lastTilesRef !== tiles) {
       const live = new Set<string>();
       for (const tile of tiles) {
-        for (const tileLayer of tile.layers) live.add(makeTileKey(tile, tileLayer));
+        for (const tileLayer of tile.layers)
+          live.add(makeTileKey(tile, tileLayer));
       }
       for (const key of this.preparedTileCache.keys()) {
         if (!live.has(key)) this.preparedTileCache.delete(key);
@@ -886,7 +965,9 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
     });
     if (DEBUG) {
       // eslint-disable-next-line no-console
-      console.log(`AnimatedPointLayer: ${tiles.length} tiles → ${sublayers.length} sublayers`);
+      console.log(
+        `AnimatedPointLayer: ${tiles.length} tiles → ${sublayers.length} sublayers`,
+      );
     }
     return sublayers;
   }
@@ -916,21 +997,27 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
     // Elevation column + scale are baked into the prepared `positions` z, so
     // they belong in the styleKey: changing either must re-pad the buffer
     // (and, in cumulative mode, re-pack the slabs).
-    const elevProp = typeof this.props.elevationProperty === 'string'
-      ? this.props.elevationProperty
-      : '';
+    const elevProp =
+      typeof this.props.elevationProperty === 'string'
+        ? this.props.elevationProperty
+        : '';
     const elevScale = elevProp ? (this.props.elevationScale ?? 1) : 0;
     // Per-point RGB is baked into the prepared getFillColor buffer, so the
     // chosen columns belong in the styleKey: changing them must re-expand it.
     const rgb = this.props.rgbColorColumns;
     const rgbKey = rgb ? `rgb${rgb.join(',')}` : '';
-    const colorVecKey = typeof this.props.colorVectorColumn === 'string' ? `cv${this.props.colorVectorColumn}` : '';
+    const colorVecKey =
+      typeof this.props.colorVectorColumn === 'string'
+        ? `cv${this.props.colorVectorColumn}`
+        : '';
     // Filter column NAME is baked into the `filterValue` attribute, so a change
     // must re-prepare tiles (and, via the new preparedKey, rebuild sublayers —
     // covering the unset↔set toggle that adds/removes DataFilterExtension).
     const filterProp = this.filterPropertyValue() ?? '';
     return `${colorVecKey}|${fillColorProp}|${radiusProp}|${lineWidthProp}|${
-      fillColorProp ? colorListDigest(this.props.colorPalette ?? DEFAULT_PALETTE) : 0
+      fillColorProp
+        ? colorListDigest(this.props.colorPalette ?? DEFAULT_PALETTE)
+        : 0
     }|${mapping ? `m${colorMappingDigest(mapping)}` : 'g'}|${
       transform ? `r${functionId(transform)}` : ''
     }|e${elevProp}:${elevScale}|${rgbKey}|f${filterProp}|${updateTriggersDigest(this.props.updateTriggers)}`;
@@ -947,7 +1034,12 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
     const tileKey = makeTileKey(tile, tileLayer);
     const cached = this.preparedTileCache.get(tileKey);
     if (cached && cached.styleKey === styleKey) {
-      emit('tilePrepare', { layer: 'AnimatedPointLayer', tileKey, cached: true, ms: 0 });
+      emit('tilePrepare', {
+        layer: 'AnimatedPointLayer',
+        tileKey,
+        cached: true,
+        ms: 0,
+      });
       return cached;
     }
     const prepared = this.buildTileData(tile, tileLayer);
@@ -966,7 +1058,8 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
 
     const fillColorValue = this.fillColorValue();
     const radiusValue = this.radiusValue();
-    const fillColorProp = typeof fillColorValue === 'string' ? fillColorValue : '';
+    const fillColorProp =
+      typeof fillColorValue === 'string' ? fillColorValue : '';
     const radiusProp = typeof radiusValue === 'string' ? radiusValue : '';
     const styleKey = this.computeStyleKey();
     const tileKey = makeTileKey(tile, tileLayer);
@@ -980,9 +1073,10 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
     // column[i] * elevationScale`. Resolve the column here so both the pad
     // path and the rare 3D-tile path can apply it. Unset / missing column ⇒
     // z stays 0 (byte-identical to a flat render).
-    const elevProp = typeof this.props.elevationProperty === 'string'
-      ? this.props.elevationProperty
-      : '';
+    const elevProp =
+      typeof this.props.elevationProperty === 'string'
+        ? this.props.elevationProperty
+        : '';
     const elevValues = elevProp ? binary.numericProps[elevProp] : undefined;
     const elevScale = this.props.elevationScale ?? 1;
 
@@ -1009,7 +1103,12 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
         positions = binary.positions;
       }
     } else {
-      positions = padPositionsTo3D(binary.positions, count, elevValues, elevScale);
+      positions = padPositionsTo3D(
+        binary.positions,
+        count,
+        elevValues,
+        elevScale,
+      );
     }
 
     const attributes: PreparedTile['data']['attributes'] = {
@@ -1027,7 +1126,10 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
     // Per-point RGBA from ONE interleaved vector column (baked at build time):
     // bind the contiguous u8 buffer straight to the GPU, zero re-pack. Wins over
     // every other colour path; falls through when the column is absent.
-    const colorVecN = typeof this.props.colorVectorColumn === 'string' ? this.props.colorVectorColumn : '';
+    const colorVecN =
+      typeof this.props.colorVectorColumn === 'string'
+        ? this.props.colorVectorColumn
+        : '';
     const colorVec = colorVecN ? binary.vectorProps?.[colorVecN] : undefined;
 
     // Per-point RGB from three numeric columns (build-time camera-sampled
@@ -1041,7 +1143,11 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
 
     // Property-driven color
     if (colorVec && colorVec.size === 4) {
-      attributes.getFillColor = { value: colorVec.value, size: 4, normalized: true };
+      attributes.getFillColor = {
+        value: colorVec.value,
+        size: 4,
+        normalized: true,
+      };
     } else if (rArr && gArr && bArr) {
       const out = new Uint8Array(count * 4);
       for (let i = 0; i < count; i++) {
@@ -1068,7 +1174,10 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
               binary,
               {
                 property: fillColorProp,
-                colorMapping: this.props.colorMapping as Record<string, RGBA255>,
+                colorMapping: this.props.colorMapping as Record<
+                  string,
+                  RGBA255
+                >,
                 colorMappingDefault: fallback as RGBA255,
               },
               'u8',
@@ -1121,7 +1230,8 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
     // Cumulative slabs don't pack this attribute (absorbTile copies a fixed
     // schema), so warn there instead of silently rendering constant widths.
     const lineWidthValue = this.lineWidthValue();
-    const lineWidthProp = typeof lineWidthValue === 'string' ? lineWidthValue : '';
+    const lineWidthProp =
+      typeof lineWidthValue === 'string' ? lineWidthValue : '';
     if (lineWidthProp) {
       if (this.props.cumulative) {
         warnOnce(
@@ -1188,18 +1298,17 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
     const filterProp = this.filterPropertyValue();
     const hasFilter = !!prepared.data.attributes.filterValue;
     const constRadius = typeof radiusValue === 'number' ? radiusValue : 5;
-    const constColor = (Array.isArray(fillColorValue)
-      ? fillColorValue
-      : ([255, 128, 0, 255] as Color)) as Color;
+    const constColor = (
+      Array.isArray(fillColorValue)
+        ? fillColorValue
+        : ([255, 128, 0, 255] as Color)
+    ) as Color;
 
     // CategoryColorExtension props: when this tile uses the GPU palette path
     // we pass the resolved palette + useCategoryColor=true. Otherwise the
     // extension idles (its shader branch is gated by useCategoryColor).
     const useGpuCategory = prepared.gpuPalette !== null;
-    if (
-      useGpuCategory &&
-      prepared.gpuPalette!.length > CATEGORY_PALETTE_SIZE
-    ) {
+    if (useGpuCategory && prepared.gpuPalette!.length > CATEGORY_PALETTE_SIZE) {
       warnOnce(
         'AnimatedPointLayer:paletteOverflow',
         `[AnimatedPointLayer] colorPalette has ${prepared.gpuPalette!.length} ` +
@@ -1388,7 +1497,9 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
       }
     }
 
-    const sublayers: Layer[] = this.slabs.map((slab, i) => this.buildSlabLayer(slab, i));
+    const sublayers: Layer[] = this.slabs.map((slab, i) =>
+      this.buildSlabLayer(slab, i),
+    );
 
     emit('renderLayers', {
       layer: 'AnimatedPointLayer',
@@ -1444,7 +1555,11 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
     if (slab.categoryIndex && a.instanceCategoryIndex) {
       slab.categoryIndex.set(a.instanceCategoryIndex.value as Float32Array, o);
     }
-    if (slab.radii && a.getRadius && a.getRadius.value instanceof Float32Array) {
+    if (
+      slab.radii &&
+      a.getRadius &&
+      a.getRadius.value instanceof Float32Array
+    ) {
       slab.radii.set(a.getRadius.value, o);
     }
 
@@ -1470,7 +1585,9 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
       startTimes: new Float32Array(capacity),
       endTimes: new Float32Array(capacity),
       fillColors: schema.hasFillColor ? new Uint8Array(capacity * 4) : null,
-      categoryIndex: schema.hasCategoryIndex ? new Float32Array(capacity) : null,
+      categoryIndex: schema.hasCategoryIndex
+        ? new Float32Array(capacity)
+        : null,
       radii: schema.hasRadius ? new Float32Array(capacity) : null,
       frozen: false,
       provenance: [],
@@ -1491,7 +1608,10 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
    * re-upload the grown open slab — and reusing it across a style-only rebuild
    * is what lets deck.gl SKIP re-upload when only a uniform changed.
    */
-  private slabData(slab: ConsolidatedSlab): { length: number; attributes: Record<string, any> } {
+  private slabData(slab: ConsolidatedSlab): {
+    length: number;
+    attributes: Record<string, any>;
+  } {
     if (slab.dataRef && slab.dataVersion === slab.version) return slab.dataRef;
     const count = slab.count;
     const attributes: Record<string, any> = {
@@ -1507,7 +1627,10 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
       };
     }
     if (slab.categoryIndex) {
-      attributes.instanceCategoryIndex = { value: slab.categoryIndex.subarray(0, count), size: 1 };
+      attributes.instanceCategoryIndex = {
+        value: slab.categoryIndex.subarray(0, count),
+        size: 1,
+      };
     }
     if (slab.radii) {
       attributes.getRadius = { value: slab.radii.subarray(0, count), size: 1 };
@@ -1522,15 +1645,20 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
    * keep a stable layer reference (their `version` never advances ⇒ no GPU
    * re-upload); the open slab rebuilds whenever it grew since last render.
    */
-  private buildSlabLayer(slab: ConsolidatedSlab, index: number): ScatterplotLayer {
+  private buildSlabLayer(
+    slab: ConsolidatedSlab,
+    index: number,
+  ): ScatterplotLayer {
     if (slab.layer && slab.builtVersion === slab.version) return slab.layer;
 
     const radiusValue = this.radiusValue();
     const fillColorValue = this.fillColorValue();
     const constRadius = typeof radiusValue === 'number' ? radiusValue : 5;
-    const constColor = (Array.isArray(fillColorValue)
-      ? fillColorValue
-      : ([255, 128, 0, 255] as Color)) as Color;
+    const constColor = (
+      Array.isArray(fillColorValue)
+        ? fillColorValue
+        : ([255, 128, 0, 255] as Color)
+    ) as Color;
     const useGpuCategory = !!this.slabSchema?.gpuPalette;
 
     // Same `points` short id as the per-tile path: one `_subLayerProps.points`
@@ -1563,7 +1691,9 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
       sttSlabProvenance: slab.provenance,
 
       useCategoryColor: useGpuCategory,
-      ...(useGpuCategory ? { categoryPalette: this.slabSchema!.gpuPalette } : {}),
+      ...(useGpuCategory
+        ? { categoryPalette: this.slabSchema!.gpuPalette }
+        : {}),
     });
 
     const SubLayerClass = this.getSubLayerClass('points', ScatterplotLayer);
@@ -1586,7 +1716,9 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
   getPickingInfo(params: GetPickingInfoParams): SpatioTemporalPickingInfo {
     const info = super.getPickingInfo(params);
     const provenance = (
-      params.sourceLayer?.props as { sttSlabProvenance?: SlabProvenance[] } | undefined
+      params.sourceLayer?.props as
+        | { sttSlabProvenance?: SlabProvenance[] }
+        | undefined
     )?.sttSlabProvenance;
     if (!provenance || info.index < 0) return info;
     const entry = findSlabProvenance(provenance, info.index);
@@ -1606,7 +1738,8 @@ export class AnimatedPointLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
       const tileLayer = tile.layers.find((l) => l.name === entry.layerName);
       if (tileLayer) {
         info.object =
-          getFeatureProperties(tileLayer.features, info.index - entry.start) ?? undefined;
+          getFeatureProperties(tileLayer.features, info.index - entry.start) ??
+          undefined;
       }
     }
     return info;

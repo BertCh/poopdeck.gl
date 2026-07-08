@@ -81,7 +81,9 @@ export const ARC_SEGMENTS = 32;
  *   `position.y` ∈ {-1,1} — SIDE of the centreline (scaled by half screen-width)
  * `N+1` samples × 2 sides → `N` quads.
  */
-export function makeArcStripGeometry(segments = ARC_SEGMENTS): InstancedBufferGeometry {
+export function makeArcStripGeometry(
+  segments = ARC_SEGMENTS,
+): InstancedBufferGeometry {
   const geometry = new InstancedBufferGeometry();
   const samples = segments + 1;
   const positions = new Float32Array(samples * 2 * 3);
@@ -89,8 +91,12 @@ export function makeArcStripGeometry(segments = ARC_SEGMENTS): InstancedBufferGe
   for (let i = 0; i < samples; i++) {
     const t = i / segments;
     // side -1 then +1 for this sample.
-    positions[p++] = t; positions[p++] = -1; positions[p++] = 0;
-    positions[p++] = t; positions[p++] = 1; positions[p++] = 0;
+    positions[p++] = t;
+    positions[p++] = -1;
+    positions[p++] = 0;
+    positions[p++] = t;
+    positions[p++] = 1;
+    positions[p++] = 0;
   }
   geometry.setAttribute('position', new Float32BufferAttribute(positions, 3));
   const indices: number[] = [];
@@ -130,7 +136,12 @@ export interface ArcMaterialBundle {
  * linear XY/Z interpolation between the RTC endpoints, lifted in +Z by a
  * parabola `4·t·(1−t)` scaled by the per-arc height × chord length.
  */
-function parabolicPos(src: TSLNode, tgt: TSLNode, height: TSLNode, t: TSLNode): TSLNode {
+function parabolicPos(
+  src: TSLNode,
+  tgt: TSLNode,
+  height: TSLNode,
+  t: TSLNode,
+): TSLNode {
   const base = mix(src, tgt, t);
   // chord length in the ground (XY) plane.
   const dx = tgt.x.sub(src.x);
@@ -180,7 +191,9 @@ function greatCirclePos(
  * `sttColorTarget` (vec4 0..1), `sttStart`/`sttEnd` (float, window), `sttHeight`
  * (float, per-arc height multiplier) on a {@link makeArcStripGeometry}.
  */
-export function createArcMaterial(opts: ArcMaterialOptions = {}): ArcMaterialBundle {
+export function createArcMaterial(
+  opts: ArcMaterialOptions = {},
+): ArcMaterialBundle {
   const shape: ArcShape = opts.shape ?? 'parabolic';
   const time = new TimeFilterUniforms();
   const arc = new ArcUniforms();
@@ -258,10 +271,14 @@ export interface ArcUniformValues {
 }
 
 /** Push the playhead + width/viewport/origin into the uniforms. Once per frame. */
-export function updateArcUniforms(bundle: ArcMaterialBundle, v: ArcUniformValues): void {
+export function updateArcUniforms(
+  bundle: ArcMaterialBundle,
+  v: ArcUniformValues,
+): void {
   updateTimeFilterUniforms(bundle.time, v.relativeCurrentTime, v.params);
   if (v.widthPx !== undefined) bundle.arc.widthPx.value = v.widthPx;
   if (v.opacity !== undefined) bundle.arc.opacity.value = v.opacity;
   if (v.viewport) bundle.arc.viewport.value.set(v.viewport[0], v.viewport[1]);
-  if (v.origin) bundle.arc.origin.value.set(v.origin[0], v.origin[1], v.origin[2]);
+  if (v.origin)
+    bundle.arc.origin.value.set(v.origin[0], v.origin[1], v.origin[2]);
 }

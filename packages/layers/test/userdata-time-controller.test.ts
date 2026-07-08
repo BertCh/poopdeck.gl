@@ -29,7 +29,8 @@ function makeLayer(props: Record<string, unknown>) {
   const layer: any = Object.create((SpatioTemporalLayer as any).prototype);
   layer.props = { currentTime: 0, timeWindow: 1000, ...props };
   layer.state = {};
-  layer.setState = (patch: Record<string, unknown>) => Object.assign(layer.state, patch);
+  layer.setState = (patch: Record<string, unknown>) =>
+    Object.assign(layer.state, patch);
   layer._initArchiveAndTileset = vi.fn(); // skip async archive setup
   return layer;
 }
@@ -59,7 +60,10 @@ describe('SpatioTemporalLayer time-controller resolution', () => {
 
     layer.initializeState(context);
 
-    expect(controller.on).toHaveBeenCalledWith('playState', expect.any(Function));
+    expect(controller.on).toHaveBeenCalledWith(
+      'playState',
+      expect.any(Function),
+    );
     expect(controller.on).toHaveBeenCalledWith('tick', expect.any(Function));
     expect(layer.state.resolvedTimeController).toBe(controller);
   });
@@ -67,12 +71,17 @@ describe('SpatioTemporalLayer time-controller resolution', () => {
   it('prefers the explicit prop over the userData controller', () => {
     const propController = makeController();
     const userDataController = makeController();
-    const context = { userData: { stt: { timeController: userDataController } } };
+    const context = {
+      userData: { stt: { timeController: userDataController } },
+    };
     const layer = makeLayer({ timeController: propController });
 
     layer.initializeState(context);
 
-    expect(propController.on).toHaveBeenCalledWith('tick', expect.any(Function));
+    expect(propController.on).toHaveBeenCalledWith(
+      'tick',
+      expect.any(Function),
+    );
     expect(userDataController.on).not.toHaveBeenCalled();
     expect(layer.state.resolvedTimeController).toBe(propController);
   });

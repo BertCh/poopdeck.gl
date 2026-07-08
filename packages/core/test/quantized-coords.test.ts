@@ -47,7 +47,9 @@ function commonColumns(featureCount: number) {
   const ids = makeData({
     type: new Uint64(),
     length: featureCount,
-    data: BigUint64Array.from({ length: featureCount }, (_, i) => BigInt(i + 1)),
+    data: BigUint64Array.from({ length: featureCount }, (_, i) =>
+      BigInt(i + 1),
+    ),
   });
   const startTime = makeData({
     type: new Int64(),
@@ -70,9 +72,15 @@ function geomMeta(ext: string, affine: Affine | string): Map<string, string> {
 }
 
 /** Build a quantized Point tile: FixedSizeList<Int32,2> + affine. */
-function buildQuantizedPointTile(qcoords: number[], affine: Affine | string): Uint8Array {
+function buildQuantizedPointTile(
+  qcoords: number[],
+  affine: Affine | string,
+): Uint8Array {
   const featureCount = qcoords.length / 2;
-  const coordValues = makeData({ type: new Int32(), data: Int32Array.from(qcoords) });
+  const coordValues = makeData({
+    type: new Int32(),
+    data: Int32Array.from(qcoords),
+  });
   const geomData = makeData({
     type: new FixedSizeList(2, new Field('xy', new Int32(), false)),
     length: featureCount,
@@ -84,9 +92,17 @@ function buildQuantizedPointTile(qcoords: number[], affine: Affine | string): Ui
     new Field('id', new Uint64(), false),
     new Field('start_time', new Int64(), false),
     new Field('end_time', new Int64(), false),
-    new Field('geometry', geomData.type, false, geomMeta('geoarrow.point', affine)),
+    new Field(
+      'geometry',
+      geomData.type,
+      false,
+      geomMeta('geoarrow.point', affine),
+    ),
   ];
-  const schema = new Schema(fields, new Map([['stt:geometry', 'geoarrow.point']]));
+  const schema = new Schema(
+    fields,
+    new Map([['stt:geometry', 'geoarrow.point']]),
+  );
   const structData = makeData({
     type: new Struct(fields),
     length: featureCount,
@@ -97,7 +113,10 @@ function buildQuantizedPointTile(qcoords: number[], affine: Affine | string): Ui
 }
 
 /** Build a quantized LineString tile: List<FixedSizeList<Int32,2>> + affine. */
-function buildQuantizedLineTile(features: number[][], affine: Affine): Uint8Array {
+function buildQuantizedLineTile(
+  features: number[][],
+  affine: Affine,
+): Uint8Array {
   const featureCount = features.length;
   const flat: number[] = [];
   const offsets: number[] = [0];
@@ -106,7 +125,10 @@ function buildQuantizedLineTile(features: number[][], affine: Affine): Uint8Arra
     offsets.push(offsets[offsets.length - 1] + f.length / 2);
   }
   const totalVerts = offsets[offsets.length - 1];
-  const coordValues = makeData({ type: new Int32(), data: Int32Array.from(flat) });
+  const coordValues = makeData({
+    type: new Int32(),
+    data: Int32Array.from(flat),
+  });
   const coordList = makeData({
     type: new FixedSizeList(2, new Field('xy', new Int32(), false)),
     length: totalVerts,
@@ -125,9 +147,17 @@ function buildQuantizedLineTile(features: number[][], affine: Affine): Uint8Arra
     new Field('id', new Uint64(), false),
     new Field('start_time', new Int64(), false),
     new Field('end_time', new Int64(), false),
-    new Field('geometry', geomData.type, false, geomMeta('geoarrow.linestring', affine)),
+    new Field(
+      'geometry',
+      geomData.type,
+      false,
+      geomMeta('geoarrow.linestring', affine),
+    ),
   ];
-  const schema = new Schema(fields, new Map([['stt:geometry', 'geoarrow.linestring']]));
+  const schema = new Schema(
+    fields,
+    new Map([['stt:geometry', 'geoarrow.linestring']]),
+  );
   const structData = makeData({
     type: new Struct(fields),
     length: featureCount,
@@ -150,7 +180,10 @@ describe('coordinate quantization decode', () => {
     expect(f.positions).toBeInstanceOf(Float64Array);
     for (let i = 0; i < q.length; i += 2) {
       expect(f.positions[i]).toBeCloseTo(deq(q[i], affine.x0, affine.sx), 9);
-      expect(f.positions[i + 1]).toBeCloseTo(deq(q[i + 1], affine.y0, affine.sy), 9);
+      expect(f.positions[i + 1]).toBeCloseTo(
+        deq(q[i + 1], affine.y0, affine.sy),
+        9,
+      );
     }
   });
 
@@ -167,7 +200,10 @@ describe('coordinate quantization decode', () => {
     const flat = features.flat();
     for (let i = 0; i < flat.length; i += 2) {
       expect(f.positions[i]).toBeCloseTo(deq(flat[i], affine.x0, affine.sx), 9);
-      expect(f.positions[i + 1]).toBeCloseTo(deq(flat[i + 1], affine.y0, affine.sy), 9);
+      expect(f.positions[i + 1]).toBeCloseTo(
+        deq(flat[i + 1], affine.y0, affine.sy),
+        9,
+      );
     }
   });
 
@@ -175,13 +211,16 @@ describe('coordinate quantization decode', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
       const q = [10, 20];
-      const decode = () => decodeTile(buildQuantizedPointTile(q, '{not json'), tileId);
+      const decode = () =>
+        decodeTile(buildQuantizedPointTile(q, '{not json'), tileId);
       const f = decode().layers[0].features;
       // Fallback: the leaf ships through as raw fixed-point grid indices.
       expect(Array.from(f.positions)).toEqual(q);
       // A corrupt archive decodes many tiles — the warning must not repeat.
       decode();
-      const quantWarns = warn.mock.calls.filter((c) => String(c[0]).includes('stt:quant'));
+      const quantWarns = warn.mock.calls.filter((c) =>
+        String(c[0]).includes('stt:quant'),
+      );
       expect(quantWarns).toHaveLength(1);
     } finally {
       warn.mockRestore();

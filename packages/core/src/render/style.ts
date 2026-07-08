@@ -133,19 +133,24 @@ export function expandCategoricalColors(
     return buf;
   }
 
-  if (spec.requireMappingOrPalette && !keyed && palette.length === 0) return null;
+  if (spec.requireMappingOrPalette && !keyed && palette.length === 0)
+    return null;
 
   const buf = alloc(out, n);
   for (let i = 0; i < n; i++) {
     const idx = cat.indices[i];
     let c: RGBA255 | undefined;
     if (keyed) {
-      const name = idx === NULL_CATEGORY_INDEX ? undefined : cat.categories[idx];
+      const name =
+        idx === NULL_CATEGORY_INDEX ? undefined : cat.categories[idx];
       c = (name !== undefined ? mapping![name] : undefined) ?? def;
       if (!c && palette.length > 0) c = palette[idx % palette.length];
       if (!c) c = transparent;
     } else {
-      c = palette.length > 0 ? palette[idx % palette.length] : (def ?? transparent);
+      c =
+        palette.length > 0
+          ? palette[idx % palette.length]
+          : (def ?? transparent);
     }
     write(buf, i * 4, c, out);
   }
@@ -230,7 +235,9 @@ export function expandRampColors(
   const buf = alloc(out, n);
   const col = binary.numericProps[spec.property];
   for (let i = 0; i < n; i++) {
-    const c = col ? rampColorAt(col[i], spec.domain, spec.range) : spec.fallback;
+    const c = col
+      ? rampColorAt(col[i], spec.domain, spec.range)
+      : spec.fallback;
     write(buf, i * 4, c, out);
   }
   return buf;

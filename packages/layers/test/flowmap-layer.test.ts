@@ -88,11 +88,15 @@ describe('FlowmapLayer', () => {
     // Flow layer carries the binary {length, attributes} shape.
     const flow = sublayers[0];
     expect(flow.props.data.length).toBe(2);
-    expect(flow.props.data.attributes.getSourcePosition.value).toBeInstanceOf(Float64Array);
+    expect(flow.props.data.attributes.getSourcePosition.value).toBeInstanceOf(
+      Float64Array,
+    );
     expect(flow.props.data.attributes.getWidth.size).toBe(1);
     // Per-instance endpoint insets (source/target node radii in px).
     expect(flow.props.data.attributes.getEndpointOffsets.size).toBe(2);
-    expect(flow.props.data.attributes.getEndpointOffsets.value).toBeInstanceOf(Float32Array);
+    expect(flow.props.data.attributes.getEndpointOffsets.value).toBeInstanceOf(
+      Float32Array,
+    );
   });
 
   it('drives arrow width from the active bucket; zero-flow arrows collapse to width 0', () => {
@@ -100,7 +104,8 @@ describe('FlowmapLayer', () => {
     const widthsAt = (time: number) => {
       const layer = makeLayer(time);
       layer.state = { tiles: [odMatrixTile(TWO_PAIRS)] };
-      return layer.renderLayers()[0].props.data.attributes.getWidth.value as Float32Array;
+      return layer.renderLayers()[0].props.data.attributes.getWidth
+        .value as Float32Array;
     };
     const w0 = widthsAt(0);
     expect(w0[0]).toBeCloseTo(Math.sqrt(10)); // widthScale 1 · sqrt(flow)
@@ -121,7 +126,10 @@ describe('FlowmapLayer', () => {
     const layer = makeLayer(0); // bucket 0: only pair0 (A→B) active at flow 10
     layer.state = { tiles: [odMatrixTile(TWO_PAIRS)] };
     const nodeLayer = layer.renderLayers()[1];
-    const nodes = nodeLayer.props.data as { position: number[]; radius: number }[];
+    const nodes = nodeLayer.props.data as {
+      position: number[];
+      radius: number;
+    }[];
     // Two endpoints of the single active arc: A(0,0) and B(1,1).
     expect(nodes.length).toBe(2);
     const radii = nodes.map((n) => n.radius).sort((a, b) => a - b);
@@ -152,7 +160,11 @@ describe('FlowmapLayer', () => {
   });
 
   it('passes constant source/target colors and gap through to the sublayer', () => {
-    const layer = makeLayer(0, { sourceColor: [1, 2, 3, 255], targetColor: [4, 5, 6, 255], gap: 0.8 });
+    const layer = makeLayer(0, {
+      sourceColor: [1, 2, 3, 255],
+      targetColor: [4, 5, 6, 255],
+      gap: 0.8,
+    });
     layer.state = { tiles: [odMatrixTile(TWO_PAIRS)] };
     const flow = layer.renderLayers()[0];
     expect(flow.props.sourceColor).toEqual([1, 2, 3, 255]);

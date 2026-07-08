@@ -150,7 +150,9 @@ describe('AnimatedColumnLayer per-tile sublayer architecture', () => {
 
     // TimeFilterExtension instanced attributes — keyed by ATTRIBUTE name.
     // Zero-copy: the same Float32Array reference the tile carries.
-    expect(attrs.instanceStartTime.value).toBe(tile.layers[0].features.startTimes);
+    expect(attrs.instanceStartTime.value).toBe(
+      tile.layers[0].features.startTimes,
+    );
     expect(attrs.instanceStartTime.size).toBe(1);
     expect(attrs.instanceEndTime.value).toBe(tile.layers[0].features.endTimes);
     expect(attrs.instanceEndTime.size).toBe(1);

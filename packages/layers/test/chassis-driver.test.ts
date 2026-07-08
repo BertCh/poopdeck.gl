@@ -74,7 +74,15 @@ vi.mock('@deck.gl/core', async () =>
 
 const ICON_ATLAS = 'https://example.test/atlas.png';
 const ICON_MAPPING = {
-  vessel: { x: 0, y: 0, width: 64, height: 64, anchorX: 32, anchorY: 32, mask: true },
+  vessel: {
+    x: 0,
+    y: 0,
+    width: 64,
+    height: 64,
+    anchorX: 32,
+    anchorY: 32,
+    mask: true,
+  },
 };
 
 interface LayerCase {
@@ -97,7 +105,9 @@ const FULL_CASES: LayerCase[] = [
   {
     name: 'AnimatedPointLayer',
     load: () =>
-      import('../src/layers/core/animated-point-layer').then((m) => m.AnimatedPointLayer),
+      import('../src/layers/core/animated-point-layer').then(
+        (m) => m.AnimatedPointLayer,
+      ),
     props: {
       id: 'test',
       fillColor: [255, 128, 0, 255],
@@ -113,7 +123,9 @@ const FULL_CASES: LayerCase[] = [
   {
     name: 'AnimatedTripsLayer',
     load: () =>
-      import('../src/layers/trips/animated-trips-layer').then((m) => m.AnimatedTripsLayer),
+      import('../src/layers/trips/animated-trips-layer').then(
+        (m) => m.AnimatedTripsLayer,
+      ),
     props: {
       id: 'trips',
       tripColor: [253, 128, 93, 255],
@@ -132,7 +144,9 @@ const FULL_CASES: LayerCase[] = [
   {
     name: 'AnimatedPolygonLayer',
     load: () =>
-      import('../src/layers/core/animated-polygon-layer').then((m) => m.AnimatedPolygonLayer),
+      import('../src/layers/core/animated-polygon-layer').then(
+        (m) => m.AnimatedPolygonLayer,
+      ),
     props: {
       id: 'poly',
       fillColor: [255, 140, 0, 180],
@@ -149,7 +163,9 @@ const FULL_CASES: LayerCase[] = [
   {
     name: 'AnimatedArcLayer',
     load: () =>
-      import('../src/layers/core/animated-arc-layer').then((m) => m.AnimatedArcLayer),
+      import('../src/layers/core/animated-arc-layer').then(
+        (m) => m.AnimatedArcLayer,
+      ),
     props: {
       id: 'arcs',
       sourceColor: [0, 150, 255, 255],
@@ -169,7 +185,9 @@ const FULL_CASES: LayerCase[] = [
   {
     name: 'AnimatedIconLayer',
     load: () =>
-      import('../src/layers/core/animated-icon-layer').then((m) => m.AnimatedIconLayer),
+      import('../src/layers/core/animated-icon-layer').then(
+        (m) => m.AnimatedIconLayer,
+      ),
     props: {
       id: 'test',
       icon: 'vessel',
@@ -195,7 +213,9 @@ const FULL_CASES: LayerCase[] = [
   {
     name: 'AnimatedColumnLayer',
     load: () =>
-      import('../src/layers/core/animated-column-layer').then((m) => m.AnimatedColumnLayer),
+      import('../src/layers/core/animated-column-layer').then(
+        (m) => m.AnimatedColumnLayer,
+      ),
     props: {
       id: 'test',
       fillColor: [255, 140, 0, 255],
@@ -262,7 +282,9 @@ const COMPARATOR_ONLY_CASES: LayerCase[] = [
   {
     name: 'AnimatedPathLayer',
     load: () =>
-      import('../src/layers/core/animated-path-layer').then((m) => m.AnimatedPathLayer),
+      import('../src/layers/core/animated-path-layer').then(
+        (m) => m.AnimatedPathLayer,
+      ),
     props: {
       id: 'test',
       pathColor: [31, 186, 214, 255],
@@ -278,7 +300,9 @@ const COMPARATOR_ONLY_CASES: LayerCase[] = [
   {
     name: 'AnimatedLineLayer',
     load: () =>
-      import('../src/layers/core/animated-line-layer').then((m) => m.AnimatedLineLayer),
+      import('../src/layers/core/animated-line-layer').then(
+        (m) => m.AnimatedLineLayer,
+      ),
     props: {
       id: 'lines',
       color: [0, 150, 255, 255],

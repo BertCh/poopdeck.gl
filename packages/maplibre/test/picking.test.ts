@@ -65,13 +65,21 @@ describe('buildPickIdColors', () => {
     const floats = buildIdColors(n); // ids 0..n-1
     const bytes: Uint8Array = layer.buildPickIdColors(n, 1); // ids 1..n
     for (let i = 0; i < n; i++) {
-      const [fr, fg, fb] = [floats[i * 3], floats[i * 3 + 1], floats[i * 3 + 2]];
+      const [fr, fg, fb] = [
+        floats[i * 3],
+        floats[i * 3 + 1],
+        floats[i * 3 + 2],
+      ];
       // Our feature i (id i+1) should equal the core encoding of id i+1.
       const [r, g, b] = encodePickId(i + 1);
       expect(triple(bytes, i)).toEqual([r, g, b]);
       // And the core float for id i decodes to i.
       expect(
-        decodePickId([Math.round(fr * 255), Math.round(fg * 255), Math.round(fb * 255)]),
+        decodePickId([
+          Math.round(fr * 255),
+          Math.round(fg * 255),
+          Math.round(fb * 255),
+        ]),
       ).toBe(i);
     }
   });
@@ -80,7 +88,10 @@ describe('buildPickIdColors', () => {
 describe('cssToDevicePixel', () => {
   it('scales by dpr and flips Y into GL bottom-left space', () => {
     // dpr 2: (10,20) css → (20,40) device (top-left); flip in a 200-tall buffer.
-    expect(cssToDevicePixel(10, 20, 2, 200)).toEqual({ x: 20, y: 200 - 1 - 40 });
+    expect(cssToDevicePixel(10, 20, 2, 200)).toEqual({
+      x: 20,
+      y: 200 - 1 - 40,
+    });
   });
 
   it('is identity-ish at dpr 1 apart from the Y-flip', () => {
@@ -152,7 +163,9 @@ describe('resolvePick', () => {
     expect(res.tileId).toEqual(tile.id);
     // Feature 1's reconstructed columns (fixture: id 1, start 5000 / end 8000).
     expect(res.object.id).toBe(1);
-    expect(res.object.start_time).toBe(tile.layers[0].features.timeOffset + 5000);
+    expect(res.object.start_time).toBe(
+      tile.layers[0].features.timeOffset + 5000,
+    );
     expect(res.object.end_time).toBe(tile.layers[0].features.timeOffset + 8000);
   });
 

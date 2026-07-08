@@ -78,7 +78,9 @@ function normalizeNode(v: TSLNode): TSLNode {
   return v.normalize();
 }
 
-export function createColumnMaterial(opts: ColumnMaterialOptions = {}): ColumnMaterialBundle {
+export function createColumnMaterial(
+  opts: ColumnMaterialOptions = {},
+): ColumnMaterialBundle {
   const time = new TimeFilterUniforms();
   const column = new ColumnUniforms();
   const timeFiltered = opts.timeFiltered ?? true;
@@ -93,10 +95,7 @@ export function createColumnMaterial(opts: ColumnMaterialOptions = {}): ColumnMa
   const end = attribute('sttEnd', 'float');
 
   const op = positionGeometry; // unit-prism object position
-  const local = base
-    .add(bx.mul(op.x))
-    .add(by.mul(op.y))
-    .add(bz.mul(op.z));
+  const local = base.add(bx.mul(op.x)).add(by.mul(op.y)).add(bz.mul(op.z));
 
   const material = new MeshBasicNodeMaterial();
   material.positionNode = vec3(local);
@@ -136,15 +135,16 @@ export function createColumnMaterial(opts: ColumnMaterialOptions = {}): ColumnMa
   return { material, time, column, timeFiltered };
 }
 
-
-
 export interface ColumnUniformValues {
   relativeCurrentTime: number;
   params?: TimeFilterParams;
   opacity?: number;
 }
 
-export function updateColumnUniforms(bundle: ColumnMaterialBundle, v: ColumnUniformValues): void {
+export function updateColumnUniforms(
+  bundle: ColumnMaterialBundle,
+  v: ColumnUniformValues,
+): void {
   updateTimeFilterUniforms(bundle.time, v.relativeCurrentTime, v.params);
   bundle.column.opacity.value = v.opacity ?? 1;
 }

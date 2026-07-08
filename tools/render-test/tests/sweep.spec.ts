@@ -82,7 +82,9 @@ async function recordRenderer(page: Page): Promise<string | null> {
         (el.getContext('webgl') as WebGLRenderingContext | null);
       if (!gl) continue;
       const dbg = gl.getExtension('WEBGL_debug_renderer_info');
-      return (dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : 'unknown') as string;
+      return (
+        dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : 'unknown'
+      ) as string;
     }
     return null;
   });
@@ -130,7 +132,10 @@ function trackArchive(page: Page, archivePath: string): NetworkTally {
   return tally;
 }
 
-async function waitForLiveCanvas(page: Page, timeoutMs = 60_000): Promise<number | null> {
+async function waitForLiveCanvas(
+  page: Page,
+  timeoutMs = 60_000,
+): Promise<number | null> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     const stats = await canvasPixelStats(page);
@@ -182,14 +187,15 @@ async function runDataset(
   // heuristic), no STT geometry is on screen. Promote to data-missing.
   const archiveFailed = tally.archiveFailures > 0;
   if (ttffMs == null || archiveFailed) {
-    const archiveMissing =
-      archiveFailed || tally.archiveBytes === 0;
+    const archiveMissing = archiveFailed || tally.archiveBytes === 0;
     return {
       dataset,
       status: archiveMissing ? 'data-missing' : 'render-failed',
       errors: [
         ...errors,
-        ...sink.consoleErrors.filter((e) => FATAL_ERROR_PATTERNS.some((p) => p.test(e))),
+        ...sink.consoleErrors.filter((e) =>
+          FATAL_ERROR_PATTERNS.some((p) => p.test(e)),
+        ),
         ...sink.pageErrors,
       ],
       rendererTag: await recordRenderer(page),
@@ -213,7 +219,9 @@ async function runDataset(
   try {
     bounds = await getRangeBounds(slider);
   } catch (err) {
-    errors.push(`time slider not available: ${err instanceof Error ? err.message : String(err)}`);
+    errors.push(
+      `time slider not available: ${err instanceof Error ? err.message : String(err)}`,
+    );
   }
 
   const anchors: AnchorResult[] = [];
@@ -225,8 +233,15 @@ async function runDataset(
       try {
         await setRangeValue(slider, t);
       } catch (err) {
-        errors.push(`scrub to ${anchor.label} failed: ${err instanceof Error ? err.message : String(err)}`);
-        anchors.push({ anchor: anchor.label, time: t, metrics: null, fidelity: null });
+        errors.push(
+          `scrub to ${anchor.label} failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        anchors.push({
+          anchor: anchor.label,
+          time: t,
+          metrics: null,
+          fidelity: null,
+        });
         continue;
       }
       // Let the new frame settle. Capture the static fidelity frame BEFORE
@@ -289,7 +304,10 @@ test.describe('STT showcase evaluation sweep', () => {
   // The sweep is one logical job; let Playwright give it the full timeout.
   test.setTimeout(60 * 60 * 1000);
 
-  test('sweep every dataset, report perf + fidelity', async ({ page, baseURL }) => {
+  test('sweep every dataset, report perf + fidelity', async ({
+    page,
+    baseURL,
+  }) => {
     fs.mkdirSync(OUTPUT_DIR, { recursive: true });
     fs.mkdirSync(BASELINES_DIR, { recursive: true });
 
@@ -300,7 +318,9 @@ test.describe('STT showcase evaluation sweep', () => {
 
     if (FILTER) {
       // eslint-disable-next-line no-console
-      console.log(`[sweep] filter "${FILTER}" → ${filtered.length}/${manifest.length} datasets`);
+      console.log(
+        `[sweep] filter "${FILTER}" → ${filtered.length}/${manifest.length} datasets`,
+      );
     } else {
       // eslint-disable-next-line no-console
       console.log(`[sweep] sweeping ${filtered.length} datasets`);
@@ -348,7 +368,8 @@ test.describe('STT showcase evaluation sweep', () => {
     for (const r of results) {
       for (const a of r.anchors) {
         const fid = a.fidelity;
-        if (!fid || fid.status !== 'compared' || fid.diffRatio == null) continue;
+        if (!fid || fid.status !== 'compared' || fid.diffRatio == null)
+          continue;
         if (fid.diffRatio > MAX_DIFF_RATIO) {
           offenders.push(
             `${r.dataset.id}@${a.anchor}: diffRatio=${fid.diffRatio.toFixed(4)} ` +
@@ -359,7 +380,9 @@ test.describe('STT showcase evaluation sweep', () => {
     }
     if (offenders.length > 0) {
       // eslint-disable-next-line no-console
-      console.error(`[sweep] fidelity regressions:\n  ${offenders.join('\n  ')}`);
+      console.error(
+        `[sweep] fidelity regressions:\n  ${offenders.join('\n  ')}`,
+      );
     }
     expect(
       offenders,

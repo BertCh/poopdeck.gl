@@ -44,13 +44,20 @@ const isExportedClass = (name: string | undefined): boolean =>
 describe('maplibreBackend descriptor', () => {
   it('is the maplibre backend and re-exports through the package barrel', () => {
     expect(maplibreBackend.id).toBe('maplibre');
-    expect((maplibre as { maplibreBackend?: unknown }).maplibreBackend).toBe(maplibreBackend);
+    expect((maplibre as { maplibreBackend?: unknown }).maplibreBackend).toBe(
+      maplibreBackend,
+    );
   });
 
   it('(c) declares every LayerKind exactly once (exhaustive over the frozen vocabulary)', () => {
-    expect(Object.keys(maplibreBackend.layerKinds).sort()).toEqual([...LAYER_KINDS].sort());
+    expect(Object.keys(maplibreBackend.layerKinds).sort()).toEqual(
+      [...LAYER_KINDS].sort(),
+    );
     for (const kind of LAYER_KINDS) {
-      expect(maplibreBackend.layerKinds[kind], `missing kind ${kind}`).toBeDefined();
+      expect(
+        maplibreBackend.layerKinds[kind],
+        `missing kind ${kind}`,
+      ).toBeDefined();
     }
   });
 
@@ -58,13 +65,18 @@ describe('maplibreBackend descriptor', () => {
     for (const kind of LAYER_KINDS) {
       const support = maplibreBackend.layerKinds[kind];
       if (!support.supported) {
-        expect(support.reason, `unsupported kind ${kind} needs a reason`).toBeTruthy();
+        expect(
+          support.reason,
+          `unsupported kind ${kind} needs a reason`,
+        ).toBeTruthy();
       }
     }
   });
 
   it('supports exactly point/line/polygon/trips/heatmap and nothing else', () => {
-    const supported = LAYER_KINDS.filter((k) => maplibreBackend.layerKinds[k].supported).sort();
+    const supported = LAYER_KINDS.filter(
+      (k) => maplibreBackend.layerKinds[k].supported,
+    ).sort();
     expect(supported).toEqual(['heatmap', 'line', 'point', 'polygon', 'trips']);
   });
 
@@ -78,15 +90,23 @@ describe('maplibreBackend descriptor', () => {
   });
 
   it('declares window + trail only (no wake/cumulative)', () => {
-    expect([...maplibreBackend.timeFilterModes].sort()).toEqual(['trail', 'window']);
+    expect([...maplibreBackend.timeFilterModes].sort()).toEqual([
+      'trail',
+      'window',
+    ]);
   });
 
   it('(a) every supported kind maps to a class that is a real export', () => {
     for (const kind of LAYER_KINDS) {
       if (maplibreBackend.layerKinds[kind].supported) {
         const name = CLASS_FOR_KIND[kind];
-        expect(name, `no class mapping for supported kind ${kind}`).toBeDefined();
-        expect(isExportedClass(name), `${name} is not an exported class`).toBe(true);
+        expect(
+          name,
+          `no class mapping for supported kind ${kind}`,
+        ).toBeDefined();
+        expect(isExportedClass(name), `${name} is not an exported class`).toBe(
+          true,
+        );
       }
     }
   });
@@ -96,7 +116,9 @@ describe('maplibreBackend descriptor', () => {
     // NOT copied from the descriptor — so if a supported kind's class disappeared,
     // its evidence would drop out and the gate would flag the over-claim.
     const provenKinds = new Set<LayerKind>(
-      (Object.keys(CLASS_FOR_KIND) as LayerKind[]).filter((k) => isExportedClass(CLASS_FOR_KIND[k])),
+      (Object.keys(CLASS_FOR_KIND) as LayerKind[]).filter((k) =>
+        isExportedClass(CLASS_FOR_KIND[k]),
+      ),
     );
     const provenCaps = new Set<Capability>(
       CAPABILITIES.filter((c) => maplibreBackend.capabilities[c]),

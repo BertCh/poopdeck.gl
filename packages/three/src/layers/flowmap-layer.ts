@@ -35,7 +35,14 @@
  * (mirroring deck's `flowStep` setState). The endpoint geometry stays resident.
  */
 
-import { Group, Mesh, InstancedBufferAttribute, Box3, Vector3, Sphere } from 'three';
+import {
+  Group,
+  Mesh,
+  InstancedBufferAttribute,
+  Box3,
+  Vector3,
+  Sphere,
+} from 'three';
 import type { Tile } from '@poopdeck.gl/core';
 import { BaseSttLayer, type SttLayerContext } from './layer.js';
 import { makeArrowTemplateGeometry } from '../geometry/arrow-template.js';
@@ -90,7 +97,12 @@ const DEFAULT_TARGET_COLOR: RGBA = [255, 142, 64, 245];
 const DEFAULT_NODE_COLOR: RGBA = [232, 238, 255, 170];
 
 function toVec4(c: RGBA): [number, number, number, number] {
-  return [(c[0] ?? 0) / 255, (c[1] ?? 0) / 255, (c[2] ?? 0) / 255, (c[3] ?? 255) / 255];
+  return [
+    (c[0] ?? 0) / 255,
+    (c[1] ?? 0) / 255,
+    (c[2] ?? 0) / 255,
+    (c[3] ?? 255) / 255,
+  ];
 }
 
 export class FlowmapLayer extends BaseSttLayer {
@@ -127,8 +139,10 @@ export class FlowmapLayer extends BaseSttLayer {
   /** Host pushes the drawing-buffer size on resize so widths/radii are true px. */
   setViewport(width: number, height: number): void {
     this.viewport = [width, height];
-    if (this.arrowBundle) this.arrowBundle.arrow.viewport.value.set(width, height);
-    if (this.nodeBundle) this.nodeBundle.point.viewport.value.set(width, height);
+    if (this.arrowBundle)
+      this.arrowBundle.arrow.viewport.value.set(width, height);
+    if (this.nodeBundle)
+      this.nodeBundle.point.viewport.value.set(width, height);
   }
 
   private bufferOptions(): FlowmapBufferOptions {
@@ -162,10 +176,16 @@ export class FlowmapLayer extends BaseSttLayer {
   private rebuild(absoluteTimeMs: number, forceGeometry: boolean): void {
     if (!this.projection) return;
     const stepKey = this.stepKey(absoluteTimeMs);
-    if (!forceGeometry && this.arrowBundle && stepKey === this.lastStepKey) return;
+    if (!forceGeometry && this.arrowBundle && stepKey === this.lastStepKey)
+      return;
     this.lastStepKey = stepKey;
 
-    const buf = buildFlowmapBuffers(this.tiles, this.projection, absoluteTimeMs, this.bufferOptions());
+    const buf = buildFlowmapBuffers(
+      this.tiles,
+      this.projection,
+      absoluteTimeMs,
+      this.bufferOptions(),
+    );
 
     if (buf.count === 0) {
       this.object.visible = false;
@@ -204,12 +224,24 @@ export class FlowmapLayer extends BaseSttLayer {
     // ── Arrows ────────────────────────────────────────────────────────────────
     const ag = makeArrowTemplateGeometry();
     ag.instanceCount = buf.count;
-    ag.setAttribute('sttPosSource', new InstancedBufferAttribute(buf.posSource, 3));
-    ag.setAttribute('sttPosTarget', new InstancedBufferAttribute(buf.posTarget, 3));
+    ag.setAttribute(
+      'sttPosSource',
+      new InstancedBufferAttribute(buf.posSource, 3),
+    );
+    ag.setAttribute(
+      'sttPosTarget',
+      new InstancedBufferAttribute(buf.posTarget, 3),
+    );
     ag.setAttribute('sttWidth', new InstancedBufferAttribute(buf.widths, 1));
-    ag.setAttribute('sttEndpointOffsets', new InstancedBufferAttribute(buf.endpointOffsets, 2));
+    ag.setAttribute(
+      'sttEndpointOffsets',
+      new InstancedBufferAttribute(buf.endpointOffsets, 2),
+    );
     if (buf.bbox) {
-      ag.boundingBox = new Box3(new Vector3(...buf.bbox.min), new Vector3(...buf.bbox.max));
+      ag.boundingBox = new Box3(
+        new Vector3(...buf.bbox.min),
+        new Vector3(...buf.bbox.max),
+      );
       ag.boundingSphere = ag.boundingBox.getBoundingSphere(new Sphere());
     }
     this.arrowBundle = createFlowArrowMaterial({
@@ -232,15 +264,20 @@ export class FlowmapLayer extends BaseSttLayer {
 
     const ng = makeBillboardQuadGeometry();
     ng.instanceCount = buf.nodeCount;
-    ng.setAttribute('sttCenter', new InstancedBufferAttribute(buf.nodeCenters, 3));
+    ng.setAttribute(
+      'sttCenter',
+      new InstancedBufferAttribute(buf.nodeCenters, 3),
+    );
     // Per-node colour (constant fill) + a wide-open window so they always show.
     const color = toVec4(this.opts.nodeColor ?? DEFAULT_NODE_COLOR);
     const colors = new Float32Array(buf.nodeCount * 4);
     const starts = new Float32Array(buf.nodeCount); // 0
     const ends = new Float32Array(buf.nodeCount); // 0
     for (let i = 0; i < buf.nodeCount; i++) {
-      colors[i * 4] = color[0]; colors[i * 4 + 1] = color[1];
-      colors[i * 4 + 2] = color[2]; colors[i * 4 + 3] = color[3];
+      colors[i * 4] = color[0];
+      colors[i * 4 + 1] = color[1];
+      colors[i * 4 + 2] = color[2];
+      colors[i * 4 + 3] = color[3];
     }
     ng.setAttribute('sttColor', new InstancedBufferAttribute(colors, 4));
     ng.setAttribute('sttStart', new InstancedBufferAttribute(starts, 1));
@@ -251,7 +288,10 @@ export class FlowmapLayer extends BaseSttLayer {
     // relative-magnitude cue, and a per-instance-sized node material is a future
     // enhancement; the per-node radii still drive the arrow endpoint insets via
     // `sttEndpointOffsets`, which is where exact radius matters most.
-    this.nodeBundle = createPointMaterial({ mode: 'window', sizeUnits: 'pixels' });
+    this.nodeBundle = createPointMaterial({
+      mode: 'window',
+      sizeUnits: 'pixels',
+    });
     this.nodes.geometry = ng;
     this.nodes.material = this.nodeBundle.material;
     this.nodeRadiiRepresentative = representativeRadius(buf.nodeRadii);
@@ -261,8 +301,12 @@ export class FlowmapLayer extends BaseSttLayer {
   /** Refresh ONLY the time-dependent attributes (widths/insets/nodes) in place. */
   private updateDynamic(buf: FlowmapBuffers): void {
     const ag = this.arrows.geometry;
-    const wAttr = ag.getAttribute('sttWidth') as InstancedBufferAttribute | undefined;
-    const eAttr = ag.getAttribute('sttEndpointOffsets') as InstancedBufferAttribute | undefined;
+    const wAttr = ag.getAttribute('sttWidth') as
+      | InstancedBufferAttribute
+      | undefined;
+    const eAttr = ag.getAttribute('sttEndpointOffsets') as
+      | InstancedBufferAttribute
+      | undefined;
     // Instance count is invariant (geometry fixed); update if shapes still match.
     if (wAttr && wAttr.array.length === buf.widths.length) {
       (wAttr.array as Float32Array).set(buf.widths);
@@ -308,7 +352,8 @@ export class FlowmapLayer extends BaseSttLayer {
   }
 
   private ensureEmptyGeometry(): void {
-    if (!this.arrows.geometry) this.arrows.geometry = makeArrowTemplateGeometry();
+    if (!this.arrows.geometry)
+      this.arrows.geometry = makeArrowTemplateGeometry();
     if (!this.nodes.geometry) this.nodes.geometry = makeBillboardQuadGeometry();
   }
 

@@ -56,7 +56,11 @@ export class StaticPathLayer extends BaseSttLayer {
     };
     this.lines = new LineSegments(
       new BufferGeometry(),
-      new LineBasicMaterial({ vertexColors: true, transparent: true, opacity: this.opts.opacity }),
+      new LineBasicMaterial({
+        vertexColors: true,
+        transparent: true,
+        opacity: this.opts.opacity,
+      }),
     );
     this.lines.frustumCulled = false;
     this.object.add(this.lines);
@@ -72,7 +76,12 @@ export class StaticPathLayer extends BaseSttLayer {
     for (const tile of tiles) {
       for (const tl of tile.layers) {
         const b = tl.features;
-        if (!b.featureCount || b.geometryType !== GeometryType.LineString || !b.startIndices) continue;
+        if (
+          !b.featureCount ||
+          b.geometryType !== GeometryType.LineString ||
+          !b.startIndices
+        )
+          continue;
         lineLayers.push(b);
         for (let f = 0; f < b.featureCount; f++) {
           const v0 = b.startIndices[f];
@@ -91,8 +100,14 @@ export class StaticPathLayer extends BaseSttLayer {
       const cat = b.categoricalProps[this.opts.colorProperty];
       for (let f = 0; f < b.featureCount; f++) {
         const label =
-          cat && cat.indices[f] !== 0xffff ? cat.categories[cat.indices[f]] : undefined;
-        const rgba = resolveCategoryColor(label, this.opts.colorMapping, this.opts.colorMappingDefault);
+          cat && cat.indices[f] !== 0xffff
+            ? cat.categories[cat.indices[f]]
+            : undefined;
+        const rgba = resolveCategoryColor(
+          label,
+          this.opts.colorMapping,
+          this.opts.colorMappingDefault,
+        );
         const a = (rgba[3] ?? 255) / 255;
         const r = (rgba[0] / 255) * a;
         const g = (rgba[1] / 255) * a;
@@ -104,8 +119,10 @@ export class StaticPathLayer extends BaseSttLayer {
           const lat0 = b.positions[v * dims + 1];
           const lon1 = b.positions[(v + 1) * dims];
           const lat1 = b.positions[(v + 1) * dims + 1];
-          const z0 = (dims > 2 ? b.positions[v * dims + 2] : 0) + this.opts.zLift;
-          const z1 = (dims > 2 ? b.positions[(v + 1) * dims + 2] : 0) + this.opts.zLift;
+          const z0 =
+            (dims > 2 ? b.positions[v * dims + 2] : 0) + this.opts.zLift;
+          const z1 =
+            (dims > 2 ? b.positions[(v + 1) * dims + 2] : 0) + this.opts.zLift;
           const p0 = proj.project(lon0, lat0, z0);
           const p1 = proj.project(lon1, lat1, z1);
           positions[o] = p0[0];

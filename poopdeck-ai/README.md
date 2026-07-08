@@ -4,11 +4,11 @@ The AI-assisted suite for **poopdeck.gl / SpatioTemporal Tiles**: the
 `@poopdeck.gl/mcp` server plus a set of Agent Skills, packaged as one Claude Code
 plugin so a single install wires **both**.
 
-- **MCP server** (`.mcp.json`, auto-registered on enable) = the *live* surface:
+- **MCP server** (`.mcp.json`, auto-registered on enable) = the _live_ surface:
   discover datasets, analyze/lint archives, compose `@deck.gl/json` map specs, and
   (CLI-gated) build/validate, generate bundled datasets, and export summary tiers.
   See [`../packages/mcp/README.md`](../packages/mcp/README.md).
-- **Skills** (`skills/`, auto-loaded) = the *procedural* surface: the workflow,
+- **Skills** (`skills/`, auto-loaded) = the _procedural_ surface: the workflow,
   the opinions, and — the load-bearing part — **which CLI or MCP tool to reach for**.
 
 This mirrors the field's convention (Cloudflare's `wrangler` skill routing between
@@ -61,15 +61,15 @@ the `stt-*` binaries (resolved from `target/release/` or `PATH`):
 
 ## Skills
 
-| Skill | When it fires |
-|---|---|
-| `poopdeck-overview` | Any poopdeck.gl / STT work — the router: which CLI, package, MCP tool, or skill to use. |
-| `installing-poopdeck` | Cold start — install the `stt-*` CLIs, add `@poopdeck.gl/*` + the deck.gl 9.3.x peers, scaffold a first render. |
-| `building-stt-datasets` | Turn **your own** GeoParquet / PostGIS / DuckDB into a `.stt` (recommends `recommend_build` first). |
-| `generating-stt-datasets` | Download + build a **bundled reference** dataset (earthquakes, drifters, GTFS, …) via `generate_dataset`. |
-| `tuning-stt-tiles` | Shrink / lint / publish / export an archive (the no-thinning rule; `dataset_report` + `diff_datasets`). |
-| `wiring-deckgl-layers` | Pick the right STT layer and compose a `@deck.gl/json` spec (pairs with `view_map`). |
-| `debugging-blank-renders` | A map renders blank/empty — the failure classes + `validate_dataset`. |
+| Skill                     | When it fires                                                                                                   |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `poopdeck-overview`       | Any poopdeck.gl / STT work — the router: which CLI, package, MCP tool, or skill to use.                         |
+| `installing-poopdeck`     | Cold start — install the `stt-*` CLIs, add `@poopdeck.gl/*` + the deck.gl 9.3.x peers, scaffold a first render. |
+| `building-stt-datasets`   | Turn **your own** GeoParquet / PostGIS / DuckDB into a `.stt` (recommends `recommend_build` first).             |
+| `generating-stt-datasets` | Download + build a **bundled reference** dataset (earthquakes, drifters, GTFS, …) via `generate_dataset`.       |
+| `tuning-stt-tiles`        | Shrink / lint / publish / export an archive (the no-thinning rule; `dataset_report` + `diff_datasets`).         |
+| `wiring-deckgl-layers`    | Pick the right STT layer and compose a `@deck.gl/json` spec (pairs with `view_map`).                            |
+| `debugging-blank-renders` | A map renders blank/empty — the failure classes + `validate_dataset`.                                           |
 
 Skills are authored to the [agentskills.io](https://agentskills.io) open standard
 (portable `name` + `description` frontmatter), so they also load in Codex, Gemini

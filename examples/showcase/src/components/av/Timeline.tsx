@@ -6,9 +6,12 @@
  * TimeController + PlaybackGovernor the deck layers + gauges read. Keeping the
  * shared component means the cockpit's transport can't drift from the demos'.
  */
-import React from "react";
-import { PlaybackControls } from "@poopdeck.gl/react";
-import type { PlaybackGovernor, PlaybackGovernorState } from "@poopdeck.gl/playback";
+import React from 'react';
+import { PlaybackControls } from '@poopdeck.gl/react';
+import type {
+  PlaybackGovernor,
+  PlaybackGovernorState,
+} from '@poopdeck.gl/playback';
 
 export interface TimelineProps {
   currentTime: number;

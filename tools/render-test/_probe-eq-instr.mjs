@@ -1,7 +1,9 @@
 import { chromium } from 'playwright';
 
 const browser = await chromium.launch({ headless: true });
-const ctx = await browser.newContext({ viewport: { width: 1600, height: 1000 } });
+const ctx = await browser.newContext({
+  viewport: { width: 1600, height: 1000 },
+});
 const page = await ctx.newPage();
 
 const logs = [];
@@ -10,7 +12,9 @@ page.on('console', (m) => {
   if (t.startsWith('[INSTR]') || t.startsWith('[PERF]')) logs.push(t);
 });
 
-await page.goto('http://localhost:3000/demo/earthquake-activity', { waitUntil: 'domcontentloaded' });
+await page.goto('http://localhost:3000/demo/earthquake-activity', {
+  waitUntil: 'domcontentloaded',
+});
 await page.waitForTimeout(2000);
 
 // Patch the AnimatedPointLayer's buildConsolidatedData via prototype injection.
@@ -32,33 +36,59 @@ await page.evaluate(() => {
   // Walk up from a known global. The deck.gl React wrapper stores the deck
   // instance in a ref — find it by walking React fibers from the canvas element.
   const canvas = document.querySelector('canvas');
-  if (!canvas) { console.log('[INSTR] no canvas'); return; }
+  if (!canvas) {
+    console.log('[INSTR] no canvas');
+    return;
+  }
   const key = Object.keys(canvas).find((k) => k.startsWith('__reactFiber'));
-  if (!key) { console.log('[INSTR] no react fiber on canvas'); return; }
+  if (!key) {
+    console.log('[INSTR] no react fiber on canvas');
+    return;
+  }
   let fiber = canvas[key];
   let deck = w.deck || null;
   if (!deck) {
     while (fiber) {
-      if (fiber.stateNode && fiber.stateNode.deck) { deck = fiber.stateNode.deck; break; }
-      if (fiber.memoizedState && fiber.memoizedState.deck) { deck = fiber.memoizedState.deck; break; }
+      if (fiber.stateNode && fiber.stateNode.deck) {
+        deck = fiber.stateNode.deck;
+        break;
+      }
+      if (fiber.memoizedState && fiber.memoizedState.deck) {
+        deck = fiber.memoizedState.deck;
+        break;
+      }
       fiber = fiber.return;
     }
   }
   if (!deck || !deck.layerManager) {
-    console.log('[INSTR] no deck.layerManager; window.deck is', typeof w.deck, Object.keys(w.deck || {}).slice(0, 10).join(','));
+    console.log(
+      '[INSTR] no deck.layerManager; window.deck is',
+      typeof w.deck,
+      Object.keys(w.deck || {})
+        .slice(0, 10)
+        .join(','),
+    );
     return;
   }
   w.__deck = deck;
-  console.log('[INSTR] deck found, layerManager layers:', deck.layerManager?.layers?.length);
+  console.log(
+    '[INSTR] deck found, layerManager layers:',
+    deck.layerManager?.layers?.length,
+  );
 
   // Patch each layer's renderLayers if it's an animated point layer
   for (const layer of deck.layerManager.layers) {
     const proto = Object.getPrototypeOf(layer);
-    if (proto.constructor.layerName === 'AnimatedPointLayer' && !proto.__patched) {
+    if (
+      proto.constructor.layerName === 'AnimatedPointLayer' &&
+      !proto.__patched
+    ) {
       proto.__patched = true;
       const origRender = proto.renderLayers;
       proto.renderLayers = function () {
-        return dump('AnimatedPointLayer.renderLayers', () => origRender.call(this));
+        return dump('AnimatedPointLayer.renderLayers', () =>
+          origRender.call(this),
+        );
       };
       const origBuild = proto.buildConsolidatedData;
       if (origBuild) {
@@ -69,7 +99,10 @@ await page.evaluate(() => {
               total += layer.features?.featureCount || 0;
             }
           }
-          return dump(`buildConsolidatedData[tiles=${tiles?.length},features=${total}]`, () => origBuild.call(this, tiles));
+          return dump(
+            `buildConsolidatedData[tiles=${tiles?.length},features=${total}]`,
+            () => origBuild.call(this, tiles),
+          );
         };
       }
       const origUpdate = proto._handleTimeUpdate;
@@ -85,7 +118,10 @@ await page.evaluate(() => {
 });
 
 // Start playback
-const playBtn = page.locator('button').filter({ hasText: /play|▶/i }).first();
+const playBtn = page
+  .locator('button')
+  .filter({ hasText: /play|▶/i })
+  .first();
 if (await playBtn.count()) {
   await playBtn.click();
 }

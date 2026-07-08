@@ -107,7 +107,8 @@ describe('core telemetry shim', () => {
     expect(arr[arr.length - 1]).toEqual({ i: MAX_SAMPLES });
 
     // Sustained overflow keeps it pinned at MAX_SAMPLES (FIFO window slides).
-    for (let i = MAX_SAMPLES + 1; i < MAX_SAMPLES + 100; i++) emit('decode', { i });
+    for (let i = MAX_SAMPLES + 1; i < MAX_SAMPLES + 100; i++)
+      emit('decode', { i });
     expect(arr).toHaveLength(MAX_SAMPLES);
     expect(arr[0]).toEqual({ i: 100 });
     expect(arr[arr.length - 1]).toEqual({ i: MAX_SAMPLES + 99 });

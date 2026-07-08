@@ -44,7 +44,9 @@ async function main() {
   if (!(await exists(SRC_DOCS))) {
     // No source docs tree (e.g. building from an extracted tarball) — nothing to
     // copy. Leave any pre-bundled docs/ untouched.
-    process.stdout.write(`copy-docs: source docs tree not found at ${SRC_DOCS} — skipping.\n`);
+    process.stdout.write(
+      `copy-docs: source docs tree not found at ${SRC_DOCS} — skipping.\n`,
+    );
     return;
   }
 
@@ -73,10 +75,14 @@ async function main() {
     }
   }
 
-  process.stdout.write(`copy-docs: bundled ${copied} doc(s) into ${DEST_DOCS}\n`);
+  process.stdout.write(
+    `copy-docs: bundled ${copied} doc(s) into ${DEST_DOCS}\n`,
+  );
 }
 
 main().catch((err) => {
-  process.stderr.write(`copy-docs failed: ${err instanceof Error ? err.stack : String(err)}\n`);
+  process.stderr.write(
+    `copy-docs failed: ${err instanceof Error ? err.stack : String(err)}\n`,
+  );
   process.exit(1);
 });

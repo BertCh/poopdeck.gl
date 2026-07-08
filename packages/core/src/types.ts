@@ -242,27 +242,27 @@ export type Position = Position2D | Position3D;
 
 /**
  * Binary representation of features for GPU-efficient rendering.
- * 
+ *
  * This format aligns with deck.gl's binary data interface and loaders.gl's
  * BinaryFeatures specification, with STT-specific temporal extensions.
- * 
+ *
  * @see https://loaders.gl/docs/specifications/category-gis#binary-geometries
  * @see https://deck.gl/docs/developer-guide/performance#supply-binary-data
  */
 export interface BinaryFeatures {
   /** Total number of features */
   featureCount: number;
-  
+
   /** Geometry type (0=Point, 1=LineString, 2=Polygon) */
   geometryType: GeometryType;
-  
-  /** 
+
+  /**
    * Number of dimensions per position (2 for [lon, lat], 3 for [lon, lat, alt])
    * Defaults to 2 if not specified
    */
   positionDimensions?: 2 | 3;
-  
-  /** 
+
+  /**
    * Interleaved positions as Float64Array.
    * For 2D: [lon0, lat0, lon1, lat1, ...]
    * For 3D: [lon0, lat0, alt0, lon1, lat1, alt1, ...]
@@ -270,7 +270,7 @@ export interface BinaryFeatures {
    * For lines/polygons: variable, use startIndices to index
    */
   positions: Float64Array;
-  
+
   /**
    * Start index for each feature's positions (loaders.gl pathIndices/polygonIndices).
    * Length = featureCount + 1 (last value is total position count).
@@ -278,7 +278,7 @@ export interface BinaryFeatures {
    * Only present for LineString and Polygon geometries.
    */
   startIndices?: Uint32Array;
-  
+
   /** Feature IDs (per feature) */
   featureIds: Uint32Array;
 
@@ -295,21 +295,21 @@ export interface BinaryFeatures {
    * Optional - if not provided, featureIds are used.
    */
   globalFeatureIds?: Uint32Array;
-  
+
   // ========== STT Temporal Extensions ==========
-  
+
   /** Start time for each feature (milliseconds, relative to timeOffset) */
   startTimes: Float32Array;
-  
+
   /** End time for each feature (milliseconds, relative to timeOffset) */
   endTimes: Float32Array;
-  
-  /** 
+
+  /**
    * Time offset for floating point precision.
    * Absolute time = startTimes[i] + timeOffset
    */
   timeOffset: number;
-  
+
   /**
    * Per-vertex timestamps for accurate path animation (optional).
    * When present, has same length as positions / positionDimensions.
@@ -372,28 +372,31 @@ export interface BinaryFeatures {
    * length. Only present when `triangles` is.
    */
   triangleOffsets?: Uint32Array;
-  
+
   // ========== Properties ==========
-  
-  /** 
+
+  /**
    * Numeric properties as typed arrays for direct GPU upload.
    * Key is property name, value is Float32Array with one value per feature.
    */
   numericProps: Record<string, Float32Array>;
-  
+
   /**
    * Categorical properties as indices into lookup tables.
    * Enables GPU-based coloring by category.
    */
-  categoricalProps: Record<string, {
-    /**
-     * Per-feature index into `categories`. Uint16Array supports up to 65535
-     * categories. Archives built before the u16 widening are normalized from
-     * the legacy single-byte field into a Uint16Array on decode.
-     */
-    indices: Uint16Array;
-    categories: string[];
-  }>;
+  categoricalProps: Record<
+    string,
+    {
+      /**
+       * Per-feature index into `categories`. Uint16Array supports up to 65535
+       * categories. Archives built before the u16 widening are normalized from
+       * the legacy single-byte field into a Uint16Array on decode.
+       */
+      indices: Uint16Array;
+      categories: string[];
+    }
+  >;
 
   /**
    * True when this tile's rows are stable-sorted by `start_time` — declared
@@ -417,7 +420,10 @@ export interface BinaryFeatures {
    * Optional only so hand-built fixtures can omit it; `decodeTile` always sets
    * it (empty when the tile carries no FixedSizeList columns).
    */
-  vectorProps?: Record<string, { value: Float32Array | Uint8Array; size: number }>;
+  vectorProps?: Record<
+    string,
+    { value: Float32Array | Uint8Array; size: number }
+  >;
 }
 
 /**

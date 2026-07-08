@@ -19,7 +19,13 @@ import { promises as fs, realpathSync, existsSync } from 'node:fs';
 import * as path from 'node:path';
 
 /** The five doc directories whose direct `*.md` children are published (mirrors examples/showcase/src/docs/content.ts). */
-export const PUBLISHED_DOC_DIRS = ['intro', 'architecture', 'spec', 'api', 'guides'] as const;
+export const PUBLISHED_DOC_DIRS = [
+  'intro',
+  'architecture',
+  'spec',
+  'api',
+  'guides',
+] as const;
 
 /** The one published doc at the docs-root itself. */
 export const ROOT_DOC = 'README.md';
@@ -85,10 +91,15 @@ function isCorpusRelPath(rel: string): boolean {
  *  - a symlink INSIDE `docsRoot` pointing OUT is defeated by re-checking the
  *    canonicalized (`realpath`) prefixes.
  */
-export function resolveDocPath(docsRoot: string, requestedPath: string): string {
+export function resolveDocPath(
+  docsRoot: string,
+  requestedPath: string,
+): string {
   const requested = String(requestedPath);
   if (path.isAbsolute(requested)) {
-    throw new Error(`doc path "${requested}" must be relative to the docs root (no absolute paths)`);
+    throw new Error(
+      `doc path "${requested}" must be relative to the docs root (no absolute paths)`,
+    );
   }
   const resolvedRoot = path.resolve(docsRoot);
   const resolved = path.resolve(resolvedRoot, requested);
@@ -108,7 +119,10 @@ export function resolveDocPath(docsRoot: string, requestedPath: string): string 
   const canonicalRoot = realpathOfNearestExisting(resolvedRoot);
   const canonicalResolved = realpathOfNearestExisting(resolved);
   const canonicalRelative = path.relative(canonicalRoot, canonicalResolved);
-  if (canonicalRelative.startsWith('..') || path.isAbsolute(canonicalRelative)) {
+  if (
+    canonicalRelative.startsWith('..') ||
+    path.isAbsolute(canonicalRelative)
+  ) {
     throw new Error(`doc path "${requested}" resolves outside the docs root`);
   }
   return resolved;
@@ -176,7 +190,10 @@ export async function listCorpusDocs(docsRoot: string): Promise<DocEntry[]> {
 }
 
 /** Reads one corpus doc's markdown text (path validated via {@link resolveDocPath}). */
-export async function readDoc(docsRoot: string, requestedPath: string): Promise<string> {
+export async function readDoc(
+  docsRoot: string,
+  requestedPath: string,
+): Promise<string> {
   const abs = resolveDocPath(docsRoot, requestedPath);
   return fs.readFile(abs, 'utf8');
 }
@@ -236,7 +253,8 @@ export async function searchDocs(
         snippets.push({ line: i + 1, text: clampSnippet(lines[i].trim()) });
       }
     }
-    if (score > 0) results.push({ path: doc.path, title: doc.title, score, snippets });
+    if (score > 0)
+      results.push({ path: doc.path, title: doc.title, score, snippets });
   }
 
   results.sort((a, b) => b.score - a.score || a.path.localeCompare(b.path));
@@ -257,5 +275,7 @@ export async function searchDocs(
 }
 
 function clampSnippet(line: string): string {
-  return line.length > MAX_SNIPPET_CHARS ? `${line.slice(0, MAX_SNIPPET_CHARS)}…` : line;
+  return line.length > MAX_SNIPPET_CHARS
+    ? `${line.slice(0, MAX_SNIPPET_CHARS)}…`
+    : line;
 }

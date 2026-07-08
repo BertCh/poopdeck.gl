@@ -24,6 +24,6 @@
   "assets": {
     "directory": "./build/client",
     "binding": "ASSETS",
-    "not_found_handling": "none"
-  }
+    "not_found_handling": "none",
+  },
 }

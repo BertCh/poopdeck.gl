@@ -14,7 +14,9 @@ import { TimeController } from '../src/time-controller';
 function installFrameHarness() {
   const state = { now: 0, nextId: 1 };
   const cbs = new Map<number, (t: number) => void>();
-  const perfSpy = vi.spyOn(performance, 'now').mockImplementation(() => state.now);
+  const perfSpy = vi
+    .spyOn(performance, 'now')
+    .mockImplementation(() => state.now);
 
   vi.stubGlobal('requestAnimationFrame', (cb: (t: number) => void) => {
     const id = state.nextId++;

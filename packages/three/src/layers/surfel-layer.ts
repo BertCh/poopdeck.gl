@@ -68,8 +68,15 @@ export class SurfelLayer extends BaseSttLayer {
   private uniforms: SurfelUniforms | null = null;
   private material: MeshBasicNodeMaterial | null = null;
   private readonly opts: Required<
-    Omit<SurfelLayerOptions, 'id' | 'rgbColumns' | 'opacityColumn' | 'elevationProperty'>
-  > & Pick<SurfelLayerOptions, 'rgbColumns' | 'opacityColumn' | 'elevationProperty'>;
+    Omit<
+      SurfelLayerOptions,
+      'id' | 'rgbColumns' | 'opacityColumn' | 'elevationProperty'
+    >
+  > &
+    Pick<
+      SurfelLayerOptions,
+      'rgbColumns' | 'opacityColumn' | 'elevationProperty'
+    >;
 
   constructor(options: SurfelLayerOptions = {}) {
     super();
@@ -82,10 +89,16 @@ export class SurfelLayer extends BaseSttLayer {
       colorVectorColumn: options.colorVectorColumn ?? 'surfel_rgba',
       quaternionColumns: options.quaternionColumns ?? ['qx', 'qy', 'qz', 'qw'],
       scaleColumns: options.scaleColumns ?? ['s_major', 's_minor'],
-      rgbColumns: options.rgbColumns === undefined ? ['r', 'g', 'b'] : options.rgbColumns,
-      opacityColumn: options.opacityColumn === undefined ? 'surfel_opacity' : options.opacityColumn,
+      rgbColumns:
+        options.rgbColumns === undefined ? ['r', 'g', 'b'] : options.rgbColumns,
+      opacityColumn:
+        options.opacityColumn === undefined
+          ? 'surfel_opacity'
+          : options.opacityColumn,
       elevationProperty:
-        options.elevationProperty === undefined ? 'z' : options.elevationProperty,
+        options.elevationProperty === undefined
+          ? 'z'
+          : options.elevationProperty,
       elevationScale: options.elevationScale ?? 1,
       fallbackColor: options.fallbackColor ?? DEFAULT_FALLBACK,
       temporalSigma: options.temporalSigma ?? 180,
@@ -126,12 +139,30 @@ export class SurfelLayer extends BaseSttLayer {
 
     const geometry = makeHexDiskGeometry();
     geometry.instanceCount = buf.count;
-    geometry.setAttribute('sttCenter', new InstancedBufferAttribute(buf.centers, 3));
-    geometry.setAttribute('sttQuat', new InstancedBufferAttribute(buf.quats, 4));
-    geometry.setAttribute('sttScale', new InstancedBufferAttribute(buf.scales, 2));
-    geometry.setAttribute('sttColor', new InstancedBufferAttribute(buf.colors, 4));
-    geometry.setAttribute('sttStart', new InstancedBufferAttribute(buf.starts, 1));
-    geometry.setAttribute('sttDynamic', new InstancedBufferAttribute(buf.dynamic, 1));
+    geometry.setAttribute(
+      'sttCenter',
+      new InstancedBufferAttribute(buf.centers, 3),
+    );
+    geometry.setAttribute(
+      'sttQuat',
+      new InstancedBufferAttribute(buf.quats, 4),
+    );
+    geometry.setAttribute(
+      'sttScale',
+      new InstancedBufferAttribute(buf.scales, 2),
+    );
+    geometry.setAttribute(
+      'sttColor',
+      new InstancedBufferAttribute(buf.colors, 4),
+    );
+    geometry.setAttribute(
+      'sttStart',
+      new InstancedBufferAttribute(buf.starts, 1),
+    );
+    geometry.setAttribute(
+      'sttDynamic',
+      new InstancedBufferAttribute(buf.dynamic, 1),
+    );
     // Real cloud bounds (the base hexagon's are metre-scale and would mis-cull /
     // mis-frame). Lets `SttScene.computeBounds()` frame the camera correctly.
     if (buf.bbox) {
@@ -139,7 +170,9 @@ export class SurfelLayer extends BaseSttLayer {
         new Vector3(...buf.bbox.min),
         new Vector3(...buf.bbox.max),
       );
-      geometry.boundingSphere = geometry.boundingBox.getBoundingSphere(new Sphere());
+      geometry.boundingSphere = geometry.boundingBox.getBoundingSphere(
+        new Sphere(),
+      );
     }
 
     const { material, uniforms } = createSurfelMaterial({

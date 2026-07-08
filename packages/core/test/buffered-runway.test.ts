@@ -13,7 +13,13 @@ import { describe, it, expect, vi } from 'vitest';
 import { SpatiotemporalTileset } from '../src/spatiotemporal-tileset';
 import type { BufferedRunway } from '../src/spatiotemporal-tileset';
 import type { TileId, BoundingBox, Tile } from '../src/types';
-import { BOUNDS, BUCKET_MS, fakeTile, makeAvailableTiles, settle } from './helpers/fixtures';
+import {
+  BOUNDS,
+  BUCKET_MS,
+  fakeTile,
+  makeAvailableTiles,
+  settle,
+} from './helpers/fixtures';
 
 const N_BUCKETS = 20;
 /** Directory byte length of the tile at bucket index `i`. */
@@ -28,7 +34,6 @@ function getTileByteSize(id: TileId): number | undefined {
   if (!Number.isInteger(i) || i < 0 || i >= N_BUCKETS) return undefined;
   return bytesAt(i);
 }
-
 
 interface HarnessOptions {
   onBufferChange?: (runway: BufferedRunway) => void;
@@ -64,7 +69,12 @@ function makeHarness(opts: HarnessOptions = {}) {
    * superseded (its tile is no longer in the new needed set).
    */
   const loadBucket = async (i: number): Promise<void> => {
-    tileset.update({ bounds: BOUNDS, zoom: 6, time: i * BUCKET_MS + 500, timeWindow: 100 });
+    tileset.update({
+      bounds: BOUNDS,
+      zoom: 6,
+      time: i * BUCKET_MS + 500,
+      timeWindow: 100,
+    });
     await settle(5);
   };
   const releaseBatches = (): void => {
@@ -112,7 +122,9 @@ describe('SpatiotemporalTileset.getBufferedRunway', () => {
     runway = tileset.getBufferedRunway(0, 1, 10_000);
     expect(runway.simMs).toBe(3000); // still blocked by bucket 3
     // ...but it does shrink the pending byte total.
-    expect(runway.bytesPending).toBe(expectedBytes - bytesAt(1) - bytesAt(2) - bytesAt(5));
+    expect(runway.bytesPending).toBe(
+      expectedBytes - bytesAt(1) - bytesAt(2) - bytesAt(5),
+    );
 
     tileset.finalize();
   });
@@ -191,13 +203,18 @@ describe('SpatiotemporalTileset.estimateCost', () => {
     expect(cost.bytes).toBe(bytesAt(1) + bytesAt(2));
 
     // A fully-loaded range costs nothing.
-    expect(tileset.estimateCost({ start: 100, end: 200 })).toEqual({ bytes: 0, tiles: 0 });
+    expect(tileset.estimateCost({ start: 100, end: 200 })).toEqual({
+      bytes: 0,
+      tiles: 0,
+    });
 
     tileset.finalize();
   });
 
   it('treats IN-FLIGHT tiles as not loaded (honesty over optimism)', async () => {
-    const { tileset, loadBucket, releaseBatches } = makeHarness({ gateBatches: true });
+    const { tileset, loadBucket, releaseBatches } = makeHarness({
+      gateBatches: true,
+    });
     await loadBucket(0); // request stays pending behind the gate
     await primeCoverage(tileset);
 
@@ -208,7 +225,10 @@ describe('SpatiotemporalTileset.estimateCost', () => {
 
     releaseBatches();
     await settle();
-    expect(tileset.estimateCost({ start: 0, end: 999 })).toEqual({ bytes: 0, tiles: 0 });
+    expect(tileset.estimateCost({ start: 0, end: 999 })).toEqual({
+      bytes: 0,
+      tiles: 0,
+    });
 
     tileset.finalize();
   });
@@ -218,7 +238,10 @@ describe('SpatiotemporalTileset.estimateTimeToReadyMs', () => {
   it('divides pending bytes by measured throughput, null without a signal', async () => {
     let bytesPerMs: number | null = null;
     const { tileset, loadBucket } = makeHarness({
-      getThroughput: () => ({ bytesPerMs, samples: bytesPerMs === null ? 0 : 3 }),
+      getThroughput: () => ({
+        bytesPerMs,
+        samples: bytesPerMs === null ? 0 : 3,
+      }),
     });
     await loadBucket(0);
     await primeCoverage(tileset);

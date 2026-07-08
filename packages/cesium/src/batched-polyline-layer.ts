@@ -35,7 +35,11 @@ import {
   type Scene,
 } from 'cesium';
 import { getFeatureProperties, type BinaryFeatures } from '@poopdeck.gl/core';
-import { timeFilterAlpha, type TimeFilterMode, type TimeFilterParams } from '@poopdeck.gl/core/time-filter';
+import {
+  timeFilterAlpha,
+  type TimeFilterMode,
+  type TimeFilterParams,
+} from '@poopdeck.gl/core/time-filter';
 import type { SttPickResult } from '@poopdeck.gl/core/picking';
 import type { FeaturePolyline, PolylineBuild } from './lib/polylines.js';
 
@@ -105,7 +109,11 @@ export class BatchedPolylineLayer {
   private attrsCached = false;
   private timeOrigin = 0;
 
-  constructor(scene: Scene, layerId: string, options: BatchedPolylineOptions = {}) {
+  constructor(
+    scene: Scene,
+    layerId: string,
+    options: BatchedPolylineOptions = {},
+  ) {
     this.scene = scene;
     this.layerId = layerId;
     this.mode = options.mode ?? 'window';
@@ -130,9 +138,17 @@ export class BatchedPolylineLayer {
       const numVerts = p.positions.length / 3;
       const positions: Cartesian3[] = new Array(numVerts);
       for (let v = 0; v < numVerts; v++) {
-        positions[v] = new Cartesian3(p.positions[v * 3], p.positions[v * 3 + 1], p.positions[v * 3 + 2]);
+        positions[v] = new Cartesian3(
+          p.positions[v * 3],
+          p.positions[v * 3 + 1],
+          p.positions[v * 3 + 2],
+        );
       }
-      const id: InstanceId = { layerId: this.layerId, binary: p.binary, featureIndex: p.featureIndex };
+      const id: InstanceId = {
+        layerId: this.layerId,
+        binary: p.binary,
+        featureIndex: p.featureIndex,
+      };
       const a = (p.color[3] ?? 255) / 255;
       instances.push(
         new GeometryInstance({
@@ -145,7 +161,12 @@ export class BatchedPolylineLayer {
           attributes: {
             // Seed fully transparent; the first setTime writes the real alpha.
             color: ColorGeometryInstanceAttribute.fromColor(
-              new Color(p.color[0] / 255, p.color[1] / 255, p.color[2] / 255, 0),
+              new Color(
+                p.color[0] / 255,
+                p.color[1] / 255,
+                p.color[2] / 255,
+                0,
+              ),
             ),
           },
           id,
@@ -176,13 +197,17 @@ export class BatchedPolylineLayer {
 
   private firstLon(p: FeaturePolyline): number {
     const dims = p.binary.positionDimensions ?? 2;
-    const v0 = p.binary.startIndices ? p.binary.startIndices[p.featureIndex] : 0;
+    const v0 = p.binary.startIndices
+      ? p.binary.startIndices[p.featureIndex]
+      : 0;
     return p.binary.positions[v0 * dims];
   }
 
   private firstLat(p: FeaturePolyline): number {
     const dims = p.binary.positionDimensions ?? 2;
-    const v0 = p.binary.startIndices ? p.binary.startIndices[p.featureIndex] : 0;
+    const v0 = p.binary.startIndices
+      ? p.binary.startIndices[p.featureIndex]
+      : 0;
     return p.binary.positions[v0 * dims + 1];
   }
 
@@ -192,7 +217,9 @@ export class BatchedPolylineLayer {
     if (!prim || !prim.ready) return; // batch table exists only after the first render
     if (!this.attrsCached) {
       for (const e of this.entries) {
-        e.attrs = prim.getGeometryInstanceAttributes(e.id) as { color: Uint8Array };
+        e.attrs = prim.getGeometryInstanceAttributes(e.id) as {
+          color: Uint8Array;
+        };
       }
       this.attrsCached = true;
     }
@@ -200,7 +227,8 @@ export class BatchedPolylineLayer {
     const cur = absoluteMs - this.timeOrigin;
     const v = SCRATCH_RGBA;
     for (const e of this.entries) {
-      const alpha = e.a * timeFilterAlpha(this.mode, cur, e.start, e.end, this.params);
+      const alpha =
+        e.a * timeFilterAlpha(this.mode, cur, e.start, e.end, this.params);
       if (alpha === e.lastAlpha || !e.attrs) continue;
       e.lastAlpha = alpha;
       v[0] = e.r;
@@ -213,10 +241,15 @@ export class BatchedPolylineLayer {
 
   /** Hit-test → the shared `SttPickResult`. */
   pick(cssX: number, cssY: number): SttPickResult | null {
-    const picked = this.scene.pick(new Cartesian2(cssX, cssY)) as { id?: InstanceId } | undefined;
-    if (!defined(picked) || !picked.id || picked.id.layerId !== this.layerId) return null;
+    const picked = this.scene.pick(new Cartesian2(cssX, cssY)) as
+      | { id?: InstanceId }
+      | undefined;
+    if (!defined(picked) || !picked.id || picked.id.layerId !== this.layerId)
+      return null;
     const { binary, featureIndex } = picked.id;
-    const entry = this.entries.find((e) => e.id.binary === binary && e.id.featureIndex === featureIndex);
+    const entry = this.entries.find(
+      (e) => e.id.binary === binary && e.id.featureIndex === featureIndex,
+    );
     return {
       object: getFeatureProperties(binary, featureIndex),
       index: featureIndex,

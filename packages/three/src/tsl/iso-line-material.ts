@@ -23,7 +23,11 @@ import { LineBasicNodeMaterial } from 'three/webgpu';
 import { NormalBlending } from 'three';
 import { attribute, varying, uniform } from './nodes.js';
 import type { UniformNode } from './nodes.js';
-import { TimeFilterUniforms, windowAlphaNode, updateTimeFilterUniforms } from './time-filter.js';
+import {
+  TimeFilterUniforms,
+  windowAlphaNode,
+  updateTimeFilterUniforms,
+} from './time-filter.js';
 import type { TimeFilterParams } from './time-filter-math.js';
 
 export interface IsoLineMaterialOptions {
@@ -47,7 +51,9 @@ export interface IsoLineMaterialBundle {
  * `sttColor` (vec4, straight RGBA 0..1), `sttStart` / `sttEnd` (float, relative
  * ms). All vertices of a contour share the contour's time window.
  */
-export function createIsoLineMaterial(opts: IsoLineMaterialOptions = {}): IsoLineMaterialBundle {
+export function createIsoLineMaterial(
+  opts: IsoLineMaterialOptions = {},
+): IsoLineMaterialBundle {
   const time = new TimeFilterUniforms();
   const opacity = uniform(0.95);
 
@@ -82,7 +88,10 @@ export interface IsoLineUniformValues {
 }
 
 /** Push the playhead + window params into the iso uniforms. Call once per frame. */
-export function updateIsoLineUniforms(bundle: IsoLineMaterialBundle, v: IsoLineUniformValues): void {
+export function updateIsoLineUniforms(
+  bundle: IsoLineMaterialBundle,
+  v: IsoLineUniformValues,
+): void {
   updateTimeFilterUniforms(bundle.time, v.relativeCurrentTime, v.params);
   bundle.iso.opacity.value = v.opacity ?? 0.95;
 }

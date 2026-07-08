@@ -22,7 +22,10 @@ import { Mesh, InstancedBufferAttribute, Box3, Vector3, Sphere } from 'three';
 import type { Texture } from 'three';
 import type { Tile } from '@poopdeck.gl/core';
 import { BaseSttLayer, type SttLayerContext } from './layer.js';
-import { resolveTimeWindow, type ThreeTimeWindowOptions } from '../lib/time-window.js';
+import {
+  resolveTimeWindow,
+  type ThreeTimeWindowOptions,
+} from '../lib/time-window.js';
 import { makeBillboardQuadGeometry } from '../geometry/billboard-quad.js';
 import {
   buildIconBuffers,
@@ -153,17 +156,43 @@ export class IconLayer extends BaseSttLayer {
 
     const geometry = makeBillboardQuadGeometry();
     geometry.instanceCount = buf.count;
-    geometry.setAttribute('sttCenter', new InstancedBufferAttribute(buf.centers, 3));
-    geometry.setAttribute('sttColor', new InstancedBufferAttribute(buf.colors, 4));
-    geometry.setAttribute('sttAngle', new InstancedBufferAttribute(buf.angles, 1));
-    geometry.setAttribute('sttSize', new InstancedBufferAttribute(buf.sizes, 1));
-    geometry.setAttribute('sttUvRect', new InstancedBufferAttribute(buf.uvRects, 4));
-    geometry.setAttribute('sttAnchor', new InstancedBufferAttribute(buf.anchors, 2));
-    geometry.setAttribute('sttStart', new InstancedBufferAttribute(buf.starts, 1));
+    geometry.setAttribute(
+      'sttCenter',
+      new InstancedBufferAttribute(buf.centers, 3),
+    );
+    geometry.setAttribute(
+      'sttColor',
+      new InstancedBufferAttribute(buf.colors, 4),
+    );
+    geometry.setAttribute(
+      'sttAngle',
+      new InstancedBufferAttribute(buf.angles, 1),
+    );
+    geometry.setAttribute(
+      'sttSize',
+      new InstancedBufferAttribute(buf.sizes, 1),
+    );
+    geometry.setAttribute(
+      'sttUvRect',
+      new InstancedBufferAttribute(buf.uvRects, 4),
+    );
+    geometry.setAttribute(
+      'sttAnchor',
+      new InstancedBufferAttribute(buf.anchors, 2),
+    );
+    geometry.setAttribute(
+      'sttStart',
+      new InstancedBufferAttribute(buf.starts, 1),
+    );
     geometry.setAttribute('sttEnd', new InstancedBufferAttribute(buf.ends, 1));
     if (buf.bbox) {
-      geometry.boundingBox = new Box3(new Vector3(...buf.bbox.min), new Vector3(...buf.bbox.max));
-      geometry.boundingSphere = geometry.boundingBox.getBoundingSphere(new Sphere());
+      geometry.boundingBox = new Box3(
+        new Vector3(...buf.bbox.min),
+        new Vector3(...buf.bbox.max),
+      );
+      geometry.boundingSphere = geometry.boundingBox.getBoundingSphere(
+        new Sphere(),
+      );
     }
 
     // The shader maps quad-top → atlas v0 (top-left origin). A TextureLoader atlas

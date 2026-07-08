@@ -76,9 +76,7 @@ describe('quantizePositionsToUint16 (perf research 2026-07)', () => {
     // case this optimization targets — precision should concentrate here,
     // not be wasted covering the whole world unit square.
     const projected = new Float32Array([
-      0.500001, 0.400002, 0,
-      0.500003, 0.400004, 0,
-      0.500005, 0.400001, 0,
+      0.500001, 0.400002, 0, 0.500003, 0.400004, 0, 0.500005, 0.400001, 0,
       0.500002, 0.400005, 0,
     ]);
     const { quantized, scale, offset } = quantizePositionsToUint16(projected);
@@ -132,7 +130,9 @@ describe('quantizePositionsToUint16 (perf research 2026-07)', () => {
   });
 
   it('handles an empty buffer without throwing', () => {
-    const { quantized, scale, offset } = quantizePositionsToUint16(new Float32Array(0));
+    const { quantized, scale, offset } = quantizePositionsToUint16(
+      new Float32Array(0),
+    );
     expect(quantized.length).toBe(0);
     expect(scale).toEqual([0, 0, 0]);
     expect(offset).toEqual([0, 0, 0]);

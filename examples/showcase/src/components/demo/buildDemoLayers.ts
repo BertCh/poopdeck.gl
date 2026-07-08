@@ -9,7 +9,7 @@
  * stay in DemoViewer — they ride the 20 Hz UI clock and are not part of the
  * dataset's own layer tree.
  */
-import { SolidPolygonLayer } from "@deck.gl/layers";
+import { SolidPolygonLayer } from '@deck.gl/layers';
 import {
   AnimatedPointLayer,
   AnimatedPathLayer,
@@ -28,15 +28,18 @@ import {
   AnimatedBoundingBoxLayer,
   SplatLayer,
   ChevronFlowExtension,
-} from "@poopdeck.gl/layers";
-import type { HeatmapChannelSpec, OverviewPreloadResult } from "@poopdeck.gl/layers";
+} from '@poopdeck.gl/layers';
+import type {
+  HeatmapChannelSpec,
+  OverviewPreloadResult,
+} from '@poopdeck.gl/layers';
 import type {
   BufferSource,
   BufferedRunway,
   TimeController,
-} from "@poopdeck.gl/playback";
-import { tileLoadingProps } from "../../types";
-import type { Dataset, SummaryToggleOption } from "../../types";
+} from '@poopdeck.gl/playback';
+import { tileLoadingProps } from '../../types';
+import type { Dataset, SummaryToggleOption } from '../../types';
 
 /**
  * luma.gl v9 render parameters for a FLAT GROUND DECAL — the AV HD-map
@@ -50,7 +53,7 @@ import type { Dataset, SummaryToggleOption } from "../../types";
  * correctly among itself. Same idiom as edge-bundler.ts's offscreen passes.
  */
 const GROUND_DECAL_PARAMETERS = {
-  depthCompare: "always" as const,
+  depthCompare: 'always' as const,
   depthWriteEnabled: false,
 };
 
@@ -240,7 +243,7 @@ export function buildDemoLayers({
   };
 
   switch (selectedDataset.type) {
-    case "point":
+    case 'point':
       return [
         new AnimatedPointLayer({
           ...baseProps,
@@ -252,7 +255,7 @@ export function buildDemoLayers({
             selectedDataset.radiusProperty ?? selectedDataset.radius ?? 1000,
           // Per-dataset styling overrides; legacy datasets stay on the old
           // meters/×2 default so ship and flight markers keep their look.
-          radiusUnits: selectedDataset.radiusUnits ?? "meters",
+          radiusUnits: selectedDataset.radiusUnits ?? 'meters',
           radiusScale: selectedDataset.radiusScale ?? 2,
           radiusMinPixels: selectedDataset.radiusMinPixels,
           radiusMaxPixels: selectedDataset.radiusMaxPixels,
@@ -272,24 +275,22 @@ export function buildDemoLayers({
           elevationScale: selectedDataset.elevationScale,
         }),
       ];
-    case "path":
+    case 'path':
       return [
         new AnimatedPathLayer({
           ...baseProps,
           ...sourceProps(selectedDataset.id, true),
-          pathColor:
-            selectedDataset.colorProperty ||
-            selectedDataset.pathColor ||
-            [31, 186, 214, 255],
+          pathColor: selectedDataset.colorProperty ||
+            selectedDataset.pathColor || [31, 186, 214, 255],
           pathWidth: selectedDataset.pathWidth ?? 3,
-          widthUnits: selectedDataset.widthUnits ?? "pixels",
+          widthUnits: selectedDataset.widthUnits ?? 'pixels',
           // Same fragment-cost story as trips: rounded is the dominant cost
           // on dense Manhattan paths at small widths; default off.
           capRounded: selectedDataset.capRounded ?? false,
           jointRounded: selectedDataset.jointRounded ?? false,
         }),
       ];
-    case "trip-heads":
+    case 'trip-heads':
       // A smooth moving point at each active trip's head via AnimatedTripHeadsLayer
       // (stock ScatterplotLayer + CPU per-frame position interpolation) — fp64,
       // no jitter, no custom GLSL.
@@ -307,7 +308,7 @@ export function buildDemoLayers({
           headRadiusMaxPixels: selectedDataset.headRadiusMaxPixels,
         }),
       ];
-    case "trips": {
+    case 'trips': {
       // Static-geometry overviews (flow corridors) carry a per-vertex ×
       // per-bucket value matrix and animate via FlowCorridorLayer — the
       // geometry loads once and only the active bucket column changes.
@@ -335,10 +336,8 @@ export function buildDemoLayers({
         }),
         // A categorical `colorProperty` is passed as the property-name form
         // of `tripColor`; `colorMapping` keeps colors stable across tiles.
-        tripColor:
-          selectedDataset.colorProperty ??
-          selectedDataset.tripColor ??
-          [31, 186, 214, 255],
+        tripColor: selectedDataset.colorProperty ??
+          selectedDataset.tripColor ?? [31, 186, 214, 255],
         ...(selectedDataset.colorMapping && {
           colorMapping: selectedDataset.colorMapping,
         }),
@@ -355,7 +354,7 @@ export function buildDemoLayers({
         tripWidth: selectedDataset.tripWidth ?? 4,
         // World-space widths (meters) when a dataset opts in, so trails
         // thicken on zoom like the maritime points; defaults to pixels.
-        widthUnits: selectedDataset.widthUnits ?? "pixels",
+        widthUnits: selectedDataset.widthUnits ?? 'pixels',
         widthMinPixels: selectedDataset.widthMinPixels ?? 2,
         widthMaxPixels: selectedDataset.widthMaxPixels ?? 8,
         // FlowStrokeLayer breathing-width + twin-ribbon knobs. Only passed when
@@ -415,7 +414,8 @@ export function buildDemoLayers({
               // Static chevrons opt out of the per-vertex direction morph while the
               // layer still colours by |value| (signedFlow). Defaults to signedFlow.
               perBucketDirection:
-                selectedDataset.chevronPerBucketDirection ?? selectedDataset.flowSignedDirection,
+                selectedDataset.chevronPerBucketDirection ??
+                selectedDataset.flowSignedDirection,
               uniformSpacing: selectedDataset.chevronUniformSpacing,
               directionColor: selectedDataset.chevronDirectionColor,
               directionColors: selectedDataset.chevronDirectionColors,
@@ -429,13 +429,14 @@ export function buildDemoLayers({
       const tripsLayers: any[] = useGlobe
         ? [
             new SolidPolygonLayer({
-              id: "earth-background",
+              id: 'earth-background',
               data: EARTH_POLYGON,
               getPolygon: (d) => d as any,
               stroked: false,
               filled: true,
-              getFillColor:
-                selectedDataset.globeBackgroundColor ?? [36, 39, 48, 255],
+              getFillColor: selectedDataset.globeBackgroundColor ?? [
+                36, 39, 48, 255,
+              ],
             }),
             tripsLayer,
           ]
@@ -467,7 +468,7 @@ export function buildDemoLayers({
       }
       return tripsLayers;
     }
-    case "heatmap": {
+    case 'heatmap': {
       // Stacked heatmaps now compile down to ONE HeatmapLayer with N
       // channels packed into the RGBA accumulator — half the draw calls
       // and one shared FBO. The legacy per-spec sublayer fanout is gone.
@@ -513,16 +514,14 @@ export function buildDemoLayers({
         }),
       ];
     }
-    case "polygon":
+    case 'polygon':
       return [
         new AnimatedPolygonLayer({
           ...baseProps,
           ...sourceProps(selectedDataset.id, true),
           filled: selectedDataset.polygonFilled ?? true,
-          fillColor:
-            selectedDataset.colorProperty ||
-            selectedDataset.polygonFillColor ||
-            [31, 186, 214, 180],
+          fillColor: selectedDataset.colorProperty ||
+            selectedDataset.polygonFillColor || [31, 186, 214, 180],
           // Categorical fills keyed by category STRING (stable across tiles);
           // only meaningful alongside a `colorProperty` fillColor.
           ...(selectedDataset.colorMapping && {
@@ -533,19 +532,19 @@ export function buildDemoLayers({
           }),
         }),
       ];
-    case "summary": {
+    case 'summary': {
       // If the dataset declares a toggle (e.g. pickup vs dropoff), the
       // active option overrides the base summary styling props. Otherwise
       // fall back to the dataset's single-weight settings.
       const weightProperty =
         activeSummaryToggle?.weightProperty ??
         selectedDataset.summaryWeightProperty ??
-        "count";
+        'count';
       const colorRange =
         activeSummaryToggle?.colorRange ?? selectedDataset.summaryColorRange;
       const colorDomain =
         activeSummaryToggle?.colorDomain ?? selectedDataset.summaryColorDomain;
-      const summaryId = `${selectedDataset.id}-${activeSummaryToggle?.id ?? "default"}`;
+      const summaryId = `${selectedDataset.id}-${activeSummaryToggle?.id ?? 'default'}`;
       return [
         new H3SummaryLayer({
           id: summaryId,
@@ -566,7 +565,7 @@ export function buildDemoLayers({
         }),
       ];
     }
-    case "arc":
+    case 'arc':
       // Origin→destination flow arcs. Each tile feature is a 2-vertex
       // LineString (first vertex = source, last = target); the layer derives
       // instanced source/target positions and bows an arc between them, faded
@@ -575,16 +574,14 @@ export function buildDemoLayers({
         new AnimatedArcLayer({
           ...baseProps,
           ...sourceProps(selectedDataset.id, true),
-          sourceColor:
-            selectedDataset.colorProperty ??
-            selectedDataset.arcSourceColor ??
-            [56, 196, 232, 210],
+          sourceColor: selectedDataset.colorProperty ??
+            selectedDataset.arcSourceColor ?? [56, 196, 232, 210],
           targetColor: selectedDataset.arcTargetColor ?? [255, 142, 64, 220],
           ...(selectedDataset.colorPalette && {
             colorPalette: selectedDataset.colorPalette,
           }),
           width: selectedDataset.arcWidth ?? 1.5,
-          widthUnits: selectedDataset.widthUnits ?? "pixels",
+          widthUnits: selectedDataset.widthUnits ?? 'pixels',
           widthMinPixels: selectedDataset.widthMinPixels ?? 1,
           widthMaxPixels: selectedDataset.widthMaxPixels,
           greatCircle: selectedDataset.arcGreatCircle ?? false,
@@ -592,7 +589,7 @@ export function buildDemoLayers({
           fadeInDuration: selectedDataset.fadeInDuration ?? 300,
         }),
       ];
-    case "flowmap":
+    case 'flowmap':
       // flowmap.gl-style animated OD flowmap: one weighted tapered arrow per
       // station-pair whose width tracks volume at the playhead (per-bucket
       // vertexValueMatrix decode, rendered via FlowLinesLayer), plus node
@@ -618,7 +615,7 @@ export function buildDemoLayers({
           minFlow: selectedDataset.flowMinFlow ?? 0.25,
         }),
       ];
-    case "flowmap-bundled":
+    case 'flowmap-bundled':
       // Same OD flowmap, but compatible corridors are relaxed into smooth rivers
       // by a GPU kernel-density edge bundler (KDEEB/CUBu — density splat → advect
       // → resample → Laplacian smooth, cosmos.gl-style ping-pong float textures)
@@ -658,14 +655,14 @@ export function buildDemoLayers({
           ...(selectedDataset.flowPreBundled && { preBundled: true }),
         }),
       ];
-    case "column":
+    case 'column':
       // Extruded 3D columns at point features; height from a numeric column.
       return [
         new AnimatedColumnLayer({
           ...baseProps,
           ...sourceProps(selectedDataset.id, true),
           radius: selectedDataset.columnRadius ?? 100,
-          radiusUnits: selectedDataset.columnRadiusUnits ?? "meters",
+          radiusUnits: selectedDataset.columnRadiusUnits ?? 'meters',
           diskResolution: selectedDataset.columnDiskResolution ?? 12,
           extruded: true,
           elevation:
@@ -673,17 +670,15 @@ export function buildDemoLayers({
             selectedDataset.columnElevation ??
             1000,
           elevationScale: selectedDataset.elevationScale ?? 1,
-          fillColor:
-            selectedDataset.colorProperty ??
-            selectedDataset.columnFillColor ??
-            [253, 128, 93, 220],
+          fillColor: selectedDataset.colorProperty ??
+            selectedDataset.columnFillColor ?? [253, 128, 93, 220],
           ...(selectedDataset.colorPalette && {
             colorPalette: selectedDataset.colorPalette,
           }),
           fadeInDuration: selectedDataset.fadeInDuration ?? 300,
         }),
       ];
-    case "quadbin-summary": {
+    case 'quadbin-summary': {
       // CARTO Quadbin square-cell analog of the H3 summary tier. Mirrors the
       // `summary` case: the layer clamps to the tier's zoom band and reads the
       // aggregated `count` (or a toggle weight) per cell. Quadbin cells carry
@@ -691,12 +686,12 @@ export function buildDemoLayers({
       const weightProperty =
         activeSummaryToggle?.weightProperty ??
         selectedDataset.summaryWeightProperty ??
-        "count";
+        'count';
       const colorRange =
         activeSummaryToggle?.colorRange ?? selectedDataset.summaryColorRange;
       const colorDomain =
         activeSummaryToggle?.colorDomain ?? selectedDataset.summaryColorDomain;
-      const quadbinId = `${selectedDataset.id}-${activeSummaryToggle?.id ?? "default"}`;
+      const quadbinId = `${selectedDataset.id}-${activeSummaryToggle?.id ?? 'default'}`;
       return [
         new QuadbinSummaryLayer({
           id: quadbinId,
@@ -716,7 +711,7 @@ export function buildDemoLayers({
         }),
       ];
     }
-    case "radar": {
+    case 'radar': {
       // Composite NEXRAD render. Three STT archives from one dataset entry:
       //   1. reflectivity CONTOUR BANDS (the field) — primary `url`, reuses
       //      baseProps verbatim and is the REQUIRED governor source so the clock
@@ -742,7 +737,7 @@ export function buildDemoLayers({
           filled: true,
           // String fillColor = property name → GPU categorical fill; colorMapping
           // keeps each dBZ band stable across tiles (the wildfires/severity pattern).
-          fillColor: selectedDataset.colorProperty ?? "dbz_band",
+          fillColor: selectedDataset.colorProperty ?? 'dbz_band',
           ...(selectedDataset.colorMapping && {
             colorMapping: selectedDataset.colorMapping,
           }),
@@ -766,7 +761,7 @@ export function buildDemoLayers({
               gradientColorRamp: selectedDataset.tripGradient.colors,
             }),
             tripWidth: selectedDataset.tripWidth ?? 3,
-            widthUnits: selectedDataset.widthUnits ?? "pixels",
+            widthUnits: selectedDataset.widthUnits ?? 'pixels',
             widthMinPixels: selectedDataset.widthMinPixels ?? 1.5,
             widthMaxPixels: selectedDataset.widthMaxPixels ?? 6,
             trailLength: selectedDataset.trailLength ?? 1800000,
@@ -784,8 +779,8 @@ export function buildDemoLayers({
             ...sourceProps(`${selectedDataset.id}-cells`, false),
             data: selectedDataset.radarCellsUrl,
             fillColor: selectedDataset.radarCellColor ?? [255, 255, 255, 230],
-            radius: selectedDataset.radiusProperty ?? "max_dbz",
-            radiusUnits: selectedDataset.radiusUnits ?? "pixels",
+            radius: selectedDataset.radiusProperty ?? 'max_dbz',
+            radiusUnits: selectedDataset.radiusUnits ?? 'pixels',
             radiusScale: selectedDataset.radiusScale ?? 1,
             radiusMinPixels: selectedDataset.radiusMinPixels ?? 2,
             radiusMaxPixels: selectedDataset.radiusMaxPixels ?? 14,
@@ -798,7 +793,7 @@ export function buildDemoLayers({
       }
       return layers;
     }
-    case "av": {
+    case 'av': {
       // Composite AV-telemetry render (streetscape.gl style). Up to three STT
       // archives from one scene bundle, painter order LIDAR → ego → objects:
       //   1. accumulated LIDAR point cloud — the primary `url`; reuses baseProps
@@ -856,7 +851,7 @@ export function buildDemoLayers({
             // Categorical `category` (object classes + "ego") → ribbon color via
             // the property-name form of tripColor; AV_OBJECT_COLORS keeps colors
             // stable across tiles (and paints the synthetic "ego" track cyan).
-            tripColor: "category",
+            tripColor: 'category',
             ...(selectedDataset.avObjectColors && {
               colorMapping: selectedDataset.avObjectColors,
             }),
@@ -872,7 +867,7 @@ export function buildDemoLayers({
             // World-space width (~1.5 m) so threads thicken on zoom like real
             // objects; clamped to a legible 2–6 px band.
             tripWidth: 1.5,
-            widthUnits: "meters",
+            widthUnits: 'meters',
             widthMinPixels: 2,
             widthMaxPixels: 6,
             // Rounded caps/joints read better on the climbing 3D threads.
@@ -895,7 +890,7 @@ export function buildDemoLayers({
             ...sourceProps(`${selectedDataset.id}-map-poly`, false),
             data: selectedDataset.avMapPolyUrl,
             filled: true,
-            fillColor: "map_layer",
+            fillColor: 'map_layer',
             ...(selectedDataset.mapColors && {
               colorMapping: selectedDataset.mapColors,
             }),
@@ -913,11 +908,11 @@ export function buildDemoLayers({
             id: `${selectedDataset.id}-map-line`,
             ...sourceProps(`${selectedDataset.id}-map-line`, false),
             data: selectedDataset.avMapLineUrl,
-            pathColor: "map_layer",
+            pathColor: 'map_layer',
             ...(selectedDataset.mapColors && {
               colorMapping: selectedDataset.mapColors,
             }),
-            widthUnits: "meters",
+            widthUnits: 'meters',
             pathWidth: 0.35,
             widthMinPixels: 1,
             capRounded: false,
@@ -947,7 +942,7 @@ export function buildDemoLayers({
         const stageStatic = selectedDataset.lidarStageStatic ?? true;
         const stageSigma = stageStatic
           ? 1e9
-          : selectedDataset.lidarSurfelTemporalSigma ?? 1800;
+          : (selectedDataset.lidarSurfelTemporalSigma ?? 1800);
         const actorSigma = selectedDataset.lidarSurfelTemporalSigma ?? 200;
         layers.push(
           new SplatLayer({
@@ -956,7 +951,7 @@ export function buildDemoLayers({
             // OPTIONAL: loads coordinated but never gates the clock (HD-map idiom).
             ...sourceProps(`${selectedDataset.id}-stage`, false),
             data: selectedDataset.avStaticUrl,
-            elevationProperty: "z",
+            elevationProperty: 'z',
             elevationScale: selectedDataset.elevationScale ?? 1,
             // Always-present backdrop: a huge sigma pins each surfel full-bright
             // independent of its first_seen vs the playhead (no accreting reveal).
@@ -975,7 +970,7 @@ export function buildDemoLayers({
             ...propsForStream(selectedDataset.id, selectedDataset.avDynamicUrl),
             id: selectedDataset.id, // bare id → the cockpit's "lidar" toggle slot
             data: selectedDataset.avDynamicUrl,
-            elevationProperty: "z",
+            elevationProperty: 'z',
             elevationScale: selectedDataset.elevationScale ?? 1,
             // Moving agents (is_dynamic = 1): a short temporal Gaussian so each
             // sweep's returns smear into motion rather than freezing or streaking.
@@ -992,7 +987,10 @@ export function buildDemoLayers({
             alphaCutoff: perfMode ? 0.2 : 0.1,
           }),
         );
-      } else if (selectedDataset.avLidarUrl && selectedDataset.lidarWorldbuild) {
+      } else if (
+        selectedDataset.avLidarUrl &&
+        selectedDataset.lidarWorldbuild
+      ) {
         // WORLDBUILD: the `-world` surfel cloud rendered as a CUMULATIVE scene
         // reconstruction. STATIC surfels (is_dynamic = 0) persist once revealed —
         // a HUGE/effectively-infinite temporalSigma keeps them at full brightness
@@ -1006,7 +1004,7 @@ export function buildDemoLayers({
             ...propsForStream(selectedDataset.id, selectedDataset.avLidarUrl),
             id: selectedDataset.id, // bare id → the cockpit's "lidar" toggle
             data: selectedDataset.avLidarUrl,
-            elevationProperty: "z",
+            elevationProperty: 'z',
             elevationScale: selectedDataset.elevationScale ?? 1,
             // Accumulate: static surfels persist once revealed (the world builds up).
             cumulative: true,
@@ -1015,7 +1013,8 @@ export function buildDemoLayers({
             // stay full-bright; the surfel scenes' tuned sigma is a sensible floor.
             temporalSigma: selectedDataset.lidarSurfelTemporalSigma ?? 1e9,
             // Dynamic surfels (moving objects) smear over this short window.
-            temporalSigmaDynamic: selectedDataset.lidarWorldbuildDynamicSigma ?? 200,
+            temporalSigmaDynamic:
+              selectedDataset.lidarWorldbuildDynamicSigma ?? 200,
             sizeScale: selectedDataset.lidarSurfelSizeScale ?? 1,
             opacity: selectedDataset.opacity ?? 1,
             ...(perfMode ? { alphaCutoff: 0.2 } : {}),
@@ -1032,7 +1031,7 @@ export function buildDemoLayers({
             id: selectedDataset.id, // bare id → the cockpit's "lidar" toggle
             data: selectedDataset.avLidarUrl,
             // Real altitude from the baked `z` column → a true 3D surface.
-            elevationProperty: "z",
+            elevationProperty: 'z',
             elevationScale: selectedDataset.elevationScale ?? 1,
             // Soft temporal Gaussian — the cloud evolves as the playhead moves.
             temporalSigma: selectedDataset.lidarSurfelTemporalSigma ?? 180,
@@ -1064,15 +1063,15 @@ export function buildDemoLayers({
             ...propsForStream(selectedDataset.id, selectedDataset.avLidarUrl),
             id: selectedDataset.id,
             data: selectedDataset.avLidarUrl,
-            pathColor: selectedDataset.colorProperty ?? "density_band",
+            pathColor: selectedDataset.colorProperty ?? 'density_band',
             colorMapping: selectedDataset.lidarColorMapping,
             colorMappingDefault: selectedDataset.lidarColorMappingDefault,
-            widthUnits: "pixels",
+            widthUnits: 'pixels',
             // Lift to the real per-contour height (numeric `z_layer` column);
             // slightly heavier lines read better terraced against the backdrop.
             ...(iso3d
               ? {
-                  elevationProperty: "z_layer",
+                  elevationProperty: 'z_layer',
                   elevationScale: selectedDataset.lidarIsoElevationScale ?? 1,
                   // Fade upper slabs translucent so the stack reads top-down
                   // (see AnimatedPathLayer.elevationOpacity*). Unset ⇒ un-graded.
@@ -1110,16 +1109,16 @@ export function buildDemoLayers({
             id: selectedDataset.id, // bare id → the cockpit's "lidar" toggle
             data: selectedDataset.avLidarUrl,
             // Phase-ramp color baked per-point (r/g/b) — the rotating scan hue.
-            rgbColorColumns: ["r", "g", "b"] as [string, string, string],
+            rgbColorColumns: ['r', 'g', 'b'] as [string, string, string],
             // Wake mode: each return draws as a fading + shrinking tail behind the
             // sweep's leading edge, so the scan-line reads as a moving sweep.
             wakeLength: 60,
             wakeTailScale: 0.1,
             use3D: true,
-            elevationProperty: "z",
+            elevationProperty: 'z',
             elevationScale: selectedDataset.elevationScale ?? 1,
             radius: selectedDataset.radius ?? 1.6,
-            radiusUnits: selectedDataset.radiusUnits ?? "pixels",
+            radiusUnits: selectedDataset.radiusUnits ?? 'pixels',
             radiusScale: selectedDataset.radiusScale ?? 1,
             radiusMinPixels: selectedDataset.radiusMinPixels ?? 1,
             radiusMaxPixels: selectedDataset.radiusMaxPixels,
@@ -1138,7 +1137,7 @@ export function buildDemoLayers({
             data: selectedDataset.avLidarUrl,
             // String fillColor = property name → GPU categorical fill; the
             // height-band colorMapping keeps each band stable across tiles.
-            fillColor: selectedDataset.colorProperty ?? "height_band",
+            fillColor: selectedDataset.colorProperty ?? 'height_band',
             colorMapping: selectedDataset.lidarColorMapping,
             colorMappingDefault: selectedDataset.lidarColorMappingDefault,
             // Camera-colored bundles (waymo_extract --colorize) bake per-point
@@ -1146,7 +1145,7 @@ export function buildDemoLayers({
             // the height ramp) and render as soft gaussian splats for the
             // photographic point-cloud look.
             ...(selectedDataset.lidarRgb
-              ? { rgbColorColumns: ["r", "g", "b"] as [string, string, string] }
+              ? { rgbColorColumns: ['r', 'g', 'b'] as [string, string, string] }
               : {}),
             splat: selectedDataset.lidarSplat ?? false,
             // Temporal fades scaled to the (tight) LIDAR window so each sweep
@@ -1162,15 +1161,17 @@ export function buildDemoLayers({
             // tile carries a numeric `z` column; AnimatedPointLayer now fills the
             // position's z from it. `elevationScale` lets a scene exaggerate.
             use3D: true,
-            elevationProperty: "z",
+            elevationProperty: 'z',
             elevationScale: selectedDataset.elevationScale ?? 1,
             // Additive-octree zoom LOD: load + render the UNION of zoom levels
             // [minZoom..cameraZoom]. Each return lives at one home zoom, so coarse
             // levels are a sparse overview and zooming in streams only the deeper
             // residual (the coarse tiles stay resident). Built with --lod.
-            ...(selectedDataset.lidarLod ? { lodMode: "additive" as const } : {}),
+            ...(selectedDataset.lidarLod
+              ? { lodMode: 'additive' as const }
+              : {}),
             radius: selectedDataset.radius ?? 1.4,
-            radiusUnits: selectedDataset.radiusUnits ?? "pixels",
+            radiusUnits: selectedDataset.radiusUnits ?? 'pixels',
             radiusScale: selectedDataset.radiusScale ?? 1,
             radiusMinPixels: selectedDataset.radiusMinPixels ?? 1,
             radiusMaxPixels: selectedDataset.radiusMaxPixels,
@@ -1191,7 +1192,7 @@ export function buildDemoLayers({
             opacity:
               perfMode && !selectedDataset.lidarSplat
                 ? 1
-                : selectedDataset.opacity ?? 0.9,
+                : (selectedDataset.opacity ?? 0.9),
           }),
         );
       }
@@ -1202,7 +1203,10 @@ export function buildDemoLayers({
       if (selectedDataset.avObjectsUrl) {
         layers.push(
           new AnimatedBoundingBoxLayer({
-            ...propsForStream(`${selectedDataset.id}-objects`, selectedDataset.avObjectsUrl),
+            ...propsForStream(
+              `${selectedDataset.id}-objects`,
+              selectedDataset.avObjectsUrl,
+            ),
             id: `${selectedDataset.id}-objects`,
             data: selectedDataset.avObjectsUrl,
             // The box layer interpolates ONE box per track from the two keyframes
@@ -1216,13 +1220,13 @@ export function buildDemoLayers({
             timeWindow: Math.max(timeWindow, 2000),
             // Categorical `category` → oriented box color via the same
             // colorMapping machinery AnimatedColumnLayer uses.
-            colorProperty: "category",
+            colorProperty: 'category',
             colorMapping: selectedDataset.avObjectColors,
             colorMappingDefault: selectedDataset.colorMappingDefault,
-            headingProperty: "heading",
-            lengthProperty: "length",
-            widthProperty: "width",
-            heightProperty: "height",
+            headingProperty: 'heading',
+            lengthProperty: 'length',
+            widthProperty: 'width',
+            heightProperty: 'height',
             // Detection-box look: crisp 12-edge cuboid OUTLINES (no solid fill),
             // so the LIDAR returns inside each box stay visible — the
             // streetscape.gl / nuScenes-devkit style. Per-object color/heading/
@@ -1235,7 +1239,7 @@ export function buildDemoLayers({
             // (overrides the baseProps pickable:false for the objects layer only).
             pickable: true,
             showLabels: true,
-            labelProperty: "category",
+            labelProperty: 'category',
             showVelocity: true,
           }),
         );

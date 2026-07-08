@@ -63,6 +63,9 @@ describe('core render kernel stays framework-free', () => {
         }
       }
     }
-    expect(violations, `core imported a renderer library:\n${violations.join('\n')}`).toEqual([]);
+    expect(
+      violations,
+      `core imported a renderer library:\n${violations.join('\n')}`,
+    ).toEqual([]);
   });
 });

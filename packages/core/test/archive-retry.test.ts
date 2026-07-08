@@ -17,7 +17,9 @@ import { STTArchive } from '../src/archive';
 import type { TileId } from '../src/types';
 import { packedFromSingleFile, packedFetch } from './helpers/packed-fixture';
 
-const FIXTURE = fileURLToPath(new URL('./fixtures/sample.stt', import.meta.url));
+const FIXTURE = fileURLToPath(
+  new URL('./fixtures/sample.stt', import.meta.url),
+);
 const DATASET = packedFromSingleFile(new Uint8Array(readFileSync(FIXTURE)));
 
 /** Is this request a Range request against a pack object? */
@@ -72,7 +74,12 @@ function faultyArchive(
 /** Every tile id in the fixture's directory. */
 async function allTileIds(archive: STTArchive): Promise<TileId[]> {
   const index = await archive.getIndex();
-  return index.tiles.map((e) => ({ z: e.zoom, x: e.x, y: e.y, t: e.timeStart }));
+  return index.tiles.map((e) => ({
+    z: e.zoom,
+    x: e.x,
+    y: e.y,
+    t: e.timeStart,
+  }));
 }
 
 describe('STTArchive range-request retry (WS-E)', () => {
@@ -92,7 +99,10 @@ describe('STTArchive range-request retry (WS-E)', () => {
   it('feeds the throughput estimator from completed range responses', async () => {
     const counter = { attempts: 0 };
     const archive = faultyArchive(counter, 0); // healthy
-    expect(archive.getThroughputEstimate()).toEqual({ bytesPerMs: null, samples: 0 });
+    expect(archive.getThroughputEstimate()).toEqual({
+      bytesPerMs: null,
+      samples: 0,
+    });
 
     await archive.getTiles(await allTileIds(archive));
     const estimate = archive.getThroughputEstimate();
@@ -130,7 +140,9 @@ describe('STTArchive range-request retry (WS-E)', () => {
     const archive = faultyArchive(counter, Number.MAX_SAFE_INTEGER, 'abort');
     const ids = await allTileIds(archive);
 
-    await expect(archive.getTiles(ids)).rejects.toMatchObject({ name: 'AbortError' });
+    await expect(archive.getTiles(ids)).rejects.toMatchObject({
+      name: 'AbortError',
+    });
     // ONE attempt: no backoff retries, no per-tile fallback after an abort.
     expect(counter.attempts).toBe(1);
   });

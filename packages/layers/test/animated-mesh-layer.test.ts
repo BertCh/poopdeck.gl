@@ -59,8 +59,10 @@ const DEG = Math.PI / 180;
 // folds them into the computed instanceModelMatrix, built from the props). So
 // the tests read the value the matrix updater actually consumes: the accessor's
 // return for a given instance index.
-const oriOf = (layer: any, i = 0): number[] => layer.props.getOrientation(null, { index: i });
-const sclOf = (layer: any, i = 0): number[] => layer.props.getScale(null, { index: i });
+const oriOf = (layer: any, i = 0): number[] =>
+  layer.props.getOrientation(null, { index: i });
+const sclOf = (layer: any, i = 0): number[] =>
+  layer.props.getScale(null, { index: i });
 
 /** A sentinel mesh source (the layer forwards it verbatim to SimpleMeshLayer). */
 const MESH = { kind: 'gltf', id: 'car' };
@@ -68,7 +70,10 @@ const MESH_CAR = { kind: 'gltf', id: 'car-model' };
 const MESH_PED = { kind: 'gltf', id: 'ped-model' };
 
 /** Build a categorical {indices, categories} column from string values. */
-function categorical(values: string[]): { indices: Uint16Array; categories: string[] } {
+function categorical(values: string[]): {
+  indices: Uint16Array;
+  categories: string[];
+} {
   const categories: string[] = [];
   const map = new Map<string, number>();
   const indices = new Uint16Array(values.length);
@@ -101,7 +106,10 @@ interface ObjRow {
 /** Build a fake object (point) tile of tracked-object snapshots. */
 function makeObjTile(
   rows: ObjRow[],
-  opts: { timeOffset?: number; tileId?: { z: number; x: number; y: number; t: number } } = {},
+  opts: {
+    timeOffset?: number;
+    tileId?: { z: number; x: number; y: number; t: number };
+  } = {},
 ): Tile {
   const tile = makePointTile({
     positions: rows.map((r) => [r.lon, r.lat]),
@@ -112,14 +120,26 @@ function makeObjTile(
   });
   const f = tile.layers[0].features;
   if (rows.some((r) => r.track !== undefined)) {
-    f.categoricalProps['track_id'] = categorical(rows.map((r) => r.track ?? ''));
+    f.categoricalProps['track_id'] = categorical(
+      rows.map((r) => r.track ?? ''),
+    );
   }
   if (rows.some((r) => r.category !== undefined)) {
-    f.categoricalProps['category'] = categorical(rows.map((r) => r.category ?? ''));
+    f.categoricalProps['category'] = categorical(
+      rows.map((r) => r.category ?? ''),
+    );
   }
-  for (const col of ['heading', 'length', 'width', 'height', 'speed'] as const) {
+  for (const col of [
+    'heading',
+    'length',
+    'width',
+    'height',
+    'speed',
+  ] as const) {
     if (rows.some((r) => r[col] !== undefined)) {
-      f.numericProps[col] = new Float32Array(rows.map((r) => (r[col] ?? NaN) as number));
+      f.numericProps[col] = new Float32Array(
+        rows.map((r) => (r[col] ?? NaN) as number),
+      );
     }
   }
   return tile;
@@ -203,7 +223,9 @@ describe('AnimatedMeshLayer', () => {
     expect(LayerCtor.defaultProps.mesh.value).toBe(null);
     expect(LayerCtor.defaultProps.meshMapping.value).toBe(null);
     expect(LayerCtor.defaultProps.getColor.value).toBe(null);
-    expect(LayerCtor.defaultProps.colorMappingDefault.value).toEqual([255, 255, 255, 255]);
+    expect(LayerCtor.defaultProps.colorMappingDefault.value).toEqual([
+      255, 255, 255, 255,
+    ]);
     expect(LayerCtor.defaultProps.orientationOffset.value).toEqual([0, 0, 0]);
     expect(LayerCtor.defaultProps.getTranslation.value).toEqual([0, 0, 0]);
     expect(LayerCtor.defaultProps.material.value).toBe(true);
@@ -297,7 +319,9 @@ describe('AnimatedMeshLayer', () => {
       { track: 'A', lon: 0, lat: 0, t: 0, heading: 0 },
       { track: 'A', lon: 0, lat: 0, t: 1000, heading: 0 },
     ]);
-    const ori = oriOf(render([tile], 500, { orientationOffset: [5, 90, -10] })[0]);
+    const ori = oriOf(
+      render([tile], 500, { orientationOffset: [5, 90, -10] })[0],
+    );
     expect(ori[0]).toBeCloseTo(5, 5); // pitch offset
     expect(ori[1]).toBeCloseTo(90, 5); // heading 0 + yaw offset 90
     expect(ori[2]).toBeCloseTo(-10, 5); // roll offset
@@ -317,10 +341,46 @@ describe('AnimatedMeshLayer', () => {
     // updater calls MUST return each instance's own pose (a binary
     // data.attributes.getOrientation/getScale would be dropped by SimpleMeshLayer).
     const tile = makeObjTile([
-      { track: 'A', lon: 0, lat: 0, t: 0, heading: 0, length: 4, width: 2, height: 1.6 },
-      { track: 'A', lon: 0, lat: 0, t: 1000, heading: 0, length: 4, width: 2, height: 1.6 },
-      { track: 'B', lon: 1, lat: 0, t: 0, heading: Math.PI / 2, length: 6, width: 2.5, height: 3 },
-      { track: 'B', lon: 1, lat: 0, t: 1000, heading: Math.PI / 2, length: 6, width: 2.5, height: 3 },
+      {
+        track: 'A',
+        lon: 0,
+        lat: 0,
+        t: 0,
+        heading: 0,
+        length: 4,
+        width: 2,
+        height: 1.6,
+      },
+      {
+        track: 'A',
+        lon: 0,
+        lat: 0,
+        t: 1000,
+        heading: 0,
+        length: 4,
+        width: 2,
+        height: 1.6,
+      },
+      {
+        track: 'B',
+        lon: 1,
+        lat: 0,
+        t: 0,
+        heading: Math.PI / 2,
+        length: 6,
+        width: 2.5,
+        height: 3,
+      },
+      {
+        track: 'B',
+        lon: 1,
+        lat: 0,
+        t: 1000,
+        heading: Math.PI / 2,
+        length: 6,
+        width: 2.5,
+        height: 3,
+      },
     ]);
     const layer = render([tile], 500)[0];
     // getOrientation / getScale are function accessors (not binary attributes).
@@ -340,8 +400,24 @@ describe('AnimatedMeshLayer', () => {
 
   it('bakes length/width/height into getScale when scaleToDimensions (default)', () => {
     const tile = makeObjTile([
-      { track: 'A', lon: 0, lat: 0, t: 0, length: 4.5, width: 1.8, height: 1.6 },
-      { track: 'A', lon: 0, lat: 0, t: 1000, length: 4.5, width: 1.8, height: 1.6 },
+      {
+        track: 'A',
+        lon: 0,
+        lat: 0,
+        t: 0,
+        length: 4.5,
+        width: 1.8,
+        height: 1.6,
+      },
+      {
+        track: 'A',
+        lon: 0,
+        lat: 0,
+        t: 1000,
+        length: 4.5,
+        width: 1.8,
+        height: 1.6,
+      },
     ]);
     const scl = sclOf(render([tile], 500)[0]);
     // Raw dims (no ×0.5 — a glTF model isn't a ±1 cube); SimpleMeshLayer's own
@@ -353,8 +429,24 @@ describe('AnimatedMeshLayer', () => {
 
   it('uses native size getScale [1,1,1] when scaleToDimensions is false', () => {
     const tile = makeObjTile([
-      { track: 'A', lon: 0, lat: 0, t: 0, length: 4.5, width: 1.8, height: 1.6 },
-      { track: 'A', lon: 0, lat: 0, t: 1000, length: 4.5, width: 1.8, height: 1.6 },
+      {
+        track: 'A',
+        lon: 0,
+        lat: 0,
+        t: 0,
+        length: 4.5,
+        width: 1.8,
+        height: 1.6,
+      },
+      {
+        track: 'A',
+        lon: 0,
+        lat: 0,
+        t: 1000,
+        length: 4.5,
+        width: 1.8,
+        height: 1.6,
+      },
     ]);
     const scl = sclOf(render([tile], 500, { scaleToDimensions: false })[0]);
     expect(Array.from(scl)).toEqual([1, 1, 1]);
@@ -365,11 +457,13 @@ describe('AnimatedMeshLayer', () => {
       { track: 'A', lon: 0, lat: 0, t: 0 },
       { track: 'A', lon: 0, lat: 0, t: 1000 },
     ]);
-    const scl = sclOf(render([tile], 500, {
-      defaultLength: 6,
-      defaultWidth: 3,
-      defaultHeight: 2,
-    })[0]);
+    const scl = sclOf(
+      render([tile], 500, {
+        defaultLength: 6,
+        defaultWidth: 3,
+        defaultHeight: 2,
+      })[0],
+    );
     expect(scl[0]).toBeCloseTo(6, 5);
     expect(scl[1]).toBeCloseTo(3, 5);
     expect(scl[2]).toBeCloseTo(2, 5);
@@ -377,7 +471,10 @@ describe('AnimatedMeshLayer', () => {
 
   it('honors custom heading/length/track-id property names', () => {
     const tile = makePointTile({
-      positions: [[0, 0], [0, 0]],
+      positions: [
+        [0, 0],
+        [0, 0],
+      ],
       startTimes: [0, 1000],
       endTimes: [0, 1000],
       timeOffset: 0,
@@ -561,7 +658,9 @@ describe('AnimatedMeshLayer', () => {
     ]);
     render([tile], 500, { texture: { url: 'car.png' }, fadeInDuration: 200 });
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(String(warn.mock.calls[0][0])).toMatch(/texture.*ignores.*getColor|fade/i);
+    expect(String(warn.mock.calls[0][0])).toMatch(
+      /texture.*ignores.*getColor|fade/i,
+    );
     warn.mockRestore();
   });
 
@@ -590,8 +689,30 @@ describe('AnimatedMeshLayer', () => {
 
   it('attaches per-track pick rows and resolves info.object on a hit', () => {
     const tile = makeObjTile([
-      { track: 't-7', lon: 0, lat: 0, t: 0, category: 'car', heading: 0, length: 4, width: 2, height: 1.6, speed: 8 },
-      { track: 't-7', lon: 10, lat: 0, t: 1000, category: 'car', heading: 0, length: 4, width: 2, height: 1.6, speed: 8 },
+      {
+        track: 't-7',
+        lon: 0,
+        lat: 0,
+        t: 0,
+        category: 'car',
+        heading: 0,
+        length: 4,
+        width: 2,
+        height: 1.6,
+        speed: 8,
+      },
+      {
+        track: 't-7',
+        lon: 10,
+        lat: 0,
+        t: 1000,
+        category: 'car',
+        heading: 0,
+        length: 4,
+        width: 2,
+        height: 1.6,
+        speed: 8,
+      },
     ]);
     const layer = makeLayer({ colorProperty: 'category' });
     layer.state = { tiles: [tile] };
@@ -627,7 +748,10 @@ describe('AnimatedMeshLayer', () => {
     layer._currentTime = 500;
     const layers = (layer as any).renderLayers();
     const pedLayer = layers[1];
-    const out = (layer as any).getPickingInfo({ info: { index: 0 }, sourceLayer: pedLayer });
+    const out = (layer as any).getPickingInfo({
+      info: { index: 0 },
+      sourceLayer: pedLayer,
+    });
     expect(out.object.track_id).toBe('B');
     expect(out.object.category).toBe('pedestrian');
   });

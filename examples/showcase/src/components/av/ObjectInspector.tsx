@@ -11,8 +11,8 @@
  * every scene/object carries every column (AV2 has no real velocity in Round 1,
  * synthetic scenes may omit dimensions, etc.). Missing fields render as "—".
  */
-import React from "react";
-import type { ColorRGBA } from "../../types";
+import React from 'react';
+import type { ColorRGBA } from '../../types';
 
 /**
  * The decoded tile-feature props for one picked object. All optional because
@@ -52,10 +52,12 @@ export interface ObjectInspectorProps {
 
 /** A finite number, or undefined — guards against NaN/null tile props. */
 const num = (v: unknown): number | undefined =>
-  typeof v === "number" && Number.isFinite(v) ? v : undefined;
+  typeof v === 'number' && Number.isFinite(v) ? v : undefined;
 
 const css = (c: ColorRGBA | undefined): string =>
-  c ? `rgba(${c[0]},${c[1]},${c[2]},${(c[3] ?? 255) / 255})` : "rgba(148,163,184,0.9)";
+  c
+    ? `rgba(${c[0]},${c[1]},${c[2]},${(c[3] ?? 255) / 255})`
+    : 'rgba(148,163,184,0.9)';
 
 /** One label/value row. */
 const Row: React.FC<{ label: string; children: React.ReactNode }> = ({
@@ -78,7 +80,7 @@ const ObjectInspector: React.FC<ObjectInspectorProps> = ({
 }) => {
   if (!object) return null;
 
-  const category = object.category ?? "object";
+  const category = object.category ?? 'object';
   const swatch = css(objectColors?.[category]);
 
   const speed = num(object.speed);
@@ -90,14 +92,14 @@ const ObjectInspector: React.FC<ObjectInspectorProps> = ({
   const dims =
     length != null || width != null || height != null
       ? [length, width, height]
-          .map((d) => (d != null ? d.toFixed(1) : "–"))
-          .join(" × ")
-      : "—";
+          .map((d) => (d != null ? d.toFixed(1) : '–'))
+          .join(' × ')
+      : '—';
 
   return (
     <div
       className={`rounded-lg border border-white/10 bg-black/60 text-slate-200 shadow-xl backdrop-blur-md ${
-        className ?? "w-56"
+        className ?? 'w-56'
       }`}
     >
       <div className="flex items-center justify-between border-b border-white/10 px-3 py-1.5">
@@ -122,21 +124,21 @@ const ObjectInspector: React.FC<ObjectInspectorProps> = ({
       </div>
       <div className="px-3 py-2">
         <Row label="Track">
-          {object.track_id != null ? String(object.track_id) : "—"}
+          {object.track_id != null ? String(object.track_id) : '—'}
         </Row>
         <Row label="Speed">
           {speed != null ? (
             <>
-              {(speed * 3.6).toFixed(0)}{" "}
+              {(speed * 3.6).toFixed(0)}{' '}
               <span className="text-slate-500">km/h</span>
             </>
           ) : (
-            "—"
+            '—'
           )}
         </Row>
         <Row label="L × W × H">
           {dims}
-          {dims !== "—" && <span className="text-slate-500"> m</span>}
+          {dims !== '—' && <span className="text-slate-500"> m</span>}
         </Row>
         <Row label="Heading">
           {heading != null ? (
@@ -145,7 +147,7 @@ const ObjectInspector: React.FC<ObjectInspectorProps> = ({
               <span className="text-slate-500">°</span>
             </>
           ) : (
-            "—"
+            '—'
           )}
         </Row>
       </div>

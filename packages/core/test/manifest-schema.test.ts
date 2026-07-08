@@ -56,40 +56,66 @@ function checkType(v: unknown, type: string): boolean {
 }
 
 /** Validate `value` against `schema`, accumulating human-readable errors. */
-function validate(value: unknown, schema: Schema, path = '$', errors: string[] = []): string[] {
+function validate(
+  value: unknown,
+  schema: Schema,
+  path = '$',
+  errors: string[] = [],
+): string[] {
   if ('const' in schema && value !== schema.const) {
-    errors.push(`${path}: expected const ${JSON.stringify(schema.const)}, got ${JSON.stringify(value)}`);
+    errors.push(
+      `${path}: expected const ${JSON.stringify(schema.const)}, got ${JSON.stringify(value)}`,
+    );
     return errors;
   }
   if (schema.enum && !schema.enum.includes(value)) {
-    errors.push(`${path}: ${JSON.stringify(value)} not in enum ${JSON.stringify(schema.enum)}`);
+    errors.push(
+      `${path}: ${JSON.stringify(value)} not in enum ${JSON.stringify(schema.enum)}`,
+    );
   }
   if (schema.type && !checkType(value, schema.type)) {
     errors.push(`${path}: expected type ${schema.type}, got ${jsType(value)}`);
     return errors;
   }
-  if (typeof value === 'number' && schema.minimum !== undefined && value < schema.minimum) {
+  if (
+    typeof value === 'number' &&
+    schema.minimum !== undefined &&
+    value < schema.minimum
+  ) {
     errors.push(`${path}: ${value} < minimum ${schema.minimum}`);
   }
-  if (typeof value === 'string' && schema.pattern && !new RegExp(schema.pattern).test(value)) {
-    errors.push(`${path}: ${JSON.stringify(value)} does not match /${schema.pattern}/`);
+  if (
+    typeof value === 'string' &&
+    schema.pattern &&
+    !new RegExp(schema.pattern).test(value)
+  ) {
+    errors.push(
+      `${path}: ${JSON.stringify(value)} does not match /${schema.pattern}/`,
+    );
   }
   if (jsType(value) === 'object') {
     const obj = value as Record<string, unknown>;
     for (const req of schema.required ?? []) {
-      if (!(req in obj)) errors.push(`${path}: missing required property "${req}"`);
+      if (!(req in obj))
+        errors.push(`${path}: missing required property "${req}"`);
     }
     const props: Record<string, Schema> = schema.properties ?? {};
     for (const [k, v] of Object.entries(obj)) {
       if (props[k]) validate(v, props[k], `${path}.${k}`, errors);
-      else if (schema.additionalProperties === false) errors.push(`${path}: unexpected property "${k}"`);
+      else if (schema.additionalProperties === false)
+        errors.push(`${path}: unexpected property "${k}"`);
     }
   }
   if (schema.type === 'array' && Array.isArray(value)) {
     if (schema.minItems !== undefined && value.length < schema.minItems) {
-      errors.push(`${path}: array length ${value.length} < minItems ${schema.minItems}`);
+      errors.push(
+        `${path}: array length ${value.length} < minItems ${schema.minItems}`,
+      );
     }
-    if (schema.items) value.forEach((item, i) => validate(item, schema.items, `${path}[${i}]`, errors));
+    if (schema.items)
+      value.forEach((item, i) =>
+        validate(item, schema.items, `${path}[${i}]`, errors),
+      );
   }
   return errors;
 }
@@ -104,10 +130,14 @@ describe('packed-format manifest contract', () => {
     // formatVersion is the closed [1, 2] enum — the authoritative
     // discriminator (packed spec §5.2); readers refuse anything else at open.
     expect(schema.properties.formatVersion.enum).toEqual([1, 2]);
-    expect(schema.properties.directory.properties.directoryVersion.const).toBe(5);
+    expect(schema.properties.directory.properties.directoryVersion.const).toBe(
+      5,
+    );
     // directory.encoding is additive: declared (so its vocabulary is pinned)
     // but never required (pre-encoding manifests omit it).
-    expect(schema.properties.directory.properties.encoding.enum).toEqual(['zstd']);
+    expect(schema.properties.directory.properties.encoding.enum).toEqual([
+      'zstd',
+    ]);
     expect(schema.properties.directory.required).not.toContain('encoding');
     // formatVersion-2 `schemas` table (packed spec §3.2): declared with the
     // {hash, data} entry shape, never required (v1 manifests omit the key).
@@ -126,7 +156,9 @@ describe('packed-format manifest contract', () => {
   it('the Rust-produced formatVersion-2 golden manifest conforms too (schemas table)', () => {
     const goldenV2 = JSON.parse(
       readFileSync(
-        fileURLToPath(new URL('./fixtures/v2-golden/manifest.json', import.meta.url)),
+        fileURLToPath(
+          new URL('./fixtures/v2-golden/manifest.json', import.meta.url),
+        ),
         'utf8',
       ),
     );
@@ -164,17 +196,23 @@ describe('packed-format manifest contract', () => {
       ...golden,
       schemas: [{ hash: 'NOT-HEX', data: 'AAAA' }],
     };
-    expect(validate(badSchemaEntry, schema).some((e) => /does not match/.test(e))).toBe(true);
+    expect(
+      validate(badSchemaEntry, schema).some((e) => /does not match/.test(e)),
+    ).toBe(true);
 
     const missingPacks = { ...golden };
     delete (missingPacks as Record<string, unknown>).packs;
-    expect(validate(missingPacks, schema).some((e) => /packs/.test(e))).toBe(true);
+    expect(validate(missingPacks, schema).some((e) => /packs/.test(e))).toBe(
+      true,
+    );
 
     const badPackKey = {
       ...golden,
       packs: [{ key: 'packs/not-a-hash.sttp', length: 10 }],
     };
-    expect(validate(badPackKey, schema).some((e) => /does not match/.test(e))).toBe(true);
+    expect(
+      validate(badPackKey, schema).some((e) => /does not match/.test(e)),
+    ).toBe(true);
 
     const badDirVersion = {
       ...golden,
@@ -186,7 +224,9 @@ describe('packed-format manifest contract', () => {
       ...golden,
       directory: { ...golden.directory, encoding: 'br' },
     };
-    expect(validate(badEncoding, schema).some((e) => /enum/.test(e))).toBe(true);
+    expect(validate(badEncoding, schema).some((e) => /enum/.test(e))).toBe(
+      true,
+    );
   });
 
   it('the schema compression enum matches the ACTIVE TS Compression codecs (gzip retired)', () => {
@@ -220,22 +260,33 @@ describe('packed-format manifest contract', () => {
     expect('capabilities' in golden).toBe(false);
 
     // A quantized build's declaration validates…
-    expect(validate({ ...golden, capabilities: ['coord-quant', 'attr-quant'] }, schema)).toEqual([]);
+    expect(
+      validate(
+        { ...golden, capabilities: ['coord-quant', 'attr-quant'] },
+        schema,
+      ),
+    ).toEqual([]);
     // …and so does a FUTURE registry entry: readers enforce their own
     // implemented set (and refuse), the schema envelope stays open.
-    expect(validate({ ...golden, capabilities: ['from-the-future'] }, schema)).toEqual([]);
+    expect(
+      validate({ ...golden, capabilities: ['from-the-future'] }, schema),
+    ).toEqual([]);
     // A non-string entry is drift, not evolution.
-    expect(validate({ ...golden, capabilities: [42] }, schema).length).toBeGreaterThan(0);
+    expect(
+      validate({ ...golden, capabilities: [42] }, schema).length,
+    ).toBeGreaterThan(0);
 
     // The TS reader's implemented set is pinned against the schema's
     // machine-readable registry — the SINGLE source of truth both reference
     // implementations assert against (the Rust side pins in
     // crates/stt-core/tests/capability_registry.rs), so a registry addition
     // on either side fails CI until the schema and both readers agree.
-    const registry = (schema as Record<string, unknown>)['x-stt-capability-registry'];
+    const registry = (schema as Record<string, unknown>)[
+      'x-stt-capability-registry'
+    ];
     expect(Array.isArray(registry)).toBe(true);
     expect([...KNOWN_MANIFEST_CAPABILITIES].sort()).toEqual(
-      [...(registry as string[])].sort()
+      [...(registry as string[])].sort(),
     );
     const m: PackedManifest = { ...golden, capabilities: ['coord-quant'] };
     expect(m.capabilities).toEqual(['coord-quant']);
@@ -249,7 +300,10 @@ describe('packed-format manifest contract', () => {
       ...golden,
       generation: 7,
       directory: { ...golden.directory, sectionOffsets: [0, 64] },
-      packs: golden.packs.map((p: Record<string, unknown>) => ({ ...p, tier: 'raw' })),
+      packs: golden.packs.map((p: Record<string, unknown>) => ({
+        ...p,
+        tier: 'raw',
+      })),
     };
     expect(validate(extended, schema)).toEqual([]);
   });

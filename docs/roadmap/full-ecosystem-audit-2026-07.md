@@ -38,6 +38,7 @@ Still live:
 ## 2. Correctness bugs (shipped behavior is wrong)
 
 ### Rust
+
 - `crates/stt-optimize/src/loader.rs:223` — feature latitude uses a **linear** Mercator inverse instead
   of `atan(sinh(...))` (contrast `projection.rs:120-133`), skewing every `stt-optimize --stt`
   spatial/zoom/hotspot result.
@@ -51,6 +52,7 @@ Still live:
   `zoom ≥ 32` panics (debug) / wraps (release).
 
 ### Renderers
+
 - **Elevation units unreconciled** — maplibre `DEFAULT_ALTITUDE_SCALE = 1e-7` (`lib/projection.ts:59`)
   vs deck true-metre `project_size` vs three 1-unit=1-metre: maplibre extrusions ~4.0× too tall at the
   equator (~2.8× at 45°) for identical data. (Flagged in the renderer-abstraction doc §5.5, never fixed.)
@@ -68,12 +70,14 @@ Still live:
   falls through to window mode — different degenerate behavior.
 
 ### TS decoder
+
 - `core/src/tile.ts:165-171`, `:570-575` — malformed `stt:quant`/`stt:qa` affine JSON is swallowed
   (`catch { return undefined }` / identity fall-through): quantized tiles render raw fixed-point ints as
   lon/lat/values with **no warning**; Rust panics on the same input — silent-wrong vs loud,
   cross-language error-model fork.
 
 ### Docs stating wrong facts (P0-wrong class)
+
 - `cli-reference.md:371` documents `stt-generate nyc-rideshare --flow-snap-meters` — the flag does not
   exist (`nyc_rideshare_flows.rs:10`: "no snap lattice"; feature removed, doc kept).
 - `stt-maplibre.md:150-152` — three wrong defaults on one page: `softTimeWindow` documented `true`,
@@ -128,6 +132,7 @@ Every slice found the same failure mode: logic duplicated by hand with comment-o
 "lockstep") enforcement, already drifted or one edit away from it.
 
 **Rust**
+
 - `tiler.rs:428-470` vs `:650-691` — `encode_single_tile_counted` hand-copies `process_zoom_level`'s
   placement/clip/bucket loop (the serve↔offline byte-parity contract); error handling already diverges
   (offline warns-and-skips a failed `build_tile`, single-tile propagates → HTTP 500).
@@ -141,11 +146,13 @@ Every slice found the same failure mode: logic duplicated by hand with comment-o
   stt-build's geozero path.
 
 **TS layers**
+
 - vertexValueMatrix two-bucket blend hand-copied ≥4× (`flow-corridor-layer.ts:144-180`,
   `flowmap-layer.ts:249-286`, `bundled-flowmap-layer.ts:351,448`, `flow-stroke-layer.ts`).
 - 8 hand-rolled styleKey assemblies across three idioms over the shared `lib/style-digest.ts` primitives.
 
 **Renderers**
+
 - The Phase-1 "single source of truth" fade resolver has a live contradiction: core
   `resolveTimeFilterParams` gates soft-fade opt-out (`time-filter.ts:289`, `!== false`) while maplibre
   kept its own `resolveFadeDurations` gating opt-in (`base-layer.ts:831`, `=== true`), different floors —
@@ -157,6 +164,7 @@ Every slice found the same failure mode: logic duplicated by hand with comment-o
   `arc-buffers.ts:87-88`); the palette-parity test covers deck+maplibre only.
 
 **Python**
+
 - `mat3_to_quat` triplicated — the two extractor copies byte-identical AND dead
   (`argoverse_extract.py:511`, `waymo_extract.py:654`; only `av_common.py:1931` is called).
 - `derive_telemetry` duplicated (argoverse:418 / waymo:476), `FALLBACK_RGB` quadruplicated,
@@ -169,6 +177,7 @@ Every slice found the same failure mode: logic duplicated by hand with comment-o
 ## 5. Dead code
 
 **Rust**
+
 - Unused deps (zero `use`): stt-core `anyhow`,`wkt`; stt-build `thiserror`,`crossbeam`,`earcutr`,
   `geo-types`; stt-generate `thiserror`,`geo`,`geo-types`; stt-optimize `thiserror`,`geo`,`geo-types`,
   `geojson`,`rayon`,`arrow-schema`,`arrow-array`; stt-serve `chrono`.
@@ -179,6 +188,7 @@ Every slice found the same failure mode: logic duplicated by hand with comment-o
 - `AnalyzableFeature.end_timestamp`, `LoadedData.source_name` written-never-read (`loader.rs:45,93`).
 
 **TS**
+
 - `getSharedSchedulerMaxRequests` (`core/src/shared-scheduler.ts:126`) — fully dead export.
 - The loaders.gl `TileSource` surface (`tile-source.ts:73`, `archive.ts:2300`) — zero consumers/tests.
 - three `GpuPicker` (`gpu-pick.ts:85`) — zero instantiations; its only consumer `PointCloudLayer.pick`
@@ -196,17 +206,17 @@ Every slice found the same failure mode: logic duplicated by hand with comment-o
 ## 6. API-consistency debt (naming/props)
 
 - Same-concept constant-color prop named 6 ways: `fillColor` (point/column/polygon), `pathColor`,
-  `tripColor`, `headColor`, bare `color` (line/icon), `fallbackColor` (splat) — *counted out; see
-  `naming-types-consistency-2026-06.md`*.
+  `tripColor`, `headColor`, bare `color` (line/icon), `fallbackColor` (splat) — _counted out; see
+  `naming-types-consistency-2026-06.md`_.
 - Outline: `strokeColor`/`strokeWidth` (point) vs `lineColor`/`lineWidth` (column) — both alias the same
   upstream `getLineColor`/`getLineWidth`.
 - Accessor-alias (honor-or-reject) adopted by 9 layers but NOT SplatLayer, AnimatedBoundingBox,
   TripHeads, FlowCorridor/FlowStroke, Flowmap, H3/QuadbinSummary — a user's `getFillColor` on summary
-  layers is silently dropped; the alias path itself has zero direct test coverage — *the accessor fork
-  is counted out; see naming-types (per-backend/per-layer idiom stays)*.
+  layers is silently dropped; the alias path itself has zero direct test coverage — _the accessor fork
+  is counted out; see naming-types (per-backend/per-layer idiom stays)_.
 - Brand capitalization drift: `SpatiotemporalTileset` (core) vs `SpatioTemporalLayer` (layers).
 - `timeWindow` default: 86,400,000 ms on SpatioTemporalLayer vs 0 on standalone TimeFilterExtension —
-  *counted out; see naming-types*.
+  _counted out; see naming-types_.
 - Core exports a `Layer` type colliding with deck's `Layer` → 12 rename-imports across consumers.
 - `FlowCorridorLayer` reads props through untyped casts (`flow-corridor-layer.ts:69-84`), no declared
   props type, no `FlowCorridorLayerProps` export while every sibling has one.
@@ -216,23 +226,23 @@ Every slice found the same failure mode: logic duplicated by hand with comment-o
 
 ### Backend parity matrix (from the frozen capability vocabulary; fb→X = declared fallback)
 
-| kind | deck | three | maplibre | cesium |
-|---|---|---|---|---|
-| point | yes | yes | yes | yes |
-| path / icon / column / tripHeads / boundingBox | yes | yes | no | no |
-| polygon | yes | yes | yes | no |
-| arc | yes | yes | fb→line | no |
-| line (OD) | yes | yes | yes | no |
-| trips | yes | yes | yes | no |
-| surfel/splat | yes | yes | no | fb→point |
-| heatmap | yes | fb→point | yes | no |
-| h3/quadbin summary | yes | yes | no | no |
-| flowmap / flowCorridor | yes | yes | no | no |
-| flowStroke | yes | fb→flowCorridor | no | no |
-| isoLines | fb→path | yes | no | no |
-| ego | no | yes | no | no |
-| time modes | all 4 | all 4 | window+trail only | all 4 (CPU) |
-| picking | gpu-id all | cpu-ray boxes | none | host scene.pick |
+| kind                                           | deck       | three           | maplibre          | cesium          |
+| ---------------------------------------------- | ---------- | --------------- | ----------------- | --------------- |
+| point                                          | yes        | yes             | yes               | yes             |
+| path / icon / column / tripHeads / boundingBox | yes        | yes             | no                | no              |
+| polygon                                        | yes        | yes             | yes               | no              |
+| arc                                            | yes        | yes             | fb→line           | no              |
+| line (OD)                                      | yes        | yes             | yes               | no              |
+| trips                                          | yes        | yes             | yes               | no              |
+| surfel/splat                                   | yes        | yes             | no                | fb→point        |
+| heatmap                                        | yes        | fb→point        | yes               | no              |
+| h3/quadbin summary                             | yes        | yes             | no                | no              |
+| flowmap / flowCorridor                         | yes        | yes             | no                | no              |
+| flowStroke                                     | yes        | fb→flowCorridor | no                | no              |
+| isoLines                                       | fb→path    | yes             | no                | no              |
+| ego                                            | no         | yes             | no                | no              |
+| time modes                                     | all 4      | all 4           | window+trail only | all 4 (CPU)     |
+| picking                                        | gpu-id all | cpu-ray boxes   | none              | host scene.pick |
 
 ## 7. Docs & onboarding — RESOLVED
 
@@ -250,6 +260,7 @@ failure). Verifiably fixed at package level: `--passWithNoTests` and the broken 
 gone; `prepublishOnly`, per-package LICENSE, and the release workflows shipped with 0.3.0.
 
 Still open:
+
 - Fixture-frozen cross-language tests: no CI step regenerates golden fixtures from the current Rust
   encoder; drift surfaces only on manual re-bless.
 - Duplicate divergent workspace defs: `pnpm-workspace.yaml` includes `tools/*`, the (pnpm-ignored)

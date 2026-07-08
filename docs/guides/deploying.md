@@ -7,23 +7,23 @@ regimes. No tile server, no invalidation pipeline.
 ## The two cache regimes
 
 The [packed format](../spec/stt-packed-format.md) makes cacheability a property
-of the *format*: `packs/` and `index/` objects are content-addressed (blake3 →
+of the _format_: `packs/` and `index/` objects are content-addressed (blake3 →
 filename), so their bytes can never change without their name changing.
 
-| Objects | `Cache-Control` | Why |
-| --- | --- | --- |
-| `packs/*.sttp`, `index/*.sttd` | `public, max-age=31536000, immutable` | Content-addressed — cache forever, never purge |
-| `manifest.json` | `public, max-age=60, must-revalidate` | The one mutable object; a deploy flips a dataset by rewriting it |
+| Objects                        | `Cache-Control`                       | Why                                                              |
+| ------------------------------ | ------------------------------------- | ---------------------------------------------------------------- |
+| `packs/*.sttp`, `index/*.sttd` | `public, max-age=31536000, immutable` | Content-addressed — cache forever, never purge                   |
+| `manifest.json`                | `public, max-age=60, must-revalidate` | The one mutable object; a deploy flips a dataset by rewriting it |
 
 Two rules follow from the immutable half:
 
-1. **Copy, never sync-with-delete.** A new build's packs upload *alongside* the
+1. **Copy, never sync-with-delete.** A new build's packs upload _alongside_ the
    old ones; only the manifest flip makes readers use them. Deleting the old
    packs during a deploy 404s live sessions that opened the old manifest.
 2. **Garbage-collect with a retention window.** Delete an unreferenced pack
    only after every cached manifest and open session could have drained
    (the reference script defaults to 7 days). "Unreferenced" must be judged
-   against the *deployed* manifest too, not just the build being uploaded:
+   against the _deployed_ manifest too, not just the build being uploaded:
    the reference script reads the currently-deployed `manifest.json` before
    uploading and protects everything it references for one deploy cycle
    (the **grace rule** of the [format spec §2](../spec/stt-packed-format.md)).
@@ -49,7 +49,7 @@ STT_DATA_DIR=path/to/staging scripts/r2-sync.sh   # deploy a staging tree
 The GC pass deletes a `packs/`/`index/` object only when it is unreferenced
 by the **local** manifests being deployed, unreferenced by the
 **currently-deployed** manifests (fetched read-only before anything uploads —
-the one-deploy *grace rule*), and older than the retention window
+the one-deploy _grace rule_), and older than the retention window
 (`R2_PRUNE_RETENTION`, default `7d`). If the deployed manifests exist but
 cannot be read, the script uploads normally and skips GC for that run
 (fail-safe). `--prune-now` drops only the age gate — the grace rule still

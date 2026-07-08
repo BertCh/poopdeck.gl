@@ -453,9 +453,11 @@ export class STTHeatmapLayer extends STTBaseLayer {
     for (const tile of this.loadedTiles.values()) {
       for (const layer of tile.layers) {
         if (!this.acceptsGeometry(layer.features.geometryType)) continue;
-        const cache = this.ensureTileGpuCache(gl, tile, layer) as
-          | HeatmapGpuCache
-          | null;
+        const cache = this.ensureTileGpuCache(
+          gl,
+          tile,
+          layer,
+        ) as HeatmapGpuCache | null;
         if (!cache) continue;
         const ctx: DrawContext = {
           matrix: m,
@@ -463,8 +465,7 @@ export class STTHeatmapLayer extends STTBaseLayer {
           zoom,
           windowStart:
             currentTime - cache.timeOffset - this.opts.timeWindow / 2,
-          windowEnd:
-            currentTime - cache.timeOffset + this.opts.timeWindow / 2,
+          windowEnd: currentTime - cache.timeOffset + this.opts.timeWindow / 2,
         };
         gl.uniform1f(ah.uWindowStart, ctx.windowStart);
         gl.uniform1f(ah.uWindowEnd, ctx.windowEnd);
@@ -475,7 +476,14 @@ export class STTHeatmapLayer extends STTBaseLayer {
         this.bindVaoOrSetup(cache, () => {
           gl.bindBuffer(gl.ARRAY_BUFFER, cache.positionBuffer);
           gl.enableVertexAttribArray(ah.aMercator);
-          gl.vertexAttribPointer(ah.aMercator, 3, gl.UNSIGNED_SHORT, true, 0, 0);
+          gl.vertexAttribPointer(
+            ah.aMercator,
+            3,
+            gl.UNSIGNED_SHORT,
+            true,
+            0,
+            0,
+          );
 
           gl.bindBuffer(gl.ARRAY_BUFFER, cache.timeBuffer);
           gl.enableVertexAttribArray(ah.aTime);
@@ -680,7 +688,9 @@ export class STTHeatmapLayer extends STTBaseLayer {
       data[i * 4] = Math.round(ca[0] * (1 - f) + cb[0] * f);
       data[i * 4 + 1] = Math.round(ca[1] * (1 - f) + cb[1] * f);
       data[i * 4 + 2] = Math.round(ca[2] * (1 - f) + cb[2] * f);
-      data[i * 4 + 3] = Math.round((ca[3] ?? 255) * (1 - f) + (cb[3] ?? 255) * f);
+      data[i * 4 + 3] = Math.round(
+        (ca[3] ?? 255) * (1 - f) + (cb[3] ?? 255) * f,
+      );
     }
     gl.bindTexture(gl.TEXTURE_2D, this.paletteTexture);
     gl.texImage2D(

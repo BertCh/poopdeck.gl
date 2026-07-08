@@ -23,15 +23,15 @@ import { FlowmapLayer } from '@poopdeck.gl/layers';
 const layer = new FlowmapLayer({
   id: 'bixi-flowmap',
   data: '/data/bixi-flowmap/manifest.json',
-  currentTime,                       // driven live from the TimeController
+  currentTime, // driven live from the TimeController
   timeController,
-  widthScale: 1.1,                   // arrow px per sqrt(current-bucket trips)
+  widthScale: 1.1, // arrow px per sqrt(current-bucket trips)
   widthMaxPixels: 14,
-  sourceColor: [56, 196, 232, 235],  // origin (tail) — cyan
-  targetColor: [255, 142, 64, 245],  // destination (arrowhead) — warm orange
-  gap: 0.5,                          // side-by-side separation of A→B and B→A
-  nodeRadiusScale: 1.3,              // node px per sqrt(incident flow)
-  minFlow: 0.5,                       // hide corridors below ~1 trip this bucket
+  sourceColor: [56, 196, 232, 235], // origin (tail) — cyan
+  targetColor: [255, 142, 64, 245], // destination (arrowhead) — warm orange
+  gap: 0.5, // side-by-side separation of A→B and B→A
+  nodeRadiusScale: 1.3, // node px per sqrt(incident flow)
+  minFlow: 0.5, // hide corridors below ~1 trip this bucket
 });
 ```
 
@@ -41,31 +41,31 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 
 ### Flow arrows
 
-| Prop | Type | Default | Description |
-|------|------|---------|-------------|
-| `widthScale` | `number` | `1.1` | Arrow width in pixels per `sqrt(currentBucketFlow)`. `sqrt` keeps a wide dynamic range legible. |
-| `widthMinPixels` | `number` | `1` | Minimum width for **active** arrows (zero-flow arrows stay at width 0). |
-| `widthMaxPixels` | `number` | `12` | Maximum arrow width in pixels. |
-| `sourceColor` | `Color` | `[56,196,232,235]` | Origin / tail color (the arrow interpolates source→target along its length). |
-| `targetColor` | `Color` | `[255,142,64,245]` | Destination / arrowhead color. |
-| `gap` | `number` | `0.5` | Perpendicular separation between the two directions of a pair, in units of the arrow width — so A→B and B→A sit side-by-side. |
+| Prop             | Type     | Default            | Description                                                                                                                   |
+| ---------------- | -------- | ------------------ | ----------------------------------------------------------------------------------------------------------------------------- |
+| `widthScale`     | `number` | `1.1`              | Arrow width in pixels per `sqrt(currentBucketFlow)`. `sqrt` keeps a wide dynamic range legible.                               |
+| `widthMinPixels` | `number` | `1`                | Minimum width for **active** arrows (zero-flow arrows stay at width 0).                                                       |
+| `widthMaxPixels` | `number` | `12`               | Maximum arrow width in pixels.                                                                                                |
+| `sourceColor`    | `Color`  | `[56,196,232,235]` | Origin / tail color (the arrow interpolates source→target along its length).                                                  |
+| `targetColor`    | `Color`  | `[255,142,64,245]` | Destination / arrowhead color.                                                                                                |
+| `gap`            | `number` | `0.5`              | Perpendicular separation between the two directions of a pair, in units of the arrow width — so A→B and B→A sit side-by-side. |
 
 ### Node circles
 
-| Prop | Type | Default | Description |
-|------|------|---------|-------------|
-| `nodeRadiusScale` | `number` | `1.3` | Node circle radius in pixels per `sqrt(incidentFlow)` (inbound + outbound current-bucket volume). Also drives the arrow endpoint insets. |
-| `nodeRadiusUnits` | `'meters' \| 'pixels'` | `'pixels'` | Units for the node-circle radius. `'pixels'` keeps a constant on-screen size at every zoom; `'meters'` scales circles with the map so a dense overview shrinks them instead of blowing out into overlapping blobs (still clamped by `nodeRadiusMinPixels`/`nodeRadiusMaxPixels`). With `'meters'`, `nodeRadiusScale` is a metres-per-`sqrt(flow)` factor, so it needs a much larger value than in pixels. |
-| `nodeRadiusMinPixels` | `number` | `1.5` | Minimum node radius in pixels. |
-| `nodeRadiusMaxPixels` | `number` | `28` | Maximum node radius in pixels. |
-| `nodeColor` | `Color` | `[232,238,255,170]` | Node circle fill color. |
-| `nodeLineColor` | `Color` | `[255,255,255,220]` | Node circle stroke color. |
+| Prop                  | Type                   | Default             | Description                                                                                                                                                                                                                                                                                                                                                                                               |
+| --------------------- | ---------------------- | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `nodeRadiusScale`     | `number`               | `1.3`               | Node circle radius in pixels per `sqrt(incidentFlow)` (inbound + outbound current-bucket volume). Also drives the arrow endpoint insets.                                                                                                                                                                                                                                                                  |
+| `nodeRadiusUnits`     | `'meters' \| 'pixels'` | `'pixels'`          | Units for the node-circle radius. `'pixels'` keeps a constant on-screen size at every zoom; `'meters'` scales circles with the map so a dense overview shrinks them instead of blowing out into overlapping blobs (still clamped by `nodeRadiusMinPixels`/`nodeRadiusMaxPixels`). With `'meters'`, `nodeRadiusScale` is a metres-per-`sqrt(flow)` factor, so it needs a much larger value than in pixels. |
+| `nodeRadiusMinPixels` | `number`               | `1.5`               | Minimum node radius in pixels.                                                                                                                                                                                                                                                                                                                                                                            |
+| `nodeRadiusMaxPixels` | `number`               | `28`                | Maximum node radius in pixels.                                                                                                                                                                                                                                                                                                                                                                            |
+| `nodeColor`           | `Color`                | `[232,238,255,170]` | Node circle fill color.                                                                                                                                                                                                                                                                                                                                                                                   |
+| `nodeLineColor`       | `Color`                | `[255,255,255,220]` | Node circle stroke color.                                                                                                                                                                                                                                                                                                                                                                                 |
 
 ### General
 
-| Prop | Type | Default | Description |
-|------|------|---------|-------------|
-| `minFlow` | `number` | `0.25` | Hide arrows and nodes whose current flow is below this many trips (squelches sub-bucket blend noise). |
+| Prop      | Type     | Default | Description                                                                                           |
+| --------- | -------- | ------- | ----------------------------------------------------------------------------------------------------- |
+| `minFlow` | `number` | `0.25`  | Hide arrows and nodes whose current flow is below this many trips (squelches sub-bucket blend noise). |
 
 ## Sublayers
 
@@ -84,7 +84,7 @@ stt-generate bixi --input DonneesOuvertes2024.csv \
   --output bixi-flowmap.stt
 ```
 
-By default the generator **clusters** stations per zoom and confines each zoom's hub-to-hub corridors to a single-zoom band (a per-feature `[min_zoom, max_zoom]`) so coarse aggregates never bleed into the full-resolution deep zooms. Tune the hub coarseness with `--cluster-radius <px>` (default `40`), or pass `--no-cluster` to emit one full-resolution corridor per OD pair with an open-ended, volume-based `min_zoom` (busy pairs appear at low zoom, minor pairs only reveal on zoom-in). Either way this is *not* temporal thinning — every bucket is kept for every emitted corridor.
+By default the generator **clusters** stations per zoom and confines each zoom's hub-to-hub corridors to a single-zoom band (a per-feature `[min_zoom, max_zoom]`) so coarse aggregates never bleed into the full-resolution deep zooms. Tune the hub coarseness with `--cluster-radius <px>` (default `40`), or pass `--no-cluster` to emit one full-resolution corridor per OD pair with an open-ended, volume-based `min_zoom` (busy pairs appear at low zoom, minor pairs only reveal on zoom-in). Either way this is _not_ temporal thinning — every bucket is kept for every emitted corridor.
 
 ## See also
 

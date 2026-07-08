@@ -17,9 +17,9 @@ const layer = new AnimatedArcLayer({
   id: 'od-arcs',
   data: '/data/nyc-od-arcs/manifest.json',
   currentTime,
-  timeWindow: 30 * 60 * 1000,   // 30-min slice
-  sourceColor: [56, 196, 232, 210],  // origin — cyan
-  targetColor: [255, 142, 64, 220],  // destination — orange
+  timeWindow: 30 * 60 * 1000, // 30-min slice
+  sourceColor: [56, 196, 232, 210], // origin — cyan
+  targetColor: [255, 142, 64, 220], // destination — orange
   width: 1.5,
   arcHeight: 0.4,
 });
@@ -29,20 +29,20 @@ const layer = new AnimatedArcLayer({
 
 Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 
-| Property | Type | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `sourceColor` | `Color \| string` | `[0,150,255,255]` | Origin-end color: a constant RGBA **or** a categorical property-column name (GPU `CategoryColorExtension`). |
-| `targetColor` | `Color \| string` | `[255,127,14,255]` | Destination-end color; the arc interpolates source→target. |
-| `getSourceColor` / `getTargetColor` | `Color \| string` | — | Upstream-vocabulary aliases (constant or column name; a function warns once and falls back). |
-| `width` / `getWidth` | `number \| string` | `2` | Arc width — constant or per-feature numeric column. |
-| `widthUnits` | `'pixels' \| 'meters' \| 'common'` | `'pixels'` | Width units. |
-| `widthScale` / `widthMinPixels` / `widthMaxPixels` | `number` | — | Width scaling + pixel clamps (`ArcLayer` pass-through). |
-| `greatCircle` | `boolean` | `false` | Bow arcs along a great-circle path (long-haul / globe flows). |
-| `numSegments` | `number` | `50` | Arc tessellation segment count — higher is smoother, lower is cheaper (`ArcLayer` pass-through). |
-| `arcHeight` / `getHeight` | `number` | `1` | Arc height multiplier; `0` = flat. Constant only. |
-| `arcTilt` / `getTilt` | `number` | `0` | Sideways tilt (degrees) to separate arcs sharing endpoints. Constant only. |
-| `colorPalette` | `Color[]` | 10-stop | Palette for a categorical `sourceColor`/`targetColor` column. |
-| `fadeInDuration` / `fadeOutDuration` | `number` | `300` | Window fade ramps (ms). |
+| Property                                           | Type                               | Default            | Description                                                                                                 |
+| :------------------------------------------------- | :--------------------------------- | :----------------- | :---------------------------------------------------------------------------------------------------------- |
+| `sourceColor`                                      | `Color \| string`                  | `[0,150,255,255]`  | Origin-end color: a constant RGBA **or** a categorical property-column name (GPU `CategoryColorExtension`). |
+| `targetColor`                                      | `Color \| string`                  | `[255,127,14,255]` | Destination-end color; the arc interpolates source→target.                                                  |
+| `getSourceColor` / `getTargetColor`                | `Color \| string`                  | —                  | Upstream-vocabulary aliases (constant or column name; a function warns once and falls back).                |
+| `width` / `getWidth`                               | `number \| string`                 | `2`                | Arc width — constant or per-feature numeric column.                                                         |
+| `widthUnits`                                       | `'pixels' \| 'meters' \| 'common'` | `'pixels'`         | Width units.                                                                                                |
+| `widthScale` / `widthMinPixels` / `widthMaxPixels` | `number`                           | —                  | Width scaling + pixel clamps (`ArcLayer` pass-through).                                                     |
+| `greatCircle`                                      | `boolean`                          | `false`            | Bow arcs along a great-circle path (long-haul / globe flows).                                               |
+| `numSegments`                                      | `number`                           | `50`               | Arc tessellation segment count — higher is smoother, lower is cheaper (`ArcLayer` pass-through).            |
+| `arcHeight` / `getHeight`                          | `number`                           | `1`                | Arc height multiplier; `0` = flat. Constant only.                                                           |
+| `arcTilt` / `getTilt`                              | `number`                           | `0`                | Sideways tilt (degrees) to separate arcs sharing endpoints. Constant only.                                  |
+| `colorPalette`                                     | `Color[]`                          | 10-stop            | Palette for a categorical `sourceColor`/`targetColor` column.                                               |
+| `fadeInDuration` / `fadeOutDuration`               | `number`                           | `300`              | Window fade ramps (ms).                                                                                     |
 
 > **Single-channel categorical color:** because `CategoryColorExtension` injects one category index, a categorical column colors the WHOLE arc one color (source wins if both name a column), not independent source/target categories.
 

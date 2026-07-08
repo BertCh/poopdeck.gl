@@ -93,11 +93,13 @@ export function measure<T>(
   // syscalls entirely. The bag check happens twice (once here, once in
   // emit) but it's a single property read; cheaper than the syscalls.
   if (!bag || bag.enabled === false) return fn();
-  const t0 = typeof performance !== 'undefined' ? performance.now() : Date.now();
+  const t0 =
+    typeof performance !== 'undefined' ? performance.now() : Date.now();
   try {
     return fn();
   } finally {
-    const t1 = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    const t1 =
+      typeof performance !== 'undefined' ? performance.now() : Date.now();
     emit(channel, { ...baseSample, ms: t1 - t0 });
   }
 }

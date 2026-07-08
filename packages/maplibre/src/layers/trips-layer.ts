@@ -14,7 +14,10 @@
  */
 
 import type { Tile, Layer as STTLayer } from '@poopdeck.gl/core';
-import { GeometryType, DEFAULT_TRIPS_PALETTE as CORE_TRIPS_PALETTE } from '@poopdeck.gl/core';
+import {
+  GeometryType,
+  DEFAULT_TRIPS_PALETTE as CORE_TRIPS_PALETTE,
+} from '@poopdeck.gl/core';
 import {
   STTBaseLayer,
   type STTBaseLayerOptions,

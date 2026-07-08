@@ -4,6 +4,7 @@
 > record for the `/drive` AV cockpit — build contract, two fidelity-refinement
 > rounds, and the LiDAR tile-compression pass, all landed. Rationale + open
 > follow-ups, not a forward plan. Live/canonical docs carry the normative detail:
+>
 > - Scene-bundle + sidecar format → [`../spec/sidecar-assets.md`](../spec/sidecar-assets.md)
 > - Object cuboid layer → [`../api/animated-bounding-box-layer.md`](../api/animated-bounding-box-layer.md)
 > - LiDAR point layer → [`../api/animated-point-layer.md`](../api/animated-point-layer.md)
@@ -17,8 +18,9 @@ chrome (streams, timeline, gauges/charts, camera inset, inspector).
 Shipped surface: `pages/AvCockpit.tsx` + `components/av/*` (showcase, `/drive/:sceneId?`),
 `AnimatedBoundingBoxLayer` (packages/layers), and the `scripts/data-generation/*` adapters
 (§1.4). Datasets live: synthetic + nuScenes v1.0-mini (10 scenes) + Argoverse 2 (6 cities)
-+ comma; Waymo is local-only (license). Render-mode / Three+TSL work that grew on top of
-this cockpit lives in [`renderer-architecture.md`](./renderer-architecture.md).
+
+- comma; Waymo is local-only (license). Render-mode / Three+TSL work that grew on top of
+  this cockpit lives in [`renderer-architecture.md`](./renderer-architecture.md).
 
 ---
 
@@ -26,20 +28,21 @@ this cockpit lives in [`renderer-architecture.md`](./renderer-architecture.md).
 
 ### 1.1 Why AV logs fit STT — georeferencing
 
-AV ego poses live in a *local map frame* (meters from a map origin), but the source maps
+AV ego poses live in a _local map frame_ (meters from a map origin), but the source maps
 have **documented lat/lon origins**, so the whole scene georeferences onto a real basemap —
 ego pose, object boxes, LIDAR returns → global map frame → lon/lat (comma.ai ships GPS directly).
 
 nuScenes map **SW-corner** origins (byte-exact to the devkit `export_poses.py::REFERENCE_COORDINATES`):
 
-| nuScenes map | origin (lat, lon) |
-|---|---|
-| boston-seaport | 42.336849169438615, -71.05785369873047 |
-| singapore-onenorth | 1.2882100868743724, 103.78475189208984 |
+| nuScenes map             | origin (lat, lon)                      |
+| ------------------------ | -------------------------------------- |
+| boston-seaport           | 42.336849169438615, -71.05785369873047 |
+| singapore-onenorth       | 1.2882100868743724, 103.78475189208984 |
 | singapore-hollandvillage | 1.2993652317780957, 103.78217697143555 |
-| singapore-queenstown | 1.2782562240223188, 103.76741409301758 |
+| singapore-queenstown     | 1.2782562240223188, 103.76741409301758 |
 
 **Georef conventions (the load-bearing gotchas):**
+
 - **nuScenes coords are TRUE GROUND METERS in a local frame** anchored at the SW corner —
   NOT EPSG:3857 web-mercator meters. `av_common.local_to_lonlat(x, y, originLat, originLon)`
   is equirectangular about the origin (`lat = originLat + y/111320`,
@@ -120,7 +123,7 @@ default depth/distance (height reads better on a georeferenced 3D scene — grou
 
 Waymo LIDAR was the size bottleneck. A measurement-driven pass cut a point's on-the-wire cost
 ~4.5× (whole `waymo-sf-day` bundle 3.84 GB → 633 MB, **6.07×**). The compression **flags are
-documented in [`../api/cli-reference.md`](../api/cli-reference.md)**; kept here is the *why*.
+documented in [`../api/cli-reference.md`](../api/cli-reference.md)**; kept here is the _why_.
 
 **Measure first** — before porting the research's headline lever (uint16-RTC coordinate
 quantization), we attributed a real z14 Waymo tile's bytes per column
@@ -140,6 +143,7 @@ This **redirected the plan**: the cost was `id` and `z`, not `geometry` (already
 the expected "per-point time tax" was already free (zstd crushes the constant-per-frame times).
 
 **What shipped** (all decode-free, inside the existing Arrow-columnar format):
+
 1. **Sequential point ids** (`columnar.rs`) — a point is never split across tiles, so the
    incompressible u64 hash fallback becomes the per-tile row index (unique → picking works;
    monotonic → zstd crushes it; explicit source ids preserved). **8.04 → 1.07 B/pt.**
@@ -154,14 +158,16 @@ the expected "per-point time tax" was already free (zstd crushes the constant-pe
 default (`common.rs::run_stt_build_with_full_options`): coord quantization
 (`DEFAULT_QUANTIZE_COORDS_M = 0.1`, world-grid so dedup survives) + `--quantize-attrs-auto`
 (every Float64 scalar → range-adaptive UInt16, same type per column so schema never drifts)
-+ sequential ids, ON for every dataset; `STT_GEN_NO_QUANTIZE=1` opts out wholesale. Measured
-−28% on an OD-line double-build; win is dataset-shaped (large on geometry/numeric, modest on
-text-heavy). The slower fallback for the ~50 GB of already-built archives was the
-**since-removed `reoptimize` pass** (decode → re-encode through the production encoder →
-re-pack); transcoding has since been removed wholesale, so re-optimizing now means a
-from-source rebuild.
+
+- sequential ids, ON for every dataset; `STT_GEN_NO_QUANTIZE=1` opts out wholesale. Measured
+  −28% on an OD-line double-build; win is dataset-shaped (large on geometry/numeric, modest on
+  text-heavy). The slower fallback for the ~50 GB of already-built archives was the
+  **since-removed `reoptimize` pass** (decode → re-encode through the production encoder →
+  re-pack); transcoding has since been removed wholesale, so re-optimizing now means a
+  from-source rebuild.
 
 **Deferred levers (measured, declined — revisit only on a concrete trigger):**
+
 - **uint16-RTC geometry** — would halve `geometry` (~1 B/pt) but a per-tile/node origin breaks
   cross-tile blob dedup (why `--quantize-coords` uses a world grid). Not worth it unless
   geometry becomes the dominant column.

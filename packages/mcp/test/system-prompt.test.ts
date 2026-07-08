@@ -28,7 +28,11 @@ describe('buildSystemPrompt', () => {
   it('lists dataset names, bbox, zoom range, and summary tier', () => {
     const prompt = buildSystemPrompt([
       dataset({ name: 'earthquakes' }),
-      dataset({ name: 'nyc-od-quadbin', hasSummaryTier: true, summaryScheme: 'quadbin' }),
+      dataset({
+        name: 'nyc-od-quadbin',
+        hasSummaryTier: true,
+        summaryScheme: 'quadbin',
+      }),
     ]);
     expect(prompt).toContain('`earthquakes`');
     expect(prompt).toContain('`nyc-od-quadbin`');
@@ -37,20 +41,31 @@ describe('buildSystemPrompt', () => {
   });
 
   it('caps inline datasets and points to list_datasets for the rest', () => {
-    const many = Array.from({ length: 50 }, (_, i) => dataset({ name: `unique${i}` }));
+    const many = Array.from({ length: 50 }, (_, i) =>
+      dataset({ name: `unique${i}` }),
+    );
     const prompt = buildSystemPrompt(many);
     expect(prompt).toContain('and 10 more');
     expect(prompt).toContain('list_datasets');
   });
 
   it('collapses a large near-identical family to one line and keeps flagships visible', () => {
-    const flagships = ['earthquakes', 'drifters', 'gtfs-nl', 'nyc-taxi-yellow', 'storm-radar'];
+    const flagships = [
+      'earthquakes',
+      'drifters',
+      'gtfs-nl',
+      'nyc-taxi-yellow',
+      'storm-radar',
+    ];
     const argoverse = Array.from({ length: 342 }, (_, i) =>
       dataset({ name: `argoverse-scene-${String(i).padStart(4, '0')}` }),
     );
     // Alphabetically the argoverse-* names dominate the first 40 slots; the
     // flagships must still survive via family collapsing.
-    const catalog = [...argoverse, ...flagships.map((name) => dataset({ name }))];
+    const catalog = [
+      ...argoverse,
+      ...flagships.map((name) => dataset({ name })),
+    ];
     const prompt = buildSystemPrompt(catalog);
 
     // Every flagship is individually visible.
@@ -59,7 +74,9 @@ describe('buildSystemPrompt', () => {
     // The argoverse family collapses to exactly one summarized line.
     expect(prompt).toContain('`argoverse-*`');
     expect(prompt).toContain('342 near-identical datasets');
-    const argoverseLines = prompt.split('\n').filter((l) => l.includes('argoverse'));
+    const argoverseLines = prompt
+      .split('\n')
+      .filter((l) => l.includes('argoverse'));
     expect(argoverseLines).toHaveLength(1);
 
     // Total catalog count is honest; no individual argoverse scene line leaks in.
@@ -81,13 +98,17 @@ describe('buildSystemPrompt', () => {
   });
 
   it('never prints "~0 features" for a zero or unknown feature count', () => {
-    const undefinedCount = buildSystemPrompt([dataset({ name: 'no-count', featureCount: undefined })]);
+    const undefinedCount = buildSystemPrompt([
+      dataset({ name: 'no-count', featureCount: undefined }),
+    ]);
     expect(undefinedCount).not.toContain('~0 features');
     expect(undefinedCount).not.toContain('0 features');
     expect(undefinedCount).toContain('`no-count`');
 
     // A literal 0 would also be nonsensical to surface; guard belt-and-braces.
-    const zeroCount = buildSystemPrompt([dataset({ name: 'zero-count', featureCount: 0 })]);
+    const zeroCount = buildSystemPrompt([
+      dataset({ name: 'zero-count', featureCount: 0 }),
+    ]);
     expect(zeroCount).not.toContain('~0 features');
   });
 });

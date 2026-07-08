@@ -78,7 +78,8 @@ function makeSummaryTile() {
  * omits a prop sees its deck default forwarded; `...props` overrides win.
  */
 async function makeH3Layer(props: Record<string, any> = {}) {
-  const { H3SummaryLayer } = await import('../src/layers/summary/h3-summary-layer');
+  const { H3SummaryLayer } =
+    await import('../src/layers/summary/h3-summary-layer');
   const layer: any = Object.create((H3SummaryLayer as any).prototype);
   layer.props = {
     id: 'h3',
@@ -140,7 +141,7 @@ describe('H3SummaryLayer: cell ID round-trip', () => {
   });
 
   it('roundtrips via BigUint64 mask + shift identical to the layer path', () => {
-    const cell = latLngToCell(40.7128, -74.0060, 6); // NYC
+    const cell = latLngToCell(40.7128, -74.006, 6); // NYC
     const split = h3IndexToSplitLong(cell);
     const u64 = (BigInt(split[1] >>> 0) << 32n) | BigInt(split[0] >>> 0);
 
@@ -202,14 +203,21 @@ describe('H3SummaryLayer: outline / stroke family forwarding (deckgl parity)', (
 
   it('lineWidth / getLineWidth alias resolve to a constant width', async () => {
     const legacy = await makeH3Layer({ lineWidth: 4 });
-    expect((legacy.renderLayers()[0] as CapturedLayer).props.getLineWidth).toBe(4);
+    expect((legacy.renderLayers()[0] as CapturedLayer).props.getLineWidth).toBe(
+      4,
+    );
 
     const aliased = await makeH3Layer({ lineWidth: 4, getLineWidth: 9 });
-    expect((aliased.renderLayers()[0] as CapturedLayer).props.getLineWidth).toBe(9);
+    expect(
+      (aliased.renderLayers()[0] as CapturedLayer).props.getLineWidth,
+    ).toBe(9);
   });
 
   it('the outline props ride the updateTriggers surface', async () => {
-    const layer = await makeH3Layer({ lineColor: [5, 6, 7, 255], lineWidth: 2 });
+    const layer = await makeH3Layer({
+      lineColor: [5, 6, 7, 255],
+      lineWidth: 2,
+    });
     const [sub] = layer.renderLayers() as CapturedLayer[];
     expect(sub.props.updateTriggers.getLineColor).toContain('5,6,7,255');
     expect(sub.props.updateTriggers.getLineWidth).toContain(2);

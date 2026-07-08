@@ -25,14 +25,18 @@ export const MAX_PICK_ID = 0xffffff; // 16,777,215
  */
 export function encodePickId(index: number): [number, number, number] {
   if (!Number.isInteger(index) || index < 0 || index > MAX_PICK_ID) {
-    throw new RangeError(`encodePickId: index ${index} out of 24-bit range [0, ${MAX_PICK_ID}]`);
+    throw new RangeError(
+      `encodePickId: index ${index} out of 24-bit range [0, ${MAX_PICK_ID}]`,
+    );
   }
   return [(index >>> 16) & 0xff, (index >>> 8) & 0xff, index & 0xff];
 }
 
 /** Decode an `[r, g, b]` byte triple back into the index. Inverse of {@link encodePickId}. */
 export function decodePickId(rgb: readonly [number, number, number]): number {
-  return (((rgb[0] & 0xff) << 16) | ((rgb[1] & 0xff) << 8) | (rgb[2] & 0xff)) >>> 0;
+  return (
+    (((rgb[0] & 0xff) << 16) | ((rgb[1] & 0xff) << 8) | (rgb[2] & 0xff)) >>> 0
+  );
 }
 
 /**

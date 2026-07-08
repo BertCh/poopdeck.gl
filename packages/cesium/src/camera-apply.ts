@@ -13,10 +13,22 @@ import { viewStateToCesiumView, type CesiumViewOptions } from './camera.js';
 import type { ViewState } from '@poopdeck.gl/core/geo';
 
 /** Drive a real Cesium `Camera` from a {@link ViewState} (the cross-backend view vocabulary). */
-export function applyViewStateToCamera(camera: Camera, v: ViewState, opts: CesiumViewOptions = {}): void {
+export function applyViewStateToCamera(
+  camera: Camera,
+  v: ViewState,
+  opts: CesiumViewOptions = {},
+): void {
   const view = viewStateToCesiumView(v, opts);
   camera.setView({
-    destination: Cartesian3.fromDegrees(view.longitude, view.latitude, view.height),
-    orientation: new HeadingPitchRoll(view.headingRad, view.pitchRad, view.rollRad),
+    destination: Cartesian3.fromDegrees(
+      view.longitude,
+      view.latitude,
+      view.height,
+    ),
+    orientation: new HeadingPitchRoll(
+      view.headingRad,
+      view.pitchRad,
+      view.rollRad,
+    ),
   });
 }

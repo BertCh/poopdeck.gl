@@ -65,13 +65,17 @@ function makeGatedTileset(opts: {
       pendingResolvers.set(key(id), () => resolve(fakeTile(id)));
     });
   };
-  const getTileDataBatch = (ids: TileId[]): Promise<Tile[]> => Promise.all(ids.map(getTileData));
+  const getTileDataBatch = (ids: TileId[]): Promise<Tile[]> =>
+    Promise.all(ids.map(getTileData));
 
-  const getAvailableTiles = vi.fn(async (_b: BoundingBox, z: number): Promise<TileId[]> => {
-    if (z === opts.immediateTile.z) return [opts.immediateTile];
-    if (z === opts.coarseTile.z) return coarseAvailable ? [opts.coarseTile] : [];
-    return [];
-  });
+  const getAvailableTiles = vi.fn(
+    async (_b: BoundingBox, z: number): Promise<TileId[]> => {
+      if (z === opts.immediateTile.z) return [opts.immediateTile];
+      if (z === opts.coarseTile.z)
+        return coarseAvailable ? [opts.coarseTile] : [];
+      return [];
+    },
+  );
 
   const tileset = new SpatiotemporalTileset({
     minZoom: 0,
@@ -109,7 +113,12 @@ describe('getVisibleTiles: finer-descendant stand-in on zoom-out', () => {
     // Zoom out to z6. The coarse primary tile's fetch is gated (pending), so
     // without the stand-in this would render nothing.
     zoomOut();
-    tileset.update({ bounds: BOUNDS, zoom: COARSE.z, time: 0, timeWindow: 100 });
+    tileset.update({
+      bounds: BOUNDS,
+      zoom: COARSE.z,
+      time: 0,
+      timeWindow: 100,
+    });
     await settle();
 
     const visible = tileset.getVisibleTiles();
@@ -133,14 +142,24 @@ describe('getVisibleTiles: finer-descendant stand-in on zoom-out', () => {
 
     // Load a depth-3 descendant (z9) of COARSE (z6) — one level beyond the
     // configured lookahead bound.
-    tileset.update({ bounds: BOUNDS, zoom: TOO_FINE.z, time: 0, timeWindow: 100 });
+    tileset.update({
+      bounds: BOUNDS,
+      zoom: TOO_FINE.z,
+      time: 0,
+      timeWindow: 100,
+    });
     await settle();
     expect(tileset.getVisibleTiles().map((t) => t.id)).toEqual([TOO_FINE]);
 
     // Zoom out to z6; the coarse tile stays pending. The depth-3 tile must
     // NOT be surfaced as a stand-in — bounded search, not unbounded.
     zoomOut();
-    tileset.update({ bounds: BOUNDS, zoom: COARSE.z, time: 0, timeWindow: 100 });
+    tileset.update({
+      bounds: BOUNDS,
+      zoom: COARSE.z,
+      time: 0,
+      timeWindow: 100,
+    });
     await settle();
     expect(tileset.getVisibleTiles()).toEqual([]);
 
@@ -159,7 +178,12 @@ describe('getVisibleTiles: finer-descendant stand-in on zoom-out', () => {
     expect(tileset.getVisibleTiles().map((t) => t.id)).toEqual([FINE]);
 
     zoomOut();
-    tileset.update({ bounds: BOUNDS, zoom: COARSE.z, time: 0, timeWindow: 100 });
+    tileset.update({
+      bounds: BOUNDS,
+      zoom: COARSE.z,
+      time: 0,
+      timeWindow: 100,
+    });
     await settle();
     // 'no-overlap' shows exactly the requested zoom, nothing else, ever.
     expect(tileset.getVisibleTiles()).toEqual([]);

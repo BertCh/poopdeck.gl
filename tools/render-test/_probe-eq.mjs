@@ -2,7 +2,9 @@ import { chromium } from 'playwright';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-const OUT = fileURLToPath(new URL('./output/probe-earthquake', import.meta.url));
+const OUT = fileURLToPath(
+  new URL('./output/probe-earthquake', import.meta.url),
+);
 
 const browser = await chromium.launch({
   headless: true,
@@ -17,7 +19,9 @@ const browser = await chromium.launch({
   ],
 });
 
-const ctx = await browser.newContext({ viewport: { width: 1600, height: 1000 } });
+const ctx = await browser.newContext({
+  viewport: { width: 1600, height: 1000 },
+});
 const page = await ctx.newPage();
 
 const consoleErrors = [];
@@ -31,8 +35,14 @@ page.on('console', (msg) => {
 page.on('pageerror', (err) => pageErrors.push(`${err.name}: ${err.message}`));
 
 // Step 1: navigate
-await page.goto('http://localhost:3000/demo/earthquake-activity', { waitUntil: 'domcontentloaded', timeout: 60_000 });
-await page.locator('.map-viewport').first().waitFor({ state: 'visible', timeout: 30_000 });
+await page.goto('http://localhost:3000/demo/earthquake-activity', {
+  waitUntil: 'domcontentloaded',
+  timeout: 60_000,
+});
+await page
+  .locator('.map-viewport')
+  .first()
+  .waitFor({ state: 'visible', timeout: 30_000 });
 
 // Initial frame
 await page.waitForTimeout(3000);
@@ -44,7 +54,10 @@ await page.screenshot({ path: `${OUT}/02-after-load.png` });
 
 // Try to click play if there's a play button (to advance through time)
 try {
-  const playBtn = page.locator('button').filter({ hasText: /play|▶/i }).first();
+  const playBtn = page
+    .locator('button')
+    .filter({ hasText: /play|▶/i })
+    .first();
   if (await playBtn.count()) {
     await playBtn.click();
     await page.waitForTimeout(2000);

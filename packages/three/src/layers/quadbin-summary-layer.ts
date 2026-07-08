@@ -101,7 +101,11 @@ export class QuadbinSummaryLayer extends BaseSttLayer {
 
   setTiles(tiles: Tile[], ctx: SttLayerContext): void {
     this.timeOrigin = ctx.timeOrigin;
-    const buf = buildQuadbinBuffers(tiles, ctx.projection, this.bufferOptions());
+    const buf = buildQuadbinBuffers(
+      tiles,
+      ctx.projection,
+      this.bufferOptions(),
+    );
 
     this.mesh.geometry.dispose();
     if (buf.count === 0) {
@@ -115,7 +119,10 @@ export class QuadbinSummaryLayer extends BaseSttLayer {
     geom.setAttribute('color', new Float32BufferAttribute(buf.colors, 4));
     geom.setIndex(new Uint32BufferAttribute(buf.indices, 1));
     if (buf.bbox) {
-      geom.boundingBox = new Box3(new Vector3(...buf.bbox.min), new Vector3(...buf.bbox.max));
+      geom.boundingBox = new Box3(
+        new Vector3(...buf.bbox.min),
+        new Vector3(...buf.bbox.max),
+      );
       geom.boundingSphere = geom.boundingBox.getBoundingSphere(new Sphere());
     } else {
       geom.computeBoundingSphere();

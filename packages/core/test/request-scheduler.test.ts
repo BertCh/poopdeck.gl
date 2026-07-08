@@ -101,7 +101,11 @@ describe('SharedRequestScheduler', () => {
     const s = new SharedRequestScheduler({ maxRequests: max });
     const work = Array.from({ length: 10 }, () => controllable());
     work.forEach((c, i) =>
-      s.schedule({ sourceId: `src${i}`, getPriority: () => i, execute: c.execute }),
+      s.schedule({
+        sourceId: `src${i}`,
+        getPriority: () => i,
+        execute: c.execute,
+      }),
     );
     await flush();
 
@@ -169,7 +173,11 @@ describe('SharedRequestScheduler', () => {
     const s = new SharedRequestScheduler({ maxRequests: 1 });
     const order: string[] = [];
     const blocker = controllable();
-    s.schedule({ sourceId: 'blocker', getPriority: () => 0, execute: blocker.execute });
+    s.schedule({
+      sourceId: 'blocker',
+      getPriority: () => 0,
+      execute: blocker.execute,
+    });
     await flush();
 
     // Two queued requests; their priorities will CHANGE before a slot frees.
@@ -211,7 +219,11 @@ describe('SharedRequestScheduler', () => {
   it('CANCELS a queued request whose getPriority() returns < 0', async () => {
     const s = new SharedRequestScheduler({ maxRequests: 1 });
     const blocker = controllable();
-    s.schedule({ sourceId: 'blk', getPriority: () => 0, execute: blocker.execute });
+    s.schedule({
+      sourceId: 'blk',
+      getPriority: () => 0,
+      execute: blocker.execute,
+    });
     await flush();
 
     const doomed = controllable();
@@ -253,12 +265,20 @@ describe('SharedRequestScheduler', () => {
   it('frees the slot on SUCCESS', async () => {
     const s = new SharedRequestScheduler({ maxRequests: 1 });
     const a = controllable<string>();
-    const pa = s.schedule({ sourceId: 'a', getPriority: () => 0, execute: a.execute });
+    const pa = s.schedule({
+      sourceId: 'a',
+      getPriority: () => 0,
+      execute: a.execute,
+    });
     await flush();
     expect(s.getStats().active).toBe(1);
 
     const b = controllable<string>();
-    const pb = s.schedule({ sourceId: 'b', getPriority: () => 0, execute: b.execute });
+    const pb = s.schedule({
+      sourceId: 'b',
+      getPriority: () => 0,
+      execute: b.execute,
+    });
     await flush();
     expect(b.started()).toBe(false); // queued behind the running one
 
@@ -274,11 +294,19 @@ describe('SharedRequestScheduler', () => {
   it('frees the slot on FAILURE (rejection)', async () => {
     const s = new SharedRequestScheduler({ maxRequests: 1 });
     const a = controllable();
-    const pa = s.schedule({ sourceId: 'a', getPriority: () => 0, execute: a.execute });
+    const pa = s.schedule({
+      sourceId: 'a',
+      getPriority: () => 0,
+      execute: a.execute,
+    });
     await flush();
 
     const b = controllable();
-    const pb = s.schedule({ sourceId: 'b', getPriority: () => 0, execute: b.execute });
+    const pb = s.schedule({
+      sourceId: 'b',
+      getPriority: () => 0,
+      execute: b.execute,
+    });
     await flush();
     expect(b.started()).toBe(false);
 
@@ -306,7 +334,11 @@ describe('SharedRequestScheduler', () => {
     await expect(pa).rejects.toBe(boom);
     await flush();
     const b = controllable();
-    const pb = s.schedule({ sourceId: 'b', getPriority: () => 0, execute: b.execute });
+    const pb = s.schedule({
+      sourceId: 'b',
+      getPriority: () => 0,
+      execute: b.execute,
+    });
     await flush();
     expect(b.started()).toBe(true); // slot was freed despite the sync throw
     b.resolve(undefined);
@@ -339,7 +371,11 @@ describe('SharedRequestScheduler', () => {
   it('abort() on a QUEUED request rejects it without ever running', async () => {
     const s = new SharedRequestScheduler({ maxRequests: 1 });
     const blocker = controllable();
-    s.schedule({ sourceId: 'blk', getPriority: () => 0, execute: blocker.execute });
+    s.schedule({
+      sourceId: 'blk',
+      getPriority: () => 0,
+      execute: blocker.execute,
+    });
     await flush();
 
     const c = controllable();
@@ -366,13 +402,29 @@ describe('SharedRequestScheduler', () => {
   it('abortSource() cancels all queued + running requests for a source', async () => {
     const s = new SharedRequestScheduler({ maxRequests: 2 });
     const running = [controllable(), controllable()];
-    const r0 = s.schedule({ sourceId: 'x', getPriority: () => 0, execute: running[0].execute });
-    const r1 = s.schedule({ sourceId: 'x', getPriority: () => 0, execute: running[1].execute });
+    const r0 = s.schedule({
+      sourceId: 'x',
+      getPriority: () => 0,
+      execute: running[0].execute,
+    });
+    const r1 = s.schedule({
+      sourceId: 'x',
+      getPriority: () => 0,
+      execute: running[1].execute,
+    });
     const queued = controllable();
-    const rq = s.schedule({ sourceId: 'x', getPriority: () => 0, execute: queued.execute });
+    const rq = s.schedule({
+      sourceId: 'x',
+      getPriority: () => 0,
+      execute: queued.execute,
+    });
     // A different source must be untouched.
     const other = controllable();
-    const ro = s.schedule({ sourceId: 'y', getPriority: () => 0, execute: other.execute });
+    const ro = s.schedule({
+      sourceId: 'y',
+      getPriority: () => 0,
+      execute: other.execute,
+    });
     await flush();
 
     const xr0 = captureRejection(r0);
@@ -586,7 +638,13 @@ describe('SharedRequestScheduler', () => {
     // slots — the absent source's share is reclaimed.
     const s = new SharedRequestScheduler({ maxRequests: 2 });
     const cs = [controllable(), controllable(), controllable()];
-    cs.forEach((c) => s.schedule({ sourceId: 'only', getPriority: () => 0, execute: c.execute }));
+    cs.forEach((c) =>
+      s.schedule({
+        sourceId: 'only',
+        getPriority: () => 0,
+        execute: c.execute,
+      }),
+    );
     await flush();
 
     // Both slots are busy with the single source — none left idle.
@@ -603,7 +661,7 @@ describe('SharedRequestScheduler', () => {
     expect(s.getStats().active).toBe(0);
   });
 
-  it('work-conserving across sources: a light source reclaims a heavy source\'s share once heavy drains', async () => {
+  it("work-conserving across sources: a light source reclaims a heavy source's share once heavy drains", async () => {
     const s = new SharedRequestScheduler({ maxRequests: 2 });
     const order: string[] = [];
     const ctrls: Controllable[] = [];
@@ -645,9 +703,21 @@ describe('SharedRequestScheduler', () => {
     const s = new SharedRequestScheduler({ maxRequests: 2 });
     const cs = [controllable(), controllable(), controllable()];
     const ps = [
-      s.schedule({ sourceId: 'a', getPriority: () => 0, execute: cs[0].execute }),
-      s.schedule({ sourceId: 'a', getPriority: () => 0, execute: cs[1].execute }),
-      s.schedule({ sourceId: 'b', getPriority: () => 0, execute: cs[2].execute }),
+      s.schedule({
+        sourceId: 'a',
+        getPriority: () => 0,
+        execute: cs[0].execute,
+      }),
+      s.schedule({
+        sourceId: 'a',
+        getPriority: () => 0,
+        execute: cs[1].execute,
+      }),
+      s.schedule({
+        sourceId: 'b',
+        getPriority: () => 0,
+        execute: cs[2].execute,
+      }),
     ];
     await flush();
     expect(s.getStats().active).toBe(2); // budget fully used
@@ -666,7 +736,11 @@ describe('SharedRequestScheduler', () => {
 
     // Still usable after clear.
     const fresh = controllable<number>();
-    const pf = s.schedule({ sourceId: 'c', getPriority: () => 0, execute: fresh.execute });
+    const pf = s.schedule({
+      sourceId: 'c',
+      getPriority: () => 0,
+      execute: fresh.execute,
+    });
     await flush();
     fresh.resolve(7);
     await expect(pf).resolves.toBe(7);
@@ -675,7 +749,11 @@ describe('SharedRequestScheduler', () => {
   it('a throwing getPriority() cancels that request without taking down the pump', async () => {
     const s = new SharedRequestScheduler({ maxRequests: 1 });
     const blocker = controllable();
-    s.schedule({ sourceId: 'blk', getPriority: () => 0, execute: blocker.execute });
+    s.schedule({
+      sourceId: 'blk',
+      getPriority: () => 0,
+      execute: blocker.execute,
+    });
     await flush();
 
     const bad = controllable();
@@ -687,13 +765,19 @@ describe('SharedRequestScheduler', () => {
       execute: bad.execute,
     });
     const good = controllable();
-    const pGood = s.schedule({ sourceId: 'good', getPriority: () => 1, execute: good.execute });
+    const pGood = s.schedule({
+      sourceId: 'good',
+      getPriority: () => 1,
+      execute: good.execute,
+    });
     const badRejected = captureRejection(pBad);
     await flush();
 
     blocker.resolve(undefined);
     await flush();
-    expect((await badRejected() as Error).message).toContain('priority kaboom');
+    expect(((await badRejected()) as Error).message).toContain(
+      'priority kaboom',
+    );
     expect(bad.started()).toBe(false);
     // The good request still got dispatched after the bad one was dropped.
     expect(good.started()).toBe(true);
@@ -712,14 +796,26 @@ describe('SharedRequestScheduler', () => {
       // Saturate the one slot with a long-running OTHER source so the victims
       // stay queued (never dispatched).
       const blocker = controllable();
-      s.schedule({ sourceId: 'blk', getPriority: () => 0, execute: blocker.execute });
+      s.schedule({
+        sourceId: 'blk',
+        getPriority: () => 0,
+        execute: blocker.execute,
+      });
       await flush();
 
       // Two queued requests for source 'leak' that never run.
       const v1 = controllable();
       const v2 = controllable();
-      const r1 = s.scheduleRequest({ sourceId: 'leak', getPriority: () => 1, execute: v1.execute });
-      const r2 = s.scheduleRequest({ sourceId: 'leak', getPriority: () => 1, execute: v2.execute });
+      const r1 = s.scheduleRequest({
+        sourceId: 'leak',
+        getPriority: () => 1,
+        execute: v1.execute,
+      });
+      const r2 = s.scheduleRequest({
+        sourceId: 'leak',
+        getPriority: () => 1,
+        execute: v2.execute,
+      });
       const j1 = captureRejection(r1.promise);
       const j2 = captureRejection(r2.promise);
       await flush();
@@ -746,13 +842,25 @@ describe('SharedRequestScheduler', () => {
     it('reclaims a source drained via abortSource() while only queued', async () => {
       const s = new SharedRequestScheduler({ maxRequests: 1 });
       const blocker = controllable();
-      s.schedule({ sourceId: 'blk', getPriority: () => 0, execute: blocker.execute });
+      s.schedule({
+        sourceId: 'blk',
+        getPriority: () => 0,
+        execute: blocker.execute,
+      });
       await flush();
 
       const v1 = controllable();
       const v2 = controllable();
-      const p1 = s.schedule({ sourceId: 'q', getPriority: () => 1, execute: v1.execute });
-      const p2 = s.schedule({ sourceId: 'q', getPriority: () => 1, execute: v2.execute });
+      const p1 = s.schedule({
+        sourceId: 'q',
+        getPriority: () => 1,
+        execute: v1.execute,
+      });
+      const p2 = s.schedule({
+        sourceId: 'q',
+        getPriority: () => 1,
+        execute: v2.execute,
+      });
       const j1 = captureRejection(p1);
       const j2 = captureRejection(p2);
       await flush();
@@ -772,10 +880,18 @@ describe('SharedRequestScheduler', () => {
     it('clear() reclaims weights for drained (queued) sources too', async () => {
       const s = new SharedRequestScheduler({ maxRequests: 1 });
       const blocker = controllable();
-      const pBlk = s.schedule({ sourceId: 'blk', getPriority: () => 0, execute: blocker.execute });
+      const pBlk = s.schedule({
+        sourceId: 'blk',
+        getPriority: () => 0,
+        execute: blocker.execute,
+      });
       await flush();
       const v1 = controllable();
-      const p1 = s.schedule({ sourceId: 'q', getPriority: () => 1, execute: v1.execute });
+      const p1 = s.schedule({
+        sourceId: 'q',
+        getPriority: () => 1,
+        execute: v1.execute,
+      });
       const j1 = captureRejection(p1);
       // The running 'blk' resolves (its execute ignores the abort signal); guard
       // its promise from surfacing as unhandled regardless of outcome.

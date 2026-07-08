@@ -109,7 +109,14 @@ describe('window-mode parity vs @poopdeck.gl/layers TimeFilterExtension', () => 
     const fadeIn = 30;
     const fadeOut = 40;
     const ml = timeWindowAlphaJS(1085, 1095, 900, 1100, fadeIn, fadeOut);
-    const dk = deckWindowAlpha(1085, 1095, currentTime, timeWindow, fadeIn, fadeOut);
+    const dk = deckWindowAlpha(
+      1085,
+      1095,
+      currentTime,
+      timeWindow,
+      fadeIn,
+      fadeOut,
+    );
     expect(ml).toBeCloseTo(dk, 10);
   });
 

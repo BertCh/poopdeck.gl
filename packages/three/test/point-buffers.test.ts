@@ -17,7 +17,13 @@ const pointTile = (
   partial: Partial<BinaryFeatures>,
   timeOffset = 0,
   geometryType = GeometryType.Point,
-) => makePointTile(count, positions, partial, { timeOffset, geometryType, layerName: 'lidar', z: 18 });
+) =>
+  makePointTile(count, positions, partial, {
+    timeOffset,
+    geometryType,
+    layerName: 'lidar',
+    z: 18,
+  });
 
 const SEG: Record<string, RGBA> = {
   road: [80, 90, 120, 255],
@@ -31,7 +37,10 @@ describe('buildPointBuffers', () => {
       [anchor.longitude, anchor.latitude, anchor.longitude, anchor.latitude],
       {
         categoricalProps: {
-          seg_class: { indices: new Uint16Array([0, 1]), categories: ['road', 'vehicle'] },
+          seg_class: {
+            indices: new Uint16Array([0, 1]),
+            categories: ['road', 'vehicle'],
+          },
         },
         numericProps: { z: new Float32Array([1, 2]) },
         startTimes: new Float32Array([10, 20]),
@@ -40,7 +49,12 @@ describe('buildPointBuffers', () => {
       3000,
     );
     const buf = buildPointBuffers([tile], proj, 1000, {
-      colorMode: { type: 'categorical', property: 'seg_class', mapping: SEG, fallback: [0, 0, 0, 0] },
+      colorMode: {
+        type: 'categorical',
+        property: 'seg_class',
+        mapping: SEG,
+        fallback: [0, 0, 0, 0],
+      },
       elevationProperty: 'z',
       elevationScale: 1,
     });
@@ -54,11 +68,14 @@ describe('buildPointBuffers', () => {
   });
 
   it('colours from rgb columns when requested', () => {
-    const tile = pointTile(
-      1,
-      [anchor.longitude, anchor.latitude],
-      { numericProps: { r: new Float32Array([255]), g: new Float32Array([0]), b: new Float32Array([0]), z: new Float32Array([0]) } },
-    );
+    const tile = pointTile(1, [anchor.longitude, anchor.latitude], {
+      numericProps: {
+        r: new Float32Array([255]),
+        g: new Float32Array([0]),
+        b: new Float32Array([0]),
+        z: new Float32Array([0]),
+      },
+    });
     const buf = buildPointBuffers([tile], proj, 0, {
       colorMode: { type: 'rgb', columns: ['r', 'g', 'b'] },
       elevationProperty: 'z',
@@ -72,12 +89,18 @@ describe('buildPointBuffers', () => {
     const tile = pointTile(
       3,
       [
-        anchor.longitude, anchor.latitude,
-        anchor.longitude, anchor.latitude,
-        anchor.longitude, anchor.latitude,
+        anchor.longitude,
+        anchor.latitude,
+        anchor.longitude,
+        anchor.latitude,
+        anchor.longitude,
+        anchor.latitude,
       ],
       {
-        numericProps: { mag: new Float32Array([0, 5, 10]), z: new Float32Array([0, 0, 0]) },
+        numericProps: {
+          mag: new Float32Array([0, 5, 10]),
+          z: new Float32Array([0, 0, 0]),
+        },
       },
     );
     const RANGE: RGBA[] = [
@@ -106,13 +129,16 @@ describe('buildPointBuffers', () => {
   });
 
   it('returns an RTC origin (~0 for the ENU frame, centres stay absolute)', () => {
-    const tile = pointTile(
-      1,
-      [anchor.longitude, anchor.latitude],
-      { numericProps: { z: new Float32Array([3]) } },
-    );
+    const tile = pointTile(1, [anchor.longitude, anchor.latitude], {
+      numericProps: { z: new Float32Array([3]) },
+    });
     const buf = buildPointBuffers([tile], proj, 0, {
-      colorMode: { type: 'categorical', property: 'seg_class', mapping: SEG, fallback: [0, 0, 0, 0] },
+      colorMode: {
+        type: 'categorical',
+        property: 'seg_class',
+        mapping: SEG,
+        fallback: [0, 0, 0, 0],
+      },
       elevationProperty: 'z',
       elevationScale: 1,
     });
@@ -128,11 +154,21 @@ describe('buildPointBuffers', () => {
     // Two points: the first defines the origin; the second is offset slightly.
     const tile = pointTile(
       2,
-      [anchor.longitude, anchor.latitude, anchor.longitude + 0.001, anchor.latitude + 0.001],
+      [
+        anchor.longitude,
+        anchor.latitude,
+        anchor.longitude + 0.001,
+        anchor.latitude + 0.001,
+      ],
       { numericProps: { z: new Float32Array([0, 0]) } },
     );
     const buf = buildPointBuffers([tile], mproj, 0, {
-      colorMode: { type: 'categorical', property: 'seg_class', mapping: SEG, fallback: [0, 0, 0, 0] },
+      colorMode: {
+        type: 'categorical',
+        property: 'seg_class',
+        mapping: SEG,
+        fallback: [0, 0, 0, 0],
+      },
       elevationProperty: 'z',
       elevationScale: 1,
     });
@@ -144,7 +180,11 @@ describe('buildPointBuffers', () => {
     expect(buf.centers[0]).toBeCloseTo(0, 3);
     expect(buf.centers[1]).toBeCloseTo(0, 3);
     // Second centre = absolute(second) - origin, a small local offset.
-    const abs1 = mproj.project(anchor.longitude + 0.001, anchor.latitude + 0.001, 0);
+    const abs1 = mproj.project(
+      anchor.longitude + 0.001,
+      anchor.latitude + 0.001,
+      0,
+    );
     expect(buf.centers[3]).toBeCloseTo(abs1[0] - abs0[0], 3);
     expect(buf.centers[4]).toBeCloseTo(abs1[1] - abs0[1], 3);
   });
@@ -158,7 +198,12 @@ describe('buildPointBuffers', () => {
       GeometryType.LineString,
     );
     const buf = buildPointBuffers([tile], proj, 0, {
-      colorMode: { type: 'categorical', property: 'x', mapping: {}, fallback: [0, 0, 0, 0] },
+      colorMode: {
+        type: 'categorical',
+        property: 'x',
+        mapping: {},
+        fallback: [0, 0, 0, 0],
+      },
       elevationProperty: 'z',
       elevationScale: 1,
     });

@@ -27,7 +27,10 @@
 
 import { PathLayer } from '@deck.gl/layers';
 import type { Color, DefaultProps, Layer, LayerContext } from '@deck.gl/core';
-import { SpatioTemporalLayer, SpatioTemporalLayerProps } from '../spatiotemporal-layer.js';
+import {
+  SpatioTemporalLayer,
+  SpatioTemporalLayerProps,
+} from '../spatiotemporal-layer.js';
 import { NoPickingPathLayer } from '../internal/no-picking-path-layer.js';
 import { TimeFilterExtension } from '../../extensions/time-filter-extension.js';
 import { CategoryColorExtension } from '../../extensions/category-color-extension.js';
@@ -40,9 +43,16 @@ import {
   updateTriggersDigest,
 } from '../../lib/style-digest.js';
 import { resolveAccessorAlias } from '../../lib/accessor-alias.js';
-import type { ColorAccessorValue, NumericAccessorValue } from '../../lib/accessor-alias.js';
+import type {
+  ColorAccessorValue,
+  NumericAccessorValue,
+} from '../../lib/accessor-alias.js';
 import { DEFAULT_TRIPS_PALETTE } from '@poopdeck.gl/core';
-import type { Tile, Layer as TileLayer, BinaryFeatures } from '@poopdeck.gl/core';
+import type {
+  Tile,
+  Layer as TileLayer,
+  BinaryFeatures,
+} from '@poopdeck.gl/core';
 
 const DEBUG = false;
 
@@ -156,7 +166,8 @@ export interface _AnimatedTripsLayerProps {
 }
 
 /** Complete props accepted by {@link AnimatedTripsLayer}. */
-export type AnimatedTripsLayerProps = _AnimatedTripsLayerProps & SpatioTemporalLayerProps;
+export type AnimatedTripsLayerProps = _AnimatedTripsLayerProps &
+  SpatioTemporalLayerProps;
 
 // Shared with the maplibre adapter (single source of truth in
 // @poopdeck.gl/core).
@@ -190,7 +201,10 @@ interface PreparedTile {
   data: {
     length: number;
     startIndices: Uint32Array;
-    attributes: Record<string, { value: any; size: number; normalized?: boolean }>;
+    attributes: Record<
+      string,
+      { value: any; size: number; normalized?: boolean }
+    >;
   };
   /** Per-tile time reference; passed to TimeFilterExtension as `timeOffset`. */
   timeOffset: number;
@@ -280,7 +294,12 @@ export function synthesizeVertexTimes(binary: BinaryFeatures): Float32Array {
 const EARTH_RADIUS_M = 6_371_000;
 
 /** Haversine distance in meters. Inputs in degrees. */
-function haversineMeters(lon1: number, lat1: number, lon2: number, lat2: number): number {
+function haversineMeters(
+  lon1: number,
+  lat1: number,
+  lon2: number,
+  lat2: number,
+): number {
   const dLat = ((lat2 - lat1) * Math.PI) / 180;
   const dLon = ((lon2 - lon1) * Math.PI) / 180;
   const lat1Rad = (lat1 * Math.PI) / 180;
@@ -430,7 +449,9 @@ function expandGradientColors(
 const EMPTY_EXTENSIONS: unknown[] = [];
 const EMPTY_SUBLAYER_PROPS: Record<string, unknown> = {};
 
-export class AnimatedTripsLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLayer<
+export class AnimatedTripsLayer<
+  ExtraPropsT extends {} = {},
+> extends SpatioTemporalLayer<
   ExtraPropsT & Required<_AnimatedTripsLayerProps>
 > {
   static layerName = 'AnimatedTripsLayer';
@@ -451,9 +472,19 @@ export class AnimatedTripsLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
     getColor: { type: 'object', value: null, optional: true, compare: true },
     getWidth: { type: 'object', value: null, optional: true, compare: true },
     colorPalette: { type: 'array', value: DEFAULT_PALETTE, compare: true },
-    colorMapping: { type: 'object', value: null, optional: true, compare: false },
+    colorMapping: {
+      type: 'object',
+      value: null,
+      optional: true,
+      compare: false,
+    },
     colorMappingDefault: { type: 'color', value: [120, 120, 120, 255] },
-    gradientProperty: { type: 'object', value: null, optional: true, compare: true },
+    gradientProperty: {
+      type: 'object',
+      value: null,
+      optional: true,
+      compare: true,
+    },
     gradientDomain: { type: 'array', value: [0, 1], compare: true },
     gradientColorRamp: { type: 'array', value: [], compare: true },
     trailLength: { type: 'number', value: 180_000, min: 0 },
@@ -514,7 +545,9 @@ export class AnimatedTripsLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
    * under WebGL2's 16-attribute floor is NoPickingPathLayer freeing the
    * `instancePickingColors` slot — not attribute pruning here.
    */
-  private readonly timeFilterExtension = new TimeFilterExtension({ mode: 'trail' });
+  private readonly timeFilterExtension = new TimeFilterExtension({
+    mode: 'trail',
+  });
 
   /**
    * Singleton CategoryColorExtension. Replaces the per-tile CPU
@@ -619,7 +652,8 @@ export class AnimatedTripsLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
     if (this.lastTilesRef !== tiles) {
       const live = new Set<string>();
       for (const tile of tiles) {
-        for (const tileLayer of tile.layers) live.add(makeTileKey(tile, tileLayer));
+        for (const tileLayer of tile.layers)
+          live.add(makeTileKey(tile, tileLayer));
       }
       for (const key of this.preparedTileCache.keys()) {
         if (!live.has(key)) this.preparedTileCache.delete(key);
@@ -674,7 +708,9 @@ export class AnimatedTripsLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
     });
     if (DEBUG) {
       // eslint-disable-next-line no-console
-      console.log(`AnimatedTripsLayer: ${tiles.length} tiles → ${sublayers.length} sublayers`);
+      console.log(
+        `AnimatedTripsLayer: ${tiles.length} tiles → ${sublayers.length} sublayers`,
+      );
     }
     return sublayers;
   }
@@ -694,7 +730,9 @@ export class AnimatedTripsLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
     binary: BinaryFeatures,
     _totalVerts: number,
   ): Float32Array | undefined {
-    return this.props.gradientProperty === 'vertexValues' ? binary.vertexValues : undefined;
+    return this.props.gradientProperty === 'vertexValues'
+      ? binary.vertexValues
+      : undefined;
   }
 
   /**
@@ -821,11 +859,15 @@ export class AnimatedTripsLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
     // domain invalidates the cached per-vertex colors when the scale changes.
     const gradSig = this.props.gradientProperty
       ? `g${this.props.gradientProperty}:${(this.props.gradientDomain ?? [0, 1]).join(',')}:${
-          this.props.gradientColorRamp ? colorListDigest(this.props.gradientColorRamp) : ''
+          this.props.gradientColorRamp
+            ? colorListDigest(this.props.gradientColorRamp)
+            : ''
         }`
       : '';
     const styleKey = `${colorProp}|${widthProp}|${
-      colorProp ? colorListDigest(this.props.colorPalette ?? DEFAULT_PALETTE) : 0
+      colorProp
+        ? colorListDigest(this.props.colorPalette ?? DEFAULT_PALETTE)
+        : 0
     }|${mapSig}|${gradSig}${this.gradientStyleSuffix(binary)}|${updateTriggersDigest(
       this.props.updateTriggers,
     )}`;
@@ -833,7 +875,12 @@ export class AnimatedTripsLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
     const tileKey = makeTileKey(tile, tileLayer);
     const cached = this.preparedTileCache.get(tileKey);
     if (cached && cached.styleKey === styleKey) {
-      emit('tilePrepare', { layer: 'AnimatedTripsLayer', tileKey, cached: true, ms: 0 });
+      emit('tilePrepare', {
+        layer: 'AnimatedTripsLayer',
+        tileKey,
+        cached: true,
+        ms: 0,
+      });
       return cached;
     }
 
@@ -855,7 +902,8 @@ export class AnimatedTripsLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
     const vertexTimes: Float32Array =
       chevronDirs && chevronDirs.length >= totalVerts
         ? chevronDirs
-        : binary.vertexTimestamps && binary.vertexTimestamps.length >= totalVerts
+        : binary.vertexTimestamps &&
+            binary.vertexTimestamps.length >= totalVerts
           ? binary.vertexTimestamps
           : synthesizeVertexTimes(binary);
 
@@ -916,7 +964,7 @@ export class AnimatedTripsLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
               this.props.colorMapping,
               this.props.colorMappingDefault ?? [120, 120, 120, 255],
             )
-          : this.props.colorPalette ?? DEFAULT_PALETTE;
+          : (this.props.colorPalette ?? DEFAULT_PALETTE);
         attributes.getColor = {
           value: expandCategoryColors(
             cat.indices,
@@ -1001,9 +1049,9 @@ export class AnimatedTripsLayer<ExtraPropsT extends {} = {}> extends SpatioTempo
   private buildSublayer(prepared: PreparedTile): PathLayer {
     const colorValue = this.colorValue();
     const widthValue = this.widthValue();
-    const constColor = (Array.isArray(colorValue)
-      ? colorValue
-      : [253, 128, 93, 255]) as Color;
+    const constColor = (
+      Array.isArray(colorValue) ? colorValue : [253, 128, 93, 255]
+    ) as Color;
     const constWidth = typeof widthValue === 'number' ? widthValue : 2;
     // `Required<>`-typed: the defaultProps value guarantees a number here.
     const timeWindow = this.props.timeWindow;

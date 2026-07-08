@@ -1,4 +1,4 @@
-import React from "react";
+import React from 'react';
 
 /**
  * The end-to-end pipeline flowchart for the "How it works" page: four stages
@@ -17,52 +17,58 @@ interface Stage {
 
 const STAGES: Stage[] = [
   {
-    n: "01",
-    label: "Source",
-    title: "Rows with geometry + time",
+    n: '01',
+    label: 'Source',
+    title: 'Rows with geometry + time',
     steps: [
-      { t: "GeoParquet / Parquet", d: "WKB, GeoArrow or lon/lat columns" },
-      { t: "PostGIS", d: "--postgres · table or SQL, reprojected server-side" },
-      { t: "DuckDB", d: "--duckdb · scans CSV, GeoJSON & Parquet too" },
+      { t: 'GeoParquet / Parquet', d: 'WKB, GeoArrow or lon/lat columns' },
+      { t: 'PostGIS', d: '--postgres · table or SQL, reprojected server-side' },
+      { t: 'DuckDB', d: '--duckdb · scans CSV, GeoJSON & Parquet too' },
     ],
-    foot: "Every row: a point, line or polygon in WGS84 plus start (and optional end) timestamps.",
+    foot: 'Every row: a point, line or polygon in WGS84 plus start (and optional end) timestamps.',
   },
   {
-    n: "02",
-    label: "Build",
-    title: "stt-build — the Rust tiler",
+    n: '02',
+    label: 'Build',
+    title: 'stt-build — the Rust tiler',
     steps: [
-      { t: "Normalize time", d: "ISO 8601 / unix → milliseconds" },
-      { t: "Tile in space", d: "Web-Mercator z/x/y across the zoom range" },
-      { t: "Cut in time", d: "each tile splits into buckets (default 1 h)" },
-      { t: "Encode", d: "Arrow IPC columns, GeoArrow geometry" },
-      { t: "Compress + dedup", d: "zstd per blob, blake3 collapses identical bytes" },
-      { t: "Pack", d: "blobs packed into ≤ 64 MiB objects + a directory" },
+      { t: 'Normalize time', d: 'ISO 8601 / unix → milliseconds' },
+      { t: 'Tile in space', d: 'Web-Mercator z/x/y across the zoom range' },
+      { t: 'Cut in time', d: 'each tile splits into buckets (default 1 h)' },
+      { t: 'Encode', d: 'Arrow IPC columns, GeoArrow geometry' },
+      {
+        t: 'Compress + dedup',
+        d: 'zstd per blob, blake3 collapses identical bytes',
+      },
+      { t: 'Pack', d: 'blobs packed into ≤ 64 MiB objects + a directory' },
     ],
-    foot: "cargo install spatiotemporal-tiles",
+    foot: 'cargo install spatiotemporal-tiles',
   },
   {
-    n: "03",
-    label: "Publish",
-    title: "A folder of static files",
+    n: '03',
+    label: 'Publish',
+    title: 'A folder of static files',
     steps: [
-      { t: "manifest.json", d: "tiny + mutable — names the current build" },
-      { t: "index/<blake3>.sttd", d: "the tile directory, immutable" },
-      { t: "packs/<blake3>.sttp", d: "tile blobs, immutable, range-read" },
+      { t: 'manifest.json', d: 'tiny + mutable — names the current build' },
+      { t: 'index/<blake3>.sttd', d: 'the tile directory, immutable' },
+      { t: 'packs/<blake3>.sttp', d: 'tile blobs, immutable, range-read' },
     ],
-    foot: "Any object store behind any CDN. No tile server, no database, cache-forever URLs.",
+    foot: 'Any object store behind any CDN. No tile server, no database, cache-forever URLs.',
   },
   {
-    n: "04",
-    label: "Play",
-    title: "Streamed like video",
+    n: '04',
+    label: 'Play',
+    title: 'Streamed like video',
     steps: [
-      { t: "@poopdeck.gl/core", d: "range requests, off-thread Arrow decode" },
-      { t: "@poopdeck.gl/playback", d: "clock + buffering governor" },
-      { t: "GPU time gate", d: "two uniforms per frame, zero rebuilds" },
-      { t: "Four renderers", d: "deck.gl · MapLibre · Three (WebGPU) · Cesium" },
+      { t: '@poopdeck.gl/core', d: 'range requests, off-thread Arrow decode' },
+      { t: '@poopdeck.gl/playback', d: 'clock + buffering governor' },
+      { t: 'GPU time gate', d: 'two uniforms per frame, zero rebuilds' },
+      {
+        t: 'Four renderers',
+        d: 'deck.gl · MapLibre · Three (WebGPU) · Cesium',
+      },
     ],
-    foot: "npm i @poopdeck.gl/layers",
+    foot: 'npm i @poopdeck.gl/layers',
   },
 ];
 
@@ -74,7 +80,7 @@ const Arrow: React.FC = () => (
       height="18"
       aria-hidden="true"
       className="rotate-90 lg:rotate-0"
-      style={{ color: "var(--ink-400)" }}
+      style={{ color: 'var(--ink-400)' }}
     >
       <path
         fill="none"
@@ -91,12 +97,15 @@ const Arrow: React.FC = () => (
 const StageCard: React.FC<{ stage: Stage }> = ({ stage }) => (
   <div
     className="rounded-lg p-4 flex flex-col"
-    style={{ background: "var(--surface)", border: "1px solid var(--hairline)" }}
+    style={{
+      background: 'var(--surface)',
+      border: '1px solid var(--hairline)',
+    }}
   >
     <div className="flex items-baseline gap-2">
       <span
         className="font-mono text-[11px] font-semibold"
-        style={{ color: "var(--accent)" }}
+        style={{ color: 'var(--accent)' }}
       >
         {stage.n}
       </span>
@@ -104,7 +113,7 @@ const StageCard: React.FC<{ stage: Stage }> = ({ stage }) => (
     </div>
     <h3
       className="font-display text-sm font-semibold mt-1.5"
-      style={{ color: "var(--ink-900)" }}
+      style={{ color: 'var(--ink-900)' }}
     >
       {stage.title}
     </h3>
@@ -114,14 +123,14 @@ const StageCard: React.FC<{ stage: Stage }> = ({ stage }) => (
           <span
             aria-hidden="true"
             className="mt-[5px] h-[5px] w-[5px] shrink-0 rounded-full"
-            style={{ background: "var(--accent)", opacity: 0.55 }}
+            style={{ background: 'var(--accent)', opacity: 0.55 }}
           />
           <span>
-            <span className="font-medium" style={{ color: "var(--ink-700)" }}>
+            <span className="font-medium" style={{ color: 'var(--ink-700)' }}>
               {s.t}
             </span>
             {s.d ? (
-              <span style={{ color: "var(--ink-500)" }}> — {s.d}</span>
+              <span style={{ color: 'var(--ink-500)' }}> — {s.d}</span>
             ) : null}
           </span>
         </li>
@@ -130,13 +139,13 @@ const StageCard: React.FC<{ stage: Stage }> = ({ stage }) => (
     {stage.foot ? (
       <p
         className={`mt-3 pt-3 text-[11px] leading-snug ${
-          stage.foot.startsWith("cargo") || stage.foot.startsWith("npm")
-            ? "font-mono"
-            : ""
+          stage.foot.startsWith('cargo') || stage.foot.startsWith('npm')
+            ? 'font-mono'
+            : ''
         }`}
         style={{
-          color: "var(--ink-400)",
-          borderTop: "1px solid var(--hairline)",
+          color: 'var(--ink-400)',
+          borderTop: '1px solid var(--hairline)',
         }}
       >
         {stage.foot}

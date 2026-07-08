@@ -19,12 +19,18 @@ export interface DatasetManifestEntry {
  * Fetch the dataset manifest from the running showcase. Navigates to `/` once,
  * waits for the SPA to evaluate `main.tsx`, then reads `window.__STT_DATASETS`.
  */
-export async function loadManifest(page: Page): Promise<DatasetManifestEntry[]> {
+export async function loadManifest(
+  page: Page,
+): Promise<DatasetManifestEntry[]> {
   await page.goto('/', { waitUntil: 'domcontentloaded' });
-  return await page.waitForFunction(
-    () => (window as unknown as { __STT_DATASETS?: DatasetManifestEntry[] }).__STT_DATASETS,
-    { timeout: 30_000 },
-  ).then((handle) => handle.jsonValue() as Promise<DatasetManifestEntry[]>);
+  return await page
+    .waitForFunction(
+      () =>
+        (window as unknown as { __STT_DATASETS?: DatasetManifestEntry[] })
+          .__STT_DATASETS,
+      { timeout: 30_000 },
+    )
+    .then((handle) => handle.jsonValue() as Promise<DatasetManifestEntry[]>);
 }
 
 /**

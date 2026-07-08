@@ -15,7 +15,8 @@ export const OUTPUT_DIR = path.resolve(__dirname, '..', 'output');
  * data is dense across a multi-year time range — which makes it a good probe
  * for the time-filter regression test.
  */
-export const TEST_DATASET = process.env.STT_RENDER_DATASET || 'earthquake-activity';
+export const TEST_DATASET =
+  process.env.STT_RENDER_DATASET || 'earthquake-activity';
 export const DEMO_PATH = `/demo/${TEST_DATASET}`;
 
 export function ensureOutputDir(): void {
@@ -55,9 +56,7 @@ export function attachErrorCollectors(page: Page): ErrorSink {
  * it. If selection is ambiguous we fall back to the first canvas.
  */
 export function deckCanvas(page: Page): Locator {
-  return page
-    .locator('.map-viewport canvas:not(.mapboxgl-canvas)')
-    .first();
+  return page.locator('.map-viewport canvas:not(.mapboxgl-canvas)').first();
 }
 
 export function mapViewport(page: Page): Locator {
@@ -74,7 +73,9 @@ export async function waitForWebGLCanvas(page: Page): Promise<void> {
   await deckCanvas(page).waitFor({ state: 'attached', timeout: 60_000 });
 
   const webglStatus = await page.evaluate(() => {
-    const canvases = Array.from(document.querySelectorAll('.map-viewport canvas'));
+    const canvases = Array.from(
+      document.querySelectorAll('.map-viewport canvas'),
+    );
     for (const c of canvases) {
       const el = c as HTMLCanvasElement;
       const gl =
@@ -84,7 +85,9 @@ export async function waitForWebGLCanvas(page: Page): Promise<void> {
         const dbg = gl.getExtension('WEBGL_debug_renderer_info');
         return {
           ok: true,
-          renderer: dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : 'unknown',
+          renderer: dbg
+            ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL)
+            : 'unknown',
         };
       }
     }
@@ -92,7 +95,11 @@ export async function waitForWebGLCanvas(page: Page): Promise<void> {
     // "WebGL is fundamentally unavailable".
     const probe = document.createElement('canvas');
     const probeGl = probe.getContext('webgl2') || probe.getContext('webgl');
-    return { ok: false, webglAvailable: !!probeGl, renderer: null as string | null };
+    return {
+      ok: false,
+      webglAvailable: !!probeGl,
+      renderer: null as string | null,
+    };
   });
 
   if (!webglStatus.ok && webglStatus.webglAvailable === false) {
@@ -117,7 +124,11 @@ export async function waitForWebGLCanvas(page: Page): Promise<void> {
  * capture the *composited* output of the page and are therefore the reliable
  * source of rendered pixels regardless of `preserveDrawingBuffer`.
  */
-function decodePng(buffer: Buffer): { width: number; height: number; data: Buffer } {
+function decodePng(buffer: Buffer): {
+  width: number;
+  height: number;
+  data: Buffer;
+} {
   const png = PNG.sync.read(buffer);
   return { width: png.width, height: png.height, data: png.data };
 }
@@ -129,7 +140,11 @@ function decodePng(buffer: Buffer): { width: number; height: number; data: Buffe
  */
 export async function canvasPixelStats(
   page: Page,
-): Promise<{ variance: number; uniqueColors: number; nonBackground: number } | null> {
+): Promise<{
+  variance: number;
+  uniqueColors: number;
+  nonBackground: number;
+} | null> {
   let buffer: Buffer;
   try {
     buffer = await mapViewport(page).screenshot();
@@ -222,7 +237,13 @@ export function pixelArrayDiffRatio(a: number[], b: number[]): number {
 export async function measureFps(
   page: Page,
   durationMs: number,
-): Promise<{ fps: number; frames: number; p50: number; p95: number; max: number }> {
+): Promise<{
+  fps: number;
+  frames: number;
+  p50: number;
+  p95: number;
+  max: number;
+}> {
   return page.evaluate(async (duration) => {
     return await new Promise<{
       fps: number;
@@ -243,7 +264,9 @@ export async function measureFps(
           const sorted = [...frameTimes].sort((x, y) => x - y);
           const pick = (p: number) =>
             sorted.length
-              ? sorted[Math.min(sorted.length - 1, Math.floor(p * sorted.length))]
+              ? sorted[
+                  Math.min(sorted.length - 1, Math.floor(p * sorted.length))
+                ]
               : 0;
           const elapsed = now - start;
           resolve({

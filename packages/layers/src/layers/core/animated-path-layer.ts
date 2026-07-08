@@ -26,7 +26,10 @@
 
 import { PathLayer } from '@deck.gl/layers';
 import type { Color, DefaultProps, Layer, LayerContext } from '@deck.gl/core';
-import { SpatioTemporalLayer, SpatioTemporalLayerProps } from '../spatiotemporal-layer.js';
+import {
+  SpatioTemporalLayer,
+  SpatioTemporalLayerProps,
+} from '../spatiotemporal-layer.js';
 import { NoPickingPathLayer } from '../internal/no-picking-path-layer.js';
 import { TimeFilterExtension } from '../../extensions/time-filter-extension.js';
 import { DataFilterExtension } from '../../extensions/data-filter-extension.js';
@@ -51,7 +54,11 @@ import type {
   WeightAccessorValue,
 } from '../../lib/accessor-alias.js';
 import { DEFAULT_LINE_PALETTE } from '@poopdeck.gl/core';
-import type { Tile, Layer as TileLayer, BinaryFeatures } from '@poopdeck.gl/core';
+import type {
+  Tile,
+  Layer as TileLayer,
+  BinaryFeatures,
+} from '@poopdeck.gl/core';
 
 const DEBUG = false;
 
@@ -261,7 +268,8 @@ export interface _AnimatedPathLayerProps {
 }
 
 /** Complete props accepted by {@link AnimatedPathLayer}. */
-export type AnimatedPathLayerProps = _AnimatedPathLayerProps & SpatioTemporalLayerProps;
+export type AnimatedPathLayerProps = _AnimatedPathLayerProps &
+  SpatioTemporalLayerProps;
 
 // Shared with the maplibre adapter (single source of truth in
 // @poopdeck.gl/core).
@@ -274,7 +282,10 @@ interface PreparedTile {
   data: {
     length: number;
     startIndices: Uint32Array;
-    attributes: Record<string, { value: any; size: number; normalized?: boolean }>;
+    attributes: Record<
+      string,
+      { value: any; size: number; normalized?: boolean }
+    >;
   };
   timeOffset: number;
   dims: number;
@@ -301,7 +312,9 @@ function makeTileKey(tile: Tile, layer: TileLayer): string {
  * keeps the source typed-array type (preserving the time precision the layer
  * already relies on). Mirrors AnimatedTripsLayer's per-vertex time/color.
  */
-function expandFeatureScalarToVertex<T extends { [i: number]: number; length: number }>(
+function expandFeatureScalarToVertex<
+  T extends { [i: number]: number; length: number },
+>(
   src: T,
   startIndices: Uint32Array,
   featureCount: number,
@@ -347,7 +360,7 @@ function expandCategoryColors(
     // replacing it. Rounded back into the u8 channel.
     const a = alphaScale
       ? Math.round((c[3] ?? 255) * alphaScale[f])
-      : c[3] ?? 255;
+      : (c[3] ?? 255);
     for (let v = startIndices[f]; v < startIndices[f + 1]; v++) {
       const o = v * 4;
       out[o] = r;
@@ -465,7 +478,6 @@ function paletteFromMapping(
   return categories.map((c) => mapping[c] ?? fallback);
 }
 
-
 /**
  * Animated path layer (window mode) with per-tile binary sublayers.
  *
@@ -475,9 +487,9 @@ function paletteFromMapping(
  * contract). Without a `type` override the class is `PathLayer` when
  * `pickable` and the attribute-stripped `NoPickingPathLayer` otherwise.
  */
-export class AnimatedPathLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLayer<
-  ExtraPropsT & Required<_AnimatedPathLayerProps>
-> {
+export class AnimatedPathLayer<
+  ExtraPropsT extends {} = {},
+> extends SpatioTemporalLayer<ExtraPropsT & Required<_AnimatedPathLayerProps>> {
   static layerName = 'AnimatedPathLayer';
 
   static defaultProps: DefaultProps<AnimatedPathLayerProps> = {
@@ -498,16 +510,36 @@ export class AnimatedPathLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
     colorPalette: { type: 'array', value: DEFAULT_PALETTE, compare: true },
     // Digested by content in computeLayerPropsKey/styleKey (compare:false here);
     // a same-shape mapping edit invalidates via the digest, not deck's diff.
-    colorMapping: { type: 'object', value: null, optional: true, compare: false },
+    colorMapping: {
+      type: 'object',
+      value: null,
+      optional: true,
+      compare: false,
+    },
     colorMappingDefault: { type: 'color', value: [120, 120, 120, 255] },
     // Elevation: unset ⇒ flat (zero-copy positions). Digested by content in the
     // styleKey / layerPropsKey (compare:false on the mapping), like colorMapping.
-    elevationProperty: { type: 'object', value: null, optional: true, compare: true },
-    elevationMapping: { type: 'object', value: null, optional: true, compare: false },
+    elevationProperty: {
+      type: 'object',
+      value: null,
+      optional: true,
+      compare: true,
+    },
+    elevationMapping: {
+      type: 'object',
+      value: null,
+      optional: true,
+      compare: false,
+    },
     elevationScale: { type: 'number', value: 1 },
     // Height-graded alpha: unset range ⇒ no grading. Range/near/far ride the
     // styleKey so a tweak re-prepares the tiles (re-expands getColor).
-    elevationOpacityRange: { type: 'object', value: null, optional: true, compare: true },
+    elevationOpacityRange: {
+      type: 'object',
+      value: null,
+      optional: true,
+      compare: true,
+    },
     elevationOpacityNear: { type: 'number', value: 1 },
     elevationOpacityFar: { type: 'number', value: 1 },
     fadeInDuration: { type: 'number', value: 300, min: 0 },
@@ -519,9 +551,19 @@ export class AnimatedPathLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
 
     // Column range filter (DataFilterExtension). Unset ⇒ not installed.
     // Permissive {type:'object'} descriptors (see the point layer).
-    filterProperty: { type: 'object', value: null, optional: true, compare: true },
+    filterProperty: {
+      type: 'object',
+      value: null,
+      optional: true,
+      compare: true,
+    },
     filterRange: { type: 'object', value: null, optional: true, compare: true },
-    filterSoftRange: { type: 'object', value: null, optional: true, compare: true },
+    filterSoftRange: {
+      type: 'object',
+      value: null,
+      optional: true,
+      compare: true,
+    },
     filterEnabled: true,
   };
 
@@ -546,7 +588,9 @@ export class AnimatedPathLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
    * minimum when stacked with PathLayer's fp64 position split + picking +
    * CategoryColorExtension.
    */
-  private readonly timeFilterExtension = new TimeFilterExtension({ mode: 'window' });
+  private readonly timeFilterExtension = new TimeFilterExtension({
+    mode: 'window',
+  });
   private readonly categoryColorExtension = new CategoryColorExtension();
   /**
    * Singleton DataFilterExtension, composed in only when `filterProperty` is
@@ -555,7 +599,9 @@ export class AnimatedPathLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
    * pipeline stays at WebGL2's 16-slot vertex-attribute floor rather than
    * overflowing to 17 — see the `filterProperty` prop docs.
    */
-  private readonly dataFilterExtension = new DataFilterExtension({ filterSize: 1 });
+  private readonly dataFilterExtension = new DataFilterExtension({
+    filterSize: 1,
+  });
   private readonly boundGetTime: () => number = () => this.getCurrentTime();
 
   finalizeState(context: LayerContext): void {
@@ -629,7 +675,9 @@ export class AnimatedPathLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
       // Column-filter uniforms (DataFilterExtension) — a range/enabled edit is
       // uniform-only, so it rebuilds the cached sublayers (whose props carry the
       // values) rather than re-preparing tiles, like timeWindow above.
-      Array.isArray(this.props.filterRange) ? this.props.filterRange.join(',') : '',
+      Array.isArray(this.props.filterRange)
+        ? this.props.filterRange.join(',')
+        : '',
       Array.isArray(this.props.filterSoftRange)
         ? this.props.filterSoftRange.join(',')
         : '',
@@ -650,7 +698,8 @@ export class AnimatedPathLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
     if (this.lastTilesRef !== tiles) {
       const live = new Set<string>();
       for (const tile of tiles) {
-        for (const tileLayer of tile.layers) live.add(makeTileKey(tile, tileLayer));
+        for (const tileLayer of tile.layers)
+          live.add(makeTileKey(tile, tileLayer));
       }
       for (const key of this.preparedTileCache.keys()) {
         if (!live.has(key)) this.preparedTileCache.delete(key);
@@ -699,7 +748,9 @@ export class AnimatedPathLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
     });
     if (DEBUG) {
       // eslint-disable-next-line no-console
-      console.log(`AnimatedPathLayer: ${tiles.length} tiles → ${sublayers.length} sublayers`);
+      console.log(
+        `AnimatedPathLayer: ${tiles.length} tiles → ${sublayers.length} sublayers`,
+      );
     }
     return sublayers;
   }
@@ -714,7 +765,9 @@ export class AnimatedPathLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
     const widthProp = typeof widthValue === 'string' ? widthValue : '';
     const filterProp = this.filterPropertyValue() ?? '';
     const elevProp =
-      typeof this.props.elevationProperty === 'string' ? this.props.elevationProperty : '';
+      typeof this.props.elevationProperty === 'string'
+        ? this.props.elevationProperty
+        : '';
     // Palette / mapping keyed by CONTENT, not length — a same-size swap must
     // invalidate cached tiles. The digests are memoized per object reference
     // (style-digest.ts), so this is a WeakMap lookup per tile, not a
@@ -728,7 +781,9 @@ export class AnimatedPathLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
     // height-ramp edit re-prepares the tile (rebuilds the 3D positions buffer).
     const elevSig = elevProp
       ? `e${elevProp}:${this.props.elevationScale}:${
-          this.props.elevationMapping ? structuralDigest(this.props.elevationMapping) : ''
+          this.props.elevationMapping
+            ? structuralDigest(this.props.elevationMapping)
+            : ''
         }`
       : '';
     // Height-graded alpha signature — a range/near/far tweak re-expands getColor.
@@ -742,13 +797,20 @@ export class AnimatedPathLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
     // covering the unset↔set toggle that adds/removes DataFilterExtension.
     const filterSig = filterProp ? `f${filterProp}` : '';
     const styleKey = `${colorProp}|${widthProp}|${
-      colorProp ? colorListDigest(this.props.colorPalette ?? DEFAULT_PALETTE) : 0
+      colorProp
+        ? colorListDigest(this.props.colorPalette ?? DEFAULT_PALETTE)
+        : 0
     }|${mapSig}|${elevSig}|${elevOpacSig}|${filterSig}|${updateTriggersDigest(this.props.updateTriggers)}`;
 
     const tileKey = makeTileKey(tile, tileLayer);
     const cached = this.preparedTileCache.get(tileKey);
     if (cached && cached.styleKey === styleKey) {
-      emit('tilePrepare', { layer: 'AnimatedPathLayer', tileKey, cached: true, ms: 0 });
+      emit('tilePrepare', {
+        layer: 'AnimatedPathLayer',
+        tileKey,
+        cached: true,
+        ms: 0,
+      });
       return cached;
     }
 
@@ -830,7 +892,7 @@ export class AnimatedPathLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
               this.props.colorMapping,
               this.props.colorMappingDefault ?? [120, 120, 120, 255],
             )
-          : this.props.colorPalette ?? DEFAULT_PALETTE;
+          : (this.props.colorPalette ?? DEFAULT_PALETTE);
         // Height-graded alpha (top of a stacked relief fades translucent): keyed
         // on the raw numeric elevation column. Null unless opted in + numeric.
         const alphaScale =
@@ -943,18 +1005,15 @@ export class AnimatedPathLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
   private buildSublayer(prepared: PreparedTile): PathLayer {
     const colorValue = this.colorValue();
     const widthValue = this.widthValue();
-    const constColor = (Array.isArray(colorValue)
-      ? colorValue
-      : [0, 150, 255, 255]) as Color;
+    const constColor = (
+      Array.isArray(colorValue) ? colorValue : [0, 150, 255, 255]
+    ) as Color;
     const constWidth = typeof widthValue === 'number' ? widthValue : 2;
     // `Required<>`-typed: the defaultProps value guarantees a number here.
     const timeWindow = this.props.timeWindow;
 
     const useGpuCategory = prepared.gpuPalette !== null;
-    if (
-      useGpuCategory &&
-      prepared.gpuPalette!.length > CATEGORY_PALETTE_SIZE
-    ) {
+    if (useGpuCategory && prepared.gpuPalette!.length > CATEGORY_PALETTE_SIZE) {
       warnOnce(
         'AnimatedPathLayer:paletteOverflow',
         `[AnimatedPathLayer] colorPalette has ${prepared.gpuPalette!.length} ` +

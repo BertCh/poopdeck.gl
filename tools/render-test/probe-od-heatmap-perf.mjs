@@ -24,45 +24,56 @@ const browser = await chromium.launch({
 /** Measure FPS over `durationMs` of animation. Returns mean + p5/p50/p95 of
  *  per-second FPS samples. */
 async function measure(demoId, durationMs) {
-  const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const ctx = await browser.newContext({
+    viewport: { width: 1280, height: 800 },
+  });
   const page = await ctx.newPage();
   const errs = [];
-  page.on('console', (m) => { if (m.type() === 'error') errs.push(m.text().slice(0, 150)); });
+  page.on('console', (m) => {
+    if (m.type() === 'error') errs.push(m.text().slice(0, 150));
+  });
 
   const url = `${BASE_URL}/demo/${demoId}`;
   console.log(`\n=== ${demoId} ===`);
   await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60_000 });
-  await page.locator('.map-viewport').first().waitFor({ state: 'visible', timeout: 30_000 });
+  await page
+    .locator('.map-viewport')
+    .first()
+    .waitFor({ state: 'visible', timeout: 30_000 });
   // Wait for tile loads.
   await page.waitForTimeout(10_000);
 
   // Click play.
   const playBtn = page.locator('button:has-text("▶")').first();
-  if (await playBtn.count() > 0) {
+  if ((await playBtn.count()) > 0) {
     await playBtn.click();
   }
   // Let animation warm up.
   await page.waitForTimeout(2_000);
 
   // Sample FPS bucketed per-second in the page context.
-  const samples = await page.evaluate((dur) => new Promise((resolve) => {
-    const buckets = [];
-    let bucketStart = performance.now();
-    let bucketCount = 0;
-    const start = bucketStart;
-    function tick() {
-      const now = performance.now();
-      bucketCount++;
-      if (now - bucketStart >= 1000) {
-        buckets.push(bucketCount * 1000 / (now - bucketStart));
-        bucketStart = now;
-        bucketCount = 0;
-      }
-      if (now - start < dur) requestAnimationFrame(tick);
-      else resolve(buckets);
-    }
-    requestAnimationFrame(tick);
-  }), durationMs);
+  const samples = await page.evaluate(
+    (dur) =>
+      new Promise((resolve) => {
+        const buckets = [];
+        let bucketStart = performance.now();
+        let bucketCount = 0;
+        const start = bucketStart;
+        function tick() {
+          const now = performance.now();
+          bucketCount++;
+          if (now - bucketStart >= 1000) {
+            buckets.push((bucketCount * 1000) / (now - bucketStart));
+            bucketStart = now;
+            bucketCount = 0;
+          }
+          if (now - start < dur) requestAnimationFrame(tick);
+          else resolve(buckets);
+        }
+        requestAnimationFrame(tick);
+      }),
+    durationMs,
+  );
 
   samples.sort((a, b) => a - b);
   const mean = samples.reduce((s, v) => s + v, 0) / samples.length;
@@ -93,10 +104,15 @@ const results = {
   od_heatmap: await measure('nyc-taxi-od-heatmap', DURATION_MS),
 };
 
-fs.writeFileSync(path.join(OUTPUT, 'fps-report.json'), JSON.stringify(results, null, 2));
+fs.writeFileSync(
+  path.join(OUTPUT, 'fps-report.json'),
+  JSON.stringify(results, null, 2),
+);
 console.log('\n=== SUMMARY ===');
 for (const [k, r] of Object.entries(results)) {
-  console.log(`${k}: mean=${r.mean} p50=${r.p50} p5=${r.p5} (${r.samples} 1s buckets)`);
+  console.log(
+    `${k}: mean=${r.mean} p50=${r.p50} p5=${r.p5} (${r.samples} 1s buckets)`,
+  );
 }
 
 await browser.close();

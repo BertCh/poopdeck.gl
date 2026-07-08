@@ -1,7 +1,7 @@
-import React from "react";
-import { Link } from "react-router";
-import { docSections } from "./manifest";
-import CodeBlock from "./CodeBlock";
+import React from 'react';
+import { Link } from 'react-router';
+import { docSections } from './manifest';
+import CodeBlock from './CodeBlock';
 
 const QUICK_START = `npm install @poopdeck.gl/core @poopdeck.gl/layers @poopdeck.gl/playback
 
@@ -28,13 +28,13 @@ const DocsLanding: React.FC = () => {
       <span className="eyebrow">Documentation</span>
       <h1
         className="font-display text-2xl sm:text-3xl font-bold mt-2"
-        style={{ color: "var(--ink-900)", lineHeight: 1.15 }}
+        style={{ color: 'var(--ink-900)', lineHeight: 1.15 }}
       >
         Spatiotemporal Tiles
       </h1>
       <p
         className="text-sm mt-3 max-w-2xl"
-        style={{ color: "var(--ink-500)", lineHeight: 1.7 }}
+        style={{ color: 'var(--ink-500)', lineHeight: 1.7 }}
       >
         A cloud-native, edge-cacheable tile format for streaming massive
         time-variant geospatial datasets — Rust tools to build archives from
@@ -50,25 +50,25 @@ const DocsLanding: React.FC = () => {
             to={`/docs/${section.entries[0].slug}`}
             className="group block rounded-md p-4 transition-colors"
             style={{
-              border: "1px solid var(--hairline)",
-              background: "var(--surface)",
+              border: '1px solid var(--hairline)',
+              background: 'var(--surface)',
             }}
             onMouseOver={(e) =>
-              (e.currentTarget.style.borderColor = "var(--accent)")
+              (e.currentTarget.style.borderColor = 'var(--accent)')
             }
             onMouseOut={(e) =>
-              (e.currentTarget.style.borderColor = "var(--hairline)")
+              (e.currentTarget.style.borderColor = 'var(--hairline)')
             }
           >
             <h2
               className="text-sm font-semibold group-hover:[color:var(--accent)] transition-colors"
-              style={{ color: "var(--ink-900)" }}
+              style={{ color: 'var(--ink-900)' }}
             >
               {section.label}
             </h2>
             <p
               className="text-xs mt-1.5"
-              style={{ color: "var(--ink-500)", lineHeight: 1.6 }}
+              style={{ color: 'var(--ink-500)', lineHeight: 1.6 }}
             >
               {section.blurb}
             </p>
@@ -77,13 +77,16 @@ const DocsLanding: React.FC = () => {
                 <span
                   key={e.slug}
                   className="text-[11px]"
-                  style={{ color: "var(--ink-400)" }}
+                  style={{ color: 'var(--ink-400)' }}
                 >
                   {e.title}
                 </span>
               ))}
               {section.entries.length > 4 && (
-                <span className="text-[11px]" style={{ color: "var(--ink-400)" }}>
+                <span
+                  className="text-[11px]"
+                  style={{ color: 'var(--ink-400)' }}
+                >
                   +{section.entries.length - 4} more
                 </span>
               )}
@@ -97,19 +100,22 @@ const DocsLanding: React.FC = () => {
         <span className="eyebrow">Quick start</span>
         <p
           className="text-sm mt-2 max-w-2xl"
-          style={{ color: "var(--ink-500)", lineHeight: 1.7 }}
+          style={{ color: 'var(--ink-500)', lineHeight: 1.7 }}
         >
-          Point an animated layer at a packed dataset's <code>manifest.json</code>{" "}
-          and give it a clock:
+          Point an animated layer at a packed dataset's{' '}
+          <code>manifest.json</code> and give it a clock:
         </p>
         <CodeBlock code={QUICK_START} language="typescript" />
-        <p className="text-xs" style={{ color: "var(--ink-400)" }}>
-          Building your own dataset? Start with the{" "}
-          <Link to="/docs/guides/data-generation" style={{ color: "var(--accent)" }}>
+        <p className="text-xs" style={{ color: 'var(--ink-400)' }}>
+          Building your own dataset? Start with the{' '}
+          <Link
+            to="/docs/guides/data-generation"
+            style={{ color: 'var(--accent)' }}
+          >
             data-generation guide
-          </Link>{" "}
-          or the{" "}
-          <Link to="/docs/guides/python" style={{ color: "var(--accent)" }}>
+          </Link>{' '}
+          or the{' '}
+          <Link to="/docs/guides/python" style={{ color: 'var(--accent)' }}>
             Python recipes
           </Link>
           .

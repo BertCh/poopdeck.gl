@@ -28,9 +28,12 @@ describe('buildFlowCorridorBuffers', () => {
     const tile = flowTile(
       {
         positions: new Float64Array([
-          anchor.longitude, anchor.latitude,
-          anchor.longitude + dLon, anchor.latitude,
-          anchor.longitude + 2 * dLon, anchor.latitude,
+          anchor.longitude,
+          anchor.latitude,
+          anchor.longitude + dLon,
+          anchor.latitude,
+          anchor.longitude + 2 * dLon,
+          anchor.latitude,
         ]),
         startIndices: new Uint32Array([0, 3]),
         startTimes: new Float32Array([0]),
@@ -82,8 +85,10 @@ describe('buildFlowCorridorBuffers', () => {
     const tile = flowTile(
       {
         positions: new Float64Array([
-          anchor.longitude, anchor.latitude,
-          anchor.longitude + 0.001, anchor.latitude,
+          anchor.longitude,
+          anchor.latitude,
+          anchor.longitude + 0.001,
+          anchor.latitude,
         ]),
         startIndices: new Uint32Array([0, 2]),
         startTimes: new Float32Array([100]),
@@ -107,8 +112,10 @@ describe('buildFlowCorridorBuffers', () => {
     const merc = new MercatorProjection();
     const tile = flowTile({
       positions: new Float64Array([
-        anchor.longitude, anchor.latitude,
-        anchor.longitude + 0.001, anchor.latitude + 0.001,
+        anchor.longitude,
+        anchor.latitude,
+        anchor.longitude + 0.001,
+        anchor.latitude + 0.001,
       ]),
       startIndices: new Uint32Array([0, 2]),
       startTimes: new Float32Array([0]),
@@ -124,8 +131,10 @@ describe('buildFlowCorridorBuffers', () => {
   it('returns empty for a non-matrix line tile (no vertexValueMatrix)', () => {
     const tile = flowTile({
       positions: new Float64Array([
-        anchor.longitude, anchor.latitude,
-        anchor.longitude + 0.001, anchor.latitude,
+        anchor.longitude,
+        anchor.latitude,
+        anchor.longitude + 0.001,
+        anchor.latitude,
       ]),
       startIndices: new Uint32Array([0, 2]),
       // no vertexValueMatrix / buckets
@@ -139,8 +148,10 @@ describe('buildFlowCorridorBuffers', () => {
   it('ignores tiles whose bucket count disagrees with the first matrix tile', () => {
     const a = flowTile({
       positions: new Float64Array([
-        anchor.longitude, anchor.latitude,
-        anchor.longitude + 0.001, anchor.latitude,
+        anchor.longitude,
+        anchor.latitude,
+        anchor.longitude + 0.001,
+        anchor.latitude,
       ]),
       startIndices: new Uint32Array([0, 2]),
       startTimes: new Float32Array([0]),
@@ -150,8 +161,10 @@ describe('buildFlowCorridorBuffers', () => {
     });
     const b = flowTile({
       positions: new Float64Array([
-        anchor.longitude, anchor.latitude + 0.002,
-        anchor.longitude + 0.001, anchor.latitude + 0.002,
+        anchor.longitude,
+        anchor.latitude + 0.002,
+        anchor.longitude + 0.001,
+        anchor.latitude + 0.002,
       ]),
       startIndices: new Uint32Array([0, 2]),
       startTimes: new Float32Array([0]),

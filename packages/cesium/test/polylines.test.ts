@@ -14,7 +14,9 @@ import {
 import { featureColor } from '../src/lib/feature-color';
 
 const WGS84_A = 6_378_137; // semi-major axis, metres
-const GLOBE = new GlobeProjection({ longitude: 0, latitude: 0 }, undefined, { datum: 'wgs84' });
+const GLOBE = new GlobeProjection({ longitude: 0, latitude: 0 }, undefined, {
+  datum: 'wgs84',
+});
 
 function lineTile(
   positions: number[],
@@ -43,13 +45,22 @@ function lineTile(
   return {
     id: { z: 5, x: 0, y: 0, t: timeOffset },
     timeRange: { start: timeOffset, end: timeOffset + 1000 },
-    layers: [{ name: 'lines', extent: 0, features, geometryExtensionName: 'geoarrow.linestring' }],
+    layers: [
+      {
+        name: 'lines',
+        extent: 0,
+        features,
+        geometryExtensionName: 'geoarrow.linestring',
+      },
+    ],
   };
 }
 
 describe('buildPathPolylines', () => {
   it('projects every vertex to WGS84 ECEF and keeps the run intact', () => {
-    const build = buildPathPolylines([lineTile([0, 0, 1, 0, 2, 0], [0, 3], [10], [900])]);
+    const build = buildPathPolylines([
+      lineTile([0, 0, 1, 0, 2, 0], [0, 3], [10], [900]),
+    ]);
     expect(build.polylines).toHaveLength(1);
     const p = build.polylines[0];
     expect(p.positions).toHaveLength(9);
@@ -63,7 +74,9 @@ describe('buildPathPolylines', () => {
   });
 
   it('skips single-vertex features (a polyline needs two ends)', () => {
-    const build = buildPathPolylines([lineTile([0, 0, 1, 0, 2, 0, 3, 0], [0, 1, 4], [1, 2], [3, 4])]);
+    const build = buildPathPolylines([
+      lineTile([0, 0, 1, 0, 2, 0, 3, 0], [0, 1, 4], [1, 2], [3, 4]),
+    ]);
     expect(build.polylines).toHaveLength(1);
     expect(build.polylines[0].featureIndex).toBe(1);
   });
@@ -147,14 +160,18 @@ describe('sampleGreatCircleArc', () => {
 
   it('degenerate zero-length arcs fall back without NaNs', () => {
     const arc = sampleGreatCircleArc(src, src, 1, 5);
-    for (let i = 0; i < arc.length; i++) expect(Number.isFinite(arc[i])).toBe(true);
+    for (let i = 0; i < arc.length; i++)
+      expect(Number.isFinite(arc[i])).toBe(true);
   });
 });
 
 describe('buildArcPolylines', () => {
   it('collapses each feature to its first/last vertex and sweeps the arc', () => {
     // 3-vertex feature: the middle vertex must NOT influence the arc endpoints.
-    const build = buildArcPolylines([lineTile([0, 0, 33, 40, 90, 0], [0, 3], [5], [50])], { samples: 9 });
+    const build = buildArcPolylines(
+      [lineTile([0, 0, 33, 40, 90, 0], [0, 3], [5], [50])],
+      { samples: 9 },
+    );
     expect(build.polylines).toHaveLength(1);
     const p = build.polylines[0];
     expect(p.positions).toHaveLength(27);
@@ -183,13 +200,27 @@ describe('lineStringTimeOrigin', () => {
 
   it('returns 0 when there is no animatable LineString layer', () => {
     expect(lineStringTimeOrigin([])).toBe(0);
-    const points = lineTile([0, 0, 1, 0], [0, 2], [0], [1], { geometryType: GeometryType.Point }, 9000);
+    const points = lineTile(
+      [0, 0, 1, 0],
+      [0, 2],
+      [0],
+      [1],
+      { geometryType: GeometryType.Point },
+      9000,
+    );
     expect(lineStringTimeOrigin([points])).toBe(0);
   });
 
   it('skips layers with zero features or no startIndices', () => {
     const empty = lineTile([], [0], [], [], {}, 1000); // featureCount 0
-    const noIdx = lineTile([0, 0, 1, 0], [0, 2], [0], [100], { startIndices: undefined }, 2000);
+    const noIdx = lineTile(
+      [0, 0, 1, 0],
+      [0, 2],
+      [0],
+      [100],
+      { startIndices: undefined },
+      2000,
+    );
     const good = lineTile([2, 0, 3, 0], [0, 2], [0], [100], {}, 7000);
     expect(lineStringTimeOrigin([empty, noIdx, good])).toBe(7000);
   });
@@ -202,7 +233,9 @@ describe('featureColor', () => {
   const b = tile.layers[0].features;
 
   it('constant mode returns the constant', () => {
-    expect(featureColor(b, 0, { type: 'constant', color: [1, 2, 3, 4] })).toEqual([1, 2, 3, 4]);
+    expect(
+      featureColor(b, 0, { type: 'constant', color: [1, 2, 3, 4] }),
+    ).toEqual([1, 2, 3, 4]);
   });
 
   it('ramp mode interpolates through the kernel rampColorAt', () => {

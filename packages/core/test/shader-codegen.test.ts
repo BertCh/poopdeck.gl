@@ -10,7 +10,10 @@ import {
   type Expr,
   type TimeFilterModeKey,
 } from '../src/render/shader-codegen';
-import { timeFilterAlpha, type TimeFilterParams } from '../src/render/time-filter';
+import {
+  timeFilterAlpha,
+  type TimeFilterParams,
+} from '../src/render/time-filter';
 
 // Deterministic LCG so the conformance sweep is reproducible (no Math.random).
 function lcg(seed: number): () => number {
@@ -50,7 +53,14 @@ function sample(mode: TimeFilterModeKey, rnd: () => number) {
     trailLength,
     trailFade,
   };
-  const params: TimeFilterParams = { windowHalf, fadeIn, fadeOut, wakeLength, trailLength, trailFade };
+  const params: TimeFilterParams = {
+    windowHalf,
+    fadeIn,
+    fadeOut,
+    wakeLength,
+    trailLength,
+    trailFade,
+  };
   return { env, params };
 }
 
@@ -91,9 +101,20 @@ describe('shader-codegen ALPHA_EXPR matches the time-filter oracle', () => {
       { startTime: cur + wh - fi, endTime: cur + wh }, // age == fadeIn
     ];
     for (const c of cases) {
-      const env = { currentTime: cur, startTime: c.startTime, endTime: c.endTime, windowHalf: wh, fadeIn: fi, fadeOut: fo };
+      const env = {
+        currentTime: cur,
+        startTime: c.startTime,
+        endTime: c.endTime,
+        windowHalf: wh,
+        fadeIn: fi,
+        fadeOut: fo,
+      };
       const got = evalExpr(ALPHA_EXPR.window, env);
-      const want = timeFilterAlpha('window', cur, c.startTime, c.endTime, { windowHalf: wh, fadeIn: fi, fadeOut: fo });
+      const want = timeFilterAlpha('window', cur, c.startTime, c.endTime, {
+        windowHalf: wh,
+        fadeIn: fi,
+        fadeOut: fo,
+      });
       expect(got).toBeCloseTo(want, 9);
     }
   });
@@ -117,7 +138,11 @@ describe('GLSL emitters', () => {
   });
 
   it('honors a nameMap for host-specific identifiers', () => {
-    const s = emitGLSL300(ALPHA_EXPR.cumulative, { currentTime: 'uCur', startTime: 'vStart', fadeIn: 'uFadeIn' });
+    const s = emitGLSL300(ALPHA_EXPR.cumulative, {
+      currentTime: 'uCur',
+      startTime: 'vStart',
+      fadeIn: 'uFadeIn',
+    });
     expect(s).toContain('uCur');
     expect(s).toContain('vStart');
     expect(s).not.toContain('currentTime');
@@ -132,7 +157,14 @@ describe('GLSL emitters', () => {
     expect(s).toContain('clamp(');
     expect(s).toContain('!= 0.0 ?');
     // Every referenced var appears.
-    for (const v of ['currentTime', 'windowHalf', 'startTime', 'endTime', 'fadeIn', 'fadeOut']) {
+    for (const v of [
+      'currentTime',
+      'windowHalf',
+      'startTime',
+      'endTime',
+      'fadeIn',
+      'fadeOut',
+    ]) {
       expect(s).toContain(v);
     }
     // Balanced parentheses.

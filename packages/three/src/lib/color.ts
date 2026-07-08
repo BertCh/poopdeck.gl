@@ -95,7 +95,11 @@ export function expandRgbColumns(
  * the Three analogue of deck's continuous `getColor` ramp (e.g. drifters SST,
  * earthquake magnitude). Returns 0–255 RGBA.
  */
-export function rampColorAt(value: number, domain: [number, number], range: RGBA[]): RGBA {
+export function rampColorAt(
+  value: number,
+  domain: [number, number],
+  range: RGBA[],
+): RGBA {
   return core.rampColorAt(value, domain, range) as RGBA;
 }
 
@@ -115,6 +119,9 @@ export interface RampColorSpec {
  * continuous {@link rampColorAt} ramp. If the property is absent, every feature
  * gets `fallback`.
  */
-export function expandRampColors(binary: BinaryFeatures, spec: RampColorSpec): Float32Array {
+export function expandRampColors(
+  binary: BinaryFeatures,
+  spec: RampColorSpec,
+): Float32Array {
   return core.expandRampColors(binary, spec, 'f32') as Float32Array;
 }

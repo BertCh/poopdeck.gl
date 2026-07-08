@@ -221,7 +221,9 @@ export const chevronUniforms = {
  * on a path layer. See the file docstring for how it composes with
  * FlowCorridorLayer and where the direction comes from.
  */
-export class ChevronFlowExtension extends LayerExtension<Required<ChevronFlowExtensionOptions>> {
+export class ChevronFlowExtension extends LayerExtension<
+  Required<ChevronFlowExtensionOptions>
+> {
   static extensionName = 'ChevronFlowExtension';
 
   /**
@@ -230,7 +232,10 @@ export class ChevronFlowExtension extends LayerExtension<Required<ChevronFlowExt
    * shader cache. Built once per extension instance (identity preserved across
    * every sublayer that shares it).
    */
-  private cachedShaders: { modules: unknown[]; inject: Record<string, string> } | null = null;
+  private cachedShaders: {
+    modules: unknown[];
+    inject: Record<string, string>;
+  } | null = null;
 
   constructor(options: ChevronFlowExtensionOptions = {}) {
     super({
@@ -320,7 +325,8 @@ export class ChevronFlowExtension extends LayerExtension<Required<ChevronFlowExt
         `vec3(${c.map((v) => (v / 255).toFixed(5)).join(', ')})`;
       const [cN, cE, cS, cW] = extension.opts.directionColors.map(glVec3);
       // Fraction-of-a-turn offset (wrapped to [0,1)) subtracted from the bearing.
-      const offDeg = ((extension.opts.directionOffsetDegrees % 360) + 360) % 360;
+      const offDeg =
+        ((extension.opts.directionOffsetDegrees % 360) + 360) % 360;
       const offsetTurns = (offDeg / 360).toFixed(6);
       vsDecl.push('out vec2 vChevronEN;');
       // (east, north) segment vector. Endpoints are lng/lat degrees (LNGLAT layer);
@@ -367,7 +373,10 @@ export class ChevronFlowExtension extends LayerExtension<Required<ChevronFlowExt
       // as a rider passes — recession is carried purely by ALPHA, so the hue stays
       // saturated (the smooth directional blend) and simply fades in/out. The track
       // stays faint, scaled by aggregate volume.
-      const floor = Math.min(Math.max(extension.opts.perTripFloor, 0), 1).toFixed(4);
+      const floor = Math.min(
+        Math.max(extension.opts.perTripFloor, 0),
+        1,
+      ).toFixed(4);
       tail = `${hueSetup}
           float chevronInstant = color.a;
           float chevronAggLum = dot(color.rgb, vec3(0.299, 0.587, 0.114));
@@ -411,12 +420,16 @@ ${tail}
         }
       `,
     };
-    if (vsDecl.length) inject['vs:#decl'] = `\n        ${vsDecl.join('\n        ')}\n      `;
+    if (vsDecl.length)
+      inject['vs:#decl'] = `\n        ${vsDecl.join('\n        ')}\n      `;
     if (vsMainStart.length)
-      inject['vs:#main-start'] = `\n        ${vsMainStart.join('\n        ')}\n      `;
-    if (fsDecl.length) inject['fs:#decl'] = `\n        ${fsDecl.join('\n        ')}\n      `;
+      inject['vs:#main-start'] =
+        `\n        ${vsMainStart.join('\n        ')}\n      `;
+    if (fsDecl.length)
+      inject['fs:#decl'] = `\n        ${fsDecl.join('\n        ')}\n      `;
     if (fsMainStart.length)
-      inject['fs:#main-start'] = `\n        ${fsMainStart.join('\n        ')}\n      `;
+      inject['fs:#main-start'] =
+        `\n        ${fsMainStart.join('\n        ')}\n      `;
     const shaders = { modules: [chevronUniforms], inject };
     extension.cachedShaders = shaders;
     return shaders;
@@ -427,8 +440,14 @@ ${tail}
     // Read the play-head from the host layer (FlowCorridorLayer forwards
     // `getTime` via its TimeFilterExtension plumbing). `currentTime` is a static
     // fallback for hosts without a live clock.
-    const props = this.props as { getTime?: (() => number) | null; currentTime?: number };
-    const t = typeof props.getTime === 'function' ? props.getTime() : props.currentTime ?? 0;
+    const props = this.props as {
+      getTime?: (() => number) | null;
+      currentTime?: number;
+    };
+    const t =
+      typeof props.getTime === 'function'
+        ? props.getTime()
+        : (props.currentTime ?? 0);
 
     // Arrow-band march (width-units): the pattern slides by chevronSpeed. Static
     // when speed 0 (the default for direction/per-trip-light demos).

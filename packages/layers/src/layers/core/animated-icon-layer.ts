@@ -41,12 +41,7 @@
  */
 
 import { IconLayer } from '@deck.gl/layers';
-import type {
-  Color,
-  DefaultProps,
-  Layer,
-  LayerContext,
-} from '@deck.gl/core';
+import type { Color, DefaultProps, Layer, LayerContext } from '@deck.gl/core';
 import type { Texture } from '@luma.gl/core';
 import {
   SpatioTemporalLayer,
@@ -65,9 +60,16 @@ import {
   updateTriggersDigest,
 } from '../../lib/style-digest.js';
 import { resolveAccessorAlias } from '../../lib/accessor-alias.js';
-import type { ColorAccessorValue, NumericAccessorValue } from '../../lib/accessor-alias.js';
+import type {
+  ColorAccessorValue,
+  NumericAccessorValue,
+} from '../../lib/accessor-alias.js';
 import { DEFAULT_CATEGORICAL_PALETTE } from '@poopdeck.gl/core';
-import type { Tile, Layer as TileLayer, BinaryFeatures } from '@poopdeck.gl/core';
+import type {
+  Tile,
+  Layer as TileLayer,
+  BinaryFeatures,
+} from '@poopdeck.gl/core';
 
 const DEBUG = false;
 
@@ -256,7 +258,8 @@ export interface _AnimatedIconLayerProps {
 }
 
 /** Complete props accepted by {@link AnimatedIconLayer}. */
-export type AnimatedIconLayerProps = _AnimatedIconLayerProps & SpatioTemporalLayerProps;
+export type AnimatedIconLayerProps = _AnimatedIconLayerProps &
+  SpatioTemporalLayerProps;
 
 // Default color palette for categorical data (shared shape with the point layer).
 // Shared with the maplibre adapter (single source of truth in
@@ -278,7 +281,10 @@ interface PreparedTile {
   /** Reference-stable data object for IconLayer's binary interface. */
   data: {
     length: number;
-    attributes: Record<string, { value: any; size: number; normalized?: boolean }>;
+    attributes: Record<
+      string,
+      { value: any; size: number; normalized?: boolean }
+    >;
   };
   /** Per-tile time reference; passed to TimeFilterExtension as `timeOffset`. */
   timeOffset: number;
@@ -323,9 +329,9 @@ function indicesToFloat32(indices: Uint16Array, count: number): Float32Array {
  * `_subLayerProps: { icons: { type: MyLayer, ...props } }` swaps the sublayer
  * class / overrides sublayer props (deck's CompositeLayer contract).
  */
-export class AnimatedIconLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLayer<
-  ExtraPropsT & Required<_AnimatedIconLayerProps>
-> {
+export class AnimatedIconLayer<
+  ExtraPropsT extends {} = {},
+> extends SpatioTemporalLayer<ExtraPropsT & Required<_AnimatedIconLayerProps>> {
   static layerName = 'AnimatedIconLayer';
 
   static defaultProps: DefaultProps<AnimatedIconLayerProps> = {
@@ -351,7 +357,12 @@ export class AnimatedIconLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
     getAngle: { type: 'object', value: null, optional: true, compare: true },
     getColor: { type: 'object', value: null, optional: true, compare: true },
     getSize: { type: 'object', value: null, optional: true, compare: true },
-    getPixelOffset: { type: 'object', value: null, optional: true, compare: true },
+    getPixelOffset: {
+      type: 'object',
+      value: null,
+      optional: true,
+      compare: true,
+    },
 
     colorPalette: { type: 'array', value: DEFAULT_PALETTE, compare: true },
 
@@ -367,7 +378,12 @@ export class AnimatedIconLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
     alphaCutoff: { type: 'number', value: 0.05, min: 0, max: 1 },
 
     // Atlas sampler params — null keeps IconManager's defaults (deck default).
-    textureParameters: { type: 'object', value: null, optional: true, compare: true },
+    textureParameters: {
+      type: 'object',
+      value: null,
+      optional: true,
+      compare: true,
+    },
 
     // Fade ramps, forwarded to TimeFilterExtension (window mode).
     fadeInDuration: { type: 'number', value: 300, min: 0 },
@@ -397,7 +413,9 @@ export class AnimatedIconLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
    * filtering (whole feature on/off + fade) — the per-vertex time attribute is
    * unused.
    */
-  private readonly timeFilterExtension = new TimeFilterExtension({ mode: 'window' });
+  private readonly timeFilterExtension = new TimeFilterExtension({
+    mode: 'window',
+  });
 
   /**
    * Singleton CategoryColorExtension. Stateless — the palette and
@@ -516,7 +534,8 @@ export class AnimatedIconLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
     if (this.lastTilesRef !== tiles) {
       const live = new Set<string>();
       for (const tile of tiles) {
-        for (const tileLayer of tile.layers) live.add(makeTileKey(tile, tileLayer));
+        for (const tileLayer of tile.layers)
+          live.add(makeTileKey(tile, tileLayer));
       }
       for (const key of this.preparedTileCache.keys()) {
         if (!live.has(key)) this.preparedTileCache.delete(key);
@@ -566,7 +585,9 @@ export class AnimatedIconLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
     });
     if (DEBUG) {
       // eslint-disable-next-line no-console
-      console.log(`AnimatedIconLayer: ${tiles.length} tiles → ${sublayers.length} sublayers`);
+      console.log(
+        `AnimatedIconLayer: ${tiles.length} tiles → ${sublayers.length} sublayers`,
+      );
     }
     return sublayers;
   }
@@ -589,7 +610,9 @@ export class AnimatedIconLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
     // memoized per object reference (style-digest.ts), so this stays a WeakMap
     // lookup per tile, not a re-serialization.
     return `${angleProp}|${colorProp}|${sizeProp}|${pixelOffsetProp}|${
-      colorProp ? colorListDigest(this.props.colorPalette ?? DEFAULT_PALETTE) : 0
+      colorProp
+        ? colorListDigest(this.props.colorPalette ?? DEFAULT_PALETTE)
+        : 0
     }|${updateTriggersDigest(this.props.updateTriggers)}`;
   }
 
@@ -604,7 +627,12 @@ export class AnimatedIconLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
     const tileKey = makeTileKey(tile, tileLayer);
     const cached = this.preparedTileCache.get(tileKey);
     if (cached && cached.styleKey === styleKey) {
-      emit('tilePrepare', { layer: 'AnimatedIconLayer', tileKey, cached: true, ms: 0 });
+      emit('tilePrepare', {
+        layer: 'AnimatedIconLayer',
+        tileKey,
+        cached: true,
+        ms: 0,
+      });
       return cached;
     }
     const prepared = this.buildTileData(tile, tileLayer);
@@ -626,7 +654,8 @@ export class AnimatedIconLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
     const angleProp = typeof angleValue === 'string' ? angleValue : '';
     const colorProp = typeof colorValue === 'string' ? colorValue : '';
     const sizeProp = typeof sizeValue === 'string' ? sizeValue : '';
-    const pixelOffsetProp = typeof pixelOffsetValue === 'string' ? pixelOffsetValue : '';
+    const pixelOffsetProp =
+      typeof pixelOffsetValue === 'string' ? pixelOffsetValue : '';
     const styleKey = this.computeStyleKey();
     const tileKey = makeTileKey(tile, tileLayer);
 
@@ -637,7 +666,9 @@ export class AnimatedIconLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
     // IconLayer expects size-3 positions. When the tile is 2D, pad once into a
     // fresh Float64Array; 3D tiles ride zero-copy.
     const positions: Float64Array =
-      srcDims === 3 ? binary.positions : padPositionsTo3D(binary.positions, count);
+      srcDims === 3
+        ? binary.positions
+        : padPositionsTo3D(binary.positions, count);
 
     const attributes: PreparedTile['data']['attributes'] = {
       getPosition: { value: positions, size: 3 },
@@ -719,12 +750,12 @@ export class AnimatedIconLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
     const pixelOffsetValue = this.pixelOffsetValue();
     const constAngle = typeof angleValue === 'number' ? angleValue : 0;
     const constSize = typeof sizeValue === 'number' ? sizeValue : 12;
-    const constColor = (Array.isArray(colorValue)
-      ? colorValue
-      : ([255, 255, 255, 255] as Color)) as Color;
-    const constPixelOffset = (Array.isArray(pixelOffsetValue)
-      ? pixelOffsetValue
-      : [0, 0]) as [number, number];
+    const constColor = (
+      Array.isArray(colorValue) ? colorValue : ([255, 255, 255, 255] as Color)
+    ) as Color;
+    const constPixelOffset = (
+      Array.isArray(pixelOffsetValue) ? pixelOffsetValue : [0, 0]
+    ) as [number, number];
 
     if (!this.props.iconAtlas || !this.props.iconMapping) {
       warnOnce(

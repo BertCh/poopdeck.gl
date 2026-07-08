@@ -22,10 +22,14 @@ const polyTile = (partial: Partial<BinaryFeatures>, timeOffset = 0) =>
 // A small CCW square ~10 m on a side, centred near the anchor.
 function square(d = 0.0001): number[] {
   return [
-    anchor.longitude - d, anchor.latitude - d,
-    anchor.longitude + d, anchor.latitude - d,
-    anchor.longitude + d, anchor.latitude + d,
-    anchor.longitude - d, anchor.latitude + d,
+    anchor.longitude - d,
+    anchor.latitude - d,
+    anchor.longitude + d,
+    anchor.latitude - d,
+    anchor.longitude + d,
+    anchor.latitude + d,
+    anchor.longitude - d,
+    anchor.latitude + d,
   ];
 }
 
@@ -123,7 +127,12 @@ describe('buildPolygonBuffers', () => {
 
   it('skips sub-triangle rings and non-polygon layers, returns empty', () => {
     const degenerate = polyTile({
-      positions: new Float64Array([anchor.longitude, anchor.latitude, anchor.longitude, anchor.latitude]),
+      positions: new Float64Array([
+        anchor.longitude,
+        anchor.latitude,
+        anchor.longitude,
+        anchor.latitude,
+      ]),
       startIndices: new Uint32Array([0, 2]),
     });
     const buf = buildPolygonBuffers([degenerate], proj, 0, {

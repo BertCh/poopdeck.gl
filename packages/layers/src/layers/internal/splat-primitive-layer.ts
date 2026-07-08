@@ -80,7 +80,7 @@ import { Model, Geometry } from '@luma.gl/engine';
  * triangulation of a convex hexagon → 4 triangles, 6 vertices).
  */
 const HEX_R = 2 / Math.sqrt(3); // ≈1.1547 — circumradius for incircle = 1
-const HEX_H = HEX_R / 2;        // R·cos60° = R/2 ≈ 0.5774
+const HEX_H = HEX_R / 2; // R·cos60° = R/2 ≈ 0.5774
 // flat-top hexagon corners at 0,60,…,300°, emitted in strip order 0,1,5,2,4,3.
 // prettier-ignore
 const HEX_CORNERS = [
@@ -289,8 +289,8 @@ void main(void) {
 `;
 
 /** Complete props for {@link SplatPrimitiveLayer}. */
-export type SplatPrimitiveLayerProps<DataT = unknown> = _SplatPrimitiveLayerProps<DataT> &
-  LayerProps;
+export type SplatPrimitiveLayerProps<DataT = unknown> =
+  _SplatPrimitiveLayerProps<DataT> & LayerProps;
 
 /** Props added by {@link SplatPrimitiveLayer}. */
 type _SplatPrimitiveLayerProps<DataT> = {
@@ -387,9 +387,10 @@ const defaultProps: DefaultProps<SplatPrimitiveLayerProps> = {
  * Instanced oriented-Gaussian-surfel layer. See the file docstring for the
  * geometry, the depth-tested (sort-free) blending, and the soft temporal term.
  */
-export class SplatPrimitiveLayer<DataT = any, ExtraProps extends {} = {}> extends Layer<
-  ExtraProps & Required<_SplatPrimitiveLayerProps<DataT>>
-> {
+export class SplatPrimitiveLayer<
+  DataT = any,
+  ExtraProps extends {} = {},
+> extends Layer<ExtraProps & Required<_SplatPrimitiveLayerProps<DataT>>> {
   static layerName = 'SplatPrimitiveLayer';
   static defaultProps = defaultProps;
 
@@ -398,7 +399,11 @@ export class SplatPrimitiveLayer<DataT = any, ExtraProps extends {} = {}> extend
   };
 
   getShaders() {
-    return super.getShaders({ vs, fs, modules: [project32, picking, splatUniforms] });
+    return super.getShaders({
+      vs,
+      fs,
+      modules: [project32, picking, splatUniforms],
+    });
   }
 
   getBounds(): [number[], number[]] | null {
@@ -476,7 +481,11 @@ export class SplatPrimitiveLayer<DataT = any, ExtraProps extends {} = {}> extend
   draw(): void {
     const model = this.state.model;
     if (!model) return;
-    const { getTime, currentTime = 0, timeOffset = 0 } = this.props as unknown as {
+    const {
+      getTime,
+      currentTime = 0,
+      timeOffset = 0,
+    } = this.props as unknown as {
       getTime?: (() => number) | null;
       currentTime?: number;
       timeOffset?: number;

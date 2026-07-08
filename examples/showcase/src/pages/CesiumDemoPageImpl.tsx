@@ -9,17 +9,17 @@
 // demo uses. Cesium's own animation/timeline widgets are already disabled in
 // CesiumRenderer, so nothing here is locked to Cesium chrome.
 
-import { useMemo } from "react";
-import { useParams, Navigate } from "react-router";
-import { PlaybackControls, usePlaybackHotkeys } from "@poopdeck.gl/react";
-import { getDatasetById } from "../datasets";
-import { useDemoPlayback } from "../components/demo/useDemoPlayback";
-import CesiumRenderer from "../components/CesiumRenderer";
-import { CESIUM_SUPPORTED_TYPES } from "../components/buildCesiumLayer";
+import { useMemo } from 'react';
+import { useParams, Navigate } from 'react-router';
+import { PlaybackControls, usePlaybackHotkeys } from '@poopdeck.gl/react';
+import { getDatasetById } from '../datasets';
+import { useDemoPlayback } from '../components/demo/useDemoPlayback';
+import CesiumRenderer from '../components/CesiumRenderer';
+import { CESIUM_SUPPORTED_TYPES } from '../components/buildCesiumLayer';
 
 export default function CesiumDemoPage() {
   const { datasetId } = useParams<{ datasetId: string }>();
-  const dataset = useMemo(() => getDatasetById(datasetId || ""), [datasetId]);
+  const dataset = useMemo(() => getDatasetById(datasetId || ''), [datasetId]);
   const playback = useDemoPlayback(dataset);
   // Fullscreen surface → wire the standard video-player keyboard map
   // (Space / arrows / speed). Inert while dataset?.timeRange is undefined.
@@ -30,19 +30,22 @@ export default function CesiumDemoPage() {
   }
 
   return (
-    <div style={{ position: "absolute", inset: 0, background: "#05070d" }}>
+    <div style={{ position: 'absolute', inset: 0, background: '#05070d' }}>
       {/* The globe reads the playhead from Cesium's render loop (scene.preRender)
           via the shared TimeController — not a per-frame React prop. */}
-      <CesiumRenderer dataset={dataset} timeController={playback.timeController} />
+      <CesiumRenderer
+        dataset={dataset}
+        timeController={playback.timeController}
+      />
       <div
         style={{
-          position: "absolute",
+          position: 'absolute',
           left: 0,
           right: 0,
           bottom: 0,
-          padding: "12px 20px",
-          background: "var(--surface)",
-          borderTop: "1px solid var(--hairline)",
+          padding: '12px 20px',
+          background: 'var(--surface)',
+          borderTop: '1px solid var(--hairline)',
         }}
       >
         <PlaybackControls

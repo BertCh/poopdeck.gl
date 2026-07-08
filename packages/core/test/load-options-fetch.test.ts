@@ -18,7 +18,9 @@ import { STTArchive } from '../src/archive';
 import type { TileId } from '../src/types';
 import { packedFromSingleFile, packedFetch } from './helpers/packed-fixture';
 
-const FIXTURE = fileURLToPath(new URL('./fixtures/sample.stt', import.meta.url));
+const FIXTURE = fileURLToPath(
+  new URL('./fixtures/sample.stt', import.meta.url),
+);
 const DATASET = packedFromSingleFile(new Uint8Array(readFileSync(FIXTURE)));
 
 interface LoggedRequest {
@@ -95,7 +97,9 @@ describe('loadOptions.fetch — object (RequestInit) form', () => {
     const archive = new STTArchive({
       url: DATASET.manifestUrl,
       fetch: stripWholeGetRange,
-      loadOptions: { fetch: { headers: { Range: 'bytes=0-0', 'X-Stt-Auth': 'a' } } },
+      loadOptions: {
+        fetch: { headers: { Range: 'bytes=0-0', 'X-Stt-Auth': 'a' } },
+      },
     });
 
     const tile = await archive.getTile(await firstTileId(archive));

@@ -20,9 +20,17 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { SpatiotemporalTileset, type TileBatchHooks } from '../src/spatiotemporal-tileset';
+import {
+  SpatiotemporalTileset,
+  type TileBatchHooks,
+} from '../src/spatiotemporal-tileset';
 import type { TileId, BoundingBox, Tile } from '../src/types';
-import { BOUNDS, BUCKET_MS, fakeTile, makeAvailableTiles } from './helpers/fixtures';
+import {
+  BOUNDS,
+  BUCKET_MS,
+  fakeTile,
+  makeAvailableTiles,
+} from './helpers/fixtures';
 
 const N_BUCKETS = 600;
 
@@ -30,7 +38,10 @@ const N_BUCKETS = 600;
 const availableTiles = makeAvailableTiles(N_BUCKETS);
 
 /** Partition spy calls into priority (contains t=0) and prefetch (all t>0). */
-function splitCalls(calls: unknown[][]): { priority: TileId[][]; prefetch: TileId[][] } {
+function splitCalls(calls: unknown[][]): {
+  priority: TileId[][];
+  prefetch: TileId[][];
+} {
   const priority: TileId[][] = [];
   const prefetch: TileId[][] = [];
   for (const call of calls) {
@@ -44,7 +55,8 @@ function splitCalls(calls: unknown[][]): { priority: TileId[][]; prefetch: TileI
 describe('SpatiotemporalTileset prefetch slicing', () => {
   it('dispatches prefetch in byte-budgeted nearest-first slices sized from measured throughput', async () => {
     const batchSpy = vi.fn(
-      async (batch: TileId[], _s?: AbortSignal, _h?: TileBatchHooks) => batch.map(fakeTile),
+      async (batch: TileId[], _s?: AbortSignal, _h?: TileBatchHooks) =>
+        batch.map(fakeTile),
     );
 
     // 2048 B/ms × 1000 ms target = 2 048 000 B budget; 512 000 B per tile
@@ -83,10 +95,12 @@ describe('SpatiotemporalTileset prefetch slicing', () => {
 
   it('tags prefetch slices fetchPriority=low and priority batches auto', async () => {
     const hooksSeen: { ids: TileId[]; hooks?: TileBatchHooks }[] = [];
-    const batchSpy = vi.fn(async (batch: TileId[], _s?: AbortSignal, hooks?: TileBatchHooks) => {
-      hooksSeen.push({ ids: batch, hooks });
-      return batch.map(fakeTile);
-    });
+    const batchSpy = vi.fn(
+      async (batch: TileId[], _s?: AbortSignal, hooks?: TileBatchHooks) => {
+        hooksSeen.push({ ids: batch, hooks });
+        return batch.map(fakeTile);
+      },
+    );
 
     const tileset = new SpatiotemporalTileset({
       minZoom: 0,
@@ -103,8 +117,12 @@ describe('SpatiotemporalTileset prefetch slicing', () => {
     tileset.update({ bounds: BOUNDS, zoom: 6, time: 0, timeWindow: BUCKET_MS });
     await new Promise((r) => setTimeout(r, 80));
 
-    const priorityCalls = hooksSeen.filter((c) => c.ids.some((id) => id.t === 0));
-    const prefetchCalls = hooksSeen.filter((c) => c.ids.every((id) => id.t > 0));
+    const priorityCalls = hooksSeen.filter((c) =>
+      c.ids.some((id) => id.t === 0),
+    );
+    const prefetchCalls = hooksSeen.filter((c) =>
+      c.ids.every((id) => id.t > 0),
+    );
     expect(priorityCalls.length).toBeGreaterThan(0);
     expect(prefetchCalls.length).toBeGreaterThan(0);
     for (const c of priorityCalls) expect(c.hooks?.fetchPriority).toBe('auto');
@@ -178,10 +196,12 @@ describe('SpatiotemporalTileset incremental batch delivery', () => {
     // Batch fn that delivers its FIRST tile immediately via the hook, then
     // holds the batch promise open (the slow far range group) before
     // resolving the full array — which REPLAYS tile 0.
-    const batchSpy = vi.fn((batch: TileId[], _s?: AbortSignal, hooks?: TileBatchHooks) => {
-      hooks?.onTileReady?.(0, fakeTile(batch[0]));
-      return gate.then(() => batch.map(fakeTile));
-    });
+    const batchSpy = vi.fn(
+      (batch: TileId[], _s?: AbortSignal, hooks?: TileBatchHooks) => {
+        hooks?.onTileReady?.(0, fakeTile(batch[0]));
+        return gate.then(() => batch.map(fakeTile));
+      },
+    );
 
     const tileset = new SpatiotemporalTileset({
       minZoom: 0,
@@ -195,7 +215,12 @@ describe('SpatiotemporalTileset incremental batch delivery', () => {
     });
 
     // A window spanning 3 buckets ⇒ one priority batch of 3 tiles.
-    tileset.update({ bounds: BOUNDS, zoom: 6, time: BUCKET_MS, timeWindow: 2 * BUCKET_MS });
+    tileset.update({
+      bounds: BOUNDS,
+      zoom: 6,
+      time: BUCKET_MS,
+      timeWindow: 2 * BUCKET_MS,
+    });
     await new Promise((r) => setTimeout(r, 30));
 
     // The batch is still in flight, but the hook-delivered tile is already

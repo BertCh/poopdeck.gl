@@ -76,7 +76,12 @@ export function epanechnikovWeight(dist: number, radius: number): number {
  * same-edge neighbours, by strength `f` (CUBu uses `f≈0.5`): `cur + f·(½(prev+
  * next) − cur)`. Evenly-spaced collinear points are unchanged; kinks relax.
  */
-export function laplacianStep(prev: Vec2, cur: Vec2, next: Vec2, f: number): [number, number] {
+export function laplacianStep(
+  prev: Vec2,
+  cur: Vec2,
+  next: Vec2,
+  f: number,
+): [number, number] {
   const mx = 0.5 * (prev[0] + next[0]) - cur[0];
   const my = 0.5 * (prev[1] + next[1]) - cur[1];
   return [cur[0] + f * mx, cur[1] + f * my];
@@ -88,10 +93,14 @@ export function laplacianStep(prev: Vec2, cur: Vec2, next: Vec2, f: number): [nu
  * OD pairs stay straight, N-vertex trajectories keep their curve) and mirrors
  * the per-iteration GPU resample pass.
  */
-export function subdivide(points: Vec2[], newCount: number): [number, number][] {
+export function subdivide(
+  points: Vec2[],
+  newCount: number,
+): [number, number][] {
   if (newCount < 2 || points.length < 2) return points.map((p) => [p[0], p[1]]);
   const cum: number[] = [0];
-  for (let i = 1; i < points.length; i++) cum.push(cum[i - 1] + len(sub(points[i], points[i - 1])));
+  for (let i = 1; i < points.length; i++)
+    cum.push(cum[i - 1] + len(sub(points[i], points[i - 1])));
   const total = cum[cum.length - 1];
   const out: [number, number][] = [];
   for (let k = 0; k < newCount; k++) {
@@ -428,7 +437,8 @@ export class EdgeBundler {
     this.pointCount = P;
 
     const format =
-      POSITION_FORMATS.find((f) => device.isTextureFormatRenderable(f)) ?? 'rgba32float';
+      POSITION_FORMATS.find((f) => device.isTextureFormatRenderable(f)) ??
+      'rgba32float';
     const channels = format === 'rgba32float' ? 4 : 2;
 
     // Normalize the cosLat-corrected control points into the fixed WORK box.
@@ -458,20 +468,27 @@ export class EdgeBundler {
       format: 'r32float',
       sampler,
     });
-    this.densityFb = device.createFramebuffer({ colorAttachments: [this.densityTex] });
+    this.densityFb = device.createFramebuffer({
+      colorAttachments: [this.densityTex],
+    });
 
     // Fullscreen triangle for the compute passes (gl_FragCoord drives texel id).
     this.quad = new Geometry({
       topology: 'triangle-list',
       vertexCount: 3,
-      attributes: { positions: { size: 2, value: new Float32Array([-1, -1, 3, -1, -1, 3]) } },
+      attributes: {
+        positions: { size: 2, value: new Float32Array([-1, -1, 3, -1, -1, 3]) },
+      },
     });
     // Unit quad (6 verts) for the instanced density splat.
     this.splatQuad = new Geometry({
       topology: 'triangle-list',
       vertexCount: 6,
       attributes: {
-        corner: { size: 2, value: new Float32Array([-1, -1, 1, -1, 1, 1, -1, -1, 1, 1, -1, 1]) },
+        corner: {
+          size: 2,
+          value: new Float32Array([-1, -1, 1, -1, 1, 1, -1, -1, 1, 1, -1, 1]),
+        },
       },
     });
 
@@ -666,7 +683,8 @@ export class StaticBundle implements BundlePositions {
     this.pointCount = P;
 
     const format =
-      POSITION_FORMATS.find((f) => device.isTextureFormatRenderable(f)) ?? 'rgba32float';
+      POSITION_FORMATS.find((f) => device.isTextureFormatRenderable(f)) ??
+      'rgba32float';
     const channels = format === 'rgba32float' ? 4 : 2;
 
     const box = toWorkBox(controlPoints, E, P, dims, cosLat0, channels);

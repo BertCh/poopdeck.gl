@@ -51,4 +51,5 @@ export const oneMinus = TSL.oneMinus as unknown as Builder;
 // ── Built-in node constants ──────────────────────────────────────────────────
 export const positionGeometry = TSL.positionGeometry as unknown as TSLNode;
 export const modelViewMatrix = TSL.modelViewMatrix as unknown as TSLNode;
-export const cameraProjectionMatrix = TSL.cameraProjectionMatrix as unknown as TSLNode;
+export const cameraProjectionMatrix =
+  TSL.cameraProjectionMatrix as unknown as TSLNode;

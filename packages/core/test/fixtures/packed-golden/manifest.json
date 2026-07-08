@@ -36,9 +36,7 @@
     "max_zoom": 10,
     "tile_count": 0,
     "feature_count": 0,
-    "layers": [
-      "default"
-    ],
+    "layers": ["default"],
     "properties": {},
     "temporal_bucket_ms": 1000,
     "summary_tier": null

@@ -60,17 +60,28 @@ function featureColor(b: BinaryFeatures, f: number, mode: LineColorMode): RGBA {
     return col ? rampColorAt(col[f], mode.domain, mode.range) : mode.fallback;
   }
   const cat = b.categoricalProps[mode.property];
-  const label = cat && cat.indices[f] !== 0xffff ? cat.categories[cat.indices[f]] : undefined;
+  const label =
+    cat && cat.indices[f] !== 0xffff
+      ? cat.categories[cat.indices[f]]
+      : undefined;
   return resolveCategoryColor(label, mode.mapping, mode.fallback);
 }
 
-function collectOdLayers(tiles: Tile[]): { layers: BinaryFeatures[]; segCount: number } {
+function collectOdLayers(tiles: Tile[]): {
+  layers: BinaryFeatures[];
+  segCount: number;
+} {
   const layers: BinaryFeatures[] = [];
   let segCount = 0;
   for (const tile of tiles) {
     for (const tl of tile.layers) {
       const b = tl.features;
-      if (!b.featureCount || b.geometryType !== GeometryType.LineString || !b.startIndices) continue;
+      if (
+        !b.featureCount ||
+        b.geometryType !== GeometryType.LineString ||
+        !b.startIndices
+      )
+        continue;
       layers.push(b);
       // One OD segment per feature (source→target endpoints).
       segCount += b.featureCount;
@@ -118,7 +129,11 @@ export function buildOdLineSegmentBuffers(
   // RTC origin = first feature's SOURCE vertex, projected (absolute world).
   const first = layers[0];
   const fdims = first.positionDimensions ?? 2;
-  const origin = projection.project(first.positions[0], first.positions[1], zLift);
+  const origin = projection.project(
+    first.positions[0],
+    first.positions[1],
+    zLift,
+  );
 
   const posA = new Float32Array(segCount * 3);
   const posB = new Float32Array(segCount * 3);
@@ -128,18 +143,27 @@ export function buildOdLineSegmentBuffers(
   const ends = new Float32Array(segCount);
   const timeA = new Float32Array(segCount);
   const timeB = new Float32Array(segCount);
-  let minX = Infinity, minY = Infinity, minZ = Infinity;
-  let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+  let minX = Infinity,
+    minY = Infinity,
+    minZ = Infinity;
+  let maxX = -Infinity,
+    maxY = -Infinity,
+    maxZ = -Infinity;
 
   let s = 0; // segment index (== feature index, but tiles concatenate)
   for (const b of layers) {
     const dims = b.positionDimensions ?? fdims;
-    const elev = opts.elevationProperty ? b.numericProps[opts.elevationProperty] : undefined;
+    const elev = opts.elevationProperty
+      ? b.numericProps[opts.elevationProperty]
+      : undefined;
     const rebase = b.timeOffset - timeOrigin;
     const si = b.startIndices!;
     for (let f = 0; f < b.featureCount; f++) {
       const rgba = featureColor(b, f, opts.colorMode);
-      const cr = rgba[0] / 255, cg = rgba[1] / 255, cb = rgba[2] / 255, ca = (rgba[3] ?? 255) / 255;
+      const cr = rgba[0] / 255,
+        cg = rgba[1] / 255,
+        cb = rgba[2] / 255,
+        ca = (rgba[3] ?? 255) / 255;
       const start = (b.startTimes ? b.startTimes[f] : 0) + rebase;
       const end = (b.endTimes ? b.endTimes[f] : 0) + rebase;
       const baseZ = elev ? elev[f] * elevScale : null;
@@ -147,21 +171,54 @@ export function buildOdLineSegmentBuffers(
       // First vertex = source, last vertex = target.
       const vSrc = si[f];
       const vTgt = si[f + 1] - 1;
-      const zSrc = (baseZ ?? (dims > 2 ? b.positions[vSrc * dims + 2] : 0)) + zLift;
-      const zTgt = (baseZ ?? (dims > 2 ? b.positions[vTgt * dims + 2] : 0)) + zLift;
-      const a = projection.project(b.positions[vSrc * dims], b.positions[vSrc * dims + 1], zSrc);
-      const c = projection.project(b.positions[vTgt * dims], b.positions[vTgt * dims + 1], zTgt);
-      const ax = a[0] - origin[0], ay = a[1] - origin[1], az = a[2] - origin[2];
-      const bx = c[0] - origin[0], by = c[1] - origin[1], bz = c[2] - origin[2];
-      posA[s * 3] = ax; posA[s * 3 + 1] = ay; posA[s * 3 + 2] = az;
-      posB[s * 3] = bx; posB[s * 3 + 1] = by; posB[s * 3 + 2] = bz;
-      colorA[s * 4] = cr; colorA[s * 4 + 1] = cg; colorA[s * 4 + 2] = cb; colorA[s * 4 + 3] = ca;
-      colorB[s * 4] = cr; colorB[s * 4 + 1] = cg; colorB[s * 4 + 2] = cb; colorB[s * 4 + 3] = ca;
-      starts[s] = start; ends[s] = end;
-      timeA[s] = start; timeB[s] = end;
-      for (const [x, y, zz] of [[ax, ay, az], [bx, by, bz]] as const) {
-        if (x < minX) minX = x; if (y < minY) minY = y; if (zz < minZ) minZ = zz;
-        if (x > maxX) maxX = x; if (y > maxY) maxY = y; if (zz > maxZ) maxZ = zz;
+      const zSrc =
+        (baseZ ?? (dims > 2 ? b.positions[vSrc * dims + 2] : 0)) + zLift;
+      const zTgt =
+        (baseZ ?? (dims > 2 ? b.positions[vTgt * dims + 2] : 0)) + zLift;
+      const a = projection.project(
+        b.positions[vSrc * dims],
+        b.positions[vSrc * dims + 1],
+        zSrc,
+      );
+      const c = projection.project(
+        b.positions[vTgt * dims],
+        b.positions[vTgt * dims + 1],
+        zTgt,
+      );
+      const ax = a[0] - origin[0],
+        ay = a[1] - origin[1],
+        az = a[2] - origin[2];
+      const bx = c[0] - origin[0],
+        by = c[1] - origin[1],
+        bz = c[2] - origin[2];
+      posA[s * 3] = ax;
+      posA[s * 3 + 1] = ay;
+      posA[s * 3 + 2] = az;
+      posB[s * 3] = bx;
+      posB[s * 3 + 1] = by;
+      posB[s * 3 + 2] = bz;
+      colorA[s * 4] = cr;
+      colorA[s * 4 + 1] = cg;
+      colorA[s * 4 + 2] = cb;
+      colorA[s * 4 + 3] = ca;
+      colorB[s * 4] = cr;
+      colorB[s * 4 + 1] = cg;
+      colorB[s * 4 + 2] = cb;
+      colorB[s * 4 + 3] = ca;
+      starts[s] = start;
+      ends[s] = end;
+      timeA[s] = start;
+      timeB[s] = end;
+      for (const [x, y, zz] of [
+        [ax, ay, az],
+        [bx, by, bz],
+      ] as const) {
+        if (x < minX) minX = x;
+        if (y < minY) minY = y;
+        if (zz < minZ) minZ = zz;
+        if (x > maxX) maxX = x;
+        if (y > maxY) maxY = y;
+        if (zz > maxZ) maxZ = zz;
       }
       s++;
     }
@@ -169,7 +226,14 @@ export function buildOdLineSegmentBuffers(
 
   return {
     count: segCount,
-    posA, posB, colorA, colorB, starts, ends, timeA, timeB,
+    posA,
+    posB,
+    colorA,
+    colorB,
+    starts,
+    ends,
+    timeA,
+    timeB,
     origin,
     bbox: { min: [minX, minY, minZ], max: [maxX, maxY, maxZ] },
   };

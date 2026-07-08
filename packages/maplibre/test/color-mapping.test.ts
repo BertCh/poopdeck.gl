@@ -25,14 +25,12 @@ type Expand = (
   colorMappingDefault?: RGBA8,
 ) => Uint8Array | null;
 
-const expand = (STTBaseLayer.prototype as unknown as { expandCategoricalColors: Expand })
-  .expandCategoricalColors;
+const expand = (
+  STTBaseLayer.prototype as unknown as { expandCategoricalColors: Expand }
+).expandCategoricalColors;
 
 /** Minimal BinaryFeatures carrying one categorical column. */
-function features(
-  categories: string[],
-  indices: number[],
-): BinaryFeatures {
+function features(categories: string[], indices: number[]): BinaryFeatures {
   return {
     featureCount: indices.length,
     categoricalProps: {
@@ -52,7 +50,11 @@ const rgbaAt = (buf: Uint8Array, i: number): number[] =>
 
 describe('expandCategoricalColors — positional palette (default, unchanged)', () => {
   it('colors each feature by palette[index % palette.length]', () => {
-    const buf = expand(features(['a', 'b', 'c', 'd'], [0, 1, 2, 3]), 'kind', PALETTE)!;
+    const buf = expand(
+      features(['a', 'b', 'c', 'd'], [0, 1, 2, 3]),
+      'kind',
+      PALETTE,
+    )!;
     expect(rgbaAt(buf, 0)).toEqual([10, 10, 10, 255]);
     expect(rgbaAt(buf, 1)).toEqual([20, 20, 20, 255]);
     expect(rgbaAt(buf, 2)).toEqual([30, 30, 30, 255]);
@@ -71,7 +73,12 @@ describe('expandCategoricalColors — keyed colorMapping (deck/three parity)', (
   };
 
   it('colors by category STRING, not index', () => {
-    const buf = expand(features(['car', 'bike'], [0, 1]), 'kind', PALETTE, mapping)!;
+    const buf = expand(
+      features(['car', 'bike'], [0, 1]),
+      'kind',
+      PALETTE,
+      mapping,
+    )!;
     expect(rgbaAt(buf, 0)).toEqual([255, 0, 0, 255]);
     expect(rgbaAt(buf, 1)).toEqual([0, 255, 0, 255]);
   });
@@ -79,8 +86,18 @@ describe('expandCategoricalColors — keyed colorMapping (deck/three parity)', (
   it('is STABLE across a tile-local dictionary reorder (the positional hazard)', () => {
     // 'car' sits at dictionary index 0 in tile A but index 1 in tile B. Keyed
     // mapping must paint it the same color in both.
-    const tileA = expand(features(['car', 'bike'], [0]), 'kind', PALETTE, mapping)!;
-    const tileB = expand(features(['bike', 'car'], [1]), 'kind', PALETTE, mapping)!;
+    const tileA = expand(
+      features(['car', 'bike'], [0]),
+      'kind',
+      PALETTE,
+      mapping,
+    )!;
+    const tileB = expand(
+      features(['bike', 'car'], [1]),
+      'kind',
+      PALETTE,
+      mapping,
+    )!;
     expect(rgbaAt(tileA, 0)).toEqual([255, 0, 0, 255]); // car, idx 0
     expect(rgbaAt(tileB, 0)).toEqual([255, 0, 0, 255]); // car, idx 1 → still red
     // A positional palette would give palette[0] vs palette[1] — DIFFERENT.
@@ -99,7 +116,12 @@ describe('expandCategoricalColors — keyed colorMapping (deck/three parity)', (
   });
 
   it('falls back to the positional palette when unmapped and no default given', () => {
-    const buf = expand(features(['car', 'truck'], [0, 2]), 'kind', PALETTE, mapping)!;
+    const buf = expand(
+      features(['car', 'truck'], [0, 2]),
+      'kind',
+      PALETTE,
+      mapping,
+    )!;
     expect(rgbaAt(buf, 0)).toEqual([255, 0, 0, 255]); // mapped
     expect(rgbaAt(buf, 1)).toEqual([30, 30, 30, 255]); // palette[2 % 3]
   });

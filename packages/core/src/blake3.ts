@@ -25,8 +25,8 @@
 
 /** Initialization vector (identical to SHA-256's IV, per the BLAKE3 spec). */
 const IV = Uint32Array.from([
-  0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-  0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+  0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c,
+  0x1f83d9ab, 0x5be0cd19,
 ]);
 
 /** Message word permutation applied between rounds. */
@@ -116,7 +116,11 @@ function compress(
 }
 
 /** Read up to 64 input bytes at `off` into 16 little-endian words (zero-padded). */
-function blockToWords(input: Uint8Array, off: number, len: number): Uint32Array {
+function blockToWords(
+  input: Uint8Array,
+  off: number,
+  len: number,
+): Uint32Array {
   const words = new Uint32Array(16);
   for (let i = 0; i < len; i++) {
     words[i >> 2] |= input[off + i] << ((i & 3) * 8);
@@ -157,7 +161,11 @@ function chunkOutput(
     cv = compress(cv, words, chunkIndex, BLOCK_LEN, flags).slice(0, 8);
   }
   const lastLen = len - (blockCount - 1) * BLOCK_LEN;
-  const lastWords = blockToWords(input, off + (blockCount - 1) * BLOCK_LEN, lastLen);
+  const lastWords = blockToWords(
+    input,
+    off + (blockCount - 1) * BLOCK_LEN,
+    lastLen,
+  );
   return {
     cv,
     block: lastWords,
@@ -184,11 +192,22 @@ function subtreeOutput(
   while (leftChunks * 2 * CHUNK_LEN < len) leftChunks *= 2;
   const leftLen = leftChunks * CHUNK_LEN;
   const left = subtreeOutput(input, off, leftLen, chunkIndex);
-  const right = subtreeOutput(input, off + leftLen, len - leftLen, chunkIndex + leftChunks);
+  const right = subtreeOutput(
+    input,
+    off + leftLen,
+    len - leftLen,
+    chunkIndex + leftChunks,
+  );
   const block = new Uint32Array(16);
   block.set(chainingValue(left), 0);
   block.set(chainingValue(right), 8);
-  return { cv: Uint32Array.from(IV), block, counter: 0, blockLen: BLOCK_LEN, flags: PARENT };
+  return {
+    cv: Uint32Array.from(IV),
+    block,
+    counter: 0,
+    blockLen: BLOCK_LEN,
+    flags: PARENT,
+  };
 }
 
 /**
@@ -202,7 +221,13 @@ export function blake3(input: Uint8Array, outLen = 32): Uint8Array {
     throw new Error(`blake3: outLen ${outLen} > 32 not supported`);
   }
   const root = subtreeOutput(input, 0, input.length, 0);
-  const words = compress(root.cv, root.block, 0, root.blockLen, root.flags | ROOT);
+  const words = compress(
+    root.cv,
+    root.block,
+    0,
+    root.blockLen,
+    root.flags | ROOT,
+  );
   const out = new Uint8Array(outLen);
   for (let i = 0; i < outLen; i++) {
     out[i] = (words[i >> 2] >>> ((i & 3) * 8)) & 0xff;

@@ -185,7 +185,9 @@ describe('AnimatedPointLayer per-tile sublayer architecture (v3)', () => {
 
     // TimeFilterExtension instanced attributes — keyed by ATTRIBUTE name.
     // Zero-copy: the same Float32Array reference the tile carries.
-    expect(attrs.instanceStartTime.value).toBe(tile.layers[0].features.startTimes);
+    expect(attrs.instanceStartTime.value).toBe(
+      tile.layers[0].features.startTimes,
+    );
     expect(attrs.instanceStartTime.size).toBe(1);
     expect(attrs.instanceEndTime.value).toBe(tile.layers[0].features.endTimes);
     expect(attrs.instanceEndTime.size).toBe(1);
@@ -423,8 +425,18 @@ describe('AnimatedPointLayer cumulative consolidation', () => {
     expect(fill.value).toBeInstanceOf(Uint8Array);
     expect(fill.value.length).toBe(10 * 4);
     // First feature of tile A and a feature from tile B both resolve to [1,2,3,255].
-    expect([fill.value[0], fill.value[1], fill.value[2], fill.value[3]]).toEqual([1, 2, 3, 255]);
-    expect([fill.value[36], fill.value[37], fill.value[38], fill.value[39]]).toEqual([1, 2, 3, 255]);
+    expect([
+      fill.value[0],
+      fill.value[1],
+      fill.value[2],
+      fill.value[3],
+    ]).toEqual([1, 2, 3, 255]);
+    expect([
+      fill.value[36],
+      fill.value[37],
+      fill.value[38],
+      fill.value[39],
+    ]).toEqual([1, 2, 3, 255]);
   });
 
   it('rebuilds slabs from scratch when the zoom (tile z) changes', () => {
@@ -483,7 +495,10 @@ describe('AnimatedPointLayer cumulative consolidation', () => {
   });
 
   it('bakes elevationProperty z into the consolidated slab positions', () => {
-    const layer = makeCumulativeLayer({ elevationProperty: 'z', elevationScale: 2 });
+    const layer = makeCumulativeLayer({
+      elevationProperty: 'z',
+      elevationScale: 2,
+    });
     const tile = makePointTile({
       positions: [
         [0, 0],
@@ -548,7 +563,7 @@ describe('AnimatedPathLayer per-tile sublayer architecture (v3)', () => {
       layer.categoryColorExtension = {};
       layer.preparedTileCache = new Map();
       return (layer as any).buildSublayer(
-        (layer as any).prepareTile(tile, tile.layers[0])
+        (layer as any).prepareTile(tile, tile.layers[0]),
       );
     };
   });
@@ -612,7 +627,9 @@ describe('AnimatedPathLayer per-tile sublayer architecture (v3)', () => {
     expect(attrs.getColor.value.length).toBe(32 * 4); // one RGBA per vertex
     // Feature 0 (cat 0) → palette[0]; feature 2 (cat 2, verts 8..11) → palette[2].
     expect([...attrs.getColor.value.slice(0, 4)]).toEqual([10, 20, 30, 255]);
-    expect([...attrs.getColor.value.slice(8 * 4, 8 * 4 + 4)]).toEqual([70, 80, 90, 255]);
+    expect([...attrs.getColor.value.slice(8 * 4, 8 * 4 + 4)]).toEqual([
+      70, 80, 90, 255,
+    ]);
   });
 
   it('expands a data-driven pathWidth PER-VERTEX (not a per-feature getWidth buffer)', () => {
@@ -629,7 +646,9 @@ describe('AnimatedPathLayer per-tile sublayer architecture (v3)', () => {
     expect(attrs.getWidth.value).toBeInstanceOf(Float32Array);
     // One value per vertex (12), NOT one per feature (3).
     expect(attrs.getWidth.value.length).toBe(12);
-    expect([...attrs.getWidth.value]).toEqual([2, 2, 2, 2, 5, 5, 5, 5, 9, 9, 9, 9]);
+    expect([...attrs.getWidth.value]).toEqual([
+      2, 2, 2, 2, 5, 5, 5, 5, 9, 9, 9, 9,
+    ]);
   });
 
   it('grades getColor alpha by raw altitude when elevationOpacityRange is set (iso3d top-fade)', () => {
@@ -644,7 +663,9 @@ describe('AnimatedPathLayer per-tile sublayer architecture (v3)', () => {
       categories: ['d3'],
     };
     // Raw altitudes: ground / mid / top of a [0, 6] m range.
-    tile.layers[0].features.numericProps['z_layer'] = new Float32Array([0, 3, 6]);
+    tile.layers[0].features.numericProps['z_layer'] = new Float32Array([
+      0, 3, 6,
+    ]);
     const built = buildSublayerForTile(tile, {
       pathColor: 'density_band',
       colorMapping: { d3: [40, 200, 176, 200] },
@@ -719,8 +740,9 @@ describe('AnimatedPathLayer per-tile sublayer architecture (v3)', () => {
     // The mapping is projected onto the tile's category dictionary, then expanded
     // per-vertex, so each feature's vertices carry mapping[category] (or the
     // default for absent keys). Feature f's first vertex is at byte f*4*4.
-    const vColor = (feature: number) =>
-      [...attrs.getColor.value.slice(feature * 4 * 4, feature * 4 * 4 + 4)];
+    const vColor = (feature: number) => [
+      ...attrs.getColor.value.slice(feature * 4 * 4, feature * 4 * 4 + 4),
+    ];
     expect(vColor(0)).toEqual([200, 0, 0, 255]); // cat 0 road_divider → mapped
     expect(vColor(1)).toEqual([120, 120, 120, 255]); // cat 1 lane_divider → default
     expect(vColor(2)).toEqual([0, 0, 200, 255]); // cat 2 lane_yellow → mapped
@@ -753,13 +775,17 @@ describe('AnimatedPathLayer per-tile sublayer architecture (v3)', () => {
 
     const first = (layer as any).prepareTile(tile, tile.layers[0]);
     // Per-vertex getColor reflects the mapped color (all features are lane_white).
-    expect([...first.data.attributes.getColor.value.slice(0, 4)]).toEqual([10, 20, 30, 255]);
+    expect([...first.data.attributes.getColor.value.slice(0, 4)]).toEqual([
+      10, 20, 30, 255,
+    ]);
 
     // Same-shape edit (still one key) — must NOT be served from cache.
     layer.props.colorMapping = { lane_white: [40, 50, 60, 255] };
     const second = (layer as any).prepareTile(tile, tile.layers[0]);
     expect(second).not.toBe(first);
-    expect([...second.data.attributes.getColor.value.slice(0, 4)]).toEqual([40, 50, 60, 255]);
+    expect([...second.data.attributes.getColor.value.slice(0, 4)]).toEqual([
+      40, 50, 60, 255,
+    ]);
   });
 
   it('lifts paths to a synthesized XYZ buffer from a categorical elevation mapping (3D iso-lines)', () => {
@@ -805,7 +831,9 @@ describe('AnimatedPathLayer per-tile sublayer architecture (v3)', () => {
     // (its real slab altitude, metres). No mapping — the numeric value × scale is
     // the z for all of the feature's vertices.
     const tile = bigPathTile(3, 4); // 3 features × 4 verts = 12 verts
-    tile.layers[0].features.numericProps['z_layer'] = new Float32Array([0, 2.5, 6]);
+    tile.layers[0].features.numericProps['z_layer'] = new Float32Array([
+      0, 2.5, 6,
+    ]);
     const built = buildSublayerForTile(tile, {
       elevationProperty: 'z_layer',
       elevationScale: 2,
@@ -909,7 +937,9 @@ describe('AnimatedTripsLayer per-tile sublayer architecture (v3)', () => {
   it('hands deck.gl the binary {length, startIndices, attributes} shape', () => {
     const layer = makeLayer();
     const tile = bigPathTile(50, 4);
-    const built = (layer as any).buildSublayer((layer as any).prepareTile(tile, tile.layers[0]));
+    const built = (layer as any).buildSublayer(
+      (layer as any).prepareTile(tile, tile.layers[0]),
+    );
     const data = built.props.data;
 
     // Regression guard: data must NOT be a plain Array (i.e. no per-feature
@@ -924,7 +954,9 @@ describe('AnimatedTripsLayer per-tile sublayer architecture (v3)', () => {
   it('binds positions + instanceVertexTime as zero-copy typed arrays', () => {
     const layer = makeLayer();
     const tile = bigPathTile(8, 4);
-    const built = (layer as any).buildSublayer((layer as any).prepareTile(tile, tile.layers[0]));
+    const built = (layer as any).buildSublayer(
+      (layer as any).prepareTile(tile, tile.layers[0]),
+    );
     const attrs = built.props.data.attributes;
 
     // PathLayer's geometry accessor: keyed by ACCESSOR NAME `getPath`.
@@ -948,7 +980,9 @@ describe('AnimatedTripsLayer per-tile sublayer architecture (v3)', () => {
   it('sets positionFormat from tile dims so 2D paths are not misread as XYZ', () => {
     const layer = makeLayer();
     const tile = bigPathTile(3, 4);
-    const built = (layer as any).buildSublayer((layer as any).prepareTile(tile, tile.layers[0]));
+    const built = (layer as any).buildSublayer(
+      (layer as any).prepareTile(tile, tile.layers[0]),
+    );
     // PathLayer defaults positionFormat to 'XYZ', which would slice a flat
     // 2D buffer into garbage 3-tuples. Both AnimatedPathLayer and the trips
     // layer have to opt out explicitly.
@@ -958,7 +992,9 @@ describe('AnimatedTripsLayer per-tile sublayer architecture (v3)', () => {
   it('passes the bound getTime getter so the trail uniform advances each draw', () => {
     const layer = makeLayer();
     const tile = bigPathTile(3, 4);
-    const built = (layer as any).buildSublayer((layer as any).prepareTile(tile, tile.layers[0]));
+    const built = (layer as any).buildSublayer(
+      (layer as any).prepareTile(tile, tile.layers[0]),
+    );
     // Without this, the trail uniform would freeze at the snapshot value
     // between layer rebuilds — visible as "freeze then jump" stutter.
     expect(typeof built.props.getTime).toBe('function');
@@ -971,7 +1007,9 @@ describe('AnimatedTripsLayer per-tile sublayer architecture (v3)', () => {
     const vt = new Float32Array(totalVerts);
     for (let i = 0; i < totalVerts; i++) vt[i] = i * 10;
     tile.layers[0].features.vertexTimestamps = vt;
-    const built = (layer as any).buildSublayer((layer as any).prepareTile(tile, tile.layers[0]));
+    const built = (layer as any).buildSublayer(
+      (layer as any).prepareTile(tile, tile.layers[0]),
+    );
     // The very point of carrying per-vertex times in the tile is that the
     // layer can hand them straight to deck.gl without allocating a fresh
     // Float32Array per render.
@@ -985,7 +1023,9 @@ describe('AnimatedTripsLayer per-tile sublayer architecture (v3)', () => {
     const tile = bigPathTile(1, 4);
     tile.layers[0].features.startTimes = new Float32Array([0]);
     tile.layers[0].features.endTimes = new Float32Array([300]);
-    const built = (layer as any).buildSublayer((layer as any).prepareTile(tile, tile.layers[0]));
+    const built = (layer as any).buildSublayer(
+      (layer as any).prepareTile(tile, tile.layers[0]),
+    );
     const vt = built.props.data.attributes.instanceVertexTime.value;
     expect(vt.length).toBe(4);
     expect(vt[0]).toBe(0);
@@ -1052,7 +1092,9 @@ describe('AnimatedTripsLayer per-tile sublayer architecture (v3)', () => {
     // Feature 0 (category index 0 → [10,20,30]) colors all its vertices…
     const col = attrs.getColor.value;
     const v0 = binary.startIndices[0] * 4;
-    expect([col[v0], col[v0 + 1], col[v0 + 2], col[v0 + 3]]).toEqual([10, 20, 30, 255]);
+    expect([col[v0], col[v0 + 1], col[v0 + 2], col[v0 + 3]]).toEqual([
+      10, 20, 30, 255,
+    ]);
     // …and feature 2 (category index 2 → [70,80,90]) gets the third palette entry.
     const v2 = binary.startIndices[2] * 4;
     expect([col[v2], col[v2 + 1], col[v2 + 2]]).toEqual([70, 80, 90]);
@@ -1293,7 +1335,8 @@ describe('AnimatedPointLayer with categorical color', () => {
   it('installs SplatExtension in the sublayer extension list only when splat is set', async () => {
     vi.resetModules();
     const mod = await import('../src/layers/core/animated-point-layer');
-    const { SplatExtension } = await import('../src/extensions/splat-extension');
+    const { SplatExtension } =
+      await import('../src/extensions/splat-extension');
     const LayerCtor = mod.AnimatedPointLayer as any;
 
     const hasSplat = (built: any) =>
@@ -1365,7 +1408,9 @@ describe('AIS-sized perf budget', () => {
     // AND re-rebased timestamps; in CI it took ~20ms for 200k features.
     // Budget held loose at 250ms to absorb slow CI runners.
     // eslint-disable-next-line no-console
-    console.log(`[perf] point-layer prepare+build for ${N} features: ${elapsed.toFixed(1)} ms`);
+    console.log(
+      `[perf] point-layer prepare+build for ${N} features: ${elapsed.toFixed(1)} ms`,
+    );
     expect(elapsed).toBeLessThan(250);
     expect(built.props.data.length).toBe(N);
     expect(Array.isArray(built.props.data)).toBe(false);
@@ -1472,7 +1517,11 @@ describe('AnimatedPolygonLayer per-tile sublayer architecture (v3)', () => {
 
     // Every vertex of feature f carries feature f's start/end time.
     for (let f = 0; f < binary.featureCount; f++) {
-      for (let v = binary.startIndices[f]; v < binary.startIndices[f + 1]; v++) {
+      for (
+        let v = binary.startIndices[f];
+        v < binary.startIndices[f + 1];
+        v++
+      ) {
         expect(attrs.instanceStartTime.value[v]).toBe(binary.startTimes[f]);
         expect(attrs.instanceEndTime.value[v]).toBe(binary.endTimes[f]);
       }
@@ -1541,7 +1590,9 @@ describe('AnimatedPolygonLayer per-tile sublayer architecture (v3)', () => {
     const totalVerts = binary.startIndices[binary.featureCount];
     expect(attrs.instanceCategoryIndex.value.length).toBe(totalVerts);
     expect(attrs.instanceCategoryIndex.value[binary.startIndices[2]]).toBe(2);
-    expect(attrs.instanceCategoryIndex.value[binary.startIndices[3] + 1]).toBe(1);
+    expect(attrs.instanceCategoryIndex.value[binary.startIndices[3] + 1]).toBe(
+      1,
+    );
     expect(built.props.useCategoryColor).toBe(true);
   });
 
@@ -1605,7 +1656,13 @@ describe('FlowCorridorLayer keeps static corridors visible (window-mode time bou
 
   function matrixPathTile(numBuckets: number, endRel: number): any {
     const tile = makePathTile({
-      paths: [[[0, 0], [1, 1], [2, 2]]],
+      paths: [
+        [
+          [0, 0],
+          [1, 1],
+          [2, 2],
+        ],
+      ],
       startTimes: [0],
       endTimes: [endRel],
       timeOffset: 1_420_070_400_000,
@@ -1686,7 +1743,12 @@ describe('FlowCorridorLayer keeps static corridors visible (window-mode time bou
     layer.lastLayerPropsKey = '';
     (layer as any).getEffectiveTimeWindow = () => 1000;
     const tile = makePathTile({
-      paths: [[[0, 0], [1, 1]]],
+      paths: [
+        [
+          [0, 0],
+          [1, 1],
+        ],
+      ],
       startTimes: [0],
       endTimes: [100],
       timeOffset: 0,

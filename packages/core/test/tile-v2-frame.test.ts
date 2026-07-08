@@ -58,7 +58,9 @@ const TILE_KEY = '3/1/2/5000';
 function coreIpc(n: number, baseTime = 1_700_000_000_000): Uint8Array {
   const coordValues = makeData({
     type: new Float64(),
-    data: Float64Array.from({ length: n * 2 }, (_, i) => (i % 2 === 0 ? -122.4 + i : 37.7)),
+    data: Float64Array.from({ length: n * 2 }, (_, i) =>
+      i % 2 === 0 ? -122.4 + i : 37.7,
+    ),
   });
   const geomData = makeData({
     type: new FixedSizeList(2, new Field('xy', new Float64(), false)),
@@ -91,17 +93,24 @@ function coreIpc(n: number, baseTime = 1_700_000_000_000): Uint8Array {
       makeData({
         type: new Int64(),
         length: n,
-        data: BigInt64Array.from({ length: n }, (_, i) => BigInt(baseTime + i * 1000)),
+        data: BigInt64Array.from({ length: n }, (_, i) =>
+          BigInt(baseTime + i * 1000),
+        ),
       }),
       makeData({
         type: new Int64(),
         length: n,
-        data: BigInt64Array.from({ length: n }, (_, i) => BigInt(baseTime + i * 1000 + 500)),
+        data: BigInt64Array.from({ length: n }, (_, i) =>
+          BigInt(baseTime + i * 1000 + 500),
+        ),
       }),
       geomData,
     ],
   });
-  return tableToIPC(new Table([new RecordBatch(schema, struct as never)]), 'stream');
+  return tableToIPC(
+    new Table([new RecordBatch(schema, struct as never)]),
+    'stream',
+  );
 }
 
 /**
@@ -155,7 +164,9 @@ function inlineFrame(
     {
       name: 'default',
       refCore: { kind: REF_KIND_INLINE },
-      refProps: overrides.refProps ?? (withProps ? { kind: REF_KIND_INLINE } : { kind: REF_KIND_NO_PROPS }),
+      refProps:
+        overrides.refProps ??
+        (withProps ? { kind: REF_KIND_INLINE } : { kind: REF_KIND_NO_PROPS }),
       sections,
     },
   ]);
@@ -188,9 +199,9 @@ describe('layer frame v2: decode', () => {
     expect(f.timesSorted).toBe(true);
     // The GeoArrow hand-off table is the MERGED core+props shape.
     expect(tile.layers[0].arrowTable!.numRows).toBe(3);
-    expect(tile.layers[0].arrowTable!.schema.fields.map((x) => x.name)).toEqual([
-      'id', 'start_time', 'end_time', 'geometry', 'speed', 'kind',
-    ]);
+    expect(tile.layers[0].arrowTable!.schema.fields.map((x) => x.name)).toEqual(
+      ['id', 'start_time', 'end_time', 'geometry', 'speed', 'kind'],
+    );
     expect(tile.layers[0].arrowIpcProps).toBeInstanceOf(Uint8Array);
     // TILE_META re-injection (merge_v2_layer parity): the hand-off schema
     // carries the v1 stt:* keys — schema-level t0 and per-field stt:qa in
@@ -218,10 +229,23 @@ describe('layer frame v2: decode', () => {
     const frame = buildV2Frame([
       {
         name: 'default',
-        refCore: { kind: REF_KIND_TEMPLATE_HASH, hash: templateHashBytes(core.template) },
-        refProps: { kind: REF_KIND_TEMPLATE_HASH, hash: templateHashBytes(props.template) },
+        refCore: {
+          kind: REF_KIND_TEMPLATE_HASH,
+          hash: templateHashBytes(core.template),
+        },
+        refProps: {
+          kind: REF_KIND_TEMPLATE_HASH,
+          hash: templateHashBytes(props.template),
+        },
         sections: [
-          [SECTION_TILE_META, tileMetaBytes({ qa: { speed: [0, 0.25] }, sorted: true, t0: 1_700_000_000_000 })],
+          [
+            SECTION_TILE_META,
+            tileMetaBytes({
+              qa: { speed: [0, 0.25] },
+              sorted: true,
+              t0: 1_700_000_000_000,
+            }),
+          ],
           [SECTION_CORE_BATCH, core.tail],
           [SECTION_PROPS_BATCH, props.tail],
         ],
@@ -232,12 +256,19 @@ describe('layer frame v2: decode', () => {
     const a = viaHash.layers[0].features;
     const b = viaInline.layers[0].features;
     expect(Array.from(a.positions)).toEqual(Array.from(b.positions));
-    expect(Array.from(a.numericProps.speed)).toEqual(Array.from(b.numericProps.speed));
-    expect(a.categoricalProps.kind.categories).toEqual(b.categoricalProps.kind.categories);
+    expect(Array.from(a.numericProps.speed)).toEqual(
+      Array.from(b.numericProps.speed),
+    );
+    expect(a.categoricalProps.kind.categories).toEqual(
+      b.categoricalProps.kind.categories,
+    );
   });
 
   it('decodes the empty-bucket tile: 0 rows with the dictionary column intact', () => {
-    const tile = decodeTile(inlineFrame(0, { tileMeta: tileMetaBytes({ sorted: true }) }), tileId);
+    const tile = decodeTile(
+      inlineFrame(0, { tileMeta: tileMetaBytes({ sorted: true }) }),
+      tileId,
+    );
     const f = tile.layers[0].features;
     expect(f.featureCount).toBe(0);
     expect(f.positions.length).toBe(0);
@@ -272,14 +303,19 @@ describe('layer frame v2: splice guards (§5.2.1 — never a silent empty tile)'
     const core = splitIpcTemplate(coreIpc(3));
     const frame = inlineFrame(3, { coreTail: zeroPrefixed(core.tail) });
     expect(() => decodeTile(frame, tileId)).toThrow(
-      new RegExp(`tile ${TILE_KEY} layer 'default' core.*0xFFFFFFFF continuation`),
+      new RegExp(
+        `tile ${TILE_KEY} layer 'default' core.*0xFFFFFFFF continuation`,
+      ),
     );
   });
 
   it('rejects a corrupt (zeroed) schema template, naming the tile', () => {
     const core = splitIpcTemplate(coreIpc(3));
     expect(() =>
-      decodeTile(inlineFrame(3, { coreTemplate: zeroPrefixed(core.template) }), tileId),
+      decodeTile(
+        inlineFrame(3, { coreTemplate: zeroPrefixed(core.template) }),
+        tileId,
+      ),
     ).toThrow(new RegExp(`tile ${TILE_KEY} layer 'default' core.*template`));
   });
 
@@ -303,7 +339,10 @@ describe('layer frame v2: registry failure modes (never silently empty)', () => 
       frame: buildV2Frame([
         {
           name: 'default',
-          refCore: { kind: REF_KIND_TEMPLATE_HASH, hash: templateHashBytes(core.template) },
+          refCore: {
+            kind: REF_KIND_TEMPLATE_HASH,
+            hash: templateHashBytes(core.template),
+          },
           refProps: { kind: REF_KIND_NO_PROPS },
           sections: [[SECTION_CORE_BATCH, core.tail]],
         },
@@ -313,15 +352,21 @@ describe('layer frame v2: registry failure modes (never silently empty)', () => 
 
   it('errors descriptively when NO registry is available', () => {
     const { frame } = hashFrame();
-    expect(() => decodeTile(frame, tileId)).toThrow(/no template registry is available/);
+    expect(() => decodeTile(frame, tileId)).toThrow(
+      /no template registry is available/,
+    );
     expect(() => decodeTile(frame, tileId)).toThrow(new RegExp(TILE_KEY));
   });
 
   it('errors descriptively when the referenced hash is absent from the registry', () => {
     const { frame, coreTemplate } = hashFrame();
-    const templates: TemplateRegistry = new Map([['00'.repeat(16), coreTemplate]]);
+    const templates: TemplateRegistry = new Map([
+      ['00'.repeat(16), coreTemplate],
+    ]);
     expect(() => decodeTile(frame, tileId, undefined, { templates })).toThrow(
-      new RegExp(`${templateHashHex(coreTemplate)}.*not in the dataset's registry`),
+      new RegExp(
+        `${templateHashHex(coreTemplate)}.*not in the dataset's registry`,
+      ),
     );
   });
 });
@@ -330,16 +375,29 @@ describe('layer frame v2: malformed frames', () => {
   it('rejects a non-zero reserved flags byte', () => {
     const core = splitIpcTemplate(coreIpc(1));
     const frame = buildV2Frame(
-      [{ name: 'x', refCore: { kind: REF_KIND_INLINE }, refProps: { kind: REF_KIND_NO_PROPS },
-         sections: [[SECTION_INLINE_SCHEMA_CORE, core.template], [SECTION_CORE_BATCH, core.tail]] }],
+      [
+        {
+          name: 'x',
+          refCore: { kind: REF_KIND_INLINE },
+          refProps: { kind: REF_KIND_NO_PROPS },
+          sections: [
+            [SECTION_INLINE_SCHEMA_CORE, core.template],
+            [SECTION_CORE_BATCH, core.tail],
+          ],
+        },
+      ],
       { flags: 1 },
     );
-    expect(() => decodeTile(frame, tileId)).toThrow(/reserved v2 layer-frame flags/);
+    expect(() => decodeTile(frame, tileId)).toThrow(
+      /reserved v2 layer-frame flags/,
+    );
   });
 
   it('rejects an unknown frame_version', () => {
     const frame = buildV2Frame([], { frameVersion: 3 });
-    expect(() => decodeTile(frame, tileId)).toThrow(/unsupported layer-frame version 3/);
+    expect(() => decodeTile(frame, tileId)).toThrow(
+      /unsupported layer-frame version 3/,
+    );
   });
 
   it('rejects an unknown schema ref_kind', () => {
@@ -347,26 +405,36 @@ describe('layer frame v2: malformed frames', () => {
     // Byte layout: escape(2) version(1) flags(1) count(2) nameLen(2) name(7)
     // → ref_kind_core at offset 15 for name 'default'.
     frame[15] = 7;
-    expect(() => decodeTile(frame, tileId)).toThrow(/unknown schema ref_kind 7/);
+    expect(() => decodeTile(frame, tileId)).toThrow(
+      /unknown schema ref_kind 7/,
+    );
   });
 
   it('rejects ref_kind_core = 2 (every layer has a CORE batch)', () => {
     const frame = Uint8Array.from(inlineFrame(1));
     frame[15] = REF_KIND_NO_PROPS;
-    expect(() => decodeTile(frame, tileId)).toThrow(/ref_kind_core 2 is invalid/);
+    expect(() => decodeTile(frame, tileId)).toThrow(
+      /ref_kind_core 2 is invalid/,
+    );
   });
 
   it('rejects a duplicate section tag', () => {
     const core = splitIpcTemplate(coreIpc(1));
     const frame = buildV2Frame([
-      { name: 'default', refCore: { kind: REF_KIND_INLINE }, refProps: { kind: REF_KIND_NO_PROPS },
+      {
+        name: 'default',
+        refCore: { kind: REF_KIND_INLINE },
+        refProps: { kind: REF_KIND_NO_PROPS },
         sections: [
           [SECTION_INLINE_SCHEMA_CORE, core.template],
           [SECTION_CORE_BATCH, core.tail],
           [SECTION_CORE_BATCH, core.tail],
-        ] },
+        ],
+      },
     ]);
-    expect(() => decodeTile(frame, tileId)).toThrow(/duplicate section tag 0x3/);
+    expect(() => decodeTile(frame, tileId)).toThrow(
+      /duplicate section tag 0x3/,
+    );
   });
 
   it('rejects a PROPS_BATCH section under ref_kind_props = 2', () => {
@@ -376,63 +444,104 @@ describe('layer frame v2: malformed frames', () => {
       refProps: { kind: REF_KIND_NO_PROPS },
       extraSections: [[SECTION_PROPS_BATCH, props.tail]],
     });
-    expect(() => decodeTile(frame, tileId)).toThrow(/PROPS_BATCH section present but ref_kind_props/);
+    expect(() => decodeTile(frame, tileId)).toThrow(
+      /PROPS_BATCH section present but ref_kind_props/,
+    );
   });
 
   it('rejects a frame with no CORE_BATCH section', () => {
     const core = splitIpcTemplate(coreIpc(1));
     const frame = buildV2Frame([
-      { name: 'default', refCore: { kind: REF_KIND_INLINE }, refProps: { kind: REF_KIND_NO_PROPS },
-        sections: [[SECTION_INLINE_SCHEMA_CORE, core.template]] },
+      {
+        name: 'default',
+        refCore: { kind: REF_KIND_INLINE },
+        refProps: { kind: REF_KIND_NO_PROPS },
+        sections: [[SECTION_INLINE_SCHEMA_CORE, core.template]],
+      },
     ]);
-    expect(() => decodeTile(frame, tileId)).toThrow(/CORE_BATCH section missing/);
+    expect(() => decodeTile(frame, tileId)).toThrow(
+      /CORE_BATCH section missing/,
+    );
   });
 
   it('rejects malformed TILE_META JSON, naming the layer', () => {
-    const frame = inlineFrame(1, { tileMeta: new TextEncoder().encode('{nope') });
-    expect(() => decodeTile(frame, tileId)).toThrow(/layer 'default': TILE_META JSON decode failed/);
+    const frame = inlineFrame(1, {
+      tileMeta: new TextEncoder().encode('{nope'),
+    });
+    expect(() => decodeTile(frame, tileId)).toThrow(
+      /layer 'default': TILE_META JSON decode failed/,
+    );
   });
 
   it('rejects a truncated frame instead of over-reading', () => {
     const frame = inlineFrame(2);
-    expect(() => decodeTile(frame.subarray(0, 40), tileId)).toThrow(/truncated/);
+    expect(() => decodeTile(frame.subarray(0, 40), tileId)).toThrow(
+      /truncated/,
+    );
   });
 
   describe('TILE_META shape validation (spec §5.2.2 — parseable-but-malformed must throw, never NaN)', () => {
     /** Decode a frame whose TILE_META is the given (valid JSON) value. */
     const decodeWithMeta = (metaJson: string) => () =>
-      decodeTile(inlineFrame(1, { tileMeta: new TextEncoder().encode(metaJson) }), tileId);
+      decodeTile(
+        inlineFrame(1, { tileMeta: new TextEncoder().encode(metaJson) }),
+        tileId,
+      );
     const named = (keyPattern: string) =>
-      new RegExp(`tile ${TILE_KEY} layer 'default': malformed TILE_META — ${keyPattern}`);
+      new RegExp(
+        `tile ${TILE_KEY} layer 'default': malformed TILE_META — ${keyPattern}`,
+      );
 
     it('rejects a non-object section (valid JSON, wrong shape)', () => {
-      expect(decodeWithMeta('[1,2]')).toThrow(named('the section must be a JSON object'));
-      expect(decodeWithMeta('null')).toThrow(named('the section must be a JSON object'));
-      expect(decodeWithMeta('42')).toThrow(named('the section must be a JSON object'));
+      expect(decodeWithMeta('[1,2]')).toThrow(
+        named('the section must be a JSON object'),
+      );
+      expect(decodeWithMeta('null')).toThrow(
+        named('the section must be a JSON object'),
+      );
+      expect(decodeWithMeta('42')).toThrow(
+        named('the section must be a JSON object'),
+      );
     });
 
     it("rejects a non-finite / non-numeric 't0'", () => {
-      expect(decodeWithMeta('{"t0":"soon"}')).toThrow(named("'t0' must be a finite number"));
+      expect(decodeWithMeta('{"t0":"soon"}')).toThrow(
+        named("'t0' must be a finite number"),
+      );
       // 1e999 is valid JSON that parses to Infinity — finite-or-absent.
-      expect(decodeWithMeta('{"t0":1e999}')).toThrow(named("'t0' must be a finite number"));
+      expect(decodeWithMeta('{"t0":1e999}')).toThrow(
+        named("'t0' must be a finite number"),
+      );
     });
 
     it("rejects a malformed 'vt' (wrong arity, wrong element types, non-array)", () => {
-      expect(decodeWithMeta('{"vt":[0]}')).toThrow(named("'vt' must be a \\[origin_ms, step_ms\\] pair"));
-      expect(decodeWithMeta('{"vt":[0,"1"]}')).toThrow(named("'vt' must be a \\[origin_ms, step_ms\\] pair"));
-      expect(decodeWithMeta('{"vt":{"origin":0,"step":1}}')).toThrow(named("'vt' must be a \\[origin_ms, step_ms\\] pair"));
+      expect(decodeWithMeta('{"vt":[0]}')).toThrow(
+        named("'vt' must be a \\[origin_ms, step_ms\\] pair"),
+      );
+      expect(decodeWithMeta('{"vt":[0,"1"]}')).toThrow(
+        named("'vt' must be a \\[origin_ms, step_ms\\] pair"),
+      );
+      expect(decodeWithMeta('{"vt":{"origin":0,"step":1}}')).toThrow(
+        named("'vt' must be a \\[origin_ms, step_ms\\] pair"),
+      );
     });
 
     it("rejects a non-finite / non-numeric 'vb'", () => {
-      expect(decodeWithMeta('{"vb":"16"}')).toThrow(named("'vb' must be a finite number"));
+      expect(decodeWithMeta('{"vb":"16"}')).toThrow(
+        named("'vb' must be a finite number"),
+      );
     });
 
     it("rejects a non-boolean 'sorted'", () => {
-      expect(decodeWithMeta('{"sorted":"true"}')).toThrow(named("'sorted' must be a boolean"));
+      expect(decodeWithMeta('{"sorted":"true"}')).toThrow(
+        named("'sorted' must be a boolean"),
+      );
     });
 
     it("rejects a malformed 'qa' (non-object, or affines that are not [finite, finite] pairs)", () => {
-      expect(decodeWithMeta('{"qa":[["speed",0,1]]}')).toThrow(named("'qa' must be an object"));
+      expect(decodeWithMeta('{"qa":[["speed",0,1]]}')).toThrow(
+        named("'qa' must be an object"),
+      );
       expect(decodeWithMeta('{"qa":{"speed":{"o":0,"s":1}}}')).toThrow(
         named(`'qa' affine for column "speed" must be an \\[o, s\\] pair`),
       );
@@ -447,7 +556,9 @@ describe('layer frame v2: malformed frames', () => {
     it('still ignores unknown keys (the additive contract is untouched)', () => {
       const tile = decodeTile(
         inlineFrame(1, {
-          tileMeta: new TextEncoder().encode('{"future_key":{"deep":[1,2]},"t0":1700000000000}'),
+          tileMeta: new TextEncoder().encode(
+            '{"future_key":{"deep":[1,2]},"t0":1700000000000}',
+          ),
         }),
         tileId,
       );
@@ -459,35 +570,46 @@ describe('layer frame v2: malformed frames', () => {
     const core = splitIpcTemplate(coreIpc(3));
     const props = splitIpcTemplate(propsIpc(2));
     const frame = buildV2Frame([
-      { name: 'default', refCore: { kind: REF_KIND_INLINE }, refProps: { kind: REF_KIND_INLINE },
+      {
+        name: 'default',
+        refCore: { kind: REF_KIND_INLINE },
+        refProps: { kind: REF_KIND_INLINE },
         sections: [
           [SECTION_INLINE_SCHEMA_CORE, core.template],
           [SECTION_CORE_BATCH, core.tail],
           [SECTION_INLINE_SCHEMA_PROPS, props.template],
           [SECTION_PROPS_BATCH, props.tail],
-        ] },
+        ],
+      },
     ]);
-    expect(() => decodeTile(frame, tileId)).toThrow(/row counts disagree: 3 vs 2/);
+    expect(() => decodeTile(frame, tileId)).toThrow(
+      /row counts disagree: 3 vs 2/,
+    );
   });
 });
 
 describe('layer frame v2: authority rule (§5.2)', () => {
   it('hard-errors on a v2 frame reached through a v1-declared manifest', () => {
-    expect(() => decodeTile(inlineFrame(1), tileId, undefined, { formatVersion: 1 })).toThrow(
-      /v2 layer frame reached through a formatVersion-1 manifest/,
-    );
+    expect(() =>
+      decodeTile(inlineFrame(1), tileId, undefined, { formatVersion: 1 }),
+    ).toThrow(/v2 layer frame reached through a formatVersion-1 manifest/);
   });
 
   it('hard-errors on a v1 frame reached through a v2-declared manifest', () => {
     const v1Frame = frameFromIpc('default', coreIpc(1));
-    expect(() => decodeTile(v1Frame, tileId, undefined, { formatVersion: 2 })).toThrow(
-      /v1 layer frame reached through a formatVersion-2 manifest/,
-    );
+    expect(() =>
+      decodeTile(v1Frame, tileId, undefined, { formatVersion: 2 }),
+    ).toThrow(/v1 layer frame reached through a formatVersion-2 manifest/);
   });
 
   it('decodes normally when the declared version matches the frame', () => {
-    expect(decodeTile(inlineFrame(1), tileId, undefined, { formatVersion: 2 }).layers).toHaveLength(1);
+    expect(
+      decodeTile(inlineFrame(1), tileId, undefined, { formatVersion: 2 })
+        .layers,
+    ).toHaveLength(1);
     const v1Frame = frameFromIpc('default', coreIpc(1));
-    expect(decodeTile(v1Frame, tileId, undefined, { formatVersion: 1 }).layers).toHaveLength(1);
+    expect(
+      decodeTile(v1Frame, tileId, undefined, { formatVersion: 1 }).layers,
+    ).toHaveLength(1);
   });
 });

@@ -4,12 +4,22 @@
   "title": "STT packed-format manifest",
   "description": "Canonical schema for the per-dataset `manifest.json` of the STT packed format (formatVersion 1 and 2). This is the cross-language wire contract: the Rust writer (`crate::pack::Manifest`) and every reader (TS `@poopdeck.gl/core` `PackedManifest`, Rust `PackedReader`) MUST agree with this document. Unknown properties are permitted at every envelope level (additive evolution within a formatVersion): readers MUST ignore fields they do not recognize. See docs/spec/stt-packed-format.md.",
   "type": "object",
-  "required": ["format", "formatVersion", "compression", "directory", "packs", "metadata"],
+  "required": [
+    "format",
+    "formatVersion",
+    "compression",
+    "directory",
+    "packs",
+    "metadata"
+  ],
   "x-stt-capability-registry": ["attr-quant", "coord-quant", "elevation-fold"],
   "allOf": [
     {
       "$comment": "formatVersion-1 manifests MUST NOT carry the `schemas` table (v2-only; the Rust reader rejects it).",
-      "if": { "required": ["formatVersion"], "properties": { "formatVersion": { "const": 1 } } },
+      "if": {
+        "required": ["formatVersion"],
+        "properties": { "formatVersion": { "const": 1 } }
+      },
       "then": { "not": { "required": ["schemas"] } }
     }
   ],
@@ -144,13 +154,34 @@
                     "description": "Property (tile column) name.",
                     "type": "string"
                   },
-                  "min": { "description": "Minimum observed value (numeric only).", "type": "number" },
-                  "p50": { "description": "50th percentile (numeric only).", "type": "number" },
-                  "p90": { "description": "90th percentile (numeric only).", "type": "number" },
-                  "p95": { "description": "95th percentile (numeric only).", "type": "number" },
-                  "p97": { "description": "97th percentile (numeric only).", "type": "number" },
-                  "p99": { "description": "99th percentile (numeric only).", "type": "number" },
-                  "max": { "description": "Maximum observed value (numeric only).", "type": "number" },
+                  "min": {
+                    "description": "Minimum observed value (numeric only).",
+                    "type": "number"
+                  },
+                  "p50": {
+                    "description": "50th percentile (numeric only).",
+                    "type": "number"
+                  },
+                  "p90": {
+                    "description": "90th percentile (numeric only).",
+                    "type": "number"
+                  },
+                  "p95": {
+                    "description": "95th percentile (numeric only).",
+                    "type": "number"
+                  },
+                  "p97": {
+                    "description": "97th percentile (numeric only).",
+                    "type": "number"
+                  },
+                  "p99": {
+                    "description": "99th percentile (numeric only).",
+                    "type": "number"
+                  },
+                  "max": {
+                    "description": "Maximum observed value (numeric only).",
+                    "type": "number"
+                  },
                   "suggested_domain": {
                     "description": "Suggested render domain `[min, p97]`, each endpoint rounded OUTWARD to 2 significant figures. p97 (not max) encodes the project's manual 'domain clamps at ~p97' tuning convention — a single outlier must not dim the whole ramp (numeric only).",
                     "type": "array",

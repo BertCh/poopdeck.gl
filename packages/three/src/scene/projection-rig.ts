@@ -16,7 +16,11 @@
  *     near/far), `OrbitControls` about the earth centre.
  */
 
-import { LocalEnuProjection, type GeoAnchor, type Projection } from '../projection/local-enu.js';
+import {
+  LocalEnuProjection,
+  type GeoAnchor,
+  type Projection,
+} from '../projection/local-enu.js';
 import { GlobeProjection } from '../projection/globe.js';
 
 /** The camera-rig a projection selects (see the module doc for what each entails). */
@@ -27,7 +31,9 @@ export type RigMode = 'flat' | 'globe';
  * the `instanceof` check `SttGlobeBasemap` and the atmosphere/3D-tiles frame use, so
  * every globe-vs-flat decision in the package agrees.
  */
-export function isGlobeProjection(projection: Projection): projection is GlobeProjection {
+export function isGlobeProjection(
+  projection: Projection,
+): projection is GlobeProjection {
   return projection instanceof GlobeProjection;
 }
 

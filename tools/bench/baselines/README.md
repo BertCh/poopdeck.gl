@@ -6,10 +6,10 @@ and fails if any metric drifts outside the tolerance (default ±15%).
 
 ## Committed baselines
 
-| File | Source archive | Captured |
-|------|----------------|----------|
-| [`earthquakes-v2.json`](./earthquakes-v2.json) | `examples/showcase/public/data/earthquakes-v2.stt` (~83 MB, USGS M4.5+ 2020-24) | 2026-05-24 |
-| [`ais-all-us.json`](./ais-all-us.json) | `examples/showcase/public/data/ais-all-us.stt` (~1.16 GB, 38.5M AIS pings 2023-01) | 2026-05-24 |
+| File                                           | Source archive                                                                     | Captured   |
+| ---------------------------------------------- | ---------------------------------------------------------------------------------- | ---------- |
+| [`earthquakes-v2.json`](./earthquakes-v2.json) | `examples/showcase/public/data/earthquakes-v2.stt` (~83 MB, USGS M4.5+ 2020-24)    | 2026-05-24 |
+| [`ais-all-us.json`](./ais-all-us.json)         | `examples/showcase/public/data/ais-all-us.stt` (~1.16 GB, 38.5M AIS pings 2023-01) | 2026-05-24 |
 
 These two were chosen to anchor the perf-regression CI gate at two scales:
 small (300k tiles, 200ms open) and large (560k tiles, 1.27 GB compressed,

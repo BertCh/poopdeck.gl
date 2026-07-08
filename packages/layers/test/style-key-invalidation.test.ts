@@ -85,7 +85,8 @@ describe('AnimatedPointLayer styleKey content invalidation', () => {
 
   beforeEach(async () => {
     vi.resetModules();
-    LayerCtor = (await import('../src/layers/core/animated-point-layer')).AnimatedPointLayer as any;
+    LayerCtor = (await import('../src/layers/core/animated-point-layer'))
+      .AnimatedPointLayer as any;
   });
 
   function makeLayer(opts: Record<string, any> = {}) {
@@ -173,18 +174,24 @@ describe('AnimatedPointLayer styleKey content invalidation', () => {
     });
     const tile = catTile();
     const first = (layer as any).prepareTile(tile, tile.layers[0]);
-    expect([...first.data.attributes.getFillColor.value.slice(0, 4)]).toEqual([1, 1, 1, 255]);
+    expect([...first.data.attributes.getFillColor.value.slice(0, 4)]).toEqual([
+      1, 1, 1, 255,
+    ]);
 
     // Same key-count (2) — the key-count/boolean-keyed bug served stale RGBA.
     layer.props.colorMapping = { a: [7, 7, 7, 255], b: [2, 2, 2, 255] };
     const second = (layer as any).prepareTile(tile, tile.layers[0]);
     expect(second.styleKey).not.toBe(first.styleKey);
-    expect([...second.data.attributes.getFillColor.value.slice(0, 4)]).toEqual([7, 7, 7, 255]);
+    expect([...second.data.attributes.getFillColor.value.slice(0, 4)]).toEqual([
+      7, 7, 7, 255,
+    ]);
   });
 
   it('invalidates when radiusTransform is swapped for a different function', () => {
     const tile = catTile();
-    tile.layers[0].features.numericProps['mag'] = new Float32Array([1, 2, 3, 4]) as any;
+    tile.layers[0].features.numericProps['mag'] = new Float32Array([
+      1, 2, 3, 4,
+    ]) as any;
     const layer = makeLayer({
       radius: 'mag',
       radiusTransform: (v: number) => v * 2,
@@ -196,12 +203,16 @@ describe('AnimatedPointLayer styleKey content invalidation', () => {
     layer.props.radiusTransform = (v: number) => v * 10;
     const second = (layer as any).prepareTile(tile, tile.layers[0]);
     expect(second.styleKey).not.toBe(first.styleKey);
-    expect([...second.data.attributes.getRadius.value]).toEqual([10, 20, 30, 40]);
+    expect([...second.data.attributes.getRadius.value]).toEqual([
+      10, 20, 30, 40,
+    ]);
   });
 
   it('keeps the cache hit when the radiusTransform reference is unchanged', () => {
     const tile = catTile();
-    tile.layers[0].features.numericProps['mag'] = new Float32Array([1, 2, 3, 4]) as any;
+    tile.layers[0].features.numericProps['mag'] = new Float32Array([
+      1, 2, 3, 4,
+    ]) as any;
     const transform = (v: number) => v * 2;
     const layer = makeLayer({ radius: 'mag', radiusTransform: transform });
     const first = (layer as any).prepareTile(tile, tile.layers[0]);
@@ -219,7 +230,8 @@ describe('AnimatedPathLayer styleKey content invalidation', () => {
 
   beforeEach(async () => {
     vi.resetModules();
-    LayerCtor = (await import('../src/layers/core/animated-path-layer')).AnimatedPathLayer as any;
+    LayerCtor = (await import('../src/layers/core/animated-path-layer'))
+      .AnimatedPathLayer as any;
   });
 
   function makeLayer(opts: Record<string, any> = {}) {
@@ -285,7 +297,9 @@ describe('AnimatedPathLayer styleKey content invalidation', () => {
     // Categorical color now expands PER-VERTEX into getColor (the per-feature GPU
     // index path under-sized the multi-vertex instanced draw). Feature 0 (cat
     // index 0) picks up the swapped palette[0] = [9,9,9,255] on its first vertex.
-    expect([...second.data.attributes.getColor.value.slice(0, 4)]).toEqual([9, 9, 9, 255]);
+    expect([...second.data.attributes.getColor.value.slice(0, 4)]).toEqual([
+      9, 9, 9, 255,
+    ]);
   });
 
   it('keeps the cache hit when the palette reference is unchanged', () => {
@@ -312,7 +326,9 @@ describe('AnimatedPathLayer styleKey content invalidation', () => {
       elevationOpacityFar: 0.3,
     });
     const tile = catPathTile();
-    tile.layers[0].features.numericProps['z_layer'] = new Float32Array([0, 6]) as any;
+    tile.layers[0].features.numericProps['z_layer'] = new Float32Array([
+      0, 6,
+    ]) as any;
     const first = (layer as any).prepareTile(tile, tile.layers[0]);
     layer.props.elevationOpacityFar = 0.1;
     const second = (layer as any).prepareTile(tile, tile.layers[0]);
@@ -332,7 +348,8 @@ describe('AnimatedTripsLayer styleKey content invalidation', () => {
 
   beforeEach(async () => {
     vi.resetModules();
-    LayerCtor = (await import('../src/layers/trips/animated-trips-layer')).AnimatedTripsLayer as any;
+    LayerCtor = (await import('../src/layers/trips/animated-trips-layer'))
+      .AnimatedTripsLayer as any;
   });
 
   function makeLayer(opts: Record<string, any> = {}) {
@@ -391,7 +408,9 @@ describe('AnimatedTripsLayer styleKey content invalidation', () => {
     });
     const tile = catTripsTile();
     const first = (layer as any).prepareTile(tile, tile.layers[0]);
-    expect([...first.data.attributes.getColor.value.slice(0, 4)]).toEqual([1, 2, 3, 255]);
+    expect([...first.data.attributes.getColor.value.slice(0, 4)]).toEqual([
+      1, 2, 3, 255,
+    ]);
 
     layer.props.colorPalette = [
       [9, 9, 9, 255],
@@ -399,7 +418,9 @@ describe('AnimatedTripsLayer styleKey content invalidation', () => {
     ];
     const second = (layer as any).prepareTile(tile, tile.layers[0]);
     expect(second.styleKey).not.toBe(first.styleKey);
-    expect([...second.data.attributes.getColor.value.slice(0, 4)]).toEqual([9, 9, 9, 255]);
+    expect([...second.data.attributes.getColor.value.slice(0, 4)]).toEqual([
+      9, 9, 9, 255,
+    ]);
   });
 
   it('invalidates on a colorMapping content change with the same key-count', () => {
@@ -409,12 +430,16 @@ describe('AnimatedTripsLayer styleKey content invalidation', () => {
     });
     const tile = catTripsTile();
     const first = (layer as any).prepareTile(tile, tile.layers[0]);
-    expect([...first.data.attributes.getColor.value.slice(0, 4)]).toEqual([1, 1, 1, 255]);
+    expect([...first.data.attributes.getColor.value.slice(0, 4)]).toEqual([
+      1, 1, 1, 255,
+    ]);
 
     layer.props.colorMapping = { a: [7, 7, 7, 255], b: [2, 2, 2, 255] };
     const second = (layer as any).prepareTile(tile, tile.layers[0]);
     expect(second.styleKey).not.toBe(first.styleKey);
-    expect([...second.data.attributes.getColor.value.slice(0, 4)]).toEqual([7, 7, 7, 255]);
+    expect([...second.data.attributes.getColor.value.slice(0, 4)]).toEqual([
+      7, 7, 7, 255,
+    ]);
   });
 
   it('invalidates on a same-length gradientColorRamp content swap', () => {
@@ -430,7 +455,9 @@ describe('AnimatedTripsLayer styleKey content invalidation', () => {
       ],
     });
     const first = (layer as any).prepareTile(tile, tile.layers[0]);
-    expect([...first.data.attributes.getColor.value.slice(0, 4)]).toEqual([0, 0, 255, 255]);
+    expect([...first.data.attributes.getColor.value.slice(0, 4)]).toEqual([
+      0, 0, 255, 255,
+    ]);
 
     // Same length (2), different stops.
     layer.props.gradientColorRamp = [
@@ -439,7 +466,9 @@ describe('AnimatedTripsLayer styleKey content invalidation', () => {
     ];
     const second = (layer as any).prepareTile(tile, tile.layers[0]);
     expect(second.styleKey).not.toBe(first.styleKey);
-    expect([...second.data.attributes.getColor.value.slice(0, 4)]).toEqual([0, 255, 0, 255]);
+    expect([...second.data.attributes.getColor.value.slice(0, 4)]).toEqual([
+      0, 255, 0, 255,
+    ]);
   });
 
   it('keeps the cache hit when palette / mapping / ramp references are unchanged', () => {
@@ -463,7 +492,8 @@ describe('H3SummaryLayer styleKey content invalidation', () => {
 
   beforeEach(async () => {
     vi.resetModules();
-    LayerCtor = (await import('../src/layers/summary/h3-summary-layer')).H3SummaryLayer as any;
+    LayerCtor = (await import('../src/layers/summary/h3-summary-layer'))
+      .H3SummaryLayer as any;
   });
 
   /** Summary-tier tile with real H3 cell ids packed as u64. */
@@ -513,7 +543,9 @@ describe('H3SummaryLayer styleKey content invalidation', () => {
     };
     layer.state = {
       tiles: [summaryTile()],
-      metadata: { summaryTier: { layerName: 'summary', minZoom: 0, maxZoom: 4 } },
+      metadata: {
+        summaryTier: { layerName: 'summary', minZoom: 0, maxZoom: 4 },
+      },
     };
     layer.preparedTileCache = new Map();
     layer.sublayerCache = new Map();
@@ -560,7 +592,8 @@ describe('SplatLayer Worldbuild layerPropsKey invalidation', () => {
 
   beforeEach(async () => {
     vi.resetModules();
-    LayerCtor = (await import('../src/layers/core/splat-layer')).SplatLayer as any;
+    LayerCtor = (await import('../src/layers/core/splat-layer'))
+      .SplatLayer as any;
   });
 
   /** Surfel point tile with the mandatory orientation/scale columns. */
@@ -573,7 +606,12 @@ describe('SplatLayer Worldbuild layerPropsKey invalidation', () => {
       startTimes.push(i * 100);
       endTimes.push(i * 100);
     }
-    const tile = makePointTile({ positions, startTimes, endTimes, timeOffset: 0 });
+    const tile = makePointTile({
+      positions,
+      startTimes,
+      endTimes,
+      timeOffset: 0,
+    });
     const f = tile.layers[0].features;
     const quat = new Float32Array(n * 4);
     const scale = new Float32Array(n * 2);
@@ -648,7 +686,11 @@ describe('SplatLayer Worldbuild layerPropsKey invalidation', () => {
   });
 
   it('keeps the cache hit when none of the Worldbuild props change', () => {
-    const layer = makeLayer({ cumulative: true, revealFade: 800, temporalSigmaDynamic: 300 });
+    const layer = makeLayer({
+      cumulative: true,
+      revealFade: 800,
+      temporalSigmaDynamic: 300,
+    });
     const [first] = layer.renderLayers();
     const [second] = layer.renderLayers();
     expect(second).toBe(first);

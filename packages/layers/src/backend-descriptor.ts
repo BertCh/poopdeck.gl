@@ -49,7 +49,8 @@ const layerKinds = {
   isoLines: {
     supported: false,
     fallbackKind: 'path',
-    reason: 'rendered via AnimatedPathLayer density mode; no dedicated iso layer',
+    reason:
+      'rendered via AnimatedPathLayer density mode; no dedicated iso layer',
   },
   ego: {
     supported: false,
@@ -66,7 +67,9 @@ const layerKinds = {
 // module load and is provably a no-op given the `satisfies` check above.
 for (const kind of LAYER_KINDS) {
   if (!(kind in layerKinds)) {
-    throw new Error(`deckBackend.layerKinds is missing an entry for LayerKind "${kind}"`);
+    throw new Error(
+      `deckBackend.layerKinds is missing an entry for LayerKind "${kind}"`,
+    );
   }
 }
 

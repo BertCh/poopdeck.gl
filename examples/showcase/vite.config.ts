@@ -22,13 +22,13 @@ function isClientBuild(outDir: string): boolean {
 // them out of the production build so it isn't bloated by multi-GB unused
 // datasets. Paths are relative to public/, with '/' separators.
 const EXCLUDE_FROM_DIST = new Set([
-  'data/satellites.geojson',          // source for satellites.stt, not fetched at runtime
-  'data/nyc-taxi-points.stt',         // points demo reads nyc-taxi-paths.stt (VAT head) instead
+  'data/satellites.geojson', // source for satellites.stt, not fetched at runtime
+  'data/nyc-taxi-points.stt', // points demo reads nyc-taxi-paths.stt (VAT head) instead
   'data/nyc-taxi-points.new.parquet', // intermediate build artifact
-  'data/nyc-taxi-points.new.stt',     // empty regen artifact
-  'data/earthquakes.stt',             // superseded by earthquakes-v2.stt
-  'data/earthquakes-summary.stt',     // unused summary tier
-  'data/land-110m.geojson',           // unreferenced basemap geojson
+  'data/nyc-taxi-points.new.stt', // empty regen artifact
+  'data/earthquakes.stt', // superseded by earthquakes-v2.stt
+  'data/earthquakes-summary.stt', // unused summary tier
+  'data/land-110m.geojson', // unreferenced basemap geojson
 ]);
 
 // Selectively copy public/ -> build/client/, skipping the unused files above
@@ -128,13 +128,20 @@ function emitLlmsDocs(): Plugin {
         fs.mkdirSync(path.dirname(dest), { recursive: true });
         fs.writeFileSync(dest, text);
       }
-      this.warn(`emit-llms-docs: wrote llms.txt, llms-full.txt, ${docFiles.length} llms/ docs`);
+      this.warn(
+        `emit-llms-docs: wrote llms.txt, llms-full.txt, ${docFiles.length} llms/ docs`,
+      );
     },
   };
 }
 
 export default defineConfig({
-  plugins: [tailwindcss(), reactRouter(), excludeUnusedPublicFiles(), emitLlmsDocs()],
+  plugins: [
+    tailwindcss(),
+    reactRouter(),
+    excludeUnusedPublicFiles(),
+    emitLlmsDocs(),
+  ],
   server: {
     port: 3000,
   },
@@ -146,7 +153,13 @@ export default defineConfig({
   // created in the three package fail to render in the showcase tree with
   // "Objects are not valid as a React child" (mismatched element `$$typeof`).
   resolve: {
-    dedupe: ['three', 'react', 'react-dom', '@react-three/fiber', '@react-three/drei'],
+    dedupe: [
+      'three',
+      'react',
+      'react-dom',
+      '@react-three/fiber',
+      '@react-three/drei',
+    ],
   },
   optimizeDeps: {
     include: ['maplibre-gl', 'mapbox-gl'],

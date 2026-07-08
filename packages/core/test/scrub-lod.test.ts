@@ -24,7 +24,13 @@ import { describe, it, expect } from 'vitest';
 import { SpatiotemporalTileset } from '../src/spatiotemporal-tileset';
 import type { ScrubLodOptions } from '../src/spatiotemporal-tileset';
 import type { BoundingBox, TemporalLodLevel, TileId } from '../src/types';
-import { BOUNDS, BUCKET_MS, fakeTile, makeAvailableTiles, settle } from './helpers/fixtures';
+import {
+  BOUNDS,
+  BUCKET_MS,
+  fakeTile,
+  makeAvailableTiles,
+  settle,
+} from './helpers/fixtures';
 
 const N_BUCKETS = 40;
 const LOD_BUCKET_MS = 4 * BUCKET_MS;
@@ -47,7 +53,8 @@ function lodTiles(
 ): TileId[] {
   const ids: TileId[] = [];
   for (let t = 0; t < N_BUCKETS * BUCKET_MS; t += bucketMs) {
-    if (t + bucketMs >= range.start && t <= range.end) ids.push({ z: zoom, x: 0, y: 0, t });
+    if (t + bucketMs >= range.start && t <= range.end)
+      ids.push({ z: zoom, x: 0, y: 0, t });
   }
   return ids;
 }
@@ -61,7 +68,10 @@ interface HarnessOptions {
 }
 
 function makeHarness(opts: HarnessOptions = {}) {
-  const baseCalls: Array<{ zoom: number; range: { start: number; end: number } }> = [];
+  const baseCalls: Array<{
+    zoom: number;
+    range: { start: number; end: number };
+  }> = [];
   const lodCalls: Array<{ zoom: number; bucketMs: number }> = [];
   const tileset = new SpatiotemporalTileset({
     minZoom: 0,
@@ -105,7 +115,9 @@ function makeHarness(opts: HarnessOptions = {}) {
 
 describe('scrub-LOD kill switch (P0 contract: bit only, zero behavior change)', () => {
   it('with scrubLod absent, setInteractive stores the bit and changes nothing', async () => {
-    const { tileset, baseCalls, lodCalls, update, visibleKeys } = makeHarness({ withLod: true });
+    const { tileset, baseCalls, lodCalls, update, visibleKeys } = makeHarness({
+      withLod: true,
+    });
 
     update(5);
     await settle();
@@ -196,7 +208,9 @@ describe('scrub-LOD temporal axis (P2 — the temporal-LOD pyramid on the hot pa
     expect(visibleKeys()).toEqual(['10/0/0/4000']); // the coarse-bucket tile renders
     // The LOD id is tier-stamped, so its cache identity can never alias the
     // base tile sharing z/x/y/t (F9/F10 — tileIdToKey folds bucketMs in).
-    expect(tileset.getVisibleTiles().map((t) => t.id.bucketMs)).toEqual([LOD_BUCKET_MS]);
+    expect(tileset.getVisibleTiles().map((t) => t.id.bucketMs)).toEqual([
+      LOD_BUCKET_MS,
+    ]);
 
     tileset.setInteractive(false);
     await settle();
@@ -288,7 +302,9 @@ describe('scrub-LOD G7 contract (preview-only: readiness stays on the fine tier)
     tileset.setInteractive(true);
     await settle();
     expect(
-      tileset.getVisibleTiles().map((t) => `${t.id.z}/${t.id.x}/${t.id.y}/${t.id.t}`),
+      tileset
+        .getVisibleTiles()
+        .map((t) => `${t.id.z}/${t.id.x}/${t.id.y}/${t.id.t}`),
     ).toEqual(['10/0/0/4000']);
 
     // The coverage index is base-keyed and the LOD tile is resident under

@@ -64,7 +64,10 @@ import {
   getSharedScheduler,
   isSharedSchedulingEnabled,
 } from './shared-scheduler.js';
-import { createCancellationError, isCancellationError } from './request-scheduler.js';
+import {
+  createCancellationError,
+  isCancellationError,
+} from './request-scheduler.js';
 
 /** `format` discriminator written into every packed manifest. */
 const PACKED_FORMAT = 'stt-packed';
@@ -199,7 +202,8 @@ function withTransferTimeout(
   const controller = new AbortController();
   const onAbort = (): void => {
     controller.abort(
-      signal?.reason ?? new DOMException('The operation was aborted.', 'AbortError'),
+      signal?.reason ??
+        new DOMException('The operation was aborted.', 'AbortError'),
     );
   };
   if (signal) {
@@ -208,7 +212,10 @@ function withTransferTimeout(
   }
   const timer = setTimeout(() => {
     controller.abort(
-      new DOMException(`STT transfer stalled for ${timeoutMs} ms`, 'TimeoutError'),
+      new DOMException(
+        `STT transfer stalled for ${timeoutMs} ms`,
+        'TimeoutError',
+      ),
     );
   }, timeoutMs);
   return {
@@ -230,7 +237,8 @@ function withTransferTimeout(
 function raceAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
   if (!signal) return promise;
   const reasonOf = (): unknown =>
-    signal.reason ?? new DOMException('The operation was aborted.', 'AbortError');
+    signal.reason ??
+    new DOMException('The operation was aborted.', 'AbortError');
   if (signal.aborted) {
     // The transport promise already exists (the call raced the abort) and
     // will reject on its own — swallow that rejection so it can't surface
@@ -262,7 +270,11 @@ function raceAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
  * retryable one — the byte-length check downstream backstops transports that
  * don't surface headers at all, e.g. test shims).
  */
-function validateContentRange(response: Response, start: number, end: number): void {
+function validateContentRange(
+  response: Response,
+  start: number,
+  end: number,
+): void {
   const header =
     typeof response.headers?.get === 'function'
       ? response.headers.get('content-range')
@@ -467,12 +479,20 @@ function base64ToBytes(b64: string): Uint8Array {
  * dataset-level failure mode for corrupt manifests, surfaced at open before
  * any tile fetch. Mirrors the Rust `pack::build_template_registry`.
  */
-function buildTemplateRegistry(schemas: ManifestSchemaTemplate[]): TemplateRegistry {
+function buildTemplateRegistry(
+  schemas: ManifestSchemaTemplate[],
+): TemplateRegistry {
   const registry: TemplateRegistry = new Map();
   for (let i = 0; i < schemas.length; i++) {
     const entry = schemas[i];
-    if (!entry || typeof entry.hash !== 'string' || typeof entry.data !== 'string') {
-      throw new Error(`STT manifest: schemas[${i}] is malformed (need {hash, data} strings)`);
+    if (
+      !entry ||
+      typeof entry.hash !== 'string' ||
+      typeof entry.data !== 'string'
+    ) {
+      throw new Error(
+        `STT manifest: schemas[${i}] is malformed (need {hash, data} strings)`,
+      );
     }
     let data: Uint8Array;
     try {
@@ -483,7 +503,9 @@ function buildTemplateRegistry(schemas: ManifestSchemaTemplate[]): TemplateRegis
       );
     }
     if (data.length === 0) {
-      throw new Error(`STT manifest: schemas[${i}] (${entry.hash}): template bytes are empty`);
+      throw new Error(
+        `STT manifest: schemas[${i}] (${entry.hash}): template bytes are empty`,
+      );
     }
     const actual = blake3Hex128(data);
     if (actual !== entry.hash) {
@@ -518,9 +540,14 @@ function headersToRecord(h: HeadersInit | undefined): Record<string, string> {
  * Plain-object header keys are kept verbatim (no `Headers` round-trip, which
  * would lowercase them).
  */
-function mergeRequestInit(base: RequestInit, override?: RequestInit): RequestInit {
+function mergeRequestInit(
+  base: RequestInit,
+  override?: RequestInit,
+): RequestInit {
   if (!override) {
-    return base.headers ? { ...base, headers: headersToRecord(base.headers) } : { ...base };
+    return base.headers
+      ? { ...base, headers: headersToRecord(base.headers) }
+      : { ...base };
   }
   const merged: RequestInit = { ...base, ...override };
   if (base.headers) {
@@ -753,10 +780,16 @@ export class STTArchive {
       if (options.retainArrowIpc !== undefined) {
         this.retainArrowIpc = options.retainArrowIpc;
       }
-      if (typeof options.coalesceGapBytes === 'number' && options.coalesceGapBytes >= 0) {
+      if (
+        typeof options.coalesceGapBytes === 'number' &&
+        options.coalesceGapBytes >= 0
+      ) {
         this.coalesceGapBytes = options.coalesceGapBytes;
       }
-      if (typeof options.maxConcurrentRequests === 'number' && options.maxConcurrentRequests >= 1) {
+      if (
+        typeof options.maxConcurrentRequests === 'number' &&
+        options.maxConcurrentRequests >= 1
+      ) {
         this.maxConcurrentRequests = Math.floor(options.maxConcurrentRequests);
       }
       if (Array.isArray(options.retryDelaysMs)) {
@@ -764,7 +797,10 @@ export class STTArchive {
           (d) => typeof d === 'number' && d >= 0,
         );
       }
-      if (typeof options.transferTimeoutMs === 'number' && options.transferTimeoutMs >= 0) {
+      if (
+        typeof options.transferTimeoutMs === 'number' &&
+        options.transferTimeoutMs >= 0
+      ) {
         this.transferTimeoutMs = options.transferTimeoutMs;
       }
       if (
@@ -805,7 +841,6 @@ export class STTArchive {
         : 512 * 1024 * 1024;
   }
 
-
   private getDecoder(): TileDecoder {
     if (this.decoder) return this.decoder;
     this.decoder = this.decoderOption ?? createDefaultTileDecoder();
@@ -845,7 +880,9 @@ export class STTArchive {
    */
   private resolveKey(key: string): string {
     if (this.baseUrl === undefined) {
-      throw new Error('STT archive: manifest not loaded (resolveKey before fetchManifest)');
+      throw new Error(
+        'STT archive: manifest not loaded (resolveKey before fetchManifest)',
+      );
     }
     return this.baseUrl + key;
   }
@@ -890,8 +927,13 @@ export class STTArchive {
       // tile fetch. An absent table is legal (self-contained inline-schema
       // frames); a v1 manifest carrying one is not (spec §3 envelope rule).
       if (manifest.formatVersion === PACKED_FORMAT_VERSION_V2) {
-        if (manifest.schemas !== undefined && !Array.isArray(manifest.schemas)) {
-          throw new Error('STT manifest: schemas must be an array of {hash, data} entries');
+        if (
+          manifest.schemas !== undefined &&
+          !Array.isArray(manifest.schemas)
+        ) {
+          throw new Error(
+            'STT manifest: schemas must be an array of {hash, data} entries',
+          );
         }
         this.templateRegistry = buildTemplateRegistry(manifest.schemas ?? []);
       } else if (manifest.schemas !== undefined) {
@@ -916,7 +958,9 @@ export class STTArchive {
         }
       }
       if (!manifest.directory || !Array.isArray(manifest.packs)) {
-        throw new Error('STT manifest: missing directory pointer or pack table');
+        throw new Error(
+          'STT manifest: missing directory pointer or pack table',
+        );
       }
       if (manifest.directory.directoryVersion !== DIRECTORY_VERSION) {
         throw new Error(
@@ -949,7 +993,8 @@ export class STTArchive {
       const metaJson = manifest.metadata ?? {};
       this.baseTemporalBucketMs = metaJson.temporal_bucket_ms ?? 3600 * 1000;
       this.temporalLodDeclared =
-        Array.isArray(metaJson.temporal_lod) && metaJson.temporal_lod.length > 0;
+        Array.isArray(metaJson.temporal_lod) &&
+        metaJson.temporal_lod.length > 0;
       // OPFS fingerprint = the content-addressed directory hash. It changes iff
       // the dataset's tiles change, and is stable across the dataset's packs.
       this.archiveFingerprint = manifest.directory.key;
@@ -974,7 +1019,10 @@ export class STTArchive {
     what: string,
     expectedLength?: number,
   ): Promise<ArrayBuffer> {
-    const { signal, cleanup } = withTransferTimeout(undefined, this.transferTimeoutMs);
+    const { signal, cleanup } = withTransferTimeout(
+      undefined,
+      this.transferTimeoutMs,
+    );
     try {
       const response = await raceAbort(this.fetchFn(url, { signal }), signal);
       if (!response.ok) {
@@ -983,7 +1031,10 @@ export class STTArchive {
         );
       }
       const buffer = await raceAbort(response.arrayBuffer(), signal);
-      if (expectedLength !== undefined && buffer.byteLength !== expectedLength) {
+      if (
+        expectedLength !== undefined &&
+        buffer.byteLength !== expectedLength
+      ) {
         throw new Error(
           `STT ${what} truncated: got ${buffer.byteLength} bytes, expected ${expectedLength}`,
         );
@@ -1043,7 +1094,13 @@ export class STTArchive {
         `STT archive: tile references pack ${packIndex} but only ${manifest.packs.length} packs exist`,
       );
     }
-    return this.fetchObjectRange(this.resolveKey(pack.key), start, end, signal, fetchPriority);
+    return this.fetchObjectRange(
+      this.resolveKey(pack.key),
+      start,
+      end,
+      signal,
+      fetchPriority,
+    );
   }
 
   /**
@@ -1071,10 +1128,13 @@ export class STTArchive {
         signal: transferSignal,
       };
       // `RequestInit.priority` is a hint; browsers without it ignore the field.
-      if (fetchPriority) (init as RequestInit & { priority?: string }).priority = fetchPriority;
+      if (fetchPriority)
+        (init as RequestInit & { priority?: string }).priority = fetchPriority;
       const response = await raceAbort(this.fetchFn(url, init), transferSignal);
       if (!response.ok) {
-        throw new Error(`STT range fetch failed: ${response.status} ${response.statusText}`);
+        throw new Error(
+          `STT range fetch failed: ${response.status} ${response.statusText}`,
+        );
       }
       if (response.status !== 206) {
         throw new Error(
@@ -1149,7 +1209,13 @@ export class STTArchive {
       }
       const attemptStart = nowMs();
       try {
-        return await this.fetchObjectRange(url, start, end, signal, fetchPriority);
+        return await this.fetchObjectRange(
+          url,
+          start,
+          end,
+          signal,
+          fetchPriority,
+        );
       } catch (error) {
         if (isAbortError(error)) throw error;
         // Failure-aware estimation: the estimator is otherwise fed only by
@@ -1302,7 +1368,9 @@ export class STTArchive {
         this.directoryDataStart + dref.rootLength - 1,
       );
       const root = decodePagedRoot(
-        this.unframeDirectory(this.stripDirectoryMagic(new Uint8Array(rootBuf))),
+        this.unframeDirectory(
+          this.stripDirectoryMagic(new Uint8Array(rootBuf)),
+        ),
       );
       this.paged = true;
       this.rootLength = dref.rootLength;
@@ -1357,7 +1425,9 @@ export class STTArchive {
       bytes[2] !== 0x54 || // 'T'
       bytes[3] !== 0x44 // 'D'
     ) {
-      throw new Error('STT directory object: missing STTD magic (formatVersion 2)');
+      throw new Error(
+        'STT directory object: missing STTD magic (formatVersion 2)',
+      );
     }
     if (bytes[4] !== 2) {
       throw new Error(
@@ -1365,13 +1435,17 @@ export class STTArchive {
       );
     }
     if (bytes[5] !== 0 || bytes[6] !== 0 || bytes[7] !== 0) {
-      throw new Error('STT directory object: reserved magic bytes must be zero');
+      throw new Error(
+        'STT directory object: reserved magic bytes must be zero',
+      );
     }
     return bytes.subarray(OBJECT_MAGIC_LEN);
   }
 
   /** Map a decoded `DirectoryEntry` to the reader's internal `TileEntry`. */
-  private toTileEntry(e: ReturnType<typeof decodeDirectory>[number]): TileEntry {
+  private toTileEntry(
+    e: ReturnType<typeof decodeDirectory>[number],
+  ): TileEntry {
     return {
       zoom: e.zoom,
       x: e.x,
@@ -1419,7 +1493,13 @@ export class STTArchive {
       }
       list.push(entry);
       this.tileEntryByKey.set(
-        this.tileEntryKey(entry.zoom, entry.x, entry.y, entry.timeStart, entry.temporalBucketMs),
+        this.tileEntryKey(
+          entry.zoom,
+          entry.x,
+          entry.y,
+          entry.timeStart,
+          entry.temporalBucketMs,
+        ),
         entry,
       );
     }
@@ -1431,7 +1511,9 @@ export class STTArchive {
     bytes: Uint8Array,
     rootLength: number,
   ): ReturnType<typeof decodeDirectory> {
-    const root = decodePagedRoot(this.unframeDirectory(bytes.subarray(0, rootLength)));
+    const root = decodePagedRoot(
+      this.unframeDirectory(bytes.subarray(0, rootLength)),
+    );
     const out: ReturnType<typeof decodeDirectory> = [];
     for (const d of root.pages) {
       const start = rootLength + d.relOffset;
@@ -1448,10 +1530,15 @@ export class STTArchive {
    * leaves are contiguous in the object), bounded by `maxConcurrentRequests`.
    * Concurrent callers share one in-flight fetch per page via `pageFetchPromises`.
    */
-  private async fetchAndMergePages(indices: number[], signal?: AbortSignal): Promise<void> {
+  private async fetchAndMergePages(
+    indices: number[],
+    signal?: AbortSignal,
+  ): Promise<void> {
     if (!this.paged || !this.pageTable || !this.directoryUrl) return;
     const pending = indices
-      .filter((i) => !this.residentPages.has(i) && !this.pageFetchPromises.has(i))
+      .filter(
+        (i) => !this.residentPages.has(i) && !this.pageFetchPromises.has(i),
+      )
       .sort((a, b) => a - b);
     // Wait on any pages already in flight for this query, plus the new ones.
     const inflight = indices
@@ -1482,7 +1569,10 @@ export class STTArchive {
 
     // `grpSignal` is the per-group signal: the caller's `signal` on the legacy
     // path, or the scheduler-provided signal on the shared-scheduler path.
-    const fetchGroup = async (g: Group, grpSignal: AbortSignal | undefined): Promise<void> => {
+    const fetchGroup = async (
+      g: Group,
+      grpSignal: AbortSignal | undefined,
+    ): Promise<void> => {
       const buf = await this.fetchObjectRangeWithRetry(
         this.directoryUrl!,
         g.start,
@@ -1491,7 +1581,8 @@ export class STTArchive {
       );
       for (const i of g.members) {
         const d = this.pageTable![i];
-        const rel = this.directoryDataStart + this.rootLength + d.relOffset - g.start;
+        const rel =
+          this.directoryDataStart + this.rootLength + d.relOffset - g.start;
         const frame = new Uint8Array(buf, rel, d.length);
         const entries = decodeDirectory(this.unframeDirectory(frame)).map((e) =>
           this.toTileEntry(e),
@@ -1547,7 +1638,8 @@ export class STTArchive {
       groupSettled.set(g, { resolve, reject });
       const reg = promise.finally(() => {
         for (const i of g.members) {
-          if (this.pageFetchPromises.get(i) === reg) this.pageFetchPromises.delete(i);
+          if (this.pageFetchPromises.get(i) === reg)
+            this.pageFetchPromises.delete(i);
         }
       });
       // Guard against an unhandled rejection: dedup waiters that DO care await
@@ -1629,7 +1721,10 @@ export class STTArchive {
    * direct `getTile`/`getTiles` paths (the tileset's `getTileIdsInBounds`
    * already ensured its pages, so its follow-up `getTiles` is usually a no-op).
    */
-  private async ensurePagesForTiles(ids: TileId[], signal?: AbortSignal): Promise<void> {
+  private async ensurePagesForTiles(
+    ids: TileId[],
+    signal?: AbortSignal,
+  ): Promise<void> {
     if (!this.paged || !this.pageTable || ids.length === 0) return;
     // Upper prune bound (see below): the widest bucket any tile in this
     // archive can have — the base bucket or any declared temporal-LOD tier.
@@ -1642,7 +1737,11 @@ export class STTArchive {
     );
     const needed = new Set<number>();
     for (const id of ids) {
-      const [minLon, minLat, maxLon, maxLat] = tileToLonLatBounds(id.z, id.x, id.y);
+      const [minLon, minLat, maxLon, maxLat] = tileToLonLatBounds(
+        id.z,
+        id.x,
+        id.y,
+      );
       for (let i = 0; i < this.pageTable.length; i++) {
         if (this.residentPages.has(i)) continue;
         const p = this.pageTable[i];
@@ -1693,9 +1792,13 @@ export class STTArchive {
     // (`'base'` — legacy archives and pre-LOD builds). An untagged entry IS
     // a base-tier entry, so it also satisfies a base-bucket lookup.
     const exact =
-      this.tileEntryByKey.get(this.tileEntryKey(id.z, id.x, id.y, id.t, want)) ??
+      this.tileEntryByKey.get(
+        this.tileEntryKey(id.z, id.x, id.y, id.t, want),
+      ) ??
       (want === base
-        ? this.tileEntryByKey.get(this.tileEntryKey(id.z, id.x, id.y, id.t, undefined))
+        ? this.tileEntryByKey.get(
+            this.tileEntryKey(id.z, id.x, id.y, id.t, undefined),
+          )
         : undefined);
     if (exact) return exact;
     const entries = this.tileEntryIndex.get(`${id.z}/${id.x}/${id.y}`);
@@ -1757,7 +1860,10 @@ export class STTArchive {
    * nothing is re-decompressed on the main thread. On every subsequent
    * reload that same key skips both the HTTP fetch and the zstd decompress.
    */
-  private async writeOpfsPayload(key: string, payload: Uint8Array): Promise<void> {
+  private async writeOpfsPayload(
+    key: string,
+    payload: Uint8Array,
+  ): Promise<void> {
     const cache = this.opfsCache;
     if (!cache) return;
     try {
@@ -1920,7 +2026,10 @@ export class STTArchive {
   }
 
   /** Fetch and decode a single tile. */
-  async getTile(id: TileId, options?: TileRequestOptions): Promise<Tile | null> {
+  async getTile(
+    id: TileId,
+    options?: TileRequestOptions,
+  ): Promise<Tile | null> {
     await this.getIndex();
     await this.ensurePagesForTiles([id], options?.signal);
     const entry = this.findTileEntry(id);
@@ -1964,7 +2073,7 @@ export class STTArchive {
       entry.offset,
       entry.offset + entry.length - 1,
       options?.signal,
-      options?.fetchPriority
+      options?.fetchPriority,
     );
     this.storeBytes(key, compressed);
     // Network miss → decode + fire-and-forget OPFS write (the decoder hands
@@ -2006,9 +2115,10 @@ export class STTArchive {
     const tierBase = fetchPriority === 'low' ? SCHEDULER_PREFETCH_TIER_BASE : 0;
     // Within a tier: EDF distance-to-playhead when known, else byte-order /
     // enqueue-order seq.
-    const term = minDistanceMs !== null && Number.isFinite(minDistanceMs)
-      ? Math.max(0, minDistanceMs)
-      : Math.max(0, fallbackSeq);
+    const term =
+      minDistanceMs !== null && Number.isFinite(minDistanceMs)
+        ? Math.max(0, minDistanceMs)
+        : Math.max(0, fallbackSeq);
     // Sub-unit spatial tie-break — see SPATIAL_TIEBREAK_WEIGHT. `null` (no
     // viewportCenter threaded in) contributes nothing, so priority is
     // unaffected unless a caller opts in.
@@ -2167,7 +2277,12 @@ export class STTArchive {
         sourceId: this.url,
         weight: this.schedulerWeight,
         getPriority: () =>
-          this.groupSchedulerPriority(minDist, fallbackSeq, fetchPriority, spatialDistSq),
+          this.groupSchedulerPriority(
+            minDist,
+            fallbackSeq,
+            fetchPriority,
+            spatialDistSq,
+          ),
         // The scheduler's signal fires on cancel/abort; pass it to the fetch
         // so retry/timeout/raceAbort inside executeGroup stop promptly.
         execute: (schedulerSignal) => executeGroup(group, schedulerSignal),
@@ -2181,7 +2296,9 @@ export class STTArchive {
         } else {
           const onAbort = (): void => req.abort('Superseded (caller aborted)');
           callerSignal.addEventListener('abort', onAbort, { once: true });
-          removers.push(() => callerSignal.removeEventListener('abort', onAbort));
+          removers.push(() =>
+            callerSignal.removeEventListener('abort', onAbort),
+          );
         }
       }
       // Observe every settlement. A scheduler cancellation or a fetch abort is a
@@ -2242,7 +2359,8 @@ export class STTArchive {
     // Surface a real error first, then an abort (matching the legacy path, where
     // an in-flight abort rejects the batch with an AbortError).
     if (firstError !== undefined) throw firstError;
-    if (aborted) throw new DOMException('The operation was aborted.', 'AbortError');
+    if (aborted)
+      throw new DOMException('The operation was aborted.', 'AbortError');
   }
 
   /**
@@ -2251,7 +2369,7 @@ export class STTArchive {
    */
   async getTiles(
     ids: TileId[],
-    options?: TileRequestOptions
+    options?: TileRequestOptions,
   ): Promise<(Tile | null)[]> {
     await this.getIndex();
     // Paged archives: ensure the ids' leaf pages are resident so findTileEntry
@@ -2301,8 +2419,8 @@ export class STTArchive {
               if (isAbortError(err)) throw err;
               this.dropCachedBytes(cacheKey);
               deliver(idx, null);
-            }
-          )
+            },
+          ),
         );
       } else {
         this.cacheStats.misses++;
@@ -2341,7 +2459,7 @@ export class STTArchive {
                 // null contract instead of failing the whole batch.
                 if (isAbortError(err)) throw err;
                 deliver(p.index, null);
-              }
+              },
             ),
           );
         } else {
@@ -2407,7 +2525,10 @@ export class STTArchive {
       // legacy path, or the scheduler-provided signal on the shared-scheduler
       // path (so retry / timeout / raceAbort inside stop the moment the
       // scheduled request is cancelled — see runGroupFetches).
-      const fetchGroup = async (group: Group, signal: AbortSignal | undefined): Promise<void> => {
+      const fetchGroup = async (
+        group: Group,
+        signal: AbortSignal | undefined,
+      ): Promise<void> => {
         let buffer: ArrayBuffer;
         this.beginTransferSample();
         try {
@@ -2446,7 +2567,10 @@ export class STTArchive {
               }
               try {
                 this.storeBytes(this.tileIdToKey(m.id), single);
-                deliver(m.index, await this.decodeBytes(m.id, m.entry, single, signal, true));
+                deliver(
+                  m.index,
+                  await this.decodeBytes(m.id, m.entry, single, signal, true),
+                );
               } catch (decodeError) {
                 if (isAbortError(decodeError)) throw decodeError;
                 // Decode failure: same per-tile `null` semantics as a fetch
@@ -2465,7 +2589,10 @@ export class STTArchive {
             const slice = buffer.slice(rel, rel + m.entry.length);
             this.storeBytes(this.tileIdToKey(m.id), slice);
             try {
-              deliver(m.index, await this.decodeBytes(m.id, m.entry, slice, signal, true));
+              deliver(
+                m.index,
+                await this.decodeBytes(m.id, m.entry, slice, signal, true),
+              );
             } catch (decodeError) {
               if (isAbortError(decodeError)) throw decodeError;
               // Decode failure (e.g. a crc32c mismatch on one corrupt blob):
@@ -2474,7 +2601,7 @@ export class STTArchive {
               // we just cached so the poison can't replay from cache hits.
               this.dropCachedBytes(this.tileIdToKey(m.id));
             }
-          })
+          }),
         );
       };
 
@@ -2487,8 +2614,16 @@ export class STTArchive {
         this.runGroupFetches(
           groups,
           (group, signal) => fetchGroup(group, signal),
-          (group) => this.minDistanceToPlayhead(group.members.map((m) => m.entry), options),
-          (group) => this.minDistanceToViewportCenter(group.members.map((m) => m.entry), options),
+          (group) =>
+            this.minDistanceToPlayhead(
+              group.members.map((m) => m.entry),
+              options,
+            ),
+          (group) =>
+            this.minDistanceToViewportCenter(
+              group.members.map((m) => m.entry),
+              options,
+            ),
           options,
         ),
       );
@@ -2558,13 +2693,14 @@ export class STTArchive {
   async getTileIdsInBounds(
     bounds: BoundingBox,
     zoom: number,
-    timeRange: TimeRange
+    timeRange: TimeRange,
   ): Promise<TileId[]> {
     await this.getIndex();
     await this.ensurePagesForBounds(bounds, zoom, timeRange);
     const meta = await this.getMetadata();
     const baseBucket = meta.temporalBucketMs;
-    const filterToBase = meta.temporalLod !== undefined && meta.temporalLod.length > 0;
+    const filterToBase =
+      meta.temporalLod !== undefined && meta.temporalLod.length > 0;
     const ids: TileId[] = [];
     for (const [x, y] of boundsToTiles(bounds, zoom)) {
       const entries = this.tileEntryIndex.get(`${zoom}/${x}/${y}`);
@@ -2583,7 +2719,10 @@ export class STTArchive {
         // window is skipped without a fetch. The pushed TileId still addresses
         // by `timeStart` (the bucket boundary) — covering tightens the *filter*,
         // not the *address*.
-        if (e.timeEnd >= timeRange.start && (e.coverTMin ?? e.timeStart) <= timeRange.end) {
+        if (
+          e.timeEnd >= timeRange.start &&
+          (e.coverTMin ?? e.timeStart) <= timeRange.end
+        ) {
           ids.push({ z: e.zoom, x: e.x, y: e.y, t: e.timeStart });
         }
       }
@@ -2606,7 +2745,7 @@ export class STTArchive {
     bounds: BoundingBox,
     zoom: number,
     timeRange: TimeRange,
-    bucketMs: number
+    bucketMs: number,
   ): Promise<TileId[]> {
     await this.getIndex();
     await this.ensurePagesForBounds(bounds, zoom, timeRange);
@@ -2630,7 +2769,10 @@ export class STTArchive {
         // not the *address*. `bucketMs` stamps the id with its tier so every
         // downstream key (directory lookup, byte/OPFS caches, tileset
         // registries) stays distinct from the base tile sharing its z/x/y/t.
-        if (e.timeEnd >= timeRange.start && (e.coverTMin ?? e.timeStart) <= timeRange.end) {
+        if (
+          e.timeEnd >= timeRange.start &&
+          (e.coverTMin ?? e.timeStart) <= timeRange.end
+        ) {
           ids.push({ z: e.zoom, x: e.x, y: e.y, t: e.timeStart, bucketMs });
         }
       }
@@ -2643,7 +2785,7 @@ export class STTArchive {
     bounds: BoundingBox,
     zoom: number,
     timeRange: TimeRange,
-    options?: TileRequestOptions
+    options?: TileRequestOptions,
   ): Promise<Tile[]> {
     const ids = await this.getTileIdsInBounds(bounds, zoom, timeRange);
     const tiles = await this.getTiles(ids, options);
@@ -2689,7 +2831,7 @@ export class STTArchive {
     bounds: BoundingBox,
     zoom: number,
     timeRange: TimeRange,
-    options?: TileRequestOptions
+    options?: TileRequestOptions,
   ): Promise<Tile[]> {
     const ids = await this.getSummaryTileIdsInBounds(bounds, zoom, timeRange);
     if (ids.length === 0) return [];
@@ -2720,7 +2862,7 @@ export class STTArchive {
     zoom: number,
     timeRange: TimeRange,
     bucketMs: number,
-    options?: TileRequestOptions
+    options?: TileRequestOptions,
   ): Promise<Tile[]> {
     const ids = await this.getTileIdsInBoundsForTemporalLod(
       bounds,
@@ -2739,7 +2881,9 @@ export class STTArchive {
    * applies, returns `undefined` — the caller should fall back to base
    * tiles via {@link getTileIdsInBounds}.
    */
-  async pickTemporalLodForZoom(zoom: number): Promise<TemporalLodLevel | undefined> {
+  async pickTemporalLodForZoom(
+    zoom: number,
+  ): Promise<TemporalLodLevel | undefined> {
     const meta = await this.getMetadata();
     const levels = meta.temporalLod;
     if (!levels || levels.length === 0) return undefined;
@@ -2818,7 +2962,6 @@ export class STTArchive {
   }
 }
 
-
 /** Web-Mercator tile coordinates covering a bounding box at a zoom. */
 function boundsToTiles(bounds: BoundingBox, zoom: number): [number, number][] {
   const n = 1 << zoom;
@@ -2842,7 +2985,8 @@ function lonToTileX(lon: number, zoom: number): number {
 function latToTileY(lat: number, zoom: number): number {
   const rad = (lat * Math.PI) / 180;
   return Math.floor(
-    ((1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2) * (1 << zoom)
+    ((1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2) *
+      (1 << zoom),
   );
 }
 
@@ -2853,7 +2997,10 @@ function latToTileY(lat: number, zoom: number): number {
  * to compare a viewport center against tile centers at whatever zoom each
  * tile happens to be.
  */
-function lonLatToNormalizedMercator(lon: number, lat: number): [number, number] {
+function lonLatToNormalizedMercator(
+  lon: number,
+  lat: number,
+): [number, number] {
   const x = (lon + 180) / 360;
   const rad = (lat * Math.PI) / 180;
   const y = (1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2;
@@ -2866,7 +3013,11 @@ function lonLatToNormalizedMercator(lon: number, lat: number): [number, number] 
  * Mirrors the Rust `projection::tile_geo_bounds`; used to select a tile's leaf
  * page(s) on a paged archive (`ensurePagesForTiles`).
  */
-function tileToLonLatBounds(z: number, x: number, y: number): [number, number, number, number] {
+function tileToLonLatBounds(
+  z: number,
+  x: number,
+  y: number,
+): [number, number, number, number] {
   const n = 1 << z;
   const lon = (tx: number): number => (tx / n) * 360 - 180;
   const lat = (ty: number): number => {
@@ -2959,7 +3110,15 @@ const LAYER_HINT_VALUES: ReadonlyArray<NonNullable<StyleHints['layerHint']>> = [
 ];
 
 /** The numeric percentile fields of a `style_hints` property entry (wire and TS names coincide). */
-const NUMERIC_HINT_FIELDS = ['min', 'p50', 'p90', 'p95', 'p97', 'p99', 'max'] as const;
+const NUMERIC_HINT_FIELDS = [
+  'min',
+  'p50',
+  'p90',
+  'p95',
+  'p97',
+  'p99',
+  'max',
+] as const;
 
 /**
  * Parse one `style_hints.properties[]` entry into a {@link PropertyStyleHint}.
@@ -2996,7 +3155,8 @@ function parsePropertyStyleHint(raw: unknown): PropertyStyleHint | null {
   }
   const cardinality = p.cardinality;
   if (cardinality != null) {
-    if (typeof cardinality !== 'number' || !Number.isFinite(cardinality)) return null;
+    if (typeof cardinality !== 'number' || !Number.isFinite(cardinality))
+      return null;
     out.cardinality = cardinality;
   }
   return out;
@@ -3014,9 +3174,11 @@ function parsePropertyStyleHint(raw: unknown): PropertyStyleHint | null {
  * user config always override them.
  */
 export function parseStyleHints(json: unknown): StyleHints | undefined {
-  if (!json || typeof json !== 'object' || Array.isArray(json)) return undefined;
+  if (!json || typeof json !== 'object' || Array.isArray(json))
+    return undefined;
   const r = json as Record<string, unknown>;
-  if (typeof r.version !== 'number' || !Number.isFinite(r.version)) return undefined;
+  if (typeof r.version !== 'number' || !Number.isFinite(r.version))
+    return undefined;
   const properties = Array.isArray(r.properties)
     ? (r.properties as unknown[])
         .map(parsePropertyStyleHint)

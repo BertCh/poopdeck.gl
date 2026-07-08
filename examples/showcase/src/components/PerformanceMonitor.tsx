@@ -108,10 +108,13 @@ const PerformanceMonitor: React.FC<PerformanceMonitorProps> = ({
         // Snapshot path is the new default; the prop callback is still
         // honoured if a consumer wants to inject custom stats.
         const tilesetStats: TilesetSnapshot =
-          getTilesetStats?.() ?? getSnapshot<TilesetSnapshot>('tileset.stats') ?? {};
+          getTilesetStats?.() ??
+          getSnapshot<TilesetSnapshot>('tileset.stats') ??
+          {};
         const archiveStats: ArchiveSnapshot =
           getSnapshot<ArchiveSnapshot>('archive.stats') ?? {};
-        const estimatedMemoryMB = ((performance as any).memory?.usedJSHeapSize || 0) / (1024 * 1024);
+        const estimatedMemoryMB =
+          ((performance as any).memory?.usedJSHeapSize || 0) / (1024 * 1024);
 
         setStats({
           tileCount: tilesetStats.tileCount ?? 0,
@@ -121,8 +124,11 @@ const PerformanceMonitor: React.FC<PerformanceMonitorProps> = ({
           prefetchQueueLength: tilesetStats.prefetchQueueLength ?? 0,
           cacheHits: (tilesetStats as any).hits ?? 0,
           cacheMisses: (tilesetStats as any).misses ?? 0,
-          cacheBytesMB: Math.round(((tilesetStats.cacheBytes ?? 0) / (1024 * 1024)) * 10) / 10,
-          archiveCacheBytesMB: Math.round(((archiveStats.bytes ?? 0) / (1024 * 1024)) * 10) / 10,
+          cacheBytesMB:
+            Math.round(((tilesetStats.cacheBytes ?? 0) / (1024 * 1024)) * 10) /
+            10,
+          archiveCacheBytesMB:
+            Math.round(((archiveStats.bytes ?? 0) / (1024 * 1024)) * 10) / 10,
           fps,
           frameTime: Math.round(frameTime * 10) / 10,
           estimatedMemoryMB: Math.round(estimatedMemoryMB),
@@ -140,16 +146,22 @@ const PerformanceMonitor: React.FC<PerformanceMonitorProps> = ({
 
   if (!visible) return null;
 
-  const hitRate = stats.cacheHits + stats.cacheMisses > 0
-    ? Math.round((stats.cacheHits / (stats.cacheHits + stats.cacheMisses)) * 100)
-    : 0;
+  const hitRate =
+    stats.cacheHits + stats.cacheMisses > 0
+      ? Math.round(
+          (stats.cacheHits / (stats.cacheHits + stats.cacheMisses)) * 100,
+        )
+      : 0;
 
-  const getFpsColor = (fps: number) => fps >= 50 ? '#0F9668' : fps >= 30 ? '#FFBD2E' : '#F9042C';
+  const getFpsColor = (fps: number) =>
+    fps >= 50 ? '#0F9668' : fps >= 30 ? '#FFBD2E' : '#F9042C';
 
   // Storyboard preload outcome: prop first (DemoPage feeds onOverviewPreload
   // straight in), snapshot channel as a fallback for probe-driven consumers.
   const overview =
-    overviewPreload ?? getSnapshot<OverviewPreloadResult>('overview.preload') ?? null;
+    overviewPreload ??
+    getSnapshot<OverviewPreloadResult>('overview.preload') ??
+    null;
 
   const dockTop = expanded || anchor === 'top-right';
 
@@ -163,7 +175,8 @@ const PerformanceMonitor: React.FC<PerformanceMonitorProps> = ({
         background: 'rgba(36, 39, 48, 0.95)',
         border: '1px solid #3A414C',
         minWidth: 140,
-        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+        fontFamily:
+          'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
         color: '#A0A7B4',
       }}
     >
@@ -177,7 +190,10 @@ const PerformanceMonitor: React.FC<PerformanceMonitorProps> = ({
       </button>
 
       {expanded && (
-        <div className="px-2.5 pb-2 space-y-1.5" style={{ borderTop: '1px solid #3A414C', paddingTop: 6 }}>
+        <div
+          className="px-2.5 pb-2 space-y-1.5"
+          style={{ borderTop: '1px solid #3A414C', paddingTop: 6 }}
+        >
           <div className="flex justify-between">
             <span>FPS:</span>
             <span style={{ color: getFpsColor(stats.fps) }}>{stats.fps}</span>
@@ -193,15 +209,25 @@ const PerformanceMonitor: React.FC<PerformanceMonitorProps> = ({
           <div style={{ height: 1, background: '#3A414C', margin: '4px 0' }} />
           <div className="flex justify-between">
             <span>Tiles:</span>
-            <span>{stats.visibleTiles}/{stats.tileCount}</span>
+            <span>
+              {stats.visibleTiles}/{stats.tileCount}
+            </span>
           </div>
           <div className="flex justify-between">
             <span>Active:</span>
-            <span style={{ color: stats.activeRequests > 0 ? '#1FBAD6' : '#6A7485' }}>{stats.activeRequests}</span>
+            <span
+              style={{
+                color: stats.activeRequests > 0 ? '#1FBAD6' : '#6A7485',
+              }}
+            >
+              {stats.activeRequests}
+            </span>
           </div>
           <div className="flex justify-between">
             <span>Queue:</span>
-            <span>{stats.priorityQueueLength}+{stats.prefetchQueueLength}</span>
+            <span>
+              {stats.priorityQueueLength}+{stats.prefetchQueueLength}
+            </span>
           </div>
           {overview && (
             <div className="flex justify-between gap-2">
@@ -224,7 +250,18 @@ const PerformanceMonitor: React.FC<PerformanceMonitorProps> = ({
           </div>
           <div className="flex justify-between">
             <span>Hit Rate:</span>
-            <span style={{ color: hitRate >= 80 ? '#0F9668' : hitRate >= 50 ? '#FFBD2E' : '#F9042C' }}>{hitRate}%</span>
+            <span
+              style={{
+                color:
+                  hitRate >= 80
+                    ? '#0F9668'
+                    : hitRate >= 50
+                      ? '#FFBD2E'
+                      : '#F9042C',
+              }}
+            >
+              {hitRate}%
+            </span>
           </div>
         </div>
       )}

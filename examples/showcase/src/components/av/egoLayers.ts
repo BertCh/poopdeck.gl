@@ -21,9 +21,9 @@
  * each axis (one unit edge-to-edge), so `getScale:[L,W,H]` maps directly to a
  * box of L×W×H metres.
  */
-import { SimpleMeshLayer } from "@deck.gl/mesh-layers";
-import { PathLayer } from "@deck.gl/layers";
-import type { ColorRGBA } from "../../types";
+import { SimpleMeshLayer } from '@deck.gl/mesh-layers';
+import { PathLayer } from '@deck.gl/layers';
+import type { ColorRGBA } from '../../types';
 
 /** One ego polyline vertex (`scene.streams.ego.path`). */
 export interface EgoPathPoint {
@@ -181,7 +181,7 @@ export function buildEgoFootprintLayer({
   path,
   time,
   color = DEFAULT_EGO_COLOR,
-  id = "ego-footprint",
+  id = 'ego-footprint',
 }: EgoFootprintOptions): SimpleMeshLayer {
   const pose = egoSampleAt(path, time);
   const data = pose ? [pose] : [];
@@ -225,7 +225,7 @@ export function buildEgoPathLayer({
   time,
   aheadMs = DEFAULT_AHEAD_MS,
   color = DEFAULT_EGO_COLOR,
-  id = "ego-path",
+  id = 'ego-path',
 }: EgoPathOptions): PathLayer {
   const horizon = time + aheadMs;
   const pts: EgoPathPoint[] = [];
@@ -268,7 +268,7 @@ export function buildEgoPathLayer({
     getPath: (d: Seg) => d.path,
     getColor: (d: Seg) => d.color,
     getWidth: (d: Seg) => d.width,
-    widthUnits: "meters",
+    widthUnits: 'meters',
     widthMinPixels: 1,
     capRounded: true,
     jointRounded: true,

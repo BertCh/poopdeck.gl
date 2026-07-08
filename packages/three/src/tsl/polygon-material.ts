@@ -24,7 +24,11 @@ import { MeshBasicNodeMaterial } from 'three/webgpu';
 import { DoubleSide, NormalBlending } from 'three';
 import { attribute, varying, uniform, float } from './nodes.js';
 import type { UniformNode } from './nodes.js';
-import { TimeFilterUniforms, windowAlphaNode, updateTimeFilterUniforms } from './time-filter.js';
+import {
+  TimeFilterUniforms,
+  windowAlphaNode,
+  updateTimeFilterUniforms,
+} from './time-filter.js';
 import type { TimeFilterParams } from './time-filter-math.js';
 
 export type PolygonTimeMode = 'window' | 'none';
@@ -54,7 +58,9 @@ export interface PolygonMaterialBundle {
  * `sttColor` (vec4, straight RGBA 0..1) and (in `window` mode) `sttStart` /
  * `sttEnd` (float, relative ms).
  */
-export function createPolygonMaterial(opts: PolygonMaterialOptions = {}): PolygonMaterialBundle {
+export function createPolygonMaterial(
+  opts: PolygonMaterialOptions = {},
+): PolygonMaterialBundle {
   const mode = opts.mode ?? 'none';
   const time = new TimeFilterUniforms();
   const opacity = uniform(1);
@@ -92,7 +98,10 @@ export interface PolygonUniformValues {
 }
 
 /** Push the playhead + window params into the polygon uniforms. Call once per frame. */
-export function updatePolygonUniforms(bundle: PolygonMaterialBundle, v: PolygonUniformValues): void {
+export function updatePolygonUniforms(
+  bundle: PolygonMaterialBundle,
+  v: PolygonUniformValues,
+): void {
   updateTimeFilterUniforms(bundle.time, v.relativeCurrentTime, v.params);
   bundle.poly.opacity.value = v.opacity ?? 1;
 }

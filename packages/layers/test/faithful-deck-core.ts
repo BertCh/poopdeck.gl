@@ -143,7 +143,9 @@ export function createFaithfulDeckCoreMock() {
         operation,
       };
       const overridingSublayerProps =
-        overridingProps && sublayerProps.id && overridingProps[sublayerProps.id];
+        overridingProps &&
+        sublayerProps.id &&
+        overridingProps[sublayerProps.id];
       const overridingSublayerTriggers =
         overridingSublayerProps && overridingSublayerProps.updateTriggers;
       const sublayerId = sublayerProps.id || 'sublayer';
@@ -159,7 +161,10 @@ export function createFaithfulDeckCoreMock() {
       // like deck, so each extension forwards its scalar props from the
       // composite onto the sublayer.
       for (const extension of extensions ?? []) {
-        const passThroughProps = extension.getSubLayerProps.call(this, extension);
+        const passThroughProps = extension.getSubLayerProps.call(
+          this,
+          extension,
+        );
         if (passThroughProps) {
           Object.assign(newProps, passThroughProps, {
             updateTriggers: Object.assign(

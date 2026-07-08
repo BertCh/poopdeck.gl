@@ -14,8 +14,8 @@
  *   @source "../node_modules/@poopdeck.gl/react/src";
  */
 @layer theme, utilities;
-@import "tailwindcss/theme" layer(theme);
-@import "tailwindcss/utilities" layer(utilities);
+@import 'tailwindcss/theme' layer(theme);
+@import 'tailwindcss/utilities' layer(utilities);
 @source "./";
 
 :root {

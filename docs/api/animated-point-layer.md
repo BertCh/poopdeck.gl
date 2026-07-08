@@ -5,23 +5,23 @@ The `AnimatedPointLayer` renders time-series point data as circles. It extends [
 ## Installation
 
 ```typescript
-import { AnimatedPointLayer } from "@poopdeck.gl/layers";
+import { AnimatedPointLayer } from '@poopdeck.gl/layers';
 ```
 
 ## Usage
 
 ```typescript
-import { AnimatedPointLayer } from "@poopdeck.gl/layers";
+import { AnimatedPointLayer } from '@poopdeck.gl/layers';
 
 const layer = new AnimatedPointLayer({
-  id: "earthquakes",
-  data: "https://example.com/earthquakes/manifest.json",
+  id: 'earthquakes',
+  data: 'https://example.com/earthquakes/manifest.json',
   currentTime: 1672531200000,
   timeWindow: 3600000, // 1 hour
   fillColor: [255, 128, 0, 255],
   radius: 5,
   radiusScale: 2,
-  radiusUnits: "meters",
+  radiusUnits: 'meters',
 });
 ```
 
@@ -29,17 +29,17 @@ const layer = new AnimatedPointLayer({
 
 ```typescript
 const layer = new AnimatedPointLayer({
-  id: "flights",
-  data: "https://example.com/flights/manifest.json",
+  id: 'flights',
+  data: 'https://example.com/flights/manifest.json',
   currentTime: Date.now(),
   timeWindow: 3600000,
-  fillColor: "airline", // categorical property name → GPU palette lookup
+  fillColor: 'airline', // categorical property name → GPU palette lookup
   colorPalette: [
     [31, 119, 180, 255],
     [255, 127, 14, 255],
     [44, 160, 44, 255],
   ],
-  radius: "altitude", // numeric property name → per-feature radius
+  radius: 'altitude', // numeric property name → per-feature radius
 });
 ```
 
@@ -47,12 +47,12 @@ const layer = new AnimatedPointLayer({
 
 ```typescript
 const layer = new AnimatedPointLayer({
-  id: "vessels",
-  data: "/data/ais/manifest.json",
+  id: 'vessels',
+  data: '/data/ais/manifest.json',
   currentTime,
-  wakeLength: 30 * 60 * 1000,    // 30 min comet tail behind each point
+  wakeLength: 30 * 60 * 1000, // 30 min comet tail behind each point
   wakeTailScale: 0.15,
-  timeWindow: 60 * 60 * 1000,    // must be >= 2 × wakeLength (loader window)
+  timeWindow: 60 * 60 * 1000, // must be >= 2 × wakeLength (loader window)
 });
 ```
 
@@ -60,11 +60,11 @@ const layer = new AnimatedPointLayer({
 
 ```typescript
 const layer = new AnimatedPointLayer({
-  id: "osm-nodes",
-  data: "/data/osm-nyc/manifest.json",
+  id: 'osm-nodes',
+  data: '/data/osm-nyc/manifest.json',
   currentTime,
   cumulative: true,
-  fadeInDuration: 500,          // appear ramp
+  fadeInDuration: 500, // appear ramp
   timeWindow: WHOLE_DATASET_MS, // keep revealed tiles resident
 });
 ```
@@ -75,62 +75,62 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 
 ### Render Options
 
-| Property             | Type                              | Default | Description                                        |
-| :------------------- | :-------------------------------- | :------ | :------------------------------------------------- |
-| `radiusScale`        | `number`                          | `1`     | Global multiplier for point radii.                 |
-| `radiusUnits`        | `'pixels' \| 'meters' \| 'common'` | `'pixels'` | Units for radius.                               |
-| `radiusMinPixels`    | `number`                          | `0`     | Minimum on-screen radius in pixels.                |
-| `radiusMaxPixels`    | `number`                          | `MAX_SAFE_INTEGER` | Maximum on-screen radius in pixels.     |
-| `filled`             | `boolean`                         | `true`  | Fill the marker.                                   |
-| `stroked`            | `boolean`                         | `false` | Render an outline stroke around each point.        |
-| `strokeColor`        | `Color`                           | `[0, 0, 0, 255]` | Stroke color (constant).                  |
-| `lineWidthUnits`     | `'pixels' \| 'meters' \| 'common'` | `'meters'` | Units for `strokeWidth`. Deck-parity default — note this differs from `radiusUnits`, whose STT default is `'pixels'`. |
-| `lineWidthScale`     | `number`                          | `1`     | Global multiplier for stroke widths.               |
-| `lineWidthMinPixels` | `number`                          | `0`     | Minimum on-screen stroke width in pixels.          |
-| `lineWidthMaxPixels` | `number`                          | `MAX_SAFE_INTEGER` | Maximum on-screen stroke width in pixels. |
-| `billboard`          | `boolean`                         | `false` | Render markers as billboards (always face the camera in 3D views). |
-| `antialiasing`       | `boolean`                         | `true`  | Smooth-edge antialiasing; disable to fix blending artifacts under some depth-test `parameters`. |
-| `fadeInDuration`     | `number`                          | `300`   | Duration (ms) for points to fade in.               |
-| `fadeOutDuration`    | `number`                          | `300`   | Duration (ms) for points to fade out (window mode).|
-| `splat`              | `boolean`                         | `false` | Render points as soft-gaussian splats instead of hard antialiased disks (installs [`SplatExtension`](./splat-extension.md)). Overlapping splats blend into continuous surfaces — a colored point-cloud / "poor-man's-photogrammetry" look rather than a field of discs. Pairs well with `rgbColorColumns`, a slightly larger `radius`, some transparency, and `billboard: true`. |
+| Property             | Type                               | Default            | Description                                                                                                                                                                                                                                                                                                                                                                      |
+| :------------------- | :--------------------------------- | :----------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `radiusScale`        | `number`                           | `1`                | Global multiplier for point radii.                                                                                                                                                                                                                                                                                                                                               |
+| `radiusUnits`        | `'pixels' \| 'meters' \| 'common'` | `'pixels'`         | Units for radius.                                                                                                                                                                                                                                                                                                                                                                |
+| `radiusMinPixels`    | `number`                           | `0`                | Minimum on-screen radius in pixels.                                                                                                                                                                                                                                                                                                                                              |
+| `radiusMaxPixels`    | `number`                           | `MAX_SAFE_INTEGER` | Maximum on-screen radius in pixels.                                                                                                                                                                                                                                                                                                                                              |
+| `filled`             | `boolean`                          | `true`             | Fill the marker.                                                                                                                                                                                                                                                                                                                                                                 |
+| `stroked`            | `boolean`                          | `false`            | Render an outline stroke around each point.                                                                                                                                                                                                                                                                                                                                      |
+| `strokeColor`        | `Color`                            | `[0, 0, 0, 255]`   | Stroke color (constant).                                                                                                                                                                                                                                                                                                                                                         |
+| `lineWidthUnits`     | `'pixels' \| 'meters' \| 'common'` | `'meters'`         | Units for `strokeWidth`. Deck-parity default — note this differs from `radiusUnits`, whose STT default is `'pixels'`.                                                                                                                                                                                                                                                            |
+| `lineWidthScale`     | `number`                           | `1`                | Global multiplier for stroke widths.                                                                                                                                                                                                                                                                                                                                             |
+| `lineWidthMinPixels` | `number`                           | `0`                | Minimum on-screen stroke width in pixels.                                                                                                                                                                                                                                                                                                                                        |
+| `lineWidthMaxPixels` | `number`                           | `MAX_SAFE_INTEGER` | Maximum on-screen stroke width in pixels.                                                                                                                                                                                                                                                                                                                                        |
+| `billboard`          | `boolean`                          | `false`            | Render markers as billboards (always face the camera in 3D views).                                                                                                                                                                                                                                                                                                               |
+| `antialiasing`       | `boolean`                          | `true`             | Smooth-edge antialiasing; disable to fix blending artifacts under some depth-test `parameters`.                                                                                                                                                                                                                                                                                  |
+| `fadeInDuration`     | `number`                           | `300`              | Duration (ms) for points to fade in.                                                                                                                                                                                                                                                                                                                                             |
+| `fadeOutDuration`    | `number`                           | `300`              | Duration (ms) for points to fade out (window mode).                                                                                                                                                                                                                                                                                                                              |
+| `splat`              | `boolean`                          | `false`            | Render points as soft-gaussian splats instead of hard antialiased disks (installs [`SplatExtension`](./splat-extension.md)). Overlapping splats blend into continuous surfaces — a colored point-cloud / "poor-man's-photogrammetry" look rather than a field of discs. Pairs well with `rgbColorColumns`, a slightly larger `radius`, some transparency, and `billboard: true`. |
 
 ### Mode Options
 
-| Property        | Type      | Default | Description |
-| :-------------- | :-------- | :------ | :--- |
+| Property        | Type      | Default | Description                                                                                                                                                                                                                                                                                                                                                        |
+| :-------------- | :-------- | :------ | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `wakeLength`    | `number`  | `0`     | When > 0, switches to one-sided "ship wake" rendering: visible only while `0 <= currentTime - startTime <= wakeLength`, alpha fades to 0 at the trailing edge, radius shrinks to `wakeTailScale` × head. Takes precedence over the symmetric window filter. The caller must ensure `timeWindow >= 2 × wakeLength` so the loader fetches the past half of the wake. |
-| `wakeTailScale` | `number`  | `0.15`  | Trailing-edge size multiplier in wake mode (0..1). |
-| `cumulative`    | `boolean` | `false` | "Draw and persist" mode: each point appears at its `startTime` and stays visible for the rest of playback. `fadeInDuration` doubles as the appear ramp. Widen the tile loader's window so revealed tiles stay resident. |
+| `wakeTailScale` | `number`  | `0.15`  | Trailing-edge size multiplier in wake mode (0..1).                                                                                                                                                                                                                                                                                                                 |
+| `cumulative`    | `boolean` | `false` | "Draw and persist" mode: each point appears at its `startTime` and stays visible for the rest of playback. `fadeInDuration` doubles as the appear ramp. Widen the tile loader's window so revealed tiles stay resident.                                                                                                                                            |
 
 ### Data Accessors
 
-| Property              | Type               | Default              | Description                                                                    |
-| :-------------------- | :----------------- | :------------------- | :----------------------------------------------------------------------------- |
-| `fillColor`           | `Color \| string`  | `[255, 128, 0, 255]` | Fill color: constant RGBA, or a property name for categorical coloring.        |
-| `getFillColor`        | `Color \| string \| null` | `null`        | Upstream-vocabulary alias of `fillColor`. Unlike upstream deck.gl it accepts a constant or a property-column NAME — NOT a function accessor (binary tiles can't run per-feature JS; a function warns once and falls back to `fillColor`). When set, it wins. |
-| `radius`              | `number \| string` | `5`                  | Point radius: constant, or a numeric property name.                            |
-| `getRadius`           | `number \| string \| null` | `null`       | Upstream-vocabulary alias of `radius` (same domain rules as `getFillColor`).   |
-| `getLineColor`        | `Color \| null`    | `null`               | Upstream-vocabulary alias of `strokeColor` (constant only).                    |
-| `strokeWidth`         | `number \| string` | `1`                  | Outline stroke width: constant, or a numeric property name. In `cumulative` mode a property-column value is ignored (slabs don't pack stroke widths) — the constant branch still applies. |
-| `getLineWidth`        | `number \| string \| null` | `null`       | Upstream-vocabulary alias of `strokeWidth` (same domain rules as `getRadius`). |
-| `colorPalette`        | `Color[]`          | 10-color palette     | Palette for categorical `fillColor` (GPU path, up to 4096 entries).            |
-| `colorMapping`        | `Record<string, Color> \| null` | `null`  | Explicit category-string → color map. The only way to get stable colors across tiles whose categorical column contains different category subsets. Forces the CPU palette-expansion path (the GPU texture can't look up by string). |
-| `colorMappingDefault` | `Color`            | `[0, 0, 0, 0]`       | Fallback for categories absent from `colorMapping` (transparent: unknown categories disappear rather than mislead). |
-| `rgbColorColumns`     | `[string, string, string] \| null` | `null` | Per-point RGB read straight from three NUMERIC property columns (each 0–255), e.g. LIDAR returns colored by projecting them into camera images at build time (`waymo_extract.py --colorize`). Fill is `[r, g, b, 255]` — no palette, no category lookup. Alpha comes from layer `opacity`. Takes precedence over `fillColor`/`colorMapping`; ignored (falls back to the normal color path) if any of the three columns is absent. |
-| `colorVectorColumn`   | `string \| null`   | `'point_rgba'`       | Per-point RGBA from ONE interleaved VECTOR column (`FixedSizeList<UInt8,4>`, baked by `stt-build --vector-group point_rgba=r,g,b,a:u8`). When the tile carries it, the contiguous u8 buffer is bound to `getFillColor` **zero-copy** — the GPU-ready analogue of `rgbColorColumns`. Takes precedence over every other color path; ignored if the column is absent from the tile. |
-| `radiusTransform`     | `(v: number) => number \| null` | `null`  | Per-feature transform applied to the `radius` property value before GPU upload (e.g. magnitude → area). |
-| `filterProperty`      | `string \| null`   | `null`               | Name of a baked NUMERIC column to GPU-filter points by — wires the column into [`DataFilterExtension`](./data-filter-extension.md). Points whose value is inside `filterRange` render; the rest are hidden (or soft-faded via `filterSoftRange`); composes WITH the time filter (a point must pass both). Accessor-alias of deck's `getFilterValue`: pass a column NAME, not a function (a function warns once and is ignored). Unset ⇒ the extension is not installed (zero cost). A categorical column can't be range-filtered (warns once). Ignored in `cumulative` mode (slabs bake a fixed schema). |
-| `filterRange`         | `[number, number] \| null` | `null`       | Inclusive `[min, max]` bounds for `filterProperty`. `null` keeps the column bound with no active range, so a range set later animates purely by uniform with no tile re-preparation. No effect unless `filterProperty` is set. |
-| `filterSoftRange`     | `[number, number] \| null` | `null`       | Optional soft `[min, max]` inside `filterRange`: values between the soft and hard bounds fade rather than hard-clip. No effect unless `filterProperty` + `filterRange` are set. |
-| `filterEnabled`       | `boolean`          | `true`               | Enable/disable the column filter without dropping the bound attribute. Effective only when `filterProperty` + a valid `filterRange` are set. |
+| Property              | Type                               | Default              | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| :-------------------- | :--------------------------------- | :------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `fillColor`           | `Color \| string`                  | `[255, 128, 0, 255]` | Fill color: constant RGBA, or a property name for categorical coloring.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `getFillColor`        | `Color \| string \| null`          | `null`               | Upstream-vocabulary alias of `fillColor`. Unlike upstream deck.gl it accepts a constant or a property-column NAME — NOT a function accessor (binary tiles can't run per-feature JS; a function warns once and falls back to `fillColor`). When set, it wins.                                                                                                                                                                                                                                                                                                                                             |
+| `radius`              | `number \| string`                 | `5`                  | Point radius: constant, or a numeric property name.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `getRadius`           | `number \| string \| null`         | `null`               | Upstream-vocabulary alias of `radius` (same domain rules as `getFillColor`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `getLineColor`        | `Color \| null`                    | `null`               | Upstream-vocabulary alias of `strokeColor` (constant only).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `strokeWidth`         | `number \| string`                 | `1`                  | Outline stroke width: constant, or a numeric property name. In `cumulative` mode a property-column value is ignored (slabs don't pack stroke widths) — the constant branch still applies.                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `getLineWidth`        | `number \| string \| null`         | `null`               | Upstream-vocabulary alias of `strokeWidth` (same domain rules as `getRadius`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `colorPalette`        | `Color[]`                          | 10-color palette     | Palette for categorical `fillColor` (GPU path, up to 4096 entries).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `colorMapping`        | `Record<string, Color> \| null`    | `null`               | Explicit category-string → color map. The only way to get stable colors across tiles whose categorical column contains different category subsets. Forces the CPU palette-expansion path (the GPU texture can't look up by string).                                                                                                                                                                                                                                                                                                                                                                      |
+| `colorMappingDefault` | `Color`                            | `[0, 0, 0, 0]`       | Fallback for categories absent from `colorMapping` (transparent: unknown categories disappear rather than mislead).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `rgbColorColumns`     | `[string, string, string] \| null` | `null`               | Per-point RGB read straight from three NUMERIC property columns (each 0–255), e.g. LIDAR returns colored by projecting them into camera images at build time (`waymo_extract.py --colorize`). Fill is `[r, g, b, 255]` — no palette, no category lookup. Alpha comes from layer `opacity`. Takes precedence over `fillColor`/`colorMapping`; ignored (falls back to the normal color path) if any of the three columns is absent.                                                                                                                                                                        |
+| `colorVectorColumn`   | `string \| null`                   | `'point_rgba'`       | Per-point RGBA from ONE interleaved VECTOR column (`FixedSizeList<UInt8,4>`, baked by `stt-build --vector-group point_rgba=r,g,b,a:u8`). When the tile carries it, the contiguous u8 buffer is bound to `getFillColor` **zero-copy** — the GPU-ready analogue of `rgbColorColumns`. Takes precedence over every other color path; ignored if the column is absent from the tile.                                                                                                                                                                                                                         |
+| `radiusTransform`     | `(v: number) => number \| null`    | `null`               | Per-feature transform applied to the `radius` property value before GPU upload (e.g. magnitude → area).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `filterProperty`      | `string \| null`                   | `null`               | Name of a baked NUMERIC column to GPU-filter points by — wires the column into [`DataFilterExtension`](./data-filter-extension.md). Points whose value is inside `filterRange` render; the rest are hidden (or soft-faded via `filterSoftRange`); composes WITH the time filter (a point must pass both). Accessor-alias of deck's `getFilterValue`: pass a column NAME, not a function (a function warns once and is ignored). Unset ⇒ the extension is not installed (zero cost). A categorical column can't be range-filtered (warns once). Ignored in `cumulative` mode (slabs bake a fixed schema). |
+| `filterRange`         | `[number, number] \| null`         | `null`               | Inclusive `[min, max]` bounds for `filterProperty`. `null` keeps the column bound with no active range, so a range set later animates purely by uniform with no tile re-preparation. No effect unless `filterProperty` is set.                                                                                                                                                                                                                                                                                                                                                                           |
+| `filterSoftRange`     | `[number, number] \| null`         | `null`               | Optional soft `[min, max]` inside `filterRange`: values between the soft and hard bounds fade rather than hard-clip. No effect unless `filterProperty` + `filterRange` are set.                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `filterEnabled`       | `boolean`                          | `true`               | Enable/disable the column filter without dropping the bound attribute. Effective only when `filterProperty` + a valid `filterRange` are set.                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 
 ### 3D props
 
-| Property            | Type               | Default | Description |
-| :------------------- | :----------------- | :------ | :--- |
-| `elevationProperty`  | `string \| null`   | `null`  | Numeric property name to source per-point elevation (z) from. Tile geometry is 2D (lon/lat); when set, each point's z is baked as `column[i] * elevationScale` into the position buffer at tile-prepare time, on both the per-tile sublayer path and the cumulative slab path. Negative and zero values pass through unchanged (e.g. below-grade to rooftop LIDAR returns). Left unset (the default), z stays 0 — byte-identical to a flat 2D render. |
-| `elevationScale`     | `number`           | `1`     | Multiplier applied to every `elevationProperty` value before it becomes z. No effect when `elevationProperty` is unset. |
-| `use3D`              | `boolean`          | `false` | Accepted for API compatibility only — has **no effect**. 3D is inferred automatically: tiles whose `positionDimensions` is 3 ride their z zero-copy, 2D tiles are padded with z=0 (or with the `elevationProperty`-baked z, if set), regardless of this flag. |
+| Property            | Type             | Default | Description                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| :------------------ | :--------------- | :------ | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `elevationProperty` | `string \| null` | `null`  | Numeric property name to source per-point elevation (z) from. Tile geometry is 2D (lon/lat); when set, each point's z is baked as `column[i] * elevationScale` into the position buffer at tile-prepare time, on both the per-tile sublayer path and the cumulative slab path. Negative and zero values pass through unchanged (e.g. below-grade to rooftop LIDAR returns). Left unset (the default), z stays 0 — byte-identical to a flat 2D render. |
+| `elevationScale`    | `number`         | `1`     | Multiplier applied to every `elevationProperty` value before it becomes z. No effect when `elevationProperty` is unset.                                                                                                                                                                                                                                                                                                                               |
+| `use3D`             | `boolean`        | `false` | Accepted for API compatibility only — has **no effect**. 3D is inferred automatically: tiles whose `positionDimensions` is 3 ride their z zero-copy, 2D tiles are padded with z=0 (or with the `elevationProperty`-baked z, if set), regardless of this flag.                                                                                                                                                                                         |
 
 3D handling is otherwise fully automatic — there is no separate "3D mode" to opt into beyond setting `elevationProperty` (for 2D tiles) or building the archive with 3D positions in the first place.
 

@@ -5,7 +5,13 @@
  * silently creep between the copies.
  */
 
-import { RecordBatch, type Schema, Table, type makeData, tableToIPC } from 'apache-arrow';
+import {
+  RecordBatch,
+  type Schema,
+  Table,
+  type makeData,
+  tableToIPC,
+} from 'apache-arrow';
 import type { BoundingBox, Tile, TileId } from '../../src/types';
 
 // ---------------------------------------------------------------------------
@@ -30,14 +36,20 @@ export const flush = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
  * matches the common case; callers with tighter/looser needs pass an explicit
  * value.
  */
-export const settle = (ms = 25): Promise<void> => new Promise((r) => setTimeout(r, ms));
+export const settle = (ms = 25): Promise<void> =>
+  new Promise((r) => setTimeout(r, ms));
 
 // ---------------------------------------------------------------------------
 // Single-cell synthetic archive
 // ---------------------------------------------------------------------------
 
 /** World bounds shared by the single-cell tileset tests. */
-export const BOUNDS: BoundingBox = { minLon: -180, minLat: -85, maxLon: 180, maxLat: 85 };
+export const BOUNDS: BoundingBox = {
+  minLon: -180,
+  minLat: -85,
+  maxLon: 180,
+  maxLat: 85,
+};
 
 /** Every synthetic tileset buckets sim-time at 1 s. */
 export const BUCKET_MS = 1000;
@@ -61,7 +73,11 @@ export function fakeTile(id: TileId, bucketMs = BUCKET_MS): Tile {
 export function makeAvailableTiles(
   nBuckets: number,
   xFromBounds: (b: BoundingBox) => number = () => 0,
-): (b: BoundingBox, z: number, range: { start: number; end: number }) => TileId[] {
+): (
+  b: BoundingBox,
+  z: number,
+  range: { start: number; end: number },
+) => TileId[] {
   return (b, z, range) => {
     const x = xFromBounds(b);
     const ids: TileId[] = [];
@@ -69,7 +85,8 @@ export function makeAvailableTiles(
     const last = Math.min(nBuckets - 1, Math.floor(range.end / BUCKET_MS));
     for (let i = first; i <= last; i++) {
       const t = i * BUCKET_MS;
-      if (t + BUCKET_MS >= range.start && t <= range.end) ids.push({ z, x, y: 0, t });
+      if (t + BUCKET_MS >= range.start && t <= range.end)
+        ids.push({ z, x, y: 0, t });
     }
     return ids;
   };
@@ -98,6 +115,9 @@ export function frameLayer(
   schema: Schema,
   structData: ReturnType<typeof makeData>,
 ): Uint8Array {
-  const ipc = tableToIPC(new Table([new RecordBatch(schema, structData as never)]), 'stream');
+  const ipc = tableToIPC(
+    new Table([new RecordBatch(schema, structData as never)]),
+    'stream',
+  );
   return frameFromIpc(name, ipc);
 }

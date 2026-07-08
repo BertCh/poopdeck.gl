@@ -2,8 +2,16 @@ import { describe, it, expect, afterEach } from 'vitest';
 import * as path from 'node:path';
 import { mkdtemp, mkdir, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { scanDatasets, describeDataset, resolveDatasetDir } from '../src/manifest';
-import { makeManifestJson, writeFixtureDataRoot, cleanupDataRoot } from './fixtures';
+import {
+  scanDatasets,
+  describeDataset,
+  resolveDatasetDir,
+} from '../src/manifest';
+import {
+  makeManifestJson,
+  writeFixtureDataRoot,
+  cleanupDataRoot,
+} from './fixtures';
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -18,22 +26,33 @@ async function fixtureRoot(datasets: Record<string, unknown>): Promise<string> {
 
 describe('scanDatasets', () => {
   it('finds a flat dataset directory', async () => {
-    const root = await fixtureRoot({ earthquakes: makeManifestJson({ metadata: { name: 'earthquakes' } }) });
+    const root = await fixtureRoot({
+      earthquakes: makeManifestJson({ metadata: { name: 'earthquakes' } }),
+    });
     const datasets = await scanDatasets(root);
     expect(datasets).toHaveLength(1);
     expect(datasets[0].name).toBe('earthquakes');
     expect(datasets[0].path).toBe(path.join(root, 'earthquakes'));
     expect(datasets[0].format).toBe('stt-packed');
     expect(datasets[0].formatVersion).toBe(2);
-    expect(datasets[0].boundingBox).toEqual({ minLon: -10, minLat: -20, maxLon: 10, maxLat: 20 });
+    expect(datasets[0].boundingBox).toEqual({
+      minLon: -10,
+      minLat: -20,
+      maxLon: 10,
+      maxLat: 20,
+    });
     expect(datasets[0].timeRange).toEqual({ start: 0, end: 3_600_000 });
     expect(datasets[0].hasSummaryTier).toBe(false);
   });
 
   it('finds nested AV-cockpit-style stream datasets one level deep', async () => {
     const root = await fixtureRoot({
-      'scene-01/lidar': makeManifestJson({ metadata: { name: 'scene-01-lidar' } }),
-      'scene-01/objects': makeManifestJson({ metadata: { name: 'scene-01-objects' } }),
+      'scene-01/lidar': makeManifestJson({
+        metadata: { name: 'scene-01-lidar' },
+      }),
+      'scene-01/objects': makeManifestJson({
+        metadata: { name: 'scene-01-objects' },
+      }),
     });
     const datasets = await scanDatasets(root);
     const names = datasets.map((d) => d.name).sort();
@@ -51,7 +70,9 @@ describe('scanDatasets', () => {
   it('surfaces summary-tier scheme when present', async () => {
     const root = await fixtureRoot({
       quadbin: makeManifestJson({
-        metadata: { summary_tier: { scheme: 'quadbin', min_zoom: 8, max_zoom: 15 } },
+        metadata: {
+          summary_tier: { scheme: 'quadbin', min_zoom: 8, max_zoom: 15 },
+        },
       }),
     });
     const [d] = await scanDatasets(root);
@@ -95,7 +116,11 @@ describe('scanDatasets', () => {
     const root = await fixtureRoot({ good: makeManifestJson() });
     const { writeFile, mkdir } = await import('node:fs/promises');
     await mkdir(path.join(root, 'bad'), { recursive: true });
-    await writeFile(path.join(root, 'bad', 'manifest.json'), '{not json', 'utf8');
+    await writeFile(
+      path.join(root, 'bad', 'manifest.json'),
+      '{not json',
+      'utf8',
+    );
     const datasets = await scanDatasets(root);
     expect(datasets.map((d) => d.name)).toEqual(['good']);
   });
@@ -104,18 +129,24 @@ describe('scanDatasets', () => {
 describe('resolveDatasetDir', () => {
   it('resolves a plain name under the data root', async () => {
     const root = await fixtureRoot({ earthquakes: makeManifestJson() });
-    expect(resolveDatasetDir(root, 'earthquakes')).toBe(path.resolve(root, 'earthquakes'));
+    expect(resolveDatasetDir(root, 'earthquakes')).toBe(
+      path.resolve(root, 'earthquakes'),
+    );
   });
 
   it('rejects path traversal outside the data root', async () => {
     const root = await fixtureRoot({ earthquakes: makeManifestJson() });
-    expect(() => resolveDatasetDir(root, '../../etc')).toThrow(/outside --data-root/);
+    expect(() => resolveDatasetDir(root, '../../etc')).toThrow(
+      /outside --data-root/,
+    );
     expect(() => resolveDatasetDir(root, '..')).toThrow(/outside --data-root/);
   });
 
   it('strips a trailing /manifest.json', async () => {
     const root = await fixtureRoot({ earthquakes: makeManifestJson() });
-    expect(resolveDatasetDir(root, 'earthquakes/manifest.json')).toBe(path.resolve(root, 'earthquakes'));
+    expect(resolveDatasetDir(root, 'earthquakes/manifest.json')).toBe(
+      path.resolve(root, 'earthquakes'),
+    );
   });
 
   it('rejects a symlink inside --data-root that points outside it', async () => {
@@ -129,7 +160,9 @@ describe('resolveDatasetDir', () => {
     await mkdir(dataRoot, { recursive: true });
     await mkdir(outside, { recursive: true });
     await symlink(outside, path.join(dataRoot, 'escape'), 'dir');
-    expect(() => resolveDatasetDir(dataRoot, 'escape')).toThrow(/outside --data-root/);
+    expect(() => resolveDatasetDir(dataRoot, 'escape')).toThrow(
+      /outside --data-root/,
+    );
   });
 
   it('allows a symlink inside --data-root that points to a contained sibling', async () => {
@@ -139,7 +172,9 @@ describe('resolveDatasetDir', () => {
     const real = path.join(dataRoot, 'real');
     await mkdir(real, { recursive: true });
     await symlink(real, path.join(dataRoot, 'alias'), 'dir');
-    expect(resolveDatasetDir(dataRoot, 'alias')).toBe(path.resolve(dataRoot, 'alias'));
+    expect(resolveDatasetDir(dataRoot, 'alias')).toBe(
+      path.resolve(dataRoot, 'alias'),
+    );
   });
 
   it('allows a not-yet-existing leaf under a real, contained directory (ENOENT is fine)', async () => {
@@ -147,7 +182,9 @@ describe('resolveDatasetDir', () => {
     roots.push(base);
     const dataRoot = path.join(base, 'data-root');
     await mkdir(dataRoot, { recursive: true });
-    expect(resolveDatasetDir(dataRoot, 'not-built-yet')).toBe(path.resolve(dataRoot, 'not-built-yet'));
+    expect(resolveDatasetDir(dataRoot, 'not-built-yet')).toBe(
+      path.resolve(dataRoot, 'not-built-yet'),
+    );
   });
 });
 
@@ -183,7 +220,13 @@ describe('describeDataset', () => {
           style_hints: {
             version: 1,
             properties: [
-              { name: 'magnitude', min: 4, p50: 4.5, max: 8.2, suggested_domain: [4, 7] },
+              {
+                name: 'magnitude',
+                min: 4,
+                p50: 4.5,
+                max: 8.2,
+                suggested_domain: [4, 7],
+              },
               { name: 'vessel_type', cardinality: 12 },
             ],
             layer_hint: 'points',
@@ -193,8 +236,22 @@ describe('describeDataset', () => {
     });
     const d = await describeDataset(root, 'styled');
     expect(d.columns).toEqual([
-      { name: 'magnitude', type: 'Number', min: 4, max: 8.2, suggestedDomain: [4, 7], cardinality: undefined, },
-      { name: 'vessel_type', type: 'String', min: undefined, max: undefined, suggestedDomain: undefined, cardinality: 12 },
+      {
+        name: 'magnitude',
+        type: 'Number',
+        min: 4,
+        max: 8.2,
+        suggestedDomain: [4, 7],
+        cardinality: undefined,
+      },
+      {
+        name: 'vessel_type',
+        type: 'String',
+        min: undefined,
+        max: undefined,
+        suggestedDomain: undefined,
+        cardinality: 12,
+      },
     ]);
     expect(d.styleHints?.layer_hint).toBe('points');
   });
@@ -247,7 +304,14 @@ describe('describeDataset', () => {
     });
     const d = await describeDataset(root, 'both');
     expect(d.columns).toEqual([
-      { name: 'magnitude', type: 'Number', min: 4, max: 8, suggestedDomain: undefined, cardinality: undefined },
+      {
+        name: 'magnitude',
+        type: 'Number',
+        min: 4,
+        max: 8,
+        suggestedDomain: undefined,
+        cardinality: undefined,
+      },
     ]);
   });
 
@@ -261,6 +325,8 @@ describe('describeDataset', () => {
 
   it('throws a clear error for an unknown dataset name', async () => {
     const root = await fixtureRoot({ earthquakes: makeManifestJson() });
-    await expect(describeDataset(root, 'nonexistent')).rejects.toThrow(/no readable manifest\.json/);
+    await expect(describeDataset(root, 'nonexistent')).rejects.toThrow(
+      /no readable manifest\.json/,
+    );
   });
 });

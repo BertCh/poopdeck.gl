@@ -1,7 +1,7 @@
-import React, { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router";
-import StoryGlobe from "../components/story/StoryGlobe";
-import { useScrollSpy } from "../components/story/useScrollSpy";
+import React, { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router';
+import StoryGlobe from '../components/story/StoryGlobe';
+import { useScrollSpy } from '../components/story/useScrollSpy';
 import {
   Eyebrow,
   Figure,
@@ -9,7 +9,7 @@ import {
   StatCounter,
   MilestoneTimeline,
   DrifterDiagram,
-} from "../components/story/parts";
+} from '../components/story/parts';
 import {
   ACT_INCEPTION,
   ACT_BUILDUP,
@@ -23,7 +23,7 @@ import {
   IMG,
   type GlobeFocus,
   type StoryStep,
-} from "../content/drifterStory";
+} from '../content/drifterStory';
 
 // ── A scrolly "act" step: a glass card floating over the live globe ──────────
 const GlobeStepCard: React.FC<{ step: StoryStep; active: boolean }> = ({
@@ -32,7 +32,7 @@ const GlobeStepCard: React.FC<{ step: StoryStep; active: boolean }> = ({
 }) => (
   <section
     id={step.key}
-    className={`story-step ${active ? "story-step--active" : ""}`}
+    className={`story-step ${active ? 'story-step--active' : ''}`}
   >
     <div className="w-full px-5 sm:px-8 lg:px-14">
       <div className="story-step-card">
@@ -41,8 +41,8 @@ const GlobeStepCard: React.FC<{ step: StoryStep; active: boolean }> = ({
           <h2
             className="story-display mt-1.5"
             style={{
-              fontSize: "clamp(1.5rem, 3vw, 2rem)",
-              color: "var(--story-ink)",
+              fontSize: 'clamp(1.5rem, 3vw, 2rem)',
+              color: 'var(--story-ink)',
             }}
           >
             {step.title}
@@ -57,9 +57,9 @@ const GlobeStepCard: React.FC<{ step: StoryStep; active: boolean }> = ({
           <div
             className="story-display mt-4 pt-3 text-xs"
             style={{
-              borderTop: "1px solid rgba(255,255,255,0.12)",
-              color: "var(--story-warm)",
-              letterSpacing: "0.02em",
+              borderTop: '1px solid rgba(255,255,255,0.12)',
+              color: 'var(--story-warm)',
+              letterSpacing: '0.02em',
             }}
           >
             {step.note}
@@ -85,15 +85,15 @@ const Act: React.FC<{ steps: StoryStep[]; activeId: string | null }> = ({
 const Chip: React.FC<{ k: string; v: string }> = ({ k, v }) => (
   <div
     className="px-3.5 py-2.5 rounded-lg"
-    style={{ background: "var(--surface-sunken)" }}
+    style={{ background: 'var(--surface-sunken)' }}
   >
     <div
       className="story-display"
-      style={{ fontSize: "1.1rem", color: "var(--ink-900)" }}
+      style={{ fontSize: '1.1rem', color: 'var(--ink-900)' }}
     >
       {v}
     </div>
-    <div className="text-xs mt-0.5" style={{ color: "var(--ink-500)" }}>
+    <div className="text-xs mt-0.5" style={{ color: 'var(--ink-500)' }}>
       {k}
     </div>
   </div>
@@ -107,9 +107,9 @@ const Pullquote: React.FC<{ children: React.ReactNode; cite?: string }> = ({
     <p
       className="story-display"
       style={{
-        fontSize: "clamp(1.5rem, 3.4vw, 2.3rem)",
+        fontSize: 'clamp(1.5rem, 3.4vw, 2.3rem)',
         lineHeight: 1.18,
-        color: "var(--accent)",
+        color: 'var(--accent)',
       }}
     >
       “{children}”
@@ -117,7 +117,7 @@ const Pullquote: React.FC<{ children: React.ReactNode; cite?: string }> = ({
     {cite && (
       <cite
         className="block mt-3 text-xs not-italic"
-        style={{ color: "var(--ink-500)" }}
+        style={{ color: 'var(--ink-500)' }}
       >
         {cite}
       </cite>
@@ -129,23 +129,23 @@ const DrifterStory: React.FC = () => {
   // Scroll targets, in DOM order: hero + each globe step + each interlude.
   const ids = useMemo(
     () => [
-      "hero",
-      "prologue",
+      'hero',
+      'prologue',
       ...ACT_INCEPTION.steps.map((s) => s.key),
-      "anatomy",
+      'anatomy',
       ...ACT_BUILDUP.steps.map((s) => s.key),
-      "array-culture",
+      'array-culture',
       ...ACT_CURRENTS.steps.map((s) => s.key),
-      "institutions",
+      'institutions',
       ...ACT_PAYOFF.steps.map((s) => s.key),
-      "epilogue",
+      'epilogue',
     ],
     [],
   );
 
   const focusMap = useMemo(() => {
     const m = new Map<string, GlobeFocus>();
-    m.set("hero", HERO_FOCUS);
+    m.set('hero', HERO_FOCUS);
     [ACT_INCEPTION, ACT_BUILDUP, ACT_CURRENTS, ACT_PAYOFF].forEach((act) =>
       act.steps.forEach((s) => m.set(s.key, s.focus)),
     );
@@ -171,7 +171,7 @@ const DrifterStory: React.FC = () => {
     <div className="story-root custom-scrollbar">
       {/* Fixed cinematic globe behind everything; interludes scroll over it. */}
       <div
-        className={`story-stage ${stageActive ? "story-stage--live" : "story-stage--idle"}`}
+        className={`story-stage ${stageActive ? 'story-stage--live' : 'story-stage--idle'}`}
       >
         <StoryGlobe focus={focus} active={stageActive} />
       </div>
@@ -181,16 +181,16 @@ const DrifterStory: React.FC = () => {
         <section
           id="hero"
           className="story-step"
-          style={{ minHeight: "100vh" }}
+          style={{ minHeight: '100vh' }}
         >
           <div className="w-full px-5 sm:px-8 lg:px-14">
-            <div style={{ maxWidth: "46rem" }}>
+            <div style={{ maxWidth: '46rem' }}>
               <Eyebrow tone="dark">NOAA Global Drifter Program</Eyebrow>
               <h1
                 className="story-display mt-4"
                 style={{
-                  fontSize: "clamp(2.6rem, 7vw, 5.2rem)",
-                  color: "var(--story-ink)",
+                  fontSize: 'clamp(2.6rem, 7vw, 5.2rem)',
+                  color: 'var(--story-ink)',
                   fontWeight: 600,
                 }}
               >
@@ -201,10 +201,10 @@ const DrifterStory: React.FC = () => {
               <p
                 className="mt-6"
                 style={{
-                  fontSize: "clamp(1.1rem, 2.2vw, 1.5rem)",
+                  fontSize: 'clamp(1.1rem, 2.2vw, 1.5rem)',
                   lineHeight: 1.5,
-                  color: "var(--story-ink-soft)",
-                  maxWidth: "34rem",
+                  color: 'var(--story-ink-soft)',
+                  maxWidth: '34rem',
                 }}
               >
                 For two centuries, we read the ocean from what it washed ashore.
@@ -214,27 +214,27 @@ const DrifterStory: React.FC = () => {
               </p>
               <div
                 className="story-display mt-10 inline-flex items-center gap-2 text-sm"
-                style={{ color: "var(--story-ink-faint)" }}
+                style={{ color: 'var(--story-ink-faint)' }}
               >
                 <span
                   style={{
-                    display: "inline-block",
+                    display: 'inline-block',
                     width: 22,
                     height: 36,
-                    border: "1.5px solid var(--story-ink-faint)",
+                    border: '1.5px solid var(--story-ink-faint)',
                     borderRadius: 12,
-                    position: "relative",
+                    position: 'relative',
                   }}
                 >
                   <span
                     style={{
-                      position: "absolute",
+                      position: 'absolute',
                       top: 6,
-                      left: "50%",
+                      left: '50%',
                       width: 3,
                       height: 7,
                       marginLeft: -1.5,
-                      background: "var(--story-ink-faint)",
+                      background: 'var(--story-ink-faint)',
                       borderRadius: 2,
                     }}
                   />
@@ -249,14 +249,14 @@ const DrifterStory: React.FC = () => {
         <section id="prologue" className="story-interlude">
           <div
             className="mx-auto px-5 sm:px-8 py-20 sm:py-28"
-            style={{ maxWidth: "64rem" }}
+            style={{ maxWidth: '64rem' }}
           >
             <Eyebrow>I · The Flotsam Age</Eyebrow>
             <h2
               className="story-display mt-3"
               style={{
-                fontSize: "clamp(2rem, 4.5vw, 3rem)",
-                color: "var(--ink-900)",
+                fontSize: 'clamp(2rem, 4.5vw, 3rem)',
+                color: 'var(--ink-900)',
               }}
             >
               Knowledge that washed ashore
@@ -312,14 +312,14 @@ const DrifterStory: React.FC = () => {
         <section id="anatomy" className="story-interlude">
           <div
             className="mx-auto px-5 sm:px-8 py-20 sm:py-28"
-            style={{ maxWidth: "64rem" }}
+            style={{ maxWidth: '64rem' }}
           >
             <Eyebrow>II · The Instrument Age</Eyebrow>
             <h2
               className="story-display mt-3"
               style={{
-                fontSize: "clamp(2rem, 4.5vw, 3rem)",
-                color: "var(--ink-900)",
+                fontSize: 'clamp(2rem, 4.5vw, 3rem)',
+                color: 'var(--ink-900)',
               }}
             >
               Anatomy of a drifter
@@ -391,14 +391,14 @@ const DrifterStory: React.FC = () => {
         <section id="array-culture" className="story-interlude">
           <div
             className="mx-auto px-5 sm:px-8 py-20 sm:py-28"
-            style={{ maxWidth: "64rem" }}
+            style={{ maxWidth: '64rem' }}
           >
             <Eyebrow>III · The Array Age</Eyebrow>
             <h2
               className="story-display mt-3"
               style={{
-                fontSize: "clamp(2rem, 4.5vw, 3rem)",
-                color: "var(--ink-900)",
+                fontSize: 'clamp(2rem, 4.5vw, 3rem)',
+                color: 'var(--ink-900)',
               }}
             >
               The array, not the drifter
@@ -437,20 +437,20 @@ const DrifterStory: React.FC = () => {
                   asset={IMG.globalPopulation}
                   alt="The global drifter array"
                   caption="The active array at a glance — every reporting drifter at once."
-                  style={{ marginTop: "0.5rem" }}
+                  style={{ marginTop: '0.5rem' }}
                 />
               </div>
             </div>
 
             <h3
               className="story-display mt-16 mb-2"
-              style={{ fontSize: "1.4rem", color: "var(--ink-900)" }}
+              style={{ fontSize: '1.4rem', color: 'var(--ink-900)' }}
             >
               The people who built it
             </h3>
             <p
               className="story-prose"
-              style={{ maxWidth: "44rem", color: "var(--ink-500)" }}
+              style={{ maxWidth: '44rem', color: 'var(--ink-500)' }}
             >
               Big observing systems aren’t built by equations alone. They take
               engineers, organizers, data-keepers, ship crews, and the
@@ -471,14 +471,14 @@ const DrifterStory: React.FC = () => {
         <section id="institutions" className="story-interlude">
           <div
             className="mx-auto px-5 sm:px-8 py-20 sm:py-28"
-            style={{ maxWidth: "64rem" }}
+            style={{ maxWidth: '64rem' }}
           >
             <Eyebrow>The work behind the picture</Eyebrow>
             <h2
               className="story-display mt-3"
               style={{
-                fontSize: "clamp(2rem, 4.5vw, 3rem)",
-                color: "var(--ink-900)",
+                fontSize: 'clamp(2rem, 4.5vw, 3rem)',
+                color: 'var(--ink-900)',
               }}
             >
               From a satellite ping to a record
@@ -505,16 +505,16 @@ const DrifterStory: React.FC = () => {
                 </p>
                 <div
                   className="story-display flex flex-wrap items-center gap-x-2 gap-y-1 mt-2 text-sm"
-                  style={{ color: "var(--accent)" }}
+                  style={{ color: 'var(--accent)' }}
                 >
                   <span>float</span>
-                  <span style={{ color: "var(--ink-400)" }}>→</span>
+                  <span style={{ color: 'var(--ink-400)' }}>→</span>
                   <span>ping</span>
-                  <span style={{ color: "var(--ink-400)" }}>→</span>
+                  <span style={{ color: 'var(--ink-400)' }}>→</span>
                   <span>quality control</span>
-                  <span style={{ color: "var(--ink-400)" }}>→</span>
+                  <span style={{ color: 'var(--ink-400)' }}>→</span>
                   <span>interpolation</span>
-                  <span style={{ color: "var(--ink-400)" }}>→</span>
+                  <span style={{ color: 'var(--ink-400)' }}>→</span>
                   <span>archive</span>
                 </div>
               </div>
@@ -534,7 +534,7 @@ const DrifterStory: React.FC = () => {
 
             <h3
               className="story-display mt-16 mb-8"
-              style={{ fontSize: "1.4rem", color: "var(--ink-900)" }}
+              style={{ fontSize: '1.4rem', color: 'var(--ink-900)' }}
             >
               Four and a half decades, in brief
             </h3>
@@ -552,14 +552,14 @@ const DrifterStory: React.FC = () => {
         >
           <div
             className="mx-auto px-5 sm:px-8 py-20 sm:py-28"
-            style={{ maxWidth: "64rem" }}
+            style={{ maxWidth: '64rem' }}
           >
             <Eyebrow tone="dark">V · The Planetary Age</Eyebrow>
             <h2
               className="story-display mt-3"
               style={{
-                fontSize: "clamp(2rem, 4.5vw, 3rem)",
-                color: "var(--story-ink)",
+                fontSize: 'clamp(2rem, 4.5vw, 3rem)',
+                color: 'var(--story-ink)',
               }}
             >
               From exploring the ocean to monitoring the Earth
@@ -567,13 +567,13 @@ const DrifterStory: React.FC = () => {
             <div className="grid lg:grid-cols-2 gap-10 lg:gap-14 mt-8 items-start">
               <div
                 className="story-prose"
-                style={{ color: "var(--story-ink-soft)" }}
+                style={{ color: 'var(--story-ink-soft)' }}
               >
                 <p>
                   Decades of trajectories now form a long public record of the
                   surface ocean. The drifters also mark a shift in what we ask
                   of the sea. Exploration asked: <em>what is out there?</em> The
-                  array asks a harder question:{" "}
+                  array asks a harder question:{' '}
                   <em>what is changing, how fast, and what will it mean?</em>
                 </p>
                 <p>
@@ -601,14 +601,14 @@ const DrifterStory: React.FC = () => {
               <Link
                 to="/demo/ocean-drifters"
                 className="inline-flex items-center gap-2 px-6 py-3 rounded-lg text-sm font-medium"
-                style={{ background: "var(--story-cool)", color: "#04121a" }}
+                style={{ background: 'var(--story-cool)', color: '#04121a' }}
               >
                 Explore the live globe <span aria-hidden>→</span>
               </Link>
               <Link
                 to="/"
                 className="text-sm"
-                style={{ color: "var(--story-ink-soft)" }}
+                style={{ color: 'var(--story-ink-soft)' }}
               >
                 ← Back to overview
               </Link>
@@ -617,7 +617,7 @@ const DrifterStory: React.FC = () => {
             {/* Sources & credits */}
             <div
               className="mt-20 pt-8"
-              style={{ borderTop: "1px solid rgba(255,255,255,0.12)" }}
+              style={{ borderTop: '1px solid rgba(255,255,255,0.12)' }}
             >
               <Eyebrow tone="dark">Sources &amp; further reading</Eyebrow>
               <ul className="grid sm:grid-cols-2 gap-x-8 gap-y-2 mt-4">
@@ -628,12 +628,12 @@ const DrifterStory: React.FC = () => {
                       target="_blank"
                       rel="noopener noreferrer"
                       className="text-sm"
-                      style={{ color: "var(--story-ink-soft)" }}
+                      style={{ color: 'var(--story-ink-soft)' }}
                     >
-                      {s.label}{" "}
+                      {s.label}{' '}
                       <span
                         aria-hidden
-                        style={{ color: "var(--story-ink-faint)" }}
+                        style={{ color: 'var(--story-ink-faint)' }}
                       >
                         ↗
                       </span>
@@ -644,15 +644,15 @@ const DrifterStory: React.FC = () => {
               <p
                 className="text-xs mt-8"
                 style={{
-                  color: "var(--story-ink-faint)",
+                  color: 'var(--story-ink-faint)',
                   lineHeight: 1.6,
-                  maxWidth: "46rem",
+                  maxWidth: '46rem',
                 }}
               >
                 Globe rendered from the NOAA Global Drifter Program trajectory
-                archive using deck.gl. Imagery: NOAA AOML and NASA’s
-                Scientific Visualization Studio (public domain); Franklin–Folger
-                chart, Library of Congress; HMS Challenger, NOAA archive; Argos
+                archive using deck.gl. Imagery: NOAA AOML and NASA’s Scientific
+                Visualization Studio (public domain); Franklin–Folger chart,
+                Library of Congress; HMS Challenger, NOAA archive; Argos
                 diagram, Vsatinet / Wikimedia (CC BY 4.0); Franklin portrait by
                 Joseph-Siffred Duplessis (public domain). Attribution does not
                 imply endorsement by NOAA or NASA.

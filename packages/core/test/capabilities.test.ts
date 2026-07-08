@@ -15,7 +15,9 @@ import {
 import type { TimeFilterMode } from '../src/render/time-filter';
 
 function descriptor(over: Partial<BackendDescriptor> = {}): BackendDescriptor {
-  const capabilities = Object.fromEntries(CAPABILITIES.map((c) => [c, false])) as Record<Capability, boolean>;
+  const capabilities = Object.fromEntries(
+    CAPABILITIES.map((c) => [c, false]),
+  ) as Record<Capability, boolean>;
   const layerKinds = Object.fromEntries(
     LAYER_KINDS.map((k) => [k, { supported: false, reason: 'not built' }]),
   ) as Record<LayerKind, { supported: false; reason: string }>;
@@ -50,9 +52,17 @@ describe('degradeRequest', () => {
     layerKinds: {
       ...descriptor().layerKinds,
       point: { supported: true },
-      surfel: { supported: false, fallbackKind: 'point', reason: 'no oriented splat' },
+      surfel: {
+        supported: false,
+        fallbackKind: 'point',
+        reason: 'no oriented splat',
+      },
       heatmap: { supported: false, reason: 'no GPU aggregation' },
-    } as Record<LayerKind, { supported: true } | { supported: false; fallbackKind?: LayerKind; reason: string }>,
+    } as Record<
+      LayerKind,
+      | { supported: true }
+      | { supported: false; fallbackKind?: LayerKind; reason: string }
+    >,
     timeFilterModes: ['window', 'trail'],
   });
 
@@ -60,7 +70,11 @@ describe('degradeRequest', () => {
     expect(degradeRequest(d, 'point', 'window')).toBeNull();
   });
   it('falls back an unsupported kind that has a fallbackKind', () => {
-    expect(degradeRequest(d, 'surfel', 'window')).toEqual({ action: 'fallback', toKind: 'point', lost: [] });
+    expect(degradeRequest(d, 'surfel', 'window')).toEqual({
+      action: 'fallback',
+      toKind: 'point',
+      lost: [],
+    });
   });
   it('skips an unsupported kind with no fallback', () => {
     const r = degradeRequest(d, 'heatmap', 'window');
@@ -90,21 +104,29 @@ describe('assertDescriptorConsistent (over-claim gate)', () => {
   it('passes when every claim has evidence', () => {
     const d = descriptor({
       capabilities: { ...descriptor().capabilities, picking: true },
-      layerKinds: { ...descriptor().layerKinds, point: { supported: true } } as BackendDescriptor['layerKinds'],
+      layerKinds: {
+        ...descriptor().layerKinds,
+        point: { supported: true },
+      } as BackendDescriptor['layerKinds'],
       timeFilterModes: ['window'],
     });
     expect(assertDescriptorConsistent(d, proven)).toEqual([]);
   });
 
   it('flags a capability claimed without a passing case', () => {
-    const d = descriptor({ capabilities: { ...descriptor().capabilities, globe: true } });
+    const d = descriptor({
+      capabilities: { ...descriptor().capabilities, globe: true },
+    });
     const v = assertDescriptorConsistent(d, proven);
     expect(v.some((s) => s.includes('globe'))).toBe(true);
   });
 
   it('flags a layer kind + a mode claimed without evidence', () => {
     const d = descriptor({
-      layerKinds: { ...descriptor().layerKinds, arc: { supported: true } } as BackendDescriptor['layerKinds'],
+      layerKinds: {
+        ...descriptor().layerKinds,
+        arc: { supported: true },
+      } as BackendDescriptor['layerKinds'],
       timeFilterModes: ['window', 'trail'],
     });
     const v = assertDescriptorConsistent(d, proven);

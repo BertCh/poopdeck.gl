@@ -12,19 +12,19 @@
  * wire the returned handlers into your layers, and drive any UI off the
  * returned reactive state.
  */
-import { useState, useCallback, useEffect, useMemo, useRef } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   PlaybackGovernor,
   TimeController,
   decideAutoSpeedMultiplier,
-} from "@poopdeck.gl/playback";
+} from '@poopdeck.gl/playback';
 import type {
   AutoSpeedPhase,
   BufferSource,
   BufferedRunway,
   PlaybackGovernorState,
-} from "@poopdeck.gl/playback";
-import type { OverviewPreloadResult } from "@poopdeck.gl/core";
+} from '@poopdeck.gl/playback';
+import type { OverviewPreloadResult } from '@poopdeck.gl/core';
 
 // The governor's user-intent bit (`get paused()`). Narrow accessor kept as a
 // helper so a single call site documents the intent semantics.
@@ -113,7 +113,7 @@ export function usePlayback(options: UsePlaybackOptions = {}): PlaybackState {
   const [timeController] = useState(
     () =>
       new TimeController({
-        initialTime: initialTime ?? rangeStart ?? Date.parse("2020-01-01"),
+        initialTime: initialTime ?? rangeStart ?? Date.parse('2020-01-01'),
         speed: baseAnimationSpeed,
         loop,
         timeRange,
@@ -160,7 +160,7 @@ export function usePlayback(options: UsePlaybackOptions = {}): PlaybackState {
   // every transition — external pauses (the clock clamping at a range end)
   // and the ended path both clear intent inside the governor, so they flow
   // through here without special-casing any particular state.
-  const [bufferState, setBufferState] = useState<PlaybackGovernorState>("idle");
+  const [bufferState, setBufferState] = useState<PlaybackGovernorState>('idle');
   useEffect(() => {
     if (!governor) return;
     setBufferState(governor.state);
@@ -169,8 +169,8 @@ export function usePlayback(options: UsePlaybackOptions = {}): PlaybackState {
       setBufferState(state);
       setIsPlaying(!governorPaused(governor));
     };
-    governor.on("statechange", onStateChange);
-    return () => governor.off("statechange", onStateChange);
+    governor.on('statechange', onStateChange);
+    return () => governor.off('statechange', onStateChange);
   }, [governor]);
 
   // Track the range VALUE actually applied so the reset below runs only when
@@ -239,11 +239,11 @@ export function usePlayback(options: UsePlaybackOptions = {}): PlaybackState {
         setCurrentTime(timeController.getTime());
       }
     };
-    timeController.on("tick", handleTimeUpdate);
-    timeController.on("playState", handlePlayState);
+    timeController.on('tick', handleTimeUpdate);
+    timeController.on('playState', handlePlayState);
     return () => {
-      timeController.off("tick", handleTimeUpdate);
-      timeController.off("playState", handlePlayState);
+      timeController.off('tick', handleTimeUpdate);
+      timeController.off('playState', handlePlayState);
     };
   }, [timeController]);
 
@@ -319,13 +319,13 @@ export function usePlayback(options: UsePlaybackOptions = {}): PlaybackState {
       timeController.setSpeed(baseAnimationSpeed * next);
       setSpeedMultiplier(next);
     };
-    applySuggestion("cadence");
-    const intervalId = setInterval(() => applySuggestion("cadence"), 5000);
-    const onWaiting = () => applySuggestion("waiting");
-    governor.on("waiting", onWaiting);
+    applySuggestion('cadence');
+    const intervalId = setInterval(() => applySuggestion('cadence'), 5000);
+    const onWaiting = () => applySuggestion('waiting');
+    governor.on('waiting', onWaiting);
     return () => {
       clearInterval(intervalId);
-      governor.off("waiting", onWaiting);
+      governor.off('waiting', onWaiting);
     };
   }, [autoSpeed, governor, baseAnimationSpeed, timeController]);
 

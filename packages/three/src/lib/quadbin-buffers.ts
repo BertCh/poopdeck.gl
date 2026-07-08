@@ -104,7 +104,11 @@ interface CellLayer {
 }
 
 /** Collect the summary layer (with its weight column) from each tile. */
-function collectCellLayers(tiles: Tile[], summaryName: string, weightProp: string): {
+function collectCellLayers(
+  tiles: Tile[],
+  summaryName: string,
+  weightProp: string,
+): {
   layers: CellLayer[];
   total: number;
 } {
@@ -184,8 +188,12 @@ export function buildQuadbinBuffers(
   const positions = new Float32Array(total * 4 * 3);
   const colors = new Float32Array(total * 4 * 4);
   const indices = new Uint32Array(total * 6);
-  let minX = Infinity, minY = Infinity, minZ = Infinity;
-  let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+  let minX = Infinity,
+    minY = Infinity,
+    minZ = Infinity;
+  let maxX = -Infinity,
+    maxY = -Infinity,
+    maxZ = -Infinity;
 
   let cell = 0; // emitted cell index
   for (const { binary, weights } of layers) {
@@ -198,7 +206,10 @@ export function buildQuadbinBuffers(
       const cy = (b.south + b.north) / 2;
       const hw = ((b.east - b.west) / 2) * coverage;
       const hh = ((b.north - b.south) / 2) * coverage;
-      const w0 = cx - hw, e0 = cx + hw, s0 = cy - hh, n0 = cy + hh;
+      const w0 = cx - hw,
+        e0 = cx + hw,
+        s0 = cy - hh,
+        n0 = cy + hh;
 
       // 4 corners CCW: SW, SE, NE, NW.
       const corners: [number, number][] = [
@@ -211,7 +222,9 @@ export function buildQuadbinBuffers(
       for (let c = 0; c < 4; c++) {
         const [lon, lat] = corners[c];
         const p = projection.project(lon, lat, zLift);
-        const px = p[0] - ox, py = p[1] - oy, pz = p[2] - oz;
+        const px = p[0] - ox,
+          py = p[1] - oy,
+          pz = p[2] - oz;
         const o3 = (v0 + c) * 3;
         positions[o3] = px;
         positions[o3 + 1] = py;
@@ -225,7 +238,9 @@ export function buildQuadbinBuffers(
       }
 
       const rgba = rampBucketColor(weights[i], domain, range);
-      const cr = rgba[0] / 255, cg = rgba[1] / 255, cb = rgba[2] / 255;
+      const cr = rgba[0] / 255,
+        cg = rgba[1] / 255,
+        cb = rgba[2] / 255;
       const ca = (rgba[3] ?? 255) / 255;
       for (let c = 0; c < 4; c++) {
         const o4 = (v0 + c) * 4;

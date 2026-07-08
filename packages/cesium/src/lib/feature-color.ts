@@ -10,7 +10,12 @@
  */
 
 import type { BinaryFeatures } from '@poopdeck.gl/core';
-import { NULL_CATEGORY_INDEX, resolveCategoryColor, rampColorAt, type RGBA255 } from '@poopdeck.gl/core/style';
+import {
+  NULL_CATEGORY_INDEX,
+  resolveCategoryColor,
+  rampColorAt,
+  type RGBA255,
+} from '@poopdeck.gl/core/style';
 
 /** Colour mode for a per-feature (one colour per instance) Cesium layer. */
 export type FeatureColorMode =
@@ -34,7 +39,11 @@ export type FeatureColorMode =
     };
 
 /** Resolve feature `f`'s base colour (0–255 channels) under `mode`. */
-export function featureColor(b: BinaryFeatures, f: number, mode: FeatureColorMode): RGBA255 {
+export function featureColor(
+  b: BinaryFeatures,
+  f: number,
+  mode: FeatureColorMode,
+): RGBA255 {
   if (mode.type === 'constant') return mode.color;
   if (mode.type === 'ramp') {
     const col = b.numericProps[mode.property];
@@ -42,6 +51,8 @@ export function featureColor(b: BinaryFeatures, f: number, mode: FeatureColorMod
   }
   const cat = b.categoricalProps[mode.property];
   const label =
-    cat && cat.indices[f] !== NULL_CATEGORY_INDEX ? cat.categories[cat.indices[f]] : undefined;
+    cat && cat.indices[f] !== NULL_CATEGORY_INDEX
+      ? cat.categories[cat.indices[f]]
+      : undefined;
   return resolveCategoryColor(label, mode.colorMapping, mode.fallback);
 }

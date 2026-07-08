@@ -25,8 +25,10 @@ function oneFlowTile(srcSeries: number[]): Tile {
   for (let b = 0; b < nb; b++) matrix[b] = srcSeries[b]; // src vertex 0
   return flowTile({
     positions: new Float64Array([
-      anchor.longitude, anchor.latitude,
-      anchor.longitude + dLon, anchor.latitude,
+      anchor.longitude,
+      anchor.latitude,
+      anchor.longitude + dLon,
+      anchor.latitude,
     ]),
     startIndices: new Uint32Array([0, 2]),
     startTimes: new Float32Array([0]),
@@ -41,7 +43,10 @@ describe('buildFlowmapBuffers', () => {
 
   it('collapses each feature to source/target endpoints, RTC-relative', () => {
     const tile = oneFlowTile([16, 16, 16, 16]);
-    const buf = buildFlowmapBuffers([tile], proj, 0, { widthScale: 1, minFlow: 0 });
+    const buf = buildFlowmapBuffers([tile], proj, 0, {
+      widthScale: 1,
+      minFlow: 0,
+    });
     expect(buf.count).toBe(1);
     // origin = source vertex projected (≈ anchor → ~0).
     expect(buf.origin[0]).toBeCloseTo(0, 4);
@@ -53,7 +58,10 @@ describe('buildFlowmapBuffers', () => {
   it('maps the bucket-0 source flow to width = widthScale·√flow', () => {
     // time 0 → bucket 0 (flow 16) → width = 1.5·√16 = 6.
     const tile = oneFlowTile([16, 1, 1, 1]);
-    const buf = buildFlowmapBuffers([tile], proj, 0, { widthScale: 1.5, minFlow: 0 });
+    const buf = buildFlowmapBuffers([tile], proj, 0, {
+      widthScale: 1.5,
+      minFlow: 0,
+    });
     expect(buf.widths[0]).toBeCloseTo(6, 5);
   });
 
@@ -61,13 +69,19 @@ describe('buildFlowmapBuffers', () => {
     // buckets [start=0, end=4000], 4 buckets → 1000 ms each.
     // time 500 → pos 0.5 → blend bucket0(16)·0.5 + bucket1(64)·0.5 = 40.
     const tile = oneFlowTile([16, 64, 0, 0]);
-    const buf = buildFlowmapBuffers([tile], proj, 500, { widthScale: 1, minFlow: 0 });
+    const buf = buildFlowmapBuffers([tile], proj, 500, {
+      widthScale: 1,
+      minFlow: 0,
+    });
     expect(buf.widths[0]).toBeCloseTo(Math.sqrt(40), 5);
   });
 
   it('squelches a flow below minFlow to width 0 (invisible)', () => {
     const tile = oneFlowTile([0.1, 0, 0, 0]);
-    const buf = buildFlowmapBuffers([tile], proj, 0, { widthScale: 1, minFlow: 0.25 });
+    const buf = buildFlowmapBuffers([tile], proj, 0, {
+      widthScale: 1,
+      minFlow: 0.25,
+    });
     expect(buf.widths[0]).toBe(0);
     // No node circles when nothing is active.
     expect(buf.nodeCount).toBe(0);
@@ -97,8 +111,14 @@ describe('buildFlowmapBuffers', () => {
     const tile = flowTile({
       featureCount: 2,
       positions: new Float64Array([
-        anchor.longitude, anchor.latitude, anchor.longitude + 0.001, anchor.latitude,
-        anchor.longitude, anchor.latitude, anchor.longitude, anchor.latitude + 0.001,
+        anchor.longitude,
+        anchor.latitude,
+        anchor.longitude + 0.001,
+        anchor.latitude,
+        anchor.longitude,
+        anchor.latitude,
+        anchor.longitude,
+        anchor.latitude + 0.001,
       ]),
       startIndices: new Uint32Array([0, 2, 4]),
       startTimes: new Float32Array([0, 0]),
@@ -126,12 +146,18 @@ describe('buildFlowmapBuffers', () => {
   it('keeps RTC offsets tiny under mercator while origin carries the magnitude', () => {
     const merc = new MercatorProjection();
     const tile = oneFlowTile([16, 0, 0, 0]);
-    const buf = buildFlowmapBuffers([tile], merc, 0, { widthScale: 1, minFlow: 0 });
+    const buf = buildFlowmapBuffers([tile], merc, 0, {
+      widthScale: 1,
+      minFlow: 0,
+    });
     expectRtcMercator(buf, { a: buf.posSource[0], b: buf.posTarget[0] });
   });
 
   it('returns empty for a tile with no line features', () => {
-    const tile = flowTile({ featureCount: 0, startIndices: new Uint32Array([0]) });
+    const tile = flowTile({
+      featureCount: 0,
+      startIndices: new Uint32Array([0]),
+    });
     const buf = buildFlowmapBuffers([tile], proj, 0, {});
     expectEmptyBuffers(buf);
     expect(buf.nodeCount).toBe(0);

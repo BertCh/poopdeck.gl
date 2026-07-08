@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from 'react';
 
 /**
  * Renders `children()` only after the component has hydrated in the browser.

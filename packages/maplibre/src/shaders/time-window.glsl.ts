@@ -127,7 +127,8 @@ export function timeWindowAlphaJS(
   }
   if (fadeOut > 0) {
     const remaining = endTime - windowStart;
-    if (remaining < fadeOut) alpha *= Math.max(0, Math.min(1, remaining / fadeOut));
+    if (remaining < fadeOut)
+      alpha *= Math.max(0, Math.min(1, remaining / fadeOut));
   }
   return alpha;
 }

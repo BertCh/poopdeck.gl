@@ -42,7 +42,10 @@ import { GeometryType, type TileId } from '../src/types';
  *
  * `features` is a list of vertex runs; each inner array is `[x0,y0,x1,y1,...]`.
  */
-function buildLineStringTile(features: number[][], padEntries: number): Uint8Array {
+function buildLineStringTile(
+  features: number[][],
+  padEntries: number,
+): Uint8Array {
   const featureCount = features.length;
   const flat: number[] = [];
   const offsets: number[] = [0];
@@ -53,7 +56,10 @@ function buildLineStringTile(features: number[][], padEntries: number): Uint8Arr
   }
   const totalVerts = offsets[offsets.length - 1];
 
-  const coordValues = makeData({ type: new Float64(), data: new Float64Array(flat) });
+  const coordValues = makeData({
+    type: new Float64(),
+    data: new Float64Array(flat),
+  });
   const coordList = makeData({
     type: new FixedSizeList(2, new Field('xy', new Float64(), false)),
     length: totalVerts,
@@ -67,7 +73,8 @@ function buildLineStringTile(features: number[][], padEntries: number): Uint8Arr
   const last = offsets[offsets.length - 1];
   const paddedOffsets = new Int32Array(offsets.length + padEntries);
   paddedOffsets.set(offsets);
-  for (let i = offsets.length; i < paddedOffsets.length; i++) paddedOffsets[i] = last;
+  for (let i = offsets.length; i < paddedOffsets.length; i++)
+    paddedOffsets[i] = last;
 
   const geomData = makeData({
     type: new List(new Field('vertices', coordList.type, false)),
@@ -101,7 +108,9 @@ function buildLineStringTile(features: number[][], padEntries: number): Uint8Arr
       'geometry',
       geomData.type,
       false,
-      new Map<string, string>([['ARROW:extension:name', 'geoarrow.linestring']]),
+      new Map<string, string>([
+        ['ARROW:extension:name', 'geoarrow.linestring'],
+      ]),
     ),
   ];
 
@@ -118,7 +127,10 @@ function buildLineStringTile(features: number[][], padEntries: number): Uint8Arr
     nullCount: 0,
     children: [ids, startTime, endTime, geomData],
   });
-  const ipc = tableToIPC(new Table([new RecordBatch(schema, structData)]), 'stream');
+  const ipc = tableToIPC(
+    new Table([new RecordBatch(schema, structData)]),
+    'stream',
+  );
 
   const name = new TextEncoder().encode('tracks');
   const frame = new Uint8Array(2 + 2 + name.length + 4 + ipc.length);

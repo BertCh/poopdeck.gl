@@ -201,7 +201,12 @@ const defaultProps: DefaultProps<AnimatedHexagonLayerProps> = {
   elevationRange: { type: 'array', value: [0, 1000], compare: true },
   colorRange: { type: 'array', value: DEFAULT_COLOR_RANGE, compare: true },
   colorDomain: { type: 'array', value: null, optional: true, compare: true },
-  elevationDomain: { type: 'array', value: null, optional: true, compare: true },
+  elevationDomain: {
+    type: 'array',
+    value: null,
+    optional: true,
+    compare: true,
+  },
   colorScaleType: 'quantize',
   elevationScaleType: 'linear',
   upperPercentile: { type: 'number', value: 100, min: 0, max: 100 },
@@ -210,12 +215,37 @@ const defaultProps: DefaultProps<AnimatedHexagonLayerProps> = {
   elevationLowerPercentile: { type: 'number', value: 0, min: 0, max: 100 },
   material: true,
   hexagonAggregation: 'SUM',
-  colorAggregation: { type: 'object', value: null, optional: true, compare: true },
-  elevationAggregation: { type: 'object', value: null, optional: true, compare: true },
+  colorAggregation: {
+    type: 'object',
+    value: null,
+    optional: true,
+    compare: true,
+  },
+  elevationAggregation: {
+    type: 'object',
+    value: null,
+    optional: true,
+    compare: true,
+  },
   gpuAggregation: true,
-  getColorWeight: { type: 'object', value: null, optional: true, compare: true },
-  getElevationWeight: { type: 'object', value: null, optional: true, compare: true },
-  weightProperty: { type: 'object', value: null, optional: true, compare: true },
+  getColorWeight: {
+    type: 'object',
+    value: null,
+    optional: true,
+    compare: true,
+  },
+  getElevationWeight: {
+    type: 'object',
+    value: null,
+    optional: true,
+    compare: true,
+  },
+  weightProperty: {
+    type: 'object',
+    value: null,
+    optional: true,
+    compare: true,
+  },
 };
 
 /**
@@ -225,7 +255,9 @@ const defaultProps: DefaultProps<AnimatedHexagonLayerProps> = {
  * `_subLayerProps: { hexbin: { type, ...props } }` swaps the sublayer class /
  * overrides sublayer props (deck's CompositeLayer contract).
  */
-export class AnimatedHexagonLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLayer<
+export class AnimatedHexagonLayer<
+  ExtraPropsT extends {} = {},
+> extends SpatioTemporalLayer<
   ExtraPropsT & Required<_AnimatedHexagonLayerProps>
 > {
   static layerName = 'AnimatedHexagonLayer';
@@ -290,7 +322,7 @@ export class AnimatedHexagonLayer<ExtraPropsT extends {} = {}> extends SpatioTem
       this.props.getElevationWeight as string | undefined,
       legacy,
     );
-    return (color ?? elevation) ?? undefined;
+    return color ?? elevation ?? undefined;
   }
 
   /**
@@ -322,7 +354,11 @@ export class AnimatedHexagonLayer<ExtraPropsT extends {} = {}> extends SpatioTem
     const layerTimeOffset = pickLayerTimeOffset(tiles);
     const tileSetKey = tiles.map(tileKey).sort().join('|');
 
-    const consolidated = this._getConsolidatedData(tiles, tileSetKey, layerTimeOffset);
+    const consolidated = this._getConsolidatedData(
+      tiles,
+      tileSetKey,
+      layerTimeOffset,
+    );
     if (!consolidated || consolidated.length === 0) return [];
 
     // Time window, relativized against the layer offset so it sits in the same
@@ -331,7 +367,10 @@ export class AnimatedHexagonLayer<ExtraPropsT extends {} = {}> extends SpatioTem
     // `Required<>`-typed: the defaultProps value guarantees a number here.
     const halfWindow = this.props.timeWindow / 2;
     const center = time - layerTimeOffset;
-    const filterRange: [number, number] = [center - halfWindow, center + halfWindow];
+    const filterRange: [number, number] = [
+      center - halfWindow,
+      center + halfWindow,
+    ];
 
     // The `data` fed to the sublayer wraps the cached consolidated buffers in
     // FRESH attribute wrappers whenever the window moves. A fresh `filterRange`
@@ -416,7 +455,10 @@ export class AnimatedHexagonLayer<ExtraPropsT extends {} = {}> extends SpatioTem
       },
     });
     // `_subLayerProps: { hexbin: { type } }` swaps the sublayer class.
-    const SubLayerClass = this.getSubLayerClass('hexbin', DeckHexagonLayer as any);
+    const SubLayerClass = this.getSubLayerClass(
+      'hexbin',
+      DeckHexagonLayer as any,
+    );
     return [new SubLayerClass(subProps as any)];
   }
 
@@ -435,7 +477,8 @@ export class AnimatedHexagonLayer<ExtraPropsT extends {} = {}> extends SpatioTem
     center: number,
   ): HexagonData {
     const key = `${tileSetKey}::${center}`;
-    if (this._windowCache && this._windowCache.key === key) return this._windowCache.data;
+    if (this._windowCache && this._windowCache.key === key)
+      return this._windowCache.data;
 
     const a = consolidated.attributes;
     // One fresh weight wrapper aliased to both channels (one column drives colour

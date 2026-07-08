@@ -146,7 +146,9 @@ describe('AnimatedArcLayer per-tile sublayer architecture (v3)', () => {
 
     // Same Float32Array references the tile carries — ArcLayer is instanced, so
     // one start/end per feature (no per-vertex expansion).
-    expect(attrs.instanceStartTime.value).toBe(tile.layers[0].features.startTimes);
+    expect(attrs.instanceStartTime.value).toBe(
+      tile.layers[0].features.startTimes,
+    );
     expect(attrs.instanceStartTime.size).toBe(1);
     expect(attrs.instanceEndTime.value).toBe(tile.layers[0].features.endTimes);
     expect(attrs.instanceEndTime.size).toBe(1);
@@ -170,7 +172,10 @@ describe('AnimatedArcLayer per-tile sublayer architecture (v3)', () => {
   });
 
   it('forwards arcHeight / arcTilt as ArcLayer getHeight / getTilt constants', () => {
-    const built = buildSublayerForTile(odTile(3), { arcHeight: 0.5, arcTilt: 30 });
+    const built = buildSublayerForTile(odTile(3), {
+      arcHeight: 0.5,
+      arcTilt: 30,
+    });
     expect(built.props.getHeight).toBe(0.5);
     expect(built.props.getTilt).toBe(30);
   });
@@ -234,7 +239,9 @@ describe('AnimatedArcLayer per-tile sublayer architecture (v3)', () => {
     tile.layers[0].features.numericProps['vol'] = new Float32Array([5, 10, 15]);
     const built = buildSublayerForTile(tile, { width: 'vol' });
     const attrs = built.props.data.attributes;
-    expect(attrs.getWidth.value).toBe(tile.layers[0].features.numericProps['vol']);
+    expect(attrs.getWidth.value).toBe(
+      tile.layers[0].features.numericProps['vol'],
+    );
     expect(attrs.getWidth.size).toBe(1);
   });
 
@@ -304,7 +311,9 @@ describe('AnimatedLineLayer per-tile sublayer architecture (v3)', () => {
     const attrs = built.props.data.attributes;
     expect(attrs.getSourcePosition.value).toBeInstanceOf(Float64Array);
     expect(attrs.getTargetPosition.value).toBeInstanceOf(Float64Array);
-    expect(attrs.instanceStartTime.value).toBe(tile.layers[0].features.startTimes);
+    expect(attrs.instanceStartTime.value).toBe(
+      tile.layers[0].features.startTimes,
+    );
     expect(attrs.instanceEndTime.value).toBe(tile.layers[0].features.endTimes);
   });
 

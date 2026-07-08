@@ -41,7 +41,11 @@ import { installShim, uninstallShim } from './helpers/opfs-shim';
 const FIXTURES = fileURLToPath(new URL('./fixtures/', import.meta.url));
 
 function dataset(name: string): InMemoryPackedDataset {
-  return loadPackedDatasetFromDisk(fs, FIXTURES + name, `mem://data/${name}/manifest.json`);
+  return loadPackedDatasetFromDisk(
+    fs,
+    FIXTURES + name,
+    `mem://data/${name}/manifest.json`,
+  );
 }
 
 function openArchive(name: string, log?: PackedFetchLog): STTArchive {
@@ -86,8 +90,11 @@ function featureRecords(tile: Tile): FeatureRecord[] {
     for (const [name, values] of Object.entries(f.numericProps)) {
       rec.numeric[name] = values[i];
     }
-    for (const [name, { indices, categories }] of Object.entries(f.categoricalProps)) {
-      rec.categorical[name] = indices[i] === 0xffff ? null : categories[indices[i]];
+    for (const [name, { indices, categories }] of Object.entries(
+      f.categoricalProps,
+    )) {
+      rec.categorical[name] =
+        indices[i] === 0xffff ? null : categories[indices[i]];
     }
     out.push(rec);
   }
@@ -95,11 +102,18 @@ function featureRecords(tile: Tile): FeatureRecord[] {
 }
 
 /** Decode EVERY indexed tile of an archive into `key → records`. */
-async function decodeAll(archive: STTArchive): Promise<Map<string, FeatureRecord[]>> {
+async function decodeAll(
+  archive: STTArchive,
+): Promise<Map<string, FeatureRecord[]>> {
   const index = await archive.getIndex();
   const out = new Map<string, FeatureRecord[]>();
   for (const e of index.tiles) {
-    const tile = await archive.getTile({ z: e.zoom, x: e.x, y: e.y, t: e.timeStart });
+    const tile = await archive.getTile({
+      z: e.zoom,
+      x: e.x,
+      y: e.y,
+      t: e.timeStart,
+    });
     expect(tile, `tile ${e.zoom}/${e.x}/${e.y}/${e.timeStart}`).not.toBeNull();
     out.set(`${e.zoom}/${e.x}/${e.y}/${e.timeStart}`, featureRecords(tile!));
   }
@@ -107,7 +121,10 @@ async function decodeAll(archive: STTArchive): Promise<Map<string, FeatureRecord
 }
 
 /** The v2 ↔ v1 same-source equivalence, per fixture pair. */
-async function expectPairEquivalent(v2Name: string, v1Name: string): Promise<void> {
+async function expectPairEquivalent(
+  v2Name: string,
+  v1Name: string,
+): Promise<void> {
   const v2 = openArchive(v2Name);
   const v1 = openArchive(v1Name);
 
@@ -115,7 +132,10 @@ async function expectPairEquivalent(v2Name: string, v1Name: string): Promise<voi
   const [i2, i1] = [await v2.getIndex(), await v1.getIndex()];
   const describeEntries = (tiles: typeof i1.tiles) =>
     tiles
-      .map((e) => `${e.zoom}/${e.x}/${e.y}/${e.timeStart}-${e.timeEnd}#${e.featureCount}`)
+      .map(
+        (e) =>
+          `${e.zoom}/${e.x}/${e.y}/${e.timeStart}-${e.timeEnd}#${e.featureCount}`,
+      )
       .sort();
   expect(describeEntries(i2.tiles)).toEqual(describeEntries(i1.tiles));
 
@@ -153,7 +173,12 @@ describe('STT packed formatVersion 2 (golden fixtures)', () => {
     const archive = openArchive('v2-golden-tracks'); // unquantized → IPC retained
     const index = await archive.getIndex();
     const e = index.tiles[0];
-    const tile = await archive.getTile({ z: e.zoom, x: e.x, y: e.y, t: e.timeStart });
+    const tile = await archive.getTile({
+      z: e.zoom,
+      x: e.x,
+      y: e.y,
+      t: e.timeStart,
+    });
     const layer = tile!.layers[0];
     const direct = toGeoArrowTable(layer);
     const workerShaped = { ...layer, arrowTable: undefined };
@@ -172,8 +197,12 @@ describe('STT packed formatVersion 2 (golden fixtures)', () => {
       Object.fromEntries(direct.schema.metadata),
     );
     expect(rehydrated.schema.metadata.get('stt:time_offset_ms')).toBeDefined();
-    expect(rehydrated.schema.metadata.get('stt:vertex_time_origin_ms')).toBeDefined();
-    expect(rehydrated.schema.metadata.get('stt:vertex_time_step_ms')).toBeDefined();
+    expect(
+      rehydrated.schema.metadata.get('stt:vertex_time_origin_ms'),
+    ).toBeDefined();
+    expect(
+      rehydrated.schema.metadata.get('stt:vertex_time_step_ms'),
+    ).toBeDefined();
   });
 
   it('re-injects TILE_META into the GeoArrow hand-off: v2 schema metadata == the v1 fixture (merge_v2_layer parity)', async () => {
@@ -195,14 +224,25 @@ describe('STT packed formatVersion 2 (golden fixtures)', () => {
     for (const [v2Name, v1Name] of pairs) {
       const [v2, v1] = [open(v2Name), open(v1Name)];
       const [i2, i1] = [await v2.getIndex(), await v1.getIndex()];
-      const key = (e: (typeof i1.tiles)[number]) => `${e.zoom}/${e.x}/${e.y}/${e.timeStart}`;
+      const key = (e: (typeof i1.tiles)[number]) =>
+        `${e.zoom}/${e.x}/${e.y}/${e.timeStart}`;
       const v1ByKey = new Map(i1.tiles.map((e) => [key(e), e]));
       expect(i2.tiles.length).toBeGreaterThan(0);
       for (const e2 of i2.tiles) {
         const e1 = v1ByKey.get(key(e2));
         expect(e1, `v1 twin of tile ${key(e2)}`).toBeDefined();
-        const t2 = await v2.getTile({ z: e2.zoom, x: e2.x, y: e2.y, t: e2.timeStart });
-        const t1 = await v1.getTile({ z: e1!.zoom, x: e1!.x, y: e1!.y, t: e1!.timeStart });
+        const t2 = await v2.getTile({
+          z: e2.zoom,
+          x: e2.x,
+          y: e2.y,
+          t: e2.timeStart,
+        });
+        const t1 = await v1.getTile({
+          z: e1!.zoom,
+          x: e1!.x,
+          y: e1!.y,
+          t: e1!.timeStart,
+        });
         const g2 = toGeoArrowTable(t2!.layers[0]);
         const g1 = toGeoArrowTable(t1!.layers[0]);
         // Schema-level metadata: the TILE_META-hoisted keys
@@ -227,17 +267,19 @@ describe('STT packed formatVersion 2 (golden fixtures)', () => {
               return [f.name, m];
             }),
           );
-        expect(fieldMeta(g2, true), `tile ${key(e2)} (${v2Name}) field metadata`).toEqual(
-          fieldMeta(g1, true),
-        );
+        expect(
+          fieldMeta(g2, true),
+          `tile ${key(e2)} (${v2Name}) field metadata`,
+        ).toEqual(fieldMeta(g1, true));
         for (const f1 of g1.schema.fields) {
           const qa1 = f1.metadata.get('stt:qa');
           const qa2 = g2.schema.fields
             .find((f) => f.name === f1.name)
             ?.metadata.get('stt:qa');
-          expect(qa2 === undefined, `tile ${key(e2)} field ${f1.name} stt:qa presence`).toBe(
-            qa1 === undefined,
-          );
+          expect(
+            qa2 === undefined,
+            `tile ${key(e2)} field ${f1.name} stt:qa presence`,
+          ).toBe(qa1 === undefined);
           if (!qa1 || !qa2) continue;
           const [p1, p2] = [JSON.parse(qa1), JSON.parse(qa2)];
           for (const k of ['o', 's'] as const) {
@@ -256,7 +298,12 @@ describe('STT packed formatVersion 2 (golden fixtures)', () => {
     const v2 = openArchive('v2-golden');
     const i2 = await v2.getIndex();
     const e = i2.tiles[0];
-    const tile = await v2.getTile({ z: e.zoom, x: e.x, y: e.y, t: e.timeStart });
+    const tile = await v2.getTile({
+      z: e.zoom,
+      x: e.x,
+      y: e.y,
+      t: e.timeStart,
+    });
     expect(tile!.layers[0].features.timesSorted).toBe(true);
     const startTimes = Array.from(tile!.layers[0].features.startTimes);
     expect(startTimes).toEqual([...startTimes].sort((a, b) => a - b));
@@ -264,7 +311,12 @@ describe('STT packed formatVersion 2 (golden fixtures)', () => {
     const v1 = openArchive('v2-golden-v1');
     const i1 = await v1.getIndex();
     const e1 = i1.tiles[0];
-    const tile1 = await v1.getTile({ z: e1.zoom, x: e1.x, y: e1.y, t: e1.timeStart });
+    const tile1 = await v1.getTile({
+      z: e1.zoom,
+      x: e1.x,
+      y: e1.y,
+      t: e1.timeStart,
+    });
     expect(tile1!.layers[0].features.timesSorted).toBeUndefined();
   });
 
@@ -292,11 +344,15 @@ describe('STT packed formatVersion 2 (golden fixtures)', () => {
       const tiles = await paged.getTilesInBounds(world, zoom, meta.timeRange);
       for (const tile of tiles) {
         if (!tile) continue;
-        seen.set(`${tile.id.z}/${tile.id.x}/${tile.id.y}/${tile.id.t}`, featureRecords(tile));
+        seen.set(
+          `${tile.id.z}/${tile.id.x}/${tile.id.y}/${tile.id.t}`,
+          featureRecords(tile),
+        );
       }
     }
     expect([...seen.keys()].sort()).toEqual([...dw.keys()].sort());
-    for (const [key, records] of dw) expect(seen.get(key), `tile ${key}`).toEqual(records);
+    for (const [key, records] of dw)
+      expect(seen.get(key), `tile ${key}`).toEqual(records);
     // The directory really was range-read (root page, then leaf pages).
     expect(log.ranges.some((r) => r.path.startsWith('index/'))).toBe(true);
   });
@@ -327,9 +383,13 @@ describe('STT packed formatVersion 2 (golden fixtures)', () => {
         opfsCacheImpl: cache,
       });
       await b.getIndex();
-      const before = log.ranges.filter((r) => r.path.startsWith('packs/')).length;
+      const before = log.ranges.filter((r) =>
+        r.path.startsWith('packs/'),
+      ).length;
       const warm = await b.getTile(id);
-      const after = log.ranges.filter((r) => r.path.startsWith('packs/')).length;
+      const after = log.ranges.filter((r) =>
+        r.path.startsWith('packs/'),
+      ).length;
       expect(warm).not.toBeNull();
       expect(after).toBe(before); // zero pack fetches — OPFS served it
       expect(featureRecords(warm!)).toEqual(featureRecords(cold!));
@@ -342,11 +402,19 @@ describe('STT packed formatVersion 2 (golden fixtures)', () => {
 
 describe('v2 manifest schemas validation (loud, dataset-level, at open)', () => {
   /** The v2 fixture with its manifest JSON rewritten through `mutate`. */
-  function withManifest(mutate: (manifest: any) => void, name = 'v2-golden'): STTArchive {
+  function withManifest(
+    mutate: (manifest: any) => void,
+    name = 'v2-golden',
+  ): STTArchive {
     const ds = dataset(name);
-    const manifest = JSON.parse(new TextDecoder().decode(ds.objects.get('manifest.json')!));
+    const manifest = JSON.parse(
+      new TextDecoder().decode(ds.objects.get('manifest.json')!),
+    );
     mutate(manifest);
-    ds.objects.set('manifest.json', new TextEncoder().encode(JSON.stringify(manifest)));
+    ds.objects.set(
+      'manifest.json',
+      new TextEncoder().encode(JSON.stringify(manifest)),
+    );
     return new STTArchive({ url: ds.manifestUrl, fetch: packedFetch(ds) });
   }
 
@@ -355,7 +423,9 @@ describe('v2 manifest schemas validation (loud, dataset-level, at open)', () => 
       const h: string = m.schemas[0].hash;
       m.schemas[0].hash = (h[0] === '0' ? '1' : '0') + h.slice(1);
     });
-    await expect(archive.getMetadata()).rejects.toThrow(/template bytes hash to .* declared/);
+    await expect(archive.getMetadata()).rejects.toThrow(
+      /template bytes hash to .* declared/,
+    );
   });
 
   it('rejects a schemas entry with corrupt base64', async () => {
@@ -378,31 +448,36 @@ describe('v2 manifest schemas validation (loud, dataset-level, at open)', () => 
     const archive = withManifest((m) => {
       m.schemas[0].data = '';
     });
-    await expect(archive.getMetadata()).rejects.toThrow(/template bytes are empty/);
+    await expect(archive.getMetadata()).rejects.toThrow(
+      /template bytes are empty/,
+    );
   });
 
   it('rejects a malformed schemas entry (missing data)', async () => {
     const archive = withManifest((m) => {
       delete m.schemas[0].data;
     });
-    await expect(archive.getMetadata()).rejects.toThrow(/schemas\[0\] is malformed/);
+    await expect(archive.getMetadata()).rejects.toThrow(
+      /schemas\[0\] is malformed/,
+    );
   });
 
   it('rejects a formatVersion-1 manifest carrying a schemas table', async () => {
-    const archive = withManifest(
-      (m) => {
-        m.schemas = [{ hash: '0'.repeat(32), data: 'AAAA' }];
-      },
-      'v2-golden-v1',
+    const archive = withManifest((m) => {
+      m.schemas = [{ hash: '0'.repeat(32), data: 'AAAA' }];
+    }, 'v2-golden-v1');
+    await expect(archive.getMetadata()).rejects.toThrow(
+      /must not carry a schemas table/,
     );
-    await expect(archive.getMetadata()).rejects.toThrow(/must not carry a schemas table/);
   });
 
   it('fails before any tile fetch: corrupt schemas block the index too', async () => {
     const archive = withManifest((m) => {
       m.schemas[0].data = '';
     });
-    await expect(archive.getIndex()).rejects.toThrow(/template bytes are empty/);
+    await expect(archive.getIndex()).rejects.toThrow(
+      /template bytes are empty/,
+    );
   });
 
   it('a frame referencing a template MISSING from the registry fails by hash, not silently empty', async () => {
@@ -422,11 +497,19 @@ describe('v2 manifest schemas validation (loud, dataset-level, at open)', () => 
 });
 
 describe('mixed-version datasets fail loudly (authority rule §5.2)', () => {
-  function withManifest(mutate: (manifest: any) => void, name: string): STTArchive {
+  function withManifest(
+    mutate: (manifest: any) => void,
+    name: string,
+  ): STTArchive {
     const ds = dataset(name);
-    const manifest = JSON.parse(new TextDecoder().decode(ds.objects.get('manifest.json')!));
+    const manifest = JSON.parse(
+      new TextDecoder().decode(ds.objects.get('manifest.json')!),
+    );
     mutate(manifest);
-    ds.objects.set('manifest.json', new TextEncoder().encode(JSON.stringify(manifest)));
+    ds.objects.set(
+      'manifest.json',
+      new TextEncoder().encode(JSON.stringify(manifest)),
+    );
     return new STTArchive({ url: ds.manifestUrl, fetch: packedFetch(ds) });
   }
 

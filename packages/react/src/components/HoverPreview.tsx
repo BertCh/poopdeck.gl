@@ -18,9 +18,9 @@
  * live loader already fetched, so the browser HTTP cache absorbs most of the
  * duplication; mount it only while the preview is visible.
  */
-import React, { useMemo, useState, useEffect } from "react";
-import DeckGL from "@deck.gl/react";
-import { TimeController } from "@poopdeck.gl/playback";
+import React, { useMemo, useState, useEffect } from 'react';
+import DeckGL from '@deck.gl/react';
+import { TimeController } from '@poopdeck.gl/playback';
 
 export interface HoverPreviewProps {
   /** Settled hovered timestamp (sim-ms). */
@@ -61,7 +61,7 @@ export const HoverPreview: React.FC<HoverPreviewProps> = ({
   width,
   height,
   basemapUrl,
-  background = "#242730",
+  background = '#242730',
   parameters,
 }) => {
   // A frozen clock the preview layers read from. speed 0 + never played; we
@@ -90,11 +90,11 @@ export const HoverPreview: React.FC<HoverPreviewProps> = ({
   return (
     <div
       style={{
-        position: "relative",
+        position: 'relative',
         width,
         height,
         background,
-        overflow: "hidden",
+        overflow: 'hidden',
       }}
     >
       {/* Basemap behind the (transparent) deck canvas — omit on globe views,
@@ -107,14 +107,14 @@ export const HoverPreview: React.FC<HoverPreviewProps> = ({
           draggable={false}
           onError={(e) => {
             // Graceful fallback to the dark surface if the basemap errors.
-            (e.currentTarget as HTMLImageElement).style.display = "none";
+            (e.currentTarget as HTMLImageElement).style.display = 'none';
           }}
           style={{
-            position: "absolute",
+            position: 'absolute',
             inset: 0,
-            width: "100%",
-            height: "100%",
-            objectFit: "cover",
+            width: '100%',
+            height: '100%',
+            objectFit: 'cover',
           }}
         />
       )}
@@ -124,7 +124,7 @@ export const HoverPreview: React.FC<HoverPreviewProps> = ({
         controller={false}
         layers={layers as never}
         parameters={parameters as never}
-        style={{ position: "absolute", inset: "0" }}
+        style={{ position: 'absolute', inset: '0' }}
       />
     </div>
   );

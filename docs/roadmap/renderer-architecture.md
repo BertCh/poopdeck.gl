@@ -72,14 +72,14 @@ buffers:
    draw; three rebases every feature to one scene-wide `timeOrigin` —
    f32-exact only for seconds-scale spans.
 3. **Shading target.** TSL node materials compile only on Three's
-   `WebGPURenderer`; deck + maplibre are WebGL2/GLSL. This is *why* three owns
+   `WebGPURenderer`; deck + maplibre are WebGL2/GLSL. This is _why_ three owns
    its own scene/camera and overlays rather than interleaves the basemap.
 4. **Archive/camera ownership.** maplibre gives each layer its own
    archive+tileset; deck shares one tileset per composite; three's `SttScene`
    owns projection+root but explicitly not the camera.
 
 The consistency problem was never that the backends are separate — it was that
-the same *CPU decisions* and *scalar shader math* were hand-copied 3–4× and
+the same _CPU decisions_ and _scalar shader math_ were hand-copied 3–4× and
 kept "in lockstep" by comments + per-package parity tests, which **drifted in
 shipped pixels** (`wakeTailScale` 0.15 vs 0.1; fade default 10%-soft vs
 hard-0; divergent `colorMappingDefault`). The adopted fix — the **STT Render
@@ -125,7 +125,7 @@ scalar alpha, P3's `assertDescriptorConsistent` over-claim CI gate, P1's
 ### 2.1 WebGPU/TSL interleave trap → overlay basemap
 
 TSL node materials compile **only** on Three's node renderer — the classic
-`WebGLRenderer` cannot run them, and every basemap *interleave* path in the
+`WebGLRenderer` cannot run them, and every basemap _interleave_ path in the
 2025–2026 ecosystem (maplibre custom layer, itowns, giro3d, three-globe,
 threebox, react-three-map non-overlay) mechanically requires
 `new THREE.WebGLRenderer({context: gl})`. WebGL and WebGPU are
@@ -149,7 +149,7 @@ once this covered all 4 globe demos).
 
 ### 2.3 `GlobeProjection` sphere ≠ WGS84 (~20 km)
 
-`globe.ts:20`: *"Sphere (not ellipsoid) is intentional for v1."* Feeding
+`globe.ts:20`: _"Sphere (not ellipsoid) is intentional for v1."_ Feeding
 sphere-ECEF into a WGS84 frame (Cesium, 3D-tiles) mis-registers geometry —
 ~0.19° latitude ≈ **~20 km at mid-latitudes**, plus radial height error (the
 same class as the shipped Google-3D-Tiles float-up bug). Fixed 2026-06-30:
@@ -163,7 +163,7 @@ console warning fires on the sphere datum. Radius is parameterizable
 ### 2.4 Precision = RTC; no in-shader fp64
 
 Relative-To-Center per resident tile-group: the f64 origin lives in the
-CPU-side `Object3D.position`, vertices are f32 *relative* to it. TSL has no
+CPU-side `Object3D.position`, vertices are f32 _relative_ to it. TSL has no
 double helpers, so there is no in-shader fp64 path. Time is likewise rebased —
 the f32 guard `MAX_RELATIVE_TIME_MS = 16_777_216` (+ `assertRelTimeInRange`)
 was hoisted from deck (previously the only backend with it) into
@@ -234,8 +234,8 @@ demand-driven with typed fallbacks.
    capability/kind/mode claim with no passing evidence;
    `backend-capabilities.md` regenerated + drift-guarded.
 
-**Honest ceiling (no proposal escapes it):** tiers 1–4 prove *scalar* math and
-*generated-GLSL numeric* parity, but **cannot prove compiled-shader pixels**
+**Honest ceiling (no proposal escapes it):** tiers 1–4 prove _scalar_ math and
+_generated-GLSL numeric_ parity, but **cannot prove compiled-shader pixels**
 (billboard sizing, depth, blend, the WGSL `select()`-in-`varying()` crash
 class — which already shipped black screens). **Browser visual verification
 stays a mandatory manual gate**, consistent with the project's visual-verify
@@ -246,18 +246,18 @@ preference.
 The renderer is WebGPU/TSL + `moduleResolution: NodeNext`; that decides what
 can plug in:
 
-| Piece | Verdict |
-|---|---|
-| `@takram/three-atmosphere` | **plugged in** — native `/webgpu` TSL path; opt-in, default OFF, WebGPU-only, wrapped so a runtime failure degrades to a plain render (can never crash a scene); sun tracks the playhead via `getSunDirectionECEF`; takram's `Geodetic.toECEF` axes are identical to STT's `GlobeProjection` (no axis swap) |
-| NASA-AMMOS `3d-tiles-renderer` | **plugged in** — renderer-agnostic meshes + `GlobeControls`; sources = url / Google Photorealistic (needs `dracoDecoderPath`) / Cesium ion (assetId 1 = World Terrain, 2 = Bing, 96188 = OSM buildings); reuses the atmosphere module's `computeWorldToEcef` as single source of truth |
-| `geo-three`, `three-geo` | reference only — GLSL `ShaderMaterial` won't compile on `WebGPURenderer` |
-| Giro3D / iTowns | reference only — own renderer + loop, can't co-host |
-| Spark (Gaussian splatting) | deferred — WebGPU path exists, no demand yet |
+| Piece                          | Verdict                                                                                                                                                                                                                                                                                                     |
+| ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `@takram/three-atmosphere`     | **plugged in** — native `/webgpu` TSL path; opt-in, default OFF, WebGPU-only, wrapped so a runtime failure degrades to a plain render (can never crash a scene); sun tracks the playhead via `getSunDirectionECEF`; takram's `Geodetic.toECEF` axes are identical to STT's `GlobeProjection` (no axis swap) |
+| NASA-AMMOS `3d-tiles-renderer` | **plugged in** — renderer-agnostic meshes + `GlobeControls`; sources = url / Google Photorealistic (needs `dracoDecoderPath`) / Cesium ion (assetId 1 = World Terrain, 2 = Bing, 96188 = OSM buildings); reuses the atmosphere module's `computeWorldToEcef` as single source of truth                      |
+| `geo-three`, `three-geo`       | reference only — GLSL `ShaderMaterial` won't compile on `WebGPURenderer`                                                                                                                                                                                                                                    |
+| Giro3D / iTowns                | reference only — own renderer + loop, can't co-host                                                                                                                                                                                                                                                         |
+| Spark (Gaussian splatting)     | deferred — WebGPU path exists, no demand yet                                                                                                                                                                                                                                                                |
 
 Earlier foundational verdicts (all held): mercator projection = BUILD (~30
 lines); globe ellipsoid math = BUY-by-copy; basemap = BUY (maplibre overlay,
 §2.1); camera/controls = BUY-by-copy (`GlobeControls`/`EnvironmentControls`
-take *our* camera and don't own the loop); tile streaming = BUILD by wrapping
+take _our_ camera and don't own the loop); tile streaming = BUILD by wrapping
 core `SpatiotemporalTileset` (framework streamers are welded to their WebGL
 renderers); terrain = DEFER.
 
@@ -277,7 +277,7 @@ builder + an adversarial GPU-material pass + user browser-verify.
 When GPU picking was finally wired (2026-07), it exposed a latent bug in the
 never-instantiated `GpuPicker`: it passed its output buffer as the
 `textureIndex` argument to the unified renderer's
-`readRenderTargetPixelsAsync` (which *returns* the pixels) — so **every GPU
+`readRenderTargetPixelsAsync` (which _returns_ the pixels) — so **every GPU
 pick decoded index 0**. Also fixed: a background-sentinel bug (black clear ==
 feature 0) and a concurrent-render race. `pickMechanism` is now `'gpu-id'`,
 and `SttPickInfo` became a discriminated union
@@ -334,31 +334,31 @@ Not gaps, by construction:
 - **`transitions`:** defeated by zero-copy binary attributes + per-tile
   sublayer churn; animation comes from baked time columns +
   `TimeFilterExtension`.
-- **`colorFormat`:** dropped by deck's *own* stock `getSubLayerProps`; colors
+- **`colorFormat`:** dropped by deck's _own_ stock `getSubLayerProps`; colors
   are baked RGBA / constant-RGBA default.
 - **`loadOptions`:** repurposed at the base as `SttLoadOptions` (only
   `loadOptions.fetch` consumed for archive HTTP), not forwarded to sublayers.
 
 ### 3.4 Skip-list (one-line reasons + revival triggers)
 
-| deck layer | Reason / trigger |
-|---|---|
-| SolidPolygonLayer | Already the `polygon` kind's render engine. |
-| GeoJsonLayer | Multiplex-by-geometry is done at build time by the tiler; raw-GeoJSON input bypasses the binary model. |
-| GridCellLayer / GridLayer | Square cells covered by QuadbinSummary (baked) + `AnimatedColumnLayer(diskResolution:4)`; no baked square-grid scheme. |
-| ContourLayer | Contours baked at build time (marching-squares → line/polygon) → existing Path/Polygon layers; deck's runtime aggregation is what STT replaces. |
-| GreatCircleLayer | `@deprecated` upstream; `AnimatedArcLayer({greatCircle:true})` already is it. |
-| QuadkeyLayer | Already `QuadbinSummaryLayer`'s internal sublayer. |
-| GeohashLayer / A5Layer | No builder scheme, no data, no adoption; trivial Quadbin clones **if a dataset ever demands one**. |
-| H3ClusterLayer | Needs a per-feature H3-index-array column STT lacks; bake the union region as a polygon instead. |
-| BitmapLayer | STT tiles carry no raster payload — a format-level change, not a layer port. |
-| TileLayer / MVTLayer | `SpatioTemporalLayer` **is** the (temporal) tiler; MVT is a competing wire format STT supersedes. |
-| Tile3DLayer / TerrainLayer / WMSLayer | External backdrops consumed from stock deck.gl at the app layer; no STT column, no time axis. |
-| ScenegraphLayer | Heavier PBR/rigged superset of the SimpleMeshLayer mapping; **revive as a renderer variant of the `mesh` kind**, not a second slug. |
+| deck layer                             | Reason / trigger                                                                                                                                                                                  |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| SolidPolygonLayer                      | Already the `polygon` kind's render engine.                                                                                                                                                       |
+| GeoJsonLayer                           | Multiplex-by-geometry is done at build time by the tiler; raw-GeoJSON input bypasses the binary model.                                                                                            |
+| GridCellLayer / GridLayer              | Square cells covered by QuadbinSummary (baked) + `AnimatedColumnLayer(diskResolution:4)`; no baked square-grid scheme.                                                                            |
+| ContourLayer                           | Contours baked at build time (marching-squares → line/polygon) → existing Path/Polygon layers; deck's runtime aggregation is what STT replaces.                                                   |
+| GreatCircleLayer                       | `@deprecated` upstream; `AnimatedArcLayer({greatCircle:true})` already is it.                                                                                                                     |
+| QuadkeyLayer                           | Already `QuadbinSummaryLayer`'s internal sublayer.                                                                                                                                                |
+| GeohashLayer / A5Layer                 | No builder scheme, no data, no adoption; trivial Quadbin clones **if a dataset ever demands one**.                                                                                                |
+| H3ClusterLayer                         | Needs a per-feature H3-index-array column STT lacks; bake the union region as a polygon instead.                                                                                                  |
+| BitmapLayer                            | STT tiles carry no raster payload — a format-level change, not a layer port.                                                                                                                      |
+| TileLayer / MVTLayer                   | `SpatioTemporalLayer` **is** the (temporal) tiler; MVT is a competing wire format STT supersedes.                                                                                                 |
+| Tile3DLayer / TerrainLayer / WMSLayer  | External backdrops consumed from stock deck.gl at the app layer; no STT column, no time axis.                                                                                                     |
+| ScenegraphLayer                        | Heavier PBR/rigged superset of the SimpleMeshLayer mapping; **revive as a renderer variant of the `mesh` kind**, not a second slug.                                                               |
 | S2SummaryLayer (deferred, not skipped) | Near-verbatim `QuadbinSummaryLayer` clone, **gated on a Rust `SummaryScheme::S2` builder that does not exist** (the Quadbin builder itself is still stubbed); do when an S2-native dataset lands. |
-| AnimatedScreenGridLayer (deferred) | Near-clone of the heatmap render path; adds pickable discrete cells + a blocky aesthetic — a nicety over an already-covered density need. |
+| AnimatedScreenGridLayer (deferred)     | Near-clone of the heatmap render path; adds pickable discrete cells + a blocky aesthetic — a nicety over an already-covered density need.                                                         |
 
-### 3.5 Latent bugs the parity work found in *shipped* layers
+### 3.5 Latent bugs the parity work found in _shipped_ layers
 
 The implementation review caught bugs beyond its own scope — the strongest
 argument for the superset exercise:
@@ -370,7 +370,7 @@ argument for the superset exercise:
   as binary attributes; the same latent bug in the shipped
   `AnimatedBoundingBoxLayer` meant boxes silently rendered identity (never
   rotated to heading or scaled to dimensions). Both fixed — this is a shipped
-  *pixel-behavior change* awaiting browser verify.
+  _pixel-behavior change_ awaiting browser verify.
 - **CRITICAL — hexbin aggregator didn't re-bin on `filterRange` change** →
   frozen time animation. Fixed.
 
@@ -500,47 +500,47 @@ drive-through + demo/showcase wiring. Deferred feature tails:
 
 ### 5.4 Counted-out register (each with its revival trigger)
 
-| Item | Trigger to revive |
-|---|---|
-| `RenderRegistry.mount` app-facing seam | A runtime backend-toggle product need appears (direct-consumer path works today). |
-| `hostApiRange` on descriptors | maplibre v5/globe (or mapbox) support is actually attempted (`base-layer.ts:450` documents the v3/v4-only `render(gl,matrix)` break). |
-| Bundle-size guard test (per-subpath `exports` + `sideEffects:false` proof) | The npm-publish packaging pass; resolve lockstep-vs-separate-package first. |
-| Cross-package regenerate-and-diff meta-test for `backend-capabilities.md` | Needs a test home that may import all four backends; gen script is deterministic, drift risk low. |
-| Constructor-level capability assertions (`degrade()` only fires via the optional registry) | Fold into whichever of registry/publish lands first. |
+| Item                                                                                                                       | Trigger to revive                                                                                                                                                   |
+| -------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `RenderRegistry.mount` app-facing seam                                                                                     | A runtime backend-toggle product need appears (direct-consumer path works today).                                                                                   |
+| `hostApiRange` on descriptors                                                                                              | maplibre v5/globe (or mapbox) support is actually attempted (`base-layer.ts:450` documents the v3/v4-only `render(gl,matrix)` break).                               |
+| Bundle-size guard test (per-subpath `exports` + `sideEffects:false` proof)                                                 | The npm-publish packaging pass; resolve lockstep-vs-separate-package first.                                                                                         |
+| Cross-package regenerate-and-diff meta-test for `backend-capabilities.md`                                                  | Needs a test home that may import all four backends; gen script is deterministic, drift risk low.                                                                   |
+| Constructor-level capability assertions (`degrade()` only fires via the optional registry)                                 | Fold into whichever of registry/publish lands first.                                                                                                                |
 | Elevation metres→world-units reconciliation (deck true-metre vs three world-Z vs maplibre `DEFAULT_ALTITUDE_SCALE = 1e-7`) | `metersPerWorldUnit()` exists in `core/geo`; wire maplibre through it + a column-height golden vector with the next maplibre pixel-verified change, not standalone. |
-| Cesium catalog beyond MOVEMENT (heatmap/summary/flow family) | Demand-driven with typed fallbacks — a Cesium consumer asks for it. |
-| three `AnimatedHeatmapLayer` GPU-aggregation parity | 1 demo; descriptor declares the honest fallback; revive on demand. |
-| three `BundledFlowmapLayer` (`StaticBundle`/`preBundled` port) | Showcase wiring surfaces a bundled demo on the three backend (`edge-bundler.ts` math reuses). |
-| Live KDEEB bundling (5-pass ping-pong float compute) | Explicitly "later/never". |
-| three `CategoryColorExtension` palette DataTexture | A demo needs better palette stability than CPU expansion. |
-| Terrain/elevation (`QuantizedMeshPlugin`) | A terrain-needing demo; not needed for parity. |
-| `SurfelLayer` globe port | Stays ENU-only — deepest coupling (build-time quaternions in ENU metres). |
-| Spark Gaussian splatting for the AV/point-cloud path | Deferred; WebGPU path exists upstream. |
-| Native in-engine TSL raster basemap (quadtree LOD, XYZ/WMTS) | **DROPPED** in favor of maplibre camera-sync — would take a reversal of the basemap decision, not a trigger. |
-| Vector-tile basemap, labels/GPU text, draping/clamp-to-ground, antimeridian wrapping | Deferred from the SoTA pass; product demand. |
-| Incremental (non-replace-all) streaming residency + r3f streaming-source cache | Measured churn cost under the wired streaming path. |
-| Globe slippy-raster-tiles-on-WebGPU spike | Obsolete — `makeGlobeBasemap` earth-texture sphere covers the 4 globe demos; revisit only if slippy-on-globe becomes a want. |
-| maplibre expression-alias vocabulary layer | A maplibre-idiom consumer demands one (deck-shaped canon stands). |
+| Cesium catalog beyond MOVEMENT (heatmap/summary/flow family)                                                               | Demand-driven with typed fallbacks — a Cesium consumer asks for it.                                                                                                 |
+| three `AnimatedHeatmapLayer` GPU-aggregation parity                                                                        | 1 demo; descriptor declares the honest fallback; revive on demand.                                                                                                  |
+| three `BundledFlowmapLayer` (`StaticBundle`/`preBundled` port)                                                             | Showcase wiring surfaces a bundled demo on the three backend (`edge-bundler.ts` math reuses).                                                                       |
+| Live KDEEB bundling (5-pass ping-pong float compute)                                                                       | Explicitly "later/never".                                                                                                                                           |
+| three `CategoryColorExtension` palette DataTexture                                                                         | A demo needs better palette stability than CPU expansion.                                                                                                           |
+| Terrain/elevation (`QuantizedMeshPlugin`)                                                                                  | A terrain-needing demo; not needed for parity.                                                                                                                      |
+| `SurfelLayer` globe port                                                                                                   | Stays ENU-only — deepest coupling (build-time quaternions in ENU metres).                                                                                           |
+| Spark Gaussian splatting for the AV/point-cloud path                                                                       | Deferred; WebGPU path exists upstream.                                                                                                                              |
+| Native in-engine TSL raster basemap (quadtree LOD, XYZ/WMTS)                                                               | **DROPPED** in favor of maplibre camera-sync — would take a reversal of the basemap decision, not a trigger.                                                        |
+| Vector-tile basemap, labels/GPU text, draping/clamp-to-ground, antimeridian wrapping                                       | Deferred from the SoTA pass; product demand.                                                                                                                        |
+| Incremental (non-replace-all) streaming residency + r3f streaming-source cache                                             | Measured churn cost under the wired streaming path.                                                                                                                 |
+| Globe slippy-raster-tiles-on-WebGPU spike                                                                                  | Obsolete — `makeGlobeBasemap` earth-texture sphere covers the 4 globe demos; revisit only if slippy-on-globe becomes a want.                                        |
+| maplibre expression-alias vocabulary layer                                                                                 | A maplibre-idiom consumer demands one (deck-shaped canon stands).                                                                                                   |
 
 ---
 
 ## Appendix: canonical concept map (deck ↔ three ↔ maplibre)
 
 The three parity-targeted renderers fork vocabulary for shared concepts. The
-per-ecosystem *prefix* schemes are **intentional idiom** and stay: deck
+per-ecosystem _prefix_ schemes are **intentional idiom** and stay: deck
 `Animated*Layer`, three bare `*Layer`, maplibre `STT*Layer`. This table is the
 canonical map (empty cell = not ported to that renderer); it is referenced by
 [`docs/api/stt-three.md`](../api/stt-three.md):
 
-| concept | deck (`@poopdeck.gl/layers`) | three (`@poopdeck.gl/three`) | maplibre (`@poopdeck.gl/maplibre`) | notes |
-|---|---|---|---|---|
-| points | `AnimatedPointLayer` | `PointCloudLayer` | `STTPointLayer` | |
-| trips / trails | `AnimatedTripsLayer` | `TripsLayer` | `STTTripsLayer` | |
-| line / path | `AnimatedPathLayer`, `AnimatedLineLayer` | `PathGeoLayer` / `StaticPathLayer`, `OdLineLayer` | `STTLineLayer` | |
-| polygon | `AnimatedPolygonLayer` | `PolygonLayer` / `StaticPolygonLayer` | `STTPolygonLayer` | |
-| heatmap | `AnimatedHeatmapLayer` | *(deferred)* | `STTHeatmapLayer` | GPU-aggregation parity deferred in three (Decision 6). |
-| surface-splat primitive | `SplatLayer` / `SplatPrimitiveLayer` | `SurfelLayer` | *(none)* | **One primitive, two names** — three's `SurfelLayer` is "the Three analogue of deck's `SplatLayer`", reading the same `--surfel` columns. |
-| **time-filter window** | `timeWindow` (**full** width, ms) | `windowHalf` (**half** width, default `250`) | `timeWindow` (**full** width, ms) | **2× magnitude trap**: copying `timeWindow: 86_400_000` onto a three layer is an unknown prop → silent fallback to `windowHalf = 250`. Same knob, different name *and* half-vs-full semantics. |
-| fade-in ramp | `fadeInDuration` | `fadeIn` (but `BoundingBoxLayer` uses `fadeInDuration`) | `fadeInDuration` | three is internally inconsistent — box layer already uses the deck/maplibre name. |
-| fade-out ramp | `fadeOutDuration` | `fadeOut` | `fadeOutDuration` | same fork as fade-in. |
-| categorical color | `fillColor` / `getFillColor` + keyed `colorMapping` + `colorMappingDefault` (+ positional `colorPalette`) | `colorProperty` + keyed `colorMapping` + `colorMappingDefault` | `colorProperty` + positional `colorPalette` only | maplibre can't express stable category→color *by name*; a tile-local category reorder silently recolors. Color accessor also forks: deck `getFillColor` vs three/maplibre `colorProperty`. |
+| concept                 | deck (`@poopdeck.gl/layers`)                                                                              | three (`@poopdeck.gl/three`)                                   | maplibre (`@poopdeck.gl/maplibre`)               | notes                                                                                                                                                                                          |
+| ----------------------- | --------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- | ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| points                  | `AnimatedPointLayer`                                                                                      | `PointCloudLayer`                                              | `STTPointLayer`                                  |                                                                                                                                                                                                |
+| trips / trails          | `AnimatedTripsLayer`                                                                                      | `TripsLayer`                                                   | `STTTripsLayer`                                  |                                                                                                                                                                                                |
+| line / path             | `AnimatedPathLayer`, `AnimatedLineLayer`                                                                  | `PathGeoLayer` / `StaticPathLayer`, `OdLineLayer`              | `STTLineLayer`                                   |                                                                                                                                                                                                |
+| polygon                 | `AnimatedPolygonLayer`                                                                                    | `PolygonLayer` / `StaticPolygonLayer`                          | `STTPolygonLayer`                                |                                                                                                                                                                                                |
+| heatmap                 | `AnimatedHeatmapLayer`                                                                                    | _(deferred)_                                                   | `STTHeatmapLayer`                                | GPU-aggregation parity deferred in three (Decision 6).                                                                                                                                         |
+| surface-splat primitive | `SplatLayer` / `SplatPrimitiveLayer`                                                                      | `SurfelLayer`                                                  | _(none)_                                         | **One primitive, two names** — three's `SurfelLayer` is "the Three analogue of deck's `SplatLayer`", reading the same `--surfel` columns.                                                      |
+| **time-filter window**  | `timeWindow` (**full** width, ms)                                                                         | `windowHalf` (**half** width, default `250`)                   | `timeWindow` (**full** width, ms)                | **2× magnitude trap**: copying `timeWindow: 86_400_000` onto a three layer is an unknown prop → silent fallback to `windowHalf = 250`. Same knob, different name _and_ half-vs-full semantics. |
+| fade-in ramp            | `fadeInDuration`                                                                                          | `fadeIn` (but `BoundingBoxLayer` uses `fadeInDuration`)        | `fadeInDuration`                                 | three is internally inconsistent — box layer already uses the deck/maplibre name.                                                                                                              |
+| fade-out ramp           | `fadeOutDuration`                                                                                         | `fadeOut`                                                      | `fadeOutDuration`                                | same fork as fade-in.                                                                                                                                                                          |
+| categorical color       | `fillColor` / `getFillColor` + keyed `colorMapping` + `colorMappingDefault` (+ positional `colorPalette`) | `colorProperty` + keyed `colorMapping` + `colorMappingDefault` | `colorProperty` + positional `colorPalette` only | maplibre can't express stable category→color _by name_; a tile-local category reorder silently recolors. Color accessor also forks: deck `getFillColor` vs three/maplibre `colorProperty`.     |

@@ -95,7 +95,10 @@ function encodePagedRoot(pages: LeafDesc[]): Uint8Array {
  * non-adjacent page indices yields SEPARATE range groups (the skipped pages'
  * bytes sit between them).
  */
-function makePagedDataset(pageCount: number, manifestUrl: string): {
+function makePagedDataset(
+  pageCount: number,
+  manifestUrl: string,
+): {
   objects: Map<string, Uint8Array>;
   manifestUrl: string;
   rootLength: number;
@@ -167,7 +170,10 @@ function makePagedDataset(pageCount: number, manifestUrl: string): {
     packs: [{ key: 'packs/p0.sttp', length: 1 }],
     metadata: { temporalBucketMs: 1 },
   };
-  objects.set('manifest.json', new TextEncoder().encode(JSON.stringify(manifest)));
+  objects.set(
+    'manifest.json',
+    new TextEncoder().encode(JSON.stringify(manifest)),
+  );
   return { objects, manifestUrl, rootLength };
 }
 
@@ -201,7 +207,12 @@ function gatedFetch(
     const range = (init?.headers as Record<string, string> | undefined)?.Range;
     const m = /bytes=(\d+)-(\d+)/.exec(range ?? '');
     if (!m) {
-      return { ok: true, status: 200, statusText: 'OK', arrayBuffer: async () => bufferToArrayBuffer(bytes) };
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        arrayBuffer: async () => bufferToArrayBuffer(bytes),
+      };
     }
     const start = Number(m[1]);
     const end = Math.min(Number(m[2]), bytes.length - 1);
@@ -218,7 +229,10 @@ function gatedFetch(
       ok: true,
       status: 206,
       statusText: 'Partial Content',
-      headers: { get: (n: string) => (n.toLowerCase() === 'content-range' ? contentRange : null) },
+      headers: {
+        get: (n: string) =>
+          n.toLowerCase() === 'content-range' ? contentRange : null,
+      },
       arrayBuffer: async () => bufferToArrayBuffer(slice),
     };
   }) as unknown as typeof fetch;
@@ -252,9 +266,11 @@ describe('paged page-fetch + SharedRequestScheduler supersession (Wave 3)', () =
     const ctrl = new AbortController();
     // Call the (private) page-fetch method directly — the exact unit the finding
     // identified — so the test isolates the bug rather than the tile geometry.
-    const p = (archive as unknown as {
-      fetchAndMergePages: (i: number[], s?: AbortSignal) => Promise<void>;
-    }).fetchAndMergePages(indices, ctrl.signal);
+    const p = (
+      archive as unknown as {
+        fetchAndMergePages: (i: number[], s?: AbortSignal) => Promise<void>;
+      }
+    ).fetchAndMergePages(indices, ctrl.signal);
     // Observe the rejection synchronously so the abort never leaks as unhandled.
     const observed = p.then(
       () => ({ ok: true as const }),
@@ -287,8 +303,9 @@ describe('paged page-fetch + SharedRequestScheduler supersession (Wave 3)', () =
 
     // THE REGRESSION: every per-page registry entry must be pruned (no leak),
     // and the scheduler must be fully drained (no orphaned bookkeeping).
-    const leaked = (archive as unknown as { pageFetchPromises: Map<number, unknown> })
-      .pageFetchPromises;
+    const leaked = (
+      archive as unknown as { pageFetchPromises: Map<number, unknown> }
+    ).pageFetchPromises;
     expect(leaked.size).toBe(0);
     const stats = scheduler.getStats();
     expect(stats.active).toBe(0);
@@ -298,22 +315,28 @@ describe('paged page-fetch + SharedRequestScheduler supersession (Wave 3)', () =
     // (index 8) must SETTLE — before the fix it would dedup onto the leaked,
     // never-settling registry promise and hang forever. Release its gate so it
     // can complete, and bound it with a timeout so a hang fails fast.
-    const follow = (archive as unknown as {
-      fetchAndMergePages: (i: number[], s?: AbortSignal) => Promise<void>;
-    }).fetchAndMergePages([8]);
+    const follow = (
+      archive as unknown as {
+        fetchAndMergePages: (i: number[], s?: AbortSignal) => Promise<void>;
+      }
+    ).fetchAndMergePages([8]);
     const drain = (async () => {
       for (let k = 0; k < 50; k++) {
         if (shared.gates.length > 0) shared.gates.shift()!();
         await flush();
       }
     })();
-    const timeout = new Promise<'timeout'>((r) => setTimeout(() => r('timeout'), 2000));
+    const timeout = new Promise<'timeout'>((r) =>
+      setTimeout(() => r('timeout'), 2000),
+    );
     const winner = await Promise.race([follow.then(() => 'settled'), timeout]);
     await drain;
     expect(winner).toBe('settled');
     // Page 8 is now resident.
     expect(
-      (archive as unknown as { residentPages: Set<number> }).residentPages.has(8),
+      (archive as unknown as { residentPages: Set<number> }).residentPages.has(
+        8,
+      ),
     ).toBe(true);
   });
 
@@ -336,9 +359,11 @@ describe('paged page-fetch + SharedRequestScheduler supersession (Wave 3)', () =
     await archive.getIndex();
 
     const ctrl = new AbortController();
-    const p = (archive as unknown as {
-      fetchAndMergePages: (i: number[], s?: AbortSignal) => Promise<void>;
-    }).fetchAndMergePages([0, 2, 4], ctrl.signal);
+    const p = (
+      archive as unknown as {
+        fetchAndMergePages: (i: number[], s?: AbortSignal) => Promise<void>;
+      }
+    ).fetchAndMergePages([0, 2, 4], ctrl.signal);
     const observed = p.then(
       () => ({ ok: true as const }),
       (e) => ({ ok: false as const, e }),
@@ -355,8 +380,9 @@ describe('paged page-fetch + SharedRequestScheduler supersession (Wave 3)', () =
 
     const res = await observed;
     expect(res.ok).toBe(false);
-    const leaked = (archive as unknown as { pageFetchPromises: Map<number, unknown> })
-      .pageFetchPromises;
+    const leaked = (
+      archive as unknown as { pageFetchPromises: Map<number, unknown> }
+    ).pageFetchPromises;
     expect(leaked.size).toBe(0);
   });
 });

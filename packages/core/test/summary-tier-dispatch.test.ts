@@ -22,10 +22,14 @@ function makeTileset(opts: {
   withSummaryCallback?: boolean;
 }) {
   const rawSpy = vi.fn(
-    async (_b: BoundingBox, z: number): Promise<TileId[]> => [{ z, x: 0, y: 0, t: 0 }],
+    async (_b: BoundingBox, z: number): Promise<TileId[]> => [
+      { z, x: 0, y: 0, t: 0 },
+    ],
   );
   const summarySpy = vi.fn(
-    async (_b: BoundingBox, z: number): Promise<TileId[]> => [{ z, x: 0, y: 0, t: 1 }],
+    async (_b: BoundingBox, z: number): Promise<TileId[]> => [
+      { z, x: 0, y: 0, t: 1 },
+    ],
   );
   const dataSpy = vi.fn(async (_id: TileId) => null);
 
@@ -44,7 +48,7 @@ function makeTileset(opts: {
 }
 
 describe('SpatiotemporalTileset tier dispatch', () => {
-  it("auto + summary range routes low zooms to summary, high zooms to raw", async () => {
+  it('auto + summary range routes low zooms to summary, high zooms to raw', async () => {
     const { tileset, rawSpy, summarySpy } = makeTileset({
       tier: 'auto',
       summaryRange: { minZoom: 0, maxZoom: 4 },

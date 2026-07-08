@@ -31,7 +31,6 @@ import { frameLayer } from './helpers/fixtures';
 
 const tileId: TileId = { z: 0, x: 0, y: 0, t: 0 };
 
-
 /** Point tile carrying a Float32 `quat` (size 4) + UInt8 `rgba` (size 4) FSL. */
 function buildSurfelTile(
   coords: number[],
@@ -48,7 +47,9 @@ function buildSurfelTile(
   const ids = makeData({
     type: new Uint64(),
     length: featureCount,
-    data: BigUint64Array.from({ length: featureCount }, (_, i) => BigInt(i + 1)),
+    data: BigUint64Array.from({ length: featureCount }, (_, i) =>
+      BigInt(i + 1),
+    ),
   });
   const startTime = makeData({
     type: new Int64(),
@@ -85,7 +86,10 @@ function buildSurfelTile(
     new Field('surfel_quat', quatData.type, true),
     new Field('surfel_rgba', rgbaData.type, true),
   ];
-  const schema = new Schema(fields, new Map([['stt:geometry', 'geoarrow.point']]));
+  const schema = new Schema(
+    fields,
+    new Map([['stt:geometry', 'geoarrow.point']]),
+  );
   const structData = makeData({
     type: new Struct(fields),
     length: featureCount,

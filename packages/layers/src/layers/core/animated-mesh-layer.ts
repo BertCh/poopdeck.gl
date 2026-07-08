@@ -331,7 +331,8 @@ export interface _AnimatedMeshLayerProps {
 }
 
 /** Complete props accepted by {@link AnimatedMeshLayer}. */
-export type AnimatedMeshLayerProps = _AnimatedMeshLayerProps & SpatioTemporalLayerProps;
+export type AnimatedMeshLayerProps = _AnimatedMeshLayerProps &
+  SpatioTemporalLayerProps;
 
 /** Flat decoded props attached to `info.object` on a pick (AV inspector shape). */
 type PickRow = TrackPickRow;
@@ -344,9 +345,9 @@ type PickRow = TrackPickRow;
  * Sublayer short id for `_subLayerProps` overrides / `getSubLayerClass`:
  * **`mesh`**.
  */
-export class AnimatedMeshLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLayer<
-  ExtraPropsT & Required<_AnimatedMeshLayerProps>
-> {
+export class AnimatedMeshLayer<
+  ExtraPropsT extends {} = {},
+> extends SpatioTemporalLayer<ExtraPropsT & Required<_AnimatedMeshLayerProps>> {
   static layerName = 'AnimatedMeshLayer';
 
   static defaultProps: DefaultProps<AnimatedMeshLayerProps> = {
@@ -356,11 +357,26 @@ export class AnimatedMeshLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
     mesh: { type: 'object', value: null, optional: true, compare: true },
     meshMapping: { type: 'object', value: null, optional: true, compare: true },
     texture: { type: 'object', value: null, optional: true, compare: true },
-    textureParameters: { type: 'object', value: null, optional: true, compare: true },
+    textureParameters: {
+      type: 'object',
+      value: null,
+      optional: true,
+      compare: true,
+    },
     trackIdProperty: 'track_id',
-    colorProperty: { type: 'object', value: null, optional: true, compare: true },
+    colorProperty: {
+      type: 'object',
+      value: null,
+      optional: true,
+      compare: true,
+    },
     getColor: { type: 'object', value: null, optional: true, compare: true },
-    colorMapping: { type: 'object', value: null, optional: true, compare: true },
+    colorMapping: {
+      type: 'object',
+      value: null,
+      optional: true,
+      compare: true,
+    },
     colorMappingDefault: { type: 'color', value: DEFAULT_COLOR },
     headingProperty: 'heading',
     orientationOffset: { type: 'object', value: [0, 0, 0], compare: true },
@@ -418,10 +434,16 @@ export class AnimatedMeshLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
    * effective `colorProperty` (column, '' when a constant is in force) and the
    * constant fallback color.
    */
-  private resolveColorConfig(): { colorProperty: string; colorMappingDefault: Color } {
+  private resolveColorConfig(): {
+    colorProperty: string;
+    colorMappingDefault: Color;
+  } {
     let colorProperty =
-      typeof this.props.colorProperty === 'string' ? this.props.colorProperty : '';
-    let colorMappingDefault = (this.props.colorMappingDefault ?? DEFAULT_COLOR) as Color;
+      typeof this.props.colorProperty === 'string'
+        ? this.props.colorProperty
+        : '';
+    let colorMappingDefault = (this.props.colorMappingDefault ??
+      DEFAULT_COLOR) as Color;
 
     const alias = resolveAccessorAlias<Color | string | null>(
       'AnimatedMeshLayer',
@@ -540,7 +562,7 @@ export class AnimatedMeshLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
         'AnimatedMeshLayer:noMesh',
         '[AnimatedMeshLayer] no `mesh` (and no `meshMapping`) — nothing to ' +
           'render. Provide a glTF/OBJ model via the `mesh` prop (a static ' +
-          'per-layer prop, like IconLayer\'s iconAtlas).',
+          "per-layer prop, like IconLayer's iconAtlas).",
       );
       return [];
     }
@@ -551,7 +573,8 @@ export class AnimatedMeshLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
     // fadeInDuration/fadeOutDuration. Warn once instead of silently dropping it.
     if (
       this.props.texture &&
-      ((this.props.fadeInDuration ?? 0) > 0 || (this.props.fadeOutDuration ?? 0) > 0)
+      ((this.props.fadeInDuration ?? 0) > 0 ||
+        (this.props.fadeOutDuration ?? 0) > 0)
     ) {
       warnOnce(
         'AnimatedMeshLayer:textureFade',
@@ -565,7 +588,11 @@ export class AnimatedMeshLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
     // Rebuild the pooled index only when the visible tile SET changes or a
     // feeding style prop changes; otherwise re-interpolate the cached index.
     const indexKey = this.computeIndexKey();
-    if (this.lastTilesRef !== tiles || this.trackIndexKey !== indexKey || !this.trackIndex) {
+    if (
+      this.lastTilesRef !== tiles ||
+      this.trackIndexKey !== indexKey ||
+      !this.trackIndex
+    ) {
       this.trackIndex = this.buildTrackIndex(tiles);
       this.trackIndexKey = indexKey;
       this.lastTilesRef = tiles;
@@ -578,7 +605,12 @@ export class AnimatedMeshLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
       if (s) samples.push(s);
     }
     if (samples.length === 0) {
-      emit('renderLayers', { layer: 'AnimatedMeshLayer', tiles: tiles.length, sublayers: 0, ms: performance.now() - t0 });
+      emit('renderLayers', {
+        layer: 'AnimatedMeshLayer',
+        tiles: tiles.length,
+        sublayers: 0,
+        ms: performance.now() - t0,
+      });
       return [];
     }
 
@@ -631,7 +663,11 @@ export class AnimatedMeshLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
   }
 
   /** Build one SimpleMeshLayer over `samples`, instancing `mesh` at each pose. */
-  private buildMeshSublayer(samples: Sample[], mesh: MeshSource, instanceKey: string): SimpleMeshLayer {
+  private buildMeshSublayer(
+    samples: Sample[],
+    mesh: MeshSource,
+    instanceKey: string,
+  ): SimpleMeshLayer {
     const n = samples.length;
     const scaleDims = this.props.scaleToDimensions ?? true;
     const offset = this.props.orientationOffset ?? [0, 0, 0];
@@ -655,7 +691,8 @@ export class AnimatedMeshLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
       // a yaw about the vertical z-axis → slot 1, plus the constant offset. NaN
       // heading ⇒ the offset alone (axis-aligned base pose).
       orientations[o3] = pitchOff;
-      orientations[o3 + 1] = (Number.isFinite(s.heading) ? s.heading * RAD_TO_DEG : 0) + yawOff;
+      orientations[o3 + 1] =
+        (Number.isFinite(s.heading) ? s.heading * RAD_TO_DEG : 0) + yawOff;
       orientations[o3 + 2] = rollOff;
       if (scaleDims) {
         scales[o3] = s.length;
@@ -691,11 +728,17 @@ export class AnimatedMeshLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
         getColor: { value: colors, size: 4, normalized: true },
       },
     };
-    const getOrientation = (_: unknown, info: { index: number }): [number, number, number] => {
+    const getOrientation = (
+      _: unknown,
+      info: { index: number },
+    ): [number, number, number] => {
       const o = info.index * 3;
       return [orientations[o], orientations[o + 1], orientations[o + 2]];
     };
-    const getScale = (_: unknown, info: { index: number }): [number, number, number] => {
+    const getScale = (
+      _: unknown,
+      info: { index: number },
+    ): [number, number, number] => {
       const o = info.index * 3;
       return [scales[o], scales[o + 1], scales[o + 2]];
     };
@@ -733,7 +776,10 @@ export class AnimatedMeshLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
    * per-instance active-track rows (stride 1); `info.object` becomes that track's
    * flat decoded props — the AV cockpit's click-to-inspect shape.
    */
-  getPickingInfo({ info, sourceLayer }: GetPickingInfoParams): SpatioTemporalPickingInfo {
+  getPickingInfo({
+    info,
+    sourceLayer,
+  }: GetPickingInfoParams): SpatioTemporalPickingInfo {
     const out = info as SpatioTemporalPickingInfo;
     const sp = sourceLayer?.props as
       | { sttPickRows?: PickRow[]; sttPickStride?: number }

@@ -97,15 +97,26 @@ const SUMMARY_SCHEME_TO_TYPE: Record<string, string> = {
  */
 export function inferLayerType(dataset: DatasetDescription): InferredLayer {
   const hint = dataset.styleHints?.layer_hint;
-  if (hint && LAYER_HINT_TO_TYPE[hint]) return { type: LAYER_HINT_TO_TYPE[hint], confidence: 'hint' };
-  if (dataset.hasSummaryTier && dataset.summaryScheme && SUMMARY_SCHEME_TO_TYPE[dataset.summaryScheme]) {
-    return { type: SUMMARY_SCHEME_TO_TYPE[dataset.summaryScheme], confidence: 'summary' };
+  if (hint && LAYER_HINT_TO_TYPE[hint])
+    return { type: LAYER_HINT_TO_TYPE[hint], confidence: 'hint' };
+  if (
+    dataset.hasSummaryTier &&
+    dataset.summaryScheme &&
+    SUMMARY_SCHEME_TO_TYPE[dataset.summaryScheme]
+  ) {
+    return {
+      type: SUMMARY_SCHEME_TO_TYPE[dataset.summaryScheme],
+      confidence: 'summary',
+    };
   }
   return { type: 'AnimatedPointLayer', confidence: 'default' };
 }
 
 /** `${publicBaseUrl}/${name}/manifest.json` when configured, else the raw filesystem manifest path. */
-export function resolveManifestUrl(dataset: DatasetDescription, publicBaseUrl?: string): string {
+export function resolveManifestUrl(
+  dataset: DatasetDescription,
+  publicBaseUrl?: string,
+): string {
   if (publicBaseUrl) {
     const base = publicBaseUrl.replace(/\/+$/, '');
     return `${base}/${dataset.name}/manifest.json`;
@@ -161,7 +172,10 @@ function clamp(value: number, lo: number, hi: number): number {
 }
 
 /** Builds the `@deck.gl/json` spec + a best-effort HTML resource + advisory warnings for one or more datasets. */
-export function buildViewMap(datasets: DatasetDescription[], options: ViewMapOptions = {}): ViewMapResult {
+export function buildViewMap(
+  datasets: DatasetDescription[],
+  options: ViewMapOptions = {},
+): ViewMapResult {
   const currentTime = options.time ?? datasets[0]?.timeRange?.start;
   const warnings: string[] = [];
   const layers = datasets.map((dataset) => {
@@ -222,7 +236,11 @@ export function buildViewMap(datasets: DatasetDescription[], options: ViewMapOpt
  * that DOES wire up a renderer. Best-effort resource only — the tool call's
  * authoritative `text` content carries the same JSON regardless.
  */
-function renderHtml(spec: ViewMapResult['spec'], datasets: DatasetDescription[], warnings: string[]): string {
+function renderHtml(
+  spec: ViewMapResult['spec'],
+  datasets: DatasetDescription[],
+  warnings: string[],
+): string {
   const title = datasets.map((d) => d.name).join(', ') || 'STT view_map';
   // Escaping `<` as `<` keeps the JSON safe inside the <script> block (no `</script>` break-out).
   const specJson = JSON.stringify(spec).replace(/</g, '\\u003c');
@@ -270,5 +288,11 @@ ${warningsHtml}
 }
 
 function escapeHtml(s: string): string {
-  return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
+  return s.replace(
+    /[&<>"']/g,
+    (c) =>
+      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[
+        c
+      ]!,
+  );
 }

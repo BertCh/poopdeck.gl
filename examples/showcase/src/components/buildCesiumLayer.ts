@@ -40,10 +40,14 @@ export const CESIUM_SUPPORTED_TYPES: readonly DatasetType[] = [
   'arc',
 ];
 
-const rgba = (c: ColorRGBA | undefined, fallback: ColorRGBA): ColorRGBA => c ?? fallback;
+const rgba = (c: ColorRGBA | undefined, fallback: ColorRGBA): ColorRGBA =>
+  c ?? fallback;
 
 /** Categorical-or-constant colour mode from the shared dataset colour fields. */
-function categoricalOrConstant(d: Dataset, constant: ColorRGBA): FeatureColorMode {
+function categoricalOrConstant(
+  d: Dataset,
+  constant: ColorRGBA,
+): FeatureColorMode {
   if (d.colorProperty) {
     return {
       type: 'categorical',
@@ -59,14 +63,21 @@ function categoricalOrConstant(d: Dataset, constant: ColorRGBA): FeatureColorMod
  * Build the Cesium layer for `dataset`, or `null` when its type isn't in the
  * backend catalog yet (callers gate the route on {@link CESIUM_SUPPORTED_TYPES}).
  */
-export function buildCesiumLayer(scene: Scene, dataset: Dataset): CesiumDemoLayer | null {
+export function buildCesiumLayer(
+  scene: Scene,
+  dataset: Dataset,
+): CesiumDemoLayer | null {
   const id = `cesium-${dataset.id}`;
 
   switch (dataset.type) {
     case 'point': {
       // Mode mirrors deck's AnimatedPointLayer prop precedence: cumulative
       // ("draw and persist") wins, then wake, else the sliding window.
-      const mode = dataset.cumulative ? 'cumulative' : dataset.wakeLength ? 'wake' : 'window';
+      const mode = dataset.cumulative
+        ? 'cumulative'
+        : dataset.wakeLength
+          ? 'wake'
+          : 'window';
       return new CesiumPointLayer(scene, {
         id,
         mode,
@@ -88,7 +99,10 @@ export function buildCesiumLayer(scene: Scene, dataset: Dataset): CesiumDemoLaye
         id,
         mode: 'window',
         timeFilter: { windowHalf: dataset.timeWindow / 2 },
-        color: categoricalOrConstant(dataset, rgba(dataset.pathColor, [31, 186, 214, 255])),
+        color: categoricalOrConstant(
+          dataset,
+          rgba(dataset.pathColor, [31, 186, 214, 255]),
+        ),
         width: typeof dataset.pathWidth === 'number' ? dataset.pathWidth : 3,
       });
 
@@ -103,7 +117,10 @@ export function buildCesiumLayer(scene: Scene, dataset: Dataset): CesiumDemoLaye
             range: dataset.tripGradient.colors,
             fallback: rgba(dataset.tripColor, [31, 186, 214, 255]),
           }
-        : categoricalOrConstant(dataset, rgba(dataset.tripColor, [31, 186, 214, 255]));
+        : categoricalOrConstant(
+            dataset,
+            rgba(dataset.tripColor, [31, 186, 214, 255]),
+          );
       return new CesiumTripsLayer(scene, {
         id,
         trailLength: dataset.trailLength ?? 60_000,
@@ -116,7 +133,10 @@ export function buildCesiumLayer(scene: Scene, dataset: Dataset): CesiumDemoLaye
     case 'trip-heads':
       return new CesiumTripHeadsLayer(scene, {
         id,
-        color: { type: 'constant', color: rgba(dataset.headColor, [253, 128, 93, 255]) },
+        color: {
+          type: 'constant',
+          color: rgba(dataset.headColor, [253, 128, 93, 255]),
+        },
         // deck's headRadiusPixels is a radius; PointPrimitive.pixelSize is a diameter.
         pixelSize: 2 * (dataset.headRadiusPixels ?? 4),
       });
@@ -127,7 +147,10 @@ export function buildCesiumLayer(scene: Scene, dataset: Dataset): CesiumDemoLaye
         mode: 'window',
         timeFilter: { windowHalf: dataset.timeWindow / 2 },
         // Endpoint gradient collapses to the source colour (documented deviation).
-        color: categoricalOrConstant(dataset, rgba(dataset.arcSourceColor, [0, 150, 255, 255])),
+        color: categoricalOrConstant(
+          dataset,
+          rgba(dataset.arcSourceColor, [0, 150, 255, 255]),
+        ),
         height: dataset.arcHeight ?? 1,
         width: dataset.arcWidth ?? 2,
       });

@@ -29,10 +29,10 @@
  * the visible tiles' `copyright` strings each traversal and hand them to the
  * cockpit chrome via {@link Google3DTilesOptions.onAttribution}.
  */
-import { Tile3DLayer } from "@deck.gl/geo-layers";
+import { Tile3DLayer } from '@deck.gl/geo-layers';
 
 /** Google Photorealistic 3D Tiles root tileset (global photoreal mesh). */
-const GOOGLE_3D_TILES_URL = "https://tile.googleapis.com/v1/3dtiles/root.json";
+const GOOGLE_3D_TILES_URL = 'https://tile.googleapis.com/v1/3dtiles/root.json';
 
 /** Horizontal radius (m) around the anchor whose tiles seed the ground estimate. */
 const GROUND_SAMPLE_RADIUS_M = 400;
@@ -85,7 +85,7 @@ const GroundedTile3DLayer = class extends (Tile3DLayer as any) {
     }
   }
 };
-(GroundedTile3DLayer as any).layerName = "GroundedTile3DLayer";
+(GroundedTile3DLayer as any).layerName = 'GroundedTile3DLayer';
 (GroundedTile3DLayer as any).defaultProps = {
   ...(Tile3DLayer as any).defaultProps,
   elevationOffset: 0,
@@ -142,7 +142,7 @@ export function buildGoogle3DTilesLayer(opts: Google3DTilesOptions) {
     data: GOOGLE_3D_TILES_URL,
     // The key rides the fetch header; loaders.gl propagates it to child tiles.
     loadOptions: {
-      fetch: { headers: { "X-GOOG-API-KEY": opts.apiKey } },
+      fetch: { headers: { 'X-GOOG-API-KEY': opts.apiKey } },
     },
     // Not a pick target — clicks belong to the object boxes (see AvDeck).
     pickable: false,
@@ -161,8 +161,8 @@ export function buildGoogle3DTilesLayer(opts: Google3DTilesOptions) {
         let groundHeight: number | null = null;
         for (const tile of selectedTiles) {
           const content = tile?.content;
-          const copyright: string = content?.gltf?.asset?.copyright ?? "";
-          for (const part of copyright.split(";")) {
+          const copyright: string = content?.gltf?.asset?.copyright ?? '';
+          for (const part of copyright.split(';')) {
             const c = part.trim();
             if (c) credits.add(c);
           }
@@ -176,7 +176,7 @@ export function buildGoogle3DTilesLayer(opts: Google3DTilesOptions) {
             }
           }
         }
-        opts.onAttribution?.(Array.from(credits).join(", "));
+        opts.onAttribution?.(Array.from(credits).join(', '));
         if (groundHeight !== null) opts.onGroundHeight?.(groundHeight);
         return selectedTiles;
       };

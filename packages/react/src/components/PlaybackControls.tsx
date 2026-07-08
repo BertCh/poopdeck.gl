@@ -2,12 +2,18 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) @poopdeck.gl/react contributors
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import type {
   PlaybackGovernor,
   PlaybackGovernorState,
   SourceRunway,
-} from "@poopdeck.gl/playback";
+} from '@poopdeck.gl/playback';
 
 export interface PlaybackControlsProps {
   currentTime: number;
@@ -84,13 +90,13 @@ type GovernorWithSources = PlaybackGovernor & {
  *  (drifters, satellites, ECCO) are authored in UTC, so the labels must not
  *  drift with the viewer's locale zone (§3.5). */
 const formatDate = (timestamp: number) => {
-  return new Date(timestamp).toLocaleString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    timeZone: "UTC",
+  return new Date(timestamp).toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZone: 'UTC',
   });
 };
 
@@ -119,7 +125,7 @@ const DensityStrip: React.FC<{ density: number[] }> = ({ density }) => (
           flex: 1,
           // Floor nonzero buckets at 1px so sparse-but-present time still reads.
           height: v > 0 ? `${Math.max(v * 100, 12)}%` : 0,
-          background: "var(--ink-400)",
+          background: 'var(--ink-400)',
           opacity: 0.15,
         }}
       />
@@ -164,21 +170,21 @@ const SourceRunwayStrip: React.FC<{
       const width = Math.min(100 - left, runwayFrac * 100);
       const isGating = s.id === gatingId;
       const color = isGating
-        ? "var(--accent)"
+        ? 'var(--accent)'
         : s.required
-          ? "var(--ink-500)"
-          : "var(--ink-400)";
+          ? 'var(--ink-500)'
+          : 'var(--ink-400)';
       const labelKind = s.required
         ? isGating
-          ? "gating — clock is held here"
-          : "required"
-        : "optional";
+          ? 'gating — clock is held here'
+          : 'required'
+        : 'optional';
       return (
         <div
           key={s.id}
-          title={`${s.id}: ${labelKind}${s.complete ? " (complete)" : ""}`}
+          title={`${s.id}: ${labelKind}${s.complete ? ' (complete)' : ''}`}
           className="relative w-full rounded-full"
-          style={{ height: 2, background: "var(--hairline)" }}
+          style={{ height: 2, background: 'var(--hairline)' }}
         >
           {/* A bone-dry source (runway 0) still paints a minimum-width nub at
               the playhead — otherwise the one source actually HOLDING the
@@ -331,9 +337,9 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({
   const [etaMs, setEtaMs] = useState<number | null>(null);
   const [isCreeping, setIsCreeping] = useState(false);
   const isBuffering =
-    bufferState === "starting" ||
-    bufferState === "buffering" ||
-    bufferState === "seeking";
+    bufferState === 'starting' ||
+    bufferState === 'buffering' ||
+    bufferState === 'seeking';
 
   useEffect(() => {
     if (!governor) return;
@@ -348,9 +354,9 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({
       );
       setIsCreeping(governor.isCreeping);
       setEtaMs(
-        governor.state === "starting" ||
-          governor.state === "buffering" ||
-          governor.state === "seeking"
+        governor.state === 'starting' ||
+          governor.state === 'buffering' ||
+          governor.state === 'seeking'
           ? governor.getEtaMs()
           : null,
       );
@@ -365,10 +371,10 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({
     };
     update();
     const intervalId = setInterval(update, 1000);
-    governor.on("progress", onProgress);
+    governor.on('progress', onProgress);
     return () => {
       clearInterval(intervalId);
-      governor.off("progress", onProgress);
+      governor.off('progress', onProgress);
     };
   }, [governor]);
 
@@ -430,7 +436,7 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({
 
   const handleBarPointerMove = useCallback(
     (e: React.PointerEvent<HTMLDivElement>) => {
-      if (e.pointerType !== "mouse" || draggingRef.current || e.buttons !== 0) {
+      if (e.pointerType !== 'mouse' || draggingRef.current || e.buttons !== 0) {
         setHover(null);
         return;
       }
@@ -522,17 +528,17 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({
   }, [sourceRunways, multiSource]);
 
   const speedPresets = [
-    { label: "0.5x", value: 0.5 },
-    { label: "1x", value: 1 },
-    { label: "2x", value: 2 },
-    { label: "5x", value: 5 },
-    { label: "10x", value: 10 },
+    { label: '0.5x', value: 0.5 },
+    { label: '1x', value: 1 },
+    { label: '2x', value: 2 },
+    { label: '5x', value: 5 },
+    { label: '10x', value: 10 },
   ];
 
   const etaLabel =
     etaMs != null && Number.isFinite(etaMs) && etaMs > 0
       ? ` ~${Math.max(1, Math.round(etaMs / 1000))}s`
-      : "…";
+      : '…';
 
   // Tooltip x, clamped so it doesn't overflow the bar (half the tooltip's
   // approximate rendered width — ~22 monospace chars at 10px).
@@ -560,10 +566,10 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({
       <div className="flex justify-between items-center">
         <span
           className="text-xs font-medium font-mono"
-          style={{ color: "var(--ink-900)" }}
+          style={{ color: 'var(--ink-900)' }}
         >
           {formatDate(displayTime)}
-          <span style={{ color: "var(--ink-400)" }}> UTC</span>
+          <span style={{ color: 'var(--ink-400)' }}> UTC</span>
         </span>
         {/* Status chip — polite live region so screen readers hear buffering /
             creep transitions without focus moving (§3.2). */}
@@ -571,13 +577,13 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({
           {isBuffering ? (
             <span
               className="text-[10px] flex items-center gap-1.5"
-              style={{ color: "var(--ink-500)" }}
+              style={{ color: 'var(--ink-500)' }}
             >
               <span
                 className="w-2.5 h-2.5 rounded-full border-2 animate-spin"
                 style={{
-                  borderColor: "var(--accent)",
-                  borderTopColor: "transparent",
+                  borderColor: 'var(--accent)',
+                  borderTopColor: 'transparent',
                 }}
               />
               Buffering{etaLabel}
@@ -585,12 +591,12 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({
           ) : (
             <span
               className="text-[10px] flex items-center gap-1.5"
-              style={{ color: "var(--ink-500)" }}
+              style={{ color: 'var(--ink-500)' }}
             >
               <span
                 className="w-1.5 h-1.5 rounded-full"
                 style={{
-                  background: isPlaying ? "var(--accent)" : "var(--ink-400)",
+                  background: isPlaying ? 'var(--accent)' : 'var(--ink-400)',
                 }}
               />
               {/* Under degraded creep the playhead advances at data-arrival
@@ -598,9 +604,9 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({
                   about what's happening instead (§3.4). */}
               {isPlaying
                 ? isCreeping
-                  ? "playing as data arrives"
+                  ? 'playing as data arrives'
                   : `${formatDuration(remainingSeconds)} left`
-                : "Paused"}
+                : 'Paused'}
             </span>
           )}
         </span>
@@ -614,7 +620,7 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({
         {/* Progress bar */}
         <div
           className="relative h-1.5 rounded-full cursor-pointer"
-          style={{ background: "var(--hairline)" }}
+          style={{ background: 'var(--hairline)' }}
           onPointerMove={handleBarPointerMove}
           onPointerLeave={handleBarPointerLeave}
         >
@@ -627,25 +633,25 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({
               className="absolute"
               style={{
                 left: previewX,
-                bottom: "100%",
-                transform: "translate(-50%, -22px)",
-                pointerEvents: "none",
+                bottom: '100%',
+                transform: 'translate(-50%, -22px)',
+                pointerEvents: 'none',
                 opacity: hover ? 1 : 0,
-                transition: "opacity 120ms ease",
+                transition: 'opacity 120ms ease',
                 zIndex: 60,
               }}
             >
               <div
                 style={{
-                  display: "inline-block",
+                  display: 'inline-block',
                   // Card hugs the preview, which sizes itself to the live
                   // viewport's aspect ratio (see HoverPreview).
                   lineHeight: 0,
                   borderRadius: 6,
-                  overflow: "hidden",
-                  border: "1px solid var(--hairline)",
-                  boxShadow: "0 6px 20px rgba(0, 0, 0, 0.35)",
-                  background: "var(--page-bg)",
+                  overflow: 'hidden',
+                  border: '1px solid var(--hairline)',
+                  boxShadow: '0 6px 20px rgba(0, 0, 0, 0.35)',
+                  background: 'var(--page-bg)',
                 }}
               >
                 {renderPreview(previewTime ?? displayTime)}
@@ -659,13 +665,13 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({
               className="absolute text-[10px] font-mono whitespace-nowrap px-1.5 py-0.5 rounded"
               style={{
                 left: tooltipX,
-                bottom: "100%",
-                transform: "translate(-50%, -4px)",
-                pointerEvents: "none",
-                background: "var(--surface)",
-                color: "var(--ink-900)",
-                border: "1px solid var(--hairline)",
-                boxShadow: "0 2px 8px rgba(0, 0, 0, 0.15)",
+                bottom: '100%',
+                transform: 'translate(-50%, -4px)',
+                pointerEvents: 'none',
+                background: 'var(--surface)',
+                color: 'var(--ink-900)',
+                border: '1px solid var(--hairline)',
+                boxShadow: '0 2px 8px rgba(0, 0, 0, 0.15)',
               }}
             >
               {formatDate(hover.time)}
@@ -693,7 +699,7 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({
                 style={{
                   left: `${left}%`,
                   width: `${right - left}%`,
-                  background: "var(--ink-400)",
+                  background: 'var(--ink-400)',
                   opacity: 0.35,
                 }}
               />
@@ -702,7 +708,7 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({
           <div
             aria-hidden="true"
             className="absolute left-0 top-0 h-full rounded-full"
-            style={{ width: `${progress}%`, background: "var(--accent)" }}
+            style={{ width: `${progress}%`, background: 'var(--accent)' }}
           />
           <input
             type="range"
@@ -735,10 +741,10 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({
 
       {/* Time range labels */}
       <div className="flex justify-between">
-        <span className="text-[9px]" style={{ color: "var(--ink-400)" }}>
+        <span className="text-[9px]" style={{ color: 'var(--ink-400)' }}>
           {formatDate(timeRange.start)}
         </span>
-        <span className="text-[9px]" style={{ color: "var(--ink-400)" }}>
+        <span className="text-[9px]" style={{ color: 'var(--ink-400)' }}>
           {formatDate(timeRange.end)}
         </span>
       </div>
@@ -753,20 +759,20 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({
         <div className="flex items-center" style={{ gap: 8 }}>
           <button
             onClick={onPlayPause}
-            aria-label={isPlaying ? "Pause" : "Play"}
+            aria-label={isPlaying ? 'Pause' : 'Play'}
             className="transition-colors"
             style={{
               width: 40,
               height: 40,
               flexShrink: 0,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
               borderRadius: 12,
-              border: "none",
-              cursor: "pointer",
-              background: "var(--accent)",
-              color: "#FFFFFF",
+              border: 'none',
+              cursor: 'pointer',
+              background: 'var(--accent)',
+              color: '#FFFFFF',
             }}
           >
             {isPlaying ? (
@@ -800,14 +806,14 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({
               width: 32,
               height: 32,
               flexShrink: 0,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
               borderRadius: 10,
-              cursor: "pointer",
-              background: "var(--surface)",
-              color: "var(--ink-500)",
-              border: "1px solid var(--hairline)",
+              cursor: 'pointer',
+              background: 'var(--surface)',
+              color: 'var(--ink-500)',
+              border: '1px solid var(--hairline)',
             }}
           >
             <svg
@@ -830,7 +836,7 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({
         >
           <span
             className="text-[10px] mr-1 hidden sm:inline"
-            style={{ color: "var(--ink-500)" }}
+            style={{ color: 'var(--ink-500)' }}
           >
             Speed:
           </span>
@@ -848,9 +854,9 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({
                 aria-pressed={isActive}
                 className="px-2 py-1 rounded text-[10px] transition-colors"
                 style={{
-                  background: isActive ? "var(--accent-soft)" : "transparent",
-                  color: isActive ? "var(--accent)" : "var(--ink-500)",
-                  border: `1px solid ${isActive ? "var(--accent)" : "var(--hairline)"}`,
+                  background: isActive ? 'var(--accent-soft)' : 'transparent',
+                  color: isActive ? 'var(--accent)' : 'var(--ink-500)',
+                  border: `1px solid ${isActive ? 'var(--accent)' : 'var(--hairline)'}`,
                 }}
               >
                 {preset.label}
@@ -865,13 +871,13 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({
             aria-pressed={autoSpeed}
             className="px-2 py-1 rounded text-[10px] transition-colors"
             style={{
-              background: autoSpeed ? "var(--accent-soft)" : "transparent",
-              color: autoSpeed ? "var(--accent)" : "var(--ink-500)",
-              border: `1px solid ${autoSpeed ? "var(--accent)" : "var(--hairline)"}`,
+              background: autoSpeed ? 'var(--accent-soft)' : 'transparent',
+              color: autoSpeed ? 'var(--accent)' : 'var(--ink-500)',
+              border: `1px solid ${autoSpeed ? 'var(--accent)' : 'var(--hairline)'}`,
             }}
             title="Match playback speed to what the network can sustain"
           >
-            {autoSpeed ? `Auto ${currentSpeedMultiplier.toFixed(1)}x` : "Auto"}
+            {autoSpeed ? `Auto ${currentSpeedMultiplier.toFixed(1)}x` : 'Auto'}
           </button>
         </div>
 
@@ -886,11 +892,11 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({
             value={currentSpeedMultiplier}
             onChange={(e) => onSpeedChange(Number(e.target.value))}
             className="flex-1 h-1 cursor-pointer"
-            style={{ accentColor: "var(--accent)" }}
+            style={{ accentColor: 'var(--accent)' }}
           />
           <span
             className="text-[10px] font-medium min-w-[32px] text-right"
-            style={{ color: "var(--ink-900)" }}
+            style={{ color: 'var(--ink-900)' }}
           >
             {currentSpeedMultiplier.toFixed(1)}x
           </span>
@@ -904,9 +910,9 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({
             aria-pressed={previewEnabled}
             className="ml-auto px-2 py-1 rounded text-[10px] transition-colors flex items-center gap-1"
             style={{
-              background: previewEnabled ? "var(--accent-soft)" : "transparent",
-              color: previewEnabled ? "var(--accent)" : "var(--ink-500)",
-              border: `1px solid ${previewEnabled ? "var(--accent)" : "var(--hairline)"}`,
+              background: previewEnabled ? 'var(--accent-soft)' : 'transparent',
+              color: previewEnabled ? 'var(--accent)' : 'var(--ink-500)',
+              border: `1px solid ${previewEnabled ? 'var(--accent)' : 'var(--hairline)'}`,
             }}
             title="Show a rendered preview of the map at the hovered time"
           >
@@ -917,4 +923,3 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({
     </div>
   );
 };
-

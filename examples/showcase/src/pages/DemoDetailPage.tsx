@@ -1,23 +1,23 @@
-import React, { Suspense, useState } from "react";
-import { useParams, Navigate, Link } from "react-router";
-import { Highlight, themes } from "prism-react-renderer";
-import { getDatasetById } from "../datasets";
+import React, { Suspense, useState } from 'react';
+import { useParams, Navigate, Link } from 'react-router';
+import { Highlight, themes } from 'prism-react-renderer';
+import { getDatasetById } from '../datasets';
 import {
   CATEGORY_LABELS,
   getCatalogEntry,
   getRelated,
-} from "../content/demoMeta";
-import DemoCard from "../components/DemoCard";
-import { SourceLogo } from "../components/SourceLogo";
-import { VizBadge } from "../components/VizBadge";
-import CubeInLine from "../components/demo/CubeInLine";
-import { profileIdFromUrl } from "../lib/densityProfile";
-import { ClientOnly } from "../lib/ClientOnly";
+} from '../content/demoMeta';
+import DemoCard from '../components/DemoCard';
+import { SourceLogo } from '../components/SourceLogo';
+import { VizBadge } from '../components/VizBadge';
+import CubeInLine from '../components/demo/CubeInLine';
+import { profileIdFromUrl } from '../lib/densityProfile';
+import { ClientOnly } from '../lib/ClientOnly';
 
 // The live map embed carries deck.gl + the playback stack; lazy + client only
 // so the statically prerendered detail HTML stays deck-free (a framed poster
 // renders in its place at build time, replaced by the live viewer on hydrate).
-const DemoEmbed = React.lazy(() => import("../components/demo/DemoEmbed"));
+const DemoEmbed = React.lazy(() => import('../components/demo/DemoEmbed'));
 
 /**
  * Per-demo landing page (`/demos/:id`): live embed up top, then the
@@ -27,8 +27,8 @@ const DemoEmbed = React.lazy(() => import("../components/demo/DemoEmbed"));
  */
 const DemoDetailPage: React.FC = () => {
   const { datasetId } = useParams<{ datasetId: string }>();
-  const dataset = getDatasetById(datasetId || "");
-  const entry = getCatalogEntry(datasetId || "");
+  const dataset = getDatasetById(datasetId || '');
+  const entry = getCatalogEntry(datasetId || '');
 
   if (!dataset) return <Navigate to="/demos" replace />;
   // Real dataset but not catalog-curated → the fullscreen viewer still serves it.
@@ -40,22 +40,25 @@ const DemoDetailPage: React.FC = () => {
   return (
     // key forces a clean remount (fresh TimeController + governor) when
     // navigating between related demos.
-    <div key={dataset.id} className="min-h-full px-5 sm:px-7 lg:px-12 py-8 sm:py-10">
+    <div
+      key={dataset.id}
+      className="min-h-full px-5 sm:px-7 lg:px-12 py-8 sm:py-10"
+    >
       <div className="max-w-5xl">
         {/* Title block */}
         <nav className="text-xs" aria-label="Breadcrumb">
-          <Link to="/demos" style={{ color: "var(--ink-400)" }}>
+          <Link to="/demos" style={{ color: 'var(--ink-400)' }}>
             Demos
           </Link>
-          <span style={{ color: "var(--ink-400)" }}> / </span>
-          <span style={{ color: "var(--ink-500)" }}>
+          <span style={{ color: 'var(--ink-400)' }}> / </span>
+          <span style={{ color: 'var(--ink-500)' }}>
             {CATEGORY_LABELS[meta.category]}
           </span>
         </nav>
         <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 mt-2">
           <h1
             className="font-display text-2xl sm:text-3xl font-bold"
-            style={{ color: "var(--ink-900)", lineHeight: 1.15 }}
+            style={{ color: 'var(--ink-900)', lineHeight: 1.15 }}
           >
             {dataset.name}
           </h1>
@@ -63,7 +66,7 @@ const DemoDetailPage: React.FC = () => {
         </div>
         <p
           className="text-sm mt-2 max-w-2xl"
-          style={{ color: "var(--ink-500)", lineHeight: 1.7 }}
+          style={{ color: 'var(--ink-500)', lineHeight: 1.7 }}
         >
           {meta.tagline ?? dataset.description}
         </p>
@@ -94,7 +97,7 @@ const DemoDetailPage: React.FC = () => {
                 <p
                   key={i}
                   className="text-sm mb-4"
-                  style={{ color: "var(--ink-700)", lineHeight: 1.75 }}
+                  style={{ color: 'var(--ink-700)', lineHeight: 1.75 }}
                 >
                   {p}
                 </p>
@@ -108,14 +111,17 @@ const DemoDetailPage: React.FC = () => {
               {meta.buildNote && (
                 <p
                   className="text-xs mt-3"
-                  style={{ color: "var(--ink-500)", lineHeight: 1.65 }}
+                  style={{ color: 'var(--ink-500)', lineHeight: 1.65 }}
                 >
                   {meta.buildNote}
                 </p>
               )}
-              <p className="text-xs mt-3" style={{ color: "var(--ink-400)" }}>
-                Full recipes for every dataset live in the{" "}
-                <Link to="/docs/guides/data-generation" style={{ color: "var(--accent)" }}>
+              <p className="text-xs mt-3" style={{ color: 'var(--ink-400)' }}>
+                Full recipes for every dataset live in the{' '}
+                <Link
+                  to="/docs/guides/data-generation"
+                  style={{ color: 'var(--accent)' }}
+                >
                   data-generation guide
                 </Link>
                 .
@@ -134,19 +140,22 @@ const DemoDetailPage: React.FC = () => {
                       target="_blank"
                       rel="noopener noreferrer"
                       className="text-sm font-medium"
-                      style={{ color: "var(--accent)" }}
+                      style={{ color: 'var(--accent)' }}
                     >
                       {s.name} ↗
                     </a>
                     {s.license && (
-                      <div className="text-xs mt-0.5" style={{ color: "var(--ink-500)" }}>
+                      <div
+                        className="text-xs mt-0.5"
+                        style={{ color: 'var(--ink-500)' }}
+                      >
                         {s.license}
                       </div>
                     )}
                     {s.note && (
                       <div
                         className="text-xs mt-0.5"
-                        style={{ color: "var(--ink-400)", lineHeight: 1.5 }}
+                        style={{ color: 'var(--ink-400)', lineHeight: 1.5 }}
                       >
                         {s.note}
                       </div>
@@ -163,7 +172,7 @@ const DemoDetailPage: React.FC = () => {
                     <Link
                       to={t.docPath}
                       className="text-sm"
-                      style={{ color: "var(--accent)" }}
+                      style={{ color: 'var(--accent)' }}
                     >
                       {t.label} →
                     </Link>
@@ -182,11 +191,11 @@ const DemoDetailPage: React.FC = () => {
           <section className="mt-12">
             <div
               className="pb-2 mb-4"
-              style={{ borderBottom: "1px solid var(--hairline)" }}
+              style={{ borderBottom: '1px solid var(--hairline)' }}
             >
               <h2
                 className="font-display text-base font-semibold"
-                style={{ color: "var(--ink-900)" }}
+                style={{ color: 'var(--ink-900)' }}
               >
                 Related demos
               </h2>
@@ -223,7 +232,7 @@ const EmbedPoster: React.FC = () => (
   <div>
     <div
       className="relative rounded-lg overflow-hidden h-[320px] sm:h-[420px] lg:h-[520px]"
-      style={{ background: "var(--surface-sunken)" }}
+      style={{ background: 'var(--surface-sunken)' }}
     />
   </div>
 );
@@ -244,27 +253,37 @@ const UnderTheHood: React.FC<{ url: string }> = ({ url }) => {
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
         className="flex w-full items-center gap-2 pb-2 text-left"
-        style={{ borderBottom: "1px solid var(--hairline)" }}
+        style={{ borderBottom: '1px solid var(--hairline)' }}
       >
         <span
           className="inline-block transition-transform"
-          style={{ color: "var(--ink-400)", transform: open ? "rotate(90deg)" : "none" }}
+          style={{
+            color: 'var(--ink-400)',
+            transform: open ? 'rotate(90deg)' : 'none',
+          }}
           aria-hidden="true"
         >
           ▸
         </span>
-        <h2 className="font-display text-base font-semibold" style={{ color: "var(--ink-900)" }}>
+        <h2
+          className="font-display text-base font-semibold"
+          style={{ color: 'var(--ink-900)' }}
+        >
           Under the hood: this dataset's space-time cube, laid down in a line
         </h2>
       </button>
       {open ? (
         <div className="mt-4">
-          <p className="text-xs mb-3 max-w-2xl" style={{ color: "var(--ink-500)", lineHeight: 1.65 }}>
-            A meta view of the format itself: how this archive's data mass sits across space and
-            time, and how the <span className="font-mono">--blob-ordering</span> walk that flattens
-            the cube into one byte string trades off range reads. Switch datasets to watch the
-            winning walk flip.{" "}
-            <Link to="/how-it-works#archive" style={{ color: "var(--accent)" }}>
+          <p
+            className="text-xs mb-3 max-w-2xl"
+            style={{ color: 'var(--ink-500)', lineHeight: 1.65 }}
+          >
+            A meta view of the format itself: how this archive's data mass sits
+            across space and time, and how the{' '}
+            <span className="font-mono">--blob-ordering</span> walk that
+            flattens the cube into one byte string trades off range reads.
+            Switch datasets to watch the winning walk flip.{' '}
+            <Link to="/how-it-works#archive" style={{ color: 'var(--accent)' }}>
               How it works →
             </Link>
           </p>
@@ -280,7 +299,7 @@ const CommandBlock: React.FC<{ command: string }> = ({ command }) => {
   const [copied, setCopied] = useState(false);
   const copy = async () => {
     try {
-      await navigator.clipboard.writeText(command.replace(/\\\n\s*/g, ""));
+      await navigator.clipboard.writeText(command.replace(/\\\n\s*/g, ''));
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch {
@@ -290,25 +309,28 @@ const CommandBlock: React.FC<{ command: string }> = ({ command }) => {
   return (
     <div
       className="relative rounded-md overflow-hidden"
-      style={{ background: "var(--surface-sunken)", border: "1px solid var(--hairline)" }}
+      style={{
+        background: 'var(--surface-sunken)',
+        border: '1px solid var(--hairline)',
+      }}
     >
       <button
         type="button"
         onClick={copy}
         className="absolute top-2 right-2 px-2 py-1 rounded text-[10px] font-semibold tracking-wide uppercase transition-colors"
         style={{
-          background: copied ? "var(--accent)" : "var(--surface)",
-          color: copied ? "#fff" : "var(--ink-500)",
-          border: "1px solid var(--hairline)",
+          background: copied ? 'var(--accent)' : 'var(--surface)',
+          color: copied ? '#fff' : 'var(--ink-500)',
+          border: '1px solid var(--hairline)',
         }}
       >
-        {copied ? "Copied" : "Copy"}
+        {copied ? 'Copied' : 'Copy'}
       </button>
       <Highlight code={command} language="bash" theme={themes.github}>
         {({ tokens, getLineProps, getTokenProps }) => (
           <pre
             className="code-block px-4 py-3 overflow-x-auto"
-            style={{ background: "transparent" }}
+            style={{ background: 'transparent' }}
           >
             {tokens.map((line, i) => (
               <div key={i} {...getLineProps({ line })}>

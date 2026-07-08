@@ -34,7 +34,9 @@ const isCoverageRange = (r: { start: number }): boolean => r.start < -1e15;
 describe('coverage-index spatial debounce', () => {
   it('does not rebuild for sub-tile drift, but does for a real pan/zoom', async () => {
     const getAvailableTiles = vi.fn(
-      async (_b: BoundingBox, z: number): Promise<TileId[]> => [{ z, x: 0, y: 0, t: 0 }],
+      async (_b: BoundingBox, z: number): Promise<TileId[]> => [
+        { z, x: 0, y: 0, t: 0 },
+      ],
     );
     const tileset = new SpatiotemporalTileset({
       minZoom: 0,
@@ -49,10 +51,17 @@ describe('coverage-index spatial debounce', () => {
     });
 
     const coverageCount = (): number =>
-      getAvailableTiles.mock.calls.filter((c) => isCoverageRange(c[2] as { start: number })).length;
+      getAvailableTiles.mock.calls.filter((c) =>
+        isCoverageRange(c[2] as { start: number }),
+      ).length;
 
     // 1°-wide viewport, so the 1/8 tolerance is ~0.125°.
-    const at = (lon: number): BoundingBox => ({ minLon: lon, minLat: 0, maxLon: lon + 1, maxLat: 1 });
+    const at = (lon: number): BoundingBox => ({
+      minLon: lon,
+      minLat: 0,
+      maxLon: lon + 1,
+      maxLat: 1,
+    });
 
     tileset.update({ bounds: at(0), zoom: 6, time: 500, timeWindow: 100 });
     await settle();
@@ -83,7 +92,10 @@ describe('selectAndLoadTiles generation guard', () => {
   it('a stale (late-resolving) selection does not clobber a newer one', async () => {
     // Gate getAvailableTiles so we control resolution order. The viewport is
     // identified by minLon (0 = stale pass, 100 = fresh pass).
-    const deferreds: Array<{ marker: number; resolve: (ids: TileId[]) => void }> = [];
+    const deferreds: Array<{
+      marker: number;
+      resolve: (ids: TileId[]) => void;
+    }> = [];
     const getAvailableTiles = (b: BoundingBox): Promise<TileId[]> =>
       new Promise<TileId[]>((resolve) => {
         deferreds.push({ marker: b.minLon, resolve });
@@ -106,8 +118,18 @@ describe('selectAndLoadTiles generation guard', () => {
 
     // Pass 1 (stale) at lon 0; Pass 2 (fresh) at lon 100 — both dispatched
     // before either directory slice resolves.
-    tileset.update({ bounds: { minLon: 0, minLat: 0, maxLon: 1, maxLat: 1 }, zoom: 6, time: 500, timeWindow: 100 });
-    tileset.update({ bounds: { minLon: 100, minLat: 0, maxLon: 101, maxLat: 1 }, zoom: 6, time: 500, timeWindow: 100 });
+    tileset.update({
+      bounds: { minLon: 0, minLat: 0, maxLon: 1, maxLat: 1 },
+      zoom: 6,
+      time: 500,
+      timeWindow: 100,
+    });
+    tileset.update({
+      bounds: { minLon: 100, minLat: 0, maxLon: 101, maxLat: 1 },
+      zoom: 6,
+      time: 500,
+      timeWindow: 100,
+    });
 
     expect(deferreds.length).toBe(2);
     const stale = deferreds.find((d) => d.marker === 0)!;
@@ -224,7 +246,12 @@ describe('prefetch stale-plan guard', () => {
     // with a pile of future buckets.
     tileset.flushPrefetch();
     gated[0](
-      Array.from({ length: 8 }, (_, i) => ({ z: 6, x: 0, y: 0, t: (i + 1) * BUCKET_MS })),
+      Array.from({ length: 8 }, (_, i) => ({
+        z: 6,
+        x: 0,
+        y: 0,
+        t: (i + 1) * BUCKET_MS,
+      })),
     );
     await settle();
 

@@ -17,7 +17,9 @@ describe('resolveCanvasProjection (SttCanvas projection prop)', () => {
     expect(proj).toBeInstanceOf(LocalEnuProjection);
     expect(proj.kind).toBe('local-enu');
     // The anchor maps to the world origin (the backward-compatible ENU frame).
-    expect(proj.project(ANCHOR.longitude, ANCHOR.latitude, 0)).toEqual([0, 0, 0]);
+    expect(proj.project(ANCHOR.longitude, ANCHOR.latitude, 0)).toEqual([
+      0, 0, 0,
+    ]);
     expect(proj.anchor).toEqual(ANCHOR);
   });
 
@@ -50,7 +52,9 @@ describe('rigModeFor (CameraRig / controls branch selection)', () => {
 
 describe('globeControlLimits (OrbitControls distance clamp)', () => {
   it('brackets the surface for the default (metric) earth radius', () => {
-    const { minDistance, maxDistance } = globeControlLimits(new GlobeProjection(ANCHOR));
+    const { minDistance, maxDistance } = globeControlLimits(
+      new GlobeProjection(ANCHOR),
+    );
     // Just above the surface out to a comfortable whole-earth zoom-out.
     expect(minDistance).toBeGreaterThan(EARTH_RADIUS);
     expect(minDistance).toBeLessThan(maxDistance);
@@ -58,7 +62,9 @@ describe('globeControlLimits (OrbitControls distance clamp)', () => {
   });
 
   it('scales with a custom globe radius (e.g. a unit-sphere world)', () => {
-    const { minDistance, maxDistance } = globeControlLimits(new GlobeProjection(ANCHOR, 100));
+    const { minDistance, maxDistance } = globeControlLimits(
+      new GlobeProjection(ANCHOR, 100),
+    );
     expect(minDistance).toBeCloseTo(102, 6);
     expect(maxDistance).toBeCloseTo(800, 6);
   });

@@ -90,7 +90,7 @@ including Vite's dev server. Drop the directory under `public/` and the app
 reads `/tiles/my-dataset/manifest.json` directly. For production, sync to
 R2 / S3 / GCS / nginx ([deploying guide](./deploying.md)).
 
-`stt-serve` exists for the *database* workflow (tiles generated per-request
+`stt-serve` exists for the _database_ workflow (tiles generated per-request
 from PostGIS/DuckDB); a prebuilt dataset never needs it.
 
 ## 5. Render it
@@ -100,14 +100,21 @@ npm install deck.gl @deck.gl/react @poopdeck.gl/layers @poopdeck.gl/react
 ```
 
 ```tsx
-import DeckGL from "@deck.gl/react";
-import { TileLayer } from "@deck.gl/geo-layers";
-import { BitmapLayer } from "@deck.gl/layers";
-import { AnimatedPointLayer } from "@poopdeck.gl/layers";
-import { usePlayback, useDeckClock, PlaybackControls } from "@poopdeck.gl/react";
-import "@poopdeck.gl/react/styles.css";
+import DeckGL from '@deck.gl/react';
+import { TileLayer } from '@deck.gl/geo-layers';
+import { BitmapLayer } from '@deck.gl/layers';
+import { AnimatedPointLayer } from '@poopdeck.gl/layers';
+import {
+  usePlayback,
+  useDeckClock,
+  PlaybackControls,
+} from '@poopdeck.gl/react';
+import '@poopdeck.gl/react/styles.css';
 
-const TIME_RANGE = { start: Date.parse("2022-09-26"), end: Date.parse("2022-10-01") };
+const TIME_RANGE = {
+  start: Date.parse('2022-09-26'),
+  end: Date.parse('2022-10-01'),
+};
 
 export default function App() {
   const pb = usePlayback({
@@ -122,8 +129,8 @@ export default function App() {
     // `data` from the spread props and throws
     // "count(): argument not a container".
     new TileLayer({
-      id: "basemap",
-      data: "https://a.basemaps.cartocdn.com/rastertiles/dark_all/{z}/{x}/{y}.png",
+      id: 'basemap',
+      data: 'https://a.basemaps.cartocdn.com/rastertiles/dark_all/{z}/{x}/{y}.png',
       maxZoom: 18,
       tileSize: 256,
       renderSubLayers: (props) =>
@@ -131,25 +138,28 @@ export default function App() {
           data: undefined,
           image: props.data,
           bounds: [
-            props.tile.boundingBox[0][0], props.tile.boundingBox[0][1],
-            props.tile.boundingBox[1][0], props.tile.boundingBox[1][1],
+            props.tile.boundingBox[0][0],
+            props.tile.boundingBox[0][1],
+            props.tile.boundingBox[1][0],
+            props.tile.boundingBox[1][1],
           ],
         } as any),
     }),
 
     // The animated data — reads the packed dataset over range requests.
     new AnimatedPointLayer({
-      id: "points",
-      data: "/tiles/my-dataset/manifest.json",
+      id: 'points',
+      data: '/tiles/my-dataset/manifest.json',
       currentTime: pb.currentTime,
       timeController: pb.timeController,
       timeRange: TIME_RANGE,
       timeWindow: 20 * 60 * 1000, // show ±20 min around the playhead
       radius: 2,
-      radiusUnits: "pixels",
+      radiusUnits: 'pixels',
       // Gate the clock on buffered data so playback never outruns loading:
-      onTilesetReady: (ts) => pb.registry.registerSource("points", ts, { required: true }),
-      onBufferChange: (runway) => pb.registry.onBufferChange("points", runway),
+      onTilesetReady: (ts) =>
+        pb.registry.registerSource('points', ts, { required: true }),
+      onBufferChange: (runway) => pb.registry.onBufferChange('points', runway),
     }),
   ];
 
@@ -160,9 +170,9 @@ export default function App() {
         initialViewState={{ longitude: -82.8, latitude: 26.7, zoom: 7 }}
         controller
         layers={layers}
-        style={{ position: "absolute", width: "100%", height: "100%" }}
+        style={{ position: 'absolute', width: '100%', height: '100%' }}
       />
-      <div style={{ position: "absolute", left: 16, right: 16, bottom: 16 }}>
+      <div style={{ position: 'absolute', left: 16, right: 16, bottom: 16 }}>
         <PlaybackControls {...pb} />
       </div>
     </>

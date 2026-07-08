@@ -7,7 +7,7 @@ It is inspired by deck.gl's `Tileset2D` (the class behind `TileLayer`), extended
 ## Installation
 
 ```typescript
-import { SpatiotemporalTileset } from "@poopdeck.gl/core";
+import { SpatiotemporalTileset } from '@poopdeck.gl/core';
 ```
 
 ## Usage
@@ -30,7 +30,7 @@ const tileset = new SpatiotemporalTileset({
     }),
   getTileByteSize: (id) => archive.getTileByteSize(id),
   getThroughput: () => archive.getThroughputEstimate(),
-  onTileLoad: (tile) => console.log("Loaded", tile),
+  onTileLoad: (tile) => console.log('Loaded', tile),
 });
 
 // Update every frame or viewport change
@@ -41,7 +41,7 @@ tileset.update(
     time: Date.now(),
     timeWindow: 86400000,
   },
-  false
+  false,
 );
 
 const visibleTiles = tileset.getVisibleTiles();
@@ -51,56 +51,56 @@ const visibleTiles = tileset.getVisibleTiles();
 
 ### Required Callbacks
 
-| Option              | Type       | Description                                              |
-| :------------------ | :--------- | :------------------------------------------------------- |
-| `getAvailableTiles` | `(bounds, zoom, timeRange) => Promise<TileId[]>` | Async directory query for raw-tier tile IDs in view. |
-| `getTileData`       | `(tileId, signal?) => Promise<Tile \| null>` | Fetch and decode a single tile (also the fallback when no batch callback is wired). |
+| Option              | Type                                             | Description                                                                         |
+| :------------------ | :----------------------------------------------- | :---------------------------------------------------------------------------------- |
+| `getAvailableTiles` | `(bounds, zoom, timeRange) => Promise<TileId[]>` | Async directory query for raw-tier tile IDs in view.                                |
+| `getTileData`       | `(tileId, signal?) => Promise<Tile \| null>`     | Fetch and decode a single tile (also the fallback when no batch callback is wired). |
 
 ### Optional Data Callbacks
 
-| Option | Type | Description |
-| :--- | :--- | :--- |
-| `getTileDataBatch` | `(tileIds, signal?, hooks?) => Promise<(Tile \| null)[]>` | Batched fetch. When provided, each request-queue pass sends the tiles it would otherwise fetch one-by-one as a SINGLE call, letting the archive coalesce their (Hilbert-adjacent, hence usually byte-adjacent) ranges into a handful of HTTP Range requests. Wire `STTArchive.getTiles` here. `hooks.onTileReady(index, tile)` delivers each tile as soon as ITS coalesced range group decodes, so tiles render incrementally; `hooks.fetchPriority` is the browser fetch-priority hint (`'low'` for lookahead tiers). |
-| `getTileByteSize` | `(tileId) => number \| undefined` | SYNCHRONOUS directory lookup of a tile's compressed byte size (wire `STTArchive.getTileByteSize`). Enables (a) skipping PARENT-fallback tiles larger than `maxParentTileBytes`, and (b) byte-exact buffer-model math (`bytesPending`, `estimateCost`). |
-| `getAvailableSummaryTiles` | `(bounds, zoom, timeRange) => Promise<TileId[]>` | Directory query for SUMMARY-tier tile IDs (wire `STTArchive.getSummaryTileIdsInBounds`). Without it, `tier: 'summary'`/`'auto'` behave as `'raw'`. |
-| `getThroughput` | `() => { bytesPerMs: number \| null; samples: number }` | Network throughput probe used by `estimateTimeToReadyMs` to convert pending bytes into an honest ETA. Wire `STTArchive.getThroughputEstimate` (a dual-EWMA over coalesced range responses). `bytesPerMs` is `null` until the estimator has a sample. |
+| Option                     | Type                                                      | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| :------------------------- | :-------------------------------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `getTileDataBatch`         | `(tileIds, signal?, hooks?) => Promise<(Tile \| null)[]>` | Batched fetch. When provided, each request-queue pass sends the tiles it would otherwise fetch one-by-one as a SINGLE call, letting the archive coalesce their (Hilbert-adjacent, hence usually byte-adjacent) ranges into a handful of HTTP Range requests. Wire `STTArchive.getTiles` here. `hooks.onTileReady(index, tile)` delivers each tile as soon as ITS coalesced range group decodes, so tiles render incrementally; `hooks.fetchPriority` is the browser fetch-priority hint (`'low'` for lookahead tiers). |
+| `getTileByteSize`          | `(tileId) => number \| undefined`                         | SYNCHRONOUS directory lookup of a tile's compressed byte size (wire `STTArchive.getTileByteSize`). Enables (a) skipping PARENT-fallback tiles larger than `maxParentTileBytes`, and (b) byte-exact buffer-model math (`bytesPending`, `estimateCost`).                                                                                                                                                                                                                                                                 |
+| `getAvailableSummaryTiles` | `(bounds, zoom, timeRange) => Promise<TileId[]>`          | Directory query for SUMMARY-tier tile IDs (wire `STTArchive.getSummaryTileIdsInBounds`). Without it, `tier: 'summary'`/`'auto'` behave as `'raw'`.                                                                                                                                                                                                                                                                                                                                                                     |
+| `getThroughput`            | `() => { bytesPerMs: number \| null; samples: number }`   | Network throughput probe used by `estimateTimeToReadyMs` to convert pending bytes into an honest ETA. Wire `STTArchive.getThroughputEstimate` (a dual-EWMA over coalesced range responses). `bytesPerMs` is `null` until the estimator has a sample.                                                                                                                                                                                                                                                                   |
 
 ### Tile Loading Options
 
-| Option             | Type     | Default       | Description                                     |
-| :----------------- | :------- | :------------ | :---------------------------------------------- |
-| `maxRequests`      | `number` | `24`          | Concurrency budget for the single-tile / prefetch paths. The coalesced priority path sends the whole viewport×window working set in one batch and lets the archive bound in-flight HTTP requests internally; this caps the per-tile + prefetch fan-out. |
-| `debounceTime`     | `number` | `0`           | Debounce (ms) before loading after a viewport change. |
-| `maxCacheSize`     | `number` | `2000`        | Maximum tiles in the LRU cache.                 |
-| `maxCacheByteSize` | `number` | `2147483648`  | Maximum decoded bytes in the cache (2 GiB). Accounting is alias-deduped (honest): zero-copy datasets genuinely fill the budget where they previously plateaued ~half; set explicitly on memory-constrained targets. |
-| `minZoom`          | `number` | `0`           | Minimum zoom level available in data.           |
-| `maxZoom`          | `number` | `14`          | Maximum zoom level available in data (the layers replace this from archive metadata). |
-| `temporalBucketMs` | `number` | `3600000`     | Temporal bucket size in ms (from archive metadata). Aligns prefetch to bucket boundaries and is the granularity of the buffer model. |
-| `maxParentTileBytes` | `number` | `2097152`   | Byte ceiling above which a PARENT-fallback tile is skipped (requires `getTileByteSize`). The primary display zoom is never subject to this. |
+| Option               | Type     | Default      | Description                                                                                                                                                                                                                                             |
+| :------------------- | :------- | :----------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `maxRequests`        | `number` | `24`         | Concurrency budget for the single-tile / prefetch paths. The coalesced priority path sends the whole viewport×window working set in one batch and lets the archive bound in-flight HTTP requests internally; this caps the per-tile + prefetch fan-out. |
+| `debounceTime`       | `number` | `0`          | Debounce (ms) before loading after a viewport change.                                                                                                                                                                                                   |
+| `maxCacheSize`       | `number` | `2000`       | Maximum tiles in the LRU cache.                                                                                                                                                                                                                         |
+| `maxCacheByteSize`   | `number` | `2147483648` | Maximum decoded bytes in the cache (2 GiB). Accounting is alias-deduped (honest): zero-copy datasets genuinely fill the budget where they previously plateaued ~half; set explicitly on memory-constrained targets.                                     |
+| `minZoom`            | `number` | `0`          | Minimum zoom level available in data.                                                                                                                                                                                                                   |
+| `maxZoom`            | `number` | `14`         | Maximum zoom level available in data (the layers replace this from archive metadata).                                                                                                                                                                   |
+| `temporalBucketMs`   | `number` | `3600000`    | Temporal bucket size in ms (from archive metadata). Aligns prefetch to bucket boundaries and is the granularity of the buffer model.                                                                                                                    |
+| `maxParentTileBytes` | `number` | `2097152`    | Byte ceiling above which a PARENT-fallback tile is skipped (requires `getTileByteSize`). The primary display zoom is never subject to this.                                                                                                             |
 
 ### Refinement Options
 
-| Option               | Type                                | Default            | Description                                            |
-| :------------------- | :---------------------------------- | :----------------- | :----------------------------------------------------- |
-| `refinementStrategy` | `'best-available' \| 'no-overlap'`  | `'best-available'` | `'best-available'` surfaces parent tiles (up to 4 zoom levels back) while detailed tiles load — also covers the gap when `--min-features-per-tile` drops sparse deep-zoom tiles. `'no-overlap'` loads only the exact zoom (used by the summary tier, where a parent would double-draw aggregated cells). |
-| `lodMode`            | `'parent-fallback' \| 'additive'`   | `'parent-fallback'`| `'parent-fallback'` renders the single best (highest loaded) zoom; coarser parents are transient fallbacks dropped the moment their children finish streaming. `'additive'` renders the UNION of zoom levels `[minZoom..requestedZoom]` simultaneously and keeps every level resident — for additive-octree point clouds (built with `stt-build --min-zoom-field`/`--max-zoom-field`), where each point lives at exactly one zoom, a coarse tile holds a sparse overview and finer tiles add only the residual detail, so there is no double-drawing and zooming in fetches only the deeper levels. |
+| Option               | Type                               | Default             | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| :------------------- | :--------------------------------- | :------------------ | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `refinementStrategy` | `'best-available' \| 'no-overlap'` | `'best-available'`  | `'best-available'` surfaces parent tiles (up to 4 zoom levels back) while detailed tiles load — also covers the gap when `--min-features-per-tile` drops sparse deep-zoom tiles. `'no-overlap'` loads only the exact zoom (used by the summary tier, where a parent would double-draw aggregated cells).                                                                                                                                                                                                                                                                                            |
+| `lodMode`            | `'parent-fallback' \| 'additive'`  | `'parent-fallback'` | `'parent-fallback'` renders the single best (highest loaded) zoom; coarser parents are transient fallbacks dropped the moment their children finish streaming. `'additive'` renders the UNION of zoom levels `[minZoom..requestedZoom]` simultaneously and keeps every level resident — for additive-octree point clouds (built with `stt-build --min-zoom-field`/`--max-zoom-field`), where each point lives at exactly one zoom, a coarse tile holds a sparse overview and finer tiles add only the residual detail, so there is no double-drawing and zooming in fetches only the deeper levels. |
 
 ### Prefetch Options
 
-| Option          | Type      | Default | Description                                          |
-| :-------------- | :-------- | :------ | :--------------------------------------------------- |
-| `enablePrefetch`| `boolean` | `true`  | Enable predictive prefetching for animations.        |
-| `prefetchAhead` | `number`  | `30000` | How far ahead to prefetch (animation time in ms). During measured playback the lookahead is additionally sized in REAL time (~8 s of playback at the current speed). |
-| `prefetchSteps` | `number`  | `4`     | Number of time-window steps to prefetch.             |
+| Option           | Type      | Default | Description                                                                                                                                                          |
+| :--------------- | :-------- | :------ | :------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `enablePrefetch` | `boolean` | `true`  | Enable predictive prefetching for animations.                                                                                                                        |
+| `prefetchAhead`  | `number`  | `30000` | How far ahead to prefetch (animation time in ms). During measured playback the lookahead is additionally sized in REAL time (~8 s of playback at the current speed). |
+| `prefetchSteps`  | `number`  | `4`     | Number of time-window steps to prefetch.                                                                                                                             |
 
 Prefetch dispatches in small, time-ordered, byte-budgeted SLICES (~1 s of measured throughput, clamped to 1–16 MiB; 4 MiB before the estimator has a sample) — the streaming-video segment model. One slice is in flight at a time; every slice boundary is a fresh chance for priority work to dispatch first. The prefetch direction has hysteresis (3 consecutive opposite-sign frames before flipping), and the prefetch working set is capped at half the tile-count cache budget so the runway stays resident instead of thrashing the LRU.
 
 ### Tier dispatch
 
-| Option | Type | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `tier` | `'raw' \| 'summary' \| 'auto'` | `'auto'` | Tile-tier dispatch for archives with a server-aggregated summary tier. `'auto'` uses summary tiles when the zoom is inside `summaryZoomRange` and raw tiles otherwise. Falls back to `'raw'` whenever `getAvailableSummaryTiles` is unwired. |
-| `summaryZoomRange` | `{ minZoom, maxZoom }` | `null` | Inclusive zoom range covered by the archive's summary tier. Only consulted by `'auto'`. |
+| Option             | Type                           | Default  | Description                                                                                                                                                                                                                                  |
+| :----------------- | :----------------------------- | :------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tier`             | `'raw' \| 'summary' \| 'auto'` | `'auto'` | Tile-tier dispatch for archives with a server-aggregated summary tier. `'auto'` uses summary tiles when the zoom is inside `summaryZoomRange` and raw tiles otherwise. Falls back to `'raw'` whenever `getAvailableSummaryTiles` is unwired. |
+| `summaryZoomRange` | `{ minZoom, maxZoom }`         | `null`   | Inclusive zoom range covered by the archive's summary tier. Only consulted by `'auto'`.                                                                                                                                                      |
 
 Temporal-LOD dispatch is now wired into the tileset, but only via the opt-in [Scrub-LOD](#scrub-lod-motion-tier) `scrubLod.temporal` axis (default off, and only when the archive was built with `--temporal-lod`). The underlying reader API — `STTArchive.pickTemporalLodForZoom`, `getTileIdsInBoundsForTemporalLod`, and `getTilesInBoundsForTemporalLod` — is also exposed directly, so an app that wants coarser temporal tiers outside the scrub path can select the LOD level and request those tiles itself.
 
@@ -108,27 +108,27 @@ Temporal-LOD dispatch is now wired into the tileset, but only via the opt-in [Sc
 
 Opt-in, default off. While the user drags the timeline, tile SELECTION may degrade to a cheaper preview tier; the readiness/buffer APIs (`getBufferedRunway` / `getBufferedRanges` / `estimateCost`) and the prefetch planner keep measuring/warming the FINE base tier, so a playback gate on scrub release re-arms against full detail — never the coarse preview.
 
-| Option | Type | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `scrubLod` | `ScrubLodOptions` | `null` | Scrub-time LOD degradation policy (see below). Absent/empty = the kill switch: `setInteractive` becomes stored state only and behavior is byte-identical to today. |
-| `temporalLodLevels` | `TemporalLodLevel[]` | `null` | The archive's temporal-LOD pyramid levels (from `ArchiveMetadata.temporalLod`), enabling the `scrubLod.temporal` axis. Absent for archives built without `--temporal-lod` — the temporal axis then no-ops regardless of `scrubLod`. |
-| `getAvailableTemporalLodTiles` | `(bounds, zoom, timeRange, bucketMs) => Promise<TileId[]>` | `null` | Enumerate the tiles of ONE temporal-LOD tier (wire `STTArchive.getTileIdsInBoundsForTemporalLod`). Used only while interactive with `scrubLod.temporal` enabled; the base `getAvailableTiles` still serves every other query. |
+| Option                         | Type                                                       | Default | Description                                                                                                                                                                                                                         |
+| :----------------------------- | :--------------------------------------------------------- | :------ | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `scrubLod`                     | `ScrubLodOptions`                                          | `null`  | Scrub-time LOD degradation policy (see below). Absent/empty = the kill switch: `setInteractive` becomes stored state only and behavior is byte-identical to today.                                                                  |
+| `temporalLodLevels`            | `TemporalLodLevel[]`                                       | `null`  | The archive's temporal-LOD pyramid levels (from `ArchiveMetadata.temporalLod`), enabling the `scrubLod.temporal` axis. Absent for archives built without `--temporal-lod` — the temporal axis then no-ops regardless of `scrubLod`. |
+| `getAvailableTemporalLodTiles` | `(bounds, zoom, timeRange, bucketMs) => Promise<TileId[]>` | `null`  | Enumerate the tiles of ONE temporal-LOD tier (wire `STTArchive.getTileIdsInBoundsForTemporalLod`). Used only while interactive with `scrubLod.temporal` enabled; the base `getAvailableTiles` still serves every other query.       |
 
 `ScrubLodOptions` has two independent axes, both default OFF; an absent/empty object is byte-identical to today (the kill switch):
 
-| Field | Type | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `spatial` | `boolean` | `false` | While interactive, drop the requested (primary) zoom by `spatialZoomDrop` so selection targets coarser tiles — usually ones the parent-fallback path already fetched. |
-| `spatialZoomDrop` | `number` | `2` | Zoom levels dropped while interactive (spatial axis). Clamped to `[0, 4]` (`PARENT_FALLBACK_LEVELS`) so the coarse target stays inside the band the fallback path already loads. |
-| `temporal` | `boolean` | `false` | While interactive, route selection through the archive's temporal-LOD pyramid — the coarsest level covering the requested zoom — instead of the base-bucket tiles. No-ops unless the archive was built with `--temporal-lod` AND both `temporalLodLevels` and `getAvailableTemporalLodTiles` are wired (capability detection). Zooms already dispatched to the summary tier keep using it (summary is already a reduced tier). |
+| Field             | Type      | Default | Description                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| :---------------- | :-------- | :------ | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `spatial`         | `boolean` | `false` | While interactive, drop the requested (primary) zoom by `spatialZoomDrop` so selection targets coarser tiles — usually ones the parent-fallback path already fetched.                                                                                                                                                                                                                                                          |
+| `spatialZoomDrop` | `number`  | `2`     | Zoom levels dropped while interactive (spatial axis). Clamped to `[0, 4]` (`PARENT_FALLBACK_LEVELS`) so the coarse target stays inside the band the fallback path already loads.                                                                                                                                                                                                                                               |
+| `temporal`        | `boolean` | `false` | While interactive, route selection through the archive's temporal-LOD pyramid — the coarsest level covering the requested zoom — instead of the base-bucket tiles. No-ops unless the archive was built with `--temporal-lod` AND both `temporalLodLevels` and `getAvailableTemporalLodTiles` are wired (capability detection). Zooms already dispatched to the summary tier keep using it (summary is already a reduced tier). |
 
 ### Callbacks
 
-| Option         | Type                           | Description                        |
-| :------------- | :----------------------------- | :--------------------------------- |
-| `onTileLoad`   | `(tile: Tile) => void`         | Called when a tile loads.          |
-| `onTileUnload` | `(tile: Tile) => void`         | Called when a tile is evicted.     |
-| `onTileError`  | `(error: Error, tileId) => void` | Called on tile load error. Dataset-level failures (selection pass could not query the directory) use the sentinel `tileId {x: -1, y: -1}` — ignore negative coords when keying per-tile state. |
+| Option           | Type                               | Description                                                                                                                                                                                                                                                                                                                         |
+| :--------------- | :--------------------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `onTileLoad`     | `(tile: Tile) => void`             | Called when a tile loads.                                                                                                                                                                                                                                                                                                           |
+| `onTileUnload`   | `(tile: Tile) => void`             | Called when a tile is evicted.                                                                                                                                                                                                                                                                                                      |
+| `onTileError`    | `(error: Error, tileId) => void`   | Called on tile load error. Dataset-level failures (selection pass could not query the directory) use the sentinel `tileId {x: -1, y: -1}` — ignore negative coords when keying per-tile state.                                                                                                                                      |
 | `onBufferChange` | `(runway: BufferedRunway) => void` | Invoked with a fresh `BufferedRunway` (probed from the play head in the committed prefetch direction) whenever a needed tile loads, a tile is evicted, or the needed-tile set changes. Trailing-edge throttled to ≤ 10 Hz. Wiring this enables coverage-index maintenance (one extra `getAvailableTiles` call per viewport change). |
 
 ## Methods
@@ -188,11 +188,11 @@ How much contiguous sim-time ahead of `time` in `direction` is fully loaded — 
 
 ```typescript
 interface BufferedRunway {
-  simMs: number;        // contiguous loaded span (stops at the first bucket with a missing tile)
+  simMs: number; // contiguous loaded span (stops at the first bucket with a missing tile)
   bytesPending: number; // directory byte sum of needed-but-not-loaded tiles in the horizon
-                        // (in-flight counts as not loaded; 0 when getTileByteSize is unwired)
+  // (in-flight counts as not loaded; 0 when getTileByteSize is unwired)
   horizonSimMs: number; // how far the probe looked
-  complete: boolean;    // reached the horizon — or the dataset edge — with nothing missing
+  complete: boolean; // reached the horizon — or the dataset edge — with nothing missing
 }
 ```
 
@@ -221,7 +221,7 @@ Eagerly load and PIN the coarsest tiles (zooms `minZoom..maxZoom`, default 0..1)
 ```typescript
 interface OverviewPreloadResult {
   loaded: boolean;
-  bytes: number;   // directory byte sum of candidates (reported even on rejection)
+  bytes: number; // directory byte sum of candidates (reported even on rejection)
   tiles: number;
   reason?: 'over-budget' | 'no-tiles' | 'disabled' | 'error';
 }

@@ -1,7 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { GeometryType } from '@poopdeck.gl/core';
 import type { BinaryFeatures, Tile } from '@poopdeck.gl/core';
-import { buildSurfelBuffers, type SurfelBufferOptions } from '../src/layers/surfel-buffers';
+import {
+  buildSurfelBuffers,
+  type SurfelBufferOptions,
+} from '../src/layers/surfel-buffers';
 import { LocalEnuProjection } from '../src/projection/local-enu';
 import { makePointTile } from './_support/features';
 
@@ -30,7 +33,8 @@ function makeTile(
   timeOffset: number,
 ): Tile {
   const num: Record<string, Float32Array> = {};
-  for (const [k, v] of Object.entries(numericProps)) num[k] = new Float32Array(v);
+  for (const [k, v] of Object.entries(numericProps))
+    num[k] = new Float32Array(v);
   return makePointTile(
     count,
     positions,
@@ -147,7 +151,15 @@ describe('buildSurfelBuffers', () => {
     const tile = makeTile(
       1,
       [anchor.longitude, anchor.latitude],
-      { qx: [0], qy: [0], qz: [0], qw: [1], s_major: [0.3], s_minor: [0.3], z: [0] },
+      {
+        qx: [0],
+        qy: [0],
+        qz: [0],
+        qw: [1],
+        s_major: [0.3],
+        s_minor: [0.3],
+        z: [0],
+      },
       [100],
       5000,
     );
@@ -159,14 +171,30 @@ describe('buildSurfelBuffers', () => {
     const t1 = makeTile(
       1,
       [anchor.longitude, anchor.latitude],
-      { qx: [0], qy: [0], qz: [0], qw: [1], s_major: [0.3], s_minor: [0.3], z: [1] },
+      {
+        qx: [0],
+        qy: [0],
+        qz: [0],
+        qw: [1],
+        s_major: [0.3],
+        s_minor: [0.3],
+        z: [1],
+      },
       [0],
       0,
     );
     const t2 = makeTile(
       1,
       [anchor.longitude + 0.001, anchor.latitude + 0.001],
-      { qx: [0], qy: [0], qz: [0], qw: [1], s_major: [0.3], s_minor: [0.3], z: [5] },
+      {
+        qx: [0],
+        qy: [0],
+        qz: [0],
+        qw: [1],
+        s_major: [0.3],
+        s_minor: [0.3],
+        z: [5],
+      },
       [0],
       0,
     );
@@ -184,23 +212,47 @@ describe('buildSurfelBuffers', () => {
       featureCount: 2,
       geometryType: GeometryType.Point,
       positionDimensions: 2,
-      positions: new Float64Array([anchor.longitude, anchor.latitude, anchor.longitude, anchor.latitude]),
+      positions: new Float64Array([
+        anchor.longitude,
+        anchor.latitude,
+        anchor.longitude,
+        anchor.latitude,
+      ]),
       featureIds: new Uint32Array(2),
       startTimes: new Float32Array([0, 0]),
       endTimes: new Float32Array([0, 0]),
       timeOffset: 0,
-      numericProps: { z: new Float32Array([2, 4]), is_dynamic: new Float32Array([0, 1]) },
+      numericProps: {
+        z: new Float32Array([2, 4]),
+        is_dynamic: new Float32Array([0, 1]),
+      },
       categoricalProps: {},
       vectorProps: {
-        surfel_quat: { value: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1]), size: 4 },
-        surfel_scale: { value: new Float32Array([0.4, 0.2, 0.5, 0.3]), size: 2 },
-        surfel_rgba: { value: new Uint8Array([255, 128, 0, 200, 10, 20, 30, 255]), size: 4 },
+        surfel_quat: {
+          value: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1]),
+          size: 4,
+        },
+        surfel_scale: {
+          value: new Float32Array([0.4, 0.2, 0.5, 0.3]),
+          size: 2,
+        },
+        surfel_rgba: {
+          value: new Uint8Array([255, 128, 0, 200, 10, 20, 30, 255]),
+          size: 4,
+        },
       },
     };
     const tile: Tile = {
       id: { z: 18, x: 0, y: 0, t: 0 },
       timeRange: { start: 0, end: 1000 },
-      layers: [{ name: 'lidar', extent: 0, features, geometryExtensionName: 'geoarrow.point' }],
+      layers: [
+        {
+          name: 'lidar',
+          extent: 0,
+          features,
+          geometryExtensionName: 'geoarrow.point',
+        },
+      ],
     };
     const buf = buildSurfelBuffers([tile], proj, 0, OPTS);
     expect(buf.count).toBe(2);
@@ -219,11 +271,22 @@ describe('buildSurfelBuffers', () => {
     const tile = makeTile(
       1,
       [anchor.longitude, anchor.latitude],
-      { qx: [0], qy: [0], qz: [0], qw: [1], s_major: [0.3], s_minor: [0.3], z: [0] },
+      {
+        qx: [0],
+        qy: [0],
+        qz: [0],
+        qw: [1],
+        s_major: [0.3],
+        s_minor: [0.3],
+        z: [0],
+      },
       [0],
       0,
     );
-    const buf = buildSurfelBuffers([tile], proj, 0, { ...OPTS, rgbColumns: null });
+    const buf = buildSurfelBuffers([tile], proj, 0, {
+      ...OPTS,
+      rgbColumns: null,
+    });
     expect(buf.colors[0]).toBeCloseTo(200 / 255, 6);
     expect(buf.colors[3]).toBe(1); // no opacity column -> opaque
   });

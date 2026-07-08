@@ -30,7 +30,10 @@
 
 import type { PerspectiveCamera } from 'three';
 import type { Projection } from '../projection/local-enu.js';
-import { cameraToViewState, type ViewStateCameraOptions } from '../projection/view-state.js';
+import {
+  cameraToViewState,
+  type ViewStateCameraOptions,
+} from '../projection/view-state.js';
 
 /**
  * The minimal structural surface a host map must expose. Satisfied by maplibre-gl

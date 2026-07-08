@@ -61,22 +61,28 @@ describe('render-spec.json contract', () => {
   const ops = new Set<string>();
   const uniforms = new Set<string>();
   const attributes = new Set<string>();
-  for (const expr of Object.values(ALPHA_EXPR)) walk(expr, ops, uniforms, attributes);
+  for (const expr of Object.values(ALPHA_EXPR))
+    walk(expr, ops, uniforms, attributes);
 
   it('ALPHA_EXPR uses only ops declared in the spec', () => {
     for (const op of ops) expect(spec.ops).toContain(op);
   });
 
   it('every uniform/attr the ASTs read is declared in the spec', () => {
-    for (const name of uniforms) expect(spec.variables.uniforms).toContain(name);
-    for (const name of attributes) expect(spec.variables.attributes).toContain(name);
+    for (const name of uniforms)
+      expect(spec.variables.uniforms).toContain(name);
+    for (const name of attributes)
+      expect(spec.variables.attributes).toContain(name);
   });
 
   it('the spec declares no variables the code does not define', () => {
     // TIME_FILTER_VARS is the canonical name registry; the spec must be a
     // subset of it (spec listing a name the code lost = stale spec).
     const known = new Set<string>(Object.values(TIME_FILTER_VARS));
-    for (const name of [...spec.variables.uniforms, ...spec.variables.attributes]) {
+    for (const name of [
+      ...spec.variables.uniforms,
+      ...spec.variables.attributes,
+    ]) {
       expect(known).toContain(name);
     }
   });
@@ -88,9 +94,18 @@ describe('render-spec.json contract', () => {
   it('op-set is exactly the frozen 12 (widening requires the all-emitters gate)', () => {
     expect([...spec.ops].sort()).toEqual(
       [
-        'uniform', 'attr', 'const',
-        'add', 'sub', 'mul', 'div',
-        'min', 'max', 'step', 'clamp01', 'select',
+        'uniform',
+        'attr',
+        'const',
+        'add',
+        'sub',
+        'mul',
+        'div',
+        'min',
+        'max',
+        'step',
+        'clamp01',
+        'select',
       ].sort(),
     );
   });

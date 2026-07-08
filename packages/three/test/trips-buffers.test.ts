@@ -1,7 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { GeometryType } from '@poopdeck.gl/core';
 import type { BinaryFeatures } from '@poopdeck.gl/core';
-import { buildTripsBuffers, synthesizeVertexTimes } from '../src/lib/trips-buffers';
+import {
+  buildTripsBuffers,
+  synthesizeVertexTimes,
+} from '../src/lib/trips-buffers';
 import { LocalEnuProjection } from '../src/projection/local-enu';
 import { makeLineTile } from './_support/features';
 import { expectEmptyBuffers } from './_support/rtc';
@@ -16,11 +19,16 @@ describe('buildTripsBuffers', () => {
   const dLon = 0.001;
 
   // 3 colinear vertices going east → 2 segments.
-  function eastLine(extra: Partial<BinaryFeatures>): BinaryFeatures['positions'] {
+  function eastLine(
+    extra: Partial<BinaryFeatures>,
+  ): BinaryFeatures['positions'] {
     return new Float64Array([
-      anchor.longitude, anchor.latitude,
-      anchor.longitude + dLon, anchor.latitude,
-      anchor.longitude + 2 * dLon, anchor.latitude,
+      anchor.longitude,
+      anchor.latitude,
+      anchor.longitude + dLon,
+      anchor.latitude,
+      anchor.longitude + 2 * dLon,
+      anchor.latitude,
     ]);
   }
 
@@ -89,7 +97,10 @@ describe('buildTripsBuffers', () => {
   });
 
   it('returns empty for a tile with no line features', () => {
-    const tile = tripTile({ featureCount: 0, startIndices: new Uint32Array([0]) });
+    const tile = tripTile({
+      featureCount: 0,
+      startIndices: new Uint32Array([0]),
+    });
     const buf = buildTripsBuffers([tile], proj, 0, {
       colorMode: { type: 'constant', color: [0, 0, 0, 255] },
     });
@@ -105,9 +116,12 @@ describe('synthesizeVertexTimes', () => {
       geometryType: GeometryType.LineString,
       positionDimensions: 2,
       positions: new Float64Array([
-        anchor.longitude, anchor.latitude,
-        anchor.longitude + 0.001, anchor.latitude,
-        anchor.longitude + 0.003, anchor.latitude, // second segment 2× longer
+        anchor.longitude,
+        anchor.latitude,
+        anchor.longitude + 0.001,
+        anchor.latitude,
+        anchor.longitude + 0.003,
+        anchor.latitude, // second segment 2× longer
       ]),
       featureIds: new Uint32Array(1),
       startTimes: new Float32Array([1000]),

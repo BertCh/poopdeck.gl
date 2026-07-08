@@ -25,7 +25,7 @@ limit (Cloudflare Free/Pro/Business = 512 MB): a multi-GB dataset returns
 every user. Reordering blobs does not change this.
 
 The packed format makes the cacheable unit a small object, not the whole
-dataset. Data is split into many content-addressed *pack* objects (each well under
+dataset. Data is split into many content-addressed _pack_ objects (each well under
 the limit) plus a tiny manifest. A dumb CDN caches each pack natively. No Worker, no
 vendor lock-in — cacheability is a property of the format, so it works on R2, S3,
 GCS, or any static host.
@@ -48,7 +48,7 @@ data/<dataset>/
 - **`manifest.json` is the only mutable object** → short `max-age` (e.g. 60 s) and/or
   explicit purge on deploy. It is tiny (a few KB), so this is cheap. It is the only
   thing a deploy must invalidate.
-- **Retention contract (origin GC).** Deploys are *additive*: a deploy MUST NOT
+- **Retention contract (origin GC).** Deploys are _additive_: a deploy MUST NOT
   delete objects the previous manifest references, because manifests are cached
   (up to their TTL) and an open session holds its manifest in memory for its whole
   lifetime — both keep resolving old pack names. Origin garbage collection is a
@@ -58,7 +58,7 @@ data/<dataset>/
   (the reference deploy script `scripts/r2-sync.sh` defaults to 7 days, override
   `R2_PRUNE_RETENTION`, escape hatch `--prune-now`). The reference script
   additionally applies a one-deploy **grace rule** — before uploading, it captures
-  the references of the *currently-deployed* manifest and protects them from GC for
+  the references of the _currently-deployed_ manifest and protects them from GC for
   that deploy cycle — and a major republish that changes every object SHOULD defer
   pruning entirely (`--no-prune`) until the retention window has passed. Edge
   caches need no purge either way — an evicted-at-origin object simply ages out
@@ -93,8 +93,16 @@ content-addressed objects and rewrites the manifest.
   "formatVersion": 1,
   "capabilities": ["attr-quant", "coord-quant"],
   "compression": "zstd",
-  "directory": { "key": "index/<hash>.sttd", "length": 1234567, "directoryVersion": 5, "encoding": "zstd",
-                 "layout": "paged", "rootLength": 7024, "pageCount": 137, "pageEntries": 4096 },
+  "directory": {
+    "key": "index/<hash>.sttd",
+    "length": 1234567,
+    "directoryVersion": 5,
+    "encoding": "zstd",
+    "layout": "paged",
+    "rootLength": 7024,
+    "pageCount": 137,
+    "pageEntries": 4096
+  },
   "packs": [
     { "key": "packs/<hash0>.sttp", "length": 67108864 },
     { "key": "packs/<hash1>.sttp", "length": 67108864 }
@@ -109,7 +117,7 @@ content-addressed objects and rewrites the manifest.
 - `directory.encoding` (OPTIONAL): at-rest encoding of the `.sttd`
   object. `"zstd"` = a zstd frame wrapping the directory codec bytes (~2× smaller; the
   directory sits on the cold-start critical path with no CDN content-encoding rescue).
-  For a **paged** directory (below) it describes the framing of *each page* (root + every
+  For a **paged** directory (below) it describes the framing of _each page_ (root + every
   leaf), not one frame over the whole object. **Absent = raw codec bytes.** The content
   address (`key`) and `length` always describe the **at-rest** bytes (i.e. the compressed
   bytes when `encoding` is set), so readers validate the fetched body length before decoding.
@@ -166,11 +174,11 @@ a loud refusal at open.
 
 Registry (`formatVersion` 1):
 
-| capability | declared when the writer… | payload mechanism |
-| --- | --- | --- |
-| `coord-quant` | quantized geometry to fixed-point `Int32` (`--quantize-coords`) | `stt:quant` metadata on the `geometry` field |
-| `attr-quant` | quantized any numeric property column (`--quantize-attr` / `--quantize-attrs-auto`) | `stt:qa` metadata on the property field |
-| `elevation-fold` | folded a property into POINT z (`--point-elevation-column`) | 3-component point leaf instead of 2 |
+| capability       | declared when the writer…                                                           | payload mechanism                            |
+| ---------------- | ----------------------------------------------------------------------------------- | -------------------------------------------- |
+| `coord-quant`    | quantized geometry to fixed-point `Int32` (`--quantize-coords`)                     | `stt:quant` metadata on the `geometry` field |
+| `attr-quant`     | quantized any numeric property column (`--quantize-attr` / `--quantize-attrs-auto`) | `stt:qa` metadata on the property field      |
+| `elevation-fold` | folded a property into POINT z (`--point-elevation-column`)                         | 3-component point leaf instead of 2          |
 
 The value vocabulary is deliberately open-ended (the envelope rules above
 stay intact): future registry entries are added by spec revision without a
@@ -187,15 +195,17 @@ the schema **template** is written once, embedded in the manifest:
 {
   "formatVersion": 2,
   "schemas": [
-    { "hash": "<blake3-128 hex (32 chars) of the raw template bytes>",
-      "data": "<base64 (standard, padded) of the raw template bytes>" }
-  ]
+    {
+      "hash": "<blake3-128 hex (32 chars) of the raw template bytes>",
+      "data": "<base64 (standard, padded) of the raw template bytes>",
+    },
+  ],
   // directory / packs / metadata / capabilities: unchanged shape
 }
 ```
 
 - A **template** is a layer's Arrow IPC stream bytes from offset 0 through
-  the end of the encapsulated *Schema message* (continuation `0xFFFFFFFF` +
+  the end of the encapsulated _Schema message_ (continuation `0xFFFFFFFF` +
   `i32 metadata_len` + flatbuffer; the schema message has `bodyLength 0`).
   Templates carry only **dataset-constant** metadata — per-tile-varying keys
   live in the frame's `TILE_META` section (§5.2.2).
@@ -297,31 +307,31 @@ test-enforced, exhaustively at low zooms, in
 `crates/stt-core/tests/hilbert_vectors.rs`; the spec table and the test table
 are the same table):
 
-| z  | x     | y     | h           |
-|----|-------|-------|-------------|
-| 0  | 0     | 0     | 0           |
-| 1  | 0     | 0     | 0           |
-| 1  | 0     | 1     | 1           |
-| 1  | 1     | 1     | 2           |
-| 1  | 1     | 0     | 3           |
-| 2  | 0     | 0     | 0           |
-| 2  | 0     | 3     | 5           |
-| 2  | 1     | 2     | 7           |
-| 2  | 3     | 3     | 10          |
-| 2  | 2     | 1     | 13          |
-| 2  | 3     | 0     | 15          |
-| 8  | 0     | 0     | 0           |
-| 8  | 0     | 255   | 21845       |
-| 8  | 255   | 255   | 43690       |
-| 8  | 255   | 0     | 65535       |
-| 8  | 128   | 128   | 32768       |
-| 8  | 100   | 200   | 28272       |
-| 14 | 0     | 0     | 0           |
-| 14 | 0     | 16383 | 89478485    |
-| 14 | 16383 | 16383 | 178956970   |
-| 14 | 16383 | 0     | 268435455   |
-| 14 | 8192  | 8192  | 134217728   |
-| 14 | 12345 | 6789  | 214230386   |
+| z   | x     | y     | h         |
+| --- | ----- | ----- | --------- |
+| 0   | 0     | 0     | 0         |
+| 1   | 0     | 0     | 0         |
+| 1   | 0     | 1     | 1         |
+| 1   | 1     | 1     | 2         |
+| 1   | 1     | 0     | 3         |
+| 2   | 0     | 0     | 0         |
+| 2   | 0     | 3     | 5         |
+| 2   | 1     | 2     | 7         |
+| 2   | 3     | 3     | 10        |
+| 2   | 2     | 1     | 13        |
+| 2   | 3     | 0     | 15        |
+| 8   | 0     | 0     | 0         |
+| 8   | 0     | 255   | 21845     |
+| 8   | 255   | 255   | 43690     |
+| 8   | 255   | 0     | 65535     |
+| 8   | 128   | 128   | 32768     |
+| 8   | 100   | 200   | 28272     |
+| 14  | 0     | 0     | 0         |
+| 14  | 0     | 16383 | 89478485  |
+| 14  | 16383 | 16383 | 178956970 |
+| 14  | 16383 | 0     | 268435455 |
+| 14  | 8192  | 8192  | 134217728 |
+| 14  | 12345 | 6789  | 214230386 |
 
 **Layout.**
 
@@ -359,7 +369,7 @@ repeat N:
   ivarint  Δcover_t_min        # cover_t_min - time_start (signed)
 ```
 
-**Run-length encoding (the headline win).** A *run* is a maximal stretch of
+**Run-length encoding (the headline win).** A _run_ is a maximal stretch of
 consecutive entries (in directory order) that reference the **same physical
 blob** — same `(pack_id, offset, length, uncompressed_size, crc32c)`. Because
 the writer deduplicates byte-identical blobs (§5), a spatial cell whose content
@@ -367,7 +377,7 @@ is identical across many consecutive time buckets collapses to a single run:
 the heavy blob columns are written **once per run** instead of once per entry —
 the temporal analogue of PMTiles collapsing identical ocean tiles across space.
 `pack_id` is part of run identity (v5): two entries collapse only when same
-pack *and* same blob.
+pack _and_ same blob.
 
 **Per-run `pack_id` column (new in v5).** Delta+zig-zag coded against the
 previous run's `pack_id`; packs are near-monotonic in directory order, so this
@@ -412,7 +422,7 @@ its viewport/time-window touches. Implemented in `crates/stt-core/src/directory_
 .sttd  =  [root page frame][leaf 0 frame][leaf 1 frame] ...
 ```
 
-- A **leaf page** is the *unchanged* §4 v5 codec over a contiguous slice of
+- A **leaf page** is the _unchanged_ §4 v5 codec over a contiguous slice of
   directory order `(zoom, hilbert, time_start)`. Slicing resets delta state and
   splits RLE runs at boundaries — the only paging cost (measured +6–19% at rest,
   paid once by the immutable CDN object, not per session).
@@ -458,12 +468,12 @@ Hilbert index in the reader; it was frozen over the alternative by an A/B sim
 at 4096 entries/page: it matched or beat Hilbert-range pruning on every dataset
 where paging matters
 (nyc-taxi-points 9.5%/15.5% of whole-load med/p90; drifters 25.0%/35.1%),
-because a viewport box maps to a Hilbert *interval* that falsely keeps
+because a viewport box maps to a Hilbert _interval_ that falsely keeps
 spatially-distant pages while geo-bbox tests real overlap. It also composes with
 a future per-tile `geoarrow.box` covering column.
 
 **Covering section.** A leaf emits the §4 covering section iff **every** entry in
-the *whole directory* carries `cover_t_min` (a global decision, so a paged
+the _whole directory_ carries `cover_t_min` (a global decision, so a paged
 directory decodes byte-for-identical-entries to a whole-load directory of the
 same corpus). Per-leaf `t_min` already encodes the tight lower bound on the page
 pointer.
@@ -481,7 +491,7 @@ and cross-page key order is monotonic in `(zoom, hilbert, time_start)`.
    cardinality — wide-time → spatial-major, else 3D Hilbert). Locality → fewer packs
    per viewport.
    The curve key is extended with a **total tiebreak** `(z, x, y, time_start,
-   temporal_bucket_ms)` — the curve alone ties between a cell's base and temporal-LOD
+temporal_bucket_ms)` — the curve alone ties between a cell's base and temporal-LOD
    tiles (and the 21-bit cube cap can collide), and the input arrives in nondeterministic
    (parallel) order. The tiebreak makes the blob byte order — and therefore every
    content address — **byte-reproducible across identical rebuilds**, which is what the
@@ -499,7 +509,7 @@ and cross-page key order is monotonic in `(zoom, hilbert, time_start)`.
 
 ### 5.1 Tile payload layer frame v1 (alignment rule)
 
-A **formatVersion-1** tile blob decompresses to the *layer frame*:
+A **formatVersion-1** tile blob decompresses to the _layer frame_:
 
 ```text
 [u16 layer_count | 0x8000]
@@ -508,9 +518,9 @@ A **formatVersion-1** tile blob decompresses to the *layer frame*:
 
 The leading u16's top bit (`0x8000`, `ALIGNED_FRAME_FLAG`) marks the **aligned
 frame**: after each `ipc_len`, zero bytes pad the position to the
-next 8-byte boundary *relative to the payload start*, so every Arrow IPC stream
+next 8-byte boundary _relative to the payload start_, so every Arrow IPC stream
 begins 8-byte aligned and a reader can hand it to an Arrow implementation zero-copy
-(Arrow guarantees buffer alignment only *within* a stream; a stream at a misaligned
+(Arrow guarantees buffer alignment only _within_ a stream; a stream at a misaligned
 offset forces a copy of every buffer). The pad length is **never stored** — readers
 derive it as `(8 - pos % 8) % 8` from the position after `ipc_len`; `ipc_len` is the
 exact IPC byte length, padding excluded. Frames with the flag unset carry no padding
@@ -551,13 +561,13 @@ is the loud refusal, by design.)
 **Section tag registry** (unknown tags are SKIPPABLE via their TOC length —
 additive evolution):
 
-| tag | name | content |
-| --- | --- | --- |
-| 0x01 | `INLINE_SCHEMA_CORE` | full IPC schema prefix (self-contained mode) |
-| 0x02 | `TILE_META` | canonical per-tile metadata JSON (§5.2.2) |
-| 0x03 | `CORE_BATCH` | IPC tail: dictionary batch(es) + record batch + EOS |
-| 0x04 | `INLINE_SCHEMA_PROPS` | as 0x01, props schema |
-| 0x05 | `PROPS_BATCH` | as 0x03, props schema |
+| tag  | name                  | content                                             |
+| ---- | --------------------- | --------------------------------------------------- |
+| 0x01 | `INLINE_SCHEMA_CORE`  | full IPC schema prefix (self-contained mode)        |
+| 0x02 | `TILE_META`           | canonical per-tile metadata JSON (§5.2.2)           |
+| 0x03 | `CORE_BATCH`          | IPC tail: dictionary batch(es) + record batch + EOS |
+| 0x04 | `INLINE_SCHEMA_PROPS` | as 0x01, props schema                               |
+| 0x05 | `PROPS_BATCH`         | as 0x03, props schema                               |
 
 Reserved columns (`id`/times/geometry/`vertex_*`/`triangles`) form the
 **CORE** batch; non-reserved property columns form the **PROPS** batch with
@@ -588,16 +598,22 @@ Per-tile-varying metadata, hoisted out of the (now dataset-constant) Arrow
 schema. Canonical serialization: JSON, keys sorted, no whitespace. Readers
 MUST ignore unknown keys. A key is present iff the corresponding feature is:
 
-| key | v1 equivalent | present iff |
-| --- | --- | --- |
-| `qa` | `stt:qa` field metadata, as `{column: [o, s]}` | any property column is quantized (absence of a column key = not quantized) |
-| `sorted` | — (new) | rows are stable-sorted by `start_time` |
-| `t0` | `stt:time_offset_ms` | a start-time column exists |
-| `vb` | `stt:vertex_value_buckets` | a vertex-value matrix exists |
-| `vt` | `stt:vertex_time_origin_ms`/`stt:vertex_time_step_ms`, as `[origin, step]` | vertex_time is u16-delta encoded |
+| key      | v1 equivalent                                                              | present iff                                                                |
+| -------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `qa`     | `stt:qa` field metadata, as `{column: [o, s]}`                             | any property column is quantized (absence of a column key = not quantized) |
+| `sorted` | — (new)                                                                    | rows are stable-sorted by `start_time`                                     |
+| `t0`     | `stt:time_offset_ms`                                                       | a start-time column exists                                                 |
+| `vb`     | `stt:vertex_value_buckets`                                                 | a vertex-value matrix exists                                               |
+| `vt`     | `stt:vertex_time_origin_ms`/`stt:vertex_time_step_ms`, as `[origin, step]` | vertex_time is u16-delta encoded                                           |
 
 ```json
-{"qa":{"speed":[0.0,0.15]},"sorted":true,"t0":1577836800000,"vb":24,"vt":[1577836800000,1000]}
+{
+  "qa": { "speed": [0.0, 0.15] },
+  "sorted": true,
+  "t0": 1577836800000,
+  "vb": 24,
+  "vt": [1577836800000, 1000]
+}
 ```
 
 Readers MUST source these from `TILE_META` in v2; dataset-constant keys
@@ -618,7 +634,7 @@ decode. Readers MUST NOT assume sortedness without the flag.
    - **single** (or `layout` absent): `GET <directory.key>` (one whole-object fetch,
      immutable/cached) → validate body length against `directory.length`, unwrap
      `encoding` if set, then decode v5 entries, each carrying `(pack_id, offset_in_pack,
-     length, …)`. Build the in-memory `(z,x,y[/t])` indexes.
+length, …)`. Build the in-memory `(z,x,y[/t])` indexes.
    - **paged**: if `directory.length` ≤ a small cutoff (the reader's
      `directoryPageThresholdBytes`, default 256 KiB), whole-load as above (decode root +
      all leaves). Otherwise range-`GET bytes=0-(rootLength-1)` for the **root page** only,
@@ -630,7 +646,7 @@ decode. Readers MUST NOT assume sortedness without the flag.
 3. Tile read: `entry` → `pack = packs[entry.pack_id]` → range `GET pack.key`
    `bytes=<offset>-<offset+length-1>`.
 4. **Coalescing is per-pack**: group needed entries by `pack_id`, then coalesce by offset
-   gap *within* each pack (a range can't bridge two pack objects); a concurrency pool runs
+   gap _within_ each pack (a range can't bridge two pack objects); a concurrency pool runs
    groups in parallel. (Leaf-page reads against the `.sttd` object coalesce the same way.)
 5. Decompress per-blob zstd (fzstd in TS — no dict).
 
@@ -658,7 +674,7 @@ The rationale behind the format's locked-in choices:
 - **D4 — manifest freshness = short `max-age` + `must-revalidate`.** `manifest.json`
   ships `max-age=60, must-revalidate`; packs/index ship `immutable, max-age=31536000`.
   Revalidation (`REVALIDATED`) keeps the tiny manifest fresh without a mandatory purge;
-  packs never need an *edge* purge (origin GC is the §2 retention pass).
+  packs never need an _edge_ purge (origin GC is the §2 retention pass).
   `scripts/r2-sync.sh` applies the two cache-control classes.
 - **D5 — directory compressed at rest.** The `.sttd` object is one
   zstd frame, declared via `directory.encoding` (§3); absent = raw codec bytes, which
@@ -671,7 +687,7 @@ The rationale behind the format's locked-in choices:
 
   1. **Ordering layer — fully deterministic.** The blob order and the directory
      entry order carry total tiebreaks (§5: `(z, x, y, time_start,
-     temporal_bucket_ms)`), so given identical payload bytes the pack layout,
+temporal_bucket_ms)`), so given identical payload bytes the pack layout,
      directory, and every content address are byte-identical across rebuilds —
      independent of input arrival order or thread scheduling.
 
@@ -695,7 +711,7 @@ The rationale behind the format's locked-in choices:
   tiles across datasets/versions share one physical object. (Correctness never
   depended on this — a fresh full rebuild always produced a self-consistent
   dataset, the manifest swap is atomic (§2), and stale objects age out via the §2
-  GC retention pass; reproducibility is a *cache-efficiency* win on top.)
+  GC retention pass; reproducibility is a _cache-efficiency_ win on top.)
 
   **Conformance.** A conformant writer SHOULD serialize Arrow schema/field custom
   metadata in a canonical (lexicographic) key order so payload bytes are
@@ -707,6 +723,7 @@ The rationale behind the format's locked-in choices:
   [conformance §3](./conformance.md#3-conformant-writer-requirements).
 
 ## 8. Non-goals
+
 - **Low-zoom data volume** (the 80 MB zoom-out) → needs the summary/aggregate tier, not packing.
 - **Worker / edge compute** → unnecessary; cacheability now lives in the format.
 
@@ -714,11 +731,11 @@ The rationale behind the format's locked-in choices:
 
 STT has **three independent version axes**; this spec governs only the first.
 
-| Axis | Where | Current | Meaning |
-| --- | --- | --- | --- |
-| Packed **format** version | `manifest.formatVersion` | **2** (writer default; **1** frozen, kill-switch `stt-build --format-version 1`) | The manifest envelope + object layout + layer-frame shape described here. |
-| **Directory** codec version | `manifest.directory.directoryVersion` | **5** | The run-length tile index encoding (`crate::directory`). v5 adds the per-run `pack_id` column + pack-relative offsets over v4. |
-| **Tile payload** encoding | Arrow IPC schema / GeoArrow field metadata | — | Per-tile geometry + properties; archive-format-independent. |
+| Axis                        | Where                                      | Current                                                                          | Meaning                                                                                                                        |
+| --------------------------- | ------------------------------------------ | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| Packed **format** version   | `manifest.formatVersion`                   | **2** (writer default; **1** frozen, kill-switch `stt-build --format-version 1`) | The manifest envelope + object layout + layer-frame shape described here.                                                      |
+| **Directory** codec version | `manifest.directory.directoryVersion`      | **5**                                                                            | The run-length tile index encoding (`crate::directory`). v5 adds the per-run `pack_id` column + pack-relative offsets over v4. |
+| **Tile payload** encoding   | Arrow IPC schema / GeoArrow field metadata | —                                                                                | Per-tile geometry + properties; archive-format-independent.                                                                    |
 
 Packed format v1 AND v2 emit directory v5 (v2 wraps the same codec bytes in
 an 8-byte object magic prelude, §9.2). The single-file container (magic
@@ -749,7 +766,7 @@ rule generalized):
   `formatVersion`, evolution is **additive-only**.
 - **`directoryVersion` (directory codec)** bumps when the byte layout of the
   `.sttd` codec changes such that a v5 decoder would misdecode it. A new
-  *trailing section tag* (like the covering section's tag 1) is additive —
+  _trailing section tag_ (like the covering section's tag 1) is additive —
   old decoders stop at the first unrecognized tag — but because trailing
   sections carry no length prefix, an unrecognized tag hides every section
   after it; a second section therefore effectively spends the remaining
@@ -773,12 +790,12 @@ Intended media type registrations (vendor tree; registration is planned, not
 yet filed — producers SHOULD serve these today so the eventual registration
 is a no-op):
 
-| object | media type |
-| --- | --- |
-| `manifest.json` | `application/vnd.stt.manifest+json` |
-| `.sttd` directory object | `application/vnd.stt.directory` |
-| `.sttp` pack object | `application/vnd.stt.pack` |
-| uncompressed layer frame (`stt-serve` tile responses) | `application/vnd.stt.tile` |
+| object                                                | media type                          |
+| ----------------------------------------------------- | ----------------------------------- |
+| `manifest.json`                                       | `application/vnd.stt.manifest+json` |
+| `.sttd` directory object                              | `application/vnd.stt.directory`     |
+| `.sttp` pack object                                   | `application/vnd.stt.pack`          |
+| uncompressed layer frame (`stt-serve` tile responses) | `application/vnd.stt.tile`          |
 
 The earlier informal `application/x-stt-tile` label (still emitted by
 `stt-serve` today — see the
@@ -862,18 +879,18 @@ question has a concrete answer, and so future convergence points are explicit.
 
 [OGC API – Tiles](https://docs.ogc.org/is/20-057/20-057.html) standardizes 2D
 tile addressing and retrieval. Its only temporal hook is a `datetime`
-conformance class — a *filter parameter* on requests, not a temporal axis in
+conformance class — a _filter parameter_ on requests, not a temporal axis in
 the tile address. Multi-dimensional tiling exists only as **informative
 Annex J** of the 2D Tile Matrix Set standard; no conformance class implements
 it. STT's `(zoom, x, y, bucket)` addressing is exactly an Annex-J-style extra
 dimension made normative:
 
-| STT address component | Annex-J-style TMS concept |
-| --- | --- |
-| `zoom` | `tileMatrix` (identifier within the TileMatrixSet) |
-| `x`, `y` | `tileCol`, `tileRow` (WebMercatorQuad-compatible) |
+| STT address component                               | Annex-J-style TMS concept                                                                                                                    |
+| --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `zoom`                                              | `tileMatrix` (identifier within the TileMatrixSet)                                                                                           |
+| `x`, `y`                                            | `tileCol`, `tileRow` (WebMercatorQuad-compatible)                                                                                            |
 | `bucket` (`time_start`, width `temporal_bucket_ms`) | an additional dimension: `name: "time"`, regular interval of `temporal_bucket_ms` milliseconds, bounded by the dataset `metadata.time_range` |
-| `--temporal-lod` coarser buckets | per-tileMatrix dimension resolution (coarser time step at lower zoom) |
+| `--temporal-lod` coarser buckets                    | per-tileMatrix dimension resolution (coarser time step at lower zoom)                                                                        |
 
 If OGC ever promotes multi-dimensional tiling to a normative conformance
 class, STT's directory is already expressible in those terms; until then this
@@ -885,7 +902,7 @@ and [`tile-matrix-set.json`](./tile-matrix-set.json).
 ### 10.2 OGC Moving Features (MF-JSON)
 
 [OGC Moving Features JSON](https://docs.ogc.org/is/19-045r3/19-045r3.html) is
-the semantic ancestor: it standardizes *trajectory encodings*
+the semantic ancestor: it standardizes _trajectory encodings_
 (`MF_TemporalGeometry`, per-coordinate timestamp arrays — the same model as
 our per-vertex `vertex_time` column). But it is feature-at-a-time JSON with no
 tiling, no columnar layout, and no GPU story — a payload semantics standard,
@@ -907,7 +924,18 @@ an asset with an `stt` role:
   "stac_version": "1.0.0",
   "id": "drifters",
   "bbox": [-180.0, -78.4, 180.0, 81.5],
-  "geometry": { "type": "Polygon", "coordinates": [[[-180.0,-78.4],[180.0,-78.4],[180.0,81.5],[-180.0,81.5],[-180.0,-78.4]]] },
+  "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+      [
+        [-180.0, -78.4],
+        [180.0, -78.4],
+        [180.0, 81.5],
+        [-180.0, 81.5],
+        [-180.0, -78.4]
+      ]
+    ]
+  },
   "properties": {
     "datetime": null,
     "start_datetime": "1979-02-15T00:00:00Z",
@@ -933,7 +961,7 @@ metadata, the Item is generable mechanically from the manifest alone.
 [GeoZarr](https://github.com/zarr-developers/geozarr-spec) (V1 RC ~May 2026)
 is the emerging standard for chunked, cloud-native **rasters and datacubes**.
 Time-varying gridded data is explicitly out of STT's scope — STT is for
-temporally-tiled *vector* data (trajectories, events, time-varying features).
+temporally-tiled _vector_ data (trajectories, events, time-varying features).
 Cite GeoZarr (or COG for static rasters), don't compete with it; the two
 formats are complementary halves of a spatiotemporal stack.
 
@@ -1014,7 +1042,7 @@ silent overflow:
   paging. The escape hatch is reserved, additive: a multi-level root ships as
   a new `descriptor_kind` (§4.1's reserved byte), not a codec bump.
 - **`packs[]` linearity.** The manifest's pack table is O(packs) JSON on the
-  *mutable* critical path. At the default 64 MiB target a 10 TB dataset is
+  _mutable_ critical path. At the default 64 MiB target a 10 TB dataset is
   ~160 K entries → a ~15 MB manifest, which defeats the "tiny mutable object"
   design. The escape hatch is reserved, additive: a future optional
   `packsRef` indirection (a content-addressed `packs.json` object holding the
@@ -1031,7 +1059,7 @@ silent overflow:
 > by round-trip tests, but not yet frozen as a normative part of this spec.
 > It corresponds to the bundle profile decided in the packed-v2 campaign
 > (`docs/roadmap/stt-packed-format-decisions.md` §4.2) and ships independently
-> of any byte-breaking revision — it is a container *around* the packed
+> of any byte-breaking revision — it is a container _around_ the packed
 > objects, not a change to them.
 
 A `dataset.sttb` is a packed dataset as **one file**, restoring the
@@ -1051,15 +1079,15 @@ Header JSON:
 
 ```jsonc
 {
-  "manifest": { /* the dataset's manifest.json, VERBATIM */ },
+  "manifest": {/* the dataset's manifest.json, VERBATIM */},
   "objects": [
     // canonical order: directory first, then packs in pack_id order, then
     // any future manifest object tables in listed order (formatVersion 2
     // adds NO objects — its `schemas` templates are embedded in the
     // manifest, §3.2, and ride the verbatim manifest bytes)
-    { "key": "index/<hash>.sttd", "offset": 16,   "length": 812 },
-    { "key": "packs/<hash>.sttp", "offset": 832,  "length": 4096 }
-  ]
+    { "key": "index/<hash>.sttd", "offset": 16, "length": 812 },
+    { "key": "packs/<hash>.sttp", "offset": 832, "length": 4096 },
+  ],
 }
 ```
 

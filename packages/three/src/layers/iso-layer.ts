@@ -13,11 +13,19 @@
  * per frame.
  */
 
-import { Group, LineSegments, BufferGeometry, Float32BufferAttribute } from 'three';
+import {
+  Group,
+  LineSegments,
+  BufferGeometry,
+  Float32BufferAttribute,
+} from 'three';
 import type { Tile, BinaryFeatures } from '@poopdeck.gl/core';
 import { GeometryType } from '@poopdeck.gl/core';
 import { BaseSttLayer, type SttLayerContext } from './layer.js';
-import { resolveTimeWindow, type ThreeTimeWindowOptions } from '../lib/time-window.js';
+import {
+  resolveTimeWindow,
+  type ThreeTimeWindowOptions,
+} from '../lib/time-window.js';
 import { resolveCategoryColor, type RGBA } from '../lib/color.js';
 import {
   createIsoLineMaterial,
@@ -52,7 +60,10 @@ export class IsoLayer extends BaseSttLayer {
   private bundle: IsoLineMaterialBundle;
 
   private readonly opts: Required<
-    Omit<IsoLayerOptions, 'id' | 'timeWindow' | 'fadeInDuration' | 'fadeOutDuration'>
+    Omit<
+      IsoLayerOptions,
+      'id' | 'timeWindow' | 'fadeInDuration' | 'fadeOutDuration'
+    >
   >;
 
   constructor(options: IsoLayerOptions = {}) {
@@ -90,10 +101,18 @@ export class IsoLayer extends BaseSttLayer {
     for (const tile of tiles) {
       for (const tl of tile.layers) {
         const b = tl.features;
-        if (!b.featureCount || b.geometryType !== GeometryType.LineString || !b.startIndices) continue;
+        if (
+          !b.featureCount ||
+          b.geometryType !== GeometryType.LineString ||
+          !b.startIndices
+        )
+          continue;
         lineLayers.push(b);
         for (let f = 0; f < b.featureCount; f++) {
-          segCount += Math.max(0, b.startIndices[f + 1] - b.startIndices[f] - 1);
+          segCount += Math.max(
+            0,
+            b.startIndices[f + 1] - b.startIndices[f] - 1,
+          );
         }
       }
     }
@@ -109,14 +128,22 @@ export class IsoLayer extends BaseSttLayer {
     for (const b of lineLayers) {
       const dims = b.positionDimensions ?? 2;
       const cat = b.categoricalProps[this.opts.colorProperty];
-      const elev =
-        this.opts.elevationProperty ? b.numericProps[this.opts.elevationProperty] : undefined;
+      const elev = this.opts.elevationProperty
+        ? b.numericProps[this.opts.elevationProperty]
+        : undefined;
       const rebase = b.timeOffset - this.timeOrigin;
 
       for (let f = 0; f < b.featureCount; f++) {
         // Per-contour colour (straight, NOT premultiplied — alpha varies per frame).
-        const label = cat && cat.indices[f] !== 0xffff ? cat.categories[cat.indices[f]] : undefined;
-        const rgba = resolveCategoryColor(label, this.opts.colorMapping, this.opts.colorMappingDefault);
+        const label =
+          cat && cat.indices[f] !== 0xffff
+            ? cat.categories[cat.indices[f]]
+            : undefined;
+        const rgba = resolveCategoryColor(
+          label,
+          this.opts.colorMapping,
+          this.opts.colorMappingDefault,
+        );
         const cr = rgba[0] / 255;
         const cg = rgba[1] / 255;
         const cb = rgba[2] / 255;
@@ -136,8 +163,12 @@ export class IsoLayer extends BaseSttLayer {
           const lat0 = b.positions[v * dims + 1];
           const lon1 = b.positions[(v + 1) * dims];
           const lat1 = b.positions[(v + 1) * dims + 1];
-          const z0 = (baseZ ?? (dims > 2 ? b.positions[v * dims + 2] : 0)) + this.opts.zLift;
-          const z1 = (baseZ ?? (dims > 2 ? b.positions[(v + 1) * dims + 2] : 0)) + this.opts.zLift;
+          const z0 =
+            (baseZ ?? (dims > 2 ? b.positions[v * dims + 2] : 0)) +
+            this.opts.zLift;
+          const z1 =
+            (baseZ ?? (dims > 2 ? b.positions[(v + 1) * dims + 2] : 0)) +
+            this.opts.zLift;
           const a0 = proj.project(lon0, lat0, z0);
           const a1 = proj.project(lon1, lat1, z1);
           positions[p] = a0[0];

@@ -25,7 +25,13 @@ import process from 'node:process';
 import { launchOptions } from './browser-profile.mjs';
 import { PAGE_PROBE_SCRIPT } from './page-probe.mjs';
 import { settle, SCENARIOS } from './scenarios.mjs';
-import { summarizeSample, printConsoleSummary, writeReport, buildRun, diffAgainstBaseline } from './report.mjs';
+import {
+  summarizeSample,
+  printConsoleSummary,
+  writeReport,
+  buildRun,
+  diffAgainstBaseline,
+} from './report.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PERF_ROOT = path.resolve(__dirname, '..');
@@ -39,8 +45,8 @@ function parseArgs(argv) {
     backend: 'gpu',
     scenarios: DEFAULT_SCENARIOS.slice(),
     baseURL: process.env.STT_URL || 'http://localhost:3000',
-    baseline: null,            // 'write' | 'check' | null
-    baselineFile: null,        // optional explicit path
+    baseline: null, // 'write' | 'check' | null
+    baselineFile: null, // optional explicit path
     tolerance: 0.15,
     outputDir: path.join(PERF_ROOT, 'output'),
     initialLoadMs: 10_000,
@@ -48,25 +54,37 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--backend') out.backend = argv[++i];
-    else if (a === '--scenarios') out.scenarios = argv[++i].split(',').map((s) => s.trim()).filter(Boolean);
+    else if (a === '--scenarios')
+      out.scenarios = argv[++i]
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
     else if (a === '--baseline') out.baseline = argv[++i];
     else if (a === '--baseline-file') out.baselineFile = argv[++i];
     else if (a === '--tolerance') out.tolerance = parseFloat(argv[++i]);
     else if (a === '--output-dir') out.outputDir = argv[++i];
-    else if (a === '--initial-load-ms') out.initialLoadMs = parseInt(argv[++i], 10);
+    else if (a === '--initial-load-ms')
+      out.initialLoadMs = parseInt(argv[++i], 10);
     else if (a === '--url') out.baseURL = argv[++i];
-    else if (a === '--help' || a === '-h') { printHelp(); process.exit(0); }
-    else if (!a.startsWith('--') && !out.demo) out.demo = a;
+    else if (a === '--help' || a === '-h') {
+      printHelp();
+      process.exit(0);
+    } else if (!a.startsWith('--') && !out.demo) out.demo = a;
     else {
       console.error(`Unknown arg: ${a}`);
       printHelp();
       process.exit(2);
     }
   }
-  if (!out.demo) { printHelp(); process.exit(2); }
+  if (!out.demo) {
+    printHelp();
+    process.exit(2);
+  }
   for (const s of out.scenarios) {
     if (!SCENARIOS[s]) {
-      console.error(`Unknown scenario: ${s}. Known: ${Object.keys(SCENARIOS).join(', ')}`);
+      console.error(
+        `Unknown scenario: ${s}. Known: ${Object.keys(SCENARIOS).join(', ')}`,
+      );
       process.exit(2);
     }
   }
@@ -115,12 +133,16 @@ async function runDemo(opts) {
   let heapDeltaBytes = 0;
 
   try {
-    const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+    const ctx = await browser.newContext({
+      viewport: { width: 1280, height: 800 },
+    });
     await ctx.addInitScript({ content: PAGE_PROBE_SCRIPT });
 
     const page = await ctx.newPage();
     const consoleErrors = [];
-    page.on('console', (m) => { if (m.type() === 'error') consoleErrors.push(m.text().slice(0, 200)); });
+    page.on('console', (m) => {
+      if (m.type() === 'error') consoleErrors.push(m.text().slice(0, 200));
+    });
     page.on('pageerror', (e) => consoleErrors.push(`[pageerror] ${e.message}`));
 
     const url = `${baseURL.replace(/\/$/, '')}/demo/${demo}`;
@@ -137,9 +159,14 @@ async function runDemo(opts) {
       try {
         await fn(page, { label: scenarioName });
       } catch (err) {
-        console.error(`[perf]  scenario ${scenarioName} failed: ${err.message}`);
+        console.error(
+          `[perf]  scenario ${scenarioName} failed: ${err.message}`,
+        );
         // Continue with remaining scenarios; the report will note the failure.
-        scenarioResults.push({ label: scenarioName, error: String(err.message || err) });
+        scenarioResults.push({
+          label: scenarioName,
+          error: String(err.message || err),
+        });
       }
     }
 
@@ -149,7 +176,8 @@ async function runDemo(opts) {
 
     // Map snapshot.samples into the report shape, preserving original order.
     for (const scenarioName of scenarios) {
-      if (scenarioResults.find((r) => r.label === scenarioName && r.error)) continue;
+      if (scenarioResults.find((r) => r.label === scenarioName && r.error))
+        continue;
       const sample = snapshot.samples[scenarioName];
       if (!sample) {
         scenarioResults.push({ label: scenarioName, error: 'no sample data' });
@@ -191,21 +219,33 @@ async function runDemo(opts) {
 
 async function handleBaseline(opts, run) {
   if (!opts.baseline) return 0;
-  const baselineFile = opts.baselineFile || path.join(PERF_ROOT, 'baselines', `${run.demo}-${run.backend}.json`);
+  const baselineFile =
+    opts.baselineFile ||
+    path.join(PERF_ROOT, 'baselines', `${run.demo}-${run.backend}.json`);
   if (opts.baseline === 'write') {
     fs.mkdirSync(path.dirname(baselineFile), { recursive: true });
     fs.writeFileSync(baselineFile, JSON.stringify(run, null, 2));
-    console.log(`[perf] baseline written: ${path.relative(process.cwd(), baselineFile)}`);
+    console.log(
+      `[perf] baseline written: ${path.relative(process.cwd(), baselineFile)}`,
+    );
     return 0;
   }
   // 'check'
   if (!fs.existsSync(baselineFile)) {
-    console.error(`[perf] no baseline at ${baselineFile} (use --baseline write first)`);
+    console.error(
+      `[perf] no baseline at ${baselineFile} (use --baseline write first)`,
+    );
     return 1;
   }
   const baseline = JSON.parse(fs.readFileSync(baselineFile, 'utf-8'));
-  const { regressions, lines } = diffAgainstBaseline(run, baseline, opts.tolerance);
-  console.log(`\nBaseline check (tolerance ±${(opts.tolerance * 100).toFixed(0)}%):`);
+  const { regressions, lines } = diffAgainstBaseline(
+    run,
+    baseline,
+    opts.tolerance,
+  );
+  console.log(
+    `\nBaseline check (tolerance ±${(opts.tolerance * 100).toFixed(0)}%):`,
+  );
   for (const l of lines) console.log(l);
   if (regressions.length > 0) {
     console.error(`\n${regressions.length} regression(s) past tolerance.`);

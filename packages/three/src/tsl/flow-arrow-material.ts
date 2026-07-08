@@ -146,7 +146,12 @@ export function createFlowArrowMaterial(
   const offClip = offPx.mul(float(2)).div(arrow.viewport).mul(clip.w);
 
   const material = new MeshBasicNodeMaterial();
-  material.vertexNode = vec4(clip.x.add(offClip.x), clip.y.add(offClip.y), clip.z, clip.w);
+  material.vertexNode = vec4(
+    clip.x.add(offClip.x),
+    clip.y.add(offClip.y),
+    clip.z,
+    clip.w,
+  );
 
   // ── FRAGMENT: gradient colour source→target (mix is varying-safe) ───────────
   const vColor = varying(mix(arrow.sourceColor, arrow.targetColor, mixT));
@@ -186,8 +191,10 @@ export function updateFlowArrowUniforms(
   const { arrow } = bundle;
   if (v.sourceColor) arrow.sourceColor.value.set(...v.sourceColor);
   if (v.targetColor) arrow.targetColor.value.set(...v.targetColor);
-  if (v.widthMinPixels !== undefined) arrow.widthMinPixels.value = v.widthMinPixels;
-  if (v.widthMaxPixels !== undefined) arrow.widthMaxPixels.value = v.widthMaxPixels;
+  if (v.widthMinPixels !== undefined)
+    arrow.widthMinPixels.value = v.widthMinPixels;
+  if (v.widthMaxPixels !== undefined)
+    arrow.widthMaxPixels.value = v.widthMaxPixels;
   if (v.gap !== undefined) arrow.gap.value = v.gap;
   if (v.opacity !== undefined) arrow.opacity.value = v.opacity;
   if (v.viewport) arrow.viewport.value.set(v.viewport[0], v.viewport[1]);

@@ -35,7 +35,10 @@ import {
 } from 'three';
 import type { Tile } from '@poopdeck.gl/core';
 import { BaseSttLayer, type SttLayerContext } from './layer.js';
-import { resolveTimeWindow, type ThreeTimeWindowOptions } from '../lib/time-window.js';
+import {
+  resolveTimeWindow,
+  type ThreeTimeWindowOptions,
+} from '../lib/time-window.js';
 import { makeSegmentQuadGeometry } from '../geometry/segment-quad.js';
 import {
   buildFlowCorridorBuffers,
@@ -98,7 +101,13 @@ function makeRampTexture(ramp: RGBA[], resolution: number): DataTexture {
 
 /** Pack the per-segment value matrix into an RG-float, linear-filtered texture. */
 function makeValueTexture(buf: FlowCorridorBuffers): DataTexture {
-  const tex = new DataTexture(buf.valueMatrix, buf.numBuckets, buf.count, RGFormat, FloatType);
+  const tex = new DataTexture(
+    buf.valueMatrix,
+    buf.numBuckets,
+    buf.count,
+    RGFormat,
+    FloatType,
+  );
   tex.minFilter = LinearFilter;
   tex.magFilter = LinearFilter;
   tex.wrapS = ClampToEdgeWrapping;
@@ -135,9 +144,14 @@ export class FlowCorridorLayer extends BaseSttLayer {
 
   setTiles(tiles: Tile[], ctx: SttLayerContext): void {
     this.timeOrigin = ctx.timeOrigin;
-    const buf = buildFlowCorridorBuffers(tiles, ctx.projection, ctx.timeOrigin, {
-      zLift: this.opts.zLift ?? 0,
-    });
+    const buf = buildFlowCorridorBuffers(
+      tiles,
+      ctx.projection,
+      ctx.timeOrigin,
+      {
+        zLift: this.opts.zLift ?? 0,
+      },
+    );
 
     this.disposeGpu();
     this.axis = buf.axis;
@@ -156,15 +170,26 @@ export class FlowCorridorLayer extends BaseSttLayer {
     geometry.setAttribute('sttPosA', new InstancedBufferAttribute(buf.posA, 3));
     geometry.setAttribute('sttPosB', new InstancedBufferAttribute(buf.posB, 3));
     geometry.setAttribute('sttRowV', new InstancedBufferAttribute(buf.rowV, 1));
-    geometry.setAttribute('sttStart', new InstancedBufferAttribute(buf.starts, 1));
+    geometry.setAttribute(
+      'sttStart',
+      new InstancedBufferAttribute(buf.starts, 1),
+    );
     geometry.setAttribute('sttEnd', new InstancedBufferAttribute(buf.ends, 1));
     if (buf.bbox) {
-      geometry.boundingBox = new Box3(new Vector3(...buf.bbox.min), new Vector3(...buf.bbox.max));
-      geometry.boundingSphere = geometry.boundingBox.getBoundingSphere(new Sphere());
+      geometry.boundingBox = new Box3(
+        new Vector3(...buf.bbox.min),
+        new Vector3(...buf.bbox.max),
+      );
+      geometry.boundingSphere = geometry.boundingBox.getBoundingSphere(
+        new Sphere(),
+      );
     }
 
     this.valueTex = makeValueTexture(buf);
-    this.rampTex = makeRampTexture(this.opts.ramp, this.opts.rampResolution ?? 256);
+    this.rampTex = makeRampTexture(
+      this.opts.ramp,
+      this.opts.rampResolution ?? 256,
+    );
 
     this.bundle = createFlowCorridorMaterial({
       valueTexture: this.valueTex,
@@ -185,7 +210,9 @@ export class FlowCorridorLayer extends BaseSttLayer {
 
   private pushUniforms(absoluteTimeMs: number): void {
     if (!this.bundle) return;
-    const bucketPos = this.axis ? bucketPosFromTime(this.axis, absoluteTimeMs) : 0;
+    const bucketPos = this.axis
+      ? bucketPosFromTime(this.axis, absoluteTimeMs)
+      : 0;
     updateFlowCorridorUniforms(this.bundle, {
       bucketPos,
       numBuckets: this.numBuckets,

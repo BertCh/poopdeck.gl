@@ -22,7 +22,10 @@
 
 // The wall-clock × speed clock.
 export { TimeController } from './time-controller.js';
-export type { TimeControllerOptions, TimeControllerState } from './time-controller.js';
+export type {
+  TimeControllerOptions,
+  TimeControllerState,
+} from './time-controller.js';
 
 // Playback buffering governor — the state machine between user intent and the
 // TimeController that gates play/resume/seek on the buffered runway.

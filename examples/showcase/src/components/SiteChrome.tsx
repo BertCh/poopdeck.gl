@@ -1,6 +1,6 @@
-import React from "react";
-import { Outlet, useLocation } from "react-router";
-import SiteHeader from "./SiteHeader";
+import React from 'react';
+import { Outlet, useLocation } from 'react-router';
+import SiteHeader from './SiteHeader';
 
 /**
  * Layout route wrapping every "site" page (landing, demo catalog, per-demo
@@ -24,7 +24,7 @@ const SiteChrome: React.FC = () => {
   return (
     <div
       className="h-full flex flex-col overflow-hidden"
-      style={{ background: "var(--page-bg)" }}
+      style={{ background: 'var(--page-bg)' }}
     >
       <SiteHeader />
       <div

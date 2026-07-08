@@ -12,16 +12,16 @@
  * SB×SB×TB density grid instead of the archive's native tiles.
  */
 
-export type Walk = "spatial" | "hilbert3" | "morton3" | "time";
-export type Query = "scrub" | "pan";
+export type Walk = 'spatial' | 'hilbert3' | 'morton3' | 'time';
+export type Query = 'scrub' | 'pan';
 
-export const WALKS: Walk[] = ["spatial", "hilbert3", "morton3", "time"];
+export const WALKS: Walk[] = ['spatial', 'hilbert3', 'morton3', 'time'];
 
 export const WALK_LABEL: Record<Walk, string> = {
-  spatial: "2D Hilbert + time",
-  hilbert3: "3D Hilbert",
-  morton3: "3D Morton",
-  time: "time-major",
+  spatial: '2D Hilbert + time',
+  hilbert3: '3D Hilbert',
+  morton3: '3D Morton',
+  time: 'time-major',
 };
 
 /** One occupied cell of the downsampled cube. `h2` is its 2D-Hilbert rank. */
@@ -69,7 +69,12 @@ export function hilbert2(bits: number, x: number, y: number): number {
 }
 
 /** 3D Hilbert distance via Skilling's transpose (port of `curve::hilbert3`). */
-export function hilbert3(x: number, y: number, t: number, bits: number): number {
+export function hilbert3(
+  x: number,
+  y: number,
+  t: number,
+  bits: number,
+): number {
   if (bits === 0) return 0;
   const n = 3;
   const coords = [x, y, t];
@@ -147,20 +152,32 @@ export function orderKey(
 ): number {
   const bits = curveBits(spaceBits, timeBins);
   switch (walk) {
-    case "spatial":
+    case 'spatial':
       // (hilbert, time_start): each cell's whole timeline stays contiguous.
       return cell.h2 * timeBins + cell.tb;
-    case "time": {
+    case 'time': {
       // (time_bucket, hilbert): one instant's whole map stays contiguous.
       const spaceCells = 1 << (2 * spaceBits);
       return cell.tb * spaceCells + cell.h2;
     }
-    case "hilbert3": {
-      const [xs, ys, qt] = scaleAxes(cell.sx, cell.sy, cell.tb, spaceBits, bits);
+    case 'hilbert3': {
+      const [xs, ys, qt] = scaleAxes(
+        cell.sx,
+        cell.sy,
+        cell.tb,
+        spaceBits,
+        bits,
+      );
       return hilbert3(xs, ys, qt, bits);
     }
-    case "morton3": {
-      const [xs, ys, qt] = scaleAxes(cell.sx, cell.sy, cell.tb, spaceBits, bits);
+    case 'morton3': {
+      const [xs, ys, qt] = scaleAxes(
+        cell.sx,
+        cell.sy,
+        cell.tb,
+        spaceBits,
+        bits,
+      );
       return morton3(xs, ys, qt, bits);
     }
   }
@@ -174,7 +191,9 @@ export function linearize(
   timeBins: number,
 ): Cell[] {
   return [...cells].sort(
-    (a, b) => orderKey(walk, a, spaceBits, timeBins) - orderKey(walk, b, spaceBits, timeBins),
+    (a, b) =>
+      orderKey(walk, a, spaceBits, timeBins) -
+      orderKey(walk, b, spaceBits, timeBins),
   );
 }
 
@@ -184,7 +203,8 @@ export function seeks(ordered: Cell[]): number {
   for (let i = 1; i < ordered.length; i++) {
     const a = ordered[i - 1];
     const b = ordered[i];
-    const d = Math.abs(a.sx - b.sx) + Math.abs(a.sy - b.sy) + Math.abs(a.tb - b.tb);
+    const d =
+      Math.abs(a.sx - b.sx) + Math.abs(a.sy - b.sy) + Math.abs(a.tb - b.tb);
     if (d !== 1) n++;
   }
   return n;
@@ -222,7 +242,8 @@ export function simulateQuery(
   let weightNeeded = 0;
   for (const p of hits) weightNeeded += weightOf(ordered[p]);
   let weightRead = 0;
-  for (const [a, b] of runs) for (let i = a; i <= b; i++) weightRead += weightOf(ordered[i]);
+  for (const [a, b] of runs)
+    for (let i = a; i <= b; i++) weightRead += weightOf(ordered[i]);
 
   return { reads: runs.length, runs, hits, weightNeeded, weightRead };
 }
@@ -237,12 +258,20 @@ export function simulateQuery(
 export function scrubHit(cells: Cell[]): (c: Cell) => boolean {
   const space = [...new Set(cells.map((c) => c.h2))].sort((a, b) => a - b);
   const m = space.length;
-  const band = new Set(space.slice(Math.floor(m * 0.375), Math.max(Math.floor(m * 0.625), Math.floor(m * 0.375) + 1)));
+  const band = new Set(
+    space.slice(
+      Math.floor(m * 0.375),
+      Math.max(Math.floor(m * 0.625), Math.floor(m * 0.375) + 1),
+    ),
+  );
   return (c) => band.has(c.h2);
 }
 
 /** "pan at one instant": the densest single time bin across the whole map. */
-export function panHit(cells: Cell[]): { hit: (c: Cell) => boolean; tb: number } {
+export function panHit(cells: Cell[]): {
+  hit: (c: Cell) => boolean;
+  tb: number;
+} {
   const byTb = new Map<number, number>();
   for (const c of cells) byTb.set(c.tb, (byTb.get(c.tb) ?? 0) + c.count);
   let best = 0;

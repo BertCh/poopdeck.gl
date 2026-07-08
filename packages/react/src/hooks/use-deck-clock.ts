@@ -23,8 +23,8 @@
  * Kept separate from {@link usePlayback} so non-deck consumers (maplibre /
  * three / standalone) keep the controller's self-owned rAF untouched.
  */
-import { useCallback, useEffect, useMemo } from "react";
-import type { TimeController } from "@poopdeck.gl/playback";
+import { useCallback, useEffect, useMemo } from 'react';
+import type { TimeController } from '@poopdeck.gl/playback';
 
 /** deck.gl props to spread onto `<DeckGL>` to drive a {@link TimeController}. */
 export interface DeckClockProps {

@@ -52,7 +52,9 @@ slider.onpointerup = (e) => governor.endScrub(+e.target.value);
 governor.on('statechange', (state) => setBadge(state));
 governor.on('waiting', ({ etaMs }) => showSpinner(etaMs));
 governor.on('ready', ({ degraded }) => hideSpinner());
-governor.on('progress', (runway) => updateBufferBar(governor.getBufferedRanges()));
+governor.on('progress', (runway) =>
+  updateBufferBar(governor.getBufferedRanges()),
+);
 ```
 
 ## The BufferSource contract
@@ -86,13 +88,13 @@ Across the scrub bracket (`beginScrub` … `endScrub`) the governor broadcasts `
 
 ## States
 
-| State | Meaning |
-| :--- | :--- |
-| `idle` | Paused (user intent is "not playing"). |
-| `starting` | User pressed play; waiting for the start gate. |
-| `playing` | Clock running. |
-| `buffering` | Runway drained mid-playback; clock frozen, waiting for the resume gate. |
-| `seeking` | A committed seek (or loop wrap) while intent is "playing"; clock frozen, waiting for a plain startup-sized gate. |
+| State       | Meaning                                                                                                          |
+| :---------- | :--------------------------------------------------------------------------------------------------------------- |
+| `idle`      | Paused (user intent is "not playing").                                                                           |
+| `starting`  | User pressed play; waiting for the start gate.                                                                   |
+| `playing`   | Clock running.                                                                                                   |
+| `buffering` | Runway drained mid-playback; clock frozen, waiting for the resume gate.                                          |
+| `seeking`   | A committed seek (or loop wrap) while intent is "playing"; clock frozen, waiting for a plain startup-sized gate. |
 
 ## Gates and hysteresis
 
@@ -119,68 +121,68 @@ A `loop: true` wrap is a teleport-seek the clock performed on its own — the re
 new PlaybackGovernor(timeController: TimeController, opts?: PlaybackGovernorOptions)
 ```
 
-| Option | Type | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `source` | `BufferSource \| null` | `null` | The readiness oracle. Arrives async in real apps — set later via `setSource()`. |
-| `startGateWallMs` | `number` | `2000` | Wall-clock ms of runway required to start (or resume after a seek): required runway = `startGateWallMs × \|speed\|` sim-ms. |
-| `lowWatermarkWallMs` | `number` | `600` | Stall threshold while playing. |
-| `resumeFactor` | `number` | `2` | Resume-gate multiplier after a stall. |
-| `seekSettleMs` | `number` | `200` | How long a scrub position must rest before a UI should commit it as a real seek. The governor doesn't run this timer — it's exposed (as the readonly `seekSettleMs` field) so scrubbing UIs share one knob. |
-| `maxStartWaitMs` | `number` | `8000` | Escape hatch: start degraded if a gate hasn't passed by then. |
-| `getThroughput` | `() => ThroughputEstimate` | `null` | Optional throughput getter for `getAutoSpeedSuggestion`; when absent the governor implies one from the source's own `estimateTimeToReadyMs`. |
-| `runwayToleranceMs` | `number` | `200` | Multi-source cadence tolerance band (see [Multiple sources](#multiple-sources-n-source-gate)). Wall-ms × \|speed\|; a required source within this of the leading required frontier is not counted as starved. `0` = exact raw-min gating. |
+| Option               | Type                       | Default | Description                                                                                                                                                                                                                               |
+| :------------------- | :------------------------- | :------ | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `source`             | `BufferSource \| null`     | `null`  | The readiness oracle. Arrives async in real apps — set later via `setSource()`.                                                                                                                                                           |
+| `startGateWallMs`    | `number`                   | `2000`  | Wall-clock ms of runway required to start (or resume after a seek): required runway = `startGateWallMs × \|speed\|` sim-ms.                                                                                                               |
+| `lowWatermarkWallMs` | `number`                   | `600`   | Stall threshold while playing.                                                                                                                                                                                                            |
+| `resumeFactor`       | `number`                   | `2`     | Resume-gate multiplier after a stall.                                                                                                                                                                                                     |
+| `seekSettleMs`       | `number`                   | `200`   | How long a scrub position must rest before a UI should commit it as a real seek. The governor doesn't run this timer — it's exposed (as the readonly `seekSettleMs` field) so scrubbing UIs share one knob.                               |
+| `maxStartWaitMs`     | `number`                   | `8000`  | Escape hatch: start degraded if a gate hasn't passed by then.                                                                                                                                                                             |
+| `getThroughput`      | `() => ThroughputEstimate` | `null`  | Optional throughput getter for `getAutoSpeedSuggestion`; when absent the governor implies one from the source's own `estimateTimeToReadyMs`.                                                                                              |
+| `runwayToleranceMs`  | `number`                   | `200`   | Multi-source cadence tolerance band (see [Multiple sources](#multiple-sources-n-source-gate)). Wall-ms × \|speed\|; a required source within this of the leading required frontier is not counted as starved. `0` = exact raw-min gating. |
 
 ## Methods
 
 ### User intent
 
-| Method | Description |
-| :--- | :--- |
-| `requestPlay()` | User pressed play. Gates the start on the buffered runway. While `ended`, restarts from the range start (the range end when travelling in reverse) — the media-element replay convention. |
-| `requestPause()` | User pressed pause. Sticks even while a gate is in progress. |
-| `beginScrub()` | Scrubber grabbed: freezes the clock; everything until `endScrub` is preview-only (no fetch churn). **Idempotent** — a second grab of an already-held thumb is the same drag. Fires `scrubstart` and broadcasts `setInteractive(true)` to every source. |
-| `scrubTo(time)` | Preview a scrub position — moves the clock so resident tiles render, WITHOUT committing a seek. |
+| Method           | Description                                                                                                                                                                                                                                                                                                                                                                                               |
+| :--------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `requestPlay()`  | User pressed play. Gates the start on the buffered runway. While `ended`, restarts from the range start (the range end when travelling in reverse) — the media-element replay convention.                                                                                                                                                                                                                 |
+| `requestPause()` | User pressed pause. Sticks even while a gate is in progress.                                                                                                                                                                                                                                                                                                                                              |
+| `beginScrub()`   | Scrubber grabbed: freezes the clock; everything until `endScrub` is preview-only (no fetch churn). **Idempotent** — a second grab of an already-held thumb is the same drag. Fires `scrubstart` and broadcasts `setInteractive(true)` to every source.                                                                                                                                                    |
+| `scrubTo(time)`  | Preview a scrub position — moves the clock so resident tiles render, WITHOUT committing a seek.                                                                                                                                                                                                                                                                                                           |
 | `endScrub(time)` | Scrubber released — commits the final position as a real seek. Broadcasts `setInteractive(false)` and fires `scrubend` before the commit (so a scrub-LOD loader restores its fine tier first, and the flush + post-seek gate measure full detail). Releasing on a position a settle-commit already committed skips the duplicate commit and just lifts the scrub hold (re-basing the escape-hatch clock). |
-| `seekTo(time)` | Programmatic committed seek (keyboard arrows, story beats). Flushes prefetch, moves the clock, re-gates if intent is playing. Mid-scrub it acts as the settle-commit: the pipeline warms, but playback resumes only on `endScrub`. |
+| `seekTo(time)`   | Programmatic committed seek (keyboard arrows, story beats). Flushes prefetch, moves the clock, re-gates if intent is playing. Mid-scrub it acts as the settle-commit: the pipeline warms, but playback resumes only on `endScrub`.                                                                                                                                                                        |
 
 ### Wiring and queries
 
-| Method | Description |
-| :--- | :--- |
+| Method                                        | Description                                                                                                                                                                                                                                                                                                                                                                                            |
+| :-------------------------------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `addSource(id, source, {required?, weight?})` | Register (or replace) one classified source in the N-source registry (see [Multiple sources](#multiple-sources-n-source-gate)). `required` (default `true`) gates the clock; optional sources never gate but still load and count toward cost/ETA. `weight` (default `1`) is a bandwidth-share hint for the shared scheduler. A source lacking `getBufferedRunway` is rejected with a console warning. |
-| `removeSource(id)` | Drop a source from the registry by id (no-op if absent). |
-| `setSource(source)` | Back-compat single-source shim: clears the registry and (when non-null) registers `source` as the required `'default'` source. New code should prefer `addSource`/`removeSource` so overlays can be classified. The governor may sit in `starting` with no source — it passes the gate the moment the required set proves readiness, or starts degraded after `maxStartWaitMs`. |
-| `notifyBufferChange(runway)` | Consumer-forwarded buffer event (layer `onBufferChange` → here). Re-emits as `progress` and triggers an immediate gate/stall evaluation in addition to the 250 ms gated cadence. |
-| `getEtaMs()` | Honest ETA (wall-ms) until the current gate window is ready; `null` when unknown. |
-| `getBufferedRanges(opts?)` | Passthrough to the source (for a buffered-bar UI); `[]` without a source. |
-| `getSourceRunways()` | Per-source `{ id, required, runwaySimMs, complete, bytesPending }[]` snapshot for a multi-track buffered bar (the gating source is the `min` over required); `[]` with no sources. |
-| `estimateCost(range)` | Byte/tile cost of making `range` fully buffered for the current viewport (passthrough to the source's directory math; zeros without a source). UIs use it for ETA chips and timeline density strips. |
-| `getQoeStats()` | Snapshot of the session's QoE counters (below). |
-| `getAutoSpeedSuggestion()` | Maximum sustainable playback speed (see below); `Infinity` when the upcoming horizon has nothing left to load, `null` when unknown. |
-| `dispose()` | Detach from the TimeController and stop all timers. The clock is left as-is. Calling intent methods after dispose warns once and no-ops (React StrictMode note: create the governor inside an effect so a remount gets a fresh instance). |
+| `removeSource(id)`                            | Drop a source from the registry by id (no-op if absent).                                                                                                                                                                                                                                                                                                                                               |
+| `setSource(source)`                           | Back-compat single-source shim: clears the registry and (when non-null) registers `source` as the required `'default'` source. New code should prefer `addSource`/`removeSource` so overlays can be classified. The governor may sit in `starting` with no source — it passes the gate the moment the required set proves readiness, or starts degraded after `maxStartWaitMs`.                        |
+| `notifyBufferChange(runway)`                  | Consumer-forwarded buffer event (layer `onBufferChange` → here). Re-emits as `progress` and triggers an immediate gate/stall evaluation in addition to the 250 ms gated cadence.                                                                                                                                                                                                                       |
+| `getEtaMs()`                                  | Honest ETA (wall-ms) until the current gate window is ready; `null` when unknown.                                                                                                                                                                                                                                                                                                                      |
+| `getBufferedRanges(opts?)`                    | Passthrough to the source (for a buffered-bar UI); `[]` without a source.                                                                                                                                                                                                                                                                                                                              |
+| `getSourceRunways()`                          | Per-source `{ id, required, runwaySimMs, complete, bytesPending }[]` snapshot for a multi-track buffered bar (the gating source is the `min` over required); `[]` with no sources.                                                                                                                                                                                                                     |
+| `estimateCost(range)`                         | Byte/tile cost of making `range` fully buffered for the current viewport (passthrough to the source's directory math; zeros without a source). UIs use it for ETA chips and timeline density strips.                                                                                                                                                                                                   |
+| `getQoeStats()`                               | Snapshot of the session's QoE counters (below).                                                                                                                                                                                                                                                                                                                                                        |
+| `getAutoSpeedSuggestion()`                    | Maximum sustainable playback speed (see below); `Infinity` when the upcoming horizon has nothing left to load, `null` when unknown.                                                                                                                                                                                                                                                                    |
+| `dispose()`                                   | Detach from the TimeController and stop all timers. The clock is left as-is. Calling intent methods after dispose warns once and no-ops (React StrictMode note: create the governor inside an effect so a remount gets a fresh instance).                                                                                                                                                              |
 
 ### Properties
 
-| Property | Type | Description |
-| :--- | :--- | :--- |
-| `state` | `PlaybackGovernorState` | Current machine state. |
-| `paused` | `boolean` | User intent, HTMLMediaElement-shaped: true when the user does not want playback. Stays `false` through `starting`/`buffering`/`seeking` gates (the user pressed play; the machine is just not there yet), so UIs can drive the play/pause glyph from this single bit instead of mirroring intent. |
-| `ended` | `boolean` | True while parked at a non-looping range boundary (media-element `'ended'`). Cleared by any committed seek; `requestPlay()` while ended restarts from the range start. |
-| `isCreeping` | `boolean` | True while in degraded creep (playing pinned to the frontier at data-arrival rate). |
-| `isScrubbing` | `boolean` | True while the scrubber is held (`beginScrub` … `endScrub`) — the same bit that suppresses gates internally, exposed so UIs/loaders can observe the drag bracket. |
-| `isDisposed` | `boolean` | True once `dispose()` has run. |
-| `seekSettleMs` | `number` | The shared scrub-settle knob. |
+| Property       | Type                    | Description                                                                                                                                                                                                                                                                                       |
+| :------------- | :---------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `state`        | `PlaybackGovernorState` | Current machine state.                                                                                                                                                                                                                                                                            |
+| `paused`       | `boolean`               | User intent, HTMLMediaElement-shaped: true when the user does not want playback. Stays `false` through `starting`/`buffering`/`seeking` gates (the user pressed play; the machine is just not there yet), so UIs can drive the play/pause glyph from this single bit instead of mirroring intent. |
+| `ended`        | `boolean`               | True while parked at a non-looping range boundary (media-element `'ended'`). Cleared by any committed seek; `requestPlay()` while ended restarts from the range start.                                                                                                                            |
+| `isCreeping`   | `boolean`               | True while in degraded creep (playing pinned to the frontier at data-arrival rate).                                                                                                                                                                                                               |
+| `isScrubbing`  | `boolean`               | True while the scrubber is held (`beginScrub` … `endScrub`) — the same bit that suppresses gates internally, exposed so UIs/loaders can observe the drag bracket.                                                                                                                                 |
+| `isDisposed`   | `boolean`               | True once `dispose()` has run.                                                                                                                                                                                                                                                                    |
+| `seekSettleMs` | `number`                | The shared scrub-settle knob.                                                                                                                                                                                                                                                                     |
 
 ## Events
 
 ```typescript
 governor.on('statechange', (state: PlaybackGovernorState) => {});
-governor.on('waiting',     ({ state, etaMs }: GovernorWaitingEvent) => {});
-governor.on('ready',       ({ degraded }: GovernorReadyEvent) => {});
-governor.on('progress',    (runway: BufferedRunway) => {});
-governor.on('ended',       (time: number) => {});
-governor.on('scrubstart',  (time: number) => {});
-governor.on('scrubend',    (time: number) => {});
+governor.on('waiting', ({ state, etaMs }: GovernorWaitingEvent) => {});
+governor.on('ready', ({ degraded }: GovernorReadyEvent) => {});
+governor.on('progress', (runway: BufferedRunway) => {});
+governor.on('ended', (time: number) => {});
+governor.on('scrubstart', (time: number) => {});
+governor.on('scrubend', (time: number) => {});
 ```
 
 `waiting` fires whenever a gate is entered (the clock is frozen) with an honest `etaMs` when computable; `ready` fires when a gate passes and the clock starts (`degraded: true` when the escape hatch fired). `progress` re-emits forwarded buffer events. `ended` fires when playback parks at a non-looping range boundary (media-element `'ended'` — distinct from a user pause; show a replay affordance). `scrubstart` fires when the scrubber is grabbed (payload: the playhead at the grab) and `scrubend` when it is released (payload: the committed position) — across that bracket the governor broadcasts `setInteractive(true/false)` to every source, so a scrub-LOD loader can drive a cheaper preview tier during the drag. `on()` returns an unsubscribe function; `off(event, callback)` also works:
@@ -199,11 +201,11 @@ Every transition is also pushed on the telemetry `playback` probe channel (`__st
 
 ```typescript
 interface PlaybackQoeStats {
-  stallCount: number;            // mid-playback rebuffer events (entries into 'buffering')
-  totalStallMs: number;          // cumulative wall ms in 'buffering'
-  startupMs: number | null;      // wall ms the most recent start gate took
-  degradedResumeCount: number;   // 'ready' events via the escape hatch
-  creepMs: number;               // cumulative wall ms in degraded creep
+  stallCount: number; // mid-playback rebuffer events (entries into 'buffering')
+  totalStallMs: number; // cumulative wall ms in 'buffering'
+  startupMs: number | null; // wall ms the most recent start gate took
+  degradedResumeCount: number; // 'ready' events via the escape hatch
+  creepMs: number; // cumulative wall ms in degraded creep
 }
 ```
 
@@ -250,7 +252,7 @@ required sources the clock never stalls.
 **Cadence tolerance band (`runwayToleranceMs`).** Sources with different temporal
 chunking almost never share a buffered horizon, so a raw `min()` spuriously stalls
 the instant the fastest-cadence source's runway dips a few ms below a peer (the W3C
-Bug 26436 misfire — this is *not* an inherited MSE mechanism; STT implements it). A
+Bug 26436 misfire — this is _not_ an inherited MSE mechanism; STT implements it). A
 required source within `runwayToleranceMs × |speed|` of the leading required frontier
 is treated as if it reached the leader before the `min`, absorbing cadence jitter
 **without** lowering genuine stall protection. Default `200` (the tick-probe

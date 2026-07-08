@@ -15,7 +15,10 @@
 
 import type { BinaryFeatures, TileId } from '@poopdeck.gl/core';
 import { getFeatureProperties } from '@poopdeck.gl/core';
-import type { InstanceProvenance, SttPickResult } from '@poopdeck.gl/core/picking';
+import type {
+  InstanceProvenance,
+  SttPickResult,
+} from '@poopdeck.gl/core/picking';
 import type { SttPointPickInfo } from './box-pick.js';
 
 /**
@@ -52,7 +55,9 @@ export interface ResolvePointPickParams {
  * index). `result.index` is the FEATURE index within its `(tile, layer)` —
  * matching the `SttPickResult.index` contract — not the merged index.
  */
-export function resolvePointPick(params: ResolvePointPickParams): SttPickResult | null {
+export function resolvePointPick(
+  params: ResolvePointPickParams,
+): SttPickResult | null {
   const { index, provenance, binaryByTileKey, layerId, screen } = params;
   const entry = provenance.resolve(index);
   if (!entry) return null;

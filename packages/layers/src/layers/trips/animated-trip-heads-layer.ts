@@ -32,10 +32,17 @@
 
 import { ScatterplotLayer } from '@deck.gl/layers';
 import type { Color, DefaultProps, Layer, LayerContext } from '@deck.gl/core';
-import { SpatioTemporalLayer, SpatioTemporalLayerProps } from '../spatiotemporal-layer.js';
+import {
+  SpatioTemporalLayer,
+  SpatioTemporalLayerProps,
+} from '../spatiotemporal-layer.js';
 import { synthesizeVertexTimes } from './animated-trips-layer.js';
 import { emit } from '../../lib/telemetry.js';
-import type { Tile, Layer as TileLayer, BinaryFeatures } from '@poopdeck.gl/core';
+import type {
+  Tile,
+  Layer as TileLayer,
+  BinaryFeatures,
+} from '@poopdeck.gl/core';
 
 const DEBUG = false;
 
@@ -173,7 +180,9 @@ function makeTileKey(tile: Tile, layer: TileLayer): string {
  *
  * Sublayer short id for `_subLayerProps` overrides: **`heads`**.
  */
-export class AnimatedTripHeadsLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLayer<
+export class AnimatedTripHeadsLayer<
+  ExtraPropsT extends {} = {},
+> extends SpatioTemporalLayer<
   ExtraPropsT & Required<_AnimatedTripHeadsLayerProps>
 > {
   static layerName = 'AnimatedTripHeadsLayer';
@@ -197,7 +206,11 @@ export class AnimatedTripHeadsLayer<ExtraPropsT extends {} = {}> extends SpatioT
     lineWidthUnits: 'meters',
     lineWidthScale: { type: 'number', value: 1, min: 0 },
     lineWidthMinPixels: { type: 'number', value: 0, min: 0 },
-    lineWidthMaxPixels: { type: 'number', value: Number.MAX_SAFE_INTEGER, min: 0 },
+    lineWidthMaxPixels: {
+      type: 'number',
+      value: Number.MAX_SAFE_INTEGER,
+      min: 0,
+    },
   };
 
   /** Per-tile prepared-data cache. Pruned to the visible tile set each render. */
@@ -277,8 +290,19 @@ export class AnimatedTripHeadsLayer<ExtraPropsT extends {} = {}> extends SpatioT
    * Output positions are size-3 (lon, lat, alt|0) Float64 — what ScatterplotLayer
    * wants for its fp64 instancePositions split (so no high-zoom jitter).
    */
-  private computeHeads(p: PreparedTile, relTime: number): { positions: Float64Array; count: number } {
-    const { positions, startIndices, startTimes, endTimes, vertexTimes, dims, featureCount } = p;
+  private computeHeads(
+    p: PreparedTile,
+    relTime: number,
+  ): { positions: Float64Array; count: number } {
+    const {
+      positions,
+      startIndices,
+      startTimes,
+      endTimes,
+      vertexTimes,
+      dims,
+      featureCount,
+    } = p;
     // Upper bound = all trips active; the returned `count` trims the draw.
     const out = new Float64Array(featureCount * 3);
     let n = 0;
@@ -313,7 +337,8 @@ export class AnimatedTripHeadsLayer<ExtraPropsT extends {} = {}> extends SpatioT
         const ta = vertexTimes[v0 + lo];
         const tb = vertexTimes[v0 + hi];
         const denom = tb - ta;
-        const frac = denom > 0 ? Math.min(1, Math.max(0, (relTime - ta) / denom)) : 0;
+        const frac =
+          denom > 0 ? Math.min(1, Math.max(0, (relTime - ta) / denom)) : 0;
         const a = (v0 + lo) * dims;
         const b = (v0 + hi) * dims;
         const g = 1 - frac;
@@ -345,7 +370,8 @@ export class AnimatedTripHeadsLayer<ExtraPropsT extends {} = {}> extends SpatioT
     if (this.lastTilesRef !== tiles) {
       const live = new Set<string>();
       for (const tile of tiles) {
-        for (const tileLayer of tile.layers) live.add(makeTileKey(tile, tileLayer));
+        for (const tileLayer of tile.layers)
+          live.add(makeTileKey(tile, tileLayer));
       }
       for (const key of this.preparedTileCache.keys()) {
         if (!live.has(key)) this.preparedTileCache.delete(key);
@@ -355,12 +381,16 @@ export class AnimatedTripHeadsLayer<ExtraPropsT extends {} = {}> extends SpatioT
 
     const absTime = this.getCurrentTime();
     const sizeInMeters = this.props.sizeUnits === 'meters';
-    const color = (Array.isArray(this.props.headColor)
-      ? this.props.headColor
-      : DEFAULT_HEAD_COLOR) as Color;
-    const strokeColor = (Array.isArray(this.props.headStrokeColor)
-      ? this.props.headStrokeColor
-      : DEFAULT_HEAD_STROKE_COLOR) as Color;
+    const color = (
+      Array.isArray(this.props.headColor)
+        ? this.props.headColor
+        : DEFAULT_HEAD_COLOR
+    ) as Color;
+    const strokeColor = (
+      Array.isArray(this.props.headStrokeColor)
+        ? this.props.headStrokeColor
+        : DEFAULT_HEAD_STROKE_COLOR
+    ) as Color;
     // In meters mode pass the meter radius (headRadius); else the pixel value.
     // The `||` chain is deliberate (headRadius defaults to 0 = unset).
     const radius = sizeInMeters

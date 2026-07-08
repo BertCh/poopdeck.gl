@@ -15,14 +15,20 @@ describe('tileKey / residentSetEqual', () => {
   });
 
   it('treats reordered same-address sets as equal', () => {
-    const a = [tile({ z: 14, x: 0, y: 0, t: 0 }), tile({ z: 14, x: 1, y: 0, t: 0 })];
+    const a = [
+      tile({ z: 14, x: 0, y: 0, t: 0 }),
+      tile({ z: 14, x: 1, y: 0, t: 0 }),
+    ];
     const b = [a[1], a[0]];
     expect(residentSetEqual(a, b)).toBe(true);
   });
 
   it('detects added / removed tiles', () => {
     const a = [tile({ z: 14, x: 0, y: 0, t: 0 })];
-    const b = [tile({ z: 14, x: 0, y: 0, t: 0 }), tile({ z: 14, x: 1, y: 0, t: 0 })];
+    const b = [
+      tile({ z: 14, x: 0, y: 0, t: 0 }),
+      tile({ z: 14, x: 1, y: 0, t: 0 }),
+    ];
     expect(residentSetEqual(a, b)).toBe(false);
     expect(residentSetEqual(b, a)).toBe(false);
   });

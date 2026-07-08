@@ -130,7 +130,10 @@ function collectCellLayers(
  * `coverage === 1` the ring is unchanged; lower values pull each vertex toward
  * the centroid, leaving a heatmap-style gap between adjacent cells.
  */
-function shrinkRing(ring: [number, number][], coverage: number): [number, number][] {
+function shrinkRing(
+  ring: [number, number][],
+  coverage: number,
+): [number, number][] {
   if (coverage >= 1) return ring;
   let cx = 0;
   let cy = 0;
@@ -140,7 +143,10 @@ function shrinkRing(ring: [number, number][], coverage: number): [number, number
   }
   cx /= ring.length;
   cy /= ring.length;
-  return ring.map(([lon, lat]) => [cx + (lon - cx) * coverage, cy + (lat - cy) * coverage]);
+  return ring.map(([lon, lat]) => [
+    cx + (lon - cx) * coverage,
+    cy + (lat - cy) * coverage,
+  ]);
 }
 
 export function buildH3Buffers(
@@ -196,8 +202,12 @@ export function buildH3Buffers(
   const positions = new Float32Array(total * MAX_RING * 3);
   const colors = new Float32Array(total * MAX_RING * 4);
   const indices = new Uint32Array(total * (MAX_RING - 2) * 3);
-  let minX = Infinity, minY = Infinity, minZ = Infinity;
-  let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+  let minX = Infinity,
+    minY = Infinity,
+    minZ = Infinity;
+  let maxX = -Infinity,
+    maxY = -Infinity,
+    maxZ = -Infinity;
 
   let cell = 0; // emitted cell count
   let vBase = 0; // running vertex offset into positions/colors
@@ -212,7 +222,9 @@ export function buildH3Buffers(
       for (let c = 0; c < n; c++) {
         const [lon, lat] = ring[c];
         const p = projection.project(lon, lat, zLift);
-        const px = p[0] - ox, py = p[1] - oy, pz = p[2] - oz;
+        const px = p[0] - ox,
+          py = p[1] - oy,
+          pz = p[2] - oz;
         const o3 = (vBase + c) * 3;
         positions[o3] = px;
         positions[o3 + 1] = py;
@@ -226,7 +238,9 @@ export function buildH3Buffers(
       }
 
       const rgba = rampBucketColor(weights[i], domain, range);
-      const cr = rgba[0] / 255, cg = rgba[1] / 255, cb = rgba[2] / 255;
+      const cr = rgba[0] / 255,
+        cg = rgba[1] / 255,
+        cb = rgba[2] / 255;
       const ca = (rgba[3] ?? 255) / 255;
       for (let c = 0; c < n; c++) {
         const o4 = (vBase + c) * 4;

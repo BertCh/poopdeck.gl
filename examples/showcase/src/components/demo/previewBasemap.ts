@@ -2,7 +2,7 @@
  * Pure (React/deck-free) helpers for the scrubber hover preview, split out so
  * they're unit-testable without pulling in the whole deck.gl stack.
  */
-import { MAPBOX_ACCESS_TOKEN } from "../../lib/mapboxToken";
+import { MAPBOX_ACCESS_TOKEN } from '../../lib/mapboxToken';
 
 /** The live camera, forwarded from DemoViewer's `onCameraChange`. */
 export interface DemoCamera {
@@ -27,7 +27,12 @@ export function fitPreviewSize(
   maxW = 264,
   maxH = 180,
 ): { width: number; height: number } {
-  if (!viewportWidth || !viewportHeight || viewportWidth <= 0 || viewportHeight <= 0) {
+  if (
+    !viewportWidth ||
+    !viewportHeight ||
+    viewportWidth <= 0 ||
+    viewportHeight <= 0
+  ) {
     return { width: maxW, height: Math.round((maxW * 9) / 16) };
   }
   const aspect = viewportWidth / viewportHeight;
@@ -51,7 +56,8 @@ export function previewZoom(
   previewWidth: number,
   viewportWidth: number | undefined,
 ): number {
-  if (!viewportWidth || viewportWidth <= 0 || previewWidth <= 0) return mainZoom;
+  if (!viewportWidth || viewportWidth <= 0 || previewWidth <= 0)
+    return mainZoom;
   return mainZoom + Math.log2(previewWidth / viewportWidth);
 }
 

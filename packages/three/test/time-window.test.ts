@@ -40,15 +40,19 @@ describe('resolveTimeWindow — full-width → half-width conversion', () => {
       fadeOut: 0,
     });
     // Default 0 (instantaneous) when omitted.
-    expect(resolveTimeWindow({})).toEqual({ windowHalf: 0, fadeIn: 0, fadeOut: 0 });
+    expect(resolveTimeWindow({})).toEqual({
+      windowHalf: 0,
+      fadeIn: 0,
+      fadeOut: 0,
+    });
   });
 });
 
 describe('resolveTimeWindow — alias precedence (lower-level three-native wins)', () => {
   it('windowHalf wins over timeWindow when both are supplied', () => {
-    expect(resolveTimeWindow({ timeWindow: 86_400_000, windowHalf: 250 }).windowHalf).toBe(
-      250,
-    );
+    expect(
+      resolveTimeWindow({ timeWindow: 86_400_000, windowHalf: 250 }).windowHalf,
+    ).toBe(250);
   });
 
   it('fadeIn / fadeOut win over fadeInDuration / fadeOutDuration', () => {
@@ -65,6 +69,8 @@ describe('resolveTimeWindow — alias precedence (lower-level three-native wins)
   it('honors an explicit windowHalf of 0 over timeWindow (0 is a real value, not "unset")', () => {
     // Guards the nullish-coalescing choice: windowHalf:0 must NOT fall through
     // to timeWindow.
-    expect(resolveTimeWindow({ timeWindow: 5000, windowHalf: 0 }).windowHalf).toBe(0);
+    expect(
+      resolveTimeWindow({ timeWindow: 5000, windowHalf: 0 }).windowHalf,
+    ).toBe(0);
   });
 });

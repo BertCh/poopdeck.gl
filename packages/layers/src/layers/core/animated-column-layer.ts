@@ -67,8 +67,15 @@ import {
   updateTriggersDigest,
 } from '../../lib/style-digest.js';
 import { resolveAccessorAlias } from '../../lib/accessor-alias.js';
-import type { ColorAccessorValue, NumericAccessorValue } from '../../lib/accessor-alias.js';
-import type { Tile, Layer as TileLayer, BinaryFeatures } from '@poopdeck.gl/core';
+import type {
+  ColorAccessorValue,
+  NumericAccessorValue,
+} from '../../lib/accessor-alias.js';
+import type {
+  Tile,
+  Layer as TileLayer,
+  BinaryFeatures,
+} from '@poopdeck.gl/core';
 
 const DEBUG = false;
 
@@ -269,7 +276,8 @@ export interface _AnimatedColumnLayerProps {
 }
 
 /** Complete props accepted by {@link AnimatedColumnLayer}. */
-export type AnimatedColumnLayerProps = _AnimatedColumnLayerProps & SpatioTemporalLayerProps;
+export type AnimatedColumnLayerProps = _AnimatedColumnLayerProps &
+  SpatioTemporalLayerProps;
 
 // Default color palette for categorical data (matches AnimatedPolygonLayer's
 // opaque tableau ramp — columns are usually fully opaque so lighting reads).
@@ -301,7 +309,10 @@ interface PreparedTile {
   /** Reference-stable data object for ColumnLayer's binary interface. */
   data: {
     length: number;
-    attributes: Record<string, { value: any; size: number; normalized?: boolean }>;
+    attributes: Record<
+      string,
+      { value: any; size: number; normalized?: boolean }
+    >;
   };
   /** Per-tile time reference; passed to TimeFilterExtension as `timeOffset`. */
   timeOffset: number;
@@ -365,7 +376,9 @@ function padPositionsTo3D(src: Float64Array, count: number): Float64Array {
  * class (default `ColumnLayer`) / overrides sublayer props (deck's
  * CompositeLayer contract).
  */
-export class AnimatedColumnLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLayer<
+export class AnimatedColumnLayer<
+  ExtraPropsT extends {} = {},
+> extends SpatioTemporalLayer<
   ExtraPropsT & Required<_AnimatedColumnLayerProps>
 > {
   static layerName = 'AnimatedColumnLayer';
@@ -391,10 +404,30 @@ export class AnimatedColumnLayer<ExtraPropsT extends {} = {}> extends SpatioTemp
     fillColor: { type: 'object', value: [255, 140, 0, 255], compare: true },
     // Accessor-named aliases (see the prop docs): unset by default so the
     // legacy props win unless the caller opts into the upstream vocabulary.
-    getElevation: { type: 'object', value: null, optional: true, compare: true },
-    getFillColor: { type: 'object', value: null, optional: true, compare: true },
-    getLineColor: { type: 'object', value: null, optional: true, compare: true },
-    getLineWidth: { type: 'object', value: null, optional: true, compare: true },
+    getElevation: {
+      type: 'object',
+      value: null,
+      optional: true,
+      compare: true,
+    },
+    getFillColor: {
+      type: 'object',
+      value: null,
+      optional: true,
+      compare: true,
+    },
+    getLineColor: {
+      type: 'object',
+      value: null,
+      optional: true,
+      compare: true,
+    },
+    getLineWidth: {
+      type: 'object',
+      value: null,
+      optional: true,
+      compare: true,
+    },
     elevationScale: { type: 'number', value: 1, min: 0 },
     colorPalette: { type: 'array', value: DEFAULT_PALETTE, compare: true },
     lineColor: { type: 'color', value: [0, 0, 0, 255] },
@@ -404,7 +437,11 @@ export class AnimatedColumnLayer<ExtraPropsT extends {} = {}> extends SpatioTemp
     // effect when `stroked` is true. Symmetric with lineWidthUnits/lineWidth.
     lineWidthScale: { type: 'number', value: 1, min: 0 },
     lineWidthMinPixels: { type: 'number', value: 0, min: 0 },
-    lineWidthMaxPixels: { type: 'number', value: Number.MAX_SAFE_INTEGER, min: 0 },
+    lineWidthMaxPixels: {
+      type: 'number',
+      value: Number.MAX_SAFE_INTEGER,
+      min: 0,
+    },
     // Same permissive descriptor ColumnLayer uses: boolean or material spec.
     material: { type: 'object', value: true, compare: true },
     // Fade ramps, forwarded to TimeFilterExtension (window mode).
@@ -435,7 +472,9 @@ export class AnimatedColumnLayer<ExtraPropsT extends {} = {}> extends SpatioTemp
    * window-mode (whole feature on/off + fade), so only the per-feature
    * start/end attributes are needed — the per-vertex time attribute is unused.
    */
-  private readonly timeFilterExtension = new TimeFilterExtension({ mode: 'window' });
+  private readonly timeFilterExtension = new TimeFilterExtension({
+    mode: 'window',
+  });
 
   /**
    * Singleton CategoryColorExtension. Always installed; when a tile lacks
@@ -557,7 +596,8 @@ export class AnimatedColumnLayer<ExtraPropsT extends {} = {}> extends SpatioTemp
     if (this.lastTilesRef !== tiles) {
       const live = new Set<string>();
       for (const tile of tiles) {
-        for (const tileLayer of tile.layers) live.add(makeTileKey(tile, tileLayer));
+        for (const tileLayer of tile.layers)
+          live.add(makeTileKey(tile, tileLayer));
       }
       for (const key of this.preparedTileCache.keys()) {
         if (!live.has(key)) this.preparedTileCache.delete(key);
@@ -607,7 +647,9 @@ export class AnimatedColumnLayer<ExtraPropsT extends {} = {}> extends SpatioTemp
     });
     if (DEBUG) {
       // eslint-disable-next-line no-console
-      console.log(`AnimatedColumnLayer: ${tiles.length} tiles → ${sublayers.length} sublayers`);
+      console.log(
+        `AnimatedColumnLayer: ${tiles.length} tiles → ${sublayers.length} sublayers`,
+      );
     }
     return sublayers;
   }
@@ -626,7 +668,9 @@ export class AnimatedColumnLayer<ExtraPropsT extends {} = {}> extends SpatioTemp
     // are memoized per object reference (style-digest.ts), so this stays a
     // WeakMap lookup per tile, not a re-serialization.
     return `${fillColorProp}|${elevationProp}|${
-      fillColorProp ? colorListDigest(this.props.colorPalette ?? DEFAULT_PALETTE) : 0
+      fillColorProp
+        ? colorListDigest(this.props.colorPalette ?? DEFAULT_PALETTE)
+        : 0
     }|${updateTriggersDigest(this.props.updateTriggers)}`;
   }
 
@@ -642,14 +686,21 @@ export class AnimatedColumnLayer<ExtraPropsT extends {} = {}> extends SpatioTemp
     const tileKey = makeTileKey(tile, tileLayer);
     const cached = this.preparedTileCache.get(tileKey);
     if (cached && cached.styleKey === styleKey) {
-      emit('tilePrepare', { layer: 'AnimatedColumnLayer', tileKey, cached: true, ms: 0 });
+      emit('tilePrepare', {
+        layer: 'AnimatedColumnLayer',
+        tileKey,
+        cached: true,
+        ms: 0,
+      });
       return cached;
     }
 
     const fillColorValue = this.fillColorValue();
     const elevationValue = this.elevationValue();
-    const fillColorProp = typeof fillColorValue === 'string' ? fillColorValue : '';
-    const elevationProp = typeof elevationValue === 'string' ? elevationValue : '';
+    const fillColorProp =
+      typeof fillColorValue === 'string' ? fillColorValue : '';
+    const elevationProp =
+      typeof elevationValue === 'string' ? elevationValue : '';
 
     const t0 = performance.now();
     const count = binary.featureCount;
@@ -658,7 +709,9 @@ export class AnimatedColumnLayer<ExtraPropsT extends {} = {}> extends SpatioTemp
     // ColumnLayer expects size=3 positions (the z is the column's base
     // altitude). Keep a stride-3 buffer zero-copy; pad a 2D buffer once.
     const positions: Float64Array =
-      srcDims === 3 ? binary.positions : padPositionsTo3D(binary.positions, count);
+      srcDims === 3
+        ? binary.positions
+        : padPositionsTo3D(binary.positions, count);
 
     const attributes: PreparedTile['data']['attributes'] = {
       getPosition: { value: positions, size: 3 },
@@ -721,10 +774,13 @@ export class AnimatedColumnLayer<ExtraPropsT extends {} = {}> extends SpatioTemp
     const timeWindow = this.props.timeWindow;
     const elevationValue = this.elevationValue();
     const fillColorValue = this.fillColorValue();
-    const constElevation = typeof elevationValue === 'number' ? elevationValue : 1000;
-    const constFillColor = (Array.isArray(fillColorValue)
-      ? fillColorValue
-      : ([255, 140, 0, 255] as Color)) as Color;
+    const constElevation =
+      typeof elevationValue === 'number' ? elevationValue : 1000;
+    const constFillColor = (
+      Array.isArray(fillColorValue)
+        ? fillColorValue
+        : ([255, 140, 0, 255] as Color)
+    ) as Color;
 
     // CategoryColorExtension props: when this tile uses the GPU palette path we
     // pass the resolved palette + useCategoryColor=true. Otherwise the

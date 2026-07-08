@@ -1,6 +1,6 @@
 # STT Time Model — Specification
 
-> **Scope:** the normative model for STT's *temporal* axis — how time is
+> **Scope:** the normative model for STT's _temporal_ axis — how time is
 > represented on a feature, how features are bucketed into tiles, how the
 > coarser-bucket pyramid works, and how a reader prunes by time. The spatial
 > axis (WebMercator tile pyramid) and the byte container are specified in
@@ -42,14 +42,14 @@ filtering with one `f64`/`i64` uniform.
 > presentation concern**: STT stores the Unix-ms scalar it is given and never
 > reinterprets or adjusts it.
 
-> **Non-negativity (normative).** Every *absolute* feature and metadata time MUST
+> **Non-negativity (normative).** Every _absolute_ feature and metadata time MUST
 > be **non-negative** ms-since-epoch (`t ≥ 0`); the reference builder **rejects
 > pre-1970 (negative) timestamps** in both strictness modes, because the
 > in-memory temporal index is **unsigned** (`TimeRange.start`/`end` and
 > `TileId.t` are `u64`). This narrows — it does not contradict — the `i64`
 > payload/wire representation: the tile `start_time`/`end_time` columns are
 > `Int64` and the directory codec stores **signed `i64`** values, so a
-> `cover_t_min` *delta* against `time_start` and a per-leaf `t_min`/`t_max`
+> `cover_t_min` _delta_ against `time_start` and a per-leaf `t_min`/`t_max`
 > descriptor may be negative even though the absolute times they encode are not.
 
 ## 2. Feature time — instants and intervals
@@ -57,8 +57,8 @@ filtering with one `f64`/`i64` uniform.
 Every feature carries two absolute timestamps in its tile payload (see the
 [payload schema](../architecture/data-format.md#per-layer-arrow-schema)):
 
-| column       | type    | meaning                                  |
-| ------------ | ------- | ---------------------------------------- |
+| column       | type    | meaning                                   |
+| ------------ | ------- | ----------------------------------------- |
 | `start_time` | `Int64` | inclusive start of the feature's validity |
 | `end_time`   | `Int64` | inclusive end of the feature's validity   |
 
@@ -68,7 +68,7 @@ Every feature carries two absolute timestamps in its tile payload (see the
   represented as `start_time == end_time`. When the input has no end-time field,
   the builder sets `end_time = start_time` (`crates/stt-build/src/columnar.rs`).
 
-For LineStrings built with an end-time field, each *vertex* additionally carries
+For LineStrings built with an end-time field, each _vertex_ additionally carries
 its own timestamp (the `vertex_time` column) so a trip animates along its path;
 that per-vertex encoding is specified in the
 [payload spec](../architecture/data-format.md#vertex_time-per-vertex-timestamps).
@@ -88,20 +88,20 @@ bucket(t) = floor(t / temporal_bucket_ms) * temporal_bucket_ms
 `temporal_bucket_ms` MUST be **> 0** — a zero or negative width makes
 `bucket(t)` undefined, and the reference builder rejects it.
 
-> **Boundary semantics (normative).** Bucket *assignment* is half-open;
-> feature *validity* is inclusive. An instant exactly on a bucket boundary
+> **Boundary semantics (normative).** Bucket _assignment_ is half-open;
+> feature _validity_ is inclusive. An instant exactly on a bucket boundary
 > (`start_time == b`) belongs to bucket `b` — never to the preceding bucket —
 > because assignment is the floor formula above over half-open
 > `[b, b + temporal_bucket_ms)`. Meanwhile a feature's `[start_time,
-> end_time]` interval is inclusive at **both** ends (§2), so an interval
-> feature from an earlier bucket whose `end_time == b` is still *valid* at
-> the boundary instant even though no feature is ever *assigned* to a bucket
+end_time]` interval is inclusive at **both** ends (§2), so an interval
+> feature from an earlier bucket whose `end_time == b` is still _valid_ at
+> the boundary instant even though no feature is ever _assigned_ to a bucket
 > by its end. The two rules never conflict: assignment places bytes,
 > validity drives pruning and rendering.
 
 > **Calendar caveat (normative).** Buckets are fixed millisecond widths, never
 > calendar-aware. A "1 month" LOD is `2_592_000_000 ms` = exactly **30 days**,
-> *not* a calendar month; "1 year" would be `31_536_000_000 ms` = 365 days, with
+> _not_ a calendar month; "1 year" would be `31_536_000_000 ms` = 365 days, with
 > no leap-year handling. Producers that need calendar-aligned aggregation must
 > pre-aggregate upstream and present the result as fixed-width buckets, or use
 > the [summary tier](../architecture/data-format.md#summary-tier-layers)
@@ -121,8 +121,8 @@ A feature is **not** duplicated into every bucket its `[start_time, end_time]`
 interval overlaps. This keeps the format lossless and compact (one physical copy
 per feature), and pushes interval-overlap handling to read time via the covering
 bound (§5). The consequence a reader MUST account for: a long-lived interval
-feature lives in the tile of its *start* bucket, so a query window that opens
-*after* the feature started must look *back* far enough to find it — which is
+feature lives in the tile of its _start_ bucket, so a query window that opens
+_after_ the feature started must look _back_ far enough to find it — which is
 exactly what `cover_t_min` (§5) and the directory's per-leaf `t_min`/`t_max`
 (§4.1 of the packed spec) make cheap.
 
@@ -215,7 +215,7 @@ flowchart TD
 ## 5. Read-time temporal pruning — `cover_t_min`
 
 Because a feature lives only in its start bucket (§3.1), a query needs a tight
-*lower* bound per tile to know whether to look at it. The directory carries one
+_lower_ bound per tile to know whether to look at it. The directory carries one
 per entry:
 
 - **`time_start`** — the tile's bucket boundary (the entry's nominal start).
@@ -226,14 +226,14 @@ per entry:
   fall back to `time_start`.
 - **`time_end`** — the tile's inclusive upper temporal bound. A writer MUST
   set it to the **maximum feature `end_time` actually in the tile** — the
-  *tight* bound, not the nominal bucket end `time_start +
-  temporal_bucket_ms - 1`. This is load-bearing for correctness, not an
-  optimization: an interval feature lives only in its *start* bucket (§3.1),
+  _tight_ bound, not the nominal bucket end `time_start +
+temporal_bucket_ms - 1`. This is load-bearing for correctness, not an
+  optimization: an interval feature lives only in its _start_ bucket (§3.1),
   so it is findable by a later query window **only because** `time_end` was
   widened to cover it. A writer emitting nominal bucket ends would produce a
   dataset that decodes cleanly yet silently loses every interval feature from
   queries after its start bucket — the reader's prune below would discard the
-  tile. (When every feature ends inside the bucket, the tight bound is *below*
+  tile. (When every feature ends inside the bucket, the tight bound is _below_
   the nominal end and additionally saves wasted fetches.)
 
 A reader keeps a tile for a query window `[w_start, w_end]` iff:
@@ -254,7 +254,7 @@ fetching them.
 Playback is driven by `TimeController` (`packages/playback`). Its time model:
 
 - **`currentTime`** — the playhead, a single Unix-ms scalar.
-- **`speed`** — a *signed effective rate* in **sim-ms per wall-ms** (direction ×
+- **`speed`** — a _signed effective rate_ in **sim-ms per wall-ms** (direction ×
   magnitude). `speed: 3600` plays one hour of data per wall-clock second;
   negative plays backward.
 - **`timeRange`** — optional `{ start, end }` (Unix-ms) clamp; the playhead
@@ -268,26 +268,26 @@ The clock advances `currentTime`; layers GPU-filter their resident tiles against
 a window around it (no re-decode per frame); and the
 [`PlaybackGovernor`](../api/playback-governor.md) gates the clock on a buffered
 runway so the playhead never silently outruns loaded data. Those mechanics are
-loading concerns, documented with the governor; the time *semantics* above are
+loading concerns, documented with the governor; the time _semantics_ above are
 what every consumer shares.
 
 ## 7. Mapping to OGC Tile Matrix Sets (normative)
 
 STT's `(zoom, x, y, bucket)` addressing is an OGC **WebMercatorQuad** tile matrix
 set with one additional, regularly-spaced **`time` dimension** — the shape
-sketched (informatively) in Annex J of the *OGC Two Dimensional Tile Matrix Set*
+sketched (informatively) in Annex J of the _OGC Two Dimensional Tile Matrix Set_
 standard. STT makes that shape concrete and normative. The machine-readable
 definition ships as
 [`tile-matrix-set.json`](./tile-matrix-set.json) (the standard WebMercatorQuad
 matrices plus an STT `dimensions` block); the mapping is:
 
-| STT concept | OGC TMS concept |
-| --- | --- |
-| `zoom` | `tileMatrix` identifier within the TileMatrixSet (WebMercatorQuad, z0–z24) |
-| `x`, `y` | `tileCol`, `tileRow` (WebMercatorQuad, top-left origin) |
+| STT concept                                | OGC TMS concept                                                                                                                   |
+| ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
+| `zoom`                                     | `tileMatrix` identifier within the TileMatrixSet (WebMercatorQuad, z0–z24)                                                        |
+| `x`, `y`                                   | `tileCol`, `tileRow` (WebMercatorQuad, top-left origin)                                                                           |
 | `bucket` start, width `temporal_bucket_ms` | an extra dimension `{ "id": "time", "unitSymbol": "ms", "resolution": temporal_bucket_ms, "default": metadata.time_range.start }` |
-| `metadata.time_range` | the dimension's `[start, end]` interval |
-| `--temporal-lod` level | a per-`tileMatrix` coarser dimension `resolution` (bigger step at lower zoom) |
+| `metadata.time_range`                      | the dimension's `[start, end]` interval                                                                                           |
+| `--temporal-lod` level                     | a per-`tileMatrix` coarser dimension `resolution` (bigger step at lower zoom)                                                     |
 
 ```json
 {
@@ -299,9 +299,9 @@ matrices plus an STT `dimensions` block); the mapping is:
 }
 ```
 
-This is a *documentation and convergence* mapping, not a compliance claim: OGC
+This is a _documentation and convergence_ mapping, not a compliance claim: OGC
 API – Tiles has no normative multi-dimensional conformance class today (its only
-temporal hook is a `datetime` *filter parameter*, not an addressed axis). If one
+temporal hook is a `datetime` _filter parameter_, not an addressed axis). If one
 is ratified, STT's directory is already expressible in its terms; until then the
 [`tile-matrix-set.json`](./tile-matrix-set.json) artifact and this table are how
 an external tool can reason about STT addressing in OGC vocabulary. See also
@@ -332,9 +332,9 @@ the per-vertex trajectory lineage.
   stored sorted ascending, each with a `max_zoom_level`.
 - A coarse LOD tile **MUST** contain exactly the base features re-bucketed at
   the coarser width — no reduction, aggregation, or thinning (§4); reduced
-  tiers are a future *declared* variant, not silently permitted.
+  tiers are a future _declared_ variant, not silently permitted.
 - A reader **MUST** prune by `time_end >= w_start AND (cover_t_min ?? time_start)
-  <= w_end`, and **MUST** fall back to `time_start` when `cover_t_min` is absent.
+<= w_end`, and **MUST** fall back to `time_start` when `cover_t_min` is absent.
 - A reader **MUST NOT** assume bucket boundaries align to calendar units.
 - A reader **SHOULD** select temporal LOD via `max_zoom_level` (coarsest level
   covering the zoom) when the application opts into the pyramid.

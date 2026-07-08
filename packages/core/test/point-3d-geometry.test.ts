@@ -28,10 +28,16 @@ import { frameLayer } from './helpers/fixtures';
 
 const tileId: TileId = { z: 0, x: 0, y: 0, t: 0 };
 
-
 function buildPointTile(
   coords3: number[], // [lon,lat,alt, …] OR i32 grid indices
-  quant: { x0: number; y0: number; sx: number; sy: number; z0: number; sz: number } | null,
+  quant: {
+    x0: number;
+    y0: number;
+    sx: number;
+    sy: number;
+    z0: number;
+    sz: number;
+  } | null,
 ): Uint8Array {
   const featureCount = coords3.length / 3;
   const leafType = quant ? new Int32() : new Float64();
@@ -50,8 +56,14 @@ function buildPointTile(
     data: BigUint64Array.from({ length: featureCount }, (_, i) => BigInt(i)),
   });
   const t = (v: bigint) =>
-    makeData({ type: new Int64(), length: featureCount, data: BigInt64Array.from({ length: featureCount }, () => v) });
-  const geomMeta = new Map<string, string>([['ARROW:extension:name', 'geoarrow.point']]);
+    makeData({
+      type: new Int64(),
+      length: featureCount,
+      data: BigInt64Array.from({ length: featureCount }, () => v),
+    });
+  const geomMeta = new Map<string, string>([
+    ['ARROW:extension:name', 'geoarrow.point'],
+  ]);
   if (quant) geomMeta.set('stt:quant', JSON.stringify(quant));
   const fields: Field[] = [
     new Field('id', new Uint64(), false),
@@ -59,7 +71,10 @@ function buildPointTile(
     new Field('end_time', new Int64(), false),
     new Field('geometry', geomData.type, false, geomMeta),
   ];
-  const schema = new Schema(fields, new Map([['stt:geometry', 'geoarrow.point']]));
+  const schema = new Schema(
+    fields,
+    new Map([['stt:geometry', 'geoarrow.point']]),
+  );
   const structData = makeData({
     type: new Struct(fields),
     length: featureCount,

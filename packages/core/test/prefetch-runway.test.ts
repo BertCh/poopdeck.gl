@@ -17,7 +17,12 @@
 import { describe, it, expect, vi } from 'vitest';
 import { SpatiotemporalTileset } from '../src/spatiotemporal-tileset';
 import type { TileId, BoundingBox, Tile } from '../src/types';
-import { BOUNDS, BUCKET_MS, fakeTile, makeAvailableTiles } from './helpers/fixtures';
+import {
+  BOUNDS,
+  BUCKET_MS,
+  fakeTile,
+  makeAvailableTiles,
+} from './helpers/fixtures';
 
 const N_BUCKETS = 600;
 
@@ -91,9 +96,19 @@ describe('SpatiotemporalTileset prefetch runway', () => {
     // consecutive backward frames), anchored near the end of the timeline.
     const start = (N_BUCKETS - 1) * BUCKET_MS;
     tileset.setAnimationState(true, 1000);
-    tileset.update({ bounds: BOUNDS, zoom: 6, time: start, timeWindow: BUCKET_MS });
+    tileset.update({
+      bounds: BOUNDS,
+      zoom: 6,
+      time: start,
+      timeWindow: BUCKET_MS,
+    });
     for (let i = 1; i <= 4; i++) {
-      tileset.update({ bounds: BOUNDS, zoom: 6, time: start - i * BUCKET_MS, timeWindow: BUCKET_MS });
+      tileset.update({
+        bounds: BOUNDS,
+        zoom: 6,
+        time: start - i * BUCKET_MS,
+        timeWindow: BUCKET_MS,
+      });
     }
     await new Promise((r) => setTimeout(r, 80));
 
@@ -192,7 +207,9 @@ describe('SpatiotemporalTileset byte-aware parent-fallback skip', () => {
     tileset.update({ bounds: BOUNDS, zoom: 14, time: 0, timeWindow: 1000 });
     await new Promise((r) => setTimeout(r, 40));
 
-    const reqKeys = new Set(requested.map((id) => `${id.z}/${id.x}/${id.y}/${id.t}`));
+    const reqKeys = new Set(
+      requested.map((id) => `${id.z}/${id.x}/${id.y}/${id.t}`),
+    );
     expect(reqKeys.has('14/100/200/0')).toBe(true); // primary always loads
     expect(reqKeys.has('13/12/25/0')).toBe(true); // cheap parent kept as fallback
     expect(reqKeys.has('10/6/12/0')).toBe(false); // giant parent skipped
@@ -224,7 +241,9 @@ describe('SpatiotemporalTileset byte-aware parent-fallback skip', () => {
     tileset.update({ bounds: BOUNDS, zoom: 14, time: 0, timeWindow: 1000 });
     await new Promise((r) => setTimeout(r, 30));
 
-    expect(requested.map((id) => `${id.z}/${id.x}/${id.y}/${id.t}`)).toContain('14/1/1/0');
+    expect(requested.map((id) => `${id.z}/${id.x}/${id.y}/${id.t}`)).toContain(
+      '14/1/1/0',
+    );
     tileset.finalize();
   });
 });

@@ -77,8 +77,14 @@ const DEFAULT_VELOCITY_COLOR: RGBA = [120, 230, 255, 255];
  */
 function emptyColoredLineGeometry(): BufferGeometry {
   const geom = new BufferGeometry();
-  geom.setAttribute('position', new Float32BufferAttribute(new Float32Array(0), 3));
-  geom.setAttribute('color', new Float32BufferAttribute(new Float32Array(0), 3));
+  geom.setAttribute(
+    'position',
+    new Float32BufferAttribute(new Float32Array(0), 3),
+  );
+  geom.setAttribute(
+    'color',
+    new Float32BufferAttribute(new Float32Array(0), 3),
+  );
   geom.setDrawRange(0, 0);
   return geom;
 }
@@ -134,7 +140,11 @@ export class BoundingBoxLayer extends BaseSttLayer implements SttPickable {
 
     this.edges = new LineSegments(
       emptyColoredLineGeometry(),
-      new LineBasicMaterial({ vertexColors: true, transparent: true, opacity: this.opts.opacity }),
+      new LineBasicMaterial({
+        vertexColors: true,
+        transparent: true,
+        opacity: this.opts.opacity,
+      }),
     );
     this.edges.frustumCulled = false;
     this.edges.visible = false; // nothing to draw until the first active box
@@ -143,7 +153,11 @@ export class BoundingBoxLayer extends BaseSttLayer implements SttPickable {
     if (this.opts.showVelocity) {
       this.velocity = new LineSegments(
         emptyColoredLineGeometry(),
-        new LineBasicMaterial({ vertexColors: true, transparent: true, opacity: this.opts.opacity }),
+        new LineBasicMaterial({
+          vertexColors: true,
+          transparent: true,
+          opacity: this.opts.opacity,
+        }),
       );
       this.velocity.frustumCulled = false;
       this.velocity.visible = false;
@@ -194,8 +208,14 @@ export class BoundingBoxLayer extends BaseSttLayer implements SttPickable {
       this.edgeColors = new Float32Array(this.edgeCapacity * FLOATS_PER_BOX);
       this.edges.geometry.dispose();
       const geom = new BufferGeometry();
-      geom.setAttribute('position', new Float32BufferAttribute(this.edgePositions, 3));
-      geom.setAttribute('color', new Float32BufferAttribute(this.edgeColors, 3));
+      geom.setAttribute(
+        'position',
+        new Float32BufferAttribute(this.edgePositions, 3),
+      );
+      geom.setAttribute(
+        'color',
+        new Float32BufferAttribute(this.edgeColors, 3),
+      );
       this.edges.geometry = geom;
     }
     const pos = this.edgePositions;
@@ -245,7 +265,10 @@ export class BoundingBoxLayer extends BaseSttLayer implements SttPickable {
       this.velColors = new Float32Array(this.velCapacity * 6);
       vel.geometry.dispose();
       const geom = new BufferGeometry();
-      geom.setAttribute('position', new Float32BufferAttribute(this.velPositions, 3));
+      geom.setAttribute(
+        'position',
+        new Float32BufferAttribute(this.velPositions, 3),
+      );
       geom.setAttribute('color', new Float32BufferAttribute(this.velColors, 3));
       vel.geometry = geom;
     }
@@ -283,7 +306,9 @@ export class BoundingBoxLayer extends BaseSttLayer implements SttPickable {
 
   private updateDrawRange(line: LineSegments, vertexCount: number): void {
     const geom = line.geometry;
-    const pos = geom.getAttribute('position') as Float32BufferAttribute | undefined;
+    const pos = geom.getAttribute('position') as
+      | Float32BufferAttribute
+      | undefined;
     // Hide (don't draw) when empty — a 0-vertex draw is a no-op that the WebGPU
     // backend warns about ("Draw with a vertex count of 0 is unusual").
     line.visible = vertexCount > 0;
@@ -295,7 +320,9 @@ export class BoundingBoxLayer extends BaseSttLayer implements SttPickable {
     }
     geom.setDrawRange(0, vertexCount);
     pos.needsUpdate = true;
-    const col = geom.getAttribute('color') as Float32BufferAttribute | undefined;
+    const col = geom.getAttribute('color') as
+      | Float32BufferAttribute
+      | undefined;
     if (col) col.needsUpdate = true;
     geom.computeBoundingSphere();
   }

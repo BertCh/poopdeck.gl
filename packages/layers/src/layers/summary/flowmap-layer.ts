@@ -42,14 +42,21 @@
 
 import { ScatterplotLayer } from '@deck.gl/layers';
 import type { Color, DefaultProps, Layer } from '@deck.gl/core';
-import { SpatioTemporalLayer, SpatioTemporalLayerProps } from '../spatiotemporal-layer.js';
+import {
+  SpatioTemporalLayer,
+  SpatioTemporalLayerProps,
+} from '../spatiotemporal-layer.js';
 import { FlowLinesLayer } from '../internal/flow-lines-layer.js';
 import { deriveSourceTargetPositions } from '../../lib/od-positions.js';
 import { bucketBlendAt, blendMatrixRow } from '../../lib/vertex-value-blend.js';
 import { resolveAccessorAlias } from '../../lib/accessor-alias.js';
 import type { ColorAccessorValue } from '../../lib/accessor-alias.js';
 import { emit } from '../../lib/telemetry.js';
-import type { Tile, Layer as TileLayer, BinaryFeatures } from '@poopdeck.gl/core';
+import type {
+  Tile,
+  Layer as TileLayer,
+  BinaryFeatures,
+} from '@poopdeck.gl/core';
 
 /** Props added by {@link FlowmapLayer} (own props only — compose with
  * {@link SpatioTemporalLayerProps} via {@link FlowmapLayerProps}). */
@@ -157,9 +164,9 @@ interface FlowNode {
  * Animated OD flowmap on the {@link SpatioTemporalLayer} chassis. Inherits tile
  * streaming, prefetch, picking, and theme props at zero cost.
  */
-export class FlowmapLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLayer<
-  ExtraPropsT & Required<_FlowmapLayerProps>
-> {
+export class FlowmapLayer<
+  ExtraPropsT extends {} = {},
+> extends SpatioTemporalLayer<ExtraPropsT & Required<_FlowmapLayerProps>> {
   static layerName = 'FlowmapLayer';
 
   static defaultProps: DefaultProps<FlowmapLayerProps> = {
@@ -178,11 +185,25 @@ export class FlowmapLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLay
     sourceColor: { type: 'object', value: DEFAULT_SOURCE_COLOR, compare: true },
     targetColor: { type: 'object', value: DEFAULT_TARGET_COLOR, compare: true },
     nodeColor: { type: 'object', value: DEFAULT_NODE_COLOR, compare: true },
-    nodeLineColor: { type: 'object', value: DEFAULT_NODE_LINE_COLOR, compare: true },
+    nodeLineColor: {
+      type: 'object',
+      value: DEFAULT_NODE_LINE_COLOR,
+      compare: true,
+    },
     // Accessor-named aliases (see the prop docs): unset by default so the
     // legacy props win unless the caller opts into the upstream vocabulary.
-    getSourceColor: { type: 'object', value: null, optional: true, compare: true },
-    getTargetColor: { type: 'object', value: null, optional: true, compare: true },
+    getSourceColor: {
+      type: 'object',
+      value: null,
+      optional: true,
+      compare: true,
+    },
+    getTargetColor: {
+      type: 'object',
+      value: null,
+      optional: true,
+      compare: true,
+    },
   };
 
   /** tileKey → geometry (rebuilt only when a tile appears). */
@@ -212,7 +233,8 @@ export class FlowmapLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLay
    * tile's own axis. `null` when the tile carries no matrix. */
   private posFromBinary(binary: BinaryFeatures, time: number): number | null {
     const nb = binary.vertexValueBuckets ?? 0;
-    if (nb <= 0 || !binary.startTimes || binary.startTimes.length === 0) return null;
+    if (nb <= 0 || !binary.startTimes || binary.startTimes.length === 0)
+      return null;
     const rel0 = binary.startTimes[0];
     const span = binary.endTimes[0] - rel0;
     if (span <= 0) return null;
@@ -248,7 +270,8 @@ export class FlowmapLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLay
 
     const { source, target, dims } = deriveSourceTargetPositions(binary);
     const srcVertexIndex = new Uint32Array(binary.featureCount);
-    for (let i = 0; i < binary.featureCount; i++) srcVertexIndex[i] = binary.startIndices[i];
+    for (let i = 0; i < binary.featureCount; i++)
+      srcVertexIndex[i] = binary.startIndices[i];
 
     const geom: TileGeom = {
       tileKey,
@@ -351,8 +374,10 @@ export class FlowmapLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLay
       for (const tile of tiles) {
         for (const tl of tile.layers) live.add(makeTileKey(tile, tl));
       }
-      for (const key of this.geomCache.keys()) if (!live.has(key)) this.geomCache.delete(key);
-      for (const key of this.arcCache.keys()) if (!live.has(key)) this.arcCache.delete(key);
+      for (const key of this.geomCache.keys())
+        if (!live.has(key)) this.geomCache.delete(key);
+      for (const key of this.arcCache.keys())
+        if (!live.has(key)) this.arcCache.delete(key);
       this.lastTilesRef = tiles;
     }
 
@@ -379,7 +404,10 @@ export class FlowmapLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLay
         const pos = this.posFromBinary(geom.binary, time) ?? 0;
         const stepped = Math.round(pos / STEP) * STEP;
         stepKey = Math.round(pos / STEP);
-        prepared.push({ geom, widths: this.widthsFor(geom, stepped, nodeFlow) });
+        prepared.push({
+          geom,
+          widths: this.widthsFor(geom, stepped, nodeFlow),
+        });
       }
     }
 
@@ -391,7 +419,11 @@ export class FlowmapLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLay
     const sublayers: Layer[] = [];
     for (const { geom, widths } of prepared) {
       const cached = this.arcCache.get(geom.tileKey);
-      if (cached && cached.flowStep === stepKey && cached.propsKey === propsKey) {
+      if (
+        cached &&
+        cached.flowStep === stepKey &&
+        cached.propsKey === propsKey
+      ) {
         sublayers.push(cached.layer);
         continue;
       }
@@ -460,21 +492,29 @@ export class FlowmapLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLay
     const rmax = this.props.nodeRadiusMaxPixels;
     const out = new Map<string, number>();
     for (const [key, entry] of nodeFlow) {
-      out.set(key, Math.min(rmax, Math.max(rmin, scale * Math.sqrt(entry.flow))));
+      out.set(
+        key,
+        Math.min(rmax, Math.max(rmin, scale * Math.sqrt(entry.flow))),
+      );
     }
     return out;
   }
 
   /** Per-feature `[sourceInset, targetInset]` (px) = each endpoint's node radius,
    * so the arrow starts/ends on the node-circle EDGE, not its center. */
-  private endpointOffsetsFor(geom: TileGeom, nodeRadius: Map<string, number>): Float32Array {
+  private endpointOffsetsFor(
+    geom: TileGeom,
+    nodeRadius: Map<string, number>,
+  ): Float32Array {
     const n = geom.binary.featureCount;
     const dims = geom.dims;
     const out = new Float32Array(n * 2);
     for (let i = 0; i < n; i++) {
       const b = i * dims;
-      out[i * 2] = nodeRadius.get(nodeKey(geom.source[b], geom.source[b + 1])) ?? 0;
-      out[i * 2 + 1] = nodeRadius.get(nodeKey(geom.target[b], geom.target[b + 1])) ?? 0;
+      out[i * 2] =
+        nodeRadius.get(nodeKey(geom.source[b], geom.source[b + 1])) ?? 0;
+      out[i * 2 + 1] =
+        nodeRadius.get(nodeKey(geom.target[b], geom.target[b + 1])) ?? 0;
     }
     return out;
   }
@@ -508,7 +548,11 @@ export class FlowmapLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLay
         ? this.props.nodeLineColor
         : DEFAULT_NODE_LINE_COLOR) as Color,
       // Node positions/radii change every sub-step; refresh accessors then.
-      updateTriggers: { getPosition: stepKey, getRadius: stepKey, getFillColor: propsKey },
+      updateTriggers: {
+        getPosition: stepKey,
+        getRadius: stepKey,
+        getFillColor: propsKey,
+      },
       pickable: false,
     });
     const SubLayerClass = this.getSubLayerClass('nodes', ScatterplotLayer);

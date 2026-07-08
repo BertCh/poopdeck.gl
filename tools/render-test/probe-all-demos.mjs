@@ -50,11 +50,15 @@ const browser = await chromium.launch({
 
 const results = [];
 for (const id of DATASETS) {
-  const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const ctx = await browser.newContext({
+    viewport: { width: 1280, height: 800 },
+  });
   const page = await ctx.newPage();
   const consoleErrors = [];
   const pageErrors = [];
-  page.on('console', (msg) => { if (msg.type() === 'error') consoleErrors.push(msg.text()); });
+  page.on('console', (msg) => {
+    if (msg.type() === 'error') consoleErrors.push(msg.text());
+  });
   page.on('pageerror', (err) => pageErrors.push(`${err.name}: ${err.message}`));
 
   const url = `${BASE_URL}/demo/${id}`;
@@ -62,10 +66,16 @@ for (const id of DATASETS) {
   let note = '';
   try {
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60_000 });
-    await page.locator('.map-viewport').first().waitFor({ state: 'visible', timeout: 30_000 });
+    await page
+      .locator('.map-viewport')
+      .first()
+      .waitFor({ state: 'visible', timeout: 30_000 });
     // Give tiles a chance to load and render.
     await page.waitForTimeout(8000);
-    await page.screenshot({ path: path.join(OUTPUT, `${id}.png`), fullPage: false });
+    await page.screenshot({
+      path: path.join(OUTPUT, `${id}.png`),
+      fullPage: false,
+    });
   } catch (e) {
     status = 'nav-fail';
     note = String(e?.message || e).slice(0, 200);
@@ -91,4 +101,7 @@ for (const id of DATASETS) {
 
 await browser.close();
 console.log(JSON.stringify(results, null, 2));
-fs.writeFileSync(path.join(OUTPUT, 'summary.json'), JSON.stringify(results, null, 2));
+fs.writeFileSync(
+  path.join(OUTPUT, 'summary.json'),
+  JSON.stringify(results, null, 2),
+);

@@ -17,15 +17,15 @@
  *
  * Missing telemetry → the parent hides the panel (no hard fail).
  */
-import React, { useEffect, useMemo, useRef } from "react";
-import type { TimeController } from "@poopdeck.gl/playback";
-import { useReducedMotion } from "../../lib/reducedMotion";
+import React, { useEffect, useMemo, useRef } from 'react';
+import type { TimeController } from '@poopdeck.gl/playback';
+import { useReducedMotion } from '../../lib/reducedMotion';
 import {
   sampleIndexAtOrBefore,
   telemetryValueAt,
   type AvTelemetry,
   type AvTelemetryField,
-} from "./sceneTypes";
+} from './sceneTypes';
 
 export interface MetricChartsProps {
   telemetry: AvTelemetry;
@@ -69,16 +69,16 @@ function fieldExtent(field: AvTelemetryField): { min: number; max: number } {
 }
 
 function formatValue(key: string, v: number, unit: string): string {
-  if (key === "speed") return `${(v * 3.6).toFixed(0)}`; // km/h, matches the gauges
-  if (unit === "rad") return `${((v * 180) / Math.PI).toFixed(0)}`;
-  if (unit === "frac") return `${(v * 100).toFixed(0)}`;
+  if (key === 'speed') return `${(v * 3.6).toFixed(0)}`; // km/h, matches the gauges
+  if (unit === 'rad') return `${((v * 180) / Math.PI).toFixed(0)}`;
+  if (unit === 'frac') return `${(v * 100).toFixed(0)}`;
   return v.toFixed(1);
 }
 
 function unitLabel(key: string, unit: string): string {
-  if (key === "speed") return "km/h";
-  if (unit === "rad") return "deg";
-  if (unit === "frac") return "%";
+  if (key === 'speed') return 'km/h';
+  if (unit === 'rad') return 'deg';
+  if (unit === 'frac') return '%';
   return unit;
 }
 
@@ -110,17 +110,17 @@ const Strip: React.FC<{
 
   // Static full-window trace (reduced motion): the whole series, mapped left→right.
   const staticPath = useMemo(() => {
-    if (!reducedMotion) return "";
+    if (!reducedMotion) return '';
     const s = field.samples;
-    if (s.length === 0) return "";
+    if (s.length === 0) return '';
     const t0 = s[0][0];
     const t1 = s[s.length - 1][0];
     const tspan = t1 - t0 || 1;
-    let d = "";
+    let d = '';
     for (let i = 0; i < s.length; i++) {
       const x = ((s[i][0] - t0) / tspan) * W;
       const y = yOf(s[i][1]);
-      d += `${i === 0 ? "M" : "L"}${x.toFixed(1)} ${y.toFixed(1)}`;
+      d += `${i === 0 ? 'M' : 'L'}${x.toFixed(1)} ${y.toFixed(1)}`;
     }
     return d;
   }, [reducedMotion, field, yOf]);
@@ -133,7 +133,7 @@ const Strip: React.FC<{
       if (valueRef.current) {
         const v = telemetryValueAt(field, t);
         valueRef.current.textContent =
-          v == null ? "–" : formatValue(fieldKey, v, field.unit);
+          v == null ? '–' : formatValue(fieldKey, v, field.unit);
       }
       if (reducedMotion) return; // static trace is drawn declaratively
 
@@ -146,28 +146,28 @@ const Strip: React.FC<{
       const end = sampleIndexAtOrBefore(samples, t); // last sample at-or-before now
       if (pathRef.current) {
         if (end < 0 || samples.length === 0) {
-          pathRef.current.setAttribute("d", "");
+          pathRef.current.setAttribute('d', '');
         } else {
-          let d = "";
+          let d = '';
           let first = true;
           for (let i = start; i <= end; i++) {
             const x = ((samples[i][0] - t0) / windowMs) * W;
             const y = yOf(samples[i][1]);
-            d += `${first ? "M" : "L"}${x.toFixed(1)} ${y.toFixed(1)}`;
+            d += `${first ? 'M' : 'L'}${x.toFixed(1)} ${y.toFixed(1)}`;
             first = false;
           }
           // Extend the trace to the right edge (the playhead "now") by holding
           // the last value, so the line always reaches the pinned cursor.
           const lastY = yOf(samples[end][1]);
           d += `L${W} ${lastY.toFixed(1)}`;
-          pathRef.current.setAttribute("d", d);
+          pathRef.current.setAttribute('d', d);
         }
       }
     };
 
     render(timeController.getTime());
     if (reducedMotion) return; // no tick subscription under reduced motion
-    const off = timeController.on("tick", render);
+    const off = timeController.on('tick', render);
     return off;
   }, [field, fieldKey, timeController, windowMs, reducedMotion, yOf]);
 
@@ -206,7 +206,7 @@ const Strip: React.FC<{
         )}
         <path
           ref={pathRef}
-          d={reducedMotion ? staticPath : ""}
+          d={reducedMotion ? staticPath : ''}
           fill="none"
           stroke="rgb(94,212,255)"
           strokeWidth={1.5}
@@ -245,9 +245,9 @@ const MetricCharts: React.FC<MetricChartsProps> = ({
     <div
       className={`${
         embedded
-          ? ""
-          : "rounded-lg border border-white/10 bg-black/55 px-3 py-2.5 shadow-xl backdrop-blur-md"
-      } ${className ?? "w-64"}`}
+          ? ''
+          : 'rounded-lg border border-white/10 bg-black/55 px-3 py-2.5 shadow-xl backdrop-blur-md'
+      } ${className ?? 'w-64'}`}
     >
       <div className="flex flex-col gap-2.5">
         {entries.map(([key, field]) => (

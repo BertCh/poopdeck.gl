@@ -23,7 +23,7 @@ Import the shipped stylesheet once and the components render fully styled —
 no Tailwind required in your app:
 
 ```ts
-import "@poopdeck.gl/react/styles.css";
+import '@poopdeck.gl/react/styles.css';
 ```
 
 It contains the utility classes the components use (compiled at package
@@ -35,7 +35,7 @@ the stylesheet, but must register the package for scanning (Tailwind ignores
 `node_modules` by default) and define those tokens themselves:
 
 ```css
-@import "tailwindcss";
+@import 'tailwindcss';
 @source "../node_modules/@poopdeck.gl/react/src";
 ```
 
@@ -83,33 +83,33 @@ const layers = [
 
 ### `UsePlaybackOptions`
 
-| Option | Type | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `timeRange` | `{ start: number; end: number }` | — | Full data span (sim-ms). Drives the clock range and the slider. |
-| `baseSpeed` | `number` | `1000` | Wall-ms → sim-ms base rate at 1× (the controller's `speed`); multiplied by the user's speed preset. |
-| `loop` | `boolean` | `true` | Wrap to the range start at the end. |
-| `initialTime` | `number` | `timeRange.start` | Initial playhead position (clamped into `timeRange`). Mount-time only — a later `timeRange` change resets to the new range start. |
+| Option        | Type                             | Default           | Description                                                                                                                       |
+| :------------ | :------------------------------- | :---------------- | :-------------------------------------------------------------------------------------------------------------------------------- |
+| `timeRange`   | `{ start: number; end: number }` | —                 | Full data span (sim-ms). Drives the clock range and the slider.                                                                   |
+| `baseSpeed`   | `number`                         | `1000`            | Wall-ms → sim-ms base rate at 1× (the controller's `speed`); multiplied by the user's speed preset.                               |
+| `loop`        | `boolean`                        | `true`            | Wrap to the range start at the end.                                                                                               |
+| `initialTime` | `number`                         | `timeRange.start` | Initial playhead position (clamped into `timeRange`). Mount-time only — a later `timeRange` change resets to the new range start. |
 
 ### `PlaybackState` (return value)
 
-| Member | Type | Description |
-| :--- | :--- | :--- |
-| `timeController` | `TimeController` | The shared animation clock. Hand it to layers via `useDeckClock`'s `userData` channel, or pass it directly as a layer's `timeController` prop. |
-| `governor` | `PlaybackGovernor \| null` | The buffer-gating governor (null only on the first paint). Pass to `PlaybackControls`. |
-| `tilesetRef` | `React.MutableRefObject<BufferSource \| null>` | Handle to the first `required` registered tileset (e.g. for polling `getVisibleTiles`). |
-| `currentTime` | `number` | 20 Hz-throttled UI clock (slider/label only, not the layers). |
-| `isPlaying` | `boolean` | User-intent play bit, mirrored from the governor. |
-| `bufferState` | `PlaybackGovernorState` | Governor machine state (`idle`/`starting`/`playing`/`buffering`/`seeking`). |
-| `speedMultiplier` | `number` | Current speed multiplier over `baseSpeed`. |
-| `currentSpeedMultiplier` | `number` | Same value under `PlaybackControls`' prop name, so `<PlaybackControls {...playback} />` spreads cleanly. |
-| `timeRange` | `{ start: number; end: number } \| undefined` | The `timeRange` option echoed back (for the spread). |
-| `autoSpeed` | `boolean` | Whether opt-in Auto speed mode is active. |
-| `overviewPreload` | `OverviewPreloadResult \| null` | Storyboard-tier preload outcome (perf HUD). |
-| `baseAnimationSpeed` | `number` | The resolved `baseSpeed` (defaulted to 1000). |
-| `onPlayPause` / `onSeek` / `onSpeedChange` / `onAutoSpeedSelect` | handlers | Transport callbacks for `PlaybackControls`. |
-| `play` / `pause` | `() => void` | Imperative play/pause for visibility-driven embeds. |
-| `registry` | `SourceRegistry` | Multi-source registration API for the governor — see below. Wire each layer's `onTilesetReady`/`onBufferChange` through it. |
-| `handleOverviewPreload` | `(result: OverviewPreloadResult) => void` | Pass as the layer's overview-preload callback. |
+| Member                                                           | Type                                           | Description                                                                                                                                    |
+| :--------------------------------------------------------------- | :--------------------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------- |
+| `timeController`                                                 | `TimeController`                               | The shared animation clock. Hand it to layers via `useDeckClock`'s `userData` channel, or pass it directly as a layer's `timeController` prop. |
+| `governor`                                                       | `PlaybackGovernor \| null`                     | The buffer-gating governor (null only on the first paint). Pass to `PlaybackControls`.                                                         |
+| `tilesetRef`                                                     | `React.MutableRefObject<BufferSource \| null>` | Handle to the first `required` registered tileset (e.g. for polling `getVisibleTiles`).                                                        |
+| `currentTime`                                                    | `number`                                       | 20 Hz-throttled UI clock (slider/label only, not the layers).                                                                                  |
+| `isPlaying`                                                      | `boolean`                                      | User-intent play bit, mirrored from the governor.                                                                                              |
+| `bufferState`                                                    | `PlaybackGovernorState`                        | Governor machine state (`idle`/`starting`/`playing`/`buffering`/`seeking`).                                                                    |
+| `speedMultiplier`                                                | `number`                                       | Current speed multiplier over `baseSpeed`.                                                                                                     |
+| `currentSpeedMultiplier`                                         | `number`                                       | Same value under `PlaybackControls`' prop name, so `<PlaybackControls {...playback} />` spreads cleanly.                                       |
+| `timeRange`                                                      | `{ start: number; end: number } \| undefined`  | The `timeRange` option echoed back (for the spread).                                                                                           |
+| `autoSpeed`                                                      | `boolean`                                      | Whether opt-in Auto speed mode is active.                                                                                                      |
+| `overviewPreload`                                                | `OverviewPreloadResult \| null`                | Storyboard-tier preload outcome (perf HUD).                                                                                                    |
+| `baseAnimationSpeed`                                             | `number`                                       | The resolved `baseSpeed` (defaulted to 1000).                                                                                                  |
+| `onPlayPause` / `onSeek` / `onSpeedChange` / `onAutoSpeedSelect` | handlers                                       | Transport callbacks for `PlaybackControls`.                                                                                                    |
+| `play` / `pause`                                                 | `() => void`                                   | Imperative play/pause for visibility-driven embeds.                                                                                            |
+| `registry`                                                       | `SourceRegistry`                               | Multi-source registration API for the governor — see below. Wire each layer's `onTilesetReady`/`onBufferChange` through it.                    |
+| `handleOverviewPreload`                                          | `(result: OverviewPreloadResult) => void`      | Pass as the layer's overview-preload callback.                                                                                                 |
 
 ### `SourceRegistry`
 
@@ -118,11 +118,11 @@ The registry classifies every layer's tileset into the governor's N-source gate
 so the clock waits for every `required` source while optional overlays load
 without gating it.
 
-| Member | Type | Description |
-| :--- | :--- | :--- |
-| `registerSource(id, tileset, opts?)` | `(id: string, tileset: BufferSource, opts?: { required?: boolean; weight?: number }) => void` | Register (or replace) one source. `required` (default `true`) gates the clock; `weight` (default `1`) is a bandwidth-share hint. Call from the layer's `onTilesetReady`. |
-| `unregisterSource(id)` | `(id: string) => void` | Drop a source by id (no-op if absent) — call on layer unmount. |
-| `onBufferChange(id, runway)` | `(id: string, runway: BufferedRunway) => void` | Forward the layer's `onBufferChange`. The governor re-probes every registered source itself, so `runway` is advisory — it just triggers an immediate gate/stall re-evaluation. |
+| Member                               | Type                                                                                          | Description                                                                                                                                                                    |
+| :----------------------------------- | :-------------------------------------------------------------------------------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `registerSource(id, tileset, opts?)` | `(id: string, tileset: BufferSource, opts?: { required?: boolean; weight?: number }) => void` | Register (or replace) one source. `required` (default `true`) gates the clock; `weight` (default `1`) is a bandwidth-share hint. Call from the layer's `onTilesetReady`.       |
+| `unregisterSource(id)`               | `(id: string) => void`                                                                        | Drop a source by id (no-op if absent) — call on layer unmount.                                                                                                                 |
+| `onBufferChange(id, runway)`         | `(id: string, runway: BufferedRunway) => void`                                                | Forward the layer's `onBufferChange`. The governor re-probes every registered source itself, so `runway` is advisory — it just triggers an immediate gate/stall re-evaluation. |
 
 `SourceRegistry` mirrors `PlaybackGovernor.addSource`/`removeSource`/
 `notifyBufferChange` one-to-one; see [PlaybackGovernor → Multiple
@@ -152,11 +152,11 @@ const deckClock = useDeckClock(playback.timeController, playback.isPlaying);
 
 ### `DeckClockProps`
 
-| Prop | Type | Description |
-| :--- | :--- | :--- |
-| `_animate` | `boolean` | deck.gl's unconditional-redraw flag. `true` while playing, so `onBeforeRender` fires every frame; `false` while paused (seeks and interactions still redraw through deck's normal path). |
-| `onBeforeRender` | `() => void` | Advances `timeController` by one frame, in lockstep with deck's render loop. |
-| `userData` | `{ stt: { timeController: TimeController } }` | The `context.userData.stt` channel every STT layer reads time from, so layers need no per-layer `timeController` prop. |
+| Prop             | Type                                          | Description                                                                                                                                                                              |
+| :--------------- | :-------------------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `_animate`       | `boolean`                                     | deck.gl's unconditional-redraw flag. `true` while playing, so `onBeforeRender` fires every frame; `false` while paused (seeks and interactions still redraw through deck's normal path). |
+| `onBeforeRender` | `() => void`                                  | Advances `timeController` by one frame, in lockstep with deck's render loop.                                                                                                             |
+| `userData`       | `{ stt: { timeController: TimeController } }` | The `context.userData.stt` channel every STT layer reads time from, so layers need no per-layer `timeController` prop.                                                                   |
 
 ## usePlaybackHotkeys
 
@@ -175,14 +175,14 @@ usePlaybackHotkeys(playback, timeRange, isFullscreen);
 
 `usePlaybackHotkeys(playback: PlaybackState, timeRange: { start, end } | undefined, enabled = true)`
 
-| Key | Action |
-| :--- | :--- |
-| `Space` / `K` | Toggle play–pause |
-| `←` / `→` | Committed seek −/+2 % of the range |
-| `J` / `L` | Committed seek −/+10 % of the range |
-| `Home` / `End` | Jump to range start / end |
-| `↑` / `↓` | Step speed up / down the shared preset ladder |
-| `0`–`9` | Jump to N×10 % of the range |
+| Key            | Action                                        |
+| :------------- | :-------------------------------------------- |
+| `Space` / `K`  | Toggle play–pause                             |
+| `←` / `→`      | Committed seek −/+2 % of the range            |
+| `J` / `L`      | Committed seek −/+10 % of the range           |
+| `Home` / `End` | Jump to range start / end                     |
+| `↑` / `↓`      | Step speed up / down the shared preset ladder |
+| `0`–`9`        | Jump to N×10 % of the range                   |
 
 Held keys auto-repeat; committed seeks are rate-capped to ~6/s so a held arrow is
 a stream of seeks, not a `flushPrefetch` storm.
@@ -200,7 +200,7 @@ exposes the speed under both `speedMultiplier` and `currentSpeedMultiplier`:
 ```tsx
 import { PlaybackControls } from '@poopdeck.gl/react';
 
-<PlaybackControls {...playback} />
+<PlaybackControls {...playback} />;
 ```
 
 Or pass the props individually to interpose on any of them:
@@ -224,28 +224,28 @@ Or pass the props individually to interpose on any of them:
 
 ### `PlaybackControlsProps`
 
-| Prop | Type | Description |
-| :--- | :--- | :--- |
-| `currentTime` | `number` | Current playhead (sim-ms); the throttled UI clock. |
-| `timeRange` | `{ start: number; end: number }` | Full data range; drives the bar geometry and slider bounds. |
-| `isPlaying` | `boolean` | User intent — drives the play/pause glyph. |
-| `bufferState` | `PlaybackGovernorState` | Governor machine state — drives the buffering chip. |
-| `governor` | `PlaybackGovernor \| null` | Scrub previews/commits target it directly; null falls back to `onSeek`. |
-| `onPlayPause` | `() => void` | Toggle play/pause. |
-| `onSeek` | `(time: number) => void` | Committed seek (keyboard arrows on the slider, jump-to-start). |
-| `onSpeedChange` | `(multiplier: number) => void` | Speed preset / slider change. |
-| `currentSpeedMultiplier` | `number` | Active speed multiplier (lights the matching preset). |
-| `targetPlaybackSeconds` | `number` | Optional (default `60`). Wall-seconds the dataset plays in at 1× — drives the "time left" readout. |
-| `autoSpeed` | `boolean` | Whether Auto speed mode is active. |
-| `onAutoSpeedSelect` | `() => void` | Select Auto speed (any explicit choice exits it). |
-| `renderPreview` | `(time: number) => React.ReactNode` | Optional. When supplied, a "Preview" toggle appears; hovering the scrubber renders the map at the settled hovered time. Pair with `HoverPreview`. |
+| Prop                     | Type                                | Description                                                                                                                                       |
+| :----------------------- | :---------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `currentTime`            | `number`                            | Current playhead (sim-ms); the throttled UI clock.                                                                                                |
+| `timeRange`              | `{ start: number; end: number }`    | Full data range; drives the bar geometry and slider bounds.                                                                                       |
+| `isPlaying`              | `boolean`                           | User intent — drives the play/pause glyph.                                                                                                        |
+| `bufferState`            | `PlaybackGovernorState`             | Governor machine state — drives the buffering chip.                                                                                               |
+| `governor`               | `PlaybackGovernor \| null`          | Scrub previews/commits target it directly; null falls back to `onSeek`.                                                                           |
+| `onPlayPause`            | `() => void`                        | Toggle play/pause.                                                                                                                                |
+| `onSeek`                 | `(time: number) => void`            | Committed seek (keyboard arrows on the slider, jump-to-start).                                                                                    |
+| `onSpeedChange`          | `(multiplier: number) => void`      | Speed preset / slider change.                                                                                                                     |
+| `currentSpeedMultiplier` | `number`                            | Active speed multiplier (lights the matching preset).                                                                                             |
+| `targetPlaybackSeconds`  | `number`                            | Optional (default `60`). Wall-seconds the dataset plays in at 1× — drives the "time left" readout.                                                |
+| `autoSpeed`              | `boolean`                           | Whether Auto speed mode is active.                                                                                                                |
+| `onAutoSpeedSelect`      | `() => void`                        | Select Auto speed (any explicit choice exits it).                                                                                                 |
+| `renderPreview`          | `(time: number) => React.ReactNode` | Optional. When supplied, a "Preview" toggle appears; hovering the scrubber renders the map at the settled hovered time. Pair with `HoverPreview`. |
 
 ## HoverPreview
 
 The generic frozen-clock thumbnail: a second, independent `DeckGL` instance that
 renders your layers at a single frozen timestamp, mirroring a supplied camera —
 the render produced by `PlaybackControls`' `renderPreview` render-prop. It is
-renderer-agnostic about *what* it draws: you supply `buildLayers(controller)`
+renderer-agnostic about _what_ it draws: you supply `buildLayers(controller)`
 (the frozen clock is handed in so your time-filtered layers read from it), the
 `viewState`/`views`, the card size, and an optional `basemapUrl` drawn behind the
 transparent deck canvas. It is a second WebGL context + archive for the same
@@ -269,17 +269,17 @@ renderPreview={(time) => (
 
 ### `HoverPreviewProps`
 
-| Prop | Type | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `time` | `number` | — | Settled hovered timestamp (sim-ms). |
-| `timeRange` | `{ start: number; end: number }` | — | Full data range; seeds the frozen clock. |
-| `buildLayers` | `(controller: TimeController) => unknown[]` | — | Builds the layers to render; the frozen preview clock is passed in. Called once per mount. |
-| `viewState` | `unknown` | — | deck.gl viewState (camera) to render at. |
-| `views` | `unknown` | — | deck.gl views (e.g. a `GlobeView`). Omit for the default map view. |
-| `width` / `height` | `number` | — | Card dimensions (px) — match the live viewport's aspect ratio. |
-| `basemapUrl` | `string \| null` | — | Optional basemap image drawn behind the transparent deck canvas. |
-| `background` | `string` | `"#242730"` | Background behind everything. |
-| `parameters` | `unknown` | — | Forwarded to DeckGL `parameters` (e.g. `{ cull: true }` on a globe). |
+| Prop               | Type                                        | Default     | Description                                                                                |
+| :----------------- | :------------------------------------------ | :---------- | :----------------------------------------------------------------------------------------- |
+| `time`             | `number`                                    | —           | Settled hovered timestamp (sim-ms).                                                        |
+| `timeRange`        | `{ start: number; end: number }`            | —           | Full data range; seeds the frozen clock.                                                   |
+| `buildLayers`      | `(controller: TimeController) => unknown[]` | —           | Builds the layers to render; the frozen preview clock is passed in. Called once per mount. |
+| `viewState`        | `unknown`                                   | —           | deck.gl viewState (camera) to render at.                                                   |
+| `views`            | `unknown`                                   | —           | deck.gl views (e.g. a `GlobeView`). Omit for the default map view.                         |
+| `width` / `height` | `number`                                    | —           | Card dimensions (px) — match the live viewport's aspect ratio.                             |
+| `basemapUrl`       | `string \| null`                            | —           | Optional basemap image drawn behind the transparent deck canvas.                           |
+| `background`       | `string`                                    | `"#242730"` | Background behind everything.                                                              |
+| `parameters`       | `unknown`                                   | —           | Forwarded to DeckGL `parameters` (e.g. `{ cull: true }` on a globe).                       |
 
 ## Source
 

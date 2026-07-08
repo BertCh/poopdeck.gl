@@ -48,7 +48,12 @@
  */
 
 import { LayerExtension } from '@deck.gl/core';
-import type { Layer, LayerContext, Accessor, DefaultProps } from '@deck.gl/core';
+import type {
+  Layer,
+  LayerContext,
+  Accessor,
+  DefaultProps,
+} from '@deck.gl/core';
 import { warnOnce } from '../lib/log.js';
 
 /** An inclusive `[min, max]` filter bound. */
@@ -165,7 +170,12 @@ const defaultProps: DefaultProps<DataFilterExtensionProps> = {
   // Permissive {type:'object'} descriptor: these hold a [min,max] tuple OR null,
   // which the 'array' validator would reject (null) in deck's debug mode.
   filterRange: { type: 'object', value: null, optional: true, compare: true },
-  filterSoftRange: { type: 'object', value: null, optional: true, compare: true },
+  filterSoftRange: {
+    type: 'object',
+    value: null,
+    optional: true,
+    compare: true,
+  },
   filterTransformSize: true,
   filterTransformColor: true,
   // Constant fallback for the `filterValue` attribute (tiles missing the column).
@@ -233,7 +243,10 @@ export class DataFilterExtension extends LayerExtension<
     super({ ...defaultOptions, ...options, filterSize: 1 });
   }
 
-  getShaders(this: Layer<DataFilterExtensionProps>, extension: DataFilterExtension) {
+  getShaders(
+    this: Layer<DataFilterExtensionProps>,
+    extension: DataFilterExtension,
+  ) {
     if (extension.cachedShaders) return extension.cachedShaders;
     const shaders = {
       modules: [dataFilterUniforms],
@@ -368,8 +381,12 @@ export class DataFilterExtension extends LayerExtension<
       // With no soft range, collapse soft edges onto the hard edges so the
       // shader's soft branch (if ever taken) is a no-op; `useSoftMargin` gates
       // it off anyway.
-      filterSoftMin: useSoft ? (filterSoftRange as DataFilterRange)[0] : filterMin,
-      filterSoftMax: useSoft ? (filterSoftRange as DataFilterRange)[1] : filterMax,
+      filterSoftMin: useSoft
+        ? (filterSoftRange as DataFilterRange)[0]
+        : filterMin,
+      filterSoftMax: useSoft
+        ? (filterSoftRange as DataFilterRange)[1]
+        : filterMax,
       enabled: active ? 1.0 : 0.0,
       useSoftMargin: useSoft ? 1.0 : 0.0,
       transformSize: filterTransformSize ? 1.0 : 0.0,

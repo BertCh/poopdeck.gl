@@ -10,7 +10,7 @@
  * the exact same chrome (same styling, same slider semantics) without growing a
  * cross-import into the demo viewer. Keep the two visually in sync.
  */
-import React from "react";
+import React from 'react';
 
 export const CubeControls: React.FC<{
   heightFactor: number;
@@ -25,25 +25,25 @@ export const CubeControls: React.FC<{
   onHeightFactor,
   showLattice,
   onShowLattice,
-  label = "TIME = HEIGHT",
+  label = 'TIME = HEIGHT',
 }) => {
   return (
     <div
       className="rounded px-3 py-2 flex flex-col gap-1.5"
       style={{
-        background: "rgba(36, 39, 48, 0.95)",
-        border: "1px solid #3A414C",
+        background: 'rgba(36, 39, 48, 0.95)',
+        border: '1px solid #3A414C',
         minWidth: 170,
       }}
     >
       <div
         className="text-[10px] font-semibold tracking-widest"
-        style={{ color: "#A0A7B4" }}
+        style={{ color: '#A0A7B4' }}
       >
         {label}
       </div>
       <div className="flex items-center gap-2">
-        <span className="text-[10px]" style={{ color: "#6B7280" }}>
+        <span className="text-[10px]" style={{ color: '#6B7280' }}>
           flat
         </span>
         <input
@@ -53,23 +53,23 @@ export const CubeControls: React.FC<{
           value={Math.round(heightFactor * 100)}
           onChange={(e) => onHeightFactor(Number(e.target.value) / 100)}
           className="flex-1"
-          style={{ accentColor: "#1FBAD6" }}
+          style={{ accentColor: '#1FBAD6' }}
           aria-label="Time-as-height squash factor"
         />
-        <span className="text-[10px]" style={{ color: "#6B7280" }}>
+        <span className="text-[10px]" style={{ color: '#6B7280' }}>
           cube
         </span>
       </div>
       {onShowLattice && (
         <label
           className="flex items-center gap-1.5 text-[11px] cursor-pointer select-none"
-          style={{ color: "#A0A7B4" }}
+          style={{ color: '#A0A7B4' }}
         >
           <input
             type="checkbox"
             checked={!!showLattice}
             onChange={(e) => onShowLattice(e.target.checked)}
-            style={{ accentColor: "#1FBAD6" }}
+            style={{ accentColor: '#1FBAD6' }}
           />
           STT tile lattice
         </label>

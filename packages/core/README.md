@@ -17,16 +17,22 @@ and `fzstd`.
 ## Hello world — open an archive, decode a tile
 
 ```ts
-import { STTArchive } from "@poopdeck.gl/core";
+import { STTArchive } from '@poopdeck.gl/core';
 
-const archive = new STTArchive("https://tiles.example.com/earthquakes/manifest.json");
+const archive = new STTArchive(
+  'https://tiles.example.com/earthquakes/manifest.json',
+);
 const meta = await archive.getMetadata();
 
 // Tile ids are {z, x, y, t} — t is the temporal-bucket start (Unix ms).
-const ids = await archive.getTileIdsInBounds(meta.bounds, meta.minZoom, meta.timeRange);
+const ids = await archive.getTileIdsInBounds(
+  meta.bounds,
+  meta.minZoom,
+  meta.timeRange,
+);
 const tile = await archive.getTile(ids[0]); // fetched, decompressed, decoded
 for (const layer of tile?.layers ?? []) {
-  console.log(layer.name, layer.features.featureCount, "features");
+  console.log(layer.name, layer.features.featureCount, 'features');
 }
 ```
 
@@ -34,8 +40,8 @@ For streaming a live viewport + playhead (selection, prefetch, eviction,
 buffered-runway events), wrap the archive in a `SpatiotemporalTileset`:
 
 ```ts
-import { SpatiotemporalTileset } from "@poopdeck.gl/core";
-import { makeTilesetCallbacks } from "@poopdeck.gl/core/tileset-adapter";
+import { SpatiotemporalTileset } from '@poopdeck.gl/core';
+import { makeTilesetCallbacks } from '@poopdeck.gl/core/tileset-adapter';
 
 const tileset = new SpatiotemporalTileset({
   minZoom: meta.minZoom,

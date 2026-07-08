@@ -45,7 +45,11 @@ function truncate(s: string): string {
  * directories — handles the server being launched with a CWD anywhere
  * inside the repo (or pointed at a data-root several levels under it).
  */
-function findInCargoTarget(name: string, startDir: string, maxUp = 8): string | undefined {
+function findInCargoTarget(
+  name: string,
+  startDir: string,
+  maxUp = 8,
+): string | undefined {
   let dir = path.resolve(startDir);
   for (let i = 0; i <= maxUp; i++) {
     const exeName = process.platform === 'win32' ? `${name}.exe` : name;
@@ -64,7 +68,11 @@ function findInCargoTarget(name: string, startDir: string, maxUp = 8): string | 
  * (PATH lookup, performed by `spawn` itself — no error here even if it's
  * not actually on PATH, that surfaces as an ENOENT from `run()`).
  */
-export function resolveBinary(name: string, override: string | undefined, searchRoots: string[]): string {
+export function resolveBinary(
+  name: string,
+  override: string | undefined,
+  searchRoots: string[],
+): string {
   if (override) return override;
   for (const root of searchRoots) {
     const found = findInCargoTarget(name, root);
@@ -114,7 +122,10 @@ export function run(
     let stderr = '';
     let timedOut = false;
     let aborted = false;
-    const child = spawn(bin, args, { cwd: options.cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(bin, args, {
+      cwd: options.cwd,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
 
     const timer = setTimeout(() => {
       timedOut = true;
@@ -146,7 +157,9 @@ export function run(
         exitCode: null,
         signal: null,
         stdout: truncate(stdout),
-        stderr: truncate(`${stderr}\n${err instanceof Error ? err.message : String(err)}`),
+        stderr: truncate(
+          `${stderr}\n${err instanceof Error ? err.message : String(err)}`,
+        ),
         timedOut,
         aborted,
         durationMs: Date.now() - start,

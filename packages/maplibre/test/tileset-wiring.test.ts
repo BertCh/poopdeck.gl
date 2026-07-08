@@ -44,7 +44,11 @@ function makeStubArchive() {
 }
 
 async function initLayer(extraOpts: Record<string, unknown> = {}) {
-  const layer = new STTPointLayer({ ...baseOpts, id: 'p', ...extraOpts }) as any;
+  const layer = new STTPointLayer({
+    ...baseOpts,
+    id: 'p',
+    ...extraOpts,
+  }) as any;
   const archive = makeStubArchive();
   layer.archive = archive;
   layer.map = makeMockMap();

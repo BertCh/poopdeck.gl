@@ -106,7 +106,9 @@ export class TripHeadsLayer extends BaseSttLayer {
     this.index = buildTripIndex(tiles, ctx.projection, ctx.timeOrigin);
     // RTC: parent the geometry under the index origin so the small f32 offsets
     // resolve to absolute world coords (no-op ~0 for the ENU/AV frame).
-    this.object.position.set(...(this.index.origin as [number, number, number]));
+    this.object.position.set(
+      ...(this.index.origin as [number, number, number]),
+    );
     // Worst-case instance count = every trip active at once.
     this.ensureCapacity(this.index.trips.length);
   }
@@ -130,7 +132,9 @@ export class TripHeadsLayer extends BaseSttLayer {
 
     // Only the moved `sttCenter` buffer needs re-upload; colour/time are static
     // (`none` mode = alpha 1, one colour for all heads).
-    const centerAttr = geom.getAttribute('sttCenter') as InstancedBufferAttribute;
+    const centerAttr = geom.getAttribute(
+      'sttCenter',
+    ) as InstancedBufferAttribute;
     centerAttr.needsUpdate = true;
 
     this.pushUniforms();
@@ -154,7 +158,10 @@ export class TripHeadsLayer extends BaseSttLayer {
     }
 
     const geom = this.geom;
-    geom.setAttribute('sttCenter', new InstancedBufferAttribute(this.centers, 3));
+    geom.setAttribute(
+      'sttCenter',
+      new InstancedBufferAttribute(this.centers, 3),
+    );
     geom.setAttribute('sttColor', new InstancedBufferAttribute(this.colors, 4));
     geom.setAttribute('sttStart', new InstancedBufferAttribute(this.times, 1));
     geom.setAttribute('sttEnd', new InstancedBufferAttribute(this.times, 1));

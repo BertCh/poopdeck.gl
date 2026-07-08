@@ -31,14 +31,14 @@ export async function settle(page, { initialLoadMs = 10_000 } = {}) {
 /** Click the play button (▶) if it's currently paused. */
 async function clickPlay(page) {
   const btn = page.locator('button:has-text("▶")').first();
-  if (await btn.count() === 0) return; // already playing
+  if ((await btn.count()) === 0) return; // already playing
   await btn.click();
 }
 
 /** Click the pause button (⏸) if it's currently playing. */
 async function clickPause(page) {
   const btn = page.locator('button:has-text("⏸")').first();
-  if (await btn.count() === 0) return; // already paused
+  if ((await btn.count()) === 0) return; // already paused
   await btn.click();
 }
 
@@ -49,7 +49,10 @@ async function clickPause(page) {
  * sustained ~6-second window AFTER initial warmup. Long tasks here usually
  * indicate consolidation rebuilds or main-thread decode contention.
  */
-export async function playback(page, { durationMs = 6_000, label = 'playback' } = {}) {
+export async function playback(
+  page,
+  { durationMs = 6_000, label = 'playback' } = {},
+) {
   await clickPlay(page);
   // Let animation reach steady-state (the tileset prefetch warms up over a
   // couple of ticks; sampling immediately captures cold-start cost).
@@ -70,7 +73,10 @@ export async function playback(page, { durationMs = 6_000, label = 'playback' } 
  *  - a layer extension whose draw() does work unconditionally
  *  - a setNeedsRedraw() called from a setInterval/setTimeout
  */
-export async function pausedIdle(page, { durationMs = 4_000, label = 'paused-idle' } = {}) {
+export async function pausedIdle(
+  page,
+  { durationMs = 4_000, label = 'paused-idle' } = {},
+) {
   await clickPause(page);
   // Settle so any in-flight tile loads don't bleed into the sample.
   await page.waitForTimeout(1_500);
@@ -94,7 +100,10 @@ export async function pausedIdle(page, { durationMs = 4_000, label = 'paused-idl
  * shortcuts aren't bound in the showcase. The wheel deltaY is negative to
  * zoom in (browser scrolls toward the cursor).
  */
-export async function zoom(page, { steps = 6, perStepMs = 800, label = 'zoom' } = {}) {
+export async function zoom(
+  page,
+  { steps = 6, perStepMs = 800, label = 'zoom' } = {},
+) {
   await clickPause(page);
   const canvas = page.locator('.map-viewport canvas').first();
   const box = await canvas.boundingBox();

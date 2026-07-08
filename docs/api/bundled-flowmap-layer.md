@@ -13,7 +13,7 @@ Each edge is resampled to `subdivisionPoints` control points, then **15 annealed
 1. **Splat** — additively rasterize an Epanechnikov kernel of bandwidth `h` at every control point into a density texture (a kernel-density estimate of where edges are).
 2. **Advect** — move each interior control point a step along the **normalized density gradient** (toward where neighbouring edges already are — this is mean-shift).
 3. **Resample** — redistribute each edge's points to uniform spacing (advection bunches them).
-4. **Smooth** — one 1D Laplacian pass along each edge. *This is what makes the bundles smooth* — advection alone is jagged.
+4. **Smooth** — one 1D Laplacian pass along each edge. _This is what makes the bundles smooth_ — advection alone is jagged.
 5. **Anneal** — shrink the kernel bandwidth and repeat, progressively tightening the bundles.
 
 The bundle is a **stable spatial skeleton**: computed once per tile from the fixed edge set (not weighted by the playhead, so the rivers don't writhe as you scrub) and kept resident on the GPU. As the time slider moves, only each ribbon's **width** animates — sampled on the GPU from a per-tile `vertexValueMatrix` texture at the live playhead, so the edges need zero per-frame CPU work. Direction reads from a source→target **color gradient** along each river. Node circles keep `FlowmapLayer`'s cheap CPU aggregation.
@@ -32,7 +32,7 @@ import { BundledFlowmapLayer } from '@poopdeck.gl/layers';
 const layer = new BundledFlowmapLayer({
   id: 'bixi-flowmap-bundled',
   data: '/data/bixi-flowmap/manifest.json',
-  currentTime,                       // driven live from the TimeController
+  currentTime, // driven live from the TimeController
   timeController,
   // FlowmapLayer styling (identical):
   widthScale: 1.1,
@@ -43,10 +43,10 @@ const layer = new BundledFlowmapLayer({
   nodeRadiusScale: 1.3,
   minFlow: 0.5,
   // KDEEB bundling tuning:
-  subdivisionPoints: 48,             // control points per edge (smoother curves)
-  kernelRadius: 0.05,                // kernel bandwidth as a fraction of the tile
-  bundlingIterations: 15,            // density-advection iterations
-  smoothingStrength: 0.5,            // per-iteration Laplacian smoothing
+  subdivisionPoints: 48, // control points per edge (smoother curves)
+  kernelRadius: 0.05, // kernel bandwidth as a fraction of the tile
+  bundlingIterations: 15, // density-advection iterations
+  smoothingStrength: 0.5, // per-iteration Laplacian smoothing
 });
 ```
 
@@ -56,13 +56,13 @@ Inherits everything from [`FlowmapLayer`](./flowmap-layer.md) (and therefore [`S
 
 ### Bundling (KDEEB)
 
-| Prop | Type | Default | Description |
-|------|------|---------|-------------|
-| `subdivisionPoints` | `number` | `48` | Control points per edge (P). Higher = smoother, more sharply-defined rivers; more GPU work. |
-| `kernelRadius` | `number` | `0.05` | Initial kernel bandwidth as a fraction of the tile's extent — the headline knob. Larger bundles flows together more aggressively (the CUBu literature default is 5%). |
-| `bundlingIterations` | `number` | `15` | Number of density-advection iterations. More = tighter bundles (10–15 converges). |
-| `smoothingStrength` | `number` | `0.5` | Per-iteration Laplacian smoothing strength in `[0,1]`. Higher = smoother (but over-smoothing washes out structure). |
-| `maxBundledEdges` | `number` | `4000` | Above this many edges per tile, skip bundling and render straight arrows (keeps the per-frame density splat bounded). |
+| Prop                 | Type     | Default | Description                                                                                                                                                           |
+| -------------------- | -------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `subdivisionPoints`  | `number` | `48`    | Control points per edge (P). Higher = smoother, more sharply-defined rivers; more GPU work.                                                                           |
+| `kernelRadius`       | `number` | `0.05`  | Initial kernel bandwidth as a fraction of the tile's extent — the headline knob. Larger bundles flows together more aggressively (the CUBu literature default is 5%). |
+| `bundlingIterations` | `number` | `15`    | Number of density-advection iterations. More = tighter bundles (10–15 converges).                                                                                     |
+| `smoothingStrength`  | `number` | `0.5`   | Per-iteration Laplacian smoothing strength in `[0,1]`. Higher = smoother (but over-smoothing washes out structure).                                                   |
+| `maxBundledEdges`    | `number` | `4000`  | Above this many edges per tile, skip bundling and render straight arrows (keeps the per-frame density splat bounded).                                                 |
 
 ## Baked bundling (`preBundled`)
 
@@ -76,7 +76,7 @@ const layer = new BundledFlowmapLayer({
   id: 'bixi-flowmap-baked',
   data: '/data/bixi-flowmap-baked/manifest.json',
   preBundled: true,
-  subdivisionPoints: 24,   // MUST match the build's --bundle-points
+  subdivisionPoints: 24, // MUST match the build's --bundle-points
   // …all the same flow* styling props
 });
 ```
@@ -88,14 +88,14 @@ polylines. The layer skips the GPU bundler entirely: it uploads the baked contro
 points once (`StaticBundle`) and renders them. `kernelRadius`,
 `bundlingIterations`, `smoothingStrength`, and `maxBundledEdges` are ignored.
 
-| | Live (default) | Baked (`preBundled`) |
-|---|---|---|
-| Bundling cost | per-frame relaxation (~15 frames to settle) | none — final on load |
+|                | Live (default)                                         | Baked (`preBundled`)                                                                          |
+| -------------- | ------------------------------------------------------ | --------------------------------------------------------------------------------------------- |
+| Bundling cost  | per-frame relaxation (~15 frames to settle)            | none — final on load                                                                          |
 | Device support | needs `EXT_float_blend` (else straight-arrow fallback) | needs only float-texture **sampling** (`isStaticBundleSupported`) — works on more mobile GPUs |
-| Stability | re-bundles when the visible tile set changes | fixed at build time — stable under pan/zoom |
-| Tuning | interactive (`kernelRadius` etc.) | fixed at build (`--bundle-*` flags) |
-| Reproducible | n/a | yes (uniform step, pinned density resolution) |
-| Wire size | small (2-vertex OD tiles) | larger (multi-vertex polylines) |
+| Stability      | re-bundles when the visible tile set changes           | fixed at build time — stable under pan/zoom                                                   |
+| Tuning         | interactive (`kernelRadius` etc.)                      | fixed at build (`--bundle-*` flags)                                                           |
+| Reproducible   | n/a                                                    | yes (uniform step, pinned density resolution)                                                 |
+| Wire size      | small (2-vertex OD tiles)                              | larger (multi-vertex polylines)                                                               |
 
 `subdivisionPoints` must equal the build's `--bundle-points` so each baked vertex
 is sampled exactly. When the device can't sample a float texture the layer

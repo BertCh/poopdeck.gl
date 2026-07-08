@@ -53,7 +53,12 @@ function makeLayer(update: ReturnType<typeof vi.fn>) {
     Object.assign(this.state, s);
   };
   // Isolate the throttle from the bounds/zoom/tile plumbing.
-  layer.getViewportBounds = () => ({ minLon: 0, minLat: 0, maxLon: 1, maxLat: 1 });
+  layer.getViewportBounds = () => ({
+    minLon: 0,
+    minLat: 0,
+    maxLon: 1,
+    maxLat: 1,
+  });
   layer.getZoomLevel = () => 6;
   layer.getEffectiveTimeWindow = () => 2000;
   layer._tilesChanged = () => false;
@@ -62,7 +67,11 @@ function makeLayer(update: ReturnType<typeof vi.fn>) {
   return layer;
 }
 
-const viewportChange = { viewportChanged: true, propsChanged: false, dataChanged: false };
+const viewportChange = {
+  viewportChanged: true,
+  propsChanged: false,
+  dataChanged: false,
+};
 
 describe('SpatioTemporalLayer viewport throttle', () => {
   beforeEach(() => {

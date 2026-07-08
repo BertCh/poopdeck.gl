@@ -1,5 +1,5 @@
-import React from "react";
-import { useReducedMotion } from "../../lib/reducedMotion";
+import React from 'react';
+import { useReducedMotion } from '../../lib/reducedMotion';
 
 /**
  * The space-time cube figure: a tile blob's address has three axes — (x, y)
@@ -20,9 +20,9 @@ import { useReducedMotion } from "../../lib/reducedMotion";
 const MONO =
   "ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Monaco, Consolas, monospace";
 
-const WARM = "rgba(240, 193, 75, 0.9)";
-const WARM_SOFT = "rgba(240, 193, 75, 0.16)";
-const WARM_INK = "#8a5a0a";
+const WARM = 'rgba(240, 193, 75, 0.9)';
+const WARM_SOFT = 'rgba(240, 193, 75, 0.16)';
+const WARM_INK = '#8a5a0a';
 
 /* ── Curve math (ports of stt-core/src/curve.rs) ──────────────────────── */
 
@@ -98,38 +98,55 @@ const BITS = 2;
 const CELLS = N * N * T;
 const SEGS = CELLS - 1;
 
-const H2: [number, number][] = Array.from({ length: N * N }, (_, d) => hilbert2(2, d));
+const H2: [number, number][] = Array.from({ length: N * N }, (_, d) =>
+  hilbert2(2, d),
+);
 
 const ALL: Cell[] = [];
-for (let x = 0; x < N; x++) for (let y = 0; y < N; y++) for (let t = 0; t < T; t++) ALL.push({ x, y, t });
+for (let x = 0; x < N; x++)
+  for (let y = 0; y < N; y++) for (let t = 0; t < T; t++) ALL.push({ x, y, t });
 
 const key = (c: Cell) => `${c.x},${c.y},${c.t}`;
 
-type OrderKey = "spatial" | "hilbert3" | "time";
-type GestureKey = "play" | "pan" | "panPlay" | "zoom" | "preload";
+type OrderKey = 'spatial' | 'hilbert3' | 'time';
+type GestureKey = 'play' | 'pan' | 'panPlay' | 'zoom' | 'preload';
 
-const ORDER_KEYS: OrderKey[] = ["spatial", "hilbert3", "time"];
-const GESTURE_KEYS: GestureKey[] = ["play", "pan", "panPlay", "zoom", "preload"];
+const ORDER_KEYS: OrderKey[] = ['spatial', 'hilbert3', 'time'];
+const GESTURE_KEYS: GestureKey[] = [
+  'play',
+  'pan',
+  'panPlay',
+  'zoom',
+  'preload',
+];
 
 const ORDER_LABEL: Record<OrderKey, string> = {
-  spatial: "spatial",
-  hilbert3: "hilbert3",
-  time: "time",
+  spatial: 'spatial',
+  hilbert3: 'hilbert3',
+  time: 'time',
 };
 
 const ORDERS: Record<OrderKey, Cell[]> = {
-  spatial: H2.flatMap(([x, y]) => Array.from({ length: T }, (_, t) => ({ x, y, t }))),
-  hilbert3: [...ALL].sort((a, b) => hilbert3(a.x, a.y, a.t, BITS) - hilbert3(b.x, b.y, b.t, BITS)),
-  time: Array.from({ length: T }, (_, t) => t).flatMap((t) => H2.map(([x, y]) => ({ x, y, t }))),
+  spatial: H2.flatMap(([x, y]) =>
+    Array.from({ length: T }, (_, t) => ({ x, y, t })),
+  ),
+  hilbert3: [...ALL].sort(
+    (a, b) => hilbert3(a.x, a.y, a.t, BITS) - hilbert3(b.x, b.y, b.t, BITS),
+  ),
+  time: Array.from({ length: T }, (_, t) => t).flatMap((t) =>
+    H2.map(([x, y]) => ({ x, y, t })),
+  ),
 };
 
-const manhattan = (a: Cell, b: Cell) => Math.abs(a.x - b.x) + Math.abs(a.y - b.y) + Math.abs(a.t - b.t);
+const manhattan = (a: Cell, b: Cell) =>
+  Math.abs(a.x - b.x) + Math.abs(a.y - b.y) + Math.abs(a.t - b.t);
 
 /** Jumps in the walk — consecutive blobs that are NOT grid neighbours. */
 const SEEKS: Record<OrderKey, number> = Object.fromEntries(
   ORDER_KEYS.map((k) => [
     k,
-    ORDERS[k].slice(1).filter((c, i) => manhattan(ORDERS[k][i], c) !== 1).length,
+    ORDERS[k].slice(1).filter((c, i) => manhattan(ORDERS[k][i], c) !== 1)
+      .length,
   ]),
 ) as Record<OrderKey, number>;
 
@@ -139,7 +156,12 @@ const SEEKS: Record<OrderKey, number> = Object.fromEntries(
 // quadrant the 2D walk fills, so scrubbing it is one contiguous run under the
 // time-deep spatial walk (that's the whole point).
 const VIEWPORT = H2.slice(0, 4);
-const QUADS = [H2.slice(0, 4), H2.slice(4, 8), H2.slice(8, 12), H2.slice(12, 16)];
+const QUADS = [
+  H2.slice(0, 4),
+  H2.slice(4, 8),
+  H2.slice(8, 12),
+  H2.slice(12, 16),
+];
 const TAP = H2[8]; // a central tile — the one a click warms
 
 const box = (x: number, y: number): [number, number][] => [
@@ -148,7 +170,8 @@ const box = (x: number, y: number): [number, number][] => [
   [x, y + 1],
   [x + 1, y + 1],
 ];
-const at = (xy: [number, number][], t: number): Cell[] => xy.map(([x, y]) => ({ x, y, t }));
+const at = (xy: [number, number][], t: number): Cell[] =>
+  xy.map(([x, y]) => ({ x, y, t }));
 const allAt = (t: number): Cell[] => H2.map(([x, y]) => ({ x, y, t }));
 
 interface Interaction {
@@ -160,27 +183,27 @@ interface Interaction {
 
 const INTERACTIONS: Record<GestureKey, Interaction> = {
   play: {
-    label: "play",
-    short: "play",
+    label: 'play',
+    short: 'play',
     blurb: (
       <>
         Fixed viewport, the playhead runs forward — the classic playback loop.
         Each visible tile wants its <em>whole timeline</em> in one pull, so the
         time-deep <span className="font-mono">spatial</span> walk (and the 3D
-        generalist) read it as a single run; <span className="font-mono">time</span>-major
-        seeks on every tick.
+        generalist) read it as a single run;{' '}
+        <span className="font-mono">time</span>-major seeks on every tick.
       </>
     ),
     frames: [0, 1, 2, 3].map((t) => at(VIEWPORT, t)),
   },
   pan: {
-    label: "pan",
-    short: "pan",
+    label: 'pan',
+    short: 'pan',
     blurb: (
       <>
-        Frozen playhead, drag across the map. Now you want one whole{" "}
-        <em>instant</em> contiguous — <span className="font-mono">time</span>-major
-        delivers it in a single run, while the time-deep{" "}
+        Frozen playhead, drag across the map. Now you want one whole{' '}
+        <em>instant</em> contiguous — <span className="font-mono">time</span>
+        -major delivers it in a single run, while the time-deep{' '}
         <span className="font-mono">spatial</span> walk shatters into a read per
         tile.
       </>
@@ -188,42 +211,48 @@ const INTERACTIONS: Record<GestureKey, Interaction> = {
     frames: QUADS.map((q) => at(q, 1)),
   },
   panPlay: {
-    label: "pan + play",
-    short: "pan+play",
+    label: 'pan + play',
+    short: 'pan+play',
     blurb: (
       <>
         Drag across the map <em>while it plays</em> — moving through space and
-        time at once. Only the 3D <span className="font-mono">hilbert3</span> walk
-        keeps consecutive reads local here; the pure-space and pure-time walks
-        each fragment along the axis they ignore. This is why the cube walk is
-        the default generalist.
+        time at once. Only the 3D <span className="font-mono">hilbert3</span>{' '}
+        walk keeps consecutive reads local here; the pure-space and pure-time
+        walks each fragment along the axis they ignore. This is why the cube
+        walk is the default generalist.
       </>
     ),
-    frames: [at(box(0, 0), 0), at(box(1, 1), 1), at(box(2, 2), 2), at(box(2, 2), 3)],
+    frames: [
+      at(box(0, 0), 0),
+      at(box(1, 1), 1),
+      at(box(2, 2), 2),
+      at(box(2, 2), 3),
+    ],
   },
   zoom: {
-    label: "zoom + play",
-    short: "zoom+play",
+    label: 'zoom + play',
+    short: 'zoom+play',
     blurb: (
       <>
         Pull back to an overview, then dive in as it plays. The wide overview
-        frame is one big single-instant read — cheap for{" "}
+        frame is one big single-instant read — cheap for{' '}
         <span className="font-mono">time</span>-major and the cube walk, but the
-        time-deep walk fetches it a tile at a time. Zoom changes the{" "}
+        time-deep walk fetches it a tile at a time. Zoom changes the{' '}
         <em>size</em> of each read, not just the count.
       </>
     ),
     frames: [allAt(0), at(box(0, 0), 1), at(box(0, 0), 2), at(box(0, 0), 3)],
   },
   preload: {
-    label: "click → preload",
-    short: "click",
+    label: 'click → preload',
+    short: 'click',
     blurb: (
       <>
         Tap a tile to warm its <em>whole timeline</em> — a speculative prefetch.
-        Under the time-deep <span className="font-mono">spatial</span> walk that's
-        one contiguous read; under <span className="font-mono">time</span>-major
-        it's a seek per bucket. Even prefetches ride the walk you chose.
+        Under the time-deep <span className="font-mono">spatial</span> walk
+        that's one contiguous read; under{' '}
+        <span className="font-mono">time</span>-major it's a seek per bucket.
+        Even prefetches ride the walk you chose.
       </>
     ),
     frames: [
@@ -257,8 +286,13 @@ const HITSET: Record<GestureKey, Set<string>> = Object.fromEntries(
 ) as Record<GestureKey, Set<string>>;
 
 /** Byte positions a set of tiles touches under an ordering, grouped into runs. */
-function runsOf(order: Cell[], want: Set<string>): { positions: number[]; runs: [number, number][] } {
-  const positions = order.map((c, i) => (want.has(key(c)) ? i : -1)).filter((i) => i >= 0);
+function runsOf(
+  order: Cell[],
+  want: Set<string>,
+): { positions: number[]; runs: [number, number][] } {
+  const positions = order
+    .map((c, i) => (want.has(key(c)) ? i : -1))
+    .filter((i) => i >= 0);
   const runs: [number, number][] = [];
   for (const p of positions) {
     const last = runs[runs.length - 1];
@@ -268,10 +302,15 @@ function runsOf(order: Cell[], want: Set<string>): { positions: number[]; runs: 
   return { positions, runs };
 }
 
-const STATS: Record<OrderKey, Record<GestureKey, ReturnType<typeof runsOf>>> = Object.fromEntries(
+const STATS: Record<
+  OrderKey,
+  Record<GestureKey, ReturnType<typeof runsOf>>
+> = Object.fromEntries(
   ORDER_KEYS.map((k) => [
     k,
-    Object.fromEntries(GESTURE_KEYS.map((g) => [g, runsOf(ORDERS[k], HITSET[g])])),
+    Object.fromEntries(
+      GESTURE_KEYS.map((g) => [g, runsOf(ORDERS[k], HITSET[g])]),
+    ),
   ]),
 ) as Record<OrderKey, Record<GestureKey, ReturnType<typeof runsOf>>>;
 
@@ -280,7 +319,10 @@ const STATS: Record<OrderKey, Record<GestureKey, ReturnType<typeof runsOf>>> = O
  * being requested this instant, `touched` is everything requested so far.
  * Pure so the render test can drive it at any progress.
  */
-function sceneAt(gesture: GestureKey, p: number): { active: Set<string>; touched: Set<string>; idx: number } {
+function sceneAt(
+  gesture: GestureKey,
+  p: number,
+): { active: Set<string>; touched: Set<string>; idx: number } {
   const frames = INTERACTIONS[gesture].frames;
   const fc = frames.length;
   const clamped = Math.min(Math.max(p, 0), 1);
@@ -305,7 +347,7 @@ const iso = (x: number, y: number, t: number): [number, number] => [
 ];
 
 const isoPoly = (pts: [number, number, number][]) =>
-  pts.map(([x, y, t]) => iso(x, y, t).join(",")).join(" ");
+  pts.map(([x, y, t]) => iso(x, y, t).join(',')).join(' ');
 
 /* ── Sub-components ───────────────────────────────────────────────────── */
 
@@ -321,12 +363,18 @@ const Seg = <K extends string>({
   onChange: (k: K) => void;
 }) => (
   <div className="flex items-center gap-2">
-    <span className="text-[10px] font-medium uppercase tracking-wide" style={{ color: "var(--ink-400)" }}>
+    <span
+      className="text-[10px] font-medium uppercase tracking-wide"
+      style={{ color: 'var(--ink-400)' }}
+    >
       {label}
     </span>
     <div
       className="flex flex-wrap rounded-full p-0.5"
-      style={{ background: "var(--surface-sunken)", border: "1px solid var(--hairline)" }}
+      style={{
+        background: 'var(--surface-sunken)',
+        border: '1px solid var(--hairline)',
+      }}
     >
       {options.map((o) => {
         const active = o.key === value;
@@ -339,8 +387,12 @@ const Seg = <K extends string>({
             className="rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors"
             style={
               active
-                ? { background: "var(--surface)", color: "var(--accent)", boxShadow: "0 0 0 1px var(--accent)" }
-                : { background: "transparent", color: "var(--ink-500)" }
+                ? {
+                    background: 'var(--surface)',
+                    color: 'var(--accent)',
+                    boxShadow: '0 0 0 1px var(--accent)',
+                  }
+                : { background: 'transparent', color: 'var(--ink-500)' }
             }
           >
             {o.label}
@@ -373,8 +425,24 @@ const Cube: React.FC<{
     const [cx, cy] = iso(-0.5, b, GZ);
     const [dx, dy] = iso(N - 0.5, b, GZ);
     gridLines.push(
-      <line key={`gx${i}`} x1={ax} y1={ay} x2={bx} y2={by} stroke="var(--hairline)" strokeWidth="0.9" />,
-      <line key={`gy${i}`} x1={cx} y1={cy} x2={dx} y2={dy} stroke="var(--hairline)" strokeWidth="0.9" />,
+      <line
+        key={`gx${i}`}
+        x1={ax}
+        y1={ay}
+        x2={bx}
+        y2={by}
+        stroke="var(--hairline)"
+        strokeWidth="0.9"
+      />,
+      <line
+        key={`gy${i}`}
+        x1={cx}
+        y1={cy}
+        x2={dx}
+        y2={dy}
+        stroke="var(--hairline)"
+        strokeWidth="0.9"
+      />,
     );
   }
 
@@ -403,12 +471,27 @@ const Cube: React.FC<{
         {corners.map(([cx, cy], i) => {
           const [x0, y0] = iso(cx, cy, GZ);
           const [x1, y1] = iso(cx, cy, topT);
-          return <line key={i} x1={x0} y1={y0} x2={x1} y2={y1} stroke={WARM} strokeWidth="0.9" opacity="0.5" />;
+          return (
+            <line
+              key={i}
+              x1={x0}
+              y1={y0}
+              x2={x1}
+              y2={y1}
+              stroke={WARM}
+              strokeWidth="0.9"
+              opacity="0.5"
+            />
+          );
         })}
         {activeTs.map((t) => (
           <polygon
             key={t}
-            points={isoPoly(corners.map(([cx, cy]) => [cx, cy, t] as [number, number, number]))}
+            points={isoPoly(
+              corners.map(
+                ([cx, cy]) => [cx, cy, t] as [number, number, number],
+              ),
+            )}
             fill={WARM_SOFT}
             stroke={WARM}
             strokeWidth="1"
@@ -436,7 +519,7 @@ const Cube: React.FC<{
         y2={y1}
         stroke="var(--ink-500)"
         strokeWidth={adjacent ? 1 : 0.9}
-        strokeDasharray={adjacent ? undefined : "3 3"}
+        strokeDasharray={adjacent ? undefined : '3 3'}
         opacity={adjacent ? 0.22 : 0.3}
         strokeLinecap="round"
       />,
@@ -459,9 +542,29 @@ const Cube: React.FC<{
       {viewport}
 
       {/* time axis */}
-      <line x1={tx} y1={ty0} x2={tx} y2={ty1} stroke="var(--ink-400)" strokeWidth="1" />
-      <path d={`M ${tx - 3.5} ${ty1 + 6} L ${tx} ${ty1} L ${tx + 3.5} ${ty1 + 6}`} fill="none" stroke="var(--ink-400)" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" />
-      <text x={tx} y={ty1 - 6} fontSize="9.5" textAnchor="middle" fill="var(--ink-500)">
+      <line
+        x1={tx}
+        y1={ty0}
+        x2={tx}
+        y2={ty1}
+        stroke="var(--ink-400)"
+        strokeWidth="1"
+      />
+      <path
+        d={`M ${tx - 3.5} ${ty1 + 6} L ${tx} ${ty1} L ${tx + 3.5} ${ty1 + 6}`}
+        fill="none"
+        stroke="var(--ink-400)"
+        strokeWidth="1"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <text
+        x={tx}
+        y={ty1 - 6}
+        fontSize="9.5"
+        textAnchor="middle"
+        fill="var(--ink-500)"
+      >
         time
       </text>
 
@@ -475,18 +578,63 @@ const Cube: React.FC<{
         if (active.has(k))
           return (
             <g key={k}>
-              {animating ? <circle cx={px} cy={py} r="6.5" fill={WARM} opacity="0.18" /> : null}
-              <circle cx={px} cy={py} r="4" fill={WARM} stroke="var(--accent)" strokeWidth="1.1" />
+              {animating ? (
+                <circle cx={px} cy={py} r="6.5" fill={WARM} opacity="0.18" />
+              ) : null}
+              <circle
+                cx={px}
+                cy={py}
+                r="4"
+                fill={WARM}
+                stroke="var(--accent)"
+                strokeWidth="1.1"
+              />
             </g>
           );
         if (touched.has(k))
-          return <circle key={k} cx={px} cy={py} r="3.4" fill={WARM} stroke={WARM_INK} strokeWidth="0.75" />;
+          return (
+            <circle
+              key={k}
+              cx={px}
+              cy={py}
+              r="3.4"
+              fill={WARM}
+              stroke={WARM_INK}
+              strokeWidth="0.75"
+            />
+          );
         if (inCum.has(k))
-          return <circle key={k} cx={px} cy={py} r="3" fill="none" stroke={WARM_INK} strokeWidth="0.9" opacity="0.7" />;
-        return <circle key={k} cx={px} cy={py} r="1.7" fill="var(--ink-400)" opacity="0.4" />;
+          return (
+            <circle
+              key={k}
+              cx={px}
+              cy={py}
+              r="3"
+              fill="none"
+              stroke={WARM_INK}
+              strokeWidth="0.9"
+              opacity="0.7"
+            />
+          );
+        return (
+          <circle
+            key={k}
+            cx={px}
+            cy={py}
+            r="1.7"
+            fill="var(--ink-400)"
+            opacity="0.4"
+          />
+        );
       })}
 
-      <text x={MX} y="279" fontSize="9.5" textAnchor="middle" fill="var(--ink-500)">
+      <text
+        x={MX}
+        y="279"
+        fontSize="9.5"
+        textAnchor="middle"
+        fill="var(--ink-500)"
+      >
         the map plane (x, y)
       </text>
     </svg>
@@ -510,15 +658,19 @@ const ByteStrip: React.FC<{
       viewBox={`0 0 ${W} 36`}
       className="w-full min-w-[540px]"
       role="img"
-      aria-label={`Diagram: the same 64 blobs laid out as one byte string in ${order} order; the ${INTERACTIONS[gesture].label} gesture's reads so far group into ${runs.length} contiguous ${runs.length === 1 ? "run" : "runs"}.`}
+      aria-label={`Diagram: the same 64 blobs laid out as one byte string in ${order} order; the ${INTERACTIONS[gesture].label} gesture's reads so far group into ${runs.length} contiguous ${runs.length === 1 ? 'run' : 'runs'}.`}
     >
       {cells.map((c, i) => {
         const k = key(c);
         const isActive = active.has(k);
         const isTouched = touched.has(k);
         const wanted = inCum.has(k);
-        const fill = isTouched ? WARM : "none";
-        const stroke = isActive ? "var(--accent)" : wanted ? WARM_INK : "var(--hairline)";
+        const fill = isTouched ? WARM : 'none';
+        const stroke = isActive
+          ? 'var(--accent)'
+          : wanted
+            ? WARM_INK
+            : 'var(--hairline)';
         return (
           <rect
             key={i}
@@ -546,7 +698,14 @@ const ByteStrip: React.FC<{
       <text x="1" y="35" fontSize="9" fontFamily={MONO} fill="var(--ink-400)">
         byte 0
       </text>
-      <text x={W - 1} y="35" fontSize="9" fontFamily={MONO} textAnchor="end" fill="var(--ink-400)">
+      <text
+        x={W - 1}
+        y="35"
+        fontSize="9"
+        fontFamily={MONO}
+        textAnchor="end"
+        fill="var(--ink-400)"
+      >
         end of pack
       </text>
     </svg>
@@ -560,8 +719,8 @@ const HOLD_MS = 1150; // dwell on the finished pattern before looping
 
 const SpaceTimeCurve: React.FC = () => {
   const reduced = useReducedMotion();
-  const [order, setOrder] = React.useState<OrderKey>("hilbert3");
-  const [gesture, setGesture] = React.useState<GestureKey>("play");
+  const [order, setOrder] = React.useState<OrderKey>('hilbert3');
+  const [gesture, setGesture] = React.useState<GestureKey>('play');
   const [elapsed, setElapsed] = React.useState(0);
 
   React.useEffect(() => {
@@ -597,15 +756,25 @@ const SpaceTimeCurve: React.FC = () => {
   return (
     <div
       className="rounded-lg p-4"
-      style={{ background: "var(--surface)", border: "1px solid var(--hairline)" }}
+      style={{
+        background: 'var(--surface)',
+        border: '1px solid var(--hairline)',
+      }}
     >
-      <h4 className="font-display text-[13px] font-semibold" style={{ color: "var(--ink-900)" }}>
+      <h4
+        className="font-display text-[13px] font-semibold"
+        style={{ color: 'var(--ink-900)' }}
+      >
         Deeper: laying the space-time cube down in a line
       </h4>
-      <p className="mt-1 text-[11px] max-w-3xl" style={{ color: "var(--ink-500)", lineHeight: 1.6 }}>
+      <p
+        className="mt-1 text-[11px] max-w-3xl"
+        style={{ color: 'var(--ink-500)', lineHeight: 1.6 }}
+      >
         A blob's address has three axes — (x, y) on the map plus a time bucket —
-        but a pack is one flat byte string. <span className="font-mono">--blob-ordering</span>{" "}
-        chooses the space-filling walk that linearizes the cube. Pick a walk, then play a
+        but a pack is one flat byte string.{' '}
+        <span className="font-mono">--blob-ordering</span> chooses the
+        space-filling walk that linearizes the cube. Pick a walk, then play a
         real map+time gesture and watch which bytes it touches: the walk decides
         how many range reads the gesture costs.
       </p>
@@ -621,37 +790,113 @@ const SpaceTimeCurve: React.FC = () => {
           label="gesture"
           value={gesture}
           onChange={setGesture}
-          options={GESTURE_KEYS.map((k) => ({ key: k, label: INTERACTIONS[k].label }))}
+          options={GESTURE_KEYS.map((k) => ({
+            key: k,
+            label: INTERACTIONS[k].label,
+          }))}
         />
       </div>
 
       <div className="mt-3 grid grid-cols-1 lg:grid-cols-[auto_1fr] gap-x-6 gap-y-4 items-start">
         {/* the cube */}
         <div>
-          <Cube order={order} gesture={gesture} active={scene.active} touched={scene.touched} animating={!reduced} />
+          <Cube
+            order={order}
+            gesture={gesture}
+            active={scene.active}
+            touched={scene.touched}
+            animating={!reduced}
+          />
           <div className="mt-1 grid grid-cols-1 gap-1 max-w-[272px]">
-            <span className="inline-flex items-center gap-1.5 text-[10.5px]" style={{ color: "var(--ink-500)" }}>
-              <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">
-                <circle cx="6" cy="6" r="4" fill={WARM} stroke="var(--accent)" strokeWidth="1.1" />
+            <span
+              className="inline-flex items-center gap-1.5 text-[10.5px]"
+              style={{ color: 'var(--ink-500)' }}
+            >
+              <svg
+                viewBox="0 0 12 12"
+                width="12"
+                height="12"
+                aria-hidden="true"
+              >
+                <circle
+                  cx="6"
+                  cy="6"
+                  r="4"
+                  fill={WARM}
+                  stroke="var(--accent)"
+                  strokeWidth="1.1"
+                />
               </svg>
               reading now (the gesture's viewport)
             </span>
-            <span className="inline-flex items-center gap-1.5 text-[10.5px]" style={{ color: "var(--ink-500)" }}>
-              <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">
-                <circle cx="6" cy="6" r="3.4" fill={WARM} stroke={WARM_INK} strokeWidth="0.75" />
+            <span
+              className="inline-flex items-center gap-1.5 text-[10.5px]"
+              style={{ color: 'var(--ink-500)' }}
+            >
+              <svg
+                viewBox="0 0 12 12"
+                width="12"
+                height="12"
+                aria-hidden="true"
+              >
+                <circle
+                  cx="6"
+                  cy="6"
+                  r="3.4"
+                  fill={WARM}
+                  stroke={WARM_INK}
+                  strokeWidth="0.75"
+                />
               </svg>
               already read this pass
             </span>
-            <span className="inline-flex items-center gap-1.5 text-[10.5px]" style={{ color: "var(--ink-500)" }}>
-              <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">
-                <circle cx="6" cy="6" r="3" fill="none" stroke={WARM_INK} strokeWidth="0.9" opacity="0.7" />
+            <span
+              className="inline-flex items-center gap-1.5 text-[10.5px]"
+              style={{ color: 'var(--ink-500)' }}
+            >
+              <svg
+                viewBox="0 0 12 12"
+                width="12"
+                height="12"
+                aria-hidden="true"
+              >
+                <circle
+                  cx="6"
+                  cy="6"
+                  r="3"
+                  fill="none"
+                  stroke={WARM_INK}
+                  strokeWidth="0.9"
+                  opacity="0.7"
+                />
               </svg>
               still to read
             </span>
-            <span className="inline-flex items-center gap-1.5 text-[10.5px]" style={{ color: "var(--ink-500)" }}>
+            <span
+              className="inline-flex items-center gap-1.5 text-[10.5px]"
+              style={{ color: 'var(--ink-500)' }}
+            >
               <svg viewBox="0 0 22 6" width="22" height="6" aria-hidden="true">
-                <line x1="1" y1="3" x2="9" y2="3" stroke="var(--ink-500)" strokeWidth="1" opacity="0.3" strokeLinecap="round" />
-                <line x1="13" y1="3" x2="21" y2="3" stroke="var(--ink-500)" strokeWidth="0.9" opacity="0.35" strokeDasharray="3 3" />
+                <line
+                  x1="1"
+                  y1="3"
+                  x2="9"
+                  y2="3"
+                  stroke="var(--ink-500)"
+                  strokeWidth="1"
+                  opacity="0.3"
+                  strokeLinecap="round"
+                />
+                <line
+                  x1="13"
+                  y1="3"
+                  x2="21"
+                  y2="3"
+                  stroke="var(--ink-500)"
+                  strokeWidth="0.9"
+                  opacity="0.35"
+                  strokeDasharray="3 3"
+                />
               </svg>
               the walk: step / jump (a seek)
             </span>
@@ -660,29 +905,42 @@ const SpaceTimeCurve: React.FC = () => {
 
         {/* the consequence */}
         <div className="min-w-0">
-          <p className="text-[11px] leading-relaxed" style={{ color: "var(--ink-500)" }}>
+          <p
+            className="text-[11px] leading-relaxed"
+            style={{ color: 'var(--ink-500)' }}
+          >
             {INTERACTIONS[gesture].blurb}
           </p>
 
           <div className="mt-3 overflow-x-auto">
-            <ByteStrip order={order} gesture={gesture} active={scene.active} touched={scene.touched} />
+            <ByteStrip
+              order={order}
+              gesture={gesture}
+              active={scene.active}
+              touched={scene.touched}
+            />
           </div>
-          <p className="mt-1 text-[11px]" style={{ color: "var(--ink-700)" }}>
-            <span className="font-semibold" style={{ color: "var(--accent)" }}>
-              {finalRuns} range {finalRuns === 1 ? "read" : "reads"}
-            </span>{" "}
-            for the {label} gesture under <span className="font-mono">{ORDER_LABEL[order]}</span> — watch the
-            brackets fuse as it plays, before gap-coalescing merges the near-misses too.
+          <p className="mt-1 text-[11px]" style={{ color: 'var(--ink-700)' }}>
+            <span className="font-semibold" style={{ color: 'var(--accent)' }}>
+              {finalRuns} range {finalRuns === 1 ? 'read' : 'reads'}
+            </span>{' '}
+            for the {label} gesture under{' '}
+            <span className="font-mono">{ORDER_LABEL[order]}</span> — watch the
+            brackets fuse as it plays, before gap-coalescing merges the
+            near-misses too.
           </p>
 
           <div className="mt-3 overflow-x-auto">
             <table className="border-collapse text-[11px]">
               <thead>
-                <tr style={{ color: "var(--ink-400)" }}>
+                <tr style={{ color: 'var(--ink-400)' }}>
                   <th className="text-left font-medium pb-1 pr-4">walk</th>
                   <th className="text-right font-medium pb-1 pr-3">seeks</th>
                   {GESTURE_KEYS.map((g) => (
-                    <th key={g} className="text-right font-medium pb-1 pr-3 whitespace-nowrap">
+                    <th
+                      key={g}
+                      className="text-right font-medium pb-1 pr-3 whitespace-nowrap"
+                    >
                       {INTERACTIONS[g].short}
                     </th>
                   ))}
@@ -695,14 +953,24 @@ const SpaceTimeCurve: React.FC = () => {
                     <tr
                       key={k}
                       style={{
-                        borderTop: "1px solid var(--hairline)",
-                        background: activeRow ? "var(--accent-soft)" : undefined,
+                        borderTop: '1px solid var(--hairline)',
+                        background: activeRow
+                          ? 'var(--accent-soft)'
+                          : undefined,
                       }}
                     >
-                      <td className="py-1 pr-4 font-mono" style={{ color: activeRow ? "var(--accent)" : "var(--ink-700)" }}>
+                      <td
+                        className="py-1 pr-4 font-mono"
+                        style={{
+                          color: activeRow ? 'var(--accent)' : 'var(--ink-700)',
+                        }}
+                      >
                         {ORDER_LABEL[k]}
                       </td>
-                      <td className="py-1 pr-3 font-mono text-right" style={{ color: "var(--ink-500)" }}>
+                      <td
+                        className="py-1 pr-3 font-mono text-right"
+                        style={{ color: 'var(--ink-500)' }}
+                      >
                         {SEEKS[k]}
                       </td>
                       {GESTURE_KEYS.map((g) => {
@@ -712,7 +980,9 @@ const SpaceTimeCurve: React.FC = () => {
                             key={g}
                             className="py-1 pr-3 font-mono text-right"
                             style={{
-                              color: cellActive ? "var(--accent)" : "var(--ink-500)",
+                              color: cellActive
+                                ? 'var(--accent)'
+                                : 'var(--ink-500)',
                               fontWeight: cellActive ? 600 : 400,
                             }}
                           >
@@ -726,26 +996,32 @@ const SpaceTimeCurve: React.FC = () => {
               </tbody>
             </table>
           </div>
-          <p className="mt-1.5 text-[10.5px]" style={{ color: "var(--ink-400)" }}>
-            Range reads per gesture. Notice the cube walk never spikes — 1·4·5·3·2,
-            no catastrophes — while the specialists each blow up on the gesture
-            they ignore.
+          <p
+            className="mt-1.5 text-[10.5px]"
+            style={{ color: 'var(--ink-400)' }}
+          >
+            Range reads per gesture. Notice the cube walk never spikes —
+            1·4·5·3·2, no catastrophes — while the specialists each blow up on
+            the gesture they ignore.
           </p>
         </div>
       </div>
 
       <p
         className="mt-3 pt-3 text-[11px] leading-relaxed"
-        style={{ color: "var(--ink-500)", borderTop: "1px solid var(--hairline)" }}
+        style={{
+          color: 'var(--ink-500)',
+          borderTop: '1px solid var(--hairline)',
+        }}
       >
         <span className="font-mono">--blob-ordering auto</span> measures the
         archive's shape and picks the walk: time-deep datasets (a buoy's
-        four-year track over a few cells) get{" "}
+        four-year track over a few cells) get{' '}
         <span className="font-mono">spatial</span>, because playback wants each
         cell's whole timeline in one pull — measured ~3× fewer requests than the
         cube walk there. Balanced or space-heavy datasets (a day of global
         flights) get the <span className="font-mono">hilbert3</span> generalist.
-        Either way the directory index keeps its own{" "}
+        Either way the directory index keeps its own{' '}
         <span className="font-mono">(zoom, hilbert(x,y), t)</span> sort — the
         knob permutes bytes inside packs, never keys.
       </p>

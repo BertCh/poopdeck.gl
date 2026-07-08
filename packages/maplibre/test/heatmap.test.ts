@@ -64,7 +64,10 @@ describe('STTHeatmapLayer', () => {
     expect(gl.bindFramebuffer).toHaveBeenCalled();
     // Pass 1 should issue at least one POINTS draw (one per tile), pass 2
     // should issue a single TRIANGLE_STRIP for the fullscreen quad.
-    const draws = gl.drawCalls as Array<{ kind: 'arrays' | 'elements'; count: number }>;
+    const draws = gl.drawCalls as Array<{
+      kind: 'arrays' | 'elements';
+      count: number;
+    }>;
     expect(draws.some((d) => d.kind === 'arrays' && d.count === 2)).toBe(true);
     expect(draws.some((d) => d.kind === 'arrays' && d.count === 4)).toBe(true);
   });
@@ -141,8 +144,12 @@ describe('STTHeatmapLayer position quantization (perf research 2026-07)', () => 
       0,
       0,
     );
-    const scaleCalls = gl.uniform3fv.mock.calls.filter((c: unknown[]) => c[0] === h.uPosScale);
-    const offsetCalls = gl.uniform3fv.mock.calls.filter((c: unknown[]) => c[0] === h.uPosOffset);
+    const scaleCalls = gl.uniform3fv.mock.calls.filter(
+      (c: unknown[]) => c[0] === h.uPosScale,
+    );
+    const offsetCalls = gl.uniform3fv.mock.calls.filter(
+      (c: unknown[]) => c[0] === h.uPosOffset,
+    );
     expect(scaleCalls.length).toBeGreaterThan(0);
     expect(offsetCalls.length).toBeGreaterThan(0);
   });

@@ -99,7 +99,8 @@ function makeSummaryTile(props?: Record<string, any>) {
 }
 
 async function makeQuadbinLayer(props: Record<string, any> = {}) {
-  const { QuadbinSummaryLayer } = await import('../src/layers/summary/quadbin-summary-layer');
+  const { QuadbinSummaryLayer } =
+    await import('../src/layers/summary/quadbin-summary-layer');
   const layer: any = Object.create((QuadbinSummaryLayer as any).prototype);
   layer.props = {
     id: 'qb',
@@ -154,7 +155,9 @@ describe('QuadbinSummaryLayer: cell decoding + sublayer wiring', () => {
     const [sub] = layer.renderLayers();
     // weight 3 → t=0.3 → bucket 0; weight 7 → t=0.7 → bucket 1.
     expect(sub.props.getFillColor(sub.props.data[0])).toEqual([0, 0, 0, 255]);
-    expect(sub.props.getFillColor(sub.props.data[1])).toEqual([255, 255, 255, 255]);
+    expect(sub.props.getFillColor(sub.props.data[1])).toEqual([
+      255, 255, 255, 255,
+    ]);
   });
 
   it('extrusion is off by default and getElevation is the constant 0', async () => {
@@ -165,7 +168,10 @@ describe('QuadbinSummaryLayer: cell decoding + sublayer wiring', () => {
   });
 
   it('extruded:true scales elevation by the weight × elevationScale', async () => {
-    const layer = await makeQuadbinLayer({ extruded: true, elevationScale: 10 });
+    const layer = await makeQuadbinLayer({
+      extruded: true,
+      elevationScale: 10,
+    });
     const [sub] = layer.renderLayers();
     expect(sub.props.extruded).toBe(true);
     expect(sub.props.getElevation(sub.props.data[1])).toBe(7 * 10);

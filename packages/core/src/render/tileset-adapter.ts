@@ -19,7 +19,11 @@ import type { SpatiotemporalTilesetOptions } from '../spatiotemporal-tileset.js'
 /** The fetch-callback subset of {@link SpatiotemporalTilesetOptions} that maps 1:1 to the archive. */
 export type TilesetFetchCallbacks = Pick<
   SpatiotemporalTilesetOptions,
-  'getAvailableTiles' | 'getTileData' | 'getTileDataBatch' | 'getTileByteSize' | 'getThroughput'
+  | 'getAvailableTiles'
+  | 'getTileData'
+  | 'getTileDataBatch'
+  | 'getTileByteSize'
+  | 'getThroughput'
 >;
 
 /**
@@ -29,7 +33,9 @@ export type TilesetFetchCallbacks = Pick<
  * time/direction) so the shared scheduler ranks range-groups comparably across
  * archives.
  */
-export function makeTilesetCallbacks(archive: STTArchive): TilesetFetchCallbacks {
+export function makeTilesetCallbacks(
+  archive: STTArchive,
+): TilesetFetchCallbacks {
   return {
     getAvailableTiles: (bounds, zoom, timeRange) =>
       archive.getTileIdsInBounds(bounds, zoom, timeRange),

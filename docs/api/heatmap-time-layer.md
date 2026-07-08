@@ -57,11 +57,11 @@ const layer = new AnimatedHeatmapLayer({
   id: 'earthquake-heat',
   data: '/data/earthquakes/manifest.json',
   currentTime: 1672531200000,
-  timeWindow: 86_400_000,           // 1 day
+  timeWindow: 86_400_000, // 1 day
   radiusPixels: 30,
   intensity: 1,
-  weightProperty: 'magnitude',      // per-splat weight
-  colorDomain: [4.0, 6.5],          // pin the ramp — protects against jitter
+  weightProperty: 'magnitude', // per-splat weight
+  colorDomain: [4.0, 6.5], // pin the ramp — protects against jitter
   colorRange: [
     [255, 255, 178, 255],
     [254, 204, 92, 255],
@@ -112,33 +112,33 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 
 ### Render
 
-| Property | Type | Default | Description |
-| -------- | ---- | ------- | ----------- |
-| `radiusPixels` | `number` | `30` | Splat radius in pixels |
-| `intensity` | `number` | `1` | Global intensity multiplier (canonical `intensity`) |
-| `weightProperty` | `string \| null` | `null` | Numeric property → per-point weight. Unset weights every point `1.0`. |
-| `getWeight` | `string \| null` | `null` | Upstream-vocabulary alias of `weightProperty`. Accepts a property-column NAME — NOT a function accessor (a function warns once and falls back). When set, it wins. |
-| `colorRange` | `Color[]` | 7-stop YlOrRd | Low → high density ramp (single-channel mode) |
-| `colorDomain` | `[number, number]` | auto / baked-in | Pinned density domain. **Unset → the layer auto-normalises against the current window's max each frame** (so colours may "breathe" as the window slides; pin it to keep the mapping stable). |
-| `threshold` | `number` | `0.05` | Density fraction below which pixels are transparent. **Only takes effect when `colorDomain` is unset** (the pinned-domain path supersedes it). |
-| `aggregation` | `'SUM' \| 'MEAN'` | `'SUM'` | Density accumulation operation (canonical pass-through). `'MEAN'` averages weights instead — only meaningful with a `weightProperty`; a constant-weight MEAN flattens the map to a single colour. |
-| `weightsTextureSize` | `number` | `2048` | Side length of the density texture (canonical pass-through). Larger = finer detail at higher GPU cost. |
-| `debounceTimeout` | `number` | `500` | Interaction debounce (ms) before re-aggregating during pan/zoom (canonical pass-through). |
-| `fadeInDuration` | `number` | `0` | Leading-edge fade (ms), mapped onto the filter soft-range |
-| `fadeOutDuration` | `number` | `0` | Trailing-edge fade (ms) |
+| Property             | Type               | Default         | Description                                                                                                                                                                                       |
+| -------------------- | ------------------ | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `radiusPixels`       | `number`           | `30`            | Splat radius in pixels                                                                                                                                                                            |
+| `intensity`          | `number`           | `1`             | Global intensity multiplier (canonical `intensity`)                                                                                                                                               |
+| `weightProperty`     | `string \| null`   | `null`          | Numeric property → per-point weight. Unset weights every point `1.0`.                                                                                                                             |
+| `getWeight`          | `string \| null`   | `null`          | Upstream-vocabulary alias of `weightProperty`. Accepts a property-column NAME — NOT a function accessor (a function warns once and falls back). When set, it wins.                                |
+| `colorRange`         | `Color[]`          | 7-stop YlOrRd   | Low → high density ramp (single-channel mode)                                                                                                                                                     |
+| `colorDomain`        | `[number, number]` | auto / baked-in | Pinned density domain. **Unset → the layer auto-normalises against the current window's max each frame** (so colours may "breathe" as the window slides; pin it to keep the mapping stable).      |
+| `threshold`          | `number`           | `0.05`          | Density fraction below which pixels are transparent. **Only takes effect when `colorDomain` is unset** (the pinned-domain path supersedes it).                                                    |
+| `aggregation`        | `'SUM' \| 'MEAN'`  | `'SUM'`         | Density accumulation operation (canonical pass-through). `'MEAN'` averages weights instead — only meaningful with a `weightProperty`; a constant-weight MEAN flattens the map to a single colour. |
+| `weightsTextureSize` | `number`           | `2048`          | Side length of the density texture (canonical pass-through). Larger = finer detail at higher GPU cost.                                                                                            |
+| `debounceTimeout`    | `number`           | `500`           | Interaction debounce (ms) before re-aggregating during pan/zoom (canonical pass-through).                                                                                                         |
+| `fadeInDuration`     | `number`           | `0`             | Leading-edge fade (ms), mapped onto the filter soft-range                                                                                                                                         |
+| `fadeOutDuration`    | `number`           | `0`             | Trailing-edge fade (ms)                                                                                                                                                                           |
 
 ### Stacked channels (`channels`)
 
 When supplied, each entry renders as its own canonical HeatmapLayer (its own
 ramp + density normalisation), composited in order.
 
-| Field | Type | Default | Description |
-| ----- | ---- | ------- | ----------- |
-| `id` | `string` | — | Channel id; matches `metadata.heatmapDomain.classes[*].id` when present |
-| `categoryFilter` | `{ property, values[] }` | — | Only features matching this categorical filter contribute to the channel (tiles missing the property are skipped for that channel) |
-| `colorRange` | `Color[]` | 7-stop YlOrRd | Per-channel ramp |
-| `colorDomain` | `[number, number]` | auto / baked-in | Pinned per-channel density domain (see note above) |
-| `intensity` | `number` | `1` | Per-channel weight multiplier, folded into the point weight |
+| Field            | Type                     | Default         | Description                                                                                                                        |
+| ---------------- | ------------------------ | --------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `id`             | `string`                 | —               | Channel id; matches `metadata.heatmapDomain.classes[*].id` when present                                                            |
+| `categoryFilter` | `{ property, values[] }` | —               | Only features matching this categorical filter contribute to the channel (tiles missing the property are skipped for that channel) |
+| `colorRange`     | `Color[]`                | 7-stop YlOrRd   | Per-channel ramp                                                                                                                   |
+| `colorDomain`    | `[number, number]`       | auto / baked-in | Pinned per-channel density domain (see note above)                                                                                 |
+| `intensity`      | `number`                 | `1`             | Per-channel weight multiplier, folded into the point weight                                                                        |
 
 Sublayers are not pickable (density pixels have no feature identity). The
 sublayer short id for `_subLayerProps` overrides is **`heatmap`** — it covers

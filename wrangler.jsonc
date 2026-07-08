@@ -18,6 +18,6 @@
   "compatibility_date": "2025-06-01",
   "assets": {
     "directory": "./examples/showcase/dist",
-    "not_found_handling": "single-page-application"
-  }
+    "not_found_handling": "single-page-application",
+  },
 }

@@ -37,57 +37,59 @@ function readArrayDefault(prop: unknown): unknown {
 
 describe('deck layer defaults consume the shared @poopdeck.gl/core palettes', () => {
   it('AnimatedPointLayer / AnimatedIconLayer → tab10 categorical', async () => {
-    const { AnimatedPointLayer, AnimatedIconLayer } = await import('../src/index');
-    expect(readArrayDefault(AnimatedPointLayer.defaultProps.colorPalette)).toEqual(
-      DEFAULT_CATEGORICAL_PALETTE,
-    );
-    expect(readArrayDefault(AnimatedIconLayer.defaultProps.colorPalette)).toEqual(
-      DEFAULT_CATEGORICAL_PALETTE,
-    );
+    const { AnimatedPointLayer, AnimatedIconLayer } =
+      await import('../src/index');
+    expect(
+      readArrayDefault(AnimatedPointLayer.defaultProps.colorPalette),
+    ).toEqual(DEFAULT_CATEGORICAL_PALETTE);
+    expect(
+      readArrayDefault(AnimatedIconLayer.defaultProps.colorPalette),
+    ).toEqual(DEFAULT_CATEGORICAL_PALETTE);
   });
 
   it('AnimatedLineLayer / AnimatedPathLayer / AnimatedArcLayer → line palette', async () => {
     const { AnimatedLineLayer, AnimatedPathLayer, AnimatedArcLayer } =
       await import('../src/index');
-    expect(readArrayDefault(AnimatedLineLayer.defaultProps.colorPalette)).toEqual(
-      DEFAULT_LINE_PALETTE,
-    );
-    expect(readArrayDefault(AnimatedPathLayer.defaultProps.colorPalette)).toEqual(
-      DEFAULT_LINE_PALETTE,
-    );
-    expect(readArrayDefault(AnimatedArcLayer.defaultProps.colorPalette)).toEqual(
-      DEFAULT_LINE_PALETTE,
-    );
+    expect(
+      readArrayDefault(AnimatedLineLayer.defaultProps.colorPalette),
+    ).toEqual(DEFAULT_LINE_PALETTE);
+    expect(
+      readArrayDefault(AnimatedPathLayer.defaultProps.colorPalette),
+    ).toEqual(DEFAULT_LINE_PALETTE);
+    expect(
+      readArrayDefault(AnimatedArcLayer.defaultProps.colorPalette),
+    ).toEqual(DEFAULT_LINE_PALETTE);
   });
 
   it('AnimatedPolygonLayer → polygon palette', async () => {
     const { AnimatedPolygonLayer } = await import('../src/index');
-    expect(readArrayDefault(AnimatedPolygonLayer.defaultProps.colorPalette)).toEqual(
-      DEFAULT_POLYGON_PALETTE,
-    );
+    expect(
+      readArrayDefault(AnimatedPolygonLayer.defaultProps.colorPalette),
+    ).toEqual(DEFAULT_POLYGON_PALETTE);
   });
 
   it('AnimatedTripsLayer → trips palette', async () => {
     const { AnimatedTripsLayer } = await import('../src/index');
-    expect(readArrayDefault(AnimatedTripsLayer.defaultProps.colorPalette)).toEqual(
-      DEFAULT_TRIPS_PALETTE,
-    );
+    expect(
+      readArrayDefault(AnimatedTripsLayer.defaultProps.colorPalette),
+    ).toEqual(DEFAULT_TRIPS_PALETTE);
   });
 
   it('AnimatedHeatmapLayer → OrRd-7 ramp', async () => {
     const { AnimatedHeatmapLayer } = await import('../src/index');
-    expect(readArrayDefault(AnimatedHeatmapLayer.defaultProps.colorRange)).toEqual(
-      DEFAULT_HEATMAP_COLOR_RANGE,
-    );
+    expect(
+      readArrayDefault(AnimatedHeatmapLayer.defaultProps.colorRange),
+    ).toEqual(DEFAULT_HEATMAP_COLOR_RANGE);
   });
 
   it('H3SummaryLayer / QuadbinSummaryLayer → shared YlGnBu-6 summary ramp', async () => {
-    const { H3SummaryLayer, QuadbinSummaryLayer } = await import('../src/index');
+    const { H3SummaryLayer, QuadbinSummaryLayer } =
+      await import('../src/index');
     expect(readArrayDefault(H3SummaryLayer.defaultProps.colorRange)).toEqual(
       DEFAULT_SUMMARY_COLOR_RANGE,
     );
-    expect(readArrayDefault(QuadbinSummaryLayer.defaultProps.colorRange)).toEqual(
-      DEFAULT_SUMMARY_COLOR_RANGE,
-    );
+    expect(
+      readArrayDefault(QuadbinSummaryLayer.defaultProps.colorRange),
+    ).toEqual(DEFAULT_SUMMARY_COLOR_RANGE);
   });
 });

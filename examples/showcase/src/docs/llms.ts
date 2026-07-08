@@ -16,26 +16,26 @@
  * the build and reads from disk with `fs`, whereas content.ts uses Vite's
  * `import.meta.glob`; the dir list is the shared source of truth.
  */
-import fs from "node:fs";
-import path from "node:path";
+import fs from 'node:fs';
+import path from 'node:path';
 
 /** Public origin the built site is served from. */
-export const LLMS_SITE_ORIGIN = "https://poopdeck.gl";
+export const LLMS_SITE_ORIGIN = 'https://poopdeck.gl';
 
 /** GitHub blob base for repo files that are NOT in the published web corpus. */
 export const LLMS_GITHUB_BLOB_BASE =
-  "https://github.com/BertCh/spatiotemporal-tiles/blob/main/";
+  'https://github.com/BertCh/spatiotemporal-tiles/blob/main/';
 
 /**
  * Published doc dirs (direct `*.md` children only). Mirrors the glob in
  * `content.ts` (`docs/{intro,architecture,spec,api,guides}/*.md` + README).
  */
 export const PUBLISHED_DOC_DIRS = [
-  "intro",
-  "architecture",
-  "spec",
-  "api",
-  "guides",
+  'intro',
+  'architecture',
+  'spec',
+  'api',
+  'guides',
 ] as const;
 
 export interface CorpusDoc {
@@ -58,19 +58,22 @@ export interface LlmsArtifacts {
 export function collectCorpus(docsDir: string): CorpusDoc[] {
   const docs: CorpusDoc[] = [];
 
-  const readme = path.join(docsDir, "README.md");
+  const readme = path.join(docsDir, 'README.md');
   if (fs.existsSync(readme)) {
-    docs.push({ file: "README.md", text: fs.readFileSync(readme, "utf8") });
+    docs.push({ file: 'README.md', text: fs.readFileSync(readme, 'utf8') });
   }
 
   for (const dir of PUBLISHED_DOC_DIRS) {
     const abs = path.join(docsDir, dir);
     if (!fs.existsSync(abs)) continue;
     for (const name of fs.readdirSync(abs)) {
-      if (!name.endsWith(".md")) continue;
+      if (!name.endsWith('.md')) continue;
       const full = path.join(abs, name);
       if (!fs.statSync(full).isFile()) continue;
-      docs.push({ file: `${dir}/${name}`, text: fs.readFileSync(full, "utf8") });
+      docs.push({
+        file: `${dir}/${name}`,
+        text: fs.readFileSync(full, 'utf8'),
+      });
     }
   }
 
@@ -82,16 +85,16 @@ const ABSOLUTE = /^[a-z][a-z0-9+.-]*:/i;
 
 /** Split a markdown link target into its path and (optional) `#fragment`. */
 function splitFragment(target: string): [string, string] {
-  const i = target.indexOf("#");
-  return i === -1 ? [target, ""] : [target.slice(0, i), target.slice(i)];
+  const i = target.indexOf('#');
+  return i === -1 ? [target, ''] : [target.slice(0, i), target.slice(i)];
 }
 
 /** Rewrite one relative link target to an absolute URL (or leave absolute). */
 function rewriteTarget(target: string, publishedFiles: Set<string>): string {
-  if (ABSOLUTE.test(target) || target.startsWith("#")) return target;
+  if (ABSOLUTE.test(target) || target.startsWith('#')) return target;
   const [pathPart, frag] = splitFragment(target);
-  if (pathPart.startsWith("docs/")) {
-    const rel = pathPart.slice("docs/".length);
+  if (pathPart.startsWith('docs/')) {
+    const rel = pathPart.slice('docs/'.length);
     if (publishedFiles.has(rel)) {
       return `${LLMS_SITE_ORIGIN}/llms/${rel}${frag}`;
     }
@@ -123,8 +126,8 @@ function linkedOrder(source: string, publishedFiles: Set<string>): string[] {
   const order: string[] = [];
   for (const m of source.matchAll(MD_LINK)) {
     const [pathPart] = splitFragment(m[1]);
-    if (!pathPart.startsWith("docs/")) continue;
-    const rel = pathPart.slice("docs/".length);
+    if (!pathPart.startsWith('docs/')) continue;
+    const rel = pathPart.slice('docs/'.length);
     if (publishedFiles.has(rel) && !seen.has(rel)) {
       seen.add(rel);
       order.push(rel);
@@ -150,20 +153,20 @@ export function buildLlmsFull(source: string, corpus: CorpusDoc[]): string {
   }
 
   const parts: string[] = [
-    "# poopdeck.gl / SpatioTemporal Tiles (STT) — full documentation",
-    "",
-    "> The complete published STT documentation corpus, concatenated for LLM",
-    "> ingestion. See https://poopdeck.gl/llms.txt for the curated map and",
-    "> https://poopdeck.gl/llms/<path> for individual files.",
+    '# poopdeck.gl / SpatioTemporal Tiles (STT) — full documentation',
+    '',
+    '> The complete published STT documentation corpus, concatenated for LLM',
+    '> ingestion. See https://poopdeck.gl/llms.txt for the curated map and',
+    '> https://poopdeck.gl/llms/<path> for individual files.',
   ];
 
   for (const file of ordered) {
     const doc = byFile.get(file);
     if (!doc) continue;
-    parts.push("", "---", "", `# ${file}`, "", doc.text.replace(/\n+$/, ""));
+    parts.push('', '---', '', `# ${file}`, '', doc.text.replace(/\n+$/, ''));
   }
 
-  return `${parts.join("\n")}\n`;
+  return `${parts.join('\n')}\n`;
 }
 
 /**

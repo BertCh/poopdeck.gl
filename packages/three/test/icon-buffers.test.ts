@@ -1,7 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { GeometryType } from '@poopdeck.gl/core';
 import type { BinaryFeatures } from '@poopdeck.gl/core';
-import { buildIconBuffers, type IconMappingEntry } from '../src/lib/icon-buffers';
+import {
+  buildIconBuffers,
+  type IconMappingEntry,
+} from '../src/lib/icon-buffers';
 import { LocalEnuProjection } from '../src/projection/local-enu';
 import type { RGBA } from '../src/lib/color';
 import { makePointTile } from './_support/features';
@@ -17,7 +20,12 @@ const pointTile = (
   partial: Partial<BinaryFeatures>,
   timeOffset = 0,
   geometryType = GeometryType.Point,
-) => makePointTile(count, positions, partial, { timeOffset, geometryType, layerName: 'vessels' });
+) =>
+  makePointTile(count, positions, partial, {
+    timeOffset,
+    geometryType,
+    layerName: 'vessels',
+  });
 
 // 256x128 atlas, a centred 'marker' rect + an off-centre-anchor 'pin'.
 const ATLAS_W = 256;
@@ -106,7 +114,10 @@ describe('buildIconBuffers', () => {
       [anchor.longitude, anchor.latitude, anchor.longitude, anchor.latitude],
       {
         categoricalProps: {
-          ship_type: { indices: new Uint16Array([0, 1]), categories: ['cargo', 'tanker'] },
+          ship_type: {
+            indices: new Uint16Array([0, 1]),
+            categories: ['cargo', 'tanker'],
+          },
         },
       },
     );
@@ -134,11 +145,9 @@ describe('buildIconBuffers', () => {
   });
 
   it('elevates from a z column and reports a bbox', () => {
-    const tile = pointTile(
-      1,
-      [anchor.longitude, anchor.latitude],
-      { numericProps: { z: new Float32Array([5]) } },
-    );
+    const tile = pointTile(1, [anchor.longitude, anchor.latitude], {
+      numericProps: { z: new Float32Array([5]) },
+    });
     const buf = buildIconBuffers([tile], proj, 0, {
       atlasWidth: ATLAS_W,
       atlasHeight: ATLAS_H,
@@ -158,7 +167,13 @@ describe('buildIconBuffers', () => {
   });
 
   it('skips non-point geometry layers', () => {
-    const tile = pointTile(1, [anchor.longitude, anchor.latitude], {}, 0, GeometryType.LineString);
+    const tile = pointTile(
+      1,
+      [anchor.longitude, anchor.latitude],
+      {},
+      0,
+      GeometryType.LineString,
+    );
     const buf = buildIconBuffers([tile], proj, 0, {
       atlasWidth: ATLAS_W,
       atlasHeight: ATLAS_H,

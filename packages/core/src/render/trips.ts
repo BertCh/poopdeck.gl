@@ -35,14 +35,21 @@ import type { Projection } from '../geo/index.js';
 const EARTH_RADIUS_M = 6_371_000;
 
 /** Haversine distance in metres. Inputs in degrees. */
-function haversineMeters(lon1: number, lat1: number, lon2: number, lat2: number): number {
+function haversineMeters(
+  lon1: number,
+  lat1: number,
+  lon2: number,
+  lat2: number,
+): number {
   const dLat = ((lat2 - lat1) * Math.PI) / 180;
   const dLon = ((lon2 - lon1) * Math.PI) / 180;
   const lat1Rad = (lat1 * Math.PI) / 180;
   const lat2Rad = (lat2 * Math.PI) / 180;
   const sinDLat = Math.sin(dLat / 2);
   const sinDLon = Math.sin(dLon / 2);
-  const a = sinDLat * sinDLat + Math.cos(lat1Rad) * Math.cos(lat2Rad) * sinDLon * sinDLon;
+  const a =
+    sinDLat * sinDLat +
+    Math.cos(lat1Rad) * Math.cos(lat2Rad) * sinDLon * sinDLon;
   return 2 * EARTH_RADIUS_M * Math.asin(Math.sqrt(a));
 }
 
@@ -336,7 +343,11 @@ export function sampleHead(trip: Trip, t: number): Head | null {
  * Interpolate every active head at relative time `t`, writing world-relative
  * vec3 centres into `out` (grown by the caller). Returns the active head count.
  */
-export function sampleHeads(index: TripIndex, t: number, out: Float32Array): number {
+export function sampleHeads(
+  index: TripIndex,
+  t: number,
+  out: Float32Array,
+): number {
   let n = 0;
   for (const trip of index.trips) {
     const h = sampleHead(trip, t);

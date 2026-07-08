@@ -35,7 +35,9 @@ describe('collisionFilterProps helper', () => {
       collisionTestProps: { radiusScale: 2 },
       collisionPriority: 50,
     });
-    expect(props.extensions.some((e) => e instanceof DeckCollisionFilterExtension)).toBe(true);
+    expect(
+      props.extensions.some((e) => e instanceof DeckCollisionFilterExtension),
+    ).toBe(true);
     expect(props.collisionEnabled).toBe(true);
     expect(props.collisionGroup).toBe('labels');
     expect(props.collisionTestProps).toEqual({ radiusScale: 2 });
@@ -56,7 +58,8 @@ describe('collisionFilterProps helper', () => {
     const props = collisionFilterProps({ extensions: [other] });
     expect(props.extensions).toContain(other);
     expect(
-      props.extensions.filter((e) => e instanceof DeckCollisionFilterExtension).length,
+      props.extensions.filter((e) => e instanceof DeckCollisionFilterExtension)
+        .length,
     ).toBe(1);
   });
 
@@ -65,7 +68,8 @@ describe('collisionFilterProps helper', () => {
     const props = collisionFilterProps({ extensions: [existing] });
     expect(props.extensions).toEqual([existing]);
     expect(
-      props.extensions.filter((e) => e instanceof DeckCollisionFilterExtension).length,
+      props.extensions.filter((e) => e instanceof DeckCollisionFilterExtension)
+        .length,
     ).toBe(1);
   });
 
@@ -73,12 +77,12 @@ describe('collisionFilterProps helper', () => {
     _resetWarnOnce();
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
-      expect(collisionFilterProps({ collisionPriority: 5000 }).getCollisionPriority).toBe(
-        COLLISION_PRIORITY_MAX,
-      );
-      expect(collisionFilterProps({ collisionPriority: -5000 }).getCollisionPriority).toBe(
-        COLLISION_PRIORITY_MIN,
-      );
+      expect(
+        collisionFilterProps({ collisionPriority: 5000 }).getCollisionPriority,
+      ).toBe(COLLISION_PRIORITY_MAX);
+      expect(
+        collisionFilterProps({ collisionPriority: -5000 }).getCollisionPriority,
+      ).toBe(COLLISION_PRIORITY_MIN);
       const rangeWarnings = warnSpy.mock.calls.filter(([m]) =>
         String(m).includes('outside'),
       );
@@ -112,8 +116,9 @@ describe('collisionFilterProps helper', () => {
       // A second call with the same key stays quiet (warnOnce).
       collisionFilterProps({ collisionPriorityProperty: 'importance' });
       expect(
-        warnSpy.mock.calls.filter(([m]) => String(m).includes('collisionPriorityProperty'))
-          .length,
+        warnSpy.mock.calls.filter(([m]) =>
+          String(m).includes('collisionPriorityProperty'),
+        ).length,
       ).toBe(1);
     } finally {
       warnSpy.mockRestore();
@@ -136,7 +141,9 @@ vi.mock('@deck.gl/layers', () => {
 });
 
 vi.mock('@deck.gl/core', async () => {
-  const core = (await import('./faithful-deck-core')).createFaithfulDeckCoreMock();
+  const core = (
+    await import('./faithful-deck-core')
+  ).createFaithfulDeckCoreMock();
   class FakeLayer {
     props: any;
     constructor(props: Record<string, any> = {}) {
@@ -147,7 +154,8 @@ vi.mock('@deck.gl/core', async () => {
 });
 
 async function makePointLayer(props: Record<string, any> = {}) {
-  const { AnimatedPointLayer } = await import('../src/layers/core/animated-point-layer');
+  const { AnimatedPointLayer } =
+    await import('../src/layers/core/animated-point-layer');
   const layer: any = Object.create((AnimatedPointLayer as any).prototype);
   layer.props = {
     id: 'icons',
@@ -197,7 +205,9 @@ describe('CollisionFilterExtension composes onto an STT layer via the extensions
     };
     const [sub] = layer.renderLayers();
     expect(
-      sub.props.extensions.some((e: any) => e instanceof DeckCollisionFilterExtension),
+      sub.props.extensions.some(
+        (e: any) => e instanceof DeckCollisionFilterExtension,
+      ),
     ).toBe(true);
     expect(sub.props.collisionEnabled).toBe(true);
     expect(sub.props.collisionGroup).toBe('labels');

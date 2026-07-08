@@ -84,14 +84,21 @@ export interface PolygonBuffers {
   bbox: { min: [number, number, number]; max: [number, number, number] } | null;
 }
 
-function featureColor(b: BinaryFeatures, f: number, mode: PolygonColorMode): RGBA {
+function featureColor(
+  b: BinaryFeatures,
+  f: number,
+  mode: PolygonColorMode,
+): RGBA {
   if (mode.type === 'constant') return mode.color;
   if (mode.type === 'ramp') {
     const col = b.numericProps[mode.property];
     return col ? rampColorAt(col[f], mode.domain, mode.range) : mode.fallback;
   }
   const cat = b.categoricalProps[mode.property];
-  const label = cat && cat.indices[f] !== 0xffff ? cat.categories[cat.indices[f]] : undefined;
+  const label =
+    cat && cat.indices[f] !== 0xffff
+      ? cat.categories[cat.indices[f]]
+      : undefined;
   return resolveCategoryColor(label, mode.mapping, mode.fallback);
 }
 
@@ -100,7 +107,12 @@ function collectPolygonLayers(tiles: Tile[]): BinaryFeatures[] {
   for (const tile of tiles) {
     for (const tl of tile.layers) {
       const b = tl.features;
-      if (!b.featureCount || b.geometryType !== GeometryType.Polygon || !b.startIndices) continue;
+      if (
+        !b.featureCount ||
+        b.geometryType !== GeometryType.Polygon ||
+        !b.startIndices
+      )
+        continue;
       out.push(b);
     }
   }
@@ -134,7 +146,11 @@ export function buildPolygonBuffers(
   // RTC origin = first feature's first projected vertex (absolute world).
   const first = layers[0];
   const fdims = first.positionDimensions ?? 2;
-  const origin = projection.project(first.positions[0], first.positions[1], zLift);
+  const origin = projection.project(
+    first.positions[0],
+    first.positions[1],
+    zLift,
+  );
   const [ox, oy, oz] = origin;
 
   // Growable scratch arrays (final sizes depend on tessellation + extrusion).
@@ -143,24 +159,46 @@ export function buildPolygonBuffers(
   const starts: number[] = [];
   const ends: number[] = [];
   const indices: number[] = [];
-  let minX = Infinity, minY = Infinity, minZ = Infinity;
-  let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+  let minX = Infinity,
+    minY = Infinity,
+    minZ = Infinity;
+  let maxX = -Infinity,
+    maxY = -Infinity,
+    maxZ = -Infinity;
 
-  const pushVertex = (x: number, y: number, z: number, col: RGBA, s: number, e: number): number => {
+  const pushVertex = (
+    x: number,
+    y: number,
+    z: number,
+    col: RGBA,
+    s: number,
+    e: number,
+  ): number => {
     const vi = positions.length / 3;
     positions.push(x, y, z);
-    colors.push(col[0] / 255, col[1] / 255, col[2] / 255, (col[3] ?? 255) / 255);
+    colors.push(
+      col[0] / 255,
+      col[1] / 255,
+      col[2] / 255,
+      (col[3] ?? 255) / 255,
+    );
     starts.push(s);
     ends.push(e);
-    if (x < minX) minX = x; if (y < minY) minY = y; if (z < minZ) minZ = z;
-    if (x > maxX) maxX = x; if (y > maxY) maxY = y; if (z > maxZ) maxZ = z;
+    if (x < minX) minX = x;
+    if (y < minY) minY = y;
+    if (z < minZ) minZ = z;
+    if (x > maxX) maxX = x;
+    if (y > maxY) maxY = y;
+    if (z > maxZ) maxZ = z;
     return vi;
   };
 
   for (const b of layers) {
     const dims = b.positionDimensions ?? fdims;
     const rebase = b.timeOffset - timeOrigin;
-    const extrudeCol = opts.extrusionProperty ? b.numericProps[opts.extrusionProperty] : undefined;
+    const extrudeCol = opts.extrusionProperty
+      ? b.numericProps[opts.extrusionProperty]
+      : undefined;
     const hasPreBaked = !!b.triangles && !!b.triangleOffsets;
 
     for (let f = 0; f < b.featureCount; f++) {
@@ -190,7 +228,8 @@ export function buildPolygonBuffers(
       for (let k = 0; k < ringLen; k++) {
         const lon = b.positions[(v0 + k) * dims];
         const lat = b.positions[(v0 + k) * dims + 1];
-        const gz = (dims > 2 ? b.positions[(v0 + k) * dims + 2] * elevScale : 0) + zLift;
+        const gz =
+          (dims > 2 ? b.positions[(v0 + k) * dims + 2] * elevScale : 0) + zLift;
         const p = projection.project(lon, lat, gz);
         projX[k] = p[0] - ox;
         projY[k] = p[1] - oy;
@@ -211,7 +250,8 @@ export function buildPolygonBuffers(
         const meshBase = baseVi[0];
         const t0 = b.triangleOffsets![f];
         const t1 = b.triangleOffsets![f + 1];
-        for (let t = t0; t < t1; t++) indices.push(meshBase + (b.triangles![t] - v0));
+        for (let t = t0; t < t1; t++)
+          indices.push(meshBase + (b.triangles![t] - v0));
       } else {
         // Earcut in PROJECTED planar space (single ring — no hole info in
         // BinaryFeatures; pre-baked triangles are the holes-correct path).
@@ -229,13 +269,21 @@ export function buildPolygonBuffers(
         // Top cap = base ring lifted by `height`, re-triangulated the same way.
         const topVi: number[] = new Array(ringLen);
         for (let k = 0; k < ringLen; k++) {
-          topVi[k] = pushVertex(projX[k], projY[k], projZ[k] + height, rgba, start, end);
+          topVi[k] = pushVertex(
+            projX[k],
+            projY[k],
+            projZ[k] + height,
+            rgba,
+            start,
+            end,
+          );
         }
         if (hasPreBaked) {
           const meshBase = topVi[0];
           const t0 = b.triangleOffsets![f];
           const t1 = b.triangleOffsets![f + 1];
-          for (let t = t0; t < t1; t++) indices.push(meshBase + (b.triangles![t] - v0));
+          for (let t = t0; t < t1; t++)
+            indices.push(meshBase + (b.triangles![t] - v0));
         } else {
           const flat = new Float64Array(ringLen * 2);
           for (let k = 0; k < ringLen; k++) {
@@ -248,7 +296,10 @@ export function buildPolygonBuffers(
         // Side walls: quad per ring edge (k → k+1, wrapping). Two triangles each.
         for (let k = 0; k < ringLen; k++) {
           const kn = (k + 1) % ringLen;
-          const b0 = baseVi[k], b1 = baseVi[kn], t0v = topVi[k], t1v = topVi[kn];
+          const b0 = baseVi[k],
+            b1 = baseVi[kn],
+            t0v = topVi[k],
+            t1v = topVi[kn];
           indices.push(b0, b1, t1v, b0, t1v, t0v);
         }
       }

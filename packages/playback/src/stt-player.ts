@@ -116,19 +116,20 @@ export class SttPlayer {
   /** Unsubscribers for our controller/governor subscriptions (torn down in destroy). */
   private readonly unsubscribers: Array<() => void> = [];
 
-  private listeners: { [K in SttPlayerEventName]: Set<SttPlayerEventMap[K]> } = {
-    timeupdate: new Set(),
-    play: new Set(),
-    pause: new Set(),
-    statechange: new Set(),
-    waiting: new Set(),
-    ready: new Set(),
-    progress: new Set(),
-    ended: new Set(),
-    ratechange: new Set(),
-    scrubstart: new Set(),
-    scrubend: new Set(),
-  };
+  private listeners: { [K in SttPlayerEventName]: Set<SttPlayerEventMap[K]> } =
+    {
+      timeupdate: new Set(),
+      play: new Set(),
+      pause: new Set(),
+      statechange: new Set(),
+      waiting: new Set(),
+      ready: new Set(),
+      progress: new Set(),
+      ended: new Set(),
+      ratechange: new Set(),
+      scrubstart: new Set(),
+      scrubend: new Set(),
+    };
 
   constructor(options: SttPlayerOptions) {
     this.range = { ...options.timeRange };
@@ -148,7 +149,10 @@ export class SttPlayer {
       // tick-driven stall detection see every frame.
       tickThrottleMs: 0,
     });
-    this.governor = new PlaybackGovernor(this.timeController, options.governor ?? {});
+    this.governor = new PlaybackGovernor(
+      this.timeController,
+      options.governor ?? {},
+    );
     this.seekSettleMs = this.governor.seekSettleMs;
 
     this.unsubscribers.push(
@@ -305,7 +309,10 @@ export class SttPlayer {
   }
 
   /** Byte/tile cost of making `range` fully buffered (directory math; for ETA chips, density strips). */
-  estimateCost(range: { start: number; end: number }): { bytes: number; tiles: number } {
+  estimateCost(range: { start: number; end: number }): {
+    bytes: number;
+    tiles: number;
+  } {
     return this.governor.estimateCost(range);
   }
 
@@ -335,13 +342,19 @@ export class SttPlayer {
   // ── Events ──────────────────────────────────────────────────────────────
 
   /** Register an event listener. Returns an unsubscribe function. */
-  on<K extends SttPlayerEventName>(event: K, callback: SttPlayerEventMap[K]): () => void {
+  on<K extends SttPlayerEventName>(
+    event: K,
+    callback: SttPlayerEventMap[K],
+  ): () => void {
     this.listeners[event].add(callback);
     return () => this.off(event, callback);
   }
 
   /** Unregister an event listener. */
-  off<K extends SttPlayerEventName>(event: K, callback: SttPlayerEventMap[K]): void {
+  off<K extends SttPlayerEventName>(
+    event: K,
+    callback: SttPlayerEventMap[K],
+  ): void {
     this.listeners[event].delete(callback);
   }
 
@@ -375,7 +388,10 @@ export class SttPlayer {
       return;
     }
     const now = nowWall();
-    if (this.timeupdateIntervalMs > 0 && now - this.lastTimeupdateWall < this.timeupdateIntervalMs) {
+    if (
+      this.timeupdateIntervalMs > 0 &&
+      now - this.lastTimeupdateWall < this.timeupdateIntervalMs
+    ) {
       return;
     }
     this.lastTimeupdateWall = now;

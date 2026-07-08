@@ -140,7 +140,9 @@ describe('AnimatedPointCloudLayer per-tile sublayer architecture', () => {
 
     // TimeFilterExtension instanced attributes — keyed by ATTRIBUTE name.
     // Zero-copy: the same Float32Array reference the tile carries.
-    expect(attrs.instanceStartTime.value).toBe(tile.layers[0].features.startTimes);
+    expect(attrs.instanceStartTime.value).toBe(
+      tile.layers[0].features.startTimes,
+    );
     expect(attrs.instanceStartTime.size).toBe(1);
     expect(attrs.instanceEndTime.value).toBe(tile.layers[0].features.endTimes);
     expect(attrs.instanceEndTime.size).toBe(1);
@@ -170,7 +172,9 @@ describe('AnimatedPointCloudLayer per-tile sublayer architecture', () => {
     const tile = bigPointTile(N);
     const rgba = new Uint8Array(N * 4);
     for (let i = 0; i < N * 4; i++) rgba[i] = i;
-    tile.layers[0].features.vectorProps = { point_rgba: { value: rgba, size: 4 } };
+    tile.layers[0].features.vectorProps = {
+      point_rgba: { value: rgba, size: 4 },
+    };
 
     const built = buildSublayerForTile(tile);
     const attrs = built.props.data.attributes;
@@ -199,7 +203,9 @@ describe('AnimatedPointCloudLayer per-tile sublayer architecture', () => {
     expect(attrs.getColor.value).toBeInstanceOf(Uint8Array);
     expect(attrs.getColor.size).toBe(4);
     expect(attrs.getColor.normalized).toBe(true);
-    expect(Array.from(attrs.getColor.value.slice(0, 4))).toEqual([10, 40, 70, 255]);
+    expect(Array.from(attrs.getColor.value.slice(0, 4))).toEqual([
+      10, 40, 70, 255,
+    ]);
   });
 
   it('CPU-expands the palette into a LIT per-point RGBA getColor for categorical colour', () => {
@@ -232,7 +238,9 @@ describe('AnimatedPointCloudLayer per-tile sublayer architecture', () => {
     expect(attrs.getColor.size).toBe(4);
     expect(attrs.getColor.normalized).toBe(true);
     // Every point is category index 2 → palette[2] = [70, 80, 90, 255].
-    expect(Array.from(attrs.getColor.value.slice(0, 4))).toEqual([70, 80, 90, 255]);
+    expect(Array.from(attrs.getColor.value.slice(0, 4))).toEqual([
+      70, 80, 90, 255,
+    ]);
     // The GPU category path stays idle (no unlit fragment replace).
     expect(built.props.useCategoryColor).toBe(false);
     expect(built.props.categoryPalette).toBeUndefined();
@@ -250,7 +258,9 @@ describe('AnimatedPointCloudLayer per-tile sublayer architecture', () => {
     const N = 3;
     const tile = bigPointTile(N);
     const normals = new Float32Array([0, 0, 1, 1, 0, 0, 0, 1, 0]);
-    tile.layers[0].features.vectorProps = { normal: { value: normals, size: 3 } };
+    tile.layers[0].features.vectorProps = {
+      normal: { value: normals, size: 3 },
+    };
 
     const built = buildSublayerForTile(tile);
     const attrs = built.props.data.attributes;
@@ -268,7 +278,10 @@ describe('AnimatedPointCloudLayer per-tile sublayer architecture', () => {
     const tile = bigPointTile(N);
     tile.layers[0].features.numericProps['alt'] = new Float32Array([5, 10, 15]);
 
-    const built = buildSublayerForTile(tile, { elevationProperty: 'alt', elevationScale: 2 });
+    const built = buildSublayerForTile(tile, {
+      elevationProperty: 'alt',
+      elevationScale: 2,
+    });
     const positions = built.props.data.attributes.getPosition.value;
     expect(positions[2]).toBe(10);
     expect(positions[5]).toBe(20);
@@ -287,7 +300,9 @@ describe('AnimatedPointCloudLayer per-tile sublayer architecture', () => {
   });
 
   it('accepts the getColor alias (upstream vocabulary) as a constant', () => {
-    const built = buildSublayerForTile(bigPointTile(3), { getColor: [1, 2, 3, 255] });
+    const built = buildSublayerForTile(bigPointTile(3), {
+      getColor: [1, 2, 3, 255],
+    });
     expect(built.props.getColor).toEqual([1, 2, 3, 255]);
   });
 

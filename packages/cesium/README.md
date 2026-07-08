@@ -19,9 +19,9 @@ npm install @poopdeck.gl/cesium cesium
 ## Hello world — attachCesiumClock + CesiumPointLayer
 
 ```ts
-import { STTArchive, SpatiotemporalTileset } from "@poopdeck.gl/core";
-import { makeTilesetCallbacks } from "@poopdeck.gl/core/tileset-adapter";
-import { CesiumPointLayer, attachCesiumClock } from "@poopdeck.gl/cesium";
+import { STTArchive, SpatiotemporalTileset } from '@poopdeck.gl/core';
+import { makeTilesetCallbacks } from '@poopdeck.gl/core/tileset-adapter';
+import { CesiumPointLayer, attachCesiumClock } from '@poopdeck.gl/cesium';
 
 const layer = new CesiumPointLayer(viewer.scene, { pixelSize: 6 });
 const archive = new STTArchive({ url: manifestUrl });

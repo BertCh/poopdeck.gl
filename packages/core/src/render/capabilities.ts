@@ -78,7 +78,12 @@ export type LayerKindSupport =
  */
 export type Degradation =
   | { action: 'fallback'; toKind: LayerKind; lost: Capability[] }
-  | { action: 'fallbackMode'; fromMode: TimeFilterMode; toMode: TimeFilterMode; lost: Capability[] }
+  | {
+      action: 'fallbackMode';
+      fromMode: TimeFilterMode;
+      toMode: TimeFilterMode;
+      lost: Capability[];
+    }
   | { action: 'skip'; reason: string }
   | { action: 'throw'; reason: string };
 
@@ -133,7 +138,8 @@ export function degradeRequest(
 ): Degradation | null {
   const support = d.layerKinds[kind];
   if (!support?.supported) {
-    const reason = support?.reason ?? `backend ${d.id} does not support layer kind ${kind}`;
+    const reason =
+      support?.reason ?? `backend ${d.id} does not support layer kind ${kind}`;
     if (support && support.supported === false && support.fallbackKind) {
       return { action: 'fallback', toKind: support.fallbackKind, lost: [] };
     }
@@ -141,7 +147,9 @@ export function degradeRequest(
   }
   if (mode !== 'none' && !d.timeFilterModes.includes(mode)) {
     // Fall back to a supported mode (prefer 'window', else the first available).
-    const toMode = d.timeFilterModes.includes('window') ? 'window' : d.timeFilterModes[0] ?? 'none';
+    const toMode = d.timeFilterModes.includes('window')
+      ? 'window'
+      : (d.timeFilterModes[0] ?? 'none');
     return { action: 'fallbackMode', fromMode: mode, toMode, lost: [] };
   }
   return null;
@@ -167,17 +175,23 @@ export function assertDescriptorConsistent(
   const violations: string[] = [];
   for (const cap of CAPABILITIES) {
     if (d.capabilities[cap] && !proven.capabilities.has(cap)) {
-      violations.push(`${d.id}: claims capability "${cap}" but no passing conformance case`);
+      violations.push(
+        `${d.id}: claims capability "${cap}" but no passing conformance case`,
+      );
     }
   }
   for (const kind of LAYER_KINDS) {
     if (d.layerKinds[kind]?.supported && !proven.layerKinds.has(kind)) {
-      violations.push(`${d.id}: claims layer kind "${kind}" but no passing conformance case`);
+      violations.push(
+        `${d.id}: claims layer kind "${kind}" but no passing conformance case`,
+      );
     }
   }
   for (const mode of d.timeFilterModes) {
     if (!proven.timeFilterModes.has(mode)) {
-      violations.push(`${d.id}: claims time-filter mode "${mode}" but no passing conformance case`);
+      violations.push(
+        `${d.id}: claims time-filter mode "${mode}" but no passing conformance case`,
+      );
     }
   }
   return violations;

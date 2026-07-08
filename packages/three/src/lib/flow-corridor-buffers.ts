@@ -85,7 +85,11 @@ function isFlowLayer(b: BinaryFeatures): boolean {
   );
 }
 
-function collectFlowLayers(tiles: Tile[]): { layers: BinaryFeatures[]; segCount: number; numBuckets: number } {
+function collectFlowLayers(tiles: Tile[]): {
+  layers: BinaryFeatures[];
+  segCount: number;
+  numBuckets: number;
+} {
   const layers: BinaryFeatures[] = [];
   let segCount = 0;
   let numBuckets = 0;
@@ -100,7 +104,10 @@ function collectFlowLayers(tiles: Tile[]): { layers: BinaryFeatures[]; segCount:
       else if (nb !== numBuckets) continue;
       layers.push(b);
       for (let f = 0; f < b.featureCount; f++) {
-        segCount += Math.max(0, b.startIndices![f + 1] - b.startIndices![f] - 1);
+        segCount += Math.max(
+          0,
+          b.startIndices![f + 1] - b.startIndices![f] - 1,
+        );
       }
     }
   }
@@ -110,11 +117,16 @@ function collectFlowLayers(tiles: Tile[]): { layers: BinaryFeatures[]; segCount:
 /** Derive the global bucket axis from a flow layer's feature-0 [start,end]. */
 function axisFor(b: BinaryFeatures): BucketAxis | null {
   const nb = b.vertexValueBuckets ?? 0;
-  if (nb <= 0 || !b.startTimes || b.startTimes.length === 0 || !b.endTimes) return null;
+  if (nb <= 0 || !b.startTimes || b.startTimes.length === 0 || !b.endTimes)
+    return null;
   const rel0 = b.startTimes[0];
   const span = b.endTimes[0] - rel0;
   if (span <= 0) return null;
-  return { numBuckets: nb, bucket0Abs: b.timeOffset + rel0, bucketWidth: span / nb };
+  return {
+    numBuckets: nb,
+    bucket0Abs: b.timeOffset + rel0,
+    bucketWidth: span / nb,
+  };
 }
 
 export function buildFlowCorridorBuffers(
@@ -146,7 +158,11 @@ export function buildFlowCorridorBuffers(
   // RTC origin = first vertex of the first feature, projected (absolute world).
   const first = layers[0];
   const fdims = first.positionDimensions ?? 2;
-  const origin = projection.project(first.positions[0], first.positions[1], zLift);
+  const origin = projection.project(
+    first.positions[0],
+    first.positions[1],
+    zLift,
+  );
 
   const posA = new Float32Array(segCount * 3);
   const posB = new Float32Array(segCount * 3);
@@ -155,8 +171,12 @@ export function buildFlowCorridorBuffers(
   const valueMatrix = new Float32Array(segCount * numBuckets * 2);
   const starts = new Float32Array(segCount);
   const ends = new Float32Array(segCount);
-  let minX = Infinity, minY = Infinity, minZ = Infinity;
-  let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+  let minX = Infinity,
+    minY = Infinity,
+    minZ = Infinity;
+  let maxX = -Infinity,
+    maxY = -Infinity,
+    maxZ = -Infinity;
 
   let s = 0; // segment index
   for (const b of layers) {
@@ -172,13 +192,30 @@ export function buildFlowCorridorBuffers(
       for (let v = v0; v < v1 - 1; v++) {
         const z0 = (dims > 2 ? b.positions[v * dims + 2] : 0) + zLift;
         const z1 = (dims > 2 ? b.positions[(v + 1) * dims + 2] : 0) + zLift;
-        const a = projection.project(b.positions[v * dims], b.positions[v * dims + 1], z0);
-        const c = projection.project(b.positions[(v + 1) * dims], b.positions[(v + 1) * dims + 1], z1);
-        const ax = a[0] - origin[0], ay = a[1] - origin[1], az = a[2] - origin[2];
-        const bx = c[0] - origin[0], by = c[1] - origin[1], bz = c[2] - origin[2];
-        posA[s * 3] = ax; posA[s * 3 + 1] = ay; posA[s * 3 + 2] = az;
-        posB[s * 3] = bx; posB[s * 3 + 1] = by; posB[s * 3 + 2] = bz;
-        starts[s] = start; ends[s] = end;
+        const a = projection.project(
+          b.positions[v * dims],
+          b.positions[v * dims + 1],
+          z0,
+        );
+        const c = projection.project(
+          b.positions[(v + 1) * dims],
+          b.positions[(v + 1) * dims + 1],
+          z1,
+        );
+        const ax = a[0] - origin[0],
+          ay = a[1] - origin[1],
+          az = a[2] - origin[2];
+        const bx = c[0] - origin[0],
+          by = c[1] - origin[1],
+          bz = c[2] - origin[2];
+        posA[s * 3] = ax;
+        posA[s * 3 + 1] = ay;
+        posA[s * 3 + 2] = az;
+        posB[s * 3] = bx;
+        posB[s * 3 + 1] = by;
+        posB[s * 3 + 2] = bz;
+        starts[s] = start;
+        ends[s] = end;
         rowV[s] = (s + 0.5) / segCount;
 
         // Copy the two endpoint vertices' bucket columns into this segment's row.
@@ -192,9 +229,16 @@ export function buildFlowCorridorBuffers(
           valueMatrix[rowBase + bk * 2 + 1] = matrix[baseB + bk];
         }
 
-        for (const [x, y, zz] of [[ax, ay, az], [bx, by, bz]] as const) {
-          if (x < minX) minX = x; if (y < minY) minY = y; if (zz < minZ) minZ = zz;
-          if (x > maxX) maxX = x; if (y > maxY) maxY = y; if (zz > maxZ) maxZ = zz;
+        for (const [x, y, zz] of [
+          [ax, ay, az],
+          [bx, by, bz],
+        ] as const) {
+          if (x < minX) minX = x;
+          if (y < minY) minY = y;
+          if (zz < minZ) minZ = zz;
+          if (x > maxX) maxX = x;
+          if (y > maxY) maxY = y;
+          if (zz > maxZ) maxZ = zz;
         }
         s++;
       }
@@ -204,7 +248,12 @@ export function buildFlowCorridorBuffers(
   return {
     count: segCount,
     numBuckets,
-    posA, posB, rowV, valueMatrix, starts, ends,
+    posA,
+    posB,
+    rowV,
+    valueMatrix,
+    starts,
+    ends,
     origin,
     bbox: { min: [minX, minY, minZ], max: [maxX, maxY, maxZ] },
     axis,
@@ -217,7 +266,10 @@ export function buildFlowCorridorBuffers(
  * material samples the value texture at `(pos + 0.5) / numBuckets` so its linear
  * filtering performs the two-bucket lerp on the GPU.
  */
-export function bucketPosFromTime(axis: BucketAxis, absoluteTimeMs: number): number {
+export function bucketPosFromTime(
+  axis: BucketAxis,
+  absoluteTimeMs: number,
+): number {
   if (axis.numBuckets <= 0 || axis.bucketWidth <= 0) return 0;
   let pos = (absoluteTimeMs - axis.bucket0Abs) / axis.bucketWidth;
   if (pos < 0) pos = 0;

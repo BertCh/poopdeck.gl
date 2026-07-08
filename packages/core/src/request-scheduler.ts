@@ -240,7 +240,8 @@ export class SharedRequestScheduler {
 
   constructor(options: SharedRequestSchedulerOptions = {}) {
     const max = options.maxRequests ?? DEFAULT_MAX_REQUESTS;
-    this.maxRequests = Number.isFinite(max) && max >= 1 ? Math.floor(max) : DEFAULT_MAX_REQUESTS;
+    this.maxRequests =
+      Number.isFinite(max) && max >= 1 ? Math.floor(max) : DEFAULT_MAX_REQUESTS;
   }
 
   /**
@@ -539,7 +540,10 @@ export class SharedRequestScheduler {
     if (!chosen) return null;
 
     // Spend one slot's worth of credit from the chosen source.
-    this.deficits.set(chosen.entry.sourceId, (this.deficits.get(chosen.entry.sourceId) ?? 0) - 1);
+    this.deficits.set(
+      chosen.entry.sourceId,
+      (this.deficits.get(chosen.entry.sourceId) ?? 0) - 1,
+    );
 
     // Remove the chosen entry from the queue.
     const idx = this.queue.indexOf(chosen.entry);
@@ -588,7 +592,10 @@ export class SharedRequestScheduler {
   private dispatch(entry: Entry): void {
     entry.running = true;
     this.active.add(entry);
-    this.inFlight.set(entry.sourceId, (this.inFlight.get(entry.sourceId) ?? 0) + 1);
+    this.inFlight.set(
+      entry.sourceId,
+      (this.inFlight.get(entry.sourceId) ?? 0) + 1,
+    );
 
     // If it was aborted between enqueue and dispatch, reject immediately.
     if (entry.controller.signal.aborted) {
@@ -644,7 +651,9 @@ export class SharedRequestScheduler {
 
 /** Coerce a weight to a positive finite number (default 1). */
 function normalizeWeight(weight: number | undefined): number {
-  return typeof weight === 'number' && Number.isFinite(weight) && weight > 0 ? weight : 1;
+  return typeof weight === 'number' && Number.isFinite(weight) && weight > 0
+    ? weight
+    : 1;
 }
 
 /**

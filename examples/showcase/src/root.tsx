@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { ReactNode } from 'react';
 import {
   Links,
   Meta,
@@ -9,8 +9,8 @@ import {
   useRouteError,
   type LinksFunction,
   type MetaFunction,
-} from "react-router";
-import "./index.css";
+} from 'react-router';
+import './index.css';
 
 /**
  * Root route — the document shell for the whole app (framework mode replaces
@@ -20,30 +20,30 @@ import "./index.css";
  */
 
 export const links: LinksFunction = () => [
-  { rel: "preconnect", href: "https://fonts.googleapis.com" },
+  { rel: 'preconnect', href: 'https://fonts.googleapis.com' },
   {
-    rel: "preconnect",
-    href: "https://fonts.gstatic.com",
-    crossOrigin: "anonymous",
+    rel: 'preconnect',
+    href: 'https://fonts.gstatic.com',
+    crossOrigin: 'anonymous',
   },
   // Editorial type for the data stories (Fraunces display + Newsreader body
   // serif). `display=swap` so first paint never blocks on the fonts.
   {
-    rel: "stylesheet",
-    href: "https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700;9..144,900&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&display=swap",
+    rel: 'stylesheet',
+    href: 'https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700;9..144,900&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&display=swap',
   },
   {
-    rel: "stylesheet",
-    href: "https://api.mapbox.com/mapbox-gl-js/v3.0.0/mapbox-gl.css",
+    rel: 'stylesheet',
+    href: 'https://api.mapbox.com/mapbox-gl-js/v3.0.0/mapbox-gl.css',
   },
 ];
 
 export const meta: MetaFunction = () => [
-  { title: "poopdeck.gl — navigation & observation" },
+  { title: 'poopdeck.gl — navigation & observation' },
   {
-    name: "description",
+    name: 'description',
     content:
-      "poopdeck.gl — time-aware deck.gl layers and a tile format for streaming animated geospatial data. Built for things that move: ships, drifters, cars, and anything with a trace.",
+      'poopdeck.gl — time-aware deck.gl layers and a tile format for streaming animated geospatial data. Built for things that move: ships, drifters, cars, and anything with a trace.',
   },
 ];
 
@@ -81,7 +81,7 @@ export function HydrateFallback() {
   return (
     <div
       className="w-full h-full flex items-center justify-center text-sm"
-      style={{ background: "var(--page-bg)", color: "var(--ink-400)" }}
+      style={{ background: 'var(--page-bg)', color: 'var(--ink-400)' }}
     >
       Loading…
     </div>
@@ -99,12 +99,12 @@ export function ErrorBoundary() {
     ? `${error.status} ${error.statusText}`
     : error instanceof Error
       ? error.message
-      : "The page hit an unexpected error and could not render.";
+      : 'The page hit an unexpected error and could not render.';
 
   return (
     <div
       className="min-h-screen flex items-center justify-center px-6"
-      style={{ background: "#0a0d12" }}
+      style={{ background: '#0a0d12' }}
     >
       <div className="max-w-md text-center">
         <h1 className="font-display text-lg font-semibold text-slate-100 mb-2">

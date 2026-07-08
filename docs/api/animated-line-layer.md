@@ -27,14 +27,14 @@ const layer = new AnimatedLineLayer({
 
 Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 
-| Property | Type | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `color` / `getColor` | `Color \| string` | `[0,150,255,255]` | Segment color: constant RGBA or a categorical property-column name. |
-| `width` / `getWidth` | `number \| string` | `1` | Segment width — constant or per-feature numeric column. |
-| `widthUnits` | `'pixels' \| 'meters' \| 'common'` | `'pixels'` | Width units. |
-| `widthScale` / `widthMinPixels` / `widthMaxPixels` | `number` | — | Width scaling + pixel clamps. |
-| `colorPalette` | `Color[]` | 10-stop | Palette for a categorical `color` column. |
-| `fadeInDuration` / `fadeOutDuration` | `number` | `300` | Window fade ramps (ms). |
+| Property                                           | Type                               | Default           | Description                                                         |
+| :------------------------------------------------- | :--------------------------------- | :---------------- | :------------------------------------------------------------------ |
+| `color` / `getColor`                               | `Color \| string`                  | `[0,150,255,255]` | Segment color: constant RGBA or a categorical property-column name. |
+| `width` / `getWidth`                               | `number \| string`                 | `1`               | Segment width — constant or per-feature numeric column.             |
+| `widthUnits`                                       | `'pixels' \| 'meters' \| 'common'` | `'pixels'`        | Width units.                                                        |
+| `widthScale` / `widthMinPixels` / `widthMaxPixels` | `number`                           | —                 | Width scaling + pixel clamps.                                       |
+| `colorPalette`                                     | `Color[]`                          | 10-stop           | Palette for a categorical `color` column.                           |
+| `fadeInDuration` / `fadeOutDuration`               | `number`                           | `300`             | Window fade ramps (ms).                                             |
 
 ## Behavior notes
 

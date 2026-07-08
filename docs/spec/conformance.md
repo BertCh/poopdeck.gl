@@ -13,11 +13,11 @@
 STT has three independently-versioned axes (§9 of the packed spec). An
 implementation declares conformance per axis:
 
-| axis | current | governed by |
-| --- | --- | --- |
-| Packed **format** | `formatVersion: 2` (default; `1` frozen) | [packed-format §3, §6](./stt-packed-format.md) + [`manifest.schema.json`](./manifest.schema.json) |
-| **Directory** codec | `directoryVersion: 5` | [packed-format §4, §4.1](./stt-packed-format.md) |
-| **Tile payload** | Arrow IPC + GeoArrow | [data-format.md](../architecture/data-format.md) + [time-model.md](./time-model.md) |
+| axis                | current                                  | governed by                                                                                       |
+| ------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| Packed **format**   | `formatVersion: 2` (default; `1` frozen) | [packed-format §3, §6](./stt-packed-format.md) + [`manifest.schema.json`](./manifest.schema.json) |
+| **Directory** codec | `directoryVersion: 5`                    | [packed-format §4, §4.1](./stt-packed-format.md)                                                  |
+| **Tile payload**    | Arrow IPC + GeoArrow                     | [data-format.md](../architecture/data-format.md) + [time-model.md](./time-model.md)               |
 
 A **conformant reader** opens any dataset these specs permit (both directory
 layouts, both layer-frame shapes, both `vertex_time` encodings, unknown
@@ -41,7 +41,7 @@ agree (`packages/core/test/manifest-schema.test.ts`):
 
 The schema encodes the format's evolution rules directly: `format`,
 `formatVersion`, and `directory.directoryVersion` are strict `const`s;
-`directory.encoding` is an enum that is *not* required (pre-encoding manifests
+`directory.encoding` is an enum that is _not_ required (pre-encoding manifests
 omit it); pack/index keys are `pattern`-checked to the blake3-128 hex shape; and
 every envelope level permits unknown fields (additive evolution). The contract
 test also asserts five **negative** cases drift loudly (wrong format, wrong
@@ -55,11 +55,11 @@ Tiny, deterministic, byte-stable datasets live under
 cross-implementation agreement. The two packed fixtures are the genuine
 **Rust writes → TS reads** cases; `sample.stt` is a frozen legacy artifact:
 
-| fixture | exercises |
-| --- | --- |
-| `packed-golden/` | manifest folding, v5 directory decode (12 entries), **byte-identical blob dedup** (3 tiles share one physical blob), multi-pack cutting |
-| `paged-golden/` + `paged-golden-single/` | the **paged ⇄ whole-load differential**: the same 252-tile corpus emitted both ways, asserting paged queries return *byte-identical* results to a whole-load directory while fetching only the leaf pages a viewport/zoom/time window touches |
-| `sample.stt` (frozen legacy v4 fixture) | a test helper transcodes it to an in-memory packed dataset, then the packed reader decodes its tiles (geometry, numeric + categorical properties, dictionary null-bitmap). Not written by the current Rust toolchain — the single-file writer was removed |
+| fixture                                  | exercises                                                                                                                                                                                                                                                 |
+| ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `packed-golden/`                         | manifest folding, v5 directory decode (12 entries), **byte-identical blob dedup** (3 tiles share one physical blob), multi-pack cutting                                                                                                                   |
+| `paged-golden/` + `paged-golden-single/` | the **paged ⇄ whole-load differential**: the same 252-tile corpus emitted both ways, asserting paged queries return _byte-identical_ results to a whole-load directory while fetching only the leaf pages a viewport/zoom/time window touches             |
+| `sample.stt` (frozen legacy v4 fixture)  | a test helper transcodes it to an in-memory packed dataset, then the packed reader decodes its tiles (geometry, numeric + categorical properties, dictionary null-bitmap). Not written by the current Rust toolchain — the single-file writer was removed |
 
 They are **committed, not regenerated per build**, so they double as a
 regression corpus. Regenerate after an intentional format change with:
@@ -81,6 +81,7 @@ or its `manifest.json` (the single-file `.stt` container has been removed — on
 the packed format is accepted), and runs, by cost tier:
 
 **Cheap (all tiles):**
+
 - **content-addressing integrity** — every `packs/*.sttp` and `index/*.sttd`
   blake3-hashes to its filename, and on-disk lengths match the manifest
   (`verify_packed_objects`);
@@ -94,6 +95,7 @@ the packed format is accepted), and runs, by cost tier:
 - **CRC32C** — every compressed blob's integrity tag round-trips.
 
 **Expensive (full or `--sample N`):**
+
 - **Arrow decode** — each tile decodes as an Arrow IPC stream;
 - **schema contract** — required columns (`id` U64, `start_time`/`end_time` I64,
   `geometry` with a `geoarrow.*` extension name) and the permitted optional/
@@ -134,7 +136,7 @@ self-description (`stt:quant` / vertex-time metadata), summary cell-id, and
 
 ### 2.4 Internal pins (for implementers extending the spec)
 
-Two Rust/TS test suites lock the spec to the code so the *spec itself* can't
+Two Rust/TS test suites lock the spec to the code so the _spec itself_ can't
 drift; an external implementer reads them as worked examples:
 
 - `crates/stt-core/tests/spec_conformance.rs` — round-trips point / line /
@@ -169,7 +171,7 @@ A conformant writer **MUST**:
   chars) and name each file by its hash;
 - emit a v5 directory: delta + zig-zag varint key columns, blob-run RLE, the
   per-run `pack_id` column, pack-relative offset contiguity, and the optional
-  covering section (emitted iff *every* entry has a covering bound);
+  covering section (emitted iff _every_ entry has a covering bound);
 - tag every `geometry` field with `ARROW:extension:name` =
   `geoarrow.{point,linestring,polygon}` (and, unquantized, the CRS84
   `ARROW:extension:metadata`);
@@ -216,7 +218,7 @@ A conformant writer **SHOULD**:
 - order blobs and directory entries with the §5 total tiebreaks so a rebuild is
   byte-reproducible — **and** serialize Arrow schema/field custom metadata in a
   canonical (lexicographic) key order so content addresses are reproducible
-  *across processes*. The reference Rust writer meets **both** on Arrow ≥59
+  _across processes_. The reference Rust writer meets **both** on Arrow ≥59
   (sorted-`BTreeMap` metadata assembly + Arrow 59's stable IPC metadata
   serialization; see
   [packed-format §7-D6](./stt-packed-format.md#7-design-decisions)) — the former

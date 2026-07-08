@@ -11,7 +11,12 @@
  * ~±2e7 → feed batches through {@link projectPositions} (RTC).
  */
 
-import { EARTH_RADIUS, type GeoAnchor, type LocalFrame, type Projection } from './local-enu.js';
+import {
+  EARTH_RADIUS,
+  type GeoAnchor,
+  type LocalFrame,
+  type Projection,
+} from './local-enu.js';
 
 const DEG2RAD = Math.PI / 180;
 const RAD2DEG = 180 / Math.PI;
@@ -20,7 +25,11 @@ const RAD2DEG = 180 / Math.PI;
 export const MAX_MERCATOR_LAT = 85.051_128_779_806_59;
 
 function clampLat(lat: number): number {
-  return lat < -MAX_MERCATOR_LAT ? -MAX_MERCATOR_LAT : lat > MAX_MERCATOR_LAT ? MAX_MERCATOR_LAT : lat;
+  return lat < -MAX_MERCATOR_LAT
+    ? -MAX_MERCATOR_LAT
+    : lat > MAX_MERCATOR_LAT
+      ? MAX_MERCATOR_LAT
+      : lat;
 }
 
 export class MercatorProjection implements Projection {
@@ -31,10 +40,15 @@ export class MercatorProjection implements Projection {
     this.anchor = anchor;
   }
 
-  project(longitude: number, latitude: number, altitude = 0): [number, number, number] {
+  project(
+    longitude: number,
+    latitude: number,
+    altitude = 0,
+  ): [number, number, number] {
     const lat = clampLat(latitude);
     const x = EARTH_RADIUS * longitude * DEG2RAD;
-    const y = EARTH_RADIUS * Math.log(Math.tan(Math.PI / 4 + (lat * DEG2RAD) / 2));
+    const y =
+      EARTH_RADIUS * Math.log(Math.tan(Math.PI / 4 + (lat * DEG2RAD) / 2));
     // Scale altitude to local mercator units so vertical == horizontal scale.
     const z = altitude / this.metersPerWorldUnit(longitude, lat);
     return [x, y, z];
@@ -42,7 +56,8 @@ export class MercatorProjection implements Projection {
 
   unproject(x: number, y: number, z = 0): [number, number, number] {
     const longitude = (x / EARTH_RADIUS) * RAD2DEG;
-    const latitude = (2 * Math.atan(Math.exp(y / EARTH_RADIUS)) - Math.PI / 2) * RAD2DEG;
+    const latitude =
+      (2 * Math.atan(Math.exp(y / EARTH_RADIUS)) - Math.PI / 2) * RAD2DEG;
     const altitude = z * this.metersPerWorldUnit(longitude, latitude);
     return [longitude, latitude, altitude];
   }

@@ -15,19 +15,19 @@ the request scheduling problem, not just the tile address.
 
 ## Prop mapping
 
-| `SpatioTemporalLayer` prop | `TileLayer` analog | Notes |
-| --- | --- | --- |
-| `data` (a `manifest.json` URL) | `data` (URL template) | One manifest per dataset, not a `{z}/{x}/{y}` template; tiles are range-read out of packs. |
-| `maxRequests` (default **24**) | `maxRequests` (default 6) | Same meaning. The single concurrency knob, threaded into the range-request pool. |
-| `maxCacheSize` (default 2000 tiles) | `maxCacheSize` | Same meaning (tile-count LRU cap). |
-| `maxCacheByteSize` (default 2 GiB) | `maxCacheByteSize` | Same meaning; a persistent OPFS cache sits below the memory LRU. |
-| `onTileLoad` / `onTileUnload` | `onTileLoad` / `onTileUnload` | Same contract. `onTileLoad`-driven re-renders are coalesced via rAF. |
-| `onViewportLoad` | `onViewportLoad` | Same contract: fired once per viewport×window selection settle, with the loaded tiles. Re-fires only after the selection changes and re-settles. |
-| `onTileError` | `onTileError` | Same contract, plus the failing tile's id. Default logs to `console.error`, like TileLayer. |
-| — | `refinementStrategy` | No equivalent prop. The tileset pins a low-zoom overview tier and renders best-available data while finer tiles stream — closest in spirit to `'best-available'`, but not configurable. |
-| `loadOptions` | `loadOptions` | loaders.gl-style: `loadOptions.fetch` as a `RequestInit` object is merged into every archive request (manifest, directory, pack ranges); a fetch-like function replaces the transport. Other keys are ignored. |
-| `_subLayerProps` | `renderSubLayers` / `_subLayerProps` | Class swapping + prop overrides via `_subLayerProps` (incl. `type`), deck's CompositeLayer contract. No `renderSubLayers` callback — each animated layer class owns its (cache-gated) sublayer stack; see "Known departures". |
-| `currentTime`, `timeWindow`, `timeController` | — | The temporal axis; no TileLayer analog exists. |
+| `SpatioTemporalLayer` prop                    | `TileLayer` analog                   | Notes                                                                                                                                                                                                                         |
+| --------------------------------------------- | ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `data` (a `manifest.json` URL)                | `data` (URL template)                | One manifest per dataset, not a `{z}/{x}/{y}` template; tiles are range-read out of packs.                                                                                                                                    |
+| `maxRequests` (default **24**)                | `maxRequests` (default 6)            | Same meaning. The single concurrency knob, threaded into the range-request pool.                                                                                                                                              |
+| `maxCacheSize` (default 2000 tiles)           | `maxCacheSize`                       | Same meaning (tile-count LRU cap).                                                                                                                                                                                            |
+| `maxCacheByteSize` (default 2 GiB)            | `maxCacheByteSize`                   | Same meaning; a persistent OPFS cache sits below the memory LRU.                                                                                                                                                              |
+| `onTileLoad` / `onTileUnload`                 | `onTileLoad` / `onTileUnload`        | Same contract. `onTileLoad`-driven re-renders are coalesced via rAF.                                                                                                                                                          |
+| `onViewportLoad`                              | `onViewportLoad`                     | Same contract: fired once per viewport×window selection settle, with the loaded tiles. Re-fires only after the selection changes and re-settles.                                                                              |
+| `onTileError`                                 | `onTileError`                        | Same contract, plus the failing tile's id. Default logs to `console.error`, like TileLayer.                                                                                                                                   |
+| —                                             | `refinementStrategy`                 | No equivalent prop. The tileset pins a low-zoom overview tier and renders best-available data while finer tiles stream — closest in spirit to `'best-available'`, but not configurable.                                       |
+| `loadOptions`                                 | `loadOptions`                        | loaders.gl-style: `loadOptions.fetch` as a `RequestInit` object is merged into every archive request (manifest, directory, pack ranges); a fetch-like function replaces the transport. Other keys are ignored.                |
+| `_subLayerProps`                              | `renderSubLayers` / `_subLayerProps` | Class swapping + prop overrides via `_subLayerProps` (incl. `type`), deck's CompositeLayer contract. No `renderSubLayers` callback — each animated layer class owns its (cache-gated) sublayer stack; see "Known departures". |
+| `currentTime`, `timeWindow`, `timeController` | —                                    | The temporal axis; no TileLayer analog exists.                                                                                                                                                                                |
 
 ## Why the tileset is custom
 
@@ -42,7 +42,7 @@ no home in that model:
   than per-tile fetching. A per-tile `getTileData` callback cannot express a
   cross-tile request plan.
 - **Three-tier temporal scheduling.** Requests are tiered (visible window /
-  playback lookahead / pinned overview) and prioritized by *playhead* distance,
+  playback lookahead / pinned overview) and prioritized by _playhead_ distance,
   not just viewport distance. `RequestScheduler` knows nothing about time.
 - **Byte-budgeted prefetch.** Lookahead prefetch ships small, nearest-first
   slices sized to measured network throughput (~1 s of data per slice), so a
@@ -99,9 +99,9 @@ Differences a deck.gl user will notice, beyond the tileset:
 
 - **Column-name styling props, not function accessors.** Tiles arrive as
   binary Arrow columns and per-feature JS accessors never run, so styling
-  props take a constant *or a property-column name* (e.g.
+  props take a constant _or a property-column name_ (e.g.
   `pathColor: 'speed'`) instead of deck's `getFillColor`-style
-  `Accessor<DataT>` functions. The upstream accessor *names* also exist as
+  `Accessor<DataT>` functions. The upstream accessor _names_ also exist as
   aliases with the same constant-or-column-name semantics — point
   `getFillColor`/`getRadius`/`getLineColor`, path/trips `getColor`/`getWidth`,
   polygon `getFillColor`/`getElevation`, heatmap `getWeight` — and take
@@ -140,11 +140,11 @@ Differences a deck.gl user will notice, beyond the tileset:
   ids: `points` (AnimatedPointLayer, incl. cumulative slabs), `paths`,
   `trips`, `polygons`, `heads` (AnimatedTripHeadsLayer), `heatmap` (per
   channel), `hexagons` (H3SummaryLayer). A TileLayer-style `renderSubLayers`
-  *callback* is still not offered — per-tile sublayer construction is
+  _callback_ is still not offered — per-tile sublayer construction is
   cache-gated for perf, and `_subLayerProps` covers the class/props
   customization upstream users reach for.
 
-Utilities that are *not* deck-coupled at all: `TimeController` (playback
+Utilities that are _not_ deck-coupled at all: `TimeController` (playback
 clock, zero deck imports) and `PlaybackGovernor` (buffering state machine over
 a structural `BufferSource` interface) can be used with any renderer,
 including the `@poopdeck.gl/maplibre` adapter.

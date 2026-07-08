@@ -34,7 +34,11 @@
 import { Matrix4, Vector3, MathUtils } from 'three';
 import type { Scene, Camera } from 'three';
 import type { WebGPURenderer } from 'three/webgpu';
-import { EARTH_RADIUS, type GeoAnchor, type Projection } from '../projection/local-enu.js';
+import {
+  EARTH_RADIUS,
+  type GeoAnchor,
+  type Projection,
+} from '../projection/local-enu.js';
 
 const { degToRad } = MathUtils;
 
@@ -105,7 +109,10 @@ export function enuBasisEcef(
  *     orthonormal, so takram's `matrixECEFToWorld = transpose(matrixWorldToECEF)`
  *     stays a valid inverse-rotation for the sun/moon/star DIRECTIONS.
  */
-export function computeWorldToEcef(projection: Projection, anchor?: GeoAnchor): Matrix4 {
+export function computeWorldToEcef(
+  projection: Projection,
+  anchor?: GeoAnchor,
+): Matrix4 {
   const a = anchor ?? projection.anchor;
   const m = new Matrix4();
   if (projection.kind === 'globe') {
@@ -259,7 +266,10 @@ export async function createSttAtmosphere(
 
   // Publish the context to the renderer so the sky/light/aerial nodes can find it.
   const prevContextNode = renderer.contextNode;
-  const ctxValue = { ...(prevContextNode?.value ?? {}), getAtmosphere: () => ctx };
+  const ctxValue = {
+    ...(prevContextNode?.value ?? {}),
+    getAtmosphere: () => ctx,
+  };
   const atmosphereContextNode = context(ctxValue);
 
   // 2) Sun/moon directional light (registered once on the renderer's node library).

@@ -20,7 +20,10 @@ import type { Scene } from 'cesium';
 import type { Tile } from '@poopdeck.gl/core';
 import type { SttRenderNode } from '@poopdeck.gl/core/capabilities';
 import type { SttPickResult } from '@poopdeck.gl/core/picking';
-import { BatchedPolylineLayer, type BatchedPolylineOptions } from './batched-polyline-layer.js';
+import {
+  BatchedPolylineLayer,
+  type BatchedPolylineOptions,
+} from './batched-polyline-layer.js';
 import { buildPathPolylines } from './lib/polylines.js';
 import type { FeatureColorMode } from './lib/feature-color.js';
 
@@ -45,7 +48,12 @@ export class CesiumPathLayer implements SttRenderNode {
 
   /** (Re)build polylines from decoded tiles (replace-all). */
   setTiles(tiles: Tile[]): void {
-    this.batch.setPolylines(buildPathPolylines(tiles, { color: this.opts.color, zLift: this.opts.zLift }));
+    this.batch.setPolylines(
+      buildPathPolylines(tiles, {
+        color: this.opts.color,
+        zLift: this.opts.zLift,
+      }),
+    );
   }
 
   setTime(absoluteMs: number): void {

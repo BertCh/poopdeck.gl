@@ -9,7 +9,7 @@
  * TimeController + STT layers animate on), so binary-searching at the playhead
  * lines the gauges/inset up with the rendered geometry.
  */
-import type { ColorRGBA } from "../../types";
+import type { ColorRGBA } from '../../types';
 
 /** `scene.json` — the cockpit's source of truth (§2f). */
 export interface AvScene {
@@ -74,12 +74,12 @@ export interface AvLidarDensity {
 }
 
 export type AvStreamKey =
-  | "lidar"
-  | "ego"
-  | "objects"
-  | "map"
-  | "telemetry"
-  | "camera";
+  | 'lidar'
+  | 'ego'
+  | 'objects'
+  | 'map'
+  | 'telemetry'
+  | 'camera';
 
 /** `telemetry.json` — CAN-bus gauges sidecar (§2d). */
 export interface AvTelemetry {

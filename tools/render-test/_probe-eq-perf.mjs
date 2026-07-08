@@ -1,7 +1,9 @@
 import { chromium } from 'playwright';
 
 const browser = await chromium.launch({ headless: true });
-const ctx = await browser.newContext({ viewport: { width: 1600, height: 1000 } });
+const ctx = await browser.newContext({
+  viewport: { width: 1600, height: 1000 },
+});
 const page = await ctx.newPage();
 
 const logs = [];
@@ -23,7 +25,9 @@ await page.addInitScript(() => {
       frameCount++;
       const now = performance.now();
       if (now - lastReport >= 1000) {
-        console.log(`[perf] FPS=${frameCount} (${(now - lastReport).toFixed(0)}ms)`);
+        console.log(
+          `[perf] FPS=${frameCount} (${(now - lastReport).toFixed(0)}ms)`,
+        );
         frameCount = 0;
         lastReport = now;
       }
@@ -32,14 +36,21 @@ await page.addInitScript(() => {
   };
 });
 
-await page.goto('http://localhost:3000/demo/earthquake-activity', { waitUntil: 'domcontentloaded' });
+await page.goto('http://localhost:3000/demo/earthquake-activity', {
+  waitUntil: 'domcontentloaded',
+});
 await page.waitForTimeout(2000);
 
 // Capture baseline (paused, no panning)
 logs.length = 0;
 console.log('=== PAUSED, IDLE (3s) ===');
 await page.waitForTimeout(3000);
-console.log(logs.filter((l) => l.startsWith('[perf]')).slice(-3).join('\n'));
+console.log(
+  logs
+    .filter((l) => l.startsWith('[perf]'))
+    .slice(-3)
+    .join('\n'),
+);
 
 // Capture pan while paused
 logs.length = 0;
@@ -58,17 +69,30 @@ const panStart = Date.now();
   }
 })();
 await page.waitForTimeout(3100);
-console.log(logs.filter((l) => l.startsWith('[perf]')).slice(-3).join('\n'));
+console.log(
+  logs
+    .filter((l) => l.startsWith('[perf]'))
+    .slice(-3)
+    .join('\n'),
+);
 
 // Start playback
 logs.length = 0;
 console.log('\n=== PLAYING (3s) ===');
-const playBtn = page.locator('button').filter({ hasText: /play|▶/i }).first();
+const playBtn = page
+  .locator('button')
+  .filter({ hasText: /play|▶/i })
+  .first();
 if (await playBtn.count()) {
   await playBtn.click();
 }
 await page.waitForTimeout(3000);
-console.log(logs.filter((l) => l.startsWith('[perf]')).slice(-3).join('\n'));
+console.log(
+  logs
+    .filter((l) => l.startsWith('[perf]'))
+    .slice(-3)
+    .join('\n'),
+);
 
 // Now profile what's slow during playback - capture long tasks
 logs.length = 0;
@@ -83,7 +107,12 @@ await page.evaluate(() => {
   obs.observe({ entryTypes: ['longtask'] });
 });
 await page.waitForTimeout(3000);
-console.log(logs.filter((l) => l.includes('longtask')).slice(0, 20).join('\n'));
+console.log(
+  logs
+    .filter((l) => l.includes('longtask'))
+    .slice(0, 20)
+    .join('\n'),
+);
 
 await ctx.close();
 await browser.close();

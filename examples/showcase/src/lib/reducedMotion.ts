@@ -12,12 +12,12 @@
  *     so effects can start/stop motion live (no reload needed).
  *   • `prefersReducedMotion()` — one-shot read for imperative paths.
  */
-import { useSyncExternalStore } from "react";
+import { useSyncExternalStore } from 'react';
 
-const QUERY = "(prefers-reduced-motion: reduce)";
+const QUERY = '(prefers-reduced-motion: reduce)';
 
 const supported = (): boolean =>
-  typeof window !== "undefined" && typeof window.matchMedia === "function";
+  typeof window !== 'undefined' && typeof window.matchMedia === 'function';
 
 function getSnapshot(): boolean {
   return supported() && window.matchMedia(QUERY).matches;
@@ -27,9 +27,9 @@ function subscribe(onChange: () => void): () => void {
   if (!supported()) return () => {};
   const mql = window.matchMedia(QUERY);
   // addEventListener is the modern API; older Safari only has addListener.
-  if (typeof mql.addEventListener === "function") {
-    mql.addEventListener("change", onChange);
-    return () => mql.removeEventListener("change", onChange);
+  if (typeof mql.addEventListener === 'function') {
+    mql.addEventListener('change', onChange);
+    return () => mql.removeEventListener('change', onChange);
   }
   mql.addListener(onChange);
   return () => mql.removeListener(onChange);

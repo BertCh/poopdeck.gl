@@ -24,7 +24,12 @@ import {
   type PointPrimitive,
   type Scene,
 } from 'cesium';
-import { GeometryType, getFeatureProperties, type BinaryFeatures, type Tile } from '@poopdeck.gl/core';
+import {
+  GeometryType,
+  getFeatureProperties,
+  type BinaryFeatures,
+  type Tile,
+} from '@poopdeck.gl/core';
 import { GlobeProjection } from '@poopdeck.gl/core/geo';
 import { buildTripIndex, sampleHead, type Trip } from '@poopdeck.gl/core/trips';
 import type { RGBA255 } from '@poopdeck.gl/core/style';
@@ -53,7 +58,9 @@ const DEFAULT_COLOR: RGBA255 = [255, 235, 205, 255];
 const SCRATCH_POS = new Cartesian3();
 
 // The WGS84 globe — Cesium's native frame.
-const GLOBE = new GlobeProjection({ longitude: 0, latitude: 0 }, undefined, { datum: 'wgs84' });
+const GLOBE = new GlobeProjection({ longitude: 0, latitude: 0 }, undefined, {
+  datum: 'wgs84',
+});
 
 export class CesiumTripHeadsLayer implements SttRenderNode {
   readonly id: string;
@@ -68,7 +75,10 @@ export class CesiumTripHeadsLayer implements SttRenderNode {
   constructor(scene: Scene, options: CesiumTripHeadsLayerOptions = {}) {
     this.id = options.id ?? 'stt-cesium-trip-heads';
     this.scene = scene;
-    this.colorMode = options.color ?? { type: 'constant', color: DEFAULT_COLOR };
+    this.colorMode = options.color ?? {
+      type: 'constant',
+      color: DEFAULT_COLOR,
+    };
     this.pixelSize = options.pixelSize ?? 8;
     this.collection = new PointPrimitiveCollection();
     scene.primitives.add(this.collection);
@@ -83,24 +93,39 @@ export class CesiumTripHeadsLayer implements SttRenderNode {
     outer: for (const tile of tiles) {
       for (const tl of tile.layers) {
         const b = tl.features;
-        if (b.geometryType === GeometryType.LineString && b.featureCount > 0 && b.startIndices) {
+        if (
+          b.geometryType === GeometryType.LineString &&
+          b.featureCount > 0 &&
+          b.startIndices
+        ) {
           this.timeOrigin = b.timeOffset;
           break outer;
         }
       }
     }
 
-    const index = buildTripIndex(tiles, GLOBE, this.timeOrigin, { precision: 'f64' });
+    const index = buildTripIndex(tiles, GLOBE, this.timeOrigin, {
+      precision: 'f64',
+    });
     this.origin = index.origin;
 
     for (const trip of index.trips) {
       const rgba = featureColor(trip.binary, trip.featureIndex, this.colorMode);
       const pp = this.collection.add({
         position: Cartesian3.ZERO,
-        color: new Color(rgba[0] / 255, rgba[1] / 255, rgba[2] / 255, (rgba[3] ?? 255) / 255),
+        color: new Color(
+          rgba[0] / 255,
+          rgba[1] / 255,
+          rgba[2] / 255,
+          (rgba[3] ?? 255) / 255,
+        ),
         pixelSize: this.pixelSize,
         show: false,
-        id: { layerId: this.id, binary: trip.binary, featureIndex: trip.featureIndex },
+        id: {
+          layerId: this.id,
+          binary: trip.binary,
+          featureIndex: trip.featureIndex,
+        },
       });
       this.entries.push({ trip, pp, active: false });
     }
@@ -133,9 +158,16 @@ export class CesiumTripHeadsLayer implements SttRenderNode {
   /** Hit-test → the shared `SttPickResult`. */
   pick(cssX: number, cssY: number): SttPickResult | null {
     const picked = this.scene.pick(new Cartesian2(cssX, cssY)) as
-      | { id?: { layerId: string; binary: BinaryFeatures; featureIndex: number } }
+      | {
+          id?: {
+            layerId: string;
+            binary: BinaryFeatures;
+            featureIndex: number;
+          };
+        }
       | undefined;
-    if (!defined(picked) || !picked.id || picked.id.layerId !== this.id) return null;
+    if (!defined(picked) || !picked.id || picked.id.layerId !== this.id)
+      return null;
     const { binary, featureIndex } = picked.id;
     const dims = binary.positionDimensions ?? 2;
     const v0 = binary.startIndices ? binary.startIndices[featureIndex] : 0;
@@ -143,7 +175,10 @@ export class CesiumTripHeadsLayer implements SttRenderNode {
       object: getFeatureProperties(binary, featureIndex),
       index: featureIndex,
       layerId: this.id,
-      coordinate: [binary.positions[v0 * dims], binary.positions[v0 * dims + 1]],
+      coordinate: [
+        binary.positions[v0 * dims],
+        binary.positions[v0 * dims + 1],
+      ],
       screen: [cssX, cssY],
     };
   }

@@ -139,7 +139,10 @@ export class MemDirectoryHandle {
 let originalNavigatorDescriptor: PropertyDescriptor | undefined;
 export function installShim(): MemDirectoryHandle {
   const root = new MemDirectoryHandle();
-  originalNavigatorDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  originalNavigatorDescriptor = Object.getOwnPropertyDescriptor(
+    globalThis,
+    'navigator',
+  );
   Object.defineProperty(globalThis, 'navigator', {
     configurable: true,
     writable: true,

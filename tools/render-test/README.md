@@ -40,12 +40,12 @@ would land at a different frame.
 
 ## Status states
 
-| status              | meaning                                                                  |
-| ------------------- | ------------------------------------------------------------------------ |
-| `ok`                | live canvas + perf samples + fidelity diff completed                     |
-| `data-missing`      | the `.stt` archive request 4xx'd or returned the HTML SPA fallback       |
+| status              | meaning                                                                 |
+| ------------------- | ----------------------------------------------------------------------- |
+| `ok`                | live canvas + perf samples + fidelity diff completed                    |
+| `data-missing`      | the `.stt` archive request 4xx'd or returned the HTML SPA fallback      |
 | `render-failed`     | archive bytes loaded but the canvas stayed blank within the 60s timeout |
-| `webgl-unavailable` | Chromium could not create a WebGL context (CI without SwiftShader)       |
+| `webgl-unavailable` | Chromium could not create a WebGL context (CI without SwiftShader)      |
 
 `render-failed` is real signal — under SwiftShader, datasets such as the
 500K-trip NYC paths at zoom 14 do not produce a frame within a minute.
@@ -56,12 +56,12 @@ surfaces it rather than masking it.
 
 Environment variables read by `tests/sweep.spec.ts`:
 
-| var                       | default | purpose                                                    |
-| ------------------------- | ------- | ---------------------------------------------------------- |
-| `STT_BLESS_BASELINES=1`   | unset   | overwrite every baseline this run produces                 |
-| `STT_SWEEP_FILTER=<sub>`  | unset   | only run datasets whose id contains `<sub>`                |
-| `STT_SWEEP_SAMPLE_MS`     | 5000    | length of each perf sample window in ms                    |
-| `STT_SWEEP_WARMUP_MS`     | 8000    | settle time before the warmup sample, in ms                |
+| var                      | default | purpose                                     |
+| ------------------------ | ------- | ------------------------------------------- |
+| `STT_BLESS_BASELINES=1`  | unset   | overwrite every baseline this run produces  |
+| `STT_SWEEP_FILTER=<sub>` | unset   | only run datasets whose id contains `<sub>` |
+| `STT_SWEEP_SAMPLE_MS`    | 5000    | length of each perf sample window in ms     |
+| `STT_SWEEP_WARMUP_MS`    | 8000    | settle time before the warmup sample, in ms |
 
 ## Updating baselines
 

@@ -138,7 +138,9 @@ describe('OpfsTileCache', () => {
     expect(await b.get('real')).not.toBeNull(); // triggers init + sweep
     expect(dir._files.has('deadbeef.bin')).toBe(false);
     expect(dir._files.has('index.json')).toBe(true);
-    expect(Array.from(dir._files.keys()).some((n) => n.endsWith('.bin'))).toBe(true);
+    expect(Array.from(dir._files.keys()).some((n) => n.endsWith('.bin'))).toBe(
+      true,
+    );
   });
 
   it('serialises index flushes through navigator.locks when available', async () => {
@@ -154,7 +156,10 @@ describe('OpfsTileCache', () => {
     const cache = new OpfsTileCache();
     await cache.set('k', new Uint8Array([7]));
     await cache.flushIndex();
-    expect(request).toHaveBeenCalledWith('stt-opfs:stt-cache', expect.any(Function));
+    expect(request).toHaveBeenCalledWith(
+      'stt-opfs:stt-cache',
+      expect.any(Function),
+    );
     expect(order).toEqual(['lock', 'unlock']);
 
     // The write went through the lock and still persisted: a fresh cache

@@ -55,7 +55,10 @@ vi.mock('@deck.gl/core', async () =>
 // ---------------------------------------------------------------------------
 
 /** Build a categorical {indices, categories} column from string values. */
-function categorical(values: string[]): { indices: Uint16Array; categories: string[] } {
+function categorical(values: string[]): {
+  indices: Uint16Array;
+  categories: string[];
+} {
   const categories: string[] = [];
   const map = new Map<string, number>();
   const indices = new Uint16Array(values.length);
@@ -87,7 +90,10 @@ interface LabelRow {
 /** Build a fake point tile of label features. */
 function makeLabelTile(
   rows: LabelRow[],
-  opts: { timeOffset?: number; tileId?: { z: number; x: number; y: number; t: number } } = {},
+  opts: {
+    timeOffset?: number;
+    tileId?: { z: number; x: number; y: number; t: number };
+  } = {},
 ): Tile {
   const tile = makePointTile({
     positions: rows.map((r) => [r.lon, r.lat]),
@@ -101,11 +107,15 @@ function makeLabelTile(
     f.categoricalProps['text'] = categorical(rows.map((r) => r.text ?? ''));
   }
   if (rows.some((r) => r.category !== undefined)) {
-    f.categoricalProps['category'] = categorical(rows.map((r) => r.category ?? ''));
+    f.categoricalProps['category'] = categorical(
+      rows.map((r) => r.category ?? ''),
+    );
   }
   for (const col of ['size', 'angle'] as const) {
     if (rows.some((r) => r[col] !== undefined)) {
-      f.numericProps[col] = new Float32Array(rows.map((r) => (r[col] ?? NaN) as number));
+      f.numericProps[col] = new Float32Array(
+        rows.map((r) => (r[col] ?? NaN) as number),
+      );
     }
   }
   return tile;
@@ -196,7 +206,9 @@ describe('AnimatedTextLayer', () => {
     expect(LayerCtor.defaultProps.getTextAnchor).toBe('middle');
     expect(LayerCtor.defaultProps.getAlignmentBaseline).toBe('center');
     expect(LayerCtor.defaultProps.sizeUnits).toBe('pixels');
-    expect(LayerCtor.defaultProps.sizeMaxPixels.value).toBe(Number.MAX_SAFE_INTEGER);
+    expect(LayerCtor.defaultProps.sizeMaxPixels.value).toBe(
+      Number.MAX_SAFE_INTEGER,
+    );
     expect(LayerCtor.defaultProps.billboard).toBe(true);
     expect(LayerCtor.defaultProps.fontFamily).toBe('Monaco, monospace');
     expect(LayerCtor.defaultProps.wordBreak).toBe('break-word');
@@ -233,7 +245,9 @@ describe('AnimatedTextLayer', () => {
       endTimes: [0],
       timeOffset: 0,
     });
-    tile.layers[0].features.categoricalProps['name'] = categorical(['Montréal']);
+    tile.layers[0].features.categoricalProps['name'] = categorical([
+      'Montréal',
+    ]);
     const layers = render([tile], 0, { textProperty: 'name' });
     const data = layers[0].props.data;
     expect(layers[0].props.getText(data[0])).toBe('Montréal');
@@ -246,8 +260,13 @@ describe('AnimatedTextLayer', () => {
       endTimes: [0],
       timeOffset: 0,
     });
-    tile.layers[0].features.categoricalProps['label'] = categorical(['via-alias']);
-    const layers = render([tile], 0, { textProperty: 'text', getText: 'label' });
+    tile.layers[0].features.categoricalProps['label'] = categorical([
+      'via-alias',
+    ]);
+    const layers = render([tile], 0, {
+      textProperty: 'text',
+      getText: 'label',
+    });
     const data = layers[0].props.data;
     expect(layers[0].props.getText(data[0])).toBe('via-alias');
   });
@@ -312,9 +331,11 @@ describe('AnimatedTextLayer', () => {
     const data = render([tile], 0, { color: [10, 20, 30, 255] })[0].props.data;
     expect(data[0].color).toEqual([10, 20, 30, 255]);
     // Constant color rides the reader too (fade folds into it per-frame).
-    expect(render([tile], 0, { color: [10, 20, 30, 255] })[0].props.getColor(data[0])).toEqual([
-      10, 20, 30, 255,
-    ]);
+    expect(
+      render([tile], 0, { color: [10, 20, 30, 255] })[0].props.getColor(
+        data[0],
+      ),
+    ).toEqual([10, 20, 30, 255]);
   });
 
   it('bakes per-category color via colorMapping when color names a column', () => {
@@ -331,7 +352,9 @@ describe('AnimatedTextLayer', () => {
   });
 
   it('uses colorMappingDefault for categories absent from colorMapping', () => {
-    const tile = makeLabelTile([{ lon: 0, lat: 0, t: 0, text: 'a', category: 'trail' }]);
+    const tile = makeLabelTile([
+      { lon: 0, lat: 0, t: 0, text: 'a', category: 'trail' },
+    ]);
     const data = render([tile], 0, {
       color: 'category',
       colorMapping: { road: [1, 2, 3, 255] },
@@ -393,7 +416,9 @@ describe('AnimatedTextLayer', () => {
 
   it('lets the getSize alias win over size', () => {
     const tile = makeLabelTile([{ lon: 0, lat: 0, t: 0, text: 'a' }]);
-    expect(render([tile], 0, { size: 10, getSize: 40 })[0].props.getSize).toBe(40);
+    expect(render([tile], 0, { size: 10, getSize: 40 })[0].props.getSize).toBe(
+      40,
+    );
   });
 
   // ── Appear / disappear fade ────────────────────────────────────────────────
@@ -401,7 +426,9 @@ describe('AnimatedTextLayer', () => {
   it('ramps the row alpha over fadeInDuration as a label enters the window', () => {
     // Feature at abs t=0; at now=−600, window=2000 → windowEnd = 400. age =
     // windowEnd − start = 400. With a 800ms fade-in → alpha ≈ 0.5 → 255×0.5.
-    const tile = makeLabelTile([{ lon: 0, lat: 0, t: 0, text: 'a', end: 10000 }]);
+    const tile = makeLabelTile([
+      { lon: 0, lat: 0, t: 0, text: 'a', end: 10000 },
+    ]);
     const data = render([tile], -600, {
       color: [80, 170, 255, 255],
       fadeInDuration: 800,
@@ -413,7 +440,8 @@ describe('AnimatedTextLayer', () => {
 
   it('keeps full alpha when no fade is set (default)', () => {
     const tile = makeLabelTile([{ lon: 0, lat: 0, t: 0, text: 'a' }]);
-    const data = render([tile], 0, { color: [80, 170, 255, 255] })[0].props.data;
+    const data = render([tile], 0, { color: [80, 170, 255, 255] })[0].props
+      .data;
     expect(data[0].color[3]).toBe(255);
   });
 
@@ -422,8 +450,13 @@ describe('AnimatedTextLayer', () => {
     // OBJECT identity must stay stable while membership is unchanged — else
     // TextLayer re-runs its per-glyph `_updateText` (fires on any `data`-ref
     // change) every frame. Only the colour re-uploads, via the getColor trigger.
-    const layer = makeLayer({ color: [80, 170, 255, 255], fadeInDuration: 800 });
-    const tile = makeLabelTile([{ lon: 0, lat: 0, t: 0, end: 10000, text: 'a' }]);
+    const layer = makeLayer({
+      color: [80, 170, 255, 255],
+      fadeInDuration: 800,
+    });
+    const tile = makeLabelTile([
+      { lon: 0, lat: 0, t: 0, end: 10000, text: 'a' },
+    ]);
     layer.state = { tiles: [tile] };
     layer._currentTime = -600; // ~50% into the fade-in
     const s1 = (layer as any).renderLayers()[0];
@@ -439,12 +472,18 @@ describe('AnimatedTextLayer', () => {
     // _updateText), so the membership-keyed triggers are UNCHANGED.
     expect(s2.props.data).toBe(rows1);
     expect(s2.props.data[0]).toBe(row);
-    expect(s2.props.updateTriggers.getText).toBe(s1.props.updateTriggers.getText);
-    expect(s2.props.updateTriggers.getPosition).toBe(s1.props.updateTriggers.getPosition);
+    expect(s2.props.updateTriggers.getText).toBe(
+      s1.props.updateTriggers.getText,
+    );
+    expect(s2.props.updateTriggers.getPosition).toBe(
+      s1.props.updateTriggers.getPosition,
+    );
     // But the alpha ramped up in place and its updateTrigger changed (carries the
     // clock) so deck re-uploads only the colour.
     expect(s2.props.data[0].color[3]).toBeGreaterThan(alpha1);
-    expect(s2.props.updateTriggers.getColor).not.toBe(s1.props.updateTriggers.getColor);
+    expect(s2.props.updateTriggers.getColor).not.toBe(
+      s1.props.updateTriggers.getColor,
+    );
   });
 
   it('fades the background + border colour in lock-step with the glyphs', () => {
@@ -455,7 +494,9 @@ describe('AnimatedTextLayer', () => {
       borderColor: [10, 20, 30, 240],
       borderWidth: 2,
     });
-    const tile = makeLabelTile([{ lon: 0, lat: 0, t: 0, end: 10000, text: 'a' }]);
+    const tile = makeLabelTile([
+      { lon: 0, lat: 0, t: 0, end: 10000, text: 'a' },
+    ]);
     layer.state = { tiles: [tile] };
     layer._currentTime = -600; // ~50% into the fade-in
     const s = (layer as any).renderLayers()[0];
@@ -474,8 +515,12 @@ describe('AnimatedTextLayer', () => {
     expect(bd[3]).toBeGreaterThan(100);
     expect(bd[3]).toBeLessThan(140); // 240 × ~0.5
     // Background/border triggers carry the clock so they re-upload with the fade.
-    expect(s.props.updateTriggers.getBackgroundColor).toBe(s.props.updateTriggers.getColor);
-    expect(s.props.updateTriggers.getBorderColor).toBe(s.props.updateTriggers.getColor);
+    expect(s.props.updateTriggers.getBackgroundColor).toBe(
+      s.props.updateTriggers.getColor,
+    );
+    expect(s.props.updateTriggers.getBorderColor).toBe(
+      s.props.updateTriggers.getColor,
+    );
   });
 
   it('leaves getBackgroundColor/getBorderColor as constants when fade is off', () => {
@@ -601,7 +646,9 @@ describe('AnimatedTextLayer', () => {
   });
 
   it('re-decodes when a style prop that feeds the rows changes', () => {
-    const tile = makeLabelTile([{ lon: 0, lat: 0, t: 0, text: 'a', category: 'road' }]);
+    const tile = makeLabelTile([
+      { lon: 0, lat: 0, t: 0, text: 'a', category: 'road' },
+    ]);
     const a = render([tile], 0, { color: [1, 1, 1, 255] })[0].props.data;
     expect(a[0].color).toEqual([1, 1, 1, 255]);
     const b = render([tile], 0, {
@@ -646,7 +693,10 @@ describe('AnimatedTextLayer', () => {
     const layer = makeLayer();
     layer.state = { tiles: [tile] };
     const sublayer = (layer as any).renderLayers()[0];
-    const out = (layer as any).getPickingInfo({ info: { index: -1 }, sourceLayer: sublayer });
+    const out = (layer as any).getPickingInfo({
+      info: { index: -1 },
+      sourceLayer: sublayer,
+    });
     expect(out.sourceTile).toBe(tile);
     expect(out.object).toBeUndefined();
   });

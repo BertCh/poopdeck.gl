@@ -8,9 +8,14 @@ import { describe, it, expect } from 'vitest';
 
 describe('heatmap layer export (rename complete)', () => {
   it('exports AnimatedHeatmapLayer as the canonical class (module)', async () => {
-    const mod = (await import('../src/layers/summary/heatmap-layer')) as Record<string, any>;
+    const mod = (await import('../src/layers/summary/heatmap-layer')) as Record<
+      string,
+      any
+    >;
     expect(mod.AnimatedHeatmapLayer).toBeTypeOf('function');
-    expect((mod.AnimatedHeatmapLayer as any).layerName).toBe('AnimatedHeatmapLayer');
+    expect((mod.AnimatedHeatmapLayer as any).layerName).toBe(
+      'AnimatedHeatmapLayer',
+    );
     // The deprecated `HeatmapLayer` alias was removed.
     expect(mod.HeatmapLayer).toBeUndefined();
   });

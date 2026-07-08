@@ -13,7 +13,10 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { relativizeTime, MAX_RELATIVE_TIME_MS } from '../src/extensions/time-filter-extension';
+import {
+  relativizeTime,
+  MAX_RELATIVE_TIME_MS,
+} from '../src/extensions/time-filter-extension';
 
 /** Simulate storing a value in a Float32Array and reading it back. */
 function roundTripF32(value: number): number {
@@ -62,9 +65,13 @@ describe('float32 time precision', () => {
 
   it('attribute time and matching currentTime use the SAME offset and stay aligned', () => {
     // Layer stores the feature time relative to the offset...
-    const featureRel = roundTripF32(relativizeTime(ABS_TIME_PLUS_1500, LAYER_OFFSET));
+    const featureRel = roundTripF32(
+      relativizeTime(ABS_TIME_PLUS_1500, LAYER_OFFSET),
+    );
     // ...and the extension subtracts the SAME offset from currentTime.
-    const currentTimeRel = roundTripF32(relativizeTime(ABS_TIME_PLUS_1500, LAYER_OFFSET));
+    const currentTimeRel = roundTripF32(
+      relativizeTime(ABS_TIME_PLUS_1500, LAYER_OFFSET),
+    );
     // Both sides of the shader comparison agree to sub-millisecond precision.
     expect(Math.abs(featureRel - currentTimeRel)).toBeLessThan(1);
   });

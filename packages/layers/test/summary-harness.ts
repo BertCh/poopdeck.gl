@@ -64,7 +64,8 @@ export function h3SummaryHarness(): SummaryHarness {
     // The base props mirror deck's H3HexagonLayer defaults for the outline
     // family (Object.create bypasses static defaultProps merging).
     makeLayer: async (props: Record<string, any> = {}) => {
-      const { H3SummaryLayer } = await import('../src/layers/summary/h3-summary-layer');
+      const { H3SummaryLayer } =
+        await import('../src/layers/summary/h3-summary-layer');
       const layer: any = Object.create((H3SummaryLayer as any).prototype);
       layer.props = {
         id: 'h3',
@@ -90,7 +91,9 @@ export function h3SummaryHarness(): SummaryHarness {
       };
       layer.state = {
         tiles: [makeH3SummaryTile()],
-        metadata: { summaryTier: { layerName: 'summary', minZoom: 0, maxZoom: 4 } },
+        metadata: {
+          summaryTier: { layerName: 'summary', minZoom: 0, maxZoom: 4 },
+        },
       };
       layer.preparedTileCache = new Map();
       layer.sublayerCache = new Map();
@@ -166,9 +169,8 @@ export function quadbinSummaryHarness(): SummaryHarness {
   return {
     name: 'QuadbinSummaryLayer',
     makeLayer: async (props: Record<string, any> = {}) => {
-      const { QuadbinSummaryLayer } = await import(
-        '../src/layers/summary/quadbin-summary-layer'
-      );
+      const { QuadbinSummaryLayer } =
+        await import('../src/layers/summary/quadbin-summary-layer');
       const layer: any = Object.create((QuadbinSummaryLayer as any).prototype);
       layer.props = {
         id: 'qb',
@@ -181,7 +183,9 @@ export function quadbinSummaryHarness(): SummaryHarness {
       };
       layer.state = {
         tiles: [makeQuadbinSummaryTile()],
-        metadata: { summaryTier: { layerName: 'summary', minZoom: 0, maxZoom: 4 } },
+        metadata: {
+          summaryTier: { layerName: 'summary', minZoom: 0, maxZoom: 4 },
+        },
       };
       layer.preparedTileCache = new Map();
       layer.sublayerCache = new Map();

@@ -41,7 +41,10 @@ export interface CreatedRenderer {
 
 /** True when the page can request a WebGPU adapter. */
 export function isWebGPUAvailable(): boolean {
-  return typeof navigator !== 'undefined' && !!(navigator as unknown as { gpu?: unknown }).gpu;
+  return (
+    typeof navigator !== 'undefined' &&
+    !!(navigator as unknown as { gpu?: unknown }).gpu
+  );
 }
 
 /** Structural view of the bits of the WebGPU API we touch (no `@webgpu/types`
@@ -80,7 +83,10 @@ export async function createHighLimitDevice(
       : undefined;
   if (!gpu) return undefined;
   try {
-    const adapter = await gpu.requestAdapter({ powerPreference, featureLevel: 'compatibility' });
+    const adapter = await gpu.requestAdapter({
+      powerPreference,
+      featureLevel: 'compatibility',
+    });
     if (!adapter) return undefined;
     const { maxBufferSize, maxStorageBufferBindingSize } = adapter.limits;
     const device = await adapter.requestDevice({
@@ -89,8 +95,9 @@ export async function createHighLimitDevice(
     });
     // One-line proof the high-limit device took effect — the default cap is
     // 256 MB, so anything above that means dense LIDAR buffers will fit.
-    const granted = (device as { limits?: { maxBufferSize?: number } } | undefined)?.limits
-      ?.maxBufferSize;
+    const granted = (
+      device as { limits?: { maxBufferSize?: number } } | undefined
+    )?.limits?.maxBufferSize;
     // eslint-disable-next-line no-console
     console.info(
       `[stt-three] WebGPU device maxBufferSize = ${Math.round((granted ?? maxBufferSize) / 1048576)} MB`,
@@ -100,7 +107,10 @@ export async function createHighLimitDevice(
     // Falling back to Three's own default device (256 MB cap) — surface why so a
     // recurring "buffer exceeds max" error isn't mistaken for the fix not landing.
     // eslint-disable-next-line no-console
-    console.warn('[stt-three] high-limit WebGPU device request failed; using default device', err);
+    console.warn(
+      '[stt-three] high-limit WebGPU device request failed; using default device',
+      err,
+    );
     return undefined;
   }
 }
@@ -117,7 +127,9 @@ export async function createSttRenderer(
   // Build a high-buffer-limit device for the WebGPU path so dense LIDAR sweeps
   // don't blow the 256 MB default single-buffer cap. forceWebGL skips it (the
   // WebGL2 backend has no such cap and ignores `device`).
-  const device = forceWebGL ? undefined : await createHighLimitDevice(powerPreference);
+  const device = forceWebGL
+    ? undefined
+    : await createHighLimitDevice(powerPreference);
   const renderer = new WebGPURenderer({
     canvas: opts.canvas,
     antialias: opts.antialias ?? true,
@@ -133,9 +145,14 @@ export async function createSttRenderer(
 }
 
 /** Inspect the live renderer to report which backend `init()` chose. */
-export function resolveBackend(renderer: WebGPURenderer, forceWebGL = false): RendererBackend {
+export function resolveBackend(
+  renderer: WebGPURenderer,
+  forceWebGL = false,
+): RendererBackend {
   if (forceWebGL) return 'webgl2';
-  const backend = (renderer as unknown as { backend?: { isWebGPUBackend?: boolean } }).backend;
+  const backend = (
+    renderer as unknown as { backend?: { isWebGPUBackend?: boolean } }
+  ).backend;
   if (backend?.isWebGPUBackend) return 'webgpu';
   return isWebGPUAvailable() && !backend ? 'webgpu' : 'webgl2';
 }

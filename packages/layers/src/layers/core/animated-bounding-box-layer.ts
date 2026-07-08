@@ -428,7 +428,9 @@ interface LabelRow {
  * and/or **`edges`** (the 12-edge outline LineLayer when `stroked`), plus (when
  * enabled) **`labels`** (TextLayer) + **`velocity`** (LineLayer).
  */
-export class AnimatedBoundingBoxLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLayer<
+export class AnimatedBoundingBoxLayer<
+  ExtraPropsT extends {} = {},
+> extends SpatioTemporalLayer<
   ExtraPropsT & Required<_AnimatedBoundingBoxLayerProps>
 > {
   static layerName = 'AnimatedBoundingBoxLayer';
@@ -440,8 +442,18 @@ export class AnimatedBoundingBoxLayer<ExtraPropsT extends {} = {}> extends Spati
     trackIdProperty: 'track_id',
     // Permissive descriptors ({type:'object'}) — these legally hold a column
     // name / a map / a Color, which deck's 'string'/'color' validators reject.
-    colorProperty: { type: 'object', value: null, optional: true, compare: true },
-    colorMapping: { type: 'object', value: null, optional: true, compare: true },
+    colorProperty: {
+      type: 'object',
+      value: null,
+      optional: true,
+      compare: true,
+    },
+    colorMapping: {
+      type: 'object',
+      value: null,
+      optional: true,
+      compare: true,
+    },
     colorMappingDefault: { type: 'color', value: DEFAULT_COLOR },
     headingProperty: 'heading',
     lengthProperty: 'length',
@@ -462,9 +474,18 @@ export class AnimatedBoundingBoxLayer<ExtraPropsT extends {} = {}> extends Spati
     strokeColor: { type: 'object', value: null, optional: true, compare: true },
     // Accessor-named alias of strokeColor — unset by default so the legacy prop
     // wins unless the caller opts into the upstream vocabulary.
-    getLineColor: { type: 'object', value: null, optional: true, compare: true },
+    getLineColor: {
+      type: 'object',
+      value: null,
+      optional: true,
+      compare: true,
+    },
     strokeWidthUnits: 'pixels',
-    strokeWidthMaxPixels: { type: 'number', value: Number.MAX_SAFE_INTEGER, min: 0 },
+    strokeWidthMaxPixels: {
+      type: 'number',
+      value: Number.MAX_SAFE_INTEGER,
+      min: 0,
+    },
     wireframe: false,
     // Boolean or material spec — same permissive descriptor SimpleMeshLayer uses.
     material: { type: 'object', value: true, compare: true },
@@ -524,7 +545,10 @@ export class AnimatedBoundingBoxLayer<ExtraPropsT extends {} = {}> extends Spati
    * every frame anyway).
    */
   private computeIndexKey(): string {
-    const colorProp = typeof this.props.colorProperty === 'string' ? this.props.colorProperty : '';
+    const colorProp =
+      typeof this.props.colorProperty === 'string'
+        ? this.props.colorProperty
+        : '';
     return [
       this.props.trackIdProperty,
       colorProp,
@@ -566,7 +590,10 @@ export class AnimatedBoundingBoxLayer<ExtraPropsT extends {} = {}> extends Spati
   private trackFieldConfig(): TrackFieldConfig {
     return {
       trackIdProperty: this.props.trackIdProperty || 'track_id',
-      colorProperty: typeof this.props.colorProperty === 'string' ? this.props.colorProperty : '',
+      colorProperty:
+        typeof this.props.colorProperty === 'string'
+          ? this.props.colorProperty
+          : '',
       labelProperty: this.props.labelProperty || 'category',
       headingProperty: this.props.headingProperty || 'heading',
       lengthProperty: this.props.lengthProperty || 'length',
@@ -574,7 +601,8 @@ export class AnimatedBoundingBoxLayer<ExtraPropsT extends {} = {}> extends Spati
       heightProperty: this.props.heightProperty || 'height',
       speedProperty: this.props.speedProperty || 'speed',
       colorMapping: this.props.colorMapping,
-      colorMappingDefault: (this.props.colorMappingDefault ?? DEFAULT_COLOR) as Color,
+      colorMappingDefault: (this.props.colorMappingDefault ??
+        DEFAULT_COLOR) as Color,
     };
   }
 
@@ -636,7 +664,11 @@ export class AnimatedBoundingBoxLayer<ExtraPropsT extends {} = {}> extends Spati
     // Rebuild the pooled index only when the visible tile SET changes or a
     // feeding style prop changes; otherwise re-interpolate the cached index.
     const indexKey = this.computeIndexKey();
-    if (this.lastTilesRef !== tiles || this.trackIndexKey !== indexKey || !this.trackIndex) {
+    if (
+      this.lastTilesRef !== tiles ||
+      this.trackIndexKey !== indexKey ||
+      !this.trackIndex
+    ) {
       this.trackIndex = this.buildTrackIndex(tiles);
       this.trackIndexKey = indexKey;
       this.lastTilesRef = tiles;
@@ -649,7 +681,12 @@ export class AnimatedBoundingBoxLayer<ExtraPropsT extends {} = {}> extends Spati
       if (s) samples.push(s);
     }
     if (samples.length === 0) {
-      emit('renderLayers', { layer: 'AnimatedBoundingBoxLayer', tiles: tiles.length, sublayers: 0, ms: performance.now() - t0 });
+      emit('renderLayers', {
+        layer: 'AnimatedBoundingBoxLayer',
+        tiles: tiles.length,
+        sublayers: 0,
+        ms: performance.now() - t0,
+      });
       return [];
     }
 
@@ -664,7 +701,8 @@ export class AnimatedBoundingBoxLayer<ExtraPropsT extends {} = {}> extends Spati
     if (drawFill) layers.push(this.buildBoxes(samples, true));
     if (wantStroke) layers.push(this.buildEdges(samples, !drawFill));
     if (this.props.showLabels) layers.push(this.buildLabels(samples));
-    if (this.props.showVelocity && this.hasSpeedColumn) layers.push(this.buildVelocity(samples));
+    if (this.props.showVelocity && this.hasSpeedColumn)
+      layers.push(this.buildVelocity(samples));
 
     emit('renderLayers', {
       layer: 'AnimatedBoundingBoxLayer',
@@ -707,7 +745,9 @@ export class AnimatedBoundingBoxLayer<ExtraPropsT extends {} = {}> extends Spati
       // (roll), which rotates about the box's length/x axis and would tip the box
       // onto its side while its length stayed pinned east. Matches egoLayers.ts's
       // ego car. NaN heading ⇒ axis-aligned.
-      orientations[o3 + 1] = Number.isFinite(s.heading) ? s.heading * RAD_TO_DEG : 0;
+      orientations[o3 + 1] = Number.isFinite(s.heading)
+        ? s.heading * RAD_TO_DEG
+        : 0;
       scales[o3] = s.length * half;
       scales[o3 + 1] = s.width * half;
       scales[o3 + 2] = s.height * half;
@@ -737,15 +777,24 @@ export class AnimatedBoundingBoxLayer<ExtraPropsT extends {} = {}> extends Spati
         getColor: { value: colors, size: 4, normalized: true },
       },
     };
-    const getOrientation = (_: unknown, info: { index: number }): [number, number, number] => {
+    const getOrientation = (
+      _: unknown,
+      info: { index: number },
+    ): [number, number, number] => {
       const o = info.index * 3;
       return [orientations[o], orientations[o + 1], orientations[o + 2]];
     };
-    const getScale = (_: unknown, info: { index: number }): [number, number, number] => {
+    const getScale = (
+      _: unknown,
+      info: { index: number },
+    ): [number, number, number] => {
       const o = info.index * 3;
       return [scales[o], scales[o + 1], scales[o + 2]];
     };
-    const getTranslation = (_: unknown, info: { index: number }): [number, number, number] => {
+    const getTranslation = (
+      _: unknown,
+      info: { index: number },
+    ): [number, number, number] => {
       const o = info.index * 3;
       return [translations[o], translations[o + 1], translations[o + 2]];
     };
@@ -804,7 +853,9 @@ export class AnimatedBoundingBoxLayer<ExtraPropsT extends {} = {}> extends Spati
     // per-segment bake below stays a plain copy. The appear/disappear fade still
     // rides the alpha in BOTH branches.
     const strokeColor = this.strokeColorValue();
-    const strokeArr = Array.isArray(strokeColor) ? (strokeColor as number[]) : null;
+    const strokeArr = Array.isArray(strokeColor)
+      ? (strokeColor as number[])
+      : null;
     const strokeRGBA: [number, number, number, number] | null = strokeArr
       ? [strokeArr[0], strokeArr[1], strokeArr[2], strokeArr[3] ?? 255]
       : null;
@@ -812,9 +863,18 @@ export class AnimatedBoundingBoxLayer<ExtraPropsT extends {} = {}> extends Spati
     // The 12 edges of a cuboid, as index pairs into the 8 corners laid out
     // below: 0-3 = ground ring (CCW), 4-7 = roof ring, then the 4 verticals.
     const EDGE_PAIRS: [number, number][] = [
-      [0, 1], [1, 2], [2, 3], [3, 0], // ground rectangle
-      [4, 5], [5, 6], [6, 7], [7, 4], // roof rectangle
-      [0, 4], [1, 5], [2, 6], [3, 7], // verticals
+      [0, 1],
+      [1, 2],
+      [2, 3],
+      [3, 0], // ground rectangle
+      [4, 5],
+      [5, 6],
+      [6, 7],
+      [7, 4], // roof rectangle
+      [0, 4],
+      [1, 5],
+      [2, 6],
+      [3, 7], // verticals
     ];
 
     let seg = 0;
@@ -827,18 +887,33 @@ export class AnimatedBoundingBoxLayer<ExtraPropsT extends {} = {}> extends Spati
       const cos = Math.cos(yaw);
       const sin = Math.sin(yaw);
       const cosLat = Math.cos((s.lat * Math.PI) / 180);
-      const mPerLon = cosLat !== 0 ? METERS_PER_DEG_LAT * cosLat : METERS_PER_DEG_LAT;
+      const mPerLon =
+        cosLat !== 0 ? METERS_PER_DEG_LAT * cosLat : METERS_PER_DEG_LAT;
 
       // Local (dx,dy,dz) metres → [lon,lat,alt]: yaw the planar offset about the
       // vertical, then convert metres to degrees about this box's anchor.
-      const corner = (dx: number, dy: number, dz: number): [number, number, number] => {
+      const corner = (
+        dx: number,
+        dy: number,
+        dz: number,
+      ): [number, number, number] => {
         const east = dx * cos - dy * sin;
         const north = dx * sin + dy * cos;
-        return [s.lon + east / mPerLon, s.lat + north / METERS_PER_DEG_LAT, s.alt + dz];
+        return [
+          s.lon + east / mPerLon,
+          s.lat + north / METERS_PER_DEG_LAT,
+          s.alt + dz,
+        ];
       };
       const corners: [number, number, number][] = [
-        corner(-hx, -hy, 0), corner(hx, -hy, 0), corner(hx, hy, 0), corner(-hx, hy, 0),
-        corner(-hx, -hy, top), corner(hx, -hy, top), corner(hx, hy, top), corner(-hx, hy, top),
+        corner(-hx, -hy, 0),
+        corner(hx, -hy, 0),
+        corner(hx, hy, 0),
+        corner(-hx, hy, 0),
+        corner(-hx, -hy, top),
+        corner(hx, -hy, top),
+        corner(hx, hy, top),
+        corner(-hx, hy, top),
       ];
 
       // Distinct constant outline overrides the inherited fill; the fade rides
@@ -879,7 +954,8 @@ export class AnimatedBoundingBoxLayer<ExtraPropsT extends {} = {}> extends Spati
       widthUnits: this.props.strokeWidthUnits ?? 'pixels',
       getWidth: this.props.strokeWidth ?? 1.5,
       widthMinPixels: this.props.strokeWidthMinPixels ?? 1,
-      widthMaxPixels: this.props.strokeWidthMaxPixels ?? Number.MAX_SAFE_INTEGER,
+      widthMaxPixels:
+        this.props.strokeWidthMaxPixels ?? Number.MAX_SAFE_INTEGER,
       pickable,
       // 12 segments per box, so a hit's segment index ÷ 12 is the box index.
       sttPickRows: pickRows,
@@ -953,7 +1029,8 @@ export class AnimatedBoundingBoxLayer<ExtraPropsT extends {} = {}> extends Spati
         getTargetPosition: { value: target, size: 3 },
       },
     };
-    const constColor = (this.props.velocityColor ?? DEFAULT_VELOCITY_COLOR) as Color;
+    const constColor = (this.props.velocityColor ??
+      DEFAULT_VELOCITY_COLOR) as Color;
     const props = this.composeSubLayerProps('velocity', 'all', {
       data: data as any,
       positionFormat: 'XYZ',
@@ -976,7 +1053,10 @@ export class AnimatedBoundingBoxLayer<ExtraPropsT extends {} = {}> extends Spati
    * `info.object` is set to that track's flat decoded props (the shape the AV
    * cockpit's click-to-inspect handler reads).
    */
-  getPickingInfo({ info, sourceLayer }: GetPickingInfoParams): SpatioTemporalPickingInfo {
+  getPickingInfo({
+    info,
+    sourceLayer,
+  }: GetPickingInfoParams): SpatioTemporalPickingInfo {
     const out = info as SpatioTemporalPickingInfo;
     const sp = sourceLayer?.props as
       | { sttPickRows?: PickRow[]; sttPickStride?: number }

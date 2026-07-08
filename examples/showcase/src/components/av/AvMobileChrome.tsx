@@ -18,17 +18,22 @@
  * never steal a map pan/pinch; the interactive blocks opt back in. Top and
  * bottom edges respect the iOS safe-area insets.
  */
-import React, { useState } from "react";
-import { Link } from "react-router";
-import type { TimeController } from "@poopdeck.gl/playback";
-import type { Dataset, ColorRGBA } from "../../types";
-import SceneSwitcher from "./SceneSwitcher";
-import StreamPanel from "./StreamPanel";
-import MetricCharts from "./MetricCharts";
-import CameraInset from "./CameraInset";
-import ObjectInspector, { type PickedObject } from "./ObjectInspector";
-import Timeline, { type TimelineProps } from "./Timeline";
-import type { AvScene, AvStreamKey, AvTelemetry, AvCameras } from "./sceneTypes";
+import React, { useState } from 'react';
+import { Link } from 'react-router';
+import type { TimeController } from '@poopdeck.gl/playback';
+import type { Dataset, ColorRGBA } from '../../types';
+import SceneSwitcher from './SceneSwitcher';
+import StreamPanel from './StreamPanel';
+import MetricCharts from './MetricCharts';
+import CameraInset from './CameraInset';
+import ObjectInspector, { type PickedObject } from './ObjectInspector';
+import Timeline, { type TimelineProps } from './Timeline';
+import type {
+  AvScene,
+  AvStreamKey,
+  AvTelemetry,
+  AvCameras,
+} from './sceneTypes';
 
 export interface AvMobileChromeProps {
   scene: AvScene | null;
@@ -68,16 +73,33 @@ export interface AvMobileChromeProps {
   timeline: TimelineProps | null;
 }
 
-const ICON = "h-[18px] w-[18px]";
+const ICON = 'h-[18px] w-[18px]';
 
 const BackIcon = () => (
-  <svg className={ICON} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+  <svg
+    className={ICON}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={2}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden
+  >
     <path d="M15 18l-6-6 6-6" />
   </svg>
 );
 
 const FollowIcon = () => (
-  <svg className={ICON} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" aria-hidden>
+  <svg
+    className={ICON}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={2}
+    strokeLinecap="round"
+    aria-hidden
+  >
     <circle cx="12" cy="12" r="3.2" />
     <circle cx="12" cy="12" r="7.5" />
     <path d="M12 1.5v3M12 19.5v3M1.5 12h3M19.5 12h3" />
@@ -85,34 +107,77 @@ const FollowIcon = () => (
 );
 
 const CubeIcon = () => (
-  <svg className={ICON} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinejoin="round" aria-hidden>
+  <svg
+    className={ICON}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={1.8}
+    strokeLinejoin="round"
+    aria-hidden
+  >
     <path d="M12 2.5l8.5 4.8v9.4L12 21.5l-8.5-4.8V7.3z" />
     <path d="M12 12l8.5-4.7M12 12v9.5M12 12L3.5 7.3" />
   </svg>
 );
 
 const GridIcon = () => (
-  <svg className={ICON} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinejoin="round" aria-hidden>
+  <svg
+    className={ICON}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={1.8}
+    strokeLinejoin="round"
+    aria-hidden
+  >
     <rect x="3.5" y="3.5" width="17" height="17" rx="1.5" />
     <path d="M3.5 9.5h17M3.5 15h17M9.5 3.5v17M15 3.5v17" />
   </svg>
 );
 
 const BoltIcon = () => (
-  <svg className={ICON} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinejoin="round" strokeLinecap="round" aria-hidden>
+  <svg
+    className={ICON}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={1.8}
+    strokeLinejoin="round"
+    strokeLinecap="round"
+    aria-hidden
+  >
     <path d="M13 2L4.5 13.5H11l-1 8.5L19.5 10H13z" />
   </svg>
 );
 const MapIcon = () => (
-  <svg className={ICON} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinejoin="round" strokeLinecap="round" aria-hidden>
+  <svg
+    className={ICON}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={1.8}
+    strokeLinejoin="round"
+    strokeLinecap="round"
+    aria-hidden
+  >
     <path d="M9 4L3 6.5v13.5L9 17.5l6 2.5 6-2.5V4l-6 2.5z" />
     <path d="M9 4v13.5M15 6.5V20" />
   </svg>
 );
 
 const ChevronIcon: React.FC<{ up?: boolean }> = ({ up }) => (
-  <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-    <path d={up ? "M6 15l6-6 6 6" : "M6 9l6 6 6-6"} />
+  <svg
+    className="h-4 w-4"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={2}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden
+  >
+    <path d={up ? 'M6 15l6-6 6 6' : 'M6 9l6 6 6-6'} />
   </svg>
 );
 
@@ -132,8 +197,8 @@ const ToggleButton: React.FC<{
     title={title ?? label}
     className={`pointer-events-auto flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border backdrop-blur-md transition-colors ${
       active
-        ? "border-cyan-300/60 bg-cyan-400/20 text-cyan-100"
-        : "border-white/10 bg-black/55 text-slate-300"
+        ? 'border-cyan-300/60 bg-cyan-400/20 text-cyan-100'
+        : 'border-white/10 bg-black/55 text-slate-300'
     }`}
   >
     {children}
@@ -176,7 +241,7 @@ const AvMobileChrome: React.FC<AvMobileChromeProps> = ({
       {/* ── Top bar: back · scene switcher · view toggles ──────────────────── */}
       <header
         className="pointer-events-none absolute inset-x-0 top-0 z-30 flex items-center gap-2 bg-gradient-to-b from-black/70 via-black/40 to-transparent px-3 pb-4"
-        style={{ paddingTop: "max(0.5rem, env(safe-area-inset-top))" }}
+        style={{ paddingTop: 'max(0.5rem, env(safe-area-inset-top))' }}
       >
         <Link
           to="/demos"
@@ -199,8 +264,8 @@ const AvMobileChrome: React.FC<AvMobileChromeProps> = ({
           label="Follow vehicle"
           title={
             egoPath
-              ? "Recenter the camera on the vehicle"
-              : "Ego-follow (scene has no ego polyline — camera holds)"
+              ? 'Recenter the camera on the vehicle'
+              : 'Ego-follow (scene has no ego polyline — camera holds)'
           }
         >
           <FollowIcon />
@@ -238,7 +303,7 @@ const AvMobileChrome: React.FC<AvMobileChromeProps> = ({
       {hasCamera && (
         <div
           className="pointer-events-none absolute right-3 z-20 w-32"
-          style={{ top: "calc(env(safe-area-inset-top) + 3.25rem)" }}
+          style={{ top: 'calc(env(safe-area-inset-top) + 3.25rem)' }}
         >
           <CameraInset
             cameras={cameras!}
@@ -252,7 +317,7 @@ const AvMobileChrome: React.FC<AvMobileChromeProps> = ({
       {/* ── Bottom stack: sheet · inspector · timeline ─────────────────────── */}
       <div
         className="pointer-events-none absolute inset-x-0 bottom-0 z-30 flex flex-col"
-        style={{ paddingBottom: "max(0.5rem, env(safe-area-inset-bottom))" }}
+        style={{ paddingBottom: 'max(0.5rem, env(safe-area-inset-bottom))' }}
       >
         {/* Expandable sheet: stream toggles + legend + telemetry + attribution */}
         {hasSheet &&
@@ -285,7 +350,7 @@ const AvMobileChrome: React.FC<AvMobileChromeProps> = ({
                   />
                 )}
                 {hasTelemetry && telemetry && (
-                  <div className={scene ? "border-t border-white/10 pt-3" : ""}>
+                  <div className={scene ? 'border-t border-white/10 pt-3' : ''}>
                     <div className="mb-2 text-[11px] uppercase tracking-wider text-slate-400">
                       Telemetry
                     </div>

@@ -41,7 +41,9 @@ describe('parseCliArgs', () => {
     try {
       expect(parseCliArgs([]).docsRoot).toBe('/env/docs');
       // An explicit flag still wins over the env fallback.
-      expect(parseCliArgs(['--docs-root', '/flag/docs']).docsRoot).toBe('/flag/docs');
+      expect(parseCliArgs(['--docs-root', '/flag/docs']).docsRoot).toBe(
+        '/flag/docs',
+      );
     } finally {
       if (prev === undefined) delete process.env.STT_DOCS_ROOT;
       else process.env.STT_DOCS_ROOT = prev;
@@ -74,7 +76,9 @@ describe('parseCliArgs', () => {
   });
 
   it('rejects an invalid --transport value', () => {
-    expect(() => parseCliArgs(['--transport', 'carrier-pigeon'])).toThrow(/stdio.*http/);
+    expect(() => parseCliArgs(['--transport', 'carrier-pigeon'])).toThrow(
+      /stdio.*http/,
+    );
   });
 
   it('rejects an unrecognized flag', () => {
@@ -84,12 +88,19 @@ describe('parseCliArgs', () => {
   it('defaults the DNS-rebinding allow-lists to the bind host/port loopback aliases', () => {
     const config = parseCliArgs([]);
     expect(config.allowedHosts).toEqual(['127.0.0.1:3900', 'localhost:3900']);
-    expect(config.allowedOrigins).toEqual(['http://127.0.0.1:3900', 'http://localhost:3900']);
+    expect(config.allowedOrigins).toEqual([
+      'http://127.0.0.1:3900',
+      'http://localhost:3900',
+    ]);
   });
 
   it('derives the default allow-lists from a custom --host/--port', () => {
     const config = parseCliArgs(['--host', '0.0.0.0', '--port', '4000']);
-    expect(config.allowedHosts).toEqual(['0.0.0.0:4000', '127.0.0.1:4000', 'localhost:4000']);
+    expect(config.allowedHosts).toEqual([
+      '0.0.0.0:4000',
+      '127.0.0.1:4000',
+      'localhost:4000',
+    ]);
     expect(config.allowedOrigins).toEqual([
       'http://0.0.0.0:4000',
       'http://127.0.0.1:4000',

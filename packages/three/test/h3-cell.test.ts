@@ -1,10 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { cellToLatLng, h3IndexToSplitLong } from 'h3-js';
 import { h3IndexFromTile, cellBoundaryFromTile } from '../src/lib/h3-cell';
-import {
-  buildH3Buffers,
-  DEFAULT_H3_COLOR_RANGE,
-} from '../src/lib/h3-buffers';
+import { buildH3Buffers, DEFAULT_H3_COLOR_RANGE } from '../src/lib/h3-buffers';
 import { LocalEnuProjection } from '../src/projection/local-enu';
 import { makeVectorTile as summaryTile } from './_support/features';
 
@@ -37,8 +34,12 @@ describe('h3-cell decode', () => {
     expect(b!.ring.length).toBeLessThanOrEqual(7);
     // Ring is GeoJSON [lng, lat]; its centroid sits at the cell centre.
     const [clat, clng] = cellToLatLng(SF_RES9_HEX);
-    let cx = 0, cy = 0;
-    for (const [lng, lat] of b!.ring) { cx += lng; cy += lat; }
+    let cx = 0,
+      cy = 0;
+    for (const [lng, lat] of b!.ring) {
+      cx += lng;
+      cy += lat;
+    }
     cx /= b!.ring.length;
     cy /= b!.ring.length;
     expect(cx).toBeCloseTo(clng, 2);
@@ -90,7 +91,10 @@ describe('buildH3Buffers', () => {
   });
 
   it('colours each cell by the count ramp over the pinned domain', () => {
-    const tile = summaryTile([hexToU64(NEIGHBOR_A), hexToU64(NEIGHBOR_B)], [0, 100]);
+    const tile = summaryTile(
+      [hexToU64(NEIGHBOR_A), hexToU64(NEIGHBOR_B)],
+      [0, 100],
+    );
     const buf = buildH3Buffers([tile], proj, {
       colorDomain: [0, 100],
       colorRange: DEFAULT_H3_COLOR_RANGE,
@@ -105,7 +109,10 @@ describe('buildH3Buffers', () => {
     // Find a vertex belonging to cell 1 by scanning for the high color.
     let foundHigh = false;
     for (let i = 0; i < buf.colors.length; i += 4) {
-      if (Math.abs(buf.colors[i] - high[0] / 255) < 1e-5) { foundHigh = true; break; }
+      if (Math.abs(buf.colors[i] - high[0] / 255) < 1e-5) {
+        foundHigh = true;
+        break;
+      }
     }
     expect(foundHigh).toBe(true);
   });
@@ -125,14 +132,20 @@ describe('buildH3Buffers', () => {
   });
 
   it('auto-domain uses visible cells when colorDomain is null', () => {
-    const tile = summaryTile([hexToU64(NEIGHBOR_A), hexToU64(NEIGHBOR_B)], [2, 8]);
+    const tile = summaryTile(
+      [hexToU64(NEIGHBOR_A), hexToU64(NEIGHBOR_B)],
+      [2, 8],
+    );
     const buf = buildH3Buffers([tile], proj, {});
     // Lowest count maps to first stop.
     expect(buf.colors[0]).toBeCloseTo(DEFAULT_H3_COLOR_RANGE[0][0] / 255, 5);
     const last = DEFAULT_H3_COLOR_RANGE[DEFAULT_H3_COLOR_RANGE.length - 1];
     let foundLast = false;
     for (let i = 0; i < buf.colors.length; i += 4) {
-      if (Math.abs(buf.colors[i] - last[0] / 255) < 1e-5) { foundLast = true; break; }
+      if (Math.abs(buf.colors[i] - last[0] / 255) < 1e-5) {
+        foundLast = true;
+        break;
+      }
     }
     expect(foundLast).toBe(true);
   });

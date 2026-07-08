@@ -40,7 +40,8 @@ const REPO_ROOT = path.resolve(__dirname, '..', '..', '..');
 const fmtMs = (ms) =>
   ms >= 1000 ? `${(ms / 1000).toFixed(2)} s` : `${ms.toFixed(2)} ms`;
 const fmtBytes = (b) => {
-  if (b >= 1024 * 1024 * 1024) return `${(b / 1024 / 1024 / 1024).toFixed(2)} GB`;
+  if (b >= 1024 * 1024 * 1024)
+    return `${(b / 1024 / 1024 / 1024).toFixed(2)} GB`;
   if (b >= 1024 * 1024) return `${(b / 1024 / 1024).toFixed(2)} MB`;
   if (b >= 1024) return `${(b / 1024).toFixed(2)} KB`;
   return `${b} B`;
@@ -51,8 +52,7 @@ const fmtPct = (frac) => `${(frac * 100).toFixed(1)}%`;
 const fmtNum = (n) => n.toLocaleString('en-US');
 
 /** Right-pad a label, then print "label : value". */
-const row = (label, value) =>
-  console.log(`  ${label.padEnd(28)} ${value}`);
+const row = (label, value) => console.log(`  ${label.padEnd(28)} ${value}`);
 
 const hr = () => console.log('-'.repeat(64));
 const header = (title) => {
@@ -64,7 +64,8 @@ const header = (title) => {
 function percentiles(values) {
   if (values.length === 0) return { p50: 0, p95: 0, p99: 0, max: 0 };
   const sorted = [...values].sort((a, b) => a - b);
-  const at = (p) => sorted[Math.min(sorted.length - 1, Math.floor(p * sorted.length))];
+  const at = (p) =>
+    sorted[Math.min(sorted.length - 1, Math.floor(p * sorted.length))];
   return {
     p50: at(0.5),
     p95: at(0.95),
@@ -171,7 +172,8 @@ function makeMemDir() {
         getFile: async () => {
           const b = files.get(name);
           return {
-            arrayBuffer: async () => b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength),
+            arrayBuffer: async () =>
+              b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength),
             text: async () => new TextDecoder().decode(b),
           };
         },
@@ -237,7 +239,7 @@ function parseArgs(argv) {
     sttPath: null,
     baseline: null,
     check: null,
-    tolerance: 0.10,
+    tolerance: 0.1,
     compare: null,
   };
   for (let i = 0; i < argv.length; i++) {
@@ -318,7 +320,7 @@ async function main() {
 
   const tileEntries = index.tiles;
   const spatialLocations = new Set(
-    tileEntries.map((e) => `${e.zoom}/${e.x}/${e.y}`)
+    tileEntries.map((e) => `${e.zoom}/${e.x}/${e.y}`),
   ).size;
 
   row('Open + parse time', fmtMs(openMs));
@@ -351,7 +353,7 @@ async function main() {
     console.error(
       '  The archive appears to use an incompatible (likely older) tile\n' +
         '  format. Rebuild it with the current stt-build / stt-generate\n' +
-        '  toolchain, then re-run the benchmark.'
+        '  toolchain, then re-run the benchmark.',
     );
     process.exitCode = 1;
     return;
@@ -394,19 +396,29 @@ async function main() {
   const decMs = performance.now() - decT0;
   const pct = percentiles(latencies);
 
-  row('Tiles decoded', `${fmtNum(sampleEntries.length)}${sampled ? ` (sample of ${fmtNum(tileEntries.length)})` : ''}`);
+  row(
+    'Tiles decoded',
+    `${fmtNum(sampleEntries.length)}${sampled ? ` (sample of ${fmtNum(tileEntries.length)})` : ''}`,
+  );
   row('Total time', fmtMs(decMs));
-  row('Throughput', `${(sampleEntries.length / (decMs / 1000)).toFixed(0)} tiles/s`);
+  row(
+    'Throughput',
+    `${(sampleEntries.length / (decMs / 1000)).toFixed(0)} tiles/s`,
+  );
   row('Compressed throughput', fmtMBs(compressedBytes, decMs));
   row('Uncompressed throughput', fmtMBs(uncompressedBytes, decMs));
   row('Features decoded', fmtNum(featuresDecoded));
-  row('Decoded in-memory size', `${fmtBytes(decodedMemBytes)} (estimateTileSize)`);
+  row(
+    'Decoded in-memory size',
+    `${fmtBytes(decodedMemBytes)} (estimateTileSize)`,
+  );
   row('Latency p50', fmtMs(pct.p50));
   row('Latency p95', fmtMs(pct.p95));
   row('Latency p99', fmtMs(pct.p99));
   row('Latency max', fmtMs(pct.max));
   metrics.decode_tiles_per_s = sampleEntries.length / (decMs / 1000);
-  metrics.decode_mb_per_s = decMs > 0 ? compressedBytes / 1024 / 1024 / (decMs / 1000) : 0;
+  metrics.decode_mb_per_s =
+    decMs > 0 ? compressedBytes / 1024 / 1024 / (decMs / 1000) : 0;
   metrics.decode_p95_ms = pct.p95;
 
   // ====================================================================
@@ -461,11 +473,11 @@ async function main() {
     'Request reduction',
     batchReqs > 0
       ? `${(indivReqs / batchReqs).toFixed(1)}x  (${fmtNum(indivReqs)} -> ${fmtNum(batchReqs)})`
-      : 'n/a'
+      : 'n/a',
   );
   row(
     'Wall-time speedup',
-    batchMs > 0 ? `${(indivMs / batchMs).toFixed(2)}x` : 'n/a'
+    batchMs > 0 ? `${(indivMs / batchMs).toFixed(2)}x` : 'n/a',
   );
   metrics.coalesce_ratio = batchReqs > 0 ? indivReqs / batchReqs : 0;
 
@@ -522,7 +534,11 @@ async function main() {
   } else if (gzipEntries.length > 0) {
     // Gzip path: native vs fflate (vs pako if available).
     const payloads = gzipEntries.map((e) =>
-      Uint8Array.prototype.slice.call(fileBuffer, e.offset, e.offset + e.length),
+      Uint8Array.prototype.slice.call(
+        fileBuffer,
+        e.offset,
+        e.offset + e.length,
+      ),
     );
     const totalCompressed = payloads.reduce((s, p) => s + p.length, 0);
     let totalDecompressed = 0;
@@ -570,19 +586,34 @@ async function main() {
 
     const totalCompIter = totalCompressed * ITER;
     row('Gzip sample payloads', fmtNum(payloads.length));
-    row('Iterations', `${ITER} (${fmtNum(payloads.length * ITER)} decode calls)`);
-    row('Compressed / decompressed', `${fmtBytes(totalCompressed)} -> ${fmtBytes(totalDecompressed)}`);
+    row(
+      'Iterations',
+      `${ITER} (${fmtNum(payloads.length * ITER)} decode calls)`,
+    );
+    row(
+      'Compressed / decompressed',
+      `${fmtBytes(totalCompressed)} -> ${fmtBytes(totalDecompressed)}`,
+    );
     console.log('');
     if (nativeMs !== null) {
-      row('native DecompressionStream', `${fmtMs(nativeMs)}  @ ${fmtMBs(totalCompIter, nativeMs)}`);
+      row(
+        'native DecompressionStream',
+        `${fmtMs(nativeMs)}  @ ${fmtMBs(totalCompIter, nativeMs)}`,
+      );
     } else {
       row('native DecompressionStream', 'unavailable in this runtime');
     }
     if (fflateMs !== null) {
-      row('fflate gzip (pure JS)', `${fmtMs(fflateMs)}  @ ${fmtMBs(totalCompIter, fflateMs)}`);
+      row(
+        'fflate gzip (pure JS)',
+        `${fmtMs(fflateMs)}  @ ${fmtMBs(totalCompIter, fflateMs)}`,
+      );
     }
     if (pakoMs !== null) {
-      row('pako gzip (pure JS)', `${fmtMs(pakoMs)}  @ ${fmtMBs(totalCompIter, pakoMs)}`);
+      row(
+        'pako gzip (pure JS)',
+        `${fmtMs(pakoMs)}  @ ${fmtMBs(totalCompIter, pakoMs)}`,
+      );
     }
     if (nativeMs !== null && fflateMs !== null) {
       row('Speedup (native vs fflate)', `${(fflateMs / nativeMs).toFixed(2)}x`);
@@ -601,7 +632,11 @@ async function main() {
   if (zstdEntries.length > 0 && fzstdDecompress) {
     console.log('');
     const zPayloads = zstdEntries.map((e) =>
-      Uint8Array.prototype.slice.call(fileBuffer, e.offset, e.offset + e.length),
+      Uint8Array.prototype.slice.call(
+        fileBuffer,
+        e.offset,
+        e.offset + e.length,
+      ),
     );
     const zTotalCompressed = zPayloads.reduce((s, p) => s + p.length, 0);
     const ITER = Math.max(1, Math.ceil(2000 / zPayloads.length));
@@ -616,8 +651,14 @@ async function main() {
     const fzstdMs = performance.now() - t0;
     const zTotalIter = zTotalCompressed * ITER;
     row('Zstd sample payloads', fmtNum(zPayloads.length));
-    row('Compressed / decompressed', `${fmtBytes(zTotalCompressed)} -> ${fmtBytes(zTotalDecompressed)}`);
-    row('fzstd (pure JS)', `${fmtMs(fzstdMs)}  @ ${fmtMBs(zTotalIter, fzstdMs)}`);
+    row(
+      'Compressed / decompressed',
+      `${fmtBytes(zTotalCompressed)} -> ${fmtBytes(zTotalDecompressed)}`,
+    );
+    row(
+      'fzstd (pure JS)',
+      `${fmtMs(fzstdMs)}  @ ${fmtMBs(zTotalIter, fzstdMs)}`,
+    );
   } else if (zstdEntries.length === 0) {
     row('Zstd', 'no zstd tiles in archive');
   }
@@ -633,7 +674,9 @@ async function main() {
     await a.getIndex();
 
     // Working set small enough to stay within the cache size limit.
-    const workingSet = tileEntries.slice(0, Math.min(200, tileEntries.length)).map(entryToTileId);
+    const workingSet = tileEntries
+      .slice(0, Math.min(200, tileEntries.length))
+      .map(entryToTileId);
 
     // First pass — all misses (cold cache).
     for (const id of workingSet) await a.getTile(id);
@@ -646,18 +689,33 @@ async function main() {
     const secondPassHits = afterSecond.hits - afterFirst.hits;
 
     row('Working set size', fmtNum(workingSet.length));
-    row('Pass 1 (cold)', `${fmtNum(afterFirst.misses)} misses, ${fmtNum(afterFirst.hits)} hits`);
-    row('Pass 2 (warm)', `${fmtNum(secondPassHits)} hits (of ${fmtNum(workingSet.length)})`);
-    row('Cache entries', `${fmtNum(afterSecond.size)} / ${fmtNum(afterSecond.maxSize)}`);
-    row('Cache bytes', `${fmtBytes(afterSecond.bytes)} / ${fmtBytes(afterSecond.maxBytes)}`);
-    row('Total hits / misses', `${fmtNum(afterSecond.hits)} / ${fmtNum(afterSecond.misses)}`);
+    row(
+      'Pass 1 (cold)',
+      `${fmtNum(afterFirst.misses)} misses, ${fmtNum(afterFirst.hits)} hits`,
+    );
+    row(
+      'Pass 2 (warm)',
+      `${fmtNum(secondPassHits)} hits (of ${fmtNum(workingSet.length)})`,
+    );
+    row(
+      'Cache entries',
+      `${fmtNum(afterSecond.size)} / ${fmtNum(afterSecond.maxSize)}`,
+    );
+    row(
+      'Cache bytes',
+      `${fmtBytes(afterSecond.bytes)} / ${fmtBytes(afterSecond.maxBytes)}`,
+    );
+    row(
+      'Total hits / misses',
+      `${fmtNum(afterSecond.hits)} / ${fmtNum(afterSecond.misses)}`,
+    );
     row('Evictions', fmtNum(afterSecond.evictions));
     row('Hit rate', fmtPct(afterSecond.hitRate));
     row(
       'Warm-pass verification',
       secondPassHits === workingSet.length
         ? 'ok — every re-fetch was a cache hit'
-        : `WARNING — only ${secondPassHits}/${workingSet.length} hits`
+        : `WARNING — only ${secondPassHits}/${workingSet.length} hits`,
     );
   }
 
@@ -677,7 +735,10 @@ async function main() {
     row('Compressed tile bytes', fmtBytes(totalComp));
     row('Uncompressed tile bytes', fmtBytes(totalUncomp));
     row('Compression ratio', `${ratio.toFixed(2)}x`);
-    row('Space saved', fmtPct(totalUncomp > 0 ? 1 - totalComp / totalUncomp : 0));
+    row(
+      'Space saved',
+      fmtPct(totalUncomp > 0 ? 1 - totalComp / totalUncomp : 0),
+    );
     var archiveRatio = ratio;
     metrics.compression_ratio = ratio;
   }
@@ -717,7 +778,11 @@ async function main() {
         const tile = await coldArchive.getTile(id);
         coldLatencies.push(performance.now() - tStart);
         const entry = tileEntries.find(
-          (e) => e.zoom === id.z && e.x === id.x && e.y === id.y && e.timeStart === id.t,
+          (e) =>
+            e.zoom === id.z &&
+            e.x === id.x &&
+            e.y === id.y &&
+            e.timeStart === id.t,
         );
         if (entry && tile) coldBytes += entry.uncompressedSize || entry.length;
       }
@@ -749,7 +814,11 @@ async function main() {
         const tile = await warmArchive.getTile(id);
         warmLatencies.push(performance.now() - tStart);
         const entry = tileEntries.find(
-          (e) => e.zoom === id.z && e.x === id.x && e.y === id.y && e.timeStart === id.t,
+          (e) =>
+            e.zoom === id.z &&
+            e.x === id.x &&
+            e.y === id.y &&
+            e.timeStart === id.t,
         );
         if (entry && tile) warmBytes += entry.uncompressedSize || entry.length;
       }
@@ -767,20 +836,34 @@ async function main() {
       console.log('');
       row('Cold pass (no OPFS hits)', '');
       row('  wall time', fmtMs(coldMs));
-      row('  throughput', `${(probeIds.length / (coldMs / 1000)).toFixed(0)} tiles/s`);
+      row(
+        '  throughput',
+        `${(probeIds.length / (coldMs / 1000)).toFixed(0)} tiles/s`,
+      );
       row('  uncompressed MB/s', fmtMBs(coldBytes, coldMs));
-      row('  p50 / p95 / p99', `${fmtMs(coldPct.p50)} / ${fmtMs(coldPct.p95)} / ${fmtMs(coldPct.p99)}`);
+      row(
+        '  p50 / p95 / p99',
+        `${fmtMs(coldPct.p50)} / ${fmtMs(coldPct.p95)} / ${fmtMs(coldPct.p99)}`,
+      );
       console.log('');
       row('Warm pass (OPFS hits)', '');
       row('  wall time', fmtMs(warmMs));
-      row('  throughput', `${(probeIds.length / (warmMs / 1000)).toFixed(0)} tiles/s`);
+      row(
+        '  throughput',
+        `${(probeIds.length / (warmMs / 1000)).toFixed(0)} tiles/s`,
+      );
       row('  uncompressed MB/s', fmtMBs(warmBytes, warmMs));
-      row('  p50 / p95 / p99', `${fmtMs(warmPct.p50)} / ${fmtMs(warmPct.p95)} / ${fmtMs(warmPct.p99)}`);
+      row(
+        '  p50 / p95 / p99',
+        `${fmtMs(warmPct.p50)} / ${fmtMs(warmPct.p95)} / ${fmtMs(warmPct.p99)}`,
+      );
       row('  range requests', fmtNum(warmTileRequests));
       console.log('');
       row(
         'Speedup',
-        warmMs > 0 ? `${(coldMs / warmMs).toFixed(2)}x  (${fmtMs(coldMs)} -> ${fmtMs(warmMs)})` : 'n/a',
+        warmMs > 0
+          ? `${(coldMs / warmMs).toFixed(2)}x  (${fmtMs(coldMs)} -> ${fmtMs(warmMs)})`
+          : 'n/a',
       );
       row('OPFS entries', fmtNum(warmStats?.entries ?? 0));
       row('OPFS bytes', fmtBytes(warmStats?.bytes ?? 0));
@@ -803,13 +886,13 @@ async function main() {
     'Tile decoding',
     typeof Worker !== 'undefined'
       ? 'Worker pool decoder (Arrow IPC)'
-      : 'Inline decoder (Arrow IPC; no Worker global in this environment)'
+      : 'Inline decoder (Arrow IPC; no Worker global in this environment)',
   );
   console.log(
     `  Decoded ${fmtNum(sampleEntries.length)} tiles / ${fmtNum(featuresDecoded)} features at ` +
       `${(sampleEntries.length / (decMs / 1000)).toFixed(0)} tiles/s; ` +
       `coalescing cut range requests ${batchReqs > 0 ? (indivReqs / batchReqs).toFixed(1) : '?'}x; ` +
-      `archive compression ${archiveRatio.toFixed(2)}x.`
+      `archive compression ${archiveRatio.toFixed(2)}x.`,
   );
   hr();
 
@@ -822,7 +905,9 @@ async function main() {
       : path.resolve(process.cwd(), cliArgs.baseline);
     await fs.mkdir(path.dirname(outPath), { recursive: true });
     await fs.writeFile(outPath, JSON.stringify(metrics, null, 2) + '\n');
-    console.log(`\nBaseline written to ${path.relative(process.cwd(), outPath)}`);
+    console.log(
+      `\nBaseline written to ${path.relative(process.cwd(), outPath)}`,
+    );
   }
 
   if (cliArgs.compare) {
@@ -836,17 +921,24 @@ async function main() {
     try {
       otherBuf = await fs.readFile(otherPath);
     } catch (err) {
-      console.error(`\nWARN: --compare archive ${otherPath} could not be read: ${err.message}`);
+      console.error(
+        `\nWARN: --compare archive ${otherPath} could not be read: ${err.message}`,
+      );
     }
     if (otherBuf) {
       header('Compare against ' + path.relative(REPO_ROOT, otherPath));
       const { fileFetch: otherFetch } = createFileFetch(otherBuf);
-      const otherArchive = new STTArchive({ url: otherPath, fetch: otherFetch });
+      const otherArchive = new STTArchive({
+        url: otherPath,
+        fetch: otherFetch,
+      });
       const otherMeta = await otherArchive.getMetadata();
       const otherIndex = await otherArchive.getIndex();
       const otherEntries = otherIndex.tiles;
       const otherSample =
-        otherEntries.length > SAMPLE_CAP ? otherEntries.slice(0, SAMPLE_CAP) : otherEntries;
+        otherEntries.length > SAMPLE_CAP
+          ? otherEntries.slice(0, SAMPLE_CAP)
+          : otherEntries;
 
       let otherFeatures = 0;
       let otherCompressed = 0;
@@ -861,7 +953,8 @@ async function main() {
         otherCompressed += entry.length;
         otherUncompressed += entry.uncompressedSize || entry.length;
         if (tile) {
-          for (const layer of tile.layers) otherFeatures += layer.features.featureCount;
+          for (const layer of tile.layers)
+            otherFeatures += layer.features.featureCount;
         }
       }
       const oMs = performance.now() - oT0;
@@ -871,7 +964,8 @@ async function main() {
         (s, e) => s + (e.uncompressedSize || e.length),
         0,
       );
-      const otherRatio = otherTotalComp > 0 ? otherTotalUncomp / otherTotalComp : 1;
+      const otherRatio =
+        otherTotalComp > 0 ? otherTotalUncomp / otherTotalComp : 1;
 
       const aLabel = `current (v${metadata.version})`;
       const bLabel = `compare (v${otherMeta.version})`;
@@ -879,7 +973,10 @@ async function main() {
       const cmpRow = (label, a, b, fmt = (v) => v) => {
         const delta = b - a;
         const pct = a !== 0 ? ` (${((delta / a) * 100).toFixed(1)}%)` : '';
-        row(label, `${String(fmt(a)).padEnd(20)} ${String(fmt(b)).padEnd(20)} ${fmt(delta)}${pct}`);
+        row(
+          label,
+          `${String(fmt(a)).padEnd(20)} ${String(fmt(b)).padEnd(20)} ${fmt(delta)}${pct}`,
+        );
       };
       cmpRow('archive size', fileBuffer.length, otherBuf.length, fmtBytes);
       cmpRow('tile count', tileEntries.length, otherEntries.length, fmtNum);
@@ -890,7 +987,12 @@ async function main() {
         fmtNum,
       );
       cmpRow('decode p95', pct.p95, oPct.p95, fmtMs);
-      cmpRow('compression ratio', archiveRatio, otherRatio, (v) => v.toFixed(2) + 'x');
+      cmpRow(
+        'compression ratio',
+        archiveRatio,
+        otherRatio,
+        (v) => v.toFixed(2) + 'x',
+      );
       cmpRow('features sampled', featuresDecoded, otherFeatures, fmtNum);
       otherArchive.finalize?.();
     }
@@ -904,7 +1006,9 @@ async function main() {
     try {
       baseline = JSON.parse(await fs.readFile(baselinePath, 'utf8'));
     } catch (err) {
-      console.error(`\nERROR: failed to load baseline ${baselinePath}: ${err.message}`);
+      console.error(
+        `\nERROR: failed to load baseline ${baselinePath}: ${err.message}`,
+      );
       process.exitCode = 1;
       return;
     }
@@ -914,26 +1018,27 @@ async function main() {
     // Higher-is-better metrics: decode_tiles_per_s, decode_mb_per_s,
     // coalesce_ratio, compression_ratio.
     const checks = [
-      { key: 'open_ms',              direction: 'lower' },
-      { key: 'decode_tiles_per_s',   direction: 'higher' },
-      { key: 'decode_mb_per_s',      direction: 'higher' },
-      { key: 'decode_p95_ms',        direction: 'lower' },
-      { key: 'coalesce_ratio',       direction: 'higher' },
-      { key: 'compression_ratio',    direction: 'higher' },
+      { key: 'open_ms', direction: 'lower' },
+      { key: 'decode_tiles_per_s', direction: 'higher' },
+      { key: 'decode_mb_per_s', direction: 'higher' },
+      { key: 'decode_p95_ms', direction: 'lower' },
+      { key: 'coalesce_ratio', direction: 'higher' },
+      { key: 'compression_ratio', direction: 'higher' },
     ];
-    console.log('\nBaseline check (tolerance ±' + (tol * 100).toFixed(0) + '%):');
+    console.log(
+      '\nBaseline check (tolerance ±' + (tol * 100).toFixed(0) + '%):',
+    );
     for (const { key, direction } of checks) {
       const base = baseline[key];
       const now = metrics[key];
       if (!Number.isFinite(base) || base === 0) continue;
       const rel = (now - base) / base;
-      const regressed =
-        direction === 'lower' ? rel > tol : rel < -tol;
+      const regressed = direction === 'lower' ? rel > tol : rel < -tol;
       const marker = regressed ? 'REGRESS' : 'ok';
       console.log(
-        `  ${key.padEnd(24)} ${base.toFixed(2)} -> ${now.toFixed(2)}  (${
-          (rel * 100).toFixed(1)
-        }%)  ${marker}`
+        `  ${key.padEnd(24)} ${base.toFixed(2)} -> ${now.toFixed(2)}  (${(
+          rel * 100
+        ).toFixed(1)}%)  ${marker}`,
       );
       if (regressed) regressions.push({ key, base, now, rel });
     }

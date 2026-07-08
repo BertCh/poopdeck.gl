@@ -14,10 +14,19 @@ fs.mkdirSync(OUTPUT, { recursive: true });
 
 const browser = await chromium.launch({
   headless: true,
-  args: ['--use-gl=swiftshader', '--enable-unsafe-swiftshader', '--enable-webgl',
-    '--ignore-gpu-blocklist', '--disable-gpu-sandbox', '--disable-dev-shm-usage', '--no-sandbox'],
+  args: [
+    '--use-gl=swiftshader',
+    '--enable-unsafe-swiftshader',
+    '--enable-webgl',
+    '--ignore-gpu-blocklist',
+    '--disable-gpu-sandbox',
+    '--disable-dev-shm-usage',
+    '--no-sandbox',
+  ],
 });
-const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+const ctx = await browser.newContext({
+  viewport: { width: 1280, height: 800 },
+});
 const page = await ctx.newPage();
 const logs = [];
 page.on('console', (m) => {
@@ -26,12 +35,16 @@ page.on('console', (m) => {
 });
 page.on('pageerror', (e) => logs.push(`[pageerror] ${e.name}: ${e.message}`));
 
-await page.goto(`${BASE_URL}/drive/${SCENE}`, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+await page.goto(`${BASE_URL}/drive/${SCENE}`, {
+  waitUntil: 'domcontentloaded',
+  timeout: 60_000,
+});
 await page.waitForTimeout(3500);
 // start playback so windows advance and tiles stream
 await page.evaluate(() => {
-  const b = Array.from(document.querySelectorAll('button'))
-    .find((x) => x.textContent && /^[▶⏸]$/.test(x.textContent.trim()));
+  const b = Array.from(document.querySelectorAll('button')).find(
+    (x) => x.textContent && /^[▶⏸]$/.test(x.textContent.trim()),
+  );
   if (b) b.click();
 });
 await page.waitForTimeout(12000);
@@ -42,17 +55,20 @@ const px = await page.evaluate(() => {
   if (!c) return null;
   const gl = c.getContext('webgl2') || c.getContext('webgl');
   if (!gl) return { note: 'no gl ctx' };
-  const w = c.width, h = c.height;
+  const w = c.width,
+    h = c.height;
   const buf = new Uint8Array(w * h * 4);
   gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, buf);
   let nonblack = 0;
   for (let i = 0; i < buf.length; i += 4) {
     if (buf[i] > 14 || buf[i + 1] > 14 || buf[i + 2] > 14) nonblack++;
   }
-  return { w, h, nonblackPct: +(100 * nonblack / (w * h)).toFixed(2) };
+  return { w, h, nonblackPct: +((100 * nonblack) / (w * h)).toFixed(2) };
 });
 
-const glErrs = logs.filter((l) => /vertex buffer|INVALID_OPERATION|drawElements|not big enough/i.test(l));
+const glErrs = logs.filter((l) =>
+  /vertex buffer|INVALID_OPERATION|drawElements|not big enough/i.test(l),
+);
 console.log(`=== /drive/${SCENE} (HD iso-3D) ===`);
 console.log('pixels:', JSON.stringify(px));
 console.log('total console errors/warnings:', logs.length);
@@ -63,7 +79,9 @@ for (const l of logs.slice(0, 10)) console.log('  ', l.slice(0, 220));
 
 const renders = px && px.nonblackPct != null && px.nonblackPct > 1.0;
 const clean = glErrs.length === 0;
-console.log(`\nRESULT: renders=${renders} (${px && px.nonblackPct}%), noGlDrawErrors=${clean}`);
+console.log(
+  `\nRESULT: renders=${renders} (${px && px.nonblackPct}%), noGlDrawErrors=${clean}`,
+);
 console.log(renders && clean ? 'VERIFY: PASS' : 'VERIFY: FAIL');
 
 await ctx.close();

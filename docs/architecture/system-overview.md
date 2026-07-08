@@ -58,6 +58,7 @@ graph TD
 ## Rust toolchain
 
 ### `stt-build` (CLI)
+
 Reads a GeoParquet file (WKB, GeoArrow, or `lon`/`lat` columns) and writes a
 **packed dataset directory** (`manifest.json` + `index/*.sttd` + `packs/*.sttp`).
 `-o foo.stt` is accepted for convenience — the extension is stripped to a `foo/`
@@ -76,9 +77,9 @@ directory. Pipeline:
 6. **Write**: `stt-core::PackWriter` orders blobs for locality, per-blob
    zstd-compresses and byte-dedups them (no shared dictionary), then cuts the
    stream into content-addressed packs (≤64 MiB each) and emits `manifest.json`
-   + `index/<hash>.sttd` + `packs/<hash>.sttp`. The lower-memory `--streaming`
-   path writes tiles into the same `PackWriter` as each zoom level completes,
-   trimming peak RAM on large inputs.
+   - `index/<hash>.sttd` + `packs/<hash>.sttp`. The lower-memory `--streaming`
+     path writes tiles into the same `PackWriter` as each zoom level completes,
+     trimming peak RAM on large inputs.
 
 Optional pipeline extras: `--summary-tier h3` adds a server-aggregated
 H3-hex tier alongside the raw tier (so 100M-feature point datasets render
@@ -102,6 +103,7 @@ For anyone with neither: convert to GeoParquet first —
 recipes.
 
 ### `stt-optimize`
+
 Reads a GeoParquet input and prints recommended `stt-build` settings —
 zoom range, temporal bucket size, compression — based on the data's
 spatial density and temporal distribution. Wired into the builder via
@@ -109,6 +111,7 @@ spatial density and temporal distribution. Wired into the builder via
 filled in from the recommendation.
 
 ### `stt-validate`
+
 Opens a packed dataset (a directory or its `manifest.json`) and reports
 anomalies. It first checks the
 **content-addressing contract** (each pack/directory object blake3-hashes to its
@@ -117,6 +120,7 @@ tile's CRC32C, decodes each Arrow IPC payload, and checks
 feature-count and temporal-extent consistency. Suitable for CI.
 
 ### `stt-generate`
+
 Convenience CLI that downloads + processes + builds the showcase datasets
 (earthquakes, AIS, flights, hurricanes, wildfires, storms, NYC rideshare,
 NYC taxi points, BIXI, satellites, drifters, drifters-hourly, animals,
@@ -124,6 +128,7 @@ OSM edits).
 Each subcommand emits GeoParquet and calls `stt-build` internally.
 
 ### `stt-serve`
+
 An axum HTTP server that generates STT tiles **on the fly**, one per request,
 from a live PostGIS or DuckDB source — the `ST_AsMVT` analog for the STT
 format. No `manifest.json` or packs are written to disk; each tile is
@@ -155,12 +160,14 @@ trade-off for serving directly off a live source. See
 [cli-reference.md](../api/cli-reference.md) for the full flag surface.
 
 ### `stt-core`
+
 The library every CLI uses. Owns the packed format, Arrow tile codec,
 compression abstraction, Hilbert/temporal indexing, and metadata.
 
 ## TypeScript stack
 
 ### `@poopdeck.gl/core`
+
 - **`STTArchive`** — packed-format reader over HTTP Range. Fetches
   `manifest.json` (metadata + directory pointer + pack table), then the
   directory object, then per-tile blobs via Range requests against the pack
@@ -187,10 +194,12 @@ compression abstraction, Hilbert/temporal indexing, and metadata.
   plumbing. See the [tile decoding](../api/stt-loader.md) page.
 
 ### `@poopdeck.gl/core` render kernel
+
 The framework-free logic every renderer backend shares, exposed as tree-shakeable
 sub-paths so the four backends stay CONSISTENT by importing one copy instead of
 hand-maintaining forks (see
 [renderer-architecture.md](../roadmap/renderer-architecture.md)):
+
 - **`core/time-filter`** — the CPU time-filter alpha (window/wake/cumulative/trail),
   `relativizeTime` + the `MAX_RELATIVE_TIME_MS` f32 guard, `resolveTimeFilterParams`
   (full-width `timeWindow` ⇄ half-width vocabulary), and `DEFAULT_WAKE_TAIL_SCALE`.
@@ -211,6 +220,7 @@ hand-maintaining forks (see
   [backend-capabilities.md](../spec/backend-capabilities.md) is the matrix.
 
 ### `@poopdeck.gl/layers`
+
 - **`SpatioTemporalLayer`** — composite layer; owns the archive + tileset,
   delegates rendering to specialized sublayers.
 - **`AnimatedPointLayer` / `AnimatedPathLayer` / `AnimatedPolygonLayer` /
@@ -238,6 +248,7 @@ hand-maintaining forks (see
   measured throughput.
 
 ### `@poopdeck.gl/three`
+
 The same tiles + clock rendered through a Three.js **WebGPU** renderer with TSL
 node materials, as a retained scene that merges resident tiles into one
 `InstancedMesh` per layer (rebased to a scene-wide `timeOrigin`). Owns its own
@@ -248,6 +259,7 @@ heatmap + live edge-bundling. See
 [renderer-architecture.md](../roadmap/renderer-architecture.md).
 
 ### `@poopdeck.gl/maplibre`
+
 Same archive reader and tileset, rendered through MapLibre GL's
 `CustomLayerInterface` in raw WebGL — for sites that don't want a deck.gl
 dependency or that need to interleave STT layers between native MapLibre
@@ -258,6 +270,7 @@ shaders assume the mercator projection, so there is no globe support. See
 [stt-maplibre.md](../api/stt-maplibre.md).
 
 ### `@poopdeck.gl/cesium`
+
 A CesiumJS backend that renders STT on a real **WGS84 globe** (CesiumJS is
 Apache-2.0; no Cesium ion token needed). The first green-field consumer of the
 render kernel — a `CesiumPointLayer` (`SttRenderNode`) + a `BackendDescriptor` +
@@ -269,18 +282,21 @@ worked `point` scaffold today (rendering is browser-verified). See
 ## Design decisions
 
 ### Arrow IPC instead of a bespoke binary format
+
 Tile payloads are standard, columnar, and browser-native via `apache-arrow`;
 GeoArrow gives the deck.gl layers exactly the buffer shape they need. (The
 directory index is the one bespoke structure — a compact varint + RLE codec;
 see the packed format spec §4.)
 
 ### Custom tileset, not deck.gl `TileLayer`
+
 - 4D addressing — `(z, x, y, t)` — that `TileLayer` doesn't model.
 - Bucket-aligned temporal prefetch needs first-class access to the time axis.
 - Cache eviction needs to be temporal-aware (keep tiles for the active
   time window even when they're off-viewport for a frame).
 
 ### GPU time filtering, not CPU per-frame filtering
+
 Most layers give each visible tile its own deck.gl sublayer bound to that
 tile's Arrow-backed attribute buffers, uploaded once on tile arrival.
 (Two exceptions consolidate across tiles for perf: the heatmap merges
@@ -290,6 +306,7 @@ extra: the CPU updates one uniform per frame and the shader does the filter
 and the fade.
 
 ### Content-addressed packs, cacheable on any static host
+
 A dataset is a `manifest.json` plus many immutable, content-addressed pack
 objects (and one directory object), served as static bytes by any host that
 honours Range requests — R2, S3, GCS, nginx. Because each pack is small and

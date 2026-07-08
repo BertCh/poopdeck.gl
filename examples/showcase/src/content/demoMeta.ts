@@ -15,7 +15,11 @@ import type { Dataset } from '../types';
 
 export type DemoCategory = 'earth-ocean' | 'mobility' | 'built-life';
 
-export const CATEGORY_ORDER: DemoCategory[] = ['earth-ocean', 'mobility', 'built-life'];
+export const CATEGORY_ORDER: DemoCategory[] = [
+  'earth-ocean',
+  'mobility',
+  'built-life',
+];
 
 export const CATEGORY_LABELS: Record<DemoCategory, string> = {
   'earth-ocean': 'Earth & ocean',
@@ -228,7 +232,8 @@ export const DEMO_META: Record<string, DemoMeta> = {
   // ── Earth & ocean ────────────────────────────────────────────────────────
   'ocean-drifters': {
     category: 'earth-ocean',
-    tagline: '43 years of satellite-tracked surface buoys, shaded by sea-surface temperature.',
+    tagline:
+      '43 years of satellite-tracked surface buoys, shaded by sea-surface temperature.',
     techniqueTag: 'Trips · SST gradient · globe',
     about: [
       'Since 1979 the Global Drifter Program has deployed satellite-tracked surface buoys across the oceans. Each buoy reports its position and the surrounding water temperature as currents carry it. Their tracks trace ocean circulation: gyres, boundary currents, and the drift between them.',
@@ -251,16 +256,26 @@ export const DEMO_META: Record<string, DemoMeta> = {
       '1979→2022 GDP record. Per-fix sea-surface temperature is emitted as ' +
       'per-vertex values to drive the color ramp.',
     techniques: [
-      { label: 'AnimatedTripsLayer', docPath: '/docs/api/animated-trips-layer' },
-      { label: 'Binary features (per-vertex values)', docPath: '/docs/api/binary-features' },
-      { label: 'SpatiotemporalTileset', docPath: '/docs/api/spatiotemporal-tileset' },
+      {
+        label: 'AnimatedTripsLayer',
+        docPath: '/docs/api/animated-trips-layer',
+      },
+      {
+        label: 'Binary features (per-vertex values)',
+        docPath: '/docs/api/binary-features',
+      },
+      {
+        label: 'SpatiotemporalTileset',
+        docPath: '/docs/api/spatiotemporal-tileset',
+      },
     ],
     related: ['ecco-currents', 'ship-traffic', 'animal-migration'],
   },
 
   'ecco-currents': {
     category: 'earth-ocean',
-    tagline: 'Virtual particles advected through NASA ECCO model currents — the modeled twin of the drifters.',
+    tagline:
+      'Virtual particles advected through NASA ECCO model currents — the modeled twin of the drifters.',
     techniqueTag: 'Trips · speed gradient · globe',
     about: [
       'The modeled companion to the drifter demo. NASA/JPL’s ECCO state estimate reconstructs global ocean circulation; here thousands of virtual particles are advected through its surface velocity fields for a year and rendered as ribbons.',
@@ -281,15 +296,22 @@ export const DEMO_META: Record<string, DemoMeta> = {
       'A Python particle-advection preprocessor, not a Rust generator — see ' +
       'scripts/data-generation/ECCO.md for setup and the advection parameters.',
     techniques: [
-      { label: 'AnimatedTripsLayer', docPath: '/docs/api/animated-trips-layer' },
-      { label: 'Binary features (per-vertex values)', docPath: '/docs/api/binary-features' },
+      {
+        label: 'AnimatedTripsLayer',
+        docPath: '/docs/api/animated-trips-layer',
+      },
+      {
+        label: 'Binary features (per-vertex values)',
+        docPath: '/docs/api/binary-features',
+      },
     ],
     related: ['ocean-drifters', 'ship-traffic'],
   },
 
   'earthquake-activity': {
     category: 'earth-ocean',
-    tagline: 'Five years of global M4+ seismicity tracing the plate boundaries.',
+    tagline:
+      'Five years of global M4+ seismicity tracing the plate boundaries.',
     techniqueTag: 'Points · magnitude',
     about: [
       'Every magnitude-4.0+ earthquake recorded by the USGS between 2020 and 2024 — tens of thousands of events. Played back, they outline the tectonic plate boundaries: the Pacific Ring of Fire, the mid-Atlantic ridge, the Alpide belt through the Himalaya.',
@@ -304,15 +326,22 @@ export const DEMO_META: Record<string, DemoMeta> = {
     ],
     buildCommand: 'stt-generate earthquakes --output earthquakes-v2.stt',
     techniques: [
-      { label: 'AnimatedPointLayer', docPath: '/docs/api/animated-point-layer' },
-      { label: 'CategoryColorExtension', docPath: '/docs/api/category-color-extension' },
+      {
+        label: 'AnimatedPointLayer',
+        docPath: '/docs/api/animated-point-layer',
+      },
+      {
+        label: 'CategoryColorExtension',
+        docPath: '/docs/api/category-color-extension',
+      },
     ],
     related: ['wildfires', 'hurricanes'],
   },
 
   'earthquake-columns': {
     category: 'earth-ocean',
-    tagline: 'The same seismic catalog, stood up as 3D columns — bar height is magnitude.',
+    tagline:
+      'The same seismic catalog, stood up as 3D columns — bar height is magnitude.',
     techniqueTag: 'Columns · 3D extrusion',
     about: [
       'The earthquake catalog from the points demo, rendered a second way: every event is an extruded column whose height is its magnitude. The columns give the Ring of Fire relief — dense spikes along the subduction zones, the largest quakes tallest.',
@@ -330,8 +359,14 @@ export const DEMO_META: Record<string, DemoMeta> = {
       'Reuses the earthquake-activity archive — only the render layer differs ' +
       '(AnimatedColumnLayer with magnitude → column height). No rebuild needed.',
     techniques: [
-      { label: 'AnimatedColumnLayer', docPath: '/docs/api/animated-column-layer' },
-      { label: 'TimeFilterExtension', docPath: '/docs/api/time-filter-extension' },
+      {
+        label: 'AnimatedColumnLayer',
+        docPath: '/docs/api/animated-column-layer',
+      },
+      {
+        label: 'TimeFilterExtension',
+        docPath: '/docs/api/time-filter-extension',
+      },
     ],
     related: ['earthquake-activity', 'hurricanes', 'wildfires'],
   },
@@ -362,10 +397,22 @@ export const DEMO_META: Record<string, DemoMeta> = {
       '--no-download to rebuild tiles from the cache. Writes three archives: ' +
       'storm-field, storm-cells, storm-tracks.',
     techniques: [
-      { label: 'AnimatedPolygonLayer', docPath: '/docs/api/animated-polygon-layer' },
-      { label: 'AnimatedPointLayer', docPath: '/docs/api/animated-point-layer' },
-      { label: 'AnimatedTripsLayer', docPath: '/docs/api/animated-trips-layer' },
-      { label: 'TimeFilterExtension', docPath: '/docs/api/time-filter-extension' },
+      {
+        label: 'AnimatedPolygonLayer',
+        docPath: '/docs/api/animated-polygon-layer',
+      },
+      {
+        label: 'AnimatedPointLayer',
+        docPath: '/docs/api/animated-point-layer',
+      },
+      {
+        label: 'AnimatedTripsLayer',
+        docPath: '/docs/api/animated-trips-layer',
+      },
+      {
+        label: 'TimeFilterExtension',
+        docPath: '/docs/api/time-filter-extension',
+      },
     ],
     related: ['hurricanes', 'wildfires', 'earthquake-activity'],
   },
@@ -396,10 +443,22 @@ export const DEMO_META: Record<string, DemoMeta> = {
       'lidar/ego/objects STT archives, telemetry.json, cameras.json) under ' +
       'public/data/av-synthetic/. Open the cockpit at /drive/av-synthetic.',
     techniques: [
-      { label: 'AnimatedPointLayer', docPath: '/docs/api/animated-point-layer' },
-      { label: 'AnimatedTripsLayer', docPath: '/docs/api/animated-trips-layer' },
-      { label: 'AnimatedColumnLayer', docPath: '/docs/api/animated-column-layer' },
-      { label: 'TimeFilterExtension', docPath: '/docs/api/time-filter-extension' },
+      {
+        label: 'AnimatedPointLayer',
+        docPath: '/docs/api/animated-point-layer',
+      },
+      {
+        label: 'AnimatedTripsLayer',
+        docPath: '/docs/api/animated-trips-layer',
+      },
+      {
+        label: 'AnimatedColumnLayer',
+        docPath: '/docs/api/animated-column-layer',
+      },
+      {
+        label: 'TimeFilterExtension',
+        docPath: '/docs/api/time-filter-extension',
+      },
     ],
     related: ['nyc-taxi-trips', 'ship-traffic', 'nyc-od-arcs'],
   },
@@ -419,7 +478,8 @@ export const DEMO_META: Record<string, DemoMeta> = {
         name: 'nuScenes (Motional)',
         url: 'https://www.nuscenes.org/nuscenes',
         license: 'CC BY-NC-SA 4.0',
-        note: 'v1.0-mini (all 10 scenes), Boston Seaport + Singapore, plus the CAN-bus, ' +
+        note:
+          'v1.0-mini (all 10 scenes), Boston Seaport + Singapore, plus the CAN-bus, ' +
           'map-expansion, and lidarseg extensions.',
       },
     ],
@@ -431,10 +491,22 @@ export const DEMO_META: Record<string, DemoMeta> = {
       '(repeat --scene scene-XXXX for the other nine scenes). Open the cockpit at ' +
       '/drive/nuscenes-0103.',
     techniques: [
-      { label: 'AnimatedPointLayer', docPath: '/docs/api/animated-point-layer' },
-      { label: 'AnimatedTripsLayer', docPath: '/docs/api/animated-trips-layer' },
-      { label: 'AnimatedColumnLayer', docPath: '/docs/api/animated-column-layer' },
-      { label: 'TimeFilterExtension', docPath: '/docs/api/time-filter-extension' },
+      {
+        label: 'AnimatedPointLayer',
+        docPath: '/docs/api/animated-point-layer',
+      },
+      {
+        label: 'AnimatedTripsLayer',
+        docPath: '/docs/api/animated-trips-layer',
+      },
+      {
+        label: 'AnimatedColumnLayer',
+        docPath: '/docs/api/animated-column-layer',
+      },
+      {
+        label: 'TimeFilterExtension',
+        docPath: '/docs/api/time-filter-extension',
+      },
     ],
     related: ['av-synthetic', 'argoverse-02678d04', 'comma-280-1641'],
   },
@@ -464,10 +536,22 @@ export const DEMO_META: Record<string, DemoMeta> = {
       'one ring camera) with `aws s3 cp --no-sign-request`, extracts, and deletes the ' +
       'raw log. Open the cockpit at /drive/argoverse-02678d04 (switch cities in-cockpit).',
     techniques: [
-      { label: 'AnimatedPointLayer', docPath: '/docs/api/animated-point-layer' },
-      { label: 'AnimatedTripsLayer', docPath: '/docs/api/animated-trips-layer' },
-      { label: 'AnimatedColumnLayer', docPath: '/docs/api/animated-column-layer' },
-      { label: 'TimeFilterExtension', docPath: '/docs/api/time-filter-extension' },
+      {
+        label: 'AnimatedPointLayer',
+        docPath: '/docs/api/animated-point-layer',
+      },
+      {
+        label: 'AnimatedTripsLayer',
+        docPath: '/docs/api/animated-trips-layer',
+      },
+      {
+        label: 'AnimatedColumnLayer',
+        docPath: '/docs/api/animated-column-layer',
+      },
+      {
+        label: 'TimeFilterExtension',
+        docPath: '/docs/api/time-filter-extension',
+      },
     ],
     related: ['av-synthetic', 'comma-280-1641', 'nuscenes-0103'],
   },
@@ -498,10 +582,22 @@ export const DEMO_META: Record<string, DemoMeta> = {
       'components the cockpit needs per segment, decodes the range images in numpy, and ' +
       'builds the bundle. Open the cockpit at /drive/waymo-sf-day (switch scenes in-cockpit).',
     techniques: [
-      { label: 'AnimatedPointLayer', docPath: '/docs/api/animated-point-layer' },
-      { label: 'AnimatedTripsLayer', docPath: '/docs/api/animated-trips-layer' },
-      { label: 'AnimatedColumnLayer', docPath: '/docs/api/animated-column-layer' },
-      { label: 'TimeFilterExtension', docPath: '/docs/api/time-filter-extension' },
+      {
+        label: 'AnimatedPointLayer',
+        docPath: '/docs/api/animated-point-layer',
+      },
+      {
+        label: 'AnimatedTripsLayer',
+        docPath: '/docs/api/animated-trips-layer',
+      },
+      {
+        label: 'AnimatedColumnLayer',
+        docPath: '/docs/api/animated-column-layer',
+      },
+      {
+        label: 'TimeFilterExtension',
+        docPath: '/docs/api/time-filter-extension',
+      },
     ],
     related: ['av-synthetic', 'argoverse-02678d04', 'nuscenes-0103'],
   },
@@ -530,8 +626,14 @@ export const DEMO_META: Record<string, DemoMeta> = {
       'Pull one demo parquet from the commaai/comma2k19 HuggingFace mirror, then ' +
       'extract. Open the cockpit at /drive/comma-280-1641.',
     techniques: [
-      { label: 'AnimatedTripsLayer', docPath: '/docs/api/animated-trips-layer' },
-      { label: 'TimeFilterExtension', docPath: '/docs/api/time-filter-extension' },
+      {
+        label: 'AnimatedTripsLayer',
+        docPath: '/docs/api/animated-trips-layer',
+      },
+      {
+        label: 'TimeFilterExtension',
+        docPath: '/docs/api/time-filter-extension',
+      },
     ],
     related: ['av-synthetic', 'argoverse-02678d04', 'ship-traffic'],
   },
@@ -560,14 +662,18 @@ export const DEMO_META: Record<string, DemoMeta> = {
       'per trip — no OSRM routing — which AnimatedArcLayer reads as source/target.',
     techniques: [
       { label: 'AnimatedArcLayer', docPath: '/docs/api/animated-arc-layer' },
-      { label: 'TimeFilterExtension', docPath: '/docs/api/time-filter-extension' },
+      {
+        label: 'TimeFilterExtension',
+        docPath: '/docs/api/time-filter-extension',
+      },
     ],
     related: ['nyc-taxi-flows', 'nyc-taxi-trips', 'nyc-od-quadbin'],
   },
 
   'bixi-flowmap': {
     category: 'mobility',
-    tagline: 'A month of real Montréal BIXI trips as an origin→destination flowmap, animated by hourly demand.',
+    tagline:
+      'A month of real Montréal BIXI trips as an origin→destination flowmap, animated by hourly demand.',
     techniqueTag: 'Flowmap · OD matrix',
     about: [
       'flowmap.gl popularized the origin→destination flowmap: one weighted arrow per station-pair, node circles sized by total flow. This demo adds time. Every directed BIXI station-pair for August 2024 carries an hourly trip-count series, so arrow widths vary with demand as the playhead scrubs the month: downtown fills on weekday mornings, the Plateau and the Lachine Canal on summer evenings and weekends.',
@@ -602,15 +708,27 @@ export const DEMO_META: Record<string, DemoMeta> = {
       'Stations CSV or the public GBFS feed.',
     techniques: [
       { label: 'FlowmapLayer', docPath: '/docs/api/flowmap-layer' },
-      { label: 'FlowLinesLayer (tapered arrows)', docPath: '/docs/api/flow-lines-layer' },
-      { label: 'Binary features (vertex value matrix)', docPath: '/docs/api/binary-features' },
+      {
+        label: 'FlowLinesLayer (tapered arrows)',
+        docPath: '/docs/api/flow-lines-layer',
+      },
+      {
+        label: 'Binary features (vertex value matrix)',
+        docPath: '/docs/api/binary-features',
+      },
     ],
-    related: ['bixi-flowmap-bundled', 'bixi-flowmap-baked', 'nyc-od-arcs', 'nyc-taxi-flows'],
+    related: [
+      'bixi-flowmap-bundled',
+      'bixi-flowmap-baked',
+      'nyc-od-arcs',
+      'nyc-taxi-flows',
+    ],
   },
 
   'bixi-flowmap-bundled': {
     category: 'mobility',
-    tagline: 'The BIXI flowmap with close corridors bundled into rivers on the GPU (KDEEB).',
+    tagline:
+      'The BIXI flowmap with close corridors bundled into rivers on the GPU (KDEEB).',
     techniqueTag: 'GPU edge bundling · KDEEB',
     about: [
       'At an overview zoom, hundreds of station-pair arrows overlap into an unreadable tangle. Edge bundling is the standard fix: pull geometrically-close flows together so corridors heading the same way merge. This demo runs kernel-density edge bundling (KDEEB; Hurter & Telea 2012) entirely on the GPU.',
@@ -643,11 +761,22 @@ export const DEMO_META: Record<string, DemoMeta> = {
       'BundledFlowmapLayer; tune it with `kernelRadius`, `bundlingIterations`, ' +
       '`smoothingStrength`, and `subdivisionPoints` on the layer.',
     techniques: [
-      { label: 'BundledFlowmapLayer', docPath: '/docs/api/bundled-flowmap-layer' },
+      {
+        label: 'BundledFlowmapLayer',
+        docPath: '/docs/api/bundled-flowmap-layer',
+      },
       { label: 'FlowmapLayer', docPath: '/docs/api/flowmap-layer' },
-      { label: 'Binary features (vertex value matrix)', docPath: '/docs/api/binary-features' },
+      {
+        label: 'Binary features (vertex value matrix)',
+        docPath: '/docs/api/binary-features',
+      },
     ],
-    related: ['bixi-flowmap', 'bixi-flowmap-baked', 'nyc-taxi-flows', 'nyc-od-arcs'],
+    related: [
+      'bixi-flowmap',
+      'bixi-flowmap-baked',
+      'nyc-taxi-flows',
+      'nyc-od-arcs',
+    ],
   },
   'bixi-flowmap-baked': {
     category: 'mobility',
@@ -692,16 +821,23 @@ export const DEMO_META: Record<string, DemoMeta> = {
       'halve the wire size. The client renders with ' +
       '`BundledFlowmapLayer({ preBundled: true })` — no render-time bundling.',
     techniques: [
-      { label: 'BundledFlowmapLayer', docPath: '/docs/api/bundled-flowmap-layer' },
+      {
+        label: 'BundledFlowmapLayer',
+        docPath: '/docs/api/bundled-flowmap-layer',
+      },
       { label: 'FlowmapLayer', docPath: '/docs/api/flowmap-layer' },
-      { label: 'Binary features (vertex value matrix)', docPath: '/docs/api/binary-features' },
+      {
+        label: 'Binary features (vertex value matrix)',
+        docPath: '/docs/api/binary-features',
+      },
     ],
     related: ['bixi-flowmap-bundled', 'bixi-flowmap', 'nyc-taxi-flows'],
   },
 
   'bixi-streets': {
     category: 'mobility',
-    tagline: 'A month of BIXI trips routed onto Montréal’s bike network, per-hour ridership shaded onto each segment.',
+    tagline:
+      'A month of BIXI trips routed onto Montréal’s bike network, per-hour ridership shaded onto each segment.',
     techniqueTag: 'Streets · pre-aggregated · gradient',
     about: [
       'The street-network companion to the BIXI flowmap: instead of straight origin→destination arcs, every trip is routed through OSRM on Montréal’s bicycle network — cycleways, the REV, the Lachine Canal path, shared streets — and its per-hour ridership is aggregated onto each road segment. The gradient shades each corridor by rider count, from dim side streets to bright arterials like de Maisonneuve and the REV at rush hour.',
@@ -734,7 +870,10 @@ export const DEMO_META: Record<string, DemoMeta> = {
       '(defaults to port 5001 so it coexists with the NYC car server).',
     techniques: [
       { label: 'FlowCorridorLayer', docPath: '/docs/api/animated-trips-layer' },
-      { label: 'Binary features (vertex value matrix)', docPath: '/docs/api/binary-features' },
+      {
+        label: 'Binary features (vertex value matrix)',
+        docPath: '/docs/api/binary-features',
+      },
       { label: 'CLI: aggregation flags', docPath: '/docs/api/cli-reference' },
     ],
     related: ['bixi-flowmap', 'nyc-taxi-flows', 'bixi-flowmap-baked'],
@@ -742,7 +881,8 @@ export const DEMO_META: Record<string, DemoMeta> = {
 
   'bixi-streets-flow': {
     category: 'mobility',
-    tagline: 'The BIXI street network with direction: chevrons march along each cycleway toward the dominant travel direction.',
+    tagline:
+      'The BIXI street network with direction: chevrons march along each cycleway toward the dominant travel direction.',
     techniqueTag: 'Streets · directional · chevrons',
     about: [
       'The directional cut of the BIXI street network. The heatmap sibling shades each corridor by rider count but not direction; this build keeps that per-hour brightness and adds direction. As trips route onto the bike network, each street edge tracks its net travel direction, and every corridor is pre-oriented toward the direction most riders take over the month.',
@@ -775,15 +915,22 @@ export const DEMO_META: Record<string, DemoMeta> = {
       'PROFILE=bicycle scripts/data-generation/setup-osrm.sh`, port 5001).',
     techniques: [
       { label: 'FlowCorridorLayer', docPath: '/docs/api/animated-trips-layer' },
-      { label: 'ChevronFlowExtension', docPath: '/docs/api/animated-trips-layer' },
-      { label: 'Binary features (vertex value matrix)', docPath: '/docs/api/binary-features' },
+      {
+        label: 'ChevronFlowExtension',
+        docPath: '/docs/api/animated-trips-layer',
+      },
+      {
+        label: 'Binary features (vertex value matrix)',
+        docPath: '/docs/api/binary-features',
+      },
     ],
     related: ['bixi-streets', 'bixi-corridors', 'bixi-flowmap'],
   },
 
   'bixi-corridors': {
     category: 'mobility',
-    tagline: 'BIXI trips bundled into a Sankey-like flow network — origin→destination lines merge onto shared trunks, widths animated by hourly demand.',
+    tagline:
+      'BIXI trips bundled into a Sankey-like flow network — origin→destination lines merge onto shared trunks, widths animated by hourly demand.',
     techniqueTag: 'Flow network · Edge-Path Bundling · breathing width',
     about: [
       'An alternative to density edge bundling. Here flows merge rather than smear: stations cluster into hubs joined by a Delaunay proximity graph, and every trip is routed along the graph’s shortest path with cost length^k, so flows heading the same way collapse onto shared trunk lines. The result is a Sankey-like network — tributaries enter a trunk, ride it, and leave — with no street snapping.',
@@ -811,8 +958,14 @@ export const DEMO_META: Record<string, DemoMeta> = {
       'into flowing curves. The whole month animates at hourly resolution. Tune ' +
       'trunk boldness with `--hub-radius` and bundling strength with `--bundle-k`.',
     techniques: [
-      { label: 'FlowStrokeLayer (breathing width)', docPath: '/docs/api/animated-trips-layer' },
-      { label: 'Binary features (vertex value matrix)', docPath: '/docs/api/binary-features' },
+      {
+        label: 'FlowStrokeLayer (breathing width)',
+        docPath: '/docs/api/animated-trips-layer',
+      },
+      {
+        label: 'Binary features (vertex value matrix)',
+        docPath: '/docs/api/binary-features',
+      },
       { label: 'CLI: aggregation flags', docPath: '/docs/api/cli-reference' },
     ],
     related: ['bixi-streets', 'bixi-flowmap-baked', 'bixi-flowmap'],
@@ -820,7 +973,8 @@ export const DEMO_META: Record<string, DemoMeta> = {
 
   'bixi-points': {
     category: 'mobility',
-    tagline: 'Every BIXI ride as a moving dot along its real OSRM-routed bike route — one per active trip.',
+    tagline:
+      'Every BIXI ride as a moving dot along its real OSRM-routed bike route — one per active trip.',
     techniqueTag: 'Moving heads',
     about: [
       'The moving-head companion to the BIXI street and flow demos. Instead of aggregating trips into corridors, each ride is routed once through OSRM on Montréal’s bicycle network and drawn as a single dot interpolated along its route at the playhead — one moving cyclist per active trip along the cycleways, the REV and the Lachine Canal path.',
@@ -853,7 +1007,10 @@ export const DEMO_META: Record<string, DemoMeta> = {
       '5001). The build prints the exact archive time span to paste into the ' +
       'dataset’s `timeRange`.',
     techniques: [
-      { label: 'AnimatedTripHeadsLayer', docPath: '/docs/api/animated-trip-heads-layer' },
+      {
+        label: 'AnimatedTripHeadsLayer',
+        docPath: '/docs/api/animated-trip-heads-layer',
+      },
       { label: 'TimeController', docPath: '/docs/api/time-controller' },
     ],
     related: ['nyc-taxi-points', 'bixi-streets', 'bixi-flowmap'],
@@ -886,7 +1043,10 @@ export const DEMO_META: Record<string, DemoMeta> = {
       'inside it. The build prints the exact archive time span to paste into ' +
       'the dataset’s `timeRange`.',
     techniques: [
-      { label: 'AnimatedTripHeadsLayer', docPath: '/docs/api/animated-trip-heads-layer' },
+      {
+        label: 'AnimatedTripHeadsLayer',
+        docPath: '/docs/api/animated-trip-heads-layer',
+      },
       { label: 'TimeController', docPath: '/docs/api/time-controller' },
     ],
     related: ['bixi-points', 'nyc-taxi-points'],
@@ -894,7 +1054,8 @@ export const DEMO_META: Record<string, DemoMeta> = {
 
   'nwm-rivers-2019': {
     category: 'earth-ocean',
-    tagline: 'The continental river network through the 2019 flood year — modeled daily discharge on every order-4+ reach.',
+    tagline:
+      'The continental river network through the 2019 flood year — modeled daily discharge on every order-4+ reach.',
     techniqueTag: 'Flow matrix · zoom-banded network',
     about: [
       'NOAA’s National Water Model simulates hourly streamflow for 2.7 million river reaches across the continental US. This demo reduces the 2019 retrospective to daily means and bakes it onto the USGS NHDPlus river network as a per-vertex × per-day value matrix — the bixi-streets recipe at continental scale. Each reach is scaled against its own annual low→high (robust 2nd–98th percentile in log space), so color reads how each river varies through the year rather than how much water it carries: a headwater creek’s snowmelt pulse lights up as vividly as the Mississippi’s crest, instead of the great rivers pinning the whole scale.',
@@ -968,12 +1129,13 @@ export const DEMO_META: Record<string, DemoMeta> = {
 
   'bixi-live': {
     category: 'mobility',
-    tagline: 'Directional street-flow and moving riders on one clock: aggregate corridors under individual rides.',
+    tagline:
+      'Directional street-flow and moving riders on one clock: aggregate corridors under individual rides.',
     techniqueTag: 'Composite · directional flow + moving heads',
     about: [
       'A composite that layers two BIXI demos on a single playhead. Underneath is the directional street-network flow: every cycleway segment pre-oriented toward its dominant direction, with chevrons showing which way riders go and brightness following the hour’s ridership. On top, every ride from that day moves as a dot along its real OSRM-routed path — one bike per active trip.',
       'It reuses two already-built archives with no third build: the light, static-geometry flow-corridor archive (the `bixi-streets-flow` matrix) is the primary source that gates the clock; the heavier per-trip paths archive (`bixi-points`) rides on top as an optional governor source, streaming in continue-and-degrade so the substrate is instant and the riders fill in. Both are windowed to Thursday 2024-08-15, so the aggregate flow and the individual rides stay on the same day.',
-      'The overlay is fully general — any `type: \'trips\'` flow demo gains moving heads by setting `headsOverlayUrl` to a per-trip paths archive; the painter order keeps the corridors as a backdrop and the riders on top.',
+      "The overlay is fully general — any `type: 'trips'` flow demo gains moving heads by setting `headsOverlayUrl` to a per-trip paths archive; the painter order keeps the corridors as a backdrop and the riders on top.",
     ],
     dataSources: [
       {
@@ -1003,8 +1165,14 @@ export const DEMO_META: Record<string, DemoMeta> = {
       'via `headsOverlayUrl`). Both need a local OSRM **bicycle** server for ' +
       'Québec (`REGION=quebec PROFILE=bicycle scripts/data-generation/setup-osrm.sh`).',
     techniques: [
-      { label: 'FlowCorridorLayer (directional)', docPath: '/docs/api/animated-trips-layer' },
-      { label: 'AnimatedTripHeadsLayer', docPath: '/docs/api/animated-trip-heads-layer' },
+      {
+        label: 'FlowCorridorLayer (directional)',
+        docPath: '/docs/api/animated-trips-layer',
+      },
+      {
+        label: 'AnimatedTripHeadsLayer',
+        docPath: '/docs/api/animated-trip-heads-layer',
+      },
       { label: 'Multi-source playback', docPath: '/docs/api/time-controller' },
     ],
     related: ['bixi-points', 'bixi-streets-flow', 'nyc-flow-and-riders'],
@@ -1012,7 +1180,8 @@ export const DEMO_META: Record<string, DemoMeta> = {
 
   'nyc-od-quadbin': {
     category: 'mobility',
-    tagline: 'Trip density binned into CARTO Quadbin square cells, extruded by count.',
+    tagline:
+      'Trip density binned into CARTO Quadbin square cells, extruded by count.',
     techniqueTag: 'Quadbin summary · square cells',
     about: [
       'The summary tier renders a dataset too dense to draw feature-by-feature: the build aggregates points into cells and ships one row per cell. This demo uses the CARTO Quadbin scheme — a Z/X/Y square-cell grid — as the counterpart to the H3 hex summary. Each cell is extruded by the number of pickup/dropoff points inside it, so Midtown rises highest.',
@@ -1036,14 +1205,18 @@ export const DEMO_META: Record<string, DemoMeta> = {
       'The CARTO Quadbin aggregator bins points into square Z/X/Y cells (count ' +
       'per cell per time bucket); QuadbinSummaryLayer renders them via QuadkeyLayer.',
     techniques: [
-      { label: 'QuadbinSummaryLayer', docPath: '/docs/api/quadbin-summary-layer' },
+      {
+        label: 'QuadbinSummaryLayer',
+        docPath: '/docs/api/quadbin-summary-layer',
+      },
     ],
     related: ['nyc-taxi-od-summary', 'nyc-taxi-od-heatmap', 'nyc-od-arcs'],
   },
 
   hurricanes: {
     category: 'earth-ocean',
-    tagline: 'Four Atlantic seasons of storm tracks from the IBTrACS best-track archive.',
+    tagline:
+      'Four Atlantic seasons of storm tracks from the IBTrACS best-track archive.',
     techniqueTag: 'Points · tracks',
     about: [
       'The IBTrACS archive merges every agency’s storm observations into a single best-track record. This demo plays the Atlantic basin from 2020 through 2023 — including the record-breaking 2020 season, which exhausted the storm-name alphabet and pushed into the Greek letters.',
@@ -1058,15 +1231,22 @@ export const DEMO_META: Record<string, DemoMeta> = {
     ],
     buildCommand: 'stt-generate hurricanes',
     techniques: [
-      { label: 'AnimatedPointLayer', docPath: '/docs/api/animated-point-layer' },
-      { label: 'TimeFilterExtension', docPath: '/docs/api/time-filter-extension' },
+      {
+        label: 'AnimatedPointLayer',
+        docPath: '/docs/api/animated-point-layer',
+      },
+      {
+        label: 'TimeFilterExtension',
+        docPath: '/docs/api/time-filter-extension',
+      },
     ],
     related: ['earthquake-activity', 'wildfires'],
   },
 
   wildfires: {
     category: 'earth-ocean',
-    tagline: 'US wildfire perimeters over four seasons, polygons sized by burn severity.',
+    tagline:
+      'US wildfire perimeters over four seasons, polygons sized by burn severity.',
     techniqueTag: 'Polygons · temporal',
     about: [
       'Final fire perimeters for every US wildfire over 1,000 acres from 2020 through 2023, from the National Interagency Fire Center. The 2020 season fills the West Coast — the August Complex, the first "gigafire" of the modern record, burned over a million acres.',
@@ -1081,8 +1261,14 @@ export const DEMO_META: Record<string, DemoMeta> = {
     ],
     buildCommand: 'stt-generate wildfires',
     techniques: [
-      { label: 'AnimatedPolygonLayer', docPath: '/docs/api/animated-polygon-layer' },
-      { label: 'TimeFilterExtension', docPath: '/docs/api/time-filter-extension' },
+      {
+        label: 'AnimatedPolygonLayer',
+        docPath: '/docs/api/animated-polygon-layer',
+      },
+      {
+        label: 'TimeFilterExtension',
+        docPath: '/docs/api/time-filter-extension',
+      },
     ],
     related: ['earthquake-activity', 'hurricanes'],
   },
@@ -1090,7 +1276,8 @@ export const DEMO_META: Record<string, DemoMeta> = {
   // ── Mobility ─────────────────────────────────────────────────────────────
   'ship-traffic': {
     category: 'mobility',
-    tagline: '16,000 vessels over 24 hours of AIS pings, each with a 30-minute comet wake.',
+    tagline:
+      '16,000 vessels over 24 hours of AIS pings, each with a 30-minute comet wake.',
     techniqueTag: 'Points · wake trails',
     about: [
       'Every AIS transponder ping in US waters over one January day in 2023: nearly sixteen thousand vessels, from container ships in the Houston Ship Channel to fishing fleets in the Gulf and ferries on Puget Sound.',
@@ -1106,15 +1293,22 @@ export const DEMO_META: Record<string, DemoMeta> = {
     ],
     buildCommand: 'stt-generate ais --date 2023-01-09 --output ais-all-us.stt',
     techniques: [
-      { label: 'AnimatedPointLayer', docPath: '/docs/api/animated-point-layer' },
-      { label: 'TimeFilterExtension (wakes)', docPath: '/docs/api/time-filter-extension' },
+      {
+        label: 'AnimatedPointLayer',
+        docPath: '/docs/api/animated-point-layer',
+      },
+      {
+        label: 'TimeFilterExtension (wakes)',
+        docPath: '/docs/api/time-filter-extension',
+      },
     ],
     related: ['flights', 'ocean-drifters'],
   },
 
   flights: {
     category: 'mobility',
-    tagline: 'A day of US air traffic — aircraft positions with 5-minute contrails, lifted by altitude.',
+    tagline:
+      'A day of US air traffic — aircraft positions with 5-minute contrails, lifted by altitude.',
     techniqueTag: 'Points · 3D · wake trails',
     about: [
       'Twenty-four hours of aircraft positions over the United States from the OpenSky Network’s crowdsourced ADS-B receivers. The morning east-coast departures, the transcontinental flows, and the overnight lull play out in about a minute.',
@@ -1129,17 +1323,25 @@ export const DEMO_META: Record<string, DemoMeta> = {
       },
     ],
     buildCommand: 'stt-generate flights --date 2020-01-06',
-    buildNote: 'OpenSky historical dumps cover Mondays 2017–2020; pick a Monday.',
+    buildNote:
+      'OpenSky historical dumps cover Mondays 2017–2020; pick a Monday.',
     techniques: [
-      { label: 'AnimatedPointLayer', docPath: '/docs/api/animated-point-layer' },
-      { label: 'TimeFilterExtension (wakes)', docPath: '/docs/api/time-filter-extension' },
+      {
+        label: 'AnimatedPointLayer',
+        docPath: '/docs/api/animated-point-layer',
+      },
+      {
+        label: 'TimeFilterExtension (wakes)',
+        docPath: '/docs/api/time-filter-extension',
+      },
     ],
     related: ['flight-trips', 'ship-traffic'],
   },
 
   'flight-trips': {
     category: 'mobility',
-    tagline: 'The same day of air traffic as full 3-D trajectories with fading trails.',
+    tagline:
+      'The same day of air traffic as full 3-D trajectories with fading trails.',
     techniqueTag: 'Trips · 3D',
     about: [
       'The companion to the flights demo: the same day of OpenSky traffic, rendered as continuous 3-D trajectories rather than discrete pings. Each flight is a line through space and time — climb-out, cruise, and descent read as geometry when you pitch the camera.',
@@ -1156,7 +1358,10 @@ export const DEMO_META: Record<string, DemoMeta> = {
       'Frozen archive (prebuilt from OpenSky ADS-B trajectories and transcoded ' +
       'to the packed format); no from-source recipe.',
     techniques: [
-      { label: 'AnimatedTripsLayer', docPath: '/docs/api/animated-trips-layer' },
+      {
+        label: 'AnimatedTripsLayer',
+        docPath: '/docs/api/animated-trips-layer',
+      },
       { label: 'TimeController', docPath: '/docs/api/time-controller' },
     ],
     related: ['flights', 'nyc-taxi-trips'],
@@ -1164,7 +1369,8 @@ export const DEMO_META: Record<string, DemoMeta> = {
 
   'nyc-taxi-trips': {
     category: 'mobility',
-    tagline: 'Half a million OSRM-routed cab trips animated on the GPU as trails.',
+    tagline:
+      'Half a million OSRM-routed cab trips animated on the GPU as trails.',
     techniqueTag: 'Animated trails',
     about: [
       'Every yellow-cab trip from New Year’s Day 2015, routed through the Manhattan street network with OSRM so each trip follows real streets rather than straight pickup-to-dropoff lines. Per-segment timing comes from OSRM’s duration annotations, so cabs are slower through midtown and faster on the FDR.',
@@ -1188,7 +1394,10 @@ export const DEMO_META: Record<string, DemoMeta> = {
       '  --max-trips 50000 --output nyc-taxi-paths.stt',
     buildNote: OSRM_NOTE,
     techniques: [
-      { label: 'AnimatedTripsLayer', docPath: '/docs/api/animated-trips-layer' },
+      {
+        label: 'AnimatedTripsLayer',
+        docPath: '/docs/api/animated-trips-layer',
+      },
       { label: 'TimeController', docPath: '/docs/api/time-controller' },
     ],
     related: ['nyc-taxi-points', 'nyc-taxi-flows', 'nyc-taxi-cube'],
@@ -1196,7 +1405,8 @@ export const DEMO_META: Record<string, DemoMeta> = {
 
   'nyc-taxi-points': {
     category: 'mobility',
-    tagline: 'The same routed trips as moving head-dots — one cab per active trip.',
+    tagline:
+      'The same routed trips as moving head-dots — one cab per active trip.',
     techniqueTag: 'Moving heads',
     about: [
       'The same OSRM-routed trip archive as the trails demo, rendered as animated head positions instead of trails: one moving dot per active cab, interpolated along its route at the playhead. At street zoom the dots move through the grid.',
@@ -1219,7 +1429,10 @@ export const DEMO_META: Record<string, DemoMeta> = {
       '  --max-trips 50000 --output nyc-taxi-paths.stt',
     buildNote: OSRM_NOTE,
     techniques: [
-      { label: 'AnimatedTripHeadsLayer', docPath: '/docs/api/animated-trip-heads-layer' },
+      {
+        label: 'AnimatedTripHeadsLayer',
+        docPath: '/docs/api/animated-trip-heads-layer',
+      },
       { label: 'TimeController', docPath: '/docs/api/time-controller' },
     ],
     related: ['nyc-taxi-trips', 'nyc-taxi-cube', 'nyc-taxi-flows'],
@@ -1253,8 +1466,14 @@ export const DEMO_META: Record<string, DemoMeta> = {
       '`--from-intermediate` re-aggregates the kept --paths intermediate ' +
       'without re-routing through OSRM.',
     techniques: [
-      { label: 'AnimatedTripsLayer', docPath: '/docs/api/animated-trips-layer' },
-      { label: 'Binary features (per-vertex values)', docPath: '/docs/api/binary-features' },
+      {
+        label: 'AnimatedTripsLayer',
+        docPath: '/docs/api/animated-trips-layer',
+      },
+      {
+        label: 'Binary features (per-vertex values)',
+        docPath: '/docs/api/binary-features',
+      },
       { label: 'CLI: aggregation flags', docPath: '/docs/api/cli-reference' },
     ],
     related: ['nyc-taxi-trips', 'nyc-taxi-od-summary'],
@@ -1262,12 +1481,13 @@ export const DEMO_META: Record<string, DemoMeta> = {
 
   'nyc-flow-and-riders': {
     category: 'mobility',
-    tagline: 'Street-flow and moving cabs on one clock: aggregate corridors under individual trips.',
+    tagline:
+      'Street-flow and moving cabs on one clock: aggregate corridors under individual trips.',
     techniqueTag: 'Composite · flow corridors + moving heads',
     about: [
       'A composite that layers two NYC taxi demos on a single playhead — the New York counterpart of the BIXI "Flow & Riders" view. Underneath is the pre-aggregated street-network flow: 500K routed trips baked into one feature per road corridor per 15-minute bin, shaded by an indigo→cyan→white ramp from dim side streets to bright arterials. On top, every trip moves as a neon-magenta dot along its real OSRM-routed path — one cab per active trip.',
       'It reuses two already-built archives with no third build: the light, static-geometry flow-corridor archive (`nyc-taxi-flows`) is the primary source that gates the clock; the heavier per-trip paths archive (`nyc-taxi-paths`) rides on top as an optional governor source, streaming in continue-and-degrade so the substrate is instant and the cabs fill in. Both are windowed to the same Jan 1–2 2015 span, so the aggregate flow and the individual trips stay on the same instant.',
-      'The overlay is fully general — any `type: \'trips\'` flow demo gains moving heads by setting `headsOverlayUrl` to a per-trip paths archive; the painter order keeps the corridors as a backdrop and the riders on top. Unlike the BIXI version this archive is non-directional, so there are no chevrons — just the corridors and the moving cabs.',
+      "The overlay is fully general — any `type: 'trips'` flow demo gains moving heads by setting `headsOverlayUrl` to a per-trip paths archive; the painter order keeps the corridors as a backdrop and the riders on top. Unlike the BIXI version this archive is non-directional, so there are no chevrons — just the corridors and the moving cabs.",
     ],
     dataSources: [
       {
@@ -1297,7 +1517,10 @@ export const DEMO_META: Record<string, DemoMeta> = {
       'server for New York (`scripts/data-generation/setup-osrm.sh`).',
     techniques: [
       { label: 'FlowCorridorLayer', docPath: '/docs/api/animated-trips-layer' },
-      { label: 'AnimatedTripHeadsLayer', docPath: '/docs/api/animated-trip-heads-layer' },
+      {
+        label: 'AnimatedTripHeadsLayer',
+        docPath: '/docs/api/animated-trip-heads-layer',
+      },
       { label: 'Multi-source playback', docPath: '/docs/api/time-controller' },
     ],
     related: ['nyc-taxi-flows', 'nyc-taxi-points', 'bixi-live'],
@@ -1305,7 +1528,8 @@ export const DEMO_META: Record<string, DemoMeta> = {
 
   'nyc-taxi-cube': {
     category: 'mobility',
-    tagline: 'Hägerstrand’s space-time cube: a million taxi samples stacked by timestamp into a 3D volume.',
+    tagline:
+      'Hägerstrand’s space-time cube: a million taxi samples stacked by timestamp into a 3D volume.',
     techniqueTag: 'Space-time cube',
     about: [
       'The classic of time geography: every pickup, en-route sample and dropoff from New Year’s morning 2015 is lifted to the altitude of its timestamp. Green pickup strata form at street level each minute, gold en-route threads climb between them (a steeper thread means slower traffic), and the night accumulates into a cube.',
@@ -1323,18 +1547,26 @@ export const DEMO_META: Record<string, DemoMeta> = {
         license: 'ODbL',
       },
     ],
-    buildCommand: 'stt-generate nyc-rideshare --download 2015-01 --max-trips 50000',
+    buildCommand:
+      'stt-generate nyc-rideshare --download 2015-01 --max-trips 50000',
     buildNote: OSRM_NOTE,
     techniques: [
-      { label: 'AnimatedPointLayer (cumulative)', docPath: '/docs/api/animated-point-layer' },
-      { label: 'SpatiotemporalTileset', docPath: '/docs/api/spatiotemporal-tileset' },
+      {
+        label: 'AnimatedPointLayer (cumulative)',
+        docPath: '/docs/api/animated-point-layer',
+      },
+      {
+        label: 'SpatiotemporalTileset',
+        docPath: '/docs/api/spatiotemporal-tileset',
+      },
     ],
     related: ['nyc-taxi-points', 'nyc-taxi-od-heatmap'],
   },
 
   'nyc-taxi-od-summary': {
     category: 'mobility',
-    tagline: 'Pickups vs dropoffs as extruded H3 hexes — the build-side summary tier.',
+    tagline:
+      'Pickups vs dropoffs as extruded H3 hexes — the build-side summary tier.',
     techniqueTag: 'H3 summary · extruded',
     about: [
       '1.36 million pickups and dropoffs binned into H3 hexagons at build time, with per-hex sums for each 30-minute slice. Toggle between pickups (green) and dropoffs (red) to see the flow reverse over the day: pickups in residential neighborhoods, dropoffs in midtown, then back again.',
@@ -1351,15 +1583,23 @@ export const DEMO_META: Record<string, DemoMeta> = {
       'Frozen archive transcoded to the packed format; no from-source recipe. ' +
       'Summary tiers for new data are built with `stt-build --summary-tier`.',
     techniques: [
-      { label: 'SpatiotemporalTileset (summary tier)', docPath: '/docs/api/spatiotemporal-tileset' },
+      {
+        label: 'SpatiotemporalTileset (summary tier)',
+        docPath: '/docs/api/spatiotemporal-tileset',
+      },
       { label: 'CLI: --summary-tier', docPath: '/docs/api/cli-reference' },
     ],
-    related: ['nyc-taxi-od-heatmap', 'nyc-taxi-flows', 'osm-nyc-changesets-summary'],
+    related: [
+      'nyc-taxi-od-heatmap',
+      'nyc-taxi-flows',
+      'osm-nyc-changesets-summary',
+    ],
   },
 
   'nyc-taxi-od-heatmap': {
     category: 'mobility',
-    tagline: 'Pickup and dropoff density as two screen-blended GPU heatmap channels.',
+    tagline:
+      'Pickup and dropoff density as two screen-blended GPU heatmap channels.',
     techniqueTag: 'Heatmap · dual channel',
     about: [
       'The first hours of 2015 as two density fields: pickups green, dropoffs red, each accumulated into its own channel of a single GPU pass and composited with per-class screen blending, so overlaps layer rather than mixing to mud.',
@@ -1372,17 +1612,22 @@ export const DEMO_META: Record<string, DemoMeta> = {
         license: 'NYC Open Data',
       },
     ],
-    buildCommand: 'stt-generate nyc-rideshare --download 2015-01 --max-trips 50000',
+    buildCommand:
+      'stt-generate nyc-rideshare --download 2015-01 --max-trips 50000',
     buildNote: OSRM_NOTE,
     techniques: [
-      { label: 'AnimatedHeatmapLayer (temporal)', docPath: '/docs/api/heatmap-time-layer' },
+      {
+        label: 'AnimatedHeatmapLayer (temporal)',
+        docPath: '/docs/api/heatmap-time-layer',
+      },
     ],
     related: ['nyc-taxi-od-summary', 'nyc-taxi-cube'],
   },
 
   'animal-migration': {
     category: 'mobility',
-    tagline: 'A year of tracked animal movement from GBIF, colored by taxonomic class.',
+    tagline:
+      'A year of tracked animal movement from GBIF, colored by taxonomic class.',
     techniqueTag: 'Trips · categorical',
     about: [
       'Tracking studies aggregated by GBIF — albatrosses in the Southern Ocean, white storks between Europe and Africa, marine mammals along the coasts — with multi-year deployments folded into a single calendar year so the seasonal pattern reads as one cycle.',
@@ -1397,8 +1642,14 @@ export const DEMO_META: Record<string, DemoMeta> = {
     ],
     buildCommand: 'stt-generate animals',
     techniques: [
-      { label: 'AnimatedTripsLayer', docPath: '/docs/api/animated-trips-layer' },
-      { label: 'CategoryColorExtension', docPath: '/docs/api/category-color-extension' },
+      {
+        label: 'AnimatedTripsLayer',
+        docPath: '/docs/api/animated-trips-layer',
+      },
+      {
+        label: 'CategoryColorExtension',
+        docPath: '/docs/api/category-color-extension',
+      },
     ],
     related: ['ocean-drifters', 'ship-traffic'],
   },
@@ -1406,7 +1657,8 @@ export const DEMO_META: Record<string, DemoMeta> = {
   // ── Built world & life ───────────────────────────────────────────────────
   'osm-nyc-draw': {
     category: 'built-life',
-    tagline: '19 years of OpenStreetMap node creations in New York, each persisting once placed, colored by year.',
+    tagline:
+      '19 years of OpenStreetMap node creations in New York, each persisting once placed, colored by year.',
     techniqueTag: 'Cumulative points',
     about: [
       'Every tagged node ever created in OpenStreetMap’s New York City, appearing when a mapper first placed it and persisting after, so the map fills in over 19 years. Color encodes the creation year: the blue 2007–2009 TIGER-era imports, then warmer colors as later mapping fills in shops, benches, and hydrants.',
@@ -1428,15 +1680,22 @@ export const DEMO_META: Record<string, DemoMeta> = {
       'Needs a full-history extract (a current snapshot has no version ' +
       'history); Geofabrik’s history downloads are OSM-login-gated.',
     techniques: [
-      { label: 'AnimatedPointLayer (cumulative)', docPath: '/docs/api/animated-point-layer' },
-      { label: 'CategoryColorExtension', docPath: '/docs/api/category-color-extension' },
+      {
+        label: 'AnimatedPointLayer (cumulative)',
+        docPath: '/docs/api/animated-point-layer',
+      },
+      {
+        label: 'CategoryColorExtension',
+        docPath: '/docs/api/category-color-extension',
+      },
     ],
     related: ['osm-nyc-changesets-summary', 'osm-nyc-changesets-editors'],
   },
 
   'osm-nyc-changesets-summary': {
     category: 'built-life',
-    tagline: 'Two decades of NYC mapping activity as H3 hex densities — edits or sessions.',
+    tagline:
+      'Two decades of NYC mapping activity as H3 hex densities — edits or sessions.',
     techniqueTag: 'H3 summary',
     about: [
       'Every OpenStreetMap changeset touching New York City from 2007 to 2025, hex-binned by month. Toggle between total edits (the volume of work) and sessions (how many distinct sittings) — bulk imports spike the former, sustained community mapping the latter.',
@@ -1455,17 +1714,26 @@ export const DEMO_META: Record<string, DemoMeta> = {
       '  --input changesets-latest.osm.bz2 \\\n' +
       '  --bounds 40.49,-74.27,40.92,-73.68 --max-bbox-deg 1.0 \\\n' +
       '  --summary-tier --output osm-nyc-changesets.stt',
-    buildNote: 'The dump is public; the cost is a planet-wide parse (10–40 min, CPU-bound).',
+    buildNote:
+      'The dump is public; the cost is a planet-wide parse (10–40 min, CPU-bound).',
     techniques: [
-      { label: 'SpatiotemporalTileset (summary tier)', docPath: '/docs/api/spatiotemporal-tileset' },
+      {
+        label: 'SpatiotemporalTileset (summary tier)',
+        docPath: '/docs/api/spatiotemporal-tileset',
+      },
       { label: 'CLI: --summary-tier', docPath: '/docs/api/cli-reference' },
     ],
-    related: ['osm-nyc-draw', 'osm-nyc-changesets-editors', 'nyc-taxi-od-summary'],
+    related: [
+      'osm-nyc-draw',
+      'osm-nyc-changesets-editors',
+      'nyc-taxi-od-summary',
+    ],
   },
 
   'osm-nyc-changesets-editors': {
     category: 'built-life',
-    tagline: 'The same changesets colored by editing tool — Potlatch to JOSM to iD to StreetComplete.',
+    tagline:
+      'The same changesets colored by editing tool — Potlatch to JOSM to iD to StreetComplete.',
     techniqueTag: 'Points · categorical',
     about: [
       'The tooling history of OpenStreetMap through one city: each changeset colored by the editor that made it. Purple Potlatch dominates the early years, JOSM blue runs throughout, the browser-based iD editor (green) arrives in 2013, and orange StreetComplete marks the mobile micro-mapping era.',
@@ -1484,8 +1752,14 @@ export const DEMO_META: Record<string, DemoMeta> = {
       '  --bounds 40.49,-74.27,40.92,-73.68 --max-bbox-deg 1.0 \\\n' +
       '  --summary-tier --output osm-nyc-changesets.stt',
     techniques: [
-      { label: 'AnimatedPointLayer', docPath: '/docs/api/animated-point-layer' },
-      { label: 'CategoryColorExtension', docPath: '/docs/api/category-color-extension' },
+      {
+        label: 'AnimatedPointLayer',
+        docPath: '/docs/api/animated-point-layer',
+      },
+      {
+        label: 'CategoryColorExtension',
+        docPath: '/docs/api/category-color-extension',
+      },
     ],
     related: ['osm-nyc-draw', 'osm-nyc-changesets-summary'],
   },

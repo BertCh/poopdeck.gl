@@ -38,8 +38,17 @@
  */
 
 import { SolidPolygonLayer } from '@deck.gl/layers';
-import type { Color, DefaultProps, Layer, LayerContext, Material } from '@deck.gl/core';
-import { SpatioTemporalLayer, SpatioTemporalLayerProps } from '../spatiotemporal-layer.js';
+import type {
+  Color,
+  DefaultProps,
+  Layer,
+  LayerContext,
+  Material,
+} from '@deck.gl/core';
+import {
+  SpatioTemporalLayer,
+  SpatioTemporalLayerProps,
+} from '../spatiotemporal-layer.js';
 import { NoPickingPathLayer } from '../internal/no-picking-path-layer.js';
 import { TimeFilterExtension } from '../../extensions/time-filter-extension.js';
 import {
@@ -56,9 +65,16 @@ import {
   updateTriggersDigest,
 } from '../../lib/style-digest.js';
 import { resolveAccessorAlias } from '../../lib/accessor-alias.js';
-import type { ColorAccessorValue, NumericAccessorValue } from '../../lib/accessor-alias.js';
+import type {
+  ColorAccessorValue,
+  NumericAccessorValue,
+} from '../../lib/accessor-alias.js';
 import { DEFAULT_POLYGON_PALETTE } from '@poopdeck.gl/core';
-import type { Tile, Layer as TileLayer, BinaryFeatures } from '@poopdeck.gl/core';
+import type {
+  Tile,
+  Layer as TileLayer,
+  BinaryFeatures,
+} from '@poopdeck.gl/core';
 
 const DEBUG = false;
 
@@ -246,7 +262,8 @@ export interface _AnimatedPolygonLayerProps {
 }
 
 /** Complete props accepted by {@link AnimatedPolygonLayer}. */
-export type AnimatedPolygonLayerProps = _AnimatedPolygonLayerProps & SpatioTemporalLayerProps;
+export type AnimatedPolygonLayerProps = _AnimatedPolygonLayerProps &
+  SpatioTemporalLayerProps;
 
 // Shared with the maplibre adapter (single source of truth in
 // @poopdeck.gl/core).
@@ -263,7 +280,10 @@ interface PreparedTile {
   data: {
     length: number;
     startIndices: Uint32Array;
-    attributes: Record<string, { value: any; size: number; normalized?: boolean }>;
+    attributes: Record<
+      string,
+      { value: any; size: number; normalized?: boolean }
+    >;
   };
   timeOffset: number;
   dims: number;
@@ -337,7 +357,9 @@ function expandPerVertex(
  * sublayer class (default `SolidPolygonLayer`) / overrides sublayer props
  * (deck's CompositeLayer contract).
  */
-export class AnimatedPolygonLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLayer<
+export class AnimatedPolygonLayer<
+  ExtraPropsT extends {} = {},
+> extends SpatioTemporalLayer<
   ExtraPropsT & Required<_AnimatedPolygonLayerProps>
 > {
   static layerName = 'AnimatedPolygonLayer';
@@ -353,13 +375,28 @@ export class AnimatedPolygonLayer<ExtraPropsT extends {} = {}> extends SpatioTem
     // Object-valued mapping — compare:false (digest content via styleKey). The
     // transparent default drops categories the caller didn't map, matching the
     // point layer.
-    colorMapping: { type: 'object', value: null, optional: true, compare: false },
+    colorMapping: {
+      type: 'object',
+      value: null,
+      optional: true,
+      compare: false,
+    },
     colorMappingDefault: { type: 'color', value: [0, 0, 0, 0] },
     elevation: { type: 'object', value: 0, compare: true },
     // Accessor-named aliases (see the prop docs): unset by default so the
     // legacy props win unless the caller opts into the upstream vocabulary.
-    getFillColor: { type: 'object', value: null, optional: true, compare: true },
-    getElevation: { type: 'object', value: null, optional: true, compare: true },
+    getFillColor: {
+      type: 'object',
+      value: null,
+      optional: true,
+      compare: true,
+    },
+    getElevation: {
+      type: 'object',
+      value: null,
+      optional: true,
+      compare: true,
+    },
     extruded: false,
     elevationScale: { type: 'number', value: 1, min: 0 },
     wireframe: false,
@@ -404,7 +441,9 @@ export class AnimatedPolygonLayer<ExtraPropsT extends {} = {}> extends SpatioTem
   private lastTilesRef: Tile[] | null = null;
 
   /** Singleton extensions, reused by every sublayer (stateless w.r.t. data). */
-  private readonly timeFilterExtension = new TimeFilterExtension({ mode: 'window' });
+  private readonly timeFilterExtension = new TimeFilterExtension({
+    mode: 'window',
+  });
   private readonly categoryColorExtension = new CategoryColorExtension();
 
   /** Stable getTime; preserved across renders to keep prop refs stable. */
@@ -518,7 +557,8 @@ export class AnimatedPolygonLayer<ExtraPropsT extends {} = {}> extends SpatioTem
     if (this.lastTilesRef !== tiles) {
       const live = new Set<string>();
       for (const tile of tiles) {
-        for (const tileLayer of tile.layers) live.add(makeTileKey(tile, tileLayer));
+        for (const tileLayer of tile.layers)
+          live.add(makeTileKey(tile, tileLayer));
       }
       for (const key of this.preparedTileCache.keys()) {
         if (!live.has(key)) this.preparedTileCache.delete(key);
@@ -586,10 +626,13 @@ export class AnimatedPolygonLayer<ExtraPropsT extends {} = {}> extends SpatioTem
     const fillColorValue = this.fillColorValue();
     const elevationValue = this.elevationValue();
     const lineWidthValue = this.lineWidthValue();
-    const fillColorProp = typeof fillColorValue === 'string' ? fillColorValue : '';
-    const elevationProp = typeof elevationValue === 'string' ? elevationValue : '';
+    const fillColorProp =
+      typeof fillColorValue === 'string' ? fillColorValue : '';
+    const elevationProp =
+      typeof elevationValue === 'string' ? elevationValue : '';
     // Property-column name for a per-feature outline width (else '').
-    const lineWidthProp = typeof lineWidthValue === 'string' ? lineWidthValue : '';
+    const lineWidthProp =
+      typeof lineWidthValue === 'string' ? lineWidthValue : '';
     // Palette keyed by CONTENT (memoized digest), not length — matches the
     // sibling layers' stale-key fix. updateTriggers ride the key so a user
     // trigger bump re-prepares the tile.
@@ -633,11 +676,21 @@ export class AnimatedPolygonLayer<ExtraPropsT extends {} = {}> extends SpatioTem
       // TimeFilterExtension attribute names (shared with the other animated
       // layers); per-vertex-expanded for the non-instanced polygon model.
       instanceStartTime: {
-        value: expandPerVertex(binary.startTimes, startIndices, featureCount, vertexCount),
+        value: expandPerVertex(
+          binary.startTimes,
+          startIndices,
+          featureCount,
+          vertexCount,
+        ),
         size: 1,
       },
       instanceEndTime: {
-        value: expandPerVertex(binary.endTimes, startIndices, featureCount, vertexCount),
+        value: expandPerVertex(
+          binary.endTimes,
+          startIndices,
+          featureCount,
+          vertexCount,
+        ),
         size: 1,
       },
     };
@@ -647,7 +700,12 @@ export class AnimatedPolygonLayer<ExtraPropsT extends {} = {}> extends SpatioTem
       const cat = binary.categoricalProps[fillColorProp];
       if (cat) {
         attributes.instanceCategoryIndex = {
-          value: expandPerVertex(cat.indices, startIndices, featureCount, vertexCount),
+          value: expandPerVertex(
+            cat.indices,
+            startIndices,
+            featureCount,
+            vertexCount,
+          ),
           size: 1,
         };
         // With a colorMapping, resolve THIS tile's category dictionary into a
@@ -674,7 +732,12 @@ export class AnimatedPolygonLayer<ExtraPropsT extends {} = {}> extends SpatioTem
         // own `elevations` attribute is vertex-stepped on the fill model and
         // deck binds this buffer verbatim.
         attributes.getElevation = {
-          value: expandPerVertex(values, startIndices, featureCount, vertexCount),
+          value: expandPerVertex(
+            values,
+            startIndices,
+            featureCount,
+            vertexCount,
+          ),
           size: 1,
         };
       }
@@ -705,7 +768,12 @@ export class AnimatedPolygonLayer<ExtraPropsT extends {} = {}> extends SpatioTem
     if (lineWidthProp) {
       const values = binary.numericProps[lineWidthProp];
       if (values) {
-        outlineWidths = expandPerVertex(values, startIndices, featureCount, vertexCount);
+        outlineWidths = expandPerVertex(
+          values,
+          startIndices,
+          featureCount,
+          vertexCount,
+        );
       }
     }
 
@@ -745,15 +813,14 @@ export class AnimatedPolygonLayer<ExtraPropsT extends {} = {}> extends SpatioTem
     const timeWindow = this.props.timeWindow;
     const fillColorValue = this.fillColorValue();
     const elevationValue = this.elevationValue();
-    const constFillColor = (Array.isArray(fillColorValue)
-      ? fillColorValue
-      : ([255, 140, 0, 180] as Color)) as Color;
+    const constFillColor = (
+      Array.isArray(fillColorValue)
+        ? fillColorValue
+        : ([255, 140, 0, 180] as Color)
+    ) as Color;
 
     const useGpuCategory = prepared.gpuPalette !== null;
-    if (
-      useGpuCategory &&
-      prepared.gpuPalette!.length > CATEGORY_PALETTE_SIZE
-    ) {
+    if (useGpuCategory && prepared.gpuPalette!.length > CATEGORY_PALETTE_SIZE) {
       warnOnce(
         'AnimatedPolygonLayer:paletteOverflow',
         `[AnimatedPolygonLayer] colorPalette has ${prepared.gpuPalette!.length} ` +
@@ -851,7 +918,8 @@ export class AnimatedPolygonLayer<ExtraPropsT extends {} = {}> extends SpatioTem
 
     const lineColorValue = this.lineColorValue();
     const lineWidthValue = this.lineWidthValue();
-    const constLineWidth = typeof lineWidthValue === 'number' ? lineWidthValue : 1;
+    const constLineWidth =
+      typeof lineWidthValue === 'number' ? lineWidthValue : 1;
 
     // Reuse the fill's per-vertex time buffers so the stroke filters/fades with
     // the fill; add a per-vertex getWidth column only when width is data-driven.

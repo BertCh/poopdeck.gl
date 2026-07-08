@@ -1,6 +1,6 @@
 # AnimatedMeshLayer
 
-The `AnimatedMeshLayer` renders **one smooth-moving 3D model per tracked object** — recognizable glTF/OBJ meshes (cars, pedestrians, cyclists, ships, planes) instanced at each object's interpolated pose. It is the mesh analog of [`AnimatedBoundingBoxLayer`](./animated-bounding-box-layer.md): both read the **exact same** AV `objects/` point archive — one POINT feature per tracked object *per keyframe* (`track_id`, `category`, `heading`, `length`/`width`/`height`, `speed`, timestamped) — and only the render primitive differs, so the two layers are interchangeable over one archive. The mesh geometry itself is **not** a tile column: it is a static per-layer prop (the analog of `IconLayer`'s `iconAtlas`), optionally a per-category map so cars, pedestrians, and cyclists each get their own model.
+The `AnimatedMeshLayer` renders **one smooth-moving 3D model per tracked object** — recognizable glTF/OBJ meshes (cars, pedestrians, cyclists, ships, planes) instanced at each object's interpolated pose. It is the mesh analog of [`AnimatedBoundingBoxLayer`](./animated-bounding-box-layer.md): both read the **exact same** AV `objects/` point archive — one POINT feature per tracked object _per keyframe_ (`track_id`, `category`, `heading`, `length`/`width`/`height`, `speed`, timestamped) — and only the render primitive differs, so the two layers are interchangeable over one archive. The mesh geometry itself is **not** a tile column: it is a static per-layer prop (the analog of `IconLayer`'s `iconAtlas`), optionally a per-category map so cars, pedestrians, and cyclists each get their own model.
 
 It extends [`SpatioTemporalLayer`](./spatiotemporal-layer.md) and shares the track kernel — pooling, binary-search + lerp interpolation, shortest-arc heading interpolation, and appear/disappear fade — with `AnimatedBoundingBoxLayer`; this layer owns only the [`SimpleMeshLayer`](https://deck.gl/docs/api-reference/mesh-layers/simple-mesh-layer) (`@deck.gl/mesh-layers`) instance bake. Like its box sibling it pools every loaded tile's keyframes by `track_id` and, once per frame, emits **one** interpolated instance per active track — never one model per keyframe — so an object glides continuously instead of leaving a "train" of models behind it.
 
@@ -25,8 +25,8 @@ const layer = new AnimatedMeshLayer({
   id: 'traffic-models',
   data: '/data/av-scene/objects/manifest.json',
   currentTime,
-  timeWindow: 200,            // ms — tile-loading window, not per-model visibility
-  mesh: '/models/car.glb',    // a static per-layer prop, like IconLayer's iconAtlas
+  timeWindow: 200, // ms — tile-loading window, not per-model visibility
+  mesh: '/models/car.glb', // a static per-layer prop, like IconLayer's iconAtlas
   colorProperty: 'category',
   colorMapping: {
     car: [80, 170, 255, 255],
@@ -54,7 +54,7 @@ const layer = new AnimatedMeshLayer({
     bicycle: '/models/bicycle.glb',
   },
   mesh: '/models/generic.glb', // fallback for categories absent from the map
-  scaleToDimensions: false,    // pre-sized models render at native size × sizeScale
+  scaleToDimensions: false, // pre-sized models render at native size × sizeScale
 });
 ```
 
@@ -66,57 +66,57 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 
 ### Mesh & texture
 
-| Property | Type | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `mesh` | `MeshSource` | `null` | The static 3D model instanced at every object's pose — a glTF/OBJ URL, a parsed mesh/geometry object, or a promise of one (`SimpleMeshLayer` `mesh` pass-through). A per-layer prop, not a tile column. When `meshMapping` is set it is the fallback for categories absent from the map. If both are unset the layer renders nothing and warns once. |
-| `meshMapping` | `Record<string, MeshSource> \| null` | `null` | Per-category model map, keyed by the raw category string. When set, active objects are grouped by category and each group is drawn by its own `SimpleMeshLayer` with `meshMapping[category]` (falling back to `mesh`). Categories with neither a mapped model nor a `mesh` fallback are skipped. |
-| `texture` | `unknown` | `null` | Texture applied to the mesh (`SimpleMeshLayer` `texture` pass-through — a URL, a texture source, or a promise). When set, the texture wins over `getColor` (so per-instance color and fades have no effect). |
-| `textureParameters` | `unknown` | `null` | Texture sampler parameters (`SimpleMeshLayer` `textureParameters` pass-through). |
+| Property            | Type                                 | Default | Description                                                                                                                                                                                                                                                                                                                                          |
+| :------------------ | :----------------------------------- | :------ | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `mesh`              | `MeshSource`                         | `null`  | The static 3D model instanced at every object's pose — a glTF/OBJ URL, a parsed mesh/geometry object, or a promise of one (`SimpleMeshLayer` `mesh` pass-through). A per-layer prop, not a tile column. When `meshMapping` is set it is the fallback for categories absent from the map. If both are unset the layer renders nothing and warns once. |
+| `meshMapping`       | `Record<string, MeshSource> \| null` | `null`  | Per-category model map, keyed by the raw category string. When set, active objects are grouped by category and each group is drawn by its own `SimpleMeshLayer` with `meshMapping[category]` (falling back to `mesh`). Categories with neither a mapped model nor a `mesh` fallback are skipped.                                                     |
+| `texture`           | `unknown`                            | `null`  | Texture applied to the mesh (`SimpleMeshLayer` `texture` pass-through — a URL, a texture source, or a promise). When set, the texture wins over `getColor` (so per-instance color and fades have no effect).                                                                                                                                         |
+| `textureParameters` | `unknown`                            | `null`  | Texture sampler parameters (`SimpleMeshLayer` `textureParameters` pass-through).                                                                                                                                                                                                                                                                     |
 
 `MeshSource` is `string | object | Promise<unknown> | null`.
 
 ### Identity & color
 
-| Property | Type | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `trackIdProperty` | `string` | `'track_id'` | Track-identity column name grouping an object's keyframe snapshots into one interpolated model. When absent, each snapshot becomes its own un-interpolated instance, held for a short hold window around its lone keyframe (the layer warns once). |
-| `colorProperty` | `string \| null` | `null` | Categorical column name driving each model's per-instance color and (with `meshMapping`) which model to draw (e.g. `'category'`). Resolved via `colorMapping`. When unset, models use `colorMappingDefault` and a single `mesh`. |
-| `getColor` | `Color \| string \| null` | `null` | Upstream-vocabulary alias for deck's `getColor`. A constant `Color` (one color for every model, overriding `colorProperty`) or a property-column name (treated as `colorProperty`) — **not** a function accessor (binary tiles can't run per-feature JS; a function warns once and falls back). When set, it wins. |
-| `colorMapping` | `Record<string, Color> \| null` | `null` | Category string → color map. Categories absent from the map use `colorMappingDefault`. |
-| `colorMappingDefault` | `Color` | `[255, 255, 255, 255]` | Color for unmapped categories (and the constant color when `colorProperty`/`getColor` name no column). White so textured / vertex-colored models keep their own appearance. |
+| Property              | Type                            | Default                | Description                                                                                                                                                                                                                                                                                                        |
+| :-------------------- | :------------------------------ | :--------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `trackIdProperty`     | `string`                        | `'track_id'`           | Track-identity column name grouping an object's keyframe snapshots into one interpolated model. When absent, each snapshot becomes its own un-interpolated instance, held for a short hold window around its lone keyframe (the layer warns once).                                                                 |
+| `colorProperty`       | `string \| null`                | `null`                 | Categorical column name driving each model's per-instance color and (with `meshMapping`) which model to draw (e.g. `'category'`). Resolved via `colorMapping`. When unset, models use `colorMappingDefault` and a single `mesh`.                                                                                   |
+| `getColor`            | `Color \| string \| null`       | `null`                 | Upstream-vocabulary alias for deck's `getColor`. A constant `Color` (one color for every model, overriding `colorProperty`) or a property-column name (treated as `colorProperty`) — **not** a function accessor (binary tiles can't run per-feature JS; a function warns once and falls back). When set, it wins. |
+| `colorMapping`        | `Record<string, Color> \| null` | `null`                 | Category string → color map. Categories absent from the map use `colorMappingDefault`.                                                                                                                                                                                                                             |
+| `colorMappingDefault` | `Color`                         | `[255, 255, 255, 255]` | Color for unmapped categories (and the constant color when `colorProperty`/`getColor` name no column). White so textured / vertex-colored models keep their own appearance.                                                                                                                                        |
 
 ### Pose & geometry
 
-| Property | Type | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `headingProperty` | `string` | `'heading'` | Yaw column name (radians, world frame, 0 = +x/east, CCW). Drives the model's `getOrientation` yaw, angle-interpolated between keyframes. Absent ⇒ models are axis-aligned. |
-| `orientationOffset` | `[number, number, number]` | `[0, 0, 0]` | Constant orientation offset `[pitch, yaw, roll]` in degrees, added to the interpolated heading (which rides the yaw slot). Corrects a model whose native forward axis is not +x, or tilts/rolls it. |
-| `lengthProperty` | `string` | `'length'` | Model-length column name (meters, model +x). Drives the x-scale when `scaleToDimensions`. |
-| `widthProperty` | `string` | `'width'` | Model-width column name (meters). Drives the y-scale when `scaleToDimensions`. |
-| `heightProperty` | `string` | `'height'` | Model-height column name (meters). Drives the z-scale when `scaleToDimensions`. |
-| `scaleToDimensions` | `boolean` | `true` | When `true`, `getScale` = `[length, width, height]`, fitting a unit-sized model to each object's bounding box. When `false`, `getScale` = `[1, 1, 1]` and the model renders at its native size (scaled only by `sizeScale`) — the right choice for a pre-sized car/ped model. |
-| `sizeScale` | `number` | `1` | Uniform `SimpleMeshLayer` size multiplier applied to the whole model on top of `getScale`. |
-| `getTranslation` | `[number, number, number]` | `[0, 0, 0]` | Constant translation `[x, y, z]` (meters) from the anchor point (`SimpleMeshLayer` `getTranslation` pass-through). Lift a center-origin model by half its height, or leave `[0, 0, 0]` for base-anchored models. |
-| `defaultLength` | `number` | `4` | Length used when `lengthProperty` names no column and `scaleToDimensions` is on. |
-| `defaultWidth` | `number` | `2` | Width used when `widthProperty` names no column. |
-| `defaultHeight` | `number` | `1.6` | Height used when `heightProperty` names no column. |
+| Property            | Type                       | Default     | Description                                                                                                                                                                                                                                                                   |
+| :------------------ | :------------------------- | :---------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `headingProperty`   | `string`                   | `'heading'` | Yaw column name (radians, world frame, 0 = +x/east, CCW). Drives the model's `getOrientation` yaw, angle-interpolated between keyframes. Absent ⇒ models are axis-aligned.                                                                                                    |
+| `orientationOffset` | `[number, number, number]` | `[0, 0, 0]` | Constant orientation offset `[pitch, yaw, roll]` in degrees, added to the interpolated heading (which rides the yaw slot). Corrects a model whose native forward axis is not +x, or tilts/rolls it.                                                                           |
+| `lengthProperty`    | `string`                   | `'length'`  | Model-length column name (meters, model +x). Drives the x-scale when `scaleToDimensions`.                                                                                                                                                                                     |
+| `widthProperty`     | `string`                   | `'width'`   | Model-width column name (meters). Drives the y-scale when `scaleToDimensions`.                                                                                                                                                                                                |
+| `heightProperty`    | `string`                   | `'height'`  | Model-height column name (meters). Drives the z-scale when `scaleToDimensions`.                                                                                                                                                                                               |
+| `scaleToDimensions` | `boolean`                  | `true`      | When `true`, `getScale` = `[length, width, height]`, fitting a unit-sized model to each object's bounding box. When `false`, `getScale` = `[1, 1, 1]` and the model renders at its native size (scaled only by `sizeScale`) — the right choice for a pre-sized car/ped model. |
+| `sizeScale`         | `number`                   | `1`         | Uniform `SimpleMeshLayer` size multiplier applied to the whole model on top of `getScale`.                                                                                                                                                                                    |
+| `getTranslation`    | `[number, number, number]` | `[0, 0, 0]` | Constant translation `[x, y, z]` (meters) from the anchor point (`SimpleMeshLayer` `getTranslation` pass-through). Lift a center-origin model by half its height, or leave `[0, 0, 0]` for base-anchored models.                                                              |
+| `defaultLength`     | `number`                   | `4`         | Length used when `lengthProperty` names no column and `scaleToDimensions` is on.                                                                                                                                                                                              |
+| `defaultWidth`      | `number`                   | `2`         | Width used when `widthProperty` names no column.                                                                                                                                                                                                                              |
+| `defaultHeight`     | `number`                   | `1.6`       | Height used when `heightProperty` names no column.                                                                                                                                                                                                                            |
 
 ### Rendering
 
-| Property | Type | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `material` | `Material` | `true` | Lighting material for the models (`SimpleMeshLayer` pass-through). `true` for the default phong material, `false` to disable lighting, or a material spec. |
-| `wireframe` | `boolean` | `false` | Draw the models in wireframe mode (`SimpleMeshLayer` pass-through). |
-| `_instanced` | `boolean` | `true` | `SimpleMeshLayer` `_instanced` pass-through. `true` instances one shared mesh at every object; `false` treats mesh positions as lng/lat deltas of a single anchor (rarely wanted here). |
-| `fadeInDuration` | `number` | `200` | Appear-fade duration (ms of playhead time) just after a track starts — a CPU alpha ramp folded into `getColor`. `0` pops in. Has no effect when a `texture` is set (the layer warns once), because the texture makes `SimpleMeshLayer` ignore `getColor`. |
-| `fadeOutDuration` | `number` | `200` | Disappear-fade duration (ms of playhead time) just before a track ends — a CPU alpha ramp folded into `getColor`. `0` pops out. Has no effect with a `texture` set (see `fadeInDuration`). |
+| Property          | Type       | Default | Description                                                                                                                                                                                                                                               |
+| :---------------- | :--------- | :------ | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `material`        | `Material` | `true`  | Lighting material for the models (`SimpleMeshLayer` pass-through). `true` for the default phong material, `false` to disable lighting, or a material spec.                                                                                                |
+| `wireframe`       | `boolean`  | `false` | Draw the models in wireframe mode (`SimpleMeshLayer` pass-through).                                                                                                                                                                                       |
+| `_instanced`      | `boolean`  | `true`  | `SimpleMeshLayer` `_instanced` pass-through. `true` instances one shared mesh at every object; `false` treats mesh positions as lng/lat deltas of a single anchor (rarely wanted here).                                                                   |
+| `fadeInDuration`  | `number`   | `200`   | Appear-fade duration (ms of playhead time) just after a track starts — a CPU alpha ramp folded into `getColor`. `0` pops in. Has no effect when a `texture` is set (the layer warns once), because the texture makes `SimpleMeshLayer` ignore `getColor`. |
+| `fadeOutDuration` | `number`   | `200`   | Disappear-fade duration (ms of playhead time) just before a track ends — a CPU alpha ramp folded into `getColor`. `0` pops out. Has no effect with a `texture` set (see `fadeInDuration`).                                                                |
 
 ### Metadata
 
-| Property | Type | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `speedProperty` | `string` | `'speed'` | Speed column name (meters/second). Carried through to picking rows so the AV inspector can read it; not otherwise rendered. |
-| `labelProperty` | `string` | `'category'` | Categorical/numeric column name whose value is carried through to picking rows / the per-track grouping label. |
+| Property        | Type     | Default      | Description                                                                                                                 |
+| :-------------- | :------- | :----------- | :-------------------------------------------------------------------------------------------------------------------------- |
+| `speedProperty` | `string` | `'speed'`    | Speed column name (meters/second). Carried through to picking rows so the AV inspector can read it; not otherwise rendered. |
+| `labelProperty` | `string` | `'category'` | Categorical/numeric column name whose value is carried through to picking rows / the per-track grouping label.              |
 
 ## How it works
 
@@ -126,7 +126,7 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 4. **Instance bake** — the interpolated samples are baked into per-instance buffers (`getPosition` and `getColor` as binary attributes, `getOrientation` and `getScale` as function accessors that index those buffers), then handed to a `SimpleMeshLayer` (`@deck.gl/mesh-layers`) instancing `mesh` at each pose. With `meshMapping`, one `SimpleMeshLayer` is emitted per category (each mapped category is seeded up front so its GPU model persists across frames rather than re-uploading as the category comes and goes); otherwise a single sublayer draws every instance.
 5. **Redraw** — the layer forces a `renderLayers()` pass every advanced tick (like `AnimatedBoundingBoxLayer`) so the CPU-computed instance buffers advance; the base class's shader-uniform redraw path never runs for this layer.
 
-Cost scales with the number of *active* tracks over the visible tiles — a binary-search + lerp per active track, well under a millisecond per frame.
+Cost scales with the number of _active_ tracks over the visible tiles — a binary-search + lerp per active track, well under a millisecond per frame.
 
 ## Picking
 

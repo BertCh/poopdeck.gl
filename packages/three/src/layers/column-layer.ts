@@ -21,7 +21,10 @@
 import { Mesh, InstancedBufferAttribute, Box3, Vector3, Sphere } from 'three';
 import type { Tile } from '@poopdeck.gl/core';
 import { BaseSttLayer, type SttLayerContext } from './layer.js';
-import { resolveTimeWindow, type ThreeTimeWindowOptions } from '../lib/time-window.js';
+import {
+  resolveTimeWindow,
+  type ThreeTimeWindowOptions,
+} from '../lib/time-window.js';
 import { makeColumnPrismGeometry } from '../geometry/column-prism.js';
 import {
   buildColumnBuffers,
@@ -95,7 +98,12 @@ export class ColumnLayer extends BaseSttLayer {
 
   setTiles(tiles: Tile[], ctx: SttLayerContext): void {
     this.timeOrigin = ctx.timeOrigin;
-    const buf = buildColumnBuffers(tiles, ctx.projection, ctx.timeOrigin, this.bufferOptions());
+    const buf = buildColumnBuffers(
+      tiles,
+      ctx.projection,
+      ctx.timeOrigin,
+      this.bufferOptions(),
+    );
 
     this.disposeGpu();
     if (buf.count === 0) {
@@ -114,16 +122,39 @@ export class ColumnLayer extends BaseSttLayer {
       ((this.opts.angle ?? 0) * Math.PI) / 180,
     );
     geometry.instanceCount = buf.count;
-    geometry.setAttribute('sttBase', new InstancedBufferAttribute(buf.bases, 3));
-    geometry.setAttribute('sttBasisX', new InstancedBufferAttribute(buf.basisX, 3));
-    geometry.setAttribute('sttBasisY', new InstancedBufferAttribute(buf.basisY, 3));
-    geometry.setAttribute('sttBasisZ', new InstancedBufferAttribute(buf.basisZ, 3));
-    geometry.setAttribute('sttColor', new InstancedBufferAttribute(buf.colors, 4));
-    geometry.setAttribute('sttStart', new InstancedBufferAttribute(buf.starts, 1));
+    geometry.setAttribute(
+      'sttBase',
+      new InstancedBufferAttribute(buf.bases, 3),
+    );
+    geometry.setAttribute(
+      'sttBasisX',
+      new InstancedBufferAttribute(buf.basisX, 3),
+    );
+    geometry.setAttribute(
+      'sttBasisY',
+      new InstancedBufferAttribute(buf.basisY, 3),
+    );
+    geometry.setAttribute(
+      'sttBasisZ',
+      new InstancedBufferAttribute(buf.basisZ, 3),
+    );
+    geometry.setAttribute(
+      'sttColor',
+      new InstancedBufferAttribute(buf.colors, 4),
+    );
+    geometry.setAttribute(
+      'sttStart',
+      new InstancedBufferAttribute(buf.starts, 1),
+    );
     geometry.setAttribute('sttEnd', new InstancedBufferAttribute(buf.ends, 1));
     if (buf.bbox) {
-      geometry.boundingBox = new Box3(new Vector3(...buf.bbox.min), new Vector3(...buf.bbox.max));
-      geometry.boundingSphere = geometry.boundingBox.getBoundingSphere(new Sphere());
+      geometry.boundingBox = new Box3(
+        new Vector3(...buf.bbox.min),
+        new Vector3(...buf.bbox.max),
+      );
+      geometry.boundingSphere = geometry.boundingBox.getBoundingSphere(
+        new Sphere(),
+      );
     }
 
     this.bundle = createColumnMaterial({

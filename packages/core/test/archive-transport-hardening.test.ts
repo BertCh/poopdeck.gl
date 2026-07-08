@@ -24,9 +24,15 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { STTArchive } from '../src/archive';
 import type { TileId } from '../src/types';
-import { packedFromSingleFile, packedFetch, type PackedFetchLog } from './helpers/packed-fixture';
+import {
+  packedFromSingleFile,
+  packedFetch,
+  type PackedFetchLog,
+} from './helpers/packed-fixture';
 
-const FIXTURE = fileURLToPath(new URL('./fixtures/sample.stt', import.meta.url));
+const FIXTURE = fileURLToPath(
+  new URL('./fixtures/sample.stt', import.meta.url),
+);
 const FIXTURE_BYTES = new Uint8Array(readFileSync(FIXTURE));
 const DATASET = packedFromSingleFile(FIXTURE_BYTES);
 
@@ -44,7 +50,12 @@ function hangForever<T>(): Promise<T> {
 /** Every tile id in the fixture's directory. */
 async function allTileIds(archive: STTArchive): Promise<TileId[]> {
   const index = await archive.getIndex();
-  return index.tiles.map((e) => ({ z: e.zoom, x: e.x, y: e.y, t: e.timeStart }));
+  return index.tiles.map((e) => ({
+    z: e.zoom,
+    x: e.x,
+    y: e.y,
+    t: e.timeStart,
+  }));
 }
 
 describe('STTArchive transfer stall timeout', () => {
@@ -66,7 +77,9 @@ describe('STTArchive transfer stall timeout', () => {
     const ids = await allTileIds(archive);
 
     const t0 = Date.now();
-    await expect(archive.getTile(ids[0])).rejects.toMatchObject({ name: 'TimeoutError' });
+    await expect(archive.getTile(ids[0])).rejects.toMatchObject({
+      name: 'TimeoutError',
+    });
     // Initial attempt + 2 retries, each cut off at the 25 ms watchdog —
     // nowhere near the seconds a real stall would otherwise hang.
     expect(counter.attempts).toBe(3);
@@ -121,7 +134,9 @@ describe('STTArchive transfer stall timeout', () => {
       transferTimeoutMs: 25,
       retryDelaysMs: [],
     });
-    await expect(archive.getMetadata()).rejects.toMatchObject({ name: 'TimeoutError' });
+    await expect(archive.getMetadata()).rejects.toMatchObject({
+      name: 'TimeoutError',
+    });
   });
 });
 
@@ -135,7 +150,12 @@ describe('STTArchive manifest/directory retry (single points of failure)', () =>
         if (url.endsWith('manifest.json')) {
           counter.attempts++;
           if (counter.attempts === 1) {
-            return { ok: false, status: 500, statusText: 'Internal Server Error', arrayBuffer: async () => new ArrayBuffer(0) };
+            return {
+              ok: false,
+              status: 500,
+              statusText: 'Internal Server Error',
+              arrayBuffer: async () => new ArrayBuffer(0),
+            };
           }
         }
         return inner(url, init);
@@ -156,7 +176,12 @@ describe('STTArchive manifest/directory retry (single points of failure)', () =>
         if (url.includes('index/')) {
           counter.attempts++;
           if (counter.attempts === 1) {
-            return { ok: false, status: 503, statusText: 'Service Unavailable', arrayBuffer: async () => new ArrayBuffer(0) };
+            return {
+              ok: false,
+              status: 503,
+              statusText: 'Service Unavailable',
+              arrayBuffer: async () => new ArrayBuffer(0),
+            };
           }
         }
         return inner(url, init);
@@ -176,7 +201,12 @@ describe('STTArchive manifest/directory retry (single points of failure)', () =>
         counter.attempts++;
         const whole = await (await inner(url, init)).arrayBuffer();
         // Drop the final byte: length now disagrees with manifest.directory.length.
-        return { ok: true, status: 200, statusText: 'OK', arrayBuffer: async () => whole.slice(0, whole.byteLength - 1) };
+        return {
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          arrayBuffer: async () => whole.slice(0, whole.byteLength - 1),
+        };
       }
       return inner(url, init);
     }) as unknown as typeof fetch;
@@ -234,7 +264,12 @@ describe('STTArchive 206 response validation', () => {
           if (counter.attempts === 1) {
             return {
               ...response,
-              headers: { get: (n: string) => (n.toLowerCase() === 'content-range' ? 'bytes 999-1999/4000' : null) },
+              headers: {
+                get: (n: string) =>
+                  n.toLowerCase() === 'content-range'
+                    ? 'bytes 999-1999/4000'
+                    : null,
+              },
             };
           }
         }
@@ -264,7 +299,10 @@ describe('STTArchive throughput sampling', () => {
       }
       return response;
     }) as unknown as typeof fetch;
-    const archive = new STTArchive({ url: DATASET.manifestUrl, fetch: delayed });
+    const archive = new STTArchive({
+      url: DATASET.manifestUrl,
+      fetch: delayed,
+    });
 
     const ids = await allTileIds(archive);
     // Fire the second batch while the first's range request is still in
@@ -300,7 +338,9 @@ describe('STTArchive throughput sampling', () => {
     // leaving the last healthy rate frozen in place.
     dead = true;
     archive.clearCache();
-    await expect(archive.getTile(ids[0])).rejects.toMatchObject({ name: 'TimeoutError' });
+    await expect(archive.getTile(ids[0])).rejects.toMatchObject({
+      name: 'TimeoutError',
+    });
     const afterDeath = archive.getThroughputEstimate();
     expect(afterDeath.samples).toBeGreaterThan(healthy.samples);
     expect(afterDeath.bytesPerMs!).toBeLessThan(healthy.bytesPerMs!);
@@ -325,7 +365,13 @@ describe('STTArchive abort-path rejection hygiene', () => {
           const signal = init?.signal;
           if (signal?.aborted) {
             return new Promise((_, reject) => {
-              setTimeout(() => reject(signal.reason ?? new DOMException('aborted', 'AbortError')), 0);
+              setTimeout(
+                () =>
+                  reject(
+                    signal.reason ?? new DOMException('aborted', 'AbortError'),
+                  ),
+                0,
+              );
             });
           }
         }
@@ -336,7 +382,9 @@ describe('STTArchive abort-path rejection hygiene', () => {
     const ids = await allTileIds(archive);
 
     const unhandled: unknown[] = [];
-    const onUnhandled = (reason: unknown): void => { unhandled.push(reason); };
+    const onUnhandled = (reason: unknown): void => {
+      unhandled.push(reason);
+    };
     process.on('unhandledRejection', onUnhandled);
     try {
       const controller = new AbortController();

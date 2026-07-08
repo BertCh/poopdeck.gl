@@ -101,6 +101,7 @@ stt-generate earthquakes \
 ```
 
 **Options:**
+
 - `--start-date`: Start date (YYYY-MM-DD), default: 2020-01-01
 - `--end-date`: End date (YYYY-MM-DD), default: 2024-12-31
 - `--min-magnitude`: Minimum magnitude, default: 4.0
@@ -111,6 +112,7 @@ stt-generate earthquakes \
 Processes AIS vessel tracking data from NOAA.
 
 **Step 1:** Download raw data from [NOAA Marine Cadastre](https://marinecadastre.gov/ais/):
+
 ```bash
 curl -o AIS_2024_01_01.zip \
   https://coast.noaa.gov/htdata/CMSP/AISDataHandler/2024/AIS_2024_01_01.zip
@@ -118,6 +120,7 @@ unzip AIS_2024_01_01.zip
 ```
 
 **Step 2:** Process with stt-generate:
+
 ```bash
 stt-generate ais \
   --input AIS_2024_01_01.csv \
@@ -127,6 +130,7 @@ stt-generate ais \
 ```
 
 **Options:**
+
 - `--input`: Input CSV file (or pass `--date` / `--start-date`+`--end-date` to download from NOAA directly)
 - `--sample-minutes`: Temporal sampling (1 position per vessel per N minutes)
 - `--bounds`: Geographic filter (min_lat,min_lon,max_lat,max_lon)
@@ -147,6 +151,7 @@ stt-generate flights \
 **Note:** OpenSky data is only available for Mondays from 2017-2020.
 
 **Options:**
+
 - `--date`: Date to download (YYYY-MM-DD, must be a Monday)
 - `--hours`: Hours to download (e.g., "0-23" for full day)
 - `--bounds`: Geographic filter
@@ -167,6 +172,7 @@ stt-generate hurricanes \
 ```
 
 **Options:**
+
 - `--start-year`: Start year, default: 2020
 - `--end-year`: End year, default: 2024
 - `--synthetic`: Create synthetic year from multiple years
@@ -184,6 +190,7 @@ stt-generate wildfires \
 ```
 
 **Options:**
+
 - `--start-year`: Start year, default: 2020
 - `--end-year`: End year, default: 2023
 - `--min-acres`: Minimum fire size in acres, default: 1000
@@ -194,6 +201,7 @@ stt-generate wildfires \
 Generates NYC taxi trajectories using real TLC data and OSRM routing.
 
 **Synthetic mode (no external data required):**
+
 ```bash
 stt-generate nyc-rideshare \
   --synthetic \
@@ -203,6 +211,7 @@ stt-generate nyc-rideshare \
 ```
 
 **With real TLC data:**
+
 ```bash
 # Requires OSRM server with NYC data
 ./setup-osrm.sh
@@ -213,6 +222,7 @@ stt-generate nyc-rideshare \
 ```
 
 **Options:**
+
 - `--synthetic`: Generate synthetic trips
 - `--num-trips`: Number of synthetic trips
 - `--download`: Download TLC data for a month (YYYY-MM; pre-2017 months carry real lat/lon)
@@ -230,7 +240,7 @@ stt-generate nyc-rideshare \
 Aggregates real [BIXI open-data](https://bixi.com/en/open-data/) bike-share
 trips into directed **origin→destination station-pair flows**, each emitted as a
 single 2-vertex `origin → destination` arc carrying a per-time-bucket count time
-series. The size on the wire is bounded by *(kept pairs) × (buckets)*, not the
+series. The size on the wire is bounded by _(kept pairs) × (buckets)_, not the
 ~13M raw trips/year, so a long span fits comfortably. The input CSV schema is
 auto-detected (the 2022+ embedded-coordinate family and the 2014–2021 station-code
 family).
@@ -244,6 +254,7 @@ stt-generate bixi \
 ```
 
 **Options:**
+
 - `--input`: BIXI open-data input (required) — the downloaded `.zip`, an extracted `.csv`, or a directory of either (plus an optional `Stations_*.csv` for pre-2022 code-based files)
 - `--bin`: Time bucket for the flow matrix, default `1h` (e.g. `30m`, `3h`, `1d`)
 - `--from` / `--to`: Inclusive lower / exclusive upper date bound `YYYY-MM-DD` (UTC), default: unbounded
@@ -286,6 +297,7 @@ stt-generate gtfs \
 ```
 
 **Options:**
+
 - `--feed`: Extracted GTFS feed directory (**required**) — needs `trips.txt`,
   `stop_times.txt`, `routes.txt`, and `calendar_dates.txt` and/or
   `calendar.txt`; `shapes.txt` and `stops.txt` are used when present
@@ -315,6 +327,7 @@ stt-generate nyc-taxi-points \
 ```
 
 **Options:**
+
 - `--input`: Source LineString packed dataset (a directory or its `manifest.json`), default `examples/showcase/public/data/nyc-taxi-paths`
 - `--interval-seconds`: Time spacing between interpolated points (smaller = smoother animation, larger output), default: 15
 - `--max-trips`: Cap on trips processed (for quick iteration), default: all
@@ -335,6 +348,7 @@ stt-generate drifters \
 ```
 
 **Options:**
+
 - `--start` / `--end`: Time window (YYYY-MM-DD), default 2021-01-01 → 2022-01-01
 - `--bounds`: Geographic filter (min_lat,min_lon,max_lat,max_lon)
 - `--min-points`: Drop trajectories shorter than this, default: 4
@@ -358,6 +372,7 @@ stt-generate animals --output animals.stt
 ```
 
 **Options:**
+
 - `--licenses`: Comma-separated license allowlist, default: `CC0_1_0,CC_BY_4_0,CC_BY_NC_4_0`
 - `--max-datasets`: Limit number of GBIF datasets (0 = unlimited)
 - `--ref-year`: Reference year every track is season-folded onto, default: 2024
@@ -367,7 +382,7 @@ stt-generate animals --output animals.stt
 
 ### OSM Editing History (`osm-edits`)
 
-A time-series animation of *OpenStreetMap being edited*, scoped to one metro
+A time-series animation of _OpenStreetMap being edited_, scoped to one metro
 (default: New York City via `--bounds`). Two complementary signals; both
 sources are downloaded as a prerequisite and passed via `--input`. All output
 is **© OpenStreetMap contributors (ODbL)** — keep that attribution in any
@@ -375,12 +390,12 @@ showcase config or published render.
 
 #### Signal A — node creation ("watch the metro draw itself")
 
-Every node's *first version* (its creation) placed at its lon/lat at its
+Every node's _first version_ (its creation) placed at its lon/lat at its
 creation time. Played back cumulatively in the showcase (`cumulative: true`),
 the street grid and buildings ink in over ~18 years.
 
 **Step 1 — get a full-history extract.** Download a regional `.osh.pbf` for the
-region containing your metro from Geofabrik's *internal* server
+region containing your metro from Geofabrik's _internal_ server
 (<https://osm-internal.download.geofabrik.de/>, free OSM login). Optionally
 shrink it to the metro first with [osmium](https://osmcode.org/osmium-tool/):
 
@@ -434,6 +449,7 @@ stt-generate osm-edits \
   doesn't smear onto Null Island. `0` disables the filter.
 
 **Options (both sources):**
+
 - `--source`: `nodes` or `changesets` (default `nodes`)
 - `--input`: source file (required)
 - `--bounds`: metro bbox `min_lat,min_lon,max_lat,max_lon` (default NYC)
@@ -478,6 +494,7 @@ stt-generate storms \
 ```
 
 **Options:**
+
 - `--sites`: Radar sites (WSR-88D ICAO ids) along the derecho path, west→east, default `KOAX,KDMX,KDVN`
 - `--date`: UTC date of the event, default `2020-08-10`
 - `--start-hour` / `--end-hour`: Inclusive start / exclusive end hour (UTC), default 16–23
@@ -514,6 +531,7 @@ stt-generate nwm --window 2019-03 --bin 1h --value log-anomaly \
 ```
 
 **Options:**
+
 - `--flowlines`: NHDPlus flowlines GeoParquet (COMID / StreamOrde / Hydroseq /
   LevelPathI / Divergence / DnHydroseq / WKB geometry), default
   `data/nwm/nhd-flowlines-order3.parquet`
@@ -720,6 +738,7 @@ redistribution, so Waymo bundles stay local. Per-source setup lives in
 ### 2. Use Temporal Sampling for Dense Data
 
 For high-frequency data (GPS tracks, vessel positions):
+
 ```bash
 stt-generate ais --sample-minutes 10  # 1 position per vessel per 10 min
 stt-generate flights --sample-seconds 60  # 1 position per aircraft per minute

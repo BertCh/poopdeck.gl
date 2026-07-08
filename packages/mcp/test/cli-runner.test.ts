@@ -16,7 +16,10 @@ describe('tryParseJson', () => {
 
 describe('run', () => {
   it('captures stdout/stderr and exit code for a successful process', async () => {
-    const result = await run(process.execPath, ['-e', 'console.log("hi"); console.error("oops")']);
+    const result = await run(process.execPath, [
+      '-e',
+      'console.log("hi"); console.error("oops")',
+    ]);
     expect(result.exitCode).toBe(0);
     expect(result.stdout.trim()).toBe('hi');
     expect(result.stderr.trim()).toBe('oops');
@@ -29,7 +32,11 @@ describe('run', () => {
   });
 
   it('kills a hung process after the timeout and marks timedOut', async () => {
-    const result = await run(process.execPath, ['-e', 'setTimeout(() => {}, 60_000)'], { timeoutMs: 50 });
+    const result = await run(
+      process.execPath,
+      ['-e', 'setTimeout(() => {}, 60_000)'],
+      { timeoutMs: 50 },
+    );
     expect(result.timedOut).toBe(true);
   }, 10_000);
 
@@ -44,9 +51,13 @@ describe('run', () => {
     const controller = new AbortController();
     controller.abort();
     const start = Date.now();
-    const result = await run(process.execPath, ['-e', 'setTimeout(() => {}, 60_000)'], {
-      signal: controller.signal,
-    });
+    const result = await run(
+      process.execPath,
+      ['-e', 'setTimeout(() => {}, 60_000)'],
+      {
+        signal: controller.signal,
+      },
+    );
     expect(result.aborted).toBe(true);
     expect(result.exitCode).toBeNull();
     expect(result.timedOut).toBe(false);
@@ -57,9 +68,13 @@ describe('run', () => {
   it('SIGKILLs a long-running child when the signal aborts mid-run', async () => {
     const controller = new AbortController();
     const start = Date.now();
-    const promise = run(process.execPath, ['-e', 'setTimeout(() => {}, 10_000)'], {
-      signal: controller.signal,
-    });
+    const promise = run(
+      process.execPath,
+      ['-e', 'setTimeout(() => {}, 10_000)'],
+      {
+        signal: controller.signal,
+      },
+    );
     // Abort on the next tick, once the child has spawned.
     setTimeout(() => controller.abort(), 20);
     const result = await promise;
@@ -72,9 +87,11 @@ describe('run', () => {
 
 describe('resolveBinary', () => {
   it('an explicit override always wins', () => {
-    expect(resolveBinary('stt-optimize', '/custom/path/stt-optimize', ['/some/root'])).toBe(
-      '/custom/path/stt-optimize',
-    );
+    expect(
+      resolveBinary('stt-optimize', '/custom/path/stt-optimize', [
+        '/some/root',
+      ]),
+    ).toBe('/custom/path/stt-optimize');
   });
 
   it('finds target/release/<name> by walking up from a search root', async () => {
@@ -94,6 +111,8 @@ describe('resolveBinary', () => {
   });
 
   it('falls back to the bare name when nothing is found', () => {
-    expect(resolveBinary('stt-optimize', undefined, ['/definitely/not/a/real/root'])).toBe('stt-optimize');
+    expect(
+      resolveBinary('stt-optimize', undefined, ['/definitely/not/a/real/root']),
+    ).toBe('stt-optimize');
   });
 });

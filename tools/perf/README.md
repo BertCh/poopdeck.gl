@@ -33,14 +33,14 @@ pnpm --filter @poopdeck.gl/perf perf -- nyc-taxi-trips --baseline check
 
 Per scenario, recorded in a labeled bucket:
 
-| Metric | What it tells you |
-|---|---|
-| `fps_p50` / `fps_p5` | Median + 5th percentile FPS — p5 catches the worst hitches users feel |
-| `frame_p95_ms`, `frame_p99_ms`, `frame_max_ms` | Frame-time tail; large p95 means stutter |
-| `longTaskCount` / `longTaskMaxMs` | Main-thread tasks ≥ 50 ms (Long Tasks API). Zero with a huge `frame_p95` means GPU-bound; nonzero means JS-bound |
-| `networkMb` / `networkCount` | `.stt` range-request bytes pulled during the scenario |
-| `heapDeltaMb` | JS heap growth across the whole run |
-| `workerCount` | Workers created (sanity check: 4 = WorkerTileDecoder pool spun up) |
+| Metric                                         | What it tells you                                                                                                |
+| ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `fps_p50` / `fps_p5`                           | Median + 5th percentile FPS — p5 catches the worst hitches users feel                                            |
+| `frame_p95_ms`, `frame_p99_ms`, `frame_max_ms` | Frame-time tail; large p95 means stutter                                                                         |
+| `longTaskCount` / `longTaskMaxMs`              | Main-thread tasks ≥ 50 ms (Long Tasks API). Zero with a huge `frame_p95` means GPU-bound; nonzero means JS-bound |
+| `networkMb` / `networkCount`                   | `.stt` range-request bytes pulled during the scenario                                                            |
+| `heapDeltaMb`                                  | JS heap growth across the whole run                                                                              |
+| `workerCount`                                  | Workers created (sanity check: 4 = WorkerTileDecoder pool spun up)                                               |
 
 ## Built-in scenarios
 

@@ -23,7 +23,12 @@
  * stays within {@link MAX_RELATIVE_TIME_MS}.
  */
 
-export type TimeFilterMode = 'window' | 'wake' | 'cumulative' | 'trail' | 'none';
+export type TimeFilterMode =
+  | 'window'
+  | 'wake'
+  | 'cumulative'
+  | 'trail'
+  | 'none';
 
 export interface TimeFilterParams {
   /** Half-width of the symmetric window (ms). `window` mode. */
@@ -75,7 +80,11 @@ export function windowAlpha(
  * linearly to 0 at the tail. (The matching tail size-shrink — `mix(wakeTailScale,
  * 1, alpha)` — is applied in the material's size node, not here.)
  */
-export function wakeAlpha(currentTime: number, startTime: number, wakeLength: number): number {
+export function wakeAlpha(
+  currentTime: number,
+  startTime: number,
+  wakeLength: number,
+): number {
   const age = currentTime - startTime;
   if (age < 0 || age > wakeLength) return 0;
   return clamp01(1 - age / wakeLength);
@@ -85,7 +94,11 @@ export function wakeAlpha(currentTime: number, startTime: number, wakeLength: nu
  * `cumulative` — a feature appears at its `startTime` and stays forever after
  * (draw-and-persist). `fadeIn`, if set, ramps its alpha 0→1 over that many ms.
  */
-export function cumulativeAlpha(currentTime: number, startTime: number, fadeIn = 0): number {
+export function cumulativeAlpha(
+  currentTime: number,
+  startTime: number,
+  fadeIn = 0,
+): number {
   if (startTime > currentTime) return 0;
   if (fadeIn > 0) return clamp01((currentTime - startTime) / fadeIn);
   return 1;
@@ -281,7 +294,7 @@ export function resolveTimeFilterParams(
 ): TimeFilterParams {
   const windowHalf =
     v.windowHalf ??
-    (v.timeWindow != null ? v.timeWindow / 2 : policy.defaultWindowHalf ?? 0);
+    (v.timeWindow != null ? v.timeWindow / 2 : (policy.defaultWindowHalf ?? 0));
 
   let fadeIn = v.fadeIn ?? v.fadeInDuration;
   let fadeOut = v.fadeOut ?? v.fadeOutDuration;

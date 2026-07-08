@@ -1,10 +1,10 @@
-import React, { useEffect, useRef, useState, useCallback } from "react";
-import { Link } from "react-router";
-import type { Dataset } from "../../types";
-import DemoViewer from "./DemoViewer";
-import { useDemoPlayback } from "./useDemoPlayback";
-import { PlaybackControls } from "@poopdeck.gl/react";
-import { useReducedMotion } from "../../lib/reducedMotion";
+import React, { useEffect, useRef, useState, useCallback } from 'react';
+import { Link } from 'react-router';
+import type { Dataset } from '../../types';
+import DemoViewer from './DemoViewer';
+import { useDemoPlayback } from './useDemoPlayback';
+import { PlaybackControls } from '@poopdeck.gl/react';
+import { useReducedMotion } from '../../lib/reducedMotion';
 
 /**
  * Framed live-map embed for the per-demo landing pages.
@@ -59,8 +59,8 @@ const DemoEmbed: React.FC<{ dataset: Dataset }> = ({ dataset }) => {
   // and trap page scroll. Desktop pointers get the full controller directly.
   const [coarsePointer] = useState(
     () =>
-      typeof window !== "undefined" &&
-      window.matchMedia("(pointer: coarse)").matches,
+      typeof window !== 'undefined' &&
+      window.matchMedia('(pointer: coarse)').matches,
   );
   const [touchInteractive, setTouchInteractive] = useState(false);
   const interactive = !coarsePointer || touchInteractive;
@@ -70,7 +70,7 @@ const DemoEmbed: React.FC<{ dataset: Dataset }> = ({ dataset }) => {
       <div
         ref={frameRef}
         className="relative rounded-lg overflow-hidden h-[320px] sm:h-[420px] lg:h-[520px]"
-        style={{ background: "var(--surface-sunken)" }}
+        style={{ background: 'var(--surface-sunken)' }}
       >
         <DemoViewer
           dataset={dataset}
@@ -82,7 +82,7 @@ const DemoEmbed: React.FC<{ dataset: Dataset }> = ({ dataset }) => {
         <Link
           to={`/demo/${dataset.id}`}
           className="absolute top-3 right-3 px-2.5 py-1.5 rounded text-xs glass inline-flex items-center gap-1.5"
-          style={{ color: "rgba(255,255,255,0.9)" }}
+          style={{ color: 'rgba(255,255,255,0.9)' }}
           title="Open the fullscreen viewer"
         >
           Open fullscreen
@@ -103,13 +103,13 @@ const DemoEmbed: React.FC<{ dataset: Dataset }> = ({ dataset }) => {
           <button
             type="button"
             className="absolute inset-0 w-full h-full flex items-end justify-center pb-4"
-            style={{ background: "transparent", border: "none" }}
+            style={{ background: 'transparent', border: 'none' }}
             onClick={() => setTouchInteractive(true)}
             aria-label="Tap to interact with the map"
           >
             <span
               className="px-3 py-1.5 rounded text-xs glass"
-              style={{ color: "rgba(255,255,255,0.9)" }}
+              style={{ color: 'rgba(255,255,255,0.9)' }}
             >
               Tap to explore the map
             </span>
@@ -119,7 +119,7 @@ const DemoEmbed: React.FC<{ dataset: Dataset }> = ({ dataset }) => {
           <button
             type="button"
             className="absolute bottom-3 left-3 px-2.5 py-1.5 rounded text-xs glass"
-            style={{ color: "rgba(255,255,255,0.9)", border: "none" }}
+            style={{ color: 'rgba(255,255,255,0.9)', border: 'none' }}
             onClick={() => setTouchInteractive(false)}
             aria-label="Release the map and resume page scrolling"
           >
@@ -132,7 +132,10 @@ const DemoEmbed: React.FC<{ dataset: Dataset }> = ({ dataset }) => {
           fullscreen viewer, so scrubbing/speed behave identically. */}
       <div
         className="mt-3 rounded-md px-4 py-2.5"
-        style={{ background: "var(--surface)", border: "1px solid var(--hairline)" }}
+        style={{
+          background: 'var(--surface)',
+          border: '1px solid var(--hairline)',
+        }}
       >
         <PlaybackControls
           currentTime={playback.currentTime}

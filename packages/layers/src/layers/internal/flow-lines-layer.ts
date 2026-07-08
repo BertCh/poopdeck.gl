@@ -188,7 +188,8 @@ void main(void) {
 `;
 
 /** Complete props for {@link FlowLinesLayer}. */
-export type FlowLinesLayerProps<DataT = unknown> = _FlowLinesLayerProps<DataT> & LayerProps;
+export type FlowLinesLayerProps<DataT = unknown> = _FlowLinesLayerProps<DataT> &
+  LayerProps;
 
 /** Props added by {@link FlowLinesLayer}. */
 type _FlowLinesLayerProps<DataT> = {
@@ -236,17 +237,26 @@ const defaultProps: DefaultProps<FlowLinesLayerProps> = {
 };
 
 /** Normalize a {@link Color} (0..255, optional alpha) to a 0..1 vec4. */
-function toVec4(color: Color | undefined, fallback: Color): [number, number, number, number] {
+function toVec4(
+  color: Color | undefined,
+  fallback: Color,
+): [number, number, number, number] {
   const c = (color ?? fallback) as unknown as number[];
-  return [(c[0] ?? 0) / 255, (c[1] ?? 0) / 255, (c[2] ?? 0) / 255, (c[3] ?? 255) / 255];
+  return [
+    (c[0] ?? 0) / 255,
+    (c[1] ?? 0) / 255,
+    (c[2] ?? 0) / 255,
+    (c[3] ?? 255) / 255,
+  ];
 }
 
 /**
  * Instanced tapered-arrow layer. See the file docstring for the geometry.
  */
-export class FlowLinesLayer<DataT = any, ExtraProps extends {} = {}> extends Layer<
-  ExtraProps & Required<_FlowLinesLayerProps<DataT>>
-> {
+export class FlowLinesLayer<
+  DataT = any,
+  ExtraProps extends {} = {},
+> extends Layer<ExtraProps & Required<_FlowLinesLayerProps<DataT>>> {
   static layerName = 'FlowLinesLayer';
   static defaultProps = defaultProps;
 
@@ -255,7 +265,11 @@ export class FlowLinesLayer<DataT = any, ExtraProps extends {} = {}> extends Lay
   };
 
   getShaders() {
-    return super.getShaders({ vs, fs, modules: [project32, picking, flowLinesUniforms] });
+    return super.getShaders({
+      vs,
+      fs,
+      modules: [project32, picking, flowLinesUniforms],
+    });
   }
 
   getBounds(): [number[], number[]] | null {
@@ -335,7 +349,10 @@ export class FlowLinesLayer<DataT = any, ExtraProps extends {} = {}> extends Lay
       geometry: new Geometry({
         topology: 'triangle-list',
         attributes: {
-          positions: { size: 3, value: new Float32Array(ARROW_TEMPLATE_POSITIONS) },
+          positions: {
+            size: 3,
+            value: new Float32Array(ARROW_TEMPLATE_POSITIONS),
+          },
         },
       }),
       isInstanced: true,

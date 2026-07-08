@@ -1,12 +1,12 @@
 # STT Preprocessing Framework — "Bake the analytics into the tiles"
 
-*Design synthesis (2026-06-16, revised 2026-06-22 against the AV/LiDAR exploration). **Forward-looking
+_Design synthesis (2026-06-16, revised 2026-06-22 against the AV/LiDAR exploration). **Forward-looking
 design — nothing here is built.** It reorganizes the ~116 preprocessing operators that have emerged
 bespoke across the codebase (Python AV extractors, `stt-generate`→`stt-build`, the render path) around
 three findings: (1) a dataset-bigness archetype playbook, (2) a unified spatial × temporal × attribute
 LOD model, and (3) the representation ladder — overview and detail as different, zoom-dispatched
 techniques. The full operator catalog is condensed to an appendix; this body keeps the load-bearing
-model.*
+model._
 
 > **Verified 2026-07-01 against source — the self-assessment holds, and the whole
 > framework stays COUNTED OUT (future work) as designed.** Everything labelled
@@ -31,28 +31,28 @@ model.*
 
 > **Read-time cost should depend on output resolution (cells × time-buckets × dimensions), never on N
 > (record count).** Anything expensive that is a pure function of the input — layouts, clusters,
-> aggregations, trend statistics, tessellation, ordering — is *baked once at build time* and shipped
+> aggregations, trend statistics, tessellation, ordering — is _baked once at build time_ and shipped
 > as a cheap-to-read artifact.
 
 Every system surveyed (tippecanoe, Planetiler, PMTiles, COPC, Datashader, Nanocubes, imMens, Gaussian
 Cubes, Supercluster, flowmap.gl) is one realization of this. STT already lives here for many datasets
 (BIXI clustering, flow-corridor value-matrix, summary tiers, additive-octree LiDAR); the framework's
-job is to make it the *default, reusable* path instead of bespoke per-generator code.
+job is to make it the _default, reusable_ path instead of bespoke per-generator code.
 
 Three corollaries:
 
 1. **Conserve, don't discard** (no-thinning). Aggregate/coalesce so the GPU sees a tractable number of
-   primitives; dropping stays strictly opt-in. The strongest form is *lossless union*: a single baked
+   primitives; dropping stays strictly opt-in. The strongest form is _lossless union_: a single baked
    ranking whose union over all levels reconstructs N exactly (the additive-octree).
 2. **Determinism is load-bearing.** Content-addressed packs only dedup, edge-cache, and incrementally
    rebuild if identical logical input → identical bytes. The formerly-live non-reproducible-packs bug
    (Arrow-metadata `HashMap` iteration order) silently broke all three — **the prerequisite, now
    closed 2026-07-04 (§7).**
-3. **LOD changes the *resolution* of the answer; encoding changes the *price per unit*.**
+3. **LOD changes the _resolution_ of the answer; encoding changes the _price per unit_.**
    `--quantize-attr`, `--vector-group`, blob-ordering, `--quantize-coords` are bytes-per-unit
    multipliers, not LOD. They compose with LOD and never substitute for it — a clean seam that lets STT
    apply born-optimized encoding universally at the `run_stt_build` boundary. (Caveat: a few encoding
-   levers conflict with *each other* — §1.4.)
+   levers conflict with _each other_ — §1.4.)
 
 ---
 
@@ -63,8 +63,9 @@ together are actually orthogonal**, and separating them predicts byte cost, the 
 the determinism burden of every operator.
 
 **Axis 1 — same primitive, or a different one?**
+
 - **Continuous LOD** (same-primitive, coarser fidelity): decimate points, simplify a polyline, roll a
-  value-matrix to a coarser bucket, snap to a coarser grid. Reconstruction = sampling the *same* data
+  value-matrix to a coarser bucket, snap to a coarser grid. Reconstruction = sampling the _same_ data
   type. One layer class, one shader, a `level` parameter.
 - **Representation switch** (different-primitive, different-algorithm — "semantic LOD"): raw returns →
   density iso-lines; points → H3/Quadbin cells; trips → flow corridors; reflectivity → isobands / storm
@@ -72,8 +73,9 @@ the determinism burden of every operator.
   different question ("how dense" vs "where exactly").
 
 **Axis 2 — surviving sub-unit, or synthesized? (the materialize-vs-filter predictor)**
+
 - **Surviving sub-unit** (a real point/vertex/feature) → **bake ONE ranking, filter at read.** If each
-  unit carries a monotone *r* = "coarsest level at which I appear," level L is served by `r ≤ L`. No
+  unit carries a monotone _r_ = "coarsest level at which I appear," level L is served by `r ≤ L`. No
   per-level copies; union reconstructs N (lossless). This is the additive-octree `home_zoom`.
 - **Synthesized unit** (cluster centroid, contour ring, holistic aggregate like median) → **must
   materialize each level.** No per-fine-unit threshold reconstructs a synthesized object.
@@ -86,15 +88,17 @@ lossless, at ~½ the bytes. Axis 2 lines up with OLAP measure classification (§
 over surviving units → filterable from one ranking; holistic or synthesized geometry → materialize.
 
 ### 1.4 The encoding lever bites back only against other encoding
-Encoding levers compose with LOD freely, but two documented cases show them conflicting with *each other*:
-**dedup vs. blob-locality** (byte-identical-tile dedup *hurt* range locality on earthquakes, repack +116%
+
+Encoding levers compose with LOD freely, but two documented cases show them conflicting with _each other_:
+**dedup vs. blob-locality** (byte-identical-tile dedup _hurt_ range locality on earthquakes, repack +116%
 worse), and **`--pack-quat` vs. `--vector-group`** (smallest-three quat packing was superseded by the
-zero-copy vector-column bind — a *resolved* tension, vector-group won). Lesson: LOD axes couple (§3.5);
+zero-copy vector-column bind — a _resolved_ tension, vector-group won). Lesson: LOD axes couple (§3.5);
 encoding doesn't couple with LOD but can couple with other encoding. The framework should own this matrix.
 
 ### 1.5 A third operator category: always-on correctness
+
 Not every non-default operator is opt-in. **Pre-tessellation** (baked earcut triangles) and
-**wildfire/radar multipolygon splitting** are *always-on* for multi-ring polygons — they fix the
+**wildfire/radar multipolygon splitting** are _always-on_ for multi-ring polygons — they fix the
 spanning-triangle / streak artifact. They are not LOD, not encoding, not opt-in: they are **correctness
 preprocessing**, a distinct category.
 
@@ -102,7 +106,7 @@ preprocessing**, a distinct category.
 
 ## 2. Dataset-bigness archetypes → the onboarding playbook
 
-Different "bigness" demands different preprocessing, and the codebase's *measurements* prove which lever
+Different "bigness" demands different preprocessing, and the codebase's _measurements_ prove which lever
 wins — usually counter to intuition.
 
 **Measure first (non-negotiable).** Run `point_column_stats.rs` (per-column post-zstd bytes) and, for
@@ -112,36 +116,38 @@ id-hash (40%) and raw-f64 z (38%) dominated (the win was seq-ids + `--quantize-a
 lightweight column encodings (delta-varint/RLE/byte-shuffle) were **measured-no-go** (byte-shuffle +31–68%
 on the dominant coord column — zstd already models raw LE f64 better).
 
-| Archetype | Definition | Axis that blows up | Diagnostic |
-|---|---|---|---|
-| **Temporally-big** | Same geometry over many timesteps | timesteps × features | a 1 h base bucket pulls **180×** a 60 s window |
-| **Spatially-big** | One instant already too dense | point count + near-incompressible per-point bytes | z14 tile is **20 B/pt** |
-| **Metadata-big** | Directory and/or per-feature attr width dominates | dir bytes grow with N not viewport; wide/high-entropy attrs | id-hash is **40%** of a point; cold-start whole-dir load wall |
-| **Both-big** (AV) | Dense instants *and* many of them | point-count × sweeps at once | a ~15 s LiDAR log ≈ **180 M** returns |
+| Archetype          | Definition                                        | Axis that blows up                                          | Diagnostic                                                    |
+| ------------------ | ------------------------------------------------- | ----------------------------------------------------------- | ------------------------------------------------------------- |
+| **Temporally-big** | Same geometry over many timesteps                 | timesteps × features                                        | a 1 h base bucket pulls **180×** a 60 s window                |
+| **Spatially-big**  | One instant already too dense                     | point count + near-incompressible per-point bytes           | z14 tile is **20 B/pt**                                       |
+| **Metadata-big**   | Directory and/or per-feature attr width dominates | dir bytes grow with N not viewport; wide/high-entropy attrs | id-hash is **40%** of a point; cold-start whole-dir load wall |
+| **Both-big** (AV)  | Dense instants _and_ many of them                 | point-count × sweeps at once                                | a ~15 s LiDAR log ≈ **180 M** returns                         |
 
 Most real data is a hybrid. The hybrid rule: layer the playbooks **temporal → spatial → attribute** (each
-stage changes what the next sees). One exception — the `--lod` path *fuses* spatial and temporal (C2) and
+stage changes what the next sees). One exception — the `--lod` path _fuses_ spatial and temporal (C2) and
 is an alternative whole pipeline, not a late step.
 
 ### 2.6 Quick lookup (the compressed playbook)
 
-| "My data is mostly…" | Do this, in order |
-|---|---|
-| **temporally-big** (taxi/flows/satellites) | finer `--temporal-bucket` → (value-matrix for flows) → temporal-LOD / adaptive tiers → suppress dead time cols → paged t-bounds |
-| **temporally-big w/ static substrate** (AV stage) | scene-split / worldbuild collapse → `erasor_scrub` → quantize → `STAGE_MIN_ZOOM` floor |
-| **spatially-big** (dense LiDAR, one instant) | seq-ids + drop dead cols → (`--adaptive-decimate` only if you truly need fewer pts) → **`--quantize-attr` (primary, ~6×)** → colorize(linear-light) → surfel/iso → vector-group + world-grid coord-quant → `--lod` |
-| **spatially-big + wide attrs** | above + `--exclude` dead cols + (`--vector-group`, not `--pack-quat`) |
-| **metadata-big (directory)** | seq-ids → zstd-19 → **paged directory w/ geo+zoom+t bounds (primary)** |
-| **metadata-big (attr width/entropy)** | id-de-entropy → `--exclude` → quantize-auto-u16 |
-| **both-big** (AV LiDAR) | georef → **scene-split (primary)** → [stage: spatial-big + `static_full_range`] ∥ [actors: temporal, conserve-all] → universal byte levers → paged t-bounds |
+| "My data is mostly…"                              | Do this, in order                                                                                                                                                                                                  |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **temporally-big** (taxi/flows/satellites)        | finer `--temporal-bucket` → (value-matrix for flows) → temporal-LOD / adaptive tiers → suppress dead time cols → paged t-bounds                                                                                    |
+| **temporally-big w/ static substrate** (AV stage) | scene-split / worldbuild collapse → `erasor_scrub` → quantize → `STAGE_MIN_ZOOM` floor                                                                                                                             |
+| **spatially-big** (dense LiDAR, one instant)      | seq-ids + drop dead cols → (`--adaptive-decimate` only if you truly need fewer pts) → **`--quantize-attr` (primary, ~6×)** → colorize(linear-light) → surfel/iso → vector-group + world-grid coord-quant → `--lod` |
+| **spatially-big + wide attrs**                    | above + `--exclude` dead cols + (`--vector-group`, not `--pack-quat`)                                                                                                                                              |
+| **metadata-big (directory)**                      | seq-ids → zstd-19 → **paged directory w/ geo+zoom+t bounds (primary)**                                                                                                                                             |
+| **metadata-big (attr width/entropy)**             | id-de-entropy → `--exclude` → quantize-auto-u16                                                                                                                                                                    |
+| **both-big** (AV LiDAR)                           | georef → **scene-split (primary)** → [stage: spatial-big + `static_full_range`] ∥ [actors: temporal, conserve-all] → universal byte levers → paged t-bounds                                                        |
 
-*Two hard steers on record:* the durable spatial lever is **bytes-per-point, not fewer points** (users
+_Two hard steers on record:_ the durable spatial lever is **bytes-per-point, not fewer points** (users
 vetoed decimate-12 as "too low res" even though adaptive-voxel proves 3–4× fewer at equal fidelity — keep
 decimation opt-in); and coord-quant must be a **world grid, never per-tile** (per-tile origin breaks
 cross-tile dedup, measured +61%). Full per-archetype operator ordering → Appendix A.
 
 ### 2.7 Cross-archetype invariants the framework should own
+
 Today each operator re-hand-rolls these:
+
 1. **Determinism** (world-grid coord-quant; per-column-min affine; commutative reductions; pinned
    constants; no RNG). The one systemic hole — arrow-ipc serializing Field metadata in `HashMap`
    order — closed 2026-07-04 via arrow ≥59 (§7).
@@ -162,13 +168,13 @@ STT treats LOD as 1-D (mercator zoom) while actually operating in 3-D. Naming th
 flags" into a model.
 
 - **Axis S — spatial resolution** (vertices/linestring, points/voxel, cells/km², features-at-zoom). Unit:
-  *cells* (or screen-space-error px).
+  _cells_ (or screen-space-error px).
 - **Axis T — temporal resolution / window** (bucket width, pyramid tier, per-sweep grain, static-collapse,
-  how much time a tile pulls). Unit: *time-buckets*.
+  how much time a tile pulls). Unit: _time-buckets_.
 - **Axis A — attribute / dimension detail** (measures, numeric precision, semantic granularity). Unit:
-  *dimensions × precision*.
+  _dimensions × precision_.
 
-**Read cost ∝ VOLUME(S × T × A) · bytes-per-unit.** A tile request is a *box* in this cube; the LOD axes
+**Read cost ∝ VOLUME(S × T × A) · bytes-per-unit.** A tile request is a _box_ in this cube; the LOD axes
 set the box volume, the encoding lever sets bytes-per-unit. The classic mercator pyramid only ever moved
 you along S; STT's frontier is that **T and A are first-class LOD axes with no prior art to copy.**
 
@@ -177,47 +183,50 @@ Supercluster, additive-octree, min/max-zoom band, bbox covering; T: bin/temporal
 collapse, per-sweep `home_zoom`, time-series codec, cumulative prefix-sum, value-matrix corridor) are in
 **Appendix A**. Three A-axis points are load-bearing enough to keep here:
 
-- **Classify every measure (OLAP rule — prevents average-of-averages).** *Distributive* (SUM/COUNT/MIN/MAX)
-  → roll up freely at every zoom. *Algebraic* (AVG/STD/covariance) → store the distributive *components*
-  (sum, sum², count), derive on read — never store the derived average and re-average it. *Holistic*
+- **Classify every measure (OLAP rule — prevents average-of-averages).** _Distributive_ (SUM/COUNT/MIN/MAX)
+  → roll up freely at every zoom. _Algebraic_ (AVG/STD/covariance) → store the distributive _components_
+  (sum, sum², count), derive on read — never store the derived average and re-average it. _Holistic_
   (MEDIAN/distinct/MODE) → can't roll up; materialize per-zoom or skip.
 - **Bake sufficient statistics, not just counts (Gaussian Cubes — the cheap high-leverage upgrade).** Per
   cell store `{ n, Σx, Σx² }` (and `Σxy` for pairs) as additive channels. At read time reconstruct mean,
   variance, correlation, linear trend, even PCA in O(d³), **independent of N, no rebuild** — the client
   switches what it visualizes without touching the build. A handful of f32 columns; the single best ROI
-  add to a count-only tile system. *(Named-but-unbuilt today.)*
+  add to a count-only tile system. _(Named-but-unbuilt today.)_
 - **The zoom pyramid IS a partial OLAP cuboid lattice** — materialize only tiers you serve; below a
   min-support count, fold cells (iceberg-cube, `--drop-densest` justified by anti-monotonicity). Separate
   aggregation from shading (Datashader): bake count+sum+min/max once; colormap/spread/normalize is
   O(pixels), re-runnable at read time. Spatiotemporal analytics that bake cleanly: KDE density raster ✅,
   Getis-Ord Gi\* hotspots ✅ (valid only for the baked grid/window), Mann-Kendall/linear-trend ✅ (from
   sufficient stats — ESRI's space-time cube), TRACLUS ⚠️ (bake the local partition, skip global grouping),
-  ST-DBSCAN/HDBSCAN ❌ (whole-dataset connectivity — run offline once, bake cluster *labels* per point).
+  ST-DBSCAN/HDBSCAN ❌ (whole-dataset connectivity — run offline once, bake cluster _labels_ per point).
 
-### 3.5 The four genuine couplings (the axes are orthogonal to *request* but coupled in four baked places)
+### 3.5 The four genuine couplings (the axes are orthogonal to _request_ but coupled in four baked places)
+
 A recipe that declares them independent will silently break.
-- **C1 — spatial overview *forces* temporal collapse (the big one).** Zoom out on a temporally-big cloud
+
+- **C1 — spatial overview _forces_ temporal collapse (the big one).** Zoom out on a temporally-big cloud
   and one coarse tile packs every-sweep density into a megatile (`STAGE_MIN_ZOOM=17`, the 62 MB tile).
   S × T must stay under the per-tile decode budget — model it as a **joint budget on the substrate**.
-  *That is what the static/dynamic split is.*
+  _That is what the static/dynamic split is._
 - **C2 — additive-octree `home_zoom` is assigned PER-SWEEP** → the spatial rank is parameterized by the
-  temporal grain. You can't bake the S-filter without first choosing sweep grouping — so `--lod` *fuses*
+  temporal grain. You can't bake the S-filter without first choosing sweep grouping — so `--lod` _fuses_
   S and T and is an alternative whole-pipeline, not a late spatial step.
-- **C3 — value-matrix / sufficient-stats: the T-axis lives *inside* A.** A `[vertex][bucket]` grid
+- **C3 — value-matrix / sufficient-stats: the T-axis lives _inside_ A.** A `[vertex][bucket]` grid
   relocates time into an attribute column; the read-time T-filter is literally an A-axis column read. For
   flow/corridor layers, T-strategy and A-strategy are **one decision.**
 - **C4 — LOD strategy ↔ multi-source governor.** A static-collapse rung is an OPTIONAL governor source
   (loads once, never gates); per-sweep actors are REQUIRED; the build-time bucket width sets the read-time
   EDF deadline. A recipe's `temporal.strategy` silently determines scheduler behavior.
-- **A fifth, aesthetic coupling** (blocks §4's headline win): *render-window ↔ representation.* iso-lines
+- **A fifth, aesthetic coupling** (blocks §4's headline win): _render-window ↔ representation._ iso-lines
   narrow the time window to ~260 ms, starving the box layer (needs ≥2 keyframes) → a defensive
   `Math.max(timeWindow, 2000)`. An automatic ladder (§4) must reconcile per-rung windows with co-resident
   layers.
 
-*Genuinely independent:* the encoding levers compose freely with the LOD axes — the clean architectural
+_Genuinely independent:_ the encoding levers compose freely with the LOD axes — the clean architectural
 seam that lets STT quantize universally at `run_stt_build`.
 
 ### 3.6 "One ranking, many zooms" — the unifying idea
+
 **A single baked, monotone ranking can serve every LOD level as a pure read-time threshold filter**, instead
 of materializing a separate artifact per level. If each unit carries r = "coarsest level at which I appear,"
 level L is `r ≤ L`; union reconstructs N (lossless). This is the structural form of no-thinning: a clamp,
@@ -227,35 +236,37 @@ Candidate rankings, all already present in the codebase: VW effective-area per v
 per point (the exemplar); cluster level per station (Supercluster); surface-variation σ = λ₀/(λ₀+λ₁+λ₂)
 per LiDAR return; sufficient-stats per cell (the A-axis analog); importance-per-byte (`budget.rs`);
 `cover_t_min` per tile. **Where STT still re-materializes** (consolidation targets): the dead
-5-fixed-density-tiers (retire for `--lod`); per-zoom clustering (synthesized centroids — a genuine *limit*
+5-fixed-density-tiers (retire for `--lod`); per-zoom clustering (synthesized centroids — a genuine _limit_
 of the ranking idea); the temporal-LOD pyramid; summary cells; **line simplify** (the VW effective-area is
-*already computed* — bake it per-vertex and filter at read time = the clearest unexploited vector win,
+_already computed_ — bake it per-vertex and filter at read time = the clearest unexploited vector win,
 gated by the line-archive constraints).
 
 **Boundary condition (the precise materialize-vs-filter predictor):** ranking-filter works exactly when the
-coarse output unit is a **real surviving sub-unit** of the fine one *and* its measures are
+coarse output unit is a **real surviving sub-unit** of the fine one _and_ its measures are
 **distributive/algebraic**. It breaks when the coarse unit is **synthesized** — there the level must be
 materialized. This is Axis 2 (§1), and it lines up with OLAP measure classification.
 
 ### 3.8 The accumulator contract
-When *any* operator removes/merges a feature (cluster, coalesce, budget-drop), fold its named scalar
+
+When _any_ operator removes/merges a feature (cluster, coalesce, budget-drop), fold its named scalar
 attributes into the survivor via a per-attribute reduction (`sum`/`mean`/`max`/`min`/`count`) and auto-emit
 `point_count` + `sqrt_point_count`. Make it a **format-level property** reusable across the build pass and
 any later merge pass (tippecanoe's tile-join lesson). This is `vertex_value_matrix` aggregation generalized
 — it's what makes "drop" safe (totals survive as aggregates) and it is the **consistency backbone for the
-representation ladder** (§4): every rung must be a *projection of the same conserved accumulator*, so a
+representation ladder** (§4): every rung must be a _projection of the same conserved accumulator_, so a
 monotone invariant (total count, total flow) is identical across rungs.
 
 ---
 
-## 4. The representation ladder — overview and detail as *different techniques*
+## 4. The representation ladder — overview and detail as _different techniques_
 
-The sharpest product question: *"does it make sense for a high-level and a zoomed-in view to be different
-techniques?"* **Yes** — with a precise rule, and a striking finding: **STT has already built every operator
+The sharpest product question: _"does it make sense for a high-level and a zoomed-in view to be different
+techniques?"_ **Yes** — with a precise rule, and a striking finding: **STT has already built every operator
 a representation ladder needs, but almost none of it is wired to zoom.**
 
 ### 4.1 When a switch beats continuous LOD
-> **Switch when the detail primitive's *legibility* collapses faster than its information content as you
+
+> **Switch when the detail primitive's _legibility_ collapses faster than its information content as you
 > zoom out. Stay continuous when sampling the same primitive still reads correctly, just sparser.**
 
 Prefer a switch when **any** hold: (1) **sub-pixel collapse** — the detail primitive is smaller than a
@@ -269,44 +280,65 @@ and keep consistent (a `level` knob, lossless union, one accumulator); a switch 
 with its own operator/determinism/hand-off cost, so it should pay for that via one of the four triggers.
 
 ### 4.2 The critical finding — the switches exist but aren't zoom-wired
+
 Two mechanisms are conflated under "LOD": **genuine zoom-driven switches** (only the summary tier's
 `pickTierForZoom` H3/Quadbin swap, and the additive-octree union — which is continuous, not a swap); and
 **user-toggled mode switches** (the AV cockpit pill row — iso-lines, surfels, stage/actors, scan, worldbuild,
-cube). Each mode is a *separately baked sibling archive* (`-iso`, `-surfel`, `-stage`…) selected by a
-frontend flag — a different abstraction of the *same instant*, NOT an automatic overview/detail handoff.
+cube). Each mode is a _separately baked sibling archive_ (`-iso`, `-surfel`, `-stage`…) selected by a
+frontend flag — a different abstraction of the _same instant_, NOT an automatic overview/detail handoff.
 You pick one mode and it's that mode at every zoom. The 13 catalogued switches (summary tier, density
 iso-lines/iso-3D, surfels-vs-points, scene-split, worldbuild, flow-corridor value-matrix, per-zoom flowmap
 clustering, baked edge bundling, radar isobands, SCIT storm tracks, object tracks, space-time cube) are
-enumerated in **Appendix B**. *Note the clustering case: same primitive yet synthesized units — the clean
-illustration that §1's two axes are independent.*
+enumerated in **Appendix B**. _Note the clustering case: same primitive yet synthesized units — the clean
+illustration that §1's two axes are independent._
 
 ### 4.3 The systematization — a declarative representation ladder
-The missing abstraction: **one ordered descriptor** saying *this dataset has N representations across scale
+
+The missing abstraction: **one ordered descriptor** saying _this dataset has N representations across scale
 bands; each rung names its own preprocessing operator AND its own render primitive; the engine picks
-automatically by zoom (and optionally time-window); rungs are guaranteed consistent.*
+automatically by zoom (and optionally time-window); rungs are guaranteed consistent._
 
 ```yaml
 representation_ladder:
   dataset: argoverse-miami
-  consistency: { accumulator: voxel_real_rep, totals_invariant: count }   # §3.8
+  consistency: { accumulator: voxel_real_rep, totals_invariant: count } # §3.8
   rungs:
-    - { id: city_overview, scale: {zoom: [0,13]},  operator: density_grid_contours, primitive: iso_lines, conserve: aggregate }
-    - { id: block_scale,   scale: {zoom: [14,16]}, operator: home_zoom_octree(curvature), primitive: surfels, conserve: lossless_union }
-    - { id: street_scale,  scale: {zoom: [17,22]}, operator: identity(full_density), primitive: surfels, conserve: lossless_union }
-  handoff: { "14->13": crossfade(zoom, 0.4), "17<-16": additive_union }
+    - {
+        id: city_overview,
+        scale: { zoom: [0, 13] },
+        operator: density_grid_contours,
+        primitive: iso_lines,
+        conserve: aggregate,
+      }
+    - {
+        id: block_scale,
+        scale: { zoom: [14, 16] },
+        operator: home_zoom_octree(curvature),
+        primitive: surfels,
+        conserve: lossless_union,
+      }
+    - {
+        id: street_scale,
+        scale: { zoom: [17, 22] },
+        operator: identity(full_density),
+        primitive: surfels,
+        conserve: lossless_union,
+      }
+  handoff: { '14->13': crossfade(zoom, 0.4), '17<-16': additive_union }
   temporal: { static_dynamic_split: true }
-  time_window_policy: per_rung_clamp_with_floor   # reconciles the §3.5 fifth coupling
+  time_window_policy: per_rung_clamp_with_floor # reconciles the §3.5 fifth coupling
 ```
 
 Two things make this more than config: **each rung binds an operator to a primitive** (the build planner
 walks the ladder, runs each operator once, emits a tagged tier/archive) — collapsing the frontend
 mode/flag/layer/suffix/heldBack that is **currently declared in 4+ places that drift** (the `renderModes`
 existence-probe in `AvCockpit.tsx`, the `datasets.ts` memo, the route regex, the `buildDemoLayers`
-if/else, *plus* the deck↔three parity copy) into **one registry row per rung** (§6.1); and **the ladder is
+if/else, _plus_ the deck↔three parity copy) into **one registry row per rung** (§6.1); and **the ladder is
 the boundary between continuous and switch LOD** — adjacent same-primitive `lossless_union` rungs are
 continuous (octree levels), adjacent different-primitive rungs are switches, and the hand-off rule differs.
 
 ### 4.4 Hand-off and the consistency contract
+
 Three hand-off modes, chosen by the two rungs' conserve declarations: **additive union** (no fade; same
 primitive `lossless_union` — client loads `[minZoom..cameraZoom]`, **no parent de-dup** — coarse points
 exist nowhere else, so `lossless_union` must be a **typed property the reader honors**); **crossfade**
@@ -314,26 +346,28 @@ exist nowhere else, so `lossless_union` must be a **typed property the reader ho
 switch** (overview meaningless at detail scale — generalizes the existing `no-overlap` refinement).
 
 **Consistency — same totals, no double-count — is the hard part**, and ties to §3.8:
+
 > **Every rung must be derivable from the SAME conserved accumulator, so a monotone invariant (total count,
 > total flow) is identical across rungs.**
 
-No rung *invents* totals — each is a projection of the conserved set (proven for the octree: 39440 pts
+No rung _invents_ totals — each is a projection of the conserved set (proven for the octree: 39440 pts
 placed once not ×6). This is why **sufficient statistics** matter: a rung carrying `{n,Σx,Σx²}` (not a
 baked mean) lets a coarser rung be re-derived from a finer one at read time without avg-of-avgs,
 guaranteeing the invariant by construction. Every rung operator must also be byte-reproducible (no RNG —
-which is why the RNG-using bake-off winners were *not* shipped), commutative-reduced, sorted-emit.
+which is why the RNG-using bake-off winners were _not_ shipped), commutative-reduced, sorted-emit.
 
 ### 4.5 The gaps — and the meta-gap
+
 Datasets that force one primitive across all zooms but shouldn't: **AV cockpit LiDAR at city scale (the
 headline gap)** — the cockpit forces a single primitive across all zooms; a dense cloud is a saturated blob
-at region scale, yet the iso-lines *already are* the correct city-scale representation, just as a parallel
+at region scale, yet the iso-lines _already are_ the correct city-scale representation, just as a parallel
 manual mode. **Make iso the auto z0–13 rung, additive-octree surfels z14–16, full surfels z17+, of ONE
 dataset** (blocked by the §3.5 fifth coupling — needs the `time_window_policy`). Also: trips/paths without a
 flow-matrix overview (the 180× over-plot blob); point datasets without a summary tier (fall back to
 `min_safe_zoom` clamp instead of showing an aggregate); radar field with no zoom-driven track handoff;
 cumulative "draw" datasets (sub-pixel-dot bug); wide-time ocean/drifter data (a KDE-raster overview rung).
 
-**The meta-gap:** the codebase has *built every operator a representation ladder would need* (contours,
+**The meta-gap:** the codebase has _built every operator a representation ladder would need_ (contours,
 surfels, octree, summary cells, flow matrix, sufficient-stat accumulators) but **never wired any of them to
 zoom as an automatic overview→detail handoff on a single dataset.** The systematization is not new operators
 — it's a **ladder descriptor + a zoom-driven dispatcher + the conserved-accumulator consistency contract.**
@@ -361,7 +395,7 @@ once — **this is also the mechanism for the §4 ladder**, each rung a sub-plan
 and **validation before I/O** (`deny_unknown_fields`).
 
 Build operators as native Rust over Arrow `RecordBatch` (keep zero-copy-to-GPU), borrowing DataFusion's
-*extension contracts* (a `Source` trait with tri-state pushdown; pull-based streaming → bounded memory,
+_extension contracts_ (a `Source` trait with tri-state pushdown; pull-based streaming → bounded memory,
 fixes "buffers all tiles in RAM, fails >10 GB") rather than its engine. Formalize the **medallion
 intermediates**: bronze (raw + provenance), **silver** (CRS-normalized, dateline-clipped, deduped,
 map-matched routes — the expensive-but-reusable layer; any ladder rung reads from silver), gold (binned,
@@ -372,7 +406,7 @@ quantized, packed tiles per rung). Re-bucketing nyc-taxi-paths becomes a silver�
 ## 6. The interface — the rung registry (MVP) first, Recipes later
 
 Every mature system converges on a declarative front door + a documented path to code. But the adversarial
-review was emphatic: **the full declarative recipe with an engine that *derives* materialize-vs-filter is
+review was emphatic: **the full declarative recipe with an engine that _derives_ materialize-vs-filter is
 over-built for v1** — it depends on the unbuilt sufficient-stats / OLAP / Plan-IR layer. Build the registry
 first; the recipe is v2.
 
@@ -380,7 +414,7 @@ first; the recipe is v2.
 generated const), one row per representation rung:
 `{ id, suffix, datasetFlag, deckLayer, threeLayer, label, heldBack, license, conserve, read, scale, handoff }`
 — where `read: union | parent-fallback | materialized` is **hand-declared in v1, not derived**. Pure
-consolidation of existing behavior, highest-leverage/lowest-risk: it kills the 4-place mode drift *plus* the
+consolidation of existing behavior, highest-leverage/lowest-risk: it kills the 4-place mode drift _plus_ the
 deck↔three parity copy; subsumes the `HELD_BACK_AV_MODES` / `WAYMO_LOCAL_ONLY` / `STAGE_LOCAL_ONLY` regex
 gates into structured `heldBack`/`license` fields; gives the dual-copy palette a single source of truth; and
 is the prerequisite that makes the §4 zoom-driven ladder possible to wire.
@@ -390,7 +424,7 @@ with ordered typed stages (Vega-Lite's shape), a small sandboxed expression lang
 params, cascading defaults, a per-axis `lod:` block that declares C1/C2/C3, and an orthogonal `encoding:` block.
 The framework **owns the leaky invariants** (§2.7) rather than each operator re-documenting them, and **recipe
 validation includes the bake-off** (`lidar_summarize_eval.py` / `point_column_stats.rs` become a first-class
-validator; a strategy is promoted default-off→default-on only when the measured win justifies it *and* output
+validator; a strategy is promoted default-off→default-on only when the measured win justifies it _and_ output
 stays byte-identical until flagged).
 
 **6.3 The escape hatch (the 20% — Rust).** Copy Planetiler's `Profile` — the missing **`Dataset` trait** the
@@ -430,7 +464,7 @@ key hashes input bytes + full config + tool version). Then memoized query DAG wi
 **early cutoff** (after recomputing a leaf tile, if its content hash equals the previous build, don't
 invalidate its pack/directory) + **projection firewalls** (each tile depends only on its slice + the config
 fields it reads). Payoff: the recurring "fleet rebuild + R2 re-sync" stops being all-or-nothing — the R2
-pack store *is* the CAS. Transcoding was removed 2026-07-04; if a reoptimize transcoder path is ever
+pack store _is_ the CAS. Transcoding was removed 2026-07-04; if a reoptimize transcoder path is ever
 reintroduced (operate on existing packs, not re-ingest), its use case is OSRM / live-API datasets that
 drift and can't be regenerated from source.
 
@@ -471,26 +505,26 @@ correction).
 
 ## 9. Open decisions
 
-- **D1 — Native operators vs. embed DataFusion** for the `Transform` stage. *Native first* (zero-copy-to-GPU
+- **D1 — Native operators vs. embed DataFusion** for the `Transform` stage. _Native first_ (zero-copy-to-GPU
   control, fewer deps); embed later if SQL-defined transforms/heavy joins become common. Reversible.
-- **D2 — Primary DGGS.** *Quadbin* default (tile-aligned, 1:1 with deck.gl, perfect nesting, `quadbin.rs`
+- **D2 — Primary DGGS.** _Quadbin_ default (tile-aligned, 1:1 with deck.gl, perfect nesting, `quadbin.rs`
   exists); H3 retained for neighbor/flow; S2 only if exact equal-area roll-up matters.
 - **D3 — Expression language.** Lean **CEL** (`cel-interpreter`) for portability + sandboxing over `rhai`.
 - **D4 — How far to take incremental in v1.** Early cutoff at the pack boundary is cheap/high-ROI; full
   projection-firewall partitioning is more work. Ship Phase 6 in two sub-steps.
-- **D5 — Materialize-vs-filter: hand-declared vs engine-derived.** *Hand-declared in v1*; engine derivation
+- **D5 — Materialize-vs-filter: hand-declared vs engine-derived.** _Hand-declared in v1_; engine derivation
   depends on the unbuilt sufficient-stats layer — defer to Phase 4+.
 - **D6 — Time-window reconciliation in the ladder.** When an automatic rung (iso) changes the global time
   window, co-resident layers (boxes, tracks) break. Options: per-rung window clamp with a floor; decouple
   per-layer windows; or forbid switches that change the window while incompatible layers are resident.
-  *Needs a decision before Phase 3 ships the AV ladder.*
+  _Needs a decision before Phase 3 ships the AV ladder._
 
 ## 10. The things to take first
 
 1. ~~Fix determinism~~ (§7.1) — **✅ CLOSED 2026-07-04** (arrow ≥59, byte-reproducible builds); the
    CAS/edge-cache/incremental prerequisite is met.
 2. **Ship the rung registry** (§6.1) — pure consolidation, zero new machinery, kills the 4-place drift +
-   dual-copy palettes; the prerequisite for a zoom-driven ladder. *Highest-leverage, lowest-risk.*
+   dual-copy palettes; the prerequisite for a zoom-driven ladder. _Highest-leverage, lowest-risk._
 3. **Consolidate the σ estimator + voxel-real reducer** (§3.6) — one planarity operator + one reducer
    replace 3–4 copies each; the shared "geometry-aware budget" every spatial rung parameterizes.
 4. **Wire the AV-LiDAR representation ladder** (§4.5) — the proof that "high-level and zoomed-in are
@@ -500,7 +534,7 @@ correction).
 
 **The two conceptual distinctions to get right:** (1) continuous-LOD vs representation-switch (same
 primitive vs different primitive+algorithm) and (2) surviving-sub-unit vs synthesized-unit (the
-materialize-vs-filter predictor) are *orthogonal* axes — a same-primitive operation can still require
+materialize-vs-filter predictor) are _orthogonal_ axes — a same-primitive operation can still require
 materialization (per-zoom clustering). And **LOD changes the resolution of the answer; encoding changes the
 price per unit** — keep that seam clean, but remember encoding levers can still conflict with each other
 (dedup vs locality; pack-quat vs vector-group).
@@ -545,7 +579,7 @@ Enumerated as (overview technique → detail technique, trigger): summary tier (
 features, **zoom band** — the one truly automatic switch); density iso-lines (LineStrings → points, user
 mode `-iso`); density iso-3D (stacked LineStrings → points, `-iso3d`); surfels vs points (oriented disks →
 billboard dots, `-surfel`); scene-split stage+actors (static surfel stage → per-sweep actors, `-stage` —
-the real split is *temporal*); worldbuild (cumulative voxel-deduped cloud → per-sweep, `-world`, held back);
+the real split is _temporal_); worldbuild (cumulative voxel-deduped cloud → per-sweep, `-world`, held back);
 flow-corridor value-matrix (static corridors + `[vertex][bucket]` → individual trips, dataset config);
 per-zoom flowmap clustering (hub-pair corridors → full-res, zoom band, same layer, **synthesized → must
 materialize**); baked edge bundling (KDEEB rivers → straight arcs, `--bake-bundling`); radar isobands

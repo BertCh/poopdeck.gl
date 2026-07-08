@@ -30,7 +30,9 @@ import {
 import { packedFromSingleFile } from './helpers/packed-fixture';
 import { bufferToArrayBuffer, flush } from './helpers/fixtures';
 
-const FIXTURE = fileURLToPath(new URL('./fixtures/sample.stt', import.meta.url));
+const FIXTURE = fileURLToPath(
+  new URL('./fixtures/sample.stt', import.meta.url),
+);
 const FIXTURE_BYTES = new Uint8Array(readFileSync(FIXTURE));
 const DATASET = packedFromSingleFile(FIXTURE_BYTES);
 const DATASET_PACK_KEYS = [...DATASET.objects.keys()]
@@ -38,7 +40,11 @@ const DATASET_PACK_KEYS = [...DATASET.objects.keys()]
   .sort();
 
 /** Pull the fixture's first decodable blob + its metadata once. */
-async function fixtureBlobAndMeta(): Promise<{ blob: Uint8Array; meta: any; e: any }> {
+async function fixtureBlobAndMeta(): Promise<{
+  blob: Uint8Array;
+  meta: any;
+  e: any;
+}> {
   const idx = await new STTArchive({
     url: DATASET.manifestUrl,
     fetch: memFetch(DATASET.objects, DATASET.manifestUrl),
@@ -50,7 +56,9 @@ async function fixtureBlobAndMeta(): Promise<{ blob: Uint8Array; meta: any; e: a
   const metaOff = Number(hv.getBigUint64(22, true));
   const metaLen = Number(hv.getBigUint64(30, true));
   const meta = JSON.parse(
-    new TextDecoder().decode(FIXTURE_BYTES.subarray(metaOff, metaOff + metaLen)),
+    new TextDecoder().decode(
+      FIXTURE_BYTES.subarray(metaOff, metaOff + metaLen),
+    ),
   );
   return { blob, meta, e };
 }
@@ -96,11 +104,18 @@ function makeDataset(
     format: 'stt-packed',
     formatVersion: 1,
     compression: 'zstd',
-    directory: { key: 'index/dir.sttd', length: dir.length, directoryVersion: 5 },
+    directory: {
+      key: 'index/dir.sttd',
+      length: dir.length,
+      directoryVersion: 5,
+    },
     packs: packRefs,
     metadata: meta,
   };
-  objects.set('manifest.json', new TextEncoder().encode(JSON.stringify(manifest)));
+  objects.set(
+    'manifest.json',
+    new TextEncoder().encode(JSON.stringify(manifest)),
+  );
   return objects;
 }
 
@@ -115,12 +130,22 @@ function memFetch(
     const key = url.startsWith(base) ? url.slice(base.length) : url;
     const bytes = objects.get(key);
     if (!bytes) {
-      return { ok: false, status: 404, statusText: 'Not Found', arrayBuffer: async () => new ArrayBuffer(0) };
+      return {
+        ok: false,
+        status: 404,
+        statusText: 'Not Found',
+        arrayBuffer: async () => new ArrayBuffer(0),
+      };
     }
     const range = (init?.headers as Record<string, string> | undefined)?.Range;
     const m = /bytes=(\d+)-(\d+)/.exec(range ?? '');
     if (!m) {
-      return { ok: true, status: 200, statusText: 'OK', arrayBuffer: async () => bufferToArrayBuffer(bytes) };
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        arrayBuffer: async () => bufferToArrayBuffer(bytes),
+      };
     }
     const start = Number(m[1]);
     const end = Math.min(Number(m[2]), bytes.length - 1);
@@ -130,7 +155,10 @@ function memFetch(
       ok: true,
       status: 206,
       statusText: 'Partial Content',
-      headers: { get: (n: string) => (n.toLowerCase() === 'content-range' ? contentRange : null) },
+      headers: {
+        get: (n: string) =>
+          n.toLowerCase() === 'content-range' ? contentRange : null,
+      },
       arrayBuffer: async () => bufferToArrayBuffer(slice),
     };
   }) as unknown as typeof fetch;
@@ -156,16 +184,27 @@ function gatedFetch(
     const range = (init?.headers as Record<string, string> | undefined)?.Range;
     const m = /bytes=(\d+)-(\d+)/.exec(range ?? '');
     if (!m) {
-      return { ok: true, status: 200, statusText: 'OK', arrayBuffer: async () => bufferToArrayBuffer(bytes) };
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        arrayBuffer: async () => bufferToArrayBuffer(bytes),
+      };
     }
     // Enter the gate: bump concurrency, then block until released.
     shared.dispatchOrder.push(tag);
     shared.inFlight++;
     shared.peak = Math.max(shared.peak, shared.inFlight);
-    shared.perSourceInFlight.set(tag, (shared.perSourceInFlight.get(tag) ?? 0) + 1);
+    shared.perSourceInFlight.set(
+      tag,
+      (shared.perSourceInFlight.get(tag) ?? 0) + 1,
+    );
     shared.perSourcePeak.set(
       tag,
-      Math.max(shared.perSourcePeak.get(tag) ?? 0, shared.perSourceInFlight.get(tag)!),
+      Math.max(
+        shared.perSourcePeak.get(tag) ?? 0,
+        shared.perSourceInFlight.get(tag)!,
+      ),
     );
     await new Promise<void>((resolve) => {
       shared.gates.push(resolve);
@@ -173,7 +212,10 @@ function gatedFetch(
       if (cb) cb();
     });
     shared.inFlight--;
-    shared.perSourceInFlight.set(tag, (shared.perSourceInFlight.get(tag) ?? 1) - 1);
+    shared.perSourceInFlight.set(
+      tag,
+      (shared.perSourceInFlight.get(tag) ?? 1) - 1,
+    );
     const start = Number(m[1]);
     const end = Math.min(Number(m[2]), bytes.length - 1);
     const slice = bytes.subarray(start, end + 1);
@@ -182,7 +224,10 @@ function gatedFetch(
       ok: true,
       status: 206,
       statusText: 'Partial Content',
-      headers: { get: (n: string) => (n.toLowerCase() === 'content-range' ? contentRange : null) },
+      headers: {
+        get: (n: string) =>
+          n.toLowerCase() === 'content-range' ? contentRange : null,
+      },
       arrayBuffer: async () => bufferToArrayBuffer(slice),
     };
   }) as unknown as typeof fetch;
@@ -217,7 +262,10 @@ function newShared(): SharedGate {
  * background pump (no fixed iteration count), so it can't break early while
  * requests are still merely QUEUED in the scheduler (not yet at a gate).
  */
-async function drainUntil(shared: SharedGate, done: Promise<unknown>): Promise<void> {
+async function drainUntil(
+  shared: SharedGate,
+  done: Promise<unknown>,
+): Promise<void> {
   let finished = false;
   done.finally(() => {
     finished = true;
@@ -251,7 +299,8 @@ function captureRejection(p: Promise<unknown>): () => Promise<unknown> {
   );
   return async () => {
     await observed;
-    if (!settled || settled.ok) throw new Error('expected promise to reject, but it resolved');
+    if (!settled || settled.ok)
+      throw new Error('expected promise to reject, but it resolved');
     return settled.value;
   };
 }
@@ -272,11 +321,29 @@ describe('STTArchive + SharedRequestScheduler (Phase 2 integration)', () => {
     const objB = makeDataset(K, blob, meta, e);
 
     const shared = newShared();
-    const aA = new STTArchive({ url: urlA, fetch: gatedFetch(objA, urlA, 'A', shared), coalesceGapBytes: 0 });
-    const aB = new STTArchive({ url: urlB, fetch: gatedFetch(objB, urlB, 'B', shared), coalesceGapBytes: 0 });
+    const aA = new STTArchive({
+      url: urlA,
+      fetch: gatedFetch(objA, urlA, 'A', shared),
+      coalesceGapBytes: 0,
+    });
+    const aB = new STTArchive({
+      url: urlB,
+      fetch: gatedFetch(objB, urlB, 'B', shared),
+      coalesceGapBytes: 0,
+    });
 
-    const idsA = (await aA.getIndex()).tiles.map((t) => ({ z: t.zoom, x: t.x, y: t.y, t: t.timeStart }));
-    const idsB = (await aB.getIndex()).tiles.map((t) => ({ z: t.zoom, x: t.x, y: t.y, t: t.timeStart }));
+    const idsA = (await aA.getIndex()).tiles.map((t) => ({
+      z: t.zoom,
+      x: t.x,
+      y: t.y,
+      t: t.timeStart,
+    }));
+    const idsB = (await aB.getIndex()).tiles.map((t) => ({
+      z: t.zoom,
+      x: t.x,
+      y: t.y,
+      t: t.timeStart,
+    }));
 
     const pA = aA.getTiles(idsA);
     const pB = aB.getTiles(idsB);
@@ -322,11 +389,31 @@ describe('STTArchive + SharedRequestScheduler (Phase 2 integration)', () => {
     const objB = makeDataset(K, blob, meta, e);
 
     const shared = newShared();
-    const aA = new STTArchive({ url: urlA, fetch: gatedFetch(objA, urlA, 'A', shared), coalesceGapBytes: 0, schedulerWeight: 1 });
-    const aB = new STTArchive({ url: urlB, fetch: gatedFetch(objB, urlB, 'B', shared), coalesceGapBytes: 0, schedulerWeight: 1 });
+    const aA = new STTArchive({
+      url: urlA,
+      fetch: gatedFetch(objA, urlA, 'A', shared),
+      coalesceGapBytes: 0,
+      schedulerWeight: 1,
+    });
+    const aB = new STTArchive({
+      url: urlB,
+      fetch: gatedFetch(objB, urlB, 'B', shared),
+      coalesceGapBytes: 0,
+      schedulerWeight: 1,
+    });
 
-    const idsA = (await aA.getIndex()).tiles.map((t) => ({ z: t.zoom, x: t.x, y: t.y, t: t.timeStart }));
-    const idsB = (await aB.getIndex()).tiles.map((t) => ({ z: t.zoom, x: t.x, y: t.y, t: t.timeStart }));
+    const idsA = (await aA.getIndex()).tiles.map((t) => ({
+      z: t.zoom,
+      x: t.x,
+      y: t.y,
+      t: t.timeStart,
+    }));
+    const idsB = (await aB.getIndex()).tiles.map((t) => ({
+      z: t.zoom,
+      x: t.x,
+      y: t.y,
+      t: t.timeStart,
+    }));
 
     // A is enqueued first, so it fills the budget before B even enqueues — that
     // is NOT starvation (B just arrived second). The DRR guarantee is about how
@@ -412,7 +499,12 @@ describe('STTArchive + SharedRequestScheduler (Phase 2 integration)', () => {
       coalesceGapBytes: 0,
       maxConcurrentRequests: PER_ARCHIVE_CAP,
     });
-    const ids = (await archive.getIndex()).tiles.map((t) => ({ z: t.zoom, x: t.x, y: t.y, t: t.timeStart }));
+    const ids = (await archive.getIndex()).tiles.map((t) => ({
+      z: t.zoom,
+      x: t.x,
+      y: t.y,
+      t: t.timeStart,
+    }));
     const p = archive.getTiles(ids);
 
     let finished = false;
@@ -456,7 +548,12 @@ describe('STTArchive + SharedRequestScheduler (Phase 2 integration)', () => {
       coalesceGapBytes: 0,
       maxConcurrentRequests: 1000,
     });
-    const ids = (await archive.getIndex()).tiles.map((t) => ({ z: t.zoom, x: t.x, y: t.y, t: t.timeStart }));
+    const ids = (await archive.getIndex()).tiles.map((t) => ({
+      z: t.zoom,
+      x: t.x,
+      y: t.y,
+      t: t.timeStart,
+    }));
     const p = archive.getTiles(ids);
 
     await flush();
@@ -490,7 +587,12 @@ describe('STTArchive + SharedRequestScheduler (Phase 2 integration)', () => {
       coalesceGapBytes: 0,
       maxConcurrentRequests: PER_ARCHIVE_CAP,
     });
-    const ids = (await archive.getIndex()).tiles.map((t) => ({ z: t.zoom, x: t.x, y: t.y, t: t.timeStart }));
+    const ids = (await archive.getIndex()).tiles.map((t) => ({
+      z: t.zoom,
+      x: t.x,
+      y: t.y,
+      t: t.timeStart,
+    }));
     const p = archive.getTiles(ids);
 
     let finished = false;
@@ -533,11 +635,31 @@ describe('STTArchive + SharedRequestScheduler (Phase 2 integration)', () => {
     const objA = makeDataset(K, blob, meta, e);
     const objB = makeDataset(K, blob, meta, e);
     const shared = newShared();
-    const aA = new STTArchive({ url: urlA, fetch: gatedFetch(objA, urlA, 'A', shared), coalesceGapBytes: 0, maxConcurrentRequests: PER_ARCHIVE_CAP });
-    const aB = new STTArchive({ url: urlB, fetch: gatedFetch(objB, urlB, 'B', shared), coalesceGapBytes: 0, maxConcurrentRequests: PER_ARCHIVE_CAP });
+    const aA = new STTArchive({
+      url: urlA,
+      fetch: gatedFetch(objA, urlA, 'A', shared),
+      coalesceGapBytes: 0,
+      maxConcurrentRequests: PER_ARCHIVE_CAP,
+    });
+    const aB = new STTArchive({
+      url: urlB,
+      fetch: gatedFetch(objB, urlB, 'B', shared),
+      coalesceGapBytes: 0,
+      maxConcurrentRequests: PER_ARCHIVE_CAP,
+    });
 
-    const idsA = (await aA.getIndex()).tiles.map((t) => ({ z: t.zoom, x: t.x, y: t.y, t: t.timeStart }));
-    const idsB = (await aB.getIndex()).tiles.map((t) => ({ z: t.zoom, x: t.x, y: t.y, t: t.timeStart }));
+    const idsA = (await aA.getIndex()).tiles.map((t) => ({
+      z: t.zoom,
+      x: t.x,
+      y: t.y,
+      t: t.timeStart,
+    }));
+    const idsB = (await aB.getIndex()).tiles.map((t) => ({
+      z: t.zoom,
+      x: t.x,
+      y: t.y,
+      t: t.timeStart,
+    }));
 
     const both = Promise.all([aA.getTiles(idsA), aB.getTiles(idsB)]);
     let finished = false;
@@ -547,8 +669,12 @@ describe('STTArchive + SharedRequestScheduler (Phase 2 integration)', () => {
     while (!finished) {
       await flush();
       expect(shared.inFlight).toBeLessThanOrEqual(GLOBAL);
-      expect(shared.perSourceInFlight.get('A') ?? 0).toBeLessThanOrEqual(PER_ARCHIVE_CAP);
-      expect(shared.perSourceInFlight.get('B') ?? 0).toBeLessThanOrEqual(PER_ARCHIVE_CAP);
+      expect(shared.perSourceInFlight.get('A') ?? 0).toBeLessThanOrEqual(
+        PER_ARCHIVE_CAP,
+      );
+      expect(shared.perSourceInFlight.get('B') ?? 0).toBeLessThanOrEqual(
+        PER_ARCHIVE_CAP,
+      );
       const gate = shared.gates.shift();
       if (gate) gate();
     }
@@ -580,7 +706,12 @@ describe('STTArchive + SharedRequestScheduler (Phase 2 integration)', () => {
       // No retries so an aborted in-flight fetch resolves the slot immediately.
       retryDelaysMs: [],
     });
-    const ids = (await archive.getIndex()).tiles.map((t) => ({ z: t.zoom, x: t.x, y: t.y, t: t.timeStart }));
+    const ids = (await archive.getIndex()).tiles.map((t) => ({
+      z: t.zoom,
+      x: t.x,
+      y: t.y,
+      t: t.timeStart,
+    }));
     const ctrl = new AbortController();
     const p = archive.getTiles(ids, { signal: ctrl.signal });
     // Observe the rejection synchronously — `p` rejects mid-test on abort.

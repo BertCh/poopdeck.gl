@@ -20,10 +20,22 @@
  * browser-verify-only; the pure kernel pieces it composes are unit-tested in core.
  */
 
-import { Cartesian2, Cartesian3, Color, PointPrimitiveCollection, defined, type PointPrimitive, type Scene } from 'cesium';
+import {
+  Cartesian2,
+  Cartesian3,
+  Color,
+  PointPrimitiveCollection,
+  defined,
+  type PointPrimitive,
+  type Scene,
+} from 'cesium';
 import { getFeatureProperties, type Tile } from '@poopdeck.gl/core';
 import type { RGBA255 } from '@poopdeck.gl/core/style';
-import { timeFilterAlpha, type TimeFilterMode, type TimeFilterParams } from '@poopdeck.gl/core/time-filter';
+import {
+  timeFilterAlpha,
+  type TimeFilterMode,
+  type TimeFilterParams,
+} from '@poopdeck.gl/core/time-filter';
 import type { BinaryFeatures } from '@poopdeck.gl/core';
 import type { SttRenderNode } from '@poopdeck.gl/core/capabilities';
 import type { SttPickResult } from '@poopdeck.gl/core/picking';
@@ -108,7 +120,11 @@ export class CesiumPointLayer implements SttRenderNode {
         position: new Cartesian3(fp.x, fp.y, fp.z),
         color: new Color(fp.r, fp.g, fp.b, fp.a),
         pixelSize,
-        id: { layerId: this.id, binary: fp.binary, featureIndex: fp.featureIndex },
+        id: {
+          layerId: this.id,
+          binary: fp.binary,
+          featureIndex: fp.featureIndex,
+        },
       });
       this.entries.push({
         pp,
@@ -140,7 +156,8 @@ export class CesiumPointLayer implements SttRenderNode {
     const cur = absoluteMs - this.timeOrigin;
     const c = SCRATCH_COLOR;
     for (const e of this.entries) {
-      const alpha = e.a * timeFilterAlpha(this.mode, cur, e.start, e.end, this.params);
+      const alpha =
+        e.a * timeFilterAlpha(this.mode, cur, e.start, e.end, this.params);
       if (alpha === e.lastAlpha) continue; // colour identical to last write — nothing to dirty
       e.lastAlpha = alpha;
       c.red = e.r;
@@ -154,11 +171,20 @@ export class CesiumPointLayer implements SttRenderNode {
   /** Hit-test → the shared `SttPickResult` (feature props joined via `getFeatureProperties`). */
   pick(cssX: number, cssY: number): SttPickResult | null {
     const picked = this.scene.pick(new Cartesian2(cssX, cssY)) as
-      | { id?: { layerId: string; binary: BinaryFeatures; featureIndex: number } }
+      | {
+          id?: {
+            layerId: string;
+            binary: BinaryFeatures;
+            featureIndex: number;
+          };
+        }
       | undefined;
-    if (!defined(picked) || !picked.id || picked.id.layerId !== this.id) return null;
+    if (!defined(picked) || !picked.id || picked.id.layerId !== this.id)
+      return null;
     const { binary, featureIndex } = picked.id;
-    const entry = this.entries.find((e) => e.binary === binary && e.featureIndex === featureIndex);
+    const entry = this.entries.find(
+      (e) => e.binary === binary && e.featureIndex === featureIndex,
+    );
     return {
       object: getFeatureProperties(binary, featureIndex),
       index: featureIndex,

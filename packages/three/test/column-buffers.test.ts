@@ -17,7 +17,12 @@ const pointTile = (
   partial: Partial<BinaryFeatures>,
   timeOffset = 0,
   geometryType = GeometryType.Point,
-) => makePointTile(count, positions, partial, { timeOffset, geometryType, layerName: 'quakes' });
+) =>
+  makePointTile(count, positions, partial, {
+    timeOffset,
+    geometryType,
+    layerName: 'quakes',
+  });
 
 const CAT: Record<string, RGBA> = {
   minor: [80, 90, 120, 255],
@@ -79,12 +84,20 @@ describe('buildColumnBuffers', () => {
       [anchor.longitude, anchor.latitude, anchor.longitude, anchor.latitude],
       {
         categoricalProps: {
-          severity: { indices: new Uint16Array([0, 1]), categories: ['minor', 'major'] },
+          severity: {
+            indices: new Uint16Array([0, 1]),
+            categories: ['minor', 'major'],
+          },
         },
       },
     );
     const buf = buildColumnBuffers([tile], proj, 0, {
-      colorMode: { type: 'categorical', property: 'severity', mapping: CAT, fallback: [0, 0, 0, 0] },
+      colorMode: {
+        type: 'categorical',
+        property: 'severity',
+        mapping: CAT,
+        fallback: [0, 0, 0, 0],
+      },
       defaultElevation: 1,
       radius: 1,
     });
@@ -102,7 +115,10 @@ describe('buildColumnBuffers', () => {
         type: 'ramp',
         property: 'depth',
         domain: [0, 100],
-        range: [[0, 0, 0, 255], [255, 255, 255, 255]],
+        range: [
+          [0, 0, 0, 255],
+          [255, 255, 255, 255],
+        ],
         fallback: [0, 0, 0, 255],
       },
       defaultElevation: 1,
@@ -118,7 +134,9 @@ describe('buildColumnBuffers', () => {
     const mlat = 60;
     const mproj = new MercatorProjection({ longitude: 0, latitude: mlat });
     const mpwu = mproj.metersPerWorldUnit(0, mlat);
-    const tile = pointTile(1, [0, mlat], { numericProps: { h: new Float32Array([200]) } });
+    const tile = pointTile(1, [0, mlat], {
+      numericProps: { h: new Float32Array([200]) },
+    });
     const buf = buildColumnBuffers([tile], mproj, 0, {
       colorMode: { type: 'constant', color: [1, 1, 1, 255] },
       elevationProperty: 'h',
@@ -133,7 +151,13 @@ describe('buildColumnBuffers', () => {
   });
 
   it('skips non-point geometry layers', () => {
-    const tile = pointTile(1, [anchor.longitude, anchor.latitude], {}, 0, GeometryType.LineString);
+    const tile = pointTile(
+      1,
+      [anchor.longitude, anchor.latitude],
+      {},
+      0,
+      GeometryType.LineString,
+    );
     const buf = buildColumnBuffers([tile], proj, 0, {
       colorMode: { type: 'constant', color: [1, 1, 1, 255] },
       defaultElevation: 1,

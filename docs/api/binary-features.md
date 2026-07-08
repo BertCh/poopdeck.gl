@@ -14,7 +14,7 @@ layers in `@poopdeck.gl/layers` consume it directly, and so do the
 ```typescript
 interface BinaryFeatures {
   featureCount: number;
-  geometryType: GeometryType;       // 0=Point, 1=LineString, 2=Polygon
+  geometryType: GeometryType; // 0=Point, 1=LineString, 2=Polygon
 
   /** 2 for [lon, lat], 3 for [lon, lat, alt]. Defaults to 2. */
   positionDimensions?: 2 | 3;
@@ -44,7 +44,7 @@ interface BinaryFeatures {
 
   /** Per-feature start/end, relative to timeOffset (ms). */
   startTimes: Float32Array;
-  endTimes:   Float32Array;
+  endTimes: Float32Array;
 
   /** Absolute time = startTimes[i] + timeOffset. */
   timeOffset: number;
@@ -91,11 +91,14 @@ interface BinaryFeatures {
   numericProps: Record<string, Float32Array>;
 
   /** Categorical properties as indices into a per-tile lookup. */
-  categoricalProps: Record<string, {
-    /** Uint16; 0xffff is the null sentinel. Up to 65535 categories per property per tile. */
-    indices: Uint16Array;
-    categories: string[];
-  }>;
+  categoricalProps: Record<
+    string,
+    {
+      /** Uint16; 0xffff is the null sentinel. Up to 65535 categories per property per tile. */
+      indices: Uint16Array;
+      categories: string[];
+    }
+  >;
 
   /**
    * Interleaved fixed-width vector columns — `FixedSizeList<Float32|UInt8, N>`
@@ -108,7 +111,10 @@ interface BinaryFeatures {
    * `u8` colour leaves. `decodeTile` always sets it (empty when the tile
    * carries no FixedSizeList columns).
    */
-  vectorProps?: Record<string, { value: Float32Array | Uint8Array; size: number }>;
+  vectorProps?: Record<
+    string,
+    { value: Float32Array | Uint8Array; size: number }
+  >;
 }
 ```
 
@@ -148,7 +154,7 @@ Consequences:
 
 ## loaders.gl alignment caveats
 
-The shape is *inspired by* loaders.gl `BinaryFeatures`, not conformant:
+The shape is _inspired by_ loaders.gl `BinaryFeatures`, not conformant:
 
 - loaders.gl splits points/lines/polygons into three parallel objects;
   STT carries ONE geometry type per layer with a `geometryType` tag.

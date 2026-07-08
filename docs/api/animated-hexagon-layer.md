@@ -14,7 +14,7 @@ aggregated weight, giving the iconic deck.gl hexagon look.
 visible tile's points are consolidated into one binary buffer set, cached by
 the visible-tile-set key so it rebuilds only when that set (or the weight
 config) changes, never per frame. The single consolidated weight buffer is
-aliased to *both* of HexagonLayer's weight accessors (`getColorWeight` and
+aliased to _both_ of HexagonLayer's weight accessors (`getColorWeight` and
 `getElevationWeight`), so one weight column drives both colour and elevation.
 
 **Time animation.** The canonical HexagonLayer has no notion of time, so the
@@ -54,12 +54,12 @@ const layer = new AnimatedHexagonLayer({
   id: 'pickup-hexbin',
   data: '/data/nyc-taxi/manifest.json',
   currentTime,
-  timeWindow: 30 * 60 * 1000,       // 30 min window around the play head
-  radius: 500,                       // hex bin radius, meters
+  timeWindow: 30 * 60 * 1000, // 30 min window around the play head
+  radius: 500, // hex bin radius, meters
   extruded: true,
   elevationScale: 20,
   elevationRange: [0, 3000],
-  weightProperty: 'passengers',      // unset → a pure COUNT hexbin
+  weightProperty: 'passengers', // unset → a pure COUNT hexbin
   hexagonAggregation: 'SUM',
 });
 ```
@@ -73,42 +73,42 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 
 ### Binning
 
-| Property | Type | Default | Description |
-| -------- | ---- | ------- | ----------- |
-| `radius` | `number` | `1000` | Radius of a hexagon bin, in meters. |
-| `coverage` | `number` | `1` | Cell size multiplier, clamped `0`–`1`. Lower values leave gaps between adjacent hexes. |
+| Property   | Type     | Default | Description                                                                            |
+| ---------- | -------- | ------- | -------------------------------------------------------------------------------------- |
+| `radius`   | `number` | `1000`  | Radius of a hexagon bin, in meters.                                                    |
+| `coverage` | `number` | `1`     | Cell size multiplier, clamped `0`–`1`. Lower values leave gaps between adjacent hexes. |
 
 ### Colour
 
-| Property | Type | Default | Description |
-| -------- | ---- | ------- | ----------- |
-| `colorRange` | `Color[]` | 6-class YlOrRd | Cell colour ramp (low → high aggregated weight). |
-| `colorDomain` | `[number, number] \| null` | `null` | Pinned colour scale domain. `null` → the canonical layer auto-ranges against the current window's aggregated weights. |
-| `colorScaleType` | `'quantize' \| 'linear' \| 'quantile' \| 'ordinal'` | `'quantize'` | Colour scale function. |
-| `upperPercentile` | `number` | `100` | Hide cells above this colour percentile (`0`–`100`). |
-| `lowerPercentile` | `number` | `0` | Hide cells below this colour percentile (`0`–`100`). |
+| Property          | Type                                                | Default        | Description                                                                                                           |
+| ----------------- | --------------------------------------------------- | -------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `colorRange`      | `Color[]`                                           | 6-class YlOrRd | Cell colour ramp (low → high aggregated weight).                                                                      |
+| `colorDomain`     | `[number, number] \| null`                          | `null`         | Pinned colour scale domain. `null` → the canonical layer auto-ranges against the current window's aggregated weights. |
+| `colorScaleType`  | `'quantize' \| 'linear' \| 'quantile' \| 'ordinal'` | `'quantize'`   | Colour scale function.                                                                                                |
+| `upperPercentile` | `number`                                            | `100`          | Hide cells above this colour percentile (`0`–`100`).                                                                  |
+| `lowerPercentile` | `number`                                            | `0`            | Hide cells below this colour percentile (`0`–`100`).                                                                  |
 
 ### Elevation
 
-| Property | Type | Default | Description |
-| -------- | ---- | ------- | ----------- |
-| `extruded` | `boolean` | `true` | Whether to extrude cells by their aggregated weight. |
-| `elevationScale` | `number` | `1` | Cell elevation multiplier. |
-| `elevationRange` | `[number, number]` | `[0, 1000]` | Elevation scale output range. |
-| `elevationDomain` | `[number, number] \| null` | `null` | Pinned elevation scale input domain. `null` → auto-range against the current window's aggregated weights. |
-| `elevationScaleType` | `'linear' \| 'quantile'` | `'linear'` | Elevation scale function. |
-| `elevationUpperPercentile` | `number` | `100` | Hide cells above this elevation percentile (`0`–`100`). |
-| `elevationLowerPercentile` | `number` | `0` | Hide cells below this elevation percentile (`0`–`100`). |
-| `material` | `Material \| boolean` | `true` | Lighting material (applies when `extruded`). |
+| Property                   | Type                       | Default     | Description                                                                                               |
+| -------------------------- | -------------------------- | ----------- | --------------------------------------------------------------------------------------------------------- |
+| `extruded`                 | `boolean`                  | `true`      | Whether to extrude cells by their aggregated weight.                                                      |
+| `elevationScale`           | `number`                   | `1`         | Cell elevation multiplier.                                                                                |
+| `elevationRange`           | `[number, number]`         | `[0, 1000]` | Elevation scale output range.                                                                             |
+| `elevationDomain`          | `[number, number] \| null` | `null`      | Pinned elevation scale input domain. `null` → auto-range against the current window's aggregated weights. |
+| `elevationScaleType`       | `'linear' \| 'quantile'`   | `'linear'`  | Elevation scale function.                                                                                 |
+| `elevationUpperPercentile` | `number`                   | `100`       | Hide cells above this elevation percentile (`0`–`100`).                                                   |
+| `elevationLowerPercentile` | `number`                   | `0`         | Hide cells below this elevation percentile (`0`–`100`).                                                   |
+| `material`                 | `Material \| boolean`      | `true`      | Lighting material (applies when `extruded`).                                                              |
 
 ### Aggregation
 
-| Property | Type | Default | Description |
-| -------- | ---- | ------- | ----------- |
-| `hexagonAggregation` | `'SUM' \| 'MEAN' \| 'MIN' \| 'MAX' \| 'COUNT'` | `'SUM'` | Aggregation operation used for both colour and elevation, unless `colorAggregation` / `elevationAggregation` overrides it. |
-| `colorAggregation` | `'SUM' \| 'MEAN' \| 'MIN' \| 'MAX' \| 'COUNT' \| null` | `null` | Colour aggregation operation. `null` → inherit `hexagonAggregation`. |
-| `elevationAggregation` | `'SUM' \| 'MEAN' \| 'MIN' \| 'MAX' \| 'COUNT' \| null` | `null` | Elevation aggregation operation. `null` → inherit `hexagonAggregation`. |
-| `gpuAggregation` | `boolean` | `true` | Perform binning on the GPU when possible. Forced `true` for the time window — see below. |
+| Property               | Type                                                   | Default | Description                                                                                                                |
+| ---------------------- | ------------------------------------------------------ | ------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `hexagonAggregation`   | `'SUM' \| 'MEAN' \| 'MIN' \| 'MAX' \| 'COUNT'`         | `'SUM'` | Aggregation operation used for both colour and elevation, unless `colorAggregation` / `elevationAggregation` overrides it. |
+| `colorAggregation`     | `'SUM' \| 'MEAN' \| 'MIN' \| 'MAX' \| 'COUNT' \| null` | `null`  | Colour aggregation operation. `null` → inherit `hexagonAggregation`.                                                       |
+| `elevationAggregation` | `'SUM' \| 'MEAN' \| 'MIN' \| 'MAX' \| 'COUNT' \| null` | `null`  | Elevation aggregation operation. `null` → inherit `hexagonAggregation`.                                                    |
+| `gpuAggregation`       | `boolean`                                              | `true`  | Perform binning on the GPU when possible. Forced `true` for the time window — see below.                                   |
 
 ### Weight column
 
@@ -116,11 +116,11 @@ The weight is a baked property-column **name** (not a per-feature function
 accessor — binary tiles cannot run per-feature JS; a function-valued alias
 warns once and falls back). One weight column drives both colour and elevation.
 
-| Property | Type | Default | Description |
-| -------- | ---- | ------- | ----------- |
-| `getColorWeight` | `string \| null` | `null` | Upstream-vocabulary alias for the colour weight column name. Wins over `getElevationWeight` and `weightProperty`. |
-| `getElevationWeight` | `string \| null` | `null` | Upstream-vocabulary alias for the elevation weight column name. Used when `getColorWeight` is unset. |
-| `weightProperty` | `string \| null` | `null` | Legacy weight column name. Unset → every point weighs `1.0` (a pure COUNT hexbin). `getColorWeight` / `getElevationWeight` win over it. |
+| Property             | Type             | Default | Description                                                                                                                             |
+| -------------------- | ---------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `getColorWeight`     | `string \| null` | `null`  | Upstream-vocabulary alias for the colour weight column name. Wins over `getElevationWeight` and `weightProperty`.                       |
+| `getElevationWeight` | `string \| null` | `null`  | Upstream-vocabulary alias for the elevation weight column name. Used when `getColorWeight` is unset.                                    |
+| `weightProperty`     | `string \| null` | `null`  | Legacy weight column name. Unset → every point weighs `1.0` (a pure COUNT hexbin). `getColorWeight` / `getElevationWeight` win over it. |
 
 ## Aggregation and behavior notes
 

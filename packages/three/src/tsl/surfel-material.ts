@@ -86,17 +86,26 @@ function unpackQuat(p: TSLNode): TSLNode {
   const a = p.x;
   const b = p.y;
   const c = p.z;
-  const d = sqrt(max(float(0), float(1).sub(a.mul(a)).sub(b.mul(b)).sub(c.mul(c))));
+  const d = sqrt(
+    max(float(0), float(1).sub(a.mul(a)).sub(b.mul(b)).sub(c.mul(c))),
+  );
   const m = int(p.w.add(0.5));
   return select(
     m.equal(0),
     vec4(d, a, b, c),
-    select(m.equal(1), vec4(a, d, b, c), select(m.equal(2), vec4(a, b, d, c), vec4(a, b, c, d))),
+    select(
+      m.equal(1),
+      vec4(a, d, b, c),
+      select(m.equal(2), vec4(a, b, d, c), vec4(a, b, c, d)),
+    ),
   );
 }
 
 /** Quaternion → the two in-plane basis vectors (matrix columns 0 and 1). */
-function quatTangentBitangent(q: TSLNode): { tangent: TSLNode; bitangent: TSLNode } {
+function quatTangentBitangent(q: TSLNode): {
+  tangent: TSLNode;
+  bitangent: TSLNode;
+} {
   const x = q.x;
   const y = q.y;
   const z = q.z;
@@ -123,7 +132,9 @@ function quatTangentBitangent(q: TSLNode): { tangent: TSLNode; bitangent: TSLNod
  * attributes `sttCenter` (vec3, ENU metres), `sttQuat` (vec4), `sttScale` (vec2),
  * `sttColor` (vec4), `sttStart` (float, relative ms), `sttDynamic` (float 0/1).
  */
-export function createSurfelMaterial(opts: SurfelMaterialOptions = {}): SurfelMaterialBundle {
+export function createSurfelMaterial(
+  opts: SurfelMaterialOptions = {},
+): SurfelMaterialBundle {
   const u = new SurfelUniforms();
 
   const center = attribute('sttCenter', 'vec3');
@@ -144,7 +155,10 @@ export function createSurfelMaterial(opts: SurfelMaterialOptions = {}): SurfelMa
   // So this whole block is BRANCH-FREE: `step()` casts a comparison to a 0/1
   // float and `mix(a, b, t∈{0,1})` is the arithmetic equivalent of `select`.
   const age = u.currentTime.sub(startTime);
-  const sigma = max(mix(u.temporalSigma, u.temporalSigmaDynamic, isDynamic), float(1));
+  const sigma = max(
+    mix(u.temporalSigma, u.temporalSigmaDynamic, isDynamic),
+    float(1),
+  );
   const dt = age.div(sigma);
   const symWeight = exp(dt.mul(dt).mul(-0.5));
   const symVisF = step(float(0.0111), symWeight); // symWeight ≥ 0.0111 ? 1 : 0
@@ -155,7 +169,9 @@ export function createSurfelMaterial(opts: SurfelMaterialOptions = {}): SurfelMa
   const cumWeight = mix(float(1), ramp, fadeOn);
   const cumVisF = step(float(0), age); // age ≥ 0 ? 1 : 0
   // cumulative-static instance: cumulative uniform ON and this surfel is static.
-  const cumStaticF = step(float(0.5), u.cumulative).mul(oneMinus(step(float(0.5), isDynamic)));
+  const cumStaticF = step(float(0.5), u.cumulative).mul(
+    oneMinus(step(float(0.5), isDynamic)),
+  );
 
   const weight = mix(symWeight, cumWeight, cumStaticF);
   const visible = mix(symVisF, cumVisF, cumStaticF);
@@ -179,7 +195,11 @@ export function createSurfelMaterial(opts: SurfelMaterialOptions = {}): SurfelMa
 
   const r2 = vUv.dot(vUv);
   const g = exp(r2.mul(u.falloff).negate());
-  const alpha = select(r2.greaterThan(1), float(0), vColor.a.mul(u.opacity).mul(vWeight).mul(g));
+  const alpha = select(
+    r2.greaterThan(1),
+    float(0),
+    vColor.a.mul(u.opacity).mul(vWeight).mul(g),
+  );
 
   material.colorNode = vColor.xyz;
   material.opacityNode = alpha;
@@ -208,14 +228,18 @@ export interface SurfelUniformValues {
   revealFade?: number;
 }
 
-export function updateSurfelUniforms(u: SurfelUniforms, v: SurfelUniformValues): void {
+export function updateSurfelUniforms(
+  u: SurfelUniforms,
+  v: SurfelUniformValues,
+): void {
   const sigma = v.temporalSigma ?? 180;
   u.currentTime.value = v.relativeCurrentTime;
   u.temporalSigma.value = sigma;
   // 0/unset dynamic σ falls back to the static σ (deck parity).
-  u.temporalSigmaDynamic.value = v.temporalSigmaDynamic && v.temporalSigmaDynamic > 0
-    ? v.temporalSigmaDynamic
-    : sigma;
+  u.temporalSigmaDynamic.value =
+    v.temporalSigmaDynamic && v.temporalSigmaDynamic > 0
+      ? v.temporalSigmaDynamic
+      : sigma;
   u.sizeScale.value = v.sizeScale ?? 1;
   u.falloff.value = v.falloff ?? 3;
   u.opacity.value = v.opacity ?? 1;

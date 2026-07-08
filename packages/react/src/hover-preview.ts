@@ -10,5 +10,5 @@
  *
  *   import { HoverPreview } from '@poopdeck.gl/react/hover-preview';
  */
-export { HoverPreview } from "./components/HoverPreview.js";
-export type { HoverPreviewProps } from "./components/HoverPreview.js";
+export { HoverPreview } from './components/HoverPreview.js';
+export type { HoverPreviewProps } from './components/HoverPreview.js';

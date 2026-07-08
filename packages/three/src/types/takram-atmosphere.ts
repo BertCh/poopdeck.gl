@@ -78,7 +78,10 @@ declare module '@takram/three-atmosphere/webgpu' {
    * `addLight` `lightClass` slot both accept it.
    */
   export const AtmosphereLight: {
-    new (distance?: number, body?: 'sun' | 'moon'): import('three').DirectionalLight;
+    new (
+      distance?: number,
+      body?: 'sun' | 'moon',
+    ): import('three').DirectionalLight;
   };
 
   /**
@@ -90,7 +93,9 @@ declare module '@takram/three-atmosphere/webgpu' {
   export const AtmosphereLightNode: {
     new (
       light?: import('three').DirectionalLight | null,
-    ): import('three/webgpu').AnalyticLightNode<import('three').DirectionalLight>;
+    ): import('three/webgpu').AnalyticLightNode<
+      import('three').DirectionalLight
+    >;
   };
 
   /** MRT view-Z accessor fed into `mrt({ output, viewZUnit })` for the pass. */
@@ -115,7 +120,9 @@ declare module '@takram/three-atmosphere/webgpu' {
   ): import('three/webgpu').Node;
 
   /** Image-based sky lighting node for `scene.environmentNode`. */
-  export function skyEnvironment(size?: number): import('three/webgpu').Node<'vec3'>;
+  export function skyEnvironment(
+    size?: number,
+  ): import('three/webgpu').Node<'vec3'>;
 }
 
 declare module '@takram/three-atmosphere' {

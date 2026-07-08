@@ -53,7 +53,7 @@ Two rules to internalize:
 - Suggestions marked `[LOSSY - opt-in]` (quantization, budgets) **never**
   join the suggested command and are never auto-applied. You opt in per
   flag, per dataset.
-- Where it matters, projections are *measured* — the advisor trial-encodes
+- Where it matters, projections are _measured_ — the advisor trial-encodes
   your sample rather than extrapolating from a formula.
 
 ## 2. Build: `--auto` vs `--auto encode`
@@ -128,7 +128,7 @@ stt-optimize doctor --archive my-dataset/
   fix: --exclude source
 ```
 
-Every rule keys off numbers measured for *this* tileset and cites them in
+Every rule keys off numbers measured for _this_ tileset and cites them in
 its message; the rule catalog (raw f64 columns, expensive feature ids, dead
 columns, z0 pyramid bombs, unpaged large directories, oversized tiles,
 missing summary tier) is in the
@@ -138,7 +138,7 @@ a regression fails the pipeline instead of shipping.
 
 ### `diff` — gate the rebuild
 
-After acting on a finding, rebuild to a *new* directory and compare:
+After acting on a finding, rebuild to a _new_ directory and compare:
 
 ```bash
 stt-optimize diff --before my-dataset/ --after my-dataset-v2/
@@ -168,7 +168,7 @@ duration, and a layer-type hint. On the JavaScript side it surfaces as
 
 ```ts
 const meta = await archive.getMetadata();
-const speed = meta.styleHints?.properties.find((p) => p.name === "speed");
+const speed = meta.styleHints?.properties.find((p) => p.name === 'speed');
 const domain = speed?.suggestedDomain ?? [0, 30]; // baked [min, ~p97]
 ```
 
@@ -211,7 +211,7 @@ stt-optimize diff --before ais-tiles/ --after ais-tiles-v2/ --fail-on-growth 5
 ```
 
 The numbers above are illustrative — that's the point. Run the loop on
-*your* dataset; the flags that pay are the ones your measurements name.
+_your_ dataset; the flags that pay are the ones your measurements name.
 
 ## Where to go next
 

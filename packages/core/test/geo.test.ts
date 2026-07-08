@@ -12,7 +12,8 @@ import {
   zoomForWorldUnitsPerPixel,
 } from '../src/geo';
 
-const near = (a: number, b: number, eps = 1e-6) => expect(Math.abs(a - b)).toBeLessThan(eps);
+const near = (a: number, b: number, eps = 1e-6) =>
+  expect(Math.abs(a - b)).toBeLessThan(eps);
 
 describe('LocalEnuProjection', () => {
   it('round-trips lon/lat/alt and is identity-ish at the anchor', () => {
@@ -55,7 +56,11 @@ describe('GlobeProjection — sphere datum (v1 byte-identity)', () => {
     const DEG2RAD = Math.PI / 180;
     const r = EARTH_RADIUS + alt;
     const cosLat = Math.cos(lat * DEG2RAD);
-    const expected = [r * cosLat * Math.cos(lon * DEG2RAD), r * cosLat * Math.sin(lon * DEG2RAD), r * Math.sin(lat * DEG2RAD)];
+    const expected = [
+      r * cosLat * Math.cos(lon * DEG2RAD),
+      r * cosLat * Math.sin(lon * DEG2RAD),
+      r * Math.sin(lat * DEG2RAD),
+    ];
     const got = g.project(lon, lat, alt);
     near(got[0], expected[0], 1e-3);
     near(got[1], expected[1], 1e-3);
@@ -73,7 +78,9 @@ describe('GlobeProjection — sphere datum (v1 byte-identity)', () => {
 
 describe('GlobeProjection — WGS84 ellipsoid datum', () => {
   it('round-trips lon/lat/alt via Bowring', () => {
-    const g = new GlobeProjection({ longitude: 0, latitude: 0 }, EARTH_RADIUS, { datum: 'wgs84' });
+    const g = new GlobeProjection({ longitude: 0, latitude: 0 }, EARTH_RADIUS, {
+      datum: 'wgs84',
+    });
     for (const [lon, lat, alt] of [
       [0, 0, 0],
       [-122.4, 37.8, 250],
@@ -89,7 +96,11 @@ describe('GlobeProjection — WGS84 ellipsoid datum', () => {
   });
   it('differs from the sphere at mid-latitude (the ~20km registration point)', () => {
     const sphere = new GlobeProjection();
-    const wgs84 = new GlobeProjection({ longitude: 0, latitude: 0 }, EARTH_RADIUS, { datum: 'wgs84' });
+    const wgs84 = new GlobeProjection(
+      { longitude: 0, latitude: 0 },
+      EARTH_RADIUS,
+      { datum: 'wgs84' },
+    );
     const s = sphere.project(0, 45, 0);
     const w = wgs84.project(0, 45, 0);
     const d = Math.hypot(s[0] - w[0], s[1] - w[1], s[2] - w[2]);

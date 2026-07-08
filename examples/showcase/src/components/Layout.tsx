@@ -29,7 +29,10 @@ const Layout: React.FC = () => {
             <button
               onClick={() => setSidebarOpen(!sidebarOpen)}
               className="lg:hidden fixed top-3 left-3 z-50 p-2 rounded transition-colors"
-              style={{ background: 'var(--surface)', border: '1px solid var(--hairline)' }}
+              style={{
+                background: 'var(--surface)',
+                border: '1px solid var(--hairline)',
+              }}
               aria-label="Toggle menu"
             >
               <div className="w-4 h-3 flex flex-col justify-between">
@@ -37,21 +40,25 @@ const Layout: React.FC = () => {
                   className="block h-0.5 transition-all"
                   style={{
                     background: 'var(--ink-700)',
-                    transform: sidebarOpen ? 'rotate(45deg) translateY(5px)' : 'none'
+                    transform: sidebarOpen
+                      ? 'rotate(45deg) translateY(5px)'
+                      : 'none',
                   }}
                 />
                 <span
                   className="block h-0.5 transition-all"
                   style={{
                     background: 'var(--ink-700)',
-                    opacity: sidebarOpen ? 0 : 1
+                    opacity: sidebarOpen ? 0 : 1,
                   }}
                 />
                 <span
                   className="block h-0.5 transition-all"
                   style={{
                     background: 'var(--ink-700)',
-                    transform: sidebarOpen ? 'rotate(-45deg) translateY(-5px)' : 'none'
+                    transform: sidebarOpen
+                      ? 'rotate(-45deg) translateY(-5px)'
+                      : 'none',
                   }}
                 />
               </div>

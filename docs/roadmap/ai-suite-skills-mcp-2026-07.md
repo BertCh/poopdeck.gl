@@ -18,12 +18,13 @@
 >
 > **Method (2026-07-07):** four parallel research streams — (1) SoTA Agent Skills
 > (Anthropic docs + the agentskills.io open standard), (2) SoTA MCP (spec 2025-11-25
-> + the 2026-07-28 RC + Linux Foundation governance), (3) best-in-class comparable
-> AI dev suites (Cloudflare, Playwright, GitHub, Supabase, Stripe, Sentry, Postgres,
-> CARTO, Mapbox, Felt, kepler.gl…), (4) a full map of poopdeck.gl's own surface.
-> Every external claim carries a URL in §11. This doc **supersedes and refines
-> Phase D of `carto-integration-2026-07.md`** (D1 MCP / D2 json-registration /
-> D3 skills), which was the original one-paragraph sketch.
+>
+> - the 2026-07-28 RC + Linux Foundation governance), (3) best-in-class comparable
+>   AI dev suites (Cloudflare, Playwright, GitHub, Supabase, Stripe, Sentry, Postgres,
+>   CARTO, Mapbox, Felt, kepler.gl…), (4) a full map of poopdeck.gl's own surface.
+>   Every external claim carries a URL in §11. This doc **supersedes and refines
+>   Phase D of `carto-integration-2026-07.md`** (D1 MCP / D2 json-registration /
+>   D3 skills), which was the original one-paragraph sketch.
 >
 > **Status:** design record — **now largely implemented (2026-07-07, uncommitted).**
 > The `@poopdeck.gl/mcp` server was built out (by the CARTO Phase-D pass) and then
@@ -36,19 +37,19 @@
 ## 0. Verdict
 
 1. **The two primitives are complementary, not competing, and the field has
-   converged on the split.** MCP = *connectivity* (live introspection + actions
-   over external systems); Skills = *procedural know-how* (playbooks, opinions,
+   converged on the split.** MCP = _connectivity_ (live introspection + actions
+   over external systems); Skills = _procedural know-how_ (playbooks, opinions,
    and crucially **which tool to reach for**). The one-line test everyone now
-   quotes: *"If you're explaining how to do something, that's a skill. If you need
-   the model to access something, that's MCP."* Ship **both, as one plugin**.
+   quotes: _"If you're explaining how to do something, that's a skill. If you need
+   the model to access something, that's MCP."_ Ship **both, as one plugin**.
 
 2. **poopdeck.gl's `stt-*` Rust CLIs are its "wrangler."** The exemplar suite is
-   Cloudflare's: a `wrangler` **skill** that teaches the agent *when to call the
-   MCP API vs the wrangler CLI*, over a set of **MCP** servers that do live ops.
+   Cloudflare's: a `wrangler` **skill** that teaches the agent _when to call the
+   MCP API vs the wrangler CLI_, over a set of **MCP** servers that do live ops.
    Map directly: poopdeck skills carry the workflow/opinion and route between the
    MCP and the `stt-build`/`stt-optimize`/`stt-serve`/`stt-validate` CLIs.
 
-3. **There is real whitespace.** *No official deck.gl or kepler.gl MCP exists.*
+3. **There is real whitespace.** _No official deck.gl or kepler.gl MCP exists._
    The nearest analog — CARTO Agentic Tools (3 tools that teach the agent the
    deck.gl-JSON spec) — is closed/hosted. poopdeck.gl can be **the open,
    self-hostable, temporal-native deck.gl agent surface** — which is exactly what
@@ -93,15 +94,15 @@ Goose, and ~40 more listed on the standard's showcase).
 **The core mechanism — 3-tier progressive disclosure** (the reason skills are
 cheap and MCP is not):
 
-| Level | Loaded | Cost | Content |
-|---|---|---|---|
-| **L1 metadata** | always, in system prompt | **~100 tok/skill** | `name` + `description` only |
-| **L2 body** | when the skill triggers | **target < 5k tok / < 500 lines** | `SKILL.md` |
-| **L3 resources** | on demand / on execution | **0 tok until read** | `references/*.md`, `scripts/*` (run via bash — *source never enters context*, only output) |
+| Level            | Loaded                   | Cost                              | Content                                                                                    |
+| ---------------- | ------------------------ | --------------------------------- | ------------------------------------------------------------------------------------------ |
+| **L1 metadata**  | always, in system prompt | **~100 tok/skill**                | `name` + `description` only                                                                |
+| **L2 body**      | when the skill triggers  | **target < 5k tok / < 500 lines** | `SKILL.md`                                                                                 |
+| **L3 resources** | on demand / on execution | **0 tok until read**              | `references/*.md`, `scripts/*` (run via bash — _source never enters context_, only output) |
 
 **Frontmatter (open standard):** `name` (req; ≤64 chars, kebab-case, **must match
 the folder name**, no "claude"/"anthropic") and `description` (req; ≤1024 chars,
-**third-person, states both what it does AND when to use it** — the *sole* trigger
+**third-person, states both what it does AND when to use it** — the _sole_ trigger
 signal). Optional: `license`, `compatibility` (≤500 chars env requirements),
 `metadata` (arbitrary string map — **`version` lives here**, there is no top-level
 version field), `allowed-tools` (experimental, implementation-varying). Claude Code
@@ -115,7 +116,7 @@ Descriptions are the trigger: make them slightly pushy, pack concrete keywords.
 Gerund naming (`building-stt-datasets`). **Match degrees of freedom to task
 fragility** — high freedom = prose for open-ended tasks; **low freedom = exact
 scripts ("run this, do not modify") for fragile/consistency-critical ops** (e.g.
-the summary-id repair, a publish-encode command). Keep references *one level deep*.
+the summary-id repair, a publish-encode command). Keep references _one level deep_.
 **Eval-driven**: ≥3 evals before docs, baseline without-skill vs with-skill.
 Reference MCP tools by fully-qualified `ServerName:tool_name`.
 
@@ -142,6 +143,7 @@ isolated stateful session; **a server cannot see the full conversation or peer
 servers** (a structural security property). Capabilities negotiated at `initialize`.
 
 **Primitives** (server-exposed unless noted):
+
 - **Tools** — model-controlled functions. `tools/list`/`tools/call`; results carry
   text/image/audio, **structured JSON output** (since 2025-06-18), and **resource
   links**; annotations (readOnly / destructive / idempotent hints).
@@ -149,13 +151,13 @@ servers** (a structural security property). Capabilities negotiated at `initiali
   templates** (RFC 6570) for parameterized/dynamic resources + autocomplete;
   **subscriptions** (`resources/subscribe` → `notifications/resources/updated`).
 - **Prompts** — user-controlled parameterized templates (`prompts/get`).
-- **Sampling** *(client-exposed; deprecated in the RC)* — server asks the client's
+- **Sampling** _(client-exposed; deprecated in the RC)_ — server asks the client's
   LLM for a completion; 2025-11-25 adds `tools`/`toolChoice`.
-- **Elicitation** *(client-exposed)* — request structured user input mid-run:
+- **Elicitation** _(client-exposed)_ — request structured user input mid-run:
   **form** mode (flat JSON Schema, primitives only) and **url** mode (new — send
   the user out-of-band for secrets/OAuth/payments). **Form mode MUST NOT request
   secrets.**
-- **Roots / Logging** *(both deprecated in the RC, 12-month window)*, **Completions**
+- **Roots / Logging** _(both deprecated in the RC, 12-month window)_, **Completions**
   (argument autocomplete), **Notifications** (`progress`, `*/list_changed`, …),
   **Ping**.
 
@@ -184,10 +186,11 @@ Cursor, Windsurf, Zed, JetBrains, plus the Anthropic **MCP Connector** (call rem
 MCP straight from the Messages API).
 
 **The token-efficiency frontier (this reshapes the server design).** MCP tool defs
-load *up front* — 5 servers / 58 tools ≈ **55k tokens before the conversation
+load _up front_ — 5 servers / 58 tools ≈ **55k tokens before the conversation
 starts**. Three converging mitigations:
-- **Code execution with MCP** (Anthropic) — present servers as a *filesystem of
-  typed code APIs* the agent imports from a sandbox; load only the tools it needs;
+
+- **Code execution with MCP** (Anthropic) — present servers as a _filesystem of
+  typed code APIs_ the agent imports from a sandbox; load only the tools it needs;
   large intermediate data stays in the sandbox, never in context. Worked example:
   **150k → 2k tokens (~98.7%)**. Agents can persist reusable code into a
   `./skills/` dir — the concrete bridge from MCP-calling to Skills.
@@ -201,18 +204,18 @@ starts**. Three converging mitigations:
 
 ## 3. The complementarity model (how the two compose)
 
-| | **Skills** | **MCP** | **Static (`llms.txt`/`.md`)** |
-|---|---|---|---|
-| Carries | procedure, opinion, guardrails, **routing** | live introspection, actions, data | frozen reference |
-| Invoked | model-invoked by `description` | tool call | manually pointed-at |
-| Cost | ~100 tok idle, <5k on trigger, L3 free | tool defs load up front | crawl-time (mostly unused) |
-| Best for | multi-step workflows, "which layer / which tool", consistency-critical ops | real-time state, mutating actions, big data | cheap fallback |
-| Analogy | the expert employee | access to the aisles | the printed manual |
+|          | **Skills**                                                                 | **MCP**                                     | **Static (`llms.txt`/`.md`)** |
+| -------- | -------------------------------------------------------------------------- | ------------------------------------------- | ----------------------------- |
+| Carries  | procedure, opinion, guardrails, **routing**                                | live introspection, actions, data           | frozen reference              |
+| Invoked  | model-invoked by `description`                                             | tool call                                   | manually pointed-at           |
+| Cost     | ~100 tok idle, <5k on trigger, L3 free                                     | tool defs load up front                     | crawl-time (mostly unused)    |
+| Best for | multi-step workflows, "which layer / which tool", consistency-critical ops | real-time state, mutating actions, big data | cheap fallback                |
+| Analogy  | the expert employee                                                        | access to the aisles                        | the printed manual            |
 
-**Structural claim (Anthropic):** *"A single skill can orchestrate multiple MCP
-servers, and a single MCP server can support dozens of skills."* Skills tell the
+**Structural claim (Anthropic):** _"A single skill can orchestrate multiple MCP
+servers, and a single MCP server can support dozens of skills."_ Skills tell the
 model **how** to call the tools ("filter by date range first"). **The load-bearing
-move is putting *which tool to reach for* in the skill** — the Cloudflare `wrangler`
+move is putting _which tool to reach for_ in the skill** — the Cloudflare `wrangler`
 skill that routes between the MCP API and the CLI is the pattern to copy verbatim,
 because poopdeck's `stt-*` CLIs are exactly that CLI.
 
@@ -240,13 +243,13 @@ closest analog and validates the shape. Distilled design rules from the field:
    Chrome DevTools MCP returns "why is LCP slow," not a waterfall; Postgres MCP Pro
    returns index recommendations; Sentry's `analyze_issue_with_seer` returns file
    paths + code fixes. → poopdeck's `stt-optimize doctor` (severity-ranked findings
-   + remediation + projected win) is *already exactly this shape*.
+   - remediation + projected win) is _already exactly this shape_.
 3. **Semantic/structured returns over pixels.** Playwright MCP drives off the a11y
    tree with stable `ref` handles, not screenshots — "deterministic, no vision
    model." Return GeoJSON/metadata; render maps as **interactive MCP-Apps UI**, not
    base64 (Mapbox already does this).
-4. **Feed the model data *shape/metadata*, not raw rows.** kepler.gl's AI Assistant
-   sends only dataset/layer/variable *names* to the LLM — privacy **and** token
+4. **Feed the model data _shape/metadata_, not raw rows.** kepler.gl's AI Assistant
+   sends only dataset/layer/variable _names_ to the LLM — privacy **and** token
    story in one. → `describe_dataset` returns the manifest/schema/timeRange, never
    feature rows.
 5. **Declarative spec > imperative code as the generation target.** Databricks/
@@ -255,16 +258,16 @@ closest analog and validates the shape. Distilled design rules from the field:
    **"expertise builder"** so the model needs no GIS knowledge; aesthetics
    (palette/binning/zoom) are delegated to the library, not the model.
 6. **Safety as an operator-enforced switch, not a model instruction.** `--read-only`
-   (Supabase/GitHub) *removes mutating tools from the manifest entirely*; Prisma's
+   (Supabase/GitHub) _removes mutating tools from the manifest entirely_; Prisma's
    CLI itself blocks destructive commands unless consented. Least-privilege scoping
    is operator config.
 7. **Docs-as-context, curated-index-then-fetch, version-pinned.** `list-sections →
-   get-documentation` (Svelte), `resolve-library-id → get-library-docs` (Context7),
+get-documentation` (Svelte), `resolve-library-id → get-library-docs` (Context7),
    explicit `tokens` budget params + relevance capping (Ref/Vercel), pinned to the
-   *installed* version (Next.js reads `node_modules/next/dist/docs`).
+   _installed_ version (Next.js reads `node_modules/next/dist/docs`).
 8. **Distribution norm:** remote-hosted OAuth server **and** local-stdio self-host;
    multi-component "suite" plugins (the CockroachDB plugin = 32 skills + 3 subagents
-   + 14 tools across 2 MCP backends is the north star for a coordinated suite).
+   - 14 tools across 2 MCP backends is the north star for a coordinated suite).
 
 ---
 
@@ -327,6 +330,7 @@ Few, consolidated, opinionated, read-only-by-default. Datasets/docs exposed as
 **Resources** (cheap, cacheable) in addition to tools.
 
 **A. Discovery (read-only)**
+
 - `list_datasets` — catalog over a `--packed` dir / R2 listing / `datasets.ts`;
   compact metadata only.
 - `describe_dataset` — manifest metadata, schema, `timeRange`, `styleHints`,
@@ -337,6 +341,7 @@ Few, consolidated, opinionated, read-only-by-default. Datasets/docs exposed as
 
 **B. Introspection / analysis (read-only, opinionated verdicts)** — thin wrappers
 over the JSON-emitting subcommands:
+
 - `inspect_dataset` → `stt-optimize inspect --format json`
 - `audit_dataset` → `stt-optimize doctor --format json` (+ `order-audit`) —
   severity-ranked findings + remediation + projected win.
@@ -347,6 +352,7 @@ over the JSON-emitting subcommands:
 - `validate_dataset` → `stt-validate --json` (safe; stays on in read-only mode).
 
 **C. Map composition (the flagship — teach the STT/deck.gl-JSON spec)**
+
 - `view_map` — accepts a `@deck.gl/json` spec with STT layers registered via the
   existing **`sttJsonConfiguration`**; renders an **inline interactive map through
   the MCP Apps extension** (Mapbox/CARTO already do this). Time-native: honors
@@ -361,6 +367,7 @@ over the JSON-emitting subcommands:
 
 **D. Execution (mutating — OFF by default; `--allow-build`/`--allow-serve`)** —
 tools **removed from the manifest** unless enabled (Supabase pattern):
+
 - `build_dataset` (prefer running the low-freedom recipe from `recommend_build`),
   `serve_dataset`. Gated shell-outs to the CLIs.
 
@@ -368,7 +375,7 @@ tools **removed from the manifest** unless enabled (Supabase pattern):
 `docs/*`, explicit `tokens` budget + relevance cap, version-pinned. Most of this
 is better as skill L3, so keep it thin.
 
-*Token architecture:* ~12–15 tools grouped; datasets/docs as resources; design for
+_Token architecture:_ ~12–15 tools grouped; datasets/docs as resources; design for
 Tool Search / Programmatic Tool Calling; keep breadth cheap so the skills own the
 budget. If the surface grows, adopt a Cloudflare-Code-Mode `search()`+`execute()`
 consolidation.
@@ -379,16 +386,16 @@ Author to the open standard (portable). Each skill maps to a job-to-be-done, pul
 L3 from the existing `docs/` corpus, bundles **low-freedom scripts** for fragile ops,
 and **routes** between the MCP tools and the CLIs:
 
-| Skill | Trigger (description gist) | Teaches / routes to | L3 source |
-|---|---|---|---|
-| `poopdeck-overview` | "working with poopdeck.gl / spatiotemporal tiles" | the router: which CLI vs MCP tool vs package | `docs/intro/*` |
-| `building-stt-datasets` | "build a .stt from GeoParquet or a DB" | `stt-build` flag model, time/zoom/summary decisions, `--auto`; **call `recommend_build` first** | `cli-reference`, `csv-quickstart` |
-| `tuning-stt-tiles` | "optimize / shrink / lint tiles for publish" | inspect→doctor→diff loop, **no-thinning principle**, publish encode levers; routes to `audit_dataset`/`diff_datasets` | `guides/tuning-tiles.md` |
-| `wiring-deckgl-layers` | "add a SpatioTemporalLayer / pick the right STT layer" | layer-selection decision tree, styling/extensions, the JSON spec; routes to `compose_layer`/`view_map` | `spatiotemporal-layer.md`, per-layer docs |
-| `choosing-a-renderer` | "deck vs three vs maplibre vs cesium" | trade-offs, camera/clock sharing | `intro/choosing.md` |
-| `adding-playback` | "add scrub/play controls" | `SttPlayer`/`PlaybackGovernor`/React hooks | `stt-player.md`, `stt-react.md` |
-| `serving-and-publishing` | "serve tiles / publish to R2" | `stt-serve` backends, R2; routes to `serve_dataset` | `guides/deploying.md` |
-| `debugging-blank-renders` | "my STT map renders blank/empty" | the blank-render class (summary-id defect, capabilities, time-window); validate→diagnose→fix; routes to `validate_dataset`/`audit_dataset`; bundles the summary-id repair script | gotchas + `stt-validate` |
+| Skill                     | Trigger (description gist)                             | Teaches / routes to                                                                                                                                                              | L3 source                                 |
+| ------------------------- | ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------- |
+| `poopdeck-overview`       | "working with poopdeck.gl / spatiotemporal tiles"      | the router: which CLI vs MCP tool vs package                                                                                                                                     | `docs/intro/*`                            |
+| `building-stt-datasets`   | "build a .stt from GeoParquet or a DB"                 | `stt-build` flag model, time/zoom/summary decisions, `--auto`; **call `recommend_build` first**                                                                                  | `cli-reference`, `csv-quickstart`         |
+| `tuning-stt-tiles`        | "optimize / shrink / lint tiles for publish"           | inspect→doctor→diff loop, **no-thinning principle**, publish encode levers; routes to `audit_dataset`/`diff_datasets`                                                            | `guides/tuning-tiles.md`                  |
+| `wiring-deckgl-layers`    | "add a SpatioTemporalLayer / pick the right STT layer" | layer-selection decision tree, styling/extensions, the JSON spec; routes to `compose_layer`/`view_map`                                                                           | `spatiotemporal-layer.md`, per-layer docs |
+| `choosing-a-renderer`     | "deck vs three vs maplibre vs cesium"                  | trade-offs, camera/clock sharing                                                                                                                                                 | `intro/choosing.md`                       |
+| `adding-playback`         | "add scrub/play controls"                              | `SttPlayer`/`PlaybackGovernor`/React hooks                                                                                                                                       | `stt-player.md`, `stt-react.md`           |
+| `serving-and-publishing`  | "serve tiles / publish to R2"                          | `stt-serve` backends, R2; routes to `serve_dataset`                                                                                                                              | `guides/deploying.md`                     |
+| `debugging-blank-renders` | "my STT map renders blank/empty"                       | the blank-render class (summary-id defect, capabilities, time-window); validate→diagnose→fix; routes to `validate_dataset`/`audit_dataset`; bundles the summary-id repair script | gotchas + `stt-validate`                  |
 
 The `debugging-blank-renders` and `tuning-stt-tiles` skills capture hard-won,
 non-obvious knowledge (the summary-id defect, the no-thinning principle) that lives
@@ -403,8 +410,8 @@ in project memory, not the code — the highest-value skills to write first.
    (drop session assumptions), the **MCP Apps** UI extension (the standards-track
    home for `view_map`'s inline map — build against it), the **Tasks** primitive
    (ideal for long `build_dataset` runs), and **deprecates Roots/Sampling/Logging**
-   (don't design around them). *Verify `@modelcontextprotocol/sdk ^1.29.0` covers
-   the 2025-11-25 primitives; bump when RC SDKs stabilize.*
+   (don't design around them). _Verify `@modelcontextprotocol/sdk ^1.29.0` covers
+   the 2025-11-25 primitives; bump when RC SDKs stabilize._
 2. **Skills standard.** Author to **agentskills.io** (two required fields; portable);
    layer Claude Code extensions as optional. Validate with `skills-ref validate`.
 3. **Transports.** stdio (plugin / self-host) now; add Streamable HTTP + OAuth 2.1
@@ -417,7 +424,8 @@ in project memory, not the code — the highest-value skills to write first.
 
 ## 8. Security model
 
-Adopt the field defaults, enforced by the *server/operator*, not the model:
+Adopt the field defaults, enforced by the _server/operator_, not the model:
+
 - **Read-only by default.** Mutating tools (`build_dataset`, `serve_dataset`)
   **absent from the manifest** unless `--allow-build`/`--allow-serve`.
 - **Least privilege / scoping.** `--packed <dir>` roots the server to one tree;
@@ -437,13 +445,13 @@ Adopt the field defaults, enforced by the *server/operator*, not the model:
 Implement `@poopdeck.gl/mcp` on the TS SDK (stdio): `list_datasets`,
 `describe_dataset` (+ dataset Resources), `inspect_dataset`, `audit_dataset`,
 `recommend_build`, `diff_datasets`, `validate_dataset` — thin wrappers over the
-JSON-emitting subcommands over a `--packed` dir. *Accept:* MCP-inspector session
+JSON-emitting subcommands over a `--packed` dir. _Accept:_ MCP-inspector session
 exercises every tool against a frozen fixture archive; structured outputs validated.
 
 **Phase 2 — Map composition + inline render.**
 `view_map` (reuse `sttJsonConfiguration`) rendered via MCP Apps; `compose_layer`
 with the expertise-builder + Zod validation + render→check→fix; `set_time`/
-`set_time_range`/`play_pause`. *Accept:* an agent emits a valid animated STT map
+`set_time_range`/`play_pause`. _Accept:_ an agent emits a valid animated STT map
 from NL; invalid specs self-correct.
 
 **Phase 3 — Skills suite + plugin packaging.**
@@ -451,18 +459,18 @@ Author the ~9 skills to the open standard (start with `debugging-blank-renders`,
 `tuning-stt-tiles`, `building-stt-datasets`, `wiring-deckgl-layers`, and the
 `poopdeck-overview` router), wire L3 to `docs/`, bundle low-freedom scripts. Add
 `.claude-plugin/plugin.json`, `.mcp.json`, `marketplace.json`, and the `llms.txt`
-emitter. *Accept:* one-command install wires MCP + skills; ≥3 evals per skill show
+emitter. _Accept:_ one-command install wires MCP + skills; ≥3 evals per skill show
 with-skill > baseline; `skills-ref validate` clean.
 
 **Phase 4 — Gated execution + remote server.**
 `build_dataset`/`serve_dataset` behind switches; Tasks-based async build; Streamable
-HTTP + OAuth 2.1 host at `mcp.poopdeck.gl`. *Accept:* hosted server passes the MCP
+HTTP + OAuth 2.1 host at `mcp.poopdeck.gl`. _Accept:_ hosted server passes the MCP
 security checklist; mutating tools absent without flags.
 
 **Phase 5 — RC migration + efficiency + registry.**
 Migrate to `2026-07-28` (stateless; MCP Apps/Tasks official); adopt Tool Search /
 Programmatic Tool Calling; publish `server.json` to the MCP Registry; validate the
-skills across Codex/Gemini CLI/Cursor. *Accept:* registry listing live; token
+skills across Codex/Gemini CLI/Cursor. _Accept:_ registry listing live; token
 budget measured; cross-vendor skill smoke tests pass.
 
 ---
@@ -490,6 +498,7 @@ budget measured; cross-vendor skill smoke tests pass.
 ## Implementation status — as built (2026-07-07, uncommitted)
 
 **MCP server (`@poopdeck.gl/mcp`, `bin: stt-mcp`) — built + extended, 59 tests green.**
+
 - Discovery: `list_datasets`, `describe_dataset` (manifest-only, no `@poopdeck.gl/core`
   runtime dep), `dataset_report` (`stt-optimize inspect`/`doctor`/`order-audit`).
 - Analysis (added per this design): `recommend_build` (`stt-optimize recommend` →
@@ -505,9 +514,10 @@ budget measured; cross-vendor skill smoke tests pass.
 - **Verified end-to-end** over real stdio against the real `stt-optimize`/
   `stt-validate` binaries and a fixture archive (every tool + resource exercised;
   `recommend_build` produced `--min-zoom 9 --max-zoom 10 --temporal-bucket 1m
-  --style-hints` from `storm-tracks.parquet`).
+--style-hints` from `storm-tracks.parquet`).
 
 **Plugin + skills tier — built fresh (the previously-absent "D3").**
+
 - `poopdeck-ai/` Claude Code plugin: `.claude-plugin/plugin.json`, `.mcp.json`
   (auto-registers the server, read-only by default), README; repo-root
   `.claude-plugin/marketplace.json`; repo-root `llms.txt` static tier.
@@ -519,6 +529,7 @@ budget measured; cross-vendor skill smoke tests pass.
   summary-id defect, the no-thinning rule).
 
 **Deviations from the design, and what remains:**
+
 1. `--min-zoom`/`--max-zoom` are the canonical stt-build flags (not
    `--min-zoom-level`); `recommend_build` renders those.
 2. `compose_layer` was **not** built as a separate tool — `view_map`'s `@@type`
@@ -568,5 +579,5 @@ github.com/keplergl/kepler.gl/blob/master/docs/user-guides/ai-assistant.md ·
 databricks.com/blog/bringing-visualizations-life-multi-agent-systems-vega-lite ·
 github.com/antvis/mcp-server-chart · idl.uw.edu/mosaic/vgplot/
 
-*Internal cross-refs:* `docs/roadmap/carto-integration-2026-07.md` (Phase D), the
+_Internal cross-refs:_ `docs/roadmap/carto-integration-2026-07.md` (Phase D), the
 codebase surface inventory, `packages/mcp/package.json` (the scaffold).

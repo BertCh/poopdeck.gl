@@ -17,17 +17,17 @@ each module is its own `exports` sub-path in `packages/core/package.json`,
 so a backend imports only the pieces it needs and bundlers tree-shake the
 rest:
 
-| Sub-path | Source file | Consumed by |
-| :--- | :--- | :--- |
-| `@poopdeck.gl/core/time-filter` | [`render/time-filter.ts`](../../packages/core/src/render/time-filter.ts) | layers, three, cesium |
-| `@poopdeck.gl/core/shader-codegen` | [`render/shader-codegen.ts`](../../packages/core/src/render/shader-codegen.ts) | cesium |
-| `@poopdeck.gl/core/style` | [`render/style.ts`](../../packages/core/src/render/style.ts) | layers, three, maplibre, cesium |
-| `@poopdeck.gl/core/geometry` | [`render/geometry.ts`](../../packages/core/src/render/geometry.ts) | layers, three, maplibre |
-| `@poopdeck.gl/core/geo` | [`geo/index.ts`](../../packages/core/src/geo/index.ts) | three, cesium |
-| `@poopdeck.gl/core/picking` | [`render/picking.ts`](../../packages/core/src/render/picking.ts) | three, maplibre, cesium |
-| `@poopdeck.gl/core/tileset-adapter` | [`render/tileset-adapter.ts`](../../packages/core/src/render/tileset-adapter.ts) | layers, three, maplibre |
-| `@poopdeck.gl/core/capabilities` | [`render/capabilities.ts`](../../packages/core/src/render/capabilities.ts) | layers, three, maplibre, cesium |
-| `@poopdeck.gl/core/capabilities-doc` | [`render/capabilities-doc.ts`](../../packages/core/src/render/capabilities-doc.ts) | doc generation only |
+| Sub-path                             | Source file                                                                        | Consumed by                     |
+| :----------------------------------- | :--------------------------------------------------------------------------------- | :------------------------------ |
+| `@poopdeck.gl/core/time-filter`      | [`render/time-filter.ts`](../../packages/core/src/render/time-filter.ts)           | layers, three, cesium           |
+| `@poopdeck.gl/core/shader-codegen`   | [`render/shader-codegen.ts`](../../packages/core/src/render/shader-codegen.ts)     | cesium                          |
+| `@poopdeck.gl/core/style`            | [`render/style.ts`](../../packages/core/src/render/style.ts)                       | layers, three, maplibre, cesium |
+| `@poopdeck.gl/core/geometry`         | [`render/geometry.ts`](../../packages/core/src/render/geometry.ts)                 | layers, three, maplibre         |
+| `@poopdeck.gl/core/geo`              | [`geo/index.ts`](../../packages/core/src/geo/index.ts)                             | three, cesium                   |
+| `@poopdeck.gl/core/picking`          | [`render/picking.ts`](../../packages/core/src/render/picking.ts)                   | three, maplibre, cesium         |
+| `@poopdeck.gl/core/tileset-adapter`  | [`render/tileset-adapter.ts`](../../packages/core/src/render/tileset-adapter.ts)   | layers, three, maplibre         |
+| `@poopdeck.gl/core/capabilities`     | [`render/capabilities.ts`](../../packages/core/src/render/capabilities.ts)         | layers, three, maplibre, cesium |
+| `@poopdeck.gl/core/capabilities-doc` | [`render/capabilities-doc.ts`](../../packages/core/src/render/capabilities-doc.ts) | doc generation only             |
 
 A repo test (`packages/core/test/kernel-framework-free.test.ts`) statically
 scans every file under `packages/core/src` and fails the build if it imports
@@ -53,25 +53,25 @@ modes independently.
 type TimeFilterMode = 'window' | 'wake' | 'cumulative' | 'trail' | 'none';
 
 interface TimeFilterParams {
-  windowHalf?: number;  // half-width of the symmetric window (ms) — window mode
-  fadeIn?: number;       // leading-edge fade ramp (ms) — window / cumulative
-  fadeOut?: number;      // trailing-edge fade ramp (ms) — window
-  wakeLength?: number;   // wake length behind the playhead (ms) — wake mode
-  trailLength?: number;  // trail length behind the playhead (ms) — trail mode
-  trailFade?: number;    // 1 = head→tail fade, 0 = solid trail — trail mode
+  windowHalf?: number; // half-width of the symmetric window (ms) — window mode
+  fadeIn?: number; // leading-edge fade ramp (ms) — window / cumulative
+  fadeOut?: number; // trailing-edge fade ramp (ms) — window
+  wakeLength?: number; // wake length behind the playhead (ms) — wake mode
+  trailLength?: number; // trail length behind the playhead (ms) — trail mode
+  trailFade?: number; // 1 = head→tail fade, 0 = solid trail — trail mode
 }
 ```
 
 ### Per-mode alpha functions
 
-| Function | Signature | Semantics |
-| :--- | :--- | :--- |
-| `windowAlpha` | `(currentTime, startTime, endTime, windowHalf, fadeIn?, fadeOut?) => number` | Visible while `[startTime, endTime]` overlaps `[currentTime ± windowHalf]`, with optional leading/trailing fade ramps. |
-| `wakeAlpha` | `(currentTime, startTime, wakeLength) => number` | Visible only in `[0, wakeLength]` ms behind the playhead, fading linearly to 0 at the tail. |
-| `cumulativeAlpha` | `(currentTime, startTime, fadeIn?) => number` | Appears at `startTime` and persists forever after ("draw and persist"); optional `fadeIn` ramps 0→1. |
-| `trailAlpha` | `(currentTime, vertexTime, trailLength, trailFade) => number` | Per-vertex: visible while `vertexTime ∈ [currentTime - trailLength, currentTime]`; `trailFade` blends a solid trail (0) against a head→tail linear fade (1). |
-| `wakeSizeScale` | `(alpha, wakeTailScale) => number` | The wake-mode tail point-size multiplier (`wakeTailScale` at the tail, full size at the head) — mirrors deck's `DECKGL_FILTER_SIZE` wake branch. |
-| `timeFilterAlpha` | `(mode, currentTime, startTime, endTime, params?, vertexTime?) => number` | Dispatches to the function above matching `mode`; `'none'` always returns `1`. |
+| Function          | Signature                                                                    | Semantics                                                                                                                                                    |
+| :---------------- | :--------------------------------------------------------------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `windowAlpha`     | `(currentTime, startTime, endTime, windowHalf, fadeIn?, fadeOut?) => number` | Visible while `[startTime, endTime]` overlaps `[currentTime ± windowHalf]`, with optional leading/trailing fade ramps.                                       |
+| `wakeAlpha`       | `(currentTime, startTime, wakeLength) => number`                             | Visible only in `[0, wakeLength]` ms behind the playhead, fading linearly to 0 at the tail.                                                                  |
+| `cumulativeAlpha` | `(currentTime, startTime, fadeIn?) => number`                                | Appears at `startTime` and persists forever after ("draw and persist"); optional `fadeIn` ramps 0→1.                                                         |
+| `trailAlpha`      | `(currentTime, vertexTime, trailLength, trailFade) => number`                | Per-vertex: visible while `vertexTime ∈ [currentTime - trailLength, currentTime]`; `trailFade` blends a solid trail (0) against a head→tail linear fade (1). |
+| `wakeSizeScale`   | `(alpha, wakeTailScale) => number`                                           | The wake-mode tail point-size multiplier (`wakeTailScale` at the tail, full size at the head) — mirrors deck's `DECKGL_FILTER_SIZE` wake branch.             |
+| `timeFilterAlpha` | `(mode, currentTime, startTime, endTime, params?, vertexTime?) => number`    | Dispatches to the function above matching `mode`; `'none'` always returns `1`.                                                                               |
 
 `DEFAULT_WAKE_TAIL_SCALE = 0.15` is the single-sourced default tail size
 multiplier for wake mode.
@@ -83,7 +83,11 @@ const MAX_RELATIVE_TIME_MS = 16_777_216; // 2^24 — f32 mantissa exact-integer 
 
 function relativizeTime(absoluteTime: number, offset: number): number; // absoluteTime - offset
 
-function assertRelTimeInRange(relativeTime: number, mode: TimeFilterMode, key?: string): void;
+function assertRelTimeInRange(
+  relativeTime: number,
+  mode: TimeFilterMode,
+  key?: string,
+): void;
 ```
 
 Every time value the kernel compares is relative to a per-tile/per-scene
@@ -100,13 +104,13 @@ for the worked deck.gl example — the scheme is identical here.
 
 ```typescript
 interface TimeFilterVocabulary {
-  timeWindow?: number;        // FULL-width window (ms) — deck/maplibre
-  fadeInDuration?: number;    // deck/maplibre
-  fadeOutDuration?: number;   // deck/maplibre
-  softTimeWindow?: boolean;   // maplibre legacy soft-ramp flag
-  windowHalf?: number;        // HALF-width window (ms) — three-native; wins over timeWindow
-  fadeIn?: number;            // three-native; wins over fadeInDuration
-  fadeOut?: number;           // three-native; wins over fadeOutDuration
+  timeWindow?: number; // FULL-width window (ms) — deck/maplibre
+  fadeInDuration?: number; // deck/maplibre
+  fadeOutDuration?: number; // deck/maplibre
+  softTimeWindow?: boolean; // maplibre legacy soft-ramp flag
+  windowHalf?: number; // HALF-width window (ms) — three-native; wins over timeWindow
+  fadeIn?: number; // three-native; wins over fadeInDuration
+  fadeOut?: number; // three-native; wins over fadeOutDuration
   wakeLength?: number;
   trailLength?: number;
   trailFade?: number;
@@ -143,7 +147,11 @@ type Expr =
   | { op: 'uniform'; name: string }
   | { op: 'attr'; name: string }
   | { op: 'const'; value: number }
-  | { op: 'add' | 'sub' | 'mul' | 'div' | 'min' | 'max' | 'step'; a: Expr; b: Expr }
+  | {
+      op: 'add' | 'sub' | 'mul' | 'div' | 'min' | 'max' | 'step';
+      a: Expr;
+      b: Expr;
+    }
   | { op: 'clamp01'; a: Expr }
   | { op: 'select'; c: Expr; t: Expr; f: Expr };
 ```
@@ -166,9 +174,15 @@ function emitGLSL300(e: Expr, nameMap?: Record<string, string>): string;
 function emitGLSL100(e: Expr, nameMap?: Record<string, string>): string;
 
 const TIME_FILTER_VARS: {
-  currentTime: 'currentTime'; startTime: 'startTime'; endTime: 'endTime';
-  vertexTime: 'vertexTime'; windowHalf: 'windowHalf'; fadeIn: 'fadeIn';
-  fadeOut: 'fadeOut'; wakeLength: 'wakeLength'; trailLength: 'trailLength';
+  currentTime: 'currentTime';
+  startTime: 'startTime';
+  endTime: 'endTime';
+  vertexTime: 'vertexTime';
+  windowHalf: 'windowHalf';
+  fadeIn: 'fadeIn';
+  fadeOut: 'fadeOut';
+  wakeLength: 'wakeLength';
+  trailLength: 'trailLength';
   trailFade: 'trailFade';
 };
 ```
@@ -220,10 +234,10 @@ function resolveCategoryColor(
 interface CategoricalColorSpec {
   property: string;
   colorMapping?: Record<string, RGBA255> | null;
-  palette?: readonly RGBA255[];        // positional fallback (maplibre)
-  colorMappingDefault?: RGBA255;       // default undefined ⇒ transparent [0,0,0,0]
-  onMissing?: 'null' | 'fill';         // property absent from tile: null (maplibre) or fill (three). default 'null'
-  requireMappingOrPalette?: boolean;   // maplibre guard: null when nothing to paint. default false
+  palette?: readonly RGBA255[]; // positional fallback (maplibre)
+  colorMappingDefault?: RGBA255; // default undefined ⇒ transparent [0,0,0,0]
+  onMissing?: 'null' | 'fill'; // property absent from tile: null (maplibre) or fill (three). default 'null'
+  requireMappingOrPalette?: boolean; // maplibre guard: null when nothing to paint. default false
 }
 
 function expandCategoricalColors(
@@ -252,8 +266,8 @@ function expandRgbColumns(
   binary: BinaryFeatures,
   columns: readonly [string, string, string], // r, g, b numeric property names (0–255)
   out: ColorOut,
-  alpha?: number,       // default 255
-  fallback?: RGBA255,   // default [200, 205, 215, 255]
+  alpha?: number, // default 255
+  fallback?: RGBA255, // default [200, 205, 215, 255]
 ): Uint8Array | Float32Array;
 ```
 
@@ -265,8 +279,16 @@ interface RampColorSpec {
   fallback: RGBA255;
 }
 
-function rampColorAt(value: number, domain: readonly [number, number], range: readonly RGBA255[]): RGBA255;
-function expandRampColors(binary: BinaryFeatures, spec: RampColorSpec, out: ColorOut): Uint8Array | Float32Array;
+function rampColorAt(
+  value: number,
+  domain: readonly [number, number],
+  range: readonly RGBA255[],
+): RGBA255;
+function expandRampColors(
+  binary: BinaryFeatures,
+  spec: RampColorSpec,
+  out: ColorOut,
+): Uint8Array | Float32Array;
 ```
 
 `rampColorAt` clamps `value` into `domain`, maps it to `[0, 1]`, and
@@ -282,10 +304,12 @@ Backend-neutral geometry reductions.
 interface SourceTargetPositions {
   source: Float64Array; // featureCount * dims — feature i's FIRST vertex
   target: Float64Array; // featureCount * dims — feature i's LAST vertex
-  dims: number;          // 2 or 3
+  dims: number; // 2 or 3
 }
 
-function deriveSourceTargetPositions(binary: BinaryFeatures): SourceTargetPositions;
+function deriveSourceTargetPositions(
+  binary: BinaryFeatures,
+): SourceTargetPositions;
 ```
 
 Derives dense source/target endpoint buffers from a LineString tile's
@@ -323,18 +347,25 @@ deck.gl projects entirely on the GPU against a host `WebMercatorViewport`/
 `GlobeViewport` and does not consume this module.
 
 ```typescript
-interface GeoAnchor { longitude: number; latitude: number; }
+interface GeoAnchor {
+  longitude: number;
+  latitude: number;
+}
 
 interface LocalFrame {
-  east: [number, number, number];  // unit world vector, local east
+  east: [number, number, number]; // unit world vector, local east
   north: [number, number, number]; // unit world vector, local north
-  up: [number, number, number];    // unit world vector, local up
+  up: [number, number, number]; // unit world vector, local up
 }
 
 interface Projection {
   readonly kind: string;
   readonly anchor: GeoAnchor;
-  project(longitude: number, latitude: number, altitude?: number): [number, number, number];
+  project(
+    longitude: number,
+    latitude: number,
+    altitude?: number,
+  ): [number, number, number];
   unproject(x: number, y: number, z?: number): [number, number, number];
   metersPerWorldUnit(longitude: number, latitude: number): number;
   localFrame(longitude: number, latitude: number): LocalFrame;
@@ -346,11 +377,11 @@ const EARTH_RADIUS = 6_378_137; // WGS84 semi-major axis (m)
 
 Three implementations share this contract:
 
-| Class | `kind` | World axes | Notes |
-| :--- | :--- | :--- | :--- |
-| `LocalEnuProjection` | `'local-enu'` | Z-up metric ENU, 1 world unit = 1 m | Equirectangular about a fixed anchor; east scale frozen at `cos(anchor.latitude)` — the exact inverse of the AV dataset build-time `av_common.local_to_lonlat` georeferencing. |
-| `MercatorProjection` | `'mercator'` | Z-up, world units = mercator metres | Standard Web-Mercator (EPSG:3857); clamps latitude to `MAX_MERCATOR_LAT` (`85.05112877980659`); altitude divided by `metersPerWorldUnit` so vertical scale matches horizontal. Absolute coordinates run ~±2e7, so batches route through the RTC helper below. |
-| `GlobeProjection` | `'globe'` | ECEF (+X → lon 0/lat 0, +Y → lon 90°E, +Z → north pole) | `datum: 'sphere'` (default, a true sphere) or `'wgs84'` (real ellipsoid, via `WGS84_F`/first-eccentricity and Bowring's closed-form inverse for `unproject`). `radius` sets the semi-major-axis world-unit length (default `EARTH_RADIUS`; e.g. pass `100` for a unit-sphere-scale globe). |
+| Class                | `kind`        | World axes                                              | Notes                                                                                                                                                                                                                                                                                      |
+| :------------------- | :------------ | :------------------------------------------------------ | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `LocalEnuProjection` | `'local-enu'` | Z-up metric ENU, 1 world unit = 1 m                     | Equirectangular about a fixed anchor; east scale frozen at `cos(anchor.latitude)` — the exact inverse of the AV dataset build-time `av_common.local_to_lonlat` georeferencing.                                                                                                             |
+| `MercatorProjection` | `'mercator'`  | Z-up, world units = mercator metres                     | Standard Web-Mercator (EPSG:3857); clamps latitude to `MAX_MERCATOR_LAT` (`85.05112877980659`); altitude divided by `metersPerWorldUnit` so vertical scale matches horizontal. Absolute coordinates run ~±2e7, so batches route through the RTC helper below.                              |
+| `GlobeProjection`    | `'globe'`     | ECEF (+X → lon 0/lat 0, +Y → lon 90°E, +Z → north pole) | `datum: 'sphere'` (default, a true sphere) or `'wgs84'` (real ellipsoid, via `WGS84_F`/first-eccentricity and Bowring's closed-form inverse for `unproject`). `radius` sets the semi-major-axis world-unit length (default `EARTH_RADIUS`; e.g. pass `100` for a unit-sphere-scale globe). |
 
 ```typescript
 function projectPositionsToEnu(
@@ -363,7 +394,7 @@ function projectPositionsToEnu(
 ): Float32Array; // interleaved world [x, y, z] triples
 
 interface ProjectedPositions {
-  positions: Float32Array;         // f32, RELATIVE to origin
+  positions: Float32Array; // f32, RELATIVE to origin
   origin: [number, number, number]; // f64 world-space origin
 }
 
@@ -372,7 +403,11 @@ function projectPositions(
   positions: Float64Array,
   count: number,
   dims: 2 | 3,
-  opts?: { elevation?: Float32Array; elevScale?: number; origin?: [number, number, number] },
+  opts?: {
+    elevation?: Float32Array;
+    elevScale?: number;
+    origin?: [number, number, number];
+  },
 ): ProjectedPositions;
 ```
 
@@ -389,18 +424,26 @@ the geometry under an object placed at that origin. Passing
 interface ViewState {
   longitude: number;
   latitude: number;
-  zoom: number;      // Web-Mercator zoom (world is 512·2^zoom px around)
-  pitch?: number;     // degrees, 0 = top-down
-  bearing?: number;   // degrees, 0 = north up
-  roll?: number;      // degrees; ignored by backends whose camera lacks a roll DOF
-  altitude?: number;  // metres, alternative to zoom for height-driven cameras (Cesium)
+  zoom: number; // Web-Mercator zoom (world is 512·2^zoom px around)
+  pitch?: number; // degrees, 0 = top-down
+  bearing?: number; // degrees, 0 = north up
+  roll?: number; // degrees; ignored by backends whose camera lacks a roll DOF
+  altitude?: number; // metres, alternative to zoom for height-driven cameras (Cesium)
 }
 
 const TILE_SIZE = 512;
 const WORLD_CIRCUMFERENCE: number; // 2π · EARTH_RADIUS
 
-function worldUnitsPerPixel(proj: Projection, zoom: number, latitude: number): number;
-function zoomForWorldUnitsPerPixel(proj: Projection, wupp: number, latitude: number): number;
+function worldUnitsPerPixel(
+  proj: Projection,
+  zoom: number,
+  latitude: number,
+): number;
+function zoomForWorldUnitsPerPixel(
+  proj: Projection,
+  wupp: number,
+  latitude: number,
+): number;
 ```
 
 `ViewState` is the deck-compatible lingua franca for cross-renderer camera
@@ -430,13 +473,13 @@ function buildIdColors(featureCount: number): Float32Array; // normalized [0,1] 
 ```typescript
 interface SttPickResult {
   object: Record<string, unknown> | null;
-  index: number;              // feature index within its (tile, layer) BinaryFeatures, or -1
+  index: number; // feature index within its (tile, layer) BinaryFeatures, or -1
   tileId?: TileId;
   layerId: string;
-  coordinate?: [number, number];       // geographic [lng, lat]
-  screen?: [number, number];           // CSS [x, y]
+  coordinate?: [number, number]; // geographic [lng, lat]
+  screen?: [number, number]; // CSS [x, y]
   worldPoint?: [number, number, number]; // renderer-frame world space
-  meta?: Record<string, unknown>;      // backend/domain-specific extras (e.g. AV trackId, speed)
+  meta?: Record<string, unknown>; // backend/domain-specific extras (e.g. AV trackId, speed)
 }
 ```
 
@@ -445,7 +488,7 @@ interface SttPickResult {
 
 ```typescript
 interface InstanceProvenanceEntry {
-  tileKey: string;      // stable z/x/y/t::layer key
+  tileKey: string; // stable z/x/y/t::layer key
   featureIndex: number; // index within that (tile, layer)'s BinaryFeatures
 }
 
@@ -472,7 +515,11 @@ Cesium's id-buffer) stays per-backend outside this kernel.
 ```typescript
 type TilesetFetchCallbacks = Pick<
   SpatiotemporalTilesetOptions,
-  'getAvailableTiles' | 'getTileData' | 'getTileDataBatch' | 'getTileByteSize' | 'getThroughput'
+  | 'getAvailableTiles'
+  | 'getTileData'
+  | 'getTileDataBatch'
+  | 'getTileByteSize'
+  | 'getThroughput'
 >;
 
 function makeTilesetCallbacks(archive: STTArchive): TilesetFetchCallbacks;
@@ -504,15 +551,38 @@ modes.
 
 ```typescript
 const LAYER_KINDS = [
-  'point', 'path', 'polygon', 'arc', 'line', 'icon', 'column', 'trips',
-  'tripHeads', 'boundingBox', 'surfel', 'heatmap', 'h3Summary',
-  'quadbinSummary', 'flowmap', 'flowCorridor', 'flowStroke', 'isoLines', 'ego',
+  'point',
+  'path',
+  'polygon',
+  'arc',
+  'line',
+  'icon',
+  'column',
+  'trips',
+  'tripHeads',
+  'boundingBox',
+  'surfel',
+  'heatmap',
+  'h3Summary',
+  'quadbinSummary',
+  'flowmap',
+  'flowCorridor',
+  'flowStroke',
+  'isoLines',
+  'ego',
 ] as const;
 type LayerKind = (typeof LAYER_KINDS)[number];
 
 const CAPABILITIES = [
-  'globe', 'picking', 'extrude3d', 'metricSizing', 'gpuHeatmap',
-  'liveBundling', 'timeAsHeight', 'interleavedBasemap', 'userExtensions',
+  'globe',
+  'picking',
+  'extrude3d',
+  'metricSizing',
+  'gpuHeatmap',
+  'liveBundling',
+  'timeAsHeight',
+  'interleavedBasemap',
+  'userExtensions',
   'cameraRoll',
 ] as const;
 type Capability = (typeof CAPABILITIES)[number];
@@ -523,7 +593,12 @@ type LayerKindSupport =
 
 type Degradation =
   | { action: 'fallback'; toKind: LayerKind; lost: Capability[] }
-  | { action: 'fallbackMode'; fromMode: TimeFilterMode; toMode: TimeFilterMode; lost: Capability[] }
+  | {
+      action: 'fallbackMode';
+      fromMode: TimeFilterMode;
+      toMode: TimeFilterMode;
+      lost: Capability[];
+    }
   | { action: 'skip'; reason: string }
   | { action: 'throw'; reason: string };
 ```
@@ -534,8 +609,8 @@ interface BackendDescriptor {
   readonly capabilities: Readonly<Record<Capability, boolean>>;
   readonly timeFilterModes: readonly TimeFilterMode[];
   readonly layerKinds: Readonly<Record<LayerKind, LayerKindSupport>>;
-  readonly projectsOnCpu: boolean;                        // three/Cesium: true; deck: false
-  readonly tilesetOwnership: 'per-layer' | 'shared';        // deck/three: shared; maplibre: per-layer
+  readonly projectsOnCpu: boolean; // three/Cesium: true; deck: false
+  readonly tilesetOwnership: 'per-layer' | 'shared'; // deck/three: shared; maplibre: per-layer
   readonly pickMechanism: 'gpu-id' | 'cpu-ray' | 'id-fbo' | 'host' | 'none';
   readonly interleavedBasemap: boolean;
   readonly basemapProjection: 'mercator' | 'globe';
@@ -555,7 +630,11 @@ interface SttRenderNode {
   readonly id: string;
   setTime(absoluteMs: number): void;
   setViewState?(v: ViewState): void;
-  pick?(cssX: number, cssY: number, o?: { mode?: 'hover' | 'click' }): SttPickResult | null | Promise<SttPickResult | null>;
+  pick?(
+    cssX: number,
+    cssY: number,
+    o?: { mode?: 'hover' | 'click' },
+  ): SttPickResult | null | Promise<SttPickResult | null>;
   dispose(): void;
 }
 ```
@@ -565,7 +644,11 @@ class. A three `SttLayer`, a deck sublayer wrapper, a maplibre
 `STTBaseLayer`, and a Cesium `Primitive` all satisfy it.
 
 ```typescript
-function degradeRequest(d: BackendDescriptor, kind: LayerKind, mode?: TimeFilterMode): Degradation | null;
+function degradeRequest(
+  d: BackendDescriptor,
+  kind: LayerKind,
+  mode?: TimeFilterMode,
+): Degradation | null;
 
 interface ConformanceEvidence {
   capabilities: ReadonlySet<Capability>;
@@ -573,7 +656,10 @@ interface ConformanceEvidence {
   timeFilterModes: ReadonlySet<TimeFilterMode>;
 }
 
-function assertDescriptorConsistent(d: BackendDescriptor, proven: ConformanceEvidence): string[];
+function assertDescriptorConsistent(
+  d: BackendDescriptor,
+  proven: ConformanceEvidence,
+): string[];
 ```
 
 `degradeRequest` resolves how a backend handles a requested

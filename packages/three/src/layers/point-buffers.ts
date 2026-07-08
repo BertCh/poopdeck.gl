@@ -154,7 +154,11 @@ export function buildPointBuffers(
   const firstLayer = parts[0].features;
   const firstDims = firstLayer.positionDimensions ?? 2;
   const firstAlt = firstDims > 2 ? firstLayer.positions[2] : 0;
-  const origin = projection.project(firstLayer.positions[0], firstLayer.positions[1], firstAlt);
+  const origin = projection.project(
+    firstLayer.positions[0],
+    firstLayer.positions[1],
+    firstAlt,
+  );
 
   const centers = new Float32Array(total * 3);
   const colors = new Float32Array(total * 4);
@@ -172,8 +176,14 @@ export function buildPointBuffers(
     const b = part.features;
     const count = b.featureCount;
     const dims = b.positionDimensions ?? 2;
-    const elev = opts.elevationProperty ? b.numericProps[opts.elevationProperty] : undefined;
-    const tileColors = colorsForTile(b, opts.colorMode, opts.colorVectorColumn ?? 'point_rgba');
+    const elev = opts.elevationProperty
+      ? b.numericProps[opts.elevationProperty]
+      : undefined;
+    const tileColors = colorsForTile(
+      b,
+      opts.colorMode,
+      opts.colorVectorColumn ?? 'point_rgba',
+    );
     const rebase = b.timeOffset - timeOrigin;
 
     for (let i = 0; i < count; i++) {
@@ -183,7 +193,11 @@ export function buildPointBuffers(
       provenance.push(part.tileKey, i);
       const lon = b.positions[i * dims];
       const lat = b.positions[i * dims + 1];
-      const alt = elev ? elev[i] * opts.elevationScale : dims > 2 ? b.positions[i * dims + 2] : 0;
+      const alt = elev
+        ? elev[i] * opts.elevationScale
+        : dims > 2
+          ? b.positions[i * dims + 2]
+          : 0;
       const p = projection.project(lon, lat, alt);
       const x = p[0] - origin[0];
       const y = p[1] - origin[1];

@@ -102,7 +102,9 @@ function billboardVertexNode(
     // constant pixel half-size. corner ∈ [-1,1]², so corner·half = ±half px.
     // px → NDC = ×2/viewport, NDC → clip = ×clip.w (cancels the perspective
     // divide so on-screen size is depth-independent). Mirrors wide-line.
-    const clip = cameraProjectionMatrix.mul(modelViewMatrix).mul(vec4(center, 1));
+    const clip = cameraProjectionMatrix
+      .mul(modelViewMatrix)
+      .mul(vec4(center, 1));
     const off = corner.mul(half).mul(float(2)).div(viewport).mul(clip.w);
     return vec4(clip.x.add(off.x), clip.y.add(off.y), clip.z, clip.w);
   }
@@ -118,7 +120,9 @@ function billboardVertexNode(
   return cameraProjectionMatrix.mul(viewPos);
 }
 
-export function createPointMaterial(opts: PointMaterialOptions): PointMaterialBundle {
+export function createPointMaterial(
+  opts: PointMaterialOptions,
+): PointMaterialBundle {
   const time = new TimeFilterUniforms();
   const point = new PointUniforms();
 
@@ -133,12 +137,19 @@ export function createPointMaterial(opts: PointMaterialOptions): PointMaterialBu
   // WGSL backend builds it fine.
   const vertexAlpha = timeFilterAlphaNode(opts.mode, time, start, end);
   // Wake mode shrinks the tail toward `wakeTailScale`; other modes keep full size.
-  const sizeFactor = opts.mode === 'wake' ? wakeSizeScaleNode(time, vertexAlpha) : float(1);
+  const sizeFactor =
+    opts.mode === 'wake' ? wakeSizeScaleNode(time, vertexAlpha) : float(1);
   const half = point.pointSize.mul(sizeFactor);
 
   const material = new MeshBasicNodeMaterial();
   const sizeUnits: PointSizeUnits = opts.sizeUnits ?? 'meters';
-  material.vertexNode = billboardVertexNode(center, corner, half, sizeUnits, point.viewport);
+  material.vertexNode = billboardVertexNode(
+    center,
+    corner,
+    half,
+    sizeUnits,
+    point.viewport,
+  );
 
   // IMPORTANT (WGSL): vary the RAW per-instance inputs and recompute the time
   // alpha — a `select()` — in the FRAGMENT stage. A `select()` wrapped in a
@@ -183,7 +194,10 @@ export interface PointUniformValues {
   viewport?: [number, number];
 }
 
-export function updatePointUniforms(bundle: PointMaterialBundle, v: PointUniformValues): void {
+export function updatePointUniforms(
+  bundle: PointMaterialBundle,
+  v: PointUniformValues,
+): void {
   updateTimeFilterUniforms(bundle.time, v.relativeCurrentTime, v.params);
   bundle.point.pointSize.value = v.pointSize ?? 0.06;
   bundle.point.opacity.value = v.opacity ?? 1;
@@ -207,7 +221,9 @@ export function updatePointUniforms(bundle: PointMaterialBundle, v: PointUniform
  * Build the point-cloud id material. `opts` mirror the colour material's so the
  * pick pass matches the on-screen quads (size, splat disc, time-filter mode).
  */
-export function createPointIdMaterial(opts: PointMaterialOptions): PointMaterialBundle {
+export function createPointIdMaterial(
+  opts: PointMaterialOptions,
+): PointMaterialBundle {
   const time = new TimeFilterUniforms();
   const point = new PointUniforms();
 
@@ -218,12 +234,19 @@ export function createPointIdMaterial(opts: PointMaterialOptions): PointMaterial
   const corner = positionGeometry.xy;
 
   const vertexAlpha = timeFilterAlphaNode(opts.mode, time, start, end);
-  const sizeFactor = opts.mode === 'wake' ? wakeSizeScaleNode(time, vertexAlpha) : float(1);
+  const sizeFactor =
+    opts.mode === 'wake' ? wakeSizeScaleNode(time, vertexAlpha) : float(1);
   const half = point.pointSize.mul(sizeFactor);
 
   const material = new MeshBasicNodeMaterial();
   const sizeUnits: PointSizeUnits = opts.sizeUnits ?? 'meters';
-  material.vertexNode = billboardVertexNode(center, corner, half, sizeUnits, point.viewport);
+  material.vertexNode = billboardVertexNode(
+    center,
+    corner,
+    half,
+    sizeUnits,
+    point.viewport,
+  );
 
   // FRAGMENT: same WGSL discipline as the colour material — vary the raw inputs
   // and recompute the `select()` here (a `select()` wrapped in a `varying()`

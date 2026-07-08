@@ -23,7 +23,12 @@ import { describe, it, expect } from 'vitest';
 import * as nodeFs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { STTArchive } from '../src/archive';
-import { decodeDirectory, decodePagedRoot, encodeDirectory, type PageDescriptor } from '../src/directory';
+import {
+  decodeDirectory,
+  decodePagedRoot,
+  encodeDirectory,
+  type PageDescriptor,
+} from '../src/directory';
 import { unzstdSync } from '../src/compression';
 import type { BoundingBox, TimeRange } from '../src/types';
 import {
@@ -34,20 +39,37 @@ import {
   type PackedFetchLog,
 } from './helpers/packed-fixture';
 
-const PAGED_DIR = fileURLToPath(new URL('./fixtures/paged-golden', import.meta.url));
-const SINGLE_DIR = fileURLToPath(new URL('./fixtures/paged-golden-single', import.meta.url));
+const PAGED_DIR = fileURLToPath(
+  new URL('./fixtures/paged-golden', import.meta.url),
+);
+const SINGLE_DIR = fileURLToPath(
+  new URL('./fixtures/paged-golden-single', import.meta.url),
+);
 
-const paged = loadPackedDatasetFromDisk(nodeFs, PAGED_DIR, 'mem://data/paged/manifest.json');
-const single = loadPackedDatasetFromDisk(nodeFs, SINGLE_DIR, 'mem://data/single/manifest.json');
+const paged = loadPackedDatasetFromDisk(
+  nodeFs,
+  PAGED_DIR,
+  'mem://data/paged/manifest.json',
+);
+const single = loadPackedDatasetFromDisk(
+  nodeFs,
+  SINGLE_DIR,
+  'mem://data/single/manifest.json',
+);
 
-const pagedManifest = JSON.parse(new TextDecoder().decode(paged.objects.get('manifest.json')!));
+const pagedManifest = JSON.parse(
+  new TextDecoder().decode(paged.objects.get('manifest.json')!),
+);
 const PAGED_DIR_KEY: string = pagedManifest.directory.key;
 const PAGED_DIR_LEN: number = pagedManifest.directory.length;
 const PAGED_ROOT_LEN: number = pagedManifest.directory.rootLength;
 
 /** A whole-load (oracle) archive over the single fixture. */
 function singleArchive(): STTArchive {
-  return new STTArchive({ url: single.manifestUrl, fetch: packedFetch(single) });
+  return new STTArchive({
+    url: single.manifestUrl,
+    fetch: packedFetch(single),
+  });
 }
 /** A paged archive forced to stream every leaf (threshold 0), with a fetch log. */
 function pagedArchive(log?: PackedFetchLog): STTArchive {
@@ -58,7 +80,9 @@ function pagedArchive(log?: PackedFetchLog): STTArchive {
   });
 }
 
-function sortedIds(ids: { z: number; x: number; y: number; t: number }[]): string[] {
+function sortedIds(
+  ids: { z: number; x: number; y: number; t: number }[],
+): string[] {
   return ids.map((id) => `${id.z}/${id.x}/${id.y}/${id.t}`).sort();
 }
 
@@ -84,14 +108,44 @@ const ALL_DATA: BoundingBox = { minLon: 0, minLat: 35, maxLon: 12, maxLat: 44 };
 // Viewports chosen across the grid's geographic extent (zoom-10 block sits over
 // ~[2.8,9.1]°lon × [37.8,41]°lat; zoom-12 block overlaps it). The single
 // archive is the oracle, so the exact tile membership need not be hand-derived.
-const QUERIES: Array<{ name: string; bounds: BoundingBox; zoom: number; time: TimeRange }> = [
+const QUERIES: Array<{
+  name: string;
+  bounds: BoundingBox;
+  zoom: number;
+  time: TimeRange;
+}> = [
   { name: 'world @z10', bounds: ALL_DATA, zoom: 10, time: FULL_TIME },
-  { name: 'sub-A @z10', bounds: { minLon: 3, minLat: 39, maxLon: 5, maxLat: 41 }, zoom: 10, time: FULL_TIME },
-  { name: 'sub-B @z10', bounds: { minLon: 6.5, minLat: 38, maxLon: 9, maxLat: 40 }, zoom: 10, time: FULL_TIME },
-  { name: 'sub-A bucket0', bounds: { minLon: 3, minLat: 39, maxLon: 5, maxLat: 41 }, zoom: 10, time: { start: 0, end: 1 } },
-  { name: 'sub-A bucket2', bounds: { minLon: 3, minLat: 39, maxLon: 5, maxLat: 41 }, zoom: 10, time: { start: 2 * HOUR, end: 2 * HOUR + 1 } },
+  {
+    name: 'sub-A @z10',
+    bounds: { minLon: 3, minLat: 39, maxLon: 5, maxLat: 41 },
+    zoom: 10,
+    time: FULL_TIME,
+  },
+  {
+    name: 'sub-B @z10',
+    bounds: { minLon: 6.5, minLat: 38, maxLon: 9, maxLat: 40 },
+    zoom: 10,
+    time: FULL_TIME,
+  },
+  {
+    name: 'sub-A bucket0',
+    bounds: { minLon: 3, minLat: 39, maxLon: 5, maxLat: 41 },
+    zoom: 10,
+    time: { start: 0, end: 1 },
+  },
+  {
+    name: 'sub-A bucket2',
+    bounds: { minLon: 3, minLat: 39, maxLon: 5, maxLat: 41 },
+    zoom: 10,
+    time: { start: 2 * HOUR, end: 2 * HOUR + 1 },
+  },
   { name: 'world @z12', bounds: ALL_DATA, zoom: 12, time: FULL_TIME },
-  { name: 'empty region', bounds: { minLon: -50, minLat: -30, maxLon: -40, maxLat: -20 }, zoom: 10, time: FULL_TIME },
+  {
+    name: 'empty region',
+    bounds: { minLon: -50, minLat: -30, maxLon: -40, maxLat: -20 },
+    zoom: 10,
+    time: FULL_TIME,
+  },
 ];
 
 describe('paged directory: cross-impl + differential', () => {
@@ -102,7 +156,9 @@ describe('paged directory: cross-impl + differential', () => {
     expect(pagedManifest.directory.encoding).toBe('zstd');
 
     // Decode the root frame the same way the reader does (zstd-framed prefix).
-    const rootFrame = paged.objects.get(PAGED_DIR_KEY)!.subarray(0, PAGED_ROOT_LEN);
+    const rootFrame = paged.objects
+      .get(PAGED_DIR_KEY)!
+      .subarray(0, PAGED_ROOT_LEN);
     const root = decodePagedRoot(unzstdSync(rootFrame));
     expect(root.pages.length).toBe(32);
     expect(root.pageEntries).toBe(8);
@@ -129,8 +185,12 @@ describe('paged directory: cross-impl + differential', () => {
     const s = singleArchive();
     const p = pagedArchive();
     for (const q of QUERIES) {
-      const want = sortedIds(await s.getTileIdsInBounds(q.bounds, q.zoom, q.time));
-      const got = sortedIds(await p.getTileIdsInBounds(q.bounds, q.zoom, q.time));
+      const want = sortedIds(
+        await s.getTileIdsInBounds(q.bounds, q.zoom, q.time),
+      );
+      const got = sortedIds(
+        await p.getTileIdsInBounds(q.bounds, q.zoom, q.time),
+      );
       expect(got, `query ${q.name}`).toEqual(want);
     }
     // The world+full-time queries must actually return tiles (guards against a
@@ -160,7 +220,11 @@ describe('paged directory: cross-impl + differential', () => {
   it('fetches only a fraction of the directory for a small viewport', async () => {
     const log: PackedFetchLog = { paths: [], ranges: [] };
     const p = pagedArchive(log);
-    await p.getTileIdsInBounds({ minLon: 3, minLat: 39, maxLon: 5, maxLat: 41 }, 10, FULL_TIME);
+    await p.getTileIdsInBounds(
+      { minLon: 3, minLat: 39, maxLon: 5, maxLat: 41 },
+      10,
+      FULL_TIME,
+    );
     const fetched = directoryBytesFetched(log);
     expect(fetched).toBeGreaterThan(PAGED_ROOT_LEN); // root + some leaves
     expect(fetched).toBeLessThan(PAGED_DIR_LEN); // not the whole directory
@@ -169,16 +233,8 @@ describe('paged directory: cross-impl + differential', () => {
   it('eventually fetches all leaves for a whole-world sweep', async () => {
     const log: PackedFetchLog = { paths: [], ranges: [] };
     const p = pagedArchive(log);
-    await p.getTileIdsInBounds(
-      ALL_DATA,
-      10,
-      FULL_TIME,
-    );
-    await p.getTileIdsInBounds(
-      ALL_DATA,
-      12,
-      FULL_TIME,
-    );
+    await p.getTileIdsInBounds(ALL_DATA, 10, FULL_TIME);
+    await p.getTileIdsInBounds(ALL_DATA, 12, FULL_TIME);
     // Root + every leaf == the full directory (coalesced reads may overlap the
     // accounting slightly, so assert "at least the whole thing").
     expect(directoryBytesFetched(log)).toBeGreaterThanOrEqual(PAGED_DIR_LEN);
@@ -187,14 +243,14 @@ describe('paged directory: cross-impl + differential', () => {
   it('decodes tile payloads identically through the paged reader', async () => {
     const s = singleArchive();
     const p = pagedArchive();
-    const oracleIds = await s.getTileIdsInBounds(
-      ALL_DATA,
-      10,
-      FULL_TIME,
-    );
+    const oracleIds = await s.getTileIdsInBounds(ALL_DATA, 10, FULL_TIME);
     expect(oracleIds.length).toBeGreaterThan(0);
     // Sample a few tiles across the set.
-    for (const id of [oracleIds[0], oracleIds[Math.floor(oracleIds.length / 2)], oracleIds[oracleIds.length - 1]]) {
+    for (const id of [
+      oracleIds[0],
+      oracleIds[Math.floor(oracleIds.length / 2)],
+      oracleIds[oracleIds.length - 1],
+    ]) {
       const st = await s.getTile(id);
       const pt = await p.getTile(id);
       expect(pt).not.toBeNull();
@@ -212,10 +268,17 @@ describe('paged directory: cross-impl + differential', () => {
     // grabs the whole object and decodes all pages, behaving like a single
     // directory. Results must still match the oracle.
     const s = singleArchive();
-    const p = new STTArchive({ url: paged.manifestUrl, fetch: packedFetch(paged) });
+    const p = new STTArchive({
+      url: paged.manifestUrl,
+      fetch: packedFetch(paged),
+    });
     for (const q of QUERIES) {
-      const want = sortedIds(await s.getTileIdsInBounds(q.bounds, q.zoom, q.time));
-      const got = sortedIds(await p.getTileIdsInBounds(q.bounds, q.zoom, q.time));
+      const want = sortedIds(
+        await s.getTileIdsInBounds(q.bounds, q.zoom, q.time),
+      );
+      const got = sortedIds(
+        await p.getTileIdsInBounds(q.bounds, q.zoom, q.time),
+      );
       expect(got, `whole-load paged ${q.name}`).toEqual(want);
     }
   });
@@ -289,7 +352,9 @@ describe('paged directory: point query with coverTMin > timeStart', () => {
     leaf0Length: number;
   } {
     // A real decodable blob (+ its directory facts) from the sample fixture.
-    const sample = packedFromSingleFile(new Uint8Array(nodeFs.readFileSync(SAMPLE)));
+    const sample = packedFromSingleFile(
+      new Uint8Array(nodeFs.readFileSync(SAMPLE)),
+    );
     const e = decodeDirectory(sample.objects.get('index/directory.sttd')!)[0];
     const srcPack = sample.objects.get('packs/pack-0.sttp')!;
     const blob = srcPack.subarray(e.offset, e.offset + e.length);
@@ -308,8 +373,12 @@ describe('paged directory: point query with coverTMin > timeStart', () => {
       temporalBucketMs: 1000,
     };
     const target = {
-      zoom: TARGET.z, x: TARGET.x, y: TARGET.y,
-      timeStart: 1000, timeEnd: 1999, coverTMin: 1500,
+      zoom: TARGET.z,
+      x: TARGET.x,
+      y: TARGET.y,
+      timeStart: 1000,
+      timeEnd: 1999,
+      coverTMin: 1500,
       ...blobFields,
     };
     // Same shape, ~98° of longitude away (z10 x=800 sits at ~101°E).
@@ -321,12 +390,30 @@ describe('paged directory: point query with coverTMin > timeStart', () => {
     // tMax = timeEnd (1999); bboxes cover each leaf's tile.
     const pages: PageDescriptor[] = [
       {
-        relOffset: 0, length: leaf0.length, entryCount: 1, minZoom: 10, maxZoom: 10,
-        minLon: 2, minLat: 40, maxLon: 4, maxLat: 41.5, tMin: 1500, tMax: 1999,
+        relOffset: 0,
+        length: leaf0.length,
+        entryCount: 1,
+        minZoom: 10,
+        maxZoom: 10,
+        minLon: 2,
+        minLat: 40,
+        maxLon: 4,
+        maxLat: 41.5,
+        tMin: 1500,
+        tMax: 1999,
       },
       {
-        relOffset: leaf0.length, length: leaf1.length, entryCount: 1, minZoom: 10, maxZoom: 10,
-        minLon: 101, minLat: 40, maxLon: 102, maxLat: 41.5, tMin: 1500, tMax: 1999,
+        relOffset: leaf0.length,
+        length: leaf1.length,
+        entryCount: 1,
+        minZoom: 10,
+        maxZoom: 10,
+        minLon: 101,
+        minLat: 40,
+        maxLon: 102,
+        maxLat: 41.5,
+        tMin: 1500,
+        tMax: 1999,
       },
     ];
     const root = encodePagedRootBytes(pages);
@@ -358,7 +445,10 @@ describe('paged directory: point query with coverTMin > timeStart', () => {
       packs: [{ key: 'packs/p0.sttp', length: blob.length }],
       metadata: sampleManifest.metadata,
     };
-    objects.set('manifest.json', new TextEncoder().encode(JSON.stringify(manifest)));
+    objects.set(
+      'manifest.json',
+      new TextEncoder().encode(JSON.stringify(manifest)),
+    );
     return {
       ds: { objects, manifestUrl: 'mem://data/cover/manifest.json' },
       dirKey,
@@ -392,9 +482,13 @@ describe('paged directory: point query with coverTMin > timeStart', () => {
       if (r.path !== dirKey) continue;
       const m = /bytes=(\d+)-(\d+)/.exec(r.range)!;
       if (Number(m[1]) >= rootLength) fetchedLeafBytes = true;
-      expect(Number(m[2]), 'decoy leaf must stay bbox-pruned').toBeLessThan(leaf1Start);
+      expect(Number(m[2]), 'decoy leaf must stay bbox-pruned').toBeLessThan(
+        leaf1Start,
+      );
     }
-    expect(fetchedLeafBytes, 'the target leaf was actually streamed').toBe(true);
+    expect(fetchedLeafBytes, 'the target leaf was actually streamed').toBe(
+      true,
+    );
   });
 });
 
@@ -424,7 +518,9 @@ describe('paged directory: point query near the dataset start does not fetch eve
     rootLength: number;
     leafOffsets: number[]; // rel offsets of each leaf (root-relative)
   } {
-    const sample = packedFromSingleFile(new Uint8Array(nodeFs.readFileSync(SAMPLE)));
+    const sample = packedFromSingleFile(
+      new Uint8Array(nodeFs.readFileSync(SAMPLE)),
+    );
     const e = decodeDirectory(sample.objects.get('index/directory.sttd')!)[0];
     const srcPack = sample.objects.get('packs/pack-0.sttp')!;
     const blob = srcPack.subarray(e.offset, e.offset + e.length);
@@ -440,19 +536,35 @@ describe('paged directory: point query near the dataset start does not fetch eve
       const t0 = i * BUCKET;
       const leaf = encodeDirectory([
         {
-          zoom: TARGET.z, x: TARGET.x, y: TARGET.y,
-          timeStart: t0, timeEnd: t0 + BUCKET - 1,
-          packId: 0, offset: 0, length: e.length,
-          uncompressedSize: e.uncompressedSize, featureCount: e.featureCount,
-          hilbert: 0, crc32c: e.crc32c, temporalBucketMs: BUCKET,
+          zoom: TARGET.z,
+          x: TARGET.x,
+          y: TARGET.y,
+          timeStart: t0,
+          timeEnd: t0 + BUCKET - 1,
+          packId: 0,
+          offset: 0,
+          length: e.length,
+          uncompressedSize: e.uncompressedSize,
+          featureCount: e.featureCount,
+          hilbert: 0,
+          crc32c: e.crc32c,
+          temporalBucketMs: BUCKET,
         },
       ]);
       leaves.push(leaf);
       leafOffsets.push(rel);
       pages.push({
-        relOffset: rel, length: leaf.length, entryCount: 1, minZoom: 10, maxZoom: 10,
-        minLon: 2, minLat: 40, maxLon: 4, maxLat: 41.5,
-        tMin: t0, tMax: t0 + BUCKET - 1,
+        relOffset: rel,
+        length: leaf.length,
+        entryCount: 1,
+        minZoom: 10,
+        maxZoom: 10,
+        minLon: 2,
+        minLat: 40,
+        maxLon: 4,
+        maxLat: 41.5,
+        tMin: t0,
+        tMax: t0 + BUCKET - 1,
       });
       rel += leaf.length;
     }
@@ -461,7 +573,8 @@ describe('paged directory: point query near the dataset start does not fetch eve
 
     const sttd = new Uint8Array(root.length + rel);
     sttd.set(root, 0);
-    for (let i = 0; i < N_LEAVES; i++) sttd.set(leaves[i], root.length + leafOffsets[i]);
+    for (let i = 0; i < N_LEAVES; i++)
+      sttd.set(leaves[i], root.length + leafOffsets[i]);
 
     const dirKey = 'index/dir.sttd';
     const objects = new Map<string, Uint8Array>();
@@ -485,7 +598,10 @@ describe('paged directory: point query near the dataset start does not fetch eve
       // prune is `tMin <= id.t + 1000`.
       metadata: { ...sampleManifest.metadata, temporal_bucket_ms: BUCKET },
     };
-    objects.set('manifest.json', new TextEncoder().encode(JSON.stringify(manifest)));
+    objects.set(
+      'manifest.json',
+      new TextEncoder().encode(JSON.stringify(manifest)),
+    );
     return {
       ds: { objects, manifestUrl: 'mem://data/many-leaf/manifest.json' },
       dirKey,
@@ -521,6 +637,8 @@ describe('paged directory: point query near the dataset start does not fetch eve
         if (start <= abs && abs <= end) fetched.add(i);
       }
     }
-    expect([...fetched].sort(), 'leaves fetched by the point query').toEqual([0, 1]);
+    expect([...fetched].sort(), 'leaves fetched by the point query').toEqual([
+      0, 1,
+    ]);
   });
 });

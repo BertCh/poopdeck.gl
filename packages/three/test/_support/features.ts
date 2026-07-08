@@ -68,7 +68,10 @@ export function makePointTile(
  * callers override the real geometry through `partial`. Matches the inline
  * `arcTile`/`flowTile`/`lineTile`/`odTile`/`tripTile`/`polyTile` factories.
  */
-export function makeLineTile(partial: Partial<BinaryFeatures>, opts: TileOpts = {}): Tile {
+export function makeLineTile(
+  partial: Partial<BinaryFeatures>,
+  opts: TileOpts = {},
+): Tile {
   const timeOffset = opts.timeOffset ?? 0;
   const features: BinaryFeatures = {
     featureCount: 1,
@@ -93,7 +96,8 @@ export function makeLineTile(partial: Partial<BinaryFeatures>, opts: TileOpts = 
         name: opts.layerName ?? 'lines',
         extent: 0,
         features,
-        geometryExtensionName: opts.geometryExtensionName ?? 'geoarrow.linestring',
+        geometryExtensionName:
+          opts.geometryExtensionName ?? 'geoarrow.linestring',
       },
     ],
   };
@@ -104,7 +108,11 @@ export function makeLineTile(partial: Partial<BinaryFeatures>, opts: TileOpts = 
  * a `count` numeric column — the payload the H3/Quadbin summary builders decode.
  * Matches the inline `summaryTile` shared by h3-cell/quadbin-cell.
  */
-export function makeVectorTile(ids: bigint[], counts: number[], layerName = 'summary'): Tile {
+export function makeVectorTile(
+  ids: bigint[],
+  counts: number[],
+  layerName = 'summary',
+): Tile {
   const n = ids.length;
   const features: BinaryFeatures = {
     featureCount: n,
@@ -123,6 +131,13 @@ export function makeVectorTile(ids: bigint[], counts: number[], layerName = 'sum
   return {
     id: { z: 4, x: 0, y: 0, t: 0 },
     timeRange: { start: 0, end: 1 },
-    layers: [{ name: layerName, extent: 0, features, geometryExtensionName: 'geoarrow.point' }],
+    layers: [
+      {
+        name: layerName,
+        extent: 0,
+        features,
+        geometryExtensionName: 'geoarrow.point',
+      },
+    ],
   };
 }

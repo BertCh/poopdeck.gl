@@ -20,8 +20,8 @@ const layer = new FlowStrokeLayer({
   id: 'bixi-corridors',
   data: '/data/bixi-corridors/manifest.json',
   currentTime,
-  gradientProperty: 'vertexValues',    // per-vertex value-matrix gradient
-  gradientDomain: [0, 90],             // active single-hour travellers on a trunk
+  gradientProperty: 'vertexValues', // per-vertex value-matrix gradient
+  gradientDomain: [0, 90], // active single-hour travellers on a trunk
   gradientColorRamp: [
     [30, 50, 120, 180],
     [40, 150, 200, 215],
@@ -29,9 +29,9 @@ const layer = new FlowStrokeLayer({
     [255, 170, 70, 248],
     [255, 255, 255, 255],
   ],
-  widthExponent: 0.5,                  // √-scale: width is area-proportional to volume
-  minFlow: 0,                          // corridors at/under this pulse to width 0
-  offsetWidths: 0.6,                   // twin-ribbon separation, in multiples of width
+  widthExponent: 0.5, // √-scale: width is area-proportional to volume
+  minFlow: 0, // corridors at/under this pulse to width 0
+  offsetWidths: 0.6, // twin-ribbon separation, in multiples of width
   widthUnits: 'pixels',
   widthMinPixels: 1,
 });
@@ -43,11 +43,11 @@ Inherits all properties from [`FlowCorridorLayer`](./flow-corridor-layer.md) (an
 
 `FlowStrokeLayer` adds:
 
-| Property | Type | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `widthExponent` | `number` | `0.5` | Exponent applied to each vertex's active-bucket blended value before `widthScale`/`widthMin`/`MaxPixels`: `width = value ** widthExponent`. `0.5` (√) is area-proportional, the cartographic default; lower flattens the busy/quiet contrast, higher exaggerates it. |
-| `minFlow` | `number` | `0` | Vertices whose active-bucket value is at or under this render at width `0` (invisible) — the per-hour pulse. |
-| `offsetWidths` | `number` | `0.6` | Constant perpendicular offset, in multiples of the rendered width, applied to every corridor to separate opposing-direction ribbons. `0` disables the offset (single centered line, base extension set). |
+| Property        | Type     | Default | Description                                                                                                                                                                                                                                                          |
+| :-------------- | :------- | :------ | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `widthExponent` | `number` | `0.5`   | Exponent applied to each vertex's active-bucket blended value before `widthScale`/`widthMin`/`MaxPixels`: `width = value ** widthExponent`. `0.5` (√) is area-proportional, the cartographic default; lower flattens the busy/quiet contrast, higher exaggerates it. |
+| `minFlow`       | `number` | `0`     | Vertices whose active-bucket value is at or under this render at width `0` (invisible) — the per-hour pulse.                                                                                                                                                         |
+| `offsetWidths`  | `number` | `0.6`   | Constant perpendicular offset, in multiples of the rendered width, applied to every corridor to separate opposing-direction ribbons. `0` disables the offset (single centered line, base extension set).                                                             |
 
 ## Difference from FlowCorridorLayer
 

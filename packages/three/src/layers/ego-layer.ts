@@ -129,7 +129,9 @@ export class EgoLayer extends BaseSttLayer implements SttPickable {
       }
     }
 
-    const order = Array.from({ length: t.length }, (_, k) => k).sort((a, b) => t[a] - t[b]);
+    const order = Array.from({ length: t.length }, (_, k) => k).sort(
+      (a, b) => t[a] - t[b],
+    );
     this.times = order.map((i) => t[i]);
     this.lon = order.map((i) => lon[i]);
     this.lat = order.map((i) => lat[i]);
@@ -140,7 +142,11 @@ export class EgoLayer extends BaseSttLayer implements SttPickable {
     const proj = ctx.projection;
     const pos = new Float32Array(this.times.length * 3);
     for (let i = 0; i < this.times.length; i++) {
-      const p = proj.project(this.lon[i], this.lat[i], this.alt[i] + this.opts.zLift);
+      const p = proj.project(
+        this.lon[i],
+        this.lat[i],
+        this.alt[i] + this.opts.zLift,
+      );
       pos[i * 3] = p[0];
       pos[i * 3 + 1] = p[1];
       pos[i * 3 + 2] = p[2];
@@ -153,7 +159,10 @@ export class EgoLayer extends BaseSttLayer implements SttPickable {
     this.trail.visible = this.times.length > 0; // no 0-vertex draw on an empty trail
 
     const mgeom = new BufferGeometry();
-    mgeom.setAttribute('position', new Float32BufferAttribute(this.markerBuf, 3));
+    mgeom.setAttribute(
+      'position',
+      new Float32BufferAttribute(this.markerBuf, 3),
+    );
     this.marker.geometry.dispose();
     this.marker.geometry = mgeom;
     this.marker.visible = false; // enabled by setTime once a pose is sampled
@@ -169,10 +178,21 @@ export class EgoLayer extends BaseSttLayer implements SttPickable {
       return;
     }
     const [l, w, h] = this.opts.boxSize;
-    writeBoxEdges(this.markerBuf, 0, pose.x, pose.y, pose.z, pose.heading, l, w, h);
+    writeBoxEdges(
+      this.markerBuf,
+      0,
+      pose.x,
+      pose.y,
+      pose.z,
+      pose.heading,
+      l,
+      w,
+      h,
+    );
     this.marker.visible = true;
     geom.setDrawRange(0, FLOATS_PER_BOX / 3);
-    (geom.getAttribute('position') as Float32BufferAttribute).needsUpdate = true;
+    (geom.getAttribute('position') as Float32BufferAttribute).needsUpdate =
+      true;
   }
 
   /** Current-frame ego OBB for click-to-inspect picking ({@link SttPickable}). */

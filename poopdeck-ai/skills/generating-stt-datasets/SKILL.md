@@ -9,7 +9,7 @@ description: >-
   NOT for turning a user's OWN data into a .stt (that's building-stt-datasets / stt-build).
 license: MIT
 metadata:
-  version: "0.4.0"
+  version: '0.4.0'
 ---
 
 # Generating reference STT datasets
@@ -48,24 +48,24 @@ stt-generate all --output-dir examples/showcase/public/data --skip-existing
 
 ## The catalog
 
-| dataset | source | notes / key flags |
-|---|---|---|
-| `earthquakes` | USGS | no params |
-| `hurricanes` | NOAA IBTrACS | no params |
-| `wildfires` | NIFC perimeters | no params |
-| `ais` | NOAA Marine Cadastre | `--date YYYY-MM-DD` (or `--input`) |
-| `flights` | OpenSky Network | `--date` — **Mondays 2017–2020 only** |
-| `nyc-rideshare` | NYC TLC + OSRM | `--synthetic` (no server) or `--download YYYY-MM` (needs an OSRM server) |
-| `nyc-taxi-points` | derived | `--input` an existing path `.stt` |
-| `bixi` | Montreal open data | origin→destination flowmap |
-| `gtfs` | a static GTFS feed | one service date (transit "ballet") |
-| `nwm` | NOAA NWM on NHDPlus | river-discharge corridors, CONUS |
-| `satellites` | CelesTrak TLE (SGP4) | orbit propagation |
-| `drifters` | NOAA Global Drifter Program | `--start`/`--end` YYYY-MM-DD |
-| `drifters-hourly` | GDP hourly QC | **experimental** |
-| `animals` | GBIF tracking | migration trajectories |
-| `osm-edits` | OSM history | node creations / changesets |
-| `storms` | NEXRAD | fixed event: 2020-08-10 Iowa derecho |
+| dataset           | source                      | notes / key flags                                                        |
+| ----------------- | --------------------------- | ------------------------------------------------------------------------ |
+| `earthquakes`     | USGS                        | no params                                                                |
+| `hurricanes`      | NOAA IBTrACS                | no params                                                                |
+| `wildfires`       | NIFC perimeters             | no params                                                                |
+| `ais`             | NOAA Marine Cadastre        | `--date YYYY-MM-DD` (or `--input`)                                       |
+| `flights`         | OpenSky Network             | `--date` — **Mondays 2017–2020 only**                                    |
+| `nyc-rideshare`   | NYC TLC + OSRM              | `--synthetic` (no server) or `--download YYYY-MM` (needs an OSRM server) |
+| `nyc-taxi-points` | derived                     | `--input` an existing path `.stt`                                        |
+| `bixi`            | Montreal open data          | origin→destination flowmap                                               |
+| `gtfs`            | a static GTFS feed          | one service date (transit "ballet")                                      |
+| `nwm`             | NOAA NWM on NHDPlus         | river-discharge corridors, CONUS                                         |
+| `satellites`      | CelesTrak TLE (SGP4)        | orbit propagation                                                        |
+| `drifters`        | NOAA Global Drifter Program | `--start`/`--end` YYYY-MM-DD                                             |
+| `drifters-hourly` | GDP hourly QC               | **experimental**                                                         |
+| `animals`         | GBIF tracking               | migration trajectories                                                   |
+| `osm-edits`       | OSM history                 | node creations / changesets                                              |
+| `storms`          | NEXRAD                      | fixed event: 2020-08-10 Iowa derecho                                     |
 
 Run `stt-generate <dataset> --help` for the exact flag set — forward those flags
 through the MCP tool's `extraArgs` (e.g. `["--date","2024-01-01"]`,

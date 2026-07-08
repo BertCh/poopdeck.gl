@@ -23,15 +23,26 @@
 import { describe, it, expect } from 'vitest';
 import { SpatiotemporalTileset } from '../src/spatiotemporal-tileset';
 import type { TileId, BoundingBox, Tile } from '../src/types';
-import { BOUNDS, BUCKET_MS, fakeTile, makeAvailableTiles } from './helpers/fixtures';
+import {
+  BOUNDS,
+  BUCKET_MS,
+  fakeTile,
+  makeAvailableTiles,
+} from './helpers/fixtures';
 
-const SHIFTED_BOUNDS: BoundingBox = { minLon: -90, minLat: -85, maxLon: 90, maxLat: 85 };
+const SHIFTED_BOUNDS: BoundingBox = {
+  minLon: -90,
+  minLat: -85,
+  maxLon: 90,
+  maxLat: 85,
+};
 const N_BUCKETS = 200;
 
 /** One tile per bucket at (x=0, y=0) whose interval overlaps the range. */
 const availableTiles = makeAvailableTiles(N_BUCKETS);
 
-const settle = (ms = 30): Promise<void> => new Promise((r) => setTimeout(r, ms));
+const settle = (ms = 30): Promise<void> =>
+  new Promise((r) => setTimeout(r, ms));
 
 /** A gated batch request: stays pending until resolved, rejects on abort. */
 interface GatedBatch {
@@ -71,7 +82,10 @@ describe('tier-aware supersession (cancelSupersededRequests)', () => {
     const tileset = makeTileset(batches, loaded);
 
     tileset.setAnimationState(true, 10);
-    tileset.update({ bounds: BOUNDS, zoom: 6, time: 0, timeWindow: BUCKET_MS }, true);
+    tileset.update(
+      { bounds: BOUNDS, zoom: 6, time: 0, timeWindow: BUCKET_MS },
+      true,
+    );
     await settle();
 
     // Resolve the priority batch (bucket 0); the prefetch runway dispatches.
@@ -79,12 +93,17 @@ describe('tier-aware supersession (cancelSupersededRequests)', () => {
     batches[0].resolve();
     await settle(300); // let the debounced prefetch plan + dispatch
 
-    const prefetchBatches = batches.slice(1).filter((b) => b.ids.every((id) => id.t > 0));
+    const prefetchBatches = batches
+      .slice(1)
+      .filter((b) => b.ids.every((id) => id.t > 0));
     expect(prefetchBatches.length).toBeGreaterThan(0);
 
     // Ordinary playback step (half a window): the runway ahead is exactly
     // what the play head is about to consume — it must survive.
-    tileset.update({ bounds: BOUNDS, zoom: 6, time: 500, timeWindow: BUCKET_MS }, true);
+    tileset.update(
+      { bounds: BOUNDS, zoom: 6, time: 500, timeWindow: BUCKET_MS },
+      true,
+    );
     await settle();
     expect(prefetchBatches.every((b) => !b.signal?.aborted)).toBe(true);
 
@@ -101,7 +120,10 @@ describe('tier-aware supersession (cancelSupersededRequests)', () => {
     const tileset = makeTileset(batches);
 
     // Window [0, 3000] → buckets 0..3 in one priority batch.
-    tileset.update({ bounds: BOUNDS, zoom: 6, time: 1500, timeWindow: 3 * BUCKET_MS }, true);
+    tileset.update(
+      { bounds: BOUNDS, zoom: 6, time: 1500, timeWindow: 3 * BUCKET_MS },
+      true,
+    );
     await settle();
     const priorityBatch = batches[0];
     expect(priorityBatch.ids.length).toBeGreaterThan(1);
@@ -109,7 +131,10 @@ describe('tier-aware supersession (cancelSupersededRequests)', () => {
     // Window slides to [1000, 4000]: bucket 0 leaves the needed set, but
     // buckets 1–3 are still needed — the shared-controller batch must NOT be
     // killed for its trailing edge.
-    tileset.update({ bounds: BOUNDS, zoom: 6, time: 2500, timeWindow: 3 * BUCKET_MS }, true);
+    tileset.update(
+      { bounds: BOUNDS, zoom: 6, time: 2500, timeWindow: 3 * BUCKET_MS },
+      true,
+    );
     await settle();
     expect(priorityBatch.signal?.aborted).toBe(false);
 
@@ -120,12 +145,18 @@ describe('tier-aware supersession (cancelSupersededRequests)', () => {
     const batches: GatedBatch[] = [];
     const tileset = makeTileset(batches);
 
-    tileset.update({ bounds: BOUNDS, zoom: 6, time: 1500, timeWindow: 3 * BUCKET_MS }, true);
+    tileset.update(
+      { bounds: BOUNDS, zoom: 6, time: 1500, timeWindow: 3 * BUCKET_MS },
+      true,
+    );
     await settle();
     const priorityBatch = batches[0];
 
     // Seek far away: none of the old batch's buckets are needed any more.
-    tileset.update({ bounds: BOUNDS, zoom: 6, time: 100_000, timeWindow: 3 * BUCKET_MS }, true);
+    tileset.update(
+      { bounds: BOUNDS, zoom: 6, time: 100_000, timeWindow: 3 * BUCKET_MS },
+      true,
+    );
     await settle();
     expect(priorityBatch.signal?.aborted).toBe(true);
 
@@ -136,18 +167,26 @@ describe('tier-aware supersession (cancelSupersededRequests)', () => {
     const batches: GatedBatch[] = [];
     const tileset = makeTileset(batches);
 
-    tileset.update({ bounds: BOUNDS, zoom: 6, time: 0, timeWindow: BUCKET_MS }, true);
+    tileset.update(
+      { bounds: BOUNDS, zoom: 6, time: 0, timeWindow: BUCKET_MS },
+      true,
+    );
     await settle();
     batches[0].resolve();
     await settle(300);
 
-    const prefetchBatches = batches.slice(1).filter((b) => b.ids.every((id) => id.t > 0));
+    const prefetchBatches = batches
+      .slice(1)
+      .filter((b) => b.ids.every((id) => id.t > 0));
     expect(prefetchBatches.length).toBeGreaterThan(0);
     expect(prefetchBatches.every((b) => !b.signal?.aborted)).toBe(true);
 
     // Pan: same time, new bounds — the runway was planned for the old
     // viewport and is auto-flushed.
-    tileset.update({ bounds: SHIFTED_BOUNDS, zoom: 6, time: 0, timeWindow: BUCKET_MS }, true);
+    tileset.update(
+      { bounds: SHIFTED_BOUNDS, zoom: 6, time: 0, timeWindow: BUCKET_MS },
+      true,
+    );
     await settle();
     expect(prefetchBatches.every((b) => b.signal?.aborted)).toBe(true);
 
@@ -162,23 +201,34 @@ describe('speed-aware seek detection', () => {
 
     // Signalled speed 100 sim-ms/real-ms → seek threshold 100 000 sim-ms.
     tileset.setAnimationState(true, 100);
-    tileset.update({ bounds: BOUNDS, zoom: 6, time: 0, timeWindow: BUCKET_MS }, true);
+    tileset.update(
+      { bounds: BOUNDS, zoom: 6, time: 0, timeWindow: BUCKET_MS },
+      true,
+    );
     await settle();
     batches[0].resolve();
     await settle(300);
 
-    const prefetchBatches = batches.slice(1).filter((b) => b.ids.every((id) => id.t > 0));
+    const prefetchBatches = batches
+      .slice(1)
+      .filter((b) => b.ids.every((id) => id.t > 0));
     expect(prefetchBatches.length).toBeGreaterThan(0);
 
     // Five windows in one step — far beyond the old window-only threshold,
     // comfortably inside the speed-aware one. Must NOT flush.
-    tileset.update({ bounds: BOUNDS, zoom: 6, time: 5000, timeWindow: BUCKET_MS }, true);
+    tileset.update(
+      { bounds: BOUNDS, zoom: 6, time: 5000, timeWindow: BUCKET_MS },
+      true,
+    );
     await settle();
     expect(prefetchBatches.every((b) => !b.signal?.aborted)).toBe(true);
 
     // A genuine jump (≫ |speed| × 1 s for any plausible measured speed in
     // this test) IS a seek and flushes the runway.
-    tileset.update({ bounds: BOUNDS, zoom: 6, time: 5_000_000, timeWindow: BUCKET_MS }, true);
+    tileset.update(
+      { bounds: BOUNDS, zoom: 6, time: 5_000_000, timeWindow: BUCKET_MS },
+      true,
+    );
     await settle();
     expect(prefetchBatches.every((b) => b.signal?.aborted)).toBe(true);
 
@@ -204,17 +254,25 @@ describe('per-batch dispatch accounting', () => {
       getTileDataBatch: gatedBatchFn(batches),
     });
 
-    tileset.update({ bounds: BOUNDS, zoom: 6, time: 25_000, timeWindow: 50 * BUCKET_MS }, true);
+    tileset.update(
+      { bounds: BOUNDS, zoom: 6, time: 25_000, timeWindow: 50 * BUCKET_MS },
+      true,
+    );
     await settle();
     expect(batches.length).toBe(1);
     expect(batches[0].ids.length).toBeGreaterThan(24); // exceeds maxRequests
 
     // The window slides one bucket: the newly-needed bucket must dispatch
     // immediately even though the 51-tile batch is still pending.
-    tileset.update({ bounds: BOUNDS, zoom: 6, time: 26_000, timeWindow: 50 * BUCKET_MS }, true);
+    tileset.update(
+      { bounds: BOUNDS, zoom: 6, time: 26_000, timeWindow: 50 * BUCKET_MS },
+      true,
+    );
     await settle();
     const followUp = batches.slice(1);
-    expect(followUp.some((b) => b.ids.some((id) => id.t === 51_000))).toBe(true);
+    expect(followUp.some((b) => b.ids.some((id) => id.t === 51_000))).toBe(
+      true,
+    );
     // And the original batch was not killed for its trailing edge.
     expect(batches[0].signal?.aborted).toBe(false);
 

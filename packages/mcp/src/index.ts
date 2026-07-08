@@ -37,7 +37,11 @@ export {
   DEFAULT_DOC_MAX_BYTES,
 } from './docs.js';
 export type { DocEntry, DocSnippet, DocSearchResult } from './docs.js';
-export { buildViewMap, inferLayerType, resolveManifestUrl } from './view-map.js';
+export {
+  buildViewMap,
+  inferLayerType,
+  resolveManifestUrl,
+} from './view-map.js';
 export type { ViewState, ViewMapOptions, ViewMapResult } from './view-map.js';
 export { parseCliArgs, HelpRequested, USAGE } from './config.js';
 export type { SttMcpConfig, TransportKind } from './config.js';

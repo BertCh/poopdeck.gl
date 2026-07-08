@@ -121,7 +121,9 @@ export const categoryColorUniforms = {
   // paletteSize/useCategoryColor every frame and the UBO stays
   // zero-initialized. Mirrors upstream FillStyleExtension's
   // getPatternUniforms, which returns all scalars next to the texture.
-  getUniforms: (opts?: { paletteTexture?: Texture } & Partial<CategoryColorUniformProps>) => {
+  getUniforms: (
+    opts?: { paletteTexture?: Texture } & Partial<CategoryColorUniformProps>,
+  ) => {
     if (!opts) {
       return {};
     }
@@ -162,7 +164,10 @@ interface PaletteTextureEntry {
   refs: number;
 }
 
-const paletteTextureCaches = new WeakMap<Device, Map<string, PaletteTextureEntry>>();
+const paletteTextureCaches = new WeakMap<
+  Device,
+  Map<string, PaletteTextureEntry>
+>();
 
 /** Content key for a palette: entry count + RGBA digest (memoized per array reference). */
 function paletteDigest(palette: readonly Color[]): string {
@@ -231,7 +236,10 @@ export class CategoryColorExtension extends LayerExtension {
   static defaultProps = defaultProps;
   static extensionName = 'CategoryColorExtension';
 
-  getShaders(this: Layer<CategoryColorExtensionProps>, _extension: CategoryColorExtension) {
+  getShaders(
+    this: Layer<CategoryColorExtensionProps>,
+    _extension: CategoryColorExtension,
+  ) {
     return {
       modules: [categoryColorUniforms],
       inject: {
@@ -261,15 +269,15 @@ export class CategoryColorExtension extends LayerExtension {
             // categorical feature at the palette's own alpha.
             color = vec4(palette.rgb, palette.a * color.a);
           }
-        `
-      }
+        `,
+      },
     };
   }
 
   initializeState(
     this: Layer<CategoryColorExtensionProps>,
     context: LayerContext,
-    extension: CategoryColorExtension
+    extension: CategoryColorExtension,
   ): void {
     const attributeManager = this.getAttributeManager();
     if (attributeManager) {
@@ -286,8 +294,8 @@ export class CategoryColorExtension extends LayerExtension {
           accessor: 'getCategoryIndex',
           type: 'float32',
           stepMode: 'dynamic',
-          defaultValue: 0
-        }
+          defaultValue: 0,
+        },
       });
     }
 
@@ -297,7 +305,7 @@ export class CategoryColorExtension extends LayerExtension {
   updateState(
     this: Layer<CategoryColorExtensionProps>,
     params: UpdateParameters<Layer<CategoryColorExtensionProps>>,
-    extension: CategoryColorExtension
+    extension: CategoryColorExtension,
   ): void {
     // Reference check is only the trigger; bindPalette keys by CONTENT, so a
     // re-created but identical palette array never re-uploads or rebinds.
@@ -309,7 +317,7 @@ export class CategoryColorExtension extends LayerExtension {
   finalizeState(
     this: Layer<CategoryColorExtensionProps>,
     context: LayerContext,
-    _extension: CategoryColorExtension
+    _extension: CategoryColorExtension,
   ): void {
     const digest = this.state.paletteDigest as string | undefined;
     if (digest !== undefined) {
@@ -320,12 +328,9 @@ export class CategoryColorExtension extends LayerExtension {
   draw(
     this: Layer<CategoryColorExtensionProps>,
     _params: unknown,
-    _extension: CategoryColorExtension
+    _extension: CategoryColorExtension,
   ): void {
-    const {
-      categoryPalette = [],
-      useCategoryColor = false,
-    } = this.props;
+    const { categoryPalette = [], useCategoryColor = false } = this.props;
 
     // Hard cap: callers must size their palettes within the texture. We
     // assert (warn + clamp) rather than silently wrap, which was the bug in

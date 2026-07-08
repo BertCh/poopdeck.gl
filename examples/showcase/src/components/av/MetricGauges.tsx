@@ -8,13 +8,13 @@
  *
  * Missing telemetry → the whole panel is hidden by the parent (no hard fail).
  */
-import React, { useEffect, useRef } from "react";
-import type { TimeController } from "@poopdeck.gl/playback";
+import React, { useEffect, useRef } from 'react';
+import type { TimeController } from '@poopdeck.gl/playback';
 import {
   telemetryValueAt,
   type AvTelemetry,
   type AvTelemetryField,
-} from "./sceneTypes";
+} from './sceneTypes';
 
 export interface MetricGaugesProps {
   telemetry: AvTelemetry;
@@ -22,25 +22,28 @@ export interface MetricGaugesProps {
 }
 
 /** A field's typical magnitude, for normalizing the arc fill (0..1). */
-function fieldScale(key: string, unit: string): { max: number; signed: boolean } {
-  if (key === "speed") return { max: 30, signed: false }; // ~108 km/h
-  if (key === "steer") return { max: Math.PI / 4, signed: true }; // ±45°
-  if (key === "accel") return { max: 5, signed: true }; // ±5 m/s²
-  if (unit === "frac") return { max: 1, signed: false };
+function fieldScale(
+  key: string,
+  unit: string,
+): { max: number; signed: boolean } {
+  if (key === 'speed') return { max: 30, signed: false }; // ~108 km/h
+  if (key === 'steer') return { max: Math.PI / 4, signed: true }; // ±45°
+  if (key === 'accel') return { max: 5, signed: true }; // ±5 m/s²
+  if (unit === 'frac') return { max: 1, signed: false };
   return { max: 10, signed: false };
 }
 
 function formatValue(key: string, v: number, unit: string): string {
-  if (key === "speed") return `${(v * 3.6).toFixed(0)}`; // km/h for readability
-  if (unit === "rad") return `${((v * 180) / Math.PI).toFixed(0)}°`;
-  if (unit === "frac") return `${(v * 100).toFixed(0)}%`;
+  if (key === 'speed') return `${(v * 3.6).toFixed(0)}`; // km/h for readability
+  if (unit === 'rad') return `${((v * 180) / Math.PI).toFixed(0)}°`;
+  if (unit === 'frac') return `${(v * 100).toFixed(0)}%`;
   return v.toFixed(1);
 }
 
 function unitLabel(key: string, unit: string): string {
-  if (key === "speed") return "km/h";
-  if (unit === "rad") return "deg";
-  if (unit === "frac") return "%";
+  if (key === 'speed') return 'km/h';
+  if (unit === 'rad') return 'deg';
+  if (unit === 'frac') return '%';
   return unit;
 }
 
@@ -74,7 +77,7 @@ const Gauge: React.FC<{
     };
     // Seed immediately, then follow the clock.
     render(timeController.getTime());
-    const off = timeController.on("tick", render);
+    const off = timeController.on('tick', render);
     return off;
   }, [field, fieldKey, timeController, max, signed]);
 
@@ -100,7 +103,7 @@ const Gauge: React.FC<{
           strokeLinecap="round"
           strokeDasharray={CIRC}
           strokeDashoffset={CIRC}
-          style={{ transition: "stroke-dashoffset 80ms linear" }}
+          style={{ transition: 'stroke-dashoffset 80ms linear' }}
         />
       </svg>
       <div className="-mt-11 flex flex-col items-center pointer-events-none">

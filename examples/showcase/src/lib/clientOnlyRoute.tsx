@@ -1,10 +1,10 @@
-import React, { Suspense, type ComponentType } from "react";
-import { ClientOnly } from "./ClientOnly";
+import React, { Suspense, type ComponentType } from 'react';
+import { ClientOnly } from './ClientOnly';
 
 const FullscreenLoading: React.FC = () => (
   <div
     className="w-full h-full flex items-center justify-center text-sm"
-    style={{ background: "var(--page-bg)", color: "var(--ink-400)" }}
+    style={{ background: 'var(--page-bg)', color: 'var(--ink-400)' }}
   >
     Loading…
   </div>

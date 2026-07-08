@@ -19,11 +19,17 @@ import type { Scene } from 'cesium';
 import type { Tile } from '@poopdeck.gl/core';
 import type { SttRenderNode } from '@poopdeck.gl/core/capabilities';
 import type { SttPickResult } from '@poopdeck.gl/core/picking';
-import { BatchedPolylineLayer, type BatchedPolylineOptions } from './batched-polyline-layer.js';
+import {
+  BatchedPolylineLayer,
+  type BatchedPolylineOptions,
+} from './batched-polyline-layer.js';
 import { buildArcPolylines } from './lib/polylines.js';
 import type { FeatureColorMode } from './lib/feature-color.js';
 
-export interface CesiumArcLayerOptions extends Omit<BatchedPolylineOptions, 'arcType'> {
+export interface CesiumArcLayerOptions extends Omit<
+  BatchedPolylineOptions,
+  'arcType'
+> {
   id?: string;
   /** Per-arc colour (constant / categorical / ramp). @default opaque grey */
   color?: FeatureColorMode;
@@ -44,7 +50,10 @@ export class CesiumArcLayer implements SttRenderNode {
     this.id = options.id ?? 'stt-cesium-arcs';
     this.opts = options;
     // The arc is already densely sampled — straight segments between samples.
-    this.batch = new BatchedPolylineLayer(scene, this.id, { ...options, arcType: 'none' });
+    this.batch = new BatchedPolylineLayer(scene, this.id, {
+      ...options,
+      arcType: 'none',
+    });
   }
 
   /** (Re)build arcs from decoded tiles (replace-all). */

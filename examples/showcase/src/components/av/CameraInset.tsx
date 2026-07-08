@@ -8,9 +8,9 @@
  * Missing camera stream → the parent hides this; a frame that fails to load
  * (placeholder bundles) just shows the empty frame chrome, no hard fail.
  */
-import React, { useEffect, useRef, useState } from "react";
-import type { TimeController } from "@poopdeck.gl/playback";
-import { cameraFrameAt, type AvCameras } from "./sceneTypes";
+import React, { useEffect, useRef, useState } from 'react';
+import type { TimeController } from '@poopdeck.gl/playback';
+import { cameraFrameAt, type AvCameras } from './sceneTypes';
 
 export interface CameraInsetProps {
   cameras: AvCameras;
@@ -44,18 +44,18 @@ const CameraInset: React.FC<CameraInsetProps> = ({
       setSrc(resolveFrameUrl(frame.url));
     };
     apply(timeController.getTime());
-    const off = timeController.on("tick", apply);
+    const off = timeController.on('tick', apply);
     return off;
   }, [cameras, resolveFrameUrl, timeController]);
 
   return (
     <div
       className={`overflow-hidden rounded-lg border border-white/10 bg-black/60 shadow-xl backdrop-blur-md ${
-        className ?? "w-56"
+        className ?? 'w-56'
       }`}
     >
       <div className="px-2 py-1 text-[10px] uppercase tracking-wider text-slate-400 border-b border-white/10 flex items-center justify-between">
-        <span>{cameras.camera || "Camera"}</span>
+        <span>{cameras.camera || 'Camera'}</span>
         <span className="inline-block h-1.5 w-1.5 rounded-full bg-red-500" />
       </div>
       <div className="aspect-video bg-slate-900/80 flex items-center justify-center">

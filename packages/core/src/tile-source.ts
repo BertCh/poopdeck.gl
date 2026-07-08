@@ -109,12 +109,12 @@ export function createSttTileSource(archive: STTArchive): SttTileSource {
       return archive.getTile({ z, x, y, t });
     },
 
-    async getTileData(
-      params: SttGetTileDataParameters,
-    ): Promise<Tile | null> {
+    async getTileData(params: SttGetTileDataParameters): Promise<Tile | null> {
       const { index, signal, userData } = params;
       const t = userData?.t ?? (await getMidpoint());
-      const opts: TileRequestOptions | undefined = signal ? { signal } : undefined;
+      const opts: TileRequestOptions | undefined = signal
+        ? { signal }
+        : undefined;
       return archive.getTile({ z: index.z, x: index.x, y: index.y, t }, opts);
     },
   };

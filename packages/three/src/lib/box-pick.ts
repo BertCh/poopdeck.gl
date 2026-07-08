@@ -105,7 +105,11 @@ const PARALLEL_EPS = 1e-9;
  * (0 if the origin is inside), or `null` for a miss. `dir` need not be
  * normalised; `t` is in units of `dir`'s length.
  */
-export function rayObbHit(origin: Vec3, dir: Vec3, box: PickBox): number | null {
+export function rayObbHit(
+  origin: Vec3,
+  dir: Vec3,
+  box: PickBox,
+): number | null {
   const [cx, cy, cz] = box.center;
   const cosH = Math.cos(box.heading);
   const sinH = Math.sin(box.heading);
@@ -152,7 +156,11 @@ export function rayObbHit(origin: Vec3, dir: Vec3, box: PickBox): number | null 
 }
 
 /** Nearest box hit along the ray, or `null` if nothing is hit. */
-export function pickBoxes(origin: Vec3, dir: Vec3, boxes: readonly PickBox[]): SttBoxPickInfo | null {
+export function pickBoxes(
+  origin: Vec3,
+  dir: Vec3,
+  boxes: readonly PickBox[],
+): SttBoxPickInfo | null {
   let best: PickBox | null = null;
   let bestT = Infinity;
   for (const box of boxes) {

@@ -30,7 +30,11 @@ export type Expr =
   | { op: 'uniform'; name: string }
   | { op: 'attr'; name: string }
   | { op: 'const'; value: number }
-  | { op: 'add' | 'sub' | 'mul' | 'div' | 'min' | 'max' | 'step'; a: Expr; b: Expr }
+  | {
+      op: 'add' | 'sub' | 'mul' | 'div' | 'min' | 'max' | 'step';
+      a: Expr;
+      b: Expr;
+    }
   | { op: 'clamp01'; a: Expr }
   | { op: 'select'; c: Expr; t: Expr; f: Expr };
 
@@ -102,7 +106,11 @@ const cumulativeExpr: Expr = mul(
 // (0) vs head→tail linear fade (1).
 const trailStart = sub(cur, trailLength);
 const trailAge = sub(cur, vtx);
-const trailFaded = select(trailLength, clamp01(sub(k(1), div(trailAge, trailLength))), k(0));
+const trailFaded = select(
+  trailLength,
+  clamp01(sub(k(1), div(trailAge, trailLength))),
+  k(0),
+);
 const trailExpr: Expr = mul(
   mul(step(vtx, cur), step(trailStart, vtx)), // trailStart <= vtx <= cur
   clamp01(add(sub(k(1), trailFade), mul(trailFaded, trailFade))),

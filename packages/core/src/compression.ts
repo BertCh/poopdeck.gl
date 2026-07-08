@@ -33,7 +33,7 @@ export function unzstdSync(data: Uint8Array): Uint8Array {
  */
 export async function decompress(
   data: Uint8Array,
-  compression: Compression
+  compression: Compression,
 ): Promise<Uint8Array> {
   return decompressSync(data, compression);
 }
@@ -44,7 +44,7 @@ export async function decompress(
  */
 export function decompressSync(
   data: Uint8Array,
-  compression: Compression
+  compression: Compression,
 ): Uint8Array {
   switch (compression) {
     case Compression.None:

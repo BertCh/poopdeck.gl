@@ -130,9 +130,11 @@ export class TimeController {
     // TEMP-DIAGNOSTIC (flash repro): record backward sim-time jumps while
     // playing — the governor's frontier clamp lands here via setClockTime.
     if (this.playing && time < this.currentTime) {
-      const probe = (globalThis as unknown as {
-        __sttProbe?: { enabled?: boolean; backjumps?: unknown[] };
-      }).__sttProbe;
+      const probe = (
+        globalThis as unknown as {
+          __sttProbe?: { enabled?: boolean; backjumps?: unknown[] };
+        }
+      ).__sttProbe;
       if (probe?.enabled && Array.isArray(probe.backjumps)) {
         probe.backjumps.push({
           wall: performance.now(),
@@ -308,7 +310,10 @@ export class TimeController {
   on(event: 'playState', callback: PlayStateCallback): () => void;
   on(event: 'wrap', callback: TimeUpdateCallback): () => void;
   on(event: 'ended', callback: TimeUpdateCallback): () => void;
-  on(event: string, callback: TimeUpdateCallback | PlayStateCallback): () => void {
+  on(
+    event: string,
+    callback: TimeUpdateCallback | PlayStateCallback,
+  ): () => void {
     if (event === 'tick') {
       this.listeners.add(callback as TimeUpdateCallback);
     } else if (event === 'playState') {
@@ -421,7 +426,10 @@ export class TimeController {
           }
         } else if (this.currentTime < start) {
           if (this.bounce) {
-            this.currentTime = Math.min(end, start + (start - this.currentTime));
+            this.currentTime = Math.min(
+              end,
+              start + (start - this.currentTime),
+            );
             this.direction = 1;
             this.notifyPlayStateListeners();
           } else if (this.loop) {
@@ -451,9 +459,15 @@ export class TimeController {
     // TEMP-DIAGNOSTIC (flash repro): ~20Hz (wall, simTime) timeline so tile
     // arrivals can be correlated against the playhead offline.
     {
-      const probe = (globalThis as unknown as {
-        __sttProbe?: { enabled?: boolean; timeline?: unknown[]; _tlLast?: number };
-      }).__sttProbe;
+      const probe = (
+        globalThis as unknown as {
+          __sttProbe?: {
+            enabled?: boolean;
+            timeline?: unknown[];
+            _tlLast?: number;
+          };
+        }
+      ).__sttProbe;
       if (probe?.enabled && Array.isArray(probe.timeline)) {
         if (now - (probe._tlLast ?? 0) >= 50) {
           probe._tlLast = now;
@@ -501,4 +515,3 @@ export class TimeController {
     }
   }
 }
-

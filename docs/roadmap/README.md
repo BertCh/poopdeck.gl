@@ -119,12 +119,12 @@ git history preserves everything verbatim.
 
 Retired files → where their durable content lives now (full text in git history):
 
-| Retired | Now in |
-|---|---|
-| `stt-packed.md`, `stt-format-review-2026-07.md`, `stt-packed-v2-design-2026-07.md`, `blob-ordering-heuristic-2026-07.md` | [stt-packed-format-decisions.md](./stt-packed-format-decisions.md) |
-| `rust-audit-2026-06.md` | format decisions §2/§5/§9 (positioning, transforms NO-GO, triggers) |
-| `renderer-abstraction-2026-06.md`, `three-renderer-parity.md`, `three-renderer-sota-2026-07.md`, `deckgl-parity-audit-2026-07.md` | [renderer-architecture.md](./renderer-architecture.md) |
-| `fe-hotpath-audit-2026-06.md` | closed; reference patterns + MED-3 trigger → renderer-architecture §4 |
-| `data-sources-and-encoder.md`, `static-vs-db-2026-07.md` | [db-input-adaptors.md](./db-input-adaptors.md) §4/§7/§8 |
-| `nwm-rivers-demo-2026-07.md` | [dataset-candidates-2026-07.md](./dataset-candidates-2026-07.md) §D build notes |
-| `doc-coverage-audit-2026-07.md` | deleted — executed 2026-07-01; residuals were folded into the ecosystem audit §2/§7 |
+| Retired                                                                                                                           | Now in                                                                              |
+| --------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `stt-packed.md`, `stt-format-review-2026-07.md`, `stt-packed-v2-design-2026-07.md`, `blob-ordering-heuristic-2026-07.md`          | [stt-packed-format-decisions.md](./stt-packed-format-decisions.md)                  |
+| `rust-audit-2026-06.md`                                                                                                           | format decisions §2/§5/§9 (positioning, transforms NO-GO, triggers)                 |
+| `renderer-abstraction-2026-06.md`, `three-renderer-parity.md`, `three-renderer-sota-2026-07.md`, `deckgl-parity-audit-2026-07.md` | [renderer-architecture.md](./renderer-architecture.md)                              |
+| `fe-hotpath-audit-2026-06.md`                                                                                                     | closed; reference patterns + MED-3 trigger → renderer-architecture §4               |
+| `data-sources-and-encoder.md`, `static-vs-db-2026-07.md`                                                                          | [db-input-adaptors.md](./db-input-adaptors.md) §4/§7/§8                             |
+| `nwm-rivers-demo-2026-07.md`                                                                                                      | [dataset-candidates-2026-07.md](./dataset-candidates-2026-07.md) §D build notes     |
+| `doc-coverage-audit-2026-07.md`                                                                                                   | deleted — executed 2026-07-01; residuals were folded into the ecosystem audit §2/§7 |

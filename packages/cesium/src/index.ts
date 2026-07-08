@@ -22,12 +22,30 @@ export { cesiumBackend } from './backend-descriptor.js';
 // The STT layers (browser — need a live Cesium Scene). Each is an
 // `SttRenderNode` built from the render kernel; the pure geometry/colour/
 // interpolation they consume is unit-tested (core + this package's lib/).
-export { CesiumPointLayer, type CesiumPointLayerOptions } from './cesium-point-layer.js';
-export { CesiumPathLayer, type CesiumPathLayerOptions } from './cesium-path-layer.js';
-export { CesiumArcLayer, type CesiumArcLayerOptions } from './cesium-arc-layer.js';
-export { CesiumTripsLayer, type CesiumTripsLayerOptions } from './cesium-trips-layer.js';
-export { CesiumTripHeadsLayer, type CesiumTripHeadsLayerOptions } from './cesium-trip-heads-layer.js';
-export { BatchedPolylineLayer, type BatchedPolylineOptions } from './batched-polyline-layer.js';
+export {
+  CesiumPointLayer,
+  type CesiumPointLayerOptions,
+} from './cesium-point-layer.js';
+export {
+  CesiumPathLayer,
+  type CesiumPathLayerOptions,
+} from './cesium-path-layer.js';
+export {
+  CesiumArcLayer,
+  type CesiumArcLayerOptions,
+} from './cesium-arc-layer.js';
+export {
+  CesiumTripsLayer,
+  type CesiumTripsLayerOptions,
+} from './cesium-trips-layer.js';
+export {
+  CesiumTripHeadsLayer,
+  type CesiumTripHeadsLayerOptions,
+} from './cesium-trip-heads-layer.js';
+export {
+  BatchedPolylineLayer,
+  type BatchedPolylineOptions,
+} from './batched-polyline-layer.js';
 
 // Pure builders (Cesium-free, unit-tested) behind the polyline layers.
 export {
@@ -62,7 +80,11 @@ export { applyViewStateToCamera } from './camera-apply.js';
 // Render-loop clock bridge: drive the STT playhead from Cesium's render loop
 // (scene.preRender) instead of per-frame React state, and pump requestRender so
 // requestRenderMode idles when paused. READ-only — never advances the controller.
-export { attachCesiumClock, type PlayheadClock, type AttachCesiumClockOptions } from './cesium-clock.js';
+export {
+  attachCesiumClock,
+  type PlayheadClock,
+  type AttachCesiumClockOptions,
+} from './cesium-clock.js';
 
 // Generated GLSL time-filter alpha for a future Cesium GPU-appearance path.
 export { timeFilterAlphaGlsl } from './shaders.js';

@@ -9,7 +9,10 @@ import { vi } from 'vitest';
 
 let nextHandleId = 1;
 
-const makeHandle = (kind: string) => ({ __mockKind: kind, __id: nextHandleId++ });
+const makeHandle = (kind: string) => ({
+  __mockKind: kind,
+  __id: nextHandleId++,
+});
 
 /**
  * Build a recorder that satisfies both WebGLRenderingContext and
@@ -173,12 +176,7 @@ export function makeMockGl(
     // resolve sensibly (e.g. 18 = 3 segments × 6 indices, now 3 instances × 6
     // quad indices).
     drawArraysInstanced: vi.fn(
-      (
-        _mode: number,
-        _first: number,
-        count: number,
-        primCount: number,
-      ) => {
+      (_mode: number, _first: number, count: number, primCount: number) => {
         drawCalls.push({
           kind: 'arrays-instanced',
           count: count * primCount,
@@ -257,12 +255,14 @@ export function makeMockGl(
 }
 
 /** Minimal MapLibre Map shape — only the methods the layer touches. */
-export function makeMockMap(bounds = {
-  west: -180,
-  south: -85,
-  east: 180,
-  north: 85,
-}): any {
+export function makeMockMap(
+  bounds = {
+    west: -180,
+    south: -85,
+    east: 180,
+    north: 85,
+  },
+): any {
   return {
     triggerRepaint: vi.fn(),
     getZoom: vi.fn(() => 2),

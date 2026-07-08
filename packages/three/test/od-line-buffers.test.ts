@@ -28,7 +28,9 @@ describe('deriveSourceTargetPositions', () => {
       startTimes: new Float32Array(2),
       endTimes: new Float32Array(2),
     });
-    const { source, target, dims } = deriveSourceTargetPositions(tile.layers[0].features);
+    const { source, target, dims } = deriveSourceTargetPositions(
+      tile.layers[0].features,
+    );
     expect(dims).toBe(2);
     // feature 0 source = vertex 0, target = vertex 2.
     expect(Array.from(source.slice(0, 2))).toEqual([0, 0]);
@@ -48,9 +50,12 @@ describe('buildOdLineSegmentBuffers', () => {
     const tile = odTile(
       {
         positions: new Float64Array([
-          anchor.longitude, anchor.latitude,
-          anchor.longitude + dLon, anchor.latitude, // mid vertex (dropped)
-          anchor.longitude + 2 * dLon, anchor.latitude,
+          anchor.longitude,
+          anchor.latitude,
+          anchor.longitude + dLon,
+          anchor.latitude, // mid vertex (dropped)
+          anchor.longitude + 2 * dLon,
+          anchor.latitude,
         ]),
         startIndices: new Uint32Array([0, 3]),
         startTimes: new Float32Array([100]),
@@ -82,9 +87,18 @@ describe('buildOdLineSegmentBuffers', () => {
     const tile = odTile({
       featureCount: 3,
       positions: new Float64Array([
-        anchor.longitude, anchor.latitude, anchor.longitude + 0.001, anchor.latitude,
-        anchor.longitude, anchor.latitude, anchor.longitude, anchor.latitude + 0.001,
-        anchor.longitude, anchor.latitude, anchor.longitude + 0.002, anchor.latitude + 0.002,
+        anchor.longitude,
+        anchor.latitude,
+        anchor.longitude + 0.001,
+        anchor.latitude,
+        anchor.longitude,
+        anchor.latitude,
+        anchor.longitude,
+        anchor.latitude + 0.001,
+        anchor.longitude,
+        anchor.latitude,
+        anchor.longitude + 0.002,
+        anchor.latitude + 0.002,
       ]),
       startIndices: new Uint32Array([0, 2, 4, 6]),
       startTimes: new Float32Array([0, 0, 0]),
@@ -100,8 +114,10 @@ describe('buildOdLineSegmentBuffers', () => {
     const merc = new MercatorProjection();
     const tile = odTile({
       positions: new Float64Array([
-        anchor.longitude, anchor.latitude,
-        anchor.longitude + 0.001, anchor.latitude + 0.001,
+        anchor.longitude,
+        anchor.latitude,
+        anchor.longitude + 0.001,
+        anchor.latitude + 0.001,
       ]),
       startIndices: new Uint32Array([0, 2]),
     });
@@ -115,8 +131,14 @@ describe('buildOdLineSegmentBuffers', () => {
     const tile = odTile({
       featureCount: 2,
       positions: new Float64Array([
-        anchor.longitude, anchor.latitude, anchor.longitude + 0.001, anchor.latitude,
-        anchor.longitude, anchor.latitude, anchor.longitude + 0.001, anchor.latitude,
+        anchor.longitude,
+        anchor.latitude,
+        anchor.longitude + 0.001,
+        anchor.latitude,
+        anchor.longitude,
+        anchor.latitude,
+        anchor.longitude + 0.001,
+        anchor.latitude,
       ]),
       startIndices: new Uint32Array([0, 2, 4]),
       startTimes: new Float32Array([0, 0]),
@@ -142,7 +164,10 @@ describe('buildOdLineSegmentBuffers', () => {
   });
 
   it('returns empty for a tile with no line features', () => {
-    const tile = odTile({ featureCount: 0, startIndices: new Uint32Array([0]) });
+    const tile = odTile({
+      featureCount: 0,
+      startIndices: new Uint32Array([0]),
+    });
     const buf = buildOdLineSegmentBuffers([tile], proj, 0, {
       colorMode: { type: 'constant', color: [0, 0, 0, 255] },
     });

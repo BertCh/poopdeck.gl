@@ -72,7 +72,11 @@ const ALL_DEMOS = [
 
 function parseDemos() {
   const fromEnv = process.env.STT_PROBE_DEMOS;
-  if (fromEnv) return fromEnv.split(',').map((s) => s.trim()).filter(Boolean);
+  if (fromEnv)
+    return fromEnv
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
   const positional = process.argv.slice(2).filter((a) => !a.startsWith('--'));
   if (positional.length > 0) return positional;
   return ALL_DEMOS;
@@ -124,7 +128,10 @@ await ctx.addInitScript(() => {
     const po = new PerformanceObserver((list) => {
       for (const e of list.getEntries()) {
         // @ts-ignore
-        window.__sttSweep.longTasks.push({ duration: e.duration, start: e.startTime });
+        window.__sttSweep.longTasks.push({
+          duration: e.duration,
+          start: e.startTime,
+        });
       }
     });
     po.observe({ entryTypes: ['longtask'] });
@@ -153,7 +160,8 @@ function summarizeMs(samples) {
   const ms = samples.map((s) => s.ms ?? 0).filter((v) => Number.isFinite(v));
   if (ms.length === 0) return null;
   const sorted = [...ms].sort((a, b) => a - b);
-  const pct = (p) => sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * p))];
+  const pct = (p) =>
+    sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * p))];
   const total = sorted.reduce((a, b) => a + b, 0);
   return {
     n: ms.length,
@@ -174,7 +182,12 @@ function histogram(samples) {
     return {
       counts: Object.fromEntries(FRAME_BUCKETS_MS.map((b) => [`<=${b}`, 0])),
       overflow: 0,
-      p50: 0, p95: 0, p99: 0, max: 0, mean: 0, n: 0,
+      p50: 0,
+      p95: 0,
+      p99: 0,
+      max: 0,
+      mean: 0,
+      n: 0,
     };
   }
   const sorted = [...samples].sort((a, b) => a - b);
@@ -183,17 +196,26 @@ function histogram(samples) {
   for (const v of samples) {
     let placed = false;
     for (const b of FRAME_BUCKETS_MS) {
-      if (v <= b) { counts[`<=${b}`]++; placed = true; break; }
+      if (v <= b) {
+        counts[`<=${b}`]++;
+        placed = true;
+        break;
+      }
     }
     if (!placed) overflow++;
   }
-  const pct = (p) => sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * p))];
+  const pct = (p) =>
+    sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * p))];
   const mean = sorted.reduce((a, b) => a + b, 0) / sorted.length;
   return {
     counts,
     overflow,
-    p50: pct(0.50), p95: pct(0.95), p99: pct(0.99),
-    max: sorted[sorted.length - 1], mean, n: sorted.length,
+    p50: pct(0.5),
+    p95: pct(0.95),
+    p99: pct(0.99),
+    max: sorted[sorted.length - 1],
+    mean,
+    n: sorted.length,
   };
 }
 
@@ -274,7 +296,10 @@ async function probeDemo(demoId) {
     // it isn't present (some demos may pre-play or have an unusual UI);
     // we still capture a "static scene" measurement.
     try {
-      const play = page.locator('button').filter({ hasText: /^[▶⏸]$/ }).first();
+      const play = page
+        .locator('button')
+        .filter({ hasText: /^[▶⏸]$/ })
+        .first();
       if (await play.count()) {
         const glyph = (await play.innerText()).trim();
         if (glyph === '▶') await play.click({ timeout: 2_000 });
@@ -344,9 +369,14 @@ async function probeDemo(demoId) {
     result.consolidationStats = summarizeMs(sample.consolidations);
     result.renderLayersStats = summarizeMs(sample.renderLayers);
     result.tilePrepareStats = summarizeMs(sample.tilePrepare);
-    if (sample.decode.length > 0 && sample.decode[0].decompressMs !== undefined) {
+    if (
+      sample.decode.length > 0 &&
+      sample.decode[0].decompressMs !== undefined
+    ) {
       result.decodeBreakdown = {
-        decompress: summarizeMs(sample.decode.map((d) => ({ ms: d.decompressMs }))),
+        decompress: summarizeMs(
+          sample.decode.map((d) => ({ ms: d.decompressMs })),
+        ),
         ipc: summarizeMs(sample.decode.map((d) => ({ ms: d.ipcMs }))),
         compressedBytesTotal: sample.decode.reduce(
           (a, d) => a + (d.compressedBytes || 0),
@@ -427,24 +457,26 @@ const csvLines = [
 ];
 for (const r of runs) {
   const ft = r.frameTime || {};
-  csvLines.push([
-    r.demo,
-    r.status,
-    r.fps ?? '',
-    r.ttftMs?.toFixed(0) ?? '',
-    ft.p50?.toFixed(1) ?? '',
-    ft.p95?.toFixed(1) ?? '',
-    ft.p99?.toFixed(1) ?? '',
-    ft.counts?.['<=16'] ?? '',
-    ft.counts?.['<=33'] ?? '',
-    ft.counts?.['<=50'] ?? '',
-    ft.counts?.['<=100'] ?? '',
-    ft.overflow ?? '',
-    r.longTasks ?? '',
-    r.consolidations ?? '',
-    r.decodes ?? '',
-    r.visibleTilesAtEnd ?? '',
-  ].join(','));
+  csvLines.push(
+    [
+      r.demo,
+      r.status,
+      r.fps ?? '',
+      r.ttftMs?.toFixed(0) ?? '',
+      ft.p50?.toFixed(1) ?? '',
+      ft.p95?.toFixed(1) ?? '',
+      ft.p99?.toFixed(1) ?? '',
+      ft.counts?.['<=16'] ?? '',
+      ft.counts?.['<=33'] ?? '',
+      ft.counts?.['<=50'] ?? '',
+      ft.counts?.['<=100'] ?? '',
+      ft.overflow ?? '',
+      r.longTasks ?? '',
+      r.consolidations ?? '',
+      r.decodes ?? '',
+      r.visibleTilesAtEnd ?? '',
+    ].join(','),
+  );
 }
 const csvPath = OUTPUT_PATH.replace(/\.json$/, '.csv');
 await writeFile(csvPath, csvLines.join('\n') + '\n');

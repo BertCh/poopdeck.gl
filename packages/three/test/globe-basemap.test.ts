@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { Vector3, type Mesh } from 'three';
-import { makeGlobeBasemap, GLOBE_BASEMAP_INSET } from '../src/scene/globe-basemap';
+import {
+  makeGlobeBasemap,
+  GLOBE_BASEMAP_INSET,
+} from '../src/scene/globe-basemap';
 import { GlobeProjection } from '../src/projection/globe';
 import { EARTH_RADIUS } from '../src/projection/local-enu';
 
@@ -19,7 +22,10 @@ describe('makeGlobeBasemap', () => {
   it('honours a custom inset', () => {
     const mesh = makeGlobeBasemap(globe, { inset: 0.5 }) as Mesh;
     mesh.geometry.computeBoundingSphere();
-    expect(mesh.geometry.boundingSphere!.radius).toBeCloseTo(EARTH_RADIUS * 0.5, 0);
+    expect(mesh.geometry.boundingSphere!.radius).toBeCloseTo(
+      EARTH_RADIUS * 0.5,
+      0,
+    );
   });
 
   it('orients texture poles to the ECEF +Z axis (lat 90 → +Z)', () => {

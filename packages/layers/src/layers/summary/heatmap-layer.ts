@@ -173,7 +173,8 @@ export interface _AnimatedHeatmapLayerProps {
 }
 
 /** Complete props accepted by {@link AnimatedHeatmapLayer}. */
-export type AnimatedHeatmapLayerProps = _AnimatedHeatmapLayerProps & SpatioTemporalLayerProps;
+export type AnimatedHeatmapLayerProps = _AnimatedHeatmapLayerProps &
+  SpatioTemporalLayerProps;
 
 interface ResolvedChannel {
   id: string;
@@ -206,7 +207,12 @@ const defaultProps: DefaultProps<AnimatedHeatmapLayerProps> = {
   colorRange: { type: 'array', value: DEFAULT_COLOR_RANGE, compare: true },
   colorDomain: { type: 'array', value: null, compare: true, optional: true },
   channels: { type: 'array', value: null, compare: true, optional: true },
-  weightProperty: { type: 'object', value: null, optional: true, compare: true },
+  weightProperty: {
+    type: 'object',
+    value: null,
+    optional: true,
+    compare: true,
+  },
   // Accessor-named alias of weightProperty (column-name semantics).
   getWeight: { type: 'object', value: null, optional: true, compare: true },
   fadeInDuration: { type: 'number', value: 0, min: 0 },
@@ -224,7 +230,9 @@ const defaultProps: DefaultProps<AnimatedHeatmapLayerProps> = {
  * swaps the sublayer class / overrides sublayer props (deck's CompositeLayer
  * contract).
  */
-export class AnimatedHeatmapLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLayer<
+export class AnimatedHeatmapLayer<
+  ExtraPropsT extends {} = {},
+> extends SpatioTemporalLayer<
   ExtraPropsT & Required<_AnimatedHeatmapLayerProps>
 > {
   static layerName = 'AnimatedHeatmapLayer';
@@ -313,7 +321,10 @@ export class AnimatedHeatmapLayer<ExtraPropsT extends {} = {}> extends SpatioTem
     // `Required<>`-typed: the defaultProps value guarantees a number here.
     const halfWindow = this.props.timeWindow / 2;
     const center = time - layerTimeOffset;
-    const filterRange: [number, number] = [center - halfWindow, center + halfWindow];
+    const filterRange: [number, number] = [
+      center - halfWindow,
+      center + halfWindow,
+    ];
 
     // Optional soft edges from fadeIn/fadeOut, clamped inside the hard range.
     // `Required<>`-typed (defaults guarantee values) — no `??` refetches.
@@ -322,7 +333,9 @@ export class AnimatedHeatmapLayer<ExtraPropsT extends {} = {}> extends SpatioTem
     const softMin = filterRange[0] + fadeIn;
     const softMax = filterRange[1] - fadeOut;
     const filterSoftRange: [number, number] | null =
-      (fadeIn > 0 || fadeOut > 0) && softMin < softMax ? [softMin, softMax] : null;
+      (fadeIn > 0 || fadeOut > 0) && softMin < softMax
+        ? [softMin, softMax]
+        : null;
 
     // Prune cache entries for channels that no longer exist.
     for (const idx of [...this._channelCache.keys()]) {
@@ -347,29 +360,36 @@ export class AnimatedHeatmapLayer<ExtraPropsT extends {} = {}> extends SpatioTem
       // overrides): density pixels have no feature identity to pick. Fresh
       // props objects per render are inherent to this layer's prop-driven
       // filterRange animation (renderLayers is already wall-clock capped).
-      const subProps = this.composeSubLayerProps('heatmap', `ch${i}-${channel.id}`, {
-        data,
-        // Density accumulation (count/weight per pixel). The 'SUM' default is
-        // correct for density; 'MEAN' only makes sense with a weightProperty.
-        aggregation: this.props.aggregation,
-        radiusPixels: this.props.radiusPixels,
-        intensity: this.props.intensity,
-        colorRange: channel.colorRange as any,
-        // null → canonical auto-normalisation; pinned → stable (no breathing).
-        colorDomain: channel.colorDomain ?? null,
-        threshold: this.props.threshold,
-        weightsTextureSize: this.props.weightsTextureSize,
-        debounceTimeout: this.props.debounceTimeout,
-        pickable: false,
-        // The DataFilterExtension is what animates the heatmap (filterRange);
-        // user extensions from the top-level prop are appended.
-        extensions: this.composeExtensions([this._dataFilter]),
-        filterEnabled: true,
-        filterRange,
-        ...(filterSoftRange ? { filterSoftRange } : {}),
-      });
+      const subProps = this.composeSubLayerProps(
+        'heatmap',
+        `ch${i}-${channel.id}`,
+        {
+          data,
+          // Density accumulation (count/weight per pixel). The 'SUM' default is
+          // correct for density; 'MEAN' only makes sense with a weightProperty.
+          aggregation: this.props.aggregation,
+          radiusPixels: this.props.radiusPixels,
+          intensity: this.props.intensity,
+          colorRange: channel.colorRange as any,
+          // null → canonical auto-normalisation; pinned → stable (no breathing).
+          colorDomain: channel.colorDomain ?? null,
+          threshold: this.props.threshold,
+          weightsTextureSize: this.props.weightsTextureSize,
+          debounceTimeout: this.props.debounceTimeout,
+          pickable: false,
+          // The DataFilterExtension is what animates the heatmap (filterRange);
+          // user extensions from the top-level prop are appended.
+          extensions: this.composeExtensions([this._dataFilter]),
+          filterEnabled: true,
+          filterRange,
+          ...(filterSoftRange ? { filterSoftRange } : {}),
+        },
+      );
       // `_subLayerProps: { heatmap: { type } }` swaps the sublayer class.
-      const SubLayerClass = this.getSubLayerClass('heatmap', DeckHeatmapLayer as any);
+      const SubLayerClass = this.getSubLayerClass(
+        'heatmap',
+        DeckHeatmapLayer as any,
+      );
       layers.push(new SubLayerClass(subProps as any));
     }
     return layers;
@@ -445,8 +465,14 @@ export class AnimatedHeatmapLayer<ExtraPropsT extends {} = {}> extends SpatioTem
     const metadata = this.state.metadata as any;
     const domain = metadata?.heatmapDomain;
     if (!domain || !Array.isArray(domain.classes)) return null;
-    const entry = domain.classes.find((c: { id: string }) => c.id === channelId);
-    if (!entry || typeof entry.min !== 'number' || typeof entry.max !== 'number') {
+    const entry = domain.classes.find(
+      (c: { id: string }) => c.id === channelId,
+    );
+    if (
+      !entry ||
+      typeof entry.min !== 'number' ||
+      typeof entry.max !== 'number'
+    ) {
       return null;
     }
     return [entry.min, entry.max];

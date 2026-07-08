@@ -20,7 +20,9 @@ import { configureSharedScheduler } from '../src/shared-scheduler';
 import { packedFromSingleFile, packedFetch } from './helpers/packed-fixture';
 import { bufferToArrayBuffer } from './helpers/fixtures';
 
-const FIXTURE = fileURLToPath(new URL('./fixtures/sample.stt', import.meta.url));
+const FIXTURE = fileURLToPath(
+  new URL('./fixtures/sample.stt', import.meta.url),
+);
 const FIXTURE_BYTES = new Uint8Array(readFileSync(FIXTURE));
 const DATASET = packedFromSingleFile(FIXTURE_BYTES);
 /** Pack object keys in `packId` order (the transcoded fixture's packs). */
@@ -30,7 +32,10 @@ const DATASET_PACK_KEYS = [...DATASET.objects.keys()]
 
 /** A fresh packed archive over the transcoded sample fixture. */
 function sampleArchive(): STTArchive {
-  return new STTArchive({ url: DATASET.manifestUrl, fetch: packedFetch(DATASET) });
+  return new STTArchive({
+    url: DATASET.manifestUrl,
+    fetch: packedFetch(DATASET),
+  });
 }
 
 describe('STTArchive (packed format)', () => {
@@ -145,7 +150,9 @@ describe('STTArchive (packed format)', () => {
     const metaOff = Number(hv.getBigUint64(22, true));
     const metaLen = Number(hv.getBigUint64(30, true));
     const metaJson = JSON.parse(
-      new TextDecoder().decode(FIXTURE_BYTES.subarray(metaOff, metaOff + metaLen)),
+      new TextDecoder().decode(
+        FIXTURE_BYTES.subarray(metaOff, metaOff + metaLen),
+      ),
     );
 
     const PER_PACK = 3; // blobs per pack
@@ -158,9 +165,19 @@ describe('STTArchive (packed format)', () => {
     // v5 directory referencing them by (packId, pack-relative offset).
     const packObjects: Uint8Array[] = [];
     const entries: Array<{
-      zoom: number; x: number; y: number; timeStart: number; timeEnd: number;
-      packId: number; offset: number; length: number; uncompressedSize: number;
-      featureCount: number; hilbert: number; crc32c: number; temporalBucketMs?: number;
+      zoom: number;
+      x: number;
+      y: number;
+      timeStart: number;
+      timeEnd: number;
+      packId: number;
+      offset: number;
+      length: number;
+      uncompressedSize: number;
+      featureCount: number;
+      hilbert: number;
+      crc32c: number;
+      temporalBucketMs?: number;
     }> = [];
     for (let p = 0; p < PACKS; p++) {
       const packLen = (PER_PACK - 1) * stride + e.length;
@@ -170,14 +187,20 @@ describe('STTArchive (packed format)', () => {
         buf.set(blob, off);
         const i = p * PER_PACK + j;
         entries.push({
-          zoom: e.zoom, x: e.x, y: e.y,
-          timeStart: i, timeEnd: i,
-          packId: p, offset: off,
-          length: e.length, uncompressedSize: e.uncompressedSize,
+          zoom: e.zoom,
+          x: e.x,
+          y: e.y,
+          timeStart: i,
+          timeEnd: i,
+          packId: p,
+          offset: off,
+          length: e.length,
+          uncompressedSize: e.uncompressedSize,
           featureCount: e.featureCount,
           // The blob is real and decoded through the verifying reader, so the
           // directory must carry its true CRC-32C.
-          hilbert: i, crc32c: crc32c(blob),
+          hilbert: i,
+          crc32c: crc32c(blob),
           temporalBucketMs: e.temporalBucketMs,
         });
       }
@@ -196,42 +219,75 @@ describe('STTArchive (packed format)', () => {
       format: 'stt-packed',
       formatVersion: 1,
       compression: 'zstd',
-      directory: { key: 'index/dir.sttd', length: dir.length, directoryVersion: 5 },
+      directory: {
+        key: 'index/dir.sttd',
+        length: dir.length,
+        directoryVersion: 5,
+      },
       packs: packRefs,
       metadata: metaJson,
     };
-    objects.set('manifest.json', new TextEncoder().encode(JSON.stringify(manifest)));
+    objects.set(
+      'manifest.json',
+      new TextEncoder().encode(JSON.stringify(manifest)),
+    );
 
     const manifestUrl = 'mem://m/manifest.json';
     const base = 'mem://m/';
 
     // A counting fetch that records Range-request concurrency. Whole GETs (the
     // manifest + directory) are served but NOT counted against the range budget.
-    function countingFetch(state: { calls: number; inFlight: number; peak: number }): typeof fetch {
+    function countingFetch(state: {
+      calls: number;
+      inFlight: number;
+      peak: number;
+    }): typeof fetch {
       return (async (url: string, init?: RequestInit) => {
         const key = url.startsWith(base) ? url.slice(base.length) : url;
         const bytes = objects.get(key)!;
-        const range = (init?.headers as Record<string, string> | undefined)?.Range;
+        const range = (init?.headers as Record<string, string> | undefined)
+          ?.Range;
         const m = /bytes=(\d+)-(\d+)/.exec(range ?? '');
         if (!m) {
-          return { ok: true, status: 200, statusText: 'OK', arrayBuffer: async () => bufferToArrayBuffer(bytes) };
+          return {
+            ok: true,
+            status: 200,
+            statusText: 'OK',
+            arrayBuffer: async () => bufferToArrayBuffer(bytes),
+          };
         }
-        state.calls++; state.inFlight++; state.peak = Math.max(state.peak, state.inFlight);
+        state.calls++;
+        state.inFlight++;
+        state.peak = Math.max(state.peak, state.inFlight);
         await new Promise((r) => setTimeout(r, 1));
         state.inFlight--;
         const start = Number(m[1]);
         const end = Math.min(Number(m[2]), bytes.length - 1);
         const slice = bytes.subarray(start, end + 1);
-        return { ok: true, status: 206, statusText: 'Partial Content', arrayBuffer: async () => bufferToArrayBuffer(slice) };
+        return {
+          ok: true,
+          status: 206,
+          statusText: 'Partial Content',
+          arrayBuffer: async () => bufferToArrayBuffer(slice),
+        };
       }) as unknown as typeof fetch;
     }
 
-    const tileIds = entries.map((en) => ({ z: en.zoom, x: en.x, y: en.y, t: en.timeStart }));
+    const tileIds = entries.map((en) => ({
+      z: en.zoom,
+      x: en.x,
+      y: en.y,
+      t: en.timeStart,
+    }));
 
     // Unbounded gap → blobs coalesce within each pack, but a range can NEVER
     // bridge two packs: 2 packs → exactly 2 range requests (not 1).
     const wide = { calls: 0, inFlight: 0, peak: 0 };
-    const aWide = new STTArchive({ url: manifestUrl, fetch: countingFetch(wide), coalesceGapBytes: Number.MAX_SAFE_INTEGER });
+    const aWide = new STTArchive({
+      url: manifestUrl,
+      fetch: countingFetch(wide),
+      coalesceGapBytes: Number.MAX_SAFE_INTEGER,
+    });
     await aWide.getIndex();
     const wideBefore = wide.calls;
     const tilesWide = await aWide.getTiles(tileIds);
@@ -249,7 +305,12 @@ describe('STTArchive (packed format)', () => {
     configureSharedScheduler({ enabled: false });
     try {
       const tight = { calls: 0, inFlight: 0, peak: 0 };
-      const aTight = new STTArchive({ url: manifestUrl, fetch: countingFetch(tight), coalesceGapBytes: 0, maxConcurrentRequests: 2 });
+      const aTight = new STTArchive({
+        url: manifestUrl,
+        fetch: countingFetch(tight),
+        coalesceGapBytes: 0,
+        maxConcurrentRequests: 2,
+      });
       await aTight.getIndex();
       const tightBefore = tight.calls;
       const tilesTight = await aTight.getTiles(tileIds);
@@ -265,14 +326,26 @@ describe('STTArchive (packed format)', () => {
     // The manifest + directory are whole-object GETs (200 is correct for them),
     // but a PACK read uses Range — a server that replies 200 there would
     // silently corrupt every offset-based read, so the reader must reject it.
-    const dataset = packedFromSingleFile(FIXTURE_BYTES, { manifestUrl: 'mem://m/manifest.json' });
+    const dataset = packedFromSingleFile(FIXTURE_BYTES, {
+      manifestUrl: 'mem://m/manifest.json',
+    });
     const badFetch = (async (url: string) => {
-      const key = url.startsWith('mem://m/') ? url.slice('mem://m/'.length) : url;
+      const key = url.startsWith('mem://m/')
+        ? url.slice('mem://m/'.length)
+        : url;
       const bytes = dataset.objects.get(key)!;
       // Always reply 200 with the whole object, ignoring any Range header.
-      return { ok: true, status: 200, statusText: 'OK', arrayBuffer: async () => bufferToArrayBuffer(bytes) };
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        arrayBuffer: async () => bufferToArrayBuffer(bytes),
+      };
     }) as unknown as typeof fetch;
-    const archive = new STTArchive({ url: 'mem://m/manifest.json', fetch: badFetch });
+    const archive = new STTArchive({
+      url: 'mem://m/manifest.json',
+      fetch: badFetch,
+    });
     const index = await archive.getIndex(); // whole-GET, fine
     const e = index.tiles[0];
     await expect(

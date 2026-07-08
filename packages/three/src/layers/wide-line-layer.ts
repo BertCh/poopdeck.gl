@@ -18,7 +18,10 @@
 import { Mesh, InstancedBufferAttribute, Box3, Vector3, Sphere } from 'three';
 import type { Tile } from '@poopdeck.gl/core';
 import { BaseSttLayer, type SttLayerContext } from './layer.js';
-import { resolveTimeWindow, type ThreeTimeWindowOptions } from '../lib/time-window.js';
+import {
+  resolveTimeWindow,
+  type ThreeTimeWindowOptions,
+} from '../lib/time-window.js';
 import { makeSegmentQuadGeometry } from '../geometry/segment-quad.js';
 import {
   buildLineSegmentBuffers,
@@ -88,7 +91,12 @@ export class WideLineLayer extends BaseSttLayer {
 
   setTiles(tiles: Tile[], ctx: SttLayerContext): void {
     this.timeOrigin = ctx.timeOrigin;
-    const buf = buildLineSegmentBuffers(tiles, ctx.projection, ctx.timeOrigin, this.bufferOptions());
+    const buf = buildLineSegmentBuffers(
+      tiles,
+      ctx.projection,
+      ctx.timeOrigin,
+      this.bufferOptions(),
+    );
 
     this.disposeGpu();
     if (buf.count === 0) {
@@ -103,15 +111,35 @@ export class WideLineLayer extends BaseSttLayer {
     geometry.instanceCount = buf.count;
     geometry.setAttribute('sttPosA', new InstancedBufferAttribute(buf.posA, 3));
     geometry.setAttribute('sttPosB', new InstancedBufferAttribute(buf.posB, 3));
-    geometry.setAttribute('sttColorA', new InstancedBufferAttribute(buf.colorA, 4));
-    geometry.setAttribute('sttColorB', new InstancedBufferAttribute(buf.colorB, 4));
-    geometry.setAttribute('sttStart', new InstancedBufferAttribute(buf.starts, 1));
+    geometry.setAttribute(
+      'sttColorA',
+      new InstancedBufferAttribute(buf.colorA, 4),
+    );
+    geometry.setAttribute(
+      'sttColorB',
+      new InstancedBufferAttribute(buf.colorB, 4),
+    );
+    geometry.setAttribute(
+      'sttStart',
+      new InstancedBufferAttribute(buf.starts, 1),
+    );
     geometry.setAttribute('sttEnd', new InstancedBufferAttribute(buf.ends, 1));
-    geometry.setAttribute('sttTimeA', new InstancedBufferAttribute(buf.timeA, 1));
-    geometry.setAttribute('sttTimeB', new InstancedBufferAttribute(buf.timeB, 1));
+    geometry.setAttribute(
+      'sttTimeA',
+      new InstancedBufferAttribute(buf.timeA, 1),
+    );
+    geometry.setAttribute(
+      'sttTimeB',
+      new InstancedBufferAttribute(buf.timeB, 1),
+    );
     if (buf.bbox) {
-      geometry.boundingBox = new Box3(new Vector3(...buf.bbox.min), new Vector3(...buf.bbox.max));
-      geometry.boundingSphere = geometry.boundingBox.getBoundingSphere(new Sphere());
+      geometry.boundingBox = new Box3(
+        new Vector3(...buf.bbox.min),
+        new Vector3(...buf.bbox.max),
+      );
+      geometry.boundingSphere = geometry.boundingBox.getBoundingSphere(
+        new Sphere(),
+      );
     }
 
     this.bundle = createWideLineMaterial({

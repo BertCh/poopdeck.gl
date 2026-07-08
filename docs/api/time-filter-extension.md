@@ -7,7 +7,11 @@ It works on instanced layers (`ScatterplotLayer`, `PathLayer`) and non-instanced
 ## Installation
 
 ```typescript
-import { TimeFilterExtension, relativizeTime, MAX_RELATIVE_TIME_MS } from '@poopdeck.gl/layers';
+import {
+  TimeFilterExtension,
+  relativizeTime,
+  MAX_RELATIVE_TIME_MS,
+} from '@poopdeck.gl/layers';
 ```
 
 ## Usage
@@ -32,39 +36,39 @@ const layer = new ScatterplotLayer({
   fadeOutDuration: 300,
 
   // Time accessors — must return RELATIVE times (absolute - timeOffset):
-  getInstanceStartTime: d => relativizeTime(d.startTime, timeOffset),
-  getInstanceEndTime: d => relativizeTime(d.endTime, timeOffset),
+  getInstanceStartTime: (d) => relativizeTime(d.startTime, timeOffset),
+  getInstanceEndTime: (d) => relativizeTime(d.endTime, timeOffset),
 
-  getPosition: d => d.coordinates,
+  getPosition: (d) => d.coordinates,
   getRadius: 100,
 });
 ```
 
 ## Extension Props
 
-| Property | Type | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `currentTime` | `number` | `0` | Current time (Unix ms). |
-| `getTime` | `(() => number) \| null` | `null` | Dynamic time getter — called every `draw()` so the layer instance stays cached across animation ticks (only uniforms update per frame). Takes priority over `currentTime`. |
-| `timeOffset` | `number` | `0` | The per-layer time origin all attribute times are relative to. **Critical for f32 precision — see below.** |
-| `timeWindow` | `number` | `0` | Window size in ms (window mode): features within `currentTime ± timeWindow/2` are visible. |
-| `fadeInDuration` | `number` | `0` | Fade-in duration (ms) for appearing features. |
-| `fadeOutDuration` | `number` | `0` | Fade-out duration (ms) for disappearing features (window mode only). |
-| `trailLength` | `number` | `0` | Trail length in ms (trail mode when > 0). |
-| `fadeTrail` | `boolean` | `true` | In trail mode: fade head→tail (the classic comet trail) vs constant opacity along the whole length (a solid snake). |
-| `wakeLength` | `number` | `0` | Wake length in ms (wake mode when > 0). |
-| `wakeTailScale` | `number` | `0.15` | Trailing-edge point-size multiplier in wake mode (0..1; head = 1.0). |
-| `cumulative` | `boolean` | `false` | Cumulative ("draw and persist") mode. |
-| `timeHeightScale` | `number` | `0` | Time-as-height: meters of altitude per sim-ms (0 = off). |
-| `timeHeightOrigin` | `number` | `0` | Absolute time (Unix ms) mapped to altitude 0 in time-as-height mode. |
+| Property           | Type                     | Default | Description                                                                                                                                                                |
+| :----------------- | :----------------------- | :------ | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `currentTime`      | `number`                 | `0`     | Current time (Unix ms).                                                                                                                                                    |
+| `getTime`          | `(() => number) \| null` | `null`  | Dynamic time getter — called every `draw()` so the layer instance stays cached across animation ticks (only uniforms update per frame). Takes priority over `currentTime`. |
+| `timeOffset`       | `number`                 | `0`     | The per-layer time origin all attribute times are relative to. **Critical for f32 precision — see below.**                                                                 |
+| `timeWindow`       | `number`                 | `0`     | Window size in ms (window mode): features within `currentTime ± timeWindow/2` are visible.                                                                                 |
+| `fadeInDuration`   | `number`                 | `0`     | Fade-in duration (ms) for appearing features.                                                                                                                              |
+| `fadeOutDuration`  | `number`                 | `0`     | Fade-out duration (ms) for disappearing features (window mode only).                                                                                                       |
+| `trailLength`      | `number`                 | `0`     | Trail length in ms (trail mode when > 0).                                                                                                                                  |
+| `fadeTrail`        | `boolean`                | `true`  | In trail mode: fade head→tail (the classic comet trail) vs constant opacity along the whole length (a solid snake).                                                        |
+| `wakeLength`       | `number`                 | `0`     | Wake length in ms (wake mode when > 0).                                                                                                                                    |
+| `wakeTailScale`    | `number`                 | `0.15`  | Trailing-edge point-size multiplier in wake mode (0..1; head = 1.0).                                                                                                       |
+| `cumulative`       | `boolean`                | `false` | Cumulative ("draw and persist") mode.                                                                                                                                      |
+| `timeHeightScale`  | `number`                 | `0`     | Time-as-height: meters of altitude per sim-ms (0 = off).                                                                                                                   |
+| `timeHeightOrigin` | `number`                 | `0`     | Absolute time (Unix ms) mapped to altitude 0 in time-as-height mode.                                                                                                       |
 
 ## Data Accessors
 
-| Property | Type | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `getInstanceStartTime` | `Accessor<number>` | `0` | Feature start time, RELATIVE to `timeOffset`. |
-| `getInstanceEndTime` | `Accessor<number>` | `Infinity` | Feature end time, RELATIVE to `timeOffset`. |
-| `getInstanceVertexTime` | `Accessor<number>` | `0` | Per-vertex timestamp (trail mode), RELATIVE to `timeOffset`. The attribute is always registered, so the constant default keeps non-trail layers valid. |
+| Property                | Type               | Default    | Description                                                                                                                                            |
+| :---------------------- | :----------------- | :--------- | :----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `getInstanceStartTime`  | `Accessor<number>` | `0`        | Feature start time, RELATIVE to `timeOffset`.                                                                                                          |
+| `getInstanceEndTime`    | `Accessor<number>` | `Infinity` | Feature end time, RELATIVE to `timeOffset`.                                                                                                            |
+| `getInstanceVertexTime` | `Accessor<number>` | `0`        | Per-vertex timestamp (trail mode), RELATIVE to `timeOffset`. The attribute is always registered, so the constant default keeps non-trail layers valid. |
 
 ## Modes
 
@@ -110,11 +114,11 @@ Both sides of every shader comparison are therefore small numbers that fit exact
 
 Dataset starts 2024-01-01 00:00 UTC (`1704067200000`). A tile's earliest feature start is that instant, so the decoder sets `binary.timeOffset = 1704067200000`.
 
-| Quantity | Absolute (ms) | Stored / uploaded |
-| :--- | :--- | :--- |
-| Feature start (01:00) | `1704070800000` | attribute `3600000` |
-| Feature end (01:30) | `1704072600000` | attribute `5400000` |
-| Playhead (02:00) | `1704074400000` | uniform `currentTime = 7200000` |
+| Quantity              | Absolute (ms)   | Stored / uploaded               |
+| :-------------------- | :-------------- | :------------------------------ |
+| Feature start (01:00) | `1704070800000` | attribute `3600000`             |
+| Feature end (01:30)   | `1704072600000` | attribute `5400000`             |
+| Playhead (02:00)      | `1704074400000` | uniform `currentTime = 7200000` |
 
 The shader compares `3600000 ≤ 7200000 ± window/2` — exact in f32. Had the attribute stored the absolute `1704070800000`, f32 would quantize it to a multiple of 128 ms and a `±131s`-class error would creep into every comparison.
 
@@ -126,7 +130,9 @@ For high-performance animation, use the `getTime` prop instead of `currentTime`:
 
 ```typescript
 // Less efficient — layer props change every frame
-new ScatterplotLayer({ currentTime: animationTime /* triggers prop diffing */ });
+new ScatterplotLayer({
+  currentTime: animationTime /* triggers prop diffing */,
+});
 
 // More efficient — layer instance cached, time read in draw()
 new ScatterplotLayer({ getTime: () => timeController.getTime() });

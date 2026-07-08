@@ -9,7 +9,7 @@ description: >-
   reach for.
 license: MIT
 metadata:
-  version: "0.4.0"
+  version: '0.4.0'
 ---
 
 # poopdeck.gl / SpatioTemporal Tiles — orientation & routing
@@ -73,21 +73,21 @@ GeoParquet / PostGIS / DuckDB
 
 ## Which skill / tool for which job
 
-| You want to… | Go to |
-|---|---|
-| **Install the tools** / scaffold a project from scratch | skill **installing-poopdeck** → `cargo install spatiotemporal-tiles`, `@poopdeck.gl/*` + deck.gl peers |
-| Turn **your own** source data into a `.stt` | skill **building-stt-datasets** → `recommend_build` then `stt-build` |
-| Get a **bundled / example** dataset (earthquakes, drifters, GTFS, …) | skill **generating-stt-datasets** → `generate_dataset` |
-| Make an archive smaller / publish-ready / lint it | skill **tuning-stt-tiles** → `dataset_report`, `diff_datasets` |
-| Put a layer on a map / pick the right layer | skill **wiring-deckgl-layers** → `view_map` |
-| Serve or publish tiles | `docs/guides/deploying.md` (`stt-serve` + static R2/CDN publishing) |
-| A map renders blank / empty | skill **debugging-blank-renders** → `validate_dataset` |
+| You want to…                                                         | Go to                                                                                                  |
+| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| **Install the tools** / scaffold a project from scratch              | skill **installing-poopdeck** → `cargo install spatiotemporal-tiles`, `@poopdeck.gl/*` + deck.gl peers |
+| Turn **your own** source data into a `.stt`                          | skill **building-stt-datasets** → `recommend_build` then `stt-build`                                   |
+| Get a **bundled / example** dataset (earthquakes, drifters, GTFS, …) | skill **generating-stt-datasets** → `generate_dataset`                                                 |
+| Make an archive smaller / publish-ready / lint it                    | skill **tuning-stt-tiles** → `dataset_report`, `diff_datasets`                                         |
+| Put a layer on a map / pick the right layer                          | skill **wiring-deckgl-layers** → `view_map`                                                            |
+| Serve or publish tiles                                               | `docs/guides/deploying.md` (`stt-serve` + static R2/CDN publishing)                                    |
+| A map renders blank / empty                                          | skill **debugging-blank-renders** → `validate_dataset`                                                 |
 
 ## Ground rules that shape every recommendation
 
 - **Never thin or aggregate data just to hit a byte budget.** STT's philosophy is
   comprehensive data; clamp the **zoom range** and use **temporal bucketing**
-  instead. Summary (H3/Quadbin) and raster tiers are *opt-in* coarse-zoom aids,
+  instead. Summary (H3/Quadbin) and raster tiers are _opt-in_ coarse-zoom aids,
   not a substitute for the raw tier. (See tuning-stt-tiles.)
 - **The archive is the contract.** `manifest.json` carries capabilities, the
   temporal block, and (if built with `--style-hints`) per-property percentiles.

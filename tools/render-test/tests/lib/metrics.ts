@@ -79,11 +79,12 @@ export async function startInPageCollectors(page: Page): Promise<void> {
         /* ignore */
       }
     }
-    const memSnap = (
-      performance as unknown as {
-        memory?: { usedJSHeapSize: number; totalJSHeapSize: number };
-      }
-    ).memory ?? null;
+    const memSnap =
+      (
+        performance as unknown as {
+          memory?: { usedJSHeapSize: number; totalJSHeapSize: number };
+        }
+      ).memory ?? null;
     const state: CollectorState = {
       longTasks: [],
       observer: null,
@@ -125,7 +126,8 @@ export async function collectMetrics(
       decode?: Array<{ ms?: number; bytes?: number; tileKey?: string }>;
       snapshots?: Record<string, unknown>;
     }
-    const probe = (globalThis as unknown as { __sttProbe?: ProbeBag }).__sttProbe;
+    const probe = (globalThis as unknown as { __sttProbe?: ProbeBag })
+      .__sttProbe;
     // Clear probe arrays before sampling so we only count work within the
     // observation window, not whatever piled up during navigation.
     if (probe) {
@@ -160,11 +162,12 @@ export async function collectMetrics(
         : 0;
     const fps = elapsed > 0 ? (frameTimes.length / elapsed) * 1000 : 0;
 
-    const memSnap = (
-      performance as unknown as {
-        memory?: { usedJSHeapSize: number; totalJSHeapSize: number };
-      }
-    ).memory ?? null;
+    const memSnap =
+      (
+        performance as unknown as {
+          memory?: { usedJSHeapSize: number; totalJSHeapSize: number };
+        }
+      ).memory ?? null;
 
     let detailedMemoryMB: number | null = null;
     const memApi = (
@@ -181,13 +184,15 @@ export async function collectMetrics(
       }
     }
 
-    const collector = (window as unknown as {
-      __sttCollector?: {
-        longTasks: Array<{ ms: number; ts: number }>;
-        observer: PerformanceObserver | null;
-        heapStart: { used: number; total: number } | null;
-      };
-    }).__sttCollector;
+    const collector = (
+      window as unknown as {
+        __sttCollector?: {
+          longTasks: Array<{ ms: number; ts: number }>;
+          observer: PerformanceObserver | null;
+          heapStart: { used: number; total: number } | null;
+        };
+      }
+    ).__sttCollector;
     if (collector?.observer) {
       try {
         collector.observer.disconnect();

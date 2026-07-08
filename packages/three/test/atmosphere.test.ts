@@ -22,7 +22,8 @@ import { MercatorProjection } from '../src/projection/mercator';
 /** WGS84 semi-minor axis (b) — the ECEF Z of the north pole. */
 const WGS84_B = EARTH_RADIUS * (1 - 1 / 298.257223563);
 
-const near = (a: number, b: number, eps = 1e-6): boolean => Math.abs(a - b) <= eps;
+const near = (a: number, b: number, eps = 1e-6): boolean =>
+  Math.abs(a - b) <= eps;
 
 describe('geodeticToEcef — STT/takram ECEF axis convention', () => {
   it('places (lon 0°, lat 0°) on +X at the semi-major radius', () => {
@@ -65,7 +66,8 @@ describe('enuBasisEcef — geodetic East/North/Up unit basis in ECEF', () => {
   it('produces an orthonormal right-handed frame at an arbitrary anchor', () => {
     const { east, north, up } = enuBasisEcef(-73.9857, 40.7484); // NYC-ish
     // Unit length.
-    for (const v of [east, north, up]) expect(near(v.length(), 1, 1e-9)).toBe(true);
+    for (const v of [east, north, up])
+      expect(near(v.length(), 1, 1e-9)).toBe(true);
     // Mutually orthogonal.
     expect(Math.abs(east.dot(north))).toBeLessThan(1e-9);
     expect(Math.abs(north.dot(up))).toBeLessThan(1e-9);
@@ -77,7 +79,9 @@ describe('enuBasisEcef — geodetic East/North/Up unit basis in ECEF', () => {
 
 describe('computeWorldToEcef — globe scene (world IS ECEF up to a uniform scale)', () => {
   it('is the identity at the default radius (no rotation, no scale, no offset)', () => {
-    const m = computeWorldToEcef(new GlobeProjection({ longitude: 10, latitude: 20 }));
+    const m = computeWorldToEcef(
+      new GlobeProjection({ longitude: 10, latitude: 20 }),
+    );
     expect(m.equals(new Matrix4())).toBe(true); // identity
   });
 
@@ -113,7 +117,9 @@ describe('computeWorldToEcef — local ENU / mercator (ENU tangent frame at the 
     expect(new Vector3(e[4], e[5], e[6]).distanceTo(north)).toBeLessThan(1e-9);
     expect(new Vector3(e[8], e[9], e[10]).distanceTo(up)).toBeLessThan(1e-9);
     // Column 3 is the anchor's ECEF position.
-    expect(new Vector3(e[12], e[13], e[14]).distanceTo(originEcef)).toBeLessThan(1e-3);
+    expect(
+      new Vector3(e[12], e[13], e[14]).distanceTo(originEcef),
+    ).toBeLessThan(1e-3);
   });
 
   it('maps the world origin exactly onto the anchor ECEF, and local +Z onto geodetic up', () => {
@@ -190,7 +196,12 @@ describe('resolveAtmosphereOptions — opt-in normalization', () => {
   it('object overrides only the named fields and passes anchor/getDate through', () => {
     const getDate = (t: number): Date => new Date(t);
     const anchor = { longitude: 1, latitude: 2 };
-    const r = resolveAtmosphereOptions({ sky: false, samples: 4, anchor, getDate });
+    const r = resolveAtmosphereOptions({
+      sky: false,
+      samples: 4,
+      anchor,
+      getDate,
+    });
     expect(r).not.toBeNull();
     expect(r!.sky).toBe(false);
     expect(r!.environment).toBe(true); // still defaulted on

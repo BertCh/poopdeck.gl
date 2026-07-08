@@ -19,16 +19,21 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { SpatiotemporalTileset } from '../src/spatiotemporal-tileset';
 import type { SpatiotemporalTilesetOptions } from '../src/spatiotemporal-tileset';
 import type { TileId, BoundingBox, Tile } from '../src/types';
-import { BOUNDS, BUCKET_MS, fakeTile, makeAvailableTiles, settle } from './helpers/fixtures';
+import {
+  BOUNDS,
+  BUCKET_MS,
+  fakeTile,
+  makeAvailableTiles,
+  settle,
+} from './helpers/fixtures';
 
 const N_BUCKETS = 20;
 /** Directory byte length of the tile at bucket index `i` (any zoom). */
 const bytesAt = (i: number): number => 100 * (i + 1);
 /** Directory byte sum of one zoom level's tiles across all buckets. */
-const ZOOM_LEVEL_BYTES = Array.from({ length: N_BUCKETS }, (_, i) => bytesAt(i)).reduce(
-  (a, b) => a + b,
-  0,
-);
+const ZOOM_LEVEL_BYTES = Array.from({ length: N_BUCKETS }, (_, i) =>
+  bytesAt(i),
+).reduce((a, b) => a + b, 0);
 /** The default overview tier is zooms 0..1 → two zoom levels of candidates. */
 const OVERVIEW_TILES = 2 * N_BUCKETS;
 const OVERVIEW_BYTES = 2 * ZOOM_LEVEL_BYTES;
@@ -42,7 +47,6 @@ function getTileByteSize(id: TileId): number | undefined {
   if (!Number.isInteger(i) || i < 0 || i >= N_BUCKETS) return undefined;
   return bytesAt(i);
 }
-
 
 const key = (id: TileId): string => `${id.z}/${id.x}/${id.y}/${id.t}`;
 
@@ -90,7 +94,12 @@ function makeHarness(opts: HarnessOptions = {}) {
   });
   /** Load exactly bucket `i` at the given zoom (tiny window inside the bucket). */
   const loadBucket = async (i: number, zoom = 6): Promise<void> => {
-    tileset.update({ bounds: BOUNDS, zoom, time: i * BUCKET_MS + 500, timeWindow: 100 });
+    tileset.update({
+      bounds: BOUNDS,
+      zoom,
+      time: i * BUCKET_MS + 500,
+      timeWindow: 100,
+    });
     await settle(5);
   };
   return { tileset, batchCalls, gated, loaded, unloaded, loadBucket };
@@ -123,7 +132,11 @@ describe('SpatiotemporalTileset.preloadOverviewTier', () => {
 
     const result = await tileset.preloadOverviewTier();
 
-    expect(result).toEqual({ loaded: true, bytes: OVERVIEW_BYTES, tiles: OVERVIEW_TILES });
+    expect(result).toEqual({
+      loaded: true,
+      bytes: OVERVIEW_BYTES,
+      tiles: OVERVIEW_TILES,
+    });
     // Every z0 + z1 bucket tile arrived through the coalesced batch path.
     expect(loaded).toHaveLength(OVERVIEW_TILES);
     expect(new Set(loaded.map((id) => id.z))).toEqual(new Set([0, 1]));
@@ -142,7 +155,11 @@ describe('SpatiotemporalTileset.preloadOverviewTier', () => {
     expect(gated).toHaveLength(1);
     for (const b of gated.splice(0)) b.resolve();
     const [r1, r2] = await Promise.all([p1, p2]);
-    expect(r1).toEqual({ loaded: true, bytes: OVERVIEW_BYTES, tiles: OVERVIEW_TILES });
+    expect(r1).toEqual({
+      loaded: true,
+      bytes: OVERVIEW_BYTES,
+      tiles: OVERVIEW_TILES,
+    });
     expect(r2).toEqual(r1);
 
     // ...and after it has loaded, too.
@@ -215,7 +232,12 @@ describe('SpatiotemporalTileset.preloadOverviewTier', () => {
 
     // Scrub to bucket 3 at z5: primary z5 (and z4..z2 parents) stay gated,
     // but the pinned z1 tile for bucket 3 is resident → it must render.
-    tileset.update({ bounds: BOUNDS, zoom: 5, time: 3 * BUCKET_MS + 500, timeWindow: 100 });
+    tileset.update({
+      bounds: BOUNDS,
+      zoom: 5,
+      time: 3 * BUCKET_MS + 500,
+      timeWindow: 100,
+    });
     await settle(5);
     const visible = tileset.getVisibleTiles();
     expect(visible.map((t) => key(t.id))).toContain('1/0/0/3000');
@@ -239,7 +261,12 @@ describe('SpatiotemporalTileset.preloadOverviewTier', () => {
     for (const b of gated.splice(0)) b.resolve();
     expect((await preload).loaded).toBe(true);
 
-    tileset.update({ bounds: BOUNDS, zoom: 5, time: 3 * BUCKET_MS + 500, timeWindow: 100 });
+    tileset.update({
+      bounds: BOUNDS,
+      zoom: 5,
+      time: 3 * BUCKET_MS + 500,
+      timeWindow: 100,
+    });
     await settle(5);
     const visible = tileset.getVisibleTiles();
     expect(visible.map((t) => key(t.id))).toContain('1/0/0/3000');

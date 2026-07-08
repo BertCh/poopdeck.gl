@@ -27,10 +27,19 @@
  * AV map-poly API (categorical `map_layer` colouring, flat, no time filter).
  */
 
-import { Group, Mesh, BufferGeometry, Float32BufferAttribute, Uint32BufferAttribute } from 'three';
+import {
+  Group,
+  Mesh,
+  BufferGeometry,
+  Float32BufferAttribute,
+  Uint32BufferAttribute,
+} from 'three';
 import type { Tile } from '@poopdeck.gl/core';
 import { BaseSttLayer, type SttLayerContext } from './layer.js';
-import { resolveTimeWindow, type ThreeTimeWindowOptions } from '../lib/time-window.js';
+import {
+  resolveTimeWindow,
+  type ThreeTimeWindowOptions,
+} from '../lib/time-window.js';
 import { type RGBA } from '../lib/color.js';
 import {
   buildPolygonBuffers,
@@ -73,7 +82,10 @@ export class PolygonLayer extends BaseSttLayer {
   private bundle: PolygonMaterialBundle;
 
   private readonly opts: Required<
-    Omit<PolygonLayerOptions, 'id' | 'timeWindow' | 'fadeInDuration' | 'fadeOutDuration'>
+    Omit<
+      PolygonLayerOptions,
+      'id' | 'timeWindow' | 'fadeInDuration' | 'fadeOutDuration'
+    >
   >;
 
   constructor(options: PolygonLayerOptions = {}) {
@@ -83,7 +95,10 @@ export class PolygonLayer extends BaseSttLayer {
     this.object.frustumCulled = false;
     const tw = resolveTimeWindow(options, 500);
     this.opts = {
-      colorMode: options.colorMode ?? { type: 'constant', color: DEFAULT_COLOR },
+      colorMode: options.colorMode ?? {
+        type: 'constant',
+        color: DEFAULT_COLOR,
+      },
       mode: options.mode ?? 'none',
       windowHalf: tw.windowHalf,
       fadeIn: tw.fadeIn,
@@ -112,7 +127,12 @@ export class PolygonLayer extends BaseSttLayer {
       extrusionProperty: this.opts.extrusionProperty,
       elevationScale: this.opts.elevationScale,
     };
-    const buf = buildPolygonBuffers(tiles, ctx.projection, ctx.timeOrigin, bufOpts);
+    const buf = buildPolygonBuffers(
+      tiles,
+      ctx.projection,
+      ctx.timeOrigin,
+      bufOpts,
+    );
 
     this.mesh.geometry.dispose();
     const geom = new BufferGeometry();

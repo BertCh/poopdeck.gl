@@ -84,7 +84,15 @@ export const ACT_INCEPTION: StoryAct = {
       ],
       // Open over the South Pacific, west of South America — already framing the
       // empty ocean where the first drifters will appear in the next beat.
-      focus: { lng: -95, lat: -12, zoom: 1.4, time: D(1985, 0, 1), mode: 'spin', trailDays: 90, speedDays: 6 },
+      focus: {
+        lng: -95,
+        lat: -12,
+        zoom: 1.4,
+        time: D(1985, 0, 1),
+        mode: 'spin',
+        trailDays: 90,
+        speedDays: 6,
+      },
     },
     {
       key: 'first-fix',
@@ -103,7 +111,9 @@ export const ACT_INCEPTION: StoryAct = {
         mode: 'drift',
         trailDays: 220,
         speedDays: 10,
-        markers: [{ lng: -140, lat: 0, label: 'First drifters · 1979', tone: 'gold' }],
+        markers: [
+          { lng: -140, lat: 0, label: 'First drifters · 1979', tone: 'gold' },
+        ],
       },
     },
   ],
@@ -160,7 +170,14 @@ export const ACT_BUILDUP: StoryAct = {
         mode: 'drift',
         trailDays: 120,
         speedDays: 14,
-        markers: [{ lng: -63.6, lat: 44.6, label: 'Drifter 1,250 · Halifax', tone: 'gold' }],
+        markers: [
+          {
+            lng: -63.6,
+            lat: 44.6,
+            label: 'Drifter 1,250 · Halifax',
+            tone: 'gold',
+          },
+        ],
       },
     },
   ],
@@ -262,7 +279,9 @@ export const ACT_PAYOFF: StoryAct = {
         mode: 'drift',
         trailDays: 90,
         speedDays: 10,
-        markers: [{ lng: -158, lat: 19, label: 'Hurricane Ana · 2014', tone: 'hot' }],
+        markers: [
+          { lng: -158, lat: 19, label: 'Hurricane Ana · 2014', tone: 'hot' },
+        ],
       },
     },
     {
@@ -280,7 +299,9 @@ export const ACT_PAYOFF: StoryAct = {
         mode: 'drift',
         trailDays: 60,
         speedDays: 6,
-        markers: [{ lng: -88.39, lat: 28.74, label: 'Deepwater Horizon', tone: 'hot' }],
+        markers: [
+          { lng: -88.39, lat: 28.74, label: 'Deepwater Horizon', tone: 'hot' },
+        ],
       },
     },
     {
@@ -298,7 +319,14 @@ export const ACT_PAYOFF: StoryAct = {
         mode: 'drift',
         trailDays: 200,
         speedDays: 14,
-        markers: [{ lng: -145, lat: 38, label: 'N. Pacific Garbage Patch', tone: 'warm' }],
+        markers: [
+          {
+            lng: -145,
+            lat: 38,
+            label: 'N. Pacific Garbage Patch',
+            tone: 'warm',
+          },
+        ],
       },
     },
     {
@@ -321,7 +349,12 @@ export const ACT_PAYOFF: StoryAct = {
   ],
 };
 
-export const ACTS: StoryAct[] = [ACT_INCEPTION, ACT_BUILDUP, ACT_CURRENTS, ACT_PAYOFF];
+export const ACTS: StoryAct[] = [
+  ACT_INCEPTION,
+  ACT_BUILDUP,
+  ACT_CURRENTS,
+  ACT_PAYOFF,
+];
 
 // ── Opening hero focus (the title screen) ───────────────────────────────────
 export const HERO_FOCUS: GlobeFocus = {
@@ -381,7 +414,10 @@ export const PEOPLE: Person[] = [
     tone: '#0b5fa5',
     blurb:
       'For two decades Lumpkin ran the Drifter Program from NOAA’s Miami lab and wrote its standard reviews. With Mayra Pazos he developed a way to detect when a drifter has lost its drogue, which corrected the velocity record for thousands of buoys, going back years.',
-    link: { href: 'https://www.aoml.noaa.gov/global-drifter-program/', label: 'NOAA Global Drifter Program' },
+    link: {
+      href: 'https://www.aoml.noaa.gov/global-drifter-program/',
+      label: 'NOAA Global Drifter Program',
+    },
   },
   {
     name: 'Mayra Pazos',
@@ -390,7 +426,10 @@ export const PEOPLE: Person[] = [
     tone: '#1a7d6b',
     blurb:
       'Pazos has long run the quality control behind the archive, the work of turning millions of raw satellite pings into a trustworthy record. Her drogue-loss detection work with Lumpkin earned NOAA’s Employee of the Year award.',
-    link: { href: 'https://www.aoml.noaa.gov/phod/gdp/', label: 'GDP Data Assembly Center' },
+    link: {
+      href: 'https://www.aoml.noaa.gov/phod/gdp/',
+      label: 'GDP Data Assembly Center',
+    },
   },
   {
     name: 'Luca Centurioni',
@@ -399,7 +438,10 @@ export const PEOPLE: Person[] = [
     tone: '#0a7790',
     blurb:
       'Niiler’s collaborator and successor. Centurioni took over as program PI in 2010 and founded the Lagrangian Drifter Laboratory, which builds roughly a thousand drifters a year and keeps developing new ones — for salinity, for waves, and for use inside a typhoon.',
-    link: { href: 'https://gdp.ucsd.edu/ldl/', label: 'Lagrangian Drifter Laboratory' },
+    link: {
+      href: 'https://gdp.ucsd.edu/ldl/',
+      label: 'Lagrangian Drifter Laboratory',
+    },
   },
   {
     name: 'Shane Elipot',
@@ -408,7 +450,10 @@ export const PEOPLE: Person[] = [
     tone: '#2a6f8e',
     blurb:
       'Elipot led the 2016 work that resampled the irregular Argos fixes into a uniform hourly dataset — hundreds of millions of positions and velocities, each with an error estimate — the version researchers use when the fine, fast motion of the ocean matters.',
-    link: { href: 'https://www.aoml.noaa.gov/phod/gdp/hourly_data.php', label: 'The hourly dataset' },
+    link: {
+      href: 'https://www.aoml.noaa.gov/phod/gdp/hourly_data.php',
+      label: 'The hourly dataset',
+    },
   },
   {
     name: 'Adam Sykulski',
@@ -417,7 +462,10 @@ export const PEOPLE: Person[] = [
     tone: '#3a6f8e',
     blurb:
       'A raw drifter position is never a clean number. Sykulski’s statistical methods, used throughout the hourly product, separate real ocean motion and the day–night swing of temperature from the noise of the satellite fixes, turning irregular pings into estimates with stated uncertainty.',
-    link: { href: 'https://agupubs.onlinelibrary.wiley.com/doi/full/10.1002/2016JC011716', label: 'Hourly dataset method' },
+    link: {
+      href: 'https://agupubs.onlinelibrary.wiley.com/doi/full/10.1002/2016JC011716',
+      label: 'Hourly dataset method',
+    },
   },
   {
     name: 'Nikolai Maximenko',
@@ -426,7 +474,10 @@ export const PEOPLE: Person[] = [
     tone: '#1a7d6b',
     blurb:
       'Maximenko showed that the drifters’ own statistics could predict where floating debris would gather. His 2012 model, with Niiler, reproduced the garbage patches from trajectories alone, locating them before ships went out to look.',
-    link: { href: 'https://iprc.soest.hawaii.edu/people/maximenko.php', label: 'IPRC profile' },
+    link: {
+      href: 'https://iprc.soest.hawaii.edu/people/maximenko.php',
+      label: 'IPRC profile',
+    },
   },
   {
     name: 'Benjamin Franklin',
@@ -436,7 +487,10 @@ export const PEOPLE: Person[] = [
     tone: '#6b5b3e',
     blurb:
       'Two centuries before the satellites, Franklin printed the first scientific chart of the Gulf Stream, drawn from the knowledge of Nantucket whalers. He asked the question the drifters would finally answer: which way, exactly, does the sea run?',
-    link: { href: 'https://oceanservice.noaa.gov/facts/bfranklin.html', label: 'NOAA: Franklin & the Gulf Stream' },
+    link: {
+      href: 'https://oceanservice.noaa.gov/facts/bfranklin.html',
+      label: 'NOAA: Franklin & the Gulf Stream',
+    },
     portrait: {
       src: '/story/img/franklin-portrait-duplessis.jpg',
       credit: 'Joseph-Siffred Duplessis, c. 1785 · public domain',
@@ -455,17 +509,78 @@ export interface Milestone {
 }
 
 export const MILESTONES: Milestone[] = [
-  { year: '1768', sort: 1768, title: 'Franklin’s Gulf Stream chart', detail: 'Franklin & Folger print the first scientific map of a current.' },
-  { year: '1978', sort: 1978, title: 'Argos reaches orbit', detail: 'TIROS-N carries the CNES/NASA/NOAA tracking system — global positioning of buoys becomes possible.' },
-  { year: '1979', sort: 1979, title: 'First fixes', detail: 'Holey-sock drifters begin reporting from the equatorial Pacific.' },
-  { year: '1982', sort: 1982, title: 'Boulder meeting', detail: 'Niiler convenes the gathering that launches the modern drifter effort.' },
-  { year: '1988', sort: 1988, title: 'The SVP standard', detail: 'Large-scale deployment of the standardized Surface Velocity Program drifter begins.' },
-  { year: '1991', sort: 1991, title: 'The construction manual', detail: 'Sybrandy & Niiler publish the blueprint that unifies the world’s drifters.' },
-  { year: '1994', sort: 1994, title: 'Barometers go to sea', detail: 'SVP-B drifters start measuring air pressure for weather prediction.' },
-  { year: '2005', sort: 2005, title: '1,250-buoy array complete', detail: 'The first finished component of the Global Ocean Observing System.' },
-  { year: '2010', sort: 2010, title: 'Deepwater Horizon', detail: 'Drifters map the Gulf currents to forecast the oil’s path.' },
-  { year: '2016', sort: 2016, title: 'The hourly dataset', detail: 'Elipot et al. publish a uniform, high-resolution drifter product.' },
-  { year: '2024', sort: 2024, title: 'The 30,000th drifter', detail: 'Deployed in August — a tally across the program’s whole life.' },
+  {
+    year: '1768',
+    sort: 1768,
+    title: 'Franklin’s Gulf Stream chart',
+    detail: 'Franklin & Folger print the first scientific map of a current.',
+  },
+  {
+    year: '1978',
+    sort: 1978,
+    title: 'Argos reaches orbit',
+    detail:
+      'TIROS-N carries the CNES/NASA/NOAA tracking system — global positioning of buoys becomes possible.',
+  },
+  {
+    year: '1979',
+    sort: 1979,
+    title: 'First fixes',
+    detail: 'Holey-sock drifters begin reporting from the equatorial Pacific.',
+  },
+  {
+    year: '1982',
+    sort: 1982,
+    title: 'Boulder meeting',
+    detail:
+      'Niiler convenes the gathering that launches the modern drifter effort.',
+  },
+  {
+    year: '1988',
+    sort: 1988,
+    title: 'The SVP standard',
+    detail:
+      'Large-scale deployment of the standardized Surface Velocity Program drifter begins.',
+  },
+  {
+    year: '1991',
+    sort: 1991,
+    title: 'The construction manual',
+    detail:
+      'Sybrandy & Niiler publish the blueprint that unifies the world’s drifters.',
+  },
+  {
+    year: '1994',
+    sort: 1994,
+    title: 'Barometers go to sea',
+    detail:
+      'SVP-B drifters start measuring air pressure for weather prediction.',
+  },
+  {
+    year: '2005',
+    sort: 2005,
+    title: '1,250-buoy array complete',
+    detail:
+      'The first finished component of the Global Ocean Observing System.',
+  },
+  {
+    year: '2010',
+    sort: 2010,
+    title: 'Deepwater Horizon',
+    detail: 'Drifters map the Gulf currents to forecast the oil’s path.',
+  },
+  {
+    year: '2016',
+    sort: 2016,
+    title: 'The hourly dataset',
+    detail: 'Elipot et al. publish a uniform, high-resolution drifter product.',
+  },
+  {
+    year: '2024',
+    sort: 2024,
+    title: 'The 30,000th drifter',
+    detail: 'Deployed in August — a tally across the program’s whole life.',
+  },
 ];
 
 // ════════════════════════════════════════════════════════════════════════
@@ -481,12 +596,43 @@ export interface Stat {
 }
 
 export const STATS: Stat[] = [
-  { value: 30000, suffix: '+', label: 'drifters deployed', sub: 'across the program’s life, as of 2024' },
-  { value: 1300, prefix: '~', label: 'reporting right now', sub: 'the live global array' },
-  { value: 45, suffix: ' yrs', label: 'of continuous record', sub: 'February 1979 to today' },
-  { value: 1000, prefix: '~', label: 'new buoys a year', sub: 'to keep the array full' },
-  { value: 50, suffix: '+', label: 'partner agencies', sub: 'an international effort' },
-  { value: 0.003, decimals: 3, suffix: ' K/yr', label: 'satellite SST stability', sub: 'held against the drifters' },
+  {
+    value: 30000,
+    suffix: '+',
+    label: 'drifters deployed',
+    sub: 'across the program’s life, as of 2024',
+  },
+  {
+    value: 1300,
+    prefix: '~',
+    label: 'reporting right now',
+    sub: 'the live global array',
+  },
+  {
+    value: 45,
+    suffix: ' yrs',
+    label: 'of continuous record',
+    sub: 'February 1979 to today',
+  },
+  {
+    value: 1000,
+    prefix: '~',
+    label: 'new buoys a year',
+    sub: 'to keep the array full',
+  },
+  {
+    value: 50,
+    suffix: '+',
+    label: 'partner agencies',
+    sub: 'an international effort',
+  },
+  {
+    value: 0.003,
+    decimals: 3,
+    suffix: ' K/yr',
+    label: 'satellite SST stability',
+    sub: 'held against the drifters',
+  },
 ];
 
 // ════════════════════════════════════════════════════════════════════════
@@ -498,14 +644,41 @@ export interface Source {
 }
 
 export const SOURCES: Source[] = [
-  { label: 'NOAA AOML — Global Drifter Program', href: 'https://www.aoml.noaa.gov/global-drifter-program/' },
-  { label: 'Lumpkin & Pazos (2007), Measuring surface currents with SVP drifters', href: 'https://www.aoml.noaa.gov/phod/docs/LumpkinPazos.pdf' },
-  { label: 'Lumpkin et al. (2017), Advances in the Application of Surface Drifters', href: 'https://www.aoml.noaa.gov/phod/docs/Lumpkin_etal2016.pdf' },
-  { label: 'Elipot et al. (2016), A global surface drifter dataset at hourly resolution', href: 'https://agupubs.onlinelibrary.wiley.com/doi/full/10.1002/2016JC011716' },
-  { label: 'Maximenko, Hafner & Niiler (2012), Pathways of marine debris', href: 'https://pubmed.ncbi.nlm.nih.gov/21696778/' },
-  { label: 'Scripps — Lagrangian Drifter Laboratory', href: 'https://gdp.ucsd.edu/ldl/' },
-  { label: 'NOAA — Benjamin Franklin & the Gulf Stream', href: 'https://oceanservice.noaa.gov/facts/bfranklin.html' },
-  { label: 'AOML ERDDAP — drifter data (freely downloadable)', href: 'https://erddap.aoml.noaa.gov/gdp/erddap/' },
+  {
+    label: 'NOAA AOML — Global Drifter Program',
+    href: 'https://www.aoml.noaa.gov/global-drifter-program/',
+  },
+  {
+    label:
+      'Lumpkin & Pazos (2007), Measuring surface currents with SVP drifters',
+    href: 'https://www.aoml.noaa.gov/phod/docs/LumpkinPazos.pdf',
+  },
+  {
+    label:
+      'Lumpkin et al. (2017), Advances in the Application of Surface Drifters',
+    href: 'https://www.aoml.noaa.gov/phod/docs/Lumpkin_etal2016.pdf',
+  },
+  {
+    label:
+      'Elipot et al. (2016), A global surface drifter dataset at hourly resolution',
+    href: 'https://agupubs.onlinelibrary.wiley.com/doi/full/10.1002/2016JC011716',
+  },
+  {
+    label: 'Maximenko, Hafner & Niiler (2012), Pathways of marine debris',
+    href: 'https://pubmed.ncbi.nlm.nih.gov/21696778/',
+  },
+  {
+    label: 'Scripps — Lagrangian Drifter Laboratory',
+    href: 'https://gdp.ucsd.edu/ldl/',
+  },
+  {
+    label: 'NOAA — Benjamin Franklin & the Gulf Stream',
+    href: 'https://oceanservice.noaa.gov/facts/bfranklin.html',
+  },
+  {
+    label: 'AOML ERDDAP — drifter data (freely downloadable)',
+    href: 'https://erddap.aoml.noaa.gov/gdp/erddap/',
+  },
 ];
 
 /** Image credits, keyed by the asset filename under /story/img. */
@@ -517,11 +690,13 @@ export interface AssetCredit {
 export const IMG = {
   franklinChart: {
     src: '/story/img/franklin-folger-gulfstream-1769.jpg',
-    credit: 'Franklin & Folger Gulf Stream chart, London 1769 · Library of Congress · public domain',
+    credit:
+      'Franklin & Folger Gulf Stream chart, London 1769 · Library of Congress · public domain',
   },
   challenger: {
     src: '/story/img/hms-challenger.jpg',
-    credit: 'HMS Challenger, Challenger Report 1885 · NOAA archive · public domain',
+    credit:
+      'HMS Challenger, Challenger Report 1885 · NOAA archive · public domain',
   },
   tiros: {
     src: '/story/img/tiros-n.jpg',
@@ -537,7 +712,8 @@ export const IMG = {
   },
   climatology: {
     src: '/story/img/noaa-climatology.jpg',
-    credit: 'Drifter-derived surface-current climatology · NOAA AOML · public domain',
+    credit:
+      'Drifter-derived surface-current climatology · NOAA AOML · public domain',
   },
   oceanCurrents: {
     src: '/story/img/noaa-ocean-currents.jpg',
@@ -553,10 +729,12 @@ export const IMG = {
   },
   svsDrifting: {
     src: '/story/img/nasa-svs-drifting-at-sea.jpg',
-    credit: 'Drifting At Sea · NASA’s Scientific Visualization Studio · public domain',
+    credit:
+      'Drifting At Sea · NASA’s Scientific Visualization Studio · public domain',
   },
   svsGarbage: {
     src: '/story/img/nasa-svs-garbage-patches.png',
-    credit: 'Garbage Patch experiment · NASA’s Scientific Visualization Studio · public domain',
+    credit:
+      'Garbage Patch experiment · NASA’s Scientific Visualization Studio · public domain',
   },
 } satisfies Record<string, AssetCredit>;

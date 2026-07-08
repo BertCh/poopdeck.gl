@@ -29,7 +29,9 @@ import {
 } from '../src/shared-scheduler';
 import { bufferToArrayBuffer, flush } from './helpers/fixtures';
 
-const FIXTURE = fileURLToPath(new URL('./fixtures/sample.stt', import.meta.url));
+const FIXTURE = fileURLToPath(
+  new URL('./fixtures/sample.stt', import.meta.url),
+);
 const FIXTURE_BYTES = new Uint8Array(readFileSync(FIXTURE));
 
 /**
@@ -38,21 +40,28 @@ const FIXTURE_BYTES = new Uint8Array(readFileSync(FIXTURE));
  * uses) — this test only needs ONE real decodable blob to reuse across
  * synthetic tiles, not the fixture's own tile layout.
  */
-async function fixtureBlobAndMeta(): Promise<{ blob: Uint8Array; meta: any; e: any }> {
+async function fixtureBlobAndMeta(): Promise<{
+  blob: Uint8Array;
+  meta: any;
+  e: any;
+}> {
   const hv = new DataView(bufferToArrayBuffer(FIXTURE_BYTES));
   const indexOffset = Number(hv.getBigUint64(6, true));
   const indexLength = Number(hv.getBigUint64(14, true));
   const metaOff = Number(hv.getBigUint64(22, true));
   const metaLen = Number(hv.getBigUint64(30, true));
   const meta = JSON.parse(
-    new TextDecoder().decode(FIXTURE_BYTES.subarray(metaOff, metaOff + metaLen)),
+    new TextDecoder().decode(
+      FIXTURE_BYTES.subarray(metaOff, metaOff + metaLen),
+    ),
   );
   // Decode just enough of the v4 directory to grab one entry's (offset, length,
   // zoom, featureCount, uncompressedSize) — reuse the blob at that slice.
   const dir = FIXTURE_BYTES.subarray(indexOffset, indexOffset + indexLength);
   let pos = 0;
   const uvarint = (): bigint => {
-    let r = 0n, s = 0n;
+    let r = 0n,
+      s = 0n;
     for (;;) {
       const b = dir[pos++];
       r |= BigInt(b & 0x7f) << s;
@@ -69,10 +78,18 @@ async function fixtureBlobAndMeta(): Promise<{ blob: Uint8Array; meta: any; e: a
   if (version !== 4) throw new Error('expected v4 fixture directory');
   const n = Number(uvarint());
   const runCount = Number(uvarint());
-  let pz = 0n, ph = 0n, px = 0n, py = 0n, pt = 0n;
+  let pz = 0n,
+    ph = 0n,
+    px = 0n,
+    py = 0n,
+    pt = 0n;
   const keys: Array<{ zoom: number; featureCount: number }> = new Array(n);
   for (let i = 0; i < n; i++) {
-    pz += ivarint(); ph += ivarint(); px += ivarint(); py += ivarint(); pt += ivarint();
+    pz += ivarint();
+    ph += ivarint();
+    px += ivarint();
+    py += ivarint();
+    pt += ivarint();
     ivarint(); // duration
     const fc = Number(uvarint());
     const bp = uvarint();
@@ -81,7 +98,13 @@ async function fixtureBlobAndMeta(): Promise<{ blob: Uint8Array; meta: any; e: a
   }
   let cursor = 0;
   let expected = 0n;
-  let first: { offset: number; length: number; uncompressedSize: number; zoom: number; featureCount: number } | null = null;
+  let first: {
+    offset: number;
+    length: number;
+    uncompressedSize: number;
+    zoom: number;
+    featureCount: number;
+  } | null = null;
   for (let r = 0; r < runCount; r++) {
     const runLen = Number(uvarint());
     const offFlag = uvarint();
@@ -91,18 +114,31 @@ async function fixtureBlobAndMeta(): Promise<{ blob: Uint8Array; meta: any; e: a
     pos += 4; // crc32c
     for (let k = 0; k < runLen; k++) {
       if (!first) {
-        first = { offset: Number(offset), length, uncompressedSize: unc, zoom: keys[cursor].zoom, featureCount: keys[cursor].featureCount };
+        first = {
+          offset: Number(offset),
+          length,
+          uncompressedSize: unc,
+          zoom: keys[cursor].zoom,
+          featureCount: keys[cursor].featureCount,
+        };
       }
       cursor++;
     }
     expected = offset + BigInt(length);
   }
-  const blob = FIXTURE_BYTES.subarray(first!.offset, first!.offset + first!.length);
+  const blob = FIXTURE_BYTES.subarray(
+    first!.offset,
+    first!.offset + first!.length,
+  );
   return { blob, meta, e: first };
 }
 
 /** Web-Mercator tile-center lon/lat, computed independently of archive.ts's own formula. */
-function tileCenterLonLat(z: number, x: number, y: number): { lon: number; lat: number } {
+function tileCenterLonLat(
+  z: number,
+  x: number,
+  y: number,
+): { lon: number; lat: number } {
   const n = 2 ** z;
   const lon = ((x + 0.5) / n) * 360 - 180;
   const merc = Math.PI * (1 - (2 * (y + 0.5)) / n);
@@ -153,11 +189,18 @@ function makeSpatialDataset(
     format: 'stt-packed',
     formatVersion: 1,
     compression: 'zstd',
-    directory: { key: 'index/dir.sttd', length: dir.length, directoryVersion: 5 },
+    directory: {
+      key: 'index/dir.sttd',
+      length: dir.length,
+      directoryVersion: 5,
+    },
     packs: packRefs,
     metadata: meta,
   };
-  objects.set('manifest.json', new TextEncoder().encode(JSON.stringify(manifest)));
+  objects.set(
+    'manifest.json',
+    new TextEncoder().encode(JSON.stringify(manifest)),
+  );
   return objects;
 }
 
@@ -168,7 +211,11 @@ interface Gate {
 }
 
 /** A GATED fetch whose dispatch tag is the requested pack key (identifies WHICH tile). */
-function gatedFetchByPath(objects: Map<string, Uint8Array>, manifestUrl: string, gate: Gate): typeof fetch {
+function gatedFetchByPath(
+  objects: Map<string, Uint8Array>,
+  manifestUrl: string,
+  gate: Gate,
+): typeof fetch {
   const slash = manifestUrl.lastIndexOf('/');
   const base = slash >= 0 ? manifestUrl.slice(0, slash + 1) : '';
   return (async (url: string, init?: RequestInit) => {
@@ -177,7 +224,12 @@ function gatedFetchByPath(objects: Map<string, Uint8Array>, manifestUrl: string,
     const range = (init?.headers as Record<string, string> | undefined)?.Range;
     const m = /bytes=(\d+)-(\d+)/.exec(range ?? '');
     if (!m) {
-      return { ok: true, status: 200, statusText: 'OK', arrayBuffer: async () => bufferToArrayBuffer(bytes) };
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        arrayBuffer: async () => bufferToArrayBuffer(bytes),
+      };
     }
     gate.dispatchOrder.push(key);
     gate.inFlight++;
@@ -191,7 +243,10 @@ function gatedFetchByPath(objects: Map<string, Uint8Array>, manifestUrl: string,
       ok: true,
       status: 206,
       statusText: 'Partial Content',
-      headers: { get: (n: string) => (n.toLowerCase() === 'content-range' ? contentRange : null) },
+      headers: {
+        get: (n: string) =>
+          n.toLowerCase() === 'content-range' ? contentRange : null,
+      },
       arrayBuffer: async () => bufferToArrayBuffer(slice),
     };
   }) as unknown as typeof fetch;
@@ -241,7 +296,14 @@ describe('spatial tie-break in the shared scheduler', () => {
     enqueueReal: () => void,
   ): Promise<void> {
     const blockerUrl = 'mem://blocker/manifest.json';
-    const blockerObjects = makeSpatialDataset([{ x: 0, y: 0 }], 1, 0, blob, meta, e);
+    const blockerObjects = makeSpatialDataset(
+      [{ x: 0, y: 0 }],
+      1,
+      0,
+      blob,
+      meta,
+      e,
+    );
     const blocker = new STTArchive({
       url: blockerUrl,
       fetch: gatedFetchByPath(blockerObjects, blockerUrl, gate),

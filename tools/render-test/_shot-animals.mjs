@@ -13,18 +13,33 @@ fs.mkdirSync(OUTPUT, { recursive: true });
 
 const browser = await chromium.launch({
   headless: true,
-  args: ['--use-gl=swiftshader', '--enable-unsafe-swiftshader', '--enable-webgl',
-    '--ignore-gpu-blocklist', '--disable-gpu-sandbox', '--disable-dev-shm-usage', '--no-sandbox'],
+  args: [
+    '--use-gl=swiftshader',
+    '--enable-unsafe-swiftshader',
+    '--enable-webgl',
+    '--ignore-gpu-blocklist',
+    '--disable-gpu-sandbox',
+    '--disable-dev-shm-usage',
+    '--no-sandbox',
+  ],
 });
 
-const ctx = await browser.newContext({ viewport: { width: 1600, height: 800 }, bypassCSP: true });
+const ctx = await browser.newContext({
+  viewport: { width: 1600, height: 800 },
+  bypassCSP: true,
+});
 await ctx.clearCookies();
 const page = await ctx.newPage();
 const errs = [];
-page.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()); });
+page.on('console', (m) => {
+  if (m.type() === 'error') errs.push(m.text());
+});
 page.on('pageerror', (e) => errs.push(`${e.name}: ${e.message}`));
 
-await page.goto(`${BASE_URL}/demo/animal-migration`, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+await page.goto(`${BASE_URL}/demo/animal-migration`, {
+  waitUntil: 'domcontentloaded',
+  timeout: 60_000,
+});
 const map = page.locator('.map-viewport').first();
 await map.waitFor({ state: 'visible', timeout: 30_000 });
 // Preload web fonts so the screenshot's font-stability wait resolves instantly.
@@ -33,12 +48,20 @@ await page.waitForTimeout(3000);
 
 // Start playback and let trails accumulate across many tracks.
 await page.evaluate(() => {
-  const b = Array.from(document.querySelectorAll('button')).find((x) => x.textContent && x.textContent.trim() === '▶');
+  const b = Array.from(document.querySelectorAll('button')).find(
+    (x) => x.textContent && x.textContent.trim() === '▶',
+  );
   if (b) b.click();
 });
 await page.waitForTimeout(12000);
-await page.screenshot({ path: path.join(OUTPUT, `animal-migration.${TAG}.playing.png`), timeout: 60_000 });
-console.log(`animal-migration: ok (errors ${errs.length})`, errs.slice(0, 3).join(' | '));
+await page.screenshot({
+  path: path.join(OUTPUT, `animal-migration.${TAG}.playing.png`),
+  timeout: 60_000,
+});
+console.log(
+  `animal-migration: ok (errors ${errs.length})`,
+  errs.slice(0, 3).join(' | '),
+);
 
 await ctx.close();
 await browser.close();

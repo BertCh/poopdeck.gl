@@ -99,11 +99,14 @@ describe('attachCesiumClock', () => {
   });
 
   it('disposer removes preRender + tick + playState so nothing fires post-dispose', () => {
-    const { scene, firePreRender, preRenderCount, renderRequests } = fakeScene();
+    const { scene, firePreRender, preRenderCount, renderRequests } =
+      fakeScene();
     const clock = fakeClock();
     const apply = vi.fn();
 
-    const dispose = attachCesiumClock(scene, clock, apply, { requestRender: true });
+    const dispose = attachCesiumClock(scene, clock, apply, {
+      requestRender: true,
+    });
     expect(preRenderCount()).toBe(1);
     expect(clock.tickCount()).toBe(1);
     expect(clock.playStateCount()).toBe(1);

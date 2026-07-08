@@ -26,15 +26,15 @@ export {
   STTPointLayer,
   type STTPointLayerOptions,
 } from './layers/point-layer.js';
-export {
-  STTLineLayer,
-  type STTLineLayerOptions,
-} from './layers/line-layer.js';
+export { STTLineLayer, type STTLineLayerOptions } from './layers/line-layer.js';
 export {
   STTPolygonLayer,
   type STTPolygonLayerOptions,
 } from './layers/polygon-layer.js';
-export { STTTripsLayer, type STTTripsLayerOptions } from './layers/trips-layer.js';
+export {
+  STTTripsLayer,
+  type STTTripsLayerOptions,
+} from './layers/trips-layer.js';
 export {
   STTHeatmapLayer,
   type STTHeatmapLayerOptions,

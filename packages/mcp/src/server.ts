@@ -9,11 +9,19 @@
  * `docs/roadmap/ai-suite-skills-mcp-2026-07.md`). A few consolidated tools
  * with rich Zod schemas rather than one tool per manifest field.
  */
-import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
+import {
+  McpServer,
+  ResourceTemplate,
+} from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import type { SttMcpConfig } from './config.js';
-import { describeDataset, resolveDatasetDir, scanDatasets, type DatasetDescription } from './manifest.js';
+import {
+  describeDataset,
+  resolveDatasetDir,
+  scanDatasets,
+  type DatasetDescription,
+} from './manifest.js';
 import {
   DEFAULT_DOC_MAX_BYTES,
   listCorpusDocs,
@@ -23,7 +31,12 @@ import {
 } from './docs.js';
 import { buildSystemPrompt } from './system-prompt.js';
 import { buildViewMap } from './view-map.js';
-import { resolveBinary, run, tryParseJson, type RunResult } from './cli-runner.js';
+import {
+  resolveBinary,
+  run,
+  tryParseJson,
+  type RunResult,
+} from './cli-runner.js';
 
 const PACKAGE_VERSION = '0.4.0';
 
@@ -39,7 +52,9 @@ interface RecommendConfig {
 }
 
 function textResult(data: unknown, isError = false): CallToolResult {
-  const result: CallToolResult = { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
+  const result: CallToolResult = {
+    content: [{ type: 'text', text: JSON.stringify(data, null, 2) }],
+  };
   if (isError) result.isError = true;
   return result;
 }
@@ -55,7 +70,12 @@ function errorResult(message: string): CallToolResult {
  * an MCP host treats a failed shell-out as an error, not a success payload.
  */
 function runFailed(result: RunResult): boolean {
-  return result.exitCode !== 0 || result.timedOut || result.aborted || result.exitCode === null;
+  return (
+    result.exitCode !== 0 ||
+    result.timedOut ||
+    result.aborted ||
+    result.exitCode === null
+  );
 }
 
 /** The `--sample` default applied to decode-dependent stats when the caller omits `sample` (keeps a full unsampled decode from blowing past the MCP client's 60s default timeout). */
@@ -103,11 +123,17 @@ function asArray(value: string | string[]): string[] {
  * re-scans fresh (datasets on disk can change between calls; the
  * instructions block is a best-effort hint, not a cache).
  */
-export async function createSttMcpServer(config: SttMcpConfig): Promise<McpServer> {
+export async function createSttMcpServer(
+  config: SttMcpConfig,
+): Promise<McpServer> {
   const initialCatalog = await scanDatasets(config.dataRoot).catch(() => []);
 
   const server = new McpServer(
-    { name: 'stt-mcp', version: PACKAGE_VERSION, title: 'SpatioTemporal Tiles' },
+    {
+      name: 'stt-mcp',
+      version: PACKAGE_VERSION,
+      title: 'SpatioTemporal Tiles',
+    },
     {
       instructions: buildSystemPrompt(initialCatalog),
       capabilities: { tools: {}, resources: {} },
@@ -139,12 +165,19 @@ function registerDiscoveryTools(server: McpServer, config: SttMcpConfig): void {
         'format/formatVersion, boundingBox, timeRange, minZoom/maxZoom, featureCount, and whether it ' +
         'carries a pre-aggregated summary tier (H3/Quadbin) for coarse-zoom rendering.',
       inputSchema: {
-        search: z.string().optional().describe('Case-insensitive substring filter on dataset name'),
+        search: z
+          .string()
+          .optional()
+          .describe('Case-insensitive substring filter on dataset name'),
       },
     },
     async ({ search }) => {
       const datasets = await scanDatasets(config.dataRoot, { search });
-      return textResult({ dataRoot: config.dataRoot, count: datasets.length, datasets });
+      return textResult({
+        dataRoot: config.dataRoot,
+        count: datasets.length,
+        datasets,
+      });
     },
   );
 
@@ -168,7 +201,9 @@ function registerDiscoveryTools(server: McpServer, config: SttMcpConfig): void {
         const description = await describeDataset(config.dataRoot, name);
         return textResult(description);
       } catch (err) {
-        return errorResult(`describe_dataset(${JSON.stringify(name)}) failed: ${errMessage(err)}`);
+        return errorResult(
+          `describe_dataset(${JSON.stringify(name)}) failed: ${errMessage(err)}`,
+        );
       }
     },
   );
@@ -182,7 +217,7 @@ function registerDiscoveryTools(server: McpServer, config: SttMcpConfig): void {
           'compressed cost) and `stt-optimize doctor` (severity-ranked findings + remediation flags), and ' +
           'optionally `order-audit` (measured blob-ordering range-read cost), against one dataset and ' +
           'returns their parsed JSON output. The decode-dependent stats are SAMPLED to 256 tiles by ' +
-          'default (an unsampled full decode can exceed the MCP client\'s 60s timeout); pass `sample` to ' +
+          "default (an unsampled full decode can exceed the MCP client's 60s timeout); pass `sample` to " +
           'change the cap, or `exact: true` for a precise full decode. Requires --allow-cli (enabled).'
         : 'Would run `stt-optimize inspect`/`doctor`/`order-audit` against one dataset, but this server ' +
           'was started WITHOUT --allow-cli — returns a manifest-only summary instead (see describe_dataset ' +
@@ -192,17 +227,23 @@ function registerDiscoveryTools(server: McpServer, config: SttMcpConfig): void {
         include: z
           .array(z.enum(['inspect', 'doctor', 'order-audit']))
           .optional()
-          .describe('Which stt-optimize subcommands to run (default: inspect + doctor)'),
+          .describe(
+            'Which stt-optimize subcommands to run (default: inspect + doctor)',
+          ),
         sample: z
           .number()
           .int()
           .positive()
           .optional()
-          .describe('Sample at most N tiles for the decode-dependent stats (default: 256; pass `exact` for a full decode)'),
+          .describe(
+            'Sample at most N tiles for the decode-dependent stats (default: 256; pass `exact` for a full decode)',
+          ),
         exact: z
           .boolean()
           .optional()
-          .describe('Decode EVERY tile for precise stats (omits --sample) — slower; may exceed the client timeout on large datasets'),
+          .describe(
+            'Decode EVERY tile for precise stats (omits --sample) — slower; may exceed the client timeout on large datasets',
+          ),
       },
     },
     async ({ name, include, sample, exact }, extra) => {
@@ -229,24 +270,37 @@ function registerDiscoveryTools(server: McpServer, config: SttMcpConfig): void {
           name,
           path: dir,
           cliEnabled: false,
-          message: 'Enable --allow-cli on the stt-mcp server to run stt-optimize inspect/doctor.',
+          message:
+            'Enable --allow-cli on the stt-mcp server to run stt-optimize inspect/doctor.',
           manifestSummary,
         });
       }
 
-      const subcommands = include && include.length > 0 ? include : (['inspect', 'doctor'] as const);
-      const effectiveSample = exact ? undefined : (sample ?? DEFAULT_STATS_SAMPLE);
+      const subcommands =
+        include && include.length > 0
+          ? include
+          : (['inspect', 'doctor'] as const);
+      const effectiveSample = exact
+        ? undefined
+        : (sample ?? DEFAULT_STATS_SAMPLE);
       const appliedSampledDefault = !exact && sample === undefined;
-      const bin = resolveBinary('stt-optimize', config.sttOptimizeBin, [config.dataRoot, process.cwd()]);
+      const bin = resolveBinary('stt-optimize', config.sttOptimizeBin, [
+        config.dataRoot,
+        process.cwd(),
+      ]);
       const results: Record<string, unknown> = {};
       let anyFailed = false;
       for (const sub of subcommands) {
         const args = [sub, '--archive', dir, '--format', 'json'];
         // order-audit measures directory range-read cost, not decoded tiles — it has no --sample flag.
-        if (effectiveSample !== undefined && sub !== 'order-audit') args.push('--sample', String(effectiveSample));
+        if (effectiveSample !== undefined && sub !== 'order-audit')
+          args.push('--sample', String(effectiveSample));
         const result = await run(bin, args, { signal: extra?.signal });
         if (!runFailed(result)) {
-          results[sub] = tryParseJson(result.stdout) ?? { raw: result.stdout, stderr: result.stderr };
+          results[sub] = tryParseJson(result.stdout) ?? {
+            raw: result.stdout,
+            stderr: result.stderr,
+          };
         } else {
           anyFailed = true;
           results[sub] = {
@@ -259,11 +313,16 @@ function registerDiscoveryTools(server: McpServer, config: SttMcpConfig): void {
           };
         }
       }
-      const payload: Record<string, unknown> = { name, path: dir, cliEnabled: true, bin, ...results };
+      const payload: Record<string, unknown> = {
+        name,
+        path: dir,
+        cliEnabled: true,
+        bin,
+        ...results,
+      };
       if (appliedSampledDefault) {
         payload.sampledDefault = DEFAULT_STATS_SAMPLE;
-        payload.sampledNote =
-          `Decode-dependent stats were sampled to ${DEFAULT_STATS_SAMPLE} tiles by default; pass \`exact: true\` for a precise full decode.`;
+        payload.sampledNote = `Decode-dependent stats were sampled to ${DEFAULT_STATS_SAMPLE} tiles by default; pass \`exact: true\` for a precise full decode.`;
       }
       return textResult(payload, anyFailed);
     },
@@ -293,13 +352,17 @@ function registerDocTools(server: McpServer, config: SttMcpConfig): void {
       inputSchema: {
         path: z
           .string()
-          .describe('Docs-relative path, e.g. "api/cli-reference.md" or "README.md" (no absolute paths, no "..")'),
+          .describe(
+            'Docs-relative path, e.g. "api/cli-reference.md" or "README.md" (no absolute paths, no "..")',
+          ),
         maxBytes: z
           .number()
           .int()
           .positive()
           .optional()
-          .describe(`Truncate the doc to this many UTF-8 bytes (default: ${DEFAULT_DOC_MAX_BYTES})`),
+          .describe(
+            `Truncate the doc to this many UTF-8 bytes (default: ${DEFAULT_DOC_MAX_BYTES})`,
+          ),
       },
     },
     async ({ path: docPath, maxBytes }) => {
@@ -335,8 +398,17 @@ function registerDocTools(server: McpServer, config: SttMcpConfig): void {
         'scan (no shell/grep). Feed a returned `path` to get_doc (or read stt://docs/<path>) for the full ' +
         'page.',
       inputSchema: {
-        query: z.string().describe('Keyword or phrase to search for (case-insensitive substring match)'),
-        limit: z.number().int().positive().optional().describe('Max matching docs to return (default: 10)'),
+        query: z
+          .string()
+          .describe(
+            'Keyword or phrase to search for (case-insensitive substring match)',
+          ),
+        limit: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe('Max matching docs to return (default: 10)'),
       },
     },
     async ({ query, limit }) => {
@@ -368,16 +440,25 @@ function registerAnalysisTools(server: McpServer, config: SttMcpConfig): void {
       inputSchema: {
         input: z
           .string()
-          .describe('Path to the source GeoParquet file (.parquet/.geoparquet) — a raw input, not a packed archive'),
-        timeField: z.string().optional().describe('Timestamp column name (default: "timestamp")'),
+          .describe(
+            'Path to the source GeoParquet file (.parquet/.geoparquet) — a raw input, not a packed archive',
+          ),
+        timeField: z
+          .string()
+          .optional()
+          .describe('Timestamp column name (default: "timestamp")'),
         timeFormat: z
           .enum(['iso8601', 'unix-ms', 'unix-sec'])
           .optional()
-          .describe('How to read an integer time column (Arrow timestamp/string columns are self-describing)'),
+          .describe(
+            'How to read an integer time column (Arrow timestamp/string columns are self-describing)',
+          ),
         output: z
           .string()
           .optional()
-          .describe('Intended output directory, used only to render the suggested stt-build command (default: "out")'),
+          .describe(
+            'Intended output directory, used only to render the suggested stt-build command (default: "out")',
+          ),
       },
     },
     async ({ input, timeField, timeFormat, output }, extra) => {
@@ -385,10 +466,14 @@ function registerAnalysisTools(server: McpServer, config: SttMcpConfig): void {
         return textResult({
           input,
           cliEnabled: false,
-          message: 'Enable --allow-cli on the stt-mcp server to run stt-optimize recommend.',
+          message:
+            'Enable --allow-cli on the stt-mcp server to run stt-optimize recommend.',
         });
       }
-      const bin = resolveBinary('stt-optimize', config.sttOptimizeBin, [config.dataRoot, process.cwd()]);
+      const bin = resolveBinary('stt-optimize', config.sttOptimizeBin, [
+        config.dataRoot,
+        process.cwd(),
+      ]);
       const args = ['recommend', '--input', input];
       if (timeField) args.push('--time-field', timeField);
       if (timeFormat) args.push('--time-format', timeFormat);
@@ -406,10 +491,21 @@ function registerAnalysisTools(server: McpServer, config: SttMcpConfig): void {
         cliEnabled: true,
         bin,
         recommendation: rec,
-        suggestedCommand: buildSttBuildCommand(input, outputDir, timeField, timeFormat, rec),
+        suggestedCommand: buildSttBuildCommand(
+          input,
+          outputDir,
+          timeField,
+          timeFormat,
+          rec,
+        ),
         // Structured, ready to hand straight to the `build_dataset` tool (same
         // param names/shape) — the machine-readable counterpart of suggestedCommand.
-        buildDatasetArgs: buildDatasetArgsFromRecipe(input, outputDir, timeField, rec),
+        buildDatasetArgs: buildDatasetArgsFromRecipe(
+          input,
+          outputDir,
+          timeField,
+          rec,
+        ),
       });
     },
   );
@@ -420,7 +516,7 @@ function registerAnalysisTools(server: McpServer, config: SttMcpConfig): void {
       title: 'Diff two built datasets (stt-optimize diff)',
       description: config.allowCli
         ? 'Compares two BUILT packed archives (before/after) with `stt-optimize diff` and returns the ' +
-          'parsed JSON — totals plus per-zoom and per-column byte/feature deltas. NOTE: the report\'s ' +
+          "parsed JSON — totals plus per-zoom and per-column byte/feature deltas. NOTE: the report's " +
           '`compressed_bytes` is a LOGICAL addressed-byte sum (deduplicated content-addressed bytes) and ' +
           'can show a shrink even when the archive physically GREW — compare beforePhysicalBytes/' +
           'afterPhysicalBytes (best-effort at-rest object bytes) for the real on-disk delta. The ' +
@@ -429,25 +525,38 @@ function registerAnalysisTools(server: McpServer, config: SttMcpConfig): void {
         : 'Would compare two built archives with `stt-optimize diff`, but this server was started WITHOUT ' +
           '--allow-cli. Restart with --allow-cli to enable.',
       inputSchema: {
-        before: z.string().describe('Dataset name (under --data-root) or explicit path to the BEFORE archive'),
-        after: z.string().describe('Dataset name (under --data-root) or explicit path to the AFTER archive'),
+        before: z
+          .string()
+          .describe(
+            'Dataset name (under --data-root) or explicit path to the BEFORE archive',
+          ),
+        after: z
+          .string()
+          .describe(
+            'Dataset name (under --data-root) or explicit path to the AFTER archive',
+          ),
         sample: z
           .number()
           .int()
           .positive()
           .optional()
-          .describe('Sample at most N tiles for the decode-dependent per-column stats (default: 256; pass `exact` for a full decode)'),
+          .describe(
+            'Sample at most N tiles for the decode-dependent per-column stats (default: 256; pass `exact` for a full decode)',
+          ),
         exact: z
           .boolean()
           .optional()
-          .describe('Decode EVERY tile for precise per-column stats (omits --sample) — slower; may exceed the client timeout'),
+          .describe(
+            'Decode EVERY tile for precise per-column stats (omits --sample) — slower; may exceed the client timeout',
+          ),
       },
     },
     async ({ before, after, sample, exact }, extra) => {
       if (!config.allowCli) {
         return textResult({
           cliEnabled: false,
-          message: 'Enable --allow-cli on the stt-mcp server to run stt-optimize diff.',
+          message:
+            'Enable --allow-cli on the stt-mcp server to run stt-optimize diff.',
         });
       }
       let beforeDir: string;
@@ -458,19 +567,37 @@ function registerAnalysisTools(server: McpServer, config: SttMcpConfig): void {
       } catch (err) {
         return errorResult(errMessage(err));
       }
-      const bin = resolveBinary('stt-optimize', config.sttOptimizeBin, [config.dataRoot, process.cwd()]);
-      const effectiveSample = exact ? undefined : (sample ?? DEFAULT_STATS_SAMPLE);
+      const bin = resolveBinary('stt-optimize', config.sttOptimizeBin, [
+        config.dataRoot,
+        process.cwd(),
+      ]);
+      const effectiveSample = exact
+        ? undefined
+        : (sample ?? DEFAULT_STATS_SAMPLE);
       const appliedSampledDefault = !exact && sample === undefined;
-      const args = ['diff', '--before', beforeDir, '--after', afterDir, '--format', 'json'];
-      if (effectiveSample !== undefined) args.push('--sample', String(effectiveSample));
+      const args = [
+        'diff',
+        '--before',
+        beforeDir,
+        '--after',
+        afterDir,
+        '--format',
+        'json',
+      ];
+      if (effectiveSample !== undefined)
+        args.push('--sample', String(effectiveSample));
       const result = await run(bin, args, { signal: extra?.signal });
       const report = tryParseJson(result.stdout);
 
       // The Rust report's compressed_bytes is a LOGICAL addressed-byte sum, and its
       // before_name/after_name come from archive metadata (not these args) — surface
       // the caller's own before/after plus a best-effort physical at-rest byte count.
-      const beforePhysicalBytes = await describeDataset(beforeDir, '.').then((d) => d.totalBytes).catch(() => undefined);
-      const afterPhysicalBytes = await describeDataset(afterDir, '.').then((d) => d.totalBytes).catch(() => undefined);
+      const beforePhysicalBytes = await describeDataset(beforeDir, '.')
+        .then((d) => d.totalBytes)
+        .catch(() => undefined);
+      const afterPhysicalBytes = await describeDataset(afterDir, '.')
+        .then((d) => d.totalBytes)
+        .catch(() => undefined);
 
       return textResult(
         {
@@ -486,7 +613,7 @@ function registerAnalysisTools(server: McpServer, config: SttMcpConfig): void {
           note:
             "stt-optimize diff's `compressed_bytes` is a LOGICAL addressed-byte sum (deduplicated " +
             'content-addressed bytes) and may differ in SIGN from the physical archive size — ' +
-            'compare beforePhysicalBytes/afterPhysicalBytes for the actual bytes at rest. The report\'s ' +
+            "compare beforePhysicalBytes/afterPhysicalBytes for the actual bytes at rest. The report's " +
             'before_name/after_name are archive metadata, not the names/paths you passed (see requestedBefore/requestedAfter).',
           ...(appliedSampledDefault
             ? {
@@ -532,7 +659,9 @@ function registerResources(server: McpServer, config: SttMcpConfig): void {
               (d.timeRange
                 ? `, ${new Date(d.timeRange.start).toISOString()}…${new Date(d.timeRange.end).toISOString()}`
                 : '') +
-              (d.hasSummaryTier ? `, ${d.summaryScheme ?? 'summary'} tier` : ''),
+              (d.hasSummaryTier
+                ? `, ${d.summaryScheme ?? 'summary'} tier`
+                : ''),
           })),
           ...(truncated
             ? {
@@ -555,12 +684,18 @@ function registerResources(server: McpServer, config: SttMcpConfig): void {
       mimeType: 'application/json',
     },
     async (uri, variables) => {
-      const rawName = Array.isArray(variables.name) ? variables.name[0] : variables.name;
+      const rawName = Array.isArray(variables.name)
+        ? variables.name[0]
+        : variables.name;
       const name = decodeURIComponent(String(rawName));
       const description = await describeDataset(config.dataRoot, name);
       return {
         contents: [
-          { uri: uri.href, mimeType: 'application/json', text: JSON.stringify(description, null, 2) },
+          {
+            uri: uri.href,
+            mimeType: 'application/json',
+            text: JSON.stringify(description, null, 2),
+          },
         ],
       };
     },
@@ -608,7 +743,9 @@ function registerResources(server: McpServer, config: SttMcpConfig): void {
       mimeType: 'text/markdown',
     },
     async (uri, variables) => {
-      const rawPath = Array.isArray(variables.path) ? variables.path.join('/') : variables.path;
+      const rawPath = Array.isArray(variables.path)
+        ? variables.path.join('/')
+        : variables.path;
       const requested = decodeURIComponent(String(rawPath));
       const text = await readDoc(config.docsRoot, requested);
       return {
@@ -630,7 +767,10 @@ const viewStateShape = {
   bearing: z.number().optional(),
 };
 
-function registerInteractiveTools(server: McpServer, config: SttMcpConfig): void {
+function registerInteractiveTools(
+  server: McpServer,
+  config: SttMcpConfig,
+): void {
   server.registerTool(
     'view_map',
     {
@@ -657,10 +797,20 @@ function registerInteractiveTools(server: McpServer, config: SttMcpConfig): void
         .object({
           datasets: z
             .union([z.string(), z.array(z.string())])
-            .describe('One dataset name, or a list of names, as returned by list_datasets'),
-          layer: z.string().optional().describe('Force this @@type for every dataset (overrides inference)'),
+            .describe(
+              'One dataset name, or a list of names, as returned by list_datasets',
+            ),
+          layer: z
+            .string()
+            .optional()
+            .describe(
+              'Force this @@type for every dataset (overrides inference)',
+            ),
           viewState: z.object(viewStateShape).partial().optional(),
-          time: z.number().optional().describe('currentTime (Unix ms) applied to every layer'),
+          time: z
+            .number()
+            .optional()
+            .describe('currentTime (Unix ms) applied to every layer'),
         })
         .strict(),
     },
@@ -676,7 +826,9 @@ function registerInteractiveTools(server: McpServer, config: SttMcpConfig): void
         }
       }
       if (resolved.length === 0) {
-        return errorResult(`view_map: no datasets resolved.\n${errors.join('\n')}`);
+        return errorResult(
+          `view_map: no datasets resolved.\n${errors.join('\n')}`,
+        );
       }
 
       const { spec, html, warnings } = buildViewMap(resolved, {
@@ -705,10 +857,16 @@ function registerInteractiveTools(server: McpServer, config: SttMcpConfig): void
       // default; a manifest URL most hosts can't actually fetch; etc.) so the
       // agent sees them rather than silently shipping a spec that won't render.
       if (warnings && warnings.length > 0) {
-        content.push({ type: 'text', text: `Warnings:\n${warnings.map((w) => `- ${w}`).join('\n')}` });
+        content.push({
+          type: 'text',
+          text: `Warnings:\n${warnings.map((w) => `- ${w}`).join('\n')}`,
+        });
       }
       if (errors.length > 0) {
-        content.push({ type: 'text', text: `Note: some datasets failed to resolve:\n${errors.join('\n')}` });
+        content.push({
+          type: 'text',
+          text: `Note: some datasets failed to resolve:\n${errors.join('\n')}`,
+        });
       }
       return { content };
     },
@@ -738,10 +896,15 @@ function registerInteractiveTools(server: McpServer, config: SttMcpConfig): void
         'state as a structured intent for a client to apply.',
       inputSchema: {
         playing: z.boolean(),
-        speed: z.number().positive().optional().describe('Playback speed multiplier (default: client-chosen)'),
+        speed: z
+          .number()
+          .positive()
+          .optional()
+          .describe('Playback speed multiplier (default: client-chosen)'),
       },
     },
-    async ({ playing, speed }) => textResult({ intent: 'play_pause', playing, speed }),
+    async ({ playing, speed }) =>
+      textResult({ intent: 'play_pause', playing, speed }),
   );
 }
 
@@ -761,29 +924,71 @@ function registerExecutionTools(server: McpServer, config: SttMcpConfig): void {
         'Long-running (no streaming — returns final stdout/stderr + the resulting manifest summary). ' +
         'Only registered because --allow-cli is enabled.',
       inputSchema: {
-        input: z.string().describe('Input GeoParquet file path (.parquet/.geoparquet)'),
+        input: z
+          .string()
+          .describe('Input GeoParquet file path (.parquet/.geoparquet)'),
         output: z.string().describe('Output packed-dataset directory'),
-        timeField: z.string().optional().describe('Timestamp column name (default: "timestamp")'),
+        timeField: z
+          .string()
+          .optional()
+          .describe('Timestamp column name (default: "timestamp")'),
         minZoom: z.number().int().min(0).max(24).optional(),
         maxZoom: z.number().int().min(0).max(24).optional(),
-        temporalBucket: z.string().optional().describe('e.g. "1h", "6h", "1d", "30m" (default: "1h")'),
-        summaryTier: z.enum(['h3', 'quadbin']).optional().describe('Emit a pre-aggregated summary tier'),
-        styleHints: z.boolean().optional().describe('Bake per-property style hints (percentiles/cardinality)'),
-        publish: z.boolean().optional().describe('Deploy-ready build (zstd level 19)'),
+        temporalBucket: z
+          .string()
+          .optional()
+          .describe('e.g. "1h", "6h", "1d", "30m" (default: "1h")'),
+        summaryTier: z
+          .enum(['h3', 'quadbin'])
+          .optional()
+          .describe('Emit a pre-aggregated summary tier'),
+        styleHints: z
+          .boolean()
+          .optional()
+          .describe('Bake per-property style hints (percentiles/cardinality)'),
+        publish: z
+          .boolean()
+          .optional()
+          .describe('Deploy-ready build (zstd level 19)'),
         name: z.string().optional().describe('Archive name (metadata)'),
-        description: z.string().optional().describe('Archive description (metadata)'),
-        attribution: z.string().optional().describe('Attribution text (metadata)'),
-        extraArgs: z.array(z.string()).optional().describe('Additional raw stt-build flags, passed through verbatim'),
-        timeoutMs: z.number().int().positive().optional().describe('Kill the build after this many ms (default: 10 minutes)'),
+        description: z
+          .string()
+          .optional()
+          .describe('Archive description (metadata)'),
+        attribution: z
+          .string()
+          .optional()
+          .describe('Attribution text (metadata)'),
+        extraArgs: z
+          .array(z.string())
+          .optional()
+          .describe('Additional raw stt-build flags, passed through verbatim'),
+        timeoutMs: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe('Kill the build after this many ms (default: 10 minutes)'),
       },
     },
     async (params, extra) => {
-      const bin = resolveBinary('stt-build', config.sttBuildBin, [config.dataRoot, process.cwd()]);
-      const args: string[] = ['--input', params.input, '--output', params.output];
+      const bin = resolveBinary('stt-build', config.sttBuildBin, [
+        config.dataRoot,
+        process.cwd(),
+      ]);
+      const args: string[] = [
+        '--input',
+        params.input,
+        '--output',
+        params.output,
+      ];
       if (params.timeField) args.push('--time-field', params.timeField);
-      if (params.minZoom !== undefined) args.push('--min-zoom', String(params.minZoom));
-      if (params.maxZoom !== undefined) args.push('--max-zoom', String(params.maxZoom));
-      if (params.temporalBucket) args.push('--temporal-bucket', params.temporalBucket);
+      if (params.minZoom !== undefined)
+        args.push('--min-zoom', String(params.minZoom));
+      if (params.maxZoom !== undefined)
+        args.push('--max-zoom', String(params.maxZoom));
+      if (params.temporalBucket)
+        args.push('--temporal-bucket', params.temporalBucket);
       if (params.summaryTier) args.push('--summary-tier', params.summaryTier);
       if (params.styleHints) args.push('--style-hints');
       if (params.publish) args.push('--publish');
@@ -792,7 +997,10 @@ function registerExecutionTools(server: McpServer, config: SttMcpConfig): void {
       if (params.attribution) args.push('--attribution', params.attribution);
       if (params.extraArgs) args.push(...params.extraArgs);
 
-      const result = await run(bin, args, { timeoutMs: params.timeoutMs ?? 600_000, signal: extra?.signal });
+      const result = await run(bin, args, {
+        timeoutMs: params.timeoutMs ?? 600_000,
+        signal: extra?.signal,
+      });
 
       let manifestSummary: unknown;
       if (result.exitCode === 0) {
@@ -803,7 +1011,9 @@ function registerExecutionTools(server: McpServer, config: SttMcpConfig): void {
           // slashes/relative-vs-absolute form.
           manifestSummary = await describeDataset(params.output, '.');
         } catch (err) {
-          manifestSummary = { error: `build succeeded but could not read the resulting manifest: ${errMessage(err)}` };
+          manifestSummary = {
+            error: `build succeeded but could not read the resulting manifest: ${errMessage(err)}`,
+          };
         }
       }
 
@@ -833,15 +1043,42 @@ function registerExecutionTools(server: McpServer, config: SttMcpConfig): void {
         'column contract, temporal-bound sanity) against a dataset and returns its parsed JSON report. ' +
         'Only registered because --allow-cli is enabled.',
       inputSchema: {
-        name: z.string().optional().describe('Dataset name (as returned by list_datasets) — mutually exclusive with `path`'),
-        path: z.string().optional().describe('Explicit filesystem path to a dataset directory/manifest.json/.sttb — mutually exclusive with `name`'),
-        sample: z.number().int().positive().optional().describe('Sample at most N tiles for the decode-dependent checks'),
-        skipDecode: z.boolean().optional().describe('Skip the per-tile Arrow decode (header/integrity/index/hash checks only)'),
-        failFast: z.boolean().optional().describe('Stop after the first failing tile'),
+        name: z
+          .string()
+          .optional()
+          .describe(
+            'Dataset name (as returned by list_datasets) — mutually exclusive with `path`',
+          ),
+        path: z
+          .string()
+          .optional()
+          .describe(
+            'Explicit filesystem path to a dataset directory/manifest.json/.sttb — mutually exclusive with `name`',
+          ),
+        sample: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe('Sample at most N tiles for the decode-dependent checks'),
+        skipDecode: z
+          .boolean()
+          .optional()
+          .describe(
+            'Skip the per-tile Arrow decode (header/integrity/index/hash checks only)',
+          ),
+        failFast: z
+          .boolean()
+          .optional()
+          .describe('Stop after the first failing tile'),
       },
     },
-    async ({ name, path: explicitPath, sample, skipDecode, failFast }, extra) => {
-      if (!name && !explicitPath) return errorResult('validate_dataset requires either `name` or `path`');
+    async (
+      { name, path: explicitPath, sample, skipDecode, failFast },
+      extra,
+    ) => {
+      if (!name && !explicitPath)
+        return errorResult('validate_dataset requires either `name` or `path`');
       // `name` and `path` are documented as mutually exclusive — reject both
       // rather than silently dropping `path` (the previously ignored one).
       if (name && explicitPath) {
@@ -851,12 +1088,17 @@ function registerExecutionTools(server: McpServer, config: SttMcpConfig): void {
       }
       let archive: string;
       try {
-        archive = name ? resolveDatasetDir(config.dataRoot, name) : explicitPath!;
+        archive = name
+          ? resolveDatasetDir(config.dataRoot, name)
+          : explicitPath!;
       } catch (err) {
         return errorResult(errMessage(err));
       }
 
-      const bin = resolveBinary('stt-validate', config.sttValidateBin, [config.dataRoot, process.cwd()]);
+      const bin = resolveBinary('stt-validate', config.sttValidateBin, [
+        config.dataRoot,
+        process.cwd(),
+      ]);
       const args = [archive, '--json'];
       if (sample !== undefined) args.push('--sample', String(sample));
       if (skipDecode) args.push('--skip-decode');
@@ -892,7 +1134,11 @@ function registerExecutionTools(server: McpServer, config: SttMcpConfig): void {
         'through `extraArgs`; run `stt-generate <dataset> --help` for the exact set. To build a `.stt` from ' +
         'YOUR OWN data, use `build_dataset` (stt-build) instead. Only registered because --allow-cli is enabled.',
       inputSchema: {
-        dataset: z.enum(STT_GENERATE_DATASETS).describe('Which bundled generator to run (the stt-generate subcommand)'),
+        dataset: z
+          .enum(STT_GENERATE_DATASETS)
+          .describe(
+            'Which bundled generator to run (the stt-generate subcommand)',
+          ),
         output: z
           .string()
           .optional()
@@ -910,17 +1156,26 @@ function registerExecutionTools(server: McpServer, config: SttMcpConfig): void {
           .int()
           .positive()
           .optional()
-          .describe('Kill the generation after this many ms (default: 15 minutes — these download source data)'),
+          .describe(
+            'Kill the generation after this many ms (default: 15 minutes — these download source data)',
+          ),
       },
     },
     async ({ dataset, output, extraArgs, timeoutMs }, extra) => {
-      const bin = resolveBinary('stt-generate', config.sttGenerateBin, [config.dataRoot, process.cwd()]);
+      const bin = resolveBinary('stt-generate', config.sttGenerateBin, [
+        config.dataRoot,
+        process.cwd(),
+      ]);
       const args: string[] = [dataset];
       // `all` takes --output-dir (a directory of .stt files); every other subcommand takes --output (a single .stt).
-      if (output) args.push(dataset === 'all' ? '--output-dir' : '--output', output);
+      if (output)
+        args.push(dataset === 'all' ? '--output-dir' : '--output', output);
       if (extraArgs) args.push(...extraArgs);
 
-      const result = await run(bin, args, { timeoutMs: timeoutMs ?? 900_000, signal: extra?.signal });
+      const result = await run(bin, args, {
+        timeoutMs: timeoutMs ?? 900_000,
+        signal: extra?.signal,
+      });
 
       // A single-dataset run writes one `.stt` we can summarize; `all` writes several, so skip.
       let manifestSummary: unknown;
@@ -928,7 +1183,9 @@ function registerExecutionTools(server: McpServer, config: SttMcpConfig): void {
         try {
           manifestSummary = await describeDataset(output, '.');
         } catch (err) {
-          manifestSummary = { note: `generation succeeded but could not read the resulting manifest: ${errMessage(err)}` };
+          manifestSummary = {
+            note: `generation succeeded but could not read the resulting manifest: ${errMessage(err)}`,
+          };
         }
       }
 
@@ -949,7 +1206,6 @@ function registerExecutionTools(server: McpServer, config: SttMcpConfig): void {
       );
     },
   );
-
 }
 
 function errMessage(err: unknown): string {
@@ -973,7 +1229,9 @@ function msToHumanDuration(ms: number): string {
 
 /** Minimal POSIX-shell quoting for the human-readable `suggestedCommand` string (display only — never executed). */
 function shellQuote(value: string): string {
-  return /[^\w@%+=:,./-]/.test(value) ? `'${value.replace(/'/g, `'\\''`)}'` : value;
+  return /[^\w@%+=:,./-]/.test(value)
+    ? `'${value.replace(/'/g, `'\\''`)}'`
+    : value;
 }
 
 /** Renders the `stt-build` command a `recommend_build` recipe implies (canonical flags: `--min-zoom`/`--max-zoom`/`--temporal-bucket`). */
@@ -984,12 +1242,21 @@ function buildSttBuildCommand(
   timeFormat: string | undefined,
   rec: RecommendConfig,
 ): string {
-  const parts = ['stt-build', '-i', shellQuote(input), '-o', shellQuote(output)];
+  const parts = [
+    'stt-build',
+    '-i',
+    shellQuote(input),
+    '-o',
+    shellQuote(output),
+  ];
   if (timeField) parts.push('-t', shellQuote(timeField));
   if (timeFormat) parts.push('--time-format', timeFormat);
-  if (rec.min_zoom !== undefined) parts.push('--min-zoom', String(rec.min_zoom));
-  if (rec.max_zoom !== undefined) parts.push('--max-zoom', String(rec.max_zoom));
-  if (rec.temporal_bucket_ms) parts.push('--temporal-bucket', msToHumanDuration(rec.temporal_bucket_ms));
+  if (rec.min_zoom !== undefined)
+    parts.push('--min-zoom', String(rec.min_zoom));
+  if (rec.max_zoom !== undefined)
+    parts.push('--max-zoom', String(rec.max_zoom));
+  if (rec.temporal_bucket_ms)
+    parts.push('--temporal-bucket', msToHumanDuration(rec.temporal_bucket_ms));
   parts.push('--style-hints');
   return parts.join(' ');
 }
@@ -1010,7 +1277,8 @@ function buildDatasetArgsFromRecipe(
   if (timeField) out.timeField = timeField;
   if (rec.min_zoom !== undefined) out.minZoom = rec.min_zoom;
   if (rec.max_zoom !== undefined) out.maxZoom = rec.max_zoom;
-  if (rec.temporal_bucket_ms) out.temporalBucket = msToHumanDuration(rec.temporal_bucket_ms);
+  if (rec.temporal_bucket_ms)
+    out.temporalBucket = msToHumanDuration(rec.temporal_bucket_ms);
   // buildSttBuildCommand always appends --style-hints; mirror that here.
   out.styleHints = true;
   return out;

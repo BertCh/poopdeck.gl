@@ -4,9 +4,9 @@
  * (`/drive/:sceneId`), which the cockpit page re-resolves; a single-scene
  * registry renders just the current name (no dropdown).
  */
-import React from "react";
-import { useNavigate, useSearchParams } from "react-router";
-import type { Dataset } from "../../types";
+import React from 'react';
+import { useNavigate, useSearchParams } from 'react-router';
+import type { Dataset } from '../../types';
 
 export interface SceneSwitcherProps {
   scenes: Dataset[];
@@ -38,7 +38,7 @@ const SceneSwitcher: React.FC<SceneSwitcherProps> = ({
   return (
     <div
       className={`rounded-lg border border-white/10 bg-black/55 shadow-xl backdrop-blur-md ${
-        compact ? "px-2.5 py-1.5" : "px-3 py-2"
+        compact ? 'px-2.5 py-1.5' : 'px-3 py-2'
       }`}
     >
       {!compact && (
@@ -52,11 +52,17 @@ const SceneSwitcher: React.FC<SceneSwitcherProps> = ({
           onChange={(e) => goToScene(e.target.value)}
           aria-label="Switch AV scene"
           className={`cursor-pointer bg-transparent font-medium text-slate-100 outline-none ${
-            compact ? "block w-full max-w-full truncate text-sm" : "mt-1 text-sm"
+            compact
+              ? 'block w-full max-w-full truncate text-sm'
+              : 'mt-1 text-sm'
           }`}
         >
           {scenes.map((s) => (
-            <option key={s.id} value={s.id} className="bg-slate-900 text-slate-100">
+            <option
+              key={s.id}
+              value={s.id}
+              className="bg-slate-900 text-slate-100"
+            >
               {s.name}
             </option>
           ))}
@@ -64,7 +70,7 @@ const SceneSwitcher: React.FC<SceneSwitcherProps> = ({
       ) : (
         <div
           className={`truncate font-medium text-slate-100 ${
-            compact ? "text-sm" : "mt-1 text-sm"
+            compact ? 'text-sm' : 'mt-1 text-sm'
           }`}
         >
           {sceneName}

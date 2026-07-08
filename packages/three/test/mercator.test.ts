@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { MercatorProjection, MAX_MERCATOR_LAT } from '../src/projection/mercator';
+import {
+  MercatorProjection,
+  MAX_MERCATOR_LAT,
+} from '../src/projection/mercator';
 import { EARTH_RADIUS } from '../src/projection/local-enu';
 
 const DEG2RAD = Math.PI / 180;

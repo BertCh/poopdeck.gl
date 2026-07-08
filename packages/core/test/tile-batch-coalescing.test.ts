@@ -58,7 +58,12 @@ describe('SpatiotemporalTileset batched (coalesced) loads', () => {
     // code sliced this into ⌈30/12⌉ = 3 serial batches; the P0 fix sends all 30
     // in one globally-coalesced batch so byte-adjacent tiles collapse to a few
     // range requests in a single round-trip.
-    const ids: TileId[] = Array.from({ length: 30 }, (_, x) => ({ z: 6, x, y: 0, t: 0 }));
+    const ids: TileId[] = Array.from({ length: 30 }, (_, x) => ({
+      z: 6,
+      x,
+      y: 0,
+      t: 0,
+    }));
     const availSpy = vi.fn(async (_b: BoundingBox, z: number) =>
       ids.filter((i) => i.z === z),
     );
@@ -80,7 +85,9 @@ describe('SpatiotemporalTileset batched (coalesced) loads', () => {
 
     // The multi-tile priority pass was a SINGLE batch of all 30 tiles, not
     // three 12-tile batches.
-    const multiCalls = batchSpy.mock.calls.filter((c) => (c[0] as TileId[]).length > 1);
+    const multiCalls = batchSpy.mock.calls.filter(
+      (c) => (c[0] as TileId[]).length > 1,
+    );
     expect(multiCalls.length).toBe(1);
     expect((multiCalls[0][0] as TileId[]).length).toBe(30);
     tileset.finalize();

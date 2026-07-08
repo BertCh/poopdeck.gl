@@ -21,7 +21,7 @@ const layer = new H3SummaryLayer({
   currentTime,
   timeWindow: 24 * 3600 * 1000,
   weightProperty: 'count',
-  colorDomain: [1, 5000],    // pin the legend (recommended)
+  colorDomain: [1, 5000], // pin the legend (recommended)
   extruded: true,
   elevationScale: 50,
 });
@@ -41,15 +41,15 @@ Each summary tile carries, per cell:
 
 Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md). One base default changes: `maxCacheSize` is **500** (summary tiles are few but row-heavy).
 
-| Property | Type | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `weightProperty` | `string` | `'count'` | Numeric property the color ramp + extrusion height are driven by. Any aggregated column is valid. |
-| `colorRange` | `Color[]` | 6-stop YlGnBu | Low→high color ramp; `weightProperty` is quantised into its buckets. |
-| `colorDomain` | `[number, number] \| null` | `null` | `[min, max]` for the ramp. Setting this pins the legend stable across tiles and zooms (recommended). When unset, the min/max across visible tiles drives the ramp — visually unstable while tiles stream in. |
-| `extruded` | `boolean` | `false` | 3D extrusion. |
-| `elevationScale` | `number` | `1` | Meters per weight unit (only when `extruded`). |
-| `coverage` | `number` | `0.92` | Hex coverage of its cell (0..1). Lower values leave gaps between adjacent hexes. |
-| `onMetadataLoad` | `(meta: ArchiveMetadata) => void` | `null` | Fired once per archive init with the decoded metadata. |
+| Property         | Type                              | Default       | Description                                                                                                                                                                                                  |
+| :--------------- | :-------------------------------- | :------------ | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `weightProperty` | `string`                          | `'count'`     | Numeric property the color ramp + extrusion height are driven by. Any aggregated column is valid.                                                                                                            |
+| `colorRange`     | `Color[]`                         | 6-stop YlGnBu | Low→high color ramp; `weightProperty` is quantised into its buckets.                                                                                                                                         |
+| `colorDomain`    | `[number, number] \| null`        | `null`        | `[min, max]` for the ramp. Setting this pins the legend stable across tiles and zooms (recommended). When unset, the min/max across visible tiles drives the ramp — visually unstable while tiles stream in. |
+| `extruded`       | `boolean`                         | `false`       | 3D extrusion.                                                                                                                                                                                                |
+| `elevationScale` | `number`                          | `1`           | Meters per weight unit (only when `extruded`).                                                                                                                                                               |
+| `coverage`       | `number`                          | `0.92`        | Hex coverage of its cell (0..1). Lower values leave gaps between adjacent hexes.                                                                                                                             |
+| `onMetadataLoad` | `(meta: ArchiveMetadata) => void` | `null`        | Fired once per archive init with the decoded metadata.                                                                                                                                                       |
 
 There is no custom color-callback prop — restyle via `colorRange` / `colorDomain` / `weightProperty`.
 
@@ -57,21 +57,21 @@ There is no custom color-callback prop — restyle via `colorRange` / `colorDoma
 
 Pass-throughs to deck.gl's `H3HexagonLayer` (which forwards them to its internal `PolygonLayer` / `ColumnLayer`). They surface the previously-implicit hex outline — a black 1px border you could neither recolor nor disable — plus the extrusion lighting material and precision toggle. `getLineColor` / `getLineWidth` are upstream-vocabulary aliases: unlike upstream deck.gl they accept a **constant** value only (the summary outline is one style for the whole grid — a function accessor or column-name string warns once and falls back to `lineColor` / `lineWidth`); when set to a constant they win over the legacy prop. Like the fill, outlines double-draw along tile seams.
 
-| Property | Type | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `stroked` | `boolean` | `true` | Draw the per-hex outline stroke (the hex-grid look). |
-| `filled` | `boolean` | `true` | Fill each hex. Set `false` (with `stroked: true`) for an outline-only hex grid. |
-| `wireframe` | `boolean` | `false` | Draw the extruded-prism edges as a wireframe. Only visible when `extruded: true`. |
-| `lineColor` | `Color` | `[0, 0, 0, 255]` | Outline color (constant). |
-| `getLineColor` | `Color \| null` | `null` | Upstream-vocabulary alias of `lineColor` (constant `Color` only). Wins over `lineColor` when set. |
-| `lineWidth` | `number` | `1` | Outline width, in `lineWidthUnits`, clamped by `lineWidthMinPixels`/`lineWidthMaxPixels`. Only drawn when `stroked`. |
-| `getLineWidth` | `number \| null` | `null` | Upstream-vocabulary alias of `lineWidth` (constant number only). Wins over `lineWidth` when set. |
-| `lineWidthUnits` | `Unit` | `'meters'` | Units for `lineWidth`. |
-| `lineWidthScale` | `number` | `1` | Outline width multiplier. |
-| `lineWidthMinPixels` | `number` | `0` | Minimum on-screen outline width in pixels — the practical lever that keeps hex-grid borders visible at summary zooms (meters-based widths collapse below a pixel when zoomed out). |
-| `lineWidthMaxPixels` | `number` | `Number.MAX_SAFE_INTEGER` | Maximum on-screen outline width in pixels. |
-| `material` | `Material \| boolean` | `true` | Lighting material for extruded hexes. Applies only when `extruded`; `true` uses the default lit material. |
-| `highPrecision` | `boolean \| 'auto'` | `'auto'` | High-precision hexagon rendering. `'auto'` picks per-cell fidelity (irregular low-res cells + pentagons render hi-fi); `true`/`false` force it. |
+| Property             | Type                  | Default                   | Description                                                                                                                                                                        |
+| :------------------- | :-------------------- | :------------------------ | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `stroked`            | `boolean`             | `true`                    | Draw the per-hex outline stroke (the hex-grid look).                                                                                                                               |
+| `filled`             | `boolean`             | `true`                    | Fill each hex. Set `false` (with `stroked: true`) for an outline-only hex grid.                                                                                                    |
+| `wireframe`          | `boolean`             | `false`                   | Draw the extruded-prism edges as a wireframe. Only visible when `extruded: true`.                                                                                                  |
+| `lineColor`          | `Color`               | `[0, 0, 0, 255]`          | Outline color (constant).                                                                                                                                                          |
+| `getLineColor`       | `Color \| null`       | `null`                    | Upstream-vocabulary alias of `lineColor` (constant `Color` only). Wins over `lineColor` when set.                                                                                  |
+| `lineWidth`          | `number`              | `1`                       | Outline width, in `lineWidthUnits`, clamped by `lineWidthMinPixels`/`lineWidthMaxPixels`. Only drawn when `stroked`.                                                               |
+| `getLineWidth`       | `number \| null`      | `null`                    | Upstream-vocabulary alias of `lineWidth` (constant number only). Wins over `lineWidth` when set.                                                                                   |
+| `lineWidthUnits`     | `Unit`                | `'meters'`                | Units for `lineWidth`.                                                                                                                                                             |
+| `lineWidthScale`     | `number`              | `1`                       | Outline width multiplier.                                                                                                                                                          |
+| `lineWidthMinPixels` | `number`              | `0`                       | Minimum on-screen outline width in pixels — the practical lever that keeps hex-grid borders visible at summary zooms (meters-based widths collapse below a pixel when zoomed out). |
+| `lineWidthMaxPixels` | `number`              | `Number.MAX_SAFE_INTEGER` | Maximum on-screen outline width in pixels.                                                                                                                                         |
+| `material`           | `Material \| boolean` | `true`                    | Lighting material for extruded hexes. Applies only when `extruded`; `true` uses the default lit material.                                                                          |
+| `highPrecision`      | `boolean \| 'auto'`   | `'auto'`                  | High-precision hexagon rendering. `'auto'` picks per-cell fidelity (irregular low-res cells + pentagons render hi-fi); `true`/`false` force it.                                    |
 
 ## Behavior notes
 

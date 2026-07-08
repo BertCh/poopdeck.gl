@@ -1,9 +1,9 @@
 # AI Suite: MCP + Agent Skills
 
-The **poopdeck-ai** suite gives an AI coding assistant a first-class, *temporal-
-native* surface over the whole STT toolchain — so "turn this parquet into an
+The **poopdeck-ai** suite gives an AI coding assistant a first-class, _temporal-
+native_ surface over the whole STT toolchain — so "turn this parquet into an
 animated map," "why is my tileset so big," and "my map renders blank" become
-things the agent can actually *do* and *diagnose*, not just describe.
+things the agent can actually _do_ and _diagnose_, not just describe.
 
 It ships as one Claude Code plugin bundling two complementary tiers:
 
@@ -12,7 +12,7 @@ It ships as one Claude Code plugin bundling two complementary tiers:
   map specs, and (gated) build/validate. Returns structured JSON the agent
   reasons over.
 - **Agent Skills** — the **procedural** surface: the workflow, the opinions,
-  and — the load-bearing part — *which CLI or MCP tool to reach for*.
+  and — the load-bearing part — _which CLI or MCP tool to reach for_.
 
 There is real whitespace here: no official deck.gl or kepler.gl MCP exists, and
 none of the comparable geo/dataviz agent surfaces make **time** first-class. That
@@ -21,16 +21,16 @@ temporal wedge is the point.
 ## The two surfaces (and why both)
 
 The field has converged on a split, and the one-line test everyone quotes is:
-*"If you're explaining how to do something, that's a skill. If you need the model
-to access something, that's MCP."* You want both, because they carry different
+_"If you're explaining how to do something, that's a skill. If you need the model
+to access something, that's MCP."_ You want both, because they carry different
 things:
 
-| | **Skills** | **MCP server** | **Static (`llms.txt` / docs)** |
-|---|---|---|---|
-| Carries | procedure, opinion, guardrails, **routing** | live introspection, actions, data | frozen reference |
-| Invoked | model-invoked by its `description` | tool call | manually pointed-at |
-| Cost | ~100 tok idle, <5k on trigger | tool defs load up front | crawl-time |
-| Best for | multi-step workflows, "which layer / which tool", consistency-critical ops | real-time state, mutating actions | cheap fallback |
+|          | **Skills**                                                                 | **MCP server**                    | **Static (`llms.txt` / docs)** |
+| -------- | -------------------------------------------------------------------------- | --------------------------------- | ------------------------------ |
+| Carries  | procedure, opinion, guardrails, **routing**                                | live introspection, actions, data | frozen reference               |
+| Invoked  | model-invoked by its `description`                                         | tool call                         | manually pointed-at            |
+| Cost     | ~100 tok idle, <5k on trigger                                              | tool defs load up front           | crawl-time                     |
+| Best for | multi-step workflows, "which layer / which tool", consistency-critical ops | real-time state, mutating actions | cheap fallback                 |
 
 The pattern to copy is Cloudflare's `wrangler` skill routing between its MCP and
 its CLI. Here the `stt-*` Rust CLIs are the CLI, the MCP server is the live
@@ -81,13 +81,13 @@ Five skills ship in the plugin, each mapped to a job-to-be-done. They fire on
 their `description` (model-invoked), pull deeper reference from this `docs/` tree
 on demand, and route to the matching MCP tool or CLI.
 
-| Skill | Fires when… | Routes to |
-|---|---|---|
-| `poopdeck-overview` | any poopdeck.gl / STT work — the **router** | the right CLI, package, MCP tool, or sibling skill |
-| `building-stt-datasets` | turn GeoParquet / PostGIS / DuckDB into a `.stt` | `recommend_build` → `stt-build` |
-| `tuning-stt-tiles` | shrink / lint / publish an archive | `dataset_report`, `diff_datasets` |
-| `wiring-deckgl-layers` | pick the right STT layer, compose a `@deck.gl/json` spec | `view_map` |
-| `debugging-blank-renders` | a map renders blank / empty | `describe_dataset`, `validate_dataset` |
+| Skill                     | Fires when…                                              | Routes to                                          |
+| ------------------------- | -------------------------------------------------------- | -------------------------------------------------- |
+| `poopdeck-overview`       | any poopdeck.gl / STT work — the **router**              | the right CLI, package, MCP tool, or sibling skill |
+| `building-stt-datasets`   | turn GeoParquet / PostGIS / DuckDB into a `.stt`         | `recommend_build` → `stt-build`                    |
+| `tuning-stt-tiles`        | shrink / lint / publish an archive                       | `dataset_report`, `diff_datasets`                  |
+| `wiring-deckgl-layers`    | pick the right STT layer, compose a `@deck.gl/json` spec | `view_map`                                         |
+| `debugging-blank-renders` | a map renders blank / empty                              | `describe_dataset`, `validate_dataset`             |
 
 Two of these encode hard-won, non-obvious project knowledge that lives nowhere in
 the code: `tuning-stt-tiles` carries the **no-thinning rule** (never drop or
@@ -108,13 +108,14 @@ run `stt-build` command. With `--allow-cli` on, `build_dataset` then runs it and
 **Tune for publish.** "This tileset is 40 MB — make it smaller." →
 `tuning-stt-tiles` runs `dataset_report` (`inspect` + `doctor` severity-ranked
 findings + `order-audit`), re-encodes with the evidence-backed levers, and gates
-the change with `diff_datasets` — checking bytes went *down* and the feature
+the change with `diff_datasets` — checking bytes went _down_ and the feature
 count did **not** (a negative feature delta is a regression, not a win).
 
 **Put it on a map.** "Show me the hurricanes dataset." → `wiring-deckgl-layers`
-+ `view_map` compose a `@deck.gl/json` spec, inferring `AnimatedTripsLayer` from
-the archive's `style_hints.layer_hint`, with `currentTime` inside the dataset's
-real time range.
+
+- `view_map` compose a `@deck.gl/json` spec, inferring `AnimatedTripsLayer` from
+  the archive's `style_hints.layer_hint`, with `currentTime` inside the dataset's
+  real time range.
 
 **Debug a blank render.** "My STT map is blank." → `debugging-blank-renders`
 walks the failure classes: `describe_dataset` for the time range and
@@ -139,7 +140,7 @@ that can only be pointed at a URL.
 
 ## Security model
 
-Field defaults, enforced by the *server/operator*, not the model:
+Field defaults, enforced by the _server/operator_, not the model:
 
 - **Read-only by default.** Mutating and shell-out tools are absent (or inert)
   until `--allow-cli`.

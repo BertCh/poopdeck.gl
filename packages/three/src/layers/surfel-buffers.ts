@@ -67,7 +67,10 @@ type NumericPart = {
 type Part = VectorPart | NumericPart;
 
 /** Classify a tile layer's surfel storage (vector preferred, numeric fallback). */
-function detectSurfel(b: BinaryFeatures, opts: SurfelBufferOptions): Part | null {
+function detectSurfel(
+  b: BinaryFeatures,
+  opts: SurfelBufferOptions,
+): Part | null {
   const vec = b.vectorProps ?? {};
   const quatV = vec[opts.quatVectorColumn];
   const scaleV = vec[opts.scaleVectorColumn];
@@ -88,7 +91,8 @@ function detectSurfel(b: BinaryFeatures, opts: SurfelBufferOptions): Part | null
     ? (['q_a', 'q_b', 'q_c', 'q_imax'] as const)
     : opts.quaternionColumns;
   const [smaj, smin] = opts.scaleColumns;
-  if (!num[qx] || !num[qy] || !num[qz] || !num[qw] || !num[smaj] || !num[smin]) return null;
+  if (!num[qx] || !num[qy] || !num[qz] || !num[qw] || !num[smaj] || !num[smin])
+    return null;
   return { kind: 'numeric', b, packed, cols: [qx, qy, qz, qw, smaj, smin] };
 }
 
@@ -152,7 +156,9 @@ export function buildSurfelBuffers(
     const num = b.numericProps;
     const count = b.featureCount;
     const dims = b.positionDimensions ?? 2;
-    const elev = opts.elevationProperty ? num[opts.elevationProperty] : undefined;
+    const elev = opts.elevationProperty
+      ? num[opts.elevationProperty]
+      : undefined;
     const dynArr = num['is_dynamic'];
     const rebase = b.timeOffset - timeOrigin;
 
@@ -171,12 +177,17 @@ export function buildSurfelBuffers(
     const nR = !isVector && rgb ? num[rgb[0]] : undefined;
     const nG = !isVector && rgb ? num[rgb[1]] : undefined;
     const nB = !isVector && rgb ? num[rgb[2]] : undefined;
-    const nOp = !isVector && opts.opacityColumn ? num[opts.opacityColumn] : undefined;
+    const nOp =
+      !isVector && opts.opacityColumn ? num[opts.opacityColumn] : undefined;
 
     for (let i = 0; i < count; i++) {
       const lon = b.positions[i * dims];
       const lat = b.positions[i * dims + 1];
-      const alt = elev ? elev[i] * opts.elevationScale : dims > 2 ? b.positions[i * dims + 2] : 0;
+      const alt = elev
+        ? elev[i] * opts.elevationScale
+        : dims > 2
+          ? b.positions[i * dims + 2]
+          : 0;
       const [x, y, z] = projection.project(lon, lat, alt);
       const j = o + i;
       centers[j * 3] = x;

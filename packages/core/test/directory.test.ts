@@ -80,9 +80,17 @@ describe('directory codec (TS)', () => {
     // Same blob fields, different packs → must stay two distinct entries each
     // addressing its own pack (pack_id is part of the run identity).
     const shared = {
-      ...base, zoom: 9, y: 0, hilbert: 0,
-      timeStart: 0, timeEnd: 1, offset: 0, length: 50, uncompressedSize: 100,
-      featureCount: 1, crc32c: 0x1234,
+      ...base,
+      zoom: 9,
+      y: 0,
+      hilbert: 0,
+      timeStart: 0,
+      timeEnd: 1,
+      offset: 0,
+      length: 50,
+      uncompressedSize: 100,
+      featureCount: 1,
+      crc32c: 0x1234,
     };
     const back = decodeDirectory(
       encodeDirectory([
@@ -107,20 +115,42 @@ describe('directory codec (TS)', () => {
   it('round-trips entries including the temporal bucket', () => {
     const entries: DirectoryEncodeEntry[] = [
       {
-        zoom: 5, x: 1, y: 2, timeStart: 0, timeEnd: 100,
-        offset: 64, length: 10, uncompressedSize: 20, featureCount: 3,
-        hilbert: 1, crc32c: 7, temporalBucketMs: 3_600_000,
+        zoom: 5,
+        x: 1,
+        y: 2,
+        timeStart: 0,
+        timeEnd: 100,
+        offset: 64,
+        length: 10,
+        uncompressedSize: 20,
+        featureCount: 3,
+        hilbert: 1,
+        crc32c: 7,
+        temporalBucketMs: 3_600_000,
       },
       {
-        zoom: 5, x: 1, y: 2, timeStart: 100, timeEnd: 200,
-        offset: 74, length: 10, uncompressedSize: 20, featureCount: 4,
-        hilbert: 1, crc32c: 8,
+        zoom: 5,
+        x: 1,
+        y: 2,
+        timeStart: 100,
+        timeEnd: 200,
+        offset: 74,
+        length: 10,
+        uncompressedSize: 20,
+        featureCount: 4,
+        hilbert: 1,
+        crc32c: 8,
       },
     ];
     const back = decodeDirectory(encodeDirectory(entries));
     expect(back.length).toBe(2);
     expect(back[0]).toMatchObject({
-      zoom: 5, x: 1, y: 2, timeStart: 0, timeEnd: 100, featureCount: 3,
+      zoom: 5,
+      x: 1,
+      y: 2,
+      timeStart: 0,
+      timeEnd: 100,
+      featureCount: 3,
       temporalBucketMs: 3_600_000,
     });
     expect(back[1].temporalBucketMs).toBeUndefined();
@@ -129,24 +159,42 @@ describe('directory codec (TS)', () => {
   it('collapses identical-across-time blobs into one run', () => {
     const entries: DirectoryEncodeEntry[] = [0, 1, 2, 3].map((b) => ({
       ...base,
-      zoom: 9, x: 3, y: 4, hilbert: 7,
-      timeStart: b * 3_600_000, timeEnd: b * 3_600_000 + 1,
-      offset: 4096, length: 512, uncompressedSize: 1024, featureCount: 8, crc32c: 0xabcd,
+      zoom: 9,
+      x: 3,
+      y: 4,
+      hilbert: 7,
+      timeStart: b * 3_600_000,
+      timeEnd: b * 3_600_000 + 1,
+      offset: 4096,
+      length: 512,
+      uncompressedSize: 1024,
+      featureCount: 8,
+      crc32c: 0xabcd,
       temporalBucketMs: 3_600_000,
     }));
     const back = decodeDirectory(encodeDirectory(entries));
     expect(back.length).toBe(4);
     // All four share the one deduped blob offset.
     expect(new Set(back.map((e) => e.offset)).size).toBe(1);
-    expect(back.map((e) => e.timeStart)).toEqual([0, 3_600_000, 7_200_000, 10_800_000]);
+    expect(back.map((e) => e.timeStart)).toEqual([
+      0, 3_600_000, 7_200_000, 10_800_000,
+    ]);
   });
 
   it('round-trips the optional covering section (coverTMin), incl. a value before the bucket', () => {
     const entries: DirectoryEncodeEntry[] = [0, 1, 2].map((b) => ({
       ...base,
-      zoom: 7, x: 2, y: 3, hilbert: b,
-      timeStart: b * 1000, timeEnd: b * 1000 + 900,
-      offset: 64 + b * 50, length: 50, uncompressedSize: 100, featureCount: b + 1, crc32c: b,
+      zoom: 7,
+      x: 2,
+      y: 3,
+      hilbert: b,
+      timeStart: b * 1000,
+      timeEnd: b * 1000 + 900,
+      offset: 64 + b * 50,
+      length: 50,
+      uncompressedSize: 100,
+      featureCount: b + 1,
+      crc32c: b,
       // entry 0's earliest feature starts 200ms BEFORE its bucket edge.
       coverTMin: b === 0 ? -200 : b * 1000 + 300,
     }));
@@ -167,7 +215,9 @@ describe('directory codec (TS)', () => {
     expect(() => encodeDirectory([{ ...base, zoom: 300 }])).toThrow(/zoom/);
     expect(() => encodeDirectory([{ ...base, x: 2 ** 33 }])).toThrow(/x /);
     expect(() => encodeDirectory([{ ...base, y: 2 ** 33 }])).toThrow(/y /);
-    expect(() => encodeDirectory([{ ...base, featureCount: 2 ** 33 }])).toThrow(/featureCount/);
+    expect(() => encodeDirectory([{ ...base, featureCount: 2 ** 33 }])).toThrow(
+      /featureCount/,
+    );
   });
 
   it('rejects a wrong directory version on decode', () => {
@@ -197,7 +247,12 @@ describe('decodeDirectory corruption guards', () => {
       5, // version
       1, // n = 1
       1, // runCount = 1
-      0, 0, 0, 0, 0, 0, // Δzoom Δhilbert Δx Δy Δtime duration (all 0)
+      0,
+      0,
+      0,
+      0,
+      0,
+      0, // Δzoom Δhilbert Δx Δy Δtime duration (all 0)
       0, // featureCount = 0
       0, // bucketPresent = 0
       2, // run_length = 2  (> n)
@@ -205,9 +260,14 @@ describe('decodeDirectory corruption guards', () => {
       0, // offset flag = 0 (contiguous)
       0, // length = 0
       0, // uncompressed_size = 0
-      0, 0, 0, 0, // crc32c u32
+      0,
+      0,
+      0,
+      0, // crc32c u32
     ]);
-    expect(() => decodeDirectory(bytes)).toThrow(/run length exceeds entry count/);
+    expect(() => decodeDirectory(bytes)).toThrow(
+      /run length exceeds entry count/,
+    );
   });
 
   it('rejects when the runs cover fewer entries than declared', () => {
@@ -216,14 +276,31 @@ describe('decodeDirectory corruption guards', () => {
       5, // version
       2, // n = 2
       1, // runCount = 1
-      0, 0, 0, 0, 0, 0, 0, 0, // entry 0 (8 zero bytes)
-      0, 0, 0, 0, 0, 0, 0, 0, // entry 1 (8 zero bytes)
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0, // entry 0 (8 zero bytes)
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0, // entry 1 (8 zero bytes)
       1, // run_length = 1  (covers only entry 0)
       0, // Δpack_id = 0
       0, // offset flag = 0
       0, // length = 0
       0, // uncompressed_size = 0
-      0, 0, 0, 0, // crc32c u32
+      0,
+      0,
+      0,
+      0, // crc32c u32
     ]);
     expect(() => decodeDirectory(bytes)).toThrow(
       /runs covered 1 entries, expected 2/,
@@ -233,7 +310,11 @@ describe('decodeDirectory corruption guards', () => {
 
 describe('decodePagedRoot error branches', () => {
   /** A minimal 12-byte root header (version, kind, reserved u16, pageCount, pageEntries). */
-  function rootHeader(version: number, kind: number, pageCount: number): Uint8Array {
+  function rootHeader(
+    version: number,
+    kind: number,
+    pageCount: number,
+  ): Uint8Array {
     const bytes = new Uint8Array(12);
     const dv = new DataView(bytes.buffer);
     dv.setUint8(0, version);
@@ -243,7 +324,9 @@ describe('decodePagedRoot error branches', () => {
   }
 
   it('rejects a buffer shorter than the fixed root header', () => {
-    expect(() => decodePagedRoot(new Uint8Array(8))).toThrow(/truncated header/);
+    expect(() => decodePagedRoot(new Uint8Array(8))).toThrow(
+      /truncated header/,
+    );
   });
 
   it('rejects an unsupported root version', () => {

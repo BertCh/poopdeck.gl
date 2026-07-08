@@ -1,13 +1,13 @@
 # Database input adaptors for STT (PostGIS + DuckDB)
 
-*Decision record. PostGIS and DuckDB are first-class **input sources** for
+_Decision record. PostGIS and DuckDB are first-class **input sources** for
 `stt-build` (complements to the GeoParquet file path) and the two backends of
 `stt-serve`, a dynamic tile server that generates one STT tile per request —
 the `ST_AsMVT` analog for the STT format. This doc records rationale, lessons,
 benchmarks, negative results, and the static-vs-DB verdict. **Behavior lives
 elsewhere:** routes/caching/metadata/error semantics in
 [../spec/stt-serve-protocol.md](../spec/stt-serve-protocol.md); the flag
-surface in [../api/cli-reference.md](../api/cli-reference.md).*
+surface in [../api/cli-reference.md](../api/cli-reference.md)._
 
 **Status.** Landed on `main` and published (0.3.0 on crates.io + npm,
 2026-07-05): both DB readers, the `stt-serve` binary, the full
@@ -55,7 +55,7 @@ where the features came from. Three properties made it a small change:
   (GeoArrow-native input encodings are rejected; WKB is the ingest lingua
   franca.)
 - **`encode_single_tile_counted` is the shared per-tile core.** The offline
-  build and every per-request serve call the *same* `build_tile`/`encode_tile`
+  build and every per-request serve call the _same_ `build_tile`/`encode_tile`
   path (factored out in `tiler.rs`), so a served tile is **byte-for-byte**
   what the offline build would emit for that `(z,x,y,t)` and the same source
   rows. It returns the placed-feature count so serve can honour
@@ -108,12 +108,12 @@ Parity-relevant decisions worth recording here:
 ## 4. Encoder-seam lessons
 
 Distilled from the parity work; the reason comprehensive DB parity was
-*concentrated, not sprawling* is one good seam and a few recurring smells.
+_concentrated, not sprawling_ is one good seam and a few recurring smells.
 
 1. **`ParsedFeature` is the source-agnostic boundary, and that's the whole
    game.** Everything downstream (tiler → encoder) reads only `ParsedFeature`,
    so a new input adaptor is "produce the same struct". **Corollary:** the
-   Python extractors are a *fourth* input adaptor (they emit GeoParquet, then
+   Python extractors are a _fourth_ input adaptor (they emit GeoParquet, then
    shell to `stt-build`) — same seam, but their flag-construction logic lives
    outside it (lesson 5).
 
@@ -121,7 +121,7 @@ Distilled from the parity work; the reason comprehensive DB parity was
    footgun.** The encoder historically read six process-wide statics
    (vertex-time precision, coord/attr quantization, attrs-auto, vector groups,
    point-elevation — `stt-core/src/arrow_tile.rs`, statics block ~890–1105).
-   The *original* serve bug was exactly this: `stt-serve` never called the
+   The _original_ serve bug was exactly this: `stt-serve` never called the
    setters, so quantized/vector-grouped datasets served subtly wrong tiles with
    **no error**. Fixed by threading an explicit `EncoderConfig`
    (`encode_tile_with`) per request — also what made multi-dataset serve
@@ -144,7 +144,7 @@ Distilled from the parity work; the reason comprehensive DB parity was
    (`crates/stt-build/tests/common/mod.rs`). Encoding determinism itself is
    closed — byte-reproducible builds on arrow ≥59 (normative:
    [../spec/stt-packed-format.md](../spec/stt-packed-format.md) §7 D6) — but
-   the IR contract remains the right one for cross-*source* comparison.
+   the IR contract remains the right one for cross-_source_ comparison.
 
 5. **Any spec interpreted in two places drifts.** `stt-serve` had silently
    drifted from the CLI (ignored most flags) until `build_options.rs` made one
@@ -167,32 +167,32 @@ Distilled from the parity work; the reason comprehensive DB parity was
 
 7. **Factoring the smallest reusable unit enables online + offline reuse.**
    `encode_single_tile_counted` sharing the full `build_tile`/`encode_tile`
-   path is the *only* reason serve parity was "set the config", not
+   path is the _only_ reason serve parity was "set the config", not
    "reimplement the tiler". The summary tier and preprocessing analytics
    aren't factored that way yet (backlog: `encode_single_cell`).
 
 ### Where each lesson lives in code
 
-| Lesson | Anchor |
-|---|---|
-| `ParsedFeature` seam | `crates/stt-build/src/input.rs` (struct + the file reader) |
+| Lesson                            | Anchor                                                                                                   |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `ParsedFeature` seam              | `crates/stt-build/src/input.rs` (struct + the file reader)                                               |
 | Encoder globals / `EncoderConfig` | `crates/stt-core/src/arrow_tile.rs` (statics ~890–1105; `EncoderConfig` + `encode_tile_with` below them) |
-| Shared flag→config | `crates/stt-build/src/build_options.rs` |
-| Per-tile reuse | `crates/stt-build/src/tiler.rs` `encode_single_tile_counted` |
-| Parity comparator | `crates/stt-build/tests/common/mod.rs`, `tests/source_parity.rs` |
-| Shared name predicates | `crates/stt-build/src/input.rs` `is_coordinate_column_name` / `is_vertex_metadata_column` |
-| Shared DB decode rules | `crates/stt-build/src/db_input_common.rs` |
+| Shared flag→config                | `crates/stt-build/src/build_options.rs`                                                                  |
+| Per-tile reuse                    | `crates/stt-build/src/tiler.rs` `encode_single_tile_counted`                                             |
+| Parity comparator                 | `crates/stt-build/tests/common/mod.rs`, `tests/source_parity.rs`                                         |
+| Shared name predicates            | `crates/stt-build/src/input.rs` `is_coordinate_column_name` / `is_vertex_metadata_column`                |
+| Shared DB decode rules            | `crates/stt-build/src/db_input_common.rs`                                                                |
 
 ## 5. Consistency notes
 
 Column/time/geometry mapping semantics are documented in
 [../api/cli-reference.md](../api/cli-reference.md) and the protocol spec; what
-belongs in the decision record is the *design stance*:
+belongs in the decision record is the _design stance_:
 
 - **The DB readers are intentional supersets of the file reader**, only on
   type shapes with no GeoParquet-Float64 equivalent (`int2`, `numeric`/DECIMAL
   → nearest-f64, timestamp/date-as-integer-ms, `json`/`jsonb` as nested JSON).
-  They only ever *add* properties a file build couldn't carry — never diverge
+  They only ever _add_ properties a file build couldn't carry — never diverge
   on the same logical data. The decimal conversion is one shared function, so
   identical values agree across engines.
 - **PostGIS resolves column types up front** from the PG type at statement
@@ -226,13 +226,13 @@ compares an **identical column set**. Reproduce via `scripts/postgis/*`
 
 ### 6.1 Ingest vs the file path (logically identical tiles)
 
-| metric | GeoParquet file | PostGIS | DuckDB |
-|---|---|---|---|
-| tile_count | 60,521 | 60,521 ✅ | 60,521 ✅ |
-| feature instances (across tiles) | 436,842 | 436,842 ✅ | 436,842 ✅ |
-| spatial bounds / time range / bucket | — | identical ✅ | identical ✅ |
-| payload bytes (zstd) | ~67.0 MB | Δ **0.10%** | Δ **0.00%** |
-| **wall-clock (best of 3)** | 4.36 s / 7.60 s¹ | **4.29 s (0.98×)** | **5.05 s (0.66×)** |
+| metric                               | GeoParquet file  | PostGIS            | DuckDB             |
+| ------------------------------------ | ---------------- | ------------------ | ------------------ |
+| tile_count                           | 60,521           | 60,521 ✅          | 60,521 ✅          |
+| feature instances (across tiles)     | 436,842          | 436,842 ✅         | 436,842 ✅         |
+| spatial bounds / time range / bucket | —                | identical ✅       | identical ✅       |
+| payload bytes (zstd)                 | ~67.0 MB         | Δ **0.10%**        | Δ **0.00%**        |
+| **wall-clock (best of 3)**           | 4.36 s / 7.60 s¹ | **4.29 s (0.98×)** | **5.05 s (0.66×)** |
 
 ¹ PostGIS and DuckDB were benchmarked in separate runs against their own
 identically-columned file baseline (4.36 s and 7.60 s respectively). Both DB
@@ -244,11 +244,11 @@ closes even that).
 
 ### 6.2 Serve: dynamic vs pre-baked static (conc 16, avg tile 5.7 KB)
 
-| server | p50 | p95 | p99 | throughput | server-side gen p50 |
-|---|---|---|---|---|---|
-| **Dynamic PostGIS** (warm) | **2.0–3.0 ms** | 2.7–4.5 ms | 5–14 ms | **5k–7k req/s** | **1.9–2.8 ms** |
-| **Dynamic DuckDB** (warm) | **7.7 ms** | 29.8 ms | 87 ms | **~1,380 req/s** | **5.4 ms** |
-| Static pre-baked files¹ | 1.1–2.7 ms | 2.0–8.5 ms | *(≈100–200 ms¹)* | ~1.9k–4k req/s¹ | — |
+| server                     | p50            | p95        | p99              | throughput       | server-side gen p50 |
+| -------------------------- | -------------- | ---------- | ---------------- | ---------------- | ------------------- |
+| **Dynamic PostGIS** (warm) | **2.0–3.0 ms** | 2.7–4.5 ms | 5–14 ms          | **5k–7k req/s**  | **1.9–2.8 ms**      |
+| **Dynamic DuckDB** (warm)  | **7.7 ms**     | 29.8 ms    | 87 ms            | **~1,380 req/s** | **5.4 ms**          |
+| Static pre-baked files¹    | 1.1–2.7 ms     | 2.0–8.5 ms | _(≈100–200 ms¹)_ | ~1.9k–4k req/s¹  | —                   |
 
 ¹ The static baseline is Python's `http.server` (a stand-in for "tile already on
 disk"); its p99 spikes and throughput cap are the test server's GIL, **not** a
@@ -295,7 +295,7 @@ p99). Static wins structurally, not on the hot path:
    "PMTiles is always a much faster choice").
 2. **Scaling with data.** Dynamic cost ∝ rows-per-tile; low-zoom tiles are the
    industry-documented pathological case, and the no-thinning principle makes
-   ours comprehensive. Static pays once at build (and DB *ingest* is as fast as
+   ours comprehensive. Static pays once at build (and DB _ingest_ is as fast as
    file ingest — 0.98×/0.66×).
 3. **The directory is the client's planner.** Byte-budgeted prefetch slices and
    runway readiness run on per-tile byte lengths from the directory; a dynamic
@@ -354,7 +354,7 @@ remains is deliberately unscheduled:
 - **`stream_arrow` batch ingest for the DuckDB reader** — originally blocked on
   the workspace arrow-version split; that trigger **fired** (arrow ≥59 landed
   2026-07). Re-triaged 2026-07-07 against §6.1: the row-`ValueRef` API already
-  measured *faster* than the file baseline (0.66×), so no performance debt
+  measured _faster_ than the file baseline (0.66×), so no performance debt
   forces the change. Stays parked unless profiling ever shows row decode as
   the ingest bottleneck.
 
@@ -365,14 +365,14 @@ decision stands at WKB ingest / Arrow-IPC tiles).
 
 ## 9. File map
 
-| Path | What |
-|---|---|
-| `crates/stt-build/src/postgres_input.rs` | PostGIS reader (feature `postgres`): streaming cursor, row→`ParsedFeature`, `build_tile_query`/`decode_rows` for the server |
-| `crates/stt-build/src/duckdb_input.rs` | DuckDB reader (feature `duckdb`): streaming `ValueRef` decode, `build_tile_query`/`build_metadata_query`/`decode_query` for the server |
-| `crates/stt-build/src/db_input_common.rs` | Row-decode rules shared by both DB readers (decimal conversion, vertex-coercion accounting, time-format dispatch) — every rule lives once |
-| `crates/stt-build/src/build_options.rs` | Shared flag→config parsing (`EncoderSettings`, duration/LOD/quantize/vector-group parsers, budget + attribute-filter builders) used by BOTH the CLI and `stt-serve` |
-| `crates/stt-build/src/tiler.rs` `encode_single_tile_counted` | The reusable single-tile encoder (shared build_tile/encode_tile path; returns the placed-feature count) |
-| `crates/spatiotemporal-tiles/src/bin/stt-serve/` | axum dynamic tile server (moved from the former `crates/stt-serve`): PostGIS (deadpool) + DuckDB (r2d2) backends with full generation parity |
-| `crates/stt-build/tests/source_parity.rs` + `tests/common/mod.rs` | file ≡ DuckDB ≡ PostgreSQL parity suite (DuckDB in CI, bundled, no spatial extension; Postgres gated on `STT_TEST_PG_DSN`) |
-| `crates/stt-build/examples/duckdb_load_ibtracs.rs` | build the benchmark `hurricane.duckdb` + baseline Parquet from IBTrACS CSV (bundled engine) |
-| `scripts/postgis/*`, `scripts/duckdb/*` | setup / load / bench-ingest / bench-serve (DuckDB reuses the backend-agnostic PostGIS serve helpers) |
+| Path                                                              | What                                                                                                                                                                |
+| ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `crates/stt-build/src/postgres_input.rs`                          | PostGIS reader (feature `postgres`): streaming cursor, row→`ParsedFeature`, `build_tile_query`/`decode_rows` for the server                                         |
+| `crates/stt-build/src/duckdb_input.rs`                            | DuckDB reader (feature `duckdb`): streaming `ValueRef` decode, `build_tile_query`/`build_metadata_query`/`decode_query` for the server                              |
+| `crates/stt-build/src/db_input_common.rs`                         | Row-decode rules shared by both DB readers (decimal conversion, vertex-coercion accounting, time-format dispatch) — every rule lives once                           |
+| `crates/stt-build/src/build_options.rs`                           | Shared flag→config parsing (`EncoderSettings`, duration/LOD/quantize/vector-group parsers, budget + attribute-filter builders) used by BOTH the CLI and `stt-serve` |
+| `crates/stt-build/src/tiler.rs` `encode_single_tile_counted`      | The reusable single-tile encoder (shared build_tile/encode_tile path; returns the placed-feature count)                                                             |
+| `crates/spatiotemporal-tiles/src/bin/stt-serve/`                  | axum dynamic tile server (moved from the former `crates/stt-serve`): PostGIS (deadpool) + DuckDB (r2d2) backends with full generation parity                        |
+| `crates/stt-build/tests/source_parity.rs` + `tests/common/mod.rs` | file ≡ DuckDB ≡ PostgreSQL parity suite (DuckDB in CI, bundled, no spatial extension; Postgres gated on `STT_TEST_PG_DSN`)                                          |
+| `crates/stt-build/examples/duckdb_load_ibtracs.rs`                | build the benchmark `hurricane.duckdb` + baseline Parquet from IBTrACS CSV (bundled engine)                                                                         |
+| `scripts/postgis/*`, `scripts/duckdb/*`                           | setup / load / bench-ingest / bench-serve (DuckDB reuses the backend-agnostic PostGIS serve helpers)                                                                |

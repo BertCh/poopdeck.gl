@@ -19,7 +19,7 @@ tiny `manifest.json` plus many immutable, content-addressed **pack** objects, so
 it deploys to any static host or CDN and every object edge-caches natively — no
 tile server, no Worker. It combines a spatial tile pyramid with a temporal axis
 — each tile is addressed by `(zoom, x, y, time-bucket)` — so a deck.gl client
-streams only the tiles in the current viewport *and* time window, and animates
+streams only the tiles in the current viewport _and_ time window, and animates
 over time.
 
 Tile payloads are **Apache Arrow IPC** with **GeoArrow**-encoded geometry — a
@@ -41,7 +41,7 @@ use [GeoZarr](https://github.com/zarr-developers/geozarr-spec) or COG for those.
   Deploy to R2 / S3 / GCS / nginx; no tile server needed.
 - 🌐 **Edge-cacheable by construction** — immutable packs cache forever on a
   plain CDN; only the tiny manifest is mutable. Cacheability is a property of
-  the *format*, not the deploy.
+  the _format_, not the deploy.
 - 🌐 **HTTP Range Requests** — tiles are fetched with per-pack range requests,
   coalesced within each pack.
 - 🗜️ **Apache Arrow payloads** — GeoArrow geometry + columnar properties,
@@ -107,15 +107,15 @@ npm install @poopdeck.gl/layers @poopdeck.gl/playback   # deck.gl renderer + clo
 ```
 
 ```typescript
-import { AnimatedPointLayer } from "@poopdeck.gl/layers";
-import { TimeController } from "@poopdeck.gl/playback";
+import { AnimatedPointLayer } from '@poopdeck.gl/layers';
+import { TimeController } from '@poopdeck.gl/playback';
 
 const controller = new TimeController({ speed: 3600 }); // 1h of data per second
 controller.play();
 
 const layer = new AnimatedPointLayer({
-  id: "earthquakes",
-  data: "/data/earthquakes/manifest.json",
+  id: 'earthquakes',
+  data: '/data/earthquakes/manifest.json',
   currentTime: Date.now(),
   timeWindow: 24 * 60 * 60 * 1000,
   timeController: controller,
@@ -132,17 +132,17 @@ from [`@poopdeck.gl/react`](./packages/react) (`usePlayback` +
 ### …or with native MapLibre GL
 
 ```typescript
-import maplibregl from "maplibre-gl";
-import { STTPointLayer } from "@poopdeck.gl/maplibre";
+import maplibregl from 'maplibre-gl';
+import { STTPointLayer } from '@poopdeck.gl/maplibre';
 
-const map = new maplibregl.Map({ container: "map", style: "..." });
+const map = new maplibregl.Map({ container: 'map', style: '...' });
 const layer = new STTPointLayer({
-  id: "earthquakes",
-  url: "/data/earthquakes/manifest.json",
+  id: 'earthquakes',
+  url: '/data/earthquakes/manifest.json',
   currentTime: Date.now(),
   timeWindow: 24 * 60 * 60 * 1000,
 });
-map.on("load", () => map.addLayer(layer));
+map.on('load', () => map.addLayer(layer));
 ```
 
 See [`docs/api/stt-maplibre.md`](./docs/api/stt-maplibre.md) for the full
@@ -166,11 +166,12 @@ data/<dataset>/
 
 The reader fetches `manifest.json`, then the directory object, then each tile via
 a Range request against the right pack — a cold load is 1 manifest + 1 directory
-+ N pack ranges; warm is all served from edge cache. Full spec:
-[`docs/spec/stt-packed-format.md`](./docs/spec/stt-packed-format.md) (machine-
-checkable manifest schema: [`manifest.schema.json`](./docs/spec/manifest.schema.json)).
 
-Each tile blob is a small *layer frame* (`[u16 count]` then per-layer
+- N pack ranges; warm is all served from edge cache. Full spec:
+  [`docs/spec/stt-packed-format.md`](./docs/spec/stt-packed-format.md) (machine-
+  checkable manifest schema: [`manifest.schema.json`](./docs/spec/manifest.schema.json)).
+
+Each tile blob is a small _layer frame_ (`[u16 count]` then per-layer
 `[name][Arrow IPC]`); every layer is one Arrow `RecordBatch` whose `geometry`
 column is GeoArrow-encoded. The directory and every tile decode with one Arrow
 implementation across the Rust writer and the TypeScript reader.

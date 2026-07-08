@@ -35,7 +35,9 @@ export interface SourceTargetPositions {
  * Requires `startIndices`; callers gate on `featureCount > 0 && startIndices`.
  * A single-vertex feature degenerates to source === target.
  */
-export function deriveSourceTargetPositions(binary: BinaryFeatures): SourceTargetPositions {
+export function deriveSourceTargetPositions(
+  binary: BinaryFeatures,
+): SourceTargetPositions {
   const dims = binary.positionDimensions ?? 2;
   const featureCount = binary.featureCount;
   const startIndices = binary.startIndices!;

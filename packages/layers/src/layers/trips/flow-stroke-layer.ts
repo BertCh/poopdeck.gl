@@ -43,12 +43,14 @@ export type FlowStrokeLayerProps = {
   offsetWidths?: number;
 };
 
-export class FlowStrokeLayer<ExtraPropsT extends {} = {}> extends FlowCorridorLayer<
-  ExtraPropsT & Required<FlowStrokeLayerProps>
-> {
+export class FlowStrokeLayer<
+  ExtraPropsT extends {} = {},
+> extends FlowCorridorLayer<ExtraPropsT & Required<FlowStrokeLayerProps>> {
   static layerName = 'FlowStrokeLayer';
 
-  static defaultProps: DefaultProps<FlowCorridorLayerProps & FlowStrokeLayerProps> = {
+  static defaultProps: DefaultProps<
+    FlowCorridorLayerProps & FlowStrokeLayerProps
+  > = {
     ...FlowCorridorLayer.defaultProps,
     widthExponent: { type: 'number', value: 0.5, min: 0 },
     minFlow: { type: 'number', value: 0, min: 0 },
@@ -71,7 +73,8 @@ export class FlowStrokeLayer<ExtraPropsT extends {} = {}> extends FlowCorridorLa
     featureCount: number,
   ): Float32Array | undefined {
     const nb = binary.vertexValueBuckets ?? 0;
-    if (nb <= 0 || !binary.vertexValueMatrix || !binary.startIndices) return undefined;
+    if (nb <= 0 || !binary.vertexValueMatrix || !binary.startIndices)
+      return undefined;
     const totalVerts = binary.startIndices[featureCount];
     // Active-bucket (quantized + blended) per-vertex traveller counts — exactly
     // the values the inherited gradient colours the corridor with.
@@ -89,7 +92,9 @@ export class FlowStrokeLayer<ExtraPropsT extends {} = {}> extends FlowCorridorLa
   }
 
   protected override extraTripsExtensions(): unknown[] {
-    return this.props.offsetWidths ? this._extensions : super.extraTripsExtensions();
+    return this.props.offsetWidths
+      ? this._extensions
+      : super.extraTripsExtensions();
   }
 
   // Only drop the (idle) CategoryColorExtension when the PathStyleExtension offset

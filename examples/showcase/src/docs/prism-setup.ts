@@ -12,7 +12,7 @@
  * require()). Code still renders server-side (as plain text) and highlights
  * after hydration — CodeBlock re-renders when `bashGrammarReady` resolves.
  */
-import { Prism } from "prism-react-renderer";
+import { Prism } from 'prism-react-renderer';
 
 (globalThis as unknown as { Prism: typeof Prism }).Prism = Prism;
 
@@ -24,6 +24,6 @@ export function isBashReady(): boolean {
 
 export const bashGrammarReady: Promise<void> = import.meta.env.SSR
   ? Promise.resolve()
-  : import("prismjs/components/prism-bash").then(() => {
+  : import('prismjs/components/prism-bash').then(() => {
       bashReady = true;
     });

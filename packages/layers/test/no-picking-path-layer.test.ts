@@ -28,7 +28,10 @@ import { _resetWarnOnce } from '../src/lib/log';
 function runWithStubbedSuper(vs: string): { vs: string; fs: string } {
   const layer = Object.create(NoPickingPathLayer.prototype);
   const spy = vi
-    .spyOn(PathLayer.prototype as unknown as { getShaders: () => unknown }, 'getShaders')
+    .spyOn(
+      PathLayer.prototype as unknown as { getShaders: () => unknown },
+      'getShaders',
+    )
     .mockReturnValue({ vs, fs: '' });
   try {
     return (layer as NoPickingPathLayer).getShaders();
@@ -59,7 +62,7 @@ void main() {
     expect(shaders.vs).toMatch(/geometry\.pickingColor\s*=\s*vec3\(0\.0\)\s*;/);
   });
 
-  it("matches the real PathLayer vertex source", () => {
+  it('matches the real PathLayer vertex source', () => {
     // Sanity-check against the installed @deck.gl/layers PathLayer shader.
     // The package's `exports` block hides the internal shader path, so we
     // resolve the package root via require.resolve('@deck.gl/layers') and

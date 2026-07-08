@@ -30,10 +30,17 @@ import {
 } from '@poopdeck.gl/core/capabilities';
 
 /** The kinds the maplibre adapter actually renders (each backed by an exported class). */
-const SUPPORTED_KINDS: readonly LayerKind[] = ['point', 'line', 'polygon', 'trips', 'heatmap'];
+const SUPPORTED_KINDS: readonly LayerKind[] = [
+  'point',
+  'line',
+  'polygon',
+  'trips',
+  'heatmap',
+];
 
 /** Why an unsupported kind degrades — a single, honest referral to the deck backend. */
-const DECK_REFERRAL = 'not implemented in the maplibre adapter; use @poopdeck.gl/layers (deck)';
+const DECK_REFERRAL =
+  'not implemented in the maplibre adapter; use @poopdeck.gl/layers (deck)';
 
 /**
  * Build the exhaustive `LayerKind → support` record from the frozen `LAYER_KINDS`
@@ -45,19 +52,38 @@ const layerKinds = Object.fromEntries(
   LAYER_KINDS.map((kind): [LayerKind, LayerKindSupport] => {
     if (SUPPORTED_KINDS.includes(kind)) return [kind, { supported: true }];
     if (kind === 'arc') {
-      return [kind, { supported: false, fallbackKind: 'line', reason: DECK_REFERRAL }];
+      return [
+        kind,
+        { supported: false, fallbackKind: 'line', reason: DECK_REFERRAL },
+      ];
     }
     if (kind === 'text') {
-      return [kind, { supported: false, fallbackKind: 'icon', reason: DECK_REFERRAL }];
+      return [
+        kind,
+        { supported: false, fallbackKind: 'icon', reason: DECK_REFERRAL },
+      ];
     }
     if (kind === 'mesh') {
-      return [kind, { supported: false, fallbackKind: 'boundingBox', reason: DECK_REFERRAL }];
+      return [
+        kind,
+        {
+          supported: false,
+          fallbackKind: 'boundingBox',
+          reason: DECK_REFERRAL,
+        },
+      ];
     }
     if (kind === 'pointCloud') {
-      return [kind, { supported: false, fallbackKind: 'point', reason: DECK_REFERRAL }];
+      return [
+        kind,
+        { supported: false, fallbackKind: 'point', reason: DECK_REFERRAL },
+      ];
     }
     if (kind === 'hexbin') {
-      return [kind, { supported: false, fallbackKind: 'h3Summary', reason: DECK_REFERRAL }];
+      return [
+        kind,
+        { supported: false, fallbackKind: 'h3Summary', reason: DECK_REFERRAL },
+      ];
     }
     return [kind, { supported: false, reason: DECK_REFERRAL }];
   }),

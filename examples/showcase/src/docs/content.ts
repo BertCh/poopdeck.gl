@@ -17,13 +17,13 @@
 
 export const docModules = import.meta.glob(
   [
-    "../../../../docs/README.md",
-    "../../../../docs/{intro,architecture,spec,api,guides}/*.md",
+    '../../../../docs/README.md',
+    '../../../../docs/{intro,architecture,spec,api,guides}/*.md',
   ],
-  { query: "?raw", import: "default" },
+  { query: '?raw', import: 'default' },
 ) as Record<string, () => Promise<string>>;
 
-const GLOB_PREFIX = "../../../../docs/";
+const GLOB_PREFIX = '../../../../docs/';
 
 /** Glob key → docs-relative file path ("api/cli-reference.md"). */
 export function globKeyToFile(key: string): string {
@@ -44,4 +44,4 @@ export function bundledDocFiles(): string[] {
  * The manifest JSON schema is the one non-markdown doc page; a static `?raw`
  * import keeps it in the docs chunk (it's a few KB).
  */
-export { default as manifestSchemaRaw } from "../../../../docs/spec/manifest.schema.json?raw";
+export { default as manifestSchemaRaw } from '../../../../docs/spec/manifest.schema.json?raw';

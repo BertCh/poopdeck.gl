@@ -3,10 +3,20 @@
 
 import { describe, it, expect } from 'vitest';
 import { renderCapabilitiesMarkdown } from '../src/render/capabilities-doc';
-import { LAYER_KINDS, CAPABILITIES, type BackendDescriptor, type LayerKind } from '../src/render/capabilities';
+import {
+  LAYER_KINDS,
+  CAPABILITIES,
+  type BackendDescriptor,
+  type LayerKind,
+} from '../src/render/capabilities';
 
-function descriptor(id: string, over: Partial<BackendDescriptor> = {}): BackendDescriptor {
-  const capabilities = Object.fromEntries(CAPABILITIES.map((c) => [c, false])) as BackendDescriptor['capabilities'];
+function descriptor(
+  id: string,
+  over: Partial<BackendDescriptor> = {},
+): BackendDescriptor {
+  const capabilities = Object.fromEntries(
+    CAPABILITIES.map((c) => [c, false]),
+  ) as BackendDescriptor['capabilities'];
   const layerKinds = Object.fromEntries(
     LAYER_KINDS.map((k) => [k, { supported: false, reason: 'x' }]),
   ) as BackendDescriptor['layerKinds'];
@@ -28,7 +38,10 @@ describe('renderCapabilitiesMarkdown', () => {
   const a = descriptor('deck', {
     capabilities: { ...descriptor('deck').capabilities, globe: true },
     timeFilterModes: ['window', 'wake', 'cumulative', 'trail'],
-    layerKinds: { ...descriptor('deck').layerKinds, point: { supported: true } } as BackendDescriptor['layerKinds'],
+    layerKinds: {
+      ...descriptor('deck').layerKinds,
+      point: { supported: true },
+    } as BackendDescriptor['layerKinds'],
   });
   const b = descriptor('maplibre', {
     layerKinds: {

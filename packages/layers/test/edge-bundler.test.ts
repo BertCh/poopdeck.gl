@@ -29,7 +29,9 @@ describe('EdgeBundler density kernel', () => {
     // 1 - (5/10)^2 = 0.75 at half the bandwidth.
     expect(epanechnikovWeight(5, 10)).toBeCloseTo(0.75, 9);
     // Monotonically decreasing with distance.
-    expect(epanechnikovWeight(3, 10)).toBeGreaterThan(epanechnikovWeight(7, 10));
+    expect(epanechnikovWeight(3, 10)).toBeGreaterThan(
+      epanechnikovWeight(7, 10),
+    );
   });
 
   it('Epanechnikov: degenerate bandwidth yields no weight', () => {
@@ -64,12 +66,15 @@ describe('EdgeBundler Laplacian smoothing', () => {
     ];
     for (let n = 0; n < 40; n++) {
       const next = pts.map((p, i) =>
-        i === 0 || i === pts.length - 1 ? p : laplacianStep(pts[i - 1], p, pts[i + 1], 0.5),
+        i === 0 || i === pts.length - 1
+          ? p
+          : laplacianStep(pts[i - 1], p, pts[i + 1], 0.5),
       );
       pts = next;
     }
     // Interior amplitudes should have collapsed toward the 0 baseline.
-    for (let i = 1; i < pts.length - 1; i++) expect(Math.abs(pts[i][1])).toBeLessThan(0.2);
+    for (let i = 1; i < pts.length - 1; i++)
+      expect(Math.abs(pts[i][1])).toBeLessThan(0.2);
   });
 });
 
@@ -86,7 +91,8 @@ describe('EdgeBundler subdivide', () => {
     expect(out[0]).toEqual([0, 0]);
     expect(out[4]).toEqual([4, 0]);
     expect(out[2][0]).toBeCloseTo(2, 6);
-    for (let i = 1; i < out.length; i++) expect(out[i][0] - out[i - 1][0]).toBeCloseTo(1, 6);
+    for (let i = 1; i < out.length; i++)
+      expect(out[i][0] - out[i - 1][0]).toBeCloseTo(1, 6);
   });
 
   it('preserves endpoints when resampling an L-shaped (curved) polyline', () => {

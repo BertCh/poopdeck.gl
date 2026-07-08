@@ -4,9 +4,9 @@
  * surface that mounts a live demo map (`/demo/:id`, the `/demos/:id` embed, the
  * home hero) goes through this so they can't drift apart.
  */
-import { usePlayback, type PlaybackState } from "@poopdeck.gl/react";
-import type { Dataset } from "../../types";
-import { calculateAnimationSpeed } from "../../types";
+import { usePlayback, type PlaybackState } from '@poopdeck.gl/react';
+import type { Dataset } from '../../types';
+import { calculateAnimationSpeed } from '../../types';
 
 export function useDemoPlayback(dataset: Dataset | undefined): PlaybackState {
   return usePlayback({

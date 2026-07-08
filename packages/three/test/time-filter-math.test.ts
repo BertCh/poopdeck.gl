@@ -82,10 +82,20 @@ describe('timeFilterAlpha dispatch', () => {
   it('routes to the right mode', () => {
     expect(timeFilterAlpha('none', 0, 0, 0)).toBe(1);
     expect(timeFilterAlpha('window', 100, 90, 110, { windowHalf: 50 })).toBe(1);
-    expect(timeFilterAlpha('wake', 100, 70, 0, { wakeLength: 60 })).toBeCloseTo(0.5, 6);
+    expect(timeFilterAlpha('wake', 100, 70, 0, { wakeLength: 60 })).toBeCloseTo(
+      0.5,
+      6,
+    );
     expect(timeFilterAlpha('cumulative', 100, 120, 0)).toBe(0);
     expect(
-      timeFilterAlpha('trail', 100, 0, 0, { trailLength: 50, trailFade: 1 }, 75),
+      timeFilterAlpha(
+        'trail',
+        100,
+        0,
+        0,
+        { trailLength: 50, trailFade: 1 },
+        75,
+      ),
     ).toBeCloseTo(0.5, 6);
   });
 });

@@ -8,8 +8,10 @@ import { GeometryType, type Tile, type Layer } from '@poopdeck.gl/core';
 
 export function makePointTile(): Tile {
   const positions = new Float64Array([
-    -122.4, 37.7,  // SF
-    -73.95, 40.75, // NYC
+    -122.4,
+    37.7, // SF
+    -73.95,
+    40.75, // NYC
   ]);
   const features = {
     featureCount: 2,
@@ -40,12 +42,9 @@ export function makeLineTile(): Tile {
   // Two paths: one 3-vertex, one 2-vertex (single segment).
   const positions = new Float64Array([
     // Path 0: NYC -> Boston -> Maine
-    -73.95, 40.75,
-    -71.05, 42.36,
-    -69.5, 44.0,
+    -73.95, 40.75, -71.05, 42.36, -69.5, 44.0,
     // Path 1: SF -> LA
-    -122.4, 37.7,
-    -118.24, 34.05,
+    -122.4, 37.7, -118.24, 34.05,
   ]);
   const startIndices = new Uint32Array([0, 3, 5]);
   const features = {
@@ -81,12 +80,9 @@ export function makeLineTile(): Tile {
 export function makeTripsTile(): Tile {
   const positions = new Float64Array([
     // Path 0: 3 vertices
-    -73.95, 40.75,
-    -71.05, 42.36,
-    -69.5, 44.0,
+    -73.95, 40.75, -71.05, 42.36, -69.5, 44.0,
     // Path 1: 2 vertices
-    -122.4, 37.7,
-    -118.24, 34.05,
+    -122.4, 37.7, -118.24, 34.05,
   ]);
   const startIndices = new Uint32Array([0, 3, 5]);
   const vertexTimestamps = new Float32Array([0, 1000, 2000, 0, 1500]);
@@ -105,7 +101,10 @@ export function makeTripsTile(): Tile {
       width: new Float32Array([4, 6]),
     },
     categoricalProps: {
-      vehicleType: { indices: new Uint16Array([0, 1]), categories: ['truck', 'car'] },
+      vehicleType: {
+        indices: new Uint16Array([0, 1]),
+        categories: ['truck', 'car'],
+      },
     },
   };
   const layer: Layer = {
@@ -155,12 +154,7 @@ export function makePropertyPointTile(): Tile {
 
 export function makePolygonTile(): Tile {
   // One square polygon covering the equator near (0,0).
-  const positions = new Float64Array([
-    -10, -10,
-    10, -10,
-    10, 10,
-    -10, 10,
-  ]);
+  const positions = new Float64Array([-10, -10, 10, -10, 10, 10, -10, 10]);
   const startIndices = new Uint32Array([0, 4]);
   const features = {
     featureCount: 1,

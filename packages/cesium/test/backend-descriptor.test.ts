@@ -47,27 +47,52 @@ describe('cesiumBackend descriptor', () => {
       trips: ['cesium-trips-layer.ts', 'CesiumTripsLayer'],
       tripHeads: ['cesium-trip-heads-layer.ts', 'CesiumTripHeadsLayer'],
     };
-    const supported = LAYER_KINDS.filter((k) => cesiumBackend.layerKinds[k].supported);
+    const supported = LAYER_KINDS.filter(
+      (k) => cesiumBackend.layerKinds[k].supported,
+    );
     expect(new Set(supported)).toEqual(new Set(Object.keys(backing)));
     for (const [kind, [file, cls]] of Object.entries(backing)) {
-      expect(cesiumBackend.layerKinds[kind as LayerKind].supported, kind).toBe(true);
+      expect(cesiumBackend.layerKinds[kind as LayerKind].supported, kind).toBe(
+        true,
+      );
       const src = readFileSync(join(SRC, file), 'utf8');
-      expect(src, `${file} must export ${cls}`).toMatch(new RegExp(`export class ${cls}`));
+      expect(src, `${file} must export ${cls}`).toMatch(
+        new RegExp(`export class ${cls}`),
+      );
     }
   });
 
   it('declares typed fallbacks for the flow family, iso-lines, and surfels', () => {
-    expect(cesiumBackend.layerKinds.surfel).toMatchObject({ supported: false, fallbackKind: 'point' });
-    expect(cesiumBackend.layerKinds.flowmap).toMatchObject({ supported: false, fallbackKind: 'line' });
-    expect(cesiumBackend.layerKinds.flowCorridor).toMatchObject({ supported: false, fallbackKind: 'line' });
-    expect(cesiumBackend.layerKinds.flowStroke).toMatchObject({ supported: false, fallbackKind: 'line' });
-    expect(cesiumBackend.layerKinds.isoLines).toMatchObject({ supported: false, fallbackKind: 'path' });
+    expect(cesiumBackend.layerKinds.surfel).toMatchObject({
+      supported: false,
+      fallbackKind: 'point',
+    });
+    expect(cesiumBackend.layerKinds.flowmap).toMatchObject({
+      supported: false,
+      fallbackKind: 'line',
+    });
+    expect(cesiumBackend.layerKinds.flowCorridor).toMatchObject({
+      supported: false,
+      fallbackKind: 'line',
+    });
+    expect(cesiumBackend.layerKinds.flowStroke).toMatchObject({
+      supported: false,
+      fallbackKind: 'line',
+    });
+    expect(cesiumBackend.layerKinds.isoLines).toMatchObject({
+      supported: false,
+      fallbackKind: 'path',
+    });
   });
 
   it('passes the over-claim gate against its own proven set', () => {
     const proven: ConformanceEvidence = {
-      capabilities: new Set<Capability>(CAPABILITIES.filter((c) => cesiumBackend.capabilities[c])),
-      layerKinds: new Set<LayerKind>(LAYER_KINDS.filter((k) => cesiumBackend.layerKinds[k].supported)),
+      capabilities: new Set<Capability>(
+        CAPABILITIES.filter((c) => cesiumBackend.capabilities[c]),
+      ),
+      layerKinds: new Set<LayerKind>(
+        LAYER_KINDS.filter((k) => cesiumBackend.layerKinds[k].supported),
+      ),
       timeFilterModes: new Set<TimeFilterMode>(cesiumBackend.timeFilterModes),
     };
     expect(assertDescriptorConsistent(cesiumBackend, proven)).toEqual([]);
@@ -77,9 +102,18 @@ describe('cesiumBackend descriptor', () => {
     const emptyEvidence: ConformanceEvidence = {
       capabilities: new Set(),
       layerKinds: new Set<LayerKind>(['point']),
-      timeFilterModes: new Set<TimeFilterMode>(['window', 'wake', 'cumulative', 'trail']),
+      timeFilterModes: new Set<TimeFilterMode>([
+        'window',
+        'wake',
+        'cumulative',
+        'trail',
+      ]),
     };
     // globe is claimed true but not in evidence → a violation is reported.
-    expect(assertDescriptorConsistent(cesiumBackend, emptyEvidence).some((v) => v.includes('globe'))).toBe(true);
+    expect(
+      assertDescriptorConsistent(cesiumBackend, emptyEvidence).some((v) =>
+        v.includes('globe'),
+      ),
+    ).toBe(true);
   });
 });

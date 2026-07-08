@@ -19,7 +19,9 @@ import { encodeDirectory } from '../src/directory';
 import { packedFromSingleFile, packedFetch } from './helpers/packed-fixture';
 import { bufferToArrayBuffer } from './helpers/fixtures';
 
-const FIXTURE = fileURLToPath(new URL('./fixtures/sample.stt', import.meta.url));
+const FIXTURE = fileURLToPath(
+  new URL('./fixtures/sample.stt', import.meta.url),
+);
 const FIXTURE_BYTES = new Uint8Array(readFileSync(FIXTURE));
 
 /**
@@ -35,9 +37,18 @@ function buildPackedDataset(manifestOverrides: Record<string, unknown> = {}): {
   const blob = new Uint8Array([0x42]);
   const dir = encodeDirectory([
     {
-      zoom: 5, x: 1, y: 2, timeStart: 0, timeEnd: 1,
-      packId: 0, offset: 0, length: blob.length, uncompressedSize: blob.length,
-      featureCount: 1, hilbert: 0, crc32c: 0,
+      zoom: 5,
+      x: 1,
+      y: 2,
+      timeStart: 0,
+      timeEnd: 1,
+      packId: 0,
+      offset: 0,
+      length: blob.length,
+      uncompressedSize: blob.length,
+      featureCount: 1,
+      hilbert: 0,
+      crc32c: 0,
     },
   ]);
   const objects = new Map<string, Uint8Array>();
@@ -47,7 +58,11 @@ function buildPackedDataset(manifestOverrides: Record<string, unknown> = {}): {
     format: 'stt-packed',
     formatVersion: 1,
     compression: 'none',
-    directory: { key: 'index/dir.sttd', length: dir.length, directoryVersion: 5 },
+    directory: {
+      key: 'index/dir.sttd',
+      length: dir.length,
+      directoryVersion: 5,
+    },
     packs: [{ key: 'packs/p0.sttp', length: blob.length }],
     metadata: {
       name: 'test',
@@ -59,7 +74,10 @@ function buildPackedDataset(manifestOverrides: Record<string, unknown> = {}): {
     },
     ...manifestOverrides,
   };
-  objects.set('manifest.json', new TextEncoder().encode(JSON.stringify(manifest)));
+  objects.set(
+    'manifest.json',
+    new TextEncoder().encode(JSON.stringify(manifest)),
+  );
 
   const url = 'mem://data/test/manifest.json';
   const base = 'mem://data/test/';
@@ -67,17 +85,32 @@ function buildPackedDataset(manifestOverrides: Record<string, unknown> = {}): {
     const key = u.startsWith(base) ? u.slice(base.length) : u;
     const bytes = objects.get(key);
     if (!bytes) {
-      return { ok: false, status: 404, statusText: 'Not Found', arrayBuffer: async () => new ArrayBuffer(0) };
+      return {
+        ok: false,
+        status: 404,
+        statusText: 'Not Found',
+        arrayBuffer: async () => new ArrayBuffer(0),
+      };
     }
     const range = (init?.headers as Record<string, string> | undefined)?.Range;
     const m = /bytes=(\d+)-(\d+)/.exec(range ?? '');
     if (!m) {
-      return { ok: true, status: 200, statusText: 'OK', arrayBuffer: async () => bufferToArrayBuffer(bytes) };
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        arrayBuffer: async () => bufferToArrayBuffer(bytes),
+      };
     }
     const start = Number(m[1]);
     const end = Math.min(Number(m[2]), bytes.length - 1);
     const slice = bytes.subarray(start, end + 1);
-    return { ok: true, status: 206, statusText: 'Partial Content', arrayBuffer: async () => bufferToArrayBuffer(slice) };
+    return {
+      ok: true,
+      status: 206,
+      statusText: 'Partial Content',
+      arrayBuffer: async () => bufferToArrayBuffer(slice),
+    };
   }) as unknown as typeof fetch;
   return { url, fetch: fetchFn };
 }
@@ -116,7 +149,8 @@ describe('packed-format manifest', () => {
         ok: true,
         status: 200,
         statusText: 'OK',
-        arrayBuffer: async () => bufferToArrayBuffer(new Uint8Array([0x53, 0x54, 0x54, 0x04])),
+        arrayBuffer: async () =>
+          bufferToArrayBuffer(new Uint8Array([0x53, 0x54, 0x54, 0x04])),
       };
     }) as unknown as typeof fetch;
     const archive = new STTArchive({ url, fetch: fetchFn });
@@ -124,9 +158,14 @@ describe('packed-format manifest', () => {
   });
 
   it('rejects a manifest missing the directory pointer or pack table', async () => {
-    const { url, fetch } = buildPackedDataset({ directory: undefined, packs: undefined });
+    const { url, fetch } = buildPackedDataset({
+      directory: undefined,
+      packs: undefined,
+    });
     const archive = new STTArchive({ url, fetch });
-    await expect(archive.getMetadata()).rejects.toThrow(/directory pointer or pack table/i);
+    await expect(archive.getMetadata()).rejects.toThrow(
+      /directory pointer or pack table/i,
+    );
   });
 
   it('rejects a tile that references a non-existent pack', async () => {
@@ -134,9 +173,18 @@ describe('packed-format manifest', () => {
     const blob = new Uint8Array([0x42]);
     const dir = encodeDirectory([
       {
-        zoom: 5, x: 1, y: 2, timeStart: 0, timeEnd: 1,
-        packId: 5, offset: 0, length: blob.length, uncompressedSize: blob.length,
-        featureCount: 1, hilbert: 0, crc32c: 0,
+        zoom: 5,
+        x: 1,
+        y: 2,
+        timeStart: 0,
+        timeEnd: 1,
+        packId: 5,
+        offset: 0,
+        length: blob.length,
+        uncompressedSize: blob.length,
+        featureCount: 1,
+        hilbert: 0,
+        crc32c: 0,
       },
     ]);
     const objects = new Map<string, Uint8Array>();
@@ -149,9 +197,18 @@ describe('packed-format manifest', () => {
           format: 'stt-packed',
           formatVersion: 1,
           compression: 'none',
-          directory: { key: 'index/dir.sttd', length: dir.length, directoryVersion: 5 },
+          directory: {
+            key: 'index/dir.sttd',
+            length: dir.length,
+            directoryVersion: 5,
+          },
           packs: [{ key: 'packs/p0.sttp', length: blob.length }],
-          metadata: { name: 't', min_zoom: 5, max_zoom: 5, temporal_bucket_ms: 1000 },
+          metadata: {
+            name: 't',
+            min_zoom: 5,
+            max_zoom: 5,
+            temporal_bucket_ms: 1000,
+          },
         }),
       ),
     );
@@ -159,13 +216,29 @@ describe('packed-format manifest', () => {
     const fetchFn = (async (u: string, init?: RequestInit) => {
       const key = u.startsWith(base) ? u.slice(base.length) : u;
       const bytes = objects.get(key)!;
-      const range = (init?.headers as Record<string, string> | undefined)?.Range;
+      const range = (init?.headers as Record<string, string> | undefined)
+        ?.Range;
       const m = /bytes=(\d+)-(\d+)/.exec(range ?? '');
-      if (!m) return { ok: true, status: 200, arrayBuffer: async () => bufferToArrayBuffer(bytes) };
-      const slice = bytes.subarray(Number(m[1]), Math.min(Number(m[2]), bytes.length - 1) + 1);
-      return { ok: true, status: 206, arrayBuffer: async () => bufferToArrayBuffer(slice) };
+      if (!m)
+        return {
+          ok: true,
+          status: 200,
+          arrayBuffer: async () => bufferToArrayBuffer(bytes),
+        };
+      const slice = bytes.subarray(
+        Number(m[1]),
+        Math.min(Number(m[2]), bytes.length - 1) + 1,
+      );
+      return {
+        ok: true,
+        status: 206,
+        arrayBuffer: async () => bufferToArrayBuffer(slice),
+      };
     }) as unknown as typeof fetch;
-    const archive = new STTArchive({ url: base + 'manifest.json', fetch: fetchFn });
+    const archive = new STTArchive({
+      url: base + 'manifest.json',
+      fetch: fetchFn,
+    });
     const index = await archive.getIndex();
     const e = index.tiles[0];
     await expect(
@@ -186,14 +259,19 @@ describe('manifest version gates (conformance reader-MUST)', () => {
       'manifest.json',
       new TextEncoder().encode(JSON.stringify(manifest)),
     );
-    return new STTArchive({ url: dataset.manifestUrl, fetch: packedFetch(dataset) });
+    return new STTArchive({
+      url: dataset.manifestUrl,
+      fetch: packedFetch(dataset),
+    });
   }
 
   it('rejects an unrecognized format', async () => {
     const archive = datasetWithManifest((m) => {
       m.format = 'stt-packed-v2';
     });
-    await expect(archive.getMetadata()).rejects.toThrow(/not a packed manifest/);
+    await expect(archive.getMetadata()).rejects.toThrow(
+      /not a packed manifest/,
+    );
   });
 
   it('rejects an unrecognized formatVersion', async () => {
@@ -201,28 +279,36 @@ describe('manifest version gates (conformance reader-MUST)', () => {
     const archive = datasetWithManifest((m) => {
       m.formatVersion = 3;
     });
-    await expect(archive.getMetadata()).rejects.toThrow(/unsupported formatVersion 3/);
+    await expect(archive.getMetadata()).rejects.toThrow(
+      /unsupported formatVersion 3/,
+    );
   });
 
   it('rejects a missing formatVersion', async () => {
     const archive = datasetWithManifest((m) => {
       delete m.formatVersion;
     });
-    await expect(archive.getMetadata()).rejects.toThrow(/unsupported formatVersion/);
+    await expect(archive.getMetadata()).rejects.toThrow(
+      /unsupported formatVersion/,
+    );
   });
 
   it('rejects an unrecognized directoryVersion', async () => {
     const archive = datasetWithManifest((m) => {
       m.directory.directoryVersion = 4;
     });
-    await expect(archive.getIndex()).rejects.toThrow(/unsupported directoryVersion 4/);
+    await expect(archive.getIndex()).rejects.toThrow(
+      /unsupported directoryVersion 4/,
+    );
   });
 
   it('rejects a missing directoryVersion', async () => {
     const archive = datasetWithManifest((m) => {
       delete m.directory.directoryVersion;
     });
-    await expect(archive.getIndex()).rejects.toThrow(/unsupported directoryVersion/);
+    await expect(archive.getIndex()).rejects.toThrow(
+      /unsupported directoryVersion/,
+    );
   });
 
   it('rejects a manifest declaring a capability this reader does not implement', async () => {

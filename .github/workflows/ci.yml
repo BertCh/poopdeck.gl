@@ -36,8 +36,8 @@ jobs:
           # runner's linker under full debuginfo — ld dies with SIGBUS
           # ("signal 7, core dumped"). Debuginfo is useless in CI; dropping
           # it shrinks the link inputs by an order of magnitude.
-          CARGO_PROFILE_DEV_DEBUG: "0"
-          CARGO_PROFILE_TEST_DEBUG: "0"
+          CARGO_PROFILE_DEV_DEBUG: '0'
+          CARGO_PROFILE_TEST_DEBUG: '0'
 
   rust-feature-lanes:
     name: Rust (feature lanes compile)

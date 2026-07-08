@@ -18,15 +18,15 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     const fallback = await env.ASSETS.fetch(
-      new URL("/__spa-fallback.html", url.origin),
+      new URL('/__spa-fallback.html', url.origin),
     );
     return new Response(fallback.body, {
       status: 200,
       headers: {
-        "content-type": "text/html; charset=utf-8",
+        'content-type': 'text/html; charset=utf-8',
         // The shell is tiny and route-agnostic; let it cache briefly at the
         // edge but always revalidate so a redeploy's new bundle is picked up.
-        "cache-control": "public, max-age=0, must-revalidate",
+        'cache-control': 'public, max-age=0, must-revalidate',
       },
     });
   },

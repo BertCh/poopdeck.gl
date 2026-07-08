@@ -18,10 +18,10 @@ Two mechanisms combine:
 
 1. **`composeExtensions`** — every animated layer passes an explicit
    `extensions` list to its sublayers (its internal `TimeFilterExtension` /
-   `CategoryColorExtension` / …). Because an explicit sublayer list *beats*
+   `CategoryColorExtension` / …). Because an explicit sublayer list _beats_
    deck's inheritance, the layer merges your top-level `extensions` prop into
    that list so your extension is never dropped. Internal extensions come
-   first, so your shader injections compose *on top of* the time-fade alpha.
+   first, so your shader injections compose _on top of_ the time-fade alpha.
 2. **Extension `getSubLayerProps` pass** — deck's `CompositeLayer` walks its
    own `extensions` and merges each `extension.getSubLayerProps()` into the
    sublayer props. That forwards the scalar props named in the extension's
@@ -43,12 +43,12 @@ contract.
 Add these to the top-level `extensions` prop of any STT layer. No import from
 `@poopdeck.gl/layers` needed.
 
-| Extension | What passes through | Documented limit |
-| --- | --- | --- |
-| **BrushingExtension** | `brushingEnabled`, `brushingRadius`, `brushingTarget` (`'source'` / `'target'` / `'source_target'`) — GPU show/hide by pointer distance. Great on point / arc layers. | `brushingTarget: 'custom'` needs `getBrushingTarget`, a per-feature accessor — no rows to bind on a binary tile. Constant targets only. |
-| **MaskExtension** | `maskId`, `maskByInstance`, `maskInverted` — geofence an STT layer to another layer's geometry (e.g. clip ship traffic to a harbor polygon). The base `operation: 'mask'` prop also forwards, so the mask-defining layer can itself be an STT layer. | None for the common case. |
-| **ClipExtension** | `clipBounds`, `clipByInstance` — rectangular clip. Pure uniforms, no accessors. | None. |
-| **PathStyleExtension** | Constant `getDashArray` (`[dash, gap]`), `getOffset`, `dashJustified`, `dashGapPickable` — dashed / offset paths (already a dep; `flow-stroke-layer.ts` uses `{ offset: true }`). | Per-**feature** dash/offset diverges — a function `getDashArray`/`getOffset` is forwarded but binds to no rows. Constant only; a baked-column variant is low-value future work. |
+| Extension              | What passes through                                                                                                                                                                                                                                  | Documented limit                                                                                                                                                                |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **BrushingExtension**  | `brushingEnabled`, `brushingRadius`, `brushingTarget` (`'source'` / `'target'` / `'source_target'`) — GPU show/hide by pointer distance. Great on point / arc layers.                                                                                | `brushingTarget: 'custom'` needs `getBrushingTarget`, a per-feature accessor — no rows to bind on a binary tile. Constant targets only.                                         |
+| **MaskExtension**      | `maskId`, `maskByInstance`, `maskInverted` — geofence an STT layer to another layer's geometry (e.g. clip ship traffic to a harbor polygon). The base `operation: 'mask'` prop also forwards, so the mask-defining layer can itself be an STT layer. | None for the common case.                                                                                                                                                       |
+| **ClipExtension**      | `clipBounds`, `clipByInstance` — rectangular clip. Pure uniforms, no accessors.                                                                                                                                                                      | None.                                                                                                                                                                           |
+| **PathStyleExtension** | Constant `getDashArray` (`[dash, gap]`), `getOffset`, `dashJustified`, `dashGapPickable` — dashed / offset paths (already a dep; `flow-stroke-layer.ts` uses `{ offset: true }`).                                                                    | Per-**feature** dash/offset diverges — a function `getDashArray`/`getOffset` is forwarded but binds to no rows. Constant only; a baked-column variant is low-value future work. |
 
 ```ts
 import { AnimatedPointLayer } from '@poopdeck.gl/layers';
@@ -68,7 +68,11 @@ new AnimatedPointLayer({
 import { MaskExtension } from '@deck.gl/extensions';
 import { GeoJsonLayer } from '@deck.gl/layers';
 
-const harbor = new GeoJsonLayer({ id: 'harbor', data: harborPolygon, operation: 'mask' });
+const harbor = new GeoJsonLayer({
+  id: 'harbor',
+  data: harborPolygon,
+  operation: 'mask',
+});
 const traffic = new AnimatedPointLayer({
   /* …tileset… */
   extensions: [new MaskExtension()],
@@ -83,10 +87,10 @@ accessor by running JS over binary features. Each is adapted to source its
 per-feature value from a **baked tile column** via the accessor-alias
 mechanism — the same shape as the internal `TimeFilterExtension`.
 
-| Extension | Status | Notes |
-| --- | --- | --- |
-| **DataFilterExtension** | port-adapted (P1, flagship) | Register a `filterValue` attribute from a baked column via accessor-alias (exactly like `TimeFilterExtension`, its hand-built descendant); keep `filterRange` / `filterSoftRange` / `filterEnabled` as constant uniforms. Passing it raw does **not** work — deck would run a JS accessor over binary features. Unlocks "filter vessels by speed", "filter by any baked property". `onFilteredItemsChange` / `countItems` are n/a (no CPU rows). See [DataFilterExtension](./data-filter-extension.md) for the full option/prop surface. |
-| **CollisionFilterExtension** | adapted (P2) | The **constant** case (`collisionEnabled` / `collisionGroup` / `collisionTestProps`, plus a constant `collisionPriority` that ranks a whole layer) works today via pass-through — great for de-cluttering `AnimatedIconLayer` / text labels. The `collisionFilterProps()` helper in `extensions/collision-filter-extension.ts` makes that one import and adds range-clamping. **Data-driven** priority (`collisionPriorityProperty`, a per-feature baked column) is **deferred**: it needs a `collisionPriorities` instanced attribute emitted by the layers (a layer-level change), so passing it warns once and falls back to the constant priority — we ship the honest helper rather than force a broken accessor. See [CollisionFilterExtension](./collision-filter-extension.md). |
+| Extension                    | Status                      | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ---------------------------- | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **DataFilterExtension**      | port-adapted (P1, flagship) | Register a `filterValue` attribute from a baked column via accessor-alias (exactly like `TimeFilterExtension`, its hand-built descendant); keep `filterRange` / `filterSoftRange` / `filterEnabled` as constant uniforms. Passing it raw does **not** work — deck would run a JS accessor over binary features. Unlocks "filter vessels by speed", "filter by any baked property". `onFilteredItemsChange` / `countItems` are n/a (no CPU rows). See [DataFilterExtension](./data-filter-extension.md) for the full option/prop surface.                                                                                                                                                                                                                                                |
+| **CollisionFilterExtension** | adapted (P2)                | The **constant** case (`collisionEnabled` / `collisionGroup` / `collisionTestProps`, plus a constant `collisionPriority` that ranks a whole layer) works today via pass-through — great for de-cluttering `AnimatedIconLayer` / text labels. The `collisionFilterProps()` helper in `extensions/collision-filter-extension.ts` makes that one import and adds range-clamping. **Data-driven** priority (`collisionPriorityProperty`, a per-feature baked column) is **deferred**: it needs a `collisionPriorities` instanced attribute emitted by the layers (a layer-level change), so passing it warns once and falls back to the constant priority — we ship the honest helper rather than force a broken accessor. See [CollisionFilterExtension](./collision-filter-extension.md). |
 
 ```ts
 import { AnimatedIconLayer } from '@poopdeck.gl/layers';
@@ -104,11 +108,11 @@ new AnimatedIconLayer({
 
 ## Skipped
 
-| Extension | Reason |
-| --- | --- |
-| **FillStyleExtension** | Decorative pattern-fill. The constant pattern already passes through; a per-feature pattern-index column is a lot of plumbing for little payoff. |
-| **_TerrainExtension** | Experimental upstream, and the vertical axis is already claimed by poopdeck's `timeHeightScale` space-time-cube lift — draping and time-as-height fight over `z`. |
-| **Fp64Extension** | Deprecated upstream. Poopdeck already relativizes time per-tile (`timeOffset`) and uses deck's built-in fp64 position split; adding it is counterproductive. |
+| Extension              | Reason                                                                                                                                                            |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **FillStyleExtension** | Decorative pattern-fill. The constant pattern already passes through; a per-feature pattern-index column is a lot of plumbing for little payoff.                  |
+| **\_TerrainExtension** | Experimental upstream, and the vertical axis is already claimed by poopdeck's `timeHeightScale` space-time-cube lift — draping and time-as-height fight over `z`. |
+| **Fp64Extension**      | Deprecated upstream. Poopdeck already relativizes time per-tile (`timeOffset`) and uses deck's built-in fp64 position split; adding it is counterproductive.      |
 
 ## See also
 

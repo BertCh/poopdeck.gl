@@ -19,13 +19,19 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { SpatiotemporalTileset } from '../src/spatiotemporal-tileset';
 import type { TileId, BoundingBox, Tile } from '../src/types';
-import { BOUNDS, BUCKET_MS, fakeTile, makeAvailableTiles } from './helpers/fixtures';
+import {
+  BOUNDS,
+  BUCKET_MS,
+  fakeTile,
+  makeAvailableTiles,
+} from './helpers/fixtures';
 import { advanceClock, installClock } from './helpers/clock';
 
 const N_BUCKETS = 60;
 const availableTiles = makeAvailableTiles(N_BUCKETS);
 
-const settle = (ms = 10): Promise<void> => new Promise((r) => setTimeout(r, ms));
+const settle = (ms = 10): Promise<void> =>
+  new Promise((r) => setTimeout(r, ms));
 
 /**
  * Harness whose batch loads stay PENDING until released — so a tile can be
@@ -49,11 +55,19 @@ function makeHarness() {
       }),
   });
   const loadBucket = async (i: number): Promise<void> => {
-    tileset.update({ bounds: BOUNDS, zoom: 6, time: i * BUCKET_MS + 500, timeWindow: 100 });
+    tileset.update({
+      bounds: BOUNDS,
+      zoom: 6,
+      time: i * BUCKET_MS + 500,
+      timeWindow: 100,
+    });
     await settle();
   };
   /** Select with an explicit (time, timeWindow) — for multi-bucket batches. */
-  const loadWindow = async (time: number, timeWindow: number): Promise<void> => {
+  const loadWindow = async (
+    time: number,
+    timeWindow: number,
+  ): Promise<void> => {
     tileset.update({ bounds: BOUNDS, zoom: 6, time, timeWindow });
     await settle();
   };

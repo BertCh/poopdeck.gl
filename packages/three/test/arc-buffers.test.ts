@@ -20,9 +20,12 @@ describe('buildArcBuffers', () => {
     const tile = arcTile(
       {
         positions: new Float64Array([
-          anchor.longitude, anchor.latitude,
-          anchor.longitude + dLon, anchor.latitude,
-          anchor.longitude + 2 * dLon, anchor.latitude,
+          anchor.longitude,
+          anchor.latitude,
+          anchor.longitude + dLon,
+          anchor.latitude,
+          anchor.longitude + 2 * dLon,
+          anchor.latitude,
         ]),
         startIndices: new Uint32Array([0, 3]),
         startTimes: new Float32Array([100]),
@@ -61,9 +64,18 @@ describe('buildArcBuffers', () => {
     const tile = arcTile({
       featureCount: 3,
       positions: new Float64Array([
-        anchor.longitude, anchor.latitude, anchor.longitude + d, anchor.latitude,
-        anchor.longitude, anchor.latitude + d, anchor.longitude + d, anchor.latitude + d,
-        anchor.longitude + d, anchor.latitude, anchor.longitude, anchor.latitude + d,
+        anchor.longitude,
+        anchor.latitude,
+        anchor.longitude + d,
+        anchor.latitude,
+        anchor.longitude,
+        anchor.latitude + d,
+        anchor.longitude + d,
+        anchor.latitude + d,
+        anchor.longitude + d,
+        anchor.latitude,
+        anchor.longitude,
+        anchor.latitude + d,
       ]),
       startIndices: new Uint32Array([0, 2, 4, 6]),
       startTimes: new Float32Array([0, 0, 0]),
@@ -79,15 +91,24 @@ describe('buildArcBuffers', () => {
     const tile = arcTile({
       featureCount: 2,
       positions: new Float64Array([
-        anchor.longitude, anchor.latitude, anchor.longitude + 0.001, anchor.latitude,
-        anchor.longitude, anchor.latitude, anchor.longitude, anchor.latitude + 0.001,
+        anchor.longitude,
+        anchor.latitude,
+        anchor.longitude + 0.001,
+        anchor.latitude,
+        anchor.longitude,
+        anchor.latitude,
+        anchor.longitude,
+        anchor.latitude + 0.001,
       ]),
       startIndices: new Uint32Array([0, 2, 4]),
       startTimes: new Float32Array([0, 0]),
       endTimes: new Float32Array([1000, 1000]),
       numericProps: { flow: new Float32Array([2.5, 0.75]) },
     });
-    const buf = buildArcBuffers([tile], proj, 0, { heightProperty: 'flow', height: 1 });
+    const buf = buildArcBuffers([tile], proj, 0, {
+      heightProperty: 'flow',
+      height: 1,
+    });
     expect(buf.heights[0]).toBeCloseTo(2.5, 5);
     expect(buf.heights[1]).toBeCloseTo(0.75, 5);
   });
@@ -95,7 +116,10 @@ describe('buildArcBuffers', () => {
   it('resolves source/target colours through a ramp', () => {
     const tile = arcTile({
       positions: new Float64Array([
-        anchor.longitude, anchor.latitude, anchor.longitude + 0.001, anchor.latitude,
+        anchor.longitude,
+        anchor.latitude,
+        anchor.longitude + 0.001,
+        anchor.latitude,
       ]),
       startIndices: new Uint32Array([0, 2]),
       numericProps: { mag: new Float32Array([5]) },
@@ -122,8 +146,10 @@ describe('buildArcBuffers', () => {
     const merc = new MercatorProjection();
     const tile = arcTile({
       positions: new Float64Array([
-        anchor.longitude, anchor.latitude,
-        anchor.longitude + 0.001, anchor.latitude + 0.001,
+        anchor.longitude,
+        anchor.latitude,
+        anchor.longitude + 0.001,
+        anchor.latitude + 0.001,
       ]),
       startIndices: new Uint32Array([0, 2]),
     });
@@ -132,7 +158,10 @@ describe('buildArcBuffers', () => {
   });
 
   it('returns empty for a tile with no line features', () => {
-    const tile = arcTile({ featureCount: 0, startIndices: new Uint32Array([0]) });
+    const tile = arcTile({
+      featureCount: 0,
+      startIndices: new Uint32Array([0]),
+    });
     const buf = buildArcBuffers([tile], proj, 0, {});
     expectEmptyBuffers(buf);
   });

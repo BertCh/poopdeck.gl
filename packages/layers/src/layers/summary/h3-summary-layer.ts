@@ -50,7 +50,10 @@ import type {
   Unit,
 } from '@deck.gl/core';
 import { H3HexagonLayer } from '@deck.gl/geo-layers';
-import { getFeatureProperties, DEFAULT_SUMMARY_COLOR_RANGE } from '@poopdeck.gl/core';
+import {
+  getFeatureProperties,
+  DEFAULT_SUMMARY_COLOR_RANGE,
+} from '@poopdeck.gl/core';
 import type {
   ArchiveMetadata,
   BinaryFeatures,
@@ -219,7 +222,8 @@ export interface _H3SummaryLayerProps {
 }
 
 /** Complete props accepted by {@link H3SummaryLayer}. */
-export type H3SummaryLayerProps = _H3SummaryLayerProps & SpatioTemporalLayerProps;
+export type H3SummaryLayerProps = _H3SummaryLayerProps &
+  SpatioTemporalLayerProps;
 
 // Shared with QuadbinSummaryLayer via @poopdeck.gl/core (audit F2) so the two
 // summary-tier ramps can't drift apart.
@@ -306,7 +310,11 @@ const defaultProps: DefaultProps<H3SummaryLayerProps> = {
   lineWidthUnits: 'meters',
   lineWidthScale: { type: 'number', value: 1, min: 0 },
   lineWidthMinPixels: { type: 'number', value: 0, min: 0 },
-  lineWidthMaxPixels: { type: 'number', value: Number.MAX_SAFE_INTEGER, min: 0 },
+  lineWidthMaxPixels: {
+    type: 'number',
+    value: Number.MAX_SAFE_INTEGER,
+    min: 0,
+  },
   material: true,
   highPrecision: 'auto',
   onMetadataLoad: { type: 'function', value: null, optional: true },
@@ -321,9 +329,9 @@ const defaultProps: DefaultProps<H3SummaryLayerProps> = {
  * sublayer class (default `H3HexagonLayer`) / overrides sublayer props
  * (deck's CompositeLayer contract).
  */
-export class H3SummaryLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLayer<
-  ExtraPropsT & Required<_H3SummaryLayerProps>
-> {
+export class H3SummaryLayer<
+  ExtraPropsT extends {} = {},
+> extends SpatioTemporalLayer<ExtraPropsT & Required<_H3SummaryLayerProps>> {
   static layerName = 'H3SummaryLayer';
 
   static defaultProps = defaultProps;
@@ -347,7 +355,11 @@ export class H3SummaryLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalL
    */
   private sublayerCache = new Map<
     string,
-    { layer: H3HexagonLayer<PreparedHexRow>; preparedKey: PreparedTile; styleKey: string }
+    {
+      layer: H3HexagonLayer<PreparedHexRow>;
+      preparedKey: PreparedTile;
+      styleKey: string;
+    }
   >();
   private lastTilesRef: Tile[] | null = null;
 
@@ -434,7 +446,9 @@ export class H3SummaryLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalL
     const weights = binary.numericProps[weightProp];
     if (!weights) {
       if (DEBUG) {
-        console.warn(`[H3SummaryLayer] tile missing weight property '${weightProp}'`);
+        console.warn(
+          `[H3SummaryLayer] tile missing weight property '${weightProp}'`,
+        );
       }
       return null;
     }
@@ -500,7 +514,9 @@ export class H3SummaryLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalL
       this.props.getLineWidth,
       this.props.lineWidth ?? 1,
     );
-    return typeof resolved === 'number' ? resolved : (this.props.lineWidth ?? 1);
+    return typeof resolved === 'number'
+      ? resolved
+      : (this.props.lineWidth ?? 1);
   }
 
   /**
@@ -553,10 +569,7 @@ export class H3SummaryLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalL
         if (prepared.weightMin < lo) lo = prepared.weightMin;
         if (prepared.weightMax > hi) hi = prepared.weightMax;
       }
-      domain = [
-        Number.isFinite(lo) ? lo : 0,
-        Number.isFinite(hi) ? hi : 1,
-      ];
+      domain = [Number.isFinite(lo) ? lo : 0, Number.isFinite(hi) ? hi : 1];
     }
 
     // Resolve the constant outline color/width ONCE per render (they're
@@ -566,7 +579,11 @@ export class H3SummaryLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalL
     const lineWidth = this.lineWidthValue();
     const material = this.props.material;
     const materialKey =
-      material === true ? 't' : material === false ? 'f' : JSON.stringify(material);
+      material === true
+        ? 't'
+        : material === false
+          ? 'f'
+          : JSON.stringify(material);
 
     // Layer-level style digest — when ANY of these change every cached
     // H3HexagonLayer is stale and we rebuild. The domain is included so a
@@ -666,8 +683,13 @@ export class H3SummaryLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalL
         },
       });
       // `_subLayerProps: { hexagons: { type } }` swaps the sublayer class.
-      const SubLayerClass = this.getSubLayerClass('hexagons', H3HexagonLayer as any);
-      const layer = new SubLayerClass(subProps as any) as H3HexagonLayer<PreparedHexRow>;
+      const SubLayerClass = this.getSubLayerClass(
+        'hexagons',
+        H3HexagonLayer as any,
+      );
+      const layer = new SubLayerClass(
+        subProps as any,
+      ) as H3HexagonLayer<PreparedHexRow>;
       this.sublayerCache.set(prepared.tileKey, {
         layer,
         preparedKey: prepared,
@@ -686,7 +708,10 @@ export class H3SummaryLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalL
    * the rows array skips undecodable cells, so its index is not the feature
    * index), keeping `hex`/`weight` keys for continuity.
    */
-  getPickingInfo({ info, sourceLayer }: GetPickingInfoParams): SpatioTemporalPickingInfo {
+  getPickingInfo({
+    info,
+    sourceLayer,
+  }: GetPickingInfoParams): SpatioTemporalPickingInfo {
     const out = info as SpatioTemporalPickingInfo;
     const sprops = sourceLayer?.props as SttSublayerPickingProps | undefined;
     const tile = sprops?.tile ?? null;

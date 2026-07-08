@@ -11,10 +11,21 @@
 import { describe, it, expect } from 'vitest';
 import type { Color } from '@deck.gl/core';
 import { makePointTile } from './fake-tile';
-import { buildTrackIndex, sampleTrack, lerpAngle, resolveColor } from '../src/lib/track-kernel';
-import type { TrackFieldConfig, TrackSampleConfig } from '../src/lib/track-kernel';
+import {
+  buildTrackIndex,
+  sampleTrack,
+  lerpAngle,
+  resolveColor,
+} from '../src/lib/track-kernel';
+import type {
+  TrackFieldConfig,
+  TrackSampleConfig,
+} from '../src/lib/track-kernel';
 
-function categorical(values: string[]): { indices: Uint16Array; categories: string[] } {
+function categorical(values: string[]): {
+  indices: Uint16Array;
+  categories: string[];
+} {
   const categories: string[] = [];
   const map = new Map<string, number>();
   const indices = new Uint16Array(values.length);
@@ -34,12 +45,22 @@ function categorical(values: string[]): { indices: Uint16Array; categories: stri
 function dupTimestampTile() {
   const times = [0, 1000, 1000, 2000];
   const tile = makePointTile({
-    positions: [[0, 0], [10, 0], [10, 0], [20, 0]],
+    positions: [
+      [0, 0],
+      [10, 0],
+      [10, 0],
+      [20, 0],
+    ],
     startTimes: times,
     endTimes: times,
     timeOffset: 0,
   });
-  tile.layers[0].features.categoricalProps['track_id'] = categorical(['A', 'A', 'A', 'A']);
+  tile.layers[0].features.categoricalProps['track_id'] = categorical([
+    'A',
+    'A',
+    'A',
+    'A',
+  ]);
   return tile;
 }
 
@@ -70,12 +91,18 @@ const deg = (d: number) => (d * Math.PI) / 180;
 /** Build a single-tile track 'A' with two positioned keyframes. */
 function twoKeyframeTrackA(lonA: number, lonB: number) {
   const tile = makePointTile({
-    positions: [[lonA, 0], [lonB, 0]],
+    positions: [
+      [lonA, 0],
+      [lonB, 0],
+    ],
     startTimes: [0, 1000],
     endTimes: [0, 1000],
     timeOffset: 0,
   });
-  tile.layers[0].features.categoricalProps['track_id'] = categorical(['A', 'A']);
+  tile.layers[0].features.categoricalProps['track_id'] = categorical([
+    'A',
+    'A',
+  ]);
   return tile;
 }
 
@@ -165,7 +192,10 @@ describe('track-kernel lerpAngle (shortest-arc wraparound)', () => {
 describe('track-kernel sampleTrack heading (applies shortest-arc across keyframes)', () => {
   it('interpolates heading the short way across the 360/0 seam', () => {
     const tile = twoKeyframeTrackA(0, 1);
-    tile.layers[0].features.numericProps['heading'] = new Float32Array([deg(350), deg(10)]);
+    tile.layers[0].features.numericProps['heading'] = new Float32Array([
+      deg(350),
+      deg(10),
+    ]);
     const track = buildTrackIndex([tile], CFG).tracks.get('A')!;
     const h = sampleTrack(track, 500, SAMPLE)!.heading;
     // Short arc → ~360° (2π); the long-way naive result would be 180° (π).
@@ -175,10 +205,16 @@ describe('track-kernel sampleTrack heading (applies shortest-arc across keyframe
 });
 
 describe('track-kernel fade-in / fade-out alpha', () => {
-  const FADE: TrackSampleConfig = { ...SAMPLE, fadeInDuration: 200, fadeOutDuration: 200 };
+  const FADE: TrackSampleConfig = {
+    ...SAMPLE,
+    fadeInDuration: 200,
+    fadeOutDuration: 200,
+  };
 
   it('ramps alpha 0→1 across the fade-in window measured from the first keyframe', () => {
-    const track = buildTrackIndex([twoKeyframeTrackA(0, 1)], CFG).tracks.get('A')!;
+    const track = buildTrackIndex([twoKeyframeTrackA(0, 1)], CFG).tracks.get(
+      'A',
+    )!;
     expect(sampleTrack(track, 0, FADE)!.alpha).toBeCloseTo(0, 9); // age 0 → 0/200
     expect(sampleTrack(track, 50, FADE)!.alpha).toBeCloseTo(0.25, 9); // 50/200
     expect(sampleTrack(track, 100, FADE)!.alpha).toBeCloseTo(0.5, 9); // 100/200
@@ -186,19 +222,25 @@ describe('track-kernel fade-in / fade-out alpha', () => {
   });
 
   it('holds alpha=1 through the steady middle', () => {
-    const track = buildTrackIndex([twoKeyframeTrackA(0, 1)], CFG).tracks.get('A')!;
+    const track = buildTrackIndex([twoKeyframeTrackA(0, 1)], CFG).tracks.get(
+      'A',
+    )!;
     expect(sampleTrack(track, 500, FADE)!.alpha).toBe(1);
   });
 
   it('ramps alpha 1→0 across the fade-out window measured to the last keyframe', () => {
-    const track = buildTrackIndex([twoKeyframeTrackA(0, 1)], CFG).tracks.get('A')!;
+    const track = buildTrackIndex([twoKeyframeTrackA(0, 1)], CFG).tracks.get(
+      'A',
+    )!;
     expect(sampleTrack(track, 800, FADE)!.alpha).toBe(1); // remaining 200, not < 200
     expect(sampleTrack(track, 900, FADE)!.alpha).toBeCloseTo(0.5, 9); // remaining 100/200
     expect(sampleTrack(track, 1000, FADE)!.alpha).toBeCloseTo(0, 9); // remaining 0
   });
 
   it('leaves alpha at 1 when both fade durations are 0', () => {
-    const track = buildTrackIndex([twoKeyframeTrackA(0, 1)], CFG).tracks.get('A')!;
+    const track = buildTrackIndex([twoKeyframeTrackA(0, 1)], CFG).tracks.get(
+      'A',
+    )!;
     expect(sampleTrack(track, 0, SAMPLE)!.alpha).toBe(1);
     expect(sampleTrack(track, 500, SAMPLE)!.alpha).toBe(1);
     expect(sampleTrack(track, 1000, SAMPLE)!.alpha).toBe(1);
@@ -207,7 +249,9 @@ describe('track-kernel fade-in / fade-out alpha', () => {
   it('folds fade-in and fade-out ramps toward the geometric pose independently', () => {
     // Sanity: the faded sample still carries the interpolated position; only
     // alpha changes with the ramp.
-    const track = buildTrackIndex([twoKeyframeTrackA(0, 10)], CFG).tracks.get('A')!;
+    const track = buildTrackIndex([twoKeyframeTrackA(0, 10)], CFG).tracks.get(
+      'A',
+    )!;
     const s = sampleTrack(track, 100, FADE)!;
     expect(s.alpha).toBeCloseTo(0.5, 9);
     expect(s.lon).toBeCloseTo(1, 9); // 100/1000 of the way from lon 0 → 10
@@ -218,12 +262,22 @@ describe('track-kernel multi-track pooling', () => {
   it('groups interleaved snapshots into one index entry per track_id', () => {
     // Tracks A and B interleaved across the same two timestamps.
     const tile = makePointTile({
-      positions: [[0, 0], [100, 0], [10, 0], [110, 0]],
+      positions: [
+        [0, 0],
+        [100, 0],
+        [10, 0],
+        [110, 0],
+      ],
       startTimes: [0, 0, 1000, 1000],
       endTimes: [0, 0, 1000, 1000],
       timeOffset: 0,
     });
-    tile.layers[0].features.categoricalProps['track_id'] = categorical(['A', 'B', 'A', 'B']);
+    tile.layers[0].features.categoricalProps['track_id'] = categorical([
+      'A',
+      'B',
+      'A',
+      'B',
+    ]);
     const result = buildTrackIndex([tile], CFG);
 
     expect(result.totalSnapshots).toBe(4);
@@ -245,7 +299,10 @@ describe('track-kernel multi-track pooling', () => {
   it('flags a missing track-id column and synthesises one held instance per snapshot', () => {
     // No track_id column → each snapshot becomes its own singleton track.
     const tile = makePointTile({
-      positions: [[0, 0], [5, 5]],
+      positions: [
+        [0, 0],
+        [5, 5],
+      ],
       startTimes: [0, 1000],
       endTimes: [0, 1000],
       timeOffset: 0,
@@ -266,19 +323,31 @@ describe('track-kernel cross-tile epoch rebasing', () => {
     // tile first; rebasing (start + timeOffset) plus the sort must interleave
     // them by absolute time, not tile order.
     const later = makePointTile({
-      positions: [[0, 0], [1, 0]],
+      positions: [
+        [0, 0],
+        [1, 0],
+      ],
       startTimes: [0, 100],
       endTimes: [0, 100],
       timeOffset: 5000, // → absolute 5000, 5100
     });
-    later.layers[0].features.categoricalProps['track_id'] = categorical(['A', 'A']);
+    later.layers[0].features.categoricalProps['track_id'] = categorical([
+      'A',
+      'A',
+    ]);
     const earlier = makePointTile({
-      positions: [[10, 0], [11, 0]],
+      positions: [
+        [10, 0],
+        [11, 0],
+      ],
       startTimes: [0, 100],
       endTimes: [0, 100],
       timeOffset: 1000, // → absolute 1000, 1100
     });
-    earlier.layers[0].features.categoricalProps['track_id'] = categorical(['A', 'A']);
+    earlier.layers[0].features.categoricalProps['track_id'] = categorical([
+      'A',
+      'A',
+    ]);
 
     const track = buildTrackIndex([later, earlier], CFG).tracks.get('A')!;
     // One pooled timeline, sorted ascending by ABSOLUTE time (not tile order).
@@ -303,27 +372,40 @@ describe('track-kernel resolveColor', () => {
   const fallback: Color = [160, 160, 160, 255];
 
   it('returns the mapped RGBA for a known category', () => {
-    expect(resolveColor('car', { car: [255, 0, 0, 200] }, fallback)).toEqual([255, 0, 0, 200]);
+    expect(resolveColor('car', { car: [255, 0, 0, 200] }, fallback)).toEqual([
+      255, 0, 0, 200,
+    ]);
   });
 
   it('falls back for an unmapped category', () => {
-    expect(resolveColor('bus', { car: [255, 0, 0, 200] }, fallback)).toEqual([160, 160, 160, 255]);
+    expect(resolveColor('bus', { car: [255, 0, 0, 200] }, fallback)).toEqual([
+      160, 160, 160, 255,
+    ]);
   });
 
   it('falls back for an empty category or a null/undefined mapping', () => {
-    expect(resolveColor('', { car: [255, 0, 0, 200] }, fallback)).toEqual([160, 160, 160, 255]);
+    expect(resolveColor('', { car: [255, 0, 0, 200] }, fallback)).toEqual([
+      160, 160, 160, 255,
+    ]);
     expect(resolveColor('car', null, fallback)).toEqual([160, 160, 160, 255]);
-    expect(resolveColor('car', undefined, fallback)).toEqual([160, 160, 160, 255]);
+    expect(resolveColor('car', undefined, fallback)).toEqual([
+      160, 160, 160, 255,
+    ]);
   });
 
   it('defaults alpha to 255 when the resolved color omits it (RGB triple)', () => {
-    expect(resolveColor('car', { car: [10, 20, 30] }, fallback)).toEqual([10, 20, 30, 255]);
+    expect(resolveColor('car', { car: [10, 20, 30] }, fallback)).toEqual([
+      10, 20, 30, 255,
+    ]);
     expect(resolveColor('x', {}, [7, 8, 9])).toEqual([7, 8, 9, 255]);
   });
 
   it('bakes a track color from its category through colorMapping (buildTrackIndex wiring)', () => {
     const tile = twoKeyframeTrackA(0, 1);
-    tile.layers[0].features.categoricalProps['category'] = categorical(['car', 'car']);
+    tile.layers[0].features.categoricalProps['category'] = categorical([
+      'car',
+      'car',
+    ]);
     const cfg: TrackFieldConfig = {
       ...CFG,
       colorProperty: 'category',

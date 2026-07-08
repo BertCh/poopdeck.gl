@@ -13,7 +13,11 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createSttMcpServer } from '../src/server';
 import type { SttMcpConfig } from '../src/config';
-import { makeManifestJson, writeFixtureDataRoot, cleanupDataRoot } from './fixtures';
+import {
+  makeManifestJson,
+  writeFixtureDataRoot,
+  cleanupDataRoot,
+} from './fixtures';
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -26,7 +30,10 @@ async function fixtureRoot(datasets: Record<string, unknown>): Promise<string> {
   return root;
 }
 
-function baseConfig(dataRoot: string, overrides: Partial<SttMcpConfig> = {}): SttMcpConfig {
+function baseConfig(
+  dataRoot: string,
+  overrides: Partial<SttMcpConfig> = {},
+): SttMcpConfig {
   return {
     dataRoot,
     // A non-existent docs root by default: the doc tools/resource degrade
@@ -41,9 +48,12 @@ function baseConfig(dataRoot: string, overrides: Partial<SttMcpConfig> = {}): St
   };
 }
 
-async function connectedClient(config: SttMcpConfig): Promise<{ client: Client; close: () => Promise<void> }> {
+async function connectedClient(
+  config: SttMcpConfig,
+): Promise<{ client: Client; close: () => Promise<void> }> {
   const server = await createSttMcpServer(config);
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const [clientTransport, serverTransport] =
+    InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport);
   const client = new Client({ name: 'test-client', version: '0.0.0' });
   await client.connect(clientTransport);
@@ -96,9 +106,14 @@ describe('createSttMcpServer — discovery tools', () => {
     try {
       const { resources } = await client.listResources();
       const uris = resources.map((r) => r.uri).sort();
-      expect(uris).toEqual(['stt://datasets/earthquakes', 'stt://datasets/nyc-taxi']);
+      expect(uris).toEqual([
+        'stt://datasets/earthquakes',
+        'stt://datasets/nyc-taxi',
+      ]);
 
-      const read = await client.readResource({ uri: 'stt://datasets/earthquakes' });
+      const read = await client.readResource({
+        uri: 'stt://datasets/earthquakes',
+      });
       const doc = JSON.parse((read.contents[0] as any).text);
       expect(doc.name).toBe('earthquakes');
       expect(read.contents[0].mimeType).toBe('application/json');
@@ -112,13 +127,23 @@ describe('createSttMcpServer — discovery tools', () => {
     const { client, close } = await connectedClient(baseConfig(root));
     try {
       const rec = JSON.parse(
-        firstText(await client.callTool({ name: 'recommend_build', arguments: { input: '/x.parquet' } })),
+        firstText(
+          await client.callTool({
+            name: 'recommend_build',
+            arguments: { input: '/x.parquet' },
+          }),
+        ),
       );
       expect(rec.cliEnabled).toBe(false);
       expect(rec.message).toMatch(/--allow-cli/);
 
       const diff = JSON.parse(
-        firstText(await client.callTool({ name: 'diff_datasets', arguments: { before: 'a', after: 'b' } })),
+        firstText(
+          await client.callTool({
+            name: 'diff_datasets',
+            arguments: { before: 'a', after: 'b' },
+          }),
+        ),
       );
       expect(diff.cliEnabled).toBe(false);
       expect(diff.message).toMatch(/--allow-cli/);
@@ -129,7 +154,9 @@ describe('createSttMcpServer — discovery tools', () => {
 
   it('additionally registers build_dataset + validate_dataset when allowCli is on', async () => {
     const root = await fixtureRoot({ earthquakes: makeManifestJson() });
-    const { client, close } = await connectedClient(baseConfig(root, { allowCli: true }));
+    const { client, close } = await connectedClient(
+      baseConfig(root, { allowCli: true }),
+    );
     try {
       const { tools } = await client.listTools();
       const names = tools.map((t) => t.name);
@@ -145,16 +172,26 @@ describe('createSttMcpServer — discovery tools', () => {
     const root = await fixtureRoot({
       earthquakes: makeManifestJson({ metadata: { name: 'earthquakes' } }),
       'nyc-od-quadbin': makeManifestJson({
-        metadata: { summary_tier: { scheme: 'quadbin', min_zoom: 8, max_zoom: 15 } },
+        metadata: {
+          summary_tier: { scheme: 'quadbin', min_zoom: 8, max_zoom: 15 },
+        },
       }),
     });
     const { client, close } = await connectedClient(baseConfig(root));
     try {
-      const result = await client.callTool({ name: 'list_datasets', arguments: {} });
+      const result = await client.callTool({
+        name: 'list_datasets',
+        arguments: {},
+      });
       const parsed = JSON.parse(firstText(result));
       expect(parsed.count).toBe(2);
-      expect(parsed.datasets.map((d: any) => d.name).sort()).toEqual(['earthquakes', 'nyc-od-quadbin']);
-      const quadbin = parsed.datasets.find((d: any) => d.name === 'nyc-od-quadbin');
+      expect(parsed.datasets.map((d: any) => d.name).sort()).toEqual([
+        'earthquakes',
+        'nyc-od-quadbin',
+      ]);
+      const quadbin = parsed.datasets.find(
+        (d: any) => d.name === 'nyc-od-quadbin',
+      );
       expect(quadbin.hasSummaryTier).toBe(true);
       expect(quadbin.summaryScheme).toBe('quadbin');
     } finally {
@@ -169,7 +206,10 @@ describe('createSttMcpServer — discovery tools', () => {
     });
     const { client, close } = await connectedClient(baseConfig(root));
     try {
-      const result = await client.callTool({ name: 'list_datasets', arguments: { search: 'taxi' } });
+      const result = await client.callTool({
+        name: 'list_datasets',
+        arguments: { search: 'taxi' },
+      });
       const parsed = JSON.parse(firstText(result));
       expect(parsed.datasets.map((d: any) => d.name)).toEqual(['nyc-taxi']);
     } finally {
@@ -178,10 +218,15 @@ describe('createSttMcpServer — discovery tools', () => {
   });
 
   it('describe_dataset returns the full manifest for a known dataset', async () => {
-    const root = await fixtureRoot({ earthquakes: makeManifestJson({ metadata: { name: 'earthquakes' } }) });
+    const root = await fixtureRoot({
+      earthquakes: makeManifestJson({ metadata: { name: 'earthquakes' } }),
+    });
     const { client, close } = await connectedClient(baseConfig(root));
     try {
-      const result = await client.callTool({ name: 'describe_dataset', arguments: { name: 'earthquakes' } });
+      const result = await client.callTool({
+        name: 'describe_dataset',
+        arguments: { name: 'earthquakes' },
+      });
       const parsed = JSON.parse(firstText(result));
       expect(parsed.name).toBe('earthquakes');
       expect(parsed.packCount).toBe(2);
@@ -195,7 +240,10 @@ describe('createSttMcpServer — discovery tools', () => {
     const root = await fixtureRoot({ earthquakes: makeManifestJson() });
     const { client, close } = await connectedClient(baseConfig(root));
     try {
-      const result = await client.callTool({ name: 'describe_dataset', arguments: { name: 'nope' } });
+      const result = await client.callTool({
+        name: 'describe_dataset',
+        arguments: { name: 'nope' },
+      });
       expect(result.isError).toBe(true);
       expect(firstText(result)).toMatch(/nope/);
     } finally {
@@ -207,7 +255,10 @@ describe('createSttMcpServer — discovery tools', () => {
     const root = await fixtureRoot({ earthquakes: makeManifestJson() });
     const { client, close } = await connectedClient(baseConfig(root));
     try {
-      const result = await client.callTool({ name: 'dataset_report', arguments: { name: 'earthquakes' } });
+      const result = await client.callTool({
+        name: 'dataset_report',
+        arguments: { name: 'earthquakes' },
+      });
       const parsed = JSON.parse(firstText(result));
       expect(parsed.cliEnabled).toBe(false);
       expect(parsed.manifestSummary.name).toBe('earthquakes');
@@ -221,7 +272,10 @@ describe('createSttMcpServer — discovery tools', () => {
     const root = await fixtureRoot({ earthquakes: makeManifestJson() });
     const { client, close } = await connectedClient(baseConfig(root));
     try {
-      const result = await client.callTool({ name: 'dataset_report', arguments: { name: 'nope' } });
+      const result = await client.callTool({
+        name: 'dataset_report',
+        arguments: { name: 'nope' },
+      });
       expect(result.isError).toBe(true);
       const text = firstText(result);
       expect(text).toMatch(/nope/);
@@ -235,21 +289,29 @@ describe('createSttMcpServer — discovery tools', () => {
 
 describe('createSttMcpServer — interactive tools', () => {
   it('view_map composes a @deck.gl/json spec pointed at the manifest, with a text + resource block', async () => {
-    const root = await fixtureRoot({ earthquakes: makeManifestJson({ metadata: { name: 'earthquakes' } }) });
+    const root = await fixtureRoot({
+      earthquakes: makeManifestJson({ metadata: { name: 'earthquakes' } }),
+    });
     const { client, close } = await connectedClient(baseConfig(root));
     try {
       const result = await client.callTool({
         name: 'view_map',
         arguments: { datasets: 'earthquakes', time: 500 },
       });
-      const textBlock = (result.content as any[]).find((c) => c.type === 'text');
+      const textBlock = (result.content as any[]).find(
+        (c) => c.type === 'text',
+      );
       const spec = JSON.parse(textBlock.text);
       expect(spec.layers).toHaveLength(1);
       expect(spec.layers[0]['@@type']).toBe('AnimatedPointLayer');
-      expect(spec.layers[0].data).toBe(path.join(root, 'earthquakes', 'manifest.json'));
+      expect(spec.layers[0].data).toBe(
+        path.join(root, 'earthquakes', 'manifest.json'),
+      );
       expect(spec.layers[0].currentTime).toBe(500);
 
-      const resourceBlock = (result.content as any[]).find((c) => c.type === 'resource');
+      const resourceBlock = (result.content as any[]).find(
+        (c) => c.type === 'resource',
+      );
       expect(resourceBlock?.resource?.mimeType).toBe('text/html');
       expect(resourceBlock?.resource?.text).toContain('<!doctype html>');
     } finally {
@@ -268,30 +330,45 @@ describe('createSttMcpServer — interactive tools', () => {
         name: 'view_map',
         arguments: { datasets: ['a', 'b'], layer: 'AnimatedArcLayer' },
       });
-      const spec = JSON.parse((result.content as any[]).find((c) => c.type === 'text').text);
+      const spec = JSON.parse(
+        (result.content as any[]).find((c) => c.type === 'text').text,
+      );
       expect(spec.layers).toHaveLength(2);
-      expect(spec.layers.every((l: any) => l['@@type'] === 'AnimatedArcLayer')).toBe(true);
+      expect(
+        spec.layers.every((l: any) => l['@@type'] === 'AnimatedArcLayer'),
+      ).toBe(true);
     } finally {
       await close();
     }
   });
 
   it('view_map respects --public-base-url for the manifest URL', async () => {
-    const root = await fixtureRoot({ earthquakes: makeManifestJson({ metadata: { name: 'earthquakes' } }) });
+    const root = await fixtureRoot({
+      earthquakes: makeManifestJson({ metadata: { name: 'earthquakes' } }),
+    });
     const { client, close } = await connectedClient(
       baseConfig(root, { publicBaseUrl: 'https://tiles.example.com' }),
     );
     try {
-      const result = await client.callTool({ name: 'view_map', arguments: { datasets: 'earthquakes' } });
-      const spec = JSON.parse((result.content as any[]).find((c) => c.type === 'text').text);
-      expect(spec.layers[0].data).toBe('https://tiles.example.com/earthquakes/manifest.json');
+      const result = await client.callTool({
+        name: 'view_map',
+        arguments: { datasets: 'earthquakes' },
+      });
+      const spec = JSON.parse(
+        (result.content as any[]).find((c) => c.type === 'text').text,
+      );
+      expect(spec.layers[0].data).toBe(
+        'https://tiles.example.com/earthquakes/manifest.json',
+      );
     } finally {
       await close();
     }
   });
 
   it('view_map rejects an unknown top-level key (strict schema) instead of silently dropping it', async () => {
-    const root = await fixtureRoot({ earthquakes: makeManifestJson({ metadata: { name: 'earthquakes' } }) });
+    const root = await fixtureRoot({
+      earthquakes: makeManifestJson({ metadata: { name: 'earthquakes' } }),
+    });
     const { client, close } = await connectedClient(baseConfig(root));
     try {
       const result = await client.callTool({
@@ -310,13 +387,26 @@ describe('createSttMcpServer — interactive tools', () => {
     const root = await fixtureRoot({ earthquakes: makeManifestJson() });
     const { client, close } = await connectedClient(baseConfig(root));
     try {
-      const setTime = JSON.parse(firstText(await client.callTool({ name: 'set_time', arguments: { time: 42 } })));
+      const setTime = JSON.parse(
+        firstText(
+          await client.callTool({ name: 'set_time', arguments: { time: 42 } }),
+        ),
+      );
       expect(setTime).toEqual({ intent: 'set_time', time: 42 });
 
       const playPause = JSON.parse(
-        firstText(await client.callTool({ name: 'play_pause', arguments: { playing: true, speed: 2 } })),
+        firstText(
+          await client.callTool({
+            name: 'play_pause',
+            arguments: { playing: true, speed: 2 },
+          }),
+        ),
       );
-      expect(playPause).toEqual({ intent: 'play_pause', playing: true, speed: 2 });
+      expect(playPause).toEqual({
+        intent: 'play_pause',
+        playing: true,
+        speed: 2,
+      });
     } finally {
       await close();
     }
@@ -325,7 +415,11 @@ describe('createSttMcpServer — interactive tools', () => {
 
 describe('createSttMcpServer — execution tools (--allow-cli)', () => {
   /** A tiny fake `stt-optimize`/`stt-validate` executable so these tests never depend on real cargo binaries. */
-  async function writeFakeCli(dir: string, name: string, script: string): Promise<string> {
+  async function writeFakeCli(
+    dir: string,
+    name: string,
+    script: string,
+  ): Promise<string> {
     const binPath = path.join(dir, name);
     await writeFile(binPath, `#!/usr/bin/env node\n${script}\n`, 'utf8');
     await chmod(binPath, 0o755);
@@ -333,16 +427,23 @@ describe('createSttMcpServer — execution tools (--allow-cli)', () => {
   }
 
   it('dataset_report shells out to stt-optimize inspect + doctor and returns parsed JSON', async () => {
-    const root = await fixtureRoot({ earthquakes: makeManifestJson({ metadata: { name: 'earthquakes' } }) });
+    const root = await fixtureRoot({
+      earthquakes: makeManifestJson({ metadata: { name: 'earthquakes' } }),
+    });
     const sttOptimizeBin = await writeFakeCli(
       root,
       'fake-stt-optimize',
       `const sub = process.argv[2];
        console.log(JSON.stringify({ subcommand: sub, ok: true }));`,
     );
-    const { client, close } = await connectedClient(baseConfig(root, { allowCli: true, sttOptimizeBin }));
+    const { client, close } = await connectedClient(
+      baseConfig(root, { allowCli: true, sttOptimizeBin }),
+    );
     try {
-      const result = await client.callTool({ name: 'dataset_report', arguments: { name: 'earthquakes' } });
+      const result = await client.callTool({
+        name: 'dataset_report',
+        arguments: { name: 'earthquakes' },
+      });
       const parsed = JSON.parse(firstText(result));
       expect(parsed.cliEnabled).toBe(true);
       expect(parsed.inspect).toEqual({ subcommand: 'inspect', ok: true });
@@ -353,15 +454,22 @@ describe('createSttMcpServer — execution tools (--allow-cli)', () => {
   });
 
   it('validate_dataset shells out to stt-validate and returns the parsed report', async () => {
-    const root = await fixtureRoot({ earthquakes: makeManifestJson({ metadata: { name: 'earthquakes' } }) });
+    const root = await fixtureRoot({
+      earthquakes: makeManifestJson({ metadata: { name: 'earthquakes' } }),
+    });
     const sttValidateBin = await writeFakeCli(
       root,
       'fake-stt-validate',
       `console.log(JSON.stringify({ errors: [], warnings: [] }));`,
     );
-    const { client, close } = await connectedClient(baseConfig(root, { allowCli: true, sttValidateBin }));
+    const { client, close } = await connectedClient(
+      baseConfig(root, { allowCli: true, sttValidateBin }),
+    );
     try {
-      const result = await client.callTool({ name: 'validate_dataset', arguments: { name: 'earthquakes' } });
+      const result = await client.callTool({
+        name: 'validate_dataset',
+        arguments: { name: 'earthquakes' },
+      });
       const parsed = JSON.parse(firstText(result));
       expect(parsed.exitCode).toBe(0);
       expect(parsed.report).toEqual({ errors: [], warnings: [] });
@@ -385,7 +493,9 @@ describe('createSttMcpServer — execution tools (--allow-cli)', () => {
        )}));
        console.log('build ok');`,
     );
-    const { client, close } = await connectedClient(baseConfig(root, { allowCli: true, sttBuildBin }));
+    const { client, close } = await connectedClient(
+      baseConfig(root, { allowCli: true, sttBuildBin }),
+    );
     try {
       const result = await client.callTool({
         name: 'build_dataset',
@@ -408,7 +518,9 @@ describe('createSttMcpServer — execution tools (--allow-cli)', () => {
       `const input = process.argv[process.argv.indexOf('--input') + 1];
        console.log(JSON.stringify({ input, time_field: 'timestamp', min_zoom: 2, max_zoom: 9, temporal_bucket_ms: 3600000, confidence: 88, explanations: ['dense localized cluster'] }));`,
     );
-    const { client, close } = await connectedClient(baseConfig(root, { allowCli: true, sttOptimizeBin }));
+    const { client, close } = await connectedClient(
+      baseConfig(root, { allowCli: true, sttOptimizeBin }),
+    );
     try {
       const result = await client.callTool({
         name: 'recommend_build',
@@ -436,9 +548,14 @@ describe('createSttMcpServer — execution tools (--allow-cli)', () => {
       'fake-stt-optimize-diff',
       `console.log(JSON.stringify({ before_name: 'a', after_name: 'b', compressed_bytes: { before: 100, after: 80, delta: -20, pct: -20 } }));`,
     );
-    const { client, close } = await connectedClient(baseConfig(root, { allowCli: true, sttOptimizeBin }));
+    const { client, close } = await connectedClient(
+      baseConfig(root, { allowCli: true, sttOptimizeBin }),
+    );
     try {
-      const result = await client.callTool({ name: 'diff_datasets', arguments: { before: 'a', after: 'b' } });
+      const result = await client.callTool({
+        name: 'diff_datasets',
+        arguments: { before: 'a', after: 'b' },
+      });
       const parsed = JSON.parse(firstText(result));
       expect(parsed.exitCode).toBe(0);
       expect(parsed.report.compressed_bytes.delta).toBe(-20);
@@ -458,9 +575,14 @@ describe('createSttMcpServer — execution tools (--allow-cli)', () => {
       'fake-stt-optimize-diff-argv',
       `console.log(JSON.stringify({ before_name: 'archive-meta-a', after_name: 'archive-meta-b', argv: process.argv.slice(2) }));`,
     );
-    const { client, close } = await connectedClient(baseConfig(root, { allowCli: true, sttOptimizeBin }));
+    const { client, close } = await connectedClient(
+      baseConfig(root, { allowCli: true, sttOptimizeBin }),
+    );
     try {
-      const result = await client.callTool({ name: 'diff_datasets', arguments: { before: 'a', after: 'b' } });
+      const result = await client.callTool({
+        name: 'diff_datasets',
+        arguments: { before: 'a', after: 'b' },
+      });
       const parsed = JSON.parse(firstText(result));
       // Caller's own names/dirs, distinct from the Rust archive metadata names.
       expect(parsed.requestedBefore.name).toBe('a');
@@ -489,9 +611,14 @@ describe('createSttMcpServer — execution tools (--allow-cli)', () => {
       'fake-stt-optimize-diff-exact',
       `console.log(JSON.stringify({ argv: process.argv.slice(2) }));`,
     );
-    const { client, close } = await connectedClient(baseConfig(root, { allowCli: true, sttOptimizeBin }));
+    const { client, close } = await connectedClient(
+      baseConfig(root, { allowCli: true, sttOptimizeBin }),
+    );
     try {
-      const result = await client.callTool({ name: 'diff_datasets', arguments: { before: 'a', after: 'b', exact: true } });
+      const result = await client.callTool({
+        name: 'diff_datasets',
+        arguments: { before: 'a', after: 'b', exact: true },
+      });
       const parsed = JSON.parse(firstText(result));
       expect(parsed.report.argv).not.toContain('--sample');
       expect(parsed.sampledDefault).toBeUndefined();
@@ -501,16 +628,23 @@ describe('createSttMcpServer — execution tools (--allow-cli)', () => {
   });
 
   it('dataset_report defaults the decode sample to 256 and marks sampledDefault', async () => {
-    const root = await fixtureRoot({ earthquakes: makeManifestJson({ metadata: { name: 'earthquakes' } }) });
+    const root = await fixtureRoot({
+      earthquakes: makeManifestJson({ metadata: { name: 'earthquakes' } }),
+    });
     const sttOptimizeBin = await writeFakeCli(
       root,
       'fake-stt-optimize-sample',
       `const argv = process.argv.slice(2);
        console.log(JSON.stringify({ subcommand: argv[0], argv }));`,
     );
-    const { client, close } = await connectedClient(baseConfig(root, { allowCli: true, sttOptimizeBin }));
+    const { client, close } = await connectedClient(
+      baseConfig(root, { allowCli: true, sttOptimizeBin }),
+    );
     try {
-      const result = await client.callTool({ name: 'dataset_report', arguments: { name: 'earthquakes' } });
+      const result = await client.callTool({
+        name: 'dataset_report',
+        arguments: { name: 'earthquakes' },
+      });
       const parsed = JSON.parse(firstText(result));
       expect(parsed.sampledDefault).toBe(256);
       expect(parsed.inspect.argv).toContain('--sample');
@@ -521,15 +655,22 @@ describe('createSttMcpServer — execution tools (--allow-cli)', () => {
   });
 
   it('validate_dataset returns isError with the full payload when the CLI exits nonzero', async () => {
-    const root = await fixtureRoot({ earthquakes: makeManifestJson({ metadata: { name: 'earthquakes' } }) });
+    const root = await fixtureRoot({
+      earthquakes: makeManifestJson({ metadata: { name: 'earthquakes' } }),
+    });
     const sttValidateBin = await writeFakeCli(
       root,
       'fake-stt-validate-fail',
       `process.stderr.write('validation blew up'); process.exit(3);`,
     );
-    const { client, close } = await connectedClient(baseConfig(root, { allowCli: true, sttValidateBin }));
+    const { client, close } = await connectedClient(
+      baseConfig(root, { allowCli: true, sttValidateBin }),
+    );
     try {
-      const result = await client.callTool({ name: 'validate_dataset', arguments: { name: 'earthquakes' } });
+      const result = await client.callTool({
+        name: 'validate_dataset',
+        arguments: { name: 'earthquakes' },
+      });
       expect(result.isError).toBe(true);
       const parsed = JSON.parse(firstText(result));
       // Still carries the full structured payload, not just an error string.
@@ -541,8 +682,12 @@ describe('createSttMcpServer — execution tools (--allow-cli)', () => {
   });
 
   it('validate_dataset rejects name and path supplied together (mutually exclusive)', async () => {
-    const root = await fixtureRoot({ earthquakes: makeManifestJson({ metadata: { name: 'earthquakes' } }) });
-    const { client, close } = await connectedClient(baseConfig(root, { allowCli: true }));
+    const root = await fixtureRoot({
+      earthquakes: makeManifestJson({ metadata: { name: 'earthquakes' } }),
+    });
+    const { client, close } = await connectedClient(
+      baseConfig(root, { allowCli: true }),
+    );
     try {
       const result = await client.callTool({
         name: 'validate_dataset',
@@ -563,11 +708,17 @@ describe('createSttMcpServer — execution tools (--allow-cli)', () => {
       `const input = process.argv[process.argv.indexOf('--input') + 1];
        console.log(JSON.stringify({ input, time_field: 'timestamp', min_zoom: 2, max_zoom: 9, temporal_bucket_ms: 3600000, confidence: 88, explanations: [] }));`,
     );
-    const { client, close } = await connectedClient(baseConfig(root, { allowCli: true, sttOptimizeBin }));
+    const { client, close } = await connectedClient(
+      baseConfig(root, { allowCli: true, sttOptimizeBin }),
+    );
     try {
       const result = await client.callTool({
         name: 'recommend_build',
-        arguments: { input: '/data/quakes.parquet', output: 'quakes-out', timeField: 'ts' },
+        arguments: {
+          input: '/data/quakes.parquet',
+          output: 'quakes-out',
+          timeField: 'ts',
+        },
       });
       const parsed = JSON.parse(firstText(result));
       expect(parsed.buildDatasetArgs).toEqual({
@@ -599,15 +750,27 @@ describe('createSttMcpServer — execution tools (--allow-cli)', () => {
        )}));
        console.log(JSON.stringify({ argv: args }));`,
     );
-    const { client, close } = await connectedClient(baseConfig(root, { allowCli: true, sttGenerateBin }));
+    const { client, close } = await connectedClient(
+      baseConfig(root, { allowCli: true, sttGenerateBin }),
+    );
     try {
       const result = await client.callTool({
         name: 'generate_dataset',
-        arguments: { dataset: 'earthquakes', output: outputPath, extraArgs: ['--limit', '500'] },
+        arguments: {
+          dataset: 'earthquakes',
+          output: outputPath,
+          extraArgs: ['--limit', '500'],
+        },
       });
       const parsed = JSON.parse(firstText(result));
       expect(parsed.exitCode).toBe(0);
-      expect(parsed.args).toEqual(['earthquakes', '--output', outputPath, '--limit', '500']);
+      expect(parsed.args).toEqual([
+        'earthquakes',
+        '--output',
+        outputPath,
+        '--limit',
+        '500',
+      ]);
       // Single-dataset run reads the resulting manifest back.
       expect(parsed.manifestSummary.formatVersion).toBe(2);
     } finally {
@@ -622,14 +785,20 @@ describe('createSttMcpServer — execution tools (--allow-cli)', () => {
       'fake-stt-generate-all',
       `console.log(JSON.stringify({ argv: process.argv.slice(2) }));`,
     );
-    const { client, close } = await connectedClient(baseConfig(root, { allowCli: true, sttGenerateBin }));
+    const { client, close } = await connectedClient(
+      baseConfig(root, { allowCli: true, sttGenerateBin }),
+    );
     try {
       const result = await client.callTool({
         name: 'generate_dataset',
         arguments: { dataset: 'all', output: '/tmp/showcase-data' },
       });
       const parsed = JSON.parse(firstText(result));
-      expect(parsed.args).toEqual(['all', '--output-dir', '/tmp/showcase-data']);
+      expect(parsed.args).toEqual([
+        'all',
+        '--output-dir',
+        '/tmp/showcase-data',
+      ]);
       // `all` writes many datasets, so no single manifest is read back.
       expect(parsed.manifestSummary).toBeUndefined();
     } finally {

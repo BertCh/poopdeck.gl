@@ -124,7 +124,11 @@ export class SttScene {
     const streaming = opts.streaming ?? this.defaultStreaming;
     if (streaming) {
       const streamOpts = streaming === true ? {} : streaming;
-      const source = new StreamingTileSource({ url, fetch: this.fetchFn, ...streamOpts });
+      const source = new StreamingTileSource({
+        url,
+        fetch: this.fetchFn,
+        ...streamOpts,
+      });
       // Replace-all rebuild on every real residency change (initial select +
       // async tile arrivals via the source's internal onTileLoad re-publish).
       source.setOnTilesChanged((tiles) => {
@@ -133,7 +137,10 @@ export class SttScene {
           layer.setTiles(tiles, this.layerContext());
         } catch (err) {
           // eslint-disable-next-line no-console
-          console.error(`[stt-three] streaming layer "${layer.id}" setTiles failed`, err);
+          console.error(
+            `[stt-three] streaming layer "${layer.id}" setTiles failed`,
+            err,
+          );
         }
       });
       this.sources.push({ kind: 'streaming', source, layer });
@@ -192,7 +199,8 @@ export class SttScene {
    */
   setAnimationState(isAnimating: boolean, speed = 0): void {
     for (const s of this.sources) {
-      if (s.kind === 'streaming') s.source.setAnimationState(isAnimating, speed);
+      if (s.kind === 'streaming')
+        s.source.setAnimationState(isAnimating, speed);
     }
   }
 
@@ -208,7 +216,8 @@ export class SttScene {
    */
   getStreamingSources(): readonly StreamingTileSource[] {
     const out: StreamingTileSource[] = [];
-    for (const s of this.sources) if (s.kind === 'streaming') out.push(s.source);
+    for (const s of this.sources)
+      if (s.kind === 'streaming') out.push(s.source);
     return out;
   }
 

@@ -8,7 +8,7 @@
  * anchors (`autoChoice`, per-ordering adjacency breaks). Regenerate with
  * `examples/showcase/scripts/build-density-profiles.sh`.
  */
-import { hilbert2, type Cell, type Walk } from "./spaceCurve";
+import { hilbert2, type Cell, type Walk } from './spaceCurve';
 
 /** `[sx, sy, tb, count, bytes]` — one occupied grid cell. */
 export type CubeTuple = [number, number, number, number, number];
@@ -40,10 +40,10 @@ export interface ProfileMeta {
 }
 
 export const PROFILE_META: ProfileMeta[] = [
-  { id: "drifters", label: "Ocean drifters", pole: "time-deep" },
-  { id: "nyc-rideshare", label: "NYC rideshare", pole: "balanced" },
-  { id: "gtfs-nl", label: "GTFS transit", pole: "wide network" },
-  { id: "flights", label: "Global flights", pole: "space-heavy" },
+  { id: 'drifters', label: 'Ocean drifters', pole: 'time-deep' },
+  { id: 'nyc-rideshare', label: 'NYC rideshare', pole: 'balanced' },
+  { id: 'gtfs-nl', label: 'GTFS transit', pole: 'wide network' },
+  { id: 'flights', label: 'Global flights', pole: 'space-heavy' },
 ];
 
 export const PROFILE_IDS = PROFILE_META.map((p) => p.id);

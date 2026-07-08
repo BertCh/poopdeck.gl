@@ -33,7 +33,11 @@ vi.mock('@poopdeck.gl/core', async () => {
     getSummaryTileIdsInBounds = vi.fn(() => []);
     getTileByteSize = vi.fn(() => 4096);
     getThroughputEstimate = vi.fn(() => ({ bytesPerMs: 5, samples: 3 }));
-    getMetadata = vi.fn(async () => ({ minZoom: 0, maxZoom: 5, temporalBucketMs: 3_600_000 }));
+    getMetadata = vi.fn(async () => ({
+      minZoom: 0,
+      maxZoom: 5,
+      temporalBucketMs: 3_600_000,
+    }));
     finalize = vi.fn();
     constructor(opts: { url: string }) {
       this.url = opts.url;
@@ -66,7 +70,8 @@ beforeEach(() => {
 
 /** Drive the real `_initArchiveAndTileset` on an Object.create'd layer. */
 async function initLayer(extraProps: Record<string, unknown> = {}) {
-  const { SpatioTemporalLayer } = await import('../src/layers/spatiotemporal-layer');
+  const { SpatioTemporalLayer } =
+    await import('../src/layers/spatiotemporal-layer');
   const layer: any = Object.create((SpatioTemporalLayer as any).prototype);
   layer.props = {
     id: 'edf',

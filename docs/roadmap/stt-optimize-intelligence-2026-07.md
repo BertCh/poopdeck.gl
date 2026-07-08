@@ -13,7 +13,7 @@ Companion to the 2026-06 rust audit — now folded into `stt-packed-format-decis
 advisory-only"), `av-cockpit.md` §3 (the measurement-driven compression pass), and
 `preprocessing-framework.md` (the long-horizon home for build intelligence).
 
-Goal: make tile generation user-friendly and *intelligent* — let users analyze datasets
+Goal: make tile generation user-friendly and _intelligent_ — let users analyze datasets
 **and built tilesets** so parameter tuning, tile generation, and visualization configuration
 are informed decisions instead of folklore.
 
@@ -33,11 +33,11 @@ are informed decisions instead of folklore.
   (`loader.rs:152`). Compressed size was a hardcoded `uncompressed / 3` (`density.rs:243-245`).
   Neither ever touched the real encoder.
 - **The density simulation modeled a build that doesn't exist.** `simulate_zoom_chunks` cut each
-  spatial tile's time-sorted features into *byte-size-bounded* chunks; the real build cuts tiles by
+  spatial tile's time-sorted features into _byte-size-bounded_ chunks; the real build cuts tiles by
   **fixed `--temporal-bucket` duration** (or `--adaptive-temporal` feature-count targets). There is
   no `--chunk-size` flag; `recommended_chunk_size` mapped to nothing a user can set.
 - Meanwhile every optimization decision that actually shipped in this repo came from **measured**
-  tooling that lived *outside* stt-optimize as unshipped cargo examples/scripts:
+  tooling that lived _outside_ stt-optimize as unshipped cargo examples/scripts:
   - `stt-core/examples/point_column_stats.rs` — per-column compressed bytes/point. Twice
     overturned research-derived plans (AV: `id` 40% + `z` 38% ≫ geometry 12.7%; lightweight
     column encodings measured NO-GO).
@@ -76,12 +76,12 @@ pattern; FE layer auto-wiring is the remaining open slice (§6).
    recommended the octree/geometry work that measurement killed.
 2. Wins are **dataset-shaped** (1.07×–21×). No formula predicts which lever pays for a given
    dataset; a 30-second sample-encode does.
-3. The counted-out rust-audit item — *"full measure-and-correct loop… revive with the first
-   real consumer"* — has its revival trigger now: **the user-friendliness initiative is the
+3. The counted-out rust-audit item — _"full measure-and-correct loop… revive with the first
+   real consumer"_ — has its revival trigger now: **the user-friendliness initiative is the
    consumer.** Third-party users can't be expected to hand-run cargo examples.
 4. `preprocessing-framework.md` makes "Measure first" **non-negotiable** (§ "Measure first")
-   and defines the seam: *LOD changes the resolution of the answer; encoding changes the
-   price per unit.* An advisor that measures per-column costs and recommends per-lever flags
+   and defines the seam: _LOD changes the resolution of the answer; encoding changes the
+   price per unit._ An advisor that measures per-column costs and recommends per-lever flags
    is the natural precursor of that framework's recipe bake-off — same analyses, different
    packaging. Build the measurement core once, in stt-optimize.
 
@@ -90,8 +90,8 @@ pattern; FE layer auto-wiring is the remaining open slice (§6).
 ## 3. Target design: three roles
 
 **stt-optimize = Profiler + Advisor + Doctor.** Same library core, three CLI verbs, spanning
-the lifecycle: *before build* (source analysis — exists today), *at build* (`--auto`),
-*after build* (tileset profiling — missing entirely).
+the lifecycle: _before build_ (source analysis — exists today), _at build_ (`--auto`),
+_after build_ (tileset profiling — missing entirely).
 
 ```
              ┌────────────┐    profile    ┌──────────────┐
@@ -124,7 +124,7 @@ the lifecycle: *before build* (source analysis — exists today), *at build* (`-
 ### 4.2 Advisor — the full knob set, with measured evidence (P1.5)
 
 Each advisor emits: suggested flag(s), **measured** projected win (trial-encode on the sample),
-confidence, and a one-line *why*; `recommend --show-command` covers the full flag set,
+confidence, and a one-line _why_; `recommend --show-command` covers the full flag set,
 `recommend --explain` prints the evidence table. Quantization (coord precision from max-zoom
 ground resolution, verified by sample-encode; per-column attr detection; hash-like id flagging —
 the 40% AV lesson), temporal (`--temporal-lod` tier, `--adaptive-temporal` from burstiness CoV,

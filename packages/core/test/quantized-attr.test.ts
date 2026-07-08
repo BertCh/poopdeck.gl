@@ -47,7 +47,10 @@ function buildPointTileWithQuantZ(
   qaRaw?: string,
 ): Uint8Array {
   const featureCount = coords.length / 2;
-  const coordValues = makeData({ type: new Float64(), data: Float64Array.from(coords) });
+  const coordValues = makeData({
+    type: new Float64(),
+    data: Float64Array.from(coords),
+  });
   const geomData = makeData({
     type: new FixedSizeList(2, new Field('xy', new Float64(), false)),
     length: featureCount,
@@ -85,9 +88,17 @@ function buildPointTileWithQuantZ(
       false,
       new Map([['ARROW:extension:name', 'geoarrow.point']]),
     ),
-    new Field('z', new Uint16(), true, new Map([['stt:qa', qaRaw ?? JSON.stringify({ o, s })]])),
+    new Field(
+      'z',
+      new Uint16(),
+      true,
+      new Map([['stt:qa', qaRaw ?? JSON.stringify({ o, s })]]),
+    ),
   ];
-  const schema = new Schema(fields, new Map([['stt:geometry', 'geoarrow.point']]));
+  const schema = new Schema(
+    fields,
+    new Map([['stt:geometry', 'geoarrow.point']]),
+  );
   const structData = makeData({
     type: new Struct(fields),
     length: featureCount,
@@ -121,13 +132,18 @@ describe('numeric attribute quantization decode', () => {
       const zq = [3, 7, 11];
       const coords = [0, 0, 1, 1, 2, 2];
       const decode = () =>
-        decodeTile(buildPointTileWithQuantZ(coords, zq, 0, 1, '{not json'), tileId);
+        decodeTile(
+          buildPointTileWithQuantZ(coords, zq, 0, 1, '{not json'),
+          tileId,
+        );
       const f = decode().layers[0].features;
       // Fallback: identity affine (o=0, s=1) — raw fixed-point values.
       expect(Array.from(f.numericProps.z)).toEqual(zq);
       // A corrupt archive decodes many tiles — the warning must not repeat.
       decode();
-      const qaWarns = warn.mock.calls.filter((c) => String(c[0]).includes('stt:qa'));
+      const qaWarns = warn.mock.calls.filter((c) =>
+        String(c[0]).includes('stt:qa'),
+      );
       expect(qaWarns).toHaveLength(1);
     } finally {
       warn.mockRestore();

@@ -2,7 +2,12 @@
 // SPDX-License-Identifier: MIT
 
 import { describe, it, expect } from 'vitest';
-import { rayObbHit, pickBoxes, type PickBox, type Vec3 } from '../src/lib/box-pick';
+import {
+  rayObbHit,
+  pickBoxes,
+  type PickBox,
+  type Vec3,
+} from '../src/lib/box-pick';
 
 const box = (over: Partial<PickBox> = {}): PickBox => ({
   center: [0, 0, 0],
@@ -54,8 +59,14 @@ describe('rayObbHit', () => {
 
 describe('pickBoxes', () => {
   it('returns the nearest hit with its metadata and world hit point', () => {
-    const near = box({ center: [0, 0, 0], meta: { layerId: 'l', kind: 'object', trackId: 'near' } });
-    const far = box({ center: [0, 0, -20], meta: { layerId: 'l', kind: 'object', trackId: 'far' } });
+    const near = box({
+      center: [0, 0, 0],
+      meta: { layerId: 'l', kind: 'object', trackId: 'near' },
+    });
+    const far = box({
+      center: [0, 0, -20],
+      meta: { layerId: 'l', kind: 'object', trackId: 'far' },
+    });
     const hit = pickBoxes([0, 0, 10], [0, 0, -1], [far, near]);
     expect(hit).not.toBeNull();
     expect(hit?.trackId).toBe('near');

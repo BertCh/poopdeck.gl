@@ -27,7 +27,9 @@ import { STTArchive } from '../src/archive';
 import { GeometryType } from '../src/types';
 import { bufferToArrayBuffer } from './helpers/fixtures';
 
-const FIXTURE_DIR = fileURLToPath(new URL('./fixtures/packed-golden/', import.meta.url));
+const FIXTURE_DIR = fileURLToPath(
+  new URL('./fixtures/packed-golden/', import.meta.url),
+);
 
 interface FetchLog {
   /** Every requested path (relative to the fixture dir). */
@@ -149,7 +151,9 @@ describe('STT packed format (golden fixture)', () => {
     const packIds = new Set(index.tiles.map((t) => t.packId));
     expect(packIds).toEqual(new Set([0, 1]));
     for (const pid of packIds) {
-      expect(index.tiles.some((t) => t.packId === pid && t.offset === 0)).toBe(true);
+      expect(index.tiles.some((t) => t.packId === pid && t.offset === 0)).toBe(
+        true,
+      );
     }
   });
 
@@ -170,11 +174,11 @@ describe('STT packed format (golden fixture)', () => {
       expect(f.featureCount).toBe(3);
 
       // Feature ids [100*s, 100*s+1, 100*s+2].
-      expect(Array.from(f.featureIds).map(Number).sort((a, b) => a - b)).toEqual([
-        100 * s,
-        100 * s + 1,
-        100 * s + 2,
-      ]);
+      expect(
+        Array.from(f.featureIds)
+          .map(Number)
+          .sort((a, b) => a - b),
+      ).toEqual([100 * s, 100 * s + 1, 100 * s + 2]);
 
       // Point (-122.4 + 0.01*s, 37.7) for all three features.
       for (let i = 0; i < f.positions.length; i += 2) {
@@ -200,7 +204,12 @@ describe('STT packed format (golden fixture)', () => {
     const archive = makeArchive(log);
     await archive.getIndex();
 
-    const ids = Array.from({ length: 12 }, (_, k) => ({ z: 10, x: k, y: 0, t: 1000 * k }));
+    const ids = Array.from({ length: 12 }, (_, k) => ({
+      z: 10,
+      x: k,
+      y: 0,
+      t: 1000 * k,
+    }));
     const before = log.ranges.length;
     const tiles = await archive.getTiles(ids);
     const packRanges = log.ranges.slice(before);
@@ -212,11 +221,11 @@ describe('STT packed format (golden fixture)', () => {
       const t = tiles[k];
       expect(t, `batch tile k=${k}`).not.toBeNull();
       const f = t!.layers[0].features;
-      expect(Array.from(f.featureIds).map(Number).sort((a, b) => a - b)).toEqual([
-        100 * s,
-        100 * s + 1,
-        100 * s + 2,
-      ]);
+      expect(
+        Array.from(f.featureIds)
+          .map(Number)
+          .sort((a, b) => a - b),
+      ).toEqual([100 * s, 100 * s + 1, 100 * s + 2]);
     }
 
     // All range requests were against pack objects (never the manifest/dir).

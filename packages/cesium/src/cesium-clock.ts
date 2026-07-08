@@ -36,7 +36,10 @@ export interface PlayheadClock {
   /** Subscribe to per-frame ticks (governor rAF). Returns an unsubscribe fn. */
   on(event: 'tick', callback: (timeMs: number) => void): () => void;
   /** Subscribe to play/pause transitions. Returns an unsubscribe fn. */
-  on(event: 'playState', callback: (playing: boolean, speed: number) => void): () => void;
+  on(
+    event: 'playState',
+    callback: (playing: boolean, speed: number) => void,
+  ): () => void;
 }
 
 export interface AttachCesiumClockOptions {
@@ -64,7 +67,9 @@ export function attachCesiumClock(
 ): () => void {
   // preRender fires immediately before Cesium's primitive-update + draw pass, so
   // a color/uniform written by `apply` lands in the SAME frame.
-  const removePreRender = scene.preRender.addEventListener(() => apply(clock.getTime()));
+  const removePreRender = scene.preRender.addEventListener(() =>
+    apply(clock.getTime()),
+  );
 
   let removeTick: (() => void) | undefined;
   let removePlayState: (() => void) | undefined;

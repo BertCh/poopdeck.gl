@@ -78,7 +78,8 @@ import { _resetWarnOnce } from '../src/lib/log';
 describe('DataFilterExtension getShaders', () => {
   // getShaders only reads its `extension` arg (not `this`), matching the sibling
   // extension suites.
-  const getShaders = (ext: DataFilterExtension) => (ext.getShaders as any).call({}, ext);
+  const getShaders = (ext: DataFilterExtension) =>
+    (ext.getShaders as any).call({}, ext);
 
   it('returns a reference-stable object (one shader-cache entry per instance)', () => {
     const ext = new DataFilterExtension();
@@ -97,22 +98,32 @@ describe('DataFilterExtension getShaders', () => {
     expect(inject['vs:#main-start']).toContain(
       'step(sttFilter.filterMin, filterValue)',
     );
-    expect(inject['vs:#main-start']).toContain('step(filterValue, sttFilter.filterMax)');
+    expect(inject['vs:#main-start']).toContain(
+      'step(filterValue, sttFilter.filterMax)',
+    );
     expect(inject['fs:#main-start']).toContain('discard');
   });
 
   it('soft-fades via smoothstep with deck-parity truncation fallback', () => {
-    const mainStart = getShaders(new DataFilterExtension()).inject['vs:#main-start'];
+    const mainStart = getShaders(new DataFilterExtension()).inject[
+      'vs:#main-start'
+    ];
     expect(mainStart).toContain('smoothstep');
     // The mix(smoothstep, step, step(soft, hard)) fallback that dodges
     // smoothstep's "edge0 >= edge1 is undefined" when the soft range is
     // truncated by the hard range (mirrors upstream DataFilterExtension).
-    expect(mainStart).toContain('step(sttFilter.filterSoftMin, sttFilter.filterMin)');
-    expect(mainStart).toContain('step(sttFilter.filterMax, sttFilter.filterSoftMax)');
+    expect(mainStart).toContain(
+      'step(sttFilter.filterSoftMin, sttFilter.filterMin)',
+    );
+    expect(mainStart).toContain(
+      'step(sttFilter.filterMax, sttFilter.filterSoftMax)',
+    );
   });
 
   it('collapses filtered features at the vertex stage (zero fragments)', () => {
-    const mainEnd = getShaders(new DataFilterExtension()).inject['vs:#main-end'];
+    const mainEnd = getShaders(new DataFilterExtension()).inject[
+      'vs:#main-end'
+    ];
     expect(mainEnd).toContain('gl_Position = vec4(0.);');
     expect(mainEnd).toContain('vDataFilterAlpha == 0.0');
   });
@@ -120,7 +131,9 @@ describe('DataFilterExtension getShaders', () => {
   it('declares the uniform block with a poopdeck-distinct std140 name', () => {
     // Distinct from deck's own `dataFilter` module so both can coexist.
     expect(dataFilterUniforms.name).toBe('sttFilter');
-    expect(dataFilterUniforms.vs).toContain('layout(std140) uniform sttFilterUniforms');
+    expect(dataFilterUniforms.vs).toContain(
+      'layout(std140) uniform sttFilterUniforms',
+    );
     const modules = getShaders(new DataFilterExtension()).modules as any[];
     expect(modules[0]).toBe(dataFilterUniforms);
   });
@@ -193,7 +206,9 @@ describe('DataFilterExtension draw() uniform forwarding', () => {
   });
 
   it('filterEnabled:false forces enabled=0 even with a valid range', () => {
-    expect(drawUniforms({ filterRange: [2, 8], filterEnabled: false }).enabled).toBe(0);
+    expect(
+      drawUniforms({ filterRange: [2, 8], filterEnabled: false }).enabled,
+    ).toBe(0);
   });
 
   it('forwards the transform flags', () => {
@@ -249,7 +264,9 @@ describe('DataFilterExtension filterSize v1 guard', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
       // Options are typed to `1`; cast to exercise the runtime clamp.
-      expect(() => new DataFilterExtension({ filterSize: 3 } as any)).not.toThrow();
+      expect(
+        () => new DataFilterExtension({ filterSize: 3 } as any),
+      ).not.toThrow();
       expect(warn).toHaveBeenCalledWith(expect.stringContaining('filterSize'));
     } finally {
       warn.mockRestore();
@@ -273,7 +290,9 @@ function pointTile() {
     endTimes: [1, 2, 3],
     timeOffset: 0,
   });
-  tile.layers[0].features.numericProps['mag'] = new Float32Array([1, 2, 3]) as any;
+  tile.layers[0].features.numericProps['mag'] = new Float32Array([
+    1, 2, 3,
+  ]) as any;
   return tile;
 }
 
@@ -294,12 +313,15 @@ function pathTile() {
     endTimes: [100, 100],
     timeOffset: 0,
   });
-  tile.layers[0].features.numericProps['score'] = new Float32Array([10, 20]) as any;
+  tile.layers[0].features.numericProps['score'] = new Float32Array([
+    10, 20,
+  ]) as any;
   return tile;
 }
 
 async function makePointLayer(props: Record<string, any> = {}) {
-  const { AnimatedPointLayer } = await import('../src/layers/core/animated-point-layer');
+  const { AnimatedPointLayer } =
+    await import('../src/layers/core/animated-point-layer');
   const layer: any = Object.create((AnimatedPointLayer as any).prototype);
   layer.props = {
     id: 'pts',
@@ -323,7 +345,8 @@ async function makePointLayer(props: Record<string, any> = {}) {
 }
 
 async function makePathLayer(props: Record<string, any> = {}) {
-  const { AnimatedPathLayer } = await import('../src/layers/core/animated-path-layer');
+  const { AnimatedPathLayer } =
+    await import('../src/layers/core/animated-path-layer');
   const layer: any = Object.create((AnimatedPathLayer as any).prototype);
   layer.props = {
     id: 'paths',
@@ -380,77 +403,88 @@ describe.each([
       expect(attr.size).toBe(1);
     },
   },
-])('$name filterProperty integration', ({ make, tile, column, assertBaked }) => {
-  it('does NOT compose DataFilterExtension when filterProperty is unset (zero cost)', async () => {
-    const layer = await make();
-    const sub = buildSub(layer, tile());
-    expect(sub.props.extensions).not.toContain(layer.dataFilterExtension);
-    expect(sub.props.data.attributes.filterValue).toBeUndefined();
-    // No filter props leak onto the sublayer.
-    expect(sub.props.filterEnabled).toBeUndefined();
-    expect(sub.props.filterRange).toBeUndefined();
-  });
-
-  it('composes DataFilterExtension and bakes the named column when set', async () => {
-    const layer = await make({ filterProperty: column, filterRange: [0, 5] });
-    const t = tile();
-    const sub = buildSub(layer, t);
-    // Composed AFTER the time + category extensions.
-    expect(sub.props.extensions).toContain(layer.dataFilterExtension);
-    const idx = sub.props.extensions.indexOf(layer.dataFilterExtension);
-    expect(idx).toBe(sub.props.extensions.length - 1);
-    // The filter column is bound to the `filterValue` attribute.
-    assertBaked(sub.props.data.attributes.filterValue, t);
-  });
-
-  it('forwards filterRange / filterSoftRange / filterEnabled as sublayer props', async () => {
-    const layer = await make({
-      filterProperty: column,
-      filterRange: [1, 4],
-      filterSoftRange: [2, 3],
-    });
-    const sub = buildSub(layer, tile());
-    expect(sub.props.filterRange).toEqual([1, 4]);
-    expect(sub.props.filterSoftRange).toEqual([2, 3]);
-    // Present column ⇒ the filter is live.
-    expect(sub.props.filterEnabled).toBe(true);
-    // Constant fallback for tiles that lack the column.
-    expect(sub.props.getFilterValue).toBe(0);
-  });
-
-  it('idles the filter for a tile missing the named column (extension installed, disabled)', async () => {
-    const layer = await make({ filterProperty: 'absent', filterRange: [0, 5] });
-    const sub = buildSub(layer, tile());
-    // Extension still installed (per-layer constant list) …
-    expect(sub.props.extensions).toContain(layer.dataFilterExtension);
-    // … but no attribute baked, so the per-tile enable is off → renders all.
-    expect(sub.props.data.attributes.filterValue).toBeUndefined();
-    expect(sub.props.filterEnabled).toBe(false);
-  });
-
-  it('a function accessor warns once and is ignored (no extension, no attribute)', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    try {
-      const layer = await make({ filterProperty: (d: any) => d[column], filterRange: [0, 5] });
+])(
+  '$name filterProperty integration',
+  ({ make, tile, column, assertBaked }) => {
+    it('does NOT compose DataFilterExtension when filterProperty is unset (zero cost)', async () => {
+      const layer = await make();
       const sub = buildSub(layer, tile());
       expect(sub.props.extensions).not.toContain(layer.dataFilterExtension);
       expect(sub.props.data.attributes.filterValue).toBeUndefined();
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining('filterProperty'));
-    } finally {
-      warn.mockRestore();
-    }
-  });
-
-  it('filterEnabled:false forwards false even with a present column', async () => {
-    const layer = await make({
-      filterProperty: column,
-      filterRange: [0, 5],
-      filterEnabled: false,
+      // No filter props leak onto the sublayer.
+      expect(sub.props.filterEnabled).toBeUndefined();
+      expect(sub.props.filterRange).toBeUndefined();
     });
-    const sub = buildSub(layer, tile());
-    expect(sub.props.filterEnabled).toBe(false);
-  });
-});
+
+    it('composes DataFilterExtension and bakes the named column when set', async () => {
+      const layer = await make({ filterProperty: column, filterRange: [0, 5] });
+      const t = tile();
+      const sub = buildSub(layer, t);
+      // Composed AFTER the time + category extensions.
+      expect(sub.props.extensions).toContain(layer.dataFilterExtension);
+      const idx = sub.props.extensions.indexOf(layer.dataFilterExtension);
+      expect(idx).toBe(sub.props.extensions.length - 1);
+      // The filter column is bound to the `filterValue` attribute.
+      assertBaked(sub.props.data.attributes.filterValue, t);
+    });
+
+    it('forwards filterRange / filterSoftRange / filterEnabled as sublayer props', async () => {
+      const layer = await make({
+        filterProperty: column,
+        filterRange: [1, 4],
+        filterSoftRange: [2, 3],
+      });
+      const sub = buildSub(layer, tile());
+      expect(sub.props.filterRange).toEqual([1, 4]);
+      expect(sub.props.filterSoftRange).toEqual([2, 3]);
+      // Present column ⇒ the filter is live.
+      expect(sub.props.filterEnabled).toBe(true);
+      // Constant fallback for tiles that lack the column.
+      expect(sub.props.getFilterValue).toBe(0);
+    });
+
+    it('idles the filter for a tile missing the named column (extension installed, disabled)', async () => {
+      const layer = await make({
+        filterProperty: 'absent',
+        filterRange: [0, 5],
+      });
+      const sub = buildSub(layer, tile());
+      // Extension still installed (per-layer constant list) …
+      expect(sub.props.extensions).toContain(layer.dataFilterExtension);
+      // … but no attribute baked, so the per-tile enable is off → renders all.
+      expect(sub.props.data.attributes.filterValue).toBeUndefined();
+      expect(sub.props.filterEnabled).toBe(false);
+    });
+
+    it('a function accessor warns once and is ignored (no extension, no attribute)', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        const layer = await make({
+          filterProperty: (d: any) => d[column],
+          filterRange: [0, 5],
+        });
+        const sub = buildSub(layer, tile());
+        expect(sub.props.extensions).not.toContain(layer.dataFilterExtension);
+        expect(sub.props.data.attributes.filterValue).toBeUndefined();
+        expect(warn).toHaveBeenCalledWith(
+          expect.stringContaining('filterProperty'),
+        );
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it('filterEnabled:false forwards false even with a present column', async () => {
+      const layer = await make({
+        filterProperty: column,
+        filterRange: [0, 5],
+        filterEnabled: false,
+      });
+      const sub = buildSub(layer, tile());
+      expect(sub.props.filterEnabled).toBe(false);
+    });
+  },
+);
 
 // Regression: the path pipeline sits at WebGL2's 16 vertex-attribute floor
 // (NoPickingPathLayer 12 + TimeFilterExtension 3 + one extension attribute).
@@ -464,7 +498,10 @@ describe.each([
 // category) must be UNAFFECTED — it keeps both.
 describe('AnimatedPathLayer filterProperty attribute budget (16-slot floor)', () => {
   it('DROPS the idle CategoryColorExtension when a filter is installed (stays at 16, not 17)', async () => {
-    const layer = await makePathLayer({ filterProperty: 'score', filterRange: [0, 5] });
+    const layer = await makePathLayer({
+      filterProperty: 'score',
+      filterRange: [0, 5],
+    });
     const sub = buildSub(layer, pathTile());
     // filterValue IS composed …
     expect(sub.props.extensions).toContain(layer.dataFilterExtension);
@@ -490,7 +527,10 @@ describe('AnimatedPathLayer filterProperty attribute budget (16-slot floor)', ()
   });
 
   it('does NOT drop CategoryColorExtension on the point layer when filtering (roomy budget, genuine GPU category)', async () => {
-    const layer = await makePointLayer({ filterProperty: 'mag', filterRange: [0, 5] });
+    const layer = await makePointLayer({
+      filterProperty: 'mag',
+      filterRange: [0, 5],
+    });
     const sub = buildSub(layer, pointTile());
     // The point layer keeps BOTH — the drop is a path-only budget workaround.
     expect(sub.props.extensions).toContain(layer.categoryColorExtension);
@@ -507,7 +547,10 @@ describe('filterProperty naming a categorical column', () => {
         categories: ['a', 'b'],
         indices: new Uint16Array([0, 1, 0]),
       } as any;
-      const layer = await makePointLayer({ filterProperty: 'kind', filterRange: [0, 5] });
+      const layer = await makePointLayer({
+        filterProperty: 'kind',
+        filterRange: [0, 5],
+      });
       const sub = buildSub(layer, t);
       expect(sub.props.data.attributes.filterValue).toBeUndefined();
       expect(sub.props.filterEnabled).toBe(false);

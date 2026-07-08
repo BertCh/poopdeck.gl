@@ -1,4 +1,10 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import DeckGL from '@deck.gl/react';
 import { _GlobeView as GlobeView } from '@deck.gl/core';
 import {
@@ -129,7 +135,10 @@ const AUTO_CAP_UPSHIFT_DEADBAND = 0.2;
 // then hold — no looping, no reset — so the drift just unfolds chronologically
 // and reads as calm. Forward playback is also the always-smooth tile-loading
 // direction (prefetch is aimed the way the head moves), so it never flashes.
-const DATA_TIME_RANGE: { start: number; end: number } = { start: DATA_START, end: DATA_END };
+const DATA_TIME_RANGE: { start: number; end: number } = {
+  start: DATA_START,
+  end: DATA_END,
+};
 
 // ── Tile-loading budget (shared recipe, story-wide ceiling) ──────────────────
 // The tileset freezes its prefetch/concurrency options when it is created and
@@ -146,13 +155,18 @@ const ALL_STORY_FOCI: GlobeFocus[] = [
   HERO_FOCUS,
   ...ACTS.flatMap((act) => act.steps.map((step) => step.focus)),
 ];
-const MAX_TRAIL_MS = Math.max(...ALL_STORY_FOCI.map((f) => (f.trailDays ?? 90) * DAY));
+const MAX_TRAIL_MS = Math.max(
+  ...ALL_STORY_FOCI.map((f) => (f.trailDays ?? 90) * DAY),
+);
 // Fastest beat's controller speed in sim-ms per real-ms (same math as
 // applyFocusTime below).
 const MAX_PLAYBACK_SPEED =
   Math.max(...ALL_STORY_FOCI.map((f) => f.speedDays ?? 8)) * (DAY / 1000);
 
-const TONE: Record<NonNullable<GlobeMarker['tone']>, [number, number, number]> = {
+const TONE: Record<
+  NonNullable<GlobeMarker['tone']>,
+  [number, number, number]
+> = {
   cool: [40, 180, 200],
   warm: [250, 200, 90],
   hot: [220, 74, 63],
@@ -212,8 +226,16 @@ const StoryGlobe: React.FC<StoryGlobeProps> = ({ focus, active }) => {
   // Live camera + its easing target. We drive viewState ourselves every frame
   // (controller is disabled), so a single rAF loop both eases the camera and
   // guarantees per-frame redraws while a beat is animating.
-  const camRef = useRef({ longitude: focus.lng, latitude: focus.lat, zoom: focus.zoom });
-  const targetRef = useRef({ longitude: focus.lng, latitude: focus.lat, zoom: focus.zoom });
+  const camRef = useRef({
+    longitude: focus.lng,
+    latitude: focus.lat,
+    zoom: focus.zoom,
+  });
+  const targetRef = useRef({
+    longitude: focus.lng,
+    latitude: focus.lat,
+    zoom: focus.zoom,
+  });
   // Idle rotation rate (deg/sec) for the *current* beat, set from its mode. The
   // hero/planetary "spin" beats turn fastest; the "sweep" (array filling in)
   // turns at a brisk middle pace so the planet visibly rolls as years pass;
@@ -321,7 +343,10 @@ const StoryGlobe: React.FC<StoryGlobeProps> = ({ focus, active }) => {
         timeController.setTimeRange(f.sweep);
         target = f.sweep.start;
       } else if (f.mode === 'still') {
-        timeController.setTimeRange({ start: f.time - 5 * DAY, end: f.time + 5 * DAY });
+        timeController.setTimeRange({
+          start: f.time - 5 * DAY,
+          end: f.time + 5 * DAY,
+        });
         target = f.time;
       } else {
         // drift / spin — play forward from the beat's moment to the end of the
@@ -346,9 +371,17 @@ const StoryGlobe: React.FC<StoryGlobeProps> = ({ focus, active }) => {
 
   // ── Apply a focus: aim the camera now; switch the era now or via a fade. ────
   useEffect(() => {
-    targetRef.current = { longitude: focus.lng, latitude: focus.lat, zoom: focus.zoom };
+    targetRef.current = {
+      longitude: focus.lng,
+      latitude: focus.lat,
+      zoom: focus.zoom,
+    };
     spinRateRef.current =
-      focus.mode === 'spin' ? FAST_SPIN : focus.mode === 'sweep' ? SWEEP_SPIN : IDLE_SPIN;
+      focus.mode === 'spin'
+        ? FAST_SPIN
+        : focus.mode === 'sweep'
+          ? SWEEP_SPIN
+          : IDLE_SPIN;
     settledRef.current = false; // fly to the new beat before resuming the gentle drift
 
     // How far the clock is about to jump from where it actually is right now,
@@ -359,7 +392,8 @@ const StoryGlobe: React.FC<StoryGlobeProps> = ({ focus, active }) => {
     // such as the slight backward nudge between the all-2016 currents beats once
     // the playhead has drifted forward — keeps enough overlap to avoid a visible
     // gap, so it applies instantly and the globe never blinks.
-    const targetTime = focus.mode === 'sweep' && focus.sweep ? focus.sweep.start : focus.time;
+    const targetTime =
+      focus.mode === 'sweep' && focus.sweep ? focus.sweep.start : focus.time;
     const jump = Math.abs(targetTime - timeController.getTime());
     const targetWindowMs = Math.max(
       dataset?.timeWindow ?? 200 * DAY,
@@ -391,10 +425,20 @@ const StoryGlobe: React.FC<StoryGlobeProps> = ({ focus, active }) => {
     // Reduce-motion: the rAF easing loop is disabled, so snap the camera to the
     // beat's framing right here (instead of flying to it) and mark it settled.
     if (reducedMotionRef.current) {
-      camRef.current = { longitude: focus.lng, latitude: focus.lat, zoom: focus.zoom };
+      camRef.current = {
+        longitude: focus.lng,
+        latitude: focus.lat,
+        zoom: focus.zoom,
+      };
       settledRef.current = true;
       setViewState({
-        globe: { longitude: focus.lng, latitude: focus.lat, zoom: focus.zoom, pitch: 0, bearing: 0 },
+        globe: {
+          longitude: focus.lng,
+          latitude: focus.lat,
+          zoom: focus.zoom,
+          pitch: 0,
+          bearing: 0,
+        },
       });
     }
     mountedRef.current = true;
@@ -480,7 +524,9 @@ const StoryGlobe: React.FC<StoryGlobeProps> = ({ focus, active }) => {
       // Have we essentially arrived at the beat's framing?
       const dLon = ((tgt.longitude - cur.longitude + 540) % 360) - 180;
       if (
-        Math.abs(dLon) + Math.abs(tgt.latitude - cur.latitude) + Math.abs(tgt.zoom - cur.zoom) <
+        Math.abs(dLon) +
+          Math.abs(tgt.latitude - cur.latitude) +
+          Math.abs(tgt.zoom - cur.zoom) <
         0.25
       ) {
         settledRef.current = true;
@@ -490,7 +536,8 @@ const StoryGlobe: React.FC<StoryGlobeProps> = ({ focus, active }) => {
       if (settledRef.current) {
         // Arrived → perpetual rotation at the beat's rate (also keeps deck's
         // paint cycle alive so the trails animate).
-        longitude = ((cur.longitude + spinRateRef.current * dt + 540) % 360) - 180;
+        longitude =
+          ((cur.longitude + spinRateRef.current * dt + 540) % 360) - 180;
       } else {
         // Flying in.
         longitude = easeAngle(cur.longitude, tgt.longitude, k);
@@ -500,7 +547,9 @@ const StoryGlobe: React.FC<StoryGlobeProps> = ({ focus, active }) => {
       const zoom = cur.zoom + (tgt.zoom - cur.zoom) * k;
 
       camRef.current = { longitude, latitude, zoom };
-      setViewState({ globe: { longitude, latitude, zoom, pitch: 0, bearing: 0 } });
+      setViewState({
+        globe: { longitude, latitude, zoom, pitch: 0, bearing: 0 },
+      });
 
       // ── Ribbon cross-dissolve across an era jump. ──────────────────────────
       let op = opacityRef.current;
@@ -575,7 +624,10 @@ const StoryGlobe: React.FC<StoryGlobeProps> = ({ focus, active }) => {
     return () => cancelAnimationFrame(raf);
   }, [active, timeController, reducedMotion]);
 
-  const views = useMemo(() => [new GlobeView({ id: 'globe', resolution: 10 })], []);
+  const views = useMemo(
+    () => [new GlobeView({ id: 'globe', resolution: 10 })],
+    [],
+  );
 
   // Record tile arrivals (same clock as the rAF `now`) so the no-source
   // fallback of the cross-dissolve can fade back in when the destination era
@@ -660,7 +712,9 @@ const StoryGlobe: React.FC<StoryGlobeProps> = ({ focus, active }) => {
           gradientDomain: g.domain,
           gradientColorRamp: g.colors,
         }),
-        ...(dataset.colorMappingDefault && { colorMappingDefault: dataset.colorMappingDefault }),
+        ...(dataset.colorMappingDefault && {
+          colorMappingDefault: dataset.colorMappingDefault,
+        }),
         tripWidth: 1.6,
         widthMinPixels: 1,
         widthMaxPixels: 3.5,

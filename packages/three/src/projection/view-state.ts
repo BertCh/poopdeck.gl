@@ -52,7 +52,11 @@ function v3(t: [number, number, number]): Vector3 {
 
 /** Distance from the target so `viewportHeight` px subtend `wupp·viewportHeight`
  *  world units at the target depth, for the camera's vertical FOV. */
-function distanceForScale(camera: PerspectiveCamera, wupp: number, viewportHeight: number): number {
+function distanceForScale(
+  camera: PerspectiveCamera,
+  wupp: number,
+  viewportHeight: number,
+): number {
   const halfFov = MathUtils.degToRad(camera.fov) / 2;
   return (viewportHeight * wupp) / (2 * Math.tan(halfFov));
 }
@@ -87,7 +91,11 @@ function orientCamera(
 }
 
 /** Set near/far to bracket the content at this scale (planet-aware on the globe). */
-function setClip(proj: Projection, camera: PerspectiveCamera, distance: number): void {
+function setClip(
+  proj: Projection,
+  camera: PerspectiveCamera,
+  distance: number,
+): void {
   if (proj.kind === 'globe') {
     camera.near = Math.max(1, distance * 0.05);
     camera.far = distance + EARTH_RADIUS * 2.5;
@@ -118,7 +126,16 @@ export function viewStateToCamera(
   const wupp = worldUnitsPerPixel(proj, zoom, latitude);
   const distance = distanceForScale(camera, wupp, viewportHeight);
 
-  orientCamera(camera, target, v3(frame.east), v3(frame.north), v3(frame.up), distance, pitch, bearing);
+  orientCamera(
+    camera,
+    target,
+    v3(frame.east),
+    v3(frame.north),
+    v3(frame.up),
+    distance,
+    pitch,
+    bearing,
+  );
   setClip(proj, camera, distance);
   return target;
 }
@@ -126,7 +143,9 @@ export function viewStateToCamera(
 /** Intersect the camera's forward ray with the ground plane (mercator) or sphere
  *  (globe); fall back to the sub-camera point when the ray misses. */
 function recoverTarget(proj: Projection, camera: PerspectiveCamera): Vector3 {
-  const forward = new Vector3(0, 0, -1).applyQuaternion(camera.quaternion).normalize();
+  const forward = new Vector3(0, 0, -1)
+    .applyQuaternion(camera.quaternion)
+    .normalize();
   const p = camera.position;
   if (proj.kind === 'globe') {
     const b = 2 * p.dot(forward);

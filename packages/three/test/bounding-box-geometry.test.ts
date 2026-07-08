@@ -24,7 +24,9 @@ describe('BoundingBoxLayer geometry seeding', () => {
 
   it('seeds a position attribute on the velocity geometry too when showVelocity', () => {
     const layer = new BoundingBoxLayer({ id: 'objects', showVelocity: true });
-    const lines = layer.object.children.filter((c) => c instanceof LineSegments);
+    const lines = layer.object.children.filter(
+      (c) => c instanceof LineSegments,
+    );
     // edges + velocity
     expect(lines.length).toBe(2);
     for (const l of lines) expect(hasPosition(l)).toBe(true);

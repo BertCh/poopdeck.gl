@@ -46,7 +46,12 @@ export interface RawManifest {
     name?: string;
     description?: string;
     attribution?: string;
-    bounds?: { min_lon: number; min_lat: number; max_lon: number; max_lat: number };
+    bounds?: {
+      min_lon: number;
+      min_lat: number;
+      max_lon: number;
+      max_lat: number;
+    };
     time_range?: { start: number; end: number };
     min_zoom?: number;
     max_zoom?: number;
@@ -233,7 +238,13 @@ async function findManifestDirs(
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     if (entry.name.startsWith('.') || SKIP_DIR_NAMES.has(entry.name)) continue;
-    await findManifestDirs(root, path.join(dir, entry.name), depth + 1, maxDepth, out);
+    await findManifestDirs(
+      root,
+      path.join(dir, entry.name),
+      depth + 1,
+      maxDepth,
+      out,
+    );
   }
 }
 
@@ -248,7 +259,10 @@ async function findManifestDirs(
  * is the correct disambiguation. An empty archive (no packs, empty directory)
  * keeps its literal value.
  */
-function normalizeContentCount(count: number | undefined, hasContent: boolean): number | undefined {
+function normalizeContentCount(
+  count: number | undefined,
+  hasContent: boolean,
+): number | undefined {
   if (!count && hasContent) return undefined;
   return count;
 }
@@ -258,7 +272,11 @@ function hasArchiveContent(manifest: RawManifest): boolean {
   return manifest.packs.length > 0 || manifest.directory.length > 0;
 }
 
-function summarize(dataRoot: string, datasetDir: string, manifest: RawManifest): DatasetSummary {
+function summarize(
+  dataRoot: string,
+  datasetDir: string,
+  manifest: RawManifest,
+): DatasetSummary {
   const m = manifest.metadata ?? {};
   return {
     name: toPosixRelative(dataRoot, datasetDir),
@@ -273,10 +291,15 @@ function summarize(dataRoot: string, datasetDir: string, manifest: RawManifest):
           maxLat: m.bounds.max_lat,
         }
       : undefined,
-    timeRange: m.time_range ? { start: m.time_range.start, end: m.time_range.end } : undefined,
+    timeRange: m.time_range
+      ? { start: m.time_range.start, end: m.time_range.end }
+      : undefined,
     minZoom: m.min_zoom,
     maxZoom: m.max_zoom,
-    featureCount: normalizeContentCount(m.feature_count, hasArchiveContent(manifest)),
+    featureCount: normalizeContentCount(
+      m.feature_count,
+      hasArchiveContent(manifest),
+    ),
     hasSummaryTier: !!m.summary_tier,
     summaryScheme: m.summary_tier?.scheme,
   };
@@ -335,7 +358,9 @@ export function resolveDatasetDir(dataRoot: string, name: string): string {
   const resolved = path.resolve(resolvedRoot, cleaned);
   const relative = path.relative(resolvedRoot, resolved);
   if (relative.startsWith('..') || path.isAbsolute(relative)) {
-    throw new Error(`dataset name "${name}" resolves outside --data-root (${dataRoot})`);
+    throw new Error(
+      `dataset name "${name}" resolves outside --data-root (${dataRoot})`,
+    );
   }
   // Symlink-aware re-check: canonicalize both the data root and the resolved
   // target (or its nearest existing ancestor, when the leaf does not exist
@@ -344,8 +369,13 @@ export function resolveDatasetDir(dataRoot: string, name: string): string {
   const canonicalRoot = realpathOfNearestExisting(resolvedRoot);
   const canonicalResolved = realpathOfNearestExisting(resolved);
   const canonicalRelative = path.relative(canonicalRoot, canonicalResolved);
-  if (canonicalRelative.startsWith('..') || path.isAbsolute(canonicalRelative)) {
-    throw new Error(`dataset name "${name}" resolves outside --data-root (${dataRoot})`);
+  if (
+    canonicalRelative.startsWith('..') ||
+    path.isAbsolute(canonicalRelative)
+  ) {
+    throw new Error(
+      `dataset name "${name}" resolves outside --data-root (${dataRoot})`,
+    );
   }
   return resolved;
 }
@@ -372,7 +402,9 @@ function realpathOfNearestExisting(p: string): string {
   }
 }
 
-function buildColumns(manifest: RawManifest): DatasetColumnSummary[] | undefined {
+function buildColumns(
+  manifest: RawManifest,
+): DatasetColumnSummary[] | undefined {
   // Prefer `style_hints.properties` (build-time measured percentiles/cardinality)
   // when present — the richest column signal the manifest carries.
   const props = manifest.metadata.style_hints?.properties;
@@ -407,7 +439,10 @@ function buildColumns(manifest: RawManifest): DatasetColumnSummary[] | undefined
  * hints, temporal block, capabilities, directory layout, pack/byte totals.
  * Reads only `manifest.json` (never a directory or pack object).
  */
-export async function describeDataset(dataRoot: string, name: string): Promise<DatasetDescription> {
+export async function describeDataset(
+  dataRoot: string,
+  name: string,
+): Promise<DatasetDescription> {
   const dir = resolveDatasetDir(dataRoot, name);
   const manifest = await readManifest(dir);
   const summary = summarize(dataRoot, dir, manifest);
@@ -422,7 +457,10 @@ export async function describeDataset(dataRoot: string, name: string): Promise<D
     layers: m.layers ?? [],
     properties: m.properties ?? {},
     temporalBucketMs: m.temporal_bucket_ms,
-    temporalLod: m.temporal_lod?.map((l) => ({ bucketMs: l.bucket_ms, maxZoomLevel: l.max_zoom_level })),
+    temporalLod: m.temporal_lod?.map((l) => ({
+      bucketMs: l.bucket_ms,
+      maxZoomLevel: l.max_zoom_level,
+    })),
     capabilities: manifest.capabilities ?? [],
     compression: manifest.compression,
     blobOrdering: manifest.blobOrdering,

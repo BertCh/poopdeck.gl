@@ -12,13 +12,18 @@
 import { describe, it, expect, vi } from 'vitest';
 import { SpatiotemporalTileset } from '../src/spatiotemporal-tileset';
 import type { TileId, BoundingBox, Tile } from '../src/types';
-import { BOUNDS, BUCKET_MS, fakeTile, makeAvailableTiles, settle } from './helpers/fixtures';
+import {
+  BOUNDS,
+  BUCKET_MS,
+  fakeTile,
+  makeAvailableTiles,
+  settle,
+} from './helpers/fixtures';
 
 const N_BUCKETS = 100;
 
 /** One tile per bucket at (x=0, y=0) whose interval overlaps the range. */
 const availableTiles = makeAvailableTiles(N_BUCKETS);
-
 
 /** A gated batch request: stays pending until resolved, rejects on abort. */
 interface GatedBatch {
@@ -63,7 +68,9 @@ describe('SpatiotemporalTileset.flushPrefetch', () => {
     const priorityBatch = batches[0];
     const prefetchBatches = batches.slice(1);
     expect(priorityBatch.ids.every((id) => id.t === 0)).toBe(true);
-    expect(prefetchBatches.every((b) => b.ids.every((id) => id.t > 0))).toBe(true);
+    expect(prefetchBatches.every((b) => b.ids.every((id) => id.t > 0))).toBe(
+      true,
+    );
 
     tileset.flushPrefetch();
 
@@ -152,7 +159,12 @@ describe('SpatiotemporalTileset.flushPrefetch', () => {
     // SEEK: jump 50 buckets — far more than one time window. Even without an
     // explicit flushPrefetch() call, the stale prefetch queue is dropped and
     // its in-flight requests aborted.
-    tileset.update({ bounds: BOUNDS, zoom: 6, time: 50_000, timeWindow: BUCKET_MS });
+    tileset.update({
+      bounds: BOUNDS,
+      zoom: 6,
+      time: 50_000,
+      timeWindow: BUCKET_MS,
+    });
     await settle();
     expect(tileset.getCacheStats().prefetchQueueLength).toBe(0);
     for (const s of prefetchSingles) expect(s.signal?.aborted).toBe(true);
@@ -180,9 +192,16 @@ describe('SpatiotemporalTileset.flushPrefetch', () => {
 
     // A normal animation step (half a window) must keep the queued runway
     // intact (modulo tiles promoted into the new priority window).
-    tileset.update({ bounds: BOUNDS, zoom: 6, time: 500, timeWindow: BUCKET_MS });
+    tileset.update({
+      bounds: BOUNDS,
+      zoom: 6,
+      time: 500,
+      timeWindow: BUCKET_MS,
+    });
     await settle();
-    expect(tileset.getCacheStats().prefetchQueueLength).toBeGreaterThan(queuedBefore - 4);
+    expect(tileset.getCacheStats().prefetchQueueLength).toBeGreaterThan(
+      queuedBefore - 4,
+    );
 
     tileset.finalize();
   });
@@ -210,7 +229,12 @@ describe('SpatiotemporalTileset.flushPrefetch', () => {
 
     // Play head advances into a bucket that was just flushed from prefetch:
     // the next selection re-creates its header and loads it at priority.
-    tileset.update({ bounds: BOUNDS, zoom: 6, time: 2000, timeWindow: BUCKET_MS });
+    tileset.update({
+      bounds: BOUNDS,
+      zoom: 6,
+      time: 2000,
+      timeWindow: BUCKET_MS,
+    });
     await settle();
     expect(loaded.some((id) => id.t === 2000)).toBe(true);
 
@@ -221,7 +245,12 @@ describe('SpatiotemporalTileset.flushPrefetch', () => {
   // A controlled camera (AV ego-follow) shifts the bounds a sub-tile sliver
   // every frame. The flush decision keys on bounds quantized to ~1/8 of the
   // viewport, so DRIFT keeps the runway while a real PAN/zoom still flushes it.
-  const SMALL: BoundingBox = { minLon: 0, minLat: 0, maxLon: 0.008, maxLat: 0.008 };
+  const SMALL: BoundingBox = {
+    minLon: 0,
+    minLat: 0,
+    maxLon: 0.008,
+    maxLat: 0.008,
+  };
 
   function prefetchingTileset(batches: GatedBatch[]) {
     return new SpatiotemporalTileset({
@@ -247,7 +276,12 @@ describe('SpatiotemporalTileset.flushPrefetch', () => {
     expect(prefetchBatches.every((b) => !b.signal?.aborted)).toBe(true);
 
     // Drift the viewport by < 1/8 of the 0.008° span (0.001°): 0.0002°.
-    const drift: BoundingBox = { minLon: 0.0002, minLat: 0.0002, maxLon: 0.0082, maxLat: 0.0082 };
+    const drift: BoundingBox = {
+      minLon: 0.0002,
+      minLat: 0.0002,
+      maxLon: 0.0082,
+      maxLat: 0.0082,
+    };
     tileset.update({ bounds: drift, zoom: 6, time: 0, timeWindow: BUCKET_MS });
     await settle();
 
@@ -268,7 +302,12 @@ describe('SpatiotemporalTileset.flushPrefetch', () => {
     expect(prefetchBatches.every((b) => !b.signal?.aborted)).toBe(true);
 
     // Pan by > 1/8 of the span (0.001°): 0.003° crosses several grid cells.
-    const pan: BoundingBox = { minLon: 0.003, minLat: 0.003, maxLon: 0.011, maxLat: 0.011 };
+    const pan: BoundingBox = {
+      minLon: 0.003,
+      minLat: 0.003,
+      maxLon: 0.011,
+      maxLat: 0.011,
+    };
     tileset.update({ bounds: pan, zoom: 6, time: 0, timeWindow: BUCKET_MS });
     await settle();
 

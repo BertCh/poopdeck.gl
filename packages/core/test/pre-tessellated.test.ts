@@ -59,11 +59,16 @@ function buildPolygonTileWithTriangles(opts: {
   const coords = new Float64Array(featureCount * ringSize * 2);
   const writeRing = (fi: number, x: number, y: number) => {
     const base = fi * ringSize * 2;
-    coords[base + 0] = x;       coords[base + 1] = y;
-    coords[base + 2] = x + 1;   coords[base + 3] = y;
-    coords[base + 4] = x + 1;   coords[base + 5] = y + 1;
-    coords[base + 6] = x;       coords[base + 7] = y + 1;
-    coords[base + 8] = x;       coords[base + 9] = y;
+    coords[base + 0] = x;
+    coords[base + 1] = y;
+    coords[base + 2] = x + 1;
+    coords[base + 3] = y;
+    coords[base + 4] = x + 1;
+    coords[base + 5] = y + 1;
+    coords[base + 6] = x;
+    coords[base + 7] = y + 1;
+    coords[base + 8] = x;
+    coords[base + 9] = y;
   };
   writeRing(0, 0, 0);
   writeRing(1, 5, 5);
@@ -125,7 +130,9 @@ function buildPolygonTileWithTriangles(opts: {
   const triFlatValues = [3, 0, 1, 3, 1, 2, 3, 0, 1, 3, 1, 2];
   const triType = wireWidth === 'u16' ? new Uint16() : new Uint32();
   const triFlat =
-    wireWidth === 'u16' ? new Uint16Array(triFlatValues) : new Uint32Array(triFlatValues);
+    wireWidth === 'u16'
+      ? new Uint16Array(triFlatValues)
+      : new Uint32Array(triFlatValues);
   const triValues = makeData({ type: triType, data: triFlat });
   const triData = makeData({
     type: new List(new Field('item', triType, false)),
@@ -229,7 +236,9 @@ describe('decodeTile: pre-tessellated polygon column', () => {
     // After shifting: feature 0 stays [3,0,1, 3,1,2], feature 1 becomes
     // [8,5,6, 8,6,7] (each +5).
     expect(Array.from(f.triangles!.subarray(0, 6))).toEqual([3, 0, 1, 3, 1, 2]);
-    expect(Array.from(f.triangles!.subarray(6, 12))).toEqual([8, 5, 6, 8, 6, 7]);
+    expect(Array.from(f.triangles!.subarray(6, 12))).toEqual([
+      8, 5, 6, 8, 6, 7,
+    ]);
 
     // Every triangle index now maps into the global `positions` buffer.
     const positionCount = f.positions.length / (f.positionDimensions ?? 2);
@@ -250,6 +259,8 @@ describe('decodeTile: pre-tessellated polygon column', () => {
     // the wire width — only the on-disk child array narrows.
     expect(f.triangles).toBeInstanceOf(Uint32Array);
     expect(Array.from(f.triangles!.subarray(0, 6))).toEqual([3, 0, 1, 3, 1, 2]);
-    expect(Array.from(f.triangles!.subarray(6, 12))).toEqual([8, 5, 6, 8, 6, 7]);
+    expect(Array.from(f.triangles!.subarray(6, 12))).toEqual([
+      8, 5, 6, 8, 6, 7,
+    ]);
   });
 });

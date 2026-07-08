@@ -9,7 +9,7 @@ description: >-
   recommend_build (or stt-optimize recommend) FIRST to get an evidence-backed recipe.
 license: MIT
 metadata:
-  version: "0.4.0"
+  version: '0.4.0'
 ---
 
 # Building an STT dataset
@@ -30,7 +30,7 @@ encoding levers depend on the data's density and time distribution. **Do not gue
 
 - **In an MCP session:** call the `recommend_build` tool (from the `stt` server)
   with the source GeoParquet path. It runs `stt-optimize analyze` + `recommend
-  --explain` and returns a suggested `stt-build` command plus an evidence table
+--explain` and returns a suggested `stt-build` command plus an evidence table
   (with confidence and any LOSSY markers).
 - **From a shell:** `stt-optimize recommend -i data.parquet --command --explain`.
 

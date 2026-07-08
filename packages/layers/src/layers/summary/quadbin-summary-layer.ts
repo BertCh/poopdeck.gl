@@ -63,7 +63,10 @@ import type {
   Material,
 } from '@deck.gl/core';
 import { QuadkeyLayer } from '@deck.gl/geo-layers';
-import { getFeatureProperties, DEFAULT_SUMMARY_COLOR_RANGE } from '@poopdeck.gl/core';
+import {
+  getFeatureProperties,
+  DEFAULT_SUMMARY_COLOR_RANGE,
+} from '@poopdeck.gl/core';
 import type {
   ArchiveMetadata,
   BinaryFeatures,
@@ -84,7 +87,10 @@ import {
   updateTriggersDigest,
 } from '../../lib/style-digest.js';
 import { resolveAccessorAlias } from '../../lib/accessor-alias.js';
-import type { ColorAccessorValue, NumericAccessorValue } from '../../lib/accessor-alias.js';
+import type {
+  ColorAccessorValue,
+  NumericAccessorValue,
+} from '../../lib/accessor-alias.js';
 import { warnOnce } from '../../lib/log.js';
 
 const DEBUG = false;
@@ -329,7 +335,9 @@ const defaultProps: DefaultProps<QuadbinSummaryLayerProps> = {
  */
 export class QuadbinSummaryLayer<
   ExtraPropsT extends {} = {},
-> extends SpatioTemporalLayer<ExtraPropsT & Required<_QuadbinSummaryLayerProps>> {
+> extends SpatioTemporalLayer<
+  ExtraPropsT & Required<_QuadbinSummaryLayerProps>
+> {
   static layerName = 'QuadbinSummaryLayer';
 
   static defaultProps = defaultProps;
@@ -353,7 +361,11 @@ export class QuadbinSummaryLayer<
    */
   private sublayerCache = new Map<
     string,
-    { layer: QuadkeyLayer<PreparedQuadRow>; preparedKey: PreparedTile; styleKey: string }
+    {
+      layer: QuadkeyLayer<PreparedQuadRow>;
+      preparedKey: PreparedTile;
+      styleKey: string;
+    }
   >();
   private lastTilesRef: Tile[] | null = null;
 
@@ -554,10 +566,7 @@ export class QuadbinSummaryLayer<
         if (prepared.weightMin < lo) lo = prepared.weightMin;
         if (prepared.weightMax > hi) hi = prepared.weightMax;
       }
-      domain = [
-        Number.isFinite(lo) ? lo : 0,
-        Number.isFinite(hi) ? hi : 1,
-      ];
+      domain = [Number.isFinite(lo) ? lo : 0, Number.isFinite(hi) ? hi : 1];
     }
 
     // Layer-level style digest — when ANY of these change every cached
@@ -661,8 +670,13 @@ export class QuadbinSummaryLayer<
         },
       });
       // `_subLayerProps: { quadbins: { type } }` swaps the sublayer class.
-      const SubLayerClass = this.getSubLayerClass('quadbins', QuadkeyLayer as any);
-      const layer = new SubLayerClass(subProps as any) as QuadkeyLayer<PreparedQuadRow>;
+      const SubLayerClass = this.getSubLayerClass(
+        'quadbins',
+        QuadkeyLayer as any,
+      );
+      const layer = new SubLayerClass(
+        subProps as any,
+      ) as QuadkeyLayer<PreparedQuadRow>;
       this.sublayerCache.set(prepared.tileKey, {
         layer,
         preparedKey: prepared,
@@ -681,7 +695,10 @@ export class QuadbinSummaryLayer<
    * the rows array skips undecodable cells, so its index is not the feature
    * index), keeping `quadkey`/`weight` keys for continuity.
    */
-  getPickingInfo({ info, sourceLayer }: GetPickingInfoParams): SpatioTemporalPickingInfo {
+  getPickingInfo({
+    info,
+    sourceLayer,
+  }: GetPickingInfoParams): SpatioTemporalPickingInfo {
     const out = info as SpatioTemporalPickingInfo;
     const sprops = sourceLayer?.props as SttSublayerPickingProps | undefined;
     const tile = sprops?.tile ?? null;

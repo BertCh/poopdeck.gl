@@ -43,7 +43,10 @@ import {
   MAX_PICK_ID,
   type SttPickResult,
 } from '@poopdeck.gl/core/picking';
-import { projectPositions, quantizePositionsToUint16 } from './lib/projection.js';
+import {
+  projectPositions,
+  quantizePositionsToUint16,
+} from './lib/projection.js';
 
 /** RGBA tuple in the 0–1 range used by all STT shader uniforms. */
 export type RGBA = [number, number, number, number];
@@ -290,8 +293,19 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
    */
   protected instSupport: {
     enabled: boolean;
-    drawArraysInstanced: (mode: number, first: number, count: number, primCount: number) => void;
-    drawElementsInstanced: (mode: number, count: number, type: number, offset: number, primCount: number) => void;
+    drawArraysInstanced: (
+      mode: number,
+      first: number,
+      count: number,
+      primCount: number,
+    ) => void;
+    drawElementsInstanced: (
+      mode: number,
+      count: number,
+      type: number,
+      offset: number,
+      primCount: number,
+    ) => void;
     vertexAttribDivisor: (index: number, divisor: number) => void;
   } = {
     enabled: false,
@@ -387,7 +401,10 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
     // line/polygon expansion. WebGL2 supports them natively; on WebGL1 we
     // probe the extension. Subclasses that index >65k vertices must check
     // `this.supports32BitIndices` and fall back to multiple draws if false.
-    if (typeof WebGL2RenderingContext !== 'undefined' && gl instanceof WebGL2RenderingContext) {
+    if (
+      typeof WebGL2RenderingContext !== 'undefined' &&
+      gl instanceof WebGL2RenderingContext
+    ) {
       this.supports32BitIndices = true;
     } else {
       this.supports32BitIndices = !!gl.getExtension('OES_element_index_uint');
@@ -457,8 +474,19 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
       return;
     }
     const ext = gl.getExtension('ANGLE_instanced_arrays') as {
-      drawArraysInstancedANGLE: (mode: number, first: number, count: number, primCount: number) => void;
-      drawElementsInstancedANGLE: (mode: number, count: number, type: number, offset: number, primCount: number) => void;
+      drawArraysInstancedANGLE: (
+        mode: number,
+        first: number,
+        count: number,
+        primCount: number,
+      ) => void;
+      drawElementsInstancedANGLE: (
+        mode: number,
+        count: number,
+        type: number,
+        offset: number,
+        primCount: number,
+      ) => void;
       vertexAttribDivisorANGLE: (index: number, divisor: number) => void;
     } | null;
     if (ext) {
@@ -491,12 +519,7 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
     gl.bindBuffer(gl.ARRAY_BUFFER, buf);
     gl.bufferData(
       gl.ARRAY_BUFFER,
-      new Float32Array([
-        -1, 0,
-        1, 0,
-        -1, 1,
-        1, 1,
-      ]),
+      new Float32Array([-1, 0, 1, 0, -1, 1, 1, 1]),
       gl.STATIC_DRAW,
     );
     this.unitQuadBuffer = buf;
@@ -593,8 +616,7 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
           zoom,
           windowStart:
             currentTime - cache.timeOffset - this.opts.timeWindow / 2,
-          windowEnd:
-            currentTime - cache.timeOffset + this.opts.timeWindow / 2,
+          windowEnd: currentTime - cache.timeOffset + this.opts.timeWindow / 2,
         };
         this.drawTile(gl, tile, layer, cache, ctx);
       }
@@ -663,7 +685,11 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
     if (!f.positions?.length) return null;
 
     const dims: 2 | 3 = f.positionDimensions === 3 ? 3 : 2;
-    const { buffer, scale, offset } = this.projectAndUpload(gl, f.positions, dims);
+    const { buffer, scale, offset } = this.projectAndUpload(
+      gl,
+      f.positions,
+      dims,
+    );
     const times = this.uploadFeatureTimes(gl, f.startTimes, f.endTimes);
 
     const vertexCount = f.positions.length / dims;
@@ -758,7 +784,11 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
     gl: WebGLRenderingContext | WebGL2RenderingContext,
     positions: Float64Array | Float32Array,
     dimensions: 2 | 3,
-  ): { buffer: WebGLBuffer; scale: [number, number, number]; offset: [number, number, number] } {
+  ): {
+    buffer: WebGLBuffer;
+    scale: [number, number, number];
+    offset: [number, number, number];
+  } {
     const projected = projectPositions(positions, dimensions);
     const { quantized, scale, offset } = quantizePositionsToUint16(projected);
     const buf = gl.createBuffer()!;
@@ -1044,7 +1074,17 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
     this.pickFbo = gl.createFramebuffer()!;
     this.pickTexture = gl.createTexture()!;
     gl.bindTexture(gl.TEXTURE_2D, this.pickTexture);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    gl.texImage2D(
+      gl.TEXTURE_2D,
+      0,
+      gl.RGBA,
+      w,
+      h,
+      0,
+      gl.RGBA,
+      gl.UNSIGNED_BYTE,
+      null,
+    );
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -1141,7 +1181,12 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
 
     // Restore the host's render target before returning.
     gl.bindFramebuffer(gl.FRAMEBUFFER, prevFramebuffer);
-    gl.viewport(prevViewport[0], prevViewport[1], prevViewport[2], prevViewport[3]);
+    gl.viewport(
+      prevViewport[0],
+      prevViewport[1],
+      prevViewport[2],
+      prevViewport[3],
+    );
 
     return this.resolvePick(
       [this.pickBuffer[0], this.pickBuffer[1], this.pickBuffer[2]],

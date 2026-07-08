@@ -22,7 +22,9 @@ import { packedFromSingleFile, packedFetch } from './helpers/packed-fixture';
 
 // The committed fixture is a single-file v4 archive; the reader now consumes
 // the packed format, so transcode it to an in-memory packed dataset once.
-const FIXTURE = fileURLToPath(new URL('./fixtures/sample.stt', import.meta.url));
+const FIXTURE = fileURLToPath(
+  new URL('./fixtures/sample.stt', import.meta.url),
+);
 const FIXTURE_BYTES = new Uint8Array(readFileSync(FIXTURE));
 const DATASET = packedFromSingleFile(FIXTURE_BYTES);
 
@@ -90,7 +92,10 @@ describe('GeoArrow interop', () => {
     // rather than an unknown CRS. The Rust writer pins it on every geometry
     // field; without it those tools fall back to "unknown".
     const extMeta = geomField!.metadata.get('ARROW:extension:metadata');
-    expect(extMeta, 'geometry field must carry ARROW:extension:metadata').toBeDefined();
+    expect(
+      extMeta,
+      'geometry field must carry ARROW:extension:metadata',
+    ).toBeDefined();
     const crs = JSON.parse(extMeta!);
     expect(crs.crs).toBe('OGC:CRS84');
     expect(crs.crs_type).toBe('authority_code');

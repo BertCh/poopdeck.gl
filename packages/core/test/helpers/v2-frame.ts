@@ -28,10 +28,15 @@ export const REF_KIND_NO_PROPS = 2;
  * template/tail boundary of spec §3.2. Deterministic; proven by the v2
  * spike against both arrow-rs 59 and apache-arrow 17.
  */
-export function splitIpcTemplate(ipc: Uint8Array): { template: Uint8Array; tail: Uint8Array } {
+export function splitIpcTemplate(ipc: Uint8Array): {
+  template: Uint8Array;
+  tail: Uint8Array;
+} {
   const view = new DataView(ipc.buffer, ipc.byteOffset, ipc.byteLength);
   if (ipc.byteLength < 8 || view.getUint32(0, true) !== 0xffffffff) {
-    throw new Error('splitIpcTemplate: stream does not start with a continuation marker');
+    throw new Error(
+      'splitIpcTemplate: stream does not start with a continuation marker',
+    );
   }
   const metadataLen = view.getInt32(4, true);
   const boundary = 8 + metadataLen;
@@ -72,11 +77,19 @@ export interface BuildV2FrameOptions {
 }
 
 /** Assemble a v2 sectioned layer frame (spec §5.2) from layer specs. */
-export function buildV2Frame(layers: V2LayerSpec[], options: BuildV2FrameOptions = {}): Uint8Array {
+export function buildV2Frame(
+  layers: V2LayerSpec[],
+  options: BuildV2FrameOptions = {},
+): Uint8Array {
   const parts: number[] = [];
   const pushU16 = (v: number) => parts.push(v & 0xff, (v >> 8) & 0xff);
   const pushU32 = (v: number) =>
-    parts.push(v & 0xff, (v >>> 8) & 0xff, (v >>> 16) & 0xff, (v >>> 24) & 0xff);
+    parts.push(
+      v & 0xff,
+      (v >>> 8) & 0xff,
+      (v >>> 16) & 0xff,
+      (v >>> 24) & 0xff,
+    );
   const pushBytes = (b: Uint8Array) => {
     for (const x of b) parts.push(x);
   };
@@ -114,6 +127,8 @@ export function buildV2Frame(layers: V2LayerSpec[], options: BuildV2FrameOptions
 
 /** Canonical-ish TILE_META bytes (sorted keys, no whitespace). */
 export function tileMetaBytes(meta: Record<string, unknown>): Uint8Array {
-  const sorted = Object.fromEntries(Object.entries(meta).sort(([a], [b]) => (a < b ? -1 : 1)));
+  const sorted = Object.fromEntries(
+    Object.entries(meta).sort(([a], [b]) => (a < b ? -1 : 1)),
+  );
   return new TextEncoder().encode(JSON.stringify(sorted));
 }

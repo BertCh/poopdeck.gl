@@ -58,7 +58,9 @@ vi.mock('@deck.gl/layers', () => {
 // Faithful core mock — reproduces deck's extension getSubLayerProps pass so a
 // REAL extension's scalar props reach the sublayer.
 vi.mock('@deck.gl/core', async () => {
-  const core = (await import('./faithful-deck-core')).createFaithfulDeckCoreMock();
+  const core = (
+    await import('./faithful-deck-core')
+  ).createFaithfulDeckCoreMock();
   class FakeLayer<P = any> {
     props: any;
     constructor(props: Record<string, any> = {}) {
@@ -101,7 +103,8 @@ function basePathTile() {
 }
 
 async function makePointLayer(props: Record<string, any> = {}) {
-  const { AnimatedPointLayer } = await import('../src/layers/core/animated-point-layer');
+  const { AnimatedPointLayer } =
+    await import('../src/layers/core/animated-point-layer');
   const layer: any = Object.create((AnimatedPointLayer as any).prototype);
   layer.props = {
     id: 'pts',
@@ -125,7 +128,8 @@ async function makePointLayer(props: Record<string, any> = {}) {
 }
 
 async function makePathLayer(props: Record<string, any> = {}) {
-  const { AnimatedPathLayer } = await import('../src/layers/core/animated-path-layer');
+  const { AnimatedPathLayer } =
+    await import('../src/layers/core/animated-path-layer');
   const layer: any = Object.create((AnimatedPathLayer as any).prototype);
   layer.props = {
     id: 'paths',

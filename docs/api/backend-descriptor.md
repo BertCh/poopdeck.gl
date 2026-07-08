@@ -65,20 +65,20 @@ backends).
 
 ### `Capability` — cross-cutting engine traits
 
-| Capability | Meaning |
-| :--- | :--- |
-| `globe` | Can render on a spherical/globe projection, not just flat mercator. |
-| `picking` | Supports feature picking (hover/click). |
-| `extrude3d` | Polygons/columns can be extruded to a 3D height. |
-| `metricSizing` | Sizes can be specified in real-world meters, not just pixels. |
-| `gpuHeatmap` | Density heatmaps are computed on the GPU. |
-| `liveBundling` | Supports live (non-baked) edge bundling for flow visualizations. |
-| `timeAsHeight` | Can lift geometry by time (the "space-time cube" effect). |
+| Capability           | Meaning                                                                                          |
+| :------------------- | :----------------------------------------------------------------------------------------------- |
+| `globe`              | Can render on a spherical/globe projection, not just flat mercator.                              |
+| `picking`            | Supports feature picking (hover/click).                                                          |
+| `extrude3d`          | Polygons/columns can be extruded to a 3D height.                                                 |
+| `metricSizing`       | Sizes can be specified in real-world meters, not just pixels.                                    |
+| `gpuHeatmap`         | Density heatmaps are computed on the GPU.                                                        |
+| `liveBundling`       | Supports live (non-baked) edge bundling for flow visualizations.                                 |
+| `timeAsHeight`       | Can lift geometry by time (the "space-time cube" effect).                                        |
 | `interleavedBasemap` | Can interleave into a host basemap's own GL context rather than needing a synced overlay canvas. |
-| `userExtensions` | Accepts arbitrary user-supplied layer extensions/materials. |
-| `cameraRoll` | The camera model has a roll (bank) axis, not just heading/pitch. |
+| `userExtensions`     | Accepts arbitrary user-supplied layer extensions/materials.                                      |
+| `cameraRoll`         | The camera model has a roll (bank) axis, not just heading/pitch.                                 |
 
-> **Globe datum.** `globe: true` says nothing about the *datum*: the deck and
+> **Globe datum.** `globe: true` says nothing about the _datum_: the deck and
 > three globes are spherical by design (deck `GlobeView` parity), while Cesium's
 > globe is the WGS84 ellipsoid — the two frames diverge by up to ~21 km at
 > mid-latitudes. When registering STT geometry against Cesium (or any real
@@ -108,17 +108,17 @@ interface BackendDescriptor {
 }
 ```
 
-| Field | Description |
-| :--- | :--- |
-| `id` | Short backend identifier (`'deck'`, `'maplibre'`, `'three'`, `'cesium'`); the column header in the generated matrix. |
-| `capabilities` | One boolean per `Capability` — exhaustive, `tsc`-enforced. |
-| `timeFilterModes` | The `TimeFilterMode`s this backend implements. |
-| `layerKinds` | One `LayerKindSupport` per `LayerKind` — exhaustive, `tsc`-enforced. |
-| `projectsOnCpu` | Whether lon/lat → world projection happens on the CPU (three, Cesium) vs. on the GPU against a host viewport (deck). |
-| `tilesetOwnership` | `'shared'` — one tileset feeds every layer (deck, three, Cesium) — vs. `'per-layer'` — each layer class owns its own archive (MapLibre). |
-| `pickMechanism` | How picking resolves: `'gpu-id'` (an id color buffer), `'cpu-ray'` (ray/OBB intersection), `'id-fbo'` (a dedicated id framebuffer pass — defined for a future backend, not used by any of the four today), `'host'` (delegated to the host engine, e.g. Cesium's `scene.pick`), or `'none'`. |
+| Field                | Description                                                                                                                                                                                                                                                                                                                                        |
+| :------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`                 | Short backend identifier (`'deck'`, `'maplibre'`, `'three'`, `'cesium'`); the column header in the generated matrix.                                                                                                                                                                                                                               |
+| `capabilities`       | One boolean per `Capability` — exhaustive, `tsc`-enforced.                                                                                                                                                                                                                                                                                         |
+| `timeFilterModes`    | The `TimeFilterMode`s this backend implements.                                                                                                                                                                                                                                                                                                     |
+| `layerKinds`         | One `LayerKindSupport` per `LayerKind` — exhaustive, `tsc`-enforced.                                                                                                                                                                                                                                                                               |
+| `projectsOnCpu`      | Whether lon/lat → world projection happens on the CPU (three, Cesium) vs. on the GPU against a host viewport (deck).                                                                                                                                                                                                                               |
+| `tilesetOwnership`   | `'shared'` — one tileset feeds every layer (deck, three, Cesium) — vs. `'per-layer'` — each layer class owns its own archive (MapLibre).                                                                                                                                                                                                           |
+| `pickMechanism`      | How picking resolves: `'gpu-id'` (an id color buffer), `'cpu-ray'` (ray/OBB intersection), `'id-fbo'` (a dedicated id framebuffer pass — defined for a future backend, not used by any of the four today), `'host'` (delegated to the host engine, e.g. Cesium's `scene.pick`), or `'none'`.                                                       |
 | `interleavedBasemap` | Whether STT geometry can share the basemap's own GL/scene context vs. needing a camera-synced overlay canvas. Mirrored inside `capabilities.interleavedBasemap`, which is the value the over-claim gate actually checks; this top-level field is the same fact exposed as a direct trait for code that branches on it without a capability lookup. |
-| `basemapProjection` | The projection the backend's basemap integration assumes: `'mercator'` or `'globe'`. |
+| `basemapProjection`  | The projection the backend's basemap integration assumes: `'mercator'` or `'globe'`.                                                                                                                                                                                                                                                               |
 
 ## `LayerKindSupport` — native, fallback, or unsupported
 
@@ -167,7 +167,7 @@ how it doesn't:
    declared, otherwise `{ action: 'skip', reason }`.
 2. **Mode checked second.** If the kind is supported but `mode` is not in
    `timeFilterModes`: returns `{ action: 'fallbackMode', fromMode, toMode,
-   lost: [] }`, preferring `'window'` as the fallback mode when the backend
+lost: [] }`, preferring `'window'` as the fallback mode when the backend
    supports it, else the first mode the backend declares.
 
 The `Degradation` union also defines a `throw` action (`{ action: 'throw',
@@ -197,8 +197,8 @@ capability the backend doesn't actually have. `assertDescriptorConsistent`
 closes that gap: it walks every `Capability`, `LayerKind`, and declared
 `TimeFilterMode` the descriptor claims `true`/`supported`/present, and reports
 a violation string for each one that has no matching entry in `proven`. A
-descriptor that claims *less* than it proves is fine (that's just a backend
-choosing to degrade something it could technically support); claiming *more*
+descriptor that claims _less_ than it proves is fine (that's just a backend
+choosing to degrade something it could technically support); claiming _more_
 than it proves is what fails.
 
 Each backend package supplies its own `test/backend-descriptor.test.ts`
@@ -238,12 +238,12 @@ step.
 The generated file has four sections, one row group per `id` column
 (`deck`/`three`/`maplibre`/`cesium` today):
 
-| Section | Rows | Cell meaning |
-| :--- | :--- | :--- |
-| **Traits** | `projectsOnCpu`, `tilesetOwnership`, `pickMechanism`, `interleavedBasemap`, `basemapProjection` | The raw field value (`yes`/`no`, or the literal union value). |
-| **Capabilities** | every `Capability` | `✅` when `capabilities[cap]` is true, else `—`. |
-| **Time-filter modes** | every `TimeFilterMode` | `✅` when the mode is in `timeFilterModes`, else `—`. |
-| **Layer kinds** | every `LayerKind` | `✅` native, `↳ <kind>` fallback, `—` unsupported — see [`LayerKindSupport`](#layerkindsupport--native-fallback-or-unsupported) above. |
+| Section               | Rows                                                                                            | Cell meaning                                                                                                                           |
+| :-------------------- | :---------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------- |
+| **Traits**            | `projectsOnCpu`, `tilesetOwnership`, `pickMechanism`, `interleavedBasemap`, `basemapProjection` | The raw field value (`yes`/`no`, or the literal union value).                                                                          |
+| **Capabilities**      | every `Capability`                                                                              | `✅` when `capabilities[cap]` is true, else `—`.                                                                                       |
+| **Time-filter modes** | every `TimeFilterMode`                                                                          | `✅` when the mode is in `timeFilterModes`, else `—`.                                                                                  |
+| **Layer kinds**       | every `LayerKind`                                                                               | `✅` native, `↳ <kind>` fallback, `—` unsupported — see [`LayerKindSupport`](#layerkindsupport--native-fallback-or-unsupported) above. |
 
 Reading it top to bottom answers, in order: how does this backend project and
 own tiles (Traits), what can it do at all (Capabilities), what animation
@@ -252,12 +252,12 @@ render for a given layer kind, natively or via fallback (Layer kinds).
 
 ## The four concrete descriptors
 
-| Backend | Package | `id` | Descriptor file |
-| :--- | :--- | :--- | :--- |
-| deck.gl | `@poopdeck.gl/layers` | `deck` | [`packages/layers/src/backend-descriptor.ts`](../../packages/layers/src/backend-descriptor.ts) |
+| Backend     | Package                 | `id`       | Descriptor file                                                                                    |
+| :---------- | :---------------------- | :--------- | :------------------------------------------------------------------------------------------------- |
+| deck.gl     | `@poopdeck.gl/layers`   | `deck`     | [`packages/layers/src/backend-descriptor.ts`](../../packages/layers/src/backend-descriptor.ts)     |
 | MapLibre GL | `@poopdeck.gl/maplibre` | `maplibre` | [`packages/maplibre/src/backend-descriptor.ts`](../../packages/maplibre/src/backend-descriptor.ts) |
-| Three.js | `@poopdeck.gl/three` | `three` | [`packages/three/src/backend-descriptor.ts`](../../packages/three/src/backend-descriptor.ts) |
-| CesiumJS | `@poopdeck.gl/cesium` | `cesium` | [`packages/cesium/src/backend-descriptor.ts`](../../packages/cesium/src/backend-descriptor.ts) |
+| Three.js    | `@poopdeck.gl/three`    | `three`    | [`packages/three/src/backend-descriptor.ts`](../../packages/three/src/backend-descriptor.ts)       |
+| CesiumJS    | `@poopdeck.gl/cesium`   | `cesium`   | [`packages/cesium/src/backend-descriptor.ts`](../../packages/cesium/src/backend-descriptor.ts)     |
 
 deck.gl is the reference backend (full catalog, GPU id-buffer picking, all
 four time-filter modes, interleaves into the basemap's GL context). The other
@@ -271,7 +271,7 @@ for a worked walkthrough of one descriptor's fields end to end.
 1. Import `BackendDescriptor`, `LayerKind`, `Capability`, `LayerKindSupport`,
    `LAYER_KINDS`, and `CAPABILITIES` from `@poopdeck.gl/core/capabilities`.
 2. Build an exhaustive `layerKinds` record — either `satisfies
-   Record<LayerKind, LayerKindSupport>` on a literal object, or
+Record<LayerKind, LayerKindSupport>` on a literal object, or
    `Object.fromEntries(LAYER_KINDS.map(...))` — so a `LayerKind` missing from
    the record is a `tsc` error. Give every `supported: false` entry a `reason`
    and, where a substitute exists, a `fallbackKind`.

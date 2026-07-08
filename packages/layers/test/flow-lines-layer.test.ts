@@ -40,8 +40,18 @@ describe('FlowLinesLayer', () => {
       expect(ARROW_TEMPLATE_POSITIONS[v * 3 + 1]).toBeGreaterThanOrEqual(0);
     }
     // The arrowhead flares to perp 2 and is pulled back along travel (−3).
-    const maxPerp = Math.max(...Array.from({ length: 9 }, (_, v) => ARROW_TEMPLATE_POSITIONS[v * 3 + 1]));
-    const minTravel = Math.min(...Array.from({ length: 9 }, (_, v) => ARROW_TEMPLATE_POSITIONS[v * 3 + 2]));
+    const maxPerp = Math.max(
+      ...Array.from(
+        { length: 9 },
+        (_, v) => ARROW_TEMPLATE_POSITIONS[v * 3 + 1],
+      ),
+    );
+    const minTravel = Math.min(
+      ...Array.from(
+        { length: 9 },
+        (_, v) => ARROW_TEMPLATE_POSITIONS[v * 3 + 2],
+      ),
+    );
     expect(maxPerp).toBe(2);
     expect(minTravel).toBe(-3);
   });

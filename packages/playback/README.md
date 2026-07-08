@@ -16,7 +16,7 @@ No peer dependencies, no runtime dependencies.
 ## Hello world — TimeController basics
 
 ```ts
-import { TimeController } from "@poopdeck.gl/playback";
+import { TimeController } from '@poopdeck.gl/playback';
 
 const clock = new TimeController({
   timeRange: { start, end },
@@ -24,7 +24,7 @@ const clock = new TimeController({
   loop: true,
 });
 
-const unsubscribe = clock.on("tick", (t) => render(t));
+const unsubscribe = clock.on('tick', (t) => render(t));
 clock.play();
 // later:
 clock.pause();

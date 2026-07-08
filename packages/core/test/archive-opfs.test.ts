@@ -22,21 +22,26 @@ import {
 import { bufferToArrayBuffer, settle } from './helpers/fixtures';
 import { installShim, uninstallShim } from './helpers/opfs-shim';
 
-const FIXTURE = fileURLToPath(new URL('./fixtures/sample.stt', import.meta.url));
+const FIXTURE = fileURLToPath(
+  new URL('./fixtures/sample.stt', import.meta.url),
+);
 const FIXTURE_BYTES = new Uint8Array(readFileSync(FIXTURE));
 // The reader consumes the packed format; transcode the single-file fixture. The
 // OPFS fingerprint now derives from the manifest's content-addressed directory
 // key (stable across packs), NOT a per-response ETag.
-const DATASET = packedFromSingleFile(FIXTURE_BYTES, { manifestUrl: 'mem://data/sample/manifest.json' });
+const DATASET = packedFromSingleFile(FIXTURE_BYTES, {
+  manifestUrl: 'mem://data/sample/manifest.json',
+});
 
 /**
  * A counting `fetch` over an in-memory packed dataset. `.calls` counts ALL
  * HTTP calls (manifest + directory whole-GETs and pack range requests); tests
  * snapshot it after `getIndex()` so the delta isolates tile-body fetches.
  */
-function packedCountingFetch(
-  ds: InMemoryPackedDataset,
-): { fetch: typeof fetch; stats: { calls: number } } {
+function packedCountingFetch(ds: InMemoryPackedDataset): {
+  fetch: typeof fetch;
+  stats: { calls: number };
+} {
   const stats = { calls: 0 };
   const slash = ds.manifestUrl.lastIndexOf('/');
   const base = slash >= 0 ? ds.manifestUrl.slice(0, slash + 1) : '';
@@ -47,12 +52,22 @@ function packedCountingFetch(
     const range = (init?.headers as Record<string, string> | undefined)?.Range;
     const m = /bytes=(\d+)-(\d+)/.exec(range ?? '');
     if (!m) {
-      return { ok: true, status: 200, statusText: 'OK', arrayBuffer: async () => bufferToArrayBuffer(bytes) };
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        arrayBuffer: async () => bufferToArrayBuffer(bytes),
+      };
     }
     const start = Number(m[1]);
     const end = Math.min(Number(m[2]), bytes.length - 1);
     const slice = bytes.subarray(start, end + 1);
-    return { ok: true, status: 206, statusText: 'Partial Content', arrayBuffer: async () => bufferToArrayBuffer(slice) };
+    return {
+      ok: true,
+      status: 206,
+      statusText: 'Partial Content',
+      arrayBuffer: async () => bufferToArrayBuffer(slice),
+    };
   }) as unknown as typeof fetch;
   return { fetch: fn, stats };
 }
@@ -70,10 +85,19 @@ describe('STTArchive + OpfsTileCache integration', () => {
     try {
       const cache = new OpfsTileCache();
       const { fetch: f } = rangeFetch();
-      const a = new STTArchive({ url: MANIFEST_URL, fetch: f, opfsCacheImpl: cache });
+      const a = new STTArchive({
+        url: MANIFEST_URL,
+        fetch: f,
+        opfsCacheImpl: cache,
+      });
       const index = await a.getIndex();
       const e = index.tiles[0];
-      const tile = await a.getTile({ z: e.zoom, x: e.x, y: e.y, t: e.timeStart });
+      const tile = await a.getTile({
+        z: e.zoom,
+        x: e.x,
+        y: e.y,
+        t: e.timeStart,
+      });
       expect(tile).not.toBeNull();
       // The OPFS write is fire-and-forget; await a tick so the microtask
       // chain that decompresses + writes can finish before we inspect.
@@ -113,7 +137,12 @@ describe('STTArchive + OpfsTileCache integration', () => {
       const idx2 = await b.getIndex();
       const e = idx2.tiles[0];
       const callsAfterOpen = s2.calls;
-      const tile = await b.getTile({ z: e.zoom, x: e.x, y: e.y, t: e.timeStart });
+      const tile = await b.getTile({
+        z: e.zoom,
+        x: e.x,
+        y: e.y,
+        t: e.timeStart,
+      });
       expect(tile).not.toBeNull();
       // No new fetches for the tile body — header + metadata + index are
       // the only HTTP calls. The tile range request was skipped.
@@ -166,7 +195,12 @@ describe('STTArchive + OpfsTileCache integration', () => {
       const idx2 = await b.getIndex();
       const e = idx2.tiles[0];
       const callsAfterOpen = s2.calls;
-      const tile = await b.getTile({ z: e.zoom, x: e.x, y: e.y, t: e.timeStart });
+      const tile = await b.getTile({
+        z: e.zoom,
+        x: e.x,
+        y: e.y,
+        t: e.timeStart,
+      });
       expect(tile).not.toBeNull();
       // The fingerprint differs, so the OPFS key differs — we expect a real
       // range request to have fired for the tile body.

@@ -33,7 +33,12 @@
   ],
   "overrides": [
     {
-      "files": ["**/*.test.ts", "**/*.test.tsx", "**/test/**", "**/__tests__/**"],
+      "files": [
+        "**/*.test.ts",
+        "**/*.test.tsx",
+        "**/test/**",
+        "**/__tests__/**"
+      ],
       "env": {
         "vitest": true
       }

@@ -20,7 +20,9 @@ const browser = await chromium.launch({
   ],
 });
 
-const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+const ctx = await browser.newContext({
+  viewport: { width: 1280, height: 800 },
+});
 
 // Install BEFORE navigation so we capture workers created during page init,
 // including the WorkerTileDecoder pool spun up when STTArchive first decodes.
@@ -46,7 +48,10 @@ await ctx.addInitScript(() => {
     const po = new PerformanceObserver((list) => {
       for (const e of list.getEntries()) {
         // @ts-ignore
-        window.__sttProbe.longTasks.push({ duration: e.duration, start: e.startTime });
+        window.__sttProbe.longTasks.push({
+          duration: e.duration,
+          start: e.startTime,
+        });
       }
     });
     po.observe({ entryTypes: ['longtask'] });
@@ -74,7 +79,10 @@ await page.waitForTimeout(3000); // initial paint
 // paused-scene cost.
 const PLAY = process.env.PLAY === '1';
 if (PLAY) {
-  const play = page.locator('button').filter({ hasText: /^[▶⏸]$/ }).first();
+  const play = page
+    .locator('button')
+    .filter({ hasText: /^[▶⏸]$/ })
+    .first();
   const glyph = (await play.innerText()).trim();
   if (glyph === '▶') await play.click();
 }
@@ -126,24 +134,34 @@ console.log(`Workers created (${sample.workerUrls.length} total):`);
 for (const u of sample.workerUrls) {
   console.log(`  ${u}`);
 }
-console.log(`rAF frames in 6s: ${sample.rafFrames}  (fps=${(sample.rafFrames / 6).toFixed(2)})`);
+console.log(
+  `rAF frames in 6s: ${sample.rafFrames}  (fps=${(sample.rafFrames / 6).toFixed(2)})`,
+);
 
 const sorted = [...sample.rafTimes].sort((a, b) => a - b);
 const p50 = sorted[Math.floor(sorted.length * 0.5)] || 0;
 const p95 = sorted[Math.floor(sorted.length * 0.95)] || 0;
 const max = sorted[sorted.length - 1] || 0;
-console.log(`rAF frame time  p50=${p50.toFixed(1)}ms  p95=${p95.toFixed(1)}ms  max=${max.toFixed(1)}ms`);
+console.log(
+  `rAF frame time  p50=${p50.toFixed(1)}ms  p95=${p95.toFixed(1)}ms  max=${max.toFixed(1)}ms`,
+);
 
 console.log(`\nLong tasks (>50ms): ${sample.longTasks.length}`);
-const topTasks = [...sample.longTasks].sort((a, b) => b.duration - a.duration).slice(0, 8);
+const topTasks = [...sample.longTasks]
+  .sort((a, b) => b.duration - a.duration)
+  .slice(0, 8);
 for (const t of topTasks) {
   console.log(`  ${t.duration.toFixed(0)}ms at t=${t.start.toFixed(0)}`);
 }
 
 console.log(`\nConsolidations recorded: ${sample.consolidations.length}`);
-const topCons = [...sample.consolidations].sort((a, b) => b.ms - a.ms).slice(0, 8);
+const topCons = [...sample.consolidations]
+  .sort((a, b) => b.ms - a.ms)
+  .slice(0, 8);
 for (const c of topCons) {
-  console.log(`  tiles=${c.tiles}  features=${c.features}  ms=${c.ms.toFixed(0)}`);
+  console.log(
+    `  tiles=${c.tiles}  features=${c.features}  ms=${c.ms.toFixed(0)}`,
+  );
 }
 
 await browser.close();

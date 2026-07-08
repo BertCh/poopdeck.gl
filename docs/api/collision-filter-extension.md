@@ -43,33 +43,33 @@ new AnimatedIconLayer({
 
 `collisionFilterProps(options: CollisionFilterOptions)` accepts:
 
-| Property | Type | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `collisionEnabled` | `boolean` | `true` | Enable/disable collisions. When disabled every object renders. |
-| `collisionGroup` | `string` | deck's `'default'` | Collision group this layer belongs to. Layers in different groups never collide with each other. Omit to fall back to deck's `'default'` group. |
-| `collisionTestProps` | `Record<string, unknown>` | — | Props overridden while deck renders the (hidden) collision map — e.g. `{ radiusScale: 2 }` to reserve extra space around each icon. |
-| `collisionPriority` | `number` | `0` | CONSTANT collision priority in `[-1000, 1000]`; higher wins. Applies to every feature in the layer (rank a whole layer above/below another). Out-of-range values are clamped with a one-time warning. |
-| `collisionPriorityProperty` | `string` | — | **Deferred** — a baked tile column name for per-feature priority. Not wired in the layers yet. Passing it warns once and falls back to the constant `collisionPriority`. See [Behavior](#behavior). |
-| `extensions` | `LayerExtension[]` | `[]` | Existing extensions to compose with. A `CollisionFilterExtension` already present is reused (not duplicated); everything else is preserved. |
+| Property                    | Type                      | Default            | Description                                                                                                                                                                                           |
+| :-------------------------- | :------------------------ | :----------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `collisionEnabled`          | `boolean`                 | `true`             | Enable/disable collisions. When disabled every object renders.                                                                                                                                        |
+| `collisionGroup`            | `string`                  | deck's `'default'` | Collision group this layer belongs to. Layers in different groups never collide with each other. Omit to fall back to deck's `'default'` group.                                                       |
+| `collisionTestProps`        | `Record<string, unknown>` | —                  | Props overridden while deck renders the (hidden) collision map — e.g. `{ radiusScale: 2 }` to reserve extra space around each icon.                                                                   |
+| `collisionPriority`         | `number`                  | `0`                | CONSTANT collision priority in `[-1000, 1000]`; higher wins. Applies to every feature in the layer (rank a whole layer above/below another). Out-of-range values are clamped with a one-time warning. |
+| `collisionPriorityProperty` | `string`                  | —                  | **Deferred** — a baked tile column name for per-feature priority. Not wired in the layers yet. Passing it warns once and falls back to the constant `collisionPriority`. See [Behavior](#behavior).   |
+| `extensions`                | `LayerExtension[]`        | `[]`               | Existing extensions to compose with. A `CollisionFilterExtension` already present is reused (not duplicated); everything else is preserved.                                                           |
 
 ## Returned props
 
 `collisionFilterProps` returns a `CollisionFilterProps` object, spreadable onto any STT layer:
 
-| Property | Type | Description |
-| :--- | :--- | :--- |
-| `extensions` | `LayerExtension[]` | The merged extension list, including a `CollisionFilterExtension`. |
-| `collisionEnabled` | `boolean` | The resolved `collisionEnabled` value. |
-| `collisionGroup` | `string` | Present only when `collisionGroup` was supplied. |
-| `collisionTestProps` | `Record<string, unknown>` | Present only when `collisionTestProps` was supplied. |
-| `getCollisionPriority` | `number` | The constant collision priority, clamped to `[COLLISION_PRIORITY_MIN, COLLISION_PRIORITY_MAX]`. Always a constant number — STT tiles are binary, so there is no per-feature JS accessor to run. |
+| Property               | Type                      | Description                                                                                                                                                                                     |
+| :--------------------- | :------------------------ | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `extensions`           | `LayerExtension[]`        | The merged extension list, including a `CollisionFilterExtension`.                                                                                                                              |
+| `collisionEnabled`     | `boolean`                 | The resolved `collisionEnabled` value.                                                                                                                                                          |
+| `collisionGroup`       | `string`                  | Present only when `collisionGroup` was supplied.                                                                                                                                                |
+| `collisionTestProps`   | `Record<string, unknown>` | Present only when `collisionTestProps` was supplied.                                                                                                                                            |
+| `getCollisionPriority` | `number`                  | The constant collision priority, clamped to `[COLLISION_PRIORITY_MIN, COLLISION_PRIORITY_MAX]`. Always a constant number — STT tiles are binary, so there is no per-feature JS accessor to run. |
 
 ## Priority constants
 
-| Constant | Value | Description |
-| :--- | :--- | :--- |
+| Constant                 | Value   | Description                                      |
+| :----------------------- | :------ | :----------------------------------------------- |
 | `COLLISION_PRIORITY_MIN` | `-1000` | Lower bound of deck's documented priority clamp. |
-| `COLLISION_PRIORITY_MAX` | `1000` | Upper bound of deck's documented priority clamp. |
+| `COLLISION_PRIORITY_MAX` | `1000`  | Upper bound of deck's documented priority clamp. |
 
 Priorities outside `[-1000, 1000]` are meaningless to deck; `collisionFilterProps` clamps them into range and emits a one-time console warning.
 

@@ -25,24 +25,53 @@
  * catalog isn't built yet.
  */
 
-import type { BackendDescriptor, LayerKind, LayerKindSupport } from '@poopdeck.gl/core/capabilities';
+import type {
+  BackendDescriptor,
+  LayerKind,
+  LayerKindSupport,
+} from '@poopdeck.gl/core/capabilities';
 import { LAYER_KINDS } from '@poopdeck.gl/core/capabilities';
 
 const UNBUILT = 'not yet implemented in the Cesium backend';
-const SUPPORTED: ReadonlySet<LayerKind> = new Set(['point', 'path', 'line', 'arc', 'trips', 'tripHeads']);
+const SUPPORTED: ReadonlySet<LayerKind> = new Set([
+  'point',
+  'path',
+  'line',
+  'arc',
+  'trips',
+  'tripHeads',
+]);
 
 function layerKinds(): Record<LayerKind, LayerKindSupport> {
   const out = {} as Record<LayerKind, LayerKindSupport>;
   for (const kind of LAYER_KINDS) {
     if (SUPPORTED.has(kind)) out[kind] = { supported: true };
-    else if (kind === 'surfel') out[kind] = { supported: false, fallbackKind: 'point', reason: UNBUILT };
-    else if (kind === 'flowmap' || kind === 'flowCorridor' || kind === 'flowStroke')
+    else if (kind === 'surfel')
+      out[kind] = { supported: false, fallbackKind: 'point', reason: UNBUILT };
+    else if (
+      kind === 'flowmap' ||
+      kind === 'flowCorridor' ||
+      kind === 'flowStroke'
+    )
       out[kind] = { supported: false, fallbackKind: 'line', reason: UNBUILT };
-    else if (kind === 'isoLines') out[kind] = { supported: false, fallbackKind: 'path', reason: UNBUILT };
-    else if (kind === 'text') out[kind] = { supported: false, fallbackKind: 'icon', reason: UNBUILT };
-    else if (kind === 'mesh') out[kind] = { supported: false, fallbackKind: 'boundingBox', reason: UNBUILT };
-    else if (kind === 'pointCloud') out[kind] = { supported: false, fallbackKind: 'point', reason: UNBUILT };
-    else if (kind === 'hexbin') out[kind] = { supported: false, fallbackKind: 'h3Summary', reason: UNBUILT };
+    else if (kind === 'isoLines')
+      out[kind] = { supported: false, fallbackKind: 'path', reason: UNBUILT };
+    else if (kind === 'text')
+      out[kind] = { supported: false, fallbackKind: 'icon', reason: UNBUILT };
+    else if (kind === 'mesh')
+      out[kind] = {
+        supported: false,
+        fallbackKind: 'boundingBox',
+        reason: UNBUILT,
+      };
+    else if (kind === 'pointCloud')
+      out[kind] = { supported: false, fallbackKind: 'point', reason: UNBUILT };
+    else if (kind === 'hexbin')
+      out[kind] = {
+        supported: false,
+        fallbackKind: 'h3Summary',
+        reason: UNBUILT,
+      };
     else out[kind] = { supported: false, reason: UNBUILT };
   }
   return out;

@@ -41,7 +41,7 @@ slider.oninput = (e) => player.scrubTo(+e.target.value);
 slider.onpointerup = (e) => player.endScrub(+e.target.value);
 
 // UI feedback — media-element shaped:
-player.on('timeupdate', (t) => updateSlider(t));       // ~4 Hz + final snap
+player.on('timeupdate', (t) => updateSlider(t)); // ~4 Hz + final snap
 player.on('play', () => setGlyph('pause'));
 player.on('pause', () => setGlyph('play'));
 player.on('waiting', ({ etaMs }) => showSpinner(etaMs));
@@ -51,21 +51,21 @@ player.on('ended', () => showReplayAffordance());
 
 ## HTMLMediaElement mapping
 
-| HTMLMediaElement | SttPlayer | Notes |
-| :--- | :--- | :--- |
-| `play()` / `pause()` | `play()` / `pause()` | Routed through the governor's buffered-runway gates. `play()` at the ended boundary replays from the range start (media replay convention). |
-| `paused` | `paused` | **User intent**: stays `false` through `starting`/`buffering`/`seeking` gates, so the play/pause glyph follows one bit. |
-| `ended` | `ended` + `'ended'` event | True while parked at a non-looping range boundary (distinct from a user pause). |
-| `currentTime` get/set | `currentTime` get/set | Setter = **committed seek** (prefetch flush + post-seek gate). For drags use the scrub trio — previews are free. |
-| `duration` | `duration` | Range span in sim-ms. Times are absolute sim-ms (not zero-based seconds); `seekable` says where the range lives. |
-| `playbackRate` | `playbackRate` | The multiplier over `baseRate`. Magnitude-only, like the media element — direction is separate (`timeController.setDirection`). |
-| `seekable` | `seekable` | The configured time range; replace via `setTimeRange(range)`. |
-| `buffered` | `buffered` | `governor.getBufferedRanges()` passthrough, for a buffered-bar UI. |
-| `readyState` | `state` | The governor machine state (`idle`/`starting`/`playing`/`buffering`/`seeking`). |
-| `'timeupdate'` (~4 Hz) | `'timeupdate'` | Throttled to `timeupdateHz`; emits immediately on pause/seek/scrub so UIs land on the final value. |
-| `'waiting'` / `'canplay'` | `'waiting'` / `'ready'` | Gate entered (clock frozen) / gate passed (`degraded: true` when the escape hatch fired). |
-| `'progress'` | `'progress'` | Forwarded buffer-runway events. |
-| `'ratechange'` | `'ratechange'` | Fires on `playbackRate` changes only — `baseRate` re-bases what "1×" means without firing it. |
+| HTMLMediaElement          | SttPlayer                 | Notes                                                                                                                                       |
+| :------------------------ | :------------------------ | :------------------------------------------------------------------------------------------------------------------------------------------ |
+| `play()` / `pause()`      | `play()` / `pause()`      | Routed through the governor's buffered-runway gates. `play()` at the ended boundary replays from the range start (media replay convention). |
+| `paused`                  | `paused`                  | **User intent**: stays `false` through `starting`/`buffering`/`seeking` gates, so the play/pause glyph follows one bit.                     |
+| `ended`                   | `ended` + `'ended'` event | True while parked at a non-looping range boundary (distinct from a user pause).                                                             |
+| `currentTime` get/set     | `currentTime` get/set     | Setter = **committed seek** (prefetch flush + post-seek gate). For drags use the scrub trio — previews are free.                            |
+| `duration`                | `duration`                | Range span in sim-ms. Times are absolute sim-ms (not zero-based seconds); `seekable` says where the range lives.                            |
+| `playbackRate`            | `playbackRate`            | The multiplier over `baseRate`. Magnitude-only, like the media element — direction is separate (`timeController.setDirection`).             |
+| `seekable`                | `seekable`                | The configured time range; replace via `setTimeRange(range)`.                                                                               |
+| `buffered`                | `buffered`                | `governor.getBufferedRanges()` passthrough, for a buffered-bar UI.                                                                          |
+| `readyState`              | `state`                   | The governor machine state (`idle`/`starting`/`playing`/`buffering`/`seeking`).                                                             |
+| `'timeupdate'` (~4 Hz)    | `'timeupdate'`            | Throttled to `timeupdateHz`; emits immediately on pause/seek/scrub so UIs land on the final value.                                          |
+| `'waiting'` / `'canplay'` | `'waiting'` / `'ready'`   | Gate entered (clock frozen) / gate passed (`degraded: true` when the escape hatch fired).                                                   |
+| `'progress'`              | `'progress'`              | Forwarded buffer-runway events.                                                                                                             |
+| `'ratechange'`            | `'ratechange'`            | Fires on `playbackRate` changes only — `baseRate` re-bases what "1×" means without firing it.                                               |
 
 ## Constructor
 
@@ -73,30 +73,30 @@ player.on('ended', () => showReplayAffordance());
 new SttPlayer(options: SttPlayerOptions)
 ```
 
-| Option | Type | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `timeRange` | `{ start, end }` | required | The dataset's time range (absolute sim-ms). Drives `duration`/`seekable` and the clock's boundary behavior. |
-| `initialTime` | `number` | `timeRange.start` | Initial playhead position. |
-| `baseRate` | `number` | `1` | Sim-ms per wall-ms at `playbackRate` 1 — the per-dataset "1×". |
-| `playbackRate` | `number` | `1` | User-facing speed multiplier. |
-| `loop` | `boolean` | `false` | Wrap to the range start at the end. Wraps are routed through seek semantics by the governor (see [loop wraps](./playback-governor.md#loop-wraps)). |
-| `bounce` | `boolean` | `false` | Ping-pong at the boundaries instead of wrapping (see [`TimeControllerOptions.bounce`](./time-controller.md)). |
-| `timeupdateHz` | `number` | `4` | `'timeupdate'` cadence. Throttles ONLY the event — never the internal clock. |
-| `governor` | `PlaybackGovernorOptions` minus `source` | `{}` | Gate/watermark/escape-hatch tuning. The source is wired via `setSource()`. |
+| Option         | Type                                     | Default           | Description                                                                                                                                        |
+| :------------- | :--------------------------------------- | :---------------- | :------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `timeRange`    | `{ start, end }`                         | required          | The dataset's time range (absolute sim-ms). Drives `duration`/`seekable` and the clock's boundary behavior.                                        |
+| `initialTime`  | `number`                                 | `timeRange.start` | Initial playhead position.                                                                                                                         |
+| `baseRate`     | `number`                                 | `1`               | Sim-ms per wall-ms at `playbackRate` 1 — the per-dataset "1×".                                                                                     |
+| `playbackRate` | `number`                                 | `1`               | User-facing speed multiplier.                                                                                                                      |
+| `loop`         | `boolean`                                | `false`           | Wrap to the range start at the end. Wraps are routed through seek semantics by the governor (see [loop wraps](./playback-governor.md#loop-wraps)). |
+| `bounce`       | `boolean`                                | `false`           | Ping-pong at the boundaries instead of wrapping (see [`TimeControllerOptions.bounce`](./time-controller.md)).                                      |
+| `timeupdateHz` | `number`                                 | `4`               | `'timeupdate'` cadence. Throttles ONLY the event — never the internal clock.                                                                       |
+| `governor`     | `PlaybackGovernorOptions` minus `source` | `{}`              | Gate/watermark/escape-hatch tuning. The source is wired via `setSource()`.                                                                         |
 
 ## Methods and properties
 
 ### Playback
 
-| Member | Description |
-| :--- | :--- |
-| `play()` / `pause()` | Gated play / sticky pause (see mapping table). |
-| `paused` / `ended` / `state` / `isCreeping` | Intent, boundary-parked flag, governor machine state, degraded-creep flag. |
-| `currentTime` get/set | Playhead; setter is a committed seek. |
-| `duration` / `seekable` / `setTimeRange(range)` | Range span / window / replacement (dataset switch). |
-| `playbackRate` get/set | Multiplier; setter applies `baseRate × rate` to the clock and fires `'ratechange'`. |
-| `baseRate` get/set | The per-dataset "1×"; setter re-applies the effective speed without firing `'ratechange'`. |
-| `buffered` | Loaded time ranges (`[]` before the source arrives). |
+| Member                                          | Description                                                                                |
+| :---------------------------------------------- | :----------------------------------------------------------------------------------------- |
+| `play()` / `pause()`                            | Gated play / sticky pause (see mapping table).                                             |
+| `paused` / `ended` / `state` / `isCreeping`     | Intent, boundary-parked flag, governor machine state, degraded-creep flag.                 |
+| `currentTime` get/set                           | Playhead; setter is a committed seek.                                                      |
+| `duration` / `seekable` / `setTimeRange(range)` | Range span / window / replacement (dataset switch).                                        |
+| `playbackRate` get/set                          | Multiplier; setter applies `baseRate × rate` to the clock and fires `'ratechange'`.        |
+| `baseRate` get/set                              | The per-dataset "1×"; setter re-applies the effective speed without firing `'ratechange'`. |
+| `buffered`                                      | Loaded time ranges (`[]` before the source arrives).                                       |
 
 ### Scrubbing
 
@@ -104,32 +104,32 @@ new SttPlayer(options: SttPlayerOptions)
 
 ### Plumbing and queries
 
-| Member | Description |
-| :--- | :--- |
-| `setSource(source)` | Attach the readiness oracle (the tileset, from the layer's `onTilesetReady`). |
-| `notifyBufferChange(runway)` | Forward the layer's `onBufferChange`; re-emitted as `'progress'`, re-evaluates gates immediately. |
-| `getEtaMs()` | Honest wall-ms ETA for the current gate window; `null` when unknown. |
-| `estimateCost(range)` | Byte/tile cost of buffering `range` (directory math — ETA chips, timeline density strips). |
-| `getQoeStats()` | Session QoE counters (stalls, startup, creep). |
-| `getAutoSpeedSuggestion()` | Raw sustainable speed in controller units (sim-ms per wall-ms). |
+| Member                               | Description                                                                                                                                                                                                                                          |
+| :----------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `setSource(source)`                  | Attach the readiness oracle (the tileset, from the layer's `onTilesetReady`).                                                                                                                                                                        |
+| `notifyBufferChange(runway)`         | Forward the layer's `onBufferChange`; re-emitted as `'progress'`, re-evaluates gates immediately.                                                                                                                                                    |
+| `getEtaMs()`                         | Honest wall-ms ETA for the current gate window; `null` when unknown.                                                                                                                                                                                 |
+| `estimateCost(range)`                | Byte/tile cost of buffering `range` (directory math — ETA chips, timeline density strips).                                                                                                                                                           |
+| `getQoeStats()`                      | Session QoE counters (stalls, startup, creep).                                                                                                                                                                                                       |
+| `getAutoSpeedSuggestion()`           | Raw sustainable speed in controller units (sim-ms per wall-ms).                                                                                                                                                                                      |
 | `getAutoSpeedMultiplierSuggestion()` | The same suggestion ÷ `baseRate` — directly comparable to `playbackRate`. **May be `Infinity`** (fully-buffered horizon ⇒ no network cap): clamp/snap/damp via [`decideAutoSpeedMultiplier`](./playback-governor.md#auto-speed), never apply it raw. |
-| `timeController` / `governor` | The wrapped pieces, for layer wiring and advanced use. |
-| `destroy()` | Dispose the governor, destroy the clock, drop all listeners. Idempotent. |
+| `timeController` / `governor`        | The wrapped pieces, for layer wiring and advanced use.                                                                                                                                                                                               |
+| `destroy()`                          | Dispose the governor, destroy the clock, drop all listeners. Idempotent.                                                                                                                                                                             |
 
 ## Events
 
 ```typescript
 const unsubscribe = player.on('timeupdate', (time) => {});
-player.on('play', () => {});            // intent became "playing" (incl. adopted external play)
-player.on('pause', () => {});           // intent became "paused" (incl. external pause / range-end clamp)
+player.on('play', () => {}); // intent became "playing" (incl. adopted external play)
+player.on('pause', () => {}); // intent became "paused" (incl. external pause / range-end clamp)
 player.on('statechange', (state) => {});
 player.on('waiting', ({ state, etaMs }) => {});
 player.on('ready', ({ degraded }) => {});
 player.on('progress', (runway) => {});
 player.on('ended', (time) => {});
 player.on('ratechange', (rate) => {});
-player.on('scrubstart', (time) => {});   // scrubber grabbed (payload: playhead at the grab)
-player.on('scrubend', (time) => {});     // scrubber released (payload: committed position)
+player.on('scrubstart', (time) => {}); // scrubber grabbed (payload: playhead at the grab)
+player.on('scrubend', (time) => {}); // scrubber released (payload: committed position)
 ```
 
 `on()` returns an unsubscribe function; `off(event, callback)` also works. At a non-looping range end, `'pause'` fires before `'ended'` (media-element ordering). `'scrubstart'` / `'scrubend'` re-emit the governor's scrub bracket (see [PlaybackGovernor events](./playback-governor.md#events)).

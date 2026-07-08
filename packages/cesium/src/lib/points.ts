@@ -17,7 +17,11 @@
  * {@link FeaturePoint} to a Cesium `PointPrimitive`; nothing here touches Cesium.
  */
 
-import { GeometryType, type BinaryFeatures, type Tile } from '@poopdeck.gl/core';
+import {
+  GeometryType,
+  type BinaryFeatures,
+  type Tile,
+} from '@poopdeck.gl/core';
 import { GlobeProjection } from '@poopdeck.gl/core/geo';
 import { expandCategoricalColors, type RGBA255 } from '@poopdeck.gl/core/style';
 
@@ -60,7 +64,9 @@ export interface PointBuildOptions {
 
 // One WGS84 globe for every build — Cesium's native frame (§5.2: datum matters).
 // Byte-identical to the polyline builders' GLOBE; `project` is anchor-independent.
-const GLOBE = new GlobeProjection({ longitude: 0, latitude: 0 }, undefined, { datum: 'wgs84' });
+const GLOBE = new GlobeProjection({ longitude: 0, latitude: 0 }, undefined, {
+  datum: 'wgs84',
+});
 
 const DEFAULT_COLOR: RGBA255 = [200, 205, 215, 255];
 
@@ -69,7 +75,10 @@ export function collectPointLayers(tiles: Tile[]): BinaryFeatures[] {
   const layers: BinaryFeatures[] = [];
   for (const tile of tiles) {
     for (const layer of tile.layers) {
-      if (layer.features.geometryType === GeometryType.Point && layer.features.featureCount > 0) {
+      if (
+        layer.features.geometryType === GeometryType.Point &&
+        layer.features.featureCount > 0
+      ) {
         layers.push(layer.features);
       }
     }
@@ -84,7 +93,10 @@ export function collectPointLayers(tiles: Tile[]): BinaryFeatures[] {
  * checks `points.length` before adopting `timeOrigin`, so an empty rebuild
  * leaves the previous origin untouched.
  */
-export function buildPointEntries(tiles: Tile[], opts: PointBuildOptions = {}): PointBuild {
+export function buildPointEntries(
+  tiles: Tile[],
+  opts: PointBuildOptions = {},
+): PointBuild {
   const pointLayers = collectPointLayers(tiles);
   if (pointLayers.length === 0) return { points: [], timeOrigin: 0 };
 
@@ -98,7 +110,12 @@ export function buildPointEntries(tiles: Tile[], opts: PointBuildOptions = {}): 
     const colors = opts.colorProperty
       ? (expandCategoricalColors(
           b,
-          { property: opts.colorProperty, colorMapping: opts.colorMapping, colorMappingDefault: def, onMissing: 'fill' },
+          {
+            property: opts.colorProperty,
+            colorMapping: opts.colorMapping,
+            colorMappingDefault: def,
+            onMissing: 'fill',
+          },
           'u8',
         ) as Uint8Array)
       : null;
@@ -113,7 +130,7 @@ export function buildPointEntries(tiles: Tile[], opts: PointBuildOptions = {}): 
       const r = (colors ? colors[i * 4] : def[0]) / 255;
       const g = (colors ? colors[i * 4 + 1] : def[1]) / 255;
       const bb = (colors ? colors[i * 4 + 2] : def[2]) / 255;
-      const a = (colors ? colors[i * 4 + 3] : def[3] ?? 255) / 255;
+      const a = (colors ? colors[i * 4 + 3] : (def[3] ?? 255)) / 255;
       points.push({
         x,
         y,

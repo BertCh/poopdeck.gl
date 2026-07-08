@@ -92,7 +92,10 @@ function defaultDataRoot(): string {
 function defaultDocsRoot(): string {
   if (process.env.STT_DOCS_ROOT) return process.env.STT_DOCS_ROOT;
   // `<pkg>/dist/config.js` (built) or `<pkg>/src/config.ts` (dev) → `<pkg>`.
-  const pkgRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const pkgRoot = path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    '..',
+  );
   const bundled = path.join(pkgRoot, 'docs'); // (a)
   if (existsSync(bundled)) return bundled;
   const cwdDocs = path.resolve(process.cwd(), 'docs'); // (b)
@@ -176,7 +179,10 @@ export function parseCliArgs(argv: string[]): SttMcpConfig {
         break;
       case '--transport': {
         const v = next();
-        if (v !== 'stdio' && v !== 'http') throw new Error(`--transport must be "stdio" or "http", got ${JSON.stringify(v)}`);
+        if (v !== 'stdio' && v !== 'http')
+          throw new Error(
+            `--transport must be "stdio" or "http", got ${JSON.stringify(v)}`,
+          );
         config.transport = v;
         break;
       }
@@ -185,7 +191,8 @@ export function parseCliArgs(argv: string[]): SttMcpConfig {
         break;
       case '--port':
         config.port = Number(next());
-        if (!Number.isFinite(config.port)) throw new Error('--port must be a number');
+        if (!Number.isFinite(config.port))
+          throw new Error('--port must be a number');
         break;
       case '--allowed-host':
         userAllowedHosts.push(next());
@@ -218,8 +225,18 @@ export function parseCliArgs(argv: string[]): SttMcpConfig {
 
   // Finalize the DNS-rebinding allow-lists now that host/port are known. User flags ADD to the
   // sane defaults so the normal local client works out of the box without any allow-list flags.
-  config.allowedHosts = [...new Set([...defaultAllowedHosts(config.host, config.port), ...userAllowedHosts])];
-  config.allowedOrigins = [...new Set([...defaultAllowedOrigins(config.host, config.port), ...userAllowedOrigins])];
+  config.allowedHosts = [
+    ...new Set([
+      ...defaultAllowedHosts(config.host, config.port),
+      ...userAllowedHosts,
+    ]),
+  ];
+  config.allowedOrigins = [
+    ...new Set([
+      ...defaultAllowedOrigins(config.host, config.port),
+      ...userAllowedOrigins,
+    ]),
+  ];
 
   return config;
 }

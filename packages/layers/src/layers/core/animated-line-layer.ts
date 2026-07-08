@@ -29,7 +29,10 @@
 
 import { LineLayer } from '@deck.gl/layers';
 import type { Color, DefaultProps, Layer, LayerContext } from '@deck.gl/core';
-import { SpatioTemporalLayer, SpatioTemporalLayerProps } from '../spatiotemporal-layer.js';
+import {
+  SpatioTemporalLayer,
+  SpatioTemporalLayerProps,
+} from '../spatiotemporal-layer.js';
 import { TimeFilterExtension } from '../../extensions/time-filter-extension.js';
 import {
   CategoryColorExtension,
@@ -43,10 +46,17 @@ import {
   updateTriggersDigest,
 } from '../../lib/style-digest.js';
 import { resolveAccessorAlias } from '../../lib/accessor-alias.js';
-import type { ColorAccessorValue, NumericAccessorValue } from '../../lib/accessor-alias.js';
+import type {
+  ColorAccessorValue,
+  NumericAccessorValue,
+} from '../../lib/accessor-alias.js';
 import { deriveSourceTargetPositions } from '../../lib/od-positions.js';
 import { DEFAULT_LINE_PALETTE } from '@poopdeck.gl/core';
-import type { Tile, Layer as TileLayer, BinaryFeatures } from '@poopdeck.gl/core';
+import type {
+  Tile,
+  Layer as TileLayer,
+  BinaryFeatures,
+} from '@poopdeck.gl/core';
 
 const DEBUG = false;
 
@@ -109,7 +119,8 @@ export interface _AnimatedLineLayerProps {
 }
 
 /** Complete props accepted by {@link AnimatedLineLayer}. */
-export type AnimatedLineLayerProps = _AnimatedLineLayerProps & SpatioTemporalLayerProps;
+export type AnimatedLineLayerProps = _AnimatedLineLayerProps &
+  SpatioTemporalLayerProps;
 
 const DEFAULT_COLOR: Color = [0, 150, 255, 255];
 
@@ -123,7 +134,10 @@ interface PreparedTile {
   styleKey: string;
   data: {
     length: number;
-    attributes: Record<string, { value: any; size: number; normalized?: boolean }>;
+    attributes: Record<
+      string,
+      { value: any; size: number; normalized?: boolean }
+    >;
   };
   timeOffset: number;
   dims: number;
@@ -160,9 +174,9 @@ function indicesToFloat32(indices: Uint16Array, count: number): Float32Array {
  * attributes than PathLayer, so picking works directly without the
  * NoPickingPathLayer attribute-budget workaround the path family needs).
  */
-export class AnimatedLineLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLayer<
-  ExtraPropsT & Required<_AnimatedLineLayerProps>
-> {
+export class AnimatedLineLayer<
+  ExtraPropsT extends {} = {},
+> extends SpatioTemporalLayer<ExtraPropsT & Required<_AnimatedLineLayerProps>> {
   static layerName = 'AnimatedLineLayer';
 
   static defaultProps: DefaultProps<AnimatedLineLayerProps> = {
@@ -203,7 +217,9 @@ export class AnimatedLineLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
    * per-feature start/end pair is registered. The trail-mode per-vertex time
    * attribute is unused.
    */
-  private readonly timeFilterExtension = new TimeFilterExtension({ mode: 'window' });
+  private readonly timeFilterExtension = new TimeFilterExtension({
+    mode: 'window',
+  });
   private readonly categoryColorExtension = new CategoryColorExtension();
   private readonly boundGetTime: () => number = () => this.getCurrentTime();
 
@@ -272,7 +288,8 @@ export class AnimatedLineLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
     if (this.lastTilesRef !== tiles) {
       const live = new Set<string>();
       for (const tile of tiles) {
-        for (const tileLayer of tile.layers) live.add(makeTileKey(tile, tileLayer));
+        for (const tileLayer of tile.layers)
+          live.add(makeTileKey(tile, tileLayer));
       }
       for (const key of this.preparedTileCache.keys()) {
         if (!live.has(key)) this.preparedTileCache.delete(key);
@@ -321,7 +338,9 @@ export class AnimatedLineLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
     });
     if (DEBUG) {
       // eslint-disable-next-line no-console
-      console.log(`AnimatedLineLayer: ${tiles.length} tiles → ${sublayers.length} sublayers`);
+      console.log(
+        `AnimatedLineLayer: ${tiles.length} tiles → ${sublayers.length} sublayers`,
+      );
     }
     return sublayers;
   }
@@ -339,13 +358,20 @@ export class AnimatedLineLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
     // this is a WeakMap lookup per tile, not a re-serialization. The user's
     // updateTriggers ride the key too so a trigger bump re-prepares the tile.
     const styleKey = `${colorProp}|${widthProp}|${
-      colorProp ? colorListDigest(this.props.colorPalette ?? DEFAULT_PALETTE) : 0
+      colorProp
+        ? colorListDigest(this.props.colorPalette ?? DEFAULT_PALETTE)
+        : 0
     }|${updateTriggersDigest(this.props.updateTriggers)}`;
 
     const tileKey = makeTileKey(tile, tileLayer);
     const cached = this.preparedTileCache.get(tileKey);
     if (cached && cached.styleKey === styleKey) {
-      emit('tilePrepare', { layer: 'AnimatedLineLayer', tileKey, cached: true, ms: 0 });
+      emit('tilePrepare', {
+        layer: 'AnimatedLineLayer',
+        tileKey,
+        cached: true,
+        ms: 0,
+      });
       return cached;
     }
 
@@ -415,9 +441,9 @@ export class AnimatedLineLayer<ExtraPropsT extends {} = {}> extends SpatioTempor
   private buildSublayer(prepared: PreparedTile): LineLayer {
     const colorValue = this.colorValue();
     const widthValue = this.widthValue();
-    const constColor = (Array.isArray(colorValue)
-      ? colorValue
-      : DEFAULT_COLOR) as Color;
+    const constColor = (
+      Array.isArray(colorValue) ? colorValue : DEFAULT_COLOR
+    ) as Color;
     const constWidth = typeof widthValue === 'number' ? widthValue : 1;
     // `Required<>`-typed: the defaultProps value guarantees a number here.
     const timeWindow = this.props.timeWindow;

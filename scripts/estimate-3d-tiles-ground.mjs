@@ -31,40 +31,40 @@
  *   node scripts/estimate-3d-tiles-ground.mjs <lon> <lat>  # an ad-hoc point
  * Needs VITE_GOOGLE_MAPS_API_KEY in examples/showcase/.env.local (Map Tiles API).
  */
-import fs from "node:fs";
+import fs from 'node:fs';
 
-const ENV_PATH = "examples/showcase/.env.local";
+const ENV_PATH = 'examples/showcase/.env.local';
 const KEY = (() => {
   const m = fs
-    .readFileSync(ENV_PATH, "utf8")
+    .readFileSync(ENV_PATH, 'utf8')
     .match(/^VITE_GOOGLE_MAPS_API_KEY=(.+)$/m);
   if (!m) throw new Error(`VITE_GOOGLE_MAPS_API_KEY not found in ${ENV_PATH}`);
-  return m[1].trim().replace(/^["']|["']$/g, "");
+  return m[1].trim().replace(/^["']|["']$/g, '');
 })();
 
-const BASE = "https://tile.googleapis.com";
-const HEADERS = { "X-GOOG-API-KEY": KEY };
-const ROOT = "/v1/3dtiles/root.json";
+const BASE = 'https://tile.googleapis.com';
+const HEADERS = { 'X-GOOG-API-KEY': KEY };
+const ROOT = '/v1/3dtiles/root.json';
 const GROUND_CORRECTION_M = 2; // bottom reads ~1.5 m low vs visually-aligned value
 
 // Scene anchors — keep in sync with AV_TILES3D_CONFIG in datasets.ts.
 const SCENES = [
-  ["argoverse-02678d04", -79.9333411419541, 40.45610620281625],
-  ["argoverse-02a00399", -80.19521021126853, 25.81266355087901],
-  ["argoverse-0b5142c1", -76.97901441961996, 38.903158674858965],
-  ["argoverse-0bae3b5e", -83.05092955863113, 42.33371685760447],
-  ["argoverse-25e5c600", -122.12833142762317, 37.415846217190214],
-  ["argoverse-92b900b1", -97.70213668235851, 30.255713070218487],
-  ["nuscenes-0061", 103.788327, 1.298281],
-  ["nuscenes-0103", -71.049976, 42.351321],
-  ["nuscenes-0553", -71.041856, 42.346179],
-  ["nuscenes-0655", -71.035317, 42.344646],
-  ["nuscenes-0757", -71.054096, 42.342856],
-  ["nuscenes-0796", 103.783511, 1.301422],
-  ["nuscenes-0916", 103.773608, 1.294315],
-  ["nuscenes-1077", 103.788308, 1.316754],
-  ["nuscenes-1094", 103.795698, 1.310148],
-  ["nuscenes-1100", 103.794048, 1.307483],
+  ['argoverse-02678d04', -79.9333411419541, 40.45610620281625],
+  ['argoverse-02a00399', -80.19521021126853, 25.81266355087901],
+  ['argoverse-0b5142c1', -76.97901441961996, 38.903158674858965],
+  ['argoverse-0bae3b5e', -83.05092955863113, 42.33371685760447],
+  ['argoverse-25e5c600', -122.12833142762317, 37.415846217190214],
+  ['argoverse-92b900b1', -97.70213668235851, 30.255713070218487],
+  ['nuscenes-0061', 103.788327, 1.298281],
+  ['nuscenes-0103', -71.049976, 42.351321],
+  ['nuscenes-0553', -71.041856, 42.346179],
+  ['nuscenes-0655', -71.035317, 42.344646],
+  ['nuscenes-0757', -71.054096, 42.342856],
+  ['nuscenes-0796', 103.783511, 1.301422],
+  ['nuscenes-0916', 103.773608, 1.294315],
+  ['nuscenes-1077', 103.788308, 1.316754],
+  ['nuscenes-1094', 103.795698, 1.310148],
+  ['nuscenes-1100', 103.794048, 1.307483],
   // Waymo is intentionally omitted — its anchor is an approximate local frame, so
   // the georeferenced photoreal mesh would never align with the cloud's streets.
 ];
@@ -100,7 +100,11 @@ function ecef2geo(x, y, z) {
 function distOBB(P, box) {
   const d = [P[0] - box[0], P[1] - box[1], P[2] - box[2]];
   let s = 0;
-  for (const o of [[3, 4, 5], [6, 7, 8], [9, 10, 11]]) {
+  for (const o of [
+    [3, 4, 5],
+    [6, 7, 8],
+    [9, 10, 11],
+  ]) {
     const u = [box[o[0]], box[o[1]], box[o[2]]];
     const ul = Math.hypot(...u);
     const ex = Math.abs((d[0] * u[0] + d[1] * u[1] + d[2] * u[2]) / ul) - ul;
@@ -128,8 +132,8 @@ function bottomOf(box) {
 let session = null;
 function withAuth(uri) {
   const u = new URL(uri, BASE);
-  if (u.searchParams.get("session")) session = u.searchParams.get("session");
-  else if (session) u.searchParams.set("session", session);
+  if (u.searchParams.get('session')) session = u.searchParams.get('session');
+  else if (session) u.searchParams.set('session', session);
   return u.toString();
 }
 async function fetchJson(url) {
@@ -142,7 +146,7 @@ async function childrenOf(tile) {
   let kids = (tile.children || []).filter((k) => k.boundingVolume?.box);
   if (kids.length || !tile.content?.uri) return kids;
   const r = await fetch(withAuth(tile.content.uri), { headers: HEADERS });
-  if ((r.headers.get("content-type") || "").includes("json")) {
+  if ((r.headers.get('content-type') || '').includes('json')) {
     const sub = await r.json();
     const root = sub.root || sub;
     kids = (root.children || [root]).filter((k) => k.boundingVolume?.box);
@@ -189,13 +193,13 @@ async function estimateGround(lon, lat) {
 
 const args = process.argv.slice(2);
 const targets =
-  args.length >= 2
-    ? [["(adhoc)", Number(args[0]), Number(args[1])]]
-    : SCENES;
+  args.length >= 2 ? [['(adhoc)', Number(args[0]), Number(args[1])]] : SCENES;
 for (const [id, lon, lat] of targets) {
   try {
     const g = await estimateGround(lon, lat);
-    console.log(`${id.padEnd(20)} ground ≈ ${g === null ? "  (no tiles)" : g.toFixed(1).padStart(7)} m`);
+    console.log(
+      `${id.padEnd(20)} ground ≈ ${g === null ? '  (no tiles)' : g.toFixed(1).padStart(7)} m`,
+    );
   } catch (e) {
     console.log(`${id.padEnd(20)} ERROR ${e.message}`);
   }

@@ -28,7 +28,11 @@ function makeSource() {
     costTiles: 0,
     etaMs: null as number | null,
     flushes: 0,
-    runwayCalls: [] as Array<{ time: number; direction: 1 | -1; horizonSimMs?: number }>,
+    runwayCalls: [] as Array<{
+      time: number;
+      direction: 1 | -1;
+      horizonSimMs?: number;
+    }>,
     costCalls: [] as Array<{ start: number; end: number }>,
     interactiveCalls: [] as boolean[],
     /** Interleaved op log: 'flush' | 'interactive:true' | 'interactive:false'. */
@@ -77,7 +81,13 @@ describe('PlaybackGovernor', () => {
 
   beforeEach(() => {
     vi.useFakeTimers({
-      toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'performance'],
+      toFake: [
+        'setTimeout',
+        'clearTimeout',
+        'setInterval',
+        'clearInterval',
+        'performance',
+      ],
     });
     vi.stubGlobal('requestAnimationFrame', () => 0);
     vi.stubGlobal('cancelAnimationFrame', () => {});
@@ -93,7 +103,9 @@ describe('PlaybackGovernor', () => {
     vi.useRealTimers();
   });
 
-  function makeGovernor(opts: ConstructorParameters<typeof PlaybackGovernor>[1] = {}) {
+  function makeGovernor(
+    opts: ConstructorParameters<typeof PlaybackGovernor>[1] = {},
+  ) {
     governor = new PlaybackGovernor(tc, opts);
     governor.on('statechange', (s) => states.push(s));
     return governor;
@@ -485,7 +497,11 @@ describe('PlaybackGovernor', () => {
 
     it('the maxStartWaitMs escape hatch is suspended mid-drag and re-based on release', () => {
       const { source } = makeSource();
-      const g = makeGovernor({ source, startGateWallMs: 2000, maxStartWaitMs: 4000 });
+      const g = makeGovernor({
+        source,
+        startGateWallMs: 2000,
+        maxStartWaitMs: 4000,
+      });
       const ready = vi.fn();
       g.on('ready', ready);
       g.requestPlay(); // runway 0 → gated
@@ -731,13 +747,19 @@ describe('PlaybackGovernor', () => {
 
   it('estimateCost passes through to the source (and returns zeros without one)', () => {
     const g = makeGovernor({});
-    expect(g.estimateCost({ start: 0, end: 100 })).toEqual({ bytes: 0, tiles: 0 });
+    expect(g.estimateCost({ start: 0, end: 100 })).toEqual({
+      bytes: 0,
+      tiles: 0,
+    });
 
     const { source, state } = makeSource();
     state.costBytes = 1234;
     state.costTiles = 7;
     g.setSource(source);
-    expect(g.estimateCost({ start: 0, end: 100 })).toEqual({ bytes: 1234, tiles: 7 });
+    expect(g.estimateCost({ start: 0, end: 100 })).toEqual({
+      bytes: 1234,
+      tiles: 7,
+    });
     expect(state.costCalls.at(-1)).toEqual({ start: 0, end: 100 }); // range forwarded verbatim
   });
 
@@ -840,7 +862,11 @@ describe('PlaybackGovernor', () => {
       const clock = makeLoopingClock(99_000);
       const { source, state } = makeSource();
       state.runwaySimMs = 1_000_000;
-      const g = makeGovernor({ source, startGateWallMs: 2000, resumeFactor: 2 });
+      const g = makeGovernor({
+        source,
+        startGateWallMs: 2000,
+        resumeFactor: 2,
+      });
       g.requestPlay();
       expect(g.state).toBe('playing');
 
@@ -881,7 +907,6 @@ describe('PlaybackGovernor', () => {
       clock.frame(100);
       expect(tc.getTime()).toBeGreaterThan(0);
     });
-
   });
 
   describe("range end → 'ended' / replay semantics", () => {
@@ -908,7 +933,7 @@ describe('PlaybackGovernor', () => {
       };
     }
 
-    it("parks as ended at a forward clamp; requestPlay replays from the range start", () => {
+    it('parks as ended at a forward clamp; requestPlay replays from the range start', () => {
       const clock = makeClampingClock(99_000);
       const { source, state } = makeSource();
       state.runwaySimMs = 1_000_000;
@@ -1041,7 +1066,9 @@ describe('PlaybackGovernor', () => {
     });
 
     it('publishes QoE snapshots on the telemetry playback channel', () => {
-      (globalThis as unknown as { __sttProbe?: unknown }).__sttProbe = { enabled: true };
+      (globalThis as unknown as { __sttProbe?: unknown }).__sttProbe = {
+        enabled: true,
+      };
       try {
         const { source, state } = makeSource();
         state.runwaySimMs = 100_000;
@@ -1158,7 +1185,10 @@ describe('PlaybackGovernor', () => {
       required.state.runwaySimMs = 100_000;
       optional.state.runwaySimMs = 0; // bone dry, never complete
       optional.state.complete = false;
-      const g = makeGovernor({ startGateWallMs: 2000, lowWatermarkWallMs: 600 });
+      const g = makeGovernor({
+        startGateWallMs: 2000,
+        lowWatermarkWallMs: 600,
+      });
       g.addSource('field', required.source, { required: true });
       g.addSource('overlay', optional.source, { required: false });
 
@@ -1246,7 +1276,10 @@ describe('PlaybackGovernor', () => {
       g.addSource('a', a.source, { required: true });
       g.addSource('b', b.source, { required: true });
       g.addSource('c', c.source, { required: false });
-      expect(g.estimateCost({ start: 0, end: 100 })).toEqual({ bytes: 355, tiles: 5 });
+      expect(g.estimateCost({ start: 0, end: 100 })).toEqual({
+        bytes: 355,
+        tiles: 5,
+      });
     });
 
     it('getAutoSpeedSuggestion = CONTENDED speed (aggregate pipe ÷ Σ demand), NOT the per-source min', () => {
@@ -1266,7 +1299,9 @@ describe('PlaybackGovernor', () => {
       fast.state.costTiles = 100;
       slow.state.costBytes = 1_600_000;
       slow.state.costTiles = 100;
-      const g = makeGovernor({ getThroughput: () => ({ bytesPerMs: 100, samples: 5 }) });
+      const g = makeGovernor({
+        getThroughput: () => ({ bytesPerMs: 100, samples: 5 }),
+      });
       g.addSource('fast', fast.source, { required: true });
       g.addSource('slow', slow.source, { required: true });
       const suggestion = g.getAutoSpeedSuggestion()!;
@@ -1282,7 +1317,9 @@ describe('PlaybackGovernor', () => {
       const oneHeavy = makeTrackedSource();
       oneHeavy.state.costBytes = 800_000;
       oneHeavy.state.costTiles = 100;
-      const g1 = makeGovernor({ getThroughput: () => ({ bytesPerMs: 100, samples: 5 }) });
+      const g1 = makeGovernor({
+        getThroughput: () => ({ bytesPerMs: 100, samples: 5 }),
+      });
       g1.addSource('a', oneHeavy.source, { required: true });
       const solo = g1.getAutoSpeedSuggestion()!; // 100 / 10 × 0.7 = 7
       g1.dispose();
@@ -1358,7 +1395,9 @@ describe('PlaybackGovernor', () => {
       const b = makeTrackedSource();
       a.state.costTiles = 0; // nothing to load
       b.state.costTiles = 0;
-      const g = makeGovernor({ getThroughput: () => ({ bytesPerMs: 100, samples: 5 }) });
+      const g = makeGovernor({
+        getThroughput: () => ({ bytesPerMs: 100, samples: 5 }),
+      });
       g.addSource('a', a.source, { required: true });
       g.addSource('b', b.source, { required: true });
       expect(g.getAutoSpeedSuggestion()).toBe(Infinity);
@@ -1382,7 +1421,9 @@ describe('PlaybackGovernor', () => {
       blind.state.costBytes = 0; // …but the directory exposes no byte sizes
       normal.state.costTiles = 100;
       normal.state.costBytes = 800_000; // a normal, sized peer keeps Σbytes > 0
-      const g = makeGovernor({ getThroughput: () => ({ bytesPerMs: 100, samples: 5 }) });
+      const g = makeGovernor({
+        getThroughput: () => ({ bytesPerMs: 100, samples: 5 }),
+      });
       g.addSource('blind', blind.source, { required: true });
       g.addSource('normal', normal.source, { required: true });
       // Without the fix this returned a (too-high) finite suggestion off the
@@ -1406,8 +1447,14 @@ describe('PlaybackGovernor', () => {
       g.requestPlay();
       expect(g.state).toBe('starting');
       // Both the required AND the optional loader were told to keep reaching ahead.
-      expect(req.state.animateCalls.at(-1)).toEqual({ isAnimating: true, speed: 10 });
-      expect(opt.state.animateCalls.at(-1)).toEqual({ isAnimating: true, speed: 10 });
+      expect(req.state.animateCalls.at(-1)).toEqual({
+        isAnimating: true,
+        speed: 10,
+      });
+      expect(opt.state.animateCalls.at(-1)).toEqual({
+        isAnimating: true,
+        speed: 10,
+      });
     });
 
     it('broadcasts setAnimationState(false) to ALL sources on a real pause', () => {
@@ -1421,8 +1468,14 @@ describe('PlaybackGovernor', () => {
       expect(g.state).toBe('playing');
 
       g.requestPause();
-      expect(req.state.animateCalls.at(-1)).toEqual({ isAnimating: false, speed: 0 });
-      expect(opt.state.animateCalls.at(-1)).toEqual({ isAnimating: false, speed: 0 });
+      expect(req.state.animateCalls.at(-1)).toEqual({
+        isAnimating: false,
+        speed: 0,
+      });
+      expect(opt.state.animateCalls.at(-1)).toEqual({
+        isAnimating: false,
+        speed: 0,
+      });
     });
 
     it('flushPrefetch on a committed seek reaches ALL sources', () => {
@@ -1456,9 +1509,27 @@ describe('PlaybackGovernor', () => {
       const runways = g.getSourceRunways();
       // Correct shape, in registration order, one entry per source.
       expect(runways).toEqual([
-        { id: 'fieldA', required: true, runwaySimMs: 50_000, complete: false, bytesPending: 1_000 },
-        { id: 'fieldB', required: true, runwaySimMs: 8_000, complete: false, bytesPending: 9_000 },
-        { id: 'overlay', required: false, runwaySimMs: 1_000, complete: false, bytesPending: 2_000 },
+        {
+          id: 'fieldA',
+          required: true,
+          runwaySimMs: 50_000,
+          complete: false,
+          bytesPending: 1_000,
+        },
+        {
+          id: 'fieldB',
+          required: true,
+          runwaySimMs: 8_000,
+          complete: false,
+          bytesPending: 9_000,
+        },
+        {
+          id: 'overlay',
+          required: false,
+          runwaySimMs: 1_000,
+          complete: false,
+          bytesPending: 2_000,
+        },
       ]);
 
       // The gating source is the required entry with the smallest runway among
@@ -1556,12 +1627,16 @@ describe('PlaybackGovernor', () => {
       // shrinking the combined span. This mock honors maxRanges so the bug is
       // observable: if maxRanges=1 were forwarded, source `a` would return only
       // [0,100], its [200,300] dropped, and the [250,260] intersection lost.
-      function maxRangesAwareSource(ranges: Array<{ start: number; end: number }>) {
+      function maxRangesAwareSource(
+        ranges: Array<{ start: number; end: number }>,
+      ) {
         const s: BufferSource = {
           getBufferedRunway: () => runway(0),
           getBufferedRanges(opts) {
             const sorted = [...ranges].sort((x, y) => x.start - y.start);
-            return opts?.maxRanges != null ? sorted.slice(0, opts.maxRanges) : sorted;
+            return opts?.maxRanges != null
+              ? sorted.slice(0, opts.maxRanges)
+              : sorted;
           },
           estimateCost: () => ({ bytes: 0, tiles: 0 }),
           estimateTimeToReadyMs: () => null,
@@ -1579,7 +1654,9 @@ describe('PlaybackGovernor', () => {
       g.addSource('b', b, { required: true });
       // The surviving intersection [250,260] proves the second source range was
       // NOT truncated away before intersecting.
-      expect(g.getBufferedRanges({ maxRanges: 1 })).toEqual([{ start: 250, end: 260 }]);
+      expect(g.getBufferedRanges({ maxRanges: 1 })).toEqual([
+        { start: 250, end: 260 },
+      ]);
     });
 
     it('getBufferedRanges applies maxRanges once on the combined intersection (trailing slice)', () => {
@@ -1691,7 +1768,10 @@ describe('PlaybackGovernor', () => {
 
       // The old single-source side-effects still reach the default source.
       g.requestPause();
-      expect(b.state.animateCalls.at(-1)).toEqual({ isAnimating: false, speed: 0 });
+      expect(b.state.animateCalls.at(-1)).toEqual({
+        isAnimating: false,
+        speed: 0,
+      });
       // A (removed by setSource) received no further broadcasts.
       const aBroadcastsAfterReplace = a.state.animateCalls.length;
       g.seekTo(7);
@@ -1701,7 +1781,10 @@ describe('PlaybackGovernor', () => {
       // setSource(null) empties the registry (no throw, no source resident).
       g.setSource(null);
       expect(g.getBufferedRanges()).toEqual([]);
-      expect(g.estimateCost({ start: 0, end: 1 })).toEqual({ bytes: 0, tiles: 0 });
+      expect(g.estimateCost({ start: 0, end: 1 })).toEqual({
+        bytes: 0,
+        tiles: 0,
+      });
     });
 
     describe('cold-start gate across N required sources (Phase 3 audit)', () => {
@@ -1766,7 +1849,10 @@ describe('PlaybackGovernor', () => {
         fast.state.etaMs = 10; // instant
         blind.state.runwaySimMs = 0;
         blind.state.etaMs = null; // blind ⇒ conservative ⇒ no playthrough
-        const g = makeGovernor({ startGateWallMs: 2000, maxStartWaitMs: 60_000 });
+        const g = makeGovernor({
+          startGateWallMs: 2000,
+          maxStartWaitMs: 60_000,
+        });
         g.addSource('fast', fast.source, { required: true });
         g.addSource('blind', blind.source, { required: true });
 
@@ -1889,7 +1975,10 @@ describe('PlaybackGovernor', () => {
         const b = makeTrackedSource();
         a.state.runwaySimMs = 100_000;
         b.state.runwaySimMs = 100_000;
-        const g = makeGovernor({ startGateWallMs: 2000, lowWatermarkWallMs: 600 });
+        const g = makeGovernor({
+          startGateWallMs: 2000,
+          lowWatermarkWallMs: 600,
+        });
         g.addSource('a', a.source, { required: true });
         g.addSource('b', b.source, { required: true });
         g.requestPlay();
@@ -1907,7 +1996,10 @@ describe('PlaybackGovernor', () => {
         // no-op: a genuine drop below the watermark still stalls.
         const a = makeTrackedSource();
         a.state.runwaySimMs = 100_000;
-        const g = makeGovernor({ lowWatermarkWallMs: 600, runwayToleranceMs: 250 });
+        const g = makeGovernor({
+          lowWatermarkWallMs: 600,
+          runwayToleranceMs: 250,
+        });
         g.addSource('a', a.source, { required: true });
         g.requestPlay();
         expect(g.state).toBe('playing');

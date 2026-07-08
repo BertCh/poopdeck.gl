@@ -19,9 +19,9 @@ npm install @poopdeck.gl/layers deck.gl
 ## Hello world — SttPlayer + an animated layer
 
 ```ts
-import { Deck } from "@deck.gl/core";
-import { AnimatedPointLayer } from "@poopdeck.gl/layers";
-import { SttPlayer } from "@poopdeck.gl/playback";
+import { Deck } from '@deck.gl/core';
+import { AnimatedPointLayer } from '@poopdeck.gl/layers';
+import { SttPlayer } from '@poopdeck.gl/playback';
 
 const player = new SttPlayer({
   timeRange: { start, end },
@@ -30,8 +30,8 @@ const player = new SttPlayer({
 });
 
 const layer = new AnimatedPointLayer({
-  id: "events",
-  data: "https://tiles.example.com/earthquakes/manifest.json",
+  id: 'events',
+  data: 'https://tiles.example.com/earthquakes/manifest.json',
   timeController: player.timeController, // layers READ the clock; the player drives it
   timeWindow: 86_400_000,
   onTilesetReady: (tileset) => player.setSource(tileset), // buffering gates playback

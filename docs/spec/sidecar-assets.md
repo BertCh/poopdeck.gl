@@ -2,7 +2,7 @@
 
 > **Scope:** how STT composes **several co-registered datasets plus non-tile
 > assets** into one playable scene, and how it represents data that is only
-> **approximately georeferenced**. This is a *profile* layered on the core
+> **approximately georeferenced**. This is a _profile_ layered on the core
 > format — the [packed container](./stt-packed-format.md) and
 > [tile payload](../architecture/data-format.md) are unchanged. The reference
 > realization is the AV (autonomous-vehicle) cockpit; the conventions here are
@@ -14,10 +14,10 @@
 
 The core format answers "stream one georeferenced vector dataset over space and
 time." This profile defines a written contract for three needs that fall
-*outside* a single packed dataset:
+_outside_ a single packed dataset:
 
 1. **Multiple co-registered streams on one playhead.** An AV scene is a lidar
-   point cloud *and* an ego trajectory *and* tracked-object boxes *and* an HD
+   point cloud _and_ an ego trajectory _and_ tracked-object boxes _and_ an HD
    map, all sharing one clock and one coordinate frame. Each is its own STT
    dataset (different geometry kind, different bucket size); they must compose
    without colliding.
@@ -27,7 +27,7 @@ time." This profile defines a written contract for three needs that fall
    samples at the playhead.
 3. **Approximate / local-frame georeferencing.** Some sources (e.g. Waymo
    Perception) disclose no usable global georeference. Their geometry is a local
-   metric frame *anchored* to a plausible lon/lat, not authoritative WGS84 — a
+   metric frame _anchored_ to a plausible lon/lat, not authoritative WGS84 — a
    case the core spec's CRS pinning (§3.4) does not cover.
 
 This document makes all three normative so a third party can produce or consume
@@ -69,7 +69,7 @@ flowchart TD
 **Every stream sub-dataset is a fully conformant packed STT dataset** — nothing
 about it is special. A reader that only understands the core format can open
 `<sceneId>/lidar/manifest.json` directly and animate the point cloud. The bundle
-adds only the *envelope* (`scene.json`) and the *sidecars*. Streams are
+adds only the _envelope_ (`scene.json`) and the _sidecars_. Streams are
 **optional and source-dependent**: a dashcam-only source ships `ego` + `telemetry`;
 a maps-less source omits `map_poly`/`map_line`.
 
@@ -88,20 +88,44 @@ round-trip. The machine-checkable definition is
   "dataset": "nuScenes v1.0-mini",
   "license": "CC-BY-NC-SA-4.0",
   "location": "boston-seaport",
-  "georef": { "originLat": 42.33685, "originLon": -71.05785 },  // always present (§4.1)
-  "timeRange": { "start": 1700000000000, "end": 1700000020000 },  // Unix ms, UTC
-  "initialView": { "longitude": -71.0506, "latitude": 42.3413, "zoom": 18, "pitch": 55, "bearing": 20 },
-  "objectColors": { "car": [255,158,0,235], "pedestrian": [0,80,230,240], "...": [] },
-  "lidarColors": { "vehicle": [], "road": [] },   // present iff lidar colored by seg_class
+  "georef": { "originLat": 42.33685, "originLon": -71.05785 }, // always present (§4.1)
+  "timeRange": { "start": 1700000000000, "end": 1700000020000 }, // Unix ms, UTC
+  "initialView": {
+    "longitude": -71.0506,
+    "latitude": 42.3413,
+    "zoom": 18,
+    "pitch": 55,
+    "bearing": 20,
+  },
+  "objectColors": {
+    "car": [255, 158, 0, 235],
+    "pedestrian": [0, 80, 230, 240],
+    "...": [],
+  },
+  "lidarColors": { "vehicle": [], "road": [] }, // present iff lidar colored by seg_class
   "streams": {
-    "lidar":     { "url": "lidar/manifest.json", "points": 159996 },
-    "ego":       { "url": "ego/manifest.json", "path": [{ "t": 1700000000000, "lon": -71.05, "lat": 42.34 }] },
-    "objects":   { "url": "objects/manifest.json", "categories": ["car", "pedestrian"] },
-    "tracks":    { "url": "tracks/manifest.json", "count": 59, "categories": ["car", "ego", "pedestrian"] },
-    "map":       { "polyUrl": "map_poly/manifest.json", "lineUrl": "map_line/manifest.json", "layers": ["drivable_area"] },
+    "lidar": { "url": "lidar/manifest.json", "points": 159996 },
+    "ego": {
+      "url": "ego/manifest.json",
+      "path": [{ "t": 1700000000000, "lon": -71.05, "lat": 42.34 }],
+    },
+    "objects": {
+      "url": "objects/manifest.json",
+      "categories": ["car", "pedestrian"],
+    },
+    "tracks": {
+      "url": "tracks/manifest.json",
+      "count": 59,
+      "categories": ["car", "ego", "pedestrian"],
+    },
+    "map": {
+      "polyUrl": "map_poly/manifest.json",
+      "lineUrl": "map_line/manifest.json",
+      "layers": ["drivable_area"],
+    },
     "telemetry": { "url": "telemetry.json" },
-    "camera":    { "url": "cameras.json" }
-  }
+    "camera": { "url": "cameras.json" },
+  },
 }
 ```
 
@@ -125,18 +149,18 @@ stream. Both are defined in [`scene.schema.json`](./scene.schema.json).
 
 ## 3.1 Stream sub-dataset conventions
 
-Each stream is an ordinary packed STT dataset; the profile fixes *which columns*
+Each stream is an ordinary packed STT dataset; the profile fixes _which columns_
 each carries so the cockpit can render them uniformly (full column list in
 `av_common.py`):
 
-| stream | geometry | key columns | notes |
-| --- | --- | --- | --- |
-| `lidar` | Point | `height_band` (categorical), `z`, optional `seg_class` | colored by `seg_class` when present, else `height_band`. (`intensity` is **legacy** — accepted as a producer arg but no longer emitted; `av_common.write_lidar_points` intentionally drops it as near-incompressible dead weight the render path never reads.) |
-| `ego` | LineString | `vertex_timestamps`, optional `vertex_values` (speed) | one trip = the ego path; per-vertex time drives the trail |
-| `objects` | Point | `category`, `heading` (rad, 0 = east, CCW+), `length`/`width`/`height`, `track_id`, `speed` | rendered as oriented boxes by [`AnimatedBoundingBoxLayer`](../api/animated-bounding-box-layer.md) |
-| `tracks` | LineString | `vertex_timestamps`, `vertex_values` (speed m/s), `category` | one trail per tracked object (ego folded in as category `"ego"`); mirrors `ego` but multi-row |
-| `stage` | Point | same as `lidar` | scene-split bundles: the static accumulated surfel cloud, built with one full-range temporal bucket |
-| `map_poly` / `map_line` | Polygon / LineString | `map_layer` (categorical) | **static**: built with one temporal bucket ≥ scene duration so the map loads once and persists |
+| stream                  | geometry             | key columns                                                                                 | notes                                                                                                                                                                                                                                                          |
+| ----------------------- | -------------------- | ------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `lidar`                 | Point                | `height_band` (categorical), `z`, optional `seg_class`                                      | colored by `seg_class` when present, else `height_band`. (`intensity` is **legacy** — accepted as a producer arg but no longer emitted; `av_common.write_lidar_points` intentionally drops it as near-incompressible dead weight the render path never reads.) |
+| `ego`                   | LineString           | `vertex_timestamps`, optional `vertex_values` (speed)                                       | one trip = the ego path; per-vertex time drives the trail                                                                                                                                                                                                      |
+| `objects`               | Point                | `category`, `heading` (rad, 0 = east, CCW+), `length`/`width`/`height`, `track_id`, `speed` | rendered as oriented boxes by [`AnimatedBoundingBoxLayer`](../api/animated-bounding-box-layer.md)                                                                                                                                                              |
+| `tracks`                | LineString           | `vertex_timestamps`, `vertex_values` (speed m/s), `category`                                | one trail per tracked object (ego folded in as category `"ego"`); mirrors `ego` but multi-row                                                                                                                                                                  |
+| `stage`                 | Point                | same as `lidar`                                                                             | scene-split bundles: the static accumulated surfel cloud, built with one full-range temporal bucket                                                                                                                                                            |
+| `map_poly` / `map_line` | Polygon / LineString | `map_layer` (categorical)                                                                   | **static**: built with one temporal bucket ≥ scene duration so the map loads once and persists                                                                                                                                                                 |
 
 > **Categorical-column gotcha (normative for producers).** `stt-build` promotes
 > an all-numeric-string column to a numeric column, which silently disables
@@ -153,12 +177,23 @@ tiles. Two are defined:
 
 ```jsonc
 {
-  "t0": 1700000000000,          // Unix ms of the first sample
-  "hz": 50.0,                   // nominal sample rate
+  "t0": 1700000000000, // Unix ms of the first sample
+  "hz": 50.0, // nominal sample rate
   "fields": {
-    "speed": { "unit": "m/s", "label": "Speed", "samples": [[1700000000000, 7.99], [1700000000020, 7.99]] },
-    "steer": { "unit": "rad", "label": "Steering", "samples": [[1700000000000, 0.04]] }
-  }
+    "speed": {
+      "unit": "m/s",
+      "label": "Speed",
+      "samples": [
+        [1700000000000, 7.99],
+        [1700000000020, 7.99],
+      ],
+    },
+    "steer": {
+      "unit": "rad",
+      "label": "Steering",
+      "samples": [[1700000000000, 0.04]],
+    },
+  },
 }
 ```
 
@@ -176,8 +211,8 @@ tiles. Two are defined:
   "camera": "CAM_FRONT",
   "frames": [
     { "t": 1700000000000, "url": "cam/0000.jpg" },
-    { "t": 1700000001000, "url": "cam/0001.jpg" }
-  ]
+    { "t": 1700000001000, "url": "cam/0001.jpg" },
+  ],
 }
 ```
 
@@ -191,11 +226,11 @@ tiles. Two are defined:
 This is the profile's one sharp departure from the core caching model, and it is
 deliberate:
 
-| object | addressing | `Cache-Control` |
-| --- | --- | --- |
-| `packs/*.sttp`, `index/*.sttd` (in every stream) | content-addressed (blake3) | `immutable, max-age=31536000` |
-| `manifest.json` (in every stream) | mutable | `max-age=60, must-revalidate` |
-| `scene.json`, `telemetry.json`, `cameras.json`, `cam/*.jpg` | **mutable, stable path** | `max-age=60, must-revalidate` |
+| object                                                      | addressing                 | `Cache-Control`               |
+| ----------------------------------------------------------- | -------------------------- | ----------------------------- |
+| `packs/*.sttp`, `index/*.sttd` (in every stream)            | content-addressed (blake3) | `immutable, max-age=31536000` |
+| `manifest.json` (in every stream)                           | mutable                    | `max-age=60, must-revalidate` |
+| `scene.json`, `telemetry.json`, `cameras.json`, `cam/*.jpg` | **mutable, stable path**   | `max-age=60, must-revalidate` |
 
 Sidecars (and `scene.json`) live at **stable filenames whose bytes change on a
 re-extract** — they are not hashed. So they ride the **mutable / short-TTL**
@@ -209,8 +244,8 @@ content-GC'd. A consumer MUST NOT assume a sidecar URL is immutable.
 The core spec pins every tile's coordinates to **OGC:CRS84** lon/lat
 (§3.4 / [GeoArrow interop](../architecture/data-format.md#geoarrow-interop)).
 That payload invariant holds here too: a scene-bundle tile's geometry is always
-interleaved `[lon, lat]` degrees. This profile additionally classifies *how
-trustworthy that lon/lat is*, because some sources only support an approximate
+interleaved `[lon, lat]` degrees. This profile additionally classifies _how
+trustworthy that lon/lat is_, because some sources only support an approximate
 placement.
 
 A scene bundle is in one of two **frames**:
@@ -218,10 +253,10 @@ A scene bundle is in one of two **frames**:
 - **`georeferenced`** — coordinates are authoritative WGS84. The local sensor
   frame (metres from a documented map origin) is projected to lon/lat with a
   documented transform:
-  - *nuScenes:* equirectangular about the map's SW-corner origin
+  - _nuScenes:_ equirectangular about the map's SW-corner origin
     (`lat = originLat + y/111320`, `lon = originLon + x/(111320·cos originLat)`),
     accurate to ~5 m over a ~1 km scene.
-  - *Argoverse 2:* the city-frame UTM zone projected via a proper CRS transform
+  - _Argoverse 2:_ the city-frame UTM zone projected via a proper CRS transform
     (`pyproj`), removing the ~75 m equirectangular error at multi-km range.
 
   `scene.json.georef` carries the `{originLat, originLon}` this projection is
@@ -231,7 +266,7 @@ A scene bundle is in one of two **frames**:
 - **`anchored-local`** — the source discloses no usable global georeference (e.g.
   Waymo Perception, whose world origin is undisclosed and ~48 km from its sensor
   origin). The producer recovers a **local ENU metric frame** (subtract the first
-  frame's world translation) and *anchors* it at a plausible city lon/lat, which
+  frame's world translation) and _anchors_ it at a plausible city lon/lat, which
   `scene.json.georef` also carries. The result is internally consistent but
   **not basemap-aligned**: the point cloud will not match real streets. Such
   scenes render on a **neutral / dark basemap** and the place label states the
@@ -263,7 +298,7 @@ can tell, even though a program cannot.
 > `frame`/`crs` flag in a stream's own `metadata` — would let a consumer, and a
 > bare stream sub-dataset opened without its `scene.json`, determine trust
 > level from the data itself rather than an external per-dataset table. Until
-> such a signal exists, an `anchored-local` stream opened standalone *looks*
+> such a signal exists, an `anchored-local` stream opened standalone _looks_
 > identical to a `georeferenced` one (its coords are lon/lat either way) while
 > being only approximately placed. This is the one place a stream is not fully
 > self-describing.
@@ -284,6 +319,7 @@ can tell, even though a program cannot.
 ## 6. Summary of normative requirements
 
 **Producers MUST:**
+
 - emit a `scene.json` conforming to [`scene.schema.json`](./scene.schema.json),
   with relative `url`s, a UTC-ms `timeRange`, `georef`, and only the streams
   that exist;
@@ -294,10 +330,12 @@ can tell, even though a program cannot.
   `description` (e.g. `"San Francisco (Waymo world frame, anchored)"`).
 
 **Producers SHOULD:**
+
 - bake the categorical palettes (`objectColors`, and `lidarColors` when lidar is
   semantically colored) into `scene.json`.
 
 **Consumers MUST:**
+
 - resolve all `url`s relative to `scene.json`;
 - treat sidecars and `scene.json` as **mutable** (revalidate; never cache as
   immutable);

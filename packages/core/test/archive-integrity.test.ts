@@ -26,7 +26,12 @@ import { decompressSync } from '../src/compression';
 import { crc32c } from '../src/crc32c';
 import { decodeDirectory, encodeDirectory } from '../src/directory';
 import { toGeoArrowTable } from '../src/tile';
-import { GeometryType, type BinaryFeatures, type Tile, type TileEntry } from '../src/types';
+import {
+  GeometryType,
+  type BinaryFeatures,
+  type Tile,
+  type TileEntry,
+} from '../src/types';
 import type { OpfsTileCache } from '../src/opfs-cache';
 import {
   packedFromSingleFile,
@@ -34,7 +39,9 @@ import {
   type InMemoryPackedDataset,
 } from './helpers/packed-fixture';
 
-const FIXTURE = fileURLToPath(new URL('./fixtures/sample.stt', import.meta.url));
+const FIXTURE = fileURLToPath(
+  new URL('./fixtures/sample.stt', import.meta.url),
+);
 const FIXTURE_BYTES = new Uint8Array(readFileSync(FIXTURE));
 
 /** A fresh, mutation-isolated dataset (pack bytes are copied at transcode). */
@@ -50,7 +57,12 @@ function packOf(ds: InMemoryPackedDataset): Uint8Array {
 }
 
 /** First directory entry + its tile id. */
-async function firstEntry(archive: STTArchive): Promise<{ e: TileEntry; id: { z: number; x: number; y: number; t: number } }> {
+async function firstEntry(
+  archive: STTArchive,
+): Promise<{
+  e: TileEntry;
+  id: { z: number; x: number; y: number; t: number };
+}> {
   const index = await archive.getIndex();
   const e = index.tiles[0];
   return { e, id: { z: e.zoom, x: e.x, y: e.y, t: e.timeStart } };
@@ -58,20 +70,28 @@ async function firstEntry(archive: STTArchive): Promise<{ e: TileEntry; id: { z:
 
 /** Rewrite the dataset's directory with every run CRC flipped (blobs intact). */
 function tamperDirectoryCrcs(ds: InMemoryPackedDataset): void {
-  const manifest = JSON.parse(new TextDecoder().decode(ds.objects.get('manifest.json')!));
+  const manifest = JSON.parse(
+    new TextDecoder().decode(ds.objects.get('manifest.json')!),
+  );
   const entries = decodeDirectory(ds.objects.get(manifest.directory.key)!);
   const dir = encodeDirectory(
     entries.map((e) => ({ ...e, crc32c: (e.crc32c ^ 0xffffffff) >>> 0 })),
   );
   ds.objects.set(manifest.directory.key, dir);
   manifest.directory.length = dir.length;
-  ds.objects.set('manifest.json', new TextEncoder().encode(JSON.stringify(manifest)));
+  ds.objects.set(
+    'manifest.json',
+    new TextEncoder().encode(JSON.stringify(manifest)),
+  );
 }
 
 describe('CRC-32C verification (T1.4)', () => {
   it('decodes the Rust-built fixture with verification ON (default) — CRCs agree cross-impl', async () => {
     const ds = freshDataset('mem://crc-ok/manifest.json');
-    const archive = new STTArchive({ url: ds.manifestUrl, fetch: packedFetch(ds) });
+    const archive = new STTArchive({
+      url: ds.manifestUrl,
+      fetch: packedFetch(ds),
+    });
     const { e, id } = await firstEntry(archive);
     expect(e.crc32c).toBeGreaterThan(0); // the Rust writer recorded a real CRC
     const tile = await archive.getTile(id);
@@ -81,7 +101,10 @@ describe('CRC-32C verification (T1.4)', () => {
 
   it('rejects a corrupted blob with the distinctive crc32c message', async () => {
     const ds = freshDataset('mem://crc-corrupt/manifest.json');
-    const archive = new STTArchive({ url: ds.manifestUrl, fetch: packedFetch(ds) });
+    const archive = new STTArchive({
+      url: ds.manifestUrl,
+      fetch: packedFetch(ds),
+    });
     const { e, id } = await firstEntry(archive);
     // Flip one byte in the middle of the blob — lengths are preserved, so
     // nothing before the CRC gate would notice.
@@ -92,7 +115,10 @@ describe('CRC-32C verification (T1.4)', () => {
   it('rejects when the directory CRC disagrees with intact bytes', async () => {
     const ds = freshDataset('mem://crc-dir/manifest.json');
     tamperDirectoryCrcs(ds);
-    const archive = new STTArchive({ url: ds.manifestUrl, fetch: packedFetch(ds) });
+    const archive = new STTArchive({
+      url: ds.manifestUrl,
+      fetch: packedFetch(ds),
+    });
     const { id } = await firstEntry(archive);
     await expect(archive.getTile(id)).rejects.toThrow(/crc32c mismatch/);
   });
@@ -153,18 +179,28 @@ describe('CRC-32C verification (T1.4)', () => {
           format: 'stt-packed',
           formatVersion: 1,
           compression: srcManifest.compression,
-          directory: { key: 'index/dir.sttd', length: dir.length, directoryVersion: 5 },
+          directory: {
+            key: 'index/dir.sttd',
+            length: dir.length,
+            directoryVersion: 5,
+          },
           packs: [{ key: 'packs/p0.sttp', length: pack.length }],
           metadata: srcManifest.metadata,
         }),
       ),
     );
-    const ds: InMemoryPackedDataset = { objects, manifestUrl: 'mem://crc-batch/manifest.json' };
+    const ds: InMemoryPackedDataset = {
+      objects,
+      manifestUrl: 'mem://crc-batch/manifest.json',
+    };
 
     // Corrupt only the SECOND copy.
     pack[stride + (blob.length >> 1)] ^= 0xff;
 
-    const archive = new STTArchive({ url: ds.manifestUrl, fetch: packedFetch(ds) });
+    const archive = new STTArchive({
+      url: ds.manifestUrl,
+      fetch: packedFetch(ds),
+    });
     await archive.getIndex();
     const ids = [
       { z: e.zoom, x: e.x, y: e.y, t: 0 },
@@ -305,7 +341,10 @@ describe('retainArrowIpc retention policy (T2.3)', () => {
     // (The aliasing-keyed 'auto' dropped exactly this valid-GeoArrow case —
     // the published-API regression this test now pins.)
     const ds = freshDataset('mem://ipc-auto/manifest.json');
-    const archive = new STTArchive({ url: ds.manifestUrl, fetch: packedFetch(ds) });
+    const archive = new STTArchive({
+      url: ds.manifestUrl,
+      fetch: packedFetch(ds),
+    });
     const { id } = await firstEntry(archive);
     const tile = await archive.getTile(id);
     const layer = tile!.layers[0];

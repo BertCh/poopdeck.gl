@@ -2,7 +2,7 @@
 
 > **Status: SHIPPED + COMMITTED.** Single-source clock↔buffer coupling shipped
 > 2026-06-09; multi-source coordination 2026-06-19 (`86bbb0f`). A consolidated
-> decision record — the *why*, not current behavior; shipped behavior + API live
+> decision record — the _why_, not current behavior; shipped behavior + API live
 > in [`stt-player`](../api/stt-player.md),
 > [`playback-governor`](../api/playback-governor.md) (incl. the multi-source
 > `addSource`/`removeSource` gate + `SharedRequestScheduler`), and
@@ -39,7 +39,7 @@ RobustMPC SIGCOMM'15). Consensus mechanics: start small, buffer while playing
 +5.8 %/s after); 10–30 s forward buffer (hls.js `maxBufferLength` 30 s) under a
 dual seconds-AND-bytes cap (`maxBufferSize` 60 MB), duty-cycled between
 watermarks; on underrun the playhead **freezes** (`waiting`) — time never
-advances over missing media, and stall *count* hurts QoE separately from
+advances over missing media, and stall _count_ hurts QoE separately from
 duration; resume hysteresis (ExoPlayer resumes at 5 s = 2× the 2.5 s start gate);
 seek feedback from a tiny always-resident storyboard tier (BIF/VTT sprites), real
 fetches debounced until the scrub settles (~150–250 ms), stale in-flight requests
@@ -50,21 +50,21 @@ rate change is ±2–5 % live-edge catch-up.
 
 **Non-video precedents** (deck.gl TripsLayer, kepler.gl, CesiumJS Clock, FR24):
 none couple the clock to loading — all play through gaps. Google Earth Timelapse
-solved it by re-encoding data *as video*, forfeiting interactivity. Clock↔buffer
+solved it by re-encoding data _as video_, forfeiting interactivity. Clock↔buffer
 coupling is the genuinely novel piece for a data player.
 
 **Where a data player deliberately differs from video:**
 
 1. **Cost is knowable in advance.** The v5 directory stores every tile's
-   `(timeStart, timeEnd, length)`, so we compute *exactly* the bytes the next N
+   `(timeStart, timeEnd, length)`, so we compute _exactly_ the bytes the next N
    playback-seconds cost for the current viewport, ÷ measured throughput = an
-   honest ETA — MPC-style lookahead for free; deadlines are *exact*, not estimated.
+   honest ETA — MPC-style lookahead for free; deadlines are _exact_, not estimated.
 2. **Speed multiplies data rate** — buffer targets are denominated in wall-seconds
    × current speed; a speed change is a re-plan event.
 3. **Viewport is a second seek axis** — pan/zoom invalidates the buffer while time
    stands still; the same debounce/abort/reprioritize machinery applies.
 4. **Speed is a user-facing semantic control** (no audio, no authored tempo), so
-   *visible, opt-in* speed adaptation is acceptable here — but only after honest
+   _visible, opt-in_ speed adaptation is acceptable here — but only after honest
    buffering, never silently.
 5. **Partial render is possible** — but as a principled mode (scrub preview, an
    explicit "play anyway" + completeness indicator), never the silent default.
@@ -78,7 +78,8 @@ the runway drains, applies resume hysteresis so stall/resume never oscillates,
 and turns seeks/scrubs into preview-vs-commit operations with a post-seek gate.
 The buffer model + readiness API (`getBufferedRunway`, `estimateCost`,
 `estimateTimeToReadyMs`, dual-EWMA throughput) live in `packages/core`; the gate
-+ auto-speed in `@poopdeck.gl/playback`.
+
+- auto-speed in `@poopdeck.gl/playback`.
 
 **Frontier hold + degraded creep** (2026-06-10 follow-up): the first governor
 detected stalls only from network events, so between events the playhead could
@@ -95,7 +96,7 @@ states, gates, options, QoE counters, auto-speed → the API doc above.)
 
 Confidence + 3-vote tallies from adversarial verification.
 
-- **Combined health = min over *required* sources** (`high`, 3-0). MSE reaches
+- **Combined health = min over _required_ sources** (`high`, 3-0). MSE reaches
   `HAVE_ENOUGH_DATA` only when all active buffers have data past the playhead;
   `HTMLMediaElement.buffered` is the **intersection**. → Gate on
   `min(getBufferedRunway)` over required; `complete` = AND.
@@ -184,7 +185,7 @@ catch-up lurch); (4) rollback drill — `configureSharedScheduler({enabled:false
 reverts loading to the per-instance path with no gate behavior change.
 
 Counted out: **maplibre governor wiring** (stays app-wired; trigger = maplibre
-becoming a supported *player* surface, not just a renderer) · **player-level
+becoming a supported _player_ surface, not just a renderer) · **player-level
 "exposure"/trail-length knob** (a feature ask touching runway-horizon math —
 build only against a concrete UX request) · **StrictMode remount re-registration**
 (mitigated via the one-shot `tilesetRef` handover in `use-playback.ts`; residual

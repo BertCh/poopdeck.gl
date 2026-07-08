@@ -7,7 +7,9 @@ import type { BinaryFeatures, Tile } from '@poopdeck.gl/core';
 import { GlobeProjection } from '@poopdeck.gl/core/geo';
 import { buildPointEntries, collectPointLayers } from '../src/lib/points';
 
-const GLOBE = new GlobeProjection({ longitude: 0, latitude: 0 }, undefined, { datum: 'wgs84' });
+const GLOBE = new GlobeProjection({ longitude: 0, latitude: 0 }, undefined, {
+  datum: 'wgs84',
+});
 
 function pointFeatures(
   positions: number[],
@@ -40,28 +42,63 @@ function pointTile(
   partial: Partial<BinaryFeatures> = {},
   timeOffset = 0,
 ): Tile {
-  const features = pointFeatures(positions, startTimes, endTimes, partial, timeOffset);
+  const features = pointFeatures(
+    positions,
+    startTimes,
+    endTimes,
+    partial,
+    timeOffset,
+  );
   return {
     id: { z: 5, x: 0, y: 0, t: timeOffset },
     timeRange: { start: timeOffset, end: timeOffset + 1000 },
-    layers: [{ name: 'points', extent: 0, features, geometryExtensionName: 'geoarrow.point' }],
+    layers: [
+      {
+        name: 'points',
+        extent: 0,
+        features,
+        geometryExtensionName: 'geoarrow.point',
+      },
+    ],
   };
 }
 
 describe('collectPointLayers', () => {
   it('keeps only non-empty Point layers, in tile/layer order', () => {
     const empty = pointFeatures([], [], []); // featureCount 0 → dropped
-    const linePoints = pointFeatures([1, 1], [0], [1], { geometryType: GeometryType.LineString }); // wrong type → dropped
+    const linePoints = pointFeatures([1, 1], [0], [1], {
+      geometryType: GeometryType.LineString,
+    }); // wrong type → dropped
     const a = pointFeatures([0, 0], [0], [1]);
     const b = pointFeatures([1, 1, 2, 2], [0, 0], [1, 1]);
     const tile: Tile = {
       id: { z: 5, x: 0, y: 0, t: 0 },
       timeRange: { start: 0, end: 1 },
       layers: [
-        { name: 'e', extent: 0, features: empty, geometryExtensionName: 'geoarrow.point' },
-        { name: 'l', extent: 0, features: linePoints, geometryExtensionName: 'geoarrow.linestring' },
-        { name: 'a', extent: 0, features: a, geometryExtensionName: 'geoarrow.point' },
-        { name: 'b', extent: 0, features: b, geometryExtensionName: 'geoarrow.point' },
+        {
+          name: 'e',
+          extent: 0,
+          features: empty,
+          geometryExtensionName: 'geoarrow.point',
+        },
+        {
+          name: 'l',
+          extent: 0,
+          features: linePoints,
+          geometryExtensionName: 'geoarrow.linestring',
+        },
+        {
+          name: 'a',
+          extent: 0,
+          features: a,
+          geometryExtensionName: 'geoarrow.point',
+        },
+        {
+          name: 'b',
+          extent: 0,
+          features: b,
+          geometryExtensionName: 'geoarrow.point',
+        },
       ],
     };
     const collected = collectPointLayers([tile]);
@@ -95,7 +132,9 @@ describe('buildPointEntries', () => {
   });
 
   it('returns an empty build (timeOrigin 0) when there are no Point features', () => {
-    const line = pointTile([0, 0, 1, 1], [0], [1], { geometryType: GeometryType.LineString });
+    const line = pointTile([0, 0, 1, 1], [0], [1], {
+      geometryType: GeometryType.LineString,
+    });
     const build = buildPointEntries([line]);
     expect(build.points).toEqual([]);
     expect(build.timeOrigin).toBe(0);

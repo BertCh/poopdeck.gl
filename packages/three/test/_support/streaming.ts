@@ -20,10 +20,19 @@ export const VIEWPORT = {
 
 /** A minimal empty-layer tile keyed only by address. */
 export function tile(id: TileId): Tile {
-  return { id, timeRange: { start: id.t, end: id.t + 1000 }, layers: [] } as Tile;
+  return {
+    id,
+    timeRange: { start: id.t, end: id.t + 1000 },
+    layers: [],
+  } as Tile;
 }
 
-type UpdateArg = { bounds: BoundingBox; zoom: number; time: number; timeWindow: number };
+type UpdateArg = {
+  bounds: BoundingBox;
+  zoom: number;
+  time: number;
+  timeWindow: number;
+};
 
 export type MockTileset = DrivableTileset & {
   /** Every viewport passed to `update`, in order. */

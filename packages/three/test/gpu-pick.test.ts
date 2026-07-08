@@ -2,7 +2,12 @@
 // SPDX-License-Identifier: MIT
 
 import { describe, it, expect } from 'vitest';
-import { encodeId, decodeId, buildIdColors, MAX_PICK_ID } from '../src/lib/gpu-pick';
+import {
+  encodeId,
+  decodeId,
+  buildIdColors,
+  MAX_PICK_ID,
+} from '../src/lib/gpu-pick';
 
 describe('encodeId / decodeId', () => {
   it('round-trips small ids', () => {
@@ -24,7 +29,16 @@ describe('encodeId / decodeId', () => {
     const samples = new Set<number>();
     for (let i = 0; i <= MAX_PICK_ID; i += 50021) samples.add(i);
     // include every channel boundary and the extremes
-    for (const v of [0, 1, 255, 256, 65535, 65536, MAX_PICK_ID - 1, MAX_PICK_ID]) {
+    for (const v of [
+      0,
+      1,
+      255,
+      256,
+      65535,
+      65536,
+      MAX_PICK_ID - 1,
+      MAX_PICK_ID,
+    ]) {
       samples.add(v);
     }
     for (const i of samples) {
@@ -36,7 +50,9 @@ describe('encodeId / decodeId', () => {
   });
 
   it('decodeId masks channels to bytes', () => {
-    expect(decodeId([0x101, 0x102, 0x103] as unknown as [number, number, number])).toBe(0x010203);
+    expect(
+      decodeId([0x101, 0x102, 0x103] as unknown as [number, number, number]),
+    ).toBe(0x010203);
   });
 
   it('throws on out-of-range ids', () => {

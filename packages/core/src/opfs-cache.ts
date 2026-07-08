@@ -209,8 +209,15 @@ export class OpfsTileCache {
         // missing, e.g. the Node test shim) keeps the configured budget.
         try {
           const estimate = await (navigator as any).storage?.estimate?.();
-          if (estimate && typeof estimate.quota === 'number' && estimate.quota > 0) {
-            this.budgetBytes = Math.min(this.maxBytes, Math.floor(estimate.quota / 2));
+          if (
+            estimate &&
+            typeof estimate.quota === 'number' &&
+            estimate.quota > 0
+          ) {
+            this.budgetBytes = Math.min(
+              this.maxBytes,
+              Math.floor(estimate.quota / 2),
+            );
           }
         } catch {
           /* keep the configured budget */
@@ -221,7 +228,10 @@ export class OpfsTileCache {
         // Any failure (denied, sandboxed iframe, Safari quirk) -> permanent
         // no-op. We log once so it's diagnosable without spamming the console
         // on every getTile().
-        console.warn('[stt] OPFS cache unavailable, running without persistence:', err);
+        console.warn(
+          '[stt] OPFS cache unavailable, running without persistence:',
+          err,
+        );
         this.available = false;
       }
     })();
@@ -256,7 +266,8 @@ export class OpfsTileCache {
         // amortized across the entire session.
         let count = 0;
         for (const e of Object.values(this.index.entries)) {
-          if (e.lastAccess > this.accessCounter) this.accessCounter = e.lastAccess;
+          if (e.lastAccess > this.accessCounter)
+            this.accessCounter = e.lastAccess;
           count++;
         }
         this.entryCount = count;
@@ -333,7 +344,9 @@ export class OpfsTileCache {
    */
   private async sweepOrphans(): Promise<void> {
     const dir = this.dirHandle as
-      | (FileSystemDirectoryHandle & { keys?: () => AsyncIterableIterator<string> })
+      | (FileSystemDirectoryHandle & {
+          keys?: () => AsyncIterableIterator<string>;
+        })
       | undefined;
     if (!dir || typeof dir.keys !== 'function') return;
     try {
@@ -483,7 +496,12 @@ export class OpfsTileCache {
 
   /** Stats for the perf HUD / probe consumers. `maxBytes` is the EFFECTIVE
    * (quota-clamped) budget, which is what eviction actually enforces. */
-  getStats(): { available: boolean; bytes: number; entries: number; maxBytes: number } {
+  getStats(): {
+    available: boolean;
+    bytes: number;
+    entries: number;
+    maxBytes: number;
+  } {
     return {
       available: this.available,
       bytes: this.index.totalBytes,

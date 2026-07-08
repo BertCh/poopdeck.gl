@@ -17,16 +17,22 @@ describe('buildLineSegmentBuffers', () => {
   it('emits one segment instance per consecutive vertex pair, RTC-relative', () => {
     // 3-vertex line at the anchor going east → 2 segments.
     const dLon = 0.001;
-    const tile = lineTile({
-      positions: new Float64Array([
-        anchor.longitude, anchor.latitude,
-        anchor.longitude + dLon, anchor.latitude,
-        anchor.longitude + 2 * dLon, anchor.latitude,
-      ]),
-      startIndices: new Uint32Array([0, 3]),
-      startTimes: new Float32Array([100]),
-      endTimes: new Float32Array([200]),
-    }, 500);
+    const tile = lineTile(
+      {
+        positions: new Float64Array([
+          anchor.longitude,
+          anchor.latitude,
+          anchor.longitude + dLon,
+          anchor.latitude,
+          anchor.longitude + 2 * dLon,
+          anchor.latitude,
+        ]),
+        startIndices: new Uint32Array([0, 3]),
+        startTimes: new Float32Array([100]),
+        endTimes: new Float32Array([200]),
+      },
+      500,
+    );
 
     const buf = buildLineSegmentBuffers([tile], proj, 200, {
       colorMode: { type: 'constant', color: [255, 0, 0, 255] },
@@ -50,8 +56,10 @@ describe('buildLineSegmentBuffers', () => {
     const merc = new MercatorProjection();
     const tile = lineTile({
       positions: new Float64Array([
-        anchor.longitude, anchor.latitude,
-        anchor.longitude + 0.001, anchor.latitude + 0.001,
+        anchor.longitude,
+        anchor.latitude,
+        anchor.longitude + 0.001,
+        anchor.latitude + 0.001,
       ]),
       startIndices: new Uint32Array([0, 2]),
     });
@@ -62,7 +70,10 @@ describe('buildLineSegmentBuffers', () => {
   });
 
   it('returns empty for a tile with no line features', () => {
-    const tile = lineTile({ featureCount: 0, startIndices: new Uint32Array([0]) });
+    const tile = lineTile({
+      featureCount: 0,
+      startIndices: new Uint32Array([0]),
+    });
     const buf = buildLineSegmentBuffers([tile], proj, 0, {
       colorMode: { type: 'constant', color: [0, 0, 0, 255] },
     });

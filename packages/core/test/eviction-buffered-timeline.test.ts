@@ -26,7 +26,12 @@ import type { TileId, BoundingBox, Tile } from '../src/types';
 import { BUCKET_MS, fakeTile, makeAvailableTiles } from './helpers/fixtures';
 import { advanceClock, installClock } from './helpers/clock';
 
-const WEST: BoundingBox = { minLon: -170, minLat: -60, maxLon: -10, maxLat: 60 };
+const WEST: BoundingBox = {
+  minLon: -170,
+  minLat: -60,
+  maxLon: -10,
+  maxLat: 60,
+};
 const EAST: BoundingBox = { minLon: 10, minLat: -60, maxLon: 170, maxLat: 60 };
 const N_BUCKETS = 60;
 
@@ -35,18 +40,25 @@ const N_BUCKETS = 60;
  * (west → x=0, east → x=1) so a viewport change genuinely changes the
  * needed-tile set AND the coverage index contents.
  */
-const availableTiles = makeAvailableTiles(N_BUCKETS, (b) => (b.maxLon <= 0 ? 0 : 1));
+const availableTiles = makeAvailableTiles(N_BUCKETS, (b) =>
+  b.maxLon <= 0 ? 0 : 1,
+);
 
-const settle = (ms = 10): Promise<void> => new Promise((r) => setTimeout(r, ms));
+const settle = (ms = 10): Promise<void> =>
+  new Promise((r) => setTimeout(r, ms));
 
-function makeTileset(opts: { maxCacheSize?: number } = {}): SpatiotemporalTileset {
+function makeTileset(
+  opts: { maxCacheSize?: number } = {},
+): SpatiotemporalTileset {
   return new SpatiotemporalTileset({
     minZoom: 0,
     maxZoom: 12,
     enablePrefetch: false,
     refinementStrategy: 'no-overlap',
     temporalBucketMs: BUCKET_MS,
-    ...(opts.maxCacheSize !== undefined ? { maxCacheSize: opts.maxCacheSize } : {}),
+    ...(opts.maxCacheSize !== undefined
+      ? { maxCacheSize: opts.maxCacheSize }
+      : {}),
     getAvailableTiles: async (b, z, r) => availableTiles(b, z, r),
     getTileData: async (id: TileId) => fakeTile(id),
     getTileDataBatch: async (ids: TileId[]) => ids.map(fakeTile),
@@ -72,7 +84,9 @@ const loadBucket = async (
 };
 
 /** Coverage index build is async — call a buffer API, then let it land. */
-const enableBufferTracking = async (tileset: SpatiotemporalTileset): Promise<void> => {
+const enableBufferTracking = async (
+  tileset: SpatiotemporalTileset,
+): Promise<void> => {
   tileset.getBufferedRanges();
   await settle();
 };

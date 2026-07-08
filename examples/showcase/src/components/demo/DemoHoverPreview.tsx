@@ -5,20 +5,20 @@
  * frozen-clock render kernel lives in the package; everything dataset- or
  * Mapbox-specific stays here.
  */
-import React, { useMemo } from "react";
-import { _GlobeView as GlobeView } from "@deck.gl/core";
-import { HoverPreview } from "@poopdeck.gl/react/hover-preview";
-import type { Dataset } from "../../types";
-import { buildDemoLayers } from "./buildDemoLayers";
+import React, { useMemo } from 'react';
+import { _GlobeView as GlobeView } from '@deck.gl/core';
+import { HoverPreview } from '@poopdeck.gl/react/hover-preview';
+import type { Dataset } from '../../types';
+import { buildDemoLayers } from './buildDemoLayers';
 import {
   clampPreviewPitch,
   fitPreviewSize,
   previewZoom,
   staticBasemapUrl,
   type DemoCamera,
-} from "./previewBasemap";
+} from './previewBasemap';
 
-export type { DemoCamera } from "./previewBasemap";
+export type { DemoCamera } from './previewBasemap';
 
 export interface DemoHoverPreviewProps {
   dataset: Dataset;
@@ -47,7 +47,8 @@ const DemoHoverPreview: React.FC<DemoHoverPreviewProps> = ({
   // Globe view is stable for the dataset's lifetime — recreating it each render
   // would churn deck's view tree.
   const views = useMemo(
-    () => (useGlobe ? [new GlobeView({ id: "globe", resolution: 10 })] : undefined),
+    () =>
+      useGlobe ? [new GlobeView({ id: 'globe', resolution: 10 })] : undefined,
     [useGlobe],
   );
 

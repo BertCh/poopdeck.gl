@@ -19,4 +19,7 @@ export {
   wakeSizeScale,
   timeFilterAlpha,
 } from '@poopdeck.gl/core/time-filter';
-export type { TimeFilterMode, TimeFilterParams } from '@poopdeck.gl/core/time-filter';
+export type {
+  TimeFilterMode,
+  TimeFilterParams,
+} from '@poopdeck.gl/core/time-filter';

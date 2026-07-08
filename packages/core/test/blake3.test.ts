@@ -70,7 +70,9 @@ describe('blake3 (pure-TS port vs the Rust writer crate)', () => {
   it('truncated outputs are prefixes of the full hash', () => {
     const input = officialInput(1025);
     const full = blake3(input, 32);
-    expect(Array.from(blake3(input, 16))).toEqual(Array.from(full.subarray(0, 16)));
+    expect(Array.from(blake3(input, 16))).toEqual(
+      Array.from(full.subarray(0, 16)),
+    );
     expect(Array.from(blake3(input, 1))).toEqual([full[0]]);
   });
 

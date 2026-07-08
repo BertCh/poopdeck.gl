@@ -71,7 +71,11 @@ export interface Projection {
   /** Anchor lon/lat that maps to world `(0, 0, *)` (planar) or the view centre (globe). */
   readonly anchor: GeoAnchor;
   /** lon/lat (deg) + altitude (m) → world `[x, y, z]`. */
-  project(longitude: number, latitude: number, altitude?: number): [number, number, number];
+  project(
+    longitude: number,
+    latitude: number,
+    altitude?: number,
+  ): [number, number, number];
   /** world `[x, y, z]` → lon/lat (deg) + altitude (m). */
   unproject(x: number, y: number, z?: number): [number, number, number];
   /** True ground metres represented by one world unit at this location. */
@@ -92,10 +96,15 @@ export class LocalEnuProjection implements Projection {
 
   constructor(anchor: GeoAnchor) {
     this.anchor = anchor;
-    this.metersPerLon = METERS_PER_DEG_LAT * Math.cos(anchor.latitude * DEG2RAD);
+    this.metersPerLon =
+      METERS_PER_DEG_LAT * Math.cos(anchor.latitude * DEG2RAD);
   }
 
-  project(longitude: number, latitude: number, altitude = 0): [number, number, number] {
+  project(
+    longitude: number,
+    latitude: number,
+    altitude = 0,
+  ): [number, number, number] {
     return [
       (longitude - this.anchor.longitude) * this.metersPerLon,
       (latitude - this.anchor.latitude) * METERS_PER_DEG_LAT,

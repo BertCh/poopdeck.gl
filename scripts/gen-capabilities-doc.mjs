@@ -13,6 +13,14 @@ import { threeBackend } from '../packages/three/dist/backend-descriptor.js';
 import { maplibreBackend } from '../packages/maplibre/dist/backend-descriptor.js';
 import { cesiumBackend } from '../packages/cesium/dist/backend-descriptor.js';
 
-const md = renderCapabilitiesMarkdown([deckBackend, threeBackend, maplibreBackend, cesiumBackend]);
-writeFileSync(join(process.cwd(), 'docs/spec/backend-capabilities.md'), md + '\n');
+const md = renderCapabilitiesMarkdown([
+  deckBackend,
+  threeBackend,
+  maplibreBackend,
+  cesiumBackend,
+]);
+writeFileSync(
+  join(process.cwd(), 'docs/spec/backend-capabilities.md'),
+  md + '\n',
+);
 console.log('wrote docs/spec/backend-capabilities.md');

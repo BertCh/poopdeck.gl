@@ -34,28 +34,29 @@ runtime — point `window.CESIUM_BASE_URL` at the npm package's
 `Build/Cesium/` output or a CDN copy before constructing a `Viewer`:
 
 ```ts
-window.CESIUM_BASE_URL = 'https://cdn.jsdelivr.net/npm/cesium@1.142.0/Build/Cesium/';
+window.CESIUM_BASE_URL =
+  'https://cdn.jsdelivr.net/npm/cesium@1.142.0/Build/Cesium/';
 ```
 
 ## Exports
 
-| Export | Kind | Description |
-|--------|------|-------------|
-| `CesiumPointLayer` | class | The `point` `SttRenderNode` — builds a `PointPrimitiveCollection` from decoded tiles and drives per-point alpha off the shared time-filter oracle |
-| `CesiumPathLayer` | class | Animated LineStrings (`path` **and** OD `line` — an OD line is a 2-vertex LineString); batched `Primitive` + per-instance colour animation |
-| `CesiumArcLayer` | class | OD flow arcs — endpoints via the kernel's `deriveSourceTargetPositions`, swept into raised great-circle polylines (same parametrization as three's globe arc material) |
-| `CesiumTripsLayer` | class | Vehicle trails — per-frame CPU trail trim (`core/trips` `trimTrail`) into a `PolylineCollection`, arc-length tail fade material |
-| `CesiumTripHeadsLayer` | class | Moving head-dots — per-frame `sampleHead` interpolation (`core/trips`) onto `PointPrimitive`s |
-| `BatchedPolylineLayer` | class | The shared batched-`Primitive` machinery behind the path/arc layers (advanced use) |
-| `buildPathPolylines` / `buildArcPolylines` / `sampleGreatCircleArc` / `lineStringTimeOrigin` | functions | The pure (Cesium-free, unit-tested) geometry builders behind the polyline layers (`lineStringTimeOrigin` = their shared scene-wide time origin) |
-| `buildPointEntries` / `collectPointLayers` | functions | The pure (Cesium-free, unit-tested) point builders behind `CesiumPointLayer` — CPU assembly of per-feature ECEF points |
-| `featureColor` | function | Per-feature constant/categorical/ramp colour dispatch over `core/style` scalar lookups |
-| `cesiumBackend` | `BackendDescriptor` | This backend's declared capabilities / layer-kind support, against `@poopdeck.gl/core/capabilities` |
-| `viewStateToCesiumView` | function | Pure `ViewState` → Cesium camera-parameter math (no Cesium runtime import) |
-| `cesiumViewToViewState` | function | Pure inverse of `viewStateToCesiumView` |
-| `applyViewStateToCamera` | function | Drives a live Cesium `Camera` from a `ViewState` |
-| `attachCesiumClock` | function | Binds a governor-owned playback clock to `scene.preRender` |
-| `timeFilterAlphaGlsl` | function | Emits the generated GLSL ES 3.00 time-filter alpha expression, for a future GPU-`Appearance` path |
+| Export                                                                                       | Kind                | Description                                                                                                                                                            |
+| -------------------------------------------------------------------------------------------- | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CesiumPointLayer`                                                                           | class               | The `point` `SttRenderNode` — builds a `PointPrimitiveCollection` from decoded tiles and drives per-point alpha off the shared time-filter oracle                      |
+| `CesiumPathLayer`                                                                            | class               | Animated LineStrings (`path` **and** OD `line` — an OD line is a 2-vertex LineString); batched `Primitive` + per-instance colour animation                             |
+| `CesiumArcLayer`                                                                             | class               | OD flow arcs — endpoints via the kernel's `deriveSourceTargetPositions`, swept into raised great-circle polylines (same parametrization as three's globe arc material) |
+| `CesiumTripsLayer`                                                                           | class               | Vehicle trails — per-frame CPU trail trim (`core/trips` `trimTrail`) into a `PolylineCollection`, arc-length tail fade material                                        |
+| `CesiumTripHeadsLayer`                                                                       | class               | Moving head-dots — per-frame `sampleHead` interpolation (`core/trips`) onto `PointPrimitive`s                                                                          |
+| `BatchedPolylineLayer`                                                                       | class               | The shared batched-`Primitive` machinery behind the path/arc layers (advanced use)                                                                                     |
+| `buildPathPolylines` / `buildArcPolylines` / `sampleGreatCircleArc` / `lineStringTimeOrigin` | functions           | The pure (Cesium-free, unit-tested) geometry builders behind the polyline layers (`lineStringTimeOrigin` = their shared scene-wide time origin)                        |
+| `buildPointEntries` / `collectPointLayers`                                                   | functions           | The pure (Cesium-free, unit-tested) point builders behind `CesiumPointLayer` — CPU assembly of per-feature ECEF points                                                 |
+| `featureColor`                                                                               | function            | Per-feature constant/categorical/ramp colour dispatch over `core/style` scalar lookups                                                                                 |
+| `cesiumBackend`                                                                              | `BackendDescriptor` | This backend's declared capabilities / layer-kind support, against `@poopdeck.gl/core/capabilities`                                                                    |
+| `viewStateToCesiumView`                                                                      | function            | Pure `ViewState` → Cesium camera-parameter math (no Cesium runtime import)                                                                                             |
+| `cesiumViewToViewState`                                                                      | function            | Pure inverse of `viewStateToCesiumView`                                                                                                                                |
+| `applyViewStateToCamera`                                                                     | function            | Drives a live Cesium `Camera` from a `ViewState`                                                                                                                       |
+| `attachCesiumClock`                                                                          | function            | Binds a governor-owned playback clock to `scene.preRender`                                                                                                             |
+| `timeFilterAlphaGlsl`                                                                        | function            | Emits the generated GLSL ES 3.00 time-filter alpha expression, for a future GPU-`Appearance` path                                                                      |
 
 There is no shared base layer or archive-owning helper like MapLibre's
 `STTBaseLayer` — the app wires `STTArchive` + `SpatiotemporalTileset` itself
@@ -84,22 +85,29 @@ function buildPointEntries(tiles: Tile[], opts?: PointBuildOptions): PointBuild;
 function lineStringTimeOrigin(tiles: Tile[]): number;
 
 interface PointBuildOptions {
-  colorProperty?: string;                      // categorical property to colour by
-  colorMapping?: Record<string, RGBA255>;      // category → colour
-  colorMappingDefault?: RGBA255;               // unmapped/absent (0–255) — @default opaque grey
+  colorProperty?: string; // categorical property to colour by
+  colorMapping?: Record<string, RGBA255>; // category → colour
+  colorMappingDefault?: RGBA255; // unmapped/absent (0–255) — @default opaque grey
 }
 
 interface PointBuild {
   points: FeaturePoint[];
-  timeOrigin: number;                          // absolute ms all start/end are relative to
+  timeOrigin: number; // absolute ms all start/end are relative to
 }
 
 interface FeaturePoint {
-  x: number; y: number; z: number;             // absolute ECEF position (metres)
-  r: number; g: number; b: number; a: number;  // base colour, pre-normalized to 0..1
-  start: number; end: number;                  // active window, relative to timeOrigin (ms)
-  lon: number; lat: number;                    // source degrees — the picking coordinate
-  binary: BinaryFeatures;                      // picking provenance
+  x: number;
+  y: number;
+  z: number; // absolute ECEF position (metres)
+  r: number;
+  g: number;
+  b: number;
+  a: number; // base colour, pre-normalized to 0..1
+  start: number;
+  end: number; // active window, relative to timeOrigin (ms)
+  lon: number;
+  lat: number; // source degrees — the picking coordinate
+  binary: BinaryFeatures; // picking provenance
   featureIndex: number;
 }
 ```
@@ -117,7 +125,8 @@ import { STTArchive, SpatiotemporalTileset } from '@poopdeck.gl/core';
 import { makeTilesetCallbacks } from '@poopdeck.gl/core/tileset-adapter';
 import { CesiumPointLayer, applyViewStateToCamera } from '@poopdeck.gl/cesium';
 
-window.CESIUM_BASE_URL = 'https://cdn.jsdelivr.net/npm/cesium@1.142.0/Build/Cesium/';
+window.CESIUM_BASE_URL =
+  'https://cdn.jsdelivr.net/npm/cesium@1.142.0/Build/Cesium/';
 
 const viewer = new Viewer(document.getElementById('cesiumContainer')!, {
   baseLayer: false, // no imagery provider — no ion token needed
@@ -132,7 +141,11 @@ const layer = new CesiumPointLayer(viewer.scene, {
   pixelSize: 6,
 });
 
-applyViewStateToCamera(viewer.camera, { longitude: -122.4, latitude: 37.7, zoom: 6 });
+applyViewStateToCamera(viewer.camera, {
+  longitude: -122.4,
+  latitude: 37.7,
+  zoom: 6,
+});
 
 const archive = new STTArchive({ url: '/data/earthquakes/manifest.json' });
 const meta = await archive.getMetadata();
@@ -147,7 +160,10 @@ const tileset = new SpatiotemporalTileset({
 });
 
 const now = Date.now();
-tileset.update({ bounds: meta.bounds, zoom: 6, time: now, timeWindow: 24 * 60 * 60 * 1000 }, true);
+tileset.update(
+  { bounds: meta.bounds, zoom: 6, time: now, timeWindow: 24 * 60 * 60 * 1000 },
+  true,
+);
 layer.setTime(now);
 ```
 
@@ -192,24 +208,24 @@ are drawn until `setTiles` is called.
 
 ### Options (`CesiumPointLayerOptions`)
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `id` | `string` | `'stt-cesium-points'` | Layer id, stamped onto each primitive's pick id so `pick()` can filter hits to this layer |
-| `mode` | `TimeFilterMode` | `'window'` | One of `'window' \| 'wake' \| 'cumulative' \| 'trail' \| 'none'` — see [Time Filter Extension](./time-filter-extension.md) for the shared semantics |
-| `timeFilter` | `TimeFilterParams` | `{}` | Mode parameters (`windowHalf`, `fadeIn`, `fadeOut`, `wakeLength`, `trailLength`, `trailFade`) — all relative milliseconds |
-| `colorProperty` | `string` | — | Categorical property to colour by. Omit it and every point uses `colorMappingDefault` |
-| `colorMapping` | `Record<string, RGBA255>` | — | Category → colour lookup for `colorProperty` |
-| `colorMappingDefault` | `RGBA255` | `[200, 205, 215, 255]` | Colour for unmapped/absent categories, and for every point when `colorProperty` is unset |
-| `pixelSize` | `number` | `6` | Point size in pixels — one constant for the whole layer; there is no per-feature radius property (unlike the deck.gl/MapLibre point layers) |
+| Field                 | Type                      | Default                | Description                                                                                                                                         |
+| --------------------- | ------------------------- | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`                  | `string`                  | `'stt-cesium-points'`  | Layer id, stamped onto each primitive's pick id so `pick()` can filter hits to this layer                                                           |
+| `mode`                | `TimeFilterMode`          | `'window'`             | One of `'window' \| 'wake' \| 'cumulative' \| 'trail' \| 'none'` — see [Time Filter Extension](./time-filter-extension.md) for the shared semantics |
+| `timeFilter`          | `TimeFilterParams`        | `{}`                   | Mode parameters (`windowHalf`, `fadeIn`, `fadeOut`, `wakeLength`, `trailLength`, `trailFade`) — all relative milliseconds                           |
+| `colorProperty`       | `string`                  | —                      | Categorical property to colour by. Omit it and every point uses `colorMappingDefault`                                                               |
+| `colorMapping`        | `Record<string, RGBA255>` | —                      | Category → colour lookup for `colorProperty`                                                                                                        |
+| `colorMappingDefault` | `RGBA255`                 | `[200, 205, 215, 255]` | Colour for unmapped/absent categories, and for every point when `colorProperty` is unset                                                            |
+| `pixelSize`           | `number`                  | `6`                    | Point size in pixels — one constant for the whole layer; there is no per-feature radius property (unlike the deck.gl/MapLibre point layers)         |
 
 ### Methods
 
-| Method | Description |
-|--------|-------------|
-| `setTiles(tiles: Tile[])` | Rebuilds the point collection from decoded tiles. Clears and re-adds every primitive; rebases all feature `[startTime, endTime]` pairs onto one scene-wide `timeOrigin` (the first tile layer's `timeOffset`). Non-point layers in the tile set are silently skipped |
-| `setTime(absoluteMs: number)` | Recomputes per-point alpha via the shared `timeFilterAlpha` oracle and writes it into each primitive's colour. Skips the write when a point's alpha is unchanged since the last call, and reuses one scratch `Color` — no allocations in the steady state |
-| `pick(cssX: number, cssY: number)` | `scene.pick()` at the given CSS pixel, filtered to this layer's own primitives, returning a shared `SttPickResult` (`object` from `getFeatureProperties`, `index`, `layerId`, `coordinate: [lon, lat]`, `screen`) or `null` on a miss |
-| `dispose()` | Removes the point collection from `scene.primitives` and drops all entries |
+| Method                             | Description                                                                                                                                                                                                                                                          |
+| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `setTiles(tiles: Tile[])`          | Rebuilds the point collection from decoded tiles. Clears and re-adds every primitive; rebases all feature `[startTime, endTime]` pairs onto one scene-wide `timeOrigin` (the first tile layer's `timeOffset`). Non-point layers in the tile set are silently skipped |
+| `setTime(absoluteMs: number)`      | Recomputes per-point alpha via the shared `timeFilterAlpha` oracle and writes it into each primitive's colour. Skips the write when a point's alpha is unchanged since the last call, and reuses one scratch `Color` — no allocations in the steady state            |
+| `pick(cssX: number, cssY: number)` | `scene.pick()` at the given CSS pixel, filtered to this layer's own primitives, returning a shared `SttPickResult` (`object` from `getFeatureProperties`, `index`, `layerId`, `coordinate: [lon, lat]`, `screen`) or `null` on a miss                                |
+| `dispose()`                        | Removes the point collection from `scene.primitives` and drops all entries                                                                                                                                                                                           |
 
 `CesiumPointLayer` implements the shared `SttRenderNode` interface (`id`,
 `setTime`, `pick`, `dispose`) but does not implement the optional
@@ -319,7 +335,7 @@ export interface CesiumViewOptions {
 interface CesiumView {
   longitude: number;
   latitude: number;
-  height: number;      // camera altitude above the surface, metres
+  height: number; // camera altitude above the surface, metres
   headingRad: number;
   pitchRad: number;
   rollRad: number;
@@ -341,12 +357,12 @@ converts `v` via `viewStateToCesiumView` and calls
 
 ### `attachCesiumClock(scene, clock, apply, options?)`
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `scene` | `Scene` | — | The live Cesium scene to hook |
-| `clock` | `PlayheadClock` | — | Anything shaped like `{ getTime(): number; on('tick', cb): () => void; on('playState', cb): () => void }` — `@poopdeck.gl/playback`'s `TimeController` satisfies this structurally, with no import |
-| `apply` | `(timeMs: number) => void` | — | Called with the clock's absolute time on every drawn frame |
-| `options.requestRender` | `boolean` | `false` | Also pump `scene.requestRender()` on `'tick'` and `'playState'`, so a `Scene` with `requestRenderMode: true` keeps animating while playing and goes idle (zero renders) when paused |
+| Field                   | Type                       | Default | Description                                                                                                                                                                                        |
+| ----------------------- | -------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `scene`                 | `Scene`                    | —       | The live Cesium scene to hook                                                                                                                                                                      |
+| `clock`                 | `PlayheadClock`            | —       | Anything shaped like `{ getTime(): number; on('tick', cb): () => void; on('playState', cb): () => void }` — `@poopdeck.gl/playback`'s `TimeController` satisfies this structurally, with no import |
+| `apply`                 | `(timeMs: number) => void` | —       | Called with the clock's absolute time on every drawn frame                                                                                                                                         |
+| `options.requestRender` | `boolean`                  | `false` | Also pump `scene.requestRender()` on `'tick'` and `'playState'`, so a `Scene` with `requestRenderMode: true` keeps animating while playing and goes idle (zero renders) when paused                |
 
 Returns a disposer that removes every listener it added — call it before
 `viewer.destroy()`.
@@ -365,27 +381,27 @@ animation, because nothing else will ask Cesium to redraw a new frame.
 ## Backend descriptor
 
 `cesiumBackend` is a `BackendDescriptor` (from `@poopdeck.gl/core/capabilities`)
-describing what the Cesium *engine* can do and what this *package* currently
+describing what the Cesium _engine_ can do and what this _package_ currently
 implements — the two are called out separately, since Cesium natively has a
 WGS84 globe, GPU picking, 3D extrusion, metric sizing, and camera roll well
 beyond the one layer kind wired up so far:
 
-| Trait / capability | Value |
-|---|---|
-| `globe` | `true` — Cesium's native frame is a WGS84 globe |
-| `picking` | `true` — `scene.pick` |
-| `extrude3d` | `true` |
-| `metricSizing` | `true` — ECEF metres |
-| `gpuHeatmap` | `false` |
-| `liveBundling` | `false` |
-| `timeAsHeight` | `false` |
-| `interleavedBasemap` | `true` — STT primitives share Cesium's scene + depth buffer |
-| `userExtensions` | `false` |
-| `cameraRoll` | `true` — Cesium's camera has heading/pitch/roll |
-| `projectsOnCpu` | `true` — via `core/geo` `GlobeProjection(wgs84)` → `Cartesian3` |
-| `tilesetOwnership` | `shared` |
-| `pickMechanism` | `host` — `scene.pick` |
-| `basemapProjection` | `globe` |
+| Trait / capability   | Value                                                           |
+| -------------------- | --------------------------------------------------------------- |
+| `globe`              | `true` — Cesium's native frame is a WGS84 globe                 |
+| `picking`            | `true` — `scene.pick`                                           |
+| `extrude3d`          | `true`                                                          |
+| `metricSizing`       | `true` — ECEF metres                                            |
+| `gpuHeatmap`         | `false`                                                         |
+| `liveBundling`       | `false`                                                         |
+| `timeAsHeight`       | `false`                                                         |
+| `interleavedBasemap` | `true` — STT primitives share Cesium's scene + depth buffer     |
+| `userExtensions`     | `false`                                                         |
+| `cameraRoll`         | `true` — Cesium's camera has heading/pitch/roll                 |
+| `projectsOnCpu`      | `true` — via `core/geo` `GlobeProjection(wgs84)` → `Cartesian3` |
+| `tilesetOwnership`   | `shared`                                                        |
+| `pickMechanism`      | `host` — `scene.pick`                                           |
+| `basemapProjection`  | `globe`                                                         |
 
 `layerKinds()` marks `point`, `path`, `line`, `arc`, `trips`, and `tripHeads`
 as `{ supported: true }`; `surfel` falls back to `point`, the flowmap family
@@ -400,7 +416,10 @@ for the full cross-backend matrix (regenerated by
 ### `timeFilterAlphaGlsl(mode, nameMap?)`
 
 ```ts
-function timeFilterAlphaGlsl(mode: TimeFilterModeKey, nameMap?: Record<string, string>): string
+function timeFilterAlphaGlsl(
+  mode: TimeFilterModeKey,
+  nameMap?: Record<string, string>,
+): string;
 ```
 
 Emits GLSL ES 3.00 (Cesium is a WebGL2 host) for the same `ALPHA_EXPR`

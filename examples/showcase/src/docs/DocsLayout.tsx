@@ -1,6 +1,6 @@
-import React, { useState, useMemo } from "react";
-import { NavLink, Outlet, useOutletContext } from "react-router";
-import { docSections } from "./manifest";
+import React, { useState, useMemo } from 'react';
+import { NavLink, Outlet, useOutletContext } from 'react-router';
+import { docSections } from './manifest';
 
 /** SiteChrome hands every page its shared scroll surface (#site-scroll). */
 interface ChromeOutletContext {
@@ -30,7 +30,7 @@ export function useDocsContext(): DocsOutletContext {
 const DocsLayout: React.FC = () => {
   const { scrollRef } = useOutletContext<ChromeOutletContext>();
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [filter, setFilter] = useState("");
+  const [filter, setFilter] = useState('');
 
   const filtered = useMemo(() => {
     const q = filter.trim().toLowerCase();
@@ -57,9 +57,9 @@ const DocsLayout: React.FC = () => {
         placeholder="Filter docs…"
         className="w-full mb-5 px-2.5 py-1.5 rounded text-xs outline-none"
         style={{
-          background: "var(--surface)",
-          border: "1px solid var(--hairline)",
-          color: "var(--ink-700)",
+          background: 'var(--surface)',
+          border: '1px solid var(--hairline)',
+          color: 'var(--ink-700)',
         }}
         aria-label="Filter documentation pages"
       />
@@ -70,21 +70,22 @@ const DocsLayout: React.FC = () => {
             {section.entries.map((entry, i) => (
               <li key={entry.slug}>
                 {/* Sub-group header — shown where the group label changes. */}
-                {entry.group && entry.group !== section.entries[i - 1]?.group && (
-                  <div
-                    className="px-2 pt-2.5 pb-1 text-[10px] font-semibold uppercase tracking-wider"
-                    style={{ color: "var(--ink-400)" }}
-                  >
-                    {entry.group}
-                  </div>
-                )}
+                {entry.group &&
+                  entry.group !== section.entries[i - 1]?.group && (
+                    <div
+                      className="px-2 pt-2.5 pb-1 text-[10px] font-semibold uppercase tracking-wider"
+                      style={{ color: 'var(--ink-400)' }}
+                    >
+                      {entry.group}
+                    </div>
+                  )}
                 <NavLink
                   to={`/docs/${entry.slug}`}
                   onClick={() => setDrawerOpen(false)}
                   className="block px-2 py-1 rounded text-[13px] leading-snug transition-colors"
                   style={({ isActive }) => ({
-                    color: isActive ? "var(--accent)" : "var(--ink-700)",
-                    background: isActive ? "var(--accent-soft)" : "transparent",
+                    color: isActive ? 'var(--accent)' : 'var(--ink-700)',
+                    background: isActive ? 'var(--accent-soft)' : 'transparent',
                     fontWeight: isActive ? 600 : 400,
                   })}
                 >
@@ -96,7 +97,7 @@ const DocsLayout: React.FC = () => {
         </div>
       ))}
       {filtered.length === 0 && (
-        <p className="text-xs" style={{ color: "var(--ink-400)" }}>
+        <p className="text-xs" style={{ color: 'var(--ink-400)' }}>
           No pages match “{filter}”.
         </p>
       )}
@@ -109,7 +110,7 @@ const DocsLayout: React.FC = () => {
           starts below the 3rem header, so the rail fills the rest). */}
       <aside
         className="hidden lg:block w-60 shrink-0 sticky top-0 self-start h-[calc(100vh-3rem)] overflow-y-auto custom-scrollbar"
-        style={{ borderRight: "1px solid var(--hairline)" }}
+        style={{ borderRight: '1px solid var(--hairline)' }}
       >
         {sidebar}
       </aside>
@@ -119,14 +120,14 @@ const DocsLayout: React.FC = () => {
         <>
           <div
             className="lg:hidden fixed inset-0 z-30"
-            style={{ background: "rgba(21, 23, 28, 0.3)" }}
+            style={{ background: 'rgba(21, 23, 28, 0.3)' }}
             onClick={() => setDrawerOpen(false)}
           />
           <aside
             className="lg:hidden fixed top-12 left-0 bottom-0 z-40 w-64 overflow-y-auto custom-scrollbar"
             style={{
-              background: "var(--page-bg)",
-              borderRight: "1px solid var(--hairline)",
+              background: 'var(--page-bg)',
+              borderRight: '1px solid var(--hairline)',
             }}
           >
             {sidebar}
@@ -140,21 +141,23 @@ const DocsLayout: React.FC = () => {
         <div
           className="lg:hidden sticky top-0 z-10 px-4 py-2"
           style={{
-            borderBottom: "1px solid var(--hairline)",
-            background: "var(--page-bg)",
+            borderBottom: '1px solid var(--hairline)',
+            background: 'var(--page-bg)',
           }}
         >
           <button
             type="button"
             onClick={() => setDrawerOpen(!drawerOpen)}
             className="text-xs font-medium"
-            style={{ color: "var(--accent)" }}
+            style={{ color: 'var(--accent)' }}
           >
-            {drawerOpen ? "✕ Close docs menu" : "☰ Docs menu"}
+            {drawerOpen ? '✕ Close docs menu' : '☰ Docs menu'}
           </button>
         </div>
         {/* TOC/anchor helpers target the shared scroller via `contentRef`. */}
-        <Outlet context={{ contentRef: scrollRef } satisfies DocsOutletContext} />
+        <Outlet
+          context={{ contentRef: scrollRef } satisfies DocsOutletContext}
+        />
       </div>
     </div>
   );

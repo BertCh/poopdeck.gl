@@ -135,7 +135,8 @@ export class InlineTileDecoder implements TileDecoder {
     if (signal?.aborted) {
       throw createCancellationError('Tile decode cancelled before dispatch');
     }
-    const t0 = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    const t0 =
+      typeof performance !== 'undefined' ? performance.now() : Date.now();
     // Integrity gate BEFORE decompression: the directory CRC covers the
     // compressed bytes, and a corrupt frame should fail loudly here rather
     // than as a confusing fzstd/IPC parse error (or worse, decode cleanly).
@@ -143,7 +144,8 @@ export class InlineTileDecoder implements TileDecoder {
       verifyCrc32c(new Uint8Array(compressed), expectedCrc32c);
     }
     const payload = await decompress(new Uint8Array(compressed), compression);
-    const tDecompress = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    const tDecompress =
+      typeof performance !== 'undefined' ? performance.now() : Date.now();
     const tile = decodeTile(payload, id, timeRange, {
       templates: this.templates,
       formatVersion,
@@ -151,7 +153,8 @@ export class InlineTileDecoder implements TileDecoder {
     // Success-path payload hand-back (OPFS write reuse) — mirrors the worker
     // response, which only carries the payload for a successful decode.
     onPayload?.(payload);
-    const t1 = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    const t1 =
+      typeof performance !== 'undefined' ? performance.now() : Date.now();
     // Emit telemetry only when the probe is enabled. Capturing compressed
     // + decompressed sizes lets the perf probe attribute slow decodes to
     // either decompression (compression hot-path bottleneck) or IPC parse
@@ -228,8 +231,7 @@ export class WorkerTileDecoder implements TileDecoder {
       })();
 
     this.workerUrl =
-      options.workerUrl ??
-      new URL('./tile-decoder.worker.js', import.meta.url);
+      options.workerUrl ?? new URL('./tile-decoder.worker.js', import.meta.url);
 
     this.workers = [];
     for (let i = 0; i < poolSize; i++) {
@@ -239,7 +241,11 @@ export class WorkerTileDecoder implements TileDecoder {
 
   private spawnWorker(): PooledWorkerEntry {
     const worker = new Worker(this.workerUrl, { type: 'module' });
-    const entry: PooledWorkerEntry = { worker, pending: 0, inFlight: new Set() };
+    const entry: PooledWorkerEntry = {
+      worker,
+      pending: 0,
+      inFlight: new Set(),
+    };
     worker.onmessage = (e) => this.handleMessage(e);
     worker.onerror = (e) => this.handleWorkerError(entry, e);
     // Registry distribution (§4.4, normative): a freshly-spawned worker —
@@ -273,7 +279,9 @@ export class WorkerTileDecoder implements TileDecoder {
       return Promise.reject(new Error('WorkerTileDecoder has been finalized'));
     }
     if (args.signal?.aborted) {
-      return Promise.reject(createCancellationError('Tile decode cancelled before dispatch'));
+      return Promise.reject(
+        createCancellationError('Tile decode cancelled before dispatch'),
+      );
     }
     const requestId = this.nextRequestId++;
 
@@ -308,7 +316,8 @@ export class WorkerTileDecoder implements TileDecoder {
       // listener per tile for the life of the signal.
       let onAbort: (() => void) | undefined;
       const detachAbort = (): void => {
-        if (onAbort && args.signal) args.signal.removeEventListener('abort', onAbort);
+        if (onAbort && args.signal)
+          args.signal.removeEventListener('abort', onAbort);
       };
       this.pending.set(requestId, {
         onPayload: args.onPayload,
@@ -346,7 +355,9 @@ export class WorkerTileDecoder implements TileDecoder {
           if (!pendingRequest) return;
           this.pending.delete(requestId);
           owner.worker.postMessage({ type: 'cancel', requestId });
-          pendingRequest.reject(createCancellationError('Tile decode cancelled'));
+          pendingRequest.reject(
+            createCancellationError('Tile decode cancelled'),
+          );
         };
         args.signal.addEventListener('abort', onAbort, { once: true });
       }
@@ -383,7 +394,11 @@ export class WorkerTileDecoder implements TileDecoder {
       // cancellation (not a hard error) so consumers that unmount/teardown
       // mid-load (e.g. switching renderers, navigating away) swallow it the same
       // way they swallow a superseded fetch, instead of logging it as a tile error.
-      reject(createCancellationError('WorkerTileDecoder finalized while decode was pending'));
+      reject(
+        createCancellationError(
+          'WorkerTileDecoder finalized while decode was pending',
+        ),
+      );
     }
     this.pending.clear();
     this.requestOwner.clear();

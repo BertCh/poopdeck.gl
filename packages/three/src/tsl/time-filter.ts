@@ -53,7 +53,9 @@ export function windowAlphaNode(
   const cur = u.currentTime;
   const timeStart = cur.sub(u.windowHalf);
   const timeEnd = cur.add(u.windowHalf);
-  const inWindow = endTime.greaterThanEqual(timeStart).and(startTime.lessThanEqual(timeEnd));
+  const inWindow = endTime
+    .greaterThanEqual(timeStart)
+    .and(startTime.lessThanEqual(timeEnd));
   const fadeInFactor = select(
     u.fadeIn.greaterThan(0),
     saturate(timeEnd.sub(startTime).div(max(u.fadeIn, float(EPS)))),
@@ -68,7 +70,10 @@ export function windowAlphaNode(
 }
 
 /** `wake` alpha node — linear fade over `[0, wakeLength]` ms behind the playhead. */
-export function wakeAlphaNode(u: TimeFilterUniforms, startTime: TSLNode): TSLNode {
+export function wakeAlphaNode(
+  u: TimeFilterUniforms,
+  startTime: TSLNode,
+): TSLNode {
   const age = u.currentTime.sub(startTime);
   const visible = age.greaterThanEqual(0).and(age.lessThanEqual(u.wakeLength));
   const a = saturate(float(1).sub(age.div(max(u.wakeLength, float(EPS)))));
@@ -76,12 +81,18 @@ export function wakeAlphaNode(u: TimeFilterUniforms, startTime: TSLNode): TSLNod
 }
 
 /** Wake tail size multiplier — head full size, tail toward `wakeTailScale`. */
-export function wakeSizeScaleNode(u: TimeFilterUniforms, alpha: TSLNode): TSLNode {
+export function wakeSizeScaleNode(
+  u: TimeFilterUniforms,
+  alpha: TSLNode,
+): TSLNode {
   return mix(u.wakeTailScale, float(1), alpha);
 }
 
 /** `cumulative` alpha node — appears at `startTime`, persists (optional fadeIn). */
-export function cumulativeAlphaNode(u: TimeFilterUniforms, startTime: TSLNode): TSLNode {
+export function cumulativeAlphaNode(
+  u: TimeFilterUniforms,
+  startTime: TSLNode,
+): TSLNode {
   const created = startTime.lessThanEqual(u.currentTime);
   const ramp = select(
     u.fadeIn.greaterThan(0),
@@ -92,7 +103,10 @@ export function cumulativeAlphaNode(u: TimeFilterUniforms, startTime: TSLNode): 
 }
 
 /** `trail` alpha node — per-vertex trips fade over `[cur-trailLength, cur]`. */
-export function trailAlphaNode(u: TimeFilterUniforms, vertexTime: TSLNode): TSLNode {
+export function trailAlphaNode(
+  u: TimeFilterUniforms,
+  vertexTime: TSLNode,
+): TSLNode {
   const trailStart = u.currentTime.sub(u.trailLength);
   const visible = vertexTime
     .lessThanEqual(u.currentTime)

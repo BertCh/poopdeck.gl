@@ -46,18 +46,18 @@ npm install @react-three/fiber @react-three/drei react react-dom
 ## Quick start (react-three-fiber)
 
 ```tsx
-import { SttCanvas, SttSurfelLayer } from "@poopdeck.gl/three/r3f";
+import { SttCanvas, SttSurfelLayer } from '@poopdeck.gl/three/r3f';
 
 <SttCanvas
   anchor={{ longitude: -79.933, latitude: 40.456 }} // world origin
-  timeOrigin={dataset.timeRange.start}              // common f32 time base
+  timeOrigin={dataset.timeRange.start} // common f32 time base
   timeRange={dataset.timeRange}
   getTime={() => timeController.getTime()}
 >
   <SttSurfelLayer
     url="https://tiles.example.com/scene/lidar/manifest.json"
     temporalSigma={180}
-    rgbColumns={["r", "g", "b"]}
+    rgbColumns={['r', 'g', 'b']}
   />
 </SttCanvas>;
 ```
@@ -73,14 +73,14 @@ export), `scene.addLayer(new SurfelLayer({...}), manifestUrl)`, add
 
 ## Layers
 
-| Layer | Renders | Notes |
-| --- | --- | --- |
-| `SurfelLayer` | Oriented Gaussian surfels | hero LIDAR mode; `temporalSigma`, `cumulative` (worldbuild) |
-| `PointCloudLayer` | Billboard point splats | `window` / `wake` (scan) / `cumulative`; categorical or `r,g,b` colour; `splat` soft Gaussian |
-| `BoundingBoxLayer` | Tracked-object 3D boxes | CPU keyframe interpolation by `track_id`, 12-edge outlines + velocity arrows |
-| `StaticPathLayer` | Map lines (lane dividers) | flat ground decals, categorical colour |
-| `StaticPolygonLayer` | Map polygons (drivable area) | pre-baked triangles or earcut |
-| `EgoLayer` | Ego trail + marker | provides the follow-camera target |
+| Layer                | Renders                      | Notes                                                                                         |
+| -------------------- | ---------------------------- | --------------------------------------------------------------------------------------------- |
+| `SurfelLayer`        | Oriented Gaussian surfels    | hero LIDAR mode; `temporalSigma`, `cumulative` (worldbuild)                                   |
+| `PointCloudLayer`    | Billboard point splats       | `window` / `wake` (scan) / `cumulative`; categorical or `r,g,b` colour; `splat` soft Gaussian |
+| `BoundingBoxLayer`   | Tracked-object 3D boxes      | CPU keyframe interpolation by `track_id`, 12-edge outlines + velocity arrows                  |
+| `StaticPathLayer`    | Map lines (lane dividers)    | flat ground decals, categorical colour                                                        |
+| `StaticPolygonLayer` | Map polygons (drivable area) | pre-baked triangles or earcut                                                                 |
+| `EgoLayer`           | Ego trail + marker           | provides the follow-camera target                                                             |
 
 All animated layers share the TSL **time-filter** (`window` / `wake` / `trail` /
 `cumulative` / `none`) — the node mirror of deck's `TimeFilterExtension`, pinned by
@@ -92,13 +92,13 @@ All of the following are **opt-in** and backward-compatible (omit them and the
 renderer behaves exactly as before). WebGPU-first; features that need WebGPU
 degrade gracefully on the WebGL2 fallback.
 
-| Feature | How to enable | Notes |
-| --- | --- | --- |
-| **Projection** | `<SttCanvas projection={new MercatorProjection(c)} />` / `new GlobeProjection(c, EARTH_RADIUS, { datum: 'wgs84' })` | default is local-ENU; Mercator = exact web-mercator, Globe = ECEF with an orbit rig |
-| **Streaming** | `<SttCanvas streaming />` or `scene.addLayer(l, url, { streaming: true })` | viewport-driven LOD / frustum cull / eviction / prefetch via `StreamingTileSource`; eager load-everything stays the default |
-| **GPU picking + hover** | `<SttCanvas onPick={…} onHover={…} />` | GPU id-buffer picks instanced clouds; CPU ray-OBB picks boxes |
-| **Atmosphere / sky / day-night** | `<SttCanvas atmosphere />` or `<SttAtmosphere />` | physically-based sky + sun + aerial perspective (`@takram/three-atmosphere`, WebGPU only); sun tracks the playhead |
-| **3D Tiles / terrain / photorealistic** | `<SttTiles3D source={{ google: { apiToken } }} globeControls />` | OGC 3D Tiles via `3d-tiles-renderer` — self-hosted `url`, Google Photorealistic, or Cesium Ion — with ellipsoid-aware `GlobeControls` |
+| Feature                                 | How to enable                                                                                                       | Notes                                                                                                                                 |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| **Projection**                          | `<SttCanvas projection={new MercatorProjection(c)} />` / `new GlobeProjection(c, EARTH_RADIUS, { datum: 'wgs84' })` | default is local-ENU; Mercator = exact web-mercator, Globe = ECEF with an orbit rig                                                   |
+| **Streaming**                           | `<SttCanvas streaming />` or `scene.addLayer(l, url, { streaming: true })`                                          | viewport-driven LOD / frustum cull / eviction / prefetch via `StreamingTileSource`; eager load-everything stays the default           |
+| **GPU picking + hover**                 | `<SttCanvas onPick={…} onHover={…} />`                                                                              | GPU id-buffer picks instanced clouds; CPU ray-OBB picks boxes                                                                         |
+| **Atmosphere / sky / day-night**        | `<SttCanvas atmosphere />` or `<SttAtmosphere />`                                                                   | physically-based sky + sun + aerial perspective (`@takram/three-atmosphere`, WebGPU only); sun tracks the playhead                    |
+| **3D Tiles / terrain / photorealistic** | `<SttTiles3D source={{ google: { apiToken } }} globeControls />`                                                    | OGC 3D Tiles via `3d-tiles-renderer` — self-hosted `url`, Google Photorealistic, or Cesium Ion — with ellipsoid-aware `GlobeControls` |
 
 The street basemap for flat scenes is a host-owned maplibre/mapbox map that the
 renderer camera-syncs beneath the transparent canvas (`BasemapOverlay`) — not an
@@ -110,13 +110,13 @@ All of the following are **opt-in** and backward-compatible (omit them and the
 renderer behaves exactly as before). WebGPU-first; features that need WebGPU
 degrade gracefully on the WebGL2 fallback.
 
-| Feature | How to enable | Notes |
-| --- | --- | --- |
-| **Projection** | `<SttCanvas projection={new MercatorProjection(c)} />` / `new GlobeProjection(c, EARTH_RADIUS, { datum: 'wgs84' })` | default is local-ENU; Mercator = exact web-mercator, Globe = ECEF with an orbit rig |
-| **Streaming** | `<SttCanvas streaming />` or `scene.addLayer(l, url, { streaming: true })` | viewport-driven LOD / frustum cull / eviction / prefetch via `StreamingTileSource`; eager load-everything stays the default |
-| **GPU picking + hover** | `<SttCanvas onPick={…} onHover={…} />` | GPU id-buffer picks instanced clouds; CPU ray-OBB picks boxes |
-| **Atmosphere / sky / day-night** | `<SttCanvas atmosphere />` or `<SttAtmosphere />` | physically-based sky + sun + aerial perspective (`@takram/three-atmosphere`, WebGPU only); sun tracks the playhead |
-| **3D Tiles / terrain / photorealistic** | `<SttTiles3D source={{ google: { apiToken } }} globeControls />` | OGC 3D Tiles via `3d-tiles-renderer` — self-hosted `url`, Google Photorealistic, or Cesium Ion — with ellipsoid-aware `GlobeControls` |
+| Feature                                 | How to enable                                                                                                       | Notes                                                                                                                                 |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| **Projection**                          | `<SttCanvas projection={new MercatorProjection(c)} />` / `new GlobeProjection(c, EARTH_RADIUS, { datum: 'wgs84' })` | default is local-ENU; Mercator = exact web-mercator, Globe = ECEF with an orbit rig                                                   |
+| **Streaming**                           | `<SttCanvas streaming />` or `scene.addLayer(l, url, { streaming: true })`                                          | viewport-driven LOD / frustum cull / eviction / prefetch via `StreamingTileSource`; eager load-everything stays the default           |
+| **GPU picking + hover**                 | `<SttCanvas onPick={…} onHover={…} />`                                                                              | GPU id-buffer picks instanced clouds; CPU ray-OBB picks boxes                                                                         |
+| **Atmosphere / sky / day-night**        | `<SttCanvas atmosphere />` or `<SttAtmosphere />`                                                                   | physically-based sky + sun + aerial perspective (`@takram/three-atmosphere`, WebGPU only); sun tracks the playhead                    |
+| **3D Tiles / terrain / photorealistic** | `<SttTiles3D source={{ google: { apiToken } }} globeControls />`                                                    | OGC 3D Tiles via `3d-tiles-renderer` — self-hosted `url`, Google Photorealistic, or Cesium Ion — with ellipsoid-aware `GlobeControls` |
 
 The street basemap for flat scenes is a host-owned maplibre/mapbox map that the
 renderer camera-syncs beneath the transparent canvas (`BasemapOverlay`) — not an

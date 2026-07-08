@@ -36,7 +36,10 @@
 
 import { ScatterplotLayer } from '@deck.gl/layers';
 import type { Color, DefaultProps, Layer } from '@deck.gl/core';
-import { SpatioTemporalLayer, SpatioTemporalLayerProps } from '../spatiotemporal-layer.js';
+import {
+  SpatioTemporalLayer,
+  SpatioTemporalLayerProps,
+} from '../spatiotemporal-layer.js';
 import { FlowLinesLayer } from '../internal/flow-lines-layer.js';
 import { BundledFlowLinesLayer } from '../internal/bundled-flow-lines-layer.js';
 import {
@@ -52,7 +55,11 @@ import { bucketBlendAt, blendMatrixRow } from '../../lib/vertex-value-blend.js';
 import { resolveAccessorAlias } from '../../lib/accessor-alias.js';
 import { emit } from '../../lib/telemetry.js';
 import { warnOnce } from '../../lib/log.js';
-import type { Tile, Layer as TileLayer, BinaryFeatures } from '@poopdeck.gl/core';
+import type {
+  Tile,
+  Layer as TileLayer,
+  BinaryFeatures,
+} from '@poopdeck.gl/core';
 import type { Texture } from '@luma.gl/core';
 import type { _FlowmapLayerProps } from './flowmap-layer.js';
 
@@ -137,8 +144,12 @@ interface FlowNode {
 /**
  * GPU-edge-bundled animated OD flowmap on the {@link SpatioTemporalLayer} chassis.
  */
-export class BundledFlowmapLayer<ExtraPropsT extends {} = {}> extends SpatioTemporalLayer<
-  ExtraPropsT & Required<_BundledFlowmapLayerProps> & Required<_FlowmapLayerProps>
+export class BundledFlowmapLayer<
+  ExtraPropsT extends {} = {},
+> extends SpatioTemporalLayer<
+  ExtraPropsT &
+    Required<_BundledFlowmapLayerProps> &
+    Required<_FlowmapLayerProps>
 > {
   static layerName = 'BundledFlowmapLayer';
 
@@ -157,9 +168,23 @@ export class BundledFlowmapLayer<ExtraPropsT extends {} = {}> extends SpatioTemp
     sourceColor: { type: 'object', value: DEFAULT_SOURCE_COLOR, compare: true },
     targetColor: { type: 'object', value: DEFAULT_TARGET_COLOR, compare: true },
     nodeColor: { type: 'object', value: DEFAULT_NODE_COLOR, compare: true },
-    nodeLineColor: { type: 'object', value: DEFAULT_NODE_LINE_COLOR, compare: true },
-    getSourceColor: { type: 'object', value: null, optional: true, compare: true },
-    getTargetColor: { type: 'object', value: null, optional: true, compare: true },
+    nodeLineColor: {
+      type: 'object',
+      value: DEFAULT_NODE_LINE_COLOR,
+      compare: true,
+    },
+    getSourceColor: {
+      type: 'object',
+      value: null,
+      optional: true,
+      compare: true,
+    },
+    getTargetColor: {
+      type: 'object',
+      value: null,
+      optional: true,
+      compare: true,
+    },
     // KDEEB bundling props.
     subdivisionPoints: { type: 'number', value: 48, min: 3 },
     kernelRadius: { type: 'number', value: 0.05, min: 0.005, max: 0.5 },
@@ -191,8 +216,12 @@ export class BundledFlowmapLayer<ExtraPropsT extends {} = {}> extends SpatioTemp
   finalizeState(context: any): void {
     super.finalizeState(context);
     if (this._bundleRafId !== null) {
-      if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(this._bundleRafId);
-      else clearTimeout(this._bundleRafId as unknown as ReturnType<typeof setTimeout>);
+      if (typeof cancelAnimationFrame === 'function')
+        cancelAnimationFrame(this._bundleRafId);
+      else
+        clearTimeout(
+          this._bundleRafId as unknown as ReturnType<typeof setTimeout>,
+        );
       this._bundleRafId = null;
     }
     this.disposeBundle();
@@ -210,7 +239,8 @@ export class BundledFlowmapLayer<ExtraPropsT extends {} = {}> extends SpatioTemp
   /** Continuous bucket position in `[0, nb-1]` for an absolute time. */
   private posFromBinary(binary: BinaryFeatures, time: number): number | null {
     const nb = binary.vertexValueBuckets ?? 0;
-    if (nb <= 0 || !binary.startTimes || binary.startTimes.length === 0) return null;
+    if (nb <= 0 || !binary.startTimes || binary.startTimes.length === 0)
+      return null;
     const rel0 = binary.startTimes[0];
     const span = binary.endTimes[0] - rel0;
     if (span <= 0) return null;
@@ -243,9 +273,18 @@ export class BundledFlowmapLayer<ExtraPropsT extends {} = {}> extends SpatioTemp
 
     const { source, target, dims } = deriveSourceTargetPositions(binary);
     const srcVertexIndex = new Uint32Array(binary.featureCount);
-    for (let i = 0; i < binary.featureCount; i++) srcVertexIndex[i] = binary.startIndices[i];
+    for (let i = 0; i < binary.featureCount; i++)
+      srcVertexIndex[i] = binary.startIndices[i];
 
-    const geom: TileGeom = { tileKey, source, target, dims, srcVertexIndex, binary, tile };
+    const geom: TileGeom = {
+      tileKey,
+      source,
+      target,
+      dims,
+      srcVertexIndex,
+      binary,
+      tile,
+    };
     this.geomCache.set(tileKey, geom);
     return geom;
   }
@@ -255,7 +294,12 @@ export class BundledFlowmapLayer<ExtraPropsT extends {} = {}> extends SpatioTemp
    * then point-major). A 2-vertex OD pair stays straight; an N-vertex routed
    * trip / trajectory keeps its shape.
    */
-  private controlPointsFor(geom: TileGeom, P: number, out: Float64Array, edgeOffset: number): void {
+  private controlPointsFor(
+    geom: TileGeom,
+    P: number,
+    out: Float64Array,
+    edgeOffset: number,
+  ): void {
     const binary = geom.binary;
     const dims = geom.dims;
     const positions = binary.positions;
@@ -265,11 +309,15 @@ export class BundledFlowmapLayer<ExtraPropsT extends {} = {}> extends SpatioTemp
       const v0 = startIndices[e];
       const v1 = startIndices[e + 1];
       const pts: Vec2[] = [];
-      for (let v = v0; v < v1; v++) pts.push([positions[v * dims], positions[v * dims + 1]]);
+      for (let v = v0; v < v1; v++)
+        pts.push([positions[v * dims], positions[v * dims + 1]]);
       const resampled =
         pts.length >= 2
           ? subdivide(pts, P)
-          : Array.from({ length: P }, () => [pts[0]?.[0] ?? 0, pts[0]?.[1] ?? 0] as Vec2);
+          : Array.from(
+              { length: P },
+              () => [pts[0]?.[0] ?? 0, pts[0]?.[1] ?? 0] as Vec2,
+            );
       for (let i = 0; i < P; i++) {
         const o = ((edgeOffset + e) * P + i) * dims;
         out[o] = resampled[i][0];
@@ -281,7 +329,8 @@ export class BundledFlowmapLayer<ExtraPropsT extends {} = {}> extends SpatioTemp
   /** Signature of the live tile set + bundle params — the bundle is rebuilt when it changes. */
   private bundleSignature(tiles: Tile[]): string {
     const keys: string[] = [];
-    for (const tile of tiles) for (const tl of tile.layers) keys.push(makeTileKey(tile, tl));
+    for (const tile of tiles)
+      for (const tl of tile.layers) keys.push(makeTileKey(tile, tl));
     keys.sort();
     const params = [
       this.props.subdivisionPoints,
@@ -319,7 +368,9 @@ export class BundledFlowmapLayer<ExtraPropsT extends {} = {}> extends SpatioTemp
     // Baked geometry only needs to SAMPLE a float texture (no density splat), so
     // it gates on the laxer capability and lights up on devices the live bundler
     // can't (the EXT_float_blend caveat).
-    const supported = preBundled ? isStaticBundleSupported(device) : isBundlingSupported(device);
+    const supported = preBundled
+      ? isStaticBundleSupported(device)
+      : isBundlingSupported(device);
     if (!device || !supported || nb <= 0 || E < 2) {
       this.bundle = base;
       this.bundleSig = sig;
@@ -357,7 +408,8 @@ export class BundledFlowmapLayer<ExtraPropsT extends {} = {}> extends SpatioTemp
         if (m && gnb > 0) {
           const srcBase = g.srcVertexIndex[i] * gnb;
           const dstBase = (eOff + i) * nb;
-          for (let b = 0; b < nb; b++) matrixData[dstBase + b] = b < gnb ? m[srcBase + b] : 0;
+          for (let b = 0; b < nb; b++)
+            matrixData[dstBase + b] = b < gnb ? m[srcBase + b] : 0;
         }
         latSum += g.source[i * dims + 1] + g.target[i * dims + 1];
       }
@@ -393,7 +445,14 @@ export class BundledFlowmapLayer<ExtraPropsT extends {} = {}> extends SpatioTemp
     // Baked: upload the build-time control points once and render them as-is.
     // Live: construct the GPU bundler and relax it one iteration per frame.
     const bundler = preBundled
-      ? new StaticBundle({ device, controlPoints, edgeCount: E, pointCount: P, dims, cosLat0 })
+      ? new StaticBundle({
+          device,
+          controlPoints,
+          edgeCount: E,
+          pointCount: P,
+          dims,
+          cosLat0,
+        })
       : new EdgeBundler({
           device,
           controlPoints,
@@ -433,7 +492,8 @@ export class BundledFlowmapLayer<ExtraPropsT extends {} = {}> extends SpatioTemp
     this._bundleRafId = schedule(() => {
       this._bundleRafId = null;
       const b = this.bundle;
-      if (!b || b.status !== 'bundling' || !(b.bundler instanceof EdgeBundler)) return;
+      if (!b || b.status !== 'bundling' || !(b.bundler instanceof EdgeBundler))
+        return;
       b.bundler.stepCycle();
       if (b.bundler.isDone()) b.status = 'ready';
       this.setNeedsRedraw();
@@ -525,8 +585,10 @@ export class BundledFlowmapLayer<ExtraPropsT extends {} = {}> extends SpatioTemp
       for (const tile of tiles) {
         for (const tl of tile.layers) live.add(makeTileKey(tile, tl));
       }
-      for (const key of this.geomCache.keys()) if (!live.has(key)) this.geomCache.delete(key);
-      for (const key of this.fallbackCache.keys()) if (!live.has(key)) this.fallbackCache.delete(key);
+      for (const key of this.geomCache.keys())
+        if (!live.has(key)) this.geomCache.delete(key);
+      for (const key of this.fallbackCache.keys())
+        if (!live.has(key)) this.fallbackCache.delete(key);
       this.lastTilesRef = tiles;
     }
 
@@ -551,7 +613,10 @@ export class BundledFlowmapLayer<ExtraPropsT extends {} = {}> extends SpatioTemp
         const pos = this.posFromBinary(geom.binary, time) ?? 0;
         const stepped = Math.round(pos / STEP) * STEP;
         stepKey = Math.round(pos / STEP);
-        prepared.push({ geom, widths: this.widthsFor(geom, stepped, nodeFlow) });
+        prepared.push({
+          geom,
+          widths: this.widthsFor(geom, stepped, nodeFlow),
+        });
       }
     }
 
@@ -560,7 +625,10 @@ export class BundledFlowmapLayer<ExtraPropsT extends {} = {}> extends SpatioTemp
     // (Re)build the single global bundle when the visible set / params change.
     const sig = this.bundleSignature(tiles);
     if (sig !== this.bundleSig) {
-      this.rebuildBundle(prepared.map((p) => p.geom), sig);
+      this.rebuildBundle(
+        prepared.map((p) => p.geom),
+        sig,
+      );
     }
 
     // Pass 2: one bundled ribbon layer for the union, or per-tile straight arrows.
@@ -570,7 +638,15 @@ export class BundledFlowmapLayer<ExtraPropsT extends {} = {}> extends SpatioTemp
       if (bundled) sublayers.push(bundled);
     } else {
       for (const { geom, widths } of prepared) {
-        sublayers.push(this.buildFallbackSublayer(geom, widths, nodeRadius, stepKey, propsKey));
+        sublayers.push(
+          this.buildFallbackSublayer(
+            geom,
+            widths,
+            nodeRadius,
+            stepKey,
+            propsKey,
+          ),
+        );
       }
     }
 
@@ -591,7 +667,8 @@ export class BundledFlowmapLayer<ExtraPropsT extends {} = {}> extends SpatioTemp
   private buildBundledSublayer(propsKey: string): Layer | null {
     const b = this.bundle;
     if (!b || !b.bundler || !b.matrixTexture || !b.edgeIndexArr) return null;
-    if (this.bundledLayer && this.bundledLayerKey === propsKey) return this.bundledLayer;
+    if (this.bundledLayer && this.bundledLayerKey === propsKey)
+      return this.bundledLayer;
 
     const data = {
       length: b.edgeIndexArr.length,
@@ -645,8 +722,10 @@ export class BundledFlowmapLayer<ExtraPropsT extends {} = {}> extends SpatioTemp
     const offsets = new Float32Array(geom.binary.featureCount * 2);
     for (let i = 0; i < geom.binary.featureCount; i++) {
       const b = i * dims;
-      offsets[i * 2] = nodeRadius.get(nodeKey(geom.source[b], geom.source[b + 1])) ?? 0;
-      offsets[i * 2 + 1] = nodeRadius.get(nodeKey(geom.target[b], geom.target[b + 1])) ?? 0;
+      offsets[i * 2] =
+        nodeRadius.get(nodeKey(geom.source[b], geom.source[b + 1])) ?? 0;
+      offsets[i * 2 + 1] =
+        nodeRadius.get(nodeKey(geom.target[b], geom.target[b + 1])) ?? 0;
     }
     const data = {
       length: geom.binary.featureCount,
@@ -684,7 +763,10 @@ export class BundledFlowmapLayer<ExtraPropsT extends {} = {}> extends SpatioTemp
     const rmax = this.props.nodeRadiusMaxPixels;
     const out = new Map<string, number>();
     for (const [key, entry] of nodeFlow) {
-      out.set(key, Math.min(rmax, Math.max(rmin, scale * Math.sqrt(entry.flow))));
+      out.set(
+        key,
+        Math.min(rmax, Math.max(rmin, scale * Math.sqrt(entry.flow))),
+      );
     }
     return out;
   }
@@ -717,7 +799,11 @@ export class BundledFlowmapLayer<ExtraPropsT extends {} = {}> extends SpatioTemp
       getLineColor: (Array.isArray(this.props.nodeLineColor)
         ? this.props.nodeLineColor
         : DEFAULT_NODE_LINE_COLOR) as Color,
-      updateTriggers: { getPosition: stepKey, getRadius: stepKey, getFillColor: propsKey },
+      updateTriggers: {
+        getPosition: stepKey,
+        getRadius: stepKey,
+        getFillColor: propsKey,
+      },
       pickable: false,
     });
     const SubLayerClass = this.getSubLayerClass('nodes', ScatterplotLayer);

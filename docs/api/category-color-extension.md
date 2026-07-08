@@ -5,7 +5,10 @@ The `CategoryColorExtension` is a deck.gl layer extension that provides GPU-base
 ## Installation
 
 ```typescript
-import { CategoryColorExtension, CATEGORY_PALETTE_SIZE } from '@poopdeck.gl/layers';
+import {
+  CategoryColorExtension,
+  CATEGORY_PALETTE_SIZE,
+} from '@poopdeck.gl/layers';
 ```
 
 ## Usage
@@ -20,14 +23,14 @@ const layer = new ScatterplotLayer({
 
   extensions: [new CategoryColorExtension()],
   categoryPalette: [
-    [255, 0, 0, 255],   // Category 0: Red
-    [0, 255, 0, 255],   // Category 1: Green
-    [0, 0, 255, 255],   // Category 2: Blue
+    [255, 0, 0, 255], // Category 0: Red
+    [0, 255, 0, 255], // Category 1: Green
+    [0, 0, 255, 255], // Category 2: Blue
   ],
-  getCategoryIndex: d => d.categoryId,
+  getCategoryIndex: (d) => d.categoryId,
   useCategoryColor: true, // must opt in — off by default
 
-  getPosition: d => d.coordinates,
+  getPosition: (d) => d.coordinates,
   getRadius: 100,
 });
 ```
@@ -36,11 +39,11 @@ In binary mode (how the STT layers use it), supply `instanceCategoryIndex` as a 
 
 ## Extension Props
 
-| Property | Type | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `categoryPalette` | `Color[]` | `[]` | Color palette (up to `CATEGORY_PALETTE_SIZE` = **4096** entries). |
-| `getCategoryIndex` | `Accessor<number>` | `0` | Accessor returning the category index (0..4095). |
-| `useCategoryColor` | `boolean` | **`false`** | Enable categorical coloring. Off by default — the layer must opt in. With the extension installed but the toggle off, the layer draws its normal constant/accessor color, so it is safe to include unconditionally. |
+| Property           | Type               | Default     | Description                                                                                                                                                                                                         |
+| :----------------- | :----------------- | :---------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `categoryPalette`  | `Color[]`          | `[]`        | Color palette (up to `CATEGORY_PALETTE_SIZE` = **4096** entries).                                                                                                                                                   |
+| `getCategoryIndex` | `Accessor<number>` | `0`         | Accessor returning the category index (0..4095).                                                                                                                                                                    |
+| `useCategoryColor` | `boolean`          | **`false`** | Enable categorical coloring. Off by default — the layer must opt in. With the extension installed but the toggle off, the layer draws its normal constant/accessor color, so it is safe to include unconditionally. |
 
 ## How it works
 

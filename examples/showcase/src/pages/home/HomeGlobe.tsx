@@ -4,16 +4,16 @@ import React, {
   useMemo,
   useRef,
   useState,
-} from "react";
-import DeckGL from "@deck.gl/react";
-import { _GlobeView as GlobeView } from "@deck.gl/core";
-import { SolidPolygonLayer } from "@deck.gl/layers";
-import { AnimatedTripsLayer } from "@poopdeck.gl/layers";
-import { PlaybackGovernor, TimeController } from "@poopdeck.gl/playback";
-import type { BufferSource, BufferedRunway } from "@poopdeck.gl/playback";
-import { getDatasetById } from "../../datasets";
-import { calculateAnimationSpeed, tileLoadingProps } from "../../types";
-import { useReducedMotion } from "../../lib/reducedMotion";
+} from 'react';
+import DeckGL from '@deck.gl/react';
+import { _GlobeView as GlobeView } from '@deck.gl/core';
+import { SolidPolygonLayer } from '@deck.gl/layers';
+import { AnimatedTripsLayer } from '@poopdeck.gl/layers';
+import { PlaybackGovernor, TimeController } from '@poopdeck.gl/playback';
+import type { BufferSource, BufferedRunway } from '@poopdeck.gl/playback';
+import { getDatasetById } from '../../datasets';
+import { calculateAnimationSpeed, tileLoadingProps } from '../../types';
+import { useReducedMotion } from '../../lib/reducedMotion';
 
 /**
  * The live rotating drifter globe on the landing hero.
@@ -43,7 +43,7 @@ const EARTH_POLYGON: number[][][] = [
 const DEG_PER_SEC = -1;
 
 const HomeGlobe: React.FC = () => {
-  const heroDataset = getDatasetById("ocean-drifters");
+  const heroDataset = getDatasetById('ocean-drifters');
 
   // When the viewer has asked the OS to reduce motion, the hero holds still: no
   // autoplay of the drifter trails and no globe spin. Reactive, so toggling the
@@ -105,7 +105,7 @@ const HomeGlobe: React.FC = () => {
   );
 
   const views = useMemo(
-    () => [new GlobeView({ id: "globe", resolution: 10 })],
+    () => [new GlobeView({ id: 'globe', resolution: 10 })],
     [],
   );
 
@@ -139,7 +139,7 @@ const HomeGlobe: React.FC = () => {
     const g = heroDataset.tripGradient;
     return [
       new SolidPolygonLayer({
-        id: "hero-earth",
+        id: 'hero-earth',
         data: EARTH_POLYGON,
         getPolygon: (d) => d as any,
         stroked: false,
@@ -147,7 +147,7 @@ const HomeGlobe: React.FC = () => {
         getFillColor: [240, 240, 236, 255],
       }),
       new AnimatedTripsLayer({
-        id: "hero-drifters",
+        id: 'hero-drifters',
         data: heroDataset.url,
         currentTime: heroDataset.timeRange.start,
         timeController,

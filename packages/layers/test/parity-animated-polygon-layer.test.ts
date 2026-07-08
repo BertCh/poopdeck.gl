@@ -104,7 +104,8 @@ function twoPolygonTile() {
 }
 
 async function makePolygonLayer(props: Record<string, any> = {}) {
-  const { AnimatedPolygonLayer } = await import('../src/layers/core/animated-polygon-layer');
+  const { AnimatedPolygonLayer } =
+    await import('../src/layers/core/animated-polygon-layer');
   const layer: any = Object.create((AnimatedPolygonLayer as any).prototype);
   layer.props = {
     id: 'poly',

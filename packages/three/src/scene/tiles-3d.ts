@@ -55,35 +55,67 @@ import { computeWorldToEcef } from './atmosphere.js';
 export type Stt3DTilesSource =
   | { url: string }
   | { google: { apiToken: string; autoRefreshToken?: boolean } }
-  | { ion: { apiToken: string; assetId: string | number; autoRefreshToken?: boolean } };
+  | {
+      ion: {
+        apiToken: string;
+        assetId: string | number;
+        autoRefreshToken?: boolean;
+      };
+    };
 
 /** {@link Stt3DTilesSource} normalized to a discriminated, defaults-filled shape. */
 export type ResolvedTilesSource =
   | { kind: 'url'; url: string }
   | { kind: 'google'; apiToken: string; autoRefreshToken: boolean }
-  | { kind: 'ion'; apiToken: string; assetId: string | number; autoRefreshToken: boolean };
+  | {
+      kind: 'ion';
+      apiToken: string;
+      assetId: string | number;
+      autoRefreshToken: boolean;
+    };
 
 /**
  * Validate + normalize a {@link Stt3DTilesSource} into the plugin/URL wiring the
  * factory needs. Pure + total (throws on a malformed source), so the source →
  * plugin decision is unit-testable without importing `3d-tiles-renderer`.
  */
-export function resolveTilesSource(source: Stt3DTilesSource): ResolvedTilesSource {
+export function resolveTilesSource(
+  source: Stt3DTilesSource,
+): ResolvedTilesSource {
   if ('google' in source) {
     const { apiToken, autoRefreshToken } = source.google;
-    if (!apiToken) throw new Error('createStt3DTiles: a { google } source requires an apiToken');
-    return { kind: 'google', apiToken, autoRefreshToken: autoRefreshToken ?? true };
+    if (!apiToken)
+      throw new Error(
+        'createStt3DTiles: a { google } source requires an apiToken',
+      );
+    return {
+      kind: 'google',
+      apiToken,
+      autoRefreshToken: autoRefreshToken ?? true,
+    };
   }
   if ('ion' in source) {
     const { apiToken, assetId, autoRefreshToken } = source.ion;
-    if (!apiToken) throw new Error('createStt3DTiles: an { ion } source requires an apiToken');
+    if (!apiToken)
+      throw new Error(
+        'createStt3DTiles: an { ion } source requires an apiToken',
+      );
     if (assetId === undefined || assetId === null || assetId === '') {
-      throw new Error('createStt3DTiles: an { ion } source requires an assetId');
+      throw new Error(
+        'createStt3DTiles: an { ion } source requires an assetId',
+      );
     }
-    return { kind: 'ion', apiToken, assetId, autoRefreshToken: autoRefreshToken ?? true };
+    return {
+      kind: 'ion',
+      apiToken,
+      assetId,
+      autoRefreshToken: autoRefreshToken ?? true,
+    };
   }
   if ('url' in source && source.url) return { kind: 'url', url: source.url };
-  throw new Error('createStt3DTiles: source must be one of { url } | { google } | { ion }');
+  throw new Error(
+    'createStt3DTiles: source must be one of { url } | { google } | { ion }',
+  );
 }
 
 // ─── Option resolution (pure) ───────────────────────────────────────────────────
@@ -129,7 +161,9 @@ export interface ResolvedStt3DTilesOptions {
  * 16 — matching `3d-tiles-renderer`'s own default). Pure, so option resolution is
  * unit-testable.
  */
-export function resolveStt3DTilesOptions(opts: Stt3DTilesOptions): ResolvedStt3DTilesOptions {
+export function resolveStt3DTilesOptions(
+  opts: Stt3DTilesOptions,
+): ResolvedStt3DTilesOptions {
   return {
     fade: opts.fade ?? true,
     compression: opts.compression ?? true,
@@ -150,7 +184,10 @@ export function resolveStt3DTilesOptions(opts: Stt3DTilesOptions): ResolvedStt3D
  *  - **Local ENU / mercator**: places the whole ellipsoid so the anchor's ECEF sits
  *    at the local Z-up world origin (rotation + translation, scale 1).
  */
-export function ecefToWorldMatrix(projection: Projection, anchor?: GeoAnchor): Matrix4 {
+export function ecefToWorldMatrix(
+  projection: Projection,
+  anchor?: GeoAnchor,
+): Matrix4 {
   return computeWorldToEcef(projection, anchor).invert();
 }
 
@@ -233,14 +270,22 @@ export interface Stt3DTiles {
  * standard meshes). Live tile fetching/rendering needs network + a GPU + (for
  * google/ion) an API token, so it is browser-verified, not tested here.
  */
-export async function createStt3DTiles(opts: CreateStt3DTilesOptions): Promise<Stt3DTiles> {
+export async function createStt3DTiles(
+  opts: CreateStt3DTilesOptions,
+): Promise<Stt3DTiles> {
   const { renderer, scene, camera, projection } = opts;
   const cfg = resolveStt3DTilesOptions(opts);
   const src = resolveTilesSource(opts.source);
 
   const [
     { TilesRenderer },
-    { GoogleCloudAuthPlugin, CesiumIonAuthPlugin, TilesFadePlugin, TileCompressionPlugin, GLTFExtensionsPlugin },
+    {
+      GoogleCloudAuthPlugin,
+      CesiumIonAuthPlugin,
+      TilesFadePlugin,
+      TileCompressionPlugin,
+      GLTFExtensionsPlugin,
+    },
     dracoMod,
   ] = await Promise.all([
     import('3d-tiles-renderer/three'),
@@ -269,7 +314,10 @@ export async function createStt3DTiles(opts: CreateStt3DTilesOptions): Promise<S
   // Auth/source plugin last (google/ion resolve the root URL + start fetching).
   if (src.kind === 'google') {
     tiles.registerPlugin(
-      new GoogleCloudAuthPlugin({ apiToken: src.apiToken, autoRefreshToken: src.autoRefreshToken }),
+      new GoogleCloudAuthPlugin({
+        apiToken: src.apiToken,
+        autoRefreshToken: src.autoRefreshToken,
+      }),
     );
   } else if (src.kind === 'ion') {
     tiles.registerPlugin(
@@ -303,7 +351,10 @@ export async function createStt3DTiles(opts: CreateStt3DTilesOptions): Promise<S
       tiles.setResolution(camera, width, height);
     },
     setResolutionFromRenderer(): void {
-      tiles.setResolutionFromRenderer(camera, renderer as unknown as WebGLRenderer);
+      tiles.setResolutionFromRenderer(
+        camera,
+        renderer as unknown as WebGLRenderer,
+      );
     },
     dispose(): void {
       scene.remove(tiles.group);
