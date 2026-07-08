@@ -9,8 +9,8 @@ props to every binary sublayer.
 
 This page is the reference for **which deck extensions work as-is**, the **two
 that are ported/adapted**, and the **three we skip** (with reasons). It
-cross-references the parity audit
-(`docs/roadmap/deckgl-parity-audit-2026-07.md`, §Tier 3).
+cross-references the parity decision record
+(`docs/roadmap/renderer-architecture.md`, §3 "Tier 3 — extensions").
 
 ## How pass-through works
 
@@ -116,4 +116,4 @@ new AnimatedIconLayer({
   hand-built descendant of `DataFilterExtension` that filters/fades by time.
 - [`CategoryColorExtension`](./category-color-extension.md) — GPU categorical
   color, another baked-column extension.
-- Parity audit: `docs/roadmap/deckgl-parity-audit-2026-07.md`, §Tier 3.
+- Parity decision record: `docs/roadmap/renderer-architecture.md`, §3 "Tier 3 — extensions".

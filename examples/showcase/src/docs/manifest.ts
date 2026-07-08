@@ -480,6 +480,28 @@ export const docSections: DocSection[] = [
       },
     ],
   },
+  {
+    id: "ai",
+    label: "AI Suite",
+    blurb:
+      "The agent surface over STT: the @poopdeck.gl/mcp server plus the poopdeck-ai Agent Skills plugin — discover, analyze, compose, build, and debug datasets from an AI assistant.",
+    entries: [
+      {
+        slug: "guides/ai-suite",
+        file: "guides/ai-suite.md",
+        title: "AI Suite (MCP + Skills)",
+        blurb:
+          "Give an AI assistant a temporal-native surface over your tiles: install the plugin, the tools + skills, worked flows, and the security model.",
+      },
+      {
+        slug: "api/stt-mcp",
+        file: "api/stt-mcp.md",
+        title: "@poopdeck.gl/mcp",
+        blurb:
+          "MCP server reference: the stt-mcp command, discovery/analysis/interactive/execution tools, dataset resources, and --allow-cli.",
+      },
+    ],
+  },
 ];
 
 /**

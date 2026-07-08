@@ -1,15 +1,19 @@
-# New large-dataset candidates for the STT showcase — research report (2026-07-01)
+# Showcase demo datasets register (2026-07)
 
-**Status: ANALYSIS-ONLY.** Nothing here is built. This is a verified shortlist of new large datasets that
-would be visually compelling in the showcase and would force genuinely new rendering / data-representation
-techniques the stack does not have yet.
+**Standing register** of large-dataset candidates for the STT showcase: what is shipped, what is
+analysis-only, and what is license-blocked. Originally a research report (2026-07-01); rewritten as the
+register of record 2026-07-07. Status is tracked **per section**:
 
-**Method.** A multi-agent deep-research run (106 agents; fan-out search → source fetch → 3-vote adversarial
-license/claim verification) plus a second targeted verification wave over the categories the first pass did
-not reach. Every license verdict below was verified **verbatim against the live license page on 2026-07-01**,
-and every "verified" bulk endpoint was confirmed by an actual anonymous request where possible. AWS Open Data
-registry listing was explicitly confirmed to imply **nothing** about license (counterexample: nuScenes is
-listed but NC) — each verdict is against the upstream licensor.
+- **SHIPPED** — generator + showcase wiring built, archives produced locally; browser-verify + R2 upload
+  remain (the shared user-run ops gate applies to every shipped demo).
+- **ANALYSIS** — verified access + license, nothing built.
+- **BLOCKED** — license failure; do not use without re-reading §3.
+
+**Method (license verdicts).** A multi-agent deep-research run (106 agents; fan-out search → source fetch →
+3-vote adversarial license/claim verification) plus a second targeted wave. Every license verdict was
+verified **verbatim against the live license page on 2026-07-01**; every "verified" bulk endpoint was
+confirmed by an actual anonymous request where possible. Each verdict is against the upstream licensor,
+never the AWS Open Data registry (listing implies nothing about license — nuScenes counterexample).
 
 **Hard requirement applied throughout:** processed STT tiles are publicly rehosted on Cloudflare R2, so
 redistribution of *derived products* must be permitted. CC-BY / public-domain / CC0 / ODbL pass;
@@ -32,7 +36,7 @@ unbuilt roadmap items in `preprocessing-framework.md`):
 | Volumetric (3D field) data | voxels only as LiDAR build-time decimation concept; rendered output is 2D-geometry surfels |
 | Analytic / parametric motion | all motion is baked sampled vertices; `satellites.rs` runs SGP4 **at build** (60 s steps) and bakes LineStrings, dropping altitude |
 | True vertical axis over time | 3D `[x,y,z]` points exist (elevation fold) but no dataset exercises a *changing* z |
-| Schedule/graph-constrained movement | OSRM routing exists (BIXI) but nothing schedule-expanded at national scale |
+| Schedule/graph-constrained movement | **closed by §C** — the GTFS generator schedule-expands a national feed at build |
 
 The candidates below are chosen to hit these gaps.
 
@@ -40,7 +44,7 @@ The candidates below are chosen to hit these gaps.
 
 ## 2. Candidates, grouped by the technique they force
 
-### A. Eulerian wind fields + GPU particle advection — **NOAA HRRR / GFS** ⭐
+### A. Eulerian wind fields + GPU particle advection — **NOAA HRRR / GFS** ⭐ — ANALYSIS
 
 - **Access (verified live, anonymous):** `s3://noaa-hrrr-bdp-pds` and `s3://noaa-gfs-bdp-pds` (us-east-1),
   no credentials, no requester-pays. GRIB2 (~90 MB files) + Zarr U/V wind. HRRR = 3 km CONUS, hourly runs,
@@ -56,7 +60,7 @@ The candidates below are chosen to hit these gaps.
 - **Risks:** GRIB2 decode in Rust (crates exist; or preprocess via wgrib2/Python); designing the grid tile
   encoding; HRRR eventually superseded by RRFS v2 (~2027-28, archive remains).
 
-### B. Billions-of-events density LOD — **GOES GLM lightning** ⭐
+### B. Billions-of-events density LOD — **GOES GLM lightning** ⭐ — ANALYSIS
 
 - **Access (verified live, anonymous):** `s3://noaa-goes16|18|19/GLM-L2-LCFA/YYYY/DDD/HH/…nc` — one NetCDF
   per **20 seconds** (~345–437 KB), ~4,320 files/day/satellite, ~600 GB/yr/satellite. Continuous since 2018.
@@ -70,9 +74,9 @@ The candidates below are chosen to hit these gaps.
   the preprocessing-framework cube/sufficient-stats design. Additive zoom-LOD machinery from the LiDAR work
   reuses directly.
 - **Risks:** ingest is S3-list/IO-bound (~1.5 M files/satellite-year — pick one satellite-year or one storm
-  season); NetCDF group parsing; GOES-East handover G16→G19 (Apr 2025).
+  season); NetCDF group parsing; GOES-East handover G16→G19 (Apr 2025) — pick the bucket per epoch.
 
-### C. Schedule-constrained national transit ballet — **Netherlands GTFS (or Switzerland / Germany)** ⭐
+### C. Schedule-constrained national transit ballet — **Netherlands GTFS** ⭐ — SHIPPED (local; verify + R2 open)
 
 | Country | Feed (verified) | Size | Scale | License | shapes.txt | GTFS-RT |
 |---|---|---|---|---|---|---|
@@ -80,19 +84,34 @@ The candidates below are chosen to hit these gaps.
 | Switzerland | `data.opentransportdata.swiss/...gtfs2020/permalink` | 188 MB | 1.66 M trips, 26.4 M stop_times | YES, attribution + keep-updated duty | **no** (geOps mirror `gtfs.geops.ch/dl/gtfs_complete.zip` adds them) | TripUpdates only, keyed, 2 req/min |
 | Germany | `download.gtfs.de/germany/free/latest.zip` | 262 MB | 1.67 M trips, 34.5 M stop_times | CC BY 4.0 (DELFI) | no (paid tier only) | yes (CC BY-SA) |
 | Norway / Sweden / Finland | Entur / Trafiklab / Fintraffic | — | national | NLOD 2.0 / CC0 / CC-BY | varies | yes |
-| Japan (ODPT) | — | — | — | **NO / risky** — bespoke license text unverifiable without account; only patchwork CC-BY subsets | — | — |
+| Japan (ODPT) | — | — | — | **NO / risky** — see §3 | — | — |
 
 - **Why compelling:** Mini Tokyo 3D, nation-scale — every train, bus, tram and ferry in a country moving on
-  schedule for 24 h. NL is the lowest-risk start (CC0 + real geometry + free realtime positions); CH is the
-  prettiest network (boats, funiculars, PostBus); DE is the biggest spectacle.
-- **New tech:** **schedule expansion as a build stage** (calendar/calendar_dates → concrete trip instances →
-  per-vertex timestamps along shapes) — mostly reuses the trips/trip-heads pipeline, so this is the cheapest
-  headline demo. Optionally a novel representation: store per-trip (shape ref + stop-time knots) and
-  interpolate in-shader instead of baking dense vertices — a stepping stone to analytic motion.
-- **Risks:** service-day expansion correctness (a solved, testable problem); NL feed includes cross-border
-  fringe to clip; CH terms include an "update tiles when source updates" obligation.
+  schedule for 24 h. NL was the lowest-risk start (CC0 + real geometry + free realtime positions); CH is the
+  prettiest network (boats, funiculars, PostBus); DE is the biggest spectacle — both remain follow-ons.
+- **Technique delivered:** **schedule expansion as a build stage** (calendar/calendar_dates → concrete trip
+  instances → per-vertex timestamps along shapes), reusing the trips/trip-heads pipeline. The optional
+  in-shader stop-time-knot interpolation (stepping stone to analytic motion) was NOT built — still open.
 
-### D. Network flow on a natural network — **NOAA National Water Model retrospective** ⭐
+**SHIPPED — build notes** (no standalone design doc; this block is the record):
+
+- Generator: `crates/stt-generate/src/datasets/gtfs.rs` (`stt-generate gtfs`). Expands ONE service date
+  into a paths archive: a trip runs iff its `service_id` is active on `--date` (weekly `calendar.txt` plus
+  `calendar_dates.txt` exceptions, removals win; the NL OVapi feed is calendar_dates-only). Stops are
+  positioned by `shape_dist_traveled`; shape vertices between consecutive stops get timestamps linearly
+  interpolated in shape-distance; dwell is kept as a duplicated stop vertex so heads visibly pause. GTFS
+  times past `24:00:00` are anchored at local midnight in the agency timezone (`Europe/Amsterdam`).
+  `route_type` is emitted as a **string label** (bus/rail/tram/…), never the numeric code — an all-numeric
+  string column gets promoted to Numeric by stt-build inference and categorical `colorMapping` silently
+  no-ops (the storm-radar lesson). Fully deterministic output ordering.
+- Rebuild: `stt-generate gtfs --feed data/gtfs-nl/feed --date 20260703 --output
+  examples/showcase/public/data/gtfs-nl` (feed refreshes daily; a stale `--date` just matches fewer
+  services — re-download and re-date together).
+- Showcase: `datasets.ts` entry `gtfs-nl`, `type: 'trip-heads'`, 121,031 journeys for Fri 2026-07-03
+  (first departure 00:19 local; >24:00:00 night network runs to ~10:23 Sat), 2 px NS-yellow heads on a
+  near-black basemap. Manifest built at `examples/showcase/public/data/gtfs-nl/`.
+
+### D. Network flow on a natural network — **NOAA National Water Model retrospective** ⭐ — SHIPPED (local; verify + R2 open)
 
 - **Access (verified):** `s3://noaa-nwm-retrospective-3-0-pds` (anonymous, NetCDF + Zarr): **hourly modeled
   streamflow for ~2.7 M CONUS river reaches, 1979 → Jan 2023** (44 years). Streamflow Zarr slice ≈ 1.4 TB.
@@ -100,17 +119,48 @@ The candidates below are chosen to hit these gaps.
   2027 → build against `api.waterdata.usgs.gov`). Reach geometry: NHDPlus (US-gov public domain; frozen in
   favor of 3DHP but downloadable). Avoid MERIT Hydro unless electing its ODbL branch (its other branch is NC).
 - **License: YES.** Registry: "Open Data. There are no restrictions on the use of this data."
-- **Why compelling:** the continental river network *breathing* through floods and droughts — spring melt
-  pulses rolling down the Mississippi, flash floods, the 2011/2019 flood years. No well-known public
-  visualization does this at reach scale; it would be genuinely novel content.
-- **New tech:** modest but real — this is **flow-corridor + `vertex_value_matrix` at 2.7 M-feature scale**
-  (river reaches = corridors, per-hour discharge = the BIXI-streets ridership pattern on a natural network).
-  Forces zoom-dependent network generalization (stream-order pruning per zoom = the flowmap clustering idea
-  on a tree) and stresses the paged directory.
-- **Risks:** feature_id → NHDPlus geometry join at 2.7 M reaches; TB-scale Zarr subsetting (pick a basin ×
-  a famous flood year for the demo, keep CONUS-decade as the stretch goal).
+- **Why compelling:** the continental river network *breathing* through floods and droughts — the 2019
+  flood year at reach scale. No well-known public visualization does this; genuinely novel content.
+- **Technique delivered:** **flow-corridor + `vertex_value_matrix` at national scale** on a natural network,
+  with zoom-dependent network generalization (stream-order pruning per zoom) baked by the generator.
 
-### E. Analytic motion evaluated in-shader — **asteroid + satellite catalogs** ⭐
+**SHIPPED — build notes** (absorbed from the retired `nwm-rivers-demo-2026-07.md`; durable decisions only):
+
+- Two demos share one geometry pipeline. Generator: `crates/stt-generate/src/datasets/nwm.rs`
+  (`stt-generate nwm`); showcase entries `nwm-rivers-2019` (`--window 2019 --bin 1d --value self-scaled`,
+  365 daily buckets) and `nwm-rivers-flood-2019-03` (`--window 2019-03 --bin 1h --value log-anomaly`,
+  744 hourly buckets; medians come from the year run — run it first). Manifests built under
+  `examples/showcase/public/data/`; a `nwm-rivers-2019.v2new` sibling is a packed-v2 rebuild in flight.
+  Renderer is `FlowCorridorLayer` as-is (`flowMatrix: true`, `getWidth: 'width'` static from Strahler
+  order) — zero new layer code, as designed.
+- **Value encoding — self-scaled won.** Demo 1 bakes each reach against its own annual
+  [p2, p98] log-discharge → [0, 1], because absolute `log-q` let the great rivers pin the scale and left
+  every tributary flat-dim (the original blow-out); `log-q` is retained as a `--value` option.
+  `SELF_SCALE_MIN_LOG_SPAN = 0.30` keeps near-constant/regulated reaches dim instead of amplifying their
+  noise to full contrast. Demo 2 bakes `log2(q / median_2019)` clamped to [0, 6] — flood **anomaly**, so a
+  creek at 50× median lights up like a mainstem, which is exactly the flood-wave read.
+- **All shaping happens in the producer** because `vertex_value_matrix` is f32-only — `stt:qa` quantization
+  covers `<prop>` columns, never the matrix leaf. Log transform + rounding to 0.01 are baked at generate
+  time; the linear ramp maps the baked domain directly.
+- **Per-zoom generalization is baked by the generator**, because `stt-build --simplify` is incompatible with
+  a supplied matrix (accepted iff simplify is OFF). Bands are a `[z, z]` ladder (min_zoom = max_zoom per
+  emitted copy, bixi-cluster style), z4–z8, each zoom carrying its own pre-resampled geometry with a
+  consistent matrix.
+- **Mainstem merging is near-required**: merge reach chains within runs of constant
+  `(LevelPathI, StreamOrde)`, ordered by `Hydroseq`. At z4 this is a 12× vertex saving (163 k raw 2-vertex
+  floors → 13 k merged), and each resampled vertex inherits its source reach's series — so a merged mainstem
+  shows the flood front moving downstream through its own geometry via per-vertex color interpolation.
+  Order-1/2 headwaters deep-only was **rejected by arithmetic**: order ≥2 at z10 = 12.7 M verts → 17.3 GiB
+  raw at 365 buckets. Headwater detail needs a short window or typical-hydrograph fold — follow-up only.
+- **Why it compresses**: values are rounded to 0.01 in log space → ≤ ~700 distinct f32 bit patterns;
+  log-space series change slowly bucket-to-bucket; resampled vertices within one source reach carry
+  byte-identical repeated rows that zstd collapses. (Packed-format blob dedup adds nothing — each tile is
+  unique.)
+- **Open, low-stakes:** anomaly baseline (2019 median vs multi-year climatology — 2019 is a wet year,
+  damping its own anomalies; acceptable for v1?); exact ramps + attribution string (NOAA NWM + USGS
+  NHDPlus); z9 stretch band ship/no-ship.
+
+### E. Analytic motion evaluated in-shader — **asteroid + satellite catalogs** ⭐ — ANALYSIS
 
 - **Asteroids:** MPC MPCORB — **1.55 M orbital elements**, 315 MB fixed-width (or 180 MB JSON), updated
   daily (`minorplanetcenter.net/iau/MPCORB/`). License **conditional YES**: redistribution allowed with
@@ -130,7 +180,7 @@ The candidates below are chosen to hit these gaps.
   asteroids, which is easy; asteroids are heliocentric (needs a solar-system, non-mercator scene — the globe
   renderer is the nearest existing home); 1-opposition MPC orbits are junk-quality (drop them).
 
-### F. Raster / gridded time-series tier — **GOES imagery, GPM IMERG, nighttime lights, Hansen, GHSL, sea ice**
+### F. Raster / gridded time-series tier — **GOES imagery, GPM IMERG, nighttime lights, Hansen, GHSL, sea ice** — ANALYSIS
 
 One new capability (a gridded tile tier) unlocks a whole family. All license-clean:
 
@@ -154,7 +204,7 @@ One new capability (a gridded tile tier) unlocks a whole family. All license-cle
 - **Risks:** IMERG/Black-Marble sit behind (free) Earthdata auth; GOES full-disk is in geostationary
   projection (reprojection cost); volume forces aggressive subsetting.
 
-### G. Volumetric 3D over time — **full NEXRAD Level-II volumes**
+### G. Volumetric 3D over time — **full NEXRAD Level-II volumes** — ANALYSIS
 
 - **Access (verified):** `s3://unidata-nexrad-level2` (anonymous; the legacy `noaa-nexrad-level2` bucket was
   **deprecated 2025-09-01** — do not build against it). June 1991 → present, ~6.2 MB per full volume scan
@@ -169,7 +219,7 @@ One new capability (a gridded tile tier) unlocks a whole family. All license-cle
 - **Risks:** volume rendering is the biggest renderer lift on this list; radar-polar → Cartesian gridding;
   scope to one storm, not the archive.
 
-### H. True depth axis over time — **Argo profiling floats**
+### H. True depth axis over time — **Argo profiling floats** — ANALYSIS
 
 - **Access (verified):** `s3://argo-gdac-sandbox` (anonymous, eu-west-3, daily sync) or GDAC https/ftp;
   global snapshot **83 GB** NetCDF, ~2.7 M profiles / ~5 B observations, ~4,000 active floats, 1999→.
@@ -182,7 +232,7 @@ One new capability (a gridded tile tier) unlocks a whole family. All license-cle
   **time-varying z**, plus camera/space-time-cube treatment of depth. Mostly build-side work.
 - **Risks:** low — QC-flag filtering (use `_ADJUSTED` delayed-mode), irregular vertical sampling.
 
-### Also verified, lower priority
+### Also verified, lower priority — ANALYSIS
 
 - **NASA FIRMS / VIIRS active fires** — YES (NASA open); ~150–250 M detections 2012→; strong seasonal fire
   waves, but overlaps the existing wildfires domain and is only daily-stepped.
@@ -196,7 +246,7 @@ One new capability (a gridded tile tier) unlocks a whole family. All license-cle
 
 ---
 
-## 3. Blocked or conditional (verified verbatim — do not use without re-reading)
+## 3. Blocked or conditional (verified verbatim — do not use without re-reading) — BLOCKED
 
 | Dataset | Verdict |
 |---|---|
@@ -208,8 +258,16 @@ One new capability (a gridded tile tier) unlocks a whole family. All license-cle
 | **Japan ODPT transit** | Bespoke license, full text unverifiable without an account; patchwork CC-BY subsets only. Legal risk for public rehosting. |
 | **MERIT Hydro** | Dual CC-BY-NC / ODbL — usable **only** by electing ODbL (share-alike). Prefer NHDPlus/NWM. |
 
-Cross-cutting: **AWS Open Data registry listing ≠ open license** (their own disclaimer; nuScenes counterexample).
-NOAA/NODD labeling duties: never present derived tiles as original NOAA data; no implied endorsement; attribute.
+## 3b. Operational time-bombs (consolidated — check before any new build)
+
+- **5-digit NORAD catalog numbers exhaust ~mid-July 2026** → ingest OMM/CSV, never legacy TLE (§E).
+- **MPC 1-opposition orbits are junk-quality** — drop them at ingest (§E).
+- **`waterservices.usgs.gov` decommissioned early 2027** → build against `api.waterdata.usgs.gov` (§D).
+- **`noaa-nexrad-level2` bucket deprecated 2025-09-01** → use `s3://unidata-nexrad-level2` (§G).
+- **GOES-East handover G16→G19 (Apr 2025)** — pick the bucket per epoch (§B, §F).
+- **AWS Open Data listing ≠ open license** — nuScenes counterexample; always verify the upstream licensor.
+- **NODD labeling duties** — derived tiles must not be presented as original NOAA data; no implied
+  endorsement; attribute.
 
 ---
 
@@ -222,12 +280,12 @@ NOAA/NODD labeling duties: never present derived tiles as original NOAA data; no
    point rendering is the stack's core strength, the event→group→flash hierarchy maps directly onto the
    existing additive zoom-LOD work, and it is the natural first customer for the preprocessing-framework
    density/cube design.
-3. **Netherlands GTFS → nation-scale transit ballet.** CC0, shapes + free realtime included, and mostly
-   reuses the trips pipeline — the cheapest headline demo on the list, with schedule expansion (and optional
-   in-shader stop-time interpolation) as the new build-side technique. Switzerland/Germany as follow-ons.
-4. **NOAA National Water Model → the continental river network breathing.** Genuinely novel public content
-   (nobody shows reach-scale discharge animation), no restrictions, and it stress-tests flow-corridor +
-   `vertex_value_matrix` + paged directory at 2.7 M features rather than requiring a new render primitive.
+3. **Netherlands GTFS → nation-scale transit ballet.** ✅ SHIPPED (§C) — it was, as predicted, the cheapest
+   headline demo (schedule expansion reused the trips pipeline). Switzerland/Germany and the in-shader
+   stop-time-knot representation remain follow-ons.
+4. **NOAA National Water Model → the continental river network breathing.** ✅ SHIPPED (§D) — two demos,
+   zero new format/layer code, exercising flow-corridor + `vertex_value_matrix` + the zoom-band ladder at
+   national scale. z9 stretch band and headwater detail remain open.
 5. **MPC/JPL asteroids (then CelesTrak satellites) → analytic in-shader motion.** The deepest representation
    novelty (elements-as-columns, ~6 floats/object replacing baked trajectories) with a spectacular 1.5 M-body
    payoff; ranked last of the five only because Kepler/SGP4-in-shader and the heliocentric scene are real
@@ -238,7 +296,7 @@ tier family (GOES/IMERG/VNL/Hansen — one format investment, many demos; interi
 today), NEXRAD Level-II volumes (hold until there's appetite for volume rendering), ICESat-2 regional photon
 clouds (reuses surfel machinery).
 
-**Suggested pairing strategy:** each new *technique* ships with one flagship dataset, and each flagship
+**Pairing strategy (standing):** each new *technique* ships with one flagship dataset, and each flagship
 reuses an existing demo as its foil — wind particles over the existing storm-radar derecho; GLM lightning
-over the hurricane tracks; NWM rivers beside the BIXI street-flow family; analytic satellites replacing the
-baked satellites demo.
+over the hurricane tracks; NWM rivers beside the BIXI street-flow family (now realized); analytic satellites
+replacing the baked satellites demo.

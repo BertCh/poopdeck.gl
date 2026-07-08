@@ -1,6 +1,9 @@
-import "./prism-setup";
-import "prismjs/components/prism-bash";
-import React, { useState } from "react";
+// prism-setup exposes prism-react-renderer's Prism globally and (on the client)
+// registers the bash grammar — see its header for why the grammar load is
+// client-only. CodeBlock re-renders when it resolves so bash highlights after
+// hydration.
+import { bashGrammarReady, isBashReady } from "./prism-setup";
+import React, { useEffect, useState } from "react";
 import { Highlight, type PrismTheme } from "prism-react-renderer";
 
 /**
@@ -62,6 +65,18 @@ const CodeBlock: React.FC<{ code: string; language: string }> = ({
   language,
 }) => {
   const [copied, setCopied] = useState(false);
+  // Re-render once the (client-only) bash grammar has loaded so bash fences
+  // upgrade from plain text to highlighted after hydration.
+  const [bashReady, setBashReady] = useState(isBashReady());
+  useEffect(() => {
+    if (bashReady) return;
+    let live = true;
+    bashGrammarReady.then(() => live && setBashReady(true));
+    return () => {
+      live = false;
+    };
+  }, [bashReady]);
+
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(code);

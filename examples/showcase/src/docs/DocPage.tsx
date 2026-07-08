@@ -1,5 +1,12 @@
-import React, { useEffect, useMemo, useState, useCallback } from "react";
-import { Link, useLocation, useParams } from "react-router-dom";
+import React, { useCallback, useEffect, useMemo } from "react";
+import {
+  Link,
+  useLoaderData,
+  useLocation,
+  useParams,
+  type ClientLoaderFunctionArgs,
+  type LoaderFunctionArgs,
+} from "react-router";
 import {
   GITHUB_BLOB_BASE,
   docSections,
@@ -15,52 +22,63 @@ import PrevNext from "./PrevNext";
 import { useDocsContext } from "./DocsLayout";
 
 /**
- * One documentation page: loads its lazily-bundled markdown chunk, renders it
- * with the docs prose treatment, and wires the on-this-page TOC + prev/next.
- * `spec/manifest-schema` is the one non-markdown page (pretty-printed JSON).
+ * One documentation page. The markdown body is read in the route `loader` so
+ * it is baked into the prerendered static HTML (real SEO, no client fetch);
+ * the component renders `useLoaderData()` synchronously. `spec/manifest-schema`
+ * is the one non-markdown page (pretty-printed JSON).
+ *
+ * The loader reuses the same `import.meta.glob('?raw')` loaders as the docs
+ * manifest contract test — during the build prerender pass (Vite SSR) they
+ * resolve to the file contents, so the resolution stays in lockstep with the
+ * glob the test pins. `clientLoader` handles client-side navigations: known
+ * (prerendered) slugs delegate to the baked loader data; unknown slugs render
+ * the styled 404 without needing a runtime server.
  */
+
+type DocData =
+  | { slug: string; notFound: true }
+  | { slug: string; notFound?: false; kind: "markdown" | "json"; raw: string };
+
+export async function loader({ params }: LoaderFunctionArgs): Promise<DocData> {
+  const slug = params["*"] ?? "";
+  const entry = getDocEntry(slug);
+  if (!entry) throw new Response("Not found", { status: 404 });
+  if (entry.kind === "json") {
+    return { slug, kind: "json", raw: manifestSchemaRaw };
+  }
+  const load = fileLoader(entry.file);
+  if (!load) throw new Response("Not found", { status: 404 });
+  return { slug, kind: "markdown", raw: await load() };
+}
+
+export async function clientLoader({
+  params,
+  serverLoader,
+}: ClientLoaderFunctionArgs): Promise<DocData> {
+  const slug = params["*"] ?? "";
+  // Unknown slug isn't prerendered → no baked data to fetch; render the 404.
+  if (!getDocEntry(slug)) return { slug, notFound: true };
+  return serverLoader<DocData>();
+}
+
 const DocPage: React.FC = () => {
   const params = useParams();
   const slug = params["*"] ?? "";
+  const data = useLoaderData() as DocData;
   const entry = getDocEntry(slug);
   const section = getSectionForSlug(slug);
   const location = useLocation();
   const { contentRef } = useDocsContext();
-  const getContainer = useCallback(
-    () => contentRef.current,
-    [contentRef],
-  );
+  const getContainer = useCallback(() => contentRef.current, [contentRef]);
 
-  const [raw, setRaw] = useState<string | null>(null);
-  const [error, setError] = useState(false);
-
-  useEffect(() => {
-    setRaw(null);
-    setError(false);
-    if (!entry || entry.kind === "json") return;
-    const loader = fileLoader(entry.file);
-    if (!loader) {
-      setError(true);
-      return;
-    }
-    // Guard against out-of-order resolution on rapid sidebar clicks.
-    let cancelled = false;
-    loader()
-      .then((text) => {
-        if (!cancelled) setRaw(text);
-      })
-      .catch(() => {
-        if (!cancelled) setError(true);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [entry]);
+  const notFound = data.notFound === true || !entry;
+  const raw = notFound ? "" : data.raw;
+  const isSchema = !notFound && data.kind === "json";
 
   // Scroll handling: new slug → top; hash present → anchor (after paint).
   // Both against the docs container — the window never scrolls.
   useEffect(() => {
-    if (!raw && entry?.kind !== "json") return;
+    if (notFound) return;
     if (location.hash) {
       const id = decodeURIComponent(location.hash.slice(1));
       // Let the markdown commit first.
@@ -70,13 +88,14 @@ const DocPage: React.FC = () => {
     } else {
       contentRef.current?.scrollTo({ top: 0 });
     }
-  }, [slug, raw, location.hash, entry, contentRef]);
+  }, [slug, location.hash, contentRef, notFound]);
 
-  const headings = useMemo(() => (raw ? extractHeadings(raw) : []), [raw]);
+  const headings = useMemo(
+    () => (raw && !isSchema ? extractHeadings(raw) : []),
+    [raw, isSchema],
+  );
 
-  if (!entry) return <NotFound slug={slug} />;
-
-  const isSchema = entry.kind === "json";
+  if (notFound || !entry) return <NotFound slug={slug} />;
 
   return (
     <div className="flex justify-center gap-10 px-5 sm:px-8 py-8">
@@ -97,27 +116,14 @@ const DocPage: React.FC = () => {
               <Link to="/docs/spec/stt-packed-format">packed format spec</Link>{" "}
               for the semantics.
             </p>
-            <CodeBlock
-              code={prettyJson(manifestSchemaRaw)}
-              language="json"
-            />
+            <CodeBlock code={prettyJson(raw)} language="json" />
           </>
-        ) : error ? (
-          <p style={{ color: "var(--ink-500)" }}>
-            This page failed to load. It is also available{" "}
-            <a
-              href={`${GITHUB_BLOB_BASE}docs/${entry.file}`}
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              on GitHub
-            </a>
-            .
-          </p>
-        ) : raw == null ? (
-          <p style={{ color: "var(--ink-400)" }}>Loading…</p>
         ) : (
-          <Markdown raw={raw} currentFile={entry.file} scrollContainer={getContainer} />
+          <Markdown
+            raw={raw}
+            currentFile={entry.file}
+            scrollContainer={getContainer}
+          />
         )}
 
         <div className="not-prose">

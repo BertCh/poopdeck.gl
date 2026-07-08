@@ -1,5 +1,5 @@
 import React from "react";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { getPrevNext } from "./manifest";
 
 /** Prev/next footer links from the flattened manifest order. */

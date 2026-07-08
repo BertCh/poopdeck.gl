@@ -208,3 +208,13 @@ into a deck.gl sublayer.
 - [**Deploying a dataset**](./guides/deploying.md): R2 / S3 / GCS / nginx —
   the two Cache-Control regimes, CORS for Range requests, and the
   copy-never-delete deploy rule.
+
+## AI Suite
+
+- [**AI Suite (MCP + Skills)**](./guides/ai-suite.md): Give an AI assistant a
+  temporal-native surface over the toolchain — the `poopdeck-ai` plugin
+  (`@poopdeck.gl/mcp` server + Agent Skills), install, worked flows, and the
+  security model.
+- [**`@poopdeck.gl/mcp`**](./api/stt-mcp.md): MCP server reference — the
+  `stt-mcp` command, the discovery / analysis / interactive / execution tools,
+  dataset resources, and the `--allow-cli` safety model.

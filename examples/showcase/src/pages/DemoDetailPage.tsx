@@ -1,5 +1,5 @@
-import React, { useState } from "react";
-import { useParams, Navigate, Link } from "react-router-dom";
+import React, { Suspense, useState } from "react";
+import { useParams, Navigate, Link } from "react-router";
 import { Highlight, themes } from "prism-react-renderer";
 import { getDatasetById } from "../datasets";
 import {
@@ -7,12 +7,17 @@ import {
   getCatalogEntry,
   getRelated,
 } from "../content/demoMeta";
-import DemoEmbed from "../components/demo/DemoEmbed";
 import DemoCard from "../components/DemoCard";
 import { SourceLogo } from "../components/SourceLogo";
 import { VizBadge } from "../components/VizBadge";
 import CubeInLine from "../components/demo/CubeInLine";
 import { profileIdFromUrl } from "../lib/densityProfile";
+import { ClientOnly } from "../lib/ClientOnly";
+
+// The live map embed carries deck.gl + the playback stack; lazy + client only
+// so the statically prerendered detail HTML stays deck-free (a framed poster
+// renders in its place at build time, replaced by the live viewer on hydrate).
+const DemoEmbed = React.lazy(() => import("../components/demo/DemoEmbed"));
 
 /**
  * Per-demo landing page (`/demos/:id`): live embed up top, then the
@@ -70,9 +75,15 @@ const DemoDetailPage: React.FC = () => {
           </div>
         )}
 
-        {/* Live embed */}
+        {/* Live embed (client-only; a framed poster prerenders in its place) */}
         <div className="mt-6">
-          <DemoEmbed dataset={dataset} />
+          <ClientOnly fallback={<EmbedPoster />}>
+            {() => (
+              <Suspense fallback={<EmbedPoster />}>
+                <DemoEmbed dataset={dataset} />
+              </Suspense>
+            )}
+          </ClientOnly>
         </div>
 
         {/* Editorial body */}
@@ -202,6 +213,19 @@ const Section: React.FC<{ title: string; children: React.ReactNode }> = ({
     <span className="eyebrow">{title}</span>
     <div className="mt-3">{children}</div>
   </section>
+);
+
+/**
+ * Static stand-in for the live embed: the same framed box, shown in the
+ * prerendered HTML and while the deck.gl viewer chunk streams in on hydrate.
+ */
+const EmbedPoster: React.FC = () => (
+  <div>
+    <div
+      className="relative rounded-lg overflow-hidden h-[320px] sm:h-[420px] lg:h-[520px]"
+      style={{ background: "var(--surface-sunken)" }}
+    />
+  </div>
 );
 
 /**

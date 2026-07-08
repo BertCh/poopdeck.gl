@@ -1,0 +1,70 @@
+{
+  "name": "@poopdeck.gl/mcp",
+  "version": "0.4.0",
+  "description": "MCP (Model Context Protocol) server for spatiotemporal tiles: an open, self-hostable counterpart to CARTO's hosted MCP server — dataset discovery, @deck.gl/json view-map composition, and gated build/validate CLI tools over a directory of packed STT archives",
+  "publishConfig": {
+    "access": "public"
+  },
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "stt-mcp": "./dist/bin.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "docs",
+    "src",
+    "!src/**/*.test.*",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc && node scripts/copy-docs.mjs",
+    "prepublishOnly": "pnpm run build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist tsconfig.tsbuildinfo"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "typescript": "^5.4.0",
+    "vitest": "^1.6.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/BertCh/spatiotemporal-tiles.git",
+    "directory": "packages/mcp"
+  },
+  "homepage": "https://github.com/BertCh/spatiotemporal-tiles/tree/main/packages/mcp#readme",
+  "bugs": {
+    "url": "https://github.com/BertCh/spatiotemporal-tiles/issues"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "agents",
+    "llm-tools",
+    "deck.gl",
+    "tiles",
+    "spatiotemporal"
+  ],
+  "author": "Robert Christie",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  }
+}

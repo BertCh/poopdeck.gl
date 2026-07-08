@@ -14,7 +14,7 @@ a first-class local-metric (ENU) frame for the AV LIDAR cockpit — oriented
 Gaussian surfels included — alongside mercator and globe projections, viewport
 streaming, and a near-full port of the geographic layer catalog. See
 [System overview](../architecture/system-overview.md) for where it sits in
-the stack and [three-renderer-parity.md](../roadmap/three-renderer-parity.md)
+the stack and [renderer-architecture.md](../roadmap/renderer-architecture.md)
 for the deck-parity design rationale.
 
 ## Install
@@ -146,7 +146,7 @@ merges every resident tile into **one** `InstancedMesh`/indexed mesh per
 layer (not one draw call per tile, unlike the maplibre adapter), and
 per-frame animation is a uniform write — no rebuild. Names deliberately fork
 from deck's `Animated*Layer` idiom (bare `*Layer`), matching the vocabulary
-map in [three-renderer-parity.md §3.1](../roadmap/three-renderer-parity.md#31-canonical-concept--deck--three--maplibre-name-map).
+map in the [renderer-architecture.md appendix](../roadmap/renderer-architecture.md#appendix-canonical-concept-map-deck--three--maplibre).
 
 | Class | Geometry | Deck equivalent | Notes |
 |---|---|---|---|
@@ -352,7 +352,7 @@ machine-generated, drift-guarded capability matrix across all four backends
 - **General (non-AV) showcase wiring is partial.** Only the AV cockpit's
   `AvThreeViewer` composes layers today; a generic `buildDemoLayers`-style
   three path for the rest of the showcase demo catalog is not yet built (see
-  [three-renderer-parity.md §6](../roadmap/three-renderer-parity.md#6-build-log-2026-06-23)).
+  [renderer-architecture.md §5.2](../roadmap/renderer-architecture.md#52-three-backend--integration-tail)).
 
 ## Live demo
 

@@ -5,7 +5,7 @@
  * registry renders just the current name (no dropdown).
  */
 import React from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router";
 import type { Dataset } from "../../types";
 
 export interface SceneSwitcherProps {

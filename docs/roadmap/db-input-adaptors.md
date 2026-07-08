@@ -2,23 +2,24 @@
 
 *Decision record. PostGIS and DuckDB are first-class **input sources** for
 `stt-build` (complements to the GeoParquet file path) and the two backends of
-`stt-serve`, a dynamic tile server that generates one STT tile per request — the
-`ST_AsMVT` analog for the STT format.*
+`stt-serve`, a dynamic tile server that generates one STT tile per request —
+the `ST_AsMVT` analog for the STT format. This doc records rationale, lessons,
+benchmarks, negative results, and the static-vs-DB verdict. **Behavior lives
+elsewhere:** routes/caching/metadata/error semantics in
+[../spec/stt-serve-protocol.md](../spec/stt-serve-protocol.md); the flag
+surface in [../api/cli-reference.md](../api/cli-reference.md).*
 
-**Status.** The base of this work (both DB readers, the `stt-serve` binary, the
-IBTrACS benchmarks) shipped in commit **`17789f7`**. The **full generation-parity
-layer** — the shared `build_options.rs`, `encode_single_tile_counted`, the
-per-vertex column bridge, and the cross-source parity suite — is **uncommitted on
-branch `feat/db-parity-comprehensive`** as of this writing. Open follow-ups live
-in [data-sources-and-encoder.md](./data-sources-and-encoder.md), not here.
-
-Merges the former `postgis-integration.md` + `duckdb-integration.md`. Pairs with
-[data-sources-and-encoder.md](./data-sources-and-encoder.md) (the roadmap/learnings)
-and [preprocessing-framework.md](./preprocessing-framework.md).
+**Status.** Landed on `main` and published (0.3.0 on crates.io + npm,
+2026-07-05): both DB readers, the `stt-serve` binary, the full
+generation-parity layer (shared `build_options.rs`, `encode_single_tile_counted`,
+per-vertex column bridge, cross-source parity suite), and the 2026-07-05 deep
+review (z-guard, DECIMAL props, kind-pinning, serve `--source-srid`, sargable
+SQL — all tests green). Merges the former PostGIS/DuckDB integration docs plus
+the absorbed encoder-seam-lessons and static-vs-DB sibling docs.
 
 ---
 
-## 1. Why
+## 1. Why DB inputs
 
 A great deal of spatiotemporal data already lives in a database, and the
 analytics ecosystem expects a "point your database at a tiler" workflow
@@ -26,14 +27,14 @@ analytics ecosystem expects a "point your database at a tiler" workflow
 Parquet/CSV/GeoJSON/Shapefile). Before this, the only way into STT was a
 GeoParquet file. Two capabilities were added for **each** engine:
 
-1. **Ingest** — `stt-build` reads features directly from a DB query and builds the
-   identical packed archive it would from a file. No export step.
+1. **Ingest** — `stt-build` reads features directly from a DB query and builds
+   the identical packed archive it would from a file. No export step.
 2. **Dynamic serve** — `stt-serve` answers `GET /tiles/{z}/{x}/{y}/{t}.stt` by
    querying the DB per request and encoding one STT tile, with no pre-bake.
 
-The two engines cover complementary needs: **PostGIS** is the live, mutating,
-server-backed table; **DuckDB** is in-process with no server — point it straight
-at a `.duckdb` file, or scan a Parquet/CSV with `:memory:` and no table at all.
+The engines cover complementary needs: **PostGIS** is the live, mutating,
+server-backed table; **DuckDB** is in-process with no server — point it at a
+`.duckdb` file, or scan a Parquet/CSV with `:memory:` and no table at all.
 
 ## 2. Architecture
 
@@ -42,183 +43,177 @@ INGEST   DB ──WKB (ST_AsEWKB / ST_AsWKB)──▶ ParsedFeature ──▶ ex
 SERVE    GET /tiles/{z}/{x}/{y}/{t}.stt ──bbox+time query──▶ encode_single_tile ──▶ Arrow-IPC tile blob
 ```
 
-The whole thing slots into the existing pipeline because both the tiler and the
-per-tile encoder already consume **`ParsedFeature`** and are agnostic to where the
-features came from. Three properties make it a small change:
+The whole thing slots into the existing pipeline because both the tiler and
+the per-tile encoder already consume **`ParsedFeature`** and are agnostic to
+where the features came from. Three properties made it a small change:
 
-- **`ParsedFeature` is the source-agnostic seam.** A new adaptor is "produce the
-  same struct" and nothing downstream changes.
+- **`ParsedFeature` is the source-agnostic seam.** A new adaptor is "produce
+  the same struct" and nothing downstream changes.
 - **WKB is the geometry bridge.** PostGIS `ST_AsEWKB(geom)` and DuckDB
-  `ST_AsWKB(geom)` both emit WKB that `stt-build`'s existing `parse_wkb_geometry`
-  (`geozero`) already decodes — no new geometry code. (GeoArrow-native input
-  encodings are still rejected; WKB is the ingest lingua franca.)
-- **`encode_single_tile_counted` is the shared per-tile core.** The offline build
-  and every per-request serve call the *same* `build_tile`/`encode_tile` path
-  (factored out in `tiler.rs`), so a served tile is **byte-for-byte** what the
-  offline build would emit for that `(z,x,y,t)` and the same source rows. It
-  returns the placed-feature count so serve can honour `--min-features-per-tile`
-  (a below-threshold tile is `204 No Content`).
+  `ST_AsWKB(geom)` both emit WKB that `stt-build`'s existing
+  `parse_wkb_geometry` (`geozero`) already decodes — no new geometry code.
+  (GeoArrow-native input encodings are rejected; WKB is the ingest lingua
+  franca.)
+- **`encode_single_tile_counted` is the shared per-tile core.** The offline
+  build and every per-request serve call the *same* `build_tile`/`encode_tile`
+  path (factored out in `tiler.rs`), so a served tile is **byte-for-byte**
+  what the offline build would emit for that `(z,x,y,t)` and the same source
+  rows. It returns the placed-feature count so serve can honour
+  `--min-features-per-tile` (below threshold → `204 No Content`).
 
-Both readers live in `stt-build` behind an off-by-default cargo feature
-(`postgres` / `duckdb`) so default builds pull no DB driver. Both drivers are
-self-contained: `postgres` is pure-Rust; the `duckdb` engine is **statically
-bundled** (no system lib). `stt-serve` runs the whole per-request path on a
-`spawn_blocking` worker.
-
-### CLI (shape only — full flags in [../api/cli-reference.md](../api/cli-reference.md))
-
-```bash
-# Ingest: from PostGIS (--features postgres), a DuckDB file, or a direct
-# Parquet scan via an in-memory DuckDB (--features duckdb):
-stt-build --postgres "$PGURL" --table hurricane_obs --geom-column geom \
-          --time-field iso_time --where "iso_time >= '1970-01-01'" -o out.stt
-stt-build --duckdb :memory: \
-          --sql "SELECT ST_Point(lon,lat) AS geom, ts, mag
-                 FROM read_parquet('quakes.parquet')" \
-          --geom-column geom --time-field ts -o out.stt
-
-# Dynamic tile server — pick a backend with --postgres or --duckdb:
-stt-serve --duckdb hurricane.duckdb --table hurricane_obs --geom-column geom \
-          --time-field iso_time --temporal-bucket 7d --min-zoom 3 --max-zoom 8
-#   GET /tiles/{z}/{x}/{y}/{t}.stt   GET /metadata.json   GET /health
-```
-
-`--postgres`/`--duckdb` are mutually exclusive with each other and with `--input`
-(which becomes optional). Connections may also come from `STT_POSTGRES_URL` /
-`DATABASE_URL` / `STT_DUCKDB_PATH`.
+Both readers live in `stt-build` behind off-by-default cargo features
+(`postgres` / `duckdb`) so default builds pull no DB driver; both are
+self-contained (`postgres` pure-Rust; the `duckdb` engine **statically
+bundled**, no system lib). `stt-serve` runs the per-request path on a
+`spawn_blocking` worker over a deadpool (PostGIS) / r2d2 (DuckDB) pool. CLI
+shape, connection env-vars, routes: see the two docs linked in the header.
 
 ## 3. Serve parity with the offline build
 
-`encode_single_tile_counted` shares the exact `build_tile`/`encode_tile` path the
-offline build uses, so `stt-serve` exposes the **full generation surface** —
-byte-identical to the offline-built tile for the same source rows. The complete
-per-tile flag list (`--simplify`, `--pre-tessellate`, clip/zoom-field flags, the
-per-tile budgets, `--exclude`/`--include`), the encoder-global flags
-(`--quantize-*`, `--vector-group`, `--point-elevation-column`,
-`--vertex-time-precision`), `--table`/`--sql`, and `--temporal-lod` are in
-[../api/cli-reference.md](../api/cli-reference.md). Two serve-only notes:
+`encode_single_tile_counted` shares the exact `build_tile`/`encode_tile` path
+the offline build uses, so `stt-serve` exposes the **full generation surface** —
+byte-identical to the offline-built tile for the same source rows. The CLI and
+the server build their configuration from the **same flag strings** via the
+shared `stt_build::build_options` module — one source of truth, no drift — and
+`stt-serve` logs its active parity-affecting config at startup so an operator
+can confirm it. Flag list:
+[../api/cli-reference.md](../api/cli-reference.md); the parity contract is
+normative in [../spec/stt-serve-protocol.md](../spec/stt-serve-protocol.md) §8.
 
-- **Temporal LOD** is advertised in `/metadata.json` as `temporal_lod`.
-- **Heatmap domain** — `--heatmap-weight`/`--heatmap-class` are computed once at
-  startup via a SQL aggregate and advertised as `heatmap_domain` (the DB's
-  continuous percentile — a style hint that may differ marginally from the
-  offline floor-index percentile).
+Parity-relevant decisions worth recording here:
 
-The CLI and the server build these from the **same flag strings** via the shared
-`stt_build::build_options` module (parsers + `EncoderSettings` +
-budget/attribute-filter builders) — one source of truth, no drift. `stt-serve`
-logs its active parity-affecting config at startup so an operator can confirm it.
+- **Kind-pinning from the result schema.** `stt-serve` pins property kinds at
+  startup (DuckDB: `LIMIT 0` probe; PostGIS: statement prepare) — the same
+  schema-pinning an offline build derives from the Parquet schema, also
+  threaded into `stt-build`'s DB sources — so an all-NULL-within-one-tile
+  column can no longer drift the layer schema on any path.
+- **`--source-srid` shipped in serve** (2026-07-05 review): non-4326 source
+  geometry is served via a per-tile `ST_Transform` before the bbox filter,
+  mirroring the ingest expressions. Correct but index-bypassing — store 4326
+  (or add a PostGIS functional index on the transform) for the fast path.
+- **The 2026-07-05 deep review** also shipped: the z-guard (tile coordinates
+  validated `z ≤ 31`, `x, y < 2^z` → `400`), DECIMAL/NUMERIC property mapping
+  via the one decimal→nearest-f64 conversion shared by both engines, and
+  **sargable time predicates** — integer-epoch filters compare the raw column
+  against pre-scaled literals (never wrap the column in an expression), so
+  b-tree indexes / zone maps still apply.
+- **Heatmap domain** is computed once at startup via a SQL aggregate — the DB's
+  continuous percentile, a style hint that may differ marginally from the
+  offline floor-index percentile (field semantics: protocol spec §4.1).
+- **Not servable per single-tile request** (rejected loudly at startup, never a
+  silent drop): `--summary-tier` (cross-tile aggregation) and
+  `--adaptive-temporal` (windows sized across a cell's whole time range) —
+  pre-bake these and serve the static archive.
 
-**Not servable per single-tile request** (rejected at startup with a clear
-error): `--summary-tier` (cross-tile H3/quadbin aggregation) and
-`--adaptive-temporal` (windows sized across a cell's whole time range) — pre-bake
-these and serve the static archive. Non-4326 source geometry is served via
-`stt-serve --source-srid` (per-tile `ST_Transform` before the bbox filter,
-mirroring the ingest expressions) — correct but index-bypassing; store 4326 (or
-add a PostGIS functional index on the transform) for the fast path.
+## 4. Encoder-seam lessons
 
-`stt-serve` also **pins property kinds from the source's result schema at
-startup** (DuckDB: `LIMIT 0` probe; PostGIS: statement prepare) — the same
-schema-pinning an offline build derives from the Parquet schema (and, since the
-same probe was threaded into `stt-build`'s DB sources, from the DB result schema
-there too), so an all-NULL-within-one-tile column no longer drifts the layer
-schema on any path.
+Distilled from the parity work; the reason comprehensive DB parity was
+*concentrated, not sprawling* is one good seam and a few recurring smells.
 
-## 4. Cross-source parity testing
+1. **`ParsedFeature` is the source-agnostic boundary, and that's the whole
+   game.** Everything downstream (tiler → encoder) reads only `ParsedFeature`,
+   so a new input adaptor is "produce the same struct". **Corollary:** the
+   Python extractors are a *fourth* input adaptor (they emit GeoParquet, then
+   shell to `stt-build`) — same seam, but their flag-construction logic lives
+   outside it (lesson 5).
 
-`crates/stt-build/tests/source_parity.rs` (+ `tests/common/mod.rs`) proves
-**file ≡ DuckDB ≡ PostgreSQL** produce the same `ParsedFeature` stream and the
-same per-tile archive from one logical fixture spanning points, LineStrings,
-per-vertex `vertex_timestamps`/`vertex_values` (incl. a NULL element), every
-common property type, a NaN float, and a null geometry. Comparison is
-order-independent and robust to the project's non-deterministic-encoding caveats:
-exact `ParsedFeature` equality after a stable sort, plus the per-tile
-`(zoom,x,y,t_start,t_end,feature_count)` key-set. Raw bytes / compressed size are
-not compared.
+2. **Process-wide mutable encoder globals are a silent-divergence + concurrency
+   footgun.** The encoder historically read six process-wide statics
+   (vertex-time precision, coord/attr quantization, attrs-auto, vector groups,
+   point-elevation — `stt-core/src/arrow_tile.rs`, statics block ~890–1105).
+   The *original* serve bug was exactly this: `stt-serve` never called the
+   setters, so quantized/vector-grouped datasets served subtly wrong tiles with
+   **no error**. Fixed by threading an explicit `EncoderConfig`
+   (`encode_tile_with`) per request — also what made multi-dataset serve
+   possible (different quantization configs in one process, live-verified).
+   The offline CLI still uses the global setters — fine for a one-shot
+   process; see the backlog.
 
-DuckDB is statically bundled, so `file ≡ DuckDB` runs in **CI with no service and
-no spatial extension** — the fixture parquet is read back through core
-`read_parquet` and the WKB geometry rides as a `BLOB` column:
+3. **Silent degradation is the dangerous failure mode.** The DB readers
+   originally dropped per-vertex columns to `None` with no warning — an entire
+   dataset class lost fidelity invisibly. The antidote — counted, named
+   end-of-read warnings for columns that carried no value — now applies to all
+   three input adaptors symmetrically (the per-tile serve decoders skip it, so
+   a live server never spams).
 
-```bash
-cargo test -p stt-build --features duckdb
-```
+4. **Parity is provable at the intermediate representation, not the bytes.**
+   Raw byte comparison is fragile (within-tile feature order from an unordered
+   `SELECT`). The robust contract: exact `ParsedFeature` equality after a
+   stable sort, plus order-independent per-tile
+   `(zoom,x,y,t_start,t_end,feature_count)` key-sets
+   (`crates/stt-build/tests/common/mod.rs`). Encoding determinism itself is
+   closed — byte-reproducible builds on arrow ≥59 (normative:
+   [../spec/stt-packed-format.md](../spec/stt-packed-format.md) §7 D6) — but
+   the IR contract remains the right one for cross-*source* comparison.
 
-PostgreSQL parity needs a live server, so it is `#[ignore]`d behind a DSN env var:
+5. **Any spec interpreted in two places drifts.** `stt-serve` had silently
+   drifted from the CLI (ignored most flags) until `build_options.rs` made one
+   source of truth. The coordinate/vertex name sets were triplicated across the
+   three readers (now deduped into shared `crate::input` predicates); the
+   row→`ParsedFeature` decode rules were consolidated the same way
+   (`db_input_common.rs` — every rule lives once, so a new engine can't
+   silently diverge). Still outside the seam: the Python extractors
+   hand-assemble flags and the showcase keeps dual-copy palettes — both
+   mechanically guarded by parity tests rather than codegen (counted out;
+   revive if the flag surface churns enough that those tests become the
+   bottleneck).
 
-```bash
-STT_TEST_PG_DSN=postgresql://postgres:postgres@localhost:5432/stt \
-  cargo test -p stt-build --features duckdb,postgres -- --ignored
-```
+6. **WKB is the ingest lingua franca; bundled/in-process is the CI win.** All
+   readers bridge geometry through WKB → `parse_wkb_geometry`. DuckDB-bundled
+   lets `file ≡ DuckDB` parity run in CI with zero infra — the fixture parquet
+   is read back through core `read_parquet` with WKB riding as a `BLOB`
+   column, sidestepping even the spatial-extension network install. PostgreSQL
+   parity needs a live server, so it's `#[ignore]`d behind `STT_TEST_PG_DSN`.
+
+7. **Factoring the smallest reusable unit enables online + offline reuse.**
+   `encode_single_tile_counted` sharing the full `build_tile`/`encode_tile`
+   path is the *only* reason serve parity was "set the config", not
+   "reimplement the tiler". The summary tier and preprocessing analytics
+   aren't factored that way yet (backlog: `encode_single_cell`).
+
+### Where each lesson lives in code
+
+| Lesson | Anchor |
+|---|---|
+| `ParsedFeature` seam | `crates/stt-build/src/input.rs` (struct + the file reader) |
+| Encoder globals / `EncoderConfig` | `crates/stt-core/src/arrow_tile.rs` (statics ~890–1105; `EncoderConfig` + `encode_tile_with` below them) |
+| Shared flag→config | `crates/stt-build/src/build_options.rs` |
+| Per-tile reuse | `crates/stt-build/src/tiler.rs` `encode_single_tile_counted` |
+| Parity comparator | `crates/stt-build/tests/common/mod.rs`, `tests/source_parity.rs` |
+| Shared name predicates | `crates/stt-build/src/input.rs` `is_coordinate_column_name` / `is_vertex_metadata_column` |
+| Shared DB decode rules | `crates/stt-build/src/db_input_common.rs` |
 
 ## 5. Consistency notes
 
-Shared across both DB readers (and the GeoParquet file reader):
+Column/time/geometry mapping semantics are documented in
+[../api/cli-reference.md](../api/cli-reference.md) and the protocol spec; what
+belongs in the decision record is the *design stance*:
 
-- **Property columns** map by source type (int/float/bool/text/timestamp/…). The
-  time column → unix-ms (timestamp/timestamptz directly; `DATE` at midnight UTC;
-  integer columns honour `--time-format`; text parsed as ISO-8601).
-- **Geometry-component names** (`lon`/`lat`/`x`/`y`/…) are excluded from
-  properties (case-sensitive lowercase match, shared `is_coordinate_column_name`),
-  so tiles never carry coordinates twice.
-- **Per-vertex columns are bridged.** Columns named `vertex_timestamps`,
-  `vertex_values`, or `vertex_value_matrix` populate the matching `ParsedFeature`
-  fields (shared `is_vertex_metadata_column` / `VERTEX_METADATA_COLUMNS`), so
-  LineString trajectories, per-vertex scalar coloring, and animated
-  static-geometry overviews all ingest and serve at full fidelity. Integer
-  vertex-timestamp arrays are raw ms (never reinterpreted via `--time-format`); a
-  NULL list element → `0` (timestamps) / `NaN` (values); a negative vertex
-  timestamp is a hard error (unsigned-epoch guard). These columns are excluded
-  from the property set.
-- A **NaN/Inf float property** becomes JSON `null` with the key retained
-  (`serde_json::json!(nan) == null`).
-- STT stores **unsigned** epoch-ms, so pre-1970 timestamps are rejected (shared
-  guard) — filter them in `--where`/`--sql`.
-
-The two DB readers are intentional **supersets** of the file reader on a few
-type shapes that have no GeoParquet-Float64 equivalent, so they only ever *add*
-properties a file build couldn't carry — never diverge on the same logical data.
-
-### PostGIS-specific
-
-- Column types are resolved **up front** from the PG type
-  (`int2`/`int4`/`int8`/float/`numeric`/bool/text/`timestamp[tz]`/`date`/
-  `json`/`jsonb`). `int2`, `numeric` (→ nearest-f64 via the decimal conversion
-  shared with DuckDB), `timestamp`/`timestamptz`/`date`-as-integer-ms, and
-  `json`/`jsonb` as nested JSON are the additive superset over the file reader.
-- Geometry bridges via `ST_AsEWKB` (SRID-prefixed EWKB), decoded by the same
-  `parse_wkb_geometry`.
-- Streaming uses a server-side `DECLARE … CURSOR` + `FETCH` loop, so memory is
-  bounded regardless of result size. Per-vertex array columns map from
-  `int8[]`/`int4[]`/`timestamp[]`/`timestamptz[]`/`date[]` (timestamps) and
-  `float8[]`/`float4[]` (values).
-- The reader is **NoTls** today (localhost / trusted-network).
-
-### DuckDB-specific
-
-- Rows decode from DuckDB's **self-describing `ValueRef`** (one tagged value per
-  cell), so — unlike PostGIS's up-front schema resolution — no per-type
-  introspection is needed. SQL `NULL` is `ValueRef::Null`; `DECIMAL` maps to a
-  nearest-f64 number (via the one decimal conversion shared with the PostGIS
-  `numeric` arm, so identical values agree across engines); unmappable types
-  (raw `GEOMETRY`, intervals, nested types) decode to `None` and are dropped
-  per row. Per-vertex arrays arrive as `Value::List`.
-- The **spatial extension** is a separate downloadable extension (not bundled,
-  not auto-loadable). The reader runs `INSTALL spatial; LOAD spatial;` on connect
-  (a one-time network fetch cached under `~/.duckdb`) and pins the session to
-  **UTC**.
-- **No `ST_SetSRID`.** DuckDB `GEOMETRY` carries no per-row SRID, so reprojection
-  passes the source CRS explicitly:
-  `ST_Transform(geom, 'EPSG:<srid>', 'EPSG:4326', always_xy => true)` (the
-  `always_xy` flag keeps 4326 output as lon/lat rather than authority lat/lon).
-- **Read-only file access.** A real `.duckdb` file opens read-only (never mutates
-  the user's data; works against a file another process holds). `:memory:` opens a
-  fresh in-memory database for external file scans via `--sql`.
-- The serve backend uses an `r2d2` connection pool (DuckDB `Connection` is `Send`
-  but `!Sync`).
-- A `NULL`/unparseable `--end-time-field` value yields `end_timestamp = None` (the
-  file reader coerces to `Some(0)` in `--warn` mode); keep end-times non-null for
-  strict parity.
+- **The DB readers are intentional supersets of the file reader**, only on
+  type shapes with no GeoParquet-Float64 equivalent (`int2`, `numeric`/DECIMAL
+  → nearest-f64, timestamp/date-as-integer-ms, `json`/`jsonb` as nested JSON).
+  They only ever *add* properties a file build couldn't carry — never diverge
+  on the same logical data. The decimal conversion is one shared function, so
+  identical values agree across engines.
+- **PostGIS resolves column types up front** from the PG type at statement
+  prepare; **DuckDB decodes from the self-describing `ValueRef`** (one tagged
+  value per cell, no per-type introspection). Unmappable DuckDB types decode
+  to `None` and are dropped per row — loudly, per lesson 3. PostGIS streams
+  via a server-side `DECLARE … CURSOR` + `FETCH` loop, so ingest memory is
+  bounded regardless of result size.
+- **DuckDB has no per-row SRID** (no `ST_SetSRID`), so reprojection passes the
+  source CRS explicitly:
+  `ST_Transform(geom, 'EPSG:<srid>', 'EPSG:4326', always_xy => true)` — the
+  `always_xy` flag keeps 4326 output as lon/lat rather than authority lat/lon.
+  The spatial extension is not bundled; the reader runs
+  `INSTALL spatial; LOAD spatial;` on connect (one-time network fetch cached
+  under `~/.duckdb`) and pins the session to UTC.
+- **Read-only file access.** A real `.duckdb` file opens read-only (never
+  mutates the user's data; works against a file another process holds);
+  `:memory:` opens a fresh in-memory database for external file scans via
+  `--sql`. The PostGIS reader is **NoTls** (localhost posture — see backlog).
+- STT stores **unsigned** epoch-ms, so pre-1970 timestamps are rejected by a
+  shared guard on every path — filter them in `--where`/`--sql`.
 
 ## 6. Benchmark (IBTrACS hurricanes)
 
@@ -264,8 +259,8 @@ was cross-checked (a served tile's feature count equals an independent DB
 non-empty).
 
 **Reading it:** generating a full STT tile live — bbox+time query → row/`ValueRef`
-decode → GeoArrow/Arrow-IPC encode → zstd — costs **~2 ms (PostGIS) / ~5 ms
-(DuckDB)** of pure compute at over a thousand tiles/sec on one laptop core-set.
+decode → Arrow-IPC encode → zstd — costs **~2 ms (PostGIS) / ~5 ms (DuckDB)** of
+pure compute at over a thousand tiles/sec on one laptop core-set.
 
 ### 6.3 When to use which
 
@@ -279,34 +274,105 @@ decode → GeoArrow/Arrow-IPC encode → zstd — costs **~2 ms (PostGIS) / ~5 m
   edge-cacheable (every tile is origin compute); a reverse-proxy cache in front
   recovers most of that for hot tiles.
 
-## 7. What's here
+## 7. Static vs DB — the architectural verdict (2026-07-05)
+
+Question investigated: is the packed format "rolling a custom DB", and would a
+DuckDB/PostGIS-backed serve path beat it on performance? (Benchmark data: §6.)
+
+The packed format **is** half a database — deliberately the read-only half:
+clustered `(zoom, hilbert, time)` index, zone-map page pruning, per-blob zstd,
+baked statistics, LOD. It skips the hard half (writes, concurrency, recovery,
+query planning). Same trade PMTiles/COPC/Parquet made; not NIH.
+
+**Raw single-node latency is a tie, not a static win**: warm dynamic PostGIS
+serves a tile in ~2–3 ms p50 vs ~1–3 ms for static files (~5 ms DuckDB, 87 ms
+p99). Static wins structurally, not on the hot path:
+
+1. **Fan-out economics.** `stt-serve` is correctly `no-store` (live source) —
+   every tile is origin compute forever. Packs are immutable + content-addressed
+   → CDN-cached indefinitely; only the manifest is mutable. Prior art is blunt:
+   under load the DB is always the bottleneck (Martin's own maintainer:
+   "PMTiles is always a much faster choice").
+2. **Scaling with data.** Dynamic cost ∝ rows-per-tile; low-zoom tiles are the
+   industry-documented pathological case, and the no-thinning principle makes
+   ours comprehensive. Static pays once at build (and DB *ingest* is as fast as
+   file ingest — 0.98×/0.66×).
+3. **The directory is the client's planner.** Byte-budgeted prefetch slices and
+   runway readiness run on per-tile byte lengths from the directory; a dynamic
+   server can't know tile sizes before generating them, and can't coalesce
+   ranges across tiles.
+
+Every "clever DB thing" (page cache, matviews-per-zoom, R-tree, Varnish in
+front) is a per-request reconstruction of what the build does once — and DuckDB
+serving is read-only multi-process anyway, i.e. an immutable snapshot.
+
+**Where the DB genuinely wins** — and why `stt-serve` stays: freshness
+(live/mutating tables), ad-hoc attribute predicates (the format has no attribute
+pushdown, whole-blob decode only), zero-build local exploration. The current
+split (DB = live tier + input source with byte-parity via the shared encoder;
+packed archive = published read-many default) is exactly the hybrid Felt /
+Wikimedia / OSM / CARTO converged on. The temporal directory has **no**
+off-the-shelf substitute — PMTiles has no time axis.
+
+## 8. Backlog — counted out, with revival triggers
+
+Everything scheduled from the original DB-path backlog has shipped:
+`EncoderConfig` threading, multi-dataset serve, integer-epoch serve filters,
+dropped-data accounting (all three readers), serve `--source-srid`, and the
+byte-determinism guard (closed by the arrow ≥59 upgrade; normative:
+[../spec/stt-packed-format.md](../spec/stt-packed-format.md) §7 D6). What
+remains is deliberately unscheduled:
+
+- **Packed-manifest facade for `stt-serve`** (`/manifest.json` + range-served
+  packs so the TS `ArchiveReader` can point at a live server) — counted out
+  2026-07-01: the dynamic `/metadata.json` descriptor and the packed manifest
+  serve different consumers. Revive when a client genuinely needs one reader
+  across both static and live sources.
+- **TLS for the PostGIS reader** — counted out: NoTls/localhost is the
+  documented posture (the error text says so); the deadpool/tokio-postgres
+  stack takes `postgres-native-tls` cleanly whenever a non-localhost
+  deployment actually appears.
+- **Serve-side cache: in-process LRU + `--immutable-source` ETag** — counted
+  out: an app cache needs a staleness policy the server can't infer (the
+  source is a LIVE table — cached tiles silently go stale on writes); the
+  documented answer stays "reverse proxy with an explicit TTL in front".
+  Revive with a user-supplied freshness contract (`--immutable-source`) —
+  e.g. the first static `.duckdb`/read-only snapshot with public traffic.
+- **Zoom-dependent short TTLs** (60 s low zoom / 5 s high — the Sourcepole
+  pattern) — revive if a genuinely live dataset ships publicly.
+- **`encode_single_cell` per-unit core for the summary tier / preprocessing
+  operators** (lesson 7 applied to analytics, enabling dynamic aggregated
+  serve) — counted out: sequenced behind the
+  [preprocessing-framework](./preprocessing-framework.md) Plan-IR, which would
+  reshape exactly this seam; building it now means building it twice. Revive
+  with that framework's Phase 1–2, or a concrete dynamic-analytics-serve ask.
+- **Retire the offline encoder globals entirely** — counted out: the offline
+  CLI's global setters are fine for a one-shot process (one archive = one
+  config); plumbing `EncoderConfig` through the config-agnostic
+  `TileWriter::write_tile` impls is cleanliness with no correctness payoff.
+  Revive if the offline builder ever needs multiple configs in one process.
+- **`stream_arrow` batch ingest for the DuckDB reader** — originally blocked on
+  the workspace arrow-version split; that trigger **fired** (arrow ≥59 landed
+  2026-07). Re-triaged 2026-07-07 against §6.1: the row-`ValueRef` API already
+  measured *faster* than the file baseline (0.66×), so no performance debt
+  forces the change. Stays parked unless profiling ever shows row decode as
+  the ingest bottleneck.
+
+Dropped outright (not parked): everything premised on `--streaming-arrow` (the
+flag was removed with the 2026-07 transcode-removal batch — moot), and
+GeoArrow input/output alignment (geoarrow was dropped from the workspace; the
+decision stands at WKB ingest / Arrow-IPC tiles).
+
+## 9. File map
 
 | Path | What |
 |---|---|
 | `crates/stt-build/src/postgres_input.rs` | PostGIS reader (feature `postgres`): streaming cursor, row→`ParsedFeature`, `build_tile_query`/`decode_rows` for the server |
 | `crates/stt-build/src/duckdb_input.rs` | DuckDB reader (feature `duckdb`): streaming `ValueRef` decode, `build_tile_query`/`build_metadata_query`/`decode_query` for the server |
-| `crates/stt-build/src/build_options.rs` | Shared flag→config parsing (`EncoderSettings`, duration/LOD/quantize/vector-group parsers, budget + attribute-filter builders) used by BOTH the CLI and `stt-serve` — one source of truth |
+| `crates/stt-build/src/db_input_common.rs` | Row-decode rules shared by both DB readers (decimal conversion, vertex-coercion accounting, time-format dispatch) — every rule lives once |
+| `crates/stt-build/src/build_options.rs` | Shared flag→config parsing (`EncoderSettings`, duration/LOD/quantize/vector-group parsers, budget + attribute-filter builders) used by BOTH the CLI and `stt-serve` |
 | `crates/stt-build/src/tiler.rs` `encode_single_tile_counted` | The reusable single-tile encoder (shared build_tile/encode_tile path; returns the placed-feature count) |
-| `crates/stt-serve` | axum dynamic tile server; PostGIS (deadpool) + DuckDB (`--duckdb`, r2d2) backends with full generation parity |
-| `crates/stt-build/tests/source_parity.rs` + `tests/common/mod.rs` | file ≡ DuckDB ≡ PostgreSQL parity suite (DuckDB in CI; Postgres gated on `STT_TEST_PG_DSN`) |
+| `crates/spatiotemporal-tiles/src/bin/stt-serve/` | axum dynamic tile server (moved from the former `crates/stt-serve`): PostGIS (deadpool) + DuckDB (r2d2) backends with full generation parity |
+| `crates/stt-build/tests/source_parity.rs` + `tests/common/mod.rs` | file ≡ DuckDB ≡ PostgreSQL parity suite (DuckDB in CI, bundled, no spatial extension; Postgres gated on `STT_TEST_PG_DSN`) |
 | `crates/stt-build/examples/duckdb_load_ibtracs.rs` | build the benchmark `hurricane.duckdb` + baseline Parquet from IBTrACS CSV (bundled engine) |
 | `scripts/postgis/*`, `scripts/duckdb/*` | setup / load / bench-ingest / bench-serve (DuckDB reuses the backend-agnostic PostGIS serve helpers) |
-
-## 8. Follow-ups
-
-The DB-path/encoder backlog is owned in one place —
-**[data-sources-and-encoder.md](./data-sources-and-encoder.md) §4** — and was
-fully triaged 2026-07-01. For orientation (statuses live there, not here):
-`EncoderConfig` threading, multi-dataset serve, the integer-epoch serve-filter,
-and dropped-data accounting (DB readers **and** now the file reader) are
-**SHIPPED**; the packed-manifest facade, TLS, in-process LRU, whole-dataset
-`--streaming-arrow` passes, and retiring the offline globals are **counted out**
-with recorded revival triggers; the byte-determinism guard is resolved-by-path
-(workspace arrow upgrade to ≥59, whose `metadata_to_fb` sorts metadata keys).
-
-DuckDB-specific ideas floated in earlier drafts but never scheduled —
-`stream_arrow` batch ingest (blocked on the same arrow-version split the upgrade
-fixes), shared-in-memory serve, RTREE index probing — are hereby **counted
-out**: the row API measured *faster* than the file baseline (0.66×), so no
-performance debt forces them. Revisit `stream_arrow` opportunistically after the
-arrow upgrade.

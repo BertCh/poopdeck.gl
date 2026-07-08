@@ -1,5 +1,5 @@
 import React from "react";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 
 /**
  * "The parts list" figure: the Rust crates that write archives and the npm

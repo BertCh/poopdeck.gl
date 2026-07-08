@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from "react";
-import { NavLink, Outlet, useOutletContext } from "react-router-dom";
+import { NavLink, Outlet, useOutletContext } from "react-router";
 import { docSections } from "./manifest";
 
 /** SiteChrome hands every page its shared scroll surface (#site-scroll). */

@@ -190,7 +190,7 @@ compression abstraction, Hilbert/temporal indexing, and metadata.
 The framework-free logic every renderer backend shares, exposed as tree-shakeable
 sub-paths so the four backends stay CONSISTENT by importing one copy instead of
 hand-maintaining forks (see
-[renderer-abstraction-2026-06.md](../roadmap/renderer-abstraction-2026-06.md)):
+[renderer-architecture.md](../roadmap/renderer-architecture.md)):
 - **`core/time-filter`** — the CPU time-filter alpha (window/wake/cumulative/trail),
   `relativizeTime` + the `MAX_RELATIVE_TIME_MS` f32 guard, `resolveTimeFilterParams`
   (full-width `timeWindow` ⇄ half-width vocabulary), and `DEFAULT_WAKE_TAIL_SCALE`.
@@ -245,7 +245,7 @@ scene/camera/projection (`core/geo`) + streaming; the basemap rides a separate
 camera-synced overlay canvas (TSL compiles only on `WebGPURenderer`, so it can't
 interleave into a WebGL context). Near-deck-parity layer catalog; defers GPU
 heatmap + live edge-bundling. See
-[three-renderer-parity.md](../roadmap/three-renderer-parity.md).
+[renderer-architecture.md](../roadmap/renderer-architecture.md).
 
 ### `@poopdeck.gl/maplibre`
 Same archive reader and tileset, rendered through MapLibre GL's

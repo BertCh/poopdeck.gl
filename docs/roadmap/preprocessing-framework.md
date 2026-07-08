@@ -15,10 +15,10 @@ model.*
 > everything labelled unbuilt (Plan-IR, Recipes, rung registry, ladder
 > descriptor, sufficient stats) is genuinely absent. Two updates to the Phase-0
 > prerequisite and the cheapest Phase-4 slice:
-> (1) **Determinism (§7.1/Phase 0) is half-closed with a verified path** — the
-> encoder is deterministic (sorted `BTreeMap`s + logical-fingerprint guards);
-> raw pack-byte identity waits on the workspace arrow upgrade (arrow-ipc ≥59
-> sorts IPC metadata) — owned by `data-sources-and-encoder.md` §4.
+> (1) **Determinism (§7.1/Phase 0) is FULLY CLOSED (2026-07-04)** — the
+> workspace arrow upgrade landed (arrow-ipc ≥59 sorts IPC metadata) and builds
+> are byte-reproducible (`same_tile_encodes_byte_identically` active); no fleet
+> re-transcode was needed — the transcode pipeline itself was removed 2026-07-04.
 > (2) **The summary tier stores `Mean` as a materialized column**
 > (`crates/stt-core/src/metadata.rs`) — exactly the avg-of-avgs trap §3.4 warns
 > about. Nothing re-aggregates cells client-side today, so it is not a live bug;
@@ -45,9 +45,9 @@ Three corollaries:
    primitives; dropping stays strictly opt-in. The strongest form is *lossless union*: a single baked
    ranking whose union over all levels reconstructs N exactly (the additive-octree).
 2. **Determinism is load-bearing.** Content-addressed packs only dedup, edge-cache, and incrementally
-   rebuild if identical logical input → identical bytes. The known non-reproducible-packs bug
-   (Arrow-metadata `HashMap` iteration order) silently breaks all three — **the prerequisite, fixed
-   first (§7).**
+   rebuild if identical logical input → identical bytes. The formerly-live non-reproducible-packs bug
+   (Arrow-metadata `HashMap` iteration order) silently broke all three — **the prerequisite, now
+   closed 2026-07-04 (§7).**
 3. **LOD changes the *resolution* of the answer; encoding changes the *price per unit*.**
    `--quantize-attr`, `--vector-group`, blob-ordering, `--quantize-coords` are bytes-per-unit
    multipliers, not LOD. They compose with LOD and never substitute for it — a clean seam that lets STT
@@ -143,7 +143,8 @@ cross-tile dedup, measured +61%). Full per-archetype operator ordering → Appen
 ### 2.7 Cross-archetype invariants the framework should own
 Today each operator re-hand-rolls these:
 1. **Determinism** (world-grid coord-quant; per-column-min affine; commutative reductions; pinned
-   constants; no RNG). Known systemic hole: arrow-ipc serializes Field metadata in `HashMap` order (§7).
+   constants; no RNG). The one systemic hole — arrow-ipc serializing Field metadata in `HashMap`
+   order — closed 2026-07-04 via arrow ≥59 (§7).
 2. **Quantize/aggregate before dedup, on a global grid** (per-tile-relative encoding is punished +61%).
 3. **Global-per-zoom, never per-tile** for any aggregation/bundling/clustering (tile-local subsets seam).
 4. **Conserve > discard** — lossy levers opt-in and default-inert; prefer a zoom clamp over aggregation.
@@ -413,11 +414,11 @@ the single-threaded per-tile stage (deterministic output order).
 This is what turns "a cleaner generator" into "**incremental fleet rebuilds + a shared cache**" — gated on
 fixing determinism first.
 
-**7.1 Determinism (the prerequisite).** The tile/pack hash must be a pure function of logical input only:
-never serialize a `HashMap`/`HashSet` (Rust re-seeds the hasher per process — **this is the direct fix for
-the Arrow-metadata non-reproducible-packs bug**: sort schema/field metadata by key before writing the IPC
-schema; the framework must be sequenced *after* the one-time fleet re-transcode that fixes the two
-`HashMap::new()` sites); sort filesystem enumerations; total per-tile sort keys (spatial → time → feature-id
+**7.1 Determinism (the prerequisite — closed 2026-07-04).** The tile/pack hash must be a pure function of
+logical input only: never serialize a `HashMap`/`HashSet` (Rust re-seeds the hasher per process — this was
+the Arrow-metadata non-reproducible-packs bug, **closed 2026-07-04** by the arrow ≥59 upgrade, which sorts
+IPC metadata; determinism landed via that upgrade and no fleet re-transcode was needed — transcoding was
+removed the same day); sort filesystem enumerations; total per-tile sort keys (spatial → time → feature-id
 → original-index); zero wall-clock in output (`SOURCE_DATE_EPOCH`-style config, never `SystemTime::now()`);
 order-independent float reduction (quantize-then-sum, or fixed sequential order — why RNG bake-off winners
 were not shipped); parallelize compute, not output order; regression-test by building twice in separate
@@ -428,9 +429,10 @@ keyed by `hash(content)` + a manifest of `{stage-key → input-fingerprint, outp
 key hashes input bytes + full config + tool version). Then memoized query DAG with cross-run persistence +
 **early cutoff** (after recomputing a leaf tile, if its content hash equals the previous build, don't
 invalidate its pack/directory) + **projection firewalls** (each tile depends only on its slice + the config
-fields it reads). Payoff: the recurring "fleet re-transcode + R2 re-sync" stops being all-or-nothing — the R2
-pack store *is* the CAS. Keep a `reoptimize` transcoder path (operate on existing packs, not re-ingest) for
-OSRM / live-API datasets that drift and can't be regenerated from source.
+fields it reads). Payoff: the recurring "fleet rebuild + R2 re-sync" stops being all-or-nothing — the R2
+pack store *is* the CAS. Transcoding was removed 2026-07-04; if a reoptimize transcoder path is ever
+reintroduced (operate on existing packs, not re-ingest), its use case is OSRM / live-API datasets that
+drift and can't be regenerated from source.
 
 ---
 
@@ -439,9 +441,9 @@ OSRM / live-API datasets that drift and can't be regenerated from source.
 The revised sequencing puts the **registry MVP before the recipe engine** (the adversarial review's main
 correction).
 
-0. **Determinism (blocking, first).** Sort Arrow metadata before IPC write; kill HashMap-order leaks; sort
-   FS enumerations; total sort keys; ordered float reduction; build-twice byte-identity test; sequence the
-   one-time fleet re-transcode. Unblocks CAS dedup, edge-cache correctness, and Phase 6.
+0. **Determinism — ✅ CLOSED 2026-07-04.** Landed via the arrow ≥59 upgrade (sorted IPC metadata) plus the
+   build-twice byte-identity test (`same_tile_encodes_byte_identically`); no fleet re-transcode was needed
+   (transcoding removed 2026-07-04). CAS dedup, edge-cache correctness, and Phase 6 are unblocked.
 1. **The rung registry + primitive consolidation (highest ROI).** Ship the shared registry (§6.1); retire
    the 4-place drift + regex gates + dual-copy palettes. Consolidate the σ planarity estimator and the
    real-representative voxel reducer (each reimplemented 3–4× in `av_common.py` + `lidar_summarize_eval.py`)
@@ -462,8 +464,8 @@ correction).
    expression language; port 2–3 datasets; keep the Rust escape hatch. Materialize-vs-filter stays
    hand-declared until sufficient-stats ship, then derived.
 6. **Incremental engine.** Salsa-style memoized query DAG; persist dep-graph + result manifest; CAS for
-   leaf tiles + packs (R2 as shared CAS); early cutoff + projection firewalls; diff-only R2 sync; keep
-   `reoptimize`.
+   leaf tiles + packs (R2 as shared CAS); early cutoff + projection firewalls; diff-only R2 sync;
+   reintroduce a `reoptimize` pack-transcode path only if a real need re-emerges (removed 2026-07-04).
 7. **Streaming-first.** Pull-based Arrow streaming as the default (in-RAM becomes the small-data case);
    unbounded-dataset support; `Source`-trait pushdown feeding the paged-directory bounds.
 
@@ -485,7 +487,8 @@ correction).
 
 ## 10. The things to take first
 
-1. **Fix determinism** (§7.1) — prerequisite for CAS/edge-cache/incremental; fixes a known live bug.
+1. ~~Fix determinism~~ (§7.1) — **✅ CLOSED 2026-07-04** (arrow ≥59, byte-reproducible builds); the
+   CAS/edge-cache/incremental prerequisite is met.
 2. **Ship the rung registry** (§6.1) — pure consolidation, zero new machinery, kills the 4-place drift +
    dual-copy palettes; the prerequisite for a zoom-driven ladder. *Highest-leverage, lowest-risk.*
 3. **Consolidate the σ estimator + voxel-real reducer** (§3.6) — one planarity operator + one reducer

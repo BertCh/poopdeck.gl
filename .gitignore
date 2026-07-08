@@ -8,11 +8,17 @@
 node_modules/
 dist/
 build/
+# React Router framework mode: generated route types (react-router typegen)
+.react-router/
 *.tsbuildinfo
 .npm/
 .yarn/
 .pnp.*
 .turbo/
+
+# Generated build artifact: the docs corpus bundled into @poopdeck.gl/mcp for
+# offline/npx use (written by packages/mcp/scripts/copy-docs.mjs at build time).
+/packages/mcp/docs/
 
 # Compiled TypeScript output (must not live next to .ts sources).
 # Patterns are **/-prefixed so they match packages/*/src, not just root src/.

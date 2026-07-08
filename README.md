@@ -8,6 +8,10 @@
 
 ---
 
+> **For AI coding agents:** start with [`AGENTS.md`](./AGENTS.md) — repo map,
+> the build→render pipeline, a routing table to the CLIs/packages/docs, and the
+> ground rules (no-thinning, the manifest is the contract, deck.gl pinned 9.3.x).
+
 ## What is STT?
 
 STT is a **cloud-native tile format** for spatiotemporal data. A dataset is a
@@ -231,7 +235,7 @@ Shared logic (time-filter, color, projection, geometry, picking, tileset glue,
 shader-alpha codegen) lives in a framework-free **render kernel** under
 `@poopdeck.gl/core` sub-paths; each backend is a thin adapter that publishes a
 capability `BackendDescriptor`. See
-[docs/roadmap/renderer-abstraction-2026-06.md](docs/roadmap/renderer-abstraction-2026-06.md)
+[docs/roadmap/renderer-architecture.md](docs/roadmap/renderer-architecture.md)
 for the design and [docs/spec/backend-capabilities.md](docs/spec/backend-capabilities.md)
 for the generated capability matrix.
 

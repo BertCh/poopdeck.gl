@@ -19,7 +19,7 @@
  * bottom edges respect the iOS safe-area insets.
  */
 import React, { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import type { TimeController } from "@poopdeck.gl/playback";
 import type { Dataset, ColorRGBA } from "../../types";
 import SceneSwitcher from "./SceneSwitcher";

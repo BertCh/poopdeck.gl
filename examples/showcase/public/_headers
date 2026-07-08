@@ -1,0 +1,14 @@
+# Cross-origin + content-type for the llmstxt.org AI-agent doc surface
+# (dist/llms.txt, dist/llms-full.txt, dist/llms/*). These files are generated
+# into dist/ by the emit-llms-docs plugin in vite.config.ts; this file is
+# copied into dist/ by the excludeUnusedPublicFiles plugin's public/ re-copy.
+# Serve them as plain UTF-8 text and allow any web-capable agent to fetch them.
+/llms.txt
+  Access-Control-Allow-Origin: *
+  Content-Type: text/plain; charset=utf-8
+/llms-full.txt
+  Access-Control-Allow-Origin: *
+  Content-Type: text/plain; charset=utf-8
+/llms/*
+  Access-Control-Allow-Origin: *
+  Content-Type: text/plain; charset=utf-8

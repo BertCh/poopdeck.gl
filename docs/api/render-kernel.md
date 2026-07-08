@@ -34,7 +34,7 @@ scans every file under `packages/core/src` and fails the build if it imports
 `three`, `@deck.gl/*`, `@luma.gl/*`, `maplibre-gl`, `mapbox-gl`, `cesium`, or
 `@react-three/*` — the enforcement mechanism that keeps this package
 renderer-agnostic. For the design rationale behind the kernel's boundaries,
-see [renderer-abstraction-2026-06.md](../roadmap/renderer-abstraction-2026-06.md);
+see [renderer-architecture.md](../roadmap/renderer-architecture.md);
 for what each backend claims to support on top of it, see
 [backend-capabilities.md](../spec/backend-capabilities.md).
 
@@ -603,7 +603,7 @@ import { expandCategoricalColors } from '@poopdeck.gl/core/style';
 ## See also
 
 - [System overview § `@poopdeck.gl/core` render kernel](../architecture/system-overview.md) — where this kernel sits relative to the reader half and each renderer backend.
-- [renderer-abstraction-2026-06.md](../roadmap/renderer-abstraction-2026-06.md) — the design rationale, fork axes, and consistency-enforcement tiers behind this kernel's boundaries.
+- [renderer-architecture.md](../roadmap/renderer-architecture.md) — the design rationale, fork axes, and consistency-enforcement tiers behind this kernel's boundaries.
 - [backend-capabilities.md](../spec/backend-capabilities.md) — the generated capability matrix (`core/capabilities-doc`'s output) across all four backends.
 - [TimeFilterExtension](./time-filter-extension.md) — deck.gl's consumer of `core/time-filter`'s relativization scheme.
 - [Binary Features](./binary-features.md) — the `BinaryFeatures` shape `core/style` and `core/geometry` operate on.

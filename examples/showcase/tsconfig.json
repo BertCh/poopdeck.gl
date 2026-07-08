@@ -14,9 +14,13 @@
     "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
-    "noFallthroughCasesInSwitch": true
+    "noFallthroughCasesInSwitch": true,
+    // React Router framework mode generates per-route types under
+    // .react-router/types (via `react-router typegen`); rootDirs makes the
+    // virtual `./+types/*` modules resolve alongside the source.
+    "rootDirs": [".", "./.react-router/types"]
   },
-  "include": ["src"],
+  "include": ["src", ".react-router/types/**/*"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }
 

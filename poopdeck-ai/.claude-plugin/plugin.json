@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin.json",
+  "name": "poopdeck-ai",
+  "version": "0.4.0",
+  "description": "AI-assisted suite for poopdeck.gl / SpatioTemporal Tiles. Bundles the @poopdeck.gl/mcp server (auto-registered via .mcp.json) and a set of Agent Skills covering the full toolchain: build a .stt from GeoParquet or a DB, generate the bundled reference datasets, tune/lint/export tiles for publishing, wire a deck.gl SpatioTemporalLayer, and debug blank renders.",
+  "author": {
+    "name": "Robert Christie",
+    "url": "https://github.com/BertCh/spatiotemporal-tiles"
+  },
+  "homepage": "https://poopdeck.gl",
+  "repository": "https://github.com/BertCh/spatiotemporal-tiles",
+  "license": "MIT",
+  "keywords": ["mcp", "agent-skills", "geospatial", "deck.gl", "spatiotemporal-tiles", "dataviz"]
+}

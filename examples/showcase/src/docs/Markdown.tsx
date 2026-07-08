@@ -2,7 +2,7 @@ import React from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeSlug from "rehype-slug";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { rewriteHref } from "./links";
 import CodeBlock from "./CodeBlock";
 import Mermaid from "./Mermaid";

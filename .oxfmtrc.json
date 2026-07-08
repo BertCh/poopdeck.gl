@@ -1,0 +1,25 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "printWidth": 80,
+  "tabWidth": 2,
+  "useTabs": false,
+  "semi": true,
+  "singleQuote": true,
+  "jsxSingleQuote": false,
+  "quoteProps": "as-needed",
+  "trailingComma": "all",
+  "bracketSpacing": true,
+  "bracketSameLine": false,
+  "arrowParens": "always",
+  "endOfLine": "lf",
+  "insertFinalNewline": true,
+  "ignorePatterns": [
+    "**/dist/**",
+    "**/build/**",
+    "**/.react-router/**",
+    "**/coverage/**",
+    "examples/showcase/public/data-publish/**",
+    "examples/showcase/public/data-v2/**",
+    "pnpm-lock.yaml"
+  ]
+}

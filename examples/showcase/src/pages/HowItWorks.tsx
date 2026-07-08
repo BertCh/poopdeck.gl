@@ -1,5 +1,5 @@
 import React from "react";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import PipelineFlow from "../components/how/PipelineFlow";
 import SpaceTimeDiagram from "../components/how/SpaceTimeDiagram";
 import CoverLookback from "../components/how/CoverLookback";

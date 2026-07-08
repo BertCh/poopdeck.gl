@@ -88,8 +88,9 @@ tests plus the F9 flag-documentation gates. Nothing on this audit remains schedu
 - **Wire tokens are frozen** by deployed R2 archives + the published spec: do **not** rename wire
   columns (`vertex_time`/`vertex_value`), the `.stt` suffix, or renumber compression bytes. Fix docs
   + in-memory names; add aliases only.
-- **`u64`→`i64`** on `TimeRange`/`TileId` is a breaking `stt-core` change — defer to semver-major or
-  keep the documented non-negative invariant; must not contradict the `Int64` payload columns.
+- **`u64`→`i64`** on `TimeRange`/`TileId` is a breaking `stt-core` change — counted out (Phase 5,
+  above): the documented non-negative invariant shipped instead; revisit only at a semver-major, and
+  it must not contradict the `Int64` payload columns.
 - **Don't delete** TS `Compression.Gzip`/`gunzipSync` — public API used by the bench harness;
   deprecate and keep the dormant decode path.
 - **`PlaybackControls.speedPresets`** is a distinct 5-button quick-pick — don't fold it into the

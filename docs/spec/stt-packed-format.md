@@ -811,8 +811,8 @@ carries its own `STTB` magic prelude from day one under either version.
 
 ### 9.3 Changelog
 
-- **v2 (2026-07)** — the coordinated byte break (design:
-  `docs/roadmap/stt-packed-v2-design-2026-07.md`; every wire-breaking change
+- **v2 (2026-07)** — the coordinated byte break (decision record:
+  `docs/roadmap/stt-packed-format-decisions.md` §4.2; every wire-breaking change
   batched into ONE version bump so content addresses churn once):
   `STTP`/`STTD` object magic with object-absolute blob offsets (§9.2);
   manifest-embedded schema templates (`schemas`, §3.2) killing the per-tile
@@ -1029,8 +1029,8 @@ silent overflow:
 > Status: **non-normative draft.** Implemented and shipped by `stt-bundle`
 > (see the [CLI reference](../api/cli-reference.md#stt-bundle)) and covered
 > by round-trip tests, but not yet frozen as a normative part of this spec.
-> It corresponds to §6 of the packed-v2 design
-> (`docs/roadmap/stt-packed-v2-design-2026-07.md`) and ships independently
+> It corresponds to the bundle profile decided in the packed-v2 campaign
+> (`docs/roadmap/stt-packed-format-decisions.md` §4.2) and ships independently
 > of any byte-breaking revision — it is a container *around* the packed
 > objects, not a change to them.
 

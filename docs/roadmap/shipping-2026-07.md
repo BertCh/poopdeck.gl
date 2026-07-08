@@ -1,8 +1,10 @@
 # Shipping & distribution — decision record (2026-07)
 
-Status: **EXECUTING** — hygiene + automation landed; first publishes pending.
-Owner of the publish backlog. Companion audits: `full-ecosystem-audit-2026-07.md`
-(release-story criticals), `naming-types-consistency-2026-06.md` (closed).
+Status: **SHIPPED** — 0.3.0 published to BOTH registries 2026-07-05 (7 npm packages;
+facade crate `spatiotemporal-tiles` with feature-gated bins); tree since
+bumped to 0.4.0. This doc is now the durable decision record for the distribution scheme.
+Companion audits: `full-ecosystem-audit-2026-07.md` (release-story criticals — resolved),
+`naming-types-consistency-2026-06.md` (closed).
 
 ## Distribution pathways (decided)
 
@@ -45,7 +47,8 @@ Owner of the publish backlog. Companion audits: `full-ecosystem-audit-2026-07.md
 
 ## Version/tag scheme
 
-- Everything lockstep at 0.1.0 (npm `fixed` group; `[workspace.package]`).
+- Everything lockstep (npm `fixed` group; `[workspace.package]`), currently 0.4.0; crate and npm
+  versions kept in lockstep with each other.
 - Rust tag: `v{version}` (release-plz creates on the facade; cargo-dist
   consumes). npm tags: changesets-style `@poopdeck.gl/pkg@x.y.z`. No overlap.
 - MSRV: `rust-version = 1.88` (empirically forced by `home`/`osmpbf`/
@@ -65,8 +68,11 @@ flips public.
 
 ## CI gates that keep publishability true
 
-- `smoke-pack` (typescript job + release-npm pre-publish): packs all 7
-  tarballs, scratch-installs with real peers, imports EVERY exports key under
+> These gates exist **as config only and are UNVERIFIED** — GitHub Actions is dead for this repo,
+> so the release automation is unproven end-to-end (the 0.3.0 publish ran manually).
+
+- `smoke-pack` (typescript job + release-npm pre-publish): packs every package
+  tarball, scratch-installs with real peers, imports EVERY exports key under
   plain Node, plus a deck-free core+playback+react install (HoverPreview
   regression).
 - `rust-package`: `cargo package --workspace --exclude stt-generate --locked`
@@ -90,23 +96,6 @@ flips public.
   custom-layer `render(gl, matrix)` signature (see
   `packages/maplibre/src/base-layer.ts`); port tracked separately.
 - Node 18 (EOL; engines `>=20`), apache-arrow stays a hard dep of core.
-
-## First-publish runbooks
-
-See the phase-5 section of the working plan; condensed:
-
-1. **npm**: verify `NPM_TOKEN` scope (granular, `@poopdeck.gl` + new
-   packages, write, bypass-2FA) → add as repo secret → merge to main →
-   `release-npm.yml` publishes all 7 (changesets publishes any
-   version missing from the registry, no changeset files needed for 0.1.0) →
-   verify `npm view` ×7 + registry-install smoke → trusted publishers + token
-   revoke + "2FA or automation" publish access.
-2. **crates.io**: `CARGO_REGISTRY_TOKEN="$CRATES_TOKEN"` then
-   `cargo publish --locked -p` in order: `stt-core` → `stt-optimize` →
-   `stt-build` → `spatiotemporal-tiles` (4 new crates fit the burst limit) →
-   trusted publishers + token revoke → `git tag v0.1.0 && git push origin
-   v0.1.0` → dist builds binaries → verify `cargo install spatiotemporal-tiles
-   --features cli --locked` in a clean env, docs.rs green, installer script.
 
 ## Known risks / fallbacks
 

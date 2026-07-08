@@ -1,5 +1,5 @@
 import React from "react";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { SourceLogo } from "./SourceLogo";
 import { VizBadge } from "./VizBadge";
 import type { CatalogEntry } from "../content/demoMeta";

@@ -7,14 +7,23 @@
   //   Build command:   pnpm exec turbo run build --filter=@poopdeck.gl/showcase
   //   Root directory:  /            (keep at repo root so pnpm installs the workspace)
   //
-  // "directory" is resolved relative to this file → examples/showcase/dist.
+  // "directory" is resolved relative to this file → examples/showcase/build/client
+  // (React Router framework mode emits the SPA + prerendered static HTML there).
   // NOTE: must match the Worker the Git integration created (named after the
   // repo), otherwise `wrangler deploy` targets a different worker and nothing
   // serves. The public site is poopdeck.gl regardless of this internal name.
   "name": "spatiotemporal-tiles",
   "compatibility_date": "2025-06-01",
+  // Worker-with-assets: prerendered static HTML is served directly (assets are
+  // matched before the Worker); the Worker (worker.js) runs only on an asset
+  // MISS and serves React Router's generic SPA shell (__spa-fallback.html) for
+  // the client-only fullscreen routes + unknown paths. `index.html` is the
+  // prerendered HOME, so it must NOT double as the SPA fallback — hence a
+  // Worker instead of not_found_handling:"single-page-application".
+  "main": "worker.js",
   "assets": {
-    "directory": "./dist",
-    "not_found_handling": "single-page-application"
+    "directory": "./build/client",
+    "binding": "ASSETS",
+    "not_found_handling": "none"
   }
 }
