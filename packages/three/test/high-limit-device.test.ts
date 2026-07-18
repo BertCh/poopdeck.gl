@@ -48,6 +48,10 @@ describe('createHighLimitDevice', () => {
     expect(device.requested.requiredLimits).toEqual({
       maxBufferSize: ADAPTER_LIMITS.maxBufferSize,
       maxStorageBufferBindingSize: ADAPTER_LIMITS.maxStorageBufferBindingSize,
+      // The high-limit device now also raises the texture-dimension cap to the
+      // adapter maximum (so flow-corridor value textures aren't rejected on
+      // large networks) — see createHighLimitDevice / flow-corridor-layer.
+      maxTextureDimension2D: ADAPTER_LIMITS.maxTextureDimension2D,
     });
   });
 

@@ -96,6 +96,22 @@ export interface _SpatioTemporalLayerProps {
    */
   timeWindow?: number;
 
+  /**
+   * Widen the window used to SELECT tiles, without widening the window used to
+   * RENDER features. Unset (or <= `timeWindow`) means the two are the same.
+   *
+   * The visible-tile set is refreshed at most once per 100 ms of wall clock, so
+   * the tiles it selects have to still contain the playhead 100 ms of sim time
+   * later. Datasets whose `timeWindow` is a single animation frame (a baked
+   * frame sequence) must set this to a few hundred milliseconds or they render
+   * nothing for most of playback — the playhead leaves the selected tiles before
+   * the next refresh. Extra resident tiles are cheap: TimeFilterExtension still
+   * discards every feature outside `timeWindow`, per feature, not per tile.
+   *
+   * @default 0 (use `timeWindow`)
+   */
+  tileLoadTimeWindow?: number;
+
   /** Full time range of the dataset. */
   timeRange?: { start: number; end: number } | null;
 
@@ -333,6 +349,7 @@ const defaultProps: DefaultProps<SpatioTemporalLayerProps> = {
   // Temporal properties
   currentTime: 0,
   timeWindow: 86_400_000, // 1 day
+  tileLoadTimeWindow: 0, // 0 = follow timeWindow
   timeRange: { type: 'object', value: null, optional: true, compare: true },
   timeController: {
     type: 'object',
@@ -600,19 +617,9 @@ export class SpatioTemporalLayer<
 
   finalizeState(context: LayerContext): void {
     this._finalized = true;
-    // Cancel any pending coalesced tile-load update.
-    if (this._tileLoadRafId !== null) {
-      if (typeof cancelAnimationFrame === 'function') {
-        cancelAnimationFrame(this._tileLoadRafId);
-      } else {
-        clearTimeout(
-          this._tileLoadRafId as unknown as ReturnType<typeof setTimeout>,
-        );
-      }
-      this._tileLoadRafId = null;
-    }
-    // Cancel any pending trailing viewport reselection.
-    this._clearViewportSettle();
+    // Cancel the pending coalesced tile-load rAF and trailing viewport-settle
+    // timer — both capture/target the tileset being torn down.
+    this._cancelPendingUpdates();
 
     // Unsubscribe from the controller we actually subscribed to (resolved from
     // prop or context.userData), not the prop alone.
@@ -740,9 +747,11 @@ export class SpatioTemporalLayer<
     // Always update internal time tracking (no setState overhead)
     this._currentTime = time;
 
-    // Check if we need to update the tileset (throttled). `timeWindow` is
-    // `Required<>`-typed: the default guarantees a value here.
-    const timeWindow = this.props.timeWindow;
+    // Check if we need to update the tileset (throttled). Use the LOAD window,
+    // not the render window: what matters here is how much of the timeline the
+    // selected tiles cover, which must outlast MIN_TILESET_UPDATE_WALL_MS of
+    // playhead travel. See getEffectiveTimeWindow().
+    const timeWindow = this.getEffectiveTimeWindow();
     const timeDelta = Math.abs(time - this._lastTilesetUpdateTime);
     const updateThreshold = timeWindow / 20; // Update tileset when 5% of time window has passed
     // Wall-clock ceiling: never refresh the tileset more than ~10×/sec from the
@@ -1087,14 +1096,48 @@ export class SpatioTemporalLayer<
   }
 
   /**
+   * Cancel the pending coalesced tile-load rAF and the trailing viewport-settle
+   * timer. Both capture / target the CURRENT tileset, so they must be dropped
+   * on a data/source switch (before the old tileset is finalized in
+   * `_initArchiveAndTileset`) and on teardown (`finalizeState`) — otherwise the
+   * deferred callback fires against the finalized old tileset.
+   */
+  private _cancelPendingUpdates(): void {
+    if (this._tileLoadRafId !== null) {
+      if (typeof cancelAnimationFrame === 'function') {
+        cancelAnimationFrame(this._tileLoadRafId);
+      } else {
+        clearTimeout(
+          this._tileLoadRafId as unknown as ReturnType<typeof setTimeout>,
+        );
+      }
+      this._tileLoadRafId = null;
+    }
+    this._clearViewportSettle();
+  }
+
+  /**
    * Get the effective time window for tile loading.
    * Subclasses can override this to account for trail rendering, etc.
    *
    * For trail rendering, the time window should be at least 2x the trail length
    * to ensure tiles containing trail data are loaded.
+   *
+   * `tileLoadTimeWindow` decouples this from the RENDER window. The visible-tile
+   * set is the tiles overlapping `currentTime ± thisWindow/2`, and it is refreshed
+   * at most once per `MIN_TILESET_UPDATE_WALL_MS` (100 ms). A dataset whose render
+   * window is narrower than the playhead's travel between two refreshes (at 1×,
+   * 100 ms of sim) would select tiles it has already left by the next frame, and
+   * the layer draws nothing. Frame-sequence archives are exactly that case: a
+   * 66 ms window over 66 ms frames. Widening the LOAD window keeps a few buckets
+   * resident; the render window still picks one frame out of them, because
+   * TimeFilterExtension filters per feature, not per tile.
    */
   protected getEffectiveTimeWindow(): number {
-    return this.props.timeWindow;
+    const load = this.props.tileLoadTimeWindow;
+    return load && load > 0
+      ? Math.max(load, this.props.timeWindow)
+      : this.props.timeWindow;
   }
 
   private async _initArchiveAndTileset(): Promise<void> {
@@ -1108,6 +1151,10 @@ export class SpatioTemporalLayer<
     const previousTileset = this.state.tileset;
     const previousArchive = this.state.archive;
     if (previousTileset) {
+      // Drop any pending tile-load rAF / viewport-settle timer that captured
+      // the previous tileset before we finalize it — otherwise they fire
+      // against the dead tileset after the source switch.
+      this._cancelPendingUpdates();
       previousTileset.finalize();
     }
     if (previousArchive) {

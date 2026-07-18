@@ -139,11 +139,24 @@ export class CesiumTripsLayer implements SttRenderNode {
     scene.primitives.add(this.collection);
   }
 
+  /**
+   * Destroy every owned trail material and drop the map. Cesium `Material`s own
+   * GPU textures/uniforms that `PolylineCollection.removeAll()` does NOT release
+   * (the collection only owns its polylines, not their externally-supplied
+   * materials), so they must be destroyed explicitly or they leak on rebuild.
+   */
+  private destroyMaterials(): void {
+    for (const material of this.materials.values()) {
+      if (defined(material) && !material.isDestroyed()) material.destroy();
+    }
+    this.materials.clear();
+  }
+
   /** (Re)build the trip index from decoded tiles (replace-all). */
   setTiles(tiles: Tile[]): void {
     this.collection.removeAll();
     this.entries = [];
-    this.materials.clear();
+    this.destroyMaterials();
 
     // Scene-wide time origin = first LineString layer's timeOffset (the same
     // convention as every other layer in this package).
@@ -248,6 +261,6 @@ export class CesiumTripsLayer implements SttRenderNode {
   dispose(): void {
     this.scene.primitives.remove(this.collection);
     this.entries = [];
-    this.materials.clear();
+    this.destroyMaterials();
   }
 }

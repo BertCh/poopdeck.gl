@@ -138,9 +138,7 @@ function decodePng(buffer: Buffer): {
  * `variance` is luminance variance; `uniqueColors` counts distinct RGB values;
  * `nonBackground` is the fraction of pixels far from the showcase background.
  */
-export async function canvasPixelStats(
-  page: Page,
-): Promise<{
+export async function canvasPixelStats(page: Page): Promise<{
   variance: number;
   uniqueColors: number;
   nonBackground: number;

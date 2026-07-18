@@ -1,5 +1,15 @@
+import { resolvePlaybackParams } from '@poopdeck.gl/playback';
+
 export type DatasetType =
   | 'point'
+  /**
+   * Phong-lit 3D point cloud (`AnimatedPointCloudLayer`). Each feature is a lit
+   * point that animates on/off as the time window sweeps. Build the archive with
+   * `stt-build --point-elevation-column z` (true 3D geometry) and
+   * `--vector-group point_rgba=r,g,b,a:u8` (per-point colour bound zero-copy,
+   * which takes precedence over `color`/`colorMapping`).
+   */
+  | 'point-cloud'
   | 'path'
   | 'trips'
   /**
@@ -9,6 +19,15 @@ export type DatasetType =
    */
   | 'trip-heads'
   | 'heatmap'
+  /**
+   * GLM lightning render from ONE flash-point archive, drawn as TWO stacked
+   * layers: a live strike-DENSITY field (`AnimatedHeatmapLayer`) as the glowing
+   * backdrop, plus individual FLASHES (`AnimatedPointLayer`) on top, each
+   * appearing bright then fading + shrinking over `wakeLength` sim-ms so
+   * instantaneous strikes read as a shimmering flicker on the compressed clock.
+   * Build the archive with `python glm_lightning.py` (GOES-16 GLM L2 LCFA).
+   */
+  | 'lightning'
   | 'polygon'
   /**
    * Server-aggregated summary tier (H3 hex bins). Renders summary tiles via
@@ -69,7 +88,17 @@ export type DatasetType =
    * `avTelemetryUrl` / `avCamerasUrl` sidecars for chrome, gauges, and the camera
    * inset. Built by the `av_synthetic.py` / `nuscenes_extract.py` adapters.
    */
-  | 'av';
+  | 'av'
+  /**
+   * Composite WEATHER-SUITE render on one playhead. Stacks (bottom→top): HRRR
+   * wind streamlines (`AnimatedTripsLayer`, from `windUrl`); the MRMS precip
+   * FIELD (`AnimatedPolygonLayer`, categorical `dbz_band`) — the primary `url`
+   * and REQUIRED governor source; precip cell tracks + centroids (from
+   * `radarTracksUrl`/`radarCellsUrl`); and GLM lightning as a density field +
+   * flashes (from `lightningUrl`). Built by glm_lightning.py + mrms_weather.py +
+   * hrrr_advect.py.
+   */
+  | 'weather';
 
 export interface DatasetLegendItem {
   color: string;
@@ -146,6 +175,15 @@ export interface Dataset {
     end: number;
   };
   timeWindow: number;
+  /**
+   * Widen the tile-SELECTION window without widening the render window. Needed by
+   * baked frame-sequence archives, whose `timeWindow` is one frame long: the
+   * tileset refreshes its visible set at most every 100 ms of wall clock, so a
+   * one-frame selection is already stale by the next refresh and the layer draws
+   * nothing. A few hundred ms keeps several buckets resident; the render window
+   * still shows exactly one frame, because features are filtered individually.
+   */
+  tileLoadTimeWindow?: number;
   /** Target duration in seconds for one complete playthrough at 1x speed (default: 30) */
   targetPlaybackSeconds?: number;
   initialViewState: {
@@ -179,6 +217,21 @@ export interface Dataset {
    * without touching the others.
    */
   basemapStyle?: string;
+  /**
+   * Drop the basemap entirely and render the data over a flat backdrop
+   * (`backdropColor`). For scenes that are geographically anchored but not
+   * geographically *readable* — a 140 m ship in open water sits inside a single
+   * z14 tile, so the basemap contributes nothing but empty ocean. The AV cockpit
+   * has always had this via `avLocalFrame`; this is the same idea for the
+   * ordinary DemoViewer path.
+   */
+  hideBasemap?: boolean;
+  /**
+   * CSS `background` value behind the deck canvas when `hideBasemap` is set.
+   * Any valid `background` — a flat colour, or a layered gradient painting a sky
+   * (the ship demo uses a storm-sky gradient in place of a flat void).
+   */
+  backdropColor?: string;
   /**
    * Hide every label on the basemap (place titles, road/POI text) by switching
    * all `symbol` layers to `visibility: none` on map load. Keeps roads, water,
@@ -278,6 +331,38 @@ export interface Dataset {
    */
   fadeInDuration?: number;
 
+  /**
+   * Fade-out duration in SIM milliseconds for disappearing points. Both fades
+   * default to 300 sim-ms in the layers; a dataset whose `timeWindow` is only a
+   * frame or two wide (e.g. `point-cloud` playback at 30 fps) must zero them,
+   * or every point stays lit long past its window and the frames smear together.
+   */
+  fadeOutDuration?: number;
+
+  // ─── type: 'point-cloud' ───────────────────────────────────────────────
+  /** Radius of every point in `pointSizeUnits`. Defaults to the layer's 10. */
+  pointSize?: number;
+
+  /** Units for `pointSize`. Defaults to the layer's `'pixels'`. */
+  pointSizeUnits?: 'meters' | 'pixels' | 'common';
+
+  /**
+   * Phong lighting for the lit points: `true` for the default material, `false`
+   * to render them unlit. An archive that bakes its own shaded colours into
+   * `point_rgba` usually wants `false`, so lighting isn't applied twice.
+   */
+  pointMaterial?: boolean;
+
+  /**
+   * Render through `PainterlyExtension`: the tile's `point_rgba` is read as
+   * `(class_id, paint_seed, 0, 255)` rather than a colour, and the palette,
+   * lighting, fog and point size are computed in the shader from the baked
+   * surface normal. Requires an archive built with `to_geoparquet.py
+   * --style-in-rgba` and a `normal` vector column. Implies `pointMaterial:false`
+   * — the extension does its own lighting.
+   */
+  painterly?: boolean;
+
   /** Render a stroke around each point. */
   stroked?: boolean;
 
@@ -358,6 +443,16 @@ export interface Dataset {
    * (the matrix drives the animation, not a trailing fade).
    */
   flowMatrix?: boolean;
+  /**
+   * `flowMatrix`: TRAILING persistence window (ms of data time). Each vertex
+   * holds the MAX of its matrix signal over `[t − flowPersistenceMs, t]`
+   * instead of the instantaneous bucket blend. The generators bin a trip's
+   * whole route into its START bucket, so without this a corridor's highlight
+   * fades one bucket after departure while the moving-heads overlay is still
+   * riding it — set to the typical trip DURATION so highlight and riders stay
+   * in sync. @default 0 (off)
+   */
+  flowPersistenceMs?: number;
   /**
    * Render this `type: 'trips'` dataset with {@link FlowStrokeLayer} (a
    * {@link FlowCorridorLayer} subclass). Like `flowMatrix` the corridor geometry
@@ -498,6 +593,32 @@ export interface Dataset {
   /** Polygon fill color — constant RGBA or `colorProperty` for categorical fill. */
   polygonFillColor?: ColorRGBA;
 
+  // ─── rain→flood composite (type: 'polygon' + a river overlay) ──────────
+  /**
+   * Optional river-discharge FLOW-MATRIX archive painted ON TOP of the primary
+   * precip-isoband polygon field (the rain→flood demo: rainfall drives the
+   * rivers). A `FlowCorridorLayer` overlay, styled by `riversConfig`, registered
+   * as an OPTIONAL governor source so the lighter rain field gates the clock
+   * while the heavy river archive streams continue-and-degrade — same split as
+   * the radar/av overlays. Rewritten through `resolveDataUrl` alongside `url` so
+   * an R2 deploy resolves it.
+   */
+  riversUrl?: string;
+  /** Styling for the `riversUrl` flow-matrix overlay (see `tripGradient`). */
+  riversConfig?: {
+    tripGradient: {
+      property: string;
+      domain: [number, number];
+      colors: number[][];
+    };
+    /** Bed color for NaN / out-of-range vertices. */
+    colorMappingDefault?: ColorRGBA;
+    /** Per-feature width — numeric property name (e.g. `'width'`) or constant. */
+    tripWidth?: string | number;
+    widthMinPixels?: number;
+    widthMaxPixels?: number;
+  };
+
   // ─── radar composite styling (type: 'radar') ───────────────────────────
   /**
    * Storm-cell CENTROID points manifest (sized/colored by `max_dbz`). The
@@ -510,6 +631,26 @@ export interface Dataset {
   radarTracksUrl?: string;
   /** Solid fill for storm-cell centroids. Defaults to near-white. */
   radarCellColor?: ColorRGBA;
+
+  // ─── weather-suite composite styling (type: 'weather') ─────────────────
+  /**
+   * Wind streamline ribbons manifest (`AnimatedTripsLayer`, per-vertex speed),
+   * from hrrr_advect.py. Rewritten through `resolveDataUrl` alongside `url`.
+   */
+  windUrl?: string;
+  /**
+   * GLM lightning flash-point manifest, rendered as BOTH a density heatmap and
+   * flash points (the `type: 'lightning'` pair) within the composite. Rewritten
+   * through `resolveDataUrl`. The composite reuses `radarCellsUrl`/
+   * `radarTracksUrl` for the precip cells/tracks and `url` for the precip field.
+   */
+  lightningUrl?: string;
+  /** Wind streamline speed gradient (m/s). Falls back to a default ramp. */
+  windGradient?: {
+    property: string;
+    domain: [number, number];
+    colors: ColorRGBA[];
+  };
 
   // ─── AV cockpit composite styling (type: 'av') ─────────────────────────
   /**
@@ -956,10 +1097,18 @@ export interface SummaryToggleOption {
  * the buffered runway and stalls honestly when loading falls behind.)
  */
 export function calculateAnimationSpeed(dataset: Dataset): number {
-  const timeRangeDuration = dataset.timeRange.end - dataset.timeRange.start;
-  const targetSeconds = dataset.targetPlaybackSeconds ?? 30;
-  const targetMs = targetSeconds * 1000;
-  return timeRangeDuration / targetMs;
+  // Delegates to the ONE shared formula in @poopdeck.gl/playback
+  // (resolvePlaybackParams: baseSpeed = span / targetPlaybackSeconds / 1000),
+  // so the showcase, buildDemoLayers' prefetch budget, and external
+  // integrators all resolve identically. No archive metadata is threaded here
+  // — the hand-authored timeRange + targetPlaybackSeconds are passed as the
+  // overrides, and the resolver's default target is 30, byte-identical to the
+  // historical `?? 30` for every real value (it additionally guards a
+  // non-positive target from producing an infinite speed).
+  return resolvePlaybackParams(undefined, {
+    targetPlaybackSeconds: dataset.targetPlaybackSeconds,
+    timeRange: dataset.timeRange,
+  }).baseSpeed;
 }
 
 /**

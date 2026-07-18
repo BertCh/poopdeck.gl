@@ -58,6 +58,34 @@ interface GpuLike {
 }
 
 /**
+ * Device-level GPU capabilities the WebGPU path resolves at device creation and
+ * layers read when building textures. Defaults are the conservative, always-safe
+ * choices (no float32 linear filtering; the WebGPU spec-default 8192 texture
+ * dimension), so a layer that runs before {@link createHighLimitDevice} — or on
+ * the WebGL2 fallback, where we can't cheaply prove the feature — degrades
+ * gracefully instead of erroring.
+ */
+export interface DeviceCapabilities {
+  /** `true` when float32 textures can be sampled with `LinearFilter`
+   *  (the WebGPU `float32-filterable` feature). */
+  float32Filterable: boolean;
+  /** The device's `maxTextureDimension2D` — the hard ceiling on a DataTexture's
+   *  width/height. */
+  maxTextureDimension2D: number;
+}
+
+const deviceCapabilities: DeviceCapabilities = {
+  float32Filterable: false,
+  maxTextureDimension2D: 8192,
+};
+
+/** Read the capabilities the active WebGPU device reported (safe defaults until
+ *  {@link createHighLimitDevice} runs). */
+export function getDeviceCapabilities(): Readonly<DeviceCapabilities> {
+  return deviceCapabilities;
+}
+
+/**
  * Pre-create a `GPUDevice` whose buffer-size ceilings are raised to the
  * adapter maximum, returning it (or `undefined` when WebGPU is unavailable /
  * the request fails — callers then fall through to Three's own adapter →
@@ -83,16 +111,44 @@ export async function createHighLimitDevice(
       : undefined;
   if (!gpu) return undefined;
   try {
-    const adapter = await gpu.requestAdapter({
-      powerPreference,
-      featureLevel: 'compatibility',
-    });
+    // No `featureLevel: 'compatibility'` — compatibility mode CAPS the adapter's
+    // limits and features below default, which directly contradicts this
+    // function's raise-the-limits purpose (and would drop `float32-filterable`).
+    const adapter = await gpu.requestAdapter({ powerPreference });
     if (!adapter) return undefined;
-    const { maxBufferSize, maxStorageBufferBindingSize } = adapter.limits;
+    const features = [...adapter.features];
+    const {
+      maxBufferSize,
+      maxStorageBufferBindingSize,
+      maxTextureDimension2D,
+    } = adapter.limits;
+    // Raise the texture-dimension ceiling too (clamped to what the adapter
+    // reports) so large resident networks fit before we have to clamp them.
+    const requiredLimits: Record<string, number> = {
+      maxBufferSize,
+      maxStorageBufferBindingSize,
+    };
+    if (typeof maxTextureDimension2D === 'number') {
+      requiredLimits.maxTextureDimension2D = maxTextureDimension2D;
+    }
     const device = await adapter.requestDevice({
-      requiredFeatures: [...adapter.features],
-      requiredLimits: { maxBufferSize, maxStorageBufferBindingSize },
+      // Requesting every adapter feature already includes `float32-filterable`
+      // when the adapter supports it, so linear-filtered float textures are safe.
+      requiredFeatures: features,
+      requiredLimits,
     });
+    // Publish the granted capabilities for layers that build float DataTextures.
+    const grantedLimits = (device as { limits?: Record<string, number> })
+      ?.limits;
+    const grantedDim = grantedLimits?.maxTextureDimension2D;
+    deviceCapabilities.float32Filterable =
+      features.includes('float32-filterable');
+    deviceCapabilities.maxTextureDimension2D =
+      typeof grantedDim === 'number'
+        ? grantedDim
+        : typeof maxTextureDimension2D === 'number'
+          ? maxTextureDimension2D
+          : deviceCapabilities.maxTextureDimension2D;
     // One-line proof the high-limit device took effect — the default cap is
     // 256 MB, so anything above that means dense LIDAR buffers will fit.
     const granted = (

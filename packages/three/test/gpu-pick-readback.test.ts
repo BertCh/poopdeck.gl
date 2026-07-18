@@ -60,6 +60,7 @@ function pixelsWithCenter(
 
 interface HarnessOptions {
   dpr?: number;
+  canvasWidth?: number;
   canvasHeight?: number;
   pixels: Uint8Array;
   /** Add the optional clear-colour save/restore methods. */
@@ -71,6 +72,7 @@ const SAVED_ALPHA = 0.5;
 
 function makeHarness(opts: HarnessOptions) {
   const dpr = opts.dpr ?? 1;
+  const canvasWidth = opts.canvasWidth ?? 100;
   const canvasHeight = opts.canvasHeight ?? 100;
 
   const state = {
@@ -88,12 +90,26 @@ function makeHarness(opts: HarnessOptions) {
       color: unknown;
       alpha: number | undefined;
     }>,
+    // Captured `Camera.setViewOffset(fullW, fullH, offX, offY, w, h)` args — the
+    // seam that maps a cursor position to the pick target's sub-region.
+    viewOffsetArgs: null as null | {
+      fullW: number;
+      fullH: number;
+      offX: number;
+      offY: number;
+      w: number;
+      h: number;
+    },
+    viewOffsetCleared: false,
   };
 
   let currentTarget: unknown = null;
 
   const renderer: PickRenderer = {
-    domElement: { height: canvasHeight } as unknown as HTMLCanvasElement,
+    domElement: {
+      width: canvasWidth,
+      height: canvasHeight,
+    } as unknown as HTMLCanvasElement,
     getPixelRatio: () => dpr,
     getRenderTarget: () => currentTarget,
     setRenderTarget: (t: unknown) => {
@@ -146,7 +162,28 @@ function makeHarness(opts: HarnessOptions) {
     }
   } as unknown as RenderTargetCtor;
 
-  return { renderer, TargetCtor, state };
+  // Fake camera exposing the `setViewOffset` / `clearViewOffset` seam the picker
+  // uses to steer the tiny target at the cursor's sub-region.
+  const camera = {
+    setViewOffset: (
+      fullW: number,
+      fullH: number,
+      offX: number,
+      offY: number,
+      w: number,
+      h: number,
+    ) => {
+      state.log.push('setViewOffset');
+      state.viewOffsetArgs = { fullW, fullH, offX, offY, w, h };
+      state.viewOffsetCleared = false;
+    },
+    clearViewOffset: () => {
+      state.log.push('clearViewOffset');
+      state.viewOffsetCleared = true;
+    },
+  };
+
+  return { renderer, TargetCtor, camera, state };
 }
 
 describe('GpuPicker readback: pixel -> id resolution', () => {
@@ -240,30 +277,100 @@ describe('GpuPicker readback: plumbing (regression for the fixed real-readback b
     expect(h.state.readbackArgs?.target).toBe(h.state.createdTargets[0]);
   });
 
-  it('reads back the cursor pixel with a bottom-left Y-flip at dpr=1', async () => {
+  it('reads back from origin (0,0) — always in target bounds — and steers the frustum via setViewOffset at the cursor', async () => {
     const h = makeHarness({
       dpr: 1,
+      canvasWidth: 160,
       canvasHeight: 100,
       pixels: pixelsWithCenter(1, encodeId(1)),
     });
-    await new GpuPicker(h.renderer, h.TargetCtor).pick({}, {}, 20, 30, {
+    await new GpuPicker(h.renderer, h.TargetCtor).pick({}, h.camera, 20, 30, {
       featureCount: 10,
     });
-    // px = floor(20*1) = 20; pyTop = 30; py = 100 - 1 - 30 = 69.
-    expect(h.state.readbackArgs).toMatchObject({ x: 20, y: 69, w: 1, h: 1 });
+    // The readback origin is (0,0) for the whole size×size target — NOT the raw
+    // cursor device coords (which would blow past a 1×1 target's bounds). The
+    // cursor is placed in the frustum via setViewOffset instead.
+    expect(h.state.readbackArgs).toMatchObject({ x: 0, y: 0, w: 1, h: 1 });
+    // Read origin within [0, size): the pre-fix bug read at full-canvas coords.
+    expect(h.state.readbackArgs!.x).toBeGreaterThanOrEqual(0);
+    expect(h.state.readbackArgs!.x).toBeLessThan(1);
+    expect(h.state.readbackArgs!.y).toBeGreaterThanOrEqual(0);
+    expect(h.state.readbackArgs!.y).toBeLessThan(1);
+    // setViewOffset(fullW=canvas.width, fullH=canvas.height, offX=cursorX,
+    // offY=cursorY, size, size). For a 1×1 target half=0 so the offset IS the
+    // cursor device pixel (top-left origin, no Y-flip). dpr=1: cursor=(20,30).
+    expect(h.state.viewOffsetArgs).toEqual({
+      fullW: 160,
+      fullH: 100,
+      offX: 20,
+      offY: 30,
+      w: 1,
+      h: 1,
+    });
+    expect(h.state.viewOffsetCleared).toBe(true);
   });
 
-  it('scales the cursor coords by device-pixel-ratio', async () => {
+  it('scales the cursor sub-region offset by device-pixel-ratio', async () => {
     const h = makeHarness({
       dpr: 2,
+      canvasWidth: 320,
       canvasHeight: 200,
       pixels: pixelsWithCenter(1, encodeId(1)),
     });
-    await new GpuPicker(h.renderer, h.TargetCtor).pick({}, {}, 20, 30, {
+    await new GpuPicker(h.renderer, h.TargetCtor).pick({}, h.camera, 20, 30, {
       featureCount: 10,
     });
-    // px = floor(20*2) = 40; pyTop = floor(30*2) = 60; py = 200 - 1 - 60 = 139.
-    expect(h.state.readbackArgs).toMatchObject({ x: 40, y: 139, w: 1, h: 1 });
+    // Full drawing buffer = canvas.width/height (already device px); cursor =
+    // css * dpr = (40, 60). Readback stays at the in-bounds origin.
+    expect(h.state.readbackArgs).toMatchObject({ x: 0, y: 0, w: 1, h: 1 });
+    expect(h.state.viewOffsetArgs).toEqual({
+      fullW: 320,
+      fullH: 200,
+      offX: 40,
+      offY: 60,
+      w: 1,
+      h: 1,
+    });
+  });
+
+  it('centres a multi-pixel sub-region on the cursor and keeps the readback origin in bounds', async () => {
+    const size = 3;
+    const h = makeHarness({
+      dpr: 1,
+      canvasWidth: 200,
+      canvasHeight: 200,
+      pixels: pixelsWithCenter(size, encodeId(1)),
+    });
+    await new GpuPicker(h.renderer, h.TargetCtor, size).pick(
+      {},
+      h.camera,
+      50,
+      50,
+      { featureCount: 10 },
+    );
+    // half = (3-1)/2 = 1, so the size×size window's top-left is cursor - 1, which
+    // puts the cursor on the CENTRE texel (the pixel the decode samples).
+    expect(h.state.viewOffsetArgs).toEqual({
+      fullW: 200,
+      fullH: 200,
+      offX: 49,
+      offY: 49,
+      w: size,
+      h: size,
+    });
+    // Reads the FULL target from (0,0); origin + extent stay within [0, size].
+    expect(h.state.readbackArgs).toMatchObject({
+      x: 0,
+      y: 0,
+      w: size,
+      h: size,
+    });
+    expect(
+      h.state.readbackArgs!.x + h.state.readbackArgs!.w,
+    ).toBeLessThanOrEqual(size);
+    expect(
+      h.state.readbackArgs!.y + h.state.readbackArgs!.h,
+    ).toBeLessThanOrEqual(size);
   });
 
   it('restores render target + clear colour SYNCHRONOUSLY, before the async readback yields', async () => {
@@ -272,25 +379,30 @@ describe('GpuPicker readback: plumbing (regression for the fixed real-readback b
       withClearColor: true,
     });
     const picker = new GpuPicker(h.renderer, h.TargetCtor);
-    const result = await picker.pick({}, {}, 5, 5, {
+    const result = await picker.pick({}, h.camera, 5, 5, {
       featureCount: 10,
       onBeforeRender: () => h.state.log.push('onBefore'),
       onAfterRender: () => h.state.log.push('onAfter'),
     });
     expect(result).toBe(3);
-    // The readback ('readback') is LAST: the target + clear-colour restore and
-    // onAfterRender all run in the synchronous `finally`, before the await.
+    // The readback ('readback') is LAST: the view-offset + target + clear-colour
+    // restore and onAfterRender all run in the synchronous `finally`, before the
+    // await. clearViewOffset MUST precede the readback so the live camera isn't
+    // left with the pick offset applied if a concurrent render fires.
     expect(h.state.log).toEqual([
       'getClearColor',
       'setClearColor:16777215', // SENTINEL_CLEAR = 0xffffff
       'onBefore',
+      'setViewOffset', // frustum steered onto the cursor sub-region
       'setRenderTarget:pickTarget',
       'render',
       'setRenderTarget:null', // prevTarget restored (was null)
+      'clearViewOffset', // view offset cleared before the await
       'setClearColor:saved', // saved clear colour restored
       'onAfter',
       'readback',
     ]);
+    expect(h.state.viewOffsetCleared).toBe(true);
     // The saved alpha (0.5), not the sentinel's 1, is what gets restored.
     expect(h.state.setClearColorCalls[0]).toEqual({
       color: 0xffffff,

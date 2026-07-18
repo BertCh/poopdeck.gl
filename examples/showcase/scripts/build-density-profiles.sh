@@ -31,6 +31,7 @@ label_for() {
     drifters) echo "Ocean drifters" ;;
     nyc-rideshare) echo "NYC rideshare" ;;
     gtfs-nl) echo "GTFS transit (NL)" ;;
+    gtfs-ch) echo "GTFS transit (CH)" ;;
     flights) echo "Global flights" ;;
     *) echo "$1" ;;
   esac

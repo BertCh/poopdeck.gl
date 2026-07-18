@@ -90,6 +90,21 @@ const PREFETCH_UNKNOWN_TILE_BYTES = 64 * 1024;
  */
 const PREFETCH_LOOKAHEAD_REAL_MS = 8000;
 /**
+ * Hard ceiling on the prefetch horizon, expressed in temporal buckets. At very
+ * fast playback the horizon terms below balloon in SIM time — a full year in
+ * 120 s runs at ~2.6e5 sim-ms per real-ms, so `windowAhead` (prefetchAhead ×
+ * prefetchSteps) reaches ~60 days and even the `speed × LOOKAHEAD` term reaches
+ * ~24 days. Each prefetch pass then walks the directory over that whole slice
+ * and sorts ~1-2k candidate tile ids ON THE MAIN THREAD, ~twice per second, per
+ * tileset — a documented FPS sink (see the enumerate-every-bucket note below).
+ * Bounding the horizon to a fixed bucket count keeps enough runway to feed the
+ * buffer gate (which needs only a few dozen buckets buffered ahead) while
+ * capping the per-pass walk+sort. Only fast demos hit it; normal-speed playback
+ * stays well under the cap, and the resident-window SELECTION (not prefetch)
+ * still loads cumulative "draw-and-persist" datasets in full.
+ */
+const MAX_PREFETCH_BUCKETS = 64;
+/**
  * Re-issue the wide prefetch only after the play head has consumed this fraction
  * of the previously prefetched span. Keeps the debounced scheduler from
  * re-coalescing the same chunk ~4×/second; the wide load then happens roughly
@@ -1725,10 +1740,20 @@ export class SpatiotemporalTileset {
     const speed = Math.abs(this.animationSpeed); // sim-ms per real-ms
     const windowAhead =
       (prefetchAhead > 0 ? prefetchAhead : timeWindow) * prefetchSteps;
-    const effectiveAhead = Math.max(
+    let effectiveAhead = Math.max(
       windowAhead,
       speed * PREFETCH_LOOKAHEAD_REAL_MS,
     );
+    // Bound the horizon to a fixed bucket count (see MAX_PREFETCH_BUCKETS) so a
+    // fast playback can't inflate it to tens of days — which would make each
+    // pass walk+sort the directory over that whole slice on the main thread.
+    const bucketMs = this.options.temporalBucketMs;
+    if (bucketMs > 0) {
+      effectiveAhead = Math.min(
+        effectiveAhead,
+        MAX_PREFETCH_BUCKETS * bucketMs,
+      );
+    }
     const prefetchEndTime = time + direction * effectiveAhead;
 
     // Throttle on the remaining prefetched "runway": skip the wide load while the

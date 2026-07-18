@@ -184,7 +184,9 @@ export interface _AnimatedPointLayerProps {
    * it, the contiguous u8 buffer is bound to `getFillColor` **zero-copy** — no
    * per-point re-interleave on the main thread (the GPU-ready analogue of
    * {@link rgbColorColumns}). Takes precedence over every other colour path.
-   * Ignored if the column is absent from the tile. @default 'point_rgba'
+   * Ignored if the column is absent from the tile. Opt-in on the base layer
+   * (a truthy default would shadow an explicit `fillColor`); the point-cloud
+   * subclass defaults it to `'point_rgba'`. @default null
    */
   colorVectorColumn?: string | null;
 
@@ -303,9 +305,13 @@ export interface _AnimatedPointLayerProps {
    * `wakeTailScale` × head radius. Takes precedence over the symmetric
    * window/fadeIn/fadeOut filter inherited from TimeFilterExtension.
    *
-   * The caller must ensure `timeWindow >= 2 × wakeLength` so the tile
-   * loader actually fetches the past half of the wake — the shader filter
-   * is independent of the tile-loading window.
+   * The tile loader must span at least `2 × wakeLength` so the past half of
+   * the wake stays resident (the shader filter is independent of the loading
+   * window). This is now ENFORCED by the layer — `getEffectiveTimeWindow()`
+   * returns `max(timeWindow, 2 × wakeLength)` in wake mode — so a caller that
+   * leaves `timeWindow` too narrow no longer sees the wake's tail pop in and
+   * out as tiles evict. Passing `timeWindow >= 2 × wakeLength` yourself is a
+   * harmless no-op.
    */
   wakeLength?: number;
 
@@ -319,8 +325,12 @@ export interface _AnimatedPointLayerProps {
    * Cumulative ("draw and persist") mode — see TimeFilterExtension. When true,
    * each point appears at its `startTime` and stays visible for the rest of
    * playback (the map "draws itself"). `fadeInDuration` doubles as the appear
-   * ramp. The caller must widen the tile loader's window so revealed tiles stay
-   * resident (the shader does the progressive reveal, not the loader).
+   * ramp. Revealed tiles must stay resident (the shader does the progressive
+   * reveal, not the loader). When `timeRange` is set, the layer ENFORCES this:
+   * `getEffectiveTimeWindow()` widens to `max(timeWindow, 2 × span)` so the
+   * symmetric loader window always covers the full [start, end] span from any
+   * play-head position. Without a `timeRange` the span is unknown, so the
+   * caller's `timeWindow` is honored as-is (widen it yourself).
    * @default false
    */
   cumulative?: boolean;
@@ -536,12 +546,25 @@ function makeTileKey(tile: Tile, layer: TileLayer): string {
  * CategoryColorExtension samples the palette texture in the fragment shader.
  *
  * `indices` arrive as Uint16Array (4096 categories max); the extension reads
- * them as float32. We do a narrowing copy here rather than running a shader
- * permutation per integer type.
+ * them as float32. This is a plain narrowing copy, but it also redirects NULL
+ * (`0xffff` sentinel) and out-of-range (unmapped) category indices onto a
+ * trailing default palette slot at index `paletteLen`. The caller appends
+ * `colorMappingDefault` there, so unmapped features render the default color
+ * instead of clamping onto the LAST real palette entry (the fragment shader
+ * clamps `vCategoryIndex` to `paletteSize - 1`, which — with the default
+ * appended — IS the default slot). Matches the CPU `colorMapping` path's
+ * fallback behavior.
  */
-function indicesToFloat32(indices: Uint16Array, count: number): Float32Array {
+function indicesToFloat32WithDefault(
+  indices: Uint16Array,
+  count: number,
+  paletteLen: number,
+): Float32Array {
   const out = new Float32Array(count);
-  for (let i = 0; i < count; i++) out[i] = indices[i];
+  for (let i = 0; i < count; i++) {
+    const idx = indices[i];
+    out[i] = idx < paletteLen ? idx : paletteLen;
+  }
   return out;
 }
 
@@ -608,9 +631,14 @@ export class AnimatedPointLayer<
       optional: true,
       compare: true,
     },
+    // Opt-in on the BASE layer (null default): a truthy default column name is
+    // checked before `fillColor` in buildTileData, so it would silently shadow
+    // an explicit fillColor whenever a tile happened to carry that column. The
+    // point-cloud subclass — whose whole purpose is baked RGBA — overrides this
+    // back to 'point_rgba' in its own defaultProps.
     colorVectorColumn: {
       type: 'object',
-      value: 'point_rgba',
+      value: null,
       optional: true,
       compare: true,
     },
@@ -893,6 +921,52 @@ export class AnimatedPointLayer<
     ].join('|');
   }
 
+  /**
+   * Enforce the loader-window invariant IN THE LAYER so callers can't get it
+   * wrong. The GPU time filter (wake trail / cumulative reveal) is independent
+   * of the tile-loading window: when the loader window is narrower than what
+   * the filter draws, the trailing half of a wake — or an already-revealed
+   * cumulative bucket — pops in and out as tiles evict.
+   *
+   *   - Common case (`wakeLength` 0/undefined, not cumulative): returns
+   *     `this.props.timeWindow` UNCHANGED — byte-identical to the base, so the
+   *     ordinary point demos see no behavior change.
+   *   - Wake mode (`wakeLength > 0`): a point stays lit for `wakeLength` of sim
+   *     time AFTER its `startTime`, so the play head trails the wake's tail by
+   *     up to `wakeLength`. Widen to `max(timeWindow, 2 × wakeLength)` — the
+   *     past half of the symmetric `[t − w/2, t + w/2]` loader window then
+   *     always spans the whole wake. Mirrors AnimatedTripsLayer's
+   *     `2 × trailLength`.
+   *   - Cumulative mode: every played-through bucket must stay resident (the
+   *     shader does the progressive reveal, not the loader). When `timeRange`
+   *     is known, widen so the symmetric window covers the full [start, end]
+   *     span from any play-head position: `max(timeWindow, 2 × span)` — the
+   *     same 2× duration `buildDemoLayers` applied by hand. Without a
+   *     `timeRange` the span is unknown, so the caller's window is honored
+   *     as-is (never shrunk).
+   */
+  protected getEffectiveTimeWindow(): number {
+    // `Required<>`-typed: defaultProps guarantees numbers/booleans here.
+    let widened = this.props.timeWindow;
+
+    // Wake trail: point lit for `wakeLength` after its start ⇒ the past half of
+    // the window must cover the whole wake (parity with trips' 2×trailLength).
+    const wakeLength = this.props.wakeLength;
+    if (wakeLength > 0) {
+      widened = Math.max(widened, wakeLength * 2);
+    }
+
+    // Cumulative reveal: keep every played-through bucket resident. With a
+    // known timeRange the symmetric window must span the full drawn range from
+    // any play-head position (matches buildDemoLayers' 2× duration).
+    if (this.props.cumulative && this.props.timeRange) {
+      const span = this.props.timeRange.end - this.props.timeRange.start;
+      if (span > 0) widened = Math.max(widened, span * 2);
+    }
+
+    return widened;
+  }
+
   renderLayers(): Layer[] {
     // Cumulative "draws itself" datasets use a consolidated, append-only path:
     // packing points into a few slabs instead of one sublayer per resident
@@ -1014,13 +1088,21 @@ export class AnimatedPointLayer<
     // must re-prepare tiles (and, via the new preparedKey, rebuild sublayers —
     // covering the unset↔set toggle that adds/removes DataFilterExtension).
     const filterProp = this.filterPropertyValue() ?? '';
+    // colorMappingDefault is baked into the CPU-expanded RGBA buffers (the
+    // colorMapping fallback, the numeric-mapping fallback) AND selects the GPU
+    // categorical NULL/unmapped palette slot, so a change in isolation must
+    // invalidate the prepared tile — otherwise a stale cache keeps old fallback
+    // colors.
+    const mapDefault = (this.props.colorMappingDefault ?? [0, 0, 0, 0]).join(
+      ',',
+    );
     return `${colorVecKey}|${fillColorProp}|${radiusProp}|${lineWidthProp}|${
       fillColorProp
         ? colorListDigest(this.props.colorPalette ?? DEFAULT_PALETTE)
         : 0
     }|${mapping ? `m${colorMappingDigest(mapping)}` : 'g'}|${
       transform ? `r${functionId(transform)}` : ''
-    }|e${elevProp}:${elevScale}|${rgbKey}|f${filterProp}|${updateTriggersDigest(this.props.updateTriggers)}`;
+    }|e${elevProp}:${elevScale}|${rgbKey}|f${filterProp}|d${mapDefault}|${updateTriggersDigest(this.props.updateTriggers)}`;
   }
 
   /**
@@ -1187,11 +1269,21 @@ export class AnimatedPointLayer<
           };
         } else {
           // GPU branch: hand category indices to the CategoryColorExtension.
+          // Append colorMappingDefault as a trailing palette slot so NULL
+          // (0xffff sentinel) / unmapped-category features render the default
+          // color instead of clamping onto the last real palette entry —
+          // matching the CPU colorMapping path's fallback.
+          const defaultColor =
+            this.props.colorMappingDefault ?? ([0, 0, 0, 0] as Color);
           attributes.instanceCategoryIndex = {
-            value: indicesToFloat32(cat.indices, count),
+            value: indicesToFloat32WithDefault(
+              cat.indices,
+              count,
+              palette.length,
+            ),
             size: 1,
           };
-          gpuPalette = palette;
+          gpuPalette = [...palette, defaultColor];
         }
       } else if (num && this.props.colorMapping) {
         // Numeric column + mapping: stringify lookup (rare).

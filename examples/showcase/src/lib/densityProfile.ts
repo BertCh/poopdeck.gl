@@ -53,9 +53,16 @@ export const PROFILE_IDS = PROFILE_META.map((p) => p.id);
  * `/data/` in the manifest url. Datasets that share an archive (e.g. the taxi
  * cube reuses nyc-rideshare) therefore share a profile, which is correct: the
  * density is a property of the archive. Returns null for non-local urls.
+ *
+ * Only flat archives (`/data/<id>/manifest.json`) have a density sidecar. AV
+ * scenes are nested one level deeper (`/data/<id>/lidar/manifest.json`) and emit
+ * NO density profile, so the trailing `[^/]+$` (matching the manifest filename
+ * directly under `<id>`) rejects those urls and returns null — otherwise the
+ * "Under the hood" panel would fetch `/density/<id>.json`, 404, and throw on
+ * every AV demo detail page. Returning null makes UnderTheHood render nothing.
  */
 export function profileIdFromUrl(url: string): string | null {
-  const m = url.match(/\/data\/([^/]+)\//);
+  const m = url.match(/\/data\/([^/]+)\/[^/]+$/);
   return m ? m[1] : null;
 }
 

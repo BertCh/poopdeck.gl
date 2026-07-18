@@ -20,6 +20,8 @@
     "**/.react-router/**",
     "**/coverage/**",
     "**/public/**",
+    "**/test/fixtures/**",
+    "**/tests/fixtures/**",
     "pnpm-lock.yaml"
   ]
 }

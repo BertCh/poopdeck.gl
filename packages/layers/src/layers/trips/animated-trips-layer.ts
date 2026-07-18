@@ -370,6 +370,51 @@ function expandFeatureWidths(
   return out;
 }
 
+// ── Per-tile geometry-derived attribute caches ──────────────────────────────
+// `synthesizeVertexTimes` and the static-`width` expansion are pure functions
+// of a tile's decoded `binary` features (positions + per-feature start/end/
+// width) — they do NOT depend on the play head. But FlowCorridorLayer /
+// FlowStrokeLayer fold the playback sub-step into the per-tile `styleKey`
+// (`gradientStyleSuffix` → `:fp{step}`), so `prepareTile` re-runs ~6×/second
+// during playback and, before this cache, re-ran BOTH of these O(totalVerts)
+// loops every time — synthesizeVertexTimes (a haversine over every vertex) was
+// the single largest per-sub-step CPU cost in the rivers+rain composite.
+// Keying by the `binary` object identity (stable for a loaded tile, GC'd on
+// unload) computes each exactly once per tile-load and reuses it across every
+// sub-step re-prepare. The cached arrays are read-only after construction, so
+// sharing them is pixel-identical to recomputing.
+const vertexTimeMemo = new WeakMap<BinaryFeatures, Float32Array>();
+function synthesizeVertexTimesMemo(binary: BinaryFeatures): Float32Array {
+  let cached = vertexTimeMemo.get(binary);
+  if (!cached) {
+    cached = synthesizeVertexTimes(binary);
+    vertexTimeMemo.set(binary, cached);
+  }
+  return cached;
+}
+
+const staticWidthMemo = new WeakMap<
+  BinaryFeatures,
+  { prop: string; value: Float32Array }
+>();
+function expandFeatureWidthsMemo(
+  binary: BinaryFeatures,
+  widthProp: string,
+  values: ArrayLike<number>,
+  totalVerts: number,
+): Float32Array {
+  const cached = staticWidthMemo.get(binary);
+  if (cached && cached.prop === widthProp) return cached.value;
+  const value = expandFeatureWidths(
+    values,
+    binary.startIndices!,
+    binary.featureCount,
+    totalVerts,
+  );
+  staticWidthMemo.set(binary, { prop: widthProp, value });
+  return value;
+}
+
 /**
  * Map a per-vertex scalar array through a color ramp to one RGBA per vertex,
  * so PathLayer shades each line *along its length* (its tessellator carries
@@ -864,11 +909,18 @@ export class AnimatedTripsLayer<
             : ''
         }`
       : '';
+    // colorMappingDefault is baked into the CPU-expanded per-vertex RGBA
+    // buffers (categorical fallback + gradient fallback), so a change in
+    // isolation must invalidate the prepared tile — otherwise the cache keeps
+    // old fallback colors.
+    const mapDefault = (
+      this.props.colorMappingDefault ?? [120, 120, 120, 255]
+    ).join(',');
     const styleKey = `${colorProp}|${widthProp}|${
       colorProp
         ? colorListDigest(this.props.colorPalette ?? DEFAULT_PALETTE)
         : 0
-    }|${mapSig}|${gradSig}${this.gradientStyleSuffix(binary)}|${updateTriggersDigest(
+    }|${mapSig}|${gradSig}${this.gradientStyleSuffix(binary)}|d${mapDefault}|${updateTriggersDigest(
       this.props.updateTriggers,
     )}`;
 
@@ -905,7 +957,9 @@ export class AnimatedTripsLayer<
         : binary.vertexTimestamps &&
             binary.vertexTimestamps.length >= totalVerts
           ? binary.vertexTimestamps
-          : synthesizeVertexTimes(binary);
+          : // Static per-vertex times: memoized per tile so the haversine loop
+            // runs once per tile-load, not on every playback sub-step re-prepare.
+            synthesizeVertexTimesMemo(binary);
 
     const attributes: PreparedTile['data']['attributes'] = {
       // PathLayer's positions attribute — keyed by ACCESSOR NAME `getPath`.
@@ -994,12 +1048,9 @@ export class AnimatedTripsLayer<
       const values = binary.numericProps[widthProp];
       if (values) {
         attributes.getWidth = {
-          value: expandFeatureWidths(
-            values,
-            binary.startIndices,
-            binary.featureCount,
-            totalVerts,
-          ),
+          // Static per-feature width: memoized per tile (same rationale as the
+          // vertex-time cache) so a sub-step re-prepare reuses the splat.
+          value: expandFeatureWidthsMemo(binary, widthProp, values, totalVerts),
           size: 1,
         };
       }

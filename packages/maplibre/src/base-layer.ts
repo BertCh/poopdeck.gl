@@ -552,6 +552,10 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
     this.loadedTiles.clear();
     this.tileset?.finalize();
     this.archive.finalize();
+    // Clear the map handle LAST so an in-flight `initTileset` (awaiting
+    // archive.getMetadata) short-circuits at its post-await `if (!this.map)`
+    // guard instead of building a tileset on a removed layer.
+    this.map = undefined;
   }
 
   private deleteCacheBuffers(
@@ -1250,6 +1254,16 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
         }
       },
     });
+
+    // Re-check for a removal that raced the build: if onRemove ran, its
+    // `this.tileset?.finalize()` saw no tileset yet, so finalize the one we
+    // just built and skip onTilesetReady — handing the governor a source that
+    // can never render would strand it.
+    if (!this.map) {
+      this.tileset.finalize();
+      this.tileset = undefined;
+      return;
+    }
 
     // Hand the live tileset to the app exactly once per init. The tileset
     // implements the BufferSource readiness contract (runway / cost / ETA

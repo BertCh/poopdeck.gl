@@ -106,6 +106,15 @@ export interface TimeRange {
 export interface DatasetSummary {
   /** POSIX-style path relative to `--data-root`; the `name` param every other tool takes. */
   name: string;
+  /**
+   * The archive's OWN `metadata.name` (the human label baked at build time via
+   * `stt-build --name`), when set. Distinct from {@link name}, which is the
+   * data-root-relative identifier every tool addresses the dataset by — for a
+   * dataset described by its own directory (e.g. a fresh `build_dataset` output,
+   * addressed as `.`), the relative `name` is `""`, so this is the only place
+   * the baked name surfaces. Omitted when the manifest carries no name.
+   */
+  metadataName?: string;
   /** Absolute filesystem path to the dataset directory. */
   path: string;
   format: string;
@@ -280,6 +289,7 @@ function summarize(
   const m = manifest.metadata ?? {};
   return {
     name: toPosixRelative(dataRoot, datasetDir),
+    metadataName: m.name || undefined,
     path: datasetDir,
     format: manifest.format,
     formatVersion: manifest.formatVersion,

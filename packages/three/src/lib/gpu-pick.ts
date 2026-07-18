@@ -144,9 +144,15 @@ export class GpuPicker {
    *
    * The pass clears to a {@link SENTINEL_CLEAR} background (see the field doc) so
    * an empty pixel resolves to a miss rather than feature 0; the previous
-   * clear-colour is restored (even on throw). We render the full frame into the
-   * target and read the cursor pixel — simpler than `Camera.setViewOffset` and
-   * adequate for a small (≤ few px) target.
+   * clear-colour is restored (even on throw).
+   *
+   * We do NOT render the whole frame into the tiny target (that collapses the
+   * full frustum into `size×size` pixels and leaves the cursor unresolved).
+   * Instead `Camera.setViewOffset(fullW, fullH, offX, offY, size, size)` offsets
+   * the frustum so the target shows only the `size×size` window centred on the
+   * cursor; the readback origin is therefore always `(0,0)` (in-bounds), and the
+   * cursor lands on the target's centre texel. `clearViewOffset()` is restored in
+   * the same synchronous `finally` as the render target + clear colour.
    */
   async pick(
     scene: any,
@@ -159,15 +165,22 @@ export class GpuPicker {
     const target = this.ensureTarget();
     const dpr = renderer.getPixelRatio();
     const canvas = renderer.domElement;
+    const size = this.size;
 
-    // CSS → device pixels, flipping Y (GL/WebGPU read origin is bottom-left).
-    const px = Math.floor(cssX * dpr);
-    const pyTop = Math.floor(cssY * dpr);
-    const py = Math.floor(canvas.height) - 1 - pyTop;
+    // Full drawing-buffer dimensions (device px) and the cursor within them, in
+    // `setViewOffset`'s top-left-origin coordinate frame (no Y-flip: the offset
+    // camera + full-target readback already put the cursor at the centre texel).
+    const fullW = Math.max(1, Math.floor(canvas.width));
+    const fullH = Math.max(1, Math.floor(canvas.height));
+    const cursorX = cssX * dpr;
+    const cursorY = cssY * dpr;
 
-    const half = (this.size - 1) / 2;
-    const readX = Math.max(0, Math.round(px - half));
-    const readY = Math.max(0, Math.round(py - half));
+    // Sub-region top-left. Near a canvas edge this may go negative / off-canvas
+    // (rendered as the sentinel background); that's fine — the readback origin
+    // stays (0,0) and only the cursor's centre texel is decoded.
+    const half = (size - 1) / 2;
+    const offX = cursorX - half;
+    const offY = cursorY - half;
 
     const prevTarget = renderer.getRenderTarget?.() ?? null;
     // Save + swap the clear colour so the id pass's background is the sentinel,
@@ -178,34 +191,37 @@ export class GpuPicker {
     const savedAlpha = renderer.getClearAlpha ? renderer.getClearAlpha() : 1;
     renderer.setClearColor?.(SENTINEL_CLEAR, 1);
 
-    // Render the id pass, then restore the render target + clear colour
-    // SYNCHRONOUSLY — before the async readback yields. Otherwise a concurrent
-    // render (e.g. the r3f RenderPump's per-rAF `advance()`) could fire during
-    // the `await` gap and draw the main scene into this 1×1 pick target. The
-    // readback takes `target` explicitly, so it stays correct after the restore.
+    // Render the id pass, then restore the view offset + render target + clear
+    // colour SYNCHRONOUSLY — before the async readback yields. Otherwise a
+    // concurrent render (e.g. the r3f RenderPump's per-rAF `advance()`) could
+    // fire during the `await` gap and draw the main scene into this pick target,
+    // or leave the view offset applied on the live camera. The readback takes
+    // `target` explicitly, so it stays correct after the restore.
     try {
       opts.onBeforeRender?.();
+      camera.setViewOffset?.(fullW, fullH, offX, offY, size, size);
       renderer.setRenderTarget(target);
       renderer.render(scene, camera);
     } finally {
       renderer.setRenderTarget(prevTarget);
+      camera.clearViewOffset?.();
       if (savedColor !== null) renderer.setClearColor?.(savedColor, savedAlpha);
       opts.onAfterRender?.();
     }
     // The unified renderer RETURNS the pixels (no output-buffer arg); consume the
-    // resolved TypedArray.
+    // resolved TypedArray. Read the whole target from origin (0,0) — the offset
+    // camera already positioned the cursor at the centre texel.
     const pixels = await renderer.readRenderTargetPixelsAsync(
       target,
-      readX,
-      readY,
-      this.size,
-      this.size,
+      0,
+      0,
+      size,
+      size,
     );
 
     // Sample the centre texel of the read square (RGBA8, one byte per channel).
     const data = pixels as unknown as Uint8Array;
-    const ci =
-      (Math.floor(this.size / 2) * this.size + Math.floor(this.size / 2)) * 4;
+    const ci = (Math.floor(size / 2) * size + Math.floor(size / 2)) * 4;
     const index = decodeId([data[ci], data[ci + 1], data[ci + 2]]);
 
     const featureCount = opts.featureCount;

@@ -1,7 +1,10 @@
 {
   "format": "stt-packed",
   "formatVersion": 2,
-  "capabilities": ["attr-quant", "coord-quant"],
+  "capabilities": [
+    "attr-quant",
+    "coord-quant"
+  ],
   "schemas": [
     {
       "hash": "4fdd0912192736cdb7a024f3a376f43b",
@@ -48,7 +51,9 @@
     "max_zoom": 5,
     "tile_count": 4,
     "feature_count": 36,
-    "layers": ["default"],
+    "layers": [
+      "default"
+    ],
     "properties": {},
     "temporal_bucket_ms": 3600000,
     "summary_tier": null

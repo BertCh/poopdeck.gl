@@ -1219,12 +1219,16 @@ describe('AnimatedPointLayer with categorical color', () => {
     expect(attrs.instanceCategoryIndex.value[0]).toBe(2);
     expect(attrs.instanceCategoryIndex.size).toBe(1);
 
-    // Layer carries the resolved palette + useCategoryColor toggle.
+    // Layer carries the resolved palette + useCategoryColor toggle. A trailing
+    // default slot (colorMappingDefault ?? transparent) is appended so NULL /
+    // unmapped-category features clamp onto the default instead of the last real
+    // palette entry — see indicesToFloat32WithDefault.
     expect(built.props.useCategoryColor).toBe(true);
     expect(built.props.categoryPalette).toEqual([
       [10, 20, 30, 255],
       [40, 50, 60, 255],
       [70, 80, 90, 255],
+      [0, 0, 0, 0],
     ]);
   });
 

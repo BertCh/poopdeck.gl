@@ -23,6 +23,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { STTArchive, estimateTileSize } from '../src/archive';
 import { decompressSync } from '../src/compression';
+import { blake3Hex128 } from '../src/blake3';
 import { crc32c } from '../src/crc32c';
 import { decodeDirectory, encodeDirectory } from '../src/directory';
 import { toGeoArrowTable } from '../src/tile';
@@ -57,9 +58,7 @@ function packOf(ds: InMemoryPackedDataset): Uint8Array {
 }
 
 /** First directory entry + its tile id. */
-async function firstEntry(
-  archive: STTArchive,
-): Promise<{
+async function firstEntry(archive: STTArchive): Promise<{
   e: TileEntry;
   id: { z: number; x: number; y: number; t: number };
 }> {
@@ -84,6 +83,100 @@ function tamperDirectoryCrcs(ds: InMemoryPackedDataset): void {
     new TextEncoder().encode(JSON.stringify(manifest)),
   );
 }
+
+/**
+ * Re-key a dataset's directory to its blake3-128 content address
+ * (`index/<hash>.sttd`), matching the production writer, so the reader's
+ * content-address enforcement has an address to verify against.
+ */
+function contentAddressedDataset(url: string): InMemoryPackedDataset {
+  const ds = freshDataset(url);
+  const manifest = JSON.parse(
+    new TextDecoder().decode(ds.objects.get('manifest.json')!),
+  );
+  const oldKey = manifest.directory.key;
+  const dirBytes = ds.objects.get(oldKey)!;
+  const newKey = `index/${blake3Hex128(dirBytes)}.sttd`;
+  ds.objects.delete(oldKey);
+  ds.objects.set(newKey, dirBytes);
+  manifest.directory.key = newKey;
+  ds.objects.set(
+    'manifest.json',
+    new TextEncoder().encode(JSON.stringify(manifest)),
+  );
+  return ds;
+}
+
+describe('directory content-address verification (spec §9.2)', () => {
+  it('opens a directory whose bytes match its content address', async () => {
+    const ds = contentAddressedDataset('mem://dir-addr-ok/manifest.json');
+    const archive = new STTArchive({
+      url: ds.manifestUrl,
+      fetch: packedFetch(ds),
+    });
+    const index = await archive.getIndex();
+    expect(index.tiles.length).toBeGreaterThan(0);
+  });
+
+  it('rejects a tampered directory whose bytes no longer hash to its address', async () => {
+    const ds = contentAddressedDataset('mem://dir-addr-bad/manifest.json');
+    const manifest = JSON.parse(
+      new TextDecoder().decode(ds.objects.get('manifest.json')!),
+    );
+    // Flip one byte in the directory object — the key (its declared address)
+    // is unchanged, so the open MUST fail the content-address check before it
+    // trusts a single tile offset out of the tampered directory.
+    const dir = ds.objects.get(manifest.directory.key)!;
+    dir[dir.length >> 1] ^= 0xff;
+    const archive = new STTArchive({
+      url: ds.manifestUrl,
+      fetch: packedFetch(ds),
+    });
+    await expect(archive.getIndex()).rejects.toThrow(
+      /content hash .* does not match/i,
+    );
+  });
+});
+
+describe('OPFS corrupt-entry self-heal', () => {
+  it('refetches from origin when an OPFS payload is truncated (not a permanently blank tile)', async () => {
+    const ds = freshDataset('mem://opfs-heal/manifest.json');
+    const store = new Map<string, Uint8Array>();
+    let servedCorrupt = false;
+    const cacheStub = {
+      get: async (k: string) => {
+        if (store.has(k)) return store.get(k)!;
+        // First lookup: a disk-corrupted (truncated) entry — wrong length vs
+        // the directory's declared uncompressedSize.
+        servedCorrupt = true;
+        return new Uint8Array(3);
+      },
+      set: async (k: string, bytes: Uint8Array) => {
+        store.set(k, bytes);
+      },
+      clear: async () => {
+        store.clear();
+      },
+      getStats: () => ({ available: true, bytes: 0, entries: 0, maxBytes: 0 }),
+    } as unknown as OpfsTileCache;
+
+    const archive = new STTArchive({
+      url: ds.manifestUrl,
+      fetch: packedFetch(ds),
+      opfsCacheImpl: cacheStub,
+    });
+    const { e, id } = await firstEntry(archive);
+    const tile = await archive.getTile(id);
+    expect(servedCorrupt).toBe(true);
+    // Self-heal: the corrupt entry did not blank the tile — it refetched.
+    expect(tile).not.toBeNull();
+    expect(tile!.layers[0].features.featureCount).toBeGreaterThan(0);
+    // ...and the refetch overwrote the poisoned entry with a correct payload.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(store.size).toBe(1);
+    expect([...store.values()][0].byteLength).toBe(e.uncompressedSize);
+  });
+});
 
 describe('CRC-32C verification (T1.4)', () => {
   it('decodes the Rust-built fixture with verification ON (default) — CRCs agree cross-impl', async () => {

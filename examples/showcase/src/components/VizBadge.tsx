@@ -48,6 +48,20 @@ const PointGlyph = svg(
 // A bare polyline — a recorded route.
 const PathGlyph = svg(<path {...stroke} d="M3 16.5 9 8.5 14.5 13.5 21 6" />);
 
+// A filled bolt over a faint glow — lightning flashes + density.
+const LightningGlyph = svg(
+  <>
+    <circle cx="12" cy="12" r="9" fill="currentColor" opacity={0.14} />
+    <path
+      d="M13 3 6.5 13H11l-1.5 8L18 10.5h-4.5L15 3z"
+      fill="currentColor"
+      stroke="currentColor"
+      strokeWidth={1}
+      strokeLinejoin="round"
+    />
+  </>,
+);
+
 // A trailing line with a bright head dot — an animated trip.
 const TripsGlyph = svg(
   <>
@@ -160,6 +174,36 @@ const AvGlyph = svg(
   </>,
 );
 
+// A scatter of lit points riding a wave crest — the 3D point cloud.
+const PointCloudGlyph = svg(
+  <>
+    <path {...stroke} d="M2.5 16c3-3.5 6-3.5 9 0s6 3.5 10 0" opacity={0.5} />
+    <circle cx="6" cy="9.5" r="1.5" fill="currentColor" />
+    <circle cx="12" cy="6" r="1.5" fill="currentColor" />
+    <circle cx="18" cy="9.5" r="1.5" fill="currentColor" />
+    <circle cx="9" cy="12.5" r="1.2" fill="currentColor" opacity={0.6} />
+    <circle cx="15" cy="12.5" r="1.2" fill="currentColor" opacity={0.6} />
+  </>,
+);
+
+// A cloud with a bolt + rain — the multi-layer weather-suite composite.
+const WeatherGlyph = svg(
+  <>
+    <path
+      {...stroke}
+      strokeWidth={1.5}
+      d="M6.5 12.5a3 3 0 0 1 .3-6 4.2 4.2 0 0 1 8 .7 2.8 2.8 0 0 1-.5 5.6"
+    />
+    <path d="M11.5 12 9 16h2l-1 4 3.5-5H11l1-3z" fill="currentColor" />
+    <path
+      {...stroke}
+      strokeWidth={1.4}
+      d="M6.5 17.5 6 19M16 17.5 15.5 19"
+      opacity={0.6}
+    />
+  </>,
+);
+
 export interface VizDef {
   /** Short type label (fallback when no editorial `techniqueTag` is given). */
   label: string;
@@ -176,11 +220,18 @@ export interface VizDef {
  */
 export const VIZ_REGISTRY: Record<DatasetType, VizDef> = {
   point: { label: 'Points', color: '#C8432F', icon: PointGlyph },
+  'point-cloud': {
+    label: 'Point cloud',
+    color: '#146B5C',
+    icon: PointCloudGlyph,
+  },
   radar: { label: 'Radar', color: '#3FA7C4', icon: PolygonGlyph },
   path: { label: 'Paths', color: '#2A8A60', icon: PathGlyph },
   trips: { label: 'Trips', color: '#0A7790', icon: TripsGlyph },
   'trip-heads': { label: 'Heads', color: '#2A6FB0', icon: TripHeadsGlyph },
   heatmap: { label: 'Heatmap', color: '#C2671B', icon: HeatmapGlyph },
+  lightning: { label: 'Lightning', color: '#5566D6', icon: LightningGlyph },
+  weather: { label: 'Weather suite', color: '#3A6EA5', icon: WeatherGlyph },
   polygon: { label: 'Polygons', color: '#7A4DB3', icon: PolygonGlyph },
   summary: { label: 'H3 summary', color: '#A93C76', icon: SummaryGlyph },
   arc: { label: 'Arcs', color: '#3F54B6', icon: ArcGlyph },

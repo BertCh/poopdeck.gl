@@ -58,3 +58,27 @@ export type {
   SttPlayerEventName,
   SttPlayerOptions,
 } from './stt-player.js';
+
+// derive-params — the single source of truth that resolves archive metadata
+// (+ optional authored overrides) into deterministic playback params, and
+// warns when an authored fact drifts from the archive. Pure; zero-dep.
+export {
+  resolvePlaybackParams,
+  deriveFrameCount,
+  deriveTrailLength,
+  deriveViewStateFromBounds,
+  DEFAULT_TARGET_PLAYBACK_SECONDS,
+  DEFAULT_TIME_WINDOW_BUCKETS,
+  DEFAULT_TIME_WINDOW_MS,
+  MIN_TRAIL_LENGTH_MS,
+  DEFAULT_POINT_ZOOM,
+} from './derive-params.js';
+export type {
+  PlaybackTimeRange,
+  PlaybackBounds,
+  PlaybackMetadataInput,
+  PlaybackOverrides,
+  ResolvedPlaybackParams,
+  ResolvePlaybackOptions,
+  DeriveViewStateOptions,
+} from './derive-params.js';

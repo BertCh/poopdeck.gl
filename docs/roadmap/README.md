@@ -45,6 +45,12 @@ git history preserves everything verbatim.
 
 ## Forward-looking (not built)
 
+- [**space-time-lod-2026-07.md**](./space-time-lod-2026-07.md) — the space×time
+  LOD master plan (2026-07-10): dual codebase audit + verified external SOTA →
+  six phases (measure → resolution-true simplification → declared reduced
+  temporal tiers → additive home-zoom decomposition → SSE + global budget →
+  joint space-time policy). Absorbs scrub-LOD P3/P4 (register item 5) and the
+  temporal-LOD tail of item 4. Plan only, nothing implemented.
 - [**dataset-candidates-2026-07.md**](./dataset-candidates-2026-07.md) — the
   standing demo-datasets register: license-verified shortlist with per-section
   status (GTFS-NL and NWM rivers **SHIPPED** locally, with absorbed build
@@ -93,6 +99,11 @@ git history preserves everything verbatim.
   the encoder-seam lessons and the static-vs-DB architectural verdict
   (absorbed 2026-07-07). Benchmarks: ingest 0.98×/0.66× vs file, serve
   ~2 ms/~5 ms. Spec: [`stt-serve-protocol.md`](../spec/stt-serve-protocol.md).
+- [**rain-flood-demo-2026-07.md**](./rain-flood-demo-2026-07.md) — the
+  `rain-flood-2019` weather-drives-water composite (CMORPH isoband rain +
+  NWM river overlay): design, data pipeline, and build recipe. Built + wired
+  locally; replaces the standalone `nwm-rivers-flood-2019-03` demo; R2 push
+  of the `rainfall-2019` archive open.
 
 ## Shipped decision records (rationale only)
 

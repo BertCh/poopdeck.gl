@@ -156,3 +156,6 @@ scripts/data-generation/av2-raw/
 *.osm.opl
 .claude/
 .npmrc
+
+# Local MCP server config (machine-specific absolute paths)
+/.mcp.json

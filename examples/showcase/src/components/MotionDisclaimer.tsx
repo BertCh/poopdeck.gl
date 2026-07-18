@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useReducedMotion } from '../lib/reducedMotion';
 
 /**
@@ -17,13 +17,18 @@ const STORAGE_KEY = 'poopdeck:motion-notice-dismissed';
 
 const MotionDisclaimer: React.FC = () => {
   const reduced = useReducedMotion();
-  const [dismissed, setDismissed] = useState<boolean>(() => {
+  // Start from the SSR-safe default (not dismissed) so the prerendered HTML and
+  // the first client render match — reading localStorage in the initializer
+  // would hydrate-mismatch on every prerendered page. Reconcile from storage
+  // after mount instead (client-only, so no server/client divergence).
+  const [dismissed, setDismissed] = useState(false);
+  useEffect(() => {
     try {
-      return localStorage.getItem(STORAGE_KEY) === '1';
+      if (localStorage.getItem(STORAGE_KEY) === '1') setDismissed(true);
     } catch {
-      return false;
+      // Private mode / blocked storage — leave the notice shown.
     }
-  });
+  }, []);
 
   if (dismissed) return null;
 

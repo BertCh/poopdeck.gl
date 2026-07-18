@@ -218,12 +218,24 @@ function registerDiscoveryTools(server: McpServer, config: SttMcpConfig): void {
           'optionally `order-audit` (measured blob-ordering range-read cost), against one dataset and ' +
           'returns their parsed JSON output. The decode-dependent stats are SAMPLED to 256 tiles by ' +
           "default (an unsampled full decode can exceed the MCP client's 60s timeout); pass `sample` to " +
-          'change the cap, or `exact: true` for a precise full decode. Requires --allow-cli (enabled).'
+          'change the cap, or `exact: true` for a precise full decode. Requires --allow-cli (enabled). ' +
+          'Address the archive by `name` (under --data-root) or by an explicit `path` (mutually exclusive).'
         : 'Would run `stt-optimize inspect`/`doctor`/`order-audit` against one dataset, but this server ' +
           'was started WITHOUT --allow-cli — returns a manifest-only summary instead (see describe_dataset ' +
           'for the full manifest). Restart the server with --allow-cli to enable this tool.',
       inputSchema: {
-        name: z.string().describe('Dataset name, as returned by list_datasets'),
+        name: z
+          .string()
+          .optional()
+          .describe(
+            'Dataset name under --data-root, as returned by list_datasets — mutually exclusive with `path`',
+          ),
+        path: z
+          .string()
+          .optional()
+          .describe(
+            'Explicit filesystem path to a built archive directory/manifest.json (for archives outside --data-root) — mutually exclusive with `name`; requires --allow-cli',
+          ),
         include: z
           .array(z.enum(['inspect', 'doctor', 'order-audit']))
           .optional()
@@ -246,26 +258,46 @@ function registerDiscoveryTools(server: McpServer, config: SttMcpConfig): void {
           ),
       },
     },
-    async ({ name, include, sample, exact }, extra) => {
-      let dir: string;
-      try {
-        dir = resolveDatasetDir(config.dataRoot, name);
-      } catch (err) {
-        return errorResult(errMessage(err));
-      }
+    async ({ name, path: explicitPath, include, sample, exact }, extra) => {
+      if (!name && !explicitPath)
+        return errorResult('dataset_report requires either `name` or `path`');
+      // `name` and `path` are documented as mutually exclusive — reject both
+      // rather than silently picking one.
+      if (name && explicitPath)
+        return errorResult(
+          'dataset_report: `name` and `path` are mutually exclusive — pass exactly one (got both).',
+        );
+      // An explicit path escapes the --data-root sandbox; keep it behind the
+      // same trust gate as the other CLI tools so a non-CLI server stays
+      // confined to its catalog.
+      if (explicitPath && !config.allowCli)
+        return errorResult(
+          'dataset_report: `path` (an explicit archive path outside --data-root) requires the server to be started with --allow-cli; use `name` for a dataset under --data-root.',
+        );
 
-      // Resolve+describe FIRST so a bad name reports "dataset not found" (naming
-      // it) rather than being swallowed into the generic --allow-cli hint below.
+      // Resolve+describe FIRST so a bad target reports a clear "not found"
+      // (naming it) rather than being swallowed into the generic --allow-cli
+      // hint below.
+      let dir: string;
       let manifestSummary: DatasetDescription;
       try {
-        manifestSummary = await describeDataset(config.dataRoot, name);
+        if (explicitPath) {
+          dir = archiveDirOf(explicitPath);
+          manifestSummary = await describeExplicitPath(explicitPath);
+        } else {
+          dir = resolveDatasetDir(config.dataRoot, name!);
+          manifestSummary = await describeDataset(config.dataRoot, name!);
+        }
       } catch (err) {
         return errorResult(
-          `dataset_report: dataset "${name}" not found under --data-root (${config.dataRoot}): ${errMessage(err)}`,
+          explicitPath
+            ? `dataset_report: could not read archive at path "${explicitPath}": ${errMessage(err)}`
+            : `dataset_report: dataset "${name}" not found under --data-root (${config.dataRoot}): ${errMessage(err)}`,
         );
       }
 
       if (!config.allowCli) {
+        // Only reachable for `name` (an explicit `path` was rejected above).
         return textResult({
           name,
           path: dir,
@@ -785,6 +817,8 @@ function registerInteractiveTools(
         '`layer` (e.g. AnimatedPathLayer / AnimatedTripsLayer / AnimatedPolygonLayer) for path/trip/' +
         'polygon data. Register these @@type names with @deck.gl/json (a JSONConfiguration carrying ' +
         'the STT layer classes) to actually instantiate the layers client-side. ' +
+        'Address datasets by `datasets` (name(s) under --data-root) and/or `paths` (explicit archive ' +
+        'path(s) outside --data-root; requires --allow-cli). ' +
         'Always returns the spec as text; when the client renders MCP resource content blocks, ALSO ' +
         'returns a best-effort self-contained HTML page (CDN deck.gl + @deck.gl/json). Unknown top-level keys are ' +
         'rejected (this schema is strict) so a misspelled param — e.g. `viewstate` for `viewState` — ' +
@@ -797,8 +831,15 @@ function registerInteractiveTools(
         .object({
           datasets: z
             .union([z.string(), z.array(z.string())])
+            .optional()
             .describe(
-              'One dataset name, or a list of names, as returned by list_datasets',
+              'One dataset name, or a list of names, as returned by list_datasets (under --data-root)',
+            ),
+          paths: z
+            .union([z.string(), z.array(z.string())])
+            .optional()
+            .describe(
+              'Explicit filesystem path(s) to built archive directory/manifest.json, for archives OUTSIDE --data-root (e.g. a fresh build_dataset output). Requires --allow-cli.',
             ),
           layer: z
             .string()
@@ -814,8 +855,21 @@ function registerInteractiveTools(
         })
         .strict(),
     },
-    async ({ datasets, layer, viewState, time }) => {
-      const names = asArray(datasets);
+    async ({ datasets, paths, layer, viewState, time }) => {
+      const names = datasets ? asArray(datasets) : [];
+      const explicitPaths = paths ? asArray(paths) : [];
+      if (names.length === 0 && explicitPaths.length === 0) {
+        return errorResult(
+          'view_map requires `datasets` (name(s) under --data-root) and/or `paths` (explicit archive path(s)).',
+        );
+      }
+      // An explicit path escapes the --data-root sandbox; gate it behind the
+      // same trust requirement as the other CLI tools.
+      if (explicitPaths.length > 0 && !config.allowCli) {
+        return errorResult(
+          'view_map: `paths` (explicit archive paths outside --data-root) require the server to be started with --allow-cli; use `datasets` for datasets under --data-root.',
+        );
+      }
       const resolved: DatasetDescription[] = [];
       const errors: string[] = [];
       for (const name of names) {
@@ -823,6 +877,13 @@ function registerInteractiveTools(
           resolved.push(await describeDataset(config.dataRoot, name));
         } catch (err) {
           errors.push(`${name}: ${errMessage(err)}`);
+        }
+      }
+      for (const explicitPath of explicitPaths) {
+        try {
+          resolved.push(await describeExplicitPath(explicitPath));
+        } catch (err) {
+          errors.push(`${explicitPath}: ${errMessage(err)}`);
         }
       }
       if (resolved.length === 0) {
@@ -842,10 +903,11 @@ function registerInteractiveTools(
         { type: 'text', text: JSON.stringify(spec, null, 2) },
       ];
       try {
+        const label = [...names, ...explicitPaths].join('+');
         content.push({
           type: 'resource',
           resource: {
-            uri: `ui://stt-mcp/view-map/${encodeURIComponent(names.join('+'))}.html`,
+            uri: `ui://stt-mcp/view-map/${encodeURIComponent(label)}.html`,
             mimeType: 'text/html',
             text: html,
           },
@@ -1296,4 +1358,26 @@ function resolveArchiveArg(dataRoot: string, value: string): string {
   } catch {
     return value;
   }
+}
+
+/**
+ * Strips a trailing `/manifest.json` (callers may pass either the archive
+ * directory or the manifest file itself) and returns the archive directory.
+ */
+function archiveDirOf(explicitPath: string): string {
+  return explicitPath.replace(/[/\\]manifest\.json$/, '');
+}
+
+/**
+ * Describes an archive addressed by an explicit filesystem `path` (outside
+ * `--data-root`). Passing the archive dir as `dataRoot` with name `.` resolves
+ * back to that exact directory, reusing `describeDataset`'s containment check
+ * against itself (always trivially contained). Callers MUST gate this on
+ * `config.allowCli` — an explicit path escapes the `--data-root` sandbox, so it
+ * carries the same trust requirement as the other CLI-gated tools.
+ */
+function describeExplicitPath(
+  explicitPath: string,
+): Promise<DatasetDescription> {
+  return describeDataset(archiveDirOf(explicitPath), '.');
 }

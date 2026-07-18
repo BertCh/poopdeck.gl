@@ -10,8 +10,10 @@
  * dataset's own layer tree.
  */
 import { SolidPolygonLayer } from '@deck.gl/layers';
+import { PainterlyExtension } from '../../lib/painterlyExtension';
 import {
   AnimatedPointLayer,
+  AnimatedPointCloudLayer,
   AnimatedPathLayer,
   AnimatedTripsLayer,
   FlowCorridorLayer,
@@ -38,6 +40,7 @@ import type {
   BufferedRunway,
   TimeController,
 } from '@poopdeck.gl/playback';
+import { resolvePlaybackParams } from '@poopdeck.gl/playback';
 import { tileLoadingProps } from '../../types';
 import type { Dataset, SummaryToggleOption } from '../../types';
 
@@ -56,6 +59,52 @@ const GROUND_DECAL_PARAMETERS = {
   depthCompare: 'always' as const,
   depthWriteEnabled: false,
 };
+
+/**
+ * Singleton so every per-tile sublayer shares one shader program. A fresh
+ * instance per render would miss deck's shader cache and re-link a pipeline for
+ * each of the ~140 temporal tiles.
+ *
+ * The palette mirrors `config/scene.json`'s `style.palette` (linear 0–1), which
+ * the bake also copies into the archive's `scene.json` sidecar. Blender only ever
+ * used these as flat viewport swatches; here they are the base albedo that the
+ * shader actually lights.
+ */
+const painterlyExtension = new PainterlyExtension({
+  // Re-graded 2026-07 toward the Dutch marine masters (van de Velde / Bakhuizen):
+  // drama is TONAL, not chromatic. The old palette leaned red-brown and saturated
+  // (a yellow-orange sail, a blood-red flag) and the sea was near-black, so the
+  // ocean points read as noise rather than water. This grade pulls the wood tones
+  // toward muted umber, lifts the sail to a luminous weathered canvas-gray, keeps
+  // the flag as the ONE saturated accent, and — the big one — gives the ocean a
+  // gray-green body so the swell reads as a sea surface catching the storm light.
+  palette: {
+    hull: [0.075, 0.045, 0.03], // wood_dark — the tonal anchor; darkest, low-sat umber
+    deck: [0.17, 0.1, 0.058], // wood_mid — muted, red pulled out
+    mast: [0.34, 0.215, 0.11], // wood_light — weathered spar, not orange
+    rigging: [0.1, 0.075, 0.052], // rope — lifted so a thread of standing rigging survives
+    sail: [0.6, 0.56, 0.46], // canvas — luminous warm-gray, weathered (was yellow-tan)
+    flag: [0.44, 0.09, 0.05], // the single saturated accent, oxidised red
+    ocean: [0.045, 0.11, 0.12], // sea with body — gray-green, not near-black void
+    foam: [0.8, 0.82, 0.8], // paint-mass white; jitter/rim break it warm+cool
+    mist: [0.52, 0.55, 0.55], // luminous spray/haze veil
+  },
+});
+
+/**
+ * Electric-storm ramp for the GLM lightning DENSITY field (low→high strike
+ * concentration): deep indigo night → violet → charged cyan → incandescent
+ * white core. Additive-composited by AnimatedHeatmapLayer, so faint areas read
+ * as a dim blue haze and active convection as a white-hot glow — the backdrop
+ * the individual flash points punch through.
+ */
+const LIGHTNING_DENSITY_RAMP: [number, number, number, number][] = [
+  [28, 22, 74, 255],
+  [70, 44, 150, 255],
+  [86, 110, 214, 255],
+  [130, 200, 255, 255],
+  [236, 246, 255, 255],
+];
 
 const EARTH_POLYGON: number[][][] = [
   [
@@ -196,8 +245,6 @@ export function buildDemoLayers({
 
   const datasetDuration =
     selectedDataset.timeRange.end - selectedDataset.timeRange.start;
-  const playbackSpeed =
-    datasetDuration / (selectedDataset.targetPlaybackSeconds || 60) / 1000;
   // Cumulative ("draw and persist") datasets reveal progressively in the
   // shader, so the tile loader must keep every played-through bucket
   // resident. A symmetric window of 2× the dataset duration guarantees the
@@ -205,9 +252,32 @@ export function buildDemoLayers({
   // metro/viewport scale this loads the visible city's tiles once and retains
   // them. Non-cumulative datasets keep their per-dataset rolling window.
   const isCumulative = !!selectedDataset.cumulative;
-  const timeWindow = isCumulative
+  const authoredTimeWindow = isCumulative
     ? datasetDuration * 2
     : selectedDataset.timeWindow || 86400000;
+  // Single derivation path: resolvePlaybackParams pins the ONE baseSpeed
+  // formula (span / targetPlaybackSeconds / 1000), ending the historical split
+  // between calculateAnimationSpeed's ÷30 (the real, user-visible clock speed)
+  // and this builder's ÷60. That ÷60 only ever fed the PREFETCH budget
+  // (tileLoadingProps below), never the visible clock — so to keep every demo's
+  // prefetch horizon byte-identical we preserve the 60s fallback explicitly for
+  // datasets that don't author `targetPlaybackSeconds` (the resolver's own
+  // default is 30). No archive metadata is available in this builder — the
+  // tileset loads it async and BufferSource carries none — and the resolver has
+  // no `cumulative` notion, so timeWindow is computed locally and passed through
+  // as an override; params.timeWindow echoes it back unchanged. `wakeLength` is
+  // deliberately NOT threaded: the resolver would raise timeWindow to
+  // 2×wakeLength (the ship-traffic wake fix), a behavior change out of scope for
+  // this behavior-preserving wiring (tracked as a followup + by the
+  // dataset-archive-reconcile test).
+  const { baseSpeed: playbackSpeed, timeWindow } = resolvePlaybackParams(
+    undefined,
+    {
+      targetPlaybackSeconds: selectedDataset.targetPlaybackSeconds || 60,
+      timeWindow: authoredTimeWindow,
+      timeRange: selectedDataset.timeRange,
+    },
+  );
 
   const baseProps = {
     id: selectedDataset.id,
@@ -220,6 +290,7 @@ export function buildDemoLayers({
     currentTime: selectedDataset.timeRange.start,
     timeController,
     timeWindow,
+    tileLoadTimeWindow: selectedDataset.tileLoadTimeWindow,
     timeRange: selectedDataset.timeRange,
     // Tile-tier dispatch. Defaults to 'auto' (summary overview at low zoom);
     // datasets can force 'raw' when the summary overlay obscures the story.
@@ -275,6 +346,38 @@ export function buildDemoLayers({
           elevationScale: selectedDataset.elevationScale,
         }),
       ];
+    case 'point-cloud': {
+      // Colour comes from the tile's interleaved `point_rgba` vector column
+      // (the layer's `colorVectorColumn` default), bound zero-copy and taking
+      // precedence over every other colour path — so no fillColor/colorMapping
+      // here. `z` already rides in the geometry via --point-elevation-column,
+      // hence no elevationProperty either.
+      //
+      // Under `painterly`, those same four bytes are (class_id, paint_seed, 0,
+      // 255) and PainterlyExtension rebuilds the colour in-shader from the baked
+      // `normal` column. Passing it at the TOP level is required: deck's
+      // `_subLayerProps.pointCloud.extensions` would REPLACE the layer's internal
+      // TimeFilterExtension, and losing the temporal window makes every frame of
+      // the archive draw at once.
+      const painterly = selectedDataset.painterly === true;
+      // fadeIn/fadeOut ramp alpha across a frame's lifetime. The archive puts one
+      // frame every 33 ms and the render window is exactly 33 ms wide, so ANY
+      // non-zero ramp pulses each frame in and out — it must stay 0 here.
+      return [
+        new AnimatedPointCloudLayer({
+          ...baseProps,
+          ...sourceProps(selectedDataset.id, true),
+          pointSize: selectedDataset.pointSize ?? 2,
+          sizeUnits: selectedDataset.pointSizeUnits ?? 'pixels',
+          material: painterly
+            ? false
+            : (selectedDataset.pointMaterial ?? false),
+          fadeInDuration: selectedDataset.fadeInDuration ?? 0,
+          fadeOutDuration: selectedDataset.fadeOutDuration ?? 0,
+          ...(painterly ? { extensions: [painterlyExtension] } : {}),
+        }),
+      ];
+    }
     case 'path':
       return [
         new AnimatedPathLayer({
@@ -371,6 +474,12 @@ export function buildDemoLayers({
         // widths; default off and let datasets opt in.
         capRounded: selectedDataset.capRounded ?? false,
         jointRounded: selectedDataset.jointRounded ?? false,
+        // flowPersistenceMs (bixi-live): trailing-max persistence so a corridor
+        // highlight binned at trip START stays lit for the ride's duration —
+        // keeps the flow base in sync with the moving-heads overlay.
+        ...(selectedDataset.flowPersistenceMs !== undefined && {
+          persistenceMs: selectedDataset.flowPersistenceMs,
+        }),
         // flowSignedDirection (bixi-live): the value matrix is SIGNED — the layer
         // colours by |value| (volume) and hands the sign to the chevron extension
         // so arrows flip per time-step. Harmless on non-corridor trips layers.
@@ -514,11 +623,78 @@ export function buildDemoLayers({
         }),
       ];
     }
-    case 'polygon':
+    case 'lightning': {
+      // GLM lightning from ONE flash-point archive, rendered as TWO stacked
+      // layers (the "both flashes + density" look):
+      //   1. a live strike-DENSITY field (AnimatedHeatmapLayer) as the glowing
+      //      backdrop — the optional governor source (continue-and-degrade);
+      //   2. individual FLASHES (AnimatedPointLayer) punching through on top,
+      //      each appearing bright then fading + shrinking over `wakeLength`
+      //      sim-ms (the one-sided comet decay) so instantaneous events read as
+      //      a shimmering flicker on the compressed multi-day clock. This is the
+      //      REQUIRED source so the clock gates on the flashes.
+      // Both read the same primary `url`; the density tileset is registered under
+      // its own id. Painter order: density (backdrop) → flashes (topmost).
+      const overlayBase = {
+        ...baseProps,
+        onOverviewPreload: undefined,
+        overviewPreload: false,
+      };
       return [
+        new AnimatedHeatmapLayer({
+          ...overlayBase,
+          id: `${selectedDataset.id}-density`,
+          ...sourceProps(`${selectedDataset.id}-density`, false),
+          radiusPixels: 26,
+          intensity: 1,
+          colorRange: LIGHTNING_DENSITY_RAMP,
+          // undefined weight = pure strike-count density; set to 'energy_fj' to
+          // weight the glow by optical energy.
+          weightProperty: selectedDataset.weightProperty,
+        }),
+        new AnimatedPointLayer({
+          ...baseProps,
+          ...sourceProps(selectedDataset.id, true),
+          fillColor: selectedDataset.colorProperty ?? [222, 236, 255, 255],
+          colorMapping: selectedDataset.colorMapping,
+          colorMappingDefault: selectedDataset.colorMappingDefault,
+          radius: selectedDataset.radiusProperty ?? 'energy_fj',
+          radiusUnits: selectedDataset.radiusUnits ?? 'pixels',
+          radiusScale: selectedDataset.radiusScale ?? 1,
+          radiusMinPixels: selectedDataset.radiusMinPixels ?? 1.2,
+          radiusMaxPixels: selectedDataset.radiusMaxPixels ?? 7,
+          radiusTransform: selectedDataset.radiusTransform,
+          // Bright-then-fade "flash" lifetime on the compressed clock.
+          wakeLength: selectedDataset.wakeLength ?? 700000,
+          wakeTailScale: selectedDataset.wakeTailScale ?? 0.15,
+          // Soft gaussian glow instead of a hard disk — sells the flash.
+          splat: true,
+          stroked: false,
+        }),
+      ];
+    }
+    case 'polygon': {
+      const polygonLayers: any[] = [
         new AnimatedPolygonLayer({
           ...baseProps,
           ...sourceProps(selectedDataset.id, true),
+          // Rain→flood composite: the rain field spans many two-hour buckets, so
+          // the default z0–z1 storyboard tier would pin ~2 tiles/bucket. Pin only
+          // z0 (whole CONUS in one tile — the ideal scrub thumbnail) with a
+          // roomier budget so the storyboard isn't rejected across a full year.
+          // The 2-hourly archive has 4,380 z0 tiles (~81 MB); the budget must
+          // clear that or the whole overview tier is dropped ('over-budget').
+          // NB the archive MUST be built with --min-zoom 0 or z0/z1 don't exist
+          // and the tier is empty ('no-tiles'). Only when the plumbing enabled
+          // preload (live viewer); other contexts keep it off.
+          ...(selectedDataset.riversUrl && baseProps.overviewPreload
+            ? {
+                overviewPreload: {
+                  maxZoom: 0,
+                  budgetBytes: 128 * 1024 * 1024,
+                },
+              }
+            : {}),
           filled: selectedDataset.polygonFilled ?? true,
           fillColor: selectedDataset.colorProperty ||
             selectedDataset.polygonFillColor || [31, 186, 214, 180],
@@ -532,6 +708,39 @@ export function buildDemoLayers({
           }),
         }),
       ];
+      // Rain→flood composite: overlay a river-discharge flow-matrix archive on
+      // top of the precip-isoband field. FlowCorridorLayer (static geometry +
+      // per-vertex×bucket value matrix) shares the primary's timeRange/timeWindow
+      // — both archives are full-2019 daily. OPTIONAL governor source so the
+      // lighter rain field gates the clock (radar/av overlay split).
+      if (selectedDataset.riversUrl && selectedDataset.riversConfig) {
+        const rc = selectedDataset.riversConfig;
+        polygonLayers.push(
+          new FlowCorridorLayer({
+            ...baseProps,
+            id: `${selectedDataset.id}-rivers`,
+            ...sourceProps(`${selectedDataset.id}-rivers`, false),
+            data: selectedDataset.riversUrl,
+            overviewPreload: false,
+            onOverviewPreload: undefined,
+            tripColor: [31, 186, 214, 255],
+            gradientProperty: rc.tripGradient.property,
+            gradientDomain: rc.tripGradient.domain,
+            gradientColorRamp: rc.tripGradient.colors,
+            ...(rc.colorMappingDefault && {
+              colorMappingDefault: rc.colorMappingDefault,
+            }),
+            tripWidth: rc.tripWidth ?? 'width',
+            widthMinPixels: rc.widthMinPixels ?? 0.2,
+            widthMaxPixels: rc.widthMaxPixels ?? 1.5,
+            trailLength: 0,
+            capRounded: false,
+            jointRounded: false,
+          }),
+        );
+      }
+      return polygonLayers;
+    }
     case 'summary': {
       // If the dataset declares a toggle (e.g. pickup vs dropoff), the
       // active option overrides the base summary styling props. Otherwise
@@ -791,6 +1000,150 @@ export function buildDemoLayers({
           }),
         );
       }
+      return layers;
+    }
+    case 'weather': {
+      // Composite WEATHER-SUITE render — up to four archives on one playhead.
+      // Painter order (bottom→top): wind streamlines → precip FIELD (the
+      // REQUIRED governor source, so the clock gates on the heaviest stream) →
+      // precip cell tracks → cell centroids → lightning density → lightning
+      // flashes. Every overlay is an OPTIONAL governor source (continue-and-
+      // degrade). Each animated layer widens its OWN loader window (trips →
+      // 2×trailLength, flashes → 2×wakeLength), so the shared short field window
+      // never starves them. Lightning styling is fixed here (the standalone
+      // `lightning` case's `radius*`/`wakeLength` fields collide with the precip
+      // cells' on the flat Dataset type).
+      const overlayBase = {
+        ...baseProps,
+        onOverviewPreload: undefined,
+        overviewPreload: false,
+      };
+      const layers: any[] = [];
+
+      // 0. HRRR wind streamlines (backdrop).
+      if (selectedDataset.windUrl) {
+        layers.push(
+          new AnimatedTripsLayer({
+            ...overlayBase,
+            id: `${selectedDataset.id}-wind`,
+            ...sourceProps(`${selectedDataset.id}-wind`, false),
+            data: selectedDataset.windUrl,
+            tripColor: [150, 170, 210, 120],
+            ...(selectedDataset.windGradient && {
+              gradientProperty: selectedDataset.windGradient.property,
+              gradientDomain: selectedDataset.windGradient.domain,
+              gradientColorRamp: selectedDataset.windGradient.colors,
+            }),
+            tripWidth: 1.4,
+            widthUnits: 'pixels',
+            widthMinPixels: 0.8,
+            widthMaxPixels: 2.5,
+            trailLength: 10800000, // 3h streamer tails
+            fadeTrail: true,
+            opacity: 0.5,
+            capRounded: false,
+            jointRounded: false,
+          }),
+        );
+      }
+
+      // 1. MRMS precip field — REQUIRED governor (categorical dbz_band fill).
+      layers.push(
+        new AnimatedPolygonLayer({
+          ...baseProps,
+          ...sourceProps(selectedDataset.id, true),
+          filled: true,
+          fillColor: selectedDataset.colorProperty ?? 'dbz_band',
+          ...(selectedDataset.colorMapping && {
+            colorMapping: selectedDataset.colorMapping,
+          }),
+          ...(selectedDataset.colorMappingDefault && {
+            colorMappingDefault: selectedDataset.colorMappingDefault,
+          }),
+        }),
+      );
+
+      // 2. precip cell tracks.
+      if (selectedDataset.radarTracksUrl) {
+        layers.push(
+          new AnimatedTripsLayer({
+            ...overlayBase,
+            id: `${selectedDataset.id}-tracks`,
+            ...sourceProps(`${selectedDataset.id}-tracks`, false),
+            data: selectedDataset.radarTracksUrl,
+            tripColor: selectedDataset.tripColor ?? [255, 255, 255, 200],
+            ...(selectedDataset.tripGradient && {
+              gradientProperty: selectedDataset.tripGradient.property,
+              gradientDomain: selectedDataset.tripGradient.domain,
+              gradientColorRamp: selectedDataset.tripGradient.colors,
+            }),
+            tripWidth: selectedDataset.tripWidth ?? 2.5,
+            widthUnits: 'pixels',
+            widthMinPixels: 1.2,
+            widthMaxPixels: 5,
+            trailLength: selectedDataset.trailLength ?? 3600000,
+            fadeTrail: true,
+            capRounded: false,
+            jointRounded: false,
+          }),
+        );
+      }
+
+      // 3. precip cell centroids.
+      if (selectedDataset.radarCellsUrl) {
+        layers.push(
+          new AnimatedPointLayer({
+            ...overlayBase,
+            id: `${selectedDataset.id}-cells`,
+            ...sourceProps(`${selectedDataset.id}-cells`, false),
+            data: selectedDataset.radarCellsUrl,
+            fillColor: selectedDataset.radarCellColor ?? [255, 255, 255, 220],
+            radius: selectedDataset.radiusProperty ?? 'max_dbz',
+            radiusUnits: 'pixels',
+            radiusScale: 1,
+            radiusMinPixels: selectedDataset.radiusMinPixels ?? 2,
+            radiusMaxPixels: selectedDataset.radiusMaxPixels ?? 12,
+            radiusTransform: selectedDataset.radiusTransform,
+            stroked: false,
+          }),
+        );
+      }
+
+      // 4+5. GLM lightning: density field then flashes (topmost).
+      if (selectedDataset.lightningUrl) {
+        layers.push(
+          new AnimatedHeatmapLayer({
+            ...overlayBase,
+            id: `${selectedDataset.id}-lightning-density`,
+            ...sourceProps(`${selectedDataset.id}-lightning-density`, false),
+            data: selectedDataset.lightningUrl,
+            radiusPixels: 22,
+            intensity: 1,
+            colorRange: LIGHTNING_DENSITY_RAMP,
+          }),
+        );
+        layers.push(
+          new AnimatedPointLayer({
+            ...overlayBase,
+            id: `${selectedDataset.id}-lightning`,
+            ...sourceProps(`${selectedDataset.id}-lightning`, false),
+            data: selectedDataset.lightningUrl,
+            fillColor: [226, 238, 255, 255],
+            radius: 'energy_fj',
+            radiusUnits: 'pixels',
+            radiusScale: 1,
+            radiusMinPixels: 1,
+            radiusMaxPixels: 6,
+            radiusTransform: (e: number) =>
+              Math.max(1, Math.min(6, Math.sqrt(e) * 0.11)),
+            wakeLength: 700000,
+            wakeTailScale: 0.15,
+            splat: true,
+            stroked: false,
+          }),
+        );
+      }
+
       return layers;
     }
     case 'av': {

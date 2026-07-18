@@ -153,4 +153,37 @@ describe('STTBaseLayer.initTileset wiring', () => {
     const layer = new STTPointLayer({ ...baseOpts, id: 'p' });
     expect(layer.getTileset()).toBeUndefined();
   });
+
+  it('a removal during the metadata await aborts init: no tileset, no onTilesetReady', async () => {
+    // Regression: onRemove must clear `this.map` so the post-await guard in
+    // initTileset short-circuits. Otherwise a layer removed while
+    // archive.getMetadata() is in flight still builds a tileset and hands the
+    // governor a source that can never render (and leaks that tileset).
+    const onTilesetReady = vi.fn();
+    const layer = new STTPointLayer({
+      ...baseOpts,
+      id: 'p',
+      onTilesetReady,
+    }) as any;
+    const archive = makeStubArchive();
+    let resolveMeta!: (m: unknown) => void;
+    archive.getMetadata = vi.fn(
+      () =>
+        new Promise((res) => {
+          resolveMeta = res;
+        }),
+    );
+    layer.archive = archive;
+    layer.map = makeMockMap();
+
+    const done = layer.initTileset();
+    // Layer removed while the metadata read is still pending.
+    layer.onRemove();
+    resolveMeta({ minZoom: 0, maxZoom: 5, temporalBucketMs: 3_600_000 });
+    await done;
+
+    expect(onTilesetReady).not.toHaveBeenCalled();
+    expect(layer.getTileset()).toBeUndefined();
+    expect(layer.map).toBeUndefined();
+  });
 });

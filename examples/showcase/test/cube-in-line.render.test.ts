@@ -65,13 +65,17 @@ describe('CubeInLineView', () => {
     expect(html).toContain('can disagree');
   });
 
-  it('profileIdFromUrl pulls the archive stem from a manifest url', () => {
+  it('profileIdFromUrl pulls the archive stem from a flat manifest url', () => {
     expect(profileIdFromUrl('/data/nyc-rideshare/manifest.json')).toBe(
       'nyc-rideshare',
     );
-    expect(profileIdFromUrl('/data/argoverse-1/lidar/manifest.json')).toBe(
-      'argoverse-1',
-    );
+    // AV scenes are nested one level deeper (/data/<id>/lidar/manifest.json) and
+    // emit NO density sidecar, so they must resolve to null — otherwise the
+    // "Under the hood" panel fetches /density/<id>.json, 404s, and throws on
+    // every AV demo detail page.
+    expect(
+      profileIdFromUrl('/data/argoverse-1/lidar/manifest.json'),
+    ).toBeNull();
     expect(profileIdFromUrl('https://example.com/remote.json')).toBeNull();
   });
 
@@ -80,6 +84,7 @@ describe('CubeInLineView', () => {
       'drifters',
       'nyc-rideshare',
       'gtfs-nl',
+      'gtfs-ch',
       'flights',
       'unknown',
     ]) {

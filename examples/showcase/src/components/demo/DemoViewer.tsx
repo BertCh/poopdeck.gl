@@ -405,8 +405,19 @@ const DemoViewer: React.FC<DemoViewerProps> = ({
     [emitCamera],
   );
 
+  // A no-basemap demo has nothing behind the transparent deck canvas, so the
+  // backdrop has to come from the container.
+  const hideBasemap = Boolean(selectedDataset.hideBasemap) && !useGlobe;
+
   return (
-    <div className="w-full h-full map-viewport">
+    <div
+      className="w-full h-full map-viewport"
+      style={
+        hideBasemap
+          ? { background: selectedDataset.backdropColor ?? '#0a0f16' }
+          : undefined
+      }
+    >
       <DeckGL
         {...(autoRotate
           ? { viewState: viewState ?? initialViewState }
@@ -419,7 +430,7 @@ const DemoViewer: React.FC<DemoViewerProps> = ({
         views={views}
         parameters={useGlobe ? ({ cull: true } as any) : undefined}
       >
-        {!useGlobe && (
+        {!useGlobe && !hideBasemap && (
           <Map
             reuseMaps
             mapStyle={

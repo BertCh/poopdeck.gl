@@ -11,8 +11,10 @@
 //
 //   • `gradientValuesFor` — instead of the static `vertexValues` channel, select
 //     the active bucket column(s) from the matrix. Default: blend the two
-//     adjacent buckets. Under `chevronPerTripLight`: a rolling-window MEAN (the
-//     AGGREGATE "overall style over a granular period" signal) → the ramp RGB.
+//     adjacent buckets; with `persistenceMs`, a TRAILING-window MAX so a
+//     highlight binned at trip START stays lit for the ride's duration. Under
+//     `chevronPerTripLight`: a rolling-window MEAN (the AGGREGATE "overall
+//     style over a granular period" signal) → the ramp RGB.
 //   • `finalizeGradientColorBuffer` — under `chevronPerTripLight`, pack a SECOND
 //     per-vertex signal (INSTANTANEOUS per-trip flow, a short trailing decay of
 //     the nearest fine bucket) into the color's ALPHA byte, so the chevron shader
@@ -35,7 +37,11 @@
 import type { DefaultProps } from '@deck.gl/core';
 import { AnimatedTripsLayer } from './animated-trips-layer.js';
 import type { AnimatedTripsLayerProps } from './animated-trips-layer.js';
-import { bucketBlendAt, blendMatrixRow } from '../../lib/vertex-value-blend.js';
+import {
+  bucketBlendAt,
+  blendMatrixRow,
+  trailingMaxMatrixRow,
+} from '../../lib/vertex-value-blend.js';
 import type { BinaryFeatures } from '@poopdeck.gl/core';
 
 /** Props added by {@link FlowCorridorLayer} (own props only — compose with
@@ -71,6 +77,21 @@ export interface _FlowCorridorLayerProps {
    * @default 0
    */
   chevronDirectionWindowMs?: number;
+  /**
+   * TRAILING persistence window, ms of data time, for the default (non-
+   * `chevronPerTripLight`) matrix path: each vertex holds the MAX of the
+   * bucket signal over `[t − persistenceMs, t]` instead of the instantaneous
+   * two-bucket blend. Generators bin a trip's whole route into its START
+   * bucket, so without persistence a corridor's highlight fades one bucket
+   * after departure while the ride (a moving-heads overlay) is still
+   * traversing it. Set to the typical trip DURATION so the highlight stays
+   * lit until riders arrive: rises over one bucket, holds for the window,
+   * fades over one bucket. Time-CHUNKED archives clamp the window at each
+   * chunk's first column (a brief reset at chunk boundaries); whole-range
+   * corridor archives are unaffected. `0` disables.
+   * @default 0
+   */
+  persistenceMs?: number;
 }
 
 /** Complete props accepted by {@link FlowCorridorLayer}. */
@@ -90,6 +111,7 @@ export class FlowCorridorLayer<
     chevronInstantDomain: { type: 'number', value: 1.5, min: 0 },
     chevronInstantDecayMs: { type: 'number', value: 120000, min: 0 },
     chevronDirectionWindowMs: { type: 'number', value: 0, min: 0 },
+    persistenceMs: { type: 'number', value: 0, min: 0 },
   };
 
   /**
@@ -241,6 +263,32 @@ export class FlowCorridorLayer<
     // chevron reads the sign separately in chevronDirectionsFor().
     const stepped =
       Math.round(pos / FlowCorridorLayer.STEP) * FlowCorridorLayer.STEP;
+
+    // TRAILING PERSISTENCE (persistenceMs > 0): hold each vertex at the MAX of
+    // the bucket signal over [t − persistenceMs, t]. Trips are binned into their
+    // START bucket by the generators, so the instantaneous blend fades a route's
+    // highlight one bucket after departure — long before the moving-heads
+    // overlay finishes the ride. See _FlowCorridorLayerProps.persistenceMs.
+    const persistMs = this.props.persistenceMs ?? 0;
+    if (persistMs > 0) {
+      const bucketWidth = (binary.endTimes[0] - binary.startTimes[0]) / nb;
+      const wBuckets = bucketWidth > 0 ? persistMs / bucketWidth : 0;
+      if (wBuckets > 0) {
+        const lo = Math.max(0, stepped - wBuckets);
+        for (let v = 0; v < totalVerts; v++) {
+          out[v] = trailingMaxMatrixRow(
+            matrix,
+            v * nb,
+            nb,
+            lo,
+            stepped,
+            signed,
+          );
+        }
+        return out;
+      }
+    }
+
     const blend = bucketBlendAt(stepped, nb);
     for (let v = 0; v < totalVerts; v++) {
       out[v] = blendMatrixRow(matrix, v * nb, blend, signed);

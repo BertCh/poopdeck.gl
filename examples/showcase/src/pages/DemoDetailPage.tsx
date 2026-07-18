@@ -78,15 +78,20 @@ const DemoDetailPage: React.FC = () => {
           </div>
         )}
 
-        {/* Live embed (client-only; a framed poster prerenders in its place) */}
+        {/* Live embed (client-only; a framed poster prerenders in its place).
+            Wrapped in a local error boundary so a throwing demo embed degrades
+            to an inline notice instead of blanking the whole app via the root
+            ErrorBoundary — the page chrome and editorial body survive. */}
         <div className="mt-6">
-          <ClientOnly fallback={<EmbedPoster />}>
-            {() => (
-              <Suspense fallback={<EmbedPoster />}>
-                <DemoEmbed dataset={dataset} />
-              </Suspense>
-            )}
-          </ClientOnly>
+          <EmbedErrorBoundary>
+            <ClientOnly fallback={<EmbedPoster />}>
+              {() => (
+                <Suspense fallback={<EmbedPoster />}>
+                  <DemoEmbed dataset={dataset} />
+                </Suspense>
+              )}
+            </ClientOnly>
+          </EmbedErrorBoundary>
         </div>
 
         {/* Editorial body */}
@@ -236,6 +241,47 @@ const EmbedPoster: React.FC = () => (
     />
   </div>
 );
+
+/**
+ * Localized boundary around the live embed. If a demo's deck.gl/WebGL surface
+ * throws during render, only this box shows the error notice — the surrounding
+ * page (title, editorial body, related demos) and the app chrome stay intact,
+ * instead of the throw propagating to the root ErrorBoundary and blanking the
+ * whole app. Resets automatically on navigation: the page keys its root on
+ * `dataset.id`, so switching demos remounts this boundary fresh.
+ */
+class EmbedErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { failed: boolean }
+> {
+  state = { failed: false };
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  render() {
+    if (this.state.failed) {
+      return (
+        <div
+          role="alert"
+          className="relative rounded-lg overflow-hidden h-[320px] sm:h-[420px] lg:h-[520px] flex items-center justify-center px-6 text-center"
+          style={{
+            background: 'var(--surface-sunken)',
+            border: '1px solid var(--hairline)',
+            color: 'var(--ink-500)',
+          }}
+        >
+          <p className="text-sm" style={{ lineHeight: 1.6 }}>
+            This demo couldn&rsquo;t be rendered. The rest of the page is still
+            available below.
+          </p>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 /**
  * Below-the-fold "meta" explorer: this dataset's space-time cube laid down in a

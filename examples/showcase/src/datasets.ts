@@ -1563,6 +1563,12 @@ const rawDatasets: Dataset[] = [
     },
     colorMappingDefault: [52, 46, 74, 120], // dim violet-grey for no-data segments
     flowMatrix: true,
+    // The flow archive bins each ride's WHOLE route into its 5-min START bucket,
+    // so the instantaneous blend dims a corridor minutes before the green rider
+    // dot (bixi-points has real per-vertex timestamps) gets there. Persist each
+    // segment's highlight for a typical ride duration (~20 min covers most BIXI
+    // trips) so the corridor stays lit until its riders arrive.
+    flowPersistenceMs: 1200000,
     flowDirectional: true,
     // The flow archive is SIGNED (--per-bucket-direction), so the layer colours by
     // |value| (volume). Kept for the geometry pre-orientation (arrows point the
@@ -1654,14 +1660,68 @@ const rawDatasets: Dataset[] = [
     headRadiusPixels: 2,
   },
   {
+    id: 'gtfs-ch',
+    name: 'Switzerland — National Transit Ballet',
+    sources: ['opentransportdata'],
+    description:
+      'Every scheduled public-transport vehicle in Switzerland for one Monday — 205,936 train, bus, tram, boat, gondola and funicular journeys expanded from the national GTFS timetable, the same service day as SRF’s “Wenn der Schweizer ÖV erwacht” visualization. Source: opentransportdata.swiss (Open Data Platform Mobility Switzerland).',
+    // Rebuild: stt-generate gtfs --feed data/gtfs-ch/feed --date 20260302
+    //   --output examples/showcase/public/data/gtfs-ch
+    // (feed: data.opentransportdata.swiss/dataset/timetable-2026-gtfs2020
+    // permalink, regenerated twice weekly; the calendar spans the whole
+    // timetable year, so 20260302 stays valid until the 2027 feed lands.
+    // The Swiss feed publishes no shapes.txt — all trips use stop-to-stop
+    // geometry.)
+    url: '/data/gtfs-ch/manifest.json',
+    type: 'trip-heads',
+    // Real archive span: Mon 2026-03-02 service day (Europe/Zurich). Starts at
+    // local midnight; GTFS >24:00:00 times run night services deep into
+    // Tuesday morning (last arrival ~10:05 local).
+    timeRange: {
+      start: 1772406000000, // 2026-03-01 23:00:00 UTC = Mon 00:00 local
+      end: 1772528700000, // 2026-03-03 09:05:00 UTC = Tue 10:05 local
+    },
+    timeWindow: 20000,
+    // ~34 h span in ~13 min — same pace as gtfs-nl; the 05:00–08:00 wake-up
+    // that SRF's piece narrates passes in about 70 seconds.
+    targetPlaybackSeconds: 780,
+    initialViewState: {
+      longitude: 8.23,
+      latitude: 46.8,
+      zoom: 7.4, // whole country in frame; zoom in and the dots ride their routes
+      pitch: 0,
+      bearing: 0,
+    },
+    // Darkest backdrop so thousands of 2 px vehicles read as a living network.
+    basemapHideLabels: true,
+    basemapBackgroundColor: '#02040a',
+    legend: {
+      title: 'Swiss public transport — one Monday',
+      items: [{ color: '#FF3B30', label: 'Scheduled vehicle' }],
+    },
+    // Pixel-sized heads: at the z7 national view a metric radius would vanish;
+    // 2 px keeps rush hour readable as individual vehicles, not a blob.
+    headColor: [255, 59, 48, 255], // #FF3B30 — SBB-red on near-black
+    headRadiusPixels: 2,
+  },
+  {
     id: 'nwm-rivers-2019',
     name: 'US Rivers — A Year of Flow',
     sources: ['noaa', 'usgs'],
     description:
       'The continental river network over the 2019 flood year — NOAA National Water Model hourly discharge reduced to daily means on every NHDPlus reach of stream order 4+. Each reach is scaled against its own annual low→high, so a headwater creek’s spring pulse reads as vividly as the Mississippi’s crest — color shows how each river varies through the year, not how much water it carries. Source: NOAA NWM v3.0 retrospective + USGS NHDPlusV2 (both public domain).',
     // Rebuild: stt-generate nwm --window 2019 --bin 1d --value self-scaled
-    //   --output examples/showcase/public/data/nwm-rivers-2019
+    //   --output examples/showcase/public/data/nwm-rivers-2019 --detail-zoom 8
     // (zarr chunks + reduced stripes cache under data/nwm/; resumable.)
+    // --detail-zoom 8 is REQUIRED, do NOT let it fall back to the default 11:
+    //   geometry vertex spacing targets 2px at `detail-zoom` and is held at ALL
+    //   zooms (no per-zoom decimation). The archive only tiles z4-8, so the
+    //   default 11 bakes ~8x more vertices than even the finest rendered zoom
+    //   (z8) needs — at the CONUS z4 view that's ~1.1M path verts/frame, tanking
+    //   the rivers+rain composite to ~20-30 fps. detail-zoom 8 matches the max
+    //   tiled zoom (~140k verts/frame, ~60fps) with NO visible loss at any
+    //   rendered zoom. Safe because the flow matrix is per-REACH-constant (every
+    //   vertex inherits its source reach's discharge — decimating loses no data).
     url: '/data/nwm-rivers-2019/manifest.json',
     type: 'trips',
     // Clean UTC year boundaries — matrix bucket 0 starts 2019-01-01.
@@ -1720,63 +1780,117 @@ const rawDatasets: Dataset[] = [
     },
   },
   {
-    id: 'nwm-rivers-flood-2019-03',
-    name: 'US Rivers — March 2019 Flood Wave',
+    id: 'rain-flood-2019',
+    name: 'US Rain → Flood, 2019',
     sources: ['noaa', 'usgs'],
     description:
-      'The March 2019 bomb-cyclone flood, hour by hour: each river reach colored by how far above its own 2019 median it is running, so flooding tributaries read as brightly as the mainstems they feed. Source: NOAA NWM v3.0 retrospective + USGS NHDPlusV2 (both public domain).',
-    // Rebuild: stt-generate nwm --window 2019-03 --bin 1h --value log-anomaly
-    //   --output examples/showcase/public/data/nwm-rivers-flood-2019-03
-    // (anomaly medians come from the 2019 daily reduce — run the year demo first.)
-    url: '/data/nwm-rivers-flood-2019-03/manifest.json',
-    type: 'trips',
-    // Clean UTC month boundaries — hourly matrix over March 2019.
+      'A continental year of weather driving water. Two-hourly rainfall from NOAA’s CMORPH satellite analysis, contoured into moving isoband polygons, layered over the National Water Model’s river discharge on every NHDPlus reach of stream order 4+. Storm systems sweep across the country and the river network brightens in their wake — spring melt and the 2019 flood crests rolling downstream. Sources: NOAA CMORPH high-resolution precipitation + NOAA NWM v3.0 retrospective + USGS NHDPlusV2 (all public domain).',
+    // Composite: the primary `url` is the RAIN isoband field (type polygon);
+    // the river discharge rides on top as a flow-matrix overlay (`riversUrl` →
+    // FlowCorridorLayer), reusing the Year-of-Flow archive verbatim. Rain runs
+    // at 2-hourly resolution, the rivers at daily (each archive carries its own
+    // baked bucket) — they share the timeRange and this timeWindow.
+    // Rebuild rain: scripts/data-generation/venv/bin/python \
+    //   scripts/data-generation/cmorph_isobands.py \
+    //   --year 2019 --out data/cmorph/rainfall-2019-2h.parquet \
+    //   --window-hours 2 --thresholds 0.5 1 2 5 10 20 --skip-fetch
+    //   (CMORPH hourly netCDF, anon: ncei.noaa.gov/data/cmorph-high-resolution-
+    //    global-precipitation-estimates/access/hourly/0.25deg/; summed to 2h.
+    //    --window-hours sets the bucket; thresholds are mm/2h — re-tune them to
+    //    the window or the bands mostly collapse into the faint tier. Bands MUST
+    //    match colorMapping/legend below: 0.5-1, 1-2, 2-5, 5-10, 10-20, 20+.)
+    // then: stt-build --input data/cmorph/rainfall-2019-2h.parquet \
+    //   --output examples/showcase/public/data/rainfall-2019 \
+    //   --time-field timestamp --time-format unix-ms --end-time-field end_timestamp \
+    //   --min-zoom 0 --max-zoom 6 --temporal-bucket 2h --publish \
+    //   (min-zoom 0 is REQUIRED: the z0 tiles are the storyboard-preload tier)
+    //   --quantize-coords 100 --quantize-attrs-auto \
+    //   --blob-ordering time-major
+    //   (blob-ordering time-major is REQUIRED, do NOT drop it or let it fall back
+    //    to `auto`: this is a CONUS-wide multi-cell PLAYBACK demo, so each 6h
+    //    bucket's tiles must be byte-contiguous for a forward prefetch to load a
+    //    continuous slice. `auto` picks SpatialMajor here — time_bits(~11) >
+    //    space_bits(~4)+3 — which scatters every frame across the Hilbert curve
+    //    so no bucket ever fully loads, the buffer gate never opens, and playback
+    //    stutters. SpatialMajor is only right for single-cell scrub, not playback.)
+    url: '/data/rainfall-2019/manifest.json',
+    riversUrl: '/data/nwm-rivers-2019/manifest.json',
+    type: 'polygon',
+    // Clean UTC year boundaries — matrix bucket 0 starts 2019-01-01.
     timeRange: {
-      start: 1551398400000, // 2019-03-01 00:00 UTC
-      end: 1554076800000, // 2019-04-01 00:00 UTC
+      start: 1546300800000, // 2019-01-01 00:00 UTC
+      end: 1577836800000, // 2020-01-01 00:00 UTC
     },
-    // One hourly bin per matrix bucket.
-    timeWindow: 3600000,
-    // 744 hourly bins in ~3 min — slow enough to see the flood front move.
-    targetPlaybackSeconds: 180,
+    timeWindow: 7200000, // 2-hourly rain bin (rivers pick their own daily bucket)
+    // 4,380 two-hourly frames in ~2 min (~36 frames/s — smooth at 60fps) —
+    // storm systems cross the country and the crests roll down the network at a
+    // pace the eye can follow, with 3× finer motion than the old 6h build.
+    targetPlaybackSeconds: 120,
     initialViewState: {
       longitude: -96,
-      latitude: 40.5,
-      zoom: 4.8, // opens on the Missouri basin where the flood breaks
+      latitude: 38.5,
+      zoom: 4.3, // CONUS in frame
       pitch: 0,
       bearing: 0,
     },
     basemapHideLabels: true,
     basemapBackgroundColor: '#02040a',
-    // Values are log2(q / 2019 median) clamped to [0,6] at generate time:
-    // 0 = normal flow, 6 = running 64× its median. Cool → alarm ramp.
-    tripGradient: {
-      property: 'vertexValues',
-      domain: [0, 6],
-      colors: [
-        [40, 56, 96, 70], // ≤1× median — network at rest, dim blue
-        [40, 130, 160, 140], // ~2× — elevated
-        [235, 215, 90, 215], // ~8× — high water
-        [255, 140, 50, 245], // ~24× — flood
-        [255, 255, 255, 255], // 64×+ — extreme crest
-      ],
+    // Translucent rain wash — per-band alpha climbs with intensity and the layer
+    // opacity keeps it a backdrop the rivers read over. Bands are annular
+    // (non-overlapping), so per-band alpha composites cleanly.
+    opacity: 0.85,
+    // Categorical fill keyed by the generator's `precip_band` RANGE label
+    // ("0.5-1" … "20+" mm/2h; deliberately non-numeric so stt-build keeps the
+    // column categorical, same rule as the storm-radar dbz_band mapping).
+    // Bands are re-tuned for the 2-hourly window (~⅓ the accumulation of the
+    // former 6h build) so the field reads at the same intensity, just smoother.
+    colorProperty: 'precip_band',
+    colorMapping: {
+      '0.5-1': [70, 150, 210, 70], // measurable rain — faint blue
+      '1-2': [55, 120, 205, 105],
+      '2-5': [50, 90, 200, 150], // steady rain
+      '5-10': [80, 70, 195, 185], // heavy — indigo
+      '10-20': [135, 65, 190, 210], // very heavy — violet
+      '20+': [225, 215, 250, 235], // extreme — near-white
     },
-    // NaN = intermittent reaches with ~zero median (anomaly undefined) — keep
-    // them as the faint resting network rather than an error color.
-    colorMappingDefault: [40, 50, 66, 70],
-    flowMatrix: true,
-    trailLength: 0,
-    tripWidth: 'width',
-    widthMinPixels: 1,
-    widthMaxPixels: 5,
-    capRounded: false,
-    jointRounded: false,
+    colorMappingDefault: [60, 90, 130, 40],
+    // The river-discharge overlay: self-scaled per reach (each normalized to its
+    // own annual low→high), a cyan→white "water" ramp that reads over the violet
+    // rain. Reuses the Year-of-Flow archive (nwm-rivers-2019).
+    riversConfig: {
+      tripGradient: {
+        property: 'vertexValues',
+        domain: [0, 1],
+        colors: [
+          [30, 90, 120, 120], // annual low — faint teal
+          [40, 160, 195, 180],
+          [90, 215, 230, 220],
+          [190, 245, 250, 240],
+          [255, 255, 255, 255], // annual crest — white
+        ],
+      },
+      colorMappingDefault: [45, 55, 70, 70],
+      tripWidth: 'width',
+      widthMinPixels: 0.25,
+      widthMaxPixels: 1.6,
+    },
     legend: {
-      title: 'Flow vs 2019 median (log scale)',
+      title: '2-hourly rainfall over river flow',
       ramps: [
         {
-          label: '1× → 64×+',
-          colors: ['#283860', '#2882A0', '#EBD75A', '#FF8C32', '#FFFFFF'],
+          label: 'rainfall  0.5 → 20+ mm/2h',
+          colors: [
+            '#4696D2',
+            '#3778CD',
+            '#325AC8',
+            '#5046C3',
+            '#8741BE',
+            '#E1D7FA',
+          ],
+        },
+        {
+          label: 'river flow  annual low → high',
+          colors: ['#1E5A78', '#28A0C3', '#5AD7E6', '#BEF5FA', '#FFFFFF'],
         },
       ],
     },
@@ -2428,12 +2542,14 @@ const rawDatasets: Dataset[] = [
     },
     // Wake aesthetic: every AIS ping behind the play head fades and shrinks
     // to form a comet trail behind each vessel. `wakeLength` is the trail's
-    // temporal span; `timeWindow` is set to 2× that so the tile loader still
+    // temporal span; `timeWindow` must be >= 2× that so the tile loader still
     // covers the past half of the wake (the shader filter is independent of
     // the loader window — see TimeFilterExtension.wakeLength docstring).
-    wakeLength: 3600000, // 30-minute wake behind each ship
+    // AnimatedPointLayer.getEffectiveTimeWindow now enforces the 2× floor at
+    // runtime; the literal is kept correct so datasets.ts is self-consistent.
+    wakeLength: 3600000, // 1-hour wake behind each ship
     wakeTailScale: 0.15, // tail shrinks to 15% of head radius
-    timeWindow: 5600000, // 60-min loader window → 30-min past coverage
+    timeWindow: 7200000, // 2× wakeLength — loader covers the full comet wake
     targetPlaybackSeconds: 60, // full time-range plays in ~1 min
     // World-space dots: `radius` is in METERS, so vessels scale with zoom like
     // real objects (300 m radius ≈ a large-vessel / berth footprint). No pixel
@@ -2611,6 +2727,259 @@ const rawDatasets: Dataset[] = [
         { color: '#fa8c23', label: '50–55' },
         { color: '#f03728', label: '55–60 · heavy' },
         { color: '#dc46e6', label: '65+ · hail core' },
+      ],
+    },
+  },
+  {
+    id: 'goes-glm-lightning',
+    name: 'GOES GLM — Lightning',
+    description:
+      'The late-May 2024 severe-weather outbreak seen as pure lightning: every optical flash the GOES-16 Geostationary Lightning Mapper detected over the Lower 48 from 19–22 May 2024 (the Greenfield, Iowa EF4 falls on the 21st), read one 20-second granule at a time. Individual flashes glow bright then fade on the compressed clock, over a live strike-density field. Source: NOAA GOES-16 GLM L2 LCFA (public domain).',
+    url: '/data/goes-glm-lightning/manifest.json',
+    type: 'lightning',
+    sources: ['noaa'],
+    timeRange: {
+      start: Date.UTC(2024, 4, 19, 12, 0, 0), // 2024-05-19 12:00Z
+      end: Date.UTC(2024, 4, 22, 12, 0, 0), // 2024-05-22 12:00Z
+    },
+    // 30-min sim window resident (also ≥ 2× wakeLength so the fading tails stay
+    // loaded); the point layer widens the loader window to 2× wakeLength itself.
+    timeWindow: 1_800_000,
+    targetPlaybackSeconds: 150,
+    initialViewState: {
+      longitude: -94,
+      latitude: 39,
+      zoom: 4,
+      pitch: 0,
+      bearing: 0,
+    },
+    // Each flash appears bright then fades + shrinks over ~12 min of sim time so
+    // instantaneous strikes read as a flicker on the 72h-in-150s clock.
+    wakeLength: 700_000,
+    wakeTailScale: 0.15,
+    // Flash marker sized by optical energy (femtojoules), gently compressed.
+    radiusProperty: 'energy_fj',
+    radiusTransform: (e: number) =>
+      Math.max(1.2, Math.min(7, Math.sqrt(e) * 0.12)),
+    legend: {
+      title: 'GOES-16 GLM lightning',
+      ramps: [
+        {
+          label: 'strike density',
+          colors: ['#1c164a', '#562c96', '#566ed6', '#82c8ff', '#ecf6ff'],
+        },
+      ],
+      items: [{ color: '#deecff', label: 'flash' }],
+    },
+  },
+  {
+    id: 'mrms-precip',
+    name: 'MRMS — Continental Precipitation',
+    description:
+      'The late-May 2024 outbreak as a national radar-reflectivity mosaic: NOAA MRMS MergedReflectivityQCComposite (1 km, ~2-min) contoured into moving dBZ isoband polygons over the whole Lower 48, with storm-cell centroids and SCIT-style cell tracks. 19–22 May 2024. Source: NOAA MRMS (public domain).',
+    // Same three-archive shape as storm-radar → reuses the `radar` composite.
+    url: '/data/mrms-precip-field/manifest.json',
+    radarCellsUrl: '/data/mrms-precip-cells/manifest.json',
+    radarTracksUrl: '/data/mrms-precip-tracks/manifest.json',
+    type: 'radar',
+    sources: ['noaa'],
+    timeRange: {
+      start: Date.UTC(2024, 4, 19, 12, 0, 0),
+      end: Date.UTC(2024, 4, 22, 12, 0, 0),
+    },
+    timeWindow: 900000, // 15-min loader window (10-min frame cadence)
+    targetPlaybackSeconds: 150,
+    initialViewState: {
+      longitude: -94,
+      latitude: 39,
+      zoom: 4.2,
+      pitch: 30,
+      bearing: 0,
+    },
+    // Continental 10-dBZ bands (coarser than NEXRAD's 5-dBZ) keyed by the
+    // generator's `dbz_band` RANGE label — non-numeric so stt-build keeps the
+    // column categorical. OPAQUE fills; overall translucency is on `opacity`.
+    colorProperty: 'dbz_band',
+    colorMapping: {
+      '20-30': [40, 190, 70, 235], // green — light rain
+      '30-40': [130, 215, 55, 240], // green-yellow
+      '40-50': [250, 232, 45, 245], // yellow — moderate
+      '50-60': [245, 120, 35, 250], // orange — heavy
+      '60+': [225, 30, 38, 255], // red — cores/hail
+    },
+    colorMappingDefault: [130, 130, 140, 255],
+    opacity: 1,
+    radiusProperty: 'max_dbz',
+    radiusUnits: 'pixels',
+    radiusScale: 1,
+    radiusMinPixels: 2,
+    radiusMaxPixels: 14,
+    radiusTransform: (dbz: number) => Math.max(2, (dbz - 45) * 0.4),
+    radarCellColor: [255, 255, 255, 220],
+    stroked: true,
+    strokeColor: [8, 12, 24, 210],
+    lineWidthMinPixels: 1,
+    tripGradient: {
+      property: 'vertexValues',
+      domain: [30, 65], // dBZ
+      colors: [
+        [90, 200, 90, 220],
+        [250, 230, 60, 230],
+        [250, 130, 40, 240],
+        [230, 40, 40, 245],
+      ],
+    },
+    trailLength: 3600000, // 60-min cell-track trail
+    tripWidth: 2.5,
+    widthMinPixels: 1.2,
+    widthMaxPixels: 5,
+    fadeTrail: true,
+    legend: {
+      title: 'Reflectivity (dBZ)',
+      items: [
+        { color: '#28be46', label: '20–30 · light' },
+        { color: '#fae82d', label: '40–50 · moderate' },
+        { color: '#f57823', label: '50–60 · heavy' },
+        { color: '#e11e26', label: '60+ · core' },
+      ],
+    },
+  },
+  {
+    id: 'hrrr-wind',
+    name: 'HRRR — Surface Wind',
+    description:
+      'Massless particles advected through NOAA HRRR 10 m wind, shaded by wind speed — the atmospheric companion to the ocean-current demo. Late-May 2024, CONUS. Source: NOAA HRRR (public domain).',
+    url: '/data/hrrr-wind/manifest.json',
+    type: 'trips',
+    sources: ['noaa'],
+    timeRange: {
+      start: Date.UTC(2024, 4, 19, 12, 0, 0),
+      end: Date.UTC(2024, 4, 22, 12, 0, 0),
+    },
+    timeWindow: 21600000, // 6-h window (trip layer widens to 2× trailLength)
+    targetPlaybackSeconds: 150,
+    initialViewState: {
+      longitude: -94,
+      latitude: 39,
+      zoom: 4.2,
+      pitch: 0,
+      bearing: 0,
+    },
+    // Ribbons colored along their length by per-vertex wind speed (m/s):
+    // calm air deep blue, jets/gust fronts flare yellow→red.
+    tripGradient: {
+      property: 'vertexValues',
+      domain: [0, 25], // m/s
+      colors: [
+        [30, 60, 140, 230], // ~0 — calm, deep blue
+        [40, 130, 190, 230], // ~6
+        [70, 200, 170, 230], // ~12 — teal
+        [250, 210, 90, 235], // ~18 — yellow
+        [220, 50, 47, 240], // ≥25 — fast, red
+      ],
+    },
+    colorMappingDefault: [130, 130, 130, 170],
+    opacity: 0.7,
+    tripWidth: 1.4,
+    widthMinPixels: 0.8,
+    widthMaxPixels: 2.6,
+    trailLength: 10800000, // 3-h streamer tails
+    fadeTrail: true,
+    legend: {
+      title: 'Wind speed',
+      ramps: [
+        {
+          label: '0 → 25 m/s',
+          colors: ['#1e3c8c', '#2882be', '#46c8aa', '#fad25a', '#dc322f'],
+        },
+      ],
+    },
+  },
+  {
+    id: 'severe-weather-2024',
+    name: 'Severe Weather Suite — May 2024',
+    description:
+      'Four public NOAA feeds over one 72-hour clock (19–22 May 2024, the late-May outbreak that produced the Greenfield, Iowa EF4): HRRR surface wind advected into streamlines, the MRMS national reflectivity mosaic as moving dBZ bands with storm cells and tracks, and every GOES-16 GLM lightning flash as a shimmering field and glowing density. Cause and effect on one continental map. Sources: NOAA HRRR + MRMS + GOES-16 GLM (all public domain).',
+    // Primary `url` = the precip FIELD (REQUIRED governor). Overlays: precip
+    // cells/tracks (reused radar fields) + wind + lightning.
+    url: '/data/mrms-precip-field/manifest.json',
+    radarCellsUrl: '/data/mrms-precip-cells/manifest.json',
+    radarTracksUrl: '/data/mrms-precip-tracks/manifest.json',
+    windUrl: '/data/hrrr-wind/manifest.json',
+    lightningUrl: '/data/goes-glm-lightning/manifest.json',
+    type: 'weather',
+    sources: ['noaa'],
+    timeRange: {
+      start: Date.UTC(2024, 4, 19, 12, 0, 0),
+      end: Date.UTC(2024, 4, 22, 12, 0, 0),
+    },
+    timeWindow: 900000, // 15-min field window; overlays widen themselves
+    targetPlaybackSeconds: 180,
+    initialViewState: {
+      longitude: -93,
+      latitude: 39.5,
+      zoom: 4.2,
+      pitch: 32,
+      bearing: 0,
+    },
+    // Precip field (categorical dBZ bands) — same mapping as mrms-precip.
+    colorProperty: 'dbz_band',
+    colorMapping: {
+      '20-30': [40, 190, 70, 225],
+      '30-40': [130, 215, 55, 232],
+      '40-50': [250, 232, 45, 240],
+      '50-60': [245, 120, 35, 248],
+      '60+': [225, 30, 38, 255],
+    },
+    colorMappingDefault: [130, 130, 140, 235],
+    opacity: 0.92,
+    // precip cell centroids.
+    radiusProperty: 'max_dbz',
+    radiusMinPixels: 2,
+    radiusMaxPixels: 11,
+    radiusTransform: (dbz: number) => Math.max(2, (dbz - 48) * 0.4),
+    radarCellColor: [255, 255, 255, 210],
+    // precip cell tracks.
+    tripGradient: {
+      property: 'vertexValues',
+      domain: [35, 65], // dBZ
+      colors: [
+        [120, 210, 110, 210],
+        [250, 230, 60, 225],
+        [250, 130, 40, 235],
+        [230, 40, 40, 240],
+      ],
+    },
+    trailLength: 3600000,
+    tripWidth: 2.2,
+    // wind streamlines.
+    windGradient: {
+      property: 'vertexValues',
+      domain: [0, 25],
+      colors: [
+        [90, 120, 175, 150],
+        [70, 190, 175, 170],
+        [250, 210, 90, 190],
+        [220, 60, 50, 205],
+      ],
+    },
+    legend: {
+      title: 'Weather suite',
+      items: [
+        { color: '#28be46', label: 'rain 20–40 dBZ' },
+        { color: '#f57823', label: 'heavy 50–60' },
+        { color: '#e11e26', label: 'core 60+' },
+        { color: '#deecff', label: 'lightning flash' },
+      ],
+      ramps: [
+        {
+          label: 'wind 0 → 25 m/s',
+          colors: ['#5a78af', '#46beaf', '#fad25a', '#dc3c32'],
+        },
+        {
+          label: 'lightning density',
+          colors: ['#1c164a', '#562c96', '#566ed6', '#82c8ff', '#ecf6ff'],
+        },
       ],
     },
   },
@@ -3846,7 +4215,10 @@ const rawDatasets: Dataset[] = [
     // resident; the GPU does the progressive reveal.
     cumulative: true,
     timeRange: {
-      start: Date.parse('2007-01-01T00:00:00Z'),
+      // Clamped to the archive's first node creation (2007-06-16): the OSM NYC
+      // extract has no nodes before this, so an earlier start just plays dead
+      // air. End is a deliberate trim (the archive runs on to 2026-05).
+      start: Date.parse('2007-06-16T00:00:00Z'),
       end: Date.parse('2026-01-01T00:00:00Z'),
     },
     timeWindow: 86400000 * 30, // overridden for cumulative datasets; kept for completeness
@@ -4028,6 +4400,92 @@ const rawDatasets: Dataset[] = [
       ],
     },
   },
+  {
+    id: 'poopdeck-ship',
+    name: 'Poopdeck — Ship on a Swell',
+    description:
+      'Procedural sailing ship on a Gerstner-wave ocean, relit in the shader — 40K points/frame, 14s at 15fps',
+    url: '/data/poopdeck-ship/manifest.json',
+    type: 'point-cloud',
+    timeRange: {
+      start: 1700000000000, // fixed synthetic epoch (see scene.json sidecar)
+      end: 1700000013860, // 211 frames, last at t0 + 210 × 66 ms
+    },
+    // MUST equal the archive's frame interval (66 ms). Each frame is a point in
+    // time (start == end) and the render window is CENTERED, so a frame is on
+    // screen for `currentTime ∈ [T-33, T+33]` and the next takes over at exactly
+    // that boundary: the visibility intervals TILE the timeline. Every playhead
+    // position sees exactly one frame, and each frame persists until the next
+    // replaces it. Verified by sweeping the playhead across all 66 phases of the
+    // lattice: 0 blank, 0 doubled.
+    //
+    // The margin is zero in both directions, so this value is load-bearing:
+    //   timeWindow < 66  ⇒  gaps, and the cloud blinks out between frames.
+    //   timeWindow > 66  ⇒  overlap, and two frames draw at once.
+    //
+    // fadeInDuration / fadeOutDuration must also stay 0 — a ramp shorter than a
+    // frame's 66 ms life would pulse every frame in and out.
+    timeWindow: 66,
+    // The RENDER window above is one frame wide. The tile-SELECTION window has to
+    // be much wider, because the tileset only refreshes its visible set every
+    // 100 ms of wall clock: a ±33 ms selection is already behind the playhead by
+    // the next refresh, and the layer draws nothing. 600 ms keeps ~3 buckets
+    // resident either side; TimeFilterExtension still shows exactly one frame out
+    // of them. Without this the cloud is blank in ~78% of rendered frames.
+    tileLoadTimeWindow: 600,
+    // WHY 15 fps AND NOT 30. SpatioTemporalLayer refreshes its visible-tile set at
+    // most once per 100 ms of wall clock (MIN_TILESET_UPDATE_WALL_MS), and that set
+    // is only the tiles overlapping `currentTime ± timeWindow/2`. A tile therefore
+    // has to stay correct for >100 ms of sim time or the playhead walks out of the
+    // resident tile between refreshes. The archive's 198 ms buckets hold 3 frames
+    // each (198 = 3 × 66), so the resident tile covers at least 165 ms even when
+    // the playhead enters at its very end.
+    //
+    // A 30 fps / 60K-point build broke both halves of that: its buckets held 180K
+    // features, which crossed stt-build's per-tile split cap, and the split falls
+    // along time — handing back one-frame tiles valid for only 33 of every 100 ms.
+    // Measured: the cloud was blank in 94% of rendered frames. At 15 fps / 40K the
+    // bucket is 120K features and stays whole (71 tiles for 71 buckets).
+    //
+    // ~1× — 13.86 s of swell over 14 real seconds, at the archive's native 15 fps.
+    // 8.44M features ≈ 59 MB ≈ 4.3 MB/s, against the ~18 MB/s the old build asked
+    // for. The swell is slow enough that 15 fps reads as motion, not judder.
+    targetPlaybackSeconds: 14,
+    initialViewState: {
+      longitude: -70.55,
+      latitude: 42.35,
+      zoom: 18.5,
+      pitch: 68,
+      bearing: 20,
+    },
+    use3D: true,
+    // Homer's low, close camera: sea as danger, not a product turntable. The
+    // scene is 140 m wide and sits inside one z14 tile, so a basemap would show
+    // nothing but empty Massachusetts Bay.
+    hideBasemap: true,
+    // A painted sky, not a void. `backdropColor` is applied straight to the
+    // container's CSS `background` (the deck canvas is transparent over it), so
+    // it takes a full layered gradient. The Dutch marine masters (van de Velde,
+    // Bakhuizen) give ~60% of the canvas to weather with a single luminous break;
+    // the flat `#0b1119` gave us none of that. Bottom layer: a tonal storm sky
+    // grading down through a warm-gray luminous horizon (~52%) into a gray-green
+    // sea and a dark foreground. Top layer: an off-axis ochre light-break
+    // (Aivazovsky's warm horizon) placed behind and above the ship. The painterly
+    // fog colour (see painterlyExtension defaults) is matched to the horizon band
+    // so distant rigging dissolves INTO this sky (Turner) instead of cutting out.
+    backdropColor:
+      'radial-gradient(135% 95% at 54% 40%, rgba(198,186,158,0.30) 0%, rgba(150,150,144,0.12) 26%, rgba(90,96,100,0) 56%), ' +
+      'linear-gradient(to bottom, #161c26 0%, #222833 22%, #333a3c 42%, #4a4c42 52%, #394040 60%, #232a30 72%, #141b22 86%, #0d1319 100%)',
+    // The tile's `point_rgba` carries (class_id, paint_seed, 0, 255), not colour:
+    // Blender bakes flat `material.diffuse_color` (7 distinct values across the
+    // whole cloud) and none of the scene's lighting, fog or view transform reaches
+    // the export. PainterlyExtension rebuilds the colour in-shader from the baked
+    // `normal` column, so the palette can be re-graded without re-running Blender.
+    painterly: true,
+    pointSize: 2.4,
+    pointSizeUnits: 'pixels',
+    pointMaterial: false,
+  },
 ];
 
 // ── Camera-colored splat variants (AV scenes with cameras) ───────────────────
@@ -4191,6 +4649,12 @@ const WAYMO_LOCAL_ONLY = /^waymo-/;
 // never `<stem>/manifest.json`; the latter 404s even for live scenes.
 const DATA_IS_REMOTE = DATA_BASE_URL !== '';
 
+// This is that gate. `poopdeck-ship` is built locally from the Blender
+// point-cloud pipeline and its 435 MB archive is not on R2, so it renders in
+// local dev (which serves `public/data`) and is filtered from the public site.
+// Drop this line once the bundle is synced.
+const LOCAL_ONLY_DATASETS = /^poopdeck-ship$/;
+
 export const datasets: Dataset[] = [
   ...rawDatasets,
   ...coloredSplatVariants,
@@ -4198,6 +4662,7 @@ export const datasets: Dataset[] = [
 ]
   .filter((d) => !HELD_BACK_AV_MODES.test(d.id))
   .filter((d) => !(DATA_IS_REMOTE && WAYMO_LOCAL_ONLY.test(d.id)))
+  .filter((d) => !(DATA_IS_REMOTE && LOCAL_ONLY_DATASETS.test(d.id)))
   .map((d) => ({
     ...d,
     url: resolveDataUrl(d.url),
@@ -4208,6 +4673,14 @@ export const datasets: Dataset[] = [
     ...(d.radarTracksUrl && {
       radarTracksUrl: resolveDataUrl(d.radarTracksUrl),
     }),
+    // The rain→flood composite carries a second (river-discharge) manifest URL
+    // overlaid on the precip field; rewrite it through the same resolver.
+    ...(d.riversUrl && { riversUrl: resolveDataUrl(d.riversUrl) }),
+    // The weather-suite composite carries wind + lightning manifests on top of
+    // the precip field (+ its reused radarCells/TracksUrl above); rewrite them
+    // through the same resolver or they 404 on the R2 deploy.
+    ...(d.windUrl && { windUrl: resolveDataUrl(d.windUrl) }),
+    ...(d.lightningUrl && { lightningUrl: resolveDataUrl(d.lightningUrl) }),
     // The composite `av` type carries the scene manifest, two overlay archive
     // manifests, and two sidecar JSONs; rewrite all of them through the same
     // VITE_DATA_BASE_URL resolver so they don't 404 on the R2 deploy.
@@ -4248,6 +4721,8 @@ export const SHIPPED_DATASET_IDS: string[] = [
   // it lands in navigation without bumping a grid card.
   'nyc-taxi-flows', // NYC Taxi Flow — pre-aggregated overview corridors
   'storm-radar', // Iowa Derecho — NEXRAD radar composite (field+cells+tracks)
+  'goes-glm-lightning', // GOES GLM Lightning — flashes + density (late-May 2024)
+  'severe-weather-2024', // Weather Suite — wind + precip + cells/tracks + lightning
 ];
 
 export const shippedDatasets: Dataset[] = SHIPPED_DATASET_IDS.map((id) =>

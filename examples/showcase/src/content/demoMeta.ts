@@ -416,6 +416,181 @@ export const DEMO_META: Record<string, DemoMeta> = {
     ],
     related: ['hurricanes', 'wildfires', 'earthquake-activity'],
   },
+  'goes-glm-lightning': {
+    category: 'earth-ocean',
+    tagline:
+      'The late-May 2024 outbreak as pure lightning — every GOES-16 GLM flash over the Lower 48, glowing then fading over a live strike-density field.',
+    techniqueTag: 'Lightning · flashes + density',
+    about: [
+      'The Geostationary Lightning Mapper (GLM) aboard GOES-16 watches the Western Hemisphere and reports every optical lightning flash it sees, day and night, in 20-second frames. This demo plays four days of it — 19–22 May 2024, the prolific late-May severe-weather sequence whose 21 May outbreak produced the Greenfield, Iowa EF4 — across the whole Lower 48.',
+      'The generator lists and downloads the L2 LCFA granules straight from the anonymous NOAA GOES-16 S3 bucket (no credentials), reads each NetCDF with xarray, keeps the good-quality flashes inside a CONUS box, and emits one point per flash carrying its time, optical energy, and footprint area — then stt-build tiles it (time-major ordering, quantized coordinates) into a single archive.',
+      'That one archive drives two stacked layers. A strike-DENSITY field (`AnimatedHeatmapLayer`) glows where flashes concentrate; individual FLASHES (`AnimatedPointLayer`) punch through on top, each appearing bright then fading and shrinking over ~12 minutes of model time — so instantaneous strikes read as a shimmering flicker on the 72-hour-in-150-second clock. It is the lightning member of the weather suite.',
+    ],
+    dataSources: [
+      {
+        name: 'NOAA GOES-16 GLM L2 LCFA (AWS Open Data)',
+        url: 'https://registry.opendata.aws/noaa-goes/',
+        license: 'Public domain (US Gov)',
+        note: 'Bucket noaa-goes16, product GLM-L2-LCFA, 19–22 May 2024, ~180 granules/hour.',
+      },
+    ],
+    buildCommand:
+      'python glm_lightning.py --start 2024-05-19T12:00Z --end 2024-05-22T12:00Z --out examples/showcase/public/data/goes-glm-lightning --summary',
+    buildNote:
+      'Downloads the 20-second GLM granules from the anonymous GOES-16 S3 bucket ' +
+      '(no credentials) on first run, caching to --cache; re-run with ' +
+      '--skip-fetch to rebuild from the cache. One archive of flash points feeds ' +
+      'both the density heatmap and the flash markers.',
+    techniques: [
+      {
+        label: 'AnimatedHeatmapLayer',
+        docPath: '/docs/api/heatmap-time-layer',
+      },
+      {
+        label: 'AnimatedPointLayer',
+        docPath: '/docs/api/animated-point-layer',
+      },
+      {
+        label: 'TimeFilterExtension',
+        docPath: '/docs/api/time-filter-extension',
+      },
+    ],
+    related: ['storm-radar', 'hurricanes', 'rain-flood-2019'],
+  },
+  'mrms-precip': {
+    category: 'earth-ocean',
+    tagline:
+      'The late-May 2024 outbreak as a national radar mosaic — 1 km reflectivity contoured into moving dBZ bands over the whole Lower 48, with storm cells and tracks.',
+    techniqueTag: 'MRMS · 3-layer composite',
+    about: [
+      'MRMS (Multi-Radar/Multi-Sensor) merges every WSR-88D and terminal radar in the country into one seamless national reflectivity mosaic at 1 km, every ~2 minutes. This demo plays 19–22 May 2024 — the prolific late-May severe sequence, including the 21 May Greenfield, Iowa EF4 — as one continental precipitation field.',
+      'A Python adapter lists and downloads the MergedReflectivityQCComposite GRIB2 grids straight from the anonymous noaa-mrms-pds S3 bucket, reads each with cfgrib, masks the no-data sentinels, and — one frame per ten minutes — contours the grid into filled dBZ isoband polygons (marching squares), finds storm cells as high-reflectivity connected components (scipy), and links those cells across frames into SCIT-style tracks. The browser renders finished vector tiles.',
+      'Three archives drive one composite, exactly like the NEXRAD storm-radar demo: reflectivity bands (`AnimatedPolygonLayer`, categorical `dbz_band`) are the precipitation field; storm-cell centroids (`AnimatedPointLayer`) mark the cores; cell tracks (`AnimatedTripsLayer`, per-vertex intensity) trail behind. It is the precipitation member of the weather suite.',
+    ],
+    dataSources: [
+      {
+        name: 'NOAA MRMS MergedReflectivityQCComposite (AWS Open Data)',
+        url: 'https://registry.opendata.aws/noaa-mrms-pds/',
+        license: 'Public domain (US Gov)',
+        note: 'Bucket noaa-mrms-pds, CONUS 0.01° composite reflectivity, 19–22 May 2024, sampled every 10 min.',
+      },
+    ],
+    buildCommand:
+      'python mrms_weather.py --start 2024-05-19T12:00Z --end 2024-05-22T12:00Z --step-min 10 --out examples/showcase/public/data/mrms-precip',
+    buildNote:
+      'Downloads the GRIB2(.gz) composites from the anonymous MRMS S3 bucket (no ' +
+      'credentials) on first run, caching to --cache; re-run with --skip-fetch to ' +
+      'rebuild from the cache. Contouring, cell detection, and tracking run in ' +
+      'Python (contourpy + scipy). Writes three archives: mrms-precip-field, ' +
+      '-cells, -tracks.',
+    techniques: [
+      {
+        label: 'AnimatedPolygonLayer',
+        docPath: '/docs/api/animated-polygon-layer',
+      },
+      {
+        label: 'AnimatedPointLayer',
+        docPath: '/docs/api/animated-point-layer',
+      },
+      {
+        label: 'AnimatedTripsLayer',
+        docPath: '/docs/api/animated-trips-layer',
+      },
+    ],
+    related: ['storm-radar', 'goes-glm-lightning', 'rain-flood-2019'],
+  },
+  'hrrr-wind': {
+    category: 'earth-ocean',
+    tagline:
+      'NOAA HRRR 10 m wind advected into streamlines over the late-May 2024 outbreak — the atmospheric companion to the ocean-current demo.',
+    techniqueTag: 'Trips · wind advection',
+    about: [
+      'The same particle-advection idea as the modeled-ocean-currents demo, applied to the atmosphere. Massless particles are seeded across the Lower 48 and integrated through NOAA HRRR’s time-varying 10 m wind for 19–22 May 2024; each path becomes a streamline ribbon shaded by wind speed.',
+      'HRRR is a 3 km model on a Lambert-Conformal grid, so the adapter byte-range-subsets only the 10 m U/V wind messages from each hourly file (~5 MB via the GRIB .idx sidecar, not the 100 MB full file), regrids that field to a regular lat/lon grid (scipy), and integrates with 4th-order Runge–Kutta plus continuous respawning so coverage stays even. The result is the earth.nullschool look via trip ribbons — no GPU particle system.',
+      'It is the wind member of the weather suite; in the combined view it sweeps beneath the precipitation and lightning.',
+    ],
+    dataSources: [
+      {
+        name: 'NOAA HRRR (High-Resolution Rapid Refresh, AWS Open Data)',
+        url: 'https://registry.opendata.aws/noaa-hrrr-bdp-pds/',
+        license: 'Public domain (US Gov)',
+        note: 'Bucket noaa-hrrr-bdp-pds, hourly wrfsfcf00 10 m UGRD/VGRD, 19–22 May 2024.',
+      },
+    ],
+    buildCommand:
+      'python hrrr_advect.py --start 2024-05-19T12:00Z --end 2024-05-22T12:00Z --out examples/showcase/public/data/hrrr-wind',
+    buildNote:
+      'Byte-range-subsets the 10 m wind from the anonymous HRRR S3 bucket (no ' +
+      'credentials), regrids and advects in Python (scipy). Reuses the ' +
+      'ecco_advect.py trip-ribbon pipeline.',
+    techniques: [
+      {
+        label: 'AnimatedTripsLayer',
+        docPath: '/docs/api/animated-trips-layer',
+      },
+      {
+        label: 'TimeFilterExtension',
+        docPath: '/docs/api/time-filter-extension',
+      },
+    ],
+    related: ['ecco-currents', 'severe-weather-2024', 'ocean-drifters'],
+  },
+  'severe-weather-2024': {
+    category: 'earth-ocean',
+    tagline:
+      'Four NOAA feeds on one 72-hour clock — wind, precipitation, storm cells, and lightning over the late-May 2024 outbreak.',
+    techniqueTag: 'Weather suite · 6-layer composite',
+    about: [
+      'The whole weather suite on one continental map and one playhead: 19–22 May 2024, the prolonged late-May severe-weather sequence whose 21 May outbreak produced the Greenfield, Iowa EF4. Four independent public NOAA datasets, each built by its own adapter, are streamed together and coordinated by the playback governor.',
+      'Bottom to top: HRRR 10 m wind advected into streamlines (blue→red by speed); the MRMS national reflectivity mosaic as moving dBZ isoband polygons — the precipitation field — with storm-cell centroids and SCIT cell tracks over it; and every GOES-16 GLM lightning flash, drawn as a glowing strike-density field with individual flashes flickering on top. The precipitation field is the required governor source; wind, lightning, cells, and tracks stream alongside as optional sources (continue-and-degrade), each widening its own loader window.',
+      'It is the payoff of the suite: you watch the wind organize, the rain bands sweep east, the cells and their tracks light up the convective cores, and the lightning flare along the leading edge — cause and effect, one clock.',
+    ],
+    dataSources: [
+      {
+        name: 'NOAA HRRR surface wind (AWS Open Data)',
+        url: 'https://registry.opendata.aws/noaa-hrrr-bdp-pds/',
+        license: 'Public domain (US Gov)',
+        note: 'hourly 10 m UGRD/VGRD → advected streamlines.',
+      },
+      {
+        name: 'NOAA MRMS reflectivity mosaic (AWS Open Data)',
+        url: 'https://registry.opendata.aws/noaa-mrms-pds/',
+        license: 'Public domain (US Gov)',
+        note: '1 km composite reflectivity → dBZ bands + cells + tracks.',
+      },
+      {
+        name: 'NOAA GOES-16 GLM lightning (AWS Open Data)',
+        url: 'https://registry.opendata.aws/noaa-goes/',
+        license: 'Public domain (US Gov)',
+        note: 'L2 LCFA flashes → density field + flash points.',
+      },
+    ],
+    buildCommand:
+      'python glm_lightning.py … && python mrms_weather.py … && python hrrr_advect.py …',
+    buildNote:
+      'Assembles four archives built by the three weather adapters (goes-glm-' +
+      'lightning, mrms-precip-field/-cells/-tracks, hrrr-wind) into one ' +
+      "type:'weather' composite. Rebuild any layer independently.",
+    techniques: [
+      {
+        label: 'AnimatedPolygonLayer',
+        docPath: '/docs/api/animated-polygon-layer',
+      },
+      {
+        label: 'AnimatedTripsLayer',
+        docPath: '/docs/api/animated-trips-layer',
+      },
+      {
+        label: 'AnimatedHeatmapLayer',
+        docPath: '/docs/api/heatmap-time-layer',
+      },
+      {
+        label: 'AnimatedPointLayer',
+        docPath: '/docs/api/animated-point-layer',
+      },
+    ],
+    related: ['goes-glm-lightning', 'mrms-precip', 'hrrr-wind'],
+  },
 
   // ── Mobility ───────────────────────────────────────────────────────────
   'av-synthetic': {
@@ -1049,7 +1224,44 @@ export const DEMO_META: Record<string, DemoMeta> = {
       },
       { label: 'TimeController', docPath: '/docs/api/time-controller' },
     ],
-    related: ['bixi-points', 'nyc-taxi-points'],
+    related: ['gtfs-ch', 'bixi-points', 'nyc-taxi-points'],
+  },
+
+  'gtfs-ch': {
+    category: 'mobility',
+    tagline:
+      'Every scheduled train, bus, tram, boat, gondola and funicular in Switzerland for one Monday — watch the national network wake up from the first pre-dawn bus.',
+    techniqueTag: 'Moving heads · schedule expansion',
+    about: [
+      'A whole country’s public transport as one animated timetable — inspired by SRF’s “Wenn der Schweizer ÖV erwacht” (July 2026), which animated the same service day, Monday 2026-03-02, and counted the network ramping from 0 to 6,488 concurrent vehicles in four hours. Intercity trains thread the Mittelland, PostAuto buses climb alpine passes, boats cross the lakes, and funiculars shuttle up the hillsides.',
+      'No vehicle positions are recorded — the static GTFS feed is the data. The build expands the national service calendar to one concrete day, then interpolates each vehicle between its scheduled stops with per-vertex timestamps (dwell included). Unlike the Dutch feed, opentransportdata.swiss deliberately publishes no shapes.txt, so every trip uses stop-to-stop geometry: dense urban services trace their streets closely, while long nonstop intercity legs run as straight chords between stations.',
+      'The archive holds the full service day with per-vertex timing; AnimatedTripHeadsLayer interpolates every active vehicle per frame. Start playback before 05:00 to watch the wake-up, or zoom into Zürich HB or Bern at rush hour for platform-level density.',
+    ],
+    dataSources: [
+      {
+        name: 'opentransportdata.swiss — Timetable 2026 (GTFS2020)',
+        url: 'https://data.opentransportdata.swiss/dataset/timetable-2026-gtfs2020',
+        license: 'Open use, attribution required',
+        note: 'Complete national timetable (all Swiss transit agencies incl. SBB and PostAuto); regenerated twice weekly, calendar spans the timetable year.',
+      },
+    ],
+    buildCommand:
+      'stt-generate gtfs --feed data/gtfs-ch/feed --date 20260302 \\\n' +
+      '  --output examples/showcase/public/data/gtfs-ch',
+    buildNote:
+      'Download + unzip the GTFS permalink from ' +
+      'data.opentransportdata.swiss/dataset/timetable-2026-gtfs2020 first. The ' +
+      'Swiss feed ships no shapes.txt, so the generator falls back to ' +
+      'stop-to-stop geometry for every trip. The build prints the exact ' +
+      'archive time span to paste into the dataset’s `timeRange`.',
+    techniques: [
+      {
+        label: 'AnimatedTripHeadsLayer',
+        docPath: '/docs/api/animated-trip-heads-layer',
+      },
+      { label: 'TimeController', docPath: '/docs/api/time-controller' },
+    ],
+    related: ['gtfs-nl', 'bixi-points', 'nyc-taxi-points'],
   },
 
   'nwm-rivers-2019': {
@@ -1088,10 +1300,10 @@ export const DEMO_META: Record<string, DemoMeta> = {
       { label: 'FlowCorridorLayer', docPath: '/docs/api/flow-corridor-layer' },
       { label: 'TimeController', docPath: '/docs/api/time-controller' },
     ],
-    related: ['nwm-rivers-flood-2019-03', 'bixi-streets'],
+    related: ['rain-flood-2019', 'bixi-streets'],
   },
 
-  'nwm-rivers-flood-2019-03': {
+  'rain-flood-2019': {
     category: 'earth-ocean',
     tagline:
       'The March 2019 bomb-cyclone flood hour by hour — every reach colored by how far above its own normal it runs.',
@@ -1762,6 +1974,47 @@ export const DEMO_META: Record<string, DemoMeta> = {
       },
     ],
     related: ['osm-nyc-draw', 'osm-nyc-changesets-summary'],
+  },
+
+  'poopdeck-ship': {
+    category: 'earth-ocean',
+    tagline: 'A synthesised sea, relit on the GPU',
+    techniqueTag: 'Point cloud · 3D · shader-relit',
+    about: [
+      'Every other demo here is measured: ships that really sailed, quakes that really happened. This one is synthesised end to end. A Blender pipeline builds a stylised sailing ship — hull, deck, masts, rigging, sails, flag — floating on an ocean displaced by superposed Gerstner waves, then derives the ship’s heave, pitch and roll from that same wave field so the vessel answers the water it sits in. Foam strokes and mist ribbons ride the surface as real deforming geometry, so they survive the conversion to points.',
+      'The scene is sampled once into 360,000 points fixed to the surfaces by barycentric coordinate, and those same points are re-evaluated at every frame, each carrying an octahedral surface normal. Because a point keeps its identity for the whole 14 seconds, nothing shimmers or reshuffles between frames — the cloud deforms rather than being re-scattered. The demo ships one in nine of them, 40,000 points per frame, at 15 fps.',
+      'Nothing here is coloured by Blender. The sampler writes `material.diffuse_color`, a flat swatch, so the whole cloud carries only seven distinct colours and none of the scene’s lamps, fog or view transform survive the export. So the four bytes of the interleaved `point_rgba` column are not a colour at all: they are a class id, a stable per-point paint seed, and a two-byte octahedral normal. A `PainterlyExtension` reads them in the vertex shader and builds the picture there — palette, a cool storm key, a warm horizon rim, distance fog, per-point pigment jitter, and a point size that makes rigging a thread and foam a paint mass. The palette can be re-graded without re-running Blender.',
+      'The frame timing is the fussy part. Frames are points in time and the render window is centred on the playhead, so it shows exactly one frame only if its width equals the frame spacing — hence a uniform 66 ms lattice and a 66 ms `timeWindow`. But the tileset refreshes its visible set only every 100 ms of wall clock, and it selects tiles by that same window, so a one-frame selection is stale before the next refresh and the cloud goes blank in most rendered frames. `tileLoadTimeWindow` separates the two: 600 ms of tiles stay resident while the render window still picks a single frame out of them. Buckets hold three frames each (198 = 3 × 66) so a resident tile outlives the refresh, and stay under the tiler’s per-tile split cap — a bucket that splits, splits along time, and hands back one-frame tiles.',
+    ],
+    dataSources: [
+      {
+        name: 'Procedurally generated (Blender)',
+        url: 'https://www.blender.org/',
+        license: 'Original scene — no third-party assets',
+        note: 'The ship, rigging, sails and ocean are built by script; nothing is downloaded.',
+      },
+      {
+        name: 'Gerstner waves — GPU Gems, ch. 1',
+        url: 'https://developer.nvidia.com/gpugems/gpugems/part-i-natural-effects/chapter-1-effective-water-simulation-physical-models',
+        license: 'Reference only',
+        note: 'The ocean displacement and the ship’s derived motion follow this model.',
+      },
+    ],
+    buildCommand:
+      'python pipeline/to_geoparquet.py --input output/raw --output demo.parquet --sidecar demo.scene.json --scene-config config/scene.json --style-in-rgba --origin-lat 42.35 --origin-lon -70.55 --decimate 9 --frame-step 2 --frame-interval-ms 66 && stt-build -i demo.parquet -o poopdeck-ship --time-field timestamp --time-format unix-ms --temporal-bucket 198ms --min-zoom 14 --max-zoom 14 --point-elevation-column z --vector-group point_rgba=r,g,b,a:u8 --quantize-coords 0.02 --quantize-attrs-auto --streaming --publish',
+    buildNote:
+      'Needs Blender 4.2+ to render the raw point frames first (`make scene sample`) from the poopdeck_pointcloud pipeline. `--quantize-coords 0.02` is the single largest size lever: 2 cm of ground precision is far below what a 2 px point can resolve, and it cuts the archive roughly threefold. 8.44M features, 59 MB, ~4.3 MB/s at 1×. The archive is local-only — it is not synced to R2, so the dataset is filtered out of the public site (see LOCAL_ONLY_DATASETS in datasets.ts).',
+    techniques: [
+      {
+        label: 'AnimatedPointCloudLayer',
+        docPath: '/docs/api/animated-point-cloud-layer',
+      },
+      {
+        label: 'TimeFilterExtension (window)',
+        docPath: '/docs/api/time-filter-extension',
+      },
+    ],
+    related: ['argoverse-02678d04', 'ship-traffic'],
   },
 };
 

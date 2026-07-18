@@ -112,14 +112,30 @@ export function inferLayerType(dataset: DatasetDescription): InferredLayer {
   return { type: 'AnimatedPointLayer', confidence: 'default' };
 }
 
-/** `${publicBaseUrl}/${name}/manifest.json` when configured, else the raw filesystem manifest path. */
+/**
+ * A stable, non-empty identifier for a dataset — used as the layer `id` and as
+ * the `${publicBaseUrl}/<id>/` path segment. Prefers the data-root-relative
+ * {@link DatasetDescription.name}, but that is `""` for an archive described by
+ * its own directory (an explicit `paths` entry outside `--data-root`, or a
+ * fresh `build_dataset` output addressed as `.`); in that case fall back to the
+ * baked `metadataName`, then the directory basename, so the id is never empty
+ * or a bare `//` in the URL.
+ */
+export function datasetLayerId(dataset: DatasetDescription): string {
+  if (dataset.name) return dataset.name;
+  if (dataset.metadataName) return dataset.metadataName;
+  const parts = dataset.path.split(/[/\\]/).filter(Boolean);
+  return parts[parts.length - 1] ?? 'dataset';
+}
+
+/** `${publicBaseUrl}/${id}/manifest.json` when configured, else the raw filesystem manifest path. */
 export function resolveManifestUrl(
   dataset: DatasetDescription,
   publicBaseUrl?: string,
 ): string {
   if (publicBaseUrl) {
     const base = publicBaseUrl.replace(/\/+$/, '');
-    return `${base}/${dataset.name}/manifest.json`;
+    return `${base}/${datasetLayerId(dataset)}/manifest.json`;
   }
   return `${dataset.path}/manifest.json`;
 }
@@ -179,13 +195,14 @@ export function buildViewMap(
   const currentTime = options.time ?? datasets[0]?.timeRange?.start;
   const warnings: string[] = [];
   const layers = datasets.map((dataset) => {
+    const id = datasetLayerId(dataset);
     const inferred = inferLayerType(dataset);
     const type = options.layer ?? inferred.type;
     // An explicit `layer` override is a deliberate choice, so it suppresses the
     // geometry-unknown warning; a bare `default` inference does not.
     if (options.layer === undefined && inferred.confidence === 'default') {
       warnings.push(
-        `Layer for "${dataset.name}": geometry type is unknown (no style_hints/summary tier on this dataset), ` +
+        `Layer for "${id}": geometry type is unknown (no style_hints/summary tier on this dataset), ` +
           `defaulting to AnimatedPointLayer — pass the \`layer\` param (e.g. ` +
           `AnimatedPathLayer/AnimatedTripsLayer/AnimatedPolygonLayer) or rebuild with --style-hints if it is ` +
           `not point data.`,
@@ -193,7 +210,7 @@ export function buildViewMap(
     }
     const props: Record<string, unknown> = {
       '@@type': type,
-      id: dataset.name,
+      id,
       data: resolveManifestUrl(dataset, options.publicBaseUrl),
     };
     if (currentTime !== undefined) props.currentTime = currentTime;
@@ -241,7 +258,8 @@ function renderHtml(
   datasets: DatasetDescription[],
   warnings: string[],
 ): string {
-  const title = datasets.map((d) => d.name).join(', ') || 'STT view_map';
+  const title =
+    datasets.map((d) => datasetLayerId(d)).join(', ') || 'STT view_map';
   // Escaping `<` as `<` keeps the JSON safe inside the <script> block (no `</script>` break-out).
   const specJson = JSON.stringify(spec).replace(/</g, '\\u003c');
   const prettySpec = escapeHtml(JSON.stringify(spec, null, 2));

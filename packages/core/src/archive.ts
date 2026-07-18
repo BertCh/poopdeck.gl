@@ -464,6 +464,19 @@ export interface PackedManifest {
   metadata: any;
 }
 
+/**
+ * Extract the blake3-128 content address embedded in a content-addressed
+ * directory object key (`.../<32-hex>.sttd`, the writer's
+ * `index/{blake3_128_hex}.sttd`), or `null` when the key is not
+ * content-addressed (e.g. a synthetic-test directory name). The address covers
+ * the ENTIRE at-rest object, magic prelude + framing included (packed spec §9.2
+ * / the Rust `blake3_128_hex(&index_bytes)`).
+ */
+function directoryContentAddress(key: string): string | null {
+  const m = /(?:^|\/)([0-9a-f]{32})\.sttd$/i.exec(key);
+  return m ? m[1].toLowerCase() : null;
+}
+
 /** Standard-alphabet base64 → bytes (`atob` exists in browsers and Node ≥ 16). */
 function base64ToBytes(b64: string): Uint8Array {
   const bin = atob(b64);
@@ -1392,7 +1405,16 @@ export class STTArchive {
       'directory',
       dref.length,
     );
-    const bytes = this.stripDirectoryMagic(new Uint8Array(buffer));
+    const objectBytes = new Uint8Array(buffer);
+    // Enforce the directory's content address (spec §9.2): the object key
+    // embeds the blake3-128 of its ENTIRE at-rest bytes. Verifying it here is
+    // the dataset's root of trust — every tile offset/CRC the reader later
+    // relies on comes from this object, so a tampered or corrupt directory must
+    // fail loudly at open rather than be silently trusted. (Non-content-
+    // addressed keys — synthetic test archives — carry no declared address to
+    // check against, so verification is skipped for them.)
+    this.verifyDirectoryContentAddress(dref.key, objectBytes);
+    const bytes = this.stripDirectoryMagic(objectBytes);
     const raw =
       dref.layout === DIRECTORY_LAYOUT_PAGED
         ? this.decodePagedWhole(bytes, dref.rootLength ?? 0)
@@ -1409,6 +1431,29 @@ export class STTArchive {
   /** Unwrap the directory object's at-rest framing (one page or the whole). */
   private unframeDirectory(bytes: Uint8Array): Uint8Array {
     return this.directoryZstd ? unzstdSync(bytes) : bytes;
+  }
+
+  /**
+   * Verify a fetched directory object against the blake3-128 content address
+   * embedded in its key (packed spec §9.2). Enforced always — the directory is
+   * the reader's root of trust; a mismatch means tampered or transport-corrupt
+   * bytes and MUST abort the open rather than be silently trusted. A key that
+   * isn't content-addressed (synthetic test archives) declares no address, so
+   * there is nothing to check and verification is a no-op.
+   */
+  private verifyDirectoryContentAddress(
+    key: string,
+    objectBytes: Uint8Array,
+  ): void {
+    const expected = directoryContentAddress(key);
+    if (!expected) return;
+    const actual = blake3Hex128(objectBytes);
+    if (actual !== expected) {
+      throw new Error(
+        `STT directory object ${key}: content hash ${actual} does not match ` +
+          `its declared address ${expected} — tampered or corrupt directory`,
+      );
+    }
   }
 
   /**
@@ -1893,6 +1938,9 @@ export class STTArchive {
       const decompressed = await decompress(
         new Uint8Array(compressed),
         entry.compression,
+        // Bound the fallback re-decompress by the directory's declared size
+        // (spec §11) — a lying/oversized frame can't blow up this cold path.
+        entry.uncompressedSize || undefined,
       );
       await cache.set(key, decompressed);
     } catch {
@@ -1993,6 +2041,45 @@ export class STTArchive {
   }
 
   /**
+   * Cheap validity check on an OPFS-cached (already-decompressed) payload: its
+   * length must equal the directory's declared `uncompressedSize`. A truncated
+   * or oversized entry — a partial write, disk-bit-rot, an unrelated blob — is
+   * caught here before it can silently blank the tile, letting the caller
+   * evict + self-heal. `uncompressedSize === 0` means the directory recorded no
+   * size (synthetic archives), so there is nothing to check.
+   */
+  private opfsPayloadValid(entry: TileEntry, payload: Uint8Array): boolean {
+    return (
+      entry.uncompressedSize === 0 ||
+      payload.byteLength === entry.uncompressedSize
+    );
+  }
+
+  /**
+   * Fetch a tile's compressed bytes from origin and decode them, persisting the
+   * fresh decompressed payload back to OPFS (`writeToOpfs`). Used by the cold
+   * network path AND by OPFS self-heal: re-decoding overwrites the poisoned
+   * OPFS entry at the same key with correct bytes, so a corrupt cache entry
+   * heals on the next request instead of blanking the tile forever.
+   */
+  private async fetchAndDecodeTile(
+    id: TileId,
+    entry: TileEntry,
+    signal?: AbortSignal,
+    fetchPriority?: 'high' | 'low' | 'auto',
+  ): Promise<Tile> {
+    const compressed = await this.fetchRangeWithRetry(
+      entry.packId,
+      entry.offset,
+      entry.offset + entry.length - 1,
+      signal,
+      fetchPriority,
+    );
+    this.storeBytes(this.tileIdToKey(id), compressed);
+    return this.decodeBytes(id, entry, compressed, signal, true);
+  }
+
+  /**
    * Apply the {@link ArchiveOptions.retainArrowIpc} policy to a freshly
    * decoded tile. `'auto'` drops a layer's raw IPC reference (and any
    * inline-decoded `arrowTable`, which pins the same buffers) only when NO
@@ -2060,25 +2147,40 @@ export class STTArchive {
     const opfsK = this.opfsCache ? this.opfsKey(id) : null;
     if (this.opfsCache && opfsK) {
       const fromOpfs = await this.opfsCache.get(opfsK);
-      if (fromOpfs) {
-        this.opfsStats.hits++;
-        return this.decodeDecompressed(id, entry, fromOpfs, options?.signal);
+      if (fromOpfs && this.opfsPayloadValid(entry, fromOpfs)) {
+        try {
+          const tile = await this.decodeDecompressed(
+            id,
+            entry,
+            fromOpfs,
+            options?.signal,
+          );
+          this.opfsStats.hits++;
+          return tile;
+        } catch (err) {
+          if (isAbortError(err)) throw err;
+          // Corrupt OPFS payload (right length, wrong bytes): fall through to
+          // the network path below, which overwrites the poisoned entry with
+          // fresh bytes (self-heal) instead of returning a broken tile.
+          this.opfsStats.misses++;
+        }
+      } else {
+        // Absent, or truncated/oversized entry (evicted-by-overwrite via the
+        // refetch below).
+        this.opfsStats.misses++;
       }
-      this.opfsStats.misses++;
     }
 
     this.cacheStats.misses++;
-    const compressed = await this.fetchRangeWithRetry(
-      entry.packId,
-      entry.offset,
-      entry.offset + entry.length - 1,
+    // Network miss (or OPFS self-heal) → fetch + decode + fire-and-forget OPFS
+    // write (the decoder hands its decompressed payload back, so nothing is
+    // re-decompressed here; the write overwrites any poisoned entry).
+    return this.fetchAndDecodeTile(
+      id,
+      entry,
       options?.signal,
       options?.fetchPriority,
     );
-    this.storeBytes(key, compressed);
-    // Network miss → decode + fire-and-forget OPFS write (the decoder hands
-    // its decompressed payload back, so nothing is re-decompressed here).
-    return this.decodeBytes(id, entry, compressed, options?.signal, true);
   }
 
   /**
@@ -2446,19 +2548,35 @@ export class STTArchive {
       for (let i = 0; i < pending.length; i++) {
         const bytes = opfsResults[i];
         const p = pending[i];
-        if (bytes) {
+        // A truncated/oversized entry can't be trusted — route it to the
+        // network phase, which overwrites the poisoned OPFS entry with fresh
+        // bytes (self-heal) instead of blanking the tile.
+        if (bytes && this.opfsPayloadValid(p.entry, bytes)) {
           this.opfsStats.hits++;
           jobs.push(
             this.decodeDecompressed(p.id, p.entry, bytes, options?.signal).then(
               (t) => {
                 deliver(p.index, t);
               },
-              (err) => {
-                // Disk-corrupted/truncated OPFS payloads reject the same
-                // way poisoned byteCache entries do — keep the per-tile
-                // null contract instead of failing the whole batch.
+              async (err) => {
                 if (isAbortError(err)) throw err;
-                deliver(p.index, null);
+                // Disk-corrupted OPFS payload (right length, wrong bytes):
+                // self-heal by refetching from origin, which also overwrites
+                // the poisoned entry — otherwise it would blank this tile on
+                // every future batch. A refetch that also fails leaves the
+                // per-tile `null` contract intact.
+                try {
+                  const healed = await this.fetchAndDecodeTile(
+                    p.id,
+                    p.entry,
+                    options?.signal,
+                    options?.fetchPriority,
+                  );
+                  deliver(p.index, healed);
+                } catch (healErr) {
+                  if (isAbortError(healErr)) throw healErr;
+                  deliver(p.index, null);
+                }
               },
             ),
           );

@@ -5,19 +5,28 @@
   // upload`), which otherwise fails with "Missing entry-point to Worker script
   // or to assets directory" because there was no config at the root.
   //
-  // Same worker name + same built assets as examples/showcase/wrangler.jsonc.
-  // The production deploy command may still pass
-  // `--config examples/showcase/wrangler.jsonc` (an explicit --config wins);
-  // both point at the same worker + same dist, so they're interchangeable.
-  // Keep the two in sync (name, assets target, not_found_handling).
+  // Same worker + same built assets as examples/showcase/wrangler.jsonc, just
+  // with paths rebased to the repo root. The production deploy command may still
+  // pass `--config examples/showcase/wrangler.jsonc` (an explicit --config wins);
+  // both point at the same worker + same build output, so they're interchangeable.
+  // Keep the two in sync (name, main, assets target, binding, not_found_handling).
   //
-  // NOTE: "directory" is relative to THIS file (repo root) → the showcase build
-  // output at examples/showcase/dist (produced by
-  // `turbo run build --filter=@poopdeck.gl/showcase`).
+  // NOTE: "main" and "assets.directory" are relative to THIS file (repo root) →
+  // the React Router framework-mode build emits the SPA + prerendered static HTML
+  // at examples/showcase/build/client, served by examples/showcase/worker.js
+  // (produced by `turbo run build --filter=@poopdeck.gl/showcase`).
   "name": "spatiotemporal-tiles",
   "compatibility_date": "2025-06-01",
+  // Worker-with-assets: prerendered static HTML is served directly (assets are
+  // matched before the Worker); the Worker (worker.js) runs only on an asset
+  // MISS and serves React Router's generic SPA shell (__spa-fallback.html) for
+  // the client-only fullscreen routes + unknown paths. `index.html` is the
+  // prerendered HOME, so it must NOT double as the SPA fallback — hence a
+  // Worker instead of not_found_handling:"single-page-application".
+  "main": "./examples/showcase/worker.js",
   "assets": {
-    "directory": "./examples/showcase/dist",
-    "not_found_handling": "single-page-application",
+    "directory": "./examples/showcase/build/client",
+    "binding": "ASSETS",
+    "not_found_handling": "none",
   },
 }

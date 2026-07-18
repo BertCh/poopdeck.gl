@@ -148,8 +148,14 @@ describe('AnimatedPointLayer styleKey content invalidation', () => {
     const second = (layer as any).prepareTile(tile, tile.layers[0]);
     expect(second.styleKey).not.toBe(first.styleKey);
     expect(second).not.toBe(first);
-    // The rebuilt tile carries the new palette to the GPU extension.
-    expect(second.gpuPalette).toBe(layer.props.colorPalette);
+    // The rebuilt tile carries the new palette content to the GPU extension,
+    // with a trailing default slot appended (colorMappingDefault ?? transparent)
+    // so NULL / unmapped-category features render the default, not the last
+    // real color — see indicesToFloat32WithDefault.
+    expect(second.gpuPalette).toEqual([
+      ...layer.props.colorPalette,
+      [0, 0, 0, 0],
+    ]);
   });
 
   it('keeps the cache hit when the palette reference is unchanged', () => {
@@ -218,6 +224,96 @@ describe('AnimatedPointLayer styleKey content invalidation', () => {
     const first = (layer as any).prepareTile(tile, tile.layers[0]);
     const second = (layer as any).prepareTile(tile, tile.layers[0]);
     expect(second).toBe(first);
+  });
+
+  it('invalidates when colorMappingDefault changes in isolation', () => {
+    // A category present in the tile but ABSENT from colorMapping falls back to
+    // colorMappingDefault, which is baked into the CPU-expanded RGBA buffer.
+    // The key omitted it, so the cache served stale fallback colors.
+    const layer = makeLayer({
+      fillColor: 'kind',
+      colorMapping: { a: [1, 1, 1, 255] }, // 'b' unmapped → default
+      colorMappingDefault: [10, 20, 30, 255],
+    });
+    const tile = catTile();
+    const first = (layer as any).prepareTile(tile, tile.layers[0]);
+    // Feature 1 (category 'b', unmapped) uses the default.
+    expect([...first.data.attributes.getFillColor.value.slice(4, 8)]).toEqual([
+      10, 20, 30, 255,
+    ]);
+
+    layer.props.colorMappingDefault = [40, 50, 60, 255];
+    const second = (layer as any).prepareTile(tile, tile.layers[0]);
+    expect(second.styleKey).not.toBe(first.styleKey);
+    expect([...second.data.attributes.getFillColor.value.slice(4, 8)]).toEqual([
+      40, 50, 60, 255,
+    ]);
+  });
+
+  it('colors NULL / unmapped categories with colorMappingDefault on the GPU path', () => {
+    // GPU categorical path (no colorMapping): a NULL feature (0xffff sentinel)
+    // and an out-of-range category index must map to an appended default slot,
+    // not clamp onto the LAST real palette entry.
+    const layer = makeLayer({
+      fillColor: 'kind',
+      colorPalette: [
+        [10, 10, 10, 255],
+        [20, 20, 20, 255],
+      ],
+      colorMappingDefault: [99, 88, 77, 255],
+    });
+    const tile = catTile();
+    tile.layers[0].features.categoricalProps['kind'] = {
+      indices: new Uint16Array([0, 1, 0xffff, 5]), // valid, valid, NULL, unmapped
+      categories: ['a', 'b'],
+    } as any;
+    const prepared = (layer as any).prepareTile(tile, tile.layers[0]);
+    // colorMappingDefault appended as a trailing palette slot (index 2).
+    expect(prepared.gpuPalette).toEqual([
+      [10, 10, 10, 255],
+      [20, 20, 20, 255],
+      [99, 88, 77, 255],
+    ]);
+    // Mapped indices stay; NULL + out-of-range redirect to the default slot (2).
+    expect([...prepared.data.attributes.instanceCategoryIndex.value]).toEqual([
+      0, 1, 2, 2,
+    ]);
+  });
+
+  it('defaults colorVectorColumn to null so an explicit fillColor is not shadowed', () => {
+    // Regression: a truthy 'point_rgba' default was checked before fillColor in
+    // buildTileData and silently overrode an explicit fillColor whenever a tile
+    // happened to carry that column. The base layer must default to null
+    // (opt-in); the point-cloud subclass overrides it back to 'point_rgba'.
+    expect(LayerCtor.defaultProps.colorVectorColumn.value).toBe(null);
+  });
+
+  it('ignores an incidental point_rgba vector column when colorVectorColumn is unset', () => {
+    const layer = makeLayer({ fillColor: [255, 128, 0, 255] });
+    const tile = catTile();
+    tile.layers[0].features.vectorProps = {
+      point_rgba: { value: new Uint8Array(16), size: 4 },
+    } as any;
+    const prepared = (layer as any).prepareTile(tile, tile.layers[0]);
+    // No per-point fill baked from the vector column — the constant fillColor
+    // (applied as a sublayer prop) wins.
+    expect(prepared.data.attributes.getFillColor).toBeUndefined();
+  });
+
+  it('binds the vector column when colorVectorColumn is explicitly set', () => {
+    const rgba = new Uint8Array([
+      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
+    ]);
+    const layer = makeLayer({
+      fillColor: [255, 128, 0, 255],
+      colorVectorColumn: 'point_rgba',
+    });
+    const tile = catTile();
+    tile.layers[0].features.vectorProps = {
+      point_rgba: { value: rgba, size: 4 },
+    } as any;
+    const prepared = (layer as any).prepareTile(tile, tile.layers[0]);
+    expect(prepared.data.attributes.getFillColor.value).toBe(rgba);
   });
 });
 
@@ -468,6 +564,30 @@ describe('AnimatedTripsLayer styleKey content invalidation', () => {
     expect(second.styleKey).not.toBe(first.styleKey);
     expect([...second.data.attributes.getColor.value.slice(0, 4)]).toEqual([
       0, 255, 0, 255,
+    ]);
+  });
+
+  it('invalidates when colorMappingDefault changes in isolation', () => {
+    // 'b' is present in the tile but absent from colorMapping, so its per-vertex
+    // color comes from colorMappingDefault — which the key omitted, serving
+    // stale fallback colors on a change.
+    const layer = makeLayer({
+      tripColor: 'kind',
+      colorMapping: { a: [1, 1, 1, 255] }, // 'b' unmapped → default
+      colorMappingDefault: [10, 20, 30, 255],
+    });
+    const tile = catTripsTile();
+    const first = (layer as any).prepareTile(tile, tile.layers[0]);
+    // Feature 1 ('b') is a single segment starting at vertex 2 → bytes 8..12.
+    expect([...first.data.attributes.getColor.value.slice(8, 12)]).toEqual([
+      10, 20, 30, 255,
+    ]);
+
+    layer.props.colorMappingDefault = [40, 50, 60, 255];
+    const second = (layer as any).prepareTile(tile, tile.layers[0]);
+    expect(second.styleKey).not.toBe(first.styleKey);
+    expect([...second.data.attributes.getColor.value.slice(8, 12)]).toEqual([
+      40, 50, 60, 255,
     ]);
   });
 

@@ -64,3 +64,45 @@ export function blendMatrixRow(
   const m1 = matrix[rowBase + b1];
   return absolute ? Math.abs(m0) * g + Math.abs(m1) * f : m0 * g + m1 * f;
 }
+
+/**
+ * Max of the piecewise-linear bucket signal over a TRAILING window `[lo, hi]`
+ * of continuous bucket positions (caller-clamped to `[0, numBuckets - 1]`,
+ * `hi` = the playhead's stepped position). A piecewise-linear function attains
+ * its max at a window endpoint or at an interior sample, so this evaluates the
+ * blend at `lo` and `hi` and every whole bucket between — the value rises over
+ * one bucket as a peak enters at `hi`, HOLDS for the window span, then fades
+ * over one bucket as it slides out past `lo`. `absolute` mirrors
+ * {@link blendMatrixRow} (signed matrices: magnitude is the value).
+ */
+export function trailingMaxMatrixRow(
+  matrix: ArrayLike<number>,
+  rowBase: number,
+  numBuckets: number,
+  lo: number,
+  hi: number,
+  absolute = false,
+): number {
+  let best = blendMatrixRow(
+    matrix,
+    rowBase,
+    bucketBlendAt(hi, numBuckets),
+    absolute,
+  );
+  if (lo < hi) {
+    const atLo = blendMatrixRow(
+      matrix,
+      rowBase,
+      bucketBlendAt(lo, numBuckets),
+      absolute,
+    );
+    if (atLo > best) best = atLo;
+    const bEnd = Math.floor(hi);
+    for (let b = Math.ceil(lo); b <= bEnd; b++) {
+      const m = matrix[rowBase + b];
+      const val = absolute ? Math.abs(m) : m;
+      if (val > best) best = val;
+    }
+  }
+  return best;
+}

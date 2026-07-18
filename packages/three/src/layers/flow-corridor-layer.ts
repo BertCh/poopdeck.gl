@@ -30,10 +30,12 @@ import {
   RGBAFormat,
   FloatType,
   LinearFilter,
+  NearestFilter,
   ClampToEdgeWrapping,
   type Texture,
 } from 'three';
 import type { Tile } from '@poopdeck.gl/core';
+import { getDeviceCapabilities } from '../renderer/webgpu-renderer.js';
 import { BaseSttLayer, type SttLayerContext } from './layer.js';
 import {
   resolveTimeWindow,
@@ -77,6 +79,19 @@ export interface FlowCorridorLayerOptions extends ThreeTimeWindowOptions {
   // `windowHalf`/`fadeIn`/`fadeOut` aliases come from ThreeTimeWindowOptions.
 }
 
+/**
+ * Filter to use for the float `DataTexture`s below. Linear filtering on
+ * rg32float / rgba32float textures needs the WebGPU `float32-filterable`
+ * feature; on a device (or the WebGL2 fallback) that lacks it, a linear-filtered
+ * float texture fails, so fall back to `NearestFilter` — the two-bucket lerp and
+ * ramp gradient step instead of blend, but nothing errors.
+ */
+function floatTextureFilter(): typeof LinearFilter | typeof NearestFilter {
+  return getDeviceCapabilities().float32Filterable
+    ? LinearFilter
+    : NearestFilter;
+}
+
 /** Bake a multi-stop RGBA(0–255) ramp into a 1-D RGBA-float `DataTexture`. */
 function makeRampTexture(ramp: RGBA[], resolution: number): DataTexture {
   const n = Math.max(2, resolution);
@@ -90,26 +105,53 @@ function makeRampTexture(ramp: RGBA[], resolution: number): DataTexture {
     data[i * 4 + 2] = c[2] / 255;
     data[i * 4 + 3] = (c[3] ?? 255) / 255;
   }
+  const filter = floatTextureFilter();
   const tex = new DataTexture(data, n, 1, RGBAFormat, FloatType);
-  tex.minFilter = LinearFilter;
-  tex.magFilter = LinearFilter;
+  tex.minFilter = filter;
+  tex.magFilter = filter;
   tex.wrapS = ClampToEdgeWrapping;
   tex.wrapT = ClampToEdgeWrapping;
   tex.needsUpdate = true;
   return tex;
 }
 
-/** Pack the per-segment value matrix into an RG-float, linear-filtered texture. */
-function makeValueTexture(buf: FlowCorridorBuffers): DataTexture {
+/**
+ * Pack the per-segment value matrix into an RG-float texture.
+ *
+ * The texture is `width = numBuckets`, `height = count` (one row per merged
+ * segment). A large resident network can push `count` past the device's
+ * `maxTextureDimension2D` (spec default 8192), which is a hard device error that
+ * blanks the whole layer. Guard it: clamp the height to the device limit and
+ * warn — segments beyond the limit sample the clamped edge rows (wrong values,
+ * but announced) instead of taking the corridors black.
+ */
+function makeValueTexture(
+  buf: FlowCorridorBuffers,
+  layerId: string,
+): DataTexture {
+  const maxDim = getDeviceCapabilities().maxTextureDimension2D || 8192;
+  let height = buf.count;
+  let data = buf.valueMatrix;
+  if (height > maxDim) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[stt-three] FlowCorridorLayer "${layerId}": ${buf.count} merged segments ` +
+        `exceed maxTextureDimension2D (${maxDim}); clamping the value texture — ` +
+        `segments beyond row ${maxDim} will not animate correctly.`,
+    );
+    height = maxDim;
+    data = buf.valueMatrix.subarray(0, height * buf.numBuckets * 2);
+  }
+  const filter = floatTextureFilter();
   const tex = new DataTexture(
-    buf.valueMatrix,
+    data,
     buf.numBuckets,
-    buf.count,
+    height,
     RGFormat,
     FloatType,
   );
-  tex.minFilter = LinearFilter;
-  tex.magFilter = LinearFilter;
+  tex.minFilter = filter;
+  tex.magFilter = filter;
   tex.wrapS = ClampToEdgeWrapping;
   tex.wrapT = ClampToEdgeWrapping;
   tex.needsUpdate = true;
@@ -185,7 +227,7 @@ export class FlowCorridorLayer extends BaseSttLayer {
       );
     }
 
-    this.valueTex = makeValueTexture(buf);
+    this.valueTex = makeValueTexture(buf, this.id);
     this.rampTex = makeRampTexture(
       this.opts.ramp,
       this.opts.rampResolution ?? 256,
