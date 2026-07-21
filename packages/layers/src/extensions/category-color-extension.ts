@@ -53,6 +53,7 @@ import type {
   UpdateParameters,
 } from '@deck.gl/core';
 import type { Device, Texture } from '@luma.gl/core';
+import { NULL_CATEGORY_INDEX } from '@poopdeck.gl/core/style';
 import { colorListDigest } from '../lib/style-digest.js';
 import { warnOnce } from '../lib/log.js';
 
@@ -62,6 +63,65 @@ import { warnOnce } from '../lib/log.js';
  * silently wrapped. See module docstring for the rationale.
  */
 export const CATEGORY_PALETTE_SIZE = 4096;
+
+/**
+ * Convert per-feature Uint16 category indices into the float32 attribute this
+ * extension samples, resolving the two out-of-palette cases every layer used
+ * to get wrong in its own way:
+ *
+ * - NULL (`0xffff` sentinel) → `paletteLen`, the trailing "default" slot the
+ *   caller appends via {@link appendNullCategorySlot}. NULLs render the
+ *   default color (transparent unless the layer authors one) instead of
+ *   clamping onto the LAST real palette entry and masquerading as that
+ *   category.
+ * - Real category beyond the palette (`idx >= paletteLen`, e.g. an 11th
+ *   category against the default 10-color palette) → clamp to
+ *   `paletteLen - 1`. Palette overflow is a styling shortfall, not missing
+ *   data — the feature stays VISIBLE in the last palette color (the pre-0.4
+ *   behavior), and a one-time warning says how to fix the styling.
+ */
+export function categoryIndicesToFloat32(
+  indices: Uint16Array,
+  count: number,
+  paletteLen: number,
+  layerName: string,
+): Float32Array {
+  const out = new Float32Array(count);
+  let overflowed = false;
+  for (let i = 0; i < count; i++) {
+    const idx = indices[i];
+    if (idx === NULL_CATEGORY_INDEX) {
+      out[i] = paletteLen;
+    } else if (idx >= paletteLen) {
+      out[i] = paletteLen - 1;
+      overflowed = true;
+    } else {
+      out[i] = idx;
+    }
+  }
+  if (overflowed) {
+    warnOnce(
+      `category-overflow:${layerName}:${paletteLen}`,
+      `[${layerName}] categorical column has more distinct categories than ` +
+        `the ${paletteLen}-entry colorPalette; the extra categories all render ` +
+        `in the last palette color. Pass a larger colorPalette or an explicit ` +
+        `colorMapping for stable per-category colors.`,
+    );
+  }
+  return out;
+}
+
+/**
+ * Append the default slot that {@link categoryIndicesToFloat32} redirects
+ * NULL indices to. Layers with a `colorMappingDefault` prop pass it through;
+ * the rest get transparent (unknown values disappear rather than mislead).
+ */
+export function appendNullCategorySlot(
+  palette: readonly Color[],
+  defaultColor?: Color,
+): Color[] {
+  return [...palette, defaultColor ?? ([0, 0, 0, 0] as Color)];
+}
 
 /** Props for layers using CategoryColorExtension. */
 export type CategoryColorExtensionProps<DataT = unknown> = {

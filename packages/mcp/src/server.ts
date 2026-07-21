@@ -31,6 +31,7 @@ import {
 } from './docs.js';
 import { buildSystemPrompt } from './system-prompt.js';
 import { buildViewMap } from './view-map.js';
+import { PRESENTATION_INTENTS } from './presentation.js';
 import {
   resolveBinary,
   run,
@@ -40,15 +41,45 @@ import {
 
 const PACKAGE_VERSION = '0.4.0';
 
-/** Parsed output of `stt-optimize recommend` (recommend.rs::to_build_config). */
+/** One evidence-based advisor suggestion (recommend.rs / advisors::Advice). */
+interface RecommendAdvice {
+  flag: string;
+  value?: string;
+  why: string;
+  projected?: string;
+  /** Lossy/destructive levers are surfaced only — never auto-applied to a build. */
+  lossy: boolean;
+  /**
+   * Non-lossy but still surfaced-only: the lever needs a human decision first
+   * (e.g. spatial blob-ordering vs. time-playback buffering, or a prerequisite
+   * data transform). Optional — an older stt-optimize omits it.
+   */
+  suggestion_only?: boolean;
+  confidence: 'high' | 'medium' | 'low';
+}
+
+/**
+ * Parsed output of `stt-optimize recommend` (recommend.rs::to_build_config).
+ * The scalar recipe fields have always been present; `temporal_bucket_human`,
+ * `dominant_type`, `advice`, and `command` are the enriched signals a current
+ * `stt-optimize` emits — all optional so an older binary (which omits them)
+ * still parses.
+ */
 interface RecommendConfig {
   input?: string;
   time_field?: string;
   min_zoom?: number;
   max_zoom?: number;
   temporal_bucket_ms?: number;
+  temporal_bucket_human?: string;
+  /** Dominant source geometry ("Point"/"LineString"/"Polygon"/…) for layer choice. */
+  dominant_type?: string;
   confidence?: number;
   explanations?: string[];
+  /** Evidence-based advisor suggestions (with `lossy`/`confidence` markers). */
+  advice?: RecommendAdvice[];
+  /** Ready-to-run `stt-build` command assembled by Rust (non-lossy advice appended). */
+  command?: string;
 }
 
 function textResult(data: unknown, isError = false): CallToolResult {
@@ -518,24 +549,43 @@ function registerAnalysisTools(server: McpServer, config: SttMcpConfig): void {
       }
       const rec = parsed as RecommendConfig;
       const outputDir = output ?? 'out';
+      // Assemble the pasteable command locally: only this side knows the
+      // caller's `output` dir and `timeFormat`, and the templater folds in the
+      // recipe scalars (zooms, temporal bucket) plus the auto-applicable
+      // advisor flags from `rec.advice`. Rust's own `rec.command` (same
+      // filtering, input-stem output) still rides inside `recommendation` for
+      // CLI parity.
+      const suggestedCommand = buildSttBuildCommand(
+        input,
+        outputDir,
+        timeField,
+        timeFormat,
+        rec,
+      );
+      const advice = rec.advice ?? [];
       return textResult({
         input,
         cliEnabled: true,
         bin,
         recommendation: rec,
-        suggestedCommand: buildSttBuildCommand(
-          input,
-          outputDir,
-          timeField,
-          timeFormat,
-          rec,
-        ),
+        dominantType: rec.dominant_type,
+        suggestedCommand,
+        // The evidence the agent should weigh: auto-applicable levers are
+        // already folded into suggestedCommand/buildDatasetArgs; lossy and
+        // suggestion-only levers (quantization, feature budgets, caveated
+        // orderings) are surfaced for a deliberate opt-in and are NEVER
+        // auto-applied.
+        evidence: advice.map((a) => ({
+          ...a,
+          autoApplied: adviceAutoApplies(a),
+        })),
         // Structured, ready to hand straight to the `build_dataset` tool (same
         // param names/shape) — the machine-readable counterpart of suggestedCommand.
         buildDatasetArgs: buildDatasetArgsFromRecipe(
           input,
           outputDir,
           timeField,
+          timeFormat,
           rec,
         ),
       });
@@ -811,12 +861,14 @@ function registerInteractiveTools(
         'Composes a @deck.gl/json-shaped deck spec ({layers: [{"@@type": ..., data: <manifest URL>, ' +
         '...}], initialViewState}) for one or more datasets, pointed at their manifest.json (as an ' +
         'absolute filesystem path, or under --public-base-url when configured). The @@type is inferred ' +
-        'per dataset from its build-time style_hints.layer_hint or summary-tier scheme. IMPORTANT: ' +
-        'layer_hint inference requires the archive to have been built with --style-hints; NO shipped ' +
-        'dataset currently carries one, so inference falls back to AnimatedPointLayer — explicitly pass ' +
-        '`layer` (e.g. AnimatedPathLayer / AnimatedTripsLayer / AnimatedPolygonLayer) for path/trip/' +
-        'polygon data. Register these @@type names with @deck.gl/json (a JSONConfiguration carrying ' +
-        'the STT layer classes) to actually instantiate the layers client-side. ' +
+        'per dataset from its manifest style_hints.layer_hint (now baked on EVERY build) or summary-tier ' +
+        'scheme. NOTE: archives built before layer_hint became a default carry none, so inference falls ' +
+        'back to AnimatedPointLayer — for those, explicitly pass `layer` (AnimatedPathLayer / ' +
+        'AnimatedTripsLayer / AnimatedPolygonLayer) or rebuild. Beyond the layer, an optional `intent` ' +
+        '(density/tracking/choropleth/exploratory) plus `colorBy`/`timeWindow` drive a data-derived ' +
+        'presentation (color domain from measured percentiles, visible window from the temporal grain, ' +
+        'summary tier when framed coarse). Register these @@type names with @deck.gl/json (a ' +
+        'JSONConfiguration carrying the STT layer classes) to actually instantiate the layers client-side. ' +
         'Address datasets by `datasets` (name(s) under --data-root) and/or `paths` (explicit archive ' +
         'path(s) outside --data-root; requires --allow-cli). ' +
         'Always returns the spec as text; when the client renders MCP resource content blocks, ALSO ' +
@@ -845,7 +897,29 @@ function registerInteractiveTools(
             .string()
             .optional()
             .describe(
-              'Force this @@type for every dataset (overrides inference)',
+              'Force this @@type for every dataset (overrides both inference and any intent-driven layer promotion)',
+            ),
+          intent: z
+            .enum(PRESENTATION_INTENTS)
+            .optional()
+            .describe(
+              'Desired presentation, biasing layer/color/tier/timeWindow: ' +
+                '"density" (summary/H3 tier + count weighting), "tracking" (trips + longer trails), ' +
+                '"choropleth" (measure-driven color), or "exploratory" (neutral default). ' +
+                '`layer`/`colorBy`/`timeWindow` always override the bias.',
+            ),
+          colorBy: z
+            .string()
+            .optional()
+            .describe(
+              'Force the color-by property for every dataset (overrides the auto pick from measured columns). ' +
+                'Only takes effect on layers with a scalar color domain (summary/heatmap: weightProperty; trips: gradientProperty).',
+            ),
+          timeWindow: z
+            .number()
+            .optional()
+            .describe(
+              'Force the visible time window in ms around currentTime (overrides the temporal-grain-derived default)',
             ),
           viewState: z.object(viewStateShape).partial().optional(),
           time: z
@@ -855,7 +929,16 @@ function registerInteractiveTools(
         })
         .strict(),
     },
-    async ({ datasets, paths, layer, viewState, time }) => {
+    async ({
+      datasets,
+      paths,
+      layer,
+      intent,
+      colorBy,
+      timeWindow,
+      viewState,
+      time,
+    }) => {
       const names = datasets ? asArray(datasets) : [];
       const explicitPaths = paths ? asArray(paths) : [];
       if (names.length === 0 && explicitPaths.length === 0) {
@@ -894,6 +977,9 @@ function registerInteractiveTools(
 
       const { spec, html, warnings } = buildViewMap(resolved, {
         layer,
+        intent,
+        colorBy,
+        timeWindow,
         viewState,
         time,
         publicBaseUrl: config.publicBaseUrl,
@@ -994,6 +1080,12 @@ function registerExecutionTools(server: McpServer, config: SttMcpConfig): void {
           .string()
           .optional()
           .describe('Timestamp column name (default: "timestamp")'),
+        timeFormat: z
+          .enum(['iso8601', 'unix-ms', 'unix-sec'])
+          .optional()
+          .describe(
+            'How to read an integer time column (Arrow timestamp/string columns are self-describing)',
+          ),
         minZoom: z.number().int().min(0).max(24).optional(),
         maxZoom: z.number().int().min(0).max(24).optional(),
         temporalBucket: z
@@ -1045,6 +1137,7 @@ function registerExecutionTools(server: McpServer, config: SttMcpConfig): void {
         params.output,
       ];
       if (params.timeField) args.push('--time-field', params.timeField);
+      if (params.timeFormat) args.push('--time-format', params.timeFormat);
       if (params.minZoom !== undefined)
         args.push('--min-zoom', String(params.minZoom));
       if (params.maxZoom !== undefined)
@@ -1296,7 +1389,22 @@ function shellQuote(value: string): string {
     : value;
 }
 
-/** Renders the `stt-build` command a `recommend_build` recipe implies (canonical flags: `--min-zoom`/`--max-zoom`/`--temporal-bucket`). */
+/**
+ * Auto-apply gate shared by the command templater, `buildDatasetArgs`, and the
+ * `autoApplied` evidence stamp: lossy levers degrade data and suggestion-only
+ * levers carry a tradeoff the user must decide — neither ever rides the
+ * automatic path.
+ */
+function adviceAutoApplies(a: RecommendAdvice): boolean {
+  return !a.lossy && !a.suggestion_only;
+}
+
+/**
+ * Renders the `stt-build` command a `recommend_build` recipe implies (canonical
+ * flags: `--min-zoom`/`--max-zoom`/`--temporal-bucket`), with the recipe's
+ * auto-applicable advisor flags (blob-ordering, temporal-LOD, publish, …)
+ * appended in advisor order.
+ */
 function buildSttBuildCommand(
   input: string,
   output: string,
@@ -1320,7 +1428,68 @@ function buildSttBuildCommand(
   if (rec.temporal_bucket_ms)
     parts.push('--temporal-bucket', msToHumanDuration(rec.temporal_bucket_ms));
   parts.push('--style-hints');
+  for (const a of rec.advice ?? []) {
+    if (!adviceAutoApplies(a) || a.flag === '--style-hints') continue;
+    parts.push(a.flag);
+    if (a.value) parts.push(shellQuote(a.value));
+  }
   return parts.join(' ');
+}
+
+/** Flags whose presence in the advice implies the dataset carries color-by-worthy
+ *  attributes, so full `--style-hints` percentile profiling is worth requesting. */
+const STYLE_HINT_SIGNAL_FLAGS = new Set([
+  '--style-hints',
+  '--summary-tier',
+  '--min-zoom-field',
+  '--quantize-attrs-auto',
+]);
+
+/**
+ * Folds the recipe's NON-LOSSY advisor flags into `build_dataset`-tool params
+ * (`--publish`→`publish`, `--summary-tier`→`summaryTier`, `--style-hints`→
+ * `styleHints`) and passes any other reversible flag through `extraArgs`
+ * verbatim (e.g. `--blob-ordering`, `--temporal-lod`, `--adaptive-temporal`).
+ * LOSSY levers (quantization, feature budgets) are deliberately skipped — they
+ * degrade data and stay a human opt-in. Also decides whether full percentile
+ * `styleHints` is worth requesting: yes whenever the advice signals attribute
+ * richness (or the advice is absent, preserving the old always-on behavior for
+ * an older stt-optimize) — `layer_hint` itself now ships in every manifest by
+ * default, so this flag is only about color-by percentiles.
+ */
+function applyAdviceToBuildArgs(
+  out: Record<string, unknown>,
+  advice: RecommendAdvice[] | undefined,
+): void {
+  if (advice === undefined) {
+    out.styleHints = true; // legacy stt-optimize: no advice array to reason from.
+    return;
+  }
+  const extra: string[] = [];
+  let styleHints = advice.some((a) => STYLE_HINT_SIGNAL_FLAGS.has(a.flag));
+  for (const a of advice) {
+    // Never auto-apply a data-degrading or suggestion-only lever — the latter
+    // is non-lossy but carries a tradeoff (playback-vs-layout, prerequisite
+    // transform) only the user can decide.
+    if (!adviceAutoApplies(a)) continue;
+    switch (a.flag) {
+      case '--publish':
+        out.publish = true;
+        break;
+      case '--style-hints':
+        styleHints = true;
+        break;
+      case '--summary-tier':
+        if (a.value === 'h3' || a.value === 'quadbin')
+          out.summaryTier = a.value;
+        break;
+      default:
+        extra.push(a.flag);
+        if (a.value) extra.push(a.value);
+    }
+  }
+  if (styleHints) out.styleHints = true;
+  if (extra.length > 0) out.extraArgs = extra;
 }
 
 /**
@@ -1333,16 +1502,17 @@ function buildDatasetArgsFromRecipe(
   input: string,
   output: string,
   timeField: string | undefined,
+  timeFormat: string | undefined,
   rec: RecommendConfig,
 ): Record<string, unknown> {
   const out: Record<string, unknown> = { input, output };
   if (timeField) out.timeField = timeField;
+  if (timeFormat) out.timeFormat = timeFormat;
   if (rec.min_zoom !== undefined) out.minZoom = rec.min_zoom;
   if (rec.max_zoom !== undefined) out.maxZoom = rec.max_zoom;
   if (rec.temporal_bucket_ms)
     out.temporalBucket = msToHumanDuration(rec.temporal_bucket_ms);
-  // buildSttBuildCommand always appends --style-hints; mirror that here.
-  out.styleHints = true;
+  applyAdviceToBuildArgs(out, rec.advice);
   return out;
 }
 

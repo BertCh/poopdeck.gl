@@ -1370,6 +1370,15 @@ export class STTArchive {
     // Paged + large: fetch ONLY the root page (a prefix range GET), build the
     // page table, and leave the entry maps empty — leaves stream in on demand
     // via ensurePages*. Small/single directories take the whole-load path below.
+    //
+    // KNOWN INTEGRITY GAP: this path returns before the content-address check
+    // below, and it cannot run it — the blake3-128 in the object key covers
+    // the ENTIRE at-rest object, which this path deliberately never fetches,
+    // and the manifest carries no root/per-page hashes to verify prefix or
+    // leaf ranges against. So paged-on-demand directories (in practice the
+    // LARGE production datasets) are trusted unverified; only whole-loaded
+    // directories get the §9.2 check. Closing this needs a manifest extension
+    // (root + per-page hashes) — tracked as a format follow-up.
     if (
       dref.layout === DIRECTORY_LAYOUT_PAGED &&
       dref.length > this.directoryPageThresholdBytes &&
@@ -1435,11 +1444,14 @@ export class STTArchive {
 
   /**
    * Verify a fetched directory object against the blake3-128 content address
-   * embedded in its key (packed spec §9.2). Enforced always — the directory is
-   * the reader's root of trust; a mismatch means tampered or transport-corrupt
-   * bytes and MUST abort the open rather than be silently trusted. A key that
-   * isn't content-addressed (synthetic test archives) declares no address, so
-   * there is nothing to check and verification is a no-op.
+   * embedded in its key (packed spec §9.2). Enforced on every WHOLE-OBJECT
+   * directory load — the directory is the reader's root of trust; a mismatch
+   * means tampered or transport-corrupt bytes and MUST abort the open rather
+   * than be silently trusted. Two cases legitimately skip it: a key that
+   * isn't content-addressed (synthetic test archives) declares no address,
+   * and the paged-on-demand path never fetches the whole object so the
+   * whole-object address is unverifiable there (see the KNOWN INTEGRITY GAP
+   * note in fetchAndBuildIndex).
    */
   private verifyDirectoryContentAddress(
     key: string,

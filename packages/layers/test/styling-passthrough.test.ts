@@ -609,8 +609,9 @@ describe('AnimatedPolygonLayer categorical colorMapping', () => {
     const paletteA = layer.prepareTile(tileA, tileA.layers[0]).gpuPalette;
     const paletteB = layer.prepareTile(tileB, tileB.layers[0]).gpuPalette;
 
-    expect(paletteA).toEqual([MAPPING.moderate, MAPPING.extreme]);
-    expect(paletteB).toEqual([MAPPING.extreme, MAPPING.moderate]);
+    // Trailing slot = colorMappingDefault, the NULL (0xffff) redirect target.
+    expect(paletteA).toEqual([MAPPING.moderate, MAPPING.extreme, [0, 0, 0, 0]]);
+    expect(paletteB).toEqual([MAPPING.extreme, MAPPING.moderate, [0, 0, 0, 0]]);
 
     // Each tile's category index resolves through its own palette to the SAME
     // color for the same string — the cross-tile-stability guarantee.
@@ -629,7 +630,13 @@ describe('AnimatedPolygonLayer categorical colorMapping', () => {
     // 'low' is not in MAPPING → its palette slot falls to the default.
     const tile = severityPolygonTile(['moderate', 'low'], [0, 1]);
     const palette = layer.prepareTile(tile, tile.layers[0]).gpuPalette;
-    expect(palette).toEqual([MAPPING.moderate, [180, 180, 180, 255]]);
+    // Unmapped 'low' resolves to the default IN its slot; the trailing NULL
+    // slot carries the same default.
+    expect(palette).toEqual([
+      MAPPING.moderate,
+      [180, 180, 180, 255],
+      [180, 180, 180, 255],
+    ]);
   });
 
   it('without colorMapping, falls back to the global colorPalette (index order)', async () => {
@@ -642,7 +649,12 @@ describe('AnimatedPolygonLayer categorical colorMapping', () => {
       colorPalette: palette,
     });
     const tile = severityPolygonTile(['moderate', 'extreme'], [0, 1]);
-    expect(layer.prepareTile(tile, tile.layers[0]).gpuPalette).toBe(palette);
+    // No longer the same array reference: the NULL slot (colorMappingDefault,
+    // transparent by default) is appended.
+    expect(layer.prepareTile(tile, tile.layers[0]).gpuPalette).toEqual([
+      ...palette,
+      [0, 0, 0, 0],
+    ]);
   });
 
   it('a colorMapping change re-prepares the tile (styleKey invalidation)', async () => {
@@ -662,6 +674,7 @@ describe('AnimatedPolygonLayer categorical colorMapping', () => {
     expect(second.gpuPalette).toEqual([
       [1, 2, 3, 255],
       [4, 5, 6, 255],
+      [0, 0, 0, 0],
     ]);
   });
 });

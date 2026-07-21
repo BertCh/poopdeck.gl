@@ -54,6 +54,8 @@ import { TimeFilterExtension } from '../../extensions/time-filter-extension.js';
 import {
   CategoryColorExtension,
   CATEGORY_PALETTE_SIZE,
+  appendNullCategorySlot,
+  categoryIndicesToFloat32,
 } from '../../extensions/category-color-extension.js';
 import { emit } from '../../lib/telemetry.js';
 import { warnOnce } from '../../lib/log.js';
@@ -636,13 +638,18 @@ export class AnimatedPolygonLayer<
     // Palette keyed by CONTENT (memoized digest), not length — matches the
     // sibling layers' stale-key fix. updateTriggers ride the key so a user
     // trigger bump re-prepares the tile.
+    // colorMappingDefault feeds both palette modes (unmapped categories and
+    // the appended NULL slot), so it must invalidate prepared tiles too.
+    const mapDefault = (this.props.colorMappingDefault ?? [0, 0, 0, 0]).join(
+      ',',
+    );
     const styleKey = `${fillColorProp}|${elevationProp}|${lineWidthProp}|${
       fillColorProp
         ? this.props.colorMapping
           ? `m${colorMappingDigest(this.props.colorMapping)}`
           : colorListDigest(this.props.colorPalette ?? DEFAULT_PALETTE)
         : 0
-    }|${updateTriggersDigest(this.props.updateTriggers)}`;
+    }|d${mapDefault}|${updateTriggersDigest(this.props.updateTriggers)}`;
 
     const tileKey = makeTileKey(tile, tileLayer);
     const cached = this.preparedTileCache.get(tileKey);
@@ -699,22 +706,13 @@ export class AnimatedPolygonLayer<
     if (fillColorProp) {
       const cat = binary.categoricalProps[fillColorProp];
       if (cat) {
-        attributes.instanceCategoryIndex = {
-          value: expandPerVertex(
-            cat.indices,
-            startIndices,
-            featureCount,
-            vertexCount,
-          ),
-          size: 1,
-        };
         // With a colorMapping, resolve THIS tile's category dictionary into a
         // per-tile palette (palette[i] = mapping[categories[i]]) so the shader,
         // which samples palette[categoryIndex], yields a stable per-string color
         // regardless of the tile's dictionary order. Without one, fall back to
         // the single global palette (colors then follow first-seen index).
         const mapping = this.props.colorMapping;
-        gpuPalette = mapping
+        const basePalette = mapping
           ? cat.categories.map(
               (c) =>
                 mapping[c] ??
@@ -722,6 +720,27 @@ export class AnimatedPolygonLayer<
                 ([0, 0, 0, 0] as Color),
             )
           : (this.props.colorPalette ?? DEFAULT_PALETTE);
+        // Redirect NULL (0xffff) per-FEATURE indices onto the appended default
+        // slot BEFORE the per-vertex expansion, so NULL polygons render the
+        // default color instead of masquerading as the last dictionary entry.
+        attributes.instanceCategoryIndex = {
+          value: expandPerVertex(
+            categoryIndicesToFloat32(
+              cat.indices,
+              featureCount,
+              basePalette.length,
+              'AnimatedPolygonLayer',
+            ),
+            startIndices,
+            featureCount,
+            vertexCount,
+          ),
+          size: 1,
+        };
+        gpuPalette = appendNullCategorySlot(
+          basePalette,
+          this.props.colorMappingDefault as Color | undefined,
+        );
       }
     }
 

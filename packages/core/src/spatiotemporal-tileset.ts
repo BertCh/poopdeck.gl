@@ -97,13 +97,28 @@ const PREFETCH_LOOKAHEAD_REAL_MS = 8000;
  * ~24 days. Each prefetch pass then walks the directory over that whole slice
  * and sorts ~1-2k candidate tile ids ON THE MAIN THREAD, ~twice per second, per
  * tileset — a documented FPS sink (see the enumerate-every-bucket note below).
- * Bounding the horizon to a fixed bucket count keeps enough runway to feed the
- * buffer gate (which needs only a few dozen buckets buffered ahead) while
- * capping the per-pass walk+sort. Only fast demos hit it; normal-speed playback
- * stays well under the cap, and the resident-window SELECTION (not prefetch)
- * still loads cumulative "draw-and-persist" datasets in full.
+ * Bounding the horizon caps the per-pass walk+sort. Only fast demos hit it;
+ * normal-speed playback stays well under the cap, and the resident-window
+ * SELECTION (not prefetch) still loads cumulative "draw-and-persist" datasets
+ * in full. NB the cap is NOT a pure constant: the governor's buffered-runway
+ * gates are speed-scaled, so the applied cap is
+ * `max(MAX_PREFETCH_BUCKETS × bucketMs, speed × PREFETCH_CAP_FLOOR_REAL_MS)`
+ * — a fixed 64-bucket ceiling alone is BELOW the gates at fast playback
+ * (year-in-120s with 2 h buckets consumes ~36.5 buckets/s; the resume gate
+ * alone needs ~146 buckets), which would stall the gate it exists to feed.
  */
 const MAX_PREFETCH_BUCKETS = 64;
+/**
+ * Wall-clock floor (ms) for the prefetch cap. The playback governor's gates
+ * are speed-scaled: the start gate wants ~2 s of wall-clock runway buffered
+ * and the resume-after-stall gate 2× that (see PlaybackGovernor's
+ * startGateWallMs/resumeFactor defaults). If the capped horizon can't cover
+ * the resume gate, one throughput dip ends in the full start-wait freeze and
+ * then permanent degraded creep. 5 s = 4 s resume gate + 1 s margin; with the
+ * 50% reload fraction the steady-state floor (~2.5 s wall) stays above the
+ * 2 s start gate.
+ */
+const PREFETCH_CAP_FLOOR_REAL_MS = 5000;
 /**
  * Re-issue the wide prefetch only after the play head has consumed this fraction
  * of the previously prefetched span. Keeps the debounced scheduler from
@@ -1744,14 +1759,19 @@ export class SpatiotemporalTileset {
       windowAhead,
       speed * PREFETCH_LOOKAHEAD_REAL_MS,
     );
-    // Bound the horizon to a fixed bucket count (see MAX_PREFETCH_BUCKETS) so a
-    // fast playback can't inflate it to tens of days — which would make each
-    // pass walk+sort the directory over that whole slice on the main thread.
+    // Bound the horizon (see MAX_PREFETCH_BUCKETS) so a fast playback can't
+    // inflate it to tens of days — which would make each pass walk+sort the
+    // directory over that whole slice on the main thread. The speed-scaled
+    // floor keeps the cap from undercutting the governor's speed-scaled
+    // buffered-runway gates at very fast playback.
     const bucketMs = this.options.temporalBucketMs;
     if (bucketMs > 0) {
       effectiveAhead = Math.min(
         effectiveAhead,
-        MAX_PREFETCH_BUCKETS * bucketMs,
+        Math.max(
+          MAX_PREFETCH_BUCKETS * bucketMs,
+          speed * PREFETCH_CAP_FLOOR_REAL_MS,
+        ),
       );
     }
     const prefetchEndTime = time + direction * effectiveAhead;

@@ -150,8 +150,8 @@ describe('AnimatedPointLayer styleKey content invalidation', () => {
     expect(second).not.toBe(first);
     // The rebuilt tile carries the new palette content to the GPU extension,
     // with a trailing default slot appended (colorMappingDefault ?? transparent)
-    // so NULL / unmapped-category features render the default, not the last
-    // real color — see indicesToFloat32WithDefault.
+    // so NULL features render the default, not the last real color — see
+    // categoryIndicesToFloat32 in category-color-extension.
     expect(second.gpuPalette).toEqual([
       ...layer.props.colorPalette,
       [0, 0, 0, 0],
@@ -250,10 +250,14 @@ describe('AnimatedPointLayer styleKey content invalidation', () => {
     ]);
   });
 
-  it('colors NULL / unmapped categories with colorMappingDefault on the GPU path', () => {
+  it('colors NULL categories with colorMappingDefault and keeps palette-overflow categories visible on the GPU path', () => {
     // GPU categorical path (no colorMapping): a NULL feature (0xffff sentinel)
-    // and an out-of-range category index must map to an appended default slot,
-    // not clamp onto the LAST real palette entry.
+    // maps to the appended default slot — never onto the LAST real palette
+    // entry, which would masquerade as that category. A GENUINE category
+    // beyond the palette length is a styling shortfall, not missing data: it
+    // clamps to the last real color and stays VISIBLE (redirecting it to the
+    // transparent default would silently hide real features — the default
+    // 10-color palette vs 4096-wide dictionaries makes that common).
     const layer = makeLayer({
       fillColor: 'kind',
       colorPalette: [
@@ -264,7 +268,7 @@ describe('AnimatedPointLayer styleKey content invalidation', () => {
     });
     const tile = catTile();
     tile.layers[0].features.categoricalProps['kind'] = {
-      indices: new Uint16Array([0, 1, 0xffff, 5]), // valid, valid, NULL, unmapped
+      indices: new Uint16Array([0, 1, 0xffff, 5]), // valid, valid, NULL, overflow
       categories: ['a', 'b'],
     } as any;
     const prepared = (layer as any).prepareTile(tile, tile.layers[0]);
@@ -274,9 +278,10 @@ describe('AnimatedPointLayer styleKey content invalidation', () => {
       [20, 20, 20, 255],
       [99, 88, 77, 255],
     ]);
-    // Mapped indices stay; NULL + out-of-range redirect to the default slot (2).
+    // Mapped indices stay; NULL → default slot (2); overflow clamps to the
+    // last REAL entry (1) and stays visible.
     expect([...prepared.data.attributes.instanceCategoryIndex.value]).toEqual([
-      0, 1, 2, 2,
+      0, 1, 2, 1,
     ]);
   });
 

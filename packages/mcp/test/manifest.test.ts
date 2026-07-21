@@ -201,6 +201,7 @@ describe('describeDataset', () => {
     });
     const d = await describeDataset(root, 'earthquakes');
     expect(d.name).toBe('earthquakes');
+    expect(d.metadataName).toBe('earthquakes');
     expect(d.description).toBe('quake catalog');
     expect(d.capabilities).toEqual(['coord-quant']);
     expect(d.compression).toBe('zstd');
@@ -256,10 +257,52 @@ describe('describeDataset', () => {
     expect(d.styleHints?.layer_hint).toBe('points');
   });
 
+  it('surfaces layer_hint from a minimal default-build style_hints block (no properties)', async () => {
+    // Post-B1 every non-streaming build bakes a percentile-free style_hints
+    // block carrying just layer_hint + suggested_playback_seconds.
+    const root = await fixtureRoot({
+      minimal: makeManifestJson({
+        metadata: {
+          style_hints: {
+            version: 1,
+            properties: [],
+            suggested_playback_seconds: 30,
+            layer_hint: 'paths',
+          },
+        },
+      }),
+    });
+    const d = await describeDataset(root, 'minimal');
+    expect(d.styleHints?.layer_hint).toBe('paths');
+    expect(d.styleHints?.suggested_playback_seconds).toBe(30);
+    // No per-property percentiles → no derived columns.
+    expect(d.columns).toBeUndefined();
+  });
+
   it('omits `columns` when there are no style hints', async () => {
     const root = await fixtureRoot({ plain: makeManifestJson() });
     const d = await describeDataset(root, 'plain');
     expect(d.columns).toBeUndefined();
+  });
+
+  it('surfaces the baked metadataName even when self-described as `.` (name is empty)', async () => {
+    // Mirrors build_dataset/generate_dataset, which describe the fresh output
+    // dir as `.` — the relative `name` is then "" but the manifest's own
+    // `metadata.name` must still be reported (regression: it used to vanish).
+    const root = await fixtureRoot({
+      hurr: makeManifestJson({ metadata: { name: 'hurricanes-mcp-test' } }),
+    });
+    const d = await describeDataset(path.join(root, 'hurr'), '.');
+    expect(d.name).toBe('');
+    expect(d.metadataName).toBe('hurricanes-mcp-test');
+  });
+
+  it('leaves metadataName undefined when the manifest carries no name', async () => {
+    const root = await fixtureRoot({
+      anon: makeManifestJson({ metadata: { name: '' } }),
+    });
+    const d = await describeDataset(root, 'anon');
+    expect(d.metadataName).toBeUndefined();
   });
 
   it('derives `columns` from summary_tier.columns when style_hints is absent', async () => {

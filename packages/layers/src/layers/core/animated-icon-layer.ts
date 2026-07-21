@@ -51,6 +51,8 @@ import { TimeFilterExtension } from '../../extensions/time-filter-extension.js';
 import {
   CategoryColorExtension,
   CATEGORY_PALETTE_SIZE,
+  appendNullCategorySlot,
+  categoryIndicesToFloat32,
 } from '../../extensions/category-color-extension.js';
 import { emit } from '../../lib/telemetry.js';
 import { warnOnce } from '../../lib/log.js';
@@ -302,18 +304,6 @@ interface PreparedTile {
 function makeTileKey(tile: Tile, layer: TileLayer): string {
   const { z, x, y, t } = tile.id;
   return `${z}/${x}/${y}/${t}:${layer.name}`;
-}
-
-/**
- * Hand category indices straight to the GPU as a single-component float
- * attribute. The CategoryColorExtension samples the palette texture in the
- * fragment shader. `indices` arrive as Uint16Array (4096 categories max); the
- * extension reads them as float32, so we do a narrowing copy here.
- */
-function indicesToFloat32(indices: Uint16Array, count: number): Float32Array {
-  const out = new Float32Array(count);
-  for (let i = 0; i < count; i++) out[i] = indices[i];
-  return out;
 }
 
 /**
@@ -712,10 +702,17 @@ export class AnimatedIconLayer<
       const cat = binary.categoricalProps[colorProp];
       if (cat) {
         attributes.instanceCategoryIndex = {
-          value: indicesToFloat32(cat.indices, count),
+          value: categoryIndicesToFloat32(
+            cat.indices,
+            count,
+            (this.props.colorPalette ?? DEFAULT_PALETTE).length,
+            'AnimatedIconLayer',
+          ),
           size: 1,
         };
-        gpuPalette = this.props.colorPalette ?? DEFAULT_PALETTE;
+        gpuPalette = appendNullCategorySlot(
+          this.props.colorPalette ?? DEFAULT_PALETTE,
+        );
       }
     }
 

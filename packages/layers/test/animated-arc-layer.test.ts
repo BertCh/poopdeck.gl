@@ -217,6 +217,9 @@ describe('AnimatedArcLayer per-tile sublayer architecture (v3)', () => {
       [10, 20, 30, 255],
       [40, 50, 60, 255],
       [70, 80, 90, 255],
+      // Appended NULL slot: 0xffff features render transparent, not the
+      // last palette color (see appendNullCategorySlot).
+      [0, 0, 0, 0],
     ]);
   });
 

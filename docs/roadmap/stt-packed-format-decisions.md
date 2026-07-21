@@ -528,3 +528,81 @@ encode loop on the non-streaming path).
   geo ≥ 0.30).
 - **T5.1 remaining memory heads** — feature-vec + per-zoom placement residency
   (§8); the next scale campaign's target.
+
+## 11. Temporal deltas (inter-timestep) — researched 2026-07-21; chains NO-GO
+
+Question: with full control of the format, should timestep t+1 be encoded as a
+delta against t (keyframe + P-frame) instead of full per-bucket tiles?
+Answered by an adversarially-verified external research sweep (23 confirmed
+claims across the MLT/MVT ecosystem, trajectory-compression literature, dynamic
+point-cloud coding, and columnar formats) plus a codebase audit of where
+per-timestep redundancy actually lives. Verdict: **inter-timestep delta chains
+are a NO-GO; two bounded follow-ups survive.** Don't relitigate the chain form.
+
+**Why chains lose here** (three independent legs):
+
+- **They break three load-bearing guarantees at once**: standalone tile decode
+  (data-format "every tile decodes standalone" / no-delta-dictionaries rule),
+  the directory-only time-prune seek (`getTileIdsInBounds` never touches
+  earlier buckets — a chain forces reading t to decode t+1), and
+  content-addressed dedup + blob-run RLE — delta blobs differ byte-wise even
+  when the underlying state is identical, so the existing *lossless* collapse
+  of time-identical cells across buckets would be lost, not improved.
+- **Zero production adoption in the tile world.** MLT's "delta" is purely
+  intra-tile sort-then-difference (Hilbert/Morton-sorted vertices, zigzag +
+  varint/FastPFOR; arXiv:2508.10791); its spec explicitly defers random access
+  into delta-encoded values as an unsolved research problem. No tiled map
+  format ships t→t+1 deltas as of 2026 (absence-of-evidence, but a thoroughly
+  searched absence).
+- **A strong general compressor recovers most of what structured deltas buy.**
+  MLT's headline 3–6× over MVT collapses to **1.12–1.96×** once gzip is
+  applied to both sides; DuckDB found Parquet V2 `DELTA_BINARY_PACKED` made
+  files **~3× larger** under zstd (duckdb#18984) — the same lesson as the §5
+  coordinate byte-shuffle/xor NO-GO and the rel-times32 sign-flip. STT already
+  runs the recipe the field converged on: time-adjacent ordering
+  (TimeMajor/Hilbert3, §6) + per-blob zstd + intra-tile deltas where they pay
+  (`vertex_time` u16-delta, directory key varints).
+
+**Where deltas DO win, and why STT already sits there.** The literature's two
+verified wins are (a) predictor-driven residuals on dense smooth tracks —
+Trajic's constant-velocity predictor cut temporal residuals 25.4→4.3 bits,
+1.5–2.2× over plain deltas; the predictor, not the differencing, is the win —
+and (b) dense, persistent, smoothly-moving geometry consumed *sequentially*
+(learned point-cloud inter-prediction, >52 % BD-Rate over V-PCC P-frames;
+arXiv:2207.12554). STT's access pattern (random-seek scrub over bucketed
+tiles) fails the sequential precondition, and where our data *is* dense and
+smooth — trajectories — the format already stores one geometry copy with
+per-vertex times rather than per-timestep snapshots. Likewise
+`vertex_value_matrix` / summary `sub_bucket_*` columns are the delta-free
+answer to per-bucket state: geometry once, buckets as columns, animated by
+column selection with zero re-fetch.
+
+**Surviving follow-ups** (both measure-first, both seek-safe):
+
+1. **Geometry-blob sharing across temporal chunks — a reference, not a
+   delta.** The one real cross-timestep duplication found by the audit:
+   chunked corridor datasets re-emit full static geometry per temporal chunk
+   (NWM rivers: same reach geometry once per ~30-bucket chunk,
+   `stt-generate/src/datasets/nwm.rs`; also the 13× decoded-duplication
+   pressure in the rivers perf story). Splitting the static geometry
+   column-group into its own blob lets existing content-addressing dedupe it
+   across chunks automatically; decode stays standalone-ish (a two-blob
+   fetch). Needs a format design (multi-blob tile reference / blob-per-section)
+   — feeds [space-time-lod-2026-07.md](./space-time-lod-2026-07.md).
+2. **Quantized-int path-delta experiment.** The §5 coordinate NO-GO tested
+   transforms on *raw f64*; the untested cell is MLT-style deltas over
+   **quantized Int32 world-grid coords** — exactly where MLT's residual
+   post-compression edge (1.12–1.96×) lives, on the column class that is ~57 %
+   of payload. Run through the `stt-optimize` measure fair-share harness;
+   same <1 % SKIP line as Stage III.
+
+**Counted out:** column-to-column deltas on `sub_bucket_*`/matrix columns
+(zstd already sees adjacent columns in-blob; DuckDB precedent says pre-zstd
+deltas can actively hurt — trigger: a measured probe clearing the 1 % line).
+**Standing rule** if live/streamed updates are ever added (a different feature
+than playback): keyframe-bounded deltas from day one — the universal practice
+across game netcode, video, and trajectory systems; never open chains.
+
+Research coverage caveat: the game-networking, climate-codec, and
+video-on-geodata angles produced no claims surviving adversarial verification;
+the verdict rests on the tile / trajectory / point-cloud legs.

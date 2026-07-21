@@ -46,6 +46,8 @@ import { TimeFilterExtension } from '../../extensions/time-filter-extension.js';
 import {
   CategoryColorExtension,
   CATEGORY_PALETTE_SIZE,
+  appendNullCategorySlot,
+  categoryIndicesToFloat32,
 } from '../../extensions/category-color-extension.js';
 import { emit } from '../../lib/telemetry.js';
 import { warnOnce } from '../../lib/log.js';
@@ -211,17 +213,6 @@ interface PreparedTile {
 function makeTileKey(tile: Tile, layer: TileLayer): string {
   const { z, x, y, t } = tile.id;
   return `${z}/${x}/${y}/${t}:${layer.name}`;
-}
-
-/**
- * Narrow Uint16Array → Float32Array so the GPU CategoryColorExtension can read
- * indices as a float attribute. Allocated once per (tile, prop change) pair and
- * cached on the PreparedTile.
- */
-function indicesToFloat32(indices: Uint16Array, count: number): Float32Array {
-  const out = new Float32Array(count);
-  for (let i = 0; i < count; i++) out[i] = indices[i];
-  return out;
 }
 
 /**
@@ -526,10 +517,17 @@ export class AnimatedArcLayer<
       const cat = binary.categoricalProps[colorProp];
       if (cat) {
         attributes.instanceCategoryIndex = {
-          value: indicesToFloat32(cat.indices, binary.featureCount),
+          value: categoryIndicesToFloat32(
+            cat.indices,
+            binary.featureCount,
+            (this.props.colorPalette ?? DEFAULT_PALETTE).length,
+            'AnimatedArcLayer',
+          ),
           size: 1,
         };
-        gpuPalette = this.props.colorPalette ?? DEFAULT_PALETTE;
+        gpuPalette = appendNullCategorySlot(
+          this.props.colorPalette ?? DEFAULT_PALETTE,
+        );
       }
     }
 

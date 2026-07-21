@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   buildViewMap,
+  datasetLayerId,
   inferLayerType,
   resolveManifestUrl,
 } from '../src/view-map';
@@ -83,6 +84,46 @@ describe('resolveManifestUrl', () => {
       'https://tiles.example.com/earthquakes/manifest.json',
     );
   });
+
+  it('falls back to the layer id (not a bare //) when name is empty under publicBaseUrl', () => {
+    // An archive described by its own dir (explicit `paths` / build output) has name="".
+    const external = dataset({
+      name: '',
+      metadataName: 'hurricanes-mcp-test',
+      path: '/tmp/out/hurr-out',
+    });
+    expect(resolveManifestUrl(external, 'https://tiles.example.com')).toBe(
+      'https://tiles.example.com/hurricanes-mcp-test/manifest.json',
+    );
+  });
+});
+
+describe('datasetLayerId', () => {
+  it('prefers the data-root-relative name', () => {
+    expect(datasetLayerId(dataset({ name: 'earthquakes' }))).toBe(
+      'earthquakes',
+    );
+  });
+
+  it('falls back to metadataName when name is empty', () => {
+    expect(
+      datasetLayerId(
+        dataset({ name: '', metadataName: 'hurricanes-mcp-test' }),
+      ),
+    ).toBe('hurricanes-mcp-test');
+  });
+
+  it('falls back to the directory basename when name and metadataName are both empty', () => {
+    expect(
+      datasetLayerId(
+        dataset({
+          name: '',
+          metadataName: undefined,
+          path: '/tmp/out/hurr-out',
+        }),
+      ),
+    ).toBe('hurr-out');
+  });
 });
 
 describe('buildViewMap', () => {
@@ -99,6 +140,18 @@ describe('buildViewMap', () => {
     expect(layer.currentTime).toBe(1_000); // defaults to the first dataset's timeRange.start
   });
 
+  it('disambiguates colliding layer ids (same name/basename) and warns', () => {
+    // Two external archives both addressed by their own dir (name=""), sharing
+    // a metadataName — without disambiguation deck.gl would drop one layer.
+    const a = dataset({ name: '', metadataName: 'out', path: '/a/out' });
+    const b = dataset({ name: '', metadataName: 'out', path: '/b/out' });
+    const { spec, warnings } = buildViewMap([a, b]);
+    const ids = spec.layers.map((l) => (l as any).id);
+    expect(ids).toEqual(['out', 'out#2']);
+    expect(new Set(ids).size).toBe(2); // unique
+    expect(warnings.some((w) => /not unique/i.test(w))).toBe(true);
+  });
+
   it('honors an explicit layer override for every dataset', () => {
     const { spec } = buildViewMap(
       [dataset(), dataset({ name: 'other', path: '/data/other' })],
@@ -109,6 +162,60 @@ describe('buildViewMap', () => {
     );
     expect((spec.layers[0] as any)['@@type']).toBe('AnimatedArcLayer');
     expect((spec.layers[1] as any)['@@type']).toBe('AnimatedArcLayer');
+  });
+
+  it('adds a data-derived timeWindow from the temporal grain', () => {
+    const { spec } = buildViewMap([dataset({ temporalBucketMs: 3_600_000 })], {
+      publicBaseUrl: 'https://tiles.example.com',
+    });
+    // bucket(1h) * 3 = 10.8M, clamped to the fixture's 1000ms span.
+    expect((spec.layers[0] as any).timeWindow).toBe(1000);
+  });
+
+  it('promotes to the summary layer and forces the tier under intent="density"', () => {
+    const { spec } = buildViewMap(
+      [
+        dataset({
+          hasSummaryTier: true,
+          summaryScheme: 'h3',
+          // Default fixture bbox frames at zoom 3, within this tier's span.
+          summaryTier: { scheme: 'h3', min_zoom: 0, max_zoom: 6 },
+        }),
+      ],
+      { intent: 'density', publicBaseUrl: 'https://tiles.example.com' },
+    );
+    const layer = spec.layers[0] as Record<string, unknown>;
+    expect(layer['@@type']).toBe('H3SummaryLayer');
+    expect(layer.tier).toBe('summary');
+  });
+
+  it('an explicit layer freezes the @@type even when intent would promote it', () => {
+    const { spec, warnings } = buildViewMap(
+      [
+        dataset({
+          styleHints: { version: 1, properties: [], layer_hint: 'paths' },
+        }),
+      ],
+      { intent: 'tracking', layer: 'AnimatedPathLayer' },
+    );
+    // layer override wins over the tracking->trips promotion...
+    expect((spec.layers[0] as any)['@@type']).toBe('AnimatedPathLayer');
+    // ...but intent still tuned the window (tracking widens it).
+    expect((spec.layers[0] as any).timeWindow).toBeDefined();
+    expect(warnings.some((w) => /not point data/.test(w))).toBe(false);
+  });
+
+  it('surfaces a presentation warning when color-by has no domain-capable layer', () => {
+    const { warnings } = buildViewMap(
+      [
+        dataset({
+          styleHints: { version: 1, properties: [], layer_hint: 'points' },
+          columns: [{ name: 'mag', type: 'Number', suggestedDomain: [1, 9] }],
+        }),
+      ],
+      { colorBy: 'mag' },
+    );
+    expect(warnings.join('\n')).toMatch(/no first-class/);
   });
 
   it('honors an explicit time and viewState', () => {

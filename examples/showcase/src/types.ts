@@ -328,6 +328,9 @@ export interface Dataset {
   /**
    * Fade-in duration in SIM milliseconds for appearing points. In `cumulative`
    * mode this is the "ink appearing" ramp applied as each point is revealed.
+   * For `type: 'radar'` / `'weather'` these two fields instead tune the precip
+   * FIELD's cross-dissolve: each discrete scan's isobands ramp in/out as the
+   * window slides over them instead of popping at frame boundaries.
    */
   fadeInDuration?: number;
 
@@ -352,16 +355,6 @@ export interface Dataset {
    * `point_rgba` usually wants `false`, so lighting isn't applied twice.
    */
   pointMaterial?: boolean;
-
-  /**
-   * Render through `PainterlyExtension`: the tile's `point_rgba` is read as
-   * `(class_id, paint_seed, 0, 255)` rather than a colour, and the palette,
-   * lighting, fog and point size are computed in the shader from the baked
-   * surface normal. Requires an archive built with `to_geoparquet.py
-   * --style-in-rgba` and a `normal` vector column. Implies `pointMaterial:false`
-   * — the extension does its own lighting.
-   */
-  painterly?: boolean;
 
   /** Render a stroke around each point. */
   stroked?: boolean;

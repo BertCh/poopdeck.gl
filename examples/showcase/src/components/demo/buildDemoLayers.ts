@@ -10,7 +10,6 @@
  * dataset's own layer tree.
  */
 import { SolidPolygonLayer } from '@deck.gl/layers';
-import { PainterlyExtension } from '../../lib/painterlyExtension';
 import {
   AnimatedPointLayer,
   AnimatedPointCloudLayer,
@@ -61,50 +60,43 @@ const GROUND_DECAL_PARAMETERS = {
 };
 
 /**
- * Singleton so every per-tile sublayer shares one shader program. A fresh
- * instance per render would miss deck's shader cache and re-link a pipeline for
- * each of the ~140 temporal tiles.
- *
- * The palette mirrors `config/scene.json`'s `style.palette` (linear 0–1), which
- * the bake also copies into the archive's `scene.json` sidecar. Blender only ever
- * used these as flat viewport swatches; here they are the base albedo that the
- * shader actually lights.
+ * luma.gl v9 ADDITIVE-GLOW blend for the GLM lightning flash points: color
+ * accumulates (`src-alpha`/`one`) instead of alpha-compositing, so overlapping
+ * splat-shaped flashes SUM — isolated strikes read as faint sparks while
+ * convective cores stack into a white-hot glow. This one point layer replaces
+ * the old AnimatedHeatmapLayer density backdrop, whose per-frame re-aggregation
+ * over a second copy of the full tileset was the demo's dominant cost (the
+ * additive accumulation IS the density signal now). Module-scope so the
+ * parameters object identity is stable across layer-list rebuilds.
  */
-const painterlyExtension = new PainterlyExtension({
-  // Re-graded 2026-07 toward the Dutch marine masters (van de Velde / Bakhuizen):
-  // drama is TONAL, not chromatic. The old palette leaned red-brown and saturated
-  // (a yellow-orange sail, a blood-red flag) and the sea was near-black, so the
-  // ocean points read as noise rather than water. This grade pulls the wood tones
-  // toward muted umber, lifts the sail to a luminous weathered canvas-gray, keeps
-  // the flag as the ONE saturated accent, and — the big one — gives the ocean a
-  // gray-green body so the swell reads as a sea surface catching the storm light.
-  palette: {
-    hull: [0.075, 0.045, 0.03], // wood_dark — the tonal anchor; darkest, low-sat umber
-    deck: [0.17, 0.1, 0.058], // wood_mid — muted, red pulled out
-    mast: [0.34, 0.215, 0.11], // wood_light — weathered spar, not orange
-    rigging: [0.1, 0.075, 0.052], // rope — lifted so a thread of standing rigging survives
-    sail: [0.6, 0.56, 0.46], // canvas — luminous warm-gray, weathered (was yellow-tan)
-    flag: [0.44, 0.09, 0.05], // the single saturated accent, oxidised red
-    ocean: [0.045, 0.11, 0.12], // sea with body — gray-green, not near-black void
-    foam: [0.8, 0.82, 0.8], // paint-mass white; jitter/rim break it warm+cool
-    mist: [0.52, 0.55, 0.55], // luminous spray/haze veil
-  },
-});
+const LIGHTNING_ADDITIVE_PARAMETERS = {
+  blendColorOperation: 'add' as const,
+  blendColorSrcFactor: 'src-alpha' as const,
+  blendColorDstFactor: 'one' as const,
+  blendAlphaOperation: 'add' as const,
+  blendAlphaSrcFactor: 'one' as const,
+  blendAlphaDstFactor: 'one-minus-src-alpha' as const,
+};
 
 /**
- * Electric-storm ramp for the GLM lightning DENSITY field (low→high strike
- * concentration): deep indigo night → violet → charged cyan → incandescent
- * white core. Additive-composited by AnimatedHeatmapLayer, so faint areas read
- * as a dim blue haze and active convection as a white-hot glow — the backdrop
- * the individual flash points punch through.
+ * Flash-point color shared by the standalone `lightning` demo and the
+ * `weather` composite — MUST stay equal to the '#deecff' legend swatch both
+ * dataset entries declare (datasets.ts), or the legend lies about the render.
  */
-const LIGHTNING_DENSITY_RAMP: [number, number, number, number][] = [
-  [28, 22, 74, 255],
-  [70, 44, 150, 255],
-  [86, 110, 214, 255],
-  [130, 200, 255, 255],
-  [236, 246, 255, 255],
+const LIGHTNING_FLASH_COLOR: [number, number, number, number] = [
+  222, 236, 255, 255,
 ];
+
+/**
+ * The weather composite's de-emphasized flash-radius transform (the standalone
+ * demo's lives on its dataset entry: sqrt(e)·0.12 into [1.2, 7]; the composite
+ * shrinks lightning to an accent under the precip field). Module-scope on
+ * purpose: AnimatedPointLayer's prepared-tile styleKey keys on function
+ * IDENTITY, so an inline closure here would re-prepare every lightning tile
+ * whenever the layer list is rebuilt.
+ */
+const WEATHER_LIGHTNING_RADIUS_TRANSFORM = (e: number) =>
+  Math.max(1, Math.min(6, Math.sqrt(e) * 0.11));
 
 const EARTH_POLYGON: number[][][] = [
   [
@@ -346,38 +338,27 @@ export function buildDemoLayers({
           elevationScale: selectedDataset.elevationScale,
         }),
       ];
-    case 'point-cloud': {
+    case 'point-cloud':
       // Colour comes from the tile's interleaved `point_rgba` vector column
       // (the layer's `colorVectorColumn` default), bound zero-copy and taking
       // precedence over every other colour path — so no fillColor/colorMapping
       // here. `z` already rides in the geometry via --point-elevation-column,
       // hence no elevationProperty either.
       //
-      // Under `painterly`, those same four bytes are (class_id, paint_seed, 0,
-      // 255) and PainterlyExtension rebuilds the colour in-shader from the baked
-      // `normal` column. Passing it at the TOP level is required: deck's
-      // `_subLayerProps.pointCloud.extensions` would REPLACE the layer's internal
-      // TimeFilterExtension, and losing the temporal window makes every frame of
-      // the archive draw at once.
-      const painterly = selectedDataset.painterly === true;
-      // fadeIn/fadeOut ramp alpha across a frame's lifetime. The archive puts one
-      // frame every 33 ms and the render window is exactly 33 ms wide, so ANY
-      // non-zero ramp pulses each frame in and out — it must stay 0 here.
+      // fadeIn/fadeOut ramp alpha across a frame's lifetime. A frame-lattice
+      // archive whose render window equals its frame spacing pulses each frame
+      // in and out under ANY non-zero ramp — they must stay 0 here.
       return [
         new AnimatedPointCloudLayer({
           ...baseProps,
           ...sourceProps(selectedDataset.id, true),
           pointSize: selectedDataset.pointSize ?? 2,
           sizeUnits: selectedDataset.pointSizeUnits ?? 'pixels',
-          material: painterly
-            ? false
-            : (selectedDataset.pointMaterial ?? false),
+          material: selectedDataset.pointMaterial ?? false,
           fadeInDuration: selectedDataset.fadeInDuration ?? 0,
           fadeOutDuration: selectedDataset.fadeOutDuration ?? 0,
-          ...(painterly ? { extensions: [painterlyExtension] } : {}),
         }),
       ];
-    }
     case 'path':
       return [
         new AnimatedPathLayer({
@@ -624,38 +605,21 @@ export function buildDemoLayers({
       ];
     }
     case 'lightning': {
-      // GLM lightning from ONE flash-point archive, rendered as TWO stacked
-      // layers (the "both flashes + density" look):
-      //   1. a live strike-DENSITY field (AnimatedHeatmapLayer) as the glowing
-      //      backdrop — the optional governor source (continue-and-degrade);
-      //   2. individual FLASHES (AnimatedPointLayer) punching through on top,
-      //      each appearing bright then fading + shrinking over `wakeLength`
-      //      sim-ms (the one-sided comet decay) so instantaneous events read as
-      //      a shimmering flicker on the compressed multi-day clock. This is the
-      //      REQUIRED source so the clock gates on the flashes.
-      // Both read the same primary `url`; the density tileset is registered under
-      // its own id. Painter order: density (backdrop) → flashes (topmost).
-      const overlayBase = {
-        ...baseProps,
-        onOverviewPreload: undefined,
-        overviewPreload: false,
-      };
+      // GLM lightning from ONE flash-point archive, rendered as ONE additive
+      // point layer. Each flash appears bright then fades + shrinks over
+      // `wakeLength` sim-ms (the one-sided comet decay) so instantaneous events
+      // read as a shimmering flicker on the compressed multi-day clock — and
+      // because the splats blend ADDITIVELY, overlapping flashes in active
+      // convection stack into the white-hot density glow the old
+      // AnimatedHeatmapLayer backdrop used to provide. (That backdrop was a
+      // SECOND full tileset over the same archive plus a consolidated-buffer
+      // rebuild + GPU re-aggregation on every tile churn — the demo's dominant
+      // cost. One layer, one tileset, density for free.)
       return [
-        new AnimatedHeatmapLayer({
-          ...overlayBase,
-          id: `${selectedDataset.id}-density`,
-          ...sourceProps(`${selectedDataset.id}-density`, false),
-          radiusPixels: 26,
-          intensity: 1,
-          colorRange: LIGHTNING_DENSITY_RAMP,
-          // undefined weight = pure strike-count density; set to 'energy_fj' to
-          // weight the glow by optical energy.
-          weightProperty: selectedDataset.weightProperty,
-        }),
         new AnimatedPointLayer({
           ...baseProps,
           ...sourceProps(selectedDataset.id, true),
-          fillColor: selectedDataset.colorProperty ?? [222, 236, 255, 255],
+          fillColor: selectedDataset.colorProperty ?? LIGHTNING_FLASH_COLOR,
           colorMapping: selectedDataset.colorMapping,
           colorMappingDefault: selectedDataset.colorMappingDefault,
           radius: selectedDataset.radiusProperty ?? 'energy_fj',
@@ -670,6 +634,7 @@ export function buildDemoLayers({
           // Soft gaussian glow instead of a hard disk — sells the flash.
           splat: true,
           stroked: false,
+          parameters: LIGHTNING_ADDITIVE_PARAMETERS,
         }),
       ];
     }
@@ -953,6 +918,16 @@ export function buildDemoLayers({
           ...(selectedDataset.colorMappingDefault && {
             colorMappingDefault: selectedDataset.colorMappingDefault,
           }),
+          // Radar scans are discrete frames; without a sim-time-scaled fade
+          // each scan's bands POP in/out as the window slides (the layer
+          // default of 500 sim-ms is sub-frame on a compressed clock).
+          // Dataset-tuned fadeIn/fadeOut cross-dissolves successive scans.
+          ...(selectedDataset.fadeInDuration !== undefined && {
+            fadeInDuration: selectedDataset.fadeInDuration,
+          }),
+          ...(selectedDataset.fadeOutDuration !== undefined && {
+            fadeOutDuration: selectedDataset.fadeOutDuration,
+          }),
         }),
       ];
       if (selectedDataset.radarTracksUrl) {
@@ -1038,7 +1013,11 @@ export function buildDemoLayers({
             widthUnits: 'pixels',
             widthMinPixels: 0.8,
             widthMaxPixels: 2.5,
-            trailLength: 10800000, // 3h streamer tails
+            // 90-min streamer tails. The trips loader keeps 2× trailLength of
+            // sim-time resident, so tail length is ALSO the GPU-resident-vertex
+            // lever: the original 3h tails kept ~6h of continental streamlines
+            // on the GPU and left the solo wind demo GPU-bound at ~33fps.
+            trailLength: 5400000,
             fadeTrail: true,
             opacity: 0.5,
             capRounded: false,
@@ -1059,6 +1038,13 @@ export function buildDemoLayers({
           }),
           ...(selectedDataset.colorMappingDefault && {
             colorMappingDefault: selectedDataset.colorMappingDefault,
+          }),
+          // Cross-dissolve successive radar scans (see the `radar` case).
+          ...(selectedDataset.fadeInDuration !== undefined && {
+            fadeInDuration: selectedDataset.fadeInDuration,
+          }),
+          ...(selectedDataset.fadeOutDuration !== undefined && {
+            fadeOutDuration: selectedDataset.fadeOutDuration,
           }),
         }),
       );
@@ -1109,37 +1095,32 @@ export function buildDemoLayers({
         );
       }
 
-      // 4+5. GLM lightning: density field then flashes (topmost).
+      // 4. GLM lightning flashes (topmost) — one ADDITIVE point layer; the
+      // stacked splats double as the density glow (see the standalone
+      // `lightning` case for why the heatmap backdrop was retired).
       if (selectedDataset.lightningUrl) {
-        layers.push(
-          new AnimatedHeatmapLayer({
-            ...overlayBase,
-            id: `${selectedDataset.id}-lightning-density`,
-            ...sourceProps(`${selectedDataset.id}-lightning-density`, false),
-            data: selectedDataset.lightningUrl,
-            radiusPixels: 22,
-            intensity: 1,
-            colorRange: LIGHTNING_DENSITY_RAMP,
-          }),
-        );
         layers.push(
           new AnimatedPointLayer({
             ...overlayBase,
             id: `${selectedDataset.id}-lightning`,
             ...sourceProps(`${selectedDataset.id}-lightning`, false),
             data: selectedDataset.lightningUrl,
-            fillColor: [226, 238, 255, 255],
+            // De-emphasized copy of the standalone `lightning` case's flash
+            // look (smaller radii; the flat Dataset type can't carry a second
+            // set of radius fields here — they belong to the precip cells).
+            // Retune the two cases TOGETHER; the color is legend-pinned.
+            fillColor: LIGHTNING_FLASH_COLOR,
             radius: 'energy_fj',
             radiusUnits: 'pixels',
             radiusScale: 1,
             radiusMinPixels: 1,
             radiusMaxPixels: 6,
-            radiusTransform: (e: number) =>
-              Math.max(1, Math.min(6, Math.sqrt(e) * 0.11)),
+            radiusTransform: WEATHER_LIGHTNING_RADIUS_TRANSFORM,
             wakeLength: 700000,
             wakeTailScale: 0.15,
             splat: true,
             stroked: false,
+            parameters: LIGHTNING_ADDITIVE_PARAMETERS,
           }),
         );
       }

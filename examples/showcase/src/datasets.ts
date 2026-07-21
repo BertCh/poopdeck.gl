@@ -2734,7 +2734,7 @@ const rawDatasets: Dataset[] = [
     id: 'goes-glm-lightning',
     name: 'GOES GLM — Lightning',
     description:
-      'The late-May 2024 severe-weather outbreak seen as pure lightning: every optical flash the GOES-16 Geostationary Lightning Mapper detected over the Lower 48 from 19–22 May 2024 (the Greenfield, Iowa EF4 falls on the 21st), read one 20-second granule at a time. Individual flashes glow bright then fade on the compressed clock, over a live strike-density field. Source: NOAA GOES-16 GLM L2 LCFA (public domain).',
+      'The late-May 2024 severe-weather outbreak seen as pure lightning: every optical flash the GOES-16 Geostationary Lightning Mapper detected over the Lower 48 from 19–22 May 2024 (the Greenfield, Iowa EF4 falls on the 21st), read one 20-second granule at a time. Individual flashes glow bright then fade on the compressed clock, and because they composite additively, active convection stacks into a white-hot density glow. Source: NOAA GOES-16 GLM L2 LCFA (public domain).',
     url: '/data/goes-glm-lightning/manifest.json',
     type: 'lightning',
     sources: ['noaa'],
@@ -2763,10 +2763,12 @@ const rawDatasets: Dataset[] = [
       Math.max(1.2, Math.min(7, Math.sqrt(e) * 0.12)),
     legend: {
       title: 'GOES-16 GLM lightning',
+      // Flashes blend ADDITIVELY (buildDemoLayers), so stacked strikes read
+      // low→high density on their own — no separate density-ramp layer.
       ramps: [
         {
-          label: 'strike density',
-          colors: ['#1c164a', '#562c96', '#566ed6', '#82c8ff', '#ecf6ff'],
+          label: 'strike density (additive)',
+          colors: ['#20304d', '#4a6a9c', '#8cb4e6', '#deecff', '#ffffff'],
         },
       ],
       items: [{ color: '#deecff', label: 'flash' }],
@@ -2788,6 +2790,11 @@ const rawDatasets: Dataset[] = [
       end: Date.UTC(2024, 4, 22, 12, 0, 0),
     },
     timeWindow: 900000, // 15-min loader window (10-min frame cadence)
+    // Radar scans are discrete 10-min frames; cross-dissolve each scan's
+    // isobands over 7 sim-minutes at both edges (~0.25 wall-s at 1×) so bands
+    // morph instead of popping at scan boundaries.
+    fadeInDuration: 420000,
+    fadeOutDuration: 420000,
     targetPlaybackSeconds: 150,
     initialViewState: {
       longitude: -94,
@@ -2846,9 +2853,9 @@ const rawDatasets: Dataset[] = [
   },
   {
     id: 'hrrr-wind',
-    name: 'HRRR — Surface Wind',
+    name: 'HRRR — Steering Wind',
     description:
-      'Massless particles advected through NOAA HRRR 10 m wind, shaded by wind speed — the atmospheric companion to the ocean-current demo. Late-May 2024, CONUS. Source: NOAA HRRR (public domain).',
+      'Massless particles advected through NOAA HRRR 500 mb wind — the mid-tropospheric steering flow severe storms ride — shaded by wind speed. The atmospheric companion to the ocean-current demo. Late-May 2024, CONUS. Source: NOAA HRRR (public domain).',
     url: '/data/hrrr-wind/manifest.json',
     type: 'trips',
     sources: ['noaa'],
@@ -2856,7 +2863,7 @@ const rawDatasets: Dataset[] = [
       start: Date.UTC(2024, 4, 19, 12, 0, 0),
       end: Date.UTC(2024, 4, 22, 12, 0, 0),
     },
-    timeWindow: 21600000, // 6-h window (trip layer widens to 2× trailLength)
+    timeWindow: 10800000, // 3-h window = 2 × trailLength (the loader minimum)
     targetPlaybackSeconds: 150,
     initialViewState: {
       longitude: -94,
@@ -2865,17 +2872,18 @@ const rawDatasets: Dataset[] = [
       pitch: 0,
       bearing: 0,
     },
-    // Ribbons colored along their length by per-vertex wind speed (m/s):
-    // calm air deep blue, jets/gust fronts flare yellow→red.
+    // Ribbons colored along their length by per-vertex wind speed (m/s).
+    // 500 mb domain — steering flow runs 2-4× the surface wind: quiet ridge
+    // flow deep blue, the jet-stream core flaring yellow→red.
     tripGradient: {
       property: 'vertexValues',
-      domain: [0, 25], // m/s
+      domain: [0, 50], // m/s (500 mb)
       colors: [
-        [30, 60, 140, 230], // ~0 — calm, deep blue
-        [40, 130, 190, 230], // ~6
-        [70, 200, 170, 230], // ~12 — teal
-        [250, 210, 90, 235], // ~18 — yellow
-        [220, 50, 47, 240], // ≥25 — fast, red
+        [30, 60, 140, 230], // ~0 — quiet, deep blue
+        [40, 130, 190, 230], // ~12
+        [70, 200, 170, 230], // ~25 — teal
+        [250, 210, 90, 235], // ~37 — yellow
+        [220, 50, 47, 240], // ≥50 — jet core, red
       ],
     },
     colorMappingDefault: [130, 130, 130, 170],
@@ -2883,13 +2891,16 @@ const rawDatasets: Dataset[] = [
     tripWidth: 1.4,
     widthMinPixels: 0.8,
     widthMaxPixels: 2.6,
-    trailLength: 10800000, // 3-h streamer tails
+    // 90-min streamer tails. Also the perf lever: the loader keeps
+    // 2 × trailLength of sim-time resident, and 3-h tails left ~6 h of
+    // continental streamline geometry on the GPU (solo demo ran ~33fps).
+    trailLength: 5400000,
     fadeTrail: true,
     legend: {
-      title: 'Wind speed',
+      title: 'Wind speed (500 mb)',
       ramps: [
         {
-          label: '0 → 25 m/s',
+          label: '0 → 50 m/s',
           colors: ['#1e3c8c', '#2882be', '#46c8aa', '#fad25a', '#dc322f'],
         },
       ],
@@ -2899,7 +2910,7 @@ const rawDatasets: Dataset[] = [
     id: 'severe-weather-2024',
     name: 'Severe Weather Suite — May 2024',
     description:
-      'Four public NOAA feeds over one 72-hour clock (19–22 May 2024, the late-May outbreak that produced the Greenfield, Iowa EF4): HRRR surface wind advected into streamlines, the MRMS national reflectivity mosaic as moving dBZ bands with storm cells and tracks, and every GOES-16 GLM lightning flash as a shimmering field and glowing density. Cause and effect on one continental map. Sources: NOAA HRRR + MRMS + GOES-16 GLM (all public domain).',
+      'Four public NOAA feeds over one 72-hour clock (19–22 May 2024, the late-May outbreak that produced the Greenfield, Iowa EF4): HRRR 500 mb steering wind advected into streamlines that run with the storms, the MRMS national reflectivity mosaic as moving dBZ bands with storm cells and tracks, and every GOES-16 GLM lightning flash as a shimmering additive glow. Cause and effect on one continental map. Sources: NOAA HRRR + MRMS + GOES-16 GLM (all public domain).',
     // Primary `url` = the precip FIELD (REQUIRED governor). Overlays: precip
     // cells/tracks (reused radar fields) + wind + lightning.
     url: '/data/mrms-precip-field/manifest.json',
@@ -2914,6 +2925,9 @@ const rawDatasets: Dataset[] = [
       end: Date.UTC(2024, 4, 22, 12, 0, 0),
     },
     timeWindow: 900000, // 15-min field window; overlays widen themselves
+    // Cross-dissolve the discrete 10-min radar scans (see mrms-precip).
+    fadeInDuration: 420000,
+    fadeOutDuration: 420000,
     targetPlaybackSeconds: 180,
     initialViewState: {
       longitude: -93,
@@ -2952,10 +2966,10 @@ const rawDatasets: Dataset[] = [
     },
     trailLength: 3600000,
     tripWidth: 2.2,
-    // wind streamlines.
+    // wind streamlines (500 mb steering flow — see hrrr-wind's domain note).
     windGradient: {
       property: 'vertexValues',
-      domain: [0, 25],
+      domain: [0, 50],
       colors: [
         [90, 120, 175, 150],
         [70, 190, 175, 170],
@@ -2973,12 +2987,13 @@ const rawDatasets: Dataset[] = [
       ],
       ramps: [
         {
-          label: 'wind 0 → 25 m/s',
+          label: 'wind 0 → 50 m/s (500 mb)',
           colors: ['#5a78af', '#46beaf', '#fad25a', '#dc3c32'],
         },
         {
-          label: 'lightning density',
-          colors: ['#1c164a', '#562c96', '#566ed6', '#82c8ff', '#ecf6ff'],
+          // Additive flash accumulation, not a separate density layer.
+          label: 'lightning density (additive)',
+          colors: ['#20304d', '#4a6a9c', '#8cb4e6', '#deecff', '#ffffff'],
         },
       ],
     },
@@ -4400,92 +4415,6 @@ const rawDatasets: Dataset[] = [
       ],
     },
   },
-  {
-    id: 'poopdeck-ship',
-    name: 'Poopdeck — Ship on a Swell',
-    description:
-      'Procedural sailing ship on a Gerstner-wave ocean, relit in the shader — 40K points/frame, 14s at 15fps',
-    url: '/data/poopdeck-ship/manifest.json',
-    type: 'point-cloud',
-    timeRange: {
-      start: 1700000000000, // fixed synthetic epoch (see scene.json sidecar)
-      end: 1700000013860, // 211 frames, last at t0 + 210 × 66 ms
-    },
-    // MUST equal the archive's frame interval (66 ms). Each frame is a point in
-    // time (start == end) and the render window is CENTERED, so a frame is on
-    // screen for `currentTime ∈ [T-33, T+33]` and the next takes over at exactly
-    // that boundary: the visibility intervals TILE the timeline. Every playhead
-    // position sees exactly one frame, and each frame persists until the next
-    // replaces it. Verified by sweeping the playhead across all 66 phases of the
-    // lattice: 0 blank, 0 doubled.
-    //
-    // The margin is zero in both directions, so this value is load-bearing:
-    //   timeWindow < 66  ⇒  gaps, and the cloud blinks out between frames.
-    //   timeWindow > 66  ⇒  overlap, and two frames draw at once.
-    //
-    // fadeInDuration / fadeOutDuration must also stay 0 — a ramp shorter than a
-    // frame's 66 ms life would pulse every frame in and out.
-    timeWindow: 66,
-    // The RENDER window above is one frame wide. The tile-SELECTION window has to
-    // be much wider, because the tileset only refreshes its visible set every
-    // 100 ms of wall clock: a ±33 ms selection is already behind the playhead by
-    // the next refresh, and the layer draws nothing. 600 ms keeps ~3 buckets
-    // resident either side; TimeFilterExtension still shows exactly one frame out
-    // of them. Without this the cloud is blank in ~78% of rendered frames.
-    tileLoadTimeWindow: 600,
-    // WHY 15 fps AND NOT 30. SpatioTemporalLayer refreshes its visible-tile set at
-    // most once per 100 ms of wall clock (MIN_TILESET_UPDATE_WALL_MS), and that set
-    // is only the tiles overlapping `currentTime ± timeWindow/2`. A tile therefore
-    // has to stay correct for >100 ms of sim time or the playhead walks out of the
-    // resident tile between refreshes. The archive's 198 ms buckets hold 3 frames
-    // each (198 = 3 × 66), so the resident tile covers at least 165 ms even when
-    // the playhead enters at its very end.
-    //
-    // A 30 fps / 60K-point build broke both halves of that: its buckets held 180K
-    // features, which crossed stt-build's per-tile split cap, and the split falls
-    // along time — handing back one-frame tiles valid for only 33 of every 100 ms.
-    // Measured: the cloud was blank in 94% of rendered frames. At 15 fps / 40K the
-    // bucket is 120K features and stays whole (71 tiles for 71 buckets).
-    //
-    // ~1× — 13.86 s of swell over 14 real seconds, at the archive's native 15 fps.
-    // 8.44M features ≈ 59 MB ≈ 4.3 MB/s, against the ~18 MB/s the old build asked
-    // for. The swell is slow enough that 15 fps reads as motion, not judder.
-    targetPlaybackSeconds: 14,
-    initialViewState: {
-      longitude: -70.55,
-      latitude: 42.35,
-      zoom: 18.5,
-      pitch: 68,
-      bearing: 20,
-    },
-    use3D: true,
-    // Homer's low, close camera: sea as danger, not a product turntable. The
-    // scene is 140 m wide and sits inside one z14 tile, so a basemap would show
-    // nothing but empty Massachusetts Bay.
-    hideBasemap: true,
-    // A painted sky, not a void. `backdropColor` is applied straight to the
-    // container's CSS `background` (the deck canvas is transparent over it), so
-    // it takes a full layered gradient. The Dutch marine masters (van de Velde,
-    // Bakhuizen) give ~60% of the canvas to weather with a single luminous break;
-    // the flat `#0b1119` gave us none of that. Bottom layer: a tonal storm sky
-    // grading down through a warm-gray luminous horizon (~52%) into a gray-green
-    // sea and a dark foreground. Top layer: an off-axis ochre light-break
-    // (Aivazovsky's warm horizon) placed behind and above the ship. The painterly
-    // fog colour (see painterlyExtension defaults) is matched to the horizon band
-    // so distant rigging dissolves INTO this sky (Turner) instead of cutting out.
-    backdropColor:
-      'radial-gradient(135% 95% at 54% 40%, rgba(198,186,158,0.30) 0%, rgba(150,150,144,0.12) 26%, rgba(90,96,100,0) 56%), ' +
-      'linear-gradient(to bottom, #161c26 0%, #222833 22%, #333a3c 42%, #4a4c42 52%, #394040 60%, #232a30 72%, #141b22 86%, #0d1319 100%)',
-    // The tile's `point_rgba` carries (class_id, paint_seed, 0, 255), not colour:
-    // Blender bakes flat `material.diffuse_color` (7 distinct values across the
-    // whole cloud) and none of the scene's lighting, fog or view transform reaches
-    // the export. PainterlyExtension rebuilds the colour in-shader from the baked
-    // `normal` column, so the palette can be re-graded without re-running Blender.
-    painterly: true,
-    pointSize: 2.4,
-    pointSizeUnits: 'pixels',
-    pointMaterial: false,
-  },
 ];
 
 // ── Camera-colored splat variants (AV scenes with cameras) ───────────────────
@@ -4642,18 +4571,25 @@ const WAYMO_LOCAL_ONLY = /^waymo-/;
 // demos (streets-flow / corridors / points / live via its bixi-live-flow stem)
 // AND the six Argoverse `-lod` zoom-LOD variants are R2-synced — all verified
 // 200 on tiles.poopdeck.gl. If a future dataset is registered before its
-// archives are synced, reintroduce the LOCAL_ONLY_DATASETS gate: filter its id
-// whenever DATA_IS_REMOTE so the public site never links (and 404s) it.
+// archives are synced, add its id to LOCAL_ONLY_DATASETS below so the public
+// site never links (and 404s) it.
 // CAUTION: AV scene bundles have NO top-level manifest — to verify one on R2,
 // probe `<base>/data/<stem>/lidar/manifest.json` (the cockpit's entry URL),
 // never `<stem>/manifest.json`; the latter 404s even for live scenes.
 const DATA_IS_REMOTE = DATA_BASE_URL !== '';
 
-// This is that gate. `poopdeck-ship` is built locally from the Blender
-// point-cloud pipeline and its 435 MB archive is not on R2, so it renders in
-// local dev (which serves `public/data`) and is filtered from the public site.
-// Drop this line once the bundle is synced.
-const LOCAL_ONLY_DATASETS = /^poopdeck-ship$/;
+// (2026-07-18) Datasets whose archives exist locally but are NOT YET synced to
+// R2 — verified 404 on tiles.poopdeck.gl for all five weather archives
+// (mrms-precip-field/cells/tracks, goes-glm-lightning, hrrr-wind). Held off
+// the remote deploy so the nav never ships a dataless demo; local dev serves
+// `public/data` directly and renders them fine. Delete an id here as soon as
+// its r2-sync lands (the gate itself stays for the next pre-sync dataset).
+const LOCAL_ONLY_DATASETS = new Set<string>([
+  'goes-glm-lightning',
+  'severe-weather-2024',
+  'mrms-precip',
+  'hrrr-wind',
+]);
 
 export const datasets: Dataset[] = [
   ...rawDatasets,
@@ -4662,7 +4598,7 @@ export const datasets: Dataset[] = [
 ]
   .filter((d) => !HELD_BACK_AV_MODES.test(d.id))
   .filter((d) => !(DATA_IS_REMOTE && WAYMO_LOCAL_ONLY.test(d.id)))
-  .filter((d) => !(DATA_IS_REMOTE && LOCAL_ONLY_DATASETS.test(d.id)))
+  .filter((d) => !(DATA_IS_REMOTE && LOCAL_ONLY_DATASETS.has(d.id)))
   .map((d) => ({
     ...d,
     url: resolveDataUrl(d.url),

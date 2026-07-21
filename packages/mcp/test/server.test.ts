@@ -285,6 +285,55 @@ describe('createSttMcpServer — discovery tools', () => {
       await close();
     }
   });
+
+  it('dataset_report rejects `name` and `path` together', async () => {
+    const root = await fixtureRoot({ earthquakes: makeManifestJson() });
+    const { client, close } = await connectedClient(
+      baseConfig(root, { allowCli: true }),
+    );
+    try {
+      const result = await client.callTool({
+        name: 'dataset_report',
+        arguments: { name: 'earthquakes', path: '/tmp/whatever' },
+      });
+      expect(result.isError).toBe(true);
+      expect(firstText(result)).toMatch(/mutually exclusive/i);
+    } finally {
+      await close();
+    }
+  });
+
+  it('dataset_report rejects an explicit `path` without --allow-cli', async () => {
+    const root = await fixtureRoot({ earthquakes: makeManifestJson() });
+    const { client, close } = await connectedClient(baseConfig(root));
+    try {
+      const result = await client.callTool({
+        name: 'dataset_report',
+        arguments: { path: '/tmp/whatever' },
+      });
+      expect(result.isError).toBe(true);
+      expect(firstText(result)).toMatch(/--allow-cli/);
+    } finally {
+      await close();
+    }
+  });
+
+  it('dataset_report requires either name or path', async () => {
+    const root = await fixtureRoot({ earthquakes: makeManifestJson() });
+    const { client, close } = await connectedClient(
+      baseConfig(root, { allowCli: true }),
+    );
+    try {
+      const result = await client.callTool({
+        name: 'dataset_report',
+        arguments: {},
+      });
+      expect(result.isError).toBe(true);
+      expect(firstText(result)).toMatch(/requires either `name` or `path`/i);
+    } finally {
+      await close();
+    }
+  });
 });
 
 describe('createSttMcpServer — interactive tools', () => {
@@ -378,6 +427,95 @@ describe('createSttMcpServer — interactive tools', () => {
       });
       expect(result.isError).toBe(true);
       expect(firstText(result)).toMatch(/viewstate/i);
+    } finally {
+      await close();
+    }
+  });
+
+  it('view_map requires datasets and/or paths', async () => {
+    const root = await fixtureRoot({ earthquakes: makeManifestJson() });
+    const { client, close } = await connectedClient(baseConfig(root));
+    try {
+      const result = await client.callTool({
+        name: 'view_map',
+        arguments: {},
+      });
+      expect(result.isError).toBe(true);
+      expect(firstText(result)).toMatch(
+        /requires `datasets`.*and\/or `paths`/i,
+      );
+    } finally {
+      await close();
+    }
+  });
+
+  it('view_map rejects explicit `paths` without --allow-cli', async () => {
+    const root = await fixtureRoot({ earthquakes: makeManifestJson() });
+    const { client, close } = await connectedClient(baseConfig(root));
+    try {
+      const result = await client.callTool({
+        name: 'view_map',
+        arguments: { paths: '/somewhere/outside/manifest.json' },
+      });
+      expect(result.isError).toBe(true);
+      expect(firstText(result)).toMatch(/--allow-cli/);
+    } finally {
+      await close();
+    }
+  });
+
+  it('view_map composes a spec for an explicit external path when --allow-cli is on', async () => {
+    // A dataset living OUTSIDE the server's --data-root.
+    const root = await fixtureRoot({ inside: makeManifestJson() });
+    const extRoot = await fixtureRoot({
+      ext: makeManifestJson({ metadata: { name: 'hurricanes-mcp-test' } }),
+    });
+    const extDir = path.join(extRoot, 'ext');
+    const { client, close } = await connectedClient(
+      baseConfig(root, { allowCli: true }),
+    );
+    try {
+      const result = await client.callTool({
+        name: 'view_map',
+        arguments: { paths: extDir },
+      });
+      expect(result.isError).toBeFalsy();
+      const spec = JSON.parse(
+        (result.content as any[]).find((c) => c.type === 'text').text,
+      );
+      expect(spec.layers).toHaveLength(1);
+      // name is "" for an externally-addressed archive → id falls back to metadataName.
+      expect(spec.layers[0].id).toBe('hurricanes-mcp-test');
+      expect(spec.layers[0].data).toBe(path.join(extDir, 'manifest.json'));
+    } finally {
+      await close();
+    }
+  });
+
+  it('view_map degrades gracefully when some names resolve and others do not', async () => {
+    const root = await fixtureRoot({
+      good: makeManifestJson({ metadata: { name: 'good' } }),
+    });
+    const { client, close } = await connectedClient(baseConfig(root));
+    try {
+      const result = await client.callTool({
+        name: 'view_map',
+        arguments: { datasets: ['good', 'missing'] },
+      });
+      expect(result.isError).toBeFalsy();
+      const spec = JSON.parse(
+        (result.content as any[]).find((c) => c.type === 'text').text,
+      );
+      // The resolvable dataset still produces a layer…
+      expect(spec.layers).toHaveLength(1);
+      expect(spec.layers[0].id).toBe('good');
+      // …and the failure is surfaced as a Note, not swallowed.
+      const noteText = (result.content as any[])
+        .filter((c) => c.type === 'text')
+        .map((c) => c.text)
+        .join('\n');
+      expect(noteText).toMatch(/some datasets failed to resolve/i);
+      expect(noteText).toMatch(/missing/);
     } finally {
       await close();
     }
@@ -510,7 +648,7 @@ describe('createSttMcpServer — execution tools (--allow-cli)', () => {
     }
   });
 
-  it('recommend_build parses the recipe and renders a canonical stt-build command', async () => {
+  it('recommend_build falls back to a TS-templated command for a legacy CLI (no command field)', async () => {
     const root = await fixtureRoot({ earthquakes: makeManifestJson() });
     const sttOptimizeBin = await writeFakeCli(
       root,
@@ -530,9 +668,127 @@ describe('createSttMcpServer — execution tools (--allow-cli)', () => {
       expect(parsed.cliEnabled).toBe(true);
       expect(parsed.recommendation.max_zoom).toBe(9);
       expect(parsed.recommendation.confidence).toBe(88);
+      // No `command` in the recipe → the local templater renders it.
       expect(parsed.suggestedCommand).toContain('--min-zoom 2 --max-zoom 9');
       expect(parsed.suggestedCommand).toContain('--temporal-bucket 1h');
       expect(parsed.suggestedCommand).toContain('--style-hints');
+      // No advice array → empty evidence, legacy styleHints default preserved.
+      expect(parsed.evidence).toEqual([]);
+    } finally {
+      await close();
+    }
+  });
+
+  it('recommend_build assembles the command with caller params + advice, and surfaces advice as evidence (lossy/suggestion-only never auto-applied)', async () => {
+    const root = await fixtureRoot({ earthquakes: makeManifestJson() });
+    // Enriched recipe: Rust-assembled command + full advice + dominant_type.
+    const recipe = {
+      input: '/data/quakes.parquet',
+      time_field: 'timestamp',
+      min_zoom: 2,
+      max_zoom: 9,
+      temporal_bucket_ms: 3600000,
+      temporal_bucket_human: '1 hour',
+      dominant_type: 'Point',
+      confidence: 88,
+      explanations: ['dense localized cluster'],
+      command:
+        'stt-build --input quakes.parquet --output quakes \\\n  --time-field timestamp --min-zoom 2 --max-zoom 9 \\\n  --blob-ordering spatial',
+      advice: [
+        {
+          flag: '--blob-ordering',
+          value: 'spatial',
+          why: 'localized short-window access',
+          projected: '-30% range reads (simulated)',
+          lossy: false,
+          confidence: 'high',
+        },
+        {
+          flag: '--publish',
+          why: 'zstd 19 saves 12% (measured)',
+          lossy: false,
+          confidence: 'medium',
+        },
+        {
+          flag: '--quantize-coords',
+          value: '1',
+          why: '1 m precision at max zoom',
+          lossy: true,
+          confidence: 'high',
+        },
+        {
+          flag: '--min-zoom-field',
+          value: 'category',
+          why: 'hotspot LOD floor; needs a numeric rank column first',
+          lossy: false,
+          suggestion_only: true,
+          confidence: 'low',
+        },
+      ],
+    };
+    const sttOptimizeBin = await writeFakeCli(
+      root,
+      'fake-stt-optimize-recommend-rich',
+      `console.log(JSON.stringify(${JSON.stringify(recipe)}));`,
+    );
+    const { client, close } = await connectedClient(
+      baseConfig(root, { allowCli: true, sttOptimizeBin }),
+    );
+    try {
+      const result = await client.callTool({
+        name: 'recommend_build',
+        arguments: {
+          input: '/data/quakes.parquet',
+          output: 'quakes-out',
+          timeFormat: 'unix-sec',
+        },
+      });
+      const parsed = JSON.parse(firstText(result));
+      // The command is assembled HERE, honoring the caller's output/timeFormat
+      // (which the Rust command cannot know) and folding in the recipe scalars
+      // plus the auto-applicable advice — the Rust command rides only inside
+      // `recommendation` for CLI parity.
+      expect(parsed.suggestedCommand).toContain('-i /data/quakes.parquet');
+      expect(parsed.suggestedCommand).toContain('-o quakes-out');
+      expect(parsed.suggestedCommand).toContain('--time-format unix-sec');
+      expect(parsed.suggestedCommand).toContain('--temporal-bucket 1h');
+      expect(parsed.suggestedCommand).toContain('--blob-ordering spatial');
+      expect(parsed.suggestedCommand).toContain('--publish');
+      expect(parsed.suggestedCommand).not.toContain('--quantize-coords');
+      expect(parsed.suggestedCommand).not.toContain('--min-zoom-field');
+      expect(parsed.dominantType).toBe('Point');
+      // Every advice entry surfaces; lossy and suggestion-only are flagged as
+      // NOT auto-applied.
+      expect(parsed.evidence).toHaveLength(4);
+      const quantize = parsed.evidence.find(
+        (e: { flag: string }) => e.flag === '--quantize-coords',
+      );
+      expect(quantize.autoApplied).toBe(false);
+      const ordering = parsed.evidence.find(
+        (e: { flag: string }) => e.flag === '--blob-ordering',
+      );
+      expect(ordering.autoApplied).toBe(true);
+      const lodFloor = parsed.evidence.find(
+        (e: { flag: string }) => e.flag === '--min-zoom-field',
+      );
+      expect(lodFloor.autoApplied).toBe(false);
+      // Auto-applicable advice folds into build args; lossy quantize and
+      // suggestion-only levers do not. The caller's timeFormat and the
+      // recipe's bucket ride along.
+      expect(parsed.buildDatasetArgs.publish).toBe(true);
+      expect(parsed.buildDatasetArgs.timeFormat).toBe('unix-sec');
+      expect(parsed.buildDatasetArgs.temporalBucket).toBe('1h');
+      expect(parsed.buildDatasetArgs.extraArgs).toEqual([
+        '--blob-ordering',
+        'spatial',
+      ]);
+      // --min-zoom-field is a STYLE_HINT_SIGNAL_FLAG: even suggestion-only,
+      // its presence signals color-worthy attributes worth profiling.
+      expect(parsed.buildDatasetArgs.styleHints).toBe(true);
+      expect(JSON.stringify(parsed.buildDatasetArgs)).not.toContain('quantize');
+      expect(JSON.stringify(parsed.buildDatasetArgs)).not.toContain(
+        'min-zoom-field',
+      );
     } finally {
       await close();
     }

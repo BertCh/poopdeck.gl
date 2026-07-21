@@ -18,6 +18,10 @@
  * `@deck.gl/json` `JSONConfiguration`.
  */
 import type { DatasetDescription } from './manifest.js';
+import {
+  recommendPresentation,
+  type PresentationIntent,
+} from './presentation.js';
 
 export interface ViewState {
   longitude: number;
@@ -28,11 +32,23 @@ export interface ViewState {
 }
 
 export interface ViewMapOptions {
-  /** Force this `@@type` for every dataset, overriding the per-dataset inference below. */
+  /** Force this `@@type` for every dataset, overriding both the per-dataset inference and any intent promotion below. */
   layer?: string;
   viewState?: Partial<ViewState>;
   /** `currentTime` applied to every layer (Unix ms). Defaults to the first dataset's `timeRange.start`. */
   time?: number;
+  /**
+   * Desired presentation. Biases the per-dataset layer/color/tier/timeWindow
+   * choice toward a reading (`density`→summary tier + count color;
+   * `tracking`→trips + longer trails; `choropleth`→measure color). Omit for a
+   * neutral `exploratory` default. The `layer` param, and the explicit
+   * `colorBy`/`timeWindow` overrides below, always win over the bias.
+   */
+  intent?: PresentationIntent;
+  /** Force the color-by property for every dataset (overrides the auto pick from measured columns). */
+  colorBy?: string;
+  /** Force the visible time window in ms for every dataset (overrides the temporal-grain default). */
+  timeWindow?: number;
   /**
    * Base URL datasets are served from (e.g. an R2/CDN origin or a local
    * `stt-serve`/static-file-server root) — manifest URLs become
@@ -194,10 +210,37 @@ export function buildViewMap(
 ): ViewMapResult {
   const currentTime = options.time ?? datasets[0]?.timeRange?.start;
   const warnings: string[] = [];
+
+  // Framed view state is computed BEFORE the layer loop: the presentation
+  // recommender needs the framed zoom to decide whether a summary tier is in range.
+  const base = defaultViewState(datasets);
+  const initialViewState: ViewState = {
+    longitude: options.viewState?.longitude ?? base.longitude,
+    latitude: options.viewState?.latitude ?? base.latitude,
+    zoom: options.viewState?.zoom ?? base.zoom,
+    pitch: options.viewState?.pitch ?? base.pitch,
+    bearing: options.viewState?.bearing ?? base.bearing,
+  };
+
+  // deck.gl keys layers by `id`, so two datasets resolving to the same
+  // `datasetLayerId` (e.g. two explicit `paths` archives both built with the
+  // same --name, or both addressed by the basename "out") would collide and one
+  // would be silently dropped. Disambiguate with a `#n` suffix and warn.
+  const seenIds = new Map<string, number>();
   const layers = datasets.map((dataset) => {
-    const id = datasetLayerId(dataset);
+    const baseId = datasetLayerId(dataset);
+    const priorCount = seenIds.get(baseId) ?? 0;
+    seenIds.set(baseId, priorCount + 1);
+    const id = priorCount === 0 ? baseId : `${baseId}#${priorCount + 1}`;
+    if (priorCount > 0) {
+      warnings.push(
+        `Layer id "${baseId}" is not unique across the requested datasets — disambiguated to "${id}". ` +
+          `Multiple archives share a name/basename; deck.gl keys layers by id, so identical ids would collide ` +
+          `(one layer silently dropped). Give the archives distinct --name values to fix this at the source.`,
+      );
+    }
     const inferred = inferLayerType(dataset);
-    const type = options.layer ?? inferred.type;
+    const baseLayerType = options.layer ?? inferred.type;
     // An explicit `layer` override is a deliberate choice, so it suppresses the
     // geometry-unknown warning; a bare `default` inference does not.
     if (options.layer === undefined && inferred.confidence === 'default') {
@@ -208,10 +251,38 @@ export function buildViewMap(
           `not point data.`,
       );
     }
+
+    // Presentation facets (layer promotion, color-by, tier, timeWindow) from the
+    // dataset + intent. An explicit `layer` param locks the type — an intent
+    // can still tune color/window, but never re-picks the layer, and
+    // `layerLocked` makes the recommender resolve every facet against the
+    // locked type (not a promoted one it will never render).
+    const summaryLayerType =
+      dataset.hasSummaryTier && dataset.summaryScheme
+        ? SUMMARY_SCHEME_TO_TYPE[dataset.summaryScheme]
+        : undefined;
+    const pres = recommendPresentation(
+      dataset,
+      {
+        baseLayerType,
+        layerLocked: options.layer !== undefined,
+        summaryLayerType,
+        framedZoom: initialViewState.zoom,
+      },
+      {
+        intent: options.intent,
+        colorBy: options.colorBy,
+        timeWindow: options.timeWindow,
+      },
+    );
+    warnings.push(...pres.warnings);
+    const type = options.layer ?? pres.layerType ?? baseLayerType;
+
     const props: Record<string, unknown> = {
       '@@type': type,
       id,
       data: resolveManifestUrl(dataset, options.publicBaseUrl),
+      ...pres.props,
     };
     if (currentTime !== undefined) props.currentTime = currentTime;
     return props;
@@ -225,15 +296,6 @@ export function buildViewMap(
         `set --public-base-url to an http(s) origin for a browser-loadable URL.`,
     );
   }
-
-  const base = defaultViewState(datasets);
-  const initialViewState: ViewState = {
-    longitude: options.viewState?.longitude ?? base.longitude,
-    latitude: options.viewState?.latitude ?? base.latitude,
-    zoom: options.viewState?.zoom ?? base.zoom,
-    pitch: options.viewState?.pitch ?? base.pitch,
-    bearing: options.viewState?.bearing ?? base.bearing,
-  };
 
   const spec = { layers, initialViewState };
   return { spec, html: renderHtml(spec, datasets, warnings), warnings };

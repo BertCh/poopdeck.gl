@@ -419,12 +419,12 @@ export const DEMO_META: Record<string, DemoMeta> = {
   'goes-glm-lightning': {
     category: 'earth-ocean',
     tagline:
-      'The late-May 2024 outbreak as pure lightning — every GOES-16 GLM flash over the Lower 48, glowing then fading over a live strike-density field.',
-    techniqueTag: 'Lightning · flashes + density',
+      'The late-May 2024 outbreak as pure lightning — every GOES-16 GLM flash over the Lower 48, glowing then fading, stacking additively into storm cores.',
+    techniqueTag: 'Lightning · additive flashes',
     about: [
       'The Geostationary Lightning Mapper (GLM) aboard GOES-16 watches the Western Hemisphere and reports every optical lightning flash it sees, day and night, in 20-second frames. This demo plays four days of it — 19–22 May 2024, the prolific late-May severe-weather sequence whose 21 May outbreak produced the Greenfield, Iowa EF4 — across the whole Lower 48.',
       'The generator lists and downloads the L2 LCFA granules straight from the anonymous NOAA GOES-16 S3 bucket (no credentials), reads each NetCDF with xarray, keeps the good-quality flashes inside a CONUS box, and emits one point per flash carrying its time, optical energy, and footprint area — then stt-build tiles it (time-major ordering, quantized coordinates) into a single archive.',
-      'That one archive drives two stacked layers. A strike-DENSITY field (`AnimatedHeatmapLayer`) glows where flashes concentrate; individual FLASHES (`AnimatedPointLayer`) punch through on top, each appearing bright then fading and shrinking over ~12 minutes of model time — so instantaneous strikes read as a shimmering flicker on the 72-hour-in-150-second clock. It is the lightning member of the weather suite.',
+      'That one archive drives a single additive point layer. Every flash (`AnimatedPointLayer` with a soft gaussian splat) appears bright then fades and shrinks over ~12 minutes of model time, and because the splats blend ADDITIVELY, overlapping strikes in active convection sum into a white-hot glow — the density field emerges from the flashes themselves instead of a separate heatmap pass. Instantaneous strikes read as a shimmering flicker on the 72-hour-in-150-second clock. It is the lightning member of the weather suite.',
     ],
     dataSources: [
       {
@@ -439,13 +439,11 @@ export const DEMO_META: Record<string, DemoMeta> = {
     buildNote:
       'Downloads the 20-second GLM granules from the anonymous GOES-16 S3 bucket ' +
       '(no credentials) on first run, caching to --cache; re-run with ' +
-      '--skip-fetch to rebuild from the cache. One archive of flash points feeds ' +
-      'both the density heatmap and the flash markers.',
+      '--skip-fetch to rebuild from the cache. The 15-minute temporal bucket ' +
+      'matters: flashes keep exact per-feature timestamps at any bucket size, ' +
+      'and finer (per-minute) buckets shatter the archive into ~1KB tiles that ' +
+      'thrash the loader during playback.',
     techniques: [
-      {
-        label: 'AnimatedHeatmapLayer',
-        docPath: '/docs/api/heatmap-time-layer',
-      },
       {
         label: 'AnimatedPointLayer',
         docPath: '/docs/api/animated-point-layer',
@@ -502,11 +500,12 @@ export const DEMO_META: Record<string, DemoMeta> = {
   'hrrr-wind': {
     category: 'earth-ocean',
     tagline:
-      'NOAA HRRR 10 m wind advected into streamlines over the late-May 2024 outbreak — the atmospheric companion to the ocean-current demo.',
+      'NOAA HRRR 500 mb steering wind advected into streamlines over the late-May 2024 outbreak — the flow the storms actually ride.',
     techniqueTag: 'Trips · wind advection',
     about: [
-      'The same particle-advection idea as the modeled-ocean-currents demo, applied to the atmosphere. Massless particles are seeded across the Lower 48 and integrated through NOAA HRRR’s time-varying 10 m wind for 19–22 May 2024; each path becomes a streamline ribbon shaded by wind speed.',
-      'HRRR is a 3 km model on a Lambert-Conformal grid, so the adapter byte-range-subsets only the 10 m U/V wind messages from each hourly file (~5 MB via the GRIB .idx sidecar, not the 100 MB full file), regrids that field to a regular lat/lon grid (scipy), and integrates with 4th-order Runge–Kutta plus continuous respawning so coverage stays even. The result is the earth.nullschool look via trip ribbons — no GPU particle system.',
+      'The same particle-advection idea as the modeled-ocean-currents demo, applied to the atmosphere. Massless particles are seeded across the Lower 48 and integrated through NOAA HRRR’s time-varying 500 mb wind for 19–22 May 2024; each path becomes a streamline ribbon shaded by wind speed.',
+      'The level matters: storms move with the mid-tropospheric STEERING flow, not the surface breeze — an earlier 10 m build visibly lagged and cut across the MRMS cell motion in the composite. 500 mb (~5.5 km up) is the classic single-level steering proxy for a severe outbreak, so these streamlines run with the storms. (Right-moving supercells still deviate ~20–30° from any single level — that residual is real meteorology, not a bug.)',
+      'HRRR is a 3 km model on a Lambert-Conformal grid, so the adapter byte-range-subsets only the two 500 mb U/V wind messages from each hourly pressure file (~1 MB via the GRIB .idx sidecar, not the 400 MB full file), regrids that field to a regular lat/lon grid (scipy), and integrates with 4th-order Runge–Kutta plus continuous respawning so coverage stays even. The result is the earth.nullschool look via trip ribbons — no GPU particle system.',
       'It is the wind member of the weather suite; in the combined view it sweeps beneath the precipitation and lightning.',
     ],
     dataSources: [
@@ -514,15 +513,17 @@ export const DEMO_META: Record<string, DemoMeta> = {
         name: 'NOAA HRRR (High-Resolution Rapid Refresh, AWS Open Data)',
         url: 'https://registry.opendata.aws/noaa-hrrr-bdp-pds/',
         license: 'Public domain (US Gov)',
-        note: 'Bucket noaa-hrrr-bdp-pds, hourly wrfsfcf00 10 m UGRD/VGRD, 19–22 May 2024.',
+        note: 'Bucket noaa-hrrr-bdp-pds, hourly wrfprsf00 500 mb UGRD/VGRD, 19–22 May 2024.',
       },
     ],
     buildCommand:
       'python hrrr_advect.py --start 2024-05-19T12:00Z --end 2024-05-22T12:00Z --out examples/showcase/public/data/hrrr-wind',
     buildNote:
-      'Byte-range-subsets the 10 m wind from the anonymous HRRR S3 bucket (no ' +
+      'Byte-range-subsets the 500 mb wind (default --level; pass --level 10m ' +
+      'for the surface wind) from the anonymous HRRR S3 bucket (no ' +
       'credentials), regrids and advects in Python (scipy). Reuses the ' +
-      'ecco_advect.py trip-ribbon pipeline.',
+      'ecco_advect.py trip-ribbon pipeline. Particle count / vertex cadence / ' +
+      '2h temporal bucket are tuned for render perf — see the script defaults.',
     techniques: [
       {
         label: 'AnimatedTripsLayer',
@@ -539,18 +540,18 @@ export const DEMO_META: Record<string, DemoMeta> = {
     category: 'earth-ocean',
     tagline:
       'Four NOAA feeds on one 72-hour clock — wind, precipitation, storm cells, and lightning over the late-May 2024 outbreak.',
-    techniqueTag: 'Weather suite · 6-layer composite',
+    techniqueTag: 'Weather suite · 5-layer composite',
     about: [
       'The whole weather suite on one continental map and one playhead: 19–22 May 2024, the prolonged late-May severe-weather sequence whose 21 May outbreak produced the Greenfield, Iowa EF4. Four independent public NOAA datasets, each built by its own adapter, are streamed together and coordinated by the playback governor.',
-      'Bottom to top: HRRR 10 m wind advected into streamlines (blue→red by speed); the MRMS national reflectivity mosaic as moving dBZ isoband polygons — the precipitation field — with storm-cell centroids and SCIT cell tracks over it; and every GOES-16 GLM lightning flash, drawn as a glowing strike-density field with individual flashes flickering on top. The precipitation field is the required governor source; wind, lightning, cells, and tracks stream alongside as optional sources (continue-and-degrade), each widening its own loader window.',
+      'Bottom to top: HRRR 500 mb steering wind advected into streamlines (blue→red by speed — the mid-tropospheric flow the storms ride, so the ribbons run with the cells); the MRMS national reflectivity mosaic as moving dBZ isoband polygons — the precipitation field, cross-dissolving between scans — with storm-cell centroids and SCIT cell tracks over it; and every GOES-16 GLM lightning flash as an additive splat, flickering individually and stacking into a glow where convection concentrates. The precipitation field is the required governor source; wind, lightning, cells, and tracks stream alongside as optional sources (continue-and-degrade), each widening its own loader window.',
       'It is the payoff of the suite: you watch the wind organize, the rain bands sweep east, the cells and their tracks light up the convective cores, and the lightning flare along the leading edge — cause and effect, one clock.',
     ],
     dataSources: [
       {
-        name: 'NOAA HRRR surface wind (AWS Open Data)',
+        name: 'NOAA HRRR 500 mb wind (AWS Open Data)',
         url: 'https://registry.opendata.aws/noaa-hrrr-bdp-pds/',
         license: 'Public domain (US Gov)',
-        note: 'hourly 10 m UGRD/VGRD → advected streamlines.',
+        note: 'hourly 500 mb UGRD/VGRD → advected steering-flow streamlines.',
       },
       {
         name: 'NOAA MRMS reflectivity mosaic (AWS Open Data)',
@@ -562,7 +563,7 @@ export const DEMO_META: Record<string, DemoMeta> = {
         name: 'NOAA GOES-16 GLM lightning (AWS Open Data)',
         url: 'https://registry.opendata.aws/noaa-goes/',
         license: 'Public domain (US Gov)',
-        note: 'L2 LCFA flashes → density field + flash points.',
+        note: 'L2 LCFA flashes → additive flash points.',
       },
     ],
     buildCommand:
@@ -579,10 +580,6 @@ export const DEMO_META: Record<string, DemoMeta> = {
       {
         label: 'AnimatedTripsLayer',
         docPath: '/docs/api/animated-trips-layer',
-      },
-      {
-        label: 'AnimatedHeatmapLayer',
-        docPath: '/docs/api/heatmap-time-layer',
       },
       {
         label: 'AnimatedPointLayer',
@@ -1306,19 +1303,25 @@ export const DEMO_META: Record<string, DemoMeta> = {
   'rain-flood-2019': {
     category: 'earth-ocean',
     tagline:
-      'The March 2019 bomb-cyclone flood hour by hour — every reach colored by how far above its own normal it runs.',
-    techniqueTag: 'Flow matrix · anomaly encoding',
+      'A continental year of weather driving water — satellite rain sweeps the country as moving isobands while every river reach brightens in its wake.',
+    techniqueTag: 'Isoband polygons · flow matrix',
     about: [
-      'The hourly companion to the year-of-flow demo, scoped to March 2019 — the bomb cyclone that dropped rain on frozen snowpack and produced major flooding across Nebraska, Iowa and the Missouri basin. Same network and matrix machinery, but each reach is colored by log2(flow ÷ its own 2019 median): an anomaly encoding, not absolute discharge.',
-      'The anomaly encoding is what makes the flood legible. On an absolute ramp the Mississippi always dominates; on the anomaly ramp a creek running fifty times its normal flow reads as bright as a mainstem. Normal flow is dim blue, high water yellow to orange, the extreme crest white as it propagates downstream over days.',
-      'The per-reach medians come from the year demo’s daily reduce, so the two demos share their download cache and geometry pipeline end to end.',
+      'Cause and effect on one clock. Two-hourly rainfall from NOAA’s CMORPH satellite analysis is contoured into filled isoband polygons (0.5 to 20+ mm per two hours) and layered over the National Water Model’s river discharge on every NHDPlus reach of stream order 4+ — the year-of-flow archive reused verbatim. Storm systems cross the country and the network brightens behind them: spring melt, then the 2019 flood crests rolling downstream.',
+      'The rain is a translucent categorical wash — annular bands keyed by range label, faint blue for drizzle climbing to near-white for extreme cores — deliberately kept a backdrop. The rivers are self-scaled per reach (each normalized to its own annual low → high) on a cyan-to-white water ramp that reads over the violet rain, so a creek at its own crest is as bright as a mainstem at its crest.',
+      'Two archives, two native cadences: rain at two-hourly bins, discharge at daily, each carrying its own baked temporal bucket while the player mixes them on one timeline — 4,380 two-hour frames crossing the year in about two minutes. This composite replaces the old standalone March-2019 flood demo; its story is now told at annual scale alongside the rain that drives it.',
     ],
     dataSources: [
+      {
+        name: 'NOAA CMORPH high-resolution global precipitation estimates (CDR, hourly 0.25°)',
+        url: 'https://www.ncei.noaa.gov/products/climate-data-records/precipitation-cmorph',
+        license: 'US Government open data — no restrictions',
+        note: 'Hourly satellite-analysis precipitation, summed to two-hour bins and contoured to isobands. This demo is a derived product, not original NOAA data.',
+      },
       {
         name: 'NOAA National Water Model v3.0 retrospective (1979–2023)',
         url: 'https://registry.opendata.aws/nwm-archive/',
         license: 'US Government open data — no restrictions',
-        note: 'Hourly modeled streamflow for March 2019. This demo is a derived product, not original NOAA data.',
+        note: 'Daily modeled streamflow for 2019, reused verbatim from the year-of-flow demo’s archive.',
       },
       {
         name: 'USGS NHDPlusV2 flowline network',
@@ -1327,12 +1330,26 @@ export const DEMO_META: Record<string, DemoMeta> = {
       },
     ],
     buildCommand:
-      'stt-generate nwm --window 2019-03 --bin 1h --value log-anomaly \\\n' +
-      '  --output examples/showcase/public/data/nwm-rivers-flood-2019-03',
+      'python scripts/data-generation/cmorph_isobands.py --year 2019 \\\n' +
+      '  --out data/cmorph/rainfall-2019-2h.parquet \\\n' +
+      '  --window-hours 2 --thresholds 0.5 1 2 5 10 20 && \\\n' +
+      'stt-build --input data/cmorph/rainfall-2019-2h.parquet \\\n' +
+      '  --output examples/showcase/public/data/rainfall-2019 \\\n' +
+      '  --time-field timestamp --time-format unix-ms \\\n' +
+      '  --end-time-field end_timestamp --min-zoom 0 --max-zoom 6 \\\n' +
+      '  --temporal-bucket 2h --quantize-coords 100 --quantize-attrs-auto \\\n' +
+      '  --blob-ordering time-major --publish',
     buildNote:
-      'Run the nwm-rivers-2019 build first — the anomaly’s per-reach medians ' +
-      'come from its cached daily reduce (then this build reuses every chunk).',
+      'The river overlay reuses the nwm-rivers-2019 archive verbatim — build ' +
+      'that demo first. `--blob-ordering time-major` and `--min-zoom 0` are ' +
+      'REQUIRED (playback needs each bucket byte-contiguous; the z0 tiles are ' +
+      'the storyboard-preload tier), and the threshold list must match the ' +
+      'colorMapping/legend band labels or the bands render as unknowns.',
     techniques: [
+      {
+        label: 'AnimatedPolygonLayer',
+        docPath: '/docs/api/animated-polygon-layer',
+      },
       { label: 'FlowCorridorLayer', docPath: '/docs/api/flow-corridor-layer' },
       { label: 'TimeController', docPath: '/docs/api/time-controller' },
     ],
@@ -1974,47 +1991,6 @@ export const DEMO_META: Record<string, DemoMeta> = {
       },
     ],
     related: ['osm-nyc-draw', 'osm-nyc-changesets-summary'],
-  },
-
-  'poopdeck-ship': {
-    category: 'earth-ocean',
-    tagline: 'A synthesised sea, relit on the GPU',
-    techniqueTag: 'Point cloud · 3D · shader-relit',
-    about: [
-      'Every other demo here is measured: ships that really sailed, quakes that really happened. This one is synthesised end to end. A Blender pipeline builds a stylised sailing ship — hull, deck, masts, rigging, sails, flag — floating on an ocean displaced by superposed Gerstner waves, then derives the ship’s heave, pitch and roll from that same wave field so the vessel answers the water it sits in. Foam strokes and mist ribbons ride the surface as real deforming geometry, so they survive the conversion to points.',
-      'The scene is sampled once into 360,000 points fixed to the surfaces by barycentric coordinate, and those same points are re-evaluated at every frame, each carrying an octahedral surface normal. Because a point keeps its identity for the whole 14 seconds, nothing shimmers or reshuffles between frames — the cloud deforms rather than being re-scattered. The demo ships one in nine of them, 40,000 points per frame, at 15 fps.',
-      'Nothing here is coloured by Blender. The sampler writes `material.diffuse_color`, a flat swatch, so the whole cloud carries only seven distinct colours and none of the scene’s lamps, fog or view transform survive the export. So the four bytes of the interleaved `point_rgba` column are not a colour at all: they are a class id, a stable per-point paint seed, and a two-byte octahedral normal. A `PainterlyExtension` reads them in the vertex shader and builds the picture there — palette, a cool storm key, a warm horizon rim, distance fog, per-point pigment jitter, and a point size that makes rigging a thread and foam a paint mass. The palette can be re-graded without re-running Blender.',
-      'The frame timing is the fussy part. Frames are points in time and the render window is centred on the playhead, so it shows exactly one frame only if its width equals the frame spacing — hence a uniform 66 ms lattice and a 66 ms `timeWindow`. But the tileset refreshes its visible set only every 100 ms of wall clock, and it selects tiles by that same window, so a one-frame selection is stale before the next refresh and the cloud goes blank in most rendered frames. `tileLoadTimeWindow` separates the two: 600 ms of tiles stay resident while the render window still picks a single frame out of them. Buckets hold three frames each (198 = 3 × 66) so a resident tile outlives the refresh, and stay under the tiler’s per-tile split cap — a bucket that splits, splits along time, and hands back one-frame tiles.',
-    ],
-    dataSources: [
-      {
-        name: 'Procedurally generated (Blender)',
-        url: 'https://www.blender.org/',
-        license: 'Original scene — no third-party assets',
-        note: 'The ship, rigging, sails and ocean are built by script; nothing is downloaded.',
-      },
-      {
-        name: 'Gerstner waves — GPU Gems, ch. 1',
-        url: 'https://developer.nvidia.com/gpugems/gpugems/part-i-natural-effects/chapter-1-effective-water-simulation-physical-models',
-        license: 'Reference only',
-        note: 'The ocean displacement and the ship’s derived motion follow this model.',
-      },
-    ],
-    buildCommand:
-      'python pipeline/to_geoparquet.py --input output/raw --output demo.parquet --sidecar demo.scene.json --scene-config config/scene.json --style-in-rgba --origin-lat 42.35 --origin-lon -70.55 --decimate 9 --frame-step 2 --frame-interval-ms 66 && stt-build -i demo.parquet -o poopdeck-ship --time-field timestamp --time-format unix-ms --temporal-bucket 198ms --min-zoom 14 --max-zoom 14 --point-elevation-column z --vector-group point_rgba=r,g,b,a:u8 --quantize-coords 0.02 --quantize-attrs-auto --streaming --publish',
-    buildNote:
-      'Needs Blender 4.2+ to render the raw point frames first (`make scene sample`) from the poopdeck_pointcloud pipeline. `--quantize-coords 0.02` is the single largest size lever: 2 cm of ground precision is far below what a 2 px point can resolve, and it cuts the archive roughly threefold. 8.44M features, 59 MB, ~4.3 MB/s at 1×. The archive is local-only — it is not synced to R2, so the dataset is filtered out of the public site (see LOCAL_ONLY_DATASETS in datasets.ts).',
-    techniques: [
-      {
-        label: 'AnimatedPointCloudLayer',
-        docPath: '/docs/api/animated-point-cloud-layer',
-      },
-      {
-        label: 'TimeFilterExtension (window)',
-        docPath: '/docs/api/time-filter-extension',
-      },
-    ],
-    related: ['argoverse-02678d04', 'ship-traffic'],
   },
 };
 

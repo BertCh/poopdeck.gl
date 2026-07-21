@@ -29,7 +29,10 @@ git history preserves everything verbatim.
    ([renderer-architecture.md](./renderer-architecture.md) §5).
 4. **Format tail** — serve-v2, lazy-props client materialization, temporal-LOD
    beyond scrub P0–P2
-   ([stt-packed-format-decisions.md](./stt-packed-format-decisions.md) §10).
+   ([stt-packed-format-decisions.md](./stt-packed-format-decisions.md) §10);
+   plus the two temporal-deltas follow-ups — geometry-blob sharing across
+   temporal chunks and the quantized-int path-delta experiment (§11; chains
+   themselves are NO-GO).
 5. **scrub-LOD P3 baked tier + P4 polish**
    ([scrub-lod-2026-07.md](./scrub-lod-2026-07.md)).
 6. **stt-optimize** — FE auto-wiring of `style_hints`; P3 `--auto-measure`
@@ -45,6 +48,13 @@ git history preserves everything verbatim.
 
 ## Forward-looking (not built)
 
+- [**kind-parity-campaign-2026-07.md**](./kind-parity-campaign-2026-07.md) —
+  the geometry-kind & layer parity campaign (2026-07-21): four-agent survey
+  baseline (polygons weakest end-to-end, moving-marker interpolation gap,
+  orphan layers, `view_map` points-fallback) → four tracks (polygon parity,
+  motion parity, adopt-or-cut, AI-surface reach) executed as wave-by-wave
+  agent workflows with a target capability matrix. Plan only; Wave-2+ fleet
+  republish folds into register item 1.
 - [**space-time-lod-2026-07.md**](./space-time-lod-2026-07.md) — the space×time
   LOD master plan (2026-07-10): dual codebase audit + verified external SOTA →
   six phases (measure → resolution-true simplification → declared reduced
@@ -76,7 +86,8 @@ git history preserves everything verbatim.
   D1–D6, v2 template/manifest choices, serve-stays-v1), negative results
   (lightweight encodings NO-GO, rel-times32/narrow-ids skips, transforms NO-GO,
   blob-ordering proxy lesson), prior art (COPC/MLT/PMTiles), E1 scale numbers,
-  and the counted-out register. Live spec:
+  the counted-out register, and the temporal-deltas verdict (§11: inter-timestep
+  chains NO-GO; geometry-blob sharing + path-delta experiment survive). Live spec:
   [`stt-packed-format.md`](../spec/stt-packed-format.md).
 - [**renderer-architecture.md**](./renderer-architecture.md) — the
   multi-backend renderer record: kernel thesis (Decision 5: no shared chassis),

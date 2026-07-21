@@ -679,8 +679,9 @@ export class AnimatedTripsLayer<
    * narrower than that.
    */
   protected getEffectiveTimeWindow(): number {
-    // Both `Required<>`-typed: the defaultProps values guarantee numbers here.
-    return Math.max(this.props.timeWindow, this.props.trailLength * 2);
+    // Seed from the base class, not the raw prop, so `tileLoadTimeWindow`
+    // keeps its contract here too; `trailLength` is `Required<>`-typed.
+    return Math.max(super.getEffectiveTimeWindow(), this.props.trailLength * 2);
   }
 
   renderLayers(): Layer[] {

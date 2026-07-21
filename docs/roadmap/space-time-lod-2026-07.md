@@ -137,6 +137,15 @@ nonexistence, but: **nobody has a verified, published joint policy. STT's
 time-native premise means it can define the category** (the same wedge argument
 as the temporal directory, format-decisions §2).
 
+_Update 2026-07-21:_ the temporal-deltas research (format-decisions §11)
+sharpened this frontier's boundary: the **lossless inter-timestep delta**
+branch is ruled out (breaks standalone decode/seek/dedup; zero production
+adoption; zstd-over-time-adjacent recovers most of it), so the productive
+branches remain exactly this plan's reduction tiers plus one new format lever —
+**geometry-blob sharing across temporal chunks** (reference-dedup of static
+geometry, format-decisions §11 follow-up 1), which also relieves the rivers
+13× decoded-duplication pressure noted below.
+
 ## 3. Design synthesis — the STT LOD model
 
 One sentence: **author a per-level error metric into the archive for each of

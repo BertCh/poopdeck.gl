@@ -29,10 +29,20 @@ Goal: source data → a packed `.stt` archive (`manifest.json` + `index/` + `pac
 encoding levers depend on the data's density and time distribution. **Do not guess.**
 
 - **In an MCP session:** call the `recommend_build` tool (from the `stt` server)
-  with the source GeoParquet path. It runs `stt-optimize analyze` + `recommend
---explain` and returns a suggested `stt-build` command plus an evidence table
-  (with confidence and any LOSSY markers).
-- **From a shell:** `stt-optimize recommend -i data.parquet --command --explain`.
+  with the source GeoParquet path. It runs `stt-optimize recommend` and returns:
+  - `suggestedCommand` — a ready-to-run `stt-build` line (the non-lossy advisor
+    levers already appended);
+  - `buildDatasetArgs` — the same recipe as structured args you can hand straight
+    to the `build_dataset` tool;
+  - `evidence[]` — every advisor suggestion with its `why`, `confidence`, and a
+    `lossy`/`autoApplied` flag. Non-lossy levers (blob-ordering, temporal-LOD,
+    publish) are already folded into the command/args; **LOSSY levers**
+    (quantization, feature budgets) are surfaced for you to weigh and opt into by
+    hand — they are never auto-applied;
+  - `dominantType` and `confidence` for the overall recipe.
+- **From a shell:** `stt-optimize recommend -i data.parquet --show-command --explain`
+  (the plain `recommend` JSON already carries `advice`/`command`; `--explain`
+  additionally prints the human-readable evidence table).
 
 Read the rationale, then run the suggested command. Only deviate with a reason.
 
@@ -59,9 +69,12 @@ Key decisions:
 - **`--summary-tier h3|quadbin`** (+ `--summary-columns "magnitude:mean,depth:sum"`)
   — opt-in pre-aggregated coarse-zoom tier for density/choropleth at low zoom.
   Independent of the raw tier; the raw features are still there at high zoom.
-- **`--style-hints`** — bake per-property percentiles/cardinality into the
-  manifest. **Recommend always passing this** — it's what `describe_dataset`,
-  `view_map` layer inference, and client color-domain auto-tuning read.
+- **`--style-hints`** — bake per-property **percentiles/cardinality** (color
+  domains) into the manifest. The cheap signals — the `layer_hint` (points/paths/
+  trips/polygons) and suggested playback duration — now ship on **every**
+  non-streaming build already, so `view_map` picks the right layer without this
+  flag; pass it when you want data-driven **color-by** domains that
+  `describe_dataset` and client color auto-tuning read.
 - **`--publish`** — deploy build (bumps zstd to level 19). Use for the final
   artifact, not iteration.
 - **`--auto`** / **`--auto encode`** — hands-off tuning: runs the analyzer inline

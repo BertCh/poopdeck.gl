@@ -64,6 +64,8 @@ import { SplatExtension } from '../../extensions/splat-extension.js';
 import {
   CategoryColorExtension,
   CATEGORY_PALETTE_SIZE,
+  appendNullCategorySlot,
+  categoryIndicesToFloat32,
 } from '../../extensions/category-color-extension.js';
 import { emit } from '../../lib/telemetry.js';
 import { warnOnce } from '../../lib/log.js';
@@ -541,34 +543,6 @@ function makeTileKey(tile: Tile, layer: TileLayer): string {
 }
 
 /**
- * For categorical columns with no `colorMapping`, hand the category indices
- * straight to the GPU as a single-component float attribute. The
- * CategoryColorExtension samples the palette texture in the fragment shader.
- *
- * `indices` arrive as Uint16Array (4096 categories max); the extension reads
- * them as float32. This is a plain narrowing copy, but it also redirects NULL
- * (`0xffff` sentinel) and out-of-range (unmapped) category indices onto a
- * trailing default palette slot at index `paletteLen`. The caller appends
- * `colorMappingDefault` there, so unmapped features render the default color
- * instead of clamping onto the LAST real palette entry (the fragment shader
- * clamps `vCategoryIndex` to `paletteSize - 1`, which — with the default
- * appended — IS the default slot). Matches the CPU `colorMapping` path's
- * fallback behavior.
- */
-function indicesToFloat32WithDefault(
-  indices: Uint16Array,
-  count: number,
-  paletteLen: number,
-): Float32Array {
-  const out = new Float32Array(count);
-  for (let i = 0; i < count; i++) {
-    const idx = indices[i];
-    out[i] = idx < paletteLen ? idx : paletteLen;
-  }
-  return out;
-}
-
-/**
  * Animated point layer with per-tile binary sublayers.
  *
  * Each visible tile produces one ScatterplotLayer instance that is cached
@@ -946,8 +920,10 @@ export class AnimatedPointLayer<
    *     as-is (never shrunk).
    */
   protected getEffectiveTimeWindow(): number {
-    // `Required<>`-typed: defaultProps guarantees numbers/booleans here.
-    let widened = this.props.timeWindow;
+    // Seed from the base class, not the raw prop, so `tileLoadTimeWindow`
+    // keeps its contract here too — all widenings below are Math.max
+    // compositions, so order is immaterial.
+    let widened = super.getEffectiveTimeWindow();
 
     // Wake trail: point lit for `wakeLength` after its start ⇒ the past half of
     // the window must cover the whole wake (parity with trips' 2×trailLength).
@@ -1270,20 +1246,23 @@ export class AnimatedPointLayer<
         } else {
           // GPU branch: hand category indices to the CategoryColorExtension.
           // Append colorMappingDefault as a trailing palette slot so NULL
-          // (0xffff sentinel) / unmapped-category features render the default
-          // color instead of clamping onto the last real palette entry —
-          // matching the CPU colorMapping path's fallback.
-          const defaultColor =
-            this.props.colorMappingDefault ?? ([0, 0, 0, 0] as Color);
+          // (0xffff sentinel) features render the default color instead of
+          // clamping onto the last real palette entry; genuine categories
+          // beyond the palette keep the pre-0.4 visible clamp (see the shared
+          // helper for the split).
           attributes.instanceCategoryIndex = {
-            value: indicesToFloat32WithDefault(
+            value: categoryIndicesToFloat32(
               cat.indices,
               count,
               palette.length,
+              'AnimatedPointLayer',
             ),
             size: 1,
           };
-          gpuPalette = [...palette, defaultColor];
+          gpuPalette = appendNullCategorySlot(
+            palette,
+            this.props.colorMappingDefault as Color | undefined,
+          );
         }
       } else if (num && this.props.colorMapping) {
         // Numeric column + mapping: stringify lookup (rare).
