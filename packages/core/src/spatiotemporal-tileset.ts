@@ -128,6 +128,31 @@ const PREFETCH_CAP_FLOOR_REAL_MS = 5000;
 const PREFETCH_RELOAD_FRACTION = 0.5;
 
 /**
+ * Pressure-adaptive prefetch horizon (Shaka's "shrink the goal" ladder):
+ * degrade the speculative lookahead under memory pressure instead of letting
+ * the cache thrash. The self-regulation loop: a full cache forces the
+ * over-limit eviction pass into the protected runway (a tier-C/D eviction —
+ * the thrash signal) → `prefetchPressureScale` decays by
+ * {@link PRESSURE_SCALE_DECAY} (floored at {@link PRESSURE_SCALE_MIN}) →
+ * the next prefetch plan reaches ahead by a shorter horizon and enqueues
+ * fewer speculative tiles → the cache drops back under its limits → after
+ * {@link PRESSURE_RECOVERY_QUIET_MS} of wall-clock with no runway eviction,
+ * the scale recovers by {@link PRESSURE_SCALE_RECOVERY_STEP} back toward 1 —
+ * rate-limited to one step per {@link PRESSURE_RECOVERY_STEP_INTERVAL_MS} of
+ * WALL time (recovery paced by plan frequency rebounds floor→1 in ~2 s and
+ * oscillates). While pressured (scale < 1) the scaled horizon is floored at
+ * `max(bucketMs, timeWindow, speed × PREFETCH_CAP_FLOOR_REAL_MS)` so the
+ * resident window keeps loading and the governor's speed-scaled gates stay
+ * satisfiable — the ladder shrinks speculation, never the playhead's own
+ * data. At scale 1 the ladder is a strict no-op (byte-identical horizon).
+ */
+const PRESSURE_SCALE_MIN = 0.25;
+const PRESSURE_SCALE_DECAY = 0.7;
+const PRESSURE_SCALE_RECOVERY_STEP = 0.1;
+const PRESSURE_RECOVERY_QUIET_MS = 5000;
+const PRESSURE_RECOVERY_STEP_INTERVAL_MS = 1000;
+
+/**
  * Real-time margin (ms) for SPEED-AWARE seek detection in `update()`: a time
  * jump is a seek only when it exceeds
  * `max(timeWindow, |animationSpeed| × this)`. Continuous playback advances
@@ -688,6 +713,15 @@ export interface SpatiotemporalTilesetOptions {
    */
   getThroughput?: () => { bytesPerMs: number | null; samples: number };
 
+  /**
+   * Loader-side fair-share weight setter, forwarded by
+   * {@link SpatiotemporalTileset.setBandwidthWeight} (the governor's
+   * bandwidth re-balancing hook). Wire `STTArchive.setSchedulerWeight` here
+   * so a weight change re-shares this source's queued work in the
+   * process-shared request scheduler immediately.
+   */
+  setSchedulerWeight?: (weight: number) => void;
+
   /** Callback when tile loads */
   onTileLoad?: (tile: Tile) => void;
 
@@ -753,11 +787,14 @@ export class SpatiotemporalTileset {
   // Frame tracking (for render optimization)
   private frameNumber = 0;
 
-  // Cache statistics
+  // Cache statistics. `runwayEvictions` counts over-limit evictions that had
+  // to reach INTO the protected playhead window (tiers C/D of
+  // evictUnusedTiles) — the observable fetch-evict-refetch thrash signal.
   private cacheStats = {
     hits: 0,
     misses: 0,
     evictions: 0,
+    runwayEvictions: 0,
   };
 
   // Animation state for prefetching
@@ -780,6 +817,23 @@ export class SpatiotemporalTileset {
   private pendingFlipCount: number = 0;
   /** End of the last prefetched span in sim-time (throttle runway anchor). */
   private lastPrefetchEndTime?: number;
+
+  /**
+   * Pressure-adaptive prefetch horizon scale ∈ [{@link PRESSURE_SCALE_MIN}, 1].
+   * Decayed by tier-C/D (runway) evictions, recovered by quiet prefetch plans
+   * — see the PRESSURE_* constants for the full self-regulation loop.
+   */
+  private prefetchPressureScale = 1;
+  /** Wall time of the last recovery step (rate-limits the ladder's rebound).
+   * -Infinity so the first eligible step is never suppressed at epoch 0. */
+  private lastPressureRecoveryAt = -Infinity;
+  /** Wall time of the last tier-C/D (runway) eviction (0 = never). */
+  private lastRunwayEvictionAt = 0;
+  /**
+   * Governor-imposed forward run-ahead cap in sim-ms, `null` = uncapped.
+   * See {@link setPrefetchRunAheadLimit}.
+   */
+  private prefetchRunAheadLimitMs: number | null = null;
 
   // Running byte total of decoded tiles held in `this.tiles`. Maintained
   // incrementally so eviction never re-sums every frame.
@@ -947,6 +1001,7 @@ export class SpatiotemporalTileset {
         options.maxParentTileBytes ?? DEFAULT_MAX_PARENT_TILE_BYTES,
       onBufferChange: options.onBufferChange ?? null,
       getThroughput: options.getThroughput ?? null,
+      setSchedulerWeight: options.setSchedulerWeight ?? null,
       onTileLoad: options.onTileLoad ?? (() => {}),
       onTileUnload: options.onTileUnload ?? (() => {}),
       onTileError: options.onTileError ?? ((err) => console.error(err)),
@@ -1116,6 +1171,39 @@ export class SpatiotemporalTileset {
   /** Current interactive/motion bit (see {@link setInteractive}). */
   get isInteractive(): boolean {
     return this.interactive;
+  }
+
+  /**
+   * Governor run-ahead fairness hook (optional `BufferSource` method — the
+   * Shaka MAX_RUN_AHEAD analog): cap the forward prefetch horizon to at most
+   * `simMs` of sim-time ahead of the playhead. In a composited scene, runway
+   * buffered beyond the min-gated intersection of all required sources is
+   * dead weight; the governor caps each leader near the neediest source's
+   * frontier so the shared bandwidth budget flows to the laggard.
+   *
+   * The cap is enforced with an internal safety floor of
+   * `max(bucketMs, timeWindow, |animationSpeed| × PREFETCH_CAP_FLOOR_REAL_MS)`
+   * so it can never starve this tileset's own speed-scaled gates. Lowering
+   * the cap below the already-planned runway flushes NOTHING — fetched tiles
+   * stay resident, the cap only stops further extension. `null` clears.
+   */
+  setPrefetchRunAheadLimit(simMs: number | null): void {
+    this.prefetchRunAheadLimitMs =
+      typeof simMs === 'number' && Number.isFinite(simMs) && simMs > 0
+        ? simMs
+        : null;
+  }
+
+  /**
+   * Update this source's fair-share weight in the process-shared request
+   * scheduler (optional `BufferSource` method — the governor's bandwidth
+   * re-balancing hook, effective immediately for queued work). Forwards to
+   * the wired loader (normally `STTArchive.setSchedulerWeight`); no-op when
+   * the {@link SpatiotemporalTilesetOptions.setSchedulerWeight} callback
+   * isn't wired.
+   */
+  setBandwidthWeight(weight: number): void {
+    this.options.setSchedulerWeight?.(weight);
   }
 
   /** True when ANY scrub-LOD axis is switched on (the feature's master gate). */
@@ -1772,6 +1860,55 @@ export class SpatiotemporalTileset {
           MAX_PREFETCH_BUCKETS * bucketMs,
           speed * PREFETCH_CAP_FLOOR_REAL_MS,
         ),
+      );
+    }
+    // Governor run-ahead fairness cap (see setPrefetchRunAheadLimit). The
+    // internal safety floor keeps a cooperating-but-misjudged cap from
+    // starving this tileset's own speed-scaled gates: the horizon never drops
+    // below the resident window nor below what the governor's wall-clock
+    // gates consume at the current speed (same sizing as the bucket cap
+    // above — see PREFETCH_CAP_FLOOR_REAL_MS).
+    if (this.prefetchRunAheadLimitMs !== null) {
+      effectiveAhead = Math.min(
+        effectiveAhead,
+        Math.max(
+          this.prefetchRunAheadLimitMs,
+          bucketMs,
+          timeWindow,
+          speed * PREFETCH_CAP_FLOOR_REAL_MS,
+        ),
+      );
+    }
+    // Pressure ladder (see the PRESSURE_* constants): recover the scale when
+    // no runway eviction happened recently — at most one step per
+    // PRESSURE_RECOVERY_STEP_INTERVAL_MS of wall time, NOT per plan (plans
+    // fire every ~250 ms during playback, which would rebound the scale from
+    // floor to 1 in ~2 s and oscillate fetch→evict indefinitely under
+    // sustained pressure). Then apply the scale AFTER every cap so pressure
+    // always shrinks the final horizon. At scale 1 the branch is skipped
+    // entirely — the un-pressured horizon must stay byte-identical to the
+    // pre-ladder behavior (no floor may RAISE it). Under pressure the floor
+    // keeps the resident window loading and — same sizing as the run-ahead
+    // cap above — never shrinks below what the governor's speed-scaled
+    // wall-clock gates consume, so a decay step can't turn a recoverable
+    // stall into the maxStartWaitMs escape hatch at high sim-speed.
+    if (
+      this.prefetchPressureScale < 1 &&
+      now - this.lastRunwayEvictionAt >= PRESSURE_RECOVERY_QUIET_MS &&
+      now - this.lastPressureRecoveryAt >= PRESSURE_RECOVERY_STEP_INTERVAL_MS
+    ) {
+      this.prefetchPressureScale = Math.min(
+        1,
+        this.prefetchPressureScale + PRESSURE_SCALE_RECOVERY_STEP,
+      );
+      this.lastPressureRecoveryAt = now;
+    }
+    if (this.prefetchPressureScale < 1) {
+      effectiveAhead = Math.max(
+        effectiveAhead * this.prefetchPressureScale,
+        bucketMs,
+        timeWindow,
+        speed * PREFETCH_CAP_FLOOR_REAL_MS,
       );
     }
     const prefetchEndTime = time + direction * effectiveAhead;
@@ -3190,7 +3327,9 @@ export class SpatiotemporalTileset {
   }
 
   /**
-   * Evict tiles not recently used (LRU)
+   * Evict cached tiles: a wall-clock grace timer while under the cache
+   * limits, a playhead-relative tiered policy (never plain LRU — see the
+   * over-limit branch) once over them.
    *
    * PERFORMANCE: Grace period reduced from 5 minutes to 60 seconds
    * to prevent memory bloat while still supporting animation loops.
@@ -3251,20 +3390,96 @@ export class SpatiotemporalTileset {
       return;
     }
 
-    // Over limits - use LRU to evict oldest tiles
-    // But NEVER evict tiles in current viewport (neededTileKeys) or PINNED
-    // overview tiles (the always-resident storyboard; their bytes still count
-    // against the limits — the preload byte budget keeps that contribution
-    // small, and preloadOverviewTier warns once if it somehow isn't).
-    const sortedTiles = Array.from(this.tiles.entries())
-      .filter(([key, header]) => !neededTileKeys.has(key) && !header.isPinned)
-      .sort((a, b) => a[1].lastUsed - b[1].lastUsed); // Oldest first
+    // Over limits — evict by a PLAYHEAD-RELATIVE, coverage-protected tiered
+    // policy, not plain LRU. Under memory pressure the runway just prefetched
+    // ahead of the playhead is the most valuable content in the cache; plain
+    // LRU reclaims exactly that (prefetched = least-recently *touched*), and
+    // the priority path then re-fetches the same bytes seconds later — the
+    // multi-dataset "flashing tiles" thrash. Media players trim the buffer
+    // relative to the playhead instead (back-buffer first, distant
+    // speculation next, the imminent window last). Candidates: NEVER tiles in
+    // the current viewport (neededTileKeys) or PINNED overview tiles (the
+    // always-resident storyboard; their bytes still count against the limits
+    // — the preload byte budget keeps that contribution small, and
+    // preloadOverviewTier warns once if it somehow isn't), and never
+    // in-flight headers (see the under-limit note above).
+    const candidates: Array<[string, SpatiotemporalTileHeader]> = [];
+    for (const [key, header] of this.tiles) {
+      if (
+        !neededTileKeys.has(key) &&
+        !header.isPinned &&
+        !header.isLoading &&
+        header.isLoaded
+      ) {
+        candidates.push([key, header]);
+      }
+    }
+
+    const coverageKeys = this.coverageIndex?.keySet;
+    const playhead = this.currentViewport?.time;
+    const bucketMs = this.options.temporalBucketMs;
+
+    // Ordered eviction plan. `runway` marks tiers C/D — evictions that reach
+    // into the protected playhead window (the thrash signal).
+    let plan: Array<{ key: string; header: SpatiotemporalTileHeader }>;
+    let runwayFrom: number;
+
+    if (!coverageKeys || playhead === undefined) {
+      // No coverage index / no playhead (consumers that never touch the
+      // buffer APIs): the original LRU behavior, unchanged.
+      plan = candidates
+        .sort((a, b) => a[1].lastUsed - b[1].lastUsed) // Oldest first
+        .map(([key, header]) => ({ key, header }));
+      runwayFrom = plan.length; // nothing counts as a runway eviction
+    } else {
+      const direction = this.prefetchDirection;
+      const timeWindow = this.currentViewport?.timeWindow ?? bucketMs;
+      // Back-buffer keep + protected forward window, in sim-ms. A tile's
+      // bucket spans [t, t + bucketMs]; distances are signed along the
+      // committed playback direction.
+      const keepBehind = Math.max(timeWindow, bucketMs);
+      const protectedAhead = Math.max(timeWindow, 2 * bucketMs);
+
+      type Ranked = {
+        key: string;
+        header: SpatiotemporalTileHeader;
+        metric: number;
+      };
+      const tierA: Ranked[] = []; // non-coverage (stale viewports/zooms)
+      const tierB: Ranked[] = []; // coverage, far behind the playhead
+      const tierC: Ranked[] = []; // coverage, far ahead (distant speculation)
+      const tierD: Ranked[] = []; // near-playhead protected window
+      for (const [key, header] of candidates) {
+        const t = header.id.t;
+        if (!coverageKeys.has(key) || !Number.isFinite(t)) {
+          // A timeless header can't be placed on the timeline; rank it with
+          // the stale tiles.
+          tierA.push({ key, header, metric: header.lastUsed });
+          continue;
+        }
+        const behind = direction > 0 ? playhead - (t + bucketMs) : t - playhead;
+        const ahead = direction > 0 ? t - playhead : playhead - (t + bucketMs);
+        if (behind > keepBehind) {
+          tierB.push({ key, header, metric: behind });
+        } else if (ahead > protectedAhead) {
+          tierC.push({ key, header, metric: ahead });
+        } else {
+          tierD.push({ key, header, metric: header.lastUsed });
+        }
+      }
+      tierA.sort((a, b) => a.metric - b.metric); // LRU: oldest first
+      tierB.sort((a, b) => b.metric - a.metric); // furthest behind first
+      tierC.sort((a, b) => b.metric - a.metric); // furthest ahead first
+      tierD.sort((a, b) => a.metric - b.metric); // LRU (last resort)
+
+      plan = [...tierA, ...tierB, ...tierC, ...tierD];
+      runwayFrom = tierA.length + tierB.length;
+    }
 
     const tilesToEvict: string[] = [];
+    let runwayEvicted = false;
 
-    for (const [tileKey, header] of sortedTiles) {
-      if (!header.isLoaded) continue;
-
+    for (let i = 0; i < plan.length; i++) {
       // Check if we're still over limits
       const stillOverSize = loadedCount > this.options.maxCacheSize;
       const stillOverBytes = cacheBytes > this.options.maxCacheByteSize;
@@ -3273,9 +3488,27 @@ export class SpatiotemporalTileset {
         break; // We're under limits now, stop evicting
       }
 
-      tilesToEvict.push(tileKey);
+      const { key, header } = plan[i];
+      tilesToEvict.push(key);
       loadedCount--;
       cacheBytes -= header.byteSize;
+      if (i >= runwayFrom) {
+        this.cacheStats.runwayEvictions++;
+        runwayEvicted = true;
+      }
+    }
+
+    // A tier-C/D eviction means the limits forced us into the protected
+    // runway: shrink the prefetch horizon (degrade speculation) instead of
+    // letting the fetch-evict-refetch loop continue. Recovery happens in
+    // prefetchFutureTiles after PRESSURE_RECOVERY_QUIET_MS of quiet — see the
+    // PRESSURE_* constants for the full loop.
+    if (runwayEvicted) {
+      this.prefetchPressureScale = Math.max(
+        PRESSURE_SCALE_MIN,
+        this.prefetchPressureScale * PRESSURE_SCALE_DECAY,
+      );
+      this.lastRunwayEvictionAt = Date.now();
     }
 
     this.evictTiles(tilesToEvict);
@@ -3519,6 +3752,7 @@ export class SpatiotemporalTileset {
       activeRequests: this.activeRequests.size,
       priorityQueueLength: this.priorityQueue.length,
       prefetchQueueLength: this.prefetchQueue.length,
+      prefetchPressureScale: this.prefetchPressureScale,
     };
   }
 

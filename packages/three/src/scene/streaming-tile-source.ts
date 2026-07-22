@@ -503,6 +503,8 @@ export interface RunwayTileset {
   estimateTimeToReadyMs(range: { start: number; end: number }): number | null;
   flushPrefetch(): void;
   setAnimationState?(isAnimating: boolean, speed?: number): void;
+  setPrefetchRunAheadLimit?(simMs: number | null): void;
+  setBandwidthWeight?(weight: number): void;
 }
 
 /**
@@ -556,6 +558,17 @@ export class TilesetBufferSource implements BufferSource {
 
   setAnimationState(isAnimating: boolean, speed?: number): void {
     this.tileset.setAnimationState?.(isAnimating, speed);
+  }
+
+  // Run-ahead fairness + dynamic fair-share weight (multi-source Phase 2).
+  // Without these forwards the governor's optional-chained calls silently
+  // no-op for every three-renderer source while the deck path cooperates.
+  setPrefetchRunAheadLimit(simMs: number | null): void {
+    this.tileset.setPrefetchRunAheadLimit?.(simMs);
+  }
+
+  setBandwidthWeight(weight: number): void {
+    this.tileset.setBandwidthWeight?.(weight);
   }
 }
 

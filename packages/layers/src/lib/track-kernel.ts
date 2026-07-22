@@ -31,7 +31,11 @@
  */
 
 import type { Color } from '@deck.gl/core';
-import type { Tile, BinaryFeatures } from '@poopdeck.gl/core';
+import type {
+  Tile,
+  BinaryFeatures,
+  Layer as TileLayer,
+} from '@poopdeck.gl/core';
 
 /** Radians → degrees, for the heading → getOrientation z-rotation. */
 export const RAD_TO_DEG = 180 / Math.PI;
@@ -133,6 +137,25 @@ export interface TrackSampleConfig {
   defaultHeight: number;
   fadeInDuration: number;
   fadeOutDuration: number;
+  /**
+   * Angular unit of the `heading` column, selecting which shortest-arc lerp the
+   * pose heading uses: `'rad'` (default) → {@link lerpAngle}; `'deg'` →
+   * {@link lerpAngleDeg}. The box/mesh layers store heading in radians and keep
+   * the default; the icon layer stores DEGREES (`IconLayer.getAngle`) and passes
+   * `'deg'`.
+   * @default 'rad'
+   */
+  angleUnit?: 'rad' | 'deg';
+  /**
+   * Largest bracket gap (ms) across which a pose is interpolated. When the two
+   * keyframes bracketing the playhead are farther apart than this, the track
+   * HOLDS its last sample (`[lo]`) instead of fabricating straight-line motion
+   * through a data hole — an integrity guard (a silent entity holds its last
+   * position, it does not glide a path it never travelled). `Infinity` (the
+   * default) never holds, so the box/mesh behaviour is unchanged.
+   * @default Infinity
+   */
+  maxGapMs?: number;
 }
 
 /** Outcome of {@link buildTrackIndex}; the caller emits its own telemetry/warns. */
@@ -165,6 +188,24 @@ export function lerpAngle(a: number, b: number, f: number): number {
   let d = (b - a) % twoPi;
   if (d > Math.PI) d -= twoPi;
   else if (d < -Math.PI) d += twoPi;
+  return a + d * f;
+}
+
+/**
+ * Shortest-arc angular interpolation in DEGREES — the degrees analogue of
+ * {@link lerpAngle}. `IconLayer.getAngle` is measured in DEGREES, so an icon
+ * heading column (AIS `cog`, aircraft `heading`) must be interpolated in
+ * degrees: interpolating it as a plain number spins the marker the long way
+ * around the 360/0 seam (e.g. 350°→10°). Normalizing the delta into (-180, 180]
+ * takes the short way. NaN endpoints (absent heading column) degrade to
+ * whichever side is finite.
+ */
+export function lerpAngleDeg(a: number, b: number, f: number): number {
+  if (!Number.isFinite(a)) return b;
+  if (!Number.isFinite(b)) return a;
+  let d = (b - a) % 360;
+  if (d > 180) d -= 360;
+  else if (d < -180) d += 360;
   return a + d * f;
 }
 
@@ -376,6 +417,8 @@ export function sampleTrack(
   const pad = track.singleton ? SINGLETON_HOLD_MS / 2 : 0;
   if (now < first - pad || now > last + pad) return null;
 
+  const maxGapMs = cfg.maxGapMs ?? Infinity;
+
   let lo: number;
   let hi: number;
   let frac: number;
@@ -394,6 +437,10 @@ export function sampleTrack(
     }
     const denom = times[hi] - times[lo];
     frac = denom > 0 ? (c - times[lo]) / denom : 0;
+    // Integrity guard: a bracket wider than maxGapMs is a data hole. HOLD the
+    // last sample (frac 0 ⇒ every field below pins to [lo]) rather than glide a
+    // straight line the object never travelled.
+    if (denom > maxGapMs) frac = 0;
   }
 
   const length = lerpDim(
@@ -435,11 +482,15 @@ export function sampleTrack(
       alpha *= Math.max(0, Math.min(1, remaining / fadeOut));
   }
 
+  // Heading uses the shortest-arc lerp in the column's own angular unit
+  // (radians for box/mesh, degrees for the icon layer via `angleUnit: 'deg'`).
+  const headingLerp = cfg.angleUnit === 'deg' ? lerpAngleDeg : lerpAngle;
+
   return {
     lon: lerp(track.lon[lo], track.lon[hi], frac),
     lat: lerp(track.lat[lo], track.lat[hi], frac),
     alt: lerp(track.alt[lo], track.alt[hi], frac),
-    heading: lerpAngle(track.heading[lo], track.heading[hi], frac),
+    heading: headingLerp(track.heading[lo], track.heading[hi], frac),
     length,
     width,
     height,
@@ -476,5 +527,386 @@ function reorder(track: Track, order: number[]): void {
     const out = new Array(order.length);
     for (let i = 0; i < order.length; i++) out[i] = src[order[i]];
     (track as any)[k] = out;
+  }
+}
+
+/* ── Incremental track-index maintenance ────────────────────────────────────
+ * {@link buildTrackIndex} is O(all resident snapshots): it re-pools EVERY loaded
+ * tile's features, then sorts + reorders EVERY track, on any tile-set change.
+ * During playback the loader window slides — tiles load/evict — so the tile
+ * ARRAY identity changes constantly, and a glide layer that keys its rebuild on
+ * that identity pays the full O(all snapshots) cost in one synchronous render
+ * frame each time the window churns: the frame-time spike.
+ *
+ * {@link TrackIndexMaintainer} replaces that with an INCREMENTAL rebuild keyed
+ * by the stable per-(tile, layer) key (mirroring the consolidated-slab absorb
+ * pattern in animated-point-layer.ts): it remembers each absorbed tile's pooled
+ * contribution grouped by track, and on sync only ADDED tiles are pooled +
+ * appended and only REMOVED tiles are dropped — then just the AFFECTED tracks
+ * are re-sorted. The result is byte-for-byte identical to a fresh
+ * {@link buildTrackIndex} over the same tile set (same track ids, same
+ * sorted+deduped parallel arrays, same singleton flags, same baked color/label/
+ * category), because a dirty track is reassembled in the SAME tile-array order
+ * as a full rebuild and run through the SAME sort/dedup/{@link reorder} pass.
+ *
+ * The ONE intentional divergence is the synthetic key handed to a track-less /
+ * NULL-id snapshot: {@link buildTrackIndex} uses a build-global counter (`∅0`,
+ * `∅1`, …) whose value depends on how many such snapshots preceded it across the
+ * whole tile set; the maintainer uses a tile-stable key (`∅<tileKey>#n`) so a
+ * tile can be added/removed without renumbering its neighbours. Each such key is
+ * a unique held singleton either way (one keyframe, `singleton: true`, rendered
+ * at its lone position), so the emitted geometry is unaffected — only the opaque
+ * map key string differs. For the glide path (which requires a resolvable
+ * idProperty) this affects only genuinely NULL-id rows.
+ */
+
+/** Column config resolved to concrete names (the defaulting buildTrackIndex applies). */
+interface ResolvedTrackFields {
+  trackIdProp: string;
+  colorProp: string;
+  labelProp: string;
+  headingProp: string;
+  lengthProp: string;
+  widthProp: string;
+  heightProp: string;
+  speedProp: string;
+  colorMapping: Record<string, Color> | null | undefined;
+  fallbackColor: Color;
+}
+
+function resolveTrackFields(cfg: TrackFieldConfig): ResolvedTrackFields {
+  return {
+    trackIdProp: cfg.trackIdProperty || 'track_id',
+    colorProp: cfg.colorProperty,
+    labelProp: cfg.labelProperty || 'category',
+    headingProp: cfg.headingProperty || 'heading',
+    lengthProp: cfg.lengthProperty || 'length',
+    widthProp: cfg.widthProperty || 'width',
+    heightProp: cfg.heightProperty || 'height',
+    speedProp: cfg.speedProperty || 'speed',
+    colorMapping: cfg.colorMapping,
+    fallbackColor: cfg.colorMappingDefault ?? DEFAULT_TRACK_COLOR,
+  };
+}
+
+/**
+ * Stable per-(tile, layer) key. MUST match the layers' `makeTileKey`
+ * (`${z}/${x}/${y}/${t}:${layer.name}`) so absorb/evict align with the tile
+ * lifecycle the loader drives.
+ */
+function tileLayerKey(tile: Tile, layerName: string): string {
+  const { z, x, y, t } = tile.id;
+  return `${z}/${x}/${y}/${t}:${layerName}`;
+}
+
+/**
+ * One track's keyframes pooled from ONE (tile, layer), in feature order. The
+ * entity-level fields (color/label/category/trackId) are baked from the track's
+ * FIRST feature in this tile — exactly what buildTrackIndex bakes when it first
+ * creates the track from that same feature.
+ */
+interface TileTrackGroup {
+  times: number[];
+  lon: number[];
+  lat: number[];
+  alt: number[];
+  heading: number[];
+  length: number[];
+  width: number[];
+  height: number[];
+  speed: number[];
+  color: [number, number, number, number];
+  label: string;
+  category: string;
+  trackId: string;
+}
+
+/** Pooled contribution of one whole (tile, layer): per-track groups + flags. */
+interface TilePool {
+  groups: Map<string, TileTrackGroup>;
+  hasSpeed: boolean;
+  trackIdMissing: boolean;
+  total: number;
+}
+
+/** One maintained track: its per-source-tile groups + whether it needs rebuild. */
+interface MaintainedTrack {
+  /** Keyframe groups keyed by source tile key — a tile can be dropped in O(1). */
+  byTile: Map<string, TileTrackGroup>;
+  /** Set when a group was added/removed since the last assemble. */
+  dirty: boolean;
+}
+
+/**
+ * Pool ONE (tile, layer)'s snapshots into per-track groups — the inner loop of
+ * {@link buildTrackIndex}, scoped to a single tile and returning the keyframes
+ * GROUPED by track (feature order preserved) rather than appended to a global
+ * pool. Track-less / NULL-id snapshots get a tile-stable synthetic key (see the
+ * section header).
+ */
+function poolTileLayer(
+  tileLayer: TileLayer,
+  tileKey: string,
+  R: ResolvedTrackFields,
+): TilePool {
+  const binary = tileLayer.features;
+  const count = binary.featureCount;
+  const groups = new Map<string, TileTrackGroup>();
+  const dims = binary.positionDimensions ?? 2;
+  const positions = binary.positions;
+  const starts = binary.startTimes;
+  const offset = binary.timeOffset;
+  const trackCol = binary.categoricalProps[R.trackIdProp];
+  const heading = binary.numericProps[R.headingProp] ?? null;
+  const length = binary.numericProps[R.lengthProp] ?? null;
+  const width = binary.numericProps[R.widthProp] ?? null;
+  const height = binary.numericProps[R.heightProp] ?? null;
+  const speed = binary.numericProps[R.speedProp] ?? null;
+
+  let synthetic = 0;
+  for (let i = 0; i < count; i++) {
+    // Group key: the track id, or a tile-stable synthetic key (degenerate,
+    // un-interpolated) when the column is absent / the value is NULL.
+    let key: string;
+    if (trackCol) {
+      const idx = trackCol.indices[i];
+      key =
+        idx === 0xffff
+          ? `∅${tileKey}#${synthetic++}`
+          : (trackCol.categories[idx] ?? `∅${tileKey}#${synthetic++}`);
+    } else {
+      key = `∅${tileKey}#${synthetic++}`;
+    }
+
+    let g = groups.get(key);
+    if (!g) {
+      const category = R.colorProp
+        ? readCategorical(binary, R.colorProp, i)
+        : '';
+      g = {
+        times: [],
+        lon: [],
+        lat: [],
+        alt: [],
+        heading: [],
+        length: [],
+        width: [],
+        height: [],
+        speed: [],
+        color: resolveColor(category, R.colorMapping, R.fallbackColor),
+        label: readCategorical(binary, R.labelProp, i),
+        category,
+        trackId: trackCol ? key : '',
+      };
+      groups.set(key, g);
+    }
+
+    const b = i * dims;
+    g.times.push(starts[i] + offset); // → absolute epoch-ms
+    g.lon.push(positions[b]);
+    g.lat.push(positions[b + 1]);
+    g.alt.push(dims > 2 ? positions[b + 2] : 0);
+    g.heading.push(heading ? heading[i] : NaN);
+    g.length.push(length ? length[i] : NaN);
+    g.width.push(width ? width[i] : NaN);
+    g.height.push(height ? height[i] : NaN);
+    g.speed.push(speed ? speed[i] : NaN);
+  }
+
+  return {
+    groups,
+    hasSpeed: !!speed,
+    trackIdMissing: !trackCol,
+    total: count,
+  };
+}
+
+/** Append every element of `src` onto `dst` (avoids spread stack limits). */
+function appendAll(dst: number[], src: number[]): void {
+  for (let i = 0; i < src.length; i++) dst.push(src[i]);
+}
+
+/**
+ * Assemble a track's per-tile groups (already in tile-array order) into one
+ * {@link Track}, then run buildTrackIndex's exact sort + de-dup + {@link reorder}
+ * pass. Entity-level fields come from the FIRST group (first tile in array
+ * order) — mirroring buildTrackIndex baking them from the track's first-seen
+ * feature. Returns whether a sort actually ran (n > 1), for instrumentation.
+ */
+function assembleTrack(groups: TileTrackGroup[]): {
+  track: Track;
+  sorted: boolean;
+} {
+  const head = groups[0];
+  const track: Track = {
+    trackId: head.trackId,
+    times: [],
+    lon: [],
+    lat: [],
+    alt: [],
+    heading: [],
+    length: [],
+    width: [],
+    height: [],
+    speed: [],
+    color: head.color,
+    label: head.label,
+    category: head.category,
+    singleton: false,
+  };
+  for (const g of groups) {
+    appendAll(track.times, g.times);
+    appendAll(track.lon, g.lon);
+    appendAll(track.lat, g.lat);
+    appendAll(track.alt, g.alt);
+    appendAll(track.heading, g.heading);
+    appendAll(track.length, g.length);
+    appendAll(track.width, g.width);
+    appendAll(track.height, g.height);
+    appendAll(track.speed, g.speed);
+  }
+
+  let sorted = false;
+  const times = track.times;
+  const n = times.length;
+  if (n > 1) {
+    const order: number[] = new Array(n);
+    for (let k = 0; k < n; k++) order[k] = k;
+    order.sort((a, b) => times[a] - times[b]);
+    let write = 0;
+    for (let k = 0; k < n; k++) {
+      const idx = order[k];
+      if (k === 0 || times[idx] !== times[order[write - 1]]) {
+        order[write++] = idx;
+      }
+    }
+    if (write !== n) order.length = write;
+    reorder(track, order);
+    sorted = true;
+  }
+  track.singleton = track.times.length < 2;
+  return { track, sorted };
+}
+
+/**
+ * Incremental analogue of {@link buildTrackIndex}: a per-layer-instance object
+ * that maintains the id-keyed track index across tile churn, re-pooling only
+ * ADDED tiles and re-sorting only AFFECTED tracks. See the section header for
+ * the byte-for-byte-equivalence contract. Used by the point + icon glide render
+ * paths; the box/mesh layers keep calling {@link buildTrackIndex} directly.
+ */
+export class TrackIndexMaintainer {
+  /** Live tracks keyed by track id / synthetic key. */
+  private tracks = new Map<string, MaintainedTrack>();
+  /** Absorbed (tile, layer) pools keyed by tile key — the eviction source. */
+  private absorbed = new Map<string, TilePool>();
+  /** Reference-stable id→Track map returned each sync (the render index). */
+  private builtMap = new Map<string, Track>();
+
+  /**
+   * Track ids re-sorted during the most recent {@link sync} (a track was
+   * rebuilt AND had > 1 keyframe). Instrumentation for the incrementality test;
+   * reset at the start of every sync.
+   */
+  readonly resortedTrackIds: string[] = [];
+
+  /** Drop all state — call when a feeding style prop changed (full rebuild). */
+  reset(): void {
+    this.tracks.clear();
+    this.absorbed.clear();
+    this.builtMap.clear();
+    this.resortedTrackIds.length = 0;
+  }
+
+  /**
+   * Diff `tiles` against the absorbed set: pool + append ADDED (tile, layer)s,
+   * drop REMOVED ones, then re-sort only the tracks those touched. Returns the
+   * same {@link TrackIndexResult} shape as {@link buildTrackIndex}, byte-for-byte
+   * equal to a fresh full build over the same tiles (modulo synthetic key
+   * strings — see the header).
+   */
+  sync(tiles: Tile[], cfg: TrackFieldConfig): TrackIndexResult {
+    const R = resolveTrackFields(cfg);
+    this.resortedTrackIds.length = 0;
+
+    // 1. Walk the current tile set in ARRAY ORDER: record the ordered key list
+    //    and absorb any (tile, layer) not seen before. Empty layers contribute
+    //    nothing (buildTrackIndex `continue`s on count === 0), so skip them.
+    const currentKeys: string[] = [];
+    const incoming = new Set<string>();
+    for (const tile of tiles) {
+      for (const tileLayer of tile.layers) {
+        if (tileLayer.features.featureCount === 0) continue;
+        const key = tileLayerKey(tile, tileLayer.name);
+        if (incoming.has(key)) continue; // guard a duplicated key in one array
+        incoming.add(key);
+        currentKeys.push(key);
+        if (this.absorbed.has(key)) continue;
+
+        const pool = poolTileLayer(tileLayer, key, R);
+        this.absorbed.set(key, pool);
+        for (const [trackKey, group] of pool.groups) {
+          let mt = this.tracks.get(trackKey);
+          if (!mt) {
+            mt = { byTile: new Map(), dirty: true };
+            this.tracks.set(trackKey, mt);
+          }
+          mt.byTile.set(key, group);
+          mt.dirty = true;
+        }
+      }
+    }
+
+    // 2. Evict absorbed (tile, layer)s no longer present: drop their group from
+    //    every track they fed and mark those tracks dirty.
+    for (const [key, pool] of this.absorbed) {
+      if (incoming.has(key)) continue;
+      for (const trackKey of pool.groups.keys()) {
+        const mt = this.tracks.get(trackKey);
+        if (mt) {
+          mt.byTile.delete(key);
+          mt.dirty = true;
+        }
+      }
+      this.absorbed.delete(key);
+    }
+
+    // 3. Rebuild dirty tracks (dropping any left empty). Reassemble in current
+    //    tile-array order → identical pre-sort ordering to a full build.
+    for (const [trackKey, mt] of this.tracks) {
+      if (mt.byTile.size === 0) {
+        this.tracks.delete(trackKey);
+        this.builtMap.delete(trackKey);
+        continue;
+      }
+      if (!mt.dirty) continue;
+      const ordered: TileTrackGroup[] = [];
+      for (const key of currentKeys) {
+        const g = mt.byTile.get(key);
+        if (g) ordered.push(g);
+      }
+      const { track, sorted } = assembleTrack(ordered);
+      this.builtMap.set(trackKey, track);
+      mt.dirty = false;
+      if (sorted) this.resortedTrackIds.push(trackKey);
+    }
+
+    // 4. Aggregate the flags/counts over the CURRENTLY absorbed pools (cheap —
+    //    O(tiles), not O(snapshots)).
+    let hasSpeedColumn = false;
+    let trackIdMissing = false;
+    let totalSnapshots = 0;
+    for (const pool of this.absorbed.values()) {
+      if (pool.hasSpeed) hasSpeedColumn = true;
+      if (pool.trackIdMissing) trackIdMissing = true;
+      totalSnapshots += pool.total;
+    }
+
+    return {
+      tracks: this.builtMap,
+      hasSpeedColumn,
+      trackIdMissing,
+      totalSnapshots,
+    };
   }
 }

@@ -5,10 +5,18 @@
 /**
  * AnimatedPathLayer - GPU-efficient path/trajectory rendering with time filtering.
  *
- * Operates in WINDOW MODE: each feature is shown (with optional fade) when
- * its `[startTime, endTime]` overlaps the current time window. Whole paths
- * render at once. For a "vehicle moving along the route" effect with a
- * trailing fade, use AnimatedTripsLayer instead.
+ * WINDOW MODE (default): each feature is shown (with optional fade) when its
+ * `[startTime, endTime]` overlaps the current time window. Whole paths render
+ * at once. For a "vehicle moving along the route" effect with a trailing fade,
+ * use AnimatedTripsLayer instead.
+ *
+ * PROGRESSIVE-REVEAL / TRAIL MODE (opt-in via `revealTrail`): a path is drawn
+ * progressively up to the play head — each vertex appears as time reaches its
+ * per-vertex timestamp — so a timeless line inks itself in along its length
+ * over the feature's time span. Uses the same TimeFilterExtension trail branch
+ * as the trips layer, fed by the tile's `vertexTimestamps` when present or
+ * monotone times synthesized from the feature span otherwise. `reducedMotion`
+ * suppresses it back to the whole-path window render.
  *
  * ARCHITECTURE (v3 - Per-tile binary sublayers):
  * - One PathLayer per (tile, layer) pair. No cross-tile consolidation.
@@ -38,6 +46,10 @@ import {
   CategoryColorExtension,
   CATEGORY_PALETTE_SIZE,
 } from '../../extensions/category-color-extension.js';
+// Progressive-reveal / trail mode reuses the trips layer's per-vertex time
+// synthesis (interpolate a feature's [startTime,endTime] span along its path by
+// cumulative distance) so a timeless line inks itself in over the play window.
+import { synthesizeVertexTimes } from '../trips/animated-trips-layer.js';
 import { emit } from '../../lib/telemetry.js';
 import { warnOnce } from '../../lib/log.js';
 import {
@@ -265,6 +277,43 @@ export interface _AnimatedPathLayerProps {
    * @default true
    */
   filterEnabled?: boolean;
+
+  /**
+   * Progressive-reveal / TRAIL mode. When `true` (and {@link reducedMotion} is
+   * not set), a path is drawn PROGRESSIVELY up to the play head instead of
+   * appearing whole: each vertex becomes visible as the play head reaches its
+   * per-vertex time, so a TIMELESS line (one with a feature `[startTime,
+   * endTime]` span but no baked per-vertex times) inks itself in ALONG its
+   * length over that span. Reuses {@link TimeFilterExtension}'s trail branch,
+   * fed by the tile's own `vertexTimestamps` when present, otherwise by
+   * monotone times synthesized from each feature's time span (mirrors the trips
+   * layer). Off (default) keeps the whole-path window mode, byte-identical to
+   * the pre-reveal layer.
+   * @default false
+   */
+  revealTrail?: boolean;
+  /**
+   * Trailing-window length in ms for {@link revealTrail}. `0` (default) PERSISTS
+   * the whole revealed portion (draw-and-keep: the line stays once drawn); a
+   * positive value renders a finite comet trail that erases behind the head
+   * after this many ms. No effect unless `revealTrail` is on.
+   * @default 0
+   */
+  revealDuration?: number;
+  /**
+   * In {@link revealTrail} mode, fade the trail head→tail (`true`, the classic
+   * comet) or draw it at constant opacity (`false`, a solid snake). No effect
+   * outside reveal mode.
+   * @default true
+   */
+  fadeTrail?: boolean;
+  /**
+   * Accessibility: when `true`, suppress the {@link revealTrail} animation and
+   * render the WHOLE path (window mode, no progressive draw). Wire the host's
+   * `prefers-reduced-motion` here. No effect when `revealTrail` is off.
+   * @default false
+   */
+  reducedMotion?: boolean;
 }
 
 /** Complete props accepted by {@link AnimatedPathLayer}. */
@@ -274,6 +323,22 @@ export type AnimatedPathLayerProps = _AnimatedPathLayerProps &
 // Shared with the maplibre adapter (single source of truth in
 // @poopdeck.gl/core).
 const DEFAULT_PALETTE: Color[] = DEFAULT_LINE_PALETTE;
+
+// Effectively-infinite trail length (ms) used for "reveal and PERSIST": a
+// `revealDuration` of 0 keeps every vertex visible once the play head passes it
+// (the trail never erases behind the head). Implemented as a trailLength larger
+// than any feature's own internal time span, so `trailStart = currentTime -
+// trailLength` stays below every vertex time and nothing fades out. The bound is
+// per-FEATURE data-time (age = currentTime − vertexTime), NOT wall-clock playback
+// span: a single path feature whose OWN vertices straddle more than this many ms
+// would start shedding its oldest vertices once the head is this far past them.
+// 250 years clears every shipped dataset (the widest single-feature span is the
+// drifters' ~43-year tracks) with headroom. (Such multi-decade single features
+// are already outside TimeFilterExtension's float32 ±2^24-ms exactness envelope —
+// see its module docstring — so reveal-persist's practical target is the short
+// timeless-line datasets, e.g. flight/taxi paths, where the bound is never
+// approached.) See the `revealDuration` prop.
+const REVEAL_PERSIST_TRAIL_MS = 250 * 365 * 24 * 60 * 60 * 1000;
 
 /** See AnimatedTripsLayer for the rationale; same cache shape, window-mode attrs. */
 interface PreparedTile {
@@ -565,6 +630,14 @@ export class AnimatedPathLayer<
       compare: true,
     },
     filterEnabled: true,
+
+    // Progressive-reveal / trail mode. Off by default ⇒ window mode (whole path
+    // on/off + fade), byte-identical to the pre-reveal layer. `reducedMotion`
+    // forces the whole path (no animation) even when `revealTrail` is set.
+    revealTrail: false,
+    revealDuration: { type: 'number', value: 0, min: 0 },
+    fadeTrail: true,
+    reducedMotion: false,
   };
 
   private preparedTileCache = new Map<string, PreparedTile>();
@@ -582,11 +655,15 @@ export class AnimatedPathLayer<
   /** Tile-array identity from the previous render — see AnimatedTripsLayer.lastTilesRef. */
   private lastTilesRef: Tile[] | null = null;
   /**
-   * Path layer is window-mode only (whole feature on/off + fade), so the
-   * per-vertex time attribute is unused. Registering only the start/end pair
-   * keeps the per-pipeline vertex-attribute count under WebGL2's 16-slot
-   * minimum when stacked with PathLayer's fp64 position split + picking +
-   * CategoryColorExtension.
+   * Single TimeFilterExtension shared by every sublayer. It registers all
+   * three time attributes unconditionally (the `mode` option is a no-op —
+   * forward-compat only), so the same instance serves BOTH the default window
+   * mode (reads `instanceStartTime`/`instanceEndTime`) and progressive-reveal
+   * trail mode (reads the per-vertex `instanceVertexTime` we feed only when
+   * `revealActive()`). The `mode: 'window'` arg documents the default intent;
+   * it does not drop the vertex-time slot. What keeps the fp64-position + time
+   * + category combo under WebGL2's 16-slot floor is NoPickingPathLayer freeing
+   * the picking slot, not attribute pruning here.
    */
   private readonly timeFilterExtension = new TimeFilterExtension({
     mode: 'window',
@@ -622,6 +699,19 @@ export class AnimatedPathLayer<
       this.props.getColor,
       this.props.pathColor,
     );
+  }
+
+  /**
+   * Progressive-reveal / trail mode is EFFECTIVE only when opted in via
+   * `revealTrail` AND not suppressed by `reducedMotion`. Under reduced motion
+   * the layer degrades to its window-mode whole-path render (no per-vertex
+   * trail, no animation) — the accessibility contract every animated surface in
+   * this codebase honors. When false, prepareTile/buildSublayer take the exact
+   * pre-reveal path (no `instanceVertexTime`, no `trailLength`), so the
+   * whole-path output stays byte-identical.
+   */
+  private revealActive(): boolean {
+    return this.props.revealTrail === true && this.props.reducedMotion !== true;
   }
 
   private widthValue(): number | string | undefined {
@@ -682,6 +772,13 @@ export class AnimatedPathLayer<
         ? this.props.filterSoftRange.join(',')
         : '',
       this.props.filterEnabled,
+      // Reveal/trail mode. revealTrail + reducedMotion decide whether the trail
+      // is active at all (also folded into the prepared-tile styleKey, which
+      // gates the instanceVertexTime attribute); revealDuration + fadeTrail are
+      // baked as sublayer props, so a change must rebuild the cached sublayers.
+      this.revealActive(),
+      this.props.revealDuration,
+      this.props.fadeTrail,
     ].join('|');
   }
 
@@ -800,7 +897,7 @@ export class AnimatedPathLayer<
       colorProp
         ? colorListDigest(this.props.colorPalette ?? DEFAULT_PALETTE)
         : 0
-    }|${mapSig}|${elevSig}|${elevOpacSig}|${filterSig}|${updateTriggersDigest(this.props.updateTriggers)}`;
+    }|${mapSig}|${elevSig}|${elevOpacSig}|${filterSig}|${updateTriggersDigest(this.props.updateTriggers)}${this.revealActive() ? '|rv1' : ''}`;
 
     const tileKey = makeTileKey(tile, tileLayer);
     const cached = this.preparedTileCache.get(tileKey);
@@ -870,6 +967,24 @@ export class AnimatedPathLayer<
         size: 1,
       },
     };
+
+    // Progressive-reveal / trail mode: feed the PER-VERTEX time that the trail
+    // branch of TimeFilterExtension reads. Prefer the tile's own zero-copy
+    // `vertexTimestamps`; otherwise synthesize monotone times by interpolating
+    // each feature's [startTime,endTime] span along its path (reused from the
+    // trips layer) so a timeless line draws itself in along its length. The
+    // `instanceVertexTime` slot is ALREADY registered by the extension in every
+    // mode (its `mode` option is a no-op), so this adds DATA, not a GPU
+    // attribute — the WebGL2 16-slot vertex-attribute budget is unchanged.
+    // Gated on revealActive() so window-mode output is byte-identical when the
+    // reveal prop is off (or reduced motion suppresses it).
+    if (this.revealActive()) {
+      const vertexTimes =
+        binary.vertexTimestamps && binary.vertexTimestamps.length >= totalVerts
+          ? binary.vertexTimestamps
+          : synthesizeVertexTimes(binary);
+      attributes.instanceVertexTime = { value: vertexTimes, size: 1 };
+    }
 
     // Categorical color: resolve each feature's color on the CPU and expand it
     // PER-VERTEX into `getColor`. The GPU CategoryColorExtension path uploaded a
@@ -1083,6 +1198,22 @@ export class AnimatedPathLayer<
       timeWindow,
       fadeInDuration: this.props.fadeInDuration,
       fadeOutDuration: this.props.fadeOutDuration,
+      // Progressive-reveal / trail mode (gated by revealTrail + !reducedMotion).
+      // A non-zero `trailLength` flips TimeFilterExtension into its trail branch,
+      // which reveals the path up to the play head via `instanceVertexTime`. A
+      // zero/unset `revealDuration` PERSISTS the whole revealed portion
+      // (draw-and-keep) through an effectively-infinite trail; a positive one is
+      // a finite comet trail. Omitted entirely when reveal is inactive, so the
+      // window-mode sublayer props stay byte-identical.
+      ...(this.revealActive()
+        ? {
+            trailLength:
+              this.props.revealDuration && this.props.revealDuration > 0
+                ? this.props.revealDuration
+                : REVEAL_PERSIST_TRAIL_MS,
+            fadeTrail: this.props.fadeTrail,
+          }
+        : {}),
       // Time-as-height (space-time cube). Window mode lifts whole features
       // by start time (the per-vertex attribute defaults to 0 here).
       timeHeightScale: this.props.timeHeightScale,

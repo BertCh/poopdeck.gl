@@ -24,9 +24,11 @@ git history preserves everything verbatim.
 2. **GitHub Actions is dead** — blocks renderer Decision 6 (GPU-conformance
    CI, which gates the Phase-1 shader rewire), verification of the rewritten
    CI/release gates, and the ecosystem audit's one live §1 item.
-3. **three backend integration tail** — 3d-tiles-renderer integration,
-   `SttThreeGeoViewer` showcase wiring, maplibre camera-sync basemap
-   ([renderer-architecture.md](./renderer-architecture.md) §5).
+3. **three backend SoTA campaign** — the 2026-07-22 four-agent research synthesis
+   absorbed the old "three integration tail" (3d-tiles-renderer integration,
+   `SttThreeGeoViewer` wiring, basemap) into a full parity + engine campaign
+   ([three-backend-sota-campaign-2026-07.md](./three-backend-sota-campaign-2026-07.md),
+   PENDING RATIFY).
 4. **Format tail** — serve-v2, lazy-props client materialization, temporal-LOD
    beyond scrub P0–P2
    ([stt-packed-format-decisions.md](./stt-packed-format-decisions.md) §10);
@@ -55,6 +57,14 @@ git history preserves everything verbatim.
   motion parity, adopt-or-cut, AI-surface reach) executed as wave-by-wave
   agent workflows with a target capability matrix. Plan only; Wave-2+ fleet
   republish folds into register item 1.
+- [**three-backend-sota-campaign-2026-07.md**](./three-backend-sota-campaign-2026-07.md)
+  — the three.js backend SoTA campaign (2026-07-22): four-agent research pass
+  (deck-vs-three gap audit; geo-ecosystem survey; TSL/WebGPU deep dive; large-scale
+  rendering techniques) → four tracks (feature/interaction parity, engine SoTA,
+  platform/ecosystem adoption, reach/verification) in five waves. Headline gaps: 0/6
+  feature families, points-only picking, replace-all residency, fragment-discard time
+  filtering, scene-wide f32 time origin. Absorbs register item 3. Plan only, PENDING
+  RATIFY.
 - [**space-time-lod-2026-07.md**](./space-time-lod-2026-07.md) — the space×time
   LOD master plan (2026-07-10): dual codebase audit + verified external SOTA →
   six phases (measure → resolution-true simplification → declared reduced

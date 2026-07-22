@@ -809,6 +809,45 @@ function waymoScene(opts: {
   };
 }
 
+// ─── storm-4d-greenfield (type: 'storm4d') volume render modes ────────────
+// Categorical color maps for the NEXRAD gate VOLUME's two render modes. The
+// band labels are the BINDING §9.1 contract labels emitted by
+// nexrad_volume.py (docs/roadmap/storm-4d-greenfield-2026-07.md) — FE keys and
+// generator labels must match byte-for-byte or the volume renders the
+// colorMappingDefault fallback.
+//
+// Reflectivity: the classic NWS Level II ramp read green→magenta (the archive
+// floors at 10 dBZ, so the blue weak-echo tail never occurs). Alpha rises
+// with intensity so weak echo stays translucent haze and the core reads solid.
+const STORM4D_DBZ_COLORS: Record<string, ColorRGBA> = {
+  '10-15': [64, 180, 90, 120],
+  '15-20': [40, 190, 70, 150],
+  '20-25': [2, 253, 2, 175],
+  '25-30': [1, 197, 1, 195],
+  '30-35': [0, 142, 0, 210],
+  '35-40': [253, 248, 2, 220],
+  '40-45': [229, 188, 0, 230],
+  '45-50': [253, 149, 0, 240],
+  '50-55': [253, 0, 0, 245],
+  '55-60': [212, 0, 0, 250],
+  '60-65': [188, 0, 0, 255],
+  '65-70': [248, 0, 253, 255],
+  '70+': [152, 84, 198, 255],
+};
+// Dealiased radial velocity: the classic NEXRAD diverging read — GREEN toward
+// the radar (inbound, negative), RED away (outbound, positive), brighter =
+// stronger; near-calm gates recede as dim translucent grey so the couplet
+// (bright green pixels beside bright red) pops out of the volume.
+const STORM4D_VEL_COLORS: Record<string, ColorRGBA> = {
+  'in-extreme': [16, 255, 120, 255],
+  'in-strong': [30, 205, 85, 235],
+  'in-mod': [55, 145, 75, 200],
+  calm: [140, 140, 148, 90],
+  'out-mod': [155, 70, 60, 200],
+  'out-strong': [225, 60, 40, 235],
+  'out-extreme': [255, 40, 60, 255],
+};
+
 const rawDatasets: Dataset[] = [
   {
     id: 'nyc-taxi-od-summary',
@@ -917,6 +956,14 @@ const rawDatasets: Dataset[] = [
     radiusMinPixels: 2,
     radiusMaxPixels: 16,
     radiusTransform: (mag: number) => Math.max(2, (mag - 4) * 1.5),
+    // DataFilterExtension magnitude range (ratified C adopt). `magnitude` is the
+    // same numeric column the radius reads, so the layer range-filters points by
+    // it — composing WITH the time window (a quake shows only when BOTH admit
+    // it). The default band spans the whole M4+ catalog so nothing is hidden;
+    // an interactive in-map magnitude slider that drives `filterRange` live is a
+    // follow-up (see known_gaps) — the wiring is in place for it now.
+    filterProperty: 'magnitude',
+    filterRange: [4, 10],
     // Color by magnitude band (categorical column emitted by stt-generate).
     // Fully opaque so the GPU can skip alpha blending — biggest perf win
     // after dropping `stroked`.
@@ -1906,16 +1953,37 @@ const rawDatasets: Dataset[] = [
       start: 1578268800000, // 2020-01-06 00:00 UTC
       end: 1578355190000, // 2020-01-06 23:59 UTC
     },
-    // Comet-wake aesthetic, mirrored from ship-traffic: every position ping
-    // behind the play head fades and shrinks into a trail behind each
-    // aircraft. Aircraft move ~25× faster than vessels (~900 km/h vs ~20 kn),
-    // so a 5-min wake already paints a long contrail (~75 km), where ships
-    // need an hour. timeWindow is 2× wakeLength so the tile loader covers the
-    // past half of the wake (the shader filter is independent of the loader
-    // window — see TimeFilterExtension.wakeLength docstring).
-    wakeLength: 300000, // 5-minute contrail behind each aircraft
-    wakeTailScale: 0.15, // tail shrinks to 15% of head radius
-    timeWindow: 600000, // 10-min loader window → 5-min past coverage
+    // Motion glide: aircraft are pooled by their ICAO 24-bit address (`icao24`,
+    // an existing categorical column — no rebuild) and each active plane glides
+    // as ONE marker CPU-interpolated between the two ADS-B pings bracketing the
+    // play head, instead of popping a fresh dot per ping. Reduced-motion viewers
+    // fall back to the discrete render (buildDemoLayers folds the preference into
+    // the concrete `interpolate` boolean). Glide is mutually exclusive with the
+    // old comet-wake path (`wakeLength` must be 0), so the wake fields are gone.
+    // The 10-min window keeps both bracketing pings resident for the glide.
+    interpolate: true,
+    idProperty: 'icao24',
+    // Glide THROUGH ADS-B coverage dropouts instead of teleporting. An aircraft
+    // that leaves receiver coverage and re-enters minutes later at a new spot is
+    // still cruising a near-straight line, so a straight-line glide is a good
+    // approximation — the honest failure here is the "big zip" (freeze at the
+    // exit point, then jump to the entry point) that a too-tight hold produced.
+    //
+    // The coupling: to glide smoothly across a gap of duration G, BOTH bracketing
+    // pings must stay resident the whole way, which needs timeWindow >= 2·G (the
+    // loader keeps tiles within ±timeWindow/2 of the play head). The visible
+    // teleport band is exactly (maxInterpolationGap, timeWindow/2], so we pin
+    //   maxInterpolationGap === timeWindow / 2
+    // to collapse it: every gap the window can bracket is glided, and anything
+    // longer — genuine ground/landing gaps (ground pings are dropped at build
+    // time), where a straight line WOULD be fabricated motion — falls outside the
+    // window, so the plane fades out on coverage loss and back in on re-entry
+    // rather than drawing a line it never flew. 20-min window ⇒ 10-min bridge,
+    // which covers the common mid-flight dropouts while staying below aircraft
+    // turnaround times. (Wider window glides longer dropouts at more resident
+    // memory — keep maxInterpolationGap at half of whatever timeWindow is set.)
+    maxInterpolationGap: 600000, // = timeWindow / 2
+    timeWindow: 1200000, // 20-min loader window keeps bracketing pings resident
     targetPlaybackSeconds: 60, // full time-range plays in ~1 min
     initialViewState: {
       longitude: -98.5,
@@ -2910,20 +2978,30 @@ const rawDatasets: Dataset[] = [
     id: 'severe-weather-2024',
     name: 'Severe Weather Suite — May 2024',
     description:
-      'Four public NOAA feeds over one 72-hour clock (19–22 May 2024, the late-May outbreak that produced the Greenfield, Iowa EF4): HRRR 500 mb steering wind advected into streamlines that run with the storms, the MRMS national reflectivity mosaic as moving dBZ bands with storm cells and tracks, and every GOES-16 GLM lightning flash as a shimmering additive glow. Cause and effect on one continental map. Sources: NOAA HRRR + MRMS + GOES-16 GLM (all public domain).',
+      'Five public NOAA feeds over one 72-hour clock (19–22 May 2024, the late-May outbreak that produced the Greenfield, Iowa EF4): HRRR 500 mb steering wind advected into streamlines that run with the storms, the MRMS national reflectivity mosaic as moving dBZ bands with storm cells and tracks, the WPC surface frontal analysis — the meteorologist-drawn cold, warm, occluded and stationary fronts, redrawn every three hours — sweeping over it, and every GOES-16 GLM lightning flash as a shimmering additive glow. Cause and effect on one continental map. Sources: NOAA HRRR + MRMS + WPC + GOES-16 GLM (all public domain).',
     // Primary `url` = the precip FIELD (REQUIRED governor). Overlays: precip
-    // cells/tracks (reused radar fields) + wind + lightning.
+    // cells/tracks (reused radar fields) + wind + lightning + fronts.
     url: '/data/mrms-precip-field/manifest.json',
     radarCellsUrl: '/data/mrms-precip-cells/manifest.json',
     radarTracksUrl: '/data/mrms-precip-tracks/manifest.json',
     // A DENSE, dots-optimized wind archive (18k particles ≈ 1.8× the standalone
-    // streamline build, 15-min vertex cadence, no per-vertex speed column) built
-    // by hrrr_advect.py --no-values — kept SEPARATE from the standalone
+    // streamline build, 15-min vertex cadence) built by
+    // `hrrr_advect.py --color-by temp` — kept SEPARATE from the standalone
     // `hrrr-wind` streamline archive so the denser particle count here doesn't
-    // slow the ribbon demo. Rendered as a background drift field of blue dots
-    // (AnimatedTripHeadsLayer, CPU head-interpolation). See buildDemoLayers.
+    // slow the ribbon demo. Each particle carries a per-vertex 500 mb air
+    // TEMPERATURE (°C), sampled from the same HRRR file as the wind, so the
+    // drift-dot field is colored by the air it rides (see `windGradient`).
+    // Rendered by AnimatedTripHeadsLayer (CPU head-interpolation). See buildDemoLayers.
     windUrl: '/data/hrrr-wind-particles/manifest.json',
     lightningUrl: '/data/goes-glm-lightning/manifest.json',
+    // WPC surface frontal analysis (wpc_fronts.py): analyzed fronts + troughs
+    // from the 3-hourly hi-res coded surface bulletin — the coarsest cadence
+    // in the suite (lightning 15 min ← radar 10 min ← tracks 1 h ← fronts
+    // 3 h), each analysis cross-dissolved into the next by the renderer.
+    // Troughs come pre-dashed; the pips companion carries the classic filled
+    // triangle/semicircle symbols as oriented geographic polygons.
+    frontsUrl: '/data/wpc-fronts/manifest.json',
+    frontsPipsUrl: '/data/wpc-fronts-pips/manifest.json',
     type: 'weather',
     sources: ['noaa'],
     timeRange: {
@@ -2974,28 +3052,175 @@ const rawDatasets: Dataset[] = [
     tripWidth: 2.2,
     // wind — a dense drifting PARTICLE FIELD (thousands of moving dots) beneath
     // the storms, rendered by AnimatedTripHeadsLayer (one CPU-interpolated head
-    // per active particle). Cool low-contrast blue on normal (non-additive)
-    // blending so it reads as calm background texture — deliberately distinct
-    // from the bright, additive WHITE lightning that is meant to pop. Small
-    // tiny-alpha dots: presence comes from DENSITY, not from any one dot, the
-    // earth.nullschool / Windy particle-flow look. See buildDemoLayers 'weather'.
+    // per active particle). Each dot is colored by the 500 mb air TEMPERATURE it
+    // rides (`windGradient`, per-vertex from the same HRRR file as the wind):
+    // cold troughs read blue, warm ridges red, so the thermal pattern steering
+    // the storms is visible in the drift itself. Small tiny-alpha dots on normal
+    // (non-additive) blending: presence comes from DENSITY, not any one dot — the
+    // earth.nullschool / Windy particle-flow look. `windHeadColor` is the
+    // fallback for dots with no sampled value. See buildDemoLayers 'weather'.
     windHeadColor: [95, 160, 230, 100],
-    windHeadRadiusPixels: 1.3,
+    windHeadRadiusPixels: .6,
     windHeadOpacity: 0.6,
+    // 500 mb air-temperature ramp over the drift dots. Domain is the °C range
+    // for the late-May outbreak window (cold trough → warm ridge); cold→warm
+    // stops (blue → cyan → pale → orange → red). Tune the domain/hues in-browser.
+    windGradient: {
+      property: 'vertexValues',
+      domain: [-24, -6], // °C at 500 mb
+      colors: [
+        [70, 100, 210, 150], // −24 °C  cold trough
+        [80, 175, 225, 150], // cyan
+        [225, 225, 200, 150], // pale mid
+        [240, 150, 70, 160], // orange
+        [220, 60, 55, 170], // −6 °C  warm ridge
+      ],
+    },
     legend: {
       title: 'Weather suite',
       items: [
         { color: '#28be46', label: 'rain 20–40 dBZ' },
         { color: '#f57823', label: 'heavy 50–60' },
         { color: '#e11e26', label: 'core 60+' },
-        { color: '#5fa0e6', label: 'wind drift (500 mb)' },
         { color: '#deecff', label: 'lightning flash' },
+        // Front hexes are pinned to WEATHER_FRONT_COLORS (buildDemoLayers);
+        // stationary fronts alternate the same two colors, and the pips
+        // archive draws the classic triangle/semicircle symbols in them.
+        { color: '#4084f0', label: 'cold front ▲' },
+        { color: '#e64038', label: 'warm front ◗' },
       ],
       ramps: [
+        {
+          // Drift-dot color = 500 mb air temperature the particle rides.
+          label: 'wind drift · 500 mb air temp (−24…−6 °C)',
+          colors: ['#4664d2', '#50afe1', '#e1e1c8', '#f09646', '#dc3c37'],
+        },
         {
           // Additive flash accumulation, not a separate density layer.
           label: 'lightning density (additive)',
           colors: ['#20304d', '#4a6a9c', '#8cb4e6', '#deecff', '#ffffff'],
+        },
+      ],
+    },
+  },
+  {
+    id: 'storm-4d-greenfield',
+    name: 'Storm as a 4D Object — Greenfield EF4',
+    description:
+      'One supercell rendered as a true four-dimensional object: the Greenfield, Iowa EF4 of 21 May 2024. NEXRAD Level II radar gates from KDMX stacked by beam altitude into a time-animated 3D volume — toggle between NWS reflectivity and dealiased radial velocity to read the mesocyclone couplet — with VTEC warning polygons rising as translucent prisms, the GOES cloud-top anvil canopy lifted to its brightness-temperature height, multi-level HRRR winds threading the volume, county power outages growing behind the storm, surface stations gusting, storm reports, GLM lightning, and the 18Z Omaha radiosonde climbing through the scene. Sources: NOAA NEXRAD / GOES / HRRR, NWS via IEM, SPC, DOE EAGLE-I.',
+    // Primary `url` = the radar gate VOLUME (REQUIRED governor, heaviest
+    // stream). All nine context overlays ride the same playhead; §9.2 of
+    // docs/roadmap/storm-4d-greenfield-2026-07.md is the binding layer map.
+    url: '/data/storm4d-volume/manifest.json',
+    coupletUrl: '/data/storm4d-couplet/manifest.json',
+    warningsUrl: '/data/storm4d-warnings/manifest.json',
+    reportsUrl: '/data/storm4d-reports/manifest.json',
+    stationsUrl: '/data/storm4d-stations/manifest.json',
+    outagesUrl: '/data/storm4d-outages/manifest.json',
+    cloudTopUrl: '/data/storm4d-cloudtop/manifest.json',
+    wind3dUrl: '/data/storm4d-wind3d/manifest.json',
+    soundingUrl: '/data/storm4d-sounding/manifest.json',
+    // Reuses the existing continental GLM archive — the demo timeRange
+    // subsets it at render; no rebuild (§9.1 "(reuse) goes-glm-lightning").
+    lightningUrl: '/data/goes-glm-lightning/manifest.json',
+    type: 'storm4d',
+    sources: ['noaa'],
+    // §9.0: pre-watch calm (17:30Z) → 19:57Z touchdown → ~20:26–20:32Z
+    // Greenfield → trailing damage/outage wave into the night (03:00Z).
+    timeRange: {
+      start: Date.UTC(2024, 4, 21, 17, 30, 0),
+      end: Date.UTC(2024, 4, 22, 3, 0, 0),
+    },
+    // ~one 5-min volume-scan bucket visible at a time; the fades cross-
+    // dissolve successive volumes so sweeps don't pop at scan boundaries.
+    timeWindow: 360000,
+    fadeInDuration: 150000,
+    fadeOutDuration: 150000,
+    // 9.5 h in 2 min: the tornado's ~35-min life plays over ~7 real seconds.
+    targetPlaybackSeconds: 120,
+    // §9.0 camera: pitched view centered on the storm path over Greenfield.
+    // maxPitch rides the view state (see types.ts initialViewState.maxPitch).
+    initialViewState: {
+      longitude: -94.46,
+      latitude: 41.4,
+      zoom: 8,
+      pitch: 55,
+      bearing: 25,
+      maxPitch: 85,
+    },
+    // Volume default render mode = reflectivity; the DemoViewer segmented
+    // control (summaryToggleWeights, reused as the storm4d render-mode
+    // toggle) swaps the categorical column + mapping to velocity in place.
+    colorProperty: 'dbz_band',
+    colorMapping: STORM4D_DBZ_COLORS,
+    colorMappingDefault: [120, 120, 130, 60],
+    summaryToggleWeights: [
+      {
+        id: 'reflectivity',
+        label: 'Reflectivity',
+        weightProperty: 'dbz_band',
+        colorRange: [
+          [2, 253, 2, 175],
+          [253, 248, 2, 220],
+          [253, 149, 0, 240],
+          [253, 0, 0, 245],
+          [188, 0, 0, 255],
+          [248, 0, 253, 255],
+        ],
+        legendColors: ['#02fd02', '#fdf802', '#fd9500', '#fd0000', '#f800fd'],
+        colorMapping: STORM4D_DBZ_COLORS,
+      },
+      {
+        id: 'velocity',
+        label: 'Velocity',
+        weightProperty: 'vel_band',
+        colorRange: [
+          [16, 255, 120, 255],
+          [55, 145, 75, 200],
+          [140, 140, 148, 90],
+          [155, 70, 60, 200],
+          [255, 40, 60, 255],
+        ],
+        legendColors: ['#10ff78', '#8c8c94', '#ff283c'],
+        colorMapping: STORM4D_VEL_COLORS,
+      },
+    ],
+    // GPU dBZ threshold on the volume (DataFilterExtension, composes WITH the
+    // time window). Default band admits everything above the archive's 10 dBZ
+    // floor; a live in-map slider driving `filterRange` is the follow-up (the
+    // earthquakes demo carries the same wiring — see its entry).
+    filterProperty: 'dbz',
+    filterRange: [10, 95],
+    // Volume gate dots: small world-space billboards with a pixel floor so
+    // the volume reads as a dense cloud at the zoom-8 framing and resolves
+    // into individual gates when you dive in.
+    radius: 320,
+    radiusUnits: 'meters',
+    radiusScale: 1,
+    radiusMinPixels: 1.2,
+    radiusMaxPixels: 8,
+    opacity: 0.85,
+    legend: {
+      title: 'Storm as a 4D object',
+      items: [
+        { color: '#02fd02', label: 'echo 20–35 dBZ' },
+        { color: '#fd9500', label: 'heavy 45–55' },
+        { color: '#f800fd', label: 'extreme 65+' },
+        { color: '#10ff78', label: 'velocity: inbound' },
+        { color: '#ff283c', label: 'velocity: outbound' },
+        { color: '#ff4646', label: 'tornado warning prism' },
+        { color: '#ffbe3c', label: 'severe-tstorm warning prism' },
+        { color: '#b43232', label: 'county outage column' },
+        { color: '#deecff', label: 'lightning flash' },
+      ],
+      ramps: [
+        {
+          label: 'reflectivity 10 → 70+ dBZ (NWS)',
+          colors: ['#40b45a', '#02fd02', '#fdf802', '#fd0000', '#f800fd'],
+        },
+        {
+          label: 'radial velocity −40 → +40 m/s',
+          colors: ['#10ff78', '#379b4b', '#8c8c94', '#9b463c', '#ff283c'],
         },
       ],
     },
@@ -4580,18 +4805,23 @@ const WAYMO_LOCAL_ONLY = /^waymo-/;
 // never `<stem>/manifest.json`; the latter 404s even for live scenes.
 const DATA_IS_REMOTE = DATA_BASE_URL !== '';
 
-// (2026-07-18) Datasets whose archives exist locally but are NOT YET synced to
-// R2 — verified 404 on tiles.poopdeck.gl for all five weather archives
-// (mrms-precip-field/cells/tracks, goes-glm-lightning, hrrr-wind). Held off
+// Datasets whose archives exist locally but are NOT YET synced to R2. Held off
 // the remote deploy so the nav never ships a dataless demo; local dev serves
-// `public/data` directly and renders them fine. Delete an id here as soon as
-// its r2-sync lands (the gate itself stays for the next pre-sync dataset).
-const LOCAL_ONLY_DATASETS = new Set<string>([
-  'goes-glm-lightning',
-  'severe-weather-2024',
-  'mrms-precip',
-  'hrrr-wind',
-]);
+// `public/data` directly and renders them fine. Add an id here when a demo is
+// registered before its archives sync, and delete it as soon as its r2-sync
+// lands (the gate mechanism itself stays for the next pre-sync dataset).
+//
+// (2026-07-22) The weather suite is now fully synced — all six archives
+// (mrms-precip-field/cells/tracks, goes-glm-lightning, hrrr-wind,
+// hrrr-wind-particles) verified 200 on tiles.poopdeck.gl — so goes-glm-lightning,
+// severe-weather-2024, mrms-precip, and hrrr-wind are un-gated.
+//
+// (2026-07-22) storm-4d-greenfield: wired ahead of its archives (the Storm-4D
+// campaign builds all nine storm4d-* stems next; see
+// docs/roadmap/storm-4d-greenfield-2026-07.md §9). Un-gate ONLY after r2-sync
+// verifies every storm4d-* manifest 200 — a partial sync 404-stalls the
+// composite (all overlays gate playback by default).
+const LOCAL_ONLY_DATASETS = new Set<string>(['storm-4d-greenfield']);
 
 export const datasets: Dataset[] = [
   ...rawDatasets,
@@ -4614,11 +4844,24 @@ export const datasets: Dataset[] = [
     // The rain→flood composite carries a second (river-discharge) manifest URL
     // overlaid on the precip field; rewrite it through the same resolver.
     ...(d.riversUrl && { riversUrl: resolveDataUrl(d.riversUrl) }),
-    // The weather-suite composite carries wind + lightning manifests on top of
-    // the precip field (+ its reused radarCells/TracksUrl above); rewrite them
-    // through the same resolver or they 404 on the R2 deploy.
+    // The weather-suite composite carries wind + lightning + fronts manifests
+    // on top of the precip field (+ its reused radarCells/TracksUrl above);
+    // rewrite them through the same resolver or they 404 on the R2 deploy.
     ...(d.windUrl && { windUrl: resolveDataUrl(d.windUrl) }),
     ...(d.lightningUrl && { lightningUrl: resolveDataUrl(d.lightningUrl) }),
+    ...(d.frontsUrl && { frontsUrl: resolveDataUrl(d.frontsUrl) }),
+    ...(d.frontsPipsUrl && { frontsPipsUrl: resolveDataUrl(d.frontsPipsUrl) }),
+    // The storm4d composite carries eight context-overlay manifests on top of
+    // the gate-volume primary (+ its reused lightningUrl above); rewrite every
+    // one through the same resolver or they 404 on the R2 deploy.
+    ...(d.coupletUrl && { coupletUrl: resolveDataUrl(d.coupletUrl) }),
+    ...(d.warningsUrl && { warningsUrl: resolveDataUrl(d.warningsUrl) }),
+    ...(d.reportsUrl && { reportsUrl: resolveDataUrl(d.reportsUrl) }),
+    ...(d.stationsUrl && { stationsUrl: resolveDataUrl(d.stationsUrl) }),
+    ...(d.outagesUrl && { outagesUrl: resolveDataUrl(d.outagesUrl) }),
+    ...(d.cloudTopUrl && { cloudTopUrl: resolveDataUrl(d.cloudTopUrl) }),
+    ...(d.wind3dUrl && { wind3dUrl: resolveDataUrl(d.wind3dUrl) }),
+    ...(d.soundingUrl && { soundingUrl: resolveDataUrl(d.soundingUrl) }),
     // The composite `av` type carries the scene manifest, two overlay archive
     // manifests, and two sidecar JSONs; rewrite all of them through the same
     // VITE_DATA_BASE_URL resolver so they don't 404 on the R2 deploy.
@@ -4661,6 +4904,7 @@ export const SHIPPED_DATASET_IDS: string[] = [
   'storm-radar', // Iowa Derecho — NEXRAD radar composite (field+cells+tracks)
   'goes-glm-lightning', // GOES GLM Lightning — flashes + density (late-May 2024)
   'severe-weather-2024', // Weather Suite — wind + precip + cells/tracks + lightning
+  'storm-4d-greenfield', // Storm as a 4D Object — Greenfield EF4 volumetric composite
 ];
 
 export const shippedDatasets: Dataset[] = SHIPPED_DATASET_IDS.map((id) =>

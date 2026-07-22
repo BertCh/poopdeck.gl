@@ -15,7 +15,12 @@
 
 import { describe, it, expect } from 'vitest';
 import * as barrel from '../src/index';
-import { deckBackend } from '../src/backend-descriptor';
+import {
+  deckBackend,
+  deckLayerFeatures,
+  LAYER_FEATURES,
+  type LayerFeature,
+} from '../src/backend-descriptor';
 import {
   LAYER_KINDS,
   CAPABILITIES,
@@ -61,6 +66,27 @@ const exports = barrel as Record<string, unknown>;
 const supportedKinds = LAYER_KINDS.filter(
   (k) => deckBackend.layerKinds[k].supported,
 );
+
+/**
+ * Collect every `defaultProps` key a layer class exposes, walking the whole
+ * prototype chain — because deck lets a subclass INHERIT a base default without
+ * redeclaring it (e.g. `AnimatedColumnLayer` reuses the base `timeHeightScale`
+ * declared on `SpatioTemporalLayer`, only `AnimatedPolygonLayer` restates it).
+ * A per-class `'prop' in Class.defaultProps` check would false-negative on those
+ * inherited defaults, so the feature gate proves against the merged set instead.
+ */
+function mergedDefaultPropKeys(cls: unknown): Set<string> {
+  const keys = new Set<string>();
+  let proto: unknown = cls;
+  while (typeof proto === 'function' && proto !== Function.prototype) {
+    const dp = (proto as { defaultProps?: unknown }).defaultProps;
+    if (dp && typeof dp === 'object') {
+      for (const k of Object.keys(dp as Record<string, unknown>)) keys.add(k);
+    }
+    proto = Object.getPrototypeOf(proto);
+  }
+  return keys;
+}
 
 describe('deckBackend — the descriptor is exported', () => {
   it('re-exports deckBackend from the package index', () => {
@@ -133,4 +159,59 @@ describe('deckBackend — layerKinds is exhaustive + unsupported carry a reason 
       }
     }
   });
+});
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * Layer-feature matrix gate (2026-07 kind-parity campaign).
+ *
+ * The coarse LayerKind/Capability gates above prove a whole layer class exists.
+ * The campaign added finer per-layer PROP FAMILIES (glide interpolation, icon
+ * wake, GPU DataFilter, space-time height, stable categorical colour, path
+ * reveal). This block is the promised "paired conformance gate": for every
+ * feature deck claims `supported: true`, the named `defaultProps` key is proven
+ * present on the REAL exported class of every kind the feature covers — so a
+ * dropped/renamed prop (or a kind wired up without the prop) trips the gate.
+ * ────────────────────────────────────────────────────────────────────────── */
+describe('deckBackend — layer-feature matrix proven vs. real defaultProps (d)', () => {
+  it('deckLayerFeatures declares every LAYER_FEATURE exactly once, no strays', () => {
+    for (const feature of LAYER_FEATURES) {
+      expect(
+        deckLayerFeatures[feature],
+        `deckLayerFeatures.${feature}`,
+      ).toBeDefined();
+    }
+    expect(Object.keys(deckLayerFeatures).sort()).toEqual(
+      [...LAYER_FEATURES].sort(),
+    );
+  });
+
+  it.each(LAYER_FEATURES)(
+    'feature "%s" covers only supported kinds and proves its prop (or degrades)',
+    (feature: LayerFeature) => {
+      const support = deckLayerFeatures[feature];
+      expect(support.kinds.length, `${feature}.kinds`).toBeGreaterThan(0);
+      if (support.supported) {
+        for (const kind of support.kinds) {
+          // A feature may only cover a kind the backend actually renders.
+          expect(
+            deckBackend.layerKinds[kind].supported,
+            `feature "${feature}" covers unsupported kind "${kind}"`,
+          ).toBe(true);
+          const name = KIND_TO_EXPORT[kind];
+          expect(name, `KIND_TO_EXPORT.${kind}`).toBeTypeOf('string');
+          const cls = exports[name!];
+          expect(cls, `barrel.${name} (kind=${kind})`).toBeTypeOf('function');
+          expect(
+            mergedDefaultPropKeys(cls).has(support.prop),
+            `feature "${feature}": prop "${support.prop}" absent from ${name}.defaultProps (kind=${kind})`,
+          ).toBe(true);
+        }
+      } else {
+        // deck is the reference backend, but the gate stays honest: an
+        // unsupported feature must record HOW it degrades, never silently.
+        expect(support.fallback, `${feature}.fallback`).toBeTruthy();
+        expect(support.reason, `${feature}.reason`).toBeTruthy();
+      }
+    },
+  );
 });

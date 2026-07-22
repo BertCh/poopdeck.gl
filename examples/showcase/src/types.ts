@@ -93,12 +93,34 @@ export type DatasetType =
    * Composite WEATHER-SUITE render on one playhead. Stacks (bottom→top): HRRR
    * wind streamlines (`AnimatedTripsLayer`, from `windUrl`); the MRMS precip
    * FIELD (`AnimatedPolygonLayer`, categorical `dbz_band`) — the primary `url`
-   * and REQUIRED governor source; precip cell tracks + centroids (from
-   * `radarTracksUrl`/`radarCellsUrl`); and GLM lightning as a density field +
-   * flashes (from `lightningUrl`). Built by glm_lightning.py + mrms_weather.py +
-   * hrrr_advect.py.
+   * and REQUIRED governor source; WPC surface fronts in classic notation
+   * (`AnimatedPathLayer` lines from `frontsUrl` + `AnimatedPolygonLayer`
+   * triangle/semicircle pips from `frontsPipsUrl`); precip cell tracks +
+   * centroids (from `radarTracksUrl`/`radarCellsUrl`); and GLM lightning as a
+   * density field + flashes (from `lightningUrl`). Built by glm_lightning.py +
+   * mrms_weather.py + hrrr_advect.py + wpc_fronts.py.
    */
-  | 'weather';
+  | 'weather'
+  /**
+   * Composite STORM-4D render — one supercell as a true 4D object on one
+   * playhead (the depth-first sibling of the continental `weather` suite).
+   * Stacks (bottom→top): county power outages extruded by `customers_out`
+   * (`AnimatedPolygonLayer`, from `outagesUrl`); the GOES C13 cloud-top "anvil
+   * canopy" isobands lifted to their brightness-temperature height (from
+   * `cloudTopUrl`); multi-level HRRR wind trips at `level_alt_m` (from
+   * `wind3dUrl`); the NEXRAD Level II gate VOLUME as a 3D billboard point
+   * cloud stacked by beam altitude (`AnimatedPointLayer`, `use3D` +
+   * `elevationProperty: 'alt_m'`) — the primary `url` and REQUIRED governor
+   * source, toggling between reflectivity (`dbz_band`) and dealiased radial
+   * velocity (`vel_band`) render modes via `summaryToggleWeights`; VTEC
+   * warning polygons extruded as translucent wireframe prisms (from
+   * `warningsUrl`); mesocyclone couplet markers (from `coupletUrl`); ASOS
+   * surface stations (from `stationsUrl`); local storm reports arriving
+   * behind the storm (from `reportsUrl`); GLM lightning at ground (reused
+   * `lightningUrl`); and the radiosonde ascent trail (from `soundingUrl`).
+   * Built by nexrad_volume.py + the storm4d fetch scripts.
+   */
+  | 'storm4d';
 
 export interface DatasetLegendItem {
   color: string;
@@ -186,12 +208,28 @@ export interface Dataset {
   tileLoadTimeWindow?: number;
   /** Target duration in seconds for one complete playthrough at 1x speed (default: 30) */
   targetPlaybackSeconds?: number;
+  /**
+   * When true (DEFAULT), composite overlay archives register as REQUIRED
+   * governor sources, so the shared clock waits for them (MSE-intersection
+   * semantics). Set false for decorative overlays that should
+   * continue-and-degrade (text-track semantics) — they then render empty when
+   * their data lags the clock.
+   */
+  overlayGatesPlayback?: boolean;
   initialViewState: {
     longitude: number;
     latitude: number;
     zoom: number;
     pitch: number;
     bearing: number;
+    /**
+     * Optional MapState pitch constraint carried in the view state (deck's
+     * MapController honors it there). DemoViewer spreads `initialViewState`
+     * straight into the deck view state, so setting this raises the 60°
+     * default the same way the space-time-cube `timeHeight.maxPitch` path
+     * does — used by the storm4d volumetric demo (pitch 55, maxPitch 85).
+     */
+    maxPitch?: number;
   };
   legend?: DatasetLegend;
 
@@ -342,6 +380,51 @@ export interface Dataset {
    */
   fadeOutDuration?: number;
 
+  // ─── motion glide (type: 'point') ──────────────────────────────────────
+  /**
+   * Smooth CPU motion interpolation for `type: 'point'`. When true (and the
+   * user has NOT asked for reduced motion, and {@link idProperty} resolves),
+   * the layer pools loaded samples by entity id and glides ONE marker per
+   * active entity between the two samples bracketing the play head, instead of
+   * popping a fresh instance per ping. Mutually exclusive with `wakeLength` /
+   * `cumulative` (the layer keeps its GPU window path when either is set).
+   * `buildDemoLayers` folds the reduced-motion flag into the concrete boolean
+   * it forwards, so reduced-motion viewers get the discrete (non-glide) path.
+   */
+  interpolate?: boolean;
+  /**
+   * Categorical id column that identifies one moving entity across pings — the
+   * key the glide path pools samples by (e.g. `'icao24'` for aircraft). Has no
+   * effect unless {@link interpolate} is on. Must be a column that already
+   * exists in the archive (no rebuild).
+   */
+  idProperty?: string;
+  /**
+   * Max gap (ms) between two consecutive samples of the same entity that the
+   * glide will interpolate across. A larger gap is a data hole (e.g. an ADS-B
+   * coverage dropout), so the marker HOLDS its last known position instead of
+   * gliding a fabricated straight line the entity never travelled. No effect
+   * unless {@link interpolate} is on. Omit to inherit the layer default
+   * (`Infinity` = always interpolate — only safe for gap-free feeds).
+   */
+  maxInterpolationGap?: number;
+
+  // ─── data filter (type: 'point') ───────────────────────────────────────
+  /**
+   * Numeric column to range-filter `type: 'point'` features by, via the layer's
+   * DataFilterExtension (composes WITH the time filter — a point shows only when
+   * BOTH its time window and its filter range admit it). Names an existing
+   * numeric column (e.g. `'magnitude'`); a categorical column warns and is
+   * ignored. No effect unless set.
+   */
+  filterProperty?: string;
+  /**
+   * Inclusive `[min, max]` bounds for {@link filterProperty}. Only meaningful
+   * when `filterProperty` is set. A future in-map slider would drive this live;
+   * a static value renders a fixed band.
+   */
+  filterRange?: [number, number];
+
   // ─── type: 'point-cloud' ───────────────────────────────────────────────
   /** Radius of every point in `pointSizeUnits`. Defaults to the layer's 10. */
   pointSize?: number;
@@ -399,8 +482,9 @@ export interface Dataset {
    * SECOND (per-trip, OSRM-routed) archive rendered ON TOP as moving head-dots
    * via AnimatedTripHeadsLayer — one dot per active ride gliding over the flow
    * corridors below, both on the one playhead. The corridor archive stays the
-   * primary/required governor source; the heads overlay loads as an OPTIONAL
-   * source (continue-and-degrade). Reuses the `head*` styling fields above.
+   * primary governor source; the heads overlay ALSO gates the clock unless
+   * {@link overlayGatesPlayback} is set false. Reuses the `head*` styling
+   * fields above.
    */
   headsOverlayUrl?: string;
 
@@ -590,11 +674,11 @@ export interface Dataset {
   /**
    * Optional river-discharge FLOW-MATRIX archive painted ON TOP of the primary
    * precip-isoband polygon field (the rain→flood demo: rainfall drives the
-   * rivers). A `FlowCorridorLayer` overlay, styled by `riversConfig`, registered
-   * as an OPTIONAL governor source so the lighter rain field gates the clock
-   * while the heavy river archive streams continue-and-degrade — same split as
-   * the radar/av overlays. Rewritten through `resolveDataUrl` alongside `url` so
-   * an R2 deploy resolves it.
+   * rivers). A `FlowCorridorLayer` overlay, styled by `riversConfig`. Registers
+   * as a REQUIRED governor source unless {@link overlayGatesPlayback} is set
+   * false, so the clock waits for the heavy river archive instead of sweeping
+   * past its loaded frontier (empty rivers). Rewritten through `resolveDataUrl`
+   * alongside `url` so an R2 deploy resolves it.
    */
   riversUrl?: string;
   /** Styling for the `riversUrl` flow-matrix overlay (see `tripGradient`). */
@@ -642,8 +726,33 @@ export interface Dataset {
    */
   lightningUrl?: string;
   /**
-   * @deprecated Legacy wind streamline speed gradient (m/s). The composite now
-   * renders wind as constant-color drift dots — see {@link windHeadColor}.
+   * WPC surface frontal analysis manifest (the wpc-fronts path archive from
+   * wpc_fronts.py): meteorologist-analyzed cold/warm/occluded/stationary
+   * fronts + troughs, one analysis every 3 h — the synoptic skeleton drawn
+   * over the precip field as categorical polylines (`render_class`), with
+   * successive analyses cross-dissolved by the renderer. Rewritten through
+   * `resolveDataUrl`.
+   */
+  frontsUrl?: string;
+  /**
+   * Companion archive to {@link frontsUrl}: the classic frontal notation —
+   * filled triangles (cold), semicircles (warm), alternating (occluded/
+   * stationary) — baked by wpc_fronts.py as small ORIENTED GEOGRAPHIC
+   * POLYGONS on each front's advancing side, so they rotate and scale with
+   * the map exactly like the paper-map symbols. Rendered by a second
+   * AnimatedPolygonLayer with the same categorical mapping and fades as the
+   * lines. Rewritten through `resolveDataUrl`.
+   */
+  frontsPipsUrl?: string;
+  /**
+   * Per-vertex TEMPERATURE gradient for the composite's wind drift dots
+   * (`AnimatedTripHeadsLayer`). When set, each moving dot is colored by its
+   * per-vertex `vertexValues` scalar — the 500 mb air temperature (°C) sampled
+   * from the SAME HRRR file as the wind (`hrrr_advect.py --color-by temp`), so
+   * the grounding shares the wind's exact 3 km / hourly resolution. `domain` is
+   * the [min, max] °C mapped onto the cold→warm `colors` ramp. Unset →
+   * constant {@link windHeadColor}. (Was the legacy streamline speed gradient;
+   * the drift-dot field now carries temperature instead.)
    */
   windGradient?: {
     property: string;
@@ -665,6 +774,64 @@ export interface Dataset {
   windHeadRadiusPixels?: number;
   /** Layer opacity for the wind drift dots. @default 0.6 */
   windHeadOpacity?: number;
+
+  // ─── storm-4D composite (type: 'storm4d') ──────────────────────────────
+  // One supercell as a 4D object: the primary `url` is the NEXRAD gate VOLUME
+  // (3D points, `alt_m` altitude column); these are the context overlays.
+  // Every one is rewritten through `resolveDataUrl` alongside `url` so an R2
+  // deploy resolves them. The composite additionally reuses `lightningUrl`
+  // (the existing goes-glm-lightning archive, timeRange-subset at render).
+  /**
+   * Mesocyclone couplet marker archive (`storm4d-couplet`): azimuthal-shear
+   * local maxima on the lowest dealiased velocity sweep, one marker per
+   * detected cluster carrying `strength_ms` (peak gate-to-gate Δv) + `alt_m`.
+   * Rendered as white stroked rings sized by `strength_ms`.
+   */
+  coupletUrl?: string;
+  /**
+   * VTEC storm-based warning polygon archive (`storm4d-warnings`, IEM SBW
+   * with SVS shrink phases): `phenom` ("TO"|"SV"|"FF") + per-phase
+   * timestamp/end_timestamp. Rendered as translucent wireframe prisms
+   * extruded 12 km (TO red / SV amber / FF green).
+   */
+  warningsUrl?: string;
+  /**
+   * Local-storm-report point archive (`storm4d-reports`, IEM LSR + SPC):
+   * categorical `kind` + `magnitude`. Rendered with a wake so reports read
+   * as arriving BEHIND the storm.
+   */
+  reportsUrl?: string;
+  /**
+   * Surface-station point archive (`storm4d-stations`, IEM 1-min ASOS +
+   * METAR fallback): per-minute `wind_kt`/`gust_kt` + categorical
+   * `gust_band`. Rendered as dots sized by gust, colored by `gust_band`.
+   */
+  stationsUrl?: string;
+  /**
+   * County power-outage polygon archive (`storm4d-outages`, EAGLE-I 15-min
+   * county rollups on Census county geometry): `customers_out` per interval.
+   * Rendered as dark-red translucent prisms extruded by `customers_out`.
+   */
+  outagesUrl?: string;
+  /**
+   * GOES C13 cloud-top isoband archive (`storm4d-cloudtop`): brightness-
+   * temperature bands (`bt_band`) each carrying `top_alt_m` (standard-
+   * atmosphere BT→height). Rendered as the translucent "anvil canopy"
+   * lifted to `top_alt_m`.
+   */
+  cloudTopUrl?: string;
+  /**
+   * Multi-level HRRR wind trips archive (`storm4d-wind3d`): particle trips
+   * at 850/700/500/250 mb, each feature carrying `level_alt_m`. Rendered as
+   * reveal-trail paths lifted to their pressure-level altitude.
+   */
+  wind3dUrl?: string;
+  /**
+   * Radiosonde ascent point archive (`storm4d-sounding`, OAX 18Z special
+   * launch): one point per reported level with `alt_m`, drift-integrated
+   * position. Rendered as a small climbing trail (delight layer).
+   */
+  soundingUrl?: string;
 
   // ─── AV cockpit composite styling (type: 'av') ─────────────────────────
   /**
@@ -1088,17 +1255,30 @@ export interface Dataset {
  * One choice in a summary-tier weight toggle. Each option points at a
  * different numeric column on the summary tier (e.g. `sum_is_pickup`
  * vs `sum_is_dropoff`) and styles it with its own ramp.
+ *
+ * The DemoViewer segmented control that renders these is type-independent
+ * (it shows whenever `summaryToggleWeights` has >1 options and threads the
+ * active option into `buildDemoLayers`), so the `storm4d` composite reuses
+ * it as its reflectivity ↔ velocity RENDER-MODE toggle: there
+ * `weightProperty` names the volume's CATEGORICAL color column (`dbz_band`
+ * or `vel_band`) and `colorMapping` carries that mode's category → RGBA map.
  */
 export interface SummaryToggleOption {
   id: string;
   label: string;
-  /** Summary column to drive the ramp. */
+  /** Summary column to drive the ramp (storm4d: the categorical color column). */
   weightProperty: string;
   colorRange: ColorRGBA[];
   /** Optional pinned `[min, max]` domain (same semantics as `summaryColorDomain`). */
   colorDomain?: [number, number];
   /** CSS gradient stops for the legend strip — usually `colorRange` mapped to hex strings. */
   legendColors?: string[];
+  /**
+   * Categorical category → RGBA mapping for this option (storm4d render
+   * modes: the NWS dBZ ramp vs the diverging velocity map). Ignored by the
+   * summary-tier cases, which color by the numeric ramp above.
+   */
+  colorMapping?: Record<string, ColorRGBA>;
 }
 
 /**

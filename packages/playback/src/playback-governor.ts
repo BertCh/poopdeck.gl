@@ -84,6 +84,27 @@ export interface BufferSource {
    * tier, so gates on release re-arm against full detail.
    */
   setInteractive?(interactive: boolean): void;
+  /**
+   * Optional (the core tileset has it): run-ahead fairness (§5–6 of
+   * docs/roadmap/playback-and-loading.md). Cap the loader's forward prefetch
+   * horizon to at most `simMs` of sim-time ahead of the playhead; `null`
+   * clears the cap. Shaka caps any track ~1 segment past the neediest for
+   * the same reason: the clock min-gates on the required laggard (MSE
+   * intersection), so buffer a leader holds beyond that intersection is dead
+   * weight — it cannot be played before the laggard catches up, yet it feeds
+   * cache-pressure eviction in the loader (which can evict the very runway
+   * the gate is waiting on). The loader may enforce its own internal safety
+   * floor.
+   */
+  setPrefetchRunAheadLimit?(simMs: number | null): void;
+  /**
+   * Optional (the core tileset has it): update this source's fair-share
+   * weight in the process-shared request scheduler, effective immediately
+   * for queued work. The governor re-weights dynamically in the fairness
+   * pass — leaders shed share toward the required laggard, base weights are
+   * restored when fairness deactivates (Phase 2 of multi-source coordination).
+   */
+  setBandwidthWeight?(weight: number): void;
 }
 
 /** Network throughput estimate (archive dual-EWMA, see WS-A5). */
@@ -183,6 +204,19 @@ export interface PlaybackGovernorOptions {
    * @default 200
    */
   runwayToleranceMs?: number;
+  /**
+   * Kill switch for multi-source run-ahead fairness + dynamic bandwidth
+   * weights (§5–6). When true (default) and ≥2 sources are registered with an
+   * incomplete required one among them, every runway probe also caps each
+   * non-laggard source's forward prefetch at the laggard's frontier + slack
+   * ({@link BufferSource.setPrefetchRunAheadLimit}) and re-weights required
+   * sources' fair share ({@link BufferSource.setBandwidthWeight}). Set false
+   * to disable both passes entirely (any outstanding caps are cleared and
+   * base weights restored once). Single-source setups are unaffected either
+   * way — fairness only engages with 2+ sources.
+   * @default true
+   */
+  multiSourceFairness?: boolean;
 }
 
 /** Payload of the 'ready' event (a gate passed and the clock started). */
@@ -295,6 +329,42 @@ const AUTO_SPEED_SAFETY = 0.7;
  * at high sim-speeds).
  */
 const PLAYTHROUGH_MIN_WALL_MS = 250;
+/**
+ * Run-ahead fairness slack floor (wall-ms; × |speed| → sim-ms at evaluation):
+ * non-laggard sources may prefetch at most this far past the required
+ * laggard's frontier (Shaka caps any track ~1 segment past the neediest —
+ * buffer beyond the min-gated intersection is dead weight). Floored against
+ * `runwayToleranceMs` so the cap can never bite inside the cadence-jitter
+ * band the gate itself ignores.
+ */
+const RUN_AHEAD_SLACK_WALL_MS = 3000;
+/** Fairness write throttle: caps/weights re-send only past this relative change. */
+const FAIRNESS_RESEND_FRACTION = 0.2;
+/**
+ * Laggard-classification hysteresis, as fractions of the slack. Near-tied
+ * required sources must not swap laggard identity across evaluations: a
+ * to/from-null cap transition legitimately bypasses the 20% write throttle,
+ * so identity flapping would re-send caps (and flush/replan prefetch
+ * horizons) on every evaluation. A source ENTERS the co-laggard set only
+ * within the tight band of the min; once in, it EXITS only past the wider
+ * band.
+ */
+const LAGGARD_ENTER_BAND_FRACTION = 0.25;
+const LAGGARD_EXIT_BAND_FRACTION = 0.5;
+
+/**
+ * One probe of one registered source. A single per-source probe per
+ * evaluation feeds the frontier fold AND the run-ahead-fairness/weight pass
+ * (see {@link PlaybackGovernor.applyMultiSourceFairness}) — no double probing.
+ */
+interface SourceProbe {
+  id: string;
+  required: boolean;
+  /** The registered (base) Phase 2 fair-share weight. */
+  baseWeight: number;
+  source: BufferSource;
+  runway: BufferedRunway;
+}
 
 export class PlaybackGovernor {
   /** Exposed so scrubbing UIs can share the settle knob (see options). */
@@ -308,20 +378,38 @@ export class PlaybackGovernor {
   private readonly getThroughput: (() => ThroughputEstimate) | null;
   /** Cadence tolerance in WALL-ms; scaled by |speed| per evaluation. See options. */
   private readonly runwayToleranceMs: number;
+  /** Kill switch for run-ahead fairness + dynamic weights (see options). */
+  private readonly multiSourceFairness: boolean;
 
   /**
    * The classified source registry (Phase 0 of multi-source coordination).
    * Replaces the historical single `source`. Each entry carries a `required`
-   * flag (gates the clock) and a `weight` (Phase 2 bandwidth-share hint, not
-   * yet consumed here). The clock's combined buffer health is folded over the
-   * REQUIRED subset only — `min` runway, `AND` complete, nearest frontier —
-   * while side-effects (prefetch keep-alive, flush) broadcast to ALL sources.
-   * See docs/roadmap/playback-and-loading.md §5–6.
+   * flag (gates the clock) and a base `weight` (Phase 2 bandwidth share, now
+   * wired: {@link applyMultiSourceFairness} re-weights required sources
+   * around it — leaders shed toward the laggard — and deactivation restores
+   * it). The clock's combined buffer health is folded over the REQUIRED
+   * subset only — `min` runway, `AND` complete, nearest frontier — while
+   * side-effects (prefetch keep-alive, flush, run-ahead caps) broadcast to
+   * ALL sources. See docs/roadmap/playback-and-loading.md §5–6.
    */
   private sources = new Map<
     string,
     { source: BufferSource; required: boolean; weight: number }
   >();
+  /**
+   * Fairness write throttles: the last cap / weight actually SENT per source
+   * id (absent = never sent). A cap re-sends only on a to/from-null
+   * transition or a >20% change; a weight only on a >20% change from the last
+   * sent (or base) value — runway jitter must not spam the loader/scheduler.
+   */
+  private lastSentCaps = new Map<string, number | null>();
+  private lastSentWeights = new Map<string, number>();
+  /** Laggard ids from the last fairness pass (removing one deactivates fairness). */
+  private lastLaggardIds = new Set<string>();
+  /** Wall time of the last SELF-probed fairness pass (gated-path rate limit).
+   * Starts at -Infinity so the FIRST gated pass is never suppressed (a fake
+   * clock — or a real one — may sit at epoch 0 when the gate opens). */
+  private lastFairnessSelfProbeWall = -Infinity;
   private _state: PlaybackGovernorState = 'idle';
   /**
    * What the USER wants, tracked separately from the machine state so a pause
@@ -415,8 +503,13 @@ export class PlaybackGovernor {
     if (this.suppressPlayStateSync || this.disposed) return;
     if (!playing && this._state === 'playing' && this.userWantsPlayback) {
       // External pause — honor it as user intent so we don't resurrect playback.
+      // Every non-looping range-end clamp routes through here, so lift the
+      // fairness interventions exactly as requestPause does — otherwise
+      // run-ahead caps and shed weights stay applied for the whole time the
+      // demo sits parked at its end.
       this.userWantsPlayback = false;
       this.stopEvalTimer();
+      this.deactivateFairness();
       this.setState('idle');
       return;
     }
@@ -532,6 +625,7 @@ export class PlaybackGovernor {
       0,
       opts.runwayToleranceMs ?? TICK_PROBE_INTERVAL_MS,
     );
+    this.multiSourceFairness = opts.multiSourceFairness ?? true;
     if (opts.source) this.setSource(opts.source);
 
     this.timeController.on('playState', this.playStateHandler);
@@ -629,6 +723,17 @@ export class PlaybackGovernor {
       );
       return;
     }
+    // Replacing an existing id must not inherit its predecessor's throttle
+    // memos: the write throttle would treat the replacement source as
+    // already capped/re-weighted and suppress the first sends, leaving it
+    // silently uncapped at full weight while the governor believes it is
+    // constrained. (No restore call on the predecessor — it is leaving the
+    // registry; a fresh fairness pass re-establishes the replacement.)
+    if (this.sources.has(id)) {
+      this.lastSentCaps.delete(id);
+      this.lastSentWeights.delete(id);
+      this.lastLaggardIds.delete(id);
+    }
     this.sources.set(id, {
       source,
       required: opts.required ?? true,
@@ -649,7 +754,28 @@ export class PlaybackGovernor {
     // forever — endScrub's clearing broadcast only reaches sources still
     // registered. Clear the bit on its way out.
     if (this.scrubbing) this.sources.get(id)?.source.setInteractive?.(false);
+    // Same reasoning for fairness state: a departing source must not keep a
+    // stale run-ahead cap or shed weight (no future pass can reach it).
+    const departing = this.sources.get(id);
+    if (departing) {
+      if (typeof this.lastSentCaps.get(id) === 'number') {
+        departing.source.setPrefetchRunAheadLimit?.(null);
+      }
+      const sentWeight = this.lastSentWeights.get(id);
+      if (sentWeight !== undefined && sentWeight !== departing.weight) {
+        departing.source.setBandwidthWeight?.(departing.weight);
+      }
+      this.lastSentCaps.delete(id);
+      this.lastSentWeights.delete(id);
+    }
     this.sources.delete(id);
+    // Dropping the LAGGARD leaves every peer capped against a stale floor;
+    // dropping under 2 sources ends fairness altogether. Deactivate (clear
+    // caps, restore base weights) — the next probe re-establishes fairness
+    // against the new laggard if one exists.
+    if (this.lastLaggardIds.has(id) || this.sources.size < 2) {
+      this.deactivateFairness();
+    }
     this.evaluateNow();
   }
 
@@ -675,6 +801,8 @@ export class PlaybackGovernor {
     if (this.scrubbing) {
       for (const s of this.allSources()) s.setInteractive?.(false);
     }
+    // Outgoing sources also shed any fairness caps/weights on the way out.
+    this.deactivateFairness();
     this.sources.clear();
     // addSource calls evaluateNow on success; on a bad-source rejection it
     // returns early WITHOUT evaluating, so re-evaluate here unconditionally.
@@ -747,6 +875,9 @@ export class PlaybackGovernor {
     // clock but they DO load, so they must also be told to stand down.
     for (const source of this.allSources())
       source.setAnimationState?.(false, 0);
+    // Fairness follows the stand-down: caps/shed weights are relative to a
+    // moving playhead, which no longer exists.
+    this.deactivateFairness();
     this.setState('idle');
   }
 
@@ -1116,6 +1247,9 @@ export class PlaybackGovernor {
     if (this.scrubbing) {
       for (const s of this.allSources()) s.setInteractive?.(false);
     }
+    // Loaders outlive the governor: leaving a run-ahead cap or shed weight
+    // behind would throttle them forever with nothing left to lift it.
+    this.deactivateFairness();
     this.sources.clear();
   }
 
@@ -1178,8 +1312,25 @@ export class PlaybackGovernor {
     horizonSimMs: number | undefined,
     tolSimMs = 0,
   ): BufferedRunway {
-    const required = this.requiredSources();
-    if (required.length === 0) {
+    const runways: BufferedRunway[] = [];
+    for (const source of this.requiredSources()) {
+      runways.push(source.getBufferedRunway(time, direction, horizonSimMs));
+    }
+    return this.foldRequiredRunways(runways, horizonSimMs, tolSimMs);
+  }
+
+  /**
+   * The fold half of {@link combinedRequiredRunway}, split out so callers
+   * that already hold per-source probes (the tick-path frontier probe, which
+   * shares ONE probe per source with the fairness pass) can fold without
+   * re-probing.
+   */
+  private foldRequiredRunways(
+    runways: BufferedRunway[],
+    horizonSimMs: number | undefined,
+    tolSimMs: number,
+  ): BufferedRunway {
+    if (runways.length === 0) {
       // No gating source: never stall. Report a complete, unbounded runway.
       return {
         simMs: horizonSimMs ?? Infinity,
@@ -1195,8 +1346,7 @@ export class PlaybackGovernor {
     let allComplete = true;
     let leadSimMs = -Infinity;
     const incomplete: number[] = [];
-    for (const source of required) {
-      const r = source.getBufferedRunway(time, direction, horizonSimMs);
+    for (const r of runways) {
       bytesPending += r.bytesPending;
       if (r.complete) continue;
       allComplete = false;
@@ -1422,6 +1572,12 @@ export class PlaybackGovernor {
           absSpeed,
         );
       }
+      // Fairness piggyback on the gated eval cadence (the tick probe is
+      // frozen with the clock, and a gate is exactly when leaders extending
+      // runway past a buffering laggard hurts most). Self-probing: the gate's
+      // own probe above is capped at the gate window, which would misread
+      // every leader as tied at that horizon.
+      this.applyMultiSourceFairness(null, absSpeed);
     }
     if (!passed && nowWall() - this.gateStartedAtWall >= this.maxStartWaitMs) {
       // Escape hatch — never hard-lock playback on a broken network.
@@ -1477,30 +1633,239 @@ export class PlaybackGovernor {
       this.bufferedUntil = null;
       return;
     }
+    const absSpeed = Math.abs(speed);
     const direction: 1 | -1 = speed < 0 ? -1 : 1;
     const time = this.timeController.getTime();
+    // ONE probe per registered source (at the generous default horizon, as
+    // this path always used) feeds BOTH the frontier fold below and the
+    // fairness/weight pass — the playing-cadence piggyback, no double probe.
+    // With the fairness kill switch off, optional sources feed neither
+    // consumer, so don't pay their probes at all (the switch must remove
+    // the cost the feature introduced, not just its writes).
+    const probes = this.probeAllRunways(
+      time,
+      direction,
+      !this.multiSourceFairness,
+    );
+    const requiredRunways: BufferedRunway[] = [];
+    for (const p of probes) if (p.required) requiredRunways.push(p.runway);
     // The NEAREST required-source frontier (cadence-tolerance-banded min
     // simMs); complete = AND over required. The same band that keeps the gate
     // from false-stalling must also lift the cached frontier so the per-tick
     // clamp doesn't snap the playhead back to a fractionally-behind cadence
     // peer. With zero required sources this is complete ⇒ unbounded.
-    const runway = this.combinedRequiredRunway(
-      time,
-      direction,
+    const runway = this.foldRequiredRunways(
+      requiredRunways,
       undefined,
-      this.toleranceSimMs(Math.abs(speed)),
+      this.toleranceSimMs(absSpeed),
     );
     this.frontierDirection = direction;
     this.bufferedUntil = runway.complete
       ? direction * Infinity
       : time + direction * runway.simMs;
     if (this.degradedCreep) {
-      const required =
-        this.startGateWallMs * Math.abs(speed) * this.resumeFactor;
+      const required = this.startGateWallMs * absSpeed * this.resumeFactor;
       if (runway.complete || runway.simMs >= required) {
         this.setDegradedCreep(false);
       }
     }
+    this.applyMultiSourceFairness(probes, absSpeed);
+  }
+
+  /** One {@link BufferSource.getBufferedRunway} probe per REGISTERED source
+   * (required + optional alike, at the source's generous default horizon).
+   * `requiredOnly` skips optional sources for callers that only fold the
+   * required set (the fairness-off frontier path). */
+  private probeAllRunways(
+    time: number,
+    direction: 1 | -1,
+    requiredOnly = false,
+  ): SourceProbe[] {
+    const out: SourceProbe[] = [];
+    for (const [id, entry] of this.sources) {
+      if (requiredOnly && !entry.required) continue;
+      out.push({
+        id,
+        required: entry.required,
+        baseWeight: entry.weight,
+        source: entry.source,
+        runway: entry.source.getBufferedRunway(time, direction),
+      });
+    }
+    return out;
+  }
+
+  /**
+   * Run-ahead fairness + dynamic fair-share weights (Phase 2 of multi-source
+   * coordination, §5–6 of docs/roadmap/playback-and-loading.md). The clock
+   * min-gates on the required laggard (MSE intersection), so any buffer a
+   * leader holds past `laggard + slack` is dead weight: it cannot render
+   * before the laggard catches up, its fetches contend with the laggard's in
+   * the shared scheduler, and it feeds cache-pressure eviction in the loader
+   * (which can evict the protected runway the gate is waiting on). Two
+   * levers, both write-throttled (see the memo fields):
+   *
+   * - CAP (Shaka-style run-ahead limit): every source that is NOT (one of)
+   *   the laggard(s) gets `setPrefetchRunAheadLimit(laggard + slack)`;
+   *   laggard(s) get `null` (run free). Optional sources are capped too —
+   *   one ahead of the required laggard is pure dead weight; one behind is
+   *   unaffected, since the cap only limits run-AHEAD.
+   *
+   * - WEIGHT: each incomplete REQUIRED source gets
+   *   `base × clamp((slack + laggard) / (slack + runway_i), 0.25, 4)` — the
+   *   laggard lands exactly on base, leaders shed share, bounded both ways.
+   *   DRR is work-conserving, so this only matters while leaders still have
+   *   legitimate queued work (e.g. refetching near-window evictions); the
+   *   run-ahead cap does most of the work. Optional/complete sources stay at
+   *   base.
+   *
+   * Piggybacks on the existing probe cadences (playing tick-probe +
+   * gated eval) — never its own timer. Skips — clearing outstanding
+   * caps/weights once — when disabled, under 2 sources, no incomplete
+   * required source, or idle.
+   */
+  private applyMultiSourceFairness(
+    probes: SourceProbe[] | null,
+    absSpeed: number,
+  ): void {
+    if (
+      !this.multiSourceFairness ||
+      this.sources.size < 2 ||
+      this._state === 'idle'
+    ) {
+      this.deactivateFairness();
+      return;
+    }
+    if (probes === null) {
+      // Gated path: evaluations are event-driven (buffer events on top of
+      // the 250 ms timer) and can burst far past the playing tick cadence,
+      // and the self-probe here is a full per-source sweep. Rate-limit it
+      // to the same TICK_PROBE_INTERVAL_MS the playing path runs at —
+      // skipping is safe, caps/weights only drift as fast as runways do.
+      const now = nowWall();
+      if (now - this.lastFairnessSelfProbeWall < TICK_PROBE_INTERVAL_MS) {
+        return;
+      }
+      this.lastFairnessSelfProbeWall = now;
+      const speed = this.timeController.getSpeed();
+      const direction: 1 | -1 = speed < 0 ? -1 : 1;
+      probes = this.probeAllRunways(this.timeController.getTime(), direction);
+    }
+    // laggard = min runway over incomplete REQUIRED sources (complete sources
+    // never gate, so they never define the floor).
+    let laggardSimMs = Infinity;
+    for (const p of probes) {
+      if (p.required && !p.runway.complete && p.runway.simMs < laggardSimMs) {
+        laggardSimMs = p.runway.simMs;
+      }
+    }
+    if (!Number.isFinite(laggardSimMs)) {
+      this.deactivateFairness();
+      return;
+    }
+    // Same wall-ms × |speed| denomination as every gate threshold (callers
+    // pass the exact |speed| the gate/keep-alive math uses).
+    const slackSimMs =
+      Math.max(this.runwayToleranceMs, RUN_AHEAD_SLACK_WALL_MS) * absSpeed;
+    const capSimMs = laggardSimMs + slackSimMs;
+    // Hysteresis bands (see LAGGARD_*_BAND_FRACTION): membership from the
+    // PREVIOUS pass widens a source's band, so a near-tie can't flap
+    // identity — and cap writes — across evaluations.
+    const prevLaggards = this.lastLaggardIds;
+    const nextLaggards = new Set<string>();
+    for (const p of probes) {
+      const band =
+        slackSimMs *
+        (prevLaggards.has(p.id)
+          ? LAGGARD_EXIT_BAND_FRACTION
+          : LAGGARD_ENTER_BAND_FRACTION);
+      const isLaggard =
+        p.required &&
+        !p.runway.complete &&
+        p.runway.simMs <= laggardSimMs + band;
+      if (isLaggard) nextLaggards.add(p.id);
+      this.sendRunAheadCap(p.id, p.source, isLaggard ? null : capSimMs);
+      if (p.required && !p.runway.complete) {
+        const shed = Math.min(
+          4,
+          Math.max(
+            0.25,
+            (slackSimMs + laggardSimMs) / (slackSimMs + p.runway.simMs),
+          ),
+        );
+        this.sendBandwidthWeight(
+          p.id,
+          p.source,
+          p.baseWeight * shed,
+          p.baseWeight,
+        );
+      }
+    }
+    this.lastLaggardIds = nextLaggards;
+  }
+
+  /** Throttled cap write: re-send only on a to/from-null transition or a >20% change. */
+  private sendRunAheadCap(
+    id: string,
+    source: BufferSource,
+    capSimMs: number | null,
+  ): void {
+    const last = this.lastSentCaps.get(id); // undefined = never sent
+    if (capSimMs === null) {
+      if (last === null) return; // already uncapped
+      this.lastSentCaps.set(id, null);
+      source.setPrefetchRunAheadLimit?.(null);
+      return;
+    }
+    if (
+      typeof last === 'number' &&
+      Math.abs(capSimMs - last) <= last * FAIRNESS_RESEND_FRACTION
+    ) {
+      return;
+    }
+    this.lastSentCaps.set(id, capSimMs);
+    source.setPrefetchRunAheadLimit?.(capSimMs);
+  }
+
+  /**
+   * Throttled weight write: the reference is the last SENT value, or the base
+   * weight when none was — so a source sitting at base (the laggard, by
+   * construction of the shed formula) is never written at all.
+   */
+  private sendBandwidthWeight(
+    id: string,
+    source: BufferSource,
+    weight: number,
+    baseWeight: number,
+  ): void {
+    const ref = this.lastSentWeights.get(id) ?? baseWeight;
+    if (Math.abs(weight - ref) <= ref * FAIRNESS_RESEND_FRACTION) return;
+    this.lastSentWeights.set(id, weight);
+    source.setBandwidthWeight?.(weight);
+  }
+
+  /**
+   * Lift every outstanding fairness intervention ONCE: clear caps to null and
+   * restore base weights on the sources still registered, then drop the
+   * memos. Called when fairness deactivates — kill switch / under 2 sources /
+   * no incomplete required source / idle (via the skip path), plus pause,
+   * laggard removal, setSource, and dispose (explicitly — no probe runs
+   * there). O(1) when nothing is outstanding.
+   */
+  private deactivateFairness(): void {
+    this.lastLaggardIds.clear();
+    if (this.lastSentCaps.size === 0 && this.lastSentWeights.size === 0) return;
+    for (const [id, entry] of this.sources) {
+      if (typeof this.lastSentCaps.get(id) === 'number') {
+        entry.source.setPrefetchRunAheadLimit?.(null);
+      }
+      const sentWeight = this.lastSentWeights.get(id);
+      if (sentWeight !== undefined && sentWeight !== entry.weight) {
+        entry.source.setBandwidthWeight?.(entry.weight);
+      }
+    }
+    this.lastSentCaps.clear();
+    this.lastSentWeights.clear();
   }
 
   /** Move the clock without the tick subscription clamping our own write. */

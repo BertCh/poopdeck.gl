@@ -97,6 +97,10 @@ function headsLayer(props: Record<string, any> = {}) {
     lineWidthScale: 1,
     lineWidthMinPixels: 0,
     lineWidthMaxPixels: Number.MAX_SAFE_INTEGER,
+    // Gradient defaults (must match defaultProps): unset → constant headColor.
+    gradientProperty: null,
+    gradientDomain: [0, 1],
+    gradientColorRamp: [],
     ...props,
   };
   layer._currentTime = 50; // mid-trip for [0,100] windows → both heads active
@@ -199,5 +203,84 @@ describe('AnimatedTripHeadsLayer parity — P2 outline subsystem', () => {
     // opaque-black default rather than leaking undefined to the sublayer.
     const [sub] = render(headsLayer({ headStrokeColor: undefined }));
     expect(sub.props.getLineColor).toEqual([0, 0, 0, 255]);
+  });
+});
+
+describe('AnimatedTripHeadsLayer — per-vertex value gradient (e.g. 500 mb temp)', () => {
+  /** twoCorridorTile + injected per-vertex values/times: corridor0 values
+   * [10,30], corridor1 [0,4]; both active over [0,100]. At the mid-playhead
+   * (t=50) each head sits at frac 0.5, so its value is the endpoint mean. */
+  function gradientTile(values: number[]) {
+    const tile = twoCorridorTile();
+    const feats: any = tile.layers[0].features;
+    feats.vertexTimestamps = new Float32Array([0, 100, 0, 100]);
+    feats.vertexValues = new Float32Array(values);
+    return tile;
+  }
+
+  function renderGrad(layer: any, values: number[]) {
+    layer.state = { tiles: [gradientTile(values)] };
+    return layer.renderLayers();
+  }
+
+  // Blue→red 2-stop ramp over [0,40]: value 20 → t=0.5 → [127,0,127,255].
+  const RAMP = [
+    [0, 0, 255, 255],
+    [255, 0, 0, 255],
+  ];
+  const gradientProps = {
+    gradientProperty: 'vertexValues',
+    gradientDomain: [0, 40],
+    gradientColorRamp: RAMP,
+  };
+
+  it('colors each dot by its interpolated per-vertex value', () => {
+    const [sub] = renderGrad(headsLayer(gradientProps), [10, 30, 0, 4]);
+    const attr = sub.props.data.attributes.getFillColor;
+    expect(attr).toBeTruthy();
+    expect(attr.size).toBe(4);
+    expect(attr.normalized).toBe(true);
+    expect(attr.value).toBeInstanceOf(Uint8Array);
+    expect(attr.value.length).toBe(8); // 2 active dots × RGBA
+    // dot0 value 20 → t=0.5 → midway blue↔red; dot1 value 2 → t=0.05 → near blue.
+    expect(Array.from(attr.value.slice(0, 4))).toEqual([127, 0, 127, 255]);
+    expect(Array.from(attr.value.slice(4, 8))).toEqual([12, 0, 242, 255]);
+  });
+
+  it('uses the finite neighbor when one segment endpoint value is NaN (seed vertex)', () => {
+    // corridor0 seed vertex NaN, end 30 → head value falls to 30 (not NaN),
+    // so the dot is colored, never flickering to the fallback mid-flight.
+    const [sub] = renderGrad(headsLayer(gradientProps), [NaN, 30, NaN, 30]);
+    const v = sub.props.data.attributes.getFillColor.value;
+    // value 30 → t=0.75 → R=191, B=63.
+    expect(Array.from(v.slice(0, 4))).toEqual([191, 0, 63, 255]);
+  });
+
+  it('falls back to constant headColor for a fully-NaN value (outside the field)', () => {
+    const head = [10, 20, 30, 200];
+    const [sub] = renderGrad(
+      headsLayer({ ...gradientProps, headColor: head }),
+      [NaN, NaN, NaN, NaN],
+    );
+    const v = sub.props.data.attributes.getFillColor.value;
+    expect(Array.from(v.slice(0, 4))).toEqual(head); // fallback = headColor
+  });
+
+  it('no gradient attribute when the tile lacks the vertexValues channel', () => {
+    // Gradient configured, but the archive carries no per-vertex column →
+    // constant-color path (no getFillColor attribute; the props constant wins).
+    const layer = headsLayer(gradientProps);
+    layer.state = { tiles: [twoCorridorTile()] }; // no vertexValues injected
+    const [sub] = layer.renderLayers();
+    expect(sub.props.data.attributes.getFillColor).toBeUndefined();
+    expect(sub.props.getFillColor).toEqual([253, 128, 93, 255]);
+  });
+
+  it('no gradient attribute when no ramp is supplied (constant color)', () => {
+    const [sub] = renderGrad(
+      headsLayer({ gradientProperty: 'vertexValues', gradientColorRamp: [] }),
+      [10, 30, 0, 4],
+    );
+    expect(sub.props.data.attributes.getFillColor).toBeUndefined();
   });
 });

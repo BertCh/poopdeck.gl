@@ -51,6 +51,8 @@ import {
 } from '../spatiotemporal-layer.js';
 import { NoPickingPathLayer } from '../internal/no-picking-path-layer.js';
 import { TimeFilterExtension } from '../../extensions/time-filter-extension.js';
+import { DataFilterExtension } from '../../extensions/data-filter-extension.js';
+import type { DataFilterRange } from '../../extensions/data-filter-extension.js';
 import {
   CategoryColorExtension,
   CATEGORY_PALETTE_SIZE,
@@ -70,6 +72,7 @@ import { resolveAccessorAlias } from '../../lib/accessor-alias.js';
 import type {
   ColorAccessorValue,
   NumericAccessorValue,
+  WeightAccessorValue,
 } from '../../lib/accessor-alias.js';
 import { DEFAULT_POLYGON_PALETTE } from '@poopdeck.gl/core';
 import type {
@@ -261,6 +264,73 @@ export interface _AnimatedPolygonLayerProps {
    * @default 500
    */
   fadeOutDuration?: number;
+
+  /**
+   * Time-as-height ("space-time cube") lift, in METERS of altitude per
+   * simulation millisecond — {@link TimeFilterExtension} pass-through. When
+   * non-zero every polygon vertex is raised by
+   * `(featureStartTime - timeHeightOrigin) * timeHeightScale` meters, so a
+   * flat choropleth stands up into a stack whose height encodes each feature's
+   * time. A single GPU uniform, so animating it (the flat-map ⇄ cube "squash"
+   * morph) costs nothing per frame. Pairs with {@link timeHeightOrigin}
+   * (inherited from the base props — the absolute time mapped to altitude 0).
+   *
+   * NOTE this is the WINDOW-mode lift: polygons rise by their per-feature start
+   * time, not per vertex. Gated by {@link reducedMotion} (forced to 0 when the
+   * viewer prefers reduced motion — the map stays flat).
+   * @default 0 (off — byte-identical flat render)
+   */
+  timeHeightScale?: number;
+
+  /**
+   * Honor `prefers-reduced-motion`. When `true`, motion-amplifying surfaces
+   * degrade gracefully: the {@link timeHeightScale} space-time-cube lift is
+   * forced to 0 so the polygons stay flat (no rise / no squash morph). Time
+   * playback + fades are unaffected. `false` (default) renders normally.
+   * @default false
+   */
+  reducedMotion?: boolean;
+
+  /**
+   * GPU range filter — the NAME of a baked numeric column to filter polygons
+   * by (installs {@link DataFilterExtension}). A polygon renders when its value
+   * in this column is inside {@link filterRange}, else it is hidden (or
+   * soft-faded via {@link filterSoftRange}). Composes WITH the time filter (a
+   * polygon must pass both) and the categorical fill path. The per-feature
+   * value is expanded per-vertex like the time attributes, so every vertex of a
+   * polygon shares its feature's value and the polygon filters as a whole.
+   *
+   * Accessor-alias of deck.gl's `getFilterValue`: pass a column NAME, not a
+   * function (STT tiles are binary — a function warns once and is ignored).
+   * Unset (default) ⇒ the extension is not installed: zero attribute, zero
+   * uniform, zero shader change. A categorical column can't be range-filtered
+   * in v1 (warns once).
+   * @default null
+   */
+  filterProperty?: WeightAccessorValue | null;
+
+  /**
+   * Inclusive `[min, max]` bounds for {@link filterProperty}. `null` (default)
+   * idles the filter (renders all) while keeping the column bound, so a range
+   * set later animates by uniform with no tile re-preparation. No effect unless
+   * `filterProperty` is set.
+   * @default null
+   */
+  filterRange?: DataFilterRange | null;
+
+  /**
+   * Optional soft `[min, max]` inside {@link filterRange} for a fade instead of
+   * a hard clip. No effect unless `filterProperty` + `filterRange` are set.
+   * @default null
+   */
+  filterSoftRange?: DataFilterRange | null;
+
+  /**
+   * Enable/disable the column filter without dropping the bound attribute.
+   * Effective only with `filterProperty` + a valid `filterRange`.
+   * @default true
+   */
+  filterEnabled?: boolean;
 }
 
 /** Complete props accepted by {@link AnimatedPolygonLayer}. */
@@ -422,6 +492,28 @@ export class AnimatedPolygonLayer<
     _full3d: false,
     fadeInDuration: { type: 'number', value: 500, min: 0 },
     fadeOutDuration: { type: 'number', value: 500, min: 0 },
+    // Space-time-cube lift. 0 (off) keeps the flat render byte-identical.
+    // timeHeightOrigin is inherited from SpatioTemporalLayer.defaultProps.
+    timeHeightScale: { type: 'number', value: 0 },
+    reducedMotion: false,
+    // Column range filter (DataFilterExtension). Unset ⇒ not installed.
+    // Permissive {type:'object'} descriptors: these hold a column-name string /
+    // [min,max] tuple / null, which the 'array'/'accessor' validators would
+    // reject in deck's debug mode (see the path layer).
+    filterProperty: {
+      type: 'object',
+      value: null,
+      optional: true,
+      compare: true,
+    },
+    filterRange: { type: 'object', value: null, optional: true, compare: true },
+    filterSoftRange: {
+      type: 'object',
+      value: null,
+      optional: true,
+      compare: true,
+    },
+    filterEnabled: true,
   };
 
   /** Per-tile prepared-data cache. Pruned to the live tile set each render. */
@@ -447,6 +539,16 @@ export class AnimatedPolygonLayer<
     mode: 'window',
   });
   private readonly categoryColorExtension = new CategoryColorExtension();
+  /**
+   * Singleton DataFilterExtension, composed into the sublayer extension list
+   * only when `filterProperty` is set (per-layer constant ⇒ stable list, so the
+   * shader-cache contract holds). SolidPolygonLayer's non-instanced fill has a
+   * roomy attribute budget, so it composes ALONGSIDE the time + category
+   * extensions (unlike the tight PathLayer family, which must drop one).
+   */
+  private readonly dataFilterExtension = new DataFilterExtension({
+    filterSize: 1,
+  });
 
   /** Stable getTime; preserved across renders to keep prop refs stable. */
   private readonly boundGetTime: () => number = () => this.getCurrentTime();
@@ -507,6 +609,29 @@ export class AnimatedPolygonLayer<
     );
   }
 
+  /**
+   * Resolve `filterProperty` to a baked-column NAME (accessor-alias of deck's
+   * `getFilterValue`; a function warns once and is ignored — no legacy prop, so
+   * the fallback is "no filter").
+   */
+  private filterPropertyValue(): string | undefined {
+    return resolveAccessorAlias<string | undefined>(
+      'AnimatedPolygonLayer',
+      'filterProperty',
+      this.props.filterProperty,
+      undefined,
+    );
+  }
+
+  /**
+   * Effective space-time-cube lift. `reducedMotion` forces it to 0 so the
+   * polygons stay flat for viewers who prefer reduced motion (no rise, no
+   * squash morph); otherwise the caller's `timeHeightScale` rides through.
+   */
+  private effectiveTimeHeightScale(): number {
+    return this.props.reducedMotion ? 0 : this.props.timeHeightScale;
+  }
+
   private computeLayerPropsKey(): string {
     const fillColor = this.fillColorValue();
     const elevation = this.elevationValue();
@@ -528,6 +653,21 @@ export class AnimatedPolygonLayer<
       this.props.timeWindow,
       this.props.fadeInDuration,
       this.props.fadeOutDuration,
+      // Space-time-cube lift — uniform-only, so a scale/origin/reduced-motion
+      // edit rebuilds the cached sublayers (whose props carry the values)
+      // rather than re-preparing tiles, like timeWindow above.
+      this.effectiveTimeHeightScale(),
+      this.props.timeHeightOrigin,
+      this.props.reducedMotion,
+      // Column-filter uniforms (DataFilterExtension) — a range/enabled edit is
+      // uniform-only; same rebuild-not-reprepare rationale as timeWindow.
+      Array.isArray(this.props.filterRange)
+        ? this.props.filterRange.join(',')
+        : '',
+      Array.isArray(this.props.filterSoftRange)
+        ? this.props.filterSoftRange.join(',')
+        : '',
+      this.props.filterEnabled,
       // fillColor constant branch only; categorical branch lives in `prepared`.
       Array.isArray(fillColor) ? fillColor.join(',') : '',
       // Outline subsystem — toggling any of these rebuilds the cached sublayers
@@ -635,6 +775,8 @@ export class AnimatedPolygonLayer<
     // Property-column name for a per-feature outline width (else '').
     const lineWidthProp =
       typeof lineWidthValue === 'string' ? lineWidthValue : '';
+    // Property-column name for the DataFilterExtension range filter (else '').
+    const filterProp = this.filterPropertyValue() ?? '';
     // Palette keyed by CONTENT (memoized digest), not length — matches the
     // sibling layers' stale-key fix. updateTriggers ride the key so a user
     // trigger bump re-prepares the tile.
@@ -643,7 +785,11 @@ export class AnimatedPolygonLayer<
     const mapDefault = (this.props.colorMappingDefault ?? [0, 0, 0, 0]).join(
       ',',
     );
-    const styleKey = `${fillColorProp}|${elevationProp}|${lineWidthProp}|${
+    // filterProp rides the styleKey (covers the unset↔set toggle that
+    // adds/removes the per-vertex `filterValue` buffer). The RANGE/enabled are
+    // uniform-only and live in the layerPropsKey instead.
+    const filterSig = filterProp ? `f${filterProp}` : '';
+    const styleKey = `${fillColorProp}|${elevationProp}|${lineWidthProp}|${filterSig}|${
       fillColorProp
         ? this.props.colorMapping
           ? `m${colorMappingDigest(this.props.colorMapping)}`
@@ -796,6 +942,37 @@ export class AnimatedPolygonLayer<
       }
     }
 
+    // Column range filter (DataFilterExtension). The value is per-FEATURE, but
+    // SolidPolygonLayer's non-instanced fill (and the outline PathLayer's
+    // instanced segments) consume the `filterValue` attribute PER-VERTEX — the
+    // same per-vertex contract as the time / elevation attributes above, and
+    // for the same reason (deck binds the buffer verbatim; a per-feature buffer
+    // under-sizes the draw). Every vertex of a polygon shares its feature's
+    // value, so the polygon filters as a whole. Absent column ⇒ no attribute →
+    // the sublayer idles the filter for this tile. A categorical column can't be
+    // range-filtered in v1 — warn once and skip.
+    if (filterProp) {
+      const values = binary.numericProps[filterProp];
+      if (values) {
+        attributes.filterValue = {
+          value: expandPerVertex(
+            values,
+            startIndices,
+            featureCount,
+            vertexCount,
+          ),
+          size: 1,
+        };
+      } else if (binary.categoricalProps[filterProp]) {
+        warnOnce(
+          'AnimatedPolygonLayer:filterPropertyCategorical',
+          `[AnimatedPolygonLayer] filterProperty "${filterProp}" is a categorical ` +
+            'column; v1 range-filters NUMERIC columns only. The filter is ignored ' +
+            'for tiles where the column is categorical.',
+        );
+      }
+    }
+
     const prepared: PreparedTile = {
       tileKey,
       styleKey,
@@ -848,6 +1025,14 @@ export class AnimatedPolygonLayer<
       );
     }
 
+    // Column range filter — install DataFilterExtension only when a column is
+    // named (per-layer constant ⇒ stable list). `hasFilter` gates the per-tile
+    // enable so a tile missing the column renders unfiltered. Unlike the tight
+    // PathLayer family, SolidPolygonLayer's non-instanced fill has attribute
+    // headroom, so the filter composes ALONGSIDE the time + category extensions.
+    const filterProp = this.filterPropertyValue();
+    const hasFilter = !!prepared.data.attributes.filterValue;
+
     // getSubLayerProps inheritance (opacity/pickable/visible, coordinate
     // system, highlight props, …) + user `_subLayerProps.polygons` overrides.
     // Only runs inside this cache-gated build path — never per frame.
@@ -878,11 +1063,18 @@ export class AnimatedPolygonLayer<
         : {}),
 
       // Constant extension list (cache-storm rationale — see
-      // animated-trips-layer.ts); user extensions are appended.
-      extensions: this.composeExtensions([
-        this.timeFilterExtension,
-        this.categoryColorExtension,
-      ]),
+      // animated-trips-layer.ts); user extensions are appended. The column
+      // filter is composed in only when a `filterProperty` is set (per-layer
+      // constant ⇒ the list stays stable across this layer's sublayers).
+      extensions: this.composeExtensions(
+        filterProp
+          ? [
+              this.timeFilterExtension,
+              this.categoryColorExtension,
+              this.dataFilterExtension,
+            ]
+          : [this.timeFilterExtension, this.categoryColorExtension],
+      ),
 
       // TimeFilterExtension wiring (same prop names the old polygon fork used)
       getTime: this.boundGetTime,
@@ -890,10 +1082,27 @@ export class AnimatedPolygonLayer<
       timeWindow,
       fadeInDuration: this.props.fadeInDuration,
       fadeOutDuration: this.props.fadeOutDuration,
+      // Time-as-height (space-time cube). Window mode lifts whole polygons by
+      // their start time (the per-vertex time attribute defaults to 0). Forced
+      // to 0 under reducedMotion so the map stays flat.
+      timeHeightScale: this.effectiveTimeHeightScale(),
+      timeHeightOrigin: this.props.timeHeightOrigin,
 
       // CategoryColorExtension wiring (gated by useCategoryColor)
       categoryPalette: useGpuCategory ? prepared.gpuPalette! : [],
       useCategoryColor: useGpuCategory,
+
+      // DataFilterExtension wiring (only when a filterProperty is set). The
+      // constant getFilterValue is the fallback for tiles missing the column;
+      // filterEnabled is additionally gated on THIS tile having baked it.
+      ...(filterProp
+        ? {
+            getFilterValue: 0,
+            filterEnabled: hasFilter && this.props.filterEnabled !== false,
+            filterRange: this.props.filterRange ?? null,
+            filterSoftRange: this.props.filterSoftRange ?? null,
+          }
+        : {}),
 
       // TileLayer convention: the source tile rides on the sublayer so the
       // base getPickingInfo can enrich info.tile / decode the picked polygon.
@@ -950,6 +1159,16 @@ export class AnimatedPolygonLayer<
     if (prepared.outlineWidths) {
       attributes.getWidth = { value: prepared.outlineWidths, size: 1 };
     }
+    // Reuse the fill's per-vertex `filterValue` buffer so a range-filtered
+    // polygon hides its outline in lock-step with its fill. Attribute budget:
+    // NoPickingPathLayer (12) + TimeFilterExtension (3) + this (1) = 16, right
+    // at WebGL2's guaranteed floor — links fine (see the path layer). Present
+    // only when a numeric filterProperty was baked into this tile.
+    const filterProp = this.filterPropertyValue();
+    const hasFilter = !!prepared.data.attributes.filterValue;
+    if (hasFilter) {
+      attributes.filterValue = prepared.data.attributes.filterValue;
+    }
 
     const outlineData = {
       length: prepared.data.length,
@@ -973,14 +1192,35 @@ export class AnimatedPolygonLayer<
       miterLimit: this.props.lineMiterLimit,
       dashJustified: this.props.lineDashJustified,
 
-      // Time filtering only (constant color → no CategoryColorExtension), which
-      // also keeps the PathLayer attribute count within the WebGL2 minimum.
-      extensions: this.composeExtensions([this.timeFilterExtension]),
+      // Time filtering (constant color → no CategoryColorExtension, which keeps
+      // the PathLayer attribute count within the WebGL2 minimum). The column
+      // filter is composed in alongside it only when a `filterProperty` is set
+      // — net 16 attributes, still at the floor.
+      extensions: this.composeExtensions(
+        filterProp
+          ? [this.timeFilterExtension, this.dataFilterExtension]
+          : [this.timeFilterExtension],
+      ),
       getTime: this.boundGetTime,
       timeOffset: prepared.timeOffset,
       timeWindow: this.props.timeWindow,
       fadeInDuration: this.props.fadeInDuration,
       fadeOutDuration: this.props.fadeOutDuration,
+      // Lift the outline with the fill so the space-time cube's ring strokes
+      // ride at the same altitude (0 under reducedMotion).
+      timeHeightScale: this.effectiveTimeHeightScale(),
+      timeHeightOrigin: this.props.timeHeightOrigin,
+
+      // DataFilterExtension wiring — mirrors the fill so the stroke clips/fades
+      // with it. filterEnabled is gated on THIS tile having baked the column.
+      ...(filterProp
+        ? {
+            getFilterValue: 0,
+            filterEnabled: hasFilter && this.props.filterEnabled !== false,
+            filterRange: this.props.filterRange ?? null,
+            filterSoftRange: this.props.filterSoftRange ?? null,
+          }
+        : {}),
 
       // Outlines are not pick targets; the fill enriches picking.
       pickable: false,

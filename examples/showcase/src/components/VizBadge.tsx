@@ -232,6 +232,9 @@ export const VIZ_REGISTRY: Record<DatasetType, VizDef> = {
   heatmap: { label: 'Heatmap', color: '#C2671B', icon: HeatmapGlyph },
   lightning: { label: 'Lightning', color: '#5566D6', icon: LightningGlyph },
   weather: { label: 'Weather suite', color: '#3A6EA5', icon: WeatherGlyph },
+  // storm4d shares the weather glyph (it's the depth-first sibling of the
+  // suite) and differs by hue — same precedent as radar/polygon.
+  storm4d: { label: 'Storm 4D', color: '#28527A', icon: WeatherGlyph },
   polygon: { label: 'Polygons', color: '#7A4DB3', icon: PolygonGlyph },
   summary: { label: 'H3 summary', color: '#A93C76', icon: SummaryGlyph },
   arc: { label: 'Arcs', color: '#3F54B6', icon: ArcGlyph },

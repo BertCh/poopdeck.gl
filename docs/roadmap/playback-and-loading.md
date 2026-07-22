@@ -174,6 +174,39 @@ forever-deadlock when a queued page-group was superseded; silent
 throughput-doubling (the per-archive cap became a no-op); an auto-speed fix inert
 on the live no-`getThroughput` path. All fixed + regression-tested.
 
+### 6.1 Run-ahead fairness + dynamic weights (2026-07-22 — Phase 2 finished)
+
+Multi-dataset composites exposed the dual of the min-gate: the clock holds at
+the required LAGGARD (MSE intersection, §4), so every sim-ms a leader buffers
+past that intersection is dead weight — it cannot render before the laggard
+catches up, its fetches contend with the laggard's in the shared DRR scheduler,
+and under memory pressure it feeds the loader's cache eviction until the
+eviction lands on a protected playhead window ("flashing tiles"). Shaka's rule
+generalizes: cap any track ~1 segment past the neediest. The governor now
+applies, on its existing probe cadences (playing tick-probe + gated eval — no
+new timer, one probe per source per evaluation shared with the frontier fold):
+
+- **Run-ahead cap** — every source that is not (one of) the laggard(s) gets
+  `setPrefetchRunAheadLimit(laggard + slack)`, the laggard(s) get `null`;
+  `slack = max(runwayToleranceMs, 3000 wall-ms) × |speed|`. Optional sources
+  are capped too (one ahead of the required laggard is pure dead weight; one
+  behind is unaffected — the cap only limits run-AHEAD). Loaders may keep an
+  internal safety floor; degrading the prefetch horizon under pressure beats
+  evicting the protected window.
+- **Dynamic weights** — incomplete required sources get
+  `base × clamp((slack + laggard) / (slack + runway_i), 0.25, 4)`: the laggard
+  lands exactly on base, leaders shed share, bounded both ways. DRR is
+  work-conserving, so this only matters while leaders still hold legitimate
+  queued work (e.g. refetching near-window evictions) — the cap does most of
+  the work. Optional sources stay at base.
+
+Writes are throttled (>20% change or a to/from-null transition); caps clear
+and base weights restore whenever fairness deactivates (pause, `setSource`,
+dropping under 2 sources, removing the laggard, dispose, or no incomplete
+required source left). Kill switch: `multiSourceFairness: false` (default
+true). Both `BufferSource` hooks are optional — loaders without them are
+simply not steered.
+
 ## 7. Follow-ups — triaged 2026-07-01
 
 **The one open item — multi-source browser-verify (user-run):** (1) a

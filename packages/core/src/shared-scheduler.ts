@@ -125,6 +125,20 @@ export function configureSharedScheduler(
   }
 }
 
+/**
+ * Re-weight one source's fair share on the process-shared scheduler, effective
+ * immediately for work already queued under that `sourceId` (see {@link
+ * SharedRequestScheduler.setSourceWeight}). No-op when the singleton hasn't
+ * been created yet — there is no queued work to re-share, and the source's
+ * next request pins the new weight at enqueue.
+ */
+export function setSharedSchedulerSourceWeight(
+  sourceId: string,
+  weight: number,
+): void {
+  state.scheduler?.setSourceWeight(sourceId, weight);
+}
+
 /** Whether the kill-switch is on (archives route through the shared scheduler). Default `true`. */
 export function isSharedSchedulingEnabled(): boolean {
   return state.enabled;

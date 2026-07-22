@@ -6,7 +6,12 @@ import {
   type LayerKind,
   type ConformanceEvidence,
 } from '@poopdeck.gl/core/capabilities';
-import { threeBackend } from '../src/backend-descriptor';
+import {
+  threeBackend,
+  threeLayerFeatures,
+  LAYER_FEATURES,
+  type LayerFeature,
+} from '../src/backend-descriptor';
 import * as three from '../src/index';
 
 /**
@@ -152,5 +157,57 @@ describe('threeBackend descriptor — structural conformance gate', () => {
         `mode "${mode}" expects export "${name}"`,
       ).toBe('function');
     }
+  });
+
+  /* ────────────────────────────────────────────────────────────────────────
+   * Layer-feature matrix (2026-07 kind-parity campaign).
+   *
+   * deck (the reference backend) gained per-layer prop families. three does NOT
+   * implement any of them yet — the honest declaration is a DELIBERATE typed
+   * fallback + reason per feature, not a silent no-op. This gate proves the
+   * three table is exhaustive over the frozen vocabulary and that every entry
+   * degrades explicitly, and cross-checks the one entry that must agree with a
+   * coarse capability (timeHeightScale ⇄ capabilities.timeAsHeight).
+   * ──────────────────────────────────────────────────────────────────────── */
+  it('threeLayerFeatures declares every LAYER_FEATURE exactly once, no strays', () => {
+    for (const feature of LAYER_FEATURES) {
+      expect(
+        threeLayerFeatures[feature],
+        `threeLayerFeatures.${feature}`,
+      ).toBeDefined();
+    }
+    expect(Object.keys(threeLayerFeatures).sort()).toEqual(
+      [...LAYER_FEATURES].sort(),
+    );
+  });
+
+  it.each(LAYER_FEATURES)(
+    'feature "%s" is a deliberate typed fallback (three ports none yet)',
+    (feature: LayerFeature) => {
+      const support = threeLayerFeatures[feature];
+      expect(support.kinds.length, `${feature}.kinds`).toBeGreaterThan(0);
+      // three implements none of the campaign features today; if one is ever
+      // ported, flip supported:true here AND wire its structural proof.
+      expect(support.supported, `${feature}.supported`).toBe(false);
+      if (!support.supported) {
+        expect(support.fallback, `${feature}.fallback`).toBeTruthy();
+        expect(support.reason, `${feature}.reason`).toBeTruthy();
+        // Every kind a fallback names must be a real LayerKind the descriptor
+        // knows about (so the degrade target is meaningful, not a typo).
+        for (const kind of support.kinds) {
+          expect(
+            threeBackend.layerKinds[kind],
+            `feature "${feature}" names unknown kind "${kind}"`,
+          ).toBeDefined();
+        }
+      }
+    },
+  );
+
+  it('timeHeightScale fallback is consistent with capabilities.timeAsHeight', () => {
+    const support = threeLayerFeatures.timeHeightScale;
+    // The space-time-cube lift is a rendering of time-as-height; the two claims
+    // must never disagree.
+    expect(support.supported).toBe(threeBackend.capabilities.timeAsHeight);
   });
 });

@@ -2011,6 +2011,303 @@ describe('PlaybackGovernor', () => {
     });
   });
 
+  describe('run-ahead fairness + dynamic weights (Phase 2 — §5–6)', () => {
+    /**
+     * Mock source carrying the two Phase 2 hooks
+     * (setPrefetchRunAheadLimit/setBandwidthWeight), each recorded per call
+     * so cap/weight traffic — and the write THROTTLE — are observable.
+     */
+    function makeFairSource() {
+      const state = {
+        runwaySimMs: 0,
+        complete: false,
+        bytesPending: 0,
+        etaMs: null as number | null,
+        capCalls: [] as Array<number | null>,
+        weightCalls: [] as number[],
+      };
+      const source: BufferSource = {
+        getBufferedRunway(_time, _direction, horizonSimMs) {
+          return {
+            simMs: state.runwaySimMs,
+            bytesPending: state.bytesPending,
+            horizonSimMs: horizonSimMs ?? state.runwaySimMs,
+            complete: state.complete,
+          };
+        },
+        getBufferedRanges() {
+          return [];
+        },
+        estimateCost() {
+          return { bytes: 0, tiles: 0 };
+        },
+        estimateTimeToReadyMs() {
+          return state.etaMs;
+        },
+        flushPrefetch() {},
+        setPrefetchRunAheadLimit(simMs) {
+          state.capCalls.push(simMs);
+        },
+        setBandwidthWeight(weight) {
+          state.weightCalls.push(weight);
+        },
+      };
+      return { source, state };
+    }
+
+    // Defaults throughout: speed 10, runwayToleranceMs 200 → slack =
+    // max(200, RUN_AHEAD_SLACK_WALL_MS 3000) × 10 = 30_000 sim-ms.
+
+    it('caps the leader at laggard + slack, frees the laggard, and sheds the leader weight per formula', () => {
+      const leader = makeFairSource();
+      const laggard = makeFairSource();
+      leader.state.runwaySimMs = 200_000;
+      laggard.state.runwaySimMs = 50_000; // above the 20_000 gate → plays
+      const g = makeGovernor();
+      g.addSource('leader', leader.source, { required: true });
+      g.addSource('laggard', laggard.source, { required: true });
+
+      g.requestPlay();
+      expect(g.state).toBe('playing');
+      // cap = laggard 50_000 + slack 30_000; the laggard itself runs free.
+      expect(leader.state.capCalls).toEqual([80_000]);
+      expect(laggard.state.capCalls).toEqual([null]);
+      // weight_leader = base 1 × clamp((30k + 50k) / (30k + 200k), 0.25, 4).
+      expect(leader.state.weightCalls).toHaveLength(1);
+      expect(leader.state.weightCalls[0]).toBeCloseTo(80_000 / 230_000);
+      // The laggard lands exactly on base — never written (base IS current).
+      expect(laggard.state.weightCalls).toEqual([]);
+    });
+
+    it('an OPTIONAL source ahead of the required laggard is capped but still never gates the clock', () => {
+      const required = makeFairSource();
+      const overlay = makeFairSource();
+      required.state.runwaySimMs = 50_000; // the laggard — and the only gate
+      overlay.state.runwaySimMs = 200_000; // optional, far ahead: dead weight
+      const g = makeGovernor();
+      g.addSource('field', required.source, { required: true });
+      g.addSource('overlay', overlay.source, { required: false });
+
+      g.requestPlay();
+      expect(g.state).toBe('playing'); // required ≥ gate; the overlay never gated
+      // The overlay is capped at the required laggard's frontier + slack…
+      expect(overlay.state.capCalls).toEqual([80_000]);
+      expect(required.state.capCalls).toEqual([null]);
+      // …but its weight stays base (optional sources never shed).
+      expect(overlay.state.weightCalls).toEqual([]);
+
+      // required:false semantics unchanged: the overlay draining to zero
+      // never stalls the clock (a capped source behind the laggard is also
+      // unaffected — the cap only limits run-AHEAD).
+      overlay.state.runwaySimMs = 0;
+      g.notifyBufferChange(runway(0));
+      expect(g.state).toBe('playing');
+      expect(tc.isPlaying()).toBe(true);
+    });
+
+    it('throttles writes: unchanged runways re-send nothing; >20% cap moves re-send', () => {
+      const leader = makeFairSource();
+      const laggard = makeFairSource();
+      leader.state.runwaySimMs = 200_000;
+      laggard.state.runwaySimMs = 50_000;
+      const g = makeGovernor();
+      g.addSource('leader', leader.source, { required: true });
+      g.addSource('laggard', laggard.source, { required: true });
+      g.requestPlay();
+      expect(leader.state.capCalls).toEqual([80_000]);
+      expect(leader.state.weightCalls).toHaveLength(1);
+
+      // Identical runways probed again (buffer events while playing) → memo hit.
+      g.notifyBufferChange(runway(50_000));
+      g.notifyBufferChange(runway(50_000));
+      expect(leader.state.capCalls).toEqual([80_000]);
+      expect(laggard.state.capCalls).toEqual([null]); // null never re-broadcast
+      expect(leader.state.weightCalls).toHaveLength(1);
+
+      // A small laggard advance (cap 80_000 → 82_000, +2.5% ≤ 20%) is jitter.
+      laggard.state.runwaySimMs = 52_000;
+      g.notifyBufferChange(runway(52_000));
+      expect(leader.state.capCalls).toEqual([80_000]);
+
+      // A real advance (cap → 120_000, +50% > 20%) re-sends.
+      laggard.state.runwaySimMs = 90_000;
+      g.notifyBufferChange(runway(90_000));
+      expect(leader.state.capCalls).toEqual([80_000, 120_000]);
+    });
+
+    it('multiSourceFairness: false disables both hooks entirely (kill switch)', () => {
+      const leader = makeFairSource();
+      const laggard = makeFairSource();
+      leader.state.runwaySimMs = 200_000;
+      laggard.state.runwaySimMs = 50_000;
+      const g = makeGovernor({ multiSourceFairness: false });
+      g.addSource('leader', leader.source, { required: true });
+      g.addSource('laggard', laggard.source, { required: true });
+      g.requestPlay();
+      expect(g.state).toBe('playing'); // gating itself is untouched
+      g.notifyBufferChange(runway(50_000));
+      g.requestPause();
+      expect(leader.state.capCalls).toEqual([]);
+      expect(laggard.state.capCalls).toEqual([]);
+      expect(leader.state.weightCalls).toEqual([]);
+      expect(laggard.state.weightCalls).toEqual([]);
+    });
+
+    it('deactivation on pause clears leader caps to null and restores base weights', () => {
+      const leader = makeFairSource();
+      const laggard = makeFairSource();
+      leader.state.runwaySimMs = 200_000;
+      laggard.state.runwaySimMs = 50_000;
+      const g = makeGovernor();
+      g.addSource('leader', leader.source, { required: true });
+      g.addSource('laggard', laggard.source, { required: true });
+      g.requestPlay();
+      expect(leader.state.capCalls).toEqual([80_000]);
+
+      g.requestPause();
+      // The leader's cap lifts and its base weight is restored; the laggard
+      // (already uncapped, already at base) hears nothing further.
+      expect(leader.state.capCalls).toEqual([80_000, null]);
+      expect(leader.state.weightCalls.at(-1)).toBe(1);
+      expect(laggard.state.capCalls).toEqual([null]);
+      expect(laggard.state.weightCalls).toEqual([]);
+    });
+
+    it('removing the LAGGARD deactivates fairness — peers shed their stale caps', () => {
+      const leader = makeFairSource();
+      const laggard = makeFairSource();
+      leader.state.runwaySimMs = 200_000;
+      laggard.state.runwaySimMs = 50_000;
+      const g = makeGovernor();
+      g.addSource('leader', leader.source, { required: true });
+      g.addSource('laggard', laggard.source, { required: true });
+      g.requestPlay();
+      expect(leader.state.capCalls).toEqual([80_000]);
+
+      g.removeSource('laggard');
+      // The cap pinned to the departed laggard's floor is lifted; with one
+      // source left fairness stays down (no self-capping).
+      expect(leader.state.capCalls).toEqual([80_000, null]);
+      expect(leader.state.weightCalls.at(-1)).toBe(1);
+    });
+
+    it('applies on the GATED eval cadence too (leaders capped while a laggard buffers)', () => {
+      const leader = makeFairSource();
+      const laggard = makeFairSource();
+      leader.state.runwaySimMs = 200_000;
+      laggard.state.runwaySimMs = 0; // holds the start gate
+      const g = makeGovernor();
+      g.addSource('leader', leader.source, { required: true });
+      g.addSource('laggard', laggard.source, { required: true });
+
+      g.requestPlay();
+      expect(g.state).toBe('starting');
+      // The gate's own immediate evaluation already capped the leader at
+      // laggard 0 + slack 30_000 — while frozen, the leader must not keep
+      // extending runway the laggard's refill then competes with.
+      expect(leader.state.capCalls).toEqual([30_000]);
+      expect(laggard.state.capCalls).toEqual([null]);
+
+      // The laggard refills past the gate on the next eval tick → playing,
+      // and the cap tracks the new floor (50_000 + 30_000, a >20% move).
+      laggard.state.runwaySimMs = 50_000;
+      vi.advanceTimersByTime(250);
+      expect(g.state).toBe('playing');
+      expect(leader.state.capCalls).toEqual([30_000, 80_000]);
+    });
+
+    it('fairness never engages for a single source or an all-complete required set', () => {
+      const solo = makeFairSource();
+      solo.state.runwaySimMs = 200_000;
+      const g = makeGovernor();
+      g.addSource('solo', solo.source, { required: true });
+      g.requestPlay();
+      expect(g.state).toBe('playing');
+      g.notifyBufferChange(runway(200_000));
+      expect(solo.state.capCalls).toEqual([]); // <2 sources → never capped
+      expect(solo.state.weightCalls).toEqual([]);
+
+      // Second source, but every required source is COMPLETE → no laggard →
+      // fairness stays down (nothing left to be fair about).
+      const peer = makeFairSource();
+      peer.state.runwaySimMs = 5;
+      peer.state.complete = true;
+      solo.state.complete = true;
+      g.addSource('peer', peer.source, { required: true });
+      g.notifyBufferChange(runway(5, true));
+      expect(solo.state.capCalls).toEqual([]);
+      expect(peer.state.capCalls).toEqual([]);
+    });
+
+    it('laggard identity has hysteresis: a near-tied peer stays co-laggard until it clears the EXIT band', () => {
+      const a = makeFairSource();
+      const b = makeFairSource();
+      a.state.runwaySimMs = 50_000;
+      b.state.runwaySimMs = 56_000; // within ENTER band (0.25 × 30_000 = 7_500)
+      const g = makeGovernor();
+      g.addSource('a', a.source, { required: true });
+      g.addSource('b', b.source, { required: true });
+      g.requestPlay();
+      // Both are co-laggards → both run free; neither is capped.
+      expect(a.state.capCalls).toEqual([null]);
+      expect(b.state.capCalls).toEqual([null]);
+
+      // b creeps ahead but stays inside the EXIT band (0.5 × 30_000 =
+      // 15_000): membership is sticky, no cap flap.
+      b.state.runwaySimMs = 60_000;
+      g.notifyBufferChange(runway(50_000));
+      expect(b.state.capCalls).toEqual([null]);
+
+      // Clearing the EXIT band finally reclassifies b as a leader.
+      b.state.runwaySimMs = 70_000;
+      g.notifyBufferChange(runway(50_000));
+      expect(b.state.capCalls).toEqual([null, 80_000]);
+      expect(a.state.capCalls).toEqual([null]); // the true laggard never flapped
+    });
+
+    it('addSource replacing an id drops its throttle memos — the replacement is re-capped, not silently free', () => {
+      const leader = makeFairSource();
+      const laggard = makeFairSource();
+      leader.state.runwaySimMs = 200_000;
+      laggard.state.runwaySimMs = 50_000;
+      const g = makeGovernor();
+      g.addSource('leader', leader.source, { required: true });
+      g.addSource('laggard', laggard.source, { required: true });
+      g.requestPlay();
+      expect(leader.state.capCalls).toEqual([80_000]);
+
+      // Same id, NEW source object (a layer remount swapping its tileset).
+      // Without the memo purge the write throttle would treat it as already
+      // capped at 80_000 and re-weighted, and send it nothing.
+      const replacement = makeFairSource();
+      replacement.state.runwaySimMs = 200_000;
+      g.addSource('leader', replacement.source, { required: true });
+      g.notifyBufferChange(runway(50_000));
+      expect(replacement.state.capCalls).toEqual([80_000]);
+      expect(replacement.state.weightCalls).toHaveLength(1);
+      expect(replacement.state.weightCalls[0]).toBeCloseTo(80_000 / 230_000);
+    });
+
+    it('an EXTERNAL pause (direct timeController.pause) lifts caps exactly like requestPause', () => {
+      const leader = makeFairSource();
+      const laggard = makeFairSource();
+      leader.state.runwaySimMs = 200_000;
+      laggard.state.runwaySimMs = 50_000;
+      const g = makeGovernor();
+      g.addSource('leader', leader.source, { required: true });
+      g.addSource('laggard', laggard.source, { required: true });
+      g.requestPlay();
+      expect(leader.state.capCalls).toEqual([80_000]);
+
+      // Every non-looping range-end clamp routes through this path; a parked
+      // demo must not keep its loaders capped and de-weighted indefinitely.
+      tc.pause();
+      expect(g.state).toBe('idle');
+      expect(leader.state.capCalls).toEqual([80_000, null]);
+      expect(leader.state.weightCalls.at(-1)).toBe(1);
+    });
+  });
+
   it('on() returns an unsubscribe function', () => {
     const { source, state } = makeSource();
     state.runwaySimMs = 100_000;

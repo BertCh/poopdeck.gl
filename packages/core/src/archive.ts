@@ -63,6 +63,7 @@ import { forEachBufferView } from './tile-transferables.js';
 import {
   getSharedScheduler,
   isSharedSchedulingEnabled,
+  setSharedSchedulerSourceWeight,
 } from './shared-scheduler.js';
 import {
   createCancellationError,
@@ -1256,6 +1257,25 @@ export class STTArchive {
    */
   getThroughputEstimate(): ThroughputEstimate {
     return this.throughput.getEstimate();
+  }
+
+  /**
+   * Update this archive's fair-share weight in the process-shared request
+   * scheduler (see `ArchiveOptions.schedulerWeight`). Future range-group
+   * fetches enqueue with the new weight, AND work already queued under this
+   * archive's `sourceId` is re-shared immediately (the scheduler deliberately
+   * overrides its first-weight-wins pin), so a governor can re-balance
+   * bandwidth mid-playback without waiting for the queue to drain.
+   * Non-finite / non-positive weights are ignored (same guard as the option).
+   */
+  setSchedulerWeight(weight: number): void {
+    if (
+      !(typeof weight === 'number' && Number.isFinite(weight) && weight > 0)
+    ) {
+      return;
+    }
+    this.schedulerWeight = weight;
+    setSharedSchedulerSourceWeight(this.url, weight);
   }
 
   /**

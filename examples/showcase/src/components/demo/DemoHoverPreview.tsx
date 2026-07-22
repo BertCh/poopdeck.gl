@@ -10,6 +10,7 @@ import { _GlobeView as GlobeView } from '@deck.gl/core';
 import { HoverPreview } from '@poopdeck.gl/react/hover-preview';
 import type { Dataset } from '../../types';
 import { buildDemoLayers } from './buildDemoLayers';
+import { useReducedMotion } from '../../lib/reducedMotion';
 import {
   clampPreviewPitch,
   fitPreviewSize,
@@ -43,6 +44,9 @@ const DemoHoverPreview: React.FC<DemoHoverPreviewProps> = ({
   maxHeight = 180,
 }) => {
   const useGlobe = dataset.useGlobe ?? false;
+  // Same reduced-motion preference the live viewer threads, so the preview's
+  // motion-glide point path degrades in lock-step with the main render.
+  const reducedMotion = useReducedMotion();
 
   // Globe view is stable for the dataset's lifetime — recreating it each render
   // would churn deck's view tree.
@@ -83,6 +87,7 @@ const DemoHoverPreview: React.FC<DemoHoverPreviewProps> = ({
           timeController: controller,
           useGlobe,
           timeHeightScale: 0,
+          reducedMotion,
         })
       }
       viewState={viewState}

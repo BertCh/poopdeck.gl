@@ -99,3 +99,107 @@ export const deckBackend: BackendDescriptor = {
   interleavedBasemap: true,
   basemapProjection: 'mercator',
 };
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * Layer-feature matrix (2026-07 kind-parity campaign)
+ *
+ * Beyond the coarse LayerKind / Capability axes, the campaign added per-layer
+ * PROP FAMILIES (glide interpolation, icon wake, GPU DataFilter, space-time
+ * height, stable categorical colour, progressive path reveal). Those are finer
+ * than a whole layer kind and don't map onto a single cross-cutting Capability,
+ * so they get their own frozen vocabulary here — declared alongside the
+ * descriptor (not inside the core `BackendDescriptor` shape, which is owned by
+ * `@poopdeck.gl/core`). A backend either implements a feature or must degrade;
+ * the paired conformance gate proves every deck claim against the real
+ * `static defaultProps` of the backing layer class, so this table cannot drift.
+ * ────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * The per-layer prop families a backend either implements or degrades. Frozen
+ * `as const` (same idiom as {@link LAYER_KINDS}): renaming a token is a `tsc`
+ * break everywhere the feature is declared.
+ */
+export const LAYER_FEATURES = [
+  'motionInterpolation',
+  'iconWake',
+  'dataFilter',
+  'timeHeightScale',
+  'stableColorMapping',
+  'pathReveal',
+] as const;
+export type LayerFeature = (typeof LAYER_FEATURES)[number];
+
+/**
+ * Whether a backend implements a {@link LayerFeature}, over which layer kinds,
+ * and — when it does — the single canonical `defaultProps` key that proves it
+ * (the conformance gate asserts `prop in LayerClass.defaultProps`). When a
+ * backend does NOT implement it, a deliberate typed `fallback` + `reason`
+ * records how it degrades instead of silently no-op'ing.
+ */
+export type LayerFeatureSupport =
+  | {
+      supported: true;
+      /** Layer kinds this feature covers; each must itself be a supported kind. */
+      kinds: readonly LayerKind[];
+      /** Canonical `defaultProps` key present on every covered layer class. */
+      prop: string;
+      summary: string;
+    }
+  | {
+      supported: false;
+      kinds: readonly LayerKind[];
+      /** How the backend degrades (what the caller sees instead). */
+      fallback: string;
+      reason: string;
+    };
+
+/**
+ * deck is the reference backend: it implements every campaign feature. Each
+ * entry names the exact `defaultProps` key the conformance test proves against
+ * the real exported layer class, so a dropped/renamed prop fails the gate.
+ */
+export const deckLayerFeatures: Readonly<
+  Record<LayerFeature, LayerFeatureSupport>
+> = {
+  motionInterpolation: {
+    supported: true,
+    kinds: ['point', 'icon'],
+    prop: 'interpolate',
+    summary:
+      'CPU per-entity glide across tile seams (interpolate/idProperty/maxInterpolationGap)',
+  },
+  iconWake: {
+    supported: true,
+    kinds: ['icon'],
+    prop: 'wakeLength',
+    summary:
+      'trailing alpha wake behind moving icons (wakeLength/wakeTailScale)',
+  },
+  dataFilter: {
+    supported: true,
+    kinds: ['arc', 'line', 'trips', 'column', 'polygon', 'icon'],
+    prop: 'filterProperty',
+    summary:
+      'GPU DataFilterExtension range filter (filterProperty/filterRange/filterSoftRange/filterEnabled)',
+  },
+  timeHeightScale: {
+    supported: true,
+    kinds: ['column', 'polygon'],
+    prop: 'timeHeightScale',
+    summary: 'space-time-cube vertical lift by feature time',
+  },
+  stableColorMapping: {
+    supported: true,
+    kinds: ['arc', 'line', 'column', 'icon'],
+    prop: 'colorMapping',
+    summary:
+      'stable per-category colour map across tiles (colorMapping/colorMappingDefault)',
+  },
+  pathReveal: {
+    supported: true,
+    kinds: ['path'],
+    prop: 'revealTrail',
+    summary:
+      'progressive draw-on reveal along a path (revealTrail/revealDuration/fadeTrail)',
+  },
+};

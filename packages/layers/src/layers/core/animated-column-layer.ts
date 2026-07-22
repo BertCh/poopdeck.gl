@@ -32,9 +32,11 @@
  *
  * Categorical fill colors lift to the GPU via CategoryColorExtension when
  * `fillColor`/`getFillColor` names a categorical column — the per-feature
- * `instanceCategoryIndex` path, identical to AnimatedPointLayer. No colorMapping
- * CPU-expansion path here (columns are a styling-light primitive; pass a numeric
- * column to drive height, a categorical column to drive color).
+ * `instanceCategoryIndex` path, identical to AnimatedPointLayer. A `colorMapping`
+ * (explicit `{ category: Color }`) instead CPU-expands a stable per-feature RGBA
+ * buffer (a category string can't hash to a palette slot on the GPU), matching
+ * AnimatedPointLayer. A baked numeric column can also drive a GPU
+ * DataFilterExtension range filter (`filterProperty`/`filterRange`).
  *
  * There is no cumulative-slab path: columns are an overview/aggregate primitive
  * (a few thousand bars at low zoom), so the per-tile-sublayer count never climbs
@@ -54,6 +56,8 @@ import {
   SpatioTemporalLayerProps,
 } from '../spatiotemporal-layer.js';
 import { TimeFilterExtension } from '../../extensions/time-filter-extension.js';
+import { DataFilterExtension } from '../../extensions/data-filter-extension.js';
+import type { DataFilterRange } from '../../extensions/data-filter-extension.js';
 import {
   CategoryColorExtension,
   CATEGORY_PALETTE_SIZE,
@@ -64,6 +68,7 @@ import { emit } from '../../lib/telemetry.js';
 import { warnOnce } from '../../lib/log.js';
 import {
   colorListDigest,
+  colorMappingDigest,
   inheritedPropsDigest,
   structuralDigest,
   updateTriggersDigest,
@@ -72,7 +77,10 @@ import { resolveAccessorAlias } from '../../lib/accessor-alias.js';
 import type {
   ColorAccessorValue,
   NumericAccessorValue,
+  WeightAccessorValue,
 } from '../../lib/accessor-alias.js';
+import { expandCategoricalColors as coreExpandCategoricalColors } from '@poopdeck.gl/core/style';
+import type { RGBA255 } from '@poopdeck.gl/core/style';
 import type {
   Tile,
   Layer as TileLayer,
@@ -201,6 +209,67 @@ export interface _AnimatedColumnLayerProps {
   colorPalette?: Color[];
 
   /**
+   * Stable per-category color map for the categorical `fillColor` path: an
+   * explicit `{ categoryValue: Color }` lookup keyed by the category STRING, so
+   * a given category always draws the SAME color regardless of its index within
+   * a tile (the index-driven {@link colorPalette} path can assign different
+   * colors to the same category across tiles). When set it takes precedence
+   * over `colorPalette` and is CPU-expanded into a per-feature `getFillColor`
+   * buffer via the shared categorical-color helper — a category string can't be
+   * hashed to a palette slot on the GPU, so this leaves the GPU
+   * CategoryColorExtension path idle. Unknown categories fall back to
+   * {@link colorMappingDefault}. No effect when `fillColor` names a constant.
+   * @default null
+   */
+  colorMapping?: Record<string, Color> | null;
+
+  /**
+   * Fallback color for categories absent from {@link colorMapping}.
+   * @default [0, 0, 0, 0] (transparent)
+   */
+  colorMappingDefault?: Color;
+
+  /**
+   * GPU range filter — the NAME of a baked numeric column to filter columns by
+   * (installs {@link DataFilterExtension}). Columns whose value in this column
+   * falls inside {@link filterRange} render; the rest are hidden (or soft-faded
+   * via {@link filterSoftRange}). Composes WITH the time filter — a column must
+   * pass both the time window and the column range.
+   *
+   * Accessor-alias of deck.gl's `getFilterValue`: pass a column NAME, not a
+   * function (STT tiles are binary — a function warns once and is ignored).
+   * Unset (the default) ⇒ the extension is not installed at all: zero
+   * attribute, zero uniform, zero shader change. A tile that lacks the named
+   * column renders unfiltered (the filter idles for that tile).
+   * @default null
+   */
+  filterProperty?: WeightAccessorValue | null;
+
+  /**
+   * Inclusive `[min, max]` bounds for {@link filterProperty}. `null` (default)
+   * means "no range yet" — the column is still bound, so a range set later
+   * animates purely by uniform with no tile re-preparation. No effect unless
+   * `filterProperty` is set.
+   * @default null
+   */
+  filterRange?: DataFilterRange | null;
+
+  /**
+   * Optional soft `[min, max]` inside {@link filterRange}: columns between the
+   * soft and hard bounds fade rather than hard-clip. No effect unless
+   * `filterProperty` + `filterRange` are set.
+   * @default null
+   */
+  filterSoftRange?: DataFilterRange | null;
+
+  /**
+   * Enable/disable the column filter without dropping the bound attribute.
+   * Effective only when `filterProperty` + a valid `filterRange` are set.
+   * @default true
+   */
+  filterEnabled?: boolean;
+
+  /**
    * Outline stroke color (constant) — used when `stroked` is true.
    * @default [0, 0, 0, 255]
    */
@@ -275,6 +344,16 @@ export interface _AnimatedColumnLayerProps {
    * @default 300
    */
   fadeOutDuration?: number;
+
+  /**
+   * Honor `prefers-reduced-motion`. When `true`, motion-amplifying surfaces
+   * degrade gracefully: the space-time-cube lift (`timeHeightScale`, inherited
+   * from the base props) is forced to 0 so the columns stay at their base
+   * altitude — no rise, no flat↔cube squash morph. Time playback + fades are
+   * unaffected. `false` (default) renders normally.
+   * @default false
+   */
+  reducedMotion?: boolean;
 }
 
 /** Complete props accepted by {@link AnimatedColumnLayer}. */
@@ -418,6 +497,19 @@ export class AnimatedColumnLayer<
     },
     elevationScale: { type: 'number', value: 1, min: 0 },
     colorPalette: { type: 'array', value: DEFAULT_PALETTE, compare: true },
+    // Stable per-category color map (CPU-expanded) + its unknown-category
+    // fallback. Permissive {type:'object'} descriptor: holds a string→Color
+    // record OR null (rejected by 'object' validation only in some deck builds,
+    // but null is the documented default → keep it permissive/optional).
+    colorMapping: {
+      type: 'object',
+      value: null,
+      optional: true,
+      compare: true,
+    },
+    // Fallback color must be defined (never explicit-undefined) so its absence
+    // resolves to fully-transparent, matching AnimatedPointLayer.
+    colorMappingDefault: { type: 'color', value: [0, 0, 0, 0] },
     lineColor: { type: 'color', value: [0, 0, 0, 255] },
     lineWidth: { type: 'number', value: 1, min: 0 },
     lineWidthUnits: 'meters',
@@ -435,6 +527,27 @@ export class AnimatedColumnLayer<
     // Fade ramps, forwarded to TimeFilterExtension (window mode).
     fadeInDuration: { type: 'number', value: 300, min: 0 },
     fadeOutDuration: { type: 'number', value: 300, min: 0 },
+
+    // Column range filter (DataFilterExtension). Unset ⇒ not installed.
+    // Permissive {type:'object'} descriptors: filterProperty holds a column
+    // name; the ranges hold a [min,max] tuple OR null (rejected by 'array').
+    filterProperty: {
+      type: 'object',
+      value: null,
+      optional: true,
+      compare: true,
+    },
+    filterRange: { type: 'object', value: null, optional: true, compare: true },
+    filterSoftRange: {
+      type: 'object',
+      value: null,
+      optional: true,
+      compare: true,
+    },
+    filterEnabled: true,
+    // prefers-reduced-motion gate for the space-time-cube lift. false (default)
+    // keeps the timeHeightScale render byte-identical.
+    reducedMotion: false,
   };
 
   /** Per-tile prepared-data cache. Pruned to the live tile set each render. */
@@ -470,6 +583,17 @@ export class AnimatedColumnLayer<
    * `useCategoryColor` uniform.
    */
   private readonly categoryColorExtension = new CategoryColorExtension();
+
+  /**
+   * Singleton DataFilterExtension. Composed into a sublayer's extension list
+   * ONLY when `filterProperty` is set (a per-layer constant, so the list stays
+   * stable across this layer's sublayers). Constructed unconditionally — a
+   * no-op object alloc; it contributes no attribute, uniform or shader unless
+   * actually installed.
+   */
+  private readonly dataFilterExtension = new DataFilterExtension({
+    filterSize: 1,
+  });
 
   /**
    * Stable getTime reference. Critical: deck.gl re-runs work when accessor
@@ -525,6 +649,30 @@ export class AnimatedColumnLayer<
   }
 
   /**
+   * Resolve `filterProperty` to a baked-column NAME. Accessor-alias of deck's
+   * `getFilterValue`: a function-valued prop warns once and is ignored (there
+   * is no legacy prop, so the fallback is "no filter" — `undefined`).
+   */
+  private filterPropertyValue(): string | undefined {
+    return resolveAccessorAlias<string | undefined>(
+      'AnimatedColumnLayer',
+      'filterProperty',
+      this.props.filterProperty,
+      undefined,
+    );
+  }
+
+  /**
+   * Effective space-time-cube lift. `reducedMotion` forces it to 0 so the
+   * columns stay at their base altitude for viewers who prefer reduced motion
+   * (no rise, no squash morph); otherwise the caller's `timeHeightScale`
+   * (inherited from the base props) rides through.
+   */
+  private effectiveTimeHeightScale(): number {
+    return this.props.reducedMotion ? 0 : this.props.timeHeightScale;
+  }
+
+  /**
    * Compute a digest of the layer-level props that affect every sublayer. When
    * this changes we throw away the entire sublayer cache.
    */
@@ -561,10 +709,27 @@ export class AnimatedColumnLayer<
       this.props.timeWindow,
       this.props.fadeInDuration,
       this.props.fadeOutDuration,
+      // Time-as-height (space-time cube) — forwarded to TimeFilterExtension.
+      // A uniform-only edit, so a scale/origin/reduced-motion change rebuilds
+      // the cached sublayers (whose props carry the values) rather than
+      // re-preparing tiles.
+      this.effectiveTimeHeightScale(),
+      this.props.timeHeightOrigin,
+      this.props.reducedMotion,
       // fillColor/elevation constant branches only — the property-driven path
       // lives in `prepared` and is keyed via preparedKey.
       Array.isArray(fillColor) ? fillColor.join(',') : '',
       typeof elevation === 'number' ? elevation : 0,
+      // Column-filter uniforms (DataFilterExtension). A range/enabled change is
+      // a uniform-only edit, so — like timeWindow — it rebuilds the cached
+      // sublayers (whose props carry the values) rather than re-preparing tiles.
+      Array.isArray(this.props.filterRange)
+        ? this.props.filterRange.join(',')
+        : '',
+      Array.isArray(this.props.filterSoftRange)
+        ? this.props.filterSoftRange.join(',')
+        : '',
+      this.props.filterEnabled,
     ].join('|');
   }
 
@@ -652,6 +817,16 @@ export class AnimatedColumnLayer<
     const elevation = this.elevationValue();
     const fillColorProp = typeof fillColor === 'string' ? fillColor : '';
     const elevationProp = typeof elevation === 'string' ? elevation : '';
+    // A colorMapping is CPU-expanded into the prepared getFillColor buffer, so
+    // any change to it (or its NULL/unmapped fallback) must re-prepare the tile.
+    const mapping = this.props.colorMapping;
+    const mapDefault = (this.props.colorMappingDefault ?? [0, 0, 0, 0]).join(
+      ',',
+    );
+    // Filter column NAME is baked into the `filterValue` attribute, so a change
+    // must re-prepare tiles (and, via the new preparedKey, rebuild sublayers —
+    // covering the unset↔set toggle that adds/removes DataFilterExtension).
+    const filterProp = this.filterPropertyValue() ?? '';
     // Palette identity matters only when fillColor is a column name. Digests
     // are memoized per object reference (style-digest.ts), so this stays a
     // WeakMap lookup per tile, not a re-serialization.
@@ -659,7 +834,9 @@ export class AnimatedColumnLayer<
       fillColorProp
         ? colorListDigest(this.props.colorPalette ?? DEFAULT_PALETTE)
         : 0
-    }|${updateTriggersDigest(this.props.updateTriggers)}`;
+    }|${mapping ? `m${colorMappingDigest(mapping)}` : 'g'}|d${mapDefault}|f${filterProp}|${updateTriggersDigest(
+      this.props.updateTriggers,
+    )}`;
   }
 
   /**
@@ -712,23 +889,50 @@ export class AnimatedColumnLayer<
 
     let gpuPalette: Color[] | null = null;
 
-    // Property-driven (categorical) fill color — GPU path: hand category
-    // indices to the CategoryColorExtension. No colorMapping CPU branch here.
+    // Property-driven (categorical) fill color. Two paths:
+    //  - `colorMapping` set → CPU branch: a category STRING can't be hashed to a
+    //    palette slot on the GPU, so expand the explicit map into a per-feature
+    //    RGBA `getFillColor` buffer via the shared helper. Stable per-category:
+    //    a category always draws its assigned color regardless of tile index.
+    //  - otherwise → GPU branch: hand category indices to the
+    //    CategoryColorExtension (the index-driven `colorPalette` path).
     if (fillColorProp) {
       const cat = binary.categoricalProps[fillColorProp];
       if (cat) {
-        attributes.instanceCategoryIndex = {
-          value: categoryIndicesToFloat32(
-            cat.indices,
-            count,
-            (this.props.colorPalette ?? DEFAULT_PALETTE).length,
-            'AnimatedColumnLayer',
-          ),
-          size: 1,
-        };
-        gpuPalette = appendNullCategorySlot(
-          this.props.colorPalette ?? DEFAULT_PALETTE,
-        );
+        if (this.props.colorMapping) {
+          const fallback =
+            this.props.colorMappingDefault ?? ([0, 0, 0, 0] as Color);
+          attributes.getFillColor = {
+            value: coreExpandCategoricalColors(
+              binary,
+              {
+                property: fillColorProp,
+                colorMapping: this.props.colorMapping as Record<
+                  string,
+                  RGBA255
+                >,
+                colorMappingDefault: fallback as RGBA255,
+              },
+              'u8',
+            ) as Uint8Array,
+            size: 4,
+            normalized: true,
+          };
+        } else {
+          attributes.instanceCategoryIndex = {
+            value: categoryIndicesToFloat32(
+              cat.indices,
+              count,
+              (this.props.colorPalette ?? DEFAULT_PALETTE).length,
+              'AnimatedColumnLayer',
+            ),
+            size: 1,
+          };
+          gpuPalette = appendNullCategorySlot(
+            this.props.colorPalette ?? DEFAULT_PALETTE,
+            this.props.colorMappingDefault as Color | undefined,
+          );
+        }
       }
     }
 
@@ -739,6 +943,26 @@ export class AnimatedColumnLayer<
       const values = binary.numericProps[elevationProp];
       if (values) {
         attributes.getElevation = { value: values, size: 1 };
+      }
+    }
+
+    // Column range filter (DataFilterExtension): bind the named numeric column
+    // to the `filterValue` attribute zero-copy (already a Float32Array). Absent
+    // column ⇒ no attribute baked → the sublayer idles the filter for this tile
+    // (renders unfiltered), mirroring how a missing color/elevation column falls
+    // back. A categorical column can't be range-filtered in v1 — warn once.
+    const filterProp = this.filterPropertyValue();
+    if (filterProp) {
+      const values = binary.numericProps[filterProp];
+      if (values) {
+        attributes.filterValue = { value: values, size: 1 };
+      } else if (binary.categoricalProps[filterProp]) {
+        warnOnce(
+          'AnimatedColumnLayer:filterPropertyCategorical',
+          `[AnimatedColumnLayer] filterProperty "${filterProp}" is a categorical ` +
+            'column; v1 range-filters NUMERIC columns only. The filter is ignored ' +
+            'for tiles where the column is categorical.',
+        );
       }
     }
 
@@ -790,12 +1014,23 @@ export class AnimatedColumnLayer<
       );
     }
 
+    // Column range filter: install DataFilterExtension only when a
+    // filterProperty is set (a per-layer constant → the list stays stable
+    // across this layer's sublayers). `hasFilter` is whether THIS tile actually
+    // baked the column — a tile lacking it idles the filter (renders all).
+    const filterProp = this.filterPropertyValue();
+    const hasFilter = !!prepared.data.attributes.filterValue;
+
     // Keep the extension list constant across sublayers — see
     // animated-trips-layer.ts for the cache-storm rationale. User extensions
     // from the top-level `extensions` prop are appended (composeExtensions).
     const extensions = this.composeExtensions([
       this.timeFilterExtension,
       this.categoryColorExtension,
+      // Column range filter, when a filterProperty is set. Multiplies its own
+      // in/out (or soft-fade) factor into color.a — commutes with the time and
+      // categorical alphas, so it composes cleanly with both.
+      ...(filterProp ? [this.dataFilterExtension] : []),
     ]);
 
     // getSubLayerProps inheritance (opacity/pickable/visible, coordinate
@@ -843,6 +1078,11 @@ export class AnimatedColumnLayer<
       timeWindow,
       fadeInDuration: this.props.fadeInDuration,
       fadeOutDuration: this.props.fadeOutDuration,
+      // Time-as-height (space-time cube). Window mode lifts whole columns by
+      // start time — a single uniform, so animating the flat↔cube morph is
+      // free. Forced to 0 under reducedMotion so the columns stay flat.
+      timeHeightScale: this.effectiveTimeHeightScale(),
+      timeHeightOrigin: this.props.timeHeightOrigin,
 
       // TileLayer convention: the source tile rides on the sublayer so the base
       // getPickingInfo can enrich info.tile / decode the picked feature.
@@ -854,6 +1094,18 @@ export class AnimatedColumnLayer<
       // when the flag is true.
       useCategoryColor: useGpuCategory,
       ...(useGpuCategory ? { categoryPalette: prepared.gpuPalette! } : {}),
+
+      // DataFilterExtension wiring (only when a filterProperty is set). The
+      // constant getFilterValue is the fallback for tiles missing the column;
+      // filterEnabled is additionally gated on THIS tile having baked it.
+      ...(filterProp
+        ? {
+            getFilterValue: 0,
+            filterEnabled: hasFilter && this.props.filterEnabled !== false,
+            filterRange: this.props.filterRange ?? null,
+            filterSoftRange: this.props.filterSoftRange ?? null,
+          }
+        : {}),
     });
     // `_subLayerProps: { columns: { type } }` swaps the sublayer class — the
     // CompositeLayer-native override point.

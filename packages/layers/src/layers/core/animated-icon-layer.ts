@@ -41,13 +41,22 @@
  */
 
 import { IconLayer } from '@deck.gl/layers';
-import type { Color, DefaultProps, Layer, LayerContext } from '@deck.gl/core';
+import type {
+  Color,
+  DefaultProps,
+  GetPickingInfoParams,
+  Layer,
+  LayerContext,
+} from '@deck.gl/core';
 import type { Texture } from '@luma.gl/core';
 import {
   SpatioTemporalLayer,
   SpatioTemporalLayerProps,
+  SpatioTemporalPickingInfo,
 } from '../spatiotemporal-layer.js';
 import { TimeFilterExtension } from '../../extensions/time-filter-extension.js';
+import { DataFilterExtension } from '../../extensions/data-filter-extension.js';
+import type { DataFilterRange } from '../../extensions/data-filter-extension.js';
 import {
   CategoryColorExtension,
   CATEGORY_PALETTE_SIZE,
@@ -57,7 +66,19 @@ import {
 import { emit } from '../../lib/telemetry.js';
 import { warnOnce } from '../../lib/log.js';
 import {
+  sampleTrack as kernelSampleTrack,
+  RAD_TO_DEG,
+  TrackIndexMaintainer,
+} from '../../lib/track-kernel.js';
+import type {
+  Track,
+  Sample,
+  TrackFieldConfig,
+  TrackSampleConfig,
+} from '../../lib/track-kernel.js';
+import {
   colorListDigest,
+  colorMappingDigest,
   inheritedPropsDigest,
   updateTriggersDigest,
 } from '../../lib/style-digest.js';
@@ -65,13 +86,19 @@ import { resolveAccessorAlias } from '../../lib/accessor-alias.js';
 import type {
   ColorAccessorValue,
   NumericAccessorValue,
+  WeightAccessorValue,
 } from '../../lib/accessor-alias.js';
-import { DEFAULT_CATEGORICAL_PALETTE } from '@poopdeck.gl/core';
+import {
+  DEFAULT_CATEGORICAL_PALETTE,
+  getFeatureProperties,
+} from '@poopdeck.gl/core';
 import type {
   Tile,
   Layer as TileLayer,
   BinaryFeatures,
 } from '@poopdeck.gl/core';
+import { expandCategoricalColors as coreExpandCategoricalColors } from '@poopdeck.gl/core/style';
+import type { RGBA255 } from '@poopdeck.gl/core/style';
 
 const DEBUG = false;
 
@@ -162,6 +189,23 @@ export interface _AnimatedIconLayerProps {
 
   /** Color palette for categorical `color`. */
   colorPalette?: Color[];
+
+  /**
+   * Explicit category-to-color map for a categorical `color` property (B3
+   * stable colorMapping). When set, each icon's tint is
+   * `colorMapping[categoryValue]`, CPU-expanded into a per-feature RGBA
+   * `getColor` buffer, using {@link colorMappingDefault} (transparent by
+   * default) for values absent from the map. This is the ONLY way to get STABLE
+   * colors across tiles whose categorical column holds different category
+   * subsets — the GPU first-seen palette-index fallback assigns the same band a
+   * different palette slot per tile. With `colorMapping` unset, the GPU
+   * CategoryColorExtension handles the lookup against `colorPalette`.
+   * @default null
+   */
+  colorMapping?: Record<string, Color> | null;
+
+  /** Fallback tint for categories absent from {@link colorMapping}. @default transparent */
+  colorMappingDefault?: Color;
 
   /**
    * Icon size — constant number, or a numeric property NAME baked per-feature
@@ -257,6 +301,111 @@ export interface _AnimatedIconLayerProps {
    * @default 300
    */
   fadeOutDuration?: number;
+
+  /**
+   * Wake length in milliseconds (B3 — the point layer's "ship wake" exposed on
+   * icons). When > 0, switches the layer's TimeFilterExtension into one-sided
+   * wake mode: each icon is visible only while
+   * `0 <= currentTime - startTime <= wakeLength`, its alpha fading linearly to 0
+   * at the trailing edge. Takes precedence over the symmetric window/fade
+   * filter. Unlike the point layer, the trailing SIZE shrink does not apply
+   * (that shader hook is ScatterplotLayer-only) — the icon wake is an alpha
+   * tail. The layer widens the load window to `2 × wakeLength` so the tail
+   * stays resident (see {@link getEffectiveTimeWindow}).
+   * @default 0
+   */
+  wakeLength?: number;
+
+  /**
+   * Trailing-edge size multiplier in wake mode (0..1) — forwarded to the
+   * TimeFilterExtension for parity with the point layer. No visible effect on
+   * icons (the size-shrink shader hook is ScatterplotLayer-only); the alpha tail
+   * still fades. @default 0.15
+   */
+  wakeTailScale?: number;
+
+  /**
+   * GPU range filter — the NAME of a baked numeric column to filter icons by
+   * (installs {@link DataFilterExtension}). Icons whose value in this column
+   * falls inside {@link filterRange} render; the rest are hidden (or soft-faded
+   * via {@link filterSoftRange}). Composes WITH the time filter — an icon must
+   * pass both the time window and the column range.
+   *
+   * Accessor-alias of deck.gl's `getFilterValue`: pass a column NAME, not a
+   * function (STT tiles are binary — a function warns once and is ignored).
+   * Unset (the default) ⇒ the extension is not installed at all: zero
+   * attribute, zero uniform, zero shader change. A tile that lacks the named
+   * column renders unfiltered (the filter idles for that tile). Applies to the
+   * discrete window path only — the glide (`interpolate`) path filters by
+   * activity, so a filter column is ignored there.
+   * @default null
+   */
+  filterProperty?: WeightAccessorValue | null;
+
+  /**
+   * Inclusive `[min, max]` bounds for {@link filterProperty}. `null` (default)
+   * means "no range yet" — the column is still bound, so a range set later
+   * animates purely by uniform with no tile re-preparation. No effect unless
+   * `filterProperty` is set.
+   * @default null
+   */
+  filterRange?: DataFilterRange | null;
+
+  /**
+   * Optional soft `[min, max]` inside {@link filterRange}: icons between the soft
+   * and hard bounds fade rather than hard-clip. No effect unless
+   * `filterProperty` + `filterRange` are set.
+   * @default null
+   */
+  filterSoftRange?: DataFilterRange | null;
+
+  /**
+   * Enable/disable the column filter without dropping the bound attribute.
+   * Effective only when `filterProperty` + a valid `filterRange` are set.
+   * @default true
+   */
+  filterEnabled?: boolean;
+
+  /**
+   * Opt into the CPU "glide" render path (B2 motion interpolation). Icon
+   * archives carry one row per entity PER SAMPLE, so a GPU time-WINDOW filter
+   * shows every sample in the window at once — a moving marker POPS. With
+   * `interpolate` on, the layer pools the loaded tiles' samples by
+   * {@link idProperty} and once per frame emits ONE IconLayer of each ACTIVE
+   * entity's pose, position AND heading CPU-interpolated between the samples
+   * bracketing the playhead, so it GLIDES and rotates smoothly. Reuses the
+   * shared track kernel.
+   *
+   * Gated: used only when `interpolate && !reducedMotion &&` a resolvable
+   * `idProperty && wakeLength === 0`. Any unmet (the default: off) leaves the
+   * GPU window/wake path BYTE-IDENTICAL.
+   * @default false
+   */
+  interpolate?: boolean;
+
+  /**
+   * Per-entity id column NAME grouping samples into one glide track (e.g. AIS
+   * exact vessel id, aircraft `icao24`). Reads a categorical (string) column;
+   * must be an EXACT per-entity id (a lossy/quantized id fuses distinct
+   * entities). No effect unless {@link interpolate} is on. @default null
+   */
+  idProperty?: string | null;
+
+  /**
+   * Largest gap (ms) between two of an entity's samples that glide interpolates
+   * across; a wider gap HOLDS the last sample (position AND heading) instead of
+   * fabricating motion through a data hole. No effect unless {@link interpolate}
+   * is on. @default Infinity
+   */
+  maxInterpolationGap?: number;
+
+  /**
+   * Honor the viewer's reduced-motion preference. When `true`, the glide path is
+   * disabled and the layer DEGRADES to the GPU time-window path (discrete
+   * per-sample rendering). A concrete boolean (survives the
+   * explicit-undefined-shadows-default gotcha). @default false
+   */
+  reducedMotion?: boolean;
 }
 
 /** Complete props accepted by {@link AnimatedIconLayer}. */
@@ -355,6 +504,18 @@ export class AnimatedIconLayer<
     },
 
     colorPalette: { type: 'array', value: DEFAULT_PALETTE, compare: true },
+    // Stable categorical colorMapping (B3). Unset ⇒ GPU palette path; set ⇒
+    // CPU-expanded per-feature RGBA (stable across tiles). Permissive
+    // descriptors (a map / null / a Color that 'color' would reject).
+    colorMapping: {
+      type: 'object',
+      value: null,
+      optional: true,
+      compare: false,
+    },
+    // Transparent fallback: categories absent from the map disappear rather
+    // than render a misleading color (parity with the point layer).
+    colorMappingDefault: { type: 'color', value: [0, 0, 0, 0] },
 
     // Sizing forwarded to IconLayer.
     sizeUnits: 'pixels',
@@ -378,6 +539,35 @@ export class AnimatedIconLayer<
     // Fade ramps, forwarded to TimeFilterExtension (window mode).
     fadeInDuration: { type: 'number', value: 300, min: 0 },
     fadeOutDuration: { type: 'number', value: 300, min: 0 },
+
+    // Wake mode (B3). wakeLength=0 keeps the symmetric window behavior.
+    wakeLength: { type: 'number', value: 0, min: 0 },
+    wakeTailScale: { type: 'number', value: 0.15, min: 0 },
+
+    // Column range filter (DataFilterExtension). Unset ⇒ not installed.
+    // Permissive {type:'object'} descriptors: filterProperty holds a column
+    // name; the ranges hold a [min,max] tuple OR null (rejected by 'array').
+    filterProperty: {
+      type: 'object',
+      value: null,
+      optional: true,
+      compare: true,
+    },
+    filterRange: { type: 'object', value: null, optional: true, compare: true },
+    filterSoftRange: {
+      type: 'object',
+      value: null,
+      optional: true,
+      compare: true,
+    },
+    filterEnabled: true,
+
+    // Glide (B2 motion interpolation). Off ⇒ the GPU window path is
+    // byte-identical. idProperty is permissive (column-name string OR null).
+    interpolate: false,
+    idProperty: { type: 'object', value: null, optional: true, compare: true },
+    maxInterpolationGap: { type: 'number', value: Infinity, min: 0 },
+    reducedMotion: false,
   };
 
   /** Per-tile prepared-data cache. Pruned to the live tile set each render. */
@@ -398,6 +588,30 @@ export class AnimatedIconLayer<
   /** Tile-array identity from the previous render — see AnimatedPointLayer.lastTilesRef. */
   private lastTilesRef: Tile[] | null = null;
 
+  /* ── Glide (motion-interpolation) state — only the `interpolate` path ─────
+   * Pool the loaded tiles' samples into one id-keyed track index (rebuilt only
+   * when the tile SET or a feeding prop changes), then re-interpolate one pose
+   * (position + heading) per active entity every frame. */
+  private interpTrackIndex: Map<string, Track> | null = null;
+  private interpTrackIndexKey = '';
+  /**
+   * Incremental maintainer of {@link interpTrackIndex}: re-pools only ADDED
+   * tiles and re-sorts only AFFECTED tracks across tile churn, instead of the
+   * O(all snapshots) full rebuild that spiked frame time. Lazily created (the
+   * test harness bypasses field initializers via Object.create).
+   */
+  private interpMaintainer: TrackIndexMaintainer | null = null;
+  /** Per-track representative decoded source feature, for glide picking. */
+  private interpPickRows: Map<string, Record<string, unknown>> | null = null;
+  /** Tile keys already scanned for {@link interpPickRows} — accumulate-only. */
+  private interpPickRowsScanned: Set<string> | null = null;
+  /** Sim-time of the last glide re-interpolation; skips redundant ticks. */
+  private lastInterpFrameTime = NaN;
+  /** Grow-only per-frame output buffers (avoid a fresh alloc every glide frame). */
+  private interpPosBuf: Float64Array | null = null;
+  private interpAngBuf: Float32Array | null = null;
+  private interpColBuf: Uint8Array | null = null;
+
   /**
    * Singleton TimeFilterExtension reused by every sublayer. Window-mode
    * filtering (whole feature on/off + fade) — the per-vertex time attribute is
@@ -416,6 +630,17 @@ export class AnimatedIconLayer<
   private readonly categoryColorExtension = new CategoryColorExtension();
 
   /**
+   * Singleton DataFilterExtension. Composed into a sublayer's extension list
+   * ONLY when `filterProperty` is set (a per-layer constant, so the list stays
+   * stable across this layer's sublayers). Constructed unconditionally — a
+   * no-op object alloc; it contributes no attribute, uniform or shader unless
+   * actually installed. Mirrors {@link AnimatedArcLayer} / {@link AnimatedPointLayer}.
+   */
+  private readonly dataFilterExtension = new DataFilterExtension({
+    filterSize: 1,
+  });
+
+  /**
    * Stable getTime reference. A fresh arrow every render defeats the cache
    * (deck.gl re-runs work when accessor function references change).
    */
@@ -425,6 +650,25 @@ export class AnimatedIconLayer<
     super.finalizeState(context);
     this.preparedTileCache.clear();
     this.sublayerCache.clear();
+    this.interpTrackIndex = null;
+    this.interpMaintainer?.reset();
+    this.interpPickRows = null;
+    this.interpPickRowsScanned = null;
+    this.interpPosBuf = null;
+    this.interpAngBuf = null;
+    this.interpColBuf = null;
+  }
+
+  /**
+   * Widen the load window for wake mode so the wake's trailing half stays
+   * resident (parity with AnimatedPointLayer). Common case (wake off): returns
+   * the base window unchanged — byte-identical.
+   */
+  protected getEffectiveTimeWindow(): number {
+    let widened = super.getEffectiveTimeWindow();
+    const wakeLength = this.props.wakeLength;
+    if (wakeLength > 0) widened = Math.max(widened, wakeLength * 2);
+    return widened;
   }
 
   /**
@@ -469,6 +713,20 @@ export class AnimatedIconLayer<
   }
 
   /**
+   * Resolve `filterProperty` to a baked-column NAME. Accessor-alias of deck's
+   * `getFilterValue`: a function-valued prop warns once and is ignored (there
+   * is no legacy prop, so the fallback is "no filter" — `undefined`).
+   */
+  private filterPropertyValue(): string | undefined {
+    return resolveAccessorAlias<string | undefined>(
+      'AnimatedIconLayer',
+      'filterProperty',
+      this.props.filterProperty,
+      undefined,
+    );
+  }
+
+  /**
    * Compute a digest of the layer-level props that affect every sublayer.
    * When this changes we throw away the entire sublayer cache.
    */
@@ -498,6 +756,8 @@ export class AnimatedIconLayer<
       this.props.timeWindow,
       this.props.fadeInDuration,
       this.props.fadeOutDuration,
+      this.props.wakeLength,
+      this.props.wakeTailScale,
       this.props.timeHeightScale,
       this.props.timeHeightOrigin,
       // angle/color/size/pixelOffset constant branches only — the
@@ -507,10 +767,66 @@ export class AnimatedIconLayer<
       Array.isArray(color) ? color.join(',') : '',
       typeof size === 'number' ? size : 0,
       Array.isArray(pixelOffset) ? pixelOffset.join(',') : '',
+      // Column-filter uniforms (DataFilterExtension). A range/enabled change is
+      // a uniform-only edit, so — like timeWindow — it rebuilds the cached
+      // sublayers (whose props carry the values) rather than re-preparing tiles.
+      Array.isArray(this.props.filterRange)
+        ? this.props.filterRange.join(',')
+        : '',
+      Array.isArray(this.props.filterSoftRange)
+        ? this.props.filterSoftRange.join(',')
+        : '',
+      this.props.filterEnabled,
     ].join('|');
   }
 
+  /**
+   * True when the CPU glide path is active: `interpolate` on, reduced-motion
+   * off, a resolvable `idProperty`, and wake off. Any unmet condition (the
+   * default) leaves the GPU window/wake path byte-identical.
+   */
+  private interpolationActive(): boolean {
+    return (
+      this.props.interpolate === true &&
+      this.props.reducedMotion !== true &&
+      !(this.props.wakeLength > 0) &&
+      this.idPropertyValue().length > 0
+    );
+  }
+
+  /** Resolve `idProperty` to a column NAME, or '' when unset/blank. */
+  private idPropertyValue(): string {
+    const p = this.props.idProperty;
+    return typeof p === 'string' ? p : '';
+  }
+
+  /**
+   * Bump a state counter each tick so the CPU-interpolated glide advances —
+   * ONLY when the glide branch is active and sim-time actually moved. The GPU
+   * window/wake path animates via a draw-time uniform and needs no
+   * renderLayers() pass, so this is a no-op there (byte-identical default-off
+   * behaviour).
+   */
+  protected _handleTimeUpdate(time: number): void {
+    super._handleTimeUpdate(time);
+    if (!this.interpolationActive()) return;
+    const { tiles } = this.state;
+    if (tiles && tiles.length > 0 && time !== this.lastInterpFrameTime) {
+      this.lastInterpFrameTime = time;
+      this.setState({
+        interpFrame: ((this.state as any).interpFrame || 0) + 1,
+      });
+    }
+  }
+
   renderLayers(): Layer[] {
+    // Glide (motion interpolation): pool samples by id, emit ONE IconLayer of
+    // interpolated active poses. Off / reduced-motion / no id ⇒ falls through
+    // to the byte-identical GPU window path below.
+    if (this.interpolationActive()) {
+      return this.renderInterpolated();
+    }
+
     const t0 = performance.now();
     const { tiles } = this.state;
     if (!tiles || tiles.length === 0) {
@@ -598,12 +914,23 @@ export class AnimatedIconLayer<
     const pixelOffsetProp = typeof pixelOffset === 'string' ? pixelOffset : '';
     // Palette identity matters only when color is a column name. Digests are
     // memoized per object reference (style-digest.ts), so this stays a WeakMap
-    // lookup per tile, not a re-serialization.
+    // lookup per tile, not a re-serialization. The colorMapping branch keys
+    // CONTENT + colorMappingDefault (both baked into the CPU-expanded RGBA
+    // buffer, so editing either must re-prepare the tile) and the CPU↔GPU
+    // toggle (which adds/removes the getColor attribute).
+    const mapping = this.props.colorMapping;
+    const mapDefault = (this.props.colorMappingDefault ?? [0, 0, 0, 0]).join(
+      ',',
+    );
+    // Filter column NAME is baked into the `filterValue` attribute, so a change
+    // must re-prepare tiles (and, via the new preparedKey, rebuild sublayers —
+    // covering the unset↔set toggle that adds/removes DataFilterExtension).
+    const filterProp = this.filterPropertyValue() ?? '';
     return `${angleProp}|${colorProp}|${sizeProp}|${pixelOffsetProp}|${
       colorProp
         ? colorListDigest(this.props.colorPalette ?? DEFAULT_PALETTE)
         : 0
-    }|${updateTriggersDigest(this.props.updateTriggers)}`;
+    }|${colorProp && mapping ? `m${colorMappingDigest(mapping)}` : 'g'}|d${mapDefault}|f${filterProp}|${updateTriggersDigest(this.props.updateTriggers)}`;
   }
 
   /**
@@ -695,23 +1022,71 @@ export class AnimatedIconLayer<
       }
     }
 
-    // Property-driven color — categorical only (GPU path). A numeric color
-    // column has no natural categorical lookup here, so it's ignored (constant
-    // color applies) rather than guessing a ramp.
+    // Property-driven color — categorical only. A numeric color column has no
+    // natural categorical lookup here, so it's ignored (constant color applies)
+    // rather than guessing a ramp.
     if (colorProp) {
       const cat = binary.categoricalProps[colorProp];
       if (cat) {
-        attributes.instanceCategoryIndex = {
-          value: categoryIndicesToFloat32(
-            cat.indices,
-            count,
-            (this.props.colorPalette ?? DEFAULT_PALETTE).length,
-            'AnimatedIconLayer',
-          ),
-          size: 1,
-        };
-        gpuPalette = appendNullCategorySlot(
-          this.props.colorPalette ?? DEFAULT_PALETTE,
+        if (this.props.colorMapping) {
+          // Stable CPU path (B3): indexed by the category STRING → a per-feature
+          // RGBA getColor buffer, so the same category is the same color across
+          // tiles carrying different category subsets. No GPU palette.
+          const fallback =
+            this.props.colorMappingDefault ?? ([0, 0, 0, 0] as Color);
+          attributes.getColor = {
+            value: coreExpandCategoricalColors(
+              binary,
+              {
+                property: colorProp,
+                colorMapping: this.props.colorMapping as Record<
+                  string,
+                  RGBA255
+                >,
+                colorMappingDefault: fallback as RGBA255,
+              },
+              'u8',
+            ) as Uint8Array,
+            size: 4,
+            normalized: true,
+          };
+        } else {
+          // GPU palette path (first-seen index; not stable across tiles).
+          attributes.instanceCategoryIndex = {
+            value: categoryIndicesToFloat32(
+              cat.indices,
+              count,
+              (this.props.colorPalette ?? DEFAULT_PALETTE).length,
+              'AnimatedIconLayer',
+            ),
+            size: 1,
+          };
+          gpuPalette = appendNullCategorySlot(
+            this.props.colorPalette ?? DEFAULT_PALETTE,
+            this.props.colorMappingDefault as Color | undefined,
+          );
+        }
+      }
+    }
+
+    // Column range filter (DataFilterExtension): bind the named numeric column
+    // to the `filterValue` attribute zero-copy (already a Float32Array). Absent
+    // column ⇒ no attribute baked → the sublayer idles the filter for this tile
+    // (renders unfiltered), mirroring how a missing color/size column falls
+    // back. IconLayer is instanced one-per-feature, so a per-feature column
+    // binds directly. A categorical column can't be range-filtered in v1 —
+    // warn once.
+    const filterProp = this.filterPropertyValue();
+    if (filterProp) {
+      const values = binary.numericProps[filterProp];
+      if (values) {
+        attributes.filterValue = { value: values, size: 1 };
+      } else if (binary.categoricalProps[filterProp]) {
+        warnOnce(
+          'AnimatedIconLayer:filterPropertyCategorical',
+          `[AnimatedIconLayer] filterProperty "${filterProp}" is a categorical ` +
+            'column; v1 range-filters NUMERIC columns only. The filter is ignored ' +
+            'for tiles where the column is categorical.',
         );
       }
     }
@@ -775,12 +1150,23 @@ export class AnimatedIconLayer<
       );
     }
 
+    // Column filter: install DataFilterExtension only when a column is named
+    // (per-layer constant ⇒ stable list across this layer's sublayers). Whether
+    // THIS tile actually baked the attribute gates the per-tile enable, so a
+    // tile missing the column renders unfiltered (idle extension).
+    const filterProp = this.filterPropertyValue();
+    const hasFilter = !!prepared.data.attributes.filterValue;
+
     // Keep the extension list constant across sublayers (cache-storm rationale,
     // as in AnimatedPointLayer). User extensions from the top-level
     // `extensions` prop are appended via composeExtensions.
     const extensions = this.composeExtensions([
       this.timeFilterExtension,
       this.categoryColorExtension,
+      // Column range filter, when a filterProperty is set. Multiplies its own
+      // in/out (or soft-fade) factor into color.a — commutes with the time and
+      // categorical alphas, so it composes cleanly with both.
+      ...(filterProp ? [this.dataFilterExtension] : []),
     ]);
 
     // getSubLayerProps inheritance (opacity/pickable/visible, coordinate
@@ -827,6 +1213,10 @@ export class AnimatedIconLayer<
       timeWindow,
       fadeInDuration: this.props.fadeInDuration,
       fadeOutDuration: this.props.fadeOutDuration,
+      // Wake mode (B3): wakeLength>0 flips the extension into the one-sided
+      // alpha tail. 0 (default) keeps the symmetric window — no behaviour change.
+      wakeLength: this.props.wakeLength,
+      wakeTailScale: this.props.wakeTailScale,
 
       // TileLayer convention: the source tile rides on the sublayer so the base
       // getPickingInfo can enrich info.tile / decode the picked feature.
@@ -837,11 +1227,425 @@ export class AnimatedIconLayer<
       // the two paths via prop inspection. The extension only works when true.
       useCategoryColor: useGpuCategory,
       ...(useGpuCategory ? { categoryPalette: prepared.gpuPalette! } : {}),
+
+      // DataFilterExtension wiring (only when a filterProperty is set). The
+      // constant getFilterValue is the fallback for tiles missing the column;
+      // filterEnabled is additionally gated on THIS tile having baked it.
+      ...(filterProp
+        ? {
+            getFilterValue: 0,
+            filterEnabled: hasFilter && this.props.filterEnabled !== false,
+            filterRange: this.props.filterRange ?? null,
+            filterSoftRange: this.props.filterSoftRange ?? null,
+          }
+        : {}),
     });
     // `_subLayerProps: { icons: { type } }` swaps the sublayer class — the
     // CompositeLayer-native renderSubLayers-style override point.
     const SubLayerClass = this.getSubLayerClass('icons', IconLayer);
     return new SubLayerClass(props as any);
+  }
+
+  /* ── Glide (motion-interpolation) path ───────────────────────────────────
+   * Pool the loaded tiles' samples by `idProperty` and emit ONE IconLayer of
+   * each active entity's interpolated pose (position + heading). Reuses the
+   * shared track kernel; visibility is implicit (only active tracks emitted) so
+   * there is no TimeFilterExtension and no window uniform.
+   */
+
+  /** Digest of the props feeding the POOLED glide index (columns + baked color). */
+  private computeInterpIndexKey(): string {
+    const colorValue = this.colorValue();
+    const colorProp = typeof colorValue === 'string' ? colorValue : '';
+    const angleValue = this.angleValue();
+    const angleProp = typeof angleValue === 'string' ? angleValue : '';
+    return [
+      this.idPropertyValue(),
+      colorProp,
+      angleProp,
+      colorProp && this.props.colorMapping
+        ? colorMappingDigest(this.props.colorMapping)
+        : 0,
+      Array.isArray(this.props.colorMappingDefault)
+        ? this.props.colorMappingDefault.join(',')
+        : '',
+      updateTriggersDigest(this.props.updateTriggers),
+    ].join('|');
+  }
+
+  /** Resolve which tile columns the kernel reads for the glide index. */
+  private interpTrackFieldConfig(): TrackFieldConfig {
+    const colorValue = this.colorValue();
+    const colorProp = typeof colorValue === 'string' ? colorValue : '';
+    const angleValue = this.angleValue();
+    const angleProp = typeof angleValue === 'string' ? angleValue : '';
+    // Silent-transparency guard (mirrored from AnimatedPointLayer): the CPU
+    // glide path resolves per-track color through the STRING-keyed `colorMapping`,
+    // not the GPU first-seen palette. A categorical color column with NO
+    // colorMapping falls to the transparent colorMappingDefault ([0,0,0,0]) for
+    // every track, so glide renders every icon INVISIBLE — warn rather than blank.
+    if (colorProp && !this.props.colorMapping) {
+      warnOnce(
+        'AnimatedIconLayer:interpNoColorMapping',
+        `[AnimatedIconLayer] interpolate is on with a categorical color column ` +
+          `("${colorProp}") but no \`colorMapping\` — the CPU glide path cannot ` +
+          `use the GPU first-seen palette, so every icon resolves to the ` +
+          `transparent colorMappingDefault and renders INVISIBLE. Provide a ` +
+          `\`colorMapping\` (category → color) or a constant color for glide.`,
+      );
+    }
+    return {
+      trackIdProperty: this.idPropertyValue(),
+      colorProperty: colorProp,
+      labelProperty: '',
+      // Heading column (DEGREES) drives the interpolated getAngle; blank ⇒
+      // bearing-from-motion fallback (computed here, not by the kernel).
+      headingProperty: angleProp,
+      lengthProperty: '',
+      widthProperty: '',
+      heightProperty: '',
+      speedProperty: '',
+      colorMapping: this.props.colorMapping,
+      colorMappingDefault: (this.props.colorMappingDefault ?? [
+        0, 0, 0, 0,
+      ]) as Color,
+    };
+  }
+
+  /** Fade ramps + degrees-heading unit + max-gap hold fed to the kernel. */
+  private interpSampleConfig(): TrackSampleConfig {
+    return {
+      defaultLength: 0,
+      defaultWidth: 0,
+      defaultHeight: 0,
+      fadeInDuration: this.props.fadeInDuration ?? 0,
+      fadeOutDuration: this.props.fadeOutDuration ?? 0,
+      // IconLayer.getAngle is DEGREES and the heading column is degrees too, so
+      // interpolate the heading along the shortest DEGREE arc.
+      angleUnit: 'deg',
+      maxGapMs: this.props.maxInterpolationGap ?? Infinity,
+    };
+  }
+
+  /**
+   * Bearing (deck IconLayer getAngle degrees — CCW from the icon's default "up"
+   * orientation) from the entity's direction of travel, for when there is no
+   * heading column. Reuses the already-sampled pose `s` at `now` and samples a
+   * hair ahead (or behind, at the track's end); returns null when the marker
+   * isn't moving (a held sample / degenerate delta) so the caller keeps the
+   * constant angle instead of spinning to an arbitrary heading.
+   */
+  private bearingDeg(
+    track: Track,
+    s: Sample,
+    now: number,
+    cfg: TrackSampleConfig,
+  ): number | null {
+    let from: Sample = s;
+    let to: Sample | null = kernelSampleTrack(track, now + 1, cfg);
+    if (!to) {
+      const behind = kernelSampleTrack(track, now - 1, cfg);
+      if (!behind) return null;
+      from = behind;
+      to = s;
+    }
+    const dLon = to.lon - from.lon;
+    const dLat = to.lat - from.lat;
+    const cosLat = Math.cos((from.lat * Math.PI) / 180);
+    const dEast = dLon * cosLat;
+    const dNorth = dLat;
+    if (dEast === 0 && dNorth === 0) return null; // not moving
+    // Icon default points up (north); deck getAngle is CCW degrees. The CCW
+    // angle from north to the travel vector is atan2(-dEast, dNorth).
+    return Math.atan2(-dEast, dNorth) * RAD_TO_DEG;
+  }
+
+  /**
+   * Ensure the glide index reflects the current tile set. Rebuilds fully when a
+   * feeding style prop changed (the maintainer + pick rows reset); otherwise the
+   * {@link TrackIndexMaintainer} re-pools only ADDED tiles and re-sorts only
+   * AFFECTED tracks, and pick rows are scanned only for not-yet-seen tiles — so
+   * a sliding loader window costs O(changed tiles + affected tracks) instead of
+   * the O(all snapshots) full rebuild that spiked frame time.
+   */
+  private syncInterpIndex(tiles: Tile[], indexKey: string): void {
+    if (!this.interpMaintainer)
+      this.interpMaintainer = new TrackIndexMaintainer();
+    if (this.interpTrackIndexKey !== indexKey) {
+      this.interpMaintainer.reset();
+      this.interpPickRows = null;
+      this.interpPickRowsScanned = null;
+    }
+    const cfg = this.interpTrackFieldConfig();
+    const result = this.interpMaintainer.sync(tiles, cfg);
+    this.interpTrackIndex = result.tracks;
+    if (result.trackIdMissing) {
+      warnOnce(
+        'AnimatedIconLayer:interpNoIdColumn',
+        `[AnimatedIconLayer] interpolate is on but no \`${cfg.trackIdProperty}\` ` +
+          `categorical column was found — each sample becomes its own held ` +
+          `instance (no glide). Set idProperty to an EXACT per-entity id column.`,
+      );
+    }
+    this.scanInterpPickRows(tiles, cfg.trackIdProperty);
+    this.interpTrackIndexKey = indexKey;
+    this.lastTilesRef = tiles;
+  }
+
+  /**
+   * Decode ONE representative source feature per entity id, for glide picking.
+   * Incremental + accumulate-only: only (tile, layer)s not scanned before are
+   * walked, and an id already present is never re-decoded (entity-level props
+   * are sample-invariant). Evicted entities' rows are left in place — harmless,
+   * since only ACTIVE tracks (resident tiles) are ever picked. Reset with the
+   * maintainer on a feeding-prop change.
+   */
+  private scanInterpPickRows(tiles: Tile[], idProp: string): void {
+    if (!this.interpPickRows) this.interpPickRows = new Map();
+    if (!this.interpPickRowsScanned) this.interpPickRowsScanned = new Set();
+    const prov = this.interpPickRows;
+    const scanned = this.interpPickRowsScanned;
+    for (const tile of tiles) {
+      for (const tileLayer of tile.layers) {
+        const key = makeTileKey(tile, tileLayer);
+        if (scanned.has(key)) continue;
+        scanned.add(key);
+        const binary = tileLayer.features;
+        const col = binary.categoricalProps[idProp];
+        if (!col) continue;
+        const count = binary.featureCount;
+        for (let i = 0; i < count; i++) {
+          const idx = col.indices[i];
+          if (idx === 0xffff) continue;
+          const k = col.categories[idx];
+          if (k === undefined || prov.has(k)) continue;
+          prov.set(k, getFeatureProperties(binary, i) ?? {});
+        }
+      }
+    }
+  }
+
+  /** Grow-only Float64 scratch buffer (reused across glide frames). */
+  private ensureInterpPos(len: number): Float64Array {
+    let b = this.interpPosBuf;
+    if (!b || b.length < len) {
+      b = new Float64Array(len);
+      this.interpPosBuf = b;
+    }
+    return b;
+  }
+
+  /** Grow-only Float32 scratch buffer (reused across glide frames). */
+  private ensureInterpAng(len: number): Float32Array {
+    let b = this.interpAngBuf;
+    if (!b || b.length < len) {
+      b = new Float32Array(len);
+      this.interpAngBuf = b;
+    }
+    return b;
+  }
+
+  /** Grow-only Uint8 scratch buffer (reused across glide frames). */
+  private ensureInterpCol(len: number): Uint8Array {
+    let b = this.interpColBuf;
+    if (!b || b.length < len) {
+      b = new Uint8Array(len);
+      this.interpColBuf = b;
+    }
+    return b;
+  }
+
+  /**
+   * Glide render pass: refresh the pooled index when the tile set / feeding prop
+   * changes (incrementally — see {@link syncInterpIndex}), then interpolate one
+   * pose (position + heading) per active entity straight into the reused output
+   * buffers and emit a single IconLayer.
+   */
+  private renderInterpolated(): Layer[] {
+    const t0 = performance.now();
+    const { tiles } = this.state;
+    if (!tiles || tiles.length === 0) {
+      this.interpTrackIndex = null;
+      this.interpMaintainer?.reset();
+      this.interpPickRows = null;
+      this.interpPickRowsScanned = null;
+      this.lastTilesRef = null;
+      return [];
+    }
+    if (!this.props.iconAtlas || !this.props.iconMapping) {
+      warnOnce(
+        'AnimatedIconLayer:missingAtlas',
+        '[AnimatedIconLayer] iconAtlas and iconMapping are required to render ' +
+          'icons; nothing will be drawn until both are supplied.',
+      );
+    }
+
+    const indexKey = this.computeInterpIndexKey();
+    if (
+      this.lastTilesRef !== tiles ||
+      this.interpTrackIndexKey !== indexKey ||
+      !this.interpTrackIndex
+    ) {
+      this.syncInterpIndex(tiles, indexKey);
+    }
+
+    const index = this.interpTrackIndex!;
+    const now = this.getCurrentTime();
+    const cfg = this.interpSampleConfig();
+    const angleValue = this.angleValue();
+    const hasHeadingColumn = typeof angleValue === 'string';
+    const constAngle = typeof angleValue === 'number' ? angleValue : 0;
+    const colorValue = this.colorValue();
+    const perTrackColor = typeof colorValue === 'string';
+    const constColor = (
+      Array.isArray(colorValue) ? colorValue : ([255, 255, 255, 255] as Color)
+    ) as Color;
+
+    // Track count bounds the active count; size the reused buffers to it and
+    // fill only the active prefix (subarray'd to the exact length below).
+    const cap = index.size;
+    const positions = this.ensureInterpPos(cap * 3);
+    const angles = this.ensureInterpAng(cap);
+    // Always bake per-instance color: it folds the appear/disappear fade
+    // (sample.alpha) and, when color names a column, the stable per-track color
+    // the kernel resolved through colorMapping.
+    const colors = this.ensureInterpCol(cap * 4);
+    const pickRows: (Record<string, unknown> | undefined)[] = [];
+    let w = 0;
+    for (const track of index.values()) {
+      const s = kernelSampleTrack(track, now, cfg);
+      if (!s) continue;
+      let angleDeg: number;
+      if (hasHeadingColumn) {
+        // s.heading is already degrees (angleUnit 'deg'); NaN ⇒ no column value.
+        angleDeg = Number.isFinite(s.heading) ? s.heading : constAngle;
+      } else {
+        angleDeg = this.bearingDeg(track, s, now, cfg) ?? constAngle;
+      }
+      const o3 = w * 3;
+      positions[o3] = s.lon;
+      positions[o3 + 1] = s.lat;
+      positions[o3 + 2] = s.alt;
+      angles[w] = angleDeg;
+      const base = perTrackColor ? s.track.color : constColor;
+      const o4 = w * 4;
+      colors[o4] = base[0];
+      colors[o4 + 1] = base[1];
+      colors[o4 + 2] = base[2];
+      colors[o4 + 3] = Math.round((base[3] ?? 255) * s.alpha);
+      pickRows.push(this.interpPickRows?.get(s.track.trackId));
+      w++;
+    }
+
+    emit('renderLayers', {
+      layer: 'AnimatedIconLayer',
+      mode: 'interpolate',
+      tiles: tiles.length,
+      tracks: index.size,
+      active: w,
+      ms: performance.now() - t0,
+    });
+
+    if (w === 0) return [];
+    return [
+      this.buildInterpolatedSublayer(
+        positions.subarray(0, w * 3),
+        angles.subarray(0, w),
+        colors.subarray(0, w * 4),
+        pickRows,
+        w,
+      ),
+    ];
+  }
+
+  /** Bake the active interpolated icon poses (already written into the buffer
+   * views) into one IconLayer sublayer. */
+  private buildInterpolatedSublayer(
+    positions: Float64Array,
+    angles: Float32Array,
+    colors: Uint8Array,
+    pickRows: (Record<string, unknown> | undefined)[],
+    n: number,
+  ): IconLayer {
+    const icon = this.props.icon;
+    const colorValue = this.colorValue();
+    const constColor = (
+      Array.isArray(colorValue) ? colorValue : ([255, 255, 255, 255] as Color)
+    ) as Color;
+    const sizeValue = this.sizeValue();
+    const constSize = typeof sizeValue === 'number' ? sizeValue : 12;
+    const angleValue = this.angleValue();
+    const constAngle = typeof angleValue === 'number' ? angleValue : 0;
+    const pixelOffsetValue = this.pixelOffsetValue();
+    const constPixelOffset = (
+      Array.isArray(pixelOffsetValue) ? pixelOffsetValue : [0, 0]
+    ) as [number, number];
+
+    const data = {
+      length: n,
+      attributes: {
+        getPosition: { value: positions, size: 3 },
+        getAngle: { value: angles, size: 1 },
+        getColor: { value: colors, size: 4, normalized: true },
+      },
+    };
+
+    // No TimeFilterExtension: visibility is implicit (only active entities are
+    // emitted), so no start/end-time attributes and no window uniform.
+    const extensions = this.composeExtensions([]);
+    const props = this.composeSubLayerProps('icons', 'interp', {
+      data: data as any,
+      dataComparator: (a: any, b: any) => a === b,
+
+      iconAtlas: this.props.iconAtlas,
+      iconMapping: this.props.iconMapping,
+      getIcon: () => icon,
+
+      sizeUnits: this.props.sizeUnits,
+      sizeScale: this.props.sizeScale,
+      sizeMinPixels: this.props.sizeMinPixels,
+      sizeMaxPixels: this.props.sizeMaxPixels,
+      sizeBasis: this.props.sizeBasis,
+      billboard: this.props.billboard,
+      alphaCutoff: this.props.alphaCutoff,
+      textureParameters: this.props.textureParameters,
+
+      // Constant fallbacks; the binary attributes win per instance.
+      getAngle: constAngle,
+      getSize: constSize,
+      getColor: constColor,
+      getPixelOffset: constPixelOffset,
+
+      extensions,
+
+      // Picking: one instance per active entity (stride 1) — resolve to the
+      // entity's decoded source feature via sttPickRows.
+      tile: null,
+      sttPickRows: pickRows,
+      sttPickStride: 1,
+    });
+    const SubLayerClass = this.getSubLayerClass('icons', IconLayer);
+    return new SubLayerClass(props as any);
+  }
+
+  /**
+   * Picking. In the glide path the sublayer merges many tiles' entities into
+   * one IconLayer, so resolve the hit to its entity's decoded source feature
+   * via the per-instance pick rows; otherwise the base tile/sttFeatures path
+   * (non-glide) applies.
+   */
+  getPickingInfo(params: GetPickingInfoParams): SpatioTemporalPickingInfo {
+    const info = super.getPickingInfo(params);
+    const pickRows = (
+      params.sourceLayer?.props as
+        | { sttPickRows?: (Record<string, unknown> | undefined)[] }
+        | undefined
+    )?.sttPickRows;
+    if (pickRows && info.index >= 0 && info.object === undefined) {
+      const row = pickRows[info.index];
+      if (row) info.object = row;
+    }
+    return info;
   }
 }
 

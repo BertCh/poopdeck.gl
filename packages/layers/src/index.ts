@@ -103,6 +103,11 @@ export { AnimatedMeshLayer } from './layers/core/animated-mesh-layer.js';
 // window mode; the scan/overview primitive (no cumulative-slab reveal path).
 export { AnimatedPointCloudLayer } from './layers/core/animated-point-cloud-layer.js';
 
+// Shortest-arc angular interpolation in DEGREES — the degrees analogue of the
+// track kernel's radians `lerpAngle`, exposed for callers interpolating an
+// `IconLayer.getAngle`-style heading (which deck.gl measures in degrees).
+export { lerpAngleDeg } from './lib/track-kernel.js';
+
 // Backend capability descriptor — what the deck.gl renderer DECLARES about
 // itself against the shared `@poopdeck.gl/core/capabilities` contract (the
 // declare-and-prove replacement for the hand-maintained parity table). Guarded

@@ -98,6 +98,139 @@ const LIGHTNING_FLASH_COLOR: [number, number, number, number] = [
 const WEATHER_LIGHTNING_RADIUS_TRANSFORM = (e: number) =>
   Math.max(1, Math.min(6, Math.sqrt(e) * 0.11));
 
+/**
+ * Categorical colors for the WPC frontal-analysis polylines AND their pip
+ * polygons, keyed on the archives' shared `render_class` (NOT `front_type`:
+ * wpc_fronts.py pre-splits each stationary front into alternating chunks so
+ * the classic red/blue STNRY notation is a plain categorical mapping).
+ * Troughs are pre-dashed at build time (paper-map convention, geographic
+ * dashes) and carry no pips; the tan stays translucent so they read as
+ * secondary structure under the storm layers. The cold/warm hexes are
+ * legend-pinned in datasets.ts (#4084f0 / #e64038).
+ */
+const WEATHER_FRONT_COLORS: Record<string, [number, number, number, number]> = {
+  COLD: [64, 132, 240, 235],
+  WARM: [230, 64, 56, 235],
+  OCFNT: [168, 88, 196, 235],
+  STNRY_COLD: [64, 132, 240, 235],
+  STNRY_WARM: [230, 64, 56, 235],
+  TROF: [216, 168, 100, 185],
+};
+
+/**
+ * Fronts fade duration (sim-ms). WPC analyses are 3-hourly and each feature's
+ * end time is padded by EXACTLY this much at build time (wpc_fronts.py
+ * --fade-pad-min), so the outgoing analysis ramps 1→0 while its successor
+ * ramps 0→1 over the same span — a constant-alpha cross-dissolve instead of
+ * the abutting-fade luminance dip. Change both sides together.
+ */
+const WEATHER_FRONT_FADE_MS = 2700000; // 45 sim-min
+
+// ─── storm4d composite constants ─────────────────────────────────────────
+// (docs/roadmap/storm-4d-greenfield-2026-07.md §9 — the binding contract.)
+
+/**
+ * The ONE shared vertical exaggeration for the storm4d scene (§9.0), applied
+ * to EVERY altitude-bearing layer — volume gates (`alt_m`), cloud-top canopy
+ * (`top_alt_m`), multi-level winds (`level_alt_m`), sounding ascent
+ * (`alt_m`), couplet markers (`alt_m`), and the fixed 12 km warning prisms —
+ * so a 10 km echo top, the anvil above it, and the prism walls all agree.
+ * Mixed per-layer scales would make the scene lie about vertical structure.
+ */
+const STORM4D_ELEVATION_SCALE = 4;
+
+/**
+ * VTEC warning prism height in METRES (pre-exaggeration): a fixed 12 km —
+ * roughly the storm's echo-top depth — so the prism walls enclose the whole
+ * volume (§7 Q4 resolved: fixed, not echo-top-derived, for v1).
+ */
+const STORM4D_WARNING_HEIGHT_M = 12000;
+
+/**
+ * Warning prism fills by VTEC `phenom` — translucent walls under a constant
+ * wireframe. TO red / SV amber / FF green (§9.2).
+ */
+const STORM4D_WARNING_COLORS: Record<string, [number, number, number, number]> =
+  {
+    TO: [255, 70, 70, 46],
+    SV: [255, 190, 60, 36],
+    FF: [80, 220, 120, 36],
+  };
+
+/**
+ * County outage extrusion: metres of prism per customer without power. The
+ * worst Iowa counties in the 21 May wave peak at ~10–20 k customers out, so
+ * 0.5 m/customer tops the tallest column near the volume's mid-levels
+ * (~5–10 km rendered) without dwarfing the storm. Data-magnitude extrusion,
+ * NOT geographic altitude — deliberately outside STORM4D_ELEVATION_SCALE.
+ */
+const STORM4D_OUTAGE_METERS_PER_CUSTOMER = 0.5;
+
+/**
+ * Cloud-top "anvil canopy" fills by `bt_band` (§9.1 labels, 10 K isobands of
+ * GOES C13 brightness temperature). Colder = higher = brighter/bluer, all
+ * very translucent so the stacked band walls read as haze the volume pokes
+ * through rather than an opaque lid.
+ */
+const STORM4D_CLOUDTOP_COLORS: Record<
+  string,
+  [number, number, number, number]
+> = {
+  '270-280': [70, 90, 120, 22],
+  '260-270': [85, 110, 145, 26],
+  '250-260': [100, 130, 170, 30],
+  '240-250': [120, 155, 195, 34],
+  '230-240': [145, 180, 215, 38],
+  '220-230': [175, 205, 232, 44],
+  '210-220': [205, 225, 244, 50],
+  '200-210': [230, 242, 252, 58],
+  '<200': [250, 252, 255, 66],
+};
+
+/**
+ * Storm-report fills by LSR `kind` (§9.1). Tornado reports pop red against
+ * the dark map; hail ice-blue, wind gusts amber, damage orange, flood blue.
+ */
+const STORM4D_REPORT_COLORS: Record<string, [number, number, number, number]> =
+  {
+    tornado: [255, 64, 64, 250],
+    hail: [170, 225, 255, 235],
+    wind: [255, 200, 90, 235],
+    damage: [255, 140, 60, 240],
+    flood: [90, 150, 255, 235],
+    other: [180, 180, 190, 210],
+  };
+
+/**
+ * Surface-station fills by `gust_band` (§9.1 labels). Calm sites recede as
+ * faint grey context; the band brightens toward the severe-gust reds so the
+ * gust front reads as a wave of warming dots crossing the mesonet.
+ */
+const STORM4D_GUST_COLORS: Record<string, [number, number, number, number]> = {
+  calm: [150, 155, 165, 90],
+  breezy: [190, 205, 160, 160],
+  windy: [250, 210, 90, 210],
+  severe: [255, 140, 60, 240],
+  extreme: [255, 60, 60, 255],
+};
+
+/**
+ * Station dot radius from `gust_kt` (kt → px). Module-scope: the point
+ * layer's prepared-tile styleKey keys on function IDENTITY (see
+ * WEATHER_LIGHTNING_RADIUS_TRANSFORM), so an inline closure would re-prepare
+ * every tile whenever the layer list rebuilds.
+ */
+const STORM4D_STATION_RADIUS_TRANSFORM = (gustKt: number) =>
+  Math.max(1.5, Math.min(9, gustKt * 0.13));
+
+/** Report marker radius from LSR `magnitude` (hail inches / gust kt / 0). */
+const STORM4D_REPORT_RADIUS_TRANSFORM = (mag: number) =>
+  Math.max(2.5, Math.min(8, 2.5 + mag * 0.08));
+
+/** Couplet ring radius from `strength_ms` (peak gate-to-gate Δv, ≥30 m/s). */
+const STORM4D_COUPLET_RADIUS_TRANSFORM = (dv: number) =>
+  Math.max(6, Math.min(18, dv * 0.22));
+
 const EARTH_POLYGON: number[][][] = [
   [
     [-180, 90],
@@ -177,6 +310,14 @@ export interface BuildDemoLayersArgs {
   activeSummaryToggle?: SummaryToggleOption;
   plumbing?: DemoLayerPlumbing;
   /**
+   * The viewer's `prefers-reduced-motion` setting, threaded from
+   * `useReducedMotion()` by the live viewer AND the hover preview. Folded into
+   * the concrete `interpolate` boolean the motion-glide point path receives, so
+   * a reduced-motion viewer gets the discrete (non-gliding) render. Defaults to
+   * false (motion allowed) for callers that don't thread it (e.g. AV cockpit).
+   */
+  reducedMotion?: boolean;
+  /**
    * Fill-rate "performance mode" (AV cockpit). When true, the heavy LIDAR layer
    * trades a little fidelity for frame rate so the densest tiers (e.g. the
    * "ultra" raw cloud) stay smooth: raw dots render OPAQUE + non-antialiased
@@ -196,6 +337,7 @@ export function buildDemoLayers({
   activeSummaryToggle,
   plumbing,
   perfMode = false,
+  reducedMotion = false,
 }: BuildDemoLayersArgs) {
   const {
     registry,
@@ -271,6 +413,75 @@ export function buildDemoLayers({
     },
   );
 
+  // Number of DISTINCT archive-backed tilesets this call instantiates for the
+  // active dataset (each layer owns its own tileset + cache, even where two
+  // layers read one manifest; stacked heatmap channels share ONE tileset, so
+  // they count once). Feeds the composite cache-budget scaling in baseProps.
+  const archiveCount = (() => {
+    switch (selectedDataset.type) {
+      case 'trips':
+        return 1 + (selectedDataset.headsOverlayUrl ? 1 : 0);
+      case 'polygon':
+        return (
+          1 +
+          (selectedDataset.riversUrl && selectedDataset.riversConfig ? 1 : 0)
+        );
+      case 'radar':
+        return (
+          1 +
+          (selectedDataset.radarTracksUrl ? 1 : 0) +
+          (selectedDataset.radarCellsUrl ? 1 : 0)
+        );
+      case 'weather':
+        return (
+          1 +
+          (selectedDataset.windUrl ? 1 : 0) +
+          (selectedDataset.radarTracksUrl ? 1 : 0) +
+          (selectedDataset.radarCellsUrl ? 1 : 0) +
+          (selectedDataset.lightningUrl ? 1 : 0) +
+          (selectedDataset.frontsUrl ? 1 : 0) +
+          (selectedDataset.frontsPipsUrl ? 1 : 0)
+        );
+      case 'storm4d':
+        // Volume + nine context overlays = 10 tilesets with the full
+        // storm-4d-greenfield entry (§9.2: archiveCount storm4d = 10).
+        return (
+          1 +
+          (selectedDataset.outagesUrl ? 1 : 0) +
+          (selectedDataset.cloudTopUrl ? 1 : 0) +
+          (selectedDataset.wind3dUrl ? 1 : 0) +
+          (selectedDataset.warningsUrl ? 1 : 0) +
+          (selectedDataset.coupletUrl ? 1 : 0) +
+          (selectedDataset.stationsUrl ? 1 : 0) +
+          (selectedDataset.reportsUrl ? 1 : 0) +
+          (selectedDataset.lightningUrl ? 1 : 0) +
+          (selectedDataset.soundingUrl ? 1 : 0)
+        );
+      case 'av': {
+        // Spacetime cube early-returns ONE tracks layer; otherwise the HD-map
+        // substrate + the LIDAR branch (scene-split stage+actors = 2) + boxes.
+        if (selectedDataset.avCube && selectedDataset.avTracksUrl) return 1;
+        const lidarLayers =
+          selectedDataset.lidarStage &&
+          selectedDataset.avStaticUrl &&
+          selectedDataset.avDynamicUrl
+            ? 2
+            : selectedDataset.avLidarUrl
+              ? 1
+              : 0;
+        return Math.max(
+          1,
+          (selectedDataset.avMapPolyUrl ? 1 : 0) +
+            (selectedDataset.avMapLineUrl ? 1 : 0) +
+            lidarLayers +
+            (selectedDataset.avObjectsUrl ? 1 : 0),
+        );
+      }
+      default:
+        return 1;
+    }
+  })();
+
   const baseProps = {
     id: selectedDataset.id,
     data: selectedDataset.url,
@@ -292,6 +503,16 @@ export function buildDemoLayers({
     // Shared prefetch/concurrency recipe (see tileLoadingProps): a few real
     // seconds of sim-time lookahead, floored at the resident window.
     ...tileLoadingProps(timeWindow, playbackSpeed),
+    // Per-dataset caches have no cross-dataset budget, so composites scale
+    // each tileset's slice of the ~2 GiB budget; floors keep a slice viable
+    // for dense datasets. Single-archive demos keep the layer defaults.
+    ...(archiveCount > 1 && {
+      maxCacheSize: Math.max(600, Math.floor(2000 / archiveCount)),
+      maxCacheByteSize: Math.max(
+        512 * 2 ** 20,
+        Math.floor((2 * 2 ** 30) / archiveCount),
+      ),
+    }),
     // Playback-governor plumbing is NOT baked into baseProps anymore: each
     // single-layer demo and each composite layer applies its own role-based
     // `sourceProps(id, required)` so EVERY tileset is registered (Phase 0).
@@ -336,6 +557,31 @@ export function buildDemoLayers({
           use3D: selectedDataset.use3D,
           elevationProperty: selectedDataset.elevationProperty,
           elevationScale: selectedDataset.elevationScale,
+          // Motion glide: a CONCRETE boolean (never explicit-undefined, so it
+          // can't shadow the layer's `interpolate: false` default) with the
+          // reduced-motion preference folded in — a reduced-motion viewer gets
+          // the discrete GPU path. `idProperty` is conditionally spread so it is
+          // ABSENT (not undefined) when unset, per the defaultProps gotcha.
+          interpolate: !!selectedDataset.interpolate && !reducedMotion,
+          ...(selectedDataset.idProperty && {
+            idProperty: selectedDataset.idProperty,
+          }),
+          // A finite gap makes the glide HOLD across data holes (coverage
+          // dropouts) rather than fabricate a straight line; conditionally
+          // spread so it is absent (not undefined, which would shadow the
+          // layer's Infinity default) when the dataset does not set it.
+          ...(selectedDataset.maxInterpolationGap != null && {
+            maxInterpolationGap: selectedDataset.maxInterpolationGap,
+          }),
+          // DataFilter range control: conditionally spread so both keys are
+          // absent by default (never explicit-undefined shadowing the
+          // DataFilterExtension defaults). Composes WITH the time filter.
+          ...(selectedDataset.filterProperty && {
+            filterProperty: selectedDataset.filterProperty,
+          }),
+          ...(selectedDataset.filterRange && {
+            filterRange: selectedDataset.filterRange,
+          }),
         }),
       ];
     case 'point-cloud':
@@ -533,16 +779,21 @@ export function buildDemoLayers({
         : [tripsLayer];
       // Composite: overlay moving head-dots from a SECOND (per-trip, OSRM-routed)
       // archive on top of the flow corridors (bixi-live = directional flow +
-      // moving riders). Painter order puts it last (topmost). It's an OPTIONAL
-      // governor source so the light corridor archive still gates the clock while
-      // the heavier per-trip stream loads continue-and-degrade — same split as
-      // the radar/av overlays.
+      // moving riders). Painter order puts it last (topmost). Gating is
+      // policy-driven: by DEFAULT the overlay registers as a REQUIRED governor
+      // source, so the shared clock waits for the riders too (MSE-intersection
+      // semantics) instead of animating the corridors while the heads run dry;
+      // overlayGatesPlayback: false opts a decorative overlay back into
+      // continue-and-degrade.
       if (selectedDataset.headsOverlayUrl) {
         tripsLayers.push(
           new AnimatedTripHeadsLayer({
             ...baseProps,
             id: `${selectedDataset.id}-heads`,
-            ...sourceProps(`${selectedDataset.id}-heads`, false),
+            ...sourceProps(
+              `${selectedDataset.id}-heads`,
+              selectedDataset.overlayGatesPlayback ?? true,
+            ),
             data: selectedDataset.headsOverlayUrl,
             // Overlays never pin the storyboard preview tier (the primary does).
             overviewPreload: false,
@@ -676,15 +927,20 @@ export function buildDemoLayers({
       // Rain→flood composite: overlay a river-discharge flow-matrix archive on
       // top of the precip-isoband field. FlowCorridorLayer (static geometry +
       // per-vertex×bucket value matrix) shares the primary's timeRange/timeWindow
-      // — both archives are full-2019 daily. OPTIONAL governor source so the
-      // lighter rain field gates the clock (radar/av overlay split).
+      // — both archives are full-2019 daily. Gating is policy-driven: REQUIRED
+      // by DEFAULT, so the clock waits for the heavy river archive instead of
+      // sweeping past its loaded frontier (empty riverbeds under live rain);
+      // overlayGatesPlayback: false opts back into continue-and-degrade.
       if (selectedDataset.riversUrl && selectedDataset.riversConfig) {
         const rc = selectedDataset.riversConfig;
         polygonLayers.push(
           new FlowCorridorLayer({
             ...baseProps,
             id: `${selectedDataset.id}-rivers`,
-            ...sourceProps(`${selectedDataset.id}-rivers`, false),
+            ...sourceProps(
+              `${selectedDataset.id}-rivers`,
+              selectedDataset.overlayGatesPlayback ?? true,
+            ),
             data: selectedDataset.riversUrl,
             overviewPreload: false,
             onOverviewPreload: undefined,
@@ -893,11 +1149,13 @@ export function buildDemoLayers({
       //      CategoryColorExtension);
       //   2. storm-cell TRACKS (AnimatedTripsLayer, per-vertex intensity);
       //   3. storm-cell CENTROIDS (AnimatedPointLayer, sized by max_dbz).
-      // Phase 0 multi-source: the overlays are now registered as OPTIONAL
-      // governor sources (required:false) — they load and stream coordinated
-      // with the rest, but never gate the clock (continue-and-degrade). They no
-      // longer have their governor plumbing stripped; only the overview-preload
-      // tier stays field-only (the storyboard pins the primary archive).
+      // Multi-source gating: the track/centroid overlays register as REQUIRED
+      // governor sources by default (`overlayGatesPlayback ?? true`) — the
+      // clock min-gates on all three archives, so the cells can no longer run
+      // dry and vanish while the reflectivity field keeps sweeping. Set
+      // `overlayGatesPlayback: false` on the dataset to opt back into
+      // continue-and-degrade. Only the overview-preload tier stays field-only
+      // (the storyboard pins the primary archive).
       // Painter order: field (backdrop) → tracks → centroids (topmost).
       const overlayBase = {
         ...baseProps,
@@ -935,7 +1193,10 @@ export function buildDemoLayers({
           new AnimatedTripsLayer({
             ...overlayBase,
             id: `${selectedDataset.id}-tracks`,
-            ...sourceProps(`${selectedDataset.id}-tracks`, false),
+            ...sourceProps(
+              `${selectedDataset.id}-tracks`,
+              selectedDataset.overlayGatesPlayback ?? true,
+            ),
             data: selectedDataset.radarTracksUrl,
             tripColor: selectedDataset.tripColor ?? [255, 255, 255, 200],
             // Per-vertex intensity (max_dbz over time) shades the trail.
@@ -960,7 +1221,10 @@ export function buildDemoLayers({
           new AnimatedPointLayer({
             ...overlayBase,
             id: `${selectedDataset.id}-cells`,
-            ...sourceProps(`${selectedDataset.id}-cells`, false),
+            ...sourceProps(
+              `${selectedDataset.id}-cells`,
+              selectedDataset.overlayGatesPlayback ?? true,
+            ),
             data: selectedDataset.radarCellsUrl,
             fillColor: selectedDataset.radarCellColor ?? [255, 255, 255, 230],
             radius: selectedDataset.radiusProperty ?? 'max_dbz',
@@ -978,16 +1242,21 @@ export function buildDemoLayers({
       return layers;
     }
     case 'weather': {
-      // Composite WEATHER-SUITE render — up to four archives on one playhead.
-      // Painter order (bottom→top): wind streamlines → precip FIELD (the
-      // REQUIRED governor source, so the clock gates on the heaviest stream) →
-      // precip cell tracks → cell centroids → lightning density → lightning
-      // flashes. Every overlay is an OPTIONAL governor source (continue-and-
-      // degrade). Each animated layer widens its OWN loader window (trips →
-      // 2×trailLength, flashes → 2×wakeLength), so the shared short field window
-      // never starves them. Lightning styling is fixed here (the standalone
-      // `lightning` case's `radius*`/`wakeLength` fields collide with the precip
-      // cells' on the flat Dataset type).
+      // Composite WEATHER-SUITE render — up to seven archives on one
+      // playhead. Painter order (bottom→top): wind drift dots → precip FIELD
+      // → WPC surface fronts → front pips → precip cell tracks → cell
+      // centroids → lightning flashes. Every time-animated archive registers as a REQUIRED governor
+      // source by default (`overlayGatesPlayback ?? true`), so the shared
+      // clock min-gates on ALL of them — MSE-intersection semantics; an
+      // overlay can no longer run dry and render blank while the field keeps
+      // animating. The governor's run-ahead fairness + weight shed keep the
+      // heavier streams fed. Set `overlayGatesPlayback: false` on the dataset
+      // to opt every overlay back into continue-and-degrade (text-track
+      // semantics). Each animated layer still widens its OWN loader window
+      // (trips → 2×trailLength, flashes → 2×wakeLength), so the shared short
+      // field window never starves them. Lightning styling is fixed here (the
+      // standalone `lightning` case's `radius*`/`wakeLength` fields collide
+      // with the precip cells' on the flat Dataset type).
       const overlayBase = {
         ...baseProps,
         onOverviewPreload: undefined,
@@ -1001,18 +1270,30 @@ export function buildDemoLayers({
       // dots that drift with the storms instead of continental spaghetti. Big
       // GPU win too: heads draw one instanced circle per ACTIVE particle instead
       // of keeping ~3 h of continental ribbon geometry resident (the ribbons
-      // left the solo wind demo GPU-bound ~33fps). Reuses the SAME hrrr-wind
-      // trips archive — no rebuild; the head position is CPU-interpolated along
-      // each particle path once per frame. Constant subtle color (no per-vertex
-      // speed gradient) is deliberate — a contextual backdrop, kept quiet.
+      // left the solo wind demo GPU-bound ~33fps). The head position is
+      // CPU-interpolated along each particle path once per frame. When the
+      // archive carries a per-vertex value and the dataset sets `windGradient`,
+      // each dot is colored by that scalar (here the 500 mb air TEMPERATURE it
+      // rides, interpolated to the dot exactly like its position) — otherwise a
+      // constant subtle `windHeadColor` backdrop.
       if (selectedDataset.windUrl) {
         layers.push(
           new AnimatedTripHeadsLayer({
             ...overlayBase,
             id: `${selectedDataset.id}-wind`,
-            ...sourceProps(`${selectedDataset.id}-wind`, false),
+            ...sourceProps(
+              `${selectedDataset.id}-wind`,
+              selectedDataset.overlayGatesPlayback ?? true,
+            ),
             data: selectedDataset.windUrl,
             headColor: selectedDataset.windHeadColor ?? [150, 180, 220, 115],
+            // Per-vertex temperature gradient (falls back to headColor when unset
+            // or where a dot has no sampled value).
+            ...(selectedDataset.windGradient && {
+              gradientProperty: selectedDataset.windGradient.property,
+              gradientDomain: selectedDataset.windGradient.domain,
+              gradientColorRamp: selectedDataset.windGradient.colors,
+            }),
             headRadiusPixels: selectedDataset.windHeadRadiusPixels ?? 1.4,
             antialiasing: true,
             opacity: selectedDataset.windHeadOpacity ?? 0.6,
@@ -1048,13 +1329,72 @@ export function buildDemoLayers({
         }),
       );
 
-      // 2. precip cell tracks.
+      // 2. WPC surface fronts — the synoptic skeleton over the precip field:
+      // analyzed cold/warm/occluded/stationary fronts + troughs, redrawn every
+      // 3 h (the coarsest cadence in the suite), spline-smoothed at build time
+      // and colored categorically by `render_class`. Whole paths show for
+      // their validity interval; successive analyses cross-dissolve (see
+      // WEATHER_FRONT_FADE_MS — deliberately NOT the dataset's 7-min radar
+      // fade, which would be sub-frame at the 3-h analysis step).
+      if (selectedDataset.frontsUrl) {
+        layers.push(
+          new AnimatedPathLayer({
+            ...overlayBase,
+            id: `${selectedDataset.id}-fronts`,
+            ...sourceProps(
+              `${selectedDataset.id}-fronts`,
+              selectedDataset.overlayGatesPlayback ?? true,
+            ),
+            data: selectedDataset.frontsUrl,
+            pathColor: 'render_class',
+            colorMapping: WEATHER_FRONT_COLORS,
+            colorMappingDefault: [200, 200, 210, 200],
+            pathWidth: 2.6,
+            widthUnits: 'pixels',
+            capRounded: true,
+            jointRounded: true,
+            fadeInDuration: WEATHER_FRONT_FADE_MS,
+            fadeOutDuration: WEATHER_FRONT_FADE_MS,
+          }),
+        );
+      }
+
+      // 3. front pips — the classic notation (cold triangles, warm
+      // semicircles, alternating for occluded/stationary) as small oriented
+      // GEOGRAPHIC polygons baked on each front's advancing side by
+      // wpc_fronts.py, drawn over the lines with the same categorical colors
+      // and cross-dissolve so line + pips read as one symbol.
+      if (selectedDataset.frontsPipsUrl) {
+        layers.push(
+          new AnimatedPolygonLayer({
+            ...overlayBase,
+            id: `${selectedDataset.id}-fronts-pips`,
+            ...sourceProps(
+              `${selectedDataset.id}-fronts-pips`,
+              selectedDataset.overlayGatesPlayback ?? true,
+            ),
+            data: selectedDataset.frontsPipsUrl,
+            filled: true,
+            stroked: false,
+            fillColor: 'render_class',
+            colorMapping: WEATHER_FRONT_COLORS,
+            colorMappingDefault: [200, 200, 210, 200],
+            fadeInDuration: WEATHER_FRONT_FADE_MS,
+            fadeOutDuration: WEATHER_FRONT_FADE_MS,
+          }),
+        );
+      }
+
+      // 4. precip cell tracks.
       if (selectedDataset.radarTracksUrl) {
         layers.push(
           new AnimatedTripsLayer({
             ...overlayBase,
             id: `${selectedDataset.id}-tracks`,
-            ...sourceProps(`${selectedDataset.id}-tracks`, false),
+            ...sourceProps(
+              `${selectedDataset.id}-tracks`,
+              selectedDataset.overlayGatesPlayback ?? true,
+            ),
             data: selectedDataset.radarTracksUrl,
             tripColor: selectedDataset.tripColor ?? [255, 255, 255, 200],
             ...(selectedDataset.tripGradient && {
@@ -1074,13 +1414,16 @@ export function buildDemoLayers({
         );
       }
 
-      // 3. precip cell centroids.
+      // 5. precip cell centroids.
       if (selectedDataset.radarCellsUrl) {
         layers.push(
           new AnimatedPointLayer({
             ...overlayBase,
             id: `${selectedDataset.id}-cells`,
-            ...sourceProps(`${selectedDataset.id}-cells`, false),
+            ...sourceProps(
+              `${selectedDataset.id}-cells`,
+              selectedDataset.overlayGatesPlayback ?? true,
+            ),
             data: selectedDataset.radarCellsUrl,
             fillColor: selectedDataset.radarCellColor ?? [255, 255, 255, 220],
             radius: selectedDataset.radiusProperty ?? 'max_dbz',
@@ -1094,7 +1437,7 @@ export function buildDemoLayers({
         );
       }
 
-      // 4. GLM lightning flashes (topmost) — one ADDITIVE point layer; the
+      // 6. GLM lightning flashes (topmost) — one ADDITIVE point layer; the
       // stacked splats double as the density glow (see the standalone
       // `lightning` case for why the heatmap backdrop was retired).
       if (selectedDataset.lightningUrl) {
@@ -1102,7 +1445,10 @@ export function buildDemoLayers({
           new AnimatedPointLayer({
             ...overlayBase,
             id: `${selectedDataset.id}-lightning`,
-            ...sourceProps(`${selectedDataset.id}-lightning`, false),
+            ...sourceProps(
+              `${selectedDataset.id}-lightning`,
+              selectedDataset.overlayGatesPlayback ?? true,
+            ),
             data: selectedDataset.lightningUrl,
             // De-emphasized copy of the standalone `lightning` case's flash
             // look (smaller radii; the flat Dataset type can't carry a second
@@ -1120,6 +1466,307 @@ export function buildDemoLayers({
             splat: true,
             stroked: false,
             parameters: LIGHTNING_ADDITIVE_PARAMETERS,
+          }),
+        );
+      }
+
+      return layers;
+    }
+    case 'storm4d': {
+      // Composite STORM-4D render — one supercell as a true 4D object, up to
+      // ten archives on one playhead (§9.2 of the storm-4d roadmap is the
+      // binding layer map). Painter order bottom→top: county outage prisms →
+      // cloud-top anvil canopy → multi-level winds → the NEXRAD gate VOLUME
+      // (primary/governor) → VTEC warning prisms → couplet rings → surface
+      // stations → storm reports → GLM lightning → sounding ascent. Every
+      // time-animated overlay registers as a REQUIRED governor source by
+      // default (`overlayGatesPlayback ?? true`), exactly like the weather
+      // composite — MSE-intersection semantics, no overlay runs dry while
+      // the volume keeps animating. ONE shared vertical exaggeration
+      // (STORM4D_ELEVATION_SCALE) across every altitude-bearing layer.
+      // Overlay styling is fixed here (the flat Dataset type's radius/color
+      // fields belong to the volume; see the weather case's lightning note).
+      const overlayBase = {
+        ...baseProps,
+        onOverviewPreload: undefined,
+        overviewPreload: false,
+      };
+      const gates = selectedDataset.overlayGatesPlayback ?? true;
+      const layers: any[] = [];
+
+      // 1. County power outages — dark-red translucent prisms extruded by
+      // `customers_out` (EAGLE-I 15-min rollups on county geometry). A
+      // data-magnitude extrusion (m per customer), not altitude, so it keeps
+      // its own scale. Arrives BEHIND the storm — the damage wake.
+      if (selectedDataset.outagesUrl) {
+        layers.push(
+          new AnimatedPolygonLayer({
+            ...overlayBase,
+            id: `${selectedDataset.id}-outages`,
+            ...sourceProps(`${selectedDataset.id}-outages`, gates),
+            data: selectedDataset.outagesUrl,
+            filled: true,
+            fillColor: [180, 50, 50, 120],
+            extruded: true,
+            elevation: 'customers_out',
+            elevationScale: STORM4D_OUTAGE_METERS_PER_CUSTOMER,
+            wireframe: false,
+            stroked: false,
+          }),
+        );
+      }
+
+      // 2. GOES C13 cloud-top "anvil canopy" — BT isobands extruded to their
+      // standard-atmosphere height (`top_alt_m`), very translucent so the
+      // volume reads through the haze. Successive 5-min scans cross-dissolve
+      // (the generator pads `end_timestamp`; the fades ramp the overlap).
+      if (selectedDataset.cloudTopUrl) {
+        layers.push(
+          new AnimatedPolygonLayer({
+            ...overlayBase,
+            id: `${selectedDataset.id}-cloudtop`,
+            ...sourceProps(`${selectedDataset.id}-cloudtop`, gates),
+            data: selectedDataset.cloudTopUrl,
+            filled: true,
+            fillColor: 'bt_band',
+            colorMapping: STORM4D_CLOUDTOP_COLORS,
+            colorMappingDefault: [140, 160, 190, 24],
+            extruded: true,
+            elevation: 'top_alt_m',
+            elevationScale: STORM4D_ELEVATION_SCALE,
+            wireframe: false,
+            stroked: false,
+            fadeInDuration: 150000,
+            fadeOutDuration: 150000,
+          }),
+        );
+      }
+
+      // 3. Multi-level HRRR winds — particle trips at 850/700/500/250 mb,
+      // each path lifted to its pressure-level altitude (`level_alt_m`) and
+      // progressively revealed as a trailing thread so the storm-relative
+      // flow visibly threads the volume at four heights.
+      if (selectedDataset.wind3dUrl) {
+        layers.push(
+          new AnimatedPathLayer({
+            ...overlayBase,
+            id: `${selectedDataset.id}-wind3d`,
+            ...sourceProps(`${selectedDataset.id}-wind3d`, gates),
+            data: selectedDataset.wind3dUrl,
+            pathColor: [130, 190, 235, 110],
+            pathWidth: 1.2,
+            widthUnits: 'pixels',
+            revealTrail: true,
+            revealDuration: 2700000, // 45 sim-min thread behind each particle
+            reducedMotion,
+            elevationProperty: 'level_alt_m',
+            elevationScale: STORM4D_ELEVATION_SCALE,
+            capRounded: false,
+            jointRounded: false,
+            // One 2 h archive bucket resident keeps the whole particle field
+            // complete (hrrr_advect pattern — see the weather wind overlay).
+            timeWindow: 7200000,
+          }),
+        );
+      }
+
+      // 4. NEXRAD gate VOLUME — the primary/governor stream. 3D billboard
+      // points stacked by beam altitude; the render-mode toggle (the reused
+      // SummaryToggle segmented control) swaps the categorical color column
+      // between reflectivity (`dbz_band`) and dealiased velocity
+      // (`vel_band`) IN PLACE — same layer id, so the tileset + cache
+      // survive the toggle and only tile styling re-prepares. The GPU dBZ
+      // threshold (`filterProperty: 'dbz'`) composes with the time window;
+      // scan-boundary pops are hidden by the dataset's cross-dissolve fades.
+      layers.push(
+        new AnimatedPointLayer({
+          ...baseProps,
+          ...sourceProps(selectedDataset.id, true),
+          fillColor:
+            activeSummaryToggle?.weightProperty ??
+            selectedDataset.colorProperty ??
+            'dbz_band',
+          colorMapping:
+            activeSummaryToggle?.colorMapping ?? selectedDataset.colorMapping,
+          colorMappingDefault: selectedDataset.colorMappingDefault ?? [
+            120, 120, 130, 60,
+          ],
+          billboard: true,
+          use3D: true,
+          elevationProperty: 'alt_m',
+          elevationScale: STORM4D_ELEVATION_SCALE,
+          radius:
+            selectedDataset.radiusProperty ?? selectedDataset.radius ?? 320,
+          radiusUnits: selectedDataset.radiusUnits ?? 'meters',
+          radiusScale: selectedDataset.radiusScale ?? 1,
+          radiusMinPixels: selectedDataset.radiusMinPixels ?? 1.2,
+          radiusMaxPixels: selectedDataset.radiusMaxPixels ?? 8,
+          stroked: false,
+          ...(selectedDataset.filterProperty && {
+            filterProperty: selectedDataset.filterProperty,
+          }),
+          ...(selectedDataset.filterRange && {
+            filterRange: selectedDataset.filterRange,
+          }),
+          ...(selectedDataset.fadeInDuration !== undefined && {
+            fadeInDuration: selectedDataset.fadeInDuration,
+          }),
+          ...(selectedDataset.fadeOutDuration !== undefined && {
+            fadeOutDuration: selectedDataset.fadeOutDuration,
+          }),
+        }),
+      );
+
+      // 5. VTEC warning polygons — translucent prisms with wireframe edges,
+      // extruded 12 km so the walls enclose the volume. One feature per SBW
+      // phase (issue → SVS shrink → expire), colored by `phenom`.
+      if (selectedDataset.warningsUrl) {
+        layers.push(
+          new AnimatedPolygonLayer({
+            ...overlayBase,
+            id: `${selectedDataset.id}-warnings`,
+            ...sourceProps(`${selectedDataset.id}-warnings`, gates),
+            data: selectedDataset.warningsUrl,
+            filled: true,
+            fillColor: 'phenom',
+            colorMapping: STORM4D_WARNING_COLORS,
+            colorMappingDefault: [200, 200, 210, 30],
+            extruded: true,
+            elevation: STORM4D_WARNING_HEIGHT_M,
+            elevationScale: STORM4D_ELEVATION_SCALE,
+            wireframe: true,
+            // Constant wireframe-edge color (SolidPolygonLayer.getLineColor
+            // pass-through) over the translucent phenom-colored walls.
+            getLineColor: [255, 255, 255, 170],
+          }),
+        );
+      }
+
+      // 6. Mesocyclone couplet markers — white stroked rings at beam height,
+      // sized by the detected gate-to-gate Δv. The narrative payoff of the
+      // velocity mode, visible in both modes.
+      if (selectedDataset.coupletUrl) {
+        layers.push(
+          new AnimatedPointLayer({
+            ...overlayBase,
+            id: `${selectedDataset.id}-couplet`,
+            ...sourceProps(`${selectedDataset.id}-couplet`, gates),
+            data: selectedDataset.coupletUrl,
+            fillColor: [255, 255, 255, 26],
+            stroked: true,
+            strokeColor: [255, 255, 255, 235],
+            lineWidthMinPixels: 1.5,
+            radius: 'strength_ms',
+            radiusUnits: 'pixels',
+            radiusScale: 1,
+            radiusMinPixels: 6,
+            radiusMaxPixels: 18,
+            radiusTransform: STORM4D_COUPLET_RADIUS_TRANSFORM,
+            billboard: true,
+            use3D: true,
+            elevationProperty: 'alt_m',
+            elevationScale: STORM4D_ELEVATION_SCALE,
+          }),
+        );
+      }
+
+      // 7. Surface stations — per-minute ASOS dots at ground, sized by gust
+      // and colored by `gust_band`, so the gust front sweeps the mesonet.
+      if (selectedDataset.stationsUrl) {
+        layers.push(
+          new AnimatedPointLayer({
+            ...overlayBase,
+            id: `${selectedDataset.id}-stations`,
+            ...sourceProps(`${selectedDataset.id}-stations`, gates),
+            data: selectedDataset.stationsUrl,
+            fillColor: 'gust_band',
+            colorMapping: STORM4D_GUST_COLORS,
+            colorMappingDefault: [150, 155, 165, 90],
+            radius: 'gust_kt',
+            radiusUnits: 'pixels',
+            radiusScale: 1,
+            radiusMinPixels: 1.5,
+            radiusMaxPixels: 9,
+            radiusTransform: STORM4D_STATION_RADIUS_TRANSFORM,
+            stroked: false,
+          }),
+        );
+      }
+
+      // 8. Local storm reports — wake-mode markers colored by `kind`,
+      // arriving BEHIND the storm (ground truth trailing the radar).
+      if (selectedDataset.reportsUrl) {
+        layers.push(
+          new AnimatedPointLayer({
+            ...overlayBase,
+            id: `${selectedDataset.id}-reports`,
+            ...sourceProps(`${selectedDataset.id}-reports`, gates),
+            data: selectedDataset.reportsUrl,
+            fillColor: 'kind',
+            colorMapping: STORM4D_REPORT_COLORS,
+            colorMappingDefault: [180, 180, 190, 210],
+            radius: 'magnitude',
+            radiusUnits: 'pixels',
+            radiusScale: 1,
+            radiusMinPixels: 2.5,
+            radiusMaxPixels: 8,
+            radiusTransform: STORM4D_REPORT_RADIUS_TRANSFORM,
+            wakeLength: 3600000, // 1 sim-h fading wake behind the storm
+            wakeTailScale: 0.2,
+            stroked: false,
+          }),
+        );
+      }
+
+      // 9. GLM lightning — the existing continental archive, timeRange-
+      // subset by the demo clock, rendered at GROUND with the additive
+      // splat treatment (§7 Q1 resolved: no fabricated altitude). Styling
+      // mirrors the weather composite's flash layer (color legend-pinned).
+      if (selectedDataset.lightningUrl) {
+        layers.push(
+          new AnimatedPointLayer({
+            ...overlayBase,
+            id: `${selectedDataset.id}-lightning`,
+            ...sourceProps(`${selectedDataset.id}-lightning`, gates),
+            data: selectedDataset.lightningUrl,
+            fillColor: LIGHTNING_FLASH_COLOR,
+            radius: 'energy_fj',
+            radiusUnits: 'pixels',
+            radiusScale: 1,
+            radiusMinPixels: 1,
+            radiusMaxPixels: 6,
+            radiusTransform: WEATHER_LIGHTNING_RADIUS_TRANSFORM,
+            wakeLength: 700000,
+            wakeTailScale: 0.15,
+            splat: true,
+            stroked: false,
+            parameters: LIGHTNING_ADDITIVE_PARAMETERS,
+          }),
+        );
+      }
+
+      // 10. Radiosonde ascent — the OAX 18Z special launch climbing through
+      // the scene as a small bright trail (delight layer, topmost).
+      if (selectedDataset.soundingUrl) {
+        layers.push(
+          new AnimatedPointLayer({
+            ...overlayBase,
+            id: `${selectedDataset.id}-sounding`,
+            ...sourceProps(`${selectedDataset.id}-sounding`, gates),
+            data: selectedDataset.soundingUrl,
+            fillColor: [200, 240, 255, 235],
+            radius: 2.5,
+            radiusUnits: 'pixels',
+            radiusScale: 1,
+            radiusMinPixels: 1.5,
+            radiusMaxPixels: 4,
+            wakeLength: 3600000, // the trail = the last sim-hour of ascent
+            wakeTailScale: 0.25,
+            billboard: true,
+            use3D: true,
+            elevationProperty: 'alt_m',
+            elevationScale: STORM4D_ELEVATION_SCALE,
+            stroked: false,
           }),
         );
       }
@@ -1213,8 +1860,12 @@ export function buildDemoLayers({
       const layers: any[] = [];
       // HD-map substrate — drawn FIRST so it sits UNDER the LIDAR/ego/objects:
       // drivable-area / crosswalk POLYGONS + lane-divider / boundary LINES, each
-      // colored by a categorical `map_layer` via `mapColors`. Both are OPTIONAL
-      // governor sources (load coordinated, never gate the clock).
+      // colored by a categorical `map_layer` via `mapColors`. Both stay
+      // hardcoded OPTIONAL governor sources — deliberately exempt from
+      // `overlayGatesPlayback`: they are TIMELESS static substrates (one
+      // full-range archive, loaded once), so they cannot "run dry"
+      // mid-playback; gating on them would only delay start. This is the
+      // text-track case, unlike the time-animated radar/weather overlays.
       if (selectedDataset.avMapPolyUrl) {
         layers.push(
           new AnimatedPolygonLayer({

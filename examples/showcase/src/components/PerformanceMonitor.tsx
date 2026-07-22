@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { enableProbe, getSnapshot } from '@poopdeck.gl/layers';
 import type { OverviewPreloadResult } from '@poopdeck.gl/layers';
+import type { SourceRunway } from '@poopdeck.gl/playback';
 
 interface PerformanceStats {
   tileCount: number;
@@ -39,6 +40,13 @@ interface PerformanceMonitorProps {
    * top-anchored either way — pre-existing behaviour.)
    */
   anchor?: 'bottom-right' | 'top-right';
+  /**
+   * Per-source buffered-runway probe (PlaybackGovernor.getSourceRunways),
+   * threaded by the viewer that owns the governor. Polled only while the HUD
+   * is expanded; one compact row per registered source so a starved source
+   * (runway 0, not complete) is VISIBLE instead of silently rendering empty.
+   */
+  getSourceRunways?: () => SourceRunway[];
 }
 
 /** One-line "storyboard:" stat. */
@@ -71,6 +79,7 @@ const PerformanceMonitor: React.FC<PerformanceMonitorProps> = ({
   visible = true,
   overviewPreload = null,
   anchor = 'bottom-right',
+  getSourceRunways,
 }) => {
   const [stats, setStats] = useState<PerformanceStats>({
     tileCount: 0,
@@ -87,6 +96,21 @@ const PerformanceMonitor: React.FC<PerformanceMonitorProps> = ({
     estimatedMemoryMB: 0,
   });
   const [expanded, setExpanded] = useState(false);
+  const [runways, setRunways] = useState<SourceRunway[]>([]);
+
+  // Per-source runway rows: poll the governor probe on the same 500 ms cadence
+  // as the stats, but ONLY while the expanded panel can show them (a pure read
+  // — no reason to probe behind the collapsed chip).
+  useEffect(() => {
+    if (!visible || !expanded || !getSourceRunways) {
+      setRunways([]);
+      return;
+    }
+    const update = () => setRunways(getSourceRunways());
+    update();
+    const intervalId = setInterval(update, 500);
+    return () => clearInterval(intervalId);
+  }, [visible, expanded, getSourceRunways]);
 
   useEffect(() => {
     if (!visible) return;
@@ -263,6 +287,39 @@ const PerformanceMonitor: React.FC<PerformanceMonitorProps> = ({
               {hitRate}%
             </span>
           </div>
+          {runways.length > 0 && (
+            <>
+              <div
+                style={{ height: 1, background: '#3A414C', margin: '4px 0' }}
+              />
+              {/* One row per governor source: REQ sources gate the clock, OPT
+                  sources continue-and-degrade. Runway = buffered sim-seconds
+                  ahead of the playhead; red = starved (empty runway, more data
+                  left), ✓ = fully buffered / dataset end. */}
+              {runways.map((r) => {
+                const starved = r.runwaySimMs === 0 && !r.complete;
+                return (
+                  <div key={r.id} className="flex justify-between gap-2">
+                    <span className="truncate">
+                      <span
+                        style={{ color: r.required ? '#1FBAD6' : '#6A7485' }}
+                      >
+                        {r.required ? 'REQ' : 'OPT'}
+                      </span>{' '}
+                      {r.id}
+                    </span>
+                    <span
+                      className="text-right shrink-0"
+                      style={starved ? { color: '#F9042C' } : undefined}
+                    >
+                      {r.complete ? '✓ ' : ''}
+                      {(r.runwaySimMs / 1000).toFixed(1)}s
+                    </span>
+                  </div>
+                );
+              })}
+            </>
+          )}
         </div>
       )}
     </div>

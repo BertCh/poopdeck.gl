@@ -23,8 +23,8 @@
  *     backdrop and expose an opt-in atmosphere toggle (WebGPU-only, default OFF).
  *
  * Each layer registers a governor source under the SAME id the deck path uses
- * (`dataset.id`; overlays `${id}-heads`, optional) via `<SttCanvas registry>`, so
- * the transport/clock gate identically.
+ * (`dataset.id`; overlays `${id}-heads`, gated per `overlayGatesPlayback`) via
+ * `<SttCanvas registry>`, so the transport/clock gate identically.
  */
 
 import React, {
@@ -246,9 +246,10 @@ function renderGeoLayers(ds: Dataset, perfMode: boolean): React.ReactNode {
             opacity={ds.opacity ?? 0.85}
           />
         );
-      // Composite: moving head-dots from a SECOND (per-trip) archive on top of the
-      // corridors — an OPTIONAL governor source (continue-and-degrade), same split
-      // as the deck path.
+      // Composite: moving head-dots from a SECOND (per-trip) archive on top of
+      // the corridors. Gating is policy-driven, same as the deck path: REQUIRED
+      // by DEFAULT so the shared clock waits for the riders too;
+      // overlayGatesPlayback: false opts into continue-and-degrade.
       if (ds.headsOverlayUrl) {
         return (
           <>
@@ -256,7 +257,7 @@ function renderGeoLayers(ds: Dataset, perfMode: boolean): React.ReactNode {
             <SttTripHeadsLayer
               id={`${ds.id}-heads`}
               url={ds.headsOverlayUrl}
-              sourceRequired={false}
+              sourceRequired={ds.overlayGatesPlayback ?? true}
               headColor={asRGBA(ds.headColor) ?? [253, 128, 93, 255]}
               headRadius={ds.headRadius ?? 6}
             />

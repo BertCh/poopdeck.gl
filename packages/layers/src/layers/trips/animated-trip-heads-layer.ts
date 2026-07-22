@@ -36,7 +36,10 @@ import {
   SpatioTemporalLayer,
   SpatioTemporalLayerProps,
 } from '../spatiotemporal-layer.js';
-import { synthesizeVertexTimes } from './animated-trips-layer.js';
+import {
+  synthesizeVertexTimes,
+  expandGradientColors,
+} from './animated-trips-layer.js';
 import { emit } from '../../lib/telemetry.js';
 import type {
   Tile,
@@ -49,8 +52,34 @@ const DEBUG = false;
 /** Props added by {@link AnimatedTripHeadsLayer} (own props only — compose with
  * {@link SpatioTemporalLayerProps} via {@link AnimatedTripHeadsLayerProps}). */
 export interface _AnimatedTripHeadsLayerProps {
-  /** Head dot color (RGBA, 0-255). @default [253, 128, 93, 255] */
+  /**
+   * Head dot color (RGBA, 0-255). Used as a CONSTANT fill when no per-vertex
+   * gradient is configured, and as the fallback for dots whose interpolated
+   * gradient value is `NaN` (e.g. outside the sampled field).
+   * @default [253, 128, 93, 255]
+   */
   headColor?: Color;
+
+  /* ── Per-vertex gradient coloring ──────────────────────────────────────
+   * Colors each moving dot by a per-vertex scalar carried on the trip
+   * (`BinaryFeatures.vertexValues`), interpolated to the dot's live position
+   * exactly like the position itself, then mapped through a ramp. Mirrors the
+   * {@link AnimatedTripsLayer} `gradient*` vocabulary so a dataset's
+   * `windGradient` config drives both the streamline and the dot renderer.
+   * Used e.g. to shade the HRRR drift-particle field by 500 mb air
+   * temperature. Falls back to constant {@link headColor} when unset. */
+
+  /**
+   * Names which per-vertex scalar channel to color by — currently only
+   * `'vertexValues'`. When set (with a non-empty {@link gradientColorRamp}) and
+   * the tile carries that channel, each dot's value is mapped through the ramp
+   * over {@link gradientDomain}. @default null (constant {@link headColor})
+   */
+  gradientProperty?: string | null;
+  /** `[min, max]` value range mapped onto {@link gradientColorRamp}. @default [0, 1] */
+  gradientDomain?: [number, number];
+  /** Low→high color stops for the gradient ramp. Empty → constant color. @default [] */
+  gradientColorRamp?: Color[];
   /**
    * Units for the head radius. 'pixels' (default) is screen-space; 'meters'
    * makes the dot world-space so it emerges/shrinks with zoom (clamped by the
@@ -162,6 +191,8 @@ interface PreparedTile {
   endTimes: Float32Array;
   /** Per-vertex times, RELATIVE to `timeOffset` (real OSRM or synthesized). */
   vertexTimes: Float32Array;
+  /** Per-vertex gradient scalar (zero-copy from the tile), or null if absent. */
+  vertexValues: Float32Array | null;
   /** 2 or 3 — stride of the source `positions` buffer. */
   dims: number;
   featureCount: number;
@@ -190,6 +221,9 @@ export class AnimatedTripHeadsLayer<
   static defaultProps: DefaultProps<AnimatedTripHeadsLayerProps> = {
     ...SpatioTemporalLayer.defaultProps,
     headColor: { type: 'color', value: DEFAULT_HEAD_COLOR },
+    gradientProperty: { type: 'object', value: null, optional: true },
+    gradientDomain: { type: 'array', value: [0, 1], compare: true },
+    gradientColorRamp: { type: 'array', value: [], compare: true },
     sizeUnits: 'pixels',
     headRadiusPixels: { type: 'number', value: 4, min: 0 },
     headRadius: { type: 'number', value: 0, min: 0 },
@@ -265,6 +299,12 @@ export class AnimatedTripHeadsLayer<
       startTimes: binary.startTimes,
       endTimes: binary.endTimes,
       vertexTimes,
+      // Per-vertex gradient scalar (e.g. 500 mb temperature) — zero-copy; only
+      // referenced when a gradient is configured and long enough to cover the tile.
+      vertexValues:
+        binary.vertexValues && binary.vertexValues.length >= totalVerts
+          ? binary.vertexValues
+          : null,
       dims,
       featureCount: binary.featureCount,
       timeOffset: binary.timeOffset,
@@ -293,18 +333,24 @@ export class AnimatedTripHeadsLayer<
   private computeHeads(
     p: PreparedTile,
     relTime: number,
-  ): { positions: Float64Array; count: number } {
+    wantValues: boolean,
+  ): { positions: Float64Array; values: Float32Array | null; count: number } {
     const {
       positions,
       startIndices,
       startTimes,
       endTimes,
       vertexTimes,
+      vertexValues,
       dims,
       featureCount,
     } = p;
     // Upper bound = all trips active; the returned `count` trims the draw.
     const out = new Float64Array(featureCount * 3);
+    // Per-dot gradient scalar, in the SAME active-only order as `out` — only
+    // allocated when a gradient is configured AND this tile carries the channel.
+    const gradient = wantValues && vertexValues ? vertexValues : null;
+    const values = gradient ? new Float32Array(featureCount) : null;
     let n = 0;
 
     for (let i = 0; i < featureCount; i++) {
@@ -318,12 +364,14 @@ export class AnimatedTripHeadsLayer<
       let lon: number;
       let lat: number;
       let alt = 0;
+      let val = NaN;
 
       if (nv <= 1) {
         const b = v0 * dims;
         lon = positions[b] ?? 0;
         lat = positions[b + 1] ?? 0;
         if (dims > 2) alt = positions[b + 2] ?? 0;
+        if (gradient) val = gradient[v0];
       } else {
         // Binary-search the segment whose [vt[lo], vt[hi]] brackets relTime
         // (vertexTimes is monotonic non-decreasing within a trip).
@@ -345,15 +393,28 @@ export class AnimatedTripHeadsLayer<
         lon = positions[a] * g + positions[b] * frac;
         lat = positions[a + 1] * g + positions[b + 1] * frac;
         if (dims > 2) alt = positions[a + 2] * g + positions[b + 2] * frac;
+        if (gradient) {
+          // Interpolate the scalar the same way as position; if one endpoint is
+          // NaN (e.g. a seed vertex), fall back to the finite neighbor so a dot
+          // never flickers to the fallback color mid-segment.
+          const va = gradient[v0 + lo];
+          const vb = gradient[v0 + hi];
+          val = Number.isNaN(va)
+            ? vb
+            : Number.isNaN(vb)
+              ? va
+              : va * g + vb * frac;
+        }
       }
 
       const o = n * 3;
       out[o] = lon;
       out[o + 1] = lat;
       out[o + 2] = alt;
+      if (values) values[n] = val;
       n++;
     }
-    return { positions: out, count: n };
+    return { positions: out, values, count: n };
   }
 
   renderLayers(): Layer[] {
@@ -397,6 +458,20 @@ export class AnimatedTripHeadsLayer<
       ? this.props.headRadius || this.props.headRadiusPixels || 4
       : this.props.headRadiusPixels;
 
+    // Per-vertex gradient coloring (e.g. drift dots shaded by 500 mb temp):
+    // active only when a channel is named AND a non-empty ramp is supplied.
+    // Currently only the `vertexValues` channel is exposed (mirrors the trips
+    // layer). NaN dots fall back to `headColor`.
+    const ramp = this.props.gradientColorRamp;
+    const useGradient =
+      this.props.gradientProperty === 'vertexValues' &&
+      Array.isArray(ramp) &&
+      ramp.length > 0;
+    const gradientDomain = (this.props.gradientDomain ?? [0, 1]) as [
+      number,
+      number,
+    ];
+
     const sublayers: Layer[] = [];
     for (const tile of tiles) {
       for (const tileLayer of tile.layers) {
@@ -404,16 +479,41 @@ export class AnimatedTripHeadsLayer<
         if (!prepared) continue;
 
         const relTime = absTime - prepared.timeOffset;
-        const { positions, count } = this.computeHeads(prepared, relTime);
+        const { positions, values, count } = this.computeHeads(
+          prepared,
+          relTime,
+          useGradient,
+        );
         if (count === 0) continue;
 
+        // A per-dot gradient color buffer when this tile carries the channel;
+        // otherwise the dots use the constant `headColor` below. Built each
+        // frame like the positions — O(active dots), trivial at showcase scale.
+        const gradientColors =
+          useGradient && values
+            ? expandGradientColors(
+                values,
+                gradientDomain,
+                ramp as Color[],
+                count,
+                color,
+              )
+            : null;
+
         // Fresh `data` ref every frame (the positions move) — deck.gl matches
-        // the ScatterplotLayer by id and re-uploads just the position buffer.
+        // the ScatterplotLayer by id and re-uploads just the changed buffers.
         const data = {
           length: count,
           attributes: {
             // size 3 (lon, lat, alt) — Float64 drives the fp64 hi/lo split.
             getPosition: { value: positions, size: 3 },
+            ...(gradientColors && {
+              getFillColor: {
+                value: gradientColors,
+                size: 4,
+                normalized: true,
+              },
+            }),
           },
         };
 

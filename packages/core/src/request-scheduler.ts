@@ -299,6 +299,25 @@ export class SharedRequestScheduler {
   }
 
   /**
+   * Re-weight `sourceId`'s fair share IMMEDIATELY, for work already queued.
+   *
+   * DELIBERATELY overrides the first-weight-wins pin ({@link
+   * ScheduleOptions.weight}): the pin keeps a source's share stable by
+   * default, but a governor re-balancing bandwidth mid-playback (a starved
+   * required source vs. a leader with runway to spare) cannot wait for the
+   * source's queue to drain. The new weight applies from the next DRR
+   * crediting round; accumulated deficits are untouched (already-earned
+   * credit is honored, so the change never claws back a slot in flight).
+   * No-op for a source with no outstanding work — its bookkeeping entry
+   * would only leak (see `trackedSources`), and its next request pins the
+   * fresh weight at enqueue anyway.
+   */
+  setSourceWeight(sourceId: string, weight: number): void {
+    if (!this.weights.has(sourceId)) return;
+    this.weights.set(sourceId, normalizeWeight(weight));
+  }
+
+  /**
    * Abort a specific entry (queued or running). Queued entries are dropped and
    * rejected; running entries get their signal fired and free their slot when
    * `execute` settles. Idempotent. Exposed via the {@link ScheduledRequest}

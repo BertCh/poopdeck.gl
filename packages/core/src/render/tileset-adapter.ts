@@ -24,6 +24,7 @@ export type TilesetFetchCallbacks = Pick<
   | 'getTileDataBatch'
   | 'getTileByteSize'
   | 'getThroughput'
+  | 'setSchedulerWeight'
 >;
 
 /**
@@ -51,5 +52,8 @@ export function makeTilesetCallbacks(
       }),
     getTileByteSize: (tileId) => archive.getTileByteSize(tileId),
     getThroughput: () => archive.getThroughputEstimate(),
+    // Governor bandwidth re-balancing (tileset.setBandwidthWeight) reaches the
+    // process-shared scheduler through this — without it the hook no-ops.
+    setSchedulerWeight: (weight) => archive.setSchedulerWeight(weight),
   };
 }

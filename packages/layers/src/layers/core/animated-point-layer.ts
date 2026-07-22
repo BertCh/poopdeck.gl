@@ -70,6 +70,15 @@ import {
 import { emit } from '../../lib/telemetry.js';
 import { warnOnce } from '../../lib/log.js';
 import {
+  sampleTrack as kernelSampleTrack,
+  TrackIndexMaintainer,
+} from '../../lib/track-kernel.js';
+import type {
+  Track,
+  TrackFieldConfig,
+  TrackSampleConfig,
+} from '../../lib/track-kernel.js';
+import {
   colorListDigest,
   colorMappingDigest,
   functionId,
@@ -92,7 +101,10 @@ import type {
   Layer as TileLayer,
   BinaryFeatures,
 } from '@poopdeck.gl/core';
-import { expandCategoricalColors as coreExpandCategoricalColors } from '@poopdeck.gl/core/style';
+import {
+  expandCategoricalColors as coreExpandCategoricalColors,
+  expandRampColors as coreExpandRampColors,
+} from '@poopdeck.gl/core/style';
 import type { RGBA255 } from '@poopdeck.gl/core/style';
 
 const DEBUG = false;
@@ -191,6 +203,41 @@ export interface _AnimatedPointLayerProps {
    * subclass defaults it to `'point_rgba'`. @default null
    */
   colorVectorColumn?: string | null;
+
+  /**
+   * Continuous color ramp — the NAME of a baked NUMERIC column to color each
+   * point by (the deck analogue of the three backend's `rampProperty`). Each
+   * point's fill is {@link rampColorRamp} sampled at its column value mapped
+   * through {@link rampDomain} (clamped), via the shared framework-free ramp
+   * kernel in @poopdeck.gl/core (`expandRampColors`).
+   *
+   * Precedence: the baked per-point color paths ({@link colorVectorColumn},
+   * {@link rgbColorColumns}) win over the ramp; the ramp WINS over the
+   * categorical `fillColor`-as-column / `colorMapping` path when both are set.
+   * A tile that lacks the named numeric column falls through to the normal
+   * color path (constant / categorical) — mirrors `rgbColorColumns`. Not
+   * applied on the CPU glide (`interpolate`) path, which colors per-track.
+   *
+   * Expansion happens ONCE per tile on the cold prepare step (cached and
+   * uploaded as a normalized u8 RGBA attribute) — zero per-frame CPU cost,
+   * the same pattern as the trips layers' `gradientProperty`.
+   * @default null
+   */
+  rampProperty?: string | null;
+
+  /**
+   * `[min, max]` value range mapped to {@link rampColorRamp}'s ends; values
+   * outside the domain clamp to the end colors. No effect unless
+   * {@link rampProperty} is set. @default [0, 1]
+   */
+  rampDomain?: [number, number];
+
+  /**
+   * Low→high gradient stops (≥ 1), each an `[r,g,b,a]` 0–255 {@link Color},
+   * evenly spaced across {@link rampDomain}. Empty (the default) leaves the
+   * ramp path inert even when {@link rampProperty} is set. @default []
+   */
+  rampColorRamp?: Color[];
 
   /**
    * Render points as soft gaussian "splats" instead of hard disks (installs
@@ -408,6 +455,52 @@ export interface _AnimatedPointLayerProps {
    * @default true
    */
   filterEnabled?: boolean;
+
+  /**
+   * Opt into the CPU "glide" render path (motion interpolation). Point archives
+   * carry one row per entity PER SAMPLE, so a GPU time-WINDOW filter shows every
+   * sample inside the window at once — a moving entity POPS between its samples.
+   * With `interpolate` on, the layer instead pools the loaded tiles' samples by
+   * {@link idProperty}, and once per frame emits ONE ScatterplotLayer of each
+   * ACTIVE entity's pose CPU-interpolated between the two samples bracketing the
+   * playhead, so it GLIDES. Reuses the shared track kernel (the same engine
+   * behind the box/mesh layers).
+   *
+   * Gated: the glide path is used only when `interpolate && !reducedMotion &&`
+   * a resolvable `idProperty && !cumulative && wakeLength === 0`. Any of those
+   * unmet (the default: `interpolate` off) leaves the existing GPU
+   * window/wake/cumulative path BYTE-IDENTICAL — zero cost.
+   * @default false
+   */
+  interpolate?: boolean;
+
+  /**
+   * Per-entity id column NAME grouping samples into one glide track (e.g.
+   * aircraft `icao24`, an exact vessel id). Reads a categorical (string) column;
+   * a numeric column is stringified. Must be an EXACT per-entity id — a lossy /
+   * quantized id that collides distinct entities would fuse their tracks. No
+   * effect unless {@link interpolate} is on; `null` (default) leaves glide
+   * inert (the GPU window path runs). @default null
+   */
+  idProperty?: string | null;
+
+  /**
+   * Largest gap (ms) between two of an entity's samples that glide interpolates
+   * across. A wider gap is a data hole: the entity HOLDS its last known position
+   * instead of gliding a straight line it never travelled (integrity, not
+   * cosmetics). No effect unless {@link interpolate} is on.
+   * @default Infinity (never holds)
+   */
+  maxInterpolationGap?: number;
+
+  /**
+   * Honor the viewer's reduced-motion preference. When `true`, the glide path is
+   * disabled and the layer DEGRADES to the GPU time-window path (discrete
+   * per-sample rendering) — the motion-sensitivity-safe fallback. A concrete
+   * boolean (not left undefined) so it survives the explicit-undefined-shadows-
+   * default gotcha. @default false
+   */
+  reducedMotion?: boolean;
 }
 
 /** Complete props accepted by {@link AnimatedPointLayer}. */
@@ -616,6 +709,17 @@ export class AnimatedPointLayer<
       optional: true,
       compare: true,
     },
+    // Continuous ramp (C3). Permissive descriptor for rampProperty — it holds
+    // a column-name string OR null, which a 'string' validator would reject.
+    // Same trio idiom as the trips layers' gradientProperty/Domain/ColorRamp.
+    rampProperty: {
+      type: 'object',
+      value: null,
+      optional: true,
+      compare: true,
+    },
+    rampDomain: { type: 'array', value: [0, 1], compare: true },
+    rampColorRamp: { type: 'array', value: [], compare: true },
     splat: false,
     radiusTransform: {
       type: 'function',
@@ -690,6 +794,14 @@ export class AnimatedPointLayer<
       compare: true,
     },
     filterEnabled: true,
+
+    // Glide (motion interpolation). Off by default ⇒ the GPU window path is
+    // byte-identical. idProperty is a permissive {type:'object'} descriptor
+    // (holds a column-name string OR null, which 'string' would reject).
+    interpolate: false,
+    idProperty: { type: 'object', value: null, optional: true, compare: true },
+    maxInterpolationGap: { type: 'number', value: Infinity, min: 0 },
+    reducedMotion: false,
   };
 
   /** Per-tile prepared-data cache. Pruned to the live tile set each render. */
@@ -715,6 +827,30 @@ export class AnimatedPointLayer<
   private lastLayerPropsKey: string = '';
   /** Tile-array identity from the previous render — see AnimatedTripsLayer.lastTilesRef. */
   private lastTilesRef: Tile[] | null = null;
+
+  /* ── Glide (motion-interpolation) state — only the `interpolate` path ─────
+   * Mirrors AnimatedBoundingBoxLayer: pool the loaded tiles' samples into one
+   * id-keyed track index (rebuilt only when the tile SET or a feeding prop
+   * changes), then re-interpolate one pose per active entity every frame. */
+  /** Pooled, id-keyed track index (glide). Null when not in the glide path. */
+  private interpTrackIndex: Map<string, Track> | null = null;
+  private interpTrackIndexKey = '';
+  /**
+   * Incremental maintainer of {@link interpTrackIndex}: re-pools only ADDED
+   * tiles and re-sorts only AFFECTED tracks across tile churn, instead of the
+   * O(all snapshots) full rebuild that spiked frame time. Lazily created (the
+   * test harness bypasses field initializers via Object.create).
+   */
+  private interpMaintainer: TrackIndexMaintainer | null = null;
+  /** Per-track representative decoded source feature, for glide picking. */
+  private interpPickRows: Map<string, Record<string, unknown>> | null = null;
+  /** Tile keys already scanned for {@link interpPickRows} — accumulate-only. */
+  private interpPickRowsScanned: Set<string> | null = null;
+  /** Sim-time of the last glide re-interpolation; skips redundant ticks. */
+  private lastInterpFrameTime = NaN;
+  /** Grow-only per-frame output buffers (avoid a fresh alloc every glide frame). */
+  private interpPosBuf: Float64Array | null = null;
+  private interpColBuf: Uint8Array | null = null;
 
   /* ── Cumulative consolidation state (cumulative mode only) ─────────────── */
   /** Packed slabs, in arrival order. The last entry is the open (growing) slab. */
@@ -783,6 +919,12 @@ export class AnimatedPointLayer<
     this.absorbedTileKeys.clear();
     this.slabSchema = null;
     this.slabSchemaKey = null;
+    this.interpTrackIndex = null;
+    this.interpMaintainer?.reset();
+    this.interpPickRows = null;
+    this.interpPickRowsScanned = null;
+    this.interpPosBuf = null;
+    this.interpColBuf = null;
   }
 
   /**
@@ -943,12 +1085,60 @@ export class AnimatedPointLayer<
     return widened;
   }
 
+  /**
+   * True when the CPU glide path is active. Gated exactly per the B1 design:
+   * `interpolate` on, reduced-motion off, an `idProperty` that resolves to a
+   * non-empty column name, NOT cumulative, and wake off. Any unmet condition
+   * (the default) leaves the GPU window/wake/cumulative path byte-identical.
+   */
+  private interpolationActive(): boolean {
+    return (
+      this.props.interpolate === true &&
+      this.props.reducedMotion !== true &&
+      !this.props.cumulative &&
+      !(this.props.wakeLength > 0) &&
+      this.idPropertyValue().length > 0
+    );
+  }
+
+  /** Resolve `idProperty` to a column NAME, or '' when unset/blank. */
+  private idPropertyValue(): string {
+    const p = this.props.idProperty;
+    return typeof p === 'string' ? p : '';
+  }
+
+  /**
+   * Bump a state counter each tick so the CPU-interpolated glide advances —
+   * ONLY when the glide branch is active and sim-time actually moved. The GPU
+   * window/wake/cumulative paths animate via a draw-time uniform and never need
+   * a renderLayers() pass, so this is a no-op there (byte-identical default-off
+   * behaviour). Mirrors AnimatedBoundingBoxLayer._handleTimeUpdate.
+   */
+  protected _handleTimeUpdate(time: number): void {
+    super._handleTimeUpdate(time);
+    if (!this.interpolationActive()) return;
+    const { tiles } = this.state;
+    if (tiles && tiles.length > 0 && time !== this.lastInterpFrameTime) {
+      this.lastInterpFrameTime = time;
+      this.setState({
+        interpFrame: ((this.state as any).interpFrame || 0) + 1,
+      });
+    }
+  }
+
   renderLayers(): Layer[] {
     // Cumulative "draws itself" datasets use a consolidated, append-only path:
     // packing points into a few slabs instead of one sublayer per resident
     // tile is what keeps a long playback off the thousands-of-draw-calls cliff.
     if (this.props.cumulative) {
       return this.renderConsolidated();
+    }
+
+    // Glide (motion interpolation): pool samples by id and emit ONE
+    // ScatterplotLayer of interpolated active poses. Off / reduced-motion / no
+    // id ⇒ falls through to the byte-identical GPU window path below.
+    if (this.interpolationActive()) {
+      return this.renderInterpolated();
     }
 
     const t0 = performance.now();
@@ -1072,13 +1262,25 @@ export class AnimatedPointLayer<
     const mapDefault = (this.props.colorMappingDefault ?? [0, 0, 0, 0]).join(
       ',',
     );
+    // Continuous-ramp signature: the expanded getFillColor buffer bakes the
+    // property, domain and stops, so any change must invalidate prepared
+    // tiles (same contract as the trips layers' gradSig).
+    const rampProp =
+      typeof this.props.rampProperty === 'string'
+        ? this.props.rampProperty
+        : '';
+    const rampSig = rampProp
+      ? `rp${rampProp}:${(this.props.rampDomain ?? [0, 1]).join(',')}:${colorListDigest(
+          this.props.rampColorRamp ?? [],
+        )}`
+      : '';
     return `${colorVecKey}|${fillColorProp}|${radiusProp}|${lineWidthProp}|${
       fillColorProp
         ? colorListDigest(this.props.colorPalette ?? DEFAULT_PALETTE)
         : 0
     }|${mapping ? `m${colorMappingDigest(mapping)}` : 'g'}|${
       transform ? `r${functionId(transform)}` : ''
-    }|e${elevProp}:${elevScale}|${rgbKey}|f${filterProp}|d${mapDefault}|${updateTriggersDigest(this.props.updateTriggers)}`;
+    }|e${elevProp}:${elevScale}|${rgbKey}|${rampSig}|f${filterProp}|d${mapDefault}|${updateTriggersDigest(this.props.updateTriggers)}`;
   }
 
   /**
@@ -1199,6 +1401,37 @@ export class AnimatedPointLayer<
     const gArr = rgbCols ? binary.numericProps[rgbCols[1]] : undefined;
     const bArr = rgbCols ? binary.numericProps[rgbCols[2]] : undefined;
 
+    // Continuous color ramp (C3): numeric column → per-point color through the
+    // shared core ramp kernel. Resolved here (not inside the chain) so a tile
+    // that lacks the column falls through to the normal color path below.
+    // Defensive `??`/typeof reads: an explicitly-undefined prop shadows the
+    // defaultProps value (the explicit-undefined gotcha).
+    const rampProp =
+      typeof this.props.rampProperty === 'string'
+        ? this.props.rampProperty
+        : '';
+    const rampStops = this.props.rampColorRamp ?? [];
+    const rampValues =
+      rampProp && rampStops.length > 0
+        ? binary.numericProps[rampProp]
+        : undefined;
+    if (rampProp && rampStops.length === 0) {
+      warnOnce(
+        'AnimatedPointLayer:rampNoStops',
+        `[AnimatedPointLayer] rampProperty "${rampProp}" is set but ` +
+          'rampColorRamp is empty — the ramp is ignored (supply at least one ' +
+          '[r,g,b,a] stop).',
+      );
+    } else if (rampProp && !rampValues && binary.categoricalProps[rampProp]) {
+      warnOnce(
+        'AnimatedPointLayer:rampPropertyCategorical',
+        `[AnimatedPointLayer] rampProperty "${rampProp}" is a categorical ` +
+          'column; the continuous ramp reads NUMERIC columns only. The ramp is ' +
+          'ignored for tiles where the column is categorical (use fillColor + ' +
+          'colorMapping for categories).',
+      );
+    }
+
     // Property-driven color
     if (colorVec && colorVec.size === 4) {
       attributes.getFillColor = {
@@ -1216,6 +1449,28 @@ export class AnimatedPointLayer<
         out[o + 3] = 255;
       }
       attributes.getFillColor = { value: out, size: 4, normalized: true };
+    } else if (rampValues) {
+      // Continuous ramp: expand ONCE on this cold prepare step via the shared
+      // core kernel; the cached u8 buffer then rides the GPU (zero per-frame
+      // cost — the trips-gradient pattern). Wins over the categorical
+      // fillColor/colorMapping path below; the fallback is never hit here
+      // because the column's presence gates this branch.
+      attributes.getFillColor = {
+        value: coreExpandRampColors(
+          binary,
+          {
+            property: rampProp,
+            domain: (this.props.rampDomain ?? [0, 1]) as [number, number],
+            range: rampStops as unknown as readonly RGBA255[],
+            fallback: (this.props.colorMappingDefault ?? [
+              0, 0, 0, 0,
+            ]) as RGBA255,
+          },
+          'u8',
+        ) as Uint8Array,
+        size: 4,
+        normalized: true,
+      };
     } else if (fillColorProp) {
       const cat = binary.categoricalProps[fillColorProp];
       const num = binary.numericProps[fillColorProp];
@@ -1774,6 +2029,324 @@ export class AnimatedPointLayer<
     return layer;
   }
 
+  /* ── Glide (motion-interpolation) path ───────────────────────────────────
+   * Pool the loaded tiles' samples by `idProperty` into one track index, then
+   * emit ONE ScatterplotLayer of each active entity's interpolated pose. Reuses
+   * the shared track kernel; visibility is implicit (only active tracks emitted)
+   * so there is no TimeFilterExtension and no window uniform.
+   */
+
+  /**
+   * Digest of the props that change the POOLED glide index (which columns feed
+   * it + the baked per-track color). Geometric/fade params re-apply every frame,
+   * so they are NOT keyed here.
+   */
+  private computeInterpIndexKey(): string {
+    const fillColorValue = this.fillColorValue();
+    const colorProp = typeof fillColorValue === 'string' ? fillColorValue : '';
+    return [
+      this.idPropertyValue(),
+      colorProp,
+      colorProp ? colorMappingDigest(this.props.colorMapping ?? {}) : 0,
+      Array.isArray(this.props.colorMappingDefault)
+        ? this.props.colorMappingDefault.join(',')
+        : '',
+      updateTriggersDigest(this.props.updateTriggers),
+    ].join('|');
+  }
+
+  /** Resolve which tile columns the kernel reads for the glide index. */
+  private interpTrackFieldConfig(): TrackFieldConfig {
+    const fillColorValue = this.fillColorValue();
+    const colorProp = typeof fillColorValue === 'string' ? fillColorValue : '';
+    // Silent-transparency guard: the CPU glide path resolves per-track color
+    // through the STRING-keyed `colorMapping`, not the GPU first-seen palette
+    // (which is per-tile-unstable and unavailable off-GPU). With a categorical
+    // color column but NO colorMapping, every track falls to the transparent
+    // colorMappingDefault ([0,0,0,0]) and glide renders every marker INVISIBLE —
+    // whereas the GPU window path would auto-palette it. Warn loudly rather than
+    // blank silently (mirrored on AnimatedIconLayer).
+    if (colorProp && !this.props.colorMapping) {
+      warnOnce(
+        'AnimatedPointLayer:interpNoColorMapping',
+        `[AnimatedPointLayer] interpolate is on with a categorical fillColor ` +
+          `column ("${colorProp}") but no \`colorMapping\` — the CPU glide path ` +
+          `cannot use the GPU first-seen palette, so every marker resolves to the ` +
+          `transparent colorMappingDefault and renders INVISIBLE. Provide a ` +
+          `\`colorMapping\` (category → color) or a constant fillColor for glide.`,
+      );
+    }
+    return {
+      trackIdProperty: this.idPropertyValue(),
+      colorProperty: colorProp,
+      // Points carry no per-keyframe label/heading/dims/speed in glide — leave
+      // these blank; the kernel's defaults read such columns only if they
+      // happen to exist, and their values are unused by the scatterplot output.
+      labelProperty: '',
+      headingProperty: '',
+      lengthProperty: '',
+      widthProperty: '',
+      heightProperty: '',
+      speedProperty: '',
+      colorMapping: this.props.colorMapping,
+      colorMappingDefault: (this.props.colorMappingDefault ?? [
+        0, 0, 0, 0,
+      ]) as Color,
+    };
+  }
+
+  /** Fade ramps + max-gap hold guard fed to the kernel every frame. */
+  private interpSampleConfig(): TrackSampleConfig {
+    return {
+      // Box dims are unused for points (scatterplot reads position + color).
+      defaultLength: 0,
+      defaultWidth: 0,
+      defaultHeight: 0,
+      fadeInDuration: this.props.fadeInDuration ?? 0,
+      fadeOutDuration: this.props.fadeOutDuration ?? 0,
+      maxGapMs: this.props.maxInterpolationGap ?? Infinity,
+    };
+  }
+
+  /**
+   * Ensure the glide index reflects the current tile set. Rebuilds fully when a
+   * feeding style prop changed (the maintainer + pick rows reset); otherwise the
+   * {@link TrackIndexMaintainer} re-pools only ADDED tiles and re-sorts only
+   * AFFECTED tracks, and pick rows are scanned only for not-yet-seen tiles — so
+   * a sliding loader window costs O(changed tiles + affected tracks) instead of
+   * the O(all snapshots) full rebuild that spiked frame time.
+   */
+  private syncInterpIndex(tiles: Tile[], indexKey: string): void {
+    if (!this.interpMaintainer)
+      this.interpMaintainer = new TrackIndexMaintainer();
+    if (this.interpTrackIndexKey !== indexKey) {
+      // A feeding prop (idProperty / color column / mapping) changed: the
+      // pooled colors + pick-row keys are stale — drop everything and re-pool.
+      this.interpMaintainer.reset();
+      this.interpPickRows = null;
+      this.interpPickRowsScanned = null;
+    }
+    const cfg = this.interpTrackFieldConfig();
+    const result = this.interpMaintainer.sync(tiles, cfg);
+    this.interpTrackIndex = result.tracks;
+    if (result.trackIdMissing) {
+      warnOnce(
+        'AnimatedPointLayer:interpNoIdColumn',
+        `[AnimatedPointLayer] interpolate is on but no \`${cfg.trackIdProperty}\` ` +
+          `categorical column was found on the loaded tiles — each sample becomes ` +
+          `its own held instance (no glide). Set idProperty to an EXACT per-entity ` +
+          `id column (a lossy/quantized id fuses distinct entities).`,
+      );
+    }
+    this.scanInterpPickRows(tiles, cfg.trackIdProperty);
+    this.interpTrackIndexKey = indexKey;
+    this.lastTilesRef = tiles;
+  }
+
+  /**
+   * Decode ONE representative source feature per entity id, for glide picking.
+   * Incremental + accumulate-only: only (tile, layer)s not scanned before are
+   * walked, and an id already present is never re-decoded (entity-level props
+   * are sample-invariant, so any sample is representative). Evicted entities'
+   * rows are left in place — harmless, since only ACTIVE tracks (resident tiles)
+   * are ever picked. Reset with the maintainer on a feeding-prop change.
+   */
+  private scanInterpPickRows(tiles: Tile[], idProp: string): void {
+    if (!this.interpPickRows) this.interpPickRows = new Map();
+    if (!this.interpPickRowsScanned) this.interpPickRowsScanned = new Set();
+    const prov = this.interpPickRows;
+    const scanned = this.interpPickRowsScanned;
+    for (const tile of tiles) {
+      for (const tileLayer of tile.layers) {
+        const key = makeTileKey(tile, tileLayer);
+        if (scanned.has(key)) continue;
+        scanned.add(key);
+        const binary = tileLayer.features;
+        const col = binary.categoricalProps[idProp];
+        if (!col) continue;
+        const count = binary.featureCount;
+        for (let i = 0; i < count; i++) {
+          const idx = col.indices[i];
+          if (idx === 0xffff) continue;
+          const k = col.categories[idx];
+          if (k === undefined || prov.has(k)) continue;
+          prov.set(k, getFeatureProperties(binary, i) ?? {});
+        }
+      }
+    }
+  }
+
+  /** Grow-only Float64 scratch buffer (reused across glide frames). */
+  private ensureInterpPos(len: number): Float64Array {
+    let b = this.interpPosBuf;
+    if (!b || b.length < len) {
+      b = new Float64Array(len);
+      this.interpPosBuf = b;
+    }
+    return b;
+  }
+
+  /** Grow-only Uint8 scratch buffer (reused across glide frames). */
+  private ensureInterpCol(len: number): Uint8Array {
+    let b = this.interpColBuf;
+    if (!b || b.length < len) {
+      b = new Uint8Array(len);
+      this.interpColBuf = b;
+    }
+    return b;
+  }
+
+  /**
+   * Glide render pass: refresh the pooled index when the tile set / feeding prop
+   * changes (incrementally — see {@link syncInterpIndex}), then interpolate one
+   * pose per active entity at the playhead straight into the reused output
+   * buffers and emit a single ScatterplotLayer.
+   */
+  private renderInterpolated(): Layer[] {
+    const t0 = performance.now();
+    const { tiles } = this.state;
+    if (!tiles || tiles.length === 0) {
+      this.interpTrackIndex = null;
+      this.interpMaintainer?.reset();
+      this.interpPickRows = null;
+      this.interpPickRowsScanned = null;
+      this.lastTilesRef = null;
+      return [];
+    }
+
+    const indexKey = this.computeInterpIndexKey();
+    if (
+      this.lastTilesRef !== tiles ||
+      this.interpTrackIndexKey !== indexKey ||
+      !this.interpTrackIndex
+    ) {
+      this.syncInterpIndex(tiles, indexKey);
+    }
+
+    const index = this.interpTrackIndex!;
+    const now = this.getCurrentTime();
+    const cfg = this.interpSampleConfig();
+    const fillColorValue = this.fillColorValue();
+    const perTrackColor = typeof fillColorValue === 'string';
+    const constColor = (
+      Array.isArray(fillColorValue)
+        ? fillColorValue
+        : ([255, 128, 0, 255] as Color)
+    ) as Color;
+
+    // Track count bounds the active count; size the reused buffers to it and
+    // fill only the active prefix (subarray'd to the exact length below).
+    const cap = index.size;
+    const positions = this.ensureInterpPos(cap * 3);
+    // Always bake per-instance color: it folds the appear/disappear fade
+    // (sample.alpha) and, when fillColor names a column, the stable per-track
+    // color the kernel resolved through colorMapping.
+    const colors = this.ensureInterpCol(cap * 4);
+    const pickRows: (Record<string, unknown> | undefined)[] = [];
+    let w = 0;
+    for (const track of index.values()) {
+      const s = kernelSampleTrack(track, now, cfg);
+      if (!s) continue;
+      const o3 = w * 3;
+      positions[o3] = s.lon;
+      positions[o3 + 1] = s.lat;
+      positions[o3 + 2] = s.alt;
+      const base = perTrackColor ? s.track.color : constColor;
+      const o4 = w * 4;
+      colors[o4] = base[0];
+      colors[o4 + 1] = base[1];
+      colors[o4 + 2] = base[2];
+      colors[o4 + 3] = Math.round((base[3] ?? 255) * s.alpha);
+      pickRows.push(this.interpPickRows?.get(s.track.trackId));
+      w++;
+    }
+
+    emit('renderLayers', {
+      layer: 'AnimatedPointLayer',
+      mode: 'interpolate',
+      tiles: tiles.length,
+      tracks: index.size,
+      active: w,
+      ms: performance.now() - t0,
+    });
+
+    if (w === 0) return [];
+    return [
+      this.buildInterpolatedSublayer(
+        positions.subarray(0, w * 3),
+        colors.subarray(0, w * 4),
+        pickRows,
+        w,
+      ),
+    ];
+  }
+
+  /** Bake the active interpolated poses (already written into the buffer views)
+   * into one ScatterplotLayer sublayer. */
+  private buildInterpolatedSublayer(
+    positions: Float64Array,
+    colors: Uint8Array,
+    pickRows: (Record<string, unknown> | undefined)[],
+    n: number,
+  ): ScatterplotLayer {
+    const fillColorValue = this.fillColorValue();
+    const constColor = (
+      Array.isArray(fillColorValue)
+        ? fillColorValue
+        : ([255, 128, 0, 255] as Color)
+    ) as Color;
+    const radiusValue = this.radiusValue();
+    const constRadius = typeof radiusValue === 'number' ? radiusValue : 5;
+
+    const data = {
+      length: n,
+      attributes: {
+        getPosition: { value: positions, size: 3 },
+        getFillColor: { value: colors, size: 4, normalized: true },
+      },
+    };
+
+    const lineWidthValue = this.lineWidthValue();
+    // No TimeFilterExtension: visibility is implicit (only active entities are
+    // emitted), so no start/end-time attributes and no window uniform.
+    const extensions = this.composeExtensions([]);
+    const props = this.composeSubLayerProps('points', 'interp', {
+      data: data as any,
+      dataComparator: (a: any, b: any) => a === b,
+
+      // Constant fallbacks; the binary getFillColor attribute wins per instance.
+      getRadius: constRadius,
+      getFillColor: constColor,
+
+      // Scatterplot visual props (the flat-marker subset that applies without
+      // the time filter / cube lift).
+      radiusUnits: this.props.radiusUnits,
+      radiusScale: this.props.radiusScale,
+      radiusMinPixels: this.props.radiusMinPixels,
+      radiusMaxPixels: this.props.radiusMaxPixels,
+      stroked: this.props.stroked,
+      filled: this.props.filled,
+      billboard: this.props.billboard,
+      antialiasing: this.props.antialiasing,
+      getLineColor: this.lineColorValue(),
+      getLineWidth: typeof lineWidthValue === 'number' ? lineWidthValue : 1,
+      lineWidthUnits: this.props.lineWidthUnits,
+      lineWidthScale: this.props.lineWidthScale,
+      lineWidthMinPixels: this.props.lineWidthMinPixels,
+      lineWidthMaxPixels: this.props.lineWidthMaxPixels,
+
+      extensions,
+
+      // Picking: one instance per active entity (stride 1). No single source
+      // tile — resolve to the entity's decoded source feature via sttPickRows.
+      tile: null,
+      sttPickRows: pickRows,
+      sttPickStride: 1,
+    });
+    const SubLayerClass = this.getSubLayerClass('points', ScatterplotLayer);
+    return new SubLayerClass(props as any);
+  }
+
   /**
    * Slab-aware picking. Cumulative slabs merge many tiles into one
    * sublayer, so the base tile/sttFeatures path can't apply; instead the
@@ -1786,6 +2359,20 @@ export class AnimatedPointLayer<
    */
   getPickingInfo(params: GetPickingInfoParams): SpatioTemporalPickingInfo {
     const info = super.getPickingInfo(params);
+    // Glide path: one instance per active entity — resolve the hit to that
+    // entity's decoded source feature via the sublayer's per-instance pick rows.
+    const pickRows = (
+      params.sourceLayer?.props as
+        | { sttPickRows?: (Record<string, unknown> | undefined)[] }
+        | undefined
+    )?.sttPickRows;
+    if (pickRows) {
+      if (info.index >= 0 && info.object === undefined) {
+        const row = pickRows[info.index];
+        if (row) info.object = row;
+      }
+      return info;
+    }
     const provenance = (
       params.sourceLayer?.props as
         | { sttSlabProvenance?: SlabProvenance[] }

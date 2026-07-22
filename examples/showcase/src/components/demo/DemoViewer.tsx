@@ -80,6 +80,7 @@ const DemoViewer: React.FC<DemoViewerProps> = ({
     overviewPreload,
     registry,
     handleOverviewPreload,
+    governor,
   } = playback;
 
   // Drive the shared playhead from deck's render loop (one frame clock, no
@@ -107,6 +108,12 @@ const DemoViewer: React.FC<DemoViewerProps> = ({
   // Projection follows the dataset's tuned default (no user toggle in the
   // shipped UI). Globe-default demos (e.g. ocean currents) stay on the globe.
   const useGlobe = selectedDataset.useGlobe ?? false;
+
+  // The viewer's reduced-motion preference. Read once here (reactive hook) and
+  // threaded into buildDemoLayers so the motion-glide point path degrades to
+  // the discrete render for viewers who asked the OS to reduce motion; the
+  // globe auto-rotation effect below reads the same value.
+  const reducedMotion = useReducedMotion();
 
   // ── Space-time cube (time = height) ────────────────────────────────────────
   // `heightFactor` is the squash slider: 0 = flat map, 1 = full cube. It feeds
@@ -171,6 +178,7 @@ const DemoViewer: React.FC<DemoViewerProps> = ({
         useGlobe,
         timeHeightScale,
         activeSummaryToggle,
+        reducedMotion,
         plumbing: {
           registry,
           onOverviewPreload: handleOverviewPreload,
@@ -184,6 +192,7 @@ const DemoViewer: React.FC<DemoViewerProps> = ({
       registry,
       handleOverviewPreload,
       timeHeightScale,
+      reducedMotion,
     ],
   );
 
@@ -325,9 +334,9 @@ const DemoViewer: React.FC<DemoViewerProps> = ({
   // onViewStateChange) we stop the spin for good and hand the globe over — the
   // demo is for exploring, so it shouldn't keep spinning out from under a click.
   // Non-rotating demos keep the uncontrolled `initialViewState` path untouched.
-  // Auto-rotation is opt-in per dataset, but reduce-motion always wins: the
-  // globe stays put (and draggable) instead of spinning on its own.
-  const reducedMotion = useReducedMotion();
+  // Auto-rotation is opt-in per dataset, but reduce-motion always wins (see the
+  // `reducedMotion` read near the top): the globe stays put (and draggable)
+  // instead of spinning on its own.
   const autoRotate = useGlobe && (selectedDataset.autoRotate ?? false);
   const [viewState, setViewState] = useState<any>(null);
   const rotateStoppedRef = useRef(false);
@@ -403,6 +412,14 @@ const DemoViewer: React.FC<DemoViewerProps> = ({
       emitCamera();
     },
     [emitCamera],
+  );
+
+  // Per-source runway probe for the perf HUD (pure read; the monitor polls it
+  // only while expanded). Stable per governor instance so the HUD's poll
+  // effect doesn't churn across playback frames.
+  const getSourceRunways = useCallback(
+    () => governor?.getSourceRunways() ?? [],
+    [governor],
   );
 
   // A no-basemap demo has nothing behind the transparent deck canvas, so the
@@ -527,11 +544,13 @@ const DemoViewer: React.FC<DemoViewerProps> = ({
       )}
 
       {/* Perf HUD (collapsed chip; top-right because the Legend owns the
-          bottom-right corner). Carries the storyboard-preload outcome. */}
+          bottom-right corner). Carries the storyboard-preload outcome plus the
+          per-source runway rows (starvation made observable). */}
       {showPerfHud && (
         <PerformanceMonitor
           anchor="top-right"
           overviewPreload={overviewPreload}
+          getSourceRunways={getSourceRunways}
         />
       )}
     </div>

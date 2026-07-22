@@ -414,7 +414,12 @@ export const DEMO_META: Record<string, DemoMeta> = {
         docPath: '/docs/api/time-filter-extension',
       },
     ],
-    related: ['hurricanes', 'wildfires', 'earthquake-activity'],
+    related: [
+      'storm-4d-greenfield',
+      'hurricanes',
+      'wildfires',
+      'earthquake-activity',
+    ],
   },
   'goes-glm-lightning': {
     category: 'earth-ocean',
@@ -539,12 +544,12 @@ export const DEMO_META: Record<string, DemoMeta> = {
   'severe-weather-2024': {
     category: 'earth-ocean',
     tagline:
-      'Four NOAA feeds on one 72-hour clock — wind, precipitation, storm cells, and lightning over the late-May 2024 outbreak.',
-    techniqueTag: 'Weather suite · 5-layer composite',
+      'Five NOAA feeds on one 72-hour clock — wind, precipitation, storm cells, surface fronts, and lightning over the late-May 2024 outbreak.',
+    techniqueTag: 'Weather suite · 7-layer composite',
     about: [
-      'The whole weather suite on one continental map and one playhead: 19–22 May 2024, the prolonged late-May severe-weather sequence whose 21 May outbreak produced the Greenfield, Iowa EF4. Four independent public NOAA datasets, each built by its own adapter, are streamed together and coordinated by the playback governor.',
-      'Bottom to top: HRRR 500 mb steering wind as a dense drifting field of cool-blue particles — thousands of dots gliding with the mid-tropospheric flow the storms ride, so the drift runs with the cells; deliberately low-contrast so it reads as background context beneath the storms rather than competing with them; the MRMS national reflectivity mosaic as moving dBZ isoband polygons — the precipitation field, cross-dissolving between scans — with storm-cell centroids and SCIT cell tracks over it; and every GOES-16 GLM lightning flash as an additive splat, flickering individually and stacking into a glow where convection concentrates. The precipitation field is the required governor source; wind, lightning, cells, and tracks stream alongside as optional sources (continue-and-degrade), each widening its own loader window.',
-      'It is the payoff of the suite: you watch the wind organize, the rain bands sweep east, the cells and their tracks light up the convective cores, and the lightning flare along the leading edge — cause and effect, one clock.',
+      'The whole weather suite on one continental map and one playhead: 19–22 May 2024, the prolonged late-May severe-weather sequence whose 21 May outbreak produced the Greenfield, Iowa EF4. Five independent public NOAA datasets, each built by its own adapter, are streamed together and coordinated by the playback governor.',
+      'Bottom to top: HRRR 500 mb steering wind as a dense drifting field of cool-blue particles — thousands of dots gliding with the mid-tropospheric flow the storms ride, so the drift runs with the cells; deliberately low-contrast so it reads as background context beneath the storms rather than competing with them; the MRMS national reflectivity mosaic as moving dBZ isoband polygons — the precipitation field, cross-dissolving between scans — with storm-cell centroids and SCIT cell tracks over it; the WPC surface frontal analysis as the synoptic skeleton above the field, drawn in the full classic notation — spline-smoothed cold, warm, occluded and stationary fronts with their filled triangle and semicircle pips riding the advancing side (derived by matching each front against the next analysis), the stationary ones alternating the classic red/blue with pips on opposite sides, plus dashed troughs — redrawn every three hours and cross-dissolved between analyses; and every GOES-16 GLM lightning flash as an additive splat, flickering individually and stacking into a glow where convection concentrates. All seven archives register as required governor sources, so the shared clock waits for every stream — no layer runs dry and vanishes while the others keep animating — with each widening its own loader window.',
+      'It is the payoff of the suite: you watch the wind organize, the fronts march east with the rain bands breaking out along them, the cells and their tracks light up the convective cores, and the lightning flare along the leading edge — cause and effect, one clock.',
     ],
     dataSources: [
       {
@@ -565,13 +570,20 @@ export const DEMO_META: Record<string, DemoMeta> = {
         license: 'Public domain (US Gov)',
         note: 'L2 LCFA flashes → additive flash points.',
       },
+      {
+        name: 'NWS/WPC coded surface bulletins (IEM AFOS archive)',
+        url: 'https://mesonet.agron.iastate.edu/wx/afos/',
+        license: 'Public domain (US Gov)',
+        note: '3-hourly hi-res (0.1°) CODSUS frontal analyses → smoothed front polylines.',
+      },
     ],
     buildCommand:
-      'python glm_lightning.py … && python mrms_weather.py … && python hrrr_advect.py …',
+      'python glm_lightning.py … && python mrms_weather.py … && python hrrr_advect.py … && python wpc_fronts.py …',
     buildNote:
-      'Assembles four archives built by the three weather adapters (goes-glm-' +
-      'lightning, mrms-precip-field/-cells/-tracks, hrrr-wind) into one ' +
-      "type:'weather' composite. Rebuild any layer independently.",
+      'Assembles seven archives built by the four weather adapters (goes-glm-' +
+      'lightning, mrms-precip-field/-cells/-tracks, hrrr-wind, wpc-fronts + ' +
+      "its -pips companion) into one type:'weather' composite. Rebuild any " +
+      'layer independently.',
     techniques: [
       {
         label: 'AnimatedPolygonLayer',
@@ -589,8 +601,111 @@ export const DEMO_META: Record<string, DemoMeta> = {
         label: 'AnimatedPointLayer',
         docPath: '/docs/api/animated-point-layer',
       },
+      {
+        label: 'AnimatedPathLayer',
+        docPath: '/docs/api/animated-path-layer',
+      },
     ],
-    related: ['goes-glm-lightning', 'mrms-precip', 'hrrr-wind'],
+    related: [
+      'goes-glm-lightning',
+      'mrms-precip',
+      'hrrr-wind',
+      'storm-4d-greenfield',
+    ],
+  },
+  'storm-4d-greenfield': {
+    category: 'earth-ocean',
+    tagline:
+      'One supercell as a true 4D object — the Greenfield, Iowa EF4 as a volumetric radar cloud with warnings, winds, outages and lightning on one clock.',
+    techniqueTag: 'Storm 4D · 10-layer volumetric composite',
+    about: [
+      'Where the severe-weather suite shows the whole continent for 72 hours, this demo goes deep on one storm: the supercell that produced the Greenfield, Iowa EF4 of 21 May 2024. Instead of flattening the radar to a 2D mosaic, every NEXRAD Level II gate from the Des Moines radar (KDMX, 78 km away) is kept as a 3D point — placed at the altitude the 4/3-earth beam model says the beam sampled — so the storm becomes a time-animated volumetric cloud you can orbit and dive through. A render-mode toggle switches the volume between NWS reflectivity bands and dealiased radial velocity, where the mesocyclone reads as bright inbound green pixels beside bright outbound red — the couplet.',
+      'The timeline is the story: the SPC particularly-dangerous-situation tornado watch at 18:10 UTC, touchdown near Villisca at 19:57, and the crossing of Greenfield around 20:26–20:32. Rated EF4 at 185 mph from the damage survey, the tornado was also sampled by a Doppler-on-Wheels mobile radar, which measured 263–271 mph winds at 44 m above ground — analyzed to roughly 309–318 mph instantaneous near the surface, making it only the third tornado ever radar-measured above 300 mph. Five people died. NOAA’s experimental Warn-on-Forecast system (WoFS) had highlighted the Greenfield area with roughly 75 minutes of lead time; the NWS Des Moines warnings rise here as translucent wireframe prisms the moment they were issued, shrinking with each SVS update and vanishing on expiry.',
+      'Around the volume, the context arrives in painter order: county power outages grow as dark-red columns behind the storm, the GOES-16 C13 cloud-top "anvil canopy" floats at its brightness-temperature height, multi-level HRRR winds thread the scene at four pressure levels, one-minute ASOS stations gust beneath it, local storm reports strike the ground trailing the radar, GLM lightning flickers additively, and the 18Z Omaha radiosonde climbs through the whole scene as a tiny bright trail. All ten archives ride one playhead behind the playback governor, and every altitude-bearing layer shares a single 4× vertical exaggeration so the scene never lies about relative heights.',
+    ],
+    dataSources: [
+      {
+        name: 'NOAA NEXRAD Level II — KDMX (Unidata AWS archive)',
+        url: 'https://registry.opendata.aws/noaa-nexrad/',
+        license: 'Public domain (US Gov)',
+        note: 'Bucket unidata-nexrad-level2, 2024-05-21 17:30 → 05-22 03:00Z; all sweeps, dealiased velocity (Py-ART).',
+      },
+      {
+        name: 'NOAA GOES-16 ABI C13 + GLM (AWS Open Data)',
+        url: 'https://registry.opendata.aws/noaa-goes/',
+        license: 'Public domain (US Gov)',
+        note: 'ABI-L2-CMIPC brightness temperature → anvil isobands; GLM L2 LCFA flashes (reused goes-glm-lightning archive).',
+      },
+      {
+        name: 'NOAA HRRR pressure-level winds (AWS Open Data)',
+        url: 'https://registry.opendata.aws/noaa-hrrr-bdp-pds/',
+        license: 'Public domain (US Gov)',
+        note: '850/700/500/250 mb UGRD/VGRD via .idx byte-range subsetting → multi-level particle trips.',
+      },
+      {
+        name: 'NWS warnings, storm reports & 1-min ASOS (IEM archives)',
+        url: 'https://mesonet.agron.iastate.edu/',
+        license: 'Public domain (US Gov)',
+        note: 'VTEC storm-based warning polygons (with SVS phases), local storm reports, and one-minute ASOS observations.',
+      },
+      {
+        name: 'SPC filtered storm reports',
+        url: 'https://www.spc.noaa.gov/climo/reports/',
+        license: 'Public domain (US Gov)',
+        note: '240521 filtered reports, cross-checked against the IEM LSR feed.',
+      },
+      {
+        name: 'DOE/ORNL EAGLE-I power outages',
+        url: 'https://figshare.com/articles/dataset/The_Environment_for_Analysis_of_Geo-Located_Energy_Information_s_Recorded_Electricity_Outages_2014-2022/24237376',
+        license: 'CC BY 4.0',
+        note: 'County-level customers-out at 15-min cadence, filtered to Iowa + border counties.',
+      },
+      {
+        name: 'NWS radiosonde — OAX 18Z special launch (U. Wyoming archive)',
+        url: 'https://weather.uwyo.edu/upperair/sounding.html',
+        license: 'Public domain (US Gov)',
+        note: 'The 2024-05-21 18Z Omaha special sounding, drift-integrated from its wind profile.',
+      },
+    ],
+    buildCommand:
+      'python nexrad_volume.py --start 2024-05-21T17:30Z --end 2024-05-22T03:00Z --out-dir examples/showcase/public/data',
+    buildNote:
+      'Ten archives on one clock: nexrad_volume.py builds the storm4d-volume ' +
+      'gate cloud (plus the storm4d-couplet shear markers) with Py-ART ' +
+      'dealiasing; the companion storm4d generators in scripts/data-generation ' +
+      'build storm4d-warnings, storm4d-reports, storm4d-stations, ' +
+      'storm4d-outages, storm4d-cloudtop, storm4d-wind3d (multi-level ' +
+      'hrrr_advect extension) and storm4d-sounding; goes-glm-lightning is the ' +
+      'existing continental archive, subset by the demo time range at render ' +
+      '— no rebuild. Exact schemas + knobs: docs/roadmap/storm-4d-greenfield' +
+      '-2026-07.md §9.',
+    techniques: [
+      {
+        label: 'AnimatedPointLayer',
+        docPath: '/docs/api/animated-point-layer',
+      },
+      {
+        label: 'AnimatedPolygonLayer',
+        docPath: '/docs/api/animated-polygon-layer',
+      },
+      {
+        label: 'AnimatedPathLayer',
+        docPath: '/docs/api/animated-path-layer',
+      },
+      {
+        label: 'TimeFilterExtension',
+        docPath: '/docs/api/time-filter-extension',
+      },
+      {
+        label: 'DataFilterExtension',
+        docPath: '/docs/api/data-filter-extension',
+      },
+      {
+        label: 'PlaybackGovernor',
+        docPath: '/docs/api/playback-governor',
+      },
+    ],
+    related: ['severe-weather-2024', 'storm-radar', 'goes-glm-lightning'],
   },
 
   // ── Mobility ───────────────────────────────────────────────────────────
@@ -1367,7 +1482,7 @@ export const DEMO_META: Record<string, DemoMeta> = {
     techniqueTag: 'Composite · directional flow + moving heads',
     about: [
       'A composite that layers two BIXI demos on a single playhead. Underneath is the directional street-network flow: every cycleway segment pre-oriented toward its dominant direction, with chevrons showing which way riders go and brightness following the hour’s ridership. On top, every ride from that day moves as a dot along its real OSRM-routed path — one bike per active trip.',
-      'It reuses two already-built archives with no third build: the light, static-geometry flow-corridor archive (the `bixi-streets-flow` matrix) is the primary source that gates the clock; the heavier per-trip paths archive (`bixi-points`) rides on top as an optional governor source, streaming in continue-and-degrade so the substrate is instant and the riders fill in. Both are windowed to Thursday 2024-08-15, so the aggregate flow and the individual rides stay on the same day.',
+      'It reuses two already-built archives with no third build: the light, static-geometry flow-corridor archive (the `bixi-streets-flow` matrix) is the primary source that gates the clock; the heavier per-trip paths archive (`bixi-points`) rides on top as a second required governor source — the clock waits for both, so the riders stay locked to the flow substrate instead of blinking out when their stream lags. Both are windowed to Thursday 2024-08-15, so the aggregate flow and the individual rides stay on the same day.',
       "The overlay is fully general — any `type: 'trips'` flow demo gains moving heads by setting `headsOverlayUrl` to a per-trip paths archive; the painter order keeps the corridors as a backdrop and the riders on top.",
     ],
     dataSources: [
@@ -1541,11 +1656,11 @@ export const DEMO_META: Record<string, DemoMeta> = {
   flights: {
     category: 'mobility',
     tagline:
-      'A day of US air traffic — aircraft positions with 5-minute contrails, lifted by altitude.',
-    techniqueTag: 'Points · 3D · wake trails',
+      'A day of US air traffic — aircraft gliding smoothly between ADS-B pings, lifted by altitude.',
+    techniqueTag: 'Points · 3D · motion glide',
     about: [
       'Twenty-four hours of aircraft positions over the United States from the OpenSky Network’s crowdsourced ADS-B receivers. The morning east-coast departures, the transcontinental flows, and the overnight lull play out in about a minute.',
-      'Each aircraft is a point lifted to its actual altitude (pitch the camera to see the vertical structure of the airways), trailing a five-minute contrail — at jet speeds that wake is roughly 75 km long, showing route structure without any line geometry.',
+      'Each aircraft is a point lifted to its actual altitude (pitch the camera to see the vertical structure of the airways). Rather than popping a fresh dot at each raw observation, the layer pools pings by aircraft id (`icao24`) and glides one marker smoothly between the two samples bracketing the play head — so planes move continuously between reports. Viewers who ask their OS to reduce motion get the discrete, non-interpolated render instead.',
     ],
     dataSources: [
       {
@@ -1560,11 +1675,11 @@ export const DEMO_META: Record<string, DemoMeta> = {
       'OpenSky historical dumps cover Mondays 2017–2020; pick a Monday.',
     techniques: [
       {
-        label: 'AnimatedPointLayer',
+        label: 'AnimatedPointLayer (motion glide)',
         docPath: '/docs/api/animated-point-layer',
       },
       {
-        label: 'TimeFilterExtension (wakes)',
+        label: 'TimeFilterExtension',
         docPath: '/docs/api/time-filter-extension',
       },
     ],
@@ -1719,7 +1834,7 @@ export const DEMO_META: Record<string, DemoMeta> = {
     techniqueTag: 'Composite · flow corridors + moving heads',
     about: [
       'A composite that layers two NYC taxi demos on a single playhead — the New York counterpart of the BIXI "Flow & Riders" view. Underneath is the pre-aggregated street-network flow: 500K routed trips baked into one feature per road corridor per 15-minute bin, shaded by an indigo→cyan→white ramp from dim side streets to bright arterials. On top, every trip moves as a neon-magenta dot along its real OSRM-routed path — one cab per active trip.',
-      'It reuses two already-built archives with no third build: the light, static-geometry flow-corridor archive (`nyc-taxi-flows`) is the primary source that gates the clock; the heavier per-trip paths archive (`nyc-taxi-paths`) rides on top as an optional governor source, streaming in continue-and-degrade so the substrate is instant and the cabs fill in. Both are windowed to the same Jan 1–2 2015 span, so the aggregate flow and the individual trips stay on the same instant.',
+      'It reuses two already-built archives with no third build: the light, static-geometry flow-corridor archive (`nyc-taxi-flows`) is the primary source that gates the clock; the heavier per-trip paths archive (`nyc-taxi-paths`) rides on top as a second required governor source — the clock waits for both, so the cabs stay locked to the flow substrate instead of blinking out when their stream lags. Both are windowed to the same Jan 1–2 2015 span, so the aggregate flow and the individual trips stay on the same instant.',
       "The overlay is fully general — any `type: 'trips'` flow demo gains moving heads by setting `headsOverlayUrl` to a per-trip paths archive; the painter order keeps the corridors as a backdrop and the riders on top. Unlike the BIXI version this archive is non-directional, so there are no chevrons — just the corridors and the moving cabs.",
     ],
     dataSources: [

@@ -34,6 +34,8 @@ import {
 import { NoPickingPathLayer } from '../internal/no-picking-path-layer.js';
 import { TimeFilterExtension } from '../../extensions/time-filter-extension.js';
 import { CategoryColorExtension } from '../../extensions/category-color-extension.js';
+import { DataFilterExtension } from '../../extensions/data-filter-extension.js';
+import type { DataFilterRange } from '../../extensions/data-filter-extension.js';
 import { emit } from '../../lib/telemetry.js';
 import { warnOnce } from '../../lib/log.js';
 import {
@@ -46,6 +48,7 @@ import { resolveAccessorAlias } from '../../lib/accessor-alias.js';
 import type {
   ColorAccessorValue,
   NumericAccessorValue,
+  WeightAccessorValue,
 } from '../../lib/accessor-alias.js';
 import { DEFAULT_TRIPS_PALETTE } from '@poopdeck.gl/core';
 import type {
@@ -163,6 +166,50 @@ export interface _AnimatedTripsLayerProps {
    * @default false
    */
   billboard?: boolean;
+  /**
+   * GPU range filter — the NAME of a baked numeric column to filter trips by
+   * (installs {@link DataFilterExtension}). Trips whose value in this column
+   * falls inside {@link filterRange} render; the rest are hidden (or soft-faded
+   * via {@link filterSoftRange}). Composes WITH the trail-mode time filter — a
+   * trip must pass both the trail window and the column range.
+   *
+   * Accessor-alias of deck.gl's `getFilterValue`: pass a column NAME, not a
+   * function (STT tiles are binary — a function warns once and is ignored).
+   * Unset (the default) ⇒ the extension is not installed at all: zero
+   * attribute, zero uniform, zero shader change. A tile that lacks the named
+   * column renders unfiltered (the filter idles for that tile). The filter is
+   * per-FEATURE (all vertices of a trip share its value), splatted per-vertex
+   * to match PathLayer's segment-instanced attribute layout.
+   *
+   * NOTE: installing this adds one instanced vertex attribute; PathLayer sits
+   * near WebGL2's 16-attribute floor (fp64 split + time + category), so a
+   * pickable + categorical + filtered trip layer can exceed it on GPUs that
+   * report exactly 16. Opt-in, so default trips are unaffected.
+   * @default null
+   */
+  filterProperty?: WeightAccessorValue | null;
+  /**
+   * Inclusive `[min, max]` bounds for {@link filterProperty}. `null` (default)
+   * means "no range yet" — the column is still bound, so a range set later
+   * animates purely by uniform with no tile re-preparation. No effect unless
+   * `filterProperty` is set.
+   * @default null
+   */
+  filterRange?: DataFilterRange | null;
+  /**
+   * Optional soft `[min, max]` inside {@link filterRange}: trips between the
+   * soft and hard bounds fade rather than hard-clip. No effect unless
+   * `filterProperty` + `filterRange` are set. (PathLayer honours the alpha
+   * fade; the size-shrink hook is silently ignored, as upstream.)
+   * @default null
+   */
+  filterSoftRange?: DataFilterRange | null;
+  /**
+   * Enable/disable the column filter without dropping the bound attribute.
+   * Effective only when `filterProperty` + a valid `filterRange` are set.
+   * @default true
+   */
+  filterEnabled?: boolean;
 }
 
 /** Complete props accepted by {@link AnimatedTripsLayer}. */
@@ -422,7 +469,7 @@ function expandFeatureWidthsMemo(
  * Each value is normalized into `[0,1]` over `domain`, then piecewise-lerped
  * across the ramp stops. `NaN` (no value) gets `fallback`.
  */
-function expandGradientColors(
+export function expandGradientColors(
   values: Float32Array,
   domain: [number, number],
   ramp: Color[],
@@ -538,6 +585,23 @@ export class AnimatedTripsLayer<
     jointRounded: true,
     miterLimit: { type: 'number', value: 4, min: 0 },
     billboard: false,
+    // Column range filter (DataFilterExtension). Unset ⇒ not installed.
+    // Permissive {type:'object'} descriptors: filterProperty holds a column
+    // name; the ranges hold a [min,max] tuple OR null (rejected by 'array').
+    filterProperty: {
+      type: 'object',
+      value: null,
+      optional: true,
+      compare: true,
+    },
+    filterRange: { type: 'object', value: null, optional: true, compare: true },
+    filterSoftRange: {
+      type: 'object',
+      value: null,
+      optional: true,
+      compare: true,
+    },
+    filterEnabled: true,
   };
 
   /** Per-tile prepared-data cache. Pruned to the currently-visible tile set on each render. */
@@ -604,6 +668,17 @@ export class AnimatedTripsLayer<
   private readonly categoryColorExtension = new CategoryColorExtension();
 
   /**
+   * Singleton DataFilterExtension. Composed into a sublayer's extension list
+   * ONLY when `filterProperty` is set (a per-layer constant, so the list stays
+   * stable across this layer's sublayers). Constructed unconditionally — a
+   * no-op object alloc; it contributes no attribute, uniform or shader unless
+   * actually installed. Mirrors {@link AnimatedPointLayer}.
+   */
+  private readonly dataFilterExtension = new DataFilterExtension({
+    filterSize: 1,
+  });
+
+  /**
    * Stable getTime reference. Critical: deck.gl re-runs work when accessor
    * function references change; a fresh arrow every render would defeat the
    * cache. The extension reads this from layer props on every draw().
@@ -640,6 +715,20 @@ export class AnimatedTripsLayer<
   }
 
   /**
+   * Resolve `filterProperty` to a baked-column NAME. Accessor-alias of deck's
+   * `getFilterValue`: a function-valued prop warns once and is ignored (there
+   * is no legacy prop, so the fallback is "no filter" — `undefined`).
+   */
+  private filterPropertyValue(): string | undefined {
+    return resolveAccessorAlias<string | undefined>(
+      'AnimatedTripsLayer',
+      'filterProperty',
+      this.props.filterProperty,
+      undefined,
+    );
+  }
+
+  /**
    * Compute a digest of the layer-level props that affect every sublayer.
    * When this changes we throw away the entire sublayer cache.
    */
@@ -670,6 +759,16 @@ export class AnimatedTripsLayer<
       // in `prepared` and is keyed via preparedKey.
       Array.isArray(color) ? color.join(',') : '',
       typeof width === 'number' ? width : 0,
+      // Column-filter uniforms (DataFilterExtension). A range/enabled change is
+      // a uniform-only edit, so — like timeWindow — it rebuilds the cached
+      // sublayers (whose props carry the values) rather than re-preparing tiles.
+      Array.isArray(this.props.filterRange)
+        ? this.props.filterRange.join(',')
+        : '',
+      Array.isArray(this.props.filterSoftRange)
+        ? this.props.filterSoftRange.join(',')
+        : '',
+      this.props.filterEnabled,
     ].join('|');
   }
 
@@ -894,6 +993,7 @@ export class AnimatedTripsLayer<
     const widthValue = this.widthValue();
     const colorProp = typeof colorValue === 'string' ? colorValue : '';
     const widthProp = typeof widthValue === 'string' ? widthValue : '';
+    const filterProp = this.filterPropertyValue() ?? '';
     // Palette / mapping / ramp keyed by CONTENT, not length or key-count — a
     // same-size swap must invalidate the CPU-expanded per-vertex colors.
     // Digests are memoized per object reference (style-digest.ts), so this is
@@ -917,11 +1017,15 @@ export class AnimatedTripsLayer<
     const mapDefault = (
       this.props.colorMappingDefault ?? [120, 120, 120, 255]
     ).join(',');
+    // The filter-column NAME is baked into the per-vertex `filterValue`
+    // attribute, so a change (incl. the unset↔set toggle that adds/removes
+    // DataFilterExtension) must re-prepare tiles → rebuild sublayers via the
+    // new preparedKey.
     const styleKey = `${colorProp}|${widthProp}|${
       colorProp
         ? colorListDigest(this.props.colorPalette ?? DEFAULT_PALETTE)
         : 0
-    }|${mapSig}|${gradSig}${this.gradientStyleSuffix(binary)}|d${mapDefault}|${updateTriggersDigest(
+    }|${mapSig}|${gradSig}${this.gradientStyleSuffix(binary)}|d${mapDefault}|f${filterProp}|${updateTriggersDigest(
       this.props.updateTriggers,
     )}`;
 
@@ -1068,6 +1172,36 @@ export class AnimatedTripsLayer<
     if (dynWidths && dynWidths.length >= totalVerts) {
       attributes.getWidth = { value: dynWidths, size: 1 };
     }
+
+    // Column range filter (DataFilterExtension): bind the named numeric column
+    // to the `filterValue` attribute. Unlike the instanced arc/line/point path,
+    // PathLayer's `filterValue` is a per-SEGMENT-instanced attribute sized to
+    // the tessellated vertex count, so a per-FEATURE column must be splatted
+    // per-vertex (exactly like the categorical-color / width paths) — a
+    // featureCount-length buffer under-sizes the draw ("vertex buffer is not
+    // big enough"). Absent column ⇒ no attribute → the sublayer idles the
+    // filter for this tile. A categorical column can't be range-filtered in v1.
+    if (filterProp) {
+      const values = binary.numericProps[filterProp];
+      if (values) {
+        attributes.filterValue = {
+          value: expandFeatureWidths(
+            values,
+            binary.startIndices,
+            binary.featureCount,
+            totalVerts,
+          ),
+          size: 1,
+        };
+      } else if (binary.categoricalProps[filterProp]) {
+        warnOnce(
+          'AnimatedTripsLayer:filterPropertyCategorical',
+          `[AnimatedTripsLayer] filterProperty "${filterProp}" is a categorical ` +
+            'column; v1 range-filters NUMERIC columns only. The filter is ignored ' +
+            'for tiles where the column is categorical.',
+        );
+      }
+    }
     // NOTE: the per-vertex chevron direction sign (signedFlow) is carried on the
     // instanceVertexTime attribute above — see the comment there. No separate
     // attribute is added, to stay under WebGL2's 16-attribute ceiling.
@@ -1130,11 +1264,36 @@ export class AnimatedTripsLayer<
     // (e.g. PathStyleExtension's offset), which otherwise overflows the 16-slot
     // floor on GPUs that report exactly 16. The list stays CONSTANT per instance
     // (the subclass's choice never changes), so shader-pipeline caching holds.
-    const baseExtensions: unknown[] = this.includeCategoryColorExtension()
-      ? [this.timeFilterExtension, this.categoryColorExtension]
-      : [this.timeFilterExtension];
+    // Column filter: install DataFilterExtension only when a column is named
+    // (per-layer constant ⇒ stable list across this layer's sublayers). Whether
+    // THIS tile actually baked the attribute gates the per-tile enable, so a
+    // tile missing the column renders unfiltered (idle extension). Its
+    // per-feature alpha commutes with the trail fade + categorical color.
+    const filterProp = this.filterPropertyValue();
+    const hasFilter = !!prepared.data.attributes.filterValue;
+    // ATTRIBUTE-BUDGET: the non-pickable path pipeline (NoPickingPathLayer, 12
+    // attrs) + TimeFilterExtension's 3 sits at 15; ONE more extension attribute
+    // lands at WebGL2's guaranteed 16-slot floor. CategoryColorExtension
+    // (`instanceCategoryIndex`, unconditionally declared `in` its vertex shader
+    // so it costs a slot even while idle) is pure DEAD WEIGHT for trips —
+    // gpuPalette is hardwired null (categorical color is CPU-expanded into
+    // getColor), so its shader branch is permanently off (`useCategoryColor`
+    // false). Installing BOTH it AND DataFilterExtension (`filterValue`) would
+    // make 17 — a fatal per-pipeline link FAILURE (blank trips) on GPUs that
+    // report exactly 16 (Apple Silicon, Intel UHD, software WebGL). So when a
+    // column filter is installed we DROP the idle CategoryColorExtension and
+    // spend that one free slot on `filterValue` instead: net 16, no overflow,
+    // no lost color (it was never coloring anything). Mirrors the sibling
+    // AnimatedPathLayer's identical trade. `filterProp` +
+    // includeCategoryColorExtension() are per-LAYER constants, so the list stays
+    // CONSTANT across this layer's sublayers (the shader-cache contract above).
+    const baseExtensions: unknown[] =
+      this.includeCategoryColorExtension() && !filterProp
+        ? [this.timeFilterExtension, this.categoryColorExtension]
+        : [this.timeFilterExtension];
     const extensions = this.composeExtensions([
       ...baseExtensions,
+      ...(filterProp ? [this.dataFilterExtension] : []),
       ...this.extraTripsExtensions(),
     ]);
 
@@ -1198,6 +1357,18 @@ export class AnimatedTripsLayer<
 
       useCategoryColor: useGpuCategory,
       ...(useGpuCategory ? { categoryPalette: prepared.gpuPalette! } : {}),
+
+      // DataFilterExtension wiring (only when a filterProperty is set). The
+      // constant getFilterValue is the fallback for tiles missing the column;
+      // filterEnabled is additionally gated on THIS tile having baked it.
+      ...(filterProp
+        ? {
+            getFilterValue: 0,
+            filterEnabled: hasFilter && this.props.filterEnabled !== false,
+            filterRange: this.props.filterRange ?? null,
+            filterSoftRange: this.props.filterSoftRange ?? null,
+          }
+        : {}),
     });
     // Pickable sublayers must use the stock PathLayer: NoPickingPathLayer
     // strips `instancePickingColors`, so forwarding pickable:true into it

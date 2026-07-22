@@ -106,3 +106,93 @@ export const threeBackend: BackendDescriptor = {
   interleavedBasemap: false,
   basemapProjection: 'mercator',
 };
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * Layer-feature matrix (2026-07 kind-parity campaign)
+ *
+ * The deck reference backend gained per-layer prop families (glide
+ * interpolation, icon wake, GPU DataFilter, space-time height, stable
+ * categorical colour, progressive path reveal). The three backend does NOT
+ * implement any of them today: TSL/WebGPU has no DataFilterExtension analogue,
+ * no CPU glide/wake kernel port, and no time-as-height (`timeAsHeight` is
+ * already `false` above). Rather than silently no-op, each feature declares a
+ * DELIBERATE typed fallback + reason here — the honest, machine-checkable
+ * complement to deck's `supported: true`. The vocabulary is redeclared locally
+ * because `@poopdeck.gl/three` deliberately does not depend on
+ * `@poopdeck.gl/layers`; the conformance gate asserts exhaustiveness.
+ * ────────────────────────────────────────────────────────────────────────── */
+
+/** The per-layer prop families a backend either implements or degrades. */
+export const LAYER_FEATURES = [
+  'motionInterpolation',
+  'iconWake',
+  'dataFilter',
+  'timeHeightScale',
+  'stableColorMapping',
+  'pathReveal',
+] as const;
+export type LayerFeature = (typeof LAYER_FEATURES)[number];
+
+/** See `@poopdeck.gl/layers` `LayerFeatureSupport`; kept structurally identical. */
+export type LayerFeatureSupport =
+  | {
+      supported: true;
+      kinds: readonly LayerKind[];
+      prop: string;
+      summary: string;
+    }
+  | {
+      supported: false;
+      kinds: readonly LayerKind[];
+      fallback: string;
+      reason: string;
+    };
+
+/**
+ * three implements NONE of the campaign features yet — every entry is a
+ * deliberate typed fallback, not a silent gap. `timeHeightScale` in particular
+ * is consistent with `capabilities.timeAsHeight === false` above.
+ */
+export const threeLayerFeatures: Readonly<
+  Record<LayerFeature, LayerFeatureSupport>
+> = {
+  motionInterpolation: {
+    supported: false,
+    kinds: ['point', 'icon'],
+    fallback: 'per-tile window sampling (markers pop between tiles, no glide)',
+    reason:
+      'CPU glide kernel (idProperty pooling + per-frame pose lerp) not ported to three',
+  },
+  iconWake: {
+    supported: false,
+    kinds: ['icon'],
+    fallback: 'static icons (no trailing wake)',
+    reason: 'no per-instance wake-alpha shader hook in the three icon path',
+  },
+  dataFilter: {
+    supported: false,
+    kinds: ['arc', 'line', 'trips', 'column', 'polygon'],
+    fallback: 'unfiltered — every feature is drawn',
+    reason: 'no DataFilterExtension analogue in the three (TSL/WebGPU) backend',
+  },
+  timeHeightScale: {
+    supported: false,
+    kinds: ['column', 'polygon'],
+    fallback: 'flat geometry (no space-time-cube lift)',
+    reason:
+      'time-as-height is unimplemented — see capabilities.timeAsHeight=false',
+  },
+  stableColorMapping: {
+    supported: false,
+    kinds: ['arc', 'line', 'column', 'icon'],
+    fallback: 'per-tile first-seen palette (colours may differ across tiles)',
+    reason:
+      'no CategoryColorExtension palette / CPU colour-expand path ported to three',
+  },
+  pathReveal: {
+    supported: false,
+    kinds: ['path'],
+    fallback: 'whole path drawn (no progressive reveal)',
+    reason: 'progressive vertex-time reveal not ported to the three path layer',
+  },
+};

@@ -43,6 +43,8 @@ import {
   SpatioTemporalLayerProps,
 } from '../spatiotemporal-layer.js';
 import { TimeFilterExtension } from '../../extensions/time-filter-extension.js';
+import { DataFilterExtension } from '../../extensions/data-filter-extension.js';
+import type { DataFilterRange } from '../../extensions/data-filter-extension.js';
 import {
   CategoryColorExtension,
   CATEGORY_PALETTE_SIZE,
@@ -53,6 +55,7 @@ import { emit } from '../../lib/telemetry.js';
 import { warnOnce } from '../../lib/log.js';
 import {
   colorListDigest,
+  colorMappingDigest,
   inheritedPropsDigest,
   updateTriggersDigest,
 } from '../../lib/style-digest.js';
@@ -60,6 +63,7 @@ import { resolveAccessorAlias } from '../../lib/accessor-alias.js';
 import type {
   ColorAccessorValue,
   NumericAccessorValue,
+  WeightAccessorValue,
 } from '../../lib/accessor-alias.js';
 import { deriveSourceTargetPositions } from '../../lib/od-positions.js';
 import { DEFAULT_LINE_PALETTE } from '@poopdeck.gl/core';
@@ -168,6 +172,54 @@ export interface _AnimatedArcLayerProps {
    */
   colorPalette?: Color[];
   /**
+   * Explicit category-string → color map for a categorical `sourceColor` /
+   * `targetColor`. Resolved per-tile against each tile's own category
+   * dictionary, so a category renders the SAME color in every tile (unlike
+   * `colorPalette`, whose indices are assigned per-tile in first-seen order).
+   * Takes precedence over `colorPalette` when set. Mirrors
+   * `AnimatedTripsLayer.colorMapping`.
+   * @default null
+   */
+  colorMapping?: Record<string, Color> | null;
+  /** Fallback color for categories absent from `colorMapping`. */
+  colorMappingDefault?: Color;
+  /**
+   * GPU range filter — the NAME of a baked numeric column to filter arcs by
+   * (installs {@link DataFilterExtension}). Arcs whose value in this column
+   * falls inside {@link filterRange} render; the rest are hidden (or soft-faded
+   * via {@link filterSoftRange}). Composes WITH the time filter — an arc must
+   * pass both the time window and the column range.
+   *
+   * Accessor-alias of deck.gl's `getFilterValue`: pass a column NAME, not a
+   * function (STT tiles are binary — a function warns once and is ignored).
+   * Unset (the default) ⇒ the extension is not installed at all: zero
+   * attribute, zero uniform, zero shader change. A tile that lacks the named
+   * column renders unfiltered (the filter idles for that tile).
+   * @default null
+   */
+  filterProperty?: WeightAccessorValue | null;
+  /**
+   * Inclusive `[min, max]` bounds for {@link filterProperty}. `null` (default)
+   * means "no range yet" — the column is still bound, so a range set later
+   * animates purely by uniform with no tile re-preparation. No effect unless
+   * `filterProperty` is set.
+   * @default null
+   */
+  filterRange?: DataFilterRange | null;
+  /**
+   * Optional soft `[min, max]` inside {@link filterRange}: arcs between the soft
+   * and hard bounds fade rather than hard-clip. No effect unless
+   * `filterProperty` + `filterRange` are set.
+   * @default null
+   */
+  filterSoftRange?: DataFilterRange | null;
+  /**
+   * Enable/disable the column filter without dropping the bound attribute.
+   * Effective only when `filterProperty` + a valid `filterRange` are set.
+   * @default true
+   */
+  filterEnabled?: boolean;
+  /**
    * Fade-in duration for appearing arcs (ms).
    * @default 300
    */
@@ -185,10 +237,26 @@ export type AnimatedArcLayerProps = _AnimatedArcLayerProps &
 
 const DEFAULT_SOURCE_COLOR: Color = [0, 150, 255, 255];
 const DEFAULT_TARGET_COLOR: Color = [255, 127, 14, 255];
+const DEFAULT_MAPPING_DEFAULT: Color = [120, 120, 120, 255];
 
 // Shared with the maplibre adapter (single source of truth in
 // @poopdeck.gl/core).
 const DEFAULT_PALETTE: Color[] = DEFAULT_LINE_PALETTE;
+
+/**
+ * Build a per-tile palette by mapping the tile's own category dictionary
+ * through an explicit string→color map. Because `instanceCategoryIndex`
+ * indexes into the same per-tile `categories` array, the resulting palette
+ * makes each category render the same color in every tile. Mirrors
+ * `AnimatedTripsLayer.paletteFromMapping`.
+ */
+function paletteFromMapping(
+  categories: string[],
+  mapping: Record<string, Color>,
+  fallback: Color,
+): Color[] {
+  return categories.map((c) => mapping[c] ?? fallback);
+}
 
 /** See AnimatedPathLayer for the rationale; same cache shape, source/target attrs. */
 interface PreparedTile {
@@ -265,6 +333,32 @@ export class AnimatedArcLayer<
     arcTilt: { type: 'number', value: 0 },
     getTilt: { type: 'object', value: null, optional: true, compare: true },
     colorPalette: { type: 'array', value: DEFAULT_PALETTE, compare: true },
+    // Explicit string→color map. compare:false — its content is folded into the
+    // per-tile styleKey (via colorMappingDigest), so deck never diffs it.
+    colorMapping: {
+      type: 'object',
+      value: null,
+      optional: true,
+      compare: false,
+    },
+    colorMappingDefault: { type: 'color', value: [120, 120, 120, 255] },
+    // Column range filter (DataFilterExtension). Unset ⇒ not installed.
+    // Permissive {type:'object'} descriptors: filterProperty holds a column
+    // name; the ranges hold a [min,max] tuple OR null (rejected by 'array').
+    filterProperty: {
+      type: 'object',
+      value: null,
+      optional: true,
+      compare: true,
+    },
+    filterRange: { type: 'object', value: null, optional: true, compare: true },
+    filterSoftRange: {
+      type: 'object',
+      value: null,
+      optional: true,
+      compare: true,
+    },
+    filterEnabled: true,
     fadeInDuration: { type: 'number', value: 300, min: 0 },
     fadeOutDuration: { type: 'number', value: 300, min: 0 },
   };
@@ -291,12 +385,36 @@ export class AnimatedArcLayer<
     mode: 'window',
   });
   private readonly categoryColorExtension = new CategoryColorExtension();
+  /**
+   * Singleton DataFilterExtension. Composed into a sublayer's extension list
+   * ONLY when `filterProperty` is set (a per-layer constant, so the list stays
+   * stable across this layer's sublayers). Constructed unconditionally — a
+   * no-op object alloc; it contributes no attribute, uniform or shader unless
+   * actually installed. Mirrors {@link AnimatedPointLayer}.
+   */
+  private readonly dataFilterExtension = new DataFilterExtension({
+    filterSize: 1,
+  });
   private readonly boundGetTime: () => number = () => this.getCurrentTime();
 
   finalizeState(context: LayerContext): void {
     super.finalizeState(context);
     this.preparedTileCache.clear();
     this.sublayerCache.clear();
+  }
+
+  /**
+   * Resolve `filterProperty` to a baked-column NAME. Accessor-alias of deck's
+   * `getFilterValue`: a function-valued prop warns once and is ignored (there
+   * is no legacy prop, so the fallback is "no filter" — `undefined`).
+   */
+  private filterPropertyValue(): string | undefined {
+    return resolveAccessorAlias<string | undefined>(
+      'AnimatedArcLayer',
+      'filterProperty',
+      this.props.filterProperty,
+      undefined,
+    );
   }
 
   /**
@@ -390,6 +508,16 @@ export class AnimatedArcLayer<
       Array.isArray(sourceColor) ? sourceColor.join(',') : '',
       Array.isArray(targetColor) ? targetColor.join(',') : '',
       typeof width === 'number' ? width : 0,
+      // Column-filter uniforms (DataFilterExtension). A range/enabled change is
+      // a uniform-only edit, so — like timeWindow — it rebuilds the cached
+      // sublayers (whose props carry the values) rather than re-preparing tiles.
+      Array.isArray(this.props.filterRange)
+        ? this.props.filterRange.join(',')
+        : '',
+      Array.isArray(this.props.filterSoftRange)
+        ? this.props.filterSoftRange.join(',')
+        : '',
+      this.props.filterEnabled,
     ].join('|');
   }
 
@@ -470,15 +598,30 @@ export class AnimatedArcLayer<
     const colorProp = this.categoryColorProp();
     const widthValue = this.widthValue();
     const widthProp = typeof widthValue === 'string' ? widthValue : '';
+    const filterProp = this.filterPropertyValue() ?? '';
+    // Explicit colorMapping content is baked into the per-tile gpuPalette, so a
+    // mapping edit must invalidate the cached tile. Digest is memoized per
+    // object reference (style-digest.ts) — a WeakMap lookup, not a re-serialize.
+    const mapSig = this.props.colorMapping
+      ? `m${colorMappingDigest(this.props.colorMapping)}`
+      : '';
+    // colorMappingDefault seeds the mapping fallback + the NULL palette slot,
+    // so a change in isolation must invalidate the prepared tile.
+    const mapDefault = (
+      this.props.colorMappingDefault ?? DEFAULT_MAPPING_DEFAULT
+    ).join(',');
     // Palette keyed by CONTENT, not length — a same-size palette swap must
     // invalidate cached tiles. The digest is memoized per array reference, so
     // this is a WeakMap lookup per tile, not a re-serialization. The user's
     // updateTriggers ride the key too so a trigger bump re-prepares the tile.
+    // The filter-column NAME is baked into the `filterValue` attribute, so a
+    // change (incl. the unset↔set toggle that adds/removes DataFilterExtension)
+    // must re-prepare tiles → rebuild sublayers via the new preparedKey.
     const styleKey = `${colorProp}|${widthProp}|${
       colorProp
         ? colorListDigest(this.props.colorPalette ?? DEFAULT_PALETTE)
         : 0
-    }|${updateTriggersDigest(this.props.updateTriggers)}`;
+    }|${mapSig}|d${mapDefault}|f${filterProp}|${updateTriggersDigest(this.props.updateTriggers)}`;
 
     const tileKey = makeTileKey(tile, tileLayer);
     const cached = this.preparedTileCache.get(tileKey);
@@ -516,17 +659,29 @@ export class AnimatedArcLayer<
     if (colorProp) {
       const cat = binary.categoricalProps[colorProp];
       if (cat) {
+        // Explicit colorMapping → stable per-tile palette (resolved against
+        // this tile's own category dictionary); else the ordered colorPalette.
+        const mappingFallback =
+          this.props.colorMappingDefault ?? DEFAULT_MAPPING_DEFAULT;
+        const palette = this.props.colorMapping
+          ? paletteFromMapping(
+              cat.categories,
+              this.props.colorMapping,
+              mappingFallback,
+            )
+          : (this.props.colorPalette ?? DEFAULT_PALETTE);
         attributes.instanceCategoryIndex = {
           value: categoryIndicesToFloat32(
             cat.indices,
             binary.featureCount,
-            (this.props.colorPalette ?? DEFAULT_PALETTE).length,
+            palette.length,
             'AnimatedArcLayer',
           ),
           size: 1,
         };
         gpuPalette = appendNullCategorySlot(
-          this.props.colorPalette ?? DEFAULT_PALETTE,
+          palette,
+          this.props.colorMapping ? mappingFallback : undefined,
         );
       }
     }
@@ -535,6 +690,26 @@ export class AnimatedArcLayer<
       const values = binary.numericProps[widthProp];
       if (values) {
         attributes.getWidth = { value: values, size: 1 };
+      }
+    }
+
+    // Column range filter (DataFilterExtension): bind the named numeric column
+    // to the `filterValue` attribute zero-copy (already a Float32Array). Absent
+    // column ⇒ no attribute baked → the sublayer idles the filter for this tile
+    // (renders unfiltered), mirroring how a missing color/width column falls
+    // back. Arc is instanced one-per-feature, so a per-feature column binds
+    // directly. A categorical column can't be range-filtered in v1 — warn once.
+    if (filterProp) {
+      const values = binary.numericProps[filterProp];
+      if (values) {
+        attributes.filterValue = { value: values, size: 1 };
+      } else if (binary.categoricalProps[filterProp]) {
+        warnOnce(
+          'AnimatedArcLayer:filterPropertyCategorical',
+          `[AnimatedArcLayer] filterProperty "${filterProp}" is a categorical ` +
+            'column; v1 range-filters NUMERIC columns only. The filter is ignored ' +
+            'for tiles where the column is categorical.',
+        );
       }
     }
 
@@ -589,12 +764,23 @@ export class AnimatedArcLayer<
       );
     }
 
+    // Column filter: install DataFilterExtension only when a column is named
+    // (per-layer constant ⇒ stable list across this layer's sublayers). Whether
+    // THIS tile actually baked the attribute gates the per-tile enable, so a
+    // tile missing the column renders unfiltered (idle extension).
+    const filterProp = this.filterPropertyValue();
+    const hasFilter = !!prepared.data.attributes.filterValue;
+
     // Keep the extension list constant across sublayers — see
     // animated-trips-layer.ts for the cache-storm rationale. User extensions
     // from the top-level `extensions` prop are appended (composeExtensions).
     const extensions = this.composeExtensions([
       this.timeFilterExtension,
       this.categoryColorExtension,
+      // Column range filter, when a filterProperty is set. Multiplies its own
+      // in/out (or soft-fade) factor into color.a — commutes with the time and
+      // categorical alphas, so it composes cleanly with both.
+      ...(filterProp ? [this.dataFilterExtension] : []),
     ]);
     // getSubLayerProps inheritance (opacity/pickable/visible, coordinate system,
     // highlight props, …) + user `_subLayerProps.arcs` overrides. Only runs
@@ -643,6 +829,18 @@ export class AnimatedArcLayer<
 
       useCategoryColor: useGpuCategory,
       ...(useGpuCategory ? { categoryPalette: prepared.gpuPalette! } : {}),
+
+      // DataFilterExtension wiring (only when a filterProperty is set). The
+      // constant getFilterValue is the fallback for tiles missing the column;
+      // filterEnabled is additionally gated on THIS tile having baked it.
+      ...(filterProp
+        ? {
+            getFilterValue: 0,
+            filterEnabled: hasFilter && this.props.filterEnabled !== false,
+            filterRange: this.props.filterRange ?? null,
+            filterSoftRange: this.props.filterSoftRange ?? null,
+          }
+        : {}),
     });
     // ArcLayer carries far fewer attributes than PathLayer (no fp64 path split,
     // no per-vertex tessellation), so the WebGL2 16-attribute floor that forces

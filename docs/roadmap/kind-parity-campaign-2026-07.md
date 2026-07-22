@@ -301,8 +301,8 @@ track (A1) started. Full agent transcripts are archived in the session's workflo
   (showcase StoryGlobe/MaplibreRenderer hooks-deps, demo-meta-contract,
   cesium/layers/core/mcp/three, tools/render-test); `oxfmt --check` flags 2 files
   (`stt-packed-format-decisions.md`, `tools/bench/src/bench.mjs`). Recorded so
-  later regressions are attributable. *(Several of these were being cleaned up in
-  the working tree concurrently during the run.)*
+  later regressions are attributable. _(Several of these were being cleaned up in
+  the working tree concurrently during the run.)_
 - **Archive inventory:** 128 dataset entries; explicit `type:` distribution —
   trips ×14, point ×8, trip-heads ×5, av ×5, summary ×2, radar ×2, polygon ×2
   (wildfires, hurricanes), path ×2 (both catalog-excluded), flowmap-bundled ×2,
@@ -349,7 +349,7 @@ working set, reword the counter docs, **retire the pinned single-tile-fallback t
 `tiler.rs:3040` and replace with a corpus placement test**); new
 `tests/antimeridian_polygon.rs` + `tests/fixtures/antimeridian/` (Fiji MultiPolygon,
 Chukotka, dateline storm cell with a seam-straddling hole); `stt-core/geometry.rs`
-**no change** (`simplify_polygon` stays out — it must run *after* split + per-tile clip).
+**no change** (`simplify_polygon` stays out — it must run _after_ split + per-tile clip).
 
 **Acceptance gate:** on the dateline corpus at every zoom — `antimeridian_fallbacks == 0`;
 all rings closed, in `[-180,180]`, no `|Δlon|>180°` edge; CCW exterior / CW holes retained
@@ -364,6 +364,7 @@ renderer-tolerated artifact — property tests must explicitly tolerate a hole e
 seam (consistent with the existing accepted-artifact stance at `clip.rs:954-963`).
 
 **Open questions for the user (A1):**
+
 1. Keep the existing `antimeridian_fallbacks` counter as a should-be-0 safety net
    (recommended, no schema churn) **or** add a distinct `antimeridian_splits` observability
    counter (touches summary/report/CLI consumers)?
@@ -386,7 +387,7 @@ seam (consistent with the existing accepted-artifact stance at `clip.rs:954-963`
 
 **Architecture answer (the task's open question):** it is **neither** a
 `TimeFilterExtension` mode **nor** a GPU sibling extension — a shader cannot gather the
-two arbitrary rows (often in different tiles) of the *same* entity that bracket the
+two arbitrary rows (often in different tiles) of the _same_ entity that bracket the
 playhead, so interpolation must be a CPU `renderLayers()` path, exactly like the shipping
 box/mesh/trip-heads layers. `track-kernel.ts` already solves the hard part (group-by-id,
 rebase to absolute epoch-ms so cross-tile samples share a timeline, sort/dedup,
@@ -426,6 +427,7 @@ seam glides with no pop; G5 max-gap holds last; G6 degrees heading shortest-arc 
 G7 glided marker picks back to its source; G8 no thinning + lint clean.
 
 **Open questions for the user (B1):**
+
 1. AIS: ratify a rebuild emitting an exact vessel id, or accept AIS glide inert for now —
    and is **`flights` an acceptable first glide demo**?
 2. Wake vs glide (mutually exclusive in v1): keep wake and wire glide to a new demo,
@@ -442,20 +444,20 @@ G7 glided marker picks back to its source; G8 no thinning + lint clean.
 The surveyor produced initial verdicts; the challenger contested the strength of **5 of 7**.
 The **reconciled** recommendation (surveyor ∧ challenger) — for user ratification:
 
-| # | Orphan | Surveyor | Challenger | **Reconciled** |
-|---|--------|----------|-----------|----------------|
-| 1 | `AnimatedHexagonLayer` | ADOPT (hexbin over earthquakes/nyc-taxi) | near-duplicate of shipped earthquakes points **and** extruded-column demos; nyc-taxi weights are pre-aggregated, not raw | **DEFER** unless a genuinely different pickable-per-cell dataset is chosen |
-| 2 | `AnimatedTextLayer` | ADOPT (earthquake/GTFS labels) | rests on an **unverified** string-column prerequisite; drags in CollisionFilter | **DEFER** until `describe_dataset` confirms a shipped archive with a string column |
-| 3 | `AnimatedMeshLayer` | ADOPT (glTF meshes for AV objects) | re-skins existing AV boxes → **zero new info** + permanent bundle cost | **DEFER** until a non-AV moving-mesh dataset where shape carries meaning (ships over AIS, aircraft over flights) |
-| 4 | `AnimatedLineLayer` | ADOPT (flat OD, mirror nyc-od-arcs) | flat clone of the arc hero over identical geometry; no named dense-OD dataset | **DEFER**, trigger = a genuinely dense OD matrix lands |
-| 5 | `type:'point-cloud'` branch | **CUT** branch, keep export | AV composite can't show a *bare* cloud; cutting forces deleting a designed VizBadge glyph; catalog lidar exists to wire it | **Keep — DEFER** (leave dormant at ~zero cost) **or ADOPT** by pointing it at an existing standalone lidar sweep. *Do not cut.* |
-| 6 | `AnimatedPathLayer` | DEFER ("not an orphan") | it's a real catalog-reach GAP; the `path` case is already wired, a window-fix rebuild gives it a hero cheaply | **ADOPT-cheap candidate** (C3): rebuild one path dataset with a corrected window |
-| 7 | `DataFilterExtension` / `CollisionFilterExtension` | DEFER both | split them — DataFilter's trigger (point hero + numeric column, wiring done) **exists today** | **ADOPT DataFilter now** (magnitude slider on earthquakes points); **DEFER Collision** (rides the Text demo) |
+| #   | Orphan                                             | Surveyor                                 | Challenger                                                                                                                 | **Reconciled**                                                                                                                  |
+| --- | -------------------------------------------------- | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | `AnimatedHexagonLayer`                             | ADOPT (hexbin over earthquakes/nyc-taxi) | near-duplicate of shipped earthquakes points **and** extruded-column demos; nyc-taxi weights are pre-aggregated, not raw   | **DEFER** unless a genuinely different pickable-per-cell dataset is chosen                                                      |
+| 2   | `AnimatedTextLayer`                                | ADOPT (earthquake/GTFS labels)           | rests on an **unverified** string-column prerequisite; drags in CollisionFilter                                            | **DEFER** until `describe_dataset` confirms a shipped archive with a string column                                              |
+| 3   | `AnimatedMeshLayer`                                | ADOPT (glTF meshes for AV objects)       | re-skins existing AV boxes → **zero new info** + permanent bundle cost                                                     | **DEFER** until a non-AV moving-mesh dataset where shape carries meaning (ships over AIS, aircraft over flights)                |
+| 4   | `AnimatedLineLayer`                                | ADOPT (flat OD, mirror nyc-od-arcs)      | flat clone of the arc hero over identical geometry; no named dense-OD dataset                                              | **DEFER**, trigger = a genuinely dense OD matrix lands                                                                          |
+| 5   | `type:'point-cloud'` branch                        | **CUT** branch, keep export              | AV composite can't show a _bare_ cloud; cutting forces deleting a designed VizBadge glyph; catalog lidar exists to wire it | **Keep — DEFER** (leave dormant at ~zero cost) **or ADOPT** by pointing it at an existing standalone lidar sweep. _Do not cut._ |
+| 6   | `AnimatedPathLayer`                                | DEFER ("not an orphan")                  | it's a real catalog-reach GAP; the `path` case is already wired, a window-fix rebuild gives it a hero cheaply              | **ADOPT-cheap candidate** (C3): rebuild one path dataset with a corrected window                                                |
+| 7   | `DataFilterExtension` / `CollisionFilterExtension` | DEFER both                               | split them — DataFilter's trigger (point hero + numeric column, wiring done) **exists today**                              | **ADOPT DataFilter now** (magnitude slider on earthquakes points); **DEFER Collision** (rides the Text demo)                    |
 
 Net: the challenger pushes the campaign away from cosmetic/near-duplicate adopts (hexbin,
 mesh, flat-line, text-without-a-column) and toward two genuinely cheap wins already wired —
 **DataFilter magnitude slider** and a **path-reveal hero** (C3) — plus **do not cut** the
-point-cloud branch (keep it dormant). *This table is the ratification target for C2+.*
+point-cloud branch (keep it dormant). _This table is the ratification target for C2+._
 
 ## D1 — `view_map` inference widening (IMPLEMENTED, uncommitted, green)
 
@@ -477,7 +479,7 @@ point-cloud branch (keep it dormant). *This table is the ratification target for
 **Important finding — corrects DoD item 5.** `view_map` reads only `manifest.json`, and the
 archive carries **no signal** for most special layers (Heatmap/Hexagon/Icon/Line/Text/Mesh/
 PointCloud/Flow\*) — and `recommend`'s `dominant_type` is **not** baked into the manifest, so
-`view_map` cannot see it. Therefore "`view_map` can reach *every* exported layer via hint/intent"
+`view_map` cannot see it. Therefore "`view_map` can reach _every_ exported layer via hint/intent"
 is **not achievable from the archive alone**; those layers remain reachable only via an explicit
 `layer` override. Closing this requires a **build-side format change** to emit richer hints (an
 `od` flag, a heading/weight marker, or baking `dominant_type` into the manifest). → **new Track E
@@ -512,11 +514,194 @@ backlog item** (see below); DoD item 5 should be softened accordingly.
     `antimeridian_multipolygon_keeps_noncrossing_part` added.
   - **Gate:** `cargo test -p stt-build -p stt-core` = **360 passed / 0 failed**; A1 adds no new
     clippy warnings; `antimeridian_fallbacks == 0` on the dateline corpus at every zoom.
-  - *(The 2 re-verify agents + the integrator-gate agent died on a session limit; the fix,
-    regression test, and gate were completed in the main loop after the reset.)*
+  - _(The 2 re-verify agents + the integrator-gate agent died on a session limit; the fix,
+    regression test, and gate were completed in the main loop after the reset.)_
 - **A2 (polygon per-zoom simplification):** next Rust step. Its ordering constraint requires
   the split to be in place first (now satisfied). Wires `simplify_polygon` on the standard clip
   path, post-split, max-zoom tier lossless.
-- **TS track (B2/B3/B4):** waits until the user commits the current working tree (it touches
-  `packages/layers` + showcase, which carry uncommitted user edits — worktree fan-out from
-  HEAD would not see them).
+- **TS track (B2/B3/B4):** unblocked once the user committed the tree (HEAD `5f5a693`); ran in
+  the comprehensive workflow below.
+
+## Wave 2/3 — comprehensive run (2026-07-22), green, uncommitted
+
+After the user committed the tree (clean HEAD), one 13-agent workflow ran the Rust A2 track in
+parallel with the full TS layer-capability track (5 disjoint-file implementers → conformance →
+gate → demo wiring → 2-lens adversarial verify), each agent owning an exclusive file set (no
+worktrees). **Final tree green:** cargo `-p stt-build -p stt-core` **368/0**, `packages/layers`
+**798**, `packages/three` **300**, showcase `tsc` 0 + demo-meta contract **270**.
+
+- **A2 — polygon per-zoom simplification (Rust).** `simplify.rs` `simplify_polygon_rings_for_zoom`
+  uses `geo::SimplifyVwPreserve` (topology-preserving Visvalingam–Whyatt, one R*-tree across
+  exterior+holes) at the same per-zoom epsilon as lines; applied in `place_polygon`'s emit closure
+  **after** split + per-tile clip, gated strict `zoom < simplify_max_zoom` so the max-tier is
+  **byte-identical/lossless** (keeps A1 seams watertight). `--simplify` OFF by default. 8 tests;
+  verify **approve**, gate **green**. Measured: 0% at max tier; ~93–99% vertex reduction at low
+  zooms (dense holed ring 3202→21 verts by z0; hole always retained). Did NOT wire stt-core's
+  `simplify_polygon` (plain DP, not topology-preserving) — used SimplifyVwPreserve instead.
+- **B2/B3 motion (point + icon).** Opt-in CPU glide via `track-kernel.ts` (`lerpAngleDeg`,
+  `angleUnit`, `maxGapMs`, all default-preserving); props `interpolate`/`idProperty`/
+  `maxInterpolationGap`/`reducedMotion` on both layers; icon gains `wakeLength`/`wakeTailScale`
+  (B3) + stable `colorMapping`. Default-off byte-identical; picking maps to source feature. 21 tests.
+- **B5 arc/line/trips.** `DataFilterExtension` (`filterProperty`/`filterRange`/`filterSoftRange`/
+  `filterEnabled`) on all three + stable `colorMapping` on arc/line. 16 tests.
+- **B5 column.** DataFilter + `timeHeightScale`/`timeHeightOrigin` + `colorMapping` + a
+  `reducedMotion` gate that forces the space-time lift to 0. 11 tests.
+- **A3 polygon render props.** DataFilter + `timeHeightScale` + `reducedMotion` gate. 18 tests.
+  Tile-seam overdraw + per-ring outline are **documented deferred follow-ups** (need a design
+  spike / per-ring sub-indices in the tile format), not attempted.
+- **C3 path-reveal.** `revealTrail`/`revealDuration`/`fadeTrail`/`reducedMotion` on
+  `AnimatedPathLayer`, reusing the TimeFilterExtension trail mode + synthesized monotone vertex
+  times (prefers baked `vertexTimestamps` when present). 9 tests.
+- **Conformance.** Both backend descriptors declare all six features
+  (motionInterpolation/iconWake/dataFilter/timeHeightScale/stableColorMapping/pathReveal); three
+  declares them as deliberate typed fallbacks (ports none yet). New conformance gates walk each
+  layer's real merged `defaultProps` (deck 33 tests) + prove three's fallback table exhaustive
+  (14 tests).
+- **Demos (plumbing only — aesthetics remain the user's browser pass).** Reduced-motion threaded
+  through `DemoViewer`/`DemoHoverPreview` → `buildDemoLayers`; the **flights** demo wired to
+  motion-glide (`idProperty:'icao24'`, wake removed — mutually exclusive with glide); the
+  **earthquakes** points hero wired to a `magnitude` DataFilter (static full-domain range).
+  `@poopdeck.gl/layers` dist rebuilt.
+- **Adversarial verify caught one confirmed MEDIUM integrity gap → FIXED in the main loop:** the
+  flights glide left `maxInterpolationGap` at `Infinity`, so glide would fabricate straight-line
+  paths across ADS-B coverage dropouts. Threaded `maxInterpolationGap` through the showcase and set
+  a finite **3 min** on flights (holds across dropouts; above ADS-B cadence, below the 10-min window).
+
+### Remaining last-mile (after this run)
+
+- ~~**§5 matrix gap:** icon `DataFilter`~~ — **DONE 2026-07-22** (mirrored the arc pattern on the
+  icon discrete/window path + descriptor coverage + test; layers 808, default-off byte-identical;
+  attribute headroom 15/16 default-off, filter-on worst case hits the WebGL2 16-floor which
+  degrades picking not rendering, same as the path family). **§5 matrix now complete.**
+- **A3 tile-seam overdraw** design spike (build vs render-side dedup) + per-ring polygon outline.
+- **C3 path-reveal DEMO** needs a window-fix dataset rebuild (layer capability is in place).
+- **Earthquakes DataFilter interactive slider UI** (layer + static range wired; live slider deferred
+  to avoid a 60 Hz-rebuild-risk UI change).
+- **B4 icon flagship demo** — icon wake+glide+colorMapping exist as capability, but no showcase demo
+  instantiates `AnimatedIconLayer` yet (ship-traffic/flights are `type:'point'`).
+- **User browser visual-verify:** flights aesthetic changed (comet wake → smooth glide dots);
+  `reducedMotion` is threaded to the point layer only (polygon/column `timeHeightScale` gate is
+  currently unexercised by any demo).
+
+## Glide perf fix (2026-07-22) — green, uncommitted
+
+User reported the flights motion-glide demo spikes 120→30 fps in bursts. **Root cause
+(diagnosed + confirmed):** `renderInterpolated` rebuilt the ENTIRE track index
+(`buildTrackIndex` = O(all resident snapshots): 9 array-pushes/feature + a per-track sort +
+reorder) whenever the tile array changed identity. Flights plays the whole day through a
+sliding 10-min window in ~60 s, so tiles churn constantly → that full rebuild fires inside a
+render frame repeatedly → the spike.
+
+**Fix (2-lens-verified, both approve, gate green):** added `TrackIndexMaintainer` in
+`track-kernel.ts` (`buildTrackIndex` left **unchanged** so box/mesh can't regress) — an
+incrementally maintained index keyed by the stable per-`(tile,layer)` key, keyframes grouped by
+source tile. `sync(tiles)` diffs incoming vs absorbed keys: only ADDED tiles are pooled, only
+REMOVED tiles dropped, and **only the affected tracks are re-sorted**; tracks confined to
+unchanged tiles keep their sorted `Track` with zero work. Point + icon glide paths migrated to
+own a maintainer each; per-frame position/color(/angle) buffers are now **reused grow-only**
+(no `new Float64Array`/`Uint8Array` per frame in steady playback). Per-churn cost drops from
+O(all snapshots) → O(changed tiles + affected tracks). New `motion-glide-incremental.test.ts`
+proves both the incremental index **equals** a full rebuild (byte-for-byte) and that a
+single-tile slide re-sorts **only** the touched tracks (non-vacuous spy). Full layers **803**,
+three **300**, typecheck clean. **Real-world fps needs the user's in-browser check** (the
+agent can only measure the synthetic rebuild cost).
+
+## A3 tile-seam overdraw — design record (2026-07-22), pending ratification
+
+3-designer panel → judge → synthesis. **Chosen: a hybrid split by defect, sequenced
+render-first; cross-tile SolidPolygonLayer consolidation explicitly REJECTED** (clip is
+irreversible, tiles fetch/evict independently, fills already abut — matches mapbox stencil /
+tippecanoe keep-clipped / deck MVTLayer never-reunion).
+
+- **Phase 1 — RENDER/DECODE, zero rebuild** (fixes the spurious outline bridge + un-outlined
+  holes on _every already-built archive_): the per-ring sub-indices already live on disk in the
+  GeoArrow nested-list geometry and are discarded at decode (`tile.ts:668-698`). Surface them
+  (`ringIndices` + `featureRingOffsets` on `BinaryFeatures`, registered in
+  `tile-transferables.ts` for zero-copy transfer) and feed the outline `PathLayer`
+  per-**ring** `startIndices` so exterior and each hole stroke as their own closed loop.
+  Closed-ring gotcha: drop the trailing duplicate before `_pathType:'loop'`. Correct the stale
+  "KNOWN LIMITATION" docstrings (flat translucent fills are already watertight at
+  `polygon_buffer_degrees=0`; hole fills are already correct via baked triangles).
+- **Phase 2 — BUILD, needs a rebuild** (fixes the tile-edge hairline + double-stroke): an
+  **optional, additive** per-vertex clip-edge-flag column emitted by the Sutherland–Hodgman
+  clipper (the only false-positive-free source of "which edges are synthetic tile cuts" — an
+  output edge with both endpoints exactly on the same clip boundary), bit-packed
+  `List<Boolean>` gated by a new `stt:has_clip_edges` metadata key (mirrors `stt:has_triangles`),
+  ABSENT on seam-free/non-polygon tiles so they stay **byte-identical** (preserves A1's
+  watertight seams). Consumed CPU-side in `prepareTile` to break each ring at seam edges into
+  open sub-paths (no new GPU attribute — the outline is at the WebGL2 16-attr floor). Extruded
+  z-fight only partially addressable (SolidPolygonLayer has no per-edge wall hook); translucent
+  AA-fringe is a separate higher-effort follow-up.
+
+**Open questions for the user (A3):** (1) Phase 2 must add seam-mask reconstruction to
+`simplify_polygon_rings_for_zoom` — the **same function A2 just modified** (VW keeps a vertex
+subset, so the mask must be reconstructed by coordinate-matching, "seam if any merged edge was
+seam"); sequence Phase 2 after A2 or fold into it? (2) Ship Phase 1 now (zero rebuild) and
+defer Phase 2, or hold both for one coordinated release + fleet republish? (3) Bespoke
+extrusion sublayer for the z-fight, or keep "prefer opaque extruded" guidance? (4) Confirm the
+bit-packed boolean column shape; (5) tag ±180 antimeridian cut edges as seam too (recommended
+yes); (6) defer the translucent AA-fringe composite to a separate campaign?
+
+## Wave 4 (partial) — review pass (2026-07-22), green, uncommitted
+
+Verified the whole uncommitted kind-parity tree against every claim above, then ran a
+3-agent adversarial review (icon glide/wake/DataFilter · B5 arc/line/column + A3 polygon ·
+C3 path-reveal + trips DataFilter + both conformance descriptors) plus a hand review of the
+Rust A1/A2, the track-kernel glide engine, and the showcase wiring.
+
+**Full-tree gate (re-run this session):** cargo `-p stt-build -p stt-core` **368/0**,
+core **506**, playback **178**, layers **813** (+5 vs the doc's 808: the icon-DataFilter
+suite plus this pass's budget assertion), three **300**, mcp **162**, showcase `tsc` clean,
+`oxlint` clean. `oxfmt --check` fixed on 3 campaign-authored files (both `backend-descriptor.ts`
+
+- `b5-icon-datafilter.test.ts`; the 2 remaining flagged files are the pre-existing
+  `stt-packed-format-decisions.md` debt + this doc).
+
+**3 confirmed findings — ALL FIXED this pass (green):**
+
+1. **HIGH (real, latent) — trips `filterProperty` overflowed the WebGL2 16-attribute floor
+   → blank trips on 16-attr GPUs (Apple Silicon / Intel UHD / software WebGL).** The B5
+   DataFilter sweep appended `DataFilterExtension` to `AnimatedTripsLayer` WITHOUT dropping
+   the always-inert `CategoryColorExtension` (trips hardwires `gpuPalette = null` and
+   CPU-expands categorical color into `getColor`, but the extension still declares
+   `in float instanceCategoryIndex;` unconditionally → costs a slot). Non-pickable trips was
+   12 (NoPickingPathLayer) + 3 (TimeFilter) + 1 (category) + 1 (filter) = **17** → fatal
+   shader-link failure. The sibling `AnimatedPathLayer` already solved the identical conflict
+   by dropping the idle category ext when filtering; trips did not. **Fixed:** trips now drops
+   `CategoryColorExtension` when `filterProperty` is set (`includeCategoryColorExtension() &&
+!filterProp`) → net 16, no lost color. Regression test added
+   (`b5-arc-line-trips-props.test.ts` — `keepsCategoryWhenFiltering` per-case flag: arc/line
+   keep both (headroom), trips drops). Latent — no shipped demo wires trips+filter, so no
+   current demo was broken; the §5-matrix trips→DataFilter capability now works on 16-attr GPUs.
+2. **MEDIUM (real, latent) — path-reveal "persist" trail constant too small + misleading
+   comment.** `REVEAL_PERSIST_TRAIL_MS` was 4 years, fed as `trailLength`; the shader culls
+   any vertex older (in per-feature DATA time) than `currentTime - trailLength`, so a single
+   path feature whose own span exceeds 4 y sheds its oldest vertices — "persist" erasing the
+   line start. The repo's own drifters span 43 y. **Fixed:** bumped to 250 y (clears every
+   shipped dataset) and rewrote the comment to be honest (the bound is per-feature data-time,
+   and multi-decade single features are anyway outside TimeFilterExtension's float32
+   ±2^24-ms envelope, so reveal-persist's real target is short timeless-line datasets like
+   flight/taxi paths). Latent — C3 path-reveal has no demo yet.
+3. **LOW / integrity (shared point+icon) — glide + a categorical color COLUMN + no
+   `colorMapping` silently renders every marker TRANSPARENT.** The CPU glide path resolves
+   color through the string-keyed `colorMapping`; with a color column but no mapping every
+   track falls to the transparent `colorMappingDefault` ([0,0,0,0]) — whereas the GPU window
+   path auto-palettes it, so flipping `interpolate` on silently blanks a working demo.
+   **Fixed:** symmetric `warnOnce` on both `AnimatedPointLayer` + `AnimatedIconLayer` glide
+   config (mirrors the existing `trackIdMissing` warn; keeps the two layers mirrored). No
+   behavior change — a loud warning replacing a silent blank.
+
+Agents otherwise cleared the icon glide/wake/DataFilter path (faithful parallel of the point
+layer across all 7 constraints), the B5 arc/line/column + A3 polygon sweep (attribute budgets
+≤16 everywhere, default-off byte-identical, reducedMotion gate unbypassable, colorMapping
+stable), the C3 synthesized-vertex-times (monotone, no div-by-zero on <2-vertex / zero-length
+paths, prefers baked times), and both conformance suites (non-vacuous — they walk the real
+merged `defaultProps` and pin feature-list exhaustiveness). One noted non-defect: the arc fill
+sits at 15/16 attrs with fp64 + categorical + filter all active (safe, zero headroom for a
+future per-instance attr).
+
+**Still open (unchanged by this pass — user-gated or needs a dataset build):** A3 tile-seam
+overdraw impl (ratify design first); C3 path-reveal demo (needs a window-fix dataset rebuild);
+earthquakes DataFilter live slider UI (deferred); B4 icon flagship demo (no showcase demo
+instantiates `AnimatedIconLayer` yet); the user's in-browser aesthetic verify (flights glide,
+any timeHeightScale demo). The tree is review-clean and committable.

@@ -112,6 +112,7 @@ export {
   configureSharedScheduler,
   isSharedSchedulingEnabled,
   getSharedSchedulerMaxRequests,
+  setSharedSchedulerSourceWeight,
   resetSharedScheduler,
   type ConfigureSharedSchedulerOptions,
 } from './shared-scheduler.js';
