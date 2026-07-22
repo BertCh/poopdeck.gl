@@ -40,9 +40,12 @@ export interface ViewMapOptions {
   /**
    * Desired presentation. Biases the per-dataset layer/color/tier/timeWindow
    * choice toward a reading (`density`→summary tier + count color;
-   * `tracking`→trips + longer trails; `choropleth`→measure color). Omit for a
-   * neutral `exploratory` default. The `layer` param, and the explicit
-   * `colorBy`/`timeWindow` overrides below, always win over the bias.
+   * `tracking`→trips + longer trails; `flow`→OD arcs (AnimatedArcLayer);
+   * `magnitude`→extruded columns (AnimatedColumnLayer); `choropleth`→measure
+   * color). Omit for a neutral `exploratory` default. A promotion applies only
+   * when the geometry supports it (else the base layer is kept with a warning).
+   * The `layer` param, and the explicit `colorBy`/`timeWindow` overrides below,
+   * always win over the bias.
    */
   intent?: PresentationIntent;
   /** Force the color-by property for every dataset (overrides the auto pick from measured columns). */
@@ -81,7 +84,26 @@ export interface InferredLayer {
   confidence: LayerConfidence;
 }
 
-/** Maps a build-time `style_hints.layer_hint` (`'points'|'paths'|'trips'|'polygons'`) to an STT `@@type`. */
+/**
+ * Maps a build-time `style_hints.layer_hint` to an STT `@@type`.
+ *
+ * This is the COMPLETE set of hint strings the build side can emit: the Rust
+ * `layer_hint()` (crates/stt-build/src/style_hints.rs) derives the kind from
+ * geometry and `profile_properties` (crates/stt-optimize/src/analysis/properties.rs)
+ * passes only the pinned `LAYER_HINTS` vocabulary
+ * (`"points" | "paths" | "trips" | "polygons"`) through to the manifest — every
+ * one is mapped here, so a hinted archive is NEVER guessed.
+ *
+ * KNOWN GAP: the archive carries no hint for the many other exported layers
+ * (Arc, Column, Icon, Heatmap, Hexagon, BoundingBox, Splat, Text, Mesh,
+ * PointCloud, Line, Flowmap, …). The packed format simply has no field to carry
+ * "this is OD data / heading data / a heatmap", so those layers cannot be
+ * inferred from a hint. They are reached instead via presentation `intent`
+ * promotion (see presentation.ts: `flow`→AnimatedArcLayer,
+ * `magnitude`→AnimatedColumnLayer, `density`→summary, `tracking`→trips) or an
+ * explicit `layer` override. Inventing extra hint keys here would be a lie the
+ * archive cannot back.
+ */
 const LAYER_HINT_TO_TYPE: Record<string, string> = {
   points: 'AnimatedPointLayer',
   paths: 'AnimatedPathLayer',
@@ -245,10 +267,15 @@ export function buildViewMap(
     // geometry-unknown warning; a bare `default` inference does not.
     if (options.layer === undefined && inferred.confidence === 'default') {
       warnings.push(
-        `Layer for "${id}": geometry type is unknown (no style_hints/summary tier on this dataset), ` +
-          `defaulting to AnimatedPointLayer — pass the \`layer\` param (e.g. ` +
-          `AnimatedPathLayer/AnimatedTripsLayer/AnimatedPolygonLayer) or rebuild with --style-hints if it is ` +
-          `not point data.`,
+        `⚠ UNRELIABLE LAYER — "${id}": geometry type is unknown. This archive carries no ` +
+          `style_hints.layer_hint and no summary tier, so view_map CANNOT tell whether it is points, ` +
+          `lines, polygons, or trips. It is falling back to AnimatedPointLayer, which will render ` +
+          `line/polygon/trip data WRONG (as stray points at vertex 0). Do NOT trust this default if the ` +
+          `data is not points. To fix, EITHER pass the \`layer\` param explicitly ` +
+          `(AnimatedPathLayer / AnimatedTripsLayer / AnimatedPolygonLayer / AnimatedArcLayer / ` +
+          `AnimatedColumnLayer / …), OR use the \`intent\` param to promote it ` +
+          `(flow→arcs, magnitude→columns, tracking→trips, density→summary), OR rebuild the archive so ` +
+          `stt-build bakes a layer_hint (emitted on every current build).`,
       );
     }
 

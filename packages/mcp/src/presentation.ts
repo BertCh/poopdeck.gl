@@ -29,6 +29,8 @@ export const PRESENTATION_INTENTS = [
   'density',
   'tracking',
   'choropleth',
+  'flow',
+  'magnitude',
 ] as const;
 
 /**
@@ -84,8 +86,15 @@ const WEIGHT_DOMAIN_LAYERS = new Set([
 ]);
 /** Layers whose scalar color-by is `gradientProperty` + `gradientDomain`. */
 const GRADIENT_DOMAIN_LAYERS = new Set(['AnimatedTripsLayer']);
-/** Line layers that `tracking` can promote to an animated-trail (trips) layer. */
+/** Line layers that `tracking` can promote to an animated-trail (trips) layer, or `flow` to OD arcs. */
 const LINE_LAYERS = new Set(['AnimatedPathLayer', 'AnimatedTripsLayer']);
+/**
+ * Point layers that `magnitude` can promote to extruded 3D columns. The only
+ * point `@@type` the geometry inference / `points` layer_hint ever produces is
+ * `AnimatedPointLayer`; kept a set so the promotion check reads symmetrically
+ * with {@link LINE_LAYERS} and tolerates future point base types.
+ */
+const POINT_LAYERS = new Set(['AnimatedPointLayer']);
 
 /**
  * Visible window = this many temporal buckets. MUST match
@@ -188,6 +197,26 @@ function resolveLayerType(
           `explicitly set to ${ctx.baseLayerType} — keeping it (omit the layer override for trails).`,
       );
     }
+    if (
+      intent === 'flow' &&
+      ctx.baseLayerType !== 'AnimatedArcLayer' &&
+      LINE_LAYERS.has(ctx.baseLayerType)
+    ) {
+      warnings.push(
+        `intent "flow" would render AnimatedArcLayer origin→destination arcs, but the layer was ` +
+          `explicitly set to ${ctx.baseLayerType} — keeping it (omit the layer override for arcs).`,
+      );
+    }
+    if (
+      intent === 'magnitude' &&
+      ctx.baseLayerType !== 'AnimatedColumnLayer' &&
+      POINT_LAYERS.has(ctx.baseLayerType)
+    ) {
+      warnings.push(
+        `intent "magnitude" would extrude AnimatedColumnLayer columns, but the layer was ` +
+          `explicitly set to ${ctx.baseLayerType} — keeping it (omit the layer override for columns).`,
+      );
+    }
     return undefined;
   }
   if (intent === 'density') {
@@ -203,6 +232,29 @@ function resolveLayerType(
     warnings.push(
       `intent "tracking" wants trajectory/trail rendering, but "${datasetId(dataset)}" is ` +
         `${ctx.baseLayerType} (not line geometry) — keeping it.`,
+    );
+    return undefined;
+  }
+  if (intent === 'flow') {
+    // OD/flow reads as one arc per (typically 2-vertex) LineString: source =
+    // first vertex, target = last (AnimatedArcLayer's contract). Only line
+    // geometry carries that source→target pair.
+    if (LINE_LAYERS.has(ctx.baseLayerType)) return 'AnimatedArcLayer';
+    warnings.push(
+      `intent "flow" renders origin→destination arcs, but "${datasetId(dataset)}" is ` +
+        `${ctx.baseLayerType} (not OD line geometry) — keeping it. Build OD-pair LineStrings ` +
+        `(e.g. nyc-rideshare --od) for a flow/arc view.`,
+    );
+    return undefined;
+  }
+  if (intent === 'magnitude') {
+    // Extruded columns rise from point features; height/color is a per-column
+    // prop the caller sets (this only promotes the @@type, never spreads an
+    // optional accessor that would shadow the layer's default).
+    if (POINT_LAYERS.has(ctx.baseLayerType)) return 'AnimatedColumnLayer';
+    warnings.push(
+      `intent "magnitude" extrudes 3D columns at point features, but "${datasetId(dataset)}" is ` +
+        `${ctx.baseLayerType} (not point geometry) — keeping it.`,
     );
     return undefined;
   }

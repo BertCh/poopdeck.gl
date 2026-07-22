@@ -47,6 +47,24 @@ describe('inferLayerType', () => {
     });
   });
 
+  // The COMPLETE set of layer_hint strings the build side can emit
+  // (crates/stt-optimize/src/analysis/properties.rs `LAYER_HINTS`): every one
+  // must map to its correct @@type — none may fall through to the point default.
+  it.each([
+    ['points', 'AnimatedPointLayer'],
+    ['paths', 'AnimatedPathLayer'],
+    ['trips', 'AnimatedTripsLayer'],
+    ['polygons', 'AnimatedPolygonLayer'],
+  ])('maps the "%s" hint to %s (confidence: hint)', (hint, type) => {
+    expect(
+      inferLayerType(
+        dataset({
+          styleHints: { version: 1, properties: [], layer_hint: hint },
+        }),
+      ),
+    ).toEqual({ type, confidence: 'hint' });
+  });
+
   it('falls back to the summary-tier scheme (confidence: summary)', () => {
     expect(
       inferLayerType(dataset({ hasSummaryTier: true, summaryScheme: 'h3' })),
@@ -189,6 +207,48 @@ describe('buildViewMap', () => {
     expect(layer.tier).toBe('summary');
   });
 
+  it('promotes a paths-hinted dataset to AnimatedArcLayer under intent="flow"', () => {
+    const { spec, warnings } = buildViewMap(
+      [
+        dataset({
+          styleHints: { version: 1, properties: [], layer_hint: 'paths' },
+        }),
+      ],
+      { intent: 'flow', publicBaseUrl: 'https://tiles.example.com' },
+    );
+    expect((spec.layers[0] as any)['@@type']).toBe('AnimatedArcLayer');
+    // A positive hint drove the base, so no unknown-geometry advisory fired.
+    expect(warnings.some((w) => w.includes('geometry type is unknown'))).toBe(
+      false,
+    );
+  });
+
+  it('promotes a points-hinted dataset to AnimatedColumnLayer under intent="magnitude"', () => {
+    const { spec } = buildViewMap(
+      [
+        dataset({
+          styleHints: { version: 1, properties: [], layer_hint: 'points' },
+        }),
+      ],
+      { intent: 'magnitude', publicBaseUrl: 'https://tiles.example.com' },
+    );
+    expect((spec.layers[0] as any)['@@type']).toBe('AnimatedColumnLayer');
+  });
+
+  it('does not promote flow onto non-line geometry, and warns', () => {
+    const { spec, warnings } = buildViewMap(
+      [
+        dataset({
+          styleHints: { version: 1, properties: [], layer_hint: 'points' },
+        }),
+      ],
+      { intent: 'flow', publicBaseUrl: 'https://tiles.example.com' },
+    );
+    // Kept the points base rather than silently rendering arcs on point data.
+    expect((spec.layers[0] as any)['@@type']).toBe('AnimatedPointLayer');
+    expect(warnings.join('\n')).toMatch(/OD line geometry/);
+  });
+
   it('an explicit layer freezes the @@type even when intent would promote it', () => {
     const { spec, warnings } = buildViewMap(
       [
@@ -292,17 +352,24 @@ describe('buildViewMap', () => {
     expect(spec.initialViewState.zoom).toBe(9);
   });
 
-  it('warns when the geometry type is unknown (blind default)', () => {
-    const { warnings } = buildViewMap([dataset()], {
+  it('warns LOUDLY and never silently defaults to points on unknown geometry', () => {
+    const { spec, warnings } = buildViewMap([dataset()], {
       publicBaseUrl: 'https://tiles.example.com',
     });
-    expect(
-      warnings.some(
-        (w) =>
-          w.includes('geometry type is unknown') && w.includes('earthquakes'),
-      ),
-    ).toBe(true);
-    expect(warnings.some((w) => w.includes('AnimatedPointLayer'))).toBe(true);
+    // The fallback contract still returns a usable spec (a point layer)...
+    expect((spec.layers[0] as any)['@@type']).toBe('AnimatedPointLayer');
+    // ...but the default is never silent: an unmistakable, actionable advisory
+    // naming the dataset, the risk, and every escape hatch must accompany it.
+    const warn = warnings.find(
+      (w) =>
+        w.includes('geometry type is unknown') && w.includes('earthquakes'),
+    );
+    expect(warn).toBeDefined();
+    expect(warn).toContain('AnimatedPointLayer');
+    expect(warn).toMatch(/⚠|UNRELIABLE/); // prominent marker
+    expect(warn).toContain('`layer`'); // tells you which param to pass
+    expect(warn).toContain('`intent`'); // ...or the intent escape hatch
+    expect(warn).toMatch(/rebuild/i); // ...or how to fix at the source
   });
 
   it('does NOT warn about geometry when a hint gives a positive signal', () => {

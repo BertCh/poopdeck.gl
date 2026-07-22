@@ -865,7 +865,9 @@ function registerInteractiveTools(
         'scheme. NOTE: archives built before layer_hint became a default carry none, so inference falls ' +
         'back to AnimatedPointLayer — for those, explicitly pass `layer` (AnimatedPathLayer / ' +
         'AnimatedTripsLayer / AnimatedPolygonLayer) or rebuild. Beyond the layer, an optional `intent` ' +
-        '(density/tracking/choropleth/exploratory) plus `colorBy`/`timeWindow` drive a data-derived ' +
+        '(density/tracking/flow/magnitude/choropleth/exploratory) — which can PROMOTE the layer to ' +
+        'AnimatedArcLayer (flow) or AnimatedColumnLayer (magnitude) when the geometry supports it — plus ' +
+        '`colorBy`/`timeWindow` drive a data-derived ' +
         'presentation (color domain from measured percentiles, visible window from the temporal grain, ' +
         'summary tier when framed coarse). Register these @@type names with @deck.gl/json (a ' +
         'JSONConfiguration carrying the STT layer classes) to actually instantiate the layers client-side. ' +
@@ -905,8 +907,11 @@ function registerInteractiveTools(
             .describe(
               'Desired presentation, biasing layer/color/tier/timeWindow: ' +
                 '"density" (summary/H3 tier + count weighting), "tracking" (trips + longer trails), ' +
+                '"flow" (origin→destination arcs, AnimatedArcLayer, on OD line geometry), ' +
+                '"magnitude" (extruded 3D columns, AnimatedColumnLayer, on point geometry), ' +
                 '"choropleth" (measure-driven color), or "exploratory" (neutral default). ' +
-                '`layer`/`colorBy`/`timeWindow` always override the bias.',
+                'A layer promotion applies only when the geometry supports it (else the base layer ' +
+                'is kept and an advisory explains why). `layer`/`colorBy`/`timeWindow` always override the bias.',
             ),
           colorBy: z
             .string()

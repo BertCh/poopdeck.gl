@@ -170,6 +170,77 @@ describe('recommendPresentation — intent: tracking', () => {
   });
 });
 
+describe('recommendPresentation — intent: flow', () => {
+  it('promotes a line layer to origin→destination arcs', () => {
+    const r = recommendPresentation(
+      dataset(),
+      ctx({ baseLayerType: 'AnimatedPathLayer' }),
+      { intent: 'flow' },
+    );
+    expect(r.layerType).toBe('AnimatedArcLayer');
+  });
+
+  it('promotes a trips layer to arcs too', () => {
+    const r = recommendPresentation(
+      dataset(),
+      ctx({ baseLayerType: 'AnimatedTripsLayer' }),
+      { intent: 'flow' },
+    );
+    expect(r.layerType).toBe('AnimatedArcLayer');
+  });
+
+  it('warns and keeps the base for non-line geometry (points)', () => {
+    const r = recommendPresentation(dataset(), ctx(), { intent: 'flow' });
+    expect(r.layerType).toBeUndefined();
+    expect(r.warnings.join('\n')).toMatch(/OD line geometry/);
+  });
+
+  it('never promotes an explicitly locked layer, and says what it would have done', () => {
+    const r = recommendPresentation(
+      dataset(),
+      ctx({ baseLayerType: 'AnimatedPathLayer', layerLocked: true }),
+      { intent: 'flow' },
+    );
+    expect(r.layerType).toBeUndefined();
+    expect(r.warnings.join('\n')).toMatch(
+      /would render AnimatedArcLayer.*explicitly set to AnimatedPathLayer/s,
+    );
+  });
+});
+
+describe('recommendPresentation — intent: magnitude', () => {
+  it('promotes a point layer to extruded columns', () => {
+    const r = recommendPresentation(
+      dataset(),
+      ctx({ baseLayerType: 'AnimatedPointLayer' }),
+      { intent: 'magnitude' },
+    );
+    expect(r.layerType).toBe('AnimatedColumnLayer');
+  });
+
+  it('warns and keeps the base for non-point geometry (polygons)', () => {
+    const r = recommendPresentation(
+      dataset(),
+      ctx({ baseLayerType: 'AnimatedPolygonLayer' }),
+      { intent: 'magnitude' },
+    );
+    expect(r.layerType).toBeUndefined();
+    expect(r.warnings.join('\n')).toMatch(/not point geometry/);
+  });
+
+  it('never promotes an explicitly locked layer, and says what it would have done', () => {
+    const r = recommendPresentation(
+      dataset(),
+      ctx({ baseLayerType: 'AnimatedPointLayer', layerLocked: true }),
+      { intent: 'magnitude' },
+    );
+    expect(r.layerType).toBeUndefined();
+    expect(r.warnings.join('\n')).toMatch(
+      /would extrude AnimatedColumnLayer.*explicitly set to AnimatedPointLayer/s,
+    );
+  });
+});
+
 describe('recommendPresentation — color-by', () => {
   const withColumns = dataset({
     hasSummaryTier: true,
@@ -317,12 +388,14 @@ describe('recommendPresentation — color-by', () => {
 });
 
 describe('PRESENTATION_INTENTS', () => {
-  it('is the pinned four-intent vocabulary', () => {
+  it('is the pinned intent vocabulary', () => {
     expect([...PRESENTATION_INTENTS]).toEqual([
       'exploratory',
       'density',
       'tracking',
       'choropleth',
+      'flow',
+      'magnitude',
     ]);
   });
 });
