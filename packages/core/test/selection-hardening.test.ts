@@ -25,7 +25,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { SpatiotemporalTileset } from '../src/spatiotemporal-tileset';
-import type { TileId, BoundingBox, Tile } from '../src/types';
+import type { TileId, BoundingBox } from '../src/types';
 import { BUCKET_MS, fakeTile, settle } from './helpers/fixtures';
 
 /** Coverage-index queries use the FULL_TIME_RANGE sentinel (start ≈ -8.64e15). */

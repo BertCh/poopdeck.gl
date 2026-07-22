@@ -90,7 +90,7 @@ describe('demo catalog curation invariants', () => {
 
 describe('demo meta editorial content', () => {
   for (const [id, meta] of Object.entries(DEMO_META)) {
-    describe(id, () => {
+    describe(`${id}`, () => {
       it('has at least two non-empty about paragraphs', () => {
         expect(meta.about.length).toBeGreaterThanOrEqual(2);
         for (const p of meta.about) {

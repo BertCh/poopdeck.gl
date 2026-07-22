@@ -1,5 +1,4 @@
 import { chromium } from 'playwright';
-import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const OUT = fileURLToPath(
@@ -71,23 +70,15 @@ if (viewport) {
 // Japan area (relative to the viewport, given initial view: lon=140, lat=20, z=2)
 // We just sample several positions and report how many are not the empty
 // map background.
-const samples = await page.evaluate(
-  ({ box }) => {
-    const canvas = document.querySelector('canvas');
-    const ctx =
-      canvas.getContext('webgl2', { preserveDrawingBuffer: true }) ||
-      canvas.getContext('webgl', { preserveDrawingBuffer: true });
-    // We can't easily readPixels from arbitrary contexts post-hoc; use the
-    // 2D HTML method on a freshly composited frame instead.
-    return {
-      canvasW: canvas.width,
-      canvasH: canvas.height,
-      clientW: canvas.clientWidth,
-      clientH: canvas.clientHeight,
-    };
-  },
-  { box: viewport },
-);
+const samples = await page.evaluate(() => {
+  const canvas = document.querySelector('canvas');
+  return {
+    canvasW: canvas.width,
+    canvasH: canvas.height,
+    clientW: canvas.clientWidth,
+    clientH: canvas.clientHeight,
+  };
+});
 console.log('Canvas info:', samples);
 
 await ctx.close();

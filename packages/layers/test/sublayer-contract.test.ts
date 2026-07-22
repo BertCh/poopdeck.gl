@@ -65,7 +65,7 @@ vi.mock('@deck.gl/layers', () => {
 // `project32` exports that custom sublayers import.
 vi.mock('@deck.gl/core', async () => {
   const core = (await import('./fake-deck-core')).createDeckCoreMock();
-  class FakeLayer<P = any> {
+  class FakeLayer {
     props: any;
     constructor(props: Record<string, any> = {}) {
       this.props = props;

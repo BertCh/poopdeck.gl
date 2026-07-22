@@ -13,7 +13,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { SpatiotemporalTileset } from '../src/spatiotemporal-tileset';
-import type { TileId, BoundingBox, Tile } from '../src/types';
+import type { TileId, Tile } from '../src/types';
 import {
   BOUNDS,
   BUCKET_MS,

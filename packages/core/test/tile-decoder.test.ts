@@ -11,7 +11,6 @@ import {
   FixedSizeList,
   Float64,
   Table,
-  makeData,
   tableToIPC,
   vectorFromArray,
 } from 'apache-arrow';

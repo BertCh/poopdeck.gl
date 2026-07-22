@@ -147,7 +147,7 @@ export function installShim(): MemDirectoryHandle {
     configurable: true,
     writable: true,
     value: {
-      ...(originalNavigatorDescriptor?.value ?? {}),
+      ...originalNavigatorDescriptor?.value,
       storage: { getDirectory: async () => root },
     },
   });

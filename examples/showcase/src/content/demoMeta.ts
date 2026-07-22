@@ -543,7 +543,7 @@ export const DEMO_META: Record<string, DemoMeta> = {
     techniqueTag: 'Weather suite · 5-layer composite',
     about: [
       'The whole weather suite on one continental map and one playhead: 19–22 May 2024, the prolonged late-May severe-weather sequence whose 21 May outbreak produced the Greenfield, Iowa EF4. Four independent public NOAA datasets, each built by its own adapter, are streamed together and coordinated by the playback governor.',
-      'Bottom to top: HRRR 500 mb steering wind advected into streamlines (blue→red by speed — the mid-tropospheric flow the storms ride, so the ribbons run with the cells); the MRMS national reflectivity mosaic as moving dBZ isoband polygons — the precipitation field, cross-dissolving between scans — with storm-cell centroids and SCIT cell tracks over it; and every GOES-16 GLM lightning flash as an additive splat, flickering individually and stacking into a glow where convection concentrates. The precipitation field is the required governor source; wind, lightning, cells, and tracks stream alongside as optional sources (continue-and-degrade), each widening its own loader window.',
+      'Bottom to top: HRRR 500 mb steering wind as a dense drifting field of cool-blue particles — thousands of dots gliding with the mid-tropospheric flow the storms ride, so the drift runs with the cells; deliberately low-contrast so it reads as background context beneath the storms rather than competing with them; the MRMS national reflectivity mosaic as moving dBZ isoband polygons — the precipitation field, cross-dissolving between scans — with storm-cell centroids and SCIT cell tracks over it; and every GOES-16 GLM lightning flash as an additive splat, flickering individually and stacking into a glow where convection concentrates. The precipitation field is the required governor source; wind, lightning, cells, and tracks stream alongside as optional sources (continue-and-degrade), each widening its own loader window.',
       'It is the payoff of the suite: you watch the wind organize, the rain bands sweep east, the cells and their tracks light up the convective cores, and the lightning flare along the leading edge — cause and effect, one clock.',
     ],
     dataSources: [
@@ -551,7 +551,7 @@ export const DEMO_META: Record<string, DemoMeta> = {
         name: 'NOAA HRRR 500 mb wind (AWS Open Data)',
         url: 'https://registry.opendata.aws/noaa-hrrr-bdp-pds/',
         license: 'Public domain (US Gov)',
-        note: 'hourly 500 mb UGRD/VGRD → advected steering-flow streamlines.',
+        note: 'hourly 500 mb UGRD/VGRD → advected steering-flow drift particles.',
       },
       {
         name: 'NOAA MRMS reflectivity mosaic (AWS Open Data)',
@@ -580,6 +580,10 @@ export const DEMO_META: Record<string, DemoMeta> = {
       {
         label: 'AnimatedTripsLayer',
         docPath: '/docs/api/animated-trips-layer',
+      },
+      {
+        label: 'AnimatedTripHeadsLayer',
+        docPath: '/docs/api/animated-trip-heads-layer',
       },
       {
         label: 'AnimatedPointLayer',

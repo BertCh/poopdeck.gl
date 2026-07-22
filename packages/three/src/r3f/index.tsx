@@ -363,7 +363,7 @@ function useEngineLayer<L extends SttLayer>(
         err,
       );
     }
-  }, [layer, tiles, projection, timeOrigin]);
+  }, [layer, tiles, projection, timeOrigin, gov.sourceId]);
   // CRITICAL: a per-frame throw here (transient decode/NaN, a WGSL build hiccup)
   // must NOT kill r3f's render loop — that strands the canvas on the last frame
   // while the clock runs on. Swallow it (logged once) so the next frame paints.
@@ -2094,9 +2094,17 @@ export function SttCanvas(props: SttCanvasProps): React.ReactElement {
 
   const gpuOk = React.useMemo(() => canRenderGpu(), []);
   // Caller-supplied projection wins; else the backward-compatible ENU default.
+  // Depend on the anchor's lng/lat primitives rather than the object identity so an
+  // inline `anchor={{…}}` prop doesn't recreate the projection — and reset the
+  // controls/camera built from it — on every render.
+  const { longitude: anchorLng, latitude: anchorLat } = anchor;
   const projection = React.useMemo(
-    () => resolveCanvasProjection(projectionProp, anchor),
-    [projectionProp, anchor.longitude, anchor.latitude],
+    () =>
+      resolveCanvasProjection(projectionProp, {
+        longitude: anchorLng,
+        latitude: anchorLat,
+      }),
+    [projectionProp, anchorLng, anchorLat],
   );
   // Globe scenes swap the flat MapControls for an earth-orbit OrbitControls.
   const globe = isGlobeProjection(projection) ? projection : null;

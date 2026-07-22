@@ -627,8 +627,11 @@ export interface Dataset {
 
   // ─── weather-suite composite styling (type: 'weather') ─────────────────
   /**
-   * Wind streamline ribbons manifest (`AnimatedTripsLayer`, per-vertex speed),
-   * from hrrr_advect.py. Rewritten through `resolveDataUrl` alongside `url`.
+   * HRRR wind archive manifest (the hrrr-wind trips archive from
+   * hrrr_advect.py). In the composite it renders as a minimal drifting PARTICLE
+   * FIELD via `AnimatedTripHeadsLayer` — one CPU-interpolated head-dot per
+   * active particle, the contextual steering-flow backdrop (not streamline
+   * ribbons). Rewritten through `resolveDataUrl` alongside `url`.
    */
   windUrl?: string;
   /**
@@ -638,12 +641,30 @@ export interface Dataset {
    * `radarTracksUrl` for the precip cells/tracks and `url` for the precip field.
    */
   lightningUrl?: string;
-  /** Wind streamline speed gradient (m/s). Falls back to a default ramp. */
+  /**
+   * @deprecated Legacy wind streamline speed gradient (m/s). The composite now
+   * renders wind as constant-color drift dots — see {@link windHeadColor}.
+   */
   windGradient?: {
     property: string;
     domain: [number, number];
     colors: ColorRGBA[];
   };
+  /**
+   * Fill color (RGBA, 0-255) for the composite's wind drift dots
+   * (`AnimatedTripHeadsLayer`). Cool low-contrast blue so the field recedes as
+   * background context, distinct from the bright white lightning that pops.
+   * @default `[95, 160, 230, 100]`
+   */
+  windHeadColor?: ColorRGBA;
+  /**
+   * Screen-space radius (px) of each wind drift dot. Kept small — the wind is a
+   * dense background field whose presence comes from particle density, not dot
+   * size. @default 1.3
+   */
+  windHeadRadiusPixels?: number;
+  /** Layer opacity for the wind drift dots. @default 0.6 */
+  windHeadOpacity?: number;
 
   // ─── AV cockpit composite styling (type: 'av') ─────────────────────────
   /**

@@ -679,7 +679,7 @@ describe('AnimatedPathLayer per-tile sublayer architecture (v3)', () => {
     // RGB preserved for every feature; only alpha is graded.
     expect([...c.slice(0, 3)]).toEqual([40, 200, 176]);
     // Ground (z=0, t=0): alpha × near=1 → 200.
-    expect(c[0 * 4 + 3]).toBe(200);
+    expect(c[3]).toBe(200);
     // Mid (z=3, t=0.5): factor = 1 + (0.3-1)*0.5 = 0.65 → round(200*0.65) = 130.
     expect(c[4 * 4 + 3]).toBe(130);
     // Top (z=6, t=1): factor = 0.3 → round(200*0.3) = 60.
@@ -700,8 +700,8 @@ describe('AnimatedPathLayer per-tile sublayer architecture (v3)', () => {
       // no elevationOpacityRange → both features keep the band alpha.
     });
     const c = built.props.data.attributes.getColor.value;
-    expect(c[0 * 4 + 3]).toBe(200);
-    expect(c[4 * 4 + 3]).toBe(200);
+    expect(c[3]).toBe(200); // feature 0
+    expect(c[4 * 4 + 3]).toBe(200); // feature 4
   });
 
   it('projects colorMapping onto the tile category dictionary for stable per-category colors', () => {
@@ -816,7 +816,7 @@ describe('AnimatedPathLayer per-tile sublayer architecture (v3)', () => {
     // z per feature = mapping[band] × scale, applied to every vertex of the
     // feature. Feature 0 (d1) → 0; feature 3 (d5, verts 9..11) → 18 × 2 = 36.
     const pos = attrs.getPath.value;
-    expect(pos[0 * 3 + 2]).toBe(0); // feature 0, vertex 0
+    expect(pos[2]).toBe(0); // feature 0, vertex 0
     expect(pos[1 * 3 + 2]).toBe(0); // feature 0, vertex 1 (same band height)
     expect(pos[3 * 3 + 2]).toBe(6); // feature 1 (d2) first vertex: 3 × 2
     expect(pos[9 * 3 + 2]).toBe(36); // feature 3 (d5) first vertex: 18 × 2
@@ -842,7 +842,7 @@ describe('AnimatedPathLayer per-tile sublayer architecture (v3)', () => {
     expect(attrs.getPath.size).toBe(3);
     expect(built.props.positionFormat).toBe('XYZ');
     const pos = attrs.getPath.value;
-    expect(pos[0 * 3 + 2]).toBe(0); // feature 0 (z_layer 0)
+    expect(pos[2]).toBe(0); // feature 0 (z_layer 0)
     expect(pos[4 * 3 + 2]).toBe(5); // feature 1 (z_layer 2.5 × 2), first vertex idx 4
     expect(pos[8 * 3 + 2]).toBe(12); // feature 2 (z_layer 6 × 2), first vertex idx 8
   });

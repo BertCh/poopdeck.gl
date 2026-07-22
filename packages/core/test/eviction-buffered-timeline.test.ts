@@ -22,7 +22,7 @@
 
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { SpatiotemporalTileset } from '../src/spatiotemporal-tileset';
-import type { TileId, BoundingBox, Tile } from '../src/types';
+import type { TileId, BoundingBox } from '../src/types';
 import { BUCKET_MS, fakeTile, makeAvailableTiles } from './helpers/fixtures';
 import { advanceClock, installClock } from './helpers/clock';
 

@@ -52,9 +52,10 @@ describe('cesiumBackend descriptor', () => {
     );
     expect(new Set(supported)).toEqual(new Set(Object.keys(backing)));
     for (const [kind, [file, cls]] of Object.entries(backing)) {
-      expect(cesiumBackend.layerKinds[kind as LayerKind].supported, kind).toBe(
-        true,
-      );
+      expect(
+        cesiumBackend.layerKinds[kind as LayerKind].supported,
+        `${kind}`,
+      ).toBe(true);
       const src = readFileSync(join(SRC, file), 'utf8');
       expect(src, `${file} must export ${cls}`).toMatch(
         new RegExp(`export class ${cls}`),

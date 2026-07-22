@@ -2916,7 +2916,13 @@ const rawDatasets: Dataset[] = [
     url: '/data/mrms-precip-field/manifest.json',
     radarCellsUrl: '/data/mrms-precip-cells/manifest.json',
     radarTracksUrl: '/data/mrms-precip-tracks/manifest.json',
-    windUrl: '/data/hrrr-wind/manifest.json',
+    // A DENSE, dots-optimized wind archive (18k particles ≈ 1.8× the standalone
+    // streamline build, 15-min vertex cadence, no per-vertex speed column) built
+    // by hrrr_advect.py --no-values — kept SEPARATE from the standalone
+    // `hrrr-wind` streamline archive so the denser particle count here doesn't
+    // slow the ribbon demo. Rendered as a background drift field of blue dots
+    // (AnimatedTripHeadsLayer, CPU head-interpolation). See buildDemoLayers.
+    windUrl: '/data/hrrr-wind-particles/manifest.json',
     lightningUrl: '/data/goes-glm-lightning/manifest.json',
     type: 'weather',
     sources: ['noaa'],
@@ -2966,30 +2972,26 @@ const rawDatasets: Dataset[] = [
     },
     trailLength: 3600000,
     tripWidth: 2.2,
-    // wind streamlines (500 mb steering flow — see hrrr-wind's domain note).
-    windGradient: {
-      property: 'vertexValues',
-      domain: [0, 50],
-      colors: [
-        [90, 120, 175, 150],
-        [70, 190, 175, 170],
-        [250, 210, 90, 190],
-        [220, 60, 50, 205],
-      ],
-    },
+    // wind — a dense drifting PARTICLE FIELD (thousands of moving dots) beneath
+    // the storms, rendered by AnimatedTripHeadsLayer (one CPU-interpolated head
+    // per active particle). Cool low-contrast blue on normal (non-additive)
+    // blending so it reads as calm background texture — deliberately distinct
+    // from the bright, additive WHITE lightning that is meant to pop. Small
+    // tiny-alpha dots: presence comes from DENSITY, not from any one dot, the
+    // earth.nullschool / Windy particle-flow look. See buildDemoLayers 'weather'.
+    windHeadColor: [95, 160, 230, 100],
+    windHeadRadiusPixels: 1.3,
+    windHeadOpacity: 0.6,
     legend: {
       title: 'Weather suite',
       items: [
         { color: '#28be46', label: 'rain 20–40 dBZ' },
         { color: '#f57823', label: 'heavy 50–60' },
         { color: '#e11e26', label: 'core 60+' },
+        { color: '#5fa0e6', label: 'wind drift (500 mb)' },
         { color: '#deecff', label: 'lightning flash' },
       ],
       ramps: [
-        {
-          label: 'wind 0 → 50 m/s (500 mb)',
-          colors: ['#5a78af', '#46beaf', '#fad25a', '#dc3c32'],
-        },
         {
           // Additive flash accumulation, not a separate density layer.
           label: 'lightning density (additive)',

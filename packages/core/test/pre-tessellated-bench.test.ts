@@ -49,7 +49,7 @@ import {
 } from 'apache-arrow';
 import earcut from 'earcut';
 import { decodeTile } from '../src/tile';
-import { GeometryType, type TileId } from '../src/types';
+import type { TileId } from '../src/types';
 
 /**
  * Build a synthetic tile with `n` polygon features, each a `verts`-vertex

@@ -14,7 +14,7 @@
  * and return minimal tile objects from `getTileData` so tiles "load".
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { SpatiotemporalTileset } from '../src/spatiotemporal-tileset';
 import type { TileId, BoundingBox } from '../src/types';
 import { BOUNDS, flush as tick } from './helpers/fixtures';

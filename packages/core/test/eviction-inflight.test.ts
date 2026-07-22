@@ -18,7 +18,7 @@
 
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { SpatiotemporalTileset } from '../src/spatiotemporal-tileset';
-import type { TileId, BoundingBox, Tile } from '../src/types';
+import type { TileId, Tile } from '../src/types';
 import {
   BOUNDS,
   BUCKET_MS,

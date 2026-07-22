@@ -218,7 +218,7 @@ function toPosixRelative(root: string, dir: string): string {
 }
 
 /**
- * Recursively finds every directory under `root` that directly contains a
+ * Recursively finds every directory under `dir` that directly contains a
  * `manifest.json`, without descending further once one is found (a dataset
  * directory's only children are its own `packs/`/`index/`, which are also
  * name-skipped as an optimization). Bounded by `maxDepth` so a misconfigured
@@ -227,7 +227,6 @@ function toPosixRelative(root: string, dir: string): string {
  * default of 6 is generous headroom, not a tight fit.
  */
 async function findManifestDirs(
-  root: string,
   dir: string,
   depth: number,
   maxDepth: number,
@@ -248,7 +247,6 @@ async function findManifestDirs(
     if (!entry.isDirectory()) continue;
     if (entry.name.startsWith('.') || SKIP_DIR_NAMES.has(entry.name)) continue;
     await findManifestDirs(
-      root,
       path.join(dir, entry.name),
       depth + 1,
       maxDepth,
@@ -326,7 +324,7 @@ export async function scanDatasets(
   options: { search?: string; maxDepth?: number } = {},
 ): Promise<DatasetSummary[]> {
   const dirs: string[] = [];
-  await findManifestDirs(dataRoot, dataRoot, 0, options.maxDepth ?? 6, dirs);
+  await findManifestDirs(dataRoot, 0, options.maxDepth ?? 6, dirs);
   dirs.sort();
 
   const summaries: DatasetSummary[] = [];

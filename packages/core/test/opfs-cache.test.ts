@@ -13,7 +13,7 @@
  * production code and the shim together.
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { OpfsTileCache, isOpfsAvailable } from '../src/opfs-cache';
 import { installShim, uninstallShim } from './helpers/opfs-shim';
 

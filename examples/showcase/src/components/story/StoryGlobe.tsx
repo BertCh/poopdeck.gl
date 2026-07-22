@@ -692,6 +692,9 @@ const StoryGlobe: React.FC<StoryGlobeProps> = ({ focus, active }) => {
       new AnimatedTripsLayer({
         id: 'story-drifters',
         data: dataset.url,
+        // `focus.time` seeds the initial frame only; `timeController` drives live
+        // updates. Rebuilding these layers whenever it changes would wipe the tile
+        // caches (see the cross-dissolve note below), so it stays out of the deps.
         currentTime: focus.time,
         timeController,
         // Same loading recipe as every other surface (see tileLoadingProps +
@@ -788,6 +791,9 @@ const StoryGlobe: React.FC<StoryGlobeProps> = ({ focus, active }) => {
     return built;
     // NOTE: driftersOpacity is deliberately NOT a dep — the cross-fade is CSS on
     // the container, so the layer instance (and its tile caches) stays stable.
+    // `focus.time` is likewise omitted (see the seed note above): listing it would
+    // rebuild every layer each beat and wipe the tile caches.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     dataset,
     coastlines,

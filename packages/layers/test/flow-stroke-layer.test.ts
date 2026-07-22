@@ -60,9 +60,10 @@ function corridorTile(peakPerBucket: number[]): BinaryFeatures {
   const nv = 3;
   const matrix = new Float32Array(nv * nb);
   for (let b = 0; b < nb; b++) {
-    matrix[0 * nb + b] = peakPerBucket[b] / 2;
-    matrix[1 * nb + b] = peakPerBucket[b];
-    matrix[2 * nb + b] = peakPerBucket[b] / 2;
+    const peak = peakPerBucket[b];
+    matrix[b] = peak / 2; // vertex 0
+    matrix[nb + b] = peak; // vertex 1
+    matrix[2 * nb + b] = peak / 2; // vertex 2
   }
   return {
     featureCount: 1,

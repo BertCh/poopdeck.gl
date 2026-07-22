@@ -527,6 +527,6 @@ describe('mixed-version datasets fail loudly (authority rule §5.2)', () => {
     }, 'v2-golden-tracks');
     // The v2 `.sttd` magic prelude is not a valid v1 directory — the open
     // fails loudly at index decode rather than serving garbage entries.
-    await expect(archive.getIndex()).rejects.toThrow();
+    await expect(archive.getIndex()).rejects.toThrow(/invalid zstd/);
   });
 });

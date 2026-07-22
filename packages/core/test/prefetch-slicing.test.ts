@@ -24,7 +24,7 @@ import {
   SpatiotemporalTileset,
   type TileBatchHooks,
 } from '../src/spatiotemporal-tileset';
-import type { TileId, BoundingBox, Tile } from '../src/types';
+import type { TileId } from '../src/types';
 import {
   BOUNDS,
   BUCKET_MS,

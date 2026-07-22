@@ -11,7 +11,7 @@
 
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { performance } from 'node:perf_hooks';
 
 import { STTArchive, estimateTileSize, OpfsTileCache } from '@poopdeck.gl/core';
@@ -22,8 +22,9 @@ import { STTArchive, estimateTileSize, OpfsTileCache } from '@poopdeck.gl/core';
 // directly from `dist/`.
 const coreEntryUrl = import.meta.resolve('@poopdeck.gl/core');
 const compressionUrl = new URL('./compression.js', coreEntryUrl).href;
-const { decompressSync, gunzipSync, NATIVE_DECOMPRESSION_AVAILABLE } =
-  await import(compressionUrl);
+const { decompressSync, NATIVE_DECOMPRESSION_AVAILABLE } = await import(
+  compressionUrl
+);
 
 // ---------------------------------------------------------------------------
 // Paths
@@ -142,7 +143,7 @@ function installInMemoryOpfsShim() {
     configurable: true,
     writable: true,
     value: {
-      ...(savedNavDescriptor?.value ?? {}),
+      ...savedNavDescriptor?.value,
       storage: { getDirectory: async () => root },
     },
   });

@@ -248,6 +248,6 @@ describe('telemetry probe enable/disable', () => {
     const bag = (globalThis as unknown as { __sttProbe: ProbeBag }).__sttProbe;
     expect(isProbeEnabled()).toBe(true);
     expect(bag.consolidations).toHaveLength(2);
-    expect((bag.consolidations?.at(-1) as { layer: string }).layer).toBe('c');
+    expect((bag.consolidations!.at(-1) as { layer: string }).layer).toBe('c');
   });
 });

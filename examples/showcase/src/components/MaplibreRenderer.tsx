@@ -78,6 +78,8 @@ const MaplibreRenderer: React.FC<MaplibreRendererProps> = ({
     // load so the style is ready, and reapply when the prop changes below.
     map.on('style.load', () => {
       try {
+        // Applied once on the initial style.load; the dedicated effect below
+        // reapplies `projection` live without re-mounting the map.
         (map as any).setProjection?.({ type: projection });
       } catch {
         // older maplibre builds without setProjection: silently fall back to mercator
@@ -97,6 +99,9 @@ const MaplibreRenderer: React.FC<MaplibreRendererProps> = ({
       mapRef.current = null;
       map.remove();
     };
+    // `projection` is deliberately omitted: it's seeded above and the effect below
+    // reapplies it live, so listing it here would needlessly tear down the map.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dataset, basemapStyle, initialTime]);
 
   // Forward ticks → layer. We keep this in a separate effect so the

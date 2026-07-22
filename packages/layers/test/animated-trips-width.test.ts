@@ -48,7 +48,6 @@ import { AnimatedTripsLayer } from '../src/layers/trips/animated-trips-layer';
 function twoCorridorTile(widths: number[]): BinaryFeatures {
   // feature 0: verts [0,2), feature 1: verts [2,5)
   const startIndices = new Uint32Array([0, 2, 5]);
-  const totalVerts = 5;
   return {
     featureCount: 2,
     geometryType: 1 as any,

@@ -267,7 +267,7 @@ export async function createSttAtmosphere(
   // Publish the context to the renderer so the sky/light/aerial nodes can find it.
   const prevContextNode = renderer.contextNode;
   const ctxValue = {
-    ...(prevContextNode?.value ?? {}),
+    ...prevContextNode?.value,
     getAtmosphere: () => ctx,
   };
   const atmosphereContextNode = context(ctxValue);

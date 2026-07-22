@@ -278,7 +278,7 @@ export class OpfsTileCache {
         this.entryCount = 0;
         this.markDirty();
       }
-    } catch (err: any) {
+    } catch {
       // NotFoundError is the common case (first run). Anything else falls
       // through to the same empty-index initialisation.
       this.index = { entries: {}, totalBytes: 0, v: INDEX_VERSION };
@@ -387,7 +387,7 @@ export class OpfsTileCache {
       entry.lastAccess = this.tick();
       this.markDirty();
       return new Uint8Array(buffer);
-    } catch (err: any) {
+    } catch {
       // The index claims this key exists but the file is gone. Forget it so
       // we don't keep retrying. The next `set()` for the same key will work.
       delete this.index.entries[safeFileName(key)];

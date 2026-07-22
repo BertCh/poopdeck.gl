@@ -20,7 +20,7 @@ describe('buildTripsBuffers', () => {
 
   // 3 colinear vertices going east → 2 segments.
   function eastLine(
-    extra: Partial<BinaryFeatures>,
+    _extra: Partial<BinaryFeatures>,
   ): BinaryFeatures['positions'] {
     return new Float64Array([
       anchor.longitude,

@@ -995,33 +995,32 @@ export function buildDemoLayers({
       };
       const layers: any[] = [];
 
-      // 0. HRRR wind streamlines (backdrop).
+      // 0. HRRR wind — a minimal drifting PARTICLE FIELD (moving dots), the
+      // background steering flow. Was AnimatedTripsLayer streamline ribbons;
+      // switched to AnimatedTripHeadsLayer so the wind reads as a quiet swarm of
+      // dots that drift with the storms instead of continental spaghetti. Big
+      // GPU win too: heads draw one instanced circle per ACTIVE particle instead
+      // of keeping ~3 h of continental ribbon geometry resident (the ribbons
+      // left the solo wind demo GPU-bound ~33fps). Reuses the SAME hrrr-wind
+      // trips archive — no rebuild; the head position is CPU-interpolated along
+      // each particle path once per frame. Constant subtle color (no per-vertex
+      // speed gradient) is deliberate — a contextual backdrop, kept quiet.
       if (selectedDataset.windUrl) {
         layers.push(
-          new AnimatedTripsLayer({
+          new AnimatedTripHeadsLayer({
             ...overlayBase,
             id: `${selectedDataset.id}-wind`,
             ...sourceProps(`${selectedDataset.id}-wind`, false),
             data: selectedDataset.windUrl,
-            tripColor: [150, 170, 210, 120],
-            ...(selectedDataset.windGradient && {
-              gradientProperty: selectedDataset.windGradient.property,
-              gradientDomain: selectedDataset.windGradient.domain,
-              gradientColorRamp: selectedDataset.windGradient.colors,
-            }),
-            tripWidth: 1.4,
-            widthUnits: 'pixels',
-            widthMinPixels: 0.8,
-            widthMaxPixels: 2.5,
-            // 90-min streamer tails. The trips loader keeps 2× trailLength of
-            // sim-time resident, so tail length is ALSO the GPU-resident-vertex
-            // lever: the original 3h tails kept ~6h of continental streamlines
-            // on the GPU and left the solo wind demo GPU-bound at ~33fps.
-            trailLength: 5400000,
-            fadeTrail: true,
-            opacity: 0.5,
-            capRounded: false,
-            jointRounded: false,
+            headColor: selectedDataset.windHeadColor ?? [150, 180, 220, 115],
+            headRadiusPixels: selectedDataset.windHeadRadiusPixels ?? 1.4,
+            antialiasing: true,
+            opacity: selectedDataset.windHeadOpacity ?? 0.6,
+            // Heads need only the particle path NEAR the playhead resident to
+            // interpolate the dot (no 90-min trail like the streamlines), so a
+            // ~1-bucket window keeps the whole field complete across the 2 h
+            // temporal buckets while loading far less geometry than the ribbons.
+            timeWindow: 10800000, // 3 h — one+ bucket, field stays complete
           }),
         );
       }

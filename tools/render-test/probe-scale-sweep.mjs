@@ -145,13 +145,6 @@ await ctx.addInitScript(() => {
 // ---------------------------------------------------------------------------
 
 /**
- * Drop `t0` from each absolute timestamp so the result is relative-since-goto.
- */
-function relative(t0, samples) {
-  return samples.map((s) => ({ ...s, start: s.start - t0 }));
-}
-
-/**
  * Summarise a telemetry channel keyed on `.ms`. Returns null when empty,
  * otherwise `{ n, totalMs, mean, p50, p95, max }`.
  */

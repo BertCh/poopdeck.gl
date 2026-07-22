@@ -21,7 +21,7 @@
  */
 
 export function createDeckCoreMock() {
-  class FakeCompositeLayer<P = any> {
+  class FakeCompositeLayer {
     declare props: any;
     declare state: any;
     declare context: any;

@@ -104,8 +104,10 @@ describe('tessellateFeature', () => {
     });
     const idx = tessellateFeature(binary, 0)!;
     expect(idx.length).toBe(6);
-    for (const i of idx)
-      (expect(i).toBeGreaterThanOrEqual(0), expect(i).toBeLessThan(4));
+    for (const i of idx) {
+      expect(i).toBeGreaterThanOrEqual(0);
+      expect(i).toBeLessThan(4);
+    }
   });
 
   it('shifts fallback indices by the feature start (second feature)', () => {
@@ -117,8 +119,10 @@ describe('tessellateFeature', () => {
       startIndices: new Uint32Array([0, 3, 7]),
     });
     const idx = tessellateFeature(binary, 1)!;
-    for (const i of idx)
-      (expect(i).toBeGreaterThanOrEqual(3), expect(i).toBeLessThan(7));
+    for (const i of idx) {
+      expect(i).toBeGreaterThanOrEqual(3);
+      expect(i).toBeLessThan(7);
+    }
   });
 
   it('prefers the fallback when preferPrebaked is false', () => {

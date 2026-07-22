@@ -13,7 +13,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { SttPlayer, type SttPlayerOptions } from '../src/stt-player';
-import type { BufferSource, BufferedRunway } from '../src/playback-governor';
+import type { BufferSource } from '../src/playback-governor';
 
 /** Mutable mock BufferSource: tests poke `runwaySimMs`/`complete` directly. */
 function makeSource() {
@@ -50,10 +50,6 @@ function makeSource() {
     },
   };
   return { source, state };
-}
-
-function runway(simMs: number, complete = false): BufferedRunway {
-  return { simMs, bytesPending: 0, horizonSimMs: simMs, complete };
 }
 
 describe('SttPlayer', () => {

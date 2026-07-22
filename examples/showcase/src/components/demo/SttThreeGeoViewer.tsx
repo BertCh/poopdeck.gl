@@ -466,14 +466,7 @@ const SttThreeGeoViewer: React.FC<SttThreeGeoViewerProps> = ({
       pitch: v.pitch ?? (isGlobe ? 0 : 45),
       bearing: v.bearing ?? 0,
     };
-  }, [
-    dataset.initialViewState.longitude,
-    dataset.initialViewState.latitude,
-    dataset.initialViewState.zoom,
-    dataset.initialViewState.pitch,
-    dataset.initialViewState.bearing,
-    isGlobe,
-  ]);
+  }, [dataset.initialViewState, isGlobe]);
 
   // One projection instance per dataset, shared by <SttCanvas> AND (flat) the
   // basemap overlay so `cameraToViewState` is exact. Globe uses the WGS84 datum so

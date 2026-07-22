@@ -12,7 +12,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { SpatiotemporalTileset } from '../src/spatiotemporal-tileset';
 import type { BufferedRunway } from '../src/spatiotemporal-tileset';
-import type { TileId, BoundingBox, Tile } from '../src/types';
+import type { TileId, Tile } from '../src/types';
 import {
   BOUNDS,
   BUCKET_MS,
