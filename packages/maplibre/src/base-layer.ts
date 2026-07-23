@@ -76,6 +76,11 @@ import {
 } from './lib/host-adapter.js';
 import type { SharedTilesetSource } from './lib/streaming-source.js';
 import { granularityForZoom } from './lib/globe.js';
+import {
+  isMapboxHost,
+  isValidMapboxSlot,
+  type MapboxSlot,
+} from './lib/host-slot.js';
 
 /** RGBA tuple in the 0–1 range used by all STT shader uniforms. */
 export type RGBA = [number, number, number, number];
@@ -636,12 +641,22 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
    * from a rebuild drop and will be resurrected by the guard.
    *
    * Plain `map.addLayer(layer)` keeps working and gets NO auto re-add.
+   *
+   * `opts.slot` (mapbox Standard style only, campaign D5) requests a layer-stack
+   * slot; see {@link applySlot} for the maplibre-ignores / mapbox-honours split.
    */
-  attach(map: MaplibreMap, opts?: { beforeId?: string }): void {
+  attach(
+    map: MaplibreMap,
+    opts?: { beforeId?: string; slot?: MapboxSlot },
+  ): void {
     if (this.attachedMap && this.attachedMap !== map) this.detach();
     const wasAttached = this.attachedMap === map;
     const prevBeforeId = this.attachBeforeId;
     this.attachBeforeId = opts?.beforeId;
+    // Resolve the mapbox slot BEFORE (re)adding: mapbox reads `this.slot` off
+    // the layer object inside addLayer, and the styledata guard re-adds the
+    // same object, so the field must be set first. No-op / warn on maplibre.
+    this.applySlot(map, opts?.slot);
     if (!wasAttached) {
       this.attachedMap = map;
       map.on('styledata', this.handleStyledata);
@@ -681,6 +696,68 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
     this.attachBeforeId = undefined;
     if (!styleOf(map)) return; // no style ⇒ no layer registry to clean.
     if (map.getLayer(this.id)) map.removeLayer(this.id);
+  }
+
+  // ── Mapbox Standard-style slot support (campaign D5) ─────────────────────
+  // Self-contained additive block, kept beside attach/detach so a concurrent
+  // edit to the render/pick/lifecycle internals never collides with it.
+  //
+  // Mapbox-gl reads a `slot` field off the custom-layer object at addLayer
+  // time to place the layer in the Standard style's stack
+  // ('bottom' | 'middle' | 'top'). MapLibre has no slot concept, so a slot
+  // request on a maplibre host is dropped (one-time dev warning). Mercator
+  // only — mapbox globe is deferred (D5); the slot governs 2D stacking, which
+  // is orthogonal to projection.
+
+  /**
+   * Mapbox Standard-style slot this layer requests, or undefined. PUBLIC and
+   * on the instance because mapbox-gl reads `layer.slot` off the
+   * CustomLayerInterface object during `map.addLayer` — including the object
+   * the styledata guard hands back on a re-add — so it must live here rather
+   * than in a closure. Set only via {@link attach} on a mapbox host; always
+   * undefined on maplibre. Harmless on maplibre hosts, which ignore unknown
+   * layer fields.
+   */
+  slot?: MapboxSlot;
+
+  /** One-time-per-layer guard so a dropped slot request warns at most once. */
+  private slotWarned = false;
+
+  /**
+   * Resolve a requested Standard-style slot against the host. On mapbox the
+   * slot is stamped onto {@link slot} so the next add (initial or a styledata
+   * re-add) positions the layer; on maplibre — or for a value past the typed
+   * union — it is dropped with a single dev warning. Passing no slot clears any
+   * prior request, mirroring how `beforeId` is overwritten on re-attach; note
+   * mapbox only reads slot at addLayer time, so a change takes effect on the
+   * NEXT add/re-add, not on an already-mounted layer.
+   */
+  private applySlot(map: MaplibreMap, requested: MapboxSlot | undefined): void {
+    if (requested === undefined) {
+      this.slot = undefined;
+      return;
+    }
+    if (!isValidMapboxSlot(requested)) {
+      this.slot = undefined;
+      if (!this.slotWarned) {
+        this.slotWarned = true;
+        console.warn(
+          `[${this.id}] attach ignored unknown slot ${JSON.stringify(requested)} (expected 'bottom' | 'middle' | 'top')`,
+        );
+      }
+      return;
+    }
+    if (isMapboxHost(map)) {
+      this.slot = requested;
+      return;
+    }
+    this.slot = undefined;
+    if (!this.slotWarned) {
+      this.slotWarned = true;
+      console.warn(
+        `[${this.id}] attach({ slot: '${requested}' }) ignored: the host is MapLibre, which has no Standard-style slots — use beforeId for ordering`,
+      );
+    }
   }
 
   /** styledata guard body: re-add if (and only if) the layer went missing. */

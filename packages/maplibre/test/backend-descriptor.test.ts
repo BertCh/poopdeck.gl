@@ -435,13 +435,38 @@ const PRELUDE_SOURCES = (): string[] => [
 ];
 
 /**
- * A source projects through the host prelude when it calls EITHER entry point.
- * The flat kinds call `projectTile`; the genuinely 3D ones (column, arc, and
- * polygon when extruded) call `projectTileFor3D`, which is a different token —
- * matching only `projectTile(` would silently un-prove them.
+ * Strip the map-injected block ({@link PRELUDE_SHADER}) from a compiled source,
+ * leaving only the layer's own generated body.
+ *
+ * The prelude DEFINES `vec4 projectTile(vec2 p) {…}` and `vec4
+ * projectTileFor3D(vec2 p, float e) {…}`, so both call-site tokens are present
+ * in EVERY prelude source whether or not the layer body ever calls them —
+ * every builder prepends the prelude verbatim (`${shader.prelude}\n…`). Searching
+ * the whole source for those tokens is therefore tautological: it would keep the
+ * `globe`/`extrude3d` claims "proven" even if a body were reverted to a flat
+ * `uMatrix` projection with the prelude head still attached. Removing the
+ * injected block first makes the search see only the layer's code, so such a
+ * revert un-proves the claim here rather than in a browser.
  */
-const projectsViaPrelude = (src: string): boolean =>
-  src.includes('projectTile(') || src.includes('projectTileFor3D(');
+const stripInjectedPrelude = (src: string): string =>
+  src
+    .split(PRELUDE_SHADER.prelude)
+    .join('')
+    .split(PRELUDE_SHADER.define)
+    .join('');
+
+/**
+ * A source projects through the host prelude when its BODY calls EITHER entry
+ * point. The flat kinds call `projectTile`; the genuinely 3D ones (column, arc,
+ * and polygon when extruded) call `projectTileFor3D`, which is a different token
+ * — matching only `projectTile(` would silently un-prove them. The prelude's own
+ * function DEFINITIONS are stripped first ({@link stripInjectedPrelude}) so they
+ * cannot satisfy the check on the layer's behalf.
+ */
+const projectsViaPrelude = (src: string): boolean => {
+  const body = stripInjectedPrelude(src);
+  return body.includes('projectTile(') || body.includes('projectTileFor3D(');
+};
 
 const CAPABILITY_EVIDENCE: Readonly<
   Partial<Record<Capability, () => boolean>>
@@ -451,12 +476,16 @@ const CAPABILITY_EVIDENCE: Readonly<
   // mercator sheet pasted on a sphere.
   globe: () => PRELUDE_SOURCES().every(projectsViaPrelude),
   // Extrusion lives on the polygon layer: it must absorb `extruded`/`elevation`
-  // AND emit the 3D projection branch.
+  // AND its own BODY must emit the 3D projection branch. The prelude is stripped
+  // before the `projectTileFor3D(` search (see stripInjectedPrelude) so the
+  // prelude's function DEFINITION cannot stand in for the extruded fill actually
+  // calling it — reverting the extrusion branch to a flat projection un-proves
+  // this half here.
   extrude3d: () =>
     provesProp('polygon', 'elevation', 4242.5) &&
-    buildFillVertexSource({ ...PRELUDE_SHADER, mode: 'window' }).includes(
-      'projectTileFor3D(',
-    ) &&
+    stripInjectedPrelude(
+      buildFillVertexSource({ ...PRELUDE_SHADER, mode: 'window' }),
+    ).includes('projectTileFor3D(') &&
     buildFillVertexSource({ ...LEGACY_SHADER, mode: 'window' }).includes(
       'uAltitudeScale',
     ),
@@ -784,6 +813,29 @@ describe('maplibreBackend — Wave M3 flips are earned, not declared', () => {
       LAYER_KINDS.filter((k) => maplibreBackend.layerKinds[k].supported).length,
     );
     expect(PRELUDE_SOURCES().every(projectsViaPrelude)).toBe(true);
+  });
+
+  it('the globe gate can FAIL a false claim: a prelude head over a uMatrix body does not prove globe', () => {
+    // Regression guard for the tautology that once protected `globe`/`extrude3d`:
+    // because the injected prelude DEFINES projectTile*, a whole-source substring
+    // search passed even for a body that never projected through it. A synthetic
+    // source with the real prelude head but a flat uMatrix body must therefore
+    // read as NOT projecting — proving `projectsViaPrelude` inspects the layer's
+    // own code, not the map's injected functions.
+    const preludeHeadOverUMatrixBody =
+      `${PRELUDE_SHADER.prelude}\n${PRELUDE_SHADER.define}\n` +
+      'void main() { gl_Position = uMatrix * vec4(0.0, 0.0, 0.0, 1.0); }';
+    expect(preludeHeadOverUMatrixBody).toContain('projectTile('); // the naive check would pass…
+    expect(projectsViaPrelude(preludeHeadOverUMatrixBody)).toBe(false); // …the body-only check does not.
+    // And a real prelude source (its body DOES call projectTile) still proves it.
+    expect(
+      projectsViaPrelude(
+        buildPointVertexSource(PRELUDE_SHADER, {
+          mode: 'window',
+          filter: false,
+        }),
+      ),
+    ).toBe(true);
   });
 
   it('claims timeAsHeight, backed by the column layer’s lift (not a proxy)', () => {

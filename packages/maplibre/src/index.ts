@@ -272,6 +272,14 @@ export {
   type RunwayTileset,
 } from './lib/streaming-source.js';
 
+// Composite host (D6b, Wave M5): ONE custom layer hosting an ordered list of
+// STT layers, driven in a single render pass so a stacked composite (weather
+// suite, AV substrates) pays MapLibre's per-custom-layer state cycle ONCE
+// instead of N times. Pair it with a SharedTilesetSource (D6a) so the stacked
+// layers also share one archive + governor BufferSource. `setCurrentTime` /
+// `setTimeWindow` fan out to every child behind a single coalesced repaint.
+export { STTLayerGroup, type STTLayerGroupOptions } from './layer-group.js';
+
 // Host render-signature adapter (D2): the normalized per-frame shape layers
 // draw from, public for full-render()-override subclasses and tests.
 export {
@@ -282,6 +290,17 @@ export {
   type HostShaderData,
   type HostProjectionData,
 } from './lib/host-adapter.js';
+
+// Mapbox host detection + Standard-style slot vocabulary (D5, Wave M5).
+// `MapboxSlot` types a `STTBaseLayer.attach({ slot })` / `STTBaseLayer.slot`
+// value; `isMapboxHost` duck-types a Mapbox GL v3 host apart from MapLibre
+// (structural only — no mapbox-gl dependency); `isValidMapboxSlot` is the
+// runtime guard for a value crossing the untyped JS boundary.
+export {
+  isMapboxHost,
+  isValidMapboxSlot,
+  type MapboxSlot,
+} from './lib/host-slot.js';
 
 // Globe correctness kit (D4): mercator-space subdivision + wrap/granularity
 // helpers for custom subclasses targeting v5+ globe hosts.

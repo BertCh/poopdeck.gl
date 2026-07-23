@@ -28,47 +28,104 @@ npm i @poopdeck.gl/maplibre maplibre-gl
 ```
 
 `maplibre-gl` is a peer dependency, accepting **`^3 || ^4 || ^5 || ^6`**.
-Mapbox GL JS `>=3.9.1` also works (mercator only).
+Mapbox GL JS `>=3.9.1` also works (mercator only — see [Mapbox](#mapbox)).
+
+`h3-js` is an **optional** peer, needed only by `STTH3SummaryLayer` — it is not
+bundled and nothing else imports it. That layer takes the boundary resolver
+injected (`cellToBoundary`), so you decide whether to pull h3-js in.
 
 The render path detects the host's custom-layer signature at runtime — v3/v4's
 positional `render(gl, matrix)`, v4.6's added camera options, v5's
 `CustomRenderMethodInput` args object, and v6's per-tile `getProjectionData` —
 so the same layer code runs on every version.
 
-> **Globe requires a v5+ host.** On v5 and newer the layers inject MapLibre's
-> own `shaderData.vertexShaderPrelude` and project through `projectTile`, so
-> `map.setProjection({type: 'globe'})` renders STT data on the globe with
-> geometry subdivided to the projection's granularity. On v3/v4 (and Mapbox)
-> the layers use the legacy mercator matrix path and render flat, which is all
-> those hosts expose to custom layers.
+> **Globe requires a v5+ MapLibre host.** On v5 and newer the layers inject
+> MapLibre's own `shaderData.vertexShaderPrelude` and project through
+> `projectTile`, so `map.setProjection({type: 'globe'})` renders STT data on the
+> globe with geometry subdivided to the projection's granularity. On v3/v4 the
+> layers use the legacy mercator matrix path and render flat, which is all those
+> hosts expose to custom layers. **Mapbox globe is not supported** (deferred): a
+> Mapbox host renders STT in mercator only, and at globe zooms the basemap's own
+> globe→mercator transition covers most practical cases.
 
 ## Layer classes
 
-Tiles whose geometry type doesn't match a given layer are skipped, so you can
-pile multiple layers onto the same archive URL when a dataset has more than
-one geometry type.
+Fifteen classes across four families. Tiles whose geometry type doesn't match a
+given layer are skipped, so you can pile multiple layers onto the same archive
+URL (or one `SharedTilesetSource`) when a dataset has more than one geometry
+type.
 
-| Class                    | Renders    | Notes                                                                                                   |
-| ------------------------ | ---------- | ------------------------------------------------------------------------------------------------------- |
-| `STTPointLayer`          | Point      | Circular billboards with antialiased disc fragment shader                                               |
-| `STTLineLayer`           | LineString | Instanced segment quads, constant pixel width across zoom                                               |
-| `STTPolygonLayer`        | Polygon    | Filled, earcut triangulated (or pre-baked triangles), optional stroke + extrusion                       |
-| `STTTripsLayer`          | LineString | Trailing-fade trajectories using per-vertex timestamps                                                  |
-| `STTTripHeadsLayer`      | LineString | Moving head dot, position interpolated through the hoisted core track kernel                            |
-| `STTHeatmapLayer`        | Point      | Two-pass FBO density heatmap with colour-ramp lookup                                                    |
-| `STTIconLayer`           | Point      | Rotated billboard atlas with heading, `iconWake`, and CPU motion glide                                  |
-| `STTColumnLayer`         | Point      | Instanced 3D prisms with the space-time-cube lift (`timeHeightScale`)                                   |
-| `STTArcLayer`            | LineString | Real 3D origin→destination arcs, optionally great-circle, tessellated in the vertex shader              |
-| `STTH3SummaryLayer`      | Point      | H3 summary-tier cells as ramp-coloured, optionally extruded prisms (takes an injected `cellToBoundary`) |
-| `STTQuadbinSummaryLayer` | Point      | CARTO Quadbin summary-tier cells, same ramp/extrusion path as H3                                        |
-| `STTHexbinLayer`         | Point      | Real runtime hexbin — CPU binning at tile upload + a GPU scatter/gather aggregate                       |
-| `STTFlowCorridorLayer`   | LineString | Value-matrix flow ribbon whose width breathes off a single per-frame scalar                             |
-| `STTFlowStrokeLayer`     | LineString | Constant-width flow-stroke variant of the corridor                                                      |
-| `STTFlowmapLayer`        | LineString | One animated OD arrow per pair; static bundles (GPU live-bundling stays a declared fallback)            |
+**Core geometry**
+
+| Class             | Renders    | Notes                                                                              |
+| ----------------- | ---------- | ---------------------------------------------------------------------------------- |
+| `STTPointLayer`   | Point      | Circular billboards with antialiased disc fragment shader                          |
+| `STTLineLayer`    | LineString | Instanced segment quads, constant pixel width across zoom; progressive path reveal |
+| `STTPolygonLayer` | Polygon    | Filled, earcut triangulated (or pre-baked triangles), optional stroke + extrusion  |
+| `STTHeatmapLayer` | Point      | Two-pass FBO density heatmap with colour-ramp lookup                               |
+
+**Motion & 3D**
+
+| Class               | Renders    | Notes                                                                                      |
+| ------------------- | ---------- | ------------------------------------------------------------------------------------------ |
+| `STTTripsLayer`     | LineString | Trailing-fade trajectories using per-vertex timestamps                                     |
+| `STTTripHeadsLayer` | LineString | Moving head dot, position interpolated through the hoisted core track kernel               |
+| `STTIconLayer`      | Point      | Rotated billboard atlas with heading, `iconWake`, and CPU motion glide                     |
+| `STTColumnLayer`    | Point      | Instanced 3D prisms with the space-time-cube lift (`timeHeightScale`)                      |
+| `STTArcLayer`       | LineString | Real 3D origin→destination arcs, optionally great-circle, tessellated in the vertex shader |
+
+**Summary tiers**
+
+| Class                    | Renders | Notes                                                                                                   |
+| ------------------------ | ------- | ------------------------------------------------------------------------------------------------------- |
+| `STTH3SummaryLayer`      | Point   | H3 summary-tier cells as ramp-coloured, optionally extruded prisms (takes an injected `cellToBoundary`) |
+| `STTQuadbinSummaryLayer` | Point   | CARTO Quadbin summary-tier cells, same ramp/extrusion path as H3                                        |
+| `STTHexbinLayer`         | Point   | Real runtime hexbin — CPU binning at tile upload + a GPU scatter/gather aggregate                       |
+
+**Flow**
+
+| Class                  | Renders    | Notes                                                                                        |
+| ---------------------- | ---------- | -------------------------------------------------------------------------------------------- |
+| `STTFlowCorridorLayer` | LineString | Value-matrix flow ribbon whose width breathes off a single per-frame scalar                  |
+| `STTFlowStrokeLayer`   | LineString | Constant-width flow-stroke variant of the corridor                                           |
+| `STTFlowmapLayer`      | LineString | One animated OD arrow per pair; static bundles (GPU live-bundling stays a declared fallback) |
 
 All extend the abstract `STTBaseLayer`, which owns the archive read, tileset
 scheduling, viewport→tile resolution, and the GPU resource lifecycle. The two
 summary subclasses share an abstract `STTSummaryCellLayer` base.
+
+## Features
+
+Beyond the raw geometry each layer supports, in step with the deck.gl backend:
+
+- **Four time-filter modes** via `timeFilterMode` — `'window'` (default, the
+  hard/soft `[t − w/2, t + w/2]` gate), `'wake'` (a fading trail behind the
+  leading edge), `'cumulative'` (everything up to `t` stays lit) and `'trail'`
+  (age-ramped). `STTTripsLayer` compiles trail + wake; `STTTripHeadsLayer`
+  window + wake; the rest compile any of the four.
+- **DataFilter** — `filterProperty` + `filterRange` / `filterSoftRange` /
+  `filterEnabled` GPU-range a numeric column (deck `DataFilterExtension`
+  parity). Every kind reads it; the branch compiles in only when
+  `filterProperty` is set, and a tile missing the column renders unfiltered.
+- **Metric sizing** — `radiusUnits: 'meters'` (point), `widthUnits: 'meters'`
+  (line/trips) and polygon `elevation` in metres, each resolved at the tile's
+  centre latitude. Screen-space approximation under pitch.
+- **Picking** — synchronous id-FBO hit-testing (`layer.pick(cssX, cssY)`) on
+  every kind **except `STTHeatmapLayer`** (a density pixel has no single feature
+  behind it). `supportsPicking()` reports it per layer.
+- **Stable colour mapping** — `colorMapping` / `colorMappingDefault` keep a
+  category's colour constant across tiles regardless of per-tile dictionary
+  order (point/line/polygon/trips/icon/column/arc/tripHeads and the flow family;
+  the density and value-ramp kinds have no category).
+- **Globe** on v5+ MapLibre hosts (see the callout above).
+- **Shared tileset** — hand N layers one `SharedTilesetSource` so they share a
+  single archive, tileset and governor `BufferSource` (see below).
+- **Composite host** — `STTLayerGroup` drives N STT layers behind one custom
+  layer, paying MapLibre's per-custom-layer state cycle once (see below).
+- **Mapbox** — mercator + Standard-style `slot` support (see [Mapbox](#mapbox)).
+
+Per-layer feature claims are machine-checked against the exported classes by the
+backend descriptor (`maplibreLayerFeatures`), so this list can't over-claim.
 
 ## Quick start
 
@@ -152,6 +209,93 @@ const layer = new STTTripsLayer({
 const tileset = layer.getTileset(); // undefined until metadata resolves
 ```
 
+## Shared tileset
+
+By default each layer opens its own archive. When several layers read the **same**
+`.stt` (a dataset with more than one geometry type, or a stack of styled passes),
+hand them one `SharedTilesetSource` instead of a `url` so they share a single
+archive, a single tileset, and a single governor `BufferSource` — no N-way
+duplicate fetching, and honest buffer accounting for the governor:
+
+```ts
+import {
+  SharedTilesetSource,
+  STTPolygonLayer,
+  STTPointLayer,
+} from '@poopdeck.gl/maplibre';
+
+const source = new SharedTilesetSource({ url: '/data/quakes/manifest.json' });
+const fill = new STTPolygonLayer({
+  id: 'quake-fill',
+  source,
+  currentTime,
+  timeWindow,
+});
+const dots = new STTPointLayer({
+  id: 'quake-dots',
+  source,
+  currentTime,
+  timeWindow,
+});
+
+map.addLayer(fill);
+map.addLayer(dots);
+
+// Register the shared BufferSource with a governor ONCE per source, not per
+// layer. getBufferSource() is null until the tileset resolves, so wait on load.
+await source.load();
+const bufferSource = source.getBufferSource();
+if (bufferSource) governor.setSource(bufferSource);
+// The source's lifetime is yours: dispose it after removing its layers.
+```
+
+Pass exactly one of `url` or `source` to a layer.
+
+## Composite host (`STTLayerGroup`)
+
+Every custom layer costs the map a full GL-state re-apply per frame. A composite
+that stacks N STT layers (a weather suite, AV substrates) pays that cycle N
+times. `STTLayerGroup` hosts an ordered list of STT layers behind **one** custom
+layer, drives them in a single render pass, and coalesces their repaints — the
+native analogue of deck's `MapboxLayerGroup`, with no deck/luma dependency:
+
+```ts
+import { STTLayerGroup } from '@poopdeck.gl/maplibre';
+
+const group = new STTLayerGroup({
+  id: 'weather',
+  layers: [radar, wind, fronts],
+});
+group.attach(map); // survives setStyle diff-rebuilds; detach() removes
+group.setCurrentTime(t); // fans out to every child behind ONE repaint
+```
+
+Children are added in **draw order** (later paints over earlier) and must not
+also be added to the map individually — the group owns their lifecycle. Pair it
+with a `SharedTilesetSource` when the children share one archive. `group.pick()`
+hit-tests top-to-bottom and returns the first hit.
+
+## Mapbox
+
+The same build runs on **Mapbox GL JS `>=3.9.1`** (below that,
+`queryRenderedFeatures` crashes with custom layers present). Mapbox renders
+**mercator only** — globe is deferred (see the globe callout). Mapbox is a
+secondary, structurally-typed target: no `mapbox-gl` runtime dependency is
+added, and the host is duck-typed apart from MapLibre at attach time.
+
+In the Mapbox Standard style you can place a layer (or a whole `STTLayerGroup`)
+into a named `slot` via `attach`:
+
+```ts
+layer.attach(map, { slot: 'bottom' }); // 'bottom' | 'middle' | 'top'
+```
+
+`attach` is preferred over `map.addLayer` on any host: it installs a `styledata`
+guard that re-adds the layer after a `setStyle` diff-fallback rebuild (which
+silently destroys custom layers). On MapLibre, which has no slot concept, a
+`slot` request is ignored with a one-time warning; use `beforeId` for ordering
+there.
+
 ## Options
 
 ### Shared (`STTBaseLayerOptions`)
@@ -173,6 +317,20 @@ const tileset = layer.getTileset(); // undefined until metadata resolves
 | `onTilesetReady`  | `(tileset) => void`                | —                        | Fired once per archive init with the live tileset (satisfies the governor's `BufferSource` contract)                                                   |
 | `onBufferChange`  | `(runway: BufferedRunway) => void` | —                        | Buffered-runway threshold events from the tileset's coverage index, forwarded as-is                                                                    |
 
+### Time filter & DataFilter (every layer)
+
+Mixed into every layer's options. `timeFilterMode`'s accepted union is
+per-layer (trips is `trail`/`wake`; tripHeads is `window`/`wake`; the rest take
+all four).
+
+| Field             | Type                                      | Default    | Description                                                                                  |
+| ----------------- | ----------------------------------------- | ---------- | -------------------------------------------------------------------------------------------- |
+| `timeFilterMode`  | `'window'\|'wake'\|'cumulative'\|'trail'` | `'window'` | How the per-feature time gate is evaluated (see [Features](#features))                       |
+| `filterProperty`  | `string`                                  | —          | Numeric column to GPU-range filter on; the filter branch compiles in only when this is set   |
+| `filterRange`     | `[min, max]`                              | —          | Features outside the range are hidden; a tile missing the column renders unfiltered          |
+| `filterSoftRange` | `[min, max]`                              | —          | Optional fade margin inside `filterRange` — values between the two ramp instead of hard-clip |
+| `filterEnabled`   | `boolean`                                 | `true`     | Toggle the filter without dropping `filterProperty`/`filterRange`                            |
+
 ### `STTPointLayer`
 
 | Field                 | Type                    | Default                   | Description                                                                                                                                                                                                            |
@@ -182,21 +340,24 @@ const tileset = layer.getTileset(); // undefined until metadata resolves
 | `colorPalette`        | `RGBA8[]`               | 10-stop categorical       | Palette for `colorProperty` (0–255)                                                                                                                                                                                    |
 | `colorMapping`        | `Record<string, RGBA8>` | —                         | Keyed category-name → color map (deck/three parity): stable per-category colors regardless of per-tile dictionary order. Unmapped categories fall back to `colorMappingDefault`, then to the positional `colorPalette` |
 | `colorMappingDefault` | `RGBA8`                 | —                         | Color for categories absent from `colorMapping`                                                                                                                                                                        |
-| `radius`              | `number`                | `4`                       | Constant pixel radius                                                                                                                                                                                                  |
+| `radius`              | `number`                | `4`                       | Constant radius, in `radiusUnits`                                                                                                                                                                                      |
+| `radiusUnits`         | `'pixels' \| 'meters'`  | `'pixels'`                | `'meters'` sizes the disc in ground metres at the tile's centre latitude (deck parity)                                                                                                                                 |
 | `radiusProperty`      | `string`                | —                         | Numeric property name driving per-feature radius                                                                                                                                                                       |
 | `radiusScale`         | `number`                | `1`                       | Multiplier on per-feature radius                                                                                                                                                                                       |
 
 ### `STTLineLayer`
 
-| Field                                  | Type                              | Default                   | Description                                                                    |
-| -------------------------------------- | --------------------------------- | ------------------------- | ------------------------------------------------------------------------------ |
-| `color`                                | `[r, g, b, a]`                    | `[0.31, 0.76, 0.97, 1.0]` | Constant stroke colour (range auto-detected)                                   |
-| `colorProperty`                        | `string`                          | —                         | Categorical property → palette lookup                                          |
-| `colorPalette`                         | `RGBA8[]`                         | 10-stop categorical       | Palette for `colorProperty`                                                    |
-| `colorMapping` / `colorMappingDefault` | `Record<string, RGBA8>` / `RGBA8` | —                         | Keyed category-name → color map + fallback (same semantics as `STTPointLayer`) |
-| `width`                                | `number`                          | `2`                       | Constant pixel width                                                           |
-| `widthProperty`                        | `string`                          | —                         | Numeric property driving per-feature width                                     |
-| `widthScale`                           | `number`                          | `1`                       | Multiplier on per-feature width                                                |
+| Field                                  | Type                              | Default                   | Description                                                                          |
+| -------------------------------------- | --------------------------------- | ------------------------- | ------------------------------------------------------------------------------------ |
+| `color`                                | `[r, g, b, a]`                    | `[0.31, 0.76, 0.97, 1.0]` | Constant stroke colour (range auto-detected)                                         |
+| `colorProperty`                        | `string`                          | —                         | Categorical property → palette lookup                                                |
+| `colorPalette`                         | `RGBA8[]`                         | 10-stop categorical       | Palette for `colorProperty`                                                          |
+| `colorMapping` / `colorMappingDefault` | `Record<string, RGBA8>` / `RGBA8` | —                         | Keyed category-name → color map + fallback (same semantics as `STTPointLayer`)       |
+| `width`                                | `number`                          | `2`                       | Constant width, in `widthUnits`                                                      |
+| `widthUnits`                           | `'pixels' \| 'meters'`            | `'pixels'`                | `'meters'` sizes the stroke in ground metres at the tile's centre latitude           |
+| `widthProperty`                        | `string`                          | —                         | Numeric property driving per-feature width                                           |
+| `widthScale`                           | `number`                          | `1`                       | Multiplier on per-feature width                                                      |
+| `revealTrail`                          | `boolean`                         | `false`                   | Progressive path reveal: draw each line up to an interpolated `currentTime` frontier |
 
 ### `STTPolygonLayer`
 
@@ -253,19 +414,24 @@ interpolates between `startTimes` / `endTimes`.
 
 Each layer exposes lifecycle helpers in addition to `CustomLayerInterface`:
 
-| Method                       | Description                                                                                                                                                                      |
-| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `setCurrentTime(t: number)`  | Update the time the next frame's filter compares against                                                                                                                         |
-| `setTimeWindow(ms: number)`  | Replace the time window                                                                                                                                                          |
-| `setColor([r,g,b,a])`        | (Per-class) Update fill / stroke / trail colour                                                                                                                                  |
-| `setRadius(px: number)`      | (Point, Heatmap) Update billboard / splat radius                                                                                                                                 |
-| `setWidth(px: number)`       | (Line, Trips) Update stroke width                                                                                                                                                |
-| `setTrailLength(ms: number)` | (Trips) Update the trail length                                                                                                                                                  |
-| `setStroked(b: boolean)`     | (Polygon) Toggle the stroke pass. Rebuilds the per-tile GPU caches (stroke instance buffers are baked in at build time), so expect a one-off CPU re-triangulation cost on toggle |
-| `setExtruded(b: boolean)`    | (Polygon) Toggle extrusion. Same cache rebuild as `setStroked`                                                                                                                   |
-| `setColorRange(range)`       | (Heatmap) Replace the colour ramp                                                                                                                                                |
-| `ready()`                    | `Promise<ArchiveMetadata>` resolved when the archive metadata is parsed                                                                                                          |
-| `getTileset()`               | The live `SpatiotemporalTileset`, or `undefined` before metadata resolves (subscribe via `onTilesetReady` to avoid polling)                                                      |
+| Method                       | Description                                                                                                                                                                                |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `attach(map, opts?)`         | Add the layer with a `styledata` re-add guard (survives `setStyle` diff-rebuilds); `opts.beforeId` orders it, `opts.slot` targets a Mapbox Standard-style slot. Prefer over `map.addLayer` |
+| `detach()`                   | Undo `attach` — disarm the guard and remove the layer                                                                                                                                      |
+| `setCurrentTime(t: number)`  | Update the time the next frame's filter compares against                                                                                                                                   |
+| `setTimeWindow(ms: number)`  | Replace the time window                                                                                                                                                                    |
+| `setTimeFilterMode(mode)`    | Switch the time-filter mode (links a second program on first use of a mode)                                                                                                                |
+| `pick(cssX, cssY)`           | Id-FBO hit-test at a CSS pixel → `SttPickResult \| null` (returns `null` on `STTHeatmapLayer`)                                                                                             |
+| `supportsPicking()`          | `true` on every kind except heatmap                                                                                                                                                        |
+| `setColor([r,g,b,a])`        | (Per-class) Update fill / stroke / trail colour                                                                                                                                            |
+| `setRadius(px: number)`      | (Point, Heatmap) Update billboard / splat radius                                                                                                                                           |
+| `setWidth(px: number)`       | (Line, Trips) Update stroke width                                                                                                                                                          |
+| `setTrailLength(ms: number)` | (Trips) Update the trail length                                                                                                                                                            |
+| `setStroked(b: boolean)`     | (Polygon) Toggle the stroke pass. Rebuilds the per-tile GPU caches (stroke instance buffers are baked in at build time), so expect a one-off CPU re-triangulation cost on toggle           |
+| `setExtruded(b: boolean)`    | (Polygon) Toggle extrusion. Same cache rebuild as `setStroked`                                                                                                                             |
+| `setColorRange(range)`       | (Heatmap) Replace the colour ramp                                                                                                                                                          |
+| `ready()`                    | `Promise<ArchiveMetadata>` resolved when the archive metadata is parsed                                                                                                                    |
+| `getTileset()`               | The live `SpatiotemporalTileset`, or `undefined` before metadata resolves (subscribe via `onTilesetReady` to avoid polling)                                                                |
 
 ## How it works
 

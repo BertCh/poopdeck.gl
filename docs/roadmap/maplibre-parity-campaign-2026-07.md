@@ -1,7 +1,12 @@
 # MapLibre/Mapbox native-backend parity campaign (2026-07-22)
 
-**Status: RATIFIED, IN EXECUTION.** Waves run one at a time with the user in
-the loop between them.
+**Status: COMPLETE (M0–M5 landed).** All six waves are done; the backend ships
+FIFTEEN layer kinds, all four time modes, DataFilter, metric sizing, id-FBO
+picking, native globe (v5+), a shared tileset, a composite layer-group host, and
+Mapbox mercator + slot support. See the "Delivered vs plan" close-out at the
+end. Remaining work is user browser verification and showcase demo/fleet wiring
+(showcase-side, owned by a separate session). Waves ran one at a time with the
+user in the loop between them.
 
 - **M0 + M1 — LANDED** (commit `3a56756`): host dispatch v3/v4/v5/v6 + mapbox,
   native globe via the injected prelude, per-`variantName` program cache, globe
@@ -31,12 +36,37 @@ the loop between them.
   maplibre/core/layers/three/cesium + showcase; oxlint/oxfmt clean;
   core/layers/maplibre dists rebuilt; `docs/spec/backend-capabilities.md`
   regenerated.
-  **Open:** the showcase `MaplibreRenderer.tsx` still mounts only the original
-  five kinds, so the M3 demo-wiring DoD (flights icon glide, taxi columns, OD
-  arcs, trip heads on maplibre) and the user browser verify are NOT done;
-  `docs/api/stt-maplibre.md` still says "five layer kinds" and lists picking
-  for point/line/polygon/trips only (docs pass stays Wave M5 item 5).
-- **M4–M5 — not started.**
+  **Open (at M3):** the showcase `MaplibreRenderer.tsx` demo-wiring DoD and the
+  user browser verify (both showcase-side; still open). The docs pass ran in M5
+  — `docs/api/stt-maplibre.md` is now current to all fifteen kinds and the full
+  feature surface.
+- **M4 — LANDED, uncommitted** (2026-07-23): the summary + flow families as SIX
+  native kinds — `STTH3SummaryLayer`/`STTQuadbinSummaryLayer` (summary-tier cell
+  decode → ramp-coloured, optionally extruded prisms; H3 boundaries via an
+  injected h3-js `cellToBoundary`, h3-js an optional peer), `STTHexbinLayer` (a
+  REAL runtime hexbin — CPU binning at tile upload + a GPU scatter/gather
+  aggregate, NOT a fallback to h3Summary, so the `hexbin → h3Summary` referral is
+  gone), and the flow family `STTFlowCorridorLayer`/`STTFlowStrokeLayer`/
+  `STTFlowmapLayer` (ref-stable value-matrix ribbons + OD arrows whose width
+  breathes off a single per-frame scalar). New kernels: `lib/cell-geometry.ts`,
+  `lib/flow-kernel.ts`, `shaders/flow.glsl.ts`. Descriptor: thirteen kinds; all
+  six read the DataFilter; `stableColorMapping` extends to the flow family only
+  (the value-/aggregate-coloured summary + hexbin kinds have no category).
+  `liveBundling` STAYS a declared fallback (P2 — the flowmap carries no GPU KDEEB
+  path).
+- **M5 — LANDED, uncommitted** (2026-07-23): the Mapbox target + composite host +
+  the docs/review polish. `lib/host-slot.ts` (Mapbox Standard-style `slot`
+  support + `isMapboxHost`/`isValidMapboxSlot`, structural-only, no mapbox-gl
+  dependency); `STTBaseLayer.attach({ slot })` honours the slot on Mapbox and
+  ignores-with-warning on MapLibre; `layer-group.ts` (`STTLayerGroup` — one
+  custom layer hosting N STT layers behind a single render pass + coalesced
+  repaint, the native analogue of deck's `MapboxLayerGroup`); a consolidated
+  correctness-invariant test suite. Backend declares FIFTEEN kinds. Docs
+  (`docs/api/stt-maplibre.md`, canonical, + the regenerated `packages/mcp/docs`
+  mirror) brought fully current. maplibre suite 1268 tests green, `tsc` clean,
+  exports wired in `src/index.ts`.
+  **Open:** user browser verify; showcase demo/fleet wiring (showcase-side,
+  separate session).
 
 **Goal.** Make `@poopdeck.gl/maplibre` a first-class rendering backend: an app
 with an existing MapLibre (or Mapbox) map should be able to drop STT layers in
@@ -51,7 +81,7 @@ points-only picking.
 §1.2 declares "maplibre stays a declared 5-of-19 subset with typed fallbacks"
 as an intentional decision, and §5.4 counts out the v5/globe port "until
 actually attempted". This campaign reverses both. The deck backend remains the
-flagship/richest path; the maplibre backend's value is *thinness* — native
+flagship/richest path; the maplibre backend's value is _thinness_ — native
 custom layers with no deck/luma dependency for the (large) population of apps
 that already have a maplibre map and will never adopt deck.
 
@@ -108,43 +138,43 @@ Key anchors cited inline; re-verify line numbers before editing.
   invalidate/rebuild the tile GPU cache ourselves. `antialias` defaults to
   false → no MSAA for custom layers unless the app opts in.
 - **Mapbox gl-js v3**: same painter heritage; still `render(gl, matrix,
-  ...globeParams)` positional style; **no injected shader prelude** — globe
+...globeParams)` positional style; **no injected shader prelude** — globe
   requires hand-implementing ECEF from the passed params
   (`projectionToMercatorMatrix`, `transition`, `centerInMercator`,
   `pixelsPerMeterRatio`); `slot: 'bottom'|'middle'|'top'` ordering in the
   Standard style; custom layers rejected on all adapted projections
   (mercator + globe only); floor peer at **≥3.9.1** (queryRenderedFeatures
   crash with custom layers below that); terrain draping needs `renderToTile`
-  + `shouldRerenderTiles` (animated layers would redrape every frame —
-  unattractive); **proprietary license** — never vendor, token-gate any CI
-  use, maplibre stays the default target.
+  - `shouldRerenderTiles` (animated layers would redrape every frame —
+    unattractive); **proprietary license** — never vendor, token-gate any CI
+    use, maplibre stays the default target.
 - **Do not route through deck interleaved for this backend**: deck 9.3
   interleaved attaches luma to the shared context and **monkey-patches every
   GL state setter** (taxes the basemap's own calls), plus per-pass push/pop,
   plus the map's own per-custom-layer setDirty. Our hand-written layer pays
   only the last item. (deck's `MapboxLayerGroup` bucketing — N deck layers
-  behind ≤ buckets custom layers — is still the right *grouping* idea.)
+  behind ≤ buckets custom layers — is still the right _grouping_ idea.)
 - MapLibre WebGPU: roadmap ("Graphics Modernization") is real but unshipped;
   the WebGL2 `CustomLayerInterface` remains the contract. Keying programs by
   `variantName` is the forward-compatible posture.
 
 ### 1.2 Parity gap (deck → maplibre), condensed from the audit
 
-| Axis | deck | maplibre today |
-| --- | --- | --- |
-| Layer kinds | all 23 except isoLines(→path), ego | **5**: point, line, polygon, trips, heatmap |
-| Time modes | window, wake, cumulative, trail | **window, trail only** |
-| Picking | gpu-id, all kinds | id-FBO scaffold complete, **points only**, descriptor says `none` |
-| DataFilter / timeHeightScale / pathReveal / motion-glide / iconWake | yes | **none** |
-| colorMapping | keyed + GPU palette texture | keyed CPU (point/line/polygon) — roadmap concept-map stale |
-| Globe / v5 / v6 | deck 9.1+ globe | **no** — peer pinned `^3 || ^4` (`base-layer.ts:575`) |
-| metricSizing | yes | no (pixel sizing only) |
-| Tileset ownership | shared | **per-layer archive** (N archives for N layers) |
-| Governor | wired in showcase | **API exists** (`onTilesetReady`/`onBufferChange`) but showcase never wires it |
-| Feature matrix in descriptor | `deckLayerFeatures` + (d) gate | **not declared** — gaps invisible to conformance |
-| Elevation scale | correct | `DEFAULT_ALTITUDE_SCALE = 1e-7` ~4× too tall (`lib/projection.ts:59`) |
+| Axis                                                                | deck                               | maplibre today                                                                 |
+| ------------------------------------------------------------------- | ---------------------------------- | ------------------------------------------------------------------------------ |
+| Layer kinds                                                         | all 23 except isoLines(→path), ego | **5**: point, line, polygon, trips, heatmap                                    |
+| Time modes                                                          | window, wake, cumulative, trail    | **window, trail only**                                                         |
+| Picking                                                             | gpu-id, all kinds                  | id-FBO scaffold complete, **points only**, descriptor says `none`              |
+| DataFilter / timeHeightScale / pathReveal / motion-glide / iconWake | yes                                | **none**                                                                       |
+| colorMapping                                                        | keyed + GPU palette texture        | keyed CPU (point/line/polygon) — roadmap concept-map stale                     |
+| Globe / v5 / v6                                                     | deck 9.1+ globe                    | **no** — peer pinned `^3                                                       |     | ^4` (`base-layer.ts:575`) |
+| metricSizing                                                        | yes                                | no (pixel sizing only)                                                         |
+| Tileset ownership                                                   | shared                             | **per-layer archive** (N archives for N layers)                                |
+| Governor                                                            | wired in showcase                  | **API exists** (`onTilesetReady`/`onBufferChange`) but showcase never wires it |
+| Feature matrix in descriptor                                        | `deckLayerFeatures` + (d) gate     | **not declared** — gaps invisible to conformance                               |
+| Elevation scale                                                     | correct                            | `DEFAULT_ALTITUDE_SCALE = 1e-7` ~4× too tall (`lib/projection.ts:59`)          |
 
-What is already *right* and must be preserved: CPU f64 pre-projection +
+What is already _right_ and must be preserved: CPU f64 pre-projection +
 per-tile uint16 quantization (strongest precision pattern in the ecosystem
 survey — matches maplibre's own Int16/EXTENT internals), `autoRepaint` →
 `triggerRepaint` discipline, premultiplied-alpha-aware blending, VAO caching +
@@ -273,7 +303,7 @@ blob-ordering rule; conformance is part of done). Additions:
   `trailLength<=0`), colorMapping completion, picking on all 5 kinds,
   feature matrix + gates.
 - **P1 — new kinds, showcase-driven** (Wave M3): icon (atlas, heading,
-  wake, glide), column (prism + timeHeightScale), arc (real 3D arc), 
+  wake, glide), column (prism + timeHeightScale), arc (real 3D arc),
   tripHeads (via D7), path upgrade (joins/dashes/pathReveal on the line
   layer family).
 - **P2 — summary + flow families** (Wave M4): h3Summary, quadbinSummary,
@@ -287,7 +317,7 @@ blob-ordering rule; conformance is part of done). Additions:
   fallbacks. **Ratify which of P3 is in.**
 
 "Parity" definition = every deck-supported kind/feature is either implemented
-or a *deliberately declared, conformance-tested fallback* — the same standard
+or a _deliberately declared, conformance-tested fallback_ — the same standard
 the three backend meets — with the P0–P2 set implemented for real.
 
 ---
@@ -299,6 +329,7 @@ panel / implementer / adversarial verifier / demo builder / integrator gate /
 reviewer sweep).
 
 ### Wave M0 — quick wins + preconditions (small, sequential)
+
 1. Commit current uncommitted tree (worktree precondition — big multi-session
    work in tree).
 2. Showcase: wire governor into `MaplibreRenderer` (`getTileset()` →
@@ -307,9 +338,11 @@ reviewer sweep).
    `colorMapping`/`colorMappingDefault`; honor `overlayGatesPlayback`.
 3. Fix stale renderer-architecture concept-map line (maplibre has keyed
    colorMapping) + record this campaign in the roadmap README register.
+
 - **DoD:** maplibre demos gate playback like deck demos; suites green.
 
 ### Wave M1 — platform: v5/v6, globe, lifecycle, shared tileset
+
 1. Host adapter + signature dispatch (D2, D5 skeleton); peer widen; showcase
    maplibre-gl 3.6 → 5.24.
 2. Prelude-injection shader path + `variantName` program cache (D3); globe
@@ -322,6 +355,7 @@ reviewer sweep).
 5. Descriptor: `globe: true`, `basemapProjection` stays `'mercator'` for ≤v4
    hosts — capability resolution becomes host-aware (`hostApiRange` idea from
    renderer-architecture §5.4 L506, now triggered).
+
 - **DoD:** all existing 5 layers render correctly on maplibre v5 mercator
   AND globe (browser-verified by user), on v3/v4 via legacy path
   (unit-tested), styledata/context-loss survived in tests; conformance +
@@ -331,6 +365,7 @@ reviewer sweep).
   verify; integrator gate.
 
 ### Wave M2 — feature parity on the existing five kinds
+
 1. Wake + cumulative GLSL + JS refs + oracle parity tests (D8); descriptor
    timeFilterModes → all four.
 2. DataFilter (`filterProperty/filterRange/filterSoftRange/filterEnabled`)
@@ -340,11 +375,13 @@ reviewer sweep).
 4. Picking: `drawPickTile` for line/polygon/trips; descriptor flip (D11).
 5. `maplibreLayerFeatures` matrix + (d) conformance gate (D9); flip
    dataFilter/stableColorMapping bits here.
+
 - **DoD:** earthquakes (DataFilter slider), bixi (trips), polygon demos run
   on maplibre with feature parity vs deck side-by-side; suites + new gates
   green; user browser verify.
 
 ### Wave M3 — new kinds tier 1 (icon, column, arc, tripHeads, path)
+
 1. D7 track-kernel hoist to core first (deck re-export; deck + three suites
    must stay green — this touches the flagship, adversarial verify).
 2. Icon layer: rotated billboard atlas, heading, `iconWake`, glide via
@@ -355,21 +392,25 @@ reviewer sweep).
 5. TripHeads layer (CPU head interpolation via hoisted kernel).
 6. Path upgrade: `revealTrail`/`revealDuration` + dash/joint quality pass on
    the line family (`pathReveal` bit flips).
+
 - **DoD:** flights (icon glide), taxi (columns), OD arcs, trip-heads demos
   runnable on maplibre; descriptor kinds + features updated; suites green;
   user browser verify.
 
 ### Wave M4 — summary + flow families
+
 1. h3Summary / quadbinSummary: instanced cell geometry (H3 boundary CPU-side
    via existing core/h3 usage), time-bucketed values, ramp/palette parity;
    hexbin real implementation.
 2. flowCorridor + flowStroke (rain-flood/NWM parity — value-matrix texture
    or attribute stream, ref-stable data discipline per the perf root-cause
    memory), then flowmap (static bundles; liveBundling stays fallback).
+
 - **DoD:** weather composite substrate layers, rain-flood, earthquakes-summary
   on maplibre; suites green; user browser verify.
 
 ### Wave M5 — mapbox target, layer-group host, polish
+
 1. Mapbox v3 adapter (mercator + slot), token-gated example + docs; peer
    `>=3.9.1`; license-clean packaging.
 2. `STTLayerGroup` composite host (D6b) + showcase composite wiring
@@ -384,6 +425,7 @@ reviewer sweep).
    embed path (follow-on hook, not a blocker).
 6. Reviewer sweep (find → adversarial verify) over the whole campaign diff;
    fix confirmed findings; final descriptor truth pass.
+
 - **DoD:** full-campaign review clean; all suites green; version-matrix unit
   tests (v3/v4/v5 sigs) green; user browser verify checkpoint list cleared.
 
@@ -426,3 +468,52 @@ reviewer sweep).
    the §5.1 codegen rewire remains out of scope.
 8. Uncommitted-tree precondition: M0.1 commit must land before any
    worktree fan-out.
+
+---
+
+## 8. Delivered vs plan (close-out, 2026-07-23)
+
+**Shipped (real, in-backend, conformance-gated):**
+
+- **Fifteen layer kinds** — point, line, polygon, trips, heatmap (M0/M2);
+  icon, column, arc, tripHeads (M3); h3Summary, quadbinSummary, hexbin,
+  flowCorridor, flowStroke, flowmap (M4). This is the full P0–P2 set.
+- **Four time-filter modes** — window / wake / cumulative / trail, oracle-tested
+  JS refs against core `time-filter.ts` (D8).
+- **DataFilter** — `filterProperty`/`filterRange`/`filterSoftRange`/
+  `filterEnabled` across every kind (D9 `dataFilter` bit).
+- **Metric sizing** — point `radiusUnits: 'meters'`, line/trips
+  `widthUnits: 'meters'`, polygon `elevation` in metres, all latitude-correct;
+  the D10 elevation reconciliation (BREAKING `altitudeScale` = dimensionless
+  exaggeration) landed with it.
+- **id-FBO picking** — every kind except heatmap (D11); descriptor
+  `pickMechanism: 'id-fbo'`, `picking: true`.
+- **Native globe** on v5+ MapLibre hosts via the injected projection prelude +
+  `variantName` program cache + subdivision kit (D3/D4); host dispatch for
+  maplibre v3–v6 (D2).
+- **Shared tileset** — `SharedTilesetSource`: N layers, one archive/tileset/
+  governor `BufferSource` (D6a).
+- **Composite host** — `STTLayerGroup`: N layers behind one custom layer, single
+  render pass + coalesced repaint (D6b).
+- **Mapbox** — mercator + Standard-style `slot` support, structural-only
+  detection, peer floor `>=3.9.1` (D5).
+
+**Declared fallbacks (deliberate, conformance-tested, NOT flipped):**
+
+- **`liveBundling`** — permanent fallback; `STTFlowmapLayer` draws static
+  bundles, no GPU KDEEB path (P2, capability `liveBundling: false`).
+- **Mapbox globe** — deferred; Mapbox renders mercator only (D5).
+- **`text → icon`** — a label degrades to its marker sprite, and only when the
+  caller supplies `iconAtlas` + `iconMapping` (same as deck/three).
+- **`pointCloud → point`** — flat billboards, per-point elevation lost.
+- Everything else (`mesh`, `boundingBox`, `isoLines`, `ego`, `surfel`/`splat`)
+  is an honest deck referral. The P3 boundingBox/pointCloud-real proposal
+  (§4/§7.2) was NOT taken beyond the pointCloud→point fallback.
+
+**Open (not backend code — owned elsewhere):**
+
+- User browser verification of the aesthetic + globe + fps checkpoints across
+  all waves.
+- Showcase demo wiring (`MaplibreRenderer.tsx` mounting the new kinds; icon
+  glide / column / arc / trip-heads / summary / flow demos) and fleet/R2
+  publishing — showcase-side, owned by a separate session.
