@@ -111,6 +111,7 @@ const DemoPage: React.FC = () => {
             key={selectedDataset.id}
             dataset={selectedDataset}
             timeController={playback.timeController}
+            registry={playback.registry}
           />
         ) : useThree ? (
           <SttThreeGeoViewer

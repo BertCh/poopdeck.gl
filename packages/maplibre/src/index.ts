@@ -14,7 +14,16 @@
  *     additive splat + colour-ramp pipeline (parity with `HeatmapTimeLayer`).
  *
  * For tiles containing multiple geometry types, instantiate multiple layers
- * pointing at the same URL — each will pick out the geometries it accepts.
+ * pointing at the same URL — each will pick out the geometries it accepts —
+ * or hand them one {@link SharedTilesetSource} (`{ source }` instead of
+ * `{ url }`) so they share a single archive + tileset and a single governor
+ * `BufferSource`.
+ *
+ * Layers work on maplibre v3–v6 and mapbox v3 from one build: `render()`
+ * duck-types the host's calling convention (`lib/host-adapter.ts`), and on
+ * v5+ hosts the shaders compile the host's injected projection prelude, which
+ * includes globe. Prefer {@link STTBaseLayer.attach} over `map.addLayer` — it
+ * survives `setStyle` diff-fallback rebuilds; `detach()` removes.
  *
  * For deck.gl's rounded joints, dashes and GPU picking, use
  * {@link "@poopdeck.gl/layers"} instead. This adapter exists for sites that don't
@@ -50,6 +59,44 @@ export {
   type RGBA8,
 } from './base-layer.js';
 export { lngLatToMercator, projectPositions } from './lib/projection.js';
+
+// Shared tileset source (D6a): ONE archive + ONE tileset serving N layers.
+// Construct one per .stt, pass it to each layer as `{ source }`, and register
+// its getBufferSource() with a PlaybackGovernor once per source.
+export {
+  SharedTilesetSource,
+  SharedTilesetBufferSource,
+  residentSetEqual,
+  tileKey,
+  type SharedTilesetSourceOptions,
+  type SharedViewport,
+  type TilesetConsumer,
+  type DrivableTileset,
+  type RunwayTileset,
+} from './lib/streaming-source.js';
+
+// Host render-signature adapter (D2): the normalized per-frame shape layers
+// draw from, public for full-render()-override subclasses and tests.
+export {
+  createHostFrame,
+  normalizeRenderArgs,
+  DEFAULT_FOV_RADIANS,
+  type HostFrame,
+  type HostShaderData,
+  type HostProjectionData,
+} from './lib/host-adapter.js';
+
+// Globe correctness kit (D4): mercator-space subdivision + wrap/granularity
+// helpers for custom subclasses targeting v5+ globe hosts.
+export {
+  subdivideLineMercator,
+  subdivideTrianglesMercator,
+  shouldDrawWorldCopy,
+  granularityForZoom,
+  type AttrArray,
+  type SubdivisionAttrs,
+  type LineSubdivisionResult,
+} from './lib/globe.js';
 
 // Shared id-buffer picking result shape (see `STTBaseLayer.pick`). Re-exported
 // from the core picking kernel so consumers don't reach across packages.

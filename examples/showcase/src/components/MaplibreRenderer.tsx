@@ -2,7 +2,10 @@
  * MaplibreRenderer — mounts a MapLibre GL map and a single `@poopdeck.gl/maplibre`
  * custom layer for the supplied dataset. Drop into any page that already
  * owns a `TimeController`; this component subscribes to its `tick` event and
- * forwards `setCurrentTime` to the STT layer on every frame.
+ * forwards `setCurrentTime` to the STT layer on every frame. When the host
+ * also passes `usePlayback`'s `registry`, the layer's tileset registers as a
+ * required governor source so playback gates on its buffered runway, exactly
+ * like the deck path.
  *
  * Kept deliberately self-contained so it can sit next to the deck.gl
  * viewport on the DemoPage without leaking state.
@@ -18,9 +21,11 @@ import {
   STTTripsLayer,
   STTHeatmapLayer,
   type STTBaseLayer,
+  type STTBaseLayerOptions,
   type RGBA8,
 } from '@poopdeck.gl/maplibre';
 import type { TimeController } from '@poopdeck.gl/playback';
+import type { SourceRegistry } from '@poopdeck.gl/react';
 import type { Dataset } from '../types';
 
 // CARTO's free dark style. We accept any style URL via prop, but this is the
@@ -32,6 +37,16 @@ const DEFAULT_BASEMAP_STYLE =
 export interface MaplibreRendererProps {
   dataset: Dataset;
   timeController: TimeController;
+  /**
+   * Multi-source governor registration API (`usePlayback`'s `registry`). When
+   * present, the mounted layer's tileset registers as a governor source under
+   * the maplibre layer id — so the clock gates on its buffered runway exactly
+   * like the deck path — and unregisters on teardown. This renderer mounts
+   * ONE layer, the demo's primary source, so it registers `required: true`;
+   * `overlayGatesPlayback` only declassifies composite OVERLAYS, which this
+   * path never mounts.
+   */
+  registry?: SourceRegistry;
   /** Optional override for the basemap style URL or JSON. */
   basemapStyle?: string | maplibregl.StyleSpecification;
   /** Optional className applied to the outer container. */
@@ -43,6 +58,7 @@ export interface MaplibreRendererProps {
 const MaplibreRenderer: React.FC<MaplibreRendererProps> = ({
   dataset,
   timeController,
+  registry,
   basemapStyle = DEFAULT_BASEMAP_STYLE,
   className,
   projection = 'mercator',
@@ -50,6 +66,15 @@ const MaplibreRenderer: React.FC<MaplibreRendererProps> = ({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const layerRef = useRef<STTBaseLayer | null>(null);
+
+  // Latest-registry ref so the tileset-ready/buffer callbacks (which fire
+  // async, after archive metadata resolves) read the current registry without
+  // the mount effect depending on its identity — a registry swap must not
+  // tear down the map.
+  const registryRef = useRef<SourceRegistry | undefined>(registry);
+  useEffect(() => {
+    registryRef.current = registry;
+  }, [registry]);
 
   // We snapshot the initial dataset so the dataset prop isn't accidentally
   // captured stale by the timeController subscription. Re-mounting on dataset
@@ -86,7 +111,24 @@ const MaplibreRenderer: React.FC<MaplibreRendererProps> = ({
       }
     });
 
-    const sttLayer = makeSttLayer(dataset, initialTime);
+    // Governor plumbing (mirrors buildDemoLayers' sourceProps): the layer's
+    // tileset registers as a REQUIRED source keyed by the maplibre layer id —
+    // distinct from the deck path's dataset-id key, so a deck ↔ maplibre
+    // renderer switch cannot clobber the other path's registration. The
+    // registry actually used at registration time is remembered so teardown
+    // unregisters from exactly that instance.
+    const layerId = `stt-${dataset.id}`;
+    let registeredWith: SourceRegistry | null = null;
+    const sttLayer = makeSttLayer(dataset, initialTime, {
+      onTilesetReady: (tileset) => {
+        const reg = registryRef.current;
+        if (!reg) return;
+        reg.registerSource(layerId, tileset, { required: true });
+        registeredWith = reg;
+      },
+      onBufferChange: (runway) =>
+        registryRef.current?.onBufferChange(layerId, runway),
+    });
     layerRef.current = sttLayer;
 
     map.on('load', () => {
@@ -95,6 +137,10 @@ const MaplibreRenderer: React.FC<MaplibreRendererProps> = ({
     });
 
     return () => {
+      // Unregister BEFORE map.remove(): removal finalizes the layer's
+      // tileset, and the governor must not keep querying a finalized source.
+      registeredWith?.unregisterSource(layerId);
+      registeredWith = null;
       layerRef.current = null;
       mapRef.current = null;
       map.remove();
@@ -143,6 +189,7 @@ export default MaplibreRenderer;
 function makeSttLayer(
   dataset: Dataset,
   initialTime: number,
+  plumbing: Pick<STTBaseLayerOptions, 'onTilesetReady' | 'onBufferChange'>,
 ): STTBaseLayer | null {
   const base = {
     id: `stt-${dataset.id}`,
@@ -150,11 +197,21 @@ function makeSttLayer(
     currentTime: initialTime,
     timeWindow: dataset.timeWindow,
     autoRepaint: true,
+    ...plumbing,
+  };
+  // Stable category → RGBA map for `colorProperty` (deck parity): required
+  // for cross-tile color consistency, since the positional-palette fallback
+  // assigns indices in first-seen order per tile. Both sides are 0–255 RGBA
+  // tuples. point/line/polygon accept it; trips/heatmap do not (yet).
+  const keyedColors = {
+    colorMapping: dataset.colorMapping,
+    colorMappingDefault: dataset.colorMappingDefault,
   };
   switch (dataset.type) {
     case 'point':
       return new STTPointLayer({
         ...base,
+        ...keyedColors,
         color: [0.12, 0.73, 0.84, 0.95],
         radius: 4,
         colorProperty: dataset.colorProperty,
@@ -163,6 +220,7 @@ function makeSttLayer(
     case 'path':
       return new STTLineLayer({
         ...base,
+        ...keyedColors,
         color: [1.0, 0.84, 0.0, 0.9],
         width: 2,
         colorProperty: dataset.colorProperty,
@@ -178,6 +236,7 @@ function makeSttLayer(
     case 'polygon':
       return new STTPolygonLayer({
         ...base,
+        ...keyedColors,
         color: [0.94, 0.42, 0.13, 0.55],
         stroked: true,
         lineWidth: 1,

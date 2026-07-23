@@ -12,6 +12,16 @@
  * Layers on a runtime without instancing log a warning and drop the tile —
  * the only browsers without it are end-of-life Edge and IE, neither of which
  * the rest of the STT stack targets.
+ *
+ * Projection variants (parity campaign D3/D4): legacy hosts (maplibre ≤v4,
+ * mapbox v3) project endpoints through the positional `uMatrix`; v5+ hosts
+ * get the host's injected prelude prepended and endpoints go through its
+ * `projectTile(vec2)` — same 0..1-mercator input our decode produces. On
+ * globe frames, segments are subdivided at tile-upload time so chords don't
+ * get horizon-clipped, cached under their own key so flat mercator entries
+ * survive projection flips. STT tiles carry no `wrap` (Tile.id = z/x/y/t)
+ * and this backend never draws world copies, so the globe wrap-skip rule is
+ * vacuously satisfied.
  */
 
 import type { Tile, Layer as STTLayer } from '@poopdeck.gl/core';
@@ -28,6 +38,8 @@ import {
   type RGBA8,
 } from '../base-layer.js';
 import { lngLatToMercator } from '../lib/projection.js';
+import { subdivideLineMercator } from '../lib/globe.js';
+import { createHostFrame, type HostFrame } from '../lib/host-adapter.js';
 import { TIME_WINDOW_GLSL } from '../shaders/time-window.glsl.js';
 
 // Shared with @poopdeck.gl/layers AnimatedPathLayer (single source of truth in
@@ -64,7 +76,29 @@ export interface STTLineLayerOptions extends STTBaseLayerOptions {
 // `aPosA`/`aPosB` are the *segment endpoints*, not the 4 corners; the 4×
 // expansion happens in the GPU rasterizer — we're removing the redundant CPU
 // broadcast that the v0.2 layer was doing on every tile load.
-const VS_SOURCE = `
+
+/**
+ * Variant-aware vertex source (D3). An empty `prelude` yields the legacy
+ * `uMatrix` shader (maplibre ≤v4 / mapbox — unchanged behavior); a v5+ host's
+ * prelude + define are prepended (maplibre's documented injection order) and
+ * BOTH segment endpoints project through its `projectTile(vec2)`. projectTile
+ * overwrites z for horizon clipping — correct for this 2d screen-space quad;
+ * the NDC extrusion math is identical across variants.
+ */
+export function buildLineVertexSource(shader: {
+  prelude: string;
+  define: string;
+}): string {
+  const v5 = shader.prelude.length > 0;
+  const header = v5 ? `${shader.prelude}\n${shader.define}` : '';
+  const matrixDecl = v5 ? '' : 'uniform mat4 uMatrix;\n  ';
+  const projectHere = v5
+    ? 'projectTile(posM)'
+    : 'uMatrix * vec4(posM, 0.0, 1.0)';
+  const projectThere = v5
+    ? 'projectTile(neighborM)'
+    : 'uMatrix * vec4(neighborM, 0.0, 1.0)';
+  return `${header}
   precision highp float;
   attribute vec2 aCorner;      // (side, along) ∈ {-1,1} × {0,1}, per-vertex
   attribute vec2 aPosA;        // segment start, per-instance
@@ -72,8 +106,7 @@ const VS_SOURCE = `
   attribute vec2 aTime;        // [startTime, endTime], per-instance
   attribute vec4 aColor;       // per-feature RGBA (when uUseFeatureColor=1)
   attribute float aWidth;      // per-feature width (when uUseFeatureWidth=1)
-  uniform mat4 uMatrix;
-  uniform vec2 uViewport;
+  ${matrixDecl}uniform vec2 uViewport;
   uniform float uWidth;
   uniform float uWidthScale;
   uniform float uUseFeatureWidth;
@@ -89,8 +122,8 @@ ${TIME_WINDOW_GLSL}
   void main() {
     vec2 posM = mix(aPosA, aPosB, aCorner.y);     // pick A or B endpoint
     vec2 neighborM = mix(aPosB, aPosA, aCorner.y); // and its neighbour
-    vec4 here = uMatrix * vec4(posM, 0.0, 1.0);
-    vec4 there = uMatrix * vec4(neighborM, 0.0, 1.0);
+    vec4 here = ${projectHere};
+    vec4 there = ${projectThere};
     vec2 hereNdc = here.xy / here.w;
     vec2 thereNdc = there.xy / there.w;
     // Direction in pixels from here to there; offset perpendicular so the
@@ -113,6 +146,7 @@ ${TIME_WINDOW_GLSL}
     vColor = (uUseFeatureColor > 0.5) ? aColor : uColor;
   }
 `;
+}
 
 const FS_SOURCE = `
   precision highp float;
@@ -132,6 +166,7 @@ interface LineProgramHandles {
   aTime: number;
   aColor: number;
   aWidth: number;
+  /** null on prelude-built variants (they project via `u_projection_*`). */
   uMatrix: WebGLUniformLocation | null;
   uViewport: WebGLUniformLocation | null;
   uWidth: WebGLUniformLocation | null;
@@ -154,7 +189,19 @@ interface LineGpuCache extends TileGpuCache {
   instanceCount: number;
   colorBuffer?: WebGLBuffer;
   widthBuffer?: WebGLBuffer;
+  /**
+   * Shader variant the cached VAO's attribute locations were recorded
+   * against. A variant flip may relocate attributes, so a mismatched VAO is
+   * dropped and re-recorded (buffers stay valid).
+   */
+  vaoVariant?: string;
 }
+
+/**
+ * Hand-built test DrawContexts may omit `frame`; treat them as a legacy
+ * uMatrix host. Read-only — never handed to normalizeRenderArgs.
+ */
+const FALLBACK_LEGACY_FRAME: HostFrame = createHostFrame();
 
 export class STTLineLayer extends STTBaseLayer {
   protected lineOpts: {
@@ -167,7 +214,13 @@ export class STTLineLayer extends STTBaseLayer {
     colorMapping?: Record<string, RGBA8>;
     colorMappingDefault?: RGBA8;
   };
-  private handles?: LineProgramHandles;
+  /**
+   * Globe frames need subdivided tile geometry, but the base render loop
+   * resolves caches before drawTile ever sees the frame — beginFrame stashes
+   * the flag so ensure/buildTileGpuCache key and build for the CURRENT
+   * projection. Also read by the pick path (a pick follows a render).
+   */
+  private frameIsGlobe = false;
 
   constructor(opts: STTLineLayerOptions) {
     super(opts);
@@ -197,44 +250,81 @@ export class STTLineLayer extends STTBaseLayer {
     return type === GeometryType.LineString;
   }
 
-  protected onContextReady(
-    gl: WebGLRenderingContext | WebGL2RenderingContext,
-  ): void {
-    const program = this.linkProgram(gl, VS_SOURCE, FS_SOURCE);
-    this.handles = {
-      program,
-      aCorner: gl.getAttribLocation(program, 'aCorner'),
-      aPosA: gl.getAttribLocation(program, 'aPosA'),
-      aPosB: gl.getAttribLocation(program, 'aPosB'),
-      aTime: gl.getAttribLocation(program, 'aTime'),
-      aColor: gl.getAttribLocation(program, 'aColor'),
-      aWidth: gl.getAttribLocation(program, 'aWidth'),
-      uMatrix: gl.getUniformLocation(program, 'uMatrix'),
-      uViewport: gl.getUniformLocation(program, 'uViewport'),
-      uWidth: gl.getUniformLocation(program, 'uWidth'),
-      uWidthScale: gl.getUniformLocation(program, 'uWidthScale'),
-      uUseFeatureWidth: gl.getUniformLocation(program, 'uUseFeatureWidth'),
-      uUseFeatureColor: gl.getUniformLocation(program, 'uUseFeatureColor'),
-      uColor: gl.getUniformLocation(program, 'uColor'),
-      uWindowStart: gl.getUniformLocation(program, 'uWindowStart'),
-      uWindowEnd: gl.getUniformLocation(program, 'uWindowEnd'),
-      uFadeIn: gl.getUniformLocation(program, 'uFadeIn'),
-      uFadeOut: gl.getUniformLocation(program, 'uFadeOut'),
-    };
+  protected beginFrame(
+    matrixOrArgs: unknown,
+    options?: unknown,
+  ): HostFrame | null {
+    const frame = super.beginFrame(matrixOrArgs, options);
+    if (frame) this.frameIsGlobe = frame.isGlobe;
+    return frame;
   }
 
-  protected onContextLost(
+  protected onContextReady(): void {
+    // Programs are linked lazily, one per host shader variant, through the
+    // base getOrCreateProgram cache — nothing to allocate eagerly.
+  }
+
+  protected onContextLost(): void {
+    // Per-variant programs live in the base program cache, which the base
+    // layer invalidates on context loss and removal.
+  }
+
+  /** Fetch (or link) this frame's variant of the line program. */
+  private programFor(
     gl: WebGLRenderingContext | WebGL2RenderingContext,
-  ): void {
-    if (this.handles) {
-      gl.deleteProgram(this.handles.program);
-      this.handles = undefined;
-    }
+    frame: HostFrame,
+  ): LineProgramHandles {
+    return this.getOrCreateProgram(gl, 'line', frame, (glc, shader) => {
+      const program = this.linkProgram(
+        glc,
+        buildLineVertexSource(shader),
+        FS_SOURCE,
+      );
+      return {
+        program,
+        aCorner: glc.getAttribLocation(program, 'aCorner'),
+        aPosA: glc.getAttribLocation(program, 'aPosA'),
+        aPosB: glc.getAttribLocation(program, 'aPosB'),
+        aTime: glc.getAttribLocation(program, 'aTime'),
+        aColor: glc.getAttribLocation(program, 'aColor'),
+        aWidth: glc.getAttribLocation(program, 'aWidth'),
+        uMatrix: glc.getUniformLocation(program, 'uMatrix'),
+        uViewport: glc.getUniformLocation(program, 'uViewport'),
+        uWidth: glc.getUniformLocation(program, 'uWidth'),
+        uWidthScale: glc.getUniformLocation(program, 'uWidthScale'),
+        uUseFeatureWidth: glc.getUniformLocation(program, 'uUseFeatureWidth'),
+        uUseFeatureColor: glc.getUniformLocation(program, 'uUseFeatureColor'),
+        uColor: glc.getUniformLocation(program, 'uColor'),
+        uWindowStart: glc.getUniformLocation(program, 'uWindowStart'),
+        uWindowEnd: glc.getUniformLocation(program, 'uWindowEnd'),
+        uFadeIn: glc.getUniformLocation(program, 'uFadeIn'),
+        uFadeOut: glc.getUniformLocation(program, 'uFadeOut'),
+      };
+    });
+  }
+
+  protected ensureTileGpuCache(
+    gl: WebGLRenderingContext | WebGL2RenderingContext,
+    tile: Tile,
+    layer: STTLayer,
+  ): TileGpuCache | null {
+    if (!this.frameIsGlobe) return super.ensureTileGpuCache(gl, tile, layer);
+    // Subdivided globe geometry lives under its own key so the flat mercator
+    // entry stays unpolluted and a globe→mercator flip reuses either side
+    // without rebuilds. The `z/x/y/t::` prefix must match the base tileKey
+    // format — the base unload sweep frees entries by that prefix.
+    const { z, x, y, t } = tile.id;
+    const key = `${z}/${x}/${y}/${t}::${layer.name}::${layer.features.geometryType}::globe:${this.tileSubdivisionGranularity(z)}`;
+    const existing = this.tileGpuCache.get(key);
+    if (existing !== undefined) return existing;
+    const cache = this.buildTileGpuCache(gl, tile, layer);
+    this.tileGpuCache.set(key, cache);
+    return cache;
   }
 
   protected buildTileGpuCache(
     gl: WebGLRenderingContext | WebGL2RenderingContext,
-    _tile: Tile,
+    tile: Tile,
     layer: STTLayer,
   ): LineGpuCache | null {
     if (!this.instSupport.enabled) {
@@ -252,12 +342,36 @@ export class STTLineLayer extends STTBaseLayer {
     const dims: 2 | 3 = f.positionDimensions === 3 ? 3 : 2;
     const startIndices = f.startIndices;
     const featureCount = startIndices.length - 1;
+    // 0 ⇒ no subdivision: off-globe both uMatrix and projectTile are affine
+    // in mercator, so chords are exact. On globe, chords longer than the
+    // host's granularity get horizon-clipped — split at upload time.
+    const granularity = this.frameIsGlobe
+      ? this.tileSubdivisionGranularity(tile.id.z)
+      : 0;
 
-    // Count segments across all features.
+    // Pass 1: project each feature's polyline to mercator (subdividing on
+    // globe) so segment counts are known before the per-instance buffers are
+    // allocated. Times / colors / widths are per-FEATURE constants — only
+    // positions interpolate. Tile-upload time only, never per frame.
+    const polylines: Float64Array[] = new Array(featureCount);
     let segmentCount = 0;
-    for (let i = 0; i < featureCount; i++) {
-      const vs = startIndices[i + 1] - startIndices[i];
-      if (vs >= 2) segmentCount += vs - 1;
+    for (let fi = 0; fi < featureCount; fi++) {
+      const begin = startIndices[fi];
+      const count = startIndices[fi + 1] - begin;
+      let merc: Float64Array = new Float64Array(count * 2);
+      for (let v = 0; v < count; v++) {
+        const [mx, my] = lngLatToMercator(
+          f.positions[(begin + v) * dims],
+          f.positions[(begin + v) * dims + 1],
+        );
+        merc[v * 2] = mx;
+        merc[v * 2 + 1] = my;
+      }
+      if (granularity > 0) {
+        merc = subdivideLineMercator(merc, granularity).positions;
+      }
+      polylines[fi] = merc;
+      if (merc.length >= 4) segmentCount += merc.length / 2 - 1;
     }
     if (segmentCount === 0) return null;
 
@@ -285,8 +399,8 @@ export class STTLineLayer extends STTBaseLayer {
 
     let s = 0;
     for (let fi = 0; fi < featureCount; fi++) {
-      const begin = startIndices[fi];
-      const end = startIndices[fi + 1];
+      const line = polylines[fi];
+      const segs = line.length >= 4 ? line.length / 2 - 1 : 0;
       const ts = f.startTimes[fi];
       const te = f.endTimes[fi];
       const fr = featureColors ? featureColors[fi * 4] : 0;
@@ -294,19 +408,11 @@ export class STTLineLayer extends STTBaseLayer {
       const fb = featureColors ? featureColors[fi * 4 + 2] : 0;
       const fa = featureColors ? featureColors[fi * 4 + 3] : 255;
       const fw = featureWidths ? featureWidths[fi] : 0;
-      for (let v = begin; v < end - 1; v++) {
-        const [ax, ay] = lngLatToMercator(
-          f.positions[v * dims],
-          f.positions[v * dims + 1],
-        );
-        const [bx, by] = lngLatToMercator(
-          f.positions[(v + 1) * dims],
-          f.positions[(v + 1) * dims + 1],
-        );
-        posA[s * 2] = ax;
-        posA[s * 2 + 1] = ay;
-        posB[s * 2] = bx;
-        posB[s * 2 + 1] = by;
+      for (let v = 0; v < segs; v++) {
+        posA[s * 2] = line[v * 2];
+        posA[s * 2 + 1] = line[v * 2 + 1];
+        posB[s * 2] = line[v * 2 + 2];
+        posB[s * 2 + 1] = line[v * 2 + 3];
         times[s * 2] = ts;
         times[s * 2 + 1] = te;
         if (colorAttr) {
@@ -364,12 +470,18 @@ export class STTLineLayer extends STTBaseLayer {
     cache: TileGpuCache,
     ctx: DrawContext,
   ): void {
-    const h = this.handles;
-    if (!h) return;
+    const frame = ctx.frame ?? FALLBACK_LEGACY_FRAME;
+    const h = this.programFor(gl, frame);
     const c = cache as LineGpuCache;
 
     gl.useProgram(h.program);
-    gl.uniformMatrix4fv(h.uMatrix, false, ctx.matrix);
+    if (frame.shader.prelude) {
+      // Prelude-built variant: projection rides the injected u_projection_*
+      // uniforms (no uMatrix in this program).
+      this.setPreludeProjectionUniforms(gl, h.program, frame);
+    } else {
+      gl.uniformMatrix4fv(h.uMatrix, false, ctx.matrix);
+    }
     gl.uniform2f(h.uViewport, gl.drawingBufferWidth, gl.drawingBufferHeight);
     gl.uniform1f(h.uWidth, this.lineOpts.width);
     gl.uniform1f(h.uWidthScale, this.lineOpts.widthScale);
@@ -382,6 +494,13 @@ export class STTLineLayer extends STTBaseLayer {
     gl.uniform1f(h.uUseFeatureColor, c.colorBuffer && h.aColor >= 0 ? 1 : 0);
     gl.uniform1f(h.uUseFeatureWidth, c.widthBuffer && h.aWidth >= 0 ? 1 : 0);
 
+    // A VAO records attribute LOCATIONS of the program it was built against —
+    // a variant flip may relocate them, so a mismatched VAO is re-recorded
+    // (the underlying buffers stay valid).
+    if (c.vao && c.vaoVariant !== frame.shader.variantName) {
+      this.vaoSupport.delete(c.vao);
+      c.vao = null;
+    }
     const quad = this.getUnitQuad(gl);
     this.bindVaoOrSetup(c, () => {
       // Per-vertex quad corner (divisor 0).
@@ -419,6 +538,7 @@ export class STTLineLayer extends STTBaseLayer {
         this.instSupport.vertexAttribDivisor(h.aWidth, 1);
       }
     });
+    c.vaoVariant = frame.shader.variantName;
 
     // 4 verts per quad × N segment instances, drawn as TRIANGLE_STRIP. No
     // gl_VertexID needed so this works on WebGL1 + ANGLE_instanced_arrays.

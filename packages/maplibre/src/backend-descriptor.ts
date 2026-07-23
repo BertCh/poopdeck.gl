@@ -15,10 +15,15 @@
  * The adapter ships five layer classes (point/line/polygon/trips/heatmap). Every
  * other layer kind degrades to deck.gl (`@poopdeck.gl/layers`); `arc` carries a
  * `line` fallback because an arc is naturally a line in a backend without arc
- * geometry. MapLibre v4 is mercator-only and interleaves into the basemap's own
- * GL context, projecting lon/lat → world on the CPU per layer (one archive per
- * layer, not a shared tileset), with no GPU picking. Only the `window` and
- * `trail` time-filter modes are implemented — `wake`/`cumulative` are NOT.
+ * geometry. The adapter interleaves into the basemap's own GL context and
+ * projects lon/lat → world on the CPU. Host dispatch (Wave M1) covers maplibre
+ * v3–v6 + mapbox v3: on v5+ hosts the layers render via the injected
+ * projection prelude — including globe — while ≤v4/mapbox hosts ride the
+ * legacy mercator matrix path. Tileset ownership defaults to one archive per
+ * layer; an opt-in `SharedTilesetSource` serves N layers from one archive.
+ * Only the `window` and `trail` time-filter modes are implemented —
+ * `wake`/`cumulative` are NOT — and there is no declared picking yet (the
+ * id-FBO scaffold is points-only; descriptor flip rides Wave M2/D11).
  */
 
 import {
@@ -92,7 +97,11 @@ const layerKinds = Object.fromEntries(
 export const maplibreBackend: BackendDescriptor = {
   id: 'maplibre',
   capabilities: {
-    globe: false,
+    // Requires a v5+ maplibre host: the layers compile the host's injected
+    // projection prelude (projectTile*/variantName program cache) so globe
+    // and the globe↔mercator transition render natively. Legacy hosts
+    // (maplibre ≤v4, mapbox v3) still render mercator via the uMatrix path.
+    globe: true,
     picking: false,
     extrude3d: true,
     metricSizing: false,
@@ -107,8 +116,12 @@ export const maplibreBackend: BackendDescriptor = {
   timeFilterModes: ['window', 'trail'],
   layerKinds,
   projectsOnCpu: true,
+  // DEFAULT ownership. An opt-in shared source (D6a `SharedTilesetSource`,
+  // layer option `source`) serves N layers from one archive; this field
+  // flips only if/when shared becomes the default path.
   tilesetOwnership: 'per-layer',
   pickMechanism: 'none',
   interleavedBasemap: true,
+  // What a ≤v4 host drives; v5+ hosts may present globe (see capabilities.globe).
   basemapProjection: 'mercator',
 };

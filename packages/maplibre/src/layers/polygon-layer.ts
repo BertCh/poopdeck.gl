@@ -14,6 +14,18 @@
  * arrive without pre-baked triangles are still treated as one ring, since STT
  * does not yet emit a `holeIndices` field for the runtime-earcut path.
  *
+ * Host projection (campaign D3/D4): every program is built per shader variant
+ * through the base `getOrCreateProgram` cache. Legacy hosts (maplibre ≤v4,
+ * mapbox) keep the historical `uMatrix` shaders byte-for-byte; v5+ hosts get
+ * the map-injected prelude prepended and project through `projectTile` (flat
+ * fills + strokes, 2d — the host owns z for horizon clipping on globe) /
+ * `projectTileFor3D` (extruded prisms, elevation in meters). On prelude hosts
+ * the baked geometry is additionally refined to the host's subdivision
+ * granularity (`lib/globe.ts`) so long chords don't horizon-clip on globe.
+ * STT tiles are drawn once in the single 0..1 mercator world (there is no
+ * per-tile `wrap`), so the globe "skip wrap ≠ 0 copies" rule holds
+ * structurally.
+ *
  * Stroked / extruded parity:
  *   - `stroked: true` adds an outline pass over each ring edge, drawn with the
  *     same screen-space quad expansion as STTLineLayer.
@@ -34,11 +46,29 @@ import {
   type RGBA8,
 } from '../base-layer.js';
 import { lngLatToMercator } from '../lib/projection.js';
+import {
+  subdivideLineMercator,
+  subdivideTrianglesMercator,
+} from '../lib/globe.js';
+import { createHostFrame, type HostFrame } from '../lib/host-adapter.js';
 import { TIME_WINDOW_GLSL } from '../shaders/time-window.glsl.js';
 
 // Shared with @poopdeck.gl/layers AnimatedPolygonLayer (single source of truth
 // in @poopdeck.gl/core).
 const DEFAULT_POLY_PALETTE: ReadonlyArray<RGBA8> = DEFAULT_POLYGON_PALETTE;
+
+/**
+ * Meters per mercator-z unit at 45° latitude (2π·6371008.8 m mean-earth
+ * circumference × cos 45°). The legacy (≤v4 / mapbox) path consumes
+ * `elevation * altitudeScale` directly as mercator-z (default 1e-7 per metre —
+ * the historical, ~4×-too-tall approximation); the v5+ prelude's
+ * `projectTileFor3D` wants METERS above the sphere instead, so the draw path
+ * converts the legacy mercator-z back through this mid-latitude factor to keep
+ * the two hosts visually matched. D10 (elevation reconciliation) replaces both
+ * sides with latitude-correct `mercatorZfromAltitude` math — do not retune
+ * this constant separately from the legacy 1e-7 default.
+ */
+export const MERCATOR_Z_TO_METERS_MIDLAT = 40030228.88407185 * Math.SQRT1_2;
 
 export interface STTPolygonLayerOptions extends STTBaseLayerOptions {
   /** Fill color as [r, g, b, a] in the 0–1 range. Ignored when `fillColorProperty` is set. */
@@ -108,6 +138,49 @@ ${TIME_WINDOW_GLSL}
   }
 `;
 
+/**
+ * Variant-aware fill vertex source. Legacy frames (empty prelude) keep the
+ * historical `uMatrix` shader VERBATIM; prelude frames (maplibre v5+) project
+ * through the injected functions instead — `projectTile` for flat fills (2d:
+ * the prelude owns z, giving horizon clipping on globe) and `projectTileFor3D`
+ * for extruded prisms (elevation in meters — see
+ * {@link MERCATOR_Z_TO_METERS_MIDLAT}). The branch is uniform-wide, matching
+ * how the cache bakes geometry (`setExtruded` rebuilds the caches).
+ * Exported for string-level variant tests.
+ */
+export const buildFillVertexSource = (shader: {
+  prelude: string;
+  define: string;
+}): string => {
+  if (shader.prelude === '') return VS_SOURCE;
+  return `
+${shader.prelude}
+${shader.define}
+  precision highp float;
+  attribute vec3 aMercator;    // [mercX, mercY, elevation units]
+  attribute vec2 aTime;
+  attribute vec4 aColor;
+  uniform float uAltitudeScale; // elevation units → METERS on this path
+  uniform float uExtruded;
+  uniform float uUseFeatureColor;
+  uniform vec4 uColor;
+  uniform float uWindowStart;
+  uniform float uWindowEnd;
+  uniform float uFadeIn;
+  uniform float uFadeOut;
+  varying float vAlpha;
+  varying vec4 vColor;
+${TIME_WINDOW_GLSL}
+  void main() {
+    gl_Position = (uExtruded > 0.5)
+      ? projectTileFor3D(aMercator.xy, aMercator.z * uAltitudeScale)
+      : projectTile(aMercator.xy);
+    vAlpha = sttTimeWindowAlpha(aTime, uWindowStart, uWindowEnd, uFadeIn, uFadeOut);
+    vColor = (uUseFeatureColor > 0.5) ? aColor : uColor;
+  }
+`;
+};
+
 const FS_SOURCE = `
   precision highp float;
   varying float vAlpha;
@@ -157,6 +230,55 @@ ${TIME_WINDOW_GLSL}
   }
 `;
 
+/**
+ * Variant-aware stroke vertex source. Outlines hug the fill: 2d content →
+ * `projectTile` (the prelude owns z for horizon clipping); the screen-space
+ * quad expansion happens post-projection and is identical to the legacy path.
+ * Exported for string-level variant tests.
+ */
+export const buildStrokeVertexSource = (shader: {
+  prelude: string;
+  define: string;
+}): string => {
+  if (shader.prelude === '') return STROKE_VS_SOURCE;
+  return `
+${shader.prelude}
+${shader.define}
+  precision highp float;
+  attribute vec2 aCorner;       // (side, along) per-vertex
+  attribute vec2 aPosA;         // edge start, per-instance
+  attribute vec2 aPosB;         // edge end, per-instance
+  attribute vec2 aTime;         // [startTime, endTime], per-instance
+  uniform vec2 uViewport;
+  uniform float uWidth;
+  uniform float uWindowStart;
+  uniform float uWindowEnd;
+  uniform float uFadeIn;
+  uniform float uFadeOut;
+  varying float vAlpha;
+${TIME_WINDOW_GLSL}
+  void main() {
+    vec2 posM = mix(aPosA, aPosB, aCorner.y);
+    vec2 neighborM = mix(aPosB, aPosA, aCorner.y);
+    vec4 here = projectTile(posM);
+    vec4 there = projectTile(neighborM);
+    vec2 hereNdc = here.xy / here.w;
+    vec2 thereNdc = there.xy / there.w;
+    vec2 dirPx = (thereNdc - hereNdc) * 0.5 * uViewport;
+    float lenPx = max(length(dirPx), 1e-4);
+    vec2 dirN = dirPx / lenPx;
+    float sideSign = (aCorner.y > 0.5) ? -1.0 : 1.0;
+    vec2 perp = vec2(-dirN.y, dirN.x) * sideSign;
+    vec2 offsetPx = perp * aCorner.x * uWidth * 0.5;
+    vec2 offsetNdc = offsetPx / (0.5 * uViewport);
+    vec4 outClip = here;
+    outClip.xy += offsetNdc * here.w;
+    gl_Position = outClip;
+    vAlpha = sttTimeWindowAlpha(aTime, uWindowStart, uWindowEnd, uFadeIn, uFadeOut);
+  }
+`;
+};
+
 const STROKE_FS_SOURCE = `
   precision highp float;
   uniform vec4 uColor;
@@ -172,8 +294,11 @@ interface PolygonProgramHandles {
   aMercator: number;
   aTime: number;
   aColor: number;
+  /** Legacy variant only — null on prelude programs (their matrix comes from u_projection_*). */
   uMatrix: WebGLUniformLocation | null;
   uAltitudeScale: WebGLUniformLocation | null;
+  /** Prelude variant only — null on the legacy program. */
+  uExtruded: WebGLUniformLocation | null;
   uUseFeatureColor: WebGLUniformLocation | null;
   uColor: WebGLUniformLocation | null;
   uWindowStart: WebGLUniformLocation | null;
@@ -188,6 +313,7 @@ interface StrokeProgramHandles {
   aPosA: number;
   aPosB: number;
   aTime: number;
+  /** Legacy variant only — null on prelude programs. */
   uMatrix: WebGLUniformLocation | null;
   uViewport: WebGLUniformLocation | null;
   uWidth: WebGLUniformLocation | null;
@@ -200,6 +326,18 @@ interface StrokeProgramHandles {
 
 interface PolygonGpuCache extends TileGpuCache {
   use32BitIndices: boolean;
+  /**
+   * Full-mercator-square subdivision granularity baked into this cache
+   * (0 = unrefined — legacy hosts). Prelude hosts refine fill triangles, wall
+   * bands and stroke edges to it at build time (D4).
+   */
+  subdivisionGranularity: number;
+  /**
+   * Shader variant the VAO recordings were captured under. VAOs record
+   * attribute locations of the variant's linked program, so a variant flip
+   * (v5 mercator ⇄ globe) invalidates them.
+   */
+  vaoVariant?: string;
   /** Per-vertex RGBA colours (Uint8 normalized) when `fillColorProperty` is in use. */
   colorBuffer?: WebGLBuffer;
   /**
@@ -213,6 +351,28 @@ interface PolygonGpuCache extends TileGpuCache {
     timeBuffer: WebGLBuffer;
     instanceCount: number;
   };
+}
+
+/**
+ * Refine a projected ring's edges (including the closing edge) so no piece
+ * spans more than `1/granularity` mercator units per axis. Returns a flat
+ * `[x, y, ...]` ring WITHOUT the duplicate closing vertex; consumers wrap
+ * with modulo exactly like the unrefined ring.
+ */
+function refineRing(
+  projected: ReadonlyArray<readonly [number, number]>,
+  granularity: number,
+): Float64Array {
+  const n = projected.length;
+  const closed = new Float64Array((n + 1) * 2);
+  for (let v = 0; v < n; v++) {
+    closed[v * 2] = projected[v][0];
+    closed[v * 2 + 1] = projected[v][1];
+  }
+  closed[n * 2] = projected[0][0];
+  closed[n * 2 + 1] = projected[0][1];
+  const refined = subdivideLineMercator(closed, granularity).positions;
+  return refined.subarray(0, refined.length - 2);
 }
 
 export class STTPolygonLayer extends STTBaseLayer {
@@ -230,8 +390,16 @@ export class STTPolygonLayer extends STTBaseLayer {
     elevation: number | string;
     altitudeScale: number;
   };
-  private handles?: PolygonProgramHandles;
-  private strokeHandles?: StrokeProgramHandles;
+
+  /**
+   * True once a prelude-projected (maplibre v5+) frame has been seen —
+   * geometry then bakes with globe subdivision. Constant per host after the
+   * first frame; observed in {@link beginFrame} BEFORE any cache build.
+   */
+  private preludeProjected = false;
+
+  /** Legacy stand-in for hand-built test DrawContexts that omit `frame`. */
+  private readonly fallbackFrame = createHostFrame();
 
   constructor(opts: STTPolygonLayerOptions) {
     super(opts);
@@ -282,17 +450,87 @@ export class STTPolygonLayer extends STTBaseLayer {
     return type === GeometryType.Polygon;
   }
 
-  protected onContextReady(
+  /**
+   * Track the host's projection family BEFORE any tile cache is (re)built
+   * this frame: prelude hosts need geometry refined for globe at upload time,
+   * legacy hosts must keep the exact unrefined buffers. A flip (first v5
+   * frame, or a defensive shaderData-less host) invalidates the baked caches;
+   * they rebuild with the right granularity later in this same render.
+   * Granularity changes WITHIN the prelude family (runtime mercator ⇄ globe
+   * projection switch) ride the granularity-keyed {@link ensureTileGpuCache}
+   * instead — no wholesale rebuild.
+   */
+  protected beginFrame(
+    matrixOrArgs: unknown,
+    options?: unknown,
+  ): HostFrame | null {
+    const frame = super.beginFrame(matrixOrArgs, options);
+    if (frame) {
+      const preludeProjected = frame.shader.prelude !== '';
+      if (preludeProjected !== this.preludeProjected) {
+        this.preludeProjected = preludeProjected;
+        this.rebuildTileCaches();
+      }
+    }
+    return frame;
+  }
+
+  /**
+   * Prelude hosts bake the host's subdivision granularity into the cached
+   * geometry, and a runtime projection switch (v5 `setProjection` mercator ⇄
+   * globe) changes that granularity WITHOUT flipping `preludeProjected` — so
+   * the cache key carries the baked granularity (the line layer's scheme): a
+   * switch lazily rebuilds each tile under its new key instead of keeping
+   * unsubdivided chords that horizon-clip on globe, and switching back
+   * reuses whichever variant already exists. The `z/x/y/t::` prefix matches
+   * the base tileKey format so the base unload sweep frees every variant.
+   */
+  protected ensureTileGpuCache(
     gl: WebGLRenderingContext | WebGL2RenderingContext,
-  ): void {
-    const program = this.linkProgram(gl, VS_SOURCE, FS_SOURCE);
-    this.handles = {
+    tile: Tile,
+    layer: STTLayer,
+  ): TileGpuCache | null {
+    if (!this.preludeProjected)
+      return super.ensureTileGpuCache(gl, tile, layer);
+    const { z, x, y, t } = tile.id;
+    const key = `${z}/${x}/${y}/${t}::${layer.name}::${layer.features.geometryType}::gran:${this.tileSubdivisionGranularity(z)}`;
+    const existing = this.tileGpuCache.get(key);
+    if (existing !== undefined) return existing;
+    const cache = this.buildTileGpuCache(gl, tile, layer);
+    this.tileGpuCache.set(key, cache);
+    return cache;
+  }
+
+  protected onContextReady(): void {
+    // Programs are linked lazily per shader variant through the base
+    // `getOrCreateProgram` cache (a v5 host recompiles per projection
+    // variant; after a context restore the cache is empty and relinks on the
+    // first draw).
+  }
+
+  protected onContextLost(): void {
+    // Program handles live in the base variant cache, which the base layer
+    // invalidates on context loss and dispose.
+  }
+
+  /** Build fill program handles for the frame's shader variant. */
+  private readonly fillProgramFactory = (
+    gl: WebGLRenderingContext | WebGL2RenderingContext,
+    shader: { prelude: string; define: string },
+  ): PolygonProgramHandles => {
+    const program = this.linkProgram(
+      gl,
+      buildFillVertexSource(shader),
+      FS_SOURCE,
+    );
+    return {
       program,
       aMercator: gl.getAttribLocation(program, 'aMercator'),
       aTime: gl.getAttribLocation(program, 'aTime'),
       aColor: gl.getAttribLocation(program, 'aColor'),
       uMatrix: gl.getUniformLocation(program, 'uMatrix'),
       uAltitudeScale: gl.getUniformLocation(program, 'uAltitudeScale'),
+      uExtruded: gl.getUniformLocation(program, 'uExtruded'),
       uUseFeatureColor: gl.getUniformLocation(program, 'uUseFeatureColor'),
       uColor: gl.getUniformLocation(program, 'uColor'),
       uWindowStart: gl.getUniformLocation(program, 'uWindowStart'),
@@ -300,39 +538,34 @@ export class STTPolygonLayer extends STTBaseLayer {
       uFadeIn: gl.getUniformLocation(program, 'uFadeIn'),
       uFadeOut: gl.getUniformLocation(program, 'uFadeOut'),
     };
+  };
 
-    // Stroke pass uses a small dedicated program. We compile it eagerly so we
-    // can flip `stroked` on/off at runtime without re-linking.
-    const sprogram = this.linkProgram(gl, STROKE_VS_SOURCE, STROKE_FS_SOURCE);
-    this.strokeHandles = {
-      program: sprogram,
-      aCorner: gl.getAttribLocation(sprogram, 'aCorner'),
-      aPosA: gl.getAttribLocation(sprogram, 'aPosA'),
-      aPosB: gl.getAttribLocation(sprogram, 'aPosB'),
-      aTime: gl.getAttribLocation(sprogram, 'aTime'),
-      uMatrix: gl.getUniformLocation(sprogram, 'uMatrix'),
-      uViewport: gl.getUniformLocation(sprogram, 'uViewport'),
-      uWidth: gl.getUniformLocation(sprogram, 'uWidth'),
-      uColor: gl.getUniformLocation(sprogram, 'uColor'),
-      uWindowStart: gl.getUniformLocation(sprogram, 'uWindowStart'),
-      uWindowEnd: gl.getUniformLocation(sprogram, 'uWindowEnd'),
-      uFadeIn: gl.getUniformLocation(sprogram, 'uFadeIn'),
-      uFadeOut: gl.getUniformLocation(sprogram, 'uFadeOut'),
-    };
-  }
-
-  protected onContextLost(
+  /** Build stroke program handles for the frame's shader variant. */
+  private readonly strokeProgramFactory = (
     gl: WebGLRenderingContext | WebGL2RenderingContext,
-  ): void {
-    if (this.handles) {
-      gl.deleteProgram(this.handles.program);
-      this.handles = undefined;
-    }
-    if (this.strokeHandles) {
-      gl.deleteProgram(this.strokeHandles.program);
-      this.strokeHandles = undefined;
-    }
-  }
+    shader: { prelude: string; define: string },
+  ): StrokeProgramHandles => {
+    const program = this.linkProgram(
+      gl,
+      buildStrokeVertexSource(shader),
+      STROKE_FS_SOURCE,
+    );
+    return {
+      program,
+      aCorner: gl.getAttribLocation(program, 'aCorner'),
+      aPosA: gl.getAttribLocation(program, 'aPosA'),
+      aPosB: gl.getAttribLocation(program, 'aPosB'),
+      aTime: gl.getAttribLocation(program, 'aTime'),
+      uMatrix: gl.getUniformLocation(program, 'uMatrix'),
+      uViewport: gl.getUniformLocation(program, 'uViewport'),
+      uWidth: gl.getUniformLocation(program, 'uWidth'),
+      uColor: gl.getUniformLocation(program, 'uColor'),
+      uWindowStart: gl.getUniformLocation(program, 'uWindowStart'),
+      uWindowEnd: gl.getUniformLocation(program, 'uWindowEnd'),
+      uFadeIn: gl.getUniformLocation(program, 'uFadeIn'),
+      uFadeOut: gl.getUniformLocation(program, 'uFadeOut'),
+    };
+  };
 
   /**
    * Resolve per-feature elevation. If `elevation` is a property name, use the
@@ -356,7 +589,7 @@ export class STTPolygonLayer extends STTBaseLayer {
 
   protected buildTileGpuCache(
     gl: WebGLRenderingContext | WebGL2RenderingContext,
-    _tile: Tile,
+    tile: Tile,
     layer: STTLayer,
   ): PolygonGpuCache | null {
     const f = layer.features;
@@ -377,6 +610,15 @@ export class STTPolygonLayer extends STTBaseLayer {
           this.polyOpts.colorMappingDefault,
         )
       : null;
+
+    // Globe correctness (D4): prelude hosts get long edges refined to the
+    // host's subdivision granularity so chords don't horizon-clip on globe
+    // (base helper: per-tile granularity × 2^z per the lib/globe.ts
+    // convention). Legacy hosts bake no subdivision — the unrefined geometry
+    // stays byte-identical to the historical path.
+    const granularity = this.preludeProjected
+      ? this.tileSubdivisionGranularity(tile.id.z)
+      : 0;
 
     // Stroke buffers — accumulated alongside the fill so we only walk the
     // ring positions once per tile.
@@ -427,63 +669,167 @@ export class STTPolygonLayer extends STTBaseLayer {
       const te = f.endTimes[fi];
       const elevation = elevations[fi] ?? 0;
 
+      // Refined ring shared by the wall + stroke passes on prelude hosts.
+      // Computed lazily so flat, unstroked features skip the work. Evenly
+      // spaced (vs the fill's dyadic bisection) — both sample the same
+      // straight mercator segments, so any boundary mismatch is sub-pixel at
+      // real granularities.
+      let refinedRing: Float64Array | undefined;
+      const ringOutline = (): Float64Array =>
+        (refinedRing ??= refineRing(projected, granularity));
+
       // ---- Fill: top of the prism (or the only face when not extruded) ----
       const topVertexBase = nextVertex;
-      for (let v = 0; v < ringVertexCount; v++) {
-        fillPositions.push(projected[v][0], projected[v][1], elevation);
-        fillTimes.push(ts, te);
-        if (fillColors && featureColors) {
-          const base = fi * 4;
-          fillColors.push(
-            featureColors[base],
-            featureColors[base + 1],
-            featureColors[base + 2],
-            featureColors[base + 3],
-          );
-        }
-        nextVertex++;
-      }
-      for (let t = 0; t < tris.length; t++) {
-        fillIndicesArr.push(topVertexBase + (tris[t] - begin));
-      }
-
-      // ---- Side walls when extruded ----
-      if (extruded && elevation > 0) {
-        // Emit one quad per ring edge (top vert i, top vert i+1, bottom
-        // vert i, bottom vert i+1). Bottom verts share xy with top verts but
-        // sit at z=0.
-        const bottomBase = nextVertex;
+      if (granularity > 0) {
+        const ringXY = new Float64Array(ringVertexCount * 2);
         for (let v = 0; v < ringVertexCount; v++) {
-          fillPositions.push(projected[v][0], projected[v][1], 0);
+          ringXY[v * 2] = projected[v][0];
+          ringXY[v * 2 + 1] = projected[v][1];
+        }
+        const localTris = new Uint32Array(tris.length);
+        for (let t = 0; t < tris.length; t++) localTris[t] = tris[t] - begin;
+        const sub = subdivideTrianglesMercator(ringXY, localTris, granularity);
+        const subCount = sub.positions.length / 2;
+        for (let v = 0; v < subCount; v++) {
+          fillPositions.push(
+            sub.positions[v * 2],
+            sub.positions[v * 2 + 1],
+            elevation,
+          );
           fillTimes.push(ts, te);
           if (fillColors && featureColors) {
             const base = fi * 4;
-            // Side walls render slightly darker by reducing brightness 25%.
             fillColors.push(
-              Math.floor(featureColors[base] * 0.75),
-              Math.floor(featureColors[base + 1] * 0.75),
-              Math.floor(featureColors[base + 2] * 0.75),
+              featureColors[base],
+              featureColors[base + 1],
+              featureColors[base + 2],
               featureColors[base + 3],
             );
           }
           nextVertex++;
         }
+        for (let t = 0; t < sub.indices.length; t++) {
+          fillIndicesArr.push(topVertexBase + sub.indices[t]);
+        }
+      } else {
         for (let v = 0; v < ringVertexCount; v++) {
-          const next = (v + 1) % ringVertexCount;
-          const tA = topVertexBase + v;
-          const tB = topVertexBase + next;
-          const bA = bottomBase + v;
-          const bB = bottomBase + next;
-          fillIndicesArr.push(tA, bA, tB, tB, bA, bB);
+          fillPositions.push(projected[v][0], projected[v][1], elevation);
+          fillTimes.push(ts, te);
+          if (fillColors && featureColors) {
+            const base = fi * 4;
+            fillColors.push(
+              featureColors[base],
+              featureColors[base + 1],
+              featureColors[base + 2],
+              featureColors[base + 3],
+            );
+          }
+          nextVertex++;
+        }
+        for (let t = 0; t < tris.length; t++) {
+          fillIndicesArr.push(topVertexBase + (tris[t] - begin));
+        }
+      }
+
+      // ---- Side walls when extruded ----
+      if (extruded && elevation > 0) {
+        if (granularity > 0) {
+          // Self-contained wall band over the refined ring: duplicated top
+          // verts (fill colour) + bottom verts (darker), one quad per refined
+          // edge. Duplication keeps the band independent of the fill mesh's
+          // bisection points.
+          const ring = ringOutline();
+          const m = ring.length / 2;
+          const wallTopBase = nextVertex;
+          for (let v = 0; v < m; v++) {
+            fillPositions.push(ring[v * 2], ring[v * 2 + 1], elevation);
+            fillTimes.push(ts, te);
+            if (fillColors && featureColors) {
+              const base = fi * 4;
+              fillColors.push(
+                featureColors[base],
+                featureColors[base + 1],
+                featureColors[base + 2],
+                featureColors[base + 3],
+              );
+            }
+            nextVertex++;
+          }
+          const bottomBase = nextVertex;
+          for (let v = 0; v < m; v++) {
+            fillPositions.push(ring[v * 2], ring[v * 2 + 1], 0);
+            fillTimes.push(ts, te);
+            if (fillColors && featureColors) {
+              const base = fi * 4;
+              // Side walls render slightly darker by reducing brightness 25%.
+              fillColors.push(
+                Math.floor(featureColors[base] * 0.75),
+                Math.floor(featureColors[base + 1] * 0.75),
+                Math.floor(featureColors[base + 2] * 0.75),
+                featureColors[base + 3],
+              );
+            }
+            nextVertex++;
+          }
+          for (let v = 0; v < m; v++) {
+            const next = (v + 1) % m;
+            const tA = wallTopBase + v;
+            const tB = wallTopBase + next;
+            const bA = bottomBase + v;
+            const bB = bottomBase + next;
+            fillIndicesArr.push(tA, bA, tB, tB, bA, bB);
+          }
+        } else {
+          // Emit one quad per ring edge (top vert i, top vert i+1, bottom
+          // vert i, bottom vert i+1). Bottom verts share xy with top verts but
+          // sit at z=0.
+          const bottomBase = nextVertex;
+          for (let v = 0; v < ringVertexCount; v++) {
+            fillPositions.push(projected[v][0], projected[v][1], 0);
+            fillTimes.push(ts, te);
+            if (fillColors && featureColors) {
+              const base = fi * 4;
+              // Side walls render slightly darker by reducing brightness 25%.
+              fillColors.push(
+                Math.floor(featureColors[base] * 0.75),
+                Math.floor(featureColors[base + 1] * 0.75),
+                Math.floor(featureColors[base + 2] * 0.75),
+                featureColors[base + 3],
+              );
+            }
+            nextVertex++;
+          }
+          for (let v = 0; v < ringVertexCount; v++) {
+            const next = (v + 1) % ringVertexCount;
+            const tA = topVertexBase + v;
+            const tB = topVertexBase + next;
+            const bA = bottomBase + v;
+            const bB = bottomBase + next;
+            fillIndicesArr.push(tA, bA, tB, tB, bA, bB);
+          }
         }
       }
 
       // ---- Stroke: ring edges ----
       if (wantStroke) {
-        for (let v = 0; v < ringVertexCount; v++) {
-          const a = projected[v];
-          const b = projected[(v + 1) % ringVertexCount];
-          strokeSegments.push({ a, b, ts, te });
+        if (granularity > 0) {
+          const ring = ringOutline();
+          const m = ring.length / 2;
+          for (let v = 0; v < m; v++) {
+            const next = (v + 1) % m;
+            strokeSegments.push({
+              a: [ring[v * 2], ring[v * 2 + 1]],
+              b: [ring[next * 2], ring[next * 2 + 1]],
+              ts,
+              te,
+            });
+          }
+        } else {
+          for (let v = 0; v < ringVertexCount; v++) {
+            const a = projected[v];
+            const b = projected[(v + 1) % ringVertexCount];
+            strokeSegments.push({ a, b, ts, te });
+          }
         }
       }
     }
@@ -556,6 +902,7 @@ export class STTPolygonLayer extends STTBaseLayer {
       indexCount: indicesArr.length,
       timeOffset: f.timeOffset,
       use32BitIndices: use32,
+      subdivisionGranularity: granularity,
       extraBuffers: extras.length > 0 ? extras : undefined,
       colorBuffer,
       stroke,
@@ -569,15 +916,45 @@ export class STTPolygonLayer extends STTBaseLayer {
     cache: TileGpuCache,
     ctx: DrawContext,
   ): void {
-    const h = this.handles;
-    if (!h) return;
     const c = cache as PolygonGpuCache;
+    // Hand-built test contexts may omit the frame — treat them as legacy.
+    const frame = ctx.frame ?? this.fallbackFrame;
+    const preludeProjected = frame.shader.prelude !== '';
+    // VAO recordings capture attribute locations of the variant's linked
+    // program; a variant flip (v5 mercator ⇄ globe transition) may relocate
+    // them, so drop the recordings and re-capture under the new programs.
+    if (c.vaoVariant !== frame.shader.variantName) {
+      if (c.vao) this.vaoSupport.delete(c.vao);
+      if (c.strokeVao) this.vaoSupport.delete(c.strokeVao);
+      c.vao = undefined;
+      c.strokeVao = undefined;
+      c.vaoVariant = frame.shader.variantName;
+    }
     const { fadeIn, fadeOut } = this.resolveFadeDurations();
+    // Legacy consumes `elevation * uAltitudeScale` as mercator-z; the
+    // prelude's projectTileFor3D wants meters — same uniform, mid-latitude
+    // conversion factor (see MERCATOR_Z_TO_METERS_MIDLAT / D10).
+    const altitudeScale = preludeProjected
+      ? this.polyOpts.altitudeScale * MERCATOR_Z_TO_METERS_MIDLAT
+      : this.polyOpts.altitudeScale;
 
     if (this.polyOpts.filled) {
+      const h = this.getOrCreateProgram(
+        gl,
+        'fill',
+        frame,
+        this.fillProgramFactory,
+      );
       gl.useProgram(h.program);
-      gl.uniformMatrix4fv(h.uMatrix, false, ctx.matrix);
-      gl.uniform1f(h.uAltitudeScale, this.polyOpts.altitudeScale);
+      if (preludeProjected) {
+        // Prelude-built variant: projection rides the injected u_projection_*
+        // uniforms (no uMatrix in this program).
+        this.setPreludeProjectionUniforms(gl, h.program, frame);
+        gl.uniform1f(h.uExtruded, this.polyOpts.extruded ? 1 : 0);
+      } else {
+        gl.uniformMatrix4fv(h.uMatrix, false, ctx.matrix);
+      }
+      gl.uniform1f(h.uAltitudeScale, altitudeScale);
       gl.uniform4fv(h.uColor, toRgba01(this.polyOpts.color));
       gl.uniform1f(h.uWindowStart, ctx.windowStart);
       gl.uniform1f(h.uWindowEnd, ctx.windowEnd);
@@ -607,16 +984,20 @@ export class STTPolygonLayer extends STTBaseLayer {
       gl.drawElements(gl.TRIANGLES, c.indexCount, indexType, 0);
     }
 
-    if (
-      this.polyOpts.stroked &&
-      c.stroke &&
-      this.strokeHandles &&
-      this.instSupport.enabled
-    ) {
-      const sh = this.strokeHandles;
+    if (this.polyOpts.stroked && c.stroke && this.instSupport.enabled) {
+      const sh = this.getOrCreateProgram(
+        gl,
+        'stroke',
+        frame,
+        this.strokeProgramFactory,
+      );
       const s = c.stroke;
       gl.useProgram(sh.program);
-      gl.uniformMatrix4fv(sh.uMatrix, false, ctx.matrix);
+      if (preludeProjected) {
+        this.setPreludeProjectionUniforms(gl, sh.program, frame);
+      } else {
+        gl.uniformMatrix4fv(sh.uMatrix, false, ctx.matrix);
+      }
       gl.uniform2f(sh.uViewport, gl.drawingBufferWidth, gl.drawingBufferHeight);
       gl.uniform1f(sh.uWidth, this.polyOpts.lineWidth);
       gl.uniform4fv(sh.uColor, toRgba01(this.polyOpts.lineColor));

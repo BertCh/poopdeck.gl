@@ -14,6 +14,22 @@
  * The abstract class deliberately stays free of any geometry-specific shader
  * code so each subclass can ship its own minimal shader without forking the
  * tile pipeline.
+ *
+ * Host-version dispatch lives in `lib/host-adapter.ts`: `render()` normalizes
+ * whichever signature the basemap uses (maplibre ≤v4 positional matrix,
+ * v4.6+ camera options, v5/v6 args object, mapbox v3) into a scratch
+ * {@link HostFrame} via {@link STTBaseLayer.beginFrame} before any drawing.
+ * Lifecycle hardening: {@link STTBaseLayer.attach} installs a styledata guard
+ * that survives style diff-fallback rebuilds, and canvas context-loss
+ * listeners invalidate every GPU cache so a restored context rebuilds lazily.
+ *
+ * Tileset ownership comes in two modes (D6a):
+ *   - **Per-layer (default, compat).** `{ url }` — the layer owns a private
+ *     archive + tileset, exactly the historical behaviour.
+ *   - **Shared.** `{ source: SharedTilesetSource }` — N layers over one .stt
+ *     register as consumers of ONE archive + ONE tileset (`lib/streaming-source.ts`),
+ *     receiving the resident set replace-all and sharing a single governor
+ *     `BufferSource`. `onTilesetReady`/`onBufferChange` fire in both modes.
  */
 
 import type {
@@ -47,6 +63,14 @@ import {
   projectPositions,
   quantizePositionsToUint16,
 } from './lib/projection.js';
+import {
+  createHostFrame,
+  normalizeRenderArgs,
+  DEFAULT_FOV_RADIANS,
+  type HostFrame,
+} from './lib/host-adapter.js';
+import type { SharedTilesetSource } from './lib/streaming-source.js';
+import { granularityForZoom } from './lib/globe.js';
 
 /** RGBA tuple in the 0–1 range used by all STT shader uniforms. */
 export type RGBA = [number, number, number, number];
@@ -84,8 +108,19 @@ export function toRgba01(
 export interface STTBaseLayerOptions {
   /** Unique layer id passed to MapLibre. */
   id: string;
-  /** URL of the .stt archive. */
-  url: string;
+  /**
+   * URL of the .stt archive (per-layer ownership: the layer builds a private
+   * archive + tileset). Exactly one of `url` / `source` must be given.
+   */
+  url?: string;
+  /**
+   * Shared tileset source (D6a): the layer registers as a consumer of ONE
+   * archive + ONE tileset serving every layer constructed over the same
+   * source. The source's lifetime is the caller's — the layer never
+   * finalizes it (dispose the source after removing its layers). Exactly one
+   * of `url` / `source` must be given.
+   */
+  source?: SharedTilesetSource;
   /** Current time in Unix milliseconds. */
   currentTime: number;
   /**
@@ -120,25 +155,30 @@ export interface STTBaseLayerOptions {
   softTimeWindow?: boolean;
   /**
    * Override the maximum concurrent tile requests against the archive.
-   * Defaults to the tileset's own default (24).
+   * Defaults to the tileset's own default (24). Per-layer (`url`) mode only —
+   * a shared `source` carries its own loading knobs.
    */
   maxRequests?: number;
   /**
    * Override prefetch behaviour. Defaults follow the SpatiotemporalTileset
-   * defaults (30s lookahead, 4 steps).
+   * defaults (30s lookahead, 4 steps). Per-layer (`url`) mode only.
    */
   enablePrefetch?: boolean;
   prefetchAhead?: number;
   prefetchSteps?: number;
   /**
-   * Called once per archive init with the live tileset, after metadata has
-   * resolved. The tileset implements the BufferSource readiness contract
-   * (runway / cost / ETA queries), which is what a PlaybackGovernor consumes.
+   * Called once per init with the live tileset, after metadata has resolved
+   * (in shared-source mode: the SHARED tileset, so N layers report the same
+   * instance — register its BufferSource with a governor once per source, not
+   * once per layer). The tileset implements the BufferSource readiness
+   * contract (runway / cost / ETA queries), which is what a PlaybackGovernor
+   * consumes.
    */
   onTilesetReady?: (tileset: SpatiotemporalTileset) => void;
   /**
    * Buffered-runway threshold events from the tileset's coverage index,
-   * forwarded as-is. Route them into a PlaybackGovernor or a buffered-bar UI.
+   * forwarded as-is (both ownership modes). Route them into a
+   * PlaybackGovernor or a buffered-bar UI.
    */
   onBufferChange?: (runway: BufferedRunway) => void;
 }
@@ -194,8 +234,18 @@ export interface TileGpuCache {
 
 /** Context passed to drawTile() with everything the subclass needs. */
 export interface DrawContext {
-  /** MapLibre's projection matrix (clip-space transform from mercator). */
+  /**
+   * Legacy MVP (mercator-0..1 → clip). On v5+ hosts this mirrors
+   * `defaultProjectionData.mainMatrix` so matrix-based shaders keep working
+   * off-globe; prelude-based shaders should read `frame` instead.
+   */
   matrix: Float32Array;
+  /**
+   * The normalized host frame for this pass (projection variant, injectable
+   * prelude, camera params, globe flag). Always set by the base render/pick
+   * paths; optional only so hand-built test contexts stay valid.
+   */
+  frame?: HostFrame;
   /** Window bounds in *relative* time, already offset for this tile. */
   windowStart: number;
   windowEnd: number;
@@ -252,6 +302,25 @@ export function cssToDevicePixel(
 
 const tileKey = (id: TileId) => `${id.z}/${id.x}/${id.y}/${id.t}`;
 
+/**
+ * `map.style`, unguarded in maplibre itself: `map.getLayer` is
+ * `this.style.getLayer(id)` with no null check, and the style is legitimately
+ * absent on a Map constructed without the optional `style` option and after
+ * `map.remove()` (`delete this.style`). Every getLayer/moveLayer call site
+ * here must probe this first.
+ */
+const styleOf = (map: MaplibreMap): { _loaded?: boolean } | undefined =>
+  (map as unknown as { style?: { _loaded?: boolean } }).style;
+
+/** Cached locations of the v5 prelude's projection uniforms, per program. */
+interface ProjectionUniformLocs {
+  matrix: WebGLUniformLocation | null;
+  tileMercatorCoords: WebGLUniformLocation | null;
+  clippingPlane: WebGLUniformLocation | null;
+  transition: WebGLUniformLocation | null;
+  fallbackMatrix: WebGLUniformLocation | null;
+}
+
 export abstract class STTBaseLayer implements CustomLayerInterface {
   readonly id: string;
   readonly type = 'custom' as const;
@@ -259,7 +328,12 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
 
   protected map?: MaplibreMap;
   protected gl?: WebGLRenderingContext | WebGL2RenderingContext;
-  protected archive: STTArchive;
+  /** Private archive (per-layer ownership); undefined in shared-source mode. */
+  protected archive?: STTArchive;
+  /** Shared tileset source (D6a); undefined in per-layer mode. */
+  protected readonly source?: SharedTilesetSource;
+  /** Unregister handle for the shared-source consumer; set while registered. */
+  private unregisterConsumer?: () => void;
   protected metadata?: ArchiveMetadata;
   protected tileset?: SpatiotemporalTileset;
   protected loadedTiles = new Map<string, Tile>();
@@ -324,12 +398,68 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
   protected unitQuadBuffer?: WebGLBuffer;
 
   /**
-   * The projection matrix captured from the most recent `render()`. Picking
-   * needs it (MapLibre only passes the matrix to `render`, not to our
-   * user-initiated `pick()`), and a pick necessarily follows a frame. `pick()`
-   * returns null before the first render.
+   * The projection matrix captured from the most recent `render()` (an alias
+   * of {@link hostFrame}'s scratch matrix). Picking needs it (the host only
+   * passes projection state to `render`, not to our user-initiated `pick()`),
+   * and a pick necessarily follows a frame. `pick()` returns null before the
+   * first render.
    */
   protected lastMatrix?: Float32Array;
+
+  /**
+   * Scratch {@link HostFrame} reused every frame — {@link beginFrame} fills
+   * it in place from whatever render signature the host used, so the hot
+   * path allocates nothing per frame. Contents are only valid for the
+   * current/most-recent pass.
+   */
+  private readonly hostFrame: HostFrame = createHostFrame();
+
+  /**
+   * Camera params captured from the latest frame (v4.6+/v5+ hosts only —
+   * undefined on plain v3/v4 and mapbox). Read via {@link getCameraParams},
+   * which supplies the 36.87° default fov when the host stayed silent.
+   */
+  protected lastFov?: number;
+  protected lastNearZ?: number;
+  protected lastFarZ?: number;
+
+  /**
+   * Program(+locations) cache keyed `cacheKey + '::' + shader variantName`.
+   * A v5 host recompiles our shaders per projection variant (mercator /
+   * globe / transition); a legacy host only ever sees the 'legacy' variant.
+   * Invalidated wholesale on context loss and dispose.
+   */
+  private readonly programCache = new Map<string, { program: WebGLProgram }>();
+  /** Lazily-resolved prelude projection uniform locations, per program. */
+  private projectionUniformLocs = new WeakMap<
+    WebGLProgram,
+    ProjectionUniformLocs
+  >();
+
+  /** Set while the host canvas's WebGL context is lost; render/pick bail. */
+  protected contextLost = false;
+  /** Canvas we registered context-loss listeners on (removed in onRemove). */
+  private lossCanvas?: HTMLCanvasElement;
+
+  /**
+   * Init-generation token: bumped by every init start AND by onRemove. An
+   * async `initTileset`/`initSharedSource` continuation compares its captured
+   * value after each await and aborts on mismatch — the `!this.map` guard
+   * alone cannot distinguish "removed" from "removed then re-added" (a
+   * styledata re-add restores `map` before the stale await resolves), which
+   * previously double-fired `onTilesetReady` and orphaned a live tileset.
+   */
+  private initGeneration = 0;
+
+  /** Map attach() bound to; undefined when unattached (plain addLayer use). */
+  private attachedMap?: MaplibreMap;
+  private attachBeforeId?: string;
+  /**
+   * Armed by attach(), disarmed by detach(): only while armed may the
+   * styledata guard re-add a layer that a style diff-fallback rebuild
+   * destroyed.
+   */
+  private autoReadd = false;
 
   // ── id-buffer picking scaffold (lazily allocated on first pick) ──────────
   /** Offscreen RGBA8 framebuffer the id pass renders into. */
@@ -344,6 +474,18 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
   constructor(opts: STTBaseLayerOptions) {
     this.id = opts.id;
     this.opts = { autoRepaint: true, ...opts };
+    if (opts.source && opts.url) {
+      throw new Error(
+        `[${opts.id}] pass either url (per-layer archive) or source (shared tileset), not both`,
+      );
+    }
+    if (opts.source) {
+      this.source = opts.source;
+      return;
+    }
+    if (!opts.url) {
+      throw new Error(`[${opts.id}] one of url or source is required`);
+    }
     // `maxRequests` is the single concurrency knob: thread it into the
     // archive's range coalescer so it bounds actual in-flight fetches.
     // Undefined falls through to the archive's default (24).
@@ -373,8 +515,16 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
   }
 
   /** Promise that resolves once the archive's metadata has been read. */
-  ready(): Promise<ArchiveMetadata> {
-    return this.archive.getMetadata();
+  async ready(): Promise<ArchiveMetadata> {
+    if (this.archive) return this.archive.getMetadata();
+    await this.source!.load();
+    const metadata = this.source!.getMetadata();
+    if (!metadata) {
+      // load() no-ops after the source was disposed — surface that instead of
+      // resolving with nothing.
+      throw new Error(`[${this.id}] shared source disposed before metadata`);
+    }
+    return metadata;
   }
 
   /**
@@ -391,16 +541,158 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
   // MapLibre lifecycle
   // ------------------------------------------------------------------------
 
+  /**
+   * Add this layer to `map` with an auto re-add guard. A successful
+   * `setStyle` diff PRESERVES custom layers, but the diff-fallback rebuild
+   * silently destroys them (WITHOUT calling `onRemove` — `Style._remove`
+   * skips custom layers) — the installed `styledata` guard re-adds the layer
+   * whenever a rebuild dropped it. Idempotent: re-attaching updates AND
+   * applies `beforeId` (an already-present layer is repositioned via
+   * `moveLayer`). Remove via {@link detach}; note a plain
+   * `map.removeLayer(id)` on an *attached* layer is indistinguishable
+   * from a rebuild drop and will be resurrected by the guard.
+   *
+   * Plain `map.addLayer(layer)` keeps working and gets NO auto re-add.
+   */
+  attach(map: MaplibreMap, opts?: { beforeId?: string }): void {
+    if (this.attachedMap && this.attachedMap !== map) this.detach();
+    const wasAttached = this.attachedMap === map;
+    const prevBeforeId = this.attachBeforeId;
+    this.attachBeforeId = opts?.beforeId;
+    if (!wasAttached) {
+      this.attachedMap = map;
+      map.on('styledata', this.handleStyledata);
+    }
+    this.autoReadd = true;
+    this.ensureAttachedLayer();
+    // Re-attach with a different anchor: ensureAttachedLayer no-ops when the
+    // layer is already present, so apply the reposition explicitly
+    // (`beforeId: undefined` moves to top, matching addLayer's semantics).
+    if (
+      wasAttached &&
+      this.attachBeforeId !== prevBeforeId &&
+      styleOf(map) &&
+      map.getLayer(this.id)
+    ) {
+      try {
+        map.moveLayer(this.id, this.attachBeforeId);
+      } catch {
+        // Anchor missing from the current style — keep the current position;
+        // a rebuild re-add applies the stored beforeId.
+      }
+    }
+  }
+
+  /**
+   * Undo {@link attach}: disarm the styledata guard (so nothing resurrects
+   * the layer), drop the listener, and remove the layer from the map if
+   * present. Safe to call repeatedly, when never attached, or after
+   * `map.remove()` (style-less map — nothing left to remove from).
+   */
+  detach(): void {
+    const map = this.attachedMap;
+    this.autoReadd = false;
+    if (!map) return;
+    map.off('styledata', this.handleStyledata);
+    this.attachedMap = undefined;
+    this.attachBeforeId = undefined;
+    if (!styleOf(map)) return; // no style ⇒ no layer registry to clean.
+    if (map.getLayer(this.id)) map.removeLayer(this.id);
+  }
+
+  /** styledata guard body: re-add if (and only if) the layer went missing. */
+  private readonly handleStyledata = (): void => {
+    this.ensureAttachedLayer();
+  };
+
+  private ensureAttachedLayer(): void {
+    const map = this.attachedMap;
+    if (!map || !this.autoReadd) return;
+    // A Map constructed without the `style` option has no style object at
+    // all — defer to the styledata that follows the app's eventual setStyle
+    // (map.getLayer would throw on the missing style).
+    const style = styleOf(map);
+    if (!style) return;
+    if (map.getLayer(this.id)) return; // still present — no re-add storms.
+    // During a diff-fallback rebuild the new style may not be ready to accept
+    // layers yet; skip and let the next styledata event retry.
+    if (style._loaded === false) return;
+    try {
+      map.addLayer(this, this.attachBeforeId);
+    } catch {
+      // Style raced us ('Style is not done loading') — retry on styledata.
+    }
+  }
+
   onAdd(
     map: MaplibreMap,
     gl: WebGLRenderingContext | WebGL2RenderingContext,
   ): void {
+    // A diff-fallback rebuild on hosts whose `Style._remove` skips
+    // custom-layer onRemove (source-verified on maplibre v4.7) re-adds a
+    // still-initialized layer on the same live context: tileset, programs
+    // and tile caches all remain valid, so short-circuit — re-running init
+    // here would orphan the live tileset (never finalized, callbacks still
+    // firing), re-fire onTilesetReady, and leak the subclass GPU handles a
+    // second onContextReady overwrites.
+    if (this.map === map && this.gl === gl) return;
+    // Initialized against a different map/context: tear down first.
+    if (this.map) this.onRemove();
     this.map = map;
     this.gl = gl;
-    // 32-bit element indices are required for tiles with > 65k vertices after
-    // line/polygon expansion. WebGL2 supports them natively; on WebGL1 we
-    // probe the extension. Subclasses that index >65k vertices must check
-    // `this.supports32BitIndices` and fall back to multiple draws if false.
+    this.contextLost = false;
+    this.initIndexSupport(gl);
+    this.initVaoSupport(gl);
+    this.initInstanceSupport(gl);
+    this.onContextReady(gl);
+    // The host explicitly cannot restore custom layers across a WebGL
+    // context loss — we own the invalidation ourselves (D12). Optional
+    // chaining keeps bare-bones test mocks without a canvas working.
+    const canvas = (
+      map as unknown as { getCanvas?: () => HTMLCanvasElement }
+    ).getCanvas?.();
+    if (canvas) {
+      this.lossCanvas = canvas;
+      canvas.addEventListener('webglcontextlost', this.handleContextLost);
+      canvas.addEventListener(
+        'webglcontextrestored',
+        this.handleContextRestored,
+      );
+    }
+    // `map.remove()` (setStyle(null) → Style._remove) never calls
+    // custom-layer onRemove either — hook the map's terminal 'remove' event
+    // so an app tearing down with only map.remove() (common SPA unmount)
+    // still finalizes the tileset/archive and drops our listeners. Optional
+    // call keeps bare-bones test mocks without an emitter working.
+    (map as unknown as { on?: (type: string, fn: () => void) => void }).on?.(
+      'remove',
+      this.handleMapRemove,
+    );
+    if (this.source) void this.initSharedSource();
+    else void this.initTileset();
+  }
+
+  /**
+   * Full teardown off `map.remove()`. The GL context is force-lost by the
+   * time (or right after) this fires, so any deletes onRemove issues are
+   * silently ignored — reference release is what matters. Also disarms the
+   * attach guard so nothing re-adds onto the dead map.
+   */
+  private readonly handleMapRemove = (): void => {
+    this.detach();
+    if (this.map) this.onRemove();
+  };
+
+  /**
+   * 32-bit element indices are required for tiles with > 65k vertices after
+   * line/polygon expansion. WebGL2 supports them natively; on WebGL1 we
+   * probe the extension. Subclasses that index >65k vertices must check
+   * `this.supports32BitIndices` and fall back to multiple draws if false.
+   * Re-run on context restore (extensions don't survive a restore).
+   */
+  private initIndexSupport(
+    gl: WebGLRenderingContext | WebGL2RenderingContext,
+  ): void {
     if (
       typeof WebGL2RenderingContext !== 'undefined' &&
       gl instanceof WebGL2RenderingContext
@@ -409,11 +701,35 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
     } else {
       this.supports32BitIndices = !!gl.getExtension('OES_element_index_uint');
     }
+  }
+
+  /**
+   * Context-loss bookkeeping. On loss, drop every GPU reference WITHOUT
+   * touching GL (all calls are silently ignored on a lost context, so
+   * deletes would be no-ops at best); on restore, re-probe capabilities and
+   * rebuild programs, letting tile buffers / VAOs / the pick FBO rebuild
+   * lazily on the next frame.
+   */
+  private readonly handleContextLost = (): void => {
+    this.contextLost = true;
+    this.releaseGpuResources(undefined);
+    // Null the subclass's handles too — any gl.delete* its hook issues is
+    // ignored on the lost context, so this is a pure reference release.
+    if (this.gl) this.onContextLost(this.gl);
+  };
+
+  private readonly handleContextRestored = (): void => {
+    const gl = this.gl;
+    this.contextLost = false;
+    if (!gl || !this.map) return;
+    // Extension objects and caps don't survive a restore — re-probe, then
+    // rebuild the subclass's programs. Everything else rebuilds lazily.
+    this.initIndexSupport(gl);
     this.initVaoSupport(gl);
     this.initInstanceSupport(gl);
     this.onContextReady(gl);
-    void this.initTileset();
-  }
+    this.map.triggerRepaint();
+  };
 
   /**
    * Resolve VAO entry points. WebGL2 has them in core under the unprefixed
@@ -527,35 +843,75 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
   }
 
   onRemove(): void {
+    // Invalidate any in-flight initTileset/initSharedSource continuation
+    // (see initGeneration) and drop the map-remove hook.
+    this.initGeneration++;
+    (
+      this.map as unknown as
+        | { off?: (type: string, fn: () => void) => void }
+        | undefined
+    )?.off?.('remove', this.handleMapRemove);
+    if (this.lossCanvas) {
+      this.lossCanvas.removeEventListener(
+        'webglcontextlost',
+        this.handleContextLost,
+      );
+      this.lossCanvas.removeEventListener(
+        'webglcontextrestored',
+        this.handleContextRestored,
+      );
+      this.lossCanvas = undefined;
+    }
     const gl = this.gl;
+    // On a lost context every delete would be ignored — just drop references.
+    this.releaseGpuResources(this.contextLost ? undefined : gl);
+    if (gl) this.onContextLost(gl);
+    this.contextLost = false;
+    this.loadedTiles.clear();
+    // Shared-source mode: the tileset/archive belong to the source (and to
+    // its other consumers) — just stop receiving fan-out. A styledata re-add
+    // re-registers in onAdd.
+    this.unregisterConsumer?.();
+    this.unregisterConsumer = undefined;
+    if (!this.source) {
+      this.tileset?.finalize();
+      this.archive?.finalize();
+    }
+    // A finalized tileset must not serve a styledata re-add's first frames —
+    // onAdd's initTileset builds a fresh one (the archive itself is reusable
+    // after finalize: metadata stays cached, the decoder rebuilds lazily).
+    this.tileset = undefined;
+    // Clear the map handle LAST. An in-flight `initTileset` /
+    // `initSharedSource` (awaiting metadata) is already invalidated by the
+    // initGeneration bump above; the `!this.map` check is the belt to that
+    // suspenders for continuations with no later re-add.
+    this.map = undefined;
+  }
+
+  /**
+   * Release every base-owned GPU handle. With a live `gl` the resources are
+   * deleted; with none (context lost) references are simply dropped so the
+   * next frame / restore rebuilds them lazily. Subclass handles are released
+   * separately via their `onContextLost` hook.
+   */
+  private releaseGpuResources(
+    gl?: WebGLRenderingContext | WebGL2RenderingContext,
+  ): void {
     if (gl) {
       for (const cache of this.tileGpuCache.values()) {
         if (cache) this.deleteCacheBuffers(gl, cache);
       }
-      if (this.unitQuadBuffer) {
-        gl.deleteBuffer(this.unitQuadBuffer);
-        this.unitQuadBuffer = undefined;
-      }
-      if (this.pickFbo) {
-        gl.deleteFramebuffer(this.pickFbo);
-        this.pickFbo = undefined;
-      }
-      if (this.pickTexture) {
-        gl.deleteTexture(this.pickTexture);
-        this.pickTexture = undefined;
-      }
-      this.pickWidth = 0;
-      this.pickHeight = 0;
-      this.onContextLost(gl);
+      if (this.unitQuadBuffer) gl.deleteBuffer(this.unitQuadBuffer);
+      if (this.pickFbo) gl.deleteFramebuffer(this.pickFbo);
+      if (this.pickTexture) gl.deleteTexture(this.pickTexture);
     }
     this.tileGpuCache.clear();
-    this.loadedTiles.clear();
-    this.tileset?.finalize();
-    this.archive.finalize();
-    // Clear the map handle LAST so an in-flight `initTileset` (awaiting
-    // archive.getMetadata) short-circuits at its post-await `if (!this.map)`
-    // guard instead of building a tileset on a removed layer.
-    this.map = undefined;
+    this.unitQuadBuffer = undefined;
+    this.pickFbo = undefined;
+    this.pickTexture = undefined;
+    this.pickWidth = 0;
+    this.pickHeight = 0;
+    this.invalidateProgramCache(gl);
   }
 
   private deleteCacheBuffers(
@@ -572,39 +928,62 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
     if (cache.strokeVao) this.vaoSupport.delete(cache.strokeVao);
   }
 
-  // This positional-matrix signature is v3/v4-only: MapLibre v5 REPLACED it
-  // with a single CustomRenderMethodInput-style args object (and changed the
-  // mercator matrix semantics — maplibre/maplibre-gl-js#3854), so a v5 host
-  // would pass the args object where v3/v4 pass the matrix. The peerDep is
-  // pinned to `^3 || ^4` accordingly. A v5 port means accepting the args
-  // object, injecting `args.shaderData.vertexShaderPrelude` into each vertex
-  // shader and projecting via `projectTile()` instead of multiplying
-  // `uMatrix` by mercator-unit-square positions (that prelude path is also
-  // what unlocks globe). Until then, v5 users should stay on v4 for STT.
+  /**
+   * FIRST step of every render pass: normalize the host's arguments (legacy
+   * positional matrix vs v5/v6 args object — see `lib/host-adapter.ts`) into
+   * the per-instance scratch {@link HostFrame}, stash the matrix + camera
+   * params for later `pick()` calls, and advance the tileset viewport.
+   * Returns null when there is nothing to draw (no tileset yet, layer
+   * removed, GL context lost). Subclasses that override `render()` wholesale
+   * (heatmap) MUST route through this so v5+ hosts and picking keep working.
+   */
+  protected beginFrame(
+    matrixOrArgs: unknown,
+    options?: unknown,
+  ): HostFrame | null {
+    if (!this.tileset || !this.map || this.contextLost) return null;
+    const frame = normalizeRenderArgs(matrixOrArgs, options, this.hostFrame);
+    // Stash for user-initiated picking, which has no host frame of its own.
+    this.lastMatrix = frame.matrix;
+    this.lastFov = frame.fov;
+    this.lastNearZ = frame.nearZ;
+    this.lastFarZ = frame.farZ;
+    const viewport = {
+      bounds: toBoundsArray(this.map.getBounds()),
+      zoom: Math.floor(this.map.getZoom()),
+      time: this.opts.currentTime,
+      timeWindow: this.opts.timeWindow,
+    };
+    // Shared mode routes through the source so its resident-set diff runs
+    // and N sibling layers stay cheap: the source is left UNARMED (no
+    // beginFrame/frameId — every update drives) because the core tileset
+    // short-circuits identical-param selections via lastSelectKey AND the
+    // source gates its getVisibleTiles/resident-diff walk on the tileset's
+    // frame number, so redundant sibling updates allocate nothing; hosts
+    // wanting strict once-per-frame driving may call `source.beginFrame()`
+    // from their own frame hook.
+    if (this.source) this.source.update(viewport);
+    else this.tileset.update(viewport);
+    return frame;
+  }
+
+  // Host signature dispatch (D2): maplibre ≤v4 calls `render(gl, matrix)`
+  // (v4.6+ appends a camera-options arg) and mapbox v3 calls
+  // `render(gl, matrix, ...globe positional params)` — both legacy; maplibre
+  // v5 REPLACED the positional matrix with a single args object carrying
+  // `defaultProjectionData` + `shaderData` (maplibre/maplibre-gl-js#3854),
+  // and v6 adds `args.getProjectionData`. `beginFrame` duck-types whichever
+  // shape arrives, so one layer instance works on every host.
   render(
     gl: WebGLRenderingContext | WebGL2RenderingContext,
-    matrix: Iterable<number>,
+    matrixOrArgs?: unknown,
+    options?: unknown,
   ): void {
-    if (!this.tileset || !this.map) return;
+    const frame = this.beginFrame(matrixOrArgs, options);
+    if (!frame) return;
 
-    const map = this.map;
-    const m =
-      matrix instanceof Float32Array
-        ? matrix
-        : new Float32Array(Array.from(matrix));
-    // Stash for user-initiated picking, which has no matrix of its own.
-    this.lastMatrix = m;
-
-    const bounds = map.getBounds();
-    const zoom = Math.floor(map.getZoom());
+    const zoom = Math.floor(this.map!.getZoom());
     const currentTime = this.opts.currentTime;
-
-    this.tileset.update({
-      bounds: toBoundsArray(bounds),
-      zoom,
-      time: currentTime,
-      timeWindow: this.opts.timeWindow,
-    });
 
     // Configure shared GL state. Subclasses may override per-draw if needed.
     this.applySharedGlState(gl);
@@ -615,7 +994,8 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
         const cache = this.ensureTileGpuCache(gl, tile, layer);
         if (!cache) continue;
         const ctx: DrawContext = {
-          matrix: m,
+          matrix: frame.matrix,
+          frame,
           currentTime,
           zoom,
           windowStart:
@@ -953,6 +1333,127 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
     return program;
   }
 
+  /**
+   * Fetch (or build via `factory`) the program handles for `cacheKey` under
+   * the frame's shader variant. The factory receives the host's
+   * `{prelude, define}` to prepend to its vertex source (empty strings on
+   * legacy frames — keep the `uMatrix` shader there) and returns the linked
+   * program plus whatever attribute/uniform locations the subclass needs.
+   * Cached per `cacheKey::variantName`, so a v5 globe transition (variant
+   * flip) relinks once and then reuses; invalidated wholesale on context
+   * loss and dispose.
+   */
+  protected getOrCreateProgram<H extends { program: WebGLProgram }>(
+    gl: WebGLRenderingContext | WebGL2RenderingContext,
+    cacheKey: string,
+    frame: HostFrame,
+    factory: (
+      gl: WebGLRenderingContext | WebGL2RenderingContext,
+      shader: { prelude: string; define: string },
+    ) => H,
+  ): H {
+    const key = `${cacheKey}::${frame.shader.variantName}`;
+    const cached = this.programCache.get(key);
+    if (cached) return cached as H;
+    const handles = factory(gl, frame.shader);
+    this.programCache.set(key, handles);
+    return handles;
+  }
+
+  /**
+   * Drop every cached program. With `gl` (dispose path) the programs are
+   * also deleted; without it (context loss — GL frees nothing on a dead
+   * context) the references are simply released so the next frame relinks
+   * lazily.
+   */
+  protected invalidateProgramCache(
+    gl?: WebGLRenderingContext | WebGL2RenderingContext,
+  ): void {
+    if (gl) {
+      for (const h of this.programCache.values()) gl.deleteProgram(h.program);
+    }
+    this.programCache.clear();
+    this.projectionUniformLocs = new WeakMap();
+  }
+
+  /**
+   * Set the injected prelude's projection uniforms (`u_projection_matrix`,
+   * `u_projection_tile_mercator_coords`, `u_projection_clipping_plane`,
+   * `u_projection_transition`, `u_projection_fallback_matrix`) from the
+   * frame's v5 projectionData. Call after `useProgram` on a program whose
+   * vertex source had the frame's prelude prepended. No-op on legacy frames
+   * (their shaders project via `uMatrix` instead). Locations are resolved
+   * once per program and cached.
+   */
+  protected setPreludeProjectionUniforms(
+    gl: WebGLRenderingContext | WebGL2RenderingContext,
+    program: WebGLProgram,
+    frame: HostFrame,
+  ): void {
+    const pd = frame.projectionData;
+    if (!pd) return;
+    let locs = this.projectionUniformLocs.get(program);
+    if (!locs) {
+      locs = {
+        matrix: gl.getUniformLocation(program, 'u_projection_matrix'),
+        tileMercatorCoords: gl.getUniformLocation(
+          program,
+          'u_projection_tile_mercator_coords',
+        ),
+        clippingPlane: gl.getUniformLocation(
+          program,
+          'u_projection_clipping_plane',
+        ),
+        transition: gl.getUniformLocation(program, 'u_projection_transition'),
+        fallbackMatrix: gl.getUniformLocation(
+          program,
+          'u_projection_fallback_matrix',
+        ),
+      };
+      this.projectionUniformLocs.set(program, locs);
+    }
+    gl.uniformMatrix4fv(locs.matrix, false, pd.mainMatrix);
+    gl.uniform4fv(locs.tileMercatorCoords, pd.tileMercatorCoords);
+    gl.uniform4fv(locs.clippingPlane, pd.clippingPlane);
+    gl.uniform1f(locs.transition, pd.projectionTransition);
+    gl.uniformMatrix4fv(locs.fallbackMatrix, false, pd.fallbackMatrix);
+  }
+
+  /**
+   * Full-mercator-square subdivision granularity for a tile zoom on globe
+   * frames: the host's per-tile granularity (duck-typed from
+   * `map.style.projection.subdivisionGranularity`; maplibre's default
+   * halving curve when the host object is absent/malformed) × 2^z per the
+   * globe-kit convention — see `lib/globe.ts` module header. Geometry layers
+   * (line/trips/polygon) subdivide tile geometry to this at build time so
+   * long edges don't get horizon-clipped on globe.
+   */
+  protected tileSubdivisionGranularity(z: number): number {
+    const like = (
+      this.map as unknown as
+        | { style?: { projection?: { subdivisionGranularity?: unknown } } }
+        | undefined
+    )?.style?.projection?.subdivisionGranularity;
+    return granularityForZoom(like, z) * 2 ** z;
+  }
+
+  /**
+   * Camera parameters for CPU-side pick / billboard math: the values
+   * captured from the latest host frame when available (v4.6+/v5+), else
+   * MapLibre's default 36.87° fov with unknown clip planes.
+   */
+  protected getCameraParams(): {
+    fovRadians: number;
+    nearZ?: number;
+    farZ?: number;
+  } {
+    return {
+      fovRadians: this.lastFov ?? DEFAULT_FOV_RADIANS,
+      nearZ: this.lastNearZ,
+      farZ: this.lastFarZ,
+    };
+  }
+
   // ------------------------------------------------------------------------
   // Picking (id-buffer / FBO)
   // ------------------------------------------------------------------------
@@ -1136,7 +1637,7 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
    */
   pick(cssX: number, cssY: number): SttPickResult | null {
     const gl = this.gl;
-    if (!gl || !this.map || !this.tileset) return null;
+    if (!gl || !this.map || !this.tileset || this.contextLost) return null;
     if (!this.supportsPicking() || !this.drawPickTile) return null;
     const matrix = this.lastMatrix;
     if (!matrix) return null; // no frame rendered yet.
@@ -1169,6 +1670,9 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
     for (const e of provenance) {
       const ctx: DrawContext = {
         matrix,
+        // The scratch frame still holds the values of the frame `matrix`
+        // was captured from — a pick necessarily follows a render.
+        frame: this.hostFrame,
         currentTime,
         zoom,
         windowStart:
@@ -1202,16 +1706,91 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
   // Internal
   // ------------------------------------------------------------------------
 
-  private async initTileset(): Promise<void> {
+  /**
+   * Drop every GPU cache entry belonging to one tile (entries are keyed
+   * `z/x/y/t::layer::…`, so variant-suffixed keys — e.g. the line layer's
+   * `…::globe:<granularity>` — are swept too). Shared by the per-layer
+   * `onTileUnload` callback and the shared-source resident-set diff.
+   */
+  private sweepTileGpuCache(baseKey: string): void {
+    const prefix = `${baseKey}::`;
+    for (const [k, cache] of this.tileGpuCache) {
+      if (!k.startsWith(prefix)) continue;
+      if (cache && this.gl) this.deleteCacheBuffers(this.gl, cache);
+      this.tileGpuCache.delete(k);
+    }
+  }
+
+  /**
+   * Shared-source init (D6a counterpart of {@link initTileset}): register as
+   * a consumer for resident-set fan-out, make sure the source is loaded, and
+   * adopt its tileset. Mirrors initTileset's removal-race guards.
+   */
+  private async initSharedSource(): Promise<void> {
+    const gen = ++this.initGeneration;
+    const source = this.source!;
+    // Register BEFORE load: an already-loaded source seeds the current
+    // resident set synchronously, so a late-added layer renders immediately.
+    this.unregisterConsumer?.();
+    this.unregisterConsumer = source.registerConsumer({
+      id: this.id,
+      onTilesChanged: (tiles) => this.handleSharedTiles(tiles),
+      onBufferChange: (runway) => {
+        this.opts.onBufferChange?.(runway);
+      },
+    });
     try {
-      const metadata = await this.archive.getMetadata();
-      this.metadata = metadata;
+      await source.load();
+    } catch (err) {
+      console.error(`[${this.id}] shared source failed to load:`, err);
+      return;
+    }
+    // A remove (or remove-then-re-add — the re-add's own init owns the
+    // publish) raced the load: abort so onTilesetReady fires once per init.
+    if (gen !== this.initGeneration || !this.map) return;
+    const tileset = source.getTileset();
+    const metadata = source.getMetadata();
+    if (!tileset) return; // source disposed while loading.
+    if (metadata) this.metadata = metadata;
+    // The source's structural DrivableTileset IS the real tileset whenever it
+    // was built by load(); a test-attached mock only needs the surface the
+    // base layer touches in shared mode (readiness guard + getTileset()).
+    this.tileset = tileset as unknown as SpatiotemporalTileset;
+    this.opts.onTilesetReady?.(this.tileset);
+    this.map.triggerRepaint();
+  }
+
+  /**
+   * Replace-all resident-set delivery from the shared source: swap
+   * `loadedTiles` wholesale and sweep GPU caches for tiles that left the set
+   * (the shared analogue of the per-layer `onTileLoad`/`onTileUnload` pair).
+   */
+  private handleSharedTiles(tiles: Tile[]): void {
+    const next = new Map<string, Tile>();
+    for (const tile of tiles) next.set(tileKey(tile.id), tile);
+    for (const key of this.loadedTiles.keys()) {
+      if (!next.has(key)) this.sweepTileGpuCache(key);
+    }
+    this.loadedTiles = next;
+    this.map?.triggerRepaint();
+  }
+
+  private async initTileset(): Promise<void> {
+    const gen = ++this.initGeneration;
+    const archive = this.archive!; // per-layer mode only (see onAdd dispatch).
+    let metadata: ArchiveMetadata;
+    try {
+      metadata = await archive.getMetadata();
     } catch (err) {
       console.error(`[${this.id}] failed to read archive metadata:`, err);
       return;
     }
 
-    if (!this.map) return; // onRemove ran before we got here.
+    // A remove (or remove-then-re-add, whose own init takes over) raced the
+    // metadata read: abort BEFORE building — assigning here would overwrite
+    // the re-add's tileset with an orphan that is never finalized.
+    if (gen !== this.initGeneration || !this.map) return;
+    this.metadata = metadata;
 
     this.tileset = new SpatiotemporalTileset({
       maxRequests: this.opts.maxRequests,
@@ -1231,7 +1810,7 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
       // via getTileByteSize, and wires the coalesced-range throughput EWMA so
       // estimateTimeToReadyMs() computes honest ETAs. See
       // docs/roadmap/renderer-abstraction-2026-06.md.
-      ...makeTilesetCallbacks(this.archive),
+      ...makeTilesetCallbacks(archive),
       // Buffered-runway threshold events from the tileset's coverage index,
       // forwarded to the app (which routes them into a PlaybackGovernor).
       onBufferChange: (runway) => {
@@ -1244,22 +1823,15 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
       onTileUnload: (tile) => {
         const baseKey = tileKey(tile.id);
         this.loadedTiles.delete(baseKey);
-        // GPU cache entries are keyed per layer within a tile, so we sweep
-        // all entries whose key starts with this tile's prefix.
-        const prefix = `${baseKey}::`;
-        for (const [k, cache] of this.tileGpuCache) {
-          if (!k.startsWith(prefix)) continue;
-          if (cache && this.gl) this.deleteCacheBuffers(this.gl, cache);
-          this.tileGpuCache.delete(k);
-        }
+        this.sweepTileGpuCache(baseKey);
       },
     });
 
-    // Re-check for a removal that raced the build: if onRemove ran, its
-    // `this.tileset?.finalize()` saw no tileset yet, so finalize the one we
-    // just built and skip onTilesetReady — handing the governor a source that
-    // can never render would strand it.
-    if (!this.map) {
+    // Defensive re-check for a removal that raced the (synchronous) build:
+    // if onRemove ran, its `this.tileset?.finalize()` saw no tileset yet, so
+    // finalize the one we just built and skip onTilesetReady — handing the
+    // governor a source that can never render would strand it.
+    if (gen !== this.initGeneration || !this.map) {
       this.tileset.finalize();
       this.tileset = undefined;
       return;

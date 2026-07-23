@@ -96,6 +96,20 @@ describe('maplibreBackend descriptor', () => {
     ]);
   });
 
+  it('claims globe (v5+ hosts via the injected prelude) but stays honest elsewhere', () => {
+    // Wave M1: every layer compiles the host prelude and projects via
+    // projectTile*, keyed by shaderData.variantName — globe renders natively
+    // on v5+ hosts; legacy (≤v4 / mapbox) hosts render mercator.
+    expect(maplibreBackend.capabilities.globe).toBe(true);
+    // Deliberately unchanged until their waves land working evidence:
+    expect(maplibreBackend.capabilities.picking).toBe(false);
+    expect(maplibreBackend.capabilities.metricSizing).toBe(false);
+    expect(maplibreBackend.pickMechanism).toBe('none');
+    // Default ownership stays per-layer; SharedTilesetSource is opt-in.
+    expect(maplibreBackend.tilesetOwnership).toBe('per-layer');
+    expect(maplibreBackend.basemapProjection).toBe('mercator');
+  });
+
   it('(a) every supported kind maps to a class that is a real export', () => {
     for (const kind of LAYER_KINDS) {
       if (maplibreBackend.layerKinds[kind].supported) {

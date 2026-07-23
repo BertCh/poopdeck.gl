@@ -24,6 +24,15 @@
  *     `drawingBuffer{Width,Height}` changes. The framebuffer is recreated on
  *     resize because some drivers don't support framebuffer texture
  *     reattachment.
+ *
+ * Host-projection variants (D3): the accumulate-pass vertex shader is built
+ * per host shader variant — legacy hosts (maplibre ≤v4 / mapbox) keep the
+ * historical `uMatrix` source verbatim, while v5+ hosts get the map's
+ * injected prelude + define prepended and project via `projectTile`, so
+ * splats land in the correct screen position on mercator AND globe. The
+ * colour-ramp pass is a screen-space fullscreen quad — projection-agnostic
+ * by construction. Programs are cached per variant via the base
+ * `getOrCreateProgram`, linked lazily on the first frame that needs them.
  */
 
 import type { Tile, Layer as STTLayer } from '@poopdeck.gl/core';
@@ -31,7 +40,6 @@ import { GeometryType, DEFAULT_HEATMAP_COLOR_RANGE } from '@poopdeck.gl/core';
 import {
   STTBaseLayer,
   type STTBaseLayerOptions,
-  type DrawContext,
   type TileGpuCache,
   type RGBA8,
 } from '../base-layer.js';
@@ -96,6 +104,51 @@ ${POSITION_DEQUANT_GLSL}
     vWeight = aWeight * sttTimeWindowAlpha(aTime, uWindowStart, uWindowEnd, uFadeIn, uFadeOut);
   }
 `;
+
+// v5+ variant body: identical declarations and math, minus `uMatrix` — the
+// host-injected prelude (prepended by `buildHeatmapAccumVertexSource`) owns
+// projection via `projectTile(vec2)`, whose 0..1-web-mercator input is
+// exactly what `sttDecodeMercatorPos` yields.
+const ACCUM_VS_V5 = `
+  precision highp float;
+  attribute vec3 aMercator;    // per-tile-local UNSIGNED_SHORT, normalized [0,1] — see sttDecodeMercatorPos
+  attribute vec2 aTime;
+  attribute float aWeight;
+  uniform vec3 uPosScale;
+  uniform vec3 uPosOffset;
+  uniform float uRadius;
+  uniform float uWindowStart;
+  uniform float uWindowEnd;
+  uniform float uFadeIn;
+  uniform float uFadeOut;
+  varying float vWeight;
+${TIME_WINDOW_GLSL}
+${POSITION_DEQUANT_GLSL}
+  void main() {
+    vec3 mercator = sttDecodeMercatorPos(aMercator, uPosScale, uPosOffset);
+    // projectTile OVERWRITES z (horizon clipping) — correct for these
+    // screen-space 2d splats, and what makes globe work with no other change.
+    gl_Position = projectTile(mercator.xy);
+    gl_PointSize = uRadius * 2.0;
+    vWeight = aWeight * sttTimeWindowAlpha(aTime, uWindowStart, uWindowEnd, uFadeIn, uFadeOut);
+  }
+`;
+
+/**
+ * Variant-aware accumulate-pass vertex source. An empty prelude means a
+ * legacy frame (maplibre ≤v4 / mapbox, or a v5 host without shaderData —
+ * `frame.matrix` is the mercator MVP there): the historical `uMatrix`
+ * shader ships VERBATIM. A non-empty prelude (v5+) is prepended, prelude
+ * before define (the order maplibre's own custom-layer examples use), ahead
+ * of the `projectTile`-projecting body. Exported for string-level tests.
+ */
+export function buildHeatmapAccumVertexSource(shader: {
+  prelude: string;
+  define: string;
+}): string {
+  if (!shader.prelude) return ACCUM_VS;
+  return `${shader.prelude}\n${shader.define}\n${ACCUM_VS_V5}`;
+}
 
 const ACCUM_FS = `
   precision highp float;
@@ -174,6 +227,13 @@ interface RampProgramHandles {
 
 interface HeatmapGpuCache extends TileGpuCache {
   weightBuffer?: WebGLBuffer;
+  /**
+   * Shader variant the cached VAO's attribute locations were recorded under.
+   * A VAO binds attribute LOCATIONS, which belong to one linked program — a
+   * projection-variant flip (mercator ⇄ globe on v5) links a different
+   * program, so a mismatched VAO must be dropped and re-recorded.
+   */
+  vaoVariant?: string;
 }
 
 /** Resolved accumulator-texture format, decided once per layer. */
@@ -196,7 +256,9 @@ export class STTHeatmapLayer extends STTBaseLayer {
     weightProperty?: string;
     colorDomain?: [number, number];
   };
-  private accum?: AccumProgramHandles;
+  // The accumulate program lives in the base per-variant program cache
+  // (`getOrCreateProgram('heatmap-accum', ...)`), linked lazily per frame
+  // variant — only the projection-agnostic ramp program is held here.
   private ramp?: RampProgramHandles;
 
   // FBO state — lazily allocated on first frame, resized when the drawing
@@ -276,22 +338,9 @@ export class STTHeatmapLayer extends STTBaseLayer {
   protected onContextReady(
     gl: WebGLRenderingContext | WebGL2RenderingContext,
   ): void {
-    const accumProgram = this.linkProgram(gl, ACCUM_VS, ACCUM_FS);
-    this.accum = {
-      program: accumProgram,
-      aMercator: gl.getAttribLocation(accumProgram, 'aMercator'),
-      uPosScale: gl.getUniformLocation(accumProgram, 'uPosScale'),
-      uPosOffset: gl.getUniformLocation(accumProgram, 'uPosOffset'),
-      aTime: gl.getAttribLocation(accumProgram, 'aTime'),
-      aWeight: gl.getAttribLocation(accumProgram, 'aWeight'),
-      uMatrix: gl.getUniformLocation(accumProgram, 'uMatrix'),
-      uRadius: gl.getUniformLocation(accumProgram, 'uRadius'),
-      uIntensity: gl.getUniformLocation(accumProgram, 'uIntensity'),
-      uWindowStart: gl.getUniformLocation(accumProgram, 'uWindowStart'),
-      uWindowEnd: gl.getUniformLocation(accumProgram, 'uWindowEnd'),
-      uFadeIn: gl.getUniformLocation(accumProgram, 'uFadeIn'),
-      uFadeOut: gl.getUniformLocation(accumProgram, 'uFadeOut'),
-    };
+    // The accumulate program is NOT linked here — it depends on the host
+    // frame's shader variant, so render() links it lazily through the base
+    // per-variant cache (which also survives context restore).
     const rampProgram = this.linkProgram(gl, RAMP_VS, RAMP_FS);
     this.ramp = {
       program: rampProgram,
@@ -320,10 +369,8 @@ export class STTHeatmapLayer extends STTBaseLayer {
   protected onContextLost(
     gl: WebGLRenderingContext | WebGL2RenderingContext,
   ): void {
-    if (this.accum) {
-      gl.deleteProgram(this.accum.program);
-      this.accum = undefined;
-    }
+    // Accumulate programs are owned by the base program cache, which the
+    // base invalidates on loss/dispose before invoking this hook.
     if (this.ramp) {
       gl.deleteProgram(this.ramp.program);
       this.ramp = undefined;
@@ -346,6 +393,10 @@ export class STTHeatmapLayer extends STTBaseLayer {
     }
     this.accumWidth = 0;
     this.accumHeight = 0;
+    // The format decision rests on extension probes (EXT_color_buffer_*) and
+    // a completeness check that don't survive a context restore — re-probe on
+    // the next accumulate pass rather than trusting a stale RGBA16F verdict.
+    this.accumFormat = null;
   }
 
   /**
@@ -384,37 +435,20 @@ export class STTHeatmapLayer extends STTBaseLayer {
   /**
    * Heatmap rendering replaces the base render() entirely — we need to wrap
    * the per-tile splats in an FBO bind/unbind and then a fullscreen colour-
-   * ramp pass.
+   * ramp pass. `beginFrame` runs FIRST (base contract): it normalizes
+   * whichever host signature arrived into the scratch HostFrame, stashes the
+   * matrix/camera params for pick(), and advances the tileset viewport.
    */
   render(
     gl: WebGLRenderingContext | WebGL2RenderingContext,
-    matrix: Iterable<number>,
+    matrixOrArgs?: unknown,
+    options?: unknown,
   ): void {
-    if (!this.tileset || !this.map) return;
-    if (!this.accum || !this.ramp || !this.paletteTexture || !this.quadBuffer) {
-      return;
-    }
+    const frame = this.beginFrame(matrixOrArgs, options);
+    if (!frame) return;
+    if (!this.ramp || !this.paletteTexture || !this.quadBuffer) return;
 
-    const map = this.map;
-    const m =
-      matrix instanceof Float32Array
-        ? matrix
-        : new Float32Array(Array.from(matrix));
-    const bounds = map.getBounds();
-    const zoom = Math.floor(map.getZoom());
     const currentTime = this.opts.currentTime;
-
-    this.tileset.update({
-      bounds: {
-        minLon: bounds.getWest(),
-        minLat: bounds.getSouth(),
-        maxLon: bounds.getEast(),
-        maxLat: bounds.getNorth(),
-      },
-      zoom,
-      time: currentTime,
-      timeWindow: this.opts.timeWindow,
-    });
 
     // MapLibre may be rendering custom layers into an offscreen target
     // (terrain draping, globe post-process), so the framebuffer bound on
@@ -441,15 +475,30 @@ export class STTHeatmapLayer extends STTBaseLayer {
     gl.blendFunc(gl.ONE, gl.ONE); // additive
     gl.disable(gl.DEPTH_TEST);
 
-    const ah = this.accum;
+    // Variant-keyed accumulate program: a v5 host relinks per projection
+    // variant (mercator / globe / transition); legacy hosts reuse one
+    // 'legacy' link. Linked lazily on the first frame that needs the variant.
+    const ah = this.getOrCreateProgram(
+      gl,
+      'heatmap-accum',
+      frame,
+      (g, shader) => this.buildAccumProgram(g, shader),
+    );
     gl.useProgram(ah.program);
-    gl.uniformMatrix4fv(ah.uMatrix, false, m);
+    // The legacy variant projects via uMatrix; on the v5 variant the location
+    // is null (the prelude owns projection) and this is a spec-level no-op.
+    gl.uniformMatrix4fv(ah.uMatrix, false, frame.matrix);
+    this.setPreludeProjectionUniforms(gl, ah.program, frame); // no-op on legacy
     gl.uniform1f(ah.uRadius, this.heatOpts.radiusPixels);
     gl.uniform1f(ah.uIntensity, this.heatOpts.intensity);
     const { fadeIn, fadeOut } = this.resolveFadeDurations();
     gl.uniform1f(ah.uFadeIn, fadeIn);
     gl.uniform1f(ah.uFadeOut, fadeOut);
 
+    // Globe wrap-skip (drop wrap !== 0 copies) is vacuous here: STT tiles
+    // are world tiles drawn exactly once — no wrapped copies exist to skip.
+    // Splats are points, so no edge subdivision is needed either (D4).
+    const half = this.opts.timeWindow / 2;
     for (const tile of this.loadedTiles.values()) {
       for (const layer of tile.layers) {
         if (!this.acceptsGeometry(layer.features.geometryType)) continue;
@@ -459,19 +508,18 @@ export class STTHeatmapLayer extends STTBaseLayer {
           layer,
         ) as HeatmapGpuCache | null;
         if (!cache) continue;
-        const ctx: DrawContext = {
-          matrix: m,
-          currentTime,
-          zoom,
-          windowStart:
-            currentTime - cache.timeOffset - this.opts.timeWindow / 2,
-          windowEnd: currentTime - cache.timeOffset + this.opts.timeWindow / 2,
-        };
-        gl.uniform1f(ah.uWindowStart, ctx.windowStart);
-        gl.uniform1f(ah.uWindowEnd, ctx.windowEnd);
+        gl.uniform1f(ah.uWindowStart, currentTime - cache.timeOffset - half);
+        gl.uniform1f(ah.uWindowEnd, currentTime - cache.timeOffset + half);
         gl.uniform3fv(ah.uPosScale, cache.posScale ?? [1, 1, 1]);
         gl.uniform3fv(ah.uPosOffset, cache.posOffset ?? [0, 0, 0]);
 
+        // A VAO records attribute locations belonging to the program it was
+        // recorded against — a variant flip links a different program, so a
+        // stale VAO is dropped and re-recorded (rare: transition start/end).
+        if (cache.vao && cache.vaoVariant !== frame.shader.variantName) {
+          this.vaoSupport.delete(cache.vao);
+          cache.vao = null;
+        }
         // VAO captures position/time/weight attribute state on first frame.
         this.bindVaoOrSetup(cache, () => {
           gl.bindBuffer(gl.ARRAY_BUFFER, cache.positionBuffer);
@@ -495,6 +543,7 @@ export class STTHeatmapLayer extends STTBaseLayer {
             gl.vertexAttribPointer(ah.aWeight, 1, gl.FLOAT, false, 0, 0);
           }
         });
+        cache.vaoVariant = frame.shader.variantName;
 
         gl.drawArrays(gl.POINTS, 0, cache.vertexCount);
       }
@@ -535,6 +584,38 @@ export class STTHeatmapLayer extends STTBaseLayer {
 
     gl.disableVertexAttribArray(rh.aPos);
     gl.activeTexture(gl.TEXTURE0);
+  }
+
+  /**
+   * Link the accumulate program for one shader variant and resolve its
+   * locations. Runs once per `heatmap-accum::<variantName>` cache key.
+   * `uMatrix` resolves to null on the v5 variant (the prelude owns
+   * projection there), so setting it unconditionally is a no-op.
+   */
+  private buildAccumProgram(
+    gl: WebGLRenderingContext | WebGL2RenderingContext,
+    shader: { prelude: string; define: string },
+  ): AccumProgramHandles {
+    const program = this.linkProgram(
+      gl,
+      buildHeatmapAccumVertexSource(shader),
+      ACCUM_FS,
+    );
+    return {
+      program,
+      aMercator: gl.getAttribLocation(program, 'aMercator'),
+      aTime: gl.getAttribLocation(program, 'aTime'),
+      aWeight: gl.getAttribLocation(program, 'aWeight'),
+      uMatrix: gl.getUniformLocation(program, 'uMatrix'),
+      uPosScale: gl.getUniformLocation(program, 'uPosScale'),
+      uPosOffset: gl.getUniformLocation(program, 'uPosOffset'),
+      uRadius: gl.getUniformLocation(program, 'uRadius'),
+      uIntensity: gl.getUniformLocation(program, 'uIntensity'),
+      uWindowStart: gl.getUniformLocation(program, 'uWindowStart'),
+      uWindowEnd: gl.getUniformLocation(program, 'uWindowEnd'),
+      uFadeIn: gl.getUniformLocation(program, 'uFadeIn'),
+      uFadeOut: gl.getUniformLocation(program, 'uFadeOut'),
+    };
   }
 
   /**
