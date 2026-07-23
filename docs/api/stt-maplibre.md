@@ -11,12 +11,13 @@ per-tile delivery, giant-parent-tile gating, throughput-driven ETAs).
 
 If you can take a deck.gl dependency, [`@poopdeck.gl/layers`](./spatiotemporal-layer.md)
 still has a few advantages — rounded joints/dashes, GPU-side category-color
-extension, cross-tile consolidation, and the full 23-kind catalog. The MapLibre
-adapter trades those off for a much smaller bundle and the ability to interleave
-between native MapLibre style layers. It covers five layer kinds — points,
-lines, polygons (with optional stroke + extrusion), animated trips, and density
-heatmaps; the deck-only kinds (arcs, flowmaps, summary tiers, …) are listed
-in the [backend capability matrix](../spec/backend-capabilities.md).
+extension, cross-tile consolidation, GPU flow live-bundling, and the full
+23-kind catalog. The MapLibre adapter trades those off for a much smaller bundle
+and the ability to interleave between native MapLibre style layers. It covers
+fifteen layer kinds across the point/line/polygon, trips, icon/column/arc,
+summary and flow families (see the table below); the remaining deck-only kinds
+(text, mesh, point cloud, bounding box, iso-lines, …) are listed in the
+[backend capability matrix](../spec/backend-capabilities.md).
 
 ## Install
 
@@ -47,16 +48,27 @@ Tiles whose geometry type doesn't match a given layer are skipped, so you can
 pile multiple layers onto the same archive URL when a dataset has more than
 one geometry type.
 
-| Class             | Renders    | Notes                                                                             |
-| ----------------- | ---------- | --------------------------------------------------------------------------------- |
-| `STTPointLayer`   | Point      | Circular billboards with antialiased disc fragment shader                         |
-| `STTLineLayer`    | LineString | Instanced segment quads, constant pixel width across zoom                         |
-| `STTPolygonLayer` | Polygon    | Filled, earcut triangulated (or pre-baked triangles), optional stroke + extrusion |
-| `STTTripsLayer`   | LineString | Trailing-fade trajectories using per-vertex timestamps                            |
-| `STTHeatmapLayer` | Point      | Two-pass FBO density heatmap with colour-ramp lookup                              |
+| Class                    | Renders    | Notes                                                                                                   |
+| ------------------------ | ---------- | ------------------------------------------------------------------------------------------------------- |
+| `STTPointLayer`          | Point      | Circular billboards with antialiased disc fragment shader                                               |
+| `STTLineLayer`           | LineString | Instanced segment quads, constant pixel width across zoom                                               |
+| `STTPolygonLayer`        | Polygon    | Filled, earcut triangulated (or pre-baked triangles), optional stroke + extrusion                       |
+| `STTTripsLayer`          | LineString | Trailing-fade trajectories using per-vertex timestamps                                                  |
+| `STTTripHeadsLayer`      | LineString | Moving head dot, position interpolated through the hoisted core track kernel                            |
+| `STTHeatmapLayer`        | Point      | Two-pass FBO density heatmap with colour-ramp lookup                                                    |
+| `STTIconLayer`           | Point      | Rotated billboard atlas with heading, `iconWake`, and CPU motion glide                                  |
+| `STTColumnLayer`         | Point      | Instanced 3D prisms with the space-time-cube lift (`timeHeightScale`)                                   |
+| `STTArcLayer`            | LineString | Real 3D origin→destination arcs, optionally great-circle, tessellated in the vertex shader              |
+| `STTH3SummaryLayer`      | Point      | H3 summary-tier cells as ramp-coloured, optionally extruded prisms (takes an injected `cellToBoundary`) |
+| `STTQuadbinSummaryLayer` | Point      | CARTO Quadbin summary-tier cells, same ramp/extrusion path as H3                                        |
+| `STTHexbinLayer`         | Point      | Real runtime hexbin — CPU binning at tile upload + a GPU scatter/gather aggregate                       |
+| `STTFlowCorridorLayer`   | LineString | Value-matrix flow ribbon whose width breathes off a single per-frame scalar                             |
+| `STTFlowStrokeLayer`     | LineString | Constant-width flow-stroke variant of the corridor                                                      |
+| `STTFlowmapLayer`        | LineString | One animated OD arrow per pair; static bundles (GPU live-bundling stays a declared fallback)            |
 
 All extend the abstract `STTBaseLayer`, which owns the archive read, tileset
-scheduling, viewport→tile resolution, and the GPU resource lifecycle.
+scheduling, viewport→tile resolution, and the GPU resource lifecycle. The two
+summary subclasses share an abstract `STTSummaryCellLayer` base.
 
 ## Quick start
 
@@ -284,12 +296,19 @@ Each layer exposes lifecycle helpers in addition to `CustomLayerInterface`:
 | Filled polygons                           | ✓ (single-ring)                                    | ✓                                                 |
 | Stroked / extruded polygons               | ✓                                                  | extruded ✓ (stroke: no)                           |
 | Trip animation (per-vertex timestamps)    | ✓                                                  | ✓                                                 |
+| Trip heads (moving head dot)              | ✓ (`STTTripHeadsLayer`)                            | ✓                                                 |
+| Icon billboards (heading / wake / glide)  | ✓ (`STTIconLayer`)                                 | ✓                                                 |
+| 3D columns (space-time cube)              | ✓ (`STTColumnLayer`, `timeHeightScale`)            | ✓                                                 |
+| Arcs (3D / great-circle)                  | ✓ (`STTArcLayer`)                                  | ✓                                                 |
+| Summary tiers (H3 / Quadbin cells)        | ✓ (ramp-coloured, optionally extruded)             | ✓                                                 |
+| Runtime hexbin                            | ✓ (CPU bin + GPU aggregate)                        | ✓                                                 |
+| Flow ribbons / OD flowmap                 | ✓ (value-matrix; static bundles)                   | ✓ (+ GPU live-bundling)                           |
 | Heatmaps                                  | ✓ (two-pass FBO)                                   | ✓ (`AnimatedHeatmapLayer`)                        |
 | Per-feature categorical colour            | ✓ (CPU-expanded RGBA attribute)                    | ✓ (`CategoryColorExtension`, GPU palette texture) |
 | Batched/coalesced tile loading            | ✓                                                  | ✓                                                 |
 | PlaybackGovernor hooks                    | ✓ (`onTilesetReady`/`onBufferChange`/`getTileset`) | ✓                                                 |
 | Rounded joints / caps                     | —                                                  | ✓                                                 |
-| GPU picking                               | ✓ (id-FBO; point/line/polygon/trips)               | ✓                                                 |
+| GPU picking                               | ✓ (id-FBO; all kinds except heatmap)               | ✓                                                 |
 | Time modes (window/wake/cumulative/trail) | ✓                                                  | ✓                                                 |
 | Data filtering by column                  | ✓ (`filterProperty` + soft range)                  | ✓ (`DataFilterExtension`)                         |
 | Globe projection                          | ✓ (v5+ hosts, native prelude)                      | ✓ (GlobeView)                                     |
@@ -302,8 +321,9 @@ Each layer exposes lifecycle helpers in addition to `CustomLayerInterface`:
   pre-baked triangles (`--pre-tessellate`) hole-aware meshes draw
   correctly, but the runtime-earcut path treats each feature as one ring.
 - **Heatmaps are not pickable.** A density field has no per-feature
-  identity; the other four kinds pick via an offscreen id buffer
-  (`queryRenderedFeatures` never reaches custom layers in either library).
+  identity; every other kind picks via an offscreen id buffer — a cell,
+  corridor, or OD arrow is its own pick unit (`queryRenderedFeatures` never
+  reaches custom layers in either library).
 - **Categorical colours expand on the CPU.** Each tile builds a per-vertex
   RGBA buffer (Uint8 normalised); the deck.gl adapter does the lookup
   GPU-side via a palette texture. Hot-swapping palettes therefore requires

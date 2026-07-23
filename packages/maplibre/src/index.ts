@@ -1,8 +1,9 @@
 /**
  * @poopdeck.gl/maplibre — MapLibre GL custom-layer adapters for STT archives.
  *
- * Nine layer classes, one per visualisation kind. Add the one(s) you need to
- * your map; each manages its own archive read, tile cache and shader pipeline:
+ * Fifteen layer classes across the point/line/polygon, trips, icon/column/arc,
+ * summary and flow families. Add the one(s) you need to your map; each manages
+ * its own archive read, tile cache and shader pipeline:
  *
  *   - {@link STTPointLayer} — Point features (billboards).
  *   - {@link STTLineLayer} — LineString features, constant width, all four
@@ -21,6 +22,15 @@
  *     the space-time-cube lift (`timeHeightScale`).
  *   - {@link STTArcLayer} — real 3D origin→destination arcs, optionally
  *     great-circle, tessellated in the vertex shader.
+ *   - {@link STTH3SummaryLayer} / {@link STTQuadbinSummaryLayer} — summary-tier
+ *     cells (H3 / CARTO Quadbin) as ramp-coloured, optionally extruded prisms.
+ *     H3 takes an injected `cellToBoundary` (h3-js is not a dependency here).
+ *   - {@link STTHexbinLayer} — a REAL runtime hexbin (CPU binning at upload +
+ *     GPU scatter/gather aggregation), not a fallback to the H3 summary tier.
+ *   - {@link STTFlowCorridorLayer} / {@link STTFlowStrokeLayer} — value-matrix
+ *     flow ribbons whose width breathes off a single per-frame scalar.
+ *   - {@link STTFlowmapLayer} — one animated OD arrow per pair (static bundles;
+ *     GPU live-bundling stays a declared fallback).
  *
  * For tiles containing multiple geometry types, instantiate multiple layers
  * pointing at the same URL — each will pick out the geometries it accepts —
@@ -104,6 +114,60 @@ export {
   type STTArcLayerOptions,
   type ArcTimeFilterMode,
 } from './layers/arc-layer.js';
+
+// ── Wave M4: summary + flow families ─────────────────────────────────────────
+
+// Summary tier (h3Summary / quadbinSummary): one abstract cell layer plus the
+// two thin scheme subclasses. `STTH3SummaryLayer` REQUIRES an injected
+// `cellToBoundary` (h3-js is not a dependency of this package — see the option
+// docs), so the `H3CellToBoundary` type ships from the cell-geometry kernel
+// below and is named on `STTH3SummaryLayerOptions`.
+export {
+  STTSummaryCellLayer,
+  STTH3SummaryLayer,
+  STTQuadbinSummaryLayer,
+  SUMMARY_WALL_SHADE,
+  summaryCellElevationMeters,
+  type STTSummaryCellLayerOptions,
+  type STTH3SummaryLayerOptions,
+  type STTQuadbinSummaryLayerOptions,
+  type SummaryCellTimeFilterMode,
+} from './layers/summary-cell-layer.js';
+
+// Hexbin (real runtime aggregation — NOT a fallback to h3Summary): CPU binning
+// at tile upload + a GPU scatter/gather aggregate that re-ranges every frame.
+export {
+  STTHexbinLayer,
+  DEFAULT_HEXBIN_COLOR_RANGE,
+  type STTHexbinLayerOptions,
+  type HexbinTimeFilterMode,
+  type HexbinAggregation,
+  type HexbinScaleType,
+} from './layers/hexbin-layer.js';
+
+// Flow corridor / flow stroke: a ref-stable value-matrix ribbon whose width
+// breathes per frame off a single `uFlowBucket` scalar (the FlowCorridorLayer
+// re-tessellation bug, designed out).
+export {
+  STTFlowCorridorLayer,
+  STTFlowStrokeLayer,
+  corridorHalfWidthMercator,
+  type STTFlowCorridorLayerOptions,
+  type STTFlowStrokeLayerOptions,
+  type FlowCorridorTimeFilterMode,
+  type FlowMagnitudeSource,
+} from './layers/flow-corridor-layer.js';
+
+// Flowmap: one animated OD arrow per pair, width driven by trip volume at the
+// playhead. `liveBundling` (GPU KDEEB) stays a permanent declared fallback
+// (P2) — the layer carries no bundling path.
+export {
+  STTFlowmapLayer,
+  type STTFlowmapLayerOptions,
+  type FlowmapTimeFilterMode,
+  type FlowmapColorMode,
+  type FlowmapArrowShape,
+} from './layers/flowmap-layer.js';
 export {
   STTBaseLayer,
   cssToDevicePixel,
@@ -230,6 +294,77 @@ export {
   type SubdivisionAttrs,
   type LineSubdivisionResult,
 } from './lib/globe.js';
+
+// Cell-geometry kernel (Wave M4 summary/hexbin families): pure CPU decode of
+// H3 / Quadbin cell ids and the deck-compatible hexbin lattice into mercator
+// rings. `H3CellToBoundary` is the h3-js `cellToBoundary` signature the h3
+// summary layer takes injected (h3-js is not a dependency of this package —
+// the caller supplies the resolver). Every entry point is tile-upload-time.
+export {
+  ringSignedArea2,
+  orientRingPositive,
+  h3IndexFromU64,
+  h3CellToMercatorRing,
+  quadbinToTile,
+  quadbinTileToMercatorBounds,
+  quadbinCellToMercatorRing,
+  hexBinRadiusFromMeters,
+  pointToHexBin,
+  hexBinKey,
+  hexBinKeyForPoint,
+  hexBinCentroidMercator,
+  hexBinToMercatorRing,
+  buildSummaryCellRings,
+  cellRingToTriangles,
+  triangulateCellRings,
+  type H3CellToBoundary,
+  type SeamMode,
+  type PoleMode,
+  type CellRingOptions,
+  type CellRingBatch,
+  type CellRingDiagnostics,
+  type QuadbinTile,
+  type MercatorBounds,
+  type SummaryCellRingOptions,
+} from './lib/cell-geometry.js';
+
+// Flow kernel (Wave M4 flow family): the ref-stable value-matrix packing +
+// per-frame bucket axis + corridor ribbon tessellation. Geometry is built once
+// per tile; only `uFlowBucket` moves per frame (the re-tessellation bug,
+// designed out). Exported for subclasses driving the same GPU magnitude path.
+export {
+  deriveFlowAxis,
+  bucketPositionAt,
+  packValueMatrix,
+  packVertexValueMatrix,
+  buildCorridorRibbon,
+  extractFlowOdPairs,
+  flowTileKey,
+  FlowTileCache,
+  supportsVertexTextureFetch,
+  chooseFlowMatrixFormat,
+  mercatorPerPixel,
+  MAX_FLOW_MATRIX_TEXELS,
+  type FlowBucketAxis,
+  type PackedValueMatrix,
+  type CorridorRibbon,
+  type CorridorRibbonOptions,
+  type FlowOdPairs,
+} from './lib/flow-kernel.js';
+
+// Flow GLSL (Wave M4 flow family): the vertex-stage magnitude sampler + width
+// kernel and their JS references. `flowSamplerCacheKey` MUST appear in a flow
+// program's cache key (a matrix-format permutation axis).
+export {
+  FLOW_MATRIX_FORMATS,
+  FLOW_NAMES,
+  FLOW_MATRIX_TEXTURE_RECIPE,
+  buildFlowMatrixSampler,
+  flowSamplerCacheKey,
+  flowWidthJS,
+  flowRampTJS,
+  type FlowMatrixFormat,
+} from './shaders/flow.glsl.js';
 
 // Shared id-buffer picking result shape (see `STTBaseLayer.pick`). Re-exported
 // from the core picking kernel so consumers don't reach across packages.

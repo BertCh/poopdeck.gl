@@ -67,6 +67,35 @@ import { STTIconLayer } from '../src/layers/icon-layer';
 import { STTColumnLayer } from '../src/layers/column-layer';
 import { STTArcLayer } from '../src/layers/arc-layer';
 import { STTTripHeadsLayer } from '../src/layers/trip-heads-layer';
+// Wave M4 — summary + flow families.
+import {
+  buildSummaryCellVertexSource,
+  buildSummaryCellIdVertexSource,
+  buildSummaryCellStrokeVertexSource,
+  buildSummaryCellStrokeIdVertexSource,
+  summaryCellProgramKey,
+  STTH3SummaryLayer,
+  STTQuadbinSummaryLayer,
+} from '../src/layers/summary-cell-layer';
+import {
+  buildHexbinCellVertexSource,
+  buildHexbinCellIdVertexSource,
+  buildHexbinScatterVertexSource,
+  hexbinProgramKey,
+  STTHexbinLayer,
+} from '../src/layers/hexbin-layer';
+import {
+  buildFlowCorridorVertexSource,
+  buildFlowCorridorIdVertexSource,
+  flowCorridorProgramKey,
+  STTFlowCorridorLayer,
+  STTFlowStrokeLayer,
+} from '../src/layers/flow-corridor-layer';
+import {
+  buildFlowmapVertexSource,
+  flowmapProgramKey,
+  STTFlowmapLayer,
+} from '../src/layers/flowmap-layer';
 import {
   TIME_WINDOW_GLSL,
   TIME_TRAIL_GLSL,
@@ -88,6 +117,22 @@ import {
   discMaskGLSL,
   DISC_EDGE_EXPR,
 } from '../src/shaders/billboard.glsl';
+
+/**
+ * `STTH3SummaryLayer` REQUIRES an injected `cellToBoundary` (h3-js is not a
+ * dependency of this package) and throws without one; every construction of it
+ * here supplies this stub, never called during construction.
+ */
+const STUB_H3_BOUNDARY = (): number[][] => [
+  [0, 0],
+  [0, 1],
+  [1, 1],
+];
+
+/** Kind-specific required options beyond the shared BASE (see BASE below). */
+const EXTRA_OPTS: Record<string, Record<string, unknown>> = {
+  h3Summary: { cellToBoundary: STUB_H3_BOUNDARY },
+};
 
 const MODES: readonly PointTimeFilterMode[] = [
   'window',
@@ -114,13 +159,25 @@ interface Emitted {
   id: string;
   layerFile: string;
   source: string;
+  /**
+   * Whether this source projects through the host prelude / uMatrix. Almost
+   * every source does; the hexbin SCATTER pass is the exception — it writes
+   * each point straight to its bin's texel with NO projection (that is what
+   * makes the aggregate survive a projection-variant flip), so it carries
+   * neither `projectTile` nor `uMatrix` and the prelude-order check skips it.
+   */
+  projects: boolean;
 }
 
-/** Every vertex source the nine layers can emit, across every knob. */
+/** Every vertex source the fifteen layers can emit, across every knob. */
 function allSources(): Emitted[] {
   const out: Emitted[] = [];
-  const push = (layerFile: string, id: string, source: string) =>
-    out.push({ layerFile, id, source });
+  const push = (
+    layerFile: string,
+    id: string,
+    source: string,
+    projects = true,
+  ) => out.push({ layerFile, id, source, projects });
 
   for (const host of HOSTS) {
     const shader = { prelude: host.prelude, define: host.define };
@@ -234,6 +291,71 @@ function allSources(): Emitted[] {
             }),
           );
         }
+        // ── Wave M4 summary family (h3Summary / quadbinSummary share a
+        // byte-identical shader, so one builder covers both kinds). Fill and
+        // outline, each visual + id, keyed by (mode, filter) like the fills.
+        const summaryCfg = { mode, filter };
+        push(
+          'summary-cell-layer.ts',
+          `summary-fill:${tag}`,
+          buildSummaryCellVertexSource(shader, summaryCfg),
+        );
+        push(
+          'summary-cell-layer.ts',
+          `summary-fill-id:${tag}`,
+          buildSummaryCellIdVertexSource(shader, summaryCfg),
+        );
+        push(
+          'summary-cell-layer.ts',
+          `summary-stroke:${tag}`,
+          buildSummaryCellStrokeVertexSource(shader, summaryCfg),
+        );
+        push(
+          'summary-cell-layer.ts',
+          `summary-stroke-id:${tag}`,
+          buildSummaryCellStrokeIdVertexSource(shader, summaryCfg),
+        );
+        // ── Wave M4 flow corridor (STTFlowStrokeLayer reuses this shader). The
+        // GPU magnitude sampler is the common path; `ramp`/`attribute` are the
+        // extra structural knobs, emitted once per host below.
+        const corridorCfg = {
+          mode,
+          filter,
+          magnitude: 'texture' as const,
+          format: 'float32' as const,
+          ramp: false,
+        };
+        push(
+          'flow-corridor-layer.ts',
+          `flow-corridor:${tag}`,
+          buildFlowCorridorVertexSource(shader, corridorCfg),
+        );
+        push(
+          'flow-corridor-layer.ts',
+          `flow-corridor-id:${tag}`,
+          buildFlowCorridorIdVertexSource(shader, corridorCfg),
+        );
+        // ── Wave M4 flowmap. One builder emits both the visual (`pick:false`)
+        // and id (`pick:true`) passes; `direction` gradient + baked bundle is
+        // the default surface, the other colour modes are emitted below.
+        const flowmapCfg = {
+          mode,
+          filter,
+          colorMode: 'direction' as const,
+          bundle: true,
+          magnitude: 'texture' as const,
+          format: 'float32' as const,
+        };
+        push(
+          'flowmap-layer.ts',
+          `flowmap:${tag}`,
+          buildFlowmapVertexSource(shader, { ...flowmapCfg, pick: false }),
+        );
+        push(
+          'flowmap-layer.ts',
+          `flowmap-id:${tag}`,
+          buildFlowmapVertexSource(shader, { ...flowmapCfg, pick: true }),
+        );
       }
       // Trip heads carry ONE moving position, so `cumulative`/`trail` (which
       // describe a history) degrade to `window` in the layer and never reach a
@@ -290,6 +412,91 @@ function allSources(): Emitted[] {
         glide: true,
       }),
     );
+
+    // ── Wave M4 hexbin CELL pass (the instanced prism draw — projects). The
+    // time mode + filter live in the SCATTER pass (below); the cell shader is
+    // keyed by the two aggregations + the aggregate source instead, so it is
+    // its own axis. Both aggregate sources and a couple of aggregation shapes.
+    for (const cellCfg of [
+      { colorAggregation: 'SUM', elevationAggregation: 'SUM', source: 'gpu' },
+      {
+        colorAggregation: 'MEAN',
+        elevationAggregation: 'COUNT',
+        source: 'cpu',
+      },
+    ] as const) {
+      const cTag = `${host.name}/${cellCfg.colorAggregation}-${cellCfg.elevationAggregation}/${cellCfg.source}`;
+      push(
+        'hexbin-layer.ts',
+        `hexbin-cell:${cTag}`,
+        buildHexbinCellVertexSource(shader, cellCfg),
+      );
+      push(
+        'hexbin-layer.ts',
+        `hexbin-cell-id:${cTag}`,
+        buildHexbinCellIdVertexSource(shader, cellCfg),
+      );
+    }
+
+    // ── Wave M4 flow-corridor structural knobs (ramp colour + the CPU-attribute
+    // magnitude fallback), emitted once per host rather than per grid cell.
+    for (const extra of [
+      { magnitude: 'texture', format: 'float32', ramp: true },
+      { magnitude: 'attribute', format: 'float32', ramp: false },
+    ] as const) {
+      const eTag = `${host.name}/${extra.magnitude}${extra.ramp ? '/ramp' : ''}`;
+      const cfg = { mode: 'window', filter: false, ...extra } as const;
+      push(
+        'flow-corridor-layer.ts',
+        `flow-corridor-x:${eTag}`,
+        buildFlowCorridorVertexSource(shader, cfg),
+      );
+      push(
+        'flow-corridor-layer.ts',
+        `flow-corridor-x-id:${eTag}`,
+        buildFlowCorridorIdVertexSource(shader, cfg),
+      );
+    }
+
+    // ── Wave M4 flowmap colour modes + the unbundled / CPU-attribute knobs.
+    for (const extra of [
+      { colorMode: 'magnitude', bundle: true, magnitude: 'texture' },
+      { colorMode: 'category', bundle: false, magnitude: 'attribute' },
+    ] as const) {
+      const fTag = `${host.name}/${extra.colorMode}${extra.bundle ? '/bundle' : ''}/${extra.magnitude}`;
+      const cfg = {
+        mode: 'window',
+        filter: true,
+        format: 'float32',
+        ...extra,
+      } as const;
+      push(
+        'flowmap-layer.ts',
+        `flowmap-x:${fTag}`,
+        buildFlowmapVertexSource(shader, { ...cfg, pick: false }),
+      );
+      push(
+        'flowmap-layer.ts',
+        `flowmap-x-id:${fTag}`,
+        buildFlowmapVertexSource(shader, { ...cfg, pick: true }),
+      );
+    }
+  }
+
+  // ── Wave M4 hexbin SCATTER pass. Projection-FREE (a point is written to its
+  // bin's texel, not to a map position) and therefore host-invariant, so it is
+  // enumerated once — outside the host loop — and flagged `projects: false` so
+  // the prelude-order check skips it. It still carries the time-filter kernel +
+  // the DataFilter, so the collision checks apply.
+  for (const filter of [false, true]) {
+    for (const mode of MODES) {
+      push(
+        'hexbin-layer.ts',
+        `hexbin-scatter:${mode}${filter ? '/filter' : ''}`,
+        buildHexbinScatterVertexSource({ mode, filter }),
+        false,
+      );
+    }
   }
   return out;
 }
@@ -392,7 +599,10 @@ describe('spliced GLSL has no collisions (the compiler we do not run in CI)', ()
   });
 
   it("injects the host prelude + define in maplibre's documented order", () => {
-    const offenders = SOURCES.flatMap(({ id, source }) => {
+    const offenders = SOURCES.flatMap(({ id, source, projects }) => {
+      // The hexbin scatter pass projects nothing (it writes to a bin texel),
+      // so it carries neither the prelude nor the uMatrix shader by design.
+      if (!projects) return [];
       const preludeAt = source.indexOf('vec4 projectTile(');
       const defineAt = source.indexOf('#define GLOBE');
       const mainAt = source.indexOf('void main()');
@@ -456,36 +666,70 @@ describe('cross-layer runtime control surface', () => {
     column: STTColumnLayer,
     arc: STTArcLayer,
     tripHeads: STTTripHeadsLayer,
+    // Wave M4. flowCorridor + flowStroke are separate CONCRETE classes that
+    // share a shader; both are registered so the "nothing ships unclassed"
+    // scan below can prove each concrete export is accounted for.
+    h3Summary: STTH3SummaryLayer,
+    quadbinSummary: STTQuadbinSummaryLayer,
+    hexbin: STTHexbinLayer,
+    flowCorridor: STTFlowCorridorLayer,
+    flowStroke: STTFlowStrokeLayer,
+    flowmap: STTFlowmapLayer,
   } as const;
 
-  it('one class per layer file — nothing ships unclassed', async () => {
+  /** Construct one layer, supplying any kind-required options (h3 boundary). */
+  const makeLayer = (
+    kind: keyof typeof LAYER_CLASSES,
+    idSuffix: string,
+  ): unknown =>
+    new (LAYER_CLASSES[kind] as new (o: unknown) => unknown)({
+      ...BASE,
+      ...EXTRA_OPTS[kind],
+      id: `seam-${idSuffix}-${kind}`,
+    });
+
+  it('every concrete layer class is registered, and no file ships unclassed', async () => {
+    // Reworked in Wave M4: two files now ship MORE than one class — summary-cell
+    // has an `export abstract class STTSummaryCellLayer` base plus two concrete
+    // scheme subclasses, and flow-corridor has `STTFlowCorridorLayer` plus the
+    // `STTFlowStrokeLayer` subclass. So the scan no longer assumes one
+    // STTBaseLayer-rooted class per file; it requires every file to export at
+    // least one STT layer class and every CONCRETE one to be registered.
     const fs = await import('node:fs/promises');
     const dir = await layersDir();
-    const names = new Set(
+    const registered = new Set(
       Object.values(LAYER_CLASSES).map((c) => (c as { name: string }).name),
     );
     for (const file of await layerFiles()) {
       const src = await fs.readFile(`${dir}/${file}`, 'utf8');
-      const cls = src.match(
-        /^export class (STT\w+) extends STTBaseLayer/m,
-      )?.[1];
-      expect(cls, `${file} exports no STTBaseLayer subclass`).toBeTruthy();
-      expect(names.has(cls!), `${cls} is missing from LAYER_CLASSES`).toBe(
-        true,
-      );
+      // Concrete exported layer classes — skip `export abstract class` bases
+      // (STTSummaryCellLayer): an abstract base is not a renderable kind.
+      const concrete = [
+        ...src.matchAll(/^export class (STT\w+) extends STT\w+/gm),
+      ].map((m) => m[1]!);
+      const abstractBases = [
+        ...src.matchAll(/^export abstract class (STT\w+) extends STT\w+/gm),
+      ].map((m) => m[1]!);
+      expect(
+        concrete.length + abstractBases.length,
+        `${file} exports no STT layer class`,
+      ).toBeGreaterThan(0);
+      for (const name of concrete) {
+        expect(
+          registered.has(name),
+          `${file}: concrete class ${name} is missing from LAYER_CLASSES`,
+        ).toBe(true);
+      }
     }
   });
 
-  it.each(Object.entries(LAYER_CLASSES))(
+  it.each(Object.keys(LAYER_CLASSES) as Array<keyof typeof LAYER_CLASSES>)(
     'the %s layer exposes the same three uniform-only DataFilter setters',
-    (kind, Cls) => {
+    (kind) => {
       // Every options interface extends `STTDataFilterOptions`, so a caller
       // that can CONFIGURE a filter must also be able to DRIVE it — the slider
       // path. A layer missing one of these forces the caller to reconstruct.
-      const layer = new (Cls as new (o: unknown) => unknown)({
-        ...BASE,
-        id: `seam-${kind}`,
-      }) as Record<string, unknown>;
+      const layer = makeLayer(kind, 'filter') as Record<string, unknown>;
       for (const setter of [
         'setFilterRange',
         'setFilterSoftRange',
@@ -501,10 +745,7 @@ describe('cross-layer runtime control surface', () => {
       keyof typeof LAYER_CLASSES
     >,
   )('the %s layer is pickable and the heatmap is not', (kind) => {
-    const layer = new (LAYER_CLASSES[kind] as new (o: unknown) => unknown)({
-      ...BASE,
-      id: `seam-pick-${kind}`,
-    }) as { supportsPicking(): boolean };
+    const layer = makeLayer(kind, 'pick') as { supportsPicking(): boolean };
     expect(layer.supportsPicking()).toBe(true);
     const heat = new STTHeatmapLayer({
       ...BASE,
@@ -720,6 +961,70 @@ describe('program-cache keys are namespaced per layer', () => {
       tripHeadsProgramKey('main', { mode: 'window', filter: false }),
     ],
     ['tripHeads', tripHeadsProgramKey('pick', { mode: 'wake', filter: true })],
+    // Wave M4 families. flowStroke shares flowCorridor's `flow-corridor:` head
+    // (it is a subclass), so it adds no new owner — the point of the check is
+    // that no two DISTINCT heads collide, which they do not.
+    [
+      'summary-cell',
+      summaryCellProgramKey('fill', { mode: 'window', filter: false }),
+    ],
+    [
+      'summary-cell',
+      summaryCellProgramKey('pick-stroke', { mode: 'trail', filter: true }),
+    ],
+    [
+      'hexbin',
+      hexbinProgramKey('cell', {
+        colorAggregation: 'SUM',
+        elevationAggregation: 'SUM',
+        source: 'gpu',
+      }),
+    ],
+    ['hexbin', hexbinProgramKey('scatter', { mode: 'wake', filter: true })],
+    [
+      'flow-corridor',
+      flowCorridorProgramKey('main', {
+        mode: 'window',
+        magnitude: 'texture',
+        format: 'float32',
+        filter: false,
+        ramp: false,
+      }),
+    ],
+    [
+      'flow-corridor',
+      flowCorridorProgramKey('pick', {
+        mode: 'trail',
+        magnitude: 'attribute',
+        format: 'float32',
+        filter: true,
+        ramp: true,
+      }),
+    ],
+    [
+      'flowmap',
+      flowmapProgramKey({
+        mode: 'window',
+        filter: false,
+        colorMode: 'direction',
+        bundle: true,
+        magnitude: 'texture',
+        format: 'float32',
+        pick: false,
+      }),
+    ],
+    [
+      'flowmap',
+      flowmapProgramKey({
+        mode: 'wake',
+        filter: true,
+        colorMode: 'category',
+        bundle: false,
+        magnitude: 'attribute',
+        format: 'float32',
+        pick: true,
+      }),
+    ],
   ];
 
   it.each(KEYS)(
@@ -763,11 +1068,15 @@ describe('program-cache keys are namespaced per layer', () => {
     expect([...owners.keys()].sort()).toEqual([
       'arc',
       'column',
+      'flow-corridor',
+      'flowmap',
       'heatmap-accum',
+      'hexbin',
       'icon',
       'line',
       'point',
       'polygon',
+      'summary-cell',
       'tripHeads',
       'trips',
     ]);
@@ -786,12 +1095,22 @@ describe('cross-layer prop conventions', () => {
 
   /**
    * `*Mode` props that are NOT the time-filter selector and are allowed to keep
-   * their own spelling. `renderingMode` is maplibre's own
-   * `CustomLayerInterface` vocabulary (`'2d' | '3d'`), surfaced by the one
-   * genuinely 3D layer so an embedder can opt back out of the shared
-   * depth slab — renaming it would fork the HOST's API, not ours.
+   * their own spelling.
+   *   - `renderingMode` is maplibre's own `CustomLayerInterface` vocabulary
+   *     (`'2d' | '3d'`), surfaced by the genuinely 3D layers so an embedder can
+   *     opt back out of the shared depth slab — renaming it would fork the
+   *     HOST's API, not ours.
+   *   - `seamMode` / `poleMode` (summary family) select the antimeridian and
+   *     pole policies for H3 cells — geometry knobs, not a time selector.
+   *   - `colorMode` (flowmap) picks the colour surface (direction gradient /
+   *     magnitude ramp / keyed category), orthogonal to the time filter.
    */
-  const NON_TIME_MODE_PROPS = new Set(['renderingMode']);
+  const NON_TIME_MODE_PROPS = new Set([
+    'renderingMode',
+    'seamMode',
+    'poleMode',
+    'colorMode',
+  ]);
 
   it('every layer spells the time-mode prop `timeFilterMode` (or omits it entirely)', async () => {
     // Trips is the deliberate omission: it infers trail vs wake from

@@ -58,14 +58,14 @@
 | boundingBox    | ✅     | ✅             | —        | —             |
 | surfel         | ✅     | ✅             | —        | ↳ point       |
 | heatmap        | ✅     | ↳ point        | ✅       | —             |
-| h3Summary      | ✅     | ✅             | —        | —             |
-| quadbinSummary | ✅     | ✅             | —        | —             |
-| flowmap        | ✅     | ✅             | —        | ↳ line        |
-| flowCorridor   | ✅     | ✅             | —        | ↳ line        |
-| flowStroke     | ✅     | ↳ flowCorridor | —        | ↳ line        |
+| h3Summary      | ✅     | ✅             | ✅       | —             |
+| quadbinSummary | ✅     | ✅             | ✅       | —             |
+| flowmap        | ✅     | ✅             | ✅       | ↳ line        |
+| flowCorridor   | ✅     | ✅             | ✅       | ↳ line        |
+| flowStroke     | ✅     | ↳ flowCorridor | ✅       | ↳ line        |
 | isoLines       | ↳ path | ✅             | —        | ↳ path        |
 | ego            | —      | ✅             | —        | —             |
 | text           | ✅     | ↳ icon         | ↳ icon   | ↳ icon        |
 | mesh           | ✅     | ↳ boundingBox  | —        | ↳ boundingBox |
 | pointCloud     | ✅     | ↳ point        | ↳ point  | ↳ point       |
-| hexbin         | ✅     | ↳ h3Summary    | —        | ↳ h3Summary   |
+| hexbin         | ✅     | ↳ h3Summary    | ✅       | ↳ h3Summary   |

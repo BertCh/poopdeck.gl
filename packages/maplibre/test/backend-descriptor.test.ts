@@ -60,6 +60,34 @@ import {
 import { metersToMercatorUnits } from '../src/lib/projection';
 import { buildArcVertexSource } from '../src/layers/arc-layer';
 import { buildTripHeadsVertexSource } from '../src/layers/trip-heads-layer';
+// Wave M4 — summary + flow families. Each ships a projecting vertex-source
+// builder (the summary/hexbin cell passes project via `projectTileFor3D`
+// through the shared elevated kernel; the flow passes via `projectTile`).
+import { buildSummaryCellVertexSource } from '../src/layers/summary-cell-layer';
+import { buildHexbinCellVertexSource } from '../src/layers/hexbin-layer';
+import { buildFlowCorridorVertexSource } from '../src/layers/flow-corridor-layer';
+import { buildFlowmapVertexSource } from '../src/layers/flowmap-layer';
+
+/**
+ * A no-op H3 boundary resolver. `STTH3SummaryLayer` REQUIRES an injected
+ * `cellToBoundary` (h3-js is not a dependency of this package) and THROWS
+ * without one, so every construction of the h3Summary kind in this gate must
+ * supply it. It is never called during construction — a stub triangle suffices.
+ */
+const STUB_H3_BOUNDARY = (): number[][] => [
+  [0, 0],
+  [0, 1],
+  [1, 1],
+];
+
+/**
+ * Kind-specific options a constructor demands beyond {@link BASE_OPTS}. Only
+ * the h3Summary kind has one (its injected boundary resolver); every other kind
+ * constructs from the base options alone.
+ */
+const REQUIRED_EXTRA: Partial<Record<LayerKind, Record<string, unknown>>> = {
+  h3Summary: { cellToBoundary: STUB_H3_BOUNDARY },
+};
 
 /**
  * The exported layer class that renders each maplibre-supported kind.
@@ -80,6 +108,15 @@ const CLASS_FOR_KIND: Partial<Record<LayerKind, string>> = {
   column: 'STTColumnLayer',
   arc: 'STTArcLayer',
   tripHeads: 'STTTripHeadsLayer',
+  // Wave M4 — summary + flow families. flowStroke is a genuinely distinct kind
+  // backed by its own exported subclass (`STTFlowStrokeLayer extends
+  // STTFlowCorridorLayer`), so the gate constructs and proves it independently.
+  h3Summary: 'STTH3SummaryLayer',
+  quadbinSummary: 'STTQuadbinSummaryLayer',
+  hexbin: 'STTHexbinLayer',
+  flowCorridor: 'STTFlowCorridorLayer',
+  flowStroke: 'STTFlowStrokeLayer',
+  flowmap: 'STTFlowmapLayer',
 };
 
 const exports = maplibre as unknown as Record<string, unknown>;
@@ -98,7 +135,15 @@ function construct(kind: LayerKind, extra: Record<string, unknown>): unknown {
   const name = CLASS_FOR_KIND[kind];
   if (!name) throw new Error(`no class mapping for kind ${kind}`);
   const Cls = exports[name] as new (o: unknown) => unknown;
-  return new Cls({ ...BASE_OPTS, id: `conformance-${kind}`, ...extra });
+  // Kind-required options (e.g. h3Summary's injected cellToBoundary) go in
+  // FIRST so a caller-supplied `extra` can still override them, and so the
+  // differential probe's "without" construction stays valid too.
+  return new Cls({
+    ...BASE_OPTS,
+    ...REQUIRED_EXTRA[kind],
+    id: `conformance-${kind}`,
+    ...extra,
+  });
 }
 
 /**
@@ -346,6 +391,47 @@ const PRELUDE_SOURCES = (): string[] => [
     pick: false,
   }),
   buildTripHeadsVertexSource(PRELUDE_SHADER, { mode: 'window', filter: false }),
+  // Wave M4. One entry per supported KIND so the count equals the supported set
+  // exactly (the test below asserts that): h3Summary and quadbinSummary compile
+  // a byte-identical cell shader, and flowStroke reuses flowCorridor's builder
+  // (it is an STTFlowCorridorLayer subclass), so those pairs each call one
+  // builder twice — every kind still demonstrably projects through the prelude.
+  buildSummaryCellVertexSource(PRELUDE_SHADER, {
+    mode: 'window',
+    filter: false,
+  }),
+  buildSummaryCellVertexSource(PRELUDE_SHADER, {
+    mode: 'window',
+    filter: false,
+  }),
+  buildHexbinCellVertexSource(PRELUDE_SHADER, {
+    colorAggregation: 'SUM',
+    elevationAggregation: 'SUM',
+    source: 'gpu',
+  }),
+  buildFlowCorridorVertexSource(PRELUDE_SHADER, {
+    mode: 'window',
+    magnitude: 'texture',
+    format: 'float32',
+    filter: false,
+    ramp: false,
+  }),
+  buildFlowCorridorVertexSource(PRELUDE_SHADER, {
+    mode: 'window',
+    magnitude: 'texture',
+    format: 'float32',
+    filter: false,
+    ramp: false,
+  }),
+  buildFlowmapVertexSource(PRELUDE_SHADER, {
+    mode: 'window',
+    filter: false,
+    colorMode: 'direction',
+    bundle: true,
+    magnitude: 'texture',
+    format: 'float32',
+    pick: false,
+  }),
 ];
 
 /**
@@ -448,18 +534,24 @@ describe('maplibreBackend descriptor', () => {
     }
   });
 
-  it('supports exactly the nine shipped kinds and nothing else', () => {
+  it('supports exactly the fifteen shipped kinds and nothing else', () => {
     const supported = LAYER_KINDS.filter(
       (k) => maplibreBackend.layerKinds[k].supported,
     ).sort();
     expect(supported).toEqual([
       'arc',
       'column',
+      'flowCorridor',
+      'flowStroke',
+      'flowmap',
+      'h3Summary',
       'heatmap',
+      'hexbin',
       'icon',
       'line',
       'point',
       'polygon',
+      'quadbinSummary',
       'tripHeads',
       'trips',
     ]);
@@ -514,13 +606,16 @@ describe('maplibreBackend descriptor', () => {
     // The regression this guards: text/mesh/hexbin were copied from the three
     // descriptor with icon/boundingBox/h3Summary fallbacks that three supports
     // and this backend did not. `text` was re-adopted in Wave M3 once the icon
-    // layer shipped (see the dedicated case above); mesh and hexbin still have
-    // no target here, so they must SKIP.
-    for (const kind of ['mesh', 'hexbin'] as const) {
+    // layer shipped; `hexbin` became a REAL native kind in Wave M4 (so it is no
+    // longer a fallback candidate at all — the dead `hexbin → h3Summary`
+    // referral is gone). `mesh` still has no target here, so it must SKIP.
+    for (const kind of ['mesh'] as const) {
       const support = maplibreBackend.layerKinds[kind];
       expect(support.supported).toBe(false);
       if (!support.supported) expect(support.fallbackKind).toBeUndefined();
     }
+    // hexbin is now native, not a skip — assert that transition explicitly.
+    expect(maplibreBackend.layerKinds.hexbin.supported).toBe(true);
   });
 
   it('(a) every supported kind maps to a class that is a real export', () => {
@@ -613,14 +708,22 @@ describe('maplibreBackend — Wave M2 flips are earned, not declared', () => {
     expect(maplibreBackend.capabilities.picking).toBe(true);
     expect(maplibreBackend.pickMechanism).toBe('id-fbo');
     // Every supported kind EXCEPT heatmap, whose pixels are a sum of unbounded
-    // splats with no single feature behind them.
+    // splats with no single feature behind them. The M4 summary/hexbin/flow
+    // kinds each ship a `drawPickTile` (a cell / a corridor / an OD arrow is the
+    // pick unit), so they join the set.
     expect(pickableKinds().sort()).toEqual([
       'arc',
       'column',
+      'flowCorridor',
+      'flowStroke',
+      'flowmap',
+      'h3Summary',
+      'hexbin',
       'icon',
       'line',
       'point',
       'polygon',
+      'quadbinSummary',
       'tripHeads',
       'trips',
     ]);
@@ -676,7 +779,7 @@ describe('maplibreBackend — Wave M3 flips are earned, not declared', () => {
     },
   );
 
-  it('every new kind compiles the host prelude (globe reaches all nine)', () => {
+  it('every supported kind compiles the host prelude (globe reaches all of them)', () => {
     expect(PRELUDE_SOURCES()).toHaveLength(
       LAYER_KINDS.filter((k) => maplibreBackend.layerKinds[k].supported).length,
     );
