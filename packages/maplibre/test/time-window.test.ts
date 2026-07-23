@@ -10,6 +10,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { trailAlpha } from '@poopdeck.gl/core/time-filter';
 import {
   timeWindowAlphaJS,
   trailAlphaJS,
@@ -47,13 +48,20 @@ function deckWindowAlpha(
   return Math.max(0, Math.min(1, vTimeAlpha));
 }
 
-/** Reference deck.gl trail branch. */
+/**
+ * Reference deck.gl trail branch, transcribed from `TimeFilterExtension`'s
+ * `vs:#main-start`. Note there is NO `trailLength <= 0` case in it: the
+ * extension guards the whole branch with `else if (trailLength > 0.0)` and
+ * otherwise falls through to the WINDOW branch. So the degenerate case has no
+ * deck trail semantics to be parity WITH — hard-coding a `return 1` here (as
+ * this fixture used to) invented an oracle. The degenerate case is pinned
+ * against core instead, in the last test below.
+ */
 function deckTrailAlpha(
   vertexTime: number,
   currentTime: number,
   trailLength: number,
 ): number {
-  if (trailLength <= 0) return 1;
   const trailStart = currentTime - trailLength;
   if (vertexTime > currentTime) return 0;
   if (vertexTime < trailStart) return 0;
@@ -166,10 +174,20 @@ describe('trail-mode parity vs @poopdeck.gl/layers TimeFilterExtension', () => {
     expect(ml).toBe(0);
   });
 
-  it('treats trailLength=0 as always-on (deck.gl reference also returns 1.0)', () => {
-    const ml = trailAlphaJS(500, 1000, 0, 1);
-    const dk = deckTrailAlpha(500, 1000, 0);
-    expect(ml).toBe(dk);
-    expect(ml).toBe(1);
+  it('a non-positive trailLength lights NOTHING, matching core trailAlpha', () => {
+    // Not "always on". core `trailAlpha` collapses the window to a point
+    // (`trailStart === currentTime`), so every vertex strictly in the past
+    // returns 0; the kernel returns 0 there too, and additionally at the
+    // measure-zero `vertexTime === currentTime` where core computes 0/0.
+    // deck never reaches its trail branch in this state at all — its callers
+    // fall through to the window branch, which is what every maplibre layer
+    // with a window kernel now degrades to.
+    for (const trailLength of [0, -1]) {
+      for (const vertexTime of [0, 500, 999, 1000]) {
+        expect(trailAlphaJS(vertexTime, 1000, trailLength, 1)).toBe(0);
+      }
+      expect(trailAlphaJS(1500, 1000, trailLength, 1)).toBe(0); // future
+    }
+    expect(trailAlpha(1000, 500, 0, 1)).toBe(0); // the core oracle agrees
   });
 });

@@ -13,7 +13,7 @@
 | ------------------ | -------- | -------- | --------- | ------ |
 | projectsOnCpu      | no       | yes      | yes       | yes    |
 | tilesetOwnership   | shared   | shared   | per-layer | shared |
-| pickMechanism      | gpu-id   | cpu-ray  | none      | host   |
+| pickMechanism      | gpu-id   | gpu-id   | id-fbo    | host   |
 | interleavedBasemap | yes      | no       | yes       | yes    |
 | basemapProjection  | mercator | mercator | mercator  | globe  |
 
@@ -21,10 +21,10 @@
 
 | Capability         | deck | three | maplibre | cesium |
 | ------------------ | ---- | ----- | -------- | ------ |
-| globe              | ✅   | ✅    | —        | ✅     |
-| picking            | ✅   | ✅    | —        | ✅     |
+| globe              | ✅   | ✅    | ✅       | ✅     |
+| picking            | ✅   | ✅    | ✅       | ✅     |
 | extrude3d          | ✅   | ✅    | ✅       | ✅     |
-| metricSizing       | ✅   | ✅    | —        | ✅     |
+| metricSizing       | ✅   | ✅    | ✅       | ✅     |
 | gpuHeatmap         | ✅   | —     | ✅       | —      |
 | liveBundling       | ✅   | —     | —        | —      |
 | timeAsHeight       | ✅   | —     | —        | —      |
@@ -38,30 +38,34 @@
 | ---------- | ---- | ----- | -------- | ------ |
 | none       | —    | —     | —        | —      |
 | window     | ✅   | ✅    | ✅       | ✅     |
-| wake       | ✅   | ✅    | —        | ✅     |
-| cumulative | ✅   | ✅    | —        | ✅     |
+| wake       | ✅   | ✅    | ✅       | ✅     |
+| cumulative | ✅   | ✅    | ✅       | ✅     |
 | trail      | ✅   | ✅    | ✅       | ✅     |
 
 ## Layer kinds (✅ native · ↳ fallback · — unsupported)
 
-| Layer kind     | deck   | three          | maplibre | cesium  |
-| -------------- | ------ | -------------- | -------- | ------- |
-| point          | ✅     | ✅             | ✅       | ✅      |
-| path           | ✅     | ✅             | —        | ✅      |
-| polygon        | ✅     | ✅             | ✅       | —       |
-| arc            | ✅     | ✅             | ↳ line   | ✅      |
-| line           | ✅     | ✅             | ✅       | ✅      |
-| icon           | ✅     | ✅             | —        | —       |
-| column         | ✅     | ✅             | —        | —       |
-| trips          | ✅     | ✅             | ✅       | ✅      |
-| tripHeads      | ✅     | ✅             | —        | ✅      |
-| boundingBox    | ✅     | ✅             | —        | —       |
-| surfel         | ✅     | ✅             | —        | ↳ point |
-| heatmap        | ✅     | ↳ point        | ✅       | —       |
-| h3Summary      | ✅     | ✅             | —        | —       |
-| quadbinSummary | ✅     | ✅             | —        | —       |
-| flowmap        | ✅     | ✅             | —        | ↳ line  |
-| flowCorridor   | ✅     | ✅             | —        | ↳ line  |
-| flowStroke     | ✅     | ↳ flowCorridor | —        | ↳ line  |
-| isoLines       | ↳ path | ✅             | —        | ↳ path  |
-| ego            | —      | ✅             | —        | —       |
+| Layer kind     | deck   | three          | maplibre | cesium        |
+| -------------- | ------ | -------------- | -------- | ------------- |
+| point          | ✅     | ✅             | ✅       | ✅            |
+| path           | ✅     | ✅             | —        | ✅            |
+| polygon        | ✅     | ✅             | ✅       | —             |
+| arc            | ✅     | ✅             | ↳ line   | ✅            |
+| line           | ✅     | ✅             | ✅       | ✅            |
+| icon           | ✅     | ✅             | —        | —             |
+| column         | ✅     | ✅             | —        | —             |
+| trips          | ✅     | ✅             | ✅       | ✅            |
+| tripHeads      | ✅     | ✅             | —        | ✅            |
+| boundingBox    | ✅     | ✅             | —        | —             |
+| surfel         | ✅     | ✅             | —        | ↳ point       |
+| heatmap        | ✅     | ↳ point        | ✅       | —             |
+| h3Summary      | ✅     | ✅             | —        | —             |
+| quadbinSummary | ✅     | ✅             | —        | —             |
+| flowmap        | ✅     | ✅             | —        | ↳ line        |
+| flowCorridor   | ✅     | ✅             | —        | ↳ line        |
+| flowStroke     | ✅     | ↳ flowCorridor | —        | ↳ line        |
+| isoLines       | ↳ path | ✅             | —        | ↳ path        |
+| ego            | —      | ✅             | —        | —             |
+| text           | ✅     | ↳ icon         | —        | ↳ icon        |
+| mesh           | ✅     | ↳ boundingBox  | —        | ↳ boundingBox |
+| pointCloud     | ✅     | ↳ point        | ↳ point  | ↳ point       |
+| hexbin         | ✅     | ↳ h3Summary    | —        | ↳ h3Summary   |

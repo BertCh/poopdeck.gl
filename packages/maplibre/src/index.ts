@@ -34,11 +34,17 @@
 export {
   STTPointLayer,
   type STTPointLayerOptions,
+  type PointTimeFilterMode,
 } from './layers/point-layer.js';
-export { STTLineLayer, type STTLineLayerOptions } from './layers/line-layer.js';
+export {
+  STTLineLayer,
+  type STTLineLayerOptions,
+  type STTLineTimeFilterMode,
+} from './layers/line-layer.js';
 export {
   STTPolygonLayer,
   type STTPolygonLayerOptions,
+  type PolygonTimeFilterMode,
 } from './layers/polygon-layer.js';
 export {
   STTTripsLayer,
@@ -47,18 +53,75 @@ export {
 export {
   STTHeatmapLayer,
   type STTHeatmapLayerOptions,
+  type STTHeatmapTimeFilterMode,
 } from './layers/heatmap-layer.js';
 export {
   STTBaseLayer,
   cssToDevicePixel,
+  resolveTrailFade,
+  expandPickIdColors,
   type STTBaseLayerOptions,
+  // ONE spelling of the mode union for the whole package; every layer's
+  // `*TimeFilterMode` alias above resolves to it.
+  type STTTimeFilterMode,
   type DrawContext,
   type TileGpuCache,
   type PickProvenanceEntry,
   type RGBA,
   type RGBA8,
 } from './base-layer.js';
-export { lngLatToMercator, projectPositions } from './lib/projection.js';
+
+// Mercator + metric-sizing math (D10). `mercatorZFromAltitude` /
+// `metersToPixelsAtLatitude` are what `radiusUnits`/`widthUnits: 'meters'` and
+// polygon `elevation` (metres) resolve through — exported so an embedder can
+// pre-compute the same factors, and so a custom subclass sizes identically.
+export {
+  lngLatToMercator,
+  projectPositions,
+  latFromMercatorY,
+  tileCenterLatitude,
+  metersPerMercatorUnit,
+  mercatorZFromAltitude,
+  metersToMercatorUnits,
+  metersToPixelsAtLatitude,
+  EARTH_RADIUS_M,
+  EARTH_CIRCUMFERENCE_M,
+} from './lib/projection.js';
+
+// GPU DataFilter kernel (D9 `dataFilter`). Every layer's options interface
+// EXTENDS `STTDataFilterOptions`, so consumers need to be able to name it (and
+// `DataFilterRange`) to type a filter-driving component; the GLSL + CPU helpers
+// come along for custom subclasses that want the same semantics.
+export {
+  DATA_FILTER_GLSL,
+  DATA_FILTER_ATTRIBUTE_GLSL,
+  DATA_FILTER_UNIFORMS_GLSL,
+  DATA_FILTER_CALL_GLSL,
+  DATA_FILTER_NAMES,
+  dataFilterAlphaJS,
+  createDataFilterUniforms,
+  resolveDataFilterUniforms,
+  extractFilterColumn,
+  expandFilterValues,
+  type STTDataFilterOptions,
+  type DataFilterRange,
+  type DataFilterUniforms,
+  type FilterColumn,
+} from './shaders/data-filter.glsl.js';
+
+// Time-filter kernel (D8): the four mode snippets plus their JS reference
+// impls, for subclasses that build their own shaders against the same math.
+export {
+  TIME_WINDOW_GLSL,
+  TIME_TRAIL_GLSL,
+  TIME_WAKE_GLSL,
+  TIME_CUMULATIVE_GLSL,
+  timeWindowAlphaJS,
+  trailAlphaJS,
+  wakeAlphaJS,
+  wakeSizeScaleJS,
+  cumulativeAlphaJS,
+} from './shaders/time-window.glsl.js';
 
 // Shared tileset source (D6a): ONE archive + ONE tileset serving N layers.
 // Construct one per .stt, pass it to each layer as `{ source }`, and register
@@ -103,8 +166,15 @@ export {
 export type { SttPickResult } from '@poopdeck.gl/core/picking';
 
 // Backend capability descriptor — what this adapter declares against the shared
-// `@poopdeck.gl/core/capabilities` vocabulary (renderer-abstraction Phase 5).
-export { maplibreBackend } from './backend-descriptor.js';
+// `@poopdeck.gl/core/capabilities` vocabulary (renderer-abstraction Phase 5),
+// plus the per-layer feature matrix (D9) mirroring `deckLayerFeatures`.
+export {
+  maplibreBackend,
+  maplibreLayerFeatures,
+  LAYER_FEATURES,
+  type LayerFeature,
+  type LayerFeatureSupport,
+} from './backend-descriptor.js';
 
 // Backwards-compat alias for the 0.1.x scaffold, which only had a points
 // renderer named STTMaplibreLayer. New code should import STTPointLayer.

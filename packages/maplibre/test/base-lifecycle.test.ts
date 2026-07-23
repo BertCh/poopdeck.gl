@@ -458,3 +458,41 @@ describe('render() signature dispatch', () => {
     expect(frame.projectionData).toBeUndefined();
   });
 });
+
+describe('option defaults survive an explicitly-passed undefined', () => {
+  it('autoRepaint stays true when a caller forwards `autoRepaint: undefined`', () => {
+    // The common React prop-forwarding shape `{ ...base, autoRepaint: props.x }`
+    // spreads an OWN key whose value is undefined. A `{ autoRepaint: true,
+    // ...opts }` seed would let that shadow the default, and setCurrentTime /
+    // setTimeWindow would silently stop repainting — the playhead advances in
+    // JS while the canvas only updates on unrelated map interaction.
+    const layer = new TestLayer({
+      ...baseOpts,
+      id: 'a',
+      autoRepaint: undefined,
+    }) as unknown as { opts: { autoRepaint: boolean }; map: unknown };
+    expect(layer.opts.autoRepaint).toBe(true);
+
+    const map = new MockMap();
+    layer.map = map;
+    (layer as unknown as { setCurrentTime(t: number): void }).setCurrentTime(1);
+    expect(map.triggerRepaint).toHaveBeenCalled();
+  });
+
+  it('an explicit `autoRepaint: false` is still honoured', () => {
+    const layer = new TestLayer({
+      ...baseOpts,
+      id: 'b',
+      autoRepaint: false,
+    }) as unknown as {
+      opts: { autoRepaint: boolean };
+      map: unknown;
+      setCurrentTime(t: number): void;
+    };
+    expect(layer.opts.autoRepaint).toBe(false);
+    const map = new MockMap();
+    layer.map = map;
+    layer.setCurrentTime(1);
+    expect(map.triggerRepaint).not.toHaveBeenCalled();
+  });
+});

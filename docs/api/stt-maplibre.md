@@ -10,11 +10,11 @@ loading path (one range-coalesced request per viewport fill, incremental
 per-tile delivery, giant-parent-tile gating, throughput-driven ETAs).
 
 If you can take a deck.gl dependency, [`@poopdeck.gl/layers`](./spatiotemporal-layer.md)
-still has a few advantages — rounded joints/dashes, GPU picking, GPU-side
-category-color extension, cross-tile consolidation. The MapLibre adapter trades
-those off for a much smaller bundle and the ability to interleave between
-native MapLibre style layers. It covers five layer kinds — points, lines,
-polygons (with optional stroke + extrusion), animated trips, and density
+still has a few advantages — rounded joints/dashes, GPU-side category-color
+extension, cross-tile consolidation, and the full 23-kind catalog. The MapLibre
+adapter trades those off for a much smaller bundle and the ability to interleave
+between native MapLibre style layers. It covers five layer kinds — points,
+lines, polygons (with optional stroke + extrusion), animated trips, and density
 heatmaps; the deck-only kinds (arcs, flowmaps, summary tiers, …) are listed
 in the [backend capability matrix](../spec/backend-capabilities.md).
 
@@ -26,13 +26,20 @@ pnpm add @poopdeck.gl/maplibre maplibre-gl
 npm i @poopdeck.gl/maplibre maplibre-gl
 ```
 
-`maplibre-gl` is a peer dependency, pinned **`^3 || ^4`**.
+`maplibre-gl` is a peer dependency, accepting **`^3 || ^4 || ^5 || ^6`**.
+Mapbox GL JS `>=3.9.1` also works (mercator only).
 
-> **MapLibre v5 is not supported.** v5 replaced the custom layer's
-> positional `render(gl, matrix)` signature with a single args object and
-> changed the mercator matrix semantics (maplibre-gl-js#3854), which this
-> adapter's render path does not handle — it expects the matrix and would
-> draw nothing. Use maplibre-gl v4 for STT layers.
+The render path detects the host's custom-layer signature at runtime — v3/v4's
+positional `render(gl, matrix)`, v4.6's added camera options, v5's
+`CustomRenderMethodInput` args object, and v6's per-tile `getProjectionData` —
+so the same layer code runs on every version.
+
+> **Globe requires a v5+ host.** On v5 and newer the layers inject MapLibre's
+> own `shaderData.vertexShaderPrelude` and project through `projectTile`, so
+> `map.setProjection({type: 'globe'})` renders STT data on the globe with
+> geometry subdivided to the projection's granularity. On v3/v4 (and Mapbox)
+> the layers use the legacy mercator matrix path and render flat, which is all
+> those hosts expose to custom layers.
 
 ## Layer classes
 
@@ -193,7 +200,15 @@ const tileset = layer.getTileset(); // undefined until metadata resolves
 | `lineWidth`                            | `number`                          | `1`                      | Outline pixel width                                                            |
 | `extruded`                             | `boolean`                         | `false`                  | Raise the top of the polygon to `elevation` and draw side walls                |
 | `elevation`                            | `number \| string`                | `0`                      | Constant elevation, or numeric property name                                   |
-| `altitudeScale`                        | `number`                          | `1e-7`                   | Converts elevation units → mercator-z                                          |
+| `altitudeScale`                        | `number`                          | `1`                      | Dimensionless exaggeration on `elevation` (see the note below)                 |
+
+> **Breaking change (2026-07).** `elevation` is now interpreted in **metres**
+> and converted with a latitude-correct metres→mercator-z factor, matching the
+> conformal-z contract MapLibre documents for custom layers. `altitudeScale`
+> used to carry that conversion as a hardcoded `1e-7` (which rendered
+> extrusions roughly 4× too tall); it is now a plain exaggeration multiplier
+> defaulting to `1`. If you previously passed `altitudeScale` to correct the
+> height, drop it — pass `elevation` in real metres instead.
 
 ### `STTTripsLayer`
 
@@ -262,31 +277,33 @@ Each layer exposes lifecycle helpers in addition to `CustomLayerInterface`:
 
 ## Compared to deck.gl
 
-| Feature                                | `@poopdeck.gl/maplibre`                            | `@poopdeck.gl/layers`                             |
-| -------------------------------------- | -------------------------------------------------- | ------------------------------------------------- |
-| Point billboards                       | ✓                                                  | ✓                                                 |
-| Line stroke (constant px)              | ✓                                                  | ✓                                                 |
-| Filled polygons                        | ✓ (single-ring)                                    | ✓                                                 |
-| Stroked / extruded polygons            | ✓                                                  | extruded ✓ (stroke: no)                           |
-| Trip animation (per-vertex timestamps) | ✓                                                  | ✓                                                 |
-| Heatmaps                               | ✓ (two-pass FBO)                                   | ✓ (`AnimatedHeatmapLayer`)                        |
-| Per-feature categorical colour         | ✓ (CPU-expanded RGBA attribute)                    | ✓ (`CategoryColorExtension`, GPU palette texture) |
-| Batched/coalesced tile loading         | ✓                                                  | ✓                                                 |
-| PlaybackGovernor hooks                 | ✓ (`onTilesetReady`/`onBufferChange`/`getTileset`) | ✓                                                 |
-| Rounded joints / caps                  | —                                                  | ✓                                                 |
-| GPU picking                            | —                                                  | ✓                                                 |
-| Globe projection                       | —                                                  | ✓ (GlobeView)                                     |
-| Interleaves with MapLibre style layers | ✓                                                  | partially (overlay)                               |
+| Feature                                   | `@poopdeck.gl/maplibre`                            | `@poopdeck.gl/layers`                             |
+| ----------------------------------------- | -------------------------------------------------- | ------------------------------------------------- |
+| Point billboards                          | ✓                                                  | ✓                                                 |
+| Line stroke (constant px)                 | ✓                                                  | ✓                                                 |
+| Filled polygons                           | ✓ (single-ring)                                    | ✓                                                 |
+| Stroked / extruded polygons               | ✓                                                  | extruded ✓ (stroke: no)                           |
+| Trip animation (per-vertex timestamps)    | ✓                                                  | ✓                                                 |
+| Heatmaps                                  | ✓ (two-pass FBO)                                   | ✓ (`AnimatedHeatmapLayer`)                        |
+| Per-feature categorical colour            | ✓ (CPU-expanded RGBA attribute)                    | ✓ (`CategoryColorExtension`, GPU palette texture) |
+| Batched/coalesced tile loading            | ✓                                                  | ✓                                                 |
+| PlaybackGovernor hooks                    | ✓ (`onTilesetReady`/`onBufferChange`/`getTileset`) | ✓                                                 |
+| Rounded joints / caps                     | —                                                  | ✓                                                 |
+| GPU picking                               | ✓ (id-FBO; point/line/polygon/trips)               | ✓                                                 |
+| Time modes (window/wake/cumulative/trail) | ✓                                                  | ✓                                                 |
+| Data filtering by column                  | ✓ (`filterProperty` + soft range)                  | ✓ (`DataFilterExtension`)                         |
+| Globe projection                          | ✓ (v5+ hosts, native prelude)                      | ✓ (GlobeView)                                     |
+| Interleaves with MapLibre style layers    | ✓                                                  | partially (overlay)                               |
 
 ## Limitations
 
-- **MapLibre v5 unsupported** (see the install note above).
 - **Single-ring polygons only.** Holes are not preserved in
   `BinaryFeatures` (see [Binary Features](./binary-features.md)); with
   pre-baked triangles (`--pre-tessellate`) hole-aware meshes draw
   correctly, but the runtime-earcut path treats each feature as one ring.
-- **No picking.** MapLibre's `queryRenderedFeatures` doesn't reach into
-  custom layers; you'd have to plumb pickable hit-testing yourself.
+- **Heatmaps are not pickable.** A density field has no per-feature
+  identity; the other four kinds pick via an offscreen id buffer
+  (`queryRenderedFeatures` never reaches custom layers in either library).
 - **Categorical colours expand on the CPU.** Each tile builds a per-vertex
   RGBA buffer (Uint8 normalised); the deck.gl adapter does the lookup
   GPU-side via a palette texture. Hot-swapping palettes therefore requires

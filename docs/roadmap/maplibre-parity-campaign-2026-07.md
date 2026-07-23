@@ -1,8 +1,21 @@
 # MapLibre/Mapbox native-backend parity campaign (2026-07-22)
 
-**Status: PLAN ONLY — PENDING RATIFY. Nothing implemented.** Execution is
-designed for agent teams/workflows run wave-by-wave, with the user in the loop
-between waves.
+**Status: RATIFIED, IN EXECUTION.** Waves run one at a time with the user in
+the loop between them.
+
+- **M0 + M1 — LANDED** (commit `3a56756`): host dispatch v3/v4/v5/v6 + mapbox,
+  native globe via the injected prelude, per-`variantName` program cache, globe
+  subdivision kit, styledata/context-loss hardening, `SharedTilesetSource`.
+- **M2 — LANDED, uncommitted** (2026-07-23): all four time-filter modes, GPU
+  DataFilter, metric sizing, the D10 elevation reconciliation (BREAKING —
+  `STTPolygonLayer.altitudeScale` is now a dimensionless exaggeration, see the
+  package CHANGELOG), id-FBO picking on point/line/polygon/trips, and the
+  descriptor feature matrix. Package suite 516/516, `tsc` clean, dist rebuilt.
+  **Open:** user browser verify (globe + the five kinds on a v5 host), and
+  `packages/mcp/docs/api/stt-maplibre.md` still documents the pre-M0 backend
+  (claims v5 unsupported / no picking / `altitudeScale` default `1e-7`) — the
+  docs pass is Wave M5 item 5, so that page misinforms until then.
+- **M3–M5 — not started.**
 
 **Goal.** Make `@poopdeck.gl/maplibre` a first-class rendering backend: an app
 with an existing MapLibre (or Mapbox) map should be able to drop STT layers in

@@ -80,14 +80,34 @@ export function makeMockGl(
     FRAGMENT_SHADER: 0x8b30,
     COMPILE_STATUS: 0x8b81,
     LINK_STATUS: 0x8b82,
+    COLOR_CLEAR_VALUE: 0x0c22,
+    VERTEX_ARRAY_BINDING: 0x85b5,
   };
 
   const drawCalls: Array<{ kind: 'arrays' | 'elements'; count: number }> = [];
 
+  /**
+   * Snapshot log of every `uniform2fv` upload. `mock.calls` retains the CALLER's
+   * array, and the DataFilter payload is a single `Float32Array` resolved in
+   * place per draw (no hot-path allocation), so a plain call log would show
+   * every recorded upload holding the latest values. Real GL copies at upload
+   * time — this log reproduces that, and is what a test asserting a SEQUENCE of
+   * vec2 uploads must read.
+   */
+  const vec2Uploads: Array<{ location: unknown; value: number[] }> = [];
+
   // Tracked bind state for getParameter — just enough for the heatmap's
-  // "capture + restore the host render target" path.
+  // "capture + restore the host render target" path and pick()'s wider
+  // capture/restore (blend + depth-test enables, clear colour, bound VAO).
   let boundFramebuffer: unknown = null;
   let currentViewport = new Int32Array([0, 0, 1024, 768]);
+  let boundVao: unknown = null;
+  // Real GL's own initial values, so a test can assert pick() put them back.
+  const enabledCaps = new Map<number, boolean>([
+    [constants.BLEND, false],
+    [constants.DEPTH_TEST, false],
+  ]);
+  let clearColorValue = new Float32Array([0, 0, 0, 0]);
 
   const gl = {
     ...constants,
@@ -95,9 +115,15 @@ export function makeMockGl(
     drawingBufferHeight: 768,
 
     drawCalls,
+    vec2Uploads,
 
-    enable: vi.fn(),
-    disable: vi.fn(),
+    enable: vi.fn((cap: number) => {
+      enabledCaps.set(cap, true);
+    }),
+    disable: vi.fn((cap: number) => {
+      enabledCaps.set(cap, false);
+    }),
+    isEnabled: vi.fn((cap: number) => enabledCaps.get(cap) ?? false),
     blendFunc: vi.fn(),
     useProgram: vi.fn(),
     bindBuffer: vi.fn(),
@@ -108,6 +134,12 @@ export function makeMockGl(
     uniformMatrix4fv: vi.fn(),
     uniform1f: vi.fn(),
     uniform2f: vi.fn(),
+    // The DataFilter kernel uploads its vec2 range/soft-range payloads as
+    // `uniform2fv` (Float32Array in, no unpacking) — every layer's filter path
+    // needs this recorder. Values are snapshotted into `vec2Uploads`; see there.
+    uniform2fv: vi.fn((location: unknown, value: ArrayLike<number>) => {
+      vec2Uploads.push({ location, value: Array.from(value) });
+    }),
     uniform4fv: vi.fn(),
 
     createBuffer: vi.fn(() => makeHandle('buffer')),
@@ -122,7 +154,9 @@ export function makeMockGl(
     deleteProgram: vi.fn(),
     deleteBuffer: vi.fn(),
     deleteVertexArray: vi.fn(),
-    bindVertexArray: vi.fn(),
+    bindVertexArray: vi.fn((vao: unknown) => {
+      boundVao = vao ?? null;
+    }),
 
     getShaderParameter: vi.fn(() => true),
     getProgramParameter: vi.fn(() => true),
@@ -154,7 +188,9 @@ export function makeMockGl(
       if (name === 'OES_vertex_array_object' && opts.supportsVaoExtension) {
         return {
           createVertexArrayOES: vi.fn(() => makeHandle('vao')),
-          bindVertexArrayOES: vi.fn(),
+          bindVertexArrayOES: vi.fn((vao: unknown) => {
+            boundVao = vao ?? null;
+          }),
           deleteVertexArrayOES: vi.fn(),
         };
       }
@@ -224,10 +260,16 @@ export function makeMockGl(
       if (pname === constants.FRAMEBUFFER_BINDING) return boundFramebuffer;
       // Fresh copy, matching real-GL semantics (callers can't mutate ours).
       if (pname === constants.VIEWPORT) return new Int32Array(currentViewport);
+      if (pname === constants.COLOR_CLEAR_VALUE) {
+        return new Float32Array(clearColorValue);
+      }
+      if (pname === constants.VERTEX_ARRAY_BINDING) return boundVao;
       return null;
     }),
     clear: vi.fn(),
-    clearColor: vi.fn(),
+    clearColor: vi.fn((r: number, g: number, b: number, a: number) => {
+      clearColorValue = new Float32Array([r, g, b, a]);
+    }),
     uniform1i: vi.fn(),
     uniform3fv: vi.fn(),
 

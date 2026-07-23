@@ -23,6 +23,9 @@ import {
 } from '@poopdeck.gl/core/picking';
 import { STTPointLayer } from '../src/layers/point-layer';
 import { STTLineLayer } from '../src/layers/line-layer';
+import { STTPolygonLayer } from '../src/layers/polygon-layer';
+import { STTTripsLayer } from '../src/layers/trips-layer';
+import { STTHeatmapLayer } from '../src/layers/heatmap-layer';
 import { cssToDevicePixel } from '../src/base-layer';
 import { makeMockGl, makeMockMap } from './mock-gl';
 import { makeLineTile, makePointTile } from './fixtures';
@@ -190,19 +193,40 @@ describe('resolvePick', () => {
 });
 
 describe('supportsPicking', () => {
-  it('is true for the point layer (has an id shader) and false for the line layer', () => {
-    const point = new STTPointLayer({ ...baseOpts, id: 'p' }) as any;
-    const line = new STTLineLayer({ ...baseOpts, id: 'l' }) as any;
-    expect(point.supportsPicking()).toBe(true);
-    expect(line.supportsPicking()).toBe(false);
+  // Wave M2/D11: point, line, polygon and trips all ship a `drawPickTile`
+  // hook, which is exactly what `supportsPicking()` reports. The heatmap does
+  // NOT and must not — a density pixel is a sum of unbounded splats with no
+  // feature identity behind it.
+  it.each([
+    ['point', STTPointLayer],
+    ['line', STTLineLayer],
+    ['polygon', STTPolygonLayer],
+    ['trips', STTTripsLayer],
+  ])('is true for the %s layer (it has an id pass)', (_kind, Cls) => {
+    const layer = new (Cls as any)({ ...baseOpts, id: 'l' }) as any;
+    expect(layer.supportsPicking()).toBe(true);
+  });
+
+  it('is false for the heatmap layer (density has no feature identity)', () => {
+    const heat = new STTHeatmapLayer({ ...baseOpts, id: 'h' }) as any;
+    expect(heat.supportsPicking()).toBe(false);
   });
 
   it('pick() returns null on a non-pickable layer', () => {
+    const heat = new STTHeatmapLayer({ ...baseOpts, id: 'h' }) as any;
+    heat.gl = makeMockGl();
+    heat.map = makeMockMap();
+    heat.tileset = {};
+    heat.lastMatrix = new Float32Array(16);
+    expect(heat.pick(10, 10)).toBeNull();
+  });
+
+  it('pick() returns null before any frame has rendered', () => {
     const line = new STTLineLayer({ ...baseOpts, id: 'l' }) as any;
     line.gl = makeMockGl();
     line.map = makeMockMap();
     line.tileset = {};
-    line.lastMatrix = new Float32Array(16);
+    // No `lastMatrix`: the layer is pickable but has drawn nothing yet.
     expect(line.pick(10, 10)).toBeNull();
   });
 });
@@ -256,5 +280,39 @@ describe('pick() orchestration (staged readback)', () => {
     const layer = standUp(gl);
     gl._readPixelsValue = new Uint8Array([0, 0, 0, 0]);
     expect(layer.pick(100, 100)).toBeNull();
+  });
+
+  it('restores blend / depth-test / clear-colour and the host VAO', () => {
+    // A pick normally fires from a `mousemove` handler, i.e. OUTSIDE
+    // painter.render(): maplibre has not unbound its VAO first and will not
+    // call context.setDirty() after, and it SKIPS a redundant gl call whenever
+    // its cached BaseValue already matches. So anything pick() leaves changed
+    // stays changed — the next frame clears to transparent black and draws the
+    // basemap unblended.
+    const gl = makeMockGl();
+    const layer = standUp(gl);
+    layer.initVaoSupport(gl); // onAdd does this on a real host
+
+    // Host state on entry: blending + depth on, style background clear colour,
+    // and the last basemap layer's vertex array still bound.
+    const hostVao = { __hostVao: true };
+    gl.bindVertexArray(hostVao);
+    gl.enable(gl.BLEND);
+    gl.enable(gl.DEPTH_TEST);
+    gl.clearColor(0.1, 0.2, 0.3, 1);
+
+    layer.pick(100, 100);
+
+    expect(gl.isEnabled(gl.BLEND)).toBe(true);
+    expect(gl.isEnabled(gl.DEPTH_TEST)).toBe(true);
+    const restored = Array.from(
+      gl.getParameter(gl.COLOR_CLEAR_VALUE) as Float32Array,
+    );
+    for (const [i, want] of [0.1, 0.2, 0.3, 1].entries()) {
+      expect(restored[i]).toBeCloseTo(want, 6); // f32 round-trip
+    }
+    expect(gl.getParameter(gl.VERTEX_ARRAY_BINDING)).toBe(hostVao);
+    // And the id pass ran on the DEFAULT vertex array, not the host's.
+    expect(gl.bindVertexArray).toHaveBeenCalledWith(null);
   });
 });

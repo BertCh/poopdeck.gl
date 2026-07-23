@@ -51,7 +51,10 @@ import {
   type GeometryType,
 } from '@poopdeck.gl/core';
 import * as core from '@poopdeck.gl/core/style';
-import { resolveTimeFilterParams } from '@poopdeck.gl/core/time-filter';
+import {
+  resolveTimeFilterParams,
+  type TimeFilterMode,
+} from '@poopdeck.gl/core/time-filter';
 import { makeTilesetCallbacks } from '@poopdeck.gl/core/tileset-adapter';
 import {
   encodePickId,
@@ -103,6 +106,64 @@ export function toRgba01(
   return is255
     ? [c[0] / 255, c[1] / 255, c[2] / 255, c[3] / 255]
     : [c[0], c[1], c[2], c[3]];
+}
+
+/**
+ * The time-filter modes a maplibre layer can compile. ONE alias for the whole
+ * package (every layer's `timeFilterMode` prop resolves to this) so the five
+ * kinds cannot drift into five spellings of the same union.
+ *
+ * Core's fifth mode `'none'` is excluded on purpose: it is "no filtering at
+ * all", which here is a `timeWindow` wider than the data, not a shader.
+ */
+export type STTTimeFilterMode = Exclude<TimeFilterMode, 'none'>;
+
+/**
+ * Normalize a `fadeTrail` prop to the shader's continuous 0..1 weight.
+ * Booleans are the historical spelling (`true` → full head→tail comet,
+ * `false` → solid snake); numbers blend between them (deck's `trailFade`
+ * uniform / core `trailAlpha`'s `trailFade` argument). Non-finite input falls
+ * back to the default rather than poisoning a uniform with NaN.
+ */
+export function resolveTrailFade(v: boolean | number | undefined): number {
+  if (v === undefined) return 1;
+  if (typeof v === 'boolean') return v ? 1 : 0;
+  if (!Number.isFinite(v)) return 1;
+  return Math.max(0, Math.min(1, v));
+}
+
+/**
+ * Repeat each feature's encoded pick-id colour across the draw units (segments,
+ * fill vertices, stroke edges) it contributed — the id-colour analogue of the
+ * DataFilter kernel's `expandFilterValues`, and the reason per-vertex or
+ * per-segment geometry still resolves to a per-FEATURE pick id.
+ *
+ * `perFeature` is the packed RGB triple stream from
+ * {@link STTBaseLayer.buildPickIdColors}; `counts[fi]` is how many draw units
+ * feature `fi` contributed; `total` is the layer's instance/vertex count. Never
+ * writes past `total`, and any unit beyond the ids the base provenance reserved
+ * stays id 0 (background) rather than borrowing the next entry's range.
+ */
+export function expandPickIdColors(
+  perFeature: Uint8Array,
+  counts: ArrayLike<number>,
+  total: number,
+): Uint8Array {
+  const out = new Uint8Array(total * 3);
+  const featureCount = Math.min(perFeature.length / 3, counts.length);
+  let w = 0;
+  for (let fi = 0; fi < featureCount; fi++) {
+    const r = perFeature[fi * 3];
+    const g = perFeature[fi * 3 + 1];
+    const b = perFeature[fi * 3 + 2];
+    for (let i = 0; i < counts[fi] && w < total; i++) {
+      out[w * 3] = r;
+      out[w * 3 + 1] = g;
+      out[w * 3 + 2] = b;
+      w++;
+    }
+  }
+  return out;
 }
 
 export interface STTBaseLayerOptions {
@@ -351,11 +412,19 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
     create: () => WebGLVertexArrayObject | null;
     bind: (vao: WebGLVertexArrayObject | null) => void;
     delete: (vao: WebGLVertexArrayObject) => void;
+    /**
+     * The vertex array currently bound. Only {@link pick} needs it: a pick can
+     * be issued from a `mousemove` handler, i.e. OUTSIDE the host's render
+     * pass, so maplibre's `setCustomLayerDefaults()` has NOT unbound its own
+     * VAO and our raw attribute binds would be recorded into it.
+     */
+    current: () => WebGLVertexArrayObject | null;
   } = {
     enabled: false,
     create: () => null,
     bind: () => undefined,
     delete: () => undefined,
+    current: () => null,
   };
   /**
    * Instanced-draw support detection. WebGL2 has `drawArraysInstanced` /
@@ -473,7 +542,12 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
 
   constructor(opts: STTBaseLayerOptions) {
     this.id = opts.id;
-    this.opts = { autoRepaint: true, ...opts };
+    // `??`, not a `{ autoRepaint: true, ...opts }` seed: a spread carries an
+    // EXPLICIT `autoRepaint: undefined` (the React prop-forwarding shape
+    // `{ ...base, autoRepaint: props.autoRepaint }`) as an own key and would
+    // shadow the default with undefined, silently killing every
+    // setCurrentTime repaint.
+    this.opts = { ...opts, autoRepaint: opts.autoRepaint ?? true };
     if (opts.source && opts.url) {
       throw new Error(
         `[${opts.id}] pass either url (per-layer archive) or source (shared tileset), not both`,
@@ -712,6 +786,9 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
    */
   private readonly handleContextLost = (): void => {
     this.contextLost = true;
+    // The drawing buffer is reallocated on restore, so the dpr memo's key
+    // (its width) is no longer trustworthy.
+    this.dprMemoBufferWidth = -1;
     this.releaseGpuResources(undefined);
     // Null the subclass's handles too — any gl.delete* its hook issues is
     // ignored on the lost context, so this is a pure reference release.
@@ -741,6 +818,9 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
   private initVaoSupport(
     gl: WebGLRenderingContext | WebGL2RenderingContext,
   ): void {
+    // 0x85B5 is VERTEX_ARRAY_BINDING in WebGL2 and VERTEX_ARRAY_BINDING_OES in
+    // the WebGL1 extension — same enum, so one literal serves both paths.
+    const VERTEX_ARRAY_BINDING = 0x85b5;
     const gl2 = gl as WebGL2RenderingContext;
     if (typeof gl2.createVertexArray === 'function') {
       this.vaoSupport = {
@@ -748,6 +828,9 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
         create: () => gl2.createVertexArray(),
         bind: (vao) => gl2.bindVertexArray(vao),
         delete: (vao) => gl2.deleteVertexArray(vao),
+        current: () =>
+          (gl2.getParameter(VERTEX_ARRAY_BINDING) ??
+            null) as WebGLVertexArrayObject | null,
       };
       return;
     }
@@ -762,6 +845,9 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
         create: () => ext.createVertexArrayOES(),
         bind: (vao) => ext.bindVertexArrayOES(vao),
         delete: (vao) => ext.deleteVertexArrayOES(vao),
+        current: () =>
+          (gl.getParameter(VERTEX_ARRAY_BINDING) ??
+            null) as WebGLVertexArrayObject | null,
       };
     }
   }
@@ -942,6 +1028,10 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
     options?: unknown,
   ): HostFrame | null {
     if (!this.tileset || !this.map || this.contextLost) return null;
+    // Frame-constant and read once per tile by the mode uniform pushes / the
+    // metric-sizing scale factors.
+    this.refreshFadeDurations();
+    this.frameZoom = this.map.getZoom();
     const frame = normalizeRenderArgs(matrixOrArgs, options, this.hostFrame);
     // Stash for user-initiated picking, which has no host frame of its own.
     this.lastMatrix = frame.matrix;
@@ -1220,20 +1310,59 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
   }
 
   /**
-   * Resolve the per-feature fade-in / fade-out durations from layer options.
+   * Resolved fade durations, in ms (0 = hard cutoff at that edge). ONE object
+   * per layer, refilled in place — `drawTile`/`drawPickTile` read it once per
+   * tile per frame on four layers, so returning a fresh literal there was
+   * thousands of short-lived objects a second on a resident tile set.
+   */
+  private readonly fadeDurations = { fadeIn: 0, fadeOut: 0 };
+  /** Inputs the cached {@link fadeDurations} were resolved from. */
+  private fadeMemo: [number, unknown, unknown, unknown] = [
+    Number.NaN,
+    undefined,
+    undefined,
+    undefined,
+  ];
+
+  /**
+   * Recompute {@link fadeDurations} when (and only when) its inputs moved.
    * Delegates to the shared kernel resolver (one fade policy across backends):
    * fades default to a hard 0-cut, with the 10%-of-window soft ramp applied
    * only on explicit `softTimeWindow: true`. The window-mode shader fragments
    * compare against these directly.
    *
-   * Returns ms (0 = hard cutoff at that edge).
+   * The four inputs are frame-constant, so the resolver runs at most once per
+   * frame however many tiles ask for the result. Called from `beginFrame` and
+   * `pick()`; the per-tile call sites go through {@link resolveFadeDurations},
+   * which is then a pure read.
+   */
+  protected refreshFadeDurations(): void {
+    const o = this.opts;
+    const m = this.fadeMemo;
+    if (
+      m[0] === o.timeWindow &&
+      m[1] === o.fadeInDuration &&
+      m[2] === o.fadeOutDuration &&
+      m[3] === o.softTimeWindow
+    ) {
+      return;
+    }
+    const p = resolveTimeFilterParams(o, { softDefaultFraction: 0.1 });
+    this.fadeDurations.fadeIn = Math.max(0, p.fadeIn ?? 0);
+    this.fadeDurations.fadeOut = Math.max(0, p.fadeOut ?? 0);
+    m[0] = o.timeWindow;
+    m[1] = o.fadeInDuration;
+    m[2] = o.fadeOutDuration;
+    m[3] = o.softTimeWindow;
+  }
+
+  /**
+   * The layer's fade durations. Allocation-free: the SAME object comes back
+   * every call (destructure it, never retain it).
    */
   protected resolveFadeDurations(): { fadeIn: number; fadeOut: number } {
-    const p = resolveTimeFilterParams(this.opts, { softDefaultFraction: 0.1 });
-    return {
-      fadeIn: Math.max(0, p.fadeIn ?? 0),
-      fadeOut: Math.max(0, p.fadeOut ?? 0),
-    };
+    this.refreshFadeDurations();
+    return this.fadeDurations;
   }
 
   /**
@@ -1434,8 +1563,22 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
         | { style?: { projection?: { subdivisionGranularity?: unknown } } }
         | undefined
     )?.style?.projection?.subdivisionGranularity;
+    // Deliberately NOT memoized. The globe cache keys read this once per tile
+    // per frame, but a host may mutate its granularity curve IN PLACE (only
+    // maplibre's own projections are guaranteed to swap the settings object on
+    // `setProjection`), and a stale granularity silently reuses chords that
+    // horizon-clip. Correctness over two property reads.
     return granularityForZoom(like, z) * 2 ** z;
   }
+
+  /**
+   * Live fractional zoom for the frame in progress, captured once in
+   * {@link beginFrame}. `undefined` outside a frame (a direct `drawTile` in a
+   * test, or a layer driven by hand), where callers fall back to the live
+   * getter. Metric sizing reads it once per TILE, and it cannot move inside a
+   * render pass.
+   */
+  protected frameZoom?: number;
 
   /**
    * Camera parameters for CPU-side pick / billboard math: the values
@@ -1609,20 +1752,39 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
 
   /**
    * Best-effort device-pixel ratio: the drawing buffer / canvas-CSS ratio when
-   * the map canvas is reachable, else `devicePixelRatio`, else 1. Only used to
-   * position the readback texel, so an off-by-a-fraction is harmless.
+   * the map canvas is reachable, else `devicePixelRatio`, else 1.
+   *
+   * Two callers, both needing the SAME ratio: the pick readback texel (an
+   * off-by-a-fraction is harmless there) and metric sizing, where maplibre's
+   * `512 · 2^zoom` world is CSS pixels while `gl_PointSize` / `uViewport` are
+   * DEVICE pixels — so every metres→pixels conversion must cross this ratio.
+   * `protected` so the sizing layers share one implementation.
+   *
+   * `canvas.clientWidth` is a layout-forcing DOM read and the metric-sizing
+   * paths call this once per TILE, so the result is memoized against the
+   * drawing-buffer width: the ratio can only move when the buffer is resized
+   * (maplibre reallocates it on canvas resize and on a dpr change), and the
+   * memo is dropped wholesale on context loss.
    */
-  private resolvePickDpr(
+  protected resolveDevicePixelRatio(
     gl: WebGLRenderingContext | WebGL2RenderingContext,
   ): number {
+    if (gl.drawingBufferWidth === this.dprMemoBufferWidth) return this.dprMemo;
     const canvas = (
       this.map as unknown as { getCanvas?: () => HTMLCanvasElement }
     )?.getCanvas?.();
-    if (canvas && canvas.clientWidth > 0) {
-      return gl.drawingBufferWidth / canvas.clientWidth;
-    }
-    return (globalThis as { devicePixelRatio?: number }).devicePixelRatio ?? 1;
+    const dpr =
+      canvas && canvas.clientWidth > 0
+        ? gl.drawingBufferWidth / canvas.clientWidth
+        : ((globalThis as { devicePixelRatio?: number }).devicePixelRatio ?? 1);
+    this.dprMemoBufferWidth = gl.drawingBufferWidth;
+    this.dprMemo = dpr;
+    return dpr;
   }
+
+  /** Drawing-buffer width {@link dprMemo} was measured at; -1 = unmeasured. */
+  private dprMemoBufferWidth = -1;
+  private dprMemo = 1;
 
   /**
    * Hit-test the feature under CSS pixel `(cssX, cssY)`. Renders the layer's
@@ -1631,9 +1793,17 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
    * {@link SttPickResult}. Returns null when the layer isn't pickable, hasn't
    * rendered yet, or the cursor is over empty space.
    *
-   * The host render target + viewport are captured and restored, so calling
-   * `pick()` never disturbs the visible frame. Browser-verify-only (needs a
-   * live GL FBO + `readPixels`); its CPU pieces are unit-tested.
+   * Every piece of GL state this pass touches is captured and restored: render
+   * target, viewport, BLEND / DEPTH_TEST enables, clear colour, and the bound
+   * vertex array. That is not defensive tidiness — a pick is normally issued
+   * from a `mousemove` handler, i.e. OUTSIDE `painter.render()`, so maplibre
+   * has neither run `setCustomLayerDefaults()` (which unbinds its VAO) before
+   * nor `context.setDirty()` after. maplibre caches blend/depth/clearColor as
+   * `BaseValue`s and SKIPS the GL call when the cached value already matches,
+   * so anything we leave changed behind its back is not self-healing: the next
+   * frame would clear to transparent black and draw the basemap unblended.
+   * Browser-verify-only (needs a live GL FBO + `readPixels`); its CPU pieces
+   * are unit-tested.
    */
   pick(cssX: number, cssY: number): SttPickResult | null {
     const gl = this.gl;
@@ -1651,12 +1821,22 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
       gl.FRAMEBUFFER_BINDING,
     ) as WebGLFramebuffer | null;
     const prevViewport = gl.getParameter(gl.VIEWPORT) as Int32Array;
+    const prevBlend = gl.isEnabled(gl.BLEND);
+    const prevDepthTest = gl.isEnabled(gl.DEPTH_TEST);
+    const prevClearColor = gl.getParameter(
+      gl.COLOR_CLEAR_VALUE,
+    ) as Float32Array | null;
+    // The host's VAO, when a pick lands outside its render pass (see the
+    // doc-comment): the raw attribute binds below would otherwise be recorded
+    // into whatever vertex array the last basemap layer drew with.
+    const prevVao = this.vaoSupport.current();
 
     this.ensurePickFbo(gl);
     const w = this.pickWidth;
     const h = this.pickHeight;
     if (w === 0 || h === 0) return null;
 
+    if (this.vaoSupport.enabled) this.vaoSupport.bind(null);
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.pickFbo!);
     gl.viewport(0, 0, w, h);
     // Ids are exact — no blending, no depth test, clear to the reserved 0.
@@ -1665,8 +1845,12 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
     gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT);
 
+    // Frame-constant scalars the per-tile pick draws read (metric sizing,
+    // fades); resolved here so the tile loop stays allocation- and DOM-free.
+    this.refreshFadeDurations();
+    this.frameZoom = this.map.getZoom();
     const currentTime = this.opts.currentTime;
-    const zoom = Math.floor(this.map.getZoom());
+    const zoom = Math.floor(this.frameZoom);
     for (const e of provenance) {
       const ctx: DrawContext = {
         matrix,
@@ -1681,13 +1865,13 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
       };
       this.drawPickTile(gl, e.tile, e.layer, e.cache, ctx, e.idBase);
     }
-    this.unbindVao();
 
-    const dpr = this.resolvePickDpr(gl);
+    const dpr = this.resolveDevicePixelRatio(gl);
     const { x, y } = cssToDevicePixel(cssX, cssY, dpr, h);
     gl.readPixels(x, y, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, this.pickBuffer);
 
-    // Restore the host's render target before returning.
+    // Restore every piece of host state this pass changed (see the
+    // doc-comment: maplibre's own cache will not repair it for us).
     gl.bindFramebuffer(gl.FRAMEBUFFER, prevFramebuffer);
     gl.viewport(
       prevViewport[0],
@@ -1695,6 +1879,17 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
       prevViewport[2],
       prevViewport[3],
     );
+    if (prevBlend) gl.enable(gl.BLEND);
+    if (prevDepthTest) gl.enable(gl.DEPTH_TEST);
+    if (prevClearColor) {
+      gl.clearColor(
+        prevClearColor[0],
+        prevClearColor[1],
+        prevClearColor[2],
+        prevClearColor[3],
+      );
+    }
+    if (this.vaoSupport.enabled) this.vaoSupport.bind(prevVao);
 
     return this.resolvePick(
       [this.pickBuffer[0], this.pickBuffer[1], this.pickBuffer[2]],

@@ -57,6 +57,16 @@ git history preserves everything verbatim.
   motion parity, adopt-or-cut, AI-surface reach) executed as wave-by-wave
   agent workflows with a target capability matrix. Plan only; Wave-2+ fleet
   republish folds into register item 1.
+- [**maplibre-parity-campaign-2026-07.md**](./maplibre-parity-campaign-2026-07.md)
+  — the MapLibre/Mapbox native-backend parity campaign (2026-07-22): three-agent
+  research pass (custom-layer APIs across maplibre v3→v6 and mapbox v3 from
+  source; deck 9.3 interleaved internals + ecosystem patterns; whole-repo backend
+  audit) → six waves reversing the "5-of-23 subset is intentional" posture.
+  **IN EXECUTION** — M0+M1 landed (host dispatch v3–v6, native globe via the
+  injected prelude, lifecycle hardening, shared tileset); M2 landed (all four
+  time modes, DataFilter, metric sizing, the D10 elevation reconciliation —
+  breaking, see the package CHANGELOG — and id-FBO picking on four kinds).
+  M3–M5 open; user browser verify open.
 - [**three-backend-sota-campaign-2026-07.md**](./three-backend-sota-campaign-2026-07.md)
   — the three.js backend SoTA campaign (2026-07-22): four-agent research pass
   (deck-vs-three gap audit; geo-ecosystem survey; TSL/WebGPU deep dive; large-scale
@@ -137,6 +147,14 @@ git history preserves everything verbatim.
   gotchas (nuScenes local frame, AV2 UTM), license verdicts (the Waymo
   no-redistribution lesson), palette lockstep rule, and the measurement-driven
   LiDAR compression story (3.84 GB → 633 MB) with counted-out levers.
+- [**cosmos-drive-dreams.md**](./cosmos-drive-dreams.md) — the `/worlds` World
+  Model Scenario Explorer (2026-07-23): ~300 Cosmos-Drive-Dreams scenarios on a
+  synthetic equatorial grid, four COMBINED cross-scenario archives on one shared
+  loop, generated video locked to the STT playhead. Carries the split-tar video
+  streaming constraint and the measurement that reshaped the demo (variants are
+  scattered, so the corpus gives a weather mosaic across worlds, not a carousel
+  per world), plus the three layer-side constraints (no box DataFilter,
+  hide-only filtering, `filterSize: 1`). Open: browser verify → R2 sync → un-gate.
 - [**shipping-2026-07.md**](./shipping-2026-07.md) — distribution record,
   SHIPPED 2026-07-05 (crates.io facade + 8 npm packages, lockstep at 0.4.0):
   naming rationale, feature/install matrix, version/tag + MSRV, auth lifecycle,
