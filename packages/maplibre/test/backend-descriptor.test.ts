@@ -51,14 +51,35 @@ import { buildLineVertexSource } from '../src/layers/line-layer';
 import { buildFillVertexSource } from '../src/layers/polygon-layer';
 import { buildTripsVertexSource } from '../src/layers/trips-layer';
 import { buildHeatmapAccumVertexSource } from '../src/layers/heatmap-layer';
+import { buildIconVertexSource } from '../src/layers/icon-layer';
+import {
+  buildColumnVertexSource,
+  resolveColumnRadiusScale,
+  timeHeightLiftMeters,
+} from '../src/layers/column-layer';
+import { metersToMercatorUnits } from '../src/lib/projection';
+import { buildArcVertexSource } from '../src/layers/arc-layer';
+import { buildTripHeadsVertexSource } from '../src/layers/trip-heads-layer';
 
-/** The exported layer class that renders each maplibre-supported kind. */
+/**
+ * The exported layer class that renders each maplibre-supported kind.
+ *
+ * This map is the gate's ONLY bridge from the descriptor's vocabulary to real
+ * code: gate (a) fails a supported kind with no entry, and `construct` throws
+ * for one, so adding a kind to `SUPPORTED_KINDS` without shipping (and
+ * exporting) a class cannot pass.
+ */
 const CLASS_FOR_KIND: Partial<Record<LayerKind, string>> = {
   point: 'STTPointLayer',
   line: 'STTLineLayer',
   polygon: 'STTPolygonLayer',
   trips: 'STTTripsLayer',
   heatmap: 'STTHeatmapLayer',
+  // Wave M3.
+  icon: 'STTIconLayer',
+  column: 'STTColumnLayer',
+  arc: 'STTArcLayer',
+  tripHeads: 'STTTripHeadsLayer',
 };
 
 const exports = maplibre as unknown as Record<string, unknown>;
@@ -90,6 +111,23 @@ function construct(kind: LayerKind, extra: Record<string, unknown>): unknown {
 const RAW_OPTIONS_FIELD = 'opts';
 
 /**
+ * A CLASS INSTANCE parked on the layer root — an archive, a tileset, a shared
+ * source, the map itself, a track-index maintainer. `STTBaseLayer`'s
+ * constructor FORWARDS options into these (`new STTArchive({ url: opts.url,
+ * maxConcurrentRequests: opts.maxRequests })`, and `STTArchive` keeps `url` as
+ * an own property), so descending into them would let a base-forwarded option
+ * "prove" itself for every kind with no per-kind implementation behind it —
+ * `provesProp(anyKind, 'url', probe)` would come back true. Resolved option
+ * bags are plain objects and arrays, which is the distinction drawn here.
+ */
+const isCollaborator = (v: unknown): boolean =>
+  typeof v === 'object' &&
+  v !== null &&
+  !Array.isArray(v) &&
+  Object.getPrototypeOf(v) !== Object.prototype &&
+  Object.getPrototypeOf(v) !== null;
+
+/**
  * Does `value` appear anywhere in the layer's own RESOLVED state?
  *
  * Layers park their defaulted options in one own field (`pointOpts`,
@@ -97,6 +135,11 @@ const RAW_OPTIONS_FIELD = 'opts';
  * walk over own enumerable properties reaches every one of them without the
  * gate having to know which field a given layer chose. Matching is by
  * `Object.is`, so an object probe matches only its own reference.
+ *
+ * Two things the walk refuses to count as evidence at the layer ROOT: the raw
+ * `opts` bag (it absorbs every key whether the layer reads it or not) and any
+ * {@link isCollaborator} instance (storage inside a base-built collaborator is
+ * the BASE reading the option, not this kind).
  */
 function absorbs(
   instance: unknown,
@@ -110,7 +153,9 @@ function absorbs(
   }
   if (ArrayBuffer.isView(instance)) return false;
   for (const [key, v] of Object.entries(instance as Record<string, unknown>)) {
-    if (isLayerRoot && key === RAW_OPTIONS_FIELD) continue;
+    if (isLayerRoot && (key === RAW_OPTIONS_FIELD || isCollaborator(v))) {
+      continue;
+    }
     if (absorbs(v, value, depth - 1, false)) return true;
   }
   return false;
@@ -200,6 +245,48 @@ const MODE_SOURCES: ReadonlyArray<{
     modes: ['trail', 'wake'],
     build: (mode) => buildTripsVertexSource(LEGACY_SHADER, mode as never),
   },
+  {
+    layer: 'icon',
+    modes: ['window', 'wake', 'cumulative', 'trail'],
+    build: (mode) =>
+      buildIconVertexSource(LEGACY_SHADER, {
+        mode: mode as never,
+        filter: false,
+        glide: false,
+      }),
+  },
+  {
+    layer: 'column',
+    modes: ['window', 'wake', 'cumulative', 'trail'],
+    build: (mode) =>
+      buildColumnVertexSource(LEGACY_SHADER, {
+        mode: mode as never,
+        filter: false,
+      }),
+  },
+  {
+    layer: 'arc',
+    modes: ['window', 'wake', 'cumulative', 'trail'],
+    build: (mode) =>
+      buildArcVertexSource(LEGACY_SHADER, {
+        mode: mode as never,
+        filter: false,
+        greatCircle: false,
+        pick: false,
+      }),
+  },
+  {
+    // A head is ONE moving position: `cumulative` and `trail` describe a
+    // history, which is what STTTripsLayer draws, so this layer contributes
+    // evidence for window + wake only (and degrades the other two with a warn).
+    layer: 'tripHeads',
+    modes: ['window', 'wake'],
+    build: (mode) =>
+      buildTripHeadsVertexSource(LEGACY_SHADER, {
+        mode: mode as never,
+        filter: false,
+      }),
+  },
 ];
 
 /** Modes with at least one layer that actually compiles the kernel. */
@@ -235,22 +322,48 @@ const PRELUDE_SHADER = {
  * set the caller supplies. Each predicate is derived from the SHIPPED code, so
  * deleting the behaviour un-proves the claim here instead of in a browser.
  */
+/**
+ * Every prelude source in the package, one per layer class — the globe
+ * predicate's input. A new kind that forgot the prelude branch (or that only
+ * ever emits the legacy `uMatrix` shader) un-proves `globe` here.
+ */
+const PRELUDE_SOURCES = (): string[] => [
+  buildPointVertexSource(PRELUDE_SHADER, { mode: 'window', filter: false }),
+  buildLineVertexSource(PRELUDE_SHADER, { mode: 'window' }),
+  buildFillVertexSource({ ...PRELUDE_SHADER, mode: 'window' }),
+  buildTripsVertexSource(PRELUDE_SHADER, 'trail'),
+  buildHeatmapAccumVertexSource(PRELUDE_SHADER, { timeFilterMode: 'window' }),
+  buildIconVertexSource(PRELUDE_SHADER, {
+    mode: 'window',
+    filter: false,
+    glide: false,
+  }),
+  buildColumnVertexSource(PRELUDE_SHADER, { mode: 'window', filter: false }),
+  buildArcVertexSource(PRELUDE_SHADER, {
+    mode: 'window',
+    filter: false,
+    greatCircle: false,
+    pick: false,
+  }),
+  buildTripHeadsVertexSource(PRELUDE_SHADER, { mode: 'window', filter: false }),
+];
+
+/**
+ * A source projects through the host prelude when it calls EITHER entry point.
+ * The flat kinds call `projectTile`; the genuinely 3D ones (column, arc, and
+ * polygon when extruded) call `projectTileFor3D`, which is a different token —
+ * matching only `projectTile(` would silently un-prove them.
+ */
+const projectsViaPrelude = (src: string): boolean =>
+  src.includes('projectTile(') || src.includes('projectTileFor3D(');
+
 const CAPABILITY_EVIDENCE: Readonly<
   Partial<Record<Capability, () => boolean>>
 > = {
   // Every layer must compile the host's injected prelude and project through
   // it — that is what makes globe render natively rather than as a flat
   // mercator sheet pasted on a sphere.
-  globe: () =>
-    [
-      buildPointVertexSource(PRELUDE_SHADER, { mode: 'window', filter: false }),
-      buildLineVertexSource(PRELUDE_SHADER, { mode: 'window' }),
-      buildFillVertexSource({ ...PRELUDE_SHADER, mode: 'window' }),
-      buildTripsVertexSource(PRELUDE_SHADER, 'trail'),
-      buildHeatmapAccumVertexSource(PRELUDE_SHADER, {
-        timeFilterMode: 'window',
-      }),
-    ].every((src) => src.includes('projectTile(')),
+  globe: () => PRELUDE_SOURCES().every(projectsViaPrelude),
   // Extrusion lives on the polygon layer: it must absorb `extruded`/`elevation`
   // AND emit the 3D projection branch.
   extrude3d: () =>
@@ -278,7 +391,29 @@ const CAPABILITY_EVIDENCE: Readonly<
   metricSizing: () =>
     provesProp('point', 'radiusUnits', 'meters') &&
     provesProp('line', 'widthUnits', 'meters') &&
-    provesProp('trips', 'widthUnits', 'meters'),
+    provesProp('trips', 'widthUnits', 'meters') &&
+    // Wave M3 kinds size in metres too, each through the same per-tile
+    // `lib/projection.ts` factor at the tile's centre latitude.
+    provesProp('icon', 'sizeUnits', 'meters') &&
+    provesProp('arc', 'widthUnits', 'meters') &&
+    provesProp('tripHeads', 'radiusUnits', 'meters') &&
+    // Column is the one layer a value probe cannot settle: `'meters'` is
+    // already its default (deck ColumnLayer parity) and `'pixels'` is the
+    // default of its OWN `lineWidthUnits`, so both probe values are present
+    // either way. Prove the maths instead — the metres branch of the exported
+    // CPU reference must BE the latitude-correct factor, and the pixels branch
+    // must not be.
+    resolveColumnRadiusScale('meters', 1, 45, 6) ===
+      metersToMercatorUnits(1, 45) &&
+    resolveColumnRadiusScale('pixels', 1, 45, 6) !==
+      resolveColumnRadiusScale('meters', 1, 45, 6),
+  // Wave M3: the space-time-cube lift IS a rendering of time as height. Proven
+  // by the column layer reading the scale AND its CPU twin — the exact function
+  // the shader mirrors — returning the lift the declaration promises.
+  timeAsHeight: () =>
+    provesProp('column', 'timeHeightScale', 1234.5) &&
+    provesProp('column', 'timeHeightOrigin', 1_700_000_111_000) &&
+    timeHeightLiftMeters(5_000, 1_000, 2) === 8_000,
 };
 
 describe('maplibreBackend descriptor', () => {
@@ -313,19 +448,49 @@ describe('maplibreBackend descriptor', () => {
     }
   });
 
-  it('supports exactly point/line/polygon/trips/heatmap and nothing else', () => {
+  it('supports exactly the nine shipped kinds and nothing else', () => {
     const supported = LAYER_KINDS.filter(
       (k) => maplibreBackend.layerKinds[k].supported,
     ).sort();
-    expect(supported).toEqual(['heatmap', 'line', 'point', 'polygon', 'trips']);
+    expect(supported).toEqual([
+      'arc',
+      'column',
+      'heatmap',
+      'icon',
+      'line',
+      'point',
+      'polygon',
+      'tripHeads',
+      'trips',
+    ]);
   });
 
-  it('degrades arc to a line fallback (natural for a backend without arc geometry)', () => {
+  it('renders arc NATIVELY — the arc→line fallback is retired, not re-pointed', () => {
+    // Wave M3 replaced the approximation (a chord on the ground) with a real
+    // tessellated 3D arc, so the kind must be supported AND carry no fallback
+    // (a supported kind with a fallbackKind would make `degradeRequest`
+    // ambiguous about which answer wins).
     const arc = maplibreBackend.layerKinds.arc;
-    expect(arc.supported).toBe(false);
-    if (!arc.supported) {
-      expect(arc.fallbackKind).toBe('line');
-      expect(arc.reason).toBeTruthy();
+    expect(arc.supported).toBe(true);
+    expect((arc as { fallbackKind?: string }).fallbackKind).toBeUndefined();
+    expect(isExportedClass('STTArcLayer')).toBe(true);
+  });
+
+  it('text now degrades to a REAL icon layer instead of dangling', () => {
+    // Before Wave M3 this fallback was deliberately absent: `text → icon` was
+    // inherited from the three descriptor, whose icon kind is supported, and
+    // naming it here would have handed the caller a second unrenderable kind.
+    // STTIconLayer exists now, so the fallback is honest — the marker renders,
+    // the glyphs do not.
+    const text = maplibreBackend.layerKinds.text;
+    expect(text.supported).toBe(false);
+    if (!text.supported) {
+      expect(text.fallbackKind).toBe('icon');
+      expect(maplibreBackend.layerKinds.icon.supported).toBe(true);
+      // A degrading kind's reason must say what is LOST, not just refer to
+      // deck — otherwise the caller cannot judge whether the substitute works.
+      expect(text.reason).toMatch(/lost:/);
+      expect(text.reason).toMatch(/GLYPHS/i);
     }
   });
 
@@ -348,8 +513,10 @@ describe('maplibreBackend descriptor', () => {
   it('(c) a kind with no in-backend approximation SKIPS rather than naming a dead fallback', () => {
     // The regression this guards: text/mesh/hexbin were copied from the three
     // descriptor with icon/boundingBox/h3Summary fallbacks that three supports
-    // and this backend does not.
-    for (const kind of ['text', 'mesh', 'hexbin'] as const) {
+    // and this backend did not. `text` was re-adopted in Wave M3 once the icon
+    // layer shipped (see the dedicated case above); mesh and hexbin still have
+    // no target here, so they must SKIP.
+    for (const kind of ['mesh', 'hexbin'] as const) {
       const support = maplibreBackend.layerKinds[kind];
       expect(support.supported).toBe(false);
       if (!support.supported) expect(support.fallbackKind).toBeUndefined();
@@ -445,12 +612,23 @@ describe('maplibreBackend — Wave M2 flips are earned, not declared', () => {
   it('claims picking via an id FBO, backed by drawPickTile on every kind with feature identity', () => {
     expect(maplibreBackend.capabilities.picking).toBe(true);
     expect(maplibreBackend.pickMechanism).toBe('id-fbo');
+    // Every supported kind EXCEPT heatmap, whose pixels are a sum of unbounded
+    // splats with no single feature behind them.
     expect(pickableKinds().sort()).toEqual([
+      'arc',
+      'column',
+      'icon',
       'line',
       'point',
       'polygon',
+      'tripHeads',
       'trips',
     ]);
+    expect(
+      (
+        construct('heatmap', {}) as { supportsPicking(): boolean }
+      ).supportsPicking(),
+    ).toBe(false);
   });
 
   it('claims metricSizing, backed by the meters unit prop on every sizing layer', () => {
@@ -458,6 +636,7 @@ describe('maplibreBackend — Wave M2 flips are earned, not declared', () => {
     expect(provesProp('point', 'radiusUnits', 'meters')).toBe(true);
     expect(provesProp('line', 'widthUnits', 'meters')).toBe(true);
     expect(provesProp('trips', 'widthUnits', 'meters')).toBe(true);
+    expect(CAPABILITY_EVIDENCE.metricSizing!()).toBe(true);
   });
 
   it('keeps globe, and the deliberate non-claims, unchanged', () => {
@@ -470,12 +649,124 @@ describe('maplibreBackend — Wave M2 flips are earned, not declared', () => {
     expect(CAPABILITY_EVIDENCE.extrude3d!()).toBe(true);
     expect(CAPABILITY_EVIDENCE.gpuHeatmap!()).toBe(true);
     expect(CAPABILITY_EVIDENCE.interleavedBasemap!()).toBe(true);
-    expect(maplibreBackend.capabilities.timeAsHeight).toBe(false);
     expect(maplibreBackend.capabilities.liveBundling).toBe(false);
     expect(maplibreBackend.capabilities.userExtensions).toBe(false);
     // Default ownership stays per-layer; SharedTilesetSource is opt-in.
     expect(maplibreBackend.tilesetOwnership).toBe('per-layer');
     expect(maplibreBackend.basemapProjection).toBe('mercator');
+  });
+});
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * Wave M3 flips (four new kinds + the four remaining feature bits). Same rule
+ * as M2: the behaviour earns the declaration, never the other way round.
+ * ────────────────────────────────────────────────────────────────────────── */
+describe('maplibreBackend — Wave M3 flips are earned, not declared', () => {
+  it.each(['icon', 'column', 'arc', 'tripHeads'] as const)(
+    'the %s kind is native: supported, exported, constructible and pickable',
+    (kind) => {
+      expect(maplibreBackend.layerKinds[kind].supported).toBe(true);
+      expect(isExportedClass(CLASS_FOR_KIND[kind])).toBe(true);
+      const layer = construct(kind, {}) as {
+        type: string;
+        supportsPicking(): boolean;
+      };
+      expect(layer.type).toBe('custom');
+      expect(layer.supportsPicking()).toBe(true);
+    },
+  );
+
+  it('every new kind compiles the host prelude (globe reaches all nine)', () => {
+    expect(PRELUDE_SOURCES()).toHaveLength(
+      LAYER_KINDS.filter((k) => maplibreBackend.layerKinds[k].supported).length,
+    );
+    expect(PRELUDE_SOURCES().every(projectsViaPrelude)).toBe(true);
+  });
+
+  it('claims timeAsHeight, backed by the column layer’s lift (not a proxy)', () => {
+    expect(maplibreBackend.capabilities.timeAsHeight).toBe(true);
+    expect(CAPABILITY_EVIDENCE.timeAsHeight!()).toBe(true);
+    // The CPU twin the shader mirrors: a feature 5 s past the origin at
+    // 2 m/ms sits 10 km up, and the origin itself never moves.
+    expect(timeHeightLiftMeters(5_000, 0, 2)).toBe(10_000);
+    expect(timeHeightLiftMeters(1_000, 1_000, 99)).toBe(0);
+  });
+
+  it('motionInterpolation names the prop BOTH interpolating layers really read', () => {
+    const support = maplibreLayerFeatures.motionInterpolation;
+    expect(support.supported).toBe(true);
+    if (!support.supported) return;
+    expect([...support.kinds].sort()).toEqual(['icon', 'tripHeads']);
+    for (const kind of support.kinds) {
+      expect(provesProp(kind, support.prop, 987_654)).toBe(true);
+    }
+    // …and the point layer is honestly EXCLUDED: it has no glide surface.
+    expect(support.kinds).not.toContain('point');
+    expect(provesProp('point', 'maxInterpolationGap', 987_654)).toBe(false);
+  });
+
+  it('the icon layer really reads the whole glide surface, not just the gate prop', () => {
+    // `interpolate` is a boolean and so cannot be value-probed differentially
+    // (the layer stores `opts.interpolate === true`, and `true` occurs in other
+    // own fields) — assert it behaviourally instead: the glide program key only
+    // appears when the full deck gate is satisfied.
+    const glide = construct('icon', {
+      interpolate: true,
+      idProperty: 'icao24',
+    }) as { mainKey: string };
+    expect(glide.mainKey).toContain('glide');
+    const discrete = construct('icon', { idProperty: 'icao24' }) as {
+      mainKey: string;
+    };
+    expect(discrete.mainKey).not.toContain('glide');
+    // reducedMotion is the accessibility escape hatch and must win.
+    const reduced = construct('icon', {
+      interpolate: true,
+      idProperty: 'icao24',
+      reducedMotion: true,
+    }) as { mainKey: string };
+    expect(reduced.mainKey).not.toContain('glide');
+    expect(provesProp('icon', 'idProperty', '__stt_id__')).toBe(true);
+  });
+
+  it('pathReveal names `line`, never the unsupported `path` kind', () => {
+    const support = maplibreLayerFeatures.pathReveal;
+    expect(support.supported).toBe(true);
+    if (!support.supported) return;
+    expect(support.kinds).toEqual(['line']);
+    expect(maplibreBackend.layerKinds.path.supported).toBe(false);
+    // Reveal is OFF by default and supersedes the time mode only when asked.
+    const off = construct('line', {}) as { mainProgramKey: string };
+    expect(off.mainProgramKey).not.toContain('reveal');
+    const on = construct('line', { revealTrail: true }) as {
+      mainProgramKey: string;
+    };
+    expect(on.mainProgramKey).toContain('reveal');
+  });
+
+  it('iconWake is the icon layer’s own wake, not the generic one re-labelled', () => {
+    const support = maplibreLayerFeatures.iconWake;
+    expect(support.supported).toBe(true);
+    if (!support.supported) return;
+    expect(support.kinds).toEqual(['icon']);
+    // A positive wakeLength must compile the wake kernel AND its size taper —
+    // the alpha alone would be the point layer's wake, not an icon wake.
+    const src = buildIconVertexSource(LEGACY_SHADER, {
+      mode: 'wake',
+      filter: false,
+      glide: false,
+    });
+    expect(src).toContain('sttWakeAlpha(');
+    expect(src).toContain('sttWakeSizeScale(');
+  });
+
+  it('every feature bit is now supported — the matrix carries no open fallbacks', () => {
+    for (const feature of LAYER_FEATURES) {
+      expect(
+        maplibreLayerFeatures[feature].supported,
+        `${feature} is still declared unsupported`,
+      ).toBe(true);
+    }
   });
 });
 
@@ -556,6 +847,28 @@ describe('maplibreBackend — layer-feature matrix proven vs. real layer classes
     expect(maplibreLayerFeatures.timeHeightScale.supported).toBe(
       maplibreBackend.capabilities.timeAsHeight,
     );
+  });
+
+  it('(d) the probe proves the KIND reads a prop, not that a base collaborator stored it', () => {
+    // `url`/`maxRequests` are base options: STTBaseLayer forwards them into the
+    // STTArchive it constructs, which keeps `url` as an own property. If the
+    // walk descended into that collaborator, EVERY kind would "prove" `url` —
+    // and a future feature entry naming a base-forwarded prop would pass gate
+    // (d) with nothing implemented behind it.
+    for (const kind of [
+      'point',
+      'icon',
+      'column',
+      'arc',
+      'tripHeads',
+    ] as const) {
+      expect(
+        provesProp(kind, 'url', 'mem://__stt_probe__.stt'),
+        `${kind} must not "prove" the base-forwarded url option`,
+      ).toBe(false);
+    }
+    // The control: a prop a kind really does resolve still proves.
+    expect(provesProp('icon', 'idProperty', '__stt_id__')).toBe(true);
   });
 
   it('unsupported features name a degrade path, and none of them silently no-ops', () => {

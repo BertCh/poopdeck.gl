@@ -31,7 +31,6 @@ import {
   type STTTimeFilterMode,
   type DrawContext,
   type TileGpuCache,
-  toRgba01,
   type RGBA8,
 } from '../base-layer.js';
 import {
@@ -45,6 +44,11 @@ import {
   TIME_CUMULATIVE_GLSL,
   TIME_TRAIL_GLSL,
 } from '../shaders/time-window.glsl.js';
+import {
+  discMaskGLSL,
+  DISC_EDGE_EXPR,
+  buildBillboardIdFragmentSource,
+} from '../shaders/billboard.glsl.js';
 import { POSITION_DEQUANT_GLSL } from '../shaders/position-quantization.glsl.js';
 import {
   DATA_FILTER_ATTRIBUTE_GLSL,
@@ -59,10 +63,6 @@ import {
   type DataFilterUniforms,
   type STTDataFilterOptions,
 } from '../shaders/data-filter.glsl.js';
-import {
-  metersToPixelsAtLatitude,
-  tileCenterLatitude,
-} from '../lib/projection.js';
 
 /**
  * The four real time-filter modes — the package-wide {@link STTTimeFilterMode}
@@ -380,7 +380,7 @@ export function pointProgramKey(
   pass: 'main' | 'pick',
   cfg: PointShaderConfig,
 ): string {
-  return `${pass}:${cfg.mode}${cfg.filter ? ':filter' : ''}`;
+  return `point:${pass}:${cfg.mode}${cfg.filter ? ':filter' : ''}`;
 }
 
 /**
@@ -410,11 +410,8 @@ const FS_SOURCE = `
   varying vec4 vColor;
   void main() {
     if (vAlpha <= 0.0) discard;
-    vec2 d = gl_PointCoord - vec2(0.5);
-    float r = dot(d, d);
-    if (r > 0.25) discard;
-    // Antialiased disc: soften the last ~10% of the radius.
-    float edge = smoothstep(0.25, 0.20, r);
+${discMaskGLSL()}    // Antialiased disc: soften the last ~10% of the radius.
+    float edge = ${DISC_EDGE_EXPR};
     gl_FragColor = vec4(vColor.rgb, vColor.a * vAlpha * edge);
   }
 `;
@@ -427,17 +424,7 @@ const FS_SOURCE = `
 // the feature index. The disc mask below matches the visual FS so only the
 // visible circle is pickable (no square hit box); no antialiased edge — a
 // partially-covered edge texel must still decode to the exact id byte triple.
-const ID_FS_SOURCE = `
-  precision highp float;
-  varying float vAlpha;
-  varying vec3 vIdColor;
-  void main() {
-    if (vAlpha <= 0.0) discard;         // time/filter-gated points are not pickable
-    vec2 d = gl_PointCoord - vec2(0.5);
-    if (dot(d, d) > 0.25) discard;      // circular hit area, matches the visual disc
-    gl_FragColor = vec4(vIdColor, 1.0); // exact id bytes, fully opaque
-  }
-`;
+const ID_FS_SOURCE = buildBillboardIdFragmentSource('points');
 
 /**
  * Locations every point program shares — the geometry, sizing, time-filter and
@@ -882,19 +869,9 @@ export class STTPointLayer extends STTBaseLayer {
   ): number {
     const scale = this.pointOpts.radiusScale;
     if (this.pointOpts.radiusUnits !== 'meters') return scale;
-    const lat = tileCenterLatitude(tile.id.z, tile.id.y);
-    // Frame-hoisted (beginFrame); the live getter is the fallback for draws
-    // issued outside a render pass, and ctx.zoom (floored) the last resort.
-    const zoom = this.frameZoom ?? this.map?.getZoom() ?? ctx.zoom;
-    return (
-      scale *
-      metersToPixelsAtLatitude(
-        1,
-        lat,
-        zoom,
-        512 * this.resolveDevicePixelRatio(gl),
-      )
-    );
+    // Shared base helper: fractional zoom + device-pixel ratio + the tile's
+    // centre latitude, resolved once per tile (see `metricPixelScale`).
+    return scale * this.metricPixelScale(gl, tile, ctx);
   }
 
   /**
@@ -1044,7 +1021,7 @@ export class STTPointLayer extends STTBaseLayer {
 
     gl.useProgram(h.program);
     this.setSharedUniforms(gl, h, tile, c, ctx, frame);
-    gl.uniform4fv(h.uColor, toRgba01(this.pointOpts.color));
+    gl.uniform4fv(h.uColor, this.rgba01Uniform('Color', this.pointOpts.color));
     gl.uniform1f(h.uUseFeatureColor, c.colorBuffer && h.aColor >= 0 ? 1 : 0);
 
     // A VAO records attribute locations against ONE program — drop it when the

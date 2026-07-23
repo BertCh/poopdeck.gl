@@ -52,6 +52,38 @@ export {
   type PaletteRGBA,
 } from './palettes.js';
 
+// ─── Track kernel (CPU motion-glide engine, framework-free) ─────────────────
+// Pool-by-id + per-frame interpolation for "one smooth-moving instance per
+// tracked object" rendering (motion glide, trip heads, AV boxes/meshes).
+// Hoisted here from @poopdeck.gl/layers so deck, maplibre/mapbox, three and
+// Cesium share ONE implementation (campaign D7); the deck package re-exports
+// this module from `src/lib/track-kernel.ts` for source compatibility.
+export {
+  buildTrackIndex,
+  sampleTrack,
+  lerp,
+  lerpAngle,
+  lerpAngleDeg,
+  lerpDim,
+  readCategorical,
+  resolveColor,
+  makePickRow,
+  TrackIndexMaintainer,
+  RAD_TO_DEG,
+  METERS_PER_DEG_LAT,
+  SINGLETON_HOLD_MS,
+  DEFAULT_TRACK_COLOR,
+} from './render/track-kernel.js';
+export type {
+  Track,
+  Sample,
+  TrackColor,
+  TrackPickRow,
+  TrackFieldConfig,
+  TrackSampleConfig,
+  TrackIndexResult,
+} from './render/track-kernel.js';
+
 // ─── Archive / tileset / tile decoding ──────────────────────────────────────
 export {
   STTArchive,

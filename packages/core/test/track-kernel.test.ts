@@ -6,40 +6,25 @@
  * track at the play head. These tests pin the de-dup path, which previously left
  * TRAILING undefined HOLES in the parallel arrays whenever a track carried
  * exact-duplicate timestamps — poisoning both the cull test and the pose lerp.
+ *
+ * Moved here with the kernel itself when it was hoisted out of
+ * `@poopdeck.gl/layers` into framework-free core (campaign D7). deck keeps a
+ * re-export smoke test proving `src/lib/track-kernel.ts` still resolves.
  */
 
 import { describe, it, expect } from 'vitest';
-import type { Color } from '@deck.gl/core';
-import { makePointTile } from './fake-tile';
+import { makePointTile, categorical } from './helpers/track-tiles';
 import {
   buildTrackIndex,
   sampleTrack,
   lerpAngle,
   resolveColor,
-} from '../src/lib/track-kernel';
+} from '../src/render/track-kernel';
 import type {
+  TrackColor,
   TrackFieldConfig,
   TrackSampleConfig,
-} from '../src/lib/track-kernel';
-
-function categorical(values: string[]): {
-  indices: Uint16Array;
-  categories: string[];
-} {
-  const categories: string[] = [];
-  const map = new Map<string, number>();
-  const indices = new Uint16Array(values.length);
-  values.forEach((v, i) => {
-    let idx = map.get(v);
-    if (idx === undefined) {
-      idx = categories.length;
-      categories.push(v);
-      map.set(v, idx);
-    }
-    indices[i] = idx;
-  });
-  return { indices, categories };
-}
+} from '../src/render/track-kernel';
 
 /** One track 'A' whose keyframes carry an EXACT-duplicate timestamp (t=1000). */
 function dupTimestampTile() {
@@ -369,7 +354,7 @@ describe('track-kernel cross-tile epoch rebasing', () => {
 });
 
 describe('track-kernel resolveColor', () => {
-  const fallback: Color = [160, 160, 160, 255];
+  const fallback: TrackColor = [160, 160, 160, 255];
 
   it('returns the mapped RGBA for a known category', () => {
     expect(resolveColor('car', { car: [255, 0, 0, 200] }, fallback)).toEqual([

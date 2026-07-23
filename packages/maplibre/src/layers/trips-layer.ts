@@ -63,7 +63,6 @@ import {
   type STTBaseLayerOptions,
   type DrawContext,
   type TileGpuCache,
-  toRgba01,
   type RGBA8,
 } from '../base-layer.js';
 import {
@@ -72,11 +71,7 @@ import {
   type HostShaderData,
 } from '../lib/host-adapter.js';
 import { subdivideLineMercator } from '../lib/globe.js';
-import {
-  lngLatToMercator,
-  metersToPixelsAtLatitude,
-  tileCenterLatitude,
-} from '../lib/projection.js';
+import { lngLatToMercator } from '../lib/projection.js';
 import {
   TIME_TRAIL_GLSL,
   TIME_WAKE_GLSL,
@@ -909,18 +904,8 @@ export class STTTripsLayer extends STTBaseLayer {
     ctx: DrawContext,
   ): number {
     if (this.tripsOpts.widthUnits !== 'meters') return 1;
-    // Shared base helper (memoized against the drawing-buffer width, so the
-    // layout-forcing `canvas.clientWidth` read does not repeat per tile).
-    const dpr = this.resolveDevicePixelRatio(gl);
-    // Fractional zoom keeps metric widths continuous across zoom levels;
-    // ctx.zoom is floored (tile-selection granularity).
-    const zoom = this.frameZoom ?? this.map?.getZoom() ?? ctx.zoom;
-    return metersToPixelsAtLatitude(
-      1,
-      tileCenterLatitude(tile.id.z, tile.id.y),
-      zoom,
-      512 * dpr,
-    );
+    // Shared base helper (fractional zoom + dpr + tile-centre latitude).
+    return this.metricPixelScale(gl, tile, ctx);
   }
 
   /**
@@ -1034,7 +1019,7 @@ export class STTTripsLayer extends STTBaseLayer {
     const h = this.getHandles(gl, frame, mode);
 
     this.setCommonUniforms(gl, h, c, tile, ctx, frame);
-    gl.uniform4fv(h.uColor, toRgba01(this.tripsOpts.color));
+    gl.uniform4fv(h.uColor, this.rgba01Uniform('Color', this.tripsOpts.color));
     gl.uniform1f(h.uUseFeatureColor, c.colorBuffer && h.aColor >= 0 ? 1 : 0);
 
     // The VAO records attribute locations belonging to ONE program; a host

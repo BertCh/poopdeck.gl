@@ -6,6 +6,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   lngLatToMercator,
+  lngLatToMercatorInto,
   projectPositions,
   quantizePositionsToUint16,
 } from '../src/lib/projection';
@@ -45,6 +46,36 @@ describe('lngLatToMercator', () => {
     expect(Number.isFinite(yMin)).toBe(true);
     expect(Math.abs(yMax)).toBeLessThan(1e-10);
     expect(Math.abs(yMin - 1)).toBeLessThan(1e-10);
+  });
+});
+
+describe('lngLatToMercatorInto', () => {
+  it('writes exactly what the tuple form returns, at any offset', () => {
+    // The allocation-free form every per-frame emit loop uses (icon glide,
+    // trip-heads). Divergence would move CPU-interpolated geometry off the
+    // positions everything else projects to, so the two are pinned together
+    // across the range — poles and the clamp included.
+    const out = new Float32Array(8);
+    const samples: Array<[number, number]> = [
+      [0, 0],
+      [-180, 0],
+      [180, 0],
+      [12.5, 45.25],
+      [-73.6, -33.4],
+      [0, 85.05112877980659],
+      [0, 89],
+      [0, -95],
+    ];
+    for (const [lon, lat] of samples) {
+      const [x, y] = lngLatToMercator(lon, lat);
+      lngLatToMercatorInto(lon, lat, out, 4);
+      // Float32 storage, so compare at f32 precision.
+      expect(out[4]).toBe(Math.fround(x));
+      expect(out[5]).toBe(Math.fround(y));
+    }
+    // …and it writes ONLY its two slots.
+    expect(Array.from(out.subarray(0, 4))).toEqual([0, 0, 0, 0]);
+    expect(Array.from(out.subarray(6))).toEqual([0, 0]);
   });
 });
 

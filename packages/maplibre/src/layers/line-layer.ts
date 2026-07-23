@@ -38,6 +38,20 @@
  * Picking (campaign D11) reuses the SAME vertex source through a `pick: true`
  * variant, so the id pass extrudes the identical screen-space quad the visual
  * pass drew and honours the identical time/filter gates.
+ *
+ * Wave M3 adds PATH REVEAL (`revealTrail`/`revealDuration`/`fadeTrail`, deck's
+ * `AnimatedPathLayer` prop names and defaults, OFF by default). Where the
+ * `'trail'` time mode fades a whole segment by its interpolated vertex time,
+ * reveal CLIPS THE GEOMETRY: the drawn extent of each segment is
+ * `mix(A, B, [tail, head])`, so the frontier segment is drawn PARTIALLY and the
+ * line inks itself in continuously instead of stepping one whole segment at a
+ * time. Per-vertex times come from the tile's baked `vertexTimestamps` when it
+ * has them and from the shared cumulative-DISTANCE kernel
+ * (`@poopdeck.gl/core/trips`) when it does not — never from vertex index, which
+ * would make a 100 km leg advance at a 100 m stub's rate. Reveal is a compiled
+ * mode like the other four (`line:reveal[:filter]`), rides the same DataFilter
+ * / metric-sizing / prelude-projection machinery, and — because the id pass
+ * shares the builder — unrevealed geometry is unpickable as well as invisible.
  */
 
 import type { Tile, Layer as STTLayer } from '@poopdeck.gl/core';
@@ -55,14 +69,9 @@ import {
   type STTTimeFilterMode,
   type DrawContext,
   type TileGpuCache,
-  toRgba01,
   type RGBA8,
 } from '../base-layer.js';
-import {
-  lngLatToMercator,
-  metersToPixelsAtLatitude,
-  tileCenterLatitude,
-} from '../lib/projection.js';
+import { lngLatToMercator } from '../lib/projection.js';
 import { subdivideLineMercator } from '../lib/globe.js';
 import { createHostFrame, type HostFrame } from '../lib/host-adapter.js';
 import {
@@ -70,6 +79,7 @@ import {
   TIME_TRAIL_GLSL,
   TIME_WAKE_GLSL,
   TIME_CUMULATIVE_GLSL,
+  trailAlphaJS,
 } from '../shaders/time-window.glsl.js';
 import {
   DATA_FILTER_ATTRIBUTE_GLSL,
@@ -94,6 +104,45 @@ const DEFAULT_LINE_PALETTE: ReadonlyArray<RGBA8> = CORE_LINE_PALETTE;
  * under this layer's historical name.
  */
 export type STTLineTimeFilterMode = STTTimeFilterMode;
+
+/**
+ * What the SHADER compiles: the four time-filter modes plus `'reveal'`, the
+ * path-reveal kernel {@link STTLineLayerOptions.revealTrail} selects. Reveal is
+ * not a `timeFilterMode` spelling — it is a different KIND of filter (geometry
+ * clipping, not just alpha), so it lives on its own prop and simply supersedes
+ * the time mode while it is active (deck's `AnimatedPathLayer`, where
+ * `revealTrail` drives `TimeFilterExtension`'s trail branch, makes the same
+ * choice).
+ */
+export type LineCompiledMode = STTLineTimeFilterMode | 'reveal';
+
+/** Modes whose shader reads the per-VERTEX time attribute (`aVertexTimeAB`). */
+function usesVertexTimes(mode: LineCompiledMode): boolean {
+  return mode === 'trail' || mode === 'reveal';
+}
+
+/**
+ * Effectively-infinite trail length (ms) behind the reveal head, used when
+ * `revealDuration` is 0 — "reveal and PERSIST" (draw-and-keep: once the head
+ * passes a vertex it stays lit). Verbatim from deck's `AnimatedPathLayer`
+ * (`REVEAL_PERSIST_TRAIL_MS`) so both backends persist over the same bound: 250
+ * years clears every shipped dataset (the widest single-feature span is the
+ * drifters' ~43-year tracks). The bound is per-FEATURE data time
+ * (`age = currentTime - vertexTime`), not wall-clock playback span.
+ */
+export const REVEAL_PERSIST_TRAIL_MS = 250 * 365 * 24 * 60 * 60 * 1000;
+
+/**
+ * The trail length the reveal shader runs with: an explicit positive
+ * `revealDuration` is a finite comet that erases behind the head; anything else
+ * (0, unset, negative) persists via {@link REVEAL_PERSIST_TRAIL_MS}. Exported
+ * for the parity tests and for hosts driving the same math CPU-side.
+ */
+export function resolveRevealTrailLength(revealDuration?: number): number {
+  return typeof revealDuration === 'number' && revealDuration > 0
+    ? revealDuration
+    : REVEAL_PERSIST_TRAIL_MS;
+}
 
 export interface STTLineLayerOptions
   extends STTBaseLayerOptions, STTDataFilterOptions {
@@ -177,9 +226,56 @@ export interface STTLineLayerOptions
   /**
    * Trail head→tail fade: `1`/`true` (default) is the classic comet, `0`/`false`
    * a solid snake, intermediate numbers blend between them (package-wide
-   * `resolveTrailFade` convention).
+   * `resolveTrailFade` convention). Shared by `'trail'` mode and
+   * {@link revealTrail} — in reveal-PERSIST (`revealDuration: 0`) the fade
+   * spreads over {@link REVEAL_PERSIST_TRAIL_MS} and is therefore invisible,
+   * exactly as in deck.
    */
   fadeTrail?: boolean | number;
+  /**
+   * PROGRESSIVE PATH REVEAL (deck `AnimatedPathLayer.revealTrail` parity). When
+   * `true` (and {@link reducedMotion} is not set), each path is drawn
+   * progressively up to the play head instead of appearing whole: the drawn
+   * extent of every segment is clipped at the reveal frontier, so the FRONTIER
+   * SEGMENT is drawn partially (its endpoint interpolated) rather than popping
+   * on whole — a timeless line inks itself in along its own length over its
+   * `[startTime, endTime]` span.
+   *
+   * The per-vertex times driving the frontier are the tile's baked
+   * `vertexTimestamps` when present, else the shared cumulative-DISTANCE
+   * synthesis (`@poopdeck.gl/core/trips`), so a long leg takes proportionally
+   * longer to ink than a short one.
+   *
+   * Reveal SUPERSEDES {@link timeFilterMode} while active (deck routes
+   * `revealTrail` through the same one-branch time filter): the compiled mode
+   * becomes `'reveal'` and the requested time mode is restored verbatim when
+   * reveal is switched back off.
+   *
+   * CALLER OBLIGATION in persist mode (`revealDuration: 0`), the same one
+   * `'cumulative'` carries: the shader does the reveal, the loader does not, so
+   * `timeWindow` must stay wide enough to keep the already-revealed tiles
+   * resident or the layer un-draws itself as playback advances.
+   *
+   * @default false
+   */
+  revealTrail?: boolean;
+  /**
+   * Trailing-window length in ms for {@link revealTrail}. `0` (the default)
+   * PERSISTS the whole revealed portion (draw-and-keep); a positive value
+   * renders a finite comet that erases behind the head after this many ms.
+   * Uniform-only — no relink, no tile rebuild. No effect unless `revealTrail`
+   * is on.
+   * @default 0
+   */
+  revealDuration?: number;
+  /**
+   * Accessibility: when `true`, suppress the {@link revealTrail} animation and
+   * render through the ordinary {@link timeFilterMode} instead (whole paths, no
+   * progressive draw). Wire the host's `prefers-reduced-motion` here. No effect
+   * when `revealTrail` is off. Deck's `AnimatedPathLayer.reducedMotion` parity.
+   * @default false
+   */
+  reducedMotion?: boolean;
 }
 
 // The instanced VS reads (side, along) ∈ {-1,1} × {0,1} from the unit-quad
@@ -188,16 +284,114 @@ export interface STTLineLayerOptions
 // expansion happens in the GPU rasterizer — we're removing the redundant CPU
 // broadcast that the v0.2 layer was doing on every tile load.
 
+/**
+ * Path-reveal kernel (Wave M3). Returns `[tail, head]` — the two fractions of
+ * THIS segment the reveal window currently covers, so the caller can clip the
+ * drawn geometry to `mix(A, B, tail) … mix(A, B, head)`. The head is where the
+ * play head sits INSIDE the segment, which is what makes the frontier segment
+ * draw partially instead of popping on whole; the tail is where the erasing
+ * edge sits (at fraction 0 for reveal-persist, whose `trailLength` is far
+ * larger than any feature's own span). `head <= tail` ⇒ nothing of this segment
+ * is currently drawn.
+ *
+ * Private to this layer for now — the icon/trips/arc kinds are the extraction
+ * trigger (see the `concerns` note in the wave report), not a second copy here.
+ */
+export const LINE_REVEAL_GLSL = `
+vec2 sttRevealSpan(
+  vec2 vertexTimeAB,     // [timeA, timeB] of this segment, tile-relative
+  float currentTime,     // tile-relative
+  float trailLength      // ms kept behind the head (persist ⇒ effectively inf)
+) {
+  float tA = vertexTimeAB.x;
+  float tB = vertexTimeAB.y;
+  float span = tB - tA;
+  float tailTime = currentTime - trailLength;
+  if (span > 0.0) {
+    return vec2(
+      clamp((tailTime - tA) / span, 0.0, 1.0),
+      clamp((currentTime - tA) / span, 0.0, 1.0)
+    );
+  }
+  // Zero-length (or non-monotone) span: the segment carries no internal
+  // ordering to interpolate, so it flips on whole at tB and erases whole once
+  // the tail passes tB. No division, so a degenerate span cannot emit NaN.
+  return vec2(
+    (tailTime >= tB) ? 1.0 : 0.0,
+    (currentTime >= tB) ? 1.0 : 0.0
+  );
+}
+`;
+
+/**
+ * JS reference for {@link LINE_REVEAL_GLSL} — the parity oracle the tests hold
+ * the GLSL to, and the CPU path a host can use to reproduce the frontier
+ * (e.g. to place a marker at the reveal head). Returns `[tail, head]`.
+ */
+export function revealSpanJS(
+  timeA: number,
+  timeB: number,
+  currentTime: number,
+  trailLength: number,
+): [number, number] {
+  const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v);
+  const span = timeB - timeA;
+  const tailTime = currentTime - trailLength;
+  if (span > 0) {
+    return [
+      clamp01((tailTime - timeA) / span),
+      clamp01((currentTime - timeA) / span),
+    ];
+  }
+  return [tailTime >= timeB ? 1 : 0, currentTime >= timeB ? 1 : 0];
+}
+
+/**
+ * JS reference for the whole reveal vertex stage: where a quad corner's drawn
+ * point sits ALONG the segment (0 = A, 1 = B) and what alpha it carries.
+ * `corner` is the quad's `aCorner.y` (0 at the A end, 1 at the B end).
+ * `along === null` ⇒ the segment is entirely outside the reveal window and the
+ * shader collapses it.
+ *
+ * This is what makes the frontier assertion testable without a GPU: for a play
+ * head inside a segment, `along` comes back STRICTLY between 0 and 1 — the
+ * partial draw — rather than snapping to a whole segment.
+ */
+export function revealVertexJS(
+  timeA: number,
+  timeB: number,
+  corner: number,
+  currentTime: number,
+  trailLength: number,
+  fadeTrail: number,
+): { along: number | null; alpha: number } {
+  const [tail, head] = revealSpanJS(timeA, timeB, currentTime, trailLength);
+  if (!(head > tail)) return { along: null, alpha: 0 };
+  const along = tail + (head - tail) * corner;
+  const sampled = timeA + (timeB - timeA) * along;
+  const clamped = Math.min(
+    Math.max(sampled, currentTime - trailLength),
+    currentTime,
+  );
+  return {
+    along,
+    alpha: trailAlphaJS(clamped, currentTime, trailLength, fadeTrail),
+  };
+}
+
 /** Kernel snippet compiled in per time mode (exactly one per program). */
-const MODE_KERNEL: Record<STTLineTimeFilterMode, string> = {
+const MODE_KERNEL: Record<LineCompiledMode, string> = {
   window: TIME_WINDOW_GLSL,
   wake: TIME_WAKE_GLSL,
   cumulative: TIME_CUMULATIVE_GLSL,
   trail: TIME_TRAIL_GLSL,
+  // Reveal reuses the shared trail alpha (one fade formula package-wide) and
+  // adds the geometry-clipping span on top.
+  reveal: `${TIME_TRAIL_GLSL}${LINE_REVEAL_GLSL}`,
 };
 
-/** Per-mode time attribute: trail is the only per-VERTEX mode. */
-const MODE_TIME_ATTRIBUTE: Record<STTLineTimeFilterMode, string> = {
+/** Per-mode time attribute: trail and reveal are the per-VERTEX modes. */
+const MODE_TIME_ATTRIBUTE: Record<LineCompiledMode, string> = {
   window:
     '  attribute vec2 aTime;        // [startTime, endTime], per-instance',
   wake: '  attribute vec2 aTime;        // [startTime, endTime], per-instance',
@@ -205,9 +399,11 @@ const MODE_TIME_ATTRIBUTE: Record<STTLineTimeFilterMode, string> = {
     '  attribute vec2 aTime;        // [startTime, endTime], per-instance',
   trail:
     '  attribute vec2 aVertexTimeAB; // [timeA, timeB], per-instance, tile-relative',
+  reveal:
+    '  attribute vec2 aVertexTimeAB; // [timeA, timeB], per-instance, tile-relative',
 };
 
-const MODE_UNIFORMS: Record<STTLineTimeFilterMode, string> = {
+const MODE_UNIFORMS: Record<LineCompiledMode, string> = {
   window: `  uniform float uWindowStart;
   uniform float uWindowEnd;
   uniform float uFadeIn;
@@ -220,9 +416,14 @@ const MODE_UNIFORMS: Record<STTLineTimeFilterMode, string> = {
   trail: `  uniform float uCurrentTime;
   uniform float uTrailLength;
   uniform float uFadeTrail;`,
+  // Same three as trail: reveal IS a trail whose length is the reveal duration
+  // (or the persist sentinel).
+  reveal: `  uniform float uCurrentTime;
+  uniform float uTrailLength;
+  uniform float uFadeTrail;`,
 };
 
-const MODE_ALPHA: Record<STTLineTimeFilterMode, string> = {
+const MODE_ALPHA: Record<LineCompiledMode, string> = {
   window:
     'sttTimeWindowAlpha(aTime, uWindowStart, uWindowEnd, uFadeIn, uFadeOut)',
   wake: 'sttWakeAlpha(aTime, uCurrentTime, uWakeLength)',
@@ -231,12 +432,20 @@ const MODE_ALPHA: Record<STTLineTimeFilterMode, string> = {
   // coordinate, so the reveal front crosses a segment continuously.
   trail:
     'sttTrailAlpha(mix(aVertexTimeAB.x, aVertexTimeAB.y, aCorner.y), uCurrentTime, uTrailLength, uFadeTrail)',
+  // Reveal samples the alpha at the CLIPPED endpoint (`revealTime`), so the
+  // head vertex sits exactly at `uCurrentTime` (age 0 ⇒ full alpha) and the
+  // fade runs backwards from the frontier — not from the segment's own B end.
+  reveal:
+    'sttTrailAlpha(revealTime, uCurrentTime, uTrailLength, uFadeTrail) * revealVisible',
 };
 
 /** Compile-time shader configuration — every field is part of the cache key. */
 export interface LineVertexVariant {
-  /** Active time-filter mode. Defaults to `'window'`. */
-  mode?: STTLineTimeFilterMode;
+  /**
+   * Active compiled mode: one of the four time filters, or `'reveal'` for the
+   * progressive path reveal. Defaults to `'window'`.
+   */
+  mode?: LineCompiledMode;
   /** Compile the DataFilter branch in (only when a `filterProperty` is named). */
   filter?: boolean;
   /** Emit the flat id-colour pick pass instead of the visual one. */
@@ -289,6 +498,41 @@ export function buildLineVertexSource(
   // narrowing and the fade cannot drift apart.
   const wakeSize =
     mode === 'wake' ? ' * sttWakeSizeScale(timeAlpha, uWakeTailScale)' : '';
+  const reveal = mode === 'reveal';
+  // Path reveal: clip the DRAWN EXTENT of this segment to the reveal window.
+  // `revealVisible` depends only on per-INSTANCE data (both endpoints of a
+  // segment resolve the same span), which is what makes the geometry collapse
+  // below safe — unlike the per-VERTEX time alpha, collapsing on it can never
+  // strand one end of a quad at the origin.
+  // The alpha samples the CLIPPED time, clamped into the reveal window: the
+  // clip guarantees the drawn extent never crosses either edge, so a sample
+  // landing an ulp outside is pure f32 rounding — and unclamped it would fall
+  // into sttTrailAlpha's hard `> currentTime` / `age > trailLength` rejections
+  // and flicker the frontier (or, with `fadeTrail: 0`, the tail) to zero.
+  const revealPrologue = reveal
+    ? `    vec2 revealSpan = sttRevealSpan(aVertexTimeAB, uCurrentTime, uTrailLength);
+    float revealAlong = mix(revealSpan.x, revealSpan.y, aCorner.y);
+    float revealVisible = (revealSpan.y > revealSpan.x) ? 1.0 : 0.0;
+    float revealTime = clamp(
+      mix(aVertexTimeAB.x, aVertexTimeAB.y, revealAlong),
+      uCurrentTime - uTrailLength,
+      uCurrentTime
+    );
+`
+    : '';
+  // The frontier endpoint is INTERPOLATED, so the head lands mid-segment.
+  const posLine = reveal
+    ? '    vec2 posM = mix(aPosA, aPosB, revealAlong); // clipped at the reveal frontier'
+    : '    vec2 posM = mix(aPosA, aPosB, aCorner.y);     // pick A or B endpoint';
+  // NOTE the neighbour below stays UNCLIPPED even in reveal mode: it only feeds
+  // the segment DIRECTION (the perpendicular the quad extrudes along), and two
+  // nearly-coincident clipped endpoints would make that direction numerically
+  // unstable exactly at the frontier. Clipping runs along the same chord, so
+  // the direction is unchanged — and whenever the segment is visible at all
+  // (`head > tail`) the clipped point can never coincide with the far end.
+  const revealCollapse = reveal
+    ? '    if (revealVisible <= 0.0) gl_Position = vec4(0.0);\n'
+    : '';
   return `${header}
   precision highp float;
   attribute vec2 aCorner;      // (side, along) ∈ {-1,1} × {0,1}, per-vertex
@@ -307,7 +551,7 @@ ${filter ? DATA_FILTER_UNIFORMS_GLSL.trimEnd() : ''}
   varying float vAlpha;
 ${MODE_KERNEL[mode]}${filter ? DATA_FILTER_GLSL : ''}
   void main() {
-    vec2 posM = mix(aPosA, aPosB, aCorner.y);     // pick A or B endpoint
+${revealPrologue}${posLine}
     vec2 neighborM = mix(aPosB, aPosA, aCorner.y); // and its neighbour
     vec4 here = ${projectHere};
     vec4 there = ${projectThere};
@@ -329,19 +573,20 @@ ${filter ? '    if (uFilterTransformSize > 0.5) widthPx *= filterAlpha;\n' : ''}
     vec4 outClip = here;
     outClip.xy += offsetNdc * here.w;
     gl_Position = outClip;
-${
-  filter
-    ? `    // deck's vs:#main-end collapse. Keyed on the FILTER factor only —
+${revealCollapse}${
+    filter
+      ? `    // deck's vs:#main-end collapse. Keyed on the FILTER factor only —
     // that one is per-FEATURE, so the whole feature collapses; the time alpha
-    // varies per vertex in trail mode and would strand one end at the origin.
+    // varies per vertex in trail/reveal mode and would strand one end at the
+    // origin (reveal has its own collapse above, on a per-INSTANCE factor).
     if (filterAlpha <= 0.0) gl_Position = vec4(0.0);
     float filterMask = (uFilterTransformColor > 0.5)
       ? filterAlpha
       : (filterAlpha > 0.0 ? 1.0 : 0.0);
     vAlpha = timeAlpha * filterMask;
 `
-    : '    vAlpha = timeAlpha;\n'
-}    ${colorAssign}
+      : '    vAlpha = timeAlpha;\n'
+  }    ${colorAssign}
   }
 `;
 }
@@ -375,9 +620,9 @@ interface LineProgramHandles {
   aCorner: number;
   aPosA: number;
   aPosB: number;
-  /** -1 in trail mode (that program reads `aVertexTimeAB` instead). */
+  /** -1 in trail/reveal mode (those programs read `aVertexTimeAB` instead). */
   aTime: number;
-  /** -1 outside trail mode. */
+  /** -1 outside the per-VERTEX modes (trail, reveal). */
   aVertexTimeAB: number;
   aColor: number;
   aWidth: number;
@@ -420,7 +665,7 @@ interface LineGpuCache extends TileGpuCache {
   instanceCount: number;
   colorBuffer?: WebGLBuffer;
   widthBuffer?: WebGLBuffer;
-  /** Per-instance [timeA, timeB]; built in trail mode only. */
+  /** Per-instance [timeA, timeB]; built in the per-VERTEX modes only (trail, reveal). */
   vertexTimeBuffer?: WebGLBuffer;
   /** Per-instance filter value; absent when the tile lacks the column. */
   filterBuffer?: WebGLBuffer;
@@ -436,8 +681,8 @@ interface LineGpuCache extends TileGpuCache {
    * dropped and re-recorded (buffers stay valid).
    */
   vaoVariant?: string;
-  /** Time mode the cached VAO was recorded against (a different program). */
-  vaoMode?: STTLineTimeFilterMode;
+  /** Compiled mode the cached VAO was recorded against (a different program). */
+  vaoMode?: LineCompiledMode;
 }
 
 /**
@@ -457,11 +702,19 @@ export class STTLineLayer extends STTBaseLayer {
     colorPalette: ReadonlyArray<RGBA8>;
     colorMapping?: Record<string, RGBA8>;
     colorMappingDefault?: RGBA8;
-    timeFilterMode: STTLineTimeFilterMode;
+    /**
+     * The COMPILED mode — the degraded time filter, or `'reveal'` while path
+     * reveal is active. `requestedMode` holds what the caller asked for.
+     */
+    timeFilterMode: LineCompiledMode;
     wakeLength: number;
     wakeTailScale: number;
     trailLength: number;
     fadeTrail: number;
+    /** Path reveal, AS PASSED (see `revealActive` for the effective state). */
+    revealTrail: boolean;
+    revealDuration: number;
+    reducedMotion: boolean;
     filterProperty?: string;
     filterRange?: DataFilterRange | null;
     filterSoftRange?: DataFilterRange | null;
@@ -537,6 +790,13 @@ export class STTLineLayer extends STTBaseLayer {
       wakeTailScale: opts.wakeTailScale ?? DEFAULT_WAKE_TAIL_SCALE,
       trailLength: opts.trailLength ?? halfWindow,
       fadeTrail: resolveTrailFade(opts.fadeTrail),
+      // Path reveal is stored AS PASSED (`??`, never coerced) so an explicit
+      // `undefined` — the React `{...base, revealTrail: props.revealTrail}`
+      // shape — falls through to the default instead of shadowing it, and so
+      // the value the caller handed us stays inspectable.
+      revealTrail: opts.revealTrail ?? false,
+      revealDuration: opts.revealDuration ?? 0,
+      reducedMotion: opts.reducedMotion ?? false,
       filterProperty: opts.filterProperty,
       filterRange: opts.filterRange,
       filterSoftRange: opts.filterSoftRange,
@@ -550,15 +810,33 @@ export class STTLineLayer extends STTBaseLayer {
   }
 
   /**
+   * Is progressive path reveal EFFECTIVE? Opted into via `revealTrail` and not
+   * suppressed by `reducedMotion` — the accessibility contract every animated
+   * surface in this codebase honours (deck's `AnimatedPathLayer.revealActive`).
+   * The `=== true` / `!== true` comparisons are deliberate: only the real
+   * boolean turns the animation on.
+   */
+  private revealActive(): boolean {
+    return (
+      this.lineOpts.revealTrail === true && this.lineOpts.reducedMotion !== true
+    );
+  }
+
+  /**
    * Re-derive the defaulted tail lengths from the CURRENT `timeWindow` and the
-   * compiled mode from those lengths. Returns true when the compiled mode
-   * moved, so callers know whether a relink/rebuild is due.
+   * compiled mode from those lengths (and from path reveal). Returns true when
+   * the compiled mode moved, so callers know whether a relink/rebuild is due.
    *
    * The degrade rule is deck's: `TimeFilterExtension` enters its wake branch
    * only for `wakeLength > 0` and its trail branch only for `trailLength > 0`,
    * otherwise falling through to the window branch. Both degenerate kernels
    * here return 0 (shaders/time-window.glsl.ts), so a mode kept in that state
    * would draw nothing at all.
+   *
+   * Path reveal then SUPERSEDES the resolved time mode while it is active. The
+   * requested time mode is kept in `requestedMode`, so switching reveal back
+   * off restores it verbatim — the reveal prop never rewrites the caller's
+   * `timeFilterMode`.
    */
   private resolveTimeConfig(): boolean {
     const half = Math.max(0, this.opts.timeWindow / 2);
@@ -567,14 +845,31 @@ export class STTLineLayer extends STTBaseLayer {
     this.lineOpts.wakeLength = wake;
     this.lineOpts.trailLength = trail;
     const requested = this.requestedMode;
-    const resolved =
+    const timeMode: STTLineTimeFilterMode =
       (requested === 'wake' && !(wake > 0)) ||
       (requested === 'trail' && !(trail > 0))
         ? 'window'
         : requested;
+    const resolved: LineCompiledMode = this.revealActive()
+      ? 'reveal'
+      : timeMode;
     const changed = this.lineOpts.timeFilterMode !== resolved;
     this.lineOpts.timeFilterMode = resolved;
     return changed;
+  }
+
+  /**
+   * Apply a compiled-mode move: relink the program keys and, when the
+   * per-VERTEX time requirement flipped, rebuild the tile caches (those times
+   * are baked at UPLOAD time and only for the modes that read them). Returns
+   * whether a cache rebuild was issued, since that already repaints.
+   */
+  private applyCompiledMode(prev: LineCompiledMode): boolean {
+    this.rebuildProgramKeys();
+    if (usesVertexTimes(prev) === usesVertexTimes(this.lineOpts.timeFilterMode))
+      return false;
+    this.rebuildTileCaches();
+    return true;
   }
 
   /**
@@ -587,10 +882,7 @@ export class STTLineLayer extends STTBaseLayer {
     super.setTimeWindow(ms);
     const prev = this.lineOpts.timeFilterMode;
     if (!this.resolveTimeConfig()) return;
-    this.rebuildProgramKeys();
-    if (prev === 'trail' || this.lineOpts.timeFilterMode === 'trail') {
-      this.rebuildTileCaches();
-    }
+    this.applyCompiledMode(prev);
   }
 
   /** See {@link mainProgramKey}. */
@@ -612,19 +904,66 @@ export class STTLineLayer extends STTBaseLayer {
 
   /**
    * Switch the temporal filter. Relinks one program per host variant (the mode
-   * is compiled in) and, when trail-ness flips, rebuilds the tile caches —
-   * per-vertex times are only baked for trail mode.
+   * is compiled in) and, when the per-VERTEX time requirement flips, rebuilds
+   * the tile caches — those times are only baked for trail/reveal. A no-op
+   * while path reveal is active: the requested mode is remembered and takes
+   * effect the moment reveal is switched off.
    */
   setTimeFilterMode(mode: STTLineTimeFilterMode): void {
     if (this.requestedMode === mode) return;
     this.requestedMode = mode;
     const prev = this.lineOpts.timeFilterMode;
     if (!this.resolveTimeConfig()) return;
-    this.rebuildProgramKeys();
-    if (prev === 'trail' || this.lineOpts.timeFilterMode === 'trail') {
-      this.rebuildTileCaches();
-      return;
-    }
+    if (this.applyCompiledMode(prev)) return;
+    this.map?.triggerRepaint();
+  }
+
+  /**
+   * Turn progressive path reveal on/off at runtime. Compiles a second program
+   * (the mode is a compile-time choice) and rebuilds the tile caches when the
+   * per-VERTEX time requirement flips — a UI toggle, not a per-frame knob. Use
+   * {@link setRevealDuration} for the animated axis.
+   */
+  setRevealTrail(enabled: boolean): void {
+    if (this.lineOpts.revealTrail === enabled) return;
+    this.lineOpts.revealTrail = enabled;
+    this.applyRevealToggle();
+  }
+
+  /**
+   * Suppress (or restore) the reveal animation for `prefers-reduced-motion`.
+   * With reveal suppressed the layer renders through its ordinary
+   * `timeFilterMode` — whole paths, no progressive draw.
+   */
+  setReducedMotion(enabled: boolean): void {
+    if (this.lineOpts.reducedMotion === enabled) return;
+    this.lineOpts.reducedMotion = enabled;
+    this.applyRevealToggle();
+  }
+
+  /** Shared body of the two reveal-activating setters. */
+  private applyRevealToggle(): void {
+    const prev = this.lineOpts.timeFilterMode;
+    if (this.resolveTimeConfig() && this.applyCompiledMode(prev)) return;
+    this.map?.triggerRepaint();
+  }
+
+  /**
+   * Move the reveal's trailing window (ms). `0` persists the whole revealed
+   * portion; a positive value erases behind the head. Uniform-only — no relink,
+   * no tile rebuild — so it is safe to animate.
+   */
+  setRevealDuration(ms: number): void {
+    this.lineOpts.revealDuration = ms;
+    this.map?.triggerRepaint();
+  }
+
+  /**
+   * Blend the head→tail fade (`1`/`true` comet … `0`/`false` solid snake) for
+   * trail and reveal alike. Uniform-only.
+   */
+  setFadeTrail(fadeTrail: boolean | number): void {
+    this.lineOpts.fadeTrail = resolveTrailFade(fadeTrail);
     this.map?.triggerRepaint();
   }
 
@@ -783,11 +1122,18 @@ export class STTLineLayer extends STTBaseLayer {
     const granularity = this.frameIsGlobe
       ? this.tileSubdivisionGranularity(tile.id.z)
       : 0;
-    // Per-vertex times are trail mode's input and nothing else's — bake them
-    // only for that mode (setTimeFilterMode rebuilds caches when it flips).
-    const wantsVertexTimes = this.lineOpts.timeFilterMode === 'trail';
+    // Per-vertex times are the input of trail mode and path reveal, and of
+    // nothing else — bake them only for those (the mode setters rebuild the
+    // caches when the requirement flips).
+    const wantsVertexTimes = usesVertexTimes(this.lineOpts.timeFilterMode);
+    // Length-checked, not just presence-checked: a tile whose `vertex_time`
+    // column is SHORTER than its vertex count would otherwise read `undefined`
+    // past the end and bake NaN times (a permanently blank path in reveal
+    // mode). Deck applies the same `>= totalVerts` guard before preferring the
+    // baked column; a short/absent column falls through to synthesis.
     const hasVertexTimestamps =
-      !!f.vertexTimestamps && f.vertexTimestamps.length > 0;
+      !!f.vertexTimestamps &&
+      f.vertexTimestamps.length >= startIndices[featureCount];
     // Tiles without a baked `vertex_time` column get the SHARED synthesis
     // kernel, which spreads [startTime, endTime] by cumulative haversine
     // DISTANCE — the same thing three/deck do and the same thing the Rust
@@ -992,19 +1338,8 @@ export class STTLineLayer extends STTBaseLayer {
   ): number {
     const { widthScale, widthUnits } = this.lineOpts;
     if (widthUnits !== 'meters') return widthScale;
-    // Frame-hoisted (beginFrame); the live getter is the fallback for draws
-    // issued outside a render pass, and ctx.zoom (floored) the last resort.
-    const zoom = this.frameZoom ?? this.map?.getZoom() ?? ctx.zoom;
-    const lat = tileCenterLatitude(tile.id.z, tile.id.y);
-    return (
-      widthScale *
-      metersToPixelsAtLatitude(
-        1,
-        lat,
-        zoom,
-        512 * this.resolveDevicePixelRatio(gl),
-      )
-    );
+    // Shared base helper (fractional zoom + dpr + tile-centre latitude).
+    return widthScale * this.metricPixelScale(gl, tile, ctx);
   }
 
   /** Upload the active mode's time uniforms (only those exist in the program). */
@@ -1029,6 +1364,17 @@ export class STTLineLayer extends STTBaseLayer {
       case 'trail':
         gl.uniform1f(h.uCurrentTime, relTime);
         gl.uniform1f(h.uTrailLength, this.lineOpts.trailLength);
+        gl.uniform1f(h.uFadeTrail, this.lineOpts.fadeTrail);
+        break;
+      case 'reveal':
+        // Reveal's trail length is its OWN knob (`revealDuration`), not the
+        // window-derived `trailLength`: 0 persists via the sentinel, a positive
+        // value erases behind the head.
+        gl.uniform1f(h.uCurrentTime, relTime);
+        gl.uniform1f(
+          h.uTrailLength,
+          resolveRevealTrailLength(this.lineOpts.revealDuration),
+        );
         gl.uniform1f(h.uFadeTrail, this.lineOpts.fadeTrail);
         break;
       default: {
@@ -1067,9 +1413,9 @@ export class STTLineLayer extends STTBaseLayer {
 
   /**
    * Bind the per-instance attributes shared by the visual and id passes. The
-   * time attribute is mode-dependent (`aVertexTimeAB` in trail mode); colour /
-   * width / filter bind only when the tile carries that buffer AND the program
-   * kept the attribute.
+   * time attribute is mode-dependent (`aVertexTimeAB` in the per-VERTEX modes,
+   * trail and reveal); colour / width / filter bind only when the tile carries
+   * that buffer AND the program kept the attribute.
    */
   private bindInstanceAttributes(
     gl: WebGLRenderingContext | WebGL2RenderingContext,
@@ -1086,7 +1432,7 @@ export class STTLineLayer extends STTBaseLayer {
     gl.vertexAttribPointer(h.aPosB, 2, gl.FLOAT, false, 0, 0);
     this.instSupport.vertexAttribDivisor(h.aPosB, 1);
 
-    if (this.lineOpts.timeFilterMode === 'trail') {
+    if (usesVertexTimes(this.lineOpts.timeFilterMode)) {
       if (c.vertexTimeBuffer && h.aVertexTimeAB >= 0) {
         gl.bindBuffer(gl.ARRAY_BUFFER, c.vertexTimeBuffer);
         gl.enableVertexAttribArray(h.aVertexTimeAB);
@@ -1136,7 +1482,7 @@ export class STTLineLayer extends STTBaseLayer {
     gl.uniform2f(h.uViewport, gl.drawingBufferWidth, gl.drawingBufferHeight);
     gl.uniform1f(h.uWidth, this.lineOpts.width);
     gl.uniform1f(h.uWidthScale, this.widthScaleFor(gl, tile, ctx));
-    gl.uniform4fv(h.uColor, toRgba01(this.lineOpts.color));
+    gl.uniform4fv(h.uColor, this.rgba01Uniform('Color', this.lineOpts.color));
     this.setTimeUniforms(gl, h, c, ctx);
     this.setFilterUniforms(gl, h, c);
     gl.uniform1f(h.uUseFeatureColor, c.colorBuffer && h.aColor >= 0 ? 1 : 0);

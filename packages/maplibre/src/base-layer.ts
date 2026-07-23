@@ -65,6 +65,8 @@ import {
 import {
   projectPositions,
   quantizePositionsToUint16,
+  metersToPixelsAtLatitude,
+  tileCenterLatitude,
 } from './lib/projection.js';
 import {
   createHostFrame,
@@ -535,6 +537,13 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
   private pickFbo?: WebGLFramebuffer;
   /** Colour texture backing {@link pickFbo}. */
   private pickTexture?: WebGLTexture;
+  /**
+   * Depth renderbuffer backing {@link pickFbo} — allocated ONLY for a
+   * `renderingMode: '3d'` layer, whose visual pass is depth-tested (see
+   * {@link pick}). A '2d' layer paints always-on-top in draw order, and its id
+   * pass matches that exactly with no depth buffer at all.
+   */
+  private pickDepth?: WebGLRenderbuffer;
   private pickWidth = 0;
   private pickHeight = 0;
   /** Reused single-pixel readback scratch (RGBA). */
@@ -990,11 +999,13 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
       if (this.unitQuadBuffer) gl.deleteBuffer(this.unitQuadBuffer);
       if (this.pickFbo) gl.deleteFramebuffer(this.pickFbo);
       if (this.pickTexture) gl.deleteTexture(this.pickTexture);
+      if (this.pickDepth) gl.deleteRenderbuffer(this.pickDepth);
     }
     this.tileGpuCache.clear();
     this.unitQuadBuffer = undefined;
     this.pickFbo = undefined;
     this.pickTexture = undefined;
+    this.pickDepth = undefined;
     this.pickWidth = 0;
     this.pickHeight = 0;
     this.invalidateProgramCache(gl);
@@ -1710,6 +1721,15 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
    * buffer size. RGBA8 + NEAREST always — ids must survive as exact bytes, so
    * we never filter or use a float format. Recreated (not reattached) on resize
    * for driver portability, mirroring the heatmap accumulator.
+   *
+   * A `renderingMode: '3d'` layer additionally gets a DEPTH_COMPONENT16
+   * renderbuffer: its VISIBLE frame is resolved by depth (maplibre installs a
+   * LEQUAL read-write depth mode for 3d custom layers, which
+   * {@link applySharedGlState} deliberately leaves in place), so an id pass with
+   * no depth would resolve overlapping geometry by DRAW ORDER instead and hand
+   * back the feature hidden BEHIND the one the user clicked. '2d' layers paint
+   * always-on-top in draw order, so for them the colour-only target already
+   * matches the frame exactly and the extra buffer would be waste.
    */
   private ensurePickFbo(
     gl: WebGLRenderingContext | WebGL2RenderingContext,
@@ -1719,6 +1739,8 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
     if (w === this.pickWidth && h === this.pickHeight && this.pickFbo) return;
     if (this.pickFbo) gl.deleteFramebuffer(this.pickFbo);
     if (this.pickTexture) gl.deleteTexture(this.pickTexture);
+    if (this.pickDepth) gl.deleteRenderbuffer(this.pickDepth);
+    this.pickDepth = undefined;
     this.pickFbo = gl.createFramebuffer()!;
     this.pickTexture = gl.createTexture()!;
     gl.bindTexture(gl.TEXTURE_2D, this.pickTexture);
@@ -1745,6 +1767,18 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
       this.pickTexture,
       0,
     );
+    if (this.renderingMode === '3d' && w > 0 && h > 0) {
+      this.pickDepth = gl.createRenderbuffer()!;
+      gl.bindRenderbuffer(gl.RENDERBUFFER, this.pickDepth);
+      gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT16, w, h);
+      gl.framebufferRenderbuffer(
+        gl.FRAMEBUFFER,
+        gl.DEPTH_ATTACHMENT,
+        gl.RENDERBUFFER,
+        this.pickDepth,
+      );
+      gl.bindRenderbuffer(gl.RENDERBUFFER, null);
+    }
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     this.pickWidth = w;
     this.pickHeight = h;
@@ -1787,15 +1821,130 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
   private dprMemo = 1;
 
   /**
+   * Metric sizing, the ONE implementation (Wave M3 seam pass).
+   *
+   * How many DEVICE pixels `meters` metres of ground cover at `latitudeDeg`,
+   * for the frame in progress. This is what every `radiusUnits`/`widthUnits`/
+   * `sizeUnits: 'meters'` prop in the package resolves through, and the three
+   * details it encodes were being re-derived, identically, in seven layers:
+   *
+   *  1. FRACTIONAL zoom. `ctx.zoom` is FLOORED (it is the tile-selection zoom),
+   *     so sizing off it makes metric widths step at integer zooms instead of
+   *     growing continuously. The ladder is: the value hoisted once per frame
+   *     in {@link beginFrame} → the live map getter (for a draw issued outside
+   *     a render pass) → `ctx.zoom` as the last resort.
+   *  2. The DEVICE-pixel ratio. MapLibre's `512 · 2^zoom` world is CSS pixels
+   *     while `gl_PointSize` and `uViewport` are device pixels, so the
+   *     conversion must cross {@link resolveDevicePixelRatio} — which is
+   *     memoized, because this runs once per TILE per frame.
+   *  3. Latitude. Mercator stretches with `1/cos(lat)`; use the TILE's centre
+   *     (see {@link metricPixelScale}) unless the geometry is not tied to one
+   *     tile, in which case the map centre is the same single-factor
+   *     approximation maplibre's own `_pixelPerMeter` makes.
+   *
+   * Screen-space caveat under pitch is documented on
+   * `metersToPixelsAtLatitude`: the factor is resolved per tile, not per
+   * fragment, so a pitched view keeps the centre-of-view size near the horizon.
+   */
+  protected metricPixelScaleAt(
+    gl: WebGLRenderingContext | WebGL2RenderingContext,
+    latitudeDeg: number,
+    fallbackZoom: number,
+    meters = 1,
+  ): number {
+    const zoom = this.frameZoom ?? this.map?.getZoom() ?? fallbackZoom;
+    return metersToPixelsAtLatitude(
+      meters,
+      latitudeDeg,
+      zoom,
+      512 * this.resolveDevicePixelRatio(gl),
+    );
+  }
+
+  /**
+   * Per-slot scratch for {@link rgba01Uniform}. One array per uniform NAME the
+   * subclass drives, so two constant colours in one program (fill + outline,
+   * source + target) never share a buffer.
+   */
+  private readonly rgbaScratch = new Map<
+    string,
+    [number, number, number, number]
+  >();
+
+  /**
+   * `toRgba01` without the per-call allocation — the form the DRAW path must
+   * use (Wave M3 seam pass).
+   *
+   * `gl.uniform4fv(h.uColor, toRgba01(this.opts.color))` reads innocently, but
+   * `toRgba01` builds a fresh 4-tuple and the draw path runs it once per TILE
+   * per FRAME, on every layer with a constant colour — eight layers were doing
+   * it, up to two slots each. This returns a cached array owned by `slot`,
+   * refilled in place, so the steady state allocates nothing.
+   *
+   * Still a plain `number[]` rather than a `Float32Array`: WebGL accepts both,
+   * and staying in float64 keeps the value byte-exact against the CPU-side
+   * expectation (a `Float32Array` would quantize `150/255` and force every
+   * assertion to go approximate).
+   *
+   * `slot` must be UNIQUE per uniform within a layer — reusing one slot for two
+   * live uniforms would have the second overwrite the first before the driver
+   * read it. Convention: the uniform's own name, minus the `u` prefix.
+   */
+  protected rgba01Uniform(
+    slot: string,
+    c: readonly [number, number, number, number],
+  ): [number, number, number, number] {
+    let out = this.rgbaScratch.get(slot);
+    if (!out) {
+      out = [0, 0, 0, 0];
+      this.rgbaScratch.set(slot, out);
+    }
+    // deck's 0–255 convention vs 0–1 floats, auto-detected exactly as
+    // `toRgba01` does (any channel above 1 means the tuple is bytes).
+    const k = c[0] > 1 || c[1] > 1 || c[2] > 1 || c[3] > 1 ? 1 / 255 : 1;
+    out[0] = c[0] * k;
+    out[1] = c[1] * k;
+    out[2] = c[2] * k;
+    out[3] = c[3] * k;
+    return out;
+  }
+
+  /**
+   * {@link metricPixelScaleAt} at `tile`'s centre latitude — the form every
+   * per-tile sizing path wants.
+   */
+  protected metricPixelScale(
+    gl: WebGLRenderingContext | WebGL2RenderingContext,
+    tile: Tile,
+    ctx: DrawContext,
+    meters = 1,
+  ): number {
+    return this.metricPixelScaleAt(
+      gl,
+      tileCenterLatitude(tile.id.z, tile.id.y),
+      ctx.zoom,
+      meters,
+    );
+  }
+
+  /**
    * Hit-test the feature under CSS pixel `(cssX, cssY)`. Renders the layer's
    * features into an offscreen id buffer (via the subclass {@link drawPickTile}
    * hook), reads back the cursor pixel and decodes it to an
    * {@link SttPickResult}. Returns null when the layer isn't pickable, hasn't
    * rendered yet, or the cursor is over empty space.
    *
+   * The pass mirrors the layer's own visibility rules, including DEPTH: a
+   * `renderingMode: '3d'` layer renders its frame depth-tested, so its id pass
+   * runs depth-tested too (against the FBO's own depth attachment, see
+   * {@link ensurePickFbo}) rather than letting draw order decide which of two
+   * overlapping prisms owns a texel. A '2d' layer keeps the historical
+   * depth-less pass, which is exactly how its frame paints.
+   *
    * Every piece of GL state this pass touches is captured and restored: render
-   * target, viewport, BLEND / DEPTH_TEST enables, clear colour, and the bound
-   * vertex array. That is not defensive tidiness — a pick is normally issued
+   * target, viewport, BLEND / DEPTH_TEST enables, the depth func / write mask /
+   * range / clear value when a 3d pass installs its own, the clear colour, and
+   * the bound vertex array. That is not defensive tidiness — a pick is normally issued
    * from a `mousemove` handler, i.e. OUTSIDE `painter.render()`, so maplibre
    * has neither run `setCustomLayerDefaults()` (which unbinds its VAO) before
    * nor `context.setDirty()` after. maplibre caches blend/depth/clearColor as
@@ -1826,6 +1975,28 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
     const prevClearColor = gl.getParameter(
       gl.COLOR_CLEAR_VALUE,
     ) as Float32Array | null;
+    // Depth MODE, captured only when this pass is going to install its own (a
+    // '3d' layer). maplibre caches depthFunc/depthMask/clearDepth as BaseValues
+    // and skips redundant calls, so leaving any of them changed behind its back
+    // would not self-heal — the next frame would depth-test the basemap wrong.
+    const depthPass = this.renderingMode === '3d';
+    const prevDepthFunc = depthPass
+      ? (gl.getParameter(gl.DEPTH_FUNC) as number)
+      : 0;
+    const prevDepthMask = depthPass
+      ? (gl.getParameter(gl.DEPTH_WRITEMASK) as boolean)
+      : true;
+    const prevClearDepth = depthPass
+      ? (gl.getParameter(gl.DEPTH_CLEAR_VALUE) as number)
+      : 1;
+    // The RANGE matters as much as the func here. A pick fires from a
+    // `mousemove`, i.e. outside the host's render pass, so the range left
+    // installed is whatever the last basemap layer used — for a 2d sublayer
+    // that is a razor-thin per-layer slab, which would squeeze every prism's z
+    // into a handful of the id buffer's 16 bits and z-fight the hit test.
+    const prevDepthRange = depthPass
+      ? (gl.getParameter(gl.DEPTH_RANGE) as Float32Array | null)
+      : null;
     // The host's VAO, when a pick lands outside its render pass (see the
     // doc-comment): the raw attribute binds below would otherwise be recorded
     // into whatever vertex array the last basemap layer drew with.
@@ -1839,11 +2010,27 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
     if (this.vaoSupport.enabled) this.vaoSupport.bind(null);
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.pickFbo!);
     gl.viewport(0, 0, w, h);
-    // Ids are exact — no blending, no depth test, clear to the reserved 0.
+    // Ids are exact — never blended, and cleared to the reserved id 0.
     gl.disable(gl.BLEND);
-    gl.disable(gl.DEPTH_TEST);
     gl.clearColor(0, 0, 0, 0);
-    gl.clear(gl.COLOR_BUFFER_BIT);
+    if (depthPass) {
+      // A depth-tested layer must resolve its id buffer the way it resolves the
+      // frame the user is looking at, or hovering the prism in FRONT can return
+      // the one hidden behind it (whichever happened to be drawn last wins the
+      // texel otherwise). LEQUAL + writes on over our OWN cleared depth buffer
+      // reproduces maplibre's `depthRangeFor3D` ordering; the host's depth
+      // RANGE is left alone because it only remaps z monotonically, which
+      // cannot change which fragment is nearer.
+      gl.enable(gl.DEPTH_TEST);
+      gl.depthFunc(gl.LEQUAL);
+      gl.depthMask(true);
+      gl.depthRange(0, 1);
+      gl.clearDepth(1);
+      gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    } else {
+      gl.disable(gl.DEPTH_TEST);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+    }
 
     // Frame-constant scalars the per-tile pick draws read (metric sizing,
     // fades); resolved here so the tile loop stays allocation- and DOM-free.
@@ -1881,6 +2068,13 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
     );
     if (prevBlend) gl.enable(gl.BLEND);
     if (prevDepthTest) gl.enable(gl.DEPTH_TEST);
+    else gl.disable(gl.DEPTH_TEST);
+    if (depthPass) {
+      gl.depthFunc(prevDepthFunc);
+      gl.depthMask(prevDepthMask);
+      gl.clearDepth(prevClearDepth);
+      if (prevDepthRange) gl.depthRange(prevDepthRange[0], prevDepthRange[1]);
+    }
     if (prevClearColor) {
       gl.clearColor(
         prevClearColor[0],

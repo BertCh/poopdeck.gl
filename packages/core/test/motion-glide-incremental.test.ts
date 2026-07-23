@@ -19,38 +19,23 @@
  *       were in the removed tile A or the added tile D; tracks confined to the
  *       unchanged tiles B/C are left untouched.
  *
- * Mirrors the fake-tile harness used by motion-point-interpolation.test.ts.
+ * Mirrors the fake-tile harness used by the deck motion-point-interpolation
+ * suite. Moved here with the kernel when it was hoisted out of
+ * `@poopdeck.gl/layers` into framework-free core (campaign D7).
  */
 
 import { describe, it, expect } from 'vitest';
-import { buildTrackIndex, TrackIndexMaintainer } from '../src/lib/track-kernel';
-import type { Track, TrackFieldConfig } from '../src/lib/track-kernel';
-import { makePointTile } from './fake-tile';
-import type { Tile } from '@poopdeck.gl/core';
+import {
+  buildTrackIndex,
+  TrackIndexMaintainer,
+} from '../src/render/track-kernel';
+import type { Track, TrackFieldConfig } from '../src/render/track-kernel';
+import { makePointTile, categorical } from './helpers/track-tiles';
+import type { Tile } from '../src/types';
 
 // ---------------------------------------------------------------------------
-// Fake-tile harness (same shape as motion-point-interpolation.test.ts)
+// Fake-tile harness
 // ---------------------------------------------------------------------------
-
-/** Build a categorical {indices, categories} column from string values. */
-function categorical(values: string[]): {
-  indices: Uint16Array;
-  categories: string[];
-} {
-  const categories: string[] = [];
-  const map = new Map<string, number>();
-  const indices = new Uint16Array(values.length);
-  values.forEach((v, i) => {
-    let idx = map.get(v);
-    if (idx === undefined) {
-      idx = categories.length;
-      categories.push(v);
-      map.set(v, idx);
-    }
-    indices[i] = idx;
-  });
-  return { indices, categories };
-}
 
 interface IdRow {
   id: string;

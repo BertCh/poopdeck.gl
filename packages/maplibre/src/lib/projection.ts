@@ -29,6 +29,30 @@ export function lngLatToMercator(lon: number, lat: number): [number, number] {
 }
 
 /**
+ * Allocation-free {@link lngLatToMercator}: writes `x` into `out[at]` and `y`
+ * into `out[at + 1]` instead of returning a fresh 2-tuple.
+ *
+ * This is the form every PER-FRAME emit loop must use. Both CPU-interpolated
+ * kinds (icon's motion glide, trip-heads) project one sample per active entity
+ * per frame, so the tuple-returning form allocates a two-element array per
+ * entity per frame — 1.2M short-lived arrays a second on a 20k-track glide.
+ * Byte-identical to the tuple form by construction (same clamp, same maths);
+ * `test/projection.test.ts` pins the two against each other across the latitude
+ * range, poles included.
+ */
+export function lngLatToMercatorInto(
+  lon: number,
+  lat: number,
+  out: Float32Array | Float64Array,
+  at: number,
+): void {
+  const clamped = lat > MAX_LAT ? MAX_LAT : lat < -MAX_LAT ? -MAX_LAT : lat;
+  const sin = Math.sin((clamped * Math.PI) / 180);
+  out[at] = lon / 360 + 0.5;
+  out[at + 1] = 0.5 - Math.log((1 + sin) / (1 - sin)) / (4 * Math.PI);
+}
+
+/**
  * Pre-project a packed lon/lat/alt buffer to mercator unit-square coordinates.
  *
  * @param positions - Interleaved positions. For 2D: [lon0, lat0, lon1, lat1, ...].

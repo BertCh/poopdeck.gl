@@ -12,15 +12,16 @@
  * cannot over-claim: every `supported: true` kind, every `true` capability and
  * every declared time-filter mode must have a passing case behind it.
  *
- * The adapter ships five layer classes (point/line/polygon/trips/heatmap). Every
- * other layer kind degrades to deck.gl (`@poopdeck.gl/layers`) except the two
- * that have an honest in-backend approximation (see `FALLBACK_KINDS`). The
- * adapter interleaves into the basemap's own GL context and
- * projects lon/lat → world on the CPU. Host dispatch (Wave M1) covers maplibre
- * v3–v6 + mapbox v3: on v5+ hosts the layers render via the injected
- * projection prelude — including globe — while ≤v4/mapbox hosts ride the
- * legacy mercator matrix path. Tileset ownership defaults to one archive per
- * layer; an opt-in `SharedTilesetSource` serves N layers from one archive.
+ * The adapter ships NINE layer classes (point/line/polygon/trips/tripHeads/
+ * heatmap/icon/column/arc). Every other layer kind degrades to deck.gl
+ * (`@poopdeck.gl/layers`) except the ones that have an honest in-backend
+ * approximation (see `FALLBACK_KINDS`). The adapter interleaves into the
+ * basemap's own GL context and projects lon/lat → world on the CPU. Host
+ * dispatch (Wave M1) covers maplibre v3–v6 + mapbox v3: on v5+ hosts the layers
+ * render via the injected projection prelude — including globe — while
+ * ≤v4/mapbox hosts ride the legacy mercator matrix path. Tileset ownership
+ * defaults to one archive per layer; an opt-in `SharedTilesetSource` serves N
+ * layers from one archive.
  *
  * Wave M2 (D8–D11) landed the feature parity this file used to disclaim:
  * all four time-filter modes (`window`/`wake`/`cumulative`/`trail`, from the
@@ -28,6 +29,13 @@
  * (`'meters'`) point radii and line/trip widths, and id-FBO picking on every
  * kind that has feature identity. Heatmap is deliberately NOT pickable — a
  * density pixel is a sum of unbounded splats with no single feature behind it.
+ *
+ * Wave M3 added four native kinds — `icon` (atlas billboards + wake + CPU
+ * motion glide), `column` (instanced prisms + the space-time-cube lift),
+ * `arc` (a real 3D, optionally great-circle strip, retiring the arc→line
+ * fallback) and `tripHeads` (the moving head dot, interpolated through the
+ * hoisted core track kernel, D7) — plus progressive path reveal on the line
+ * layer. That flips four of the six layer features and `timeAsHeight`.
  */
 
 import {
@@ -45,6 +53,11 @@ const SUPPORTED_KINDS: readonly LayerKind[] = [
   'polygon',
   'trips',
   'heatmap',
+  // Wave M3.
+  'icon',
+  'column',
+  'arc',
+  'tripHeads',
 ];
 
 /** Why an unsupported kind degrades — a single, honest referral to the deck backend. */
@@ -57,15 +70,33 @@ const DECK_REFERRAL =
  * every target MUST itself be in {@link SUPPORTED_KINDS} — a fallback naming
  * another unsupported kind hands the caller a second unrenderable answer
  * instead of the honest "skip, go to deck" its `reason` intends. Pinned by the
- * conformance gate. `text → icon`, `mesh → boundingBox` and `hexbin →
- * h3Summary` were copied from the three descriptor, where those targets ARE
- * supported; here they are not, so those kinds skip.
+ * conformance gate. `mesh → boundingBox` and `hexbin → h3Summary` were copied
+ * from the three descriptor, where those targets ARE supported; here they are
+ * not, so those kinds skip.
+ *
+ * Wave M3 moved `arc` OUT of this table (it is now a real kind) and moved
+ * `text` IN: the fallback three declares (`text → icon`) was dangling here
+ * while there was no icon layer, and now resolves to `STTIconLayer` — a
+ * labelled feature degrades to its marker with no glyphs, which is a real
+ * approximation rather than a second dead end.
  */
-const FALLBACK_KINDS: Readonly<Partial<Record<LayerKind, LayerKind>>> = {
-  // An arc is naturally a line in a backend without arc geometry.
-  arc: 'line',
-  // A point cloud degrades to flat points (no per-point z here).
-  pointCloud: 'point',
+const FALLBACK_KINDS: Readonly<
+  Partial<Record<LayerKind, { kind: LayerKind; lost: string }>>
+> = {
+  pointCloud: {
+    kind: 'point',
+    lost: 'per-point elevation — the cloud renders as flat billboards on the ground plane',
+  },
+  text: {
+    kind: 'icon',
+    // Same target the three backend names. The atlas caveat is part of the
+    // `lost` string on purpose: STTIconLayer draws NOTHING without a caller-
+    // supplied `iconAtlas` + `iconMapping` (it warns and bails), so promising
+    // "the positions render" unconditionally would understate what the caller
+    // has to bring — deck's IconLayer and @poopdeck.gl/three's icon layer carry
+    // the same requirement.
+    lost: 'the GLYPHS — a label renders as its marker sprite, and ONLY if the caller supplies iconAtlas + iconMapping (STTIconLayer draws nothing without them)',
+  },
 };
 
 /**
@@ -78,9 +109,19 @@ const FALLBACK_KINDS: Readonly<Partial<Record<LayerKind, LayerKind>>> = {
 const layerKinds = Object.fromEntries(
   LAYER_KINDS.map((kind): [LayerKind, LayerKindSupport] => {
     if (SUPPORTED_KINDS.includes(kind)) return [kind, { supported: true }];
-    const fallbackKind = FALLBACK_KINDS[kind];
-    if (fallbackKind) {
-      return [kind, { supported: false, fallbackKind, reason: DECK_REFERRAL }];
+    const fallback = FALLBACK_KINDS[kind];
+    if (fallback) {
+      // A degrading kind's `reason` names what the caller LOSES by taking the
+      // approximation — the generic deck referral would tell them nothing about
+      // whether the substitute is good enough for their map.
+      return [
+        kind,
+        {
+          supported: false,
+          fallbackKind: fallback.kind,
+          reason: `renders as ${fallback.kind}; lost: ${fallback.lost}. For the real kind use @poopdeck.gl/layers (deck)`,
+        },
+      ];
     }
     return [kind, { supported: false, reason: DECK_REFERRAL }];
   }),
@@ -106,15 +147,22 @@ export const maplibreBackend: BackendDescriptor = {
     metricSizing: true,
     gpuHeatmap: true,
     liveBundling: false,
-    timeAsHeight: false,
+    // Wave M3: `STTColumnLayer.timeHeightScale` lifts every vertex of a feature
+    // by `(startTime - timeHeightOrigin) * scale` METRES through the same D10
+    // elevation path the prisms use — a real space-time cube, not a proxy.
+    // Kept in lockstep with `maplibreLayerFeatures.timeHeightScale` by the
+    // conformance gate: the two claims are the same claim.
+    timeAsHeight: true,
     interleavedBasemap: true,
     userExtensions: false,
     cameraRoll: false,
   } satisfies Record<Capability, boolean>,
   // D8: all four modes ship as independent kernel snippets, selected at
-  // program-build time. point/line/polygon/heatmap compile any of the four;
-  // trips compiles trail + wake (window/cumulative are meaningless for a
-  // per-vertex swept path, the same cut deck's AnimatedTripsLayer makes).
+  // program-build time. point/line/polygon/heatmap/icon/column/arc compile any
+  // of the four; trips compiles trail + wake (window/cumulative are meaningless
+  // for a per-vertex swept path, the same cut deck's AnimatedTripsLayer makes)
+  // and tripHeads compiles window + wake (cumulative/trail describe a HISTORY,
+  // which is what the trips ribbon already draws).
   timeFilterModes: ['window', 'wake', 'cumulative', 'trail'],
   layerKinds,
   projectsOnCpu: true,
@@ -182,57 +230,94 @@ export type LayerFeatureSupport =
     };
 
 /**
- * What the maplibre adapter implements after Wave M2. Two of the six are real
- * (`dataFilter`, `stableColorMapping`); the other four need layer kinds this
- * backend does not render yet (icon, column, path) or a CPU kernel that has not
- * been hoisted out of the deck package (D7) — each records its degrade path
- * rather than silently no-op'ing.
+ * What the maplibre adapter implements after Wave M3. All six are now real; the
+ * gate in test/backend-descriptor.test.ts block (d) proves each `prop` against
+ * the REAL exported class for every kind the claim names, so a claim can never
+ * outrun the code.
+ *
+ * `kinds` is deliberately the set the feature ACTUALLY covers here, not deck's
+ * set: deck glides points too and reveals a dedicated `path` kind, and this
+ * backend does neither — declaring those would be an over-claim the gate would
+ * (correctly) reject.
  */
 export const maplibreLayerFeatures: Readonly<
   Record<LayerFeature, LayerFeatureSupport>
 > = {
   motionInterpolation: {
-    supported: false,
-    kinds: ['point', 'icon'],
-    fallback:
-      'per-tile window sampling — markers jump between tiles instead of gliding',
-    reason:
-      'needs the CPU glide kernel (packages/layers/src/lib/track-kernel.ts), which is hoisted to core in Wave M3 (D7)',
+    supported: true,
+    // `point` is deck's third kind here and is deliberately absent:
+    // STTPointLayer draws the discrete window, with no id-pooled glide path.
+    kinds: ['icon', 'tripHeads'],
+    // The one option BOTH interpolating layers share. Icon's glide is opt-in
+    // (`interpolate` + `idProperty`, deck's gate); tripHeads interpolates
+    // unconditionally because a head with no interpolation is just a vertex.
+    // `maxInterpolationGap` is the knob common to both, so it is the key the
+    // (d) gate can prove on every covered class — and a boolean `interpolate`
+    // is unprovable by a differential value probe anyway.
+    prop: 'maxInterpolationGap',
+    summary:
+      'CPU per-entity glide through the hoisted core track kernel (@poopdeck.gl/core `TrackIndexMaintainer`/`sampleTrack`, D7): icon pools resident tiles by idProperty and draws ONE interpolated pose per entity (interpolate/idProperty/maxInterpolationGap/reducedMotion), tripHeads interpolates each trip polyline to the playhead; maxInterpolationGap HOLDS the last sample instead of fabricating motion across a data hole',
   },
   iconWake: {
-    supported: false,
+    supported: true,
     kinds: ['icon'],
-    fallback: 'no icon layer at all — falls back to the deck backend',
-    reason:
-      'the icon kind itself is unimplemented here (Wave M3); the generic wake alpha exists in shaders/time-window.glsl.ts and is already wired on point/line/polygon/trips/heatmap',
+    prop: 'wakeLength',
+    summary:
+      'trailing alpha wake behind moving icons (wakeLength/wakeTailScale) from the shared shaders/time-window.glsl.ts kernel, with the tail shrinking via sttWakeSizeScale',
   },
   dataFilter: {
     supported: true,
-    kinds: ['point', 'line', 'polygon', 'trips', 'heatmap'],
+    kinds: [
+      'point',
+      'line',
+      'polygon',
+      'trips',
+      'heatmap',
+      'icon',
+      'column',
+      'arc',
+      'tripHeads',
+    ],
     prop: 'filterProperty',
     summary:
-      'GPU range filter over a numeric column, deck DataFilterExtension parity (filterProperty/filterRange/filterSoftRange/filterEnabled/filterTransformSize/filterTransformColor); the branch compiles in only when filterProperty is set, and a tile missing the column renders UNFILTERED',
+      'GPU range filter over a numeric column, deck DataFilterExtension parity (filterProperty/filterRange/filterSoftRange/filterEnabled/filterTransformSize/filterTransformColor); the branch compiles in only when filterProperty is set, and a tile missing the column renders UNFILTERED. DEGRADE: on `icon` the filter covers the DISCRETE path only — with motionInterpolation active (`interpolate` + `idProperty`) the glide program compiles no filter kernel and the CPU track pool carries no filter column, so every entity renders regardless of filterRange (deck AnimatedIconLayer degrades identically; STTIconLayer warns once)',
   },
   timeHeightScale: {
-    supported: false,
-    kinds: ['column', 'polygon'],
-    fallback: 'flat geometry (no space-time-cube lift)',
-    reason:
-      'time-as-height is unimplemented — see capabilities.timeAsHeight=false; the D10 elevation fix is the prerequisite and landed in Wave M2',
+    supported: true,
+    // deck also lifts polygons; STTPolygonLayer extrudes but has no time lift,
+    // so the claim stops at the column kind.
+    kinds: ['column'],
+    prop: 'timeHeightScale',
+    summary:
+      'space-time-cube vertical lift by feature time — every vertex rises (startTime - timeHeightOrigin) * timeHeightScale METRES through the D10 latitude-correct elevation path; timeHeightOrigin anchors altitude 0 and reducedMotion forces the lift to 0',
   },
   stableColorMapping: {
     supported: true,
-    kinds: ['point', 'line', 'polygon', 'trips'],
+    // Every kind with a categorical colour. Heatmap is the deliberate
+    // exclusion: a density pixel has no category.
+    kinds: [
+      'point',
+      'line',
+      'polygon',
+      'trips',
+      'icon',
+      'column',
+      'arc',
+      'tripHeads',
+    ],
     prop: 'colorMapping',
     summary:
       'category-STRING → RGBA map applied CPU-side per tile (colorMapping/colorMappingDefault), so a category keeps one colour across tiles regardless of per-tile dictionary order',
   },
   pathReveal: {
-    supported: false,
-    kinds: ['path'],
-    fallback:
-      "STTLineLayer's trail mode reveals per-VERTEX along a path, but without the revealTrail/revealDuration prop surface",
-    reason:
-      'the dedicated path kind (joins, dashes, revealTrail/revealDuration) is Wave M3',
+    supported: true,
+    // deck spells this on its `path` kind; this backend has no separate path
+    // kind, so the reveal lives on the LINE layer and the claim names `line`.
+    // A feature may only cover kinds the backend renders — naming 'path' here
+    // would fail gate (d).
+    kinds: ['line'],
+    prop: 'revealTrail',
+    summary:
+      "progressive path reveal with a partially-drawn frontier segment (revealTrail/revealDuration/fadeTrail/reducedMotion): per-VERTEX times come from the tile's vertexTimestamps or the shared cumulative-distance kernel, the frontier endpoint is INTERPOLATED rather than popped, and unrevealed geometry is unpickable",
   },
 };

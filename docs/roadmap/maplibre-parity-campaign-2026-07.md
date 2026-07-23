@@ -11,11 +11,32 @@ the loop between them.
   `STTPolygonLayer.altitudeScale` is now a dimensionless exaggeration, see the
   package CHANGELOG), id-FBO picking on point/line/polygon/trips, and the
   descriptor feature matrix. Package suite 516/516, `tsc` clean, dist rebuilt.
-  **Open:** user browser verify (globe + the five kinds on a v5 host), and
-  `packages/mcp/docs/api/stt-maplibre.md` still documents the pre-M0 backend
-  (claims v5 unsupported / no picking / `altitudeScale` default `1e-7`) — the
-  docs pass is Wave M5 item 5, so that page misinforms until then.
-- **M3–M5 — not started.**
+  `docs/api/stt-maplibre.md` (and its `packages/mcp/docs` mirror) WAS refreshed
+  by that commit — v5/globe/picking/`altitudeScale: 1` are documented, so the
+  older "still documents the pre-M0 backend" note here was stale; the page is
+  now behind only on the layer count (see M3).
+  **Open:** user browser verify (globe + the five kinds on a v5 host).
+- **M3 — LANDED, uncommitted** (2026-07-23): D7 track-kernel hoist to
+  `@poopdeck.gl/core` (`src/render/track-kernel.ts`; the deck package's
+  `src/lib/track-kernel.ts` is now a re-export, so no deck import path moved),
+  four new native kinds — `STTIconLayer` (atlas billboards, heading,
+  `iconWake`, CPU motion glide), `STTColumnLayer` (instanced prisms +
+  `timeHeightScale`), `STTArcLayer` (real 3D/great-circle strip, retiring the
+  arc→line fallback), `STTTripHeadsLayer` — plus progressive path reveal
+  (`revealTrail`) on the line family and two shared shader kernels
+  (`shaders/billboard.glsl.ts`, `shaders/globe-elevation.glsl.ts`).
+  Descriptor: nine supported kinds, `timeAsHeight: true`, `text → icon`
+  fallback adopted, all six `maplibreLayerFeatures` bits real. Integrator
+  gate: maplibre 876/876, core 535/535, layers 800/800; `tsc` clean in
+  maplibre/core/layers/three/cesium + showcase; oxlint/oxfmt clean;
+  core/layers/maplibre dists rebuilt; `docs/spec/backend-capabilities.md`
+  regenerated.
+  **Open:** the showcase `MaplibreRenderer.tsx` still mounts only the original
+  five kinds, so the M3 demo-wiring DoD (flights icon glide, taxi columns, OD
+  arcs, trip heads on maplibre) and the user browser verify are NOT done;
+  `docs/api/stt-maplibre.md` still says "five layer kinds" and lists picking
+  for point/line/polygon/trips only (docs pass stays Wave M5 item 5).
+- **M4–M5 — not started.**
 
 **Goal.** Make `@poopdeck.gl/maplibre` a first-class rendering backend: an app
 with an existing MapLibre (or Mapbox) map should be able to drop STT layers in

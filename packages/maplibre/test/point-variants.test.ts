@@ -353,9 +353,9 @@ describe('mode/config resolution', () => {
       pointProgramKey('pick', cfg()),
     ]);
     expect(keys.size).toBe(6);
-    expect(pointProgramKey('main', cfg())).toBe('main:window');
+    expect(pointProgramKey('main', cfg())).toBe('point:main:window');
     expect(pointProgramKey('pick', cfg({ mode: 'wake', filter: true }))).toBe(
-      'pick:wake:filter',
+      'point:pick:wake:filter',
     );
   });
 });

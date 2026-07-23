@@ -364,9 +364,9 @@ describe('polygon time-filter modes (D8)', () => {
   it('the program-cache key carries the mode and the filter branch', () => {
     // getOrCreateProgram only appends the HOST variant, so two modes sharing a
     // base key would silently reuse each other's program.
-    expect(makeLayer().programKeys.fill).toBe('fill:window');
+    expect(makeLayer().programKeys.fill).toBe('polygon:fill:window');
     expect(makeLayer({ timeFilterMode: 'cumulative' }).programKeys.fill).toBe(
-      'fill:cumulative',
+      'polygon:fill:cumulative',
     );
     expect(
       makeLayer({
@@ -374,7 +374,7 @@ describe('polygon time-filter modes (D8)', () => {
         trailLength: 1000,
         filterProperty: 'mag',
       }).programKeys['pick-stroke'],
-    ).toBe('pick-stroke:trail:filter');
+    ).toBe('polygon:pick-stroke:trail:filter');
   });
 
   it('wake with a non-positive wakeLength degrades to the window kernel', () => {

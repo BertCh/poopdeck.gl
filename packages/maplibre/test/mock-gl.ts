@@ -68,6 +68,18 @@ export function makeMockGl(
     VIEWPORT: 0x0ba2,
     COLOR_ATTACHMENT0: 0x8ce0,
     FRAMEBUFFER_COMPLETE: 0x8cd5,
+    // Depth surface — the pick FBO grows a depth attachment for '3d' layers
+    // (STTColumnLayer), whose visual pass is depth-tested.
+    RENDERBUFFER: 0x8d41,
+    DEPTH_ATTACHMENT: 0x8d00,
+    DEPTH_COMPONENT16: 0x81a5,
+    DEPTH_BUFFER_BIT: 0x0100,
+    DEPTH_FUNC: 0x0b74,
+    DEPTH_WRITEMASK: 0x0b72,
+    DEPTH_CLEAR_VALUE: 0x0b73,
+    DEPTH_RANGE: 0x0b70,
+    LEQUAL: 0x0203,
+    LESS: 0x0201,
     ONE: 1,
     LINE_LOOP: 2,
     LINE_STRIP: 3,
@@ -108,6 +120,13 @@ export function makeMockGl(
     [constants.DEPTH_TEST, false],
   ]);
   let clearColorValue = new Float32Array([0, 0, 0, 0]);
+  // Depth mode, tracked for the same reason: a '3d' pick pass installs its own
+  // and must hand the host's back (maplibre caches it and skips redundant
+  // calls, so anything left changed is not self-healing).
+  let depthFuncValue = constants.LESS;
+  let depthWriteMask = true;
+  let depthClearValue = 1;
+  let depthRangeValue = new Float32Array([0, 1]);
 
   const gl = {
     ...constants,
@@ -128,6 +147,23 @@ export function makeMockGl(
     useProgram: vi.fn(),
     bindBuffer: vi.fn(),
     bufferData: vi.fn(),
+    // Per-frame prefix uploads into a pre-sized store (trip-heads' emitted
+    // heads, the icon layer's glide instances). Suites that need the uploaded
+    // VALUES snapshot the view themselves — the scratch arrays are reused, so a
+    // plain call log would show every entry holding the newest contents.
+    bufferSubData: vi.fn(),
+    depthFunc: vi.fn((func: number) => {
+      depthFuncValue = func;
+    }),
+    depthMask: vi.fn((flag: boolean) => {
+      depthWriteMask = flag;
+    }),
+    clearDepth: vi.fn((depth: number) => {
+      depthClearValue = depth;
+    }),
+    depthRange: vi.fn((near: number, far: number) => {
+      depthRangeValue = new Float32Array([near, far]);
+    }),
     enableVertexAttribArray: vi.fn(),
     disableVertexAttribArray: vi.fn(),
     vertexAttribPointer: vi.fn(),
@@ -252,6 +288,11 @@ export function makeMockGl(
       boundFramebuffer = fbo ?? null;
     }),
     framebufferTexture2D: vi.fn(),
+    createRenderbuffer: vi.fn(() => makeHandle('renderbuffer')),
+    deleteRenderbuffer: vi.fn(),
+    bindRenderbuffer: vi.fn(),
+    renderbufferStorage: vi.fn(),
+    framebufferRenderbuffer: vi.fn(),
     checkFramebufferStatus: vi.fn(() => 0x8cd5),
     viewport: vi.fn((x: number, y: number, w: number, h: number) => {
       currentViewport = new Int32Array([x, y, w, h]);
@@ -264,6 +305,11 @@ export function makeMockGl(
         return new Float32Array(clearColorValue);
       }
       if (pname === constants.VERTEX_ARRAY_BINDING) return boundVao;
+      if (pname === constants.DEPTH_FUNC) return depthFuncValue;
+      if (pname === constants.DEPTH_WRITEMASK) return depthWriteMask;
+      if (pname === constants.DEPTH_CLEAR_VALUE) return depthClearValue;
+      if (pname === constants.DEPTH_RANGE)
+        return new Float32Array(depthRangeValue);
       return null;
     }),
     clear: vi.fn(),

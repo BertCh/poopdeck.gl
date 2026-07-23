@@ -1,17 +1,26 @@
 /**
  * @poopdeck.gl/maplibre — MapLibre GL custom-layer adapters for STT archives.
  *
- * Five layer classes, one per visualisation kind. Add the one(s) you need to
+ * Nine layer classes, one per visualisation kind. Add the one(s) you need to
  * your map; each manages its own archive read, tile cache and shader pipeline:
  *
  *   - {@link STTPointLayer} — Point features (billboards).
- *   - {@link STTLineLayer} — LineString features, constant width window mode.
+ *   - {@link STTLineLayer} — LineString features, constant width, all four
+ *     time modes plus progressive path reveal (`revealTrail`).
  *   - {@link STTPolygonLayer} — Polygon features, with optional stroke and
  *     extrusion.
  *   - {@link STTTripsLayer} — LineString features rendered with a trailing
  *     fade anchored at `currentTime` (parity with `AnimatedTripsLayer`).
+ *   - {@link STTTripHeadsLayer} — the moving head dot at the live end of each
+ *     trip, CPU-interpolated through the shared core track kernel.
  *   - {@link STTHeatmapLayer} — Density heatmap from POINT tiles, with an
  *     additive splat + colour-ramp pipeline (parity with `HeatmapTimeLayer`).
+ *   - {@link STTIconLayer} — rotated sprite billboards from an atlas, with
+ *     per-feature sprite selection, an icon wake and CPU motion glide.
+ *   - {@link STTColumnLayer} — instanced prisms (`elevation` in metres) with
+ *     the space-time-cube lift (`timeHeightScale`).
+ *   - {@link STTArcLayer} — real 3D origin→destination arcs, optionally
+ *     great-circle, tessellated in the vertex shader.
  *
  * For tiles containing multiple geometry types, instantiate multiple layers
  * pointing at the same URL — each will pick out the geometries it accepts —
@@ -38,8 +47,17 @@ export {
 } from './layers/point-layer.js';
 export {
   STTLineLayer,
+  // Progressive path reveal (D-M3): the compiled-mode union widens the four
+  // time modes with `'reveal'`, and the kernel ships its JS references so a
+  // subclass (or an app-side scrubber) can predict the frontier on the CPU.
+  LINE_REVEAL_GLSL,
+  REVEAL_PERSIST_TRAIL_MS,
+  resolveRevealTrailLength,
+  revealSpanJS,
+  revealVertexJS,
   type STTLineLayerOptions,
   type STTLineTimeFilterMode,
+  type LineCompiledMode,
 } from './layers/line-layer.js';
 export {
   STTPolygonLayer,
@@ -51,10 +69,41 @@ export {
   type STTTripsLayerOptions,
 } from './layers/trips-layer.js';
 export {
+  STTTripHeadsLayer,
+  type STTTripHeadsLayerOptions,
+  type TripHeadsTimeFilterMode,
+} from './layers/trip-heads-layer.js';
+export {
   STTHeatmapLayer,
   type STTHeatmapLayerOptions,
   type STTHeatmapTimeFilterMode,
 } from './layers/heatmap-layer.js';
+export {
+  STTIconLayer,
+  type STTIconLayerOptions,
+  type IconTimeFilterMode,
+  // The atlas prop surface: a consumer typing its own sprite sheet needs both
+  // the rectangle shape and the accepted image sources.
+  type IconMappingEntry,
+  type IconAtlasImage,
+  type STTIconAtlasSource,
+} from './layers/icon-layer.js';
+export {
+  STTColumnLayer,
+  type STTColumnLayerOptions,
+  type ColumnTimeFilterMode,
+} from './layers/column-layer.js';
+export {
+  STTArcLayer,
+  // Arc CPU references: the same closed forms the vertex shader mirrors, so an
+  // app can pre-size an arc's apex (or lay out a legend) without a GPU pass.
+  MAX_ARC_SEGMENTS,
+  greatCircleMeters,
+  arcHeightMeters,
+  arcVertexTime,
+  type STTArcLayerOptions,
+  type ArcTimeFilterMode,
+} from './layers/arc-layer.js';
 export {
   STTBaseLayer,
   cssToDevicePixel,
@@ -122,6 +171,27 @@ export {
   wakeSizeScaleJS,
   cumulativeAlphaJS,
 } from './shaders/time-window.glsl.js';
+
+// Elevated-projection kernel (Wave M3 seam pass): the one implementation of
+// the metres-vs-mercator-z split and the globe horizon-clip re-derivation that
+// polygon/column/arc all raise geometry through. Exported for a subclass that
+// wants to leave the ground without re-deriving maplibre's contract.
+export {
+  buildElevatedProjection,
+  GLOBE_ELEVATION_STEPS,
+  type ElevatedProjectionOptions,
+  type ElevatedProjectionNames,
+} from './shaders/globe-elevation.glsl.js';
+
+// Billboard (point-sprite) disc kernel: shared by the point and trip-heads
+// layers so their VISUAL disc and their PICK hit area cannot drift apart.
+export {
+  discMaskGLSL,
+  buildBillboardIdFragmentSource,
+  DISC_R2_MAX,
+  DISC_R2_SOFT,
+  DISC_EDGE_EXPR,
+} from './shaders/billboard.glsl.js';
 
 // Shared tileset source (D6a): ONE archive + ONE tileset serving N layers.
 // Construct one per .stt, pass it to each layer as `{ source }`, and register

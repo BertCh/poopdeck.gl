@@ -27,7 +27,7 @@
 | metricSizing       | ✅   | ✅    | ✅       | ✅     |
 | gpuHeatmap         | ✅   | —     | ✅       | —      |
 | liveBundling       | ✅   | —     | —        | —      |
-| timeAsHeight       | ✅   | —     | —        | —      |
+| timeAsHeight       | ✅   | —     | ✅       | —      |
 | interleavedBasemap | ✅   | —     | ✅       | ✅     |
 | userExtensions     | ✅   | —     | —        | —      |
 | cameraRoll         | —    | —     | —        | ✅     |
@@ -49,12 +49,12 @@
 | point          | ✅     | ✅             | ✅       | ✅            |
 | path           | ✅     | ✅             | —        | ✅            |
 | polygon        | ✅     | ✅             | ✅       | —             |
-| arc            | ✅     | ✅             | ↳ line   | ✅            |
+| arc            | ✅     | ✅             | ✅       | ✅            |
 | line           | ✅     | ✅             | ✅       | ✅            |
-| icon           | ✅     | ✅             | —        | —             |
-| column         | ✅     | ✅             | —        | —             |
+| icon           | ✅     | ✅             | ✅       | —             |
+| column         | ✅     | ✅             | ✅       | —             |
 | trips          | ✅     | ✅             | ✅       | ✅            |
-| tripHeads      | ✅     | ✅             | —        | ✅            |
+| tripHeads      | ✅     | ✅             | ✅       | ✅            |
 | boundingBox    | ✅     | ✅             | —        | —             |
 | surfel         | ✅     | ✅             | —        | ↳ point       |
 | heatmap        | ✅     | ↳ point        | ✅       | —             |
@@ -65,7 +65,7 @@
 | flowStroke     | ✅     | ↳ flowCorridor | —        | ↳ line        |
 | isoLines       | ↳ path | ✅             | —        | ↳ path        |
 | ego            | —      | ✅             | —        | —             |
-| text           | ✅     | ↳ icon         | —        | ↳ icon        |
+| text           | ✅     | ↳ icon         | ↳ icon   | ↳ icon        |
 | mesh           | ✅     | ↳ boundingBox  | —        | ↳ boundingBox |
 | pointCloud     | ✅     | ↳ point        | ↳ point  | ↳ point       |
 | hexbin         | ✅     | ↳ h3Summary    | —        | ↳ h3Summary   |

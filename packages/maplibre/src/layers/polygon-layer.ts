@@ -69,6 +69,7 @@
 import type { Tile, Layer as STTLayer } from '@poopdeck.gl/core';
 import { GeometryType, DEFAULT_POLYGON_PALETTE } from '@poopdeck.gl/core';
 import { tessellateFeature } from '@poopdeck.gl/core/geometry';
+import { buildElevatedProjection } from '../shaders/globe-elevation.glsl.js';
 import {
   STTBaseLayer,
   expandPickIdColors,
@@ -77,7 +78,6 @@ import {
   type STTTimeFilterMode,
   type DrawContext,
   type TileGpuCache,
-  toRgba01,
   type RGBA8,
 } from '../base-layer.js';
 import {
@@ -334,33 +334,29 @@ export const buildFillVertexSource = (cfg: PolygonShaderConfig): string => {
   const varyings = pick
     ? '  varying vec3 vIdColor;\n'
     : '  varying vec4 vColor;\n';
+  // The shared elevated-projection kernel (shaders/globe-elevation.glsl.ts).
+  // NOTE the elevation expressions: this layer folds the metres→mercator-z
+  // factor into `uAltitudeScale`, whose VALUE differs per host variant — so
+  // `elev` is already mercator-z on the MERCATOR prelude, while on GLOBE it is
+  // metres and the transition's flat fallback has to convert explicitly.
+  const extrudedProjection = buildElevatedProjection({
+    usesPrelude: true,
+    xy: 'aMercator.xy',
+    elevMeters: 'elev',
+    elevMercatorZ: 'elev',
+    elevMercatorZFallback: 'elev * uMercatorZPerMeter',
+    names: {
+      out: 'result',
+      sphere: 'elevated',
+      globe: 'globePos',
+      flat: 'flatPos',
+    },
+    indent: '      ',
+  });
   const position = usesPrelude
     ? `    if (uExtruded > 0.5) {
       float elev = aMercator.z * uAltitudeScale;
-#ifdef GLOBE
-      // projectTileFor3D deliberately PRESERVES z on globe ("Unlike
-      // interpolateProjection, this variant preserves the Z value",
-      // maplibre _projection_globe.vertex.glsl), so a prism would lose the
-      // horizon clipping the flat branch inherits and the back hemisphere
-      // would draw over the front. Its transition fallback also wants
-      // mercator-z while its sphere term wants metres — one call cannot feed
-      // both. Mirror interpolateProjection here with the right unit on each
-      // side; the 0.2 constant is maplibre's own z_globeness_threshold.
-      vec3 elevated = projectToSphere(aMercator.xy) * (1.0 + elev / GLOBE_RADIUS);
-      vec4 globePos = u_projection_matrix * vec4(elevated, 1.0);
-      globePos.z = globeComputeClippingZ(elevated) * globePos.w;
-      vec4 result = globePos;
-      if (u_projection_transition <= 0.999) {
-        vec4 flatPos = u_projection_fallback_matrix *
-          vec4(aMercator.xy, elev * uMercatorZPerMeter, 1.0);
-        result.z = mix(0.0, globePos.z,
-          clamp((u_projection_transition - 0.2) / 0.8, 0.0, 1.0));
-        result.xyw = mix(flatPos.xyw, globePos.xyw, u_projection_transition);
-      }
-      gl_Position = result;
-#else
-      gl_Position = projectTileFor3D(aMercator.xy, elev);
-#endif
+${extrudedProjection}      gl_Position = result;
     } else {
       gl_Position = projectTile(aMercator.xy);
     }
@@ -832,7 +828,7 @@ export class STTPolygonLayer extends STTBaseLayer {
    * {@link programKeys}; the draw path reads that record.
    */
   private buildProgramKey(pass: PolygonPass): string {
-    return `${pass}:${this.timeMode}${this.filterCompiled ? ':filter' : ''}`;
+    return `polygon:${pass}:${this.timeMode}${this.filterCompiled ? ':filter' : ''}`;
   }
 
   /** Link a fill program (visual or id-pick) for the frame's shader variant. */
@@ -1482,7 +1478,7 @@ export class STTPolygonLayer extends STTBaseLayer {
         gl.uniformMatrix4fv(h.uMatrix, false, ctx.matrix);
       }
       gl.uniform1f(h.uAltitudeScale, altitudeScale);
-      gl.uniform4fv(h.uColor, toRgba01(this.polyOpts.color));
+      gl.uniform4fv(h.uColor, this.rgba01Uniform('Color', this.polyOpts.color));
       this.setTimeUniforms(gl, h, ctx, c, fadeIn, fadeOut);
       this.setFilterUniforms(gl, h, c);
       gl.uniform1f(h.uUseFeatureColor, c.colorBuffer && h.aColor >= 0 ? 1 : 0);
@@ -1530,7 +1526,10 @@ export class STTPolygonLayer extends STTBaseLayer {
       }
       gl.uniform2f(sh.uViewport, gl.drawingBufferWidth, gl.drawingBufferHeight);
       gl.uniform1f(sh.uWidth, this.polyOpts.lineWidth);
-      gl.uniform4fv(sh.uColor, toRgba01(this.polyOpts.lineColor));
+      gl.uniform4fv(
+        sh.uColor,
+        this.rgba01Uniform('StrokeColor', this.polyOpts.lineColor),
+      );
       this.setTimeUniforms(gl, sh, ctx, c, fadeIn, fadeOut);
       this.setFilterUniforms(gl, sh, c);
 
