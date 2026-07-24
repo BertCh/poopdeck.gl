@@ -6,17 +6,27 @@ dozens of real and synthetic datasets.
 
 ## Pages
 
+The route tree is `src/routes.ts` (react-router framework mode).
+
 - `/` — landing page
-- `/demos` — dataset gallery; `/demos/:datasetId` — per-dataset detail page
-- `/demo/:datasetId` — single-dataset deck.gl demo with the time
+- `/demos` — the curated gallery; `/demos/:datasetId` — per-demo detail page
+  (live embed + editorial body). A dataset with no gallery card redirects to
+  the fullscreen viewer.
+- `/demo/:datasetId` — single-dataset deck.gl viewer with the time
   controller, the perf HUD, and the `__sttProbe` channel tap
 - `/maplibre/:datasetId` — same data rendered through `@poopdeck.gl/maplibre`
 - `/cesium/:datasetId` — same data rendered through `@poopdeck.gl/cesium`
+- `/how-it-works` — the format/renderer explainer, with live figures
 - `/docs` — the repo's `docs/` rendered as the documentation site
   (nav manifest: `src/docs/manifest.ts`)
 - `/drive/:sceneId?` — the AV LIDAR cockpit (nuScenes / Argoverse / Waymo /
-  comma scene bundles)
+  comma scene bundles); no `:sceneId` opens `av-synthetic`
+- `/worlds/:worldId?` — the world-model scenario gallery (300
+  Cosmos-Drive-Dreams scenarios, generated video synced to the playhead)
 - `/story/drifters` — scrollytelling ocean-drifter story
+
+`/demo`, `/drive`, `/worlds` and `/story` render outside `SiteChrome`, so they
+are chrome-free and never prerendered.
 
 ## Data Pipeline
 
@@ -29,11 +39,21 @@ cached under `data/`.
 
 ## Registered Datasets
 
-The demo catalog is defined in [`src/datasets.ts`](./src/datasets.ts) — that
-file is the single source of truth (id, layer kind, source, and per-demo
-config). It's the list that drives the `/` gallery and `/demo/:id` routes, so
-consult it directly rather than a copy here. The demos span every layer kind
-the project ships, grouped roughly as:
+Two files, two jobs — don't confuse them:
+
+- [`src/datasets.ts`](./src/datasets.ts) is the runtime **registry**: id, layer
+  kind, source, and per-demo config for every dataset. It drives `/demo/:id`,
+  `/drive/:id`, `/maplibre/:id` and `/cesium/:id`, so any id here resolves.
+- [`src/content/demoMeta.ts`](./src/content/demoMeta.ts) is the **curation**:
+  a dataset gets a `/demos` card if and only if it has a `DEMO_META` entry.
+  The gallery is deliberately small (twelve cards, one per idea); the other
+  cuts of the same archives are linked from the headline demo's prose and
+  still stream at `/demo/:id`. `SHIPPED_DATASET_IDS` in `datasets.ts` is the
+  same twelve in navigation order (its first six are the home-page grid), and
+  `test/demo-meta-contract.test.ts` fails if the two lists disagree.
+
+Consult those files directly rather than a copy here. The registry spans every
+layer kind the project ships, grouped roughly as:
 
 - **Points** — earthquakes, ship traffic, flights, satellites, NYC taxi points
 - **Paths & trips** — flight paths/trips, hurricane tracks, NYC taxi
@@ -42,8 +62,9 @@ the project ships, grouped roughly as:
 - **OD & flow** — NYC taxi flows (flow corridors), OD arcs, OD quadbin /
   H3 summary, OD heatmap, BIXI flowmaps (clustered / edge-bundled)
 - **3D & space-time cube** — earthquake columns, the NYC taxi cube
-- **Composite & domain** — NEXRAD storm radar, the AV cockpit
-  (nuScenes / Argoverse / comma / synthetic)
+- **Composite & domain** — NEXRAD storm radar, the weather suite, the
+  volumetric storm-4D composites, the AV cockpit (nuScenes / Argoverse /
+  Waymo / comma / synthetic), and the world-model scenario gallery
 
 ## Building Locally
 
@@ -85,7 +106,7 @@ recipes.
 
 ## Tech Stack
 
-- **React 18** + **TypeScript** + **Vite**
+- **React 19** + **TypeScript** + **Vite** + **react-router** (framework mode)
 - **deck.gl 9.x** via `@poopdeck.gl/layers`
 - **MapLibre GL 3+** via `@poopdeck.gl/maplibre`
 - **`@poopdeck.gl/core`** for the archive reader, decoder pool, and tileset

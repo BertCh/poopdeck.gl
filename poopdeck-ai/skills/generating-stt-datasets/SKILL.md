@@ -29,20 +29,20 @@ use the **building-stt-datasets** skill (`stt-build`) instead.
 - **In an MCP session:** call the `generate_dataset` tool (from the `stt` server)
   with `dataset` (the subcommand), an optional `output` path, and any
   source-specific flags via `extraArgs`. It shells out to `stt-generate`, so it
-  needs the server started with `--allow-cli` (the bundled plugin enables it).
+  needs the server started with `--allow-cli`, which is **off by default** —
+  including in the bundled plugin (see `poopdeck-ai/README.md`).
 - **From a shell:** `stt-generate <dataset> --output <name>.stt [flags]`.
 
 Generation is **network-bound and can be slow** (it downloads source data); the
 MCP tool defaults to a 15-minute timeout (`timeoutMs` to change).
 
-## The `all` shortcut
-
-`stt-generate all` (`dataset: "all"`, `output` = a **directory**) builds only the
-**three no-parameter datasets** — `earthquakes`, `hurricanes`, `wildfires` — into
-that directory. Everything else needs per-run parameters.
+**One dataset per invocation.** There is no `all` fan-out subcommand — loop over
+the no-parameter ones yourself if you want a batch:
 
 ```
-stt-generate all --output-dir examples/showcase/public/data --skip-existing
+for d in earthquakes hurricanes wildfires; do
+  stt-generate "$d" --output "examples/showcase/public/data/$d.stt"
+done
 ```
 
 ## The catalog

@@ -1,0 +1,21 @@
+version: 2
+updates:
+  # Rust only. The published crates are what a `cargo install` user gets, and
+  # their dep tree (arrow/parquet, duckdb, geo) is where a stale pin actually
+  # costs something.
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      # One PR for the routine drift; majors still arrive on their own so an
+      # arrow or duckdb bump gets read rather than rubber-stamped.
+      cargo-minor-and-patch:
+        patterns: ['*']
+        update-types: [minor, patch]
+    commit-message:
+      prefix: 'deps'
+# Deliberately NOT enabled for npm: the workspace hard-pins the deck.gl and
+# luma.gl 9.3.x line through `pnpm.overrides` (a documented invariant, see
+# CONTRIBUTING.md), and dependabot would open PRs against it every week.

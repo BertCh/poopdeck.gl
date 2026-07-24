@@ -71,7 +71,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       # Continuously verifies publishability: package excludes, versioned
       # path-deps, and manifest errors fail here instead of at release time.
-      # stt-generate is publish = false and explicitly excluded.
+      # `--exclude stt-generate` is belt-and-braces — the generator moved out
+      # to its own workspace at tools/, and cargo only warns about excluding a
+      # non-member, so this keeps working if it ever moves back.
       - name: cargo package --workspace
         run: cargo package --workspace --exclude stt-generate --locked
 
@@ -81,10 +83,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       # Keep in sync with [workspace.package] rust-version in Cargo.toml.
-      - uses: dtolnay/rust-toolchain@1.88
+      - uses: dtolnay/rust-toolchain@1.87
       - uses: Swatinem/rust-cache@v2
-      - name: cargo check --workspace on MSRV
-        run: cargo check --workspace --locked
+      # The MSRV is a promise to `cargo install` users, so it covers exactly
+      # the crates they can install — naming them beats `--workspace`, which
+      # dragged in the unpublished stt-generate (osmpbf/home/delaunator) and
+      # let a generator-only dep raise the number users see. Naming packages
+      # also keeps this job correct whether stt-generate is still a workspace
+      # member or has moved out to tools/.
+      - name: cargo check on MSRV (published crates)
+        run: cargo check -p stt-core -p stt-build -p stt-optimize -p spatiotemporal-tiles --locked
 
   rust-duckdb:
     name: Rust (stt-build, duckdb feature)
@@ -93,10 +101,30 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      # `INSTALL spatial` downloads the extension into ~/.duckdb on first use.
+      # Cache it so the ignored spatial test below neither re-downloads on
+      # every run nor goes red when the extension host has a bad day. Keyed on
+      # Cargo.lock — the duckdb crate version is what pins the extension
+      # version the download resolves to.
+      - name: Cache DuckDB extensions
+        uses: actions/cache@v4
+        with:
+          path: ~/.duckdb
+          key: duckdb-ext-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: duckdb-ext-${{ runner.os }}-
       # Bundled libduckdb is a ~10 min cold compile; rust-cache keeps the
       # warm path fast.
       - name: cargo test -p stt-build --features duckdb
         run: cargo test -p stt-build --features duckdb
+      # spatial_roundtrip_smoke is the only test that runs the SQL the server
+      # actually emits (ST_Point / ST_AsWKB / ST_MakeEnvelope /
+      # ST_Intersects_Extent / ST_Transform). It is #[ignore]d because the
+      # first INSTALL needs network, so a plain `cargo test` skips it and that
+      # SQL ships unexercised — this step is the whole reason the job is more
+      # than a compile check. `--lib` scopes --include-ignored to the lib test
+      # binary, keeping the server-gated ignored tests in tests/ out of it.
+      - name: duckdb spatial SQL (ignored test)
+        run: cargo test -p stt-build --features duckdb --lib -- --include-ignored
 
   rust-postgres-parity:
     name: Rust (PostGIS source parity)
@@ -158,13 +186,19 @@ jobs:
         with:
           node-version: '20'
           cache: pnpm
-      # Version gate: the Claude Code plugin surface (plugin.json, the
-      # marketplace entry, every skill's `metadata.version`) is outside the
-      # changesets fixed group, so nothing bumps it automatically. Pure fs +
-      # JSON, no install or build needed — run it first so drift fails in
-      # seconds instead of after the whole build.
-      - name: plugin/skill versions in sync
+      # Version gate: the cargo workspace version and the Claude Code plugin
+      # surface (plugin.json, the marketplace entry, every skill's
+      # `metadata.version`) are outside the changesets fixed group, so nothing
+      # bumps them automatically — that is how npm reached 0.5.0 while
+      # crates.io sat at 0.4.0. Pure fs + JSON, no install or build needed —
+      # run it first so drift fails in seconds instead of after the whole build.
+      - name: cargo/plugin/skill versions in sync
         run: node scripts/sync-versions.mjs --check
+      # Doc-drift gate: source comments cite docs/roadmap/*.md by name, and the
+      # last roadmap consolidation stranded 39 of them. git grep + existsSync,
+      # ~50 ms.
+      - name: roadmap citations resolve
+        run: node .github/scripts/check-roadmap-citations.mjs
       - run: pnpm install --frozen-lockfile
       - run: pnpm turbo run build
       # Generated-doc gate: re-renders docs/spec/backend-capabilities.md from
@@ -234,6 +268,17 @@ jobs:
     name: Showcase (all demos load)
     runs-on: ubuntu-latest
     needs: [typescript]
+    env:
+      # The probe loads REAL archives, and every dataset path is resolved
+      # against VITE_DATA_BASE_URL (src/datasets.ts). That variable lives in
+      # examples/showcase/.env.production, which Vite reads in production mode
+      # only — the dev server below never sees it. Without this line every
+      # dataset resolves to /data/*.stt, i.e. the gitignored
+      # examples/showcase/public/data (zero tracked files), every archive
+      # fetch 404s, and the fail-closed probe CANNOT pass. Vite picks
+      # VITE_-prefixed process env up in any mode. Keep in step with
+      # .env.production.
+      VITE_DATA_BASE_URL: https://tiles.poopdeck.gl
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -242,14 +287,27 @@ jobs:
           node-version: '20'
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter '@poopdeck.gl/render-test' install-browser
+      # --with-deps: the runner image does not carry chromium's shared libs.
+      - name: Install chromium
+        run: pnpm --filter '@poopdeck.gl/render-test' exec playwright install --with-deps chromium
+      # Only the packages: the dev server below reads the showcase from source,
+      # and its own build (uncached, tsc + prerender of every route) is already
+      # covered by the typescript job.
       - name: Build packages
-        run: pnpm build
+        run: pnpm turbo run build --filter='./packages/*'
+      # Dev server, not the built site, on purpose: `/demo/:datasetId` is not
+      # in react-router's prerender list, and the SPA fallback the build emits
+      # (`__spa-fallback.html`) is only wired up by the deploy's worker — a
+      # plain `vite preview` answers /demo/* with the prerendered `/` HTML, so
+      # every demo hydrates with a React #418 mismatch. The dev server serves
+      # the real shell for every route.
       - name: Start showcase
         run: |
           pnpm --filter '@poopdeck.gl/showcase' dev &
-          for i in $(seq 1 60); do
-            if curl -fs http://localhost:3000 >/dev/null; then exit 0; fi
+          # Poll a demo route rather than `/` — it proves the router is
+          # serving, not just that a socket is open.
+          for i in $(seq 1 90); do
+            if curl -fs http://localhost:3000/demo/earthquake-activity >/dev/null; then exit 0; fi
             sleep 1
           done
           echo "showcase dev server never came up on :3000" >&2

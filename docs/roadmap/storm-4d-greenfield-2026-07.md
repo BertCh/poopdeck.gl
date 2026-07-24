@@ -373,8 +373,8 @@ A SECOND rendering of the same storm, built on request: the rain as CAPPI
 **contour sheets** instead of a gate point cloud. Same event, same window, same
 nine context archives (byte-identical — nothing was rebuilt); only the primary
 archive and the layer that draws it differ. The two demos are meant to be read
-against each other: the point cloud answers *where is the echo*, the sheets
-answer *what shape is it* (core lean with height, anvil overhang, gradient
+against each other: the point cloud answers _where is the echo_, the sheets
+answer _what shape is it_ (core lean with height, anvil overhang, gradient
 tightness where the rings crowd).
 
 ### 10.1 Why gridding, and why it is not thinning
@@ -393,15 +393,15 @@ feature thinning.
 
 ### 10.2 Measured decisions (KDMX 2024-05-21T20:24:22Z volume, unless noted)
 
-| Decision | Measurement that forced it |
-|---|---|
+| Decision                                                           | Measurement that forced it                                                                                                                                                                                                                                                                                                                                   |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | **`weighting_function='nearest'`**, not Py-ART's `Barnes2` default | Raw sweep max **66.5 dBZ**. Barnes2 grid max **62.5** and per-level maxima 56/56/57/61/63…; after the contour pre-smooth only **2 rings** survived at 60 dBZ across all levels — the core isopleth all but vanished. `nearest` grids to **65.5** (per-level 64/64/66/65/64/66…) and is ~2× faster. The blockiness it leaves is what `--smooth-cells` is for. |
-| **1 km horizontal grid** | The 0.5° beam is already ~1.3 km wide over Greenfield (78 km from KDMX). A 0.5 km grid cost 1.7 s vs 1.1 s and moved the per-level maxima by ≤2 dBZ — it invents detail the radar never resolved. |
-| **15 CAPPI levels, 1 km spacing, 1–15 km MSL** | Ring counts peak at 9–10 km (the anvil), not at the ground: 26–75 rings/level at the tornado volume. 1 km spacing terraces visibly at the demo's 4× exaggeration. |
-| **9 contour levels, 20→60 dBZ** | 60 dBZ yields **254 rings across the whole 9.5 h window** and 65 dBZ yields zero — the grid's own ceiling. Levels above 60 are dead weight. |
-| **`--no-clip`** | A duration LineString that IS clipped goes through `clip_trajectory`, which interpolates per-vertex times along the path (`compute_vertex_timestamps`) — a closed isopleth would then animate as if it were being *drawn*. Whole-ring placement (`place_whole_feature`) is the only correct route, same as the AV density iso-lines. |
-| **z5–7 pyramid** | With whole-ring placement the pyramid is pure duplication: deeper levels add no detail (a ring is never cut) and a ring whose centroid tile leaves the viewport would wink out. 674 tiles, **73 MB** packed. |
-| **No `--quantize-coords`, no `--simplify`** | Inherited constraints: quantizing multi-vertex LineStrings mis-sizes PathLayer's instanced draw; `--simplify` distorts isopleths. Simplification happens in lon/lat at 0.002° (~200 m ≪ the 1 km cell). |
+| **1 km horizontal grid**                                           | The 0.5° beam is already ~1.3 km wide over Greenfield (78 km from KDMX). A 0.5 km grid cost 1.7 s vs 1.1 s and moved the per-level maxima by ≤2 dBZ — it invents detail the radar never resolved.                                                                                                                                                            |
+| **15 CAPPI levels, 1 km spacing, 1–15 km MSL**                     | Ring counts peak at 9–10 km (the anvil), not at the ground: 26–75 rings/level at the tornado volume. 1 km spacing terraces visibly at the demo's 4× exaggeration.                                                                                                                                                                                            |
+| **9 contour levels, 20→60 dBZ**                                    | 60 dBZ yields **254 rings across the whole 9.5 h window** and 65 dBZ yields zero — the grid's own ceiling. Levels above 60 are dead weight.                                                                                                                                                                                                                  |
+| **`--no-clip`**                                                    | A duration LineString that IS clipped goes through `clip_trajectory`, which interpolates per-vertex times along the path (`compute_vertex_timestamps`) — a closed isopleth would then animate as if it were being _drawn_. Whole-ring placement (`place_whole_feature`) is the only correct route, same as the AV density iso-lines.                         |
+| **z5–7 pyramid**                                                   | With whole-ring placement the pyramid is pure duplication: deeper levels add no detail (a ring is never cut) and a ring whose centroid tile leaves the viewport would wink out. 674 tiles, **73 MB** packed.                                                                                                                                                 |
+| **No `--quantize-coords`, no `--simplify`**                        | Inherited constraints: quantizing multi-vertex LineStrings mis-sizes PathLayer's instanced draw; `--simplify` distorts isopleths. Simplification happens in lon/lat at 0.002° (~200 m ≪ the 1 km cell).                                                                                                                                                      |
 
 Full window (17:30→03:00Z, 93 cached volumes, 5 workers): **2 min wall**,
 100,129 rings, 2.24 M vertices, 37 MB parquet, **73 MB archive** — against the
@@ -435,6 +435,7 @@ Per contour ring: `timestamp` (volume-scan start), `end_timestamp` (§10.3),
 `alt_m` f32 (CAPPI level, metres MSL), `dbz` f32 (the contour's level — the GPU
 `filterProperty` the threshold drives), `dbz_level` str, `alt_band` str.
 Label contracts (FE `colorMapping` keys match byte-for-byte):
+
 - `dbz_level`: `"20","25","30","35","40","45","50","55","60"`
 - `alt_band`: `"1km"`, `"2km"`, … `"15km"`
 

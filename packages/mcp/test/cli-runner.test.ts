@@ -40,6 +40,18 @@ describe('run', () => {
     expect(result.timedOut).toBe(true);
   }, 10_000);
 
+  it('caps a runaway stream at 200k chars and reports the exact overflow', async () => {
+    // 300k chars out, 200k cap → 100k dropped. The cap is applied while
+    // reading (not after the fact), so this is also the memory ceiling.
+    const result = await run(process.execPath, [
+      '-e',
+      "process.stdout.write('x'.repeat(300_000))",
+    ]);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('… [truncated, 100000 more chars]');
+    expect(result.stdout.replace(/\n….*$/, '')).toHaveLength(200_000);
+  }, 10_000);
+
   it('surfaces a spawn error (unknown binary) without throwing', async () => {
     const result = await run('definitely-not-a-real-binary-xyz', []);
     expect(result.exitCode).toBeNull();
@@ -105,6 +117,30 @@ describe('resolveBinary', () => {
       await writeFile(binPath, '#!/bin/sh\necho fake\n', { mode: 0o755 });
 
       expect(resolveBinary('stt-optimize', undefined, [nested])).toBe(binPath);
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('finds an internal tool that carries its own workspace under tools/<name>/', async () => {
+    // `stt-generate` lives outside the published Cargo workspace, so its build
+    // output is `tools/stt-generate/target/release/`, not the root `target/`.
+    const tmp = await mkdtemp(path.join(tmpdir(), 'stt-mcp-cli-'));
+    try {
+      const nested = path.join(tmp, 'examples', 'showcase', 'public', 'data');
+      await mkdir(nested, { recursive: true });
+      const releaseDir = path.join(
+        tmp,
+        'tools',
+        'stt-generate',
+        'target',
+        'release',
+      );
+      await mkdir(releaseDir, { recursive: true });
+      const binPath = path.join(releaseDir, 'stt-generate');
+      await writeFile(binPath, '#!/bin/sh\necho fake\n', { mode: 0o755 });
+
+      expect(resolveBinary('stt-generate', undefined, [nested])).toBe(binPath);
     } finally {
       await rm(tmp, { recursive: true, force: true });
     }

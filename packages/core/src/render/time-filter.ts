@@ -13,7 +13,7 @@
  * originally authored as deck.gl's `TimeFilterExtension` and lived (verbatim) in
  * `@poopdeck.gl/three`'s `tsl/time-filter-math.ts`; it now lives here so all
  * three backends import ONE copy rather than keeping hand-maintained forks in
- * lockstep. See `docs/roadmap/renderer-abstraction-2026-06.md`.
+ * lockstep. See `docs/roadmap/renderer-architecture.md`.
  *
  * ── PRECISION CONTRACT ───────────────────────────────────────────────────────
  * Every time argument is RELATIVE to a time offset (absolute epoch-ms minus the
@@ -134,7 +134,7 @@ export function wakeSizeScale(alpha: number, wakeTailScale: number): number {
  * The unified default wake-mode tail size multiplier (the "barely visible dot"
  * tail). Single-sourced here so the backends can't drift — they had already
  * split (deck 0.15 vs three 0.1); 0.15 is the resolved policy
- * (docs/roadmap/renderer-abstraction-2026-06.md Phase 1 decision).
+ * (docs/roadmap/renderer-architecture.md).
  */
 export const DEFAULT_WAKE_TAIL_SCALE = 0.15;
 

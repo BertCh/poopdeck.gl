@@ -7,10 +7,22 @@ export const GITHUB_URL = 'https://github.com/BertCh/spatiotemporal-tiles';
  * Site-wide top bar shared by the landing page, demo catalog, per-demo pages
  * and docs. Deliberately quiet — a hairline under the wordmark, hierarchy from
  * ink weight — matching the rest of the editorial chrome. The fullscreen demo
- * viewer and the drifters story render outside SiteChrome and never see it.
+ * viewer, the AV cockpit, the worlds gallery and the drifters story render
+ * outside SiteChrome and never see it.
+ *
+ * `/drive` and `/worlds` live HERE, not only on a demo card, because they are
+ * standalone destinations the way `/story/drifters` is — chrome-free fullscreen
+ * surfaces with their own IA, not a dataset in the deck viewer. Before this they
+ * had no clickable path from anywhere on the site: the only route into either
+ * was typing the URL. `/drive` with no `:sceneId` defaults to av-synthetic;
+ * `/worlds` with no `:worldId` opens the whole gallery. Six links plus GitHub no
+ * longer fit a ~360px phone, so the strip scrolls (`.nav-scroll`) instead of
+ * clipping the last item — it never overflows at desktop widths.
  */
 const NAV_ITEMS: { label: string; to: string }[] = [
   { label: 'Demos', to: '/demos' },
+  { label: 'Drive', to: '/drive' },
+  { label: 'Worlds', to: '/worlds' },
   { label: 'How it works', to: '/how-it-works' },
   { label: 'Docs', to: '/docs' },
   { label: 'Story', to: '/story/drifters' },
@@ -27,18 +39,21 @@ const SiteHeader: React.FC = () => {
     >
       <Link
         to="/"
-        className="font-display text-sm font-bold tracking-tight"
+        className="font-display text-sm font-bold tracking-tight shrink-0"
         style={{ color: 'var(--ink-900)' }}
       >
         poopdeck<span style={{ color: 'var(--ink-400)' }}>.gl</span>
       </Link>
 
-      <nav className="flex items-center gap-4 sm:gap-6" aria-label="Site">
+      <nav
+        className="flex items-center gap-4 sm:gap-6 min-w-0 overflow-x-auto nav-scroll"
+        aria-label="Site"
+      >
         {NAV_ITEMS.map((item) => (
           <NavLink
             key={item.to}
             to={item.to}
-            className="text-xs sm:text-[13px] font-medium transition-colors"
+            className="text-xs sm:text-[13px] font-medium transition-colors shrink-0"
             style={({ isActive }) => ({
               color: isActive ? 'var(--accent)' : 'var(--ink-500)',
             })}
@@ -59,7 +74,7 @@ const SiteHeader: React.FC = () => {
           href={GITHUB_URL}
           target="_blank"
           rel="noopener noreferrer"
-          className="text-xs sm:text-[13px] font-medium transition-colors inline-flex items-center gap-1"
+          className="text-xs sm:text-[13px] font-medium transition-colors inline-flex items-center gap-1 shrink-0"
           style={{ color: 'var(--ink-500)' }}
           onMouseOver={(e) => (e.currentTarget.style.color = 'var(--accent)')}
           onMouseOut={(e) => (e.currentTarget.style.color = 'var(--ink-500)')}

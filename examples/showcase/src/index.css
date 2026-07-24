@@ -157,6 +157,21 @@
   content: none; /* drop typography's backtick pseudo-quotes */
 }
 
+/* Inline code outside the typography plugin's reach — the demo-page editorial
+   prose (InlineProse). Same chip as `.docs-prose code` so a `--flag` reads
+   identically on /demos/:id and in the docs. */
+.inline-code {
+  font-family:
+    ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Monaco, Consolas,
+    'Liberation Mono', 'Courier New', monospace;
+  font-size: 0.9em;
+  background: var(--surface-sunken);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+  font-weight: 500;
+  color: var(--ink-900);
+}
+
 .docs-prose table {
   font-size: 0.85em;
 }
@@ -176,6 +191,18 @@
 
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
   background: var(--ink-400);
+}
+
+/* Site-header nav: six links + GitHub overflow a ~360px phone, and the header
+   is a fixed h-12 row that must not wrap. Let the strip scroll instead of
+   clipping the last link off the edge, with no scrollbar eating header height
+   (it never overflows at desktop widths, so this is invisible there). */
+.nav-scroll {
+  scrollbar-width: none;
+}
+
+.nav-scroll::-webkit-scrollbar {
+  display: none;
 }
 
 /* Mapbox attribution — small + unobtrusive over the dark canvas. */

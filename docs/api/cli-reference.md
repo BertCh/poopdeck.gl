@@ -1,8 +1,10 @@
 # CLI Reference
 
-The Rust toolchain ships five core binaries. Install them from crates.io
-with `cargo install spatiotemporal-tiles`, grab a prebuilt
-binary from the [GitHub releases page](https://github.com/BertCh/spatiotemporal-tiles/releases)
+`cargo install spatiotemporal-tiles` installs five binaries — `stt-build`,
+`stt-optimize`, `stt-validate`, `stt-bundle`, `stt-serve` — and **not**
+`stt-generate`, which is `publish = false` and builds only from a repo
+checkout. You can also grab a prebuilt binary from the
+[GitHub releases page](https://github.com/BertCh/spatiotemporal-tiles/releases)
 (shell/powershell installers included), or build from the repo root with
 `cargo build --release -p spatiotemporal-tiles` (binaries land in
 `target/release/`).
@@ -10,15 +12,18 @@ binary from the [GitHub releases page](https://github.com/BertCh/spatiotemporal-
 | Binary         | Purpose                                                                              |
 | -------------- | ------------------------------------------------------------------------------------ |
 | `stt-build`    | Convert a GeoParquet file **or a PostGIS/DuckDB query** into a packed STT dataset    |
-| `stt-generate` | Download + build the bundled showcase datasets                                       |
 | `stt-optimize` | Analyze an input and recommend `stt-build` flags; inspect/diff/doctor built tilesets |
 | `stt-validate` | Verify a packed dataset, decode every tile                                           |
 | `stt-bundle`   | Pack a dataset into a single-file `.sttb` interchange bundle, or unpack one          |
+| `stt-serve`    | Generate STT tiles on the fly from a live PostGIS or DuckDB source                   |
 
-A sixth binary — **`stt-serve`** — generates STT tiles on the fly from a live
-PostGIS or DuckDB source (see [below](#stt-serve)). The default install gives
-it the PostGIS backend; `--features cli` (or `--features serve`) adds the
-embedded-DuckDB backend, a heavy bundled C++ compile.
+The default install gives [`stt-serve`](#stt-serve) the PostGIS backend;
+`--features cli` (or `--features serve`) adds the embedded-DuckDB backend, a
+heavy bundled C++ compile.
+
+A sixth binary, **`stt-generate`** (the bundled showcase-dataset generators,
+see [below](#stt-generate)), is **repo-only** — it is not on crates.io and no
+install command produces it.
 
 ---
 
@@ -417,6 +422,22 @@ geometry's vertices.
 
 ## `stt-generate`
 
+> **Not installable.** `cargo install spatiotemporal-tiles` installs five
+> binaries — `stt-build`, `stt-optimize`, `stt-validate`, `stt-bundle`,
+> `stt-serve` — and **not** `stt-generate`, which is `publish = false` and
+> builds only from a repo checkout. It exists to (re)build _this repo's_
+> showcase datasets, not as part of the shipped toolchain; nothing else in the
+> pipeline depends on it, and it reaches `stt-build` by shelling out to the
+> binary. It also sits **outside the root workspace** (at `tools/stt-generate`,
+> with its own lockfile — its dep tree carries a higher MSRV than the published
+> crates need), so `-p stt-generate` from the repo root does not resolve it.
+> Get it with:
+>
+> ```bash
+> git clone https://github.com/BertCh/spatiotemporal-tiles
+> cargo install --path tools/stt-generate
+> ```
+
 Convenience CLI that fetches the source for each bundled showcase
 dataset, normalises it into GeoParquet, and shells out to `stt-build`
 (so each output is a packed dataset directory too).
@@ -429,7 +450,6 @@ Subcommands:
 
 | Subcommand        | Source                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `all`             | builds ONLY `earthquakes`, `hurricanes`, `wildfires` (the no-extra-setup datasets). `--output-dir <DIR>` (default `examples/showcase/public/data`), `--skip-existing`. The other datasets need per-run params (dates, OSRM, etc.) and must be run individually.                                                                                                                                                                                                                                                                                                           |
 | `earthquakes`     | USGS API (M4.0+ global, 2020–2024)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `ais`             | NOAA Marine Cadastre AIS vessel positions                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `flights`         | OpenSky Network ADS-B (Mondays 2017–2020); `--paths` emits LineString trajectories instead of points                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |

@@ -9,7 +9,7 @@
  *   2. the `--help` text `config.ts` prints      ⇄  the fenced block that doc
  *      reproduces under "## The `stt-mcp` command",
  *   3. the `STT_GENERATE_DATASETS` enum in `server.ts` (a HAND-COPY)  ⇄  the
- *      real clap subcommand enum in `crates/stt-generate/src/main.rs`,
+ *      real clap subcommand enum in `stt-generate`'s `main.rs`,
  *   4. the corpus allow-list in `src/docs.ts` (what the server will SERVE)  ⇄
  *      the copy allow-list in `scripts/copy-docs.mjs` (what a published install
  *      actually SHIPS).
@@ -22,6 +22,7 @@
  */
 import { describe, it, expect, beforeAll } from 'vitest';
 import { readFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import * as path from 'node:path';
@@ -46,13 +47,22 @@ const SERVER_SRC = path.join(PKG_ROOT, 'src', 'server.ts');
 const MCP_DOC = path.join(REPO_ROOT, 'docs', 'api', 'stt-mcp.md');
 const COPY_DOCS_SCRIPT = path.join(PKG_ROOT, 'scripts', 'copy-docs.mjs');
 const execFileAsync = promisify(execFile);
-const GENERATE_MAIN_RS = path.join(
-  REPO_ROOT,
-  'crates',
-  'stt-generate',
-  'src',
-  'main.rs',
-);
+/**
+ * `stt-generate`'s clap enum, wherever the generator currently lives. It moved
+ * out of the published Cargo workspace (`crates/stt-generate`) to
+ * `tools/stt-generate`, which carries its own `[workspace]` — so this gate
+ * accepts either location rather than going ENOENT on whichever half of the
+ * move it meets. Neither present is a hard failure, not a silent skip: a
+ * vanished generator means `generate_dataset`'s enum has nothing left to
+ * verify against, and that must be noticed.
+ */
+const GENERATE_MAIN_RS = (() => {
+  const candidates = [
+    path.join(REPO_ROOT, 'tools', 'stt-generate', 'src', 'main.rs'),
+    path.join(REPO_ROOT, 'crates', 'stt-generate', 'src', 'main.rs'),
+  ];
+  return candidates.find((p) => existsSync(p)) ?? candidates[0];
+})();
 
 // --------------------------------------------------------------------------
 // Shared helpers
@@ -391,17 +401,15 @@ function parseRustSubcommandVariants(src: string): string[] {
   return variants;
 }
 
-describe('contract: STT_GENERATE_DATASETS ⇄ crates/stt-generate subcommands', () => {
+describe('contract: STT_GENERATE_DATASETS ⇄ stt-generate subcommands', () => {
   /**
    * DRIFT PREVENTED: `STT_GENERATE_DATASETS` in `server.ts` is a HAND-COPY of
    * the Rust `enum Commands`. A generator added to (or removed from)
    * `stt-generate` leaves the MCP tool advertising a stale zod enum — an agent
    * either cannot reach a real generator, or is offered one that makes
-   * `stt-generate` exit with "unrecognized subcommand".
-   *
-   * Note on `'all'`: it is NOT a synthetic extra in the TS list — `Commands::All`
-   * is a genuine clap subcommand (it fans out to the other generators), so the
-   * two sets compare with plain equality, no special-casing.
+   * `stt-generate` exit with "unrecognized subcommand". The TS list carries no
+   * synthetic extras (the `all` fan-out was a real clap subcommand until it was
+   * removed from the generator), so the two sets compare with plain equality.
    */
   it('the generate_dataset dataset enum equals the clap subcommand set', async () => {
     const rust = await readFile(GENERATE_MAIN_RS, 'utf8');
@@ -427,11 +435,11 @@ describe('contract: STT_GENERATE_DATASETS ⇄ crates/stt-generate subcommands', 
     ).toBe(true);
 
     expect([...actual!].sort()).toEqual(expected);
-    // Both sides are 17 today (16 real generators + the `all` fan-out). The
-    // literal count is a canary: it makes a same-size swap (one generator
-    // renamed on one side only) obvious in the failure output above, and this
-    // line obvious to update deliberately when a generator is really added.
-    expect(expected).toHaveLength(17);
+    // Both sides are 16 today. The literal count is a canary: it makes a
+    // same-size swap (one generator renamed on one side only) obvious in the
+    // failure output above, and this line obvious to update deliberately when a
+    // generator is really added.
+    expect(expected).toHaveLength(16);
   });
 
   /**

@@ -1,14 +1,8 @@
 {
   "mcpServers": {
     "stt": {
-      "command": "node",
-      "args": [
-        "${CLAUDE_PLUGIN_ROOT}/../packages/mcp/dist/bin.js",
-        "--allow-cli"
-      ],
-      "env": {
-        "STT_DATA_ROOT": "${CLAUDE_PLUGIN_ROOT}/../examples/showcase/public/data"
-      }
+      "command": "npx",
+      "args": ["-y", "@poopdeck.gl/mcp"]
     }
   }
 }

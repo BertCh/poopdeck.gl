@@ -62,30 +62,6 @@ const PREVIEW_MAX_W = 264;
 /** Cursor must rest this long before the (expensive) preview frame re-renders. */
 const PREVIEW_SETTLE_MS = 120;
 
-// `estimateCost` is a new passthrough on PlaybackGovernor that lands alongside
-// this change. The showcase typechecks against @poopdeck.gl/layers's BUILT dist,
-// which may be stale until the package is rebuilt — this narrow intersection
-// keeps the call site typed (and becomes a harmless no-op once the rebuilt
-// types include the member) instead of scattering @ts-ignore.
-type GovernorWithCost = PlaybackGovernor & {
-  estimateCost(range: { start: number; end: number }): {
-    bytes: number;
-    tiles: number;
-  };
-};
-
-// `getSourceRunways` is the multi-source per-source runway passthrough (one
-// runway probe per registered governor source; see
-// docs/roadmap/playback-and-loading.md). Same dist-staleness guard as
-// `GovernorWithCost`: the showcase typechecks against @poopdeck.gl/playback's
-// BUILT dist, which may not yet carry the member — this narrow intersection
-// keeps the call typed and becomes a harmless no-op once the rebuilt types
-// include it. Defensive `?.()` at the call site degrades to the single-bar
-// path if an older governor build lacks the method entirely.
-type GovernorWithSources = PlaybackGovernor & {
-  getSourceRunways?: () => SourceRunway[];
-};
-
 /** All timestamps in the player are dataset time — global scientific datasets
  *  (drifters, satellites, ECCO) are authored in UTC, so the labels must not
  *  drift with the viewer's locale zone (§3.5). */
@@ -346,12 +322,12 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({
     let lastProgressUpdate = 0;
     const update = () => {
       setBufferedRanges(governor.getBufferedRanges({ maxRanges: 64 }));
-      // Probe per-source runways for the multi-track strip. `?.()` so a
-      // governor built before this passthrough simply yields the single-bar
-      // path (empty array) instead of throwing.
-      setSourceRunways(
-        (governor as GovernorWithSources).getSourceRunways?.() ?? [],
-      );
+      // Probe per-source runways for the multi-track strip. `?.()` guards the
+      // one case the types can't: `governor` comes from the host app, which can
+      // pin an @poopdeck.gl/playback older than this @poopdeck.gl/react — a
+      // governor without the passthrough then yields the single-bar path
+      // (empty array) instead of throwing on every poll tick.
+      setSourceRunways(governor.getSourceRunways?.() ?? []);
       setIsCreeping(governor.isCreeping);
       setEtaMs(
         governor.state === 'starting' ||
@@ -390,7 +366,6 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({
   useEffect(() => {
     setDensity(null);
     if (!governor) return;
-    const g = governor as GovernorWithCost;
     const total = timeRange.end - timeRange.start;
     if (total <= 0) return;
 
@@ -398,7 +373,7 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({
       const bytes: number[] = [];
       let sum = 0;
       for (let i = 0; i < DENSITY_BUCKETS; i++) {
-        const cost = g.estimateCost({
+        const cost = governor.estimateCost({
           start: timeRange.start + (total * i) / DENSITY_BUCKETS,
           end: timeRange.start + (total * (i + 1)) / DENSITY_BUCKETS,
         });

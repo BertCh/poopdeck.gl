@@ -1034,7 +1034,7 @@ describe('createSttMcpServer — execution tools (--allow-cli)', () => {
     }
   });
 
-  it('generate_dataset maps `all` to --output-dir (not --output)', async () => {
+  it('generate_dataset refuses `all`, which the generator no longer implements', async () => {
     const root = await fixtureRoot({ earthquakes: makeManifestJson() });
     const sttGenerateBin = await writeFakeCli(
       root,
@@ -1045,18 +1045,19 @@ describe('createSttMcpServer — execution tools (--allow-cli)', () => {
       baseConfig(root, { allowCli: true, sttGenerateBin }),
     );
     try {
+      // The `all` fan-out was removed from stt-generate; the zod enum must
+      // reject it at the schema boundary rather than spawn the binary and hand
+      // back clap's "unrecognized subcommand".
       const result = await client.callTool({
         name: 'generate_dataset',
         arguments: { dataset: 'all', output: '/tmp/showcase-data' },
       });
-      const parsed = JSON.parse(firstText(result));
-      expect(parsed.args).toEqual([
-        'all',
-        '--output-dir',
-        '/tmp/showcase-data',
-      ]);
-      // `all` writes many datasets, so no single manifest is read back.
-      expect(parsed.manifestSummary).toBeUndefined();
+      expect(result.isError).toBe(true);
+      // The rejection names the offending param and enumerates the real
+      // subcommands — `all` is not among them.
+      expect(firstText(result)).toMatch(/invalid option/i);
+      expect(firstText(result)).toMatch(/"dataset"/);
+      expect(firstText(result)).not.toMatch(/"all"/);
     } finally {
       await close();
     }

@@ -5161,7 +5161,36 @@ const DATA_IS_REMOTE = DATA_BASE_URL !== '';
 // storm-4d-greenfield archives, byte-identical), but its own primary archive
 // `storm4d-isolines` is local-only until r2-sync lands it — and the primary IS
 // the governor, so an un-gated deploy would 404-stall the whole composite.
-const LOCAL_ONLY_DATASETS = new Set<string>(['storm-4d-isolines']);
+//
+// (2026-07-24) rain-flood-2019 + gtfs-ch: NOT pre-sync wiring — these two were
+// live in the nav while their archives were already 404ing. Re-probed against
+// tiles.poopdeck.gl on 2026-07-24:
+//   /data/rainfall-2019/manifest.json  → 404   (rain-flood-2019's PRIMARY; its
+//                                              riversUrl nwm-rivers-2019 is 200,
+//                                              so only the rain field is missing
+//                                              — and the primary is the governor)
+//   /data/gtfs-ch/manifest.json        → 404
+// Delete an id from this set the moment `scripts/r2-sync.sh` lands its stem and
+// the manifest verifies 200 — the gate is the stopgap, the sync is the fix.
+const LOCAL_ONLY_DATASETS = new Set<string>([
+  'storm-4d-isolines',
+  'rain-flood-2019',
+  'gtfs-ch',
+]);
+
+/**
+ * Would this id be filtered out of the registry on the PUBLIC (R2) deploy?
+ *
+ * Exported because the two gates above are invisible to anything that authors a
+ * link by hand: the editorial prose in `content/demoMeta.ts` can point at
+ * `/demo/<id>`, and under `npm run dev` (local `public/data`) that link works
+ * even when the dataset's archives 404 on tiles.poopdeck.gl. The contract test
+ * uses this to refuse a prose link into a gated demo, which is otherwise a dead
+ * link nobody sees until it is live.
+ */
+export function isRemoteGated(id: string): boolean {
+  return WAYMO_LOCAL_ONLY.test(id) || LOCAL_ONLY_DATASETS.has(id);
+}
 
 export const datasets: Dataset[] = [
   ...rawDatasets,
@@ -5237,23 +5266,28 @@ export function getDatasetById(id: string): Dataset | undefined {
  * `datasets` array above stays intact so dev (`npm run dev`) keeps every demo;
  * only the navigation surface is trimmed in production. Routing still resolves
  * any id via `getDatasetById`, so old deep-links keep working in dev.
+ *
+ * This list IS the `/demos` catalog (2026-07): the contract test requires every
+ * id here to carry a DEMO_META entry, so keeping two curated sets that disagree
+ * only produced a home-page grid and a catalog telling different stories. One
+ * list, twelve demos — see the curation note in `content/demoMeta.ts`. The first
+ * six are the home-page grid (`navDatasets.slice(0, 6)`), so order matters:
+ * lead with the surfaces that look best cold.
  */
 export const SHIPPED_DATASET_IDS: string[] = [
   'ocean-drifters', // Ocean Currents — surface-drifter tracks (observed)
-  'ecco-currents', // Modeled Ocean Currents — ECCO advected particles
-  'nyc-taxi-points', // NYC Taxi Points — trip-heads layer, full nyc-taxi-paths.stt
+  'storm-4d-greenfield', // Storm as a 4D Object — Greenfield EF4 volumetric composite
+  'cosmos-drive-dreams', // World Model Scenario Explorer (/worlds)
+  'argoverse-02678d04', // AV cockpit — real Argoverse 2 sensor logs (/drive)
   'nyc-taxi-trips', // NYC Yellow Cab Trips
   'osm-nyc-draw', // OSM Editing — NYC (cumulative "draw")
+  // Below the first 6 — in the catalog and the nav, off the home-page grid.
+  'severe-weather-2024', // Weather Suite — wind + precip + cells/tracks + lightning + fronts
+  'ecco-currents', // Modeled Ocean Currents — ECCO advected particles
+  'earthquake-activity', // Global M4+ seismicity, 2020–2024
   'ship-traffic', // US Maritime Traffic — vessel points
-  // After the first 6 (the home-page grid is `navDatasets.slice(0, 6)`), so
-  // it lands in navigation without bumping a grid card.
-  'nyc-taxi-flows', // NYC Taxi Flow — pre-aggregated overview corridors
-  'storm-radar', // Iowa Derecho — NEXRAD radar composite (field+cells+tracks)
-  'goes-glm-lightning', // GOES GLM Lightning — flashes + density (late-May 2024)
-  'severe-weather-2024', // Weather Suite — wind + precip + cells/tracks + lightning
-  'storm-4d-greenfield', // Storm as a 4D Object — Greenfield EF4 volumetric composite
-  'storm-4d-isolines', // Storm as a 4D Object — the same storm as CAPPI contour sheets
-  'storm-3d-conus', // Storm as a 4D Object — Continental MRMS 3D reflectivity volume
+  'gtfs-nl', // Netherlands national timetable — 121,031 journeys
+  'nyc-taxi-cube', // Space-time cube — Hägerstrand, on a million taxi samples
 ];
 
 export const shippedDatasets: Dataset[] = SHIPPED_DATASET_IDS.map((id) =>

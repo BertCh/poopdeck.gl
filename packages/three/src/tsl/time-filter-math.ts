@@ -4,7 +4,7 @@
 
 /**
  * The CPU time-filter reference moved to the framework-free kernel in
- * `@poopdeck.gl/core/time-filter` (see docs/roadmap/renderer-abstraction-2026-06.md).
+ * `@poopdeck.gl/core/time-filter` (see docs/roadmap/renderer-architecture.md).
  * This module re-exports every soft-alpha function so the TSL materials, the
  * CPU-interpolated layers, and the package barrel keep resolving unchanged while
  * the alpha math lives in exactly one place. The TSL node graph in

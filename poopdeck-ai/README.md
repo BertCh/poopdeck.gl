@@ -25,30 +25,56 @@ From a checkout of this repo (the repo root is the plugin marketplace):
 /plugin install poopdeck-ai
 ```
 
-Then **build the MCP server — this step is required, not optional:**
+That's the whole install. The bundled `.mcp.json` runs the **published** server:
 
-```bash
-pnpm --filter @poopdeck.gl/mcp build
+```json
+{
+  "mcpServers": {
+    "stt": { "command": "npx", "args": ["-y", "@poopdeck.gl/mcp"] }
+  }
+}
 ```
 
-> **Do not skip that.** `@poopdeck.gl/mcp` is **not published to npm yet**, so the
-> bundled `.mcp.json` runs a local build artifact, `packages/mcp/dist/bin.js`. If
-> that file is missing the plugin still installs and the skills still load, but
-> the MCP server **silently fails to start** — every tool below is simply absent,
-> with nothing in the UI pointing at the cause. Confirm with
-> `ls packages/mcp/dist/bin.js` before enabling the plugin, and re-run the build
-> after any edit under `packages/mcp/src/`. If the `stt` tools don't show up,
-> check this first.
+No repo checkout, no build step, no `dist/` on disk — `npx` fetches
+[`@poopdeck.gl/mcp`](https://www.npmjs.com/package/@poopdeck.gl/mcp) and the
+documentation corpus rides inside that tarball, so `search_docs`/`get_doc` work
+immediately.
 
-The server runs over stdio, scanning `examples/showcase/public/data` for
-datasets. Once `@poopdeck.gl/mcp` is published to npm you can switch the command
-in `.mcp.json` to `npx -y @poopdeck.gl/mcp` and drop the build step entirely.
+### Pointing it at your datasets
+
+The plugin sets **no dataset root**. It can't: a plugin installed from the
+marketplace has no idea where your archives live, and the old config guessed a
+path inside a repo checkout (`examples/showcase/public/data`) that exists on
+exactly one machine. With none set, the server falls back to
+`$STT_DATA_ROOT`, else `<cwd>/examples/showcase/public/data` — so
+`list_datasets` returns an empty catalog rather than failing, and every
+docs/compose tool still works.
+
+To see your own archives, either export `STT_DATA_ROOT=/path/to/archives`
+before launching Claude Code, or add an explicit flag to the server args
+(a project-scoped `.mcp.json`, `claude mcp add`, or by editing the plugin's own
+`.mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "stt": {
+      "command": "npx",
+      "args": ["-y", "@poopdeck.gl/mcp", "--data-root", "/path/to/archives"]
+    }
+  }
+}
+```
+
+A "dataset" is any directory containing a `manifest.json`, found up to six
+levels under the root.
 
 ## What you get out of the box
 
-The bundled `.mcp.json` launches the server with **`--allow-cli`** — a locally
-installed, stdio-only plugin the user deliberately enabled — so the full tool set
-is live. Always-on, read-only tools:
+The bundled `.mcp.json` runs the server in its **default, read-only mode** — no
+`--allow-cli`, so nothing this plugin registers can spawn a process or write a
+file (see [Enabling the CLI tools](#enabling-the-cli-tools-allow-cli)).
+Always-on, read-only tools:
 
 - `list_datasets`, `describe_dataset` — discover + inspect archives (manifest only).
 - `search_docs` / `get_doc` — search the published STT documentation and read a
@@ -60,23 +86,74 @@ is live. Always-on, read-only tools:
 - `stt://docs/<path>` **resources** — the same doc corpus, enumerable and
   addressable as context without a tool call.
 
-CLI-gated tools (enabled by the `--allow-cli` in `.mcp.json`) — these shell out to
-the `stt-*` binaries (resolved from `target/release/` or `PATH`):
+Six more tools are CLI-gated. Without `--allow-cli`, three of them still appear
+in `tools/list` but decline to shell out — `dataset_report` answers from the
+manifest alone, `recommend_build` and `diff_datasets` return an "enable
+`--allow-cli`" hint — and `build_dataset` / `validate_dataset` /
+`generate_dataset` are not registered at all, so a default server never even
+advertises them.
 
-- `recommend_build` — analyze a source GeoParquet → an evidence-backed build recipe.
-- `dataset_report` — `stt-optimize inspect`/`doctor`/`order-audit` on a built archive.
-- `diff_datasets` — before/after regression gate.
+## Enabling the CLI tools (`--allow-cli`)
+
+**Opt in deliberately, and only for a local stdio server you trust.** The flag
+is off by default in `@poopdeck.gl/mcp` and this plugin does not turn it on.
+
+What it unlocks — six tools that **shell out to the `stt-*` Rust binaries**
+(resolved from `target/release/` walking up from the data root and CWD, else
+`PATH`) with arguments chosen by the agent:
+
+- `recommend_build` — `stt-optimize recommend` over a source GeoParquet → an
+  evidence-backed build recipe.
+- `dataset_report` — `stt-optimize inspect`/`doctor`/`order-audit` on a built
+  archive. Also unlocks its `path` argument, which addresses an archive
+  **outside** `--data-root` (rejected without the flag).
+- `diff_datasets` — `stt-optimize diff`, a before/after regression gate.
 - `build_dataset` — `stt-build` from a GeoParquet input (PostGIS/DuckDB sources
-  go through `extraArgs`).
-- `generate_dataset` — `stt-generate` one of the bundled reference datasets.
+  go through `extraArgs`); **writes** to the output directory you name.
+- `generate_dataset` — `stt-generate` a bundled reference dataset; **writes**
+  to disk and **downloads over the network**.
 - `validate_dataset` — `stt-validate` integrity/decode/schema/temporal.
 
-> **Security:** `--allow-cli` lets the MCP client spawn the `stt-*` binaries (which
-> read/write the filesystem and, for `generate_dataset`, the network). That's the
-> intended behavior for a trusted local stdio session. **Remove `--allow-cli` from
-> `.mcp.json` for a read-only, no-shell-out setup** (the gated tools then return an
-> "enable --allow-cli" hint instead of running). Do **not** pair `--allow-cli` with
-> a non-localhost HTTP transport on an untrusted network.
+The honest summary: with `--allow-cli`, an MCP tool call can spawn a
+subprocess and read or write any path the server process can reach — the input
+and output paths are tool arguments, and they ultimately come from whatever
+model is driving the session. That is the intended power of a local build agent,
+and it is also why it is not the default. Turn it on by adding the flag to the
+server args:
+
+```json
+{
+  "mcpServers": {
+    "stt": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@poopdeck.gl/mcp",
+        "--allow-cli",
+        "--data-root",
+        "/path/to/archives"
+      ]
+    }
+  }
+}
+```
+
+Two hard rules:
+
+- **Never** pair `--allow-cli` with `--transport http` on a non-localhost bind.
+  (The HTTP transport enforces DNS-rebinding protection precisely because that
+  combination turns a browser tab into a remote shell.)
+- Without the flag, the read-only tools stay read-only: `list_datasets`,
+  `describe_dataset`, `search_docs`, `get_doc`, `view_map`, `set_time`, and
+  `play_pause` never spawn anything, and every path they accept is checked for
+  containment (lexically **and** after `realpath`, so a symlink can't escape).
+
+This repo's own root `.mcp.json` — the one contributors get when they open the
+checkout in Claude Code — **does** pass `--allow-cli` and points at the local
+`packages/mcp/dist/bin.js` build. That config is deliberately different: it
+serves people who already run `cargo build` and `pnpm test` in this tree, so the
+CLIs are the workflow and no new trust boundary is crossed. A marketplace plugin
+installed by a stranger has neither that context nor those binaries.
 
 ## Skills
 

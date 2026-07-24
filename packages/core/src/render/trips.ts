@@ -7,7 +7,7 @@
  * renderers share, lifted verbatim from `@poopdeck.gl/three`'s pure
  * `lib/trip-heads.ts` + `synthesizeVertexTimes` when the Cesium backend became
  * their third consumer (deck carries the original copies; three now re-export
- * shims onto this module). See docs/roadmap/renderer-abstraction-2026-06.md —
+ * shims onto this module). See docs/roadmap/renderer-architecture.md —
  * CPU logic lives in exactly one place, backends keep their render models.
  *
  * Each LineString feature is a trip; the head is the position the vehicle

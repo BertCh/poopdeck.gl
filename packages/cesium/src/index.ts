@@ -4,7 +4,7 @@
 
 /**
  * @poopdeck.gl/cesium — a CesiumJS backend for SpatioTemporal Tiles, the first
- * green-field consumer of the render kernel (docs/roadmap/renderer-abstraction-2026-06.md
+ * green-field consumer of the render kernel (docs/roadmap/renderer-architecture.md
  * §6). It renders STT on a real WGS84 globe and is built almost entirely from
  * `@poopdeck.gl/core` sub-paths (geo / style / time-filter / shader-codegen /
  * tileset-adapter / picking / capabilities) — the proof that adding a backend is

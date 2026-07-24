@@ -7,7 +7,7 @@
  * shares: the normalized pick-result shape, the 24-bit id-colour packing (so any
  * id-buffer backend is interoperable), and the per-instance provenance contract a
  * MERGED-buffer backend (three) needs to answer "which feature is instance N?"
- * (see docs/roadmap/renderer-abstraction-2026-06.md §5.3). The GPU render/readback
+ * (see docs/roadmap/renderer-architecture.md). The GPU render/readback
  * (three's `GpuPicker`) and the CPU ray-OBB test stay per-backend; join a decoded
  * index back to columns via `getFeatureProperties(binary, index)` from
  * `@poopdeck.gl/core`.

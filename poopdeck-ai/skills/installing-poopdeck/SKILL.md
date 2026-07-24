@@ -134,18 +134,26 @@ scrub/play UI with `@poopdeck.gl/react` (`PlaybackControls`, `usePlayback`,
 ## Wire the MCP server / plugin
 
 The `poopdeck-ai` plugin auto-registers the `stt` MCP server via its `.mcp.json`,
-which launches `packages/mcp/dist/bin.js`. That build artifact must exist:
+which runs the published package (`npx -y @poopdeck.gl/mcp`) — no repo checkout
+and no build step. In Claude Code:
+`/plugin marketplace add /path/to/spatiotemporal-tiles` →
+`/plugin install poopdeck-ai`.
 
-```
-pnpm --filter @poopdeck.gl/mcp build     # once, from a repo checkout
-```
+Two things it does **not** do, both deliberate, both fixable with one arg:
 
-Then in Claude Code: `/plugin marketplace add /path/to/spatiotemporal-tiles` →
-`/plugin install poopdeck-ai`. See `poopdeck-ai/README.md` for the `--allow-cli`
-security note (gated build/generate/validate tools shell out to the `stt-*`
-binaries — that's the intended local-stdio behavior; remove `--allow-cli` for a
-read-only setup). Once `@poopdeck.gl/mcp` is on npm you can point the command at
-`npx -y @poopdeck.gl/mcp` instead of the local build.
+- **No dataset root.** Set `STT_DATA_ROOT`, or add
+  `"--data-root", "/path/to/archives"` to the server args, or `list_datasets`
+  stays empty (the docs tools work regardless — the corpus is bundled).
+- **No `--allow-cli`.** The build/generate/validate tools and the CLI mode of
+  `dataset_report`/`recommend_build`/`diff_datasets` shell out to the `stt-*`
+  binaries, i.e. agent-directed subprocess spawn plus file read/write, so they
+  are off until the user adds `"--allow-cli"` themselves. See
+  `poopdeck-ai/README.md` § "Enabling the CLI tools".
+
+Working ON this repo is the other case: its root `.mcp.json` runs the local
+build with `--allow-cli`, which needs `pnpm --filter @poopdeck.gl/mcp build`
+first (`packages/mcp/dist/` is gitignored) and Claude Code launched from the
+repo root.
 
 ## You're set up when…
 

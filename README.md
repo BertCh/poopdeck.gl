@@ -3,8 +3,24 @@
 > **A cloud-native, edge-cacheable tile format for interactive spatiotemporal data visualization**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Rust](https://img.shields.io/badge/rust-1.85+-orange.svg)](https://www.rust-lang.org/)
+[![MSRV](https://img.shields.io/crates/msrv/spatiotemporal-tiles?label=msrv)](./Cargo.toml)
 [![TypeScript](https://img.shields.io/badge/typescript-5.4+-blue.svg)](https://www.typescriptlang.org/)
+
+**→ [poopdeck.gl](https://poopdeck.gl)** — the live showcase: dozens of
+real-dataset demos, the rendered docs, and the AV cockpit.
+
+| Live surface                                                     | What it is                                            |
+| ---------------------------------------------------------------- | ----------------------------------------------------- |
+| [poopdeck.gl/demos](https://poopdeck.gl/demos)                   | Demo gallery — every dataset below, animating         |
+| [poopdeck.gl/how-it-works](https://poopdeck.gl/how-it-works)     | Illustrated explainer of the space×time tile model    |
+| [poopdeck.gl/docs](https://poopdeck.gl/docs)                     | This repo's `docs/` tree, rendered                    |
+| [poopdeck.gl/drive](https://poopdeck.gl/drive)                   | AV cockpit — nuScenes / Argoverse 2 LIDAR scenes      |
+| [poopdeck.gl/story/drifters](https://poopdeck.gl/story/drifters) | Scrollytelling data story: 40 years of ocean drifters |
+| [poopdeck.gl/worlds](https://poopdeck.gl/worlds)                 | NVIDIA Cosmos Drive Dreams world-model scenarios      |
+
+**Three names, one project:** **STT** is the format; **`spatiotemporal-tiles`**
+is the Rust toolchain that writes it; **`@poopdeck.gl/*`** are the TypeScript
+packages that render it.
 
 ---
 
@@ -28,9 +44,9 @@ interops directly with `@geoarrow/deck.gl-layers`, Lonboard, and kepler.gl 3.x.
 time-varying features. Time-varying rasters and datacubes are out of scope; use
 [GeoZarr](https://github.com/zarr-developers/geozarr-spec) or COG for those.
 
-**See it live:** the showcase app (`examples/showcase`, deployed on Cloudflare)
-carries dozens of real-dataset demos, the rendered docs at `/docs`, an AV LIDAR
-cockpit at `/drive`, and a scrollytelling data story at `/story/drifters`.
+**See it live:** everything in the table above is one app —
+`examples/showcase`, deployed to [poopdeck.gl](https://poopdeck.gl) on
+Cloudflare — running against the same packed archives this repo builds.
 
 ### Key features
 
@@ -65,10 +81,14 @@ is the fastest end-to-end path (DuckDB one-liner included).
 cargo install spatiotemporal-tiles
 ```
 
-Installs `stt-build`, `stt-validate`, `stt-optimize`, `stt-bundle`, and
-`stt-serve`. (Or
-build from a checkout with `cargo build --release` and use
-`./target/release/stt-build`.)
+`cargo install spatiotemporal-tiles` installs five binaries — `stt-build`,
+`stt-optimize`, `stt-validate`, `stt-bundle`, `stt-serve` — and **not**
+`stt-generate`, which is `publish = false` and builds only from a repo
+checkout. (Or build the whole toolchain from a checkout with
+`cargo build --release` and use `./target/release/stt-build`.) The minimum
+supported Rust version is whatever `rust-version` says in
+[`Cargo.toml`](./Cargo.toml) — that field is the single source of truth and CI
+enforces it.
 
 ### 2. Build a packed dataset from GeoParquet
 
@@ -97,24 +117,38 @@ immutable-pack / short-TTL-manifest cache headers).
 ### 3. Visualize with deck.gl
 
 ```bash
-npm install @poopdeck.gl/layers @poopdeck.gl/playback   # deck.gl renderer + clock
+npm install @poopdeck.gl/layers @poopdeck.gl/playback deck.gl   # renderer + clock + peer
 ```
 
 ```typescript
+import { Deck } from '@deck.gl/core';
 import { AnimatedPointLayer } from '@poopdeck.gl/layers';
-import { TimeController } from '@poopdeck.gl/playback';
+import { SttPlayer } from '@poopdeck.gl/playback';
 
-const controller = new TimeController({ speed: 3600 }); // 1h of data per second
-controller.play();
+const player = new SttPlayer({
+  timeRange: { start, end },
+  baseRate: (end - start) / 60_000, // dataset plays in ~60 s at 1×
+  loop: true,
+});
 
 const layer = new AnimatedPointLayer({
   id: 'earthquakes',
-  data: '/data/earthquakes/manifest.json',
-  currentTime: Date.now(),
-  timeWindow: 24 * 60 * 60 * 1000,
-  timeController: controller,
+  data: 'https://tiles.example.com/earthquakes/manifest.json',
+  timeController: player.timeController, // layers READ the clock; the player drives it
+  timeWindow: 86_400_000,
+  onTilesetReady: (tileset) => player.setSource(tileset), // buffering gates playback
+  onBufferChange: (runway) => player.notifyBufferChange(runway),
 });
+
+new Deck({ layers: [layer] });
+player.play();
 ```
+
+[`SttPlayer`](./docs/api/stt-player.md) is the recommended entry point — an
+`HTMLMediaElement`-style facade that owns the clock _and_ the buffering
+governor, so playback stalls instead of skipping over tiles that have not
+arrived. Reach for the bare [`TimeController`](./docs/api/time-controller.md)
+only when you are driving the clock from something else.
 
 See [`docs/api/`](./docs/api/) for the full layer catalog
 (paths, trips, polygons, heatmap, H3 summary).
@@ -176,10 +210,9 @@ implementation across the Rust writer and the TypeScript reader.
 
 ```
 spatiotemporal-tiles/
-├── crates/                 # Rust workspace — 5 crates
+├── crates/                 # Rust workspace — the 4 PUBLISHED crates
 │   ├── stt-core/           # Archive + Arrow tile format library
 │   ├── stt-build/          # Library: GeoParquet / PostGIS / DuckDB -> packed dataset
-│   ├── stt-generate/       # Bundled showcase-dataset generators (+ the stt-generate CLI)
 │   ├── stt-optimize/       # Input analysis + recommendations (powers --auto)
 │   └── spatiotemporal-tiles/  # Umbrella crate: re-exports the libraries above and
 │       └── src/bin/           #   ships every other CLI: stt-build, stt-optimize,
@@ -200,6 +233,10 @@ spatiotemporal-tiles/
 │   └── react/              # React playback hooks + UI controls
 ├── examples/showcase/      # Interactive demo app (deck.gl + MapLibre + Three)
 ├── tools/
+│   ├── stt-generate/       # Bundled showcase-dataset generators (+ the stt-generate
+│   │                       #   CLI). Repo-only (publish = false) and its OWN cargo
+│   │                       #   workspace, so its dep tree's MSRV never reaches the
+│   │                       #   published crates.
 │   ├── bench/              # @poopdeck.gl/core load + decode benchmark (Node)
 │   ├── perf/               # Real-WebGL Playwright perf harness
 │   └── render-test/        # Playwright fidelity sweep (baselines + diffs)
@@ -211,8 +248,9 @@ spatiotemporal-tiles/
 ## Development
 
 ```bash
-cargo test --workspace          # Rust tests
-cargo build --release           # CLI binaries (stt-build, stt-generate, ...)
+cargo test --workspace          # Rust tests (the 4 published crates)
+cargo build --release           # CLI binaries (stt-build, stt-validate, ...)
+cargo test --manifest-path tools/stt-generate/Cargo.toml   # the generator's own workspace
 
 pnpm install
 pnpm --filter @poopdeck.gl/core build

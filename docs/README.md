@@ -171,13 +171,20 @@ a deck.gl sublayer.
 
 ## Guides
 
+- [From CSV to an animated map](./guides/csv-quickstart.md) — **start here.**
+  The fastest end-to-end path on published packages: CSV → DuckDB one-liner →
+  `stt-build --auto` → an animated deck.gl map in a Vite + React app.
 - [Data generation](./guides/data-generation.md) — building datasets with
   `stt-generate` for the bundled showcase sets, or `stt-build` for your own
   GeoParquet.
 - [Building from Python](./guides/python.md) — GeoPandas, DuckDB, and pyarrow
   recipes for getting data into GeoParquet.
 - [Deploying a dataset](./guides/deploying.md) — R2 / S3 / GCS / nginx: the two
-  Cache-Control regimes, CORS for Range requests, the copy-never-delete rule.
+  Cache-Control regimes, the CDN cache rule immutable packs need, CORS for Range
+  requests, the copy-never-delete rule.
+- [Tuning your tiles](./guides/tuning-tiles.md) — the measure → interpret →
+  decide loop with `stt-optimize`: `analyze`/`recommend`, `--auto`, `inspect`,
+  `doctor`, and `diff` — shrinking bytes without dropping or degrading data.
 
 ## AI Suite
 

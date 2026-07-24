@@ -6,7 +6,7 @@
  * viewBox, with the playhead pinned at the right edge and a numeric readout of
  * the value at the cursor.
  *
- * Like {@link MetricGauges}, updates are driven imperatively off the shared
+ * Updates are driven imperatively off the shared
  * TimeController's `tick` (mutating the SVG `<path d>` / readout via refs) so
  * the cockpit does NOT re-render per frame — the strips stay locked to the same
  * clock the layers animate on. The window bounds are found with two binary

@@ -3,7 +3,7 @@
 
 /**
  * Structural conformance gate for the deck.gl backend descriptor
- * (docs/roadmap/renderer-abstraction-2026-06.md §4.3 tier 5, Phase 5).
+ * (docs/roadmap/renderer-architecture.md, Phase 5).
  *
  * This is NOT a GPU/pixel conformance harness (that is the deferred nightly 1px
  * readback). It proves the cheaper-but-real invariant: every layer kind the

@@ -22,6 +22,24 @@ import { useReducedMotion } from '../../lib/reducedMotion';
  * On coarse pointers a transparent tap-shield keeps the map from hijacking
  * page scroll until the reader opts into interacting.
  */
+/**
+ * Where "open fullscreen" goes. `/demo/:id` is the FLAT deck viewer, which is
+ * the wrong surface for the two composite types that have a purpose-built
+ * fullscreen page: `av` scenes belong in the cockpit (`/drive/:id` — camera
+ * inset, stream rail, telemetry charts, render-mode toggle) and the `worlds`
+ * gallery belongs at `/worlds`. Hardcoding `/demo/${id}` here was the only
+ * link into either, so both cockpit and gallery were unreachable by clicking.
+ */
+function fullscreenRoute(dataset: Dataset): { to: string; label: string } {
+  if (dataset.type === 'av')
+    return { to: `/drive/${dataset.id}`, label: 'Open cockpit' };
+  // One `worlds` dataset (cosmos-drive-dreams) and the route selects a scenario,
+  // not a dataset — so the bare gallery route, not `/worlds/${id}`.
+  if (dataset.type === 'worlds')
+    return { to: '/worlds', label: 'Open explorer' };
+  return { to: `/demo/${dataset.id}`, label: 'Open fullscreen' };
+}
+
 const DemoEmbed: React.FC<{ dataset: Dataset }> = ({ dataset }) => {
   const playback = useDemoPlayback(dataset);
   const frameRef = useRef<HTMLDivElement>(null);
@@ -65,6 +83,8 @@ const DemoEmbed: React.FC<{ dataset: Dataset }> = ({ dataset }) => {
   const [touchInteractive, setTouchInteractive] = useState(false);
   const interactive = !coarsePointer || touchInteractive;
 
+  const fullscreen = fullscreenRoute(dataset);
+
   return (
     <div>
       <div
@@ -80,12 +100,12 @@ const DemoEmbed: React.FC<{ dataset: Dataset }> = ({ dataset }) => {
 
         {/* Open-fullscreen affordance, top-right over the map. */}
         <Link
-          to={`/demo/${dataset.id}`}
+          to={fullscreen.to}
           className="absolute top-3 right-3 px-2.5 py-1.5 rounded text-xs glass inline-flex items-center gap-1.5"
           style={{ color: 'rgba(255,255,255,0.9)' }}
           title="Open the fullscreen viewer"
         >
-          Open fullscreen
+          {fullscreen.label}
           <svg viewBox="0 0 24 24" width="11" height="11" aria-hidden="true">
             <path
               fill="none"

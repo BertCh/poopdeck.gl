@@ -69,11 +69,13 @@ GeoParquet / PostGIS / DuckDB
   - `diff_datasets` — before/after regression gate.
   - `view_map` — compose a `@deck.gl/json` spec (STT layers) for one or more datasets.
   - `build_dataset` / `validate_dataset` / `generate_dataset` (bundled reference
-    datasets) — registered **only** when the server runs with `--allow-cli`.
-    Those three plus `dataset_report` / `recommend_build` / `diff_datasets`
-    (which always register, then self-gate) are the six tools that shell out to
-    the `stt-*` binaries; `generate_dataset` is the only one that touches the
-    network.
+    datasets) — registered **only** when the server runs with `--allow-cli`,
+    which is **off by default and not enabled by this plugin** (the user opts in
+    by adding the flag; see `poopdeck-ai/README.md`). Those three plus
+    `dataset_report` / `recommend_build` / `diff_datasets` (which always
+    register, then self-gate) are the six tools that shell out to the `stt-*`
+    binaries; `generate_dataset` is the only one that touches the network. With
+    the flag off, reach for the CLIs directly instead.
 
 ## Which skill / tool for which job
 

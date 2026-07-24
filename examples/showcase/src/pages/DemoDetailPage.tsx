@@ -8,6 +8,7 @@ import {
   getRelated,
 } from '../content/demoMeta';
 import DemoCard from '../components/DemoCard';
+import InlineProse from '../components/InlineProse';
 import { SourceLogo } from '../components/SourceLogo';
 import { VizBadge } from '../components/VizBadge';
 import CubeInLine from '../components/demo/CubeInLine';
@@ -98,13 +99,16 @@ const DemoDetailPage: React.FC = () => {
         <div className="mt-10 grid grid-cols-1 lg:grid-cols-[1fr_280px] gap-x-12 gap-y-10">
           <div className="min-w-0">
             <Section title="About this demo">
+              {/* The `about` strings are authored in inline markdown (code
+                  spans, links) — render them, or the page ships literal
+                  backticks to production. */}
               {meta.about.map((p, i) => (
                 <p
                   key={i}
                   className="text-sm mb-4"
                   style={{ color: 'var(--ink-700)', lineHeight: 1.75 }}
                 >
-                  {p}
+                  <InlineProse text={p} />
                 </p>
               ))}
             </Section>
@@ -118,7 +122,7 @@ const DemoDetailPage: React.FC = () => {
                   className="text-xs mt-3"
                   style={{ color: 'var(--ink-500)', lineHeight: 1.65 }}
                 >
-                  {meta.buildNote}
+                  <InlineProse text={meta.buildNote} />
                 </p>
               )}
               <p className="text-xs mt-3" style={{ color: 'var(--ink-400)' }}>

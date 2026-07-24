@@ -31,12 +31,11 @@
     "clean": "rm -rf dist tsconfig.tsbuildinfo"
   },
   "dependencies": {
-    "@poopdeck.gl/core": "workspace:*",
-    "earcut": "^3.0.0"
+    "@poopdeck.gl/core": "workspace:*"
   },
   "peerDependencies": {
     "h3-js": "^4.1.0",
-    "maplibre-gl": "^3 || ^4 || ^5 || ^6"
+    "maplibre-gl": "^3 || ^4 || ^5"
   },
   "peerDependenciesMeta": {
     "h3-js": {
@@ -44,7 +43,6 @@
     }
   },
   "devDependencies": {
-    "@types/earcut": "^2.1.4",
     "maplibre-gl": "^4.7.0",
     "typescript": "^5.4.0",
     "vitest": "^1.6.0"

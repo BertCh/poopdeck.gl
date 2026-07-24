@@ -2,11 +2,17 @@
 
 ## 0.5.0
 
-Not yet published to npm. This package has lived in the monorepo since the AI
-suite landed (2026-07-07) and is versioned in lockstep with its `@poopdeck.gl`
-siblings (the changesets `fixed` group), but no tarball has ever been released —
-so this file starts here rather than inventing a history. The entry below
-describes the surface as it stands, not a shipped diff.
+The first published tarball. This package had lived in the monorepo since the AI
+suite landed (2026-07-07), versioned in lockstep with its `@poopdeck.gl` siblings
+(the changesets `fixed` group), but nothing was released until 0.5.0 — so this
+file starts here rather than inventing a history. The entry below describes the
+surface as it stands, not a shipped diff.
+
+> Known defect in the 0.5.0 tarball: the server reports `0.4.0` in its MCP
+> `initialize` response (`serverInfo.version`) — a hand-written constant that was
+> never bumped. Fixed for the next release: the version is now generated from
+> `package.json` at build time (`scripts/gen-version.mjs`) and gated by
+> `test/version.test.ts`.
 
 ### Minor Changes
 

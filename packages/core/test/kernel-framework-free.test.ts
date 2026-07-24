@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url';
  * This repo has no eslint, so the guard is a test (matching the manifest-schema
  * / palette-parity precedent). It is the machine that replaces the "// keep in
  * lockstep" comments the renderer-abstraction plan retires. See
- * docs/roadmap/renderer-abstraction-2026-06.md.
+ * docs/roadmap/renderer-architecture.md.
  */
 
 const SRC = join(fileURLToPath(new URL('.', import.meta.url)), '..', 'src');

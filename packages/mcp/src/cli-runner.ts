@@ -33,10 +33,31 @@ export interface RunResult {
 const MAX_OUTPUT_CHARS = 200_000;
 const DEFAULT_TIMEOUT_MS = 120_000;
 
-function truncate(s: string): string {
-  return s.length > MAX_OUTPUT_CHARS
-    ? `${s.slice(0, MAX_OUTPUT_CHARS)}\n… [truncated, ${s.length - MAX_OUTPUT_CHARS} more chars]`
-    : s;
+/**
+ * A stream capture that stops GROWING at {@link MAX_OUTPUT_CHARS} instead of
+ * buffering everything and truncating at the end. The cap has to apply while
+ * reading, not on the way out: a child that streams gigabytes to stdout (a
+ * `stt-build` in a log-spewing failure loop, or a mistargeted binary) would
+ * otherwise sit in this process's heap in full before anyone trimmed it. The
+ * overflow is still counted exactly, so the truncation note stays honest.
+ */
+class CappedOutput {
+  private text = '';
+  private dropped = 0;
+
+  push(chunk: string): void {
+    const room = MAX_OUTPUT_CHARS - this.text.length;
+    if (room > 0) {
+      this.text += chunk.length <= room ? chunk : chunk.slice(0, room);
+    }
+    if (chunk.length > room) this.dropped += chunk.length - Math.max(room, 0);
+  }
+
+  toString(): string {
+    return this.dropped > 0
+      ? `${this.text}\n… [truncated, ${this.dropped} more chars]`
+      : this.text;
+  }
 }
 
 /**
@@ -44,6 +65,13 @@ function truncate(s: string): string {
  * output) starting at `startDir` and walking up to `maxUp` ancestor
  * directories — handles the server being launched with a CWD anywhere
  * inside the repo (or pointed at a data-root several levels under it).
+ *
+ * `tools/<name>/target/release/<name>` is probed at each level too: an
+ * INTERNAL binary that is not one of the published crates lives outside the
+ * root Cargo workspace (with its own `[workspace]`, so its dep tree can't
+ * force an MSRV on the published crates), and therefore has its own `target/`.
+ * `stt-generate` is the one that moved out; without this probe it resolves to
+ * a bare PATH lookup and a repo checkout that built it never finds it.
  */
 function findInCargoTarget(
   name: string,
@@ -51,10 +79,14 @@ function findInCargoTarget(
   maxUp = 8,
 ): string | undefined {
   let dir = path.resolve(startDir);
+  const exeName = process.platform === 'win32' ? `${name}.exe` : name;
   for (let i = 0; i <= maxUp; i++) {
-    const exeName = process.platform === 'win32' ? `${name}.exe` : name;
-    const candidate = path.join(dir, 'target', 'release', exeName);
-    if (existsSync(candidate)) return candidate;
+    for (const candidate of [
+      path.join(dir, 'target', 'release', exeName),
+      path.join(dir, 'tools', name, 'target', 'release', exeName),
+    ]) {
+      if (existsSync(candidate)) return candidate;
+    }
     const parent = path.dirname(dir);
     if (parent === dir) break;
     dir = parent;
@@ -118,8 +150,8 @@ export function run(
       return;
     }
 
-    let stdout = '';
-    let stderr = '';
+    const stdout = new CappedOutput();
+    const stderr = new CappedOutput();
     let timedOut = false;
     let aborted = false;
     const child = spawn(bin, args, {
@@ -144,10 +176,10 @@ export function run(
     };
 
     child.stdout?.on('data', (chunk) => {
-      stdout += chunk.toString('utf8');
+      stdout.push(chunk.toString('utf8'));
     });
     child.stderr?.on('data', (chunk) => {
-      stderr += chunk.toString('utf8');
+      stderr.push(chunk.toString('utf8'));
     });
     child.on('error', (err) => {
       cleanup();
@@ -156,10 +188,12 @@ export function run(
         args,
         exitCode: null,
         signal: null,
-        stdout: truncate(stdout),
-        stderr: truncate(
-          `${stderr}\n${err instanceof Error ? err.message : String(err)}`,
-        ),
+        stdout: stdout.toString(),
+        // The spawn failure (typically ENOENT for a binary that isn't on PATH)
+        // is appended AFTER the cap, not folded into it — it's the one line the
+        // caller actually needs, and it used to be the first thing dropped when
+        // a chatty child had already filled the buffer.
+        stderr: `${stderr.toString()}\n${err instanceof Error ? err.message : String(err)}`,
         timedOut,
         aborted,
         durationMs: Date.now() - start,
@@ -172,8 +206,8 @@ export function run(
         args,
         exitCode: code,
         signal,
-        stdout: truncate(stdout),
-        stderr: truncate(stderr),
+        stdout: stdout.toString(),
+        stderr: stderr.toString(),
         timedOut,
         aborted,
         durationMs: Date.now() - start,

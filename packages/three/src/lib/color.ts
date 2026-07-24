@@ -12,7 +12,7 @@
  *
  * The categorical / ramp algorithms now live in the framework-free
  * `@poopdeck.gl/core/style` kernel (Phase 2 dedup — see
- * docs/roadmap/renderer-abstraction-2026-06.md); the functions below are thin
+ * docs/roadmap/renderer-architecture.md); the functions below are thin
  * three-side adapters that preserve three's exact public API (mutable `RGBA`,
  * `.mapping`/`.fallback` spec shapes, f32 0..1 output). `expandRgbColumns` keeps
  * its own local body because its alpha semantics differ (it writes the 0..1

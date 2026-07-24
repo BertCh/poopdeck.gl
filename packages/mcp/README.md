@@ -118,11 +118,11 @@ client; front it with a session-aware proxy for multi-client production use.
 
 **Execution** (only registered with `--allow-cli`, off by default):
 
-| Tool               | Params                                                                                                                                                           | Returns                                                                                                                                                                                                                                                                             |
-| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `build_dataset`    | `input, output, timeField?, minZoom?, maxZoom?, temporalBucket?, summaryTier?, styleHints?, publish?, name?, description?, attribution?, extraArgs?, timeoutMs?` | Shells out to `stt-build`; returns stdout/stderr/exit code + the resulting manifest summary                                                                                                                                                                                         |
-| `generate_dataset` | `dataset: <subcommand>, output?, extraArgs?, timeoutMs?`                                                                                                         | Shells out to `stt-generate <dataset>` to DOWNLOAD + build a bundled reference dataset (`all` → the 3 no-param datasets into `output` as a directory; others → a single `.stt` via `--output`). Source-specific flags go through `extraArgs`. Network-bound; 15-min default timeout |
-| `validate_dataset` | `name? \| path, sample?, skipDecode?, failFast?`                                                                                                                 | Shells out to `stt-validate --json`; returns the parsed report. `name` and `path` are mutually exclusive (supplying both errors)                                                                                                                                                    |
+| Tool               | Params                                                                                                                                                           | Returns                                                                                                                                                                                                                      |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `build_dataset`    | `input, output, timeField?, minZoom?, maxZoom?, temporalBucket?, summaryTier?, styleHints?, publish?, name?, description?, attribution?, extraArgs?, timeoutMs?` | Shells out to `stt-build`; returns stdout/stderr/exit code + the resulting manifest summary                                                                                                                                  |
+| `generate_dataset` | `dataset: <subcommand>, output?, extraArgs?, timeoutMs?`                                                                                                         | Shells out to `stt-generate <dataset>` to DOWNLOAD + build ONE bundled reference dataset into `output` (a single `.stt` via `--output`). Source-specific flags go through `extraArgs`. Network-bound; 15-min default timeout |
+| `validate_dataset` | `name? \| path, sample?, skipDecode?, failFast?`                                                                                                                 | Shells out to `stt-validate --json`; returns the parsed report. `name` and `path` are mutually exclusive (supplying both errors)                                                                                             |
 
 All six shell-out tools (`build_dataset`, `validate_dataset`, `generate_dataset`,
 `diff_datasets`, `dataset_report`, `recommend_build`) set the MCP
@@ -205,11 +205,25 @@ Code plugin ([`../../poopdeck-ai/`](../../poopdeck-ai/)). The plugin's `.mcp.jso
 auto-registers this server, and `skills/` teaches the workflow — which layer to
 use, how to build/tune/serve, and **when to reach for these MCP tools vs the
 `stt-*` CLIs**. Install it from the repo-root marketplace
-(`/plugin marketplace add <this repo>` → `/plugin install poopdeck-ai`). The
-plugin's `.mcp.json` runs the server **with `--allow-cli`** (it's a local stdio
-server you deliberately installed), so the analysis + build/generate/export tools
-are live out of the box; **remove `--allow-cli` from its `.mcp.json` args** for a
-read-only, discovery-only setup.
+(`/plugin marketplace add <this repo>` → `/plugin install poopdeck-ai`).
+
+The plugin runs `npx -y @poopdeck.gl/mcp` with **no `--allow-cli` and no
+`--data-root`**: an installed plugin can't know where a stranger's archives
+live, and it must not enable subprocess spawn on their behalf. Point it at data
+with `STT_DATA_ROOT`/`--data-root`, and add `--allow-cli` yourself if you want
+the build tools (see `poopdeck-ai/README.md`).
+
+**The two configs in this repo differ on purpose:**
+
+| Config                  | Command                         | `--allow-cli` | Why                                                                                                                                               |
+| ----------------------- | ------------------------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `poopdeck-ai/.mcp.json` | `npx -y @poopdeck.gl/mcp`       | **no**        | Ships to strangers through the marketplace; must work with no checkout, and must not enable subprocess spawn without a deliberate opt-in.         |
+| `.mcp.json` (repo root) | `node packages/mcp/dist/bin.js` | **yes**       | Serves contributors to this tree, who already run `cargo build`/`pnpm test` here — the `stt-*` CLIs _are_ the workflow, so no new trust boundary. |
+
+The repo-root config uses **repo-relative** paths (it is only discovered when
+Claude Code is launched from the repo root, so the CWD is the repo root by
+construction) and requires `pnpm --filter @poopdeck.gl/mcp build` first, since
+`packages/mcp/dist/` is gitignored.
 
 ## Design & scope
 

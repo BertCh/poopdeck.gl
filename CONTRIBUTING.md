@@ -12,11 +12,10 @@ it.
 Two workspaces live side by side in one checkout.
 
 ```
-crates/                 # cargo workspace — 5 crates
+crates/                 # cargo workspace — the 4 PUBLISHED crates
   stt-core/             #   archive + Arrow tile format library
   stt-build/            #   GeoParquet / PostGIS / DuckDB → packed .stt
   stt-optimize/         #   input analysis + archive inspect/doctor/diff
-  stt-generate/         #   bundled reference-dataset generators (unpublished)
   spatiotemporal-tiles/ #   umbrella crate: re-exports the libs + ships the CLIs
     src/bin/            #     stt-build, stt-optimize, stt-validate,
                         #     stt-bundle, stt-serve
@@ -28,19 +27,23 @@ packages/               # pnpm workspace — 8 @poopdeck.gl packages
   mcp/                  #   MCP server (`stt-mcp`) — not yet on npm
 examples/showcase/      # React Router demo site (dozens of real datasets)
 tools/                  # bench, perf, render-test harnesses
+  stt-generate/         #   reference-dataset generators — its OWN cargo
+                        #   workspace, unpublished, off the root MSRV
 docs/                   # spec, API reference, guides, architecture
 poopdeck-ai/            # Claude Code plugin (MCP server + Agent Skills)
 ```
 
-`stt-generate` is a separate crate with its own `stt-generate` binary; the other
-five CLIs are bins inside `spatiotemporal-tiles` and are feature-gated (a bare
+`stt-generate` is deliberately outside the root workspace (`cargo test
+--manifest-path tools/stt-generate/Cargo.toml` to run it); the five shipped CLIs
+are bins inside `spatiotemporal-tiles` and are feature-gated (a bare
 `cargo install spatiotemporal-tiles` gets all five).
 
 ## Setup
 
 - **Node 20+** (`packages/mcp` requires `>=20`) and **pnpm** — the version is
   pinned by `packageManager` in `package.json`, so `corepack enable` is enough.
-- **Rust 1.88+** — the MSRV in `[workspace.package]`, enforced by a CI job.
+- **Rust 1.87+** — the MSRV in `[workspace.package]`, enforced by a CI job that
+  checks the four published crates on exactly that toolchain.
 
 ```bash
 pnpm install
@@ -74,13 +77,17 @@ that package.
 cargo test --workspace --locked                  # default features
 cargo test --workspace --all-features --locked   # incl. duckdb, projection
 cargo build --release                            # binaries → target/release/
+
+# The generator is its own workspace — `--workspace` above does NOT cover it.
+cargo test --manifest-path tools/stt-generate/Cargo.toml
 ```
 
 CI additionally compiles each published feature combination on its own
-(workspace feature unification would otherwise hide missing `cfg` gates) and
-runs `cargo package --workspace --exclude stt-generate --locked` as a standing
-publishability check. If you add a feature, add its lane to
-`.github/workflows/ci.yml`.
+(workspace feature unification would otherwise hide missing `cfg` gates), runs
+`cargo package --workspace --exclude stt-generate --locked` as a standing
+publishability check, and runs the `#[ignore]`d DuckDB spatial test (the only
+one that exercises the SQL `stt-serve` emits). If you add a feature, add its
+lane to `.github/workflows/ci.yml`.
 
 ## Lint & format
 
@@ -100,22 +107,40 @@ the file you are editing.
 
 ## Releasing
 
-npm and crates.io versions move in **lockstep**, and each side has its own
-automation:
+npm and crates.io versions move in **lockstep** — one number, both registries.
+There is one release system: **changesets drives the version, cargo-dist builds
+the binaries.** (There used to be three; two of them had never produced a
+release. release-plz was deleted rather than left as config nobody runs.)
 
-- **npm** — [changesets](https://github.com/changesets/changesets). Add
-  `pnpm changeset` to any PR that changes a published package; the
-  `@poopdeck.gl/*` packages are a `fixed` group, so they all bump together.
-  `release-npm.yml` opens a Version Packages PR and publishes on merge
-  (`pnpm version-packages` → `pnpm release`).
-- **crates.io** — [release-plz](https://release-plz.dev) (`release-plz.toml`):
-  merging to `main` opens a release PR that bumps the version group and updates
-  changelogs; merging that publishes the crates and tags `v{version}`, which
-  cargo-dist picks up to build binaries.
-- **Everything else** — `node scripts/sync-versions.mjs` rewrites the files no
-  release tool owns: the Claude Code plugin manifest, the marketplace entry, and
-  each skill's frontmatter `metadata.version`. Run it after a version bump;
-  `--check` reports drift and exits non-zero.
+Add `pnpm changeset` to any PR that changes a published package. The
+`@poopdeck.gl/*` packages are a `fixed` group, so they all bump together.
+
+To release:
+
+1. **npm.** `release-npm.yml` opens a Version Packages PR from the accumulated
+   changesets; merging it runs `pnpm version-packages` → `pnpm release`
+   (build + `smoke-pack` + publish). That is what sets the canonical number.
+2. **Everything else follows the canonical number.** Run
+   `node scripts/sync-versions.mjs` — it rewrites `[workspace.package] version`
+   in `Cargo.toml`, the Claude Code plugin manifest, the marketplace entry, and
+   each skill's frontmatter `metadata.version` to match
+   `packages/core/package.json`. `--check` reports drift and exits non-zero;
+   CI runs it on every PR. **This is the gate that keeps crates.io and npm from
+   diverging** — they did exactly that (0.4.0 vs 0.5.0) back when Cargo.toml
+   was a hand edit no check covered.
+3. **crates.io.** Publish by hand, in dependency order:
+   `stt-core` → `stt-optimize` → `stt-build` → `spatiotemporal-tiles`.
+   `stt-generate` is `publish = false`. Note the standing constraint in
+   `docs/roadmap/shipping.md`: `cargo publish` stalls on upload from the
+   author's network (h2 `PUT`-with-body hangs) — publish from elsewhere.
+4. **Binaries.** Tag `v{version}` and push it, then run the **Release**
+   workflow (Actions → Release → Run workflow) with that tag. cargo-dist is
+   configured with `dispatch-releases = true`, so pushing the tag alone does
+   **not** build anything.
+
+Changelogs: `packages/*/CHANGELOG.md` are written by changesets — do not
+hand-edit them. The crates have **no** changelog files, deliberately; the
+GitHub Release cargo-dist creates in step 4 is the crate-side record.
 
 ## Invariants — do not break these
 

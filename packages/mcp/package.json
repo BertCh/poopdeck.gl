@@ -28,7 +28,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc && node scripts/copy-docs.mjs",
+    "build": "node scripts/gen-version.mjs && tsc && node scripts/copy-docs.mjs",
     "prepublishOnly": "pnpm run build",
     "test": "vitest run",
     "test:watch": "vitest",

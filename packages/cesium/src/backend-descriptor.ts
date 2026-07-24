@@ -5,7 +5,7 @@
 /**
  * What the CesiumJS backend declares against the shared
  * `@poopdeck.gl/core/capabilities` contract. Cesium is the first GREEN-FIELD
- * consumer of the render kernel (docs/roadmap/renderer-abstraction-2026-06.md
+ * consumer of the render kernel (docs/roadmap/renderer-architecture.md
  * §6) — it validates the extension surface is thin: this package implements a
  * tiny `SttRenderNode` + this descriptor and reuses `core/geo` (WGS84 globe),
  * `core/style` (color), `core/tileset-adapter` (streaming), and

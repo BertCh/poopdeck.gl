@@ -39,8 +39,10 @@ import {
   tryParseJson,
   type RunResult,
 } from './cli-runner.js';
-
-const PACKAGE_VERSION = '0.4.0';
+// Generated from package.json at build time (scripts/gen-version.mjs) — a
+// hand-written constant here sat at '0.4.0' while the package shipped 0.5.0,
+// so every client was told the wrong version in `initialize`.
+import { PACKAGE_VERSION } from './version.js';
 
 /** One evidence-based advisor suggestion (recommend.rs / advisors::Advice). */
 interface RecommendAdvice {
@@ -118,14 +120,16 @@ const RESOURCE_LIST_CAP = 100;
 
 /**
  * The `stt-generate` subcommands, in the CLI's kebab-case form (as clap derives
- * them). `all` builds the three no-parameter datasets (earthquakes/hurricanes/
- * wildfires) into a directory; every other subcommand writes a single `.stt`,
- * and most take dataset-specific flags (dates, ranges, `--synthetic`, …) that
- * the `generate_dataset` tool forwards via `extraArgs`. Kept in sync with
- * `crates/stt-generate/src/main.rs`'s `Commands` enum.
+ * them). Each writes a single `.stt`, and most take dataset-specific flags
+ * (dates, ranges, `--synthetic`, …) that the `generate_dataset` tool forwards
+ * via `extraArgs`. Kept in sync with `stt-generate`'s `Commands` enum
+ * (`tools/stt-generate/src/main.rs`) — `test/contract.test.ts` fails if this
+ * hand-copy drifts. The `all` fan-out was dropped from the generator (it
+ * re-spawned `current_exe()` for three of the datasets), so it is not offered
+ * here: an agent that asked for it would only get clap's "unrecognized
+ * subcommand".
  */
 const STT_GENERATE_DATASETS = [
-  'all',
   'earthquakes',
   'ais',
   'flights',
@@ -1297,9 +1301,8 @@ function registerExecutionTools(server: McpServer, config: SttMcpConfig): void {
       description:
         'Shells out to `stt-generate <dataset>` to DOWNLOAD and build one of the bundled reference/showcase ' +
         'datasets (earthquakes, hurricanes, drifters, gtfs, nwm, satellites, …) into a packed `.stt`. ' +
-        'Network-bound and long-running. Use `dataset: "all"` to build the three no-parameter datasets ' +
-        '(earthquakes/hurricanes/wildfires) into `output` as a DIRECTORY. Most other datasets take ' +
-        'source-specific flags (e.g. `--date YYYY-MM-DD`, `--start`/`--end`, `--synthetic`) — forward them ' +
+        'Network-bound and long-running. One dataset per call — most take source-specific flags ' +
+        '(e.g. `--date YYYY-MM-DD`, `--start`/`--end`, `--synthetic`) — forward them ' +
         'through `extraArgs`; run `stt-generate <dataset> --help` for the exact set. To build a `.stt` from ' +
         'YOUR OWN data, use `build_dataset` (stt-build) instead. Only registered because --allow-cli is enabled.',
       inputSchema: {
@@ -1312,7 +1315,7 @@ function registerExecutionTools(server: McpServer, config: SttMcpConfig): void {
           .string()
           .optional()
           .describe(
-            'Output path: a `.stt` file for a single dataset, or (for `dataset: "all"`) the output DIRECTORY. Omit to use the generator default.',
+            'Output path for the generated `.stt`. Omit to use the generator default.',
           ),
         extraArgs: z
           .array(z.string())
@@ -1336,9 +1339,9 @@ function registerExecutionTools(server: McpServer, config: SttMcpConfig): void {
         process.cwd(),
       ]);
       const args: string[] = [dataset];
-      // `all` takes --output-dir (a directory of .stt files); every other subcommand takes --output (a single .stt).
-      if (output)
-        args.push(dataset === 'all' ? '--output-dir' : '--output', output);
+      // Every subcommand takes `--output <file.stt>` (the old `all` fan-out,
+      // which took `--output-dir`, no longer exists in the generator).
+      if (output) args.push('--output', output);
       if (extraArgs) args.push(...extraArgs);
 
       const result = await run(bin, args, {
@@ -1346,9 +1349,8 @@ function registerExecutionTools(server: McpServer, config: SttMcpConfig): void {
         signal: extra?.signal,
       });
 
-      // A single-dataset run writes one `.stt` we can summarize; `all` writes several, so skip.
       let manifestSummary: unknown;
-      if (result.exitCode === 0 && output && dataset !== 'all') {
+      if (result.exitCode === 0 && output) {
         try {
           manifestSummary = await describeDataset(output, '.');
         } catch (err) {

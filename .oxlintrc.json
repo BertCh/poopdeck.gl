@@ -1,6 +1,14 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["typescript", "unicorn", "oxc", "react", "import", "vitest"],
+  "plugins": [
+    "typescript",
+    "unicorn",
+    "oxc",
+    "react",
+    "import",
+    "vitest",
+    "jsx-a11y"
+  ],
   "categories": {
     "correctness": "error"
   },
@@ -16,7 +24,13 @@
     "vitest/require-mock-type-parameters": "off",
     "vitest/expect-expect": "off",
     "vitest/no-conditional-expect": "off",
-    "vitest/no-standalone-expect": "off"
+    "vitest/no-standalone-expect": "off",
+
+    "jsx-a11y/prefer-tag-over-role": "warn",
+    "jsx-a11y/mouse-events-have-key-events": "warn",
+    "jsx-a11y/no-static-element-interactions": "warn",
+    "jsx-a11y/no-noninteractive-element-interactions": "warn",
+    "jsx-a11y/click-events-have-key-events": "warn"
   },
   "ignorePatterns": [
     "**/dist/**",

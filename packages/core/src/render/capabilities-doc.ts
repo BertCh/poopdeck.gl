@@ -5,8 +5,8 @@
 /**
  * Render a Markdown capability matrix from the backends' {@link BackendDescriptor}s
  * — the generated replacement for the hand-written parity table in
- * docs/roadmap/three-renderer-parity.md §3 (see
- * docs/roadmap/renderer-abstraction-2026-06.md §4.3 tier 5). The committed doc
+ * docs/roadmap/renderer-architecture.md (see
+ * docs/roadmap/renderer-architecture.md). The committed doc
  * (docs/spec/backend-capabilities.md) is produced by running
  * `node scripts/gen-capabilities-doc.mjs`, and CI re-runs that same script with
  * `--check` (the `typescript` job, right after the turbo build) to byte-compare

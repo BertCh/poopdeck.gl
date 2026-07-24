@@ -1,0 +1,56 @@
+name: Bug report
+description: Something in the toolchain, the packages, or the showcase is wrong.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Security issues do **not** belong here — see
+        [SECURITY.md](https://github.com/BertCh/spatiotemporal-tiles/blob/main/SECURITY.md).
+
+        For a blank or broken map, `poopdeck-ai`'s `debugging-blank-renders`
+        skill (and `stt-validate` / `stt-optimize doctor`) usually names the
+        cause faster than an issue round-trip.
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Which part?
+      options:
+        - CLI (stt-build / stt-optimize / stt-validate / stt-bundle)
+        - stt-serve
+        - '@poopdeck.gl/layers (deck.gl)'
+        - '@poopdeck.gl/three, /maplibre or /cesium'
+        - '@poopdeck.gl/core, /playback or /react'
+        - '@poopdeck.gl/mcp or the Claude Code plugin'
+        - Showcase site (poopdeck.gl)
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect instead?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: >-
+        The exact `stt-build` command, layer props, or URL. If it is
+        archive-specific, paste the head of `stt-optimize inspect <archive>` —
+        the manifest is the contract, and most render bugs are visible in it.
+      render: shell
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: >-
+        Crate or CLI version (`stt-build --version`) and/or `@poopdeck.gl/*`
+        version, plus OS. For renderer bugs add browser and GPU
+        (chrome://gpu → "GL Renderer").
+      placeholder: 'stt-build 0.5.0, @poopdeck.gl/layers 0.5.0, macOS 14, Chrome 138, Apple M2'
+    validations:
+      required: true

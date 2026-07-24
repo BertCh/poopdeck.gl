@@ -38,10 +38,16 @@ Three.
 npm install @poopdeck.gl/three three
 # for the react-three-fiber bindings:
 npm install @react-three/fiber @react-three/drei react react-dom
+# only if you turn on the atmosphere / 3D-Tiles features (both dynamic-imported):
+npm install @takram/three-atmosphere 3d-tiles-renderer
 ```
 
-**Peers**: `three` ≥ 0.171 (required); `react` ≥ 19 / `@react-three/fiber` ≥ 9 /
-`@react-three/drei` ≥ 10 are optional peers used only by the `/r3f` subpath.
+**Peers**: `three` ≥ 0.183 < 0.190 (required — TSL node APIs move between minors,
+so the upper bound is real, not defensive). Everything else is an **optional**
+peer, installed only if you use the feature that dynamic-imports it: `react` ≥ 19
+/ `@react-three/fiber` ≥ 9 / `@react-three/drei` ≥ 10 for the `/r3f` subpath,
+`@takram/three-atmosphere` for the atmosphere, `3d-tiles-renderer` for 3D Tiles +
+`GlobeControls`.
 
 ## Quick start (react-three-fiber)
 
@@ -104,30 +110,18 @@ The street basemap for flat scenes is a host-owned maplibre/mapbox map that the
 renderer camera-syncs beneath the transparent canvas (`BasemapOverlay`) — not an
 in-engine tile layer.
 
-## Geo rendering & interaction
-
-All of the following are **opt-in** and backward-compatible (omit them and the
-renderer behaves exactly as before). WebGPU-first; features that need WebGPU
-degrade gracefully on the WebGL2 fallback.
-
-| Feature                                 | How to enable                                                                                                       | Notes                                                                                                                                 |
-| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| **Projection**                          | `<SttCanvas projection={new MercatorProjection(c)} />` / `new GlobeProjection(c, EARTH_RADIUS, { datum: 'wgs84' })` | default is local-ENU; Mercator = exact web-mercator, Globe = ECEF with an orbit rig                                                   |
-| **Streaming**                           | `<SttCanvas streaming />` or `scene.addLayer(l, url, { streaming: true })`                                          | viewport-driven LOD / frustum cull / eviction / prefetch via `StreamingTileSource`; eager load-everything stays the default           |
-| **GPU picking + hover**                 | `<SttCanvas onPick={…} onHover={…} />`                                                                              | GPU id-buffer picks instanced clouds; CPU ray-OBB picks boxes                                                                         |
-| **Atmosphere / sky / day-night**        | `<SttCanvas atmosphere />` or `<SttAtmosphere />`                                                                   | physically-based sky + sun + aerial perspective (`@takram/three-atmosphere`, WebGPU only); sun tracks the playhead                    |
-| **3D Tiles / terrain / photorealistic** | `<SttTiles3D source={{ google: { apiToken } }} globeControls />`                                                    | OGC 3D Tiles via `3d-tiles-renderer` — self-hosted `url`, Google Photorealistic, or Cesium Ion — with ellipsoid-aware `GlobeControls` |
-
-The street basemap for flat scenes is a host-owned maplibre/mapbox map that the
-renderer camera-syncs beneath the transparent canvas (`BasemapOverlay`) — not an
-in-engine tile layer.
-
 ## Architecture
 
 - **Engine** (framework-agnostic): the `WebGPURenderer` bootstrap, the `SttScene`
   orchestrator + tile loader, the TSL materials, and the tile→geometry layer
   adapters. No React.
 - **`/r3f`**: a thin react-three-fiber `<Canvas>` binding that drives the engine.
+- **`/internal`**: the layer/material **authoring** kit — TSL node builders,
+  uniform holders, instanced-geometry templates, `BaseSttLayer`. **Unstable: it
+  may change in any release, including a patch.** You never need it to use the
+  shipped layers and materials; it exists so a third layer author can build
+  against the same node graph without us freezing the shader internals as public
+  API. Everything on the root barrel is stable.
 
 ## Status
 

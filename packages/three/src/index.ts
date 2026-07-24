@@ -11,6 +11,12 @@
  * The engine here is framework-agnostic (owns the renderer, scene, camera, loop,
  * TSL materials, and tile→geometry layer adapters). React / react-three-fiber
  * bindings live in the `@poopdeck.gl/three/r3f` subpath.
+ *
+ * This barrel is the STABLE surface: everything needed to construct and drive
+ * the shipped layers and materials. The node-graph builders, uniform holders and
+ * instanced-geometry templates you only touch when authoring a NEW layer or
+ * material live in `@poopdeck.gl/three/internal`, which is explicitly unstable —
+ * see that module's header for why the split exists.
  */
 
 // ─── Projection ───────────────────────────────────────────────────────────────
@@ -75,24 +81,15 @@ export {
   type ThreeTimeWindowOptions,
   type ResolvedTimeWindow,
 } from './lib/time-window.js';
+// The uniform holder + the per-frame push, plus the two wake nodes the icon
+// materials compose directly. The rest of the alpha / visibility node builders
+// (including the hard 0/1 vertex-stage twins) are authoring-only — the whole
+// family is re-exported from `@poopdeck.gl/three/internal`.
 export {
   TimeFilterUniforms,
-  timeFilterAlphaNode,
-  windowAlphaNode,
   wakeAlphaNode,
   wakeSizeScaleNode,
-  cumulativeAlphaNode,
-  trailAlphaNode,
   updateTimeFilterUniforms,
-  // Hard 0/1 visibility nodes — out-of-window primitives collapse to zero
-  // extent in the vertex stage (early-Z preserved) instead of fragment-discard.
-  timeFilterVisibleNode,
-  windowVisibleNode,
-  wakeVisibleNode,
-  cumulativeVisibleNode,
-  trailVisibleNode,
-  type TSLNode,
-  type UniformNode,
 } from './tsl/time-filter.js';
 
 // ─── Data filter (deck DataFilterExtension analogue: range cut + soft band) ────
@@ -106,8 +103,6 @@ export {
 } from './tsl/data-filter-math.js';
 export {
   DataFilterUniforms,
-  dataFilterVisibleNode,
-  dataFilterAlphaNode,
   updateDataFilterUniforms,
 } from './tsl/data-filter.js';
 
@@ -120,12 +115,7 @@ export {
   type KeyframeField,
   type ResampledTrack,
 } from './lib/track-keyframes.js';
-export {
-  GLIDE_ATTR,
-  GlideUniforms,
-  glideSampleNode,
-  glidePositionNode,
-} from './tsl/motion-glide.js';
+export { GlideUniforms } from './tsl/motion-glide.js';
 
 // ─── Stable categorical colour (deck CategoryColorExtension analogue) ─────────
 export {
@@ -139,12 +129,7 @@ export {
   type StablePaletteOptions,
   type StablePalette,
 } from './lib/palette.js';
-export {
-  PALETTE_ATTR,
-  PaletteUniforms,
-  paletteColorNode,
-  makePaletteTexture,
-} from './tsl/palette.js';
+export { PaletteUniforms } from './tsl/palette.js';
 
 // ─── Engine core ──────────────────────────────────────────────────────────────
 export {
@@ -152,10 +137,6 @@ export {
   type SttSceneOptions,
   type AddLayerOptions,
 } from './scene/stt-three-scene.js';
-export {
-  StandaloneViewer,
-  type StandaloneViewerOptions,
-} from './viewer/standalone-viewer.js';
 // ─── Atmosphere (opt-in, WebGPU-only physically-based sky / sun / day-night) ────
 export {
   createSttAtmosphere,
@@ -193,8 +174,9 @@ export {
   type SttTileSourceOptions,
   type LoadedSource,
 } from './scene/tile-source.js';
-export { makeGround, type GroundOptions } from './scene/ground.js';
-export { frameBox, type FrameOptions } from './scene/camera.js';
+// `SttScene` builds the ground for you from its `ground` option; the `makeGround`
+// factory itself is authoring-only (`@poopdeck.gl/three/internal`).
+export { type GroundOptions } from './scene/ground.js';
 export {
   isGlobeProjection,
   rigModeFor,
@@ -202,18 +184,14 @@ export {
   globeControlLimits,
   type RigMode,
 } from './scene/projection-rig.js';
-export {
-  BaseSttLayer,
-  type SttLayer,
-  type SttLayerContext,
-} from './layers/layer.js';
+// The layer CONTRACT. `BaseSttLayer`, the class you extend to implement it, is
+// authoring-only (`@poopdeck.gl/three/internal`).
+export { type SttLayer, type SttLayerContext } from './layers/layer.js';
 
 // ─── Surfels (hero) ───────────────────────────────────────────────────────────
-export { makeHexDiskGeometry, HEX_CIRCUMRADIUS } from './geometry/hex-disk.js';
 export {
   createSurfelMaterial,
   updateSurfelUniforms,
-  SurfelUniforms,
   type SurfelMaterialOptions,
   type SurfelMaterialBundle,
   type SurfelUniformValues,
@@ -226,12 +204,10 @@ export {
 } from './layers/surfel-buffers.js';
 
 // ─── Points (raw / splat / scan / worldbuild) ─────────────────────────────────
-export { makeBillboardQuadGeometry } from './geometry/billboard-quad.js';
 export {
   createPointMaterial,
   createPointIdMaterial,
   updatePointUniforms,
-  PointUniforms,
   type PointMaterialOptions,
   type PointMaterialBundle,
   type PointUniformValues,
@@ -279,7 +255,6 @@ export {
 } from './layers/box-tracks.js';
 export {
   writeBoxEdges,
-  BOX_CORNERS,
   BOX_EDGES,
   FLOATS_PER_BOX,
 } from './geometry/box-edges.js';
@@ -311,7 +286,7 @@ export { IsoLayer, type IsoLayerOptions } from './layers/iso-layer.js';
 
 // ════════════════════════════════════════════════════════════════════════════
 //  GEOGRAPHIC LAYERS (deck parity) — render the non-AV showcase demos in Three
-//  under MercatorProjection / GlobeProjection. See docs/roadmap/three-renderer-parity.md
+//  under MercatorProjection / GlobeProjection. See docs/roadmap/renderer-architecture.md
 // ════════════════════════════════════════════════════════════════════════════
 
 // Point geo-parity: continuous ramp colour + pixel-radius sizing.
@@ -328,7 +303,6 @@ export {
   type WideLineMaterialBundle,
   type WideLineUniformValues,
 } from './tsl/wide-line-material.js';
-export { makeSegmentQuadGeometry } from './geometry/segment-quad.js';
 export {
   buildLineSegmentBuffers,
   type LineColorMode,
@@ -380,8 +354,6 @@ export {
   createArcMaterial,
   createArcIdMaterial,
   updateArcUniforms,
-  makeArcStripGeometry,
-  ArcUniforms,
   type ArcShape,
   type ArcMaterialOptions,
   type ArcMaterialBundle,
@@ -426,10 +398,6 @@ export {
   type ColumnMaterialBundle,
   type ColumnUniformValues,
 } from './tsl/column-material.js';
-export {
-  makeColumnPrismGeometry,
-  circumradiusForIncircle,
-} from './geometry/column-prism.js';
 export { ColumnLayer, type ColumnLayerOptions } from './layers/column-layer.js';
 export {
   buildColumnBuffers,
@@ -501,15 +469,11 @@ export {
 export {
   createFlowArrowMaterial,
   updateFlowArrowUniforms,
-  FlowArrowUniforms,
   type FlowArrowMaterialOptions,
   type FlowArrowMaterialBundle,
   type FlowArrowUniformValues,
 } from './tsl/flow-arrow-material.js';
-export {
-  makeArrowTemplateGeometry,
-  ARROW_TEMPLATE_POSITIONS,
-} from './geometry/arrow-template.js';
+export { ARROW_TEMPLATE_POSITIONS } from './geometry/arrow-template.js';
 export {
   FlowmapLayer,
   type FlowmapLayerOptions,
@@ -522,7 +486,6 @@ export {
 export {
   createFlowCorridorMaterial,
   updateFlowCorridorUniforms,
-  FlowCorridorUniforms,
   type FlowCorridorMaterialOptions,
   type FlowCorridorMaterialBundle,
   type FlowCorridorUniformValues,
@@ -543,7 +506,6 @@ export {
 export {
   StreamingTileSource,
   cameraToViewport,
-  zoomFromCamera,
   tileKey,
   residentSetEqual,
   TilesetBufferSource,

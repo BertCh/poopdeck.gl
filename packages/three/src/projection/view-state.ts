@@ -9,7 +9,7 @@
  * in the framework-free kernel `@poopdeck.gl/core/geo` (so a future Cesium /
  * WebGL-three camera bridge shares them). The two functions here are the
  * three-specific binding — they touch a Three `PerspectiveCamera` / `Vector3` and
- * therefore stay in this package. See docs/roadmap/renderer-abstraction-2026-06.md.
+ * therefore stay in this package. See docs/roadmap/renderer-architecture.md.
  *
  * The implementation is projection-agnostic: target placement, the E/N/U basis,
  * and the metric scale all come from the {@link Projection}. Supported kinds:

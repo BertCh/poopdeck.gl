@@ -8,7 +8,7 @@
  * shader and real depth/occlusion. Moved from `@poopdeck.gl/three` into the
  * framework-free kernel and EXTENDED with a WGS84-ellipsoid datum + a
  * parameterizable radius so real globe hosts can reuse it (see
- * docs/roadmap/renderer-abstraction-2026-06.md §5.2 — a sphere mis-registers
+ * docs/roadmap/renderer-architecture.md — a sphere mis-registers
  * geometry against Cesium's WGS84 frame by up to ~20 km at mid-latitudes).
  *
  * ── Axes (standard ECEF) ─────────────────────────────────────────────────────

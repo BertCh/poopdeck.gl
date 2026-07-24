@@ -5,7 +5,7 @@
 /**
  * The ENU projection + the pluggable {@link Projection} contract moved to the
  * framework-free kernel `@poopdeck.gl/core/geo` (see
- * docs/roadmap/renderer-abstraction-2026-06.md). This module stays as a
+ * docs/roadmap/renderer-architecture.md). This module stays as a
  * re-export shim so every three importer of `../projection/local-enu` keeps
  * resolving unchanged while the math lives in exactly one place.
  */

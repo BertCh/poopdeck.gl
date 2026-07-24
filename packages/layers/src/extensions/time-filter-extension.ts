@@ -243,7 +243,7 @@ const defaultProps: DefaultProps<TimeFilterExtensionProps> = {
 // `MAX_RELATIVE_TIME_MS` + `relativizeTime` now live in the framework-free kernel
 // (`@poopdeck.gl/core/time-filter`) so all three renderer backends share ONE copy
 // of the relativization scheme. Re-exported here to preserve this module's (and
-// the `@poopdeck.gl/layers` barrel's) public API. See renderer-abstraction-2026-06.md.
+// the `@poopdeck.gl/layers` barrel's) public API. See renderer-architecture.md.
 export { relativizeTime, MAX_RELATIVE_TIME_MS };
 
 /**

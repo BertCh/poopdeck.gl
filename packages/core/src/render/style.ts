@@ -5,7 +5,7 @@
 /**
  * STT styling kernel — the framework-free color-resolution the renderer backends
  * share. This collapses FOUR hand-copied implementations that had already
- * drifted (see docs/roadmap/renderer-abstraction-2026-06.md §1.4 #2):
+ * drifted (see docs/roadmap/renderer-architecture.md #2):
  *   - three `lib/color.ts`            (Float32 0..1 output, fill-on-missing)
  *   - maplibre `base-layer.ts`        (Uint8 output, keyed-OR-palette, null-on-missing)
  *   - deck `animated-point-layer.ts`  (Uint8 output, keyed-only; GPU palette stays deck-side)

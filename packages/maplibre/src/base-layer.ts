@@ -2275,7 +2275,7 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
       // the cross-source EDF play-head hints, gates giant parent-fallback tiles
       // via getTileByteSize, and wires the coalesced-range throughput EWMA so
       // estimateTimeToReadyMs() computes honest ETAs. See
-      // docs/roadmap/renderer-abstraction-2026-06.md.
+      // docs/roadmap/renderer-architecture.md.
       ...makeTilesetCallbacks(archive),
       // Buffered-runway threshold events from the tileset's coverage index,
       // forwarded to the app (which routes them into a PlaybackGovernor).

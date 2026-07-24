@@ -8,7 +8,7 @@
  * vocabulary) — plus the pure zoom↔ground-resolution helpers a camera bridge
  * needs. The three-specific `viewStateToCamera`/`cameraToViewState` (which touch
  * a Three `PerspectiveCamera`) stay in `@poopdeck.gl/three`; they consume this
- * type + these helpers. See docs/roadmap/renderer-abstraction-2026-06.md §5.5.
+ * type + these helpers. See docs/roadmap/renderer-architecture.md
  */
 
 import { EARTH_RADIUS, type Projection } from './local-enu.js';

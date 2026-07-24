@@ -74,6 +74,86 @@ Browser clients fetch cross-origin, so the bucket needs a CORS policy allowing
 tiles are public read-only data, and a wildcard avoids `Vary: Origin`
 fan-out at the edge).
 
+## Verify the edge after every sync
+
+Setting the right `Cache-Control` on the origin objects is necessary and **not
+sufficient**: the whole "a warm load is served entirely from edge cache" claim
+lives or dies on what the CDN in front of the bucket decides to do with those
+headers, and both halves of the two-regime table can be silently defeated by
+zone configuration. Sync uploads the bytes; only a probe tells you the edge
+agreed. Two checks, both cheap enough to run on every deploy.
+
+### 1. Immutable objects must actually be cached
+
+`packs/*.sttp` and `index/*.sttd` are non-standard extensions served as
+`application/octet-stream`. Cloudflare's default cache behavior on a **generic
+proxied origin** is extension-driven, so unknown extensions come back
+`cf-cache-status: DYNAMIC` — never cached, every viewport range request going
+to origin — no matter how long the origin's `max-age` is. Setting the headers
+correctly at the origin is necessary but **not sufficient**, and nothing in the
+archive tells you the edge ignored them.
+
+> **Known defect on `tiles.poopdeck.gl` (verified 2026-07-24):** the probe below
+> currently returns **`DYNAMIC`** — on `bytes=0-1023`, on `bytes=0-65535`, and on
+> a full-object GET, repeated. The origin side is correct (`r2-sync.sh` uploads
+> `public, max-age=31536000, immutable` and that header survives to the client);
+> the edge simply never considered the object cacheable. Until a Cache Rule is
+> added, **every viewport range request is a full origin round-trip**, which is
+> exactly what the content-addressed-immutable-pack design exists to avoid.
+
+Probe with a **repeated ranged** request, because ranges are how the reader
+actually fetches tiles — a cacheable whole-object GET proves nothing about
+range coalescing at the edge:
+
+```bash
+BASE=https://tiles.poopdeck.gl/data/earthquakes-v2
+PACK=$(curl -sS "$BASE/manifest.json" |
+  python3 -c 'import json,sys; print(json.load(sys.stdin)["packs"][0]["key"])')
+
+status() {
+  curl -sS -o /dev/null -D - -H 'Range: bytes=0-65535' "$1" |
+    tr -d '\r' | awk 'tolower($1)=="cf-cache-status:"{print $2}'
+}
+
+status "$BASE/$PACK" >/dev/null                       # prime the edge (MISS)
+[ "$(status "$BASE/$PACK")" = HIT ] ||
+  { echo "FAIL: immutable pack is not cached at the edge"; exit 1; }
+```
+
+The first request reports `MISS`, every later one `HIT`. `DYNAMIC` or `BYPASS`
+means the edge is not caching packs at all — fix it with an explicit **Cache
+Rule** on the tiles hostname rather than by touching the archive:
+
+| Cache Rule field  | Value                                                |
+| ----------------- | ---------------------------------------------------- |
+| When incoming     | `http.request.uri.path` ends with `.sttp` or `.sttd` |
+| Cache eligibility | Eligible for cache                                   |
+| Edge TTL          | Use cache-control header from origin                 |
+| Browser TTL       | Use cache-control header from origin                 |
+
+### 2. The manifest's short TTL must survive the edge
+
+The manifest is the mutable half, and its 60-second TTL is what makes a deploy
+flip visible promptly. A zone-level **Browser Cache TTL** set to a fixed
+duration overrides any origin `max-age` _lower_ than it — so the 1-year packs
+sail through untouched while the manifest is quietly raised, and a dataset flip
+stays invisible to browsers that already hold one for the whole window:
+
+```bash
+curl -sS -o /dev/null -D - "$BASE/manifest.json" | grep -i '^cache-control:'
+# want: cache-control: public, max-age=60, must-revalidate
+```
+
+On `tiles.poopdeck.gl` this probe **passes** as of 2026-07-24 — the manifest
+returns exactly the `max-age=60, must-revalidate` that `r2-sync.sh` uploads. Keep
+the check anyway: a zone-level Browser Cache TTL is a single dashboard setting
+away, it silently raises only the values _below_ it, and the symptom (a
+republish that stays invisible for hours to browsers that already hold a
+manifest) looks like a sync failure rather than a cache setting.
+
+Neither probe needs credentials — run them against the public hostname from
+anywhere, including from a CI job after `scripts/r2-sync.sh`.
+
 ## Any other static host
 
 The same recipe ports to S3 + CloudFront, GCS, or a plain nginx box:
@@ -86,6 +166,10 @@ The same recipe ports to S3 + CloudFront, GCS, or a plain nginx box:
 - Apply the CORS policy above if the viewer is on a different origin.
 - Order deploys: upload new packs + directory **first**, flip `manifest.json`
   last.
+- Run both [edge probes](#verify-the-edge-after-every-sync) against whatever
+  hostname you end up on. Neither failure mode is Cloudflare-specific: a CDN
+  that decides cacheability by file extension will not cache `.sttp`/`.sttd`,
+  and a fixed browser-TTL override will bury the manifest's 60-second TTL.
 
 ## Build for publishing
 

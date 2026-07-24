@@ -251,8 +251,13 @@ renderer-agnostic about _what_ it draws: you supply `buildLayers(controller)`
 transparent deck canvas. It is a second WebGL context + archive for the same
 data, so mount it only while the preview is visible, keyed by source id.
 
+It is on its **own subpath**, not in the package barrel: it value-imports the
+optional `@deck.gl/core` / `@deck.gl/react` peers, and keeping it out of the
+barrel is what lets `import … from '@poopdeck.gl/react'` resolve without
+deck.gl installed. Importing it from the barrel throws.
+
 ```tsx
-import { HoverPreview } from '@poopdeck.gl/react';
+import { HoverPreview } from '@poopdeck.gl/react/hover-preview';
 
 renderPreview={(time) => (
   <HoverPreview

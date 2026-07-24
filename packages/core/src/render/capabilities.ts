@@ -6,7 +6,7 @@
  * STT backend capability contract — the single source of truth for the
  * cross-backend vocabulary (LayerKind / Capability / TimeFilterMode) + the
  * declare-and-prove machinery that replaces the hand-maintained "MUST match"
- * parity table (see docs/roadmap/renderer-abstraction-2026-06.md §4.3 tier 5).
+ * parity table (see docs/roadmap/renderer-architecture.md).
  *
  * Following the repo's proven idiom (palette-parity: plain shared TS unions +
  * `tsc` break-on-rename, NOT a codegen pipeline — the critic flagged codegen as

@@ -8,7 +8,7 @@
  * consumes. Moved verbatim from `@poopdeck.gl/three`'s `projection/local-enu.ts`
  * into the framework-free kernel so a single copy serves all backends (deck keeps
  * its own on-GPU projection and does NOT consume this). See
- * docs/roadmap/renderer-abstraction-2026-06.md.
+ * docs/roadmap/renderer-architecture.md.
  *
  * STT AV tiles store geometry as **lon/lat (+ optional z metres)**, georeferenced
  * at build time by `av_common.local_to_lonlat`, an equirectangular (flat-earth)

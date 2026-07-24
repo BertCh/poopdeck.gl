@@ -3,11 +3,16 @@
  * Version sync for the files changesets does NOT touch.
  *
  * `changeset version` bumps every `@poopdeck.gl/*` package.json (they are a
- * `fixed` group, so they always move together) and the cargo workspace is
- * bumped by hand in Cargo.toml. Neither knows about the Claude Code plugin
- * surface — `poopdeck-ai/.claude-plugin/plugin.json`, the marketplace entry,
- * and the `metadata.version` in each skill's frontmatter — so those rot
- * silently, one release at a time.
+ * `fixed` group, so they always move together) and stops there. Everything
+ * else in the lockstep is a hand edit:
+ *
+ *   - the cargo workspace version in `Cargo.toml` — the bug this file exists
+ *     to prevent. npm shipped 0.5.0 while crates.io sat at 0.4.0 because the
+ *     bump was manual and nothing compared the two numbers.
+ *   - the Claude Code plugin surface —
+ *     `poopdeck-ai/.claude-plugin/plugin.json`, the marketplace entry, and the
+ *     `metadata.version` in each skill's frontmatter — which rots silently,
+ *     one release at a time.
  *
  * Canonical version = `packages/core/package.json` (the root of the fixed
  * group; every other @poopdeck.gl package carries the same number).
@@ -88,6 +93,52 @@ function skillVersionTarget(file) {
   };
 }
 
+/**
+ * The `[workspace.package]` table of a cargo manifest, as `{ start, text }`
+ * (null if absent). Scoping to the table matters: `[workspace.dependencies]`
+ * below it is full of `version = "…"` lines for third-party crates, and a
+ * file-wide match would rewrite arrow or serde to our version number.
+ */
+function cargoWorkspacePackageTable(text) {
+  const start = text.search(/^\[workspace\.package\][ \t]*$/m);
+  if (start === -1) return null;
+  const body = text.slice(start);
+  // Search past the table header's own `[` for the next table header.
+  const next = body.slice(1).search(/^\[/m);
+  return { start, text: next === -1 ? body : body.slice(0, next + 1) };
+}
+
+const CARGO_VERSION_RE = /^(version[ \t]*=[ \t]*")([^"]*)(")/m;
+
+/** `version = "x.y.z"` under `[workspace.package]` in a cargo manifest. */
+function cargoWorkspaceVersionTarget(file) {
+  return {
+    file,
+    read() {
+      const table = existsSync(file)
+        ? cargoWorkspacePackageTable(read(file))
+        : null;
+      const m = table && CARGO_VERSION_RE.exec(table.text);
+      return [
+        { label: 'workspace.package.version', value: m ? m[2] : undefined },
+      ];
+    },
+    write(text, want) {
+      const table = cargoWorkspacePackageTable(text);
+      if (!table) return text;
+      const next = table.text.replace(
+        CARGO_VERSION_RE,
+        (_m, head, _old, tail) => `${head}${want}${tail}`,
+      );
+      return (
+        text.slice(0, table.start) +
+        next +
+        text.slice(table.start + table.text.length)
+      );
+    },
+  };
+}
+
 /** The text between the leading `---` fence and its closer (empty if absent). */
 function frontmatter(text) {
   if (!text.startsWith('---\n')) return '';
@@ -97,6 +148,7 @@ function frontmatter(text) {
 
 function collectTargets() {
   const targets = [
+    cargoWorkspaceVersionTarget(join(ROOT, 'Cargo.toml')),
     jsonVersionTarget(join(ROOT, 'poopdeck-ai/.claude-plugin/plugin.json'), [
       ['version'],
     ]),

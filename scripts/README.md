@@ -10,7 +10,7 @@ Located in [`data-generation/`](./data-generation/), with helper scripts for gen
 
 ```bash
 # Install the unified stt-generate tool
-cargo install --path ../crates/stt-generate
+cargo install --path ../tools/stt-generate
 
 # Generate all datasets
 stt-generate all --output-dir ../examples/showcase/public/data

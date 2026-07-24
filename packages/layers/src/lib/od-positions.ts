@@ -8,7 +8,7 @@
  * framework-free kernel `@poopdeck.gl/core/geometry` (byte-identical extraction —
  * three's OD layer re-exports the same function); this module stays as a
  * re-export shim so the deck OD layers import an unchanged surface while the
- * logic lives in exactly one place. See docs/roadmap/renderer-abstraction-2026-06.md.
+ * logic lives in exactly one place. See docs/roadmap/renderer-architecture.md.
  */
 
 export {

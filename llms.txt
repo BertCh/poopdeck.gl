@@ -18,7 +18,7 @@
 - [System overview](docs/architecture/system-overview.md): how the pieces fit.
 
 ## Command-line tools
-- [CLI reference](docs/api/cli-reference.md): canonical flags for `stt-build`, `stt-optimize`, `stt-serve`, `stt-validate`.
+- [CLI reference](docs/api/cli-reference.md): canonical flags for the five installed binaries — `stt-build`, `stt-optimize`, `stt-validate`, `stt-bundle`, `stt-serve` — plus the repo-only `stt-generate`.
 - [Build a dataset](docs/guides/csv-quickstart.md): `stt-build` from GeoParquet / PostGIS / DuckDB.
 - [Tune & lint tiles](docs/guides/tuning-tiles.md): `stt-optimize` inspect/doctor/diff/order-audit; publish encoding.
 - [Serve & deploy](docs/guides/deploying.md): `stt-serve` and static publishing to a CDN/R2.

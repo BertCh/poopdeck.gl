@@ -32,8 +32,13 @@ itself without reading Rust:
 ### 2.1 The manifest JSON Schema
 
 [`manifest.schema.json`](./manifest.schema.json) is the **cross-language wire
-contract** for `manifest.json`. It is pinned in CI against three things that must
-agree (`packages/core/test/manifest-schema.test.ts`):
+contract** for `manifest.json`. It is served at the absolute URL it declares as
+its own `$id` — <https://poopdeck.gl/spec/manifest.schema.json>, as
+`application/schema+json` with `Access-Control-Allow-Origin: *` — so a
+validator that _resolves_ the `$id` gets the schema instead of a web page
+(likewise <https://poopdeck.gl/spec/scene.schema.json>). It is pinned in CI
+against three things that must agree
+(`packages/core/test/manifest-schema.test.ts`):
 
 1. the Rust writer type (`crate::pack::Manifest`),
 2. the TypeScript reader type (`@poopdeck.gl/core` `PackedManifest`),
@@ -52,31 +57,65 @@ version, missing `packs`, bad key pattern, bad directory version) and that
 
 Tiny, deterministic, byte-stable datasets live under
 `packages/core/test/fixtures/` and are read by the TS reader tests to prove
-cross-implementation agreement. The two packed fixtures are the genuine
-**Rust writes → TS reads** cases; `sample.stt` is a frozen legacy artifact:
+cross-implementation agreement — the genuine **Rust writes → TS reads** cases.
+Each row states the `formatVersion` the fixture is emitted at, because that is
+_not_ uniform: the reader-behavior fixtures predate v2 and are still written at
+`formatVersion: 1`, and only the `v2-golden*` family covers the default.
 
-| fixture                                  | exercises                                                                                                                                                                                                                                                 |
-| ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `packed-golden/`                         | manifest folding, v5 directory decode (12 entries), **byte-identical blob dedup** (3 tiles share one physical blob), multi-pack cutting                                                                                                                   |
-| `paged-golden/` + `paged-golden-single/` | the **paged ⇄ whole-load differential**: the same 252-tile corpus emitted both ways, asserting paged queries return _byte-identical_ results to a whole-load directory while fetching only the leaf pages a viewport/zoom/time window touches             |
-| `sample.stt` (frozen legacy v4 fixture)  | a test helper transcodes it to an in-memory packed dataset, then the packed reader decodes its tiles (geometry, numeric + categorical properties, dictionary null-bitmap). Not written by the current Rust toolchain — the single-file writer was removed |
+| fixture                                      | `formatVersion` | exercises                                                                                                                                                                                                                                                                                                              |
+| -------------------------------------------- | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `packed-golden/`                             | 1               | manifest folding, v5 directory decode (12 entries), **byte-identical blob dedup** (3 tiles share one physical blob), multi-pack cutting                                                                                                                                                                                |
+| `paged-golden/` + `paged-golden-single/`     | 1               | the **paged ⇄ whole-load differential**: the same 252-tile corpus emitted both ways, asserting paged queries return _byte-identical_ results to a whole-load directory while fetching only the leaf pages a viewport/zoom/time window touches                                                                          |
+| `v2-golden/` + `v2-golden-v1/`               | 2 and 1         | the **v2 ⇄ v1 decode differential** for points: one source, one set of tiling flags, only `--format-version` differs, so v2's manifest-level `schemas` templates must decode _equal_ to the self-contained v1 build (coord-quant, per-tile `qa` affines, numeric + two dictionary columns with nulls, paged directory) |
+| `v2-golden-tracks/` + `v2-golden-tracks-v1/` | 2 and 1         | the same differential for trajectories: `List<UInt16>` `vertex_time` with the `vt` TILE_META affine, unquantized Float64 coordinates, single (whole-load) directory                                                                                                                                                    |
+| `sample.stt` (frozen legacy v4 fixture)      | —               | a test helper transcodes it to an in-memory packed dataset, then the packed reader decodes its tiles (geometry, numeric + categorical properties, dictionary null-bitmap). Not written by the current Rust toolchain — the single-file writer was removed                                                              |
 
 They are **committed, not regenerated per build**, so they double as a
-regression corpus. Regenerate after an intentional format change with:
+regression corpus. Two generators, because the two families are produced by
+different halves of the toolchain:
 
 ```bash
+# packed-golden/, paged-golden/, paged-golden-single/ — hand-built payloads
+# through stt-core's PackWriter, pinned to formatVersion 1.
 cargo run -p stt-core --example make-golden-fixture
+
+# v2-golden*/ — the real stt-build writer, each dataset built twice from one
+# synthetic DuckDB source (needs `--features duckdb`).
+packages/core/scripts/make-v2-golden.sh
 ```
 
-The generator (`crates/stt-core/examples/make-golden-fixture.rs`) uses
+The first generator (`crates/stt-core/examples/make-golden-fixture.rs`) uses
 `BlobOrdering::SpatialMajor` (not `Auto`) so content hashes are stable across
 regenerations, and builds each distinct payload once + clones it for the dedup
-cases.
+cases. Its `--v2` flag writes a version-coherent v2 copy into sibling `*-v2/`
+dirs; that output is **not committed and nothing reads it** (see the gap
+below). Builds are byte-reproducible, so re-running either generator is a
+no-op diff unless the writer's bytes intentionally changed.
+
+#### Byte-exact writer pins — and the v2 gap
+
+Decoding a fixture proves reader agreement. Pinning a fixture's _bytes_ proves
+the writer did not drift. Today only **formatVersion 1** has that second pin:
+`crates/stt-core/tests/fixtures/v1-golden/` (a `single/` and a `paged/`
+dataset plus `expected-hashes.json`), asserted by
+`crates/stt-core/tests/v1_golden.rs`.
+
+> **OPEN GAP (release-plan W2.1).** `formatVersion: 2` — the default that §1
+> declares, and the thing an implementer will actually be handed — has **no**
+> byte-exact golden pin: `git grep v2-golden crates/` returns nothing. The four
+> `v2-golden*` fixtures are committed but no CI step re-runs
+> `make-v2-golden.sh` and diffs the result, so a deliberate pack-layout tweak
+> turns the v1 pin red and leaves v2 silently green. The intended end state is
+> the v1 arrangement mirrored for v2: a `v2_golden.rs` byte pin alongside a CI
+> step that regenerates and `git diff --exit-code`s. Until that lands, an
+> external implementer should treat the v2 fixtures as decode-equivalence
+> references, not as a byte contract.
 
 ### 2.3 The reference validator
 
-`stt-validate <dataset>` (the `stt-validate` crate) is the executable
-specification of the integrity contract. It accepts a packed dataset directory
+`stt-validate <dataset>` (a `[[bin]]` of the `spatiotemporal-tiles` crate —
+there is no `stt-validate` package) is the executable specification of the
+integrity contract. It accepts a packed dataset directory
 or its `manifest.json` (the single-file `.stt` container has been removed — only
 the packed format is accepted), and runs, by cost tier:
 
@@ -136,9 +175,17 @@ self-description (`stt:quant` / vertex-time metadata), summary cell-id, and
 
 ### 2.4 Internal pins (for implementers extending the spec)
 
-Two Rust/TS test suites lock the spec to the code so the _spec itself_ can't
+These Rust/TS test suites lock the spec to the code so the _spec itself_ can't
 drift; an external implementer reads them as worked examples:
 
+- `crates/stt-core/tests/v1_golden.rs` — the byte-exact writer pin for
+  `formatVersion: 1` against `crates/stt-core/tests/fixtures/v1-golden/` (both
+  directory shapes, every object plus the manifest). **`formatVersion: 2` has
+  no counterpart yet** — see the open gap in §2.2.
+- `crates/spatiotemporal-tiles/tests/validate_cli.rs` — end-to-end tests of the
+  reference validator: each builds a tiny packed dataset with `PackWriter`,
+  runs the compiled `stt-validate` binary over it with `--json`, and asserts on
+  the parsed report.
 - `crates/stt-core/tests/spec_conformance.rs` — round-trips point / line /
   polygon / pre-tessellated-polygon layers and asserts the exact documented Arrow
   schema (column names, types, nullability, GeoArrow extension names, the
@@ -280,12 +327,17 @@ A conformant reader **SHOULD**:
 ## 5. Running the suite
 
 ```bash
-cargo test -p stt-core spec_conformance          # payload schema lock
-cargo test -p stt-validate                        # validator behavior
-cargo run  -p stt-core --example make-golden-fixture   # regenerate fixtures (after an intended change)
-pnpm --filter @poopdeck.gl/core test              # manifest contract + golden-fixture reads
-stt-validate <your-dataset>                        # validate your own output
+cargo test -p stt-core spec_conformance                     # payload schema lock
+cargo test -p stt-core --test v1_golden                     # v1 writer byte pin
+cargo test -p spatiotemporal-tiles --test validate_cli      # validator behavior
+cargo run  -p stt-core --example make-golden-fixture        # regenerate the v1 reader fixtures
+packages/core/scripts/make-v2-golden.sh                     # regenerate the v2 ⇄ v1 fixtures
+pnpm --filter @poopdeck.gl/core test                        # manifest contract + golden-fixture reads
+stt-validate <your-dataset>                                 # validate your own output
 ```
+
+`stt-validate` is a `[[bin]]` of the `spatiotemporal-tiles` crate, not a
+package — `cargo test -p stt-validate` has never resolved.
 
 A new implementation demonstrates conformance by (a) producing a dataset that
 passes `stt-validate` and the manifest schema, and (b) reading the committed

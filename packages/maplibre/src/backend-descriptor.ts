@@ -3,7 +3,7 @@
 
 /**
  * Capability descriptor for the MapLibre GL backend — Phase 5 of
- * docs/roadmap/renderer-abstraction-2026-06.md.
+ * docs/roadmap/renderer-architecture.md.
  *
  * This is what the maplibre adapter DECLARES about itself against the shared
  * vocabulary in `@poopdeck.gl/core/capabilities`. It is machine-checked against

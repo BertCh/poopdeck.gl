@@ -5,7 +5,7 @@
 /**
  * The `@poopdeck.gl/three` backend's self-declaration against the shared
  * `@poopdeck.gl/core/capabilities` contract — Phase 5 of
- * docs/roadmap/renderer-abstraction-2026-06.md. This is a *retro-documenting*
+ * docs/roadmap/renderer-architecture.md. This is a *retro-documenting*
  * descriptor: it records what the three backend (Three.js + TSL on WebGPU,
  * WebGL2 fallback) actually ships today, and the structural conformance gate in
  * `test/backend-descriptor.test.ts` proves every claim against the real

@@ -22,9 +22,13 @@ see [Custom Data](#custom-data-using-stt-build) below.
 1. **Install Rust:** [rustup.rs](https://rustup.rs/)
 2. **Build the tools:**
    ```bash
-   cargo install --path crates/stt-generate
+   cargo install --path tools/stt-generate             # repo-only; its own workspace
    cargo install --path crates/spatiotemporal-tiles   # stt-build + the other CLIs
    ```
+   `stt-generate` is `publish = false` — `cargo install spatiotemporal-tiles`
+   does not give it to you, and it lives outside the root workspace (its dep
+   tree carries a higher MSRV), so `cargo build -p stt-generate` from the repo
+   root does not resolve it either.
 
 ## Quick Start
 

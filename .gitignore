@@ -51,6 +51,10 @@ build/
 coverage/
 .nyc_output/
 *.log
+# The regen/build log drop. `*.log` above already covers what lands here today,
+# but the directory itself is scratch — ignore it whole so a stray .txt/.json
+# transcript can't slip into a public commit.
+logs/
 temp_eval/
 
 # Secrets / local env. The root .env holds R2 credentials; .local files hold
@@ -153,6 +157,13 @@ scripts/data-generation/av2-raw/
 # from Hugging Face + intermediate parquet + phase markers; several GB, deleted
 # by the generator's `cleanup` phase and re-fetchable at any time).
 scripts/data-generation/cosmos-raw/
+
+# Raw Waymo Open Dataset sensor shards staged for the AV-cockpit extractor.
+# The sibling av2-raw/ and cosmos-raw/ trees are ignored by name but this one
+# was not — it only escaped by accident, because every leaf happens to be a
+# `.parquet`. Waymo's terms forbid REDISTRIBUTION, so a single non-parquet file
+# landing here (a stats .json, a .tfrecord) must never become committable.
+scripts/data-generation/waymo-raw/
 
 # OSM editing-history inputs for `stt-generate osm-edits` (large; downloaded
 # as a prerequisite, never committed). History extracts + the changeset dump.

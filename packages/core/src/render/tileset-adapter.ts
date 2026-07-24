@@ -7,7 +7,7 @@
  * the {@link SpatiotemporalTilesetOptions} fetch callbacks. deck's
  * `SpatioTemporalLayer` and three's `StreamingTileSource` each re-wrote this exact
  * `getAvailableTiles` / `getTileData` / `getTileDataBatch` / `getTileByteSize` /
- * `getThroughput` bundle by hand (see docs/roadmap/renderer-abstraction-2026-06.md
+ * `getThroughput` bundle by hand (see docs/roadmap/renderer-architecture.md
  * §1.4 #6); this collapses both to one call. maplibre can use it too. Callers spread
  * the result into their `SpatiotemporalTileset` options and add the layout/lifecycle
  * fields (min/maxZoom, refinementStrategy, onTileLoad/Unload, onBufferChange, …).

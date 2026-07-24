@@ -76,7 +76,7 @@ const PACKED_FORMAT = 'stt-packed';
 const PACKED_FORMAT_VERSION_V1 = 1;
 /**
  * The 2026-07 coordinated byte break (packed spec §5.2 / design doc
- * `stt-packed-v2-design-2026-07.md`): `STTP`/`STTD` object magic with
+ * `stt-packed-format-decisions.md`): `STTP`/`STTD` object magic with
  * object-absolute blob offsets, manifest-embedded `schemas` templates, and
  * the sectioned, template-referencing layer frame v2.
  */

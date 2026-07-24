@@ -9,7 +9,12 @@
 import { describe, it, expect } from 'vitest';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { datasets, getDatasetById, SHIPPED_DATASET_IDS } from '../src/datasets';
+import {
+  datasets,
+  getDatasetById,
+  isRemoteGated,
+  SHIPPED_DATASET_IDS,
+} from '../src/datasets';
 import {
   DEMO_META,
   CATALOG_EXCLUDED_IDS,
@@ -27,6 +32,27 @@ function docFilePath(docPath: string): string {
   const rel = docPath.replace(/^\/docs\//, '');
   return fileURLToPath(new URL(`../../../docs/${rel}.md`, import.meta.url));
 }
+
+/** Every free-text field rendered through InlineProse on `/demos/:id`. */
+function proseOf(meta: (typeof DEMO_META)[string]): string[] {
+  return meta.buildNote ? [...meta.about, meta.buildNote] : [...meta.about];
+}
+
+/** Markdown link targets that stay inside the app (leading "/"). */
+function internalLinkTargets(text: string): string[] {
+  return [...text.matchAll(/\[[^\]]+\]\((\/[^)\s]*)\)/g)].map((m) => m[1]);
+}
+
+/** Non-dataset routes from `src/routes.ts` the prose is allowed to link. */
+const STATIC_ROUTES = new Set([
+  '/',
+  '/demos',
+  '/how-it-works',
+  '/docs',
+  '/drive',
+  '/worlds',
+  '/story/drifters',
+]);
 
 describe('demo catalog curation invariants', () => {
   it('every DEMO_META key resolves to a real dataset id', () => {
@@ -61,12 +87,42 @@ describe('demo catalog curation invariants', () => {
     }
   });
 
+  // The mirror of the case above, and the one that was missing: an exclusion
+  // that names nothing is invisible rot. Ten `nuscenes-*-splat` ids sat here for
+  // months excluding datasets that were never built (nuScenes is not in
+  // COLORED_SPLAT_BASE_IDS), and no test could see it — "has no DEMO_META entry"
+  // is trivially true for an id that doesn't exist. Runs against the LOCAL
+  // registry (no VITE_DATA_BASE_URL under vitest), so the Waymo / not-yet-synced
+  // ids that the remote deploy filters out still resolve here.
+  it('excluded-by-design ids resolve to real datasets (no stale exclusions)', () => {
+    for (const id of CATALOG_EXCLUDED_IDS) {
+      expect(
+        getDatasetById(id),
+        `CATALOG_EXCLUDED_IDS lists "${id}", which is not a registered dataset — delete the stale exclusion`,
+      ).toBeTruthy();
+    }
+  });
+
   it('every SHIPPED dataset has a DEMO_META entry', () => {
     for (const id of SHIPPED_DATASET_IDS) {
       expect(
         DEMO_META[id],
         `shipped dataset ${id} missing from catalog`,
       ).toBeTruthy();
+    }
+  });
+
+  // …and the converse, so the two curated lists can't drift into telling
+  // different stories again: SHIPPED_DATASET_IDS drives the home-page grid and
+  // DEMO_META drives /demos, and before 2026-07 they disagreed on 7 of 13 ids.
+  // They are now ONE curated set (order still matters — the first six are the
+  // grid). Adding a card means adding it to both.
+  it('every catalog entry is a SHIPPED dataset (one curated set, not two)', () => {
+    for (const id of metaIds) {
+      expect(
+        SHIPPED_DATASET_IDS.includes(id),
+        `DEMO_META has "${id}" but SHIPPED_DATASET_IDS does not — add it there or drop the card`,
+      ).toBe(true);
     }
   });
 
@@ -142,6 +198,42 @@ describe('demo meta editorial content', () => {
             DEMO_META[rid],
             `${id}.related → ${rid} not in catalog`,
           ).toBeTruthy();
+        }
+      });
+
+      // The prose is where the 36 demos cut from the catalog in 2026-07 stayed
+      // reachable, so its links are load-bearing, not decoration. Two ways they
+      // rot: a typo'd id (dead on every environment), and a link into a demo
+      // that only resolves under `npm run dev` because its archives aren't on
+      // R2 yet — that one looks fine locally and 404s in production.
+      it('inline prose links point at routes that exist on the public deploy', () => {
+        for (const text of proseOf(meta)) {
+          for (const target of internalLinkTargets(text)) {
+            const demo = /^\/demo\/([^/#?]+)/.exec(target);
+            const drive = /^\/drive\/([^/#?]+)/.exec(target);
+            const datasetId = demo?.[1] ?? drive?.[1];
+            if (datasetId) {
+              expect(
+                getDatasetById(datasetId),
+                `${id} prose links ${target}, but "${datasetId}" is not a dataset`,
+              ).toBeTruthy();
+              expect(
+                isRemoteGated(datasetId),
+                `${id} prose links ${target}, but "${datasetId}" is gated off the public deploy (LOCAL_ONLY_DATASETS / Waymo) — the link would 404 in production`,
+              ).toBe(false);
+              if (drive) {
+                expect(
+                  getDatasetById(datasetId)!.type,
+                  `${id} prose links ${target}, but "${datasetId}" is not an AV scene — /drive can't render it`,
+                ).toBe('av');
+              }
+              continue;
+            }
+            expect(
+              STATIC_ROUTES.has(target),
+              `${id} prose links ${target}, which is not a route this app serves`,
+            ).toBe(true);
+          }
         }
       });
     });

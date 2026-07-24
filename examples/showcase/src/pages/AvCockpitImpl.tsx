@@ -193,8 +193,9 @@ const AvCockpit: React.FC = () => {
     // Spacetime (cube) is HELD BACK from the shipped cockpit (see the held-back
     // note in datasets.ts). The render-only logic below stays dormant (the toggle
     // is not pushed and the `-cube` deep-link suffix is unmatched, so
-    // `lidarRenderMode` is never "cube"); re-add this push + the CubeControls
-    // import/JSX + the regex suffix to ship it.
+    // `lidarRenderMode` is never "cube"); re-add this push + a squash-slider
+    // chip (copy DemoViewer's private `CubeControls`) + the regex suffix to
+    // ship it.
     // Spacetime (cube) is RENDER-ONLY — it reads the base bundle + its `tracks/`
     // archive. HELD BACK: the toggle is not offered (re-add `modes.push("cube")`
     // to ship it).
@@ -519,7 +520,7 @@ const AvCockpit: React.FC = () => {
     return Number.isFinite(n) ? Math.max(0, Math.min(1, n / 100)) : 1;
   })();
   // (`setHeightFactor` — the squash slider's onChange — was removed with the
-  // held-back Spacetime cube; re-add it with the CubeControls JSX to ship cube.)
+  // held-back Spacetime cube; re-add it with the squash-slider JSX to ship cube.)
   // Cube height in metres for the full range at squash 1 (≈200 m reads clearly at
   // the pulled-back cube framing without dwarfing the streets), divided by the
   // range duration → metres per sim-ms (the AnimatedTripsLayer / now-plane
@@ -889,8 +890,9 @@ const AvCockpit: React.FC = () => {
               )}
             </div>
             {/* Spacetime CUBE squash slider HELD BACK with the cube mode (the
-            CubeControls import + this JSX are removed; `cubeMode` is always
-            false). Re-add to ship Spacetime. */}
+            slider chip + this JSX are removed; `cubeMode` is always false).
+            Re-add — copying DemoViewer's private `CubeControls` — to ship
+            Spacetime. */}
           </div>
 
           {/* Left rail: stream list (below the switcher) */}

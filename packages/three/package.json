@@ -18,6 +18,10 @@
     "./r3f": {
       "types": "./dist/r3f/index.d.ts",
       "default": "./dist/r3f/index.js"
+    },
+    "./internal": {
+      "types": "./dist/internal.d.ts",
+      "default": "./dist/internal.js"
     }
   },
   "files": [
@@ -36,25 +40,30 @@
     "clean": "rm -rf dist tsconfig.tsbuildinfo"
   },
   "dependencies": {
-    "3d-tiles-renderer": "^0.4.28",
     "@poopdeck.gl/core": "workspace:*",
     "@poopdeck.gl/playback": "workspace:*",
-    "@takram/three-atmosphere": "^0.19.1",
-    "@takram/three-geospatial": "^0.9.1",
     "earcut": "^3.0.0",
     "h3-js": "^4.1.0"
   },
   "peerDependencies": {
+    "3d-tiles-renderer": "^0.4.28",
     "@react-three/drei": ">=10.0.0",
     "@react-three/fiber": ">=9.0.0",
+    "@takram/three-atmosphere": "^0.19.1",
     "react": ">=19",
-    "three": ">=0.183.0"
+    "three": ">=0.183.0 <0.190.0"
   },
   "peerDependenciesMeta": {
+    "3d-tiles-renderer": {
+      "optional": true
+    },
     "@react-three/drei": {
       "optional": true
     },
     "@react-three/fiber": {
+      "optional": true
+    },
+    "@takram/three-atmosphere": {
       "optional": true
     },
     "react": {
@@ -62,8 +71,10 @@
     }
   },
   "devDependencies": {
+    "3d-tiles-renderer": "^0.4.28",
     "@react-three/drei": "^10.7.0",
     "@react-three/fiber": "^9.6.0",
+    "@takram/three-atmosphere": "^0.19.1",
     "@types/earcut": "^2.1.4",
     "@types/react": "^19.2.0",
     "@types/three": "^0.184.0",

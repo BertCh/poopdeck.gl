@@ -5,7 +5,7 @@
 /**
  * The worked-example STT layer for CesiumJS: a `point` renderer that satisfies the
  * shared `SttRenderNode` shape and is built ENTIRELY from the render kernel —
- * proving a new backend is thin (docs/roadmap/renderer-abstraction-2026-06.md §6):
+ * proving a new backend is thin (docs/roadmap/renderer-architecture.md):
  *
  *   - positions  → `core/geo` `GlobeProjection({datum:'wgs84'})` → ECEF `Cartesian3`
  *                  (Cesium's native frame IS WGS84 ECEF, so the kernel output drops in)

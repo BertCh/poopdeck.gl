@@ -1,5 +1,14 @@
 # @poopdeck.gl/cesium
 
+> **⚠️ Experimental — no longer published to npm.** This package is `"private":
+true` in the workspace: `0.5.0` stays on npm, but no new versions ship. It is a
+> fourth-backend spike we keep in-tree as the honest price tag on "just add
+> another renderer" — ~2,000 lines for **6 of the 23** layer kinds
+> (`point`/`path`/`line`/`arc`/`trips`/`tripHeads`); the other 17 degrade to a
+> fallback kind via the capability descriptor. Use `@poopdeck.gl/layers` (deck),
+> `@poopdeck.gl/three`, or `@poopdeck.gl/maplibre` for real work. To use this
+> anyway, build it from source in a workspace checkout.
+
 A **CesiumJS backend for SpatioTemporal Tiles** — renders animated STT data
 on a true WGS84 globe. Ships the movement layer catalog —
 `CesiumPointLayer`, `CesiumPathLayer` (paths + OD lines), `CesiumArcLayer`
@@ -10,8 +19,10 @@ rendering STT needs no Cesium ion token.
 
 ## Install
 
+Not on npm past `0.5.0` — build it from a workspace checkout:
+
 ```bash
-npm install @poopdeck.gl/cesium cesium
+pnpm --filter @poopdeck.gl/cesium build
 ```
 
 **Peers**: `cesium` `^1`.

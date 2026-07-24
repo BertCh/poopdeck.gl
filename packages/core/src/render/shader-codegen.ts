@@ -6,7 +6,7 @@
  * STT shader codegen — the scalar time-filter alpha authored ONCE as an
  * expression AST and machine-emitted to each backend's shading dialect, so the
  * GPU math has no hand-maintained copy to drift (see
- * docs/roadmap/renderer-abstraction-2026-06.md §4.3 tier 2). `evalExpr` is the
+ * docs/roadmap/renderer-architecture.md). `evalExpr` is the
  * CPU oracle and MUST equal `./time-filter`'s `timeFilterAlpha` numerically (a
  * conformance test pins this); `emitGLSL100` / `emitGLSL300` are pure string
  * emitters that produce deck's inject snippet and maplibre's GLSL; `emitTSL`

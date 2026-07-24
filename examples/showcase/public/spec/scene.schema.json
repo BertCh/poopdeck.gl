@@ -1,0 +1,221 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://poopdeck.gl/spec/scene.schema.json",
+  "title": "STT scene bundle manifest (scene.json)",
+  "description": "The envelope for a multi-stream STT 'scene bundle' (the AV-cockpit profile, docs/spec/sidecar-assets.md). It points at the per-stream packed STT datasets and the non-tile sidecars, and declares the bundle's georeferencing. Authority: scripts/data-generation/av_common.py (write_scene_json) and examples/showcase/src/datasets.ts.",
+  "type": "object",
+  "required": ["id", "name", "timeRange", "streams", "georef"],
+  "additionalProperties": true,
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Stable scene id; matches the bundle directory name."
+    },
+    "name": { "type": "string", "description": "Human display name." },
+    "dataset": {
+      "type": "string",
+      "description": "Source dataset / attribution label."
+    },
+    "datasetUrl": { "type": "string", "format": "uri" },
+    "license": {
+      "type": "string",
+      "description": "SPDX id or license name of the source data."
+    },
+    "location": {
+      "type": "string",
+      "description": "Place label. For anchored-local frames this MUST state the anchoring honestly, e.g. 'San Francisco (Waymo world frame, anchored)'."
+    },
+    "description": { "type": "string" },
+    "georef": {
+      "type": "object",
+      "description": "Always present: the map origin the stream geometry is projected/anchored around (see §4). For a `georeferenced` scene, {originLat, originLon} is the authoritative WGS84 origin the local sensor frame was projected from. For an `anchored-local` scene, it is a plausible city lon/lat the source's undisclosed local frame is anchored to, not an authoritative geodetic origin. Which of the two applies to a given scene is not signaled by this object's shape or presence — see §4.1.",
+      "required": ["originLat", "originLon"],
+      "additionalProperties": false,
+      "properties": {
+        "originLat": { "type": "number", "minimum": -90, "maximum": 90 },
+        "originLon": { "type": "number", "minimum": -180, "maximum": 180 }
+      }
+    },
+    "timeRange": {
+      "type": "object",
+      "required": ["start", "end"],
+      "additionalProperties": false,
+      "properties": {
+        "start": { "type": "integer", "description": "Unix ms, UTC." },
+        "end": { "type": "integer", "description": "Unix ms, UTC." }
+      }
+    },
+    "initialView": {
+      "type": "object",
+      "description": "Initial deck.gl/MapLibre camera.",
+      "additionalProperties": true,
+      "properties": {
+        "longitude": { "type": "number" },
+        "latitude": { "type": "number" },
+        "zoom": { "type": "number" },
+        "pitch": { "type": "number" },
+        "bearing": { "type": "number" }
+      }
+    },
+    "objectColors": {
+      "type": "object",
+      "description": "Categorical object-class palette baked into the bundle (mirrors the canonical OBJECT_COLORS). Keys are object categories; values are RGBA [0..255] quads.",
+      "additionalProperties": { "$ref": "#/$defs/rgba" }
+    },
+    "lidarColors": {
+      "type": "object",
+      "description": "Optional. Present when lidar is colored by a semantic class (seg_class) rather than a height band. Keys are class names; values RGBA quads.",
+      "additionalProperties": { "$ref": "#/$defs/rgba" }
+    },
+    "streams": {
+      "type": "object",
+      "description": "Only present streams appear. Each tiled stream points at a standard packed STT dataset (its manifest.json); the non-tile streams point at sidecar JSON.",
+      "additionalProperties": false,
+      "properties": {
+        "lidar": {
+          "type": "object",
+          "required": ["url"],
+          "properties": {
+            "url": {
+              "type": "string",
+              "description": "Relative path to a packed STT point dataset (e.g. 'lidar/manifest.json')."
+            },
+            "points": { "type": "integer" },
+            "colored": {
+              "type": "boolean",
+              "description": "Points carry per-return r/g/b (camera-colorized)."
+            },
+            "splat": {
+              "type": "string",
+              "description": "Splat rendering hint: 'soft' (gaussian point splats) or 'surfel' (oriented surfel columns present)."
+            },
+            "style": {
+              "type": "string",
+              "description": "Presentation hint for the cockpit (e.g. 'actors' in a scene-split bundle)."
+            },
+            "scan": {
+              "type": "boolean",
+              "description": "Wake/scan-style sweep visualization hint."
+            },
+            "densities": {
+              "type": "array",
+              "description": "Alternative lidar variants selectable in the cockpit (e.g. the stage/actors pair in a scene-split bundle), each pointing at its own packed dataset.",
+              "items": {
+                "type": "object",
+                "required": ["id", "url"],
+                "properties": {
+                  "id": { "type": "string" },
+                  "label": { "type": "string" },
+                  "points": { "type": "integer" },
+                  "url": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "ego": {
+          "type": "object",
+          "required": ["url"],
+          "properties": {
+            "url": {
+              "type": "string",
+              "description": "Relative path to a packed STT trips (LineString) dataset."
+            },
+            "path": {
+              "type": "array",
+              "description": "Optional lightweight ego polyline (lon/lat/t) for camera-follow without decoding the trips archive.",
+              "items": {
+                "type": "object",
+                "required": ["t", "lon", "lat"],
+                "properties": {
+                  "t": { "type": "integer" },
+                  "lon": { "type": "number" },
+                  "lat": { "type": "number" }
+                }
+              }
+            }
+          }
+        },
+        "objects": {
+          "type": "object",
+          "required": ["url"],
+          "properties": {
+            "url": {
+              "type": "string",
+              "description": "Relative path to a packed STT point dataset (one point per tracked object per sample)."
+            },
+            "categories": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "tracks": {
+          "type": "object",
+          "required": ["url"],
+          "properties": {
+            "url": {
+              "type": "string",
+              "description": "Relative path to a packed STT LineString dataset — one per-object trail per tracked object (distinct from `ego`, which is the ego vehicle only)."
+            },
+            "count": { "type": "integer" },
+            "categories": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "stage": {
+          "type": "object",
+          "description": "Scene-split bundles only: the STATIC, timeless accumulated surfel cloud (the 'stage'), rendered under the animated lidar 'actors' stream.",
+          "required": ["url"],
+          "properties": {
+            "url": {
+              "type": "string",
+              "description": "Relative path to a packed STT point dataset built with one full-range temporal bucket."
+            },
+            "points": { "type": "integer" },
+            "colored": { "type": "boolean" },
+            "splat": { "type": "string" },
+            "style": { "type": "string" },
+            "static": {
+              "type": "boolean",
+              "description": "Always true — the stream is temporally constant."
+            }
+          }
+        },
+        "map": {
+          "type": "object",
+          "description": "Optional HD-map streams. Each is a standard packed STT dataset (polygon/line) built with a static, full-scene temporal bucket.",
+          "properties": {
+            "polyUrl": { "type": "string" },
+            "lineUrl": { "type": "string" },
+            "layers": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "telemetry": {
+          "type": "object",
+          "required": ["url"],
+          "properties": {
+            "url": {
+              "type": "string",
+              "description": "Relative path to telemetry.json (CAN-bus time series sidecar)."
+            }
+          }
+        },
+        "camera": {
+          "type": "object",
+          "required": ["url"],
+          "properties": {
+            "url": {
+              "type": "string",
+              "description": "Relative path to cameras.json (camera keyframe sidecar)."
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "rgba": {
+      "type": "array",
+      "items": { "type": "integer", "minimum": 0, "maximum": 255 },
+      "minItems": 4,
+      "maxItems": 4
+    }
+  }
+}

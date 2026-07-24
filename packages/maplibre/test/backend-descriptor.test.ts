@@ -3,7 +3,7 @@
 
 /**
  * Structural conformance gate for the maplibre backend descriptor
- * (docs/roadmap/renderer-abstraction-2026-06.md Phase 5, + D9 of the
+ * (docs/roadmap/renderer-architecture.md Phase 5, + D9 of the
  * maplibre-parity campaign).
  *
  * This does NOT re-test rendering behaviour (the other suites do). It proves the

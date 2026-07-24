@@ -46,7 +46,7 @@ import type {
 
 // Dense source/target endpoint derivation now lives in the framework-free
 // `@poopdeck.gl/core/geometry` kernel (Phase 2 dedup — byte-identical port,
-// see docs/roadmap/renderer-abstraction-2026-06.md). Re-exported here so OD
+// see docs/roadmap/renderer-architecture.md). Re-exported here so OD
 // consumers keep a single three-side import surface.
 export {
   deriveSourceTargetPositions,

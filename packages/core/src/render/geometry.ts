@@ -7,7 +7,7 @@
  * renderers share. Phase 2 seeds it with the OD endpoint derivation (byte-
  * identical across the deck and three packages before this extraction); Phase 3
  * adds `tessellateFeature` (pre-baked-triangle-aware polygon tessellation) here.
- * See docs/roadmap/renderer-abstraction-2026-06.md.
+ * See docs/roadmap/renderer-architecture.md.
  */
 
 import earcut from 'earcut';

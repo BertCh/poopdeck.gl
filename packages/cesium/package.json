@@ -1,10 +1,8 @@
 {
   "name": "@poopdeck.gl/cesium",
   "version": "0.5.0",
-  "description": "CesiumJS backend for spatiotemporal tiles — renders STT on a real WGS84 globe",
-  "publishConfig": {
-    "access": "public"
-  },
+  "description": "EXPERIMENTAL, not published — CesiumJS backend for spatiotemporal tiles; renders STT on a real WGS84 globe",
+  "private": true,
   "type": "module",
   "sideEffects": false,
   "main": "./dist/index.js",
@@ -25,7 +23,6 @@
   ],
   "scripts": {
     "build": "tsc",
-    "prepublishOnly": "pnpm run build",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "clean": "rm -rf dist tsconfig.tsbuildinfo"
